@@ -1,9 +1,6 @@
 Review evidence from executed tests, builds, and manual verification, then make the final approval decision including whether any unnecessary maintenance diff remains.
 
-Procedure:
-1. Open the Knowledge and Policy Source paths with the Read tool and obtain the full content
-2. List every `##` section from each source (do not cherry-pick)
-3. Match the criteria from the listed sections against the diff, execution evidence, and reports
+{{include:instructions/review-investigation-discipline}}
 
 ## Step-specific additional procedure
 

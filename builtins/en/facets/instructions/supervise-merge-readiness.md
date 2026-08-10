@@ -14,7 +14,7 @@ This step is a single final adjudication of whether the current deliverable is m
 3. Limit new findings to merge-blocking unmet requirements, contract breaks, regressions, or remediable verification gaps confirmed by current code or execution evidence. Do not turn another specialist rescan or an improvement suggestion into a new finding
 4. Consolidate problems with the same root cause and acceptance criteria into one family and state acceptance criteria that can be checked after remediation
 5. Return `FIX REQUIRED` for problems fixable under the current requirements and design assumptions; return `TASK REPLAN REQUIRED` only for conflicts that require changing those requirements or assumptions
-6. Return `BLOCKED BY ENVIRONMENT` only when mandatory evidence cannot be obtained due to the environment and every Policy condition holds. Do not classify a failure fixable in code or repository configuration as environmental
+6. Return `BLOCKED BY ENVIRONMENT` only when mandatory evidence cannot be obtained due to the environment, the current prompt provides environmental criteria, and every condition holds. Do not classify a failure fixable in code or repository configuration as environmental
 7. Return `MERGEABLE` only when no open findings remain and requirement fulfillment plus required quality-gate evidence are established
 
 For `FIX REQUIRED`, record a finding ID, evidence, cause, affected contract paths, and acceptance criteria so the following fix-plan can use this step's report directly as its authoritative target.

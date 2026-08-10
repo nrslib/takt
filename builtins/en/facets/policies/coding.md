@@ -9,12 +9,13 @@ Prioritize correctness over speed, and code accuracy over ease of implementation
 | Simple > Easy | Prioritize readability over writability |
 | DRY | Eliminate essential duplication |
 | Comments | Why only. Never write What/How |
-| Function size | One function, one responsibility. ~30 lines |
-| File size | ~300 lines as a guideline. Be flexible depending on the task |
-| Boy Scout | Leave touched areas a little better than you found them |
+| Function and file size | Judge by responsibility and reason to change, not line count |
+| Boy Scout | Improve only problems the current change depends on, expands, or newly exposes |
 | Fail Fast | Detect errors early. Never swallow them |
 | Project scripts first | Use project-defined scripts for tool execution. Direct invocation is a last resort |
 | State normalization | Do not keep the same fact in multiple states |
+
+Minimal means a direct change that satisfies the requirement and real safety conditions, not the fewest lines. Do not add structure for predicted flexibility or quality metrics, but do not omit validation, authorization, cleanup, or error handling at a changed trust boundary.
 
 ## No Fallbacks or Default Arguments
 
@@ -191,7 +192,6 @@ Use abstraction to reduce duplication and real axes of change, and also to name 
 | Criteria | Judgment |
 |----------|----------|
 | A small number of branches differs by event type, state, or domain concept | Use explicit `when` / `switch` |
-| The same operation with the same argument shape repeats in 3+ places | Consider abstraction |
 | A config array or function object is used in only one place | REJECT. Prefer explicit branching first |
 | Side effects or removed fields cannot be understood without reading config objects | REJECT |
 | Strategy names a domain concept and makes interchangeable implementations explicit | OK |
@@ -372,9 +372,6 @@ Criteria:
 
 ### Criteria for Splitting
 
-- Has its own state → Separate
-- UI/logic exceeding 50 lines → Separate
-- Has multiple responsibilities → Separate
 - Has an independent reason to change, responsibility, or reuse boundary → Separate. Whether small supporting types may share a file depends on language conventions and file cohesion
 
 ### Reachability When Adding Features
@@ -541,14 +538,15 @@ Request → toInput() → UseCase/Service → Output → Response.from()
 
 ## Shared Code Decisions
 
-Eliminate duplication by default. When logic is essentially the same and should be unified, apply DRY. Do not decide mechanically by count.
+When a second implementation with the same meaning, contract, and reason to change is confirmed, decide whether both belong under a common owner. A direct reference or call relationship is not required when actual code shows that both share the same authority, invariant, and reason to change. Changing only one would make the contract diverge, so both participate in the impact path of the current change.
+
+Do not treat use of the same generic API, visual similarity, or argument-shape similarity as proof of one contract. A real boundary in the current change between external I/O and domain logic, Policy and Mechanism, or public contract and internal implementation may justify an abstraction on the first implementation. Do not abstract from predicted future variants alone.
 
 ### Should Be Shared
 
-- Essentially identical logic duplicated
-- Same style/UI pattern
-- Same validation logic
-- Same formatting logic
+- Logic derived from the same authority and sharing a reason to change
+- Validation or transformation implementing the same external contract
+- UI patterns where changing only one copy would break the contract
 
 ### Should Not Be Shared
 
@@ -650,11 +648,10 @@ Verification approach:
 - **console.log** - Do not leave in production code
 - **Sensitive information exposure** - Do not include sensitive data in hardcoded values, logs, error responses, or test output
 - **Scattered hardcoded contract strings** - File names and config key names must be defined as constants in one place. Scattered literals are prohibited
-- **Scattered try-catch** - Centralize error handling at the upper layer
+- **Scattered try-catch** - Consolidate error translation for the same external contract under the owner of that boundary. Do not mix different operation contracts into one global handler
 - **Internal implementation exported from public API** - Only export domain-level functions and types. Do not export infrastructure functions or internal classes
 - **Replaced code surviving after refactoring** - Remove replaced code and exports. Do not keep unless explicitly told to
 - **Workarounds that bypass safety mechanisms** - If the root fix is correct, no additional bypass is needed
 - **Direct tool execution bypassing project scripts** - `npx tool` and similar bypass the lockfile, causing version mismatches. Look for project-defined scripts (npm scripts, Makefile, etc.) first. Only consider direct execution when no script exists
-- **Missing wiring** - When adding new parameters or fields, search the entire call chain to verify. If callers do not pass the value, `options.xxx ?? fallback` always uses the fallback
+- **Missing wiring** - Producers, propagation paths, and consumers of new parameters or fields must share one contract. A value omitted by callers and always replaced by `options.xxx ?? fallback` is not wired
 - **Redundant conditionals** - When if/else calls the same function with only argument differences, unify using ternary operators or spread syntax
-- **Copy-paste patterns** - Before writing new code, search for existing implementations of the same kind and follow the existing pattern. Do not introduce your own style

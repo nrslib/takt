@@ -51,6 +51,10 @@ results, not one pass/fail summary.
 | `issue-plan-samples` | default / plan | nrslib/takt repository (read-only) | whether planning preserves explicit breadth, allowed design choices, and explicitly required architecture across Issues #1127, #1155, and #1136 |
 | `plan-report-source-authority` | default / plan report phase | synthetic Phase 1 draft (tool-less) | whether the final `plan.md` keeps the original task authoritative and demotes unsupported design details from requirements |
 | `write-tests-contract-traceability` | default / write_tests | write-tests-contract-traceability | whether generated tests accept the intended local contract, reject plausible mutations, and avoid inventing irrelevant impact paths |
+| `scope-default-write-tests` | default / write_tests | scope-discipline-tests | whether tests observe behavior and remove an invalid internal-structure test instead of replacing it with another proxy |
+| `scope-maintenance-write-tests` | backend-maintenance / write_tests | scope-discipline-tests | whether the shared maintenance path applies the same behavioral test discipline |
+| `scope-architecture-search{,-none,-unrelated}` | peer-review / arch-review | scope-architecture-search | whether the same shared instruction discovers an unhinted second implementation and avoids an unrelated defect with relevant, absent, or unrelated Policy/Knowledge composition |
+| `scope-architecture-boundary` | peer-review / arch-review | scope-architecture-boundary | whether review recognizes an existing domain/I/O boundary on its first implementation without speculative extension points |
 | `implement-contract-traceability` | default / implement | implement-contract-traceability | whether implementation preserves named contract identities from plan and tests |
 | `implementation-report-contract-traceability` | default / implementation report | implement-contract-traceability | whether the report preserves the same contract identities and evidence |
 | `follow-up-review-repair-regression` | peer-review / follow-up coding-review | follow-up-review-repair-regression | whether follow-up review independently falsifies completion claims and distinguishes repair-induced defects from adjacent omissions |
@@ -184,6 +188,7 @@ npm run eval:prompts:replan-contract-closure
 npm run eval:prompts:issue-plan-samples
 npm run eval:prompts:plan-report-source-authority
 npm run eval:prompts:write-tests-contract-traceability
+npm run eval:prompts:scope-discipline
 npm run eval:prompts:implement-contract-traceability
 npm run eval:prompts:follow-up-review-repair-regression
 npm run eval:prompts:review-adjudication

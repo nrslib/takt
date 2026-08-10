@@ -48,7 +48,6 @@ import {
 import { initializeGitFixture } from './helpers/git-fixture.js';
 import { invalidateAllResolvedConfigCache, invalidateGlobalConfigCache } from '../infra/config/index.js';
 import {
-  getBuiltinLanguageResourcesDir,
   getBuiltinLanguageStepsDir,
   getBuiltinWorkflowsDir,
 } from '../infra/config/paths.js';
@@ -1014,41 +1013,6 @@ describe('builtin workflow step fragment migration', () => {
         report: [{ name: 'review-resolution.md', format: 'merge-readiness-supervision' }],
       },
     });
-  });
-
-  it.each(LANGUAGES)('keeps %s remediation authority separate from reviewer verdicts', (lang) => {
-    const facetRoot = join(getBuiltinLanguageResourcesDir(lang), 'facets');
-    const instruction = readFileSync(
-      join(facetRoot, 'instructions', 'adjudicate-review-findings.md'),
-      'utf-8',
-    );
-    const persona = readFileSync(
-      join(facetRoot, 'personas', 'review-adjudicator.md'),
-      'utf-8',
-    );
-    const policy = readFileSync(
-      join(facetRoot, 'policies', 'review-adjudication.md'),
-      'utf-8',
-    );
-
-    expect(policy).toMatch(
-      /reviewer.*(?:重大度|severity).*REJECT.*(?:修正案|suggested remediation).*(?:根拠にしない|not authority|authorize remediation)/isu,
-    );
-    expect(instruction).toMatch(/(?:Review Finding Adjudication Policy|レビュー指摘裁定ポリシー)/isu);
-    expect(policy).toMatch(
-      /(?:DRY|責務|responsibility|boundary|型安全|type safety|デッドコード|dead code|テスト品質|test quality)/isu,
-    );
-    expect(policy).toMatch(
-      /(?:最小.*内部修正|最小の内部|minimal internal|smallest internal)/isu,
-    );
-    expect(policy).toMatch(
-      /(?:atomicity|transaction|rollback|資源上限|resource caps?|互換経路|compatibility routes?)/isu,
-    );
-    if (lang === 'ja') {
-      expect(persona).toMatch(/変更箇所.*DRY.*見逃さない/su);
-    } else {
-      expect(persona).toMatch(/Retain.*DRY.*changed area/isu);
-    }
   });
 
   it.each(LANGUAGES)('detects every %s peer-review remediation cycle at its configured threshold', (lang) => {

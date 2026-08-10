@@ -1,8 +1,7 @@
-## Knowledge Scope
+## Scope of Supporting Judgment Material
 
-- Use only the Knowledge assigned to the step
-- Knowledge without an applicability condition applies whenever it is assigned to the step
-- Use Knowledge with an applicability condition only when the actual code, configuration, and execution path meet that condition
+- Only when the current prompt provides supporting judgment material, match its applicability conditions against actual code, configuration, and execution paths
 - Do not infer applicability from a technology name, file extension, or dependency alone
-- Do not use a Knowledge checklist whose applicability is not met as finding evidence or required coverage
-- When dividing an audit as a team leader, state the Knowledge assigned to each part and why it applies
+- Do not use material whose applicability condition is not met as finding evidence or required coverage
+- When the current instruction divides an audit, state the judgment material passed to each part and why it applies
+- Even when no supporting material is provided, complete exploration from the original requirement, actual code, and observable trust boundaries

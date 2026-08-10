@@ -57,7 +57,7 @@ Comments and tests may preserve historical constraints or intent. Even comments 
 | Constraint or workaround comments | Preserve |
 | Comments contradicting code | Correct |
 | Comments that only restate function names | May consider deleting |
-| Existing test expectations outside the change scope | Treat as existing contracts |
+| Existing test expectations outside the change scope | Treat as existing contracts when they map to observable behavior; existence alone does not make internal structure a contract |
 | Existing tests that pin the contract being replaced | Evidence of impacted assertions and consumers |
 
 ## Maintenance Change Risk

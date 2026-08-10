@@ -100,6 +100,46 @@ const TARGETS = [
     mutable: true,
   },
   {
+    id: 'scope-default-write-tests',
+    workflow: 'default',
+    step: 'write_tests',
+    fixture: 'eval/fixtures/scope-discipline-tests',
+    mutable: true,
+  },
+  {
+    id: 'scope-maintenance-write-tests',
+    workflow: 'backend-maintenance',
+    step: 'write_tests',
+    fixture: 'eval/fixtures/scope-discipline-tests',
+    mutable: true,
+  },
+  {
+    id: 'scope-architecture-search',
+    workflow: 'peer-review',
+    step: 'arch-review',
+    fixture: 'eval/fixtures/scope-architecture-search',
+  },
+  {
+    id: 'scope-architecture-search-none',
+    workflow: 'peer-review',
+    step: 'arch-review',
+    fixture: 'eval/fixtures/scope-architecture-search',
+    facetMode: 'none',
+  },
+  {
+    id: 'scope-architecture-search-unrelated',
+    workflow: 'peer-review',
+    step: 'arch-review',
+    fixture: 'eval/fixtures/scope-architecture-search',
+    facetMode: 'unrelated',
+  },
+  {
+    id: 'scope-architecture-boundary',
+    workflow: 'peer-review',
+    step: 'arch-review',
+    fixture: 'eval/fixtures/scope-architecture-boundary',
+  },
+  {
     id: 'implement-contract-traceability',
     workflow: 'default',
     step: 'implement',
@@ -204,6 +244,7 @@ for (const {
   fixture,
   mutable,
   workflowCallVars,
+  facetMode,
   artifacts,
   phase: requestedPhase,
   targetFile,
@@ -264,6 +305,20 @@ for (const {
         .map((substep) => substep.name),
     ]);
     throw new Error(`Step "${stepName}" not found in ${workflowName}. Available: ${names.join(', ')}`);
+  }
+
+  if (facetMode === 'none') {
+    target = { ...target, policyContents: [], knowledgeContents: [] };
+  } else if (facetMode === 'unrelated') {
+    target = {
+      ...target,
+      policyContents: [{
+        content: '# Documentation Link Policy\n\nWhen public documentation is edited, preserve externally published link targets.',
+      }],
+      knowledgeContents: [{
+        content: '# Markdown Navigation Knowledge\n\nRelative links in Markdown are resolved from the directory containing the document.',
+      }],
+    };
   }
 
   // --- Facet snapshots + seeded reports (once per run directory) -----------

@@ -10,20 +10,20 @@ This review is a defensive quality and security audit performed, on request, aga
 
 | Principle | Criteria |
 |-----------|----------|
-| Fix immediately | Never defer minor issues to "the next task." Fix now what can be fixed now |
+| Fix immediately | Do not defer problems introduced by the change or causally required for the requirement or safety conditions |
 | Eliminate ambiguity | Vague feedback like "clean this up a bit" is prohibited. Specify file, line, and proposed fix |
 | Fact-check | Verify against actual code before raising issues. Do not speculate |
 | Practical fixes | Propose implementable solutions, not theoretical ideals |
-| State consistency | For side effects and state changes, verify that success, failure, and interruption paths have no missing, duplicated, or inconsistent effects |
-| Contract coverage | Verify new contracts across normal entries, derived conditions, validation, evaluation, output, and re-injection paths |
+| State consistency | For side effects and state changes, verify real success, failure, and interruption paths for missing, duplicated, or inconsistent effects |
+| Contract impact paths | Verify new contracts across input, transformation, persistence, and consumption paths confirmed from definitions and references |
 | Contract consistency | Verify that contracts carried by consolidation or abstraction are applied to existing equivalent branches by the same standard |
 | Semantic contract | For meaningful fields such as IDs, source, trace, and issue/PR numbers, verify not only the storage shape but also the meaning interpreted downstream |
 | External contract verification | Verify semantic contracts of external services, SDKs, and generated artifacts from primary evidence or actual types |
 | Specification completeness | When changing a user-facing contract, verify that implementation, tests, and documentation describe the same lookup order, override rules, special syntax, and failure conditions |
 | Requirement anchoring | Do not reinterpret required task items as optional, out of scope, or different requirements for implementation convenience |
 | Resolution judgment | Judge `resolved` against the original finding acceptance criteria and original task requirements, not merely against the presence of a fix |
-| Defect-class re-scan | Before recognizing a defect as resolved, re-scan every path in the same defect class for the original acceptance criteria |
-| Concern handling | Any concern recognized in the prose must either become a finding or be explicitly classified with evidence as non-finding |
+| Defect-class re-scan | Before recognizing a defect as resolved, re-scan paths confirmed to have the same meaning, contract, and root cause against the original acceptance criteria |
+| Concern handling | Judge only concerns related to the changed contract, and explain why any such concern is not a finding |
 | Behavior evidence | Verify what behavior the tests or logs prove, not merely that they exist |
 | Demonstrability | Distinguish items that environmental factors prevent demonstrating from implementation defects confirmed by current evidence |
 | Boy Scout | Have existing problems fixed within task scope only when the change depends on, expands, or newly exposes them |
@@ -77,7 +77,7 @@ Encourage local Boy Scout improvements within that causal scope. Do not use the 
 
 ### REJECT (Request Changes)
 
-REJECT without exception if any of the following apply.
+First confirm causal scope under Scope Determination. Within that scope, REJECT if any of the following apply.
 
 - New behavior without tests
 - Boundary changes (permissions, rejection paths, external execution, shared state, state transitions) without verification of the main allow/deny, success/failure, isolation/release behavior
@@ -89,7 +89,6 @@ REJECT without exception if any of the following apply.
 - Direct mutation of caller-owned, shared, or externally exposed objects/arrays
 - Swallowed errors (empty catch blocks)
 - TODO/FIXME without an issue number, external blocker, and removal condition
-- Essentially identical logic duplicated (DRY violation)
 - Method proliferation doing the same thing (should be absorbed by configuration differences)
 - Specific implementation leaking into generic layers (imports and branching for specific implementations in generic layers)
 - Internal implementation exported from public API (infrastructure functions or internal classes exposed publicly)
@@ -157,59 +156,7 @@ Exception: when suite execution is imposed on your own step as a quality gate (t
 
 ## Fact-Checking
 
-Always verify facts before raising an issue.
-
-| Do | Do Not |
-|----|--------|
-| Open the file and check actual code | Assume "it should be fixed already" |
-| Search for call sites and usages | Raise issues based on memory |
-| Cross-reference type definitions and schemas | Guess that code is dead |
-| Distinguish generated files (reports, etc.) from source | Review generated files as if they were source code |
-| Verify tool output is readable and uncorrupted | Raise issues based on garbled or abnormal output |
-| When claiming code is absent, read the target lines directly | Conclude "code doesn't exist" based on search results alone |
-
-### Tool Output Reliability
-
-If tool output is unreadable, re-read using a reliable method before making any judgment.
-
-| Situation | Action |
-|-----------|--------|
-| Output contains garbled text or encoding anomalies | Recognize the corruption, then re-read using an alternative method (open the file directly, specify line numbers for the target section) before judging |
-| Search command did not find the target code | Read the specific lines of the file directly to confirm absence before raising an issue. Search failure does not equal code absence |
-| Re-raising a prior finding without re-checking actual code | Must read current code before marking as persists. Do not re-raise from memory of the prior review |
-| A verification task did not actually run the target work due to caching, skipping, or missing configuration | Do not count it as passing evidence. Record what was actually executed separately from what remains unverified |
-
-## Writing Specific Feedback
-
-Every issue raised must include the following.
-
-When one new problem is found, search the review scope for all locations that may share the same `family_tag` before finalizing the report, and report them in the same review. Do not report one location at a time and reveal another location from the same family only after the first is fixed.
-
-When the same kind of problem appears in multiple locations, report one representative finding and list the other locations inline as `also: src/store.ts:L232, src/projection.ts:L243`. Do not spend rows enumerating the same kind of issue; use the remaining attention to hunt different kinds of problems. Do not merge, however, in these cases:
-
-- Findings already tracked under separate `finding_id`s (do not break the tracking unit)
-- When a Finding Contract is in use (report every observed problem as an individual raw finding; deduplication is the responsibility of the findings-manager and the ledger)
-
-### Report Completeness
-
-- Finding one issue does not end discovery. On the first review, apply every assigned Policy / Knowledge perspective to the entire cumulative diff
-- On later reviews, prioritize prior open findings, changed locations, and direct impact paths. Before finalizing either APPROVE or REJECT, apply every assigned Policy / Knowledge perspective to that scope; before APPROVE, also perform the final full cumulative-diff review
-- Report every blocking finding verified in the same round. Keep explanations concise and aggregate locations with the same cause, but never omit findings to satisfy an output line limit
-- A correct new finding discovered later remains valid. However, structural or contract findings added across multiple completed review rounds mean the report content has not converged
-
-- **Which file and line number**
-- **What the problem is**
-- **How to fix it**
-- **If requesting abstraction or consolidation, why that placement is the natural one**
-
-```text
-❌ "Review the structure"
-❌ "Clean this up a bit"
-❌ "Refactoring is needed"
-
-✅ "src/auth/service.ts:45 — validateUser() is duplicated in 3 places.
-     Extract into a shared function."
-```
+A finding must be directly supported by current code, types, schemas, primary specifications, or reproducible execution results. Memory, search mismatches, corrupted output, mocks that bypass the real path, and results where caching or skipping prevented target execution are not conclusive evidence. Claims that something is absent, unwired, or persists are not findings unless the governing contract and current implementation have been confirmed.
 
 ## Finding ID Tracking (`finding_id`)
 
@@ -275,17 +222,6 @@ Do not mix different problems under the same ID.
 - If problem meaning, evidence files, or reproduction conditions change, issue a new `finding_id`
 - Rewriting an existing `finding_id` to represent a different problem is prohibited
 
-## Handling Test File Size and Duplication
-
-Test file length and duplication are warning-level maintainability concerns by default.
-
-- Excessive test file length and duplicated test setup are `Warning` by default
-- They may be `REJECT` only when reproducible harm is shown
-  - flaky behavior
-  - false positives/false negatives
-  - inability to detect regressions
-- "Too long" or "duplicated" alone is not sufficient for `REJECT`
-
 ## Handling Changelog and History Files
 
 Files or sections that record point-in-time facts (e.g., `CHANGELOG.md`, `RELEASE_NOTES.md`, `MIGRATION.md`) are history, not specifications of the current code. Judge them by their correctness as history.
@@ -325,13 +261,12 @@ Leave it better than you found it.
 | Situation | Verdict |
 |-----------|---------|
 | The change depends on, expands, or newly exposes an existing problem | REJECT — have it fixed together |
-| Redundant expression (a shorter equivalent exists) | REJECT |
-| Unnecessary branch/condition (unreachable or always the same result) | REJECT |
-| Confirmed directly related and fixable in seconds to minutes | REJECT (do not mark as "non-blocking") |
+| Redundant expression or unnecessary branch introduced by the change | REJECT |
+| Easy-to-fix issue with no causal relationship to the change | Out of scope. Ease of repair is not scope authority |
 | Code made unused as a result of the change (arguments, imports, etc.) | REJECT — change-induced, not an "existing problem" |
 | Fix requires refactoring (large scope) | Record only (technical debt) |
 
-Do not tolerate problems just because existing code does the same. If existing code is bad, improve it rather than match it.
+Within the causal scope, do not tolerate a problem merely because existing code does the same. Treat unrelated existing problems as separate work.
 
 ## Judgment Rules
 
@@ -342,81 +277,6 @@ Do not tolerate problems just because existing code does the same. If existing c
 - "Same as existing behavior" is not an approval reason when a new public entry, adapter, or tool exposes that contract
 - When a concern mentioned in prose is not made a finding, classify it as `false_positive` / `overreach` / `out_of_scope` / `no_issue_after_verification` and provide evidence
 - If even one issue exists, REJECT. "APPROVE with warnings" or "APPROVE with suggestions" is prohibited
-
-## Basic Review Procedure
-
-Common procedure that every reviewer must follow. Do not duplicate this in individual instructions.
-
-### Diff Baseline (Anchor to the Base)
-
-The review target is the entire cumulative diff from the task's starting point (the base), not just the changes from the most recent iteration.
-
-- In the fix ↔ review loop, keep recomputing the diff from the base. Do not move the baseline to the latest fix
-- The base is the merge-base with the integration branch, or the starting point recorded in `plan` / `order`. Do not treat only the "changes" section of `Previous Response` as the diff
-- On the first review, evaluate the entire cumulative diff and exhaust all locations in each detected finding family
-- On the second and later reviews, prioritize prior open findings, their fixes, and directly affected paths. Apply every Policy / Knowledge criterion in that scope, but do not restart broad discovery from scratch in untouched areas of the cumulative diff
-- On the second and later reviews, if the focused scope has no blocking finding and the reviewer would return APPROVE, first perform a final review of the entire cumulative diff and reconcile every remaining area and contract
-- Unrequested changes introduced in earlier iterations (unrelated comment deletions, renames, reformatting, contract changes, weakened tests, environment-dependent tool-generated diffs — version stamps, re-serialization, order-only rewrites) remain in the cumulative diff even when they no longer appear in the latest fix report. Reconcile them on the first and final reviews and confirm their causal link to the request
-- Track finding states (new / persists / resolved) on a fixed baseline. Do not narrow the diff scope and conclude "it is no longer in the diff"
-
-### Referring to Primary Sources
-
-- Use `order.md`, `plan.md`, and the actual code as primary sources
-- Treat decisions from earlier steps (prior review results, planning decisions) as supplementary
-- When information conflicts, prioritize `order.md` / `plan.md` / actual code
-- When a user-facing specification changes, treat documentation and configuration examples as part of the contract and verify that every behavior listed in the requirements is present
-
-### Referring to Design Decisions
-
-- If the implementation step has emitted `coder-decisions.md`, read it and understand the recorded design decisions
-- Do not dismiss intentional decisions as false positives just because they were recorded. Evaluate validity against `order.md` / `plan.md` / actual code
-- If the design decision itself is flawed, raise it
-
-### Full Entry Review for Contract Additions and Changes
-
-When the diff adds or changes a contract such as a config value, state, condition expression, file format, event, builder, adapter, or state-transition function, enumerate and reconcile every entry, exit, and re-injection path that can carry that contract.
-
-- Verify that definition, production, normalization, validation, evaluation, persistence, output, and event emission all apply the same contract
-- Check derived paths as well as the normal entry: derived conditions, aggregate conditions, parent/child workflows, loop decisions, early exits, and exception paths
-- When persisted data or externally supplied data is re-injected into JSON, Markdown, logs, events, or later instructions, include escaping, boundary handling, and failure behavior in the contract
-- Verify that values normalized or validated at a boundary propagate as the same normalized value through persistence, execution, external calls, and event emission. Treat reuse of pre-normalized values in later stages as a contract inconsistency
-- Search for existing returns, throws, catches, early returns, branches, and call sites with the same responsibility
-- If an existing branch does not satisfy the new contract, treat it as related code even if the code itself predates the change
-- If tests cover only the new path and do not verify existing equivalent branches or derived entries, treat it as a coverage gap
-- Treating a required contract as optional, excluded, or a different requirement requires evidence from the task spec, specification, or explicit user instruction
-- "Not explicitly stated in the task requirements" is not a valid reason to mark a contract inconsistency introduced by the diff as non-blocking
-
-### Reviewing Side Effects and State Transitions
-
-When a change involves side effects or state changes such as external calls, configuration application, sessions, queues, locks, subscriptions, caches, or temporary resources, do not judge from the happy path alone.
-
-- Trace entry, normal completion, early return, exception, retry, interruption, and cleanup paths
-- Verify that anything acquired, started, registered, or applied is handled exactly as required on the corresponding paths
-- Verify that the same side effect is not executed more than once, and that required effects are not skipped on failure paths
-- Verify that no new side effect, such as an external notification, confirmation request, tool call, or persistence write, is started after interruption, cancellation, timeout, or any other condition has made continuation invalid
-- For changes that affect shared state or downstream execution, verify that partial failure does not leave state that breaks the next run
-- If these checks have not been performed, do not treat the behavior as functionally verified
-
-### Tracking Findings from Previous Reviews
-
-**Precedence:**
-
-1. If a parseable Finding Contract ledger / `findings-ledger.json` is available in a workflow configured with Finding Contract, use the ledger as the authoritative source for tracked findings. Fix only open findings from the ledger (`new`, `persists`, or `reopened`); ignore resolved or closed findings. Treat individual reports as supporting evidence reachable from the ledger.
-2. If a ledger exists but is incomplete, follow mapped findings from the ledger and treat unmapped raw findings as potential new entries pending findings-manager reconciliation.
-3. If the workflow is configured with Finding Contract but no parseable ledger is available, use the latest review reports in the Report Directory only as supporting evidence for observed raw findings. Do not assign final `finding_id` values or lifecycle states and do not apply the legacy rules; wait for ledger regeneration or findings-manager reconciliation.
-4. If the workflow does not use `finding_contract` configuration, use the latest review reports in the Report Directory as the primary evidence and apply the legacy rules:
-   - Look in the Report Directory for review reports this step has previously produced, along with their timestamped history
-   - Treat the unsuffixed file as the latest result and the most recent `{report-name}.{timestamp}` as the previous result
-   - `Previous Response` may be used as supplementary information, but finding state determinations must prioritize the report history
-   - Do not drop open findings from the previous report when producing the new report
-   - Apply the `finding_id` management rules when classifying each finding as `new` / `persists` / `resolved` / `reopened`
-   - Mark `resolved` only when the original expected result and original requirement are satisfied, not merely because a patch exists
-
-### Final Decision Steps
-
-1. Classify each detected issue as blocking / non-blocking according to the scope rules and decision rules above
-2. When citing test, build, or behavior verification as evidence, record the target, the check, and the result in the report
-3. REJECT if there is at least one blocking issue (`new`, `persists`, or `reopened`)
 
 ## Detecting Circular Arguments
 

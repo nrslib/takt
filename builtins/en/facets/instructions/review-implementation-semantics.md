@@ -1,7 +1,7 @@
 Review the implementation semantics. Judge whether the meaning of the code is correct, not whether the tests pass.
 
 Steps:
-1. If a Knowledge Source Path is provided, open it and check the criteria in its `##` sections
+1. Review supporting material classified as `applicable` by the shared procedure
 2. Read the diff and surrounding code, scanning for:
    - Dictionary/collection type choices that do not match the meaning of the data (dynamic-key Records, membership checks via `in`)
    - Derivable values maintained in parallel as separate variables

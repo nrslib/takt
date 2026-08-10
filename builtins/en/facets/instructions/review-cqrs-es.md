@@ -1,19 +1,15 @@
 Focus on reviewing **CQRS (Command Query Responsibility Segregation) and Event Sourcing**.
 Do not assume another reviewer or step has already covered an issue. Detect any problem that belongs to this review perspective.
 
-Procedure:
-1. Open the Knowledge and Policy Source paths with the Read tool and obtain the full content
-2. List every `##` section in each of them (do not cherry-pick)
-3. Match the criteria in each listed section against the diff and detect any issues
-4. Search for `sendAndWait` / `commandGateway.send` / `QueryGateway` / `QueryBus` / `QueryHandler` / `ReadService` / `processStore` / `operationProcess` / `completeStep` / `materialStore` / `waitForProjection` / `delayedExecutor` / `subscriptionQuery` / `CompletableFuture`, and verify that each is necessary for CQRS+ES responsibility
-5. For changed Aggregates, check whether origin metadata such as `source` / `input` / `origin` / `channel` / `type` / `kind` is restored into state
-6. If origin metadata is used in `if` / `require`, decide whether that validation is an invariant of the whole Aggregate or only a flow constraint for one input source
-7. When a new flow is integrated into an existing Aggregate, verify that states allowed by the existing normal lifecycle are not prohibited only for the new flow
-8. Check whether Query / Read Model results are used to choose the command type for the same Aggregate, and push decisions into the Aggregate when possible
-9. Check whether an Application Service sends multiple commands sequentially for the same state transition, and flag cases that can be separated into EventHandlers for committed events
-10. Confirm Projection waiting exists only for synchronous API contracts; otherwise prefer an immediate response, client-held state, or polling
-11. If migration appears, split it into DB schema / data / event upcaster / Read Model rebuild / API compatibility, and check each target against the active contract replacement policy
-12. Check whether processing that fits an existing Aggregate's normal lifecycle was turned into input-source-specific commands, wrappers, services, or deletion paths
+Inspect the following CQRS+ES-specific concerns only when they exist in the changed contract.
+
+1. search command, query, projection, and process usages and verify that their responsibilities match CQRS+ES boundaries
+2. check whether a changed Aggregate stores provenance metadata specific to an input source in its state
+3. distinguish an Aggregate-wide invariant from a flow constraint for one input source
+4. verify that a new flow does not unnecessarily restrict the existing Aggregate lifecycle
+5. check whether Query or Read Model results move Aggregate decisions outside the Aggregate
+6. look for multiple commands for one transition, unnecessary projection waits, or input-specific paths that duplicate the normal lifecycle
+7. split migration into DB schema, data, event upcaster, Read Model rebuild, and API compatibility, then evaluate only explicitly authorized targets
 
 **Note:** If this project does not use the CQRS+ES pattern, review from a general domain design perspective instead.
 {{include:instructions/review-round-scope}}

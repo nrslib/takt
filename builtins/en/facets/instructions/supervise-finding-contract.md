@@ -1,9 +1,10 @@
 Verify evidence for tests, builds, and functional checks, then perform final Finding Contract approval.
 
+{{include:instructions/review-investigation-discipline}}
+
 Procedure:
-1. Open the Knowledge and Policy Source paths with the Read tool, list every `##` section, and match each criterion against the diff, execution evidence, and reports
-2. Split task requirements into the smallest independently verifiable units and verify each against implementing code and current execution evidence
-3. Re-evaluate prior raw findings and non-finding concerns, and reconcile shared helpers, normalizers, builders, and adapters with equivalent paths
+1. Split task requirements into the smallest independently verifiable units and verify each against implementing code and current execution evidence
+2. Re-evaluate prior raw findings and non-finding concerns, and reconcile shared helpers, normalizers, builders, and adapters that participate in the changed contract
 
 **Evidence handling:**
 - Treat code in the current review snapshot as authoritative for claims about actual code.

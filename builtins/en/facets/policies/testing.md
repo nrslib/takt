@@ -9,6 +9,7 @@ Every behavior change requires a corresponding test, and every bug fix requires 
 | Given-When-Then | Structure tests in 3 phases |
 | One test, one concept | Do not mix multiple concerns in a single test |
 | Test behavior | Test behavior, not implementation details |
+| Do not turn internals into contracts | Do not use line counts, source wording, imports, helper names, file layout, runtime freezing, or reference identity as proxies for observable contracts |
 | Independence | Do not depend on other tests or execution order |
 | Type safety | Code must pass the build (type check) |
 | Reproducibility | Do not depend on time or randomness. Same result every run |
@@ -16,6 +17,8 @@ Every behavior change requires a corresponding test, and every bug fix requires 
 | Do not duplicate shipped definitions | Do not copy concrete definitions from bundled declarative assets into test expectations |
 | Verify negative contracts at observable units | Do not pass prohibition, rejection, non-inheritance, or unsupported cases by exact-string absence alone |
 | Mock contract fidelity | Keep external SDK/API mocks aligned with real contracts and do not freeze wrong assumptions in tests |
+
+Delete existing tests that pin only internal structure instead of replacing them with another internal-structure assertion. Limit this check to existing tests that import, invoke, or directly reference the changed contract owner; do not exclude them by filename or claimed purpose, and do not expand the check into repository-wide cleanup of unrelated tests. Add a replacement only when a real external contract or regression risk exists, and verify the observable behavior. Exact strings remain appropriate when the string itself is a public contract such as CLI output, a protocol value, or a published error code.
 
 ## Coverage Criteria
 

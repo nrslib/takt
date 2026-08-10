@@ -19,9 +19,8 @@ For small tasks, omit the design section. In maintenance work, do not omit exist
    - If a directory is listed, enumerate it and identify the relevant files before reading
    - If reference materials do not exist or cannot be found, report that and do not substitute guesses
    - **Do not use files not listed in the task as substitutes for reference materials**
-2. **Review Knowledge / Policy when provided**
-   - If Knowledge / Policy Source Paths are provided, open them with the Read tool and check the `##` sections that affect design decisions for this task
-   - Reflect the applied constraints and anti-patterns to avoid in the implementation approach and coder implementation guidelines
+2. **Reflect applicable criteria**
+   - Reflect constraints and anti-patterns classified as `applicable` by the shared procedure in the implementation approach and coder implementation guidelines
 3. Understand the task requirements
    - Compare reference materials with the current implementation to identify the delta
    - **For each requirement, decide whether a change is needed. If no change is needed, cite the current code location (file:line). Do not say "already correct" without evidence**
@@ -35,7 +34,7 @@ For small tasks, omit the design section. In maintenance work, do not omit exist
 7. Decide file structure and design patterns when needed
    - Where the request is not causally related, keep the existing structure even if it is not ideal
 8. Decide the implementation approach
-   - Check that the approach does not violate Knowledge or Policy constraints
+   - When judgment criteria or supporting material are provided, compare only those classified as `applicable` by the shared procedure
    - For user-facing additions or changes, fix the reachability condition, entry point, and activation path
 9. Include the following in the Coder guidance:
    - Existing implementation patterns to follow (file:line). Always cite same-kind existing code when available

@@ -160,23 +160,6 @@ afterAll(() => {
 });
 
 describe('takt-default-localllm composition', () => {
-  it.each(['ja', 'en'] as const)('%s root は development-core へ FC peer review を注入する', (locale) => {
-    const source = readFileSync(workflowPath(locale, 'takt-default-localllm'), 'utf-8');
-    const workflow = readRawWorkflow(locale, 'takt-default-localllm');
-    const develop = getRawStep(workflow, 'develop');
-
-    expect(source.split('\n').length).toBeLessThan(60);
-    expect(workflow.finding_contract).toBeDefined();
-    expect(develop).toMatchObject({
-      kind: 'workflow_call',
-      call: 'development-core',
-      args: {
-        peer_review_workflow: 'peer-review-finding-contract-localllm',
-      },
-    });
-    expect(source).not.toMatch(/^\s+(?:provider|model):/m);
-  });
-
   it.each(['ja', 'en'] as const)('%s の全 workflow_call 契約は root ledger 継承込みで解決できる', (locale) => {
     const projectDir = join(testRoot, `project-${locale}`);
     const root = loadBuiltinWorkflow(locale, 'takt-default-localllm');

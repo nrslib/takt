@@ -47,7 +47,6 @@ Command Model（Aggregate）の役割は「コマンドを受けて判断し、�
 |------|------|
 | Aggregateが複数のトランザクション境界を跨ぐ | REJECT |
 | Aggregate間の直接参照（ID参照でない） | REJECT |
-| Aggregateが100行を超える | 分割を検討 |
 | ビジネス不変条件がAggregate外にある | REJECT |
 | 判断に使わないフィールドを保持 | REJECT |
 | `source` / `input` / `origin` / `channel` / `type` などの由来メタデータで状態遷移を分岐 | 原則REJECT |
@@ -924,14 +923,9 @@ data class PaymentFailedEvent(
 
 ## 抽象化レベルの評価
 
-**条件分岐の肥大化検出**
+**条件分岐と抽象化**
 
-| パターン | 判定 |
-|---------|------|
-| 同じif-elseパターンが3箇所以上 | ポリモーフィズムで抽象化 → REJECT |
-| switch/caseが5分岐以上 | Strategy/Mapパターンを検討 |
-| イベント種別による分岐が増殖 | イベントハンドラを分離 → REJECT |
-| Aggregate内の状態分岐が複雑 | State Patternを検討 |
+分岐数だけで Strategy、State、ポリモーフィズムを選ばない。同じドメイン上の意味・契約・変更理由を持つ処理が2つ確認できたら、Aggregate、EventHandler、Projection など本来の所有者へ集約するか判断する。イベント種別や状態が異なる理由で変わる処理は分離を保つ。
 
 **抽象度の不一致検出**
 

@@ -12,7 +12,7 @@ steps:
       plan_instruction: plan-maintenance
       testing_policy: [coding, testing, existing-system-respect]
       testing_knowledge: [backend, architecture, unit-testing, e2e-testing, existing-system]
-      testing_instruction: write-tests-maintenance
+      testing_instruction: write-tests-first
       development_policy: [coding, testing, existing-system-respect]
       development_knowledge: [backend, security, architecture, existing-system]
       implementation_instruction: implement-maintenance

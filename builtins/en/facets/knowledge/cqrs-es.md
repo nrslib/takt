@@ -47,7 +47,6 @@ The Command Model (Aggregate) role is to "receive commands, make decisions, and 
 |----------|----------|
 | Aggregate spans multiple transaction boundaries | REJECT |
 | Direct references between Aggregates, not ID references | REJECT |
-| Aggregate exceeds 100 lines | Consider splitting |
 | Business invariants exist outside the Aggregate | REJECT |
 | Holding fields not used for decisions | REJECT |
 | Branching state transitions with origin metadata such as `source` / `input` / `origin` / `channel` / `type` | REJECT by default |
@@ -924,14 +923,9 @@ Default to the exception approach. Consider events only when there is an audit r
 
 ## Abstraction-level Evaluation
 
-**Detecting bloated conditional branches**
+**Conditionals and abstraction**
 
-| Pattern | Judgment |
-|---------|----------|
-| Same if-else pattern appears in 3 or more places | Abstract with polymorphism -> REJECT |
-| switch/case has 5 or more branches | Consider Strategy/Map pattern |
-| Branching by event type grows repeatedly | Split EventHandlers -> REJECT |
-| State branching inside Aggregate is complex | Consider State Pattern |
+Do not choose Strategy, State, or polymorphism from branch count alone. When two implementations with the same domain meaning, contract, and reason to change are observed, decide whether they belong under the proper owner such as the Aggregate, EventHandler, or Projection. Keep behavior separate when event types or states change for different reasons.
 
 **Detecting mismatched abstraction levels**
 

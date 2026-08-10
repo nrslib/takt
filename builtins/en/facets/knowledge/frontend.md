@@ -2,24 +2,7 @@
 
 ## Component Design
 
-Do not write everything in one file. Always split components.
-
-Required splits:
-- Has its own state → Must split
-- JSX over 50 lines → Split
-- Reusable → Split
-- Multiple responsibilities → Split
-- Independent section within page → Split
-
-| Criteria | Judgment |
-|----------|----------|
-| Component over 200 lines | Consider splitting |
-| Component over 300 lines | Warning. Suggest splitting |
-| Display and logic mixed | Consider separation |
-| Props drilling (3+ levels) | Consider state management |
-| Component with multiple responsibilities | REJECT |
-
-Component line count is a review signal, not a unit-test or snapshot-test failure condition.
+Choose component boundaries by responsibility, reason to change, reuse boundary, and data ownership rather than line count or the mere presence of state. Independently changing sections and side effects are separation candidates, but closely collaborating presentation should not be split mechanically. Do not introduce state management based on prop depth alone; reconsider ownership when multiple branches share the same state or another real ownership boundary appears.
 
 Good Component:
 - Single responsibility: Does one thing well
@@ -393,14 +376,9 @@ Anti-patterns:
 
 ## Abstraction Level Evaluation
 
-**Conditional branch bloat detection:**
+**Conditionals and abstraction:**
 
-| Pattern | Judgment |
-|---------|----------|
-| Same conditional in 3+ places | Extract to shared component → **REJECT** |
-| Props-based branching with 5+ types | Consider component split |
-| Nested ternaries in render | Early return or component separation → **REJECT** |
-| Type-based render branching | Consider polymorphic components |
+Express rendering branches in terms of user-visible states and responsibility. Once two implementations with the same meaning, contract, and reason to change are observed, decide the owner of a shared component or transformation. Do not require component splitting or polymorphism based only on branch count or syntax.
 
 **Abstraction level mismatch detection:**
 

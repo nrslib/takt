@@ -20,9 +20,8 @@ For small tasks, skip the design section.
    - If a directory is specified, list its contents, identify the relevant files, and then read them
    - If reference materials do not exist or cannot be found, report that and do not substitute guesses
    - **Do not use files that are not explicitly listed in the instructions as substitutes for reference materials**
-2. **Review Knowledge / Policy when provided**
-   - If Knowledge / Policy Source Paths are provided, open them with the Read tool and check the `##` sections that affect design decisions for this task
-   - Reflect the applied constraints and anti-patterns to avoid in the implementation approach and coder implementation guidelines
+2. **Reflect applicable criteria**
+   - Reflect constraints and anti-patterns classified as `applicable` by the shared procedure in the implementation approach and coder implementation guidelines
 3. Understand the task requirements
    - **Keep the stated objective, constraints, and acceptance criteria fixed instead of reinterpreting them as an easier implementation problem. Distinguish whether an example method is required by the request or is only a candidate means of satisfying it**
    - Compare the reference materials with the current implementation and identify the differences
@@ -36,7 +35,7 @@ For small tasks, skip the design section.
    - Only when user or external input, authorization, sensitive information, external execution, persistence, retries, or concurrency actually participates, include the relevant validation, rejection, and failure handling. Do not add unrelated concerns mechanically
 6. Determine file structure and design patterns (if needed)
 7. Decide on the implementation approach
-   - Verify the implementation approach does not violate knowledge/policy constraints
+   - When judgment criteria or supporting material are provided, compare only those classified as `applicable` by the shared procedure
    - Do not confuse keeping the diff small with omitting required production behavior. Put validation, authorization, state updates, error handling, and cleanup into the participating execution paths when they are required for the acceptance criteria
    - When adding or changing a user-facing feature, fix the conditions, entry points, and reachability by which users arrive at it
 8. Include the following in coder implementation guidelines:

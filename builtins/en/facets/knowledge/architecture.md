@@ -4,14 +4,7 @@
 
 **File Organization:**
 
-| Criteria | Judgment |
-|----------|----------|
-| Single file > 200 lines | Consider splitting |
-| Single file > 300 lines | Warning. Suggest splitting |
-| Single file with multiple responsibilities | REJECT |
-| Unrelated code coexisting | REJECT |
-
-Line count is a review or doctor warning signal, not a pass/fail condition for unit tests or snapshot tests.
+A file should group code with the same responsibility and reason to change. Line count can prompt a closer look, but it is neither a reason to split nor a quality gate. Separate responsibilities that change independently; small definitions that collaborate closely and change for the same reason may stay together.
 
 **Module Structure:**
 
@@ -22,13 +15,7 @@ Line count is a review or doctor warning signal, not a pass/fail condition for u
 
 **Operation Discoverability:**
 
-When calls to the same generic function are scattered across the codebase with different purposes, it becomes impossible to understand what the system does without grepping every call site. Group related operations into purpose-named functions within a single module. Reading that module should reveal the complete list of operations the system performs.
-
-| Judgment | Criteria |
-|----------|----------|
-| REJECT | Same generic function called directly from 3+ places with different purposes |
-| REJECT | Understanding all system operations requires grepping every call site |
-| OK | Purpose-named functions defined and collected in a single module |
+Domain operations and external side effects are easier to understand when their purpose and owner can be followed through named boundaries. Calls that reconstruct the same contract in multiple places are candidates for a common owner. Direct use of a generic API whose intent is already clear does not need a wrapper merely to create a catalog.
 
 **Public API Surface:**
 
@@ -43,7 +30,7 @@ Public APIs should expose only domain-level functions and types. Do not export i
 **Function Design:**
 
 - One responsibility per function
-- Consider splitting functions over 30 lines
+- Separate processing with an independent role or reason to change
 - Side effects clearly defined
 
 **Layer Design:**
@@ -349,15 +336,9 @@ REJECT when these patterns are found:
 
 ## Abstraction Level Evaluation
 
-**Conditional Branch Proliferation Detection:**
+**Conditionals and Abstraction:**
 
-| Pattern | Judgment |
-|---------|----------|
-| Same if-else pattern in 3+ places | Abstract with polymorphism → REJECT |
-| switch/case with 5+ branches | Consider Strategy/Map pattern |
-| Flag arguments changing behavior | Split into separate functions → REJECT |
-| Type-based branching (instanceof/typeof) | Replace with polymorphism → REJECT |
-| Nested conditionals (3+ levels) | Early return or extract → REJECT |
+Branch counts and syntax do not determine the right abstraction. Once two implementations with the same meaning, contract, and reason to change are observed, decide whether they belong under a common owner. A first implementation can still deserve an abstraction when it already crosses a real boundary such as external I/O versus domain logic, policy versus mechanism, or public contract versus internal implementation. Do not add Strategy or polymorphic variants based only on predicted future needs.
 
 **Abstraction Level Mismatch Detection:**
 
@@ -461,14 +442,7 @@ Correct handling:
 
 ## DRY Violation Detection
 
-Eliminate duplication by default. When logic is essentially the same and should be unified, apply DRY. Do not judge mechanically by count.
-
-| Pattern | Judgment |
-|---------|----------|
-| Essentially identical logic duplicated | REJECT - Extract to function/method |
-| Same validation duplicated | REJECT - Extract to validator function |
-| Essentially identical component structure | REJECT - Create shared component |
-| Copy-paste derived code | REJECT - Parameterize or abstract |
+DRY reduces duplicated knowledge, not merely similar code shapes. Once two implementations with the same meaning, contract, and reason to change are observed, decide whether they belong under a common owner. Choose the form that naturally owns the responsibility: a function, value object, component, policy, or another local abstraction.
 
 When NOT to apply DRY:
 - Different domains: Don't abstract (e.g., customer validation vs admin validation are different things)
@@ -478,24 +452,13 @@ When NOT to apply DRY:
 
 Contract-change consistency follows the active contract replacement policy. In architecture review, check whether changes contradict documented specifications, types, schemas, or config formats.
 
-Verification targets:
+Conditions that require consistency:
 
-| Target | What to Check |
+| Change | Governing contracts |
 |--------|---------------|
-| CLAUDE.md / README.md | Conforms to schema definitions, design principles, constraints |
-| Type definitions / Zod schemas | New fields reflected in schemas |
-| YAML/JSON config files | Follows documented format |
-
-Specific checks:
-
-1. When config files (YAML, etc.) are modified or added:
-   - Cross-reference with schema definitions in CLAUDE.md, etc.
-   - No ignored or invalid fields present
-   - No required fields missing
-
-2. When type definitions or interfaces are modified:
-   - Documentation schema descriptions are updated
-   - Config files belonging to contracts outside the requested change scope remain valid under the new schema
+| Added or changed configuration | Documented schema, required fields, and valid values |
+| Added or changed types or schemas | Producers, consumers, user-facing documentation, and valid configuration outside the changed contract |
+| Changes involving design constraints | The primary specification that owns the constraint and its implementation boundary |
 
 REJECT when these patterns are found:
 
@@ -509,10 +472,7 @@ REJECT when these patterns are found:
 
 Missing wiring after contract changes follows the coding policy. In architecture review, check whether new parameters or fields actually reach callers, producers, and readers instead of staying local to the changed file.
 
-Verification steps:
-1. When finding new optional parameters or interface fields, search all callers
-2. Check if all callers pass the new parameter
-3. If fallback value (`?? default`) exists, verify if fallback is used as intended
+When a contract crosses a call chain, its definition alone is insufficient. The entry point that produces a value, callers that propagate it, and consumers that read it must share the same meaning; fallbacks must also match whether the contract truly permits omission.
 
 Danger patterns:
 
@@ -544,31 +504,20 @@ Call chain verification applies not only to "missing wiring" but also to the rev
 | Null guard when callers already check null | Redundant defense | Trace caller constraints |
 | Runtime type check when TypeScript types constrain | Not trusting type safety | Check TypeScript type constraints |
 
-Verification steps:
-1. When finding defensive branches (TTY check, null guard, etc.), check all callers
-2. If all callers already guarantee the condition, guard is unnecessary → REJECT
-3. If some callers don't guarantee it, keep the guard
+The need for a defensive condition depends on preconditions guaranteed by reachable entry points. If every real entry point guarantees the same condition, the internal guard is logically unreachable; if any entry point does not, the guard can be a meaningful boundary defense.
 
 ## Immutability of Published State
 
-Verify that shared state a module publishes (initial-state constants, singletons, configuration objects) cannot be mutated by consumers. Mutable shared state silently propagates a single write to every usage site.
-
-| Criterion | Verdict |
-|-----------|---------|
-| A published initial-state constant (e.g. initialState) is not frozen and consumers can mutate it | REJECT |
-| Mutable objects nested inside a published constant (arrays, Records, Maps) are exposed raw | REJECT |
-| A store or read model returns references to its internal state as-is | REJECT |
-| Protected via recursive deep freeze (`Object.freeze` alone is shallow and does not protect nested mutable objects or `Map`/`Set`), factory functions, or defensive copies | OK |
-| Only `Readonly` type annotations, or a shallow freeze that leaves nested objects raw | REJECT (static or shallow guards do not prevent runtime mutation) |
+For shared state published by a module (initial state, singletons, configuration objects), consumer mutations must not leak to other consumers. The required property is observable isolation. Factories, defensive copies, persistent data structures, and freezing are implementation choices; do not require recursive freezing or reference identity unless the public contract specifies the mechanism.
 
 ```typescript
 // REJECT - mutable published initial state; one consumer write poisons every replay
 export const initialState: State = { count: 0, entries: {} };
 
-// OK - frozen, including nested objects
+// Option - frozen, including nested objects
 export const initialState: State = Object.freeze({ count: 0, entries: Object.freeze({}) });
 
-// OK - factory returning a fresh instance every time
+// Option - factory returning a fresh instance every time
 export function createInitialState(): State {
   return { count: 0, entries: {} };
 }
@@ -586,28 +535,10 @@ export function createInitialState(): State {
 
 Don't get lost in minor "clean code" nitpicks.
 
-Verify:
-- How will this code evolve in the future
-- Is scaling considered
-- Is technical debt being created
-- Does it align with business requirements
-- Is naming consistent with the domain
+Quality attributes become design constraints only when their need is supported by the request, current load, an existing operational contract, or a boundary changed now. Predictions that the code or scale may change do not by themselves justify extension points or extra layers. Domain naming and alignment with current business contracts remain present semantic concerns rather than future forecasts.
 
 ## Change Scope Assessment
 
-Check change scope and include in report (non-blocking).
+Assess scope by whether it forms a coherent set of requirements, root causes, and affected paths with the same contract, not by line count. A broad change may be indispensable, while a small unrelated edit is still scope expansion.
 
-| Scope Size | Lines Changed | Action |
-|------------|---------------|--------|
-| Small | ~200 lines | Review as-is |
-| Medium | 200-500 lines | Review as-is |
-| Large | 500+ lines | Continue review. Suggest splitting if possible |
-
-Note: Some tasks require large changes. Don't REJECT based on line count alone.
-
-Verify:
-- Changes are logically cohesive (no unrelated changes mixed in)
-- Coder's scope declaration matches actual changes
-
-Include as suggestions (non-blocking):
-- If splittable, present splitting proposal
+Logical cohesion can be explained by a shared requirement, root cause, contract, or real boundary. A coder's scope declaration is supporting evidence; when it differs from the actual change, evaluate against the request and affected paths as the authority.

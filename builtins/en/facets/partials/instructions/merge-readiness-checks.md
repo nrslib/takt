@@ -1,7 +1,7 @@
 Assess whether the accumulated diff after specialist review is quality-ready to enter a codebase that must be maintained going forward.
 
 Procedure:
-1. If Knowledge and Policy Source paths are provided, open them and review the criteria in their `##` sections
+1. Review the judgment criteria and supporting material classified as `applicable` by the shared procedure
 2. Review the original task requirements, plan, diff, execution evidence, and prior review reports
 3. Look for unmet requirements, broken existing behavior, missing tests, out-of-scope changes, maintainability degradation, and obvious risks
 4. List every added or changed ID, name, metadata field, config value, environment variable, output contract, type field, status/discriminant, helper, adapter, and entry point

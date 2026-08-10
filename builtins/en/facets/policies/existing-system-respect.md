@@ -11,7 +11,7 @@ For released or operational systems, make changes that are causally related to t
 | Necessity over proximity | Do not use nearby code as a reason to change it |
 | Respect existing structure | Do not change file placement, type names, public APIs, or responsibility boundaries without causal relationship to the request |
 | Preserve comments | Do not delete comments that explain intent, constraints, or calculation rationale |
-| Tests are contracts | Do not treat behavior asserted by existing tests as incidental |
+| Tests are contracts | Do not treat observable behavior directly asserted by existing tests as incidental. A test's existence alone does not make internal structure a contract |
 | Verify external contracts from primary evidence | Confirm behavior of external services, SDKs, and generated artifacts from official specs or actual types/schemas |
 | Causal improvement judgment | Perform style improvements and refactoring when causally related to the request. Do not mix improvements without causal relationship |
 | Protect unrelated code | Prioritize preserving existing behavior and structure that is not causally related to the request |
@@ -72,6 +72,7 @@ Tests should distinguish existing contracts from new requirements, not merely fo
 |---------|---------|
 | Add tests for new requirements | OK |
 | Add regression tests to preserve existing contracts | OK |
+| Delete an internal-structure test in the owning test set when it maps to no observable contract | OK. Do not clean unrelated test sets |
 | Merely weaken existing expectations to match implementation changes | REJECT |
 | Remove tested existing behavior to make tests pass | REJECT |
 | Delete tests because they obstruct the new implementation | REJECT |
