@@ -94,20 +94,6 @@ parallel:
         report:
           - name: backend-review.md
             format: coding-review
-    - name: cli-review
-      description: CLIコマンド、引数、終了コード、設定、ログ、既存CLI構造をレビューする
-      capabilities: readonly
-      tags: [review]
-      edit: false
-      persona: coding-reviewer
-      policy: [contract-change, review, coding]
-      knowledge: architecture
-      instruction: review-coding
-      pass_previous_response: false
-      output_contracts:
-        report:
-          - name: cli-review.md
-            format: coding-review
     - name: security-review
       description: 認証認可、入力検証、機密情報、依存関係、セキュリティ境界をレビューする
       capabilities: readonly

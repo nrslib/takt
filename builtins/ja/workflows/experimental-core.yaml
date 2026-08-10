@@ -105,8 +105,8 @@ facet_pools:
         description: TAKTのテスト設計、カバレッジ、統合境界、E2E境界を扱う
         knowledge: [unit-testing, e2e-testing]
       - id: security
-        description: TAKTの認証認可、入力検証、機密情報、依存関係、セキュリティ境界を扱う
-        knowledge: [security, security-web, security-api, security-local, security-data, security-dependencies]
+        description: TAKTの認証認可、入力検証、機密情報、ローカル実行、依存関係、セキュリティ境界を扱う
+        knowledge: [security, security-api, security-local, security-data, security-dependencies]
 
 steps:
   - name: plan

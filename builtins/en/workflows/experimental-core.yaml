@@ -105,8 +105,8 @@ facet_pools:
         description: Handle TAKT test design, coverage, integration boundaries, and E2E boundaries.
         knowledge: [unit-testing, e2e-testing]
       - id: security
-        description: Handle TAKT authentication, authorization, input validation, secrets, dependencies, and security boundaries.
-        knowledge: [security, security-web, security-api, security-local, security-data, security-dependencies]
+        description: Handle TAKT authentication, authorization, input validation, secrets, local execution, dependencies, and security boundaries.
+        knowledge: [security, security-api, security-local, security-data, security-dependencies]
 
 steps:
   - name: plan

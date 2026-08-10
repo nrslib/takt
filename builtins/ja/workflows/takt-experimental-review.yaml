@@ -39,20 +39,6 @@ steps:
             report:
               - name: architecture-review.md
                 format: architecture-review
-        - name: cli-review
-          description: CLIコマンド、引数、終了コード、設定、ログ、既存CLI構造をレビューする
-          capabilities: readonly
-          tags: [review]
-          edit: false
-          persona: coding-reviewer
-          policy: [contract-change, review, coding]
-          knowledge: [takt, architecture]
-          instruction: review-coding
-          pass_previous_response: false
-          output_contracts:
-            report:
-              - name: cli-review.md
-                format: coding-review
         - name: security-review
           description: TAKTの認証認可、入力検証、機密情報、ローカル実行、依存関係、セキュリティ境界をレビューする
           capabilities: readonly
@@ -91,6 +77,5 @@ steps:
         coding-review: [{ condition: approved }, { condition: needs_fix }]
         ai-antipattern-review: [{ condition: approved }, { condition: needs_fix }]
         architecture-review: [{ condition: approved }, { condition: needs_fix }]
-        cli-review: [{ condition: approved }, { condition: needs_fix }]
         security-review: [{ condition: approved }, { condition: needs_fix }]
         testing-review: [{ condition: approved }, { condition: needs_fix }]

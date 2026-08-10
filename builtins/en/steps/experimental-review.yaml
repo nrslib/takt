@@ -94,20 +94,6 @@ parallel:
         report:
           - name: backend-review.md
             format: coding-review
-    - name: cli-review
-      description: Review CLI commands, arguments, exit codes, configuration, logging, and existing CLI structure.
-      capabilities: readonly
-      tags: [review]
-      edit: false
-      persona: coding-reviewer
-      policy: [contract-change, review, coding]
-      knowledge: architecture
-      instruction: review-coding
-      pass_previous_response: false
-      output_contracts:
-        report:
-          - name: cli-review.md
-            format: coding-review
     - name: security-review
       description: Review authentication, authorization, input validation, secrets, dependencies, and security boundaries.
       capabilities: readonly

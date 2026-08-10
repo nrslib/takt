@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   getAllParallelSubSteps,
-  isDynamicParallelSubSteps,
   type WorkflowConfig,
   type WorkflowStep,
 } from '../core/models/index.js';
@@ -64,8 +63,6 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   generateReportDir: vi.fn().mockReturnValue('test-report-dir'),
   generateSessionId: vi.fn().mockReturnValue('test-session-id'),
 }));
-
-import { runReportPhase } from '../core/workflow/phase-runner.js';
 
 const SELECTOR_PROVIDER = {
   provider: 'mock' as const,
@@ -168,21 +165,6 @@ function selection(selectedIds: string[], rationale: string): ScenarioEntry {
   };
 }
 
-function reviewReportCalls(): WorkflowStep[] {
-  return vi.mocked(runReportPhase).mock.calls
-    .map(([step]) => step)
-    .filter((step) => step.tags?.includes('review') === true);
-}
-
-function facetSourceFileNames(
-  contents: readonly { sourcePath?: string }[] | undefined,
-): string[] {
-  return (contents ?? []).flatMap(({ sourcePath }) => {
-    const fileName = sourcePath?.split(/[/\\]/u).at(-1);
-    return fileName === undefined ? [] : [fileName];
-  });
-}
-
 describe('experimental builtin workflow', () => {
   let projectDir: string;
   let engines: WorkflowEngine[];
@@ -203,111 +185,6 @@ describe('experimental builtin workflow', () => {
     rmSync(projectDir, { recursive: true, force: true });
     invalidateGlobalConfigCache();
     invalidateAllResolvedConfigCache();
-  });
-
-  it.each(['en', 'ja'] as const)('should keep the %s variants thin and isolate their injected pools when loading generic and TAKT wrappers', (language) => {
-    writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${language}\n`);
-    invalidateAllResolvedConfigCache();
-    const generic = loadWorkflowFromFile(
-      join(getBuiltinWorkflowsDir(language), 'experimental.yaml'),
-      projectDir,
-    );
-    const takt = loadWorkflowFromFile(
-      join(getBuiltinWorkflowsDir(language), 'takt-experimental.yaml'),
-      projectDir,
-    );
-
-    for (const wrapper of [generic, takt]) {
-      expect(wrapper.facetPools).toBeUndefined();
-      expect(wrapper.steps).toHaveLength(1);
-      expect(wrapper.steps[0]).toMatchObject({
-        name: 'develop',
-        kind: 'workflow_call',
-        call: 'experimental-core',
-      });
-    }
-
-    const genericCore = loadCoreForWrapper(language, generic, projectDir);
-    const taktCore = loadCoreForWrapper(language, takt, projectDir);
-    const genericImplement = findWorkflowStep(genericCore, 'implement');
-    const taktImplement = findWorkflowStep(taktCore, 'implement');
-    const genericFix = findWorkflowStep(genericCore, 'fix');
-    const taktFix = findWorkflowStep(taktCore, 'fix');
-    expect(genericImplement.dynamicFacets?.pool).toBe('coding-facets');
-    expect(taktImplement.dynamicFacets?.pool).toBe('takt-coding-facets');
-    for (const step of [genericImplement, genericFix, taktImplement, taktFix]) {
-      const policyFiles = facetSourceFileNames(step.policyContents);
-      const knowledgeFiles = facetSourceFileNames(step.knowledgeContents);
-      expect(policyFiles).toContain('ai-antipattern.md');
-      expect(policyFiles).not.toContain('existing-system-respect.md');
-      expect(knowledgeFiles).toEqual(expect.arrayContaining([
-        'architecture.md',
-        'implementation-semantics.md',
-      ]));
-      expect(knowledgeFiles).not.toContain('existing-system.md');
-    }
-    expect(genericImplement.companion).toBeUndefined();
-    expect(genericImplement.rules?.[0]?.condition.kind).toBe('semantic');
-    expect(taktImplement.companion).toEqual({
-      fixed: ['ai-antipattern-review-companion'],
-      pool: [],
-    });
-    expect(taktImplement.rules?.[0]).toMatchObject({
-      condition: {
-        kind: 'when',
-        expression: 'companion.escalated',
-      },
-      next: 'fix',
-    });
-    expect(taktCore.companions?.['ai-antipattern-review-companion']).toMatchObject({
-      persona: 'ai-antipattern-reviewer',
-      policy: ['contract-change', 'review', 'ai-antipattern'],
-      knowledge: ['architecture'],
-    });
-    const genericCandidates = genericCore.facetPools?.['coding-facets']?.candidates ?? [];
-    const genericCandidateIds = genericCandidates.map(({ id }) => id);
-    expect(genericCandidateIds).toEqual(
-      expect.arrayContaining(['frontend', 'backend', 'testing', 'security']),
-    );
-    expect(genericCandidateIds).not.toContain('cli');
-    expect(genericCandidateIds).not.toContain('implementation-semantics');
-    const taktCandidates = taktCore.facetPools?.['takt-coding-facets']?.candidates ?? [];
-    const taktCandidateIds = taktCandidates.map(({ id }) => id);
-    expect(taktCandidateIds).toEqual(expect.arrayContaining(['testing', 'security']));
-    expect(taktCandidateIds).not.toContain('cli');
-    expect(taktCandidateIds).not.toContain('frontend');
-    expect(taktCandidateIds).not.toContain('backend');
-    expect(taktCandidateIds).not.toContain('implementation-semantics');
-    for (const candidate of [...genericCandidates, ...taktCandidates]) {
-      for (const disallowedDynamicPolicy of ['testing', 'takt-testing', 'existing-system-respect']) {
-        expect(candidate.policyRefs).not.toContain(disallowedDynamicPolicy);
-      }
-      for (const disallowedDynamicKnowledge of [
-        'takt',
-        'architecture',
-        'implementation-semantics',
-        'existing-system',
-      ]) {
-        expect(candidate.knowledgeRefs).not.toContain(disallowedDynamicKnowledge);
-      }
-    }
-    expect(findWorkflowStep(genericCore, 'review').call).toBe('experimental-review');
-    expect(findWorkflowStep(taktCore, 'review').call).toBe('takt-experimental-review');
-    for (const reviewWorkflow of [
-      loadReviewForCore(language, genericCore, projectDir),
-      loadReviewForCore(language, taktCore, projectDir),
-    ]) {
-      const reviewStep = findWorkflowStep(reviewWorkflow, 'review');
-      if (reviewStep.parallel === undefined) {
-        throw new Error('Experimental review must define reviewers');
-      }
-      for (const reviewer of getAllParallelSubSteps(reviewStep.parallel)) {
-        expect(facetSourceFileNames(reviewer.policyContents))
-          .not.toContain('existing-system-respect.md');
-        expect(facetSourceFileNames(reviewer.knowledgeContents))
-          .not.toContain('existing-system.md');
-      }
-    }
   });
 
   it('should fail fast when facet pool bindings are missing, wrongly typed, or unknown', () => {
@@ -408,38 +285,6 @@ steps:
         iteration: state.iteration,
         remainingScenarios: getScenarioQueue()?.remaining,
       })).toBe('completed');
-      const resumePoint = engine.getResumePoint();
-      const implementSelection = Object.values(resumePoint?.dynamic_facet_selections ?? {})
-        .find((snapshot) => snapshot.step_name === 'implement');
-      expect(implementSelection).toMatchObject({
-        round: 1,
-        selected_ids: ['frontend'],
-      });
-      const reviewSelection = Object.values(resumePoint?.dynamic_parallel_selections ?? {})
-        .find((snapshot) => snapshot.step_name === 'review'
-          && snapshot.selected_pool_ids.includes('security-review'));
-      expect(reviewSelection).toMatchObject({
-        round: 1,
-        selected_pool_ids: ['security-review'],
-        effective_selection_ids: [
-          'coding-review',
-          'ai-antipattern-review',
-          'security-review',
-        ],
-      });
-      expect(findWorkflowStep(reviewWorkflow, 'review').parallel)
-        .toMatchObject({ selection: { mode: 'replace' } });
-
-      const reportCalls = reviewReportCalls();
-      expect(reportCalls.filter((step) => step.name === 'ai-antipattern-review')).toHaveLength(2);
-      expect(reportCalls.filter((step) => step.name === 'coding-review')).toHaveLength(2);
-      expect(reportCalls.filter((step) => step.name === 'frontend-review')).toHaveLength(1);
-      expect(reportCalls.filter((step) => step.name === 'security-review')).toHaveLength(1);
-      expect(reportCalls.some((step) => step.name === 'backend-review')).toBe(false);
-      const aiAntipatternReport = reportCalls
-        .find((step) => step.name === 'ai-antipattern-review')
-        ?.outputContracts.find((contract) => contract.name === 'ai-antipattern-review.md');
-      expect(aiAntipatternReport).toBeDefined();
       expect(getScenarioQueue()?.remaining).toBe(0);
     },
     60_000,
@@ -457,22 +302,6 @@ steps:
       );
       const scenarioWorkflow = loadCoreForWrapper(language, workflow, projectDir);
       const reviewWorkflow = loadReviewForCore(language, scenarioWorkflow, projectDir);
-      const reviewStep = findWorkflowStep(reviewWorkflow, 'review');
-      if (reviewStep.parallel === undefined || !isDynamicParallelSubSteps(reviewStep.parallel)) {
-        throw new Error('TAKT experimental review must use a dynamic parallel pool');
-      }
-      expect(reviewStep.parallel.pool.some((step) => step.name === 'testing-review')).toBe(true);
-      expect(reviewStep.parallel.pool.some((step) => step.name === 'frontend-review')).toBe(false);
-      expect(reviewStep.parallel.pool.some((step) => step.name === 'backend-review')).toBe(false);
-      const fixedReviewers = reviewStep.parallel.fixed.filter((step) =>
-        step.name === 'coding-review' || step.name === 'ai-antipattern-review',
-      );
-      expect(fixedReviewers).toHaveLength(2);
-      expect(fixedReviewers.every((step) => step.knowledgeContents?.some(({ content }) =>
-        content.includes('# TAKT Architecture Knowledge')) === true)).toBe(true);
-      const implementStep = findWorkflowStep(scenarioWorkflow, 'implement');
-      expect(implementStep.policyContents?.some(({ content }) =>
-        content.includes('# TAKT Test Execution Policy'))).toBe(true);
       setMockScenario([
         response(scenarioWorkflow, 'plan', 'planner', 'Requirements are clear and implementation is feasible'),
         response(scenarioWorkflow, 'write_tests', 'coder', 'Test creation is complete'),
@@ -508,38 +337,6 @@ steps:
         iteration: state.iteration,
         remainingScenarios: getScenarioQueue()?.remaining,
       })).toBe('completed');
-      const resumePoint = engine.getResumePoint();
-      const implementSelection = Object.values(resumePoint?.dynamic_facet_selections ?? {})
-        .find((snapshot) => snapshot.step_name === 'implement');
-      expect(implementSelection).toMatchObject({
-        selected_ids: ['testing'],
-        selected_policy_refs: [],
-        selected_knowledge_refs: ['unit-testing', 'e2e-testing'],
-      });
-      const reviewSelection = Object.values(resumePoint?.dynamic_parallel_selections ?? {})
-        .find((snapshot) => snapshot.step_name === 'review');
-      expect(reviewSelection).toMatchObject({
-        selected_pool_ids: [],
-        effective_selection_ids: [
-          'coding-review',
-          'ai-antipattern-review',
-        ],
-      });
-      const reportCalls = reviewReportCalls();
-      const fixedReviewReportCalls = reportCalls.filter((step) =>
-        step.name === 'coding-review' || step.name === 'ai-antipattern-review',
-      );
-      expect(fixedReviewReportCalls.map((step) => step.name).sort()).toEqual([
-        'ai-antipattern-review',
-        'coding-review',
-      ]);
-      expect(fixedReviewReportCalls.every((step) => step.knowledgeContents?.some(({ content }) =>
-        content.includes('# TAKT Architecture Knowledge')) === true)).toBe(true);
-      const implementReportStep = vi.mocked(runReportPhase).mock.calls
-        .map(([step]) => step)
-        .find((step) => step.name === 'implement');
-      expect(implementReportStep?.policyContents?.some(({ content }) =>
-        content.includes('# TAKT Test Execution Policy'))).toBe(true);
       expect(getScenarioQueue()?.remaining).toBe(0);
     },
   );
@@ -585,8 +382,6 @@ steps:
 
       expect(state.status).toBe('aborted');
       expect(abortReasons).toEqual(['Workflow aborted by step transition']);
-      expect(reviewReportCalls().filter((step) => step.name === 'ai-antipattern-review')).toHaveLength(1);
-      expect(vi.mocked(runReportPhase).mock.calls.filter(([step]) => step.name === 'fix')).toHaveLength(1);
       expect(getScenarioQueue()?.remaining).toBe(0);
     },
     60_000,

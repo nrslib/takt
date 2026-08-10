@@ -35,6 +35,5 @@ steps:
         architecture-review: [{ condition: approved }, { condition: needs_fix }]
         frontend-review: [{ condition: approved }, { condition: needs_fix }]
         backend-review: [{ condition: approved }, { condition: needs_fix }]
-        cli-review: [{ condition: approved }, { condition: needs_fix }]
         security-review: [{ condition: approved }, { condition: needs_fix }]
         testing-review: [{ condition: approved }, { condition: needs_fix }]

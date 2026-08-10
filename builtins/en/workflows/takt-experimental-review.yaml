@@ -39,20 +39,6 @@ steps:
             report:
               - name: architecture-review.md
                 format: architecture-review
-        - name: cli-review
-          description: Review CLI commands, arguments, exit codes, configuration, logging, and existing CLI structure.
-          capabilities: readonly
-          tags: [review]
-          edit: false
-          persona: coding-reviewer
-          policy: [contract-change, review, coding]
-          knowledge: [takt, architecture]
-          instruction: review-coding
-          pass_previous_response: false
-          output_contracts:
-            report:
-              - name: cli-review.md
-                format: coding-review
         - name: security-review
           description: Review TAKT authentication, authorization, input validation, secrets, local execution, dependencies, and security boundaries.
           capabilities: readonly
@@ -91,6 +77,5 @@ steps:
         coding-review: [{ condition: approved }, { condition: needs_fix }]
         ai-antipattern-review: [{ condition: approved }, { condition: needs_fix }]
         architecture-review: [{ condition: approved }, { condition: needs_fix }]
-        cli-review: [{ condition: approved }, { condition: needs_fix }]
         security-review: [{ condition: approved }, { condition: needs_fix }]
         testing-review: [{ condition: approved }, { condition: needs_fix }]
