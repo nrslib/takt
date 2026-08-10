@@ -9,7 +9,6 @@ import { buildWorkflowCallNamespaceSegment } from './workflow-call-namespace.js'
 const MAX_READABLE_RUN_PATH_PREFIX_LENGTH = 160;
 
 export interface WorkflowCallSiteIdentity {
-  readonly key: string;
   readonly runPathSegment: string;
 }
 
@@ -33,18 +32,17 @@ export function buildWorkflowCallSiteIdentity(input: {
   if (currentFrame === undefined || currentFrame.kind !== 'workflow_call') {
     throw new Error('Canonical workflow call-site identity requires an active workflow_call frame');
   }
-  const key = JSON.stringify({
+  const canonicalJson = JSON.stringify({
     stack: input.stack.map(frameIdentity),
     childWorkflow: getWorkflowReference(input.childWorkflow),
   });
-  const digest = createHash('sha256').update(key).digest('hex');
+  const digest = createHash('sha256').update(canonicalJson).digest('hex');
   const readableRunPathPrefix = buildWorkflowCallNamespaceSegment(
     currentFrame.step,
     input.childWorkflow.name,
     currentFrame.occurrence,
   ).slice(0, MAX_READABLE_RUN_PATH_PREFIX_LENGTH);
   return {
-    key,
     runPathSegment: [
       readableRunPathPrefix,
       digest,

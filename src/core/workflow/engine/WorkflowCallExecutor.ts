@@ -646,8 +646,8 @@ export class WorkflowCallExecutor {
       initialIteration: this.deps.state.iteration,
       reportDirName: this.deps.runPaths.slug,
       runPathNamespace: this.buildWorkflowCallNamespace(invocation),
-      findingCallNamespace: workflowCallSite.key,
-      workflowCallSiteIdentity: workflowCallSite.key,
+      findingCallNamespace: workflowCallSite.runPathSegment,
+      workflowCallSiteIdentity: workflowCallSite.runPathSegment,
       workflowCallVars: {
         ...options.workflowCallVars,
         ...request.step.vars,

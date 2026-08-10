@@ -4169,9 +4169,8 @@ describe('WorkflowEngine structured caller defaults', () => {
     // により、2子の raw finding id は別々になる。衝突していれば重複排除で
     // 1件しか残らない。"#1" は呼び出し時点の親イテレーション（この走行では
     // fanout ステップが最初の1ステップのため1）。
-    expect(new Set(rawFindingIds).size).toBe(2);
-    expect(rawFindingIds.some((id) => id.includes('"step":"child-a"'))).toBe(true);
-    expect(rawFindingIds.some((id) => id.includes('"step":"child-b"'))).toBe(true);
+    expect(rawFindingIds).toHaveLength(2);
+    expect(new Set(rawFindingIds).size).toBe(rawFindingIds.length);
 
     // 内容（path+title+description）が完全一致するため、保存直前の再照合
     // （openFindingKeyIndex）で1件の finding に畳み込まれる。ただしその finding は両方の raw
@@ -4182,6 +4181,9 @@ describe('WorkflowEngine structured caller defaults', () => {
     const reportsRoot = join(cwd, '.takt', 'runs', 'test-report-dir', 'reports', 'subworkflows');
     const reportNamespaces = readdirSync(reportsRoot);
     expect(reportNamespaces).toHaveLength(2);
+    for (const namespace of reportNamespaces) {
+      expect(rawFindingIds.filter((id) => id.includes(namespace))).toHaveLength(1);
+    }
     expect(reportNamespaces.map((namespace) => (
       readFileSync(join(reportsRoot, namespace, 'review.md'), 'utf-8')
     ))).toEqual([

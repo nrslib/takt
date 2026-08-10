@@ -62,7 +62,7 @@ import type {
   ReviewerAnomalyEntry,
 } from './types.js';
 
-const CONTEXT_CANDIDATE_LIMITS = [16, 8, 4, 0] as const;
+const CONTEXT_CANDIDATE_LIMITS = [16, 8, 4] as const;
 const COMPACT_CONFLICT_COLLECTION_LIMIT = 16;
 const CONTROL_PRIOR_TEXT_LIMIT = 4_000;
 
@@ -110,7 +110,9 @@ function taskLedgerProjection(
   ledger: FindingLedger,
   fullDetailFindingIds: ReadonlySet<string>,
 ): unknown {
-  const projection = buildManagerInputLedger(ledger, fullDetailFindingIds) as {
+  const projection = buildManagerInputLedger(ledger, fullDetailFindingIds, {
+    includeRawFindingDetails: false,
+  }) as {
     workflowName: string;
     findings: unknown[];
     conflicts: unknown[];
@@ -665,7 +667,10 @@ async function executeRawTasks(input: {
       | { phase1Instruction: string; inputBytes: number }
       | undefined;
     let renderedInputBytes: number | undefined;
-    for (const candidateLimit of CONTEXT_CANDIDATE_LIMITS) {
+    const candidateLimits = item.rawFindings.length > 1
+      ? [CONTEXT_CANDIDATE_LIMITS[0]]
+      : CONTEXT_CANDIDATE_LIMITS;
+    for (const candidateLimit of candidateLimits) {
       const context = rawTaskContext(
         input.previousLedger,
         item.rawFindings,

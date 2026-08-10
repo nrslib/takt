@@ -141,7 +141,7 @@ function buildWorkflowCallNamespace(projectDir: string, occurrence: number): str
 }
 
 function buildWorkflowCallAuthorityKey(projectDir: string, occurrence: number): string {
-  return buildWorkflowCallSite(projectDir, occurrence).key;
+  return buildWorkflowCallSite(projectDir, occurrence).runPathSegment;
 }
 
 function buildResumePoint(projectDir: string) {

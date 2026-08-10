@@ -218,8 +218,15 @@ function compactEvidenceSummary(record: FindingEvidenceRecord | undefined, evide
  * 予算超過・解釈不能はすべて provisional として台帳へ着地し、run は継続する
  * （final gate は provisional が閉じ続ける）。
  */
-export function buildManagerInputLedger(ledger: FindingLedger, fullDetailFindingIds?: ReadonlySet<string>): unknown {
+export function buildManagerInputLedger(
+  ledger: FindingLedger,
+  fullDetailFindingIds?: ReadonlySet<string>,
+  options?: {
+    includeRawFindingDetails?: boolean;
+  },
+): unknown {
   const rawFindingsById = new Map(ledger.rawFindings.map((rawFinding) => [rawFinding.rawFindingId, rawFinding]));
+  const includeRawFindingDetails = options?.includeRawFindingDetails ?? true;
   const needsFullDetail = (finding: FindingLedger['findings'][number]): boolean => (
     fullDetailFindingIds === undefined
       ? finding.status === 'open'
@@ -246,10 +253,14 @@ export function buildManagerInputLedger(ledger: FindingLedger, fullDetailFinding
         suggestion: finding.suggestion,
         reviewers: finding.reviewers,
         rawFindingIds: finding.rawFindingIds,
-        rawFindings: finding.rawFindingIds
-          .map((rawFindingId) => rawFindingsById.get(rawFindingId))
-          .filter((rawFinding): rawFinding is RawFinding => rawFinding !== undefined)
-          .map((rawFinding) => managerRawFindingView(rawFinding, ledger.evidenceRecords)),
+        ...(includeRawFindingDetails
+          ? {
+              rawFindings: finding.rawFindingIds
+                .map((rawFindingId) => rawFindingsById.get(rawFindingId))
+                .filter((rawFinding): rawFinding is RawFinding => rawFinding !== undefined)
+                .map((rawFinding) => managerRawFindingView(rawFinding, ledger.evidenceRecords)),
+            }
+          : {}),
         evidenceDetails: finding.evidenceIds.map((evidenceId) => (
           ledger.evidenceRecords.find((record) => record.evidenceId === evidenceId) ?? {
             evidenceId,

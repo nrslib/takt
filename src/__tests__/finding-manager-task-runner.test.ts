@@ -863,6 +863,32 @@ describe('main manager bounded task runner', () => {
     expect(result.rawFailures.size).toBe(0);
   });
 
+  it('splits multi-raw input before reducing ledger candidates', async () => {
+    const raws = Array.from({ length: 16 }, (_, index) => rawFinding(index + 1, {
+      description: `Large semantic body ${'x'.repeat(1_400)}`,
+    }));
+    let firstInstruction = '';
+    executeAgentMock.mockImplementation(async (_persona, instruction) => {
+      if (firstInstruction === '') {
+        firstInstruction = instruction;
+      }
+      return successfulRawResponse(instruction);
+    });
+
+    const result = await run(raws, emptyLedger({
+      findings: raws.map((_raw, index) => ledgerFinding(index + 1)),
+    }));
+
+    const manifest = sectionJson<RawManifestView>(firstInstruction, '## Task manifest');
+    const coverage = sectionJson<{
+      candidateFindingCount: number;
+      selectedFindingIds: string[];
+    }>(firstInstruction, '## Context coverage');
+    expect(manifest.rawFindings.length).toBeLessThan(16);
+    expect(coverage.selectedFindingIds.length).toBe(coverage.candidateFindingCount);
+    expect(result.decisions.rawDecisions).toHaveLength(16);
+  });
+
   it('lands a single irreducible oversized raw as manager-input-overflow without calling the provider', async () => {
     const raw = rawFinding(1, {
       description: `Irreducible ${'x'.repeat(30_000)}`,
@@ -874,6 +900,63 @@ describe('main manager bounded task runner', () => {
     expect(result.rawFailures.get(raw.rawFindingId)?.kind)
       .toBe('manager-input-overflow');
     expect(result.taskAudits).toMatchObject([{ status: 'input_overflow' }]);
+  });
+
+  it('fails a one-raw input after the 16-to-8-to-4 candidates without an empty projection success', async () => {
+    const raw = rawFinding(1, {
+      title: 'Candidate issue 1',
+      description: `Candidate description 1 ${'x'.repeat(MAIN_MANAGER_INPUT_MAX_BYTES)}`,
+    });
+    const candidateFindings = Array.from({ length: 16 }, (_, index) => ({
+      ...ledgerFinding(index + 1),
+      title: 'Candidate issue 1',
+    }));
+    const attempts: string[] = [];
+    const executionInput = {
+      ...runInput,
+      stepExecutor: {
+        ...runInput.stepExecutor,
+        buildPhase1Instruction: (instruction: string) => {
+          if (!instruction.includes('__manager-prefix-check__')) {
+            attempts.push(instruction);
+          }
+          return instruction;
+        },
+      },
+    };
+
+    const result = await run(
+      [raw],
+      emptyLedger({ findings: candidateFindings }),
+      executionInput,
+    );
+
+    expect(executeAgentMock).not.toHaveBeenCalled();
+    expect(attempts).toHaveLength(3);
+    for (const instruction of attempts) {
+      const projection = sectionJson<{ findings: unknown[] }>(
+        instruction,
+        '## Relevant ledger projection',
+      );
+      expect(projection.findings).not.toHaveLength(0);
+    }
+    const coverages = attempts.map((instruction) => sectionJson<{
+      candidateFindingCount: number;
+      selectedFindingIds: string[];
+    }>(instruction, '## Context coverage'));
+    expect(coverages.map((coverage) => coverage.candidateFindingCount))
+      .toEqual([16, 16, 16]);
+    expect(coverages.map((coverage) => coverage.selectedFindingIds.length))
+      .toEqual([16, 8, 4]);
+    expect(result.rawFailures.get(raw.rawFindingId)?.kind)
+      .toBe('manager-input-overflow');
+    expect(result.taskAudits).toMatchObject([{
+      status: 'input_overflow',
+      inputBytes: expect.any(Number),
+    }]);
+    expect(result.taskAudits[0]?.inputBytes).toBeGreaterThan(
+      MAIN_MANAGER_INPUT_MAX_BYTES,
+    );
   });
 
   it.each([23_999, 24_000, 24_001])(
@@ -1119,7 +1202,6 @@ describe('main manager bounded task runner', () => {
           description?: string;
           suggestion?: string;
           target: unknown;
-          rawFindings?: Array<{ evidenceDetails: Array<{ verbatimExcerpt?: string }> }>;
         }>;
       }>(instruction, '## Relevant ledger projection');
       expect(ledger.findings).toEqual([expect.objectContaining({
@@ -1127,12 +1209,9 @@ describe('main manager bounded task runner', () => {
         description: 'The error branch leaks the acquired handle.',
         suggestion: 'Release the handle on every error branch.',
         target: { kind: 'code', paths: ['src/original.ts'] },
-        rawFindings: [expect.objectContaining({
-          evidenceDetails: [expect.objectContaining({
-            verbatimExcerpt: 'return withoutReleasing(handle);',
-          })],
-        })],
       })]);
+      expect(ledger.findings[0]).not.toHaveProperty('rawFindings');
+      expect(instruction).not.toContain('return withoutReleasing(handle);');
       return response({
         taskId: manifest.taskId,
         decisions: [{
