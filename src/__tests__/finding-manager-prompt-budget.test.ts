@@ -167,7 +167,7 @@ describe('finding manager prompt budget', () => {
     );
   });
 
-  it('retains four maximum-shape ledger locations within the ledger section budget', () => {
+  it('retains four truncated maximum-path ledger locations with item metadata within the ledger section budget', () => {
     const evidenceIds = Array.from(
       { length: FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerMaxLocations },
       (_, index) => `evidence-${index}`,
@@ -194,7 +194,7 @@ describe('finding manager prompt budget', () => {
       evidenceRecords: evidenceIds.map((evidenceId, index) => ({
         evidenceId,
         kind: 'file_quote' as const,
-        path: `${'x'.repeat(230)}${index}`,
+        path: `${'x'.repeat(RAW_FINDING_FIELD_LIMITS.maxEvidencePathChars - 1)}${index}`,
         startLine: 1,
         endLine: 1,
         verbatimExcerpt: 'x',
@@ -207,15 +207,26 @@ describe('finding manager prompt budget', () => {
       ledger,
       new Set(['F-0001']),
       { includeRawFindingDetails: false },
-    ) as { findings: Array<{ locations: string[] }> };
+    ) as {
+      findings: Array<{
+        locations: {
+          items: string[];
+          itemTruncations: unknown[];
+          truncation?: unknown;
+        };
+      }>;
+    };
     const locations = projection.findings[0]!.locations;
     const section = [
       '## Relevant ledger projection',
       renderCompactJsonBlock({ findings: [{ locations }], conflicts: [] }),
     ].join('\n');
 
-    expect(locations).toHaveLength(FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerMaxLocations);
-    expect(promptJsonUtf8Bytes({ items: locations })).toBeLessThanOrEqual(
+    expect(locations.items).toHaveLength(FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerMaxLocations);
+    expect(locations.itemTruncations).toHaveLength(
+      FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerMaxLocations,
+    );
+    expect(promptJsonUtf8Bytes(locations)).toBeLessThanOrEqual(
       FINDING_MANAGER_PROMPT_LEDGER_LOCATIONS_ARRAY_MAX_BYTES,
     );
     expect(Buffer.byteLength(section, 'utf8')).toBeLessThanOrEqual(

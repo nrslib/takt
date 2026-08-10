@@ -63,21 +63,34 @@ export function renderCompactJsonBlock(value: unknown): string {
 
 export const renderQuoteWindowsJsonBlock = renderCompactJsonBlock;
 
-const PROMPT_JSON_STRING_DELIMITER_BYTES = 2;
-
-function maximumLedgerLocationBudgetItems(): string[] {
-  return Array.from(
+function maximumLedgerLocationBudgetShape(): {
+  items: string[];
+  truncation: PromptArrayTruncationMarker;
+  itemTruncations: PromptTruncationMarker[];
+} {
+  const boundedLocations = Array.from(
     { length: FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerMaxLocations },
-    () => 'x'.repeat(
-      FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerLocationMaxBytes
-      - PROMPT_JSON_STRING_DELIMITER_BYTES,
-    ),
+    (_, index) => boundPromptString({
+      value: `${'x'.repeat(RAW_FINDING_FIELD_LIMITS.maxEvidencePathChars)}:1`,
+      fieldPath: `budget.locations[${index}]`,
+      maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerLocationMaxBytes,
+    }),
   );
+  return {
+    items: boundedLocations.map(({ text }) => text),
+    truncation: {
+      kind: PROMPT_TRUNCATION_MARKER_KIND,
+      omittedCount: 1,
+    },
+    itemTruncations: boundedLocations.flatMap(({ truncation }) => (
+      truncation === undefined ? [] : [truncation]
+    )),
+  };
 }
 
-export const FINDING_MANAGER_PROMPT_LEDGER_LOCATIONS_ARRAY_MAX_BYTES = promptJsonUtf8Bytes({
-  items: maximumLedgerLocationBudgetItems(),
-});
+export const FINDING_MANAGER_PROMPT_LEDGER_LOCATIONS_ARRAY_MAX_BYTES = (
+  promptJsonUtf8Bytes(maximumLedgerLocationBudgetShape())
+);
 
 export const MIN_PROMPT_STRING_TRUNCATION_MARKER_BYTES = promptJsonUtf8Bytes({
   kind: PROMPT_TRUNCATION_MARKER_KIND,
@@ -472,12 +485,7 @@ function fullDetailFindingBudget(): Record<string, unknown> {
     maxItems: FINDING_MANAGER_PROMPT_FIELD_LIMITS.evidenceMaxItems,
     maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.taskLedgerEvidenceArrayMaxBytes,
   });
-  const boundedLocations = boundPromptArray({
-    items: maximumLedgerLocationBudgetItems(),
-    fieldPath: 'budget.locations',
-    maxItems: FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerMaxLocations,
-    maxRenderedBytes: FINDING_MANAGER_PROMPT_LEDGER_LOCATIONS_ARRAY_MAX_BYTES,
-  });
+  const boundedLocations = maximumLedgerLocationBudgetShape();
   return {
     id: 'F'.repeat(RAW_FINDING_FIELD_LIMITS.maxFindingIdChars),
     revision: 1,
@@ -494,7 +502,7 @@ function fullDetailFindingBudget(): Record<string, unknown> {
     },
     ...boundedText('description', FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerDescriptionMaxBytes),
     ...boundedText('suggestion', FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerSuggestionMaxBytes),
-    locations: promptArrayView(boundedLocations),
+    locations: boundedLocations,
     evidenceDetails: boundedEvidenceDetails.truncation === undefined
       ? boundedEvidenceDetails.items
       : boundedEvidenceDetails,

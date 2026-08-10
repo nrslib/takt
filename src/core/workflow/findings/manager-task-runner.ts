@@ -146,6 +146,11 @@ interface RawTaskContext {
   };
 }
 
+interface RawTaskRenderAttempt {
+  inputBytes: number | null;
+  reason: string;
+}
+
 interface ControlTaskQueueItem {
   task: MainManagerControlTask;
 }
@@ -955,13 +960,12 @@ async function executeRawTasks(input: {
     let prepared:
       | { phase1Instruction: string; inputBytes: number }
       | undefined;
-    let renderedInputBytes: number | undefined;
-    let lastRenderError: string | undefined;
+    const renderAttempts: RawTaskRenderAttempt[] = [];
     const candidateLimits = item.rawFindings.length > 1
       ? [CONTEXT_CANDIDATE_LIMITS[0]]
       : CONTEXT_CANDIDATE_LIMITS;
     for (const candidateLimit of candidateLimits) {
-      renderedInputBytes = undefined;
+      let renderedInputBytes: number | undefined;
       const context = rawTaskContext(
         input.previousLedger,
         item.rawFindings,
@@ -1001,11 +1005,21 @@ async function executeRawTasks(input: {
           prepared = { phase1Instruction, inputBytes };
           break;
         }
+        renderAttempts.push({
+          inputBytes,
+          reason: `Fully rendered manager input exceeds ${MAIN_MANAGER_INPUT_MAX_BYTES} UTF-8 bytes even for one raw finding (${inputBytes})`,
+        });
       } catch (error) {
         if (!(error instanceof FindingManagerPromptOverflowError)) {
           throw error;
         }
-        lastRenderError = error.message;
+        const inputBytes = renderedInputBytes ?? null;
+        renderAttempts.push({
+          inputBytes,
+          reason: inputBytes === null
+            ? `${error.message} (input bytes unknown because prompt rendering failed before full input was rendered)`
+            : error.message,
+        });
       }
     }
     if (prepared === undefined) {
@@ -1026,13 +1040,15 @@ async function executeRawTasks(input: {
         continue;
       }
       const rawFindingId = item.task.ownedRawFindingIds[0]!;
-      const reason = lastRenderError
-        ?? `Fully rendered manager input exceeds ${MAIN_MANAGER_INPUT_MAX_BYTES} UTF-8 bytes even for one raw finding`;
+      const finalAttempt = renderAttempts.at(-1) ?? {
+        inputBytes: null,
+        reason: `Fully rendered manager input exceeds ${MAIN_MANAGER_INPUT_MAX_BYTES} UTF-8 bytes even for one raw finding`,
+      };
       const overflow = buildRawTaskInputOverflow({
         taskId: item.task.taskId,
         ownedRawFindingIds: [rawFindingId],
-        inputBytes: renderedInputBytes ?? null,
-        reason,
+        inputBytes: finalAttempt.inputBytes,
+        reason: finalAttempt.reason,
       });
       for (const [failedRawFindingId, failure] of overflow.failures) {
         failures.set(failedRawFindingId, failure);
