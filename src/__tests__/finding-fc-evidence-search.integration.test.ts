@@ -156,10 +156,10 @@ describe('FC evidence-search fallback', () => {
   it('keeps adding left context when the next right line exceeds the byte limit', () => {
     const path = 'src/example.ts';
     const lines = [
-      'l'.repeat(2800),
-      'l'.repeat(2800),
-      'a'.repeat(1800),
-      'r'.repeat(4800),
+      'l'.repeat(300),
+      'l'.repeat(300),
+      'a'.repeat(300),
+      'r'.repeat(300),
     ];
     const windows = buildFindingEvidenceSearchWindows({
       snapshot: {
@@ -230,10 +230,10 @@ describe('FC evidence-search fallback', () => {
     });
 
     expect(request?.reportContent).toContain('snapshot-only');
-    expect(request?.reportContent).toContain(`[FILE ${targetPath} lines 1-127]`);
-    expect(request?.reportContent).toContain(`[FILE ${targetPath} lines 128-251]`);
-    expect(request?.reportContent).toContain(`[FILE ${targetPath} lines 252-375]`);
-    expect(request?.reportContent).toContain(`[FILE ${targetPath} lines 376-401]`);
+    const windowHeaders = request?.reportContent.match(/\[FILE .* lines \d+-\d+\]/g) ?? [];
+    expect(windowHeaders.length).toBeGreaterThan(1);
+    expect(request?.reportContent).toContain(`[FILE ${targetPath} lines 1-16]`);
+    expect(request?.reportContent).toContain(`[FILE ${targetPath} lines 397-401]`);
     expect(request?.reportContent).not.toContain('import {');
   });
 

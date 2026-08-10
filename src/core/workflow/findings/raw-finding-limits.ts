@@ -186,12 +186,12 @@ export function findRawFieldLimitViolation(fields: {
     const evidenceChecks: Array<[string, unknown, number]> = record.kind === 'file_quote'
       ? [
           [`evidence[${index}].path`, record.path, RAW_FINDING_LIMITS.maxEvidencePathChars],
-          [`evidence[${index}].verbatimExcerpt`, record.verbatimExcerpt, RAW_FINDING_LIMITS.maxVerbatimExcerptChars],
+          [`evidence[${index}].verbatimExcerpt`, record.verbatimExcerpt, RAW_FINDING_LIMITS.maxVerbatimExcerptBytes],
         ]
       : [];
     for (const [name, value, limit] of evidenceChecks) {
-      if (typeof value === 'string' && value.length > limit) {
-        return `${name} is ${value.length} characters, exceeding the limit of ${limit}`;
+      if (typeof value === 'string' && Buffer.byteLength(value, 'utf8') > limit) {
+        return `${name} is ${Buffer.byteLength(value, 'utf8')} UTF-8 bytes, exceeding the limit of ${limit}`;
       }
     }
   }

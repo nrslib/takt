@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { AgentWorkflowStep } from '../core/models/types.js';
+import { FINDING_EVIDENCE_ISSUANCE_LIMITS } from '../core/models/finding-contract-limits.js';
 import { evaluateRawAdmission } from '../core/workflow/findings/manager-admission.js';
 import { intakeReviewerOutputs } from '../core/workflow/findings/manager-intake.js';
 import {
@@ -15,14 +16,14 @@ import type { ReviewScopeProofSnapshot } from '../core/workflow/findings/snapsho
 import { canonicalRawFindingFixture } from './helpers/finding-lifecycle-fixture.js';
 
 const snapshotId = 'a'.repeat(64);
-const quoteContent = Buffer.from(`${'x'.repeat(8192)}\n`);
+const quoteContent = Buffer.from(`${'x'.repeat(FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteBytes)}\n`);
 const overLimitLineExcerpt = Array.from({ length: 201 }, () => 'x').join('\n');
 const overLimitStoredQuoteCases = [
   {
     name: 'byte',
-    content: Buffer.from(`${'x'.repeat(8193)}\n`),
+    content: Buffer.from(`${'x'.repeat(FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteBytes + 1)}\n`),
     endLine: 1,
-    verbatimExcerpt: 'x'.repeat(8193),
+    verbatimExcerpt: 'x'.repeat(FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteBytes + 1),
   },
   {
     name: 'line',
@@ -300,7 +301,7 @@ describe('finding evidence issuance byte budgets', () => {
       expect(item.wire.evidence).toHaveLength(1);
       expect(item.wire.evidence[0]).toMatchObject({
         kind: 'file_quote',
-        verbatimExcerpt: 'x'.repeat(8192),
+        verbatimExcerpt: 'x'.repeat(FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteBytes),
       });
     }
     expect(result.items[4]!.wire.evidence).toEqual([]);
@@ -384,7 +385,7 @@ describe('finding evidence issuance byte budgets', () => {
     expect(result.items[32]!.canonical.evidenceCoverageGaps).toEqual([]);
     expect(result.items[32]!.wire.evidence).toEqual([expect.objectContaining({
       kind: 'file_quote',
-      verbatimExcerpt: 'x'.repeat(8192),
+      verbatimExcerpt: 'x'.repeat(FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteBytes),
     })]);
   });
 

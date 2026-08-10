@@ -58,6 +58,9 @@ import {
   FINDING_MANAGER_PROMPT_CONTEXT_COVERAGE_MAX_BYTES,
   FINDING_MANAGER_PROMPT_BUDGETS,
   FINDING_MANAGER_PROMPT_FIELD_LIMITS,
+  FINDING_MANAGER_PROMPT_QUOTE_WINDOWS_ARRAY_MAX_BYTES,
+  renderCompactJsonBlock,
+  renderQuoteWindowsJsonBlock,
   rawTaskSectionBudget,
 } from './prompt-bounds.js';
 import type {
@@ -149,14 +152,74 @@ function taskLedgerProjection(
     fullDetailFindingIds,
     { includeRawFindingDetails: false },
   ) as {
-    workflowName: string;
     findings: unknown[];
-    conflicts: unknown[];
   };
+  const evidenceContext = (value: unknown): unknown => {
+    const compactRecord = (record: unknown): unknown => {
+      if (typeof record !== 'object' || record === null || Array.isArray(record)) {
+        return record;
+      }
+      const view = record as Record<string, unknown>;
+      if (view.kind !== 'file_quote') {
+        return {
+          evidenceId: view.evidenceId,
+          ...(view.protocolError === undefined ? {} : { protocolError: view.protocolError }),
+        };
+      }
+      return {
+        kind: view.kind,
+        path: view.path,
+        ...(view.pathTruncation === undefined ? {} : { pathTruncation: view.pathTruncation }),
+        startLine: view.startLine,
+        endLine: view.endLine,
+        verbatimExcerpt: view.verbatimExcerpt,
+        ...(view.verbatimExcerptTruncation === undefined
+          ? {}
+          : { verbatimExcerptTruncation: view.verbatimExcerptTruncation }),
+      };
+    };
+    const items = Array.isArray(value)
+      ? value
+      : typeof value === 'object' && value !== null && Array.isArray((value as Record<string, unknown>).items)
+        ? (value as Record<string, unknown>).items as unknown[]
+        : [];
+    const bounded = boundPromptArray({
+      items: items.map(compactRecord),
+      fieldPath: 'taskLedger.evidenceDetails',
+      maxItems: FINDING_MANAGER_PROMPT_FIELD_LIMITS.evidenceMaxItems,
+      maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.taskLedgerEvidenceArrayMaxBytes,
+    });
+    if (bounded.truncation === undefined) {
+      return bounded.items;
+    }
+    return bounded;
+  };
+  const findings = projection.findings.map((finding) => {
+    const view = finding as Record<string, unknown>;
+    return {
+      id: view.id,
+      revision: view.revision,
+      status: view.status,
+      lifecycle: view.lifecycle,
+      severity: view.severity,
+      title: view.title,
+      ...(view.titleTruncation === undefined ? {} : { titleTruncation: view.titleTruncation }),
+      target: view.target,
+      description: view.description,
+      ...(view.descriptionTruncation === undefined
+        ? {}
+        : { descriptionTruncation: view.descriptionTruncation }),
+      suggestion: view.suggestion,
+      ...(view.suggestionTruncation === undefined
+        ? {}
+        : { suggestionTruncation: view.suggestionTruncation }),
+      evidenceDetails: evidenceContext(view.evidenceDetails),
+    };
+  });
   return {
-    workflowName: projection.workflowName,
-    findings: projection.findings,
-    conflicts: projection.conflicts,
+    findings,
+    // raw adjudication does not own conflict decisions; those are sent to control tasks.
+    conflicts: [],
   };
 }
 
@@ -503,8 +566,13 @@ function rawTaskManifestView(input: {
   };
 }
 
-function promptSection(label: string, value: unknown, maxBytes: number): string {
-  const rendered = [label, renderFencedJsonBlock(value)].join('\n');
+function promptSection(
+  label: string,
+  value: unknown,
+  maxBytes: number,
+  render = renderCompactJsonBlock,
+): string {
+  const rendered = [label, render(value)].join('\n');
   const bytes = Buffer.byteLength(rendered, 'utf8');
   if (bytes > maxBytes) {
     throw new Error(`Finding manager prompt section "${label}" exceeds ${maxBytes} UTF-8 bytes (${bytes})`);
@@ -554,12 +622,7 @@ function rawEvidenceView(
       const path = boundPromptString({
         value: entry.path,
         fieldPath: `${rawFinding.rawFindingId}.evidence[${index}].path`,
-        maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.targetCollectionItemMaxBytes,
-      });
-      const verbatimExcerpt = boundPromptString({
-        value: entry.verbatimExcerpt,
-        fieldPath: `${rawFinding.rawFindingId}.evidence[${index}].verbatimExcerpt`,
-        maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.evidenceVerbatimExcerptMaxBytes,
+        maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.quoteWindowPathMaxBytes,
       });
       return {
         kind: entry.kind,
@@ -567,10 +630,7 @@ function rawEvidenceView(
         ...(path.truncation === undefined ? {} : { pathTruncation: path.truncation }),
         startLine: entry.startLine,
         endLine: entry.endLine,
-        verbatimExcerpt: verbatimExcerpt.text,
-        ...(verbatimExcerpt.truncation === undefined
-          ? {}
-          : { verbatimExcerptTruncation: verbatimExcerpt.truncation }),
+        verbatimExcerpt: entry.verbatimExcerpt,
         snapshotId: entry.snapshotId,
       };
     }
@@ -599,7 +659,7 @@ function rawEvidenceView(
       items: evidence,
       fieldPath: `${rawFinding.rawFindingId}.evidence`,
       maxItems: FINDING_MANAGER_PROMPT_FIELD_LIMITS.evidenceMaxItems,
-      maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.evidenceArrayMaxBytes,
+      maxRenderedBytes: FINDING_MANAGER_PROMPT_QUOTE_WINDOWS_ARRAY_MAX_BYTES,
     })),
   };
 }
@@ -689,6 +749,7 @@ function buildRawTaskInstruction(input: {
       evidenceRecordsByRawFindingId: input.evidenceRecordsByRawFindingId,
     }),
     rawTaskSectionBudget('quoteWindows', rawFindingIds),
+    renderQuoteWindowsJsonBlock,
   );
   return [input.contract.manager.instruction, structure, manifest, excerpts, quoteWindows, ledger]
     .join('\n');
@@ -894,9 +955,9 @@ async function executeRawTasks(input: {
         );
         const inputBytes = Buffer.byteLength(phase1Instruction, 'utf8');
         renderedInputBytes = inputBytes;
-        if (inputBytes > FINDING_MANAGER_PROMPT_BUDGETS.certificateMaxBytes) {
+        if (inputBytes > FINDING_MANAGER_PROMPT_BUDGETS.totalMaxBytes) {
           throw new Error(
-            `Finding manager prompt exceeds the budget certificate of ${FINDING_MANAGER_PROMPT_BUDGETS.certificateMaxBytes} UTF-8 bytes (${inputBytes})`,
+            `Finding manager prompt exceeds the prompt budget of ${FINDING_MANAGER_PROMPT_BUDGETS.totalMaxBytes} UTF-8 bytes (${inputBytes})`,
           );
         }
         if (inputBytes <= MAIN_MANAGER_INPUT_MAX_BYTES) {

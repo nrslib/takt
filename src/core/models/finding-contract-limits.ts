@@ -14,6 +14,7 @@ export const RAW_FINDING_FIELD_LIMITS = {
   maxDescriptionChars: 8192,
   maxSuggestionChars: 8192,
   maxVerbatimExcerptChars: 8192,
+  maxVerbatimExcerptBytes: 1024,
   /** snapshotId / proofId は SHA-256 content address の64桁 hex。 */
   maxSnapshotIdChars: 64,
   maxProofIdChars: 64,
@@ -26,7 +27,7 @@ export const RAW_FINDING_NORMALIZER_LIMITS = {
 
 export const FINDING_EVIDENCE_ISSUANCE_LIMITS = {
   maxFileQuoteLines: 200,
-  maxFileQuoteBytes: 8 * 1024,
+  maxFileQuoteBytes: RAW_FINDING_FIELD_LIMITS.maxVerbatimExcerptBytes,
   maxSourceFileBytes: 1024 * 1024,
   maxReviewerBytes: 256 * 1024,
   maxStepBytes: 512 * 1024,

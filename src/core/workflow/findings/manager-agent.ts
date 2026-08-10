@@ -43,7 +43,6 @@ import {
   boundPromptString,
   FINDING_MANAGER_PROMPT_FIELD_LIMITS,
   promptJsonUtf8Bytes,
-  type PromptArrayTruncationMarker,
   type PromptTruncationMarker,
 } from './prompt-bounds.js';
 
@@ -543,16 +542,39 @@ function boundedLedgerEvidenceDetails(
   ledger: FindingLedger,
   finding: FindingLedger['findings'][number],
 ): unknown {
-  return promptArrayView(boundPromptArray({
-    items: finding.evidenceIds.map((evidenceId) => (
-      ledger.evidenceRecords.find((record) => record.evidenceId === evidenceId) ?? {
+  const details = finding.evidenceIds.map((evidenceId) => {
+    const record = ledger.evidenceRecords.find((candidate) => candidate.evidenceId === evidenceId);
+    if (record === undefined || record.kind !== 'file_quote') {
+      return record ?? {
         evidenceId,
         protocolError: 'finding evidence record is missing',
-      }
-    )),
+      };
+    }
+    const path = boundPromptString({
+      value: record.path,
+      fieldPath: `${finding.id}.evidenceDetails.${evidenceId}.path`,
+      maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.targetCollectionItemMaxBytes,
+    });
+    const excerpt = boundPromptString({
+      value: record.verbatimExcerpt,
+      fieldPath: `${finding.id}.evidenceDetails.${evidenceId}.verbatimExcerpt`,
+      maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerEvidenceVerbatimExcerptMaxBytes,
+    });
+    return {
+      ...record,
+      path: path.text,
+      ...(path.truncation === undefined ? {} : { pathTruncation: path.truncation }),
+      verbatimExcerpt: excerpt.text,
+      ...(excerpt.truncation === undefined
+        ? {}
+        : { verbatimExcerptTruncation: excerpt.truncation }),
+    };
+  });
+  return promptArrayView(boundPromptArray({
+    items: details,
     fieldPath: `${finding.id}.evidenceDetails`,
     maxItems: FINDING_MANAGER_PROMPT_FIELD_LIMITS.evidenceMaxItems,
-    maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.evidenceArrayMaxBytes,
+    maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerEvidenceArrayMaxBytes,
   }));
 }
 
@@ -703,7 +725,12 @@ export function buildManagerInputLedger(
               fieldPath: `${finding.id}.locations[${index}]`,
               maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerLocationMaxBytes,
             });
-            return bounded.text;
+            return {
+              location: bounded.text,
+              ...(bounded.truncation === undefined
+                ? {}
+                : { locationTruncation: bounded.truncation }),
+            };
           })),
           lastSeen: finding.lastSeen,
           ...(finding.provisional !== undefined

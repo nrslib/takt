@@ -108,7 +108,7 @@ function maxRawFinding(): RawFinding {
   });
 }
 
-describe('finding manager prompt budget certificate', () => {
+describe('finding manager prompt budget', () => {
   it('keeps every section allocation below the provider input limit', () => {
     const raw = maxRawFinding();
     const oneRawSectionBudgets = {
@@ -123,7 +123,7 @@ describe('finding manager prompt budget certificate', () => {
       .reduce((sum, value) => sum + value, 0);
     expect(FINDING_MANAGER_PROMPT_BUDGET_ITEM_COUNT).toBe(1);
     expect(total).toBeLessThanOrEqual(FINDING_MANAGER_INPUT_MAX_BYTES);
-    expect(total).toBeLessThanOrEqual(FINDING_MANAGER_PROMPT_BUDGETS.certificateMaxBytes);
+    expect(total).toBeLessThanOrEqual(FINDING_MANAGER_PROMPT_BUDGETS.totalMaxBytes);
   });
 
   it('proves every bounded string and array budget can carry its smallest marker', () => {
@@ -134,7 +134,9 @@ describe('finding manager prompt budget certificate', () => {
       FINDING_MANAGER_PROMPT_FIELD_LIMITS.rawExcerptMaxBytes,
       FINDING_MANAGER_PROMPT_FIELD_LIMITS.targetLiteralMaxBytes,
       FINDING_MANAGER_PROMPT_FIELD_LIMITS.targetCollectionItemMaxBytes,
+      FINDING_MANAGER_PROMPT_FIELD_LIMITS.quoteWindowPathMaxBytes,
       FINDING_MANAGER_PROMPT_FIELD_LIMITS.evidenceVerbatimExcerptMaxBytes,
+      FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerEvidenceVerbatimExcerptMaxBytes,
       FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerTitleMaxBytes,
       FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerDescriptionMaxBytes,
       FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerSuggestionMaxBytes,
@@ -147,6 +149,8 @@ describe('finding manager prompt budget certificate', () => {
     ];
     const arrayBudgets = [
       FINDING_MANAGER_PROMPT_FIELD_LIMITS.evidenceArrayMaxBytes,
+      FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerEvidenceArrayMaxBytes,
+      FINDING_MANAGER_PROMPT_FIELD_LIMITS.taskLedgerEvidenceArrayMaxBytes,
       FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerLocationMaxBytes,
     ];
 
@@ -166,7 +170,7 @@ describe('finding manager prompt budget certificate', () => {
     expect(view).toHaveProperty('rawFindingId', raw.rawFindingId);
   });
 
-  it('renders a schema-maximum raw finding within the certificate', async () => {
+  it('renders a schema-maximum raw finding within the total budget', async () => {
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
       const manifest = sectionJson<{
         taskId: string;
@@ -219,7 +223,7 @@ describe('finding manager prompt budget certificate', () => {
       expect.objectContaining({ status: 'input_overflow' }),
     );
     expect(Buffer.byteLength(prompt, 'utf8'))
-      .toBeLessThanOrEqual(FINDING_MANAGER_PROMPT_BUDGETS.certificateMaxBytes);
+      .toBeLessThanOrEqual(FINDING_MANAGER_PROMPT_BUDGETS.totalMaxBytes);
     expect(Buffer.byteLength(prompt, 'utf8')).toBeLessThanOrEqual(FINDING_MANAGER_INPUT_MAX_BYTES);
   });
 

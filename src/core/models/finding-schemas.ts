@@ -440,7 +440,12 @@ export const FileQuoteEvidenceSchema = z.object({
   path: nonEmptyString.max(RAW_FINDING_FIELD_LIMITS.maxEvidencePathChars),
   startLine: z.number().int().positive(),
   endLine: z.number().int().positive(),
-  verbatimExcerpt: nonEmptyString.max(RAW_FINDING_FIELD_LIMITS.maxVerbatimExcerptChars),
+  verbatimExcerpt: nonEmptyString
+    .max(RAW_FINDING_FIELD_LIMITS.maxVerbatimExcerptChars)
+    .refine(
+      (value) => Buffer.byteLength(value, 'utf8') <= RAW_FINDING_FIELD_LIMITS.maxVerbatimExcerptBytes,
+      `verbatimExcerpt must be at most ${RAW_FINDING_FIELD_LIMITS.maxVerbatimExcerptBytes} UTF-8 bytes`,
+    ),
   snapshotId: Sha256Schema.max(RAW_FINDING_FIELD_LIMITS.maxSnapshotIdChars),
 }).strict();
 

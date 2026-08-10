@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildFindingRawObservationSettlementSummary,
   assertFindingRawObservationExactCover,
   FindingRawObservationExactCoverError,
 } from '../core/workflow/findings/finding-raw-settlement.js';
+import type { FindingLedger } from '../core/workflow/findings/types.js';
 
 const knownDestinations = new Map([
   ['finding', new Set(['F-0001'])],
@@ -48,6 +50,55 @@ describe('finding manager raw observation exact cover', () => {
       ],
       failures: [],
       knownDestinationIds: knownDestinations,
+    })).toThrow(FindingRawObservationExactCoverError);
+  });
+
+  it('normalizes a conflict and its member finding to one authoritative conflict landing', () => {
+    const ledger = {
+      conflictRawClaimLandings: [],
+      conflicts: [{
+        id: 'C-0001',
+        findingIds: ['F-0001'],
+        rawFindingIds: ['raw-duplicate'],
+      }],
+      findings: [{
+        id: 'F-0001',
+        rawFindingIds: ['raw-duplicate'],
+      }],
+      reviewerAnomalies: [],
+    } as unknown as FindingLedger;
+
+    const summary = buildFindingRawObservationSettlementSummary({
+      expectedRawFindingIds: ['raw-duplicate'],
+      ledger,
+      explicitFailures: [],
+    });
+
+    expect(summary.settlements).toEqual([{
+      rawFindingIds: ['raw-duplicate'],
+      destination: { kind: 'conflict', id: 'C-0001' },
+    }]);
+  });
+
+  it('rejects an unrelated finding and conflict that both contain the same raw finding', () => {
+    const ledger = {
+      conflictRawClaimLandings: [],
+      conflicts: [{
+        id: 'C-0001',
+        findingIds: ['F-0002'],
+        rawFindingIds: ['raw-duplicate'],
+      }],
+      findings: [{
+        id: 'F-0001',
+        rawFindingIds: ['raw-duplicate'],
+      }],
+      reviewerAnomalies: [],
+    } as unknown as FindingLedger;
+
+    expect(() => buildFindingRawObservationSettlementSummary({
+      expectedRawFindingIds: ['raw-duplicate'],
+      ledger,
+      explicitFailures: [],
     })).toThrow(FindingRawObservationExactCoverError);
   });
 

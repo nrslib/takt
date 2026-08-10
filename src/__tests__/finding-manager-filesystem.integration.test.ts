@@ -1252,7 +1252,7 @@ describe('finding manager filesystem error propagation', () => {
   });
 
   it('24KB近傍のrawを有界描画し、lifecycleのsettlementを検証レポートへ記録する', async () => {
-    const exampleLines = Array.from({ length: 5 }, (_, index) => `line-${index + 1}-😀`.repeat(40));
+    const exampleLines = Array.from({ length: 5 }, (_, index) => `line-${index + 1}-😀`.repeat(30));
     writeFileSync(join(cwd, 'src', 'example.ts'), `${exampleLines.join('\n')}\n`);
     const ledgerStore = createTestFindingLedgerStore({
       projectCwd: cwd,

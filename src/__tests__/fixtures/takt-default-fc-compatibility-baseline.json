@@ -16,12 +16,12 @@
   },
   "managerPrompts": {
     "raw": {
-      "bytes": 3837,
-      "sha256": "1e3f0d1d72aa44e152a55222b4ab412f25343d1a89da6abc2563cadebb57757c"
+      "bytes": 2323,
+      "sha256": "98c9df685188007ea9468b51f69d0f8ae60c545ccf205a4061b9fcdd227621c4"
     },
     "control": {
-      "bytes": 3364,
-      "sha256": "9d1aa4d303026b885e64ac32c4eae06fa8496237ab6ebd75de8660df32351148"
+      "bytes": 2213,
+      "sha256": "6d2c657d7eb8765a4735b440dca6d4c3bd4eb234b9e879ee1241f846363cd58b"
     },
     "entityBinding": {
       "bytes": 1963,

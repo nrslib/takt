@@ -1,13 +1,17 @@
 import { decodeSourceUtf8 } from './source-quote.js';
-import { FINDING_EVIDENCE_ISSUANCE_LIMITS } from '../../models/finding-contract-limits.js';
+import {
+  FINDING_EVIDENCE_ISSUANCE_LIMITS,
+  RAW_FINDING_FIELD_LIMITS,
+} from '../../models/finding-contract-limits.js';
 import type { RawFinding, ReviewerAnomalyEntry } from './types.js';
 import type { ReviewScopeProofSnapshot } from './snapshot.js';
 import type { RestatementRequestV1 } from './review-publication.js';
 import { selectRestatementSourceClaimAtom } from './reviewer-anomalies.js';
 
+const MAX_SEARCH_WINDOW_BYTES = RAW_FINDING_FIELD_LIMITS.maxVerbatimExcerptBytes;
 const MAX_WINDOWS_PER_FILE = Math.floor(
   FINDING_EVIDENCE_ISSUANCE_LIMITS.maxReviewerBytes
-    / FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteBytes,
+    / MAX_SEARCH_WINDOW_BYTES,
 );
 
 export interface FindingEvidenceSearchRequest {
@@ -34,13 +38,6 @@ function lineCount(lines: readonly string[]): number {
   return lines.length === 1 && lines[0] === '' ? 0 : lines.length;
 }
 
-function renderLines(
-  lines: readonly string[],
-  startLine: number,
-): string {
-  return lines.map((line, index) => `${startLine + index}: ${line}`).join('\n');
-}
-
 function windowForLines(
   path: string,
   lines: readonly string[],
@@ -53,7 +50,7 @@ function windowForLines(
     const renderedLine = `${startLine + selectedLines.length}: ${line}`;
     const renderedBytes = Buffer.byteLength(renderedLine, 'utf8')
       + (selectedLines.length === 0 ? 0 : 1);
-    if (contentBytes + renderedBytes > FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteBytes) {
+    if (contentBytes + renderedBytes > MAX_SEARCH_WINDOW_BYTES) {
       break;
     }
     selectedLines.push(line);
@@ -127,13 +124,11 @@ function windowsForFile(
     lines.pop();
   }
   const totalLines = lineCount(lines);
-  if (Buffer.byteLength(content, 'utf8') <= FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteBytes) {
-    return [{
-      path,
-      startLine: 1,
-      endLine: totalLines,
-      content: renderLines(lines, 1),
-    }];
+  if (Buffer.byteLength(content, 'utf8') <= MAX_SEARCH_WINDOW_BYTES) {
+    const wholeFileWindow = windowForLines(path, lines, 1);
+    if (wholeFileWindow !== undefined && wholeFileWindow.endLine === totalLines) {
+      return [wholeFileWindow];
+    }
   }
 
   const maxLines = FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteLines;

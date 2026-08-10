@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   computeClaimIdentityHash,
 } from '../core/models/finding-claim-identity.js';
+import { FINDING_EVIDENCE_ISSUANCE_LIMITS } from '../core/models/finding-contract-limits.js';
 import {
   createRawFindingsOutputJsonSchema,
 } from '../core/models/finding-schemas.js';
@@ -1017,11 +1018,11 @@ describe('Finding evidence request issuer', () => {
       reviewerInvalid: false,
     },
     {
-      name: 'more than 8192 quote bytes',
-      content: Buffer.from(`${'x'.repeat(8193)}\n`),
+      name: `more than ${FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteBytes} quote bytes`,
+      content: Buffer.from(`${'x'.repeat(FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteBytes + 1)}\n`),
       startLine: 1,
       endLine: 1,
-      reason: /8192-byte quote limit/,
+      reason: new RegExp(`${FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteBytes}-byte quote limit`),
       reviewerInvalid: false,
     },
     {
@@ -1166,7 +1167,7 @@ describe('Finding evidence request issuer', () => {
   });
 
   it('enforces exact reviewer and step byte budgets without truncation', () => {
-    const content = Buffer.from(`${'x'.repeat(8192)}\n`);
+    const content = Buffer.from(`${'x'.repeat(FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteBytes)}\n`);
     const codeTarget: FindingTarget = {
       kind: 'code',
       paths: ['src/a.ts'],
@@ -1198,19 +1199,32 @@ describe('Finding evidence request issuer', () => {
       })
     );
 
-    expect(issue(8192, 8192)).toMatchObject({
+    expect(issue(
+      FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteBytes,
+      FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteBytes,
+    )).toMatchObject({
       coverageGaps: [],
-      materializedQuoteBytes: 8192,
+      materializedQuoteBytes: FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteBytes,
     });
-    expect(issue(8191, 8192)).toMatchObject({
+    expect(issue(
+      FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteBytes - 1,
+      FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteBytes,
+    )).toMatchObject({
       evidence: [],
-      coverageGaps: ['file_quote issuance exceeds the remaining reviewer byte budget (8191 bytes)'],
+      coverageGaps: [
+        `file_quote issuance exceeds the remaining reviewer byte budget (${FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteBytes - 1} bytes)`,
+      ],
       quoteFailureReasons: [],
       materializedQuoteBytes: 0,
     });
-    expect(issue(8192, 8191)).toMatchObject({
+    expect(issue(
+      FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteBytes,
+      FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteBytes - 1,
+    )).toMatchObject({
       evidence: [],
-      coverageGaps: ['file_quote issuance exceeds the remaining step byte budget (8191 bytes)'],
+      coverageGaps: [
+        `file_quote issuance exceeds the remaining step byte budget (${FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteBytes - 1} bytes)`,
+      ],
       quoteFailureReasons: [],
       materializedQuoteBytes: 0,
     });

@@ -210,6 +210,69 @@ function destinationMap(
   return destinations;
 }
 
+function conflictMemberFindingRawIds(input: {
+  ledger: FindingLedger;
+  settlements: readonly FindingRawObservationSettlementInput[];
+}): ReadonlySet<string> {
+  const conflictIdsByRawFindingId = new Map<string, Set<string>>();
+  const findingIdsByRawFindingId = new Map<string, Set<string>>();
+  for (const settlement of input.settlements) {
+    const rawFindingIds = [
+      ...(settlement.rawFindingIds ?? []),
+      ...(settlement.sourceRawFindingIds ?? []),
+    ];
+    if (settlement.destination.kind === 'conflict') {
+      for (const rawFindingId of rawFindingIds) {
+        const conflictIds = conflictIdsByRawFindingId.get(rawFindingId) ?? new Set<string>();
+        conflictIds.add(settlement.destination.id);
+        conflictIdsByRawFindingId.set(rawFindingId, conflictIds);
+      }
+    }
+    if (settlement.destination.kind === 'finding') {
+      for (const rawFindingId of rawFindingIds) {
+        const findingIds = findingIdsByRawFindingId.get(rawFindingId) ?? new Set<string>();
+        findingIds.add(settlement.destination.id);
+        findingIdsByRawFindingId.set(rawFindingId, findingIds);
+      }
+    }
+  }
+
+  const normalizedRawFindingIds = new Set<string>();
+  for (const [rawFindingId, findingIds] of findingIdsByRawFindingId) {
+    const conflictIds = conflictIdsByRawFindingId.get(rawFindingId);
+    if (conflictIds === undefined || conflictIds.size !== 1) {
+      continue;
+    }
+    const conflict = input.ledger.conflicts.find(({ id }) => conflictIds.has(id));
+    if (conflict !== undefined && [...findingIds].every((findingId) => (
+      conflict.findingIds.includes(findingId)
+    ))) {
+      normalizedRawFindingIds.add(rawFindingId);
+    }
+  }
+  return normalizedRawFindingIds;
+}
+
+function normalizeConflictMemberFindingSettlements(input: {
+  ledger: FindingLedger;
+  settlements: readonly FindingRawObservationSettlementInput[];
+}): FindingRawObservationSettlementInput[] {
+  const normalizedRawFindingIds = conflictMemberFindingRawIds(input);
+  return input.settlements.flatMap((settlement) => {
+    if (settlement.destination.kind !== 'finding') {
+      return [settlement];
+    }
+    const rawFindingIds = (settlement.rawFindingIds ?? [])
+      .filter((rawFindingId) => !normalizedRawFindingIds.has(rawFindingId));
+    const sourceRawFindingIds = (settlement.sourceRawFindingIds ?? [])
+      .filter((rawFindingId) => !normalizedRawFindingIds.has(rawFindingId));
+    if (rawFindingIds.length === 0 && sourceRawFindingIds.length === 0) {
+      return [];
+    }
+    return [{ ...settlement, rawFindingIds, sourceRawFindingIds }];
+  });
+}
+
 export function buildFindingRawObservationSettlementSummary(input: {
   expectedRawFindingIds: readonly string[];
   ledger: FindingLedger;
@@ -253,18 +316,50 @@ export function buildFindingRawObservationSettlementSummary(input: {
       });
     }
   }
-  const conflictRawFindingIds = new Set(
-    ledger.conflicts.flatMap((conflict) => conflict.rawFindingIds),
-  );
+  const conflictHoldingProvisionalRawFindingIdsByFindingId = new Map<string, Set<string>>();
+  for (const conflict of ledger.conflicts) {
+    const conflictRawFindingIds = new Set(conflict.rawFindingIds);
+    const conflictHoldingFindingIds = new Set(
+      ledger.conflictRawClaimLandings
+        .filter((landing) => landing.conflictId === conflict.id)
+        .map((landing) => landing.holdingFindingId),
+    );
+    for (const finding of ledger.findings) {
+      if (
+        !finding.provisional
+        || (
+          !conflict.findingIds.includes(finding.id)
+          && !conflictHoldingFindingIds.has(finding.id)
+        )
+      ) {
+        continue;
+      }
+      const holdingRawFindingIds = (
+        conflictHoldingProvisionalRawFindingIdsByFindingId.get(finding.id)
+        ?? new Set<string>()
+      );
+      for (const rawFindingId of [
+        ...finding.rawFindingIds,
+        ...finding.provisional.sourceRawFindingIds,
+      ]) {
+        if (conflictRawFindingIds.has(rawFindingId)) {
+          holdingRawFindingIds.add(rawFindingId);
+        }
+      }
+      conflictHoldingProvisionalRawFindingIdsByFindingId.set(finding.id, holdingRawFindingIds);
+    }
+  }
 
   for (const finding of ledger.findings) {
+    const holdingRawFindingIds = conflictHoldingProvisionalRawFindingIdsByFindingId.get(finding.id)
+      ?? new Set<string>();
     const findingRawFindingIds = finding.rawFindingIds.filter(
       (rawFindingId) => expectedRawFindingIds.has(rawFindingId)
-        && !conflictRawFindingIds.has(rawFindingId),
+        && !holdingRawFindingIds.has(rawFindingId),
     );
     const provisionalRawFindingIds = (finding.provisional?.sourceRawFindingIds ?? []).filter(
       (rawFindingId) => expectedRawFindingIds.has(rawFindingId)
-        && !conflictRawFindingIds.has(rawFindingId),
+        && !holdingRawFindingIds.has(rawFindingId),
     );
     if (findingRawFindingIds.length > 0 || provisionalRawFindingIds.length > 0) {
       settlements.push({
@@ -284,8 +379,12 @@ export function buildFindingRawObservationSettlementSummary(input: {
     }
   }
 
+  const normalizedSettlements = normalizeConflictMemberFindingSettlements({
+    ledger,
+    settlements,
+  });
   const rawDestinationById = new Map<string, { kind: FindingRawObservationSettlementDestinationKind; id: string }>();
-  for (const settlement of settlements) {
+  for (const settlement of normalizedSettlements) {
     for (const rawFindingId of sortedUnique([
       ...(settlement.rawFindingIds ?? []),
       ...(settlement.sourceRawFindingIds ?? []),
@@ -308,7 +407,7 @@ export function buildFindingRawObservationSettlementSummary(input: {
           }
           continue;
         }
-        settlements.push({
+        normalizedSettlements.push({
           rawFindingIds: [rawFindingId],
           destination: { kind: 'finding', id: anomaly.promotedFindingId },
         });
@@ -323,7 +422,7 @@ export function buildFindingRawObservationSettlementSummary(input: {
       (rawFindingId) => expectedRawFindingIds.has(rawFindingId),
     );
     if (sourceRawFindingIds.length > 0) {
-      settlements.push({
+      normalizedSettlements.push({
         sourceRawFindingIds,
         destination: { kind: 'reviewer-anomaly', id: anomaly.id },
       });
@@ -332,7 +431,7 @@ export function buildFindingRawObservationSettlementSummary(input: {
 
   return assertFindingRawObservationExactCover({
     expectedRawFindingIds: input.expectedRawFindingIds,
-    settlements,
+    settlements: normalizedSettlements,
     failures: input.explicitFailures,
     knownDestinationIds: destinationMap(input.ledger),
   });
