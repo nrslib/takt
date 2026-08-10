@@ -62,7 +62,8 @@ import type {
   ReviewerAnomalyEntry,
 } from './types.js';
 
-const CONTEXT_CANDIDATE_LIMITS = [16, 8, 4] as const;
+// required target は常に含め、単一 raw の optional 候補だけを段階的に削る。
+const CONTEXT_CANDIDATE_LIMITS = [16, 8, 4, 2, 1, 0] as const;
 const COMPACT_CONFLICT_COLLECTION_LIMIT = 16;
 const CONTROL_PRIOR_TEXT_LIMIT = 4_000;
 
@@ -676,6 +677,12 @@ async function executeRawTasks(input: {
         item.rawFindings,
         candidateLimit,
       );
+      if (
+        context.coverage.candidateFindingCount > 0
+        && context.coverage.selectedFindingIds.length === 0
+      ) {
+        break;
+      }
       const baseInstruction = buildRawTaskInstruction({
         contract: input.contract,
         task: item.task,

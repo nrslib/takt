@@ -903,7 +903,7 @@ describe('main manager bounded task runner', () => {
     expect(result.taskAudits).toMatchObject([{ status: 'input_overflow' }]);
   });
 
-  it('fails a one-raw input after the 16-to-8-to-4 candidates without an empty projection success', async () => {
+  it('fails a one-raw input after the 16-to-8-to-4-to-2-to-1 candidates without an empty projection success', async () => {
     const raw = rawFinding(1, {
       title: 'Candidate issue 1',
       description: `Candidate description 1 ${'x'.repeat(MAIN_MANAGER_INPUT_MAX_BYTES)}`,
@@ -933,7 +933,7 @@ describe('main manager bounded task runner', () => {
     );
 
     expect(executeAgentMock).not.toHaveBeenCalled();
-    expect(attempts).toHaveLength(3);
+    expect(attempts).toHaveLength(5);
     for (const instruction of attempts) {
       const projection = sectionJson<{ findings: unknown[] }>(
         instruction,
@@ -946,9 +946,9 @@ describe('main manager bounded task runner', () => {
       selectedFindingIds: string[];
     }>(instruction, '## Context coverage'));
     expect(coverages.map((coverage) => coverage.candidateFindingCount))
-      .toEqual([16, 16, 16]);
+      .toEqual([16, 16, 16, 16, 16]);
     expect(coverages.map((coverage) => coverage.selectedFindingIds.length))
-      .toEqual([16, 8, 4]);
+      .toEqual([16, 8, 4, 2, 1]);
     expect(result.rawFailures.get(raw.rawFindingId)?.kind)
       .toBe('manager-input-overflow');
     expect(result.taskAudits).toMatchObject([{
@@ -958,6 +958,74 @@ describe('main manager bounded task runner', () => {
     expect(result.taskAudits[0]?.inputBytes).toBeGreaterThan(
       MAIN_MANAGER_INPUT_MAX_BYTES,
     );
+  });
+
+  it('lands a required lifecycle raw with only its required finding after candidate reduction', async () => {
+    const raw = rawFinding(1, {
+      relation: 'persists',
+      targetFindingId: 'F-0001',
+      title: 'Candidate issue 1',
+      description: `Raw observation candidateSymbolShared ${'x'.repeat(4_000)}`,
+    });
+    // optional 候補は圧縮ビューに載る title で予算を圧迫させる（description は
+    // 圧縮ビューに描画されない）。候補資格は共有シンボルで維持する。
+    const candidateFindings = Array.from({ length: 4 }, (_, index) => (
+      index === 0
+        ? {
+            ...ledgerFinding(1),
+            title: 'Candidate issue 1',
+            description: `Candidate description ${'x'.repeat(7_000)}`,
+          }
+        : {
+            ...ledgerFinding(index + 1),
+            title: `Optional candidateSymbolShared ${'y'.repeat(22_000)}`,
+            description: 'Optional candidate candidateSymbolShared',
+          }
+    ));
+    const attempts: string[] = [];
+    const executionInput = {
+      ...runInput,
+      stepExecutor: {
+        ...runInput.stepExecutor,
+        buildPhase1Instruction: (instruction: string) => {
+          if (!instruction.includes('__manager-prefix-check__')) {
+            attempts.push(instruction);
+          }
+          return instruction;
+        },
+      },
+    };
+    executeAgentMock.mockImplementation(async (_persona, instruction) => (
+      successfulRawResponse(instruction, 'same')
+    ));
+
+    const result = await run(
+      [raw],
+      emptyLedger({ findings: candidateFindings }),
+      executionInput,
+    );
+
+    const coverages = attempts.map((instruction) => sectionJson<{
+      candidateFindingCount: number;
+      selectedFindingIds: string[];
+    }>(instruction, '## Context coverage'));
+    expect(coverages).toHaveLength(6);
+    expect(coverages.map((coverage) => coverage.candidateFindingCount))
+      .toEqual([4, 4, 4, 4, 4, 4]);
+    expect(coverages.map((coverage) => coverage.selectedFindingIds.length))
+      .toEqual([4, 4, 4, 3, 2, 1]);
+    expect(coverages.at(-1)).toMatchObject({
+      candidateFindingCount: 4,
+      selectedFindingIds: ['F-0001'],
+    });
+    expect(executeAgentMock).toHaveBeenCalledTimes(1);
+    expect(result.decisions.rawDecisions).toEqual([expect.objectContaining({
+      rawFindingId: raw.rawFindingId,
+      decision: 'same',
+      findingId: 'F-0001',
+    })]);
+    expect(result.rawFailures.size).toBe(0);
+    expect(result.taskAudits).toMatchObject([{ status: 'succeeded' }]);
   });
 
   it.each([23_999, 24_000, 24_001])(
