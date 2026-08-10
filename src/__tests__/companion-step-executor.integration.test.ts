@@ -101,6 +101,13 @@ function createFailingCompletionDiffReader(): CompanionDiffReader {
   };
 }
 
+function createFailingStartupDiffReader(): CompanionDiffReader {
+  return {
+    readBaselineSha: vi.fn().mockRejectedValue(new Error('baseline failed')),
+    readDiff: vi.fn(),
+  };
+}
+
 function mockSuccessfulImplementer(): void {
   vi.mocked(executeAgent).mockImplementation(async (_persona, prompt, options) => {
     options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: prompt });
@@ -233,6 +240,30 @@ describe('companion StepExecutor lifecycle', () => {
     );
 
     expect(getEventListeners(abortController.signal, 'abort')).toHaveLength(0);
+  });
+
+  it('should block condition evaluation when companion startup fails', async () => {
+    const abortController = new AbortController();
+    mockSuccessfulImplementer();
+    const state = makeState();
+
+    const result = await new StepExecutor(createDeps({
+      cwd,
+      runPaths,
+      companionDiffReader: createFailingStartupDiffReader(),
+      abortSignal: abortController.signal,
+      emitEvent: vi.fn(),
+    })).runNormalStep(
+      createCompanionStep(),
+      state,
+      'task',
+      5,
+      vi.fn(),
+      'Implement.',
+    );
+
+    expect(result.response.status).toBe('blocked');
+    expect(state.companion).toBeUndefined();
   });
 
   it('should deliver escalation reason and five-field findings as untrusted evidence', async () => {

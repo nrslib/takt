@@ -2638,8 +2638,9 @@ export class StepExecutor {
         });
       } catch (error) {
         this.deps.abortSignal?.throwIfAborted();
+        delete state.companion;
         log.warn(
-          `Companion startup failed for "${step.name}"; continuing main step: ${getErrorMessage(error)}`,
+          `Companion startup failed for "${step.name}"; main step will continue but completion remains blocked: ${getErrorMessage(error)}`,
         );
       }
     }

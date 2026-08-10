@@ -390,13 +390,16 @@ steps:
       });
       engines.push(engine);
       const abortReasons: string[] = [];
+      const companionSteps: string[] = [];
       engine.on('workflow:abort', (_state, reason) => abortReasons.push(reason));
+      engine.on('companion:start', ({ step }) => companionSteps.push(step));
 
       const state = await engine.run();
 
       expect(state.status).toBe('aborted');
       expect(abortReasons).toEqual(['Workflow aborted by step transition']);
       expect(getScenarioQueue()?.remaining).toBe(0);
+      expect(companionSteps).toEqual(['implement', 'fix']);
     },
     60_000,
   );

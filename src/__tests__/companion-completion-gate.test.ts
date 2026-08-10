@@ -58,8 +58,8 @@ describe('companion completion gate', () => {
     const step = companionStep();
     const workflowState = state({
       escalated: true,
-      openMustFixCount: 1,
-      openMustFix,
+      openMustFixCount: 0,
+      openMustFix: [],
       reason: 'completion review could not verify the final diff',
     });
     const buildPhaseRunnerContext = vi.fn();
