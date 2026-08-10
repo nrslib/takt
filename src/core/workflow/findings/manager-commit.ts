@@ -234,6 +234,7 @@ function buildCommitReport(
       ...managerDecision.invalidAttempts,
     ],
     staleRejections: committed.staleRejections,
+    deferredResolutionRejections: committed.deferredResolutionRejections,
     admissionRejections: committed.admissionRejections,
     unsupportedRawFindingReports: [
       ...managerDecision.unsupportedRawFindingReports,

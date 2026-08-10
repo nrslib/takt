@@ -59,6 +59,9 @@ function canonicalizeReport(
     ...(report.rawAdmissionRejections === undefined
       ? {}
       : { rawAdmissionRejections: [...report.rawAdmissionRejections] }),
+    ...(report.deferredResolutionRejections === undefined
+      ? {}
+      : { deferredResolutionRejections: [...report.deferredResolutionRejections] }),
     ...(report.unsupportedRawFindings === undefined
       ? {}
       : { unsupportedRawFindings: [...report.unsupportedRawFindings] }),

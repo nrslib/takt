@@ -239,6 +239,7 @@ describe('provisional target landing', () => {
       landedSpecs: [],
       entityMutationResults: [],
       normalizationRejections: [],
+      deferredResolutionRejections: [],
       rejectedObservationAttachments: [],
       settlementCommands: [],
     };
@@ -312,6 +313,7 @@ describe('provisional target landing', () => {
       landedSpecs: [],
       entityMutationResults: [],
       normalizationRejections: [],
+      deferredResolutionRejections: [],
       rejectedObservationAttachments: [],
       settlementCommands: [],
     };

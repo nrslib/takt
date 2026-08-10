@@ -1164,6 +1164,7 @@ export interface FindingManagerValidationReport {
   ledgerUpdated: boolean;
   finalErrors: string[];
   attempts: FindingManagerValidationAttemptReport[];
+  deferredResolutionRejections?: string[];
   rawAdmissionRejections?: RawAdmissionRejectionReport[];
   unsupportedRawFindings?: UnsupportedRawFindingReport[];
   reviewerOutputOverflows?: ReviewerOutputOverflowReport[];

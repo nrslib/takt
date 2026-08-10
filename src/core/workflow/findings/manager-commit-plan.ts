@@ -119,6 +119,7 @@ export interface CommitMutationResult {
   managerDecisionCommands: FindingLifecycleCommand[];
   lifecycleManagerOutput: FindingManagerOutput;
   staleRejections: string[];
+  deferredResolutionRejections: string[];
   unsupportedRawFindingReports: UnsupportedRawFindingReport[];
   admissionRejections: RawAdmissionEvaluation['admissionRejections'];
   provisionalLandings: ProvisionalLandingReport[];
@@ -1079,6 +1080,7 @@ export function buildFindingManagerCommitMutation(
         managerDecisionCommands: [],
         lifecycleManagerOutput: params.managerDecision.managerOutput,
         staleRejections: [],
+        deferredResolutionRejections: [],
         unsupportedRawFindingReports: [],
         admissionRejections: [],
         provisionalLandings: [],
@@ -1424,6 +1426,7 @@ export function buildFindingManagerCommitMutation(
         ...reconcilePlan.normalizationRejections,
         ...finalized.adjudicationRejections,
       ],
+      deferredResolutionRejections: reconcilePlan.deferredResolutionRejections,
       unsupportedRawFindingReports: revalidated.unsupportedRawFindingReports,
       admissionRejections: admission.admissionRejections,
       provisionalLandings,

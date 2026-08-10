@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -543,6 +543,19 @@ describe('finding-conflict-adjudication runner registry contract', () => {
       managerResolutionResponse(String(instruction), holding.id)
     ));
     await managerRound([resolutionRaw(beforeAdjudicationRawId)], 1);
+
+    const validationReport = JSON.parse(readFileSync(
+      join(cwd, '.takt', 'runs', 'run-1', 'reports', 'findings-manager-validation.reviewers.json'),
+      'utf8',
+    )) as {
+      attempts: Array<{ validationErrors: string[] }>;
+      deferredResolutionRejections: string[];
+    };
+    expect(validationReport.deferredResolutionRejections).toEqual([
+      expect.stringContaining('deferred while waiting for an unsettled conflict landing to settle'),
+    ]);
+    expect(validationReport.attempts.flatMap((attempt) => attempt.validationErrors).join(' '))
+      .not.toContain('deferred while waiting for an unsettled conflict landing to settle');
 
     const deferredLedger = ledgerStore.loadLedger();
     const deferredRaw = deferredLedger.rawFindings.find((rawFinding) => (

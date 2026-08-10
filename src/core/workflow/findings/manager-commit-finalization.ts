@@ -312,6 +312,7 @@ export function reconcileCommitPlan(input: {
   landedSpecs: ProvisionalFindingSpec[];
   entityMutationResults: PreAdmissionEntityMutationResult[];
   normalizationRejections: string[];
+  deferredResolutionRejections: string[];
   rejectedObservationAttachments: RejectedObservationAttachment[];
   settlementCommands: FindingLifecycleCommand[];
 } {
@@ -443,10 +444,8 @@ export function reconcileCommitPlan(input: {
     managerOutput: settledOutput,
     landedSpecs,
     entityMutationResults,
-    normalizationRejections: [
-      ...normalizationRejections,
-      ...reconciledPlan.deferredResolutionRejections,
-    ],
+    normalizationRejections,
+    deferredResolutionRejections: reconciledPlan.deferredResolutionRejections,
     rejectedObservationAttachments,
     settlementCommands,
   };

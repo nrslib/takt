@@ -21,6 +21,7 @@ interface ManagerCommitReportInput {
   managerOutput: FindingManagerOutput;
   invalidAttempts: FindingManagerValidationAttemptReport[];
   staleRejections: string[];
+  deferredResolutionRejections: string[];
   admissionRejections: RawAdmissionRejectionReport[];
   unsupportedRawFindingReports: UnsupportedRawFindingReport[];
   overflowReports: ReviewerOutputOverflowReport[];
@@ -38,6 +39,7 @@ export function buildManagerCommitReport(
 ): FindingManagerValidationReport | undefined {
   const reportNeeded = input.invalidAttempts.length > 0
     || input.staleRejections.length > 0
+    || input.deferredResolutionRejections.length > 0
     || input.admissionRejections.length > 0
     || input.unsupportedRawFindingReports.length > 0
     || input.overflowReports.length > 0
@@ -74,6 +76,9 @@ export function buildManagerCommitReport(
       : {}),
     ...(input.managerTaskAudits.length > 0
       ? { managerTaskAudits: input.managerTaskAudits }
+      : {}),
+    ...(input.deferredResolutionRejections.length > 0
+      ? { deferredResolutionRejections: input.deferredResolutionRejections }
       : {}),
     interpretationStats: input.interpretationStats,
     attempts: input.staleRejections.length > 0
