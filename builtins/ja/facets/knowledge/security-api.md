@@ -2,13 +2,15 @@
 
 ## 適用条件
 
-外部または低信頼クライアントから呼ばれるAPI・server endpoint、認証・認可、database query、tenant境界を変更する場合に適用する。ローカルCLI、build script、browser UIだけの変更には適用しない。
+API、server endpoint、認証・認可、database query、tenant境界を扱う変更に適用する。
 
-## SQL injection
+## インジェクション攻撃
 
-- 低信頼値を文字列連結してSQLを構築する実行経路 → REJECT
-- ORMのraw queryへ未検証値が到達する実行経路 → REJECT
-- parameterized queryまたは同等のbindingが全到達経路で使われる → OK
+**SQLインジェクション**
+
+- 文字列連結によるSQL構築 → REJECT
+- パラメータ化クエリの不使用 → REJECT
+- ORMの raw query での未サニタイズ入力 → REJECT
 
 ```typescript
 // NG
@@ -20,51 +22,111 @@ db.query('SELECT * FROM users WHERE id = ?', [userId])
 
 ## 認証・認可
 
-### 認証
+**認証の問題**
 
-- 平文passwordの保存 → 即REJECT
-- 弱いpassword hashの新規利用 → REJECT
-- session tokenの扱いにより、第三者がsessionを取得・固定・再利用できる経路 → REJECT
+- ハードコードされたクレデンシャル → 即REJECT
+- 平文パスワードの保存 → 即REJECT
+- 弱いハッシュアルゴリズム (MD5, SHA1) → REJECT
+- セッショントークンの不適切な管理 → REJECT
 
-### 認可
+**認可の問題**
 
-- 保護対象操作へ権限checkなしで到達できる経路 → REJECT
-- IDORにより他利用者・他tenantの資産へ到達できる経路 → REJECT
-- 低権限主体が高権限操作を実行できる経路 → REJECT
+- 権限チェックの欠如 → REJECT
+- IDOR (Insecure Direct Object Reference) → REJECT
+- 権限昇格の可能性 → REJECT
 
-## API入力検証
+```typescript
+// NG - 権限チェックなし
+app.get('/user/:id', (req, res) => {
+  return db.getUser(req.params.id)
+})
 
-- 低信頼入力がtrust boundaryを越える前に必要な意味検証を受けない経路 → REJECT
-- runtimeで型保証されない入力を型検証なしで利用する経路 → REJECT
-- input size上限がないことだけを根拠にREJECTしない。具体的な経路と影響をSecurity専用policyに従って評価する
+// OK
+app.get('/user/:id', authorize('read:user'), (req, res) => {
+  if (req.user.id !== req.params.id && !req.user.isAdmin) {
+    return res.status(403).send('Forbidden')
+  }
+  return db.getUser(req.params.id)
+})
+```
 
-## Server-side request
+## データ保護
 
-- 低信頼入力が接続先のhost、scheme、port、pathを制御し、内部serviceやmetadata endpointへ到達できる経路 → REJECT
-- serverが外向きrequestを行うこと自体は問題としない。攻撃者が制御できる部分と到達可能な資産を確認する
+**データ検証**
 
-## Rate limit・DoS
+- 入力値の未検証（サイズ制限の未設定だけの場合を除く）→ REJECT
+- 型チェックの欠如 → REJECT
+- サイズ制限の未設定はリソース枯渇につながり得るため、具体的な経路を Security 専用 policy に従って確認する
 
-- 認証endpointのrate limit不足 → 警告
-- リソース枯渇の可能性だけを根拠にREJECTしない
-- 無限loopや無制限処理は、到達可能な入力、停止不能な経路、具体的な影響が確認できる場合だけblocking候補とする
+## レート制限・DoS対策
+
+- レート制限の欠如（認証エンドポイント） → 警告
+- リソース枯渇攻撃の可能性 → 警告
+- 無限ループのパターンはサービス拒否につながり得るため、確認できた経路と影響を Security 専用 policy に従って評価する
 
 ## マルチテナントデータ分離
 
-tenant境界を越えたデータアクセスを防ぐ。認可とtenant scopingは別の関心事であり、読み取りと書き込みの両方を確認する。
+テナント境界を超えたデータアクセスを防ぐ。認可（誰が操作できるか）とスコーピング（どのテナントのデータか）は別の関心事。
 
 | 基準 | 判定 |
 |------|------|
-| 読み取りはtenant scopeだが書き込みはscopeなし | REJECT |
-| 書き込みでclient提供のtenant IDを信頼する | REJECT |
-| tenant resolverを使うendpointに必要な認可がない | REJECT |
-| role分岐の一部だけtenant解決を通らない | REJECT |
-| 想定呼び出しroleを認証する仕組みの適用範囲外にendpointがある | REJECT |
+| 読み取りはテナントスコープだが書き込みはスコープなし | REJECT |
+| 書き込み操作でクライアント提供のテナントIDを使用 | REJECT |
+| テナントリゾルバーを使うエンドポイントに認可制御がない | REJECT |
+| ロール分岐の一部パスでテナント解決が未考慮 | REJECT |
+| エンドポイントの想定呼び出し者（ロール・トークン種別）に認証機構の適用範囲が及んでいない | REJECT |
 
 ### 読み書きの一貫性
 
-読み取りにtenant filterを追加した場合、対応する書き込みも認証済み主体から解決したtenant IDで検証する。
+テナントスコーピングは読み取りと書き込みの両方に適用する。片方だけでは、参照できないが変更できる状態が生まれる。
 
-### 認可とresolverの整合性
+読み取りにテナントフィルタを追加したら、対応する書き込みも必ずテナント検証する。
 
-resolverが特定roleを前提とする場合、その前提をendpointの認可で保証する。role分岐がある場合は全経路で認証・認可・tenant解決の対応を確認する。
+### 書き込みのテナント検証
+
+書き込み操作では、リクエストボディのテナントIDではなく認証済みユーザーから解決したテナントIDを使う。
+
+```kotlin
+// NG - クライアント提供のテナントIDを信頼
+fun create(request: CreateRequest) {
+    service.create(request.tenantId, request.data)
+}
+
+// OK - 認証情報からテナントを解決
+fun create(request: CreateRequest) {
+    val tenantId = tenantResolver.resolve()
+    service.create(tenantId, request.data)
+}
+```
+
+### 認可とリゾルバーの整合性
+
+テナントリゾルバーが特定ロール（例: スタッフ）を前提とする場合、エンドポイントに対応する認可制御が必要。認可なしだと、前提外のロールがアクセスしてリゾルバーが失敗する。
+
+```kotlin
+// NG - リゾルバーが STAFF を前提とするが認可制御なし
+fun getSettings(): SettingsResponse {
+    val tenantId = tenantResolver.resolve()  // STAFF 以外で失敗
+    return settingsService.getByTenant(tenantId)
+}
+
+// OK - 認可制御でロールを保証
+@Authorized(roles = ["STAFF"])
+fun getSettings(): SettingsResponse {
+    val tenantId = tenantResolver.resolve()
+    return settingsService.getByTenant(tenantId)
+}
+```
+
+ロール分岐があるエンドポイントでは、全パスでテナント解決が成功するか検証する。
+
+逆パターンにも注意する。特定ロール専用のエンドポイントを追加する場合、そのロールを認証する機構（フィルタ等）の適用範囲拡張と、ロール必須の認可制御を同じ変更で行う。認証機構の適用範囲外だと想定呼び出し者がそもそも認証されず、認可がないと想定外ロールが通ってしまう。
+
+## OWASP Top 10 チェックリスト
+
+| カテゴリ | 確認事項 |
+|---------|---------|
+| A01 Broken Access Control | 認可チェック |
+| A03 Injection | SQL |
+| A07 Auth Failures | 認証メカニズム |
+| A10 SSRF | サーバーサイドリクエスト |

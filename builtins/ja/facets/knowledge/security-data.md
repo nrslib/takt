@@ -1,40 +1,84 @@
-# データ・secretセキュリティ知識
+# データ・機密情報セキュリティ知識
 
 ## 適用条件
 
-credential、token、個人情報、機密データ、log、error response、暗号化・署名を変更する場合に適用する。保護対象データを扱わないcontrol flowや表示だけの変更には適用しない。
+機密情報、ログ、エラーレスポンス、暗号化を扱う変更に適用する。
 
-## 機密情報の露出
+## データ保護
 
-- API keyやsecretのhardcode → 即REJECT
-- password、token、API keyをlogへ出力する経路 → REJECT
-- responseや例外が低信頼主体へstack trace、内部path、credentialを露出する経路 → REJECT
-- 実値を含む`.env`やcredential fileのcommit → REJECT
+**機密情報の露出**
 
-値が「内部情報」と呼ばれるだけでは不十分で、攻撃者が取得できる出力経路と、露出による具体的影響を確認する。
+- APIキー、シークレットのハードコーディング → 即REJECT
+- ログへの機密情報出力 → REJECT
+- エラーメッセージでの内部情報露出 → REJECT
+- `.env` ファイルのコミット → REJECT
 
-## Logging・masking
+## ログとマスキング
 
-password、token、API key、認証header、session ID、不要な個人情報はlog対象から除外する。object全体のserializationや`toString()`も実際の出力内容として確認する。
+機密情報がログやレスポンスに露出するのを防ぐ。
+
+**ログに出力してはいけない情報:**
+- パスワード、トークン、APIキー
+- クレジットカード番号、個人識別番号
+- セッションID、認証ヘッダの値
+- 個人情報（メールアドレス、電話番号）のうち、デバッグ目的で不要なもの
+
+**マスキングパターン:**
+
+```typescript
+// NG - パスワードがログに露出
+logger.info('User login attempt', { email, password })
+
+// OK - 機密フィールドを除外
+logger.info('User login attempt', { email })
+```
+
+```kotlin
+// NG - リクエスト全体をログ出力
+logger.info("Request: {}", request)
+
+// OK - 機密フィールドをマスク
+logger.info("Request: userId={}, action={}", request.userId, request.action)
+```
+
+**構造化ログでのフィールドフィルタリング:**
+
+ログ出力にオブジェクトを渡す場合、`toString()` や JSON シリアライズで機密フィールドが含まれないようにする。
+
+```kotlin
+// NG - data class の toString() がパスワードを含む
+data class UserCredentials(val email: String, val password: String)
+
+// OK - toString() をオーバーライドしてマスク
+data class UserCredentials(val email: String, val password: String) {
+    override fun toString(): String = "UserCredentials(email=$email, password=***)"
+}
+```
 
 | 基準 | 判定 |
 |------|------|
-| logにpassword・token・API keyが含まれる | REJECT |
-| error responseにstack traceや内部pathが含まれる | 到達主体と情報の機密性を確認する |
-| object serializationが機密fieldを露出する | REJECT |
-| debug logに個人情報があるがproductionで無効 | 警告。設定経路を確認する |
+| ログ出力にパスワード・トークン・APIキーが含まれる | REJECT |
+| エラーレスポンスにスタックトレースや内部パスが含まれる | REJECT |
+| data class の toString() が機密フィールドを露出する | REJECT |
+| ログレベルに関わらず機密情報が出力される可能性がある | REJECT |
+| デバッグログに個人情報が含まれるが本番で無効化されている | 警告。設定ミスのリスクがある |
 
-## 暗号
+## 暗号化
 
-- 弱い暗号algorithmの新規利用 → REJECT
-- 固定IV・nonceにより安全性が破られる利用 → REJECT
-- 暗号keyのhardcode → 即REJECT
-- transport暗号不足は、productionで機密データが平文送信される具体経路がある場合にREJECT
+- 弱い暗号アルゴリズムの使用 → REJECT
+- 固定IV/Nonceの使用 → REJECT
+- 暗号化キーのハードコーディング → 即REJECT
+- HTTPSの未使用（本番環境） → REJECT
 
-暗号primitiveの名前だけで判定せず、利用目的、mode、key管理、nonce要件を確認する。
+## エラーハンドリング
 
-## Error handling
+- スタックトレースの本番露出 → REJECT
+- 詳細なエラーメッセージの露出 → REJECT
+- エラーの握りつぶし（セキュリティイベント） → REJECT
 
-- security eventを握りつぶし、認証・認可・監査境界が失敗を検知できない → REJECT
-- 一般的なerrorの握りつぶしは、security boundaryへの影響がなければSecurity findingにしない
-- 詳細error messageは、低信頼主体へ機密情報が返る経路がある場合に評価する
+## OWASP Top 10 チェックリスト
+
+| カテゴリ | 確認事項 |
+|---------|---------|
+| A02 Cryptographic Failures | 暗号化、機密データ保護 |
+| A09 Logging Failures | セキュリティログ |

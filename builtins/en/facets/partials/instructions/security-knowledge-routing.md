@@ -1,8 +1,7 @@
-## Applying Domain-Specific Security Knowledge
+## Knowledge Scope
 
-- Always apply `security` as the common trust-boundary Knowledge
-- Evaluate only the assigned `security-web`, `security-api`, `security-local`, `security-data`, and `security-dependencies` facets, and compare each assigned facet's `## Applicability` section with real code, configuration, and execution paths
-- Do not infer applicability from a technology name, file extension, or installed dependency alone
-- Do not apply a domain Knowledge facet that is not assigned to the step, or use its checklist as finding evidence or required coverage
-- Apply every assigned Knowledge facet whose system surface participates in the change
-- When a team leader divides an audit, state the assigned domain Knowledge facets and rationale in each part instruction
+- Use only the Knowledge assigned to the step
+- Use Knowledge with an applicability condition only when the actual code, configuration, and execution path meet that condition
+- Do not infer applicability from a technology name, file extension, or dependency alone
+- Do not use a Knowledge checklist whose applicability is not met as finding evidence or required coverage
+- When dividing an audit as a team leader, state the Knowledge assigned to each part and why it applies

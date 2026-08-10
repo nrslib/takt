@@ -23,9 +23,6 @@ Security reviewer の脆弱性判定を、共通ポリシーの一般的な品�
 | 事項 | 扱い |
 |------|------|
 | 要求されていない defense-in-depth、追加保証、仮想的な脅威 | Warning |
-| 悪意ある provider、同一ユーザーによる改変、無制限入力だけに依存する懸念 | Warning |
-| secret scanning / masking、tamper resistance、atomic persistence | Warning |
-| 認証メタデータ、任意の上限値、その他の新しいセキュリティ契約の追加要求 | Warning |
 | セキュリティ境界に直接関係しない品質、保守性、一般的なテストカバレッジの提案 | Warning または対象外 |
 
 Warning または対象外の事項だけが残る場合は APPROVE とする。未確認の懸念は共通ポリシーに従って未確認範囲として記録し、finding に格上げしない。

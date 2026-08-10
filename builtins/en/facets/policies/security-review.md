@@ -23,9 +23,6 @@ The following may be recorded as security recommendations but must not become bl
 | Item | Treatment |
 |------|-----------|
 | Unrequested defense-in-depth, additional guarantees, or hypothetical threats | Warning |
-| Concerns relying only on a malicious provider, same-user modification, or unbounded input | Warning |
-| Secret scanning / masking, tamper resistance, or atomic persistence | Warning |
-| Authentication metadata, arbitrary limits, or another request to add a new security contract | Warning |
 | Quality, maintainability, or general test-coverage suggestions that do not directly concern a security boundary | Warning or out of scope |
 
 When only warnings or out-of-scope items remain, return APPROVE. Record unverified concerns as unverified scope under the shared policy; do not promote them to findings.

@@ -42,7 +42,7 @@ steps:
         tags:
           - review
         edit: false
-        persona: backend-security-reviewer
+        persona: security-reviewer
         policy:
           - contract-change
           - security-review

@@ -1,5 +1,5 @@
 name: peer-review-suite-finding-contract-takt
-description: Finding Contract対応の共通レビューへTAKT向けSecurity reviewerを設定するスイート。
+description: Finding Contract対応の共通レビューへTAKT向けSecurity Knowledgeを設定するスイート。
 subworkflow:
   callable: true
   visibility: internal
@@ -24,7 +24,6 @@ steps:
         $param: review_policy_additions
       review_knowledge_additions:
         $param: review_knowledge_additions
-      security_reviewer_persona: takt-security-reviewer
       security_review_knowledge: [takt, security, security-local, security-data, security-dependencies]
     rules:
       - condition: COMPLETE

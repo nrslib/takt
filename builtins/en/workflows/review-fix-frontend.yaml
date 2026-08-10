@@ -78,7 +78,7 @@ steps:
         tags:
           - review
         edit: false
-        persona: web-security-reviewer
+        persona: security-reviewer
         policy:
           - contract-change
           - security-review

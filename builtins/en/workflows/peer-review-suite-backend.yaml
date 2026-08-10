@@ -1,5 +1,5 @@
 name: peer-review-suite-backend
-description: Common review suite configured with the Backend Security Reviewer.
+description: Common review suite configured with Backend Security Knowledge.
 subworkflow:
   callable: true
   visibility: internal
@@ -24,7 +24,6 @@ steps:
         $param: review_policy_additions
       review_knowledge_additions:
         $param: review_knowledge_additions
-      security_reviewer_persona: backend-security-reviewer
       security_review_knowledge: [security, security-api, security-data, security-dependencies]
     rules:
       - condition: COMPLETE

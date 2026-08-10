@@ -5,10 +5,6 @@ params:
   review_knowledge_additions:
     type: facet_ref[]
     facet_kind: knowledge
-  security_reviewer_persona:
-    type: facet_ref
-    facet_kind: persona
-    default: security-reviewer
   security_review_knowledge:
     type: facet_ref[]
     facet_kind: knowledge
@@ -40,8 +36,7 @@ parallel:
     tags:
       - review
     edit: false
-    persona:
-      $param: security_reviewer_persona
+    persona: security-reviewer
     policy:
       - contract-change
       - $param: review_policy_additions

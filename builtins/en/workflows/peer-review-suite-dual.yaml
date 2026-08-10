@@ -1,5 +1,5 @@
 name: peer-review-suite-dual
-description: Composes the common review suite with frontend review and one Security Reviewer covering both Web and Backend boundaries.
+description: Common review suite configured with frontend review and both Web and Backend Security Knowledge.
 subworkflow:
   callable: true
   visibility: internal
@@ -26,7 +26,6 @@ steps:
             $param: review_policy_additions
           review_knowledge_additions:
             $param: review_knowledge_additions
-          security_reviewer_persona: security-reviewer
           security_review_knowledge: [security, security-web, security-api, security-data, security-dependencies]
         rules:
           - condition: COMPLETE

@@ -58,7 +58,7 @@ steps:
           capabilities: readonly
           tags: [review]
           edit: false
-          persona: takt-security-reviewer
+          persona: security-reviewer
           policy: [contract-change, security-review]
           knowledge: [takt, security, security-local, security-data, security-dependencies]
           instruction: review-security

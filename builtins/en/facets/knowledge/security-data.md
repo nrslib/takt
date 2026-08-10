@@ -1,40 +1,84 @@
-# Data and Secret Security Knowledge
+# Data and Sensitive Information Security Knowledge
 
 ## Applicability
 
-Apply this Knowledge when a change affects credentials, tokens, personal information, confidential data, logs, error responses, cryptography, or signatures. Do not apply it to control flow or presentation that handles no protected data.
+Apply to changes that involve sensitive information, logs, error responses, or cryptography.
 
-## Sensitive Information Exposure
+## Data Protection
 
-- Hardcoded API keys or secrets → Immediate REJECT
-- A reachable log path emits a password, token, or API key → REJECT
-- A response or exception exposes a stack trace, internal path, or credential to a low-trust party → REJECT
-- A committed `.env` or credential file contains real values → REJECT
+**Sensitive information exposure:**
 
-Calling a value “internal information” is insufficient. Establish the output path available to an attacker and the concrete impact of disclosure.
+- Hardcoded API keys, secrets → Immediate REJECT
+- Sensitive info in logs → REJECT
+- Internal info exposure in error messages → REJECT
+- Committed `.env` files → REJECT
 
-## Logging and Masking
+## Logging & Masking
 
-Exclude passwords, tokens, API keys, authentication headers, session IDs, and unnecessary personal information from logs. Inspect whole-object serialization and `toString()` output as real output paths.
+Prevent sensitive information from leaking into logs and responses.
 
-| Criterion | Decision |
-|-----------|----------|
-| Logs contain passwords, tokens, or API keys | REJECT |
-| An error response contains a stack trace or internal path | Evaluate the reachable principal and information sensitivity |
-| Object serialization exposes a sensitive field | REJECT |
-| Debug logs contain personal data but are disabled in production | Warning; inspect the configuration path |
+**Never log:**
+- Passwords, tokens, API keys
+- Credit card numbers, personal identification numbers
+- Session IDs, authentication header values
+- Personal information (email, phone) unless necessary for debugging
+
+**Masking patterns:**
+
+```typescript
+// NG - Password exposed in logs
+logger.info('User login attempt', { email, password })
+
+// OK - Exclude sensitive fields
+logger.info('User login attempt', { email })
+```
+
+```kotlin
+// NG - Logging entire request object
+logger.info("Request: {}", request)
+
+// OK - Log only safe fields
+logger.info("Request: userId={}, action={}", request.userId, request.action)
+```
+
+**Structured logging field filtering:**
+
+When passing objects to log output, ensure `toString()` or JSON serialization does not include sensitive fields.
+
+```kotlin
+// NG - data class toString() includes password
+data class UserCredentials(val email: String, val password: String)
+
+// OK - Override toString() to mask sensitive fields
+data class UserCredentials(val email: String, val password: String) {
+    override fun toString(): String = "UserCredentials(email=$email, password=***)"
+}
+```
+
+| Criteria | Verdict |
+|----------|---------|
+| Log output contains passwords, tokens, or API keys | REJECT |
+| Error responses contain stack traces or internal paths | REJECT |
+| data class toString() exposes sensitive fields | REJECT |
+| Sensitive info can be output regardless of log level | REJECT |
+| Debug logs contain PII but disabled in production | Warning. Risk of misconfiguration |
 
 ## Cryptography
 
-- New use of a weak cryptographic algorithm → REJECT
-- A fixed IV or nonce breaks the security property of the chosen construction → REJECT
-- Hardcoded cryptographic keys → Immediate REJECT
-- Missing transport encryption → REJECT when a concrete production path sends sensitive data in plaintext
-
-Do not judge by primitive name alone. Inspect the purpose, mode, key management, and nonce requirements.
+- Use of weak crypto algorithms → REJECT
+- Fixed IV/Nonce usage → REJECT
+- Hardcoded encryption keys → Immediate REJECT
+- No HTTPS (production) → REJECT
 
 ## Error Handling
 
-- A swallowed security event prevents an authentication, authorization, or audit boundary from detecting failure → REJECT
-- Swallowing an ordinary error is not a Security finding when no security boundary is affected
-- Evaluate a detailed error message when a reachable path exposes sensitive information to a low-trust party
+- Stack trace exposure in production → REJECT
+- Detailed error message exposure → REJECT
+- Swallowing security events → REJECT
+
+## OWASP Top 10 Checklist
+
+| Category | Check Items |
+|----------|-------------|
+| A02 Cryptographic Failures | Encryption, sensitive data protection |
+| A09 Logging Failures | Security logging |

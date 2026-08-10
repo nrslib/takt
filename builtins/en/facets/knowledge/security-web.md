@@ -2,33 +2,27 @@
 
 ## Applicability
 
-Apply this Knowledge when a change affects browser-interpreted HTML, JavaScript, URLs, DOM operations, cookies, CORS, or browser-originated file submission. Do not apply it to CLI output, server-internal string handling, or local-only files.
+Apply to changes that involve browser-interpreted HTML, JavaScript, URLs, DOM operations, CORS, or browser-originated file submission.
 
-## Cross-Site Scripting (XSS)
+## Injection Attacks
 
-- A reachable path writes a low-trust value into HTML or JavaScript without context-appropriate escaping → REJECT
-- A low-trust value reaches `innerHTML` or `dangerouslySetInnerHTML` without effective sanitization → REJECT
-- A URL parameter is inserted directly into an executable browser context → REJECT
+**XSS (Cross-Site Scripting):**
 
-The use of an HTML-generation API alone is not grounds for REJECT. Identify the input controller, output context, and effective escaping or sanitization.
+- Unescaped output to HTML/JS → REJECT
+- Improper use of `innerHTML`, `dangerouslySetInnerHTML` → REJECT
+- Direct embedding of URL parameters → REJECT
 
-## Browser Boundaries
+## File Operations
 
-| Surface | Evidence to inspect |
-|---------|---------------------|
-| Cookies and sessions | Attributes, destination, and availability to a third-party origin |
-| CORS | Allowed origins, credentials, and the operations or data exposed |
-| Redirects and URLs | Whether low-trust input controls a destination or executable scheme |
-| Browser storage | Data sensitivity and reachability from same-origin scripts |
+**File Upload:**
 
-Do not reject a broad setting in isolation. Establish what an attacker can read or execute because of that setting.
+- No file type validation → REJECT
+- Missing file-size limits can contribute to resource exhaustion; evaluate the concrete path under the Security policy
+- Allowing executable file uploads → REJECT
 
-## File Submission
+## OWASP Top 10 Checklist
 
-- A low-trust file reaches a public or executable location without required validation → REJECT
-- Allowing executable files leads to a concrete code-execution path → REJECT
-- Do not reject solely because a file-size limit is absent; evaluate the concrete path and impact under the Security-specific policy
-
-## Web Application Review Categories
-
-Consider access control, cryptographic failures, injection, insecure design, misconfiguration, vulnerable components, authentication failures, software integrity, and logging only when they relate to the changed browser boundary.
+| Category | Check Items |
+|----------|-------------|
+| A01 Broken Access Control | CORS config |
+| A03 Injection | XSS |

@@ -6,8 +6,8 @@ Security 専用 policy の finding / warning 境界を最終判定の正本と�
 
 手順:
 1. Knowledge と Policy の Source Path を Read ツールで開き、全文を取得する
-2. 共通Knowledgeとstepに付与された各分野別Knowledgeの適用条件を、要求、変更差分、実際の呼び出し経路と照合する
-3. 共通Knowledgeと、stepに付与され適用条件を満たすKnowledgeについて `##` セクションをすべて列挙する
+2. stepに付与された各Knowledgeの適用条件を、要求、変更差分、実際の呼び出し経路と照合する
+3. stepに付与され、適用条件を満たすKnowledgeについて `##` セクションをすべて列挙する
 4. 列挙した各セクションの判定基準を変更差分と照合し、該当する問題を検出する
 
 {{include:instructions/review-round-scope}}

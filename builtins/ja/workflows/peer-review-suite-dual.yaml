@@ -1,5 +1,5 @@
 name: peer-review-suite-dual
-description: 共通レビューへフロントエンド専門レビューとWeb・Backend両境界のSecurity reviewを合成するスイート。
+description: 共通レビューへフロントエンド専門レビューとWeb・Backend両方のSecurity Knowledgeを設定するスイート。
 subworkflow:
   callable: true
   visibility: internal
@@ -26,7 +26,6 @@ steps:
             $param: review_policy_additions
           review_knowledge_additions:
             $param: review_knowledge_additions
-          security_reviewer_persona: security-reviewer
           security_review_knowledge: [security, security-web, security-api, security-data, security-dependencies]
         rules:
           - condition: COMPLETE
