@@ -770,7 +770,8 @@ describe('CT-COMP-05 event-driven companion change detection', () => {
       const bashChanged = diff('bash-changed', 12);
       const readSnapshot = vi.fn()
         .mockResolvedValueOnce(edited)
-        .mockResolvedValueOnce(bashChanged);
+        .mockResolvedValueOnce(bashChanged)
+        .mockResolvedValue(bashChanged);
       let resolveQueue!: () => void;
       const queuePromise = new Promise<void>((resolve) => {
         resolveQueue = resolve;
@@ -811,6 +812,12 @@ describe('CT-COMP-05 event-driven companion change detection', () => {
       expect(detector.getObservedGeneration()).toBe(2);
       resolveQueue();
       await vi.advanceTimersByTimeAsync(0);
+      now = 1_500;
+      await vi.advanceTimersByTimeAsync(250);
+      expect(enqueue).toHaveBeenCalledTimes(2);
+      expect(enqueue).toHaveBeenLastCalledWith(expect.objectContaining({
+        snapshot: expect.objectContaining({ digest: 'bash-changed' }),
+      }));
       scheduler.stop();
     } finally {
       vi.useRealTimers();
@@ -829,7 +836,8 @@ describe('CT-COMP-05 event-driven companion change detection', () => {
         .mockImplementationOnce(() => new Promise<CompanionDiff>((resolve) => {
           resolveEvaluationSnapshot = resolve;
         }))
-        .mockResolvedValueOnce(bashChanged);
+        .mockResolvedValueOnce(bashChanged)
+        .mockResolvedValue(bashChanged);
       let resolveQueue!: () => void;
       const queuePromise = new Promise<void>((resolve) => {
         resolveQueue = resolve;
@@ -875,6 +883,127 @@ describe('CT-COMP-05 event-driven companion change detection', () => {
       expect(detector.getObservedGeneration()).toBe(2);
       resolveQueue();
       await vi.advanceTimersByTimeAsync(0);
+      now = 1_600;
+      await vi.advanceTimersByTimeAsync(250);
+      expect(enqueue).toHaveBeenCalledTimes(2);
+      expect(enqueue).toHaveBeenLastCalledWith(expect.objectContaining({
+        snapshot: expect.objectContaining({ digest: 'bash-changed' }),
+      }));
+      scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('should serialize overlapping Bash snapshot probes', async () => {
+    vi.useFakeTimers();
+    try {
+      const initial = diff('baseline', 0);
+      const changed = diff('bash-changed', 12);
+      let resolveFirstProbe!: (snapshot: CompanionDiff) => void;
+      const readSnapshot = vi.fn()
+        .mockImplementationOnce(() => new Promise<CompanionDiff>((resolve) => {
+          resolveFirstProbe = resolve;
+        }))
+        .mockResolvedValueOnce(changed);
+      const detector = new CompanionChangeDetector({
+        intervalMs: 15_000,
+        minimumChangedLines: 1,
+        now: () => 1_000,
+        readDiff: readSnapshot,
+      });
+      const scheduler = new CompanionTriggerScheduler({
+        detectors: new Map([['security-reviewer', detector]]),
+        intervals: [15_000],
+        allowGitCommit: false,
+        queue: { enqueue: vi.fn().mockResolvedValue(undefined) } as unknown as CompanionReviewQueue,
+        initialSnapshot: initial,
+        readSnapshot,
+        isAborted: () => false,
+        onError: vi.fn(),
+      });
+
+      for (const id of ['bash-1', 'bash-2']) {
+        scheduler.observe({
+          type: 'tool_use',
+          data: { tool: 'Bash', input: { command: 'npm run format' }, id },
+        });
+      }
+      for (const id of ['bash-1', 'bash-2']) {
+        scheduler.observe({
+          type: 'tool_result',
+          data: { id, content: '', isError: false },
+        });
+      }
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(readSnapshot).toHaveBeenCalledOnce();
+      resolveFirstProbe(changed);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(readSnapshot).toHaveBeenCalledTimes(2);
+      expect(detector.getObservedGeneration()).toBe(1);
+      scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('should serialize a Bash snapshot probe with a scheduled evaluation snapshot', async () => {
+    vi.useFakeTimers();
+    try {
+      let now = 1_000;
+      const initial = diff('baseline', 0);
+      const bashChanged = diff('bash-changed', 8);
+      const edited = diff('edited-after-bash', 12);
+      let resolveProbe!: (snapshot: CompanionDiff) => void;
+      const readSnapshot = vi.fn()
+        .mockImplementationOnce(() => new Promise<CompanionDiff>((resolve) => {
+          resolveProbe = resolve;
+        }))
+        .mockResolvedValueOnce(edited);
+      const detector = new CompanionChangeDetector({
+        intervalMs: 15_000,
+        minimumChangedLines: 1,
+        now: () => now,
+        readDiff: readSnapshot,
+      });
+      const enqueue = vi.fn().mockResolvedValue(undefined);
+      const scheduler = new CompanionTriggerScheduler({
+        detectors: new Map([['security-reviewer', detector]]),
+        intervals: [15_000],
+        allowGitCommit: false,
+        queue: { enqueue } as unknown as CompanionReviewQueue,
+        initialSnapshot: initial,
+        readSnapshot,
+        isAborted: () => false,
+        onError: vi.fn(),
+      });
+
+      scheduler.observe({
+        type: 'tool_use',
+        data: { tool: 'Bash', input: { command: 'npm run format' }, id: 'bash-1' },
+      });
+      scheduler.observe({
+        type: 'tool_result',
+        data: { id: 'bash-1', content: '', isError: false },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      now = 1_100;
+      scheduler.observe(tool('Edit'));
+      now = 1_350;
+      await vi.advanceTimersByTimeAsync(250);
+      expect(readSnapshot).toHaveBeenCalledOnce();
+
+      resolveProbe(bashChanged);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(readSnapshot).toHaveBeenCalledTimes(2);
+      expect(enqueue).toHaveBeenCalledOnce();
+      expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({
+        snapshot: expect.objectContaining({ digest: 'edited-after-bash' }),
+      }));
       scheduler.stop();
     } finally {
       vi.useRealTimers();

@@ -58,6 +58,28 @@ emitCompanionEvent('companion:queue_coalesced', {
   },
 });
 
+emitCompanionEvent('companion:review_round', {
+  step: 'implement',
+  companion: 'security-reviewer',
+  // @ts-expect-error Companion review rounds require a declared trigger value.
+  trigger: 'manual',
+  digest: 'digest-1',
+  changedLines: 12,
+  findingCount: 1,
+});
+
+// @ts-expect-error Companion queue coalescing requires the replacement payload.
+emitCompanionEvent('companion:queue_coalesced', {
+  step: 'implement',
+  companion: 'security-reviewer',
+  replaced: {
+    trigger: 'quiet',
+    digest: 'digest-1',
+    changedLines: 10,
+    observedGeneration: 1,
+  },
+});
+
 emitCompanionEvent('companion:complete', {
   step: 'implement',
   openMustFixCount: 0,

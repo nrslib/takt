@@ -1,4 +1,8 @@
-import type { WorkflowEvents } from '../types.js';
+import type {
+  CompanionQueueAuditEntry,
+  CompanionReviewTrigger,
+  WorkflowEvents,
+} from '../types.js';
 
 type CompanionEventName = Extract<keyof WorkflowEvents, `companion:${string}`>;
 type CompanionEventArguments<TEvent extends CompanionEventName> = Parameters<WorkflowEvents[TEvent]>;
@@ -48,7 +52,7 @@ export class CompanionEventPublisher {
 
   reviewRound(input: {
     companion: string;
-    trigger: 'quiet' | 'forced' | 'completion' | 'commit';
+    trigger: CompanionReviewTrigger;
     digest: string;
     changedLines: number;
     findingCount: number;
@@ -58,18 +62,8 @@ export class CompanionEventPublisher {
 
   queueCoalesced(input: {
     companion: string;
-    replaced: {
-      trigger: 'quiet' | 'forced' | 'completion' | 'commit';
-      digest: string;
-      changedLines: number;
-      observedGeneration: number;
-    };
-    replacement: {
-      trigger: 'quiet' | 'forced' | 'completion' | 'commit';
-      digest: string;
-      changedLines: number;
-      observedGeneration: number;
-    };
+    replaced: CompanionQueueAuditEntry;
+    replacement: CompanionQueueAuditEntry;
   }): void {
     this.emit('companion:queue_coalesced', { step: this.step, ...input });
   }

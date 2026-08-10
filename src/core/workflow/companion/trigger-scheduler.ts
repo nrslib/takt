@@ -17,6 +17,7 @@ export class CompanionTriggerScheduler {
   private completing = false;
   private knownSnapshot: CompanionDiff;
   private readonly knownSnapshotGenerations = new Map<string, number>();
+  private snapshotOperation: Promise<void> = Promise.resolve();
   private evaluationEpoch = 0;
   private readonly pendingBash = new Map<string, {
     readonly detectors: ReadonlyMap<string, {
@@ -122,11 +123,16 @@ export class CompanionTriggerScheduler {
       detector.getObservedGeneration(),
     ]));
     try {
-      const snapshot = await this.input.readSnapshot();
-      this.knownSnapshot = snapshot;
-      for (const [name, generation] of evaluationGenerations) {
-        this.knownSnapshotGenerations.set(name, generation);
-      }
+      const snapshot = await this.runSnapshotOperation(async () => {
+        const current = await this.input.readSnapshot();
+        if (this.completing || this.input.isAborted()) return undefined;
+        this.knownSnapshot = current;
+        for (const [name, generation] of evaluationGenerations) {
+          this.knownSnapshotGenerations.set(name, generation);
+        }
+        return current;
+      });
+      if (snapshot === undefined) return;
       await Promise.all(candidates.map(async ({ name, detector, candidate }) => {
         const trigger = await detector.evaluateCandidate(candidate, snapshot);
         if (trigger === undefined || this.completing) return;
@@ -164,15 +170,22 @@ export class CompanionTriggerScheduler {
   }
 
   private observeBashUse(id: string): void {
+    const detectors = new Map<string, {
+      readonly dirty: boolean;
+      readonly generation: number;
+      readonly snapshotGeneration: number;
+    }>();
+    for (const [name, detector] of this.input.detectors) {
+      const snapshotGeneration = this.knownSnapshotGenerations.get(name);
+      if (snapshotGeneration === undefined) continue;
+      detectors.set(name, {
+        dirty: detector.isDirty(),
+        generation: detector.getObservedGeneration(),
+        snapshotGeneration,
+      });
+    }
     this.pendingBash.set(id, {
-      detectors: new Map([...this.input.detectors].map(([name, detector]) => [
-        name,
-        {
-          dirty: detector.isDirty(),
-          generation: detector.getObservedGeneration(),
-          snapshotGeneration: this.knownSnapshotGenerations.get(name)!,
-        },
-      ])),
+      detectors,
       evaluationEpoch: this.evaluationEpoch,
     });
     this.pendingBashIds.push(id);
@@ -187,7 +200,7 @@ export class CompanionTriggerScheduler {
     if (pending === undefined) return;
     this.pendingBash.delete(matchedId);
     removePendingBashId(this.pendingBashIds, matchedId);
-    void this.probeBashCompletion(pending).catch((error) => {
+    void this.runSnapshotOperation(() => this.probeBashCompletion(pending)).catch((error) => {
       if (!this.input.isAborted() && !isAbortError(error)) this.input.onError();
     });
   }
@@ -200,14 +213,17 @@ export class CompanionTriggerScheduler {
     }>;
     readonly evaluationEpoch: number;
   }): Promise<void> {
+    if (this.completing || this.input.isAborted()) return;
     const snapshotBefore = this.knownSnapshot;
     const snapshotAfter = await this.input.readSnapshot();
+    if (this.completing || this.input.isAborted()) return;
     this.knownSnapshot = snapshotAfter;
     const snapshotChanged = snapshotBefore.digest !== snapshotAfter.digest;
     const evaluationCrossed = this.evaluating || this.evaluationEpoch !== pending.evaluationEpoch;
     let observedChange = false;
     for (const [name, detector] of this.input.detectors) {
-      const pendingDetector = pending.detectors.get(name)!;
+      const pendingDetector = pending.detectors.get(name);
+      if (pendingDetector === undefined) continue;
       const cacheCoversDirtyGeneration = pendingDetector.snapshotGeneration
         >= pendingDetector.generation;
       const explicitChangeAfterBash = detector.getObservedGeneration() > pendingDetector.generation;
@@ -227,6 +243,15 @@ export class CompanionTriggerScheduler {
       this.knownSnapshotGenerations.set(name, detector.getObservedGeneration());
     }
     if (observedChange) this.scheduleDebouncedEvaluation();
+  }
+
+  private runSnapshotOperation<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.snapshotOperation.then(operation);
+    this.snapshotOperation = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   }
 }
 

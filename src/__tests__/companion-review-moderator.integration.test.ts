@@ -213,6 +213,7 @@ describe('CT-COMP-10 companion review terminal lifecycle', () => {
       },
     });
 
+    const onRoundCompleted = vi.fn();
     try {
       const result = await executeCompanionReviewRound({
         companionName: 'security-reviewer',
@@ -252,10 +253,16 @@ describe('CT-COMP-10 companion review terminal lifecycle', () => {
         markReviewed: vi.fn(),
         evaluateRound: createEvaluateRound(),
         applyRoundDecision: vi.fn(),
-        onRoundCompleted: vi.fn(),
+        onRoundCompleted,
       });
 
       expect(result.findingCount).toBe(1);
+      expect(onRoundCompleted).toHaveBeenCalledOnce();
+      expect(onRoundCompleted).toHaveBeenCalledWith({
+        snapshot: expect.objectContaining({ digest: 'digest' }),
+        trigger: 'quiet',
+        findingCount: 1,
+      });
       expect(stateStore.get(mailboxPath, 'security-reviewer').mailbox.findings).toHaveLength(2);
     } finally {
       rmSync(root, { recursive: true, force: true });

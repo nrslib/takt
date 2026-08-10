@@ -64,13 +64,16 @@ describe('companion completion coordinator', () => {
     const runningRejection = expect(running).rejects.toMatchObject({ name: 'AbortError' });
     await Promise.resolve();
     const emit = vi.fn();
-    const coordinator = createCoordinator({ current, queue, emit });
+    const synchronizeSnapshot = vi.fn();
+    const coordinator = createCoordinator({ current, queue, emit, synchronizeSnapshot });
 
     await coordinator.complete(state());
     await runningRejection;
 
     expect(order).toEqual(['started', 'aborted']);
     expect(emit).toHaveBeenCalledOnce();
+    expect(synchronizeSnapshot).toHaveBeenCalledOnce();
+    expect(synchronizeSnapshot).toHaveBeenCalledWith(snapshot);
   });
 
   it('should retain open must_fix and escalate when loop adjudication fails', async () => {
@@ -159,12 +162,14 @@ describe('companion completion coordinator', () => {
     const queue = new CompanionReviewQueue({
       runReview: vi.fn().mockRejectedValue(new Error('review failed')),
     });
-    const coordinator = createCoordinator({ current, queue });
+    const synchronizeSnapshot = vi.fn();
+    const coordinator = createCoordinator({ current, queue, synchronizeSnapshot });
 
     const result = await coordinator.complete(state());
 
     expect(current.isDirty()).toBe(true);
     expect(result).toMatchObject({ escalated: true, openMustFix: [] });
+    expect(synchronizeSnapshot).not.toHaveBeenCalled();
   });
 
   it('should rethrow an abort without publishing completion', async () => {
@@ -219,6 +224,7 @@ function createCoordinator(input: {
   openMustFix?: CompanionFindingEvidence[];
   readSnapshot?: ReturnType<typeof vi.fn>;
   recordCompletionRound?: ReturnType<typeof vi.fn>;
+  synchronizeSnapshot?: ReturnType<typeof vi.fn>;
 }): CompanionCompletionCoordinator {
   const queue = input.queue ?? new CompanionReviewQueue({ runReview: vi.fn() });
   return new CompanionCompletionCoordinator({
@@ -226,7 +232,7 @@ function createCoordinator(input: {
     detectors: new Map([['security-reviewer', input.current]]),
     queue,
     readSnapshot: input.readSnapshot ?? vi.fn().mockResolvedValue(snapshot),
-    synchronizeSnapshot: vi.fn(),
+    synchronizeSnapshot: input.synchronizeSnapshot ?? vi.fn(),
     openMustFix: () => input.openMustFix ?? [],
     recordCompletionRound: input.recordCompletionRound ?? vi.fn(),
     decision: new CompanionTerminalDecisionTracker(),

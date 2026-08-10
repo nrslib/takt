@@ -256,11 +256,39 @@ describe('bindWorkflowExecutionEvents', () => {
         status: 'completed',
       };
       const listeners = new Map<string, (...args: unknown[]) => void>();
+      const reviewRoundPayload = {
+        step: 'review',
+        companion: 'security-reviewer',
+        trigger: 'quiet',
+        digest: 'child-digest',
+        changedLines: 12,
+        findingCount: 2,
+      };
+      const queueCoalescedPayload = {
+        step: 'review',
+        companion: 'security-reviewer',
+        replaced: {
+          trigger: 'quiet',
+          digest: 'child-digest',
+          changedLines: 12,
+          observedGeneration: 1,
+        },
+        replacement: {
+          trigger: 'forced',
+          digest: 'child-digest-2',
+          changedLines: 18,
+          observedGeneration: 2,
+        },
+      };
       const childEngine = {
         on: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
           listeners.set(event, listener);
         }),
-        runWithResult: vi.fn().mockResolvedValue({ state: childState }),
+        runWithResult: vi.fn().mockImplementation(async () => {
+          listeners.get('companion:review_round')?.(reviewRoundPayload);
+          listeners.get('companion:queue_coalesced')?.(queueCoalescedPayload);
+          return { state: childState };
+        }),
       };
       const sharedRuntime = { startedAtMs: Date.now(), maxSteps: 10 };
       const executor = new WorkflowCallExecutor({
@@ -295,15 +323,6 @@ describe('bindWorkflowExecutionEvents', () => {
         providerEscalation: undefined,
       } as never, { syncParentState: true });
 
-      listeners.get('companion:review_round')?.({
-        step: 'review',
-        companion: 'security-reviewer',
-        trigger: 'quiet',
-        digest: 'child-digest',
-        changedLines: 12,
-        findingCount: 2,
-      });
-
       const records = readFileSync(ndjsonPath, 'utf8')
         .trim()
         .split('\n')
@@ -316,6 +335,13 @@ describe('bindWorkflowExecutionEvents', () => {
         digest: 'child-digest',
         changedLines: 12,
         findingCount: 2,
+      }));
+      expect(records).toContainEqual(expect.objectContaining({
+        type: 'companion_queue_coalesced',
+        step: 'review',
+        companion: 'security-reviewer',
+        replaced: expect.objectContaining({ digest: 'child-digest' }),
+        replacement: expect.objectContaining({ digest: 'child-digest-2' }),
       }));
     } finally {
       rmSync(logsDir, { recursive: true, force: true });
