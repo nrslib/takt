@@ -6,8 +6,8 @@ function normalizePath(path) {
     : '';
 }
 
-function includesPath(paths, suffix) {
-  return Array.isArray(paths) && paths.some((path) => normalizePath(path).endsWith(suffix));
+function includesPath(paths, expectedPath) {
+  return Array.isArray(paths) && paths.some((path) => normalizePath(path) === expectedPath);
 }
 
 export function parseScopeTelemetry(output) {

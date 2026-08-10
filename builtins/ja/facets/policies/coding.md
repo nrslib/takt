@@ -192,7 +192,7 @@ handlers[type]?.();
 | 基準 | 判定 |
 |------|------|
 | 少数の分岐がイベント種別・状態・業務概念ごとに異なる | `when` / `switch` で明示する |
-| 1箇所でしか使わない設定配列・関数オブジェクト | REJECT。まず明示分岐 |
+| 設定配列・関数オブジェクトが意味・契約・変更境界を隠し、設定と実行処理を往復しないと振る舞いが分からない | REJECT。概念を命名するか明示分岐にする |
 | 設定オブジェクトを読まないと副作用や削除対象が分からない | REJECT |
 | Strategy が業務概念に名前を与え、複数実装の差し替え点を明確にしている | OK |
 | 分岐名がドメイン概念として読める | OK |
@@ -469,10 +469,10 @@ TODO/FIXME、空実装、スタブ、コメントアウトされた旧実装を�
 
 ## エラーハンドリング
 
-エラーは一元管理する。各所でtry-catchしない。
+同じ外部契約へのエラー変換は、その契約を所有する境界へ集約する。異なる操作やプロトコルのエラー契約まで単一のglobal handlerへ集約しない。
 
 ```typescript
-// ❌ 各所でtry-catch
+// ❌ 同じHTTPエラー変換をendpointごとに重複
 async function createUser(data) {
   try {
     const user = await userService.create(data)
@@ -483,8 +483,7 @@ async function createUser(data) {
   }
 }
 
-// ✅ 上位層で一元処理
-// 境界の例外変換レイヤでまとめて処理
+// ✅ 同じHTTP契約を所有するadapter境界で変換
 async function createUser(data) {
   return await userService.create(data)  // 例外はそのまま上に投げる
 }

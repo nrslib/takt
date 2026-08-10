@@ -249,9 +249,9 @@ AIは少数の具体分岐を、設定配列・関数オブジェクト・汎用
 
 | パターン | 例 | 判定 |
 |---------|-----|------|
-| 1箇所でしか使わない処理設定配列 | `[{ kind, fields, removedFields }]` を loop で処理 | REJECT |
+| 処理設定配列が意味・契約・変更境界を隠す | `[{ kind, fields, removedFields }]` と loop の両方を読まないと副作用が分からない | REJECT |
 | 削除・副作用・例外条件が設定オブジェクトに隠れる | 設定値を読まないと破壊的変更が分からない | REJECT |
-| 分岐ごとの処理が1-3行で完結するのに関数オブジェクト化 | `handlers[type]()` だけが増える | REJECT |
+| 分岐差分に独立した概念や変更軸がないのに関数オブジェクト化 | `handlers[type]()` の間接参照だけが増える | REJECT |
 | Strategy が業務概念を表し、実装差し替えの境界を明確にする | `TaxPolicy`, `PaymentMethod`, `RetryStrategy` | OK |
 | 分岐数が多く、処理形が同じで、今後も追加される | handler map を検討 | OK |
 

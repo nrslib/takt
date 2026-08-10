@@ -192,7 +192,7 @@ Use abstraction to reduce duplication and real axes of change, and also to name 
 | Criteria | Judgment |
 |----------|----------|
 | A small number of branches differs by event type, state, or domain concept | Use explicit `when` / `switch` |
-| A config array or function object is used in only one place | REJECT. Prefer explicit branching first |
+| A config array or function object hides meaning, contracts, or change boundaries so behavior requires cross-reading configuration and execution code | REJECT. Name the concept or use explicit branching |
 | Side effects or removed fields cannot be understood without reading config objects | REJECT |
 | Strategy names a domain concept and makes interchangeable implementations explicit | OK |
 | Branch names read as domain concepts | OK |
@@ -469,10 +469,10 @@ Do not expose passwords, tokens, API keys, session IDs, auth headers, personal i
 
 ## Error Handling
 
-Centralize error handling. Do not scatter try-catch everywhere.
+Consolidate error translation for the same external contract under the boundary that owns that contract. Do not move different operation or protocol error contracts into one global handler.
 
 ```typescript
-// ❌ Scattered try-catch
+// ❌ Duplicate the same HTTP error translation in each endpoint
 async function createUser(data) {
   try {
     const user = await userService.create(data)
@@ -483,8 +483,7 @@ async function createUser(data) {
   }
 }
 
-// ✅ Centralized handling at the upper layer
-// Handle collectively at the boundary exception translation layer
+// ✅ Translate at the adapter boundary that owns the HTTP contract
 async function createUser(data) {
   return await userService.create(data)  // Let exceptions propagate up
 }

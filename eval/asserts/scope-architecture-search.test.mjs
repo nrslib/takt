@@ -55,6 +55,20 @@ test('rejects an unrelated path promoted to a finding', () => {
   assert.equal(assertArchitectureSearch(outputWithTelemetry(telemetry)).pass, false);
 });
 
+test('rejects prefixed paths instead of accepting suffix matches', () => {
+  const cases = [
+    (telemetry) => { telemetry.boundaryFamilies[0].members[0] = 'other/src/report-path.ts'; },
+    (telemetry) => { telemetry.boundaryFamilies[0].behaviorEvidence[0] = 'other/test/attachment-path.test.ts'; },
+    (telemetry) => { telemetry.findingPaths[1] = 'other/src/attachment-path.ts'; },
+  ];
+
+  for (const changePath of cases) {
+    const telemetry = validTelemetry();
+    changePath(telemetry);
+    assert.equal(assertArchitectureSearch(outputWithTelemetry(telemetry)).pass, false);
+  }
+});
+
 test('uses structured classifications instead of positive or negative wording', () => {
   const positive = outputWithTelemetry(
     validTelemetry(),

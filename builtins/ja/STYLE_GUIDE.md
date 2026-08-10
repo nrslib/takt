@@ -25,7 +25,7 @@ facets/
 
 ## プロンプトアーキテクチャ
 
-```
+```text
 System Prompt:
   [TAKT コンテキスト]
   [ペルソナ]              ← エージェントの identity・専門性・責任境界
@@ -45,7 +45,7 @@ Report:
 
 ## 分離の判断フロー
 
-```
+```text
 この内容は…
 ├── identity・専門性・責任境界 → ペルソナ
 ├── 原則・禁止事項・finding/edit 権限 → ポリシー

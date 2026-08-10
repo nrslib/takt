@@ -68,14 +68,14 @@ src/
     └── middleware/
 ```
 
-Vertical Slice criteria:
+Vertical Slice selection factors:
 
-| Criteria | Judgment |
-|----------|----------|
-| Single feature spans 3+ layers | Consider slicing |
-| Minimal inter-feature dependencies | Recommend slicing |
-| Over 50% shared processing | Keep layered |
-| Team organized by features | Slicing required |
+| Condition | Meaning / options |
+|-----------|-------------------|
+| A feature has an independent business responsibility, reason to change, and data owner | Candidate for a slice |
+| The feature boundary aligns with existing dependency directions or deployment boundaries | Slicing can clarify ownership |
+| Multiple features share the same business rules and reason to change | Consider layered or hybrid structure that preserves a common owner |
+| Feature-specific responsibilities and cross-cutting infrastructure change for different reasons | Candidate for a hybrid of feature slices and shared infrastructure |
 
 Prohibited patterns:
 
@@ -83,14 +83,14 @@ Prohibited patterns:
 |---------|---------|
 | Bloated `utils/` | Becomes graveyard of unclear responsibilities |
 | Lazy placement in `common/` | Dependencies become unclear |
-| Excessive nesting (4+ levels) | Navigation difficulty |
+| Nesting does not express a responsibility or owner | Makes navigation and change impact difficult to understand |
 | Mixed features and layers | `features/services/` prohibited |
 
 **Separation of Concerns:**
 
 - Read and write responsibilities separated
 - Data fetching at root (View/Controller), passed to children
-- Error handling centralized (no try-catch scattered everywhere)
+- Exception translation for the same external contract is consolidated under its boundary owner, while different contracts remain at their respective boundaries
 - Business logic not leaking into Controller/View
 
 **Exception Translation at Protocol Boundaries:**

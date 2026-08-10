@@ -249,9 +249,9 @@ AI often turns a small number of concrete branches into config arrays, function 
 
 | Pattern | Example | Verdict |
 |---------|---------|---------|
-| Single-use operation config array | Processing `[{ kind, fields, removedFields }]` in a loop | REJECT |
+| Operation config array hides meaning, contracts, or change boundaries | Side effects require reading both `[{ kind, fields, removedFields }]` and its loop | REJECT |
 | Deletions, side effects, or exception cases are hidden in config objects | Readers must inspect config values to find destructive behavior | REJECT |
-| Function object introduced when each branch is only 1-3 lines | `handlers[type]()` adds indirection only | REJECT |
+| Function object introduced when branch differences have no independent concept or change axis | `handlers[type]()` adds only indirection | REJECT |
 | Strategy represents a domain concept and clarifies the implementation boundary | `TaxPolicy`, `PaymentMethod`, `RetryStrategy` | OK |
 | Many branches share the same shape and are expected to grow | Consider a handler map | OK |
 
