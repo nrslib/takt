@@ -100,7 +100,7 @@ facet_pools:
         knowledge: [unit-testing, e2e-testing]
       - id: security
         description: Handle authentication, authorization, input validation, secrets, dependencies, and security boundaries.
-        knowledge: security
+        knowledge: [security, security-web, security-api, security-local, security-data, security-dependencies]
       - id: implementation-semantics
         description: Handle implementation meaning, contracts, state transitions, return values, and side effects.
         knowledge: implementation-semantics
@@ -116,7 +116,7 @@ facet_pools:
         knowledge: [takt, unit-testing, e2e-testing]
       - id: security
         description: Handle TAKT authentication, authorization, input validation, secrets, dependencies, and security boundaries.
-        knowledge: [takt, security]
+        knowledge: [takt, security, security-web, security-api, security-local, security-data, security-dependencies]
       - id: implementation-semantics
         description: Handle TAKT implementation meaning, contracts, state transitions, return values, and side effects.
         knowledge: [takt, implementation-semantics]

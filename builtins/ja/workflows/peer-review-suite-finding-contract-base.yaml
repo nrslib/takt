@@ -14,6 +14,14 @@ subworkflow:
       type: facet_ref[]
       facet_kind: knowledge
       default: []
+    security_reviewer_persona:
+      type: facet_ref
+      facet_kind: persona
+      default: security-reviewer
+    security_review_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: [security, security-web, security-api, security-local, security-data, security-dependencies]
 initial_step: reviewers
 steps:
   - name: reviewers
@@ -23,6 +31,10 @@ steps:
         $param: review_policy_additions
       review_knowledge_additions:
         $param: review_knowledge_additions
+      security_reviewer_persona:
+        $param: security_reviewer_persona
+      security_review_knowledge:
+        $param: security_review_knowledge
     rules:
       self:
         - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)

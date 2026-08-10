@@ -46,11 +46,11 @@ steps:
         tags:
           - review
         edit: false
-        persona: security-reviewer
+        persona: takt-security-reviewer
         policy:
           - contract-change
           - security-review
-        knowledge: security
+        knowledge: [takt, security, security-local, security-data, security-dependencies]
         instruction: review-security
         output_contracts:
           report:

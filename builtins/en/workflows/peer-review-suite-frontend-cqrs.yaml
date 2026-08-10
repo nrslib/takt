@@ -26,6 +26,8 @@ steps:
             $param: review_policy_additions
           review_knowledge_additions:
             $param: review_knowledge_additions
+          security_reviewer_persona: security-reviewer
+          security_review_knowledge: [security, security-web, security-api, security-data, security-dependencies]
         rules:
           - condition: COMPLETE
           - condition: needs_fix

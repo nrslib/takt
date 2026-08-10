@@ -1,296 +1,51 @@
-# Security Knowledge
+# Common Security Knowledge
+
+## Domain Knowledge Applicability
+
+The Security reviewer evaluates only the security surfaces that exist in the changed system and its real execution paths. A filename, framework name, or installed dependency alone is not evidence that a domain applies.
+
+| Knowledge | Applicable systems and changes |
+|-----------|--------------------------------|
+| `security-web` | Browsers, DOM, HTML generation, cookies, CORS, or browser-originated file submission |
+| `security-api` | APIs or servers called by external or low-trust clients, authentication, authorization, database access, or tenant boundaries |
+| `security-local` | CLIs, local agents, shell/process execution, filesystems, local configuration, plugins, or providers |
+| `security-data` | Secrets, personal data, logs, cryptography, or error surfaces that handle protected data |
+| `security-dependencies` | Package manifests, lockfiles, dependency resolution, distributed artifacts, or external components |
+
+Multiple Knowledge domains can apply to one change. Do not use a domain's checklist as finding evidence when its applicability condition is not met. The assigned Policy's scope and blocking/warning boundary take precedence over examples in every Knowledge facet.
 
 ## AI-Generated Code Security Issues
 
-AI-generated code has unique vulnerability patterns.
+AI-generated code commonly exhibits these vulnerability patterns.
 
 | Pattern | Risk | Example |
 |---------|------|---------|
-| Plausible but dangerous defaults | High | `cors: { origin: '*' }` looks fine but is dangerous |
-| Outdated security practices | Medium | Using deprecated encryption, old auth patterns |
-| Incomplete validation | High | Validates format but not business rules |
-| Over-trusting inputs | Critical | Assumes internal APIs are always safe |
-| Copy-paste vulnerabilities | High | Same dangerous pattern repeated in multiple files |
+| Plausible but unsafe defaults | High | Permissions broader than the actual contract requires |
+| Outdated security practices | Medium | Deprecated cryptography or legacy authentication patterns |
+| Incomplete validation | High | Validating syntax without validating boundary semantics |
+| Excessive trust in input | Critical | Treating low-trust input as internal input |
+| Copied vulnerability patterns | High | Repeating the same unsafe pattern across several locations |
 
-Require extra scrutiny:
-- Auth/authorization logic (AI tends to miss edge cases)
-- Input validation (AI may check syntax but miss semantics)
-- Error messages (AI may expose internal details)
-- Config files (AI may use dangerous defaults from training data)
+Authentication, authorization, input boundaries, sensitive data, and configuration defaults need close inspection when they participate in a real trust boundary.
 
 ## Precedence Resolution, Override, and Trust Boundaries
 
-Resolving multiple configuration or definition sources by precedence, intentional override behavior, and extension points are not vulnerabilities by themselves. The real question is whether the change breaks a trust boundary or gives a lower-trust actor a new attack capability.
-
-| Criteria | Verdict |
-|----------|---------|
-| Behavior follows documented precedence rules within the same user and trust level | OK |
-| An explicit selector or argument chooses the target and resolution still follows the documented precedence model | OK |
-| A higher-precedence definition wins over a lower-precedence one, but stays within the documented customization contract and does not expand privileges or data access | Warning at most. Normally not REJECT |
-| A lower-trust actor can override a higher-trust setting or definition and thereby gain new code execution, modify higher-trust assets, access data, or bypass authorization | REJECT |
-| An interactive confirmation step is removed, but explicit selection already makes intent unambiguous and the trust boundary is unchanged | OK |
-| An interactive confirmation step was the only trust-boundary control, and removing it silently enables lower-trust override | May be REJECT. Make the attack preconditions and impact concrete |
-
-### How to Evaluate
-
-To treat precedence resolution or override behavior as a vulnerability, make all of the following concrete:
-
-- Who the lower-trust actor is and what input or configuration they control
-- What the higher-trust asset is
-- What becomes possible only after this change
-- Why that behavior exceeds the documented precedence or extension model
-
-If the product already allows behavior to be customized through multiple scoped definition files or configuration sources, enabling selection among definitions at the same trust level is usually not a new attack capability by itself.
-
-## Injection Attacks
-
-**SQL Injection:**
-
-- SQL construction via string concatenation → REJECT
-- Not using parameterized queries → REJECT
-- Unsanitized input in ORM raw queries → REJECT
-
-```typescript
-// NG
-db.query(`SELECT * FROM users WHERE id = ${userId}`)
-
-// OK
-db.query('SELECT * FROM users WHERE id = ?', [userId])
-```
-
-**Command Injection:**
-
-- Unvalidated input in `exec()`, `spawn()` → REJECT
-- Insufficient escaping in shell command construction → REJECT
-
-```typescript
-// NG
-exec(`ls ${userInput}`)
-
-// OK
-execFile('ls', [sanitizedInput])
-```
-
-**XSS (Cross-Site Scripting):**
-
-- Unescaped output to HTML/JS → REJECT
-- Improper use of `innerHTML`, `dangerouslySetInnerHTML` → REJECT
-- Direct embedding of URL parameters → REJECT
-
-## Authentication & Authorization
-
-**Authentication issues:**
-
-- Hardcoded credentials → Immediate REJECT
-- Plaintext password storage → Immediate REJECT
-- Weak hash algorithms (MD5, SHA1) → REJECT
-- Improper session token management → REJECT
-
-**Authorization issues:**
-
-- Missing permission checks → REJECT
-- IDOR (Insecure Direct Object Reference) → REJECT
-- Privilege escalation possibility → REJECT
-
-```typescript
-// NG - No permission check
-app.get('/user/:id', (req, res) => {
-  return db.getUser(req.params.id)
-})
-
-// OK
-app.get('/user/:id', authorize('read:user'), (req, res) => {
-  if (req.user.id !== req.params.id && !req.user.isAdmin) {
-    return res.status(403).send('Forbidden')
-  }
-  return db.getUser(req.params.id)
-})
-```
-
-## Data Protection
-
-**Sensitive information exposure:**
-
-- Hardcoded API keys, secrets → Immediate REJECT
-- Sensitive info in logs → REJECT
-- Internal info exposure in error messages → REJECT
-- Committed `.env` files → REJECT
-
-**Data validation:**
-
-- Unvalidated input values → REJECT, except when the only missing validation is an input size limit
-- Missing type checks → REJECT
-- Missing size limits can contribute to resource exhaustion; evaluate the concrete path under the Security policy
-
-## Logging & Masking
-
-Prevent sensitive information from leaking into logs and responses.
-
-**Never log:**
-- Passwords, tokens, API keys
-- Credit card numbers, personal identification numbers
-- Session IDs, authentication header values
-- Personal information (email, phone) unless necessary for debugging
-
-**Masking patterns:**
-
-```typescript
-// NG - Password exposed in logs
-logger.info('User login attempt', { email, password })
-
-// OK - Exclude sensitive fields
-logger.info('User login attempt', { email })
-```
-
-```kotlin
-// NG - Logging entire request object
-logger.info("Request: {}", request)
-
-// OK - Log only safe fields
-logger.info("Request: userId={}, action={}", request.userId, request.action)
-```
-
-**Structured logging field filtering:**
-
-When passing objects to log output, ensure `toString()` or JSON serialization does not include sensitive fields.
-
-```kotlin
-// NG - data class toString() includes password
-data class UserCredentials(val email: String, val password: String)
-
-// OK - Override toString() to mask sensitive fields
-data class UserCredentials(val email: String, val password: String) {
-    override fun toString(): String = "UserCredentials(email=$email, password=***)"
-}
-```
-
-| Criteria | Verdict |
-|----------|---------|
-| Log output contains passwords, tokens, or API keys | REJECT |
-| Error responses contain stack traces or internal paths | REJECT |
-| data class toString() exposes sensitive fields | REJECT |
-| Sensitive info can be output regardless of log level | REJECT |
-| Debug logs contain PII but disabled in production | Warning. Risk of misconfiguration |
-
-## Cryptography
-
-- Use of weak crypto algorithms → REJECT
-- Fixed IV/Nonce usage → REJECT
-- Hardcoded encryption keys → Immediate REJECT
-- No HTTPS (production) → REJECT
-
-## File Operations
-
-**Path Traversal:**
-
-- File paths containing user input → REJECT
-- Insufficient `../` sanitization → REJECT
-
-```typescript
-// NG
-const filePath = path.join(baseDir, userInput)
-fs.readFile(filePath)
-
-// OK
-const safePath = path.resolve(baseDir, userInput)
-if (!safePath.startsWith(path.resolve(baseDir))) {
-  throw new Error('Invalid path')
-}
-```
-
-**File Upload:**
-
-- No file type validation → REJECT
-- Missing file-size limits can contribute to resource exhaustion; evaluate the concrete path under the Security policy
-- Allowing executable file uploads → REJECT
-
-## Dependencies
-
-- Packages with known vulnerabilities → REJECT
-- Unmaintained packages → Warning
-- Unnecessary dependencies → Warning
-
-## Error Handling
-
-- Stack trace exposure in production → REJECT
-- Detailed error message exposure → REJECT
-- Swallowing security events → REJECT
-
-## Rate Limiting & DoS Protection
-
-- No rate limiting (auth endpoints) → Warning
-- Resource exhaustion attack possibility → Warning
-- Infinite loop patterns can cause denial of service; evaluate the verified path and impact under the Security policy
-
-## Multi-Tenant Data Isolation
-
-Prevent data access across tenant boundaries. Authorization (who can operate) and scoping (which tenant's data) are separate concerns.
-
-| Criteria | Verdict |
-|----------|---------|
-| Reads are tenant-scoped but writes are not | REJECT |
-| Write operations use client-provided tenant ID | REJECT |
-| Endpoint using tenant resolver has no authorization control | REJECT |
-| Some paths in role-based branching don't account for tenant resolution | REJECT |
-| Authentication mechanism coverage does not extend to the endpoint's expected caller (role, token type) | REJECT |
-
-### Read-Write Consistency
-
-Apply tenant scoping to both reads and writes. Scoping only one side creates a state where data cannot be viewed but can be modified.
-
-When adding a tenant filter to reads, always add tenant verification to corresponding writes.
-
-### Write-Side Tenant Verification
-
-For write operations, use the tenant ID resolved from the authenticated user, not from the request body.
-
-```kotlin
-// NG - Trusting client-provided tenant ID
-fun create(request: CreateRequest) {
-    service.create(request.tenantId, request.data)
-}
-
-// OK - Resolve tenant from authentication
-fun create(request: CreateRequest) {
-    val tenantId = tenantResolver.resolve()
-    service.create(tenantId, request.data)
-}
-```
-
-### Authorization-Resolver Alignment
-
-When a tenant resolver assumes a specific role (e.g., staff), the endpoint must have corresponding authorization controls. Without authorization, unexpected roles can access the endpoint and cause the resolver to fail.
-
-```kotlin
-// NG - Resolver assumes STAFF but no authorization control
-fun getSettings(): SettingsResponse {
-    val tenantId = tenantResolver.resolve()  // Fails for non-STAFF
-    return settingsService.getByTenant(tenantId)
-}
-
-// OK - Authorization ensures correct role
-@Authorized(roles = ["STAFF"])
-fun getSettings(): SettingsResponse {
-    val tenantId = tenantResolver.resolve()
-    return settingsService.getByTenant(tenantId)
-}
-```
-
-For endpoints with role-based branching, verify that tenant resolution succeeds on all paths.
-
-Watch for the reverse pattern as well. When adding an endpoint dedicated to a specific role, extend the coverage of the mechanism that authenticates that role (filters, etc.) and add role-required authorization in the same change. Outside the authentication mechanism's coverage the expected caller is never authenticated in the first place, and without authorization, unexpected roles get through.
-
-## OWASP Top 10 Checklist
-
-| Category | Check Items |
-|----------|-------------|
-| A01 Broken Access Control | Authorization checks, CORS config |
-| A02 Cryptographic Failures | Encryption, sensitive data protection |
-| A03 Injection | SQL, Command, XSS |
-| A04 Insecure Design | Security design patterns |
-| A05 Security Misconfiguration | Default settings, unnecessary features |
-| A06 Vulnerable Components | Dependency vulnerabilities |
-| A07 Auth Failures | Authentication mechanisms |
-| A08 Software Integrity | Code signing, CI/CD |
-| A09 Logging Failures | Security logging |
-| A10 SSRF | Server-side requests |
+Precedence across configuration or definition sources, intentional overrides, and extension points are not vulnerabilities by themselves. The relevant question is whether the change breaks a trust boundary or gives a lower-trust party a new capability.
+
+| Criterion | Decision |
+|-----------|----------|
+| Resolution follows documented precedence within the same user and trust level | OK |
+| An explicit selector or argument chooses the target under the existing precedence model | OK |
+| A higher-priority definition wins within the customization contract without privilege or data-access expansion | Warning at most; normally not REJECT |
+| A lower-trust source can override a higher-trust source and gain code execution, asset modification, data access, or authorization bypass | REJECT |
+| Interactive confirmation is removed, but explicit selection remains unambiguous and the trust boundary is unchanged | OK |
+| Confirmation was the only boundary control and its removal silently enables a lower-trust override | May be REJECT when the attack preconditions and impact are concrete |
+
+### Decision Evidence
+
+- Who is the lower-trust party, and which input or configuration can they control?
+- What is the higher-trust asset?
+- What becomes possible after the change that was not possible before?
+- Why is that behavior outside the specified precedence or extension contract?
+
+Allowing the same user at the same trust level to select an existing extension or definition normally does not create a new attack capability.

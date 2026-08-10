@@ -298,15 +298,22 @@ describe('facet include expansion', () => {
   it.each(['en', 'ja'] as const)('should route every builtin review-security entry through the security policy in %s', (lang) => {
     const roots = ['steps', 'workflows'].map((directory) => join(getLanguageResourcesDir(lang), directory));
     const yamlFiles = roots.flatMap((root) => listYamlFiles(root));
+    const allowedPersonas = new Set([
+      'security-reviewer',
+      'web-security-reviewer',
+      'backend-security-reviewer',
+      'takt-security-reviewer',
+      'security_reviewer_persona',
+    ]);
     const routes = yamlFiles.flatMap((filePath) => {
       const parsed = parseYaml(readFileSync(filePath, 'utf-8')) as unknown;
-      return collectRecords(parsed).filter((record) => (
-        record.persona === 'security-reviewer' && record.instruction === 'review-security'
-      )).map((record) => ({ filePath, record }));
+      return collectRecords(parsed).filter((record) => record.instruction === 'review-security')
+        .map((record) => ({ filePath, record }));
     });
 
     expect(routes.length).toBeGreaterThan(0);
     for (const { filePath, record } of routes) {
+      expect(collectStrings(record.persona).some((persona) => allowedPersonas.has(persona)), filePath).toBe(true);
       const policies = collectStrings(record.policy);
       expect(policies, filePath).toContain('security-review');
       expect(policies, filePath).not.toContain('review');
@@ -315,6 +322,224 @@ describe('facet include expansion', () => {
         expect(policies.indexOf('security-review'), filePath).toBeGreaterThan(additionsIndex);
       }
     }
+  });
+
+  it.each(['en', 'ja'] as const)('should apply the domain knowledge for each specialized security persona in %s', (lang) => {
+    const expectedKnowledge: Record<string, string[]> = {
+      'web-security-reviewer': ['security', 'security-web', 'security-data', 'security-dependencies'],
+      'backend-security-reviewer': ['security', 'security-api', 'security-data', 'security-dependencies'],
+      'takt-security-reviewer': ['takt', 'security', 'security-local', 'security-data', 'security-dependencies'],
+    };
+    const roots = ['steps', 'workflows'].map((directory) => join(getLanguageResourcesDir(lang), directory));
+    const yamlFiles = roots.flatMap((root) => listYamlFiles(root));
+    const routes = yamlFiles.flatMap((filePath) => {
+      const parsed = parseYaml(readFileSync(filePath, 'utf-8')) as unknown;
+      return collectRecords(parsed).filter((record) => typeof record.persona === 'string' && record.persona in expectedKnowledge)
+        .map((record) => ({ filePath, record }));
+    });
+
+    expect(routes.length).toBeGreaterThan(0);
+    for (const { filePath, record } of routes) {
+      const knowledge = collectStrings(record.knowledge)
+        .filter((value) => value === 'takt' || value === 'security' || value.startsWith('security-'));
+      expect(knowledge, filePath).toEqual(expectedKnowledge[record.persona as string]);
+    }
+  });
+
+  it.each(['en', 'ja'] as const)('should preserve the fixed workflow security persona mapping in %s', (lang) => {
+    const languageRoot = getLanguageResourcesDir(lang);
+    const mappings: Record<string, { persona: string; knowledge: string[] }> = {
+      'review-frontend.yaml': {
+        persona: 'web-security-reviewer',
+        knowledge: ['security', 'security-web', 'security-data', 'security-dependencies'],
+      },
+      'review-fix-frontend.yaml': {
+        persona: 'web-security-reviewer',
+        knowledge: ['security', 'security-web', 'security-data', 'security-dependencies'],
+      },
+      'review-backend.yaml': {
+        persona: 'backend-security-reviewer',
+        knowledge: ['security', 'security-api', 'security-data', 'security-dependencies'],
+      },
+      'review-backend-cqrs.yaml': {
+        persona: 'backend-security-reviewer',
+        knowledge: ['security', 'security-api', 'security-data', 'security-dependencies'],
+      },
+      'review-fix-backend.yaml': {
+        persona: 'backend-security-reviewer',
+        knowledge: ['security', 'security-api', 'security-data', 'security-dependencies'],
+      },
+      'review-fix-backend-cqrs.yaml': {
+        persona: 'backend-security-reviewer',
+        knowledge: ['security', 'security-api', 'security-data', 'security-dependencies'],
+      },
+      'review-dual.yaml': {
+        persona: 'security-reviewer',
+        knowledge: ['security', 'security-web', 'security-api', 'security-data', 'security-dependencies'],
+      },
+      'review-dual-cqrs.yaml': {
+        persona: 'security-reviewer',
+        knowledge: ['security', 'security-web', 'security-api', 'security-data', 'security-dependencies'],
+      },
+      'review-fix-dual.yaml': {
+        persona: 'security-reviewer',
+        knowledge: ['security', 'security-web', 'security-api', 'security-data', 'security-dependencies'],
+      },
+      'review-fix-dual-cqrs.yaml': {
+        persona: 'security-reviewer',
+        knowledge: ['security', 'security-web', 'security-api', 'security-data', 'security-dependencies'],
+      },
+      'review-default.yaml': {
+        persona: 'security-reviewer',
+        knowledge: ['security', 'security-web', 'security-api', 'security-local', 'security-data', 'security-dependencies'],
+      },
+      'review-fix-default.yaml': {
+        persona: 'security-reviewer',
+        knowledge: ['security', 'security-web', 'security-api', 'security-local', 'security-data', 'security-dependencies'],
+      },
+      'review-takt-default.yaml': {
+        persona: 'takt-security-reviewer',
+        knowledge: ['takt', 'security', 'security-local', 'security-data', 'security-dependencies'],
+      },
+    };
+
+    for (const [fileName, expected] of Object.entries(mappings)) {
+      const parsed = parseYaml(readFileSync(join(languageRoot, 'workflows', fileName), 'utf-8')) as unknown;
+      const route = collectRecords(parsed).find((record) => record.instruction === 'review-security');
+      expect(route, fileName).toBeDefined();
+      expect(route?.persona, fileName).toBe(expected.persona);
+      expect(collectStrings(route?.knowledge), fileName).toEqual(expected.knowledge);
+    }
+
+    const audit = parseYaml(readFileSync(join(languageRoot, 'workflows', 'audit-security.yaml'), 'utf-8')) as unknown;
+    for (const route of collectRecords(audit).filter((record) => (
+      record.persona === 'security-reviewer' && typeof record.instruction === 'string'
+      && record.instruction.startsWith('audit-security')
+    ))) {
+      expect(collectStrings(route.knowledge)).toEqual([
+        'security',
+        'security-web',
+        'security-api',
+        'security-local',
+        'security-data',
+        'security-dependencies',
+      ]);
+    }
+  });
+
+  it.each(['en', 'ja'] as const)('should configure one security reviewer for each peer-review suite in %s', (lang) => {
+    const languageRoot = getLanguageResourcesDir(lang);
+    const mappings: Record<string, { persona: string; knowledge: string[] }> = {
+      'peer-review-suite-frontend.yaml': {
+        persona: 'web-security-reviewer',
+        knowledge: ['security', 'security-web', 'security-data', 'security-dependencies'],
+      },
+      'peer-review-suite-backend.yaml': {
+        persona: 'backend-security-reviewer',
+        knowledge: ['security', 'security-api', 'security-data', 'security-dependencies'],
+      },
+      'peer-review-suite-cqrs.yaml': {
+        persona: 'backend-security-reviewer',
+        knowledge: ['security', 'security-api', 'security-data', 'security-dependencies'],
+      },
+      'peer-review-suite-dual.yaml': {
+        persona: 'security-reviewer',
+        knowledge: ['security', 'security-web', 'security-api', 'security-data', 'security-dependencies'],
+      },
+      'peer-review-suite-frontend-cqrs.yaml': {
+        persona: 'security-reviewer',
+        knowledge: ['security', 'security-web', 'security-api', 'security-data', 'security-dependencies'],
+      },
+      'peer-review-suite-finding-contract-takt.yaml': {
+        persona: 'takt-security-reviewer',
+        knowledge: ['takt', 'security', 'security-local', 'security-data', 'security-dependencies'],
+      },
+    };
+
+    for (const [fileName, expected] of Object.entries(mappings)) {
+      const parsed = parseYaml(readFileSync(join(languageRoot, 'workflows', fileName), 'utf-8')) as unknown;
+      const args = collectRecords(parsed).find((record) => (
+        typeof record.security_reviewer_persona === 'string'
+        && Array.isArray(record.security_review_knowledge)
+      ));
+      expect(args, fileName).toBeDefined();
+      expect(args?.security_reviewer_persona, fileName).toBe(expected.persona);
+      expect(collectStrings(args?.security_review_knowledge), fileName).toEqual(expected.knowledge);
+    }
+
+    const workflowSuites: Record<string, string> = {
+      'backend.yaml': 'peer-review-suite-backend',
+      'backend-maintenance.yaml': 'peer-review-suite-backend',
+      'frontend.yaml': 'peer-review-suite-frontend',
+      'frontend-maintenance.yaml': 'peer-review-suite-frontend',
+      'dual.yaml': 'peer-review-suite-dual',
+      'backend-cqrs.yaml': 'peer-review-suite-cqrs',
+      'dual-cqrs.yaml': 'peer-review-suite-frontend-cqrs',
+      'takt-default-fc.yaml': 'peer-review-suite-finding-contract-takt',
+    };
+    for (const [fileName, suite] of Object.entries(workflowSuites)) {
+      const parsed = parseYaml(readFileSync(join(languageRoot, 'workflows', fileName), 'utf-8')) as unknown;
+      expect(collectRecords(parsed).some((record) => record.reviewer_suite === suite), fileName).toBe(true);
+    }
+  });
+
+  it.each(['en', 'ja'] as const)('should keep the experimental security candidates as single generic or TAKT entries in %s', (lang) => {
+    const languageRoot = getLanguageResourcesDir(lang);
+    const experimental = parseYaml(readFileSync(join(languageRoot, 'steps', 'experimental-review.yaml'), 'utf-8')) as Record<string, unknown>;
+    const securityCandidates = ((experimental.parallel as Record<string, unknown>).pool as Array<Record<string, unknown>>)
+      .filter((candidate) => candidate.persona === 'security-reviewer');
+    expect(securityCandidates).toHaveLength(1);
+    expect(securityCandidates[0]?.name).toBe('security-review');
+    expect(collectStrings(securityCandidates[0]?.knowledge)).toEqual([
+      'security',
+      'security-web',
+      'security-api',
+      'security-local',
+      'security-data',
+      'security-dependencies',
+    ]);
+    expect(collectStrings(securityCandidates[0]?.output_contracts)).toContain('security-review.md');
+
+    const takt = parseYaml(readFileSync(join(languageRoot, 'workflows', 'takt-experimental-review.yaml'), 'utf-8')) as Record<string, unknown>;
+    const taktStep = (takt.steps as Array<Record<string, unknown>>)[0];
+    const taktPool = ((taktStep.parallel as Record<string, unknown>).pool as Array<Record<string, unknown>>)
+      .filter((candidate) => candidate.persona === 'takt-security-reviewer');
+    expect(taktPool).toHaveLength(1);
+    expect(taktPool[0]?.name).toBe('security-review');
+    expect(collectStrings(taktPool[0]?.knowledge)).toEqual([
+      'takt',
+      'security',
+      'security-local',
+      'security-data',
+      'security-dependencies',
+    ]);
+    expect(collectStrings(taktPool[0]?.output_contracts)).toContain('security-review.md');
+    const taktRules = ((taktStep.rules as Record<string, unknown>).parallel as Record<string, unknown>);
+    expect(taktRules['security-review']).toBeDefined();
+  });
+
+  it.each(['en', 'ja'] as const)('should keep security domains separate and apply explicit routing in %s', (lang) => {
+    const domains = [
+      'security-web',
+      'security-api',
+      'security-local',
+      'security-data',
+      'security-dependencies',
+    ];
+    const context = { projectDir: tempDir, lang };
+    const common = resolveRefToContent('security', undefined, tempDir, 'knowledge', context);
+    const instruction = resolveRefToContent('review-security', undefined, tempDir, 'instructions', context);
+
+    for (const domain of domains) {
+      expect(common).toContain(`\`${domain}\``);
+      const specialized = resolveRefToContent(domain, undefined, tempDir, 'knowledge', context);
+      expect(specialized).toContain(lang === 'ja' ? '## 適用条件' : '## Applicability');
+    }
+    expect(common).not.toContain(lang === 'ja' ? '# Webセキュリティ知識' : '# Web Security Knowledge');
+    expect(instruction).toContain(lang === 'ja'
+      ? 'stepに付与されていない分野Knowledgeは適用せず'
+      : 'Do not apply a domain Knowledge facet that is not assigned to the step');
+    expect(instruction).not.toContain('{{include:instructions/security-knowledge-routing}}');
   });
 });
 

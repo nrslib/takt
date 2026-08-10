@@ -42,7 +42,7 @@ steps:
       - review
     persona: security-reviewer
     policy: contract-change
-    knowledge: security
+    knowledge: [security, security-web, security-api, security-local, security-data, security-dependencies]
     instruction: audit-security-team-leader
     edit: false
     team_leader:
@@ -63,7 +63,7 @@ steps:
       - supervise
     persona: supervisor
     policy: contract-change
-    knowledge: security
+    knowledge: [security, security-web, security-api, security-local, security-data, security-dependencies]
     instruction: audit-security-supervise
     edit: false
     rules:
@@ -77,7 +77,7 @@ steps:
       - review
     persona: security-reviewer
     policy: contract-change
-    knowledge: security
+    knowledge: [security, security-web, security-api, security-local, security-data, security-dependencies]
     instruction: audit-security-review
     edit: false
     output_contracts:

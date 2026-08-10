@@ -54,13 +54,13 @@ steps:
               - name: cli-review.md
                 format: coding-review
         - name: security-review
-          description: Review authentication, authorization, input validation, secrets, dependencies, and security boundaries.
+          description: Review TAKT authentication, authorization, input validation, secrets, local execution, dependencies, and security boundaries.
           capabilities: readonly
           tags: [review]
           edit: false
-          persona: security-reviewer
+          persona: takt-security-reviewer
           policy: [contract-change, security-review]
-          knowledge: [takt, security]
+          knowledge: [takt, security, security-local, security-data, security-dependencies]
           instruction: review-security
           pass_previous_response: false
           output_contracts:

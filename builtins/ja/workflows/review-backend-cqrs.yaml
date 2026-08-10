@@ -63,11 +63,11 @@ steps:
         tags:
           - review
         edit: false
-        persona: security-reviewer
+        persona: backend-security-reviewer
         policy:
           - contract-change
           - security-review
-        knowledge: security
+        knowledge: [security, security-api, security-data, security-dependencies]
         instruction: review-security
         output_contracts:
           report:

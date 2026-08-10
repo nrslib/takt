@@ -1,0 +1,48 @@
+name: peer-review-suite-dual
+description: 共通レビューへフロントエンド専門レビューとWeb・Backend両境界のSecurity reviewを合成するスイート。
+subworkflow:
+  callable: true
+  visibility: internal
+  returns:
+    - needs_fix
+  params:
+    review_policy_additions:
+      type: facet_ref[]
+      facet_kind: policy
+      default: []
+    review_knowledge_additions:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: []
+initial_step: reviewers
+steps:
+  - name: reviewers
+    parallel:
+      - name: base-reviewers
+        kind: workflow_call
+        call: peer-review-suite-base
+        args:
+          review_policy_additions:
+            $param: review_policy_additions
+          review_knowledge_additions:
+            $param: review_knowledge_additions
+          security_reviewer_persona: security-reviewer
+          security_review_knowledge: [security, security-web, security-api, security-data, security-dependencies]
+        rules:
+          - condition: COMPLETE
+          - condition: needs_fix
+      - name: frontend-review
+        uses: peer-review-frontend-reviewer
+        with:
+          review_policy_additions:
+            $param: review_policy_additions
+          review_knowledge_additions:
+            $param: review_knowledge_additions
+        rules:
+          - condition: approved
+          - condition: needs_fix
+    rules:
+      - condition: all("COMPLETE", "approved")
+        next: COMPLETE
+      - condition: any("needs_fix")
+        return: needs_fix

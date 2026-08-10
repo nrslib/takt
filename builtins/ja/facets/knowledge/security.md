@@ -1,296 +1,51 @@
-# セキュリティ知識
+# セキュリティ共通知識
+
+## 分野別Knowledgeの適用判定
+
+Security reviewer は、実際の変更対象と実行経路に存在するセキュリティ面だけを評価対象にする。ファイル名、フレームワーク名、依存関係の存在だけでは、その分野が適用対象である証拠にならない。
+
+| Knowledge | 適用されるシステム・変更 |
+|-----------|--------------------------|
+| `security-web` | ブラウザ、DOM、HTML生成、cookie、CORS、ブラウザからのファイル送信を扱う |
+| `security-api` | 外部または低信頼クライアントから呼ばれるAPI、サーバー、認証・認可、DBアクセス、マルチテナント境界を扱う |
+| `security-local` | CLI、ローカルエージェント、shell/process起動、ファイルシステム、ローカル設定・plugin・providerを扱う |
+| `security-data` | secret、個人情報、ログ、暗号、エラー応答など保護対象データを扱う |
+| `security-dependencies` | package manifest、lockfile、依存解決、配布物、外部componentを変更する |
+
+複数の面を持つ変更には複数のKnowledgeが適用される。適用条件を満たさないKnowledgeのチェック項目はfindingの根拠にしない。各Knowledgeの判定例より、割り当てられたPolicyのscopeとblocking / warning境界を優先する。
 
 ## AI生成コードのセキュリティ問題
 
-AI生成コードには特有の脆弱性パターンがある。
+AI生成コードには次のような脆弱性パターンがある。
 
 | パターン | リスク | 例 |
 |---------|--------|-----|
-| もっともらしいが危険なデフォルト | 高 | `cors: { origin: '*' }` は問題なく見えるが危険 |
-| 古いセキュリティプラクティス | 中 | 非推奨の暗号化、古い認証パターンの使用 |
-| 不完全なバリデーション | 高 | 形式は検証するがビジネスルールを検証しない |
-| 入力を過度に信頼 | 重大 | 内部APIは常に安全と仮定 |
-| コピペによる脆弱性 | 高 | 同じ危険なパターンが複数ファイルで繰り返される |
+| もっともらしいが危険なデフォルト | 高 | 必要以上に広いアクセス許可 |
+| 古いセキュリティプラクティス | 中 | 非推奨の暗号化、古い認証パターン |
+| 不完全なバリデーション | 高 | 形式だけを検証し、境界上の意味を検証しない |
+| 入力を過度に信頼 | 重大 | 低信頼入力を内部入力として扱う |
+| コピペによる脆弱性 | 高 | 同じ危険なパターンが複数箇所で繰り返される |
 
-特に厳しく審査が必要:
-- 認証・認可ロジック（AIはエッジケースを見落としがち）
-- 入力バリデーション（AIは構文を検証しても意味を見落とす可能性）
-- エラーメッセージ（AIは内部詳細を露出する可能性）
-- 設定ファイル（AIは学習データから危険なデフォルトを使う可能性）
+厳しい確認が必要なのは、認証・認可、入力境界、機密情報、設定の既定値など、実際のtrust boundaryに関係する変更である。
 
 ## 優先順位解決・オーバーライド・信頼境界
 
-複数の設定ソースや定義ソースを優先順位で解決する仕組み、意図的なオーバーライド、拡張ポイントは、それ自体では脆弱性ではない。重要なのは、変更が信頼境界を壊したか、低信頼側に新しい攻撃能力を与えたかである。
+複数の設定ソースや定義ソースを優先順位で解決する仕組み、意図的なオーバーライド、拡張ポイントは、それ自体では脆弱性ではない。重要なのは、変更がtrust boundaryを壊したか、低信頼側に新しい攻撃能力を与えたかである。
 
 | 基準 | 判定 |
 |------|------|
-| documented な優先順位に従い、同じ利用者・同じ trust level 内で設定や定義が解決される | OK |
-| 明示的な selector や引数指定で対象が選ばれ、既存の優先順位モデルに従って解決される | OK |
-| 低い優先順位の定義より高い優先順位の定義が採用されても、それが既存のカスタマイズ契約の範囲内で、権限拡大や新しいデータアクセスを伴わない | 警告以下。通常は REJECT にしない |
-| 低信頼側が高信頼側の設定や定義を上書きでき、その結果として新しいコード実行、高信頼資産の内容変更、データ取得、認可回避が可能になる | REJECT |
-| 対話的な確認ステップがなくなったが、明示指定で意図は十分に一意で、trust boundary も変わらない | OK |
-| 対話的な確認ステップが唯一の境界防御であり、それを外すことで低信頼側の override が silent に有効になる | REJECT になりうる。攻撃前提と影響を具体化する |
+| documentedな優先順位に従い、同じ利用者・同じtrust level内で設定や定義が解決される | OK |
+| 明示的なselectorや引数指定で対象が選ばれ、既存の優先順位モデルに従って解決される | OK |
+| 高い優先順位の定義が既存のカスタマイズ契約内で採用され、権限拡大や新しいデータアクセスを伴わない | 警告以下。通常はREJECTにしない |
+| 低信頼側が高信頼側を上書きし、新しいコード実行、資産変更、データ取得、認可回避が可能になる | REJECT |
+| 対話確認がなくなっても、明示指定で意図が一意かつtrust boundaryが変わらない | OK |
+| 対話確認が唯一の境界防御で、その削除により低信頼側のoverrideがsilentに有効になる | 具体的な攻撃前提と影響が確認できればREJECTになりうる |
 
-### 判定のしかた
-
-優先順位解決やオーバーライドを脆弱性として扱うには、次を具体的に示す必要がある。
+### 判定材料
 
 - 誰が低信頼側で、どの入力や設定を制御できるか
 - 何が高信頼資産か
 - 変更前にはできず、変更後に初めて可能になったことは何か
-- その挙動が仕様上の precedence や拡張点の範囲を超えている理由
+- その挙動が仕様上のprecedenceや拡張点の範囲を超えている理由
 
-既に複数スコープの定義ファイルや設定ソースで挙動を調整できる設計なら、同じ trust level の別の定義を選べるようになっただけでは、通常は新しい攻撃能力とはいえない。
-
-## インジェクション攻撃
-
-**SQLインジェクション**
-
-- 文字列連結によるSQL構築 → REJECT
-- パラメータ化クエリの不使用 → REJECT
-- ORMの raw query での未サニタイズ入力 → REJECT
-
-```typescript
-// NG
-db.query(`SELECT * FROM users WHERE id = ${userId}`)
-
-// OK
-db.query('SELECT * FROM users WHERE id = ?', [userId])
-```
-
-**コマンドインジェクション**
-
-- `exec()`, `spawn()` での未検証入力 → REJECT
-- シェルコマンド構築時のエスケープ不足 → REJECT
-
-```typescript
-// NG
-exec(`ls ${userInput}`)
-
-// OK
-execFile('ls', [sanitizedInput])
-```
-
-**XSS (Cross-Site Scripting)**
-
-- HTML/JSへの未エスケープ出力 → REJECT
-- `innerHTML`, `dangerouslySetInnerHTML` の不適切な使用 → REJECT
-- URLパラメータの直接埋め込み → REJECT
-
-## 認証・認可
-
-**認証の問題**
-
-- ハードコードされたクレデンシャル → 即REJECT
-- 平文パスワードの保存 → 即REJECT
-- 弱いハッシュアルゴリズム (MD5, SHA1) → REJECT
-- セッショントークンの不適切な管理 → REJECT
-
-**認可の問題**
-
-- 権限チェックの欠如 → REJECT
-- IDOR (Insecure Direct Object Reference) → REJECT
-- 権限昇格の可能性 → REJECT
-
-```typescript
-// NG - 権限チェックなし
-app.get('/user/:id', (req, res) => {
-  return db.getUser(req.params.id)
-})
-
-// OK
-app.get('/user/:id', authorize('read:user'), (req, res) => {
-  if (req.user.id !== req.params.id && !req.user.isAdmin) {
-    return res.status(403).send('Forbidden')
-  }
-  return db.getUser(req.params.id)
-})
-```
-
-## データ保護
-
-**機密情報の露出**
-
-- APIキー、シークレットのハードコーディング → 即REJECT
-- ログへの機密情報出力 → REJECT
-- エラーメッセージでの内部情報露出 → REJECT
-- `.env` ファイルのコミット → REJECT
-
-**データ検証**
-
-- 入力値の未検証（サイズ制限の未設定だけの場合を除く）→ REJECT
-- 型チェックの欠如 → REJECT
-- サイズ制限の未設定はリソース枯渇につながり得るため、具体的な経路を Security 専用 policy に従って確認する
-
-## ログとマスキング
-
-機密情報がログやレスポンスに露出するのを防ぐ。
-
-**ログに出力してはいけない情報:**
-- パスワード、トークン、APIキー
-- クレジットカード番号、個人識別番号
-- セッションID、認証ヘッダの値
-- 個人情報（メールアドレス、電話番号）のうち、デバッグ目的で不要なもの
-
-**マスキングパターン:**
-
-```typescript
-// NG - パスワードがログに露出
-logger.info('User login attempt', { email, password })
-
-// OK - 機密フィールドを除外
-logger.info('User login attempt', { email })
-```
-
-```kotlin
-// NG - リクエスト全体をログ出力
-logger.info("Request: {}", request)
-
-// OK - 機密フィールドをマスク
-logger.info("Request: userId={}, action={}", request.userId, request.action)
-```
-
-**構造化ログでのフィールドフィルタリング:**
-
-ログ出力にオブジェクトを渡す場合、`toString()` や JSON シリアライズで機密フィールドが含まれないようにする。
-
-```kotlin
-// NG - data class の toString() がパスワードを含む
-data class UserCredentials(val email: String, val password: String)
-
-// OK - toString() をオーバーライドしてマスク
-data class UserCredentials(val email: String, val password: String) {
-    override fun toString(): String = "UserCredentials(email=$email, password=***)"
-}
-```
-
-| 基準 | 判定 |
-|------|------|
-| ログ出力にパスワード・トークン・APIキーが含まれる | REJECT |
-| エラーレスポンスにスタックトレースや内部パスが含まれる | REJECT |
-| data class の toString() が機密フィールドを露出する | REJECT |
-| ログレベルに関わらず機密情報が出力される可能性がある | REJECT |
-| デバッグログに個人情報が含まれるが本番で無効化されている | 警告。設定ミスのリスクがある |
-
-## 暗号化
-
-- 弱い暗号アルゴリズムの使用 → REJECT
-- 固定IV/Nonceの使用 → REJECT
-- 暗号化キーのハードコーディング → 即REJECT
-- HTTPSの未使用（本番環境） → REJECT
-
-## ファイル操作
-
-**パストラバーサル**
-
-- ユーザー入力を含むファイルパス → REJECT
-- `../` のサニタイズ不足 → REJECT
-
-```typescript
-// NG
-const filePath = path.join(baseDir, userInput)
-fs.readFile(filePath)
-
-// OK
-const safePath = path.resolve(baseDir, userInput)
-if (!safePath.startsWith(path.resolve(baseDir))) {
-  throw new Error('Invalid path')
-}
-```
-
-**ファイルアップロード**
-
-- ファイルタイプの未検証 → REJECT
-- ファイルサイズ制限なしはリソース枯渇につながり得るため、具体的な経路を Security 専用 policy に従って確認する
-- 実行可能ファイルのアップロード許可 → REJECT
-
-## 依存関係
-
-- 既知の脆弱性を持つパッケージ → REJECT
-- メンテナンスされていないパッケージ → 警告
-- 不必要な依存関係 → 警告
-
-## エラーハンドリング
-
-- スタックトレースの本番露出 → REJECT
-- 詳細なエラーメッセージの露出 → REJECT
-- エラーの握りつぶし（セキュリティイベント） → REJECT
-
-## レート制限・DoS対策
-
-- レート制限の欠如（認証エンドポイント） → 警告
-- リソース枯渇攻撃の可能性 → 警告
-- 無限ループのパターンはサービス拒否につながり得るため、確認できた経路と影響を Security 専用 policy に従って評価する
-
-## マルチテナントデータ分離
-
-テナント境界を超えたデータアクセスを防ぐ。認可（誰が操作できるか）とスコーピング（どのテナントのデータか）は別の関心事。
-
-| 基準 | 判定 |
-|------|------|
-| 読み取りはテナントスコープだが書き込みはスコープなし | REJECT |
-| 書き込み操作でクライアント提供のテナントIDを使用 | REJECT |
-| テナントリゾルバーを使うエンドポイントに認可制御がない | REJECT |
-| ロール分岐の一部パスでテナント解決が未考慮 | REJECT |
-| エンドポイントの想定呼び出し者（ロール・トークン種別）に認証機構の適用範囲が及んでいない | REJECT |
-
-### 読み書きの一貫性
-
-テナントスコーピングは読み取りと書き込みの両方に適用する。片方だけでは、参照できないが変更できる状態が生まれる。
-
-読み取りにテナントフィルタを追加したら、対応する書き込みも必ずテナント検証する。
-
-### 書き込みのテナント検証
-
-書き込み操作では、リクエストボディのテナントIDではなく認証済みユーザーから解決したテナントIDを使う。
-
-```kotlin
-// NG - クライアント提供のテナントIDを信頼
-fun create(request: CreateRequest) {
-    service.create(request.tenantId, request.data)
-}
-
-// OK - 認証情報からテナントを解決
-fun create(request: CreateRequest) {
-    val tenantId = tenantResolver.resolve()
-    service.create(tenantId, request.data)
-}
-```
-
-### 認可とリゾルバーの整合性
-
-テナントリゾルバーが特定ロール（例: スタッフ）を前提とする場合、エンドポイントに対応する認可制御が必要。認可なしだと、前提外のロールがアクセスしてリゾルバーが失敗する。
-
-```kotlin
-// NG - リゾルバーが STAFF を前提とするが認可制御なし
-fun getSettings(): SettingsResponse {
-    val tenantId = tenantResolver.resolve()  // STAFF 以外で失敗
-    return settingsService.getByTenant(tenantId)
-}
-
-// OK - 認可制御でロールを保証
-@Authorized(roles = ["STAFF"])
-fun getSettings(): SettingsResponse {
-    val tenantId = tenantResolver.resolve()
-    return settingsService.getByTenant(tenantId)
-}
-```
-
-ロール分岐があるエンドポイントでは、全パスでテナント解決が成功するか検証する。
-
-逆パターンにも注意する。特定ロール専用のエンドポイントを追加する場合、そのロールを認証する機構（フィルタ等）の適用範囲拡張と、ロール必須の認可制御を同じ変更で行う。認証機構の適用範囲外だと想定呼び出し者がそもそも認証されず、認可がないと想定外ロールが通ってしまう。
-
-## OWASP Top 10 チェックリスト
-
-| カテゴリ | 確認事項 |
-|---------|---------|
-| A01 Broken Access Control | 認可チェック、CORS設定 |
-| A02 Cryptographic Failures | 暗号化、機密データ保護 |
-| A03 Injection | SQL, コマンド, XSS |
-| A04 Insecure Design | セキュリティ設計パターン |
-| A05 Security Misconfiguration | デフォルト設定、不要な機能 |
-| A06 Vulnerable Components | 依存関係の脆弱性 |
-| A07 Auth Failures | 認証メカニズム |
-| A08 Software Integrity | コード署名、CI/CD |
-| A09 Logging Failures | セキュリティログ |
-| A10 SSRF | サーバーサイドリクエスト |
+同じtrust levelの利用者が既存の拡張点や定義を選べるようになっただけでは、通常は新しい攻撃能力とはいえない。

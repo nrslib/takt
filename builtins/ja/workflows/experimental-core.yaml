@@ -100,7 +100,7 @@ facet_pools:
         knowledge: [unit-testing, e2e-testing]
       - id: security
         description: 認証認可、入力検証、機密情報、依存関係、セキュリティ境界を扱う
-        knowledge: security
+        knowledge: [security, security-web, security-api, security-local, security-data, security-dependencies]
       - id: implementation-semantics
         description: 実装の意味、契約、状態遷移、戻り値、副作用を扱う
         knowledge: implementation-semantics
@@ -116,7 +116,7 @@ facet_pools:
         knowledge: [takt, unit-testing, e2e-testing]
       - id: security
         description: TAKTの認証認可、入力検証、機密情報、依存関係、セキュリティ境界を扱う
-        knowledge: [takt, security]
+        knowledge: [takt, security, security-web, security-api, security-local, security-data, security-dependencies]
       - id: implementation-semantics
         description: TAKT実装の意味、契約、状態遷移、戻り値、副作用を扱う
         knowledge: [takt, implementation-semantics]

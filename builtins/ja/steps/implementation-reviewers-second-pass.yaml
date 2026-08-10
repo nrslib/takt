@@ -10,7 +10,7 @@ parallel:
     policy:
       - contract-change
       - security-review
-    knowledge: security
+    knowledge: [security, security-web, security-api, security-local, security-data, security-dependencies]
     capabilities: readonly
     instruction: review-security
     output_contracts:
