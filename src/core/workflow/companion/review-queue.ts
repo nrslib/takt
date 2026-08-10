@@ -8,6 +8,22 @@ export interface CompanionReviewRequest {
   readonly observedGeneration: number;
 }
 
+export interface CompanionReviewQueueCoalesced {
+  readonly companionName: string;
+  readonly replaced: {
+    readonly trigger: CompanionReviewRequest['reason'];
+    readonly digest: string;
+    readonly changedLines: number;
+    readonly observedGeneration: number;
+  };
+  readonly replacement: {
+    readonly trigger: CompanionReviewRequest['reason'];
+    readonly digest: string;
+    readonly changedLines: number;
+    readonly observedGeneration: number;
+  };
+}
+
 interface QueueWaiter {
   readonly resolve: () => void;
   readonly reject: (error: unknown) => void;
@@ -31,6 +47,7 @@ export class CompanionReviewQueue {
 
   constructor(private readonly input: {
     runReview: (request: CompanionReviewRequest & { signal: AbortSignal }) => Promise<void>;
+    onCoalesced?: (event: CompanionReviewQueueCoalesced) => void;
   }) {}
 
   enqueue(request: CompanionReviewRequest): Promise<void> {
@@ -39,8 +56,14 @@ export class CompanionReviewQueue {
     const waiter = promiseWaiter();
     const last = state.pending.at(-1);
     if (last !== undefined && last.request.reason !== 'completion') {
+      const replaced = toQueueAuditRequest(last.request);
       last.request = request;
       last.waiters.push(waiter.waiter);
+      this.input.onCoalesced?.({
+        companionName: request.companionName,
+        replaced,
+        replacement: toQueueAuditRequest(request),
+      });
     } else {
       state.pending.push({ request, waiters: [waiter.waiter] });
     }
@@ -128,6 +151,15 @@ export class CompanionReviewQueue {
   private throwIfStopped(): void {
     if (this.stopped) throw createAbortError();
   }
+}
+
+function toQueueAuditRequest(request: CompanionReviewRequest): CompanionReviewQueueCoalesced['replaced'] {
+  return {
+    trigger: request.reason,
+    digest: request.snapshot.digest,
+    changedLines: request.snapshot.changedLines,
+    observedGeneration: request.observedGeneration,
+  };
 }
 
 function promiseWaiter(): { promise: Promise<void>; waiter: QueueWaiter } {

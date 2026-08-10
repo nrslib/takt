@@ -24,6 +24,17 @@ const snapshot = {
   truncated: false,
 };
 
+const emptySnapshot = {
+  digest: 'empty',
+  changedLines: 0,
+  content: '',
+  changedFiles: [],
+  fileFingerprints: {},
+  hunkFingerprints: {},
+  omittedBytes: 0,
+  truncated: false,
+};
+
 function step(allowGitCommit?: boolean): NormalAgentWorkflowStep {
   return {
     name: 'implement',
@@ -74,7 +85,7 @@ function dependencies(input: {
 
 describe('companion runtime lifecycle', () => {
   it('should preserve the diff failure code and sanitized message in its error', async () => {
-    const runtime = await CompanionStepRuntime.create(dependencies({
+    await expect(CompanionStepRuntime.create(dependencies({
       diffReader: {
         readBaselineSha: vi.fn().mockResolvedValue('baseline'),
         readDiff: vi.fn().mockResolvedValue({
@@ -85,17 +96,9 @@ describe('companion runtime lifecycle', () => {
           },
         }),
       },
-    }));
-
-    try {
-      const readSnapshot = (runtime as unknown as { readSnapshot: () => Promise<unknown> }).readSnapshot
-        .bind(runtime);
-      await expect(readSnapshot()).rejects.toThrow(
-        'Companion diff unavailable (git_failure): git diff failed in [path]',
-      );
-    } finally {
-      runtime.stop();
-    }
+    }))).rejects.toThrow(
+      'Companion diff unavailable (git_failure): git diff failed in [path]',
+    );
   });
 
   it('should pass the maximum platform-safe interval to the scheduler unchanged', async () => {
@@ -104,7 +107,10 @@ describe('companion runtime lifecycle', () => {
     let runtime: CompanionStepRuntime | undefined;
     try {
       runtime = await CompanionStepRuntime.create(dependencies({
-        diffReader: { readBaselineSha: vi.fn().mockResolvedValue('baseline'), readDiff: vi.fn() },
+        diffReader: {
+          readBaselineSha: vi.fn().mockResolvedValue('baseline'),
+          readDiff: vi.fn().mockResolvedValue({ status: 'ok', snapshot: emptySnapshot }),
+        },
         intervalMs: MAX_COMPANION_INTERVAL_MS,
       }));
 
@@ -132,7 +138,7 @@ describe('companion runtime lifecycle', () => {
       await Promise.resolve();
       runtime.stop();
 
-      expect(readDiff).not.toHaveBeenCalled();
+      expect(readDiff).toHaveBeenCalledOnce();
     },
   );
 
@@ -147,8 +153,53 @@ describe('companion runtime lifecycle', () => {
       type: 'tool_use',
       data: { tool: 'Bash', input: { command: 'git commit -m change' }, id: 'commit' },
     });
-    await vi.waitFor(() => expect(readDiff).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(readDiff).toHaveBeenCalledTimes(2));
     runtime.stop();
+  });
+
+  it('should synchronize the completion snapshot before an unchanged Bash in a fix round', async () => {
+    vi.useFakeTimers();
+    const readDiff = vi.fn()
+      .mockResolvedValueOnce({ status: 'ok', snapshot: emptySnapshot })
+      .mockResolvedValue({ status: 'ok', snapshot });
+    const callSpy = vi.spyOn(CompanionStructuredCaller.prototype, 'call').mockImplementation(
+      async (request) => request.purpose === 'judge'
+        ? {
+            status: 'done',
+            content: '',
+            structuredOutput: { decision: 'continue', reason: 'continue' },
+          }
+        : {
+            status: 'done',
+            content: '',
+            structuredOutput: { findings: [], updates: [], notes: null },
+          },
+    );
+    let runtime: CompanionStepRuntime | undefined;
+    try {
+      runtime = await CompanionStepRuntime.create(dependencies({
+        diffReader: { readBaselineSha: vi.fn().mockResolvedValue('baseline'), readDiff },
+      }));
+      await runtime.complete({ companion: undefined } as unknown as WorkflowState, 'complete');
+      runtime.beginFixRound(2, 0);
+
+      runtime.observe({
+        type: 'tool_use',
+        data: { tool: 'Bash', input: { command: 'npm test' }, id: 'bash-read' },
+      });
+      runtime.observe({
+        type: 'tool_result',
+        data: { id: 'bash-read', content: '', isError: false },
+      });
+      await vi.waitFor(() => expect(readDiff).toHaveBeenCalledTimes(3));
+      await vi.advanceTimersByTimeAsync(250);
+
+      expect(callSpy.mock.calls.filter(([request]) => request.purpose === 'reviewer')).toHaveLength(1);
+    } finally {
+      runtime?.stop();
+      callSpy.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it('should leave no listener or timer when baseline initialization fails', async () => {
@@ -202,7 +253,10 @@ describe('companion runtime lifecycle', () => {
     try {
       runtime = await CompanionStepRuntime.create(dependencies({
         workflowStep,
-        diffReader: { readBaselineSha: vi.fn().mockResolvedValue('baseline'), readDiff: vi.fn() },
+        diffReader: {
+          readBaselineSha: vi.fn().mockResolvedValue('baseline'),
+          readDiff: vi.fn().mockResolvedValue({ status: 'ok', snapshot: emptySnapshot }),
+        },
         selectorProvider: {
           provider: 'mock',
           model: undefined,
@@ -249,7 +303,10 @@ describe('companion runtime lifecycle', () => {
     };
     const base = dependencies({
       workflowStep,
-      diffReader: { readBaselineSha: vi.fn().mockResolvedValue('baseline'), readDiff: vi.fn() },
+      diffReader: {
+        readBaselineSha: vi.fn().mockResolvedValue('baseline'),
+        readDiff: vi.fn().mockResolvedValue({ status: 'ok', snapshot: emptySnapshot }),
+      },
       providers: {
         'security-reviewer': { provider: 'mock' },
         adjudicator: { provider: 'mock' },

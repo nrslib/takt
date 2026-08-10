@@ -226,6 +226,7 @@ function createCoordinator(input: {
     detectors: new Map([['security-reviewer', input.current]]),
     queue,
     readSnapshot: input.readSnapshot ?? vi.fn().mockResolvedValue(snapshot),
+    synchronizeSnapshot: vi.fn(),
     openMustFix: () => input.openMustFix ?? [],
     recordCompletionRound: input.recordCompletionRound ?? vi.fn(),
     decision: new CompanionTerminalDecisionTracker(),

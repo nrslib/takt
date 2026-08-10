@@ -45,4 +45,32 @@ export class CompanionEventPublisher {
     this.completed = true;
     this.emit('companion:complete', { step: this.step, openMustFixCount, escalated });
   }
+
+  reviewRound(input: {
+    companion: string;
+    trigger: 'quiet' | 'forced' | 'completion' | 'commit';
+    digest: string;
+    changedLines: number;
+    findingCount: number;
+  }): void {
+    this.emit('companion:review_round', { step: this.step, ...input });
+  }
+
+  queueCoalesced(input: {
+    companion: string;
+    replaced: {
+      trigger: 'quiet' | 'forced' | 'completion' | 'commit';
+      digest: string;
+      changedLines: number;
+      observedGeneration: number;
+    };
+    replacement: {
+      trigger: 'quiet' | 'forced' | 'completion' | 'commit';
+      digest: string;
+      changedLines: number;
+      observedGeneration: number;
+    };
+  }): void {
+    this.emit('companion:queue_coalesced', { step: this.step, ...input });
+  }
 }

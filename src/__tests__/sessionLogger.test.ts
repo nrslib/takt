@@ -30,6 +30,59 @@ afterEach(() => {
 });
 
 describe('SessionLogger', () => {
+  it('companion review round と queue coalescing を run NDJSON に永続化する', () => {
+    const logsDir = createTempLogsDir();
+    const ndjsonPath = initNdjsonLog('session-companion', 'task', 'workflow', { logsDir });
+    const logger = new SessionLogger(ndjsonPath, false);
+
+    logger.onCompanionReviewRound({
+      step: 'implement',
+      companion: 'security-reviewer',
+      trigger: 'quiet',
+      digest: 'digest-2',
+      changedLines: 12,
+      findingCount: 2,
+    });
+    logger.onCompanionQueueCoalesced({
+      step: 'implement',
+      companion: 'security-reviewer',
+      replaced: {
+        trigger: 'quiet',
+        digest: 'digest-1',
+        changedLines: 10,
+        observedGeneration: 1,
+      },
+      replacement: {
+        trigger: 'quiet',
+        digest: 'digest-2',
+        changedLines: 12,
+        observedGeneration: 2,
+      },
+    });
+
+    const records = readFileSync(ndjsonPath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map(parseNdjsonRecord);
+
+    expect(records).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'companion_review_round',
+        step: 'implement',
+        companion: 'security-reviewer',
+        trigger: 'quiet',
+        digest: 'digest-2',
+        changedLines: 12,
+        findingCount: 2,
+      }),
+      expect.objectContaining({
+        type: 'companion_queue_coalesced',
+        replaced: expect.objectContaining({ digest: 'digest-1' }),
+        replacement: expect.objectContaining({ digest: 'digest-2' }),
+      }),
+    ]));
+  });
+
   it.each([
     {
       name: 'completed',

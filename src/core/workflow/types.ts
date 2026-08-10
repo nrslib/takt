@@ -388,6 +388,30 @@ export interface WorkflowEvents {
     openMustFixCount: number;
     escalated: boolean;
   }) => void;
+  'companion:review_round': (payload: {
+    step: string;
+    companion: string;
+    trigger: 'quiet' | 'forced' | 'completion' | 'commit';
+    digest: string;
+    changedLines: number;
+    findingCount: number;
+  }) => void;
+  'companion:queue_coalesced': (payload: {
+    step: string;
+    companion: string;
+    replaced: {
+      trigger: 'quiet' | 'forced' | 'completion' | 'commit';
+      digest: string;
+      changedLines: number;
+      observedGeneration: number;
+    };
+    replacement: {
+      trigger: 'quiet' | 'forced' | 'completion' | 'commit';
+      digest: string;
+      changedLines: number;
+      observedGeneration: number;
+    };
+  }) => void;
   'step:blocked': (step: WorkflowStep, response: AgentResponse) => void;
   'step:rate_limited': (step: WorkflowStep, response: AgentResponse, rateLimitInfo: AgentResponse['rateLimitInfo']) => void;
   'step:user_input': (step: WorkflowStep, userInput: string) => void;

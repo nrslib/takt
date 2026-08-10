@@ -152,6 +152,34 @@ export type WorkflowExecutionEvent =
       step: string;
       openMustFixCount: number;
       escalated: boolean;
+    }
+  | {
+      type: 'companion';
+      action: 'review_round';
+      step: string;
+      companion: string;
+      trigger: 'quiet' | 'forced' | 'completion' | 'commit';
+      digest: string;
+      changedLines: number;
+      findingCount: number;
+    }
+  | {
+      type: 'companion';
+      action: 'queue_coalesced';
+      step: string;
+      companion: string;
+      replaced: {
+        trigger: 'quiet' | 'forced' | 'completion' | 'commit';
+        digest: string;
+        changedLines: number;
+        observedGeneration: number;
+      };
+      replacement: {
+        trigger: 'quiet' | 'forced' | 'completion' | 'commit';
+        digest: string;
+        changedLines: number;
+        observedGeneration: number;
+      };
     };
 
 /** Live-only workflow feedback. Delivery failure never changes run outcome. */

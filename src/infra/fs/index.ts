@@ -16,6 +16,9 @@ export type {
   NdjsonPhaseJudgeStage,
   NdjsonInteractiveStart,
   NdjsonInteractiveEnd,
+  NdjsonCompanionReviewRound,
+  NdjsonCompanionQueueCoalesced,
+  NdjsonCompanionReviewTrigger,
   NdjsonRecord,
 } from './session.js';
 

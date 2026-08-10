@@ -32,6 +32,32 @@ emitCompanionEvent('companion:complete', {
   escalated: false,
 });
 
+emitCompanionEvent('companion:review_round', {
+  step: 'implement',
+  companion: 'security-reviewer',
+  trigger: 'quiet',
+  digest: 'digest-1',
+  changedLines: 12,
+  findingCount: 1,
+});
+
+emitCompanionEvent('companion:queue_coalesced', {
+  step: 'implement',
+  companion: 'security-reviewer',
+  replaced: {
+    trigger: 'quiet',
+    digest: 'digest-1',
+    changedLines: 10,
+    observedGeneration: 1,
+  },
+  replacement: {
+    trigger: 'quiet',
+    digest: 'digest-2',
+    changedLines: 12,
+    observedGeneration: 2,
+  },
+});
+
 emitCompanionEvent('companion:complete', {
   step: 'implement',
   openMustFixCount: 0,

@@ -18,6 +18,7 @@ export class CompanionCompletionCoordinator {
     readonly detectors: ReadonlyMap<string, CompanionChangeDetector>;
     readonly queue: CompanionReviewQueue;
     readonly readSnapshot: () => Promise<CompanionDiff>;
+    readonly synchronizeSnapshot: (snapshot: CompanionDiff) => void;
     readonly openMustFix: () => CompanionFindingEvidence[];
     readonly recordCompletionRound: (snapshot: CompanionDiff) => Promise<void>;
     readonly decision: CompanionTerminalDecisionTracker;
@@ -36,6 +37,7 @@ export class CompanionCompletionCoordinator {
     try {
       const snapshot = await this.input.readSnapshot();
       await this.completeQueues(snapshot, candidates);
+      this.input.synchronizeSnapshot(snapshot);
       reviewedSnapshot = snapshot;
     } catch (error) {
       if (isAbortError(error) || this.input.abortSignal?.aborted) throw error;

@@ -97,6 +97,7 @@ describe('CT-COMP-10 companion review terminal lifecycle', () => {
     try {
       await expect(executeCompanionReviewRound({
         companionName: 'security-reviewer',
+        trigger: 'quiet',
         diff: {
           content: 'diff',
           digest: 'digest',
@@ -129,6 +130,7 @@ describe('CT-COMP-10 companion review terminal lifecycle', () => {
         markReviewed: vi.fn(),
         evaluateRound: createEvaluateRound(),
         applyRoundDecision: vi.fn(),
+        onRoundCompleted: vi.fn(),
       })).rejects.toThrow(`${actor} references unknown companion finding "missing-1"`);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -156,6 +158,7 @@ describe('CT-COMP-10 companion review terminal lifecycle', () => {
     try {
       await executeCompanionReviewRound({
         companionName: 'security-reviewer',
+        trigger: 'quiet',
         diff: {
           content: 'diff',
           digest: 'digest',
@@ -184,12 +187,76 @@ describe('CT-COMP-10 companion review terminal lifecycle', () => {
         markReviewed,
         evaluateRound,
         applyRoundDecision: vi.fn(),
+        onRoundCompleted: vi.fn(),
       });
 
       expect(callStructured).toHaveBeenCalledOnce();
       expect(markReviewed).toHaveBeenCalledOnce();
       expect(evaluateRound).toHaveBeenCalledOnce();
       expect(existsSync(mailboxPath)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('should return the findings accepted by this round instead of the mailbox open count', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-companion-finding-count-'));
+    const mailboxPath = join(root, 'security-reviewer.jsonl');
+    const stateStore = new CompanionReviewStateStore();
+    stateStore.apply({
+      path: mailboxPath,
+      companionName: 'security-reviewer',
+      maxOpenMustFix: 5,
+      result: {
+        findings: [{ severity: 'should_fix', file: 'src/existing.ts', line: 1, finding: 'existing' }],
+        updates: [],
+      },
+    });
+
+    try {
+      const result = await executeCompanionReviewRound({
+        companionName: 'security-reviewer',
+        trigger: 'quiet',
+        diff: {
+          content: 'diff',
+          digest: 'digest',
+          changedLines: 1,
+          changedFiles: ['src/a.ts'],
+          fileFingerprints: {},
+          hunkFingerprints: {},
+          omittedBytes: 0,
+          truncated: false,
+        },
+        observedGeneration: 1,
+        changedRegionsSincePreviousReview: [],
+        diffSummary: 'summary',
+        signal: new AbortController().signal,
+        task: 'task',
+        stepName: 'implement',
+        stepInstruction: 'implement',
+        activeNames: ['security-reviewer'],
+        stateStore,
+        mailboxPath: () => mailboxPath,
+        systemPrompt: () => 'review',
+        openFindings: () => stateStore.get(mailboxPath, 'security-reviewer').mailbox.findings,
+        callStructured: vi.fn().mockResolvedValue({
+          status: 'done',
+          content: '',
+          structuredOutput: {
+            findings: [{ severity: 'nit', file: 'src/a.ts', line: 2, finding: 'new' }],
+            updates: [],
+            notes: null,
+          },
+        }),
+        emitFinding: vi.fn(),
+        markReviewed: vi.fn(),
+        evaluateRound: createEvaluateRound(),
+        applyRoundDecision: vi.fn(),
+        onRoundCompleted: vi.fn(),
+      });
+
+      expect(result.findingCount).toBe(1);
+      expect(stateStore.get(mailboxPath, 'security-reviewer').mailbox.findings).toHaveLength(2);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -226,6 +293,7 @@ describe('CT-COMP-10 companion review terminal lifecycle', () => {
     });
     const roundInput = {
       companionName: 'security-reviewer',
+      trigger: 'quiet' as const,
       diff: {
         content: 'diff',
         digest: 'digest',
@@ -253,6 +321,7 @@ describe('CT-COMP-10 companion review terminal lifecycle', () => {
       markReviewed,
       evaluateRound,
       applyRoundDecision: vi.fn(),
+      onRoundCompleted: vi.fn(),
     };
     mailboxPublicationInjection.path = mailboxPath;
     mailboxPublicationInjection.failAfterGuard = true;
@@ -310,6 +379,7 @@ describe('CT-COMP-10 companion review terminal lifecycle', () => {
     try {
       await expect(executeCompanionReviewRound({
         companionName: 'security-reviewer',
+        trigger: 'quiet',
         diff: {
           content: 'diff',
           digest: 'digest',
@@ -347,6 +417,7 @@ describe('CT-COMP-10 companion review terminal lifecycle', () => {
         markReviewed: vi.fn(),
         evaluateRound: createEvaluateRound(),
         applyRoundDecision: vi.fn(),
+        onRoundCompleted: vi.fn(),
       })).rejects.toThrow(/changed outside the engine/);
 
       expect(readFileSync(mailboxPath)).toEqual(Buffer.concat([bytesBefore, externalRecord]));
@@ -406,6 +477,7 @@ describe('CT-COMP-10 companion review terminal lifecycle', () => {
     });
     const roundInput = {
       companionName: 'security-reviewer',
+      trigger: 'quiet' as const,
       diff: {
         content: 'diff',
         digest: 'digest',
@@ -437,6 +509,7 @@ describe('CT-COMP-10 companion review terminal lifecycle', () => {
       markReviewed,
       evaluateRound,
       applyRoundDecision: vi.fn(),
+      onRoundCompleted: vi.fn(),
     };
     mailboxPublicationInjection.path = designPath;
     mailboxPublicationInjection.failAfterGuard = true;
@@ -510,6 +583,7 @@ describe('CT-COMP-10 companion review terminal lifecycle', () => {
     try {
       await executeCompanionReviewRound({
         companionName: shortOwner,
+        trigger: 'quiet',
         diff: {
           content: 'diff',
           digest: 'digest',
@@ -551,6 +625,7 @@ describe('CT-COMP-10 companion review terminal lifecycle', () => {
         markReviewed: vi.fn(),
         evaluateRound: createEvaluateRound(),
         applyRoundDecision: vi.fn(),
+        onRoundCompleted: vi.fn(),
       });
 
       expect(stateStore.get(shortPath, shortOwner).mailbox.findings[0]?.status).toBe('open');
@@ -588,6 +663,7 @@ describe('CT-COMP-10 companion review terminal lifecycle', () => {
     });
     const roundInput = {
       companionName: 'security-reviewer',
+      trigger: 'quiet' as const,
       diff: {
         content: 'diff',
         digest: 'digest',
@@ -615,6 +691,7 @@ describe('CT-COMP-10 companion review terminal lifecycle', () => {
       markReviewed,
       evaluateRound,
       applyRoundDecision: vi.fn(),
+      onRoundCompleted: vi.fn(),
     };
 
     try {
@@ -649,6 +726,7 @@ describe('CT-COMP-10 companion review terminal lifecycle', () => {
     try {
       await expect(executeCompanionReviewRound({
         companionName: 'security-reviewer',
+        trigger: 'quiet',
         diff: {
           content: 'diff',
           digest: 'digest',
@@ -686,6 +764,7 @@ describe('CT-COMP-10 companion review terminal lifecycle', () => {
         markReviewed,
         evaluateRound,
         applyRoundDecision: vi.fn(),
+        onRoundCompleted: vi.fn(),
       })).rejects.toMatchObject({ name: 'AbortError' });
 
       expect(emitFinding).not.toHaveBeenCalled();
@@ -709,6 +788,7 @@ describe('CT-COMP-10 companion review terminal lifecycle', () => {
     try {
       await executeCompanionReviewRound({
         companionName: 'security-reviewer',
+        trigger: 'quiet',
         diff: {
           content: 'diff',
           digest: 'digest',
@@ -761,6 +841,7 @@ describe('CT-COMP-10 companion review terminal lifecycle', () => {
         markReviewed: vi.fn(),
         evaluateRound,
         applyRoundDecision: vi.fn(),
+        onRoundCompleted: vi.fn(),
       });
 
       expect(calls[0]?.prompt).toContain('The branch is required by the public API.');
@@ -800,6 +881,7 @@ describe('CT-COMP-10 companion review terminal lifecycle', () => {
     });
     const input = {
       companionName: 'security-reviewer',
+      trigger: 'quiet' as const,
       diff: {
         content: 'diff',
         digest: 'digest',
@@ -827,6 +909,7 @@ describe('CT-COMP-10 companion review terminal lifecycle', () => {
       markReviewed,
       evaluateRound,
       applyRoundDecision: vi.fn(),
+      onRoundCompleted: vi.fn(),
     };
 
     try {
@@ -863,6 +946,7 @@ describe('CT-COMP-10 companion review terminal lifecycle', () => {
     });
     const base = {
       companionName: 'security-reviewer',
+      trigger: 'quiet' as const,
       diff: {
         content: 'diff',
         digest: 'digest',
@@ -888,6 +972,7 @@ describe('CT-COMP-10 companion review terminal lifecycle', () => {
       emitFinding: vi.fn(),
       markReviewed,
       evaluateRound,
+      onRoundCompleted: vi.fn(),
     };
 
     try {
@@ -971,6 +1056,7 @@ describe('CT-COMP-10 companion review terminal lifecycle', () => {
     });
     const input = {
       companionName: 'security-reviewer',
+      trigger: 'quiet' as const,
       diff: {
         content: 'diff',
         digest: 'digest',
@@ -998,6 +1084,7 @@ describe('CT-COMP-10 companion review terminal lifecycle', () => {
       markReviewed: vi.fn(),
       evaluateRound,
       applyRoundDecision: vi.fn(),
+      onRoundCompleted: vi.fn(),
     };
 
     try {
@@ -1033,6 +1120,7 @@ describe('CT-COMP-10 companion review terminal lifecycle', () => {
     const mailboxPath = join(root, 'security-reviewer.jsonl');
     const stateStore = new CompanionReviewStateStore();
     const markReviewed = vi.fn();
+    const onRoundCompleted = vi.fn();
     let evaluationAttempt = 0;
     const evaluateRound = vi.fn(async (
       digest: string,
@@ -1061,6 +1149,7 @@ describe('CT-COMP-10 companion review terminal lifecycle', () => {
     });
     const common = {
       companionName: 'security-reviewer',
+      trigger: 'quiet' as const,
       changedRegionsSincePreviousReview: [],
       diffSummary: 'summary',
       signal: new AbortController().signal,
@@ -1077,6 +1166,7 @@ describe('CT-COMP-10 companion review terminal lifecycle', () => {
       markReviewed,
       evaluateRound,
       applyRoundDecision: vi.fn(),
+      onRoundCompleted,
     };
     const pendingDiff = {
       content: 'pending',
@@ -1105,6 +1195,16 @@ describe('CT-COMP-10 companion review terminal lifecycle', () => {
       expect(callStructured).toHaveBeenCalledTimes(2);
       expect(markReviewed).toHaveBeenNthCalledWith(1, pendingDiff, 1);
       expect(markReviewed).toHaveBeenNthCalledWith(2, currentDiff, currentGeneration);
+      expect(onRoundCompleted).toHaveBeenNthCalledWith(1, {
+        snapshot: pendingDiff,
+        trigger: 'quiet',
+        findingCount: 0,
+      });
+      expect(onRoundCompleted).toHaveBeenNthCalledWith(2, {
+        snapshot: currentDiff,
+        trigger: 'quiet',
+        findingCount: 0,
+      });
       expect(evaluateRound).toHaveBeenCalledTimes(3);
       expect(stateStore.previewRound('history', {
         diffDigest: 'probe',

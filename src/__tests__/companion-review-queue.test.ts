@@ -33,11 +33,15 @@ describe('CT-COMP-05 companion review queue lifecycle', () => {
   it('should serialize rounds for one companion and batch changes into the next round', async () => {
     const first = deferred<void>();
     const starts: string[] = [];
+    const coalesced: unknown[] = [];
     const runReview = vi.fn(async (request: { companionName: string; snapshot: { digest: string } }) => {
       starts.push(request.snapshot.digest);
       if (request.snapshot.digest === 'diff-1') await first.promise;
     });
-    const queue = new CompanionReviewQueue({ runReview });
+    const queue = new CompanionReviewQueue({
+      runReview,
+      onCoalesced: (event) => coalesced.push(event),
+    });
 
     const round1 = queue.enqueue(request('diff-1'));
     const round2 = queue.enqueue(request('diff-2'));
@@ -48,6 +52,21 @@ describe('CT-COMP-05 companion review queue lifecycle', () => {
     await Promise.all([round1, round2, round3]);
 
     expect(starts).toEqual(['diff-1', 'diff-3']);
+    expect(coalesced).toEqual([{
+      companionName: 'security-reviewer',
+      replaced: {
+        trigger: 'quiet',
+        digest: 'diff-2',
+        changedLines: 1,
+        observedGeneration: 1,
+      },
+      replacement: {
+        trigger: 'quiet',
+        digest: 'diff-3',
+        changedLines: 1,
+        observedGeneration: 1,
+      },
+    }]);
   });
 
   it('should allow different companions to review concurrently', async () => {

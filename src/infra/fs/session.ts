@@ -34,6 +34,9 @@ export type {
   NdjsonPhaseJudgeStage,
   NdjsonInteractiveStart,
   NdjsonInteractiveEnd,
+  NdjsonCompanionReviewRound,
+  NdjsonCompanionQueueCoalesced,
+  NdjsonCompanionReviewTrigger,
   NdjsonRecord,
 } from '../../shared/utils/index.js';
 
@@ -468,8 +471,53 @@ function assertNdjsonRecordShape(
       }
       requireNdjsonString(record.timestamp, 'timestamp');
       return;
+    case 'companion_review_round':
+      requireCompanionReviewRoundFields(record);
+      return;
+    case 'companion_queue_coalesced':
+      requireCompanionQueueCoalescedFields(record);
+      return;
     default:
       throw new Error(`Unknown NDJSON session record type: ${String(record.type)}`);
+  }
+}
+
+function requireCompanionReviewRoundFields(
+  record: Readonly<Record<string, unknown>>,
+): void {
+  requireNdjsonString(record.step, 'step');
+  requireNdjsonString(record.companion, 'companion');
+  requireCompanionReviewTrigger(record.trigger);
+  requireNdjsonString(record.digest, 'digest');
+  requireNdjsonInteger(record.changedLines, 'changedLines');
+  requireNdjsonInteger(record.findingCount, 'findingCount');
+  requireNdjsonString(record.timestamp, 'timestamp');
+}
+
+function requireCompanionQueueCoalescedFields(
+  record: Readonly<Record<string, unknown>>,
+): void {
+  requireNdjsonString(record.step, 'step');
+  requireNdjsonString(record.companion, 'companion');
+  requireCompanionQueueRequest(record.replaced, 'replaced');
+  requireCompanionQueueRequest(record.replacement, 'replacement');
+  requireNdjsonString(record.timestamp, 'timestamp');
+}
+
+function requireCompanionQueueRequest(value: unknown, field: string): void {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`NDJSON ${field} must be an object`);
+  }
+  const request = value as Record<string, unknown>;
+  requireCompanionReviewTrigger(request.trigger);
+  requireNdjsonString(request.digest, `${field}.digest`);
+  requireNdjsonInteger(request.changedLines, `${field}.changedLines`);
+  requireNdjsonInteger(request.observedGeneration, `${field}.observedGeneration`);
+}
+
+function requireCompanionReviewTrigger(value: unknown): void {
+  if (value !== 'quiet' && value !== 'forced' && value !== 'completion' && value !== 'commit') {
+    throw new Error('NDJSON companion review trigger is invalid');
   }
 }
 

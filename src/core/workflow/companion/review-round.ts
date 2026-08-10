@@ -18,12 +18,14 @@ import type { CompanionAgentPurpose } from './review-runner.js';
 import type { CompanionReviewStateStore } from './review-state-store.js';
 import type { CompanionReviewOperation } from './review-state-store.js';
 import type { CompanionLoopDecision } from './terminal-decision.js';
+import type { CompanionReviewRequest } from './review-queue.js';
 
 const MAX_OPEN_MUST_FIX = 5;
 
 interface CompanionReviewRoundInput {
   readonly companionName: string;
   readonly diff: CompanionDiff;
+  readonly trigger: CompanionReviewRequest['reason'];
   readonly observedGeneration: number;
   readonly changedRegionsSincePreviousReview: readonly string[];
   readonly diffSummary: string;
@@ -63,22 +65,36 @@ interface CompanionReviewRoundInput {
     decision: CompanionLoopDecision;
   }>;
   readonly applyRoundDecision: (decision: CompanionLoopDecision) => void;
+  readonly onRoundCompleted: (round: {
+    readonly snapshot: CompanionDiff;
+    readonly trigger: CompanionReviewRequest['reason'];
+    readonly findingCount: number;
+  }) => void;
+}
+
+export interface CompanionReviewRoundResult {
+  readonly findingCount: number;
 }
 
 export async function executeCompanionReviewRound(
   input: CompanionReviewRoundInput,
-): Promise<void> {
+): Promise<CompanionReviewRoundResult> {
   input.signal.throwIfAborted();
   const mailboxPath = input.mailboxPath(input.companionName);
   const pending = input.stateStore.getPendingOperation(mailboxPath);
   if (pending !== undefined) {
-    await commitOperation(input, pending);
+    const findingCount = await commitOperation(input, pending);
     await finalizeOperation(input, mailboxPath);
+    input.onRoundCompleted({
+      snapshot: pending.snapshot,
+      trigger: pending.trigger,
+      findingCount,
+    });
     if (
       pending.snapshot.digest === input.diff.digest
       && pending.observedGeneration === input.observedGeneration
     ) {
-      return;
+      return { findingCount };
     }
   }
   const state = input.stateStore.get(mailboxPath, input.companionName);
@@ -103,7 +119,10 @@ export async function executeCompanionReviewRound(
   );
   input.signal.throwIfAborted();
   const reviewerResult = parseCompanionReviewOutput(response.structuredOutput);
-  const commit = createCommit(input, mailboxPath);
+  let findingCount = 0;
+  const commit = createCommit(input, mailboxPath, (count) => {
+    findingCount = count;
+  });
   const moderatorName = input.moderatorName;
 
   if (moderatorName === undefined) {
@@ -133,11 +152,18 @@ export async function executeCompanionReviewRound(
     await commit({ findings: [], updates: [] });
   }
   await finalizeOperation(input, mailboxPath);
+  input.onRoundCompleted({
+    snapshot: input.diff,
+    trigger: input.trigger,
+    findingCount,
+  });
+  return { findingCount };
 }
 
 function createCommit(
   input: CompanionReviewRoundInput,
   scope: string,
+  onFindingCount: (count: number) => void,
 ): (accepted: CompanionReviewOutput) => Promise<void> {
   return async (accepted) => {
     input.signal.throwIfAborted();
@@ -157,6 +183,7 @@ function createCommit(
     input.stateStore.beginOperation({
       scope,
       snapshot: input.diff,
+      trigger: input.trigger,
       observedGeneration: input.observedGeneration,
       diffSummary: input.diffSummary,
       ...(input.implementerExplanation === undefined
@@ -168,14 +195,15 @@ function createCommit(
     if (operation === undefined) {
       throw new Error(`Companion review operation was not created: ${scope}`);
     }
-    await commitOperation(input, operation);
+    onFindingCount(await commitOperation(input, operation));
   };
 }
 
 async function commitOperation(
   input: CompanionReviewRoundInput,
   operation: CompanionReviewOperation,
-): Promise<void> {
+): Promise<number> {
+  let findingCount = operation.findingEvents.length;
   publishPendingFindingEvents(input, operation.scope);
   for (const owner of operation.owners) {
     const current = input.stateStore.getPendingOperation(operation.scope);
@@ -190,7 +218,7 @@ async function commitOperation(
       owner.ownerName,
       owner.result,
     );
-    input.stateStore.applyOwner(operation.scope, owner.ownerName, transitions, {
+    findingCount += input.stateStore.applyOwner(operation.scope, owner.ownerName, transitions, {
       path: owner.path,
       companionName: owner.ownerName,
       maxOpenMustFix: MAX_OPEN_MUST_FIX,
@@ -198,6 +226,7 @@ async function commitOperation(
     });
     publishPendingFindingEvents(input, operation.scope);
   }
+  return findingCount;
 }
 
 function publishPendingFindingEvents(

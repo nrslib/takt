@@ -14,6 +14,7 @@ import {
 } from './mailbox.js';
 import { appendCompanionMailboxRecords } from './mailbox-projection.js';
 import type { CompanionLoopDecision } from './terminal-decision.js';
+import type { CompanionReviewRequest } from './review-queue.js';
 
 interface CompanionReviewState {
   mailbox: CompanionMailbox;
@@ -31,6 +32,7 @@ export interface CompanionReviewOwnerOperation {
 export interface CompanionReviewOperation {
   readonly scope: string;
   readonly snapshot: CompanionDiff;
+  readonly trigger: CompanionReviewRequest['reason'];
   readonly observedGeneration: number;
   readonly diffSummary: string;
   readonly implementerExplanation?: string;
@@ -159,7 +161,7 @@ export class CompanionReviewStateStore {
     ownerName: string,
     transitions: CompanionLoopRound['transitions'],
     input: CompanionReviewStateApplyInput,
-  ): void {
+  ): number {
     const operation = this.requireOperation(scope);
     const owner = operation.owners.find((candidate) => candidate.ownerName === ownerName);
     if (
@@ -192,6 +194,7 @@ export class CompanionReviewStateStore {
       ],
       findingEvents: [...operation.findingEvents, ...findingEvents],
     });
+    return findingEvents.length;
   }
 
   takeNextFindingEvent(scope: string): CompanionFindingEvent | undefined {
@@ -335,6 +338,7 @@ function cloneOperationInput(
   return {
     scope: operation.scope,
     snapshot: cloneDiff(operation.snapshot),
+    trigger: operation.trigger,
     observedGeneration: operation.observedGeneration,
     diffSummary: operation.diffSummary,
     ...(operation.implementerExplanation === undefined

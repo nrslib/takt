@@ -77,13 +77,27 @@ function createCompanionDiffReader(): CompanionDiffReader {
 function createFailingCompletionDiffReader(): CompanionDiffReader {
   return {
     readBaselineSha: vi.fn().mockResolvedValue('baseline-sha'),
-    readDiff: vi.fn().mockResolvedValue({
-      status: 'error',
-      failure: {
-        code: 'git_failure',
-        message: 'safe injected completion failure',
-      },
-    }),
+    readDiff: vi.fn()
+      .mockResolvedValueOnce({
+        status: 'ok',
+        snapshot: {
+          digest: 'empty-diff',
+          changedLines: 0,
+          content: '',
+          changedFiles: [],
+          fileFingerprints: {},
+          hunkFingerprints: {},
+          omittedBytes: 0,
+          truncated: false,
+        },
+      })
+      .mockResolvedValue({
+        status: 'error',
+        failure: {
+          code: 'git_failure',
+          message: 'safe injected completion failure',
+        },
+      }),
   };
 }
 

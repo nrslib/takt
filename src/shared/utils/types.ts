@@ -183,6 +183,38 @@ export interface NdjsonInteractiveEnd {
   timestamp: string;
 }
 
+export type NdjsonCompanionReviewTrigger = 'quiet' | 'forced' | 'completion' | 'commit';
+
+export interface NdjsonCompanionReviewRound {
+  type: 'companion_review_round';
+  step: string;
+  companion: string;
+  trigger: NdjsonCompanionReviewTrigger;
+  digest: string;
+  changedLines: number;
+  findingCount: number;
+  timestamp: string;
+}
+
+export interface NdjsonCompanionQueueCoalesced {
+  type: 'companion_queue_coalesced';
+  step: string;
+  companion: string;
+  replaced: {
+    trigger: NdjsonCompanionReviewTrigger;
+    digest: string;
+    changedLines: number;
+    observedGeneration: number;
+  };
+  replacement: {
+    trigger: NdjsonCompanionReviewTrigger;
+    digest: string;
+    changedLines: number;
+    observedGeneration: number;
+  };
+  timestamp: string;
+}
+
 export type NdjsonRecord =
   | NdjsonWorkflowStart
   | NdjsonWorkflowCallStart
@@ -195,7 +227,9 @@ export type NdjsonRecord =
   | NdjsonPhaseComplete
   | NdjsonPhaseJudgeStage
   | NdjsonInteractiveStart
-  | NdjsonInteractiveEnd;
+  | NdjsonInteractiveEnd
+  | NdjsonCompanionReviewRound
+  | NdjsonCompanionQueueCoalesced;
 
 /** Record for debug prompt/response log (debug-*-prompts.jsonl) */
 export interface PromptLogRecord {
