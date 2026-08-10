@@ -167,7 +167,7 @@ steps:
       $param: implementation_companions
     rules:
       - condition: when(companion.escalated)
-        next: fix
+        next: review
       - condition: 実装が完了した
         next: review
       - condition: 実装未着手（レポートのみ）
@@ -183,6 +183,27 @@ steps:
     kind: workflow_call
     call:
       $param: review_workflow
+    vars:
+      review_mode: initial
+    args:
+      review_policy_additions:
+        $param: review_policy_additions
+      review_knowledge_additions:
+        $param: review_knowledge_additions
+    rules:
+      - condition: COMPLETE
+        next: supervise
+      - condition: needs_fix
+        next: fix
+      - condition: ABORT
+        next: ABORT
+
+  - name: follow-up-review
+    kind: workflow_call
+    call:
+      $param: review_workflow
+    vars:
+      review_mode: follow_up
     args:
       review_policy_additions:
         $param: review_policy_additions
@@ -211,7 +232,7 @@ steps:
         $param: implementation_pool
     rules:
       - condition: 修正完了
-        next: review
+        next: follow-up-review
       - condition: 修正方針の見直しが必要
         next: plan
       - condition: タスク全体の再計画が必要

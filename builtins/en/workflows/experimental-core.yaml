@@ -167,7 +167,7 @@ steps:
       $param: implementation_companions
     rules:
       - condition: when(companion.escalated)
-        next: fix
+        next: review
       - condition: Implementation is complete
         next: review
       - condition: No implementation was started (report only)
@@ -183,6 +183,27 @@ steps:
     kind: workflow_call
     call:
       $param: review_workflow
+    vars:
+      review_mode: initial
+    args:
+      review_policy_additions:
+        $param: review_policy_additions
+      review_knowledge_additions:
+        $param: review_knowledge_additions
+    rules:
+      - condition: COMPLETE
+        next: supervise
+      - condition: needs_fix
+        next: fix
+      - condition: ABORT
+        next: ABORT
+
+  - name: follow-up-review
+    kind: workflow_call
+    call:
+      $param: review_workflow
+    vars:
+      review_mode: follow_up
     args:
       review_policy_additions:
         $param: review_policy_additions
@@ -211,7 +232,7 @@ steps:
         $param: implementation_pool
     rules:
       - condition: Fix is complete
-        next: review
+        next: follow-up-review
       - condition: The fix approach needs to be reconsidered
         next: plan
       - condition: The task needs to be replanned
