@@ -461,7 +461,12 @@ describe('facet include expansion', () => {
     ];
     const context = { projectDir: tempDir, lang };
     const common = resolveRefToContent('security', undefined, tempDir, 'knowledge', context);
-    const instruction = resolveRefToContent('review-security', undefined, tempDir, 'instructions', context);
+    const instructions = [
+      'review-security',
+      'audit-security-team-leader',
+      'audit-security-supervise',
+      'audit-security-review',
+    ].map((name) => resolveRefToContent(name, undefined, tempDir, 'instructions', context));
 
     for (const domain of domains) {
       expect(common).not.toContain(domain);
@@ -469,10 +474,12 @@ describe('facet include expansion', () => {
       expect(specialized).toContain(lang === 'ja' ? '## 適用条件' : '## Applicability');
     }
     expect(common).not.toContain(lang === 'ja' ? '# Webセキュリティ知識' : '# Web Security Knowledge');
-    expect(instruction).toContain(lang === 'ja'
-      ? 'stepに付与されたKnowledgeだけを使用する'
-      : 'Use only the Knowledge assigned to the step');
-    expect(instruction).not.toContain('{{include:instructions/security-knowledge-routing}}');
+    for (const instruction of instructions) {
+      expect(instruction).toContain(lang === 'ja'
+        ? 'stepに付与されたKnowledgeだけを使用する'
+        : 'Use only the Knowledge assigned to the step');
+      expect(instruction).not.toContain('{{include:instructions/security-knowledge-routing}}');
+    }
   });
 });
 
