@@ -1,6 +1,0 @@
-name: takt-implementation-reviewer
-description: Continuously review TAKT implementation semantics, contracts, local execution security, sensitive data, and dependencies while the implementer works.
-persona: implementation-semantics-reviewer
-policy: [contract-change, security-review]
-knowledge: [takt, security, security-local, security-data, security-dependencies]
-instruction: companion-watch-review

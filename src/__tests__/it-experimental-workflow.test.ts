@@ -227,7 +227,7 @@ describe('experimental builtin workflow', () => {
     expect(genericImplement.companion).toBeUndefined();
     expect(genericImplement.rules?.[0]?.condition.kind).toBe('semantic');
     expect(taktImplement.companion).toEqual({
-      fixed: ['takt-implementation-reviewer'],
+      fixed: ['ai-antipattern-review-companion'],
       pool: [],
     });
     expect(taktImplement.rules?.[0]).toMatchObject({
@@ -237,10 +237,10 @@ describe('experimental builtin workflow', () => {
       },
       next: 'fix',
     });
-    expect(taktCore.companions?.['takt-implementation-reviewer']).toMatchObject({
-      persona: 'implementation-semantics-reviewer',
-      policy: ['contract-change', 'security-review'],
-      knowledge: ['takt', 'security', 'security-local', 'security-data', 'security-dependencies'],
+    expect(taktCore.companions?.['ai-antipattern-review-companion']).toMatchObject({
+      persona: 'ai-antipattern-reviewer',
+      policy: ['contract-change', 'review', 'ai-antipattern'],
+      knowledge: ['architecture'],
     });
     expect(genericCore.facetPools?.['coding-facets']?.candidates.map(({ id }) => id))
       .toEqual(expect.arrayContaining(['frontend', 'backend']));
@@ -430,7 +430,7 @@ steps:
         selectorProvider: SELECTOR_PROVIDER,
         selectorGitCommandRunner: SELECTOR_GIT_COMMAND_RUNNER,
         companionProviders: {
-          'takt-implementation-reviewer': { provider: 'mock' },
+          'ai-antipattern-review-companion': { provider: 'mock' },
         },
         companionDiffReader: COMPANION_DIFF_READER,
         structuredCaller: new DefaultStructuredCaller(),

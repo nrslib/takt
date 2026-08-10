@@ -9,7 +9,7 @@ steps:
     call: experimental-core
     args:
       implementation_pool: takt-coding-facets
-      implementation_companions: [takt-implementation-reviewer]
+      implementation_companions: [ai-antipattern-review-companion]
       review_workflow: takt-experimental-review
       review_policy_additions: [takt-testing]
       review_knowledge_additions: [takt]
