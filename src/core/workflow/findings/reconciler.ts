@@ -65,6 +65,7 @@ import {
   mergeProvisionalClaimProjection,
 } from './finding-entry.js';
 import { isProvisionalReopenSource } from './provisional-promotion-eligibility.js';
+import { hasUnsettledActiveConflictOwnership } from './conflict-ownership.js';
 import { findingMatchesMutationPrecondition } from './finding-preconditions.js';
 import type {
   PreAdmissionEntityMutationResult,
@@ -1068,6 +1069,12 @@ function reconcileFindingLedgerWithValidator(
   for (const resolved of input.managerOutput.resolvedFindings) {
     assertKnownFinding(knownFindingIds, resolved.findingId);
     const finding = updatedById.get(resolved.findingId)!;
+    if (
+      finding.provisional !== undefined
+      && hasUnsettledActiveConflictOwnership(input.previousLedger, finding.id)
+    ) {
+      continue;
+    }
     assertFindingStatus(finding, 'open', 'resolve');
     assertResolvedEvidenceRawFindings({
       finding,
