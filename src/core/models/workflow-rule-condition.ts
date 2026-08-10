@@ -252,6 +252,16 @@ export function hasUnquotedIdentifierReference(expression: string, identifier: s
   return false;
 }
 
+/** Detects an unquoted companion state reference in a parsed rule condition. */
+export function hasCompanionReference(condition: WorkflowRuleCondition): boolean {
+  switch (condition.kind) {
+    case 'when': return hasUnquotedIdentifierReference(condition.expression, 'companion');
+    case 'and': return hasCompanionReference(condition.left) || hasCompanionReference(condition.right);
+    case 'aggregate': return condition.targetConditions.some(hasCompanionReference);
+    default: return false;
+  }
+}
+
 export function terminalLabelOf(condition: WorkflowRuleCondition): string | undefined {
   return condition.kind === 'semantic' ? condition.label : undefined;
 }

@@ -59,6 +59,22 @@ describe('CT-COMP-01 workflow companion schema', () => {
     });
   });
 
+  it('should reject a literal empty companion selection', () => {
+    expect(WorkflowStepRawSchema.safeParse({
+      name: 'implement',
+      instruction: 'implement',
+      companion: [],
+      rules: validRules(),
+    }).success).toBe(false);
+
+    expect(WorkflowStepRawSchema.safeParse({
+      name: 'implement',
+      instruction: 'implement',
+      companion: {},
+      rules: validRules(),
+    }).success).toBe(false);
+  });
+
   it('should preserve fixed, pool, and moderator references in object form', () => {
     const workflow = workflowWithCompanion();
 

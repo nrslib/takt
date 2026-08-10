@@ -128,10 +128,16 @@ const WorkflowFacetPoolParamDeclarationRawSchema = z.object({
   default: WorkflowFacetRefScalarSchema.optional(),
 }).strict();
 
+const WorkflowCompanionParamDeclarationRawSchema = z.object({
+  type: z.literal('companion_ref[]'),
+  default: z.array(z.string().trim().min(1)).optional(),
+}).strict();
+
 const WorkflowParamDeclarationRawSchema = z.union([
   WorkflowFacetParamDeclarationRawSchema,
   WorkflowReferenceParamDeclarationRawSchema,
   WorkflowFacetPoolParamDeclarationRawSchema,
+  WorkflowCompanionParamDeclarationRawSchema,
 ]);
 
 const WorkflowRuleConditionRawSchema = z.string().trim().min(1).superRefine((condition, ctx) => {
@@ -570,6 +576,7 @@ const DynamicParallelRawSchema = z.object({
 
 const CompanionSelectionRawSchema = z.union([
   z.array(z.string().trim().min(1)).min(1),
+  WorkflowParamReferenceRawSchema,
   z.object({
     fixed: z.array(z.string().trim().min(1)).optional().default([]),
     pool: z.array(z.string().trim().min(1)).optional().default([]),

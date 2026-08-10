@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { WorkflowConfigRawSchema, WorkflowStepRawSchema } from '../core/models/index.js';
 import { getWorkflowConfigErrorPath } from '../core/workflow/workflow-config-error.js';
+import { hasCompanionReference, parseWorkflowRuleCondition } from '../core/models/workflow-rule-condition.js';
 import { prepareCallableSubworkflowDiscoveryArgs } from '../infra/config/loaders/workflowCallableDiscoveryArgs.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 
@@ -73,6 +74,66 @@ function createCallableFacetPoolWorkflow(): Record<string, unknown> {
       instruction: 'Implement',
       dynamic_facets: {
         pool: { $param: 'implementation_pool' },
+      },
+      rules: [{ condition: 'done', next: 'COMPLETE' }],
+    }],
+  };
+}
+
+function createCallableCompanionWorkflow(): Record<string, unknown> {
+  return {
+    name: 'callable-companion',
+    subworkflow: {
+      callable: true,
+      params: {
+        implementation_companions: {
+          type: 'companion_ref[]',
+          default: [],
+        },
+      },
+    },
+    steps: [{
+      name: 'implement',
+      instruction: 'Implement',
+      companion: { $param: 'implementation_companions' },
+      rules: [
+        { condition: 'when(companion.escalated)', next: 'fix' },
+        { condition: 'done', next: 'COMPLETE' },
+      ],
+    }, {
+      name: 'fix',
+      instruction: 'Fix',
+      rules: [{ condition: 'done', next: 'COMPLETE' }],
+    }],
+  };
+}
+
+function createCallableScalarFacetWorkflow(): Record<string, unknown> {
+  return {
+    name: 'callable-scalar-facets',
+    subworkflow: {
+      callable: true,
+      params: {
+        review_persona: { type: 'facet_ref', facet_kind: 'persona', default: 'reviewer' },
+        review_policy: { type: 'facet_ref', facet_kind: 'policy', default: 'strict-review' },
+        review_knowledge: { type: 'facet_ref', facet_kind: 'knowledge', default: 'architecture' },
+        review_instruction: { type: 'facet_ref', facet_kind: 'instruction', default: 'review-instruction' },
+        review_format: { type: 'facet_ref', facet_kind: 'report_format', default: 'summary' },
+      },
+    },
+    personas: { reviewer: 'Reviewer persona content' },
+    policies: { 'strict-review': 'Strict review policy content' },
+    knowledge: { architecture: 'Architecture knowledge content' },
+    instructions: { 'review-instruction': 'Review instruction content' },
+    report_formats: { summary: 'Summary format content' },
+    steps: [{
+      name: 'review',
+      persona: { $param: 'review_persona' },
+      policy: { $param: 'review_policy' },
+      knowledge: { $param: 'review_knowledge' },
+      instruction: { $param: 'review_instruction' },
+      output_contracts: {
+        report: [{ name: 'summary', format: { $param: 'review_format' } }],
       },
       rules: [{ condition: 'done', next: 'COMPLETE' }],
     }],
@@ -232,6 +293,239 @@ describe('workflow_call schema', () => {
     }, '/tmp');
 
     expect(workflow.maxSteps).toBe(10);
+  });
+
+  it('should omit an empty companion_ref[] and its optional escalation rule', () => {
+    const workflow = normalizeWorkflowConfig(createCallableCompanionWorkflow(), '/tmp');
+    const implement = workflow.steps.find((step) => step.name === 'implement');
+
+    expect(implement).toBeDefined();
+    expect(implement?.companion).toBeUndefined();
+    expect(implement?.rules).toHaveLength(1);
+    expect(implement?.rules?.[0]?.next).toBe('COMPLETE');
+  });
+
+  it('should expand companion_ref[] to fixed companions and keep escalation first', () => {
+    const workflow = normalizeWorkflowConfig(createCallableCompanionWorkflow(), '/tmp', undefined, undefined, undefined, undefined, undefined, undefined, {
+      callableArgs: {
+        implementation_companions: ['first-reviewer', 'second-reviewer'],
+      },
+    });
+    const implement = workflow.steps.find((step) => step.name === 'implement');
+
+    expect(implement?.companion).toEqual({
+      fixed: ['first-reviewer', 'second-reviewer'],
+      pool: [],
+    });
+    expect(implement?.rules?.[0]).toMatchObject({
+      condition: {
+        kind: 'when',
+        expression: 'companion.escalated',
+      },
+      next: 'fix',
+    });
+  });
+
+  it('should preserve scalar facet params while expanding callable steps', () => {
+    const workflow = normalizeWorkflowConfig(createCallableScalarFacetWorkflow(), '/tmp');
+    const review = workflow.steps[0];
+
+    expect(review.persona).toContain('Reviewer persona content');
+    expect(review.policyContents?.map((facet) => facet.content)).toEqual(['Strict review policy content']);
+    expect(review.knowledgeContents?.map((facet) => facet.content)).toEqual(['Architecture knowledge content']);
+    expect(review.instruction).toContain('Review instruction content');
+    expect(review.outputContracts?.[0]?.format).toContain('Summary format content');
+  });
+
+  it.each([
+    'when(companion.escalated)',
+    'when(companion.escalated == true)',
+    'when(true == companion.escalated)',
+  ])('should omit a recognized empty-companion escalation rule: %s', (condition) => {
+    const workflow = createCallableCompanionWorkflow();
+    (workflow.steps as Array<Record<string, unknown>>)[0]!.rules = [
+      { condition, next: 'fix' },
+      { condition: 'done', next: 'COMPLETE' },
+    ];
+
+    const normalized = normalizeWorkflowConfig(workflow, '/tmp');
+    const implement = normalized.steps.find((step) => step.name === 'implement');
+
+    expect(implement?.companion).toBeUndefined();
+    expect(implement?.rules).toHaveLength(1);
+    expect(implement?.rules?.[0]?.next).toBe('COMPLETE');
+  });
+
+  it('should retain an unrelated first when rule instead of removing it', () => {
+    const workflow = createCallableCompanionWorkflow();
+    (workflow.steps as Array<Record<string, unknown>>)[0]!.rules = [
+      { condition: 'when(true)', next: 'fix' },
+      { condition: 'done', next: 'COMPLETE' },
+    ];
+
+    const normalized = normalizeWorkflowConfig(workflow, '/tmp');
+    const implement = normalized.steps.find((step) => step.name === 'implement');
+
+    expect(implement?.companion).toBeUndefined();
+    expect(implement?.rules?.map((rule) => rule.next)).toEqual(['fix', 'COMPLETE']);
+    expect(implement?.rules?.[0]?.condition).toMatchObject({
+      kind: 'when',
+      expression: 'true',
+    });
+  });
+
+  it.each(['companion.escalated', 'companion.escalated == true'])
+    ('should retain a semantic companion label when companions are empty: %s', (condition) => {
+      const workflow = createCallableCompanionWorkflow();
+      (workflow.steps as Array<Record<string, unknown>>)[0]!.rules = [
+        { condition, next: 'fix' },
+        { condition: 'done', next: 'COMPLETE' },
+      ];
+
+      const normalized = normalizeWorkflowConfig(workflow, '/tmp');
+      const implement = normalized.steps.find((step) => step.name === 'implement');
+
+      expect(implement?.companion).toBeUndefined();
+      expect(implement?.rules?.[0]?.condition).toEqual({ kind: 'semantic', label: condition });
+      expect(implement?.rules).toHaveLength(2);
+    });
+
+  it('should reject a later companion state rule when an empty companion is expanded', () => {
+    const workflow = createCallableCompanionWorkflow();
+    (workflow.steps as Array<Record<string, unknown>>)[0]!.rules = [
+      { condition: 'when(companion.escalated)', next: 'fix' },
+      { condition: 'when(companion.openMustFixCount == 0)', next: 'fix' },
+      { condition: 'done', next: 'COMPLETE' },
+    ];
+
+    let error: unknown;
+    try {
+      normalizeWorkflowConfig(workflow, '/tmp');
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({
+      message: expect.stringContaining('unquoted companion state reference'),
+    });
+    expect(getWorkflowConfigErrorPath(error)).toEqual(['steps', 0, 'rules', 1, 'condition']);
+  });
+
+  it('should reject a companion state in a semantic-and-when rule when empty', () => {
+    const workflow = createCallableCompanionWorkflow();
+    (workflow.steps as Array<Record<string, unknown>>)[0]!.rules = [
+      { condition: 'when(companion.escalated)', next: 'fix' },
+      { condition: 'complete && when(companion.openMustFixCount == 0)', next: 'fix' },
+      { condition: 'done', next: 'COMPLETE' },
+    ];
+
+    let error: unknown;
+    try {
+      normalizeWorkflowConfig(workflow, '/tmp');
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    expect(getWorkflowConfigErrorPath(error)).toEqual(['steps', 0, 'rules', 1, 'condition']);
+  });
+
+  it('should recurse through aggregate targets and ignore semantic or quoted companion text', () => {
+    const aggregateRule = 'all("when(companion.openMustFixCount == 0)")';
+    const schemaResult = WorkflowStepRawSchema.safeParse({
+      name: 'parallel-review',
+      parallel: [{
+        name: 'review',
+        instruction: 'Review',
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      }],
+      rules: [{ condition: aggregateRule, next: 'COMPLETE' }],
+    });
+
+    expect(schemaResult.success).toBe(true);
+    expect(hasCompanionReference(parseWorkflowRuleCondition(aggregateRule))).toBe(true);
+    expect(hasCompanionReference(parseWorkflowRuleCondition('companion.openMustFixCount'))).toBe(false);
+    expect(hasCompanionReference(parseWorkflowRuleCondition('when(context.status == "companion.openMustFixCount")'))).toBe(false);
+  });
+
+  it('should accept later companion state rules when companions are non-empty', () => {
+    const workflow = createCallableCompanionWorkflow();
+    (workflow.steps as Array<Record<string, unknown>>)[0]!.rules = [
+      { condition: 'when(companion.escalated)', next: 'fix' },
+      { condition: 'when(companion.openMustFixCount == 0)', next: 'fix' },
+      { condition: 'done', next: 'COMPLETE' },
+    ];
+
+    const normalized = normalizeWorkflowConfig(workflow, '/tmp', undefined, undefined, undefined, undefined, undefined, undefined, {
+      callableArgs: { implementation_companions: ['reviewer'] },
+    });
+    const implement = normalized.steps.find((step) => step.name === 'implement');
+
+    expect(implement?.companion).toEqual({ fixed: ['reviewer'], pool: [] });
+    expect(implement?.rules).toHaveLength(3);
+  });
+
+  it('should not reject a quoted companion string in a remaining when rule', () => {
+    const workflow = createCallableCompanionWorkflow();
+    (workflow.steps as Array<Record<string, unknown>>)[0]!.rules = [
+      { condition: 'when(companion.escalated)', next: 'fix' },
+      { condition: 'when(context.status == "companion.openMustFixCount")', next: 'fix' },
+      { condition: 'done', next: 'COMPLETE' },
+    ];
+
+    const normalized = normalizeWorkflowConfig(workflow, '/tmp');
+    const implement = normalized.steps.find((step) => step.name === 'implement');
+
+    expect(implement?.companion).toBeUndefined();
+    expect(implement?.rules).toHaveLength(2);
+    expect(implement?.rules?.[0]?.condition).toMatchObject({
+      kind: 'when',
+      expression: 'context.status == "companion.openMustFixCount"',
+    });
+  });
+
+  it('should reject a scalar companion_ref[] argument before expansion', () => {
+    expect(() => normalizeWorkflowConfig(createCallableCompanionWorkflow(), '/tmp', undefined, undefined, undefined, undefined, undefined, undefined, {
+      callableArgs: {
+        implementation_companions: 'first-reviewer',
+      },
+    })).toThrow('must be a companion_ref[] array');
+  });
+
+  it('should reject an undeclared companion parameter reference before schema validation', () => {
+    const workflow = createCallableCompanionWorkflow();
+    workflow.steps = [{
+      name: 'implement',
+      instruction: 'Implement',
+      companion: { $param: 'undeclared_companions' },
+      rules: [
+        { condition: 'when(companion.escalated)', next: 'fix' },
+        { condition: 'done', next: 'COMPLETE' },
+      ],
+    }, {
+      name: 'fix',
+      instruction: 'Fix',
+      rules: [{ condition: 'done', next: 'COMPLETE' }],
+    }];
+
+    expect(() => normalizeWorkflowConfig(workflow, '/tmp'))
+      .toThrow(/undeclared_companions/);
+  });
+
+  it('should supply an empty discovery binding for a required companion_ref[] parameter', () => {
+    const workflow = createCallableCompanionWorkflow();
+    workflow.subworkflow = {
+      callable: true,
+      params: {
+        implementation_companions: { type: 'companion_ref[]' },
+      },
+    };
+    const raw = WorkflowConfigRawSchema.parse(workflow);
+
+    expect(prepareCallableSubworkflowDiscoveryArgs(raw).callableArgs).toEqual({
+      implementation_companions: [],
+    });
   });
 
   it('should use a suffixed synthetic discovery pool when the default pool name collides', () => {

@@ -10,6 +10,7 @@ import {
 } from '../core/models/index.js';
 import { semanticRuleCandidatesOf } from '../core/models/workflow-rule-condition.js';
 import { WorkflowEngine } from '../core/workflow/index.js';
+import type { CompanionDiffReader } from '../core/workflow/companion/diff-reader.js';
 import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
 import type { SelectorGitCommandRunner } from '../core/workflow/dynamic-parallel/selector-git-command-runner.js';
 import { DefaultStructuredCaller } from '../agents/structured-caller.js';
@@ -73,6 +74,22 @@ const SELECTOR_PROVIDER = {
 };
 const SELECTOR_GIT_COMMAND_RUNNER: SelectorGitCommandRunner = {
   run: async () => ({ output: Buffer.alloc(0), bytes: 0 }),
+};
+const COMPANION_DIFF_READER: CompanionDiffReader = {
+  readBaselineSha: async () => 'test-baseline',
+  readDiff: async () => ({
+    status: 'ok',
+    snapshot: {
+      digest: 'empty-diff',
+      changedLines: 0,
+      content: '',
+      changedFiles: [],
+      fileFingerprints: {},
+      hunkFingerprints: {},
+      omittedBytes: 0,
+      truncated: false,
+    },
+  }),
 };
 
 function findWorkflowStep(workflow: WorkflowConfig, stepName: string): WorkflowStep {
@@ -207,6 +224,24 @@ describe('experimental builtin workflow', () => {
     const taktImplement = findWorkflowStep(taktCore, 'implement');
     expect(genericImplement.dynamicFacets?.pool).toBe('coding-facets');
     expect(taktImplement.dynamicFacets?.pool).toBe('takt-coding-facets');
+    expect(genericImplement.companion).toBeUndefined();
+    expect(genericImplement.rules?.[0]?.condition.kind).toBe('semantic');
+    expect(taktImplement.companion).toEqual({
+      fixed: ['takt-implementation-reviewer'],
+      pool: [],
+    });
+    expect(taktImplement.rules?.[0]).toMatchObject({
+      condition: {
+        kind: 'when',
+        expression: 'companion.escalated',
+      },
+      next: 'fix',
+    });
+    expect(taktCore.companions?.['takt-implementation-reviewer']).toMatchObject({
+      persona: 'implementation-semantics-reviewer',
+      policy: ['contract-change', 'security-review'],
+      knowledge: ['takt', 'security', 'security-local', 'security-data', 'security-dependencies'],
+    });
     expect(genericCore.facetPools?.['coding-facets']?.candidates.map(({ id }) => id))
       .toEqual(expect.arrayContaining(['frontend', 'backend']));
     const taktCandidateIds = taktCore.facetPools?.['takt-coding-facets']?.candidates.map(({ id }) => id) ?? [];
@@ -394,15 +429,22 @@ steps:
         provider: 'mock',
         selectorProvider: SELECTOR_PROVIDER,
         selectorGitCommandRunner: SELECTOR_GIT_COMMAND_RUNNER,
+        companionProviders: {
+          'takt-implementation-reviewer': { provider: 'mock' },
+        },
+        companionDiffReader: COMPANION_DIFF_READER,
         structuredCaller: new DefaultStructuredCaller(),
         workflowCallResolver: ({ parentWorkflow, step, projectCwd, lookupCwd }) =>
           resolveWorkflowCallTarget(parentWorkflow, step, projectCwd, lookupCwd),
       });
       engines.push(engine);
+      const abortReasons: string[] = [];
+      engine.on('workflow:abort', (_state, reason) => abortReasons.push(reason));
 
       const state = await engine.run();
 
       expect(state.status, JSON.stringify({
+        abortReasons,
         currentStep: state.currentStep,
         iteration: state.iteration,
         remainingScenarios: getScenarioQueue()?.remaining,

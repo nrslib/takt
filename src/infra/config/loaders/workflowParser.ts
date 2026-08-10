@@ -62,6 +62,39 @@ import { withWorkflowConfigErrorPath as withWorkflowStepErrorPath } from '../../
 import { validateDynamicParallelContracts } from '../../../core/workflow/dynamic-parallel/validator.js';
 import { isScopeRef } from 'faceted-prompting';
 
+type RawSubworkflowParams = NonNullable<ReturnType<typeof WorkflowConfigRawSchema.parse>['subworkflow']>['params'];
+
+function normalizeSubworkflowParams(
+  rawParams: NonNullable<RawSubworkflowParams>,
+): NonNullable<WorkflowSubworkflowConfig['params']> {
+  const params: NonNullable<WorkflowSubworkflowConfig['params']> = {};
+  for (const [name, param] of Object.entries(rawParams)) {
+    if (param.type === 'workflow_ref') {
+      params[name] = {
+        type: 'workflow_ref',
+        default: param.default,
+      };
+    } else if (param.type === 'facet_pool_ref') {
+      params[name] = {
+        type: 'facet_pool_ref',
+        default: param.default,
+      };
+    } else if (param.type === 'companion_ref[]') {
+      params[name] = {
+        type: 'companion_ref[]',
+        default: param.default,
+      };
+    } else {
+      params[name] = {
+        type: param.type,
+        facetKind: param.facet_kind,
+        default: param.default,
+      };
+    }
+  }
+  return params;
+}
+
 function normalizeSubworkflowConfig(
   raw: ReturnType<typeof WorkflowConfigRawSchema.parse>['subworkflow'],
 ): WorkflowSubworkflowConfig | undefined {
@@ -74,23 +107,7 @@ function normalizeSubworkflowConfig(
     visibility: raw.visibility,
     requiresFindingContract: raw.requires_finding_contract,
     returns: raw.returns,
-    params: raw.params
-      ? Object.fromEntries(
-        Object.entries(raw.params).map(([name, param]) => [
-          name,
-          param.type === 'workflow_ref' || param.type === 'facet_pool_ref'
-            ? {
-                type: param.type,
-                default: param.default,
-              }
-            : {
-                type: param.type,
-                facetKind: param.facet_kind,
-                default: param.default,
-              },
-        ]),
-      )
-      : undefined,
+    params: raw.params ? normalizeSubworkflowParams(raw.params) : undefined,
   };
 }
 

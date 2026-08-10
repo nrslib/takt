@@ -52,7 +52,7 @@ import { withWorkflowConfigErrorPath } from '../workflow-config-error.js';
 import { findWorkflowStepLocation } from '../workflow-step-location.js';
 import { getProviderValidationErrorSource, withProviderValidationErrorSource } from '../provider-validation-error.js';
 import { validateDynamicParallelContracts } from '../dynamic-parallel/validator.js';
-import { parseWhenConditionExpression } from '../../models/workflow-when-expression.js';
+import { guaranteesCompanionEscalationCatch } from '../companion/escalation-rule.js';
 
 type ResolvedProviderInfo = ReturnType<typeof resolveStepProviderModel>;
 export type FindingContractSyntheticProviderValidationOptions = Pick<
@@ -750,27 +750,6 @@ function validateCompanionEscalationRule(step: WorkflowStep): void {
       `Configuration error: companion step "${step.name}" first rule must catch when(companion.escalated)`,
     );
   }
-}
-
-function guaranteesCompanionEscalationCatch(expression: string): boolean {
-  const parsed = parseWhenConditionExpression(expression);
-  if (parsed.alternatives.length !== 1 || parsed.alternatives[0]?.length !== 1) return false;
-  const clause = parsed.alternatives[0][0];
-  if (clause?.kind === 'operand') {
-    return clause.operand.reference === 'companion.escalated';
-  }
-  if (clause?.kind !== 'comparison' || clause.operator !== '==') return false;
-  return (
-    clause.left.kind === 'state'
-    && clause.left.reference === 'companion.escalated'
-    && clause.right.kind === 'literal'
-    && clause.right.value === true
-  ) || (
-    clause.right.kind === 'state'
-    && clause.right.reference === 'companion.escalated'
-    && clause.left.kind === 'literal'
-    && clause.left.value === true
-  );
 }
 
 function findWorkflowCallStep(

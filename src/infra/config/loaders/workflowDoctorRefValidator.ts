@@ -72,6 +72,7 @@ function getParamDefinition(
   if (
     definition.type === 'workflow_ref'
     || definition.type === 'facet_pool_ref'
+    || definition.type === 'companion_ref[]'
     || !expectedTypes.includes(definition.type)
     || definition.facet_kind !== expectedKind
   ) {

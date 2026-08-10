@@ -5,6 +5,7 @@ import type {
   WorkflowCallArgValue,
 } from '../../../core/models/index.js';
 import { WorkflowConfigRawSchema } from '../../../core/models/index.js';
+import { parseWorkflowRuleCondition } from '../../../core/models/workflow-rule-condition.js';
 import type { FacetResolutionContext, WorkflowSections } from './resource-resolver.js';
 import {
   isResourcePath,
@@ -17,6 +18,8 @@ import { isWorkflowParamReference, type WorkflowParamReference } from './workflo
 import { assertNoParamReferences, validateReturnRules } from './workflowCallableRuleValidation.js';
 import { withWorkflowConfigErrorPath as withWorkflowStepErrorPath } from '../../../core/workflow/workflow-config-error.js';
 import { hasOwnFacetPool } from './workflowFacetPoolLookup.js';
+import { hasCompanionReference } from '../../../core/models/workflow-rule-condition.js';
+import { guaranteesCompanionEscalationRawCondition } from '../../../core/workflow/companion/escalation-rule.js';
 
 type RawWorkflowConfig = z.output<typeof WorkflowConfigRawSchema>;
 type RawWorkflowStep = RawWorkflowConfig['steps'][number];
@@ -149,6 +152,12 @@ function validateWorkflowCallArgValue(
   argPolicy?: WorkflowCallArgResolutionPolicy,
 ): void {
   const isArrayValue = Array.isArray(value);
+  if (definition.type === 'companion_ref[]') {
+    if (!isArrayValue || value.some((ref) => typeof ref !== 'string' || ref.trim().length === 0)) {
+      throw new Error(`workflow_call arg "${paramName}" must be a companion_ref[] array`);
+    }
+    return;
+  }
   if (definition.type === 'workflow_ref' || definition.type === 'facet_pool_ref') {
     if (isArrayValue) {
       throw new Error(
@@ -225,6 +234,7 @@ function resolveExpandedParamValue(
   if (
     definition.type === 'workflow_ref'
     || definition.type === 'facet_pool_ref'
+    || definition.type === 'companion_ref[]'
     || !expectedTypes.includes(definition.type)
   ) {
     const expectedTypeLabel = expectedTypes.join(' or ');
@@ -237,7 +247,7 @@ function resolveExpandedParamValue(
   if (value === undefined) {
     throw withWorkflowStepErrorPath(new Error(`Step "${stepName}" requires workflow_call arg "${paramRef.$param}" for ${fieldName}`), errorPath);
   }
-  return value;
+  return Array.isArray(value) ? [...value] : value;
 }
 
 function resolveExpandedFacetPoolValue(
@@ -277,6 +287,42 @@ function resolveExpandedFacetPoolValue(
   if (!hasOwnFacetPool(facetPools, value)) {
     throw withWorkflowStepErrorPath(
       new Error(`Step "${stepName}" references unknown facet pool "${value}"`),
+      errorPath,
+    );
+  }
+  return value;
+}
+
+function resolveExpandedCompanionValue(
+  stepName: string,
+  paramRef: WorkflowParamReference,
+  params: NonNullable<RawWorkflowConfig['subworkflow']>['params'] | undefined,
+  resolvedArgs: Record<string, WorkflowCallArgValue>,
+  errorPath: readonly PropertyKey[],
+): string[] {
+  const definition = params?.[paramRef.$param];
+  if (!definition) {
+    throw withWorkflowStepErrorPath(
+      new Error(`Step "${stepName}" references undeclared param "${paramRef.$param}" in companion`),
+      errorPath,
+    );
+  }
+  if (definition.type !== 'companion_ref[]') {
+    throw withWorkflowStepErrorPath(
+      new Error(`Step "${stepName}" expects companion to use companion_ref[] param "${paramRef.$param}"`),
+      errorPath,
+    );
+  }
+  const value = resolvedArgs[paramRef.$param];
+  if (value === undefined) {
+    throw withWorkflowStepErrorPath(
+      new Error(`Step "${stepName}" requires workflow_call arg "${paramRef.$param}" for companion`),
+      errorPath,
+    );
+  }
+  if (!Array.isArray(value)) {
+    throw withWorkflowStepErrorPath(
+      new Error(`Step "${stepName}" expects companion param "${paramRef.$param}" to resolve to a companion_ref[] array`),
       errorPath,
     );
   }
@@ -447,6 +493,42 @@ function expandStepFields(
         [...stepPath, 'dynamic_facets', 'pool'],
       ),
     };
+  }
+
+  if (isWorkflowParamReference(step.companion)) {
+    const companions = resolveExpandedCompanionValue(
+      step.name,
+      step.companion,
+      params,
+      resolvedArgs,
+      [...stepPath, 'companion'],
+    );
+    if (companions.length === 0) {
+      delete expandedStep.companion;
+      const rules = expandedStep.rules;
+      const removedEscalationRule = (
+        rules?.[0]?.condition !== undefined
+        && guaranteesCompanionEscalationRawCondition(rules[0].condition)
+      );
+      if (removedEscalationRule && rules !== undefined) {
+        expandedStep.rules = rules.slice(1);
+      }
+      for (const [ruleIndex, rule] of (expandedStep.rules ?? []).entries()) {
+        if (!hasCompanionReference(parseWorkflowRuleCondition(rule.condition))) continue;
+        throw withWorkflowStepErrorPath(
+          new Error(
+            `Step "${step.name}" cannot retain an unquoted companion state reference `
+            + `when companion parameter "${step.companion.$param}" resolves to an empty list`,
+          ),
+          [...stepPath, 'rules', ruleIndex + (removedEscalationRule ? 1 : 0), 'condition'],
+        );
+      }
+    } else {
+      expandedStep.companion = {
+        fixed: [...companions],
+        pool: [],
+      };
+    }
   }
 
   if (isWorkflowParamReference(step.instruction)) {

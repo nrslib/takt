@@ -100,6 +100,11 @@ export function prepareCallableSubworkflowDiscoveryArgs(
       continue;
     }
 
+    if (definition.type === 'companion_ref[]') {
+      callableArgs.set(paramName, []);
+      continue;
+    }
+
     const placeholderRef = ensurePlaceholderFacet(prepared, paramName, definition.facet_kind);
     callableArgs.set(
       paramName,

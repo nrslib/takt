@@ -32,6 +32,33 @@ function workflowYaml(companionName: string): string {
   ].join('\n');
 }
 
+function callableWorkflowYaml(): string {
+  return [
+    'name: callable-companion-loader',
+    'subworkflow:',
+    '  callable: true',
+    '  params:',
+    '    implementation_companions:',
+    '      type: companion_ref[]',
+    'steps:',
+    '  - name: implement',
+    '    instruction: implement',
+    '    companion:',
+    '      $param: implementation_companions',
+    '    rules:',
+    '      - condition: when(companion.escalated)',
+    '        next: needs-fix',
+    '      - condition: done',
+    '        next: COMPLETE',
+    '  - name: needs-fix',
+    '    instruction: fix',
+    '    rules:',
+    '      - condition: done',
+    '        next: COMPLETE',
+    '',
+  ].join('\n');
+}
+
 describe('CT-COMP-02 workflow loader and doctor integration', () => {
   let root: string;
   let projectDir: string;
@@ -87,6 +114,15 @@ describe('CT-COMP-02 workflow loader and doctor integration', () => {
 
     expect(() => loadWorkflowFromFile(workflowPath, projectDir))
       .toThrow(/missing-reviewer/);
+  });
+
+  it('should fail callable workflow loading immediately for an undefined companion parameter value', () => {
+    const workflowPath = join(projectDir, '.takt', 'workflows', 'missing-callable.yaml');
+    writeFileSync(workflowPath, callableWorkflowYaml(), 'utf-8');
+
+    expect(() => loadWorkflowFromFile(workflowPath, projectDir, {
+      callableArgs: { implementation_companions: ['missing-reviewer'] },
+    })).toThrow(/missing-reviewer/);
   });
 
   it('should report an undefined companion reference through workflow doctor', () => {

@@ -26,6 +26,9 @@ function assertNoParamReferencesInStep(
     if (isWorkflowParamReference(step.instruction)) {
       throw withWorkflowStepErrorPath(new Error(`Step "${step.name}" cannot use $param in instruction outside a callable subworkflow`), [...stepPath, 'instruction']);
     }
+    if (isWorkflowParamReference(step.companion)) {
+      throw withWorkflowStepErrorPath(new Error(`Step "${step.name}" cannot use $param in companion outside a callable subworkflow`), [...stepPath, 'companion']);
+    }
     if (isWorkflowParamReference(step.call)) {
       throw withWorkflowStepErrorPath(new Error(`Step "${step.name}" cannot use $param in call outside a callable subworkflow`), [...stepPath, 'call']);
     }
