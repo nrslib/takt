@@ -16,6 +16,15 @@ import { isBirpcNoiseOnlyFailure } from './vitest-birpc-noise.mjs';
 const UNIT_SHARDS = ['1/4', '2/4', '3/4', '4/4'];
 const NO_ARG_UNIT_RUN_OPTIONS = ['--maxWorkers=1'];
 const INTEGRATION_NOTICE = '[takt] Fast unit gate only. After implementation run "npm run test:it" for light integration coverage. If you add or change an integration test, run the classification contract by itself with "npm test -- src/__tests__/releaseVerificationWiring.test.ts". Pull requests and "npm run check:release" run heavy integration coverage too. If you add or change a heavy integration test, run that file directly with "npm test -- <test-file>" before handoff.';
+const PARALLEL_TEST_SCRIPTS = new Set([
+  'test:unit:parallel',
+  'test:it:light',
+  'test:it:heavy:parallel',
+]);
+const SERIAL_TEST_SCRIPTS = [
+  'test:it:heavy:serial:git',
+  'test:it:heavy:serial:workflow',
+];
 const VITEST_OPTIONS_WITH_REQUIRED_VALUE = new Set([
   '-c',
   '-r',
@@ -264,15 +273,33 @@ async function remeasureBirpcNoiseShards(results, runCommand) {
   return settled;
 }
 
+export async function executeNpmTestRuns(runs, runCommand) {
+  const indexedRuns = runs.map((run, index) => ({ run, index }));
+  const parallelRuns = indexedRuns.filter(({ run }) => PARALLEL_TEST_SCRIPTS.has(run.npmArgs[1]));
+  const serialRuns = SERIAL_TEST_SCRIPTS.flatMap((script) =>
+    indexedRuns.filter(({ run }) => run.npmArgs[1] === script));
+  if (parallelRuns.length + serialRuns.length !== runs.length) {
+    const unknownScripts = indexedRuns
+      .filter(({ run }) => !PARALLEL_TEST_SCRIPTS.has(run.npmArgs[1]) && !SERIAL_TEST_SCRIPTS.includes(run.npmArgs[1]))
+      .map(({ run }) => run.npmArgs[1] ?? '(missing)');
+    throw new Error(`Unknown npm test runner classification: ${[...new Set(unknownScripts)].join(', ')}`);
+  }
+  const executeRun = async (run) => ({
+    ...run,
+    result: await runCommand(run.run.npmArgs),
+  });
+  const results = await Promise.all(parallelRuns.map(executeRun));
+  for (const run of serialRuns) {
+    results.push(await executeRun(run));
+  }
+  return results.sort((left, right) => left.index - right.index);
+}
+
 export async function runNpmTest(args, runCommand = runNpmCommand) {
   if (!hasExplicitTargets(splitTestTargets(args))) {
     console.log(INTEGRATION_NOTICE);
   }
-  const runs = selectNpmTestRuns(args);
-  const results = await Promise.all(runs.map(async (run) => {
-    const result = await runCommand(run.npmArgs);
-    return { run, result };
-  }));
+  const results = await executeNpmTestRuns(selectNpmTestRuns(args), runCommand);
 
   const failed = (await remeasureBirpcNoiseShards(results, runCommand))
     .filter(({ result }) => result.code !== 0);

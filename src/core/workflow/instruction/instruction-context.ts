@@ -131,6 +131,9 @@ export interface InstructionContext {
   workflowCallVars?: Readonly<Record<string, string | number | boolean>>;
   /** Finding Contract input for reviewer raw finding output. */
   findingContract?: FindingContractInstructionContext;
+  companion?: {
+    mailboxDirectory: string;
+  };
 }
 
 /**

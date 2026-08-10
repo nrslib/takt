@@ -1,24 +1,33 @@
-import type { AgentResponse } from '../../models/types.js';
-import { getErrorMessage } from '../../../shared/utils/index.js';
-import { validateStructuredOutputAgainstSchema } from '../engine/structured-output-schema-validator.js';
+import type { AgentResponse } from '../models/types.js';
+import { projectNativeStructuredOutputSchema } from '../models/native-structured-output-schema.js';
+import { getErrorMessage } from '../../shared/utils/index.js';
+import { validateStructuredOutputAgainstSchema } from './engine/structured-output-schema-validator.js';
+
+export interface SelectorCandidate {
+  readonly name: string;
+  readonly description: string;
+}
 
 export interface SelectorResponseLabel {
   readonly label: string;
 }
 
-export function createSelectorOutputSchema(
-  poolIds: readonly string[],
+export interface SelectorContract {
+  readonly providerSchema: Record<string, unknown>;
+  readonly validationSchema: Record<string, unknown>;
+}
+
+export function createSelectorContract(
+  candidates: readonly SelectorCandidate[],
   maxSelected?: number,
-): Record<string, unknown> {
+): SelectorContract {
   const selectedIds: Record<string, unknown> = {
     type: 'array',
     uniqueItems: true,
-    items: { type: 'string', enum: poolIds },
+    items: { type: 'string', enum: candidates.map(({ name }) => name) },
   };
-  if (maxSelected !== undefined) {
-    selectedIds.maxItems = maxSelected;
-  }
-  return {
+  if (maxSelected !== undefined) selectedIds.maxItems = maxSelected;
+  const validationSchema: Record<string, unknown> = {
     type: 'object',
     additionalProperties: false,
     properties: {
@@ -27,11 +36,15 @@ export function createSelectorOutputSchema(
     },
     required: ['selected_ids', 'rationale'],
   };
+  return {
+    providerSchema: projectNativeStructuredOutputSchema(validationSchema),
+    validationSchema,
+  };
 }
 
 export function validateSelectorResponse(
   response: AgentResponse,
-  outputSchema: Record<string, unknown>,
+  validationSchema: Record<string, unknown>,
   stepName: string,
   redact: (text: string) => string,
   label: SelectorResponseLabel,
@@ -46,17 +59,14 @@ export function validateSelectorResponse(
     ].join(': ');
     throw new Error(`${label.label} selector for "${stepName}" failed with ${diagnostics}`);
   }
-  const structuredOutput = response.structuredOutput;
   try {
-    validateStructuredOutputAgainstSchema(structuredOutput, outputSchema);
+    validateStructuredOutputAgainstSchema(response.structuredOutput, validationSchema);
   } catch (error) {
-    throw new Error(
-      redact(
-        `${label.label} selector for "${stepName}" returned invalid structured output: ${getErrorMessage(error)}`,
-      ),
-    );
+    throw new Error(redact(
+      `${label.label} selector for "${stepName}" returned invalid structured output: ${getErrorMessage(error)}`,
+    ));
   }
-  const selection = structuredOutput as {
+  const selection = response.structuredOutput as {
     readonly selected_ids: readonly string[];
     readonly rationale: string;
   };

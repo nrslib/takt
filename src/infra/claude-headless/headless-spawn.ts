@@ -1,7 +1,11 @@
 import { crossSpawn } from '../../shared/utils/index.js';
 import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/index.js';
 import { containsRateLimitMarker } from '../rate-limit/detection.js';
-import { tryExtractTextFromStreamJsonLine, tryExtractThinkingFromStreamJsonLine } from './stream-json-lines.js';
+import {
+  tryExtractTextFromStreamJsonLine,
+  tryExtractThinkingFromStreamJsonLine,
+  tryExtractToolUseFromStreamJsonLine,
+} from './stream-json-lines.js';
 import type { ClaudeHeadlessCallOptions } from './types.js';
 
 const HEADLESS_STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
@@ -187,6 +191,10 @@ export function runHeadlessCli(
       if (!options.onStream) return;
 
       for (const line of parts) {
+        const toolUses = tryExtractToolUseFromStreamJsonLine(line);
+        for (const toolUse of toolUses) {
+          options.onStream({ type: 'tool_use', data: toolUse });
+        }
         const thinking = tryExtractThinkingFromStreamJsonLine(line);
         if (thinking) {
           options.onStream({ type: 'thinking', data: { thinking } });

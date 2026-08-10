@@ -31,7 +31,10 @@ import {
 } from '../../scripts/test-classification.mjs';
 import heavyParallelIntegrationConfig from '../../vitest.config.it.heavy.parallel.js';
 import lightIntegrationConfig from '../../vitest.config.it.parallel.js';
+import serialGitConfig from '../../vitest.config.it.serial.git.js';
+import serialWorkflowConfig from '../../vitest.config.it.serial.workflow.js';
 import unitConfig from '../../vitest.config.unit.parallel.js';
+import { selectNpmTestRuns } from '../../scripts/run-npm-test.mjs';
 
 interface PackageManifest {
   scripts: Record<string, string>;
@@ -377,6 +380,8 @@ describe('release verification wiring', () => {
       ...lightIntegrationTestFiles,
       ...serialFiles,
     ]);
+    expect(serialGitConfig.test?.include).toEqual(serialGitTestFiles);
+    expect(serialWorkflowConfig.test?.include).toEqual(serialWorkflowTestFiles);
     expect(unitConfig.test?.exclude).toEqual([
       ...parallelIntegrationTestGlobs,
       ...parallelIntegrationTestFiles,
@@ -398,5 +403,62 @@ describe('release verification wiring', () => {
       .sort();
 
     expect(unclassifiedBoundaryFiles).toEqual([]);
+  });
+
+  it.each([
+    {
+      target: 'companion-prompt-loop.test.ts',
+      script: 'test:unit:parallel',
+      normalized: 'companion-prompt-loop.test.ts',
+    },
+    {
+      target: 'src/__tests__/companion-mailbox.integration.test.ts',
+      script: 'test:it:heavy:parallel',
+      normalized: 'src/__tests__/companion-mailbox.integration.test.ts',
+    },
+    {
+      target: 'companion-step-executor.integration.test.ts',
+      script: 'test:it:heavy:parallel',
+      normalized: 'companion-step-executor.integration.test.ts',
+    },
+    {
+      target: 'src/__tests__/companion-step-executor.integration.test.ts',
+      script: 'test:it:heavy:parallel',
+      normalized: 'src/__tests__/companion-step-executor.integration.test.ts',
+    },
+    {
+      target: 'src/__tests__/finding-review-integrity-gate.test.ts',
+      script: 'test:it:heavy:serial:workflow',
+      normalized: 'src/__tests__/finding-review-integrity-gate.test.ts',
+    },
+    {
+      target: 'src/__tests__/workflow-step-fragment-builtin-runtime.test.ts',
+      script: 'test:it:heavy:serial:workflow',
+      normalized: 'src/__tests__/workflow-step-fragment-builtin-runtime.test.ts',
+    },
+    {
+      target: 'src/__tests__/workflow-step-fragment-runtime.test.ts',
+      script: 'test:it:heavy:serial:workflow',
+      normalized: 'src/__tests__/workflow-step-fragment-runtime.test.ts',
+    },
+    {
+      target: 'companion-diff-runtime.integration.test.ts',
+      script: 'test:it:heavy:serial:git',
+      normalized: 'src/__tests__/companion-diff-runtime.integration.test.ts',
+    },
+    {
+      target: 'it-team-leader-finding-contract-operation-journal.test.ts',
+      script: 'test:it:heavy:serial:git',
+      normalized: 'src/__tests__/it-team-leader-finding-contract-operation-journal.test.ts',
+    },
+    {
+      target: 'src/__tests__/it-team-leader-finding-contract-operation-journal.test.ts',
+      script: 'test:it:heavy:serial:git',
+      normalized: 'src/__tests__/it-team-leader-finding-contract-operation-journal.test.ts',
+    },
+  ])('should route $target to $script', ({ target, script, normalized }) => {
+    expect(selectNpmTestRuns([target])).toEqual([{
+      npmArgs: ['run', script, '--', normalized],
+    }]);
   });
 });

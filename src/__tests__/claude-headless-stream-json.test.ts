@@ -5,9 +5,48 @@ import {
   aggregateResultFromStdout,
   tryExtractTextFromStreamJsonLine,
   tryExtractThinkingFromStreamJsonLine,
+  tryExtractToolUseFromStreamJsonLine,
 } from '../infra/claude-headless/stream-json-lines.js';
 
 describe('claude-headless stream-json line parsing', () => {
+  it('CT-COMP-12 extracts tool_use content blocks from assistant stream-json lines', () => {
+    const line = JSON.stringify({
+      type: 'assistant',
+      message: {
+        content: [{
+          type: 'tool_use',
+          id: 'tool-1',
+          name: 'Edit',
+          input: { file_path: 'src/a.ts', old_string: 'a', new_string: 'b' },
+        }],
+      },
+    });
+
+    expect(tryExtractToolUseFromStreamJsonLine(line)).toEqual([{
+      tool: 'Edit',
+      id: 'tool-1',
+      input: { file_path: 'src/a.ts', old_string: 'a', new_string: 'b' },
+    }]);
+  });
+
+  it('CT-COMP-12 ignores malformed tool_use blocks without suppressing valid siblings', () => {
+    const line = JSON.stringify({
+      type: 'assistant',
+      message: {
+        content: [
+          { type: 'tool_use', id: 1, name: 'Write', input: {} },
+          { type: 'tool_use', id: 'tool-2', name: 'Write', input: { file_path: 'src/b.ts' } },
+        ],
+      },
+    });
+
+    expect(tryExtractToolUseFromStreamJsonLine(line)).toEqual([{
+      tool: 'Write',
+      id: 'tool-2',
+      input: { file_path: 'src/b.ts' },
+    }]);
+  });
+
   it('extracts text from a stream-json text line', () => {
     const line = JSON.stringify({ type: 'text', text: 'hello' });
     expect(tryExtractTextFromStreamJsonLine(line)).toBe('hello');

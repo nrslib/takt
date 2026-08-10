@@ -96,6 +96,7 @@ import {
 } from '../workflow-call-invocation-index.js';
 import { SelectorInputReader } from '../dynamic-parallel/selector-input-reader.js';
 import { restoreWorkflowStepParticipationIndex } from '../workflow-step-participation-index.js';
+import { CompanionReviewAuthority } from '../companion/review-state-store.js';
 
 const log = createLogger('workflow-engine');
 
@@ -226,6 +227,7 @@ export function createSharedRuntime(
     ),
     workflowCallInvocationEvidence: restoreWorkflowCallInvocationEvidence(resumePoint),
     workflowStepParticipationIndex: restoreWorkflowStepParticipationIndex(resumePoint),
+    companionReviewAuthority: new CompanionReviewAuthority(),
   };
 }
 
@@ -868,6 +870,10 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       return summary;
     },
   });
+  const companionReviewAuthority = params.sharedRuntime.companionReviewAuthority;
+  if (companionReviewAuthority === undefined) {
+    throw new Error('Companion review authority is missing from shared workflow runtime');
+  }
 
   const stepExecutor = new StepExecutor({
     optionsBuilder,
@@ -905,6 +911,12 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     recordSynthesizedAgentUsage: (stepName, providerInfo, success, usage) =>
       recordAgentUsageEvent(params.options, stepName, 'normal', providerInfo, success, usage),
     getRunId: () => params.runPaths.slug,
+    getRunPathNamespace: () => params.options.runPathNamespace ?? [],
+    companionDefinitions: params.config.companions,
+    companionProviders: params.options.companionProviders,
+    companionSelectorProvider: params.options.selectorProvider,
+    companionDiffReader: params.options.companionDiffReader,
+    companionReviewAuthority,
     getFindingCallNamespace: () => params.options.findingCallNamespace ?? '',
     ...phaseRelay,
     getFacetPool: (name: string) => params.config.facetPools?.[name],

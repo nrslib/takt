@@ -387,17 +387,17 @@ function buildPipelineTraceTaskContext(
   };
 }
 
-export function commitAndPush(
+export async function commitAndPush(
   execCwd: string,
   projectCwd: string,
   branch: string,
   commitMessage: string,
   isWorktree: boolean,
-): boolean {
+): Promise<boolean> {
   const safeBranch = sanitizeTerminalText(branch);
   info('Committing changes...');
   try {
-    const commitHash = stageAndCommit(execCwd, commitMessage, {
+    const commitHash = await stageAndCommit(execCwd, commitMessage, {
       allowGitHooks: resolveConfigValue(projectCwd, 'allowGitHooks') ?? false,
       allowGitFilters: resolveConfigValue(projectCwd, 'allowGitFilters') ?? false,
     });

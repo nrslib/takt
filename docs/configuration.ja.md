@@ -1186,3 +1186,36 @@ logging:
 ```
 
 これは CLI 内部の verbose console mode も有効にします。さらに `logging.level: debug` だけでデバッグロガーも有効になるため、上記の `debug-{timestamp}.log` と `debug-{timestamp}-prompts.jsonl` は `logging.debug` を別途設定しなくても出力されます。`logging.debug: true`、`logging.trace: true`、`logging.level: debug` のいずれかで有効になります。
+
+## Companion の provider target
+
+Companion には有効な `runtime.yaml` の provider section が必要です。参照する companion ごとに `provider.targets.companions` で割り当て、名前が未指定の場合は `provider.defaults` を使います。companion target は固定 profile のみ指定でき、pool と ladder は `runtime.yaml` の読み込み時に拒否されます。legacy `config.yaml` の provider 設定へはフォールバックせず、`companion` を使う workflow では移行案内付きで拒否します。
+
+```yaml
+version: 1
+provider:
+  profiles:
+    review:
+      provider: codex
+      model: gpt-5
+  defaults:
+    profile: review
+  targets:
+    companions:
+      security-reviewer:
+        profile: review
+```
+
+| Provider | Companion の strict 隔離実行 | 実装エージェントの tool event |
+|---|---:|---:|
+| `claude-sdk` | 可 | ライブ |
+| `codex` | 可 | ライブ |
+| `claude`（headless） | 可 | ライブ |
+| `claude-terminal` | 可 | ターン後に再生 |
+| `mock` | 可 | scenario に依存 |
+| `opencode` | 不可 | ライブ |
+| `cursor`、`copilot`、`kiro` | 不可 | 利用不可 |
+
+`不可` の provider を指定した workflow はロード時に拒否され、隔離を弱めた縮退実行は行いません。
+
+ライブの tool event がない場合も、完了レビューと同一 session の修正ループは動作します。

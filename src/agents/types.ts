@@ -48,6 +48,7 @@ export interface RunAgentOptions {
   personaPath?: string;
   workflowBundleResourceRoot?: string;
   internalSystemPrompt?: string;
+  internalAgentName?: string;
   internalAgentIsolation?: InternalAgentIsolation;
   allowedTools?: string[];
   mcpServers?: Record<string, McpServerConfig>;

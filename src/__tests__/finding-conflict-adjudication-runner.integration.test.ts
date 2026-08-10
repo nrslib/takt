@@ -8,9 +8,13 @@ import {
   createEngineProofRecord,
 } from '../core/models/finding-evidence-record.js';
 import type { WorkflowState } from '../core/models/types.js';
-import { createFindingConflictAdjudicationRunner } from '../core/workflow/findings/adjudication-runner.js';
+import {
+  createFindingConflictAdjudicationRunner,
+  serializeFindingConflictAdjudicationRequest,
+} from '../core/workflow/findings/adjudication-runner.js';
 import { buildFindingConflictAdjudicationStep } from '../core/workflow/findings/adjudication-step.js';
 import {
+  buildConflictAdjudicationSnapshotReference,
   renderConflictAdjudicationInstruction,
   type ConflictAdjudicationHistoryOrder,
 } from '../core/workflow/findings/adjudication-evidence.js';
@@ -37,12 +41,16 @@ import {
   rawCanonicalSnapshotFixture,
 } from './helpers/finding-lifecycle-fixture.js';
 import { verifiedFindingEvidenceFixture } from './helpers/finding-evidence.js';
-import { MANAGER_INTERPRETATION_LIMITS } from '../core/workflow/findings/raw-finding-limits.js';
+import {
+  CONFLICT_ADJUDICATION_INPUT_MAX_BYTES,
+  MANAGER_INTERPRETATION_LIMITS,
+} from '../core/workflow/findings/raw-finding-limits.js';
 import {
   captureConflictTargetContentDigests,
   captureReviewScopeProofSnapshot,
 } from '../core/workflow/findings/snapshot.js';
 import { conflictTargetPaths } from '../core/workflow/findings/conflict-target.js';
+import { formatConflictId } from '../core/models/finding-conflict-identity.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({ executeAgent: vi.fn() }));
 const executeAgentMock = vi.mocked(executeAgent);
@@ -86,69 +94,95 @@ function contract(cwd: string): FindingContractConfig {
   };
 }
 
-function seededLedger(cwd: string): FindingLedger {
-  const evidence = verifiedFindingEvidenceFixture({
-    cwd,
-    path: 'src/a.ts',
-    startLine: 1,
-    title: 'Disputed issue',
-    description: 'The bug is present.',
-    familyTag: 'bug',
-    targetFindingId: 'F-0001',
+function seededLedger(
+  cwd: string,
+  options: { productCount?: number; rawFindingsPerProduct?: number } = {},
+): FindingLedger {
+  const productCount = options.productCount ?? 1;
+  const rawFindingsPerProduct = options.rawFindingsPerProduct ?? 1;
+  const products = Array.from({ length: productCount }, (_, productIndex) => {
+    const findingId = `F-${String(productIndex + 1).padStart(4, '0')}`;
+    const evidence = verifiedFindingEvidenceFixture({
+      cwd,
+      path: 'src/a.ts',
+      startLine: 1,
+      title: productCount === 1 ? 'Disputed issue' : `Disputed issue ${findingId}`,
+      description: productCount === 1 ? 'The bug is present.' : `The bug is present in ${findingId}.`,
+      familyTag: 'bug',
+      targetFindingId: findingId,
+    });
+    return { findingId, evidence };
   });
-  const ledger = authorizeFindingLedgerFixture({
-    workflowName: 'runner-test',
-    nextId: 2,
-    updatedAt: OBSERVATION.timestamp,
-    findings: [{
-      id: 'F-0001',
-      status: 'open',
-      lifecycle: 'new',
-      revision: 1,
-      severity: 'high',
-      title: 'Disputed issue',
-      description: 'The bug is present.',
-      evidenceIds: [evidence.record.evidenceId],
-      reviewers: ['coding-review'],
-      rawFindingIds: ['raw-1'],
-      firstSeen: OBSERVATION,
-      lastSeen: OBSERVATION,
-    }],
-    rawFindings: [{
-      rawFindingId: 'raw-1',
+  const rawFindingIdFor = (productIndex: number, rawIndex: number): string => (
+    rawFindingsPerProduct === 1
+      ? `raw-${productIndex + 1}`
+      : `raw-${productIndex + 1}-${String(rawIndex + 1).padStart(4, '0')}`
+  );
+  const rawFindings = products.flatMap(({ findingId, evidence }, productIndex) => (
+    Array.from({ length: rawFindingsPerProduct }, (_, rawIndex) => ({
+      rawFindingId: rawFindingIdFor(productIndex, rawIndex),
       stepName: 'reviewers',
       reviewer: 'coding-review',
       familyTag: 'bug',
-      severity: 'high',
-      title: 'Disputed issue',
-      description: 'The bug is present.',
+      severity: 'high' as const,
+      title: productCount === 1 ? 'Disputed issue' : `Disputed issue ${findingId}`,
+      description: productCount === 1 ? 'The bug is present.' : `The bug is present in ${findingId}.`,
       suggestion: null,
-      relation: 'persists',
-      targetFindingId: 'F-0001',
+      relation: 'persists' as const,
+      targetFindingId: findingId,
       targetPrecondition: {
-        targetFindingId: 'F-0001',
+        targetFindingId: findingId,
         targetRevision: 1,
-        targetStatus: 'open',
+        targetStatus: 'open' as const,
         targetEvidenceHash: '0'.repeat(64),
       },
       evidence: [evidence.evidence],
-    }],
+    }))
+  ));
+  const ledger = authorizeFindingLedgerFixture({
+    workflowName: 'runner-test',
+    nextId: productCount + 1,
+    updatedAt: OBSERVATION.timestamp,
+    findings: products.map(({ findingId, evidence }) => ({
+      id: findingId,
+      status: 'open' as const,
+      lifecycle: 'new' as const,
+      revision: 1,
+      severity: 'high' as const,
+      title: productCount === 1 ? 'Disputed issue' : `Disputed issue ${findingId}`,
+      description: productCount === 1 ? 'The bug is present.' : `The bug is present in ${findingId}.`,
+      evidenceIds: [evidence.record.evidenceId],
+      reviewers: ['coding-review'],
+      rawFindingIds: rawFindings
+        .filter((rawFinding) => rawFinding.targetFindingId === findingId)
+        .map(({ rawFindingId }) => rawFindingId),
+      firstSeen: OBSERVATION,
+      lastSeen: OBSERVATION,
+    })),
+    rawFindings,
     conflicts: [{
-      id: 'C-FA2947446963',
+      id: formatConflictId({
+        findingIds: products.map(({ findingId }) => findingId),
+        rawFindingIds: products.map((_, productIndex) => rawFindingIdFor(productIndex, 0)),
+      }),
       status: 'active',
-      findingIds: ['F-0001'],
-      rawFindingIds: ['raw-1'],
+      findingIds: products.map(({ findingId }) => findingId),
+      rawFindingIds: products.map((_, productIndex) => rawFindingIdFor(productIndex, 0)),
       description: 'Reviewers disagree about F-0001.',
       firstSeen: OBSERVATION,
       lastSeen: OBSERVATION,
       revision: 1,
     }],
-    evidenceRecords: [evidence.record],
+    evidenceRecords: products.map(({ evidence }) => evidence.record),
     evidenceBindings: [],
     lifecycleReservations: [],
     lifecycleEvents: [],
   });
   const landed = landUnownedConflictRawClaims({ ledger, observation: OBSERVATION });
+  const conflictId = landed.conflicts[0]?.id;
+  if (conflictId === undefined) {
+    throw new Error('Expected the fixture to contain a conflict');
+  }
   const reviewScopeSnapshot = captureReviewScopeProofSnapshot(cwd);
   const queryInventoryByPath = new Map(
     reviewScopeSnapshot.queryInventory.map((entry) => [entry.path, entry]),
@@ -158,11 +192,11 @@ function seededLedger(cwd: string): FindingLedger {
     originStep: 'reviewers',
     createdAt: OBSERVATION,
     targetContentDigestsByConflict: new Map([[
-      'C-FA2947446963',
-      captureConflictTargetContentDigests(
-        queryInventoryByPath,
-        conflictTargetPaths({ ledger: landed, conflictId: 'C-FA2947446963' }),
-      ),
+      conflictId,
+      captureConflictTargetContentDigests(queryInventoryByPath, conflictTargetPaths({
+        ledger: landed,
+        conflictId,
+      })),
     ]]),
   });
 }
@@ -229,11 +263,11 @@ describe('finding-conflict-adjudication runner registry contract', () => {
     };
   }
 
-  function reopenStore(): FindingLedgerStore {
+  function reopenStore(runId = 'run-1'): FindingLedgerStore {
     return createTestFindingLedgerStore({
       projectCwd: cwd,
-      runId: 'run-1',
-      reportDir: join(cwd, '.takt', 'runs', 'run-1', 'reports'),
+      runId,
+      reportDir: join(cwd, '.takt', 'runs', runId, 'reports'),
       workflowName: 'runner-test',
     });
   }
@@ -285,7 +319,7 @@ describe('finding-conflict-adjudication runner registry contract', () => {
       expect.objectContaining({ state: 'settled', purpose: 'conflict_adjudication' }),
     ]));
     expect(ledger.findingManagerProviderCalls.every((call) => (
-      call.requestByteLength <= MANAGER_INTERPRETATION_LIMITS.maxInputBytesPerCall
+      call.requestByteLength <= CONFLICT_ADJUDICATION_INPUT_MAX_BYTES
     ))).toBe(true);
     expect(executeAgentMock).toHaveBeenCalledTimes(2);
   });
@@ -1010,11 +1044,23 @@ describe('finding-conflict-adjudication runner registry contract', () => {
     const inflated = structuredClone(snapshot);
     inflated.subjects = inflated.subjects.map((subject, subjectIndex) => ({
       ...subject,
-      sourceRawFindingIds: Array.from({ length: 4096 }, (_, index) => `${subjectIndex}-raw-${index}`),
-      sourceRawPayloadDigests: Array.from({ length: 4096 }, (_, index) => `${subjectIndex}-payload-${index}`),
-      evidenceBindingIds: Array.from({ length: 4096 }, (_, index) => `${subjectIndex}-binding-${index}`),
+      sourceRawFindingIds: Array.from(
+        { length: 4096 },
+        (_, index) => `${subjectIndex}-raw-${index}-${'finding-context/'.repeat(50)}${index}`,
+      ),
+      sourceRawPayloadDigests: Array.from(
+        { length: 4096 },
+        (_, index) => `${subjectIndex.toString(16)}${index.toString(16).padStart(8, '0')}${'p'.repeat(55)}`,
+      ),
+      evidenceBindingIds: Array.from(
+        { length: 4096 },
+        (_, index) => `${subjectIndex.toString(16)}${index.toString(16).padStart(8, '0')}${'b'.repeat(55)}`,
+      ),
       rawClaimLandingIds: subject.role === 'holding_provisional'
-        ? Array.from({ length: 4096 }, (_, index) => `${subjectIndex}-landing-${index}`)
+        ? Array.from(
+            { length: 4096 },
+            (_, index) => `${subjectIndex.toString(16)}${index.toString(16).padStart(8, '0')}${'l'.repeat(55)}`,
+          )
         : [],
     }));
 
@@ -1040,9 +1086,52 @@ describe('finding-conflict-adjudication runner registry contract', () => {
       ]),
     ) as ConflictAdjudicationHistoryOrder;
     const instruction = renderConflictAdjudicationInstruction(inflated, history);
+    const reference = buildConflictAdjudicationSnapshotReference(inflated, history);
+    const compactRawFindingId = reference.subjects
+      .flatMap(({ sourceRawFindingIds }) => sourceRawFindingIds)
+      .find((value) => value.startsWith('raw-ref:'));
+    const step = runner().step;
+    const phase1Instruction = [
+      '# Finding Contract adjudication',
+      '',
+      'Judge only the supplied ledger subject and the engine-issued proofs and scope bindings.',
+      '',
+      'Do not dismiss or terminate without claim-specific verified evidence or a matching scope binding. Choose the undetermined outcome when evidence does not correspond byte-for-byte to the candidate, when the scope differs, or when the result cannot be determined.',
+      '',
+      'Do not perform a new review, edit code, or invent evidence, authority, or findings. Do not treat reviewer or coder confidence, or their silence, as evidence.',
+      '',
+      '---',
+      '',
+      instruction,
+    ].join('\n');
+    const request = serializeFindingConflictAdjudicationRequest({
+      step,
+      phase1Instruction,
+      agentOptions: {
+        cwd: '/Users/nrs/work/git/takt-worktrees/20260807T1751-pr-komento-no-wodaunroodoshite-4bcef608f0695f48',
+        projectCwd: '/Users/nrs/work/git/takt-worktrees/20260807T1751-pr-komento-no-wodaunroodoshite-4bcef608f0695f48',
+        provider: 'claude',
+        model: 'claude-sonnet',
+        resolvedProvider: 'claude',
+        resolvedModel: 'claude-sonnet',
+        personaPath: '/Users/nrs/work/git/takt/builtins/ja/facets/personas/supervisor.md',
+        workflowBundleResourceRoot: '/Users/nrs/work/git/takt/builtins',
+        language: 'ja',
+        allowedTools: [],
+        workflowMeta: {
+          workflowName: 'peer-review-suite-finding-contract-base',
+          currentStep: 'finding-conflict-adjudication',
+          stepsList: [{ name: 'reviewers' }, { name: 'finding-conflict-adjudication' }],
+          currentPosition: '2/2',
+        },
+        outputSchema: step.structuredOutput?.schema,
+      },
+    });
 
     expect(Buffer.byteLength(instruction, 'utf8'))
-      .toBeLessThanOrEqual(MANAGER_INTERPRETATION_LIMITS.maxInputBytesPerCall);
+      .toBeLessThanOrEqual(CONFLICT_ADJUDICATION_INPUT_MAX_BYTES);
+    expect(Buffer.byteLength(request, 'utf8'))
+      .toBeLessThanOrEqual(CONFLICT_ADJUDICATION_INPUT_MAX_BYTES);
     expect(instruction).toContain('"snapshotFormat": "reference-v1"');
     expect(instruction).toContain('sourceRawFindingCount');
     expect(instruction).toContain('sourceRawFindingIds');
@@ -1050,6 +1139,101 @@ describe('finding-conflict-adjudication runner registry contract', () => {
     expect(instruction).toContain('sourceRawPayloadIds');
     expect(instruction).toContain('0-raw-999');
     expect(instruction).toContain('evidenceBindingIds');
+    expect(compactRawFindingId).toMatch(/^raw-ref:.*….*#sha256:[0-9a-f]{64}$/);
+    expect(reference.subjects[0]?.sourceRawFindingCount).toBe(4096);
+    expect(reference.subjects[0]?.sourceRawFindingDigest).toMatch(/^[0-9a-f]{64}$/);
+    expect(request).not.toContain(inflated.subjects[0]?.sourceRawFindingIds[0] ?? '');
+  });
+
+  it('keeps ten subjects with large ID collections in one conflict adjudication call', async () => {
+    const manyRunId = 'run-many-subjects';
+    mkdirSync(join(cwd, '.takt', 'runs', manyRunId, 'reports'), { recursive: true });
+    ledgerStore = reopenStore(manyRunId);
+    await ledgerStore.updateLedger(() => ({
+      ledger: seededLedger(cwd, { productCount: 5, rawFindingsPerProduct: 40 }),
+      result: undefined,
+    }));
+
+    const conflictId = ledgerStore.loadLedger().conflicts[0]!.id;
+    const snapshot = freshConflictAdjudicationSnapshot(ledgerStore.loadLedger(), conflictId);
+    expect(snapshot.subjects).toHaveLength(10);
+    const expectedSubjectIds = snapshot.subjects.map(({ subjectId }) => subjectId);
+    const proofBySubjectId = new Map(snapshot.subjects.map((subject, index) => {
+      const proof = createEngineProofRecord({
+        kind: 'engine_proof',
+        purpose: 'lifecycle_authority',
+        verifierId: 'takt.finding-lifecycle-policy',
+        verifierVersion: '1',
+        workflowName: 'runner-test',
+        runId: 'run-1',
+        scopeIdentity: SCOPE_IDENTITY,
+        snapshotId: snapshot.conflictSnapshotId,
+        claimIdentityHash: null,
+        targetFindingId: subject.findingId,
+        subject: {
+          kind: 'finding_no_issue_after_verification',
+          adjudicationKind: 'conflict',
+          subjectId: subject.subjectId,
+          findingId: subject.findingId,
+          expectedHead: subject.expectedHead,
+          claimSnapshotDigest: subject.claimSnapshotDigest,
+          rawClaimRefIds: subject.rawClaimLandingIds,
+        },
+        dependencyDigests: [snapshot.conflictSnapshotId],
+        resultDigest: `${index.toString(16).padStart(2, '0')}${'a'.repeat(62)}`,
+        issuedAt: OBSERVATION.timestamp,
+      });
+      return [subject.subjectId, proof] as const;
+    }));
+    await ledgerStore.updateLedger((current) => ({
+      ledger: {
+        ...current,
+        evidenceRecords: [...current.evidenceRecords, ...proofBySubjectId.values()],
+      },
+      result: undefined,
+    }));
+
+    const subjectIdsByRequest: string[][] = [];
+    executeAgentMock.mockImplementation(async (_persona, prompt) => {
+      const subjectIds = expectedSubjectIds.filter((subjectId) => (
+        prompt.includes(`"subjectId":"${subjectId}"`)
+        || prompt.includes(`"subjectId": "${subjectId}"`)
+      ));
+      subjectIdsByRequest.push(subjectIds);
+      const subjectId = subjectIds[0];
+      const proof = subjectId === undefined ? undefined : proofBySubjectId.get(subjectId);
+      if (proof === undefined) {
+        throw new Error('Expected a proof-backed subject in the conflict adjudication request');
+      }
+      return {
+        persona: 'supervisor',
+        status: 'done' as const,
+        content: '{}',
+        structuredOutput: {
+          proposal: {
+            kind: 'terminate_subject' as const,
+            subjectId,
+            basis: 'finding_no_issue_after_verification' as const,
+            authorityRefIds: [proof.evidenceId],
+            rationale: 'The fixture proof supports termination.',
+          },
+        },
+        timestamp: new Date(),
+      };
+    });
+
+    const target = runner(undefined, ledgerStore);
+    await target.runner.run(target.step, state());
+
+    const adjudicationCalls = ledgerStore.loadLedger().findingManagerProviderCalls.filter((call) => (
+      call.purpose === 'conflict_adjudication'
+    ));
+    expect(adjudicationCalls).toHaveLength(1);
+    expect(adjudicationCalls[0]!.requestByteLength)
+      .toBeGreaterThan(MANAGER_INTERPRETATION_LIMITS.maxInputBytesPerCall);
+    expect(adjudicationCalls[0]!.requestByteLength)
+      .toBeLessThanOrEqual(CONFLICT_ADJUDICATION_INPUT_MAX_BYTES);
+    expect(subjectIdsByRequest).toEqual([expectedSubjectIds]);
   });
 
   it('re-adjudicates once with digest-bound target windows and applies a verified result', async () => {

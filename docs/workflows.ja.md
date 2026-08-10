@@ -928,6 +928,7 @@ promotion は並列サブ step ではサポートされません。
 | `knowledge` | - | knowledge キーまたはキー配列（section map、または bare 名で project → user → builtin の順に解決） |
 | `instruction` | - | instruction キー（section map、または bare 名で project → user → builtin の順に解決） |
 | `edit` | - | step がプロジェクトファイルを編集できるか (`true` / `false`) |
+| `companion` | - | 通常の agent step と並行して隔離された read-only reviewer を実行（[Companion レビュアー](#companion-レビュアー)参照） |
 | `pass_previous_response` | `true` | 前の step の出力を `{previous_response}` に渡す |
 | `provider_options.claude.allowed_tools` | - | step または workflow に対する Claude ツール許可リスト |
 | `provider_options.claude.base_url` | - | `claude` / `claude-sdk` 用の Anthropic 互換 base URL（[configuration ガイド](./configuration.ja.md#provider-base-url-base_url) 参照） |
@@ -1351,6 +1352,28 @@ steps:
       次の解析結果に基づいて実装してください:
       {previous_response}
 ```
+
+## Companion レビュアー
+
+通常の agent step に `companion` を指定すると、実装エージェントの編集と並行して、ステートレスかつ read-only のレビュアーが動きます。名前配列は固定レビュアーの短縮形です。object 形式では固定レビュアー、step 開始時に1回だけ選抜する pool、任意の moderator を組み合わせられます。同時実行は最大3名です。
+
+```yaml
+- name: implement
+  persona: coder
+  companion:
+    fixed: [security-reviewer]
+    pool: [design-reviewer, frontend-reviewer]
+    moderator: adjudicator
+  rules:
+    - condition: when(companion.escalated)
+      next: needs-fix
+    - condition: implementation complete
+      next: final-review
+```
+
+定義 YAML は `.takt/companions/`、`~/.takt/companions/`、`builtins/{language}/companions/` の順で解決されます。指定できるのは `name`、`description`、facet 参照（`persona`、`policy`、`knowledge`、`instruction`）、`interval_ms` だけで、provider やツール設定は指定できません。`interval_ms` は `2,147,483,647` 以下の正整数である必要があります。companion 付き step では `when(companion.escalated)` の rule を先頭に置く必要があります。
+
+TAKT は変更系 tool event を観測し、静穏時間または強制発火時間の経過後に累積差分をレビューします。実装エージェントの完了時には未レビュー変更を確認し、残っている場合だけレビューします。新しい完了レビューが不要でも、実行中・待機中のレビューを中断または待機してから完了します。指摘は `.takt/runs/{run}/companion/{step}/{companion}.jsonl` へ追記されます。各 companion の JSONL ファイルは実装エージェント向けの読取専用projectionであり、独立した transaction boundary です。そのファイルへの追記成功後にだけ cache、finding の採番、finding event が確定します。1ラウンドで複数 companion を更新する場合、後続 mailbox の失敗によって、すでに確定した先行 mailbox を rollbackせず、再試行では未完了の mailbox 更新だけを再開します。projection の外部変更は拒否され、engine が所有する finding 状態には反映されません。実装エージェントは Phase 2 より前に同じ session で open の `must_fix` を解消します。companion の障害は本体を失敗させませんが、workflow または step の中断時は companion も停止します。
 
 ## ベストプラクティス
 

@@ -46,4 +46,11 @@ export interface ScenarioEntry {
   delayMs?: number;
   /** Keep the response pending until the call's abort signal fires. */
   waitForAbort?: boolean;
+  streamEvents?: Array<{
+    type: 'tool_use';
+    tool: string;
+    id: string;
+    input: Record<string, unknown>;
+  }>;
+  fileWrites?: Array<{ path: string; content: string }>;
 }

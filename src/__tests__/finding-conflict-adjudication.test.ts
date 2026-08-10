@@ -229,6 +229,31 @@ describe('verified conflict adjudication', () => {
     );
   });
 
+  it('keeps emoji intact when compacting at surrogate boundaries', () => {
+    const rawFindingId = `${'a'.repeat(11)}😀${'b'.repeat(200)}😀${'c'.repeat(11)}`;
+    const current = snapshot([{
+      ...subject('F-0001', head('finding', 'F-0001', 1)),
+      sourceRawFindingIds: [rawFindingId],
+    }]);
+    const history = {
+      sourceRawFindingIds: new Map([[rawFindingId, OBSERVATION]]),
+      sourceRawPayloadDigests: new Map(),
+      evidenceBindingIds: new Map(),
+      rawClaimLandingIds: new Map(),
+      priorSettlementIds: new Map(),
+    };
+
+    const compact = buildConflictAdjudicationSnapshotReference(current, history)
+      .subjects[0]?.sourceRawFindingIds[0];
+
+    expect(compact).toMatch(
+      new RegExp(
+        `^raw-ref:${'a'.repeat(11)}😀…😀${'c'.repeat(11)}#sha256:[0-9a-f]{64}$`,
+        'u',
+      ),
+    );
+  });
+
   it('issues branded terminate authority only for an exactly bound engine proof', () => {
     const findingHead = head('finding', 'F-0001', 1);
     const conflictHead = head('conflict', 'C-0001', 1);

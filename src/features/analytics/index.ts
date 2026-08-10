@@ -8,6 +8,7 @@ export type {
   FixActionEvent,
   StepResultEvent,
   RoutingDecisionEvent,
+  CompanionAnalyticsEvent,
 } from './events.js';
 
 export {

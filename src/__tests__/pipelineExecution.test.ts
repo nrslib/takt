@@ -59,7 +59,14 @@ vi.mock('../infra/config/index.js', () => ({
 }));
 
 const mockExecFileSync = vi.fn();
+const mockExecFile = vi.fn((
+  _file: string,
+  _args: readonly string[],
+  _options: object,
+  callback: (error: Error | null, stdout: string, stderr: string) => void,
+) => callback(null, '', ''));
 vi.mock('node:child_process', () => ({
+  execFile: mockExecFile,
   execFileSync: mockExecFileSync,
 }));
 

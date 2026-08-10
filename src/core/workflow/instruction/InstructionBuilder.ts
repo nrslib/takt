@@ -23,6 +23,8 @@ import {
 } from 'faceted-prompting';
 import { renderFencedJsonBlock } from './fenced-block.js';
 import { renderPullRequestContext } from '../pr-context.js';
+import { isNormalAgentWorkflowStep } from '../../models/workflow-types.js';
+import { getCompanionInstructionCopy } from '../companion/evidence.js';
 
 const CONTEXT_MAX_CHARS = 2000;
 
@@ -138,14 +140,14 @@ export class InstructionBuilder {
       : '';
 
     // Instructions (step instruction with placeholder processing)
-    const instructions = this.appendFindingContractInstruction(replaceTemplatePlaceholders(
+    const instructions = this.appendCompanionInstruction(this.appendFindingContractInstruction(replaceTemplatePlaceholders(
       tmpl,
       this.step,
       {
         ...this.context,
         previousResponseText: previousResponsePrepared || undefined,
       },
-    ));
+    )));
 
     // Workflow name and description
     const workflowName = this.context.workflowName ?? '';
@@ -255,6 +257,32 @@ export class InstructionBuilder {
       renderFencedJsonBlock,
     });
 
+    return [instructions, '', section].join('\n');
+  }
+
+  private appendCompanionInstruction(instructions: string): string {
+    if (
+      !isNormalAgentWorkflowStep(this.step)
+      || this.step.companion === undefined
+      || this.context.companion === undefined
+    ) return instructions;
+    const language = this.context.language ?? 'en';
+    const companionCopy = getCompanionInstructionCopy(language);
+    const section = language === 'ja'
+      ? [
+          `## ${companionCopy.heading}`,
+          `${companionCopy.inboxLabel}: ${this.context.companion.mailboxDirectory}`,
+          '各ファイルの実装完了後、テスト実行前、作業完了宣言の直前に新規レコードを確認してください。',
+          companionCopy.evidenceGuard,
+          '`must_fix` は直ちに対応し、`should_fix` は作業の区切りで対応し、`nit` は無視して構いません。',
+        ].join('\n')
+      : [
+          `## ${companionCopy.heading}`,
+          `${companionCopy.inboxLabel}: ${this.context.companion.mailboxDirectory}`,
+          'Read new records after finishing each file, before running tests, and before declaring completion.',
+          companionCopy.evidenceGuard,
+          'Address must_fix immediately, handle should_fix at a work boundary, and nit findings may be ignored.',
+        ].join('\n');
     return [instructions, '', section].join('\n');
   }
 }

@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  executeNpmTestRuns,
   runNpmTest,
   selectNpmTestRuns,
 } from '../../scripts/run-npm-test.mjs';
@@ -80,24 +81,26 @@ describe('npm test execution', () => {
     const events: string[] = [];
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const run = vi.fn(async (npmArgs: string[]) => {
-      const script = npmArgs[1]!;
-      events.push(`start:${script}`);
+      const shard = npmArgs[3]!;
+      events.push(`start:${shard}`);
       await Promise.resolve();
-      events.push(`finish:${script}`);
+      events.push(`finish:${shard}`);
       return { code: 0, signal: null, output: '' };
     });
 
     const code = await runNpmTest([], run);
 
-    expect(events).toEqual([
-      'start:test:unit:parallel',
-      'start:test:unit:parallel',
-      'start:test:unit:parallel',
-      'start:test:unit:parallel',
-      'finish:test:unit:parallel',
-      'finish:test:unit:parallel',
-      'finish:test:unit:parallel',
-      'finish:test:unit:parallel',
+    expect(events.slice(0, 4)).toEqual([
+      'start:--shard=1/4',
+      'start:--shard=2/4',
+      'start:--shard=3/4',
+      'start:--shard=4/4',
+    ]);
+    expect(events.slice(4)).toEqual([
+      'finish:--shard=1/4',
+      'finish:--shard=2/4',
+      'finish:--shard=3/4',
+      'finish:--shard=4/4',
     ]);
     expect(run).toHaveBeenCalledTimes(4);
     expect(log).toHaveBeenCalledWith(
@@ -106,7 +109,35 @@ describe('npm test execution', () => {
     expect(code).toBe(0);
   });
 
-  it('should run targeted routed gates concurrently and return the first child failure code', async () => {
+  it('should continue all unit shards and return the first failure code', async () => {
+    const executedShards: string[] = [];
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const run = vi.fn(async (npmArgs: string[]) => {
+      const shard = npmArgs[3]!;
+      executedShards.push(shard);
+      const codeByShard = new Map([
+        ['--shard=1/4', 7],
+        ['--shard=3/4', 9],
+      ]);
+      return { code: codeByShard.get(shard) ?? 0, signal: null, output: '' };
+    });
+
+    const code = await runNpmTest([], run);
+
+    expect(executedShards).toEqual([
+      '--shard=1/4',
+      '--shard=2/4',
+      '--shard=3/4',
+      '--shard=4/4',
+    ]);
+    expect(error.mock.calls).toEqual([
+      ['[takt] npm run test:unit:parallel -- --shard=1/4 --maxWorkers=1 failed with exit=7'],
+      ['[takt] npm run test:unit:parallel -- --shard=3/4 --maxWorkers=1 failed with exit=9'],
+    ]);
+    expect(code).toBe(7);
+  });
+
+  it('should continue into serial runs after parallel failure and return the first failure code', async () => {
     const commands: string[][] = [];
     const events: string[] = [];
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -116,7 +147,10 @@ describe('npm test execution', () => {
       events.push(`start:${script}`);
       await Promise.resolve();
       events.push(`finish:${script}`);
-      return { code: script === 'test:unit:parallel' ? 7 : 0, signal: null, output: '' };
+      const code = script === 'test:unit:parallel'
+        ? 7
+        : script === 'test:it:heavy:serial:git' ? 9 : 0;
+      return { code, signal: null, output: '' };
     });
 
     const code = await runNpmTest([
@@ -124,6 +158,7 @@ describe('npm test execution', () => {
       'verbose',
       'src/__tests__/git-detect.test.ts',
       'src/__tests__/it-teed-command.test.ts',
+      'src/__tests__/companion-diff-runtime.integration.test.ts',
     ], run);
 
     expect(commands).toEqual([
@@ -143,17 +178,102 @@ describe('npm test execution', () => {
         'verbose',
         'src/__tests__/it-teed-command.test.ts',
       ],
+      [
+        'run',
+        'test:it:heavy:serial:git',
+        '--',
+        '--reporter',
+        'verbose',
+        'src/__tests__/companion-diff-runtime.integration.test.ts',
+      ],
     ]);
     expect(events).toEqual([
       'start:test:unit:parallel',
       'start:test:it:heavy:parallel',
       'finish:test:unit:parallel',
       'finish:test:it:heavy:parallel',
+      'start:test:it:heavy:serial:git',
+      'finish:test:it:heavy:serial:git',
     ]);
-    expect(error).toHaveBeenCalledWith(
-      '[takt] npm run test:unit:parallel -- --reporter verbose src/__tests__/git-detect.test.ts failed with exit=7',
-    );
+    expect(error.mock.calls).toEqual([
+      [
+        '[takt] npm run test:unit:parallel -- --reporter verbose src/__tests__/git-detect.test.ts failed with exit=7',
+      ],
+      [
+        '[takt] npm run test:it:heavy:serial:git -- --reporter verbose src/__tests__/companion-diff-runtime.integration.test.ts failed with exit=9',
+      ],
+    ]);
     expect(code).toBe(7);
+  });
+
+  it('should finish parallel runs before executing serial Git and workflow runs in order', async () => {
+    const scripts = [
+      'test:unit:parallel',
+      'test:it:light',
+      'test:it:heavy:parallel',
+      'test:it:heavy:serial:git',
+      'test:it:heavy:serial:workflow',
+    ];
+    const runs = scripts.map((script) => ({ npmArgs: ['run', script] }));
+    const releases = new Map<string, () => void>();
+    const events: string[] = [];
+    const run = vi.fn(async (npmArgs: string[]) => {
+      const script = npmArgs[1]!;
+      events.push(`start:${script}`);
+      await new Promise<void>((resolvePromise) => releases.set(script, resolvePromise));
+      events.push(`finish:${script}`);
+      return {
+        code: script === 'test:unit:parallel' ? 7 : script === 'test:it:heavy:serial:workflow' ? 9 : 0,
+        signal: null,
+        output: '',
+      };
+    });
+
+    const execution = executeNpmTestRuns(runs, run);
+    await vi.waitFor(() => expect(events).toHaveLength(3));
+    expect(events).toEqual([
+      'start:test:unit:parallel',
+      'start:test:it:light',
+      'start:test:it:heavy:parallel',
+    ]);
+    releases.get('test:unit:parallel')?.();
+    await vi.waitFor(() => expect(events).toContain('finish:test:unit:parallel'));
+    expect(events).not.toContain('start:test:it:heavy:serial:git');
+    releases.get('test:it:light')?.();
+    await vi.waitFor(() => expect(events).toContain('finish:test:it:light'));
+    expect(events).not.toContain('start:test:it:heavy:serial:git');
+    releases.get('test:it:heavy:parallel')?.();
+    await vi.waitFor(() => expect(events).toContain('start:test:it:heavy:serial:git'));
+    releases.get('test:it:heavy:serial:git')?.();
+    await vi.waitFor(() => expect(events).toContain('start:test:it:heavy:serial:workflow'));
+    releases.get('test:it:heavy:serial:workflow')?.();
+
+    const results = await execution;
+
+    expect(events).toEqual([
+      'start:test:unit:parallel',
+      'start:test:it:light',
+      'start:test:it:heavy:parallel',
+      'finish:test:unit:parallel',
+      'finish:test:it:light',
+      'finish:test:it:heavy:parallel',
+      'start:test:it:heavy:serial:git',
+      'finish:test:it:heavy:serial:git',
+      'start:test:it:heavy:serial:workflow',
+      'finish:test:it:heavy:serial:workflow',
+    ]);
+    expect(run).toHaveBeenCalledTimes(5);
+    expect(results.map(({ result }) => result.code)).toEqual([7, 0, 0, 0, 9]);
+  });
+
+  it('should reject an unknown runner classification before executing commands', async () => {
+    const run = vi.fn();
+
+    await expect(executeNpmTestRuns([
+      { npmArgs: ['run', 'test:unknown'] },
+    ], run)).rejects.toThrow('Unknown npm test runner classification: test:unknown');
+
+    expect(run).not.toHaveBeenCalled();
   });
 });
 
@@ -450,6 +570,41 @@ describe('npm test entrypoint routing', () => {
   });
 
   it('should let an explicit light classification override the it filename', () => {
+    const args = ['src/__tests__/it-acp-workflow-bridge.test.ts'];
+
+    expect(selectNpmTestRuns(args)).toEqual([
+      { npmArgs: ['run', 'test:it:light', '--', ...args] },
+    ]);
+  });
+
+  it.each([
+    'finding-review-integrity-gate.test.ts',
+    'workflow-step-fragment-builtin-runtime.test.ts',
+    'workflow-step-fragment-runtime.test.ts',
+  ])('should route serial workflow member %s to the workflow runner', (fileName) => {
+    for (const target of [fileName, `src/__tests__/${fileName}`]) {
+      expect(selectNpmTestRuns([target])).toEqual([
+        {
+          npmArgs: [
+            'run',
+            'test:it:heavy:serial:workflow',
+            '--',
+            `src/__tests__/${fileName}`,
+          ],
+        },
+      ]);
+    }
+  });
+
+  it('should route the team-leader operation journal test to the serial Git runner', () => {
+    const target = 'src/__tests__/it-team-leader-finding-contract-operation-journal.test.ts';
+
+    expect(selectNpmTestRuns([target])).toEqual([
+      { npmArgs: ['run', 'test:it:heavy:serial:git', '--', target] },
+    ]);
+  });
+
+  it('should route targeted integration tests to the IT runner', () => {
     const args = ['src/__tests__/it-acp-workflow-bridge.test.ts'];
 
     expect(selectNpmTestRuns(args)).toEqual([

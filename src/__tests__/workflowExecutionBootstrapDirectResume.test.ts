@@ -142,6 +142,8 @@ vi.mock('../core/runtime/runtime-environment.js', () => ({
 
 vi.mock('../infra/config/loaders/workflowResolver.js', () => ({
   validateWorkflowCallContracts: mockValidateWorkflowCallContracts,
+  isWorkflowPath: vi.fn(() => false),
+  loadWorkflowByIdentifierForWorkflowCall: vi.fn(() => null),
 }));
 
 import {

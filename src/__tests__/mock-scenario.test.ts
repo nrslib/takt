@@ -176,6 +176,18 @@ describe('loadScenarioFile', () => {
     expect(() => loadScenarioFile(filePath)).toThrow('must have a "content" string');
   });
 
+  it('should reject with entry and write indexes when file_writes path is empty', () => {
+    const filePath = join(tempDir, 'empty-write-path.json');
+    writeFileSync(filePath, JSON.stringify([{
+      content: 'response',
+      file_writes: [{ path: '', content: 'changed' }],
+    }]));
+
+    expect(() => loadScenarioFile(filePath)).toThrow(
+      'Scenario entry [0] file_writes[0] is invalid',
+    );
+  });
+
   it('should throw when delay_ms is a string instead of a number', () => {
     const filePath = join(tempDir, 'bad-delay-ms.json');
     writeFileSync(filePath, '[{"content": "test", "delay_ms": "30000"}]');

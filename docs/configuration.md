@@ -1197,3 +1197,36 @@ logging:
 ```
 
 This also enables the internal verbose console mode used by the CLI. `logging.level: debug` alone additionally enables the debug logger, so the `debug-{timestamp}.log` and `debug-{timestamp}-prompts.jsonl` artifacts above are produced without setting `logging.debug` separately. Any of `logging.debug: true`, `logging.trace: true`, or `logging.level: debug` enables them.
+
+## Companion provider targets
+
+Companions require an active `runtime.yaml` provider section. Assign each referenced companion through `provider.targets.companions`; an omitted name uses `provider.defaults`. Companion targets must name a fixed profile; pool and ladder assignments are rejected while parsing `runtime.yaml`. Legacy `config.yaml` provider settings are not a fallback and are rejected with migration guidance when a workflow uses `companion`.
+
+```yaml
+version: 1
+provider:
+  profiles:
+    review:
+      provider: codex
+      model: gpt-5
+  defaults:
+    profile: review
+  targets:
+    companions:
+      security-reviewer:
+        profile: review
+```
+
+| Provider | Strict isolated companion execution | Implementer tool events |
+|---|---:|---:|
+| `claude-sdk` | Yes | Live |
+| `codex` | Yes | Live |
+| `claude` (headless) | Yes | Live |
+| `claude-terminal` | Yes | Replayed after the turn |
+| `mock` | Yes | Scenario-dependent |
+| `opencode` | No | Live |
+| `cursor`, `copilot`, `kiro` | No | Unavailable |
+
+`No` means the workflow is rejected during loading; TAKT does not run a degraded, non-isolated companion.
+
+When live tool events are unavailable, completion review and the same-session fix loop still run.

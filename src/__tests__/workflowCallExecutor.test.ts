@@ -283,6 +283,18 @@ describe('WorkflowCallExecutor', () => {
     };
     listeners.get('findings:ledger')?.(ledger);
     expect(emit).toHaveBeenCalledWith('findings:ledger', ledger);
+    for (const eventName of [
+      'companion:start',
+      'companion:pool_selected',
+      'companion:finding',
+      'companion:fix_round',
+      'companion:complete',
+    ] as const) {
+      expect(childEngine.on).toHaveBeenCalledWith(eventName, expect.any(Function));
+      const payload = { step: 'review', marker: eventName };
+      listeners.get(eventName)?.(payload);
+      expect(emit).toHaveBeenCalledWith(eventName, payload);
+    }
     expect(state.iteration).toBe(4);
     expect(state.personaSessions.get('coder')).toBe('session-2');
     expect(setActiveResumePoint).toHaveBeenCalledWith(step, 4, 3, []);

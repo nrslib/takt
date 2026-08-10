@@ -10,12 +10,20 @@
  * while ignoring runtime directories (tasks, logs, runs, completed, .runtime).
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { stageAndCommit } from '../infra/task/git.js';
+import { buildSafeGitEnvironment } from '../infra/task/git-environment.js';
 import { getProjectWorkflowsDir, getProjectFacetDir } from '../infra/config/paths.js';
 import { VALID_FACET_TYPES, parseFacetType } from '../features/config/facetTypes.js';
 import { ensureWorktreeTaktRuntimeProtection } from '../infra/task/projectLocalTaktSync.js';
@@ -39,13 +47,14 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   if (existsSync(testDir)) {
     rmSync(testDir, { recursive: true, force: true });
   }
 });
 
 describe('stageAndCommit', () => {
-  it('should not commit gitignored .takt/runs/ files', () => {
+  it('should not commit gitignored .takt/runs/ files', async () => {
     // Setup: .takt/ is gitignored
     writeFileSync(join(testDir, '.gitignore'), '.takt/\n');
     execFileSync('git', ['add', '.gitignore'], { cwd: testDir });
@@ -58,7 +67,7 @@ describe('stageAndCommit', () => {
     // Also create a tracked file change to ensure commit happens
     writeFileSync(join(testDir, 'src.ts'), 'export const x = 1;');
 
-    const hash = stageAndCommit(testDir, 'test commit');
+    const hash = await stageAndCommit(testDir, 'test commit');
     expect(hash).toBeDefined();
 
     // Verify .takt/runs/ is NOT in the commit
@@ -72,10 +81,10 @@ describe('stageAndCommit', () => {
     expect(committedFiles).not.toContain('.takt/runs/');
   });
 
-  it('should commit normally when no gitignored files exist', () => {
+  it('should commit normally when no gitignored files exist', async () => {
     writeFileSync(join(testDir, 'app.ts'), 'console.log("hello");');
 
-    const hash = stageAndCommit(testDir, 'add app');
+    const hash = await stageAndCommit(testDir, 'add app');
     expect(hash).toBeDefined();
 
     const committedFiles = execFileSync('git', ['diff-tree', '--no-commit-id', '-r', '--name-only', 'HEAD'], {
@@ -87,7 +96,98 @@ describe('stageAndCommit', () => {
     expect(committedFiles).toBe('app.ts');
   });
 
-  it('should commit .takt/.gitignore while leaving runtime artifacts uncommitted', () => {
+  it('should use the cwd repository when inherited Git repository variables point to a decoy', async () => {
+    const decoyDir = mkdtempSync(join(tmpdir(), 'takt-stage-commit-decoy-'));
+    try {
+      execFileSync('git', ['init'], { cwd: decoyDir });
+      execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: decoyDir });
+      execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: decoyDir });
+      writeFileSync(join(decoyDir, 'README.md'), '# Decoy');
+      execFileSync('git', ['add', '.'], { cwd: decoyDir });
+      execFileSync('git', ['commit', '-m', 'Decoy baseline'], { cwd: decoyDir });
+      const decoyHead = execFileSync('git', ['rev-parse', 'HEAD'], {
+        cwd: decoyDir,
+        encoding: 'utf-8',
+      }).trim();
+
+      execFileSync('git', ['config', '--local', 'filter.observer.clean', 'false'], { cwd: testDir });
+      execFileSync('git', ['config', '--local', 'filter.observer.required', 'true'], { cwd: testDir });
+      writeFileSync(join(testDir, '.gitattributes'), 'app.ts filter=observer\n');
+      writeFileSync(join(testDir, 'app.ts'), 'export const target = true;');
+
+      const decoyGitDir = join(decoyDir, '.git');
+      vi.stubEnv('GIT_DIR', decoyGitDir);
+      vi.stubEnv('GIT_WORK_TREE', decoyDir);
+      vi.stubEnv('GIT_COMMON_DIR', decoyGitDir);
+      vi.stubEnv('GIT_INDEX_FILE', join(decoyGitDir, 'index'));
+
+      let hash: string | undefined;
+      try {
+        hash = await stageAndCommit(testDir, 'commit target repository');
+      } finally {
+        vi.unstubAllEnvs();
+      }
+
+      expect(hash).toBeDefined();
+      expect(execFileSync('git', ['show', '--format=', '--name-only', 'HEAD'], {
+        cwd: testDir,
+        encoding: 'utf-8',
+      })).toContain('app.ts');
+      expect(execFileSync('git', ['rev-parse', 'HEAD'], {
+        cwd: decoyDir,
+        encoding: 'utf-8',
+      }).trim()).toBe(decoyHead);
+    } finally {
+      rmSync(decoyDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should commit successfully when inherited indexed Git config is incomplete', async () => {
+    writeFileSync(join(testDir, 'app.ts'), 'export const complete = true;');
+    vi.stubEnv('GIT_CONFIG_COUNT', '3');
+    vi.stubEnv('GIT_CONFIG_KEY_2', undefined);
+    vi.stubEnv('GIT_CONFIG_VALUE_2', undefined);
+
+    const hash = await stageAndCommit(testDir, 'ignore incomplete inherited config');
+
+    expect(hash).toBeDefined();
+  });
+
+  it('should return only generated command config pairs when inherited keys use mixed case', async () => {
+    const globalConfig = join(testDir, 'global-git-config');
+    const systemConfig = join(testDir, 'system-git-config');
+    writeFileSync(globalConfig, '');
+    writeFileSync(systemConfig, '');
+    vi.stubEnv('GIT_CONFIG_GLOBAL', globalConfig);
+    vi.stubEnv('GIT_CONFIG_SYSTEM', systemConfig);
+    vi.stubEnv('GIT_CONFIG_NOSYSTEM', '1');
+    vi.stubEnv('gIt_CoNfIg', join(testDir, 'stale-config'));
+    vi.stubEnv('gIt_CoNfIg_CoUnT', '43');
+    vi.stubEnv('gIt_CoNfIg_PaRaMeTeRs', "'unsafe.key=value'");
+    vi.stubEnv('gIt_CoNfIg_KeY_42', 'unsafe.key');
+    vi.stubEnv('gIt_CoNfIg_VaLuE_42', 'unsafe-value');
+
+    const environment = await buildSafeGitEnvironment(testDir, { allowGitFilters: true });
+    const commandConfigKeys = Object.keys(environment)
+      .filter((key) => /^GIT_CONFIG(?:$|_COUNT$|_PARAMETERS$|_(?:KEY|VALUE)_)/iu.test(key))
+      .sort();
+
+    expect(commandConfigKeys).toEqual([
+      'GIT_CONFIG_COUNT',
+      'GIT_CONFIG_KEY_0',
+      'GIT_CONFIG_VALUE_0',
+    ]);
+    expect(environment).toMatchObject({
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'core.hooksPath',
+      GIT_CONFIG_GLOBAL: globalConfig,
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_CONFIG_SYSTEM: systemConfig,
+    });
+    expect(environment.GIT_CONFIG_VALUE_0).toBeDefined();
+  });
+
+  it('should commit .takt/.gitignore while leaving runtime artifacts uncommitted', async () => {
     const dotgitignore = readFileSync(dotgitignorePath, 'utf-8');
     mkdirSync(join(testDir, '.takt', '.runtime', 'tmp'), { recursive: true });
     mkdirSync(join(testDir, '.takt', 'runs', 'test-run', 'reports'), { recursive: true });
@@ -96,7 +196,7 @@ describe('stageAndCommit', () => {
     writeFileSync(join(testDir, '.takt', 'runs', 'test-run', 'reports', 'test-report.md'), '# Report', 'utf-8');
     writeFileSync(join(testDir, 'src.ts'), 'export const x = 1;', 'utf-8');
 
-    const hash = stageAndCommit(testDir, 'add worktree gitignore');
+    const hash = await stageAndCommit(testDir, 'add worktree gitignore');
     expect(hash).toBeDefined();
 
     const committedFiles = execFileSync('git', ['diff-tree', '--no-commit-id', '-r', '--name-only', 'HEAD'], {
@@ -111,8 +211,8 @@ describe('stageAndCommit', () => {
     expect(committedFiles).not.toContain('.takt/runs/test-run/reports/test-report.md');
   });
 
-  it('should return undefined when there are no changes', () => {
-    const hash = stageAndCommit(testDir, 'empty');
+  it('should return undefined when there are no changes', async () => {
+    const hash = await stageAndCommit(testDir, 'empty');
     expect(hash).toBeUndefined();
   });
 });

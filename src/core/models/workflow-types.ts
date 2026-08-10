@@ -24,6 +24,11 @@ import type {
   FindingsRuleContext,
 } from './finding-types.js';
 import type { WorkflowRuleCondition } from './workflow-rule-condition.js';
+import type {
+  CompanionSelection,
+  CompanionWorkflowState,
+  ResolvedCompanionDefinition,
+} from './companion-types.js';
 
 export const WORKFLOW_SESSION_MODES = ['continue', 'refresh', 'compact'] as const;
 export type WorkflowSessionMode = typeof WORKFLOW_SESSION_MODES[number];
@@ -317,6 +322,7 @@ export interface NormalAgentWorkflowStep extends AgentWorkflowStepBase {
   arpeggio?: never;
   teamLeader?: never;
   dynamicFacets?: DynamicFacetsConfig;
+  companion?: CompanionSelection;
 }
 
 export interface ParallelWorkflowStep extends AgentWorkflowStepBase {
@@ -533,6 +539,7 @@ export interface WorkflowConfig {
   loopMonitors?: LoopMonitorConfig[];
   interactiveMode?: InteractiveMode;
   facetPools?: Record<string, ResolvedFacetPool>;
+  companions?: Record<string, ResolvedCompanionDefinition>;
 }
 
 export interface RateLimitFallbackProvider {
@@ -584,6 +591,7 @@ export interface WorkflowState {
   previousStep?: string;
   iteration: number;
   findings?: FindingsRuleContext;
+  companion?: CompanionWorkflowState;
   stepOutputs: Map<string, AgentResponse>;
   structuredOutputs: Map<string, Record<string, unknown>>;
   systemContexts: Map<string, Record<string, unknown>>;

@@ -12,13 +12,13 @@ import type {
 } from '../core/models/types.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import { DynamicFacetSelectionStore } from '../core/workflow/dynamic-facets/dynamicFacetSelectionStore.js';
+import { assertStrictStructuredOutputSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeIsolatedStructuredInternalAgent: vi.fn(),
 }));
 
 import { executeIsolatedStructuredInternalAgent } from '../agents/agent-usecases.js';
-import * as selectorContract from '../core/workflow/dynamic-parallel/selector-contract.js';
 import * as contextBuilder from '../core/workflow/dynamic-facets/dynamicFacetContextBuilder.js';
 
 const mockedExecuteAgent = vi.mocked(executeIsolatedStructuredInternalAgent);
@@ -167,6 +167,30 @@ describe('DynamicFacetSelectorCoordinator', () => {
     expect(executeOptions.properties?.selected_ids?.maxItems).toBeUndefined();
   });
 
+  it('sends a provider-compatible schema to the isolated selector', async () => {
+    const pool = makePool([
+      { id: 'a', description: 'A' },
+      { id: 'b', description: 'B' },
+    ]);
+    const response: AgentResponse = {
+      persona: 'selector',
+      status: 'done',
+      content: '',
+      timestamp: new Date(),
+      structuredOutput: { selected_ids: ['a'], rationale: 'a is relevant' },
+    };
+    mockedExecuteAgent.mockResolvedValueOnce(response);
+
+    const coordinator = new DynamicFacetSelectorCoordinator(buildDeps());
+    await coordinator.resolveDynamicFacets(makeStep(1), makeState(), 'task', pool);
+
+    const outputSchema = mockedExecuteAgent.mock.calls[0]?.[2];
+    if (outputSchema === undefined) throw new Error('Selector output schema was not sent');
+    expect(() => assertStrictStructuredOutputSchema(outputSchema)).not.toThrow();
+    expect(outputSchema).not.toHaveProperty('properties.selected_ids.uniqueItems');
+    expect(outputSchema).toHaveProperty('properties.selected_ids.maxItems', 1);
+  });
+
   it('restores from snapshot without invoking selector when identity is in resumedDynamicFacetSteps', async () => {
     const pool = makePool([{ id: 'backend', description: 'backend' }]);
     const step = makeStep();
@@ -253,8 +277,7 @@ describe('DynamicFacetSelectorCoordinator', () => {
     instructionSpy.mockRestore();
   });
 
-  // L3: coordinator-level secondary unknownId rejection.
-  it('throws when selector returns an unknown candidate id (coordinator secondary check, L3)', async () => {
+  it('throws when selector returns an unknown candidate id through the shared contract', async () => {
     const pool = makePool([{ id: 'a', description: 'A' }]);
     const step = makeStep();
     const response: AgentResponse = {
@@ -265,19 +288,10 @@ describe('DynamicFacetSelectorCoordinator', () => {
       structuredOutput: { selected_ids: ['unknown-id'], rationale: 'x' },
     };
     mockedExecuteAgent.mockResolvedValueOnce(response);
-    // The schema enum check rejects unknown ids inside validateSelectorResponse. To exercise the
-    // coordinator's defensive secondary check (dynamicFacetSelectorCoordinator.ts:165-171), bypass
-    // the validator and inject an unknown id directly.
-    const spy = vi.spyOn(selectorContract, 'validateSelectorResponse').mockReturnValueOnce({
-      selectedIds: ['unknown-id'],
-      rationale: 'x',
-    });
-
     const coordinator = new DynamicFacetSelectorCoordinator(buildDeps());
     await expect(
       coordinator.resolveDynamicFacets(step, makeState(), 'task', pool),
-    ).rejects.toThrow(/unknown candidate id/);
-    spy.mockRestore();
+    ).rejects.toThrow(/invalid structured output/);
   });
 
   it('propagates commitSelection failure and leaves activeDynamicFacetSelectionIdentity unset (C-STATE-RUNTIME: persistence failure)', async () => {

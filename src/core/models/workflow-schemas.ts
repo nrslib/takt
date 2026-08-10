@@ -459,6 +459,7 @@ const AgentParallelSubStepRawObjectSchema = z.object({
   provider: ProviderReferenceSchema.optional(),
   model: z.string().nullable().optional(),
   promotion: z.never().optional(),
+  companion: z.never().optional(),
   permission_mode: z.never().optional(),
   required_permission_mode: PermissionModeSchema.optional(),
   provider_options: WorkflowStepProviderOptionsSchema,
@@ -524,6 +525,7 @@ const WorkflowCallParallelSubStepRawSchema = z.object({
   provider: z.never().optional(),
   model: z.never().optional(),
   promotion: z.never().optional(),
+  companion: z.never().optional(),
   permission_mode: z.never().optional(),
   required_permission_mode: z.never().optional(),
   provider_options: z.never().optional(),
@@ -565,6 +567,32 @@ const DynamicParallelRawSchema = z.object({
     mode: z.enum(['replace', 'cumulative']).optional().default('replace'),
   }).strict().optional().default({ mode: 'replace' }),
 }).strict();
+
+const CompanionSelectionRawSchema = z.union([
+  z.array(z.string().trim().min(1)).min(1),
+  z.object({
+    fixed: z.array(z.string().trim().min(1)).optional().default([]),
+    pool: z.array(z.string().trim().min(1)).optional().default([]),
+    moderator: z.string().trim().min(1).optional(),
+  }).strict().superRefine((selection, ctx) => {
+    if (selection.fixed.length === 0 && selection.pool.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'companion requires at least one fixed or pool reference',
+      });
+    }
+    if (
+      selection.moderator !== undefined
+      && (selection.fixed.includes(selection.moderator) || selection.pool.includes(selection.moderator))
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['moderator'],
+        message: 'companion moderator cannot also be a fixed or pool reviewer',
+      });
+    }
+  }),
+]);
 
 const WorkflowSubworkflowRawSchema = z.object({
   callable: z.boolean().optional(),
@@ -631,6 +659,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     provider: ProviderReferenceSchema.optional(),
     model: z.string().nullable().optional(),
     promotion: z.array(WorkflowPromotionRawSchema).optional(),
+    companion: CompanionSelectionRawSchema.optional(),
     permission_mode: z.never().optional(),
     required_permission_mode: PermissionModeSchema.optional(),
     provider_options: WorkflowStepProviderOptionsSchema,
@@ -783,6 +812,25 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
       });
     }
 
+    if (data.companion !== undefined && stepKind !== 'agent') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['companion'],
+        message: 'companion is only allowed on normal agent steps',
+      });
+    }
+
+    if (
+      data.companion !== undefined
+      && (data.parallel !== undefined || data.arpeggio !== undefined || data.team_leader !== undefined)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['companion'],
+        message: 'companion is only allowed on normal agent steps',
+      });
+    }
+
     if (data.dynamic_facets !== undefined && stepKind !== 'agent') {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -822,6 +870,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
         'provider',
         'model',
         'promotion',
+        'companion',
         'provider_options',
         'required_permission_mode',
         'edit',
@@ -863,6 +912,13 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     return {
       ...data,
       allow_git_commit: data.allow_git_commit ?? false,
+      ...(data.companion === undefined
+        ? {}
+        : {
+            companion: Array.isArray(data.companion)
+              ? { fixed: data.companion, pool: [] }
+              : data.companion,
+          }),
     };
   });
 }

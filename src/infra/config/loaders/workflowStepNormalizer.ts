@@ -17,6 +17,7 @@ import type {
   WorkflowStepKind,
   DynamicFacetsConfig,
 } from '../../../core/models/workflow-types.js';
+import type { CompanionSelection } from '../../../core/models/companion-types.js';
 import { applyQualityGateOverrides } from './qualityGateOverrides.js';
 import {
   type FacetResolutionContext,
@@ -463,6 +464,7 @@ export function normalizeStepFromRaw(
     passPreviousResponse: step.pass_previous_response ?? true,
     policyContents,
     knowledgeContents,
+    companion: step.companion as CompanionSelection | undefined,
   };
 
   // parallel 親の capabilities は sub-step の既定になる（sub-step 自身の宣言が置換する）。

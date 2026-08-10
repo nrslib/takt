@@ -12,7 +12,7 @@ import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { recordAgentUsageEvent } from '../engine/agent-usage-event.js';
 import { buildDynamicParallelSelectionIdentityFromPath } from './identity.js';
 import { createDynamicParallelSelectionSnapshot, resolveDynamicParallelSelection } from './snapshot.js';
-import { createSelectorOutputSchema, validateSelectorResponse } from './selector-contract.js';
+import { createSelectorContract, validateSelectorResponse } from '../selector-contract.js';
 import { buildDynamicSelectorInstruction } from './selector-input.js';
 import { SelectorInputReader } from './selector-input-reader.js';
 import type { DynamicParallelSelectionStore } from './selection-store.js';
@@ -73,8 +73,10 @@ export class DynamicParallelSelectorCoordinator {
     if (selectorProvider?.provider === undefined) {
       throw new Error(`Dynamic parallel selector for "${step.name}" has no resolved provider`);
     }
-    const poolIds = step.parallel.pool.map((subStep) => subStep.name);
-    const outputSchema = createSelectorOutputSchema(poolIds);
+    const selectorContract = createSelectorContract(step.parallel.pool.map(({ name, description }) => ({
+      name,
+      description,
+    })));
     const previous = selections.get(identity);
     if (this.inputReader === undefined) {
       throw new Error('Dynamic parallel selector requires an input reader');
@@ -112,7 +114,7 @@ export class DynamicParallelSelectorCoordinator {
       response = await executeIsolatedStructuredInternalAgent(
         'You are TAKT\'s internal dynamic parallel selector. Select only candidate IDs from the provided pool.',
         instruction,
-        outputSchema,
+        selectorContract.providerSchema,
         {
           cwd: this.deps.getCwd(),
           projectCwd: this.deps.engineOptions.projectCwd,
@@ -126,7 +128,13 @@ export class DynamicParallelSelectorCoordinator {
         },
       );
       signal?.throwIfAborted();
-      selectorResult = validateSelectorResponse(response, outputSchema, step.name, redact, { label: 'Dynamic parallel' });
+      selectorResult = validateSelectorResponse(
+        response,
+        selectorContract.validationSchema,
+        step.name,
+        redact,
+        { label: 'Dynamic parallel' },
+      );
       signal?.throwIfAborted();
       const selectedIds = selectorResult.selectedIds;
       selected = new Set(step.parallel.selection.mode === 'cumulative'

@@ -53,7 +53,13 @@ export interface WhenConditionExpression {
 }
 
 const COMPARISON_OPERATORS = ['>=', '<=', '!=', '==', '>', '<'] as const;
-const STATE_REFERENCE_PREFIXES = ['context.', 'structured.', 'effect.', 'findings.'] as const;
+const STATE_REFERENCE_PREFIXES = [
+  'context.',
+  'structured.',
+  'effect.',
+  'findings.',
+  'companion.',
+] as const;
 
 function isOrderingOperator(operator: WhenComparisonOperator): boolean {
   return operator === '>' || operator === '<' || operator === '>=' || operator === '<=';

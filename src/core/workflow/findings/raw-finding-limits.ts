@@ -49,6 +49,14 @@ export const MANAGER_INTERPRETATION_LIMITS = {
   maxInterpretationEpochsPerLineage: 2,
 } as const;
 
+/**
+ * conflict adjudication は想定する 10 subjects と長大な ID 集合を 1 呼び出しで
+ * 扱うため、実測した 27,279 bytes のリクエストにプロンプト差分の余裕を加えた
+ * 96 KiB を上限とする。128K コンテキスト級モデルに合わせた値だが、これは暴走を
+ * 防止する guard であり、入力が無制限になるわけではないため有界性は維持する。
+ */
+export const CONFLICT_ADJUDICATION_INPUT_MAX_BYTES = 98_304;
+
 export const MANAGER_ACTION_RECOVERY_LIMITS = {
   maxAttempts: 2,
 } as const;

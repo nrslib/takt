@@ -3,7 +3,7 @@
  *
  * Shapes are the literal ones from order.md:41-103 / 206-217 / 221-223. The schema is
  * intentionally strict: it rejects any indirection key (e.g. `runtime_file`) and any
- * `provider.targets` map other than the four documented ones. Cross-reference checks
+ * `provider.targets` map other than the documented ones. Cross-reference checks
  * (extends chains, profile/pool references) are enforced later at compile time by
  * `validateRuntimeProviderSection`, not here.
  */
@@ -55,6 +55,12 @@ const AssignmentSchema = z
     }
   });
 
+const CompanionAssignmentSchema = z
+  .object({
+    profile: z.string().min(1),
+  })
+  .strict();
+
 /** An auto-routing pool candidate references a profile; it must not inline provider/model. */
 const CandidateSchema = z
   .object({
@@ -78,13 +84,14 @@ const AutoRoutingSchema = z
   })
   .strict();
 
-/** Only the four documented target maps are allowed. */
+/** Only the documented target maps are allowed. */
 const TargetsSchema = z
   .object({
     personas: z.record(z.string(), AssignmentSchema).optional(),
     tags: z.record(z.string(), AssignmentSchema).optional(),
     steps: z.record(z.string(), AssignmentSchema).optional(),
     internal_agents: z.record(z.string(), AssignmentSchema).optional(),
+    companions: z.record(z.string(), CompanionAssignmentSchema).optional(),
   })
   .strict();
 
@@ -108,4 +115,5 @@ export type RuntimeProviderFile = z.infer<typeof RuntimeProviderFileSchema>;
 export type RuntimeProviderSection = z.infer<typeof ProviderSectionSchema>;
 export type RuntimeProviderProfile = z.infer<typeof ProfileSchema>;
 export type RuntimeProviderAssignment = z.infer<typeof AssignmentSchema>;
+export type RuntimeCompanionProviderAssignment = z.infer<typeof CompanionAssignmentSchema>;
 export type RuntimeProviderAutoRouting = z.infer<typeof AutoRoutingSchema>;

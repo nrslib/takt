@@ -161,16 +161,21 @@ export class SelectorInputReader {
     signal?.throwIfAborted();
     const absolutePath = join(cwd, path);
     const stat = lstatSync(absolutePath);
-    const header = `diff --git a/${path} b/${path}\nnew file mode 100644\n--- /dev/null\n+++ b/${path}\n`;
+    let mode: '100644' | '100755' | '120000';
     if (stat.isSymbolicLink()) {
+      mode = '120000';
+    } else if (stat.isFile()) {
+      mode = (stat.mode & 0o100) === 0 ? '100644' : '100755';
+    } else {
+      throw new Error(`Selector input is not a regular file: ${path}`);
+    }
+    const header = `diff --git a/${path} b/${path}\nnew file mode ${mode}\n--- /dev/null\n+++ b/${path}\n`;
+    if (mode === '120000') {
       const content = `${header}Symbolic link target: ${readlinkSync(absolutePath)}`;
       if (Buffer.byteLength(content, 'utf-8') > MAX_SELECTOR_ENTRY_BYTES) {
         throw new Error(`Dynamic selector path payload "${path}" exceeds ${MAX_SELECTOR_ENTRY_BYTES} bytes`);
       }
       return this.renderEntry(path, Buffer.byteLength(content), content);
-    }
-    if (!stat.isFile()) {
-      throw new Error(`Selector input is not a regular file: ${path}`);
     }
     const available = Math.max(0, MAX_SELECTOR_ENTRY_BYTES - Buffer.byteLength(header));
     const content = this.readTextFileWithinLimit(

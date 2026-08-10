@@ -31,6 +31,7 @@ export async function executeAgent(
 }
 
 export interface ResolvedInternalAgentOptions {
+  readonly agentName?: string;
   readonly cwd: string;
   readonly projectCwd?: string;
   readonly abortSignal?: AbortSignal;
@@ -53,10 +54,12 @@ export async function executeIsolatedStructuredInternalAgent(
   assertProviderSupportsSelectorExecution(options.resolution.provider);
   const {
     resolution,
+    agentName,
     ...executionOptions
   } = options;
   return runAgent(undefined, instruction, {
     ...executionOptions,
+    ...(agentName === undefined ? {} : { internalAgentName: agentName }),
     sessionId: undefined,
     internalSystemPrompt: systemPrompt,
     internalAgentIsolation: 'strict-readonly',

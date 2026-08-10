@@ -40,12 +40,17 @@ export class AutoCommitter {
    * 3. If changes exist, create a commit with "takt: {taskName}"
    * 4. Push to the main project directory
    */
-  commitAndPush(cloneCwd: string, taskName: string, projectDir: string, branch?: string): AutoCommitResult {
+  async commitAndPush(
+    cloneCwd: string,
+    taskName: string,
+    projectDir: string,
+    branch?: string,
+  ): Promise<AutoCommitResult> {
     log.info('Auto-commit starting', { cwd: cloneCwd, taskName });
 
     try {
       const commitMessage = `takt: ${taskName}`;
-      const commitHash = stageAndCommit(cloneCwd, commitMessage, {
+      const commitHash = await stageAndCommit(cloneCwd, commitMessage, {
         allowGitHooks: resolveConfigValue(projectDir, 'allowGitHooks') ?? false,
         allowGitFilters: resolveConfigValue(projectDir, 'allowGitFilters') ?? false,
       });
@@ -104,6 +109,11 @@ export class AutoCommitter {
 
 const defaultCommitter = new AutoCommitter();
 
-export function autoCommitAndPush(cloneCwd: string, taskName: string, projectDir: string, branch?: string): AutoCommitResult {
+export function autoCommitAndPush(
+  cloneCwd: string,
+  taskName: string,
+  projectDir: string,
+  branch?: string,
+): Promise<AutoCommitResult> {
   return defaultCommitter.commitAndPush(cloneCwd, taskName, projectDir, branch);
 }

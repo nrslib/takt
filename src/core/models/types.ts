@@ -118,6 +118,17 @@ export type {
   DynamicFacetSelectionSnapshot,
 } from './workflow-types.js';
 
+export type {
+  CompanionSelection,
+  ResolvedCompanionDefinition,
+  CompanionFindingSeverity,
+  CompanionFindingStatus,
+  CompanionFindingUpdateStatus,
+  CompanionFinding,
+  CompanionFindingEvidence,
+  CompanionWorkflowState,
+} from './companion-types.js';
+
 export {
   WORKFLOW_SESSION_MODES,
   OPENCODE_GUARD_PROFILES,

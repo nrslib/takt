@@ -68,6 +68,7 @@ import {
 } from './workflowExecutionReporting.js';
 import { stageTaskSpecForExecution } from './taskSpecContext.js';
 import { GitSelectorCommandRunner } from '../../../infra/task/selector-git-command-runner.js';
+import { GitCompanionDiffReader } from '../../../infra/task/companion-git-diff-reader.js';
 import {
   loadWorkflowExecutionBundle,
   prepareWorkflowExecutionBundle,
@@ -404,6 +405,7 @@ async function executeWorkflowInternal(
         providerOptions: bootstrap.providerOptions,
         selectorProvider: options.selectorProvider,
         selectorGitCommandRunner: new GitSelectorCommandRunner(),
+        companionDiffReader: new GitCompanionDiffReader(),
         autoRouting: bootstrap.effectiveWorkflowConfig.autoRouting,
         autoStrategyOverride: bootstrap.autoStrategyOverride,
         onEffectiveAutoRoutingReached: bootstrap.onEffectiveAutoRoutingReached,
@@ -414,6 +416,7 @@ async function executeWorkflowInternal(
         providerLadders: bootstrap.providerLadders,
         providerEscalation: bootstrap.providerEscalation,
         internalAgentSeats: bootstrap.internalAgentSeats,
+        companionProviders: bootstrap.companionProviders,
         providerRoutingTagConflictPolicy: bootstrap.providerRoutingTagConflictPolicy,
         providerProfiles: options.providerProfiles,
         mcpServers: options.mcpServers,
