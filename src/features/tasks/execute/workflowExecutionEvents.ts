@@ -836,6 +836,26 @@ export function bindWorkflowExecutionEvents(
       eventSinkDispatchState,
     );
   });
+  deps.engine.on('companion:review_round', (payload) => {
+    deps.analyticsEmitter.onCompanionEvent('companion:review_round', payload);
+    deps.sessionLogger.onCompanionReviewRound(payload);
+    emitWorkflowExecutionEvent(
+      deps.eventSink,
+      { type: 'companion', action: 'review_round', ...payload },
+      onEventSinkFailure,
+      eventSinkDispatchState,
+    );
+  });
+  deps.engine.on('companion:queue_coalesced', (payload) => {
+    deps.analyticsEmitter.onCompanionEvent('companion:queue_coalesced', payload);
+    deps.sessionLogger.onCompanionQueueCoalesced(payload);
+    emitWorkflowExecutionEvent(
+      deps.eventSink,
+      { type: 'companion', action: 'queue_coalesced', ...payload },
+      onEventSinkFailure,
+      eventSinkDispatchState,
+    );
+  });
 
   deps.engine.on('workflow:complete', (workflowState) => {
     if (terminalIntent === undefined) {

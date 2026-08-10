@@ -35,7 +35,13 @@ import {
   buildWorkflowCallCompleteRecord,
   buildWorkflowCallStartRecord,
   buildWorkflowCompleteRecord,
+  buildCompanionReviewRoundRecord,
+  buildCompanionQueueCoalescedRecord,
 } from './sessionLoggerRecordFactory.js';
+import type {
+  NdjsonCompanionQueueCoalesced,
+  NdjsonCompanionReviewRound,
+} from '../../../shared/utils/types.js';
 import {
   PrivateArtifactPublicationConflictError,
   readPrivateFileState,
@@ -373,6 +379,18 @@ export class SessionLogger {
     }
     this.appendRecord(buildWorkflowAbortRecord(state, reason, this.sanitizeText.bind(this)));
     this.workflowTerminalLogged = true;
+  }
+
+  onCompanionReviewRound(
+    input: Omit<NdjsonCompanionReviewRound, 'type' | 'timestamp'>,
+  ): void {
+    this.appendRecord(buildCompanionReviewRoundRecord(input));
+  }
+
+  onCompanionQueueCoalesced(
+    input: Omit<NdjsonCompanionQueueCoalesced, 'type' | 'timestamp'>,
+  ): void {
+    this.appendRecord(buildCompanionQueueCoalescedRecord(input));
   }
 
   getNdjsonRecords(): NdjsonRecord[] {

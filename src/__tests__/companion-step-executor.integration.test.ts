@@ -77,13 +77,34 @@ function createCompanionDiffReader(): CompanionDiffReader {
 function createFailingCompletionDiffReader(): CompanionDiffReader {
   return {
     readBaselineSha: vi.fn().mockResolvedValue('baseline-sha'),
-    readDiff: vi.fn().mockResolvedValue({
-      status: 'error',
-      failure: {
-        code: 'git_failure',
-        message: 'safe injected completion failure',
-      },
-    }),
+    readDiff: vi.fn()
+      .mockResolvedValueOnce({
+        status: 'ok',
+        snapshot: {
+          digest: 'empty-diff',
+          changedLines: 0,
+          content: '',
+          changedFiles: [],
+          fileFingerprints: {},
+          hunkFingerprints: {},
+          omittedBytes: 0,
+          truncated: false,
+        },
+      })
+      .mockResolvedValue({
+        status: 'error',
+        failure: {
+          code: 'git_failure',
+          message: 'safe injected completion failure',
+        },
+      }),
+  };
+}
+
+function createFailingStartupDiffReader(): CompanionDiffReader {
+  return {
+    readBaselineSha: vi.fn().mockRejectedValue(new Error('baseline failed')),
+    readDiff: vi.fn(),
   };
 }
 
@@ -219,6 +240,30 @@ describe('companion StepExecutor lifecycle', () => {
     );
 
     expect(getEventListeners(abortController.signal, 'abort')).toHaveLength(0);
+  });
+
+  it('should block condition evaluation when companion startup fails', async () => {
+    const abortController = new AbortController();
+    mockSuccessfulImplementer();
+    const state = makeState();
+
+    const result = await new StepExecutor(createDeps({
+      cwd,
+      runPaths,
+      companionDiffReader: createFailingStartupDiffReader(),
+      abortSignal: abortController.signal,
+      emitEvent: vi.fn(),
+    })).runNormalStep(
+      createCompanionStep(),
+      state,
+      'task',
+      5,
+      vi.fn(),
+      'Implement.',
+    );
+
+    expect(result.response.status).toBe('blocked');
+    expect(state.companion).toBeUndefined();
   });
 
   it('should deliver escalation reason and five-field findings as untrusted evidence', async () => {

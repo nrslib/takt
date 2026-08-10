@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -8,7 +8,10 @@ import { initAnalyticsWriter } from '../features/analytics/index.js';
 import { resetAnalyticsWriter } from '../features/analytics/writer.js';
 import { AnalyticsEmitter } from '../features/tasks/execute/analyticsEmitter.js';
 import { bindWorkflowExecutionEvents } from '../features/tasks/execute/workflowExecutionEvents.js';
+import { SessionLogger } from '../features/tasks/execute/sessionLogger.js';
 import { createWorkflowTerminalPayloadFactory } from '../features/tasks/execute/workflowTerminalPayload.js';
+import { initNdjsonLog, parseNdjsonRecord } from '../infra/fs/session.js';
+import { WorkflowCallExecutor } from '../core/workflow/engine/WorkflowCallExecutor.js';
 import { resetDebugLogger, setVerboseConsole } from '../shared/utils/debug.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import type { ProviderType } from '../shared/types/provider.js';
@@ -47,6 +50,8 @@ function createBridgeHarness(options?: {
   eventSink?: ReturnType<typeof vi.fn>;
   shouldNotifyRateLimit?: boolean;
   display?: { flush: ReturnType<typeof vi.fn> };
+  engine?: TestEngine;
+  sessionLogger?: SessionLogger;
 }) {
   const resumePoint = options?.resumePoint ?? {
     version: 2,
@@ -62,7 +67,7 @@ function createBridgeHarness(options?: {
     workflow_call_invocations: {},
     workflow_step_participations: {},
   } satisfies WorkflowResumePoint;
-  const engine = new TestEngine(resumePoint, options?.findingIds);
+  const engine = options?.engine ?? new TestEngine(resumePoint, options?.findingIds);
   const out = {
     info: vi.fn(),
     blankLine: vi.fn(),
@@ -96,7 +101,7 @@ function createBridgeHarness(options?: {
   const usageEventLogger = {
     logUsageFor: vi.fn(),
   };
-  const sessionLogger = {
+  const sessionLogger = options?.sessionLogger ?? {
     onPhaseStart: vi.fn(),
     onPhaseComplete: vi.fn(),
     onJudgeStage: vi.fn(),
@@ -106,6 +111,8 @@ function createBridgeHarness(options?: {
     onStepComplete: vi.fn(),
     onWorkflowComplete: vi.fn(),
     onWorkflowAbort: vi.fn(),
+    onCompanionReviewRound: vi.fn(),
+    onCompanionQueueCoalesced: vi.fn(),
   };
   const sessionLog = {
     task: 'task',
@@ -201,6 +208,144 @@ describe('bindWorkflowExecutionEvents', () => {
 
     expect(sessionLogger.onWorkflowCallStart).toHaveBeenCalledWith(lifecycle);
     expect(sessionLogger.onWorkflowCallComplete).toHaveBeenCalledWith(complete);
+  });
+
+  it('child workflow の companion review event を relay と親 bridge 経由で run NDJSON に記録する', async () => {
+    const logsDir = mkdtempSync(join(tmpdir(), 'takt-companion-relay-'));
+    try {
+      const ndjsonPath = initNdjsonLog('session-relay', 'task', 'parent', { logsDir });
+      const sessionLogger = new SessionLogger(ndjsonPath, false);
+      const bridgeHarness = createBridgeHarness({ sessionLogger });
+      const parentConfig = {
+        name: 'parent',
+        initialStep: 'delegate',
+        maxSteps: 10,
+        steps: [],
+      };
+      const childConfig = {
+        name: 'child',
+        initialStep: 'review',
+        maxSteps: 10,
+        steps: [{ name: 'review' }],
+      };
+      const step = {
+        name: 'delegate',
+        call: 'child',
+        personaDisplayName: 'delegate',
+        instruction: '',
+      };
+      const state = {
+        workflowName: 'parent',
+        currentStep: 'delegate',
+        iteration: 1,
+        stepOutputs: new Map(),
+        structuredOutputs: new Map(),
+        systemContexts: new Map(),
+        effectResults: new Map(),
+        userInputs: [],
+        personaSessions: new Map(),
+        stepIterations: new Map([['delegate', 1]]),
+        dynamicParallelSelections: new Map(),
+        resumedDynamicParallelSteps: new Set(),
+        status: 'running',
+      };
+      const childState = {
+        ...state,
+        workflowName: 'child',
+        currentStep: 'review',
+        status: 'completed',
+      };
+      const listeners = new Map<string, (...args: unknown[]) => void>();
+      const reviewRoundPayload = {
+        step: 'review',
+        companion: 'security-reviewer',
+        trigger: 'quiet',
+        digest: 'child-digest',
+        changedLines: 12,
+        findingCount: 2,
+      };
+      const queueCoalescedPayload = {
+        step: 'review',
+        companion: 'security-reviewer',
+        replaced: {
+          trigger: 'quiet',
+          digest: 'child-digest',
+          changedLines: 12,
+          observedGeneration: 1,
+        },
+        replacement: {
+          trigger: 'forced',
+          digest: 'child-digest-2',
+          changedLines: 18,
+          observedGeneration: 2,
+        },
+      };
+      const childEngine = {
+        on: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
+          listeners.set(event, listener);
+        }),
+        runWithResult: vi.fn().mockImplementation(async () => {
+          listeners.get('companion:review_round')?.(reviewRoundPayload);
+          listeners.get('companion:queue_coalesced')?.(queueCoalescedPayload);
+          return { state: childState };
+        }),
+      };
+      const sharedRuntime = { startedAtMs: Date.now(), maxSteps: 10 };
+      const executor = new WorkflowCallExecutor({
+        getConfig: () => parentConfig as never,
+        getOptions: () => ({ projectCwd: '/tmp/project', reportDirName: 'run' }),
+        getMaxSteps: () => 10,
+        updateMaxSteps: vi.fn(),
+        getCwd: () => '/tmp/project',
+        projectCwd: '/tmp/project',
+        task: 'task',
+        sharedRuntime: sharedRuntime as never,
+        resumeStackPrefix: [],
+        consumeWorkflowCallContinuation: vi.fn(),
+        runPaths: { slug: 'run' } as never,
+        resolveWorkflowCall: vi.fn(),
+        createEngine: vi.fn().mockReturnValue(childEngine),
+        emit: (event: string, ...args: unknown[]) => bridgeHarness.engine.emit(event, ...args),
+        state: state as never,
+        setActiveResumePoint: vi.fn(),
+        refreshFindingsState: vi.fn(),
+      });
+
+      const prepared = executor.prepare(step as never, childConfig as never, 1, []);
+      await executor.execute({
+        step: step as never,
+        preparedExecution: prepared,
+        childProviderInfo: { provider: 'mock', model: 'test-model' },
+        parentProviderOptions: undefined,
+        personaProviders: undefined,
+        providerRouting: undefined,
+        providerLadders: undefined,
+        providerEscalation: undefined,
+      } as never, { syncParentState: true });
+
+      const records = readFileSync(ndjsonPath, 'utf8')
+        .trim()
+        .split('\n')
+        .map(parseNdjsonRecord);
+      expect(records).toContainEqual(expect.objectContaining({
+        type: 'companion_review_round',
+        step: 'review',
+        companion: 'security-reviewer',
+        trigger: 'quiet',
+        digest: 'child-digest',
+        changedLines: 12,
+        findingCount: 2,
+      }));
+      expect(records).toContainEqual(expect.objectContaining({
+        type: 'companion_queue_coalesced',
+        step: 'review',
+        companion: 'security-reviewer',
+        replaced: expect.objectContaining({ digest: 'child-digest' }),
+        replacement: expect.objectContaining({ digest: 'child-digest-2' }),
+      }));
+    } finally {
+      rmSync(logsDir, { recursive: true, force: true });
+    }
   });
 
   it('event bridge が run meta と実行結果を同期する', () => {
@@ -1775,7 +1920,7 @@ describe('bindWorkflowExecutionEvents', () => {
 
   it('CT-COMP-11 should preserve all companion actions in event sink and analytics payloads', async () => {
     const eventSink = vi.fn().mockResolvedValue(undefined);
-    const { bridge, engine, analyticsEmitter, out } = createBridgeHarness({ eventSink });
+    const { bridge, engine, analyticsEmitter, out, sessionLogger } = createBridgeHarness({ eventSink });
     const events = [
       ['companion:start', { step: 'implement', companion: 'security-reviewer' }],
       ['companion:pool_selected', {
@@ -1791,6 +1936,30 @@ describe('bindWorkflowExecutionEvents', () => {
       }],
       ['companion:fix_round', { step: 'implement', sequence: 2, openMustFixCount: 1 }],
       ['companion:complete', { step: 'implement', openMustFixCount: 0, escalated: false }],
+      ['companion:review_round', {
+        step: 'implement',
+        companion: 'security-reviewer',
+        trigger: 'quiet',
+        digest: 'digest-2',
+        changedLines: 12,
+        findingCount: 2,
+      }],
+      ['companion:queue_coalesced', {
+        step: 'implement',
+        companion: 'security-reviewer',
+        replaced: {
+          trigger: 'quiet',
+          digest: 'digest-1',
+          changedLines: 10,
+          observedGeneration: 1,
+        },
+        replacement: {
+          trigger: 'quiet',
+          digest: 'digest-2',
+          changedLines: 12,
+          observedGeneration: 2,
+        },
+      }],
     ] as const;
 
     for (const [name, payload] of events) {
@@ -1829,7 +1998,37 @@ describe('bindWorkflowExecutionEvents', () => {
         openMustFixCount: 0,
         escalated: false,
       },
+      {
+        type: 'companion',
+        action: 'review_round',
+        step: 'implement',
+        companion: 'security-reviewer',
+        trigger: 'quiet',
+        digest: 'digest-2',
+        changedLines: 12,
+        findingCount: 2,
+      },
+      {
+        type: 'companion',
+        action: 'queue_coalesced',
+        step: 'implement',
+        companion: 'security-reviewer',
+        replaced: {
+          trigger: 'quiet',
+          digest: 'digest-1',
+          changedLines: 10,
+          observedGeneration: 1,
+        },
+        replacement: {
+          trigger: 'quiet',
+          digest: 'digest-2',
+          changedLines: 12,
+          observedGeneration: 2,
+        },
+      },
     ]);
+    expect(sessionLogger.onCompanionReviewRound).toHaveBeenCalledWith(events[5][1]);
+    expect(sessionLogger.onCompanionQueueCoalesced).toHaveBeenCalledWith(events[6][1]);
     expect(analyticsEmitter.onCompanionEvent.mock.calls.map(([name, payload]) => [name, payload]))
       .toEqual(events);
     expect(out.info.mock.calls.map(([message]) => message)).toEqual([

@@ -22,6 +22,7 @@ interface ManagerCommitReportInput {
   managerOutput: FindingManagerOutput;
   invalidAttempts: FindingManagerValidationAttemptReport[];
   staleRejections: string[];
+  deferredResolutionRejections: string[];
   admissionRejections: RawAdmissionRejectionReport[];
   unsupportedRawFindingReports: UnsupportedRawFindingReport[];
   overflowReports: ReviewerOutputOverflowReport[];
@@ -37,7 +38,24 @@ interface ManagerCommitReportInput {
 
 export function buildManagerCommitReport(
   input: ManagerCommitReportInput,
-): FindingManagerValidationReport {
+): FindingManagerValidationReport | undefined {
+  const reportNeeded = input.invalidAttempts.length > 0
+    || input.staleRejections.length > 0
+    || input.deferredResolutionRejections.length > 0
+    || input.admissionRejections.length > 0
+    || input.unsupportedRawFindingReports.length > 0
+    || input.overflowReports.length > 0
+    || input.provisionalLandings.length > 0
+    || input.reviewerAnomalyLandings.length > 0
+    || input.clarifications.length > 0
+    || input.rawNormalizations.length > 0
+    || input.interpretationRecoverySettlements.length > 0
+    || input.managerTaskAudits.length > 0
+    || input.settlement !== undefined;
+  if (!reportNeeded) {
+    return undefined;
+  }
+
   return {
     version: 1,
     runId: input.runId,
@@ -63,6 +81,9 @@ export function buildManagerCommitReport(
       ? { managerTaskAudits: input.managerTaskAudits }
       : {}),
     settlement: input.settlement,
+    ...(input.deferredResolutionRejections.length > 0
+      ? { deferredResolutionRejections: input.deferredResolutionRejections }
+      : {}),
     interpretationStats: input.interpretationStats,
     attempts: input.staleRejections.length > 0
       ? [

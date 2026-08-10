@@ -1017,6 +1017,157 @@ describe('validateWorkflowConfig', () => {
       .toThrow('Finding Contract reviewer "plan" requires exactly one Finding Contract report');
   });
 
+  it('rejects a Finding Contract reviewer that declares a companion', () => {
+    const workflow = createWorkflow({
+      findingContract: {
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+      steps: [createPlanAgent({
+        companion: { fixed: ['ai-antipattern-review-companion'], pool: [] },
+        outputContracts: [{
+          name: 'review.md',
+          format: 'review',
+          formatRef: 'review-finding-contract',
+        }],
+      })],
+    });
+
+    let failure: unknown;
+    try {
+      validateWorkflowConfig(workflow, { projectCwd: process.cwd() });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeDefined();
+    expect(failure).toMatchObject({
+      message: expect.stringContaining(
+        'Finding Contract reviewer "plan" cannot declare companion',
+      ),
+    });
+    expect(getWorkflowConfigErrorPath(failure)).toEqual(['steps', 0, 'companion']);
+  });
+
+  it.each([
+    {
+      name: 'regular parallel reviewer',
+      parallel: (reviewer: NormalAgentWorkflowStep) => [reviewer],
+      path: ['steps', 0, 'parallel', 0, 'companion'],
+    },
+    {
+      name: 'dynamic fixed reviewer',
+      parallel: (reviewer: NormalAgentWorkflowStep) => ({
+        kind: 'dynamic' as const,
+        fixed: [reviewer],
+        pool: [createPlanAgent({
+          name: 'candidate-review',
+          persona: 'candidate-reviewer',
+          personaDisplayName: 'candidate-reviewer',
+          description: 'Optional candidate reviewer',
+          outputContracts: [{
+            name: 'candidate-review.md',
+            format: 'review',
+            formatRef: 'review-finding-contract',
+          }],
+        })],
+        selection: { mode: 'replace' as const },
+      }),
+      path: ['steps', 0, 'parallel', 'fixed', 0, 'companion'],
+    },
+    {
+      name: 'dynamic pool reviewer',
+      parallel: (reviewer: NormalAgentWorkflowStep) => ({
+        kind: 'dynamic' as const,
+        fixed: [],
+        pool: [reviewer],
+        selection: { mode: 'replace' as const },
+      }),
+      path: ['steps', 0, 'parallel', 'pool', 0, 'companion'],
+    },
+  ])('rejects a companion on a $name', ({ parallel, path }) => {
+    const reviewer = createPlanAgent({
+      name: 'review',
+      persona: 'reviewer',
+      personaDisplayName: 'reviewer',
+      description: 'Review implementation',
+      companion: { fixed: ['ai-antipattern-review-companion'], pool: [] },
+      outputContracts: [{
+        name: 'review.md',
+        format: 'review',
+        formatRef: 'review-finding-contract',
+      }],
+    });
+    const workflow = createWorkflow({
+      findingContract: {
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+      steps: [createPlanAgent({ parallel: parallel(reviewer) })],
+    });
+
+    let failure: unknown;
+    try {
+      validateWorkflowConfig(workflow, { projectCwd: process.cwd() });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toMatchObject({
+      message: expect.stringContaining(
+        'Finding Contract reviewer "review" cannot declare companion',
+      ),
+    });
+    expect(getWorkflowConfigErrorPath(failure)).toEqual(path);
+  });
+
+  it('rejects a companion when Finding Contract is inherited', () => {
+    const workflow = createWorkflow({
+      steps: [createPlanAgent({
+        companion: { fixed: ['ai-antipattern-review-companion'], pool: [] },
+        outputContracts: [{
+          name: 'review.md',
+          format: 'review',
+          formatRef: 'review-finding-contract',
+        }],
+      })],
+    });
+
+    let failure: unknown;
+    try {
+      validateWorkflowConfig(workflow, {
+        projectCwd: process.cwd(),
+        inheritedFindingContract: {
+          contract: {
+            manager: {
+              persona: 'findings-manager',
+              instruction: 'findings-manager',
+              outputContract: 'findings-manager',
+            },
+            adjudicator: { persona: 'supervisor' },
+          },
+          ledgerStore: createFakeLedgerStore(),
+          managerAuthority: 'standard',
+        },
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toMatchObject({
+      message: expect.stringContaining(
+        'Finding Contract reviewer "plan" cannot declare companion',
+      ),
+    });
+    expect(getWorkflowConfigErrorPath(failure)).toEqual(['steps', 0, 'companion']);
+  });
+
   it('rejects duplicate Finding Contract report names under the same parallel parent', () => {
     const reviewer = (name: string) => createPlanAgent({
       name,

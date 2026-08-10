@@ -64,13 +64,19 @@ describe('companion completion coordinator', () => {
     const runningRejection = expect(running).rejects.toMatchObject({ name: 'AbortError' });
     await Promise.resolve();
     const emit = vi.fn();
-    const coordinator = createCoordinator({ current, queue, emit });
+    const synchronizeSnapshot = vi.fn();
+    const coordinator = createCoordinator({ current, queue, emit, synchronizeSnapshot });
 
-    await coordinator.complete(state());
+    const workflowState = state();
+    const result = await coordinator.complete(workflowState);
     await runningRejection;
 
+    expect(result.completionVerified).toBe(true);
+    expect(workflowState.companion?.completionVerified).toBe(true);
     expect(order).toEqual(['started', 'aborted']);
     expect(emit).toHaveBeenCalledOnce();
+    expect(synchronizeSnapshot).toHaveBeenCalledOnce();
+    expect(synchronizeSnapshot).toHaveBeenCalledWith(snapshot);
   });
 
   it('should retain open must_fix and escalate when loop adjudication fails', async () => {
@@ -89,9 +95,14 @@ describe('companion completion coordinator', () => {
 
     expect(result).toMatchObject({
       escalated: true,
+      completionVerified: false,
       openMustFix: [openFinding],
     });
-    expect(workflowState.companion).toMatchObject({ escalated: true, openMustFixCount: 1 });
+    expect(workflowState.companion).toMatchObject({
+      escalated: true,
+      completionVerified: false,
+      openMustFixCount: 1,
+    });
     expect(emit).toHaveBeenCalledWith('companion:complete', {
       step: 'implement',
       openMustFixCount: 1,
@@ -113,8 +124,12 @@ describe('companion completion coordinator', () => {
 
     const result = await coordinator.complete(workflowState);
 
-    expect(result).toMatchObject({ escalated: true, openMustFix: [] });
-    expect(workflowState.companion).toMatchObject({ escalated: true, openMustFixCount: 0 });
+    expect(result).toMatchObject({ escalated: true, completionVerified: false, openMustFix: [] });
+    expect(workflowState.companion).toMatchObject({
+      escalated: true,
+      completionVerified: false,
+      openMustFixCount: 0,
+    });
     expect(emit).toHaveBeenCalledWith('companion:complete', {
       step: 'implement',
       openMustFixCount: 0,
@@ -140,8 +155,12 @@ describe('companion completion coordinator', () => {
     const result = await coordinator.complete(workflowState);
 
     expect(current.isDirty()).toBe(true);
-    expect(result).toMatchObject({ escalated: true, openMustFix: [] });
-    expect(workflowState.companion).toMatchObject({ escalated: true, openMustFixCount: 0 });
+    expect(result).toMatchObject({ escalated: true, completionVerified: false, openMustFix: [] });
+    expect(workflowState.companion).toMatchObject({
+      escalated: true,
+      completionVerified: false,
+      openMustFixCount: 0,
+    });
     expect(emit).toHaveBeenCalledWith('companion:complete', {
       step: 'implement',
       openMustFixCount: 0,
@@ -159,12 +178,14 @@ describe('companion completion coordinator', () => {
     const queue = new CompanionReviewQueue({
       runReview: vi.fn().mockRejectedValue(new Error('review failed')),
     });
-    const coordinator = createCoordinator({ current, queue });
+    const synchronizeSnapshot = vi.fn();
+    const coordinator = createCoordinator({ current, queue, synchronizeSnapshot });
 
     const result = await coordinator.complete(state());
 
     expect(current.isDirty()).toBe(true);
-    expect(result).toMatchObject({ escalated: true, openMustFix: [] });
+    expect(result).toMatchObject({ escalated: true, completionVerified: false, openMustFix: [] });
+    expect(synchronizeSnapshot).not.toHaveBeenCalled();
   });
 
   it('should rethrow an abort without publishing completion', async () => {
@@ -181,6 +202,32 @@ describe('companion completion coordinator', () => {
     await expect(coordinator.complete(state())).rejects.toBe(abort);
 
     expect(emit).not.toHaveBeenCalled();
+  });
+
+  it('should mark a loop-judge escalation as verified after a successful completion round', async () => {
+    const current = detector();
+    current.markReviewed(snapshot, 0);
+    const decision = new CompanionTerminalDecisionTracker();
+    decision.update({ decision: 'escalate', reason: 'the finding cannot be resolved by more fixes' });
+    const workflowState = state();
+    const coordinator = createCoordinator({
+      current,
+      decision,
+      openMustFix: [openFinding],
+    });
+
+    const result = await coordinator.complete(workflowState);
+
+    expect(result).toMatchObject({
+      escalated: true,
+      completionVerified: true,
+      openMustFix: [openFinding],
+    });
+    expect(workflowState.companion).toMatchObject({
+      escalated: true,
+      completionVerified: true,
+      openMustFixCount: 1,
+    });
   });
 
   it('should never downgrade a confirmed escalation to continue', () => {
@@ -219,6 +266,8 @@ function createCoordinator(input: {
   openMustFix?: CompanionFindingEvidence[];
   readSnapshot?: ReturnType<typeof vi.fn>;
   recordCompletionRound?: ReturnType<typeof vi.fn>;
+  synchronizeSnapshot?: ReturnType<typeof vi.fn>;
+  decision?: CompanionTerminalDecisionTracker;
 }): CompanionCompletionCoordinator {
   const queue = input.queue ?? new CompanionReviewQueue({ runReview: vi.fn() });
   return new CompanionCompletionCoordinator({
@@ -226,9 +275,10 @@ function createCoordinator(input: {
     detectors: new Map([['security-reviewer', input.current]]),
     queue,
     readSnapshot: input.readSnapshot ?? vi.fn().mockResolvedValue(snapshot),
+    synchronizeSnapshot: input.synchronizeSnapshot ?? vi.fn(),
     openMustFix: () => input.openMustFix ?? [],
     recordCompletionRound: input.recordCompletionRound ?? vi.fn(),
-    decision: new CompanionTerminalDecisionTracker(),
+    decision: input.decision ?? new CompanionTerminalDecisionTracker(),
     events: new CompanionEventPublisher('implement', input.emit ?? vi.fn()),
     onError: vi.fn(),
   });

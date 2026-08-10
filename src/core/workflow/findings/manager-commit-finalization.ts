@@ -312,6 +312,7 @@ export function reconcileCommitPlan(input: {
   landedSpecs: ProvisionalFindingSpec[];
   entityMutationResults: PreAdmissionEntityMutationResult[];
   normalizationRejections: string[];
+  deferredResolutionRejections: string[];
   rejectedObservationAttachments: RejectedObservationAttachment[];
   settlementCommands: FindingLifecycleCommand[];
 } {
@@ -426,6 +427,7 @@ export function reconcileCommitPlan(input: {
     settlement,
   });
   const rejectedObservationAttachments = [
+    ...reconciledPlan.rejectedObservationAttachments,
     ...settlement.rejectedObservationAttachments,
     ...terminalEntityResults.flatMap((result) => (
       result.sourceRawFindingIds.map((rawFindingId) => ({
@@ -444,6 +446,7 @@ export function reconcileCommitPlan(input: {
     landedSpecs,
     entityMutationResults,
     normalizationRejections,
+    deferredResolutionRejections: reconciledPlan.deferredResolutionRejections,
     rejectedObservationAttachments,
     settlementCommands,
   };

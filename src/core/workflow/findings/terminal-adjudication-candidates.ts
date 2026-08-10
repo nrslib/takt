@@ -14,7 +14,7 @@ import type {
   FindingProvisionalKind,
 } from './types.js';
 import { captureFindingLifecycleHead } from './lifecycle-mutation.js';
-import { hasUnsettledActiveConflictOwnership } from './conflict-ownership.js';
+import { collectUnsettledActiveConflictHoldingFindingIds } from './conflict-ownership.js';
 
 const ENTITY_ADJUDICATION_PROVISIONAL_KINDS = new Set<FindingProvisionalKind>([
   'raw-meaning-ambiguous',
@@ -124,11 +124,12 @@ function targetCandidates(
   }).sort((left, right) => compareBinaryStrings(left.targetRefId, right.targetRefId));
 }
 
-export function buildTerminalAdjudicationCandidateSnapshot(input: {
+function buildTerminalAdjudicationCandidateSnapshotWithOwnership(input: {
   ledger: FindingLedger;
   finding: FindingLedgerEntry;
   currentRound: number;
   allowExistingEpisode?: boolean;
+  unsettledConflictHoldingFindingIds: ReadonlySet<string>;
 }): TerminalAdjudicationCandidateSnapshot | undefined {
   const finding = input.finding;
   if (
@@ -136,7 +137,7 @@ export function buildTerminalAdjudicationCandidateSnapshot(input: {
     || !ENTITY_ADJUDICATION_PROVISIONAL_KINDS.has(finding.provisional.kind)
     || finding.provisional.firstObservedRound >= input.currentRound
     || finding.provisional.sourceRawFindingIds.length === 0
-    || hasUnsettledActiveConflictOwnership(input.ledger, finding.id)
+    || input.unsettledConflictHoldingFindingIds.has(finding.id)
   ) {
     return undefined;
   }
@@ -178,12 +179,29 @@ export function buildTerminalAdjudicationCandidateSnapshot(input: {
   return { candidateSnapshotDigest, ...withoutDigest };
 }
 
+export function buildTerminalAdjudicationCandidateSnapshot(input: {
+  ledger: FindingLedger;
+  finding: FindingLedgerEntry;
+  currentRound: number;
+  allowExistingEpisode?: boolean;
+}): TerminalAdjudicationCandidateSnapshot | undefined {
+  return buildTerminalAdjudicationCandidateSnapshotWithOwnership({
+    ...input,
+    unsettledConflictHoldingFindingIds: collectUnsettledActiveConflictHoldingFindingIds(input.ledger),
+  });
+}
+
 export function selectTerminalAdjudicationCandidates(input: {
   ledger: FindingLedger;
   currentRound: number;
 }): TerminalAdjudicationCandidateSnapshot[] {
+  const unsettledConflictHoldingFindingIds = collectUnsettledActiveConflictHoldingFindingIds(input.ledger);
   return input.ledger.findings.flatMap((finding) => {
-    const candidate = buildTerminalAdjudicationCandidateSnapshot({ ...input, finding });
+    const candidate = buildTerminalAdjudicationCandidateSnapshotWithOwnership({
+      ...input,
+      finding,
+      unsettledConflictHoldingFindingIds,
+    });
     return candidate === undefined ? [] : [candidate];
   }).sort((left, right) => compareBinaryStrings(left.findingId, right.findingId));
 }

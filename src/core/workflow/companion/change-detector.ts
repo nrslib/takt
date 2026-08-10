@@ -4,6 +4,8 @@ import type { CompanionDiff } from './diff-reader.js';
 const FORCE_INTERVAL_MULTIPLIER = 4;
 const MUTATING_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'apply_patch', 'write', 'edit']);
 
+export const COMPANION_CHANGE_DEBOUNCE_MS = 250;
+
 export interface CompanionChangeCandidate {
   readonly reason: 'quiet' | 'forced' | 'completion' | 'commit';
   readonly observedGeneration: number;
@@ -38,12 +40,13 @@ export class CompanionChangeDetector {
     this.readDiff = input.readDiff;
   }
 
-  observe(event: StreamEvent): void {
-    if (event.type !== 'tool_use' || !this.isMutatingTool(event.data.tool, event.data.input)) return;
+  observe(event: StreamEvent): boolean {
+    if (event.type !== 'tool_use' || !this.isMutatingTool(event.data.tool)) return false;
     const timestamp = this.now();
     this.generation += 1;
     this.dirtySince ??= timestamp;
     this.lastChangeAt = timestamp;
+    return true;
   }
 
   observeCommit(): void {
@@ -54,8 +57,21 @@ export class CompanionChangeDetector {
     this.immediateGeneration = this.generation;
   }
 
+  observeSnapshotChange(before: CompanionDiff, after: CompanionDiff): boolean {
+    if (before.digest === after.digest) return false;
+    const timestamp = this.now();
+    this.generation += 1;
+    this.dirtySince ??= timestamp;
+    this.lastChangeAt = timestamp;
+    return true;
+  }
+
   isDirty(): boolean {
     return this.dirtySince !== undefined;
+  }
+
+  getObservedGeneration(): number {
+    return this.generation;
   }
 
   markReviewed(snapshot: CompanionDiff, observedGeneration: number): void {
@@ -83,10 +99,10 @@ export class CompanionChangeDetector {
     return [...changedHunks, ...changedFilesWithoutHunks];
   }
 
-  getTriggerCandidate(): CompanionChangeCandidate | undefined {
+  getTriggerCandidate(quietIntervalMs: number): CompanionChangeCandidate | undefined {
     if (this.dirtySince === undefined || this.lastChangeAt === undefined) return undefined;
     const elapsed = this.now() - this.dirtySince;
-    const quiet = this.now() - this.lastChangeAt >= this.intervalMs;
+    const quiet = this.now() - this.lastChangeAt >= quietIntervalMs;
     const forced = elapsed >= this.intervalMs * FORCE_INTERVAL_MULTIPLIER;
     const immediate = this.immediateGeneration !== undefined;
     if (!quiet && !forced && !immediate) return undefined;
@@ -133,9 +149,8 @@ export class CompanionChangeDetector {
     }
   }
 
-  private isMutatingTool(tool: string, input: Record<string, unknown>): boolean {
-    if (MUTATING_TOOLS.has(tool)) return true;
-    return (tool === 'Bash' || tool === 'bash') && typeof input.command === 'string';
+  private isMutatingTool(tool: string): boolean {
+    return MUTATING_TOOLS.has(tool);
   }
 }
 

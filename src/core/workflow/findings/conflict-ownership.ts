@@ -48,27 +48,30 @@ export function validConflictLandingSettlements(
   ));
 }
 
-export function hasUnsettledActiveConflictOwnership(
+export function collectUnsettledActiveConflictHoldingFindingIds(
   ledger: FindingLedger,
-  findingId: string,
-): boolean {
-  const owners = new Set(ledger.conflictRawClaimLandings.flatMap((landing) => {
-    if (landing.holdingFindingId !== findingId) {
-      return [];
-    }
+): Set<string> {
+  const ownersByFindingId = new Map<string, Set<string>>();
+  for (const landing of ledger.conflictRawClaimLandings) {
     const conflict = ledger.conflicts.find((candidate) => candidate.id === landing.conflictId);
     if (
       conflict?.status !== 'active'
       || validConflictLandingSettlements(ledger, landing.rawClaimLandingId).length === 1
     ) {
-      return [];
+      continue;
     }
-    return [landing.conflictId];
-  }));
-  if (owners.size > 1) {
-    throw new Error(
-      `Conflict holding "${findingId}" has multiple unsettled active owners`,
-    );
+    const owners = ownersByFindingId.get(landing.holdingFindingId) ?? new Set<string>();
+    owners.add(landing.conflictId);
+    ownersByFindingId.set(landing.holdingFindingId, owners);
   }
-  return owners.size === 1;
+  const findingIds = new Set<string>();
+  for (const [findingId, owners] of ownersByFindingId) {
+    if (owners.size > 1) {
+      throw new Error(
+        `Conflict holding "${findingId}" has multiple unsettled active owners`,
+      );
+    }
+    findingIds.add(findingId);
+  }
+  return findingIds;
 }

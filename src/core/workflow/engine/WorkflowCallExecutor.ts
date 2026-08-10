@@ -488,6 +488,8 @@ export class WorkflowCallExecutor {
       'companion:finding',
       'companion:fix_round',
       'companion:complete',
+      'companion:review_round',
+      'companion:queue_coalesced',
       'step:blocked',
       'step:rate_limited',
       'step:user_input',

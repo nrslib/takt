@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createEmptyFindingContractRegistries } from '../core/models/finding-contract-seed.js';
 import { settleProvisionalsWithCleanEvidence } from '../core/workflow/findings/manager-provisional-settlement.js';
 import type {
   FindingLedger,
@@ -52,8 +53,10 @@ function ledger(findings: FindingLedgerEntry[], rawFindings: RawFinding[] = []):
     updatedAt: observation.timestamp,
     findings,
     evidenceRecords: [],
+    evidenceBindings: [],
     rawFindings,
     conflicts: [],
+    ...createEmptyFindingContractRegistries(),
   };
 }
 
@@ -128,5 +131,4 @@ describe('finding identity case sensitivity', () => {
 
     expect(result.resolvedByMapping.size).toBe(0);
   });
-
 });

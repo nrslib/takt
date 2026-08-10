@@ -63,6 +63,7 @@ import { applyFindingLifecycleCommands } from './lifecycle-transaction.js';
 import { landUnownedConflictRawClaims } from './conflict-claim-landing.js';
 import { computeConflictReactivationDigest } from '../../models/finding-contract-identity.js';
 import { collectRestatementRequestBindings } from './review-publication.js';
+import { collectUnsettledActiveConflictHoldingFindingIds } from './conflict-ownership.js';
 
 export function attachCapturedConflictHeads(input: {
   commands: readonly FindingLifecycleCommand[];
@@ -118,6 +119,7 @@ export interface CommitMutationResult {
   managerDecisionCommands: FindingLifecycleCommand[];
   lifecycleManagerOutput: FindingManagerOutput;
   staleRejections: string[];
+  deferredResolutionRejections: string[];
   unsupportedRawFindingReports: UnsupportedRawFindingReport[];
   admissionRejections: RawAdmissionEvaluation['admissionRejections'];
   provisionalLandings: ProvisionalLandingReport[];
@@ -242,6 +244,7 @@ function prepareProvisionalTargetLandings(input: {
   const itemsByRawFindingId = new Map(
     input.intake.items.map((item) => [item.wire.rawFindingId, item]),
   );
+  const unsettledConflictHoldingFindingIds = collectUnsettledActiveConflictHoldingFindingIds(input.ledger);
   return input.candidates.flatMap((candidate): PreparedProvisionalTargetLanding[] => {
     if (!input.retainedRawFindingIds.has(candidate.rawFindingId)) {
       return [];
@@ -290,6 +293,7 @@ function prepareProvisionalTargetLandings(input: {
     const existing = findIndependentProvisionalDestination({
       ledger: input.ledger,
       stableKey: identity.independentStableKey,
+      unsettledConflictHoldingFindingIds,
     });
     return [{
       candidate,
@@ -1076,6 +1080,7 @@ export function buildFindingManagerCommitMutation(
         managerDecisionCommands: [],
         lifecycleManagerOutput: params.managerDecision.managerOutput,
         staleRejections: [],
+        deferredResolutionRejections: [],
         unsupportedRawFindingReports: [],
         admissionRejections: [],
         provisionalLandings: [],
@@ -1228,6 +1233,9 @@ export function buildFindingManagerCommitMutation(
     healthyReviewerStableKeys: params.intake.healthyReviewerStableKeys,
     verifiedEvidenceRecordsByRawFindingId: admission.verifiedEvidenceRecordsByRawFindingId,
   };
+  const unsettledConflictHoldingFindingIds = collectUnsettledActiveConflictHoldingFindingIds(
+    recoveryLedger,
+  );
   const interpretationProvisionalTargetLandings = interpretationPrepared.cases.flatMap(
     (preparedCase): PreparedProvisionalTargetLanding[] => {
       if (preparedCase.action.kind !== 'land_provisional_target') {
@@ -1250,6 +1258,7 @@ export function buildFindingManagerCommitMutation(
           : findIndependentProvisionalDestination({
               ledger: recoveryLedger,
               stableKey: spec.stableKey,
+              unsettledConflictHoldingFindingIds,
             })?.finding.id ?? null;
         return {
           candidate: {
@@ -1417,6 +1426,7 @@ export function buildFindingManagerCommitMutation(
         ...reconcilePlan.normalizationRejections,
         ...finalized.adjudicationRejections,
       ],
+      deferredResolutionRejections: reconcilePlan.deferredResolutionRejections,
       unsupportedRawFindingReports: revalidated.unsupportedRawFindingReports,
       admissionRejections: admission.admissionRejections,
       provisionalLandings,

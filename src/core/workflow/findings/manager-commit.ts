@@ -232,6 +232,9 @@ export async function commitFindingManagerRound(params: {
         ),
       };
       const report = buildCommitReport(params, commitMutation.result, settlement);
+      if (report === undefined) {
+        return lifecycleMutation;
+      }
       return {
         ...lifecycleMutation,
         publication: {
@@ -279,6 +282,7 @@ function buildCommitReport(
       ...managerDecision.invalidAttempts,
     ],
     staleRejections: committed.staleRejections,
+    deferredResolutionRejections: committed.deferredResolutionRejections,
     admissionRejections: committed.admissionRejections,
     unsupportedRawFindingReports: [
       ...managerDecision.unsupportedRawFindingReports,

@@ -1,18 +1,23 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { executeAgent } from '../agents/agent-usecases.js';
+import { findingContentAddress } from '../core/models/finding-contract-identity.js';
 import {
   computeFileQuoteEvidenceRecordId,
   createEngineProofRecord,
 } from '../core/models/finding-evidence-record.js';
-import type { WorkflowState } from '../core/models/types.js';
+import type { AgentResponse, WorkflowState, WorkflowStep } from '../core/models/types.js';
 import {
   createFindingConflictAdjudicationRunner,
   serializeFindingConflictAdjudicationRequest,
 } from '../core/workflow/findings/adjudication-runner.js';
 import { buildFindingConflictAdjudicationStep } from '../core/workflow/findings/adjudication-step.js';
+import {
+  runFindingManagerForStep,
+  type FindingManagerSubStepResult,
+} from '../core/workflow/findings/manager-runner.js';
 import {
   buildConflictAdjudicationSnapshotReference,
   renderConflictAdjudicationInstruction,
@@ -38,9 +43,18 @@ import { initializeGitFixture } from './helpers/git-fixture.js';
 import {
   authorizeFindingLedgerFixture,
   canonicalRawFindingFixture,
+  reviewerRawExtractionFixture,
   rawCanonicalSnapshotFixture,
 } from './helpers/finding-lifecycle-fixture.js';
-import { verifiedFindingEvidenceFixture } from './helpers/finding-evidence.js';
+import {
+  findingManagerTaskManifest,
+  findingManagerTaskResponse,
+} from './helpers/finding-manager-task-response.js';
+import { findingReviewPublicationFixture } from './helpers/finding-review-publication.js';
+import {
+  verifiedFindingEvidenceFixture,
+  verifiedSourceQuoteFields,
+} from './helpers/finding-evidence.js';
 import {
   CONFLICT_ADJUDICATION_INPUT_MAX_BYTES,
   MANAGER_INTERPRETATION_LIMITS,
@@ -201,6 +215,92 @@ function seededLedger(
   });
 }
 
+function managerResolutionResponse(
+  instruction: string,
+  targetFindingId: string,
+): AgentResponse {
+  if (instruction.startsWith('Adjudicate the durable provisional finding below.')) {
+    return {
+      persona: 'findings-supervisor',
+      status: 'done',
+      content: '{}',
+      structuredOutput: {
+        proposal: {
+          kind: 'undetermined',
+          rationale: 'The active conflict fixture supplies no terminal authority.',
+        },
+      },
+      timestamp: new Date(OBSERVATION.timestamp),
+    };
+  }
+  if (instruction.includes('## Control task output override')) {
+    const manifest = findingManagerTaskManifest(instruction) as {
+      taskId: string;
+      candidateIntents?: Array<{ intentId: string }>;
+    };
+    return {
+      persona: 'findings-manager',
+      status: 'done',
+      content: '',
+      structuredOutput: {
+        taskId: manifest.taskId,
+        evaluations: (manifest.candidateIntents ?? []).map(({ intentId }) => ({
+          intentId,
+          result: {
+            kind: 'no_action',
+            reason: 'The fixture leaves conflict control to the adjudication runner.',
+          },
+        })),
+        selectedIntentId: null,
+      },
+      timestamp: new Date(OBSERVATION.timestamp),
+    };
+  }
+  if (instruction.includes('entity-binding contract below replaces')) {
+    const manifest = findingManagerTaskManifest(instruction) as {
+      taskId: string;
+      ownedRawFindingIds: string[];
+    };
+    return {
+      persona: 'findings-manager',
+      status: 'done',
+      content: '',
+      structuredOutput: {
+        taskId: manifest.taskId,
+        decisions: manifest.ownedRawFindingIds.map((rawFindingId) => ({
+          rawFindingId,
+          decision: 'bind_existing',
+          findingId: targetFindingId,
+          groupRawFindingId: '',
+          reason: 'The resolution observation targets the existing conflict holding.',
+        })),
+      },
+      timestamp: new Date(OBSERVATION.timestamp),
+    };
+  }
+
+  const taskManifest = findingManagerTaskManifest(instruction) as {
+    rawFindings?: Array<{ rawFindingId: string }>;
+  };
+  const rawFindings = taskManifest.rawFindings ?? [];
+  if (rawFindings.length === 0) {
+    throw new Error('Test setup error: manager resolution task input is missing');
+  }
+  return findingManagerTaskResponse(instruction, {
+    rawDecisions: rawFindings.map(({ rawFindingId }) => ({
+      decision: 'resolved',
+      rawFindingId,
+      findingId: targetFindingId,
+      evidence: 'The materialized quote satisfies the original failure mode and required fix.',
+    })),
+    disputeDecisions: [],
+    conflictDecisions: [],
+    invalidateDecisions: [],
+    duplicateDecisions: [],
+    dismissDecisions: [],
+  });
+}
+
 describe('finding-conflict-adjudication runner registry contract', () => {
   let cwd: string;
   let ledgerStore: FindingLedgerStore;
@@ -261,6 +361,66 @@ describe('finding-conflict-adjudication runner registry contract', () => {
         guidance,
       }),
     };
+  }
+
+  function managerRound(
+    rawFindings: readonly unknown[],
+    stepIteration: number,
+  ) {
+    const parentStep: WorkflowStep = {
+      kind: 'agent',
+      name: 'reviewers',
+      persona: 'reviewer',
+      edit: false,
+    };
+    const subResults: FindingManagerSubStepResult[] = [{
+      subStep: {
+        kind: 'agent',
+        name: 'arch-review',
+        persona: 'arch',
+        edit: false,
+      },
+      publication: findingReviewPublicationFixture({
+        scopeIdentity: ledgerStore.ledgerIdentity,
+        parentStepName: parentStep.name,
+        stepIteration,
+        reviewerStepName: 'arch-review',
+        rawFindings,
+      }),
+    }];
+    return runFindingManagerForStep({
+      contract: contract(cwd),
+      ledgerStore,
+      optionsBuilder: {
+        buildAgentOptions: () => ({
+          provider: 'claude',
+          cwd,
+          providerOptions: { claude: {} },
+          resolvedProviderOptions: { claude: {} },
+        }),
+        resolveStepProviderModel: () => ({
+          provider: 'claude',
+          model: 'claude-sonnet',
+        }),
+      },
+      stepExecutor: {
+        buildPhase1Instruction: (instruction: string) => instruction,
+        normalizeStructuredOutput: (_step: WorkflowStep, response: AgentResponse) => response,
+        recordSynthesizedAgentUsage: () => {},
+      },
+      cwd,
+      parentStep,
+      stepIteration,
+      subResults,
+      workflowName: 'runner-test',
+      workflowTask: 'Review the implementation.',
+      runId: 'run-1',
+      callNamespace: '',
+      timestamp: stepIteration === 1
+        ? OBSERVATION.timestamp
+        : '2026-06-13T00:01:00.000Z',
+      managerAuthority: 'standard',
+    });
   }
 
   function reopenStore(runId = 'run-1'): FindingLedgerStore {
@@ -352,6 +512,297 @@ describe('finding-conflict-adjudication runner registry contract', () => {
 
     expect(executeAgentMock).not.toHaveBeenCalled();
     expect(ledgerStore.loadLedger().conflictAdjudicationAttempts).toHaveLength(2);
+  });
+
+  it('holds a clean resolution observation until conflict adjudication, then resolves it in the next manager round', async () => {
+    const initialLedger = ledgerStore.loadLedger();
+    const conflict = initialLedger.conflicts[0];
+    const landing = initialLedger.conflictRawClaimLandings[0];
+    const holding = initialLedger.findings.find((finding) => (
+      landing !== undefined
+      && finding.id === landing.holdingFindingId
+      && finding.provisional !== undefined
+    ));
+    if (conflict === undefined || landing === undefined || holding === undefined) {
+      throw new Error('Expected an active conflict with a provisional holding in the fixture');
+    }
+
+    const resolutionRaw = (rawFindingId: string) => reviewerRawExtractionFixture({
+      rawFindingId,
+      familyTag: 'bug',
+      severity: 'high',
+      title: 'Disputed issue',
+      description: 'The materialized code no longer exhibits the reported failure mode.',
+      suggestion: null,
+      relation: 'resolution_confirmation',
+      targetFindingId: holding.id,
+      target: { kind: 'code', paths: ['src/a.ts'] },
+      evidence: [verifiedSourceQuoteFields(cwd, 'src/a.ts', 1)],
+    });
+
+    const beforeAdjudicationRawId = 'resolution-before-adjudication';
+    executeAgentMock.mockImplementation(async (_persona, instruction) => (
+      managerResolutionResponse(String(instruction), holding.id)
+    ));
+    await managerRound([resolutionRaw(beforeAdjudicationRawId)], 1);
+
+    const validationReport = JSON.parse(readFileSync(
+      join(cwd, '.takt', 'runs', 'run-1', 'reports', 'findings-manager-validation.reviewers.json'),
+      'utf8',
+    )) as {
+      attempts: Array<{ validationErrors: string[] }>;
+      deferredResolutionRejections: string[];
+    };
+    expect(validationReport.deferredResolutionRejections).toEqual([
+      expect.stringContaining('deferred while waiting for an unsettled conflict landing to settle'),
+    ]);
+    expect(validationReport.attempts.flatMap((attempt) => attempt.validationErrors).join(' '))
+      .not.toContain('deferred while waiting for an unsettled conflict landing to settle');
+
+    const deferredLedger = ledgerStore.loadLedger();
+    const deferredRaw = deferredLedger.rawFindings.find((rawFinding) => (
+      rawFinding.rawFindingId.endsWith(beforeAdjudicationRawId)
+    ));
+    const deferredHolding = deferredLedger.findings.find((finding) => finding.id === holding.id);
+    if (deferredRaw === undefined || deferredHolding === undefined) {
+      throw new Error('Expected the clean resolution observation to be admitted');
+    }
+    expect(deferredLedger.conflicts).toEqual([
+      expect.objectContaining({ id: conflict.id, status: 'active' }),
+    ]);
+    expect(deferredHolding).toMatchObject({
+      id: holding.id,
+      status: 'open',
+      provisional: expect.any(Object),
+    });
+    expect(deferredHolding.rawFindingIds).toEqual(holding.rawFindingIds);
+    expect(deferredHolding.evidenceIds).toEqual(holding.evidenceIds);
+    expect(deferredHolding.rejectedObservations).toEqual([
+      expect.objectContaining({
+        rawFindingId: deferredRaw.rawFindingId,
+        reason: expect.stringContaining('deferred while waiting for an unsettled conflict landing'),
+      }),
+    ]);
+    expect(deferredLedger.lifecycleReservations).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        operation: 'record_rejected_observation',
+        authority: expect.objectContaining({
+          kind: 'rejected_observation',
+          rawFindingId: deferredRaw.rawFindingId,
+          rejectionCode: 'conflict_resolution_deferred',
+        }),
+      }),
+    ]));
+
+    const adjudicationSnapshot = freshConflictAdjudicationSnapshot(
+      deferredLedger,
+      conflict.id,
+    );
+    const holdingSubject = adjudicationSnapshot.subjects.find((subject) => (
+      subject.findingId === holding.id && subject.role === 'holding_provisional'
+    ));
+    const product = deferredLedger.findings.find((finding) => (
+      conflict.findingIds.includes(finding.id)
+      && finding.provisional === undefined
+    ));
+    const conflictRaw = deferredLedger.rawFindings.find((rawFinding) => (
+      rawFinding.rawFindingId === conflict.rawFindingIds[0]
+    ));
+    if (
+      holdingSubject === undefined
+      || product === undefined
+      || conflictRaw?.familyTag === null
+      || conflictRaw === undefined
+      || product.target === null
+      || product.targetIdentityHash === null
+      || product.claimIdentityHash === null
+      || product.semanticClaimIdentityHash === null
+      || product.severity === null
+      || product.title === null
+      || product.description === undefined
+    ) {
+      throw new Error('Expected complete product and holding projections for adjudication');
+    }
+    const proposedProduct = {
+      target: product.target,
+      targetIdentityHash: product.targetIdentityHash,
+      familyTag: conflictRaw.familyTag,
+      severity: product.severity,
+      title: product.title,
+      description: product.description,
+      suggestion: product.suggestion ?? null,
+      claimIdentityHash: product.claimIdentityHash,
+      semanticClaimIdentityHash: product.semanticClaimIdentityHash,
+      evidenceRecordIds: [...product.evidenceIds],
+    };
+    const proof = createEngineProofRecord({
+      kind: 'engine_proof',
+      purpose: 'lifecycle_authority',
+      verifierId: 'takt.finding-lifecycle-policy',
+      verifierVersion: '1',
+      workflowName: deferredLedger.workflowName,
+      runId: 'run-1',
+      scopeIdentity: SCOPE_IDENTITY,
+      snapshotId: adjudicationSnapshot.conflictSnapshotId,
+      claimIdentityHash: null,
+      targetFindingId: holdingSubject.findingId,
+      subject: {
+        kind: 'finding_claim_supported_after_verification',
+        adjudicationKind: 'conflict',
+        subjectId: holdingSubject.subjectId,
+        findingId: holdingSubject.findingId,
+        expectedHead: holdingSubject.expectedHead,
+        rawClaimRefIds: holdingSubject.rawClaimLandingIds,
+        productProjectionDigest: findingContentAddress(
+          'product-finding-projection',
+          proposedProduct,
+        ),
+      },
+      dependencyDigests: [adjudicationSnapshot.conflictSnapshotId],
+      resultDigest: '3'.repeat(64),
+      issuedAt: OBSERVATION.timestamp,
+    });
+    await ledgerStore.updateLedger((current) => ({
+      ledger: {
+        ...current,
+        evidenceRecords: [...current.evidenceRecords, proof],
+      },
+      result: undefined,
+    }));
+
+    executeAgentMock.mockReset();
+    executeAgentMock
+      .mockResolvedValueOnce({
+        persona: 'supervisor',
+        status: 'done',
+        content: '{}',
+        structuredOutput: {
+          proposal: {
+            kind: 'undetermined',
+            subjectIds: adjudicationSnapshot.subjects.map(({ subjectId }) => subjectId).sort(),
+            rationale: 'No verified terminal authority is available.',
+          },
+        },
+        timestamp: new Date(OBSERVATION.timestamp),
+      })
+      .mockResolvedValueOnce({
+        persona: 'supervisor',
+        status: 'done',
+        content: '{}',
+        structuredOutput: {
+          proposal: {
+            kind: 'promote_holding',
+            holdingSubjectId: holdingSubject.subjectId,
+            proposedProduct,
+            authorityRefIds: [proof.evidenceId],
+            rationale: 'The held claim is independently verified.',
+          },
+        },
+        timestamp: new Date(OBSERVATION.timestamp),
+      });
+    const adjudication = runner();
+    await adjudication.runner.run(adjudication.step, state());
+
+    const promotedLedger = ledgerStore.loadLedger();
+    const promotedHolding = promotedLedger.findings.find((finding) => finding.id === holding.id);
+    expect(promotedLedger.conflicts).toEqual([
+      expect.objectContaining({ id: conflict.id, status: 'resolved' }),
+    ]);
+    expect(promotedHolding).toMatchObject({
+      id: holding.id,
+      status: 'open',
+      lifecycle: 'persists',
+    });
+    expect(promotedHolding).not.toHaveProperty('provisional');
+
+    const afterAdjudicationRawId = 'resolution-after-adjudication';
+    executeAgentMock.mockReset();
+    executeAgentMock.mockImplementation(async (_persona, instruction) => (
+      managerResolutionResponse(String(instruction), holding.id)
+    ));
+    await managerRound([resolutionRaw(afterAdjudicationRawId)], 2);
+
+    const resolvedLedger = ledgerStore.loadLedger();
+    const afterAdjudicationRaw = resolvedLedger.rawFindings.find((rawFinding) => (
+      rawFinding.rawFindingId.endsWith(afterAdjudicationRawId)
+    ));
+    const resolvedHolding = resolvedLedger.findings.find((finding) => finding.id === holding.id);
+    if (afterAdjudicationRaw === undefined || resolvedHolding === undefined) {
+      throw new Error('Expected the post-adjudication resolution observation to be admitted');
+    }
+    expect(resolvedHolding).toMatchObject({
+      id: holding.id,
+      status: 'resolved',
+      lifecycle: 'resolved',
+    });
+    expect(resolvedHolding.rawFindingIds).toEqual(expect.arrayContaining([
+      afterAdjudicationRaw.rawFindingId,
+    ]));
+    expect(resolvedHolding.rawFindingIds).not.toContain(deferredRaw.rawFindingId);
+  });
+
+  it('does not re-arm adjudication after deferring a resolution as an audit observation', async () => {
+    const initialLedger = ledgerStore.loadLedger();
+    const conflict = initialLedger.conflicts[0];
+    const landing = initialLedger.conflictRawClaimLandings[0];
+    const holding = initialLedger.findings.find((finding) => (
+      landing !== undefined
+      && finding.id === landing.holdingFindingId
+      && finding.provisional !== undefined
+    ));
+    if (conflict === undefined || landing === undefined || holding === undefined) {
+      throw new Error('Expected an active conflict with a provisional holding in the fixture');
+    }
+
+    const snapshot = freshConflictAdjudicationSnapshot(initialLedger, conflict.id);
+    executeAgentMock.mockResolvedValue({
+      persona: 'supervisor',
+      status: 'done',
+      content: '{}',
+      structuredOutput: {
+        proposal: {
+          kind: 'undetermined',
+          subjectIds: snapshot.subjects.map(({ subjectId }) => subjectId).sort(),
+          rationale: 'No verified terminal authority is available.',
+        },
+      },
+      timestamp: new Date(OBSERVATION.timestamp),
+    });
+    const adjudication = runner();
+    await adjudication.runner.run(adjudication.step, state());
+    const adjudicated = ledgerStore.loadLedger();
+    const priorSnapshot = freshConflictAdjudicationSnapshot(adjudicated, conflict.id);
+
+    executeAgentMock.mockReset();
+    executeAgentMock.mockImplementation(async (_persona, instruction) => (
+      managerResolutionResponse(String(instruction), holding.id)
+    ));
+    const resolutionRaw = reviewerRawExtractionFixture({
+      rawFindingId: 'resolution-deferred-audit-only',
+      familyTag: 'bug',
+      severity: 'high',
+      title: 'Disputed issue',
+      description: 'The materialized code no longer exhibits the reported failure mode.',
+      suggestion: null,
+      relation: 'resolution_confirmation',
+      targetFindingId: holding.id,
+      target: { kind: 'code', paths: ['src/a.ts'] },
+      evidence: [verifiedSourceQuoteFields(cwd, 'src/a.ts', 1)],
+    });
+    await managerRound([resolutionRaw], 1);
+
+    const deferred = ledgerStore.loadLedger();
+    const currentSnapshot = freshConflictAdjudicationSnapshot(deferred, conflict.id);
+    expect(sharesConflictAdjudicationBasis(deferred, priorSnapshot, currentSnapshot)).toBe(true);
+    expect(isActiveConflictUnadjudicated(deferred, conflict.id)).toBe(false);
+    const attemptCount = deferred.conflictAdjudicationAttempts.length;
+
+    executeAgentMock.mockClear();
+    const repeated = runner();
+    await repeated.runner.run(repeated.step, state());
+
+    expect(executeAgentMock).not.toHaveBeenCalled();
+    expect(ledgerStore.loadLedger().conflictAdjudicationAttempts).toHaveLength(attemptCount);
   });
 
   it('re-adjudicates when a fix changes the conflict target code with the same ledger projection', async () => {

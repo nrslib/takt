@@ -267,13 +267,13 @@ export class AnalyticsEmitter {
   }
 
   onCompanionEvent(
-    eventName: 'companion:start' | 'companion:pool_selected' | 'companion:finding' | 'companion:fix_round' | 'companion:complete',
+    eventName: 'companion:start' | 'companion:pool_selected' | 'companion:finding' | 'companion:fix_round' | 'companion:complete' | 'companion:review_round' | 'companion:queue_coalesced',
     payload: Record<string, unknown> & { step: string },
   ): void {
     writeAnalyticsEvent({
       type: 'companion',
       action: eventName.slice('companion:'.length) as
-        'start' | 'pool_selected' | 'finding' | 'fix_round' | 'complete',
+        'start' | 'pool_selected' | 'finding' | 'fix_round' | 'complete' | 'review_round' | 'queue_coalesced',
       ...payload,
       runId: this.runSlug,
       timestamp: new Date().toISOString(),

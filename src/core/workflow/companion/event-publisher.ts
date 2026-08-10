@@ -1,4 +1,8 @@
-import type { WorkflowEvents } from '../types.js';
+import type {
+  CompanionQueueAuditEntry,
+  CompanionReviewTrigger,
+  WorkflowEvents,
+} from '../types.js';
 
 type CompanionEventName = Extract<keyof WorkflowEvents, `companion:${string}`>;
 type CompanionEventArguments<TEvent extends CompanionEventName> = Parameters<WorkflowEvents[TEvent]>;
@@ -44,5 +48,23 @@ export class CompanionEventPublisher {
     if (this.completed) throw new Error(`Companion completion already published for "${this.step}"`);
     this.completed = true;
     this.emit('companion:complete', { step: this.step, openMustFixCount, escalated });
+  }
+
+  reviewRound(input: {
+    companion: string;
+    trigger: CompanionReviewTrigger;
+    digest: string;
+    changedLines: number;
+    findingCount: number;
+  }): void {
+    this.emit('companion:review_round', { step: this.step, ...input });
+  }
+
+  queueCoalesced(input: {
+    companion: string;
+    replaced: CompanionQueueAuditEntry;
+    replacement: CompanionQueueAuditEntry;
+  }): void {
+    this.emit('companion:queue_coalesced', { step: this.step, ...input });
   }
 }

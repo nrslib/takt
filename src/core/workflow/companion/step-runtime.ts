@@ -97,6 +97,11 @@ export class CompanionStepRuntime {
       runReview: async (request) => {
         await this.runReview(request);
       },
+      onCoalesced: (event) => this.events.queueCoalesced({
+        companion: event.companionName,
+        replaced: event.replaced,
+        replacement: event.replacement,
+      }),
     });
   }
 
@@ -186,6 +191,7 @@ export class CompanionStepRuntime {
       this.requireProvider(item.name);
       return { name: item.name, definition };
     });
+    const initialSnapshot = await this.readSnapshot();
     for (const { name, definition } of resolved) {
       this.active.set(name, definition);
       try {
@@ -207,6 +213,7 @@ export class CompanionStepRuntime {
       intervals: [...this.active.values()].map(({ intervalMs }) => intervalMs),
       allowGitCommit: this.deps.step.allowGitCommit === true,
       queue: this.queue,
+      initialSnapshot,
       readSnapshot: () => this.readSnapshot(),
       isAborted: () => this.deps.abortSignal?.aborted === true,
       onError: () => log.warn('Companion live review failed; the change remains unreviewed', {
@@ -218,6 +225,7 @@ export class CompanionStepRuntime {
       detectors: this.detectors,
       queue: this.queue,
       readSnapshot: () => this.readSnapshot(),
+      synchronizeSnapshot: (snapshot) => this.requireScheduler().synchronizeSnapshot(snapshot),
       openMustFix: () => this.openMustFix(),
       recordCompletionRound: async (snapshot) => this.recordStandaloneRound(
         snapshot.digest,
@@ -281,6 +289,7 @@ export class CompanionStepRuntime {
       await executeCompanionReviewRound({
         companionName,
         diff,
+        trigger: request.reason,
         observedGeneration,
         changedRegionsSincePreviousReview: detector.changedRegionsSinceLastReview(diff),
         diffSummary: summarizeDiff(diff),
@@ -321,6 +330,13 @@ export class CompanionStepRuntime {
           )
         ),
         applyRoundDecision: (decision) => this.terminalDecision.update(decision),
+        onRoundCompleted: (round) => this.events.reviewRound({
+          companion: companionName,
+          trigger: round.trigger,
+          digest: round.snapshot.digest,
+          changedLines: round.snapshot.changedLines,
+          findingCount: round.findingCount,
+        }),
       });
     } catch (error) {
       if (!isCompanionCapacityError(error)) throw error;

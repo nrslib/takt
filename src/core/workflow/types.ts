@@ -317,6 +317,15 @@ export interface WorkflowCallCompleteLifecycle extends WorkflowCallLifecycle {
 }
 
 /** Events emitted by workflow engine */
+export type CompanionReviewTrigger = 'quiet' | 'forced' | 'completion' | 'commit';
+
+export interface CompanionQueueAuditEntry {
+  readonly trigger: CompanionReviewTrigger;
+  readonly digest: string;
+  readonly changedLines: number;
+  readonly observedGeneration: number;
+}
+
 export interface WorkflowEvents {
   'workflow_call:start': (lifecycle: WorkflowCallLifecycle) => void;
   'workflow_call:complete': (lifecycle: WorkflowCallCompleteLifecycle) => void;
@@ -387,6 +396,20 @@ export interface WorkflowEvents {
     step: string;
     openMustFixCount: number;
     escalated: boolean;
+  }) => void;
+  'companion:review_round': (payload: {
+    step: string;
+    companion: string;
+    trigger: CompanionReviewTrigger;
+    digest: string;
+    changedLines: number;
+    findingCount: number;
+  }) => void;
+  'companion:queue_coalesced': (payload: {
+    step: string;
+    companion: string;
+    replaced: CompanionQueueAuditEntry;
+    replacement: CompanionQueueAuditEntry;
   }) => void;
   'step:blocked': (step: WorkflowStep, response: AgentResponse) => void;
   'step:rate_limited': (step: WorkflowStep, response: AgentResponse, rateLimitInfo: AgentResponse['rateLimitInfo']) => void;

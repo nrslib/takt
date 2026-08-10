@@ -26,7 +26,7 @@ This review is a defensive quality and security audit performed, on request, aga
 | Concern handling | Any concern recognized in the prose must either become a finding or be explicitly classified with evidence as non-finding |
 | Behavior evidence | Verify what behavior the tests or logs prove, not merely that they exist |
 | Demonstrability | Distinguish items that environmental factors prevent demonstrating from implementation defects confirmed by current evidence |
-| Boy Scout | Have problems fixed within the task scope when they are in changed code or in areas directly affecting correctness, contracts, or wiring of the change |
+| Boy Scout | Have existing problems fixed within task scope only when the change depends on, expands, or newly exposes them |
 
 ## Finding Decision Invariants
 
@@ -62,12 +62,16 @@ Treat an item separately from an implementation defect only when all of the foll
 |-----------|---------|--------|
 | Problem introduced by this change | Blocking | REJECT |
 | Code made unused by this change (arguments, imports, variables, functions) | Blocking | REJECT (change-induced problem) |
-| Existing problem in changed or directly related code | Blocking | REJECT (Boy Scout rule) |
+| Existing problem the change depends on, expands, or newly exposes | Blocking | REJECT (Boy Scout rule) |
 | Existing ambiguous or incorrect contract exposed through a new public entry, adapter, or tool | Blocking | REJECT (existing behavior is not an exemption) |
 | Structural problem directly affecting correctness of the change | Blocking | REJECT if within scope |
 | Problem in an unchanged file | Non-blocking | Record only (informational) |
 | Existing problem that merely shares a changed file but does not directly affect correctness of the change | Non-blocking | Record only (informational) |
 | Refactoring that greatly exceeds task scope | Non-blocking | Note as a suggestion |
+
+An existing problem is directly related only when the change depends on it, expands or newly exposes its impact, or cannot satisfy the current acceptance criteria or changed contract without fixing it. Proximity in the same file, function, hook, class, or call path is not sufficient. An existing problem is non-blocking when behavior and reachability remain unchanged from before the change and fixing it is unnecessary for the current requirement.
+
+Encourage local Boy Scout improvements within that causal scope. Do not use the Boy Scout rule to expand task applicability or turn unrelated existing problems, performance improvements, design changes, or refactoring into blocking findings.
 
 ## Judgment Criteria
 
@@ -307,7 +311,7 @@ Leave it better than you found it.
 
 ### In Scope
 
-- Existing problems in changed code or in areas directly affecting correctness, contracts, or wiring of the change (unused code, poor naming, broken abstractions)
+- Existing problems the change depends on, expands, or newly exposes (unused code, poor naming, broken abstractions)
 - Structural problems directly affecting correctness of the change (mixed responsibilities, unnecessary dependencies)
 
 ### Out of Scope
@@ -320,10 +324,10 @@ Leave it better than you found it.
 
 | Situation | Verdict |
 |-----------|---------|
-| Changed or directly related code has an obvious problem | REJECT — have it fixed together |
+| The change depends on, expands, or newly exposes an existing problem | REJECT — have it fixed together |
 | Redundant expression (a shorter equivalent exists) | REJECT |
 | Unnecessary branch/condition (unreachable or always the same result) | REJECT |
-| Fixable in seconds to minutes | REJECT (do not mark as "non-blocking") |
+| Confirmed directly related and fixable in seconds to minutes | REJECT (do not mark as "non-blocking") |
 | Code made unused as a result of the change (arguments, imports, etc.) | REJECT — change-induced, not an "existing problem" |
 | Fix requires refactoring (large scope) | Record only (technical debt) |
 
@@ -331,9 +335,10 @@ Do not tolerate problems just because existing code does the same. If existing c
 
 ## Judgment Rules
 
-- Issues detected in changed code or in areas directly affecting correctness, contracts, or wiring of the change are blocking (REJECT targets), even if the code existed before the change
+- Existing problems the change depends on, expands, or newly exposes are blocking (REJECT targets), even if the code existed before the change
 - Only issues not directly related to the change may be classified as "existing problems" or "non-blocking"
-- "The code itself existed before" is not a valid reason for non-blocking when the issue is in changed or directly related code
+- Do not decide from "the code itself existed before" alone; verify the causal relationship to the change
+- Do not make an existing problem blocking merely because it is in the same file, function, hook, class, or call path
 - "Same as existing behavior" is not an approval reason when a new public entry, adapter, or tool exposes that contract
 - When a concern mentioned in prose is not made a finding, classify it as `false_positive` / `overreach` / `out_of_scope` / `no_issue_after_verification` and provide evidence
 - If even one issue exists, REJECT. "APPROVE with warnings" or "APPROVE with suggestions" is prohibited

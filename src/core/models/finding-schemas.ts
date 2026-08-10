@@ -2304,6 +2304,7 @@ const FindingManagerValidationReportSchema = z.object({
   ledgerUpdated: z.boolean(),
   finalErrors: z.array(z.string()),
   attempts: z.array(FindingManagerValidationAttemptReportSchema),
+  deferredResolutionRejections: z.array(z.string()).optional(),
   rawAdmissionRejections: z.array(RawAdmissionRejectionReportSchema).optional(),
   unsupportedRawFindings: z.array(UnsupportedRawFindingReportSchema).optional(),
   reviewerOutputOverflows: z.array(ReviewerOutputOverflowReportSchema).optional(),

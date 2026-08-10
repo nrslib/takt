@@ -129,6 +129,7 @@ import { buildCompanionMailboxDirectory } from '../companion/mailbox.js';
 import { runCompanionFixLoop } from '../companion/fix-loop.js';
 import { CompanionStepRuntime } from '../companion/step-runtime.js';
 import { buildCompanionEscalationSummary } from '../companion/evidence.js';
+import { guardCompanionCompletion } from '../companion/completion-gate.js';
 import {
   CompanionReviewStateStore,
   type CompanionReviewAuthority,
@@ -2219,6 +2220,11 @@ export class StepExecutor {
       return nextResponse;
     }
 
+    nextResponse = guardCompanionCompletion(step, state, nextResponse);
+    if (nextResponse.status === 'blocked') {
+      return nextResponse;
+    }
+
     const recordPhaseProviderAttempt = onProviderAttempt
       ?? ((providerInfo, success, usage) => {
         this.deps.recordSynthesizedAgentUsage(
@@ -2285,6 +2291,10 @@ export class StepExecutor {
     response: AgentResponse,
     phaseContext: () => StatusJudgmentPhaseContext,
   ): Promise<AgentResponse> {
+    const companionCompletion = guardCompanionCompletion(step, state, response);
+    if (companionCompletion.status === 'blocked') {
+      return companionCompletion;
+    }
     if (response.structuredOutput) {
       state.structuredOutputs.set(step.name, response.structuredOutput);
     }
@@ -2594,6 +2604,7 @@ export class StepExecutor {
       }
       state.companion = {
         escalated: false,
+        completionVerified: false,
         openMustFixCount: 0,
         openMustFix: [],
       };
@@ -2628,8 +2639,9 @@ export class StepExecutor {
         });
       } catch (error) {
         this.deps.abortSignal?.throwIfAborted();
+        delete state.companion;
         log.warn(
-          `Companion startup failed for "${step.name}"; continuing main step: ${getErrorMessage(error)}`,
+          `Companion startup failed for "${step.name}"; main step will continue but completion remains blocked: ${getErrorMessage(error)}`,
         );
       }
     }

@@ -24,6 +24,7 @@ describe('CT-COMP-09 companion workflow state and when routing', () => {
     const state = createInitialState(config(), { projectCwd: '/worktree' });
     state.companion = {
       escalated: true,
+      completionVerified: true,
       openMustFixCount: 1,
       openMustFix: [{
         id: 'security-reviewer-1', severity: 'must_fix', file: 'src/a.ts', line: 1,
@@ -48,6 +49,7 @@ describe('CT-COMP-09 companion workflow state and when routing', () => {
     }];
     state.companion = {
       escalated: true,
+      completionVerified: true,
       openMustFixCount: 1,
       openMustFix: owned,
       reason: 'loop',

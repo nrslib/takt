@@ -28,6 +28,7 @@ import {
   isProvisionalFindingEntry,
   materializeProvisionalFinding,
 } from './finding-entry.js';
+import { collectUnsettledActiveConflictHoldingFindingIds } from './conflict-ownership.js';
 
 export interface ProvisionalSettlement {
   output: FindingManagerOutput;
@@ -112,6 +113,7 @@ export function settleProvisionalsWithCleanEvidence(input: {
     };
   }
   const provisionalById = new Map(openProvisionals.map((finding) => [finding.id, finding]));
+  const unsettledConflictHoldingFindingIds = collectUnsettledActiveConflictHoldingFindingIds(input.freshLedger);
   const ineligibleConfirmationRawIds = new Set(
     input.output.resolvedFindings.flatMap((resolved) => {
       const provisional = provisionalById.get(resolved.findingId);
@@ -259,9 +261,11 @@ export function settleProvisionalsWithCleanEvidence(input: {
   };
 
   let promotedFindingIds = new Set(input.explicitPromotedFindingIds);
-  let resolvedByMapping = new Map<string, string>([
-    ...input.explicitResolvedByMapping,
-  ]);
+  let resolvedByMapping = new Map(
+    [...input.explicitResolvedByMapping].filter(([findingId]) => (
+      !unsettledConflictHoldingFindingIds.has(findingId)
+    )),
+  );
   let resolvedByEvidence = new Map<string, string>();
   for (const resolved of settlementOutput.resolvedFindings) {
     const provisional = provisionalById.get(resolved.findingId);
@@ -269,6 +273,9 @@ export function settleProvisionalsWithCleanEvidence(input: {
       provisional === undefined
       || !canResolveProvisionalByExplicitConfirmation(provisional)
     ) {
+      continue;
+    }
+    if (unsettledConflictHoldingFindingIds.has(provisional.id)) {
       continue;
     }
     const hasCleanConfirmation = resolved.rawFindingIds.some((rawFindingId) => {
@@ -285,7 +292,10 @@ export function settleProvisionalsWithCleanEvidence(input: {
     }
   }
   for (const finding of openProvisionals) {
-    if (finding.provisional?.kind !== 'reviewer-output-overflow') {
+    if (
+      finding.provisional?.kind !== 'reviewer-output-overflow'
+      || unsettledConflictHoldingFindingIds.has(finding.id)
+    ) {
       continue;
     }
     const reviewerStableKey = finding.provisional.recoveryReviewerStableKey;
@@ -347,7 +357,12 @@ export function settleProvisionalsWithCleanEvidence(input: {
         continue;
       }
       const provisional = byUniqueIdentity.get(identity);
-      if (provisional === undefined || provisional.id === match.findingId || promotedFindingIds.has(provisional.id)) {
+      if (
+        provisional === undefined
+        || provisional.id === match.findingId
+        || promotedFindingIds.has(provisional.id)
+        || unsettledConflictHoldingFindingIds.has(provisional.id)
+      ) {
         continue;
       }
       if (targetHasExactIdentity(match.findingId, identity)) {
@@ -358,6 +373,9 @@ export function settleProvisionalsWithCleanEvidence(input: {
 
   const promotionSourceRawFindingIds = new Map<string, string[]>();
   promotedFindingIds = new Set([...promotedFindingIds].filter((findingId) => {
+    if (unsettledConflictHoldingFindingIds.has(findingId)) {
+      return false;
+    }
     const provisional = provisionalById.get(findingId);
     if (provisional === undefined || !isProvisionalFindingEntry(provisional)) {
       return false;

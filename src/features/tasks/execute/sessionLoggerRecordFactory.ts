@@ -10,6 +10,9 @@ import type {
   NdjsonStepStart,
   NdjsonWorkflowAbort,
   NdjsonWorkflowComplete,
+  NdjsonCompanionReviewRound,
+  NdjsonCompanionQueueCoalesced,
+  NdjsonCompanionReviewTrigger,
 } from '../../../infra/fs/index.js';
 import type { PromptLogRecord } from '../../../shared/utils/index.js';
 import type {
@@ -293,5 +296,33 @@ export function buildWorkflowAbortRecord(
     iterations: state.iteration,
     reason: sanitizeText(reason),
     endTime: new Date().toISOString(),
+  };
+}
+
+export function buildCompanionReviewRoundRecord(input: {
+  readonly step: string;
+  readonly companion: string;
+  readonly trigger: NdjsonCompanionReviewTrigger;
+  readonly digest: string;
+  readonly changedLines: number;
+  readonly findingCount: number;
+}): NdjsonCompanionReviewRound {
+  return {
+    type: 'companion_review_round',
+    ...input,
+    timestamp: new Date().toISOString(),
+  };
+}
+
+export function buildCompanionQueueCoalescedRecord(input: {
+  readonly step: string;
+  readonly companion: string;
+  readonly replaced: NdjsonCompanionQueueCoalesced['replaced'];
+  readonly replacement: NdjsonCompanionQueueCoalesced['replacement'];
+}): NdjsonCompanionQueueCoalesced {
+  return {
+    type: 'companion_queue_coalesced',
+    ...input,
+    timestamp: new Date().toISOString(),
   };
 }

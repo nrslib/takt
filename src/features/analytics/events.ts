@@ -101,7 +101,7 @@ export interface RoutingDecisionEvent {
 
 export interface CompanionAnalyticsEvent {
   type: 'companion';
-  action: 'start' | 'pool_selected' | 'finding' | 'fix_round' | 'complete';
+  action: 'start' | 'pool_selected' | 'finding' | 'fix_round' | 'complete' | 'review_round' | 'queue_coalesced';
   step: string;
   companion?: string;
   selected?: string[];
@@ -111,6 +111,22 @@ export interface CompanionAnalyticsEvent {
   sequence?: number;
   openMustFixCount?: number;
   escalated?: boolean;
+  trigger?: 'quiet' | 'forced' | 'completion' | 'commit';
+  digest?: string;
+  changedLines?: number;
+  findingCount?: number;
+  replaced?: {
+    trigger: 'quiet' | 'forced' | 'completion' | 'commit';
+    digest: string;
+    changedLines: number;
+    observedGeneration: number;
+  };
+  replacement?: {
+    trigger: 'quiet' | 'forced' | 'completion' | 'commit';
+    digest: string;
+    changedLines: number;
+    observedGeneration: number;
+  };
   runId: string;
   timestamp: string;
 }

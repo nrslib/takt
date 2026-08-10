@@ -13,6 +13,7 @@ import {
   findIndependentProvisionalDestination,
   independentProvisionalIdentity,
 } from '../core/workflow/findings/independent-provisional-identity.js';
+import { collectUnsettledActiveConflictHoldingFindingIds } from '../core/workflow/findings/conflict-ownership.js';
 import { applyFindingLifecycleCommands } from '../core/workflow/findings/lifecycle-transaction.js';
 import { captureFindingLifecycleHead } from '../core/workflow/findings/lifecycle-mutation.js';
 import { landUnownedConflictRawClaims } from '../core/workflow/findings/conflict-claim-landing.js';
@@ -212,6 +213,7 @@ describe('provisional target landing', () => {
     expect(() => findIndependentProvisionalDestination({
       ledger: { ...ledger, findings: [...ledger.findings, duplicate] },
       stableKey: ledger.findings[0]!.provisional!.stableKey,
+      unsettledConflictHoldingFindingIds: collectUnsettledActiveConflictHoldingFindingIds(ledger),
     })).toThrow(/multiple open owners/);
   });
 
@@ -237,6 +239,7 @@ describe('provisional target landing', () => {
       landedSpecs: [],
       entityMutationResults: [],
       normalizationRejections: [],
+      deferredResolutionRejections: [],
       rejectedObservationAttachments: [],
       settlementCommands: [],
     };
@@ -310,6 +313,7 @@ describe('provisional target landing', () => {
       landedSpecs: [],
       entityMutationResults: [],
       normalizationRejections: [],
+      deferredResolutionRejections: [],
       rejectedObservationAttachments: [],
       settlementCommands: [],
     };
