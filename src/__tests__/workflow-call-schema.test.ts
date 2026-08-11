@@ -318,6 +318,47 @@ describe('workflow_call schema', () => {
     expect(implement?.rules?.[0]?.next).toBe('COMPLETE');
   });
 
+  it('should preserve a companion selection object through callable arg expansion', () => {
+    const workflow = normalizeWorkflowConfig(createCallableCompanionWorkflow(), '/tmp', undefined, undefined, undefined, undefined, undefined, undefined, {
+      callableArgs: {
+        implementation_companions: {
+          fixed: ['reviewer'],
+          pool: [],
+          moderator: 'review-adjudicator',
+        },
+      },
+    });
+    const implement = workflow.steps.find((step) => step.name === 'implement');
+
+    expect(implement?.companion).toEqual({
+      fixed: ['reviewer'],
+      pool: [],
+      moderator: 'review-adjudicator',
+    });
+  });
+
+  it.each([
+    {
+      label: 'without a reviewer',
+      value: { fixed: [], pool: [], moderator: 'review-adjudicator' },
+      message: 'companion selection requires a fixed or pool reference',
+    },
+    {
+      label: 'with a duplicate moderator',
+      value: { fixed: ['review-adjudicator'], pool: [], moderator: 'review-adjudicator' },
+      message: 'companion moderator cannot also be a reviewer',
+    },
+    {
+      label: 'with a malformed reviewer list',
+      value: { fixed: 'reviewer', pool: [], moderator: 'review-adjudicator' },
+      message: 'must be a companion_ref[] array or selection object',
+    },
+  ])('should reject a malformed companion selection object: $label', ({ value, message }) => {
+    expect(() => normalizeWorkflowConfig(createCallableCompanionWorkflow(), '/tmp', undefined, undefined, undefined, undefined, undefined, undefined, {
+      callableArgs: { implementation_companions: value },
+    })).toThrow(message);
+  });
+
   it('should preserve scalar facet params while expanding callable steps', () => {
     const workflow = normalizeWorkflowConfig(createCallableScalarFacetWorkflow(), '/tmp');
     const review = workflow.steps[0];

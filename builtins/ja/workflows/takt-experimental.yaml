@@ -11,7 +11,10 @@ steps:
       implementation_pool: takt-coding-facets
       implementation_workflow: development-implement-dynamic
       remediation_workflow: development-remediation-dynamic
-      implementation_companions: [ai-antipattern-review-companion]
+      implementation_companions:
+        fixed: [ai-antipattern-review-companion]
+        pool: []
+        moderator: ai-antipattern-review-moderator
       reviewer_suite: takt-experimental-review
       review_policy_additions: [takt-testing]
       review_policy: [coding, testing, takt-testing, review]

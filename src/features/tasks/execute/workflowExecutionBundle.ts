@@ -11,8 +11,10 @@ import {
 } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
+import { WorkflowCallArgValueRawSchema } from '../../../core/models/index.js';
 import type {
   AgentWorkflowStep,
+  WorkflowCallArgValue,
   WorkflowCallStep,
   WorkflowConfig,
   WorkflowStep,
@@ -44,7 +46,7 @@ interface BundleCallEdge {
   readonly stepPath: StepPath;
   readonly childNodeId: string;
   readonly call: string;
-  readonly args: Readonly<Record<string, string | string[]>>;
+  readonly args: Readonly<Record<string, WorkflowCallArgValue>>;
 }
 
 interface BundleNodeObject {
@@ -520,16 +522,17 @@ function parseNode(value: unknown): BundleNodeObject {
     if (typeof edge.call !== 'string' || edge.call.length === 0) throw new Error(`Workflow bundle call[${index}] call is invalid`);
     const args = structuredClone(requireRecord(edge.args, `Workflow bundle call[${index}] args`));
     for (const [key, argument] of Object.entries(args)) {
-      if (typeof argument !== 'string'
-        && (!Array.isArray(argument) || argument.some((part) => typeof part !== 'string'))) {
+      const parsed = WorkflowCallArgValueRawSchema.safeParse(argument);
+      if (!parsed.success) {
         throw new Error(`Workflow bundle call[${index}] argument "${key}" is invalid`);
       }
+      args[key] = parsed.data;
     }
     return {
       stepPath: edge.stepPath as (string | number)[],
       childNodeId: requireSha256(edge.childNodeId, `Workflow bundle call[${index}] child node id`),
       call: edge.call,
-      args: args as Record<string, string | string[]>,
+      args: args as Record<string, WorkflowCallArgValue>,
     };
   });
   return {

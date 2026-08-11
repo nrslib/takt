@@ -7,6 +7,7 @@ import { WorkflowConfigRawSchema } from '../../../core/models/index.js';
 import type {
   FindingContractConfig,
   LoopMonitorConfig,
+  WorkflowCallArgValue,
   WorkflowConfig,
   WorkflowStep,
   WorkflowSubworkflowConfig,
@@ -426,7 +427,7 @@ function validateFindingsRulesRequireContract(
 }
 
 interface NormalizeWorkflowConfigOptions {
-  callableArgs?: Record<string, string | string[]>,
+  callableArgs?: Record<string, WorkflowCallArgValue>,
   callableArgPolicy?: WorkflowCallArgResolutionPolicy,
   callableArgMode?: 'runtime' | 'discovery',
   workflowCommandGatesPolicy?: WorkflowCommandGatesConfig,

@@ -68,9 +68,45 @@ const WorkflowFacetRefListOrParamSchema = z.union([
 ]);
 const WorkflowReferenceOrParamSchema = z.union([WorkflowFacetRefScalarSchema, WorkflowParamReferenceRawSchema]);
 
+const CompanionSelectionObjectRawSchema = z.object({
+  fixed: z.array(z.string().trim().min(1)).optional().default([]),
+  pool: z.array(z.string().trim().min(1)).optional().default([]),
+  moderator: z.string().trim().min(1).optional(),
+}).strict().superRefine((selection, ctx) => {
+  if (selection.fixed.length === 0 && selection.pool.length === 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'companion requires at least one fixed or pool reference',
+    });
+  }
+  if (
+    selection.moderator !== undefined
+    && (selection.fixed.includes(selection.moderator) || selection.pool.includes(selection.moderator))
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['moderator'],
+      message: 'companion moderator cannot also be a fixed or pool reviewer',
+    });
+  }
+});
+
+const CompanionSelectionArgValueRawSchema = z.union([
+  z.array(z.string().trim().min(1)),
+  CompanionSelectionObjectRawSchema,
+]);
+
+export const WorkflowCallArgValueRawSchema = z.union([
+  WorkflowFacetRefValueSchema,
+  CompanionSelectionArgValueRawSchema,
+]);
+
 const WorkflowCallArgsRawSchema = z.record(
   z.string().min(1),
-  z.union([WorkflowFacetRefValueSchema, WorkflowParamReferenceRawSchema]),
+  z.union([
+    WorkflowCallArgValueRawSchema,
+    WorkflowParamReferenceRawSchema,
+  ]),
 );
 const WorkflowCallVarsRawSchema = z.record(
   z.string().regex(/^[A-Za-z_][A-Za-z0-9_.-]*$/),
@@ -130,7 +166,7 @@ const WorkflowFacetPoolParamDeclarationRawSchema = z.object({
 
 const WorkflowCompanionParamDeclarationRawSchema = z.object({
   type: z.literal('companion_ref[]'),
-  default: z.array(z.string().trim().min(1)).optional(),
+  default: CompanionSelectionArgValueRawSchema.optional(),
 }).strict();
 
 const WorkflowParamDeclarationRawSchema = z.union([
@@ -577,28 +613,7 @@ const DynamicParallelRawSchema = z.object({
 const CompanionSelectionRawSchema = z.union([
   z.array(z.string().trim().min(1)).min(1),
   WorkflowParamReferenceRawSchema,
-  z.object({
-    fixed: z.array(z.string().trim().min(1)).optional().default([]),
-    pool: z.array(z.string().trim().min(1)).optional().default([]),
-    moderator: z.string().trim().min(1).optional(),
-  }).strict().superRefine((selection, ctx) => {
-    if (selection.fixed.length === 0 && selection.pool.length === 0) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'companion requires at least one fixed or pool reference',
-      });
-    }
-    if (
-      selection.moderator !== undefined
-      && (selection.fixed.includes(selection.moderator) || selection.pool.includes(selection.moderator))
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['moderator'],
-        message: 'companion moderator cannot also be a fixed or pool reviewer',
-      });
-    }
-  }),
+  CompanionSelectionObjectRawSchema,
 ]);
 
 const WorkflowSubworkflowRawSchema = z.object({
