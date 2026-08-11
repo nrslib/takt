@@ -497,6 +497,9 @@ steps:
       if (develop.kind !== 'workflow_call') {
         throw new Error(`Workflow "${workflow.name}" does not delegate development`);
       }
+      if (typeof initialReview.call !== 'string' || typeof followUpReview.call !== 'string') {
+        throw new Error(`Workflow "${workflow.name}" has no resolved reviewer workflow`);
+      }
       expect(followUpReview.call).toBe(initialReview.call);
       if (typeof develop.args?.review_workflow === 'string') {
         expect(initialReview.call).toBe(develop.args.review_workflow);
