@@ -168,6 +168,8 @@ steps:
         next: peer-review
       - condition: need_replan
         next: replan
+      - condition: ABORT
+        next: ABORT
 
   - name: peer-review
     kind: workflow_call

@@ -105,7 +105,7 @@ function loadCoreForWrapper(
 ): WorkflowConfig {
   const delegation = wrapper.steps.find((step) => step.name === 'develop');
   if (delegation?.kind !== 'workflow_call' || typeof delegation.call !== 'string') {
-    return wrapper;
+    throw new Error(`Workflow "${wrapper.name}" step "develop" is not a workflow_call`);
   }
   return loadWorkflowFromFile(
     join(getBuiltinWorkflowsDir(language), `${delegation.call}.yaml`),
@@ -121,7 +121,7 @@ function loadPeerReviewForCore(
 ): WorkflowConfig {
   const peerReview = findWorkflowStep(core, 'peer-review');
   if (peerReview.kind !== 'workflow_call' || typeof peerReview.call !== 'string') {
-    return core;
+    throw new Error(`Workflow "${core.name}" step "peer-review" is not a workflow_call`);
   }
   return loadWorkflowFromFile(
     join(getBuiltinWorkflowsDir(language), `${peerReview.call}.yaml`),
@@ -137,7 +137,7 @@ function loadImplementationForCore(
 ): WorkflowConfig {
   const implementation = findWorkflowStep(core, 'implement');
   if (implementation.kind !== 'workflow_call' || typeof implementation.call !== 'string') {
-    return core;
+    throw new Error(`Workflow "${core.name}" step "implement" is not a workflow_call`);
   }
   return loadWorkflowFromFile(
     join(getBuiltinWorkflowsDir(language), `${implementation.call}.yaml`),
@@ -153,7 +153,7 @@ function loadRemediationForPeerReview(
 ): WorkflowConfig {
   const remediation = findWorkflowStep(peerReview, 'remediation');
   if (remediation.kind !== 'workflow_call' || typeof remediation.call !== 'string') {
-    return peerReview;
+    throw new Error(`Workflow "${peerReview.name}" step "remediation" is not a workflow_call`);
   }
   return loadWorkflowFromFile(
     join(getBuiltinWorkflowsDir(language), `${remediation.call}.yaml`),
@@ -169,7 +169,9 @@ function loadReviewerSuiteForPeerReview(
 ): WorkflowConfig {
   const reviewers = findWorkflowStep(peerReview, peerReview.initialStep);
   if (reviewers.kind !== 'workflow_call' || typeof reviewers.call !== 'string') {
-    return peerReview;
+    throw new Error(
+      `Workflow "${peerReview.name}" step "${peerReview.initialStep}" is not a workflow_call`,
+    );
   }
   return loadWorkflowFromFile(
     join(getBuiltinWorkflowsDir(language), `${reviewers.call}.yaml`),

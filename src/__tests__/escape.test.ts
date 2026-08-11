@@ -271,6 +271,19 @@ describe('replaceTemplatePlaceholders', () => {
       expect(replaceTemplatePlaceholders('Read {report:resolution.md}', step, ctx)).toBe('Read nearest');
     });
 
+    it('should continue to the reports root when the nearest parent report is missing', () => {
+      const reportsRoot = join(reportDir, '.takt', 'runs', 'run-slug', 'reports');
+      const parentReportDir = join(reportsRoot, 'subworkflows', 'develop#1');
+      const childReportDir = join(parentReportDir, 'subworkflows', 'remediation#1');
+      mkdirSync(childReportDir, { recursive: true });
+      writeFileSync(join(reportsRoot, 'resolution.md'), 'outer');
+
+      const step = makeStep({ name: 'plan' });
+      const ctx = makeInstructionContext({ reportDir: childReportDir, reportsRootDir: reportsRoot });
+
+      expect(replaceTemplatePlaceholders('Read {report:resolution.md}', step, ctx)).toBe('Read outer');
+    });
+
     it('should prefer the child report over the parent when both exist', () => {
       const reportsRoot = join(reportDir, '.takt', 'runs', 'run-slug', 'reports');
       const childReportDir = join(reportsRoot, 'subworkflows', 'draft#3');
