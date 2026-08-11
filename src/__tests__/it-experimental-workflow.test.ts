@@ -130,6 +130,38 @@ function loadReviewForCore(
   );
 }
 
+interface ReviewerStepReference {
+  workflow: WorkflowConfig;
+  step: WorkflowStep;
+  persona: string;
+}
+
+function collectReviewerSteps(
+  language: 'en' | 'ja',
+  workflow: WorkflowConfig,
+  projectDir: string,
+): ReviewerStepReference[] {
+  const reviewRoot = findWorkflowStep(workflow, workflow.initialStep);
+  if (reviewRoot.parallel === undefined) {
+    throw new Error(`Review workflow "${workflow.name}" has no parallel reviewers`);
+  }
+
+  return getAllParallelSubSteps(reviewRoot.parallel).flatMap((step) => {
+    if (step.kind === 'workflow_call' && typeof step.call === 'string') {
+      const nestedWorkflow = loadWorkflowFromFile(
+        join(getBuiltinWorkflowsDir(language), `${step.call}.yaml`),
+        projectDir,
+        { callableArgs: step.args },
+      );
+      return collectReviewerSteps(language, nestedWorkflow, projectDir);
+    }
+    if (typeof step.persona !== 'string') {
+      throw new Error(`Persona not found for reviewer "${step.name}"`);
+    }
+    return [{ workflow, step, persona: step.persona }];
+  });
+}
+
 function findRuleIndex(step: WorkflowStep, ruleLabel: string): number {
   const ruleIndex = semanticRuleCandidatesOf(step.rules ?? [], false)
     .findIndex((candidate) => candidate.label === ruleLabel);
@@ -156,7 +188,6 @@ function response(
 function responseForNext(
   workflow: WorkflowConfig,
   stepName: string,
-  persona: string,
   nextStep: string,
 ): ScenarioEntry {
   const step = findWorkflowStep(workflow, stepName);
@@ -167,7 +198,10 @@ function responseForNext(
   if (ruleLabel === undefined) {
     throw new Error(`Semantic rule not found for transition "${stepName}" -> "${nextStep}"`);
   }
-  return response(workflow, stepName, persona, ruleLabel);
+  if (typeof step.persona !== 'string') {
+    throw new Error(`Persona not found for step "${stepName}"`);
+  }
+  return response(workflow, stepName, step.persona, ruleLabel);
 }
 
 function selection(selectedIds: string[], rationale: string): ScenarioEntry {
@@ -207,7 +241,7 @@ describe('experimental builtin workflow', () => {
   it('should fail fast when facet pool bindings are missing, wrongly typed, or unknown', () => {
     writeFileSync(join(projectDir, '.takt', 'config.yaml'), 'language: en\n');
     invalidateAllResolvedConfigCache();
-    const corePath = join(getBuiltinWorkflowsDir('en'), 'experimental-core.yaml');
+    const corePath = join(getBuiltinWorkflowsDir('en'), 'development-core.yaml');
     expect(() => loadWorkflowFromFile(corePath, projectDir, {
       callableArgs: { implementation_pool: 'missing-pool' },
     })).toThrow('references unknown facet pool "missing-pool"');
@@ -381,25 +415,25 @@ steps:
       const scenarioWorkflow = loadCoreForWrapper(language, workflow, projectDir);
       const reviewWorkflow = loadReviewForCore(language, scenarioWorkflow, projectDir);
       setMockScenario([
-        responseForNext(scenarioWorkflow, 'plan', 'planner', 'write_tests'),
-        responseForNext(scenarioWorkflow, 'write_tests', 'coder', 'implement'),
+        responseForNext(scenarioWorkflow, 'plan', 'write_tests'),
+        responseForNext(scenarioWorkflow, 'write_tests', 'implement'),
         selection(['testing'], 'Testing implementation facets are required.'),
-        responseForNext(scenarioWorkflow, 'implement', 'coder', 'replan'),
-        responseForNext(scenarioWorkflow, 'replan', 'planner', 'implement'),
+        responseForNext(scenarioWorkflow, 'implement', 'replan'),
+        responseForNext(scenarioWorkflow, 'replan', 'implement'),
         selection(['testing'], 'The replanned implementation still changes test boundaries.'),
-        responseForNext(scenarioWorkflow, 'implement', 'coder', 'review'),
+        responseForNext(scenarioWorkflow, 'implement', 'review'),
         selection([], 'The fixed TAKT reviewers cover the changed path.'),
         response(reviewWorkflow, 'coding-review', 'coding-reviewer', 'needs_fix'),
         response(reviewWorkflow, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'needs_fix'),
         selection([], 'No additional remediation facets are needed.'),
-        responseForNext(scenarioWorkflow, 'fix', 'coder', 'replan'),
-        responseForNext(scenarioWorkflow, 'replan', 'planner', 'implement'),
+        responseForNext(scenarioWorkflow, 'fix', 'replan'),
+        responseForNext(scenarioWorkflow, 'replan', 'implement'),
         selection(['testing'], 'The second replanned implementation changes test boundaries.'),
-        responseForNext(scenarioWorkflow, 'implement', 'coder', 'review'),
+        responseForNext(scenarioWorkflow, 'implement', 'review'),
         selection([], 'The fixed TAKT reviewers cover the replanned path.'),
         response(reviewWorkflow, 'coding-review', 'coding-reviewer', 'approved'),
         response(reviewWorkflow, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
-        responseForNext(scenarioWorkflow, 'supervise', 'supervisor', 'COMPLETE'),
+        responseForNext(scenarioWorkflow, 'supervise', 'COMPLETE'),
       ]);
       const engine = new WorkflowEngine(workflow, projectDir, 'Implement a TAKT change that requires replanning', {
         projectCwd: projectDir,
@@ -429,6 +463,105 @@ steps:
       expect(getScenarioQueue()?.remaining).toBe(0);
       expect(visitedSteps.filter((step) => step === 'replan')).toHaveLength(2);
       expect(visitedSteps.filter((step) => step === 'plan')).toHaveLength(1);
+    },
+    60_000,
+  );
+
+  const followUpReviewCases = (['en', 'ja'] as const).flatMap((language) =>
+    [
+      'default',
+      'takt-default',
+      'frontend',
+      'dual',
+      'backend-cqrs',
+      'dual-cqrs',
+      'frontend-maintenance',
+    ].map((workflowName) => ({ language, workflowName })),
+  );
+
+  it.each(followUpReviewCases)(
+    'should run $language $workflowName reviewers again after a fix without experimental companions',
+    async ({ language, workflowName }) => {
+      writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${language}\n`);
+      invalidateAllResolvedConfigCache();
+      const workflow = loadWorkflowFromFile(
+        join(getBuiltinWorkflowsDir(language), `${workflowName}.yaml`),
+        projectDir,
+      );
+      const core = loadCoreForWrapper(language, workflow, projectDir);
+      const reviewerSuite = loadReviewForCore(language, core, projectDir);
+      const reviewerSteps = collectReviewerSteps(language, reviewerSuite, projectDir);
+      const develop = findWorkflowStep(workflow, 'develop');
+      const initialReview = findWorkflowStep(core, 'review');
+      const followUpReview = findWorkflowStep(core, 'follow-up-review');
+      if (develop.kind !== 'workflow_call') {
+        throw new Error(`Workflow "${workflow.name}" does not delegate development`);
+      }
+      expect(followUpReview.call).toBe(initialReview.call);
+      if (typeof develop.args?.review_workflow === 'string') {
+        expect(initialReview.call).toBe(develop.args.review_workflow);
+      }
+      const reviewResponses = (verdict: 'approved' | 'needs_fix'): ScenarioEntry[] =>
+        reviewerSteps.map(({ workflow: reviewerWorkflow, step, persona }) =>
+          response(reviewerWorkflow, step.name, persona, verdict));
+      setMockScenario([
+        responseForNext(core, 'plan', 'write_tests'),
+        responseForNext(core, 'write_tests', 'implement'),
+        selection([], 'No implementation-specific facet is required.'),
+        responseForNext(core, 'implement', 'review'),
+        ...reviewResponses('needs_fix'),
+        selection([], 'No fix-specific facet is required.'),
+        responseForNext(core, 'fix', 'follow-up-review'),
+        ...reviewResponses('approved'),
+        responseForNext(core, 'supervise', 'COMPLETE'),
+      ]);
+      const scenarioQueue = getScenarioQueue();
+      if (scenarioQueue === undefined) {
+        throw new Error('Mock scenario queue was not created');
+      }
+      const consumeScenario = vi.spyOn(scenarioQueue, 'consume');
+      const engine = new WorkflowEngine(workflow, projectDir, 'Implement and review a default workflow change', {
+        projectCwd: projectDir,
+        provider: 'mock',
+        selectorProvider: SELECTOR_PROVIDER,
+        selectorGitCommandRunner: SELECTOR_GIT_COMMAND_RUNNER,
+        companionProviders: {
+          'ai-antipattern-review-companion': { provider: 'mock' },
+        },
+        companionDiffReader: COMPANION_DIFF_READER,
+        structuredCaller: new DefaultStructuredCaller(),
+        workflowCallResolver: ({ parentWorkflow, step, projectCwd, lookupCwd }) =>
+          resolveWorkflowCallTarget(parentWorkflow, step, projectCwd, lookupCwd),
+      });
+      engines.push(engine);
+      const visitedSteps: string[] = [];
+      const companionSteps: string[] = [];
+      engine.on('step:start', (step) => visitedSteps.push(step.name));
+      engine.on('companion:start', ({ step }) => companionSteps.push(step));
+
+      const state = await engine.run();
+
+      expect(state.status, JSON.stringify({
+        currentStep: state.currentStep,
+        iteration: state.iteration,
+        remainingScenarios: getScenarioQueue()?.remaining,
+        visitedSteps,
+      })).toBe('completed');
+      expect(getScenarioQueue()?.remaining).toBe(0);
+      const expectedReviewsByPersona = new Map<string, number>();
+      for (const { persona } of reviewerSteps) {
+        expectedReviewsByPersona.set(
+          persona,
+          (expectedReviewsByPersona.get(persona) ?? 0) + 2,
+        );
+      }
+      for (const [persona, expectedCount] of expectedReviewsByPersona) {
+        expect(
+          consumeScenario.mock.calls.filter(([consumedPersona]) => consumedPersona === persona),
+          persona,
+        ).toHaveLength(expectedCount);
+      }
+      expect(companionSteps).toEqual([]);
     },
     60_000,
   );

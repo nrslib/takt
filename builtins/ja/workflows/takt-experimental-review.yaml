@@ -3,8 +3,7 @@ description: TAKT固有のレビュー文脈と候補だけを注入する実験
 subworkflow:
   callable: true
   visibility: internal
-  returns:
-    - needs_fix
+  returns: [needs_fix]
   params:
     review_policy_additions:
       type: facet_ref[]

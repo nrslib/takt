@@ -3,8 +3,7 @@ description: Common review execution for the experimental workflow, returning a 
 subworkflow:
   callable: true
   visibility: internal
-  returns:
-    - needs_fix
+  returns: [needs_fix]
   params:
     review_policy_additions:
       type: facet_ref[]

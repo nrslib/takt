@@ -579,7 +579,6 @@ describe('npm test entrypoint routing', () => {
 
   it.each([
     'finding-review-integrity-gate.test.ts',
-    'workflow-step-fragment-builtin-runtime.test.ts',
     'workflow-step-fragment-runtime.test.ts',
   ])('should route serial workflow member %s to the workflow runner', (fileName) => {
     for (const target of [fileName, `src/__tests__/${fileName}`]) {

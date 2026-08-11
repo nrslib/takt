@@ -13,7 +13,7 @@ steps:
       testing_knowledge: [frontend, react, backend, cqrs-es, architecture, unit-testing, e2e-testing]
       development_policy: [coding, testing, design-fidelity, screen-api]
       development_knowledge: [frontend, react, backend, cqrs-es, security, architecture, task-decomposition]
-      reviewer_suite: peer-review-suite-frontend-cqrs
+      review_workflow: peer-review-suite-frontend-cqrs
       review_policy: [coding, testing, design-fidelity, screen-api, review]
       review_knowledge: [frontend, react, backend, cqrs-es, security, architecture, unit-testing, e2e-testing]
     rules:

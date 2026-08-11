@@ -6,12 +6,14 @@ initial_step: develop
 steps:
   - name: develop
     kind: workflow_call
-    call: experimental-core
+    call: development-core
     args:
       implementation_pool: coding-facets
+      implementation_companions: [ai-antipattern-review-companion]
       review_workflow: experimental-review
       review_policy_additions: []
-      review_knowledge_additions: []
+      review_policy: [coding, testing, review]
+      review_knowledge: [architecture, unit-testing, e2e-testing]
     rules:
       - condition: COMPLETE
         next: COMPLETE

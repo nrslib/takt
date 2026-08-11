@@ -1,17 +1,19 @@
 name: experimental
-description: Experimental coding workflow delegating generic planning, testing, implementation, review, fix, and supervision to the shared core.
+description: Experimental coding workflow using the shared development core's dynamic implementation, review, follow-up review, fix, and supervision flow.
 max_steps: 51
 initial_step: develop
 
 steps:
   - name: develop
     kind: workflow_call
-    call: experimental-core
+    call: development-core
     args:
       implementation_pool: coding-facets
+      implementation_companions: [ai-antipattern-review-companion]
       review_workflow: experimental-review
       review_policy_additions: []
-      review_knowledge_additions: []
+      review_policy: [coding, testing, review]
+      review_knowledge: [architecture, unit-testing, e2e-testing]
     rules:
       - condition: COMPLETE
         next: COMPLETE

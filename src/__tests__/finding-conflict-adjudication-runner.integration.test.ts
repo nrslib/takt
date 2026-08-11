@@ -1570,7 +1570,7 @@ describe('finding-conflict-adjudication runner registry contract', () => {
         language: 'ja',
         allowedTools: [],
         workflowMeta: {
-          workflowName: 'peer-review-suite-finding-contract-base',
+          workflowName: 'e2e-team-leader-finding-contract-fix',
           currentStep: 'finding-conflict-adjudication',
           stepsList: [{ name: 'reviewers' }, { name: 'finding-conflict-adjudication' }],
           currentPosition: '2/2',

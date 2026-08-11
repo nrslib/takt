@@ -1,9 +1,18 @@
 name: development-core
-description: Shared development flow that injects domain facets into planning, testing, direct implementation, peer review, and convergent remediation.
+description: Shared development flow with injectable planning, testing, implementation, initial review, fix, follow-up review, and supervision context.
 subworkflow:
   callable: true
   visibility: internal
   params:
+    implementation_pool:
+      type: facet_pool_ref
+      default: coding-facets
+    implementation_companions:
+      type: companion_ref[]
+      default: []
+    review_workflow:
+      type: workflow_ref
+      default: peer-review-suite-base
     plan_policy:
       type: facet_ref[]
       facet_kind: policy
@@ -11,7 +20,7 @@ subworkflow:
     plan_knowledge:
       type: facet_ref[]
       facet_kind: knowledge
-      default: [architecture]
+      default: [architecture, task-decomposition]
     plan_instruction:
       type: facet_ref
       facet_kind: instruction
@@ -35,21 +44,15 @@ subworkflow:
     development_policy:
       type: facet_ref[]
       facet_kind: policy
-      default: [coding, testing]
+      default: [coding, testing, ai-antipattern]
     development_knowledge:
       type: facet_ref[]
       facet_kind: knowledge
-      default: [architecture]
+      default: [architecture, implementation-semantics]
     implementation_instruction:
       type: facet_ref
       facet_kind: instruction
       default: implement
-    reviewer_suite:
-      type: workflow_ref
-      default: peer-review-suite-base
-    peer_review_workflow:
-      type: workflow_ref
-      default: peer-review
     review_policy_additions:
       type: facet_ref[]
       facet_kind: policy
@@ -62,10 +65,44 @@ subworkflow:
       type: facet_ref[]
       facet_kind: knowledge
       default: [architecture, unit-testing, e2e-testing]
-capabilities: readonly
+    fix_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: fix
+    supervise_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: supervise
 initial_step: plan
+
+facet_pools:
+  coding-facets:
+    candidates:
+      - id: frontend
+        description: Handle UI, components, state management, accessibility, and presentation.
+        policy: design-fidelity
+        knowledge: [frontend, react]
+      - id: backend
+        description: Handle APIs, domain logic, server-side processing, and persistence.
+        knowledge: backend
+      - id: testing
+        description: Handle test design, coverage, integration boundaries, and E2E boundaries.
+        knowledge: [unit-testing, e2e-testing]
+      - id: security
+        description: Handle authentication, authorization, input validation, secrets, dependencies, and security boundaries.
+        knowledge: [security, security-web, security-api, security-local, security-data, security-dependencies]
+  takt-coding-facets:
+    candidates:
+      - id: testing
+        description: Handle TAKT test design, coverage, integration boundaries, and E2E boundaries.
+        knowledge: [unit-testing, e2e-testing]
+      - id: security
+        description: Handle TAKT authentication, authorization, input validation, secrets, local execution, dependencies, and security boundaries.
+        knowledge: [security, security-api, security-local, security-data, security-dependencies]
+
 steps:
   - name: plan
+    capabilities: [readonly, enable-skills]
     uses: development-core-plan
     with:
       plan_policy:
@@ -76,9 +113,9 @@ steps:
         $param: plan_instruction
       plan_report_format: plan
     rules:
-      - condition: Requirements are clear and implementable
+      - condition: Requirements are clear and implementation is feasible
         next: write_tests
-      - condition: User is asking a question (not an implementation task)
+      - condition: The user is asking a question rather than requesting implementation
         next: COMPLETE
       - condition: Requirements are unclear or information is insufficient
         next: ABORT
@@ -86,6 +123,7 @@ steps:
   - name: replan
     tags: [plan]
     edit: false
+    capabilities: readonly
     persona: planner
     policy:
       - contract-change
@@ -101,12 +139,13 @@ steps:
     rules:
       - condition: An actionable, untried project-scoped change or investigation and its verification steps were defined
         next: implement
-      - condition: The current implementation meets the requirements and acceptance criteria, required project-scoped verification is complete, and no untried change or investigation remains
-        next: peer-review
-      - condition: Confirmed evidence shows that project-scoped changes or investigation cannot resolve the issue, leaving only external action or mutually unsatisfiable requirements
+      - condition: The current implementation satisfies the requirements and acceptance criteria, required project-scoped verification is complete, and no untried change or investigation remains
+        next: review
+      - condition: Confirmed evidence shows that project-scoped changes or investigation cannot resolve the blocker, leaving only an external action or mutually incompatible requirements
         next: ABORT
 
   - name: write_tests
+    capabilities: [edit, enable-skills]
     uses: development-core-write-tests
     with:
       testing_policy:
@@ -116,18 +155,19 @@ steps:
       testing_instruction:
         $param: testing_instruction
     rules:
-      - condition: Test creation completed
+      - condition: Test creation is complete
         next: implement
-      - condition: Test creation skipped because the target is not implemented
+      - condition: Test creation is skipped because the target is not implemented
         next: implement
-      - condition: Unable to proceed with test creation
+      - condition: Test creation cannot proceed
         next: plan
-      - condition: User input is required to resolve a question
+      - condition: User input is required for a clarification
         next: write_tests
         requires_user_input: true
         interactive_only: true
 
   - name: implement
+    capabilities: [edit, enable-skills]
     uses: development-core-implement
     with:
       development_policy:
@@ -136,41 +176,102 @@ steps:
         $param: development_knowledge
       implementation_instruction:
         $param: implementation_instruction
+    dynamic_facets:
+      pool:
+        $param: implementation_pool
+    companion:
+      $param: implementation_companions
     rules:
-      - condition: Implementation completed
-        next: peer-review
-      - condition: Implementation not started (report only)
-        next: peer-review
-      - condition: Unable to proceed with implementation
+      - condition: Implementation is complete
+        next: review
+      - condition: No implementation was started (report only)
+        next: review
+      - condition: Implementation cannot proceed
         next: replan
       - condition: User input is required
         next: implement
         requires_user_input: true
         interactive_only: true
 
-  - name: peer-review
+  - name: review
     kind: workflow_call
     call:
-      $param: peer_review_workflow
+      $param: review_workflow
+    vars:
+      review_mode: initial
     args:
-      reviewer_suite:
-        $param: reviewer_suite
       review_policy_additions:
         $param: review_policy_additions
       review_knowledge_additions:
         $param: review_knowledge
-      fix_knowledge:
-        $param: review_knowledge
-      plan_policy:
-        $param: review_policy
-      fix_policy:
-        $param: development_policy
-      verification_policy:
-        $param: review_policy
     rules:
       - condition: COMPLETE
+        next: supervise
+      - condition: needs_fix
+        next: fix
+      - condition: ABORT
+        next: ABORT
+
+  - name: follow-up-review
+    kind: workflow_call
+    call:
+      $param: review_workflow
+    vars:
+      review_mode: follow_up
+    args:
+      review_policy_additions:
+        $param: review_policy_additions
+      review_knowledge_additions:
+        $param: review_knowledge
+    rules:
+      - condition: COMPLETE
+        next: supervise
+      - condition: needs_fix
+        next: fix
+      - condition: ABORT
+        next: ABORT
+
+  - name: fix
+    capabilities: [edit, enable-skills]
+    uses: experimental-fix
+    with:
+      fix_policy:
+        $param: review_policy
+      fix_knowledge:
+        $param: development_knowledge
+      fix_instruction:
+        $param: fix_instruction
+    dynamic_facets:
+      pool:
+        $param: implementation_pool
+    companion:
+      $param: implementation_companions
+    rules:
+      - condition: Fix is complete
+        next: follow-up-review
+      - condition: The fix approach needs to be reconsidered
+        next: replan
+      - condition: The task needs to be replanned
+        next: replan
+      - condition: Fix cannot proceed
+        next: ABORT
+
+  - name: supervise
+    capabilities: [readonly, enable-skills]
+    uses: experimental-supervise
+    with:
+      supervise_policy:
+        $param: review_policy
+      supervise_knowledge:
+        $param: review_knowledge
+      supervise_instruction:
+        $param: supervise_instruction
+    rules:
+      - condition: BLOCKED
+        next: ABORT
+      - condition: approved
         next: COMPLETE
       - condition: need_replan
         next: replan
-      - condition: ABORT
-        next: ABORT
+      - condition: needs_fix
+        next: fix

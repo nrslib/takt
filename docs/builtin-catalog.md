@@ -12,7 +12,7 @@ A comprehensive catalog of all builtin workflows and personas included with TAKT
 | `simple-mini` | A lightweight variant that trusts a capable model's judgment. Omits dedicated test writing and final supervision: plan → implement → code review → fix loop → complete. |
 | `default` | Test-first workflow that runs the shared development flow with standard facets. |
 | `default-mini` | Lightweight workflow without a test-writing step that injects standard facets into the shared mini development flow. |
-| `default-high` | Full-spec workflow using the shared development core with direct implementation, specialist peer review, convergent remediation, merge-readiness, and supervision. |
+| `default-high` | Full-spec workflow using the shared development core with direct implementation, specialist peer review, convergent remediation, follow-up review, and final supervision. |
 | `frontend` | Frontend-specialized development workflow with React/Next.js focused reviews and knowledge injection. |
 | `backend` | Backend workflow that injects domain facets into the shared development flow. |
 | `dual` | Dual frontend/backend workflow that injects domain facets into the shared development flow. |
@@ -26,7 +26,7 @@ Organized by category.
 | 🚀 Quick Start | `simple` | A simple development workflow that trusts a capable model's judgment. The model selects relevant available skills for plan → write tests → implement → code review → fix loop → final supervision → complete. |
 | | `default` | Test-first workflow that runs the shared development flow with standard facets. |
 | | `default-mini` | Lightweight workflow without a test-writing step that injects standard facets into the shared mini development flow. |
-| | `default-high` | Full-spec workflow using the shared development core with direct implementation, specialist peer review, convergent remediation, merge-readiness, and supervision. |
+| | `default-high` | Full-spec workflow using the shared development core with direct implementation, specialist peer review, convergent remediation, follow-up review, and final supervision. |
 | | `cli` | CLI development workflow that injects CLI-oriented facets into the shared development flow. |
 | | `frontend` | Frontend-specialized development workflow with React/Next.js focused reviews and knowledge injection. |
 | | `backend` | Backend workflow that injects domain facets into the shared development flow. |
@@ -53,7 +53,7 @@ Organized by category.
 | | `simple-cqrs` | For capable models. A simple variant that injects backend and CQRS+ES knowledge and policies into `simple-core`. |
 | | `backend` | Backend workflow that injects domain facets into the shared development flow. |
 | | `backend-mini` | Backend-focused mini development workflow (plan → implement → parallel review → fix if needed → complete). |
-| | `backend-maintenance` | Strict backend maintenance workflow with parallel architecture, testing, security, coding, and AI-antipattern reviews, followed by merge-readiness and final supervision. |
+| | `backend-maintenance` | Strict backend maintenance workflow with specialist peer review, convergent remediation, follow-up review, and final supervision. |
 | | `backend-cqrs` | CQRS+ES-specialized backend development workflow with CQRS+ES-aware peer review and convergent remediation. |
 | | `backend-cqrs-mini` | CQRS+ES-focused mini development workflow (plan → implement → parallel review → fix if needed → complete). |
 | 🔧 Dual | `simple-dual` | For capable models. A simple variant that injects frontend and backend knowledge and policies into `simple-core`. |
@@ -75,9 +75,6 @@ Organized by category.
 | | `review-fix-dual-cqrs` | Frontend + CQRS+ES focused architecture, CQRS+ES, frontend, security, and coding review with a fix loop. |
 | | `review-backend-cqrs` | CQRS+ES focused architecture, CQRS+ES, security, and coding review. |
 | | `review-fix-backend-cqrs` | CQRS+ES focused architecture, CQRS+ES, security, and coding review with a fix loop. |
-| | `review-takt-default` | TAKT-focused multi-perspective review (5 reviewers including AI antipattern and coding review). |
-| | `review-fix-takt-default` | Workflow that gathers the review target, then injects TAKT-specific facets into the shared development flow. |
-| | `review-fix-takt-default-high` | Enhanced variant of `review-fix-takt-default` with a Finding Contract: gathers the review target, then plans, writes tests, implements directly, runs six compact specialist reviews, applies direct fixes, and closes through a fail-closed final gate. |
 | | `audit-unit` | Unit test audit. Enumerates behaviors and coverage gaps, produces an issue-ready report without modifying code. |
 | | `audit-e2e` | E2E audit. Enumerates user flows and coverage gaps, produces an issue-ready report without modifying code. |
 | | `audit-security` | Full security audit. Reads every project file for security review. |
@@ -86,22 +83,16 @@ Organized by category.
 | | `audit-architecture-backend` | Backend-focused architecture audit. Enumerates service modules and boundaries. |
 | | `audit-architecture-dual` | Full-stack architecture audit. Enumerates frontend/backend boundaries and cross-layer wiring. |
 | 🎵 TAKT Development | `takt-default` | TAKT-focused workflow using the shared development core with TAKT knowledge injected into planning, testing, implementation, review, and remediation. |
-| | `takt-default-fc` | Runs the same development flow as `takt-default`, with the five standard specialist reviews ingested into a Finding Contract ledger, ledger-driven remediation, and a terminal final gate. |
+| | `takt-experimental` | Experimental TAKT development workflow that uses the shared development core with the experimental review, remediation, and follow-up review flow. |
 | | `auto-improvement-loop` | Infinite orchestration loop that routes between open PR handling, issue-driven planning, and fresh improvement planning. |
-| | `review-takt-default` | TAKT-focused multi-perspective review (5 reviewers including AI antipattern and coding review). |
-| | `review-fix-takt-default` | Workflow that gathers the review target, then injects TAKT-specific facets into the shared development flow. |
-| | `review-fix-takt-default-high` | Enhanced variant of `review-fix-takt-default` with a Finding Contract: gathers the review target, then plans, writes tests, implements directly, runs six compact specialist reviews, applies direct fixes, and closes through a fail-closed final gate. |
-| | `takt-default-high` | Enhanced high-cost variant of takt-default: direct implementation and fixes, six compact specialist reviews, Finding Contract, and a merge-readiness/supervisor final gate. |
-| | `takt-default-team-high` | Team Leader variant of takt-default-high. The leader decomposes implementation and fixes for members, followed by the same six compact specialist reviews, Finding Contract, and final gate. Provider and model remain configurable. |
-| | `takt-default-localllm` | Composes the shared development core with Finding Contract stages that route regular reviews to local LLMs and recheck integrity, wiring, resource ownership, failure boundaries, and final readiness with a high-assurance model. Route `review`, `boundary-review`, and `final-gate` independently; providers and models are not hardcoded. |
 | Others | `research` | Research workflow: planner -> digger -> supervisor. Autonomously executes research without asking questions. |
 | | `deep-research` | Deep research workflow: plan -> dig -> analyze -> supervise. Discovery-driven investigation that follows emerging questions with multi-perspective analysis. |
 | | `magi` | Deliberation system inspired by Evangelion. Three AI personas (MELCHIOR, BALTHASAR, CASPER) analyze and vote. |
 | | `compound-eye` | Multi-eye review: send the same instruction to two independently assigned eyes, then synthesize both responses. Assign providers per eye via runtime.yaml (`provider.targets.steps` -> `eye1` / `eye2`). |
 
-To run an existing workflow entirely with local models, configure its provider and model normally. For a hybrid setup, route `review` to the local provider and route both `boundary-review` and `final-gate` to the commercial provider. Tags are applied in step order, so `final-gate` overrides the earlier `review` route on both `merge-readiness-review` and `supervise`. The integrity gate in `finding-contract-local-review` and the final gate in `finding-contract-boundary-review` use the same `merge-readiness-finding-contract-final-gate` subworkflow, so this one route covers both stages without hardcoding a provider or model in the workflow.
+To run an existing workflow entirely with local models, configure its provider and model normally. For a custom hybrid setup, route ordinary `review` steps to the local provider and apply a later `final-gate` tag to the steps that must return to a high-assurance provider. Later tags override earlier tags for the same provider, model, and provider-options fields.
 
-For `takt-default-fc`, the following `.takt/config.yaml` example routes regular reviewers and fixes to lightweight models while keeping the Finding Manager, automatically derived supervisor, and terminal final gate on strong models.
+For a custom Finding Contract workflow, the following `.takt/config.yaml` example routes regular reviewers and fixes to lightweight models while keeping the Finding Manager, automatically derived supervisor, and terminal final gate on strong models.
 
 ```yaml
 provider_routing:

@@ -1,9 +1,18 @@
 name: development-core
-description: ドメイン固有ファセットを注入して、計画、テスト、直接実装、ピアレビューと収束修正を実行する共通開発フロー。
+description: 計画・テスト・実装・初回レビュー・修正・フォローアップレビュー・監督のコンテキストを注入できる共有開発フロー。
 subworkflow:
   callable: true
   visibility: internal
   params:
+    implementation_pool:
+      type: facet_pool_ref
+      default: coding-facets
+    implementation_companions:
+      type: companion_ref[]
+      default: []
+    review_workflow:
+      type: workflow_ref
+      default: peer-review-suite-base
     plan_policy:
       type: facet_ref[]
       facet_kind: policy
@@ -11,7 +20,7 @@ subworkflow:
     plan_knowledge:
       type: facet_ref[]
       facet_kind: knowledge
-      default: [architecture]
+      default: [architecture, task-decomposition]
     plan_instruction:
       type: facet_ref
       facet_kind: instruction
@@ -35,21 +44,15 @@ subworkflow:
     development_policy:
       type: facet_ref[]
       facet_kind: policy
-      default: [coding, testing]
+      default: [coding, testing, ai-antipattern]
     development_knowledge:
       type: facet_ref[]
       facet_kind: knowledge
-      default: [architecture]
+      default: [architecture, implementation-semantics]
     implementation_instruction:
       type: facet_ref
       facet_kind: instruction
       default: implement
-    reviewer_suite:
-      type: workflow_ref
-      default: peer-review-suite-base
-    peer_review_workflow:
-      type: workflow_ref
-      default: peer-review
     review_policy_additions:
       type: facet_ref[]
       facet_kind: policy
@@ -62,10 +65,44 @@ subworkflow:
       type: facet_ref[]
       facet_kind: knowledge
       default: [architecture, unit-testing, e2e-testing]
-capabilities: readonly
+    fix_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: fix
+    supervise_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: supervise
 initial_step: plan
+
+facet_pools:
+  coding-facets:
+    candidates:
+      - id: frontend
+        description: UI、コンポーネント、状態管理、アクセシビリティ、画面表示を扱う
+        policy: design-fidelity
+        knowledge: [frontend, react]
+      - id: backend
+        description: API、ドメインロジック、サーバー側処理、永続化を扱う
+        knowledge: backend
+      - id: testing
+        description: テスト設計、テストカバレッジ、統合境界、E2E境界を扱う
+        knowledge: [unit-testing, e2e-testing]
+      - id: security
+        description: 認証認可、入力検証、機密情報、依存関係、セキュリティ境界を扱う
+        knowledge: [security, security-web, security-api, security-local, security-data, security-dependencies]
+  takt-coding-facets:
+    candidates:
+      - id: testing
+        description: TAKTのテスト設計、カバレッジ、統合境界、E2E境界を扱う
+        knowledge: [unit-testing, e2e-testing]
+      - id: security
+        description: TAKTの認証認可、入力検証、機密情報、ローカル実行、依存関係、セキュリティ境界を扱う
+        knowledge: [security, security-api, security-local, security-data, security-dependencies]
+
 steps:
   - name: plan
+    capabilities: [readonly, enable-skills]
     uses: development-core-plan
     with:
       plan_policy:
@@ -86,6 +123,7 @@ steps:
   - name: replan
     tags: [plan]
     edit: false
+    capabilities: readonly
     persona: planner
     policy:
       - contract-change
@@ -102,11 +140,12 @@ steps:
       - condition: プロジェクト内で実行可能な未試行の変更または原因調査と、その検証手順を具体化した
         next: implement
       - condition: 現行実装が要件・受入条件を満たし、必要なプロジェクト内検証が完了し、未試行の変更・調査が残っていない
-        next: peer-review
+        next: review
       - condition: 確認済みの根拠により、プロジェクト内の変更や調査では解消できず、外部操作だけが残るか要件が両立不能である
         next: ABORT
 
   - name: write_tests
+    capabilities: [edit, enable-skills]
     uses: development-core-write-tests
     with:
       testing_policy:
@@ -128,6 +167,7 @@ steps:
         interactive_only: true
 
   - name: implement
+    capabilities: [edit, enable-skills]
     uses: development-core-implement
     with:
       development_policy:
@@ -136,11 +176,16 @@ steps:
         $param: development_knowledge
       implementation_instruction:
         $param: implementation_instruction
+    dynamic_facets:
+      pool:
+        $param: implementation_pool
+    companion:
+      $param: implementation_companions
     rules:
       - condition: 実装が完了した
-        next: peer-review
+        next: review
       - condition: 実装未着手（レポートのみ）
-        next: peer-review
+        next: review
       - condition: 実装を進行できない
         next: replan
       - condition: ユーザー入力が必要
@@ -148,29 +193,85 @@ steps:
         requires_user_input: true
         interactive_only: true
 
-  - name: peer-review
+  - name: review
     kind: workflow_call
     call:
-      $param: peer_review_workflow
+      $param: review_workflow
+    vars:
+      review_mode: initial
     args:
-      reviewer_suite:
-        $param: reviewer_suite
       review_policy_additions:
         $param: review_policy_additions
       review_knowledge_additions:
         $param: review_knowledge
-      fix_knowledge:
-        $param: review_knowledge
-      plan_policy:
-        $param: review_policy
-      fix_policy:
-        $param: development_policy
-      verification_policy:
-        $param: review_policy
     rules:
       - condition: COMPLETE
+        next: supervise
+      - condition: needs_fix
+        next: fix
+      - condition: ABORT
+        next: ABORT
+
+  - name: follow-up-review
+    kind: workflow_call
+    call:
+      $param: review_workflow
+    vars:
+      review_mode: follow_up
+    args:
+      review_policy_additions:
+        $param: review_policy_additions
+      review_knowledge_additions:
+        $param: review_knowledge
+    rules:
+      - condition: COMPLETE
+        next: supervise
+      - condition: needs_fix
+        next: fix
+      - condition: ABORT
+        next: ABORT
+
+  - name: fix
+    capabilities: [edit, enable-skills]
+    uses: experimental-fix
+    with:
+      fix_policy:
+        $param: review_policy
+      fix_knowledge:
+        $param: development_knowledge
+      fix_instruction:
+        $param: fix_instruction
+    dynamic_facets:
+      pool:
+        $param: implementation_pool
+    companion:
+      $param: implementation_companions
+    rules:
+      - condition: 修正完了
+        next: follow-up-review
+      - condition: 修正方針の見直しが必要
+        next: replan
+      - condition: タスク全体の再計画が必要
+        next: replan
+      - condition: 修正を進行できない
+        next: ABORT
+
+  - name: supervise
+    capabilities: [readonly, enable-skills]
+    uses: experimental-supervise
+    with:
+      supervise_policy:
+        $param: review_policy
+      supervise_knowledge:
+        $param: review_knowledge
+      supervise_instruction:
+        $param: supervise_instruction
+    rules:
+      - condition: BLOCKED
+        next: ABORT
+      - condition: approved
         next: COMPLETE
       - condition: need_replan
         next: replan
-      - condition: ABORT
-        next: ABORT
+      - condition: needs_fix
+        next: fix

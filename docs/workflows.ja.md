@@ -116,7 +116,7 @@ steps:
 
 ```yaml
 kind: workflow_call
-call: merge-readiness-finding-contract-final-gate
+call: merge-readiness-final-gate
 ```
 
 `uses` を宣言する concrete workflow step は、parallel sub-step を含め、呼び出し側に空でない rule 定義を必ず持ちます。非 parallel fragment の呼び出し側は `rules` 配列を、parallel fragment の呼び出し側は次に示す rule tree を使います。fragment は root と parallel sub-step のどちらにも `rules` を定義できません。これにより、遷移先の step 名を知る workflow が routing を所有します。fragment から別 fragment を参照する中間 `uses` は、concrete workflow がその参照 chain を呼び出すまではこの必須条件の対象外です。loader は rule のコピー、継承、fallback の自動生成を行いません。
@@ -671,7 +671,7 @@ open finding の各 item は、fixer instruction と `when()` の rule state の
 
 ledger が既に存在しない raw finding を参照している場合、その id は黙って破棄されたり ledger 全体を読めなくしたりせず、`unknownRawFindingIds` に公開されます。どちらの配列も重複排除・ソート済みで、`contains(item.unknownRawFindingIds, "raw-id")` も同じ包含構文を使います。
 
-invalid・欠落した Finding Manager の判断は provisional finding として台帳へ着地し、run は継続します。`COMPLETE` の rule より*前*に `when(findings.provisional.count > 0 && findings.conflicts.count == 0)` を再計画ステップへ向ける rule を追加してください（配線の参考は builtin の `takt-default-high` workflow）。`finding_contract` を使う workflow が `findings.provisional` を一切参照していない場合、`takt workflow doctor` が警告します。
+invalid・欠落した Finding Manager の判断は provisional finding として台帳へ着地し、run は継続します。`COMPLETE` の rule より*前*に `when(findings.provisional.count > 0 && findings.conflicts.count == 0)` を再計画ステップへ向ける rule を追加してください。`finding_contract` を使う workflow が `findings.provisional` を一切参照していない場合、`takt workflow doctor` が警告します。
 
 ### conflict の裁定と接地再裁定
 

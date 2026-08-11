@@ -142,7 +142,7 @@ describe('builtin capability declarations (parsed contract)', () => {
         join(REPO_ROOT, 'builtins', lang, 'workflows', 'development-core.yaml'),
       );
       const byName = new Map(agentLeaves(config.steps).map((leaf) => [leaf.name, leaf.providerOptions]));
-      expect(canon(byName.get('implement'))).toBe(canon(resolvePreset(lang, 'edit')));
+      expect(canon(byName.get('implement'))).toBe(canon(resolvePreset(lang, ['edit', 'enable-skills'])));
       expect(canon(byName.get('replan'))).toBe(canon(resolvePreset(lang, 'readonly')));
     }
   });

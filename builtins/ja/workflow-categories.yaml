@@ -68,9 +68,6 @@ workflow_categories:
       - review-fix-dual-cqrs
       - review-backend-cqrs
       - review-fix-backend-cqrs
-      - review-takt-default
-      - review-fix-takt-default
-      - review-fix-takt-default-high
       - audit-unit
       - audit-e2e
       - audit-security
@@ -82,14 +79,7 @@ workflow_categories:
     workflows:
       - takt-default
       - takt-experimental
-      - takt-default-fc
       - auto-improvement-loop
-      - review-takt-default
-      - review-fix-takt-default
-      - review-fix-takt-default-high
-      - takt-default-high
-      - takt-default-team-high
-      - takt-default-localllm
   その他:
     workflows:
       - research

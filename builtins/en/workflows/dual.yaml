@@ -13,7 +13,7 @@ steps:
       testing_knowledge: [frontend, react, backend, architecture, unit-testing, e2e-testing]
       development_policy: [coding, testing, design-fidelity, screen-api]
       development_knowledge: [frontend, react, backend, security, architecture, task-decomposition]
-      reviewer_suite: peer-review-suite-frontend
+      review_workflow: peer-review-suite-frontend
       review_policy: [coding, testing, design-fidelity, screen-api, review]
       review_knowledge: [frontend, react, backend, security, architecture, unit-testing, e2e-testing]
     rules:

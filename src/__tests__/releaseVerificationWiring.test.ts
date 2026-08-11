@@ -446,11 +446,6 @@ describe('release verification wiring', () => {
       normalized: 'src/__tests__/finding-review-integrity-gate.test.ts',
     },
     {
-      target: 'src/__tests__/workflow-step-fragment-builtin-runtime.test.ts',
-      script: 'test:it:heavy:serial:workflow',
-      normalized: 'src/__tests__/workflow-step-fragment-builtin-runtime.test.ts',
-    },
-    {
       target: 'src/__tests__/workflow-step-fragment-runtime.test.ts',
       script: 'test:it:heavy:serial:workflow',
       normalized: 'src/__tests__/workflow-step-fragment-runtime.test.ts',
