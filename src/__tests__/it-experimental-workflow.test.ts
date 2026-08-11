@@ -352,6 +352,81 @@ steps:
   );
 
   it(
+    'should route blocked implementation and fix replanning through replan before reviewing again',
+    async () => {
+      const language = 'en';
+      writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${language}\n`);
+      invalidateAllResolvedConfigCache();
+      const workflow = loadWorkflowFromFile(
+        join(getBuiltinWorkflowsDir(language), 'takt-experimental.yaml'),
+        projectDir,
+      );
+      const scenarioWorkflow = loadCoreForWrapper(language, workflow, projectDir);
+      const reviewWorkflow = loadReviewForCore(language, scenarioWorkflow, projectDir);
+      setMockScenario([
+        response(scenarioWorkflow, 'plan', 'planner', 'Requirements are clear and implementation is feasible'),
+        response(scenarioWorkflow, 'write_tests', 'coder', 'Test creation is complete'),
+        selection(['testing'], 'Testing implementation facets are required.'),
+        response(scenarioWorkflow, 'implement', 'coder', 'Implementation cannot proceed'),
+        response(
+          scenarioWorkflow,
+          'replan',
+          'planner',
+          'An actionable, untried project-scoped change or investigation and its verification steps were defined',
+        ),
+        selection(['testing'], 'The replanned implementation still changes test boundaries.'),
+        response(scenarioWorkflow, 'implement', 'coder', 'Implementation is complete'),
+        selection([], 'The fixed TAKT reviewers cover the changed path.'),
+        response(reviewWorkflow, 'coding-review', 'coding-reviewer', 'needs_fix'),
+        response(reviewWorkflow, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'needs_fix'),
+        selection([], 'No additional remediation facets are needed.'),
+        response(scenarioWorkflow, 'fix', 'coder', 'The task needs to be replanned'),
+        response(
+          scenarioWorkflow,
+          'replan',
+          'planner',
+          'An actionable, untried project-scoped change or investigation and its verification steps were defined',
+        ),
+        selection(['testing'], 'The second replanned implementation changes test boundaries.'),
+        response(scenarioWorkflow, 'implement', 'coder', 'Implementation is complete'),
+        selection([], 'The fixed TAKT reviewers cover the replanned path.'),
+        response(reviewWorkflow, 'coding-review', 'coding-reviewer', 'approved'),
+        response(reviewWorkflow, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
+        response(scenarioWorkflow, 'supervise', 'supervisor', 'approved'),
+      ]);
+      const engine = new WorkflowEngine(workflow, projectDir, 'Implement a TAKT change that requires replanning', {
+        projectCwd: projectDir,
+        provider: 'mock',
+        selectorProvider: SELECTOR_PROVIDER,
+        selectorGitCommandRunner: SELECTOR_GIT_COMMAND_RUNNER,
+        companionProviders: {
+          'ai-antipattern-review-companion': { provider: 'mock' },
+        },
+        companionDiffReader: COMPANION_DIFF_READER,
+        structuredCaller: new DefaultStructuredCaller(),
+        workflowCallResolver: ({ parentWorkflow, step, projectCwd, lookupCwd }) =>
+          resolveWorkflowCallTarget(parentWorkflow, step, projectCwd, lookupCwd),
+      });
+      engines.push(engine);
+      const visitedSteps: string[] = [];
+      engine.on('step:start', (step) => visitedSteps.push(step.name));
+
+      const state = await engine.run();
+
+      expect(state.status, JSON.stringify({
+        currentStep: state.currentStep,
+        iteration: state.iteration,
+        remainingScenarios: getScenarioQueue()?.remaining,
+        visitedSteps,
+      })).toBe('completed');
+      expect(getScenarioQueue()?.remaining).toBe(0);
+      expect(visitedSteps.filter((step) => step === 'replan')).toHaveLength(2);
+      expect(visitedSteps.filter((step) => step === 'plan')).toHaveLength(1);
+    },
+    60_000,
+  );
+
+  it(
     'should abort the Japanese experimental wrapper when review findings cannot be remediated',
     async () => {
       const language = 'ja';

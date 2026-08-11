@@ -22,6 +22,10 @@ subworkflow:
       type: facet_ref
       facet_kind: instruction
       default: plan
+    replan_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: replan-implementation
     testing_policy:
       type: facet_ref[]
       facet_kind: policy
@@ -125,6 +129,29 @@ steps:
       - condition: Requirements are unclear or information is insufficient
         next: ABORT
 
+  - name: replan
+    tags: [plan]
+    edit: false
+    persona: planner
+    policy:
+      - contract-change
+      - $param: plan_policy
+    knowledge:
+      $param: plan_knowledge
+    instruction:
+      $param: replan_instruction
+    output_contracts:
+      report:
+        - name: plan.md
+          format: plan
+    rules:
+      - condition: An actionable, untried project-scoped change or investigation and its verification steps were defined
+        next: implement
+      - condition: The current implementation satisfies the requirements and acceptance criteria, required project-scoped verification is complete, and no untried change or investigation remains
+        next: review
+      - condition: Confirmed evidence shows that project-scoped changes or investigation cannot resolve the blocker, leaving only an external action or mutually incompatible requirements
+        next: ABORT
+
   - name: write_tests
     capabilities: [edit, enable-skills]
     uses: development-core-write-tests
@@ -167,7 +194,7 @@ steps:
       - condition: No implementation was started (report only)
         next: review
       - condition: Implementation cannot proceed
-        next: plan
+        next: replan
       - condition: User input is required
         next: implement
         requires_user_input: true
@@ -229,9 +256,9 @@ steps:
       - condition: Fix is complete
         next: follow-up-review
       - condition: The fix approach needs to be reconsidered
-        next: plan
+        next: replan
       - condition: The task needs to be replanned
-        next: plan
+        next: replan
       - condition: Fix cannot proceed
         next: ABORT
 
@@ -251,6 +278,6 @@ steps:
       - condition: approved
         next: COMPLETE
       - condition: need_replan
-        next: plan
+        next: replan
       - condition: needs_fix
         next: fix

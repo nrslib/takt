@@ -863,6 +863,40 @@ describe('builtin workflow step fragment migration', () => {
     expect(fcReplan?.instruction?.trim().length ?? 0).toBeGreaterThan(0);
   });
 
+  it.each(LANGUAGES)('routes %s experimental-core rework through replan instead of the initial plan', (lang) => {
+    mkdirSync(join(projectDir, '.takt'), { recursive: true });
+    writeFileSync(join(projectDir, '.takt', 'config.yaml'), 'language: ' + lang + '\n', 'utf-8');
+    invalidateAllResolvedConfigCache();
+
+    const raw = readBuiltinWorkflow(lang, 'experimental-core');
+    const replan = getStep(raw, 'replan');
+    expect(replan).toMatchObject({
+      persona: 'planner',
+      edit: false,
+      instruction: { $param: 'replan_instruction' },
+      knowledge: { $param: 'plan_knowledge' },
+      output_contracts: { report: [{ name: 'plan.md', format: 'plan' }] },
+    });
+    expect(replan.policy).toEqual(['contract-change', { $param: 'plan_policy' }]);
+    expect((replan.rules as RawRule[]).map((rule) => rule.next))
+      .toEqual(['implement', 'review', 'ABORT']);
+
+    const nextTargets = (stepName: string): (string | undefined)[] =>
+      (getStep(raw, stepName).rules as RawRule[]).map((rule) => rule.next);
+    for (const stepName of ['implement', 'fix', 'supervise']) {
+      expect(nextTargets(stepName), stepName).toContain('replan');
+      expect(nextTargets(stepName), stepName).not.toContain('plan');
+    }
+    expect(nextTargets('write_tests')).toContain('plan');
+
+    const workflowPath = join(getBuiltinWorkflowsDir(lang), 'experimental-core.yaml');
+    const loaded = loadWorkflowFromFile(workflowPath, projectDir);
+    const loadedReplan = loaded.steps.find((step) => step.name === 'replan');
+    expect(loadedReplan).toMatchObject({ persona: 'planner', edit: false });
+    expect(loadedReplan?.outputContracts?.[0]).toMatchObject({ name: 'plan.md', formatRef: 'plan' });
+    expect(loadedReplan?.instruction?.trim().length ?? 0).toBeGreaterThan(0);
+  });
+
   it.each(LANGUAGES)('loads %s lightweight development routines with resolved runtime report contracts', (lang) => {
     mkdirSync(join(projectDir, '.takt'), { recursive: true });
     writeFileSync(join(projectDir, '.takt', 'config.yaml'), 'language: ' + lang + '\n', 'utf-8');
