@@ -22,9 +22,9 @@
 | {problem family or contract reviewed} | {condition to preserve} | {locations checked} | {locations checked} | {paths checked} | {test assets checked} | {none or reason unchecked} | {no issue / finding number} |
 
 ## Current Iteration Findings (new)
-| # | finding_id | family_tag | Location | Issue | Fix Suggestion |
-|---|------------|------------|----------|-------|----------------|
-| 1 | FE-NEW-src-file-L42 | component-design | `src/file.tsx:42` | Issue description | Fix approach |
+| # | finding_id | family_tag | Location | Issue | Authorization Basis | Reason Absent from Initial Round | Fix Suggestion |
+|---|------------|------------|----------|-------|---------------------|----------------------------------|----------------|
+| 1 | FE-NEW-src-file-L42 | component-design | `src/file.tsx:42` | Issue description | Required for follow-up; otherwise not applicable | Required for follow-up; otherwise not applicable | Fix approach |
 
 ## Carry-over Findings (persists)
 | # | finding_id | family_tag | Previous Evidence | Current Evidence | Issue | Fix Suggestion |

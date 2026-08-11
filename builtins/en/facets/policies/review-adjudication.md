@@ -38,7 +38,7 @@ Use `duplicate` only for findings with the same root cause and acceptance criter
 
 ## New findings in follow-up reviews
 
-Keep follow-up remediation converging toward closure. When accepting a new finding from a follow-up review, record one of `accepted_family_unvisited_consumer`, `remediation_regression`, or `direct_acceptance_criterion_violation`, plus the reason it was absent from the initial round. Prior existence does not make an unvisited consumer in an accepted family non-actionable; attach it to that family rather than creating a horizontal family. A horizontal improvement to a neighboring contract does not enter fix planning as a new finding.
+Keep follow-up remediation converging toward closure. When accepting a new finding from a follow-up review, record one of `accepted_family_unvisited_consumer`, `remediation_regression`, `direct_acceptance_criterion_violation`, or `required_consumer_migration`, plus the reason it was absent from the initial round. Prior existence does not make an unvisited consumer in an accepted family non-actionable; attach it to that family rather than creating a horizontal family. A horizontal improvement to a neighboring contract does not enter fix planning as a new finding.
 
 ## Complete adjudication
 

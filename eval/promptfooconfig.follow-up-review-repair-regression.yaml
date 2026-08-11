@@ -38,7 +38,7 @@ tests:
           - It identifies src/public-key.js as a collision defect introduced by the repair, and makes clear that the repair introduced this new finding.
           - It separately keeps the original finding unresolved for src/retry-token.js and src/checkpoint.js.
           - It identifies src/status-api.js as an existing but previously unvisited consumer of the accepted compound-resource-identity family. It must explain that the initial round omitted the terminal/API consumer rather than dismissing it as a pre-existing or carryover issue.
-          - It records an authorization basis for each new finding: repair-induced regression for src/public-key.js and accepted-family unvisited consumer for src/status-api.js. Equivalent phrasing is acceptable.
+          - It records an authorization basis for each new finding: repair-induced regression for src/public-key.js, and accepted-family unvisited consumer plus required consumer migration for src/status-api.js. Equivalent phrasing is acceptable.
           - It does not report src/primary-key.js, src/structured-key.js, or the separate presentation contract in src/resource-label.js as defective.
 
           Merely listing all defects under the original persistent finding fails because it does not distinguish the repair-induced regression from the initially missed accepted-family consumer. Expanding into the neighboring label contract also fails.

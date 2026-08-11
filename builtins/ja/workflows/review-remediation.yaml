@@ -31,7 +31,7 @@ subworkflow:
       facet_kind: knowledge
       default:
         - architecture
-initial_step: fix-plan
+initial_step: review-adjudication
 loop_monitors:
   - cycle:
       - fix-plan
@@ -69,6 +69,21 @@ loop_monitors:
         - condition: 要件を満たす実現可能な打開手段がない
           next: ABORT
 steps:
+  - name: review-adjudication
+    uses: peer-review-adjudication
+    with:
+      review_policy_additions:
+        $param: plan_policy
+      review_knowledge_additions:
+        $param: fix_knowledge
+    rules:
+      - condition: 修正対象あり
+        next: fix-plan
+      - condition: 修正対象なし
+        next: COMPLETE
+      - condition: タスク全体の再計画が必要
+        return: need_replan
+
   - name: fix-plan
     uses: peer-review-fix-plan
     with:
@@ -76,7 +91,7 @@ steps:
         $param: plan_policy
       fix_knowledge:
         $param: fix_knowledge
-      plan_instruction: fix-plan
+      plan_instruction: fix-plan-from-review-resolution
     rules:
       - condition: 修正計画を確定した
         next: fix

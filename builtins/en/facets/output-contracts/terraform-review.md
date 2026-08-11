@@ -21,9 +21,9 @@
 | {problem family or contract reviewed} | {condition to preserve} | {locations checked} | {locations checked} | {paths checked} | {test assets checked} | {none or reason unchecked} | {no issue / finding number} |
 
 ## Current Iteration Findings (new)
-| # | finding_id | family_tag | Scope | Location | Issue | Fix Suggestion |
-|---|------------|------------|-------|----------|-------|----------------|
-| 1 | TF-NEW-file-L42 | tf-convention | In-scope | `modules/example/main.tf:42` | Issue description | Fix approach |
+| # | finding_id | family_tag | Scope | Location | Issue | Authorization Basis | Reason Absent from Initial Round | Fix Suggestion |
+|---|------------|------------|-------|----------|-------|---------------------|----------------------------------|----------------|
+| 1 | TF-NEW-file-L42 | tf-convention | In-scope | `modules/example/main.tf:42` | Issue description | Required for follow-up; otherwise not applicable | Required for follow-up; otherwise not applicable | Fix approach |
 
 Scope: "In-scope" (fixable in this change) / "Out-of-scope" (existing issue, non-blocking)
 

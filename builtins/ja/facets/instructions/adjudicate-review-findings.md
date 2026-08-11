@@ -8,7 +8,7 @@
 3. 各指摘を現在のコード、要求、観測可能な契約へ照合し、正式な disposition である `actionable`、`duplicate`、`false_positive`、`overreach`、`out_of_scope`、`no_issue_after_verification`、`environment_unverified` のいずれか1つへ分類する。現在のプロンプトに裁定・契約変更の判断基準が提供されている場合は適用する
 4. 同じ根本原因、正本、不変条件、受入条件を持つ指摘を1つの family にまとめ、元の finding ID と出典をすべて保持する。定義から terminal・API 出力まで同じ family を縦に閉じ、隣接する別契約を混ぜない
 5. 過剰な修正方式を退ける場合も、証拠で確認でき修正権限を持つ元の欠陥と、それを解消する最小の内部修正を失わない。技術的に妥当でも権限のない水平改善は `out_of_scope` として修正対象へ入れない
-6. follow-up の新規 finding には、`accepted_family_unvisited_consumer`、`remediation_regression`、`direct_acceptance_criterion_violation` のいずれかと、初回に含まれなかった理由を記録する
+6. follow-up の新規 finding には、`accepted_family_unvisited_consumer`、`remediation_regression`、`direct_acceptance_criterion_violation`、`required_consumer_migration` のいずれかと、初回に含まれなかった理由を記録する
 7. `environment_unverified` は、現在のプロンプトに環境要因の判断基準が提供され全条件を満たす場合だけ使い、実装欠陥の証拠がある指摘を環境要因で退けない
 8. 指摘同士または要求・計画が競合し、現行の前提のまま修正対象を確定できない場合だけ、再計画が必要と判定する
 9. 修正対象ごとに、権限根拠、破られている不変条件、関係する契約経路、完了を判定できる受入条件を記録する

@@ -24,9 +24,9 @@ Fill this when the diff adds or changes IDs, names, metadata, config, environmen
 | {problem family or contract reviewed} | {condition to preserve} | {locations checked} | {locations checked} | {paths checked} | {test assets checked} | {none or reason unchecked} | {no issue / finding number} |
 
 ## Current Iteration Findings (new)
-| # | finding_id | family_tag | Severity | Location | Issue | Impact | Fix Suggestion |
-|---|------------|------------|----------|----------|-------|--------|----------------|
-| 1 | CODE-NEW-src-file-L42 | bug | High / Medium / Low | `src/file.ts:42` | {Issue} | {Impact} | {Fix suggestion} |
+| # | finding_id | family_tag | Severity | Location | Issue | Impact | Authorization Basis | Reason Absent from Initial Round | Fix Suggestion |
+|---|------------|------------|----------|----------|-------|--------|---------------------|----------------------------------|----------------|
+| 1 | CODE-NEW-src-file-L42 | bug | High / Medium / Low | `src/file.ts:42` | {Issue} | {Impact} | {Required for follow-up; otherwise not applicable} | {Required for follow-up; otherwise not applicable} | {Fix suggestion} |
 
 ## Carry-over Findings (persists)
 | # | finding_id | family_tag | Previous Evidence | Current Evidence | Issue | Fix Suggestion |

@@ -38,7 +38,7 @@
 
 ## 継続レビューの新規指摘
 
-follow-up の修正対象を解消へ向けて収束させる。新規 finding を採用する場合は、`accepted_family_unvisited_consumer`、`remediation_regression`、`direct_acceptance_criterion_violation` のいずれかと、初回に含まれなかった理由を記録する。初回から存在したことは、採用済み family の未確認 consumer を非修正にする根拠にならず、水平な新規 family は作らず同じ family へ紐付ける。一方、隣接する別契約の水平改善は新規 finding として修正計画へ渡さない。
+follow-up の修正対象を解消へ向けて収束させる。新規 finding を採用する場合は、`accepted_family_unvisited_consumer`、`remediation_regression`、`direct_acceptance_criterion_violation`、`required_consumer_migration` のいずれかと、初回に含まれなかった理由を記録する。初回から存在したことは、採用済み family の未確認 consumer を非修正にする根拠にならず、水平な新規 family は作らず同じ family へ紐付ける。一方、隣接する別契約の水平改善は新規 finding として修正計画へ渡さない。
 
 ## 裁定の完全性
 
