@@ -4,14 +4,14 @@
 ## Result: Fix plan finalized / Task-level replanning required
 
 ## Finding Coverage
-| Finding ID / Source | Evidence | Fix Unit / Follow-up | Problem → Direct Cause → Root Cause | Classification | Acceptance Criteria |
-|---------------------|----------|----------------------|-------------------------------------|----------------|---------------------|
-| {ID or report name} | {Report or file:line} | {Stable ID} | {Causal chain verified in code} | {Local / Structural / Undemonstrable due to environmental factors} | {Completion condition or follow-up verification} |
+| Finding ID / Source | Authorization Basis | Evidence | Fix Unit / Follow-up | Problem → Direct Cause → Root Cause | Classification | Acceptance Criteria and Remediation Boundary |
+|---------------------|---------------------|----------|----------------------|-------------------------------------|----------------|----------------------------------------------|
+| {ID or report name} | {Basis recorded by adjudication} | {Report or file:line} | {Stable ID} | {Causal chain verified in code} | {Local / Structural / Undemonstrable due to environmental factors} | {Completion condition and excluded neighboring contract or adjacent work} |
 
 ## Defect-Family Final State
 | Fix Unit | Authoritative Contract | Complete Invariant Set | Target Responsibility and Source of Truth | Participating Contract Paths | Valid, Failing, and Boundary Examples | Migration and Removal |
 |----------|------------------------|------------------------|-------------------------------------------|------------------------------|---------------------------------------|-----------------------|
-| {Fix unit} | {Requirement, specification, schema, or public contract} | {Conditions beyond the finding examples} | {Target location, or unchanged for a local issue} | {Entries, types, schemas, validation, consumers, state, side effects, and failure paths} | {Representative cases to verify} | {Consumers and duplicate or obsolete paths} |
+| {Fix unit} | {Requirement, specification, schema, or public contract} | {Conditions beyond the finding examples} | {Target location, or unchanged for a local issue} | {Definition, production, normalization, validation, every consumer, retry, fallback, parallel execution, persistence, restoration, and terminal or API output} | {Representative cases to verify} | {Consumers and duplicate or obsolete paths} |
 
 ## Requirement Scenarios (conditional)
 

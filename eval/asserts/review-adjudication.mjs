@@ -1,6 +1,7 @@
 const FINDINGS = {
   code: 'CODE-NEW-channel-normalization-L2',
   architecture: 'ARCH-NEW-channel-normalization-L2',
+  horizontal: 'ARCH-NEW-build-label-dup-L1',
   testing: 'TEST-NEW-readme-examples-L1',
   security: 'SEC-NEW-secret-leak-L3',
   antipattern: 'AI-NEW-windows-proof-L1',
@@ -232,26 +233,30 @@ export default function assertReviewAdjudication(output) {
 
   const codeRows = rowForFinding(dispositionTable.rows, FINDINGS.code);
   const architectureRows = rowForFinding(dispositionTable.rows, FINDINGS.architecture);
+  const horizontalRows = rowForFinding(dispositionTable.rows, FINDINGS.horizontal);
   const testingRows = rowForFinding(dispositionTable.rows, FINDINGS.testing);
   const securityRows = rowForFinding(dispositionTable.rows, FINDINGS.security);
   const antipatternRows = rowForFinding(dispositionTable.rows, FINDINGS.antipattern);
   const codeRow = codeRows[0] ?? [];
   const architectureRow = architectureRows[0] ?? [];
+  const horizontalRow = horizontalRows[0] ?? [];
   const testingRow = testingRows[0] ?? [];
   const securityRow = securityRows[0] ?? [];
   const antipatternRow = antipatternRows[0] ?? [];
-  const nonActionableIds = [FINDINGS.testing, FINDINGS.security, FINDINGS.antipattern];
+  const nonActionableIds = [FINDINGS.horizontal, FINDINGS.testing, FINDINGS.security, FINDINGS.antipattern];
   const actionableEvidence = `${actionableSection}\n${codeRow.join(' ')}\n${architectureRow.join(' ')}`;
   const acceptanceEvidence = acceptanceContexts(actionableSection).join('\n');
 
   const checks = [
     ['actionable-result', /(結果\s*[:：]\s*修正対象あり|Result\s*[:：]\s*ACTIONABLE FINDINGS|(?:修正対象は\s*[1-9]\d*|[1-9]\d*つの修正対象)\s*family)/i.test(output)],
     ['disposition-schema', hasDispositionSchema(dispositionTable)],
-    ['one-disposition-per-finding', [codeRows, architectureRows, testingRows, securityRows, antipatternRows]
+    ['one-disposition-per-finding', [codeRows, architectureRows, horizontalRows, testingRows, securityRows, antipatternRows]
       .every((rows) => rows.length === 1)],
     ['code-actionable', /^actionable$/i.test(dispositionOf(codeRow))],
     ['architecture-duplicate', /^duplicate$/i.test(dispositionOf(architectureRow))],
     ['same-actionable-family', sameActionableFamily(actionableSection, dispositionTable, codeRow, architectureRow)],
+    ['horizontal-valid-but-out-of-scope', /^out_of_scope$/i.test(dispositionOf(horizontalRow))
+      && hasNoExplicitTarget(dispositionTable, horizontalRow)],
     ['quality-defect-retained', QUALITY_DUPLICATION.test(actionableSection)
       && QUALITY_BOUNDARY.test(actionableSection)],
     ['minimal-internal-repair-retained', INTERNAL_REPAIR.test(actionableEvidence)],

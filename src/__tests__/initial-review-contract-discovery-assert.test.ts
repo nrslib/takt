@@ -7,6 +7,8 @@ const projectionPaths = [
   'src/summary.js',
   'src/catalog-row.js',
   'src/list-command.js',
+  'src/terminal-node.js',
+  'src/node-api.js',
   'tests/public-projections.test.js',
 ];
 const identityPaths = [
@@ -15,6 +17,12 @@ const identityPaths = [
   'src/job-store.js',
   'src/checkpoint.js',
   'src/event-bus.js',
+  'src/retry-token.js',
+  'src/fallback-resume.js',
+  'src/parallel-slot.js',
+  'src/resume-codec.js',
+  'src/terminal-progress.js',
+  'src/status-api.js',
 ];
 
 function tableRow(familyTag: string, location: string, problem: string, repair: string): string {

@@ -8,9 +8,9 @@
 | Case-insensitive cache keys | unmet | `src/cache.js:13` reads the raw key although `set` normalizes it |
 
 ## Actionable Families
-| family | Finding ID | Evidence | Problem -> root cause | Affected contract paths | Acceptance criteria |
-|--------|------------|----------|-----------------------|-------------------------|---------------------|
-| cache-key-normalization | MERGE-NEW-cache-key-L2 | `src/cache.js:13` | Read-side operations bypass the normalization boundary used by writes | set, get, has, delete, and key normalization | Values written with a supported key are retrievable, detectable, and deletable through every case-and-whitespace-equivalent key, while invalid-value behavior is unchanged |
+| family | Finding ID | Authorization basis | Evidence | Problem -> root cause | Affected contract paths | Acceptance criteria | Remediation boundary |
+|--------|------------|---------------------|----------|-----------------------|-------------------------|---------------------|----------------------|
+| cache-key-normalization | MERGE-NEW-cache-key-L2 | Direct acceptance-criterion violation and required consumer migration | `src/cache.js:13` | Read-side operations bypass the normalization boundary used by writes | normalization, set/get/has/delete, retry, fallback, parallel reads, snapshot/restore, terminal output, and API output | Values written with a supported key are retrievable, detectable, and deletable through every case-and-whitespace-equivalent key across every consumer, while invalid-value behavior is unchanged | Change only the cache-key normalization contract; do not revive documentation work or alter unrelated consumers |
 
 ## Prior Finding Dispositions
 | Finding ID | State | Evidence |

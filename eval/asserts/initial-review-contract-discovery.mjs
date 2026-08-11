@@ -169,12 +169,21 @@ export default function assertInitialReviewContractDiscovery(output) {
     'src/doctor.js',
     'src/catalog-row.js',
     'src/list-command.js',
+    'src/terminal-node.js',
+    'src/node-api.js',
   ];
   const identityPaths = [
     'src/path-key.js',
+    'src/name-schema.js',
     'src/job-store.js',
     'src/checkpoint.js',
     'src/event-bus.js',
+    'src/retry-token.js',
+    'src/fallback-resume.js',
+    'src/parallel-slot.js',
+    'src/resume-codec.js',
+    'src/terminal-progress.js',
+    'src/status-api.js',
   ];
   const records = extractFamilyRecords(reviewOutput);
   const projectionRecord = records.find((record) => recordIncludesAllLocations(record, projectionPaths));

@@ -33,4 +33,12 @@ tests:
       - type: llm-rubric
         metric: review/remediation-falsification
         value: |
-          Judge causal classification and code evidence, not headings, table shape, labels, or exact wording. Pass only if the review rejects, identifies src/public-key.js as a collision defect introduced by the repair, separately keeps the original finding unresolved for src/retry-token.js and src/checkpoint.js, and does not report src/primary-key.js or src/structured-key.js as defective. Merely listing all defects under the original persistent finding fails because it does not distinguish the repair-induced regression.
+          Judge causal classification and code evidence, not headings, table shape, labels, or exact wording. Pass only if the review rejects and does all of the following:
+
+          - It identifies src/public-key.js as a collision defect introduced by the repair, and makes clear that the repair introduced this new finding.
+          - It separately keeps the original finding unresolved for src/retry-token.js and src/checkpoint.js.
+          - It identifies src/status-api.js as an existing but previously unvisited consumer of the accepted compound-resource-identity family. It must explain that the initial round omitted the terminal/API consumer rather than dismissing it as a pre-existing or carryover issue.
+          - It records an authorization basis for each new finding: repair-induced regression for src/public-key.js and accepted-family unvisited consumer for src/status-api.js. Equivalent phrasing is acceptable.
+          - It does not report src/primary-key.js, src/structured-key.js, or the separate presentation contract in src/resource-label.js as defective.
+
+          Merely listing all defects under the original persistent finding fails because it does not distinguish the repair-induced regression from the initially missed accepted-family consumer. Expanding into the neighboring label contract also fails.

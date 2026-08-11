@@ -1,1 +1,1 @@
-Cache keys are case-insensitive and ignore surrounding whitespace for both writes and reads. Preserve invalid-key behavior and do not change unrelated documentation.
+Cache keys are case-insensitive and ignore surrounding whitespace for writes and every read path, including retry, fallback, parallel execution, snapshot restoration, terminal output, and API output. Preserve invalid-key behavior and do not change unrelated documentation.

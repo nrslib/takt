@@ -6,7 +6,7 @@ Treat the following current review resolution as the sole authoritative remediat
 
 Plan only the actionable families recorded in that resolution, including findings consolidated into them as `duplicate`. Treat `false_positive`, `overreach`, `out_of_scope`, `no_issue_after_verification`, `environment_unverified`, and the final gate's `adjudicated_non_actionable` prior-finding state as explicit non-implementation constraints, not optional work or opportunities for cleanup. Do not reopen or re-adjudicate them.
 
-For each fix unit, preserve the adjudicated family IDs, acceptance criteria, and remediation boundary. Select the smallest change that satisfies those criteria without adding adjacent refactoring, compatibility paths, new guarantees, or reviewer-suggested mechanisms that the adjudication excluded. If a suggested mechanism was rejected while its underlying defect remained actionable, plan the accepted minimal correction rather than the rejected mechanism.
+For each fix unit, preserve the adjudicated family IDs, authorization basis, acceptance criteria, and remediation boundary. Select the smallest change that closes every actual path carrying the same invariant without adding a technically valid but unauthorized improvement to another contract, adjacent refactoring, compatibility paths, new guarantees, or reviewer-suggested mechanisms that the adjudication excluded. If a suggested mechanism was rejected while its underlying defect remained actionable, plan the accepted minimal correction rather than the rejected mechanism.
 
 **Current review resolution:**
 {report:review-resolution.md}
