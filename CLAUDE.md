@@ -121,7 +121,7 @@ Optional per-run SQLite ledger (`finding-contract.sqlite`) that makes review fin
 - Manager/adjudicator prompt wire formats (structured output schemas, allowed actions, evidence requirements) are **engine-owned**; facets add judgment guidance only.
 - Reviewer relation clarification (`clarifyAmbiguousRawRelationsOnce`) only ever ran on the structured-reviewer path and is unreachable under the one-path model; its `relationClarification` plumbing and the ledger's `clarificationAttempted` field are still present and need their own removal decision.
 
-Workflows: `takt-default` and `takt-experimental` use the shared development core. Finding Contract fix/plan/monitor instructions treat the engine-injected live ledger state as the single source of truth, and report files are not authoritative there.
+Workflows: `takt-default`, `takt-experimental`, and `review-fix-takt-default` use the shared development core. Finding Contract fix/plan/monitor instructions treat the engine-injected live ledger state as the single source of truth, and report files are not authoritative there.
 
 ### Config & workflow loading
 
@@ -176,4 +176,4 @@ builtins/{en,ja}/       Bundled facets + workflows (read from dist/ at runtime)
 - Prefer simple code over defensive fallback-heavy logic. TAKT is a local tool: no audit trails, tamper-resistance, or security theater — the threat model is provider output and engine wiring mistakes, not hostile users editing their own files.
 - Filenames mostly `kebab-case`. Conventional Commit style with occasional `(#issue)` suffix.
 - Don't commit secrets; provider keys live in env vars or `~/.takt/config.yaml`.
-- A TAKT review pass is recommended before a PR: `takt -t "#<PR>" -w review-default`. For CodeRabbit comments: judge each, act on the valid ones, resolve every thread; don't post replies.
+- A TAKT review pass is recommended before a PR: `takt -t "#<PR>" -w review-takt-default`. For CodeRabbit comments: judge each, act on the valid ones, resolve every thread; don't post replies.

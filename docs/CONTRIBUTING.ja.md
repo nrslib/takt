@@ -52,17 +52,17 @@ E2E テストの実行方法と前提条件は [E2E テスト概要](./testing/e
 
 ### 2. TAKT レビューを実行する（推奨）
 
-TAKT レビューの実行は**任意ですが推奨**です。問題を早期に発見でき、サマリーを貼るとレビュアーの助けになります。コードを自動改変しない読み取り専用の `review-default` の利用をおすすめします。入力内容からレビューモードを自動判定します:
+TAKT レビューの実行は**任意ですが推奨**です。問題を早期に発見でき、サマリーを貼るとレビュアーの助けになります。コードを自動改変しない読み取り専用の `review-takt-default` の利用をおすすめします。入力内容からレビューモードを自動判定します:
 
 ```bash
 # PR モード — PR番号を指定してレビュー
-takt -t "#<PR番号>" -w review-default
+takt -t "#<PR番号>" -w review-takt-default
 
 # ブランチモード — ブランチのmainとの差分をレビュー
-takt -t "<ブランチ名>" -w review-default
+takt -t "<ブランチ名>" -w review-takt-default
 
 # 現在の差分モード — 未コミットや直近の変更をレビュー
-takt -t "review current changes" -w review-default
+takt -t "review current changes" -w review-takt-default
 ```
 
 `.takt/runs/*/reports/review-summary.md` のレビューサマリーを確認してください。結果が **REJECT** の場合は指摘に対応し、誤検知や意図的な設計判断であればその理由を残してください。サマリーの PR への投稿は歓迎しますが必須ではありません。

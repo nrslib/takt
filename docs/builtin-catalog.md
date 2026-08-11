@@ -75,6 +75,8 @@ Organized by category.
 | | `review-fix-dual-cqrs` | Frontend + CQRS+ES focused architecture, CQRS+ES, frontend, security, and coding review with a fix loop. |
 | | `review-backend-cqrs` | CQRS+ES focused architecture, CQRS+ES, security, and coding review. |
 | | `review-fix-backend-cqrs` | CQRS+ES focused architecture, CQRS+ES, security, and coding review with a fix loop. |
+| | `review-takt-default` | TAKT-focused multi-perspective review (5 reviewers including AI antipattern and coding review). |
+| | `review-fix-takt-default` | Workflow that gathers the review target, then injects TAKT-specific facets into the shared development flow. |
 | | `audit-unit` | Unit test audit. Enumerates behaviors and coverage gaps, produces an issue-ready report without modifying code. |
 | | `audit-e2e` | E2E audit. Enumerates user flows and coverage gaps, produces an issue-ready report without modifying code. |
 | | `audit-security` | Full security audit. Reads every project file for security review. |
@@ -85,6 +87,8 @@ Organized by category.
 | 🎵 TAKT Development | `takt-default` | TAKT-focused workflow using the shared development core with TAKT knowledge injected into planning, testing, implementation, review, and remediation. |
 | | `takt-experimental` | Experimental TAKT development workflow that uses the shared development core with the experimental review, remediation, and follow-up review flow. |
 | | `auto-improvement-loop` | Infinite orchestration loop that routes between open PR handling, issue-driven planning, and fresh improvement planning. |
+| | `review-takt-default` | TAKT-focused multi-perspective review (5 reviewers including AI antipattern and coding review). |
+| | `review-fix-takt-default` | Workflow that gathers the review target, then injects TAKT-specific facets into the shared development flow. |
 | Others | `research` | Research workflow: planner -> digger -> supervisor. Autonomously executes research without asking questions. |
 | | `deep-research` | Deep research workflow: plan -> dig -> analyze -> supervise. Discovery-driven investigation that follows emerging questions with multi-perspective analysis. |
 | | `magi` | Deliberation system inspired by Evangelion. Three AI personas (MELCHIOR, BALTHASAR, CASPER) analyze and vote. |

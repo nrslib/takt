@@ -52,17 +52,17 @@ See the [E2E testing overview](./docs/testing/e2e.md) for how to run the E2E sui
 
 ### 2. Run a TAKT review (recommended)
 
-A TAKT review pass is **optional but encouraged** — it catches issues early, and pasting the summary helps reviewers. We recommend `review-default`, the read-only review that does not auto-modify your code. It auto-detects the review mode from the input:
+A TAKT review pass is **optional but encouraged** — it catches issues early, and pasting the summary helps reviewers. We recommend `review-takt-default`, the read-only review that does not auto-modify your code. It auto-detects the review mode from the input:
 
 ```bash
 # PR mode — review a pull request by number
-takt -t "#<PR-number>" -w review-default
+takt -t "#<PR-number>" -w review-takt-default
 
 # Branch mode — review a branch diff against main
-takt -t "<branch-name>" -w review-default
+takt -t "<branch-name>" -w review-takt-default
 
 # Current diff mode — review uncommitted or recent changes
-takt -t "review current changes" -w review-default
+takt -t "review current changes" -w review-takt-default
 ```
 
 Check the summary in `.takt/runs/*/reports/review-summary.md`. If the result is **REJECT**, address the findings; if a finding is a false positive or an intentional decision, note why it stays. Posting the summary on your PR is welcome but not required.

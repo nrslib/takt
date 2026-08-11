@@ -75,6 +75,8 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 | | `review-fix-dual-cqrs` | フロントエンド＋CQRS+ES 特化レビュー＋修正ループ（architecture、CQRS+ES、frontend、security、coding）。 |
 | | `review-backend-cqrs` | CQRS+ES 特化レビュー（architecture、CQRS+ES、security、coding）。 |
 | | `review-fix-backend-cqrs` | CQRS+ES 特化レビュー＋修正ループ（architecture、CQRS+ES、security、coding）。 |
+| | `review-takt-default` | TAKT開発向け多角レビュー（AIアンチパターン・コーディングレビュー含む5観点レビュー）。 |
+| | `review-fix-takt-default` | レビュー対象を収集してから、TAKT固有ファセットを共通開発フローへ注入するワークフロー。 |
 | | `audit-unit` | ユニットテスト監査。振る舞いとカバレッジギャップを列挙し、コードを変更せずに Issue 作成可能なレポートを出力。 |
 | | `audit-e2e` | E2E テスト監査。ユーザーフローとカバレッジギャップを列挙し、コードを変更せずに Issue 作成可能なレポートを出力。 |
 | | `audit-security` | セキュリティ監査。プロジェクトの全ファイルを読み取ってセキュリティレビュー。 |
@@ -85,6 +87,8 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 | 🎵 TAKT開発 | `takt-default` | 計画、テスト、実装、レビュー、修正へ TAKT 固有知識を注入して共通開発コアを実行する workflow です。 |
 | | `takt-experimental` | 共通開発コアと experimental 向けレビュー・修正・follow-up review を使う TAKT 開発 workflow です。 |
 | | `auto-improvement-loop` | PR・Issue・新規改善を巡回しながら次の task を積み続ける orchestration loop workflow。 |
+| | `review-takt-default` | TAKT開発向け多角レビュー（AIアンチパターン・コーディングレビュー含む5観点レビュー）。 |
+| | `review-fix-takt-default` | レビュー対象を収集してから、TAKT固有ファセットを共通開発フローへ注入するワークフロー。 |
 | その他 | `research` | リサーチ workflow: planner -> digger -> supervisor。質問せずに自律的にリサーチを実行。 |
 | | `deep-research` | ディープリサーチ workflow: plan -> dig -> analyze -> supervise。発見駆動型の調査で、浮上した疑問を多角的に分析。 |
 | | `magi` | エヴァンゲリオンにインスパイアされた合議システム。3つの AI persona (MELCHIOR, BALTHASAR, CASPER) が分析・投票。 |
