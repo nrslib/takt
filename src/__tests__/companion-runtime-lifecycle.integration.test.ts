@@ -252,11 +252,18 @@ describe('companion runtime lifecycle', () => {
       ...step(),
       companion: { fixed: [], pool: ['security-reviewer'] },
     };
-    const callSpy = vi.spyOn(CompanionStructuredCaller.prototype, 'call').mockResolvedValue({
-      status: 'done',
-      content: '',
-      structuredOutput: { selected_ids: ['security-reviewer'], rationale: 'relevant' },
-    });
+    const callSpy = vi.spyOn(CompanionStructuredCaller.prototype, 'call').mockImplementation(
+      async (request) => {
+        const response = {
+          status: 'done' as const,
+          content: '',
+          structuredOutput: { selected_ids: ['security-reviewer'], rationale: 'relevant' },
+        };
+        expect(request.validateResponse).toBeDefined();
+        request.validateResponse!(response);
+        return response;
+      },
+    );
     let runtime: CompanionStepRuntime | undefined;
 
     try {
@@ -382,14 +389,17 @@ describe('companion runtime lifecycle', () => {
       async (request) => {
         schemas.push({ purpose: request.purpose, outputSchema: request.outputSchema });
         if (request.purpose === 'judge') {
-          return {
+          const response = {
             status: 'done',
             content: '',
             structuredOutput: { decision: 'continue', reason: 'continue' },
-          };
+          } as const;
+          expect(request.validateResponse).toBeDefined();
+          request.validateResponse!(response);
+          return response;
         }
         reviewerCalls += 1;
-        return {
+        const response = {
           status: 'done',
           content: '',
           structuredOutput: {
@@ -399,7 +409,10 @@ describe('companion runtime lifecycle', () => {
             updates: [],
             notes: null,
           },
-        };
+        } as const;
+        expect(request.validateResponse).toBeDefined();
+        request.validateResponse!(response);
+        return response;
       },
     );
     const readDiff = vi.fn().mockResolvedValue({ status: 'ok', snapshot });

@@ -853,7 +853,9 @@ describe('CT-COMP-10 companion review terminal lifecycle', () => {
             timestamp: new Date('2026-08-08T00:00:00.000Z'),
           };
           validateResponse?.(candidate);
-          validationCalls.push(purpose);
+          if (validateResponse !== undefined) {
+            validationCalls.push(purpose);
+          }
           return candidate;
         }),
         emitFinding: vi.fn(),

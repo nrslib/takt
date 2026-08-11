@@ -1,5 +1,5 @@
 import { getEventListeners } from 'node:events';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -11,6 +11,7 @@ import { StepExecutor, type StepExecutorDeps } from '../core/workflow/engine/Ste
 import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engine/structured-output-normalizer.js';
 import type { RunPaths } from '../core/workflow/run/run-paths.js';
 import { executeAgent } from '../agents/agent-usecases.js';
+import { initDebugLogger, resetDebugLogger } from '../shared/utils/debug.js';
 import { makeRule, makeStep } from './test-helpers.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
@@ -208,6 +209,7 @@ describe('companion StepExecutor lifecycle', () => {
   let runPaths: RunPaths;
 
   beforeEach(() => {
+    resetDebugLogger();
     cwd = mkdtempSync(join(tmpdir(), 'companion-step-executor-'));
     runPaths = createRunPaths(cwd);
     mkdirSync(runPaths.contextPreviousResponsesAbs, { recursive: true });
@@ -215,6 +217,7 @@ describe('companion StepExecutor lifecycle', () => {
   });
 
   afterEach(() => {
+    resetDebugLogger();
     rmSync(cwd, { recursive: true, force: true });
   });
 
@@ -307,6 +310,8 @@ describe('companion StepExecutor lifecycle', () => {
     mockSuccessfulImplementer();
     const state = makeState();
     const rawFailure = 'api_key=top-secret; cannot read /Users/nrs/private/.takt/config.yaml';
+    const debugLogPath = join(cwd, 'debug.log');
+    initDebugLogger({ enabled: true, logFile: debugLogPath }, cwd);
 
     await new StepExecutor(createDeps({
       cwd,
@@ -327,6 +332,11 @@ describe('companion StepExecutor lifecycle', () => {
     expect(state.companion?.reason).toContain('[path]');
     expect(state.companion?.reason).not.toContain('top-secret');
     expect(state.companion?.reason).not.toContain('/Users/nrs/private/.takt/config.yaml');
+    const debugLog = readFileSync(debugLogPath, 'utf8');
+    expect(debugLog).toContain('api_key=[REDACTED]');
+    expect(debugLog).toContain('[path]');
+    expect(debugLog).not.toContain('top-secret');
+    expect(debugLog).not.toContain('/Users/nrs/private/.takt/config.yaml');
   });
 
   it('should deliver escalation reason and five-field findings as untrusted evidence', async () => {
