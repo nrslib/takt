@@ -132,7 +132,7 @@ describe('companion completion gate', () => {
     expect(result).toBe(original);
   });
 
-  it('should fail closed when completion review could not be verified', () => {
+  it('should fail closed for an unverified state without a recorded failure', () => {
     const result = guardCompanionCompletion(
       companionStep(),
       state({
@@ -147,4 +147,55 @@ describe('companion completion gate', () => {
 
     expect(result.status).toBe('blocked');
   });
+
+  it('should continue condition evaluation after an advisory completion failure', async () => {
+    const workflowState = state({
+      escalated: true,
+      completionVerified: false,
+      completionFailure: true,
+      openMustFixCount: 1,
+      openMustFix,
+      reason: 'completion review could not verify the final diff',
+    });
+    const executor = new StepExecutor({
+      structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
+      optionsBuilder: { buildPhaseRunnerContext: vi.fn() } as unknown as StepExecutorDeps['optionsBuilder'],
+      getInteractive: () => false,
+    } as unknown as StepExecutorDeps);
+
+    const result = await executor.applyPostExecutionPhases(
+      companionStep(),
+      workflowState,
+      1,
+      response(),
+      vi.fn(),
+    );
+
+    expect(result.status).toBe('done');
+    expect(result.matchedRuleIndex).toBe(0);
+    expect(workflowState.companion).toMatchObject({
+      completionVerified: false,
+      completionFailure: true,
+      openMustFixCount: 1,
+    });
+  });
+
+  it.each(['blocked', 'error', 'rate_limited'] as const)(
+    'should preserve a main %s response without applying companion conversion',
+    (status) => {
+      const original = { ...response(), status };
+      const result = guardCompanionCompletion(
+        companionStep(),
+        state({
+          escalated: false,
+          completionVerified: true,
+          openMustFixCount: 1,
+          openMustFix,
+        }),
+        original,
+      );
+
+      expect(result).toBe(original);
+    },
+  );
 });

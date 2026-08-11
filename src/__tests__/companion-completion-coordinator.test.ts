@@ -101,6 +101,7 @@ describe('companion completion coordinator', () => {
     expect(workflowState.companion).toMatchObject({
       escalated: true,
       completionVerified: false,
+      completionFailure: true,
       openMustFixCount: 1,
     });
     expect(emit).toHaveBeenCalledWith('companion:complete', {
@@ -128,6 +129,7 @@ describe('companion completion coordinator', () => {
     expect(workflowState.companion).toMatchObject({
       escalated: true,
       completionVerified: false,
+      completionFailure: true,
       openMustFixCount: 0,
     });
     expect(emit).toHaveBeenCalledWith('companion:complete', {
@@ -159,6 +161,7 @@ describe('companion completion coordinator', () => {
     expect(workflowState.companion).toMatchObject({
       escalated: true,
       completionVerified: false,
+      completionFailure: true,
       openMustFixCount: 0,
     });
     expect(emit).toHaveBeenCalledWith('companion:complete', {
@@ -191,17 +194,48 @@ describe('companion completion coordinator', () => {
   it('should rethrow an abort without publishing completion', async () => {
     const current = detector();
     const emit = vi.fn();
+    const controller = new AbortController();
     const abort = new Error('cancelled');
     abort.name = 'AbortError';
     const coordinator = createCoordinator({
       current,
       emit,
-      readSnapshot: vi.fn().mockRejectedValue(abort),
+      abortSignal: controller.signal,
+      readSnapshot: vi.fn(async () => {
+        controller.abort();
+        throw abort;
+      }),
     });
 
     await expect(coordinator.complete(state(), { allowUnchangedDigest: () => false })).rejects.toBe(abort);
 
     expect(emit).not.toHaveBeenCalled();
+  });
+
+  it('should fail soft for a provider abort when the parent signal is still active', async () => {
+    const current = detector();
+    const emit = vi.fn();
+    const providerAbort = new Error('provider cancelled');
+    providerAbort.name = 'AbortError';
+    const workflowState = state();
+    const coordinator = createCoordinator({
+      current,
+      emit,
+      readSnapshot: vi.fn().mockRejectedValue(providerAbort),
+      abortSignal: new AbortController().signal,
+    });
+
+    const result = await coordinator.complete(workflowState, { allowUnchangedDigest: () => false });
+
+    expect(result).toMatchObject({
+      escalated: true,
+      completionVerified: false,
+      openMustFix: [],
+    });
+    expect(workflowState.companion).toMatchObject({
+      completionVerified: false,
+      completionFailure: true,
+    });
   });
 
   it('should mark a loop-judge escalation as verified after a successful completion round', async () => {
@@ -268,6 +302,7 @@ function createCoordinator(input: {
   recordCompletionRound?: ReturnType<typeof vi.fn>;
   synchronizeSnapshot?: ReturnType<typeof vi.fn>;
   decision?: CompanionTerminalDecisionTracker;
+  abortSignal?: AbortSignal;
 }): CompanionCompletionCoordinator {
   const queue = input.queue ?? new CompanionReviewQueue({ runReview: vi.fn() });
   return new CompanionCompletionCoordinator({
@@ -280,6 +315,7 @@ function createCoordinator(input: {
     recordCompletionRound: input.recordCompletionRound ?? vi.fn(),
     decision: input.decision ?? new CompanionTerminalDecisionTracker(),
     events: new CompanionEventPublisher('implement', input.emit ?? vi.fn()),
+    abortSignal: input.abortSignal,
     onError: vi.fn(),
   });
 }

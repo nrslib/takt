@@ -65,6 +65,7 @@ describe('CT-COMP-06 and CT-COMP-11 structured internal agent execution', () => 
   it('should record failed usage before propagating an internal call failure to the fail-soft boundary', async () => {
     const failure = new Error('provider failed');
     const recordUsage = vi.fn();
+    const call = vi.fn().mockRejectedValue(failure);
 
     await expect(executeCompanionStructuredAgent({
       purpose: 'reviewer',
@@ -76,21 +77,132 @@ describe('CT-COMP-06 and CT-COMP-11 structured internal agent execution', () => 
       projectCwd: '/project',
       language: 'en',
       resolution: { provider: 'mock', model: 'mock-model', providerOptions: {} },
-      call: vi.fn().mockRejectedValue(failure),
+      call,
       recordUsage,
     })).rejects.toBe(failure);
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(recordUsage).toHaveBeenCalledTimes(2);
     expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({
       purpose: 'reviewer',
       success: false,
     }));
   });
 
+  it('should retry a transient internal failure and return the successful response', async () => {
+    const recordUsage = vi.fn();
+    const call = vi.fn()
+      .mockRejectedValueOnce(new Error('temporary provider failure'))
+      .mockResolvedValueOnce(response('done'));
+
+    const result = await executeCompanionStructuredAgent({
+      purpose: 'moderator',
+      agentName: 'companion-moderator',
+      systemPrompt: 'system',
+      prompt: 'prompt',
+      outputSchema: { type: 'object' },
+      cwd: '/worktree',
+      projectCwd: '/project',
+      language: 'en',
+      resolution: { provider: 'mock' },
+      call,
+      recordUsage,
+    });
+
+    expect(result.status).toBe('done');
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(recordUsage).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      purpose: 'moderator',
+      success: false,
+    }));
+    expect(recordUsage).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      purpose: 'moderator',
+      success: true,
+    }));
+  });
+
+  it('should retry a provider AbortError while the parent signal remains active', async () => {
+    const providerAbort = new Error('provider cancelled');
+    providerAbort.name = 'AbortError';
+    const recordUsage = vi.fn();
+    const call = vi.fn()
+      .mockRejectedValueOnce(providerAbort)
+      .mockResolvedValueOnce(response('done'));
+
+    const result = await executeCompanionStructuredAgent({
+      purpose: 'reviewer',
+      agentName: 'security-reviewer',
+      systemPrompt: 'system',
+      prompt: 'prompt',
+      outputSchema: { type: 'object' },
+      cwd: '/worktree',
+      projectCwd: '/project',
+      language: 'en',
+      resolution: { provider: 'mock' },
+      abortSignal: new AbortController().signal,
+      call,
+      recordUsage,
+    });
+
+    expect(result.status).toBe('done');
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(recordUsage).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      purpose: 'reviewer',
+      success: false,
+    }));
+    expect(recordUsage).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      purpose: 'reviewer',
+      success: true,
+    }));
+  });
+
+  it('should retry invalid semantic output and record the failed attempt usage', async () => {
+    const recordUsage = vi.fn();
+    const call = vi.fn()
+      .mockResolvedValueOnce(response('done'))
+      .mockResolvedValueOnce(response('done'));
+    const validateResponse = vi.fn()
+      .mockImplementationOnce(() => {
+        throw new Error('invalid semantic output');
+      })
+      .mockImplementationOnce(() => undefined);
+
+    const result = await executeCompanionStructuredAgent({
+      purpose: 'judge',
+      agentName: 'companion-judge',
+      systemPrompt: 'system',
+      prompt: 'prompt',
+      outputSchema: { type: 'object' },
+      cwd: '/worktree',
+      projectCwd: '/project',
+      language: 'en',
+      resolution: { provider: 'mock' },
+      call,
+      validateResponse,
+      recordUsage,
+    });
+
+    expect(result.status).toBe('done');
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(validateResponse).toHaveBeenCalledTimes(2);
+    expect(recordUsage).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      purpose: 'judge',
+      success: false,
+      usage: expect.objectContaining({ totalTokens: 30 }),
+    }));
+    expect(recordUsage).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      purpose: 'judge',
+      success: true,
+      usage: expect.objectContaining({ totalTokens: 30 }),
+    }));
+  });
+
   it.each(['error', 'blocked', 'rate_limited'] as const)(
-    'should record a resolved %s response as failed usage while retaining provider usage',
+    'should retry and then reject a resolved %s response as an internal failure',
     async (status) => {
       const recordUsage = vi.fn();
+      const call = vi.fn().mockResolvedValue(response(status));
 
-      const result = await executeCompanionStructuredAgent({
+      await expect(executeCompanionStructuredAgent({
         purpose: 'reviewer',
         agentName: 'security-reviewer',
         systemPrompt: 'system',
@@ -100,11 +212,12 @@ describe('CT-COMP-06 and CT-COMP-11 structured internal agent execution', () => 
         projectCwd: '/project',
         language: 'en',
         resolution: { provider: 'mock' },
-        call: vi.fn().mockResolvedValue(response(status)),
+        call,
         recordUsage,
-      });
+      })).rejects.toThrow(new RegExp(`returned status "${status}"`));
 
-      expect(result.status).toBe(status);
+      expect(call).toHaveBeenCalledTimes(2);
+      expect(recordUsage).toHaveBeenCalledTimes(2);
       expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({
         success: false,
         usage: expect.objectContaining({ totalTokens: 30 }),
@@ -136,10 +249,11 @@ describe('CT-COMP-06 and CT-COMP-11 structured internal agent execution', () => 
     resolveCall(response('done'));
 
     await expect(execution).rejects.toMatchObject({ name: 'AbortError' });
+    expect(call).toHaveBeenCalledOnce();
     expect(recordUsage).not.toHaveBeenCalled();
   });
 
-  it('should abort and record a failed usage event when one companion call reaches its timeout', async () => {
+  it('should retry and record failed usage when companion calls reach their timeout', async () => {
     vi.useFakeTimers();
     const recordUsage = vi.fn();
     const call = vi.fn((_system, _prompt, _schema, options: { abortSignal: AbortSignal }) => (
@@ -165,9 +279,13 @@ describe('CT-COMP-06 and CT-COMP-11 structured internal agent execution', () => 
         call,
         recordUsage,
       });
+      const rejection = expect(execution).rejects.toThrow(/timeout|timed out/i);
+      await vi.advanceTimersByTimeAsync(100);
       await vi.advanceTimersByTimeAsync(100);
 
-      await expect(execution).rejects.toThrow(/timeout|timed out/i);
+      await rejection;
+      expect(call).toHaveBeenCalledTimes(2);
+      expect(recordUsage).toHaveBeenCalledTimes(2);
       expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({
         purpose: 'reviewer',
         success: false,

@@ -9,12 +9,15 @@ import {
 } from './contracts.js';
 import type { CompanionDiff } from './diff-reader.js';
 import type { CompanionLoopRound } from './loop-guard.js';
-import { moderateCompanionResult } from './moderator.js';
+import { moderateCompanionResult, validateModeratorDecisions } from './moderator.js';
 import {
   buildCompanionModeratorPrompt,
   buildCompanionReviewPrompt,
 } from './prompt.js';
-import type { CompanionAgentPurpose } from './review-runner.js';
+import type {
+  CompanionAgentPurpose,
+  CompanionStructuredResponseValidator,
+} from './review-runner.js';
 import type { CompanionReviewStateStore } from './review-state-store.js';
 import type { CompanionReviewOperation } from './review-state-store.js';
 import type { CompanionLoopDecision } from './terminal-decision.js';
@@ -47,6 +50,7 @@ interface CompanionReviewRoundInput {
     prompt: string,
     outputSchema: Record<string, unknown>,
     signal: AbortSignal,
+    validateResponse?: CompanionStructuredResponseValidator,
   ) => Promise<AgentResponse>;
   readonly emitFinding: (
     companionName: string,
@@ -98,6 +102,7 @@ export async function executeCompanionReviewRound(
     }
   }
   const state = input.stateStore.get(mailboxPath, input.companionName);
+  const ownersByFindingId = buildFindingOwnerIndex(input);
   const response = await input.callStructured(
     'reviewer',
     input.companionName,
@@ -116,6 +121,12 @@ export async function executeCompanionReviewRound(
     }),
     REVIEW_OUTPUT_JSON_SCHEMA,
     input.signal,
+    (candidate) => {
+      const reviewerResult = parseCompanionReviewOutput(candidate.structuredOutput);
+      if (input.moderatorName === undefined) {
+        validateUpdates(input, reviewerResult.updates, ownersByFindingId);
+      }
+    },
   );
   input.signal.throwIfAborted();
   const reviewerResult = parseCompanionReviewOutput(response.structuredOutput);
@@ -128,9 +139,10 @@ export async function executeCompanionReviewRound(
   if (moderatorName === undefined) {
     await commit(reviewerResult);
   } else {
+    const openFindings = input.openFindings();
     await moderateCompanionResult({
       reviewerResult,
-      openFindings: input.openFindings(),
+      openFindings,
       diffSummary: input.diffSummary,
       implementerExplanation: input.implementerExplanation,
       runModerator: async (request) => {
@@ -141,6 +153,11 @@ export async function executeCompanionReviewRound(
           buildCompanionModeratorPrompt(request),
           MODERATOR_OUTPUT_JSON_SCHEMA,
           input.signal,
+          (candidate) => {
+            const moderated = parseModeratorOutput(candidate.structuredOutput);
+            validateModeratorDecisions(moderated, reviewerResult, openFindings);
+            validateUpdates(input, moderated.updates, ownersByFindingId);
+          },
         );
         input.signal.throwIfAborted();
         return parseModeratorOutput(moderated.structuredOutput);

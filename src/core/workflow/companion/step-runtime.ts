@@ -268,6 +268,14 @@ export class CompanionStepRuntime {
     const provider = this.deps.selectorProvider;
     if (provider === undefined) throw new Error('Companion pool selector has no resolved provider');
     const selectorContract = createSelectorContract(request.candidates, request.maxSelected);
+    const redact = (text: string): string => sanitizeCompanionSelectorRationale(text, request);
+    const validateSelection = (response: AgentResponse) => validateSelectorResponse(
+      response,
+      selectorContract.validationSchema,
+      this.deps.step.name,
+      redact,
+      { label: 'Companion' },
+    );
     const response = await this.structuredCaller.call({
       purpose: 'selector',
       agentName: 'companion-selector',
@@ -275,15 +283,9 @@ export class CompanionStepRuntime {
       systemPrompt: 'Select companion reviewer IDs relevant to this task. Do not select more than maxSelected.',
       prompt: JSON.stringify(request),
       outputSchema: selectorContract.providerSchema,
+      validateResponse: validateSelection,
     });
-    const redact = (text: string): string => sanitizeCompanionSelectorRationale(text, request);
-    const selected = validateSelectorResponse(
-      response,
-      selectorContract.validationSchema,
-      this.deps.step.name,
-      redact,
-      { label: 'Companion' },
-    );
+    const selected = validateSelection(response);
     const rationale = sanitizeCompanionSelectorRationale(selected.rationale, request);
     this.events.poolSelected(selected.selectedIds, rationale);
     return { selectedIds: [...selected.selectedIds], rationale };
@@ -317,7 +319,15 @@ export class CompanionStepRuntime {
         mailboxPath: (name) => this.mailboxPath(name),
         systemPrompt: (name) => this.definitionSystemPrompt(name),
         openFindings: () => this.openFindings(),
-        callStructured: async (purpose, agentName, systemPrompt, prompt, schema, reviewSignal) => (
+        callStructured: async (
+          purpose,
+          agentName,
+          systemPrompt,
+          prompt,
+          schema,
+          reviewSignal,
+          validateResponse,
+        ) => (
           this.structuredCaller.call({
             purpose,
             agentName,
@@ -326,6 +336,7 @@ export class CompanionStepRuntime {
             prompt,
             outputSchema: schema,
             abortSignal: reviewSignal,
+            validateResponse,
           })
         ),
         emitFinding: (ownerName, findingId, severity) => {
@@ -389,6 +400,9 @@ export class CompanionStepRuntime {
           prompt: buildCompanionLoopJudgePrompt(judgeHistory, signals),
           outputSchema: LOOP_JUDGE_OUTPUT_JSON_SCHEMA,
           abortSignal,
+          validateResponse: (candidate) => {
+            parseLoopJudgeOutput(candidate.structuredOutput);
+          },
         });
         return parseLoopJudgeOutput(response.structuredOutput);
       },

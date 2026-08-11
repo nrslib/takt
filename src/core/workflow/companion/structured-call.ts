@@ -1,7 +1,11 @@
 import { executeIsolatedStructuredInternalAgent } from '../../../agents/agent-usecases.js';
 import type { AgentResponse } from '../../models/types.js';
 import type { ProviderRoutingEntry } from '../../models/config-types.js';
-import { executeCompanionStructuredAgent, type CompanionAgentPurpose } from './review-runner.js';
+import {
+  executeCompanionStructuredAgent,
+  type CompanionAgentPurpose,
+  type CompanionStructuredResponseValidator,
+} from './review-runner.js';
 
 export class CompanionStructuredCaller {
   constructor(private readonly input: {
@@ -25,6 +29,7 @@ export class CompanionStructuredCaller {
     readonly prompt: string;
     readonly outputSchema: Record<string, unknown>;
     readonly abortSignal?: AbortSignal;
+    readonly validateResponse?: CompanionStructuredResponseValidator;
   }): Promise<AgentResponse> {
     if (request.provider.provider === undefined) {
       throw new Error(`Companion "${request.agentName}" has no provider`);
@@ -45,6 +50,7 @@ export class CompanionStructuredCaller {
         providerOptions: request.provider.providerOptions ?? {},
       },
       abortSignal: signal,
+      validateResponse: request.validateResponse,
       call: (systemPrompt, prompt, schema, options) => executeIsolatedStructuredInternalAgent(
         systemPrompt,
         prompt,

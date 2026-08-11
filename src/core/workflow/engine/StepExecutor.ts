@@ -58,6 +58,7 @@ import type {
 import { buildSessionKey } from '../session-key.js';
 import { incrementStepIteration, getPreviousOutput } from './state-manager.js';
 import { createLogger, getErrorMessage, slugify } from '../../../shared/utils/index.js';
+import { safeExternalErrorMessage } from '../../../shared/utils/safeExternalErrorMessage.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { RunPaths } from '../run/run-paths.js';
 import { waitForStepDelay } from './step-delay.js';
@@ -2610,14 +2611,6 @@ export class StepExecutor {
       const companionProviders = this.deps.companionProviders;
       const companionDiffReader = this.deps.companionDiffReader;
       const companionReviewState = this.companionReviewState;
-      if (
-        companionDefinitions === undefined
-        || companionProviders === undefined
-        || companionDiffReader === undefined
-        || companionReviewState === undefined
-      ) {
-        throw new Error(`Companion runtime configuration is missing for step "${step.name}"`);
-      }
       state.companion = {
         escalated: false,
         completionVerified: false,
@@ -2625,6 +2618,14 @@ export class StepExecutor {
         openMustFix: [],
       };
       try {
+        if (
+          companionDefinitions === undefined
+          || companionProviders === undefined
+          || companionDiffReader === undefined
+          || companionReviewState === undefined
+        ) {
+          throw new Error(`Companion runtime configuration is missing for step "${step.name}"`);
+        }
         companionRuntime = await CompanionStepRuntime.create({
           cwd: this.deps.getCwd(),
           projectCwd: this.deps.getProjectCwd(),
@@ -2655,9 +2656,14 @@ export class StepExecutor {
         });
       } catch (error) {
         this.deps.abortSignal?.throwIfAborted();
-        delete state.companion;
+        const reason = safeExternalErrorMessage(error);
+        state.companion = {
+          ...requireActiveCompanionState(state, step.name),
+          completionFailure: true,
+          reason,
+        };
         log.warn(
-          `Companion startup failed for "${step.name}"; main step will continue but completion remains blocked: ${getErrorMessage(error)}`,
+          `Companion startup failed for "${step.name}"; main step will continue without completion review: ${reason}`,
         );
       }
     }

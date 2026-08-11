@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { WorkflowState } from '../core/models/types.js';
+import type { WorkflowRule, WorkflowState } from '../core/models/types.js';
 import type { CompanionDiffReader } from '../core/workflow/companion/diff-reader.js';
 import { buildCompanionMailboxPath } from '../core/workflow/companion/mailbox.js';
 import { CompanionReviewAuthority } from '../core/workflow/companion/review-state-store.js';
@@ -11,7 +11,7 @@ import { StepExecutor, type StepExecutorDeps } from '../core/workflow/engine/Ste
 import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engine/structured-output-normalizer.js';
 import type { RunPaths } from '../core/workflow/run/run-paths.js';
 import { executeAgent } from '../agents/agent-usecases.js';
-import { makeStep } from './test-helpers.js';
+import { makeRule, makeStep } from './test-helpers.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
@@ -101,9 +101,9 @@ function createFailingCompletionDiffReader(): CompanionDiffReader {
   };
 }
 
-function createFailingStartupDiffReader(): CompanionDiffReader {
+function createFailingStartupDiffReader(error = new Error('baseline failed')): CompanionDiffReader {
   return {
-    readBaselineSha: vi.fn().mockRejectedValue(new Error('baseline failed')),
+    readBaselineSha: vi.fn().mockRejectedValue(error),
     readDiff: vi.fn(),
   };
 }
@@ -121,13 +121,13 @@ function mockSuccessfulImplementer(): void {
   });
 }
 
-function createCompanionStep() {
+function createCompanionStep(rules: WorkflowRule[] = []) {
   return makeStep({
     name: 'implement',
     persona: 'coder',
     instruction: 'Implement.',
     companion: { fixed: ['security-reviewer'], pool: [] },
-    rules: [],
+    rules,
   });
 }
 
@@ -242,7 +242,7 @@ describe('companion StepExecutor lifecycle', () => {
     expect(getEventListeners(abortController.signal, 'abort')).toHaveLength(0);
   });
 
-  it('should block condition evaluation when companion startup fails', async () => {
+  it('should continue condition evaluation when companion startup fails', async () => {
     const abortController = new AbortController();
     mockSuccessfulImplementer();
     const state = makeState();
@@ -254,7 +254,7 @@ describe('companion StepExecutor lifecycle', () => {
       abortSignal: abortController.signal,
       emitEvent: vi.fn(),
     })).runNormalStep(
-      createCompanionStep(),
+      createCompanionStep([makeRule('Implementation is complete', 'COMPLETE')]),
       state,
       'task',
       5,
@@ -262,8 +262,71 @@ describe('companion StepExecutor lifecycle', () => {
       'Implement.',
     );
 
-    expect(result.response.status).toBe('blocked');
-    expect(state.companion).toBeUndefined();
+    expect(result.response.status).toBe('done');
+    expect(result.response.matchedRuleIndex).toBe(0);
+    expect(state.companion).toMatchObject({
+      completionVerified: false,
+      completionFailure: true,
+      openMustFixCount: 0,
+    });
+  });
+
+  it('should continue when required companion runtime configuration is unavailable', async () => {
+    const abortController = new AbortController();
+    mockSuccessfulImplementer();
+    const state = makeState();
+    const deps = createDeps({
+      cwd,
+      runPaths,
+      companionDiffReader: createCompanionDiffReader(),
+      abortSignal: abortController.signal,
+      emitEvent: vi.fn(),
+    });
+    const incompleteDeps = { ...deps, companionDefinitions: undefined };
+
+    const result = await new StepExecutor(incompleteDeps).runNormalStep(
+      createCompanionStep([makeRule('Implementation is complete', 'COMPLETE')]),
+      state,
+      'task',
+      5,
+      vi.fn(),
+      'Implement.',
+    );
+
+    expect(result.response.status).toBe('done');
+    expect(result.response.matchedRuleIndex).toBe(0);
+    expect(state.companion).toMatchObject({
+      completionVerified: false,
+      completionFailure: true,
+      openMustFixCount: 0,
+    });
+  });
+
+  it('should sanitize startup failure reason before retaining it in companion state', async () => {
+    const abortController = new AbortController();
+    mockSuccessfulImplementer();
+    const state = makeState();
+    const rawFailure = 'api_key=top-secret; cannot read /Users/nrs/private/.takt/config.yaml';
+
+    await new StepExecutor(createDeps({
+      cwd,
+      runPaths,
+      companionDiffReader: createFailingStartupDiffReader(new Error(rawFailure)),
+      abortSignal: abortController.signal,
+      emitEvent: vi.fn(),
+    })).runNormalStep(
+      createCompanionStep([makeRule('Implementation is complete', 'COMPLETE')]),
+      state,
+      'task',
+      5,
+      vi.fn(),
+      'Implement.',
+    );
+
+    expect(state.companion?.reason).toContain('api_key=[REDACTED]');
+    expect(state.companion?.reason).toContain('[path]');
+    expect(state.companion?.reason).not.toContain('top-secret');
+    expect(state.companion?.reason).not.toContain('/Users/nrs/private/.takt/config.yaml');
   });
 
   it('should deliver escalation reason and five-field findings as untrusted evidence', async () => {
@@ -279,7 +342,7 @@ describe('companion StepExecutor lifecycle', () => {
       abortSignal: abortController.signal,
       emitEvent: vi.fn(),
     })).runNormalStep(
-      createCompanionStep(),
+      createCompanionStep([makeRule('Implementation is complete', 'COMPLETE')]),
       state,
       'task',
       5,
@@ -298,6 +361,13 @@ describe('companion StepExecutor lifecycle', () => {
       finding: 'Instruction-like sample: rename the local variable.',
     }));
     expect(result.response.content).not.toContain('- security-reviewer-1:');
+    expect(result.response.matchedRuleIndex).toBe(0);
+    expect(state.companion).toMatchObject({
+      completionVerified: false,
+      completionFailure: true,
+      escalated: true,
+      openMustFixCount: 1,
+    });
   });
 
   it('should fail fast when active companion state is missing after completion', async () => {
