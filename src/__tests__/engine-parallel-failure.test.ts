@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import type { AgentResponse, WorkflowConfig } from '../core/models/index.js';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -32,6 +33,7 @@ import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDet
 import { runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
 import { StructuredOutputSchemaError } from '../core/workflow/engine/structured-output-schema-validator.js';
 import { initDebugLogger, resetDebugLogger } from '../shared/utils/index.js';
+import type { SelectorGitCommandRunner } from '../core/workflow/dynamic-parallel/selector-git-command-runner.js';
 import {
   makeResponse,
   makeStep,
@@ -40,7 +42,71 @@ import {
   createTestTmpDir,
   applyDefaultMocks,
 } from './engine-test-helpers.js';
-import type { AgentResponse, WorkflowConfig } from '../core/models/index.js';
+
+const emptySelectorGitCommandRunner: SelectorGitCommandRunner = {
+  async run() {
+    return { output: Buffer.alloc(0), bytes: 0 };
+  },
+};
+
+function buildDynamicFacetFailureConfig(): WorkflowConfig {
+  return {
+    name: 'parallel-facet-failure',
+    description: 'Test parallel facet selection failures',
+    maxSteps: 1,
+    initialStep: 'reviewers',
+    steps: [{
+      name: 'reviewers',
+      personaDisplayName: 'reviewers',
+      instruction: 'Review',
+      parallel: [{
+        name: 'security',
+        persona: 'security-reviewer',
+        personaDisplayName: 'security-reviewer',
+        instruction: 'Review security',
+        dynamicFacets: { pool: 'security-facets', maxSelected: 1 },
+        rules: [makeRule('approved', 'COMPLETE')],
+      }],
+      rules: [makeRule('all("approved")', 'COMPLETE')],
+    }],
+    facetPools: {
+      'security-facets': {
+        name: 'security-facets',
+        source: 'inline',
+        candidates: [{
+          id: 'web',
+          description: 'Web facet',
+          policyRefs: [],
+          knowledgeRefs: ['web'],
+          resolvedPolicyContents: [],
+          resolvedKnowledgeContents: [{ content: 'WEB SECURITY FACET' }],
+        }, {
+          id: 'cli',
+          description: 'CLI facet',
+          policyRefs: [],
+          knowledgeRefs: ['cli'],
+          resolvedPolicyContents: [],
+          resolvedKnowledgeContents: [{ content: 'CLI SECURITY FACET' }],
+        }],
+      },
+    },
+  } as unknown as WorkflowConfig;
+}
+
+function buildDynamicParallelFixedFacetFailureConfig(): WorkflowConfig {
+  const config = buildDynamicFacetFailureConfig();
+  const reviewers = config.steps[0]!;
+  const fixed = Array.isArray(reviewers.parallel)
+    ? reviewers.parallel[0]!
+    : reviewers.parallel.fixed[0]!;
+  reviewers.parallel = {
+    kind: 'dynamic',
+    fixed: [fixed],
+    pool: [{ ...fixed, name: 'pool-security', description: 'Pool security' }],
+    selection: { mode: 'replace' },
+  };
+  return config;
+}
 
 function buildParallelOnlyConfig(): WorkflowConfig {
   return {
@@ -203,6 +269,116 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
       { step: 'arch-review', provider: 'mock', providerModel: 'retry-model' },
       { step: 'arch-review', provider: 'mock', providerModel: 'retry-model' },
     ]);
+  });
+
+  it.each([
+    {
+      label: 'max_selected overflow',
+      structuredOutput: { selected_ids: ['web', 'cli'], rationale: 'invalid overflow' },
+      error: 'must NOT have more than 1 items',
+    },
+    {
+      label: 'unknown candidate',
+      structuredOutput: { selected_ids: ['unknown'], rationale: 'invalid candidate' },
+      error: 'invalid structured output',
+    },
+  ])('should abort before the parallel reviewer on $label (DFP-006)', async ({ structuredOutput, error }) => {
+    const config = buildDynamicFacetFailureConfig();
+    const abortReasons: string[] = [];
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      selectorProvider: { provider: 'mock', providerOptions: {}, nativeTools: [] },
+      selectorGitCommandRunner: emptySelectorGitCommandRunner,
+    });
+    engine.on('workflow:abort', (_state, reason) => abortReasons.push(reason));
+    vi.mocked(runAgent).mockImplementation(async (persona, _instruction, options) => {
+      if (options?.outputSchema !== undefined) {
+        return makeResponse({ persona: persona ?? 'selector', structuredOutput });
+      }
+      return makeResponse({ persona: persona ?? 'reviewer', content: 'approved' });
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(abortReasons.some((reason) => reason.includes(error))).toBe(true);
+    expect(vi.mocked(runAgent).mock.calls.filter(([, , options]) => options?.outputSchema === undefined))
+      .toHaveLength(0);
+  });
+
+  it('should abort dynamic parallel fixed children before any reviewer runs when facet selection fails (DFP-018)', async () => {
+    const config = buildDynamicParallelFixedFacetFailureConfig();
+    const abortReasons: string[] = [];
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      selectorProvider: { provider: 'mock', providerOptions: {}, nativeTools: [] },
+      selectorGitCommandRunner: emptySelectorGitCommandRunner,
+    });
+    engine.on('workflow:abort', (_state, reason) => abortReasons.push(reason));
+    vi.mocked(runAgent).mockImplementation(async (persona, _instruction, options) => {
+      if (options?.outputSchema !== undefined) {
+        const isFacetSelector = options.internalSystemPrompt?.includes('dynamic facet selector') === true;
+        return makeResponse({
+          persona: persona ?? 'selector',
+          structuredOutput: isFacetSelector
+            ? { selected_ids: ['web', 'cli'], rationale: 'invalid overflow' }
+            : { selected_ids: ['pool-security'], rationale: 'select the pool child' },
+        });
+      }
+      return makeResponse({ persona: persona ?? 'reviewer', content: 'approved' });
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(abortReasons.some((reason) => reason.includes('must NOT have more than 1 items'))).toBe(true);
+    expect(vi.mocked(runAgent).mock.calls.filter(([, , options]) => options?.outputSchema === undefined))
+      .toHaveLength(0);
+  });
+
+  it('should wait for every facet selector before starting parallel reviewers (DFP-018)', async () => {
+    const config = buildDynamicFacetFailureConfig();
+    const reviewers = config.steps[0]!;
+    const security = Array.isArray(reviewers.parallel)
+      ? reviewers.parallel[0]!
+      : reviewers.parallel.fixed[0]!;
+    reviewers.parallel = [security, { ...security, name: 'cli-security' }];
+    let releaseSlowFailure: (() => void) | undefined;
+    const slowFailure = new Promise<void>((resolve) => {
+      releaseSlowFailure = resolve;
+    });
+    const reviewerCalls: string[] = [];
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      selectorProvider: { provider: 'mock', providerOptions: {}, nativeTools: [] },
+      selectorGitCommandRunner: emptySelectorGitCommandRunner,
+    });
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      if (options?.outputSchema !== undefined) {
+        if (instruction.includes('Step:\nsecurity\n')) {
+          setImmediate(() => releaseSlowFailure?.());
+          return makeResponse({
+            persona: persona ?? 'selector',
+            structuredOutput: { selected_ids: ['web'], rationale: 'valid selection' },
+          });
+        }
+        await slowFailure;
+        return makeResponse({
+          persona: persona ?? 'selector',
+          structuredOutput: { selected_ids: ['unknown'], rationale: 'delayed invalid selection' },
+        });
+      }
+      reviewerCalls.push(String(persona));
+      return makeResponse({ persona: persona ?? 'reviewer', content: 'approved' });
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(reviewerCalls).toEqual([]);
   });
 
   it('should invalidate only the exhausted parallel sub-step session', async () => {

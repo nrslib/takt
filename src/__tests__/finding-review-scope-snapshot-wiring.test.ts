@@ -28,7 +28,7 @@ import { afterAll, describe, it, expect, beforeEach, vi } from 'vitest';
 import { ParallelRunner, type ParallelRunnerDeps } from '../core/workflow/engine/ParallelRunner.js';
 import { StepExecutor, type StepExecutorDeps } from '../core/workflow/engine/StepExecutor.js';
 import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engine/structured-output-normalizer.js';
-import type { AgentResponse, FindingContractConfig, WorkflowState, WorkflowStep } from '../core/models/types.js';
+import type { AgentResponse, AgentWorkflowStep, FindingContractConfig, WorkflowState, WorkflowStep } from '../core/models/types.js';
 import type { ProviderUsageSnapshot } from '../core/models/response.js';
 import type { AutoRoutingConfig } from '../core/models/config-types.js';
 import type { StepProviderInfo } from '../core/workflow/types.js';
@@ -293,6 +293,7 @@ function makeRunner(options: {
     ),
   } as unknown as NonNullable<ParallelRunnerDeps['findingLedgerStore']>;
   const stepExecutor = {
+    prepareDynamicFacetStep: vi.fn(async (step: AgentWorkflowStep) => step),
     buildInstruction: vi.fn((step: WorkflowStep) => `instruction:${step.name}`),
     buildPhase1Instruction: vi.fn((instruction: string) => instruction),
     recordSynthesizedAgentUsage: vi.fn(),

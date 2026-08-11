@@ -13,6 +13,18 @@ subworkflow:
       type: facet_ref[]
       facet_kind: knowledge
       default: [takt]
+facet_pools:
+  security-review:
+    candidates:
+      - id: takt
+        description: TAKT の workflow、provider、session、resume、permission、worktree、selector の境界をレビューする
+        knowledge: takt-security
+      - id: cli
+        description: TAKT の CLI 引数、subprocess、path、ローカルファイル、secret 露出をレビューする
+        knowledge: cli-security
+      - id: supply-chain
+        description: TAKT の dependency、lockfile、install と build script、provenance、publish をレビューする
+        knowledge: supply-chain-security
 initial_step: review
 steps:
   - name: review
@@ -46,6 +58,9 @@ steps:
           persona: security-reviewer
           policy: [contract-change, security-review]
           knowledge: [takt, security, security-local, security-data, security-dependencies]
+          dynamic_facets:
+            pool: security-review
+            max_selected: 1
           instruction: review-security
           pass_previous_response: false
           output_contracts:

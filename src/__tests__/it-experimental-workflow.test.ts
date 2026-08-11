@@ -394,6 +394,7 @@ describe('experimental builtin workflow', () => {
         ...rejectedCompanionFinding(),
         responseForNext(remediation, 'fix-verifier', 'COMPLETE'),
         selection(['security-review'], 'The second review round covers security changes.'),
+        selection(['web'], 'The web security knowledge matches the changed surface.'),
         response(reviewerSuite, 'coding-review', 'coding-reviewer', 'approved'),
         response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
         response(reviewerSuite, 'security-review', 'security-reviewer', 'approved'),

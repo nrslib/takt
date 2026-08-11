@@ -238,6 +238,8 @@ Rules determine the next step. `COMPLETE` ends the workflow successfully, `ABORT
 
 Reusable step definitions can be stored in `.takt/steps/` and expanded with `uses` before validation. See the Workflow Guide for fragment lookup and override rules.
 
+Experimental review workflows can use `facet_pools` and `dynamic_facets` to select system-specific knowledge for a security reviewer. The same feature works on normal agent steps and `parallel` agent sub-steps: dynamic parallel participants are selected first, each selected child keeps its fixed facets and receives up to `max_selected` pool candidates, and an empty selection adds nothing. Invalid selections fail before that child starts. A process resume re-runs participant and facet selectors against their current pools.
+
 Workflow files live in `workflows/` as the official directory name.
 
 When the same workflow name exists in multiple locations, TAKT resolves in this order: `.takt/workflows/` → `~/.takt/workflows/` → builtins.

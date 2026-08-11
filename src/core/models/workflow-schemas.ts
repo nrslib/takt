@@ -521,7 +521,7 @@ const AgentParallelSubStepRawObjectSchema = z.object({
   concurrency: z.never().optional(),
   arpeggio: z.never().optional(),
   team_leader: z.never().optional(),
-  dynamic_facets: z.never().optional(),
+  dynamic_facets: DynamicFacetsRawSchema.optional(),
 });
 
 function validateAgentParallelSubStepRules(
@@ -587,6 +587,7 @@ const WorkflowCallParallelSubStepRawSchema = z.object({
   concurrency: z.never().optional(),
   arpeggio: z.never().optional(),
   team_leader: z.never().optional(),
+  dynamic_facets: z.never().optional(),
 }).superRefine((data, ctx) => {
   validateParallelSubStepRules(data.rules, ctx);
   validateWorkflowCallRules(data.rules, ctx, { allowExtendedConditions: true });

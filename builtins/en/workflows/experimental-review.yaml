@@ -13,6 +13,18 @@ subworkflow:
       type: facet_ref[]
       facet_kind: knowledge
       default: []
+facet_pools:
+  security-review:
+    candidates:
+      - id: web
+        description: Review HTTP, browser, session, origin, input, and cross-origin security boundaries.
+        knowledge: web-security
+      - id: cli
+        description: Review command-line arguments, subprocesses, paths, local files, and secret exposure.
+        knowledge: cli-security
+      - id: supply-chain
+        description: Review dependencies, lockfiles, install and build scripts, provenance, and publishing.
+        knowledge: supply-chain-security
 initial_step: review
 steps:
   - name: review

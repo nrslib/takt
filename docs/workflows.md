@@ -399,7 +399,7 @@ are unaffected.
 
 ### Dynamic Facet Selection (facet pools)
 
-A normal agent step can dynamically select additional `policy` and `knowledge` facets from a validated candidate pool right before its main agent runs. This keeps the fixed facets the step already declares and adds only the facets the current situation requires — for example, selecting a transaction-correctness policy only after a review surfaces transaction-boundary concerns.
+A normal agent step, or an agent sub-step under `parallel`, can dynamically select additional `policy` and `knowledge` facets from a validated candidate pool right before its main agent runs. This keeps the fixed facets the step already declares and adds only the facets the current situation requires — for example, selecting a transaction-correctness policy only after a review surfaces transaction-boundary concerns.
 
 Define a pool under the top-level `facet_pools` map, then reference it from a step with `dynamic_facets`. Pools can be defined inline in the workflow or as external resource files.
 
@@ -450,6 +450,43 @@ steps:
       - condition: Fix complete
         next: review
 ```
+
+#### Parallel sub-steps
+
+`dynamic_facets` is also valid on a static `parallel` child and on a dynamic parallel `fixed` or `pool` entry. For a dynamic parallel step, participant selection runs first; the facet selector runs only for the selected children. For a static parallel step, each dynamic child runs its own facet selector independently.
+
+```yaml
+facet_pools:
+  security-review:
+    candidates:
+      - id: web
+        description: Review HTTP and browser security boundaries
+        knowledge: web-security
+      - id: cli
+        description: Review command-line and local process boundaries
+        knowledge: cli-security
+
+steps:
+  - name: reviewers
+    parallel:
+      pool:
+        - name: security-review
+          description: Review security for the selected system
+          persona: security-reviewer
+          knowledge: security
+          dynamic_facets:
+            pool: security-review
+            max_selected: 1
+          instruction: review-security
+          rules: [{ condition: approved }]
+      selection:
+        mode: replace
+    rules:
+      - condition: all("approved")
+        next: COMPLETE
+```
+
+The selected knowledge or policy is added to the child's fixed facets. An empty selection keeps the fixed facets unchanged. An invalid pool reference, candidate ID, or `max_selected` stops the workflow before that child starts. Within one uninterrupted run, the parent parallel frame and occurrence keep child selections independent. A process resume starts with empty run-local selection state and invokes the participant and child facet selectors again.
 
 #### External pool
 
@@ -607,7 +644,7 @@ Loading fails before execution when any of these hold:
 - External resource lookup, trust, or file validation fails
 - `dynamic_facets.pool` is unknown
 - A specified `max_selected` is invalid or exceeds the candidate count
-- `dynamic_facets` is declared on a non-agent step
+- `dynamic_facets` is declared on a non-agent step or a parallel parent
 
 Selector execution fails before the main agent starts when:
 

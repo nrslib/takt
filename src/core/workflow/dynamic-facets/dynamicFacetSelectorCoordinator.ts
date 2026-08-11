@@ -44,6 +44,11 @@ export interface DynamicFacetSelectorCoordinatorDeps {
   readonly getUnresolvedFindings: () => string;
 }
 
+export interface DynamicFacetSelectionContext {
+  readonly identityPath?: readonly WorkflowResumePointEntry[];
+  readonly stepIteration?: number;
+}
+
 export interface DynamicFacetSelectionResult {
   readonly selectedIds: readonly string[];
   readonly effectivePolicyContents: readonly string[];
@@ -59,13 +64,19 @@ export class DynamicFacetSelectorCoordinator {
     state: WorkflowState,
     task: string,
     pool: ResolvedFacetPool,
+    context?: DynamicFacetSelectionContext,
   ): Promise<DynamicFacetSelectionResult> {
     const signal = this.deps.engineOptions.abortSignal;
     signal?.throwIfAborted();
     if (step.dynamicFacets === undefined) {
       throw new Error(`Step "${step.name}" has no dynamic_facets configuration`);
     }
-    const identity = this.resolveIdentity(step.name);
+    const identityPath = context?.identityPath ?? this.deps.workflowCallPath;
+    const identity = this.resolveIdentity(step.name, identityPath);
+    const stepIteration = context?.stepIteration ?? state.stepIterations.get(step.name);
+    if (stepIteration === undefined) {
+      throw new Error(`Dynamic facet selector for "${step.name}" requires a resolved step iteration`);
+    }
     const selections = this.deps.selectionStore.snapshot();
     const selectorProvider = this.deps.engineOptions.selectorProvider;
     if (selectorProvider?.provider === undefined) {
@@ -96,9 +107,9 @@ export class DynamicFacetSelectorCoordinator {
       task,
       workflowName: state.workflowName,
       stepName: step.name,
-      workflowCallPath: this.deps.workflowCallPath,
+      workflowCallPath: identityPath,
       isReentry: previous !== undefined,
-      stepIteration: state.stepIterations.get(step.name) ?? 1,
+      stepIteration,
       reports: inputs.reports,
       unresolvedFindings,
       cumulativeDiff: inputs.workingTreeDiff,
@@ -243,11 +254,14 @@ export class DynamicFacetSelectorCoordinator {
     };
   }
 
-  private resolveIdentity(stepName: string): string {
+  private resolveIdentity(
+    stepName: string,
+    workflowCallPath: readonly WorkflowResumePointEntry[],
+  ): string {
     return buildDynamicParallelSelectionIdentityFromPath(
       this.deps.getWorkflowReference(),
       stepName,
-      this.deps.workflowCallPath,
+      workflowCallPath,
     );
   }
 

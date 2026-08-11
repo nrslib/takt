@@ -12,7 +12,10 @@ import type {
   WorkflowStep,
   WorkflowSubworkflowConfig,
 } from '../../../core/models/index.js';
-import { enumerateParallelSubSteps } from './workflowParallelTraversal.js';
+import {
+  enumerateParallelSubSteps,
+  enumerateRawParallelSubSteps,
+} from './workflowParallelTraversal.js';
 import {
   hasFindingsReference,
   parseWorkflowRuleCondition,
@@ -584,19 +587,32 @@ function validateDynamicFacetsReferences(
   steps: RawWorkflowSteps,
   facetPools: Record<string, ResolvedFacetPool> | undefined,
 ): void {
-  for (const [index, step] of steps.entries()) {
+  const candidates = steps.flatMap((step, index) => [
+    { step, path: ['steps', index] as readonly PropertyKey[] },
+    ...(step.parallel === undefined
+      ? []
+      : enumerateRawParallelSubSteps(step.parallel, ['steps', index, 'parallel']).map((entry) => ({
+          step: entry.subStep as RawWorkflowSteps[number],
+          path: entry.path,
+        }))),
+  ]);
+  for (const { step, path } of candidates) {
     if (step.dynamic_facets === undefined) continue;
     const poolName = step.dynamic_facets.pool;
+    const dynamicFacetsPath = [...path, 'dynamic_facets'] as readonly PropertyKey[];
+    const stepLabel = path.includes('parallel')
+      ? `parallel sub-step "${step.name}"`
+      : `step "${step.name}"`;
     if (typeof poolName !== 'string') {
       throw withWorkflowStepErrorPath(
-        new Error(`Configuration error: step "${step.name}" has an unresolved facet pool parameter`),
-        ['steps', index, 'dynamic_facets', 'pool'],
+        new Error(`Configuration error: ${stepLabel} has an unresolved facet pool parameter`),
+        [...dynamicFacetsPath, 'pool'],
       );
     }
     if (!hasOwnFacetPool(facetPools, poolName)) {
       throw withWorkflowStepErrorPath(
-        new Error(`Configuration error: step "${step.name}" references unknown facet pool "${poolName}"`),
-        ['steps', index, 'dynamic_facets', 'pool'],
+        new Error(`Configuration error: ${stepLabel} references unknown facet pool "${poolName}"`),
+        [...dynamicFacetsPath, 'pool'],
       );
     }
     const pool = facetPools![poolName]!;
@@ -607,9 +623,9 @@ function validateDynamicFacetsReferences(
     ) {
       throw withWorkflowStepErrorPath(
         new Error(
-          `Configuration error: step "${step.name}" dynamic_facets.max_selected (${step.dynamic_facets.max_selected}) exceeds candidate count (${candidateCount}) of pool "${poolName}"`,
+          `Configuration error: ${stepLabel} dynamic_facets.max_selected (${step.dynamic_facets.max_selected}) exceeds candidate count (${candidateCount}) of pool "${poolName}"`,
         ),
-        ['steps', index, 'dynamic_facets', 'max_selected'],
+        [...dynamicFacetsPath, 'max_selected'],
       );
     }
   }

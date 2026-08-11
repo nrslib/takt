@@ -3334,7 +3334,13 @@ describe('StepExecutor dynamic facet integration', () => {
       const state = makeState();
       const prepared = await executor.prepareNormalStepExecution(step, state, 'task', 5, 1);
 
-      expect(coordinator.resolveDynamicFacets).toHaveBeenCalledWith(step, state, 'task', pool);
+      expect(coordinator.resolveDynamicFacets).toHaveBeenCalledWith(
+        step,
+        state,
+        'task',
+        pool,
+        { stepIteration: 1 },
+      );
       expect(prepared.executableStep.policyContents).toEqual([{ content: 'policy-content' }]);
       expect(prepared.executableStep.knowledgeContents).toEqual([{ content: 'knowledge-content' }]);
 

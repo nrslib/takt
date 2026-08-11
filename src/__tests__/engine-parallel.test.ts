@@ -70,7 +70,9 @@ import {
 import { initDebugLogger, resetDebugLogger } from '../shared/utils/index.js';
 import type { AgentResponse } from '../core/models/index.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
-import { buildDynamicParallelSelectionIdentity } from '../core/workflow/dynamic-parallel/identity.js';
+import {
+  buildDynamicParallelSelectionIdentity,
+} from '../core/workflow/dynamic-parallel/identity.js';
 import { SelectorInputReader } from '../core/workflow/dynamic-parallel/selector-input-reader.js';
 import { GitSelectorCommandRunner } from '../infra/task/selector-git-command-runner.js';
 import {
@@ -219,6 +221,156 @@ function createDeferred(): {
 
 function dynamicSelectionIdentity(config: WorkflowConfig): string {
   return buildDynamicParallelSelectionIdentity(config, 'reviewers', []);
+}
+
+function makeFacetPool(
+  name: string,
+  candidates: Array<{ id: string; content: string }>,
+): { name: string; source: 'inline'; candidates: Array<Record<string, unknown>> } {
+  return {
+    name,
+    source: 'inline',
+    candidates: candidates.map((candidate) => ({
+      id: candidate.id,
+      description: `${candidate.id} facet`,
+      policyRefs: [],
+      knowledgeRefs: [candidate.id],
+      resolvedPolicyContents: [],
+      resolvedKnowledgeContents: [{ content: candidate.content }],
+    })),
+  };
+}
+
+function makeDynamicParallelFacetWorkflow(): WorkflowConfig {
+  const security = {
+    name: 'security',
+    description: 'Review security',
+    persona: 'security-reviewer',
+    personaDisplayName: 'security-reviewer',
+    instruction: 'Review security',
+    knowledgeContents: [{ content: 'BASE SECURITY' }],
+    dynamicFacets: { pool: 'security-facets', maxSelected: 1 },
+    rules: [{ condition: 'approved', next: 'COMPLETE' }],
+  };
+  const unselected = {
+    name: 'unselected',
+    description: 'Review unrelated changes',
+    persona: 'unselected-reviewer',
+    personaDisplayName: 'unselected-reviewer',
+    instruction: 'Review unrelated changes',
+    dynamicFacets: { pool: 'security-facets', maxSelected: 1 },
+    rules: [{ condition: 'approved', next: 'COMPLETE' }],
+  };
+  return {
+    name: 'parallel-facet-execution',
+    initialStep: 'reviewers',
+    maxSteps: 1,
+    steps: [{
+      name: 'reviewers',
+      personaDisplayName: 'reviewers',
+      instruction: 'Review all changes',
+      parallel: {
+        kind: 'dynamic',
+        fixed: [],
+        pool: [security, unselected],
+        selection: { mode: 'replace' },
+      },
+      rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
+    }],
+    facetPools: {
+      'security-facets': makeFacetPool('security-facets', [
+        { id: 'web', content: 'WEB SECURITY FACET' },
+        { id: 'cli', content: 'CLI SECURITY FACET' },
+      ]),
+    },
+  } as unknown as WorkflowConfig;
+}
+
+function makeDynamicParallelFixedFacetWorkflow(): WorkflowConfig {
+  const fixed = {
+    name: 'fixed-security',
+    description: 'Review fixed security scope',
+    persona: 'fixed-security-reviewer',
+    personaDisplayName: 'fixed-security-reviewer',
+    instruction: 'Review fixed security scope',
+    knowledgeContents: [{ content: 'BASE FIXED SECURITY' }],
+    dynamicFacets: { pool: 'security-facets', maxSelected: 1 },
+    rules: [{ condition: 'approved', next: 'COMPLETE' }],
+  };
+  const pool = {
+    name: 'pool-security',
+    description: 'Review selected security scope',
+    persona: 'pool-security-reviewer',
+    personaDisplayName: 'pool-security-reviewer',
+    instruction: 'Review selected security scope',
+    knowledgeContents: [{ content: 'BASE POOL SECURITY' }],
+    dynamicFacets: { pool: 'security-facets', maxSelected: 1 },
+    rules: [{ condition: 'approved', next: 'COMPLETE' }],
+  };
+  return {
+    name: 'parallel-fixed-facet-execution',
+    initialStep: 'reviewers',
+    maxSteps: 1,
+    steps: [{
+      name: 'reviewers',
+      personaDisplayName: 'reviewers',
+      instruction: 'Review fixed and selected security scopes',
+      parallel: {
+        kind: 'dynamic',
+        fixed: [fixed],
+        pool: [pool],
+        selection: { mode: 'replace' },
+      },
+      rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
+    }],
+    facetPools: {
+      'security-facets': makeFacetPool('security-facets', [
+        { id: 'web', content: 'WEB SECURITY FACET' },
+        { id: 'cli', content: 'CLI SECURITY FACET' },
+      ]),
+    },
+  } as unknown as WorkflowConfig;
+}
+
+function makeStaticParallelFacetWorkflow(): WorkflowConfig {
+  const security = {
+    name: 'security',
+    persona: 'security-reviewer',
+    personaDisplayName: 'security-reviewer',
+    instruction: 'Review security',
+    knowledgeContents: [{ content: 'BASE SECURITY' }],
+    dynamicFacets: { pool: 'security-facets', maxSelected: 1 },
+    rules: [{ condition: 'approved', next: 'COMPLETE' }],
+  };
+  const frontend = {
+    name: 'frontend',
+    persona: 'frontend-reviewer',
+    personaDisplayName: 'frontend-reviewer',
+    instruction: 'Review frontend',
+    knowledgeContents: [{ content: 'BASE FRONTEND' }],
+    dynamicFacets: { pool: 'frontend-facets', maxSelected: 1 },
+    rules: [{ condition: 'approved', next: 'COMPLETE' }],
+  };
+  return {
+    name: 'static-parallel-facet-execution',
+    initialStep: 'reviewers',
+    maxSteps: 1,
+    steps: [{
+      name: 'reviewers',
+      personaDisplayName: 'reviewers',
+      instruction: 'Review all changes',
+      parallel: [security, frontend],
+      rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
+    }],
+    facetPools: {
+      'security-facets': makeFacetPool('security-facets', [
+        { id: 'web', content: 'WEB SECURITY FACET' },
+      ]),
+      'frontend-facets': makeFacetPool('frontend-facets', [
+        { id: 'cli', content: 'CLI SECURITY FACET' },
+      ]),
+    },
+  } as unknown as WorkflowConfig;
 }
 
 // Baseline git repository template: initialized once and copied per test,
@@ -568,6 +720,273 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     expect(selectorCall?.instruction).not.toContain('external content must not reach the selector');
     expect(selectorCall?.instruction).not.toContain('.takt/runs/test-report-dir/reports/prior.md');
     expect(selectorCall?.instruction).not.toContain('after task start internal state');
+  });
+
+  it('should run the participant selector before facet selection and only select dynamic participants (DFP-003)', async () => {
+    const config = makeDynamicParallelFacetWorkflow();
+    const selectorKinds: string[] = [];
+    const reviewerInstructions: Array<{ persona: string | undefined; instruction: string }> = [];
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      if (options?.outputSchema !== undefined) {
+        const kind = options.internalSystemPrompt?.includes('dynamic facet selector')
+          ? 'facet'
+          : 'participant';
+        selectorKinds.push(kind);
+        return makeResponse({
+          persona: 'selector',
+          structuredOutput: {
+            selected_ids: kind === 'participant' ? ['security'] : ['web'],
+            rationale: `${kind} selection`,
+          },
+        });
+      }
+      reviewerInstructions.push({ persona, instruction });
+      options?.onPromptResolved?.({ systemPrompt: 'review', userInstruction: instruction });
+      return makeResponse({ persona: persona ?? 'reviewer', content: 'approved' });
+    });
+    vi.mocked(mockRuleEvaluation).mockImplementation((step) => step.name === 'reviewers'
+      ? { index: 0, method: 'aggregate' }
+      : { index: 0, method: 'phase3_tag' });
+
+    const engine = new WorkflowEngine(config, tmpDir, 'Review security changes', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      selectorProvider: MOCK_SELECTOR_PROVIDER,
+    });
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(selectorKinds).toEqual(['participant', 'facet']);
+    expect(reviewerInstructions).toHaveLength(1);
+    expect(reviewerInstructions[0]?.persona).toBe('security-reviewer');
+    expect(reviewerInstructions[0]?.instruction).toContain('BASE SECURITY');
+    expect(reviewerInstructions[0]?.instruction).toContain('WEB SECURITY FACET');
+    expect(reviewerInstructions[0]?.instruction).not.toContain('CLI SECURITY FACET');
+    expect(state.stepOutputs.has('unselected')).toBe(false);
+  });
+
+  it('should execute dynamic parallel fixed children with independent facet selection (DFP-016)', async () => {
+    const config = makeDynamicParallelFixedFacetWorkflow();
+    const selectorKinds: string[] = [];
+    const reviewerInstructions: Array<{ persona: string | undefined; instruction: string }> = [];
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      if (options?.outputSchema !== undefined) {
+        const kind = options.internalSystemPrompt?.includes('dynamic facet selector')
+          ? 'facet'
+          : 'participant';
+        selectorKinds.push(kind);
+        const selectedIds = kind === 'participant'
+          ? ['pool-security']
+          : instruction.includes('Step:\nfixed-security') ? ['web'] : ['cli'];
+        return makeResponse({
+          persona: 'selector',
+          structuredOutput: { selected_ids: selectedIds, rationale: `${kind} selection` },
+        });
+      }
+      reviewerInstructions.push({ persona, instruction });
+      options?.onPromptResolved?.({ systemPrompt: 'review', userInstruction: instruction });
+      return makeResponse({ persona: persona ?? 'reviewer', content: 'approved' });
+    });
+    vi.mocked(mockRuleEvaluation).mockImplementation((step) => step.name === 'reviewers'
+      ? { index: 0, method: 'aggregate' }
+      : { index: 0, method: 'phase3_tag' });
+
+    const engine = new WorkflowEngine(config, tmpDir, 'Review fixed and selected security scopes', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      selectorProvider: MOCK_SELECTOR_PROVIDER,
+    });
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(selectorKinds).toEqual(['participant', 'facet', 'facet']);
+    expect(reviewerInstructions).toHaveLength(2);
+    expect(reviewerInstructions.find(({ persona }) => persona === 'fixed-security-reviewer')?.instruction)
+      .toContain('BASE FIXED SECURITY');
+    expect(reviewerInstructions.find(({ persona }) => persona === 'fixed-security-reviewer')?.instruction)
+      .toContain('WEB SECURITY FACET');
+    expect(reviewerInstructions.find(({ persona }) => persona === 'pool-security-reviewer')?.instruction)
+      .toContain('BASE POOL SECURITY');
+    expect(reviewerInstructions.find(({ persona }) => persona === 'pool-security-reviewer')?.instruction)
+      .toContain('CLI SECURITY FACET');
+  });
+
+  it('should execute a selected dynamic child with only its base facets when facet selection is empty (TEST-DFP-005)', async () => {
+    const config = makeDynamicParallelFacetWorkflow();
+    const selectorKinds: string[] = [];
+    const reviewerInstructions: Array<{ persona: string | undefined; instruction: string }> = [];
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      if (options?.outputSchema !== undefined) {
+        const kind = options.internalSystemPrompt?.includes('dynamic facet selector')
+          ? 'facet'
+          : 'participant';
+        selectorKinds.push(kind);
+        return makeResponse({
+          persona: 'selector',
+          structuredOutput: {
+            selected_ids: kind === 'participant' ? ['security'] : [],
+            rationale: `${kind} selection`,
+          },
+        });
+      }
+      reviewerInstructions.push({ persona, instruction });
+      options?.onPromptResolved?.({ systemPrompt: 'review', userInstruction: instruction });
+      return makeResponse({ persona: persona ?? 'reviewer', content: 'approved' });
+    });
+    vi.mocked(mockRuleEvaluation).mockImplementation((step) => step.name === 'reviewers'
+      ? { index: 0, method: 'aggregate' }
+      : { index: 0, method: 'phase3_tag' });
+
+    const engine = new WorkflowEngine(config, tmpDir, 'Review security changes without an extra facet', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      selectorProvider: MOCK_SELECTOR_PROVIDER,
+    });
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(selectorKinds).toEqual(['participant', 'facet']);
+    expect(reviewerInstructions).toHaveLength(1);
+    expect(reviewerInstructions[0]?.persona).toBe('security-reviewer');
+    expect(reviewerInstructions[0]?.instruction).toContain('BASE SECURITY');
+    expect(reviewerInstructions[0]?.instruction).not.toContain('WEB SECURITY FACET');
+    expect(reviewerInstructions[0]?.instruction).not.toContain('CLI SECURITY FACET');
+    expect(state.stepOutputs.has('security')).toBe(true);
+    expect(state.stepOutputs.has('unselected')).toBe(false);
+  });
+
+  it('should select facets independently for each static parallel child and compose each child base (DFP-004, DFP-005)', async () => {
+    const config = makeStaticParallelFacetWorkflow();
+    const facetSelectorInstructions: string[] = [];
+    const reviewerInstructions: Array<{ persona: string | undefined; instruction: string }> = [];
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      if (options?.outputSchema !== undefined) {
+        facetSelectorInstructions.push(instruction);
+        const selectedIds = instruction.includes('Step:\nsecurity') ? ['web'] : ['cli'];
+        return makeResponse({
+          persona: 'selector',
+          structuredOutput: { selected_ids: selectedIds, rationale: 'child-specific selection' },
+        });
+      }
+      reviewerInstructions.push({ persona, instruction });
+      options?.onPromptResolved?.({ systemPrompt: 'review', userInstruction: instruction });
+      return makeResponse({ persona: persona ?? 'reviewer', content: 'approved' });
+    });
+    vi.mocked(mockRuleEvaluation).mockImplementation((step) => step.name === 'reviewers'
+      ? { index: 0, method: 'aggregate' }
+      : { index: 0, method: 'phase3_tag' });
+
+    const engine = new WorkflowEngine(config, tmpDir, 'Review static children', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      selectorProvider: MOCK_SELECTOR_PROVIDER,
+    });
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(facetSelectorInstructions).toHaveLength(2);
+    expect(reviewerInstructions).toHaveLength(2);
+    const securityReview = reviewerInstructions.find(({ persona }) => persona === 'security-reviewer');
+    const frontendReview = reviewerInstructions.find(({ persona }) => persona === 'frontend-reviewer');
+    expect(securityReview?.instruction).toContain('BASE SECURITY');
+    expect(securityReview?.instruction).toContain('WEB SECURITY FACET');
+    expect(frontendReview?.instruction).toContain('BASE FRONTEND');
+    expect(frontendReview?.instruction).toContain('CLI SECURITY FACET');
+  });
+
+  it('should pass the scoped child iteration to selectors on repeated parallel rounds (DFP-020)', async () => {
+    const config = makeStaticParallelFacetWorkflow();
+    config.maxSteps = 2;
+    config.steps[0]!.rules = [
+      { condition: 'all("approved")', next: 'reviewers' },
+      { condition: 'all("approved")', next: 'COMPLETE' },
+    ];
+    const selectorIterations: string[] = [];
+    let parentRound = 0;
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      if (options?.outputSchema !== undefined) {
+        const match = /Step iteration:\n(\d+)/u.exec(instruction);
+        if (match?.[1] !== undefined) selectorIterations.push(match[1]);
+        const selectedIds = instruction.includes('Step:\nsecurity') ? ['web'] : ['cli'];
+        return makeResponse({
+          persona: 'selector',
+          structuredOutput: { selected_ids: selectedIds, rationale: 'repeatable child selection' },
+        });
+      }
+      options?.onPromptResolved?.({ systemPrompt: 'review', userInstruction: instruction });
+      return makeResponse({ persona: persona ?? 'reviewer', content: 'approved' });
+    });
+    vi.mocked(mockRuleEvaluation).mockImplementation((step) => {
+      if (step.name === 'reviewers') {
+        parentRound += 1;
+        return { index: parentRound === 1 ? 0 : 1, method: 'aggregate' };
+      }
+      return { index: 0, method: 'phase3_tag' };
+    });
+
+    const state = await new WorkflowEngine(config, tmpDir, 'Repeat static parallel children', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      selectorProvider: MOCK_SELECTOR_PROVIDER,
+    }).run();
+
+    expect(state.status).toBe('completed');
+    expect(selectorIterations.sort()).toEqual(['1', '1', '2', '2']);
+  });
+
+  it('should reselect a dynamic participant and its fixed and pool child facets after resume', async () => {
+    const config = makeDynamicParallelFixedFacetWorkflow();
+    const parentFrame = {
+      workflow: config.name,
+      workflow_ref: config.name,
+      step: 'reviewers',
+      kind: 'parallel' as const,
+      occurrence: 1,
+    };
+    const selectorKinds: string[] = [];
+    const reviewerInstructions: Array<{ persona: string | undefined; instruction: string }> = [];
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      if (options?.outputSchema !== undefined) {
+        const isFacetSelector = options.internalSystemPrompt?.includes('dynamic facet selector') === true;
+        selectorKinds.push(isFacetSelector ? 'facet' : 'participant');
+        const selectedIds = !isFacetSelector
+          ? ['pool-security']
+          : instruction.includes('Step:\nfixed-security') ? ['web'] : ['cli'];
+        return makeResponse({
+          persona: 'selector',
+          structuredOutput: { selected_ids: selectedIds, rationale: 'current run selection' },
+        });
+      }
+      reviewerInstructions.push({ persona, instruction });
+      options?.onPromptResolved?.({ systemPrompt: 'review', userInstruction: instruction });
+      return makeResponse({ persona: persona ?? 'reviewer', content: 'approved' });
+    });
+    vi.mocked(mockRuleEvaluation).mockImplementation((step) => step.name === 'reviewers'
+      ? { index: 0, method: 'aggregate' }
+      : { index: 0, method: 'phase3_tag' });
+
+    const state = await new WorkflowEngine(config, tmpDir, 'Resume dynamic fixed and pool facets', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      selectorProvider: MOCK_SELECTOR_PROVIDER,
+      startStep: 'reviewers',
+      resumePoint: {
+        version: 2,
+        stack: [parentFrame],
+        iteration: 1,
+        elapsed_ms: 1,
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
+      },
+    }).run();
+
+    expect(state.status).toBe('completed');
+    expect(selectorKinds.sort()).toEqual(['facet', 'facet', 'participant']);
+    expect(reviewerInstructions).toHaveLength(2);
+    expect(reviewerInstructions.find(({ persona }) => persona === 'fixed-security-reviewer')?.instruction)
+      .toContain('WEB SECURITY FACET');
+    expect(reviewerInstructions.find(({ persona }) => persona === 'pool-security-reviewer')?.instruction)
+      .toContain('CLI SECURITY FACET');
   });
 
   it('should preserve selected dynamic fragment metadata through participant and report execution', async () => {
@@ -992,6 +1411,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
         unselected: [],
       },
     );
+
   });
 
   it('should return defensive copies of dynamic selection state to completion events and run results', async () => {

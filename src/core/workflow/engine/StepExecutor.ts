@@ -40,7 +40,10 @@ import type {
 import type { ProviderUsageSnapshot } from '../../models/response.js';
 import { executeAgent } from '../../../agents/agent-usecases.js';
 import { InstructionBuilder } from '../instruction/InstructionBuilder.js';
-import type { DynamicFacetSelectorCoordinator } from '../dynamic-facets/dynamicFacetSelectorCoordinator.js';
+import type {
+  DynamicFacetSelectionContext,
+  DynamicFacetSelectorCoordinator,
+} from '../dynamic-facets/dynamicFacetSelectorCoordinator.js';
 import {
   generateReportPhase,
   runReportPhase,
@@ -461,6 +464,41 @@ export class StepExecutor {
     return this.deps.getFacetPool?.(step.dynamicFacets.pool);
   }
 
+  async prepareDynamicFacetStep(
+    step: AgentWorkflowStep,
+    state: WorkflowState,
+    task: string,
+    stepIteration: number,
+    context?: DynamicFacetSelectionContext,
+  ): Promise<AgentWorkflowStep> {
+    if (!isNormalAgentWorkflowStep(step) || step.dynamicFacets === undefined) {
+      return step;
+    }
+    if (this.deps.dynamicFacetSelectorCoordinator === undefined) {
+      throw new Error(
+        `Configuration error: step "${step.name}" has dynamic_facets but no dynamic facet selector coordinator is configured`,
+      );
+    }
+    const pool = this.resolveDynamicFacetPool(step);
+    if (pool === undefined) {
+      throw new Error(
+        `Configuration error: step "${step.name}" references unknown facet pool "${step.dynamicFacets.pool}"`,
+      );
+    }
+    const result = await this.deps.dynamicFacetSelectorCoordinator.resolveDynamicFacets(
+      step,
+      state,
+      task,
+      pool,
+      { ...context, stepIteration },
+    );
+    return {
+      ...step,
+      policyContents: result.effectivePolicyContents.map((content) => ({ content })),
+      knowledgeContents: result.effectiveKnowledgeContents.map((content) => ({ content })),
+    } as AgentWorkflowStep;
+  }
+
   private buildFindingContractInstructionContext(
     step: WorkflowStep,
     policy: FindingContractInstructionPolicy | undefined,
@@ -830,34 +868,12 @@ export class StepExecutor {
           true,
         )
       : this.buildFindingContractInstructionContext(step, undefined);
-    let executableStep = step as AgentWorkflowStep;
-    if (
-      isNormalAgentWorkflowStep(step)
-      && step.dynamicFacets !== undefined
-    ) {
-      if (this.deps.dynamicFacetSelectorCoordinator === undefined) {
-        throw new Error(
-          `Configuration error: step "${step.name}" has dynamic_facets but no dynamic facet selector coordinator is configured`,
-        );
-      }
-      const pool = this.resolveDynamicFacetPool(step);
-      if (pool === undefined) {
-        throw new Error(
-          `Configuration error: step "${step.name}" references unknown facet pool "${step.dynamicFacets.pool}"`,
-        );
-      }
-      const result = await this.deps.dynamicFacetSelectorCoordinator.resolveDynamicFacets(
-        step,
-        state,
-        task,
-        pool,
-      );
-      executableStep = {
-        ...executableStep,
-        policyContents: result.effectivePolicyContents.map((content) => ({ content })),
-        knowledgeContents: result.effectiveKnowledgeContents.map((content) => ({ content })),
-      } as AgentWorkflowStep;
-    }
+    const executableStep = await this.prepareDynamicFacetStep(
+      step as AgentWorkflowStep,
+      state,
+      task,
+      stepIteration,
+    );
     const instruction = this.buildInstruction(
       executableStep,
       stepIteration,

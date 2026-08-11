@@ -106,7 +106,7 @@ describe('getWorkflowDescription', () => {
     ].join('\n'));
   }
 
-  it('dynamic parallel の mode と fixed/pool role を preview に含める', () => {
+  it('dynamic parallel の mode と fixed/pool role、static child facet を preview に含める (DFP-002, DFP-008)', () => {
     const projectDir = createProject();
     const workflowDir = join(projectDir, '.takt', 'workflows');
     mkdirSync(workflowDir, { recursive: true });
@@ -190,6 +190,55 @@ describe('getWorkflowDescription', () => {
     });
     expect(description.stepPreviews[0]?.substeps?.[0]).not.toHaveProperty('providerOptions');
     expect(overridden.stepPreviews[0]?.substeps?.[0]).not.toHaveProperty('providerOptions');
+    const facetDir = join(workflowDir, 'facets', 'policies');
+    mkdirSync(facetDir, { recursive: true });
+    writeFileSync(join(facetDir, 'review.md'), 'Review policy\n');
+    writeFileSync(join(workflowDir, 'static-facet-preview.yaml'), [
+      'name: static-facet-preview',
+      'initial_step: reviewers',
+      'max_steps: 1',
+      'facet_pools:',
+      '  security-facets:',
+      '    policies:',
+      '      review: ./facets/policies/review.md',
+      '    candidates:',
+      '      - id: web',
+      '        description: Web security',
+      '        policy: review',
+      'steps:',
+      '  - name: reviewers',
+      '    parallel:',
+      '      - name: security',
+      '        persona: security-reviewer',
+      '        instruction: Review security',
+      '        dynamic_facets:',
+      '          pool: security-facets',
+      '          max_selected: 1',
+      '        rules:',
+      '          - condition: approved',
+      '            next: COMPLETE',
+      '    rules:',
+      '      - condition: all("approved")',
+      '        next: COMPLETE',
+    ].join('\n'));
+
+    const staticDescription = getWorkflowDescription('static-facet-preview', projectDir, 1);
+    const security = staticDescription.stepPreviews[0]?.substeps?.find((step) => step.name === 'security');
+
+    expect(security).toMatchObject({
+      name: 'security',
+      dynamicFacets: {
+        pool: 'security-facets',
+        maxSelected: 1,
+        source: 'inline',
+        candidates: [{
+          id: 'web',
+          description: 'Web security',
+          policyRefs: ['review'],
+          knowledgeRefs: [],
+        }],
+      },
+    });
   });
 
   it('OpenCode selectorをpreview生成前に拒否する', () => {

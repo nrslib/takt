@@ -102,6 +102,9 @@ parallel:
       persona: security-reviewer
       policy: [contract-change, security-review]
       knowledge: [security, security-web, security-api, security-local, security-data, security-dependencies]
+      dynamic_facets:
+        pool: security-review
+        max_selected: 1
       instruction: review-security
       pass_previous_response: false
       output_contracts:

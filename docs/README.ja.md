@@ -241,6 +241,8 @@ steps:
 
 繰り返し使う step 定義は `.takt/steps/` に置き、workflow から `uses` で参照できます。探索順と上書き規則は [Workflow Guide](./workflows.ja.md) を参照してください。
 
+実験的な review workflow では、`facet_pools` と `dynamic_facets` を使って security reviewer へ対象システム固有の knowledge を選択的に渡せます。通常の agent step と `parallel` の agent sub-step の両方で使え、dynamic parallel では participant selector の後に選択された子だけが facet selector を実行します。各子の固定 facet は維持され、`max_selected` まで pool 候補が追加され、空選択なら追加されません。不正な選択は子の起動前に失敗します。プロセスの resume では participant selector と facet selector を現在の pool に対して再実行します。
+
 workflow ファイルの正式ディレクトリ名は `workflows/` です。
 
 同名 workflow が複数箇所にある場合の探索順は `.takt/workflows/` → `~/.takt/workflows/` → builtin です。

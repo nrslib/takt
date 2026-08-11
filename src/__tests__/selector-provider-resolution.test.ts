@@ -402,7 +402,7 @@ describe('workflow selector resolution', () => {
     });
   });
 
-  it('should resolve selector configuration when only a called workflow has dynamic_facets', () => {
+  it('should resolve selector configuration for called workflows and static parallel children (DFP-008)', () => {
     const projectDir = createProject('provider: codex\nmodel: gpt-selector\n');
     const workflowDir = join(projectDir, '.takt', 'workflows');
     writeFileSync(join(workflowDir, 'child.yaml'), [
@@ -458,6 +458,33 @@ describe('workflow selector resolution', () => {
         provider: 'codex',
         model: 'gpt-selector',
       },
+    });
+
+    const staticChildWorkflow: WorkflowConfig = {
+      name: 'static-child-facet',
+      initialStep: 'reviewers',
+      maxSteps: 1,
+      steps: [{
+        name: 'reviewers',
+        personaDisplayName: 'reviewers',
+        instruction: 'Review',
+        parallel: [{
+          name: 'security',
+          personaDisplayName: 'security',
+          instruction: 'Review security',
+          dynamicFacets: { pool: 'security', maxSelected: 1 },
+          rules: [{ condition: 'approved' }],
+        }],
+        rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
+      }],
+    };
+
+    expect(resolveWorkflowSelector(staticChildWorkflow, {
+      projectCwd: projectDir,
+      lookupCwd: projectDir,
+    })).toMatchObject({
+      applies: true,
+      selectorProvider: { provider: 'codex', model: 'gpt-selector' },
     });
   });
 

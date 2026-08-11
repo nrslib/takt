@@ -1968,6 +1968,7 @@ describe('FC restatement slot — caller reaches the runner after the manager ro
         buildFindingEvidenceSearchRequests: vi.fn().mockReturnValue([]),
       },
       stepExecutor: {
+        prepareDynamicFacetStep: vi.fn(async (step: AgentWorkflowStep) => step),
         buildInstruction: vi.fn((step: { name: string }) => `instruction:${step.name}`),
         buildPhase1Instruction: vi.fn((instruction: string) => instruction),
         emitStepReports: vi.fn(),

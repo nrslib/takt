@@ -3,6 +3,7 @@ import {
   isNormalAgentWorkflowStep,
   isDynamicParallelSubSteps,
   type WorkflowConfig,
+  type WorkflowStep,
 } from '../../core/models/types.js';
 import { MAX_WORKFLOW_CALL_DEPTH } from '../../core/workflow/workflow-call-depth.js';
 import { getWorkflowReference } from '../../core/workflow/workflow-reference.js';
@@ -50,8 +51,15 @@ function hasDynamicParallel(workflow: WorkflowConfig): boolean {
 }
 
 function hasDynamicFacets(workflow: WorkflowConfig): boolean {
-  return workflow.steps.some((step) =>
-    (step as { dynamicFacets?: unknown }).dynamicFacets !== undefined);
+  return workflow.steps.some(hasDynamicFacetsInStep);
+}
+
+function hasDynamicFacetsInStep(step: WorkflowStep): boolean {
+  if (isNormalAgentWorkflowStep(step) && step.dynamicFacets !== undefined) {
+    return true;
+  }
+  return step.parallel !== undefined
+    && getAllParallelSubSteps(step.parallel).some(hasDynamicFacetsInStep);
 }
 
 function hasCompanionPool(workflow: WorkflowConfig): boolean {
