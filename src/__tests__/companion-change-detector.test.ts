@@ -269,6 +269,7 @@ describe('CT-COMP-05 event-driven companion change detection', () => {
     expect(live).toBeDefined();
     detector.markReviewed(diff('live-diff', 1), live!.observedGeneration);
 
+    expect(await evaluateCompletion(detector, diff('live-diff', 1))).toBeUndefined();
     expect(await detector.evaluateCandidate(
       detector.getCompletionCandidate(true),
       diff('live-diff', 1),
