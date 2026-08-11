@@ -475,7 +475,7 @@ steps:
         next: COMPLETE
 ```
 
-選択した knowledge / policy は子の固定 facet に追加されます。空選択なら固定 facet は変わりません。未知の pool 参照、candidate ID、`max_selected` 超過は、その子の起動前に workflow を停止します。中断のない同一 run では、parallel 親の frame と occurrence によって子ごとの選択を分離します。プロセスの resume は空の run-local 選択状態から始まり、participant selector と子の facet selector を再実行します。
+選択した knowledge / policy は子の固定 facet に追加されます。空選択なら固定 facet は変わりません。対象の facet selector をすべて完了してから parallel の子を起動します。未知の pool 参照、candidate ID、`max_selected` 超過が1件でもあれば、その子と同じ parallel 親配下の sibling を起動せず workflow を停止します。中断のない同一 run では、parallel 親の frame と occurrence によって子ごとの選択を分離します。プロセスの resume は空の run-local 選択状態から始まり、participant selector と子の facet selector を再実行します。
 
 #### external pool
 

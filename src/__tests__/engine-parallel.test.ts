@@ -91,6 +91,7 @@ import {
   createTestTmpDir,
   applyDefaultMocks,
   makeRule,
+  makeResolvedFacetPool,
 } from './engine-test-helpers.js';
 
 const selectorGitCommandRunner = new GitSelectorCommandRunner();
@@ -223,24 +224,6 @@ function dynamicSelectionIdentity(config: WorkflowConfig): string {
   return buildDynamicParallelSelectionIdentity(config, 'reviewers', []);
 }
 
-function makeFacetPool(
-  name: string,
-  candidates: Array<{ id: string; content: string }>,
-): { name: string; source: 'inline'; candidates: Array<Record<string, unknown>> } {
-  return {
-    name,
-    source: 'inline',
-    candidates: candidates.map((candidate) => ({
-      id: candidate.id,
-      description: `${candidate.id} facet`,
-      policyRefs: [],
-      knowledgeRefs: [candidate.id],
-      resolvedPolicyContents: [],
-      resolvedKnowledgeContents: [{ content: candidate.content }],
-    })),
-  };
-}
-
 function makeDynamicParallelFacetWorkflow(): WorkflowConfig {
   const security = {
     name: 'security',
@@ -278,12 +261,12 @@ function makeDynamicParallelFacetWorkflow(): WorkflowConfig {
       rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
     }],
     facetPools: {
-      'security-facets': makeFacetPool('security-facets', [
+      'security-facets': makeResolvedFacetPool('security-facets', [
         { id: 'web', content: 'WEB SECURITY FACET' },
         { id: 'cli', content: 'CLI SECURITY FACET' },
       ]),
     },
-  } as unknown as WorkflowConfig;
+  };
 }
 
 function makeDynamicParallelFixedFacetWorkflow(): WorkflowConfig {
@@ -324,12 +307,12 @@ function makeDynamicParallelFixedFacetWorkflow(): WorkflowConfig {
       rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
     }],
     facetPools: {
-      'security-facets': makeFacetPool('security-facets', [
+      'security-facets': makeResolvedFacetPool('security-facets', [
         { id: 'web', content: 'WEB SECURITY FACET' },
         { id: 'cli', content: 'CLI SECURITY FACET' },
       ]),
     },
-  } as unknown as WorkflowConfig;
+  };
 }
 
 function makeStaticParallelFacetWorkflow(): WorkflowConfig {
@@ -363,14 +346,14 @@ function makeStaticParallelFacetWorkflow(): WorkflowConfig {
       rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
     }],
     facetPools: {
-      'security-facets': makeFacetPool('security-facets', [
+      'security-facets': makeResolvedFacetPool('security-facets', [
         { id: 'web', content: 'WEB SECURITY FACET' },
       ]),
-      'frontend-facets': makeFacetPool('frontend-facets', [
+      'frontend-facets': makeResolvedFacetPool('frontend-facets', [
         { id: 'cli', content: 'CLI SECURITY FACET' },
       ]),
     },
-  } as unknown as WorkflowConfig;
+  };
 }
 
 // Baseline git repository template: initialized once and copied per test,

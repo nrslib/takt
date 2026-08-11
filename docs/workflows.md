@@ -486,7 +486,7 @@ steps:
         next: COMPLETE
 ```
 
-The selected knowledge or policy is added to the child's fixed facets. An empty selection keeps the fixed facets unchanged. An invalid pool reference, candidate ID, or `max_selected` stops the workflow before that child starts. Within one uninterrupted run, the parent parallel frame and occurrence keep child selections independent. A process resume starts with empty run-local selection state and invokes the participant and child facet selectors again.
+The selected knowledge or policy is added to the child's fixed facets. An empty selection keeps the fixed facets unchanged. All applicable facet selectors complete before any parallel child starts. An invalid pool reference, candidate ID, or `max_selected` stops the workflow without starting that child or any sibling under the same parallel parent. Within one uninterrupted run, the parent parallel frame and occurrence keep child selections independent. A process resume starts with empty run-local selection state and invokes the participant and child facet selectors again.
 
 #### External pool
 

@@ -41,6 +41,7 @@ import {
   mockRuleEvaluationSequence,
   createTestTmpDir,
   applyDefaultMocks,
+  makeResolvedFacetPool,
 } from './engine-test-helpers.js';
 
 const emptySelectorGitCommandRunner: SelectorGitCommandRunner = {
@@ -70,27 +71,12 @@ function buildDynamicFacetFailureConfig(): WorkflowConfig {
       rules: [makeRule('all("approved")', 'COMPLETE')],
     }],
     facetPools: {
-      'security-facets': {
-        name: 'security-facets',
-        source: 'inline',
-        candidates: [{
-          id: 'web',
-          description: 'Web facet',
-          policyRefs: [],
-          knowledgeRefs: ['web'],
-          resolvedPolicyContents: [],
-          resolvedKnowledgeContents: [{ content: 'WEB SECURITY FACET' }],
-        }, {
-          id: 'cli',
-          description: 'CLI facet',
-          policyRefs: [],
-          knowledgeRefs: ['cli'],
-          resolvedPolicyContents: [],
-          resolvedKnowledgeContents: [{ content: 'CLI SECURITY FACET' }],
-        }],
-      },
+      'security-facets': makeResolvedFacetPool('security-facets', [
+        { id: 'web', content: 'WEB SECURITY FACET' },
+        { id: 'cli', content: 'CLI SECURITY FACET' },
+      ]),
     },
-  } as unknown as WorkflowConfig;
+  };
 }
 
 function buildDynamicParallelFixedFacetFailureConfig(): WorkflowConfig {
