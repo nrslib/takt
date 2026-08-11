@@ -421,6 +421,12 @@ describe('executeWorkflow claude-terminal integration', () => {
     const { executeWorkflow } = await import('../features/tasks/execute/workflowExecution.js');
     const fallbackRunSlug = '20260801-lineage-terminal-fallback';
     const resumedRunSlug = '20260801-lineage-terminal-resumed';
+    const missingAttachmentPath = join(
+      projectDir,
+      'missing-task-source',
+      'attachments',
+      'missing.png',
+    );
 
     await expect(executeWorkflow(makeConfig(), 'fallback bootstrap failure', projectDir, {
       projectCwd: projectDir,
@@ -442,7 +448,7 @@ describe('executeWorkflow claude-terminal integration', () => {
         orderContent: 'missing task',
         stagedOrderContent: 'missing task',
       },
-    })).rejects.toThrow();
+    })).rejects.toThrow(`Task attachment is missing: ${missingAttachmentPath}`);
 
     const fallbackMeta = JSON.parse(await readFile(
       join(projectDir, '.takt', 'runs', fallbackRunSlug, 'meta.json'),
@@ -536,6 +542,9 @@ describe('executeWorkflow claude-terminal integration', () => {
       join(projectDir, '.takt', 'runs', targetRunSlug, 'reports', 'review.md'),
       'utf-8',
     )).toBe('# valid review\n');
+    expect(existsSync(
+      join(projectDir, '.takt', 'runs', targetRunSlug, 'reports', 'invalid-link.md'),
+    )).toBe(false);
     expect(existsSync(
       join(projectDir, '.takt', 'runs', targetRunSlug, 'reports', 'resume-artifacts.json'),
     )).toBe(false);
