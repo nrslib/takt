@@ -450,10 +450,10 @@ facet_pools:
     candidates:
       - id: web
         description: HTTP と browser のセキュリティ境界をレビューする
-        knowledge: web-security
+        knowledge: [security-web, security-api, security-data]
       - id: cli
         description: CLI とローカルプロセスの境界をレビューする
-        knowledge: cli-security
+        knowledge: [security-local, security-data]
 
 steps:
   - name: reviewers
@@ -476,6 +476,8 @@ steps:
 ```
 
 選択した knowledge / policy は子の固定 facet に追加されます。空選択なら固定 facet は変わりません。対象の facet selector をすべて完了してから parallel の子を起動します。未知の pool 参照、candidate ID、`max_selected` 超過が1件でもあれば、その子と同じ parallel 親配下の sibling を起動せず workflow を停止します。中断のない同一 run では、parallel 親の frame と occurrence によって子ごとの選択を分離します。プロセスの resume は空の run-local 選択状態から始まり、participant selector と子の facet selector を再実行します。
+
+callable workflow をネストする場合、pool の選択責任は所有者であるトップレベル workflow に置きます。共有 workflow が任意の `workflow_ref` を受け取る場合、すべての呼び出し先へ pool 引数を追加してはいけません。未宣言の callable 引数は拒否されるためです。代わりに、トップレベル workflow が専用 adapter を選び、その adapter が実際に消費する suite を呼ぶときだけ `facet_pool_ref` を束縛します。消費側 suite が受理する外部 pool を宣言するため、無関係な callable 契約を広げず、未知参照はその境界のロード時に拒否されます。
 
 #### external pool
 

@@ -178,7 +178,7 @@ function loadRemediationForPeerReview(
   );
 }
 
-function loadReviewerSuiteForPeerReview(
+function loadReviewerAdapterForPeerReview(
   language: 'en' | 'ja',
   peerReview: WorkflowConfig,
   projectDir: string,
@@ -193,6 +193,23 @@ function loadReviewerSuiteForPeerReview(
     join(getBuiltinWorkflowsDir(language), `${reviewers.call}.yaml`),
     projectDir,
     { callableArgs: reviewers.args },
+  );
+}
+
+function loadReviewerSuiteForPeerReview(
+  language: 'en' | 'ja',
+  peerReview: WorkflowConfig,
+  projectDir: string,
+): WorkflowConfig {
+  const adapter = loadReviewerAdapterForPeerReview(language, peerReview, projectDir);
+  const reviewCall = findWorkflowStep(adapter, adapter.initialStep);
+  if (reviewCall.kind !== 'workflow_call' || typeof reviewCall.call !== 'string') {
+    return adapter;
+  }
+  return loadWorkflowFromFile(
+    join(getBuiltinWorkflowsDir(language), `${reviewCall.call}.yaml`),
+    projectDir,
+    { callableArgs: reviewCall.args },
   );
 }
 
@@ -358,6 +375,75 @@ describe('experimental builtin workflow', () => {
     invalidateAllResolvedConfigCache();
   });
 
+  it.each([
+    ['en', 'experimental', 'experimental-review-adapter', 'security-review-facets', [
+      ['web', ['security-web', 'security-api', 'security-data']],
+      ['cli', ['security-local', 'security-data']],
+      ['supply-chain', ['security-dependencies']],
+    ]],
+    ['en', 'takt-experimental', 'takt-experimental-review-adapter', 'takt-security-review-facets', [
+      ['orchestration', ['takt-security']],
+      ['cli', ['security-local', 'security-data']],
+      ['supply-chain', ['security-dependencies']],
+    ]],
+    ['ja', 'experimental', 'experimental-review-adapter', 'security-review-facets', [
+      ['web', ['security-web', 'security-api', 'security-data']],
+      ['cli', ['security-local', 'security-data']],
+      ['supply-chain', ['security-dependencies']],
+    ]],
+    ['ja', 'takt-experimental', 'takt-experimental-review-adapter', 'takt-security-review-facets', [
+      ['orchestration', ['takt-security']],
+      ['cli', ['security-local', 'security-data']],
+      ['supply-chain', ['security-dependencies']],
+    ]],
+  ] as const)(
+    'should bind the security review pool selected by the %s %s wrapper without widening shared workflow contracts',
+    (language, workflowName, expectedAdapter, expectedPool, expectedCandidates) => {
+      writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${language}\n`);
+      invalidateAllResolvedConfigCache();
+      const wrapper = loadWorkflowFromFile(
+        join(getBuiltinWorkflowsDir(language), `${workflowName}.yaml`),
+        projectDir,
+      );
+      const wrapperCall = findWorkflowStep(wrapper, 'develop');
+      expect(wrapperCall.args?.reviewer_suite).toBe(expectedAdapter);
+      expect(wrapperCall.args).not.toHaveProperty('security_review_pool');
+
+      const core = loadCoreForWrapper(language, wrapper, projectDir);
+      const peerReviewCall = findWorkflowStep(core, 'peer-review');
+      expect(peerReviewCall.args?.reviewer_suite).toBe(expectedAdapter);
+      expect(peerReviewCall.args).not.toHaveProperty('security_review_pool');
+
+      const peerReview = loadPeerReviewForCore(language, core, projectDir);
+      const reviewerSuiteCall = findWorkflowStep(peerReview, peerReview.initialStep);
+      expect(reviewerSuiteCall.call).toBe(expectedAdapter);
+      expect(reviewerSuiteCall.args).not.toHaveProperty('security_review_pool');
+
+      const adapter = loadReviewerAdapterForPeerReview(language, peerReview, projectDir);
+      const adapterCall = findWorkflowStep(adapter, adapter.initialStep);
+      expect(adapterCall.args?.security_review_pool).toBe(expectedPool);
+
+      const reviewerSuite = loadReviewerSuiteForPeerReview(language, peerReview, projectDir);
+      expect(reviewerSuite.facetPools?.[expectedPool]?.candidates.map((candidate) => [
+        candidate.id,
+        candidate.knowledgeRefs,
+      ])).toEqual(expectedCandidates);
+      expect(findWorkflowStep(reviewerSuite, 'security-review').dynamicFacets)
+        .toEqual({ pool: expectedPool, maxSelected: 1 });
+    },
+  );
+
+  it('should reject an unknown security review pool at the consuming reviewer-suite boundary', () => {
+    writeFileSync(join(projectDir, '.takt', 'config.yaml'), 'language: en\n');
+    invalidateAllResolvedConfigCache();
+
+    expect(() => loadWorkflowFromFile(
+      join(getBuiltinWorkflowsDir('en'), 'experimental-review.yaml'),
+      projectDir,
+      { callableArgs: { security_review_pool: 'missing-security-review-pool' } },
+    )).toThrow('references unknown facet pool "missing-security-review-pool"');
+  });
+
   it(
     'should run adjudication, verified remediation, follow-up review, and the final gate for takt-experimental',
     async () => {
@@ -394,7 +480,7 @@ describe('experimental builtin workflow', () => {
         ...rejectedCompanionFinding(),
         responseForNext(remediation, 'fix-verifier', 'COMPLETE'),
         selection(['security-review'], 'The second review round covers security changes.'),
-        selection(['web'], 'The web security knowledge matches the changed surface.'),
+        selection(['orchestration'], 'The TAKT orchestration security knowledge matches the changed surface.'),
         response(reviewerSuite, 'coding-review', 'coding-reviewer', 'approved'),
         response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
         response(reviewerSuite, 'security-review', 'security-reviewer', 'approved'),

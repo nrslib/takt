@@ -1,0 +1,15 @@
+knowledge:
+  takt-security: ../facets/knowledge/takt-security.md
+  security-local: ../facets/knowledge/security-local.md
+  security-data: ../facets/knowledge/security-data.md
+  security-dependencies: ../facets/knowledge/security-dependencies.md
+candidates:
+  - id: orchestration
+    description: TAKTのworkflow解決、provider、session、resume、権限、selectorの信頼境界をレビューする。
+    knowledge: takt-security
+  - id: cli
+    description: TAKT CLI、サブプロセス、worktree、パス、ローカル設定、機密データ境界をレビューする。
+    knowledge: [security-local, security-data]
+  - id: supply-chain
+    description: TAKTの依存関係、lockfile、インストール・ビルド処理、成果物、公開経路をレビューする。
+    knowledge: security-dependencies

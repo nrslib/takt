@@ -5,6 +5,8 @@ params:
   review_knowledge_additions:
     type: facet_ref[]
     facet_kind: knowledge
+  security_review_pool:
+    type: facet_pool_ref
 
 name: review
 tags: [review]
@@ -101,9 +103,10 @@ parallel:
       edit: false
       persona: security-reviewer
       policy: [contract-change, security-review]
-      knowledge: [security, security-web, security-api, security-local, security-data, security-dependencies]
+      knowledge: security
       dynamic_facets:
-        pool: security-review
+        pool:
+          $param: security_review_pool
         max_selected: 1
       instruction: review-security
       pass_previous_response: false

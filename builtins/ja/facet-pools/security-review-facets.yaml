@@ -1,0 +1,16 @@
+knowledge:
+  security-web: ../facets/knowledge/security-web.md
+  security-api: ../facets/knowledge/security-api.md
+  security-local: ../facets/knowledge/security-local.md
+  security-data: ../facets/knowledge/security-data.md
+  security-dependencies: ../facets/knowledge/security-dependencies.md
+candidates:
+  - id: web
+    description: ブラウザ、HTTP API、認証・認可、オリジン、入力、機密データ境界をレビューする。
+    knowledge: [security-web, security-api, security-data]
+  - id: cli
+    description: CLI引数、サブプロセス、パス、ローカルファイル、設定、機密データ境界をレビューする。
+    knowledge: [security-local, security-data]
+  - id: supply-chain
+    description: 依存関係、lockfile、インストール・ビルド処理、成果物、公開経路をレビューする。
+    knowledge: security-dependencies

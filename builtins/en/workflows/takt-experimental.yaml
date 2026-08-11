@@ -15,7 +15,7 @@ steps:
         fixed: [ai-antipattern-review-companion]
         pool: []
         moderator: ai-antipattern-review-moderator
-      reviewer_suite: takt-experimental-review
+      reviewer_suite: takt-experimental-review-adapter
       review_policy_additions: [takt-testing]
       review_policy: [coding, testing, takt-testing, review]
       review_knowledge: [takt, architecture, unit-testing, e2e-testing]

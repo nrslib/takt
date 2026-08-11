@@ -14,7 +14,7 @@
 - `runtime.yaml` の profile ladder を追加しました (#1231)。`defaults` と各 `provider.targets` エントリは、固定の `profile`・自動ルーティングの `pool`・順序付き `ladder` のいずれか1つを指定します。ladder は先頭 profile が初期割り当てで、ステップの `promotion` が次の段へ進めます。自己参照・循環 ladder はロード時に拒否されます。あわせて、ステップからワークフロー最上位の `mcp_servers` 定義を `mcp: [name, ...]` で名前参照でき、未解決の名前は fail fast します。
 - インタラクティブモード Grill Me を追加しました (#1251)。新モード `grill-me` は、判断が分かれる論点を1問ずつ推奨付きの質問で解消しながらタスクを詰め、要件が揃ったところで `/go` を提案します。モード選択プロンプトに加わり、`interactive_mode: grill-me` で既定にもできます。
 - Markdown + Gherkin のタスク指示を追加しました (#1252)。プロジェクト専用設定 `assistant.gherkin: true` を有効にすると、アシスタント対話（quiet モード含む）から生成される最終タスク指示が、背景・スコープ・設計意図・制約・検証を Markdown に保ちつつ、重要な観測可能挙動・状態遷移・境界・失敗・不変条件だけを最小限の Gherkin シナリオで表現するようになります。未設定なら従来の Markdown 指示のままです。
-- 実験的な動的コーディングワークフローを追加しました (#1247, #1275)。ビルトイン `experimental` は動的ファセットプールを軸にしたコーディングフローで、共有の `experimental-review` ステップフラグメントを使います。security reviewer は `parallel` の sub-step である場合も workflow の `facet_pools` から対象システム固有の knowledge を選べます。`dynamic_facets.max_selected` は省略可能で、省略時はセレクターがプール内の全候補まで選択できます。セレクター失敗は実行を停止し、全候補への暗黙フォールバックはありません。
+- 実験的な動的コーディングワークフローを追加しました (#1247, #1275)。`experimental` / `takt-experimental` wrapper は、汎用または TAKT 固有の外部 security-review facet pool を束縛する reviewer-suite adapter を選び、共有 workflow 契約を広げずに `parallel` の security reviewer へ適用します。`dynamic_facets.max_selected` は省略可能で、省略時は selector が pool 内の全候補まで選択できます。selector 失敗は実行を停止し、全候補への暗黙 fallback はありません。
 
 ### Changed
 

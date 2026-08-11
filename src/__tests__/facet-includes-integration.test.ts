@@ -286,20 +286,18 @@ describe('facet include expansion', () => {
     expect(resolvedSecurityReview?.split(common)).toHaveLength(2);
   });
 
-  it.each(['en', 'ja'] as const)('should resolve every system-specific security knowledge facet in %s', (lang) => {
-    for (const facetName of ['takt-security', 'web-security', 'cli-security', 'supply-chain-security']) {
-      const facetPath = join(getLanguageResourcesDir(lang), 'facets', 'knowledge', `${facetName}.md`);
-      const expected = readFileSync(facetPath, 'utf-8').trim();
-      const resolved = resolveRefToContent(
-        facetName,
-        undefined,
-        tempDir,
-        'knowledge',
-        { projectDir: tempDir, lang },
-      );
+  it.each(['en', 'ja'] as const)('should resolve TAKT-specific security knowledge in %s', (lang) => {
+    const facetPath = join(getLanguageResourcesDir(lang), 'facets', 'knowledge', 'takt-security.md');
+    const expected = readFileSync(facetPath, 'utf-8').trim();
+    const resolved = resolveRefToContent(
+      'takt-security',
+      undefined,
+      tempDir,
+      'knowledge',
+      { projectDir: tempDir, lang },
+    );
 
-      expect(resolved?.trim(), facetName).toBe(expected);
-    }
+    expect(resolved?.trim()).toBe(expected);
   });
 
 });

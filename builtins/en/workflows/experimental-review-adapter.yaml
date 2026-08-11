@@ -1,0 +1,31 @@
+name: experimental-review-adapter
+description: Bind the generic security review facet pool selected by the experimental wrapper to its reviewer suite.
+subworkflow:
+  callable: true
+  visibility: internal
+  returns: [needs_fix]
+  params:
+    review_policy_additions:
+      type: facet_ref[]
+      facet_kind: policy
+      default: []
+    review_knowledge_additions:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: []
+initial_step: review
+steps:
+  - name: review
+    kind: workflow_call
+    call: experimental-review
+    args:
+      security_review_pool: security-review-facets
+      review_policy_additions:
+        $param: review_policy_additions
+      review_knowledge_additions:
+        $param: review_knowledge_additions
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: needs_fix
+        return: needs_fix

@@ -13,18 +13,14 @@ subworkflow:
       type: facet_ref[]
       facet_kind: knowledge
       default: []
+    security_review_pool:
+      type: facet_pool_ref
+      default: security-review-facets
 facet_pools:
-  security-review:
-    candidates:
-      - id: web
-        description: Review HTTP, browser, session, origin, input, and cross-origin security boundaries.
-        knowledge: web-security
-      - id: cli
-        description: Review command-line arguments, subprocesses, paths, local files, and secret exposure.
-        knowledge: cli-security
-      - id: supply-chain
-        description: Review dependencies, lockfiles, install and build scripts, provenance, and publishing.
-        knowledge: supply-chain-security
+  security-review-facets:
+    uses: security-review-facets
+  takt-security-review-facets:
+    uses: takt-security-review-facets
 initial_step: review
 steps:
   - name: review
@@ -34,6 +30,8 @@ steps:
         $param: review_policy_additions
       review_knowledge_additions:
         $param: review_knowledge_additions
+      security_review_pool:
+        $param: security_review_pool
     rules:
       self:
         - condition: all("approved")

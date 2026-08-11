@@ -461,10 +461,10 @@ facet_pools:
     candidates:
       - id: web
         description: Review HTTP and browser security boundaries
-        knowledge: web-security
+        knowledge: [security-web, security-api, security-data]
       - id: cli
         description: Review command-line and local process boundaries
-        knowledge: cli-security
+        knowledge: [security-local, security-data]
 
 steps:
   - name: reviewers
@@ -487,6 +487,8 @@ steps:
 ```
 
 The selected knowledge or policy is added to the child's fixed facets. An empty selection keeps the fixed facets unchanged. All applicable facet selectors complete before any parallel child starts. An invalid pool reference, candidate ID, or `max_selected` stops the workflow without starting that child or any sibling under the same parallel parent. Within one uninterrupted run, the parent parallel frame and occurrence keep child selections independent. A process resume starts with empty run-local selection state and invokes the participant and child facet selectors again.
+
+For nested callable workflows, keep pool selection at the owning top-level workflow. When a shared workflow accepts an open `workflow_ref`, do not add a pool argument to every possible target: an undeclared callable argument is rejected. Instead, let the top-level workflow select a narrow adapter that binds the `facet_pool_ref` only when it calls the suite that consumes it. The consuming suite declares the accepted external pools, so unknown references still fail while loading that boundary without widening unrelated callable contracts.
 
 #### External pool
 
