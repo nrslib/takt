@@ -153,6 +153,23 @@ function response(
   };
 }
 
+function responseForNext(
+  workflow: WorkflowConfig,
+  stepName: string,
+  persona: string,
+  nextStep: string,
+): ScenarioEntry {
+  const step = findWorkflowStep(workflow, stepName);
+  const rule = step.rules?.find((candidate) => candidate.next === nextStep);
+  const ruleLabel = rule === undefined
+    ? undefined
+    : semanticRuleCandidatesOf([rule], false)[0]?.label;
+  if (ruleLabel === undefined) {
+    throw new Error(`Semantic rule not found for transition "${stepName}" -> "${nextStep}"`);
+  }
+  return response(workflow, stepName, persona, ruleLabel);
+}
+
 function selection(selectedIds: string[], rationale: string): ScenarioEntry {
   return {
     persona: 'takt-internal',
@@ -364,35 +381,25 @@ steps:
       const scenarioWorkflow = loadCoreForWrapper(language, workflow, projectDir);
       const reviewWorkflow = loadReviewForCore(language, scenarioWorkflow, projectDir);
       setMockScenario([
-        response(scenarioWorkflow, 'plan', 'planner', 'Requirements are clear and implementation is feasible'),
-        response(scenarioWorkflow, 'write_tests', 'coder', 'Test creation is complete'),
+        responseForNext(scenarioWorkflow, 'plan', 'planner', 'write_tests'),
+        responseForNext(scenarioWorkflow, 'write_tests', 'coder', 'implement'),
         selection(['testing'], 'Testing implementation facets are required.'),
-        response(scenarioWorkflow, 'implement', 'coder', 'Implementation cannot proceed'),
-        response(
-          scenarioWorkflow,
-          'replan',
-          'planner',
-          'An actionable, untried project-scoped change or investigation and its verification steps were defined',
-        ),
+        responseForNext(scenarioWorkflow, 'implement', 'coder', 'replan'),
+        responseForNext(scenarioWorkflow, 'replan', 'planner', 'implement'),
         selection(['testing'], 'The replanned implementation still changes test boundaries.'),
-        response(scenarioWorkflow, 'implement', 'coder', 'Implementation is complete'),
+        responseForNext(scenarioWorkflow, 'implement', 'coder', 'review'),
         selection([], 'The fixed TAKT reviewers cover the changed path.'),
         response(reviewWorkflow, 'coding-review', 'coding-reviewer', 'needs_fix'),
         response(reviewWorkflow, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'needs_fix'),
         selection([], 'No additional remediation facets are needed.'),
-        response(scenarioWorkflow, 'fix', 'coder', 'The task needs to be replanned'),
-        response(
-          scenarioWorkflow,
-          'replan',
-          'planner',
-          'An actionable, untried project-scoped change or investigation and its verification steps were defined',
-        ),
+        responseForNext(scenarioWorkflow, 'fix', 'coder', 'replan'),
+        responseForNext(scenarioWorkflow, 'replan', 'planner', 'implement'),
         selection(['testing'], 'The second replanned implementation changes test boundaries.'),
-        response(scenarioWorkflow, 'implement', 'coder', 'Implementation is complete'),
+        responseForNext(scenarioWorkflow, 'implement', 'coder', 'review'),
         selection([], 'The fixed TAKT reviewers cover the replanned path.'),
         response(reviewWorkflow, 'coding-review', 'coding-reviewer', 'approved'),
         response(reviewWorkflow, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
-        response(scenarioWorkflow, 'supervise', 'supervisor', 'approved'),
+        responseForNext(scenarioWorkflow, 'supervise', 'supervisor', 'COMPLETE'),
       ]);
       const engine = new WorkflowEngine(workflow, projectDir, 'Implement a TAKT change that requires replanning', {
         projectCwd: projectDir,
