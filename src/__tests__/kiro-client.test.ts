@@ -662,6 +662,35 @@ describe('callKiro', () => {
     expect(result.content).toBe(output);
   });
 
+  it('Given only a context compaction notice, When command succeeds, Then returns an error so the caller can retry', async () => {
+    const notice = 'The context window has overflowed, summarizing the history...';
+    mockSpawnWithScenario({
+      stdout: notice,
+      code: 0,
+    });
+
+    const onStream = vi.fn();
+    const result = await callKiro('planner', 'write the report', {
+      cwd: '/repo',
+      onStream,
+      sessionId: '123e4567-e89b-12d3-a456-426614174000',
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.error).toBe(
+      'kiro-cli compacted the context without returning a response',
+    );
+    expect(onStream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'result',
+        data: expect.objectContaining({ success: false }),
+      }),
+    );
+    expect(onStream).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'text' }),
+    );
+  });
+
   it('Given onStream callback, When command succeeds, Then emits text and successful result events', async () => {
     mockSpawnWithScenario({
       stdout: 'stream content',
