@@ -17,4 +17,4 @@ This step is a single final adjudication of whether the current deliverable is m
 6. Return `BLOCKED BY ENVIRONMENT` only when mandatory evidence cannot be obtained due to the environment, the current prompt provides environmental criteria, and every condition holds. Do not classify a failure fixable in code or repository configuration as environmental
 7. Return `MERGEABLE` only when no open findings remain and requirement fulfillment plus required quality-gate evidence are established
 
-For `FIX REQUIRED`, record a finding ID, evidence, cause, affected contract paths, and acceptance criteria so the following fix-plan can use this step's report directly as its authoritative target.
+For `FIX REQUIRED`, record a finding ID, evidence, cause, affected contract paths, acceptance criteria, and the narrow remediation boundary. Explicitly exclude adjacent cleanup, refactoring, compatibility behavior, new guarantees, and suggested mechanisms that are not required to clear the confirmed merge blocker, so the following fix-plan can use this step's report directly as its authoritative target.

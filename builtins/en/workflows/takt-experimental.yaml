@@ -1,5 +1,5 @@
 name: takt-experimental
-description: Inject TAKT-specific knowledge and testing policy into the shared development core, using TAKT-only implementation and review candidates.
+description: Inject TAKT-specific facets and implementation companions into the shared core's adjudicated, verified peer-review remediation loop and merge-readiness gate.
 max_steps: 51
 initial_step: develop
 
@@ -9,8 +9,10 @@ steps:
     call: development-core
     args:
       implementation_pool: takt-coding-facets
+      implementation_workflow: development-implement-dynamic
+      remediation_workflow: development-remediation-dynamic
       implementation_companions: [ai-antipattern-review-companion]
-      review_workflow: takt-experimental-review
+      reviewer_suite: takt-experimental-review
       review_policy_additions: [takt-testing]
       review_policy: [coding, testing, takt-testing, review]
       review_knowledge: [takt, architecture, unit-testing, e2e-testing]

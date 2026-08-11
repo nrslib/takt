@@ -11,7 +11,6 @@ export const parallelIntegrationTestGlobs = Object.freeze([
 // real child processes, or real Git boundaries.
 const legacyParallelIntegrationTestFiles = Object.freeze([
   'src/__tests__/acp-entrypoint.test.ts',
-  'src/__tests__/builtin-review-remediation-transitions.test.ts',
   'src/__tests__/dependency-versions.test.ts',
   'src/__tests__/e2e-helpers.test.ts',
   'src/__tests__/engine-abort.test.ts',
@@ -84,7 +83,6 @@ export const auditedIntegrationBoundaryTestFiles = Object.freeze([
   'src/__tests__/addTask.test.ts',
   'src/__tests__/assistantConfig.test.ts',
   'src/__tests__/assistantInitFiles.test.ts',
-  'src/__tests__/builtin-implementation-judgment-input.test.ts',
   'src/__tests__/catalog.test.ts',
   'src/__tests__/claude-terminal-client.test.ts',
   'src/__tests__/codex-isolated-structured.test.ts',
@@ -201,7 +199,6 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/architecture-boundary.test.ts',
   'src/__tests__/arpeggio-csv.test.ts',
   'src/__tests__/builtin-workflow-categories-path.test.ts',
-  'src/__tests__/builtins-capabilities-migration.test.ts',
   'src/__tests__/builtins-facets-deployment.test.ts',
   'src/__tests__/claude-headless-client.test.ts',
   'src/__tests__/claude-mcp-config.test.ts',

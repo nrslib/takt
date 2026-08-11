@@ -1,5 +1,5 @@
 name: experimental
-description: 汎用の計画、テスト、実装、レビュー、修正、最終監督を共通コアへ委譲する実験的なコーディングワークフロー。
+description: 動的実装 companion と、共通コアの裁定・修正検証付きピアレビュー収束ループ、マージ準備ゲートを使う実験的コーディングワークフロー。
 max_steps: 51
 initial_step: develop
 
@@ -9,8 +9,10 @@ steps:
     call: development-core
     args:
       implementation_pool: coding-facets
+      implementation_workflow: development-implement-dynamic
+      remediation_workflow: development-remediation-dynamic
       implementation_companions: [ai-antipattern-review-companion]
-      review_workflow: experimental-review
+      reviewer_suite: experimental-review
       review_policy_additions: []
       review_policy: [coding, testing, review]
       review_knowledge: [architecture, unit-testing, e2e-testing]

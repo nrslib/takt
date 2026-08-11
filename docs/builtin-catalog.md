@@ -85,7 +85,7 @@ Organized by category.
 | | `audit-architecture-backend` | Backend-focused architecture audit. Enumerates service modules and boundaries. |
 | | `audit-architecture-dual` | Full-stack architecture audit. Enumerates frontend/backend boundaries and cross-layer wiring. |
 | 🎵 TAKT Development | `takt-default` | TAKT-focused workflow using the shared development core with TAKT knowledge injected into planning, testing, implementation, review, and remediation. |
-| | `takt-experimental` | Experimental TAKT development workflow that uses the shared development core with the experimental review, remediation, and follow-up review flow. |
+| | `takt-experimental` | Experimental TAKT development workflow that adds TAKT-specific reviewers and implementation companions to the shared adjudication, verified-remediation, follow-up review, and merge-readiness flow. |
 | | `auto-improvement-loop` | Infinite orchestration loop that routes between open PR handling, issue-driven planning, and fresh improvement planning. |
 | | `review-takt-default` | TAKT-focused multi-perspective review (5 reviewers including AI antipattern and coding review). |
 | | `review-fix-takt-default` | Workflow that gathers the review target, then injects TAKT-specific facets into the shared development flow. |

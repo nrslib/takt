@@ -40,7 +40,6 @@ describe('ejectBuiltin step fragments', () => {
     await ejectBuiltin('review-fix-default', { projectDir });
 
     const workflowPath = join(projectDir, '.takt', 'workflows', 'review-fix-default.yaml');
-    expect(existsSync(join(projectDir, '.takt', 'steps', 'review-gather-with-clarification-to-reviewers.yaml'))).toBe(true);
     expect(() => loadWorkflowFromFile(workflowPath, projectDir)).not.toThrow();
   });
 

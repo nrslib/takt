@@ -18,7 +18,6 @@ steps:
     kind: workflow_call
     call: development-core
     args:
-      implementation_pool: takt-coding-facets
       plan_policy: [design-planning]
       plan_knowledge: [takt, architecture]
       testing_policy: [coding, testing, takt-testing]

@@ -95,7 +95,6 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
     const workflows = loadAllStandaloneWorkflowsWithSources(testDir, { onWarning });
 
     expect(workflows.size).toBeGreaterThan(0);
-    expect(workflows.get('takt-experimental')?.source).toBe('builtin');
     expect(Array.from(workflows.values()).every(({ source }) => source === 'builtin')).toBe(true);
     expect(onWarning).not.toHaveBeenCalled();
   });

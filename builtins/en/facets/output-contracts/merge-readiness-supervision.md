@@ -9,9 +9,9 @@
 | {Decomposed requirement, quality gate, or prior finding} | {met / unmet / verified / unverified / resolved} | {file:line, report, or execution evidence} |
 
 ## Actionable Families
-| family | Finding ID | Evidence | Problem -> root cause | Affected contract paths | Acceptance criteria |
-|--------|------------|----------|-----------------------|-------------------------|---------------------|
-| {Stable family name} | {FINAL-NEW-* / FINAL-PERSIST-*} | {file:line or execution evidence} | {Verified causal chain} | {Entry, production, validation, consumption, and side effects} | {Observable completion conditions} |
+| family | Finding ID | Evidence | Problem -> root cause | Affected contract paths | Acceptance criteria | Remediation boundary |
+|--------|------------|----------|-----------------------|-------------------------|---------------------|----------------------|
+| {Stable family name} | {FINAL-NEW-* / FINAL-PERSIST-*} | {file:line or execution evidence} | {Verified causal chain} | {Entry, production, validation, consumption, and side effects} | {Observable completion conditions} | {Required minimal change; explicitly excluded adjacent work or mechanism} |
 
 ## Prior Finding Dispositions
 | Finding ID | State | Evidence |

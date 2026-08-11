@@ -1,5 +1,5 @@
 name: takt-experimental
-description: TAKT固有の知識とテストポリシーを共通開発コアへ注入し、TAKT候補だけで実装とレビューを行うワークフロー。
+description: TAKT固有ファセットと実装 companion を、共通コアの裁定・修正検証付きピアレビュー収束ループ、マージ準備ゲートへ注入する。
 max_steps: 51
 initial_step: develop
 
@@ -9,8 +9,10 @@ steps:
     call: development-core
     args:
       implementation_pool: takt-coding-facets
+      implementation_workflow: development-implement-dynamic
+      remediation_workflow: development-remediation-dynamic
       implementation_companions: [ai-antipattern-review-companion]
-      review_workflow: takt-experimental-review
+      reviewer_suite: takt-experimental-review
       review_policy_additions: [takt-testing]
       review_policy: [coding, testing, takt-testing, review]
       review_knowledge: [takt, architecture, unit-testing, e2e-testing]

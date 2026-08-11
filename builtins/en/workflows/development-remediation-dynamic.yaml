@@ -1,0 +1,139 @@
+name: development-remediation-dynamic
+description: Dynamic-facet remediation loop for adjudicated experimental findings, including planning, fixing, and verification.
+subworkflow:
+  callable: true
+  visibility: internal
+  returns: [need_replan]
+  params:
+    fix_pool:
+      type: facet_pool_ref
+      default: coding-facets
+    fix_companions:
+      type: companion_ref[]
+      default: []
+    plan_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default: [coding, testing, review]
+    fix_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default: [coding, testing]
+    verification_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default: [coding, testing, review]
+    fix_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: [architecture, implementation-semantics]
+    verification_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: [architecture, unit-testing, e2e-testing]
+facet_pools:
+  coding-facets:
+    uses: coding-facets
+  takt-coding-facets:
+    uses: takt-coding-facets
+initial_step: fix-plan
+loop_monitors:
+  - cycle: [fix-plan, fix]
+    ignore_steps: [fix-verifier, fix-retry]
+    threshold: 4
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: Healthy (fix progress exists and report content is converging)
+          next: fix-plan
+        - condition: Fixes are incomplete or reports have not converged, but another review and fix is feasible
+          next: fix-plan
+        - condition: The fix approach assumptions must change and replanning is feasible
+          next: fix-plan
+        - condition: No feasible path can satisfy the requirements
+          next: ABORT
+  - cycle: [fix-retry, fix-verifier]
+    threshold: 4
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: Healthy (fix progress exists and report content is converging)
+          next: fix-retry
+        - condition: Fixes are incomplete or reports have not converged, but another fix is feasible
+          next: fix-retry
+        - condition: The fix approach assumptions must change and replanning is feasible
+          next: fix-plan
+        - condition: No feasible path can satisfy the requirements
+          next: ABORT
+steps:
+  - name: fix-plan
+    uses: peer-review-fix-plan
+    with:
+      plan_policy:
+        $param: plan_policy
+      fix_knowledge:
+        $param: fix_knowledge
+      plan_instruction: fix-plan-from-review-resolution
+    rules:
+      - condition: Fix plan finalized
+        next: fix
+      - condition: Whole-task replanning required
+        return: need_replan
+  - name: fix
+    capabilities: [edit, enable-skills]
+    uses: peer-review-fix
+    with:
+      fix_policy:
+        $param: fix_policy
+      fix_knowledge:
+        $param: fix_knowledge
+      fix_instruction: apply-fix-plan
+    dynamic_facets:
+      pool:
+        $param: fix_pool
+    companion:
+      $param: fix_companions
+    rules:
+      - condition: Fix complete
+        next: fix-verifier
+      - condition: Fix plan requires revision
+        next: fix-plan
+      - condition: Task-level replanning required
+        return: need_replan
+  - name: fix-verifier
+    uses: peer-review-fix-verifier
+    with:
+      verification_policy:
+        $param: verification_policy
+      fix_knowledge:
+        $param: verification_knowledge
+    rules:
+      - condition: verified
+        next: COMPLETE
+      - condition: incomplete
+        next: fix-retry
+      - condition: plan_invalid
+        next: fix-plan
+  - name: fix-retry
+    capabilities: [edit, enable-skills]
+    uses: peer-review-fix
+    with:
+      fix_policy:
+        $param: fix_policy
+      fix_knowledge:
+        $param: fix_knowledge
+      fix_instruction: apply-fix-verification
+    dynamic_facets:
+      pool:
+        $param: fix_pool
+    companion:
+      $param: fix_companions
+    rules:
+      - condition: Fix complete
+        next: fix-verifier
+      - condition: Fix plan requires revision
+        next: fix-plan
+      - condition: Task-level replanning required
+        return: need_replan

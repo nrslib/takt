@@ -114,19 +114,67 @@ function loadCoreForWrapper(
   );
 }
 
-function loadReviewForCore(
+function loadPeerReviewForCore(
   language: 'en' | 'ja',
   core: WorkflowConfig,
   projectDir: string,
 ): WorkflowConfig {
-  const review = findWorkflowStep(core, 'review');
-  if (review.kind !== 'workflow_call' || typeof review.call !== 'string') {
+  const peerReview = findWorkflowStep(core, 'peer-review');
+  if (peerReview.kind !== 'workflow_call' || typeof peerReview.call !== 'string') {
     return core;
   }
   return loadWorkflowFromFile(
-    join(getBuiltinWorkflowsDir(language), `${review.call}.yaml`),
+    join(getBuiltinWorkflowsDir(language), `${peerReview.call}.yaml`),
     projectDir,
-    { callableArgs: review.args },
+    { callableArgs: peerReview.args },
+  );
+}
+
+function loadImplementationForCore(
+  language: 'en' | 'ja',
+  core: WorkflowConfig,
+  projectDir: string,
+): WorkflowConfig {
+  const implementation = findWorkflowStep(core, 'implement');
+  if (implementation.kind !== 'workflow_call' || typeof implementation.call !== 'string') {
+    return core;
+  }
+  return loadWorkflowFromFile(
+    join(getBuiltinWorkflowsDir(language), `${implementation.call}.yaml`),
+    projectDir,
+    { callableArgs: implementation.args },
+  );
+}
+
+function loadRemediationForPeerReview(
+  language: 'en' | 'ja',
+  peerReview: WorkflowConfig,
+  projectDir: string,
+): WorkflowConfig {
+  const remediation = findWorkflowStep(peerReview, 'remediation');
+  if (remediation.kind !== 'workflow_call' || typeof remediation.call !== 'string') {
+    return peerReview;
+  }
+  return loadWorkflowFromFile(
+    join(getBuiltinWorkflowsDir(language), `${remediation.call}.yaml`),
+    projectDir,
+    { callableArgs: remediation.args },
+  );
+}
+
+function loadReviewerSuiteForPeerReview(
+  language: 'en' | 'ja',
+  peerReview: WorkflowConfig,
+  projectDir: string,
+): WorkflowConfig {
+  const reviewers = findWorkflowStep(peerReview, peerReview.initialStep);
+  if (reviewers.kind !== 'workflow_call' || typeof reviewers.call !== 'string') {
+    return peerReview;
+  }
+  return loadWorkflowFromFile(
+    join(getBuiltinWorkflowsDir(language), `${reviewers.call}.yaml`),
+    projectDir,
+    { callableArgs: reviewers.args },
   );
 }
 
@@ -204,6 +252,25 @@ function responseForNext(
   return response(workflow, stepName, step.persona, ruleLabel);
 }
 
+function responseForReturn(
+  workflow: WorkflowConfig,
+  stepName: string,
+  returnValue: string,
+): ScenarioEntry {
+  const step = findWorkflowStep(workflow, stepName);
+  const rule = step.rules?.find((candidate) => candidate.returnValue === returnValue);
+  const ruleLabel = rule === undefined
+    ? undefined
+    : semanticRuleCandidatesOf([rule], false)[0]?.label;
+  if (ruleLabel === undefined) {
+    throw new Error(`Semantic rule not found for return "${stepName}" -> "${returnValue}"`);
+  }
+  if (typeof step.persona !== 'string') {
+    throw new Error(`Persona not found for step "${stepName}"`);
+  }
+  return response(workflow, stepName, step.persona, ruleLabel);
+}
+
 function selection(selectedIds: string[], rationale: string): ScenarioEntry {
   return {
     persona: 'takt-internal',
@@ -238,82 +305,53 @@ describe('experimental builtin workflow', () => {
     invalidateAllResolvedConfigCache();
   });
 
-  it('should fail fast when facet pool bindings are missing, wrongly typed, or unknown', () => {
-    writeFileSync(join(projectDir, '.takt', 'config.yaml'), 'language: en\n');
-    invalidateAllResolvedConfigCache();
-    const corePath = join(getBuiltinWorkflowsDir('en'), 'development-core.yaml');
-    expect(() => loadWorkflowFromFile(corePath, projectDir, {
-      callableArgs: { implementation_pool: 'missing-pool' },
-    })).toThrow('references unknown facet pool "missing-pool"');
-    expect(() => loadWorkflowFromFile(corePath, projectDir, {
-      callableArgs: { implementation_pool: ['coding-facets'] },
-    })).toThrow('must be a scalar facet_pool_ref');
-
-    const customDir = join(projectDir, '.takt', 'workflows');
-    mkdirSync(customDir, { recursive: true });
-    const customPath = join(customDir, 'pool-contract.yaml');
-    writeFileSync(customPath, `name: pool-contract
-subworkflow:
-  callable: true
-  visibility: internal
-  params:
-    pool:
-      type: facet_pool_ref
-facet_pools:
-  available:
-    candidates:
-      - id: candidate
-        description: Candidate
-        policy: coding
-        knowledge: architecture
-initial_step: implement
-steps:
-  - name: implement
-    persona: coder
-    policy: coding
-    knowledge: architecture
-    instruction: implement
-    edit: true
-    dynamic_facets:
-      pool:
-        $param: pool
-    rules:
-      - condition: done
-        next: COMPLETE
-`, 'utf-8');
-    expect(() => loadWorkflowFromFile(customPath, projectDir)).toThrow(
-      'requires workflow_call arg "pool" for dynamic_facets.pool',
-    );
-  });
-
   it(
-    'should complete the English experimental wrapper after reviewer fixes when review requires remediation',
+    'should run adjudication, verified remediation, follow-up review, and the final gate for takt-experimental',
     async () => {
       const language = 'en';
       writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${language}\n`);
       invalidateAllResolvedConfigCache();
       const workflow = loadWorkflowFromFile(
-        join(getBuiltinWorkflowsDir(language), 'experimental.yaml'),
+        join(getBuiltinWorkflowsDir(language), 'takt-experimental.yaml'),
         projectDir,
       );
-      const scenarioWorkflow = loadCoreForWrapper(language, workflow, projectDir);
-      const reviewWorkflow = loadReviewForCore(language, scenarioWorkflow, projectDir);
+      const core = loadCoreForWrapper(language, workflow, projectDir);
+      const implementation = loadImplementationForCore(language, core, projectDir);
+      const peerReview = loadPeerReviewForCore(language, core, projectDir);
+      const remediation = loadRemediationForPeerReview(language, peerReview, projectDir);
+      const reviewerSuite = loadReviewerSuiteForPeerReview(language, peerReview, projectDir);
       setMockScenario([
-        response(scenarioWorkflow, 'plan', 'planner', 'Requirements are clear and implementation is feasible'),
-        response(scenarioWorkflow, 'write_tests', 'coder', 'Test creation is complete'),
-        selection(['frontend'], 'Frontend implementation facets are required.'),
-        response(scenarioWorkflow, 'implement', 'coder', 'Implementation is complete'),
-        selection(['frontend-review'], 'The first review round covers frontend changes.'),
-        response(reviewWorkflow, 'coding-review', 'coding-reviewer', 'needs_fix'),
-        response(reviewWorkflow, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'needs_fix'),
-        response(reviewWorkflow, 'frontend-review', 'frontend-reviewer', 'needs_fix'),
-        selection([], 'No additional remediation facets are needed.'),
-        response(scenarioWorkflow, 'fix', 'coder', 'Fix is complete'),
+        responseForNext(core, 'plan', 'write_tests'),
+        responseForNext(core, 'write_tests', 'implement'),
+        selection(['testing'], 'Testing implementation facets are required.'),
+        responseForNext(implementation, 'implement', 'COMPLETE'),
+        selection(['architecture-review'], 'The first review round covers architecture changes.'),
+        response(reviewerSuite, 'coding-review', 'coding-reviewer', 'needs_fix'),
+        response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'needs_fix'),
+        response(reviewerSuite, 'architecture-review', 'architecture-reviewer', 'needs_fix'),
+        responseForNext(peerReview, 'review-adjudication', 'remediation'),
+        responseForNext(remediation, 'fix-plan', 'fix'),
+        selection(['testing'], 'Testing remediation facets are required.'),
+        responseForNext(remediation, 'fix', 'fix-verifier'),
+        responseForNext(remediation, 'fix-verifier', 'fix-retry'),
+        selection(['testing'], 'Testing remediation facets are required for the retry.'),
+        responseForNext(remediation, 'fix-retry', 'fix-verifier'),
+        responseForNext(remediation, 'fix-verifier', 'COMPLETE'),
         selection(['security-review'], 'The second review round covers security changes.'),
-        response(reviewWorkflow, 'coding-review', 'coding-reviewer', 'approved'),
-        response(reviewWorkflow, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
-        response(reviewWorkflow, 'security-review', 'security-reviewer', 'approved'),
-        response(scenarioWorkflow, 'supervise', 'supervisor', 'approved'),
+        response(reviewerSuite, 'coding-review', 'coding-reviewer', 'approved'),
+        response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
+        response(reviewerSuite, 'security-review', 'security-reviewer', 'approved'),
+        responseForNext(peerReview, 'review-adjudication', 'final-gate'),
+        responseForNext(peerReview, 'final-gate', 'remediation'),
+        responseForNext(remediation, 'fix-plan', 'fix'),
+        selection(['security'], 'The final-gate remediation requires security facets.'),
+        responseForNext(remediation, 'fix', 'fix-verifier'),
+        responseForNext(remediation, 'fix-verifier', 'COMPLETE'),
+        selection([], 'The fixed reviewers cover the final-gate remediation.'),
+        response(reviewerSuite, 'coding-review', 'coding-reviewer', 'approved'),
+        response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
+        responseForNext(peerReview, 'review-adjudication', 'final-gate'),
+        responseForNext(peerReview, 'final-gate', 'COMPLETE'),
       ]);
       const engine = new WorkflowEngine(workflow, projectDir, 'Implement and review a frontend security change', {
         projectCwd: projectDir,
@@ -341,99 +379,60 @@ steps:
         currentStep: state.currentStep,
         iteration: state.iteration,
         remainingScenarios: getScenarioQueue()?.remaining,
+        companionSteps,
       })).toBe('completed');
       expect(getScenarioQueue()?.remaining).toBe(0);
-      expect(companionSteps).toEqual(['implement', 'fix']);
+      expect(companionSteps).toEqual(['implement', 'fix', 'fix-retry', 'fix']);
     },
     60_000,
   );
 
   it(
-    'should complete the TAKT experimental wrapper when TAKT testing facets and reviewers are selected',
+    'should route implementation, fix, and final-gate replanning through replan',
     async () => {
       const language = 'en';
       writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${language}\n`);
       invalidateAllResolvedConfigCache();
       const workflow = loadWorkflowFromFile(
-        join(getBuiltinWorkflowsDir(language), 'takt-experimental.yaml'),
+        join(getBuiltinWorkflowsDir(language), 'experimental.yaml'),
         projectDir,
       );
-      const scenarioWorkflow = loadCoreForWrapper(language, workflow, projectDir);
-      const reviewWorkflow = loadReviewForCore(language, scenarioWorkflow, projectDir);
+      const core = loadCoreForWrapper(language, workflow, projectDir);
+      const implementation = loadImplementationForCore(language, core, projectDir);
+      const peerReview = loadPeerReviewForCore(language, core, projectDir);
+      const remediation = loadRemediationForPeerReview(language, peerReview, projectDir);
+      const reviewerSuite = loadReviewerSuiteForPeerReview(language, peerReview, projectDir);
       setMockScenario([
-        response(scenarioWorkflow, 'plan', 'planner', 'Requirements are clear and implementation is feasible'),
-        response(scenarioWorkflow, 'write_tests', 'coder', 'Test creation is complete'),
-        selection(['testing'], 'The implementation changes test boundaries.'),
-        response(scenarioWorkflow, 'implement', 'coder', 'Implementation is complete'),
-        selection([], 'The fixed reviewers cover the changed test path.'),
-        response(reviewWorkflow, 'coding-review', 'coding-reviewer', 'approved'),
-        response(reviewWorkflow, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
-        response(scenarioWorkflow, 'supervise', 'supervisor', 'approved'),
-      ]);
-      const engine = new WorkflowEngine(workflow, projectDir, 'Implement a TAKT testing change', {
-        projectCwd: projectDir,
-        provider: 'mock',
-        selectorProvider: SELECTOR_PROVIDER,
-        selectorGitCommandRunner: SELECTOR_GIT_COMMAND_RUNNER,
-        companionProviders: {
-          'ai-antipattern-review-companion': { provider: 'mock' },
-        },
-        companionDiffReader: COMPANION_DIFF_READER,
-        structuredCaller: new DefaultStructuredCaller(),
-        workflowCallResolver: ({ parentWorkflow, step, projectCwd, lookupCwd }) =>
-          resolveWorkflowCallTarget(parentWorkflow, step, projectCwd, lookupCwd),
-      });
-      engines.push(engine);
-      const abortReasons: string[] = [];
-      const companionSteps: string[] = [];
-      engine.on('workflow:abort', (_state, reason) => abortReasons.push(reason));
-      engine.on('companion:start', ({ step }) => companionSteps.push(step));
-
-      const state = await engine.run();
-
-      expect(state.status, JSON.stringify({
-        abortReasons,
-        currentStep: state.currentStep,
-        iteration: state.iteration,
-        remainingScenarios: getScenarioQueue()?.remaining,
-      })).toBe('completed');
-      expect(getScenarioQueue()?.remaining).toBe(0);
-      expect(companionSteps).toEqual(['implement']);
-    },
-  );
-
-  it(
-    'should route blocked implementation and fix replanning through replan before reviewing again',
-    async () => {
-      const language = 'en';
-      writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${language}\n`);
-      invalidateAllResolvedConfigCache();
-      const workflow = loadWorkflowFromFile(
-        join(getBuiltinWorkflowsDir(language), 'takt-experimental.yaml'),
-        projectDir,
-      );
-      const scenarioWorkflow = loadCoreForWrapper(language, workflow, projectDir);
-      const reviewWorkflow = loadReviewForCore(language, scenarioWorkflow, projectDir);
-      setMockScenario([
-        responseForNext(scenarioWorkflow, 'plan', 'write_tests'),
-        responseForNext(scenarioWorkflow, 'write_tests', 'implement'),
+        responseForNext(core, 'plan', 'write_tests'),
+        responseForNext(core, 'write_tests', 'implement'),
         selection(['testing'], 'Testing implementation facets are required.'),
-        responseForNext(scenarioWorkflow, 'implement', 'replan'),
-        responseForNext(scenarioWorkflow, 'replan', 'implement'),
+        responseForReturn(implementation, 'implement', 'need_replan'),
+        responseForNext(core, 'replan', 'implement'),
         selection(['testing'], 'The replanned implementation still changes test boundaries.'),
-        responseForNext(scenarioWorkflow, 'implement', 'review'),
+        responseForNext(implementation, 'implement', 'COMPLETE'),
         selection([], 'The fixed TAKT reviewers cover the changed path.'),
-        response(reviewWorkflow, 'coding-review', 'coding-reviewer', 'needs_fix'),
-        response(reviewWorkflow, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'needs_fix'),
-        selection([], 'No additional remediation facets are needed.'),
-        responseForNext(scenarioWorkflow, 'fix', 'replan'),
-        responseForNext(scenarioWorkflow, 'replan', 'implement'),
+        response(reviewerSuite, 'coding-review', 'coding-reviewer', 'needs_fix'),
+        response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'needs_fix'),
+        responseForNext(peerReview, 'review-adjudication', 'remediation'),
+        responseForNext(remediation, 'fix-plan', 'fix'),
+        selection(['testing'], 'The fix uses the TAKT testing facets.'),
+        responseForReturn(remediation, 'fix', 'need_replan'),
+        responseForNext(core, 'replan', 'implement'),
         selection(['testing'], 'The second replanned implementation changes test boundaries.'),
-        responseForNext(scenarioWorkflow, 'implement', 'review'),
+        responseForNext(implementation, 'implement', 'COMPLETE'),
         selection([], 'The fixed TAKT reviewers cover the replanned path.'),
-        response(reviewWorkflow, 'coding-review', 'coding-reviewer', 'approved'),
-        response(reviewWorkflow, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
-        responseForNext(scenarioWorkflow, 'supervise', 'COMPLETE'),
+        response(reviewerSuite, 'coding-review', 'coding-reviewer', 'approved'),
+        response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
+        responseForNext(peerReview, 'review-adjudication', 'final-gate'),
+        responseForReturn(peerReview, 'final-gate', 'need_replan'),
+        responseForNext(core, 'replan', 'implement'),
+        selection(['testing'], 'The final-gate replan still changes test boundaries.'),
+        responseForNext(implementation, 'implement', 'COMPLETE'),
+        selection([], 'The fixed reviewers cover the final-gate replan.'),
+        response(reviewerSuite, 'coding-review', 'coding-reviewer', 'approved'),
+        response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
+        responseForNext(peerReview, 'review-adjudication', 'final-gate'),
+        responseForNext(peerReview, 'final-gate', 'COMPLETE'),
       ]);
       const engine = new WorkflowEngine(workflow, projectDir, 'Implement a TAKT change that requires replanning', {
         projectCwd: projectDir,
@@ -461,69 +460,45 @@ steps:
         visitedSteps,
       })).toBe('completed');
       expect(getScenarioQueue()?.remaining).toBe(0);
-      expect(visitedSteps.filter((step) => step === 'replan')).toHaveLength(2);
+      expect(visitedSteps.filter((step) => step === 'replan')).toHaveLength(3);
       expect(visitedSteps.filter((step) => step === 'plan')).toHaveLength(1);
     },
     60_000,
   );
 
-  const followUpReviewCases = (['en', 'ja'] as const).flatMap((language) =>
-    [
-      'default',
-      'takt-default',
-      'frontend',
-      'dual',
-      'backend-cqrs',
-      'dual-cqrs',
-      'frontend-maintenance',
-    ].map((workflowName) => ({ language, workflowName })),
-  );
-
-  it.each(followUpReviewCases)(
-    'should run $language $workflowName reviewers again after a fix without experimental companions',
-    async ({ language, workflowName }) => {
+  it(
+    'should keep the default workflow fixed while rerunning reviewers after verified remediation',
+    async () => {
+      const language = 'en';
       writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${language}\n`);
       invalidateAllResolvedConfigCache();
       const workflow = loadWorkflowFromFile(
-        join(getBuiltinWorkflowsDir(language), `${workflowName}.yaml`),
+        join(getBuiltinWorkflowsDir(language), 'default.yaml'),
         projectDir,
       );
       const core = loadCoreForWrapper(language, workflow, projectDir);
-      const reviewerSuite = loadReviewForCore(language, core, projectDir);
+      const implementation = loadImplementationForCore(language, core, projectDir);
+      const peerReview = loadPeerReviewForCore(language, core, projectDir);
+      const remediation = loadRemediationForPeerReview(language, peerReview, projectDir);
+      const reviewerSuite = loadReviewerSuiteForPeerReview(language, peerReview, projectDir);
       const reviewerSteps = collectReviewerSteps(language, reviewerSuite, projectDir);
-      const develop = findWorkflowStep(workflow, 'develop');
-      const initialReview = findWorkflowStep(core, 'review');
-      const followUpReview = findWorkflowStep(core, 'follow-up-review');
-      if (develop.kind !== 'workflow_call') {
-        throw new Error(`Workflow "${workflow.name}" does not delegate development`);
-      }
-      if (typeof initialReview.call !== 'string' || typeof followUpReview.call !== 'string') {
-        throw new Error(`Workflow "${workflow.name}" has no resolved reviewer workflow`);
-      }
-      expect(followUpReview.call).toBe(initialReview.call);
-      if (typeof develop.args?.review_workflow === 'string') {
-        expect(initialReview.call).toBe(develop.args.review_workflow);
-      }
       const reviewResponses = (verdict: 'approved' | 'needs_fix'): ScenarioEntry[] =>
         reviewerSteps.map(({ workflow: reviewerWorkflow, step, persona }) =>
           response(reviewerWorkflow, step.name, persona, verdict));
       setMockScenario([
         responseForNext(core, 'plan', 'write_tests'),
         responseForNext(core, 'write_tests', 'implement'),
-        selection([], 'No implementation-specific facet is required.'),
-        responseForNext(core, 'implement', 'review'),
+        responseForNext(implementation, 'implement', 'COMPLETE'),
         ...reviewResponses('needs_fix'),
-        selection([], 'No fix-specific facet is required.'),
-        responseForNext(core, 'fix', 'follow-up-review'),
+        responseForNext(peerReview, 'review-adjudication', 'remediation'),
+        responseForNext(remediation, 'fix-plan', 'fix'),
+        responseForNext(remediation, 'fix', 'fix-verifier'),
+        responseForNext(remediation, 'fix-verifier', 'COMPLETE'),
         ...reviewResponses('approved'),
-        responseForNext(core, 'supervise', 'COMPLETE'),
+        responseForNext(peerReview, 'review-adjudication', 'final-gate'),
+        responseForNext(peerReview, 'final-gate', 'COMPLETE'),
       ]);
-      const scenarioQueue = getScenarioQueue();
-      if (scenarioQueue === undefined) {
-        throw new Error('Mock scenario queue was not created');
-      }
-      const consumeScenario = vi.spyOn(scenarioQueue, 'consume');
-      const engine = new WorkflowEngine(workflow, projectDir, 'Implement and review a default workflow change', {
+      const engine = new WorkflowEngine(workflow, projectDir, 'Implement and review a standard workflow change', {
         projectCwd: projectDir,
         provider: 'mock',
         selectorProvider: SELECTOR_PROVIDER,
@@ -537,9 +512,7 @@ steps:
           resolveWorkflowCallTarget(parentWorkflow, step, projectCwd, lookupCwd),
       });
       engines.push(engine);
-      const visitedSteps: string[] = [];
       const companionSteps: string[] = [];
-      engine.on('step:start', (step) => visitedSteps.push(step.name));
       engine.on('companion:start', ({ step }) => companionSteps.push(step));
 
       const state = await engine.run();
@@ -548,29 +521,15 @@ steps:
         currentStep: state.currentStep,
         iteration: state.iteration,
         remainingScenarios: getScenarioQueue()?.remaining,
-        visitedSteps,
       })).toBe('completed');
       expect(getScenarioQueue()?.remaining).toBe(0);
-      const expectedReviewsByPersona = new Map<string, number>();
-      for (const { persona } of reviewerSteps) {
-        expectedReviewsByPersona.set(
-          persona,
-          (expectedReviewsByPersona.get(persona) ?? 0) + 2,
-        );
-      }
-      for (const [persona, expectedCount] of expectedReviewsByPersona) {
-        expect(
-          consumeScenario.mock.calls.filter(([consumedPersona]) => consumedPersona === persona),
-          persona,
-        ).toHaveLength(expectedCount);
-      }
       expect(companionSteps).toEqual([]);
     },
     60_000,
   );
 
   it(
-    'should abort the Japanese experimental wrapper when review findings cannot be remediated',
+    'should abort the Japanese experimental wrapper when the final gate is blocked by the environment',
     async () => {
       const language = 'ja';
       writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${language}\n`);
@@ -579,19 +538,21 @@ steps:
         join(getBuiltinWorkflowsDir(language), 'experimental.yaml'),
         projectDir,
       );
-      const scenarioWorkflow = loadCoreForWrapper(language, wrapper, projectDir);
-      const reviewWorkflow = loadReviewForCore(language, scenarioWorkflow, projectDir);
+      const core = loadCoreForWrapper(language, wrapper, projectDir);
+      const implementation = loadImplementationForCore(language, core, projectDir);
+      const peerReview = loadPeerReviewForCore(language, core, projectDir);
+      const reviewerSuite = loadReviewerSuiteForPeerReview(language, peerReview, projectDir);
       setMockScenario([
-        response(scenarioWorkflow, 'plan', 'planner', '要件が明確で実装可能'),
-        response(scenarioWorkflow, 'write_tests', 'coder', 'テスト作成が完了した'),
+        responseForNext(core, 'plan', 'write_tests'),
+        responseForNext(core, 'write_tests', 'implement'),
         selection(['testing'], 'Testing implementation facets are required.'),
-        response(scenarioWorkflow, 'implement', 'coder', '実装が完了した'),
+        responseForNext(implementation, 'implement', 'COMPLETE'),
         selection(['testing-review'], 'Testing review is required.'),
-        response(reviewWorkflow, 'coding-review', 'coding-reviewer', 'needs_fix'),
-        response(reviewWorkflow, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'needs_fix'),
-        response(reviewWorkflow, 'testing-review', 'testing-reviewer', 'needs_fix'),
-        selection([], 'No additional remediation facets are needed.'),
-        response(scenarioWorkflow, 'fix', 'coder', '修正を進行できない'),
+        response(reviewerSuite, 'coding-review', 'coding-reviewer', 'approved'),
+        response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
+        response(reviewerSuite, 'testing-review', 'testing-reviewer', 'approved'),
+        responseForNext(peerReview, 'review-adjudication', 'final-gate'),
+        responseForNext(peerReview, 'final-gate', 'ABORT'),
       ]);
       const engine = new WorkflowEngine(wrapper, projectDir, 'Implement a change that cannot be remediated', {
         projectCwd: projectDir,
@@ -617,7 +578,7 @@ steps:
       expect(state.status).toBe('aborted');
       expect(abortReasons).toEqual(['Workflow aborted by step transition']);
       expect(getScenarioQueue()?.remaining).toBe(0);
-      expect(companionSteps).toEqual(['implement', 'fix']);
+      expect(companionSteps).toEqual(['implement']);
     },
     60_000,
   );

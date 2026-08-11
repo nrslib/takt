@@ -9,6 +9,15 @@ subworkflow:
     reviewer_suite:
       type: workflow_ref
       default: peer-review-suite-base
+    fix_companions:
+      type: companion_ref[]
+      default: []
+    fix_pool:
+      type: facet_pool_ref
+      default: coding-facets
+    remediation_workflow:
+      type: workflow_ref
+      default: development-remediation
     review_policy_additions:
       type: facet_ref[]
       facet_kind: policy
@@ -20,6 +29,12 @@ subworkflow:
         - architecture
         - takt
     fix_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default:
+        - takt
+        - architecture
+    verification_knowledge:
       type: facet_ref[]
       facet_kind: knowledge
       default:
@@ -45,16 +60,17 @@ subworkflow:
         - coding
         - testing
         - review
+facet_pools:
+  coding-facets:
+    uses: coding-facets
+  takt-coding-facets:
+    uses: takt-coding-facets
 initial_step: initial-reviewers
 loop_monitors:
   - cycle:
       - reviewers
       - review-adjudication
-      - fix-plan
-      - fix
-    ignore_steps:
-      - fix-verifier
-      - fix-retry
+      - remediation
     threshold: 3
     judge:
       persona: supervisor
@@ -65,18 +81,14 @@ loop_monitors:
         - condition: 修正未完了または報告未収束だが、次のレビュー・修正が実行可能である
           next: reviewers
         - condition: 修正方針の前提を変える必要があり、再計画が実行可能である
-          next: fix-plan
+          next: remediation
         - condition: 要件を満たす実現可能な打開手段がない
           next: ABORT
   - cycle:
       - reviewers
       - review-adjudication
       - final-gate
-      - fix-plan
-      - fix
-    ignore_steps:
-      - fix-verifier
-      - fix-retry
+      - remediation
     threshold: 3
     judge:
       persona: supervisor
@@ -87,42 +99,7 @@ loop_monitors:
         - condition: 修正未完了または報告未収束だが、次のレビュー・修正が実行可能である
           next: reviewers
         - condition: 修正方針の前提を変える必要があり、再計画が実行可能である
-          next: fix-plan
-        - condition: 要件を満たす実現可能な打開手段がない
-          next: ABORT
-  - cycle:
-      - fix-plan
-      - fix
-    ignore_steps:
-      - fix-verifier
-      - fix-retry
-    threshold: 4
-    judge:
-      persona: supervisor
-      instruction: loop-monitor-reviewers-fix
-      rules:
-        - condition: 健全（修正進捗があり、報告内容も収束している）
-          next: fix-plan
-        - condition: 修正未完了または報告未収束だが、次のレビュー・修正が実行可能である
-          next: fix-plan
-        - condition: 修正方針の前提を変える必要があり、再計画が実行可能である
-          next: fix-plan
-        - condition: 要件を満たす実現可能な打開手段がない
-          next: ABORT
-  - cycle:
-      - fix-retry
-      - fix-verifier
-    threshold: 4
-    judge:
-      persona: supervisor
-      instruction: loop-monitor-reviewers-fix
-      rules:
-        - condition: 健全（修正進捗があり、報告内容も収束している）
-          next: fix-retry
-        - condition: 修正未完了または報告未収束だが、次の修正が実行可能である
-          next: fix-retry
-        - condition: 修正方針の前提を変える必要があり、再計画が実行可能である
-          next: fix-plan
+          next: remediation
         - condition: 要件を満たす実現可能な打開手段がない
           next: ABORT
 steps:
@@ -167,7 +144,7 @@ steps:
         $param: review_knowledge_additions
     rules:
       - condition: 修正対象あり
-        next: fix-plan
+        next: remediation
       - condition: 修正対象なし
         next: final-gate
       - condition: タスク全体の再計画が必要
@@ -183,68 +160,34 @@ steps:
       - condition: マージ可能
         next: COMPLETE
       - condition: 修正が必要
-        next: fix-plan
+        next: remediation
       - condition: タスク全体の再計画が必要
         return: need_replan
       - condition: 実行環境により判定不能
         next: ABORT
-  - name: fix-plan
-    uses: peer-review-fix-plan
-    with:
+  - name: remediation
+    kind: workflow_call
+    call:
+      $param: remediation_workflow
+    args:
+      fix_pool:
+        $param: fix_pool
+      fix_companions:
+        $param: fix_companions
+      fix_policy:
+        $param: fix_policy
+      fix_knowledge:
+        $param: fix_knowledge
+      verification_knowledge:
+        $param: verification_knowledge
       plan_policy:
         $param: plan_policy
-      fix_knowledge:
-        $param: fix_knowledge
-      plan_instruction: fix-plan-from-review-resolution
-    rules:
-      - condition: 修正計画を確定した
-        next: fix
-      - condition: タスク全体の再計画が必要
-        return: need_replan
-
-  - name: fix
-    uses: peer-review-fix
-    with:
-      fix_policy:
-        $param: fix_policy
-      fix_knowledge:
-        $param: fix_knowledge
-      fix_instruction: apply-fix-plan
-    rules:
-      - condition: 修正完了
-        next: fix-verifier
-      - condition: 修正計画の見直しが必要
-        next: fix-plan
-      - condition: タスク全体の再計画が必要
-        return: need_replan
-
-  - name: fix-verifier
-    uses: peer-review-fix-verifier
-    with:
       verification_policy:
         $param: verification_policy
-      fix_knowledge:
-        $param: fix_knowledge
     rules:
-      - condition: verified
+      - condition: COMPLETE
         next: reviewers
-      - condition: incomplete
-        next: fix-retry
-      - condition: plan_invalid
-        next: fix-plan
-
-  - name: fix-retry
-    uses: peer-review-fix
-    with:
-      fix_policy:
-        $param: fix_policy
-      fix_knowledge:
-        $param: fix_knowledge
-      fix_instruction: apply-fix-verification
-    rules:
-      - condition: 修正完了
-        next: fix-verifier
-      - condition: 修正計画の見直しが必要
-        next: fix-plan
-      - condition: タスク全体の再計画が必要
+      - condition: need_replan
         return: need_replan
+      - condition: ABORT
+        next: ABORT

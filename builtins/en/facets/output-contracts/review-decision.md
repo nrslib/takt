@@ -7,9 +7,9 @@
 {Source reports, actionable family count, non-actionable count, and evidence summary}
 
 ## Actionable Families
-| family | Finding ID / source | Evidence | Problem -> root cause | Affected contract paths | Acceptance criteria |
-|--------|---------------------|----------|-----------------------|-------------------------|---------------------|
-| {Stable family name} | {All IDs and report names} | {file:line or reproduction evidence} | {Verified causal chain} | {Entry, production, validation, consumption, and side effects} | {Observable completion conditions} |
+| family | Finding ID / source | Evidence | Problem -> root cause | Affected contract paths | Acceptance criteria | Remediation boundary |
+|--------|---------------------|----------|-----------------------|-------------------------|---------------------|----------------------|
+| {Stable family name} | {All IDs and report names} | {file:line or reproduction evidence} | {Verified causal chain} | {Entry, production, validation, consumption, and side effects} | {Observable completion conditions} | {Required minimal change; explicitly excluded adjacent work or mechanism} |
 
 ## Finding Dispositions
 | Finding ID / source | Disposition | Target family | Evidence |
@@ -24,3 +24,4 @@
 - Record every submitted finding ID exactly once in Finding Dispositions
 - No actionable findings -> include only the summary, finding dispositions, and unresolved premises
 - Actionable findings -> consolidate findings with the same cause into one family and include every `actionable` and `duplicate` finding ID in its target family
+- Findings with any other disposition are excluded from remediation and must not appear in an actionable family

@@ -1,5 +1,5 @@
 name: development-core
-description: Shared development flow with injectable planning, testing, implementation, initial review, fix, follow-up review, and supervision context.
+description: Shared development flow with injectable planning, testing, implementation, peer review, adjudication, verified remediation, and merge-readiness context.
 subworkflow:
   callable: true
   visibility: internal
@@ -7,12 +7,21 @@ subworkflow:
     implementation_pool:
       type: facet_pool_ref
       default: coding-facets
+    implementation_workflow:
+      type: workflow_ref
+      default: development-implement
+    remediation_workflow:
+      type: workflow_ref
+      default: development-remediation
     implementation_companions:
       type: companion_ref[]
       default: []
-    review_workflow:
+    reviewer_suite:
       type: workflow_ref
       default: peer-review-suite-base
+    peer_review_workflow:
+      type: workflow_ref
+      default: peer-review
     plan_policy:
       type: facet_ref[]
       facet_kind: policy
@@ -65,40 +74,13 @@ subworkflow:
       type: facet_ref[]
       facet_kind: knowledge
       default: [architecture, unit-testing, e2e-testing]
-    fix_instruction:
-      type: facet_ref
-      facet_kind: instruction
-      default: fix
-    supervise_instruction:
-      type: facet_ref
-      facet_kind: instruction
-      default: supervise
 initial_step: plan
 
 facet_pools:
   coding-facets:
-    candidates:
-      - id: frontend
-        description: Handle UI, components, state management, accessibility, and presentation.
-        policy: design-fidelity
-        knowledge: [frontend, react]
-      - id: backend
-        description: Handle APIs, domain logic, server-side processing, and persistence.
-        knowledge: backend
-      - id: testing
-        description: Handle test design, coverage, integration boundaries, and E2E boundaries.
-        knowledge: [unit-testing, e2e-testing]
-      - id: security
-        description: Handle authentication, authorization, input validation, secrets, dependencies, and security boundaries.
-        knowledge: [security, security-web, security-api, security-local, security-data, security-dependencies]
+    uses: coding-facets
   takt-coding-facets:
-    candidates:
-      - id: testing
-        description: Handle TAKT test design, coverage, integration boundaries, and E2E boundaries.
-        knowledge: [unit-testing, e2e-testing]
-      - id: security
-        description: Handle TAKT authentication, authorization, input validation, secrets, local execution, dependencies, and security boundaries.
-        knowledge: [security, security-api, security-local, security-data, security-dependencies]
+    uses: takt-coding-facets
 
 steps:
   - name: plan
@@ -140,7 +122,7 @@ steps:
       - condition: An actionable, untried project-scoped change or investigation and its verification steps were defined
         next: implement
       - condition: The current implementation satisfies the requirements and acceptance criteria, required project-scoped verification is complete, and no untried change or investigation remains
-        next: review
+        next: peer-review
       - condition: Confirmed evidence shows that project-scoped changes or investigation cannot resolve the blocker, leaving only an external action or mutually incompatible requirements
         next: ABORT
 
@@ -167,111 +149,57 @@ steps:
         interactive_only: true
 
   - name: implement
-    capabilities: [edit, enable-skills]
-    uses: development-core-implement
-    with:
+    kind: workflow_call
+    call:
+      $param: implementation_workflow
+    args:
+      implementation_pool:
+        $param: implementation_pool
+      implementation_companions:
+        $param: implementation_companions
       development_policy:
         $param: development_policy
       development_knowledge:
         $param: development_knowledge
       implementation_instruction:
         $param: implementation_instruction
-    dynamic_facets:
-      pool:
-        $param: implementation_pool
-    companion:
-      $param: implementation_companions
     rules:
-      - condition: Implementation is complete
-        next: review
-      - condition: No implementation was started (report only)
-        next: review
-      - condition: Implementation cannot proceed
+      - condition: COMPLETE
+        next: peer-review
+      - condition: need_replan
         next: replan
-      - condition: User input is required
-        next: implement
-        requires_user_input: true
-        interactive_only: true
 
-  - name: review
+  - name: peer-review
     kind: workflow_call
     call:
-      $param: review_workflow
-    vars:
-      review_mode: initial
+      $param: peer_review_workflow
     args:
+      reviewer_suite:
+        $param: reviewer_suite
       review_policy_additions:
         $param: review_policy_additions
       review_knowledge_additions:
         $param: review_knowledge
-    rules:
-      - condition: COMPLETE
-        next: supervise
-      - condition: needs_fix
-        next: fix
-      - condition: ABORT
-        next: ABORT
-
-  - name: follow-up-review
-    kind: workflow_call
-    call:
-      $param: review_workflow
-    vars:
-      review_mode: follow_up
-    args:
-      review_policy_additions:
-        $param: review_policy_additions
-      review_knowledge_additions:
-        $param: review_knowledge
-    rules:
-      - condition: COMPLETE
-        next: supervise
-      - condition: needs_fix
-        next: fix
-      - condition: ABORT
-        next: ABORT
-
-  - name: fix
-    capabilities: [edit, enable-skills]
-    uses: experimental-fix
-    with:
-      fix_policy:
+      fix_companions:
+        $param: implementation_companions
+      remediation_workflow:
+        $param: remediation_workflow
+      fix_pool:
+        $param: implementation_pool
+      plan_policy:
         $param: review_policy
+      fix_policy:
+        $param: development_policy
       fix_knowledge:
         $param: development_knowledge
-      fix_instruction:
-        $param: fix_instruction
-    dynamic_facets:
-      pool:
-        $param: implementation_pool
-    companion:
-      $param: implementation_companions
-    rules:
-      - condition: Fix is complete
-        next: follow-up-review
-      - condition: The fix approach needs to be reconsidered
-        next: replan
-      - condition: The task needs to be replanned
-        next: replan
-      - condition: Fix cannot proceed
-        next: ABORT
-
-  - name: supervise
-    capabilities: [readonly, enable-skills]
-    uses: experimental-supervise
-    with:
-      supervise_policy:
-        $param: review_policy
-      supervise_knowledge:
+      verification_knowledge:
         $param: review_knowledge
-      supervise_instruction:
-        $param: supervise_instruction
+      verification_policy:
+        $param: review_policy
     rules:
-      - condition: BLOCKED
-        next: ABORT
-      - condition: approved
+      - condition: COMPLETE
         next: COMPLETE
       - condition: need_replan
         next: replan
-      - condition: needs_fix
-        next: fix
+      - condition: ABORT
+        next: ABORT

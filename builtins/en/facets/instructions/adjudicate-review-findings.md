@@ -11,5 +11,9 @@ Adjudicate the review findings from evidence and establish the authoritative rem
 6. Require replanning only when findings conflict with each other or with the requirements or plan, and the actionable set cannot be established under the current assumptions
 7. Record the violated invariant or quality principle, affected contract or call paths, and observable acceptance criteria for every actionable family
 8. Map every submitted finding ID to exactly one disposition row. Name the actionable family for `actionable`, name the same target family for `duplicate`, and do not include findings with any other disposition in an actionable family
+9. For every actionable family, define the narrow remediation boundary: what must change to satisfy the task and what adjacent cleanup, refactoring, compatibility behavior, operational guarantee, or reviewer-suggested mechanism is explicitly excluded as unnecessary scope expansion
+10. Treat this adjudication as the sole authority for the next step. A raw reviewer verdict does not authorize a fix: only `actionable` families and their `duplicate` findings may enter fix planning. Findings classified otherwise must remain excluded unless later code or requirement changes provide new evidence
+
+Choose the result from the adjudicated set, not from reviewer vote counts. When at least one actionable family remains, return `ACTIONABLE FINDINGS` for fix planning. When none remains and no unresolved premise requires replanning, return `NO ACTIONABLE FINDINGS` so the workflow proceeds to the final merge-readiness gate.
 
 Do not dismiss an undecidable concern by assumption; record the unresolved premise explicitly.
