@@ -63,6 +63,9 @@ export class SelectorInputReader {
     signal: AbortSignal | undefined,
   ): Promise<string> {
     signal?.throwIfAborted();
+    if (await this.commandRunner.isInsideWorkTree?.(cwd, signal) === false) {
+      return this.consumeEmptyValue('(no working tree changes)', budget);
+    }
     const trackedPaths = (await this.listGitPaths(
       cwd,
       ['diff', '--name-only', '-z', 'HEAD', '--end-of-options', '--', '.'],

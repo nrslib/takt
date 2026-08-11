@@ -161,6 +161,18 @@ const mockExecFileSync = vi.mocked(execFileSync);
 
 // --- Test helpers ---
 
+function selectNoDynamicFacets() {
+  return {
+    persona: 'takt-internal',
+    status: 'done' as const,
+    content: 'No additional implementation facets are needed.',
+    structuredOutput: {
+      selected_ids: [],
+      rationale: 'The shared workflow facets are sufficient.',
+    },
+  };
+}
+
 /** Create a minimal test workflow YAML + agent files in a temp directory */
 function createTestWorkflowDir(): { dir: string; workflowPath: string } {
   const dir = mkdtempSync(join(tmpdir(), 'takt-it-pipeline-'));
@@ -380,18 +392,18 @@ describe('Pipeline Integration Tests', () => {
   it('should complete pipeline with workflow name + skip-git + mock scenario', async () => {
     // Use builtin 'default' workflow
     // persona field: extractPersonaName result (from .md filename)
-    // Flow: shared development core → peer-review → final gate → COMPLETE
+    // Flow: shared development core → reviewer suite → supervision → COMPLETE
     setMockScenario([
       { persona: 'planner', status: 'done', content: '[PLAN:1]\n\nRequirements are clear and implementable' },
       { persona: 'coder', status: 'done', content: '[WRITE_TESTS:1]\n\nTests written successfully' },
+      selectNoDynamicFacets(),
       { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\n\nImplementation complete' },
       { persona: 'architecture-reviewer', status: 'done', content: '[ARCH-REVIEW:1]\n\napproved' },
       { persona: 'security-reviewer', status: 'done', content: '[SECURITY-REVIEW:1]\n\napproved' },
       { persona: 'testing-reviewer', status: 'done', content: '[TESTING-REVIEW:1]\n\napproved' },
       { persona: 'coding-reviewer', status: 'done', content: '[CODING-REVIEW:1]\n\napproved' },
       { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-2ND:1]\n\napproved' },
-      { persona: 'review-adjudicator', status: 'done', content: '[REVIEW-ADJUDICATION:2]\n\nNo actionable findings remain.' },
-      { persona: 'merge-readiness-supervisor', status: 'done', content: '[FINAL-GATE:1]\n\nMergeable.' },
+      { persona: 'supervisor', status: 'done', content: '[SUPERVISE:2]\n\nApproved.' },
     ]);
 
     const exitCode = await executePipeline({
@@ -411,6 +423,7 @@ describe('Pipeline Integration Tests', () => {
     setMockScenario([
       { persona: 'planner', status: 'done', content: '[PLAN:1]\n\nPlan completed.' },
       { persona: 'coder', status: 'done', content: '[WRITE_TESTS:1]\n\nTests created.' },
+      selectNoDynamicFacets(),
       { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\n\nImplementation completed.' },
       { persona: 'architecture-reviewer', status: 'done', content: '[ARCH-REVIEW:2]\n\nA fix is required.' },
       { persona: 'security-reviewer', status: 'done', content: '[SECURITY-REVIEW:1]\n\nApproved.' },
@@ -418,18 +431,15 @@ describe('Pipeline Integration Tests', () => {
       { persona: 'coding-reviewer', status: 'done', content: '[CODING-REVIEW:1]\n\nApproved.' },
       { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-2ND:1]\n\nApproved.' },
       { persona: 'frontend-reviewer', status: 'done', content: '[FRONTEND-REVIEW:1]\n\nApproved.' },
-      { persona: 'review-adjudicator', status: 'done', content: '[REVIEW-ADJUDICATION:1]\n\nActionable findings remain.' },
-      { persona: 'planner', status: 'done', content: '[FIX-PLAN:1]\n\nFix plan finalized.' },
+      selectNoDynamicFacets(),
       { persona: 'coder', status: 'done', content: '[FIX:1]\n\nFix completed.' },
-      { persona: 'coding-reviewer', status: 'done', content: '[FIX-VERIFIER:1]\n\nVerified.' },
       { persona: 'architecture-reviewer', status: 'done', content: '[ARCH-REVIEW:1]\n\nApproved.' },
       { persona: 'security-reviewer', status: 'done', content: '[SECURITY-REVIEW:1]\n\nApproved.' },
       { persona: 'testing-reviewer', status: 'done', content: '[TESTING-REVIEW:1]\n\nApproved.' },
       { persona: 'coding-reviewer', status: 'done', content: '[CODING-REVIEW:1]\n\nApproved.' },
       { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-2ND:1]\n\nApproved.' },
       { persona: 'frontend-reviewer', status: 'done', content: '[FRONTEND-REVIEW:1]\n\nApproved.' },
-      { persona: 'review-adjudicator', status: 'done', content: '[REVIEW-ADJUDICATION:2]\n\nNo actionable findings remain.' },
-      { persona: 'merge-readiness-supervisor', status: 'done', content: '[FINAL-GATE:1]\n\nMergeable.' },
+      { persona: 'supervisor', status: 'done', content: '[SUPERVISE:2]\n\nApproved.' },
     ]);
 
     const exitCode = await executePipeline({

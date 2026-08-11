@@ -95,6 +95,50 @@ afterEach(() => {
 });
 
 describe('SelectorInputReader', () => {
+  it('should return an empty working-tree diff outside a Git repository', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-selector-no-repository-'));
+    temporaryDirectories.push(cwd);
+
+    const result = await new SelectorInputReader(new GitSelectorCommandRunner()).readInputs(
+      join(cwd, 'reports'),
+      [],
+      cwd,
+      undefined,
+    );
+
+    expect(result.workingTreeDiff).toBe('(no working tree changes)');
+  });
+
+  it('should not treat a broken Git control entry as an empty working-tree diff', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-selector-broken-repository-'));
+    temporaryDirectories.push(cwd);
+    writeFileSync(join(cwd, '.git'), 'gitdir: /definitely/missing/takt-git-dir\n');
+
+    await expect(new SelectorInputReader(new GitSelectorCommandRunner()).readInputs(
+      join(cwd, 'reports'),
+      [],
+      cwd,
+      undefined,
+    )).rejects.toThrow();
+  });
+
+  it('should propagate worktree probe failures', async () => {
+    const cwd = createGitDirectory();
+    const runner: SelectorGitCommandRunner = {
+      isInsideWorkTree: async () => {
+        throw new Error('worktree probe failed');
+      },
+      run: async () => ({ output: Buffer.alloc(0), bytes: 0 }),
+    };
+
+    await expect(new SelectorInputReader(runner).readInputs(
+      join(cwd, 'reports'),
+      [],
+      cwd,
+      undefined,
+    )).rejects.toThrow('worktree probe failed');
+  });
+
   it('should read the current staged, unstaged, deleted, and untracked changes against HEAD', async () => {
     const cwd = createRepository();
     writeFileSync(join(cwd, 'staged.txt'), 'before staged\n');
