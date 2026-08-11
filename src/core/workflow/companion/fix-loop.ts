@@ -18,6 +18,7 @@ export async function runCompanionFixLoop<TOptions extends object>(input: {
   executeFix: (attempt: {
     sequence: number;
     phase: 1;
+    openMustFixCount: number;
     sessionId: string | undefined;
     options: TOptions & { sessionId: string | undefined };
     instruction: string;
@@ -27,43 +28,50 @@ export async function runCompanionFixLoop<TOptions extends object>(input: {
   phaseResponse: AgentResponse;
   latestSessionId: string | undefined;
   fixRounds: number;
-  escalated: boolean;
-  escalationReason?: string;
 }> {
+  let latestResponse = input.initialResponse;
   let latestSessionId = input.initialResponse.sessionId;
   let latestImplementerResponse = input.initialResponse.content;
   let fixRounds = 0;
   for (;;) {
     throwIfAborted(input.abortSignal);
-    const review = await input.completeReview({
-      implementerResponse: latestImplementerResponse,
-      afterFix: fixRounds > 0,
-      ...(fixRounds > 0 ? { fixRound: fixRounds } : {}),
-    });
+    let review: Awaited<ReturnType<typeof input.completeReview>>;
+    try {
+      review = await input.completeReview({
+        implementerResponse: latestImplementerResponse,
+        afterFix: fixRounds > 0,
+        ...(fixRounds > 0 ? { fixRound: fixRounds } : {}),
+      });
+    } catch {
+      if (input.abortSignal?.aborted) throw createAbortError(input.abortSignal.reason);
+      return terminal(latestResponse, latestSessionId, fixRounds);
+    }
     throwIfAborted(input.abortSignal);
     if (review.escalated || review.openMustFix.length === 0) {
-      return terminal(
-        input.initialResponse,
-        latestSessionId,
-        fixRounds,
-        review.escalated,
-        review.reason,
-      );
+      return terminal(latestResponse, latestSessionId, fixRounds);
     }
     const sequence = fixRounds + 2;
-    const fixed = await input.executeFix({
-      sequence,
-      phase: 1,
-      sessionId: latestSessionId,
-      options: { ...input.phase1Options, sessionId: latestSessionId },
-      instruction: buildCompanionFixInstruction(review.openMustFix),
-    });
+    let fixed: AgentResponse;
+    try {
+      fixed = await input.executeFix({
+        sequence,
+        phase: 1,
+        openMustFixCount: review.openMustFix.length,
+        sessionId: latestSessionId,
+        options: { ...input.phase1Options, sessionId: latestSessionId },
+        instruction: buildCompanionFixInstruction(review.openMustFix),
+      });
+    } catch {
+      if (input.abortSignal?.aborted) throw createAbortError(input.abortSignal.reason);
+      return terminal(latestResponse, latestSessionId, fixRounds + 1);
+    }
     throwIfAborted(input.abortSignal);
-    latestSessionId = fixed.sessionId ?? latestSessionId;
     fixRounds += 1;
     if (fixed.status !== 'done') {
-      return terminal(fixed, latestSessionId, fixRounds, false);
+      return terminal(latestResponse, latestSessionId, fixRounds);
     }
+    latestResponse = fixed;
+    latestSessionId = fixed.sessionId ?? latestSessionId;
     latestImplementerResponse = fixed.content;
   }
 }
@@ -72,15 +80,11 @@ function terminal(
   phaseResponse: AgentResponse,
   latestSessionId: string | undefined,
   fixRounds: number,
-  escalated: boolean,
-  escalationReason?: string,
 ) {
   return {
     phaseResponse,
     latestSessionId,
     fixRounds,
-    escalated,
-    ...(escalationReason === undefined ? {} : { escalationReason }),
   };
 }
 

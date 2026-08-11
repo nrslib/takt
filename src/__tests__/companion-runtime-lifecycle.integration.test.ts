@@ -353,6 +353,146 @@ describe('companion runtime lifecycle', () => {
     }));
   });
 
+  it('should fix a moderator-accepted must_fix and re-review it in the same session', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-companion-runtime-moderated-fix-'));
+    const workflowStep = {
+      ...step(),
+      companion: {
+        fixed: ['security-reviewer'],
+        pool: [],
+        moderator: 'adjudicator',
+      },
+    };
+    let reviewerCalls = 0;
+    let moderatorCalls = 0;
+    const callSpy = vi.spyOn(CompanionStructuredCaller.prototype, 'call').mockImplementation(
+      async (request) => {
+        if (request.purpose === 'judge') {
+          return {
+            status: 'done',
+            content: '',
+            structuredOutput: { decision: 'continue', reason: 'progress continues' },
+          };
+        }
+        if (request.purpose === 'moderator') {
+          moderatorCalls += 1;
+          return {
+            status: 'done',
+            content: '',
+            structuredOutput: moderatorCalls === 1
+              ? {
+                  findings: [{
+                    action: 'accept',
+                    sourceIndex: 0,
+                    severity: null,
+                    finding: null,
+                    targetId: null,
+                  }],
+                  updates: [],
+                }
+              : {
+                  findings: [],
+                  updates: [{ id: 'security-reviewer-1', status: 'resolved' }],
+                },
+          };
+        }
+        reviewerCalls += 1;
+        return {
+          status: 'done',
+          content: '',
+          structuredOutput: reviewerCalls === 1
+            ? {
+                findings: [{
+                  severity: 'must_fix',
+                  file: 'src/a.ts',
+                  line: 1,
+                  finding: 'candidate',
+                }],
+                updates: [],
+                notes: null,
+              }
+            : {
+                findings: [],
+                updates: [{ id: 'security-reviewer-1', status: 'resolved' }],
+                notes: null,
+              },
+        };
+      },
+    );
+    const state = { companion: undefined } as unknown as WorkflowState;
+    let runtime: CompanionStepRuntime | undefined;
+
+    try {
+      const base = dependencies({
+        workflowStep,
+        diffReader: {
+          readBaselineSha: vi.fn().mockResolvedValue('baseline'),
+          readDiff: vi.fn().mockResolvedValue({ status: 'ok', snapshot }),
+        },
+        providers: {
+          'security-reviewer': { provider: 'mock' },
+          adjudicator: { provider: 'mock' },
+        },
+      });
+      runtime = await CompanionStepRuntime.create({
+        ...base,
+        cwd: root,
+        projectCwd: root,
+        definitions: {
+          ...base.definitions,
+          adjudicator: {
+            name: 'adjudicator',
+            description: 'moderate findings',
+            instruction: 'moderate',
+            intervalMs: 60_000,
+          },
+        },
+      });
+      const executeFix = vi.fn(async (attempt: { sequence: number; openMustFixCount: number }) => {
+        runtime!.beginFixRound(attempt.sequence, attempt.openMustFixCount);
+        return {
+          persona: 'coder',
+          status: 'done' as const,
+          content: 'fixed candidate',
+          sessionId: 'session-2',
+          timestamp: new Date('2026-08-08T00:00:00.000Z'),
+        };
+      });
+
+      const result = await runCompanionFixLoop({
+        initialResponse: {
+          persona: 'coder',
+          status: 'done',
+          content: 'initial implementation',
+          sessionId: 'session-1',
+          timestamp: new Date('2026-08-08T00:00:00.000Z'),
+        },
+        phase1Options: {},
+        completeReview: ({ implementerResponse, afterFix, fixRound }) => runtime!.complete(
+          state,
+          implementerResponse,
+          { afterFix, fixRound },
+        ),
+        executeFix,
+      });
+
+      expect(executeFix).toHaveBeenCalledOnce();
+      expect(executeFix).toHaveBeenCalledWith(expect.objectContaining({
+        sequence: 2,
+        sessionId: 'session-1',
+        openMustFixCount: 1,
+      }));
+      expect(reviewerCalls).toBe(2);
+      expect(moderatorCalls).toBe(2);
+      expect(result.phaseResponse).toMatchObject({ content: 'fixed candidate', sessionId: 'session-2' });
+      expect(state.companion).toMatchObject({ openMustFixCount: 0, openMustFix: [] });
+    } finally {
+      runtime?.stop();
+      callSpy.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('should fail initialization when the adjudication-only moderator has no provider', async () => {
     const workflowStep = {
       ...step(),
@@ -520,7 +660,7 @@ describe('companion runtime lifecycle', () => {
           { afterFix, fixRound },
         ),
         executeFix: async (attempt) => {
-          runtime!.beginFixRound(attempt.sequence, state.companion?.openMustFixCount ?? 0);
+          runtime!.beginFixRound(attempt.sequence, attempt.openMustFixCount);
           return {
             persona: 'coder',
             status: 'done' as const,
@@ -640,7 +780,7 @@ describe('companion runtime lifecycle', () => {
           { afterFix, fixRound },
         ),
         executeFix: async (attempt) => {
-          runtime!.beginFixRound(attempt.sequence, state.companion?.openMustFixCount ?? 0);
+          runtime!.beginFixRound(attempt.sequence, attempt.openMustFixCount);
           return {
             persona: 'coder',
             status: 'done' as const,

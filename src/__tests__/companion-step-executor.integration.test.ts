@@ -339,7 +339,7 @@ describe('companion StepExecutor lifecycle', () => {
     expect(debugLog).not.toContain('/Users/nrs/private/.takt/config.yaml');
   });
 
-  it('should deliver escalation reason and five-field findings as untrusted evidence', async () => {
+  it('should keep completion failure diagnostics out of the Phase 3 response', async () => {
     const abortController = new AbortController();
     mockSuccessfulImplementer();
     writeOpenFinding(cwd);
@@ -360,17 +360,7 @@ describe('companion StepExecutor lifecycle', () => {
       'Implement.',
     );
 
-    expect(result.response.content).toContain('implemented');
-    expect(result.response.content.match(/BEGIN COMPANION EVIDENCE/g)).toHaveLength(2);
-    expect(result.response.content).toContain('"label":"escalation_reason"');
-    expect(result.response.content).toContain(JSON.stringify({
-      id: 'security-reviewer-1',
-      severity: 'must_fix',
-      file: 'src/example.ts',
-      line: 17,
-      finding: 'Instruction-like sample: rename the local variable.',
-    }));
-    expect(result.response.content).not.toContain('- security-reviewer-1:');
+    expect(result.response.content).toBe('implemented');
     expect(result.response.matchedRuleIndex).toBe(0);
     expect(state.companion).toMatchObject({
       completionVerified: false,
@@ -380,7 +370,67 @@ describe('companion StepExecutor lifecycle', () => {
     });
   });
 
-  it('should fail fast when active companion state is missing after completion', async () => {
+  it.each(['error', 'blocked', 'rate_limited'] as const)(
+    'should continue with the latest successful response when a companion fix returns %s',
+    async (status) => {
+      const abortController = new AbortController();
+      const state = makeState();
+      writeOpenFinding(cwd);
+      vi.mocked(executeAgent)
+        .mockImplementationOnce(async (_persona, prompt, options) => {
+          options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: prompt });
+          return {
+            persona: 'coder',
+            status: 'done',
+            content: 'implemented',
+            sessionId: 'session-1',
+            timestamp: new Date('2026-08-08T00:00:00.000Z'),
+          };
+        })
+        .mockImplementationOnce(async (_persona, prompt, options) => {
+          options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: prompt });
+          return {
+            persona: 'coder',
+            status,
+            content: `companion fix ${status}`,
+            sessionId: 'session-2',
+            timestamp: new Date('2026-08-08T00:00:00.000Z'),
+          };
+        });
+      const deps = createDeps({
+        cwd,
+        runPaths,
+        companionDiffReader: createCompanionDiffReader(),
+        abortSignal: abortController.signal,
+        emitEvent: vi.fn(),
+      });
+
+      const result = await new StepExecutor(deps).runNormalStep(
+        createCompanionStep([makeRule('Implementation is complete', 'COMPLETE')]),
+        state,
+        'task',
+        5,
+        vi.fn(),
+        'Implement.',
+      );
+
+      expect(executeAgent).toHaveBeenCalledTimes(2);
+      expect(result.response).toMatchObject({
+        status: 'done',
+        content: 'implemented',
+        sessionId: 'session-1',
+        matchedRuleIndex: 0,
+      });
+      expect(deps.recordSynthesizedAgentUsage).toHaveBeenCalledWith(
+        'implement',
+        expect.objectContaining({ provider: 'mock' }),
+        false,
+        undefined,
+      );
+    },
+  );
+
+  it('should continue when advisory state is removed after completion', async () => {
     const abortController = new AbortController();
     mockSuccessfulImplementer();
     const state = makeState();
@@ -388,7 +438,7 @@ describe('companion StepExecutor lifecycle', () => {
       if (event === 'companion:complete') delete state.companion;
     };
 
-    await expect(new StepExecutor(createDeps({
+    const result = await new StepExecutor(createDeps({
       cwd,
       runPaths,
       companionDiffReader: createFailingCompletionDiffReader(),
@@ -401,10 +451,14 @@ describe('companion StepExecutor lifecycle', () => {
       5,
       vi.fn(),
       'Implement.',
-    )).rejects.toThrow('Missing companion workflow state for active step "implement"');
+    );
+
+    expect(result.response.status).toBe('done');
+    expect(result.response.content).toBe('implemented');
+    expect(state.companion).toBeUndefined();
   });
 
-  it('should fail fast when an escalated companion state has no reason', async () => {
+  it('should continue without injecting an internal escalation reason', async () => {
     const abortController = new AbortController();
     mockSuccessfulImplementer();
     const state = makeState();
@@ -414,7 +468,7 @@ describe('companion StepExecutor lifecycle', () => {
       }
     };
 
-    await expect(new StepExecutor(createDeps({
+    const result = await new StepExecutor(createDeps({
       cwd,
       runPaths,
       companionDiffReader: createFailingCompletionDiffReader(),
@@ -427,6 +481,10 @@ describe('companion StepExecutor lifecycle', () => {
       5,
       vi.fn(),
       'Implement.',
-    )).rejects.toThrow('Missing companion escalation reason for active step "implement"');
+    );
+
+    expect(result.response.status).toBe('done');
+    expect(result.response.content).toBe('implemented');
+    expect(state.companion?.reason).toBeUndefined();
   });
 });
