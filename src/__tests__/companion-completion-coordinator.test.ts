@@ -68,7 +68,7 @@ describe('companion completion coordinator', () => {
     const coordinator = createCoordinator({ current, queue, emit, synchronizeSnapshot });
 
     const workflowState = state();
-    const result = await coordinator.complete(workflowState);
+    const result = await coordinator.complete(workflowState, { allowUnchangedDigest: () => false });
     await runningRejection;
 
     expect(result.completionVerified).toBe(true);
@@ -91,7 +91,7 @@ describe('companion completion coordinator', () => {
     });
     const workflowState = state();
 
-    const result = await coordinator.complete(workflowState);
+    const result = await coordinator.complete(workflowState, { allowUnchangedDigest: () => false });
 
     expect(result).toMatchObject({
       escalated: true,
@@ -122,7 +122,7 @@ describe('companion completion coordinator', () => {
     });
     const workflowState = state();
 
-    const result = await coordinator.complete(workflowState);
+    const result = await coordinator.complete(workflowState, { allowUnchangedDigest: () => false });
 
     expect(result).toMatchObject({ escalated: true, completionVerified: false, openMustFix: [] });
     expect(workflowState.companion).toMatchObject({
@@ -152,7 +152,7 @@ describe('companion completion coordinator', () => {
     });
     const workflowState = state();
 
-    const result = await coordinator.complete(workflowState);
+    const result = await coordinator.complete(workflowState, { allowUnchangedDigest: () => false });
 
     expect(current.isDirty()).toBe(true);
     expect(result).toMatchObject({ escalated: true, completionVerified: false, openMustFix: [] });
@@ -181,7 +181,7 @@ describe('companion completion coordinator', () => {
     const synchronizeSnapshot = vi.fn();
     const coordinator = createCoordinator({ current, queue, synchronizeSnapshot });
 
-    const result = await coordinator.complete(state());
+    const result = await coordinator.complete(state(), { allowUnchangedDigest: () => false });
 
     expect(current.isDirty()).toBe(true);
     expect(result).toMatchObject({ escalated: true, completionVerified: false, openMustFix: [] });
@@ -199,7 +199,7 @@ describe('companion completion coordinator', () => {
       readSnapshot: vi.fn().mockRejectedValue(abort),
     });
 
-    await expect(coordinator.complete(state())).rejects.toBe(abort);
+    await expect(coordinator.complete(state(), { allowUnchangedDigest: () => false })).rejects.toBe(abort);
 
     expect(emit).not.toHaveBeenCalled();
   });
@@ -216,7 +216,7 @@ describe('companion completion coordinator', () => {
       openMustFix: [openFinding],
     });
 
-    const result = await coordinator.complete(workflowState);
+    const result = await coordinator.complete(workflowState, { allowUnchangedDigest: () => false });
 
     expect(result).toMatchObject({
       escalated: true,

@@ -79,8 +79,8 @@ describe('CT-COMP-08 same-session companion fix loop', () => {
     expect(result.latestSessionId).toBe('session-2');
     expect(result.fixRounds).toBe(1);
     expect(completeReview.mock.calls).toEqual([
-      [{ implementerResponse: 'original phase 1 result' }],
-      [{ implementerResponse: 'fixed the finding' }],
+      [{ implementerResponse: 'original phase 1 result', afterFix: false }],
+      [{ implementerResponse: 'fixed the finding', afterFix: true, fixRound: 1 }],
     ]);
   });
 
@@ -138,6 +138,26 @@ describe('CT-COMP-08 same-session companion fix loop', () => {
       expect(result.fixRounds).toBe(1);
     },
   );
+
+  it('should not claim a successful post-fix completion for a non-done fix response', async () => {
+    const completeReview = vi.fn().mockResolvedValue({
+      openMustFix: [finding('security-reviewer-1', 'a')],
+      escalated: false,
+    });
+    const result = await runCompanionFixLoop({
+      initialResponse: response('done', 'session-1'),
+      phase1Options: phase1Options(),
+      completeReview,
+      executeFix: vi.fn().mockResolvedValue(terminalResponse('blocked')),
+    });
+
+    expect(result.fixRounds).toBe(1);
+    expect(completeReview).toHaveBeenCalledOnce();
+    expect(completeReview).toHaveBeenCalledWith({
+      implementerResponse: 'done',
+      afterFix: false,
+    });
+  });
 });
 
 describe('CT-COMP-10 fail-soft and abort lifecycle', () => {

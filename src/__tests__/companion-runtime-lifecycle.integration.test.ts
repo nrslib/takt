@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { NormalAgentWorkflowStep } from '../core/models/types.js';
 import type { CompanionDiffReader } from '../core/workflow/companion/diff-reader.js';
+import { buildCompanionMailboxPath } from '../core/workflow/companion/mailbox.js';
 import { CompanionStepRuntime } from '../core/workflow/companion/step-runtime.js';
+import { runCompanionFixLoop } from '../core/workflow/companion/fix-loop.js';
 import { CompanionReviewStateStore } from '../core/workflow/companion/review-state-store.js';
 import { CompanionStructuredCaller } from '../core/workflow/companion/structured-call.js';
 import { assertStrictStructuredOutputSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
@@ -35,7 +37,10 @@ const emptySnapshot = {
   truncated: false,
 };
 
-function step(allowGitCommit?: boolean): NormalAgentWorkflowStep {
+function step(
+  allowGitCommit?: boolean,
+  fixedCompanions: string[] = ['security-reviewer'],
+): NormalAgentWorkflowStep {
   return {
     name: 'implement',
     persona: 'coder',
@@ -43,7 +48,7 @@ function step(allowGitCommit?: boolean): NormalAgentWorkflowStep {
     instruction: 'implement',
     edit: true,
     passPreviousResponse: true,
-    companion: { fixed: ['security-reviewer'], pool: [] },
+    companion: { fixed: fixedCompanions, pool: [] },
     rules: [],
     ...(allowGitCommit === undefined ? {} : { allowGitCommit }),
   };
@@ -180,7 +185,11 @@ describe('companion runtime lifecycle', () => {
       runtime = await CompanionStepRuntime.create(dependencies({
         diffReader: { readBaselineSha: vi.fn().mockResolvedValue('baseline'), readDiff },
       }));
-      await runtime.complete({ companion: undefined } as unknown as WorkflowState, 'complete');
+      await runtime.complete(
+        { companion: undefined } as unknown as WorkflowState,
+        'complete',
+        { afterFix: false },
+      );
       runtime.beginFixRound(2, 0);
 
       runtime.observe({
@@ -410,16 +419,24 @@ describe('companion runtime lifecycle', () => {
         type: 'tool_use',
         data: { tool: 'Edit', input: { path: 'src/a.ts' }, id: 'first-edit' },
       });
-      await runtime.complete({ companion: undefined } as unknown as WorkflowState, 'first');
+      await runtime.complete(
+        { companion: undefined } as unknown as WorkflowState,
+        'first',
+        { afterFix: false },
+      );
       runtime.beginFixRound(3, 1);
       runtime.observe({
         type: 'tool_use',
         data: { tool: 'Edit', input: { path: 'src/a.ts' }, id: 'second-edit' },
       });
-      await runtime.complete({ companion: undefined } as unknown as WorkflowState, 'second');
+      await runtime.complete(
+        { companion: undefined } as unknown as WorkflowState,
+        'second',
+        { afterFix: true, fixRound: 2 },
+      );
 
-      expect(schemas.filter(({ purpose }) => purpose === 'reviewer')).toHaveLength(1);
-      expect(schemas.filter(({ purpose }) => purpose === 'judge')).toHaveLength(1);
+      expect(schemas.filter(({ purpose }) => purpose === 'reviewer')).toHaveLength(2);
+      expect(schemas.filter(({ purpose }) => purpose === 'judge')).toHaveLength(2);
       for (const { outputSchema } of schemas) {
         expect(() => assertStrictStructuredOutputSchema(outputSchema)).not.toThrow();
       }
@@ -427,6 +444,345 @@ describe('companion runtime lifecycle', () => {
       runtime?.stop();
       callSpy.mockRestore();
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('should re-review an unchanged diff after a fix explanation and resolve the prior finding', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-companion-runtime-unchanged-fix-'));
+    const prompts: Array<{ purpose: string; prompt: string }> = [];
+    let reviewerCalls = 0;
+    const callSpy = vi.spyOn(CompanionStructuredCaller.prototype, 'call').mockImplementation(
+      async (request) => {
+        prompts.push({ purpose: request.purpose, prompt: request.prompt });
+        if (request.purpose === 'judge') {
+          return {
+            status: 'done',
+            content: '',
+            structuredOutput: { decision: 'continue', reason: 'continue' },
+          };
+        }
+        reviewerCalls += 1;
+        return {
+          status: 'done',
+          content: '',
+          structuredOutput: {
+            findings: reviewerCalls === 1
+              ? [{ severity: 'must_fix', file: 'src/a.ts', line: 1, finding: 'false positive' }]
+              : [],
+            updates: reviewerCalls === 2
+              ? [{ id: 'security-reviewer-1', status: 'resolved' }]
+              : [],
+            notes: null,
+          },
+        };
+      },
+    );
+    const readDiff = vi.fn().mockResolvedValue({ status: 'ok', snapshot });
+    const state = { companion: undefined } as unknown as WorkflowState;
+    const emitEvent = vi.fn();
+    let runtime: CompanionStepRuntime | undefined;
+
+    try {
+      const base = dependencies({
+        diffReader: { readBaselineSha: vi.fn().mockResolvedValue('baseline'), readDiff },
+      });
+      runtime = await CompanionStepRuntime.create({
+        ...base,
+        cwd: root,
+        projectCwd: root,
+        emitEvent,
+      });
+      const result = await runCompanionFixLoop({
+        initialResponse: {
+          persona: 'coder',
+          status: 'done',
+          content: 'initial implementation',
+          sessionId: 'session-1',
+          timestamp: new Date('2026-08-08T00:00:00.000Z'),
+        },
+        phase1Options: {},
+        completeReview: ({ implementerResponse, afterFix, fixRound }) => runtime!.complete(
+          state,
+          implementerResponse,
+          { afterFix, fixRound },
+        ),
+        executeFix: async (attempt) => {
+          runtime!.beginFixRound(attempt.sequence, state.companion?.openMustFixCount ?? 0);
+          return {
+            persona: 'coder',
+            status: 'done' as const,
+            content: 'The finding is a false positive; no code change was needed.',
+            sessionId: 'session-2',
+            timestamp: new Date('2026-08-08T00:00:00.000Z'),
+          };
+        },
+      });
+
+      const reviewerPrompts = prompts
+        .filter(({ purpose }) => purpose === 'reviewer')
+        .map(({ prompt }) => prompt);
+      expect(result.fixRounds).toBe(1);
+      expect(reviewerPrompts).toHaveLength(2);
+      expect(reviewerPrompts[1]).toContain('false positive; no code change was needed.');
+      expect(reviewerPrompts[1]).toContain('security-reviewer-1');
+      expect(emitEvent.mock.calls.filter(([event]) => event === 'companion:finding')).toHaveLength(1);
+      expect(state.companion).toMatchObject({
+        openMustFixCount: 0,
+        openMustFix: [],
+        completionVerified: true,
+      });
+      expect(base.stateStore.get(
+        buildCompanionMailboxPath({
+          cwd: root,
+          runSlug: 'run',
+          runPathNamespace: [],
+          stepName: 'implement',
+          companionName: 'security-reviewer',
+        }),
+        'security-reviewer',
+      ).mailbox.findings).toEqual([
+        expect.objectContaining({ id: 'security-reviewer-1', status: 'resolved' }),
+      ]);
+    } finally {
+      runtime?.stop();
+      callSpy.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('should authorize unchanged post-fix review only for the companion that owns an open finding', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-companion-runtime-unchanged-scope-'));
+    const prompts: Array<{ purpose: string; agentName: string; prompt: string }> = [];
+    const reviewerCalls: string[] = [];
+    const callSpy = vi.spyOn(CompanionStructuredCaller.prototype, 'call').mockImplementation(
+      async (request) => {
+        prompts.push({ purpose: request.purpose, agentName: request.agentName, prompt: request.prompt });
+        if (request.purpose === 'judge') {
+          return {
+            status: 'done',
+            content: '',
+            structuredOutput: { decision: 'continue', reason: 'continue' },
+          };
+        }
+        reviewerCalls.push(request.agentName);
+        const companionCalls = reviewerCalls.filter((name) => name === request.agentName).length;
+        return {
+          status: 'done',
+          content: '',
+          structuredOutput: {
+            findings: request.agentName === 'security-reviewer' && companionCalls === 1
+              ? [{ severity: 'must_fix', file: 'src/a.ts', line: 1, finding: 'false positive' }]
+              : [],
+            updates: request.agentName === 'security-reviewer' && companionCalls === 2
+              ? [{ id: 'security-reviewer-1', status: 'resolved' }]
+              : [],
+            notes: null,
+          },
+        };
+      },
+    );
+    const state = { companion: undefined } as unknown as WorkflowState;
+    let runtime: CompanionStepRuntime | undefined;
+
+    try {
+      const workflowStep = step(undefined, ['security-reviewer', 'architecture-reviewer']);
+      const base = dependencies({
+        workflowStep,
+        providers: {
+          'security-reviewer': { provider: 'mock' },
+          'architecture-reviewer': { provider: 'mock' },
+        },
+        diffReader: {
+          readBaselineSha: vi.fn().mockResolvedValue('baseline'),
+          readDiff: vi.fn().mockResolvedValue({ status: 'ok', snapshot }),
+        },
+      });
+      runtime = await CompanionStepRuntime.create({
+        ...base,
+        cwd: root,
+        projectCwd: root,
+        definitions: {
+          ...base.definitions,
+          'architecture-reviewer': {
+            name: 'architecture-reviewer',
+            description: 'architecture review',
+            instruction: 'review architecture',
+            intervalMs: 60_000,
+          },
+        },
+      });
+
+      const result = await runCompanionFixLoop({
+        initialResponse: {
+          persona: 'coder',
+          status: 'done',
+          content: 'initial implementation',
+          sessionId: 'session-1',
+          timestamp: new Date('2026-08-08T00:00:00.000Z'),
+        },
+        phase1Options: {},
+        completeReview: ({ implementerResponse, afterFix, fixRound }) => runtime!.complete(
+          state,
+          implementerResponse,
+          { afterFix, fixRound },
+        ),
+        executeFix: async (attempt) => {
+          runtime!.beginFixRound(attempt.sequence, state.companion?.openMustFixCount ?? 0);
+          return {
+            persona: 'coder',
+            status: 'done' as const,
+            content: 'The finding is a false positive; no code change was needed.',
+            sessionId: 'session-2',
+            timestamp: new Date('2026-08-08T00:00:00.000Z'),
+          };
+        },
+      });
+
+      expect(result.fixRounds).toBe(1);
+      expect(reviewerCalls.filter((name) => name === 'security-reviewer')).toHaveLength(2);
+      expect(reviewerCalls.filter((name) => name === 'architecture-reviewer')).toHaveLength(1);
+      const securityPrompts = prompts
+        .filter(({ purpose, agentName }) => purpose === 'reviewer' && agentName === 'security-reviewer')
+        .map(({ prompt }) => prompt);
+      expect(securityPrompts[1]).toContain('false positive; no code change was needed.');
+      expect(securityPrompts[1]).toContain('security-reviewer-1');
+      expect(state.companion).toMatchObject({ openMustFixCount: 0, openMustFix: [] });
+    } finally {
+      runtime?.stop();
+      callSpy.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('should not bypass unchanged-digest dedupe when the Fix explanation is empty', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-companion-runtime-empty-explanation-'));
+    let reviewerCalls = 0;
+    const callSpy = vi.spyOn(CompanionStructuredCaller.prototype, 'call').mockImplementation(
+      async (request) => {
+        if (request.purpose === 'judge') {
+          return {
+            status: 'done',
+            content: '',
+            structuredOutput: { decision: 'continue', reason: 'continue' },
+          };
+        }
+        reviewerCalls += 1;
+        return {
+          status: 'done',
+          content: '',
+          structuredOutput: {
+            findings: reviewerCalls === 1
+              ? [{ severity: 'must_fix', file: 'src/a.ts', line: 1, finding: 'candidate' }]
+              : [],
+            updates: [],
+            notes: null,
+          },
+        };
+      },
+    );
+    const state = { companion: undefined } as unknown as WorkflowState;
+    let runtime: CompanionStepRuntime | undefined;
+
+    try {
+      const base = dependencies({
+        diffReader: {
+          readBaselineSha: vi.fn().mockResolvedValue('baseline'),
+          readDiff: vi.fn().mockResolvedValue({ status: 'ok', snapshot }),
+        },
+      });
+      runtime = await CompanionStepRuntime.create({ ...base, cwd: root, projectCwd: root });
+
+      const first = await runtime.complete(state, 'initial', { afterFix: false });
+      runtime.beginFixRound(2, first.openMustFix.length);
+      const afterEmpty = await runtime.complete(state, '  \n\t', {
+        afterFix: true,
+        fixRound: 1,
+      });
+
+      expect(reviewerCalls).toBe(1);
+      expect(afterEmpty.openMustFix).toHaveLength(1);
+    } finally {
+      runtime?.stop();
+      callSpy.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('should re-review with the latest explanation even after a live review during the Fix round', async () => {
+    vi.useFakeTimers();
+    const root = mkdtempSync(join(tmpdir(), 'takt-companion-runtime-live-before-completion-'));
+    const liveSnapshot = {
+      ...snapshot,
+      digest: 'live-diff',
+      changedLines: 10,
+      content: '+live change\n',
+      fileFingerprints: { 'src/a.ts': 'live-diff' },
+      hunkFingerprints: { 'src/a.ts:1-1': 'live-diff' },
+    };
+    const readDiff = vi.fn()
+      .mockResolvedValueOnce({ status: 'ok', snapshot: emptySnapshot })
+      .mockResolvedValueOnce({ status: 'ok', snapshot })
+      .mockResolvedValue({ status: 'ok', snapshot: liveSnapshot });
+    const prompts: string[] = [];
+    let reviewerCalls = 0;
+    const callSpy = vi.spyOn(CompanionStructuredCaller.prototype, 'call').mockImplementation(
+      async (request) => {
+        if (request.purpose === 'judge') {
+          return {
+            status: 'done',
+            content: '',
+            structuredOutput: { decision: 'continue', reason: 'continue' },
+          };
+        }
+        prompts.push(request.prompt);
+        reviewerCalls += 1;
+        return {
+          status: 'done',
+          content: '',
+          structuredOutput: {
+            findings: reviewerCalls === 1
+              ? [{ severity: 'must_fix', file: 'src/a.ts', line: 1, finding: 'candidate' }]
+              : [],
+            updates: reviewerCalls === 3
+              ? [{ id: 'security-reviewer-1', status: 'resolved' }]
+              : [],
+            notes: null,
+          },
+        };
+      },
+    );
+    const state = { companion: undefined } as unknown as WorkflowState;
+    let runtime: CompanionStepRuntime | undefined;
+
+    try {
+      const base = dependencies({
+        diffReader: { readBaselineSha: vi.fn().mockResolvedValue('baseline'), readDiff },
+      });
+      runtime = await CompanionStepRuntime.create({ ...base, cwd: root, projectCwd: root });
+      const first = await runtime.complete(state, 'initial', { afterFix: false });
+      runtime.beginFixRound(2, first.openMustFix.length);
+      runtime.observe({
+        type: 'tool_use',
+        data: { tool: 'Edit', input: { path: 'src/a.ts' }, id: 'fix-edit' },
+      });
+      await vi.advanceTimersByTimeAsync(250);
+      await vi.waitFor(() => expect(reviewerCalls).toBe(2));
+
+      const result = await runtime.complete(
+        state,
+        'The finding is a false positive; no code change was needed.',
+        { afterFix: true, fixRound: 1 },
+      );
+
+      expect(reviewerCalls).toBe(3);
+      expect(prompts[2]).toContain('false positive; no code change was needed.');
+      expect(prompts[2]).toContain('security-reviewer-1');
+      expect(result.openMustFix).toEqual([]);
+    } finally {
+      runtime?.stop();
+      callSpy.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+      vi.useRealTimers();
     }
   });
 
@@ -467,7 +823,7 @@ describe('companion runtime lifecycle', () => {
       });
       const state = { companion: undefined } as unknown as WorkflowState;
 
-      const result = await runtime.complete(state, 'complete');
+      const result = await runtime.complete(state, 'complete', { afterFix: false });
 
       expect(result).toMatchObject({
         escalated: true,
@@ -525,7 +881,7 @@ describe('companion runtime lifecycle', () => {
       });
       const state = { companion: undefined } as unknown as WorkflowState;
 
-      const result = await runtime.complete(state, 'complete');
+      const result = await runtime.complete(state, 'complete', { afterFix: false });
 
       expect(result).toMatchObject({
         escalated: true,

@@ -2790,8 +2790,11 @@ export class StepExecutor {
       const fixLoop = await runCompanionFixLoop({
         initialResponse: response,
         phase1Options: agentOptions,
-        completeReview: async ({ implementerResponse }) => {
-          const review = await activeCompanionRuntime.complete(state, implementerResponse);
+        completeReview: async ({ implementerResponse, afterFix, fixRound }) => {
+          const review = await activeCompanionRuntime.complete(state, implementerResponse, {
+            afterFix,
+            fixRound,
+          });
           requireActiveCompanionState(state, step.name);
           return review;
         },

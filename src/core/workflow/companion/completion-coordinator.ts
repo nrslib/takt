@@ -28,11 +28,14 @@ export class CompanionCompletionCoordinator {
     readonly onError: () => void;
   }) {}
 
-  async complete(state: WorkflowState): Promise<CompanionCompletionResult> {
+  async complete(
+    state: WorkflowState,
+    input: { readonly allowUnchangedDigest: (companionName: string) => boolean },
+  ): Promise<CompanionCompletionResult> {
     this.input.abortSignal?.throwIfAborted();
     const candidates = new Map([...this.input.detectors].map(([name, detector]) => [
       name,
-      detector.getCompletionCandidate(),
+      detector.getCompletionCandidate(input.allowUnchangedDigest(name)),
     ]));
     let reviewedSnapshot: CompanionDiff | undefined;
     let completionVerified = false;

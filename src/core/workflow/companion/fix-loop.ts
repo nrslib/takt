@@ -2,10 +2,15 @@ import type { AgentResponse, CompanionFindingEvidence } from '../../models/index
 import { createAbortError } from './abort.js';
 import { buildCompanionFixInstruction } from './evidence.js';
 
+export interface CompanionFixReviewContext {
+  readonly afterFix: boolean;
+  readonly fixRound?: number;
+}
+
 export async function runCompanionFixLoop<TOptions extends object>(input: {
   initialResponse: AgentResponse;
   phase1Options: TOptions;
-  completeReview: (context: { implementerResponse: string }) => Promise<{
+  completeReview: (context: CompanionFixReviewContext & { implementerResponse: string }) => Promise<{
     openMustFix: CompanionFindingEvidence[];
     escalated: boolean;
     reason?: string;
@@ -30,7 +35,11 @@ export async function runCompanionFixLoop<TOptions extends object>(input: {
   let fixRounds = 0;
   for (;;) {
     throwIfAborted(input.abortSignal);
-    const review = await input.completeReview({ implementerResponse: latestImplementerResponse });
+    const review = await input.completeReview({
+      implementerResponse: latestImplementerResponse,
+      afterFix: fixRounds > 0,
+      ...(fixRounds > 0 ? { fixRound: fixRounds } : {}),
+    });
     throwIfAborted(input.abortSignal);
     if (review.escalated || review.openMustFix.length === 0) {
       return terminal(

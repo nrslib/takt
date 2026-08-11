@@ -32,6 +32,7 @@ import {
 import { createAbortError } from './abort.js';
 import { isCompanionCapacityError } from './limits.js';
 import { executeCompanionReviewRound } from './review-round.js';
+import type { CompanionFixReviewContext } from './fix-loop.js';
 import {
   CompanionEventPublisher,
   type CompanionEventEmitter,
@@ -133,17 +134,29 @@ export class CompanionStepRuntime {
     };
   }
 
-  async complete(state: WorkflowState, implementerResponse: string): Promise<{
+  async complete(
+    state: WorkflowState,
+    implementerResponse: string,
+    context: CompanionFixReviewContext,
+  ): Promise<{
     openMustFix: CompanionFindingEvidence[];
     escalated: boolean;
     reason?: string;
   }> {
-    this.latestImplementerExplanation = truncateUtf8(
+    const explanation = truncateUtf8(
       implementerResponse,
       ROUND_CONTEXT_MAX_BYTES,
-    ).value;
+    ).value.trim();
+    this.latestImplementerExplanation = explanation.length === 0 ? undefined : explanation;
     this.requireScheduler().beginCompletion();
-    return this.requireCompletionCoordinator().complete(state);
+    return this.requireCompletionCoordinator().complete(state, {
+      allowUnchangedDigest: (companionName) => (
+        context.afterFix
+        && context.fixRound === this.currentFixRound
+        && this.latestImplementerExplanation !== undefined
+        && this.hasOpenMustFix(companionName)
+      ),
+    });
   }
 
   beginFixRound(sequence: number, openMustFixCount: number): void {
@@ -423,6 +436,21 @@ export class CompanionStepRuntime {
       }
     }
     return open;
+  }
+
+  private hasOpenMustFix(companionName: string): boolean {
+    try {
+      return this.deps.stateStore.get(
+        this.mailboxPath(companionName),
+        companionName,
+      ).mailbox.findings.some(({ severity, status }) => (
+        severity === 'must_fix' && (status === 'open' || status === 'unresolved')
+      ));
+    } catch (error) {
+      if (!isCompanionCapacityError(error)) throw error;
+      this.recordCapacityExceeded(companionName);
+      return false;
+    }
   }
 
   private recordCapacityExceeded(companionName: string): void {
