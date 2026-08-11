@@ -403,7 +403,6 @@ describe('experimental builtin workflow', () => {
               { id: 'cli', knowledgeRefs: ['security-local'] },
             ]
           : [
-              { id: 'orchestration', knowledgeRefs: ['workflow-orchestration-security'] },
               { id: 'cli', knowledgeRefs: ['security-local'] },
             ]);
       }
@@ -457,7 +456,7 @@ describe('experimental builtin workflow', () => {
         ...rejectedCompanionFinding(),
         responseForNext(remediation, 'fix-verifier', 'COMPLETE'),
         selection(['security-review'], 'The second review round covers security changes.'),
-        selection(['orchestration'], 'The TAKT orchestration security knowledge matches the changed surface.'),
+        selection(['cli'], 'The TAKT local execution security knowledge matches the changed surface.'),
         response(reviewerSuite, 'coding-review', 'coding-reviewer', 'approved'),
         response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
         response(reviewerSuite, 'security-review', 'security-reviewer', 'approved'),
@@ -474,7 +473,7 @@ describe('experimental builtin workflow', () => {
         responseForNext(peerReview, 'review-adjudication', 'final-gate'),
         responseForNext(peerReview, 'final-gate', 'COMPLETE'),
       ]);
-      const engine = new WorkflowEngine(workflow, projectDir, 'Implement and review a frontend security change', {
+      const engine = new WorkflowEngine(workflow, projectDir, 'Implement and review a TAKT local execution security change', {
         projectCwd: projectDir,
         provider: 'mock',
         selectorProvider: SELECTOR_PROVIDER,

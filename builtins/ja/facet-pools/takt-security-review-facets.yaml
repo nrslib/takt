@@ -1,10 +1,6 @@
 knowledge:
-  workflow-orchestration-security: ../facets/knowledge/workflow-orchestration-security.md
   security-local: ../facets/knowledge/security-local.md
 candidates:
-  - id: orchestration
-    description: workflow・外部定義の解決、provider・sessionの識別、resume、権限、selectorの境界を変える変更に限ってレビューする。
-    knowledge: workflow-orchestration-security
   - id: cli
     description: CLI入力がサブプロセス、worktree、パス、ローカルファイル、設定へ到達する変更に限ってレビューする。
     knowledge: security-local

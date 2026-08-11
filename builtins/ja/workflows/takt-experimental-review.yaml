@@ -17,8 +17,6 @@ subworkflow:
       type: facet_pool_ref
       default: takt-security-review-facets
 facet_pools:
-  security-review-facets:
-    uses: security-review-facets
   takt-security-review-facets:
     uses: takt-security-review-facets
 initial_step: review
@@ -49,13 +47,13 @@ steps:
               - name: architecture-review.md
                 format: architecture-review
         - name: security-review
-          description: TAKTの認証認可、入力検証、機密情報、ローカル実行、依存関係、セキュリティ境界をレビューする
+          description: TAKTの変更で生じる具体的なセキュリティ境界をレビューする
           capabilities: readonly
           tags: [review]
           edit: false
           persona: security-reviewer
           policy: [contract-change, security-review]
-          knowledge: [takt, security]
+          knowledge: [takt]
           dynamic_facets:
             pool:
               $param: security_review_pool

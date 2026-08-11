@@ -19,8 +19,6 @@ subworkflow:
 facet_pools:
   security-review-facets:
     uses: security-review-facets
-  takt-security-review-facets:
-    uses: takt-security-review-facets
 initial_step: review
 steps:
   - name: review

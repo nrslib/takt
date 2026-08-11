@@ -1,10 +1,6 @@
 knowledge:
-  workflow-orchestration-security: ../facets/knowledge/workflow-orchestration-security.md
   security-local: ../facets/knowledge/security-local.md
 candidates:
-  - id: orchestration
-    description: Review only changes that alter workflow or external-definition resolution, provider or session identity, resume, permissions, or selector boundaries.
-    knowledge: workflow-orchestration-security
   - id: cli
     description: Review only changes where CLI input reaches subprocesses, worktrees, paths, local files, or configuration.
     knowledge: security-local
