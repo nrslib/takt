@@ -229,13 +229,14 @@ async function executeWorkflowInternal(
       ? {}
       : { resumeSource: options.resumeSource }),
   });
-  const publishedResumeSource = options.resumeSource;
   const resumeLineage: WorkflowExecutionResumeLineage =
     availableSourceLineage ?? resolveWorkflowExecutionResumeLineage(
       cwd,
       activeRun.runSlug,
       options.resumeSource,
     );
+  const artifactResumeSource = resumeLineage.artifactResumeSource;
+  const publishedResumeSource = resumeLineage.publishedResumeSource;
   let bootstrap: WorkflowExecutionBootstrap;
   try {
     publishWorkflowExecutionBundle(activeRun.runPaths, preparedBundle);
@@ -264,9 +265,6 @@ async function executeWorkflowInternal(
       projectCwd: options.projectCwd,
       primaryError: bootstrapError,
       resumeLineage,
-      ...(publishedResumeSource === undefined
-        ? {}
-        : { resumeSource: publishedResumeSource }),
     });
   }
   const executionBundle = loadWorkflowExecutionBundle(activeRun.runPaths);
@@ -427,7 +425,7 @@ async function executeWorkflowInternal(
         retryNote: options.retryNote,
         resumePoint: options.resumePoint,
         restartPoint: options.restartPoint,
-        resumeSource: publishedResumeSource,
+        resumeSource: artifactResumeSource,
         operationJournal: bootstrap.operationJournal,
         reportDirName: bootstrap.runSlug,
         taskPrefix: options.taskPrefix,
@@ -631,19 +629,19 @@ async function terminalizeBootstrapFailure(input: {
   readonly task: string;
   readonly projectCwd: string;
   readonly primaryError: unknown;
-  readonly resumeSource?: WorkflowExecutionOptions['resumeSource'];
   readonly resumeLineage?: WorkflowExecutionResumeLineage;
 }): Promise<never> {
   const reason = getErrorMessage(input.primaryError);
   const finalizationErrors: unknown[] = [];
+  const publishedResumeSource = input.resumeLineage?.publishedResumeSource;
   try {
     input.activeRun.bootstrap.publishRunMeta({
         runPaths: input.activeRun.runPaths,
         task: input.task,
         workflowName: input.workflowConfig.name,
-        ...(input.resumeSource === undefined
+        ...(publishedResumeSource === undefined
           ? {}
-          : { resumeSource: input.resumeSource }),
+          : { resumeSource: publishedResumeSource }),
         ...(input.resumeLineage === undefined
           ? {}
           : {

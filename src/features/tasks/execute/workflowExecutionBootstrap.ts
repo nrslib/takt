@@ -141,7 +141,11 @@ export interface WorkflowExecutionBootstrap {
 }
 
 export interface WorkflowExecutionResumeLineage {
+  /** Best-effort report/artifact inheritance source, not operation ancestry. */
   readonly sourceRunSlug?: string;
+  /** Runtime-only resume source for report/artifact fallback in the engine. */
+  readonly artifactResumeSource?: WorkflowExecutionOptions['resumeSource'];
+  /** Verified operation ancestry source to persist in run metadata. */
   readonly publishedResumeSource?: WorkflowExecutionOptions['resumeSource'];
   readonly operationJournalRunSlug: string;
   readonly operationClaimToken: string;
@@ -270,7 +274,10 @@ export function resolveWorkflowExecutionResumeLineage(
     return {
       operationJournalRunSlug: runSlug,
       operationClaimToken: randomUUID(),
-      ...(resumeSource === undefined ? {} : { publishedResumeSource: resumeSource }),
+      ...(resumeSource === undefined ? {} : {
+        artifactResumeSource: resumeSource,
+        publishedResumeSource: resumeSource,
+      }),
     };
   }
 
@@ -290,7 +297,7 @@ export function resolveWorkflowExecutionResumeLineage(
     );
     return {
       sourceRunSlug,
-      publishedResumeSource: resumeSource,
+      artifactResumeSource: resumeSource,
       operationJournalRunSlug: runSlug,
       operationClaimToken: randomUUID(),
     };
@@ -311,6 +318,7 @@ export function resolveWorkflowExecutionResumeSourceLineage(
   const sourceClaims = resolveOperationJournalSourceClaims(cwd, sourceRunSlug);
   return {
     sourceRunSlug,
+    artifactResumeSource: resumeSource,
     publishedResumeSource: resumeSource,
     operationJournalRunSlug: sourceClaims.journalRunSlug,
     operationClaimToken: randomUUID(),
