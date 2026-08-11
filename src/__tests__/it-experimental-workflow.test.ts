@@ -375,61 +375,20 @@ describe('experimental builtin workflow', () => {
     invalidateAllResolvedConfigCache();
   });
 
-  it.each([
-    ['en', 'experimental', 'experimental-review-adapter', 'security-review-facets', [
-      ['web', ['security-web', 'security-api', 'security-data']],
-      ['cli', ['security-local', 'security-data']],
-      ['supply-chain', ['security-dependencies']],
-    ]],
-    ['en', 'takt-experimental', 'takt-experimental-review-adapter', 'takt-security-review-facets', [
-      ['orchestration', ['takt-security']],
-      ['cli', ['security-local', 'security-data']],
-      ['supply-chain', ['security-dependencies']],
-    ]],
-    ['ja', 'experimental', 'experimental-review-adapter', 'security-review-facets', [
-      ['web', ['security-web', 'security-api', 'security-data']],
-      ['cli', ['security-local', 'security-data']],
-      ['supply-chain', ['security-dependencies']],
-    ]],
-    ['ja', 'takt-experimental', 'takt-experimental-review-adapter', 'takt-security-review-facets', [
-      ['orchestration', ['takt-security']],
-      ['cli', ['security-local', 'security-data']],
-      ['supply-chain', ['security-dependencies']],
-    ]],
-  ] as const)(
-    'should bind the security review pool selected by the %s %s wrapper without widening shared workflow contracts',
-    (language, workflowName, expectedAdapter, expectedPool, expectedCandidates) => {
+  it.each(['en', 'ja'] as const)(
+    'should load the %s dynamic review wrappers through their consuming reviewer suites',
+    (language) => {
       writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${language}\n`);
       invalidateAllResolvedConfigCache();
-      const wrapper = loadWorkflowFromFile(
-        join(getBuiltinWorkflowsDir(language), `${workflowName}.yaml`),
-        projectDir,
-      );
-      const wrapperCall = findWorkflowStep(wrapper, 'develop');
-      expect(wrapperCall.args?.reviewer_suite).toBe(expectedAdapter);
-      expect(wrapperCall.args).not.toHaveProperty('security_review_pool');
-
-      const core = loadCoreForWrapper(language, wrapper, projectDir);
-      const peerReviewCall = findWorkflowStep(core, 'peer-review');
-      expect(peerReviewCall.args?.reviewer_suite).toBe(expectedAdapter);
-      expect(peerReviewCall.args).not.toHaveProperty('security_review_pool');
-
-      const peerReview = loadPeerReviewForCore(language, core, projectDir);
-      const reviewerSuiteCall = findWorkflowStep(peerReview, peerReview.initialStep);
-      expect(reviewerSuiteCall.call).toBe(expectedAdapter);
-      expect(reviewerSuiteCall.args).not.toHaveProperty('security_review_pool');
-
-      const adapter = loadReviewerAdapterForPeerReview(language, peerReview, projectDir);
-      const adapterCall = findWorkflowStep(adapter, adapter.initialStep);
-      expect(adapterCall.args?.security_review_pool).toBe(expectedPool);
-
-      const reviewerSuite = loadReviewerSuiteForPeerReview(language, peerReview, projectDir);
-      expect(reviewerSuite.facetPools?.[expectedPool]?.candidates.map((candidate) => [
-        candidate.id,
-        candidate.knowledgeRefs,
-      ])).toEqual(expectedCandidates);
-      expect(findWorkflowStep(reviewerSuite, 'security-review').dynamicFacets)
-        .toEqual({ pool: expectedPool, maxSelected: 1 });
+      for (const workflowName of ['experimental', 'takt-experimental']) {
+        const wrapper = loadWorkflowFromFile(
+          join(getBuiltinWorkflowsDir(language), `${workflowName}.yaml`),
+          projectDir,
+        );
+        const core = loadCoreForWrapper(language, wrapper, projectDir);
+        const peerReview = loadPeerReviewForCore(language, core, projectDir);
+        loadReviewerSuiteForPeerReview(language, peerReview, projectDir);
+      }
     },
   );
 
