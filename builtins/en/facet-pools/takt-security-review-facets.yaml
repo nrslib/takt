@@ -1,15 +1,10 @@
 knowledge:
-  takt-security: ../facets/knowledge/takt-security.md
+  workflow-orchestration-security: ../facets/knowledge/workflow-orchestration-security.md
   security-local: ../facets/knowledge/security-local.md
-  security-data: ../facets/knowledge/security-data.md
-  security-dependencies: ../facets/knowledge/security-dependencies.md
 candidates:
   - id: orchestration
-    description: Review TAKT workflow resolution, providers, sessions, resume, permissions, and selector trust boundaries.
-    knowledge: takt-security
+    description: Review only changes that alter workflow or external-definition resolution, provider or session identity, resume, permissions, or selector boundaries.
+    knowledge: workflow-orchestration-security
   - id: cli
-    description: Review TAKT CLI, subprocess, worktree, path, local configuration, and sensitive-data boundaries.
-    knowledge: [security-local, security-data]
-  - id: supply-chain
-    description: Review TAKT dependencies, lockfiles, install and build behavior, artifacts, and publishing paths.
-    knowledge: security-dependencies
+    description: Review only changes where CLI input reaches subprocesses, worktrees, paths, local files, or configuration.
+    knowledge: security-local

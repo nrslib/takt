@@ -450,10 +450,10 @@ facet_pools:
     candidates:
       - id: web
         description: HTTP と browser のセキュリティ境界をレビューする
-        knowledge: [security-web, security-api, security-data]
+        knowledge: [security-web, security-api]
       - id: cli
         description: CLI とローカルプロセスの境界をレビューする
-        knowledge: [security-local, security-data]
+        knowledge: security-local
 
 steps:
   - name: reviewers

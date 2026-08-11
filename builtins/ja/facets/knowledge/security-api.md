@@ -2,131 +2,43 @@
 
 ## 適用条件
 
-API、server endpoint、認証・認可、database query、tenant境界を扱う変更に適用する。
+低信頼のrequestがserver側の認証、認可、resource選択、interpreter、外部接続、または永続化へ到達する変更に適用する。endpointが存在するだけ、または内部実装だけを変えて信頼境界が変わらない場合には適用しない。
 
-## インジェクション攻撃
+## 入力からinterpreterへの境界
 
-**SQLインジェクション**
-
-- 文字列連結によるSQL構築 → REJECT
-- パラメータ化クエリの不使用 → REJECT
-- ORMの raw query での未サニタイズ入力 → REJECT
-
-```typescript
-// NG
-db.query(`SELECT * FROM users WHERE id = ${userId}`)
-
-// OK
-db.query('SELECT * FROM users WHERE id = ?', [userId])
-```
-
-## 認証・認可
-
-**認証の問題**
-
-- ハードコードされたクレデンシャル → 即REJECT
-- 平文パスワードの保存 → 即REJECT
-- 弱いハッシュアルゴリズム (MD5, SHA1) → REJECT
-- セッショントークンの不適切な管理 → REJECT
-
-**認可の問題**
-
-- 権限チェックの欠如 → REJECT
-- IDOR (Insecure Direct Object Reference) → REJECT
-- 権限昇格の可能性 → REJECT
-
-```typescript
-// NG - 権限チェックなし
-app.get('/user/:id', (req, res) => {
-  return db.getUser(req.params.id)
-})
-
-// OK
-app.get('/user/:id', authorize('read:user'), (req, res) => {
-  if (req.user.id !== req.params.id && !req.user.isAdmin) {
-    return res.status(403).send('Forbidden')
-  }
-  return db.getUser(req.params.id)
-})
-```
-
-## データ保護
-
-**データ検証**
-
-- 入力値の未検証（サイズ制限の未設定だけの場合を除く）→ REJECT
-- 型チェックの欠如 → REJECT
-- サイズ制限の未設定はリソース枯渇につながり得るため、具体的な経路を Security 専用 policy に従って確認する
-
-## レート制限・DoS対策
-
-- レート制限の欠如（認証エンドポイント） → 警告
-- リソース枯渇攻撃の可能性 → 警告
-- 無限ループのパターンはサービス拒否につながり得るため、確認できた経路と影響を Security 専用 policy に従って評価する
-
-## マルチテナントデータ分離
-
-テナント境界を超えたデータアクセスを防ぐ。認可（誰が操作できるか）とスコーピング（どのテナントのデータか）は別の関心事。
+SQL、template、query language、expression、server-side requestなど、入力を別の言語や宛先として解釈する境界を追跡する。API名や「validation済み」という名称だけではなく、dataと命令・宛先が分離されていることを確認する。
 
 | 基準 | 判定 |
 |------|------|
-| 読み取りはテナントスコープだが書き込みはスコープなし | REJECT |
-| 書き込み操作でクライアント提供のテナントIDを使用 | REJECT |
-| テナントリゾルバーを使うエンドポイントに認可制御がない | REJECT |
-| ロール分岐の一部パスでテナント解決が未考慮 | REJECT |
-| エンドポイントの想定呼び出し者（ロール・トークン種別）に認証機構の適用範囲が及んでいない | REJECT |
+| 低信頼の値をqueryやtemplateの命令部分へ連結する | REJECT |
+| 低信頼のURL・hostが内部networkやcredential付きrequestの宛先を選べる | REJECT |
+| parameter bindingや構造化builderでdataと命令を分離する | OK |
+| 外部接続先をscheme・host・redirectを含めて必要な範囲へ制約する | OK |
 
-### 読み書きの一貫性
+## 認証・認可・resource scope
 
-テナントスコーピングは読み取りと書き込みの両方に適用する。片方だけでは、参照できないが変更できる状態が生まれる。
+認証は呼び出し主体を確立し、認可はその主体が操作できるactionとresourceを制約する。routeに認可middlewareがあるかだけでなく、取得・更新・削除の全経路で同じresource scopeが適用されることを確認する。
 
-読み取りにテナントフィルタを追加したら、対応する書き込みも必ずテナント検証する。
+| 基準 | 判定 |
+|------|------|
+| privateまたは所有領域付きresourceをrequest由来のIDだけで取得し、主体との関係を検証しない | REJECT |
+| 保護対象の読込にはscopeを適用するが、対応する更新・削除には適用しない | REJECT |
+| client指定のowner・tenant・roleを、独立した認可なしに認証済み主体より優先する | REJECT |
+| 認証済み主体からactionとresource scopeを解決し、全操作へ一貫して適用する | OK |
 
-### 書き込みのテナント検証
+## 入出力契約とresource消費
 
-書き込み操作では、リクエストボディのテナントIDではなく認証済みユーザーから解決したテナントIDを使う。
+型・形式・列挙値・長さ・件数は、後段が依存する契約に合わせて境界で制約する。ただし、validationやrate limitがないという一般論だけでは問題にせず、低信頼の入力から権限逸脱、解釈境界、または現実的なresource枯渇へ至る経路を示す。
 
-```kotlin
-// NG - クライアント提供のテナントIDを信頼
-fun create(request: CreateRequest) {
-    service.create(request.tenantId, request.data)
-}
+responseとerrorには、呼び出し元へ返す必要のないcredential、内部path、query、stack、他resourceの内容を含めない。
 
-// OK - 認証情報からテナントを解決
-fun create(request: CreateRequest) {
-    val tenantId = tenantResolver.resolve()
-    service.create(tenantId, request.data)
-}
-```
+## 所有領域の分離
 
-### 認可とリゾルバーの整合性
+複数のowner、tenant、workspace、accountなどを扱う場合、認可（誰が操作できるか）とscope（どの所有領域か）を別々に確立し、組み合わせて問い合わせる。
 
-テナントリゾルバーが特定ロール（例: スタッフ）を前提とする場合、エンドポイントに対応する認可制御が必要。認可なしだと、前提外のロールがアクセスしてリゾルバーが失敗する。
-
-```kotlin
-// NG - リゾルバーが STAFF を前提とするが認可制御なし
-fun getSettings(): SettingsResponse {
-    val tenantId = tenantResolver.resolve()  // STAFF 以外で失敗
-    return settingsService.getByTenant(tenantId)
-}
-
-// OK - 認可制御でロールを保証
-@Authorized(roles = ["STAFF"])
-fun getSettings(): SettingsResponse {
-    val tenantId = tenantResolver.resolve()
-    return settingsService.getByTenant(tenantId)
-}
-```
-
-ロール分岐があるエンドポイントでは、全パスでテナント解決が成功するか検証する。
-
-逆パターンにも注意する。特定ロール専用のエンドポイントを追加する場合、そのロールを認証する機構（フィルタ等）の適用範囲拡張と、ロール必須の認可制御を同じ変更で行う。認証機構の適用範囲外だと想定呼び出し者がそもそも認証されず、認可がないと想定外ロールが通ってしまう。
-
-## OWASP Top 10 チェックリスト
-
-| カテゴリ | 確認事項 |
-|---------|---------|
-| A01 Broken Access Control | 認可チェック |
-| A03 Injection | SQL |
-| A07 Auth Failures | 認証メカニズム |
-| A10 SSRF | サーバーサイドリクエスト |
+| 基準 | 判定 |
+|------|------|
+| 読み取りは所有領域でscopeされるが、書き込みはscopeされない | REJECT |
+| client指定の所有領域を認証済み主体との照合なしに使う | REJECT |
+| roleやtoken種別ごとの分岐に、scopeが確立されない経路がある | REJECT |
+| 認証済み主体からscopeを解決し、読み書きのqueryへ同じ制約を適用する | OK |

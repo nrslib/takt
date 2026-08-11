@@ -2,15 +2,10 @@ knowledge:
   security-web: ../facets/knowledge/security-web.md
   security-api: ../facets/knowledge/security-api.md
   security-local: ../facets/knowledge/security-local.md
-  security-data: ../facets/knowledge/security-data.md
-  security-dependencies: ../facets/knowledge/security-dependencies.md
 candidates:
   - id: web
-    description: Review browser, HTTP API, authentication, authorization, origin, input, and sensitive-data boundaries.
-    knowledge: [security-web, security-api, security-data]
+    description: Review only changes that cross browser and HTTP API boundaries involving authentication, authorization, origins, or input and output.
+    knowledge: [security-web, security-api]
   - id: cli
-    description: Review CLI arguments, subprocesses, paths, local files, configuration, and sensitive-data boundaries.
-    knowledge: [security-local, security-data]
-  - id: supply-chain
-    description: Review dependencies, lockfiles, install and build behavior, artifacts, and publishing paths.
-    knowledge: security-dependencies
+    description: Review only changes where CLI input reaches subprocesses, paths, local files, or configuration.
+    knowledge: security-local

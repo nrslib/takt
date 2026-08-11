@@ -461,10 +461,10 @@ facet_pools:
     candidates:
       - id: web
         description: Review HTTP and browser security boundaries
-        knowledge: [security-web, security-api, security-data]
+        knowledge: [security-web, security-api]
       - id: cli
         description: Review command-line and local process boundaries
-        knowledge: [security-local, security-data]
+        knowledge: security-local
 
 steps:
   - name: reviewers

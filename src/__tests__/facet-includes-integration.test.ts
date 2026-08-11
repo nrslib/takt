@@ -286,11 +286,16 @@ describe('facet include expansion', () => {
     expect(resolvedSecurityReview?.split(common)).toHaveLength(2);
   });
 
-  it.each(['en', 'ja'] as const)('should resolve TAKT-specific security knowledge in %s', (lang) => {
-    const facetPath = join(getLanguageResourcesDir(lang), 'facets', 'knowledge', 'takt-security.md');
+  it.each(['en', 'ja'] as const)('should resolve workflow orchestration security knowledge in %s', (lang) => {
+    const facetPath = join(
+      getLanguageResourcesDir(lang),
+      'facets',
+      'knowledge',
+      'workflow-orchestration-security.md',
+    );
     const expected = readFileSync(facetPath, 'utf-8').trim();
     const resolved = resolveRefToContent(
-      'takt-security',
+      'workflow-orchestration-security',
       undefined,
       tempDir,
       'knowledge',

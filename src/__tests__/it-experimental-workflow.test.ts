@@ -387,7 +387,25 @@ describe('experimental builtin workflow', () => {
         );
         const core = loadCoreForWrapper(language, wrapper, projectDir);
         const peerReview = loadPeerReviewForCore(language, core, projectDir);
-        loadReviewerSuiteForPeerReview(language, peerReview, projectDir);
+        const reviewerSuite = loadReviewerSuiteForPeerReview(language, peerReview, projectDir);
+        const securityReview = findWorkflowStep(reviewerSuite, 'security-review');
+        const poolName = securityReview.dynamicFacets?.pool;
+        if (poolName === undefined) {
+          throw new Error(`Security reviewer in "${reviewerSuite.name}" has no dynamic facet pool`);
+        }
+        const candidates = reviewerSuite.facetPools?.[poolName]?.candidates.map((candidate) => ({
+          id: candidate.id,
+          knowledgeRefs: candidate.knowledgeRefs,
+        }));
+        expect(candidates).toEqual(workflowName === 'experimental'
+          ? [
+              { id: 'web', knowledgeRefs: ['security-web', 'security-api'] },
+              { id: 'cli', knowledgeRefs: ['security-local'] },
+            ]
+          : [
+              { id: 'orchestration', knowledgeRefs: ['workflow-orchestration-security'] },
+              { id: 'cli', knowledgeRefs: ['security-local'] },
+            ]);
       }
     },
   );

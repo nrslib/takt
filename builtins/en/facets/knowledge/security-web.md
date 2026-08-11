@@ -1,28 +1,30 @@
-# Web Security Knowledge
+# Browser Boundary Security Knowledge
 
 ## Applicability
 
-Apply to changes that involve browser-interpreted HTML, JavaScript, URLs, DOM operations, CORS, or browser-originated file submission.
+Apply when low-trust values reach HTML, JavaScript, CSS, URLs, the DOM, or requests that a browser interprets or sends. Do not apply to static presentation changes or internal representation changes that do not cross a trust boundary.
 
-## Injection Attacks
+## Browser Interpretation Boundaries
 
-**XSS (Cross-Site Scripting):**
+Review the context in which the browser ultimately interprets a value, not merely whether it was validated. HTML, attributes, scripts, styles, and URLs require different defenses.
 
-- Unescaped output to HTML/JS → REJECT
-- Improper use of `innerHTML`, `dangerouslySetInnerHTML` → REJECT
-- Direct embedding of URL parameters → REJECT
+| Criterion | Verdict |
+|-----------|---------|
+| A low-trust value reaches executable HTML or a script sink without contextual handling | REJECT |
+| A low-trust value can select a dangerous URL scheme, open redirect target, or credential destination | REJECT |
+| Framework default escaping matches the text or attribute context, with URL allow conditions checked separately | OK |
+| Encoding, sanitization, or allowlisting matches the value's use context at the boundary | OK |
 
-## File Operations
+## Origins and Requests
 
-**File Upload:**
+CORS controls which origins may read a response in a browser; it is not a substitute for authentication or authorization. For state-changing requests that use automatically sent credentials such as cookies, also verify that an unintended origin cannot initiate the action.
 
-- No file type validation → REJECT
-- Missing file-size limits can contribute to resource exhaustion; evaluate the concrete path under the Security policy
-- Allowing executable file uploads → REJECT
+| Criterion | Verdict |
+|-----------|---------|
+| CORS permission is treated as server-side authorization | REJECT |
+| A credentialed request can be initiated from any origin and reach a state change | REJECT |
+| Allowed origins are limited to operational need and the server still authorizes the action | OK |
 
-## OWASP Top 10 Checklist
+## Files Received from Browsers
 
-| Category | Check Items |
-|----------|-------------|
-| A01 Broken Access Control | CORS config |
-| A03 Injection | XSS |
+Treat filenames, content types, and extensions as low-trust metadata. Trace the storage location, publication behavior, and downstream parser or renderer. Report a problem only when there is a concrete path to execution, overwrite, or reinterpretation as another format.
