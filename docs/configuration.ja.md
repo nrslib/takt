@@ -601,6 +601,11 @@ companion:
 global と project の値は論理積で合成されるため、global 側で無効化した companion を
 project 側の `true` で再有効化することはできません。
 
+companion の provider target（`targets.companions`）とプロバイダ能力要件が適用されるのは
+companion が有効な間だけです。無効時も companion 宣言と `targets.companions` の構造検証は
+維持されますが、companion の provider 解決と実行は行われません — companion を宣言した
+ワークフローは、companion 用の provider 設定なしで実行できます。
+
 runtime モードはファイルの存在ではなく、有効な `provider` セクションの有無で有効化されます。`version: 1` だけのファイルは inactive で、従来の `config.yaml` による provider 解決がそのまま使われます。
 
 ### 設定例
