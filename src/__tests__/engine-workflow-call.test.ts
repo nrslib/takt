@@ -969,6 +969,7 @@ steps:
     engine = new WorkflowEngine(config, tmpDir, 'Override child provider', createWorkflowCallOptions(tmpDir, {
       provider: 'claude',
       providerSource: 'runtime-v1',
+      providerOptionsProviderSource: 'runtime-v1',
       providerPermissionMode: 'full',
       providerOptions: {
         claude: { allowedTools: ['Read'] },
@@ -986,6 +987,70 @@ steps:
       codex: {
         networkAccess: true,
       },
+    });
+  });
+
+  it('workflow_call の明示 provider_options は子 profile 切替後も保持し親 profile 制約だけを落とす', async () => {
+    writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
+subworkflow:
+  callable: true
+initial_step: review
+steps:
+  - name: review
+    persona: reviewer
+    instruction: "Review child workflow"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'delegate',
+      max_steps: 10,
+      steps: [{
+        name: 'delegate',
+        kind: 'workflow_call',
+        call: 'takt/coding',
+        overrides: {
+          provider_options: {
+            claude: { allowed_tools: ['Read'] },
+          },
+        },
+        rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+      }],
+    });
+
+    vi.mocked(runAgent).mockResolvedValueOnce(makeResponse({ persona: 'reviewer', content: 'done' }));
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+    const startedProviderInfo: Array<Record<string, unknown>> = [];
+    engine = new WorkflowEngine(config, tmpDir, 'Keep call-site options only', createWorkflowCallOptions(tmpDir, {
+      provider: 'codex',
+      providerSource: 'runtime-v1',
+      providerOptionsProviderSource: 'runtime-v1',
+      providerOptions: {
+        codex: { networkAccess: false },
+        claude: { allowedTools: ['Stale'] },
+      },
+      personaProviders: {
+        reviewer: { provider: 'claude', model: 'target-model' },
+      },
+    }));
+    engine.on('step:start', (step, _iteration, _instruction, providerInfo) => {
+      if (step.name === 'review') {
+        startedProviderInfo.push(providerInfo as unknown as Record<string, unknown>);
+      }
+    });
+
+    await engine.run();
+
+    const options = vi.mocked(runAgent).mock.calls[0]?.[2];
+    expect(options?.resolvedProvider).toBe('claude');
+    expect(options?.resolvedModel).toBe('target-model');
+    expect(options?.providerOptions).toEqual({ claude: { allowedTools: ['Read'] } });
+    expect(startedProviderInfo[0]?.providerOptions).toEqual({ claude: { allowedTools: ['Read'] } });
+    expect(startedProviderInfo[0]?.providerOptionsSources).toEqual({
+      'claude.allowedTools': 'workflow_call',
     });
   });
 
@@ -1172,10 +1237,12 @@ steps:
 
     expect(options?.resolvedProvider).toBe('codex');
     expect(options?.resolvedModel).toBeUndefined();
-    expect(options?.providerOptions).toBeUndefined();
+    expect(options?.providerOptions).toMatchObject({
+      codex: { reasoningEffort: 'high' },
+    });
   });
 
-  it('workflow_call が provider を override したら元 profile の provider_options を落とす', async () => {
+  it('workflow_call が provider を override しても legacy provider_options を保持する', async () => {
     writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
 subworkflow:
   callable: true
@@ -1240,7 +1307,12 @@ steps:
 
     expect(options?.resolvedProvider).toBe('codex');
     expect(options?.resolvedModel).toBeUndefined();
-    expect(options?.providerOptions).toBeUndefined();
+    expect(options?.providerOptions).toEqual({
+      codex: {
+        networkAccess: false,
+        reasoningEffort: 'high',
+      },
+    });
   });
 
   it('workflow_call が model だけ override しても child personaProviders の provider 解決を維持する', async () => {

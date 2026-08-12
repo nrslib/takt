@@ -241,8 +241,8 @@ function expectCliSelectorPreview(previews: readonly StepPreview[]): void {
     model: CLI_MODEL,
     providerSource: 'cli',
     modelSource: 'cli',
-    permissionMode: 'readonly',
   }));
+  expect(selector).not.toHaveProperty('permissionMode');
 }
 
 function readProviderStarts(mockCallLogPath: string): Array<Record<string, unknown>> {

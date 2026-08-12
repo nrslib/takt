@@ -8,8 +8,9 @@ import { detectJudgeIndex, buildJudgePrompt } from './judge-utils.js';
 import { loadJudgmentSchema, loadEvaluationSchema } from '../infra/resources/schema-loader.js';
 import { detectCandidateIndex } from '../shared/utils/ruleIndex.js';
 import {
-  executeFreshAgent,
   executeStructuredAgent,
+  executeStructuredTextAgent,
+  requireStructuredAgentProvider,
   StructuredAgentContractError,
 } from './structured-caller/transport.js';
 import {
@@ -76,18 +77,17 @@ export async function runTagJudgeStage(
   runOptions.abortSignal?.throwIfAborted();
   let tagResponse: AgentResponse;
   try {
-    tagResponse = await executeFreshAgent(tagInstruction, {
+    tagResponse = await executeStructuredTextAgent(tagInstruction, {
       name: 'conductor',
       persona: 'conductor',
       cwd: runOptions.cwd,
       projectCwd: runOptions.projectCwd,
       resolution: {
-        provider: runOptions.resolvedProvider ?? runOptions.provider,
+        provider: requireStructuredAgentProvider(runOptions.resolvedProvider ?? runOptions.provider, 'conductor'),
         model: runOptions.resolvedModel,
         providerOptions: runOptions.resolvedProviderOptions,
         permissionMode: runOptions.permissionMode,
       },
-      maxTurns: 3,
       language: runOptions.language,
       onStream: runOptions.onStream,
       childProcessEnv: runOptions.childProcessEnv,
@@ -190,12 +190,14 @@ export async function evaluateCondition(
       cwd: options.cwd,
       projectCwd: options.projectCwd,
       resolution: {
-        provider: options.resolvedProvider ?? options.provider,
+        provider: requireStructuredAgentProvider(
+          options.resolvedProvider ?? options.provider,
+          'condition-evaluator',
+        ),
         model: options.resolvedModel,
         providerOptions: options.resolvedProviderOptions,
         permissionMode: options.permissionMode,
       },
-      maxTurns: 1,
       childProcessEnv: options.childProcessEnv,
       abortSignal: options.abortSignal,
     });
@@ -374,12 +376,14 @@ export async function judgeStatus(
         cwd: options.cwd,
         projectCwd: options.projectCwd,
         resolution: {
-          provider: options.resolvedProvider ?? options.provider,
+          provider: requireStructuredAgentProvider(
+            options.resolvedProvider ?? options.provider,
+            'conductor',
+          ),
           model: options.resolvedModel,
           providerOptions: options.resolvedProviderOptions,
           permissionMode: options.permissionMode,
         },
-        maxTurns: 3,
         language: options.language,
         onStream: options.onStream,
         childProcessEnv: options.childProcessEnv,

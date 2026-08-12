@@ -278,6 +278,8 @@ interface WorkflowStepBase {
    * injection (allowed).
    */
   engineSynthesized?: true;
+  /** Engine-owned agent whose Phase 1 must use the shared fresh-session transport. */
+  internalFreshSession?: true;
   /** Exact runtime-profile permission for engine-synthesized agents; never accepted from YAML. */
   internalPermissionMode?: PermissionMode;
 }
@@ -499,7 +501,6 @@ export interface LoopMonitorRule {
 }
 
 export interface LoopMonitorJudge {
-  sessionKey?: string;
   persona?: string;
   personaPath?: string;
   provider?: ProviderType;

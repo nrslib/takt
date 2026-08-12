@@ -24,7 +24,7 @@ import {
   resolveEffectiveProviderOptions,
   resolveDirectStepProviderOptions,
   mergeProviderOptions,
-  mergeStepProviderOptionsLayers,
+  resolveProfileScopedProviderOptionsLayers,
 } from '../providerOptions.js';
 import { loadPersonaPromptFromPath } from './agentLoader.js';
 import { loadWorkflowByIdentifier } from './workflowResolver.js';
@@ -79,6 +79,7 @@ interface PreviewProviderResolution extends ProviderModelResolutionContext {
   providerOptions: StepProviderOptions | undefined;
   providerOptionsSource: ReturnType<typeof resolveProviderOptionsWithTrace>['source'];
   providerOptionsOriginResolver: ReturnType<typeof resolveProviderOptionsWithTrace>['originResolver'];
+  profileScopedProviderOptions: boolean;
   /** runtime.yaml internal_agents の解決済み seat。合成ロールの表示を実行時と一致させる。 */
   internalAgentSeats: InternalAgentSeats | undefined;
   companionEnabled: boolean;
@@ -146,6 +147,7 @@ function resolvePreviewProviderInfo(
     providerRouting: resolution.providerRouting,
     personaProviders: resolution.personaProviders,
     tagConflictPolicy: resolution.tagConflictPolicy,
+    permissionMode: resolution.permissionMode,
   });
   if (resolution.autoRouting === undefined) {
     return currentProviderInfo;
@@ -236,6 +238,9 @@ function buildStepPreview(
     canEdit: isParallelParent ? false : resolvePreviewCanEdit(previewStep),
     ...(providerInfo?.provider !== undefined ? { provider: providerInfo.provider } : {}),
     ...(providerInfo?.model !== undefined ? { model: providerInfo.model } : {}),
+    ...(providerInfo?.permissionMode !== undefined
+      ? { permissionMode: providerInfo.permissionMode }
+      : {}),
     sessionKey: previewStep.sessionKey,
     requiresUserInput: previewStep.requiresUserInput,
     ...(context.parallelRole === undefined ? {} : { parallelRole: context.parallelRole }),
@@ -306,9 +311,11 @@ function resolvePreviewProviderResolution(
     personaProviders: env.personaProviders,
     providerRouting: env.providerRouting,
     tagConflictPolicy: env.tagConflictPolicy,
+    permissionMode: env.permissionMode,
     providerOptions: env.providerOptions,
     providerOptionsSource,
     providerOptionsOriginResolver,
+    profileScopedProviderOptions: runtimeEnvironment.providerConfigMode === 'runtime-v1',
     internalAgentSeats: env.internalAgents,
     companionEnabled: runtimeEnvironment.companionEnabled,
     ...(selectorResolution.applies
@@ -326,15 +333,25 @@ function resolvePreviewAllowedTools(
     providerInfo.providerOptions,
     resolveDirectStepProviderOptions(step),
   );
+  const profileLayers = resolveProfileScopedProviderOptionsLayers(
+    step,
+    {
+      providerRouting: resolution.providerRouting,
+      personaProviders: resolution.personaProviders,
+    },
+    providerInfo.providerSource,
+    resolution.profileScopedProviderOptions,
+  );
+  const baseProviderOptions = !resolution.profileScopedProviderOptions
+    || providerInfo.providerSource === resolution.providerSource
+    ? resolution.providerOptions
+    : undefined;
   const mergedProviderOptions = resolveEffectiveProviderOptions(
     resolution.providerOptionsSource,
     resolution.providerOptionsOriginResolver,
-    resolution.providerOptions,
+    baseProviderOptions,
     stepProviderOptions,
-    mergeStepProviderOptionsLayers(step, {
-      providerRouting: resolution.providerRouting,
-      personaProviders: resolution.personaProviders,
-    }),
+    mergeProviderOptions(...profileLayers.map((layer) => layer.options)),
   );
   const resolvedProvider = providerInfo.provider;
 

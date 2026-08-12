@@ -353,6 +353,13 @@ function selection(selectedIds: string[], rationale: string): ScenarioEntry {
   };
 }
 
+function parallelSelection(selectedIds: string[], rationale: string): ScenarioEntry {
+  return {
+    ...selection(selectedIds, rationale),
+    persona: 'dynamic-parallel-selector',
+  };
+}
+
 function acceptedAndMergedCompanionFinding(): ScenarioEntry[] {
   return [
     {
@@ -611,7 +618,7 @@ describe('experimental builtin workflow', () => {
         selection(['testing'], 'Testing implementation facets are required.'),
         responseForNext(implementation, 'implement', 'COMPLETE'),
         ...acceptedAndMergedCompanionFinding(),
-        selection(['architecture-review'], 'The first review round covers architecture changes.'),
+        parallelSelection(['architecture-review'], 'The first review round covers architecture changes.'),
         response(reviewerSuite, 'coding-review', 'coding-reviewer', 'needs_fix'),
         response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'needs_fix'),
         response(reviewerSuite, 'architecture-review', 'architecture-reviewer', 'needs_fix'),
@@ -625,7 +632,7 @@ describe('experimental builtin workflow', () => {
         responseForNext(remediation, 'fix-retry', 'fix-verifier'),
         ...acceptedAndMergedCompanionFinding(),
         responseForNext(remediation, 'fix-verifier', 'COMPLETE'),
-        selection(['security-review'], 'The second review round covers security changes.'),
+        parallelSelection(['security-review'], 'The second review round covers security changes.'),
         selection(['cli'], 'The TAKT local execution security knowledge matches the changed surface.'),
         response(reviewerSuite, 'coding-review', 'coding-reviewer', 'approved'),
         response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
@@ -637,7 +644,7 @@ describe('experimental builtin workflow', () => {
         responseForNext(remediation, 'fix', 'fix-verifier'),
         ...acceptedAndMergedCompanionFinding(),
         responseForNext(remediation, 'fix-verifier', 'COMPLETE'),
-        selection([], 'The fixed reviewers cover the final-gate remediation.'),
+        parallelSelection([], 'The fixed reviewers cover the final-gate remediation.'),
         response(reviewerSuite, 'coding-review', 'coding-reviewer', 'approved'),
         response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
         responseForNext(peerReview, 'review-adjudication', 'final-gate'),
@@ -726,7 +733,7 @@ describe('experimental builtin workflow', () => {
         responseForNext(core, 'replan', 'implement'),
         selection(['testing'], 'The replanned implementation still changes test boundaries.'),
         responseForNext(implementation, 'implement', 'COMPLETE'),
-        selection([], 'The fixed TAKT reviewers cover the changed path.'),
+        parallelSelection([], 'The fixed TAKT reviewers cover the changed path.'),
         response(reviewerSuite, 'coding-review', 'coding-reviewer', 'needs_fix'),
         response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'needs_fix'),
         responseForNext(peerReview, 'review-adjudication', 'remediation'),
@@ -736,7 +743,7 @@ describe('experimental builtin workflow', () => {
         responseForNext(core, 'replan', 'implement'),
         selection(['testing'], 'The second replanned implementation changes test boundaries.'),
         responseForNext(implementation, 'implement', 'COMPLETE'),
-        selection([], 'The fixed TAKT reviewers cover the replanned path.'),
+        parallelSelection([], 'The fixed TAKT reviewers cover the replanned path.'),
         response(reviewerSuite, 'coding-review', 'coding-reviewer', 'approved'),
         response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
         responseForNext(peerReview, 'review-adjudication', 'final-gate'),
@@ -744,7 +751,7 @@ describe('experimental builtin workflow', () => {
         responseForNext(core, 'replan', 'implement'),
         selection(['testing'], 'The final-gate replan still changes test boundaries.'),
         responseForNext(implementation, 'implement', 'COMPLETE'),
-        selection([], 'The fixed reviewers cover the final-gate replan.'),
+        parallelSelection([], 'The fixed reviewers cover the final-gate replan.'),
         response(reviewerSuite, 'coding-review', 'coding-reviewer', 'approved'),
         response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
         responseForNext(peerReview, 'review-adjudication', 'final-gate'),
@@ -862,7 +869,7 @@ describe('experimental builtin workflow', () => {
         selection(['testing'], 'Testing implementation facets are required.'),
         responseForNext(implementation, 'implement', 'COMPLETE'),
         ...acceptedAndMergedCompanionFinding(),
-        selection(['testing-review'], 'Testing review is required.'),
+        parallelSelection(['testing-review'], 'Testing review is required.'),
         response(reviewerSuite, 'coding-review', 'coding-reviewer', 'approved'),
         response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
         response(reviewerSuite, 'testing-review', 'testing-reviewer', 'approved'),

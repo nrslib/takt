@@ -1,7 +1,7 @@
 export type { StructuredCaller } from './structured-caller/contracts.js';
 export { ProviderNeutralStructuredCaller } from './structured-caller/provider-neutral-structured-caller.js';
 export {
-  executeFreshAgent,
+  executeStructuredTextAgent,
   StructuredAgentContractError,
   executeStructuredAgent,
   type StructuredAgentCallOptions,

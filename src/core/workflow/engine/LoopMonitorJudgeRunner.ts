@@ -7,7 +7,6 @@ import type {
   WorkflowState,
   WorkflowStep,
 } from '../../models/types.js';
-import { providerSupportsClaudeAllowedTools } from '../../../infra/providers/provider-capabilities.js';
 import { resolveLoopMonitorJudgeProviderModel } from '../provider-resolution.js';
 import type { InternalAgentSeats } from '../../models/config-types.js';
 import {
@@ -65,7 +64,7 @@ export class LoopMonitorJudgeRunner {
     fallbackNextStep: string,
   ): Promise<string> {
     const resolvedRuntime = this.resolveJudgeRuntime(monitor, cycleCount, triggeringStep, triggeringRuntime);
-    const judgeStep = this.createJudgeStep(monitor, cycleCount, resolvedRuntime.providerInfo);
+    const judgeStep = this.createJudgeStep(monitor, cycleCount);
     log.info('Running loop monitor judge', {
       cycle: monitor.cycle,
       cycleCount,
@@ -140,15 +139,13 @@ export class LoopMonitorJudgeRunner {
   private createJudgeStep(
     monitor: LoopMonitorConfig,
     cycleCount: number,
-    providerInfo: StepProviderInfo | undefined,
   ): WorkflowStep {
     const instruction = (monitor.judge.instruction ?? this.buildDefaultInstruction(monitor, cycleCount))
       .replace(/\{cycle_count\}/g, String(cycleCount));
-    const defaultProviderOptions = this.buildDefaultProviderOptions(providerInfo?.provider);
-
     return {
       name: loopJudgeStepName(monitor.cycle),
-      sessionKey: monitor.judge.sessionKey,
+      engineSynthesized: true,
+      internalFreshSession: true,
       persona: monitor.judge.persona,
       personaPath: monitor.judge.personaPath,
       personaDisplayName: LOOP_JUDGE_ROUTING_KEY,
@@ -156,7 +153,6 @@ export class LoopMonitorJudgeRunner {
       ...loopJudgeProviderFields(monitor.judge, this.deps.internalAgentSeats),
       edit: false,
       providerOptions: loopJudgeProviderOptions({
-        defaults: defaultProviderOptions,
         judge: monitor.judge,
         seats: this.deps.internalAgentSeats,
       }),
@@ -179,10 +175,8 @@ export class LoopMonitorJudgeRunner {
    * 9 時間走り続けた）。そのため runtime を渡さずに judge ステップ単体の通常解決を先に取り、
    * そこに明示指定が無かった場合だけトリガー元へフォールバックする。
    *
-   * 通常解決の呼び出しには provider 確定後にしか作れる defaultProviderOptions を含む
-   * ステップは使えない（provider を決めるための解決に、決まった後の値が要る循環になる）。
-   * そのため providerInfo なしの下書きステップで解決だけ行い、確定した providerInfo で
-   * createJudgeStep を呼び直して本物のステップを作る。
+   * judge ステップ自体の通常解決とトリガー元の解決を分離し、最後に共通 resolver で
+   * 優先順位を決める。
    */
   private resolveJudgeRuntime(
     monitor: LoopMonitorConfig,
@@ -190,7 +184,7 @@ export class LoopMonitorJudgeRunner {
     triggeringStep: WorkflowStep,
     triggeringRuntime?: RuntimeStepResolution,
   ): RuntimeStepResolution {
-    const draftJudgeStep = this.createJudgeStep(monitor, cycleCount, undefined);
+    const draftJudgeStep = this.createJudgeStep(monitor, cycleCount);
     const judgeProviderInfo = this.deps.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(draftJudgeStep);
     const triggeringProviderInfo = this.deps.optionsBuilder.resolveStepProviderModel(
       triggeringStep,
@@ -202,18 +196,6 @@ export class LoopMonitorJudgeRunner {
       triggeringProviderInfo,
     });
     return { providerInfo };
-  }
-
-  private buildDefaultProviderOptions(provider: StepProviderInfo['provider']) {
-    if (!providerSupportsClaudeAllowedTools(provider)) {
-      return undefined;
-    }
-
-    return {
-      claude: {
-        allowedTools: ['Read', 'Glob', 'Grep'],
-      },
-    };
   }
 
   private buildDefaultInstruction(monitor: LoopMonitorConfig, cycleCount: number): string {

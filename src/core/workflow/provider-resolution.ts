@@ -45,6 +45,7 @@ export interface StepProviderModelOutput {
   providerSource?: ProviderResolutionSource;
   modelSource?: ProviderResolutionSource;
   permissionMode?: import('../models/types.js').PermissionMode;
+  providerOptions?: import('../models/workflow-types.js').StepProviderOptions;
   /**
    * `escalate` target declared by the runtime.yaml profile that supplied the provider.
    * A profile always carries provider and model together, so the provider-winning layer is
@@ -82,6 +83,8 @@ export interface LoopMonitorJudgeProviderModelOutput {
   model: string | undefined;
   providerSource?: ProviderResolutionSource;
   modelSource?: ProviderResolutionSource;
+  permissionMode?: import('../models/types.js').PermissionMode;
+  providerOptions?: import('../models/workflow-types.js').StepProviderOptions;
 }
 
 export interface AgentProviderModelInput {
@@ -526,5 +529,15 @@ export function resolveLoopMonitorJudgeProviderModel(
     modelSource: modelIsExplicit
       ? judgeInfo.modelSource
       : (providerIsExplicit ? judgeInfo.providerSource : input.triggeringProviderInfo.modelSource),
+    ...(providerIsExplicit
+      ? judgeInfo.permissionMode === undefined ? {} : { permissionMode: judgeInfo.permissionMode }
+      : input.triggeringProviderInfo.permissionMode === undefined
+        ? {}
+        : { permissionMode: input.triggeringProviderInfo.permissionMode }),
+    ...(providerIsExplicit
+      ? judgeInfo.providerOptions === undefined ? {} : { providerOptions: judgeInfo.providerOptions }
+      : input.triggeringProviderInfo.providerOptions === undefined
+        ? {}
+        : { providerOptions: input.triggeringProviderInfo.providerOptions }),
   };
 }

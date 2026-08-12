@@ -280,7 +280,8 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
       .mockResolvedValueOnce({
         persona: 'conductor',
         status: 'done',
-        content: 'no matching tag',
+        content: '',
+        structuredOutput: { content: 'no matching tag' },
         timestamp: new Date(),
       })
       .mockRejectedValueOnce(new Error('ai judge attempt rejected'));

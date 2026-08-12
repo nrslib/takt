@@ -143,8 +143,8 @@ function providerCalls(): Array<{ resolvedProvider?: string; resolvedModel?: str
   return vi.mocked(runAgent).mock.calls.map((call) => {
     const options = call[2];
     return {
-      resolvedProvider: options.resolvedProvider,
-      resolvedModel: options.resolvedModel,
+      resolvedProvider: options.resolvedExecution?.provider ?? options.resolvedProvider,
+      resolvedModel: options.resolvedExecution?.model ?? options.resolvedModel,
       sessionId: options.sessionId,
     };
   });

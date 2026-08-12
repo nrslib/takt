@@ -67,18 +67,17 @@ export function loopJudgeProviderFields(
 }
 
 /**
- * judge ステップの providerOptions を合成する。弱い順に「provider 既定 → workflow の
- * judge 設定 → seat の profile options」で重ねる。provider/model 指定と同じく、
+ * judge ステップの providerOptions を合成する。弱い順に「workflow の judge 設定 →
+ * seat の profile options」で重ねる。provider/model 指定と同じく、
  * 合成順をここ1箇所に固定する。
  */
 export function loopJudgeProviderOptions(input: {
-  readonly defaults: StepProviderOptions | undefined;
   readonly judge: Pick<LoopMonitorJudge, 'providerOptions'>;
   readonly seats: InternalAgentSeats | undefined;
 }): StepProviderOptions | undefined {
   const seat = internalAgentSeatOverride(input.seats?.loopJudge);
   return mergeProviderOptions(
-    mergeProviderOptions(input.defaults, input.judge.providerOptions),
+    input.judge.providerOptions,
     seat?.providerOptions,
   );
 }

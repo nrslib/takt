@@ -22,6 +22,7 @@ function toMockOptions(options: ProviderCallOptions): MockCallOptions {
     model: options.model,
     onStream: options.onStream,
     allowedTools: options.allowedTools,
+    outputSchema: options.outputSchema,
   };
 }
 

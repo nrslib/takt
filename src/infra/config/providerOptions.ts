@@ -616,6 +616,40 @@ export function mergeStepProviderOptionsLayers(
   );
 }
 
+/**
+ * Runtime profile options are identity-scoped: only the profile that supplied the winning
+ * provider contributes options. Legacy configuration keeps its historical layered merge.
+ */
+export function resolveProfileScopedProviderOptionsLayers(
+  step: WorkflowStep,
+  context: StepProviderOptionsLayerContext,
+  resolvedProviderSource: ProviderResolutionSource | undefined,
+  profileScoped: boolean,
+): ProviderOptionsLayer[] {
+  const layers = resolveStepProviderOptionsLayers(step, context);
+  if (!profileScoped) {
+    return layers;
+  }
+  const nonProfileLayers = layers.filter((layer) => (
+    layer.source === 'capabilities' || layer.source === 'workflow'
+  ));
+  if (resolvedProviderSource === 'provider_routing.tags') {
+    const winningTag = [...(step.tags ?? [])].reverse().find((tag) => (
+      context.providerRouting?.tags?.[tag]?.provider !== undefined
+    ));
+    const options = winningTag === undefined
+      ? undefined
+      : context.providerRouting?.tags?.[winningTag]?.providerOptions;
+    return options === undefined
+      ? nonProfileLayers
+      : [...nonProfileLayers, { source: 'provider_routing.tags', options }];
+  }
+  return [
+    ...nonProfileLayers,
+    ...layers.filter((layer) => layer.source === resolvedProviderSource),
+  ];
+}
+
 export function resolveEffectiveProviderOptions(
   source: ProviderOptionsSource | undefined,
   originResolver: ProviderOptionsOriginResolver | undefined,

@@ -741,7 +741,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['session_key'],
-        message: 'session_key is only supported on agent steps, parallel sub-steps, and loop_monitors.judge',
+        message: 'session_key is only supported on agent steps and parallel sub-steps',
       });
     }
 
@@ -961,7 +961,7 @@ export const LoopMonitorRuleSchema = z.object({
 
 /** Loop monitor judge schema */
 export const LoopMonitorJudgeSchema = z.object({
-  session_key: z.string().trim().min(1).optional(),
+  session_key: z.never({ message: 'session_key is not supported on loop_monitors.judge; judges always use a fresh session' }).optional(),
   persona: z.string().optional(),
   provider: ProviderReferenceSchema.optional(),
   model: z.string().min(1).nullable().optional(),

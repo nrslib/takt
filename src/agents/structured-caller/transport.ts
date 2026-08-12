@@ -10,7 +10,7 @@ import { executeAgent } from '../agent-usecases.js';
 import { parseStructuredOutputObject } from './shared.js';
 
 export interface StructuredAgentResolution {
-  readonly provider?: ProviderType;
+  readonly provider: ProviderType;
   readonly model?: string;
   readonly providerOptions?: StepProviderOptions;
   readonly permissionMode?: PermissionMode;
@@ -53,8 +53,18 @@ export class StructuredAgentContractError extends Error {
   }
 }
 
+export function requireStructuredAgentProvider(
+  provider: ProviderType | undefined,
+  name: string,
+): ProviderType {
+  if (provider === undefined) {
+    throw new Error(`Structured agent "${name}" requires a resolved provider`);
+  }
+  return provider;
+}
+
 /** Fresh-session provider-neutral transport shared by every TAKT-owned synthetic agent. */
-export async function executeFreshAgent(
+async function executeFreshAgent(
   instruction: string,
   options: StructuredAgentCallOptions,
 ): Promise<AgentResponse> {
@@ -72,14 +82,12 @@ export async function executeFreshAgent(
     ...(options.systemPrompt === undefined
       ? {}
       : { internalSystemPrompt: options.systemPrompt, internalAgentName: options.name }),
-    resolvedProvider: options.resolution.provider,
-    resolvedModel: options.resolution.model,
-    ...(options.resolution.providerOptions === undefined
-      ? {}
-      : { resolvedProviderOptions: options.resolution.providerOptions }),
-    ...(options.resolution.permissionMode === undefined
-      ? {}
-      : { permissionMode: options.resolution.permissionMode }),
+    resolvedExecution: {
+      provider: options.resolution.provider,
+      model: options.resolution.model,
+      providerOptions: options.resolution.providerOptions,
+      permissionMode: options.resolution.permissionMode,
+    },
     ...(options.allowedTools !== undefined
       ? { allowedTools: options.allowedTools }
       : profileAllowedTools === undefined ? {} : { allowedTools: profileAllowedTools }),
@@ -95,6 +103,27 @@ export async function executeFreshAgent(
     ...(options.outputSchema === undefined ? {} : { outputSchema: options.outputSchema }),
     sessionId: undefined,
   });
+}
+
+const STRUCTURED_TEXT_SCHEMA = {
+  type: 'object',
+  properties: { content: { type: 'string' } },
+  required: ['content'],
+  additionalProperties: false,
+} as const;
+
+/** Typed text-result adapter for synthetic agents whose domain output remains natural language. */
+export async function executeStructuredTextAgent(
+  instruction: string,
+  options: StructuredAgentCallOptions,
+): Promise<AgentResponse> {
+  const response = await executeStructuredAgent<{ content: string }>(
+    instruction,
+    STRUCTURED_TEXT_SCHEMA,
+    options,
+  );
+  const { structuredOutput, ...domainResponse } = response;
+  return { ...domainResponse, content: structuredOutput.content };
 }
 
 /**

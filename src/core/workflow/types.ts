@@ -593,6 +593,10 @@ export interface WorkflowEngineOptions {
   rateLimitFallback?: RateLimitFallbackConfig;
   /** Resolved provider options */
   providerOptions?: StepProviderOptions;
+  /** Provider source whose runtime profile supplied providerOptions; absent for shared config options. */
+  providerOptionsProviderSource?: ProviderResolutionSource;
+  /** Explicit workflow_call provider_options inherited by every child step. */
+  workflowCallProviderOptions?: StepProviderOptions;
   /** Permission mode from the runtime defaults profile. */
   providerPermissionMode?: PermissionMode;
   selectorProvider?: SelectorProviderInfo;

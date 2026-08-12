@@ -153,7 +153,6 @@ export function createWorkRequirementEstimator(options: WorkRequirementEstimator
               providerOptions: options.providerOptions,
               permissionMode: options.permissionMode,
             },
-            maxTurns: 1,
             abortSignal: abortScope.signal,
             language: options.language,
             childProcessEnv: options.childProcessEnv,

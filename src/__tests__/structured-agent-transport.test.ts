@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { executeStructuredAgent } from '../agents/structured-caller/transport.js';
+import {
+  executeStructuredAgent,
+  requireStructuredAgentProvider,
+} from '../agents/structured-caller/transport.js';
 import { executeAgent } from '../agents/agent-usecases.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({ executeAgent: vi.fn() }));
@@ -35,12 +38,16 @@ describe('executeStructuredAgent', () => {
     expect(vi.mocked(executeAgent).mock.calls[0]?.[2]).toEqual(expect.objectContaining({
       cwd: '/repo',
       sessionId: undefined,
-      resolvedProvider: 'mock',
+      resolvedExecution: {
+        provider: 'mock',
+        model: undefined,
+        providerOptions: undefined,
+        permissionMode: undefined,
+      },
       outputSchema: schema,
     }));
     const options = vi.mocked(executeAgent).mock.calls[0]?.[2];
     expect(options).not.toHaveProperty('permissionMode');
-    expect(options).not.toHaveProperty('resolvedProviderOptions');
     expect(options).not.toHaveProperty('allowedTools');
     expect(options).not.toHaveProperty('mcpServers');
     expect(options).not.toHaveProperty('bypassPermissions');
@@ -73,15 +80,17 @@ describe('executeStructuredAgent', () => {
     });
 
     expect(vi.mocked(executeAgent).mock.calls[0]?.[2]).toEqual(expect.objectContaining({
-      resolvedProvider: 'claude',
-      resolvedModel: 'claude-review',
-      resolvedProviderOptions: providerOptions,
-      permissionMode: 'readonly',
+      resolvedExecution: {
+        provider: 'claude',
+        model: 'claude-review',
+        providerOptions,
+        permissionMode: 'readonly',
+      },
       allowedTools: ['Read', 'Grep'],
     }));
   });
 
-  it('preserves omitted provider options as undefined so normal config resolution remains active', async () => {
+  it('preserves omitted provider options as explicit undefined in resolved execution', async () => {
     vi.mocked(executeAgent).mockResolvedValue({
       persona: 'selector',
       status: 'done',
@@ -96,7 +105,14 @@ describe('executeStructuredAgent', () => {
       resolution: { provider: 'mock', providerOptions: undefined },
     });
 
-    expect(vi.mocked(executeAgent).mock.calls[0]?.[2]).not.toHaveProperty('resolvedProviderOptions');
+    expect(vi.mocked(executeAgent).mock.calls[0]?.[2]?.resolvedExecution?.providerOptions)
+      .toBeUndefined();
+  });
+
+  it('fails fast when the caller has not resolved a provider', () => {
+    expect(() => requireStructuredAgentProvider(undefined, 'judge'))
+      .toThrow('requires a resolved provider');
+    expect(executeAgent).not.toHaveBeenCalled();
   });
 
   it('uses the prompt JSON fallback and validates providers without native structured output', async () => {

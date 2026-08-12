@@ -10,8 +10,7 @@ import {
   resolveEffectiveProviderOptions,
   resolveEffectiveTeamLeaderPartProviderOptions,
   resolveDirectStepProviderOptions,
-  resolveStepProviderOptionsLayers,
-  mergeStepProviderOptionsLayers,
+  resolveProfileScopedProviderOptionsLayers,
   mergeProviderOptions,
   resolveProviderOptionsSources,
   type ProviderOptionsLayer,
@@ -122,10 +121,10 @@ export class OptionsBuilder {
       if (runtime.providerInfoResolution === 'fully_resolved') {
         return runtime.providerInfo;
       }
-      const providerOptions = this.resolveMergedProviderOptions(step, runtime.providerInfo.provider, runtime);
+      const providerOptions = this.resolveMergedProviderOptions(step, runtime.providerInfo, runtime);
       const providerOptionsSources = this.resolveProviderOptionsSourcesForRuntime(step, runtime)
         ?? runtime.providerInfo.providerOptionsSources
-        ?? this.resolveProviderOptionsSourcesForStep(step);
+        ?? this.resolveProviderOptionsSourcesForStep(step, runtime.providerInfo.providerSource);
       return {
         ...runtime.providerInfo,
         ...(providerOptions !== undefined ? { providerOptions } : {}),
@@ -146,8 +145,8 @@ export class OptionsBuilder {
       escalation: this.engineOptions.providerEscalation,
       permissionMode: this.engineOptions.providerPermissionMode,
     });
-    const providerOptions = this.resolveMergedProviderOptions(step, resolved.provider, runtime);
-    const providerOptionsSources = this.resolveProviderOptionsSourcesForStep(step);
+    const providerOptions = this.resolveMergedProviderOptions(step, resolved, runtime);
+    const providerOptionsSources = this.resolveProviderOptionsSourcesForStep(step, resolved.providerSource);
     return {
       provider: resolved.provider,
       providerSource: resolved.providerSource,
@@ -183,14 +182,22 @@ export class OptionsBuilder {
     };
   }
 
-  private resolveProviderOptionsSourcesForStep(step: WorkflowStep) {
+  private resolveProviderOptionsSourcesForStep(
+    step: WorkflowStep,
+    resolvedProviderSource: StepProviderInfo['providerSource'],
+  ) {
+    const baseProviderOptions = this.resolveProfileScopedBaseProviderOptions(resolvedProviderSource);
+    const profileLayers = this.resolveProfileScopedProviderOptionLayers(step, resolvedProviderSource);
+    const tracedLayers = [
+      ...(this.engineOptions.workflowCallProviderOptions === undefined
+        ? []
+        : [{ source: 'workflow_call' as const, options: this.engineOptions.workflowCallProviderOptions }]),
+      ...profileLayers,
+    ];
     const providerOptionsSources = resolveProviderOptionsSources(
       resolveDirectStepProviderOptions(step),
-      resolveStepProviderOptionsLayers(step, {
-        providerRouting: this.engineOptions.providerRouting,
-        personaProviders: this.engineOptions.personaProviders,
-      }),
-      this.engineOptions.providerOptions,
+      tracedLayers,
+      baseProviderOptions,
       this.engineOptions.providerOptionsOriginResolver,
       this.engineOptions.providerOptionsSource,
     );
@@ -207,16 +214,18 @@ export class OptionsBuilder {
     if (!runtime.providerInfo?.providerOptions || !isAutoProviderOptionsSource(runtimeSource)) {
       return undefined;
     }
+    const baseProviderOptions = this.resolveProfileScopedBaseProviderOptions(runtimeSource);
+    const profileLayers = this.resolveProfileScopedProviderOptionLayers(step, runtimeSource);
     const providerOptionsSources = resolveProviderOptionsSources(
       resolveDirectStepProviderOptions(step),
       [
-        ...resolveStepProviderOptionsLayers(step, {
-          providerRouting: this.engineOptions.providerRouting,
-          personaProviders: this.engineOptions.personaProviders,
-        }),
+        ...(this.engineOptions.workflowCallProviderOptions === undefined
+          ? []
+          : [{ source: 'workflow_call' as const, options: this.engineOptions.workflowCallProviderOptions }]),
+        ...profileLayers,
         { source: runtimeSource, options: runtime.providerInfo.providerOptions } satisfies ProviderOptionsLayer,
       ],
-      this.engineOptions.providerOptions,
+      baseProviderOptions,
       this.engineOptions.providerOptionsOriginResolver,
       this.engineOptions.providerOptionsSource,
     );
@@ -227,18 +236,24 @@ export class OptionsBuilder {
 
   private resolveMergedProviderOptions(
     step: WorkflowStep,
-    resolvedProvider: StepProviderInfo['provider'],
+    resolvedProviderInfo: Pick<StepProviderInfo, 'provider' | 'providerSource'>,
     runtime?: RuntimeStepResolution,
   ): StepProviderOptions | undefined {
     if (runtime?.providerInfoResolution === 'fully_resolved') {
       return runtime.providerInfo?.providerOptions;
     }
-    const middleProviderOptions = mergeStepProviderOptionsLayers(step, {
-      providerRouting: this.engineOptions.providerRouting,
-      personaProviders: this.engineOptions.personaProviders,
-    });
+    const middleProviderOptions = mergeProviderOptions(
+      this.engineOptions.workflowCallProviderOptions,
+      ...this.resolveProfileScopedProviderOptionLayers(
+        step,
+        resolvedProviderInfo.providerSource,
+      ).map((layer) => layer.options),
+    );
     const directStepProviderOptions = resolveDirectStepProviderOptions(step);
     const runtimeProviderOptions = runtime?.providerInfo?.providerOptions;
+    const baseProviderOptions = this.resolveProfileScopedBaseProviderOptions(
+      resolvedProviderInfo.providerSource,
+    );
 
     if (runtimeProviderOptions && !runtime.teamLeaderPart) {
       const stepProviderOptions = mergeRuntimeAndDirectStepProviderOptions(
@@ -249,7 +264,7 @@ export class OptionsBuilder {
       return resolveEffectiveProviderOptions(
         this.engineOptions.providerOptionsSource,
         this.engineOptions.providerOptionsOriginResolver,
-        this.engineOptions.providerOptions,
+        baseProviderOptions,
         stepProviderOptions,
         middleProviderOptions,
       );
@@ -264,9 +279,9 @@ export class OptionsBuilder {
       return resolveEffectiveTeamLeaderPartProviderOptions(
         this.engineOptions.providerOptionsSource,
         this.engineOptions.providerOptionsOriginResolver,
-        this.engineOptions.providerOptions,
+        baseProviderOptions,
         stepProviderOptions,
-        resolvedProvider,
+        resolvedProviderInfo.provider,
         runtime.teamLeaderPart.partAllowedTools,
         middleProviderOptions,
       );
@@ -275,9 +290,34 @@ export class OptionsBuilder {
     return resolveEffectiveProviderOptions(
       this.engineOptions.providerOptionsSource,
       this.engineOptions.providerOptionsOriginResolver,
-      this.engineOptions.providerOptions,
+      baseProviderOptions,
       directStepProviderOptions,
       middleProviderOptions,
+    );
+  }
+
+  private resolveProfileScopedBaseProviderOptions(
+    resolvedProviderSource: StepProviderInfo['providerSource'],
+  ): StepProviderOptions | undefined {
+    const profileSource = this.engineOptions.providerOptionsProviderSource;
+    return profileSource === undefined || profileSource === resolvedProviderSource
+      ? this.engineOptions.providerOptions
+      : undefined;
+  }
+
+  private resolveProfileScopedProviderOptionLayers(
+    step: WorkflowStep,
+    resolvedProviderSource: StepProviderInfo['providerSource'],
+  ): ProviderOptionsLayer[] {
+    const context = {
+      providerRouting: this.engineOptions.providerRouting,
+      personaProviders: this.engineOptions.personaProviders,
+    };
+    return resolveProfileScopedProviderOptionsLayers(
+      step,
+      context,
+      resolvedProviderSource,
+      this.engineOptions.providerOptionsProviderSource !== undefined,
     );
   }
 
@@ -294,7 +334,7 @@ export class OptionsBuilder {
     const { provider: resolvedProvider, model: resolvedModel } = providerInfo;
 
     const providerOptions = mergedProviderOptions
-      ?? this.resolveMergedProviderOptions(step, resolvedProvider, runtime);
+      ?? this.resolveMergedProviderOptions(step, providerInfo, runtime);
     const workflowMeta: WorkflowMeta = {
       workflowName: this.getWorkflowName(),
       workflowDescription: this.getWorkflowDescription(),
@@ -419,11 +459,12 @@ export class OptionsBuilder {
 
   /** Build RunAgentOptions for Phase 1 (main execution) */
   buildAgentOptions(step: WorkflowStep, runtime?: RuntimeStepResolution): RunAgentOptions {
+    const providerInfo = this.resolveStepProviderModel(step, runtime);
     const {
       provider: resolvedProvider,
       model: resolvedModel,
-    } = this.resolveStepProviderModel(step, runtime);
-    const mergedProviderOptions = this.resolveMergedProviderOptions(step, resolvedProvider, runtime);
+    } = providerInfo;
+    const mergedProviderOptions = this.resolveMergedProviderOptions(step, providerInfo, runtime);
 
     assertProviderResolvedForCapabilitySensitiveOptions(resolvedProvider, {
       stepName: step.name,

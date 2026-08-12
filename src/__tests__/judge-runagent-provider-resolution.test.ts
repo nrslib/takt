@@ -82,8 +82,10 @@ describe('judge runAgent provider/model resolution (#556)', () => {
         'judge prompt',
         expect.objectContaining({
           cwd: '/repo',
-          resolvedProvider: 'codex',
-          resolvedModel: 'gpt-5.2-codex',
+          resolvedExecution: expect.objectContaining({
+            provider: 'codex',
+            model: 'gpt-5.2-codex',
+          }),
         }),
       );
     });
@@ -91,7 +93,7 @@ describe('judge runAgent provider/model resolution (#556)', () => {
 
   describe('runTagJudgeStage', () => {
     it('Given resolvedProvider and resolvedModel When tag stage runs Then runAgent receives them', async () => {
-      vi.mocked(runAgent).mockResolvedValue(doneResponse('[REVIEW:1]'));
+      vi.mocked(runAgent).mockResolvedValue(doneResponse('', { content: '[REVIEW:1]' }));
 
       const runOpts: TagJudgeRunOptions & WithResolved = {
         cwd: '/repo',
@@ -111,8 +113,10 @@ describe('judge runAgent provider/model resolution (#556)', () => {
         'tag instruction',
         expect.objectContaining({
           cwd: '/repo',
-          resolvedProvider: 'codex',
-          resolvedModel: 'gpt-5.2-codex',
+          resolvedExecution: expect.objectContaining({
+            provider: 'codex',
+            model: 'gpt-5.2-codex',
+          }),
         }),
       );
     });
@@ -121,7 +125,7 @@ describe('judge runAgent provider/model resolution (#556)', () => {
   describe('judgeStatus', () => {
     it('Given resolvedProvider and resolvedModel When all three stages invoke runAgent Then each call includes them', async () => {
       vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('no structured step'));
-      vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('no tag'));
+      vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('', { content: 'no tag' }));
       vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('ignored', { matched_index: 2, reason: 'second condition' }));
 
       await judgeStatus('structured', 'tag', [
@@ -135,8 +139,10 @@ describe('judge runAgent provider/model resolution (#556)', () => {
         'conductor',
         'structured',
         expect.objectContaining({
-          resolvedProvider: 'codex',
-          resolvedModel: 'gpt-5.2-codex',
+          resolvedExecution: expect.objectContaining({
+            provider: 'codex',
+            model: 'gpt-5.2-codex',
+          }),
         }),
       );
       expect(runAgent).toHaveBeenNthCalledWith(
@@ -144,8 +150,10 @@ describe('judge runAgent provider/model resolution (#556)', () => {
         'conductor',
         'tag',
         expect.objectContaining({
-          resolvedProvider: 'codex',
-          resolvedModel: 'gpt-5.2-codex',
+          resolvedExecution: expect.objectContaining({
+            provider: 'codex',
+            model: 'gpt-5.2-codex',
+          }),
         }),
       );
       expect(runAgent).toHaveBeenNthCalledWith(
@@ -153,8 +161,10 @@ describe('judge runAgent provider/model resolution (#556)', () => {
         undefined,
         'judge prompt',
         expect.objectContaining({
-          resolvedProvider: 'codex',
-          resolvedModel: 'gpt-5.2-codex',
+          resolvedExecution: expect.objectContaining({
+            provider: 'codex',
+            model: 'gpt-5.2-codex',
+          }),
         }),
       );
     });

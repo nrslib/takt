@@ -34,6 +34,11 @@ import type {
 } from '../types.js';
 import type { ProviderUsageSnapshot } from '../../models/response.js';
 import { executeAgent } from '../../../agents/agent-usecases.js';
+import {
+  executeStructuredTextAgent,
+  requireStructuredAgentProvider,
+  StructuredAgentContractError,
+} from '../../../agents/structured-caller/transport.js';
 import { InstructionBuilder } from '../instruction/InstructionBuilder.js';
 import type {
   DynamicFacetSelectionContext,
@@ -991,7 +996,9 @@ export class StepExecutor {
     const promptResolvedAttempts = new Set<number>();
     const phase1Result = await runPhase1WithEmptyRecovery({
       instruction: phase1Instruction,
-      initialSessionId: agentOptions.sessionId,
+      initialSessionId: executableStep.internalFreshSession === true
+        ? undefined
+        : agentOptions.sessionId,
       retryProviderErrorFresh: false,
       execute: async (attempt) => {
         const result = await executeObservedPhase1Attempt({
@@ -1005,14 +1012,54 @@ export class StepExecutor {
           workflowStack: this.deps.getCurrentWorkflowStack?.(),
           sanitizeText: this.deps.sanitizeObservabilityText,
           providerInfo,
-          execute: (attemptInstruction, sessionId, onPromptResolved) => executeAgent(
-            executableStep.persona,
-            attemptInstruction,
-            {
-              ...agentOptions,
-              sessionId,
-              onPromptResolved,
-            },
+          execute: (attemptInstruction, sessionId, onPromptResolved) => (
+            executableStep.internalFreshSession === true
+              ? executeStructuredTextAgent(attemptInstruction, {
+                  name: executableStep.name,
+                  cwd: agentOptions.cwd,
+                  projectCwd: agentOptions.projectCwd,
+                  persona: executableStep.persona,
+                  personaPath: agentOptions.personaPath,
+                  workflowBundleResourceRoot: agentOptions.workflowBundleResourceRoot,
+                  resolution: {
+                    provider: requireStructuredAgentProvider(
+                      providerInfo.provider,
+                      executableStep.name,
+                    ),
+                    model: providerInfo.model,
+                    providerOptions: providerInfo.providerOptions,
+                    permissionMode: agentOptions.permissionMode,
+                  },
+                  language: agentOptions.language,
+                  abortSignal: agentOptions.abortSignal,
+                  childProcessEnv: agentOptions.childProcessEnv,
+                  onStream: agentOptions.onStream,
+                  onPromptResolved,
+                  workflowMeta: agentOptions.workflowMeta,
+                }).then((response) => {
+                  const freshResponse = { ...response };
+                  delete freshResponse.sessionId;
+                  return freshResponse;
+                }).catch((error: unknown) => {
+                  if (
+                    !(error instanceof StructuredAgentContractError)
+                    || error.response.status === 'done'
+                  ) {
+                    throw error;
+                  }
+                  const failedResponse = { ...error.response };
+                  delete failedResponse.sessionId;
+                  return failedResponse;
+                })
+              : executeAgent(
+                  executableStep.persona,
+                  attemptInstruction,
+                  {
+                    ...agentOptions,
+                    sessionId,
+                    onPromptResolved,
+                  },
+                )
           ),
           onPhaseStart: this.deps.onPhaseStart,
         });
@@ -1022,6 +1069,9 @@ export class StepExecutor {
         return result.response;
       },
       discardSession: (sessionId) => {
+        if (executableStep.internalFreshSession === true) {
+          return;
+        }
         invalidatePersonaSessionIfExpected(
           state,
           sessionKey,
@@ -1069,7 +1119,7 @@ export class StepExecutor {
       );
     }
     response = normalizedPhase1.response;
-    if (response.sessionId !== undefined) {
+    if (executableStep.internalFreshSession !== true && response.sessionId !== undefined) {
       updatePersonaSession(sessionKey, response.sessionId);
     }
     completeObservedPhase1Attempt({

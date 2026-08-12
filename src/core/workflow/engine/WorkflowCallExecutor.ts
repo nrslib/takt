@@ -567,8 +567,12 @@ export class WorkflowCallExecutor {
       // Explicitly overwrite the inherited value, including with undefined. The
       // permission belongs to the profile that supplied childProviderInfo.provider.
       providerPermissionMode: request.childProviderInfo.permissionMode,
-      providerOptions: mergeProviderOptions(
-        request.parentProviderOptions,
+      providerOptions: request.parentProviderOptions,
+      providerOptionsProviderSource: options.providerOptionsProviderSource === undefined
+        ? undefined
+        : request.childProviderInfo.providerSource,
+      workflowCallProviderOptions: mergeProviderOptions(
+        options.workflowCallProviderOptions,
         request.step.overrides?.providerOptions,
       ),
       autoRouting: childAutoRouting,

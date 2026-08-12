@@ -129,6 +129,7 @@ export interface WorkflowExecutionBootstrap {
   companionProviders: Readonly<Record<string, ProviderRoutingEntry>>;
   providerRoutingTagConflictPolicy: TagRoutingConflictPolicy;
   providerOptions: WorkflowExecutionOptions['providerOptions'];
+  providerOptionsProviderSource: ProviderResolutionSource | undefined;
   providerPermissionMode: PermissionMode | undefined;
   effectiveWorkflowConfig: WorkflowConfig;
   autoStrategyOverride: WorkflowExecutionOptions['autoStrategy'];
@@ -740,6 +741,9 @@ export async function createWorkflowExecutionBootstrap(
     companionProviders,
     providerRoutingTagConflictPolicy,
     providerOptions: effectiveProviderOptions,
+    providerOptionsProviderSource: resolvedRuntimeEnvironment.providerConfigMode === 'runtime-v1'
+      ? currentProviderSource
+      : undefined,
     providerPermissionMode: providerEnvironment.permissionMode,
     effectiveWorkflowConfig,
     autoStrategyOverride,

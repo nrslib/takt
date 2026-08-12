@@ -49,12 +49,20 @@ import {
   makeResponse,
   makeStep,
   makeRule,
-  mockRunAgentSequence,
+  mockRunAgentSequence as mockBaseRunAgentSequence,
   mockRuleEvaluationSequence,
   createTestTmpDir,
   applyDefaultMocks,
   cleanupWorkflowEngine,
 } from './engine-test-helpers.js';
+
+function mockRunAgentSequence(responses: ReturnType<typeof makeResponse>[]): void {
+  mockBaseRunAgentSequence(responses.map((response) => (
+    response.persona === 'supervisor' && response.status === 'done'
+      ? { ...response, structuredOutput: { content: response.content } }
+      : response
+  )));
+}
 
 function loopJudgeRules(): LoopMonitorRule[] {
   return [
@@ -142,7 +150,11 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
           rules: loopJudgeRules(),
         },
       });
-      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        provider: 'mock',
+        model: 'mock-model',
+      });
 
       mockRunAgentSequence([
         // implement
@@ -190,7 +202,11 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
 
     it('should run judge and continue loop when cycle is healthy', async () => {
       const config = buildConfigWithLoopMonitor(2);
-      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        provider: 'mock',
+        model: 'mock-model',
+      });
 
       mockRunAgentSequence([
         // implement
@@ -232,7 +248,11 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
 
     it('should continue with the natural transition when judge returns non-done status', async () => {
       const config = buildConfigWithLoopMonitor(1);
-      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        provider: 'mock',
+        model: 'mock-model',
+      });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'implement', content: 'Implementation done' }),
@@ -305,8 +325,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       const judgeCall = vi.mocked(runAgent).mock.calls.find((call) => call[0] === 'supervisor');
       expect(judgeCall).toBeDefined();
       expect(judgeCall?.[2]).toEqual(expect.objectContaining({
-        resolvedProvider: 'opencode',
-        resolvedModel: 'opencode/zai-coding-plan/glm-5.1',
+        resolvedExecution: expect.objectContaining({ provider: 'opencode', model: 'opencode/zai-coding-plan/glm-5.1' }),
       }));
     });
 
@@ -360,8 +379,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       expect(state.status).toBe('completed');
       const judgeCall = vi.mocked(runAgent).mock.calls.find((call) => call[0] === 'supervisor');
       expect(judgeCall?.[2]).toEqual(expect.objectContaining({
-        resolvedProvider: 'codex',
-        resolvedModel: 'gpt-5',
+        resolvedExecution: expect.objectContaining({ provider: 'codex', model: 'gpt-5' }),
       }));
     });
 
@@ -409,8 +427,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       const judgeCall = vi.mocked(runAgent).mock.calls.find((call) => call[0] === 'supervisor');
       expect(judgeCall).toBeDefined();
       expect(judgeCall?.[2]).toEqual(expect.objectContaining({
-        resolvedProvider: 'codex',
-        resolvedModel: 'gpt-5.2-codex',
+        resolvedExecution: expect.objectContaining({ provider: 'codex', model: 'gpt-5.2-codex' }),
       }));
     });
 
@@ -509,8 +526,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       expect(state.status).toBe('completed');
       const judgeCall = vi.mocked(runAgent).mock.calls.find((call) => call[0] === 'supervisor');
       expect(judgeCall?.[2]).toMatchObject({
-        resolvedProvider: expected.provider,
-        resolvedModel: expected.model,
+        resolvedExecution: expect.objectContaining({ provider: expected.provider, model: expected.model }),
       });
       expect(judgeStart).toHaveBeenCalledWith(expect.objectContaining(expected));
     });
@@ -557,8 +573,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       const judgeCall = vi.mocked(runAgent).mock.calls.find((call) => call[0] === 'supervisor');
       expect(judgeCall).toBeDefined();
       expect(judgeCall?.[2]).toEqual(expect.objectContaining({
-        resolvedProvider: 'codex',
-        resolvedModel: undefined,
+        resolvedExecution: expect.objectContaining({ provider: 'codex', model: undefined }),
       }));
     });
 
@@ -623,8 +638,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       ]);
       const judgeCall = vi.mocked(runAgent).mock.calls.find((call) => call[0] === 'supervisor');
       expect(judgeCall?.[2]).toEqual(expect.objectContaining({
-        resolvedProvider: 'codex',
-        resolvedModel: undefined,
+        resolvedExecution: expect.objectContaining({ provider: 'codex', model: undefined }),
       }));
     });
 
@@ -680,8 +694,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       const judgeCall = vi.mocked(runAgent).mock.calls.find((call) => call[0] === 'supervisor');
       expect(judgeCall).toBeDefined();
       expect(judgeCall?.[2]).toEqual(expect.objectContaining({
-        resolvedProvider: 'codex',
-        resolvedModel: 'gpt-5',
+        resolvedExecution: expect.objectContaining({ provider: 'codex', model: 'gpt-5' }),
       }));
     });
 
@@ -727,8 +740,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       const judgeCall = vi.mocked(runAgent).mock.calls.find((call) => call[0] === 'supervisor');
       expect(judgeCall).toBeDefined();
       expect(judgeCall?.[2]).toEqual(expect.objectContaining({
-        resolvedProvider: 'opencode',
-        resolvedModel: 'opencode/zai-coding-plan/glm-5.2',
+        resolvedExecution: expect.objectContaining({ provider: 'opencode', model: 'opencode/zai-coding-plan/glm-5.2' }),
       }));
     });
 
@@ -781,8 +793,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       const judgeCall = vi.mocked(runAgent).mock.calls.find((call) => call[0] === 'supervisor');
       expect(judgeCall).toBeDefined();
       expect(judgeCall?.[2]).toEqual(expect.objectContaining({
-        resolvedProvider: 'codex',
-        resolvedModel: 'gpt-5.2-codex',
+        resolvedExecution: expect.objectContaining({ provider: 'codex', model: 'gpt-5.2-codex' }),
       }));
     });
 
@@ -833,8 +844,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       const judgeCall = vi.mocked(runAgent).mock.calls.find((call) => call[0] === 'supervisor');
       expect(judgeCall).toBeDefined();
       expect(judgeCall?.[2]).toEqual(expect.objectContaining({
-        resolvedProvider: 'codex',
-        resolvedModel: 'gpt-5.9-judge',
+        resolvedExecution: expect.objectContaining({ provider: 'codex', model: 'gpt-5.9-judge' }),
       }));
     });
 
@@ -887,8 +897,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       const judgeCall = vi.mocked(runAgent).mock.calls.find((call) => call[0] === 'supervisor');
       expect(judgeCall).toBeDefined();
       expect(judgeCall?.[2]).toEqual(expect.objectContaining({
-        resolvedProvider: 'cursor',
-        resolvedModel: 'cursor-judge-model',
+        resolvedExecution: expect.objectContaining({ provider: 'cursor', model: 'cursor-judge-model' }),
       }));
     });
 
@@ -941,8 +950,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       const judgeCall = vi.mocked(runAgent).mock.calls.find((call) => call[0] === 'supervisor');
       expect(judgeCall).toBeDefined();
       expect(judgeCall?.[2]).toEqual(expect.objectContaining({
-        resolvedProvider: 'claude-sdk',
-        resolvedModel: 'opus-judge-step',
+        resolvedExecution: expect.objectContaining({ provider: 'claude-sdk', model: 'opus-judge-step' }),
       }));
     });
 
@@ -992,8 +1000,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       const judgeCall = vi.mocked(runAgent).mock.calls.find((call) => call[0] === 'supervisor');
       expect(judgeCall).toBeDefined();
       expect(judgeCall?.[2]).toEqual(expect.objectContaining({
-        resolvedProvider: 'codex',
-        resolvedModel: undefined,
+        resolvedExecution: expect.objectContaining({ provider: 'codex', model: undefined }),
       }));
     });
 
@@ -1051,8 +1058,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       const judgeCall = vi.mocked(runAgent).mock.calls.find((call) => call[0] === 'supervisor');
       expect(judgeCall).toBeDefined();
       expect(judgeCall?.[2]).toEqual(expect.objectContaining({
-        resolvedProvider: 'cursor',
-        resolvedModel: 'cursor-override',
+        resolvedExecution: expect.objectContaining({ provider: 'cursor', model: 'cursor-override' }),
       }));
     });
 
@@ -1103,16 +1109,19 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       const judgeCall = vi.mocked(runAgent).mock.calls.find((call) => call[0] === 'supervisor');
       expect(judgeCall).toBeDefined();
       expect(judgeCall?.[2]).toEqual(expect.objectContaining({
-        providerOptions: {
-          codex: {
-            networkAccess: true,
-          },
-          claude: {
-            sandbox: {
-              allowUnsandboxedCommands: true,
+        sessionId: undefined,
+        resolvedExecution: expect.objectContaining({
+          providerOptions: {
+            codex: {
+              networkAccess: true,
+            },
+            claude: {
+              sandbox: {
+                allowUnsandboxedCommands: true,
+              },
             },
           },
-        },
+        }),
       }));
     });
 
@@ -1184,14 +1193,17 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         expect.objectContaining(expectedClaudeOptions),
       ]);
       const judgeCall = vi.mocked(runAgent).mock.calls.find((call) => call[0] === 'supervisor');
-      expect(judgeCall?.[2]?.providerOptions).toEqual(expect.objectContaining(expectedClaudeOptions));
-      expect(judgeCall?.[2]?.allowedTools).toEqual(['Read']);
+      expect(judgeCall?.[2]?.resolvedExecution?.providerOptions).toEqual(expect.objectContaining({
+        claude: expect.objectContaining({
+          allowedTools: ['Read'],
+          effort: 'low',
+        }),
+      }));
     });
 
-    it('should use loop monitor judge sessionKey for session resume and updates', async () => {
+    it('runs every loop monitor judge call in a fresh session and never persists returned sessions', async () => {
       const config = buildConfigWithLoopMonitor(1, {
         judge: {
-          sessionKey: 'loop-watch',
           persona: 'supervisor',
           rules: loopJudgeRules(),
         },
@@ -1234,42 +1246,30 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
 
       const judgeCalls = vi.mocked(runAgent).mock.calls.filter((call) => call[0] === 'supervisor');
       expect(state.status).toBe('completed');
-      expect(judgeCalls.map((call) => call[2]?.sessionId)).toEqual([undefined, 'monitor-session-1']);
-      expect(state.personaSessions.get(
-        '["loop-watch","opencode","opencode/zai-coding-plan/glm-5.1"]',
-      )).toBe('monitor-session-2');
+      expect(judgeCalls.map((call) => call[2]?.sessionId)).toEqual([undefined, undefined]);
       expect(state.personaSessions.has(
         '["supervisor","opencode","opencode/zai-coding-plan/glm-5.1"]',
       )).toBe(false);
     });
 
-    it('should use the loop monitor judge persona as the default session key base', async () => {
+    it('passes the loop-judge seat permission mode to the provider call', async () => {
       const config = buildConfigWithLoopMonitor(1, {
-        judge: {
-          persona: 'supervisor',
-          rules: loopJudgeRules(),
-        },
+        judge: { persona: 'supervisor', rules: loopJudgeRules() },
       } as Partial<LoopMonitorConfig>);
-      const aiFixStep = config.steps.find((step) => step.name === 'ai_fix');
-      if (!aiFixStep) {
-        throw new Error('ai_fix step is required for this test');
-      }
-      aiFixStep.provider = 'opencode';
-      aiFixStep.model = 'opencode/zai-coding-plan/glm-5.1';
-
       engine = new WorkflowEngine(config, tmpDir, 'test task', {
         projectCwd: tmpDir,
         provider: 'claude',
+        internalAgentSeats: {
+          loopJudge: { provider: 'opencode', model: 'opencode/seat-judge', permissionMode: 'readonly' },
+        },
       });
-
       mockRunAgentSequence([
         makeResponse({ persona: 'implement', content: 'Implementation done' }),
-        makeResponse({ persona: 'ai_review', content: 'Issues found: X' }),
-        makeResponse({ persona: 'ai_fix', content: 'Fixed X' }),
-        makeResponse({ persona: 'supervisor', content: 'Unproductive loop detected', sessionId: 'default-monitor-session' }),
+        makeResponse({ persona: 'ai_review', content: 'Issues found' }),
+        makeResponse({ persona: 'ai_fix', content: 'Fixed' }),
+        makeResponse({ persona: 'supervisor', content: 'Unproductive loop detected' }),
         makeResponse({ persona: 'reviewers', content: 'All approved' }),
       ]);
-
       mockRuleEvaluationSequence([
         { index: 0, method: 'phase3_tag' },
         { index: 1, method: 'phase3_tag' },
@@ -1278,12 +1278,52 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         { index: 0, method: 'phase3_tag' },
       ]);
 
+      await engine.run();
+
+      const judgeCall = vi.mocked(runAgent).mock.calls.find((call) => call[0] === 'supervisor');
+      expect(judgeCall?.[2]).toEqual(expect.objectContaining({
+        resolvedExecution: {
+          provider: 'opencode',
+          model: 'opencode/seat-judge',
+          providerOptions: undefined,
+          permissionMode: 'readonly',
+        },
+        sessionId: undefined,
+      }));
+    });
+
+    it('rejects a completed loop-judge response that violates the typed text contract', async () => {
+      const config = buildConfigWithLoopMonitor(1, {
+        judge: { persona: 'supervisor', rules: loopJudgeRules() },
+      } as Partial<LoopMonitorConfig>);
+      engine = new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        provider: 'claude',
+      });
+      mockBaseRunAgentSequence([
+        makeResponse({ persona: 'implement', content: 'Implementation done' }),
+        makeResponse({ persona: 'ai_review', content: 'Issues found' }),
+        makeResponse({ persona: 'ai_fix', content: 'Fixed' }),
+        {
+          ...makeResponse({ persona: 'supervisor', content: 'invalid typed result' }),
+          structuredOutput: { content: 42 },
+        },
+        makeResponse({ persona: 'reviewers', content: 'All approved' }),
+      ]);
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'ai_judge' },
+        { index: 0, method: 'phase3_tag' },
+      ]);
+      const abortReasons: string[] = [];
+      engine.on('workflow:abort', (_state, reason) => abortReasons.push(reason));
+
       const state = await engine.run();
 
-      expect(state.status).toBe('completed');
-      expect(state.personaSessions.get(
-        '["supervisor","opencode","opencode/zai-coding-plan/glm-5.1"]',
-      )).toBe('default-monitor-session');
+      expect(state.status).toBe('aborted');
+      expect(abortReasons.some((reason) => /content.*string/i.test(reason))).toBe(true);
     });
   });
 
@@ -1510,7 +1550,11 @@ describe('Judge failure falls back to the natural transition', () => {
         rules: loopJudgeRules(),
       },
     });
-    engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      model: 'mock-model',
+    });
 
     mockRunAgentSequence([
       makeResponse({ persona: 'implement', content: 'Implementation done' }),
@@ -1651,7 +1695,11 @@ describe('Replan-family judge transitions (runtime)', () => {
   }
 
   it('should return to reviewers when the judge sees the latest fix as complete', async () => {
-    engine = new WorkflowEngine(buildReplanFamilyConfig(), tmpDir, 'task', { projectCwd: tmpDir });
+    engine = new WorkflowEngine(buildReplanFamilyConfig(), tmpDir, 'task', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      model: 'mock-model',
+    });
     primeTwoCycles({ index: 0, method: 'ai_judge' }, {
       responses: [makeResponse({ persona: 'reviewers', content: 'All approved' })],
       matches: [{ index: 1, method: 'phase3_tag' }],
@@ -1665,7 +1713,11 @@ describe('Replan-family judge transitions (runtime)', () => {
   });
 
   it('should return to plan when the judge sees healthy replanning', async () => {
-    engine = new WorkflowEngine(buildReplanFamilyConfig(), tmpDir, 'task', { projectCwd: tmpDir });
+    engine = new WorkflowEngine(buildReplanFamilyConfig(), tmpDir, 'task', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      model: 'mock-model',
+    });
     primeTwoCycles({ index: 1, method: 'ai_judge' }, {
       responses: [makeResponse({ persona: 'plan', content: 'Cannot plan' })],
       matches: [{ index: 1, method: 'phase3_tag' }],
@@ -1680,7 +1732,11 @@ describe('Replan-family judge transitions (runtime)', () => {
   });
 
   it('should abort when the judge sees the same dead end repeating', async () => {
-    engine = new WorkflowEngine(buildReplanFamilyConfig(), tmpDir, 'task', { projectCwd: tmpDir });
+    engine = new WorkflowEngine(buildReplanFamilyConfig(), tmpDir, 'task', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      model: 'mock-model',
+    });
     primeTwoCycles({ index: 2, method: 'ai_judge' }, { responses: [], matches: [] });
     const steps = collectStepStarts(engine);
 

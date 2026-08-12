@@ -489,7 +489,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       options?.onStream?.({
         type: 'init',
         data: {
-          model: options.resolvedModel ?? '(default)',
+          model: options.resolvedExecution?.model ?? options.resolvedModel ?? '(default)',
           sessionId: `team-session-${responseIndex}`,
         },
       });
@@ -527,8 +527,12 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       },
     });
     expect(vi.mocked(runAgent).mock.calls[0]?.[2]).toMatchObject({
-      resolvedProvider: 'mock',
-      resolvedModel: 'mock-1',
+      resolvedExecution: {
+        provider: 'mock',
+        model: 'mock-1',
+        providerOptions: undefined,
+        permissionMode: undefined,
+      },
     });
 
     const providerRecords = readFileSync(providerLogger.filepath, 'utf-8')
@@ -662,7 +666,8 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
         systemPrompt: typeof persona === 'string' ? persona : '',
         userInstruction: instruction,
       });
-      if (options?.resolvedProvider === 'claude-sdk') {
+      const provider = options?.resolvedExecution?.provider ?? options?.resolvedProvider;
+      if (provider === 'claude-sdk') {
         options.onStream?.({ type: 'text', data: { text: 'routing' } });
         const selections = [
           { id: longPartId, required_tier: 'medium' },
@@ -670,14 +675,14 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
         ];
         return makeResponse({
           persona: 'auto-router',
-          content: JSON.stringify({ required_tier: 'medium', reason_codes: ['focused-change'] }),
-          structuredOutput: { required_tier: 'medium', reason_codes: ['focused-change'] },
+          content: JSON.stringify({ required_tier: 'medium', reason_codes: ['focused-change'], confidence: null }),
+          structuredOutput: { required_tier: 'medium', reason_codes: ['focused-change'], confidence: null },
         });
       }
-      if (options?.resolvedProvider === 'mock') {
+      if (provider === 'mock') {
         return nextLeaderResponse();
       }
-      if (options?.resolvedProvider === 'codex') {
+      if (provider === 'codex') {
         options.onStream?.({ type: 'text', data: { text: 'part execution' } });
         return makeResponse({
           persona: 'coder',
@@ -690,7 +695,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
           },
         });
       }
-      throw new Error(`Unexpected provider: ${options?.resolvedProvider ?? '(missing)'}`);
+      throw new Error(`Unexpected provider: ${provider ?? '(missing)'}`);
     });
     vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
@@ -1119,7 +1124,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     ]);
   });
 
-  it('prompt-based team leader の意味的再生成と feedback retry を全attempt分記録する', async () => {
+  it('prompt-based team leader の意味的再生成と feedback 契約失敗を全attempt分記録する', async () => {
     vi.useFakeTimers();
     try {
       const config = buildTeamLeaderConfig();
@@ -1173,15 +1178,6 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
           persona: 'team-leader',
           status: 'error',
           error: 'feedback first failed',
-        }))
-        .mockRejectedValueOnce(new Error('feedback second rejected'))
-        .mockResolvedValueOnce(makeResponse({
-          persona: 'team-leader',
-          content: [
-            '```json',
-            JSON.stringify({ done: true, reasoning: 'enough', parts: [] }),
-            '```',
-          ].join('\n'),
         }));
       vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
@@ -1200,8 +1196,6 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
         true,
         true,
         false,
-        false,
-        true,
       ]);
     } finally {
       vi.useRealTimers();

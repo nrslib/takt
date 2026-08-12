@@ -11,6 +11,7 @@ import type { RunAgentOptions, StreamCallback } from './runner.js';
 import type { StepProviderOptions } from '../core/models/workflow-types.js';
 import {
   executeStructuredAgent,
+  requireStructuredAgentProvider,
   StructuredAgentContractError,
 } from './structured-caller/transport.js';
 import { parseParts } from '../core/workflow/engine/task-decomposer.js';
@@ -164,7 +165,7 @@ async function requestDecompositionResponse(
       workflowBundleResourceRoot: options.workflowBundleResourceRoot,
       language: options.language,
       resolution: {
-        provider: options.resolvedProvider ?? options.provider,
+        provider: requireStructuredAgentProvider(options.resolvedProvider ?? options.provider, 'task-decomposer'),
         model: options.resolvedModel ?? options.model,
         providerOptions: options.resolvedProviderOptions,
         permissionMode: options.permissionMode,
@@ -300,7 +301,7 @@ export async function requestMorePartsRawResponse(
       workflowBundleResourceRoot: options.workflowBundleResourceRoot,
       language: options.language,
       resolution: {
-        provider: options.resolvedProvider ?? options.provider,
+        provider: requireStructuredAgentProvider(options.resolvedProvider ?? options.provider, 'task-more-parts'),
         model: options.resolvedModel ?? options.model,
         providerOptions: options.resolvedProviderOptions,
         permissionMode: options.permissionMode,

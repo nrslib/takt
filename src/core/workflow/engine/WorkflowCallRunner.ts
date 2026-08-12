@@ -200,6 +200,7 @@ export class WorkflowCallRunner {
     return applyWorkflowCallOverridesToPersonaProviders(
       this.deps.getOptions().personaProviders,
       step.overrides,
+      this.deps.getOptions().providerOptionsProviderSource !== undefined,
     );
   }
 
@@ -209,6 +210,7 @@ export class WorkflowCallRunner {
     return applyWorkflowCallOverridesToProviderRouting(
       this.deps.getOptions().providerRouting,
       step.overrides,
+      this.deps.getOptions().providerOptionsProviderSource !== undefined,
     );
   }
 
@@ -653,9 +655,10 @@ export class WorkflowCallRunner {
         }
       : this.resolveChildProviderModel(step, childWorkflow);
     const parentProviderContext = this.resolveParentWorkflowProviderContext();
+    const profileScopedOptions = this.deps.getOptions().providerOptionsProviderSource !== undefined;
     const inheritedProviderOptions = runtime.fallback
       ? runtimeProviderInfo.providerOptions
-      : childProviderModel.providerSource === parentProviderContext.providerSource
+      : !profileScopedOptions || childProviderModel.providerSource === parentProviderContext.providerSource
         ? parentProviderContext.providerOptions
         : undefined;
     const childResult = await this.executor.execute({

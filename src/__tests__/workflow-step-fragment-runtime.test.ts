@@ -245,6 +245,16 @@ describe('workflow step fragment runtime contract', () => {
           systemPrompt: 'test system prompt',
           userInstruction: instruction,
         });
+        if (schemaHasProperty(options?.outputSchema, 'content')) {
+          const content = persona === 'review'
+            ? REVIEW_REPORT_CONTENT
+            : persona === 'supervisor' ? 'stop' : 'fixed';
+          return makeResponse({
+            persona,
+            content,
+            structuredOutput: { content },
+          });
+        }
         if (persona === 'review' || options?.workflowMeta?.currentStep === 'review') {
           return makeResponse({ persona, content: REVIEW_REPORT_CONTENT });
         }

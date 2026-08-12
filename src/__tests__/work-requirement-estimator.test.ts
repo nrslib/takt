@@ -158,8 +158,10 @@ describe('createWorkRequirementEstimator', () => {
     expect(prompt).not.toMatch(/terra|sol|candidate_pool|gpt-5|\/repo/i);
     expect(options).toMatchObject({
       cwd: '/repo',
-      resolvedProvider: 'claude-sdk',
-      resolvedModel: 'claude-haiku-4-5-20251001',
+      resolvedExecution: {
+        provider: 'claude-sdk',
+        model: 'claude-haiku-4-5-20251001',
+      },
       language: 'ja',
       childProcessEnv: { TAKT_TEST: '1' },
       outputSchema: {

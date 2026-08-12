@@ -378,7 +378,7 @@ describe('executeWorkflow structuredCaller injection', () => {
     expect(prompt).toContain('Return exactly one fenced JSON block');
     expect(runOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
-      resolvedProvider: 'cursor',
+      resolvedExecution: expect.objectContaining({ provider: 'cursor' }),
     }));
     expect(runOptions).not.toHaveProperty('outputSchema');
   });
@@ -430,7 +430,7 @@ describe('executeWorkflow structuredCaller injection', () => {
     expect(prompt).toContain('needs_fix');
     expect(runOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
-      resolvedProvider: 'claude',
+      resolvedExecution: expect.objectContaining({ provider: 'claude' }),
     }));
     expect(runOptions).toHaveProperty('outputSchema');
   });
@@ -467,7 +467,7 @@ describe('executeWorkflow structuredCaller injection', () => {
       .mockResolvedValueOnce({
         persona: 'conductor',
         status: 'done',
-        content: '[IMPLEMENT:1]',
+        content: '```json\n{"content":"[IMPLEMENT:1]"}\n```',
         timestamp: new Date('2026-04-01T00:00:01.000Z'),
       });
 
@@ -494,7 +494,7 @@ describe('executeWorkflow structuredCaller injection', () => {
     expect(firstPrompt).toContain('structured judge prompt');
     expect(firstRunOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
-      resolvedProvider: 'cursor',
+      resolvedExecution: expect.objectContaining({ provider: 'cursor' }),
     }));
     expect(firstRunOptions).not.toHaveProperty('outputSchema');
     const [, secondPrompt, secondRunOptions] = mockRunAgent.mock.calls[1] ?? [];
@@ -555,8 +555,7 @@ describe('executeWorkflow structuredCaller injection', () => {
     expect(prompt).toContain('structured judge prompt');
     expect(runOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
-      resolvedProvider: 'claude',
-      resolvedModel: 'sonnet',
+      resolvedExecution: expect.objectContaining({ provider: 'claude', model: 'sonnet' }),
     }));
     expect(runOptions).toHaveProperty('outputSchema');
   });
@@ -1128,7 +1127,7 @@ steps:
     expect(prompt).toContain('Output ONLY the tag `[JUDGE:N]`');
     expect(runOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
-      resolvedProvider: 'cursor',
+      resolvedExecution: expect.objectContaining({ provider: 'cursor' }),
     }));
     expect(runOptions).not.toHaveProperty('outputSchema');
   });
@@ -1180,7 +1179,7 @@ steps:
     expect(prompt).toContain('Output ONLY the tag `[JUDGE:N]`');
     expect(runOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
-      resolvedProvider: 'claude',
+      resolvedExecution: expect.objectContaining({ provider: 'claude' }),
     }));
     expect(runOptions).toHaveProperty('outputSchema');
   });
@@ -1227,8 +1226,7 @@ steps:
     expect(prompt).toContain('```json');
     expect(runOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
-      resolvedProvider: 'cursor',
-      resolvedModel: 'cursor-fast',
+      resolvedExecution: expect.objectContaining({ provider: 'cursor', model: 'cursor-fast' }),
     }));
     expect(runOptions).not.toHaveProperty('outputSchema');
   });
@@ -1277,8 +1275,7 @@ steps:
     const [, , runOptions] = mockRunAgent.mock.calls[0] ?? [];
     expect(runOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
-      resolvedProvider: 'claude',
-      resolvedModel: 'sonnet',
+      resolvedExecution: expect.objectContaining({ provider: 'claude', model: 'sonnet' }),
     }));
     expect(runOptions).toHaveProperty('outputSchema');
   });
@@ -1323,8 +1320,7 @@ steps:
     expect(prompt).toContain('```json');
     expect(runOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
-      resolvedProvider: 'cursor',
-      resolvedModel: 'cursor-fast',
+      resolvedExecution: expect.objectContaining({ provider: 'cursor', model: 'cursor-fast' }),
     }));
     expect(runOptions).not.toHaveProperty('outputSchema');
   });
@@ -1374,8 +1370,7 @@ steps:
     const [, , runOptions] = mockRunAgent.mock.calls[0] ?? [];
     expect(runOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
-      resolvedProvider: 'claude',
-      resolvedModel: 'sonnet',
+      resolvedExecution: expect.objectContaining({ provider: 'claude', model: 'sonnet' }),
     }));
     expect(runOptions).toHaveProperty('outputSchema');
   });

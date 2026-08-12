@@ -572,6 +572,7 @@ describe('MockProvider — structured output', () => {
     const opts = mockCallMock.mock.calls[0]?.[2];
     expect(opts).toMatchObject({
       allowedTools: ['Read', 'Edit'],
+      outputSchema: SCHEMA,
     });
   });
 

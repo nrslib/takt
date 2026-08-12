@@ -100,6 +100,123 @@ describe('OptionsBuilder.buildBaseOptions', () => {
     expect(options.permissionMode).toBe('edit');
   });
 
+  it.each([
+    { label: 'same provider', targetProvider: 'codex' as const },
+    { label: 'different provider', targetProvider: 'claude' as const },
+  ])('does not leak defaults profile capabilities into a plain target profile ($label)', ({ targetProvider }) => {
+    const step = createStep({ personaDisplayName: 'Reviewers' });
+    const builder = createBuilder(step, {
+      provider: 'codex',
+      providerSource: 'runtime-v1',
+      providerOptionsProviderSource: 'runtime-v1',
+      providerOptions: {
+        codex: { networkAccess: false },
+        claude: { allowedTools: ['Read'] },
+      },
+      personaProviders: {
+        Reviewers: { provider: targetProvider, model: 'target-model' },
+      },
+    });
+
+    expect(builder.buildAgentOptions(step).providerOptions).toBeUndefined();
+  });
+
+  it('does not leak a runtime default profile into a direct step provider override', () => {
+    const step = createStep({ provider: 'claude', model: 'step-model' });
+    const builder = createBuilder(step, {
+      provider: 'codex',
+      providerSource: 'runtime-v1',
+      providerOptionsProviderSource: 'runtime-v1',
+      providerOptions: {
+        codex: { networkAccess: false },
+        claude: { allowedTools: ['Read'] },
+      },
+    });
+
+    expect(builder.buildAgentOptions(step).providerOptions).toBeUndefined();
+  });
+
+  it('passes only the winning target profile capabilities to the actual provider call', () => {
+    const step = createStep({ personaDisplayName: 'Reviewers' });
+    const builder = createBuilder(step, {
+      provider: 'codex',
+      providerSource: 'runtime-v1',
+      providerOptionsProviderSource: 'runtime-v1',
+      providerOptions: {
+        codex: { networkAccess: false },
+      },
+      personaProviders: {
+        Reviewers: {
+          provider: 'claude',
+          model: 'target-model',
+          providerOptions: { claude: { allowedTools: ['Read', 'Glob'] } },
+        },
+      },
+    });
+
+    expect(builder.buildAgentOptions(step).providerOptions).toEqual({
+      claude: { allowedTools: ['Read', 'Glob'] },
+    });
+  });
+
+  it.each([
+    { label: 'persona', personaOptions: { codex: { networkAccess: false } }, tagOptions: undefined },
+    { label: 'tag', personaOptions: undefined, tagOptions: { codex: { networkAccess: false } } },
+  ])('drops a constrained $label profile when a plain step profile wins', ({ personaOptions, tagOptions }) => {
+    const step = createStep({ name: 'reviewers', personaDisplayName: 'Reviewers', tags: ['review'] });
+    const builder = createBuilder(step, {
+      provider: 'codex',
+      providerSource: 'runtime-v1',
+      providerOptionsProviderSource: 'runtime-v1',
+      personaProviders: personaOptions === undefined ? undefined : {
+        Reviewers: { provider: 'codex', model: 'persona-model', providerOptions: personaOptions },
+      },
+      providerRouting: {
+        tags: tagOptions === undefined ? undefined : {
+          review: { provider: 'codex', model: 'tag-model', providerOptions: tagOptions },
+        },
+        steps: { reviewers: { provider: 'claude', model: 'step-model' } },
+      },
+    });
+
+    expect(builder.buildAgentOptions(step).providerOptions).toBeUndefined();
+  });
+
+  it('keeps workflow capability options independent of the winning runtime profile', () => {
+    const step = createStep({
+      personaDisplayName: 'Reviewers',
+      capabilityProviderOptions: { claude: { allowedTools: ['Read'] } },
+    });
+    const builder = createBuilder(step, {
+      provider: 'codex',
+      providerSource: 'runtime-v1',
+      providerOptionsProviderSource: 'runtime-v1',
+      personaProviders: {
+        Reviewers: { provider: 'claude', model: 'target-model' },
+      },
+    });
+
+    expect(builder.buildAgentOptions(step).providerOptions).toEqual({
+      claude: { allowedTools: ['Read'] },
+    });
+  });
+
+  it('keeps legacy persona and step option layering when runtime profiles are not active', () => {
+    const step = createStep({
+      personaDisplayName: 'Reviewers',
+      providerOptions: { codex: { reasoningEffort: 'high' } },
+    });
+    const builder = createBuilder(step, {
+      personaProviders: {
+        Reviewers: { provider: 'codex', providerOptions: { codex: { networkAccess: false } } },
+      },
+    });
+
+    expect(builder.buildAgentOptions(step).providerOptions).toEqual({
+      codex: { networkAccess: false, reasoningEffort: 'high' },
+    });
+  });
+
   it('includes requiredPermissionMode in permission resolution context', () => {
     const step = createStep({ requiredPermissionMode: 'full' });
     const builder = createBuilder(step);

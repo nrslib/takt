@@ -6,7 +6,6 @@ import { parseWorkflowRuleCondition } from '../../../core/models/workflow-rule-c
 
 function normalizeLoopMonitorJudge(
   raw: {
-    session_key?: string;
     persona?: string;
     provider?: unknown;
     model?: string | null;
@@ -27,7 +26,6 @@ function normalizeLoopMonitorJudge(
     context,
   );
   return {
-    sessionKey: raw.session_key,
     persona: personaSpec,
     personaPath,
     provider: normalizedProvider.provider,
@@ -56,7 +54,6 @@ export function normalizeLoopMonitors(
     ignore_steps?: string[];
     threshold: number;
     judge: {
-      session_key?: string;
       persona?: string;
       provider?: unknown;
       model?: string | null;

@@ -30,8 +30,8 @@ export interface WorkflowMeta {
 export interface ResolvedAgentExecution {
   readonly provider: ProviderType;
   readonly model: string | undefined;
-  readonly providerOptions: StepProviderOptions;
-  readonly permissionMode: PermissionMode;
+  readonly providerOptions: StepProviderOptions | undefined;
+  readonly permissionMode: PermissionMode | undefined;
 }
 
 /** Common options for running agents */
