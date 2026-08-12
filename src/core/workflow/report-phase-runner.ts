@@ -47,8 +47,6 @@ export type ReportContentValidator = (
 ) => ReportContentValidationResult;
 
 export interface ReportPhaseGenerationOptions {
-  /** FC レビュアーの Phase 2 か。指示文へレビュアー契約を出すかどうかを決める。 */
-  readonly findingContractReviewer?: boolean;
   readonly validateReportContent?: ReportContentValidator;
   readonly retryMode?: 'standard' | 'single-attempt';
   readonly nextPhaseSequence?: () => number;
@@ -91,8 +89,7 @@ export class ReportPhaseGenerationError extends Error {
  * Phase 2: Report output.
  * Resumes the agent session with no tools to request report content.
  * Each report file is generated individually in a loop.
- * 通常レポートは plain text をそのまま扱う。Finding Contract reviewer は
- * structured publication の reportContent だけを正準本文として扱う。
+ * レポート本文は plain text として扱う。
  */
 export async function runReportPhase(
   step: WorkflowStep,
@@ -124,7 +121,6 @@ async function executeReportPhase(
   options: ReportPhaseGenerationOptions,
   acceptReport: (report: GeneratedReport) => void,
 ): Promise<ReportPhaseBlockedResult | ReportPhaseRateLimitedResult | void> {
-  const findingContractReviewer = options.findingContractReviewer === true;
   const primarySessionKey = ctx.resolveSessionKey(step);
   let currentSessionId = ctx.getSessionId(primarySessionKey);
   const hasLastResponse = ctx.lastResponse != null && ctx.lastResponse.trim().length > 0;
@@ -165,7 +161,6 @@ async function executeReportPhase(
       language: ctx.language,
       targetFile: fileName,
       lastResponse: currentSessionId ? undefined : ctx.lastResponse,
-      findingContract: ctx.buildFindingContractInstructionContext?.(step, findingContractReviewer),
     }).build();
     let firstAttemptOptions: RunAgentOptions;
     if (currentSessionId === undefined) {
@@ -237,7 +232,6 @@ async function executeReportPhase(
       language: ctx.language,
       targetFile: fileName,
       lastResponse: ctx.lastResponse,
-      findingContract: ctx.buildFindingContractInstructionContext?.(step, findingContractReviewer),
     }).build();
     const retryInstruction = firstAttempt.failureReason === 'invalid_output'
       ? [

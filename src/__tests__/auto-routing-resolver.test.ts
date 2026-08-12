@@ -136,7 +136,7 @@ describe('resolveAutoRoutingRuntime', () => {
 
   it('Given a high work estimate, When resolving auto routing, Then the selector chooses an eligible high-tier candidate', async () => {
     const estimator: WorkRequirementEstimator = {
-      estimate: vi.fn().mockResolvedValue({ requiredTier: 'high', reasonCodes: ['critical-finding'] }),
+      estimate: vi.fn().mockResolvedValue({ requiredTier: 'high', reasonCodes: ['complex-work'] }),
     };
 
     const result = await resolveAutoRoutingRuntime({
@@ -147,7 +147,7 @@ describe('resolveAutoRoutingRuntime', () => {
 
     expect(result?.providerInfo).toMatchObject({
       provider: 'claude-sdk', providerSource: 'auto.dynamic',
-      autoRoutingDecision: { candidateName: 'reasoning', routingTier: 'high', requiredTier: 'high', reasonCodes: ['critical-finding'] },
+      autoRoutingDecision: { candidateName: 'reasoning', routingTier: 'high', requiredTier: 'high', reasonCodes: ['complex-work'] },
     });
   });
 
@@ -212,7 +212,7 @@ describe('resolveAutoRoutingBatch', () => {
     const estimator: WorkRequirementEstimator = {
       estimate: vi.fn()
         .mockResolvedValueOnce({ requiredTier: 'medium', reasonCodes: ['focused-change'] })
-        .mockResolvedValueOnce({ requiredTier: 'high', reasonCodes: ['critical-finding'] }),
+        .mockResolvedValueOnce({ requiredTier: 'high', reasonCodes: ['complex-work'] }),
     };
 
     const result = await resolveAutoRoutingBatch({

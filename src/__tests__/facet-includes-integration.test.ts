@@ -129,7 +129,6 @@ describe('facet include expansion', () => {
 
     for (const instruction of [
       'fix',
-      'fix-finding-contract',
       'ai-antipattern-fix',
       'fix-maintenance',
       'fix-supervisor',
@@ -156,9 +155,7 @@ describe('facet include expansion', () => {
 
     for (const instruction of [
       'fix-plan',
-      'fix-plan-finding-contract',
       'fix',
-      'fix-finding-contract',
       'ai-antipattern-fix',
       'fix-maintenance',
       'fix-supervisor',
@@ -184,7 +181,6 @@ describe('facet include expansion', () => {
 
     for (const instruction of [
       'fix-plan',
-      'fix-plan-finding-contract',
       'apply-fix-plan',
       'verify-fix',
     ]) {

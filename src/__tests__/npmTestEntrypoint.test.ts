@@ -472,27 +472,6 @@ describe('npm test entrypoint routing', () => {
     ]);
   });
 
-  it('should route serial Git members to the Git runner', () => {
-    const args = ['src/__tests__/finding-ladder-robustness.integration.test.ts'];
-
-    expect(selectNpmTestRuns(args)).toEqual([
-      { npmArgs: ['run', 'test:it:heavy:serial:git', '--', ...args] },
-    ]);
-  });
-
-  it('should normalize a serial Git basename before routing', () => {
-    expect(selectNpmTestRuns(['finding-conflict-adjudication-runner.integration.test.ts'])).toEqual([
-      {
-        npmArgs: [
-          'run',
-          'test:it:heavy:serial:git',
-          '--',
-          'src/__tests__/finding-conflict-adjudication-runner.integration.test.ts',
-        ],
-      },
-    ]);
-  });
-
   it('should normalize an absolute unit path before routing', () => {
     expect(selectNpmTestRuns([resolve('src/__tests__/git-detect.test.ts')])).toEqual([
       {
@@ -527,25 +506,6 @@ describe('npm test entrypoint routing', () => {
     ]);
   });
 
-  it('should route mixed unit, light IT, heavy IT, and serial IT targets exactly once', () => {
-    const args = [
-      'src/__tests__/git-detect.test.ts',
-      'src/__tests__/finding-review-integrity-gate.test.ts',
-      'src/__tests__/it-teed-command.test.ts',
-      'src/__tests__/finding-evidence-protocol.integration.test.ts',
-      'src/__tests__/option-resolution-order.test.ts',
-      'src/__tests__/workflowExecutionEvents.test.ts',
-    ];
-
-    expect(selectNpmTestRuns(args)).toEqual([
-      { npmArgs: ['run', 'test:unit:parallel', '--', args[0], args[4]] },
-      { npmArgs: ['run', 'test:it:light', '--', args[5]] },
-      { npmArgs: ['run', 'test:it:heavy:parallel', '--', args[2]] },
-      { npmArgs: ['run', 'test:it:heavy:serial:git', '--', args[3]] },
-      { npmArgs: ['run', 'test:it:heavy:serial:workflow', '--', args[1]] },
-    ]);
-  });
-
   it('should route an explicitly classified legacy filename to the IT runner', () => {
     const args = ['engine-happy-path.test.ts'];
 
@@ -577,10 +537,8 @@ describe('npm test entrypoint routing', () => {
     ]);
   });
 
-  it.each([
-    'finding-review-integrity-gate.test.ts',
-    'workflow-step-fragment-runtime.test.ts',
-  ])('should route serial workflow member %s to the workflow runner', (fileName) => {
+  it('should route a serial workflow member to the workflow runner', () => {
+    const fileName = 'workflow-step-fragment-runtime.test.ts';
     for (const target of [fileName, `src/__tests__/${fileName}`]) {
       expect(selectNpmTestRuns([target])).toEqual([
         {
@@ -595,14 +553,6 @@ describe('npm test entrypoint routing', () => {
     }
   });
 
-  it('should route the team-leader operation journal test to the serial Git runner', () => {
-    const target = 'src/__tests__/it-team-leader-finding-contract-operation-journal.test.ts';
-
-    expect(selectNpmTestRuns([target])).toEqual([
-      { npmArgs: ['run', 'test:it:heavy:serial:git', '--', target] },
-    ]);
-  });
-
   it('should route targeted integration tests to the IT runner', () => {
     const args = ['src/__tests__/it-acp-workflow-bridge.test.ts'];
 
@@ -613,6 +563,14 @@ describe('npm test entrypoint routing', () => {
 
   it('should route a light integration target to the light runner', () => {
     const args = ['src/__tests__/workflowExecutionEvents.test.ts'];
+
+    expect(selectNpmTestRuns(args)).toEqual([
+      { npmArgs: ['run', 'test:it:light', '--', ...args] },
+    ]);
+  });
+
+  it('should route the removed workflow syntax compatibility test to the light runner', () => {
+    const args = ['src/__tests__/workflow-removed-syntax.test.ts'];
 
     expect(selectNpmTestRuns(args)).toEqual([
       { npmArgs: ['run', 'test:it:light', '--', ...args] },

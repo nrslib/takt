@@ -96,56 +96,6 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 
 ローカルモデルだけで既存workflowを動かす場合は、各workflowへ provider/model を設定してください。カスタムのハイブリッド構成では、通常の `review` step をローカル provider へ振り分け、高信頼 provider へ戻す step に後ろの `final-gate` タグを付けます。後ろのタグは、同じ provider、model、provider-options field に対して先のタグを上書きします。
 
-カスタム Finding Contract workflow で一般 reviewer と修正を軽量モデルへ、Finding Manager、自動導出される supervisor、terminal final gate を強いモデルへ振り分ける例です。`.takt/config.yaml` に設定します。
-
-```yaml
-provider_routing:
-  tags:
-    review:
-      provider: opencode
-      model: <weak-local-review-model>
-    final-gate:
-      provider: codex
-      model: <strong-model>
-  steps:
-    fix:
-      provider: opencode
-      model: <weak-local-fix-model>
-    fix-retry:
-      provider: opencode
-      model: <weak-local-fix-model>
-  personas:
-    findings-manager:
-      provider: codex
-      model: <strong-model>
-    loop-judge:
-      provider: codex
-      model: <strong-model>
-    supervisor:
-      provider: codex
-      model: <strong-model>
-```
-
-`final-gate` タグは `review` より後に適用されるため、通常レビューをローカルに保ったまま final gate を強いモデルへ戻せます。Finding Manager は `findings-manager`、loop judge は judge の persona 設定にかかわらず固定キー `loop-judge`、現行エンジンが自動導出する adjudicator は `supervisor` の persona routing を使います。`loop-judge` の routing がない場合、loop judge は cycle を発火させた step の解決済み provider/model を引き継ぎます。
-
-synthetic role を完全に固定する場合は、`runtime.yaml` の `internal_agents` seat に割り当てます。workflow YAML では、これらの role に provider/model を指定できません。
-
-```yaml
-# runtime.yaml
-provider:
-  profiles:
-    strong: { provider: codex, model: <strong-model> }
-  targets:
-    internal_agents:
-      findings-manager:     { profile: strong }
-      terminal-adjudicator: { profile: strong }
-      loop-judge:           { profile: strong }
-      escalation-reviewer:  { profile: strong }
-      intake-normalizer:    { profile: strong }
-```
-
-各 seat は任意です。省略した role は上記の persona routing chain を維持します。実行時には provider と model をフィールドごとに、CLI/環境変数の明示 override → 実行時にマッチした promotion（通常の agent step のみ）→ step または parallel sub-step の provider/model（seat の割り当てを含む）→ `workflow_call` override → `provider_routing` の step/tag/persona → deprecated の `persona_providers` → auto routing → workflow → project → global → provider default の順で解決します。parallel sub-step は promotion をサポートしないため、直接値は CLI/環境変数の明示 override の直後に評価されます。provider だけを指定した seat は、下位優先度の model fallback を停止します。
-
 `takt` を実行すると workflow をインタラクティブに選択できます。
 
 ## ビルトイン Persona 一覧
@@ -181,7 +131,6 @@ provider:
 | **melchior** | MAGI 合議システム: MELCHIOR-1（科学者の観点） |
 | **balthasar** | MAGI 合議システム: BALTHASAR-2（母親の観点） |
 | **casper** | MAGI 合議システム: CASPER-3（女性の観点） |
-| **findings-manager** | 複数レビュアーの生の指摘をライフサイクル追跡付きの統合台帳に照合 |
 | **pr-commenter** | レビュー結果を GitHub PR コメントとして投稿 |
 
 `exec-assistant` と `exec-worker` もビルトイン persona ファイルとして存在しますが、これらは `exec` 生成ワークフロー用の内部ペルソナであり、カスタム workflow から直接使うことは想定されていません。
@@ -227,5 +176,3 @@ persona_providers:
 ```
 
 この設定はすべての workflow にグローバルに適用されます。指定された persona を使用する step は、実行中の workflow に関係なく、対応する provider にルーティングされます。
-
-Finding Contract manager のルーティングには、workflow 内の `finding_contract.manager.provider` と `finding_contract.manager.model` を優先してください。台帳裁定者専用の明示設定であり、`persona_providers.findings-manager` より優先されます。

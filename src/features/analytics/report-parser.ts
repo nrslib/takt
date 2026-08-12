@@ -6,10 +6,8 @@
  * contains a finding_id column.
  */
 
-import type { FindingLedger, FindingLedgerEntry } from '../../core/models/finding-types.js';
-import type { FindingStatus, FindingSeverity, FindingDecision, FixActionEvent, FixActionType, ReviewFindingEvent } from './events.js';
+import type { FindingStatus, FindingSeverity, FindingDecision, FixActionEvent, FixActionType } from './events.js';
 import { writeAnalyticsEvent } from './writer.js';
-import { findingAnalyticsDisplayLocation } from '../../core/workflow/findings/evidence-location.js';
 
 export interface ParsedFinding {
   findingId: string;
@@ -148,51 +146,8 @@ export function inferSeverity(findingId: string): FindingSeverity {
   return 'warning';
 }
 
-function inferLedgerSeverity(finding: FindingLedgerEntry): FindingSeverity {
-  return finding.severity === 'critical' || finding.severity === 'high' ? 'error' : 'warning';
-}
-
-function toFindingStatus(finding: FindingLedgerEntry): FindingStatus {
-  return finding.lifecycle;
-}
-
-const FINDING_CONTRACT_RULE_ID = 'finding-contract';
-
-export function buildReviewFindingEventsFromLedger(
-  ledger: FindingLedger,
-  iteration: number,
-  workflowName: string,
-  scopeIdentity: string,
-  runId: string,
-  timestamp: Date,
-): ReviewFindingEvent[] {
-  const decision: FindingDecision = ledger.findings.some((finding) => finding.status === 'open')
-    || ledger.conflicts.some((conflict) => conflict.status === 'active')
-    ? 'reject'
-    : 'approve';
-
-  return ledger.findings.map((finding) => {
-    const { file, line } = parseLocation(findingAnalyticsDisplayLocation(ledger, finding) ?? '');
-    return {
-      type: 'review_finding',
-      findingId: finding.id,
-      status: toFindingStatus(finding),
-      ruleId: FINDING_CONTRACT_RULE_ID,
-      severity: inferLedgerSeverity(finding),
-      decision,
-      file,
-      line,
-      iteration,
-      workflowName,
-      scopeIdentity,
-      runId,
-      timestamp: timestamp.toISOString(),
-    };
-  });
-}
-
 const FINDING_ID_PATTERN = /\b(?:F-\d{4}|[A-Z]{2,}-(?:NEW-)?[\w-]+)\b/g;
-const ENGINE_FINDING_ID_PATTERN = /^F-\d{4}$/;
+const REMOVED_ENGINE_FINDING_ID_PATTERN = /^F-\d{4}$/;
 
 export function emitFixActionEvents(
   responseContent: string,
@@ -201,7 +156,6 @@ export function emitFixActionEvents(
   timestamp: Date,
   workflowName: string,
   scopeIdentity: string,
-  findingContractFindingIds?: ReadonlySet<string>,
 ): void {
   emitActionEvents(
     responseContent,
@@ -211,7 +165,6 @@ export function emitFixActionEvents(
     timestamp,
     workflowName,
     scopeIdentity,
-    findingContractFindingIds,
   );
 }
 
@@ -222,7 +175,6 @@ export function emitRebuttalEvents(
   timestamp: Date,
   workflowName: string,
   scopeIdentity: string,
-  findingContractFindingIds?: ReadonlySet<string>,
 ): void {
   emitActionEvents(
     responseContent,
@@ -232,7 +184,6 @@ export function emitRebuttalEvents(
     timestamp,
     workflowName,
     scopeIdentity,
-    findingContractFindingIds,
   );
 }
 
@@ -244,17 +195,12 @@ function emitActionEvents(
   timestamp: Date,
   workflowName: string,
   scopeIdentity: string,
-  findingContractFindingIds?: ReadonlySet<string>,
 ): void {
   const matches = responseContent.match(FINDING_ID_PATTERN);
   if (!matches) return;
 
-  const uniqueIds = [...new Set(matches)].filter((findingId) => {
-    if (!ENGINE_FINDING_ID_PATTERN.test(findingId)) {
-      return true;
-    }
-    return findingContractFindingIds?.has(findingId) === true;
-  });
+  const uniqueIds = [...new Set(matches)]
+    .filter((findingId) => !REMOVED_ENGINE_FINDING_ID_PATTERN.test(findingId));
   for (const findingId of uniqueIds) {
     const event: FixActionEvent = {
       type: 'fix_action',

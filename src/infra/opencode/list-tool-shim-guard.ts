@@ -1,7 +1,7 @@
 /**
  * 'list' 互換シム（plugins/list-tool.ts）の upstream 衝突ガード。
  *
- * Finding Contract: upstream の registry に 'list' が実在する環境では登録しない
+ * upstream の registry に 'list' が実在する環境では登録しない
  * （fail-closed。「custom が上書きするから問題ない」は不可）。実装はバージョン
  * allowlist を採る:
  * - プラグイン初期化中に自サーバの /experimental/tool/ids を引くと deadlock

@@ -36,17 +36,6 @@ const legacyParallelIntegrationTestFiles = Object.freeze([
   'src/__tests__/engine-workflow-call.test.ts',
   'src/__tests__/engine-worktree-report.test.ts',
   'src/__tests__/exceeded-requeue.test.ts',
-  'src/__tests__/finding-convergence.test.ts',
-  'src/__tests__/finding-evidence-protocol-fixture.test.ts',
-  'src/__tests__/finding-fixpoint.test.ts',
-  'src/__tests__/finding-inherited-source-parser.test.ts',
-  'src/__tests__/finding-lifecycle-mutation.test.ts',
-  'src/__tests__/finding-review-observability-wiring.test.ts',
-  'src/__tests__/finding-review-scope-snapshot-admission.test.ts',
-  'src/__tests__/finding-review-scope-snapshot-wiring.test.ts',
-  'src/__tests__/finding-reviewer-anomaly-settlement.test.ts',
-  'src/__tests__/finding-storage.test.ts',
-  'src/__tests__/finding-terminal-adjudication-runner.test.ts',
   'src/__tests__/managed-spawn.test.ts',
   'src/__tests__/package-public-boundary.test.ts',
   'src/__tests__/promptEvalProbeLifecycle.test.ts',
@@ -56,13 +45,11 @@ const legacyParallelIntegrationTestFiles = Object.freeze([
   'src/__tests__/selector-input-reader.test.ts',
   'src/__tests__/step-executor.test.ts',
   'src/__tests__/task-review-scope.test.ts',
-  'src/__tests__/team-leader-finding-contract-orphan-resume.test.ts',
   'src/__tests__/team-leader-runner-structured-caller.test.ts',
   'src/__tests__/token-usage-csv.test.ts',
   'src/__tests__/windows-executable-shadowing.test.ts',
   'src/__tests__/workflow-call-abort-resume.test.ts',
   'src/__tests__/workflow-call-lifecycle.test.ts',
-  'src/__tests__/workflow-engine-finding-store-injection.test.ts',
   'src/__tests__/workflow-engine-single-iteration-span.test.ts',
   'src/__tests__/workflow-promotion-engine.test.ts',
   'src/__tests__/workflow-step-fragment-contracts.test.ts',
@@ -96,11 +83,6 @@ export const auditedIntegrationBoundaryTestFiles = Object.freeze([
   'src/__tests__/exec-workflowTemplate.test.ts',
   'src/__tests__/facet-pool-eject-repertoire.test.ts',
   'src/__tests__/facet-pool-loader.test.ts',
-  'src/__tests__/finding-dismiss.test.ts',
-  'src/__tests__/finding-fc-intake-contract.test.ts',
-  'src/__tests__/finding-fc-restatement-slot.test.ts',
-  'src/__tests__/finding-manager-publication-double.test.ts',
-  'src/__tests__/finding-review-publication.test.ts',
   'src/__tests__/github-provider.test.ts',
   'src/__tests__/global-provider-profiles.test.ts',
   'src/__tests__/globalConfig-defaults.test.ts',
@@ -152,8 +134,6 @@ export const auditedIntegrationBoundaryTestFiles = Object.freeze([
   'src/__tests__/summarize-non-workflow-provider.test.ts',
   'src/__tests__/system-workflow-schema.test.ts',
   'src/__tests__/taskForceFailActions.test.ts',
-  'src/__tests__/team-leader-finding-contract-recovery.test.ts',
-  'src/__tests__/team-leader-finding-contract.test.ts',
   'src/__tests__/traced-config-boundary.test.ts',
   'src/__tests__/traced-config-runtime-bridge-cache.test.ts',
   'src/__tests__/traced-config-runtime-bridge-mock-regression.test.ts',
@@ -168,7 +148,6 @@ export const auditedIntegrationBoundaryTestFiles = Object.freeze([
   'src/__tests__/workflow-preview.test.ts',
   'src/__tests__/workflow-reference.test.ts',
   'src/__tests__/workflow-run-lifecycle-boundary.test.ts',
-  'src/__tests__/workflow-run-lifecycle-finding-source-ancestry.test.ts',
   'src/__tests__/workflow-run-lifecycle.test.ts',
   'src/__tests__/workflow-run-loop-command-gates.test.ts',
   'src/__tests__/workflow-step-fragment-params.test.ts',
@@ -216,15 +195,6 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/exec-presetStore.test.ts',
   'src/__tests__/executable-path.test.ts',
   'src/__tests__/facet-resolution.test.ts',
-  'src/__tests__/finding-contract-instruction.test.ts',
-  'src/__tests__/finding-contract-workflow-schema.test.ts',
-  'src/__tests__/finding-evidence-issuance-budget.test.ts',
-  'src/__tests__/finding-evidence-protocol-units.test.ts',
-  'src/__tests__/finding-evidence-request-issuer-io-error.test.ts',
-  'src/__tests__/finding-evidence-request-issuer.test.ts',
-  'src/__tests__/finding-intake-normalize.test.ts',
-  'src/__tests__/finding-intake-normalizer-usecase.test.ts',
-  'src/__tests__/finding-verdict-claims-integrity.test.ts',
   'src/__tests__/global-workflowCategories.test.ts',
   'src/__tests__/imageAttachmentReferences.test.ts',
   'src/__tests__/implement-contract-traceability-assert.test.ts',
@@ -292,13 +262,13 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/taskDeleteActions.test.ts',
   'src/__tests__/taskResultHandler.test.ts',
   'src/__tests__/taskSpecContext.test.ts',
-  'src/__tests__/team-leader-part-completion-inspection.test.ts',
   'src/__tests__/team-leader-schema-loader.test.ts',
   'src/__tests__/tmpdir.test.ts',
   'src/__tests__/traceReport.test.ts',
   'src/__tests__/usageEventLogger.test.ts',
   'src/__tests__/watcher.test.ts',
   'src/__tests__/workflow-init.test.ts',
+  'src/__tests__/workflow-removed-syntax.test.ts',
   'src/__tests__/workflowExecution-ask-user-question.test.ts',
   'src/__tests__/workflowExecution-session-loading.test.ts',
   'src/__tests__/workflowExecution-structured-caller.test.ts',
@@ -315,8 +285,6 @@ export const publicContractIntegrationTestFiles = Object.freeze([
 // remain bounded and quick enough for the normal post-implementation IT gate.
 export const lightContractIntegrationTestFiles = Object.freeze([
   'src/__tests__/analytics-workflowExecution.test.ts',
-  'src/__tests__/finding-contract-flow.test.ts',
-  'src/__tests__/finding-plan-normalization.test.ts',
   'src/__tests__/sigint-interrupt.test.ts',
 ]);
 
@@ -327,10 +295,6 @@ export const lightContractIntegrationTestFiles = Object.freeze([
 export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/exec-workflowRunner.integration.test.ts',
   'src/__tests__/facet-includes-integration.test.ts',
-  'src/__tests__/finding-interpretation-case-proof-fast-path.integration.test.ts',
-  'src/__tests__/finding-interpretation-case-recovery.integration.test.ts',
-  'src/__tests__/finding-interpretation-case-store.integration.test.ts',
-  'src/__tests__/finding-scope-binding.integration.test.ts',
   'src/__tests__/it-acp-workflow-bridge.test.ts',
   'src/__tests__/it-cli-dynamic-import-error.test.ts',
   'src/__tests__/it-cli-entrypoint-lazy-loading.test.ts',
@@ -379,20 +343,12 @@ export const serialGitTestFiles = Object.freeze([
   'src/__tests__/companion-diff-runtime.integration.test.ts',
   // 2026-08-09: ラウンド9で遷移表→実 WorkflowEngine シナリオへ置換した結果、Git fixture+SQLite I/O の重量級になった(#1264 shard 飽和の主因)。
   // 2026-08-09: heavy 並列スライスで birpc onTaskUpdate 期限超過が CI 2コアランナーで2連続再現(#1264)。SQLite+fsync 負荷の実測干渉のため serial へ。
-  'src/__tests__/workflowExecution-finding-storage.integration.test.ts',
-  'src/__tests__/finding-conflict-adjudication-engine.integration.test.ts',
-  'src/__tests__/finding-conflict-adjudication-runner.integration.test.ts',
-  'src/__tests__/finding-evidence-protocol.integration.test.ts',
-  'src/__tests__/finding-ladder-robustness.integration.test.ts',
-  'src/__tests__/finding-manager-filesystem.integration.test.ts',
   'src/__tests__/it-operation-journal-store.test.ts',
-  'src/__tests__/it-team-leader-finding-contract-operation-journal.test.ts',
   // Spawns full runAllTasks engine runs (real child processes); on 2-core CI
   // runners it blocked a parallel worker past the 60s RPC deadline in two
   // consecutive runs (2026-08-04), failing the it job with "Timeout calling
   // onTaskUpdate" despite all tests passing.
   'src/__tests__/it-runAllTasks-auto-requeue.test.ts',
-  'src/__tests__/workflow-engine-structured-caller.integration.test.ts',
 ]);
 
 // These integration tests are resource-intensive enough to starve Vitest's
@@ -400,8 +356,6 @@ export const serialGitTestFiles = Object.freeze([
 // with the single-worker workflow runner.
 export const serialWorkflowTestFiles = Object.freeze([
   'src/__tests__/codex-isolated-executor.test.ts',
-  'src/__tests__/finding-review-integrity-gate.test.ts',
-  'src/__tests__/team-leader-finding-contract-runner.test.ts',
   'src/__tests__/workflow-step-fragment-runtime.test.ts',
   'src/__tests__/workflowExecution-claude-terminal.test.ts',
 ]);

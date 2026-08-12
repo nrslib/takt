@@ -1,15 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { join } from 'node:path';
-import {
-  describeFindingsReferencePath,
-  type FindingsReferenceDescriptor,
-} from '../core/models/workflow-findings-reference.js';
 import { WorkflowConfigRawSchema } from '../core/models/workflow-schemas.js';
 import { parseWhenConditionExpression } from '../core/models/workflow-when-expression.js';
 import {
   formatWorkflowRuleCondition,
-  hasFindingsReference,
-  hasUnquotedFindingsReference,
   parseWorkflowRuleCondition,
   semanticLabelsOf,
 } from '../core/models/workflow-rule-condition.js';
@@ -60,101 +54,42 @@ function workflowWithLoopMonitorRule(condition: string): unknown {
 }
 
 describe('parseWhenConditionExpression', () => {
-  it('should keep findings validation isolated from descriptor mutation attempts', () => {
-    const descriptor = describeFindingsReferencePath(['open', 'count']);
-    expect(descriptor).toBeDefined();
-
-    const mutableDescriptor = descriptor as { kind: FindingsReferenceDescriptor['kind'] };
-    let mutationError: unknown;
-    try {
-      mutableDescriptor.kind = 'string';
-    } catch (error) {
-      mutationError = error;
-    }
-
-    expect(mutationError).toBeInstanceOf(TypeError);
-    expect(() => parseWhenConditionExpression('findings.open.count > 0')).not.toThrow();
-  });
-
-  it('should protect nested findings object and array descriptors at runtime', () => {
-    const openDescriptor = describeFindingsReferencePath(['open']);
-    const itemsDescriptor = describeFindingsReferencePath(['open', 'items']);
-    const itemDescriptor = describeFindingsReferencePath(['open', 'items', '0']);
-    const reviewersDescriptor = describeFindingsReferencePath(['open', 'items', 'reviewers']);
-    expect(openDescriptor?.kind).toBe('object');
-    expect(itemsDescriptor?.kind).toBe('array');
-    expect(itemDescriptor?.kind).toBe('object');
-    expect(reviewersDescriptor?.kind).toBe('array');
-    if (
-      openDescriptor?.kind !== 'object'
-      || itemsDescriptor?.kind !== 'array'
-      || itemDescriptor?.kind !== 'object'
-      || reviewersDescriptor?.kind !== 'array'
-    ) {
-      throw new Error('Expected findings object and array descriptors');
-    }
-
-    expect(() => {
-      (openDescriptor.properties as Record<string, FindingsReferenceDescriptor>).count = {
-        kind: 'string',
-      };
-    }).toThrow(TypeError);
-    expect(() => {
-      (itemsDescriptor as { item: FindingsReferenceDescriptor }).item = { kind: 'string' };
-    }).toThrow(TypeError);
-    expect(() => {
-      (itemDescriptor.properties as Record<string, FindingsReferenceDescriptor>).severity = {
-        kind: 'number',
-      };
-    }).toThrow(TypeError);
-    expect(() => {
-      (reviewersDescriptor.item as { kind: FindingsReferenceDescriptor['kind'] }).kind =
-        'number';
-    }).toThrow(TypeError);
-
-    expect(() => parseWhenConditionExpression('findings.open.count > 0')).not.toThrow();
-    expect(() => parseWhenConditionExpression(
-      'exists(findings.open.items, item.severity == "high")',
-    )).not.toThrow();
-  });
-
   it.each([
     ['boolean', 'true'],
     ['bare state operand', 'context.route_context.ready'],
-    ['comparison', 'findings.open.count >= 1'],
+    ['comparison', 'context.review.count >= 1'],
     ['quoted operator', 'structured.scan.note == "a == b"'],
     [
       'logical clauses',
-      'findings.open.count > 0 || findings.provisional.count > 0 && findings.conflicts.count == 0',
+      'context.review.count > 0 || context.review.pending > 0 && context.review.blocked == 0',
     ],
     [
       'exists predicate',
-      'exists(findings.open.items, item.severity == "high" && item.title == "Example")',
+      'exists(context.review.items, item.severity == "high" && item.title == "Example")',
     ],
     [
       'contains predicate',
-      'exists(findings.open.items, contains(item.familyTags, "provider-e2e"))',
+      'exists(context.review.items, contains(item.familyTags, "provider-e2e"))',
     ],
     [
       'top-level contains',
-      'contains(findings.open.items[0].familyTags, "provider-e2e")',
+      'contains(context.review.items[0].familyTags, "provider-e2e")',
     ],
   ])('should accept a valid %s expression', (_label, expression) => {
     expect(() => parseWhenConditionExpression(expression)).not.toThrow();
   });
 
   it.each([
-    ['missing right operand', 'findings.open.count =='],
-    ['missing left operand', '== findings.open.count'],
-    ['empty logical clause', 'findings.open.count > 0 && && findings.conflicts.count == 0'],
-    ['unbalanced parenthesis', 'exists(findings.open.items, item.severity == "high"'],
+    ['missing right operand', 'context.review.count =='],
+    ['missing left operand', '== context.review.count'],
+    ['empty logical clause', 'context.review.count > 0 && && context.review.blocked == 0'],
+    ['unbalanced parenthesis', 'exists(context.review.items, item.severity == "high"'],
     ['unbalanced quote', 'structured.scan.note == "unfinished'],
-    ['missing exists predicate', 'exists(findings.open.items)'],
-    ['unsupported exists operator', 'exists(findings.open.items, item.severity != "high")'],
-    ['missing contains value', 'contains(findings.open.items[0].familyTags)'],
-    ['too many contains arguments', 'contains(findings.open.items[0].familyTags, "a", "b")'],
-    ['non-array contains operand', 'contains(findings.open.count, 1)'],
-    ['multiple comparison operators', 'findings.open.count == 0 == true'],
+    ['missing exists predicate', 'exists(context.review.items)'],
+    ['unsupported exists operator', 'exists(context.review.items, item.severity != "high")'],
+    ['missing contains value', 'contains(context.review.items[0].familyTags)'],
+    ['too many contains arguments', 'contains(context.review.items[0].familyTags, "a", "b")'],
+    ['multiple comparison operators', 'context.review.count == 0 == true'],
     ['unsupported bare operand', 'unknown'],
     ['unsupported comparison operand', 'unknown == true'],
     ['non-boolean bare number', '1'],
@@ -195,7 +130,7 @@ describe('parseWhenConditionExpression', () => {
   });
 
   it('should decode supported escapes in exists predicate string literals', () => {
-    const expression = String.raw`exists(findings.open.items, item.title == "a\"b" && item.description == "C:\\tmp")`;
+    const expression = String.raw`exists(context.review.items, item.title == "a\"b" && item.description == "C:\\tmp")`;
 
     expect(parseWhenConditionExpression(expression)).toMatchObject({
       alternatives: [[{
@@ -209,7 +144,7 @@ describe('parseWhenConditionExpression', () => {
   });
 
   it('should decode supported escapes in contains() string literals', () => {
-    const expression = String.raw`exists(findings.open.items, contains(item.familyTags, "a\"b\\c"))`;
+    const expression = String.raw`exists(context.review.items, contains(item.familyTags, "a\"b\\c"))`;
 
     expect(parseWhenConditionExpression(expression)).toMatchObject({
       alternatives: [[{
@@ -385,267 +320,12 @@ describe('WorkflowConfigRawSchema when operand validation', () => {
   );
 
   it.each(placements)(
-    'should reject non-boolean findings references as bare operands in a %s',
-    (_label, createWorkflow) => {
-      const references = [
-        'findings.open',
-        'findings.open.bySeverity',
-        'findings.conflicts.unadjudicated',
-        'findings.open.count',
-        'findings.open.items',
-        'findings.open.items[0].id',
-        'findings.unknown',
-      ];
-
-      for (const reference of references) {
-        const result = WorkflowConfigRawSchema.safeParse(
-          createWorkflow(`when(${reference})`),
-        );
-
-        expect(result.success).toBe(false);
-      }
-    },
-  );
-
-  it.each(placements)(
-    'should accept boolean findings references as bare operands in a %s',
-    (_label, createWorkflow) => {
-      const references = [
-        'findings.provisional.fixpoint',
-        'findings.rounds.budgetExhausted',
-        'findings.reviewerAnomalies.budgetExhausted',
-      ];
-
-      for (const reference of references) {
-        const result = WorkflowConfigRawSchema.safeParse(
-          createWorkflow(`when(${reference})`),
-        );
-
-        expect(result.success).toBe(true);
-      }
-    },
-  );
-
-  it.each(placements)(
-    'should reject non-array findings references as exists lists in a %s',
-    (_label, createWorkflow) => {
-      const references = [
-        'findings.open',
-        'findings.open.bySeverity',
-        'findings.conflicts.unadjudicated',
-        'findings.open.count',
-        'findings.provisional.fixpoint',
-        'findings.open.items[0].id',
-        'findings.unknown',
-      ];
-
-      for (const reference of references) {
-        const result = WorkflowConfigRawSchema.safeParse(
-          createWorkflow(`when(exists(${reference}, item.id == "F-1"))`),
-        );
-
-        expect(result.success).toBe(false);
-      }
-    },
-  );
-
-  it.each(placements)(
-    'should accept array findings references as exists lists in a %s',
-    (_label, createWorkflow) => {
-      const references = [
-        'findings.open.items',
-        'findings.provisional.items',
-        'findings.conflicts.items',
-      ];
-
-      for (const reference of references) {
-        const result = WorkflowConfigRawSchema.safeParse(
-          createWorkflow(`when(exists(${reference}, item.id == "F-1"))`),
-        );
-
-        expect(result.success).toBe(true);
-      }
-    },
-  );
-
-  it.each(placements)(
-    'should accept every known findings item field in a %s',
-    (_label, createWorkflow) => {
-      const references = [
-        ['findings.open.items', [
-          'id',
-          'severity',
-          'title',
-          'locations',
-          'locations.length',
-          'locations.0',
-          'description',
-          'suggestion',
-          'reviewers',
-          'reviewers.length',
-          'reviewers.0',
-          'familyTags',
-          'familyTags.length',
-          'familyTags.0',
-          'unknownRawFindingIds',
-          'unknownRawFindingIds.length',
-          'unknownRawFindingIds.0',
-        ]],
-        ['findings.provisional.items', ['id', 'kind', 'reason']],
-        ['findings.conflicts.items', [
-          'id',
-          'status',
-          'findingIds',
-          'findingIds.length',
-          'findingIds.0',
-          'rawFindingIds',
-          'rawFindingIds.length',
-          'rawFindingIds.0',
-          'description',
-        ]],
-      ] as const;
-
-      for (const [listReference, fields] of references) {
-        for (const field of fields) {
-          const result = WorkflowConfigRawSchema.safeParse(createWorkflow(
-            `when(exists(${listReference}, item.${field} == item.${field}))`,
-          ));
-
-          expect(result.success).toBe(true);
-        }
-      }
-    },
-  );
-
-  it.each(placements)(
-    'should accept every optional findings item access form in a %s',
-    (_label, createWorkflow) => {
-      for (const field of ['description', 'suggestion']) {
-        for (const expression of [
-          `when(exists(findings.open.items, item.${field} == "value"))`,
-          `when(findings.open.items[0].${field} == null)`,
-          `when(findings.open.items.${field}.length == 2)`,
-        ]) {
-          const result = WorkflowConfigRawSchema.safeParse(createWorkflow(expression));
-
-          expect(result.success).toBe(true);
-        }
-      }
-    },
-  );
-
-  it.each(placements)(
-    'should reject unknown fields for every findings item shape in a %s',
-    (_label, createWorkflow) => {
-      const invalidReferences = [
-        ['findings.open.items', 'reviewed'],
-        ['findings.open.items', 'constructor'],
-        ['findings.open.items', 'id.value'],
-        ['findings.open.items', 'reviewers.unknown'],
-        ['findings.provisional.items', 'title'],
-        ['findings.conflicts.items', 'severity'],
-        ['findings.conflicts.items', 'findingIds.unknown'],
-      ] as const;
-
-      for (const [listReference, field] of invalidReferences) {
-        for (const predicate of [
-          `item.${field} == false`,
-          `false == item.${field}`,
-        ]) {
-          const result = WorkflowConfigRawSchema.safeParse(createWorkflow(
-            `when(exists(${listReference}, ${predicate}))`,
-          ));
-
-          expect(result.success).toBe(false);
-        }
-      }
-    },
-  );
-
-  it.each(placements)(
-    'should reject unknown findings comparison paths in a %s',
-    (_label, createWorkflow) => {
-      for (const expression of [
-        'when(findings.unknown == 0)',
-        'when(findings.constructor == 0)',
-        'when(0 == findings.unknown)',
-        'when(findings.open.missing == 0)',
-        'when(findings.open.constructor == 0)',
-        'when(findings.open.items[0].missing == "value")',
-      ]) {
-        const result = WorkflowConfigRawSchema.safeParse(createWorkflow(expression));
-
-        expect(result.success).toBe(false);
-      }
-    },
-  );
-
-  it.each(placements)(
-    'should accept known findings comparison paths in a %s',
-    (_label, createWorkflow) => {
-      const references = [
-        'findings.open',
-        'findings.open.items',
-        'findings.provisional.fixpoint',
-        'findings.open.items[0].id',
-        'findings.open.items.id',
-        'findings.open.items.length',
-      ];
-
-      for (const reference of references) {
-        const result = WorkflowConfigRawSchema.safeParse(createWorkflow(
-          `when(${reference} == ${reference})`,
-        ));
-
-        expect(result.success).toBe(true);
-      }
-    },
-  );
-
-  it.each(placements)(
-    'should reject every known non-number findings kind in ordering comparisons in a %s',
-    (_label, createWorkflow) => {
-      const nonNumericReferences = [
-        'findings.open',
-        'findings.open.items',
-        'findings.provisional.fixpoint',
-        'findings.open.items[0].id',
-      ];
-
-      for (const reference of nonNumericReferences) {
-        for (const expression of [
-          `when(${reference} > 0)`,
-          `when(0 < ${reference})`,
-        ]) {
-          const result = WorkflowConfigRawSchema.safeParse(createWorkflow(expression));
-
-          expect(result.success).toBe(false);
-        }
-      }
-    },
-  );
-
-  it.each(placements)(
-    'should accept number findings references in ordering comparisons in a %s',
-    (_label, createWorkflow) => {
-      for (const expression of [
-        'when(findings.open.count >= 1)',
-        'when(1 <= findings.open.bySeverity.high)',
-      ]) {
-        const result = WorkflowConfigRawSchema.safeParse(createWorkflow(expression));
-
-        expect(result.success).toBe(true);
-      }
-    },
-  );
-
-  it.each(placements)(
     'should accept supported string escapes in a %s',
     (_label, createWorkflow) => {
       const expressions = [
         String.raw`when(structured.scan.note == "a\"b\\c")`,
-        String.raw`when(exists(findings.open.items, item.title == "a\"b\\c"))`,
-        String.raw`when(exists(findings.open.items, contains(item.familyTags, "a\"b\\c")))`,
+        String.raw`when(exists(context.review.items, item.title == "a\"b\\c"))`,
+        String.raw`when(exists(context.review.items, contains(item.familyTags, "a\"b\\c")))`,
       ];
 
       for (const expression of expressions) {
@@ -683,30 +363,17 @@ function interactiveRule(condition: string, interactiveOnly = false): WorkflowRu
   return normalizeRule({ condition, next: 'COMPLETE', ...(interactiveOnly ? { interactiveOnly } : {}) });
 }
 
-describe('hasUnquotedFindingsReference', () => {
-  it('condition AST public operations recurse over an and condition directly', () => {
-    const condition = parseWorkflowRuleCondition('approved && when(findings.open.count == 0)');
+describe('workflow rule condition parsing', () => {
+  it('keeps condition AST public operations recursive over an and condition', () => {
+    const condition = parseWorkflowRuleCondition('approved && when(context.review.count == 0)');
 
     expect(condition).toEqual({
       kind: 'and',
       left: { kind: 'semantic', label: 'approved' },
-      right: { kind: 'when', expression: 'findings.open.count == 0' },
+      right: { kind: 'when', expression: 'context.review.count == 0' },
     });
-    expect(formatWorkflowRuleCondition(condition)).toBe('approved && when(findings.open.count == 0)');
+    expect(formatWorkflowRuleCondition(condition)).toBe('approved && when(context.review.count == 0)');
     expect(semanticLabelsOf(condition)).toEqual(['approved']);
-    expect(hasFindingsReference(condition)).toBe(true);
-  });
-
-  it('ignores findings references inside escaped quoted strings', () => {
-    expect(hasUnquotedFindingsReference(String.raw`structured.message == "ignore \"findings.open.count\" here"`)).toBe(false);
-  });
-
-  it('detects findings references after a closed quoted string', () => {
-    expect(hasUnquotedFindingsReference(String.raw`structured.message == "path \\" && findings.open.count == 0`)).toBe(true);
-  });
-  it('classifies only an unquoted findings state access as a findings reference', () => {
-    expect(hasFindingsReference(parseWorkflowRuleCondition('when(structured.note == "findings.open.count")'))).toBe(false);
-    expect(hasFindingsReference(parseWorkflowRuleCondition('when(findings.open.count == 0)'))).toBe(true);
   });
 
   it('rejects empty when expressions at the normalization boundary', () => {
@@ -743,7 +410,7 @@ describe('generateStatusRulesComponents interactive default', () => {
 describe('workflow rule normalization', () => {
   it('rejects the removed when alias instead of translating it into a condition', () => {
     expect(() => normalizeRule({
-      when: 'findings.open.count == 0',
+      when: 'context.review.count == 0',
       next: 'COMPLETE',
     })).toThrow(/condition/i);
   });
@@ -756,9 +423,9 @@ describe('workflow rule normalization', () => {
   });
 
   it.each([
-    'needs_fix && when(findings.provisional.count > 0)',
-    'all("approved") && when(findings.conflicts.count == 0)',
-    'any("needs_fix") && when(findings.open.count > 0)',
+    'needs_fix && when(context.review.pending > 0)',
+    'all("approved") && when(context.review.blocked == 0)',
+    'any("needs_fix") && when(context.review.count > 0)',
   ])('keeps %s in the single condition AST without hidden guard fields', (condition) => {
     const normalized = normalizeRule({ condition, next: 'next-step' });
 
@@ -770,12 +437,12 @@ describe('workflow rule normalization', () => {
 
   it('formats normalized condition ASTs for observability output', () => {
     const normalized = normalizeRule({
-      condition: 'all("approved", "needs_fix") && when(findings.open.count == 0)',
+      condition: 'all("approved", "needs_fix") && when(context.review.count == 0)',
       next: 'next-step',
     });
 
     expect(formatWorkflowRuleCondition(normalized.condition))
-      .toBe('all("approved", "needs_fix") && when(findings.open.count == 0)');
+      .toBe('all("approved", "needs_fix") && when(context.review.count == 0)');
   });
 
   it('omits next when normalizing a return-only rule', () => {
@@ -787,15 +454,15 @@ describe('workflow rule normalization', () => {
 
   it.each([
     'all("x") extra',
-    'approved && && when(findings.open.count == 0)',
-    'when(findings.open.count == 0) && when(findings.conflicts.count == 0)',
+    'approved && && when(context.review.count == 0)',
+    'when(context.review.count == 0) && when(context.review.blocked == 0)',
   ])('rejects malformed reserved condition %s without treating it as a semantic label', (condition) => {
     expect(() => normalizeRule({ condition, next: 'COMPLETE' })).toThrow();
   });
 
   it('should reject an invalid when predicate before creating the condition AST', () => {
     expect(() => normalizeRule({
-      condition: 'when(findings.open.count ==)',
+      condition: 'when(context.review.count ==)',
       next: 'COMPLETE',
     })).toThrow('Invalid when operand');
   });

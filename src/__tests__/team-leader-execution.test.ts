@@ -266,70 +266,6 @@ describe('runTeamLeaderExecution', () => {
     expect(onPlanningNoNewParts).toHaveBeenCalledTimes(1);
   });
 
-  it('Finding Contract mode separates latest raw results from the prior compactable batch', async () => {
-    const p1 = makePart('p1');
-    const p2 = makePart('p2');
-    const requestMoreParts = vi.fn()
-      .mockResolvedValueOnce({
-        done: false,
-        reasoning: 'continue',
-        cancelPartIds: [],
-        parts: [p2],
-        findingContractDecision: { decision: 'continue', reasoning: 'continue', parts: [p2] },
-      })
-      .mockResolvedValueOnce({
-        done: true,
-        reasoning: 'complete',
-        cancelPartIds: [],
-        parts: [],
-        findingContractDecision: {
-          decision: 'complete',
-          reasoning: 'complete',
-          parts: [],
-          fixCoverage: [],
-        },
-      });
-
-    const result = await runTeamLeaderExecution({
-      initialParts: [p1],
-      maxConcurrency: 1,
-      findingContractMode: true,
-      runPart: async (part) => makeResult(part),
-      requestMoreParts,
-    });
-
-    expect(requestMoreParts).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      latestBatchResults: [expect.objectContaining({ part: p2 })],
-      completedPartResults: [expect.objectContaining({ part: p1 })],
-    }));
-    expect(result.findingContractDecision?.decision).toBe('complete');
-  });
-
-  it('Finding Contract mode does not convert duplicate parts or feedback errors into completion', async () => {
-    const part = makePart('p1');
-    await expect(runTeamLeaderExecution({
-      initialParts: [part],
-      maxConcurrency: 1,
-      findingContractMode: true,
-      runPart: async (current) => makeResult(current),
-      requestMoreParts: async () => ({
-        done: false,
-        reasoning: 'duplicate',
-        cancelPartIds: [],
-        parts: [part],
-        findingContractDecision: { decision: 'continue', reasoning: 'duplicate', parts: [part] },
-      }),
-    })).rejects.toThrow(/no new unique parts/);
-
-    await expect(runTeamLeaderExecution({
-      initialParts: [part],
-      maxConcurrency: 1,
-      findingContractMode: true,
-      runPart: async (current) => makeResult(current),
-      requestMoreParts: async () => { throw new Error('feedback failed'); },
-    })).rejects.toThrow('feedback failed');
-  });
-
   it('latches a terminal part failure, aborts siblings, and waits for their settlement', async () => {
     const controller = new AbortController();
     const started: string[] = [];
@@ -348,7 +284,6 @@ describe('runTeamLeaderExecution', () => {
     await expect(runTeamLeaderExecution({
       initialParts: ['p1', 'p2', 'p3'].map(makePart),
       maxConcurrency: 2,
-      findingContractMode: true,
       abortSignal: controller.signal,
       onTerminalError: (error) => controller.abort(error),
       runPart,
@@ -369,7 +304,6 @@ describe('runTeamLeaderExecution', () => {
     await expect(runTeamLeaderExecution({
       initialParts: ['p1', 'p2'].map(makePart),
       maxConcurrency: 2,
-      findingContractMode: true,
       abortSignal: controller.signal,
       onTerminalError: (error) => controller.abort(error),
       runPart: async (part, _partIndex, publicationFence) => {
@@ -400,7 +334,6 @@ describe('runTeamLeaderExecution', () => {
       await runTeamLeaderExecution({
         initialParts: ['p1', 'p2'].map(makePart),
         maxConcurrency: 2,
-        findingContractMode: true,
         abortSignal: controller.signal,
         onTerminalError: (error) => {
           parentStage = 'terminating';
@@ -434,59 +367,6 @@ describe('runTeamLeaderExecution', () => {
       'parent.terminated',
     ]);
     expect(parentStage).toBe('terminated');
-  });
-
-  it('Finding Contract mode propagates an explicit replan decision', async () => {
-    const part = makePart('p1');
-    const result = await runTeamLeaderExecution({
-      initialParts: [part],
-      maxConcurrency: 1,
-      findingContractMode: true,
-      runPart: async (current) => makeResult(current),
-      requestMoreParts: async () => ({
-        done: true,
-        reasoning: 'architecture must change',
-        cancelPartIds: [],
-        parts: [],
-        findingContractDecision: {
-          decision: 'replan',
-          reasoning: 'architecture must change',
-          parts: [],
-          blockers: ['shared contract is inconsistent'],
-        },
-      }),
-    });
-
-    expect(result.findingContractDecision).toEqual(expect.objectContaining({
-      decision: 'replan',
-      blockers: ['shared contract is inconsistent'],
-    }));
-  });
-
-  it('rate limited part bypasses Finding Contract feedback and returns the part result', async () => {
-    const part = makePart('p1');
-    const requestMoreParts = vi.fn(async () => {
-      throw new Error('feedback must not run after rate limit');
-    });
-
-    const result = await runTeamLeaderExecution({
-      initialParts: [part],
-      maxConcurrency: 1,
-      findingContractMode: true,
-      runPart: async (current) => ({
-        ...makeResult(current),
-        response: {
-          ...makeResult(current).response,
-          status: 'rate_limited',
-        },
-      }),
-      requestMoreParts,
-    });
-
-    expect(requestMoreParts).not.toHaveBeenCalled();
-    expect(result.partResults).toHaveLength(1);
-    expect(result.partResults[0]?.response.status).toBe('rate_limited');
-    expect(result.findingContractDecision).toBeUndefined();
   });
 
   it('queued partを取消し、取消済みIDを再利用させない', async () => {

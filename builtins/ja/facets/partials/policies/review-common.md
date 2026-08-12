@@ -164,40 +164,14 @@ finding は現在のコード、型、スキーマ、一次仕様、または再
 
 同じ指摘の堂々巡りを防ぐため、指摘をIDで追跡する。
 
-Finding Contract は individual finding 単位ではなく review workflow 全体に適用される。
-Finding Contract workflow かどうかは、workflow レベルの `finding_contract` 設定が
-宣言されている場合に限って判定する。`findings-ledger.json`、instruction template 内の
-専用 `Finding Contract` セクション、output contract の `観測した指摘` table は、
-すでに Finding Contract が設定された workflow 内での補助証跡であり、それ自体では
-Finding Contract を有効化しない。
-
-Finding Contract 利用時、レビュワーは新規の最終 `finding_id` を採番せず、最終 lifecycle
-状態も判定しない。観測した問題は `観測した指摘` table に、証跡付き raw finding として
-報告する。raw relation には `new` / `persists` / `resolution_confirmation` / `reopened`
-だけを使い、既存 ID への言及は ledger に載っている指摘を参照する場合に限る。最終
-lifecycle 判定と finding ID の対応づけは findings-manager とエンジンの責務である。
-
-Finding Contract が設定された workflow で parse 可能な ledger がある場合、tracked findings
-の正本は ledger である。個別レポートと raw finding 詳細は補助証跡として扱う。ledger が
-存在するが不完全な場合は、mapped findings は ledger に従い、unmapped raw findings は
-findings-manager reconciliation 待ちの potential new entries として扱う。Finding Contract
-が設定された workflow で parse 可能な ledger がない場合、レポート履歴は observed raw
-findings の補助証跡としてのみ使う。最終 `finding_id` や lifecycle 状態は割り当てず、
-従来ルールも適用しない。ledger 再生成または findings-manager reconciliation を待つ。
-
-### 従来の Finding ID ルール（Finding Contract を使わない workflow 向け）
-
-workflow レベルの `finding_contract` 設定がない場合は、以下の従来ルールに従う。
-この節と後続の再オープン条件・ID意味固定は Finding Contract workflow には適用しない。
-Finding Contract で再発が別問題なら reviewer は raw relation を `new` として報告し、最終
-`finding_id` は発行しない。最終 ID と lifecycle は findings-manager とエンジンが決める。
+### Finding ID ルール
 
 - REJECT時に挙げる各問題には `finding_id` を必須で付ける
 - 同じ問題を再指摘する場合は、同じ `finding_id` を再利用する
 - 再指摘時は状態を `persists` とし、未解決である根拠（ファイル/行）を必ず示す
 - 新規指摘は状態 `new` とする
 - 解消済みは状態 `resolved` として一覧化する
-- `finding_id` のない指摘は無効（判定根拠として扱わない）。この legacy 基準は Finding Contract workflow には適用しない
+- `finding_id` のない指摘は無効（判定根拠として扱わない）
 - REJECTは `new` または `persists` の問題が1件以上ある場合のみ許可する
 - 前回指摘を解消済みとする場合、別の構造問題や契約悪化を新たに導入していないか確認する
 

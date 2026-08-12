@@ -118,8 +118,5 @@ export function createWorkflowRunLoopTestContract(
   return {
     ...createWorkflowOccurrenceTestHarness(workflow, state, []),
     getTask: () => task,
-    getRoutingFindings: () => ({ open: [], conflicts: [] }),
-    getFindingScopeIdentity: () => undefined,
-    getFindingIds: () => undefined,
   };
 }

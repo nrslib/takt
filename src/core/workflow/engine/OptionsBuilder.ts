@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import type { AgentWorkflowStep, WorkflowStep, WorkflowState, Language, WorkflowResumePointEntry, McpServerConfig } from '../../models/types.js';
+import type { WorkflowStep, WorkflowState, Language, WorkflowResumePointEntry, McpServerConfig } from '../../models/types.js';
 import type { StepProviderOptions } from '../../models/workflow-types.js';
 import type { TaskReviewScope } from '../review-scope.js';
 import type { RunAgentOptions } from '../../../agents/runner.js';
@@ -42,11 +42,6 @@ import { getWorkflowStepKind } from '../step-kind.js';
 import { resolveStepProviderModel } from '../provider-resolution.js';
 import { resolveDeterministicAutoRoutingProviderInfo, toAutoRoutingStepMetadata } from '../auto-routing/resolver.js';
 import { buildPhase1WorkflowMeta } from './workflow-meta.js';
-import type {
-  FindingContractInstructionContext,
-} from '../instruction/instruction-context.js';
-import type { FindingRestatementSlotOwnerContexts } from '../findings/restatement-slot-runner.js';
-import type { FindingEvidenceSearchRequest } from '../findings/evidence-search.js';
 
 type ResolvedRunAgentOptions = RunAgentOptions & {
   resolvedProviderOptions?: StepProviderOptions;
@@ -83,22 +78,8 @@ export class OptionsBuilder {
     private readonly getWorkflowName: () => string,
     private readonly getWorkflowDescription: () => string | undefined,
     private readonly getCurrentWorkflowStack: () => WorkflowResumePointEntry[] | undefined = () => undefined,
-    private readonly getFindingContractInstructionContext?: (
-      step: WorkflowStep,
-      isReviewer: boolean,
-      reviewScopeSnapshotId?: string,
-      findingContractFreezeKey?: string,
-    ) => FindingContractInstructionContext | undefined,
     private readonly getTask?: () => string,
-    private readonly getFindingRestatementSlotContexts?: (input: {
-      ownerReviewerSteps: readonly AgentWorkflowStep[];
-      reviewScopeSnapshotId: string;
-    }) => ReadonlyMap<string, FindingRestatementSlotOwnerContexts>,
     private readonly getReviewScope?: () => TaskReviewScope,
-    private readonly getFindingEvidenceSearchRequests?: (input: {
-      ownerReviewerSteps: readonly AgentWorkflowStep[];
-      reviewScopeSnapshotId: string;
-    }) => readonly FindingEvidenceSearchRequest[],
     private readonly getFailureDir?: () => string,
   ) {}
 
@@ -107,7 +88,7 @@ export class OptionsBuilder {
    * config）で provider が決まらない agent ステップは、auto_routing の
    * rules → strategy デフォルトへ決定的に補完する。実行ループの AI ルーターを
    * 通るステップは runtime.providerInfo が優先されるため補完は発動せず、
-   * ルーターを通らない合成ステップ（findings-manager 等）もこの共通経路で
+   * ルーターを通らない合成ステップもこの共通経路で
    * デフォルトまで落ちる。
    */
   resolveStepProviderModel(step: WorkflowStep, runtime?: RuntimeStepResolution): StepProviderInfo {
@@ -394,39 +375,6 @@ export class OptionsBuilder {
     return buildPhase1WorkflowMeta(workflowMeta, processSafety);
   }
 
-  buildFindingContractInstructionContext(
-    step: WorkflowStep,
-    isReviewer: boolean,
-    reviewScopeSnapshotId?: string,
-    findingContractFreezeKey?: string,
-  ): FindingContractInstructionContext | undefined {
-    return this.getFindingContractInstructionContext?.(
-      step,
-      isReviewer,
-      reviewScopeSnapshotId,
-      findingContractFreezeKey,
-    );
-  }
-
-  /**
-   * 言い直し slot の1パス分の owner 別 reviewer context。今のパスで提示する
-   * anomaly が無い owner・フェーズは含まれない。呼ぶたびに台帳と提示回数を
-   * 読み直す。
-   */
-  buildFindingRestatementSlotContexts(input: {
-    ownerReviewerSteps: readonly AgentWorkflowStep[];
-    reviewScopeSnapshotId: string;
-  }): ReadonlyMap<string, FindingRestatementSlotOwnerContexts> {
-    return this.getFindingRestatementSlotContexts?.(input) ?? new Map();
-  }
-
-  buildFindingEvidenceSearchRequests(input: {
-    ownerReviewerSteps: readonly AgentWorkflowStep[];
-    reviewScopeSnapshotId: string;
-  }): readonly FindingEvidenceSearchRequest[] {
-    return this.getFindingEvidenceSearchRequests?.(input) ?? [];
-  }
-
   private resolveSupportedMaxTurns(
     step: WorkflowStep,
     maxTurns: number | undefined,
@@ -646,8 +594,6 @@ export class OptionsBuilder {
       ),
       structuredCaller: this.requireStructuredCaller(),
       resolveStepProviderModel: (step) => this.resolveStepProviderModel(step, runtime),
-      buildFindingContractInstructionContext: (step, isReviewer) =>
-        this.buildFindingContractInstructionContext(step, isReviewer),
       getSessionId: (persona: string) => state.personaSessions.get(persona),
       resolveSessionKey: (step) => {
         const providerInfo = this.resolveStepProviderModel(step, runtime);

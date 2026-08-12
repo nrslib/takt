@@ -29,21 +29,9 @@ describe('when expression empty clauses', () => {
   it.each([
     ['and', 'context.a.exists == true && && context.b.exists == true'],
     ['or', 'context.a.exists == true || || context.b.exists == true'],
-    ['exists-inner', 'exists(findings.open.items, item.severity == "high" && && item.id == "F-1")'],
+    ['exists-inner', 'exists(context.review.items, item.severity == "high" && && item.id == "R-1")'],
   ])('should throw on empty clauses in %s expressions at evaluation time', (_label, expression) => {
-    const state = {
-      context: { a: { exists: true }, b: { exists: true } },
-      findings: {
-        open: {
-          count: 1,
-          bySeverity: { critical: 0, high: 1, medium: 0, low: 0 },
-          items: [{ id: 'F-1', severity: 'high', title: 't', reviewers: [] }],
-        },
-        resolved: { count: 0 },
-        waived: { count: 0 },
-        conflicts: { count: 0, items: [] },
-      },
-    } as never;
+    const state = makeState();
     expect(() => evaluateWhenExpression(expression, state)).toThrow('contains an empty clause');
   });
 });

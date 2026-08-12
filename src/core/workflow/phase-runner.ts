@@ -10,9 +10,6 @@ import type { StructuredCaller } from '../../agents/structured-caller.js';
 import type { PhaseName, PhasePromptParts, JudgeStageEntry, StepProviderInfo } from './types.js';
 import type { RunAgentOptions } from '../../agents/runner.js';
 import { needsSemanticStatusJudgment } from '../models/workflow-rule-condition.js';
-import type {
-  FindingContractInstructionContext,
-} from './instruction/instruction-context.js';
 import type { TaskReviewScope } from './review-scope.js';
 export {
   generateReportPhase,
@@ -110,10 +107,6 @@ export interface ReportPhaseRunnerContext extends BasePhaseRunnerContext {
   resolveReportFallbackProviderModel: () => StepProviderInfo | undefined;
   /** Update persona session after a phase run */
   updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
-  buildFindingContractInstructionContext?: (
-    step: WorkflowStep,
-    isReviewer: boolean,
-  ) => FindingContractInstructionContext | undefined;
   resolveStepProviderModel: (step: WorkflowStep) => StepProviderInfo;
 }
 

@@ -31,12 +31,6 @@ export type {
   PartDefinition,
   PartResult,
   TeamLeaderConfig,
-  TeamLeaderMode,
-  FindingContractPartAssignment,
-  FindingContractFindingOutcome,
-  FindingContractPartCompletionClaim,
-  FindingContractFixCoverage,
-  FindingContractTeamLeaderDecision,
 } from './part.js';
 
 // Workflow configuration and runtime state
@@ -80,9 +74,6 @@ export type {
   StepProviderOptions,
   OpenCodeGuardOptions,
   OpenCodeGuardProfile,
-  FindingContractConfig,
-  FindingLedger,
-  FindingsRuleContext,
   AgentWorkflowStep,
   NormalAgentWorkflowStep,
   ParallelWorkflowStep,

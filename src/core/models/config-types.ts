@@ -50,8 +50,8 @@ export interface AutoRoutingConfig {
 
 /**
  * The resolved `escalate` target of the runtime.yaml profile an agent was resolved to.
- * Carried on the resolution result so consumers (Finding Contract escalation) act on a
- * resolved provider/model instead of re-reading configuration or matching model names.
+ * Carried on the resolution result so consumers act on a resolved provider/model instead of
+ * re-reading configuration or matching model names.
  */
 export interface ProviderEscalationTarget {
   profile: string;
@@ -88,15 +88,11 @@ export interface InternalAgentSeats {
   selector?: ProviderRoutingEntry;
   /** `assistant`: 対話モードのアシスタント。 */
   assistant?: ProviderRoutingEntry;
-  /** `intake-normalizer`: Finding Contract のレビュー報告を raw findings へ正規化する係。 */
   intakeNormalizer?: ProviderRoutingEntry;
-  /** `findings-manager`: Finding Contract の台帳マネージャ（取り込み・同一性判定）。 */
   findingsManager?: ProviderRoutingEntry;
-  /** `terminal-adjudicator`: Finding Contract の終端／衝突裁定役（persona facet は supervisor）。 */
   terminalAdjudicator?: ProviderRoutingEntry;
   /** `loop-judge`: loop_monitors の判定役。 */
   loopJudge?: ProviderRoutingEntry;
-  /** `escalation-reviewer`: Finding Contract 言い直しの最終枠（格上げ先）。 */
   escalationReviewer?: ProviderRoutingEntry;
 }
 

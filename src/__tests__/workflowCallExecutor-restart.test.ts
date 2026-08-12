@@ -116,7 +116,6 @@ function makeExecutor(options: {
     setActiveResumePoint: vi.fn(),
     setActiveResumeStack: vi.fn(),
     adoptResumeCheckpoint: vi.fn(),
-    refreshFindingsState: vi.fn(),
   });
   return { executor, createEngine, sharedRuntime };
 }

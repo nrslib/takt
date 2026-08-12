@@ -20,24 +20,16 @@ import { ReportInstructionBuilder } from '../../core/workflow/instruction/Report
 import { StatusJudgmentBuilder } from '../../core/workflow/instruction/StatusJudgmentBuilder.js';
 import { needsStatusJudgmentPhase } from '../../core/workflow/index.js';
 import {
-  resolveStepProviderModel,
   type ProviderModelResolutionContext,
 } from '../../core/workflow/provider-resolution.js';
-import { resolveDeterministicAutoRoutingProviderInfo, toAutoRoutingStepMetadata } from '../../core/workflow/auto-routing/resolver.js';
-import { buildFindingManagerStep } from '../../core/workflow/findings/manager-step.js';
-import { buildFindingTerminalAdjudicationStep } from '../../core/workflow/findings/adjudication-step.js';
 import {
   collectTaskReviewScope,
   resolveReviewScopeBaseRange,
   type TaskReviewScope,
 } from '../../core/workflow/review-scope.js';
-import {
-  validateFindingContractSyntheticProviderModels,
-  type FindingContractSyntheticProviderValidationOptions,
-} from '../../core/workflow/engine/WorkflowValidator.js';
 import type { InstructionContext } from '../../core/workflow/instruction/instruction-context.js';
 import type { WorkflowConfig, WorkflowStep } from '../../core/models/index.js';
-import type { InternalAgentSeats, TagRoutingConflictPolicy } from '../../core/models/config-types.js';
+import type { TagRoutingConflictPolicy } from '../../core/models/config-types.js';
 import { getAllParallelSubSteps, isDynamicParallelSubSteps } from '../../core/models/types.js';
 import type { Language } from '../../core/models/types.js';
 import type { ProviderResolutionSource } from '../../core/workflow/provider-options-trace.js';
@@ -47,7 +39,6 @@ import { header, info, error, blankLine } from '../../shared/ui/index.js';
 import { DEFAULT_WORKFLOW_NAME } from '../../shared/constants.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
 import { getErrorMessage } from '../../shared/utils/error.js';
-import { translateWorkflowConfigError } from '../../shared/workflowConfigMetadata.js';
 
 function printStepExecutionMetadata(step: WorkflowStep): void {
   if (step.sessionKey) {
@@ -108,8 +99,6 @@ type PreviewProviderResolution = CompiledProviderEnvironment & ProviderModelReso
   companionEnabled: boolean;
   providerEnvironment: CompiledProviderEnvironment;
   providerConfigMode: ReturnType<typeof resolveAuxiliaryRuntimeEnvironment>['providerConfigMode'];
-  /** runtime.yaml internal_agents の解決済み seat。合成ロールの表示を実行時と一致させる。 */
-  internalAgentSeats: InternalAgentSeats | undefined;
 };
 
 function resolvePreviewProviderResolution(
@@ -122,75 +111,7 @@ function resolvePreviewProviderResolution(
     companionEnabled: runtimeEnvironment.companionEnabled,
     providerEnvironment: runtimeEnvironment.providerEnvironment,
     providerConfigMode: runtimeEnvironment.providerConfigMode,
-    internalAgentSeats: runtimeEnvironment.providerEnvironment.internalAgents,
   };
-}
-
-function resolveSyntheticProviderModel(
-  step: WorkflowStep,
-  resolution: PreviewProviderResolution,
-): ReturnType<typeof resolveStepProviderModel> {
-  const currentProviderInfo = resolveStepProviderModel({
-    step,
-    provider: resolution.provider,
-    providerSource: resolution.providerSource,
-    model: resolution.model,
-    modelSource: resolution.modelSource,
-    autoRouting: resolution.autoRouting,
-    personaProviders: resolution.personaProviders,
-    providerRouting: resolution.providerRouting,
-    tagConflictPolicy: resolution.tagConflictPolicy,
-  });
-  if (resolution.autoRouting === undefined) {
-    return currentProviderInfo;
-  }
-  // synthetic roles は AI ルーターを通らないため、実行時（OptionsBuilder）と
-  // 同じ rules → strategy デフォルトの決定的解決で表示する。
-  return resolveDeterministicAutoRoutingProviderInfo({
-    autoRouting: resolution.autoRouting,
-    step: toAutoRoutingStepMetadata(step),
-    currentProviderInfo,
-  }) ?? currentProviderInfo;
-}
-
-function printFindingContractMetadata(
-  config: WorkflowConfig,
-  resolution: PreviewProviderResolution,
-): void {
-  const contract = config.findingContract;
-  if (contract === undefined) {
-    return;
-  }
-  const manager = contract.manager;
-  const managerStep = buildFindingManagerStep({
-    contract,
-    workflowProvider: config.provider,
-    workflowModel: config.model,
-    ...(resolution.internalAgentSeats === undefined
-      ? {}
-      : { internalAgentSeats: resolution.internalAgentSeats }),
-  });
-  const providerInfo = resolveSyntheticProviderModel(managerStep, resolution);
-
-  info(`Finding manager: ${sanitizeTerminalText(manager.personaDisplayName ?? manager.persona)}`);
-  info(`Finding manager provider: ${formatConfiguredValue(providerInfo?.provider)}`);
-  info(`Finding manager model: ${formatConfiguredValue(providerInfo?.model)}`);
-  const adjudicator = contract.adjudicator;
-  if (adjudicator === undefined) {
-    return;
-  }
-  const adjudicatorStep = buildFindingTerminalAdjudicationStep({
-    contract,
-    workflowProvider: config.provider,
-    workflowModel: config.model,
-    ...(resolution.internalAgentSeats === undefined
-      ? {}
-      : { internalAgentSeats: resolution.internalAgentSeats }),
-  });
-  const adjudicatorProviderInfo = resolveSyntheticProviderModel(adjudicatorStep, resolution);
-  info(`Finding adjudicator: ${sanitizeTerminalText(adjudicator.personaDisplayName ?? adjudicator.persona)}`);
-  info(`Finding adjudicator provider: ${formatConfiguredValue(adjudicatorProviderInfo.provider)}`);
-  info(`Finding adjudicator model: ${formatConfiguredValue(adjudicatorProviderInfo.model)}`);
 }
 
 /**
@@ -297,27 +218,7 @@ export async function previewPrompts(
 
   const language = resolveWorkflowConfigValue(cwd, 'language') as Language;
   const providerResolution = resolvePreviewProviderResolution(cwd, config);
-  const providerValidationOptions: FindingContractSyntheticProviderValidationOptions = {
-    provider: providerResolution.provider,
-    providerSource: providerResolution.providerSource,
-    model: providerResolution.model,
-    modelSource: providerResolution.modelSource,
-    autoRouting: providerResolution.autoRouting,
-    personaProviders: providerResolution.personaProviders,
-    providerRouting: providerResolution.providerRouting,
-    providerRoutingTagConflictPolicy: providerResolution.tagConflictPolicy,
-    ...(providerResolution.internalAgentSeats === undefined
-      ? {}
-      : { internalAgentSeats: providerResolution.internalAgentSeats }),
-  };
-  try {
-    validateFindingContractSyntheticProviderModels(config, providerValidationOptions);
-  } catch (validationError) {
-    throw translateWorkflowConfigError(config, validationError);
-  }
-  validateWorkflowCallContracts(config, cwd, cwd, {
-    providerValidationOptions,
-  });
+  validateWorkflowCallContracts(config, cwd, cwd);
   const selectorResolution = resolveWorkflowSelector(config, {
     projectCwd: cwd,
     lookupCwd: cwd,
@@ -340,7 +241,6 @@ export async function previewPrompts(
   header(`Workflow Prompt Preview: ${safeWorkflowName}`);
   info(`Steps: ${config.steps.length}`);
   info(`Language: ${language}`);
-  printFindingContractMetadata(config, providerResolution);
   blankLine();
 
   const reviewScope = resolvePreviewReviewScope(cwd);

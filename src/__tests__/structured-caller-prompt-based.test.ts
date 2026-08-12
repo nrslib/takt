@@ -28,7 +28,6 @@ vi.mock('../agents/runner.js', () => ({
 import { PromptBasedStructuredCaller } from '../agents/structured-caller.js';
 import { RETRY_DELAY_MS } from '../agents/structured-caller/prompt-based-structured-caller.js';
 import { resolveStructuredStep } from '../agents/structured-caller/shared.js';
-import { FindingContractTeamLeaderDecisionValidationError } from '../core/workflow/team-leader-finding-contract-decision.js';
 import { MAX_AGENT_FAILURE_MESSAGE_BYTES } from '../shared/types/agent-failure.js';
 
 function createBoundedParseFailure(fullTextPath: string): string {
@@ -453,11 +452,11 @@ describe('PromptBasedStructuredCaller', () => {
     expect(mockRunAgent.mock.calls[1]?.[1]).toContain('decomposition.parts_invalid');
   });
 
-  it('retries prompt-only raw decomposition transport failures without parsing the response', async () => {
+  it('retries prompt-only follow-up transport failures before parsing the response', async () => {
     const rawResponse = {
       persona: 'leader',
       status: 'done' as const,
-      content: 'not parsed by the raw boundary',
+      content: '```json\n{"done":true,"reasoning":"complete","cancelPartIds":[],"parts":[]}\n```',
       timestamp: new Date(),
     };
     mockRunAgent
@@ -465,22 +464,29 @@ describe('PromptBasedStructuredCaller', () => {
       .mockResolvedValueOnce(rawResponse);
 
     const caller = new PromptBasedStructuredCaller();
-    const promise = caller.requestDecompositionRawResponse(
-      'break down the work',
-      3,
+    const promise = caller.requestMoreParts(
+      'continue the work',
+      [],
+      [],
       {
         cwd: '/tmp/project',
         provider: 'cursor',
         persona: 'team-leader',
+        cancellablePartIds: [],
       },
     );
     await vi.advanceTimersByTimeAsync(RETRY_DELAY_MS);
 
-    await expect(promise).resolves.toBe(rawResponse);
+    await expect(promise).resolves.toEqual({
+      done: true,
+      reasoning: 'complete',
+      cancelPartIds: [],
+      parts: [],
+    });
     expect(mockRunAgent).toHaveBeenCalledTimes(2);
   });
 
-  it('returns a delayed raw response after abort while suppressing its public notification', async () => {
+  it('returns a delayed follow-up result after abort while suppressing its public notification', async () => {
     const abortController = new AbortController();
     const onAgentResponse = vi.fn();
     let resolveRunAgent: ((response: {
@@ -493,13 +499,15 @@ describe('PromptBasedStructuredCaller', () => {
       resolveRunAgent = resolve;
     }));
     const caller = new PromptBasedStructuredCaller();
-    const result = caller.requestDecompositionRawResponse(
-      'break down the work',
-      3,
+    const result = caller.requestMoreParts(
+      'continue the work',
+      [],
+      [],
       {
         cwd: '/tmp/project',
         provider: 'cursor',
         persona: 'team-leader',
+        cancellablePartIds: [],
         abortSignal: abortController.signal,
         onAgentResponse,
       },
@@ -510,12 +518,17 @@ describe('PromptBasedStructuredCaller', () => {
     const response = {
       persona: 'leader',
       status: 'done' as const,
-      content: 'late raw response',
+      content: '```json\n{"done":true,"reasoning":"complete","cancelPartIds":[],"parts":[]}\n```',
       timestamp: new Date(),
     };
     resolveRunAgent?.(response);
 
-    await expect(result).resolves.toBe(response);
+    await expect(result).resolves.toEqual({
+      done: true,
+      reasoning: 'complete',
+      cancelPartIds: [],
+      parts: [],
+    });
     expect(onAgentResponse).not.toHaveBeenCalled();
   });
 
@@ -782,29 +795,6 @@ describe('PromptBasedStructuredCaller', () => {
     expect(retryPrompt).not.toContain('"content"');
   });
 
-  it('leaves Finding Contract decomposition recovery to the common acceptance boundary', async () => {
-    mockRunAgent.mockResolvedValue({
-      persona: 'leader',
-      status: 'done',
-      content: '```json\n[]\n```',
-      timestamp: new Date(),
-    });
-    const caller = new PromptBasedStructuredCaller();
-
-    await expect(caller.decomposeTask('repair findings', 3, {
-      cwd: '/tmp/project',
-      provider: 'cursor',
-      persona: 'team-leader',
-      findingContract: {
-        targetFindingIds: ['F-0001'],
-        actionableFindings: '{"open":[{"id":"F-0001"}]}',
-      },
-    })).rejects.toThrow();
-
-    expect(mockRunAgent).toHaveBeenCalledOnce();
-    expect(mockRunAgent.mock.calls[0]?.[1]).not.toContain('Previously rejected decomposition');
-  });
-
   it('should parse additional parts from fenced JSON without outputSchema', async () => {
     mockRunAgent.mockResolvedValue({
       persona: 'leader',
@@ -848,52 +838,6 @@ describe('PromptBasedStructuredCaller', () => {
         provider: 'cursor',
       }),
     );
-  });
-
-  it('leaves Finding Contract semantic retries to the Team Leader acceptance boundary', async () => {
-    mockRunAgent.mockResolvedValue({
-      persona: 'leader',
-      status: 'done',
-      content: [
-        '```json',
-        JSON.stringify({
-          decision: 'continue',
-          reasoning: 'invalid',
-          parts: [],
-          fixCoverage: [],
-          blockers: [],
-        }),
-        '```',
-      ].join('\n'),
-      timestamp: new Date(),
-    });
-
-    const caller = new PromptBasedStructuredCaller();
-    await expect(caller.requestMoreParts(
-      'original task',
-      [{ id: 'p1', title: 'First', status: 'done', content: 'done' }],
-      ['p1'],
-      {
-        cwd: '/tmp/project',
-        provider: 'cursor',
-        findingContract: {
-          targetFindingIds: ['F-0001'],
-          actionableFindings: '{"open":[{"id":"F-0001"}]}',
-          completedPartIndex: [],
-          plannedParts: [],
-          evidence: {
-            entries: [],
-            findings: [{
-              findingId: 'F-0001',
-              eligibleSupportingPartIds: { addressed: [], disputed: [] },
-              eligibleVerificationPartIds: [],
-              completeFeasible: false,
-            }],
-          },
-        },
-      },
-    )).rejects.toBeInstanceOf(FindingContractTeamLeaderDecisionValidationError);
-    expect(mockRunAgent).toHaveBeenCalledTimes(1);
   });
 
   it('prompt-based requestMoreParts は inspect tools を渡さず outputSchema も渡さない', async () => {

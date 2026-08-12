@@ -42,7 +42,6 @@ export interface DynamicFacetSelectorCoordinatorDeps {
   readonly getReportNames: (step: NormalAgentWorkflowStep, state: WorkflowState) => readonly string[];
   readonly getCwd: () => string;
   readonly inputReader?: SelectorInputReader;
-  readonly getUnresolvedFindings: () => string;
 }
 
 export interface DynamicFacetSelectionContext {
@@ -102,8 +101,6 @@ export class DynamicFacetSelectorCoordinator {
       signal,
     );
     signal?.throwIfAborted();
-    const unresolvedFindings = this.deps.getUnresolvedFindings();
-
     const instruction = buildDynamicFacetSelectorInstruction({
       task,
       workflowName: state.workflowName,
@@ -112,7 +109,6 @@ export class DynamicFacetSelectorCoordinator {
       isReentry: previous !== undefined,
       stepIteration,
       reports: inputs.reports,
-      unresolvedFindings,
       cumulativeDiff: inputs.workingTreeDiff,
       pool,
       maxSelected: step.dynamicFacets.maxSelected,
@@ -124,7 +120,6 @@ export class DynamicFacetSelectorCoordinator {
       reports: inputs.reports,
       working_tree_diff: inputs.workingTreeDiff,
       candidates: pool.candidates.map((candidate) => ({ id: candidate.id, description: candidate.description })),
-      unresolved_findings: unresolvedFindings,
     });
     const redact = (text: string): string => sanitizeSensitiveTextWithKnownValues(text, sensitiveValues);
 

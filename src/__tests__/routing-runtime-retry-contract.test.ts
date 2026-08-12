@@ -28,7 +28,6 @@ function createSnapshot(retryNote?: string) {
       stepType: 'parallel',
       passPreviousResponse: false,
     },
-    findings: { open: [], conflicts: [] },
   });
 }
 
@@ -73,37 +72,36 @@ describe('routing runtime retry contract', () => {
     const runtime = new RoutingRuntime({ autoRouting: createAutoRoutingConfig(), estimator: { estimate } });
     const scope = createRoutingScope({ workflow: 'workflow', parentStep: 'fix', workItem: 'fix' });
 
-    await runtime.resolve({ scope, snapshot: createSnapshot('Resolve the architecture finding') });
+    await runtime.resolve({ scope, snapshot: createSnapshot('Resolve the architecture issue') });
     const next = await runtime.resolve({ scope, snapshot: createSnapshot('Update the focused regression test') });
 
     expect(next.fingerprintChanged).toBe(true);
     expect(next.requiredTier).toBe('medium');
   });
 
-  it('Given the same finding changes lifecycle and text, When retrying, Then the no-progress tier floor remains active', async () => {
+  it('Given the same work receives updated text, When retrying, Then the changed fingerprint avoids the no-progress tier floor', async () => {
     const estimate = vi.fn().mockResolvedValue({ requiredTier: 'medium', reasonCodes: ['focused-change'] });
     const runtime = new RoutingRuntime({
       autoRouting: createAutoRoutingConfig(),
       estimator: { estimate },
     });
     const scope = createRoutingScope({ workflow: 'workflow', parentStep: 'fix', workItem: 'fix' });
-    const createFindingSnapshot = (lifecycle: string, description: string) => buildRoutingWorkSnapshot({
-      goal: 'Resolve the open finding',
-      userInputs: [],
+    const createWorkSnapshot = (description: string) => buildRoutingWorkSnapshot({
+      goal: 'Resolve the open issue',
+      userInputs: [description],
       step: { name: 'fix', tags: [], stepType: 'normal', passPreviousResponse: false },
-      findings: { open: [{ id: 'F-1', lifecycle, description }], conflicts: [] },
     });
 
-    await runtime.resolve({ scope, snapshot: createFindingSnapshot('new', 'Initial wording.') });
+    await runtime.resolve({ scope, snapshot: createWorkSnapshot('Initial wording.') });
     runtime.recordExecutionResult({ scope, status: 'done' });
     const retry = await runtime.resolve({
       scope,
-      snapshot: createFindingSnapshot('persists', 'Updated evidence for the same finding.'),
+      snapshot: createWorkSnapshot('Updated evidence for the same issue.'),
     });
 
-    expect(retry.fingerprintChanged).toBe(false);
-    expect(retry.requiredTier).toBe('high');
-    expect(retry.escalationReason).toBe('no-progress');
+    expect(retry.fingerprintChanged).toBe(true);
+    expect(retry.requiredTier).toBe('medium');
+    expect(retry.escalationReason).toBeUndefined();
     expect(estimate).toHaveBeenCalledTimes(2);
   });
 

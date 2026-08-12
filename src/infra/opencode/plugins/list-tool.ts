@@ -7,7 +7,7 @@
  * 同名再発して確定失敗した。前置文の誘導修正に加え、幻覚の受け皿として
  * ディレクトリ一覧の最小ツールを登録する（compatibility requirement）。
  *
- * 責務の上限（Finding Contract）: fs.promises.readdir({ withFileTypes: true }) のみ。
+ * 責務の上限: fs.promises.readdir({ withFileTypes: true }) のみ。
  * 任意コマンド・再帰探索・glob・ファイル内容読み取りへ広げない。
  *
  * 配布経路は coerce-tool-args.ts と同じ（TAKT dist の絶対パスを config.plugin

@@ -15,7 +15,6 @@ export interface RunPaths {
   readonly logsRel: string;
   readonly operationsRel: string;
   readonly operationJournalRel: string;
-  readonly findingContractDatabaseRel: string;
   readonly metaRel: string;
   readonly workflowBundleRel: string;
   readonly workflowBundleManifestRel: string;
@@ -34,7 +33,6 @@ export interface RunPaths {
   readonly logsAbs: string;
   readonly operationsAbs: string;
   readonly operationJournalAbs: string;
-  readonly findingContractDatabaseAbs: string;
   readonly metaAbs: string;
   readonly workflowBundleAbs: string;
   readonly workflowBundleManifestAbs: string;
@@ -62,7 +60,6 @@ export function buildRunPaths(cwd: string, slug: string, namespace?: string[]): 
   const logsRel = `${runRootRel}/logs`;
   const operationsRel = `${runRootRel}/operations`;
   const operationJournalRel = `${operationsRel}/journal.json`;
-  const findingContractDatabaseRel = `${runRootRel}/finding-contract.sqlite`;
   const metaRel = `${runRootRel}/meta.json`;
   const workflowBundleRel = `${runRootRel}/workflow-bundle`;
   const workflowBundleManifestRel = `${workflowBundleRel}/manifest.json`;
@@ -84,7 +81,6 @@ export function buildRunPaths(cwd: string, slug: string, namespace?: string[]): 
     logsRel,
     operationsRel,
     operationJournalRel,
-    findingContractDatabaseRel,
     metaRel,
     workflowBundleRel,
     workflowBundleManifestRel,
@@ -103,7 +99,6 @@ export function buildRunPaths(cwd: string, slug: string, namespace?: string[]): 
     logsAbs: join(cwd, logsRel),
     operationsAbs: join(cwd, operationsRel),
     operationJournalAbs: join(cwd, operationJournalRel),
-    findingContractDatabaseAbs: join(cwd, findingContractDatabaseRel),
     metaAbs: join(cwd, metaRel),
     workflowBundleAbs: join(cwd, workflowBundleRel),
     workflowBundleManifestAbs: join(cwd, workflowBundleManifestRel),

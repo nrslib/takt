@@ -348,7 +348,6 @@ export function normalizeStepFromRaw(
           }
         : undefined,
       args: normalizeStepField(stepPath, ['args'], () => normalizeWorkflowCallArgs(step.name, step.args)),
-      findingContractAuthority: step.finding_contract_authority,
       personaDisplayName: resolvedPersonaDisplayName,
       instruction: '',
       rules,

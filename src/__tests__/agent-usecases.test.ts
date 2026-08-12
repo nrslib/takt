@@ -14,7 +14,7 @@ import {
   type DecomposeTaskOptions,
 } from '../agents/agent-usecases.js';
 import { runTagJudgeStage } from '../agents/judge-status-usecase.js';
-import { requestDecompositionRawResponse } from '../agents/decompose-task-usecase.js';
+import { requestMorePartsRawResponse } from '../agents/decompose-task-usecase.js';
 import { loadEvaluationSchema, loadJudgmentSchema } from '../infra/resources/schema-loader.js';
 import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
 import { OpenCodeProvider } from '../infra/providers/opencode.js';
@@ -802,22 +802,7 @@ describe('agent-usecases', () => {
     ]);
   });
 
-  it('Finding Contract decomposition は構造化出力がない場合に汎用parserへフォールバックしない', async () => {
-    vi.mocked(runAgent).mockResolvedValue(doneResponse('```json [] ```'));
-
-    await expect(decomposeTask('instruction', 2, {
-      cwd: '/repo',
-      findingContract: {
-        targetFindingIds: ['F-0001'],
-        actionableFindings: '{"open":[{"id":"F-0001"}]}',
-      },
-    })).rejects.toThrow('requires structured output');
-
-    expect(parseParts).not.toHaveBeenCalled();
-    expect(runAgent).toHaveBeenCalledOnce();
-  });
-
-  it('非Finding Contract decomposition は意味的検証診断付きで全partsを再生成する', async () => {
+  it('decomposition は意味的検証診断付きで全partsを再生成する', async () => {
     vi.mocked(runAgent)
       .mockResolvedValueOnce(doneResponse('invalid', { parts: [] }))
       .mockResolvedValueOnce(doneResponse('valid', {
@@ -836,7 +821,7 @@ describe('agent-usecases', () => {
     expect(secondPrompt).toContain('regenerate all parts');
   });
 
-  it('非Finding Contract decomposition は provider 例外を再試行しない', async () => {
+  it('decomposition は provider 例外を再試行しない', async () => {
     const providerError = new Error('network unavailable');
     const onAgentError = vi.fn();
     vi.mocked(runAgent).mockRejectedValue(providerError);
@@ -1015,7 +1000,7 @@ describe('agent-usecases', () => {
     expect(onAgentError).not.toHaveBeenCalled();
   });
 
-  it('raw decomposition は中断後の遅延応答を上位境界へ返し、公開通知だけを抑止する', async () => {
+  it('raw follow-up は中断後の遅延応答を上位境界へ返し、公開通知だけを抑止する', async () => {
     const abortController = new AbortController();
     const onAgentResponse = vi.fn();
     let resolveRunAgent: ((response: ReturnType<typeof doneResponse>) => void) | undefined;
@@ -1023,11 +1008,17 @@ describe('agent-usecases', () => {
       resolveRunAgent = resolve;
     }));
 
-    const result = requestDecompositionRawResponse('instruction', 2, {
-      cwd: '/repo',
-      abortSignal: abortController.signal,
-      onAgentResponse,
-    });
+    const result = requestMorePartsRawResponse(
+      'instruction',
+      [],
+      [],
+      {
+        cwd: '/repo',
+        cancellablePartIds: [],
+        abortSignal: abortController.signal,
+        onAgentResponse,
+      },
+    );
     await vi.waitFor(() => expect(runAgent).toHaveBeenCalledOnce());
 
     abortController.abort(new Error('cancelled while waiting'));
