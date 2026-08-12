@@ -38,10 +38,15 @@ describe('review completion evidence', () => {
     const cwd = createDirectory('takt-review-completion-evidence-');
     const outside = createDirectory('takt-review-completion-outside-');
     mkdirSync(join(cwd, 'src'));
+    mkdirSync(join(cwd, 'config'));
     writeFileSync(join(cwd, 'src', 'safe.ts'), 'const api_key = "visible-secret";\nexport const value = 1;\n');
+    writeFileSync(join(cwd, 'src', 'secretary.ts'), 'export const office = 1;\n');
     writeFileSync(join(cwd, '.env'), 'TOKEN=must-not-leak\n');
+    writeFileSync(join(cwd, 'config', 'production-secrets.yaml'), 'token: production-secret\n');
     writeFileSync(join(cwd, 'credentials.json'), '{"opaque":"credential-file-marker"}\n');
+    writeFileSync(join(cwd, 'prod-secrets.txt'), 'prod-secret-marker\n');
     writeFileSync(join(cwd, 'secrets.txt'), 'opaque-secret-file-marker\n');
+    writeFileSync(join(cwd, 'service-account.json'), '{"private_key":"service-account-marker"}\n');
     writeFileSync(join(cwd, 'binary.dat'), Buffer.from([0, 1, 2, 3]));
     writeFileSync(join(outside, 'outside.ts'), 'outside-marker');
     symlinkSync(join(outside, 'outside.ts'), join(cwd, 'linked.ts'));
@@ -52,26 +57,37 @@ describe('review completion evidence', () => {
         '.env',
         '../outside.ts',
         'binary.dat',
+        'config/production-secrets.yaml',
         'credentials.json',
         'linked.ts',
+        'prod-secrets.txt',
         'secrets.txt',
+        'service-account.json',
         'src/safe.ts',
+        'src/secretary.ts',
       ]),
     });
 
     expect(evidence.status).toBe('collected');
-    expect(evidence.files).toEqual([{
-      path: 'src/safe.ts',
-      content: 'const api_key = "[REDACTED]";\nexport const value = 1;\n',
-      truncated: false,
-    }]);
+    expect(evidence.files).toEqual([
+      {
+        path: 'src/safe.ts',
+        content: 'const api_key = "[REDACTED]";\nexport const value = 1;\n',
+        truncated: false,
+      },
+      {
+        path: 'src/secretary.ts',
+        content: 'export const office = 1;\n',
+        truncated: false,
+      },
+    ]);
     expect(JSON.stringify(evidence))
-      .not.toMatch(/visible-secret|must-not-leak|credential-file-marker|opaque-secret-file-marker|outside-marker/);
+      .not.toMatch(/visible-secret|must-not-leak|production-secret|credential-file-marker|prod-secret-marker|opaque-secret-file-marker|service-account-marker|outside-marker/);
     expect(Object.fromEntries(evidence.omissions.map(({ reason, count }) => [reason, count])))
       .toMatchObject({
         binary_file: 1,
         file_unavailable: 2,
-        sensitive_path: 3,
+        sensitive_path: 6,
       });
   });
 
@@ -153,6 +169,14 @@ describe('review completion evidence', () => {
     );
     writeFileSync(join(cwd, '.env.ts'), 'const secretConsumer = stableContract;\n');
     writeFileSync(join(cwd, 'binary.ts'), Buffer.from('stableContract\0binary-body-marker'));
+    mkdirSync(join(cwd, 'config'));
+    writeFileSync(
+      join(cwd, 'config', 'production-secrets.yaml'),
+      'stableContract: production-secret-reference\n',
+    );
+    writeFileSync(join(cwd, 'prod-secrets.ts'), 'const prodSecret = stableContract;\n');
+    writeFileSync(join(cwd, 'service_account.ts'), 'const serviceAccount = stableContract;\n');
+    writeFileSync(join(cwd, 'secretary.ts'), 'const secretary = stableContract;\n');
     writeFileSync(join(outside, 'outside.ts'), 'const outsideConsumer = stableContract;\n');
     symlinkSync(join(outside, 'outside.ts'), join(cwd, 'linked.ts'));
     execFileSync('git', ['add', '.'], { cwd });
@@ -169,20 +193,31 @@ describe('review completion evidence', () => {
       },
     });
 
-    expect(evidence.references).toEqual([{
-      path: 'consumer.ts',
-      line: 1,
-      relationKind: 'module_name',
-      seed: 'changed',
-    }]);
+    expect(evidence.references).toEqual([
+      {
+        path: 'consumer.ts',
+        line: 1,
+        relationKind: 'module_name',
+        seed: 'changed',
+      },
+      {
+        path: 'secretary.ts',
+        line: 1,
+        relationKind: 'declaration',
+        seed: 'stableContract',
+      },
+    ]);
     expect(evidence.references.map(({ path }) => path)).not.toEqual(expect.arrayContaining([
       '.env.ts',
       'binary.ts',
+      'config/production-secrets.yaml',
       'linked.ts',
+      'prod-secrets.ts',
+      'service_account.ts',
       'untracked.ts',
     ]));
     expect(JSON.stringify(evidence)).not.toMatch(
-      /unchangedBodyMarker|secretConsumer|binary-body-marker|outsideConsumer|untrackedConsumer/,
+      /unchangedBodyMarker|secretConsumer|binary-body-marker|production-secret-reference|prodSecret|serviceAccount|outsideConsumer|untrackedConsumer/,
     );
     expect(evidence.omissions).toEqual(expect.arrayContaining([
       { reason: 'reference_binary_file', count: 1 },

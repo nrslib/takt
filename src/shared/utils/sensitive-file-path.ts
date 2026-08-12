@@ -32,7 +32,7 @@ const SENSITIVE_PROJECT_DIRECTORY_NAMES = new Set([
   '.ssh',
 ]);
 
-const SENSITIVE_CONFIG_FILE_NAME_PATTERN = /^(?:auth|authorization|credentials?|secrets?|tokens?|service[-_]account)(?:\.(?:conf(?:ig)?|ini|json|toml|txt|ya?ml))?$/;
+const SENSITIVE_PATH_TOKEN_PATTERN = /(?:^|[._\-\s])(?:auth(?:orization)?|credentials?|secrets?|service[-_]accounts?|tokens?)(?:[._\-\s]|$)/;
 
 export function isSensitiveProjectFilePath(relativePath: string): boolean {
   const lowerSegments = relativePath.split('/').map((segment) => segment.toLowerCase());
@@ -41,8 +41,8 @@ export function isSensitiveProjectFilePath(relativePath: string): boolean {
     return true;
   }
   return lowerSegments.some((segment) => SENSITIVE_PROJECT_DIRECTORY_NAMES.has(segment))
+    || lowerSegments.some((segment) => SENSITIVE_PATH_TOKEN_PATTERN.test(segment))
     || lowerFileName.startsWith('.env')
     || SENSITIVE_PROJECT_FILE_NAMES.has(lowerFileName)
-    || SENSITIVE_CONFIG_FILE_NAME_PATTERN.test(lowerFileName)
     || SENSITIVE_PROJECT_FILE_EXTENSIONS.some((extension) => lowerFileName.endsWith(extension));
 }
