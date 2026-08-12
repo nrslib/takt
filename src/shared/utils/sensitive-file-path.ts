@@ -47,7 +47,7 @@ const SENSITIVE_CONFIG_DATA_FILE_EXTENSIONS = new Set([
 ]);
 
 const SENSITIVE_PURPOSE_BASENAME_PATTERN = /(?:^|[._-])(?:auth(?:orization)?|credentials?|secrets?|service[-_]accounts?|tokens?)(?:[._-]|$)/;
-const SENSITIVE_EXTENSIONLESS_FILE_NAME_PATTERN = /^(?:(?:(?:prod|production)[-_])?secrets?|credentials?|service[-_]accounts?)$/;
+const SENSITIVE_EXTENSIONLESS_FILE_NAME_PATTERN = /(?:^|[._-])secrets?(?:[._-]|$)|^(?:credentials?|service[-_]accounts?)$/;
 
 function hasSensitivePurposeFileName(fileName: string): boolean {
   const extensionSeparator = fileName.lastIndexOf('.');
