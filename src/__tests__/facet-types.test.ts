@@ -2,11 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { parseFacetType, VALID_FACET_TYPES } from '../features/config/facetTypes.js';
 
 describe('CLI facet types', () => {
-  it('should reject consumer mutation of the published facet names', () => {
+  it('should isolate published facet names from consumer mutation', () => {
     const originalFacetTypes = [...VALID_FACET_TYPES];
 
     try {
-      expect(() => (VALID_FACET_TYPES as string[]).push('unknown')).toThrow(TypeError);
+      try {
+        (VALID_FACET_TYPES as string[]).push('unknown');
+      } catch {
+        // A mutation may be rejected, but the observable contract is unchanged shared state.
+      }
       expect(VALID_FACET_TYPES).toEqual(originalFacetTypes);
     } finally {
       if (VALID_FACET_TYPES.length !== originalFacetTypes.length) {

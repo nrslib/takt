@@ -10,6 +10,9 @@ describe('filterSlashCommands', () => {
   it('should return all commands when prefix is "/"', () => {
     const result = filterSlashCommands('/');
     const commands = result.map((e) => e.command);
+    const playCommands = filterSlashCommands('/p').map((e) => e.command);
+    expect(playCommands.length).toBeGreaterThan(0);
+    expect(commands).toEqual(expect.arrayContaining(playCommands));
     expect(commands).not.toContain('/setup');
   });
 
