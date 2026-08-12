@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { resolve } from 'node:path';
+import { posix, resolve } from 'node:path';
 import { readRegularFileNoFollow } from '../../shared/utils/private-file.js';
 import { isSensitiveProjectFilePath } from '../../shared/utils/sensitive-file-path.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
@@ -9,6 +9,7 @@ import type { ReviewScopeBaseRange, TaskReviewScope } from './review-scope.js';
 import { resolveRealPathWithinProject } from './findings/admission-validation.js';
 
 export const REVIEW_COMPLETION_EVIDENCE_MAX_PATHS = 64;
+const REVIEW_COMPLETION_EVIDENCE_MAX_CLAIMED_PATHS = 16;
 export const REVIEW_COMPLETION_EVIDENCE_MAX_PATH_BYTES = 1024;
 export const REVIEW_COMPLETION_EVIDENCE_MAX_FILE_BYTES = 32 * 1024;
 export const REVIEW_COMPLETION_EVIDENCE_MAX_DIFF_BYTES = 256 * 1024;
@@ -22,6 +23,7 @@ type ReviewCompletionEvidenceOmissionReason =
   | 'file_unavailable'
   | 'path_limit'
   | 'path_size_limit'
+  | 'claimed_path_unverified'
   | 'sensitive_path'
   | 'total_size_limit'
   | 'unsupported_scope';
@@ -60,6 +62,74 @@ function collectDiffText(cwd: string, range: string, paths: readonly string[]): 
   }
   const trimmed = decoded.trim();
   return trimmed.length === 0 ? undefined : trimmed;
+}
+
+function decodeNulPaths(content: Buffer): string[] {
+  if (content.length === 0) return [];
+  if (content.at(-1) !== 0) throw new Error('git ls-files output is not NUL terminated');
+  const decoded = content.toString('utf8');
+  if (!Buffer.from(decoded, 'utf8').equals(content)) {
+    throw new Error('git ls-files output is not reversibly UTF-8 encoded');
+  }
+  return decoded.slice(0, -1).split('\0');
+}
+
+function trackedClaimedPaths(cwd: string, paths: readonly string[]): Set<string> {
+  if (paths.length === 0) return new Set();
+  const output = execFileSync('git', ['ls-files', '--cached', '-z', '--', ...paths], {
+    cwd,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    maxBuffer: REVIEW_COMPLETION_EVIDENCE_MAX_DIFF_BYTES,
+  });
+  return new Set(decodeNulPaths(output));
+}
+
+function isCanonicalRepositoryPath(path: string): boolean {
+  return path.length > 0
+    && !path.includes('\0')
+    && !posix.isAbsolute(path)
+    && path !== '.'
+    && path !== '..'
+    && !path.startsWith('../')
+    && posix.normalize(path) === path;
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
+/**
+ * Extract repository paths only from the reviewer's structured finding contract.
+ * Free-form prose is deliberately ignored: every returned path still has to pass
+ * the tracked-file and filesystem safety checks in collectReviewCompletionEvidence.
+ */
+export function reviewCompletionClaimedPaths(structuredOutput: Record<string, unknown> | undefined): string[] {
+  const rawFindings = structuredOutput?.rawFindings;
+  if (!Array.isArray(rawFindings)) return [];
+  const paths = new Set<string>();
+  for (const entry of rawFindings.slice(0, REVIEW_COMPLETION_EVIDENCE_MAX_CLAIMED_PATHS)) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue;
+    const raw = entry as Record<string, unknown>;
+    const candidate = typeof raw.candidate === 'object' && raw.candidate !== null
+      && !Array.isArray(raw.candidate)
+      ? raw.candidate as Record<string, unknown>
+      : raw;
+    const target = typeof candidate.target === 'object' && candidate.target !== null
+      && !Array.isArray(candidate.target)
+      ? candidate.target as Record<string, unknown>
+      : undefined;
+    stringArray(target?.paths).forEach((path) => paths.add(path));
+    stringArray(target?.manifestTargets).forEach((path) => paths.add(path));
+    const evidence = Array.isArray(candidate.evidenceRequests)
+      ? candidate.evidenceRequests
+      : Array.isArray(raw.evidence) ? raw.evidence : [];
+    for (const item of evidence) {
+      if (typeof item !== 'object' || item === null || Array.isArray(item)) continue;
+      const record = item as Record<string, unknown>;
+      if (record.kind === 'file_quote' && typeof record.path === 'string') paths.add(record.path);
+    }
+  }
+  return [...paths];
 }
 
 function collectWorkingTreeDiff(
@@ -169,19 +239,65 @@ function enforceSerializedLimit(
 export function collectReviewCompletionEvidence(input: {
   readonly cwd: string;
   readonly reviewScope: TaskReviewScope | undefined;
+  readonly claimedPaths?: readonly string[];
 }): ReviewCompletionEvidence {
   const omissionCounts = new Map<ReviewCompletionEvidenceOmissionReason, number>();
   if (input.reviewScope === undefined || input.reviewScope.kind !== 'collected') {
     addOmission(omissionCounts, 'unsupported_scope');
     return buildEvidence([], undefined, omissionCounts);
   }
+  const reviewScope = input.reviewScope;
 
-  const selectedPaths = input.reviewScope.paths.slice(0, REVIEW_COMPLETION_EVIDENCE_MAX_PATHS);
-  if (input.reviewScope.paths.length > selectedPaths.length) {
+  const novelClaimedPaths = [...new Set(input.claimedPaths ?? [])]
+    .filter((path) => !reviewScope.paths.includes(path));
+  const boundedClaimedPaths = novelClaimedPaths.slice(
+    0,
+    REVIEW_COMPLETION_EVIDENCE_MAX_CLAIMED_PATHS,
+  );
+  if (novelClaimedPaths.length > boundedClaimedPaths.length) {
     addOmission(
       omissionCounts,
       'path_limit',
-      input.reviewScope.paths.length - selectedPaths.length,
+      novelClaimedPaths.length - boundedClaimedPaths.length,
+    );
+  }
+  const claimedCandidates = boundedClaimedPaths.filter((path) => {
+    if (!isCanonicalRepositoryPath(path)) {
+      addOmission(omissionCounts, 'claimed_path_unverified');
+      return false;
+    }
+    if (Buffer.byteLength(path, 'utf8') > REVIEW_COMPLETION_EVIDENCE_MAX_PATH_BYTES) {
+      addOmission(omissionCounts, 'path_size_limit');
+      return false;
+    }
+    if (isSensitiveProjectFilePath(path)) {
+      addOmission(omissionCounts, 'sensitive_path');
+      return false;
+    }
+    return true;
+  });
+  let verifiedClaimedPaths: Set<string> | undefined;
+  try {
+    verifiedClaimedPaths = trackedClaimedPaths(input.cwd, claimedCandidates);
+  } catch {
+    addOmission(omissionCounts, 'claimed_path_unverified', claimedCandidates.length);
+  }
+  if (verifiedClaimedPaths !== undefined) {
+    for (const path of claimedCandidates) {
+      if (!verifiedClaimedPaths.has(path)) addOmission(omissionCounts, 'claimed_path_unverified');
+    }
+  }
+  const admittedClaimedPaths = claimedCandidates.filter(
+    (path) => verifiedClaimedPaths?.has(path) === true,
+  );
+  const scopePathLimit = REVIEW_COMPLETION_EVIDENCE_MAX_PATHS - admittedClaimedPaths.length;
+  const selectedScopePaths = reviewScope.paths.slice(0, scopePathLimit);
+  const selectedPaths = [...selectedScopePaths, ...admittedClaimedPaths];
+  if (reviewScope.paths.length > selectedScopePaths.length) {
+    addOmission(
+      omissionCounts,
+      'path_limit',
+      reviewScope.paths.length - selectedScopePaths.length,
     );
   }
 
@@ -247,7 +363,7 @@ export function collectReviewCompletionEvidence(input: {
 
   let diff: string | undefined;
   try {
-    const collectedDiff = collectReviewScopeDiff(input.cwd, input.reviewScope, diffPaths);
+    const collectedDiff = collectReviewScopeDiff(input.cwd, reviewScope, diffPaths);
     if (collectedDiff !== undefined) {
       const sanitizedDiff = sanitizeSensitiveText(collectedDiff);
       const boundedDiff = truncateUtf8(

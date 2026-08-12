@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { TaskReviewScope } from '../core/workflow/review-scope.js';
 import {
   collectReviewCompletionEvidence,
+  reviewCompletionClaimedPaths,
   REVIEW_COMPLETION_EVIDENCE_MAX_FILE_BYTES,
   REVIEW_COMPLETION_EVIDENCE_MAX_TOTAL_BYTES,
 } from '../core/workflow/review-completion-evidence.js';
@@ -97,6 +98,45 @@ describe('review completion evidence', () => {
     expect(evidence.files).toEqual([]);
     expect(evidence.diff).toMatch(/-export const removed = true;/);
     expect(evidence.omissions).toContainEqual({ reason: 'file_unavailable', count: 1 });
+  });
+
+  it('admits structured claimed consumers only after tracked-path and security validation', () => {
+    const cwd = createDirectory('takt-review-completion-claimed-evidence-');
+    execFileSync('git', ['init'], { cwd });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd });
+    writeFileSync(join(cwd, 'changed.ts'), 'export const changed = 1;\n');
+    writeFileSync(join(cwd, 'consumer.ts'), 'export const consumer = true;\n');
+    writeFileSync(join(cwd, 'secrets.txt'), 'opaque-secret-marker\n');
+    execFileSync('git', ['add', '.'], { cwd });
+    execFileSync('git', ['commit', '-m', 'base'], { cwd });
+    const baseCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).trim();
+    writeFileSync(join(cwd, 'changed.ts'), 'export const changed = 2;\n');
+    const claimedPaths = reviewCompletionClaimedPaths({
+      rawFindings: [{
+        candidate: {
+          target: { kind: 'code', paths: ['consumer.ts', 'secrets.txt', '../outside.ts'] },
+          evidenceRequests: [{ kind: 'file_quote', path: 'consumer.ts' }],
+        },
+      }],
+    });
+
+    const evidence = collectReviewCompletionEvidence({
+      cwd,
+      reviewScope: {
+        kind: 'collected',
+        paths: ['changed.ts'],
+        source: { kind: 'working_tree', baseRange: { kind: 'branch_base', baseCommit } },
+      },
+      claimedPaths,
+    });
+
+    expect(evidence.files.map(({ path }) => path)).toEqual(['changed.ts', 'consumer.ts']);
+    expect(JSON.stringify(evidence)).not.toContain('opaque-secret-marker');
+    expect(evidence.omissions).toEqual(expect.arrayContaining([
+      { reason: 'claimed_path_unverified', count: 1 },
+      { reason: 'sensitive_path', count: 1 },
+    ]));
   });
 
   it('includes commits after a materialized PR head in local diff evidence', () => {

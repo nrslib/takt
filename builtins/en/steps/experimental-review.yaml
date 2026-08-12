@@ -20,7 +20,8 @@ parallel:
   fixed:
     - name: coding-review
       capabilities: readonly
-      tags: [review]
+      tags: [review, review-completion]
+      review_completion: {}
       edit: false
       persona: coding-reviewer
       policy:
@@ -43,7 +44,8 @@ parallel:
             format: coding-review
     - name: ai-antipattern-review
       capabilities: readonly
-      tags: [review]
+      tags: [review, review-completion]
+      review_completion: {}
       edit: false
       persona: ai-antipattern-reviewer
       policy:
@@ -65,7 +67,8 @@ parallel:
     - name: architecture-review
       description: Review module structure, responsibility boundaries, dependency direction, and call paths.
       capabilities: readonly
-      tags: [review]
+      tags: [review, review-completion]
+      review_completion: {}
       edit: false
       persona: architecture-reviewer
       policy: [contract-change, review]
@@ -80,7 +83,8 @@ parallel:
     - name: frontend-review
       description: Review UI, components, state management, accessibility, and presentation.
       capabilities: readonly
-      tags: [review]
+      tags: [review, review-completion]
+      review_completion: {}
       edit: false
       persona: frontend-reviewer
       policy: [contract-change, review]
@@ -95,7 +99,8 @@ parallel:
     - name: backend-review
       description: Review APIs, domain logic, server-side processing, and persistence.
       capabilities: readonly
-      tags: [review]
+      tags: [review, review-completion]
+      review_completion: {}
       edit: false
       persona: coding-reviewer
       policy: [contract-change, review, coding]
@@ -110,7 +115,8 @@ parallel:
     - name: security-review
       description: Review authentication, authorization, input validation, secrets, dependencies, and security boundaries.
       capabilities: readonly
-      tags: [review]
+      tags: [review, review-completion]
+      review_completion: {}
       edit: false
       persona: security-reviewer
       policy: [contract-change, security-review]
@@ -129,7 +135,8 @@ parallel:
     - name: testing-review
       description: Review test coverage, test design, integration boundaries, and E2E boundaries.
       capabilities: readonly
-      tags: [review]
+      tags: [review, review-completion]
+      review_completion: {}
       edit: false
       persona: testing-reviewer
       policy: [contract-change, review, testing]

@@ -162,6 +162,89 @@ describe('WorkflowEngine review completion wiring', () => {
     expect(judgePayload.repository_evidence.diff).toMatch(/-export const version = 1;[\s\S]*\+export const version = 2;/);
   });
 
+  it('adds a tracked consumer claimed by the structured reviewer output to judge evidence', async () => {
+    execFileSync('git', ['init'], { cwd });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd });
+    writeFileSync(`${cwd}/review-target.ts`, 'export const version = 1;\n');
+    writeFileSync(`${cwd}/consumer.ts`, 'export const consumer = true;\n');
+    execFileSync('git', ['add', '.'], { cwd });
+    execFileSync('git', ['commit', '-m', 'base'], { cwd });
+    writeFileSync(`${cwd}/review-target.ts`, 'export const version = 2;\n');
+    const step = reviewStep('reviewer', { reviewCompletion: { ...completion, maxRetry: 0 } });
+    engine = new WorkflowEngine(normalConfig(step), cwd, 'task', { projectCwd: cwd, provider: 'mock' });
+    let judgeInstruction = '';
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      if (options.internalAgentName === 'review-completion-judge') {
+        judgeInstruction = instruction;
+        return judgeResponse(true);
+      }
+      options.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: instruction });
+      return makeResponse({
+        persona: String(persona),
+        content: 'consumer.ts is an affected consumer',
+        sessionId: 'review-session',
+        structuredOutput: {
+          rawFindings: [{
+            candidate: {
+              target: { kind: 'code', paths: ['consumer.ts'] },
+              evidenceRequests: [],
+            },
+          }],
+        },
+      });
+    });
+
+    await engine.run();
+
+    const judgePayload = JSON.parse(judgeInstruction.slice(judgeInstruction.indexOf('{')));
+    expect(judgePayload.repository_evidence.files).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'consumer.ts', content: 'export const consumer = true;\n' }),
+    ]));
+  });
+
+  it('validates and adds a prior judge gap path to the next attempt evidence', async () => {
+    execFileSync('git', ['init'], { cwd });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd });
+    writeFileSync(`${cwd}/review-target.ts`, 'export const version = 1;\n');
+    writeFileSync(`${cwd}/consumer.ts`, 'export const consumer = true;\n');
+    execFileSync('git', ['add', '.'], { cwd });
+    execFileSync('git', ['commit', '-m', 'base'], { cwd });
+    writeFileSync(`${cwd}/review-target.ts`, 'export const version = 2;\n');
+    const step = reviewStep('reviewer');
+    engine = new WorkflowEngine(normalConfig(step), cwd, 'task', { projectCwd: cwd, provider: 'mock' });
+    const judgeInstructions: string[] = [];
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      if (options.internalAgentName === 'review-completion-judge') {
+        judgeInstructions.push(instruction);
+        return judgeInstructions.length === 1 ? makeResponse({
+          persona: 'review-completion-judge',
+          content: 'decision',
+          structuredOutput: {
+            complete: false,
+            reason: 'consumer not checked',
+            missing_obligations: [{
+              kind: 'family_lifecycle_gap',
+              contract_family: 'consumer',
+              path: 'consumer.ts',
+              reason: 'consumer path is unverified',
+            }],
+          },
+        }) : judgeResponse(true);
+      }
+      options.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: instruction });
+      return reviewerResponse(String(persona), 'review report', 'review-session');
+    });
+
+    await engine.run();
+
+    const secondPayload = JSON.parse(judgeInstructions[1]!.slice(judgeInstructions[1]!.indexOf('{')));
+    expect(secondPayload.repository_evidence.files).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'consumer.ts', content: 'export const consumer = true;\n' }),
+    ]));
+  });
+
   it('keeps parallel reviewer completion episodes independent', async () => {
     const reviewerA = reviewStep('reviewer-a');
     const reviewerB = reviewStep('reviewer-b');

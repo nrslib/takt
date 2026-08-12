@@ -47,7 +47,8 @@ steps:
         - name: architecture-review
           description: モジュール構造、責務分割、依存方向、呼び出し経路をレビューする
           capabilities: readonly
-          tags: [review]
+          tags: [review, review-completion]
+          review_completion: {}
           edit: false
           persona: architecture-reviewer
           policy: [contract-change, review]
@@ -62,7 +63,8 @@ steps:
         - name: security-review
           description: TAKTの変更で生じる具体的なセキュリティ境界をレビューする
           capabilities: readonly
-          tags: [review]
+          tags: [review, review-completion]
+          review_completion: {}
           edit: false
           persona: security-reviewer
           policy: [contract-change, security-review]
@@ -81,7 +83,8 @@ steps:
         - name: testing-review
           description: テストカバレッジ、テスト設計、統合境界、E2E境界をレビューする
           capabilities: readonly
-          tags: [review]
+          tags: [review, review-completion]
+          review_completion: {}
           edit: false
           persona: testing-reviewer
           policy: [contract-change, review, testing, takt-testing]
