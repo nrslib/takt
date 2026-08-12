@@ -10,8 +10,6 @@ import {
 import { createLocalRepo, type LocalRepo } from '../helpers/test-repo';
 import { runTakt } from '../helpers/takt-runner';
 import { readSessionRecords } from '../helpers/session-log';
-import { copyWorkflowFixtureToRepo } from '../helpers/local-workflow-fixture';
-import { readOnlyRunFindingLedger } from '../helpers/finding-ledger';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -219,100 +217,4 @@ describe('E2E: --provider option override (mock)', () => {
     expect(result.exitCode).toBe(1);
     expect(`${result.stdout}\n${result.stderr}`).toContain('base_url');
   }, 240_000);
-
-  it('should execute the finding manager through its resolved provider/model', () => {
-    // manager の provider/model は workflow に書けない。seat 未指定なら
-    // persona routing → workflow 既定、の既定解決へそのまま落ちる。
-    updateIsolatedConfig(isolatedEnv.taktDir, {
-      provider_routing: {
-        personas: {
-          'findings-manager.md': {
-            provider: 'mock',
-            model: 'routed-manager-model',
-          },
-        },
-      },
-    });
-
-    const workflowPath = copyWorkflowFixtureToRepo(
-      repo.path,
-      resolve(__dirname, '../fixtures/workflows/finding-contract-manager-provider/finding-contract-manager-provider.yaml'),
-    );
-    const scenarioPath = resolve(__dirname, '../fixtures/scenarios/finding-contract-manager-provider.json');
-
-    const result = runTakt({
-      args: [
-        '--task', 'Verify finding manager provider and model routing',
-        '--workflow', workflowPath,
-        '--provider', 'mock',
-      ],
-      cwd: repo.path,
-      env: {
-        ...isolatedEnv.env,
-        TAKT_MOCK_SCENARIO: scenarioPath,
-      },
-      timeout: 240_000,
-    });
-
-    expect(result.exitCode, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(result.stdout).toContain('Workflow completed');
-
-    const records = readSessionRecords(repo.path);
-    expect(records.some((record) => record.type === 'workflow_complete')).toBe(true);
-
-    const ledger = readOnlyRunFindingLedger(repo.path);
-    expect(ledger.findings).toEqual([]);
-    expect(ledger.rawFindings).toEqual([]);
-    expect(ledger.conflicts).toEqual([]);
-  }, 240_000);
-
-  it('should display the resolved finding manager provider/model in prompt preview', () => {
-    const workflowPath = resolve(
-      __dirname,
-      '../fixtures/workflows/finding-contract-manager-provider/finding-contract-manager-provider.yaml',
-    );
-
-    const result = runTakt({
-      args: ['prompt', workflowPath],
-      cwd: repo.path,
-      env: isolatedEnv.env,
-      timeout: 60_000,
-    });
-
-    const combined = `${result.stdout}\n${result.stderr}`;
-    expect(combined).toContain('Finding manager provider: mock');
-    expect(combined).toContain('Finding manager model: manager-mock-model');
-  }, 60_000);
-
-  it('should validate the resolved finding manager provider/model before mock execution', () => {
-    // routing が manager だけを「model の無い opencode」へ落とす構成は実行前に落ちる。
-    // 合成ロールの検証は workflow の記述ではなく解決結果に対して働く。
-    updateIsolatedConfig(isolatedEnv.taktDir, {
-      provider_routing: {
-        personas: {
-          'findings-manager.md': { provider: 'opencode' },
-        },
-      },
-    });
-
-    const workflowPath = resolve(
-      __dirname,
-      '../fixtures/workflows/finding-contract-manager-provider/finding-contract-manager-provider.yaml',
-    );
-
-    const result = runTakt({
-      args: [
-        '--task', 'Reject invalid finding manager provider and model',
-        '--workflow', workflowPath,
-      ],
-      cwd: repo.path,
-      env: isolatedEnv.env,
-      timeout: 60_000,
-      injectProvider: false,
-    });
-
-    const combined = `${result.stdout}\n${result.stderr}`;
-    expect(result.exitCode, combined).toBe(1);
-    expect(combined).toContain("findings-manager model must be in 'provider/model' format");
-  }, 60_000);
 });

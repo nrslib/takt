@@ -621,21 +621,7 @@ export async function createWorkflowExecutionBootstrap(
         })
       : [],
   );
-  validateWorkflowCallContracts(effectiveWorkflowConfig, projectCwd, cwd, {
-    providerValidationOptions: {
-      provider: currentProvider,
-      providerSource: currentProviderSource,
-      model: configuredModel,
-      modelSource: configuredModelSource,
-      autoRouting: providerEnvironment.autoRouting,
-      personaProviders: effectivePersonaProviders,
-      providerRouting: effectiveProviderRouting,
-      providerRoutingTagConflictPolicy,
-      ...(providerEnvironment.internalAgents === undefined
-        ? {}
-        : { internalAgentSeats: providerEnvironment.internalAgents }),
-    },
-  });
+  validateWorkflowCallContracts(effectiveWorkflowConfig, projectCwd, cwd);
   const providerEventLogger = createProviderEventLogger({
     logsDir: runPaths.logsAbs,
     sessionId: workflowSessionId,

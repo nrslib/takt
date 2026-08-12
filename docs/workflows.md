@@ -202,7 +202,6 @@ What `{review_scope}` covers depends on where the run came from.
 - The working-tree computation (always performed): the union of committed changes since the base commit, uncommitted working-tree changes, and untracked files (ignored files excluded). It therefore still lists the changes when the task changes are already committed to the branch and the working-tree diff is empty.
 - PR-derived runs (a run carrying a PR context, e.g. `takt --pr N`): the PR diff range `base...head` is added **on top of** the working-tree computation. `--pr` pulls in PR review comments and fixes them, so the working tree changes within the same run and both belong to the review scope. If the diff range is not available locally, the text says so and lists the local changes only.
 
-The Finding Contract uses the same working-tree computation for evidence verification. Composing in the PR diff range is an instruction-injection-only extension; it does not enter evidence verification, which byte-exactly matches against what exists in the working directory.
 
 When the working directory is not a Git repository, or no change is detected, it resolves to text stating that fact rather than to an empty string. Lists longer than 200 files are truncated with the remaining count stated. Builtin general-purpose reviewers receive this variable automatically through the `instructions/review-round-scope` partial.
 
@@ -296,63 +295,6 @@ Sub-steps execute concurrently, and the parent aggregates sub-step matches via `
 - Parallel sub-steps do not support `promotion`
 - The parent step accepts an optional `concurrency: <N>` (minimum 1) to bound how many sub-steps run at the same time; without it, all sub-steps start together
 
-### Finding Contract reviewer output normalization
-
-There is one path, and every Finding Contract reviewer takes it. A reviewer always
-writes an ordinary Markdown review report — never JSON, never a structured output
-contract — and a single isolated normalizer call turns that report into raw findings.
-Escalated re-review uses the same path. Nothing declares which models can hold a
-structured contract, because reviewers are never asked to hold one.
-
-Cost characteristic: one normalizer call per reviewer per round, on top of the
-reviewer's own phases. It is a fixed per-round cost, not a penalty paid after a
-failure.
-
-The three roles own separate decisions. The **reviewer only observes**: what is
-broken, where, why, and where the evidence can be quoted, written as labelled
-fields (target files, description, evidence) in its report's
-`## Finding Contract Claims` section. It never states a severity, a title, an
-issue-family tag, or a ledger relation. The **normalizer** extracts those
-observations and assigns the classification — `severity`, `title`, `familyTag` —
-from the claim's own content; the ban on fabrication applies to observed facts
-(paths, line ranges, quotes, finding IDs, lifecycle decisions), not to that
-classification, and each publication records `classificationAuthority:
-intake-normalizer` so a ledger severity can be traced to who chose it. The
-**findings-manager** decides identity against the ledger: whether a claim is new,
-repeats an open finding, or confirms one resolved. Consequently the intake
-contract asks a reviewer for the substance of the observation only — claim text,
-target, and offered evidence — and a missing severity or tag is never a reason to
-send a report back for restatement.
-
-The normalizer's provider/model resolve from the runtime.yaml
-`provider.targets.internal_agents['intake-normalizer']` seat, then the reviewer's
-`escalate` target when its profile declares one, then the ordinary default
-resolution — where "ordinary" means the same tier as `findings-manager`, so
-`provider_routing` still applies. An explicit CLI or environment override outranks
-all of them, exactly as it does for every other step. The first candidate that
-resolves must support isolated structured execution; if it does not, the run stops
-with that reason instead of silently continuing, and workflow loading and
-`takt workflow doctor` reject that configuration before any agent runs.
-
-Because the normalizer is now the round's only gate, failures are split by cause.
-
-When the **normalizer's own output** is at fault (schema not satisfied, the claim lost
-between `rawExcerpt` and `candidate`) and the existing single correction does not fix
-it, TAKT runs the normalization once more on the **next** candidate of that same
-resolution chain — the first one whose `(provider, model)` differs from the one already
-used and that can run isolated structured execution. Only one such retry happens, and a
-schema defect on the engine side is never retried elsewhere. If that retry also fails,
-the run stops with every candidate's concrete reason (which item failed which check).
-
-When the **report** is at fault, the run does not stop. A reviewer that ignores the
-Markdown contract — for example one that emits its whole report as a JSON payload —
-produces excerpts that cannot be found byte-exact in its own report text, and no other
-normalizer would read that report any differently. TAKT records a `protocol-anomaly`
-against that reviewer instead, carrying the report as the claim excerpt and an
-instruction to rewrite it as ordinary Markdown prose, and lets the existing restatement
-path ask for it again. Nothing from that reviewer reaches the ledger for that round, the
-round still counts against `review_budget`, and the other reviewers of the same round
-are unaffected.
 
 ### Dynamic Parallel Step
 
@@ -666,90 +608,6 @@ There is no implicit fallback.
 - `takt workflow preview` shows the dynamic pool name, candidate IDs, referenced facets, and source.
 - When builtin ja/en pools are provided, their candidate ID sets are kept identical.
 
-### Finding Contract synthetic role provider/model
-
-A workflow never names a provider or model for a synthetic role. `finding_contract.manager` and
-`finding_contract.adjudicator` accept no `provider` / `model` field; the schema is strict, so a
-leftover key is rejected at load time. The destination is assigned in `runtime.yaml` through the
-`internal_agents` seats:
-
-```yaml
-# runtime.yaml
-provider:
-  profiles:
-    strong: { provider: codex, model: gpt-5.5 }
-  targets:
-    internal_agents:
-      findings-manager:     { profile: strong }
-      terminal-adjudicator: { profile: strong }
-      loop-judge:           { profile: strong }
-      escalation-reviewer:  { profile: strong }
-      intake-normalizer:    { profile: strong }
-```
-
-The report is saved before normalization, and the normalizer receives only that
-single report in a fresh, tool-free session.
-
-**Every seat is optional.** An unassigned seat keeps the ordinary resolution the role has always
-used (persona routing → workflow → project → global → provider default, plus the reviewer profile's
-`escalate` chain for the normalizer). An assigned seat is applied as a step-level `provider` /
-`model` for that role, so it takes priority over `provider_routing`, deprecated `persona_providers`,
-effective auto routing, and workflow/project/global fallbacks; explicit CLI and environment
-overrides stay higher. A seat that names only a provider stops lower-priority model fallback so the
-resolved pair never mixes providers.
-
-`escalation-reviewer` decides only the destination of an escalation that is already enabled; it
-never changes the firing condition. Escalated re-review still fires exclusively for reviewers whose
-resolved profile declares `escalate`, so assigning the seat does not move the last presentation of a
-non-escalating reviewer away from that reviewer.
-
-### Finding Contract provisional findings and the completion gate
-
-Every raw finding is guaranteed a destination: it is either applied to the ledger as a confirmed finding, recorded as an active conflict, or kept as a **provisional finding** — an open ledger entry with `provisional` metadata representing an observation whose meaning could not be determined (contradictory relation/target labeling, reviewer output exceeding hard limits, an interrupted interpretation, a stale save-time precondition, or an exhausted interpretation budget). A single malformed raw finding, a broken Finding Manager response, or an exhausted interpretation budget never aborts the run.
-
-Provisional findings block the final gate:
-
-- `findings.provisional.count` (and `findings.provisional.items`) is available in `when()` rules. Builtin workflows route `findings.provisional.count > 0` to the replan step — a provisional finding is a system finding the fixer cannot address with code changes.
-- The engine enforces a final invariant: a transition to `COMPLETE` while any provisional finding is open aborts the workflow (fail-fast, with the provisional ids/kinds/reasons in the abort reason). Custom workflows that use `finding_contract` should route on `findings.provisional.count` before their `COMPLETE` rule.
-
-Provisional findings are settled only by later clean review evidence: a clean re-observation of the same claim confirms it as a real finding, and a deterministic mapping to an existing finding resolves it. They are never resolved just because a later round did not mention them, and they cannot be waived, invalidated, or superseded.
-
-Open finding items expose `familyTags` to both fixer instructions and `when()` rule state. Use `contains()` inside `exists()` to route by family without depending on array order:
-
-```yaml
-- condition: when(exists(findings.open.items, contains(item.familyTags, "provider-e2e")))
-  next: fix
-```
-
-If a ledger references a raw finding that is no longer present, its id is exposed in `unknownRawFindingIds` instead of being silently discarded or making the ledger unreadable. Both arrays are deduplicated and sorted; `contains(item.unknownRawFindingIds, "raw-id")` uses the same membership syntax.
-
-Invalid or missing Finding Manager decisions land as provisional findings and the run continues. Add a rule such as `when(findings.provisional.count > 0 && findings.conflicts.count == 0)` routed to your replan step *before* the `COMPLETE` rule. `takt workflow doctor` warns when a `finding_contract` workflow has no rule referencing `findings.provisional`.
-
-### Conflict adjudication and grounded re-adjudication
-
-An active conflict first enters the engine-synthesized `finding-conflict-adjudication` step. If its
-verification is `verification_undetermined`, the engine makes one grounded re-adjudication attempt
-for that conflict in that round through the same `terminal-adjudicator` seat, persona resolution,
-provider budget, and lease path. It does not add a workflow step or role.
-
-The re-adjudication prompt contains bounded windows from the immutable review-scope snapshot. The
-windows are built from the disputed finding's `target.paths` and the line anchors in its file-quote
-evidence, using the same digest-bound window mechanism as `evidence-search`. The adjudicator must
-use only those windows; it never gets a live working-tree fallback. The reservation is persisted
-before the provider call, so a crash or replay resumes the exact attempt rather than issuing a
-duplicate one. A second `verification_undetermined` settles that round and returns to the originating
-review step.
-
-The re-adjudication snapshot identity also includes the current content digest captured for the
-disputed `target.paths`. If a fix changes the target code digest while the ledger projection stays
-the same, the engine can create a fresh snapshot and adjudicate again. If neither the target code
-nor the ledger projection changes, it does not re-adjudicate. Non-regular targets are the exception:
-because they have no stable regular-file content digest, every capture is treated as changed and may
-create a fresh snapshot; the bounded adjudication and workflow limits still apply.
-
-Conflict ladders must keep an active conflict in the fix/review loop while
-`findings.rounds.budgetExhausted == false`. The final `when(findings.conflicts.count > 0)` → `ABORT`
-arm is only the exhausted-budget exit; it must follow the budget-aware loop arm.
 
 ### Arpeggio Step (data-driven batch)
 
@@ -810,7 +668,6 @@ Useful for breaking one large task into independent units that can run in parall
 
 `inspect_tools` allows only read-only inspection tools (`read`, `glob`, `grep`) during the parent Team Leader task decomposition phase. Invalid tool names fail workflow loading. It does not affect generated child parts; child part tools remain controlled separately by `part_allowed_tools`. Inspection tools are supported by providers that expose `allowedTools`, including Claude-family providers and OpenCode. Providers that do not support Team Leader inspection tools fail at runtime with a clear error.
 
-For a Finding Contract repair step, set `team_leader.mode: finding_contract_fix`. This mode requires an active `finding_contract` and assigns every part to explicit actionable findings. Assignment `readPaths` entries are literal relative paths that guide inspection, while completion `changedPaths` report the files a worker actually changed. Neither accepts the `*` or `?` wildcard characters; other characters such as `[]` are not expanded and remain part of the path. Part edits follow the normal part permissions. When changes from multiple parts overlap, the Team Leader must plan a later repair or verify part in its next decision and check the final state. If the bounded index has a non-zero `omittedPartCount` or any non-zero `omittedChangedPathCount`, the Team Leader must not complete and instead uses a later consolidated repair or verify part to check the final state. The Team Leader does not accumulate old raw responses; it decides `continue`, `complete`, or `replan` from a batch-wide bounded raw excerpt and engine-validated finding-level claim digests for the latest batch plus the latest digest per finding from earlier batches. `complete` requires successful verification and `fixCoverage` for every actionable finding present at step start. This step-local decision means the work is ready for reviewers; only the Finding Manager updates finding lifecycle state in the ledger. Route the decision with a mechanical condition such as `when(structured.fix.decision == "complete")`.
 
 ### Workflow Call Step (subworkflow)
 
@@ -1042,115 +899,6 @@ schemas:
 
 Workflow-level automatic provider routing: an AI `router` (provider + model) picks a provider/model `candidate` per step. `candidates` names the selectable provider/model entries, `candidate_pools` groups them with a per-pool `fallback`, `default_pool` selects the pool used when nothing more specific matches, and `pool_rules` / `rules` pin pools or candidates by step `tags`, `steps` (names), or `personas`. Rules must reference declared candidates and pools; unknown names fail validation.
 
-### `finding_contract`
-
-Declares a Finding Contract for the workflow (see the Finding Contract sections above for runtime semantics). `ledger_path`, `raw_findings_path`, and `manager` are required; `manager` requires `persona`, `instruction`, and `output_contract`, with optional `policy` / `knowledge` additions. Neither `manager` nor `adjudicator` accepts a `provider` / `model` field — assign the `findings-manager` and `terminal-adjudicator` seats in `runtime.yaml` instead. Optional budgets: `stop_budget` (`max_rounds`, default 40; `max_minutes`, no time limit unless set) and `review_budget` (`max_review_rounds`).
-
-```yaml
-finding_contract:
-  ledger_path: .takt/findings/review.json
-  raw_findings_path: .takt/findings/review/raw
-  manager:
-    persona: findings-manager
-    instruction: findings-manager
-    output_contract: findings-manager
-  stop_budget:
-    max_rounds: 40
-```
-
-### Reviewer follow-up (the restatement slot)
-
-Everything a reviewer left unresolved — intake anomalies waiting for a restatement, and
-anomalies such as `protocol-anomaly` / `verdict-claims-mismatch` that only settle when
-that reviewer produces a subsequent complete review — is handed **back to that reviewer
-inside the same round**, instead of riding along on the next review round. None of this
-appears in workflow YAML; it is not a step.
-
-- It fires right after the review round's `findings-manager` ingest. For each reviewer
-  that owns such an anomaly, the engine issues one provider call through a synthesized
-  step that inherits that reviewer's persona, policy, knowledge, MCP servers, and report
-  format.
-- One follow-up is one pass: call → normalization → manager ingest. If restatements are
-  still pending, the next pass runs in the same round, up to the presentation budget
-  (`presentationLimit` = `review_budget.max_review_rounds`). A presentation still counts
-  into `presentedReviewerAnomalyIds` exactly as a "next round" presentation did before,
-  but a slot pass is **not** counted as a `review_budget` / `stop_budget` round — it is a
-  hand-back inside the review round, not a new review round.
-- A single call carries **at most 10 restatement requests**; the rest move to the next
-  pass of the same round.
-- An observation from which the correspondence gate cannot select a claim body (no
-  description and no excerpt) gets no restatement request at all — no answer could ever
-  be accepted. Such an anomaly is terminated in place without any presentation, under kind
-  `undemandable_claim_atom`; its outcome follows the observation class (`claim-bearing` →
-  `review_integrity_unresolved`, `protocol-noise` → `non_claim_observation_rejected`).
-  Either outcome stops blocking the gate.
-- Termination paths, precisely: an intake anomaly ends through a verified restatement
-  correspondence (promotion), through presentation-budget exhaustion, or because no claim
-  body could be demanded back. Withdrawal by a subsequent complete review terminates only
-  the non-intake anomalies (`protocol-anomaly`, `verdict-claims-mismatch`, …), which carry
-  no restatement budget.
-- A reviewer holding an anomaly that only settles by a subsequent complete review gets a
-  **full re-review** rather than a restatement-only call: it keeps the reviewer's own
-  instruction and tool set, and pending restatement requests ride along in the same call as
-  "answer these as well". That slot fires at most once per reviewer per round; later passes
-  fall back to restatement-only. Only a full re-review counts as the subsequent complete
-  review that withdraws such an anomaly — a restatement-only call never does.
-- A claim that declares it restates a given anomaly but fails the correspondence gate no
-  longer mints a new product finding; it is recorded as a retry of that anomaly.
-- When a claim-bearing anomaly reaches `presentationLimit`, the engine inserts one
-  **evidence-search attempt per anomaly for the lifetime of that anomaly** immediately
-  before terminal disposition. The engine reads the real files in `target.paths`; for a
-  large file it supplies a simple window around the claimed line range. It passes that
-  content, the original claim, and the presentation history to the existing isolated
-  structured intake-normalizer resolution chain (`intake-normalizer` seat → `escalate` →
-  default). The normalizer receives no tools.
-- Evidence-search is not a workflow step. Its output is still an ordinary `evidenceRequests`
-  candidate: the existing evidence issuer and byte-exact gate are the final authority. A
-  verified candidate follows the existing promotion path and the ledger records
-  `promotionOrigin: evidence-search`. A null candidate, a mismatch, or a target mismatch
-  keeps the existing `restatement_exhausted_claim_bearing` terminal disposition.
-- The evidence-search call and its manager ingest use the slot's `budget-excluded` accounting;
-  they do not extend the presentation budget. The publication is persisted before ingest, so
-  interruption and resume cannot fire a second attempt for the same anomaly.
-
-`withdrawn_by_subsequent_review` settles an anomaly because the reviewer that raised it
-produced a later complete review, not because the underlying observation was judged sound
-or unsound. A reviewer that keeps making the same unverifiable claim therefore produces a
-withdraw-and-refile cycle: each round withdraws the previous episode and records a new one
-under the same stable key. That is the intended reading — the ledger keeps every episode as
-an audit record, exactly one stays outstanding, and the review-integrity budget bounds the
-cycle. It is not a sign that the claim was accepted.
-
-### Escalated re-review (`escalate`)
-
-The **last** restatement presentation of each intake anomaly (the presentation whose ordinal equals the anomaly's `presentationLimit`, derived from `review_budget.max_review_rounds`) can go to a stronger model instead of asking the original reviewer once more. There is nothing to configure in the workflow: escalation turns on when the reviewer resolves to a `runtime.yaml` profile that declares `escalate`, and the escalated model is that `escalate` target.
-
-```yaml
-# runtime.yaml
-provider:
-  profiles:
-    reviewer-local:
-      provider: opencode
-      model: ollama-cloud/gemma4:31b
-      escalate: strong
-    strong:
-      provider: opencode
-      model: ollama-cloud/glm-5.2
-  targets:
-    steps:
-      peer-review/architecture-review:
-        profile: reviewer-local
-```
-
-- The escalated reviewer is the owning reviewer's stand-in: it inherits that reviewer's persona, policy, knowledge, MCP servers, and report format (from the step as it actually ran, including dynamically selected facets). Only two things change — the model (the `escalate` target) and the instruction, which is the engine's restatement-only contract instead of the reviewer's normal review procedure. There is no escalation persona facet and no workflow configuration block.
-- Because it shares the owner's persona, an escalated claim carries the **owner's reviewer identity** for lifecycle purposes: it continues the owner's finding lifecycle instead of landing as a different observer's new observation. Only the publication identity differs (reviewer key `escalation-reviewer`, per-owner report name).
-- It is **not** a workflow step. It is the restatement slot's final slot: like `findings-manager` and terminal adjudication, the engine synthesizes it and issues the provider call directly, then feeds its output through the ordinary intake pipeline (normalization, canonical publication, byte-exact verification, promotion matching).
-- When several reviewers reach their final presentation in the same pass, the engine groups the requests by owning reviewer and issues one call per owner, so each escalated call carries exactly one reviewer's persona and report format.
-- The reviewer key is the fixed string `escalation-reviewer` for every escalated call. That key is the raw findings' `reviewer` value and the publication identity; the owning reviewer stays recorded through the anomaly's `presentationOwnerReviewer` and the restatement correspondence. Reports are written per owner and pass as `escalation-reviewer-<owner-step>-<pass>.md` (the slot's owner-side call writes `followup-<owner-step>-<pass>.md`).
-- Phase 1 runs read-only: the escalated reviewer can read the repository to produce byte-exact quotes, but cannot write.
-- `escalation-reviewer` is a **reserved step name** in every Finding Contract workflow; a workflow that also declares a step (or parallel sub-step) with that name fails to load.
-- With `presentationLimit == 1`, the first and only presentation is already the escalated one. A reviewer whose profile declares no `escalate` keeps the final presentation with the original reviewer.
-- When the escalated review fails before its publication lands, nothing is counted and the same escalation request is re-issued at the next opportunity; the presentation budget and the workflow's `max_steps` bound the run.
 
 ### `interactive_mode`
 
@@ -1292,7 +1040,6 @@ Declare a workflow as a subworkflow that accepts parameters from a parent's `wor
 subworkflow:
   callable: true
   visibility: internal
-  requires_finding_contract: true
   params:
     impl_knowledge:
       type: facet_ref[]
@@ -1310,8 +1057,6 @@ subworkflow:
 Builtin callable workflows should omit `max_steps` because the root workflow owns the budget for the complete call tree. Keep `max_steps` on the standalone root wrapper when the shared implementation also needs a direct entry point; the callable child is intended to be entered through `workflow_call`.
 
 Callable workflow facet parameters use `facet_ref` or `facet_ref[]` and one of the five `facet_kind` values: `policy`, `knowledge`, `instruction`, `persona`, or `report_format`. A `workflow_ref` parameter identifies a callable workflow and omits `facet_kind`; it may be used as `call: { $param: reviewer_suite }`. A `facet_pool_ref` parameter also omits `facet_kind` and identifies a scalar key in the callable child's top-level `facet_pools` map; it may be used as `dynamic_facets.pool: { $param: implementation_pool }`. A `companion_ref[]` parameter likewise omits `facet_kind` and supplies fixed companions through `companion: { $param: implementation_companions }` on a normal agent step. An empty array omits `companion` and rejects any remaining unquoted `companion.*` state reference; literal empty companion selections remain invalid. Defaults are optional. A `facet_ref[]` argument or default may be empty, which is useful for optional additions. In `policy` and `knowledge`, scalar or list parameters can be mixed with fixed references; list values are flattened at their position while preserving the field's written order. Parameters can also be forwarded through `workflow_call.args`. For `facet_pool_ref`, a missing required argument, a list value, an unknown child-local pool, or an unexpanded `$param` fails before execution; there is no implicit pool fallback. For `companion_ref[]`, a non-array argument, an undeclared parameter, or an unknown companion definition fails before execution.
-
-Set `requires_finding_contract: true` when the child consumes inherited `findings.*` state or Finding Contract output formats, or delegates to another subworkflow with the same requirement. The immediate caller must either declare `finding_contract` or require it from its own caller. Every child in the chain uses the owning caller's contract and the same ledger rather than creating its own ledger.
 
 ## Examples
 
