@@ -198,9 +198,11 @@ describe('WorkflowEngine review completion wiring', () => {
     await engine.run();
 
     const judgePayload = JSON.parse(judgeInstruction.slice(judgeInstruction.indexOf('{')));
-    expect(judgePayload.repository_evidence.files).toEqual(expect.arrayContaining([
-      expect.objectContaining({ path: 'consumer.ts', content: 'export const consumer = true;\n' }),
-    ]));
+    expect(judgePayload.repository_evidence.files).toEqual([
+      expect.objectContaining({ path: 'review-target.ts' }),
+    ]);
+    expect(judgePayload.repository_evidence.claimedPaths).toEqual(['consumer.ts']);
+    expect(judgeInstruction).not.toContain('export const consumer = true');
   });
 
   it('validates and adds a prior judge gap path to the next attempt evidence', async () => {
@@ -240,9 +242,78 @@ describe('WorkflowEngine review completion wiring', () => {
     await engine.run();
 
     const secondPayload = JSON.parse(judgeInstructions[1]!.slice(judgeInstructions[1]!.indexOf('{')));
-    expect(secondPayload.repository_evidence.files).toEqual(expect.arrayContaining([
-      expect.objectContaining({ path: 'consumer.ts', content: 'export const consumer = true;\n' }),
+    expect(secondPayload.repository_evidence.files).toEqual([
+      expect.objectContaining({ path: 'review-target.ts' }),
+    ]);
+    expect(secondPayload.repository_evidence.priorGapPaths).toEqual(['consumer.ts']);
+    expect(judgeInstructions[1]).not.toContain('export const consumer = true');
+  });
+
+  it('retries a reviewer with no findings when metadata exposes an unvisited consumer', async () => {
+    execFileSync('git', ['init'], { cwd });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd });
+    writeFileSync(`${cwd}/review-target.ts`, 'export const stableContract = 1;\n');
+    writeFileSync(
+      `${cwd}/consumer.ts`,
+      'import { stableContract } from "./review-target.js";\nconst privateConsumerBody = stableContract;\n',
+    );
+    execFileSync('git', ['add', '.'], { cwd });
+    execFileSync('git', ['commit', '-m', 'base'], { cwd });
+    writeFileSync(`${cwd}/review-target.ts`, 'export const stableContract = 2;\n');
+    const step = reviewStep('reviewer');
+    engine = new WorkflowEngine(normalConfig(step), cwd, 'task', { projectCwd: cwd, provider: 'mock' });
+    const judgeInstructions: string[] = [];
+    let reviewerCalls = 0;
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      if (options.internalAgentName === 'review-completion-judge') {
+        judgeInstructions.push(instruction);
+        const payload = JSON.parse(instruction.slice(instruction.indexOf('{')));
+        const consumerWasDiscovered = payload.repository_evidence.references.some(
+          (reference: { path: string }) => reference.path === 'consumer.ts',
+        );
+        const reviewerCoveredConsumer = payload.reviewer_report.includes('consumer.ts');
+        return consumerWasDiscovered && !reviewerCoveredConsumer
+          ? makeResponse({
+            persona: 'review-completion-judge',
+            content: 'decision',
+            structuredOutput: {
+              complete: false,
+              reason: 'tracked consumer was not reviewed',
+              missing_obligations: [{
+                kind: 'family_lifecycle_gap',
+                contract_family: 'stableContract',
+                path: 'consumer.ts',
+                reason: 'metadata identifies an unvisited consumer',
+              }],
+            },
+          })
+          : judgeResponse(true);
+      }
+      options.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: instruction });
+      reviewerCalls += 1;
+      return makeResponse({
+        persona: String(persona),
+        content: reviewerCalls === 1 ? 'changed target reviewed' : 'consumer.ts reviewed',
+        sessionId: `review-session-${reviewerCalls}`,
+        structuredOutput: { rawFindings: [] },
+      });
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(reviewerCalls).toBe(2);
+    const firstPayload = JSON.parse(judgeInstructions[0]!.slice(judgeInstructions[0]!.indexOf('{')));
+    expect(firstPayload.repository_evidence.references).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        path: 'consumer.ts',
+        line: 1,
+        relationKind: 'module_name',
+        seed: 'review-target',
+      }),
     ]));
+    expect(judgeInstructions.join('\n')).not.toContain('privateConsumerBody');
   });
 
   it('keeps parallel reviewer completion episodes independent', async () => {

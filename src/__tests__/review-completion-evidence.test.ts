@@ -100,7 +100,7 @@ describe('review completion evidence', () => {
     expect(evidence.omissions).toContainEqual({ reason: 'file_unavailable', count: 1 });
   });
 
-  it('admits structured claimed consumers only after tracked-path and security validation', () => {
+  it('admits structured claimed consumers as path-only metadata after validation', () => {
     const cwd = createDirectory('takt-review-completion-claimed-evidence-');
     execFileSync('git', ['init'], { cwd });
     execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd });
@@ -131,11 +131,62 @@ describe('review completion evidence', () => {
       claimedPaths,
     });
 
-    expect(evidence.files.map(({ path }) => path)).toEqual(['changed.ts', 'consumer.ts']);
+    expect(evidence.files.map(({ path }) => path)).toEqual(['changed.ts']);
+    expect(evidence.claimedPaths).toEqual(['consumer.ts']);
     expect(JSON.stringify(evidence)).not.toContain('opaque-secret-marker');
     expect(evidence.omissions).toEqual(expect.arrayContaining([
       { reason: 'claimed_path_unverified', count: 1 },
       { reason: 'sensitive_path', count: 1 },
+    ]));
+  });
+
+  it('discovers tracked unchanged consumers without exporting their source bodies', () => {
+    const cwd = createDirectory('takt-review-completion-reference-evidence-');
+    const outside = createDirectory('takt-review-completion-reference-outside-');
+    execFileSync('git', ['init'], { cwd });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd });
+    writeFileSync(join(cwd, 'changed.ts'), 'export const stableContract = 1;\n');
+    writeFileSync(
+      join(cwd, 'consumer.ts'),
+      'import { stableContract } from "./changed.js";\nconst unchangedBodyMarker = stableContract;\n',
+    );
+    writeFileSync(join(cwd, '.env.ts'), 'const secretConsumer = stableContract;\n');
+    writeFileSync(join(cwd, 'binary.ts'), Buffer.from('stableContract\0binary-body-marker'));
+    writeFileSync(join(outside, 'outside.ts'), 'const outsideConsumer = stableContract;\n');
+    symlinkSync(join(outside, 'outside.ts'), join(cwd, 'linked.ts'));
+    execFileSync('git', ['add', '.'], { cwd });
+    execFileSync('git', ['commit', '-m', 'base'], { cwd });
+    writeFileSync(join(cwd, 'untracked.ts'), 'const untrackedConsumer = stableContract;\n');
+    writeFileSync(join(cwd, 'changed.ts'), 'export const stableContract = 2;\n');
+
+    const evidence = collectReviewCompletionEvidence({
+      cwd,
+      reviewScope: {
+        kind: 'collected',
+        paths: ['changed.ts'],
+        source: { kind: 'working_tree', baseRange: { kind: 'base_branch_head' } },
+      },
+    });
+
+    expect(evidence.references).toEqual([{
+      path: 'consumer.ts',
+      line: 1,
+      relationKind: 'module_name',
+      seed: 'changed',
+    }]);
+    expect(evidence.references.map(({ path }) => path)).not.toEqual(expect.arrayContaining([
+      '.env.ts',
+      'binary.ts',
+      'linked.ts',
+      'untracked.ts',
+    ]));
+    expect(JSON.stringify(evidence)).not.toMatch(
+      /unchangedBodyMarker|secretConsumer|binary-body-marker|outsideConsumer|untrackedConsumer/,
+    );
+    expect(evidence.omissions).toEqual(expect.arrayContaining([
+      { reason: 'reference_binary_file', count: 1 },
+      { reason: 'reference_file_unavailable', count: 1 },
     ]));
   });
 

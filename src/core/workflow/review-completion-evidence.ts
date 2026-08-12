@@ -7,6 +7,11 @@ import { truncateUtf8 } from '../../shared/utils/utf8.js';
 import { assertPathSegmentsAreSafe } from '../../shared/utils/pathBoundary.js';
 import type { ReviewScopeBaseRange, TaskReviewScope } from './review-scope.js';
 import { resolveRealPathWithinProject } from './findings/admission-validation.js';
+import {
+  discoverReviewCompletionReferences,
+  type ReviewCompletionReferenceEvidence,
+  type ReviewCompletionReferenceOmissionReason,
+} from './review-completion-reference-discovery.js';
 
 export const REVIEW_COMPLETION_EVIDENCE_MAX_PATHS = 64;
 const REVIEW_COMPLETION_EVIDENCE_MAX_CLAIMED_PATHS = 16;
@@ -15,7 +20,7 @@ export const REVIEW_COMPLETION_EVIDENCE_MAX_FILE_BYTES = 32 * 1024;
 export const REVIEW_COMPLETION_EVIDENCE_MAX_DIFF_BYTES = 256 * 1024;
 export const REVIEW_COMPLETION_EVIDENCE_MAX_TOTAL_BYTES = 512 * 1024;
 
-type ReviewCompletionEvidenceOmissionReason =
+type ReviewCompletionEvidenceOmissionReason = ReviewCompletionReferenceOmissionReason
   | 'binary_file'
   | 'diff_size_limit'
   | 'diff_unavailable'
@@ -43,6 +48,9 @@ export interface ReviewCompletionEvidence {
   readonly status: 'collected' | 'omitted';
   readonly files: readonly ReviewCompletionEvidenceFile[];
   readonly diff?: string;
+  readonly references: readonly ReviewCompletionReferenceEvidence[];
+  readonly claimedPaths: readonly string[];
+  readonly priorGapPaths: readonly string[];
   readonly omissions: readonly ReviewCompletionEvidenceOmission[];
 }
 
@@ -198,12 +206,24 @@ function omissionsFrom(
 function buildEvidence(
   files: readonly ReviewCompletionEvidenceFile[],
   diff: string | undefined,
+  references: readonly ReviewCompletionReferenceEvidence[],
+  claimedPaths: readonly string[],
+  priorGapPaths: readonly string[],
   omissionCounts: ReadonlyMap<ReviewCompletionEvidenceOmissionReason, number>,
 ): ReviewCompletionEvidence {
   return {
-    status: files.length === 0 && diff === undefined ? 'omitted' : 'collected',
+    status: files.length === 0
+      && diff === undefined
+      && references.length === 0
+      && claimedPaths.length === 0
+      && priorGapPaths.length === 0
+      ? 'omitted'
+      : 'collected',
     files,
     ...(diff === undefined ? {} : { diff }),
+    references,
+    claimedPaths,
+    priorGapPaths,
     omissions: omissionsFrom(omissionCounts),
   };
 }
@@ -211,17 +231,34 @@ function buildEvidence(
 function enforceSerializedLimit(
   files: ReviewCompletionEvidenceFile[],
   diff: string | undefined,
+  references: ReviewCompletionReferenceEvidence[],
+  claimedPaths: string[],
+  priorGapPaths: string[],
   omissionCounts: Map<ReviewCompletionEvidenceOmissionReason, number>,
 ): ReviewCompletionEvidence {
   let currentDiff = diff;
-  let evidence = buildEvidence(files, currentDiff, omissionCounts);
+  let evidence = buildEvidence(
+    files,
+    currentDiff,
+    references,
+    claimedPaths,
+    priorGapPaths,
+    omissionCounts,
+  );
   let excess = Buffer.byteLength(JSON.stringify(evidence), 'utf8')
     - REVIEW_COMPLETION_EVIDENCE_MAX_TOTAL_BYTES;
   while (excess > 0 && currentDiff !== undefined) {
     const retainedBytes = Math.max(0, Buffer.byteLength(currentDiff, 'utf8') - excess);
     currentDiff = retainedBytes === 0 ? undefined : truncateUtf8(currentDiff, retainedBytes).value;
     addOmission(omissionCounts, 'total_size_limit');
-    evidence = buildEvidence(files, currentDiff, omissionCounts);
+    evidence = buildEvidence(
+      files,
+      currentDiff,
+      references,
+      claimedPaths,
+      priorGapPaths,
+      omissionCounts,
+    );
     excess = Buffer.byteLength(JSON.stringify(evidence), 'utf8')
       - REVIEW_COMPLETION_EVIDENCE_MAX_TOTAL_BYTES;
   }
@@ -231,73 +268,141 @@ function enforceSerializedLimit(
   ) {
     files.pop();
     addOmission(omissionCounts, 'total_size_limit');
-    evidence = buildEvidence(files, currentDiff, omissionCounts);
+    evidence = buildEvidence(
+      files,
+      currentDiff,
+      references,
+      claimedPaths,
+      priorGapPaths,
+      omissionCounts,
+    );
+  }
+  while (
+    references.length > 0
+    && Buffer.byteLength(JSON.stringify(evidence), 'utf8') > REVIEW_COMPLETION_EVIDENCE_MAX_TOTAL_BYTES
+  ) {
+    references.pop();
+    addOmission(omissionCounts, 'reference_candidate_limit');
+    evidence = buildEvidence(
+      files,
+      currentDiff,
+      references,
+      claimedPaths,
+      priorGapPaths,
+      omissionCounts,
+    );
+  }
+  while (
+    priorGapPaths.length > 0
+    && Buffer.byteLength(JSON.stringify(evidence), 'utf8') > REVIEW_COMPLETION_EVIDENCE_MAX_TOTAL_BYTES
+  ) {
+    priorGapPaths.pop();
+    addOmission(omissionCounts, 'total_size_limit');
+    evidence = buildEvidence(
+      files,
+      currentDiff,
+      references,
+      claimedPaths,
+      priorGapPaths,
+      omissionCounts,
+    );
+  }
+  while (
+    claimedPaths.length > 0
+    && Buffer.byteLength(JSON.stringify(evidence), 'utf8') > REVIEW_COMPLETION_EVIDENCE_MAX_TOTAL_BYTES
+  ) {
+    claimedPaths.pop();
+    addOmission(omissionCounts, 'total_size_limit');
+    evidence = buildEvidence(
+      files,
+      currentDiff,
+      references,
+      claimedPaths,
+      priorGapPaths,
+      omissionCounts,
+    );
   }
   return evidence;
+}
+
+function collectSupplementalPaths(input: {
+  readonly cwd: string;
+  readonly paths: readonly string[];
+  readonly excludedPaths: ReadonlySet<string>;
+  readonly omissionCounts: Map<ReviewCompletionEvidenceOmissionReason, number>;
+}): string[] {
+  const novelPaths = [...new Set(input.paths)]
+    .filter((path) => !input.excludedPaths.has(path));
+  const boundedPaths = novelPaths.slice(0, REVIEW_COMPLETION_EVIDENCE_MAX_CLAIMED_PATHS);
+  if (novelPaths.length > boundedPaths.length) {
+    addOmission(input.omissionCounts, 'path_limit', novelPaths.length - boundedPaths.length);
+  }
+  const candidates = boundedPaths.filter((path) => {
+    if (!isCanonicalRepositoryPath(path)) {
+      addOmission(input.omissionCounts, 'claimed_path_unverified');
+      return false;
+    }
+    if (Buffer.byteLength(path, 'utf8') > REVIEW_COMPLETION_EVIDENCE_MAX_PATH_BYTES) {
+      addOmission(input.omissionCounts, 'path_size_limit');
+      return false;
+    }
+    if (isSensitiveProjectFilePath(path)) {
+      addOmission(input.omissionCounts, 'sensitive_path');
+      return false;
+    }
+    return true;
+  });
+  let trackedPaths: Set<string> | undefined;
+  try {
+    trackedPaths = trackedClaimedPaths(input.cwd, candidates);
+  } catch {
+    addOmission(input.omissionCounts, 'claimed_path_unverified', candidates.length);
+  }
+  const admittedPaths: string[] = [];
+  if (trackedPaths === undefined) return admittedPaths;
+  for (const path of candidates) {
+    if (!trackedPaths.has(path)) {
+      addOmission(input.omissionCounts, 'claimed_path_unverified');
+      continue;
+    }
+    try {
+      const inspected = assertPathSegmentsAreSafe(
+        input.cwd,
+        resolve(input.cwd, path),
+        (_violation, segmentPath) => new Error(`Unsafe review completion reference path: ${segmentPath}`),
+      );
+      if (inspected === null || !inspected.isFile()) {
+        addOmission(input.omissionCounts, 'claimed_path_unverified');
+        continue;
+      }
+    } catch {
+      addOmission(input.omissionCounts, 'claimed_path_unverified');
+      continue;
+    }
+    admittedPaths.push(path);
+  }
+  return admittedPaths;
 }
 
 export function collectReviewCompletionEvidence(input: {
   readonly cwd: string;
   readonly reviewScope: TaskReviewScope | undefined;
   readonly claimedPaths?: readonly string[];
+  readonly priorGapPaths?: readonly string[];
 }): ReviewCompletionEvidence {
   const omissionCounts = new Map<ReviewCompletionEvidenceOmissionReason, number>();
   if (input.reviewScope === undefined || input.reviewScope.kind !== 'collected') {
     addOmission(omissionCounts, 'unsupported_scope');
-    return buildEvidence([], undefined, omissionCounts);
+    return buildEvidence([], undefined, [], [], [], omissionCounts);
   }
   const reviewScope = input.reviewScope;
 
-  const novelClaimedPaths = [...new Set(input.claimedPaths ?? [])]
-    .filter((path) => !reviewScope.paths.includes(path));
-  const boundedClaimedPaths = novelClaimedPaths.slice(
-    0,
-    REVIEW_COMPLETION_EVIDENCE_MAX_CLAIMED_PATHS,
-  );
-  if (novelClaimedPaths.length > boundedClaimedPaths.length) {
+  const selectedPaths = reviewScope.paths.slice(0, REVIEW_COMPLETION_EVIDENCE_MAX_PATHS);
+  if (reviewScope.paths.length > selectedPaths.length) {
     addOmission(
       omissionCounts,
       'path_limit',
-      novelClaimedPaths.length - boundedClaimedPaths.length,
-    );
-  }
-  const claimedCandidates = boundedClaimedPaths.filter((path) => {
-    if (!isCanonicalRepositoryPath(path)) {
-      addOmission(omissionCounts, 'claimed_path_unverified');
-      return false;
-    }
-    if (Buffer.byteLength(path, 'utf8') > REVIEW_COMPLETION_EVIDENCE_MAX_PATH_BYTES) {
-      addOmission(omissionCounts, 'path_size_limit');
-      return false;
-    }
-    if (isSensitiveProjectFilePath(path)) {
-      addOmission(omissionCounts, 'sensitive_path');
-      return false;
-    }
-    return true;
-  });
-  let verifiedClaimedPaths: Set<string> | undefined;
-  try {
-    verifiedClaimedPaths = trackedClaimedPaths(input.cwd, claimedCandidates);
-  } catch {
-    addOmission(omissionCounts, 'claimed_path_unverified', claimedCandidates.length);
-  }
-  if (verifiedClaimedPaths !== undefined) {
-    for (const path of claimedCandidates) {
-      if (!verifiedClaimedPaths.has(path)) addOmission(omissionCounts, 'claimed_path_unverified');
-    }
-  }
-  const admittedClaimedPaths = claimedCandidates.filter(
-    (path) => verifiedClaimedPaths?.has(path) === true,
-  );
-  const scopePathLimit = REVIEW_COMPLETION_EVIDENCE_MAX_PATHS - admittedClaimedPaths.length;
-  const selectedScopePaths = reviewScope.paths.slice(0, scopePathLimit);
-  const selectedPaths = [...selectedScopePaths, ...admittedClaimedPaths];
-  if (reviewScope.paths.length > selectedScopePaths.length) {
-    addOmission(
-      omissionCounts,
-      'path_limit',
-      reviewScope.paths.length - selectedScopePaths.length,
+      reviewScope.paths.length - selectedPaths.length,
     );
   }
 
@@ -379,5 +484,39 @@ export function collectReviewCompletionEvidence(input: {
     addOmission(omissionCounts, 'diff_unavailable');
   }
 
-  return enforceSerializedLimit(files, diff, omissionCounts);
+  const selectedPathSet = new Set(selectedPaths);
+  const claimedPaths = collectSupplementalPaths({
+    cwd: input.cwd,
+    paths: input.claimedPaths ?? [],
+    excludedPaths: selectedPathSet,
+    omissionCounts,
+  });
+  const priorGapPaths = collectSupplementalPaths({
+    cwd: input.cwd,
+    paths: input.priorGapPaths ?? [],
+    excludedPaths: new Set([...selectedPathSet, ...claimedPaths]),
+    omissionCounts,
+  });
+  const discovered = discoverReviewCompletionReferences({
+    cwd: input.cwd,
+    changedFiles: files.map(({ path, content }) => ({ path, content })),
+    diff,
+    excludedPaths: new Set([...selectedPathSet, ...claimedPaths, ...priorGapPaths]),
+    limits: {
+      maxPathBytes: REVIEW_COMPLETION_EVIDENCE_MAX_PATH_BYTES,
+      maxFileBytes: REVIEW_COMPLETION_EVIDENCE_MAX_FILE_BYTES,
+    },
+  });
+  for (const [reason, count] of discovered.omissions) {
+    addOmission(omissionCounts, reason, count);
+  }
+
+  return enforceSerializedLimit(
+    files,
+    diff,
+    [...discovered.references],
+    claimedPaths,
+    priorGapPaths,
+    omissionCounts,
+  );
 }
