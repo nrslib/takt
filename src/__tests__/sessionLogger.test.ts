@@ -675,8 +675,11 @@ describe('SessionLogger', () => {
       AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
     );
 
-    const records = logger.getNdjsonRecords();
-    expect(records.at(-1)).toMatchObject({
+    const persistedLines = readFileSync(ndjsonPath, 'utf-8').trim().split('\n');
+    const workflowAbort = JSON.parse(
+      persistedLines.at(-1) ?? '{}',
+    ) as Record<string, unknown>;
+    expect(workflowAbort).toMatchObject({
       type: 'workflow_abort',
       failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
     });

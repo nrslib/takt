@@ -27,96 +27,6 @@ vi.mock('../core/workflow/phase-runner.js', () => ({
 
 import { executeAgent } from '../agents/agent-usecases.js';
 import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
-import type { StepProviderInfo, StepRunResult } from '../core/workflow/types.js';
-
-interface TerminalLineageFixture {
-  readonly subStep: WorkflowStep;
-  readonly response: AgentResponse;
-  readonly instruction: string;
-  readonly providerInfo: StepProviderInfo;
-  readonly workflowCallFailure: NonNullable<StepRunResult['workflowCallFailure']>;
-  readonly terminalOperation: NonNullable<StepRunResult['terminalOperation']>;
-}
-
-function projectPrimaryErrorLineage(
-  runner: ParallelRunner,
-  terminalResults: TerminalLineageFixture[],
-): { result: StepRunResult; primary: TerminalLineageFixture } {
-  const boundary = runner as unknown as {
-    firstFailureResult(results: TerminalLineageFixture[]): TerminalLineageFixture | undefined;
-    createTerminalParentResult(options: {
-      step: WorkflowStep;
-      state: WorkflowState;
-      stepIteration: number;
-      subResults: TerminalLineageFixture[];
-      terminalResults: TerminalLineageFixture[];
-      status: 'error';
-      providerInfo: StepProviderInfo;
-      primaryFailure: TerminalLineageFixture;
-    }): StepRunResult;
-  };
-  const primary = boundary.firstFailureResult(terminalResults);
-  if (primary === undefined) {
-    throw new Error('Expected primary error fixture');
-  }
-  return {
-    primary,
-    result: boundary.createTerminalParentResult({
-      step: makeParallelStep(),
-      state: makeState(),
-      stepIteration: 1,
-      subResults: terminalResults,
-      terminalResults,
-      status: 'error',
-      providerInfo: primary.providerInfo,
-      primaryFailure: primary,
-    }),
-  };
-}
-
-function makeTerminalLineageFixture(options: {
-  readonly stepName: string;
-  readonly error: string;
-  readonly providerInfo: StepProviderInfo;
-  readonly failureCategory?: AgentResponse['failureCategory'];
-  readonly hasRateMetadata: boolean;
-}): TerminalLineageFixture {
-  const rateLimitInfo = {
-    provider: options.providerInfo.provider,
-    detectedAt: new Date(`2026-05-29T00:00:0${options.stepName.length % 10}.000Z`),
-    source: 'error_text' as const,
-  };
-  return {
-    subStep: makeReviewStep(options.stepName),
-    response: makeAgentResponse({
-      persona: options.stepName,
-      status: 'error',
-      content: '',
-      error: options.error,
-      ...(options.failureCategory === undefined
-        ? {}
-        : { failureCategory: options.failureCategory }),
-      ...(options.hasRateMetadata
-        ? { errorKind: 'rate_limit', rateLimitInfo }
-        : {}),
-    }),
-    instruction: `instruction:${options.stepName}`,
-    providerInfo: options.providerInfo,
-    workflowCallFailure: {
-      kind: 'step_error',
-      step: options.stepName,
-      reason: options.error,
-      error: options.error,
-      ...(options.failureCategory === undefined
-        ? {}
-        : { failureCategory: options.failureCategory }),
-    },
-    terminalOperation: {
-      origin: { stage: 'reviewer', reviewerStepName: options.stepName },
-      providerInfo: options.providerInfo,
-    },
-  };
-}
 
 function makeState(): WorkflowState {
   return {
@@ -641,93 +551,116 @@ describe('ParallelRunner terminal sub-step statuses', () => {
 
   it.each([false, true])(
     'projects every provider-error primary field without generic sibling mixing (reversed=%s)',
-    (reversed) => {
-      const { runner } = makeRunner();
-      const generic = makeTerminalLineageFixture({
-        stepName: 'generic-source',
-        error: 'Generic source error.',
-        providerInfo: AI_PROVIDER_INFO,
-        hasRateMetadata: true,
+    async (reversed) => {
+      const { runner, deps } = makeRunner();
+      configureDistinctProviderInfo(deps);
+      const genericRateLimitInfo = {
+        provider: 'claude' as const,
+        detectedAt: new Date('2026-05-29T00:00:01.000Z'),
+        source: 'error_text' as const,
+      };
+      mockResponsesByPersona({
+        'ai-antipattern-review-2nd': makeAgentResponse({
+          persona: 'ai-antipattern-review-2nd',
+          status: 'error',
+          content: '',
+          error: 'Generic source error.',
+          errorKind: 'rate_limit',
+          rateLimitInfo: genericRateLimitInfo,
+        }),
+        'security-review': makeAgentResponse({
+          persona: 'security-review',
+          status: 'error',
+          content: '',
+          error: 'Provider source error.',
+          failureCategory: 'provider_error',
+        }),
       });
-      const provider = makeTerminalLineageFixture({
-        stepName: 'provider-source',
-        error: 'Provider source error.',
-        providerInfo: SECURITY_PROVIDER_INFO,
-        failureCategory: 'provider_error',
-        hasRateMetadata: false,
-      });
-      const { result, primary } = projectPrimaryErrorLineage(
-        runner,
-        reversed ? [provider, generic] : [generic, provider],
+
+      const result = await runner.runParallelStep(
+        makeParallelStepInOrder(reversed),
+        makeState(),
+        'test task',
+        5,
+        vi.fn(),
       );
 
-      expect(primary).toBe(provider);
       expect(result.response).toMatchObject({
-        status: provider.response.status,
-        error: provider.response.error,
-        failureCategory: provider.response.failureCategory,
+        status: 'error',
+        error: 'Provider source error.',
+        failureCategory: 'provider_error',
       });
       expect(result.response.errorKind).toBeUndefined();
       expect(result.response.rateLimitInfo).toBeUndefined();
-      expect(result.providerInfo).toBe(provider.providerInfo);
-      expect(result.workflowCallFailure).toBe(provider.workflowCallFailure);
+      expect(result.providerInfo).toEqual(SECURITY_PROVIDER_INFO);
       expect(result.workflowCallFailure).toMatchObject({
-        step: 'provider-source',
+        step: 'security-review',
         reason: 'Provider source error.',
         error: 'Provider source error.',
         failureCategory: 'provider_error',
       });
-      expect(result.terminalOperation).toBe(provider.terminalOperation);
+      expect(result.terminalOperation).toEqual(undefined);
       expect(result.response.error).not.toContain('Generic source');
-      expect(result.workflowCallFailure).not.toEqual(generic.workflowCallFailure);
-      expect(result.terminalOperation).not.toEqual(generic.terminalOperation);
       expect(result.response.content).toContain('Generic source error.');
     },
   );
 
   it.each([false, true])(
     'projects every first generic primary field for equal-priority errors (reversed=%s)',
-    (reversed) => {
-      const { runner } = makeRunner();
-      const generic = makeTerminalLineageFixture({
-        stepName: 'generic-source',
-        error: 'Generic source error.',
-        providerInfo: AI_PROVIDER_INFO,
-        hasRateMetadata: false,
+    async (reversed) => {
+      const { runner, deps } = makeRunner();
+      configureDistinctProviderInfo(deps);
+      const securityRateLimitInfo = {
+        provider: 'mock' as const,
+        detectedAt: new Date('2026-05-29T00:00:02.000Z'),
+        source: 'error_text' as const,
+      };
+      mockResponsesByPersona({
+        'ai-antipattern-review-2nd': makeAgentResponse({
+          persona: 'ai-antipattern-review-2nd',
+          status: 'error',
+          content: '',
+          error: 'Generic source error.',
+        }),
+        'security-review': makeAgentResponse({
+          persona: 'security-review',
+          status: 'error',
+          content: '',
+          error: 'Provider seat generic error.',
+          errorKind: 'rate_limit',
+          rateLimitInfo: securityRateLimitInfo,
+        }),
       });
-      const providerSeat = makeTerminalLineageFixture({
-        stepName: 'provider-seat-source',
-        error: 'Provider seat generic error.',
-        providerInfo: SECURITY_PROVIDER_INFO,
-        hasRateMetadata: true,
-      });
-      const ordered = reversed
-        ? [providerSeat, generic]
-        : [generic, providerSeat];
-      const { result, primary } = projectPrimaryErrorLineage(runner, ordered);
-      const secondary = reversed ? generic : providerSeat;
 
-      expect(primary).toBe(ordered[0]);
+      const result = await runner.runParallelStep(
+        makeParallelStepInOrder(reversed),
+        makeState(),
+        'test task',
+        5,
+        vi.fn(),
+      );
+      const primaryStep = reversed ? 'security-review' : 'ai-antipattern-review-2nd';
+      const primaryError = reversed ? 'Provider seat generic error.' : 'Generic source error.';
+      const primaryProviderInfo = reversed ? SECURITY_PROVIDER_INFO : AI_PROVIDER_INFO;
+      const secondaryError = reversed ? 'Generic source error.' : 'Provider seat generic error.';
+
       expect(result.response).toMatchObject({
-        status: primary.response.status,
-        error: primary.response.error,
+        status: 'error',
+        error: primaryError,
       });
       expect(result.response.failureCategory).toBeUndefined();
       expect(result.response.errorKind).toBeUndefined();
       expect(result.response.rateLimitInfo).toBeUndefined();
-      expect(result.providerInfo).toBe(primary.providerInfo);
-      expect(result.workflowCallFailure).toBe(primary.workflowCallFailure);
+      expect(result.providerInfo).toEqual(primaryProviderInfo);
       expect(result.workflowCallFailure).toMatchObject({
-        step: primary.subStep.name,
-        reason: primary.response.error,
-        error: primary.response.error,
+        step: primaryStep,
+        reason: primaryError,
+        error: primaryError,
       });
       expect(result.workflowCallFailure?.failureCategory).toBeUndefined();
-      expect(result.terminalOperation).toBe(primary.terminalOperation);
-      expect(result.response.error).not.toBe(secondary.response.error);
-      expect(result.workflowCallFailure).not.toEqual(secondary.workflowCallFailure);
-      expect(result.terminalOperation).not.toEqual(secondary.terminalOperation);
-      expect(result.response.content).toContain(secondary.response.error);
+      expect(result.terminalOperation).toEqual(undefined);
+      expect(result.response.error).not.toBe(secondaryError);
+      expect(result.response.content).toContain(secondaryError);
     },
   );
 

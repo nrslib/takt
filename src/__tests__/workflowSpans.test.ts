@@ -614,7 +614,12 @@ describe('workflow OpenTelemetry spans', () => {
       'takt.failure.step': 'implement',
       'takt.failure.reason': 'Step "implement" failed: [REDACTED] content',
     });
-    expect(findSpan(spans, 'workflow_start.test-workflow').attributes['takt.failure.kind']).toBeUndefined();
+    const startSpanAttributes = findSpan(
+      spans,
+      'workflow_start.test-workflow',
+    ).attributes;
+    expect(startSpanAttributes['takt.failure.kind']).toBeUndefined();
+    expect(startSpanAttributes['takt.failure.category']).toBeUndefined();
     for (const record of metricRecords) {
       expect(record.attributes['takt.failure.kind']).toBeUndefined();
       expect(record.attributes['takt.failure.category']).toBeUndefined();
