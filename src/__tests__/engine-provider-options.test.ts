@@ -173,6 +173,39 @@ describe('WorkflowEngine provider_options resolution', () => {
     expect(options?.allowedTools).toEqual(['Read', 'Edit', 'Bash']);
   });
 
+  it('should propagate the Pi read-only ceiling when edit is false without allowed tools', async () => {
+    const step = makeStep('review', {
+      provider: 'pi',
+      edit: false,
+      rules: [makeRule('done', 'COMPLETE')],
+    });
+
+    const config: WorkflowConfig = {
+      name: 'provider-options-pi-readonly-tools',
+      steps: [step],
+      initialStep: 'review',
+      maxSteps: 1,
+    };
+
+    mockRunAgentSequence([
+      makeResponse({ persona: step.persona, content: 'done' }),
+    ]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      provider: 'claude',
+    });
+
+    await engine.run();
+
+    const options = vi.mocked(runAgent).mock.calls[0]?.[2];
+    expect(options).toEqual(expect.objectContaining({
+      resolvedProvider: 'pi',
+      allowedTools: ['read', 'grep', 'find', 'ls'],
+    }));
+  });
+
   it('should silently ignore claude allowedTools when configured for a non-claude provider', async () => {
     const step = makeStep('implement', {
       provider: 'codex',

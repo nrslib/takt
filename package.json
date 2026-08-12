@@ -1,6 +1,6 @@
 {
   "name": "takt",
-  "version": "0.57.0",
+  "version": "0.58.0",
   "description": "Workflow control for AI coding agents",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -19,7 +19,7 @@
     "takt-mcp": "./dist/app/mcp/index.js"
   },
   "scripts": {
-    "build": "tsc && tsc -p tsconfig.prompt-evals.json && mkdir -p dist/shared/prompts/en/parts dist/shared/prompts/ja/parts dist/shared/i18n dist/core/runtime/presets && cp src/shared/prompts/en/*.md dist/shared/prompts/en/ && cp src/shared/prompts/ja/*.md dist/shared/prompts/ja/ && cp src/shared/prompts/en/parts/*.md dist/shared/prompts/en/parts/ && cp src/shared/prompts/ja/parts/*.md dist/shared/prompts/ja/parts/ && cp src/shared/i18n/labels_en.yaml src/shared/i18n/labels_ja.yaml dist/shared/i18n/ && cp src/core/runtime/presets/*.sh dist/core/runtime/presets/",
+    "build": "tsc && tsc -p tsconfig.prompt-evals.json && node scripts/copy-build-assets.mjs",
     "watch": "tsc --watch",
     "analyze:usage": "node dist/commands/analyze-usage.js",
     "eval:prompts:prepare": "node eval/scripts/prepare.mjs",
@@ -42,12 +42,14 @@
     "eval:prompts:scope-discipline": "node --test eval/asserts/scope-architecture-search.test.mjs && node eval/scripts/prepare.mjs scope-default-write-tests scope-maintenance-write-tests scope-architecture-search scope-architecture-search-none scope-architecture-search-unrelated scope-architecture-boundary && node eval/scripts/run-evals.mjs scope-default-write-tests scope-maintenance-write-tests scope-architecture-search scope-architecture-search-none scope-architecture-search-unrelated scope-architecture-boundary",
     "eval:prompts:implement-contract-traceability": "node eval/scripts/prepare.mjs implement-contract-traceability implementation-report-contract-traceability && node eval/scripts/run-evals.mjs implement-contract-traceability implementation-report-contract-traceability",
     "eval:prompts:follow-up-review-repair-regression": "node eval/scripts/prepare.mjs follow-up-review-repair-regression && node eval/scripts/run-evals.mjs follow-up-review-repair-regression",
+    "eval:prompts:follow-up-testing-review-repair-regression": "node eval/scripts/prepare.mjs follow-up-testing-review-repair-regression && node eval/scripts/run-evals.mjs follow-up-testing-review-repair-regression",
     "eval:prompts:review-adjudication": "node eval/scripts/prepare.mjs review-adjudication && node eval/scripts/run-evals.mjs review-adjudication",
     "eval:prompts:task-instruction-gherkin": "node eval/scripts/run-evals.mjs task-instruction-gherkin",
-    "eval:prompts:final-readiness-supervision": "node eval/scripts/prepare.mjs final-readiness-supervision && node eval/scripts/run-evals.mjs final-readiness-supervision",
+    "eval:prompts:final-readiness-supervision": "node --test eval/asserts/final-readiness-supervision.test.mjs && node eval/scripts/prepare.mjs final-readiness-merge-review final-readiness-supervision final-readiness-merge-review-phase2 final-readiness-supervision-phase2 && node eval/scripts/run-evals.mjs final-readiness-supervision final-readiness-preservation",
     "eval:prompts:final-readiness-precision": "node eval/scripts/prepare.mjs final-readiness-precision && node eval/scripts/run-evals.mjs final-readiness-precision",
     "test": "npm run test:type-contracts && node scripts/run-npm-test.mjs",
     "test:type-contracts": "tsc --noEmit -p tsconfig.type-contracts.json",
+    "test:pi-sdk-smoke": "node scripts/pi-sdk-cross-platform-smoke.mjs",
     "test:unit": "vitest run --config vitest.config.unit.parallel.ts",
     "test:unit:parallel": "vitest run --config vitest.config.unit.parallel.ts",
     "test:it": "npm run test:it:light",
@@ -80,7 +82,7 @@
     "test:e2e:opencode": "npm run test:e2e:provider:opencode",
     "test:e2e:cursor": "npm run test:e2e:provider:cursor",
     "lint": "eslint src/",
-    "check:release": "npm run build && npm run lint && npm run test && npm run test:it:all && npm run test:e2e:all; code=$?; if [ \"$code\" -eq 0 ]; then msg='check:release passed'; else msg=\"check:release failed (exit=$code)\"; fi; if command -v osascript >/dev/null 2>&1; then osascript -e \"display notification \\\"$msg\\\" with title \\\"takt\\\" subtitle \\\"Release Check\\\"\" >/dev/null 2>&1 || true; fi; echo \"[takt] $msg\"; exit $code",
+    "check:release": "node scripts/run-release-check.mjs",
     "prepublishOnly": "npm run lint && npm run build",
     "canary:coder": "node scripts/canary-coder.mjs"
   },
@@ -107,6 +109,7 @@
     "openai",
     "opencode",
     "orchestration",
+    "pi",
     "workflow",
     "workflow-automation"
   ],
@@ -132,6 +135,8 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.3.0",
     "@anthropic-ai/claude-agent-sdk": "^0.3.206",
+    "@earendil-works/pi-ai": "^0.84.1",
+    "@earendil-works/pi-coding-agent": "^0.84.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@openai/codex-sdk": "^0.144.1",
     "@opencode-ai/sdk": "1.18.2",

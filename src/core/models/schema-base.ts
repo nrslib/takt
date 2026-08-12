@@ -146,6 +146,15 @@ const KiroProviderOptionsSchema = z.object({
   agent: z.string().min(1).optional(),
 });
 
+const PiProviderOptionsSchema = z.object({
+  extensions: z.array(z.string().min(1)).optional(),
+  no_extensions: z.boolean().optional(),
+  no_skills: z.boolean().optional(),
+  no_prompt_templates: z.boolean().optional(),
+  no_themes: z.boolean().optional(),
+  no_context_files: z.boolean().optional(),
+});
+
 export const StepProviderOptionsObjectSchema = z.object({
   codex: CodexProviderOptionsSchema.optional(),
   opencode: OpenCodeProviderOptionsSchema.optional(),
@@ -153,6 +162,7 @@ export const StepProviderOptionsObjectSchema = z.object({
   claude_terminal: ClaudeTerminalProviderOptionsSchema.optional(),
   copilot: CopilotProviderOptionsSchema.optional(),
   kiro: KiroProviderOptionsSchema.optional(),
+  pi: PiProviderOptionsSchema.optional(),
 });
 
 export const StepProviderOptionsSchema = StepProviderOptionsObjectSchema.optional();
@@ -164,6 +174,7 @@ const StrictStepProviderOptionsSchema = z.object({
   claude_terminal: ClaudeTerminalProviderOptionsSchema.strict().optional(),
   copilot: CopilotProviderOptionsSchema.strict().optional(),
   kiro: KiroProviderOptionsSchema.strict().optional(),
+  pi: PiProviderOptionsSchema.strict().optional(),
 }).strict().optional();
 
 /** Provider key schema for profile maps */
@@ -370,6 +381,7 @@ export const ProviderPermissionProfilesSchema = z.object({
   cursor: ProviderPermissionProfileSchema.optional(),
   copilot: ProviderPermissionProfileSchema.optional(),
   kiro: ProviderPermissionProfileSchema.optional(),
+  pi: ProviderPermissionProfileSchema.optional(),
   mock: ProviderPermissionProfileSchema.optional(),
 }).strict().optional();
 
@@ -605,6 +617,14 @@ const NormalizedStepProviderOptionsSchema = z.object({
   }).strict().optional(),
   kiro: z.object({
     agent: z.string().min(1).optional(),
+  }).strict().optional(),
+  pi: z.object({
+    extensions: z.array(z.string().min(1)).optional(),
+    noExtensions: z.boolean().optional(),
+    noSkills: z.boolean().optional(),
+    noPromptTemplates: z.boolean().optional(),
+    noThemes: z.boolean().optional(),
+    noContextFiles: z.boolean().optional(),
   }).strict().optional(),
 }).strict().optional();
 

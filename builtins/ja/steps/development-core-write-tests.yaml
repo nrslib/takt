@@ -8,6 +8,9 @@ params:
   testing_instruction:
     type: facet_ref
     facet_kind: instruction
+  testing_report_format:
+    type: facet_ref
+    facet_kind: report_format
 name: write_tests
 capabilities: edit
 tags:
@@ -26,4 +29,5 @@ instruction:
 output_contracts:
   report:
     - name: test-report.md
-      format: test-report
+      format:
+        $param: testing_report_format

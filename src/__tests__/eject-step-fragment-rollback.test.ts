@@ -71,41 +71,41 @@ describe('eject step fragment rollback', () => {
 
     expect(() => copyReferencedBuiltinStepFragments([
       'steps:',
-      '  - name: gather',
-      '    uses: gather',
+      '  - name: request-replan',
+      '    uses: request-replan',
       '    rules:',
       '      - condition: done',
       '        next: COMPLETE',
-      '  - name: fix',
-      '    uses: fix',
+      '  - name: ai-antipattern-review',
+      '    uses: ai-antipattern-first-pass',
       '    rules:',
       '      - condition: done',
       '        next: COMPLETE',
       '',
     ].join('\n'), 'en', targetDir, workflowPath, true)).toThrow('simulated second fragment write failure');
 
-    expect(existsSync(join(targetDir, 'gather.yaml'))).toBe(false);
-    expect(existsSync(join(targetDir, 'fix.yaml'))).toBe(false);
+    expect(existsSync(join(targetDir, 'request-replan.yaml'))).toBe(false);
+    expect(existsSync(join(targetDir, 'ai-antipattern-first-pass.yaml'))).toBe(false);
     expect(readFileSync(join(targetDir, 'existing.yaml'), 'utf-8')).toBe('instruction: existing\n');
   });
 
   it('removes a newly copied fragment after closing its descriptor fails', () => {
     const targetDir = join(projectDir, '.takt', 'steps');
     const workflowPath = join(projectDir, '.takt', 'workflows', 'default.yaml');
-    state.closeTargetPath = join(targetDir, 'gather.yaml');
+    state.closeTargetPath = join(targetDir, 'request-replan.yaml');
     state.failFirstFragmentClose = true;
 
     expect(() => copyReferencedBuiltinStepFragments([
       'steps:',
-      '  - name: gather',
-      '    uses: gather',
+      '  - name: request-replan',
+      '    uses: request-replan',
       '    rules:',
       '      - condition: done',
       '        next: COMPLETE',
       '',
     ].join('\n'), 'en', targetDir, workflowPath, true)).toThrow('simulated fragment close failure');
 
-    expect(existsSync(join(targetDir, 'gather.yaml'))).toBe(false);
+    expect(existsSync(join(targetDir, 'request-replan.yaml'))).toBe(false);
     expect(existsSync(targetDir)).toBe(false);
     expect(existsSync(join(projectDir, '.takt'))).toBe(false);
   });
@@ -115,13 +115,13 @@ describe('eject step fragment rollback', () => {
     const targetDir = join(taktDir, 'steps');
     const workflowPath = join(taktDir, 'workflows', 'default.yaml');
     mkdirSync(taktDir);
-    state.closeTargetPath = join(targetDir, 'gather.yaml');
+    state.closeTargetPath = join(targetDir, 'request-replan.yaml');
     state.failFirstFragmentClose = true;
 
     expect(() => copyReferencedBuiltinStepFragments([
       'steps:',
-      '  - name: gather',
-      '    uses: gather',
+      '  - name: request-replan',
+      '    uses: request-replan',
       '    rules:',
       '      - condition: done',
       '        next: COMPLETE',

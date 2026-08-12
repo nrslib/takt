@@ -6,6 +6,37 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
+## [0.58.0] - 2026-08-11
+
+### Added
+
+- Pi SDK プロバイダを追加しました (#1283, #1302)。新プロバイダ `pi` は SDK 専用のインメモリセッションで Pi を実行し、ストリーミング・中断・ネイティブ画像添付をサポートします。パーミッションモードは Pi の active-tool 許可リスト（`readonly` / `edit` / `full`）へ対応付けられ、`provider_options.pi` でリソース読み込み（`extensions`、`no_extensions`、`no_skills`、`no_prompt_templates`、`no_themes`、`no_context_files`）を制御でき、対応する `TAKT_PROVIDER_OPTIONS_PI_*` 環境変数でも上書きできます。認証情報は Pi SDK の credential store またはプロバイダ固有の環境変数を使います。Pi のパーミッションモードは SDK の active-tool 許可リストであり OS サンドボックスではありません — 明示的に指定した extension は TAKT プロセス内で実行され、プロジェクトローカルの暗黙 extension は読み込まれず、厳密な読み取り専用分離を要する動的内部エージェントには Pi は使えません。
+- Companion レビュアーを追加しました (#1269, #1300)。通常のエージェントステップに `companion` を宣言すると、実装エージェントと並走する読み取り専用のステートレスなレビュアーを最大3体実行できます。TAKT は変更系ツールイベントを観測し、静穏期間または強制インターバル後に累積 diff をレビューし、実装完了時に未レビュー変更を確認し、findings を `.takt/runs/{run}/companion/` 配下の companion 別 JSONL メールボックスへ追記します。open な `must_fix` findings はステップの事後条件評価前に同一セッションの修正ループを駆動し、companion の findings はレビュー裁定フローに合流し、companion の失敗は fail-soft で実装をブロックせずリトライされます。定義は `.takt/companions/`、`~/.takt/companions/`、同梱の `companions/`（AI アンチパターンレビュー companion とモデレーターを同梱）の順に解決される YAML ファイルです。companion の利用には有効な `runtime.yaml` の provider セクションが必要で、参照する各 companion は `provider.targets.companions`（固定 profile のみ）で解決され、未指定なら `provider.defaults` にフォールバックします。解決されたプロバイダは厳密な分離実行と structured output をサポートしている必要があります。
+- `takt-experimental` ワークフローを追加しました (#1263, #1276, #1296, #1299)。共有の裁定・検証付き修正・フォローアップレビュー・merge-readiness フローの上に、TAKT 固有のレビュアーと実装 companion を加えた実験的な TAKT 開発ワークフローです。新設の `experimental-review` / `takt-experimental-review` スイートとその adapter ワークフロー (#1299) を通じて、汎用の `experimental` ワークフローとレビュアースイートを共有します。
+- parallel レビュアーでの dynamic facets を追加しました (#1299)。`dynamic_facets` が静的 `parallel` の子ステップと動的 parallel の `fixed` / `pool` エントリでも宣言可能になりました。参加者選択が先に走り、選択された動的な子ごとに facet セレクターが実行されてから parallel の子が開始します。共有契約を広げずにこの合成を可能にする callable ワークフローのパラメータ型を2つ追加しました (#1263, #1296)。`facet_pool_ref` は子ローカルの facet pool を束縛し（`dynamic_facets.pool: { $param: ... }`）、`companion_ref[]` は固定 companion を供給します（`companion: { $param: ... }`。空配列は `companion` フィールド自体を省略します）。
+
+### Changed
+
+- **BREAKING:** ビルトインの TAKT 開発系・Finding Contract 系ワークフロー変種を統廃合しました (#1296)。`takt-default-fc`、`takt-default-high`、`takt-default-team-high`、`takt-default-localllm`、`review-fix-takt-default-high`、および Finding Contract のビルトインサブワークフロー（`finding-contract-boundary-review`、`finding-contract-local-review`、`finding-contract-remediation`、`merge-readiness-finding-contract-final-gate`、`peer-review-finding-contract`、`peer-review-finding-contract-localllm`、`peer-review-suite-finding-contract-base`）を削除しました。TAKT 開発は `takt-default` と新設の `takt-experimental` に集約され、共有の `development-core` は差し替え可能な `development-implement` / `development-remediation` サブワークフロー（および `-dynamic` 変種）を裁定・検証付き修正・フォローアップレビュー・merge-readiness とともに合成し、実装 facet pool と companion をパラメータ化します。Finding Contract エンジン自体は変わらず、カスタムワークフローの `finding_contract:` から引き続き利用できます。
+- `experimental` ワークフローを共有 development core の上に再構成しました (#1263, #1296, #1299)。`development-core` への薄い wrapper となり、動的な実装・修復サブワークフローを使い、レビュアースイートは `experimental-review-adapter` 経由で束縛され、同梱の AI アンチパターンレビュー companion とモデレーターがデフォルトで有効です — `experimental` の実行には実装中の companion レビューが含まれるようになりました。
+- `assistant.gherkin` がグローバル設定になりました (#1260)。従来はプロジェクト専用でしたが `~/.takt/config.yaml` にも書けるようになり、プロジェクトの明示値がグローバル値を上書きします。
+- ビルトインのレビュー・裁定・計画プロンプトがタスクスコープを守るようになりました (#1262, #1284, #1291)。レビュー裁定は実行可能な品質指摘を保ちながら findings をタスクスコープ内に収め（新設の `review-adjudication` policy facet が裏付け）、共有レビューポリシーは収束時の修正の適用範囲を制御し、計画・レビューの instruction は開発ワークフローでのスコープ拡大を抑制します。
+- ビルトインのセキュリティレビュー facet をシステムサーフェス別に再編しました (#1270, #1274)。セキュリティポリシーをレビュー用に特化し、既存のセキュリティナレッジを対象のシステムサーフェスでルーティングして peer review と audit review で共有します — 新規レビュー内容の追加はない facet 再編です。
+- プロセス resume 時に動的選択を再実行するようになりました (#1292)。プロセス resume は保存済みの参加者・facet 選択を復元せず、現在の pool に対してセレクターを再実行します。削除された動的選択フィールドを含む resume ポイントはサポートされません。
+
+### Fixed
+
+- プロバイダの `effort` 値がそのままプロバイダへ渡るようになりました (#1261)。`effort` / `reasoning_effort` はプロバイダ別の固定 enum で検証されていたため、プロバイダが受け付けるのに TAKT が列挙していないレベルはロード時に拒否されていました。空でない値はそのまま透過します。
+- Finding Contract: manager 裁定の入力超過で観測がドロップしなくなりました (#1278, #1281, #1287)。call-site identity が冗長な約 1.2KB のスタック表現を全 raw finding ID に埋め込み、プロンプト描画が固定 24,000 バイト入力上限に対して非有界だったため、raw タスクが超過し観測（解消申告を含む）が黙って落ちていました。raw ID は圧縮形の run-path segment を使い、描画される各フィールドには可視の切り詰めマーカー付き固定バイト上限を設け（逐語引用は発行時点で有界化し byte-exact 照合では切り詰めない）、1 raw タスクが必ず上限に収まることを静的な予算検算テストで保証し、提出された観測が台帳への着地か理由付き明示失敗のどちらにも数えられない場合はエンジンバグとして即失敗する勘定検査を追加しました。
+- Finding Contract: conflict 裁定が空回りしなくなりました (#1264, #1265, #1267, #1271)。再裁定は実際のコード変化に束縛され、同一主張の再観測は裁定予算をリセットせず、裁定リクエストは raw findings を縮約形で参照し裁定専用の 96KiB 入力上限に収め、conflict landing の永続 registry は追記順を保ちます — 入力予算を枯渇させ run を終了させていた reviewer と裁定の往復が止まります。
+- Finding Contract: 未決着の conflict landing を保有する finding の解消は run を落とさず保留されるようになりました (#1285, #1288, #1290)。通常の解消経路が landing を settle しないままこうした provisional finding を解消でき、直後の裁定スナップショットが不変条件違反で run 全体を落としていました。conflict が active な間は解消を保留し、申告は裁定根拠を変更しない監査専用の添付として記録して（検証レポートの専用フィールドで報告）、裁定決着後の次ラウンドで通常どおり解消します。
+- リトライした run がレポート継承と操作系譜を分離して記録するようになりました (#1293)。以前の run のレポートを継承する fallback 実行が、その継承を検証済みの操作系譜として run メタデータに記録していました。2つの出所を分けて追跡します。
+
+### Internal
+
+- `check:release` から prompt-eval ゲートを外し (#1259)、package-lock のメタデータを正規化し、Nix flake lock の整合性を復旧しました。
+- SQLite 負荷の高い統合テストスイートを serial グループへ移し、heavy 並列 CI シャードを4から6に増やしました (#1264)。
+
 ## [0.57.0] - 2026-08-09
 
 ### Added
@@ -14,7 +45,7 @@
 - `runtime.yaml` の profile ladder を追加しました (#1231)。`defaults` と各 `provider.targets` エントリは、固定の `profile`・自動ルーティングの `pool`・順序付き `ladder` のいずれか1つを指定します。ladder は先頭 profile が初期割り当てで、ステップの `promotion` が次の段へ進めます。自己参照・循環 ladder はロード時に拒否されます。あわせて、ステップからワークフロー最上位の `mcp_servers` 定義を `mcp: [name, ...]` で名前参照でき、未解決の名前は fail fast します。
 - インタラクティブモード Grill Me を追加しました (#1251)。新モード `grill-me` は、判断が分かれる論点を1問ずつ推奨付きの質問で解消しながらタスクを詰め、要件が揃ったところで `/go` を提案します。モード選択プロンプトに加わり、`interactive_mode: grill-me` で既定にもできます。
 - Markdown + Gherkin のタスク指示を追加しました (#1252)。プロジェクト専用設定 `assistant.gherkin: true` を有効にすると、アシスタント対話（quiet モード含む）から生成される最終タスク指示が、背景・スコープ・設計意図・制約・検証を Markdown に保ちつつ、重要な観測可能挙動・状態遷移・境界・失敗・不変条件だけを最小限の Gherkin シナリオで表現するようになります。未設定なら従来の Markdown 指示のままです。
-- 実験的な動的コーディングワークフローを追加しました (#1247)。ビルトイン `experimental` は動的ファセットプールを軸にしたコーディングフローで、共有の `experimental-review` ステップフラグメントを使います。`dynamic_facets.max_selected` は省略可能になり、省略時はセレクターがプール内の全候補まで選択できます。セレクター失敗は従来どおり実行を停止し、全候補への暗黙フォールバックはありません。
+- 実験的な動的コーディングワークフローを追加しました (#1247, #1275)。`experimental` / `takt-experimental` wrapper は、汎用または TAKT 固有の外部 security-review facet pool を束縛する reviewer-suite adapter を選び、共有 workflow 契約を広げずに `parallel` の security reviewer へ適用します。`dynamic_facets.max_selected` は省略可能で、省略時は selector が pool 内の全候補まで選択できます。selector 失敗は実行を停止し、全候補への暗黙 fallback はありません。
 
 ### Changed
 

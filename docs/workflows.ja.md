@@ -116,7 +116,7 @@ steps:
 
 ```yaml
 kind: workflow_call
-call: merge-readiness-finding-contract-final-gate
+call: merge-readiness-final-gate
 ```
 
 `uses` を宣言する concrete workflow step は、parallel sub-step を含め、呼び出し側に空でない rule 定義を必ず持ちます。非 parallel fragment の呼び出し側は `rules` 配列を、parallel fragment の呼び出し側は次に示す rule tree を使います。fragment は root と parallel sub-step のどちらにも `rules` を定義できません。これにより、遷移先の step 名を知る workflow が routing を所有します。fragment から別 fragment を参照する中間 `uses` は、concrete workflow がその参照 chain を呼び出すまではこの必須条件の対象外です。loader は rule のコピー、継承、fallback の自動生成を行いません。
@@ -388,7 +388,7 @@ claim を失う等）で、既存の訂正1回でも直らないときは、TAKT
 
 ### Dynamic Facet Selection（facet pool）
 
-通常の agent step は、main agent の起動直前に、検証済み候補 pool から追加の `policy` / `knowledge` facet を動的に選択できます。step が既に宣言している固定 facet は維持したまま、現在の状況が必要とする facet だけを追加します。例えば、レビューで transaction 境界の懸念が指摘された後にだけ transaction-correctness policy を選ぶ、といった運用が可能です。
+通常の agent step と `parallel` 配下の agent sub-step は、main agent の起動直前に、検証済み候補 pool から追加の `policy` / `knowledge` facet を動的に選択できます。step が既に宣言している固定 facet は維持したまま、現在の状況が必要とする facet だけを追加します。例えば、レビューで transaction 境界の懸念が指摘された後にだけ transaction-correctness policy を選ぶ、といった運用が可能です。
 
 pool はトップレベルの `facet_pools` map に定義し、step から `dynamic_facets` で参照します。pool は workflow 内に inline で定義するか、外部 resource ファイルとして定義できます。
 
@@ -439,6 +439,45 @@ steps:
       - condition: 修正が完了した
         next: review
 ```
+
+#### parallel sub-step
+
+`dynamic_facets` は静的 `parallel` の子、および dynamic parallel の `fixed` / `pool` entry にも指定できます。dynamic parallel では participant selector を先に実行し、選ばれた子に対してだけ facet selector を実行します。静的 parallel では、dynamic facet を持つ各子が独立した facet selector を実行します。
+
+```yaml
+facet_pools:
+  security-review:
+    candidates:
+      - id: web
+        description: HTTP と browser のセキュリティ境界をレビューする
+        knowledge: [security-web, security-api]
+      - id: cli
+        description: CLI とローカルプロセスの境界をレビューする
+        knowledge: security-local
+
+steps:
+  - name: reviewers
+    parallel:
+      pool:
+        - name: security-review
+          description: 選択されたシステムのセキュリティをレビューする
+          persona: security-reviewer
+          knowledge: security
+          dynamic_facets:
+            pool: security-review
+            max_selected: 1
+          instruction: review-security
+          rules: [{ condition: approved }]
+      selection:
+        mode: replace
+    rules:
+      - condition: all("approved")
+        next: COMPLETE
+```
+
+選択した knowledge / policy は子の固定 facet に追加されます。空選択なら固定 facet は変わりません。対象の facet selector をすべて完了してから parallel の子を起動します。未知の pool 参照、candidate ID、`max_selected` 超過が1件でもあれば、その子と同じ parallel 親配下の sibling を起動せず workflow を停止します。中断のない同一 run では、parallel 親の frame と occurrence によって子ごとの選択を分離します。プロセスの resume は空の run-local 選択状態から始まり、participant selector と子の facet selector を再実行します。
+
+callable workflow をネストする場合、pool の選択責任は所有者であるトップレベル workflow に置きます。共有 workflow が任意の `workflow_ref` を受け取る場合、すべての呼び出し先へ pool 引数を追加してはいけません。未宣言の callable 引数は拒否されるためです。代わりに、トップレベル workflow が専用 adapter を選び、その adapter が実際に消費する suite を呼ぶときだけ `facet_pool_ref` を束縛します。消費側 suite が受理する外部 pool を宣言するため、無関係な callable 契約を広げず、未知参照はその境界のロード時に拒否されます。
 
 #### external pool
 
@@ -596,7 +635,7 @@ MVP では実行途中の facet hot swap を行いません。必要領域が変
 - 外部 resource の探索、trust、file validation 違反
 - `dynamic_facets.pool` が未知
 - 指定した `max_selected` が不正または候補数を超える
-- 通常 agent step 以外への `dynamic_facets` 指定
+- agent 以外の step または parallel 親への `dynamic_facets` 指定
 
 selector 実行時に次のいずれかが成立すると main agent 起動前に失敗します。
 
@@ -671,7 +710,7 @@ open finding の各 item は、fixer instruction と `when()` の rule state の
 
 ledger が既に存在しない raw finding を参照している場合、その id は黙って破棄されたり ledger 全体を読めなくしたりせず、`unknownRawFindingIds` に公開されます。どちらの配列も重複排除・ソート済みで、`contains(item.unknownRawFindingIds, "raw-id")` も同じ包含構文を使います。
 
-invalid・欠落した Finding Manager の判断は provisional finding として台帳へ着地し、run は継続します。`COMPLETE` の rule より*前*に `when(findings.provisional.count > 0 && findings.conflicts.count == 0)` を再計画ステップへ向ける rule を追加してください（配線の参考は builtin の `takt-default-high` workflow）。`finding_contract` を使う workflow が `findings.provisional` を一切参照していない場合、`takt workflow doctor` が警告します。
+invalid・欠落した Finding Manager の判断は provisional finding として台帳へ着地し、run は継続します。`COMPLETE` の rule より*前*に `when(findings.provisional.count > 0 && findings.conflicts.count == 0)` を再計画ステップへ向ける rule を追加してください。`finding_contract` を使う workflow が `findings.provisional` を一切参照していない場合、`takt workflow doctor` が警告します。
 
 ### conflict の裁定と接地再裁定
 
@@ -945,7 +984,13 @@ promotion は並列サブ step ではサポートされません。
 | `provider_options.copilot.effort` | - | Copilot の provider 固有 reasoning effort 文字列。TAKT は値を provider へそのまま渡す |
 | `provider_options.claude.sandbox.allow_unsandboxed_commands` | - | Claude の Bash を macOS Seatbelt サンドボックス外で実行（[configuration ガイド](./configuration.ja.md#claude-code-の-sandbox-制御-allow_unsandboxed_commands) 参照） |
 | `provider_options.kiro.agent` | - | Kiro CLI の custom agent 名。`kiro-cli chat --agent` として渡される。未指定の step は Kiro CLI 側の default agent を使用 |
-| `provider` | - | この step の provider を上書き (`claude`, `claude-sdk`, `claude-terminal`, `codex`, `opencode`, `cursor`, `copilot`, `kiro`, `mock`) |
+| `provider_options.pi.extensions` | - | Pi SDK の extension/package source（`path`、`npm:...`、`git:...`）。call ごとに一時解決 |
+| `provider_options.pi.no_extensions` | - | Pi の extension 探索を無効化。明示した `extensions` source は読み込む |
+| `provider_options.pi.no_skills` | - | Pi の Skill 探索を無効化 |
+| `provider_options.pi.no_prompt_templates` | - | Pi の prompt template 探索を無効化 |
+| `provider_options.pi.no_themes` | - | Pi の theme 探索を無効化 |
+| `provider_options.pi.no_context_files` | - | Pi の context file 探索を無効化 |
+| `provider` | - | この step の provider を上書き (`claude`, `claude-sdk`, `claude-terminal`, `codex`, `opencode`, `cursor`, `copilot`, `kiro`, `pi`, `mock`) |
 | `model` | - | この step の model を上書き |
 | `promotion` | - | 実行回数ごとの provider / model / options 昇格（[Step レベルのプロバイダープロモーション](#step-レベルのプロバイダープロモーション) 参照） |
 | `mcp_servers` | - | step ごとの MCP サーバー設定 (stdio / HTTP / SSE) |
@@ -957,6 +1002,8 @@ promotion は並列サブ step ではサポートされません。
 通常の agent step、parallel sub-step、`loop_monitors.judge` では、`model: null` は model の明示的な省略を表します。`model` 未指定とは異なります。未指定は routing、workflow、loop monitor judge のトリガー元 step、入力由来の model など、適用可能な下位優先度のソースへフォールバックしますが、`null` はその entry で model 解決を止めます。明示 model が必須の provider では検証エラーになります。
 
 実効ツール一覧は、設定値より狭くなる場合があります。`edit: false` の場合、または step に `output_contracts` があり `edit: true` ではない場合、TAKT は provider 呼び出し前に `provider_options.*.allowed_tools` からコマンド・編集系 tool を除去します。Claude 系 provider では、カンマ区切り entry を atomic な tool spec に正規化し、`Bash(...)` は `(` より前の canonical tool 名で判定してから、`Bash`、`Edit`、`Write`、`Apply_Patch`、`Patch` を除去します。OpenCode では `bash`、`edit`、`write` など lowercase の tool を除去します。同じ read-only フィルタは、`part_edit: false` または継承された `edit: false` などにより part の実効 edit 設定が false の場合の `team_leader.part_allowed_tools` にも適用されます。
+
+Pi provider は generic な `Read`、`Glob`、`Grep`、`Edit`、`Write`、`Bash` 名を Pi SDK tool へ変換します。Pi は TAKT の MCP server と structured output に対応しません。step-level の MCP 設定は drop され、session-level の MCP 設定は対応 provider が必要です。`max_turns` は Pi call で無視します。
 
 ## Workflow レベルの設定
 
@@ -1369,9 +1416,11 @@ steps:
       next: final-review
 ```
 
+workflow の遷移ルールから `companion.*` state は参照できません。Companion の指摘と失敗は advisory な診断情報であり、主 workflow の遷移は通常の semantic condition と Phase 3 の判定だけで決まります。
+
 定義 YAML は `.takt/companions/`、`~/.takt/companions/`、`builtins/{language}/companions/` の順で解決されます。指定できるのは `name`、`description`、facet 参照（`persona`、`policy`、`knowledge`、`instruction`）、`interval_ms` だけで、provider やツール設定は指定できません。`interval_ms` は `2,147,483,647` 以下の正整数である必要があります。
 
-TAKT は変更系 tool event を観測し、静穏時間または強制発火時間の経過後に累積差分をレビューします。実装エージェントの完了時には未レビュー変更を確認し、残っている場合だけレビューします。新しい完了レビューが不要でも、実行中・待機中のレビューを中断または待機してから完了します。指摘は `.takt/runs/{run}/companion/{step}/{companion}.jsonl` へ追記されます。各 companion の JSONL ファイルは実装エージェント向けの読取専用projectionであり、独立した transaction boundary です。そのファイルへの追記成功後にだけ cache、finding の採番、finding event が確定します。1ラウンドで複数 companion を更新する場合、後続 mailbox の失敗によって、すでに確定した先行 mailbox を rollbackせず、再試行では未完了の mailbox 更新だけを再開します。projection の外部変更は拒否され、engine が所有する finding 状態には反映されません。post-execution condition の評価前に、エンジンは同じ session の fix loop で open の `must_fix` を解消します。loop judge が修正継続不能として escalate した場合は、理由と未解消指摘を証拠として通常の post-execution condition 判定へ進みます。completion review 自体を検証できない場合、または未解消の `must_fix` が escalation なしで残る場合は step を blocked とし、condition へ進みません。その他の companion 障害は本体を fail-soft として扱い、workflow または step の中断時は companion も停止します。
+TAKT は変更系 tool event を観測し、静穏時間または強制発火時間の経過後に累積差分をレビューします。実装エージェントの完了時には未レビュー変更を確認し、残っている場合だけレビューします。新しい完了レビューが不要でも、実行中・待機中のレビューを中断または待機してから完了します。指摘は `.takt/runs/{run}/companion/{step}/{companion}.jsonl` へ追記されます。各 companion の JSONL ファイルは実装エージェント向けの読取専用 projection であり、独立した transaction boundary です。そのファイルへの追記成功後にだけ cache、finding の採番、finding event が確定します。1ラウンドで複数 companion を更新する場合、後続 mailbox の失敗によって、すでに確定した先行 mailbox を rollback せず、再試行では未完了の mailbox 更新だけを再開します。projection の外部変更は拒否され、engine が所有する finding 状態には反映されません。post-execution condition の評価前に、エンジンは進展が続く間、同じ session の fix loop で open の `must_fix` を解消します。loop escalation はこの内部 fix loop だけを停止します。未解消指摘、completion review の失敗、内部 escalation は Companion の診断情報として記録されますが、主 workflow を block せず、post-execution 判定へ渡す response も変更しません。Companion 対応後は、成功した主 agent の最新 response だけを後続へ渡します。Companion 呼び出しは既定回数の retry 後に fail-soft とし、workflow または step の中断時は引き続き Companion も停止します。
 
 ## ベストプラクティス
 

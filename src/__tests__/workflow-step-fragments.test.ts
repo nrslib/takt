@@ -343,11 +343,11 @@ steps:
     ]);
   });
 
-  it.each(['en', 'ja'] as const)('should resolve the language-specific final-gate fragment for %s builtins', (lang) => {
+  it.each(['en', 'ja'] as const)('should resolve a fragment from the selected %s builtin directory', (lang) => {
     const workflowPath = join(getBuiltinLanguageStepsDir(lang), 'fixture-workflow.yaml');
     const resolution = resolveWorkflowStepFragments({
       steps: [{
-        uses: 'finding-contract-final-gate',
+        uses: 'request-replan',
         rules: [{ condition: 'done', next: 'COMPLETE' }],
       }],
     }, {
@@ -368,7 +368,7 @@ steps:
     });
 
     expect(resolution.dependencies).toContainEqual(expect.objectContaining({
-      ref: 'finding-contract-final-gate',
+      ref: 'request-replan',
       sourceRoot: getBuiltinLanguageStepsDir(lang),
     }));
   });

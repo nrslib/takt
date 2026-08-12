@@ -2,6 +2,7 @@ import type { AgentResponse, PermissionMode, StepProviderOptions } from '../../m
 import type { ProviderType } from '../../../shared/types/provider.js';
 import { createAbortError } from './abort.js';
 import { appendCompanionEvidenceSystemGuard } from './evidence.js';
+import { safeExternalErrorMessage } from '../../../shared/utils/safeExternalErrorMessage.js';
 
 export type CompanionAgentPurpose = 'selector' | 'reviewer' | 'moderator' | 'judge';
 
@@ -24,9 +25,12 @@ interface CompanionCallOptions {
   abortSignal: AbortSignal;
 }
 
-const COMPANION_CALL_TIMEOUT_MS = 300_000;
+export type CompanionStructuredResponseValidator = (response: AgentResponse) => void;
 
-export function executeCompanionStructuredAgent(input: {
+const COMPANION_CALL_TIMEOUT_MS = 300_000;
+const MAX_COMPANION_CALL_ATTEMPTS = 2;
+
+export async function executeCompanionStructuredAgent(input: {
   purpose: CompanionAgentPurpose;
   agentName: string;
   systemPrompt: string;
@@ -45,6 +49,7 @@ export function executeCompanionStructuredAgent(input: {
     outputSchema: Record<string, unknown>,
     options: CompanionCallOptions,
   ) => Promise<AgentResponse>;
+  validateResponse?: CompanionStructuredResponseValidator;
   recordUsage: (event: {
     purpose: CompanionAgentPurpose;
     agentName: string;
@@ -52,9 +57,30 @@ export function executeCompanionStructuredAgent(input: {
     usage?: AgentResponse['providerUsage'];
   }) => void;
 }): Promise<AgentResponse> {
-  const execution = executeCompanionStructuredAgentInternal(input);
-  void execution.catch(() => undefined);
-  return execution;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      const response = await executeCompanionStructuredAgentInternal(input);
+      if (response.status === 'done') return response;
+      if (attempt >= MAX_COMPANION_CALL_ATTEMPTS) {
+        throw new Error(companionResponseFailureMessage(input, response));
+      }
+    } catch (error) {
+      if (input.abortSignal?.aborted || attempt >= MAX_COMPANION_CALL_ATTEMPTS) {
+        throw error;
+      }
+    }
+  }
+}
+
+function companionResponseFailureMessage(
+  input: Parameters<typeof executeCompanionStructuredAgent>[0],
+  response: AgentResponse,
+): string {
+  const detail = safeExternalErrorMessage(response.error ?? response.content).trim();
+  return [
+    `Companion ${input.purpose} "${input.agentName}" returned status "${response.status}"`,
+    ...(detail.length === 0 ? [] : [detail]),
+  ].join(': ');
 }
 
 async function executeCompanionStructuredAgentInternal(input: Parameters<
@@ -74,6 +100,7 @@ async function executeCompanionStructuredAgentInternal(input: Parameters<
   if (input.abortSignal?.aborted) throw createAbortError(input.abortSignal.reason);
   input.abortSignal?.addEventListener('abort', abortFromParent, { once: true });
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let response: AgentResponse | undefined;
   try {
     const timeoutMs = input.timeoutMs ?? COMPANION_CALL_TIMEOUT_MS;
     const timeout = new Promise<never>((_resolve, reject) => {
@@ -82,6 +109,7 @@ async function executeCompanionStructuredAgentInternal(input: Parameters<
         controller.abort();
       }, timeoutMs);
     });
+    void timeout.catch(() => undefined);
     const call = input.call(
       appendCompanionEvidenceSystemGuard(input.systemPrompt),
       input.prompt,
@@ -100,11 +128,14 @@ async function executeCompanionStructuredAgentInternal(input: Parameters<
       },
     );
     void call.catch(() => undefined);
-    const response = await Promise.race([
+    response = await Promise.race([
       call,
       timeout,
       parentAbort,
     ]);
+    if (response.status === 'done') {
+      input.validateResponse?.(response);
+    }
     input.recordUsage({
       purpose: input.purpose,
       agentName: input.agentName,
@@ -118,6 +149,7 @@ async function executeCompanionStructuredAgentInternal(input: Parameters<
         purpose: input.purpose,
         agentName: input.agentName,
         success: false,
+        usage: response?.providerUsage,
       });
     }
     throw error;

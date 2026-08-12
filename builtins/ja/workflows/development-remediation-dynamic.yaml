@@ -1,0 +1,150 @@
+name: development-remediation-dynamic
+description: 裁定済み experimental finding を動的ファセットで計画・修正・検証する収束ループ。
+subworkflow:
+  callable: true
+  visibility: internal
+  returns: [need_replan]
+  params:
+    fix_pool:
+      type: facet_pool_ref
+      default: coding-facets
+    fix_companions:
+      type: companion_ref[]
+      default: []
+    plan_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default: [coding, testing, review]
+    fix_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default: [coding, testing]
+    verification_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default: [coding, testing, review]
+    fix_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: [architecture, implementation-semantics]
+    verification_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: [architecture, unit-testing, e2e-testing]
+    fix_plan_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: fix-plan-from-review-resolution
+    fix_plan_report_format:
+      type: facet_ref
+      facet_kind: report_format
+      default: fix-plan
+facet_pools:
+  coding-facets:
+    uses: coding-facets
+  takt-coding-facets:
+    uses: takt-coding-facets
+initial_step: fix-plan
+loop_monitors:
+  - cycle: [fix-plan, fix]
+    ignore_steps: [fix-verifier, fix-retry]
+    threshold: 4
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: 健全（修正進捗があり、報告内容も収束している）
+          next: fix-plan
+        - condition: 修正未完了または報告未収束だが、次のレビュー・修正が実行可能である
+          next: fix-plan
+        - condition: 修正方針の前提を変える必要があり、再計画が実行可能である
+          next: fix-plan
+        - condition: 要件を満たす実現可能な打開手段がない
+          next: ABORT
+  - cycle: [fix-retry, fix-verifier]
+    threshold: 4
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: 健全（修正進捗があり、報告内容も収束している）
+          next: fix-retry
+        - condition: 修正未完了または報告未収束だが、次の修正が実行可能である
+          next: fix-retry
+        - condition: 修正方針の前提を変える必要があり、再計画が実行可能である
+          next: fix-plan
+        - condition: 要件を満たす実現可能な打開手段がない
+          next: ABORT
+steps:
+  - name: fix-plan
+    uses: peer-review-fix-plan
+    with:
+      plan_policy:
+        $param: plan_policy
+      fix_knowledge:
+        $param: fix_knowledge
+      plan_instruction:
+        $param: fix_plan_instruction
+      plan_report_format:
+        $param: fix_plan_report_format
+    rules:
+      - condition: 修正計画を確定した
+        next: fix
+      - condition: タスク全体の再計画が必要
+        return: need_replan
+  - name: fix
+    capabilities: [edit, enable-skills]
+    uses: peer-review-fix
+    with:
+      fix_policy:
+        $param: fix_policy
+      fix_knowledge:
+        $param: fix_knowledge
+      fix_instruction: apply-fix-plan
+    dynamic_facets:
+      pool:
+        $param: fix_pool
+    companion:
+      $param: fix_companions
+    rules:
+      - condition: 修正完了
+        next: fix-verifier
+      - condition: 修正計画の見直しが必要
+        next: fix-plan
+      - condition: タスク全体の再計画が必要
+        return: need_replan
+  - name: fix-verifier
+    uses: peer-review-fix-verifier
+    with:
+      verification_policy:
+        $param: verification_policy
+      fix_knowledge:
+        $param: verification_knowledge
+    rules:
+      - condition: verified
+        next: COMPLETE
+      - condition: incomplete
+        next: fix-retry
+      - condition: plan_invalid
+        next: fix-plan
+  - name: fix-retry
+    capabilities: [edit, enable-skills]
+    uses: peer-review-fix
+    with:
+      fix_policy:
+        $param: fix_policy
+      fix_knowledge:
+        $param: fix_knowledge
+      fix_instruction: apply-fix-verification
+    dynamic_facets:
+      pool:
+        $param: fix_pool
+    companion:
+      $param: fix_companions
+    rules:
+      - condition: 修正完了
+        next: fix-verifier
+      - condition: 修正計画の見直しが必要
+        next: fix-plan
+      - condition: タスク全体の再計画が必要
+        return: need_replan

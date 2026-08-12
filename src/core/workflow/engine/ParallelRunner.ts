@@ -378,10 +378,49 @@ export class ParallelRunner {
       return [subStep.name, providerInfo];
     }));
 
-    // Run all sub-steps concurrently (failures are captured, not thrown)
-    // When semaphore is set, at most `concurrency` sub-steps execute simultaneously.
     const subStepStartedAtByName = new Map<string, number>();
     const subStepInstructionByName = new Map<string, string>();
+    const dynamicFacetIdentityPath = this.deps.getCurrentWorkflowStack?.() ?? [];
+    const preparationResults = await Promise.allSettled(
+      agentSubSteps.map(async (subStep) => {
+        if (semaphore) {
+          await semaphore.acquire();
+        }
+        try {
+          const subIteration = incrementStepIteration(
+            state,
+            buildScopedStepIterationIdentity(subStep.name, [step.name]),
+          );
+          const executableSubStep = await this.deps.stepExecutor.prepareDynamicFacetStep(
+            subStep,
+            state,
+            task,
+            subIteration,
+            { identityPath: dynamicFacetIdentityPath },
+          );
+          return [subStep.name, { executableSubStep, subIteration }] as const;
+        } finally {
+          if (semaphore) {
+            semaphore.release();
+          }
+        }
+      }),
+    );
+    const preparationFailure = preparationResults.find(
+      (result): result is PromiseRejectedResult => result.status === 'rejected',
+    );
+    if (preparationFailure !== undefined) {
+      throw preparationFailure.reason;
+    }
+    const preparedAgentSubSteps = new Map(preparationResults.map((result) => {
+      if (result.status !== 'fulfilled') {
+        throw result.reason;
+      }
+      return result.value;
+    }));
+
+    // Run all sub-steps concurrently only after every dynamic facet selector succeeds.
+    // When semaphore is set, at most `concurrency` sub-steps execute simultaneously.
     const settled = await Promise.allSettled(
       subSteps.map(async (subStep, index) => {
         if (semaphore) {
@@ -441,11 +480,11 @@ export class ParallelRunner {
           if (findingContractContext !== undefined) {
             assertFindingContractReviewerStep(subStep);
           }
-          const executableSubStep = subStep;
-          const subIteration = incrementStepIteration(
-            state,
-            buildScopedStepIterationIdentity(subStep.name, [step.name]),
-          );
+          const preparedSubStep = preparedAgentSubSteps.get(subStep.name);
+          if (preparedSubStep === undefined) {
+            throw new Error(`Prepared parallel sub-step is missing for "${subStep.name}"`);
+          }
+          const { executableSubStep, subIteration } = preparedSubStep;
           const subInstruction = this.deps.stepExecutor.buildInstruction(
             executableSubStep,
             subIteration,

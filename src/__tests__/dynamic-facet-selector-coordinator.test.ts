@@ -91,7 +91,7 @@ function makeState(snapshot?: DynamicFacetSelectionSnapshot): WorkflowState {
     effectResults: new Map(),
     userInputs: [],
     personaSessions: new Map(),
-    stepIterations: new Map(),
+    stepIterations: new Map([['fix', 1]]),
     dynamicParallelSelections: new Map(),
     dynamicFacetSelections: selections,
     status: 'running',
@@ -186,6 +186,41 @@ describe('DynamicFacetSelectorCoordinator', () => {
     expect(result.selectedIds).toEqual(['a', 'b', 'c']);
     const executeOptions = mockedExecuteAgent.mock.calls[0]?.[2] as { properties?: { selected_ids?: { maxItems?: number } } };
     expect(executeOptions.properties?.selected_ids?.maxItems).toBeUndefined();
+  });
+
+  it('keeps base facets unchanged when the selector returns an empty selection (DFP-005)', async () => {
+    const pool: ResolvedFacetPool = {
+      name: 'fix',
+      candidates: [{
+        id: 'extra',
+        description: 'extra facet',
+        policyRefs: ['extra-policy'],
+        knowledgeRefs: ['extra-knowledge'],
+        resolvedPolicyContents: [{ content: 'EXTRA POLICY' }],
+        resolvedKnowledgeContents: [{ content: 'EXTRA KNOWLEDGE' }],
+      }],
+    };
+    const step: NormalAgentWorkflowStep = {
+      ...makeStep(1),
+      policyContents: [{ content: 'BASE POLICY' }],
+      knowledgeContents: [{ content: 'BASE KNOWLEDGE' }],
+    };
+    mockedExecuteAgent.mockResolvedValueOnce({
+      persona: 'selector',
+      status: 'done',
+      content: '',
+      timestamp: new Date(),
+      structuredOutput: { selected_ids: [], rationale: 'no extra facet is needed' },
+    });
+
+    const coordinator = new DynamicFacetSelectorCoordinator(buildDeps());
+    const result = await coordinator.resolveDynamicFacets(step, makeState(), 'task', pool);
+
+    expect(result.selectedIds).toEqual([]);
+    expect(result.effectivePolicyContents).toEqual(['BASE POLICY']);
+    expect(result.effectiveKnowledgeContents).toEqual(['BASE KNOWLEDGE']);
+    expect(result.effectivePolicyContents).not.toContain('EXTRA POLICY');
+    expect(result.effectiveKnowledgeContents).not.toContain('EXTRA KNOWLEDGE');
   });
 
   it('sends a provider-compatible schema to the isolated selector', async () => {
@@ -292,6 +327,19 @@ describe('DynamicFacetSelectorCoordinator', () => {
     ).rejects.toThrow('has no resolved provider');
   });
 
+  it('fails fast when the selector does not receive a resolved step iteration', async () => {
+    const pool = makePool([{ id: 'a', description: 'A' }]);
+    const step = makeStep();
+    const state = makeState();
+    state.stepIterations.clear();
+    const coordinator = new DynamicFacetSelectorCoordinator(buildDeps());
+
+    await expect(
+      coordinator.resolveDynamicFacets(step, state, 'task', pool),
+    ).rejects.toThrow('requires a resolved step iteration');
+    expect(mockedExecuteAgent).not.toHaveBeenCalled();
+  });
+
   // L2: round increment + isReentry propagation through coordinator chain.
   it('increments round and propagates isReentry when selector runs with a previous selection (L2)', async () => {
     const pool = makePool([
@@ -336,6 +384,47 @@ describe('DynamicFacetSelectorCoordinator', () => {
     expect(instructionSpy).toHaveBeenCalledOnce();
     const instructionInput = instructionSpy.mock.calls[0]![0] as { isReentry: boolean };
     expect(instructionInput.isReentry).toBe(true);
+  });
+
+  it('uses the captured parallel child iteration and parent frame in the run-local identity', async () => {
+    const pool = makePool([{ id: 'a', description: 'A' }]);
+    const step = makeStep();
+    mockedExecuteAgent.mockResolvedValueOnce({
+      persona: 'selector',
+      status: 'done',
+      content: '',
+      timestamp: new Date(),
+      structuredOutput: { selected_ids: ['a'], rationale: 'parallel selection' },
+    });
+    const instructionSpy = vi.spyOn(contextBuilder, 'buildDynamicFacetSelectorInstruction');
+    const parentFrame = {
+      workflow: 'test-workflow',
+      workflow_ref: 'test-workflow',
+      step: 'reviewers',
+      kind: 'parallel' as const,
+      occurrence: 2,
+    };
+    const deps = buildDeps();
+    const coordinator = new DynamicFacetSelectorCoordinator(deps);
+
+    await coordinator.resolveDynamicFacets(step, makeState(), 'task', pool, {
+      identityPath: [parentFrame],
+      stepIteration: 7,
+    });
+
+    expect(instructionSpy).toHaveBeenCalledWith(expect.objectContaining({ stepIteration: 7 }));
+    const commit = deps.commitSelection as unknown as { mock: { calls: unknown[][] } };
+    expect(JSON.parse(commit.mock.calls[0]?.[0] as string)).toEqual({
+      workflow: 'test-workflow',
+      step: 'fix',
+      calls: [{
+        workflow: 'test-workflow',
+        step: 'reviewers',
+        kind: 'parallel',
+        instance: 2,
+      }],
+    });
+    instructionSpy.mockRestore();
   });
 
   it('throws when selector returns an unknown candidate id through the shared contract', async () => {

@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AgentResponse, WorkflowState, WorkflowStep } from '../core/models/index.js';
+import type { AgentResponse, AgentWorkflowStep, WorkflowState, WorkflowStep } from '../core/models/index.js';
 import type { RunPaths } from '../core/workflow/run/run-paths.js';
 import type { StepExecutorDeps } from '../core/workflow/engine/StepExecutor.js';
 import type { ParallelRunnerDeps } from '../core/workflow/engine/ParallelRunner.js';
@@ -144,6 +144,7 @@ function makeParallelDeps(
       resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode', model: 'opencode/big-pickle' }),
     } as unknown as ParallelRunnerDeps['optionsBuilder'],
     stepExecutor: {
+      prepareDynamicFacetStep: vi.fn(async (step: AgentWorkflowStep) => step),
       buildInstruction: vi.fn((step: WorkflowStep) => `instruction:${step.name}`),
       emitStepReports: vi.fn(),
       persistPreviousResponseSnapshot: vi.fn(),
@@ -623,6 +624,7 @@ describe('session compaction Phase 1 wiring', () => {
         resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode', model: 'opencode/big-pickle' }),
       } as unknown as ParallelRunnerDeps['optionsBuilder'],
       stepExecutor: {
+        prepareDynamicFacetStep: vi.fn(async (step: AgentWorkflowStep) => step),
         buildInstruction: vi.fn((step: WorkflowStep) => `instruction:${step.name}`),
         emitStepReports: vi.fn(),
         persistPreviousResponseSnapshot: vi.fn(),
@@ -676,6 +678,7 @@ describe('session compaction Phase 1 wiring', () => {
         resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode', model: 'opencode/big-pickle' }),
       } as unknown as ParallelRunnerDeps['optionsBuilder'],
       stepExecutor: {
+        prepareDynamicFacetStep: vi.fn(async (step: AgentWorkflowStep) => step),
         buildInstruction: vi.fn((step: WorkflowStep) => `instruction:${step.name}`),
         emitStepReports: vi.fn(),
         persistPreviousResponseSnapshot: vi.fn(),

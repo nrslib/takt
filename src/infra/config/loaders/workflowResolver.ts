@@ -6,7 +6,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { isScopeRef, parseScopeRef } from 'faceted-prompting';
-import type { WorkflowConfig } from '../../../core/models/index.js';
+import type { WorkflowCallArgValue, WorkflowConfig } from '../../../core/models/index.js';
 import type { FindingContractSyntheticProviderValidationOptions } from '../../../core/workflow/engine/WorkflowValidator.js';
 import { validateWorkflowCallContracts as validateWorkflowCallContractsImpl } from './workflowCallContractValidator.js';
 import { buildWorkflowDiscoveryConfig, loadValidatedWorkflowDiscoveryEntry } from './workflowDiscoveryLoader.js';
@@ -43,7 +43,7 @@ export interface WorkflowLookupOptions {
 }
 
 interface InternalWorkflowLookupOptions extends WorkflowLookupOptions {
-  callableArgs?: Record<string, string | string[]>;
+  callableArgs?: Record<string, WorkflowCallArgValue>;
   parentTrustInfo?: WorkflowTrustInfo;
   skipWorkflowCallContractValidation?: boolean;
 }
@@ -72,7 +72,7 @@ function loadWorkflowFromLookupDirs(
   lookupDirs: NamedWorkflowLookupDir[],
   projectCwd: string,
   lookupCwd: string,
-  callableArgs?: Record<string, string | string[]>,
+  callableArgs?: Record<string, WorkflowCallArgValue>,
   parentTrustInfo?: WorkflowTrustInfo,
 ): WorkflowConfig | null {
   const match = findWorkflowInLookupDirs(name, lookupDirs);
@@ -111,7 +111,7 @@ function loadWorkflowFromPath(
   basePath: string,
   projectCwd: string,
   lookupCwd: string,
-  callableArgs?: Record<string, string | string[]>,
+  callableArgs?: Record<string, WorkflowCallArgValue>,
   parentTrustInfo?: WorkflowTrustInfo,
 ): WorkflowConfig | null {
   const resolvedPath = resolvePath(filePath, basePath);
@@ -122,7 +122,7 @@ function loadWorkflowFromResolvedPath(
   resolvedPath: string,
   projectCwd: string,
   lookupCwd = projectCwd,
-  callableArgs?: Record<string, string | string[]>,
+  callableArgs?: Record<string, WorkflowCallArgValue>,
   parentTrustInfo?: WorkflowTrustInfo,
 ): WorkflowConfig | null {
   if (!existsSync(resolvedPath)) {
@@ -227,7 +227,7 @@ export function isWorkflowPath(identifier: string): boolean {
 function loadRepertoireWorkflowByRef(
   identifier: string,
   projectCwd: string,
-  callableArgs?: Record<string, string | string[]>,
+  callableArgs?: Record<string, WorkflowCallArgValue>,
   parentTrustInfo?: WorkflowTrustInfo,
 ): WorkflowConfig | null {
   const scopeRef = parseScopeRef(identifier);

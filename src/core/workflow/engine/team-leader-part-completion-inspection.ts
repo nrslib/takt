@@ -20,6 +20,7 @@ const SESSIONLESS_INSPECTION_CAPABILITY: Record<ProviderType, 'claude' | 'unsupp
   cursor: 'unsupported',
   copilot: 'unsupported',
   kiro: 'unsupported',
+  pi: 'unsupported',
 };
 
 function isAllowedReadPath(

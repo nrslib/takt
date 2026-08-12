@@ -226,6 +226,23 @@ describe('runtime-provider loader', () => {
     expect(resolved?.provider?.auto_routing?.strategy).toBe('performance');
   });
 
+  it('Given global companion.enabled=false and project companion.enabled=true, When resolving, Then companion remains disabled', () => {
+    writeRuntimeYaml(globalDir, [
+      'version: 1',
+      'companion:',
+      '  enabled: false',
+    ]);
+    writeRuntimeYaml(projectDir, [
+      'version: 1',
+      'companion:',
+      '  enabled: true',
+    ]);
+
+    const resolved = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
+
+    expect(resolved?.companion?.enabled).toBe(false);
+  });
+
   it('Given neither file present, When resolving, Then it returns undefined (C1)', () => {
     expect(resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir })).toBeUndefined();
   });

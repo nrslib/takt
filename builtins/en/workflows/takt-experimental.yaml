@@ -1,26 +1,37 @@
 name: takt-experimental
-description: Inject TAKT-specific knowledge and testing policy into the shared experimental core, using TAKT-only implementation and review candidates.
+description: Inject TAKT-specific facets and implementation companions into the shared core's adjudicated, verified peer-review remediation loop and merge-readiness gate.
 max_steps: 51
 initial_step: develop
 
 steps:
   - name: develop
     kind: workflow_call
-    call: experimental-core
+    call: development-core
     args:
       implementation_pool: takt-coding-facets
-      review_workflow: takt-experimental-review
+      implementation_workflow: development-implement-dynamic
+      remediation_workflow: development-remediation-dynamic
+      plan_instruction: scenario-based-plan
+      plan_report_format: scenario-based-plan
+      replan_instruction: scenario-based-replan-implementation
+      testing_instruction: scenario-based-write-tests-first
+      testing_report_format: scenario-based-test-report
+      fix_plan_instruction: scenario-based-fix-plan-from-review-resolution
+      fix_plan_report_format: scenario-based-fix-plan
+      final_gate_instruction: scenario-based-supervise-merge-readiness
+      implementation_companions:
+        fixed: [ai-antipattern-review-companion, testing-review-companion]
+        pool: []
+        moderator: ai-antipattern-review-moderator
+      reviewer_suite: takt-experimental-review-adapter
       review_policy_additions: [takt-testing]
-      review_knowledge_additions: [takt]
+      review_policy: [coding, testing, takt-testing, review]
+      review_knowledge: [takt, architecture, unit-testing, e2e-testing]
       plan_knowledge: [takt, architecture, task-decomposition]
       testing_policy: [coding, testing, takt-testing]
       testing_knowledge: [takt, architecture, unit-testing, e2e-testing]
       development_policy: [coding, testing, takt-testing, ai-antipattern]
       development_knowledge: [takt, architecture, implementation-semantics]
-      fix_policy: [contract-change, coding, testing, takt-testing, review, ai-antipattern]
-      fix_knowledge: [takt, architecture, implementation-semantics]
-      supervise_policy: [contract-change, coding, testing, takt-testing, review, ai-antipattern]
-      supervise_knowledge: [takt, architecture, unit-testing, e2e-testing]
     rules:
       - condition: COMPLETE
         next: COMPLETE

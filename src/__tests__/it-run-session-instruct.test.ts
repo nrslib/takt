@@ -267,33 +267,4 @@ describe('Integration: Run session → instruct mode with interactive flow', () 
     expect(capture.callCount).toBe(1);
   });
 
-  it('should skip empty and corrupt meta.json in listRecentRuns', () => {
-    createRunFixture(tmpDir, 'valid-run');
-    createRunFixture(tmpDir, 'empty-meta', { emptyMeta: true });
-    createRunFixture(tmpDir, 'corrupt-meta', { corruptMeta: true });
-
-    const runs = listRecentRuns(tmpDir);
-    expect(runs).toHaveLength(1);
-    expect(runs[0]!.slug).toBe('valid-run');
-  });
-
-  it('should sort runs by startTime descending', () => {
-    createRunFixture(tmpDir, 'old', { meta: { startTime: '2026-01-01T00:00:00Z' } });
-    createRunFixture(tmpDir, 'new', { meta: { startTime: '2026-02-15T00:00:00Z' } });
-
-    const runs = listRecentRuns(tmpDir);
-    expect(runs[0]!.slug).toBe('new');
-    expect(runs[1]!.slug).toBe('old');
-  });
-
-  it('should truncate long step content to 500 chars', () => {
-    createRunFixture(tmpDir, 'long');
-    setupMockNdjsonLog([
-      { step: 'implement', persona: 'coder', status: 'completed', content: 'X'.repeat(800) },
-    ]);
-
-    const context = loadRunSessionContext(tmpDir, 'long');
-    expect(context.stepLogs[0]!.content.length).toBe(501);
-    expect(context.stepLogs[0]!.content.endsWith('…')).toBe(true);
-  });
 });

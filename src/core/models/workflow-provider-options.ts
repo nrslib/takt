@@ -112,6 +112,16 @@ export interface KiroProviderOptions {
   agent?: string;
 }
 
+/** Pi SDK resource-loading options. Extension sources are resolved temporarily. */
+export interface PiProviderOptions {
+  extensions?: string[];
+  noExtensions?: boolean;
+  noSkills?: boolean;
+  noPromptTemplates?: boolean;
+  noThemes?: boolean;
+  noContextFiles?: boolean;
+}
+
 export interface StepProviderOptions {
   codex?: CodexProviderOptions;
   opencode?: OpenCodeProviderOptions;
@@ -119,6 +129,7 @@ export interface StepProviderOptions {
   claudeTerminal?: ClaudeTerminalProviderOptions;
   copilot?: CopilotProviderOptions;
   kiro?: KiroProviderOptions;
+  pi?: PiProviderOptions;
 }
 
 export type WorkflowStepKind = 'agent' | 'system' | 'workflow_call';

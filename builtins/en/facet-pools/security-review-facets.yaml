@@ -1,0 +1,11 @@
+knowledge:
+  security-web: ../facets/knowledge/security-web.md
+  security-api: ../facets/knowledge/security-api.md
+  security-local: ../facets/knowledge/security-local.md
+candidates:
+  - id: web
+    description: Review only changes that cross browser and HTTP API boundaries involving authentication, authorization, origins, or input and output.
+    knowledge: [security-web, security-api]
+  - id: cli
+    description: Review only changes where CLI input reaches subprocesses, paths, local files, or configuration.
+    knowledge: security-local

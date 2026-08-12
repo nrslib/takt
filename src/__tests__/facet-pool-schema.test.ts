@@ -208,7 +208,7 @@ describe('facet_pools schema (C-CANDIDATE-SCHEMA, C-USES-INLINE-MIX, C-EXTERNAL-
   });
 
   describe('dynamic_facets on step', () => {
-    it('should accept dynamic_facets on a normal agent step', () => {
+    it('should accept dynamic_facets on a normal agent step (DFP-001)', () => {
       const raw = baseWorkflowWithFacetPools(
         { fix: { uses: 'implementation-fix' } },
         [{
@@ -236,6 +236,21 @@ describe('facet_pools schema (C-CANDIDATE-SCHEMA, C-USES-INLINE-MIX, C-EXTERNAL-
         }],
       );
       expect(() => WorkflowConfigRawSchema.parse(raw)).toThrow();
+
+      const nestedRaw = baseWorkflowWithFacetPools(
+        { fix: { uses: 'implementation-fix' } },
+        [{
+          name: 'parallel-parent',
+          parallel: [{
+            name: 'callstep',
+            call: 'called',
+            dynamic_facets: { pool: 'fix', max_selected: 3 },
+            rules: [{ condition: 'done', next: 'COMPLETE' }],
+          }],
+          rules: [{ condition: 'all("done")', next: 'COMPLETE' }],
+        }],
+      );
+      expect(() => WorkflowConfigRawSchema.parse(nestedRaw)).toThrow();
     });
 
     it('should reject dynamic_facets on a parallel parent step (C-LOAD-FAILFAST: 通常 agent step 以外)', () => {
@@ -253,7 +268,7 @@ describe('facet_pools schema (C-CANDIDATE-SCHEMA, C-USES-INLINE-MIX, C-EXTERNAL-
       expect(() => WorkflowConfigRawSchema.parse(raw)).toThrow();
     });
 
-    it('should reject dynamic_facets on a parallel sub-step (C-LOAD-FAILFAST: parallel 子)', () => {
+    it('should accept dynamic_facets on a static parallel agent child (DFP-002)', () => {
       const raw = baseWorkflowWithFacetPools(
         { fix: { uses: 'implementation-fix' } },
         [{
@@ -266,6 +281,55 @@ describe('facet_pools schema (C-CANDIDATE-SCHEMA, C-USES-INLINE-MIX, C-EXTERNAL-
               rules: [{ condition: 'done', next: 'COMPLETE' }],
             },
           ],
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        }],
+      );
+      expect(() => WorkflowConfigRawSchema.parse(raw)).not.toThrow();
+    });
+
+    it('should accept dynamic_facets on dynamic parallel fixed and pool agent children (DFP-002)', () => {
+      const raw = baseWorkflowWithFacetPools(
+        {
+          fix: {
+            candidates: [
+              { id: 'backend', description: 'backend', knowledge: 'backend-api' },
+            ],
+          },
+        },
+        [{
+          name: 'parallel-parent',
+          parallel: {
+            fixed: [{
+              name: 'fixed-child',
+              persona: 'coder',
+              instruction: 'fixed',
+              dynamic_facets: { pool: 'fix', max_selected: 1 },
+              rules: [{ condition: 'done', next: 'COMPLETE' }],
+            }],
+            pool: [{
+              name: 'pool-child',
+              description: 'pool child',
+              persona: 'coder',
+              instruction: 'pool',
+              dynamic_facets: { pool: 'fix' },
+              rules: [{ condition: 'done', next: 'COMPLETE' }],
+            }],
+          },
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        }],
+      );
+      expect(() => WorkflowConfigRawSchema.parse(raw)).not.toThrow();
+    });
+
+    it('should reject min_selected because the contract only supports max_selected (DFP-015)', () => {
+      const raw = baseWorkflowWithFacetPools(
+        { fix: { uses: 'implementation-fix' } },
+        [{
+          name: 'fix',
+          persona: 'coder',
+          dynamic_facets: { pool: 'fix', max_selected: 1, min_selected: 1 },
+          instruction: 'fix',
+          edit: true,
           rules: [{ condition: 'done', next: 'COMPLETE' }],
         }],
       );

@@ -5,6 +5,9 @@ params:
   review_knowledge_additions:
     type: facet_ref[]
     facet_kind: knowledge
+  cqrs_es_review_instruction:
+    type: facet_ref
+    facet_kind: instruction
 name: cqrs-es-review
 capabilities: readonly
 tags:
@@ -19,7 +22,8 @@ knowledge:
   - cqrs-es
   - backend
   - $param: review_knowledge_additions
-instruction: review-cqrs-es
+instruction:
+  $param: cqrs_es_review_instruction
 output_contracts:
   report:
     - name: cqrs-es-review.md

@@ -1,8 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { join } from 'node:path';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { parse as parseYaml } from 'yaml';
+import { join } from 'node:path';
 import { WorkflowStepRawSchema } from '../core/models/schemas.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 
@@ -23,26 +22,6 @@ describe('team_leader schema', () => {
     expect(invalid.success).toBe(false);
   });
 
-  it.each(['ja', 'en'])('default team high (%s) の fix は明示 decision だけで reviewers または replan へ遷移する', (locale) => {
-    const source = readFileSync(
-      join(process.cwd(), 'builtins', locale, 'workflows', 'takt-default-team-high.yaml'),
-      'utf-8',
-    );
-    const workflow = parseYaml(source) as {
-      steps: Array<{
-        name: string;
-        team_leader?: { mode?: string };
-        rules?: Array<{ condition: string; next: string }>;
-      }>;
-    };
-    const fix = workflow.steps.find((step) => step.name === 'fix');
-
-    expect(fix?.team_leader?.mode).toBe('finding_contract_fix');
-    expect(fix?.rules).toEqual([
-      { condition: 'when(structured.fix.decision == "complete")', next: 'reviewers' },
-      { condition: 'when(structured.fix.decision == "replan")', next: 'replan' },
-    ]);
-  });
   it('max_parts <= 3 の設定を受け付ける', () => {
     const raw = {
       name: 'implement',

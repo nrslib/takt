@@ -67,6 +67,7 @@ export type {
   ClaudeTerminalProviderOptions,
   CopilotProviderOptions,
   KiroProviderOptions,
+  PiProviderOptions,
   StepProviderOptions,
   WorkflowStepKind,
   WorkflowCallOverrides,
@@ -138,13 +139,13 @@ export type WorkflowParamType =
   | 'facet_pool_ref'
   | 'companion_ref[]';
 export type WorkflowParamFacetKind = 'knowledge' | 'policy' | 'instruction' | 'persona' | 'report_format';
-export type WorkflowCallArgValue = string | string[];
+export type WorkflowCallArgValue = string | string[] | CompanionSelection;
 export type WorkflowCallVariableValue = string | number | boolean;
 
 interface WorkflowFacetSubworkflowParamConfig {
   type: 'facet_ref' | 'facet_ref[]';
   facetKind: WorkflowParamFacetKind;
-  default?: WorkflowCallArgValue;
+  default?: string | string[];
 }
 
 interface WorkflowReferenceSubworkflowParamConfig {
@@ -159,7 +160,7 @@ interface WorkflowFacetPoolSubworkflowParamConfig {
 
 interface WorkflowCompanionSubworkflowParamConfig {
   type: 'companion_ref[]';
-  default?: string[];
+  default?: string[] | CompanionSelection;
 }
 
 export type WorkflowSubworkflowParamConfig =

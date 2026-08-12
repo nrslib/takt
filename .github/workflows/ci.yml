@@ -153,10 +153,30 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      # build は不要: 対象テストは vitest が src / prompt-evals/*.mjs を直接読む。
-      # ルートの build スクリプトは mkdir -p / cp を使う Unix 前提で Windows の
-      # cmd では実行できない（このジョブの検証対象でもない）。
+      # build は pi-cross-platform で Windows / macOS の両方を検証する。
       - run: npm test -- src/__tests__/private-file.test.ts src/__tests__/resume-report-snapshot.test.ts src/__tests__/promptEvalProbeLifecycle.test.ts src/__tests__/runtime-environment-windows.test.ts src/__tests__/executable-path.test.ts src/__tests__/spawn.test.ts src/__tests__/managed-spawn.test.ts src/__tests__/windows-executable-shadowing.test.ts
+
+  pi-cross-platform:
+    name: Pi SDK (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm test -- src/__tests__/pi-client.test.ts src/__tests__/pi-provider.test.ts
+      - run: npm run test:pi-sdk-smoke
 
   e2e-mock:
     runs-on: ubuntu-latest

@@ -764,6 +764,23 @@ export function denormalizeProviderOptions(
   if (providerOptions.kiro?.agent !== undefined) {
     raw.kiro = { agent: providerOptions.kiro.agent };
   }
+  if (providerOptions.pi !== undefined) {
+    const pi = {
+      ...(providerOptions.pi.extensions !== undefined ? { extensions: [...providerOptions.pi.extensions] } : {}),
+      ...(providerOptions.pi.noExtensions !== undefined ? { no_extensions: providerOptions.pi.noExtensions } : {}),
+      ...(providerOptions.pi.noSkills !== undefined ? { no_skills: providerOptions.pi.noSkills } : {}),
+      ...(providerOptions.pi.noPromptTemplates !== undefined
+        ? { no_prompt_templates: providerOptions.pi.noPromptTemplates }
+        : {}),
+      ...(providerOptions.pi.noThemes !== undefined ? { no_themes: providerOptions.pi.noThemes } : {}),
+      ...(providerOptions.pi.noContextFiles !== undefined
+        ? { no_context_files: providerOptions.pi.noContextFiles }
+        : {}),
+    };
+    if (Object.keys(pi).length > 0) {
+      raw.pi = pi;
+    }
+  }
   if (providerOptions.claudeTerminal) {
     const claudeTerminal: Record<string, unknown> = {};
     if (providerOptions.claudeTerminal.backend !== undefined) {

@@ -14,7 +14,7 @@ phase 粒度の usage events と集計方法は [Observability Guide](./observab
 language: en                  # UI 言語: 'en' または 'ja'
 logging:
   level: info                 # ログレベル: debug, info, warn, error
-provider: claude              # デフォルト provider: claude, claude-sdk, claude-terminal, codex, opencode, cursor, copilot, kiro, または mock
+provider: claude              # デフォルト provider: claude, claude-sdk, claude-terminal, codex, opencode, cursor, copilot, kiro, pi, または mock
 model: sonnet                 # デフォルトモデル（省略可、provider にそのまま渡される）
 branch_name_strategy: romaji  # ブランチ名生成方式: 'romaji'（高速）または 'ai'（低速）
 prevent_sleep: false          # 実行中に macOS のアイドルスリープを防止（caffeinate）
@@ -130,7 +130,7 @@ assistant:
 #         reasoning_effort: medium
 ```
 
-`takt_providers.selector` は任意です。provider/model の優先順位は、明示的な CLI または環境 override、project selector、global selector、project top-level、global top-level の順です。model は解決済み provider と一致する候補だけを採用します。`provider_options` は selector entry だけを global → project の leaf 単位でマージし、top-level・persona・pool sub-step の options は selector に継承されません。空の selector entry と空の `provider_options` entry は設定読み込み時に拒否されます。dynamic selector には strict read-only の内部 agent 隔離を保証できる provider が必要です。Claude、Codex、Mock はこの契約を満たし、OpenCode、Cursor、Copilot、Kiro は selector・participant 起動前に拒否されます。dynamic parallel を使わない workflow では selector 設定を解決せず、既存実行へ影響しません。
+`takt_providers.selector` は任意です。provider/model の優先順位は、明示的な CLI または環境 override、project selector、global selector、project top-level、global top-level の順です。model は解決済み provider と一致する候補だけを採用します。`provider_options` は selector entry だけを global → project の leaf 単位でマージし、top-level・persona・pool sub-step の options は selector に継承されません。空の selector entry と空の `provider_options` entry は設定読み込み時に拒否されます。dynamic selector には strict read-only の内部 agent 隔離を保証できる provider が必要です。Claude、Codex、Mock はこの契約を満たし、OpenCode、Cursor、Copilot、Kiro、Pi は selector・participant 起動前に拒否されます。dynamic parallel を使わない workflow では selector 設定を解決せず、既存実行へ影響しません。
 
 ```yaml
 # ~/.takt/config.yaml（続き）
@@ -181,7 +181,7 @@ assistant:
 | `logging.debug` | boolean | `false` | デバッグログを有効化（`debug.log` + `prompts.jsonl`） |
 | `logging.provider_events` | boolean | `false` | provider stream イベントを永続化 |
 | `logging.usage_events` | boolean | `false` | usage イベントログを永続化 |
-| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude"` | デフォルトの具体 AI provider（`claude` = ヘッドレス CLI モード、`claude-sdk` = SDK/API モード、`claude-terminal` = experimental interactive terminal モード） |
+| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude"` | デフォルトの具体 AI provider（`claude` = ヘッドレス CLI モード、`claude-sdk` = SDK/API モード、`claude-terminal` = experimental interactive terminal モード、`pi` = Pi SDK モード） |
 | `model` | string | - | デフォルトモデル名（provider にそのまま渡される） |
 | `branch_name_strategy` | `"romaji"` \| `"ai"` | `"romaji"` | ブランチ名生成方式 |
 | `prevent_sleep` | boolean | `false` | macOS アイドルスリープ防止（caffeinate） |
@@ -280,6 +280,9 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 #       reasoning_byte_limit: 4194304
 #   kiro:
 #     agent: my-default-agent
+#   pi:
+#     extensions: [npm:pi-fff]
+#     no_skills: true
 #   claude_terminal:
 #     backend: tmux
 #     timeout_ms: 900000
@@ -294,6 +297,9 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 #       ai_review: readonly
 
 ```
+
+Pi SDK session は現在の TAKT process 内だけ memory に保持します。TAKT は Pi の session JSONL を書き込まず、`provider_options.pi.extensions` を Pi settings に永続化しません。明示した package は Pi の temporary resolution path で解決します。
+暗黙の project-local Pi extension は信頼せず、読み込みません。明示した Pi extension は TAKT process 内で実行されるため、信頼できる local path と package source だけを設定してください。認証情報を埋め込んだ URL や secret 系 query parameter を含む extension URL は拒否します。
 
 ### OpenCode 実行ガード
 
@@ -345,7 +351,7 @@ terminal tool の完全一致反復は、廃止された累積検出ではなく
 
 | フィールド | 型 | デフォルト | 説明 |
 |-----------|------|---------|------|
-| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | - | 具体 provider の上書き |
+| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | - | 具体 provider の上書き |
 | `model` | string | - | モデル名の上書き（provider にそのまま渡される） |
 | `submodules` | `"all"` \| string[] | - | プロジェクト専用。共有クローンで初期化する submodule。`"all"` または明示パスリスト（ワイルドカード不可） |
 | `with_submodules` | boolean | - | プロジェクト専用。`submodules: "all"` 相当の旧 boolean 設定。`submodules` を推奨 |
@@ -424,7 +430,7 @@ validation に失敗します。
 
 ## API キー設定
 
-TAKT は Claude、Codex、OpenCode、Cursor、Copilot、Kiro provider をサポートしています。Claude/Codex/OpenCode/Kiro は API キーを使い、Cursor は API キーまたは `cursor-agent login` セッションで認証でき、Copilot は GitHub トークンを使います。
+TAKT は Claude、Codex、OpenCode、Pi、Cursor、Copilot、Kiro provider をサポートしています。Claude/Codex/OpenCode は各 SDK の認証情報、Pi は Pi SDK の credential store または provider 環境変数、Kiro は API キーを使い、Cursor は API キーまたは `cursor-agent login` セッションで認証でき、Copilot は GitHub トークンを使います。
 
 ### 環境変数（推奨）
 
@@ -437,6 +443,9 @@ export TAKT_OPENAI_API_KEY=sk-...
 
 # OpenCode 用
 export TAKT_OPENCODE_API_KEY=...
+
+# Pi 用
+# Pi SDK の credential store または provider-native 環境変数を使用
 
 # Cursor Agent 用（cursor-agent login 済みなら省略可）
 export TAKT_CURSOR_API_KEY=...
@@ -469,6 +478,7 @@ kiro_api_key: ...              # Kiro CLI 用
 | Claude (Anthropic) | `TAKT_ANTHROPIC_API_KEY` | `anthropic_api_key` |
 | Codex (OpenAI) | `TAKT_OPENAI_API_KEY` | `openai_api_key` |
 | OpenCode | `TAKT_OPENCODE_API_KEY` | `opencode_api_key` |
+| Pi | Pi SDK credential store または provider-native 環境変数 | - |
 | Cursor Agent | `TAKT_CURSOR_API_KEY` | `cursor_api_key` |
 | GitHub Copilot CLI | `TAKT_COPILOT_GITHUB_TOKEN` | `copilot_github_token` |
 | Kiro CLI | `TAKT_KIRO_API_KEY`（`KIRO_API_KEY` フォールバック） | `kiro_api_key` |
@@ -479,7 +489,7 @@ kiro_api_key: ...              # Kiro CLI 用
 - 環境変数の使用を検討してください。
 - 必要に応じて `~/.takt/config.yaml` をグローバル `.gitignore` に追加してください。
 - Cursor provider は `cursor-agent login` が済んでいれば API キーなしでも動作できます。
-- API キーを設定すれば、対応する CLI ツール（Claude Code、Codex、OpenCode）のインストールは不要です。TAKT が対応する API を直接呼び出します。
+- 認証情報を設定すれば、対応する CLI ツール（Claude Code、Codex、OpenCode、Pi）のインストールは不要です。TAKT が対応する API を直接呼び出します。
 - Copilot provider は `copilot` CLI のインストールが必要です。GitHub トークンは認証に使用されます。
 - Kiro provider は `kiro-cli` CLI のインストールが必要です。`TAKT_KIRO_API_KEY` / `kiro_api_key` は子プロセスの `KIRO_API_KEY` として渡されます。どちらも未設定の場合は公式の `KIRO_API_KEY` 環境変数を使用します。
 
@@ -545,6 +555,8 @@ workflow YAML では、通常 step、parallel sub-step、`loop_monitors.judge` �
 
 **OpenCode** は `provider/model` 形式のモデル（例: `opencode/big-pickle`）が必要です。OpenCode provider でモデルを省略すると設定エラーになります。
 
+**Pi** は `provider/model` 形式と、設定済みの Pi model に一意に一致する model ID を受け付けます。認識可能な `:<thinking-level>` サフィックスで Pi の thinking level を指定できます。省略時は Pi session の現在の model を維持します。
+
 **Cursor Agent** は `model` を `cursor-agent --model <model>` にそのまま渡します。省略時は Cursor CLI のデフォルトが使用されます。
 
 **GitHub Copilot CLI** は `model` を `copilot --model <model>` にそのまま渡します。省略時は Copilot CLI のデフォルトが使用されます。
@@ -576,6 +588,23 @@ steps:
 
 1. `~/.takt/runtime.yaml`
 2. `<project>/.takt/runtime.yaml`
+
+companion reviewer は既定で有効です。無効化する場合は、トップレベルの
+`companion.enabled` を設定します。
+
+```yaml
+version: 1
+companion:
+  enabled: false
+```
+
+global と project の値は論理積で合成されるため、global 側で無効化した companion を
+project 側の `true` で再有効化することはできません。
+
+companion の provider target（`targets.companions`）とプロバイダ能力要件が適用されるのは
+companion が有効な間だけです。無効時も companion 宣言と `targets.companions` の構造検証は
+維持されますが、companion の provider 解決と実行は行われません — companion を宣言した
+ワークフローは、companion 用の provider 設定なしで実行できます。
 
 runtime モードはファイルの存在ではなく、有効な `provider` セクションの有無で有効化されます。`version: 1` だけのファイルは inactive で、従来の `config.yaml` による provider 解決がそのまま使われます。
 
@@ -758,11 +787,13 @@ Provider プロファイルを使用すると、各 provider にデフォルト�
 
 TAKT は provider 非依存の3つのパーミッションモードを使用します。
 
-| モード | 説明 | Claude | Codex | OpenCode | Cursor Agent | Copilot | Kiro CLI |
-|--------|------|--------|-------|----------|--------------|---------|----------|
-| `readonly` | 読み取り専用、ファイル変更不可 | `default` | `read-only` | `read-only` | デフォルトフラグ（`--force` なし） | フラグなし | `--trust-tools=read,grep` |
-| `edit` | 確認付きでファイル編集を許可 | `acceptEdits` | `workspace-write` | `workspace-write` | デフォルトフラグ（`--force` なし） | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` |
-| `full` | すべてのパーミッションチェックをバイパス | `bypassPermissions` | `danger-full-access` | `danger-full-access` | `--force` | `--yolo` | `--trust-all-tools` |
+| モード | 説明 | Claude | Codex | OpenCode | Pi | Cursor Agent | Copilot | Kiro CLI |
+|--------|------|--------|-------|----------|----|--------------|---------|----------|
+| `readonly` | 読み取り専用、ファイル変更不可 | `default` | `read-only` | `read-only` | `read`, `grep`, `find`, `ls` | デフォルトフラグ（`--force` なし） | フラグなし | `--trust-tools=read,grep` |
+| `edit` | 確認付きでファイル編集を許可 | `acceptEdits` | `workspace-write` | `workspace-write` | `read`, `grep`, `find`, `ls`, `edit`, `write`, `bash` | デフォルトフラグ（`--force` なし） | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` |
+| `full` | すべてのパーミッションチェックをバイパス | `bypassPermissions` | `danger-full-access` | `danger-full-access` | 登録済み Pi tool すべて | `--force` | `--yolo` | `--trust-all-tools` |
+
+Pi の permission mode は SDK の active-tool allowlist であり、OS sandbox ではありません。また、TAKT は Pi に tool ごとの確認 prompt を追加しません。特に Pi の `edit` は `bash` を有効化し、file tool は絶対 path も受け取れます。信頼できる workflow input と extension だけで実行してください。TAKT は strict read-only isolation が必要な dynamic internal agent には Pi を使用しません。
 
 ### 設定方法
 
@@ -972,7 +1003,7 @@ workflow の `provider_options.extends` は、共有 YAML プリセットを名�
 
 `provider_options.extends` は、preset または path を解決できない場合、scoped ref が利用可能な repertoire package を指していない場合、参照先 YAML が不正または provider-options object でない場合、extends チェーンが循環している場合、削除済みの `$ref` キーが使われた場合に、設定エラーとして fail fast します。相対 path は workflow file 基準で解決され、symlink 解決後も workflow directory 内に留まる必要があります。絶対 path と、実体が workflow directory 外へ出る path は拒否されます。
 
-provider option の leaf は環境変数でも上書きできます。OpenCode の model variant は `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high` で `provider_options.opencode.variant` を設定できます。provider base URL は `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL=http://127.0.0.1:8787/v1` または `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL=http://127.0.0.1:8787` を使用できます。これらは config layer を設定するもので、step や workflow routing の `base_url` leaf は上書きしません。Codex Skill の継承は `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_REPO=true` または `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_USER=true` で設定できます。Claude Skill の継承は `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED=true` で設定できます。Claude terminal は `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_BACKEND=tmux`、`TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TIMEOUT_MS=900000`、`TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_KEEP_SESSION=false`、`TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TRANSCRIPT_POLL_INTERVAL_MS=500` を使用できます。Kiro の custom agent は `TAKT_PROVIDER_OPTIONS_KIRO_AGENT=planner-agent` で `provider_options.kiro.agent` を設定できます。
+provider option の leaf は環境変数でも上書きできます。OpenCode の model variant は `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high` で `provider_options.opencode.variant` を設定できます。provider base URL は `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL=http://127.0.0.1:8787/v1` または `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL=http://127.0.0.1:8787` を使用できます。これらは config layer を設定するもので、step や workflow routing の `base_url` leaf は上書きしません。Codex Skill の継承は `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_REPO=true` または `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_USER=true` で設定できます。Claude Skill の継承は `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED=true` で設定できます。Claude terminal は `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_BACKEND=tmux`、`TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TIMEOUT_MS=900000`、`TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_KEEP_SESSION=false`、`TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TRANSCRIPT_POLL_INTERVAL_MS=500` を使用できます。Kiro の custom agent は `TAKT_PROVIDER_OPTIONS_KIRO_AGENT=planner-agent` で `provider_options.kiro.agent` を設定できます。Pi の resource loading は `TAKT_PROVIDER_OPTIONS_PI_EXTENSIONS='["npm:pi-fff"]'`、`TAKT_PROVIDER_OPTIONS_PI_NO_EXTENSIONS=true`、`TAKT_PROVIDER_OPTIONS_PI_NO_SKILLS=true`、`TAKT_PROVIDER_OPTIONS_PI_NO_PROMPT_TEMPLATES=true`、`TAKT_PROVIDER_OPTIONS_PI_NO_THEMES=true`、`TAKT_PROVIDER_OPTIONS_PI_NO_CONTEXT_FILES=true` を使用できます。
 
 これにより、表示名と provider 選択を分離したまま、単一の workflow 内で provider や model を混在させることができます。
 
@@ -990,7 +1021,7 @@ provider_options:
     base_url: http://127.0.0.1:8787/v1
 ```
 
-TAKT は `provider_options.claude.base_url` を `claude` と `claude-sdk` に `ANTHROPIC_BASE_URL` として渡します。`provider_options.codex.base_url` は Codex SDK constructor の `baseUrl` として渡します。`claude-terminal`、`opencode`、`cursor`、`copilot`、`kiro` は、別途文書化されるまでこの base URL 対応の対象外です。
+TAKT は `provider_options.claude.base_url` を `claude` と `claude-sdk` に `ANTHROPIC_BASE_URL` として渡します。`provider_options.codex.base_url` は Codex SDK constructor の `baseUrl` として渡します。`claude-terminal`、`opencode`、`cursor`、`copilot`、`kiro`、`pi` は、別途文書化されるまでこの base URL 対応の対象外です。
 
 `ANTHROPIC_BASE_URL` や `OPENAI_BASE_URL` など provider-native の環境変数は provider 側の fallback 設定です。上記 provider では、TAKT の `provider_options.*.base_url` が明示的な TAKT config として provider-native 設定より優先されます。
 
@@ -1206,14 +1237,15 @@ provider:
         profile: review
 ```
 
-| Provider | Companion の strict 隔離実行 | 実装エージェントの tool event |
+| Provider | Companion の隔離構造化実行 | 実装エージェントの tool event |
 |---|---:|---:|
 | `claude-sdk` | 可 | ライブ |
 | `codex` | 可 | ライブ |
 | `claude`（headless） | 可 | ライブ |
 | `claude-terminal` | 可 | ターン後に再生 |
 | `mock` | 可 | scenario に依存 |
-| `opencode` | 不可 | ライブ |
+| `opencode` | 可 | ライブ |
+| `pi` | 不可 | ライブ |
 | `cursor`、`copilot`、`kiro` | 不可 | 利用不可 |
 
 `不可` の provider を指定した workflow はロード時に拒否され、隔離を弱めた縮退実行は行いません。

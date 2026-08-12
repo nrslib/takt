@@ -90,6 +90,14 @@ function collectStaticRuntimeDependencies(entry: string): string[] {
 }
 
 describe('CLI lazy-loading boundary', () => {
+  it('should load the Pi SDK only when the Pi provider executes a call', () => {
+    const providerPath = resolve(sourceRoot, 'infra/providers/pi.ts');
+    const dependencies = collectStaticRuntimeDependencies('infra/providers/pi.ts');
+
+    expect(dependencies.some((dependency) => dependency.startsWith('infra/pi/'))).toBe(false);
+    expect(dynamicImports(providerPath)).toContain('../pi/index.js');
+  });
+
   it.each([
     'app/cli/index.ts',
     'app/cli/program.ts',
@@ -102,7 +110,7 @@ describe('CLI lazy-loading boundary', () => {
       || dependency.startsWith('features/interactive/')
       || dependency.startsWith('core/workflow/engine/')
       || dependency.startsWith('infra/providers/')
-      || /^infra\/(claude|claude-headless|claude-terminal|codex|copilot|cursor|kiro|opencode)\//.test(dependency)
+      || /^infra\/(claude|claude-headless|claude-terminal|codex|copilot|cursor|kiro|opencode|pi)\//.test(dependency)
       || dependency === 'infra/git/index.ts'
       || dependency === 'app/cli/routing.ts'
       || dependency === 'app/cli/opencodeExitCleanup.ts'

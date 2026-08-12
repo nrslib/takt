@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ParallelRunner, type ParallelRunnerDeps } from '../core/workflow/engine/ParallelRunner.js';
-import type { AgentResponse, WorkflowState, WorkflowStep } from '../core/models/index.js';
+import type { AgentResponse, AgentWorkflowStep, WorkflowState, WorkflowStep } from '../core/models/index.js';
 import { makeRule, makeStep } from './test-helpers.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
@@ -86,6 +86,7 @@ function makeRunner(): { runner: ParallelRunner; deps: ParallelRunnerDeps } {
       resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'claude', model: 'claude-sonnet' }),
     } as unknown as ParallelRunnerDeps['optionsBuilder'],
     stepExecutor: {
+      prepareDynamicFacetStep: vi.fn(async (step: AgentWorkflowStep) => step),
       buildInstruction: vi.fn((step: WorkflowStep) => `instruction:${step.name}`),
       emitStepReports: vi.fn(),
       persistPreviousResponseSnapshot: vi.fn(),

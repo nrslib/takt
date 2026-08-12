@@ -132,8 +132,9 @@ describe('truncateUtf8PreservingMarker', () => {
 });
 
 describe('truncateText', () => {
-  it('should return empty string for maxWidth 0', () => {
+  it('should return empty string for non-positive maxWidth', () => {
     expect(truncateText('hello', 0)).toBe('');
+    expect(truncateText('hello', -5)).toBe('');
   });
 
   it('should not truncate text shorter than maxWidth', () => {

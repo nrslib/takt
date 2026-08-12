@@ -16,6 +16,7 @@ export type ProviderProfileName =
   | 'cursor'
   | 'copilot'
   | 'kiro'
+  | 'pi'
   | 'mock';
 
 /** Permission profile for a single provider. */

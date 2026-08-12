@@ -1,7 +1,7 @@
 import { dirname } from 'node:path';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { parse as parseYaml } from 'yaml';
-import type { WorkflowConfig } from '../../../core/models/index.js';
+import type { WorkflowCallArgValue, WorkflowConfig } from '../../../core/models/index.js';
 import { getRepertoireDir } from '../paths.js';
 import { resolveWorkflowConfigValue } from '../resolveWorkflowConfigValue.js';
 import { loadGlobalConfig } from '../global/globalConfig.js';
@@ -29,7 +29,7 @@ import { isNormalAgentWorkflowStep } from '../../../core/models/types.js';
 
 interface LoadWorkflowFromFileOptions {
   trustInfo?: WorkflowTrustInfo;
-  callableArgs?: Record<string, string | string[]>;
+  callableArgs?: Record<string, WorkflowCallArgValue>;
   callableArgPolicy?: WorkflowCallArgResolutionPolicy;
 }
 

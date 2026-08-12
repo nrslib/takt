@@ -5,6 +5,9 @@ params:
   review_knowledge:
     type: facet_ref[]
     facet_kind: knowledge
+  final_gate_instruction:
+    type: facet_ref
+    facet_kind: instruction
 name: final-gate
 capabilities: readonly
 tags:
@@ -20,7 +23,8 @@ policy:
 knowledge:
   $param: review_knowledge
 pass_previous_response: false
-instruction: supervise-merge-readiness
+instruction:
+  $param: final_gate_instruction
 output_contracts:
   report:
     - name: review-resolution.md

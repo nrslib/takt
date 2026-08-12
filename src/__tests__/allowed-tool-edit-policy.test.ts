@@ -8,6 +8,8 @@ import {
   resolveAllowedToolsForProvider,
   resolvePartAllowedToolsForProvider,
 } from '../core/workflow/engine/engine-provider-options.js';
+import { providerDefaultAllowedToolsWithoutEdit } from '../infra/providers/provider-capabilities.js';
+import { resolvePiActiveTools } from '../infra/providers/pi-tool-policy.js';
 
 describe('allowed-tool-edit-policy', () => {
   it('should export Claude edit tool names for provider policy checks', () => {
@@ -123,5 +125,89 @@ describe('allowed-tool-edit-policy', () => {
       false,
       'opencode',
     )).toEqual(['read', 'bash', ' Bash ', 'grep']);
+  });
+
+  it('should synthesize the Pi read-only ceiling when edit is false without allowed tools', () => {
+    expect(resolveAllowedToolsForProvider(
+      undefined,
+      false,
+      false,
+      'pi',
+    )).toEqual(['read', 'grep', 'find', 'ls']);
+  });
+
+  it('should synthesize the Pi read-only ceiling for output-contract steps unless edit is true', () => {
+    expect(resolveAllowedToolsForProvider(
+      undefined,
+      true,
+      undefined,
+      'pi',
+    )).toEqual(['read', 'grep', 'find', 'ls']);
+    expect(resolveAllowedToolsForProvider(
+      undefined,
+      true,
+      true,
+      'pi',
+    )).toBeUndefined();
+  });
+
+  it('should use the Pi read-only ceiling for team leader parts without part_allowed_tools', () => {
+    const partAllowedTools = resolvePartAllowedToolsForProvider(undefined, false, 'pi');
+    const allowedTools = partAllowedTools ?? resolveAllowedToolsForProvider(
+      undefined,
+      false,
+      false,
+      'pi',
+    );
+
+    expect(allowedTools).toEqual(['read', 'grep', 'find', 'ls']);
+  });
+
+  it('should keep only Pi read aliases when edit is false', () => {
+    expect(resolvePartAllowedToolsForProvider(
+      ['Read', 'Glob', 'Grep', 'Find', 'LS', 'Edit', 'Write', 'Bash', 'trusted_extension_tool'],
+      false,
+      'pi',
+    )).toEqual(['Read', 'Glob', 'Grep', 'Find', 'LS']);
+  });
+
+  it('should expose the Pi read-only ceiling through the provider capability seam', () => {
+    expect(providerDefaultAllowedToolsWithoutEdit('pi')).toEqual(['read', 'grep', 'find', 'ls']);
+    expect(providerDefaultAllowedToolsWithoutEdit('claude')).toBeUndefined();
+    expect(providerDefaultAllowedToolsWithoutEdit(undefined)).toBeUndefined();
+  });
+
+  it('should preserve an explicit empty Pi allowlist as deny-all', () => {
+    expect(resolvePiActiveTools(
+      'edit',
+      [],
+      [
+        { name: 'read', source: 'builtin' },
+        { name: 'grep', source: 'builtin' },
+        { name: 'find', source: 'builtin' },
+        { name: 'ls', source: 'builtin' },
+        { name: 'edit', source: 'builtin' },
+        { name: 'write', source: 'builtin' },
+        { name: 'bash', source: 'sdk' },
+        { name: 'trusted_extension_tool', source: 'npm:trusted-extension' },
+      ],
+    )).toEqual([]);
+  });
+
+  it('should intersect Pi edit permissions with a read-only allowlist', () => {
+    expect(resolvePiActiveTools(
+      'edit',
+      ['Read', 'Glob', 'Grep', 'Find', 'LS'],
+      [
+        { name: 'read', source: 'builtin' },
+        { name: 'grep', source: 'builtin' },
+        { name: 'find', source: 'builtin' },
+        { name: 'ls', source: 'builtin' },
+        { name: 'edit', source: 'builtin' },
+        { name: 'write', source: 'builtin' },
+        { name: 'bash', source: 'sdk' },
+        { name: 'trusted_extension_tool', source: 'npm:trusted-extension' },
+      ],
+    )).toEqual(['read', 'find', 'grep', 'ls']);
   });
 });

@@ -184,16 +184,28 @@ function assertContained(reportDir: string, reference: string, stepName: string)
   return targetAbs;
 }
 
-/**
- * reportDir が reportsRootDir の `subworkflows/` 名前空間配下かどうか。
- * workflow_call の子だけが親成果物フォールバックの対象（任意のネスト
- * reportDir へ適用しない — boundary requirement）。
- */
-function isSubworkflowNamespaceDir(reportDir: string, reportsRootDir: string): boolean {
+/** workflow_call の名前空間構造を検証し、直近の親から reports root までを返す。 */
+function getParentWorkflowReportDirs(reportDir: string, reportsRootDir: string): string[] {
   const rootAbs = resolve(reportsRootDir);
   const dirAbs = resolve(reportDir);
-  const namespacePrefix = `${rootAbs}${sep}${SUBWORKFLOWS_NAMESPACE_DIR}${sep}`;
-  return dirAbs.startsWith(namespacePrefix);
+  const components = relative(rootAbs, dirAbs)
+    .split(sep)
+    .filter((component) => component.length > 0);
+  if (
+    components.length < 2
+    || components.length % 2 !== 0
+    || components.some((component, index) => (
+      index % 2 === 0 && component !== SUBWORKFLOWS_NAMESPACE_DIR
+    ))
+  ) {
+    return [];
+  }
+
+  const parents: string[] = [];
+  for (let length = components.length - 2; length >= 0; length -= 2) {
+    parents.push(resolve(rootAbs, ...components.slice(0, length)));
+  }
+  return parents;
 }
 
 /**
@@ -201,10 +213,11 @@ function isSubworkflowNamespaceDir(reportDir: string, reportsRootDir: string): b
  * （symlink 拒否）を検証し、問題があればエージェント起動前に throw する。
  * `path` は従来と同じ `${dir}/${reference}` 形式（プロンプト本文の互換性維持）。
  *
- * workflow_call の子（subworkflows 名前空間）で見つからない場合のみ、
- * `context.reportsRootDir`（engine から明示的に渡された run の reports ルート）
- * へフォールバックする。その場合 `scope` は `parent-run-readonly` — 親成果物の
- * 読み取り専用参照であり、書き込みは常に自分の reportDir に対して行われる。
+ * workflow_call の子（subworkflows 名前空間）で見つからない場合のみ、直近の
+ * 親 workflow から run の reports ルートまで順にフォールバックする。親候補は
+ * `context.reportsRootDir` から構造検証した名前空間だけを使う。その場合 `scope` は
+ * `parent-run-readonly` — 親成果物の読み取り専用参照であり、書き込みは常に自分の
+ * reportDir に対して行われる。
  */
 export function resolveReportReferenceDetailed(
   reportDir: string,
@@ -229,11 +242,18 @@ export function resolveReportReferenceDetailed(
   if (stepContent !== undefined) {
     return { content: stepContent, scope: 'step' };
   }
-  if (reportsRoot !== undefined && isSubworkflowNamespaceDir(reportDir, reportsRoot)) {
-    const rootTargetAbs = assertContained(reportsRoot, normalizedReference, context.stepName);
-    const parentContent = readRegularReportFile(reportsRoot, rootTargetAbs, reference, context.stepName);
-    if (parentContent !== undefined) {
-      return { content: parentContent, scope: 'parent-run-readonly' };
+  if (reportsRoot !== undefined) {
+    for (const parentReportDir of getParentWorkflowReportDirs(reportDir, reportsRoot)) {
+      const parentTargetAbs = assertContained(parentReportDir, normalizedReference, context.stepName);
+      const parentContent = readRegularReportFile(
+        reportsRoot,
+        parentTargetAbs,
+        reference,
+        context.stepName,
+      );
+      if (parentContent !== undefined) {
+        return { content: parentContent, scope: 'parent-run-readonly' };
+      }
     }
   }
   throw buildMissingReportError(reference, reportDir, context);

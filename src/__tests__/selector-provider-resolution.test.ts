@@ -12,6 +12,7 @@ import {
   invalidateGlobalConfigCache,
   loadWorkflowByIdentifier,
 } from '../infra/config/index.js';
+import { resolveAuxiliaryRuntimeEnvironment } from '../infra/config/runtime-provider/provider-environment.js';
 
 describe('selector provider resolution', () => {
   it.each([
@@ -176,6 +177,27 @@ describe('selector provider resolution', () => {
     expect(resolved.providerOptions).toEqual({ codex: { reasoningEffort: 'medium' } });
   });
 
+  it('should pass Pi selector resource options to the resolved provider', () => {
+    const resolved = resolveSelectorProviderFromConfig({
+      local: {
+        taktProviders: {
+          selector: {
+            provider: 'pi',
+            providerOptions: {
+              pi: { extensions: ['npm:pi-fff'], noSkills: true },
+              codex: { reasoningEffort: 'medium' },
+            },
+          },
+        },
+      },
+      global: {},
+    });
+
+    expect(resolved.providerOptions).toEqual({
+      pi: { extensions: ['npm:pi-fff'], noSkills: true },
+    });
+  });
+
   it('should validate an OpenCode provider after composing its top-level model', () => {
     const resolved = resolveSelectorProviderFromConfig({
       local: {
@@ -286,6 +308,22 @@ describe('workflow selector resolution', () => {
     };
   }
 
+  function resolveWorkflowSelectorForProject(
+    workflow: WorkflowConfig,
+    projectDir: string,
+    options: { companionEnabled?: boolean } = {},
+  ) {
+    const runtimeEnvironment = resolveAuxiliaryRuntimeEnvironment(projectDir, workflow);
+    return resolveWorkflowSelector(workflow, {
+      projectCwd: projectDir,
+      lookupCwd: projectDir,
+      ...options,
+      companionEnabled: options.companionEnabled ?? runtimeEnvironment.companionEnabled,
+      providerEnvironment: runtimeEnvironment.providerEnvironment,
+      providerConfigMode: runtimeEnvironment.providerConfigMode,
+    });
+  }
+
   it('should not resolve an invalid unused selector for a workflow without dynamic parallel', () => {
     const projectDir = createProject([
       'takt_providers:',
@@ -299,10 +337,7 @@ describe('workflow selector resolution', () => {
       steps: [{ name: 'implement', instruction: 'Implement' }],
     };
 
-    expect(resolveWorkflowSelector(workflow, {
-      projectCwd: projectDir,
-      lookupCwd: projectDir,
-    })).toEqual({ applies: false });
+    expect(resolveWorkflowSelectorForProject(workflow, projectDir)).toEqual({ applies: false });
   });
 
   it('should resolve selector configuration for a companion pool', () => {
@@ -315,17 +350,33 @@ describe('workflow selector resolution', () => {
         name: 'implement',
         instruction: 'Implement',
         companion: { fixed: [], pool: ['security-reviewer'] },
-        rules: [{ condition: 'when(companion.escalated)', next: 'COMPLETE' }],
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
       }],
     };
 
-    expect(resolveWorkflowSelector(workflow, {
-      projectCwd: projectDir,
-      lookupCwd: projectDir,
-    })).toMatchObject({
+    expect(resolveWorkflowSelectorForProject(workflow, projectDir)).toMatchObject({
       applies: true,
       selectorProvider: { provider: 'codex', model: 'gpt-selector' },
     });
+  });
+
+  it('should ignore a companion pool when companion is disabled', () => {
+    const projectDir = createProject('provider: opencode\nmodel: opencode/model\n');
+    const workflow: WorkflowConfig = {
+      name: 'disabled-companion-pool',
+      initialStep: 'implement',
+      maxSteps: 1,
+      steps: [{
+        name: 'implement',
+        instruction: 'Implement',
+        companion: { fixed: [], pool: ['security-reviewer'] },
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      }],
+    };
+
+    expect(resolveWorkflowSelectorForProject(workflow, projectDir, {
+      companionEnabled: false,
+    })).toEqual({ applies: false });
   });
 
   it('should resolve selector configuration when only a called workflow is dynamic', () => {
@@ -369,10 +420,7 @@ describe('workflow selector resolution', () => {
       throw new Error('Expected parent workflow');
     }
 
-    expect(resolveWorkflowSelector(workflow, {
-      projectCwd: projectDir,
-      lookupCwd: projectDir,
-    })).toMatchObject({
+    expect(resolveWorkflowSelectorForProject(workflow, projectDir)).toMatchObject({
       applies: true,
       selectorProvider: {
         provider: 'codex',
@@ -381,7 +429,7 @@ describe('workflow selector resolution', () => {
     });
   });
 
-  it('should resolve selector configuration when only a called workflow has dynamic_facets', () => {
+  it('should resolve selector configuration for called workflows and static parallel children (DFP-008)', () => {
     const projectDir = createProject('provider: codex\nmodel: gpt-selector\n');
     const workflowDir = join(projectDir, '.takt', 'workflows');
     writeFileSync(join(workflowDir, 'child.yaml'), [
@@ -428,15 +476,36 @@ describe('workflow selector resolution', () => {
       throw new Error('Expected parent workflow');
     }
 
-    expect(resolveWorkflowSelector(workflow, {
-      projectCwd: projectDir,
-      lookupCwd: projectDir,
-    })).toMatchObject({
+    expect(resolveWorkflowSelectorForProject(workflow, projectDir)).toMatchObject({
       applies: true,
       selectorProvider: {
         provider: 'codex',
         model: 'gpt-selector',
       },
+    });
+
+    const staticChildWorkflow: WorkflowConfig = {
+      name: 'static-child-facet',
+      initialStep: 'reviewers',
+      maxSteps: 1,
+      steps: [{
+        name: 'reviewers',
+        personaDisplayName: 'reviewers',
+        instruction: 'Review',
+        parallel: [{
+          name: 'security',
+          personaDisplayName: 'security',
+          instruction: 'Review security',
+          dynamicFacets: { pool: 'security', maxSelected: 1 },
+          rules: [{ condition: 'approved' }],
+        }],
+        rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
+      }],
+    };
+
+    expect(resolveWorkflowSelectorForProject(staticChildWorkflow, projectDir)).toMatchObject({
+      applies: true,
+      selectorProvider: { provider: 'codex', model: 'gpt-selector' },
     });
   });
 
@@ -486,10 +555,7 @@ describe('workflow selector resolution', () => {
       throw new Error('Expected parent workflow');
     }
 
-    expect(resolveWorkflowSelector(workflow, {
-      projectCwd: projectDir,
-      lookupCwd: projectDir,
-    })).toMatchObject({
+    expect(resolveWorkflowSelectorForProject(workflow, projectDir)).toMatchObject({
       applies: true,
       selectorProvider: { provider: 'codex', model: 'gpt-selector' },
     });
@@ -509,10 +575,7 @@ describe('workflow selector resolution', () => {
       '          user: false',
     ].join('\n'));
 
-    expect(resolveWorkflowSelector(makeDynamicWorkflow(), {
-      projectCwd: projectDir,
-      lookupCwd: projectDir,
-    })).toEqual({
+    expect(resolveWorkflowSelectorForProject(makeDynamicWorkflow(), projectDir)).toEqual({
       applies: true,
       selectorProvider: expect.objectContaining({
         provider: 'codex',
@@ -540,10 +603,7 @@ describe('workflow selector resolution', () => {
       '          enabled: false',
     ].join('\n'));
 
-    expect(resolveWorkflowSelector(makeDynamicWorkflow(), {
-      projectCwd: projectDir,
-      lookupCwd: projectDir,
-    })).toEqual({
+    expect(resolveWorkflowSelectorForProject(makeDynamicWorkflow(), projectDir)).toEqual({
       applies: true,
       selectorProvider: expect.objectContaining({
         provider: 'claude',
@@ -582,10 +642,7 @@ describe('workflow selector resolution', () => {
       ...config,
     ].join('\n'));
 
-    expect(() => resolveWorkflowSelector(makeDynamicWorkflow(), {
-      projectCwd: projectDir,
-      lookupCwd: projectDir,
-    })).toThrow(path);
+    expect(() => resolveWorkflowSelectorForProject(makeDynamicWorkflow(), projectDir)).toThrow(path);
   });
 
   it.each(['copilot', 'cursor', 'kiro', 'opencode'] as const)(
@@ -597,10 +654,9 @@ describe('workflow selector resolution', () => {
       const projectDir = createProject(config);
       const workflow = makeDynamicWorkflow();
 
-      expect(() => resolveWorkflowSelector(workflow, {
-        projectCwd: projectDir,
-        lookupCwd: projectDir,
-      })).toThrow(`Provider "${provider}" does not support strict internal-agent isolation`);
+      expect(() => resolveWorkflowSelectorForProject(workflow, projectDir)).toThrow(
+        `Provider "${provider}" does not support strict internal-agent isolation`,
+      );
     },
   );
 });

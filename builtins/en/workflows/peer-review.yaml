@@ -9,6 +9,15 @@ subworkflow:
     reviewer_suite:
       type: workflow_ref
       default: peer-review-suite-base
+    fix_companions:
+      type: companion_ref[]
+      default: []
+    fix_pool:
+      type: facet_pool_ref
+      default: coding-facets
+    remediation_workflow:
+      type: workflow_ref
+      default: development-remediation
     review_policy_additions:
       type: facet_ref[]
       facet_kind: policy
@@ -20,6 +29,12 @@ subworkflow:
         - architecture
         - takt
     fix_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default:
+        - takt
+        - architecture
+    verification_knowledge:
       type: facet_ref[]
       facet_kind: knowledge
       default:
@@ -45,16 +60,29 @@ subworkflow:
         - coding
         - testing
         - review
+    fix_plan_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: fix-plan-from-review-resolution
+    fix_plan_report_format:
+      type: facet_ref
+      facet_kind: report_format
+      default: fix-plan
+    final_gate_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: supervise-merge-readiness
+facet_pools:
+  coding-facets:
+    uses: coding-facets
+  takt-coding-facets:
+    uses: takt-coding-facets
 initial_step: initial-reviewers
 loop_monitors:
   - cycle:
       - reviewers
       - review-adjudication
-      - fix-plan
-      - fix
-    ignore_steps:
-      - fix-verifier
-      - fix-retry
+      - remediation
     threshold: 3
     judge:
       persona: supervisor
@@ -65,18 +93,14 @@ loop_monitors:
         - condition: Implementation incomplete or report not converged, but the next review or fix is actionable
           next: reviewers
         - condition: The remediation assumptions must change and replanning is actionable
-          next: fix-plan
+          next: remediation
         - condition: No feasible action can satisfy the requirements
           next: ABORT
   - cycle:
       - reviewers
       - review-adjudication
       - final-gate
-      - fix-plan
-      - fix
-    ignore_steps:
-      - fix-verifier
-      - fix-retry
+      - remediation
     threshold: 3
     judge:
       persona: supervisor
@@ -87,49 +111,12 @@ loop_monitors:
         - condition: Implementation incomplete or report not converged, but the next review or fix is actionable
           next: reviewers
         - condition: The remediation assumptions must change and replanning is actionable
-          next: fix-plan
-        - condition: No feasible action can satisfy the requirements
-          next: ABORT
-  - cycle:
-      - fix-plan
-      - fix
-    ignore_steps:
-      - fix-verifier
-      - fix-retry
-    threshold: 4
-    judge:
-      persona: supervisor
-      instruction: loop-monitor-reviewers-fix
-      rules:
-        - condition: Healthy (fixes progressing and report content converging)
-          next: fix-plan
-        - condition: Implementation incomplete or report not converged, but the next review or fix is actionable
-          next: fix-plan
-        - condition: The remediation assumptions must change and replanning is actionable
-          next: fix-plan
-        - condition: No feasible action can satisfy the requirements
-          next: ABORT
-  - cycle:
-      - fix-retry
-      - fix-verifier
-    threshold: 4
-    judge:
-      persona: supervisor
-      instruction: loop-monitor-reviewers-fix
-      rules:
-        - condition: Healthy (fixes progressing and report content converging)
-          next: fix-retry
-        - condition: Implementation incomplete or report not converged, but the next fix is actionable
-          next: fix-retry
-        - condition: The remediation assumptions must change and replanning is actionable
-          next: fix-plan
+          next: remediation
         - condition: No feasible action can satisfy the requirements
           next: ABORT
 steps:
   - name: initial-reviewers
     uses: peer-review-suite-call
-    vars:
-      review_mode: initial
     with:
       reviewer_suite:
         $param: reviewer_suite
@@ -137,6 +124,13 @@ steps:
         $param: review_policy_additions
       review_knowledge_additions:
         $param: review_knowledge_additions
+      architecture_review_instruction: architecture-review
+      security_review_instruction: security-review
+      testing_review_instruction: testing-review
+      coding_review_instruction: coding-review
+      ai_antipattern_review_instruction: initial-ai-antipattern-review
+      frontend_review_instruction: frontend-review
+      cqrs_es_review_instruction: cqrs-es-review
     rules:
       - condition: COMPLETE
         next: review-adjudication
@@ -144,8 +138,6 @@ steps:
         next: review-adjudication
   - name: reviewers
     uses: peer-review-suite-call
-    vars:
-      review_mode: follow_up
     with:
       reviewer_suite:
         $param: reviewer_suite
@@ -153,6 +145,13 @@ steps:
         $param: review_policy_additions
       review_knowledge_additions:
         $param: review_knowledge_additions
+      architecture_review_instruction: follow-up-architecture-review
+      security_review_instruction: follow-up-security-review
+      testing_review_instruction: follow-up-testing-review
+      coding_review_instruction: follow-up-coding-review
+      ai_antipattern_review_instruction: follow-up-ai-antipattern-review
+      frontend_review_instruction: follow-up-frontend-review
+      cqrs_es_review_instruction: follow-up-cqrs-es-review
     rules:
       - condition: COMPLETE
         next: review-adjudication
@@ -167,7 +166,7 @@ steps:
         $param: review_knowledge_additions
     rules:
       - condition: ACTIONABLE FINDINGS
-        next: fix-plan
+        next: remediation
       - condition: NO ACTIONABLE FINDINGS
         next: final-gate
       - condition: REPLAN REQUIRED
@@ -179,72 +178,44 @@ steps:
         $param: verification_policy
       review_knowledge:
         $param: review_knowledge_additions
+      final_gate_instruction:
+        $param: final_gate_instruction
     rules:
       - condition: MERGEABLE
         next: COMPLETE
       - condition: FIX REQUIRED
-        next: fix-plan
+        next: remediation
       - condition: TASK REPLAN REQUIRED
         return: need_replan
       - condition: BLOCKED BY ENVIRONMENT
         next: ABORT
-  - name: fix-plan
-    uses: peer-review-fix-plan
-    with:
+  - name: remediation
+    kind: workflow_call
+    call:
+      $param: remediation_workflow
+    args:
+      fix_pool:
+        $param: fix_pool
+      fix_companions:
+        $param: fix_companions
+      fix_policy:
+        $param: fix_policy
+      fix_knowledge:
+        $param: fix_knowledge
+      verification_knowledge:
+        $param: verification_knowledge
       plan_policy:
         $param: plan_policy
-      fix_knowledge:
-        $param: fix_knowledge
-      plan_instruction: fix-plan-from-review-resolution
-    rules:
-      - condition: Fix plan finalized
-        next: fix
-      - condition: Whole-task replanning required
-        return: need_replan
-
-  - name: fix
-    uses: peer-review-fix
-    with:
-      fix_policy:
-        $param: fix_policy
-      fix_knowledge:
-        $param: fix_knowledge
-      fix_instruction: apply-fix-plan
-    rules:
-      - condition: Fix complete
-        next: fix-verifier
-      - condition: Fix plan must be revised
-        next: fix-plan
-      - condition: Whole-task replanning required
-        return: need_replan
-
-  - name: fix-verifier
-    uses: peer-review-fix-verifier
-    with:
       verification_policy:
         $param: verification_policy
-      fix_knowledge:
-        $param: fix_knowledge
+      fix_plan_instruction:
+        $param: fix_plan_instruction
+      fix_plan_report_format:
+        $param: fix_plan_report_format
     rules:
-      - condition: verified
+      - condition: COMPLETE
         next: reviewers
-      - condition: incomplete
-        next: fix-retry
-      - condition: plan_invalid
-        next: fix-plan
-
-  - name: fix-retry
-    uses: peer-review-fix
-    with:
-      fix_policy:
-        $param: fix_policy
-      fix_knowledge:
-        $param: fix_knowledge
-      fix_instruction: apply-fix-verification
-    rules:
-      - condition: Fix complete
-        next: fix-verifier
-      - condition: Fix plan requires revision
-        next: fix-plan
-      - condition: Task-level replanning required
+      - condition: need_replan
         return: need_replan
+      - condition: ABORT
+        next: ABORT

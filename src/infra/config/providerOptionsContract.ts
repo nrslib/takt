@@ -28,6 +28,12 @@ const PROVIDER_OPTIONS_ENV_SPEC_ENTRIES = [
   { path: 'provider_options.claude_terminal.transcript_poll_interval_ms', type: 'number' },
   { path: 'provider_options.copilot.effort', type: 'string' },
   { path: 'provider_options.kiro.agent', type: 'string' },
+  { path: 'provider_options.pi.extensions', type: 'json' },
+  { path: 'provider_options.pi.no_extensions', type: 'boolean' },
+  { path: 'provider_options.pi.no_skills', type: 'boolean' },
+  { path: 'provider_options.pi.no_prompt_templates', type: 'boolean' },
+  { path: 'provider_options.pi.no_themes', type: 'boolean' },
+  { path: 'provider_options.pi.no_context_files', type: 'boolean' },
 ] as const satisfies readonly EnvSpec[];
 
 const PROVIDER_OPTIONS_TRACE_PATH_ENTRIES = [
@@ -68,6 +74,13 @@ const PROVIDER_OPTIONS_TRACE_PATH_ENTRIES = [
   'provider_options.copilot.effort',
   'provider_options.kiro',
   'provider_options.kiro.agent',
+  'provider_options.pi',
+  'provider_options.pi.extensions',
+  'provider_options.pi.no_extensions',
+  'provider_options.pi.no_skills',
+  'provider_options.pi.no_prompt_templates',
+  'provider_options.pi.no_themes',
+  'provider_options.pi.no_context_files',
 ] as const;
 
 const PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATH_ENTRIES = [
@@ -102,6 +115,12 @@ const PROVIDER_OPTIONS_INTERNAL_PATH_ENTRIES = [
   'claudeTerminal.transcriptPollIntervalMs',
   'copilot.effort',
   'kiro.agent',
+  'pi.extensions',
+  'pi.noExtensions',
+  'pi.noSkills',
+  'pi.noPromptTemplates',
+  'pi.noThemes',
+  'pi.noContextFiles',
 ] as const;
 
 export type ProviderOptionsTracePath = (typeof PROVIDER_OPTIONS_TRACE_PATH_ENTRIES)[number];

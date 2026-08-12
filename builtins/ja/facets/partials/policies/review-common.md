@@ -278,3 +278,5 @@ Finding Contract で再発が別問題なら reviewer は raw relation を `new`
 
 同じ種類の指摘が繰り返される場合、細かい修正指示の反復ではなくアプローチ自体を見直す。
 前回のfindingが解消した後、同じ `family_tag` の別箇所が後続レビューで繰り返しnewになる状態は、未確認領域が減っている証拠ではなく、同種問題の出し切りに失敗している状態として扱う。
+
+{{include:policies/review-scope-authority}}

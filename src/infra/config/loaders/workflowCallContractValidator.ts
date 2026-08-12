@@ -1,6 +1,7 @@
 import { dirname } from 'node:path';
 import type {
   FindingContractConfig,
+  WorkflowCallArgValue,
   WorkflowConfig,
 } from '../../../core/models/index.js';
 import type { FindingManagerAuthority } from '../../../core/models/finding-types.js';
@@ -23,7 +24,7 @@ import {
 
 interface WorkflowCallValidationLookupOptions {
   basePath?: string;
-  callableArgs?: Record<string, string | string[]>;
+  callableArgs?: Record<string, WorkflowCallArgValue>;
   lookupCwd: string;
   parentTrustInfo?: WorkflowTrustInfo;
   skipWorkflowCallContractValidation?: boolean;
@@ -58,7 +59,7 @@ interface FindingContractTraversalContext {
 
 function getWorkflowCallInvocationIdentity(
   call: string,
-  args: Record<string, string | string[]> | undefined,
+  args: Record<string, WorkflowCallArgValue> | undefined,
 ): string {
   return canonicalJson({ call, args: args ?? {} });
 }

@@ -78,6 +78,7 @@ export async function promptProviderSelection(): Promise<InitialSetupProvider> {
     { label: 'Cursor Agent', value: 'cursor' },
     { label: 'GitHub Copilot', value: 'copilot' },
     { label: 'Kiro CLI', value: 'kiro' },
+    { label: 'Pi SDK', value: 'pi' },
   ];
 
   const result = await selectOptionWithDefault(

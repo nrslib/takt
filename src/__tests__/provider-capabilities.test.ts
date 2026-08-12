@@ -7,6 +7,7 @@ import {
   providerSupportsMaxTurns,
   providerSupportsMcpServers,
   providerSupportsNativeImageInput,
+  providerSupportsStructuredOutput,
 } from '../infra/providers/provider-capabilities.js';
 
 function readModuleSource(path: string): string {
@@ -31,6 +32,7 @@ describe('provider capabilities module boundary', () => {
   it('provider-neutral な allowedTools capability は opencode を許可し cursor と codex を拒否する', () => {
     expect(providerSupportsAllowedTools('claude')).toBe(true);
     expect(providerSupportsAllowedTools('opencode')).toBe(true);
+    expect(providerSupportsAllowedTools('pi')).toBe(true);
     expect(providerSupportsAllowedTools('cursor')).toBe(false);
     expect(providerSupportsAllowedTools('codex')).toBe(false);
   });
@@ -47,6 +49,8 @@ describe('provider capabilities module boundary', () => {
     expect(providerSupportsMcpServers('claude')).toBe(true);
     expect(providerSupportsAllowedTools('opencode')).toBe(true);
     expect(providerSupportsMcpServers('opencode')).toBe(false);
+    expect(providerSupportsAllowedTools('pi')).toBe(true);
+    expect(providerSupportsMcpServers('pi')).toBe(false);
     expect(providerSupportsAllowedTools('cursor')).toBe(false);
     expect(providerSupportsMcpServers('cursor')).toBe(false);
     expect(providerSupportsAllowedTools('codex')).toBe(false);
@@ -57,6 +61,7 @@ describe('provider capabilities module boundary', () => {
     expect(providerSupportsMaxTurns('claude')).toBe(true);
     expect(providerSupportsMaxTurns('claude-terminal')).toBe(false);
     expect(providerSupportsMaxTurns('opencode')).toBe(false);
+    expect(providerSupportsMaxTurns('pi')).toBe(false);
   });
 
   it('native image input capability は SDK に実画像を渡せる provider だけを許可する', () => {
@@ -65,6 +70,11 @@ describe('provider capabilities module boundary', () => {
     expect(providerSupportsNativeImageInput('claude')).toBe(false);
     expect(providerSupportsNativeImageInput('claude-terminal')).toBe(false);
     expect(providerSupportsNativeImageInput('opencode')).toBe(false);
+    expect(providerSupportsNativeImageInput('pi')).toBe(true);
+  });
+
+  it('Pi は structured output をサポートしない', () => {
+    expect(providerSupportsStructuredOutput('pi')).toBe(false);
   });
 
   it('非編集 step の allowedTools 判定は provider capability 境界に閉じる', () => {

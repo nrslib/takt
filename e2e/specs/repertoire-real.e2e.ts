@@ -409,21 +409,4 @@ describe('E2E: takt repertoire (real GitHub fixtures)', () => {
     240_000,
   );
 
-  it.todo('should populate lock file commit field with the specified commit SHA when installing by SHA');
-
-  it.todo('should display warning symbol when package contains workflow with edit: true');
-
-  it.todo('should reject takt-repertoire.yaml with absolute path in path field (/foo)');
-
-  it.todo('should reject takt-repertoire.yaml with path traversal via ".." segments');
-
-  it.todo('should reject package with no supported content directory');
-
-  it.todo('should reject takt-repertoire.yaml with min_version "1.0" (missing patch segment)');
-
-  it.todo('should reject takt-repertoire.yaml with min_version "v1.0.0" (v prefix)');
-
-  it.todo('should reject takt-repertoire.yaml with min_version "1.0.0-alpha" (pre-release suffix)');
-
-  it.todo('should fail with version mismatch message when min_version exceeds current takt version');
 });

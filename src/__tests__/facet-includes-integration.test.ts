@@ -70,6 +70,74 @@ describe('facet include expansion', () => {
     expect(content).not.toContain('{{include:instructions/review-pr-context}}');
   });
 
+  it.each(['en', 'ja'] as const)(
+    'should keep scenario addons structurally separate from base facets in %s',
+    (lang) => {
+      const facetContext = { projectDir: tempDir, lang };
+      const assertions = [
+        ['instructions', 'plan', 'base-plan', 'requirement-scenario-planning'],
+        ['instructions', 'plan-maintenance', 'base-plan-maintenance', 'requirement-scenario-planning'],
+        ['instructions', 'write-tests-first', 'base-write-tests-first', 'requirement-scenario-test-mapping'],
+        ['instructions', 'replan-implementation', 'base-replan-implementation', 'requirement-scenario-maintenance'],
+        ['instructions', 'fix-plan-from-review-resolution', 'base-fix-plan-from-review-resolution', 'requirement-scenario-maintenance'],
+        ['instructions', 'review-merge-readiness', 'base-review-merge-readiness', 'requirement-scenario-verification'],
+        ['instructions', 'supervise-merge-readiness', 'base-supervise-merge-readiness', 'requirement-scenario-verification'],
+        ['output-contracts', 'plan', 'base-plan', 'requirement-scenarios-plan'],
+        ['output-contracts', 'fix-plan', 'base-fix-plan', 'requirement-scenarios-fix-plan'],
+        ['output-contracts', 'test-report', 'base-test-report', 'requirement-scenarios-test-report'],
+      ] as const;
+
+      for (const [kind, name, basePartial, scenarioPartial] of assertions) {
+        const normalSource = readFileSync(join(
+          getLanguageResourcesDir(lang),
+          'facets',
+          kind,
+          `${name}.md`,
+        ), 'utf-8').trim();
+        const scenarioName = `scenario-based-${name}`;
+        const scenarioSource = readFileSync(join(
+          getLanguageResourcesDir(lang),
+          'facets',
+          kind,
+          `${scenarioName}.md`,
+        ), 'utf-8').trim();
+        const normalDirective = `{{include:${kind}/${basePartial}}}`;
+        const scenarioDirective = `{{include:${kind}/${scenarioPartial}}}`;
+        const scenarioAddon = readFileSync(join(
+          getLanguageResourcesDir(lang),
+          'facets',
+          'partials',
+          kind,
+          `${scenarioPartial}.md`,
+        ), 'utf-8').trim();
+
+        expect(normalSource, name).toBe(normalDirective);
+        expect(scenarioSource, scenarioName).toBe(`${normalDirective}\n\n${scenarioDirective}`);
+
+        const normalContent = resolveRefToContent(
+          name,
+          undefined,
+          tempDir,
+          kind,
+          facetContext,
+        );
+        const scenarioContent = resolveRefToContent(
+          scenarioName,
+          undefined,
+          tempDir,
+          kind,
+          facetContext,
+        );
+
+        expect(normalContent, name).toBeDefined();
+        expect(scenarioContent, scenarioName).toBeDefined();
+        const normalizeFacetSpacing = (value: string): string => value.trim().replace(/\n{3,}/gu, '\n\n');
+        expect(normalizeFacetSpacing(scenarioContent!), scenarioName)
+          .toBe(normalizeFacetSpacing(`${normalContent!}\n\n${scenarioAddon}`));
+      }
+    },
+  );
+
   it.each(['en', 'ja'] as const)('should compose the builtin fix-family contract into fix instructions in %s', (lang) => {
     const partial = readFileSync(
       join(getLanguageResourcesDir(lang), 'facets', 'partials', 'instructions', 'fix-family-completion.md'),
@@ -259,11 +327,6 @@ describe('facet include expansion', () => {
   });
 
   it.each(['en', 'ja'] as const)('should share the common review policy and add the security boundary once in %s', (lang) => {
-    const languageRoot = getLanguageResourcesDir(lang);
-    const common = readFileSync(
-      join(languageRoot, 'facets', 'partials', 'policies', 'review-common.md'),
-      'utf-8',
-    ).trim();
     const review = resolveRefToContent(
       'review',
       undefined,
@@ -281,9 +344,8 @@ describe('facet include expansion', () => {
 
     const resolvedReview = review?.trim();
     const resolvedSecurityReview = securityReview?.trim();
-    expect(resolvedReview).toBe(common);
-    expect(resolvedSecurityReview).toContain(common);
-    expect(resolvedSecurityReview?.split(common)).toHaveLength(2);
+    expect(resolvedReview).toBeDefined();
+    expect(resolvedSecurityReview).toContain(resolvedReview);
+    expect(resolvedSecurityReview?.split(resolvedReview!)).toHaveLength(2);
   });
-
 });

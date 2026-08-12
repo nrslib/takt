@@ -5,6 +5,14 @@ params:
   review_knowledge_additions:
     type: facet_ref[]
     facet_kind: knowledge
+  security_review_pool:
+    type: facet_pool_ref
+  architecture_review_instruction: { type: facet_ref, facet_kind: instruction }
+  security_review_instruction: { type: facet_ref, facet_kind: instruction }
+  testing_review_instruction: { type: facet_ref, facet_kind: instruction }
+  coding_review_instruction: { type: facet_ref, facet_kind: instruction }
+  ai_antipattern_review_instruction: { type: facet_ref, facet_kind: instruction }
+  frontend_review_instruction: { type: facet_ref, facet_kind: instruction }
 
 name: review
 tags: [review]
@@ -26,7 +34,8 @@ parallel:
         - unit-testing
         - e2e-testing
         - $param: review_knowledge_additions
-      instruction: review-coding
+      instruction:
+        $param: coding_review_instruction
       pass_previous_response: false
       output_contracts:
         report:
@@ -45,7 +54,8 @@ parallel:
       knowledge:
         - architecture
         - $param: review_knowledge_additions
-      instruction: ai-antipattern-review
+      instruction:
+        $param: ai_antipattern_review_instruction
       pass_previous_response: false
       output_contracts:
         report:
@@ -60,7 +70,8 @@ parallel:
       persona: architecture-reviewer
       policy: [contract-change, review]
       knowledge: architecture
-      instruction: review-arch
+      instruction:
+        $param: architecture_review_instruction
       pass_previous_response: false
       output_contracts:
         report:
@@ -74,7 +85,8 @@ parallel:
       persona: frontend-reviewer
       policy: [contract-change, review]
       knowledge: [frontend, react]
-      instruction: review-frontend
+      instruction:
+        $param: frontend_review_instruction
       pass_previous_response: false
       output_contracts:
         report:
@@ -88,7 +100,8 @@ parallel:
       persona: coding-reviewer
       policy: [contract-change, review, coding]
       knowledge: [backend, architecture]
-      instruction: review-coding
+      instruction:
+        $param: coding_review_instruction
       pass_previous_response: false
       output_contracts:
         report:
@@ -101,8 +114,13 @@ parallel:
       edit: false
       persona: security-reviewer
       policy: [contract-change, security-review]
-      knowledge: [security, security-web, security-api, security-local, security-data, security-dependencies]
-      instruction: review-security
+      knowledge: security
+      dynamic_facets:
+        pool:
+          $param: security_review_pool
+        max_selected: 1
+      instruction:
+        $param: security_review_instruction
       pass_previous_response: false
       output_contracts:
         report:
@@ -116,7 +134,8 @@ parallel:
       persona: testing-reviewer
       policy: [contract-change, review, testing]
       knowledge: [unit-testing, e2e-testing]
-      instruction: review-test
+      instruction:
+        $param: testing_review_instruction
       pass_previous_response: false
       output_contracts:
         report:

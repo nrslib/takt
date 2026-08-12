@@ -1,5 +1,5 @@
 import { realpathSync } from 'node:fs';
-import type { WorkflowConfig } from '../../../core/models/index.js';
+import type { WorkflowCallArgValue, WorkflowConfig } from '../../../core/models/index.js';
 import type { WorkflowCallArgResolutionPolicy } from './workflowCallableArgResolver.js';
 import { loadWorkflowFromFile, loadWorkflowFromFileForDiscovery } from './workflowFileLoader.js';
 import {
@@ -11,7 +11,7 @@ import {
 type WorkflowLoadMode = 'runtime' | 'discovery';
 
 export interface WorkflowResolvedLoaderOptions {
-  callableArgs?: Record<string, string | string[]>;
+  callableArgs?: Record<string, WorkflowCallArgValue>;
   loadMode?: WorkflowLoadMode;
   lookupCwd: string;
   parentTrustInfo?: WorkflowTrustInfo;

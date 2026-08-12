@@ -4,6 +4,7 @@ import assertReviewAdjudication from '../../eval/asserts/review-adjudication.mjs
 const findings = {
   code: 'CODE-NEW-channel-normalization-L2',
   architecture: 'ARCH-NEW-channel-normalization-L2',
+  horizontal: 'ARCH-NEW-build-label-dup-L1',
   testing: 'TEST-NEW-readme-examples-L1',
   security: 'SEC-NEW-secret-leak-L3',
   antipattern: 'AI-NEW-windows-proof-L1',
@@ -32,6 +33,7 @@ function adjudicationOutput(): string {
     '|------------|-------------|---------------|----------|',
     `| ${findings.code} | actionable | FAM-channel-normalization | The confirmed DRY defect remains actionable; the reviewer-suggested transaction is out of scope. |`,
     `| ${findings.architecture} | duplicate | FAM-channel-normalization | Same responsibility-boundary defect; atomicity has no requirement and is not adopted. |`,
+    `| ${findings.horizontal} | out_of_scope | none | The duplication is technically valid but belongs to an unchanged neighboring contract. |`,
     `| ${findings.testing} | out_of_scope | none | README variation coverage is unrelated to the changed execution path. |`,
     `| ${findings.security} | false_positive | none | Current code contains no secret leak. |`,
     `| ${findings.antipattern} | environment_unverified | none | The environment-only proof cannot establish an implementation defect. |`,
@@ -48,6 +50,7 @@ function compactJapaneseAdjudicationOutput(): string {
     '|---|---|---|',
     `| ${findings.code} | actionable | F-CHANNEL-NORMALIZATION。代表 finding |`,
     `| ${findings.architecture} | duplicate | F-CHANNEL-NORMALIZATION。同じ根本原因へ統合し、transaction方式は不採用 |`,
+    `| ${findings.horizontal} | out_of_scope | 別契約の技術的に妥当な重複だが修正権限なし |`,
     `| ${findings.testing} | out_of_scope | 文書の全パターン列挙は変更の正しさと無関係 |`,
     `| ${findings.security} | false_positive | 現コードは秘密値を出力しない |`,
     `| ${findings.antipattern} | out_of_scope | Windows証跡は要求されていない |`,

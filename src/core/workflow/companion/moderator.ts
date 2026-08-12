@@ -1,7 +1,7 @@
 import type { CompanionFinding, CompanionFindingSeverity } from '../../models/companion-types.js';
 import type { CompanionReviewOutput } from './contracts.js';
 
-interface ModeratorResult {
+export interface ModeratorResult {
   readonly findings: readonly {
     action: 'accept' | 'reject' | 'merge' | 'downgrade';
     sourceIndex: number;
@@ -39,7 +39,7 @@ export async function moderateCompanionResult(input: {
       ? {}
       : { implementerExplanation: input.implementerExplanation }),
   });
-  validateDecisions(moderated, input.reviewerResult, input.openFindings);
+  validateModeratorDecisions(moderated, input.reviewerResult, input.openFindings);
   const findings = moderated.findings.flatMap((decision) => {
     const source = input.reviewerResult.findings[decision.sourceIndex]!;
     if (decision.action === 'reject') return [];
@@ -58,7 +58,7 @@ export async function moderateCompanionResult(input: {
   });
 }
 
-function validateDecisions(
+export function validateModeratorDecisions(
   moderated: ModeratorResult,
   reviewerResult: CompanionReviewOutput,
   openFindings: readonly CompanionFinding[],

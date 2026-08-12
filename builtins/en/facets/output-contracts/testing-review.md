@@ -6,6 +6,8 @@
 ## Summary
 {Summarize the result in 1-2 sentences}
 
+For every finding that requests a test, record the observable contract to preserve, the concrete failure path, and evidence that existing tests cannot detect it. Do not record findings whose only purpose is freezing internal structure or duplicating existing verification.
+
 ## Reviewed Aspects
 | Aspect | Result | Notes |
 |--------|--------|-------|
@@ -23,9 +25,11 @@
 | {problem family or contract reviewed} | {condition to preserve} | {locations checked} | {locations checked} | {paths checked} | {test assets checked} | {none or reason unchecked} | {no issue / finding number} |
 
 ## Current Iteration Findings (new)
-| # | finding_id | family_tag | Category | Location | Issue | Fix Suggestion |
-|---|------------|------------|----------|----------|-------|----------------|
-| 1 | TEST-NEW-src-test-L42 | test-structure | Coverage | `src/test.ts:42` | Issue description | Fix suggestion |
+| # | finding_id | family_tag | Category | Location | Issue | Authorization Basis | Reason Absent from Initial Round | Fix Suggestion |
+|---|------------|------------|----------|----------|-------|---------------------|----------------------------------|----------------|
+| 1 | TEST-NEW-src-test-L42 | test-structure | Coverage | `src/test.ts:42` | Issue description | remediation_regression | The repair changed this behavior after the initial test review | Fix suggestion |
+
+For a follow-up finding, `Authorization Basis` must be exactly `accepted_family_unvisited_consumer`, `remediation_regression`, `direct_acceptance_criterion_violation`, or `required_consumer_migration`; initial review uses `not applicable`. `Reason Absent from Initial Round` is a separate factual explanation for a follow-up finding and is `not applicable` for initial review.
 
 ## Carry-over Findings (persists)
 | # | finding_id | family_tag | Previous Evidence | Current Evidence | Issue | Fix Suggestion |

@@ -123,6 +123,73 @@ candidates:
     policy: backward-compatibility
 `;
 
+const STATIC_PARALLEL_CHILD_WORKFLOW = `
+policies:
+  coding: ../../facets/policies/coding.md
+knowledge:
+  architecture: ../../facets/knowledge/architecture.md
+facet_pools:
+  fix:
+    candidates:
+      - id: backend
+        description: backend
+        knowledge: architecture
+steps:
+  - name: parallel-parent
+    parallel:
+      - name: child
+        persona: coder
+        instruction: child
+        dynamic_facets:
+          pool: fix
+          max_selected: 1
+        rules:
+          - condition: done
+            next: COMPLETE
+    rules:
+      - condition: done
+        next: COMPLETE
+`;
+
+const DYNAMIC_PARALLEL_CHILD_WORKFLOW = `
+policies:
+  coding: ../../facets/policies/coding.md
+knowledge:
+  architecture: ../../facets/knowledge/architecture.md
+facet_pools:
+  fix:
+    candidates:
+      - id: backend
+        description: backend
+        knowledge: architecture
+steps:
+  - name: parallel-parent
+    parallel:
+      fixed:
+        - name: fixed-child
+          persona: coder
+          instruction: fixed
+          dynamic_facets:
+            pool: fix
+            max_selected: 1
+          rules:
+            - condition: done
+              next: COMPLETE
+      pool:
+        - name: pool-child
+          description: pool child
+          persona: coder
+          instruction: pool
+          dynamic_facets:
+            pool: fix
+          rules:
+            - condition: done
+              next: COMPLETE
+    rules:
+      - condition: done
+        next: COMPLETE
+`;
+
 describe('facet_pools loader (C-INLINE-POOL, C-EXTERNAL-POOL, C-POOL-NORMALIZE, C-POOL-LOOKUP, C-POOL-PROVENANCE)', () => {
   let projectDir: string;
   let globalConfigDir: string;
@@ -325,6 +392,86 @@ steps:
       // are normalized to the same shape while preserving their origin metadata (order.md:339).
       expect(inlinePool?.source).toBe('inline');
       expect(externalPool?.source).toBe('external');
+    });
+  });
+
+  describe('DFP-002/DFP-006: parallel child dynamic facet loading', () => {
+    it('should retain dynamic facets on static parallel children during normalization (DFP-002)', () => {
+      const workflowPath = writeWorkflow(
+        projectDir,
+        'static-parallel-facets',
+        STATIC_PARALLEL_CHILD_WORKFLOW,
+        'parallel-parent',
+      );
+      const workflow = loadWorkflowFromFile(workflowPath, projectDir);
+      const parent = workflow.steps[0];
+
+      if (!parent || !('parallel' in parent) || parent.parallel === undefined || !Array.isArray(parent.parallel)) {
+        throw new Error('Expected a static parallel workflow step');
+      }
+      expect(parent.parallel[0]?.dynamicFacets).toEqual({ pool: 'fix', maxSelected: 1 });
+    });
+
+    it('should retain dynamic facets on dynamic parallel fixed and pool children during normalization (DFP-002)', () => {
+      const workflowPath = writeWorkflow(
+        projectDir,
+        'dynamic-parallel-facets',
+        DYNAMIC_PARALLEL_CHILD_WORKFLOW,
+        'parallel-parent',
+      );
+      const workflow = loadWorkflowFromFile(workflowPath, projectDir);
+      const parent = workflow.steps[0];
+
+      if (!parent || !('parallel' in parent) || parent.parallel === undefined || Array.isArray(parent.parallel)) {
+        throw new Error('Expected a dynamic parallel workflow step');
+      }
+      expect(parent.parallel.fixed[0]?.dynamicFacets).toEqual({ pool: 'fix', maxSelected: 1 });
+      expect(parent.parallel.pool[0]?.dynamicFacets).toEqual({ pool: 'fix' });
+    });
+
+    it('should reject an unknown facet pool on a nested static parallel child (DFP-006)', () => {
+      const workflow = STATIC_PARALLEL_CHILD_WORKFLOW.replace('pool: fix', 'pool: missing');
+      const workflowPath = writeWorkflow(projectDir, 'static-parallel-missing-pool', workflow, 'parallel-parent');
+
+      const error = errorMessage(() => loadWorkflowFromFile(workflowPath, projectDir));
+      expect(error).toContain('unknown facet pool "missing"');
+      expect(error).toContain('parallel');
+    });
+
+    it('should reject an unknown facet pool on a dynamic parallel fixed child (DFP-017)', () => {
+      const workflow = DYNAMIC_PARALLEL_CHILD_WORKFLOW.replace(
+        'dynamic_facets:\n            pool: fix\n            max_selected: 1',
+        'dynamic_facets:\n            pool: missing\n            max_selected: 1',
+      );
+      const workflowPath = writeWorkflow(projectDir, 'dynamic-parallel-fixed-missing-pool', workflow, 'parallel-parent');
+
+      const error = errorMessage(() => loadWorkflowFromFile(workflowPath, projectDir));
+      expect(error).toContain('unknown facet pool "missing"');
+      expect(error).toContain('parallel');
+    });
+
+    it('should reject max_selected exceeding candidates on a dynamic parallel fixed child (DFP-017)', () => {
+      const workflow = DYNAMIC_PARALLEL_CHILD_WORKFLOW.replace(
+        'dynamic_facets:\n            pool: fix\n            max_selected: 1',
+        'dynamic_facets:\n            pool: fix\n            max_selected: 2',
+      );
+      const workflowPath = writeWorkflow(projectDir, 'dynamic-parallel-fixed-max-selected', workflow, 'parallel-parent');
+
+      const error = errorMessage(() => loadWorkflowFromFile(workflowPath, projectDir));
+      expect(error).toContain('exceeds candidate count');
+      expect(error).toContain('parallel');
+    });
+
+    it('should reject max_selected exceeding candidates on a nested dynamic pool child (DFP-006)', () => {
+      const workflow = DYNAMIC_PARALLEL_CHILD_WORKFLOW.replace(
+        'pool: fix\n          rules:',
+        'pool: fix\n            max_selected: 2\n          rules:',
+      );
+      const workflowPath = writeWorkflow(projectDir, 'dynamic-parallel-max-selected', workflow, 'parallel-parent');
+
+      const error = errorMessage(() => loadWorkflowFromFile(workflowPath, projectDir));
+      expect(error).toContain('exceeds candidate count');
+      expect(error).toContain('parallel');
     });
   });
 

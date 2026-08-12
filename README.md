@@ -37,11 +37,11 @@ Instead of asking one agent to remember the whole process, TAKT gives each step 
 - Run plan → implement → review → fix loops as explicit workflow steps
 - Keep context focused with step-specific personas, policies, knowledge, instructions, and output contracts
 - Execute queued tasks in isolated worktrees and inspect logs and reports afterward
-- Use Claude Code, Claude SDK, Codex SDK, OpenCode SDK, Cursor, GitHub Copilot CLI, or Kiro as providers
+- Use Claude Code, Claude SDK, Codex SDK, OpenCode SDK, Pi SDK, Cursor, GitHub Copilot CLI, or Kiro as providers
 
 **T**AKT **A**gent **K**oordination **T**opology orchestrates multiple AI agents with structured review loops, managed prompts, and guardrails.
 
-Talk to AI to define what you want, queue it as a task, and run it with `takt run`. Planning, implementation, review, and fix loops are defined in YAML workflow files, so the process is not left to the agent's discretion. TAKT coordinates Claude Code, Codex, OpenCode, Cursor, GitHub Copilot CLI, and Kiro CLI as agents with different roles, permissions, and context.
+Talk to AI to define what you want, queue it as a task, and run it with `takt run`. Planning, implementation, review, and fix loops are defined in YAML workflow files, so the process is not left to the agent's discretion. TAKT coordinates Claude Code, Codex, OpenCode, Pi, Cursor, GitHub Copilot CLI, and Kiro CLI as agents with different roles, permissions, and context.
 
 TAKT is built primarily for AI coding workflows, but the same model applies beyond coding: any task where multiple AI agents need to coordinate, or where review, judgment, and feedback loops can improve task quality.
 
@@ -80,7 +80,7 @@ takt run
 takt list
 ```
 
-If this is your first run, configure a provider in `~/.takt/config.yaml` or use the API key environment variables listed in [Configuration](#configuration). SDK-based providers such as `claude-sdk`, `codex`, and `opencode` can run with Node.js and API keys; CLI-based providers require their external CLIs.
+If this is your first run, configure a provider in `~/.takt/config.yaml` or use the API key environment variables listed in [Configuration](#configuration). SDK-based providers such as `claude-sdk`, `codex`, `opencode`, and `pi` can run with Node.js; CLI-based providers require their external CLIs.
 
 ### Video Tutorial
 
@@ -113,6 +113,7 @@ These providers run via SDK (no CLI required, Node.js only):
 - `claude-sdk` — `@anthropic-ai/claude-agent-sdk`
 - `codex` — `@openai/codex-sdk`
 - `opencode` — `@opencode-ai/sdk`
+- `pi` — `@earendil-works/pi-coding-agent`
 
 These providers require an external CLI:
 
@@ -237,6 +238,8 @@ Rules determine the next step. `COMPLETE` ends the workflow successfully, `ABORT
 
 Reusable step definitions can be stored in `.takt/steps/` and expanded with `uses` before validation. See the Workflow Guide for fragment lookup and override rules.
 
+The `experimental` and `takt-experimental` wrappers select reviewer-suite adapters that bind the generic or TAKT-specific external security-review facet pool only at the suite that consumes it. Shared development and peer-review workflow contracts remain unchanged. `dynamic_facets` works on normal agent steps and `parallel` agent sub-steps: dynamic parallel participants are selected first, each selected child keeps its fixed facets and receives up to `max_selected` pool candidates, and an empty selection adds nothing. All applicable facet selectors complete before any parallel child starts; if one selection is invalid, no child under that parallel parent starts. A process resume re-runs participant and facet selectors against their current pools.
+
 Workflow files live in `workflows/` as the official directory name.
 
 When the same workflow name exists in multiple locations, TAKT resolves in this order: `.takt/workflows/` → `~/.takt/workflows/` → builtins.
@@ -295,7 +298,7 @@ Normal agent steps, parallel sub-steps, and loop detection judges may set `sessi
 Minimal `~/.takt/config.yaml`:
 
 ```yaml
-provider: claude    # claude, claude-sdk, claude-terminal, codex, opencode, cursor, copilot, kiro, or mock
+provider: claude    # claude, claude-sdk, claude-terminal, codex, opencode, cursor, copilot, kiro, pi, or mock
 model: sonnet       # passed directly to provider
 language: en        # en or ja
 ```
@@ -356,7 +359,7 @@ Operations without workflow-step context, such as AI task-slug generation, use t
 
 Auto-routing decisions are written locally to `.takt/events/` as NDJSON. TAKT does not upload routing decisions. Local recording is enabled by default, can be configured with `telemetry.routing_decisions`, and can be inspected or changed with `takt telemetry status|enable|disable`.
 
-Or use API keys directly (no CLI installation required for Claude, Codex, OpenCode):
+Or use provider credentials directly (no CLI installation required for claude-sdk, Codex, OpenCode, or Pi):
 
 ```bash
 export TAKT_ANTHROPIC_API_KEY=sk-ant-...   # Anthropic (Claude)
@@ -365,6 +368,7 @@ export TAKT_OPENCODE_API_KEY=...           # OpenCode
 export TAKT_CURSOR_API_KEY=...             # Cursor Agent (optional if logged in)
 export TAKT_COPILOT_GITHUB_TOKEN=ghp_...   # GitHub Copilot CLI
 export TAKT_KIRO_API_KEY=...               # Kiro CLI
+# Pi uses its SDK credential store or provider-native environment variables.
 ```
 
 See the [Configuration Guide](./docs/configuration.md) for all options, provider profiles, and model resolution.
@@ -409,6 +413,18 @@ naming the file and the key to migrate to. Without a `runtime.yaml`,
 `config.yaml` behaves exactly as before. See
 [docs/configuration.md](docs/configuration.md) for the schema and the
 migration table.
+
+Companion reviewers are enabled by default. To disable them, set the
+top-level policy in `runtime.yaml`:
+
+```yaml
+version: 1
+companion:
+  enabled: false
+```
+
+The global and project policies are combined with logical AND, so a global
+`false` cannot be re-enabled by a project setting.
 
 ## Customization
 

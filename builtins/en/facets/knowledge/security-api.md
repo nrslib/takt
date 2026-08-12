@@ -2,131 +2,43 @@
 
 ## Applicability
 
-Apply to changes that involve APIs, server endpoints, authentication, authorization, database queries, or tenant boundaries.
+Apply when a low-trust request reaches server-side authentication, authorization, resource selection, an interpreter, an outbound connection, or persistence. Do not apply merely because an endpoint exists or when an internal implementation change leaves the trust boundary unchanged.
 
-## Injection Attacks
+## Input-to-Interpreter Boundaries
 
-**SQL Injection:**
+Trace boundaries that interpret input as another language or destination, including SQL, templates, query languages, expressions, and server-side requests. Verify that data remains separate from instructions or destinations rather than relying on an API name or a claim that input was validated.
 
-- SQL construction via string concatenation → REJECT
-- Not using parameterized queries → REJECT
-- Unsanitized input in ORM raw queries → REJECT
+| Criterion | Verdict |
+|-----------|---------|
+| A low-trust value is concatenated into the instruction portion of a query or template | REJECT |
+| A low-trust URL or host selects an internal network target or credentialed request destination | REJECT |
+| Parameter binding or a structured builder separates data from instructions | OK |
+| Outbound destinations constrain scheme, host, and redirects to the required set | OK |
 
-```typescript
-// NG
-db.query(`SELECT * FROM users WHERE id = ${userId}`)
+## Authentication, Authorization, and Resource Scope
 
-// OK
-db.query('SELECT * FROM users WHERE id = ?', [userId])
-```
+Authentication establishes the caller. Authorization constrains the actions and resources available to that caller. Review more than the presence of route middleware: reads, updates, and deletes must apply the same resource scope.
 
-## Authentication & Authorization
+| Criterion | Verdict |
+|-----------|---------|
+| A private or ownership-scoped resource is loaded only by a request-provided ID without checking its relation to the caller | REJECT |
+| Reads of a protected resource apply a scope but corresponding updates or deletes do not | REJECT |
+| A client-provided owner, tenant, or role overrides the authenticated caller without independent authorization | REJECT |
+| Actions and resource scope are resolved from the authenticated caller and applied to every operation | OK |
 
-**Authentication issues:**
+## Input, Output, and Resource Contracts
 
-- Hardcoded credentials → Immediate REJECT
-- Plaintext password storage → Immediate REJECT
-- Weak hash algorithms (MD5, SHA1) → REJECT
-- Improper session token management → REJECT
+Constrain types, formats, enumerations, lengths, and counts at the boundary according to the downstream contract. Do not report missing validation or rate limiting as a generality; show a path from low-trust input to authority bypass, an interpretation boundary, or realistic resource exhaustion.
 
-**Authorization issues:**
+Responses and errors must not include credentials, internal paths, queries, stacks, or another resource's content unless the caller needs them.
 
-- Missing permission checks → REJECT
-- IDOR (Insecure Direct Object Reference) → REJECT
-- Privilege escalation possibility → REJECT
+## Ownership-Domain Isolation
 
-```typescript
-// NG - No permission check
-app.get('/user/:id', (req, res) => {
-  return db.getUser(req.params.id)
-})
-
-// OK
-app.get('/user/:id', authorize('read:user'), (req, res) => {
-  if (req.user.id !== req.params.id && !req.user.isAdmin) {
-    return res.status(403).send('Forbidden')
-  }
-  return db.getUser(req.params.id)
-})
-```
-
-## Data Protection
-
-**Data validation:**
-
-- Unvalidated input values → REJECT, except when the only missing validation is an input size limit
-- Missing type checks → REJECT
-- Missing size limits can contribute to resource exhaustion; evaluate the concrete path under the Security policy
-
-## Rate Limiting & DoS Protection
-
-- No rate limiting (auth endpoints) → Warning
-- Resource exhaustion attack possibility → Warning
-- Infinite loop patterns can cause denial of service; evaluate the verified path and impact under the Security policy
-
-## Multi-Tenant Data Isolation
-
-Prevent data access across tenant boundaries. Authorization (who can operate) and scoping (which tenant's data) are separate concerns.
+When data has multiple owners, tenants, workspaces, or accounts, establish authorization (who may act) and scope (which ownership domain applies) independently, then combine them in the operation.
 
 | Criteria | Verdict |
 |----------|---------|
-| Reads are tenant-scoped but writes are not | REJECT |
-| Write operations use client-provided tenant ID | REJECT |
-| Endpoint using tenant resolver has no authorization control | REJECT |
-| Some paths in role-based branching don't account for tenant resolution | REJECT |
-| Authentication mechanism coverage does not extend to the endpoint's expected caller (role, token type) | REJECT |
-
-### Read-Write Consistency
-
-Apply tenant scoping to both reads and writes. Scoping only one side creates a state where data cannot be viewed but can be modified.
-
-When adding a tenant filter to reads, always add tenant verification to corresponding writes.
-
-### Write-Side Tenant Verification
-
-For write operations, use the tenant ID resolved from the authenticated user, not from the request body.
-
-```kotlin
-// NG - Trusting client-provided tenant ID
-fun create(request: CreateRequest) {
-    service.create(request.tenantId, request.data)
-}
-
-// OK - Resolve tenant from authentication
-fun create(request: CreateRequest) {
-    val tenantId = tenantResolver.resolve()
-    service.create(tenantId, request.data)
-}
-```
-
-### Authorization-Resolver Alignment
-
-When a tenant resolver assumes a specific role (e.g., staff), the endpoint must have corresponding authorization controls. Without authorization, unexpected roles can access the endpoint and cause the resolver to fail.
-
-```kotlin
-// NG - Resolver assumes STAFF but no authorization control
-fun getSettings(): SettingsResponse {
-    val tenantId = tenantResolver.resolve()  // Fails for non-STAFF
-    return settingsService.getByTenant(tenantId)
-}
-
-// OK - Authorization ensures correct role
-@Authorized(roles = ["STAFF"])
-fun getSettings(): SettingsResponse {
-    val tenantId = tenantResolver.resolve()
-    return settingsService.getByTenant(tenantId)
-}
-```
-
-For endpoints with role-based branching, verify that tenant resolution succeeds on all paths.
-
-Watch for the reverse pattern as well. When adding an endpoint dedicated to a specific role, extend the coverage of the mechanism that authenticates that role (filters, etc.) and add role-required authorization in the same change. Outside the authentication mechanism's coverage the expected caller is never authenticated in the first place, and without authorization, unexpected roles get through.
-
-## OWASP Top 10 Checklist
-
-| Category | Check Items |
-|----------|-------------|
-| A01 Broken Access Control | Authorization checks |
-| A03 Injection | SQL |
-| A07 Auth Failures | Authentication mechanisms |
-| A10 SSRF | Server-side requests |
+| Reads are scoped to an ownership domain but writes are not | REJECT |
+| A client-provided ownership domain is used without checking it against the authenticated caller | REJECT |
+| A role or token-type branch has a path where scope is not established | REJECT |
+| Scope is resolved from the authenticated caller and applied consistently to read and write queries | OK |

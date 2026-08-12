@@ -61,6 +61,7 @@ export interface Provider {
   supportsStrictInternalAgentIsolation: boolean;
   getRuntimeInstructions(allowedTools?: string[], permissionMode?: import('../../core/models/index.js').PermissionMode, networkAccess?: boolean): string | null;
   keepsAllowedToolWithoutEdit(tool: string): boolean;
+  getDefaultAllowedToolsWithoutEdit?(): readonly string[];
   setup(config: AgentSetup): ProviderAgent;
   setupIsolatedStructured(config: AgentSetup): ProviderAgent;
   compactSession?(options: ProviderCompactSessionOptions): Promise<void>;

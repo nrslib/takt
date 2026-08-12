@@ -1,5 +1,8 @@
 import type { WorkflowRule } from '../../../core/models/index.js';
-import { parseWorkflowRuleCondition } from '../../../core/models/workflow-rule-condition.js';
+import {
+  hasCompanionReference,
+  parseWorkflowRuleCondition,
+} from '../../../core/models/workflow-rule-condition.js';
 
 export function normalizeRule(rule: {
   condition?: string;
@@ -10,8 +13,12 @@ export function normalizeRule(rule: {
   interactive_only?: boolean;
 }): WorkflowRule {
   if (rule.condition === undefined) throw new Error('Workflow rule requires condition');
+  const condition = parseWorkflowRuleCondition(rule.condition);
+  if (hasCompanionReference(condition)) {
+    throw new Error('Workflow transition rules cannot reference advisory companion state');
+  }
   return {
-    condition: parseWorkflowRuleCondition(rule.condition),
+    condition,
     ...(rule.next === undefined ? {} : { next: rule.next }),
     returnValue: rule.return,
     appendix: rule.appendix,

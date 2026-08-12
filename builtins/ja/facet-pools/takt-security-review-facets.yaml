@@ -1,0 +1,6 @@
+knowledge:
+  security-local: ../facets/knowledge/security-local.md
+candidates:
+  - id: cli
+    description: CLI入力がサブプロセス、worktree、パス、ローカルファイル、設定へ到達する変更に限ってレビューする。
+    knowledge: security-local

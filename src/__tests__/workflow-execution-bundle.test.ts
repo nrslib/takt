@@ -17,6 +17,7 @@ import {
 import { attachLegacyWorkflowExecutionBundle } from '../features/workflowAuthoring/attachExecutionBundle.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 import { buildWorkflowStepParticipationIdentity } from '../core/workflow/workflow-step-participation-index.js';
+import { canonicalJson } from '../shared/utils/canonical-json.js';
 
 const roots: string[] = [];
 
@@ -56,7 +57,21 @@ describe('workflow execution bundle', () => {
         personaDisplayName: 'first',
         instruction: '',
       },
-      { name: 'second', kind: 'workflow_call', call: 'child', args: { mode: 'second' }, personaDisplayName: 'second', instruction: '' },
+      {
+        name: 'second',
+        kind: 'workflow_call',
+        call: 'child',
+        args: {
+          mode: 'second',
+          companions: {
+            fixed: ['reviewer'],
+            pool: [],
+            moderator: 'moderator',
+          },
+        },
+        personaDisplayName: 'second',
+        instruction: '',
+      },
     ]);
     const prepared = prepareWorkflowExecutionBundle({
       rootWorkflow: parent,
@@ -75,6 +90,14 @@ describe('workflow execution bundle', () => {
       personaPath: 'ordinary-persona-argument',
       partPersonaPath: 'ordinary-part-persona-argument',
     });
+    expect(second?.args).toEqual({
+      mode: 'second',
+      companions: {
+        fixed: ['reviewer'],
+        pool: [],
+        moderator: 'moderator',
+      },
+    });
     const loadedFirst = loaded.workflowCallResolver({
       parentWorkflow: loaded.rootWorkflow,
       step: first as never,
@@ -92,6 +115,64 @@ describe('workflow execution bundle', () => {
     expect(getWorkflowReference(loaded.rootWorkflow)).toBe(getWorkflowReference(parent));
     expect(getWorkflowReference(loadedFirst!)).toBe(getWorkflowReference(firstChild));
     expect(Object.keys(prepared.manifest.nodes)).not.toContain(getWorkflowReference(parent));
+  });
+
+  it('rejects an invalid companion selection at the bundle argument boundary', () => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-arg-boundary-'));
+    roots.push(root);
+    const child = workflow('child', [{
+      name: 'one', kind: 'agent', persona: 'child prompt', personaDisplayName: 'child', instruction: '{task}',
+    }]);
+    const parent = workflow('parent', [{
+      name: 'delegate',
+      kind: 'workflow_call',
+      call: 'child',
+      args: {
+        companions: {
+          fixed: ['reviewer'],
+          pool: [],
+          moderator: 'moderator',
+        },
+      },
+      personaDisplayName: 'delegate',
+      instruction: '',
+    }]);
+    const paths = buildRunPaths(root, 'bundle-arg-boundary-run');
+    publishWorkflowExecutionBundle(paths, prepareWorkflowExecutionBundle({
+      rootWorkflow: parent,
+      workflowCallResolver: () => child,
+      projectCwd: root,
+      lookupCwd: root,
+    }));
+
+    const manifest = JSON.parse(readFileSync(paths.workflowBundleManifestAbs, 'utf-8')) as {
+      nodes: Record<string, string>;
+      root: { nodeId: string };
+    };
+    const rootHash = manifest.nodes[manifest.root!.nodeId];
+    if (rootHash === undefined) throw new Error('Root bundle node is missing');
+    const objectPath = join(paths.workflowBundleObjectsAbs, `${rootHash}.json`);
+    const object = JSON.parse(readFileSync(objectPath, 'utf-8')) as {
+      calls: Array<{ args: Record<string, unknown> }>;
+    };
+    object.calls[0]!.args.companions = {
+      fixed: ['reviewer'],
+      pool: [],
+      moderator: 'reviewer',
+    };
+    const encoded = canonicalJson(object);
+    const replacementHash = createHash('sha256').update(encoded).digest('hex');
+    writeFileSync(join(paths.workflowBundleObjectsAbs, `${replacementHash}.json`), `${encoded}\n`);
+    rmSync(objectPath);
+    manifest.nodes[manifest.root!.nodeId] = replacementHash;
+    const manifestText = canonicalJson(manifest);
+    writeFileSync(paths.workflowBundleManifestAbs, `${manifestText}\n`);
+    writeFileSync(
+      paths.workflowBundleManifestHashAbs,
+      `${createHash('sha256').update(manifestText).digest('hex')}\n`,
+    );
+
+    expect(() => loadWorkflowExecutionBundle(paths)).toThrow('argument "companions" is invalid');
   });
 
   it('fails loudly when an object is tampered', () => {

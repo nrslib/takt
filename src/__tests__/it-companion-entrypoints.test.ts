@@ -17,6 +17,10 @@ interface FixtureOptions {
   readonly assignment: 'target' | 'defaults' | 'legacy';
   readonly provider?: 'mock' | 'cursor';
   readonly includeCompanion?: boolean;
+  readonly companionEnabled?: boolean;
+  readonly invalidCompanionTarget?: boolean;
+  readonly dynamicSelector?: boolean;
+  readonly dynamicFacets?: boolean;
 }
 
 interface CompanionEntrypointFixture {
@@ -37,23 +41,64 @@ function createFixture(options: FixtureOptions): CompanionEntrypointFixture {
   mkdirSync(companionDir, { recursive: true });
   mkdirSync(configDir, { recursive: true });
   const workflowPath = join(workflowDir, 'companion-entrypoint.yaml');
+  const dynamicFacets = options.dynamicFacets === true;
   writeFileSync(workflowPath, [
     'name: companion-entrypoint',
     'initial_step: implement',
-    'max_steps: 1',
+    `max_steps: ${options.dynamicSelector ? 2 : 1}`,
+    ...(dynamicFacets
+      ? [
+          'facet_pools:',
+          '  reviewers:',
+          '    policies:',
+          '      coding: ./facets/policies/coding.md',
+          '    candidates:',
+          '      - id: security',
+          '        description: Review security',
+          '        policy: coding',
+        ]
+      : []),
     'steps:',
     '  - name: implement',
     '    persona: coder',
     '    instruction: implement',
     '    edit: true',
     '    companion: [security-reviewer]',
+    ...(dynamicFacets
+      ? [
+          '    dynamic_facets:',
+          '      pool: reviewers',
+          '      max_selected: 1',
+        ]
+      : []),
     '    rules:',
-    '      - condition: when(companion.escalated)',
-    '        next: ABORT',
-    '      - condition: when(companion.openMustFixCount == 0)',
-    '        next: COMPLETE',
+    '      - condition: done',
+    `        next: ${options.dynamicSelector ? 'reviewers' : 'COMPLETE'}`,
+    ...(options.dynamicSelector
+      ? [
+          '  - name: reviewers',
+          '    parallel:',
+          '      fixed: []',
+          '      pool:',
+          '        - name: security',
+          '          persona: coder',
+          '          description: Review security',
+          '          instruction: review security',
+          '          rules:',
+          '            - condition: done',
+          '      selection:',
+          '        mode: replace',
+          '    rules:',
+          '      - condition: all("done")',
+          '        next: COMPLETE',
+        ]
+      : []),
     '',
   ].join('\n'));
+  if (dynamicFacets) {
+    mkdirSync(join(workflowDir, 'facets', 'policies'), { recursive: true });
+    writeFileSync(join(workflowDir, 'facets', 'policies', 'coding.md'), '# Coding policy\n');
+  }
   if (options.includeCompanion !== false) {
     writeFileSync(join(companionDir, 'security-reviewer.yaml'), [
       'name: security-reviewer',
@@ -69,12 +114,15 @@ function createFixture(options: FixtureOptions): CompanionEntrypointFixture {
           '  targets:',
           '    companions:',
           '      security-reviewer:',
-          '        profile: selected',
+          `        profile: ${options.invalidCompanionTarget ? 'missing' : 'selected'}`,
         ]
       : [
         ];
     writeFileSync(join(projectDir, '.takt', 'runtime.yaml'), [
       'version: 1',
+      ...(options.companionEnabled === undefined
+        ? []
+        : ['companion:', `  enabled: ${options.companionEnabled}`]),
       'provider:',
       '  profiles:',
       '    selected:',
@@ -93,10 +141,16 @@ function createFixture(options: FixtureOptions): CompanionEntrypointFixture {
     '',
   ].join('\n'));
   const scenarioPath = join(configDir, 'scenario.json');
-  writeFileSync(scenarioPath, JSON.stringify([{
-    persona: 'coder',
-    content: 'No changes required.',
-  }]));
+  const selectorResponse = {
+    structured_output: { selected_ids: ['security'], rationale: 'Selected security review.' },
+    content: 'Selected security review.',
+  };
+  writeFileSync(scenarioPath, JSON.stringify(options.dynamicFacets
+    ? [selectorResponse, { persona: 'coder', content: 'No changes required.' }]
+    : [
+        { persona: 'coder', content: 'No changes required.' },
+        ...(options.dynamicSelector ? [selectorResponse] : []),
+      ]));
   copyFileSync(PROJECT_TAKT_GITIGNORE, join(projectDir, '.takt', '.gitignore'));
   execFileSync('git', ['init', '--quiet'], { cwd: projectDir });
   execFileSync('git', ['config', 'user.name', 'TAKT Test'], { cwd: projectDir });
@@ -181,7 +235,32 @@ describe('companion runtime, preview, and doctor entrypoint parity', () => {
       name: 'rejects a provider without companion isolation support',
       options: { assignment: 'target', provider: 'cursor' },
       succeeds: false,
-      errorPattern: /does not support companion strict isolated execution/,
+      errorPattern: /does not support companion isolated structured execution/,
+    },
+    {
+      name: 'skips companion provider resolution when disabled',
+      options: { assignment: 'target', companionEnabled: false, invalidCompanionTarget: true },
+      succeeds: true,
+    },
+    {
+      name: 'skips disabled companion targets before resolving a dynamic selector',
+      options: {
+        assignment: 'target',
+        companionEnabled: false,
+        invalidCompanionTarget: true,
+        dynamicSelector: true,
+      },
+      succeeds: true,
+    },
+    {
+      name: 'skips disabled companion targets before resolving dynamic facets',
+      options: {
+        assignment: 'target',
+        companionEnabled: false,
+        invalidCompanionTarget: true,
+        dynamicFacets: true,
+      },
+      succeeds: true,
     },
     {
       name: 'rejects an undefined companion',

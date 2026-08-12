@@ -569,6 +569,7 @@ const PROVIDER_OPTIONS_RAW_KEY: Partial<Record<ProviderType, string>> = {
   'claude-terminal': 'claude_terminal',
   copilot: 'copilot',
   kiro: 'kiro',
+  pi: 'pi',
 };
 
 function resolveProfileProviderOptions(

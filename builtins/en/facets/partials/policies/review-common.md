@@ -283,3 +283,5 @@ Within the causal scope, do not tolerate a problem merely because existing code 
 When the same kind of issue keeps recurring, reconsider the approach itself rather than repeating granular fix instructions.
 
 If a finding is resolved and another finding with the same family appears at a different location in the next review, treat that as a failure to exhaust the family in the prior review, not as evidence that the unverified scope is shrinking.
+
+{{include:policies/review-scope-authority}}

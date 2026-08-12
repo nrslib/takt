@@ -25,9 +25,11 @@
 | {問題系列または確認対象契約} | {守るべき条件} | {確認した場所} | {確認した場所} | {確認した経路} | {確認したテスト資産} | {なし、または未確認理由} | {問題なし / finding番号} |
 
 ## 今回の指摘（new）
-| # | finding_id | family_tag | カテゴリ | 場所 | 問題 | 修正案 |
-|---|------------|------------|---------|------|------|--------|
-| 1 | AI-NEW-src-file-L23 | hallucination | 幻覚API | `src/file.ts:23` | 存在しないメソッド | 実在APIへ置換 |
+| # | finding_id | family_tag | カテゴリ | 場所 | 問題 | Authorization basis | 初回に含まれなかった理由 | 修正案 |
+|---|------------|------------|---------|------|------|---------------------|------------------------------|--------|
+| 1 | AI-NEW-src-file-L23 | hallucination | 幻覚API | `src/file.ts:23` | 存在しないメソッド | direct_acceptance_criterion_violation | 初回レビュー証跡ではこの受入条件を確認していなかった | 実在APIへ置換 |
+
+follow-up finding の `Authorization basis` は `accepted_family_unvisited_consumer`、`remediation_regression`、`direct_acceptance_criterion_violation`、`required_consumer_migration` のいずれか正確な値に限定し、初回レビューでは「該当なし」とする。「初回に含まれなかった理由」は別の事実説明であり、初回レビューでは「該当なし」とする。
 
 ## 継続指摘（persists）
 | # | finding_id | family_tag | 前回根拠 | 今回根拠 | 問題 | 修正案 |

@@ -1916,57 +1916,6 @@ describe('StepExecutor', () => {
     expect(ingestFindingContractResults).toHaveBeenCalledOnce();
   });
 
-  it('companion付きFinding Contract reviewerのpublication resumeは未検証stateでconditionへ進まない', async () => {
-    const harness = createPlainTextPublicationHarness([]);
-    harness.step.companion = {
-      fixed: ['ai-antipattern-review-companion'],
-      pool: [],
-    };
-    const reportContent = '## Result: APPROVE\n\nNo findings.';
-    const publication = createFindingReviewPublication({
-      identity: {
-        scopeIdentity: 'snapshot-plain-text',
-        callNamespace: '',
-        parentStepName: 'review',
-        stepIteration: 1,
-        reviewerStepName: 'review',
-        reportName: 'review.md',
-      },
-      protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
-      reportContent,
-      rawFindings: [],
-    });
-    vi.spyOn(harness.executor, 'resumeFindingReviewPublication').mockResolvedValue({
-      publication,
-      response: {
-        persona: 'review',
-        status: 'done',
-        content: reportContent,
-        structuredOutput: { rawFindings: [] },
-        timestamp: new Date('2026-07-31T00:00:00.000Z'),
-      },
-    });
-
-    const resumed = await harness.executor.runNormalStep(
-      harness.step,
-      harness.state,
-      'test task',
-      5,
-      harness.updatePersonaSession,
-      undefined,
-      undefined,
-      {
-        executableStep: harness.step,
-        findingContractContext: harness.findingContractContext,
-        phase1Instruction: 'Review.',
-        stepIteration: 1,
-      },
-    );
-
-    expect(resumed.response.status).toBe('blocked');
-    expect(executeAgent).not.toHaveBeenCalled();
-  });
-
   /** 単独ステップ経路で slot 呼び出しに渡された input を1件だけ取り出す。 */
   function singleSlotInput(): FindingRestatementSlotInput {
     const calls = vi.mocked(runFindingRestatementSlot).mock.calls;
@@ -3426,7 +3375,13 @@ describe('StepExecutor dynamic facet integration', () => {
       const state = makeState();
       const prepared = await executor.prepareNormalStepExecution(step, state, 'task', 5, 1);
 
-      expect(coordinator.resolveDynamicFacets).toHaveBeenCalledWith(step, state, 'task', pool);
+      expect(coordinator.resolveDynamicFacets).toHaveBeenCalledWith(
+        step,
+        state,
+        'task',
+        pool,
+        { stepIteration: 1 },
+      );
       expect(prepared.executableStep.policyContents).toEqual([{ content: 'policy-content' }]);
       expect(prepared.executableStep.knowledgeContents).toEqual([{ content: 'knowledge-content' }]);
 

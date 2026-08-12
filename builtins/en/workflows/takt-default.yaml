@@ -11,10 +11,10 @@ steps:
       plan_knowledge: [takt, architecture]
       testing_policy: [coding, testing, takt-testing]
       testing_knowledge: [takt, architecture, unit-testing, e2e-testing]
-      development_policy: [coding, testing, takt-testing]
-      development_knowledge: [takt, architecture, task-decomposition]
+      development_policy: [coding, testing, takt-testing, ai-antipattern]
+      development_knowledge: [takt, architecture, task-decomposition, implementation-semantics]
       implementation_instruction: implement
-      review_policy: [coding, testing, review]
+      review_policy: [coding, testing, takt-testing, review]
       review_knowledge: [takt, architecture, unit-testing, e2e-testing]
     rules:
       - condition: COMPLETE

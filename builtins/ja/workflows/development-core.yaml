@@ -1,9 +1,27 @@
 name: development-core
-description: ドメイン固有ファセットを注入して、計画、テスト、直接実装、ピアレビューと収束修正を実行する共通開発フロー。
+description: 計画・テスト・実装・ピアレビュー・裁定・検証付き修正・マージ準備判定のコンテキストを注入できる共有開発フロー。
 subworkflow:
   callable: true
   visibility: internal
   params:
+    implementation_pool:
+      type: facet_pool_ref
+      default: coding-facets
+    implementation_workflow:
+      type: workflow_ref
+      default: development-implement
+    remediation_workflow:
+      type: workflow_ref
+      default: development-remediation
+    implementation_companions:
+      type: companion_ref[]
+      default: []
+    reviewer_suite:
+      type: workflow_ref
+      default: peer-review-suite-base
+    peer_review_workflow:
+      type: workflow_ref
+      default: peer-review
     plan_policy:
       type: facet_ref[]
       facet_kind: policy
@@ -11,10 +29,14 @@ subworkflow:
     plan_knowledge:
       type: facet_ref[]
       facet_kind: knowledge
-      default: [architecture]
+      default: [architecture, task-decomposition]
     plan_instruction:
       type: facet_ref
       facet_kind: instruction
+      default: plan
+    plan_report_format:
+      type: facet_ref
+      facet_kind: report_format
       default: plan
     replan_instruction:
       type: facet_ref
@@ -32,24 +54,22 @@ subworkflow:
       type: facet_ref
       facet_kind: instruction
       default: write-tests-first
+    testing_report_format:
+      type: facet_ref
+      facet_kind: report_format
+      default: test-report
     development_policy:
       type: facet_ref[]
       facet_kind: policy
-      default: [coding, testing]
+      default: [coding, testing, ai-antipattern]
     development_knowledge:
       type: facet_ref[]
       facet_kind: knowledge
-      default: [architecture]
+      default: [architecture, implementation-semantics]
     implementation_instruction:
       type: facet_ref
       facet_kind: instruction
       default: implement
-    reviewer_suite:
-      type: workflow_ref
-      default: peer-review-suite-base
-    peer_review_workflow:
-      type: workflow_ref
-      default: peer-review
     review_policy_additions:
       type: facet_ref[]
       facet_kind: policy
@@ -62,10 +82,29 @@ subworkflow:
       type: facet_ref[]
       facet_kind: knowledge
       default: [architecture, unit-testing, e2e-testing]
-capabilities: readonly
+    fix_plan_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: fix-plan-from-review-resolution
+    fix_plan_report_format:
+      type: facet_ref
+      facet_kind: report_format
+      default: fix-plan
+    final_gate_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: supervise-merge-readiness
 initial_step: plan
+
+facet_pools:
+  coding-facets:
+    uses: coding-facets
+  takt-coding-facets:
+    uses: takt-coding-facets
+
 steps:
   - name: plan
+    capabilities: [readonly, enable-skills]
     uses: development-core-plan
     with:
       plan_policy:
@@ -74,7 +113,8 @@ steps:
         $param: plan_knowledge
       plan_instruction:
         $param: plan_instruction
-      plan_report_format: plan
+      plan_report_format:
+        $param: plan_report_format
     rules:
       - condition: 要件が明確で実装可能
         next: write_tests
@@ -86,6 +126,7 @@ steps:
   - name: replan
     tags: [plan]
     edit: false
+    capabilities: readonly
     persona: planner
     policy:
       - contract-change
@@ -97,7 +138,8 @@ steps:
     output_contracts:
       report:
         - name: plan.md
-          format: plan
+          format:
+            $param: plan_report_format
     rules:
       - condition: プロジェクト内で実行可能な未試行の変更または原因調査と、その検証手順を具体化した
         next: implement
@@ -107,6 +149,7 @@ steps:
         next: ABORT
 
   - name: write_tests
+    capabilities: [edit, enable-skills]
     uses: development-core-write-tests
     with:
       testing_policy:
@@ -115,6 +158,8 @@ steps:
         $param: testing_knowledge
       testing_instruction:
         $param: testing_instruction
+      testing_report_format:
+        $param: testing_report_format
     rules:
       - condition: テスト作成が完了した
         next: implement
@@ -128,8 +173,14 @@ steps:
         interactive_only: true
 
   - name: implement
-    uses: development-core-implement
-    with:
+    kind: workflow_call
+    call:
+      $param: implementation_workflow
+    args:
+      implementation_pool:
+        $param: implementation_pool
+      implementation_companions:
+        $param: implementation_companions
       development_policy:
         $param: development_policy
       development_knowledge:
@@ -137,16 +188,12 @@ steps:
       implementation_instruction:
         $param: implementation_instruction
     rules:
-      - condition: 実装が完了した
+      - condition: COMPLETE
         next: peer-review
-      - condition: 実装未着手（レポートのみ）
-        next: peer-review
-      - condition: 実装を進行できない
+      - condition: need_replan
         next: replan
-      - condition: ユーザー入力が必要
-        next: implement
-        requires_user_input: true
-        interactive_only: true
+      - condition: ABORT
+        next: ABORT
 
   - name: peer-review
     kind: workflow_call
@@ -159,14 +206,28 @@ steps:
         $param: review_policy_additions
       review_knowledge_additions:
         $param: review_knowledge
-      fix_knowledge:
-        $param: review_knowledge
+      fix_companions:
+        $param: implementation_companions
+      remediation_workflow:
+        $param: remediation_workflow
+      fix_pool:
+        $param: implementation_pool
       plan_policy:
         $param: review_policy
       fix_policy:
         $param: development_policy
+      fix_knowledge:
+        $param: development_knowledge
+      verification_knowledge:
+        $param: review_knowledge
       verification_policy:
         $param: review_policy
+      fix_plan_instruction:
+        $param: fix_plan_instruction
+      fix_plan_report_format:
+        $param: fix_plan_report_format
+      final_gate_instruction:
+        $param: final_gate_instruction
     rules:
       - condition: COMPLETE
         next: COMPLETE

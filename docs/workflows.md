@@ -116,7 +116,7 @@ For example, `.takt/steps/final-gate.yaml` can contain:
 
 ```yaml
 kind: workflow_call
-call: merge-readiness-finding-contract-final-gate
+call: merge-readiness-final-gate
 ```
 
 Every concrete workflow step that declares `uses`, including a parallel sub-step, must declare its own non-empty rule specification. A non-parallel fragment caller uses a `rules` array; a parallel fragment caller uses the rule tree described below. A fragment cannot declare `rules` at its root or on any parallel sub-step. This keeps routing owned by the workflow that knows the destination step names; fragment-to-fragment `uses` is exempt until a concrete workflow calls the chain. The loader does not copy, inherit, or synthesize fallback rules.
@@ -399,7 +399,7 @@ are unaffected.
 
 ### Dynamic Facet Selection (facet pools)
 
-A normal agent step can dynamically select additional `policy` and `knowledge` facets from a validated candidate pool right before its main agent runs. This keeps the fixed facets the step already declares and adds only the facets the current situation requires — for example, selecting a transaction-correctness policy only after a review surfaces transaction-boundary concerns.
+A normal agent step, or an agent sub-step under `parallel`, can dynamically select additional `policy` and `knowledge` facets from a validated candidate pool right before its main agent runs. This keeps the fixed facets the step already declares and adds only the facets the current situation requires — for example, selecting a transaction-correctness policy only after a review surfaces transaction-boundary concerns.
 
 Define a pool under the top-level `facet_pools` map, then reference it from a step with `dynamic_facets`. Pools can be defined inline in the workflow or as external resource files.
 
@@ -450,6 +450,45 @@ steps:
       - condition: Fix complete
         next: review
 ```
+
+#### Parallel sub-steps
+
+`dynamic_facets` is also valid on a static `parallel` child and on a dynamic parallel `fixed` or `pool` entry. For a dynamic parallel step, participant selection runs first; the facet selector runs only for the selected children. For a static parallel step, each dynamic child runs its own facet selector independently.
+
+```yaml
+facet_pools:
+  security-review:
+    candidates:
+      - id: web
+        description: Review HTTP and browser security boundaries
+        knowledge: [security-web, security-api]
+      - id: cli
+        description: Review command-line and local process boundaries
+        knowledge: security-local
+
+steps:
+  - name: reviewers
+    parallel:
+      pool:
+        - name: security-review
+          description: Review security for the selected system
+          persona: security-reviewer
+          knowledge: security
+          dynamic_facets:
+            pool: security-review
+            max_selected: 1
+          instruction: review-security
+          rules: [{ condition: approved }]
+      selection:
+        mode: replace
+    rules:
+      - condition: all("approved")
+        next: COMPLETE
+```
+
+The selected knowledge or policy is added to the child's fixed facets. An empty selection keeps the fixed facets unchanged. All applicable facet selectors complete before any parallel child starts. An invalid pool reference, candidate ID, or `max_selected` stops the workflow without starting that child or any sibling under the same parallel parent. Within one uninterrupted run, the parent parallel frame and occurrence keep child selections independent. A process resume starts with empty run-local selection state and invokes the participant and child facet selectors again.
+
+For nested callable workflows, keep pool selection at the owning top-level workflow. When a shared workflow accepts an open `workflow_ref`, do not add a pool argument to every possible target: an undeclared callable argument is rejected. Instead, let the top-level workflow select a narrow adapter that binds the `facet_pool_ref` only when it calls the suite that consumes it. The consuming suite declares the accepted external pools, so unknown references still fail while loading that boundary without widening unrelated callable contracts.
 
 #### External pool
 
@@ -607,7 +646,7 @@ Loading fails before execution when any of these hold:
 - External resource lookup, trust, or file validation fails
 - `dynamic_facets.pool` is unknown
 - A specified `max_selected` is invalid or exceeds the candidate count
-- `dynamic_facets` is declared on a non-agent step
+- `dynamic_facets` is declared on a non-agent step or a parallel parent
 
 Selector execution fails before the main agent starts when:
 
@@ -684,7 +723,7 @@ Open finding items expose `familyTags` to both fixer instructions and `when()` r
 
 If a ledger references a raw finding that is no longer present, its id is exposed in `unknownRawFindingIds` instead of being silently discarded or making the ledger unreadable. Both arrays are deduplicated and sorted; `contains(item.unknownRawFindingIds, "raw-id")` uses the same membership syntax.
 
-Invalid or missing Finding Manager decisions land as provisional findings and the run continues. Add a rule such as `when(findings.provisional.count > 0 && findings.conflicts.count == 0)` routed to your replan step *before* the `COMPLETE` rule (see the builtin `takt-default-high` workflow for the reference wiring). `takt workflow doctor` warns when a `finding_contract` workflow has no rule referencing `findings.provisional`.
+Invalid or missing Finding Manager decisions land as provisional findings and the run continues. Add a rule such as `when(findings.provisional.count > 0 && findings.conflicts.count == 0)` routed to your replan step *before* the `COMPLETE` rule. `takt workflow doctor` warns when a `finding_contract` workflow has no rule referencing `findings.provisional`.
 
 ### Conflict adjudication and grounded re-adjudication
 
@@ -956,7 +995,13 @@ Promotion is not supported on parallel sub-steps.
 | `provider_options.copilot.effort` | - | Provider-specific Copilot reasoning effort string, passed through to the provider |
 | `provider_options.claude.sandbox.allow_unsandboxed_commands` | - | Run Claude Bash outside the macOS Seatbelt sandbox (see [configuration guide](./configuration.md#claude-code-sandbox-control-allow_unsandboxed_commands)) |
 | `provider_options.kiro.agent` | - | Kiro CLI custom agent name passed as `kiro-cli chat --agent`. Steps without it use the Kiro CLI default agent |
-| `provider` | - | Override provider for this step (`claude`, `claude-sdk`, `claude-terminal`, `codex`, `opencode`, `cursor`, `copilot`, `kiro`, or `mock`) |
+| `provider_options.pi.extensions` | - | Pi SDK extension/package sources (`path`, `npm:...`, or `git:...`), resolved temporarily for the call |
+| `provider_options.pi.no_extensions` | - | Disable Pi extension discovery; explicit `extensions` sources still load |
+| `provider_options.pi.no_skills` | - | Disable Pi Skill discovery |
+| `provider_options.pi.no_prompt_templates` | - | Disable Pi prompt-template discovery |
+| `provider_options.pi.no_themes` | - | Disable Pi theme discovery |
+| `provider_options.pi.no_context_files` | - | Disable Pi context-file discovery |
+| `provider` | - | Override provider for this step (`claude`, `claude-sdk`, `claude-terminal`, `codex`, `opencode`, `pi`, `cursor`, `copilot`, `kiro`, or `mock`) |
 | `model` | - | Override model for this step |
 | `promotion` | - | Per-execution provider/model/options escalation (see [Step-level Provider Promotion](#step-level-provider-promotion)) |
 | `mcp_servers` | - | Per-step MCP server configuration (stdio / HTTP / SSE) |
@@ -968,6 +1013,8 @@ Promotion is not supported on parallel sub-steps.
 For normal agent steps, parallel sub-steps, and `loop_monitors.judge`, `model: null` explicitly omits the model. This is different from leaving `model` out: absence continues fallback to applicable lower-priority sources such as routing, workflow, the triggering step for loop monitor judges, and input models, while `null` stops model resolution at that entry. Providers that require an explicit model still fail validation.
 
 The effective tool list may be narrower than configured. When `edit: false`, or when a step has `output_contracts` and does not set `edit: true`, TAKT removes command/edit tools from `provider_options.*.allowed_tools` before calling the provider. For Claude-family providers, comma-separated entries are normalized into atomic tool specs first, `Bash(...)` is judged by the canonical tool name before `(`, and `Bash`, `Edit`, `Write`, `Apply_Patch`, and `Patch` are removed. For OpenCode, lowercase tools such as `bash`, `edit`, and `write` are removed. The same read-only filtering applies to `team_leader.part_allowed_tools` when the part's effective edit setting is false, such as `part_edit: false` or inherited `edit: false`.
+
+The Pi provider maps generic `Read`, `Glob`, `Grep`, `Edit`, `Write`, and `Bash` names to Pi SDK tools. Pi does not support TAKT MCP servers or structured output; step-level MCP settings are dropped, while session-level MCP settings require a provider that supports them. `max_turns` is ignored for Pi calls.
 
 ## Workflow-level Configuration
 
@@ -1387,9 +1434,11 @@ Add `companion` to a normal agent step to run stateless, read-only reviewers whi
       next: final-review
 ```
 
+Workflow transition rules cannot reference `companion.*` state. Companion findings and failures are advisory diagnostics; ordinary semantic conditions and Phase 3 judgment exclusively control the main workflow route.
+
 Definitions are YAML files resolved from `.takt/companions/`, `~/.takt/companions/`, then `builtins/{language}/companions/`. They may contain `name`, `description`, facet references (`persona`, `policy`, `knowledge`, `instruction`), and `interval_ms`; provider and tool settings are not allowed. `interval_ms` must be a positive integer no greater than `2,147,483,647`.
 
-TAKT observes mutating tool events and reviews a cumulative diff after a quiet period or forced interval. At implementer completion it checks for unreviewed changes and reviews only when some remain; running and pending reviews are still stopped or awaited before completion can finish. Findings are appended to `.takt/runs/{run}/companion/{step}/{companion}.jsonl`. Each companion JSONL file is a read-only projection for the implementer and an independent transaction boundary: its cache, finding sequence, and finding events are committed only after that file is appended successfully. When a round updates multiple companions, a later mailbox failure does not roll back an earlier mailbox that was already committed; retry resumes only the unfinished mailbox updates. External changes to the projection are rejected and do not change engine-owned finding state. Before post-execution conditions are evaluated, the engine runs the same-session fix loop for open `must_fix` findings. If the loop judge escalates because fixes cannot continue, the ordinary post-execution condition judgment receives the reason and unresolved findings as evidence. If the completion review itself cannot be verified, or unresolved `must_fix` findings remain without escalation, the step becomes blocked and conditions are skipped. Companion failures are otherwise fail-soft; workflow or step cancellation stops companion work.
+TAKT observes mutating tool events and reviews a cumulative diff after a quiet period or forced interval. At implementer completion it checks for unreviewed changes and reviews only when some remain; running and pending reviews are still stopped or awaited before completion can finish. Findings are appended to `.takt/runs/{run}/companion/{step}/{companion}.jsonl`. Each companion JSONL file is a read-only projection for the implementer and an independent transaction boundary: its cache, finding sequence, and finding events are committed only after that file is appended successfully. When a round updates multiple companions, a later mailbox failure does not roll back an earlier mailbox that was already committed; retry resumes only the unfinished mailbox updates. External changes to the projection are rejected and do not change engine-owned finding state. Before post-execution conditions are evaluated, the engine runs the same-session fix loop for open `must_fix` findings while the loop continues to make progress. Loop escalation stops only this internal fix loop. Unresolved findings, completion-review failures, and internal escalation remain recorded as Companion diagnostics but do not block the main workflow or alter the response passed to post-execution judgment. After Companion handling, only the latest successful main-agent response is passed onward. Companion calls use their bounded retry policy before failing soft; workflow or step cancellation still stops Companion work.
 
 ## Best Practices
 

@@ -4,6 +4,7 @@ export interface SelectorGitOutput {
 }
 
 export interface SelectorGitCommandRunner {
+  isInsideWorkTree?(cwd: string, signal: AbortSignal | undefined): Promise<boolean>;
   run(
     cwd: string,
     args: readonly string[],

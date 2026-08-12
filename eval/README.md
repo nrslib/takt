@@ -47,7 +47,7 @@ results, not one pass/fail summary.
 | `review-family-closure` | peer-review-suite-base / coding-review | review-family-closure | whether one review reports every path affected by the same contract defect instead of stopping at a representative example |
 | `initial-review-contract-discovery` | peer-review / initial coding-review | initial-review-contract-discovery | whether the initial review independently discovers multiple blocking families and completes each family sweep |
 | `initial-plan-contract-closure` | default / plan | initial-review-contract-discovery | whether the initial plan discovers same-responsibility paths even under different names, closes real multi-boundary impact paths, and keeps local changes local |
-| `replan-contract-closure` | takt-default-high / replan | initial-review-contract-discovery | whether replanning preserves the original task while adding required production boundaries and rejecting unrelated reviewer proposals |
+| `replan-contract-closure` | default / replan | initial-review-contract-discovery | whether replanning preserves the original task while adding required production boundaries and rejecting unrelated reviewer proposals |
 | `issue-plan-samples` | default / plan | nrslib/takt repository (read-only) | whether planning preserves explicit breadth, allowed design choices, and explicitly required architecture across Issues #1127, #1155, and #1136 |
 | `plan-report-source-authority` | default / plan report phase | synthetic Phase 1 draft (tool-less) | whether the final `plan.md` keeps the original task authoritative and demotes unsupported design details from requirements |
 | `write-tests-contract-traceability` | default / write_tests | write-tests-contract-traceability | whether generated tests accept the intended local contract, reject plausible mutations, and avoid inventing irrelevant impact paths |
@@ -58,9 +58,11 @@ results, not one pass/fail summary.
 | `implement-contract-traceability` | default / implement | implement-contract-traceability | whether implementation preserves named contract identities from plan and tests |
 | `implementation-report-contract-traceability` | default / implementation report | implement-contract-traceability | whether the report preserves the same contract identities and evidence |
 | `follow-up-review-repair-regression` | peer-review / follow-up coding-review | follow-up-review-repair-regression | whether follow-up review independently falsifies completion claims and distinguishes repair-induced defects from adjacent omissions |
-| `review-adjudication` | peer-review / review-adjudication | review-adjudication | whether directly related implementation-quality defects remain actionable with minimal internal fixes without promoting reviewer-suggested remediation, while unrelated quality improvements, duplicates, overreach, false positives, and environment-only gaps stay non-actionable |
+| `follow-up-testing-review-repair-regression` | peer-review / follow-up testing-review | follow-up-review-repair-regression | whether test findings stay limited to missing regression detection in an authorized family and reject adjacent or structure-freezing test expansion |
+| `review-adjudication` | peer-review / review-adjudication | review-adjudication | whether adjudication separates technical validity from remediation authority, keeps accepted-family closure and diff-induced regressions actionable, and excludes even severe horizontal improvements from the fix plan |
 | `task-instruction-gherkin` | interactive task summarization | direct English and Japanese conversations | whether implementation details and abstraction intent remain in Markdown while focused Gherkin captures only externally observable behavior |
-| `final-readiness-supervision` | peer-review / final-gate | final-readiness-supervision | whether the final supervisor catches a merge-blocking unmet requirement without reopening an adjudicated non-actionable finding |
+| `final-readiness-supervision` | review-fix-default / merge-readiness-review + supervise Phase 1 | final-readiness-supervision | whether both public final-gate producers independently authorize a newly discovered required consumer, explain its initial-round omission, and avoid horizontal exploration |
+| `final-readiness-preservation` | review-fix-default / merge-readiness-review + supervise Phase 2 | final-readiness-supervision | whether both public final-gate reports preserve the new finding and keep adjudicated noise non-actionable |
 | `final-readiness-precision` | peer-review / final-gate | final-readiness-precision | whether the final supervisor accepts a complete change without reopening an adjudicated documentation improvement |
 
 Reviewer suites run read-only against `eval/fixtures/*`. Coder suites run
@@ -191,9 +193,11 @@ npm run eval:prompts:write-tests-contract-traceability
 npm run eval:prompts:scope-discipline
 npm run eval:prompts:implement-contract-traceability
 npm run eval:prompts:follow-up-review-repair-regression
+npm run eval:prompts:follow-up-testing-review-repair-regression
 npm run eval:prompts:review-adjudication
 npm run eval:prompts:task-instruction-gherkin
 npm run eval:prompts:final-readiness-supervision
+npm run eval:prompts -- final-readiness-preservation
 npm run eval:prompts:final-readiness-precision
 npm run eval:finding-normalizer -- --models luna --batch-size 1 --repeat 3
 npm run eval:finding-normalizer -- --models sol,opus --reports 1,2,3

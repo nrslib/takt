@@ -30,7 +30,8 @@
             version = packageJson.version;
             src = ./.;
 
-            npmDepsHash = "sha256-YBg4J86B/1ikmEbLTFRQ0tuc8QGnF2CFAIwwED0vJ7Q=";
+            npmDepsHash = "sha256-uAF4AV9mLPgdOogWN6lfzN1N4PQt2xU7uUQA6nJ6GI4=";
+            npmDepsFetcherVersion = 2;
             nodejs = nodejs;
             ONNXRUNTIME_NODE_INSTALL = "skip";
             PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";

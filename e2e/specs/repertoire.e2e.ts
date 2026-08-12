@@ -40,66 +40,6 @@ function createFakePackage(opts: FakePackageOptions): string {
 }
 
 // ---------------------------------------------------------------------------
-// E2E: takt repertoire add — 正常系
-// ---------------------------------------------------------------------------
-
-describe('E2E: takt repertoire add (正常系)', () => {
-  it.todo('should install standard package and verify directory structure');
-
-  it.todo('should generate .takt-repertoire-lock.yaml with source, ref, commit, imported_at');
-
-  it.todo('should install subdir-type package and copy only path-specified files');
-
-  it.todo('should install facets-only package without creating workflows/ directory');
-
-  it.todo('should populate lock file commit field with the specified commit SHA when installing by SHA');
-
-  it.todo('should display pre-install summary with package name, faceted count, and workflows list');
-
-  it.todo('should display warning symbol when package contains workflow with edit: true');
-
-  it.todo('should abort installation when user answers N to confirmation prompt');
-});
-
-// ---------------------------------------------------------------------------
-// E2E: takt repertoire add — 上書きシナリオ
-// ---------------------------------------------------------------------------
-
-describe('E2E: takt repertoire add (上書きシナリオ)', () => {
-  it.todo('should display already-installed warning on second add');
-
-  it.todo('should atomically update package when user answers y to overwrite prompt');
-
-  it.todo('should keep existing package when user answers N to overwrite prompt');
-
-  it.todo('should clean up leftover .tmp/ directory from previous failed installation');
-
-  it.todo('should clean up leftover .bak/ directory from previous failed installation');
-});
-
-// ---------------------------------------------------------------------------
-// E2E: takt repertoire add — バリデーション・エラー系
-// ---------------------------------------------------------------------------
-
-describe('E2E: takt repertoire add (バリデーション・エラー系)', () => {
-  it.todo('should fail with error when repository has no takt-repertoire.yaml');
-
-  it.todo('should reject takt-repertoire.yaml with absolute path in path field (/foo)');
-
-  it.todo('should reject takt-repertoire.yaml with path traversal via ".." segments');
-
-  it.todo('should reject package with no supported content directory');
-
-  it.todo('should reject takt-repertoire.yaml with min_version "1.0" (missing patch segment)');
-
-  it.todo('should reject takt-repertoire.yaml with min_version "v1.0.0" (v prefix)');
-
-  it.todo('should reject takt-repertoire.yaml with min_version "1.0.0-alpha" (pre-release suffix)');
-
-  it.todo('should fail with version mismatch message when min_version exceeds current takt version');
-});
-
-// ---------------------------------------------------------------------------
 // E2E: takt repertoire remove (mock)
 // ---------------------------------------------------------------------------
 

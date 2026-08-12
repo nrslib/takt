@@ -35,7 +35,7 @@ async function evaluateCompletion(
   detector: CompanionChangeDetector,
   snapshot?: CompanionDiff,
 ) {
-  return detector.evaluateCandidate(detector.getCompletionCandidate(), snapshot);
+  return detector.evaluateCandidate(detector.getCompletionCandidate(false), snapshot);
 }
 
 describe('CT-COMP-05 event-driven companion change detection', () => {
@@ -232,6 +232,48 @@ describe('CT-COMP-05 event-driven companion change detection', () => {
     now = 1_300;
 
     expect(await evaluateLive(detector)).toBeUndefined();
+  });
+
+  it('should allow an explicitly authorized unchanged-digest completion review without changing normal dedupe', async () => {
+    const detector = new CompanionChangeDetector({
+      intervalMs: 100,
+      minimumChangedLines: 10,
+      now: () => 1_000,
+      readDiff: vi.fn(),
+    });
+    detector.markReviewed(diff('same-diff', 10), 0);
+
+    expect(await evaluateCompletion(detector, diff('same-diff', 1))).toBeUndefined();
+    expect(await detector.evaluateCandidate(
+      detector.getCompletionCandidate(true),
+      diff('same-diff', 1),
+    )).toMatchObject({
+      reason: 'completion',
+      snapshot: { digest: 'same-diff' },
+    });
+    expect(await evaluateCompletion(detector, diff('same-diff', 1))).toBeUndefined();
+  });
+
+  it('should keep completion authorization explicit after a live review consumes its generation', async () => {
+    let now = 1_000;
+    const detector = new CompanionChangeDetector({
+      intervalMs: 100,
+      minimumChangedLines: 1,
+      now: () => now,
+      readDiff: vi.fn().mockResolvedValue(diff('live-diff', 1)),
+    });
+    detector.markReviewed(diff('initial-diff', 1), 0);
+    detector.observe(tool('Edit'));
+    now = 1_100;
+    const live = await evaluateLive(detector, diff('live-diff', 1));
+    expect(live).toBeDefined();
+    detector.markReviewed(diff('live-diff', 1), live!.observedGeneration);
+
+    expect(await evaluateCompletion(detector, diff('live-diff', 1))).toBeUndefined();
+    expect(await detector.evaluateCandidate(
+      detector.getCompletionCandidate(true),
+      diff('live-diff', 1),
+    )).toBeDefined();
   });
 
   it('should retain an edit observed after the reviewed snapshot generation', async () => {

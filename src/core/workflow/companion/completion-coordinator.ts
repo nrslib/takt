@@ -1,7 +1,6 @@
 import type { CompanionFindingEvidence, WorkflowState } from '../../models/types.js';
 import type { CompanionChangeDetector } from './change-detector.js';
 import type { CompanionDiff } from './diff-reader.js';
-import { isAbortError } from './abort.js';
 import type { CompanionEventPublisher } from './event-publisher.js';
 import type { CompanionReviewQueue } from './review-queue.js';
 import type { CompanionTerminalDecisionTracker } from './terminal-decision.js';
@@ -28,21 +27,26 @@ export class CompanionCompletionCoordinator {
     readonly onError: () => void;
   }) {}
 
-  async complete(state: WorkflowState): Promise<CompanionCompletionResult> {
+  async complete(
+    state: WorkflowState,
+    input: { readonly allowUnchangedDigest: (companionName: string) => boolean },
+  ): Promise<CompanionCompletionResult> {
     this.input.abortSignal?.throwIfAborted();
     const candidates = new Map([...this.input.detectors].map(([name, detector]) => [
       name,
-      detector.getCompletionCandidate(),
+      detector.getCompletionCandidate(input.allowUnchangedDigest(name)),
     ]));
     let reviewedSnapshot: CompanionDiff | undefined;
     let completionVerified = false;
+    let completionFailure = false;
     try {
       const snapshot = await this.input.readSnapshot();
       await this.completeQueues(snapshot, candidates);
       this.input.synchronizeSnapshot(snapshot);
       reviewedSnapshot = snapshot;
     } catch (error) {
-      if (isAbortError(error) || this.input.abortSignal?.aborted) throw error;
+      if (this.input.abortSignal?.aborted) throw error;
+      completionFailure = true;
       this.preserveCompletionFailure();
       await this.settleQueuesAfterFailure();
     }
@@ -53,7 +57,8 @@ export class CompanionCompletionCoordinator {
         await this.input.recordCompletionRound(reviewedSnapshot);
         completionVerified = true;
       } catch (error) {
-        if (isAbortError(error) || this.input.abortSignal?.aborted) throw error;
+        if (this.input.abortSignal?.aborted) throw error;
+        completionFailure = true;
         this.preserveCompletionFailure();
       }
     }
@@ -61,6 +66,7 @@ export class CompanionCompletionCoordinator {
     state.companion = {
       escalated: decision.decision === 'escalate',
       completionVerified,
+      ...(completionFailure ? { completionFailure: true } : {}),
       openMustFixCount: openMustFix.length,
       openMustFix,
       ...(decision.reason === undefined ? {} : { reason: decision.reason }),
@@ -112,7 +118,7 @@ export class CompanionCompletionCoordinator {
     try {
       await this.settleQueues();
     } catch (error) {
-      if (isAbortError(error) || this.input.abortSignal?.aborted) throw error;
+      if (this.input.abortSignal?.aborted) throw error;
       this.preserveCompletionFailure();
     }
   }

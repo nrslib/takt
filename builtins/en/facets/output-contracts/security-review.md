@@ -19,9 +19,11 @@
 | {problem family or contract reviewed} | {condition to preserve} | {locations checked} | {locations checked} | {paths checked} | {test assets checked} | {none or reason unchecked} | {no issue / finding number} |
 
 ## Current Iteration Findings (new)
-| # | finding_id | family_tag | Severity | Type | Location | Issue | Fix Suggestion |
-|---|------------|------------|----------|------|----------|-------|----------------|
-| 1 | SEC-NEW-src-db-L42 | injection-risk | High | SQLi | `src/db.ts:42` | Raw query string | Use parameterized queries |
+| # | finding_id | family_tag | Severity | Type | Location | Issue | Authorization Basis | Reason Absent from Initial Round | Fix Suggestion |
+|---|------------|------------|----------|------|----------|-------|---------------------|----------------------------------|----------------|
+| 1 | SEC-NEW-src-db-L42 | injection-risk | High | SQLi | `src/db.ts:42` | Raw query string | direct_acceptance_criterion_violation | The initial review evidence covered only the other query entry point | Use parameterized queries |
+
+For a follow-up finding, `Authorization Basis` must be exactly `accepted_family_unvisited_consumer`, `remediation_regression`, `direct_acceptance_criterion_violation`, or `required_consumer_migration`; initial review uses `not applicable`. `Reason Absent from Initial Round` is a separate factual explanation for a follow-up finding and is `not applicable` for initial review.
 
 ## Carry-over Findings (persists)
 | # | finding_id | family_tag | Previous Evidence | Current Evidence | Issue | Fix Suggestion |

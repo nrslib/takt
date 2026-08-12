@@ -325,6 +325,7 @@ describe('runGeneratedWorkflow integration', () => {
       'kiro',
       'mock',
       'opencode',
+      'pi',
     ]);
     expect(overrides.codex?.defaultPermissionMode).toBe('edit');
     expect(overrides.codex?.stepPermissionOverrides).toEqual(expect.objectContaining({

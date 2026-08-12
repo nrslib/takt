@@ -1,0 +1,11 @@
+knowledge:
+  security-web: ../facets/knowledge/security-web.md
+  security-api: ../facets/knowledge/security-api.md
+  security-local: ../facets/knowledge/security-local.md
+candidates:
+  - id: web
+    description: ブラウザとHTTP APIの境界、認証・認可、オリジン、入出力を扱う変更に限ってレビューする。
+    knowledge: [security-web, security-api]
+  - id: cli
+    description: CLI入力がサブプロセス、パス、ローカルファイル、設定へ到達する変更に限ってレビューする。
+    knowledge: security-local

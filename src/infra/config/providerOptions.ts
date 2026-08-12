@@ -4,6 +4,7 @@ import type {
   CodexReasoningEffort,
   CopilotEffort,
   OpenCodeGuardProfile,
+  PiProviderOptions,
   WorkflowStep,
   StepProviderOptions,
 } from '../../core/models/workflow-types.js';
@@ -64,6 +65,14 @@ type RawProviderOptions = {
   };
   kiro?: {
     agent?: string;
+  };
+  pi?: {
+    extensions?: string[];
+    no_extensions?: boolean;
+    no_skills?: boolean;
+    no_prompt_templates?: boolean;
+    no_themes?: boolean;
+    no_context_files?: boolean;
   };
 };
 
@@ -297,6 +306,21 @@ export function normalizeProviderOptions(
   if (options.kiro?.agent !== undefined) {
     result.kiro = { agent: options.kiro.agent };
   }
+  if (options.pi !== undefined) {
+    const pi: PiProviderOptions = {
+      ...(options.pi.extensions !== undefined ? { extensions: [...options.pi.extensions] } : {}),
+      ...(options.pi.no_extensions !== undefined ? { noExtensions: options.pi.no_extensions } : {}),
+      ...(options.pi.no_skills !== undefined ? { noSkills: options.pi.no_skills } : {}),
+      ...(options.pi.no_prompt_templates !== undefined
+        ? { noPromptTemplates: options.pi.no_prompt_templates }
+        : {}),
+      ...(options.pi.no_themes !== undefined ? { noThemes: options.pi.no_themes } : {}),
+      ...(options.pi.no_context_files !== undefined ? { noContextFiles: options.pi.no_context_files } : {}),
+    };
+    if (Object.keys(pi).length > 0) {
+      result.pi = pi;
+    }
+  }
   if (
     options.claude_terminal?.backend !== undefined
     || options.claude_terminal?.timeout_ms !== undefined
@@ -424,6 +448,19 @@ export function mergeProviderOptions(
         ...(layer.kiro.agent !== undefined
           ? { agent: layer.kiro.agent }
           : {}),
+      };
+    }
+    if (layer.pi) {
+      result.pi = {
+        ...result.pi,
+        ...(layer.pi.extensions !== undefined ? { extensions: [...layer.pi.extensions] } : {}),
+        ...(layer.pi.noExtensions !== undefined ? { noExtensions: layer.pi.noExtensions } : {}),
+        ...(layer.pi.noSkills !== undefined ? { noSkills: layer.pi.noSkills } : {}),
+        ...(layer.pi.noPromptTemplates !== undefined
+          ? { noPromptTemplates: layer.pi.noPromptTemplates }
+          : {}),
+        ...(layer.pi.noThemes !== undefined ? { noThemes: layer.pi.noThemes } : {}),
+        ...(layer.pi.noContextFiles !== undefined ? { noContextFiles: layer.pi.noContextFiles } : {}),
       };
     }
     if (layer.claudeTerminal) {
@@ -732,6 +769,42 @@ export function resolveEffectiveProviderOptions(
     stepOptions?.kiro?.agent,
     resolveProviderOptionOrigin(originResolver, 'kiro.agent', source),
   );
+  const piExtensions = selectProviderValue(
+    resolvedConfigOptions.pi?.extensions,
+    personaOptions?.pi?.extensions,
+    stepOptions?.pi?.extensions,
+    resolveProviderOptionOrigin(originResolver, 'pi.extensions', source),
+  );
+  const piNoExtensions = selectProviderValue(
+    resolvedConfigOptions.pi?.noExtensions,
+    personaOptions?.pi?.noExtensions,
+    stepOptions?.pi?.noExtensions,
+    resolveProviderOptionOrigin(originResolver, 'pi.noExtensions', source),
+  );
+  const piNoSkills = selectProviderValue(
+    resolvedConfigOptions.pi?.noSkills,
+    personaOptions?.pi?.noSkills,
+    stepOptions?.pi?.noSkills,
+    resolveProviderOptionOrigin(originResolver, 'pi.noSkills', source),
+  );
+  const piNoPromptTemplates = selectProviderValue(
+    resolvedConfigOptions.pi?.noPromptTemplates,
+    personaOptions?.pi?.noPromptTemplates,
+    stepOptions?.pi?.noPromptTemplates,
+    resolveProviderOptionOrigin(originResolver, 'pi.noPromptTemplates', source),
+  );
+  const piNoThemes = selectProviderValue(
+    resolvedConfigOptions.pi?.noThemes,
+    personaOptions?.pi?.noThemes,
+    stepOptions?.pi?.noThemes,
+    resolveProviderOptionOrigin(originResolver, 'pi.noThemes', source),
+  );
+  const piNoContextFiles = selectProviderValue(
+    resolvedConfigOptions.pi?.noContextFiles,
+    personaOptions?.pi?.noContextFiles,
+    stepOptions?.pi?.noContextFiles,
+    resolveProviderOptionOrigin(originResolver, 'pi.noContextFiles', source),
+  );
   const claudeTerminalBackend = selectProviderValue(
     resolvedConfigOptions.claudeTerminal?.backend,
     personaOptions?.claudeTerminal?.backend,
@@ -840,6 +913,23 @@ export function resolveEffectiveProviderOptions(
       : {}),
     ...(copilotEffort !== undefined ? { copilot: { effort: copilotEffort } } : {}),
     ...(kiroAgent !== undefined ? { kiro: { agent: kiroAgent } } : {}),
+    ...(piExtensions !== undefined
+      || piNoExtensions !== undefined
+      || piNoSkills !== undefined
+      || piNoPromptTemplates !== undefined
+      || piNoThemes !== undefined
+      || piNoContextFiles !== undefined
+      ? {
+          pi: {
+            ...(piExtensions !== undefined ? { extensions: [...piExtensions] } : {}),
+            ...(piNoExtensions !== undefined ? { noExtensions: piNoExtensions } : {}),
+            ...(piNoSkills !== undefined ? { noSkills: piNoSkills } : {}),
+            ...(piNoPromptTemplates !== undefined ? { noPromptTemplates: piNoPromptTemplates } : {}),
+            ...(piNoThemes !== undefined ? { noThemes: piNoThemes } : {}),
+            ...(piNoContextFiles !== undefined ? { noContextFiles: piNoContextFiles } : {}),
+          },
+        }
+      : {}),
     ...(claudeTerminalBackend !== undefined
       || claudeTerminalTimeoutMs !== undefined
       || claudeTerminalKeepSession !== undefined
@@ -899,6 +989,26 @@ function stripClaudeAllowedTools(
       : {}),
     ...(providerOptions.kiro !== undefined
       ? { kiro: { ...providerOptions.kiro } }
+      : {}),
+    ...(providerOptions.pi !== undefined
+      ? {
+          pi: {
+            ...(providerOptions.pi.extensions !== undefined
+              ? { extensions: [...providerOptions.pi.extensions] }
+              : {}),
+            ...(providerOptions.pi.noExtensions !== undefined
+              ? { noExtensions: providerOptions.pi.noExtensions }
+              : {}),
+            ...(providerOptions.pi.noSkills !== undefined ? { noSkills: providerOptions.pi.noSkills } : {}),
+            ...(providerOptions.pi.noPromptTemplates !== undefined
+              ? { noPromptTemplates: providerOptions.pi.noPromptTemplates }
+              : {}),
+            ...(providerOptions.pi.noThemes !== undefined ? { noThemes: providerOptions.pi.noThemes } : {}),
+            ...(providerOptions.pi.noContextFiles !== undefined
+              ? { noContextFiles: providerOptions.pi.noContextFiles }
+              : {}),
+          },
+        }
       : {}),
     ...(providerOptions.claudeTerminal !== undefined
       ? { claudeTerminal: { ...providerOptions.claudeTerminal } }
@@ -962,6 +1072,12 @@ export const PROVIDER_OPTION_PATHS = [
   'opencode.guards.reasoningByteLimit',
   'copilot.effort',
   'kiro.agent',
+  'pi.extensions',
+  'pi.noExtensions',
+  'pi.noSkills',
+  'pi.noPromptTemplates',
+  'pi.noThemes',
+  'pi.noContextFiles',
   'claudeTerminal.backend',
   'claudeTerminal.timeoutMs',
   'claudeTerminal.keepSession',

@@ -5,16 +5,19 @@
  *
  * Usage: node eval/scripts/run-evals.mjs [suite...] [--promptfoo-flags...]
  * Suites: coding, arch, antipattern, frontend, cqrs, rescan, rescan-coding,
- *         rescan-semantics, rescan-precision, loop-monitor-fc, frontend-coder,
+ *         frontend-coder,
  *         cqrs-coder, fix-closure, fix-plan-fresh-findings,
  *         fix-plan-boundary-preflight, review-family-closure,
  *         initial-review-contract-discovery, follow-up-review-repair-regression,
+ *         follow-up-testing-review-repair-regression,
  *         initial-plan-contract-closure, replan-contract-closure,
  *         issue-plan-samples, plan-report-source-authority,
  *         write-tests-contract-traceability,
  *         implement-contract-traceability,
  *         implementation-report-contract-traceability,
- *         review-adjudication, task-instruction-gherkin
+ *         review-adjudication, final-readiness-supervision,
+ *         final-readiness-preservation,
+ *         task-instruction-gherkin
  *         (default: all except rescan suites,
  *         which need opencode auth)
  * Example: npm run eval:prompts -- arch --repeat 3
@@ -31,9 +34,6 @@ const SUITES = {
   cqrs: 'promptfooconfig.cqrs.yaml',
   rescan: 'promptfooconfig.rescan.yaml',
   'rescan-coding': 'promptfooconfig.rescan-coding.yaml',
-  'rescan-semantics': 'promptfooconfig.rescan-semantics.yaml',
-  'rescan-precision': 'promptfooconfig.rescan-precision.yaml',
-  'loop-monitor-fc': 'promptfooconfig.loop-monitor-fc.yaml',
   'frontend-coder': 'promptfooconfig.frontend-coder.yaml',
   'cqrs-coder': 'promptfooconfig.cqrs-coder.yaml',
   'fix-closure': 'promptfooconfig.fix-closure.yaml',
@@ -56,7 +56,10 @@ const SUITES = {
   'implement-contract-traceability': 'promptfooconfig.implement-contract-traceability.yaml',
   'implementation-report-contract-traceability': 'promptfooconfig.implementation-report-contract-traceability.yaml',
   'follow-up-review-repair-regression': 'promptfooconfig.follow-up-review-repair-regression.yaml',
+  'follow-up-testing-review-repair-regression': 'promptfooconfig.follow-up-testing-review-repair-regression.yaml',
   'review-adjudication': 'promptfooconfig.review-adjudication.yaml',
+  'final-readiness-supervision': 'promptfooconfig.final-readiness-supervision.yaml',
+  'final-readiness-preservation': 'promptfooconfig.final-readiness-preservation.yaml',
   'task-instruction-gherkin': 'promptfooconfig.task-instruction-gherkin.yaml',
 };
 
@@ -77,7 +80,7 @@ for (const name of names) {
 // 弱いモデルの行は常に部分失敗するため、デフォルトのゲート実行からは除外する。
 // fix-self-scan は claude ヘッドレス CLI（要 claude ログイン）で走るため、
 // codex 前提のデフォルト実行からは除外し、明示的に呼び出す。
-const DEFAULT_EXCLUDED = new Set(['rescan', 'rescan-coding', 'rescan-semantics', 'rescan-precision', 'fix-self-scan']);
+const DEFAULT_EXCLUDED = new Set(['rescan', 'rescan-coding', 'fix-self-scan']);
 const selected = names.length > 0 ? names : Object.keys(SUITES).filter((s) => !DEFAULT_EXCLUDED.has(s));
 
 const summary = [];

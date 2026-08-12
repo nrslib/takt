@@ -24,9 +24,11 @@ Fill this when the diff adds or changes IDs, names, metadata, config, environmen
 | {problem family or contract reviewed} | {condition to preserve} | {locations checked} | {locations checked} | {paths checked} | {test assets checked} | {none or reason unchecked} | {no issue / finding number} |
 
 ## Current Iteration Findings (new)
-| # | finding_id | family_tag | Severity | Location | Issue | Impact | Fix Suggestion |
-|---|------------|------------|----------|----------|-------|--------|----------------|
-| 1 | CODE-NEW-src-file-L42 | bug | High / Medium / Low | `src/file.ts:42` | {Issue} | {Impact} | {Fix suggestion} |
+| # | finding_id | family_tag | Severity | Location | Issue | Impact | Authorization Basis | Reason Absent from Initial Round | Fix Suggestion |
+|---|------------|------------|----------|----------|-------|--------|---------------------|----------------------------------|----------------|
+| 1 | CODE-NEW-src-file-L42 | bug | High / Medium / Low | `src/file.ts:42` | {Issue} | {Impact} | {accepted_family_unvisited_consumer / remediation_regression / direct_acceptance_criterion_violation / required_consumer_migration for follow-up; not applicable for initial review; reject every other value} | {Independent evidence explaining why the initial review omitted this follow-up finding; not applicable for initial review} | {Fix suggestion} |
+
+For a follow-up finding, `Authorization Basis` must be exactly one of the four listed values; reject every other value. `Reason Absent from Initial Round` is an independent factual explanation, never another authorization value.
 
 ## Carry-over Findings (persists)
 | # | finding_id | family_tag | Previous Evidence | Current Evidence | Issue | Fix Suggestion |

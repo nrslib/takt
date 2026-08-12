@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-TAKT (TAKT Agent Koordination Topology) is a multi-agent orchestration CLI. It runs AI agents (Claude, Codex, OpenCode, Cursor, Copilot) through YAML-defined workflows: a state machine of steps with rule-based routing, parallel review sub-steps, dynamic task decomposition, worktree-isolated execution, and an optional Finding Contract subsystem that tracks review findings in a per-run SQLite ledger. TAKT is dogfooded — this repository uses TAKT itself for review and development.
+TAKT (TAKT Agent Koordination Topology) is a multi-agent orchestration CLI. It runs AI agents (Claude, Codex, OpenCode, Pi, Cursor, Copilot) through YAML-defined workflows: a state machine of steps with rule-based routing, parallel review sub-steps, dynamic task decomposition, worktree-isolated execution, and an optional Finding Contract subsystem that tracks review findings in a per-run SQLite ledger. TAKT is dogfooded — this repository uses TAKT itself for review and development.
 
 ## Development Commands
 
@@ -76,7 +76,7 @@ Each normal step runs up to three phases on the same provider session: Phase 1 m
 
 ### Provider integration
 
-`src/infra/providers/` exposes a unified `Provider` interface. Registered: `claude-sdk`, `claude` (headless CLI), `codex`, `opencode` (shared server pool), `cursor`, `copilot`, `mock`. **Provider errors must surface through `AgentResponse.error`** — otherwise SDK failures appear as empty `blocked` output and are nearly impossible to debug. Use `--provider mock` to exercise the engine without a real API.
+`src/infra/providers/` exposes a unified `Provider` interface. Registered: `claude-sdk`, `claude` (headless CLI), `codex`, `opencode` (shared server pool), `pi` (Pi SDK), `cursor`, `copilot`, `kiro`, `mock`. **Provider errors must surface through `AgentResponse.error`** — otherwise SDK failures appear as empty `blocked` output and are nearly impossible to debug. Use `--provider mock` to exercise the engine without a real API.
 
 ### Provider/model resolution priority
 
@@ -121,7 +121,7 @@ Optional per-run SQLite ledger (`finding-contract.sqlite`) that makes review fin
 - Manager/adjudicator prompt wire formats (structured output schemas, allowed actions, evidence requirements) are **engine-owned**; facets add judgment guidance only.
 - Reviewer relation clarification (`clarifyAmbiguousRawRelationsOnce`) only ever ran on the structured-reviewer path and is unreachable under the one-path model; its `relationClarification` plumbing and the ledger's `clarificationAttempted` field are still present and need their own removal decision.
 
-Workflows: `takt-default` (non-FC, prompt-adjudication step) and `takt-default-fc` (FC; no adjudication step — manager + terminal adjudication replace it). The FC fix/plan/monitor instructions treat the engine-injected live ledger state as the single source of truth; report files are not authoritative there.
+Workflows: `takt-default`, `takt-experimental`, and `review-fix-takt-default` use the shared development core. Finding Contract fix/plan/monitor instructions treat the engine-injected live ledger state as the single source of truth, and report files are not authoritative there.
 
 ### Config & workflow loading
 

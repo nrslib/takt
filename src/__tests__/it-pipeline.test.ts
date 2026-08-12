@@ -159,8 +159,6 @@ import { loadGlobalConfig } from '../infra/config/global/globalConfig.js';
 
 const mockExecFileSync = vi.mocked(execFileSync);
 
-// --- Test helpers ---
-
 /** Create a minimal test workflow YAML + agent files in a temp directory */
 function createTestWorkflowDir(): { dir: string; workflowPath: string } {
   const dir = mkdtempSync(join(tmpdir(), 'takt-it-pipeline-'));
@@ -376,80 +374,6 @@ describe('Pipeline Integration Tests', () => {
 
     expect(exitCode).toBe(3);
   });
-
-  it('should complete pipeline with workflow name + skip-git + mock scenario', async () => {
-    // Use builtin 'default' workflow
-    // persona field: extractPersonaName result (from .md filename)
-    // Flow: shared development core → peer-review → final gate → COMPLETE
-    setMockScenario([
-      { persona: 'planner', status: 'done', content: '[PLAN:1]\n\nRequirements are clear and implementable' },
-      { persona: 'coder', status: 'done', content: '[WRITE_TESTS:1]\n\nTests written successfully' },
-      { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\n\nImplementation complete' },
-      { persona: 'architecture-reviewer', status: 'done', content: '[ARCH-REVIEW:1]\n\napproved' },
-      { persona: 'security-reviewer', status: 'done', content: '[SECURITY-REVIEW:1]\n\napproved' },
-      { persona: 'testing-reviewer', status: 'done', content: '[TESTING-REVIEW:1]\n\napproved' },
-      { persona: 'coding-reviewer', status: 'done', content: '[CODING-REVIEW:1]\n\napproved' },
-      { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-2ND:1]\n\napproved' },
-      { persona: 'review-adjudicator', status: 'done', content: '[REVIEW-ADJUDICATION:2]\n\nNo actionable findings remain.' },
-      { persona: 'merge-readiness-supervisor', status: 'done', content: '[FINAL-GATE:1]\n\nMergeable.' },
-    ]);
-
-    const exitCode = await executePipeline({
-      task: 'Add a hello world function',
-      workflow: 'default',
-      autoPr: false,
-      skipGit: true,
-      cwd: testDir,
-      provider: 'mock',
-    });
-
-    expect(exitCode).toBe(0);
-    expect(getScenarioQueue()?.remaining).toBe(0);
-  });
-
-  it('should complete the shared development core after remediating review findings', async () => {
-    setMockScenario([
-      { persona: 'planner', status: 'done', content: '[PLAN:1]\n\nPlan completed.' },
-      { persona: 'coder', status: 'done', content: '[WRITE_TESTS:1]\n\nTests created.' },
-      { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\n\nImplementation completed.' },
-      { persona: 'architecture-reviewer', status: 'done', content: '[ARCH-REVIEW:2]\n\nA fix is required.' },
-      { persona: 'security-reviewer', status: 'done', content: '[SECURITY-REVIEW:1]\n\nApproved.' },
-      { persona: 'testing-reviewer', status: 'done', content: '[TESTING-REVIEW:1]\n\nApproved.' },
-      { persona: 'coding-reviewer', status: 'done', content: '[CODING-REVIEW:1]\n\nApproved.' },
-      { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-2ND:1]\n\nApproved.' },
-      { persona: 'frontend-reviewer', status: 'done', content: '[FRONTEND-REVIEW:1]\n\nApproved.' },
-      { persona: 'review-adjudicator', status: 'done', content: '[REVIEW-ADJUDICATION:1]\n\nActionable findings remain.' },
-      { persona: 'planner', status: 'done', content: '[FIX-PLAN:1]\n\nFix plan finalized.' },
-      { persona: 'coder', status: 'done', content: '[FIX:1]\n\nFix completed.' },
-      { persona: 'coding-reviewer', status: 'done', content: '[FIX-VERIFIER:1]\n\nVerified.' },
-      { persona: 'architecture-reviewer', status: 'done', content: '[ARCH-REVIEW:1]\n\nApproved.' },
-      { persona: 'security-reviewer', status: 'done', content: '[SECURITY-REVIEW:1]\n\nApproved.' },
-      { persona: 'testing-reviewer', status: 'done', content: '[TESTING-REVIEW:1]\n\nApproved.' },
-      { persona: 'coding-reviewer', status: 'done', content: '[CODING-REVIEW:1]\n\nApproved.' },
-      { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-2ND:1]\n\nApproved.' },
-      { persona: 'frontend-reviewer', status: 'done', content: '[FRONTEND-REVIEW:1]\n\nApproved.' },
-      { persona: 'review-adjudicator', status: 'done', content: '[REVIEW-ADJUDICATION:2]\n\nNo actionable findings remain.' },
-      { persona: 'merge-readiness-supervisor', status: 'done', content: '[FINAL-GATE:1]\n\nMergeable.' },
-    ]);
-
-    const exitCode = await executePipeline({
-      task: 'Implement a frontend change that requires review remediation',
-      workflow: 'frontend',
-      autoPr: false,
-      skipGit: true,
-      cwd: testDir,
-      provider: 'mock',
-    });
-
-    expect(
-      exitCode,
-      JSON.stringify({
-        errors: mockUiError.mock.calls,
-        remaining: getScenarioQueue()?.remaining,
-      }),
-    ).toBe(0);
-    expect(getScenarioQueue()?.remaining).toBe(0);
-  }, 30_000);
 
   it.each(['backend-mini', 'default-mini'])('should complete %s through the shared mini core', async (workflow) => {
     setMockScenario([

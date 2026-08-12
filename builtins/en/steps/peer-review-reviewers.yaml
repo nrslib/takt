@@ -5,6 +5,21 @@ params:
   review_knowledge_additions:
     type: facet_ref[]
     facet_kind: knowledge
+  architecture_review_instruction:
+    type: facet_ref
+    facet_kind: instruction
+  security_review_instruction:
+    type: facet_ref
+    facet_kind: instruction
+  testing_review_instruction:
+    type: facet_ref
+    facet_kind: instruction
+  coding_review_instruction:
+    type: facet_ref
+    facet_kind: instruction
+  ai_antipattern_review_instruction:
+    type: facet_ref
+    facet_kind: instruction
 name: reviewers
 tags:
   - review
@@ -22,7 +37,8 @@ parallel:
     knowledge:
       - architecture
       - $param: review_knowledge_additions
-    instruction: review-arch
+    instruction:
+      $param: architecture_review_instruction
     output_contracts:
       report:
         - name: architect-review.md
@@ -46,7 +62,8 @@ parallel:
       - security-dependencies
       - takt
       - $param: review_knowledge_additions
-    instruction: review-security
+    instruction:
+      $param: security_review_instruction
     output_contracts:
       report:
         - name: security-review.md
@@ -67,7 +84,8 @@ parallel:
       - e2e-testing
       - takt
       - $param: review_knowledge_additions
-    instruction: review-test
+    instruction:
+      $param: testing_review_instruction
     output_contracts:
       report:
         - name: testing-review.md
@@ -87,7 +105,8 @@ parallel:
       - takt
       - $param: review_knowledge_additions
     pass_previous_response: false
-    instruction: review-coding
+    instruction:
+      $param: coding_review_instruction
     output_contracts:
       report:
         - name: coding-review.md
@@ -106,7 +125,8 @@ parallel:
     knowledge:
       - takt
       - $param: review_knowledge_additions
-    instruction: ai-antipattern-review
+    instruction:
+      $param: ai_antipattern_review_instruction
     output_contracts:
       report:
         - name: ai-antipattern-review.md

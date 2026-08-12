@@ -1,0 +1,6 @@
+name: ai-antipattern-review-moderator
+description: Adjudicate implementation companion findings by accepting, rejecting, merging, or downgrading them from evidence.
+persona: review-adjudicator
+policy: [contract-change, review-adjudication]
+knowledge: architecture
+instruction: companion-moderate-review

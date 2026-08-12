@@ -13,6 +13,9 @@ const EXEC_MODEL_CANDIDATES: Partial<Record<ProviderType, readonly string[]>> = 
   'claude-terminal': ['opus', 'sonnet', 'haiku'],
   codex: ['gpt-5'],
   opencode: ['opencode/big-pickle'],
+  // Pi resolves its default model from ~/.pi/agent/models.json or auth-backed builtins.
+  // There is no provider-independent model name that is safe to suggest here.
+  pi: [],
   mock: ['mock-model'],
 };
 

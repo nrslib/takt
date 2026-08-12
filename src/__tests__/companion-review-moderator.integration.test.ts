@@ -790,6 +790,7 @@ describe('CT-COMP-10 companion review terminal lifecycle', () => {
       prompt: string;
       schema: Record<string, unknown>;
     }> = [];
+    const validationCalls: string[] = [];
     const evaluateRound = createEvaluateRound();
 
     try {
@@ -820,11 +821,19 @@ describe('CT-COMP-10 companion review terminal lifecycle', () => {
         mailboxPath: () => mailboxPath,
         systemPrompt: () => 'review',
         openFindings: () => [],
-        callStructured: vi.fn(async (purpose, _name, _system, prompt, schema) => {
+        callStructured: vi.fn(async (
+          purpose,
+          _name,
+          _system,
+          prompt,
+          schema,
+          _signal,
+          validateResponse,
+        ) => {
           calls.push({ purpose, prompt, schema });
-          return {
+          const candidate = {
             persona: purpose,
-            status: 'done',
+            status: 'done' as const,
             content: '',
             structuredOutput: purpose === 'reviewer'
               ? {
@@ -843,6 +852,11 @@ describe('CT-COMP-10 companion review terminal lifecycle', () => {
                 },
             timestamp: new Date('2026-08-08T00:00:00.000Z'),
           };
+          validateResponse?.(candidate);
+          if (validateResponse !== undefined) {
+            validationCalls.push(purpose);
+          }
+          return candidate;
         }),
         emitFinding: vi.fn(),
         markReviewed: vi.fn(),
@@ -858,6 +872,7 @@ describe('CT-COMP-10 companion review terminal lifecycle', () => {
         .toBe('The branch is required by the public API.');
       expect(() => assertStrictStructuredOutputSchema(calls[0]!.schema)).not.toThrow();
       expect(() => assertStrictStructuredOutputSchema(calls[1]!.schema)).not.toThrow();
+      expect(validationCalls).toEqual(['reviewer', 'moderator']);
       expect(evaluateRound).toHaveBeenCalledWith(
         'digest',
         '{"changedRegions":["src/a.ts:1-1"]}',

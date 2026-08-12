@@ -2,10 +2,10 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { z } from 'zod/v4';
 import type {
+  CompanionSelection,
   WorkflowCallArgValue,
 } from '../../../core/models/index.js';
 import { WorkflowConfigRawSchema } from '../../../core/models/index.js';
-import { parseWorkflowRuleCondition } from '../../../core/models/workflow-rule-condition.js';
 import type { FacetResolutionContext, WorkflowSections } from './resource-resolver.js';
 import {
   isResourcePath,
@@ -18,7 +18,6 @@ import { isWorkflowParamReference, type WorkflowParamReference } from './workflo
 import { assertNoParamReferences, validateReturnRules } from './workflowCallableRuleValidation.js';
 import { withWorkflowConfigErrorPath as withWorkflowStepErrorPath } from '../../../core/workflow/workflow-config-error.js';
 import { hasOwnFacetPool } from './workflowFacetPoolLookup.js';
-import { hasCompanionReference } from '../../../core/models/workflow-rule-condition.js';
 
 type RawWorkflowConfig = z.output<typeof WorkflowConfigRawSchema>;
 type RawWorkflowStep = RawWorkflowConfig['steps'][number];
@@ -152,13 +151,33 @@ function validateWorkflowCallArgValue(
 ): void {
   const isArrayValue = Array.isArray(value);
   if (definition.type === 'companion_ref[]') {
-    if (!isArrayValue || value.some((ref) => typeof ref !== 'string' || ref.trim().length === 0)) {
-      throw new Error(`workflow_call arg "${paramName}" must be a companion_ref[] array`);
+    if (isArrayValue) {
+      if (value.some((ref) => typeof ref !== 'string' || ref.trim().length === 0)) {
+        throw new Error(`workflow_call arg "${paramName}" must be a companion_ref[] array`);
+      }
+      return;
+    }
+    if (!isCompanionSelectionObject(value)) {
+      throw new Error(
+        `workflow_call arg "${paramName}" must be a companion_ref[] array or selection object`,
+      );
+    }
+    if (value.fixed.length === 0 && value.pool.length === 0) {
+      throw new Error(`workflow_call arg "${paramName}" companion selection requires a fixed or pool reference`);
+    }
+    if (
+      value.moderator !== undefined
+      && (value.fixed.includes(value.moderator) || value.pool.includes(value.moderator))
+    ) {
+      throw new Error(`workflow_call arg "${paramName}" companion moderator cannot also be a reviewer`);
     }
     return;
   }
   if (definition.type === 'workflow_ref' || definition.type === 'facet_pool_ref') {
-    if (isArrayValue) {
+    if (typeof value !== 'string') {
+      if (definition.type === 'facet_pool_ref' && value === null) {
+        throw new Error(`workflow_call arg "${paramName}" references unknown facet pool "null"`);
+      }
       throw new Error(
         `workflow_call arg "${paramName}" must be a scalar ${definition.type === 'workflow_ref' ? 'workflow_ref' : 'facet_pool_ref'}`,
       );
@@ -168,17 +187,36 @@ function validateWorkflowCallArgValue(
     }
     return;
   }
-  if (definition.type === 'facet_ref' && isArrayValue) {
-    throw new Error(`workflow_call arg "${paramName}" must be a scalar facet_ref`);
+  if (definition.type === 'facet_ref') {
+    if (typeof value !== 'string') {
+      throw new Error(`workflow_call arg "${paramName}" must be a scalar facet_ref`);
+    }
+    validateFacetReferenceExists(paramName, value, definition.facet_kind, workflowDir, sections, context, argPolicy);
+    return;
   }
-  if (definition.type === 'facet_ref[]' && !isArrayValue) {
+  if (!isArrayValue) {
     throw new Error(`workflow_call arg "${paramName}" must be a facet_ref[] array`);
   }
-
-  const refs = isArrayValue ? value : [value];
-  for (const ref of refs) {
+  for (const ref of value) {
     validateFacetReferenceExists(paramName, ref, definition.facet_kind, workflowDir, sections, context, argPolicy);
   }
+}
+
+function isCompanionSelectionObject(value: unknown): value is CompanionSelection {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  const keys = Object.keys(candidate);
+  if (keys.some((key) => key !== 'fixed' && key !== 'pool' && key !== 'moderator')) return false;
+  if (!isCompanionReferenceList(candidate.fixed) || !isCompanionReferenceList(candidate.pool)) {
+    return false;
+  }
+  return candidate.moderator === undefined
+    || (typeof candidate.moderator === 'string' && candidate.moderator.trim().length > 0);
+}
+
+function isCompanionReferenceList(value: unknown): value is string[] {
+  return Array.isArray(value)
+    && value.every((ref) => typeof ref === 'string' && ref.trim().length > 0);
 }
 
 function resolveCallableArgs(
@@ -277,7 +315,7 @@ function resolveExpandedFacetPoolValue(
       errorPath,
     );
   }
-  if (Array.isArray(value)) {
+  if (typeof value !== 'string') {
     throw withWorkflowStepErrorPath(
       new Error(`Step "${stepName}" expects dynamic_facets.pool to resolve to a scalar facet_pool_ref`),
       errorPath,
@@ -298,7 +336,7 @@ function resolveExpandedCompanionValue(
   params: NonNullable<RawWorkflowConfig['subworkflow']>['params'] | undefined,
   resolvedArgs: Record<string, WorkflowCallArgValue>,
   errorPath: readonly PropertyKey[],
-): string[] {
+): string[] | CompanionSelection {
   const definition = params?.[paramRef.$param];
   if (!definition) {
     throw withWorkflowStepErrorPath(
@@ -319,13 +357,22 @@ function resolveExpandedCompanionValue(
       errorPath,
     );
   }
-  if (!Array.isArray(value)) {
+  if (Array.isArray(value)) {
+    return [...value];
+  }
+  if (!isCompanionSelectionObject(value)) {
     throw withWorkflowStepErrorPath(
-      new Error(`Step "${stepName}" expects companion param "${paramRef.$param}" to resolve to a companion_ref[] array`),
+      new Error(
+        `Step "${stepName}" expects companion param "${paramRef.$param}" to resolve to a companion_ref[] array or selection object`,
+      ),
       errorPath,
     );
   }
-  return value;
+  return {
+    fixed: [...value.fixed],
+    pool: [...value.pool],
+    ...(value.moderator === undefined ? {} : { moderator: value.moderator }),
+  };
 }
 
 function resolveExpandedWorkflowCallArgValue(
@@ -385,7 +432,7 @@ function expandFacetListField(
       params,
       resolvedArgs,
       [...fieldPath, index],
-    );
+    ) as string | string[];
     return Array.isArray(expanded) ? expanded : [expanded];
   });
 }
@@ -411,7 +458,7 @@ function expandWorkflowCallReference(
   if (value === undefined) {
     throw withWorkflowStepErrorPath(new Error(`Step "${step.name}" requires workflow_call arg "${step.call.$param}" for call`), errorPath);
   }
-  if (Array.isArray(value)) {
+  if (typeof value !== 'string') {
     throw withWorkflowStepErrorPath(new Error(`Step "${step.name}" expects call param "${step.call.$param}" to resolve to a scalar workflow_ref`), errorPath);
   }
   return value;
@@ -433,7 +480,7 @@ function expandWorkflowCallArgs(
       ? resolveExpandedWorkflowCallArgValue(step.name, argName, value, params, resolvedArgs, [...stepPath, 'args', argName])
       : value;
   }
-  return expandedArgs;
+  return expandedArgs as RawWorkflowStep['args'];
 }
 
 function expandStepFields(
@@ -502,22 +549,18 @@ function expandStepFields(
       resolvedArgs,
       [...stepPath, 'companion'],
     );
-    if (companions.length === 0) {
+    if (Array.isArray(companions) && companions.length === 0) {
       delete expandedStep.companion;
-      for (const [ruleIndex, rule] of (expandedStep.rules ?? []).entries()) {
-        if (!hasCompanionReference(parseWorkflowRuleCondition(rule.condition))) continue;
-        throw withWorkflowStepErrorPath(
-          new Error(
-            `Step "${step.name}" cannot retain an unquoted companion state reference `
-            + `when companion parameter "${step.companion.$param}" resolves to an empty list`,
-          ),
-          [...stepPath, 'rules', ruleIndex, 'condition'],
-        );
-      }
-    } else {
+    } else if (Array.isArray(companions)) {
       expandedStep.companion = {
         fixed: [...companions],
         pool: [],
+      };
+    } else {
+      expandedStep.companion = {
+        fixed: [...companions.fixed],
+        pool: [...companions.pool],
+        ...(companions.moderator === undefined ? {} : { moderator: companions.moderator }),
       };
     }
   }

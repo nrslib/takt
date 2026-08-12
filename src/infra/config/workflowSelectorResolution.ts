@@ -3,6 +3,7 @@ import {
   isNormalAgentWorkflowStep,
   isDynamicParallelSubSteps,
   type WorkflowConfig,
+  type WorkflowStep,
 } from '../../core/models/types.js';
 import { MAX_WORKFLOW_CALL_DEPTH } from '../../core/workflow/workflow-call-depth.js';
 import { getWorkflowReference } from '../../core/workflow/workflow-reference.js';
@@ -10,16 +11,19 @@ import type { ProviderType } from '../../shared/types/provider.js';
 import type { StepProviderOptions } from '../../core/models/workflow-types.js';
 import type { WorkflowCallResolver } from '../../core/workflow/types.js';
 import { resolveWorkflowCallTarget } from './loaders/workflowCallResolver.js';
-import { collectWorkflowCallSteps } from './loaders/workflowParallelTraversal.js';
+import { collectReachableWorkflowCallSteps } from './loaders/workflowParallelTraversal.js';
 import {
   assertProviderSupportsSelectorExecution,
   resolveStrictInternalAgentNativeTools,
 } from '../providers/provider-capabilities.js';
 import {
-  resolveSelectorProviderForProject,
+  resolveSelectorProviderFromLegacyProject,
+  resolveSelectorProviderFromRuntimeEnvironment,
   type ResolvedSelectorProvider,
   type SelectorProviderOverrides,
 } from './selectorProviderResolution.js';
+import type { CompiledProviderEnvironment } from './runtime-provider/environment.js';
+import type { ProviderConfigMode } from './runtime-provider/mode.js';
 
 type ResolvedActiveSelectorProvider = ResolvedSelectorProvider & {
   readonly provider: ProviderType;
@@ -40,6 +44,9 @@ export interface WorkflowSelectorResolutionOptions {
   readonly lookupCwd: string;
   readonly overrides?: SelectorProviderOverrides;
   readonly workflowCallResolver?: WorkflowCallResolver;
+  readonly companionEnabled?: boolean;
+  readonly providerEnvironment: CompiledProviderEnvironment;
+  readonly providerConfigMode: ProviderConfigMode;
 }
 
 function hasDynamicParallel(workflow: WorkflowConfig): boolean {
@@ -50,8 +57,15 @@ function hasDynamicParallel(workflow: WorkflowConfig): boolean {
 }
 
 function hasDynamicFacets(workflow: WorkflowConfig): boolean {
-  return workflow.steps.some((step) =>
-    (step as { dynamicFacets?: unknown }).dynamicFacets !== undefined);
+  return workflow.steps.some(hasDynamicFacetsInStep);
+}
+
+function hasDynamicFacetsInStep(step: WorkflowStep): boolean {
+  if (isNormalAgentWorkflowStep(step) && step.dynamicFacets !== undefined) {
+    return true;
+  }
+  return step.parallel !== undefined
+    && getAllParallelSubSteps(step.parallel).some(hasDynamicFacetsInStep);
 }
 
 function hasCompanionPool(workflow: WorkflowConfig): boolean {
@@ -66,11 +80,11 @@ function workflowGraphHasDynamicFacets(
   activeReferences: ReadonlySet<string>,
   depth: number,
 ): boolean {
-  if (hasDynamicFacets(workflow) || hasCompanionPool(workflow)) {
+  if (hasDynamicFacets(workflow) || (options.companionEnabled !== false && hasCompanionPool(workflow))) {
     return true;
   }
 
-  for (const step of collectWorkflowCallSteps(workflow.steps)) {
+  for (const step of collectReachableWorkflowCallSteps(workflow)) {
     const childDepth = depth + 1;
     if (childDepth > MAX_WORKFLOW_CALL_DEPTH) {
       throw new Error(
@@ -120,7 +134,7 @@ function workflowGraphHasDynamicParallel(
     return true;
   }
 
-  for (const step of collectWorkflowCallSteps(workflow.steps)) {
+  for (const step of collectReachableWorkflowCallSteps(workflow)) {
     const childDepth = depth + 1;
     if (childDepth > MAX_WORKFLOW_CALL_DEPTH) {
       throw new Error(
@@ -205,10 +219,9 @@ export function resolveWorkflowSelector(
     return { applies: false };
   }
 
-  const selectorProvider = resolveSelectorProviderForProject(
-    options.projectCwd,
-    options.overrides,
-  );
+  const selectorProvider = options.providerConfigMode === 'runtime-v1'
+    ? resolveSelectorProviderFromRuntimeEnvironment(options.providerEnvironment, options.overrides)
+    : resolveSelectorProviderFromLegacyProject(options.projectCwd, options.overrides);
   if (selectorProvider.provider === undefined) {
     throw new Error('Dynamic selector has no resolved provider');
   }

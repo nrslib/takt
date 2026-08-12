@@ -1,6 +1,7 @@
 import type { ProviderType } from '../../../shared/types/provider.js';
 import type { McpServerConfig, StepProviderOptions } from '../../models/types.js';
 import {
+  providerDefaultAllowedToolsWithoutEdit,
   providerKeepsAllowedToolWithoutEdit,
   providerSupportsAllowedTools,
   providerSupportsClaudeAllowedTools,
@@ -19,6 +20,13 @@ interface CapabilitySensitiveStepOptions {
 }
 
 type CapabilityProbe = (provider: ProviderType | undefined) => boolean | undefined;
+
+function shouldFilterAllowedTools(
+  hasOutputContracts: boolean,
+  edit: boolean | undefined,
+): boolean {
+  return edit === false || (hasOutputContracts && edit !== true);
+}
 
 const CLAUDE_TEAM_LEADER_INSPECT_TOOL_NAMES: Record<TeamLeaderInspectTool, string> = {
   read: 'Read',
@@ -45,8 +53,7 @@ function filterAllowedToolsForEditPolicy(
   const normalizedAllowedTools = providerSupportsClaudeAllowedTools(provider) === true
     ? allowedTools.flatMap(splitClaudeAllowedToolSpecs)
     : allowedTools;
-  const shouldFilterEditTools = edit === false || (hasOutputContracts && edit !== true);
-  if (!shouldFilterEditTools) {
+  if (!shouldFilterAllowedTools(hasOutputContracts, edit)) {
     return normalizedAllowedTools;
   }
   return normalizedAllowedTools.filter((tool) => providerKeepsAllowedToolWithoutEdit(provider, tool));
@@ -68,7 +75,9 @@ export function resolveAllowedToolsForProvider(
     providerSupportsOpenCodeAllowedTools,
   );
   if (!allowedTools) {
-    return undefined;
+    return shouldFilterAllowedTools(hasOutputContracts, edit)
+      ? providerDefaultAllowedToolsWithoutEdit(provider)
+      : undefined;
   }
   return filterAllowedToolsForEditPolicy(allowedTools, hasOutputContracts, edit, provider);
 }

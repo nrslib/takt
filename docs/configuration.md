@@ -14,7 +14,7 @@ Configure TAKT defaults in `~/.takt/config.yaml`. This file is created automatic
 language: en                  # UI language: 'en' or 'ja'
 logging:
   level: info                 # Log level: debug, info, warn, error
-provider: claude              # Default provider: claude, claude-sdk, claude-terminal, codex, opencode, cursor, copilot, kiro, or mock
+provider: claude              # Default provider: claude, claude-sdk, claude-terminal, codex, opencode, cursor, copilot, kiro, pi, or mock
 model: sonnet                 # Default model (optional, passed to provider as-is)
 branch_name_strategy: romaji  # Branch name generation: 'romaji' (fast) or 'ai' (slow)
 prevent_sleep: false          # Prevent macOS idle sleep during execution (caffeinate)
@@ -130,7 +130,7 @@ assistant:
 #         reasoning_effort: medium
 ```
 
-`takt_providers.selector` is optional. Provider/model precedence is explicit CLI or environment override, project selector, global selector, project top-level, then global top-level. A model is accepted only when its candidate belongs to the resolved provider. Only selector entries contribute `provider_options`, merged by option leaf from global then project; top-level, persona, and pool sub-step options are not inherited by the selector. An empty selector entry or an empty `provider_options` entry is rejected during configuration loading. Dynamic selectors require a provider that guarantees strict read-only internal-agent isolation; Claude, Codex, and Mock satisfy this contract, while OpenCode, Cursor, Copilot, and Kiro are rejected before selector or participant startup. Selector settings remain unused and do not affect workflows without dynamic parallel.
+`takt_providers.selector` is optional. Provider/model precedence is explicit CLI or environment override, project selector, global selector, project top-level, then global top-level. A model is accepted only when its candidate belongs to the resolved provider. Only selector entries contribute `provider_options`, merged by option leaf from global then project; top-level, persona, and pool sub-step options are not inherited by the selector. An empty selector entry or an empty `provider_options` entry is rejected during configuration loading. Dynamic selectors require a provider that guarantees strict read-only internal-agent isolation; Claude, Codex, and Mock satisfy this contract, while OpenCode, Cursor, Copilot, Kiro, and Pi are rejected before selector or participant startup. Selector settings remain unused and do not affect workflows without dynamic parallel.
 
 ```yaml
 # ~/.takt/config.yaml (continued)
@@ -181,7 +181,7 @@ assistant:
 | `logging.debug` | boolean | `false` | Enable debug logging (`debug.log` + `prompts.jsonl`) |
 | `logging.provider_events` | boolean | `false` | Persist provider stream events |
 | `logging.usage_events` | boolean | `false` | Persist usage event logs |
-| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude"` | Default concrete AI provider (`claude` = headless CLI mode, `claude-sdk` = SDK/API mode, `claude-terminal` = experimental interactive terminal mode) |
+| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude"` | Default concrete AI provider (`claude` = headless CLI mode, `claude-sdk` = SDK/API mode, `claude-terminal` = experimental interactive terminal mode, `pi` = Pi SDK mode) |
 | `model` | string | - | Default model name (passed to provider as-is) |
 | `branch_name_strategy` | `"romaji"` \| `"ai"` | `"romaji"` | Branch name generation strategy |
 | `prevent_sleep` | boolean | `false` | Prevent macOS idle sleep (caffeinate) |
@@ -280,6 +280,9 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 #       reasoning_byte_limit: 4194304
 #   kiro:
 #     agent: my-default-agent
+#   pi:
+#     extensions: [npm:pi-fff]
+#     no_skills: true
 #   claude_terminal:
 #     backend: tmux
 #     timeout_ms: 900000
@@ -294,6 +297,9 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 #       ai_review: readonly
 
 ```
+
+Pi SDK sessions are kept in memory for the current TAKT process. TAKT does not write Pi session JSONL files or persist `provider_options.pi.extensions` into Pi settings; explicitly requested packages use Pi's temporary resolution path.
+Implicit project-local Pi extensions are not trusted or loaded. Explicit Pi extensions execute inside the TAKT process, so only configure trusted local paths and package sources. Extension URLs containing embedded credentials or secret-bearing query parameters are rejected.
 
 ### OpenCode execution guards
 
@@ -350,7 +356,7 @@ Project config accepts most global keys and overrides their global values (e.g. 
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | - | Override concrete provider |
+| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | - | Override concrete provider |
 | `model` | string | - | Override model name (passed to provider as-is) |
 | `submodules` | `"all"` \| string[] | - | Project-only. Submodules to initialize in shared clones: `"all"` or an explicit path list (wildcards not supported) |
 | `with_submodules` | boolean | - | Project-only. Legacy boolean equivalent of `submodules: "all"`; prefer `submodules` |
@@ -434,7 +440,7 @@ Separately from config-key overrides, `TAKT_NOTIFY_WEBHOOK` sets a Slack Incomin
 
 ## API Key Configuration
 
-TAKT supports Claude, Codex, OpenCode, Cursor, Copilot, and Kiro providers. Claude/Codex/OpenCode/Kiro use API keys, Cursor can use either API key or existing `cursor-agent login` session, and Copilot uses a GitHub token.
+TAKT supports Claude, Codex, OpenCode, Pi, Cursor, Copilot, and Kiro providers. Claude/Codex/OpenCode use their SDK credentials, Pi uses the Pi SDK credential store or provider environment variables, Kiro uses an API key, Cursor can use either API key or existing `cursor-agent login` session, and Copilot uses a GitHub token.
 
 ### Environment Variables (Recommended)
 
@@ -447,6 +453,9 @@ export TAKT_OPENAI_API_KEY=sk-...
 
 # For OpenCode
 export TAKT_OPENCODE_API_KEY=...
+
+# For Pi
+# Use the Pi SDK credential store or provider-native environment variables
 
 # For Cursor Agent (optional if cursor-agent login session exists)
 export TAKT_CURSOR_API_KEY=...
@@ -479,6 +488,7 @@ Environment variables take precedence over `config.yaml` settings.
 | Claude (Anthropic) | `TAKT_ANTHROPIC_API_KEY` | `anthropic_api_key` |
 | Codex (OpenAI) | `TAKT_OPENAI_API_KEY` | `openai_api_key` |
 | OpenCode | `TAKT_OPENCODE_API_KEY` | `opencode_api_key` |
+| Pi | Pi SDK credential store or provider-native environment variables | - |
 | Cursor Agent | `TAKT_CURSOR_API_KEY` | `cursor_api_key` |
 | GitHub Copilot CLI | `TAKT_COPILOT_GITHUB_TOKEN` | `copilot_github_token` |
 | Kiro CLI | `TAKT_KIRO_API_KEY` (`KIRO_API_KEY` fallback) | `kiro_api_key` |
@@ -489,7 +499,7 @@ Environment variables take precedence over `config.yaml` settings.
 - Consider using environment variables instead.
 - Add `~/.takt/config.yaml` to your global `.gitignore` if needed.
 - Cursor provider can run without API key when `cursor-agent login` is already configured.
-- If you set an API key, installing the corresponding CLI tool (Claude Code, Codex, OpenCode) is not necessary. TAKT directly calls the respective API.
+- If you set credentials, installing the corresponding CLI tool (Claude Code, Codex, OpenCode, Pi) is not necessary. TAKT directly calls the respective API.
 - Copilot provider requires the `copilot` CLI to be installed. The GitHub token is used for authentication.
 - Kiro provider requires the `kiro-cli` CLI to be installed. `TAKT_KIRO_API_KEY` / `kiro_api_key` is passed to the child process as `KIRO_API_KEY`; if neither is set, TAKT uses the official `KIRO_API_KEY` environment variable.
 
@@ -555,6 +565,8 @@ In workflow YAML, `model: null` is an explicit model omission for a normal step,
 
 **OpenCode** requires a model in `provider/model` format (e.g., `opencode/big-pickle`). Omitting the model for the OpenCode provider will result in a configuration error.
 
+**Pi** accepts `provider/model` references and bare model IDs that uniquely match a configured Pi model. A recognized `:<thinking-level>` suffix selects the Pi thinking level. If omitted, TAKT keeps the Pi session's current model.
+
 **Cursor Agent** forwards `model` directly to `cursor-agent --model <model>`. If omitted, Cursor CLI default is used.
 
 **GitHub Copilot CLI** forwards `model` directly to `copilot --model <model>`. If omitted, Copilot CLI default is used.
@@ -586,6 +598,24 @@ steps:
 
 1. `~/.takt/runtime.yaml`
 2. `<project>/.takt/runtime.yaml`
+
+Companion reviewers are enabled by default. Disable them with the top-level
+`companion.enabled` policy:
+
+```yaml
+version: 1
+companion:
+  enabled: false
+```
+
+The global and project values are combined with logical AND; a project value
+of `true` cannot re-enable a globally disabled companion.
+
+Companion provider targets (`targets.companions`) and provider capability
+requirements apply only while companions are enabled. When disabled, companion
+declarations and the structural validation of `targets.companions` remain in
+place, but no companion provider is resolved or executed — a workflow that
+declares companions runs without any companion provider configuration.
 
 Runtime mode is enabled by the presence of an active `provider` section, not by the file existing. A file that only contains `version: 1` is inactive and leaves the legacy `config.yaml` provider resolution in place.
 
@@ -769,11 +799,13 @@ Provider profiles allow you to set default permission modes and per-step permiss
 
 TAKT uses three provider-independent permission modes:
 
-| Mode | Description | Claude | Codex | OpenCode | Cursor Agent | Copilot | Kiro CLI |
-|------|-------------|--------|-------|----------|--------------|---------|----------|
-| `readonly` | Read-only access, no file modifications | `default` | `read-only` | `read-only` | default flags (no `--force`) | no permission flags | `--trust-tools=read,grep` |
-| `edit` | Allow file edits with confirmation | `acceptEdits` | `workspace-write` | `workspace-write` | default flags (no `--force`) | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` |
-| `full` | Bypass all permission checks | `bypassPermissions` | `danger-full-access` | `danger-full-access` | `--force` | `--yolo` | `--trust-all-tools` |
+| Mode | Description | Claude | Codex | OpenCode | Pi | Cursor Agent | Copilot | Kiro CLI |
+|------|-------------|--------|-------|----------|----|--------------|---------|----------|
+| `readonly` | Read-only access, no file modifications | `default` | `read-only` | `read-only` | `read`, `grep`, `find`, `ls` | default flags (no `--force`) | no permission flags | `--trust-tools=read,grep` |
+| `edit` | Allow file edits with confirmation | `acceptEdits` | `workspace-write` | `workspace-write` | `read`, `grep`, `find`, `ls`, `edit`, `write`, `bash` | default flags (no `--force`) | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` |
+| `full` | Bypass all permission checks | `bypassPermissions` | `danger-full-access` | `danger-full-access` | all registered Pi tools | `--force` | `--yolo` | `--trust-all-tools` |
+
+Pi permission modes are SDK active-tool allowlists, not an operating-system sandbox, and TAKT does not add per-tool confirmation prompts for Pi. In particular, Pi `edit` enables `bash`, and Pi's file tools can accept absolute paths. Run Pi with trusted workflow input and extensions; TAKT does not use Pi for dynamic internal agents that require strict read-only isolation.
 
 ### Configuration
 
@@ -983,7 +1015,7 @@ Workflow `provider_options.extends` can load shared YAML presets by name. Names 
 
 `provider_options.extends` fails fast as a configuration error when a preset or path cannot be resolved, a scoped ref points to an unavailable repertoire package, the target YAML is invalid or is not a provider-options object, the extends chain is circular, or the removed `$ref` key is used. Relative paths are resolved from the workflow file and must stay inside the workflow directory after symlink resolution; absolute paths and paths whose real target escapes that directory are rejected.
 
-Provider option leaves can also be overridden from env. For OpenCode model variants, use `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high` to set `provider_options.opencode.variant`. For provider base URLs, use `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL=http://127.0.0.1:8787/v1` or `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL=http://127.0.0.1:8787`; these populate the config layer and do not override step or workflow routing `base_url` leaves. For Codex Skill inheritance, use `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_REPO=true` or `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_USER=true`. For Claude Skill inheritance, use `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED=true`. For Claude terminal, use `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_BACKEND=tmux`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TIMEOUT_MS=900000`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_KEEP_SESSION=false`, or `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TRANSCRIPT_POLL_INTERVAL_MS=500`. For Kiro custom agents, use `TAKT_PROVIDER_OPTIONS_KIRO_AGENT=planner-agent` to set `provider_options.kiro.agent`.
+Provider option leaves can also be overridden from env. For OpenCode model variants, use `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high` to set `provider_options.opencode.variant`. For provider base URLs, use `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL=http://127.0.0.1:8787/v1` or `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL=http://127.0.0.1:8787`; these populate the config layer and do not override step or workflow routing `base_url` leaves. For Codex Skill inheritance, use `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_REPO=true` or `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_USER=true`. For Claude Skill inheritance, use `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED=true`. For Claude terminal, use `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_BACKEND=tmux`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TIMEOUT_MS=900000`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_KEEP_SESSION=false`, or `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TRANSCRIPT_POLL_INTERVAL_MS=500`. For Kiro custom agents, use `TAKT_PROVIDER_OPTIONS_KIRO_AGENT=planner-agent` to set `provider_options.kiro.agent`. For Pi resource loading, use `TAKT_PROVIDER_OPTIONS_PI_EXTENSIONS='["npm:pi-fff"]'`, `TAKT_PROVIDER_OPTIONS_PI_NO_EXTENSIONS=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_SKILLS=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_PROMPT_TEMPLATES=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_THEMES=true`, or `TAKT_PROVIDER_OPTIONS_PI_NO_CONTEXT_FILES=true`.
 
 This allows mixing providers and models within a single workflow while keeping display names independent from provider selection.
 
@@ -1001,7 +1033,7 @@ provider_options:
     base_url: http://127.0.0.1:8787/v1
 ```
 
-TAKT passes `provider_options.claude.base_url` to `claude` and `claude-sdk` as `ANTHROPIC_BASE_URL`. TAKT passes `provider_options.codex.base_url` to the Codex SDK constructor as `baseUrl`. `claude-terminal`, `opencode`, `cursor`, `copilot`, and `kiro` are not included in this base URL support unless documented separately.
+TAKT passes `provider_options.claude.base_url` to `claude` and `claude-sdk` as `ANTHROPIC_BASE_URL`. TAKT passes `provider_options.codex.base_url` to the Codex SDK constructor as `baseUrl`. `claude-terminal`, `opencode`, `cursor`, `copilot`, `kiro`, and `pi` are not included in this base URL support unless documented separately.
 
 Provider-native environment variables such as `ANTHROPIC_BASE_URL` or `OPENAI_BASE_URL` are provider fallback settings. A TAKT `provider_options.*.base_url` value is explicit TAKT configuration and takes priority over those provider-native settings for the providers above.
 
@@ -1217,14 +1249,15 @@ provider:
         profile: review
 ```
 
-| Provider | Strict isolated companion execution | Implementer tool events |
+| Provider | Isolated structured companion execution | Implementer tool events |
 |---|---:|---:|
 | `claude-sdk` | Yes | Live |
 | `codex` | Yes | Live |
 | `claude` (headless) | Yes | Live |
 | `claude-terminal` | Yes | Replayed after the turn |
 | `mock` | Yes | Scenario-dependent |
-| `opencode` | No | Live |
+| `opencode` | Yes | Live |
+| `pi` | No | Live |
 | `cursor`, `copilot`, `kiro` | No | Unavailable |
 
 `No` means the workflow is rejected during loading; TAKT does not run a degraded, non-isolated companion.

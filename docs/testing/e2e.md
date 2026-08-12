@@ -43,7 +43,7 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
 - `TAKT_E2E_PROVIDER=opencode TAKT_E2E_MODEL=ollama-cloud/qwen3.5:397b npx vitest run --config vitest.config.e2e.opencode-parallel.ts`: OpenCode 並列セッション専用スペック（`opencode-parallel-sessions.e2e.ts`）を長めのタイムアウト設定で単独実行する専用 config（直接実行時は provider と model の指定が必要）。
 - `npx vitest run --config vitest.config.e2e.structured-output.ts`: `structured-output.e2e.ts` を単独実行する専用 config。
 
-provider E2E スクリプトの対象は `claude` / `claude-sdk` / `codex` / `cursor` / `opencode`。`copilot` と `kiro` には provider E2E 経路がなく、単体テスト（`src/__tests__/copilot-*.test.ts` / `kiro-*.test.ts`）のみで検証している。
+provider E2E スクリプトの対象は `claude` / `claude-sdk` / `codex` / `cursor` / `opencode`。`copilot`、`kiro`、`pi` には provider E2E 経路がなく、単体テスト（`src/__tests__/copilot-*.test.ts` / `kiro-*.test.ts`）または Pi SDK tests（`src/__tests__/pi-client.test.ts` / `src/__tests__/pi-provider.test.ts`）で検証している。
 
 GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` のみ。provider E2E は API 課金を伴うため CI には含めず、メンテナーが PR コメントコマンド `/ci`（OWNER 限定）で必要時にのみ実行する。
 

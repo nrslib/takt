@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MockInstance } from 'vitest';
-import type { CompiledProviderEnvironment } from '../infra/config/runtime-provider/environment.js';
+import type {
+  CompiledProviderEnvironment,
+  ResolvedRuntimeEnvironment,
+} from '../infra/config/runtime-provider/provider-environment.js';
 import { getProviderValidationErrorSource } from '../core/workflow/provider-validation-error.js';
 
 const VALID_ADJUDICATOR = {
@@ -11,7 +14,7 @@ const {
   mockLoadWorkflowByIdentifier,
   mockResolveWorkflowConfigValue,
   mockResolveWorkflowSelector,
-  mockResolveAuxiliaryProviderEnvironment,
+  mockResolveAuxiliaryRuntimeEnvironment,
   mockValidateWorkflowCallContracts,
   mockHeader,
   mockInfo,
@@ -27,7 +30,7 @@ const {
   mockLoadWorkflowByIdentifier: vi.fn(),
   mockResolveWorkflowConfigValue: vi.fn(),
   mockResolveWorkflowSelector: vi.fn(),
-  mockResolveAuxiliaryProviderEnvironment: vi.fn(),
+  mockResolveAuxiliaryRuntimeEnvironment: vi.fn(),
   mockValidateWorkflowCallContracts: vi.fn(),
   mockHeader: vi.fn(),
   mockInfo: vi.fn(),
@@ -49,9 +52,9 @@ vi.mock('../infra/config/index.js', () => ({
 
 // Preview resolves provider/model through the same compiled bundle as execution (issue #1136,
 // Unit B). The bundle's runtime-v1/legacy/mixed behavior is covered by the integration tests for
-// resolveAuxiliaryProviderEnvironment; here we drive its resolved output directly.
+// resolveAuxiliaryRuntimeEnvironment; here we drive its resolved output directly.
 vi.mock('../infra/config/runtime-provider/provider-environment.js', () => ({
-  resolveAuxiliaryProviderEnvironment: mockResolveAuxiliaryProviderEnvironment,
+  resolveAuxiliaryRuntimeEnvironment: mockResolveAuxiliaryRuntimeEnvironment,
 }));
 
 vi.mock('../infra/config/loaders/workflowResolver.js', () => ({
@@ -60,19 +63,25 @@ vi.mock('../infra/config/loaders/workflowResolver.js', () => ({
 
 function compiledEnvironment(
   overrides: Partial<CompiledProviderEnvironment> = {},
-): CompiledProviderEnvironment {
+): ResolvedRuntimeEnvironment {
   return {
-    provider: undefined,
-    providerSource: 'default',
-    model: undefined,
-    modelSource: 'default',
-    personaProviders: undefined,
-    providerRouting: undefined,
-    autoRouting: undefined,
-    providerOptions: undefined,
-    tagConflictPolicy: 'last-wins',
-    internalAgents: undefined,
-    ...overrides,
+    providerEnvironment: {
+      provider: undefined,
+      providerSource: 'default',
+      model: undefined,
+      modelSource: 'default',
+      personaProviders: undefined,
+      providerRouting: undefined,
+      autoRouting: undefined,
+      providerOptions: undefined,
+      escalation: undefined,
+      tagConflictPolicy: 'last-wins',
+      internalAgents: undefined,
+      providerLadders: undefined,
+      ...overrides,
+    },
+    companionEnabled: true,
+    providerConfigMode: 'legacy',
   };
 }
 
@@ -125,7 +134,7 @@ describe('previewPrompts', () => {
       if (key === 'language') return 'en';
       return undefined;
     });
-    mockResolveAuxiliaryProviderEnvironment.mockReturnValue(compiledEnvironment());
+    mockResolveAuxiliaryRuntimeEnvironment.mockReturnValue(compiledEnvironment());
     mockResolveReviewScopeBaseRange.mockReturnValue({ kind: 'base_branch_head' });
     mockCollectTaskReviewScope.mockReturnValue({
       kind: 'collected',
@@ -169,7 +178,7 @@ describe('previewPrompts', () => {
     await previewPrompts('/project', undefined, undefined);
 
     expect(mockLoadWorkflowByIdentifier).toHaveBeenCalledWith('default', '/project');
-    expect(mockResolveAuxiliaryProviderEnvironment).toHaveBeenCalledWith(
+    expect(mockResolveAuxiliaryRuntimeEnvironment).toHaveBeenCalledWith(
       '/project',
       expect.objectContaining({ name: 'default' }),
     );
@@ -338,6 +347,11 @@ describe('previewPrompts', () => {
         projectCwd: '/project',
         lookupCwd: '/project',
         overrides,
+        companionEnabled: true,
+        providerEnvironment: expect.objectContaining({
+          provider: undefined,
+        }),
+        providerConfigMode: 'legacy',
       },
     );
   });
@@ -426,7 +440,7 @@ describe('previewPrompts', () => {
   });
 
   it('finding manager の設定済み provider/model を表示する', async () => {
-    mockResolveAuxiliaryProviderEnvironment.mockReturnValueOnce(compiledEnvironment({
+    mockResolveAuxiliaryRuntimeEnvironment.mockReturnValueOnce(compiledEnvironment({
       provider: 'codex',
       providerSource: 'project',
       model: 'gpt-5.5',
@@ -508,7 +522,7 @@ describe('previewPrompts', () => {
   });
 
   it('finding manager の provider/model を runtime と同じ resolver 経由で表示する', async () => {
-    mockResolveAuxiliaryProviderEnvironment.mockReturnValue(compiledEnvironment({
+    mockResolveAuxiliaryRuntimeEnvironment.mockReturnValue(compiledEnvironment({
       personaProviders: {
         'Findings Manager': {
           provider: 'codex',
@@ -544,7 +558,7 @@ describe('previewPrompts', () => {
   });
 
   it('環境変数由来の provider/model を finding manager の直接指定より優先する', async () => {
-    mockResolveAuxiliaryProviderEnvironment.mockReturnValue(compiledEnvironment({
+    mockResolveAuxiliaryRuntimeEnvironment.mockReturnValue(compiledEnvironment({
       provider: 'mock',
       providerSource: 'env',
       model: 'env-model',
@@ -573,7 +587,7 @@ describe('previewPrompts', () => {
   });
 
   it('findings-manager seat 指定時は persona model を表示しない', async () => {
-    mockResolveAuxiliaryProviderEnvironment.mockReturnValue(compiledEnvironment({
+    mockResolveAuxiliaryRuntimeEnvironment.mockReturnValue(compiledEnvironment({
       personaProviders: {
         'Findings Manager': {
           provider: 'opencode',
@@ -610,7 +624,7 @@ describe('previewPrompts', () => {
   });
 
   it('finding manager の静的 auto_routing rule を runtime と同じ候補へ解決する', async () => {
-    mockResolveAuxiliaryProviderEnvironment.mockReturnValue(compiledEnvironment({
+    mockResolveAuxiliaryRuntimeEnvironment.mockReturnValue(compiledEnvironment({
       autoRouting: {
         strategy: 'balanced',
         router: { provider: 'claude-sdk', model: 'claude-haiku-4-5-20251001' },
@@ -647,7 +661,7 @@ describe('previewPrompts', () => {
   });
 
   it('finding manager は auto_routing の rules 不一致でも strategy デフォルトへ確定して表示する', async () => {
-    mockResolveAuxiliaryProviderEnvironment.mockReturnValue(compiledEnvironment({
+    mockResolveAuxiliaryRuntimeEnvironment.mockReturnValue(compiledEnvironment({
       autoRouting: {
         strategy: 'balanced',
         router: { provider: 'claude-sdk', model: 'claude-haiku-4-5-20251001' },
@@ -692,7 +706,7 @@ describe('previewPrompts', () => {
         personaProviders: {
           'Findings Manager': { provider: 'opencode' },
         },
-      }),
+      }).providerEnvironment,
       contract: {
         manager: {
           persona: 'findings-manager',
@@ -710,7 +724,7 @@ describe('previewPrompts', () => {
         providerRouting: {
           personas: { supervisor: { provider: 'opencode' } },
         },
-      }),
+      }).providerEnvironment,
       contract: {
         manager: {
           persona: 'findings-manager',
@@ -728,7 +742,11 @@ describe('previewPrompts', () => {
     contract,
     source,
   }) => {
-    mockResolveAuxiliaryProviderEnvironment.mockReturnValueOnce(environment);
+    mockResolveAuxiliaryRuntimeEnvironment.mockReturnValueOnce({
+      providerEnvironment: environment,
+      companionEnabled: true,
+      providerConfigMode: 'legacy',
+    });
     mockLoadWorkflowByIdentifier.mockReturnValueOnce({
       name: 'finding-contract-preview',
       maxSteps: 1,

@@ -573,6 +573,7 @@ export interface WorkflowEngineOptions {
    */
   internalAgentSeats?: InternalAgentSeats;
   /** runtime.yaml から解決済みの companion ごとの実行環境。 */
+  companionEnabled?: boolean;
   companionProviders?: Readonly<Record<string, ProviderRoutingEntry>>;
   companionDiffReader?: CompanionDiffReader;
   /**

@@ -12,7 +12,7 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 | `simple-mini` | 強いモデルの判断力を信頼する軽量版です。独立したテスト作成と最終監督を省き、計画 → 実装 → コードレビュー → 修正ループ → 完了。 |
 | `default` | 共通開発フローを標準ファセットで実行するテスト先行開発ワークフロー。 |
 | `default-mini` | 標準ファセットを共通Mini開発フローへ注入する、テスト作成ステップなしの軽量ワークフロー。 |
-| `default-high` | 共通開発コアを直接実装で使い、専門ピアレビュー、収束修正、merge-readiness、監督まで行うフルスペック workflow です。 |
+| `default-high` | 共通開発コアを直接実装で使い、専門ピアレビュー、収束修正、follow-up review、最終監督まで行うフルスペック workflow です。 |
 | `frontend` | フロントエンド特化開発 workflow。React/Next.js に焦点を当てたレビューとナレッジ注入付き。 |
 | `backend` | バックエンド向けファセットを共通開発フローへ注入するワークフロー。 |
 | `dual` | フロントエンドとバックエンドのファセットを共通開発フローへ注入するワークフロー。 |
@@ -26,7 +26,7 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 | 🚀 クイックスタート | `simple` | 強いモデルの判断力を信頼するシンプルな開発 workflow。モデル自身が関連 SKILL を選び、計画 → テスト作成 → 実装 → コードレビュー → 修正ループ → 最終監督 → 完了。 |
 | | `default` | 共通開発フローを標準ファセットで実行するテスト先行開発ワークフロー。 |
 | | `default-mini` | 標準ファセットを共通Mini開発フローへ注入する、テスト作成ステップなしの軽量ワークフロー。 |
-| | `default-high` | 共通開発コアを直接実装で使い、専門ピアレビュー、収束修正、merge-readiness、監督まで行うフルスペック workflow です。 |
+| | `default-high` | 共通開発コアを直接実装で使い、専門ピアレビュー、収束修正、follow-up review、最終監督まで行うフルスペック workflow です。 |
 | | `cli` | CLI開発向けファセットを共通開発フローへ注入するワークフロー。 |
 | | `frontend` | フロントエンド特化開発 workflow。React/Next.js に焦点を当てたレビューとナレッジ注入付き。 |
 | | `backend` | バックエンド向けファセットを共通開発フローへ注入するワークフロー。 |
@@ -53,7 +53,7 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 | | `simple-cqrs` | 強いモデル向け。`simple-core` にバックエンドと CQRS+ES のナレッジとポリシーを注入するシンプル版。 |
 | | `backend` | バックエンド向けファセットを共通開発フローへ注入するワークフロー。 |
 | | `backend-mini` | バックエンド向けMini開発ワークフロー（plan → implement → 並列レビュー → 修正 → 完了）。 |
-| | `backend-maintenance` | バックエンド本番保守向け厳密 workflow。アーキテクチャ、テスト、セキュリティ、コーディング、AIアンチパターンの並列レビュー後に merge-readiness ゲートと最終承認を行う。 |
+| | `backend-maintenance` | バックエンド本番保守向け厳密 workflow。専門ピアレビュー、収束修正、follow-up review、最終監督を行う。 |
 | | `backend-cqrs` | CQRS+ES 特化バックエンド開発 workflow。CQRS+ES 知識を注入した専門ピアレビューと収束修正付き。 |
 | | `backend-cqrs-mini` | CQRS+ES向けMini開発ワークフロー（plan → implement → 並列レビュー → 修正 → 完了）。 |
 | 🔧 デュアル | `simple-dual` | 強いモデル向け。`simple-core` にフロントエンドとバックエンドのナレッジとポリシーを注入するシンプル版。 |
@@ -77,7 +77,6 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 | | `review-fix-backend-cqrs` | CQRS+ES 特化レビュー＋修正ループ（architecture、CQRS+ES、security、coding）。 |
 | | `review-takt-default` | TAKT開発向け多角レビュー（AIアンチパターン・コーディングレビュー含む5観点レビュー）。 |
 | | `review-fix-takt-default` | レビュー対象を収集してから、TAKT固有ファセットを共通開発フローへ注入するワークフロー。 |
-| | `review-fix-takt-default-high` | `review-fix-takt-default` の強化版となる Finding Contract 付き workflow。レビュー対象の収集後、計画、テスト、直接実装、6観点の compact 並列レビュー、直接修正、fail-closed 最終ゲートを実行する。 |
 | | `audit-unit` | ユニットテスト監査。振る舞いとカバレッジギャップを列挙し、コードを変更せずに Issue 作成可能なレポートを出力。 |
 | | `audit-e2e` | E2E テスト監査。ユーザーフローとカバレッジギャップを列挙し、コードを変更せずに Issue 作成可能なレポートを出力。 |
 | | `audit-security` | セキュリティ監査。プロジェクトの全ファイルを読み取ってセキュリティレビュー。 |
@@ -86,22 +85,18 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 | | `audit-architecture-backend` | バックエンド特化アーキテクチャ監査。サービスモジュールと境界を列挙。 |
 | | `audit-architecture-dual` | フルスタックアーキテクチャ監査。フロントエンド/バックエンドの境界とクロスレイヤー配線を列挙。 |
 | 🎵 TAKT開発 | `takt-default` | 計画、テスト、実装、レビュー、修正へ TAKT 固有知識を注入して共通開発コアを実行する workflow です。 |
-| | `takt-default-fc` | `takt-default` と同じ開発フローで、標準5専門レビューを Finding Contract ledger へ取り込み、ledger 駆動の修正ループと terminal final gate を実行します。 |
+| | `takt-experimental` | 共通開発コアの裁定・修正検証・follow-up review・マージ準備判定へ、TAKT固有 reviewer と実装 companion を追加する実験的 TAKT 開発 workflow です。 |
 | | `auto-improvement-loop` | PR・Issue・新規改善を巡回しながら次の task を積み続ける orchestration loop workflow。 |
 | | `review-takt-default` | TAKT開発向け多角レビュー（AIアンチパターン・コーディングレビュー含む5観点レビュー）。 |
 | | `review-fix-takt-default` | レビュー対象を収集してから、TAKT固有ファセットを共通開発フローへ注入するワークフロー。 |
-| | `review-fix-takt-default-high` | `review-fix-takt-default` の強化版となる Finding Contract 付き workflow。レビュー対象の収集後、計画、テスト、直接実装、6観点の compact 並列レビュー、直接修正、fail-closed 最終ゲートを実行する。 |
-| | `takt-default-high` | takt-default の高コスト強化構成。直接実装・直接修正、6観点の compact 専門レビュー、Finding Contract、merge-readiness/supervisor 最終ゲートで構成する。 |
-| | `takt-default-team-high` | takt-default-high の Team Leader 版。実装・修正を Team Leader が分解して member へ委譲し、同じ6観点の compact 専門レビュー、Finding Contract、最終ゲートを実行する。provider/model は固定しない。 |
-| | `takt-default-localllm` | 共通開発コアと Finding Contract stage を合成し、通常レビューをローカルLLMへ、integrity・配線・資源所有権・失敗境界・最終準備状況の再検査を高信頼モデルへ割り当てる。`review`、`boundary-review`、`final-gate` のタグで経路を分離し、provider/model 自体は固定しない。 |
 | その他 | `research` | リサーチ workflow: planner -> digger -> supervisor。質問せずに自律的にリサーチを実行。 |
 | | `deep-research` | ディープリサーチ workflow: plan -> dig -> analyze -> supervise。発見駆動型の調査で、浮上した疑問を多角的に分析。 |
 | | `magi` | エヴァンゲリオンにインスパイアされた合議システム。3つの AI persona (MELCHIOR, BALTHASAR, CASPER) が分析・投票。 |
 | | `compound-eye` | 複眼レビュー。同じ指示を2つの eye に同時に投げ、両者の回答を統合する。eye ごとのプロバイダーは runtime.yaml（`provider.targets.steps` -> `eye1` / `eye2`）で割り当てる。 |
 
-ローカルモデルだけで既存workflowを動かす場合は、各workflowへ provider/model を設定してください。ハイブリッド構成では、`review` をローカル provider へ、`boundary-review` と `final-gate` を commercial provider へルーティングしてください。タグは step の記載順に適用されるため、`merge-readiness-review` と `supervise` では後ろの `final-gate` が先の `review` を上書きします。`finding-contract-local-review` の integrity gate と `finding-contract-boundary-review` の final gate は同じ `merge-readiness-finding-contract-final-gate` subworkflow を呼ぶため、この1つの routing で両 stage を保証でき、workflow 自体へ provider/model を固定する必要はありません。
+ローカルモデルだけで既存workflowを動かす場合は、各workflowへ provider/model を設定してください。カスタムのハイブリッド構成では、通常の `review` step をローカル provider へ振り分け、高信頼 provider へ戻す step に後ろの `final-gate` タグを付けます。後ろのタグは、同じ provider、model、provider-options field に対して先のタグを上書きします。
 
-`takt-default-fc` で一般 reviewer と修正を軽量モデルへ、Finding Manager、自動導出される supervisor、terminal final gate を強いモデルへ振り分ける例です。`.takt/config.yaml` に設定します。
+カスタム Finding Contract workflow で一般 reviewer と修正を軽量モデルへ、Finding Manager、自動導出される supervisor、terminal final gate を強いモデルへ振り分ける例です。`.takt/config.yaml` に設定します。
 
 ```yaml
 provider_routing:
@@ -133,24 +128,23 @@ provider_routing:
 
 `final-gate` タグは `review` より後に適用されるため、通常レビューをローカルに保ったまま final gate を強いモデルへ戻せます。Finding Manager は `findings-manager`、loop judge は judge の persona 設定にかかわらず固定キー `loop-judge`、現行エンジンが自動導出する adjudicator は `supervisor` の persona routing を使います。`loop-judge` の routing がない場合、loop judge は cycle を発火させた step の解決済み provider/model を引き継ぎます。
 
-特定の custom workflow で Finding Manager と adjudicator を完全に固定する場合は、workflow YAML に直接指定できます。
+synthetic role を完全に固定する場合は、`runtime.yaml` の `internal_agents` seat に割り当てます。workflow YAML では、これらの role に provider/model を指定できません。
 
 ```yaml
-finding_contract:
-  manager:
-    persona: findings-manager
-    instruction: findings-manager
-    output_contract: findings-manager
-    provider: codex
-    model: <strong-model>
-  adjudicator:
-    persona: supervisor
-    instruction: adjudicate-finding-contract
-    provider: codex
-    model: <strong-model>
+# runtime.yaml
+provider:
+  profiles:
+    strong: { provider: codex, model: <strong-model> }
+  targets:
+    internal_agents:
+      findings-manager:     { profile: strong }
+      terminal-adjudicator: { profile: strong }
+      loop-judge:           { profile: strong }
+      escalation-reviewer:  { profile: strong }
+      intake-normalizer:    { profile: strong }
 ```
 
-実装上、provider と model はフィールドごとに、CLI/環境変数の明示 override → 実行時にマッチした promotion（通常の agent step のみ）→ step または parallel sub-step の provider/model（この直接指定を含む）→ `workflow_call` override → `provider_routing` の step/tag/persona → deprecated の `persona_providers` → auto routing → workflow → project → global → provider default の順で解決されます。parallel sub-step は promotion をサポートしないため、その場合は CLI/環境変数の明示 override の次に sub-step の直接指定が優先されます。`provider` だけを直接指定すると、下位優先度の model fallback は停止します。
+各 seat は任意です。省略した role は上記の persona routing chain を維持します。実行時には provider と model をフィールドごとに、CLI/環境変数の明示 override → 実行時にマッチした promotion（通常の agent step のみ）→ step または parallel sub-step の provider/model（seat の割り当てを含む）→ `workflow_call` override → `provider_routing` の step/tag/persona → deprecated の `persona_providers` → auto routing → workflow → project → global → provider default の順で解決します。parallel sub-step は promotion をサポートしないため、直接値は CLI/環境変数の明示 override の直後に評価されます。provider だけを指定した seat は、下位優先度の model fallback を停止します。
 
 `takt` を実行すると workflow をインタラクティブに選択できます。
 

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { StepExecutor, type StepExecutorDeps } from '../core/workflow/engine/StepExecutor.js';
 import { ParallelRunner, type ParallelRunnerDeps } from '../core/workflow/engine/ParallelRunner.js';
 import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engine/structured-output-normalizer.js';
-import type { AgentResponse, WorkflowState, WorkflowStep } from '../core/models/index.js';
+import type { AgentResponse, AgentWorkflowStep, WorkflowState, WorkflowStep } from '../core/models/index.js';
 import { makeStep } from './test-helpers.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
@@ -127,6 +127,7 @@ function makeParallelRunner(): ParallelRunner {
       resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'claude', model: 'claude-sonnet' }),
     } as unknown as ParallelRunnerDeps['optionsBuilder'],
     stepExecutor: {
+      prepareDynamicFacetStep: vi.fn(async (step: AgentWorkflowStep) => step),
       buildInstruction: vi.fn((step: WorkflowStep) => `instruction:${step.name}`),
       emitStepReports: vi.fn(),
       persistPreviousResponseSnapshot: vi.fn(),

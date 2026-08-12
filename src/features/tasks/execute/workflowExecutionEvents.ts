@@ -208,7 +208,17 @@ function createOutputEvents(
           }]
         : [];
     case 'tool_result': {
-      const completedToolCallId = pendingToolCallIds.shift();
+      const reportedToolCallId = streamEvent.data.id;
+      let completedToolCallId: string | undefined;
+      if (reportedToolCallId !== undefined) {
+        const pendingIndex = pendingToolCallIds.indexOf(reportedToolCallId);
+        if (pendingIndex >= 0) {
+          pendingToolCallIds.splice(pendingIndex, 1);
+          completedToolCallId = reportedToolCallId;
+        }
+      } else {
+        completedToolCallId = pendingToolCallIds.shift();
+      }
       if (!completedToolCallId && !streamEvent.data.content) {
         return [];
       }
@@ -351,6 +361,21 @@ function emitProviderOptionLines(
     const agent = options.kiro?.agent;
     if (agent !== undefined) {
       out.info(`Agent: ${agent}${sourceSuffix('kiro.agent', sources, showSource)}`);
+    }
+  } else if (stepProvider === 'pi') {
+    const pi = options.pi;
+    if (pi?.extensions !== undefined) {
+      out.info(`Extensions: ${pi.extensions.length}${sourceSuffix('pi.extensions', sources, showSource)}`);
+    }
+    const disabledResources = [
+      pi?.noExtensions === true ? 'extensions' : undefined,
+      pi?.noSkills === true ? 'skills' : undefined,
+      pi?.noPromptTemplates === true ? 'prompt templates' : undefined,
+      pi?.noThemes === true ? 'themes' : undefined,
+      pi?.noContextFiles === true ? 'context files' : undefined,
+    ].filter((resource): resource is string => resource !== undefined);
+    if (disabledResources.length > 0) {
+      out.info(`Disabled resources: ${disabledResources.join(', ')}`);
     }
   }
 }

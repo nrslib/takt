@@ -68,9 +68,9 @@
 | {確認項目} | `{command}` | {実際のエラー} | {必要なランタイムとバージョン} | {利用可能なランタイムとバージョン} | {設定と結果または利用できない理由} | {タスク範囲外である根拠} |
 
 ## 今回の指摘（new）
-| # | finding_id | 項目 | 根拠 | 理由 | 必要アクション |
-|---|------------|------|------|------|----------------|
-| 1 | VAL-NEW-src-file-L42 | 要求不一致 | `file:line` | 説明 | 修正が必要 |
+| # | finding_id | 項目 | 根拠 | 理由 | Authorization basis | 初回に含まれなかった理由 | 必要アクション |
+|---|------------|------|------|------|---------------------|--------------------------|----------------|
+| 1 | VAL-NEW-src-file-L42 | 要求不一致 | `file:line` | 説明 | {accepted_family_unvisited_consumer / remediation_regression / direct_acceptance_criterion_violation / required_consumer_migration} | {初回レビューがこのfindingを省いた理由を示す独立した証拠} | 修正が必要 |
 
 ## 継続指摘（persists）
 | # | finding_id | 前回根拠 | 今回根拠 | 理由 | 必要アクション |

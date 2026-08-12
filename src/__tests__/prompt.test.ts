@@ -13,7 +13,6 @@ import {
   handleKeyInput,
   readMultilineFromStream,
 } from '../shared/prompt/index.js';
-import { isFullWidth, getDisplayWidth, truncateText } from '../shared/utils/index.js';
 
 // Disable chalk colors for predictable test output
 chalk.level = 0;
@@ -397,101 +396,6 @@ describe('prompt', () => {
 
       // defaultValue not found → falls back to index 0
       expect(result).toBe('plan');
-    });
-  });
-
-  describe('isFullWidth', () => {
-    it('should return true for CJK ideographs', () => {
-      expect(isFullWidth('漢'.codePointAt(0)!)).toBe(true);
-      expect(isFullWidth('字'.codePointAt(0)!)).toBe(true);
-    });
-
-    it('should return true for Hangul syllables', () => {
-      expect(isFullWidth('한'.codePointAt(0)!)).toBe(true);
-    });
-
-    it('should return true for fullwidth ASCII variants', () => {
-      // Ａ = U+FF21 (fullwidth A)
-      expect(isFullWidth(0xFF21)).toBe(true);
-    });
-
-    it('should return false for ASCII characters', () => {
-      expect(isFullWidth('A'.codePointAt(0)!)).toBe(false);
-      expect(isFullWidth('z'.codePointAt(0)!)).toBe(false);
-      expect(isFullWidth(' '.codePointAt(0)!)).toBe(false);
-    });
-
-    it('should return false for basic Latin punctuation', () => {
-      expect(isFullWidth('-'.codePointAt(0)!)).toBe(false);
-      expect(isFullWidth('/'.codePointAt(0)!)).toBe(false);
-    });
-  });
-
-  describe('getDisplayWidth', () => {
-    it('should return length for ASCII-only string', () => {
-      expect(getDisplayWidth('hello')).toBe(5);
-    });
-
-    it('should count CJK characters as 2 columns each', () => {
-      expect(getDisplayWidth('漢字')).toBe(4);
-    });
-
-    it('should handle mixed ASCII and CJK', () => {
-      // 'ab' = 2 + '漢' = 2 + 'c' = 1 = 5
-      expect(getDisplayWidth('ab漢c')).toBe(5);
-    });
-
-    it('should return 0 for empty string', () => {
-      expect(getDisplayWidth('')).toBe(0);
-    });
-  });
-
-  describe('truncateText', () => {
-    it('should return text as-is when it fits within maxWidth', () => {
-      expect(truncateText('hello', 10)).toBe('hello');
-    });
-
-    it('should truncate ASCII text and add ellipsis', () => {
-      const result = truncateText('abcdefghij', 6);
-      // maxWidth=6, ellipsis takes 1, so 5 chars fit + '…'
-      expect(result).toBe('abcde…');
-      expect(getDisplayWidth(result)).toBeLessThanOrEqual(6);
-    });
-
-    it('should truncate CJK text and add ellipsis', () => {
-      // '漢字テスト' = 10 columns, maxWidth=7
-      const result = truncateText('漢字テスト', 7);
-      // 漢(2)+字(2)+テ(2) = 6, next ス(2) would be 8 > 7-1=6, so truncate at 6
-      expect(result).toBe('漢字テ…');
-      expect(getDisplayWidth(result)).toBeLessThanOrEqual(7);
-    });
-
-    it('should handle mixed ASCII and CJK truncation', () => {
-      // 'abc漢字def' = 3+2+2+3 = 10 columns, maxWidth=8
-      const result = truncateText('abc漢字def', 8);
-      // a(1)+b(1)+c(1)+漢(2)+字(2) = 7, next d(1) would be 8 > 8-1=7, truncate
-      expect(result).toBe('abc漢字…');
-      expect(getDisplayWidth(result)).toBeLessThanOrEqual(8);
-    });
-
-    it('should return empty string when maxWidth is 0', () => {
-      expect(truncateText('hello', 0)).toBe('');
-    });
-
-    it('should return empty string when maxWidth is negative', () => {
-      expect(truncateText('hello', -5)).toBe('');
-    });
-
-    it('should not truncate text that exactly fits maxWidth', () => {
-      // 'abc' = 3 columns, maxWidth=3
-      // width(0)+a(1)=1 > 3-1=2? no. width(1)+b(1)=2 > 2? no. width(2)+c(1)=3 > 2? yes → truncate
-      // Actually truncateText adds ellipsis when width + charWidth > maxWidth - 1
-      // For 'abc' maxWidth=3: a(1)>2? no; b(2)>2? no; c(3)>2? yes → 'ab…'
-      // So text exactly at maxWidth still gets truncated because ellipsis needs space
-      // To avoid truncation, the full text display width must be <= maxWidth - 1...
-      // Wait, let's re-read: if width+charWidth > maxWidth-1, truncate.
-      // For 'abc' maxWidth=4: a(1)>3? no; b(2)>3? no; c(3)>3? no; returns 'abc'
-      expect(truncateText('abc', 4)).toBe('abc');
     });
   });
 

@@ -70,7 +70,7 @@ Pipeline モードでは、`--auto-pr` を明示的に指定しない限り PR �
 | `--skip-git` | ブランチ作成、コミット、プッシュをスキップ（pipeline モード、workflow のみ実行） |
 | `--repo <owner/repo>` | リポジトリを指定（PR 作成用） |
 | `-q, --quiet` | 最小出力モード: AI 出力を抑制（CI 向け） |
-| `--provider <name>` | エージェント provider を上書き（claude\|claude-sdk\|claude-terminal\|codex\|opencode\|cursor\|copilot\|kiro\|mock） |
+| `--provider <name>` | エージェント provider を上書き（claude\|claude-sdk\|claude-terminal\|codex\|opencode\|cursor\|copilot\|kiro\|pi\|mock） |
 | `--model <name>` | エージェントモデルを上書き |
 | `--auto-strategy <strategy>` | 自動ルーティング戦略（cost\|balanced\|performance） |
 
@@ -173,7 +173,7 @@ takt --pipeline --task "Fix bug" --auto-pr --repo owner/repo
 
 ## 環境変数
 
-CI 環境での認証には、適切な API キー環境変数を設定してください。これらは他のツールとの衝突を避けるため TAKT 固有のプレフィックスを使用しています。
+CI 環境での認証には、該当する場合は適切な API キー環境変数を設定してください。これらは他のツールとの衝突を避けるため TAKT 固有のプレフィックスを使用しています。
 
 ```bash
 # Claude（Anthropic）用
@@ -184,6 +184,9 @@ export TAKT_OPENAI_API_KEY=sk-...
 
 # OpenCode 用
 export TAKT_OPENCODE_API_KEY=...
+
+# Pi 用
+# Pi SDK の credential store または provider-native 環境変数を使用
 
 # Cursor Agent 用（cursor-agent login 済みなら省略可）
 export TAKT_CURSOR_API_KEY=...
@@ -197,7 +200,7 @@ export TAKT_KIRO_API_KEY=...
 
 優先順位: 環境変数は `config.yaml` の設定よりも優先されます。
 
-> **注意**: 環境変数で API キーを設定すれば、SDK provider（Claude SDK、Codex、OpenCode）用の CLI インストールは不要です。TAKT が対応する API を直接呼び出します。Cursor、Copilot、Kiro は CLI のインストールが必要です。
+> **注意**: SDK provider（Claude SDK、Codex、OpenCode、Pi）の認証情報を設定すれば、対応する CLI のインストールは不要です。TAKT が API を直接呼び出します。Cursor、Copilot、Kiro は CLI のインストールが必要です。
 
 ## コストに関する注意
 

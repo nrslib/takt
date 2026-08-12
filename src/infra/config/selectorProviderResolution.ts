@@ -11,6 +11,7 @@ import { loadGlobalConfig } from './global/globalConfig.js';
 import { resolveConfigValueWithSource } from './resolveConfigValue.js';
 import { resolveRuntimeInternalAgentProvider } from './runtime-provider/internal-agents.js';
 import { composeRuntimeProviderOverride } from './runtime-provider/override.js';
+import type { CompiledProviderEnvironment } from './runtime-provider/environment.js';
 
 export interface SelectorProviderOverrides {
   provider?: ProviderType;
@@ -77,6 +78,57 @@ export function resolveSelectorProviderForProject(
   if (runtimeSelector !== undefined) {
     return resolveSelectorFromRuntimeV1(runtimeSelector, projectCwd, overrides);
   }
+  return resolveSelectorProviderFromLegacyProject(projectCwd, overrides);
+}
+
+export function resolveSelectorProviderFromRuntimeEnvironment(
+  environment: CompiledProviderEnvironment,
+  overrides?: SelectorProviderOverrides,
+): ResolvedSelectorProvider {
+  const runtimeSelector = environment.internalAgents?.selector ?? (
+    environment.provider === undefined
+      ? undefined
+      : {
+          provider: environment.provider,
+          model: environment.model,
+          providerOptions: environment.providerOptions,
+        }
+  );
+  if (runtimeSelector === undefined) {
+    return {};
+  }
+
+  const providerFromEnvironment = environment.providerSource === 'cli'
+    || environment.providerSource === 'env'
+    ? environment.provider
+    : undefined;
+  const modelFromEnvironment = environment.modelSource === 'cli'
+    || environment.modelSource === 'env'
+    ? environment.model
+    : undefined;
+  const providerOverride = overrides?.provider ?? providerFromEnvironment;
+  const modelOverride = overrides?.model ?? modelFromEnvironment;
+  return resolveSelectorFromRuntimeValues(
+    runtimeSelector,
+    {
+      provider: providerOverride,
+      model: modelOverride,
+      providerSource: overrides?.providerSource
+        ?? (overrides?.provider !== undefined
+          ? 'cli'
+          : providerFromEnvironment === undefined ? undefined : environment.providerSource),
+      modelSource: overrides?.modelSource
+        ?? (overrides?.model !== undefined
+          ? 'cli'
+          : modelFromEnvironment === undefined ? undefined : environment.modelSource),
+    },
+  );
+}
+
+export function resolveSelectorProviderFromLegacyProject(
+  projectCwd: string,
+  overrides?: SelectorProviderOverrides,
+): ResolvedSelectorProvider {
   const project = loadProjectConfig(projectCwd);
   const global = loadGlobalConfig();
   const configuredProvider = resolveConfigValueWithSource(projectCwd, 'provider');
@@ -129,7 +181,28 @@ function resolveSelectorFromRuntimeV1(
   const modelOverrideSource = overrides?.modelSource
     ?? (configuredModel.source === 'env' ? 'env' : 'cli');
 
-  // Normalize the runtime-tied model the same way the legacy path normalizes every candidate.
+  return resolveSelectorFromRuntimeValues(
+    runtime,
+    {
+      provider: providerOverride,
+      model: modelOverride,
+      providerSource: providerOverride === undefined ? undefined : providerOverrideSource,
+      modelSource: modelOverride === undefined ? undefined : modelOverrideSource,
+    },
+  );
+}
+
+function resolveSelectorFromRuntimeValues(
+  runtime: ProviderRoutingEntry,
+  overrides: {
+    provider?: ProviderType;
+    model?: string;
+    providerSource?: ProviderResolutionSource;
+    modelSource?: ProviderResolutionSource;
+  },
+): ResolvedSelectorProvider {
+  const providerOverride = overrides.provider;
+  const modelOverride = overrides.model;
   const composed = composeRuntimeProviderOverride(
     {
       provider: runtime.provider,
@@ -140,13 +213,13 @@ function resolveSelectorFromRuntimeV1(
   );
   const provider = composed.provider;
   const providerSource: ProviderResolutionSource | undefined = providerOverride !== undefined
-    ? providerOverrideSource
+    ? overrides.providerSource
     : (runtime.provider !== undefined ? 'runtime-v1' : undefined);
 
   const model = composed.model;
   let modelSource: ProviderResolutionSource | undefined;
   if (modelOverride !== undefined) {
-    modelSource = modelOverrideSource;
+    modelSource = overrides.modelSource;
   } else if (providerOverride === undefined && runtime.model !== undefined) {
     modelSource = 'runtime-v1';
   }
@@ -184,7 +257,12 @@ function resolveSelectorProviderOptions(
 function getSelectorProviderOptionKeys(provider: ProviderType): readonly (keyof StepProviderOptions)[] {
   if (provider === 'claude-sdk') return ['claude'];
   if (provider === 'claude-terminal') return ['claude', 'claudeTerminal'];
-  return provider === 'codex' || provider === 'opencode' || provider === 'claude' || provider === 'copilot' || provider === 'kiro'
+  return provider === 'codex'
+    || provider === 'opencode'
+    || provider === 'claude'
+    || provider === 'copilot'
+    || provider === 'kiro'
+    || provider === 'pi'
     ? [provider]
     : [];
 }

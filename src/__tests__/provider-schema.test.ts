@@ -476,8 +476,8 @@ describe('Schemas accept opencode provider', () => {
     expect(result.provider).toBe('cursor');
   });
 
-  it('should still accept existing providers (claude, codex, opencode, cursor, mock)', () => {
-    for (const provider of ['claude', 'codex', 'opencode', 'cursor', 'mock']) {
+  it('should still accept existing providers (claude, codex, opencode, cursor, pi, mock)', () => {
+    for (const provider of ['claude', 'codex', 'opencode', 'cursor', 'pi', 'mock']) {
       const result = GlobalConfigSchema.parse({ provider });
       expect(result.provider).toBe(provider);
     }

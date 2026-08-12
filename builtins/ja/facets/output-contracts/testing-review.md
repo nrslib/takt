@@ -6,6 +6,8 @@
 ## サマリー
 {1-2文で結果を要約}
 
+テスト追加を要求する指摘には、守る観測可能な契約、壊れる具体的な経路、既存テストでは検出できない根拠を記録する。内部構造の固定や既存検証との重複だけを目的とする指摘は記録しない。
+
 ## 確認した観点
 | 観点 | 結果 | 備考 |
 |------|------|------|
@@ -23,9 +25,11 @@
 | {問題系列または確認対象契約} | {守るべき条件} | {確認した場所} | {確認した場所} | {確認した経路} | {確認したテスト資産} | {なし、または未確認理由} | {問題なし / finding番号} |
 
 ## 今回の指摘（new）
-| # | finding_id | family_tag | カテゴリ | 場所 | 問題 | 修正案 |
-|---|------------|------------|---------|------|------|--------|
-| 1 | TEST-NEW-src-test-L42 | test-structure | カバレッジ | `src/test.ts:42` | 問題の説明 | 修正方法 |
+| # | finding_id | family_tag | カテゴリ | 場所 | 問題 | Authorization basis | 初回に含まれなかった理由 | 修正案 |
+|---|------------|------------|---------|------|------|---------------------|------------------------------|--------|
+| 1 | TEST-NEW-src-test-L42 | test-structure | カバレッジ | `src/test.ts:42` | 問題の説明 | remediation_regression | 初回test review後の修正がこの挙動を変更した | 修正方法 |
+
+follow-up finding の `Authorization basis` は `accepted_family_unvisited_consumer`、`remediation_regression`、`direct_acceptance_criterion_violation`、`required_consumer_migration` のいずれか正確な値に限定し、初回レビューでは「該当なし」とする。「初回に含まれなかった理由」は別の事実説明であり、初回レビューでは「該当なし」とする。
 
 ## 継続指摘（persists）
 | # | finding_id | family_tag | 前回根拠 | 今回根拠 | 問題 | 修正案 |

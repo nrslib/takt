@@ -40,7 +40,7 @@ const TERMINAL_BASELINE = JSON.parse(readFileSync(join(
   'src',
   '__tests__',
   'fixtures',
-  'takt-default-fc-terminal-compatibility-baseline.json',
+  'finding-contract-terminal-compatibility-baseline.json',
 ), 'utf8')) as {
   prompt: { bytes: number; sha256: string };
   requestDigest: string;

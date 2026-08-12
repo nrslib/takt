@@ -1,6 +1,5 @@
 import { spawnSync } from 'node:child_process';
 import {
-  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -11,10 +10,11 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join, relative } from 'node:path';
+import { basename, dirname, join, relative } from 'node:path';
+import { Writable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 import {
   auditedIntegrationBoundaryTestFiles,
@@ -35,6 +35,11 @@ import serialGitConfig from '../../vitest.config.it.serial.git.js';
 import serialWorkflowConfig from '../../vitest.config.it.serial.workflow.js';
 import unitConfig from '../../vitest.config.unit.parallel.js';
 import { selectNpmTestRuns } from '../../scripts/run-npm-test.mjs';
+import {
+  RELEASE_GATE_SCRIPTS,
+  RELEASE_LOG_RELATIVE_PATH,
+  runReleaseCheck,
+} from '../../scripts/run-release-check.mjs';
 
 interface PackageManifest {
   scripts: Record<string, string>;
@@ -50,6 +55,7 @@ interface CiWorkflowJob {
   needs?: string[];
   strategy?: {
     matrix?: {
+      os?: string[];
       shard?: number[];
       include?: Array<{
         group: string;
@@ -177,42 +183,47 @@ function hasIntegrationFileName(filePath: string): boolean {
     || fileName.endsWith('.performance.test.ts');
 }
 
-function releaseCommands(): string[] {
-  const [gateCommands, notification] = manifest.scripts['check:release'].split('; code=$?;');
-  expect(notification).toContain('exit $code');
-  return gateCommands.split(' && ');
-}
-
 function executeReleaseScript(failingCommand: string | undefined): {
   commands: string[];
   status: number | null;
   stdout: string;
+  log: string;
 } {
   const tempRoot = mkdtempSync(join(tmpdir(), 'takt-release-verification-'));
+  const repositoryRoot = process.cwd();
   const binDir = join(tempRoot, 'bin');
   const logPath = join(tempRoot, 'npm.log');
-  const npmStubPath = join(binDir, 'npm');
+  const releaseLogPath = join(tempRoot, RELEASE_LOG_RELATIVE_PATH);
+  const npmStubPath = join(binDir, 'npm-cli.js');
   mkdirSync(binDir);
-  writeFileSync(npmStubPath, `#!/bin/sh
-printf '%s\\n' "$*" >> "$TAKT_RELEASE_LOG"
-if [ "$*" = "$TAKT_FAIL_COMMAND" ]; then
-  exit 23
-fi
-`);
-  chmodSync(npmStubPath, 0o755);
+  writeFileSync(npmStubPath, `
+import { appendFileSync } from 'node:fs';
+
+const command = process.argv.slice(2).join(' ');
+appendFileSync(process.env.TAKT_RELEASE_LOG, command + '\\n');
+process.stdout.write('stdout:' + command + '\\n');
+process.stderr.write('stderr:' + command + '\\n');
+if (command === process.env.TAKT_FAIL_COMMAND) {
+  process.exit(23);
+}
+  `);
+  mkdirSync(dirname(releaseLogPath), { recursive: true });
+  writeFileSync(releaseLogPath, 'stale log entry\\n');
 
   try {
-    const result = spawnSync('/bin/sh', ['-c', manifest.scripts['check:release']], {
+    const result = spawnSync(process.execPath, [join(repositoryRoot, 'scripts/run-release-check.mjs')], {
       encoding: 'utf8',
+      cwd: tempRoot,
       env: {
         ...process.env,
-        PATH: binDir,
+        npm_execpath: npmStubPath,
         TAKT_FAIL_COMMAND: failingCommand === undefined ? '' : failingCommand,
         TAKT_RELEASE_LOG: logPath,
       },
     });
     const commands = readFileSync(logPath, 'utf8').trim().split('\n');
-    return { commands, status: result.status, stdout: result.stdout };
+    const log = readFileSync(releaseLogPath, 'utf8');
+    return { commands, status: result.status, stdout: result.stdout, log };
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }
@@ -236,19 +247,24 @@ describe('release verification wiring', () => {
       'test:it:serial:workflow': 'npm run test:it:heavy:serial:workflow',
       'test:prompt-evals': 'node prompt-evals/run-smoke.mjs',
     });
+    expect(manifest.scripts['test:e2e:provider:claude-sdk'])
+      .toMatch(/TAKT_E2E_PROVIDER=claude-sdk/);
+    expect(manifest.scripts['test:e2e:provider'])
+      .toContain('test:e2e:provider:claude-sdk');
+    expect(manifest.scripts['test:e2e:provider']!.indexOf('claude-sdk'))
+      .toBeLessThan(manifest.scripts['test:e2e:provider']!.indexOf('provider:codex'));
   });
 
   it('should run every release gate once', () => {
-    const commands = releaseCommands();
-
-    expect(commands).toEqual([
-      'npm run build',
-      'npm run lint',
-      'npm run test',
-      'npm run test:it:all',
-      'npm run test:e2e:all',
+    expect(manifest.scripts['check:release']).toBe('node scripts/run-release-check.mjs');
+    expect(RELEASE_GATE_SCRIPTS).toEqual([
+      'build',
+      'lint',
+      'test',
+      'test:it:all',
+      'test:e2e:all',
     ]);
-    expect(new Set(commands).size).toBe(commands.length);
+    expect(new Set(RELEASE_GATE_SCRIPTS).size).toBe(RELEASE_GATE_SCRIPTS.length);
   });
 
   it('should run light integration and isolated heavy integration shards as pull-request gates', () => {
@@ -288,6 +304,19 @@ describe('release verification wiring', () => {
     expect(aggregateCommand).toContain('exit 1');
   });
 
+  it('should build and smoke test the Pi SDK on Windows and macOS', () => {
+    const piJob = ciWorkflow.jobs?.['pi-cross-platform'];
+    const commands = piJob?.steps?.map((step) => step.run).filter(Boolean);
+
+    expect(piJob?.strategy?.matrix?.os).toEqual(['windows-latest', 'macos-latest']);
+    expect(commands).toEqual(expect.arrayContaining([
+      'npm ci',
+      'npm run build',
+      'npm test -- src/__tests__/pi-client.test.ts src/__tests__/pi-provider.test.ts',
+      'npm run test:pi-sdk-smoke',
+    ]));
+  });
+
   it('should execute the complete release path when every gate succeeds', () => {
     const result = executeReleaseScript(undefined);
 
@@ -299,7 +328,29 @@ describe('release verification wiring', () => {
       'run test:e2e:all',
     ]);
     expect(result.status).toBe(0);
+    expect(result.stdout).toContain(`[takt] check:release log: ${RELEASE_LOG_RELATIVE_PATH}`);
     expect(result.stdout).toContain('[takt] check:release passed');
+    expect(result.log).toContain(`[takt] check:release log: ${RELEASE_LOG_RELATIVE_PATH}`);
+    expect(result.log).toContain('stdout:run build');
+    expect(result.log).toContain('stderr:run build');
+    expect(result.log).not.toContain('stale log entry');
+  });
+
+  it('should fail when the release log rejects the final result write', async () => {
+    const logStream = new Writable({
+      write(chunk, _encoding, callback) {
+        const error = chunk.toString().includes('check:release passed')
+          ? new Error('final release log write failed')
+          : undefined;
+        callback(error);
+      },
+    });
+    const runCommand = vi.fn().mockResolvedValue({ code: 0, signal: null, output: '' });
+
+    const code = await runReleaseCheck(runCommand, async () => logStream);
+
+    expect(runCommand).toHaveBeenCalledTimes(RELEASE_GATE_SCRIPTS.length);
+    expect(code).toBe(1);
   });
 
   it.each([
@@ -329,7 +380,10 @@ describe('release verification wiring', () => {
 
     expect(result.commands).toEqual(expectedCommands);
     expect(result.status).toBe(23);
+    expect(result.stdout).toContain(`[takt] check:release log: ${RELEASE_LOG_RELATIVE_PATH}`);
     expect(result.stdout).toContain('[takt] check:release failed (exit=23)');
+    expect(result.log).toContain('[takt] check:release failed (exit=23)');
+    expect(result.log).not.toContain('stale log entry');
   });
 
   it('should keep fast unit and integration classifications disjoint', () => {
@@ -430,11 +484,6 @@ describe('release verification wiring', () => {
       target: 'src/__tests__/finding-review-integrity-gate.test.ts',
       script: 'test:it:heavy:serial:workflow',
       normalized: 'src/__tests__/finding-review-integrity-gate.test.ts',
-    },
-    {
-      target: 'src/__tests__/workflow-step-fragment-builtin-runtime.test.ts',
-      script: 'test:it:heavy:serial:workflow',
-      normalized: 'src/__tests__/workflow-step-fragment-builtin-runtime.test.ts',
     },
     {
       target: 'src/__tests__/workflow-step-fragment-runtime.test.ts',

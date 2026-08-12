@@ -14,6 +14,7 @@ import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDet
 import type { SelectorGitCommandRunner } from '../core/workflow/dynamic-parallel/selector-git-command-runner.js';
 import { DefaultStructuredCaller } from '../agents/structured-caller.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
+import { resolveRefToContent } from '../infra/config/loaders/resource-resolver.js';
 import {
   getBuiltinWorkflowsDir,
 } from '../infra/config/paths.js';
@@ -88,6 +89,22 @@ const COMPANION_DIFF_READER: CompanionDiffReader = {
     },
   }),
 };
+const COMPANION_DIFF_READER_WITH_FINDING: CompanionDiffReader = {
+  readBaselineSha: async () => 'test-baseline',
+  readDiff: async () => ({
+    status: 'ok',
+    snapshot: {
+      digest: 'changed-diff',
+      changedLines: 10,
+      content: 'diff content',
+      changedFiles: ['src/example.ts'],
+      fileFingerprints: { 'src/example.ts': 'changed' },
+      hunkFingerprints: { 'src/example.ts:1': 'changed' },
+      omittedBytes: 0,
+      truncated: false,
+    },
+  }),
+};
 
 function findWorkflowStep(workflow: WorkflowConfig, stepName: string): WorkflowStep {
   const pending = [...workflow.steps];
@@ -105,7 +122,7 @@ function loadCoreForWrapper(
 ): WorkflowConfig {
   const delegation = wrapper.steps.find((step) => step.name === 'develop');
   if (delegation?.kind !== 'workflow_call' || typeof delegation.call !== 'string') {
-    return wrapper;
+    throw new Error(`Workflow "${wrapper.name}" step "develop" is not a workflow_call`);
   }
   return loadWorkflowFromFile(
     join(getBuiltinWorkflowsDir(language), `${delegation.call}.yaml`),
@@ -114,20 +131,154 @@ function loadCoreForWrapper(
   );
 }
 
-function loadReviewForCore(
+function loadPeerReviewForCore(
   language: 'en' | 'ja',
   core: WorkflowConfig,
   projectDir: string,
 ): WorkflowConfig {
-  const review = findWorkflowStep(core, 'review');
-  if (review.kind !== 'workflow_call' || typeof review.call !== 'string') {
-    return core;
+  const peerReview = findWorkflowStep(core, 'peer-review');
+  if (peerReview.kind !== 'workflow_call' || typeof peerReview.call !== 'string') {
+    throw new Error(`Workflow "${core.name}" step "peer-review" is not a workflow_call`);
   }
   return loadWorkflowFromFile(
-    join(getBuiltinWorkflowsDir(language), `${review.call}.yaml`),
+    join(getBuiltinWorkflowsDir(language), `${peerReview.call}.yaml`),
     projectDir,
-    { callableArgs: review.args },
+    { callableArgs: peerReview.args },
   );
+}
+
+function loadImplementationForCore(
+  language: 'en' | 'ja',
+  core: WorkflowConfig,
+  projectDir: string,
+): WorkflowConfig {
+  const implementation = findWorkflowStep(core, 'implement');
+  if (implementation.kind !== 'workflow_call' || typeof implementation.call !== 'string') {
+    throw new Error(`Workflow "${core.name}" step "implement" is not a workflow_call`);
+  }
+  return loadWorkflowFromFile(
+    join(getBuiltinWorkflowsDir(language), `${implementation.call}.yaml`),
+    projectDir,
+    { callableArgs: implementation.args },
+  );
+}
+
+function loadRemediationForPeerReview(
+  language: 'en' | 'ja',
+  peerReview: WorkflowConfig,
+  projectDir: string,
+): WorkflowConfig {
+  const remediation = findWorkflowStep(peerReview, 'remediation');
+  if (remediation.kind !== 'workflow_call' || typeof remediation.call !== 'string') {
+    throw new Error(`Workflow "${peerReview.name}" step "remediation" is not a workflow_call`);
+  }
+  return loadWorkflowFromFile(
+    join(getBuiltinWorkflowsDir(language), `${remediation.call}.yaml`),
+    projectDir,
+    { callableArgs: remediation.args },
+  );
+}
+
+function loadReviewerSuiteForPeerReview(
+  language: 'en' | 'ja',
+  peerReview: WorkflowConfig,
+  projectDir: string,
+): WorkflowConfig {
+  const reviewers = findWorkflowStep(peerReview, peerReview.initialStep);
+  return loadReviewerSuiteForCall(language, reviewers, projectDir);
+}
+
+function loadReviewerSuiteForCall(
+  language: 'en' | 'ja',
+  reviewers: WorkflowStep,
+  projectDir: string,
+): WorkflowConfig {
+  if (reviewers.kind !== 'workflow_call' || typeof reviewers.call !== 'string') {
+    throw new Error(`Reviewer step "${reviewers.name}" is not a workflow_call`);
+  }
+  const adapter = loadWorkflowFromFile(
+    join(getBuiltinWorkflowsDir(language), `${reviewers.call}.yaml`),
+    projectDir,
+    { callableArgs: reviewers.args },
+  );
+  const reviewCall = findWorkflowStep(adapter, adapter.initialStep);
+  if (reviewCall.kind !== 'workflow_call' || typeof reviewCall.call !== 'string') {
+    return adapter;
+  }
+  return loadWorkflowFromFile(
+    join(getBuiltinWorkflowsDir(language), `${reviewCall.call}.yaml`),
+    projectDir,
+    { callableArgs: reviewCall.args },
+  );
+}
+
+interface ReviewerStepReference {
+  workflow: WorkflowConfig;
+  step: WorkflowStep;
+  persona: string;
+}
+
+const REVIEW_INSTRUCTION_PARAM_BY_PERSONA: Readonly<Record<string, string>> = {
+  'architecture-reviewer': 'architecture_review_instruction',
+  'security-reviewer': 'security_review_instruction',
+  'testing-reviewer': 'testing_review_instruction',
+  'coding-reviewer': 'coding_review_instruction',
+  'ai-antipattern-reviewer': 'ai_antipattern_review_instruction',
+  'frontend-reviewer': 'frontend_review_instruction',
+};
+
+function expectResolvedReviewerInstructions(
+  language: 'en' | 'ja',
+  reviewerCall: WorkflowStep,
+  reviewerSuite: WorkflowConfig,
+  projectDir: string,
+): void {
+  for (const { step, persona } of collectReviewerSteps(language, reviewerSuite, projectDir)) {
+    const param = REVIEW_INSTRUCTION_PARAM_BY_PERSONA[persona];
+    if (param === undefined) throw new Error(`Instruction parameter not found for persona "${persona}"`);
+    const instructionRef = reviewerCall.args?.[param];
+    if (typeof instructionRef !== 'string') {
+      throw new Error(`Instruction argument "${param}" not found for reviewer "${step.name}"`);
+    }
+    const resolvedInstruction = resolveRefToContent(
+      instructionRef,
+      undefined,
+      projectDir,
+      'instructions',
+      { projectDir, lang: language },
+    );
+    expect(resolvedInstruction).toEqual(expect.any(String));
+    expect(resolvedInstruction).not.toBe('');
+    expect(step.instruction).toEqual(expect.any(String));
+    expect(step.instruction).not.toBe('');
+    expect(step.instruction).toBe(resolvedInstruction);
+  }
+}
+
+function collectReviewerSteps(
+  language: 'en' | 'ja',
+  workflow: WorkflowConfig,
+  projectDir: string,
+): ReviewerStepReference[] {
+  const reviewRoot = findWorkflowStep(workflow, workflow.initialStep);
+  if (reviewRoot.parallel === undefined) {
+    throw new Error(`Review workflow "${workflow.name}" has no parallel reviewers`);
+  }
+
+  return getAllParallelSubSteps(reviewRoot.parallel).flatMap((step) => {
+    if (step.kind === 'workflow_call' && typeof step.call === 'string') {
+      const nestedWorkflow = loadWorkflowFromFile(
+        join(getBuiltinWorkflowsDir(language), `${step.call}.yaml`),
+        projectDir,
+        { callableArgs: step.args },
+      );
+      return collectReviewerSteps(language, nestedWorkflow, projectDir);
+    }
+    if (typeof step.persona !== 'string') {
+      throw new Error(`Persona not found for reviewer "${step.name}"`);
+    }
+    return [{ workflow, step, persona: step.persona }];
+  });
 }
 
 function findRuleIndex(step: WorkflowStep, ruleLabel: string): number {
@@ -153,6 +304,44 @@ function response(
   };
 }
 
+function responseForNext(
+  workflow: WorkflowConfig,
+  stepName: string,
+  nextStep: string,
+): ScenarioEntry {
+  const step = findWorkflowStep(workflow, stepName);
+  const rule = step.rules?.find((candidate) => candidate.next === nextStep);
+  const ruleLabel = rule === undefined
+    ? undefined
+    : semanticRuleCandidatesOf([rule], false)[0]?.label;
+  if (ruleLabel === undefined) {
+    throw new Error(`Semantic rule not found for transition "${stepName}" -> "${nextStep}"`);
+  }
+  if (typeof step.persona !== 'string') {
+    throw new Error(`Persona not found for step "${stepName}"`);
+  }
+  return response(workflow, stepName, step.persona, ruleLabel);
+}
+
+function responseForReturn(
+  workflow: WorkflowConfig,
+  stepName: string,
+  returnValue: string,
+): ScenarioEntry {
+  const step = findWorkflowStep(workflow, stepName);
+  const rule = step.rules?.find((candidate) => candidate.returnValue === returnValue);
+  const ruleLabel = rule === undefined
+    ? undefined
+    : semanticRuleCandidatesOf([rule], false)[0]?.label;
+  if (ruleLabel === undefined) {
+    throw new Error(`Semantic rule not found for return "${stepName}" -> "${returnValue}"`);
+  }
+  if (typeof step.persona !== 'string') {
+    throw new Error(`Persona not found for step "${stepName}"`);
+  }
+  return response(workflow, stepName, step.persona, ruleLabel);
+}
+
 function selection(selectedIds: string[], rationale: string): ScenarioEntry {
   return {
     persona: 'takt-internal',
@@ -163,6 +352,72 @@ function selection(selectedIds: string[], rationale: string): ScenarioEntry {
       rationale,
     },
   };
+}
+
+function acceptedAndMergedCompanionFinding(): ScenarioEntry[] {
+  return [
+    {
+      persona: 'ai-antipattern-review-companion',
+      status: 'done',
+      content: 'review',
+      structuredOutput: {
+        findings: [{
+          severity: 'should_fix',
+          file: 'src/example.ts',
+          line: 1,
+          finding: 'The changed observable contract lacks regression coverage.',
+        }],
+        updates: [],
+        notes: null,
+      },
+    },
+    {
+      persona: 'ai-antipattern-review-moderator',
+      status: 'done',
+      content: 'moderate',
+      structuredOutput: {
+        findings: [{
+          action: 'accept',
+          sourceIndex: 0,
+          severity: null,
+          finding: null,
+          targetId: null,
+        }],
+        updates: [],
+      },
+    },
+    {
+      persona: 'testing-review-companion',
+      status: 'done',
+      content: 'review',
+      delayMs: 25,
+      structuredOutput: {
+        findings: [{
+          severity: 'should_fix',
+          file: 'src/example.ts',
+          line: 1,
+          finding: 'The changed observable contract lacks regression coverage.',
+        }],
+        updates: [],
+        notes: null,
+      },
+    },
+    {
+      persona: 'ai-antipattern-review-moderator',
+      status: 'done',
+      content: 'moderate',
+      structuredOutput: {
+        findings: [{
+          action: 'merge',
+          sourceIndex: 0,
+          severity: null,
+          finding: null,
+          targetId: 'ai-antipattern-review-companion-1',
+        }],
+        updates: [],
+      },
+    },
+  ];
 }
 
 describe('experimental builtin workflow', () => {
@@ -187,118 +442,157 @@ describe('experimental builtin workflow', () => {
     invalidateAllResolvedConfigCache();
   });
 
-  it('should fail fast when facet pool bindings are missing, wrongly typed, or unknown', () => {
+  it.each(['en', 'ja'] as const)(
+    'should opt requirement scenarios into every %s experimental stage and no normal wrapper stage',
+    (language) => {
+      writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${language}\n`);
+      invalidateAllResolvedConfigCache();
+      const scenarioSelection = {
+        plan_instruction: 'scenario-based-plan',
+        plan_report_format: 'scenario-based-plan',
+        replan_instruction: 'scenario-based-replan-implementation',
+        testing_instruction: 'scenario-based-write-tests-first',
+        testing_report_format: 'scenario-based-test-report',
+        fix_plan_instruction: 'scenario-based-fix-plan-from-review-resolution',
+        fix_plan_report_format: 'scenario-based-fix-plan',
+        final_gate_instruction: 'scenario-based-supervise-merge-readiness',
+      };
+      const reportFormatRef = (workflow: WorkflowConfig, stepName: string): string | undefined => {
+        const reports = findWorkflowStep(workflow, stepName).outputContracts;
+        expect(reports, `${workflow.name}.${stepName}`).toHaveLength(1);
+        return reports![0]!.formatRef;
+      };
+      const resolvedStages = (workflowName: string) => {
+        const wrapper = loadWorkflowFromFile(
+          join(getBuiltinWorkflowsDir(language), `${workflowName}.yaml`),
+          projectDir,
+        );
+        const core = loadCoreForWrapper(language, wrapper, projectDir);
+        const peerReview = loadPeerReviewForCore(language, core, projectDir);
+        const remediation = loadRemediationForPeerReview(language, peerReview, projectDir);
+        return { wrapper, core, peerReview, remediation };
+      };
+
+      for (const workflowName of ['experimental', 'takt-experimental']) {
+        const { wrapper, core, peerReview, remediation } = resolvedStages(workflowName);
+        expect(findWorkflowStep(wrapper, 'develop')).toMatchObject({
+          kind: 'workflow_call',
+          args: scenarioSelection,
+        });
+        expect(findWorkflowStep(core, 'peer-review')).toMatchObject({
+          kind: 'workflow_call',
+          args: {
+            fix_plan_instruction: scenarioSelection.fix_plan_instruction,
+            fix_plan_report_format: scenarioSelection.fix_plan_report_format,
+            final_gate_instruction: scenarioSelection.final_gate_instruction,
+          },
+        });
+        expect(findWorkflowStep(peerReview, 'remediation')).toMatchObject({
+          kind: 'workflow_call',
+          args: {
+            fix_plan_instruction: scenarioSelection.fix_plan_instruction,
+            fix_plan_report_format: scenarioSelection.fix_plan_report_format,
+          },
+        });
+        expect(reportFormatRef(core, 'plan')).toBe(scenarioSelection.plan_report_format);
+        expect(reportFormatRef(core, 'replan')).toBe(scenarioSelection.plan_report_format);
+        expect(reportFormatRef(core, 'write_tests')).toBe(scenarioSelection.testing_report_format);
+        expect(reportFormatRef(remediation, 'fix-plan'))
+          .toBe(scenarioSelection.fix_plan_report_format);
+      }
+
+      for (const workflowName of ['default', 'backend-maintenance', 'frontend-maintenance']) {
+        const { core, peerReview, remediation } = resolvedStages(workflowName);
+        expect(findWorkflowStep(core, 'peer-review')).toMatchObject({
+          kind: 'workflow_call',
+          args: {
+            fix_plan_instruction: 'fix-plan-from-review-resolution',
+            fix_plan_report_format: 'fix-plan',
+            final_gate_instruction: 'supervise-merge-readiness',
+          },
+        });
+        expect(findWorkflowStep(peerReview, 'remediation')).toMatchObject({
+          kind: 'workflow_call',
+          args: {
+            fix_plan_instruction: 'fix-plan-from-review-resolution',
+            fix_plan_report_format: 'fix-plan',
+          },
+        });
+        expect(reportFormatRef(core, 'plan')).toBe('plan');
+        expect(reportFormatRef(core, 'replan')).toBe('plan');
+        expect(reportFormatRef(core, 'write_tests')).toBe('test-report');
+        expect(reportFormatRef(remediation, 'fix-plan')).toBe('fix-plan');
+      }
+    },
+  );
+
+  it.each(['en', 'ja'] as const)(
+    'should load the %s dynamic review wrappers through their consuming reviewer suites',
+    (language) => {
+      writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${language}\n`);
+      invalidateAllResolvedConfigCache();
+      for (const workflowName of ['experimental', 'takt-experimental']) {
+        const wrapper = loadWorkflowFromFile(
+          join(getBuiltinWorkflowsDir(language), `${workflowName}.yaml`),
+          projectDir,
+        );
+        const core = loadCoreForWrapper(language, wrapper, projectDir);
+        const peerReview = loadPeerReviewForCore(language, core, projectDir);
+        const reviewerCalls = peerReview.steps.filter((step) => (
+          step.kind === 'workflow_call'
+          && typeof step.args?.coding_review_instruction === 'string'
+        ));
+        expect(reviewerCalls).toHaveLength(2);
+        const [initialSuite, followUpSuite] = reviewerCalls.map((step) => (
+          loadReviewerSuiteForCall(language, step, projectDir)
+        ));
+        expectResolvedReviewerInstructions(language, reviewerCalls[0]!, initialSuite!, projectDir);
+        expectResolvedReviewerInstructions(language, reviewerCalls[1]!, followUpSuite!, projectDir);
+        const initialReviewers = new Map(collectReviewerSteps(language, initialSuite!, projectDir)
+          .map(({ step }) => [step.name, step.instruction]));
+        const followUpReviewers = new Map(collectReviewerSteps(language, followUpSuite!, projectDir)
+          .map(({ step }) => [step.name, step.instruction]));
+        expect([...followUpReviewers.keys()].sort()).toEqual([...initialReviewers.keys()].sort());
+        for (const [reviewer, initialInstruction] of initialReviewers) {
+          expect(initialInstruction).not.toBe('');
+          expect(followUpReviewers.get(reviewer)).not.toBe(initialInstruction);
+        }
+
+        const reviewerSuite = initialSuite!;
+        const securityReview = findWorkflowStep(reviewerSuite, 'security-review');
+        const poolName = securityReview.dynamicFacets?.pool;
+        if (poolName === undefined) {
+          throw new Error(`Security reviewer in "${reviewerSuite.name}" has no dynamic facet pool`);
+        }
+        const candidates = reviewerSuite.facetPools?.[poolName]?.candidates.map((candidate) => ({
+          id: candidate.id,
+          knowledgeRefs: candidate.knowledgeRefs,
+        }));
+        expect(candidates).toEqual(workflowName === 'experimental'
+          ? [
+              { id: 'web', knowledgeRefs: ['security-web', 'security-api'] },
+              { id: 'cli', knowledgeRefs: ['security-local'] },
+            ]
+          : [
+              { id: 'cli', knowledgeRefs: ['security-local'] },
+            ]);
+      }
+    },
+  );
+
+  it('should reject an unknown security review pool at the consuming reviewer-suite boundary', () => {
     writeFileSync(join(projectDir, '.takt', 'config.yaml'), 'language: en\n');
     invalidateAllResolvedConfigCache();
-    const corePath = join(getBuiltinWorkflowsDir('en'), 'experimental-core.yaml');
-    expect(() => loadWorkflowFromFile(corePath, projectDir, {
-      callableArgs: { implementation_pool: 'missing-pool' },
-    })).toThrow('references unknown facet pool "missing-pool"');
-    expect(() => loadWorkflowFromFile(corePath, projectDir, {
-      callableArgs: { implementation_pool: ['coding-facets'] },
-    })).toThrow('must be a scalar facet_pool_ref');
 
-    const customDir = join(projectDir, '.takt', 'workflows');
-    mkdirSync(customDir, { recursive: true });
-    const customPath = join(customDir, 'pool-contract.yaml');
-    writeFileSync(customPath, `name: pool-contract
-subworkflow:
-  callable: true
-  visibility: internal
-  params:
-    pool:
-      type: facet_pool_ref
-facet_pools:
-  available:
-    candidates:
-      - id: candidate
-        description: Candidate
-        policy: coding
-        knowledge: architecture
-initial_step: implement
-steps:
-  - name: implement
-    persona: coder
-    policy: coding
-    knowledge: architecture
-    instruction: implement
-    edit: true
-    dynamic_facets:
-      pool:
-        $param: pool
-    rules:
-      - condition: done
-        next: COMPLETE
-`, 'utf-8');
-    expect(() => loadWorkflowFromFile(customPath, projectDir)).toThrow(
-      'requires workflow_call arg "pool" for dynamic_facets.pool',
-    );
+    expect(() => loadWorkflowFromFile(
+      join(getBuiltinWorkflowsDir('en'), 'experimental-review.yaml'),
+      projectDir,
+      { callableArgs: { security_review_pool: 'missing-security-review-pool' } },
+    )).toThrow('references unknown facet pool "missing-security-review-pool"');
   });
 
   it(
-    'should complete the English experimental wrapper after reviewer fixes when review requires remediation',
-    async () => {
-      const language = 'en';
-      writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${language}\n`);
-      invalidateAllResolvedConfigCache();
-      const workflow = loadWorkflowFromFile(
-        join(getBuiltinWorkflowsDir(language), 'experimental.yaml'),
-        projectDir,
-      );
-      const scenarioWorkflow = loadCoreForWrapper(language, workflow, projectDir);
-      const reviewWorkflow = loadReviewForCore(language, scenarioWorkflow, projectDir);
-      setMockScenario([
-        response(scenarioWorkflow, 'plan', 'planner', 'Requirements are clear and implementation is feasible'),
-        response(scenarioWorkflow, 'write_tests', 'coder', 'Test creation is complete'),
-        selection(['frontend'], 'Frontend implementation facets are required.'),
-        response(scenarioWorkflow, 'implement', 'coder', 'Implementation is complete'),
-        selection(['frontend-review'], 'The first review round covers frontend changes.'),
-        response(reviewWorkflow, 'coding-review', 'coding-reviewer', 'needs_fix'),
-        response(reviewWorkflow, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'needs_fix'),
-        response(reviewWorkflow, 'frontend-review', 'frontend-reviewer', 'needs_fix'),
-        selection([], 'No additional remediation facets are needed.'),
-        response(scenarioWorkflow, 'fix', 'coder', 'Fix is complete'),
-        selection(['security-review'], 'The second review round covers security changes.'),
-        response(reviewWorkflow, 'coding-review', 'coding-reviewer', 'approved'),
-        response(reviewWorkflow, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
-        response(reviewWorkflow, 'security-review', 'security-reviewer', 'approved'),
-        response(scenarioWorkflow, 'supervise', 'supervisor', 'approved'),
-      ]);
-      const engine = new WorkflowEngine(workflow, projectDir, 'Implement and review a frontend security change', {
-        projectCwd: projectDir,
-        provider: 'mock',
-        selectorProvider: SELECTOR_PROVIDER,
-        selectorGitCommandRunner: SELECTOR_GIT_COMMAND_RUNNER,
-        companionProviders: {
-          'ai-antipattern-review-companion': { provider: 'mock' },
-        },
-        companionDiffReader: COMPANION_DIFF_READER,
-        structuredCaller: new DefaultStructuredCaller(),
-        workflowCallResolver: ({ parentWorkflow, step, projectCwd, lookupCwd }) =>
-          resolveWorkflowCallTarget(parentWorkflow, step, projectCwd, lookupCwd),
-      });
-      engines.push(engine);
-      const abortReasons: string[] = [];
-      const companionSteps: string[] = [];
-      engine.on('workflow:abort', (_state, reason) => abortReasons.push(reason));
-      engine.on('companion:start', ({ step }) => companionSteps.push(step));
-
-      const state = await engine.run();
-
-      expect(state.status, JSON.stringify({
-        abortReasons,
-        currentStep: state.currentStep,
-        iteration: state.iteration,
-        remainingScenarios: getScenarioQueue()?.remaining,
-      })).toBe('completed');
-      expect(getScenarioQueue()?.remaining).toBe(0);
-      expect(companionSteps).toEqual(['implement', 'fix']);
-    },
-    60_000,
-  );
-
-  it(
-    'should complete the TAKT experimental wrapper when TAKT testing facets and reviewers are selected',
+    'should run adjudication, verified remediation, follow-up review, and the final gate for takt-experimental',
     async () => {
       const language = 'en';
       writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${language}\n`);
@@ -307,36 +601,83 @@ steps:
         join(getBuiltinWorkflowsDir(language), 'takt-experimental.yaml'),
         projectDir,
       );
-      const scenarioWorkflow = loadCoreForWrapper(language, workflow, projectDir);
-      const reviewWorkflow = loadReviewForCore(language, scenarioWorkflow, projectDir);
+      const core = loadCoreForWrapper(language, workflow, projectDir);
+      const implementation = loadImplementationForCore(language, core, projectDir);
+      const peerReview = loadPeerReviewForCore(language, core, projectDir);
+      const remediation = loadRemediationForPeerReview(language, peerReview, projectDir);
+      const reviewerSuite = loadReviewerSuiteForPeerReview(language, peerReview, projectDir);
       setMockScenario([
-        response(scenarioWorkflow, 'plan', 'planner', 'Requirements are clear and implementation is feasible'),
-        response(scenarioWorkflow, 'write_tests', 'coder', 'Test creation is complete'),
-        selection(['testing'], 'The implementation changes test boundaries.'),
-        response(scenarioWorkflow, 'implement', 'coder', 'Implementation is complete'),
-        selection([], 'The fixed reviewers cover the changed test path.'),
-        response(reviewWorkflow, 'coding-review', 'coding-reviewer', 'approved'),
-        response(reviewWorkflow, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
-        response(scenarioWorkflow, 'supervise', 'supervisor', 'approved'),
+        responseForNext(core, 'plan', 'write_tests'),
+        responseForNext(core, 'write_tests', 'implement'),
+        selection(['testing'], 'Testing implementation facets are required.'),
+        responseForNext(implementation, 'implement', 'COMPLETE'),
+        ...acceptedAndMergedCompanionFinding(),
+        selection(['architecture-review'], 'The first review round covers architecture changes.'),
+        response(reviewerSuite, 'coding-review', 'coding-reviewer', 'needs_fix'),
+        response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'needs_fix'),
+        response(reviewerSuite, 'architecture-review', 'architecture-reviewer', 'needs_fix'),
+        responseForNext(peerReview, 'review-adjudication', 'remediation'),
+        responseForNext(remediation, 'fix-plan', 'fix'),
+        selection(['testing'], 'Testing remediation facets are required.'),
+        responseForNext(remediation, 'fix', 'fix-verifier'),
+        ...acceptedAndMergedCompanionFinding(),
+        responseForNext(remediation, 'fix-verifier', 'fix-retry'),
+        selection(['testing'], 'Testing remediation facets are required for the retry.'),
+        responseForNext(remediation, 'fix-retry', 'fix-verifier'),
+        ...acceptedAndMergedCompanionFinding(),
+        responseForNext(remediation, 'fix-verifier', 'COMPLETE'),
+        selection(['security-review'], 'The second review round covers security changes.'),
+        selection(['cli'], 'The TAKT local execution security knowledge matches the changed surface.'),
+        response(reviewerSuite, 'coding-review', 'coding-reviewer', 'approved'),
+        response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
+        response(reviewerSuite, 'security-review', 'security-reviewer', 'approved'),
+        responseForNext(peerReview, 'review-adjudication', 'final-gate'),
+        responseForNext(peerReview, 'final-gate', 'remediation'),
+        responseForNext(remediation, 'fix-plan', 'fix'),
+        selection(['security'], 'The final-gate remediation requires security facets.'),
+        responseForNext(remediation, 'fix', 'fix-verifier'),
+        ...acceptedAndMergedCompanionFinding(),
+        responseForNext(remediation, 'fix-verifier', 'COMPLETE'),
+        selection([], 'The fixed reviewers cover the final-gate remediation.'),
+        response(reviewerSuite, 'coding-review', 'coding-reviewer', 'approved'),
+        response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
+        responseForNext(peerReview, 'review-adjudication', 'final-gate'),
+        responseForNext(peerReview, 'final-gate', 'COMPLETE'),
       ]);
-      const engine = new WorkflowEngine(workflow, projectDir, 'Implement a TAKT testing change', {
+      const engine = new WorkflowEngine(workflow, projectDir, 'Implement and review a TAKT local execution security change', {
         projectCwd: projectDir,
         provider: 'mock',
         selectorProvider: SELECTOR_PROVIDER,
         selectorGitCommandRunner: SELECTOR_GIT_COMMAND_RUNNER,
         companionProviders: {
           'ai-antipattern-review-companion': { provider: 'mock' },
+          'testing-review-companion': { provider: 'mock' },
+          'ai-antipattern-review-moderator': { provider: 'mock' },
         },
-        companionDiffReader: COMPANION_DIFF_READER,
+        companionDiffReader: COMPANION_DIFF_READER_WITH_FINDING,
         structuredCaller: new DefaultStructuredCaller(),
         workflowCallResolver: ({ parentWorkflow, step, projectCwd, lookupCwd }) =>
           resolveWorkflowCallTarget(parentWorkflow, step, projectCwd, lookupCwd),
       });
       engines.push(engine);
       const abortReasons: string[] = [];
-      const companionSteps: string[] = [];
+      const companionStarts: Array<{ step: string; companion: string }> = [];
+      const companionReviewRounds: Array<{ step: string; companion: string }> = [];
+      const companionFindingEvents: Array<{
+        step: string;
+        companion: string;
+        findingId: string;
+      }> = [];
       engine.on('workflow:abort', (_state, reason) => abortReasons.push(reason));
-      engine.on('companion:start', ({ step }) => companionSteps.push(step));
+      engine.on('companion:start', ({ step, companion }) => {
+        companionStarts.push({ step, companion });
+      });
+      engine.on('companion:review_round', ({ step, companion }) => {
+        companionReviewRounds.push({ step, companion });
+      });
+      engine.on('companion:finding', ({ step, companion, findingId }) => {
+        companionFindingEvents.push({ step, companion, findingId });
+      });
 
       const state = await engine.run();
 
@@ -345,14 +686,165 @@ steps:
         currentStep: state.currentStep,
         iteration: state.iteration,
         remainingScenarios: getScenarioQueue()?.remaining,
+        companionStarts,
       })).toBe('completed');
       expect(getScenarioQueue()?.remaining).toBe(0);
-      expect(companionSteps).toEqual(['implement']);
+      const companionSteps = ['implement', 'fix', 'fix-retry', 'fix'];
+      expect(companionStarts).toEqual(companionSteps.flatMap((step) => [
+        { step, companion: 'ai-antipattern-review-companion' },
+        { step, companion: 'testing-review-companion' },
+      ]));
+      expect(companionReviewRounds).toEqual(companionStarts);
+      expect(companionFindingEvents).toEqual(companionSteps.map((step) => ({
+        step,
+        companion: 'ai-antipattern-review-companion',
+        findingId: 'ai-antipattern-review-companion-1',
+      })));
     },
+    60_000,
   );
 
   it(
-    'should abort the Japanese experimental wrapper when review findings cannot be remediated',
+    'should route implementation, fix, and final-gate replanning through replan',
+    async () => {
+      const language = 'en';
+      writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${language}\n`);
+      invalidateAllResolvedConfigCache();
+      const workflow = loadWorkflowFromFile(
+        join(getBuiltinWorkflowsDir(language), 'experimental.yaml'),
+        projectDir,
+      );
+      const core = loadCoreForWrapper(language, workflow, projectDir);
+      const implementation = loadImplementationForCore(language, core, projectDir);
+      const peerReview = loadPeerReviewForCore(language, core, projectDir);
+      const remediation = loadRemediationForPeerReview(language, peerReview, projectDir);
+      const reviewerSuite = loadReviewerSuiteForPeerReview(language, peerReview, projectDir);
+      setMockScenario([
+        responseForNext(core, 'plan', 'write_tests'),
+        responseForNext(core, 'write_tests', 'implement'),
+        selection(['testing'], 'Testing implementation facets are required.'),
+        responseForReturn(implementation, 'implement', 'need_replan'),
+        responseForNext(core, 'replan', 'implement'),
+        selection(['testing'], 'The replanned implementation still changes test boundaries.'),
+        responseForNext(implementation, 'implement', 'COMPLETE'),
+        selection([], 'The fixed TAKT reviewers cover the changed path.'),
+        response(reviewerSuite, 'coding-review', 'coding-reviewer', 'needs_fix'),
+        response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'needs_fix'),
+        responseForNext(peerReview, 'review-adjudication', 'remediation'),
+        responseForNext(remediation, 'fix-plan', 'fix'),
+        selection(['testing'], 'The fix uses the TAKT testing facets.'),
+        responseForReturn(remediation, 'fix', 'need_replan'),
+        responseForNext(core, 'replan', 'implement'),
+        selection(['testing'], 'The second replanned implementation changes test boundaries.'),
+        responseForNext(implementation, 'implement', 'COMPLETE'),
+        selection([], 'The fixed TAKT reviewers cover the replanned path.'),
+        response(reviewerSuite, 'coding-review', 'coding-reviewer', 'approved'),
+        response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
+        responseForNext(peerReview, 'review-adjudication', 'final-gate'),
+        responseForReturn(peerReview, 'final-gate', 'need_replan'),
+        responseForNext(core, 'replan', 'implement'),
+        selection(['testing'], 'The final-gate replan still changes test boundaries.'),
+        responseForNext(implementation, 'implement', 'COMPLETE'),
+        selection([], 'The fixed reviewers cover the final-gate replan.'),
+        response(reviewerSuite, 'coding-review', 'coding-reviewer', 'approved'),
+        response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
+        responseForNext(peerReview, 'review-adjudication', 'final-gate'),
+        responseForNext(peerReview, 'final-gate', 'COMPLETE'),
+      ]);
+      const engine = new WorkflowEngine(workflow, projectDir, 'Implement a TAKT change that requires replanning', {
+        projectCwd: projectDir,
+        provider: 'mock',
+        selectorProvider: SELECTOR_PROVIDER,
+        selectorGitCommandRunner: SELECTOR_GIT_COMMAND_RUNNER,
+        companionProviders: {
+          'ai-antipattern-review-companion': { provider: 'mock' },
+          'ai-antipattern-review-moderator': { provider: 'mock' },
+        },
+        companionDiffReader: COMPANION_DIFF_READER,
+        structuredCaller: new DefaultStructuredCaller(),
+        workflowCallResolver: ({ parentWorkflow, step, projectCwd, lookupCwd }) =>
+          resolveWorkflowCallTarget(parentWorkflow, step, projectCwd, lookupCwd),
+      });
+      engines.push(engine);
+      const visitedSteps: string[] = [];
+      engine.on('step:start', (step) => visitedSteps.push(step.name));
+
+      const state = await engine.run();
+
+      expect(state.status, JSON.stringify({
+        currentStep: state.currentStep,
+        iteration: state.iteration,
+        remainingScenarios: getScenarioQueue()?.remaining,
+        visitedSteps,
+      })).toBe('completed');
+      expect(getScenarioQueue()?.remaining).toBe(0);
+      expect(visitedSteps.filter((step) => step === 'replan')).toHaveLength(3);
+      expect(visitedSteps.filter((step) => step === 'plan')).toHaveLength(1);
+    },
+    60_000,
+  );
+
+  it(
+    'should keep the default workflow fixed while rerunning reviewers after verified remediation',
+    async () => {
+      const language = 'en';
+      writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${language}\n`);
+      invalidateAllResolvedConfigCache();
+      const workflow = loadWorkflowFromFile(
+        join(getBuiltinWorkflowsDir(language), 'default.yaml'),
+        projectDir,
+      );
+      const core = loadCoreForWrapper(language, workflow, projectDir);
+      const implementation = loadImplementationForCore(language, core, projectDir);
+      const peerReview = loadPeerReviewForCore(language, core, projectDir);
+      const remediation = loadRemediationForPeerReview(language, peerReview, projectDir);
+      const reviewerSuite = loadReviewerSuiteForPeerReview(language, peerReview, projectDir);
+      const reviewerSteps = collectReviewerSteps(language, reviewerSuite, projectDir);
+      const reviewResponses = (verdict: 'approved' | 'needs_fix'): ScenarioEntry[] =>
+        reviewerSteps.map(({ workflow: reviewerWorkflow, step, persona }) =>
+          response(reviewerWorkflow, step.name, persona, verdict));
+      setMockScenario([
+        responseForNext(core, 'plan', 'write_tests'),
+        responseForNext(core, 'write_tests', 'implement'),
+        responseForNext(implementation, 'implement', 'COMPLETE'),
+        ...reviewResponses('needs_fix'),
+        responseForNext(peerReview, 'review-adjudication', 'remediation'),
+        responseForNext(remediation, 'fix-plan', 'fix'),
+        responseForNext(remediation, 'fix', 'fix-verifier'),
+        responseForNext(remediation, 'fix-verifier', 'COMPLETE'),
+        ...reviewResponses('approved'),
+        responseForNext(peerReview, 'review-adjudication', 'final-gate'),
+        responseForNext(peerReview, 'final-gate', 'COMPLETE'),
+      ]);
+      const engine = new WorkflowEngine(workflow, projectDir, 'Implement and review a standard workflow change', {
+        projectCwd: projectDir,
+        provider: 'mock',
+        selectorProvider: SELECTOR_PROVIDER,
+        selectorGitCommandRunner: SELECTOR_GIT_COMMAND_RUNNER,
+        companionDiffReader: COMPANION_DIFF_READER,
+        structuredCaller: new DefaultStructuredCaller(),
+        workflowCallResolver: ({ parentWorkflow, step, projectCwd, lookupCwd }) =>
+          resolveWorkflowCallTarget(parentWorkflow, step, projectCwd, lookupCwd),
+      });
+      engines.push(engine);
+      const companionSteps: string[] = [];
+      engine.on('companion:start', ({ step }) => companionSteps.push(step));
+
+      const state = await engine.run();
+
+      expect(state.status, JSON.stringify({
+        currentStep: state.currentStep,
+        iteration: state.iteration,
+        remainingScenarios: getScenarioQueue()?.remaining,
+      })).toBe('completed');
+      expect(getScenarioQueue()?.remaining).toBe(0);
+      expect(companionSteps).toEqual([]);
+    },
+    60_000,
+  );
+
+  it(
+    'should abort the Japanese experimental wrapper when the final gate is blocked by the environment',
     async () => {
       const language = 'ja';
       writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${language}\n`);
@@ -361,19 +853,22 @@ steps:
         join(getBuiltinWorkflowsDir(language), 'experimental.yaml'),
         projectDir,
       );
-      const scenarioWorkflow = loadCoreForWrapper(language, wrapper, projectDir);
-      const reviewWorkflow = loadReviewForCore(language, scenarioWorkflow, projectDir);
+      const core = loadCoreForWrapper(language, wrapper, projectDir);
+      const implementation = loadImplementationForCore(language, core, projectDir);
+      const peerReview = loadPeerReviewForCore(language, core, projectDir);
+      const reviewerSuite = loadReviewerSuiteForPeerReview(language, peerReview, projectDir);
       setMockScenario([
-        response(scenarioWorkflow, 'plan', 'planner', '要件が明確で実装可能'),
-        response(scenarioWorkflow, 'write_tests', 'coder', 'テスト作成が完了した'),
+        responseForNext(core, 'plan', 'write_tests'),
+        responseForNext(core, 'write_tests', 'implement'),
         selection(['testing'], 'Testing implementation facets are required.'),
-        response(scenarioWorkflow, 'implement', 'coder', '実装が完了した'),
+        responseForNext(implementation, 'implement', 'COMPLETE'),
+        ...acceptedAndMergedCompanionFinding(),
         selection(['testing-review'], 'Testing review is required.'),
-        response(reviewWorkflow, 'coding-review', 'coding-reviewer', 'needs_fix'),
-        response(reviewWorkflow, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'needs_fix'),
-        response(reviewWorkflow, 'testing-review', 'testing-reviewer', 'needs_fix'),
-        selection([], 'No additional remediation facets are needed.'),
-        response(scenarioWorkflow, 'fix', 'coder', '修正を進行できない'),
+        response(reviewerSuite, 'coding-review', 'coding-reviewer', 'approved'),
+        response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
+        response(reviewerSuite, 'testing-review', 'testing-reviewer', 'approved'),
+        responseForNext(peerReview, 'review-adjudication', 'final-gate'),
+        responseForNext(peerReview, 'final-gate', 'ABORT'),
       ]);
       const engine = new WorkflowEngine(wrapper, projectDir, 'Implement a change that cannot be remediated', {
         projectCwd: projectDir,
@@ -382,24 +877,49 @@ steps:
         selectorGitCommandRunner: SELECTOR_GIT_COMMAND_RUNNER,
         companionProviders: {
           'ai-antipattern-review-companion': { provider: 'mock' },
+          'testing-review-companion': { provider: 'mock' },
+          'ai-antipattern-review-moderator': { provider: 'mock' },
         },
-        companionDiffReader: COMPANION_DIFF_READER,
+        companionDiffReader: COMPANION_DIFF_READER_WITH_FINDING,
         structuredCaller: new DefaultStructuredCaller(),
         workflowCallResolver: ({ parentWorkflow, step, projectCwd, lookupCwd }) =>
           resolveWorkflowCallTarget(parentWorkflow, step, projectCwd, lookupCwd),
       });
       engines.push(engine);
       const abortReasons: string[] = [];
-      const companionSteps: string[] = [];
+      const companionStarts: Array<{ step: string; companion: string }> = [];
+      const companionReviewRounds: Array<{ step: string; companion: string }> = [];
+      const companionFindingEvents: Array<{
+        step: string;
+        companion: string;
+        findingId: string;
+      }> = [];
       engine.on('workflow:abort', (_state, reason) => abortReasons.push(reason));
-      engine.on('companion:start', ({ step }) => companionSteps.push(step));
+      engine.on('companion:start', ({ step, companion }) => {
+        companionStarts.push({ step, companion });
+      });
+      engine.on('companion:review_round', ({ step, companion }) => {
+        companionReviewRounds.push({ step, companion });
+      });
+      engine.on('companion:finding', ({ step, companion, findingId }) => {
+        companionFindingEvents.push({ step, companion, findingId });
+      });
 
       const state = await engine.run();
 
       expect(state.status).toBe('aborted');
       expect(abortReasons).toEqual(['Workflow aborted by step transition']);
       expect(getScenarioQueue()?.remaining).toBe(0);
-      expect(companionSteps).toEqual(['implement', 'fix']);
+      expect(companionStarts).toEqual([
+        { step: 'implement', companion: 'ai-antipattern-review-companion' },
+        { step: 'implement', companion: 'testing-review-companion' },
+      ]);
+      expect(companionReviewRounds).toEqual(companionStarts);
+      expect(companionFindingEvents).toEqual([{
+        step: 'implement',
+        companion: 'ai-antipattern-review-companion',
+        findingId: 'ai-antipattern-review-companion-1',
+      }]);
     },
     60_000,
   );

@@ -8,6 +8,9 @@ params:
   plan_instruction:
     type: facet_ref
     facet_kind: instruction
+  plan_report_format:
+    type: facet_ref
+    facet_kind: report_format
 name: fix-plan
 capabilities: readonly
 tags:
@@ -26,5 +29,6 @@ instruction:
 output_contracts:
   report:
     - name: fix-plan.md
-      format: fix-plan
+      format:
+        $param: plan_report_format
       use_judge: false

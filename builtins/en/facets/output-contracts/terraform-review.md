@@ -21,9 +21,11 @@
 | {problem family or contract reviewed} | {condition to preserve} | {locations checked} | {locations checked} | {paths checked} | {test assets checked} | {none or reason unchecked} | {no issue / finding number} |
 
 ## Current Iteration Findings (new)
-| # | finding_id | family_tag | Scope | Location | Issue | Fix Suggestion |
-|---|------------|------------|-------|----------|-------|----------------|
-| 1 | TF-NEW-file-L42 | tf-convention | In-scope | `modules/example/main.tf:42` | Issue description | Fix approach |
+| # | finding_id | family_tag | Scope | Location | Issue | Authorization Basis | Reason Absent from Initial Round | Fix Suggestion |
+|---|------------|------------|-------|----------|-------|---------------------|----------------------------------|----------------|
+| 1 | TF-NEW-file-L42 | tf-convention | In-scope | `modules/example/main.tf:42` | Issue description | accepted_family_unvisited_consumer | The initial review evidence did not visit this module consumer | Fix approach |
+
+For a follow-up finding, `Authorization Basis` must be exactly `accepted_family_unvisited_consumer`, `remediation_regression`, `direct_acceptance_criterion_violation`, or `required_consumer_migration`; initial review uses `not applicable`. `Reason Absent from Initial Round` is a separate factual explanation for a follow-up finding and is `not applicable` for initial review.
 
 Scope: "In-scope" (fixable in this change) / "Out-of-scope" (existing issue, non-blocking)
 
