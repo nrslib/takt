@@ -29,6 +29,10 @@ test('accepts an authorized new finding while preserving a non-actionable dispos
   assert.equal(assertFinalReadinessSupervision(outputWith()).pass, true);
 });
 
+test('accepts the same report from a provider output envelope', () => {
+  assert.equal(assertFinalReadinessSupervision(JSON.stringify({ output: outputWith() })).pass, true);
+});
+
 test('accepts the equivalent Japanese lifecycle structure', () => {
   const output = [
     '## 結果: REJECT',
