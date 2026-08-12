@@ -33,12 +33,19 @@ For small tasks, skip the design section.
    - Identify implementation and verification locations for every contract ID. Only for contracts with impact paths, enumerate the relevant path from production to the final consumer
    - Identify the feature's role in the system and the owners of its entry points, trust boundaries, state, authority, and side effects
    - Only when user or external input, authorization, sensitive information, external execution, persistence, retries, or concurrency actually participates, include the relevant validation, rejection, and failure handling. Do not add unrelated concerns mechanically
-6. Determine file structure and design patterns (if needed)
-7. Decide on the implementation approach
+6. Classify boundary risks (required before finalizing completion contracts)
+   - Classify each completion contract against these two classes:
+     - **Structured input**: classification or transformation where the same literal text is in scope or out of scope depending on position or context (code fences, literals, comments, quotes, and escaped regions change the result)
+     - **Identifier generation**: generated identifiers, sequence numbers, or names share a namespace with existing content, persisted data, or other artifacts generated in the same operation
+   - For qualifying contracts, fix the in-scope and out-of-scope regions (or the existing namespace and potentially colliding existing values) with concrete input fragments, and write positive/negative scenario pairs in the "Requirement Scenarios" section of the output contract
+   - Scenarios concretize existing completion contracts and never create new requirements
+   - When no contract qualifies, write one line in the Requirement Scenarios section: "Not applicable — no qualifying completion contract"
+7. Determine file structure and design patterns (if needed)
+8. Decide on the implementation approach
    - When judgment criteria or supporting material are provided, compare only those classified as `applicable` by the shared procedure
    - Do not confuse keeping the diff small with omitting required production behavior. Put validation, authorization, state updates, error handling, and cleanup into the participating execution paths when they are required for the acceptance criteria
    - When adding or changing a user-facing feature, fix the conditions, entry points, and reachability by which users arrive at it
-8. Include the following in coder implementation guidelines:
+9. Include the following in coder implementation guidelines:
    - Existing implementation patterns to reference (file:line). Always cite when similar processing already exists
    - Impact area of changes. Especially when adding new parameters, enumerate all call sites that need wiring
    - Anti-patterns to watch for in this specific task (if applicable)

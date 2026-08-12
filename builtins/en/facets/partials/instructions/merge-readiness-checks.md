@@ -9,6 +9,7 @@ Procedure:
 6. For side effects or state changes, verify happy path, early return, exception, interruption, and cleanup / rollback paths separately
 7. Verify that future maintainers can trace the reason for the change, the affected surface, and the validation path
 8. Judge `resolved` against the original finding's expected result, acceptance criteria, and task requirement, not merely against the patch
-9. Report only quality or maintainability issues that should block the merge, with location, impact, and fix direction
+9. When the plan contains requirement scenarios (`SCN-` IDs), extract every scenario ID from the plan, confirm each ID appears verbatim in a test declaration name, and confirm the latest execution evidence for that test passes. Treat missing IDs, unexecuted or failing tests, and a plan lacking requirement scenarios despite a qualifying completion contract (structured-input classification/transformation, identifier generation) as merge-blocking issues
+10. Report only quality or maintainability issues that should block the merge, with location, impact, and fix direction
 {{include:instructions/review-family-completion}}
 {{include:instructions/review-pr-context}}
