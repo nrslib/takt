@@ -6,7 +6,6 @@ import type {
   WorkflowCallArgValue,
 } from '../../../core/models/index.js';
 import { WorkflowConfigRawSchema } from '../../../core/models/index.js';
-import { parseWorkflowRuleCondition } from '../../../core/models/workflow-rule-condition.js';
 import type { FacetResolutionContext, WorkflowSections } from './resource-resolver.js';
 import {
   isResourcePath,
@@ -19,7 +18,6 @@ import { isWorkflowParamReference, type WorkflowParamReference } from './workflo
 import { assertNoParamReferences, validateReturnRules } from './workflowCallableRuleValidation.js';
 import { withWorkflowConfigErrorPath as withWorkflowStepErrorPath } from '../../../core/workflow/workflow-config-error.js';
 import { hasOwnFacetPool } from './workflowFacetPoolLookup.js';
-import { hasCompanionReference } from '../../../core/models/workflow-rule-condition.js';
 
 type RawWorkflowConfig = z.output<typeof WorkflowConfigRawSchema>;
 type RawWorkflowStep = RawWorkflowConfig['steps'][number];
@@ -553,16 +551,6 @@ function expandStepFields(
     );
     if (Array.isArray(companions) && companions.length === 0) {
       delete expandedStep.companion;
-      for (const [ruleIndex, rule] of (expandedStep.rules ?? []).entries()) {
-        if (!hasCompanionReference(parseWorkflowRuleCondition(rule.condition))) continue;
-        throw withWorkflowStepErrorPath(
-          new Error(
-            `Step "${step.name}" cannot retain an unquoted companion state reference `
-            + `when companion parameter "${step.companion.$param}" resolves to an empty list`,
-          ),
-          [...stepPath, 'rules', ruleIndex, 'condition'],
-        );
-      }
     } else if (Array.isArray(companions)) {
       expandedStep.companion = {
         fixed: [...companions],

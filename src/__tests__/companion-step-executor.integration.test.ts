@@ -430,6 +430,73 @@ describe('companion StepExecutor lifecycle', () => {
     },
   );
 
+  it('should keep phase execution events distinct after initial empty-output recovery and a companion fix', async () => {
+    const abortController = new AbortController();
+    const state = makeState();
+    writeOpenFinding(cwd);
+    vi.mocked(executeAgent)
+      .mockImplementationOnce(async (_persona, prompt, options) => {
+        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: prompt });
+        return {
+          persona: 'coder',
+          status: 'done',
+          content: '',
+          sessionId: 'session-1',
+          timestamp: new Date('2026-08-08T00:00:00.000Z'),
+        };
+      })
+      .mockImplementationOnce(async (_persona, prompt, options) => {
+        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: prompt });
+        return {
+          persona: 'coder',
+          status: 'done',
+          content: 'implemented after recovery',
+          sessionId: 'session-1',
+          timestamp: new Date('2026-08-08T00:00:00.000Z'),
+        };
+      })
+      .mockImplementationOnce(async (_persona, prompt, options) => {
+        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: prompt });
+        return {
+          persona: 'coder',
+          status: 'error',
+          content: '',
+          error: 'repair failed',
+          sessionId: 'session-2',
+          timestamp: new Date('2026-08-08T00:00:00.000Z'),
+        };
+      });
+    const deps = createDeps({
+      cwd,
+      runPaths,
+      companionDiffReader: createCompanionDiffReader(),
+      abortSignal: abortController.signal,
+      emitEvent: vi.fn(),
+    });
+
+    const result = await new StepExecutor(deps).runNormalStep(
+      createCompanionStep([makeRule('Implementation is complete', 'COMPLETE')]),
+      state,
+      'task',
+      5,
+      vi.fn(),
+      'Implement.',
+    );
+
+    const startedIds = vi.mocked(deps.onPhaseStart!).mock.calls.map((call) => call[5]);
+    const completedIds = vi.mocked(deps.onPhaseComplete!).mock.calls.map((call) => call[6]);
+    expect(result.response).toMatchObject({
+      status: 'done',
+      content: 'implemented after recovery',
+      sessionId: 'session-1',
+      matchedRuleIndex: 0,
+    });
+    expect(startedIds).toHaveLength(3);
+    expect(new Set(startedIds).size).toBe(startedIds.length);
+    expect(completedIds).toHaveLength(startedIds.length);
+    expect(new Set(completedIds)).toEqual(new Set(startedIds));
+  });
+
   it('should apply empty-output recovery to a companion fix and retain the successful session', async () => {
     const abortController = new AbortController();
     const state = makeState();

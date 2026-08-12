@@ -370,21 +370,6 @@ describe('workflow_call schema', () => {
     expect(review.outputContracts?.[0]?.format).toContain('Summary format content');
   });
 
-  it.each([
-    'when(companion.escalated)',
-    'when(companion.escalated == true)',
-    'when(true == companion.escalated)',
-  ])('should reject an unquoted empty-companion state rule: %s', (condition) => {
-    const workflow = createCallableCompanionWorkflow();
-    (workflow.steps as Array<Record<string, unknown>>)[0]!.rules = [
-      { condition, next: 'fix' },
-      { condition: 'done', next: 'COMPLETE' },
-    ];
-
-    expect(() => normalizeWorkflowConfig(workflow, '/tmp'))
-      .toThrow('Workflow transition rules cannot reference advisory companion state');
-  });
-
   it('should retain an unrelated first when rule instead of removing it', () => {
     const workflow = createCallableCompanionWorkflow();
     (workflow.steps as Array<Record<string, unknown>>)[0]!.rules = [
@@ -418,49 +403,6 @@ describe('workflow_call schema', () => {
       expect(implement?.rules?.[0]?.condition).toEqual({ kind: 'semantic', label: condition });
       expect(implement?.rules).toHaveLength(2);
     });
-
-  it('should reject a later companion state rule when an empty companion is expanded', () => {
-    const workflow = createCallableCompanionWorkflow();
-    (workflow.steps as Array<Record<string, unknown>>)[0]!.rules = [
-      { condition: 'done', next: 'COMPLETE' },
-      { condition: 'when(companion.openMustFixCount == 0)', next: 'fix' },
-    ];
-
-    let error: unknown;
-    try {
-      normalizeWorkflowConfig(workflow, '/tmp');
-    } catch (caught) {
-      error = caught;
-    }
-
-    expect(error).toMatchObject({
-      message: expect.stringContaining('Workflow transition rules cannot reference advisory companion state'),
-      issues: expect.arrayContaining([
-        expect.objectContaining({ path: ['steps', 0, 'rules', 1, 'condition'] }),
-      ]),
-    });
-  });
-
-  it('should reject a companion state in a semantic-and-when rule when empty', () => {
-    const workflow = createCallableCompanionWorkflow();
-    (workflow.steps as Array<Record<string, unknown>>)[0]!.rules = [
-      { condition: 'done', next: 'COMPLETE' },
-      { condition: 'complete && when(companion.openMustFixCount == 0)', next: 'fix' },
-    ];
-
-    let error: unknown;
-    try {
-      normalizeWorkflowConfig(workflow, '/tmp');
-    } catch (caught) {
-      error = caught;
-    }
-
-    expect(error).toMatchObject({
-      issues: expect.arrayContaining([
-        expect.objectContaining({ path: ['steps', 0, 'rules', 1, 'condition'] }),
-      ]),
-    });
-  });
 
   it('should recurse through aggregate targets and ignore semantic or quoted companion text', () => {
     const aggregateRule = 'all("when(companion.openMustFixCount == 0)")';

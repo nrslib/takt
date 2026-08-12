@@ -2799,7 +2799,7 @@ export class StepExecutor {
     }
 
     if (activeCompanionRuntime !== undefined) {
-      let companionPhaseExecutionSequence = 2;
+      let companionPhaseExecutionSequence = phase1Result.finalAttempt.sequence + 1;
       const fixLoop = await runCompanionFixLoop({
         initialResponse: response,
         phase1Options: agentOptions,
