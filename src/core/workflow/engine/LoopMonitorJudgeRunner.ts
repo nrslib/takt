@@ -154,7 +154,6 @@ export class LoopMonitorJudgeRunner {
       edit: false,
       providerOptions: loopJudgeProviderOptions({
         judge: monitor.judge,
-        seats: this.deps.internalAgentSeats,
       }),
       instruction,
       rules: monitor.judge.rules,

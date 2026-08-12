@@ -68,7 +68,7 @@ describe('internalAgentSeatOverride', () => {
       providerSpecified: true,
       model: 'seat-model',
       modelSpecified: true,
-      providerOptions: { opencode: { agent: 'build' } },
+      internalProviderOptions: { opencode: { agent: 'build' } },
       internalPermissionMode: 'readonly',
     });
   });

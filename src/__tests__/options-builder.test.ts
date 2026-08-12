@@ -159,6 +159,44 @@ describe('OptionsBuilder.buildBaseOptions', () => {
     });
   });
 
+  it('drops synthesized seat options and permission when a CLI provider override wins', () => {
+    const step = createStep({
+      provider: 'claude',
+      model: 'seat-model',
+      internalProviderOptions: {
+        codex: { networkAccess: false },
+        claude: { allowedTools: ['Read'] },
+      },
+      internalPermissionMode: 'readonly',
+    });
+    const builder = createBuilder(step, {
+      provider: 'codex',
+      providerSource: 'cli',
+      model: 'cli-model',
+      modelSource: 'cli',
+    });
+
+    const options = builder.buildAgentOptions(step);
+
+    expect(options.resolvedProvider).toBe('codex');
+    expect(options.resolvedModel).toBe('cli-model');
+    expect(options.providerOptions).toBeUndefined();
+    expect(options.permissionMode).toBeUndefined();
+  });
+
+  it('keeps synthesized seat options and permission when the seat provider wins', () => {
+    const step = createStep({
+      provider: 'claude',
+      model: 'seat-model',
+      internalProviderOptions: { claude: { allowedTools: ['Read'] } },
+      internalPermissionMode: 'readonly',
+    });
+    const options = createBuilder(step).buildAgentOptions(step);
+
+    expect(options.providerOptions).toEqual({ claude: { allowedTools: ['Read'] } });
+    expect(options.permissionMode).toBe('readonly');
+  });
+
   it.each([
     { label: 'persona', personaOptions: { codex: { networkAccess: false } }, tagOptions: undefined },
     { label: 'tag', personaOptions: undefined, tagOptions: { codex: { networkAccess: false } } },

@@ -1292,6 +1292,54 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       }));
     });
 
+    it('drops loop-judge seat capabilities and permission when a CLI provider override wins', async () => {
+      const config = buildConfigWithLoopMonitor(1, {
+        judge: { persona: 'supervisor', rules: loopJudgeRules() },
+      } as Partial<LoopMonitorConfig>);
+      engine = new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        provider: 'codex',
+        providerSource: 'cli',
+        model: 'cli-model',
+        modelSource: 'cli',
+        internalAgentSeats: {
+          loopJudge: {
+            provider: 'claude',
+            model: 'seat-model',
+            providerOptions: {
+              codex: { networkAccess: false },
+              claude: { allowedTools: ['Read'] },
+            },
+            permissionMode: 'readonly',
+          },
+        },
+      });
+      mockRunAgentSequence([
+        makeResponse({ persona: 'implement', content: 'Implementation done' }),
+        makeResponse({ persona: 'ai_review', content: 'Issues found' }),
+        makeResponse({ persona: 'ai_fix', content: 'Fixed' }),
+        makeResponse({ persona: 'supervisor', content: 'Unproductive loop detected' }),
+        makeResponse({ persona: 'reviewers', content: 'All approved' }),
+      ]);
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'ai_judge' },
+        { index: 0, method: 'phase3_tag' },
+      ]);
+
+      await engine.run();
+
+      const judgeCall = vi.mocked(runAgent).mock.calls.find((call) => call[0] === 'supervisor');
+      expect(judgeCall?.[2]?.resolvedExecution).toEqual({
+        provider: 'codex',
+        model: 'cli-model',
+        providerOptions: undefined,
+        permissionMode: undefined,
+      });
+    });
+
     it('rejects a completed loop-judge response that violates the typed text contract', async () => {
       const config = buildConfigWithLoopMonitor(1, {
         judge: { persona: 'supervisor', rules: loopJudgeRules() },

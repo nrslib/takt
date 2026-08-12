@@ -17,7 +17,7 @@ export interface InternalAgentSeatOverride {
   providerSpecified: true;
   model?: string;
   modelSpecified: true;
-  providerOptions?: StepProviderOptions;
+  internalProviderOptions?: StepProviderOptions;
   internalPermissionMode?: PermissionMode;
 }
 
@@ -44,7 +44,7 @@ export function internalAgentSeatOverride(
     providerSpecified: true,
     ...(seat.model === undefined ? {} : { model: seat.model }),
     modelSpecified: true,
-    ...(seat.providerOptions === undefined ? {} : { providerOptions: seat.providerOptions }),
+    ...(seat.providerOptions === undefined ? {} : { internalProviderOptions: seat.providerOptions }),
     ...(seat.permissionMode === undefined ? {} : { internalPermissionMode: seat.permissionMode }),
   };
 }
