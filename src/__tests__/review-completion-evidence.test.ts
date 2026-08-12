@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { TaskReviewScope } from '../core/workflow/review-scope.js';
+import { isSensitiveProjectFilePath } from '../shared/utils/sensitive-file-path.js';
 import {
   collectReviewCompletionEvidence,
   reviewCompletionClaimedPaths,
@@ -34,6 +35,30 @@ describe('review completion evidence', () => {
     return directory;
   }
 
+  it.each([
+    ['client-secret.json', true],
+    ['github-token.json', true],
+    ['config/production-secrets.yaml', true],
+    ['prod-secrets.txt', true],
+    ['service_account.toml', true],
+    ['credentials.ini', true],
+    ['authorization.config', true],
+    ['secrets', true],
+    ['auth', false],
+    ['token', false],
+    ['token-bucket', false],
+    ['src/client-secret.ts', false],
+    ['src/github-token.ts', false],
+    ['src/prod-secrets.ts', false],
+    ['src/service_account.ts', false],
+    ['src/token-bucket.ts', false],
+    ['src/auth/middleware.ts', false],
+    ['src/authorization-policy.ts', false],
+    ['src/secretary.ts', false],
+  ] as const)('classifies purpose-boundary path %s as sensitive=%s', (path, expected) => {
+    expect(isSensitiveProjectFilePath(path)).toBe(expected);
+  });
+
   it('provides sanitized source while excluding sensitive, symlink, binary, and outside paths', () => {
     const cwd = createDirectory('takt-review-completion-evidence-');
     const outside = createDirectory('takt-review-completion-outside-');
@@ -47,7 +72,9 @@ describe('review completion evidence', () => {
     writeFileSync(join(cwd, 'src', 'token-bucket.ts'), 'export const bucket = 1;\n');
     writeFileSync(join(cwd, '.env'), 'TOKEN=must-not-leak\n');
     writeFileSync(join(cwd, 'config', 'production-secrets.yaml'), 'token: production-secret\n');
+    writeFileSync(join(cwd, 'client-secret.json'), '{"value":"client-secret-marker"}\n');
     writeFileSync(join(cwd, 'credentials.json'), '{"opaque":"credential-file-marker"}\n');
+    writeFileSync(join(cwd, 'github-token.json'), '{"value":"github-token-marker"}\n');
     writeFileSync(join(cwd, 'prod-secrets.txt'), 'prod-secret-marker\n');
     writeFileSync(join(cwd, 'secrets.txt'), 'opaque-secret-file-marker\n');
     writeFileSync(join(cwd, 'service-account.json'), '{"private_key":"service-account-marker"}\n');
@@ -61,8 +88,10 @@ describe('review completion evidence', () => {
         '.env',
         '../outside.ts',
         'binary.dat',
+        'client-secret.json',
         'config/production-secrets.yaml',
         'credentials.json',
+        'github-token.json',
         'linked.ts',
         'prod-secrets.txt',
         'secrets.txt',
@@ -104,12 +133,12 @@ describe('review completion evidence', () => {
       },
     ]);
     expect(JSON.stringify(evidence))
-      .not.toMatch(/visible-secret|must-not-leak|production-secret|credential-file-marker|prod-secret-marker|opaque-secret-file-marker|service-account-marker|outside-marker/);
+      .not.toMatch(/visible-secret|must-not-leak|client-secret-marker|production-secret|credential-file-marker|github-token-marker|prod-secret-marker|opaque-secret-file-marker|service-account-marker|outside-marker/);
     expect(Object.fromEntries(evidence.omissions.map(({ reason, count }) => [reason, count])))
       .toMatchObject({
         binary_file: 1,
         file_unavailable: 2,
-        sensitive_path: 6,
+        sensitive_path: 8,
       });
   });
 
@@ -196,8 +225,10 @@ describe('review completion evidence', () => {
       join(cwd, 'config', 'production-secrets.yaml'),
       'stableContract: production-secret-reference\n',
     );
-    writeFileSync(join(cwd, 'prod-secrets.ts'), 'const prodSecret = stableContract;\n');
-    writeFileSync(join(cwd, 'service_account.ts'), 'const serviceAccount = stableContract;\n');
+    writeFileSync(join(cwd, 'prod-secrets.json'), '{"value":"stableContractProdSecret"}\n');
+    writeFileSync(join(cwd, 'service_account.toml'), 'value = "stableContractServiceAccount"\n');
+    writeFileSync(join(cwd, 'client-secret.json'), '{"value":"stableContractClientSecret"}\n');
+    writeFileSync(join(cwd, 'github-token.json'), '{"value":"stableContractGithubToken"}\n');
     mkdirSync(join(cwd, 'auth'));
     writeFileSync(join(cwd, 'auth', 'middleware.ts'), 'const middleware = stableContract;\n');
     writeFileSync(join(cwd, 'authorization-policy.ts'), 'const policy = stableContract;\n');
@@ -254,14 +285,16 @@ describe('review completion evidence', () => {
     expect(evidence.references.map(({ path }) => path)).not.toEqual(expect.arrayContaining([
       '.env.ts',
       'binary.ts',
+      'client-secret.json',
       'config/production-secrets.yaml',
+      'github-token.json',
       'linked.ts',
-      'prod-secrets.ts',
-      'service_account.ts',
+      'prod-secrets.json',
+      'service_account.toml',
       'untracked.ts',
     ]));
     expect(JSON.stringify(evidence)).not.toMatch(
-      /unchangedBodyMarker|secretConsumer|binary-body-marker|production-secret-reference|prodSecret|serviceAccount|outsideConsumer|untrackedConsumer/,
+      /unchangedBodyMarker|secretConsumer|binary-body-marker|stableContractClientSecret|production-secret-reference|stableContractGithubToken|stableContractProdSecret|stableContractServiceAccount|outsideConsumer|untrackedConsumer/,
     );
     expect(evidence.omissions).toEqual(expect.arrayContaining([
       { reason: 'reference_binary_file', count: 1 },

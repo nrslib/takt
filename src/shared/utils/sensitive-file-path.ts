@@ -32,8 +32,32 @@ const SENSITIVE_PROJECT_DIRECTORY_NAMES = new Set([
   '.ssh',
 ]);
 
-const SENSITIVE_PURPOSE_FILE_NAME_PATTERN = /^(?:(?:prod|production)[-_]secrets?|credentials?|secrets?|service[-_]accounts?)(?:\..+)?$/;
-const SENSITIVE_AUTH_CONFIG_FILE_NAME_PATTERN = /^(?:auth(?:orization)?|tokens?)\.(?:conf(?:ig)?|ini|json|toml|txt|ya?ml)$/;
+const SENSITIVE_CONFIG_DATA_FILE_EXTENSIONS = new Set([
+  'cfg',
+  'conf',
+  'config',
+  'env',
+  'ini',
+  'json',
+  'properties',
+  'toml',
+  'txt',
+  'yaml',
+  'yml',
+]);
+
+const SENSITIVE_PURPOSE_BASENAME_PATTERN = /(?:^|[._-])(?:auth(?:orization)?|credentials?|secrets?|service[-_]accounts?|tokens?)(?:[._-]|$)/;
+const SENSITIVE_EXTENSIONLESS_FILE_NAME_PATTERN = /^(?:(?:(?:prod|production)[-_])?secrets?|credentials?|service[-_]accounts?)$/;
+
+function hasSensitivePurposeFileName(fileName: string): boolean {
+  const extensionSeparator = fileName.lastIndexOf('.');
+  if (extensionSeparator < 0) {
+    return SENSITIVE_EXTENSIONLESS_FILE_NAME_PATTERN.test(fileName);
+  }
+  const extension = fileName.slice(extensionSeparator + 1);
+  if (!SENSITIVE_CONFIG_DATA_FILE_EXTENSIONS.has(extension)) return false;
+  return SENSITIVE_PURPOSE_BASENAME_PATTERN.test(fileName.slice(0, extensionSeparator));
+}
 
 export function isSensitiveProjectFilePath(relativePath: string): boolean {
   const lowerSegments = relativePath.split('/').map((segment) => segment.toLowerCase());
@@ -44,7 +68,6 @@ export function isSensitiveProjectFilePath(relativePath: string): boolean {
   return lowerSegments.some((segment) => SENSITIVE_PROJECT_DIRECTORY_NAMES.has(segment))
     || lowerFileName.startsWith('.env')
     || SENSITIVE_PROJECT_FILE_NAMES.has(lowerFileName)
-    || SENSITIVE_PURPOSE_FILE_NAME_PATTERN.test(lowerFileName)
-    || SENSITIVE_AUTH_CONFIG_FILE_NAME_PATTERN.test(lowerFileName)
+    || hasSensitivePurposeFileName(lowerFileName)
     || SENSITIVE_PROJECT_FILE_EXTENSIONS.some((extension) => lowerFileName.endsWith(extension));
 }
