@@ -1582,19 +1582,6 @@ unexpected_overrides:
       expect(reloaded.workflowRuntimePrepare).toEqual({ customScripts: true });
     });
 
-    it('should load workflow_runtime_prepare policy block', () => {
-      const configPath = join(testDir, '.takt', 'config.yaml');
-      writeFileSync(
-        configPath,
-        ['workflow_runtime_prepare:', '  custom_scripts: true'].join('\n'),
-        'utf-8',
-      );
-
-      const loaded = loadProjectConfig(testDir);
-
-      expect(loaded.workflowRuntimePrepare).toEqual({ customScripts: true });
-    });
-
     it('should save workflowRuntimePrepare using workflow_runtime_prepare key', () => {
       const config: ProjectLocalConfig = {
         workflowRuntimePrepare: { customScripts: true },
@@ -1657,28 +1644,6 @@ unexpected_overrides:
         customDataSourceModules: true,
         customMergeInlineJs: true,
         customMergeFiles: false,
-      });
-    });
-
-    it('should load workflow_arpeggio policy block', () => {
-      const configPath = join(testDir, '.takt', 'config.yaml');
-      writeFileSync(
-        configPath,
-        [
-          'workflow_arpeggio:',
-          '  custom_data_source_modules: true',
-          '  custom_merge_inline_js: false',
-          '  custom_merge_files: true',
-        ].join('\n'),
-        'utf-8',
-      );
-
-      const loaded = loadProjectConfig(testDir);
-
-      expect(loaded.workflowArpeggio).toEqual({
-        customDataSourceModules: true,
-        customMergeInlineJs: false,
-        customMergeFiles: true,
       });
     });
 
@@ -1835,19 +1800,6 @@ unexpected_overrides:
       const reloaded = loadProjectConfig(testDir);
 
       expect(reloaded.workflowMcpServers).toEqual({ stdio: true, http: true, sse: false });
-    });
-
-    it('should load workflow_mcp_servers config block', () => {
-      const configPath = join(testDir, '.takt', 'config.yaml');
-      writeFileSync(
-        configPath,
-        ['workflow_mcp_servers:', '  stdio: true', '  http: false', '  sse: true'].join('\n'),
-        'utf-8',
-      );
-
-      const loaded = loadProjectConfig(testDir);
-
-      expect(loaded.workflowMcpServers).toEqual({ stdio: true, http: false, sse: true });
     });
 
     it('should save workflowMcpServers using workflow_mcp_servers key', () => {

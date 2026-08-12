@@ -247,6 +247,12 @@ describe('release verification wiring', () => {
       'test:it:serial:workflow': 'npm run test:it:heavy:serial:workflow',
       'test:prompt-evals': 'node prompt-evals/run-smoke.mjs',
     });
+    expect(manifest.scripts['test:e2e:provider:claude-sdk'])
+      .toMatch(/TAKT_E2E_PROVIDER=claude-sdk/);
+    expect(manifest.scripts['test:e2e:provider'])
+      .toContain('test:e2e:provider:claude-sdk');
+    expect(manifest.scripts['test:e2e:provider']!.indexOf('claude-sdk'))
+      .toBeLessThan(manifest.scripts['test:e2e:provider']!.indexOf('provider:codex'));
   });
 
   it('should run every release gate once', () => {

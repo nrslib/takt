@@ -608,11 +608,14 @@ describe('manager instruction dedup (manager-agent.ts)', () => {
       ])).size).toBe(0);
     });
 
-    it('provisional と closed の finding はグループ対象にしない', () => {
+    it.each([
+      'unverified-locationless',
+      'raw-meaning-ambiguous',
+    ] as const)('%s provisional と closed の finding はグループ対象にしない', (kind) => {
       const provisional = {
         ...openFinding('F-0001', '暫定', 'src/a.ts:1'),
         provisional: {
-          kind: 'unverified-locationless' as const,
+          kind,
           stableKey: 's1',
           lineageKey: 'l1',
           sourceRawFindingIds: ['raw-F-0001'],
