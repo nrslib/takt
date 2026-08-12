@@ -16,6 +16,7 @@ import {
 import { runTagJudgeStage } from '../agents/judge-status-usecase.js';
 import { requestDecompositionRawResponse } from '../agents/decompose-task-usecase.js';
 import { loadEvaluationSchema, loadJudgmentSchema } from '../infra/resources/schema-loader.js';
+import { OpenCodeProvider } from '../infra/providers/opencode.js';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -104,8 +105,8 @@ describe('agent-usecases', () => {
         agentName: 'security-reviewer',
         sessionId: 'ambient-session',
         resolution: {
-          provider: 'mock',
-          model: undefined,
+          provider: 'opencode',
+          model: 'opencode/model',
           providerOptions: {
             codex: { skills: { repo: true, user: true } },
             opencode: { allowedTools: ['write'] },
@@ -123,6 +124,7 @@ describe('agent-usecases', () => {
       undefined,
       'select reviewers',
       expect.objectContaining({
+        executionProfile: 'isolated-structured',
         internalAgentIsolation: 'strict-readonly',
         internalAgentName: 'security-reviewer',
         allowedTools: [],
@@ -131,8 +133,8 @@ describe('agent-usecases', () => {
         sessionId: undefined,
         outputSchema: schema,
         resolvedExecution: {
-          provider: 'mock',
-          model: undefined,
+          provider: 'opencode',
+          model: 'opencode/model',
           permissionMode: 'readonly',
           providerOptions: {
             codex: { skills: { repo: true, user: true } },
@@ -144,8 +146,41 @@ describe('agent-usecases', () => {
     );
   });
 
-  it.each(['copilot', 'cursor', 'kiro', 'opencode'] as const)(
-    'should reject %s before invoking an internal agent without strict isolation support',
+  it('routes OpenCode internal structured execution through setupIsolatedStructured', async () => {
+    const actualRunner = await vi.importActual<typeof import('../agents/runner.js')>(
+      '../agents/runner.js',
+    );
+    const setupIsolatedStructured = vi.spyOn(OpenCodeProvider.prototype, 'setupIsolatedStructured')
+      .mockReturnValue({
+        call: vi.fn().mockResolvedValue(doneResponse('ignored', { selected_ids: ['frontend'] })),
+      });
+    vi.mocked(runAgent).mockImplementation(actualRunner.runAgent);
+
+    try {
+      await executeIsolatedStructuredInternalAgent(
+        'selector system prompt',
+        'select reviewers',
+        { type: 'object' },
+        {
+          cwd: '/tmp',
+          resolution: {
+            provider: 'opencode',
+            model: 'opencode/model',
+            providerOptions: {},
+          },
+        },
+      );
+
+      expect(setupIsolatedStructured).toHaveBeenCalledWith(expect.objectContaining({
+        name: 'takt-internal',
+      }));
+    } finally {
+      setupIsolatedStructured.mockRestore();
+    }
+  });
+
+  it.each(['copilot', 'cursor', 'kiro'] as const)(
+    'should reject %s before invoking an internal agent without isolated structured execution support',
     async (provider) => {
       await expect(executeIsolatedStructuredInternalAgent(
         'selector system prompt',
@@ -159,7 +194,7 @@ describe('agent-usecases', () => {
             providerOptions: {},
           },
         },
-      )).rejects.toThrow(`Provider "${provider}" does not support strict internal-agent isolation`);
+      )).rejects.toThrow(`Provider "${provider}" does not support isolated structured execution`);
 
       expect(runAgent).not.toHaveBeenCalled();
     },

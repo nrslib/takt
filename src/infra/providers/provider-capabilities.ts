@@ -93,6 +93,14 @@ export function assertProviderSupportsStrictInternalAgentIsolation(
   }
 }
 
+export function assertProviderSupportsIsolatedStructuredExecution(
+  provider: ProviderType,
+): void {
+  if (providerSupportsIsolatedStructuredExecution(provider) !== true) {
+    throw new Error(`Provider "${provider}" does not support isolated structured execution`);
+  }
+}
+
 export function assertProviderSupportsSelectorExecution(provider: ProviderType): void {
   assertProviderSupportsStrictInternalAgentIsolation(provider);
   if (providerSupportsStructuredOutput(provider) !== true) {

@@ -1,7 +1,7 @@
 import type { AgentResponse } from '../core/models/types.js';
 import { runAgent, type RunAgentOptions } from './runner.js';
 import {
-  assertProviderSupportsSelectorExecution,
+  assertProviderSupportsIsolatedStructuredExecution,
 } from '../infra/providers/provider-capabilities.js';
 import type { StepProviderOptions } from '../core/models/workflow-types.js';
 import type { Language } from '../core/models/types.js';
@@ -51,7 +51,7 @@ export async function executeIsolatedStructuredInternalAgent(
   outputSchema: Record<string, unknown>,
   options: ResolvedInternalAgentOptions,
 ): Promise<AgentResponse> {
-  assertProviderSupportsSelectorExecution(options.resolution.provider);
+  assertProviderSupportsIsolatedStructuredExecution(options.resolution.provider);
   const {
     resolution,
     agentName,
@@ -59,6 +59,7 @@ export async function executeIsolatedStructuredInternalAgent(
   } = options;
   return runAgent(undefined, instruction, {
     ...executionOptions,
+    executionProfile: 'isolated-structured',
     ...(agentName === undefined ? {} : { internalAgentName: agentName }),
     sessionId: undefined,
     internalSystemPrompt: systemPrompt,

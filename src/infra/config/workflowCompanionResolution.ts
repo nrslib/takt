@@ -11,7 +11,7 @@ import { getWorkflowReference } from '../../core/workflow/workflow-reference.js'
 import { MAX_WORKFLOW_CALL_DEPTH } from '../../core/workflow/workflow-call-depth.js';
 import type { WorkflowCallResolver } from '../../core/workflow/types.js';
 import {
-  providerSupportsStrictInternalAgentIsolation,
+  providerSupportsIsolatedStructuredExecution,
   providerSupportsStructuredOutput,
 } from '../providers/provider-capabilities.js';
 
@@ -128,8 +128,8 @@ export function resolveWorkflowCompanions(
     if (!entry?.provider) {
       throw new Error(`Companion "${name}" has no runtime.yaml provider target or defaults assignment`);
     }
-    if (providerSupportsStrictInternalAgentIsolation(entry.provider) !== true) {
-      throw new Error(`Provider "${entry.provider}" does not support companion strict isolated execution`);
+    if (providerSupportsIsolatedStructuredExecution(entry.provider) !== true) {
+      throw new Error(`Provider "${entry.provider}" does not support companion isolated structured execution`);
     }
     if (providerSupportsStructuredOutput(entry.provider) !== true) {
       throw new Error(`Provider "${entry.provider}" does not support companion structured output`);
