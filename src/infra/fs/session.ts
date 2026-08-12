@@ -19,6 +19,7 @@ import {
 import {
   parseCanonicalWorkflowResumeFrame,
 } from '../../shared/types/workflow-resume.js';
+import { isAgentFailureCategory } from '../../shared/types/agent-failure.js';
 
 export type {
   SessionLog,
@@ -417,6 +418,7 @@ function assertNdjsonRecordShape(
       requireNdjsonString(record.instruction, 'instruction');
       requireNdjsonInteger(record.iteration, 'iteration');
       requireNdjsonString(record.timestamp, 'timestamp');
+      requireOptionalAgentFailureCategory(record.failureCategory, 'failureCategory');
       return;
     case 'workflow_complete':
       requireNdjsonInteger(record.iterations, 'iterations');
@@ -426,6 +428,7 @@ function assertNdjsonRecordShape(
       requireNdjsonInteger(record.iterations, 'iterations');
       requireNdjsonString(record.reason, 'reason');
       requireNdjsonString(record.endTime, 'endTime');
+      requireOptionalAgentFailureCategory(record.failureCategory, 'failureCategory');
       return;
     case 'phase_start':
     case 'phase_complete':
@@ -479,6 +482,12 @@ function assertNdjsonRecordShape(
       return;
     default:
       throw new Error(`Unknown NDJSON session record type: ${String(record.type)}`);
+  }
+}
+
+function requireOptionalAgentFailureCategory(value: unknown, field: string): void {
+  if (value !== undefined && !isAgentFailureCategory(value)) {
+    throw new Error(`NDJSON ${field} is invalid`);
   }
 }
 

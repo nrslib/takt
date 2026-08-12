@@ -120,6 +120,7 @@ export interface NdjsonWorkflowAbort {
   type: 'workflow_abort';
   iterations: number;
   reason: string;
+  failureCategory?: AgentFailureCategory;
   endTime: string;
   publicationId?: string;
 }

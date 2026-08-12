@@ -20,6 +20,7 @@ import type {
   WorkflowSharedRuntimeState,
   WorkflowStepFailureSummary,
 } from '../core/workflow/types.js';
+import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import { buildWorkflowCallCompleteRecord } from '../features/tasks/execute/sessionLoggerRecordFactory.js';
 import type { AutoRoutingConfig } from '../core/models/config-types.js';
@@ -474,6 +475,7 @@ describe('WorkflowCallRunner lifecycle events', () => {
       step: 'deepest-review',
       reason: 'child rejection',
       error: 'child rejection',
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
     };
     const harness = createLifecycleHarness({
       childStatus: 'aborted',

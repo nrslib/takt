@@ -7,6 +7,7 @@ import type { NdjsonRecord } from '../../../shared/utils/types.js';
 import {
   parseCanonicalWorkflowResumeFrame,
 } from '../../../shared/types/workflow-resume.js';
+import { isAgentFailureCategory } from '../../../shared/types/agent-failure.js';
 import type { TraceReportMode } from './traceReport.js';
 import {
   buildWorkflowAbortSessionFinalization,
@@ -139,6 +140,9 @@ function assembleWorkflowTerminalPublicationPayload(
           requireTerminalReason(input.reason),
           input.traceReportMode === 'full',
         ),
+        ...(input.failure?.failureCategory === undefined
+          ? {}
+          : { failureCategory: input.failure.failureCategory }),
         endTime: input.endTime,
       };
   return {
@@ -223,9 +227,12 @@ function assertWorkflowTerminalPublicationPayload(
       throw new TypeError('Completed workflow terminal payload cannot contain failure');
     }
     const failure = requireRecord(payload.failure, '$.failure');
-    assertAllowedKeys(failure, ['step', 'error'], '$.failure');
+    assertAllowedKeys(failure, ['step', 'error', 'failureCategory'], '$.failure');
     requireNonEmptyString(failure.step, '$.failure.step');
     requireNonEmptyString(failure.error, '$.failure.error');
+    if (failure.failureCategory !== undefined) {
+      requireAgentFailureCategory(failure.failureCategory, '$.failure.failureCategory');
+    }
   }
   requireIsoTimestamp(payload.endTime, '$.endTime');
   assertTerminalSessionLog(payload.sessionLog, payload);
@@ -328,6 +335,18 @@ function assertTerminalSessionRecord(
     throw new TypeError(
       'Workflow terminal payload sessionRecord identity or status is invalid',
     );
+  }
+  const failure = payload.failure === undefined
+    ? undefined
+    : requireRecord(payload.failure, '$.failure');
+  if (record.type === 'workflow_abort' && record.failureCategory !== failure?.failureCategory) {
+    throw new TypeError('Workflow terminal payload sessionRecord failure category is inconsistent');
+  }
+}
+
+function requireAgentFailureCategory(value: unknown, path: string): void {
+  if (!isAgentFailureCategory(value)) {
+    throw new TypeError(`Workflow terminal payload failure category is invalid at ${path}`);
   }
 }
 

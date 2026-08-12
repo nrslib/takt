@@ -373,11 +373,20 @@ export class SessionLogger {
     this.workflowTerminalLogged = true;
   }
 
-  onWorkflowAbort(state: WorkflowState, reason: string): void {
+  onWorkflowAbort(
+    state: WorkflowState,
+    reason: string,
+    failureCategory?: AgentResponse['failureCategory'],
+  ): void {
     if (this.workflowTerminalLogged) {
       return;
     }
-    this.appendRecord(buildWorkflowAbortRecord(state, reason, this.sanitizeText.bind(this)));
+    this.appendRecord(buildWorkflowAbortRecord(
+      state,
+      reason,
+      this.sanitizeText.bind(this),
+      failureCategory,
+    ));
     this.workflowTerminalLogged = true;
   }
 

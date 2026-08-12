@@ -290,11 +290,13 @@ export function buildWorkflowAbortRecord(
   state: WorkflowState,
   reason: string,
   sanitizeText: SanitizeText,
+  failureCategory?: AgentResponse['failureCategory'],
 ): NdjsonWorkflowAbort {
   return {
     type: 'workflow_abort',
     iterations: state.iteration,
     reason: sanitizeText(reason),
+    ...(failureCategory === undefined ? {} : { failureCategory }),
     endTime: new Date().toISOString(),
   };
 }

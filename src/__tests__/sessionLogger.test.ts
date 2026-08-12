@@ -650,4 +650,35 @@ describe('SessionLogger', () => {
       }),
     ]));
   });
+
+  it('workflow_abort の failureCategory を NDJSON に保持する', () => {
+    const logsDir = createTempLogsDir();
+    const ndjsonPath = initNdjsonLog('session-abort-category', 'task', 'workflow', { logsDir });
+    const logger = new SessionLogger(ndjsonPath, true);
+    const state = {
+      workflowName: 'workflow',
+      currentStep: 'implement',
+      iteration: 1,
+      stepOutputs: new Map(),
+      structuredOutputs: new Map(),
+      systemContexts: new Map(),
+      effectResults: new Map(),
+      userInputs: [],
+      personaSessions: new Map(),
+      stepIterations: new Map(),
+      status: 'aborted' as const,
+    };
+
+    logger.onWorkflowAbort(
+      state,
+      'provider stream parse error: invalid line',
+      AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+    );
+
+    const records = logger.getNdjsonRecords();
+    expect(records.at(-1)).toMatchObject({
+      type: 'workflow_abort',
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+    });
+  });
 });

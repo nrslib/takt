@@ -1866,6 +1866,9 @@ export class ParallelRunner {
       step: result.subStep.name,
       reason: result.response.failureCategory === undefined ? parentReason : failureError,
       error: failureError,
+      ...(result.response.failureCategory === undefined
+        ? {}
+        : { failureCategory: result.response.failureCategory }),
     });
   }
 

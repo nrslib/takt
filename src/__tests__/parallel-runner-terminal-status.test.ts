@@ -443,6 +443,7 @@ describe('ParallelRunner terminal sub-step statuses', () => {
       step: 'security-review',
       reason: 'provider stream parse error: Failed to parse item: invalid stdout line',
       error: 'provider stream parse error: Failed to parse item: invalid stdout line',
+      failureCategory: 'provider_stream_parse_error',
     });
   });
 

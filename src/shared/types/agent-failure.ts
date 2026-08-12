@@ -11,6 +11,10 @@ export const MAX_AGENT_FAILURE_MESSAGE_BYTES = 8 * 1024;
 export type AgentFailureCategory =
   typeof AGENT_FAILURE_CATEGORIES[keyof typeof AGENT_FAILURE_CATEGORIES];
 
+export function isAgentFailureCategory(value: unknown): value is AgentFailureCategory {
+  return Object.values(AGENT_FAILURE_CATEGORIES).some((category) => category === value);
+}
+
 export interface AgentFailureDetail {
   category: AgentFailureCategory;
   reason: string;

@@ -96,6 +96,7 @@ describe('WorkflowRunLoop failure metadata', () => {
     expect(result.abort?.failure).toMatchObject({
       reason: boundedFailure,
       error: boundedFailure,
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
     });
     expect(Buffer.byteLength(result.abort?.reason ?? '', 'utf8')).toBe(
       MAX_AGENT_FAILURE_MESSAGE_BYTES,
@@ -201,6 +202,7 @@ describe('WorkflowRunLoop failure metadata', () => {
         step: 'implement',
         reason: 'provider stream parse error: Failed to parse correction item',
         error: 'provider stream parse error: Failed to parse correction item',
+        failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
       },
     });
     expect(deps.emit).toHaveBeenCalledWith(
@@ -213,6 +215,7 @@ describe('WorkflowRunLoop failure metadata', () => {
         step: 'implement',
         reason: 'provider stream parse error: Failed to parse correction item',
         error: 'provider stream parse error: Failed to parse correction item',
+        failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
       },
     );
   });

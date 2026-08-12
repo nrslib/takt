@@ -512,6 +512,54 @@ describe('StepExecutor', () => {
     expect(harness.normalizeFindingIntake).toHaveBeenCalledTimes(2);
   });
 
+  it('provider stream parse failureはstructured output fallbackより先に終端化する', () => {
+    const buildFailureFallback = vi.fn(() => ({
+      persona: 'planner',
+      status: 'done' as const,
+      content: 'fallback',
+      structuredOutput: { action: 'retry' },
+      timestamp: new Date('2026-08-12T00:00:01.000Z'),
+    }));
+    const harness = createPlainTextPublicationHarness(
+      [],
+      undefined,
+      undefined,
+      {
+        normalize: vi.fn((value) => value),
+        buildFailureFallback,
+      },
+    );
+    const step = makeStep({
+      name: 'plan-followup',
+      persona: 'planner',
+      instruction: 'Plan.',
+      structuredOutput: {
+        schema: {
+          type: 'object',
+          properties: { action: { type: 'string' } },
+          required: ['action'],
+        },
+      },
+    });
+    const parseFailure: AgentResponse = {
+      persona: 'planner',
+      status: 'error',
+      content: '',
+      error: 'provider stream parse error: invalid stdout line',
+      failureCategory: 'provider_stream_parse_error',
+      timestamp: new Date('2026-08-12T00:00:00.000Z'),
+    };
+
+    const result = harness.executor.normalizeStructuredOutputWithDiagnostics(
+      step,
+      parseFailure,
+    );
+
+    expect(result).toEqual({ response: parseFailure });
+    expect(buildFailureFallback).not.toHaveBeenCalled();
+    expect(harness.resolveStepProviderModel).not.toHaveBeenCalled();
+  });
+
   it('Phase 2 は明示指定された finding contract context を使い restatement-only 契約を保つ', async () => {
     const rawFinding = {
       rawExcerpt: 'Issue: src/example.ts still bypasses the required boundary.',

@@ -387,6 +387,7 @@ function recordWorkflowOutcome(span: Span, params: WorkflowSpanParams, outcome: 
     'takt.workflow.abort.kind': outcome.abortKind,
     'takt.workflow.abort.reason': sanitizeSpanText(params.sanitizeText, outcome.abortReason),
     'takt.failure.kind': outcome.failure?.kind,
+    'takt.failure.category': outcome.failure?.failureCategory,
     'takt.failure.step': sanitizeSpanText(params.sanitizeText, outcome.failure?.step),
     'takt.failure.reason': sanitizeSpanText(params.sanitizeText, outcome.failure?.reason),
     'takt.workflow.next_step': outcome.nextStep,

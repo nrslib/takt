@@ -415,12 +415,14 @@ function buildWorkflowAbortResult(
   stepName: string,
   reason: string,
   error: string,
+  failureCategory?: AgentResponse['failureCategory'],
 ): WorkflowAbortResult {
   const failure = createRunFailure({
     kind,
     step: stepName,
     reason,
     error,
+    ...(failureCategory === undefined ? {} : { failureCategory }),
   });
   return {
     kind,
@@ -436,6 +438,7 @@ function abortWorkflow(
   options: {
     clearLastOutput?: boolean;
     failureError?: string;
+    failureCategory?: AgentResponse['failureCategory'];
     failure?: WorkflowStepFailureSummary;
   } = {},
 ): WorkflowAbortResult {
@@ -447,7 +450,13 @@ function abortWorkflow(
     ? reason
     : options.failureError;
   const result = options.failure === undefined
-    ? buildWorkflowAbortResult(kind, deps.state.currentStep, reason, failureError)
+    ? buildWorkflowAbortResult(
+        kind,
+        deps.state.currentStep,
+        reason,
+        failureError,
+        options.failureCategory,
+      )
     : {
         kind: options.failure.kind,
         reason: options.failure.reason,
@@ -487,7 +496,11 @@ function abortWorkflowRuntimeError(deps: WorkflowRunLoopDeps, error: unknown): W
       deps,
       'step_error',
       failureError,
-      { clearLastOutput: true, failureError },
+      {
+        clearLastOutput: true,
+        failureError,
+        failureCategory: error.failureCategory,
+      },
     );
   }
   if (isAgentFailureError(error)) {
@@ -495,7 +508,11 @@ function abortWorkflowRuntimeError(deps: WorkflowRunLoopDeps, error: unknown): W
       deps,
       'step_error',
       error.reason,
-      { clearLastOutput: true, failureError: error.reason },
+      {
+        clearLastOutput: true,
+        failureError: error.reason,
+        failureCategory: error.failureCategory,
+      },
     );
   }
   const errorMessage = getErrorMessage(error);
@@ -628,7 +645,7 @@ function abortStepError(
       deps,
       'step_error',
       failureError,
-      { failureError },
+      { failureError, failureCategory: result.response.failureCategory },
     );
   }
   return abortWorkflow(

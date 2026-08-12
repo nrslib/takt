@@ -1,6 +1,9 @@
 import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
 import { truncateUtf8PreservingMarker } from '../../../shared/utils/text.js';
-import { MAX_AGENT_FAILURE_MESSAGE_BYTES } from '../../../shared/types/agent-failure.js';
+import {
+  MAX_AGENT_FAILURE_MESSAGE_BYTES,
+  type AgentFailureCategory,
+} from '../../../shared/types/agent-failure.js';
 import type {
   WorkflowAbortKind,
   WorkflowStepFailureSummary,
@@ -12,6 +15,7 @@ interface RunFailureInput {
   readonly step: string;
   readonly reason: string;
   readonly error: string;
+  readonly failureCategory?: AgentFailureCategory;
   readonly details?: {
     reviewIntegrity?: ReviewIntegrityFailureDetails;
   };
@@ -28,6 +32,7 @@ export function createRunFailure(input: RunFailureInput): WorkflowStepFailureSum
     step: input.step,
     reason: sanitizeAndBound(input.reason),
     error: sanitizeAndBound(input.error),
+    ...(input.failureCategory === undefined ? {} : { failureCategory: input.failureCategory }),
     ...(input.details === undefined ? {} : { details: input.details }),
   };
 }

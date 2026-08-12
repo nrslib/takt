@@ -1057,6 +1057,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       kind: 'step_error',
       reason: boundedParseFailure,
       error: boundedParseFailure,
+      failureCategory: 'provider_stream_parse_error',
     });
     expect(Buffer.byteLength(String(abortReason))).toBe(MAX_AGENT_FAILURE_MESSAGE_BYTES);
     expect(Buffer.byteLength(String(abortFailure?.error))).toBe(

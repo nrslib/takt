@@ -906,6 +906,9 @@ export function bindWorkflowExecutionEvents(
       const runFailure: RunFailure = {
         step: failure.step,
         error: failure.error,
+        ...(failure.failureCategory === undefined
+          ? {}
+          : { failureCategory: failure.failureCategory }),
       };
       state.abortReason = reason;
       state.abortKind = kind;

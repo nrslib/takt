@@ -16,6 +16,7 @@ import { resetDebugLogger, setVerboseConsole } from '../shared/utils/debug.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import type { ProviderType } from '../shared/types/provider.js';
 import { MAX_TERMINAL_OUTPUT_BYTES } from '../shared/utils/text.js';
+import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
 
 class TestEngine extends EventEmitter {
   public abort = vi.fn();
@@ -596,16 +597,19 @@ describe('bindWorkflowExecutionEvents', () => {
       kind: 'interrupt',
       expectedStatus: 'aborted',
       failureError: 'terminal reason',
+      failureCategory: AGENT_FAILURE_CATEGORIES.EXTERNAL_ABORT,
     },
     {
       kind: 'step_error',
       expectedStatus: 'failed',
       failureError: 'NEEDS_ADJUDICATION: finding invariant failed',
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
     },
   ] as const)('publishes $kind as $expectedStatus', ({
     kind,
     expectedStatus,
     failureError,
+    failureCategory,
   }) => {
     const { bridge, engine, runMetaManager } = createBridgeHarness();
 
@@ -614,7 +618,13 @@ describe('bindWorkflowExecutionEvents', () => {
       { iteration: 3 },
       'terminal reason',
       kind,
-      { kind, step: 'reviewers', reason: 'terminal reason', error: failureError },
+      {
+        kind,
+        step: 'reviewers',
+        reason: 'terminal reason',
+        error: failureError,
+        failureCategory,
+      },
     );
     const payload = bridge.prepareTerminalPublicationPayload();
 
@@ -626,11 +636,17 @@ describe('bindWorkflowExecutionEvents', () => {
       failure: {
         step: 'reviewers',
         error: failureError,
+        failureCategory,
       },
     });
     expect(bridge.state.failure).toEqual({
       step: 'reviewers',
       error: failureError,
+      failureCategory,
+    });
+    expect(payload.sessionRecord).toMatchObject({
+      type: 'workflow_abort',
+      failureCategory,
     });
   });
 

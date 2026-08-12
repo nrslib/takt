@@ -1990,6 +1990,9 @@ export class StepExecutor {
     response: AgentResponse,
     runtime?: RuntimeStepResolution,
   ): StructuredOutputNormalizationResult {
+    if (StepExecutor.isProviderStreamParseFailure(response)) {
+      return { response };
+    }
     if (!step.structuredOutput) {
       return { response };
     }
@@ -2782,10 +2785,10 @@ export class StepExecutor {
       });
     } else {
       const normalizedPhase1 = this.normalizeStructuredOutputWithDiagnostics(
-          executableStep,
-          response,
-          executionRuntime,
-        );
+        executableStep,
+        response,
+        executionRuntime,
+      );
       if (normalizedPhase1.invalidDetail !== undefined) {
         const provider = this.deps.optionsBuilder
           .resolveStepProviderModel(executableStep, runtime)

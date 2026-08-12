@@ -52,6 +52,7 @@ import type { CompanionDiffReader } from './companion/diff-reader.js';
 import type { CompanionReviewAuthority } from './companion/review-state-store.js';
 
 import type { ProviderType, StreamCallback, StreamEvent } from '../../shared/types/provider.js';
+import type { AgentFailureCategory } from '../../shared/types/agent-failure.js';
 
 export interface WorkflowOperationJournalContext {
   readonly store: OperationJournalStore;
@@ -248,6 +249,7 @@ export interface WorkflowStepFailureSummary {
   step: string;
   reason: string;
   error: string;
+  failureCategory?: AgentFailureCategory;
   details?: {
     reviewIntegrity?: ReviewIntegrityFailureDetails;
   };
