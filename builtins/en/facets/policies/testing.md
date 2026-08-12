@@ -1,6 +1,6 @@
 # Testing Policy
 
-Every behavior change requires a corresponding test, and every bug fix requires a regression test.
+Subject to the four-part evidence gate below, an observable behavior change requires the minimum test needed to prevent regressions that existing tests cannot detect, and a bug fix requires an existing or new regression test that would detect the pre-fix failure.
 
 ## Principles
 
@@ -20,16 +20,18 @@ Every behavior change requires a corresponding test, and every bug fix requires 
 
 Delete existing tests that pin only internal structure instead of replacing them with another internal-structure assertion. Limit this check to existing tests that import, invoke, or directly reference the changed contract owner; do not exclude them by filename or claimed purpose, and do not expand the check into repository-wide cleanup of unrelated tests. Add a replacement only when a real external contract or regression risk exists, and verify the observable behavior. Exact strings remain appropriate when the string itself is a public contract such as CLI output, a protocol value, or a published error code.
 
+A test may be required only when all of the following can be shown: an acceptance criterion or observable contract that serves as the source of truth, a concrete failure reachable through a real path, evidence that existing tests cannot detect that failure, and the smallest layer that owns its verification. Do not require a test when any of these is absent. Module count, call-chain length, internal branch count, and file layout are not test-addition grounds. When an existing unit, integration, or E2E test detects the same failure, do not duplicate it at another layer or per consumer.
+
 ## Coverage Criteria
 
 | Target | Criteria |
 |--------|----------|
-| New behavior | Test required. REJECT if missing |
-| Bug fix | Regression test required. REJECT if missing |
-| Behavior change | Test update required. REJECT if missing |
-| Side-effect or state-transition change | Successful path and representative failure paths must be verified. REJECT if failure paths are untested |
-| Contract changes through consolidation or abstraction | Must verify that the contract holds on existing equivalent branches, not only on the new shared path |
-| Parser or configuration boundary changes | Must verify syntactically valid inputs with unexpected shapes, missing values, and isolation from personal configuration |
+| New observable behavior | A test at the smallest contract-owning layer is required only when existing tests cannot detect the regression |
+| Bug fix | An existing or new regression test must detect the pre-fix failure. No additional test is needed when an existing test already does so |
+| Observable behavior change | Update tests when they assert only the old contract. No addition or update is needed when existing tests already detect the new contract |
+| Side-effect or state-transition change | REJECT only when contract-relevant successful and representative failure paths are untested at every layer |
+| Contract changes through consolidation or abstraction | When existing evidence cannot detect regressions in equivalent branches, verify representative behavior at the contract owner |
+| Parser or configuration boundary changes | Verify only input classes relevant to the changed contract and not detected by existing tests |
 | Build (type check) | Build must succeed. REJECT if it fails |
 | Edge cases / boundary values | Test recommended (Warning) |
 
@@ -85,21 +87,6 @@ When a specification change replaces elements of an old design (UI, API, events,
 | Positively verifying the new specification in the layer that owns the new responsibility (upper module, service, integration flow, etc.) | OK |
 | Deleting obsolete tests for removed old behavior and replacing them with regression tests for the new specification | OK |
 
-## Test Structure: Given-When-Then
-
-```typescript
-test('should return NotFound error when user does not exist', async () => {
-  // Given: A non-existent user ID
-  const nonExistentId = 'non-existent-id'
-
-  // When: Attempt to fetch the user
-  const result = await getUser(nonExistentId)
-
-  // Then: NotFound error is returned
-  expect(result.error).toBe('NOT_FOUND')
-})
-```
-
 ## Test Quality
 
 | Aspect | Good | Bad |
@@ -136,14 +123,14 @@ Changes involving side effects or state transitions are not sufficiently verifie
 
 ## Testing Contract Changes and Existing Branches
 
-When a change standardizes a contract through a shared helper, normalizer, builder, or adapter, testing only the newly added path is not sufficient. Verify that existing equivalent branches satisfy the same contract.
+When a change standardizes a contract through a shared helper, normalizer, builder, or adapter, confirm that existing equivalent branches remain protected. Do not duplicate tests per consumer; use the contract owner's unit test, a representative parameterized test, or an existing higher-level behavior test, whichever detects the same fault at the smallest scope.
 
 | Criteria | Verdict |
 |----------|---------|
-| Only the new shared path is tested, while existing equivalent branches are not verified for the same return value, side effect, or error contract | REJECT |
-| An existing branch is treated as "preserved behavior" without verifying that it does not conflict with the contract introduced by the diff | REJECT |
-| Return / throw / catch / early return paths in the changed function are not enumerated, causing representative failure paths to be missed | REJECT |
-| Existing branches with the same responsibility have tests for return values, side effects, events, and error classification contracts | OK |
+| A concrete regression path exists in an equivalent branch and no existing test detects it | REJECT |
+| Tests are requested only because of module count, consumer count, or the number of return / throw / catch / early return paths | REJECT |
+| The same fault-detecting assertion is duplicated per consumer or across multiple layers | REJECT |
+| A contract-owner test or existing higher-level behavior test detects representative failures across equivalent branches | OK |
 
 ## Contract Test Sufficiency
 
@@ -157,7 +144,7 @@ When adding or changing a config value, runtime-selected capability, backend, op
 | A test only checks displayed values without verifying they match the resolution input used during execution | REJECT |
 | Absence is verified only by exact string matching, missing order, case, whitespace, or partial-leak differences | REJECT |
 | Boundary values that may be normalized at configuration boundaries, such as empty strings, whitespace-only strings, empty arrays, or case variants, are not tested | Warning. REJECT when this is a primary contract branch |
-| The path from entry point to final call verifies happy, rejection, and non-inheritance cases | OK |
+| The observable boundary owned by the contract verifies requirement-relevant happy, rejection, and non-inheritance cases | OK. Repeating them at every hop is unnecessary |
 
 ## Testing Negative, Non-Inheritance, and Rejection Contracts
 
@@ -174,14 +161,15 @@ Extract observable units such as output lines, records, fields, or call argument
 
 ## Parser and Configuration Boundary Tests
 
-At boundaries that read external files, configuration, YAML/JSON, or CLI input, testing only the ideal typed input is not sufficient.
+At boundaries that read external files, configuration, YAML/JSON, or CLI input, verify the input classes relevant to the changed contract. Do not apply a generic invalid-input checklist mechanically to every parser.
 
 | Criteria | Verdict |
 |----------|---------|
-| Array-like fields are not tested with object/null/missing values | REJECT |
-| File/directory checks are not tested with an existing regular file, broken link, or permission error | REJECT |
+| The changed input contract includes object/null/missing handling and has a concrete undetected failure | A test for the relevant representative input is required |
+| Object/null/missing combinations are requested solely because a parser changed | REJECT |
+| Regular-file, broken-link, and permission-error cases are required uniformly when file kind or access failure is unrelated to the changed contract | REJECT |
 | Tests that can inherit existing user or machine configuration do not isolate with an empty config directory or temporary HOME | REJECT |
-| Syntactically valid but contract-invalid shapes are pinned to ignore, normalize, or explicit-error behavior | OK |
+| A representative contract-invalid shape relevant to the change is pinned to ignore, normalize, or explicit-error behavior | OK |
 
 ## Test Data and Fixtures
 
@@ -207,15 +195,6 @@ When mocking an external SDK, external API, generated client, or CLI, align mock
 | The mock is type-safe but operation-specific semantic contracts, such as existing-resource behavior, partial success, or missing detection, are not verified | REJECT |
 | Internal test double drops constraints, overrides, or side effects that production always passes | REJECT |
 | When real integration is stubbed, the report separates what the mock verifies from the unverified real-integration scope | OK |
-
-### Naming
-
-Test names describe expected behavior. Use the `should {expected behavior} when {condition}` pattern.
-
-### Structure
-
-- Arrange-Act-Assert pattern (equivalent to Given-When-Then)
-- Avoid magic numbers and magic strings
 
 ## Refetch loop regressions
 
@@ -254,17 +233,19 @@ When introducing or changing major third-party UI components such as data grids,
 - Do not overuse E2E tests for what unit tests can cover
 - If new logic only has E2E tests, propose adding unit tests
 
-### When Integration Tests Are Required
+### Choosing Integration Tests
 
 Verify data flow coupling that unit tests alone cannot cover.
 
 | Condition | Verdict |
 |-----------|---------|
-| Data flow crossing 3+ modules | Integration test required |
-| New status/state merging into an existing workflow | Integration test for the full transition flow required |
-| New option propagating through a call chain to the endpoint | End-to-end chain coupling test required |
-| Handler, middleware, or translator selection and precedence is decided by runtime configuration | Integration test with production-like configuration required. A limited (slice) configuration only proves the behavior of what it includes |
-| All module-level unit tests pass | Unit tests alone are sufficient (when none of the above apply) |
+| Data flow crosses multiple modules, without any other evidence | Not grounds for another test. Do not decide by module count |
+| A contract-owner unit test can detect the same fault | Unit test is sufficient |
+| A concrete cross-boundary miswiring or transformation omission cannot be detected by unit tests | A minimal integration test through that coupling is required |
+| A new state merges into an existing workflow | Test transition decisions at their owner. Add a representative integration flow only for failures possible solely during composition |
+| A new option propagates through a call chain | Verify the resolution owner and the smallest handoff not covered by existing tests. Do not repeat at every hop or consumer |
+| Runtime configuration decides selection or precedence | Require production-like integration only for a concrete miswiring that a slice configuration would hide |
+| An existing higher-level behavior test detects the same coupling failure | No addition needed. Do not require a duplicate integration test |
 
 ## Unit Test Criteria
 
