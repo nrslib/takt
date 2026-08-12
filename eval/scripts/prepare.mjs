@@ -61,6 +61,13 @@ const TARGETS = [
     fixture: 'eval/fixtures/initial-review-contract-discovery',
   },
   {
+    id: 'testing-review-observable-evidence',
+    workflow: 'peer-review',
+    via: 'initial-reviewers',
+    step: 'testing-review',
+    fixture: 'eval/fixtures/testing-review-observable-evidence',
+  },
+  {
     id: 'initial-plan-contract-closure',
     workflow: 'default',
     step: 'plan',

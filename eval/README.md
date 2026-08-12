@@ -46,6 +46,7 @@ results, not one pass/fail summary.
 | `fix-plan-boundary-preflight` | peer-review / fix-plan | fix-plan-boundary-preflight | whether fix-plan rejects a locally valid method that violates its representation and persistence boundary |
 | `review-family-closure` | peer-review-suite-base / coding-review | review-family-closure | whether one review reports every path affected by the same contract defect instead of stopping at a representative example |
 | `initial-review-contract-discovery` | peer-review / initial coding-review | initial-review-contract-discovery | whether the initial review independently discovers multiple blocking families and completes each family sweep |
+| `testing-review-observable-evidence` | peer-review / initial testing-review | testing-review-observable-evidence | whether testing review requires one missing behavior-level integration check while rejecting module-count, per-hop, and already-covered test expansion |
 | `initial-plan-contract-closure` | default / plan | initial-review-contract-discovery | whether the initial plan discovers same-responsibility paths even under different names, closes real multi-boundary impact paths, and keeps local changes local |
 | `replan-contract-closure` | default / replan | initial-review-contract-discovery | whether replanning preserves the original task while adding required production boundaries and rejecting unrelated reviewer proposals |
 | `issue-plan-samples` | default / plan | nrslib/takt repository (read-only) | whether planning preserves explicit breadth, allowed design choices, and explicitly required architecture across Issues #1127, #1155, and #1136 |
@@ -185,6 +186,7 @@ npm run eval:prompts:fix-plan-fresh-findings
 npm run eval:prompts:fix-plan-boundary-preflight
 npm run eval:prompts:review-family-closure
 npm run eval:prompts:initial-review-contract-discovery
+npm run eval:prompts:testing-review-observable-evidence
 npm run eval:prompts:initial-plan-contract-closure
 npm run eval:prompts:replan-contract-closure
 npm run eval:prompts:issue-plan-samples

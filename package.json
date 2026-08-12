@@ -34,6 +34,7 @@
     "eval:prompts:fix-plan-boundary-preflight": "node eval/scripts/prepare.mjs fix-plan-boundary-preflight && node eval/scripts/run-evals.mjs fix-plan-boundary-preflight",
     "eval:prompts:review-family-closure": "node eval/scripts/prepare.mjs review-family-closure && node eval/scripts/run-evals.mjs review-family-closure",
     "eval:prompts:initial-review-contract-discovery": "node eval/scripts/prepare.mjs initial-review-contract-discovery && node eval/scripts/run-evals.mjs initial-review-contract-discovery",
+    "eval:prompts:testing-review-observable-evidence": "node eval/scripts/prepare.mjs testing-review-observable-evidence && node eval/scripts/run-evals.mjs testing-review-observable-evidence",
     "eval:prompts:initial-plan-contract-closure": "node eval/scripts/prepare.mjs initial-plan-contract-closure && node eval/scripts/run-evals.mjs initial-plan-contract-closure",
     "eval:prompts:replan-contract-closure": "node eval/scripts/prepare.mjs replan-contract-closure && node eval/scripts/run-evals.mjs replan-contract-closure",
     "eval:prompts:issue-plan-samples": "node eval/scripts/prepare.mjs issue-plan-samples && node eval/scripts/run-evals.mjs issue-plan-samples",
