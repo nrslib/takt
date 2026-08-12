@@ -354,8 +354,7 @@ export class OptionsBuilder {
     providerInfo: Pick<StepProviderInfo, 'provider' | 'model' | 'providerSource'>,
   ): boolean {
     return providerInfo.providerSource === 'step'
-      && providerInfo.provider === step.provider
-      && providerInfo.model === step.model;
+      && providerInfo.provider === step.provider;
   }
 
   /** Build common RunAgentOptions shared by all phases */

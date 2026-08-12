@@ -1252,15 +1252,22 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       )).toBe(false);
     });
 
-    it('passes the loop-judge seat permission mode to the provider call', async () => {
+    it('keeps loop-judge seat capabilities and permission across a model-only CLI override', async () => {
       const config = buildConfigWithLoopMonitor(1, {
         judge: { persona: 'supervisor', rules: loopJudgeRules() },
       } as Partial<LoopMonitorConfig>);
       engine = new WorkflowEngine(config, tmpDir, 'test task', {
         projectCwd: tmpDir,
         provider: 'claude',
+        model: 'opencode/cli-judge-model',
+        modelSource: 'cli',
         internalAgentSeats: {
-          loopJudge: { provider: 'opencode', model: 'opencode/seat-judge', permissionMode: 'readonly' },
+          loopJudge: {
+            provider: 'opencode',
+            model: 'opencode/seat-judge',
+            providerOptions: { opencode: { networkAccess: false } },
+            permissionMode: 'readonly',
+          },
         },
       });
       mockRunAgentSequence([
@@ -1284,8 +1291,8 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       expect(judgeCall?.[2]).toEqual(expect.objectContaining({
         resolvedExecution: {
           provider: 'opencode',
-          model: 'opencode/seat-judge',
-          providerOptions: undefined,
+          model: 'opencode/cli-judge-model',
+          providerOptions: { opencode: { networkAccess: false } },
           permissionMode: 'readonly',
         },
         sessionId: undefined,

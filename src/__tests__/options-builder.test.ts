@@ -197,6 +197,26 @@ describe('OptionsBuilder.buildBaseOptions', () => {
     expect(options.permissionMode).toBe('readonly');
   });
 
+  it('keeps synthesized seat options and permission across a model-only CLI override', () => {
+    const step = createStep({
+      provider: 'codex',
+      model: 'seat-model',
+      internalProviderOptions: { codex: { networkAccess: false } },
+      internalPermissionMode: 'readonly',
+    });
+    const options = createBuilder(step, {
+      provider: 'codex',
+      providerSource: 'runtime-v1',
+      model: 'cli-model',
+      modelSource: 'cli',
+    }).buildAgentOptions(step);
+
+    expect(options.resolvedProvider).toBe('codex');
+    expect(options.resolvedModel).toBe('cli-model');
+    expect(options.providerOptions).toEqual({ codex: { networkAccess: false } });
+    expect(options.permissionMode).toBe('readonly');
+  });
+
   it.each([
     { label: 'persona', personaOptions: { codex: { networkAccess: false } }, tagOptions: undefined },
     { label: 'tag', personaOptions: undefined, tagOptions: { codex: { networkAccess: false } } },
