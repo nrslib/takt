@@ -4,6 +4,7 @@
 {report:review-resolution.md}
 
 {{include:instructions/final-readiness-checks}}
+{{include:instructions/final-gate-new-finding-scope}}
 
 ## 最終 supervisor の裁定境界
 

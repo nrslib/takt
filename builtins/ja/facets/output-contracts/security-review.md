@@ -21,7 +21,9 @@
 ## 今回の指摘（new）
 | # | finding_id | family_tag | 重大度 | 種類 | 場所 | 問題 | Authorization basis | 初回に含まれなかった理由 | 修正案 |
 |---|------------|------------|--------|------|------|------|---------------------|------------------------------|--------|
-| 1 | SEC-NEW-src-db-L42 | injection-risk | High | SQLi | `src/db.ts:42` | 生SQL文字列 | follow-up で必須。それ以外は該当なし | follow-up で必須。それ以外は該当なし | パラメータ化クエリを使用 |
+| 1 | SEC-NEW-src-db-L42 | injection-risk | High | SQLi | `src/db.ts:42` | 生SQL文字列 | direct_acceptance_criterion_violation | 初回レビュー証跡は別のquery入口だけを確認していた | パラメータ化クエリを使用 |
+
+follow-up finding の `Authorization basis` は `accepted_family_unvisited_consumer`、`remediation_regression`、`direct_acceptance_criterion_violation`、`required_consumer_migration` のいずれか正確な値に限定し、初回レビューでは「該当なし」とする。「初回に含まれなかった理由」は別の事実説明であり、初回レビューでは「該当なし」とする。
 
 ## 継続指摘（persists）
 | # | finding_id | family_tag | 前回根拠 | 今回根拠 | 問題 | 修正案 |

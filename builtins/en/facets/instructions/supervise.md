@@ -1,7 +1,6 @@
 Verify existing evidence for tests, builds, and functional checks, then perform final approval.
 
 {{include:instructions/review-investigation-discipline}}
-{{include:instructions/final-gate-new-finding-scope}}
 
 ## Step-Specific Additional Procedure
 

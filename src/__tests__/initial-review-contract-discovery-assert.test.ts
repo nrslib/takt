@@ -81,6 +81,21 @@ describe('initial review contract discovery assertion', () => {
     expect(assertInitialReviewContractDiscovery(tableOutput(rows, false)).pass).toBe(false);
   });
 
+  it('rejects nearby identifiers that do not state entry-to-participant connections', () => {
+    const rows = [
+      ...projectionPaths.map((path) => tableRow('projection', path, projectionProblem, projectionRepair)),
+      ...identityPaths.map((path) => tableRow('identity', path, identityProblem, identityRepair)),
+    ];
+    const disconnectedInventory = [
+      tableOutput(rows, false),
+      'Data-flow was inspected for inspectNode and inspectExecution.',
+      'Participants: renderPreview, listNode, printNode, nodeRecord.',
+      'Participants: JobStore, tokenA, restoreResumeNamespace, statusRecord.',
+    ].join('\n');
+
+    expect(assertInitialReviewContractDiscovery(disconnectedInventory).pass).toBe(false);
+  });
+
   it('merges table and labeled records by case-insensitive family identity', () => {
     const rows = projectionPaths.map((path) => tableRow('shared', path, projectionProblem, projectionRepair));
     const labeledIdentity = [

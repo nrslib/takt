@@ -11,7 +11,7 @@
 ## Defect-Family Final State
 | Fix Unit | Authoritative Contract | Complete Invariant Set | Target Responsibility and Source of Truth | Participating Contract Paths | Valid, Failing, and Boundary Examples | Migration and Removal |
 |----------|------------------------|------------------------|-------------------------------------------|------------------------------|---------------------------------------|-----------------------|
-| {Fix unit} | {Requirement, specification, schema, or public contract} | {Conditions beyond the finding examples} | {Target location, or unchanged for a local issue} | {Definition, production, normalization, validation, every consumer, retry, fallback, parallel execution, persistence, restoration, and terminal or API output} | {Representative cases to verify} | {Consumers and duplicate or obsolete paths} |
+| {Fix unit} | {Requirement, specification, schema, or public contract} | {Conditions beyond the finding examples} | {Target location, or unchanged for a local issue} | {Only affected paths that actually exist: definition, production, normalization, validation, consumers, terminal or API output, plus retry, fallback, parallel execution, persistence, or restoration only when applicable. Omit non-applicable paths rather than exploring or listing them} | {Representative cases to verify} | {Consumers and duplicate or obsolete paths} |
 
 ## Requirement Scenarios (conditional)
 

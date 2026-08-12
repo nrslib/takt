@@ -39,7 +39,7 @@
 ## 今回の指摘（new）
 | # | finding_id | family_tag | カテゴリ | 場所 | 問題 | Authorization basis | 初回に含まれなかった理由 | 修正案 |
 |---|------------|------------|---------|------|------|---------------------|--------------------------|--------|
-| 1 | MERGE-NEW-src-file-L42 | maintainability-readiness | 回帰 / 要求未充足 / テスト不足 / 契約破壊 / 保守困難化 / スコープクリープ | `src/file.ts:42` | 問題の説明 | {受入条件への直接違反 / diff起因の回帰 / 必須consumer migration / 採用済みfamilyの閉鎖} | {初回レビューの証跡にこの指摘が含まれなかった理由} | 修正方法 |
+| 1 | MERGE-NEW-src-file-L42 | maintainability-readiness | 回帰 / 要求未充足 / テスト不足 / 契約破壊 / 保守困難化 / スコープクリープ | `src/file.ts:42` | 問題の説明 | {accepted_family_unvisited_consumer / remediation_regression / direct_acceptance_criterion_violation / required_consumer_migration} | {初回レビューがこのfindingを省いた理由を示す独立した証拠} | 修正方法 |
 
 ## 継続指摘（persists）
 | # | finding_id | family_tag | 前回根拠 | 今回根拠 | 問題 | 修正案 |

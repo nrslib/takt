@@ -70,7 +70,7 @@ Extract requirements from the task spec and verify each one individually against
 ## Current Iteration Findings (new)
 | # | finding_id | Item | Evidence | Reason | Authorization Basis | Reason Absent from Initial Round | Required Action |
 |---|------------|------|----------|--------|---------------------|----------------------------------|-----------------|
-| 1 | VAL-NEW-src-file-L42 | Requirement mismatch | `file:line` | Description | {Direct acceptance-criterion violation / diff-introduced regression / required consumer migration / accepted-family closure} | {Why the initial review evidence did not include this finding} | Fix required |
+| 1 | VAL-NEW-src-file-L42 | Requirement mismatch | `file:line` | Description | {accepted_family_unvisited_consumer / remediation_regression / direct_acceptance_criterion_violation / required_consumer_migration} | {Independent evidence explaining why the initial review omitted this finding} | Fix required |
 
 ## Carry-over Findings (persists)
 | # | finding_id | Previous Evidence | Current Evidence | Reason | Required Action |

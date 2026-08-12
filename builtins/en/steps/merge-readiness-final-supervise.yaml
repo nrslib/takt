@@ -16,7 +16,7 @@ policy:
 knowledge:
   $param: supervise_knowledge
 pass_previous_response: false
-instruction: supervise
+instruction: supervise-merge-readiness
 output_contracts:
   report:
     - name: supervisor-validation.md

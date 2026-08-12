@@ -23,7 +23,9 @@
 ## 今回の指摘（new）
 | # | finding_id | family_tag | スコープ | 場所 | 問題 | Authorization basis | 初回に含まれなかった理由 | 修正案 |
 |---|------------|------------|---------|------|------|---------------------|------------------------------|--------|
-| 1 | CQRS-NEW-src-file-L42 | cqrs-violation | スコープ内 | `src/file.ts:42` | 問題の説明 | follow-up で必須。それ以外は該当なし | follow-up で必須。それ以外は該当なし | 修正方法 |
+| 1 | CQRS-NEW-src-file-L42 | cqrs-violation | スコープ内 | `src/file.ts:42` | 問題の説明 | follow-upでは remediation_regression。初回は該当なし | 初回レビュー後の修正がこの回帰を導入した | 修正方法 |
+
+follow-up finding の `Authorization basis` は `accepted_family_unvisited_consumer`、`remediation_regression`、`direct_acceptance_criterion_violation`、`required_consumer_migration` のいずれか正確な値に限定し、初回レビューでは「該当なし」とする。「初回に含まれなかった理由」は別の事実説明であり、初回レビューでは「該当なし」とする。
 
 スコープ: 「スコープ内」（今回修正可能）/ 「スコープ外」（既存問題・非ブロッキング）
 

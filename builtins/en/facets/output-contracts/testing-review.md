@@ -25,7 +25,9 @@
 ## Current Iteration Findings (new)
 | # | finding_id | family_tag | Category | Location | Issue | Authorization Basis | Reason Absent from Initial Round | Fix Suggestion |
 |---|------------|------------|----------|----------|-------|---------------------|----------------------------------|----------------|
-| 1 | TEST-NEW-src-test-L42 | test-structure | Coverage | `src/test.ts:42` | Issue description | Required for follow-up; otherwise not applicable | Required for follow-up; otherwise not applicable | Fix suggestion |
+| 1 | TEST-NEW-src-test-L42 | test-structure | Coverage | `src/test.ts:42` | Issue description | remediation_regression | The repair changed this behavior after the initial test review | Fix suggestion |
+
+For a follow-up finding, `Authorization Basis` must be exactly `accepted_family_unvisited_consumer`, `remediation_regression`, `direct_acceptance_criterion_violation`, or `required_consumer_migration`; initial review uses `not applicable`. `Reason Absent from Initial Round` is a separate factual explanation for a follow-up finding and is `not applicable` for initial review.
 
 ## Carry-over Findings (persists)
 | # | finding_id | family_tag | Previous Evidence | Current Evidence | Issue | Fix Suggestion |

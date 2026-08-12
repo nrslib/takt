@@ -27,7 +27,9 @@
 ## Current Iteration Findings (new)
 | # | finding_id | family_tag | Category | Location | Issue | Authorization Basis | Reason Absent from Initial Round | Fix Suggestion |
 |---|------------|------------|----------|----------|-------|---------------------|----------------------------------|----------------|
-| 1 | AI-NEW-src-file-L23 | hallucination | Hallucinated API | `src/file.ts:23` | Non-existent method | Required for follow-up; otherwise not applicable | Required for follow-up; otherwise not applicable | Replace with existing API |
+| 1 | AI-NEW-src-file-L23 | hallucination | Hallucinated API | `src/file.ts:23` | Non-existent method | direct_acceptance_criterion_violation | The initial review evidence did not inspect this acceptance criterion | Replace with existing API |
+
+For a follow-up finding, `Authorization Basis` must be exactly `accepted_family_unvisited_consumer`, `remediation_regression`, `direct_acceptance_criterion_violation`, or `required_consumer_migration`; initial review uses `not applicable`. `Reason Absent from Initial Round` is a separate factual explanation for a follow-up finding and is `not applicable` for initial review.
 
 ## Carry-over Findings (persists)
 | # | finding_id | family_tag | Previous Evidence | Current Evidence | Issue | Fix Suggestion |

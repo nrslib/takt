@@ -8,7 +8,7 @@ function newFindingTable() {
     '## Current Iteration Findings (new)',
     '| finding_id | Location | Issue | Authorization Basis | Reason Absent from Initial Round |',
     '|------------|----------|-------|---------------------|----------------------------------|',
-    '| MERGE-NEW-mode-L1 | `src/mode.js` configuration entry | Missing normalization | Required consumer migration | Initial evidence covered only another entry |',
+    '| MERGE-NEW-mode-L1 | `src/mode.js` configuration entry | Missing normalization | required_consumer_migration | Initial evidence covered only another entry |',
   ].join('\n');
 }
 
@@ -35,7 +35,7 @@ test('accepts the equivalent Japanese lifecycle structure', () => {
     '## 今回の指摘（new）',
     '| finding_id | 項目 | 理由 | Authorization basis | 初回に含まれなかった理由 |',
     '|------------|------|------|---------------------|--------------------------|',
-    '| VAL-NEW-mode-L1 | project設定 | 正規化が不足 | 必須consumer migration | 初回証跡はCLI入口だけに限定 |',
+    '| VAL-NEW-mode-L1 | project設定 | 正規化が不足 | required_consumer_migration | 初回証跡はCLI入口だけに限定 |',
     '## 前段 finding の再評価',
     '| finding_id | 再評価 |',
     '|------------|--------|',
@@ -56,7 +56,7 @@ for (const [name, heading, id] of [
       `## ${heading}`,
       '| finding_id | Issue |',
       '|------------|-------|',
-      `| ${id} | OLD-REVIEW-readme-L1 requires work |`,
+      `| OLD-REVIEW-readme-L1 | ${id} requires work |`,
     ].join('\n');
 
     const result = assertFinalReadinessSupervision(outputWith(revived));
@@ -65,6 +65,29 @@ for (const [name, heading, id] of [
     assert.equal(result.reason.includes('old-finding-not-revived'), true);
   });
 }
+
+test('does not infer a prior disposition from explanatory prose', () => {
+  const output = outputWith().replace(
+    priorDisposition(),
+    'The OLD-REVIEW-readme-L1 item was described as out_of_scope in earlier prose.',
+  );
+
+  const result = assertFinalReadinessSupervision(output);
+
+  assert.equal(result.pass, false);
+  assert.equal(result.reason.includes('old-finding-disposition'), true);
+});
+
+test('does not revive a prior finding mentioned only in actionable prose', () => {
+  const actionable = [
+    '## Actionable Families',
+    '| finding_id | Issue |',
+    '|------------|-------|',
+    '| MERGE-NEW-mode-L2 | This is distinct from OLD-REVIEW-readme-L1 |',
+  ].join('\n');
+
+  assert.equal(assertFinalReadinessSupervision(outputWith(actionable)).pass, true);
+});
 
 test('rejects omission of the prior non-actionable disposition', () => {
   const output = ['## Result: REJECT', newFindingTable()].join('\n\n');
@@ -76,7 +99,7 @@ test('rejects omission of the prior non-actionable disposition', () => {
 });
 
 test('rejects an authorization label outside the allowed bases', () => {
-  const output = outputWith().replace('Required consumer migration', 'General quality improvement');
+  const output = outputWith().replace('required_consumer_migration', 'General quality improvement');
 
   const result = assertFinalReadinessSupervision(output);
 

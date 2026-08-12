@@ -1,19 +1,10 @@
 const OLD_NON_ACTIONABLE_FINDING = 'OLD-REVIEW-readme-L1';
-const ALLOWED_AUTHORIZATION_BASIS_PATTERNS = [
-  /direct.{0,24}acceptance.{0,24}(?:violation|failure|gap)/i,
-  /acceptance.{0,24}(?:criterion|requirement).{0,24}(?:violation|failure|gap)/i,
-  /(?:diff|remediation|patch|current change).{0,32}(?:introduced|caused)?.{0,12}regression/i,
-  /regression.{0,32}(?:introduced|caused).{0,12}(?:diff|remediation|patch|current change)/i,
-  /required.{0,24}consumer.{0,24}migration/i,
-  /consumer.{0,24}migration.{0,24}required/i,
-  /accepted.{0,24}family.{0,24}(?:closure|unvisited consumer)/i,
-  /(?:closure|unvisited consumer).{0,24}accepted.{0,24}family/i,
-  /受入.{0,24}(?:条件|要件).{0,12}(?:直接違反|未充足)/i,
-  /(?:差分|修正).{0,24}(?:起因|導入).{0,12}回帰/i,
-  /必須.{0,24}consumer.{0,24}migration/i,
-  /採用済み.{0,24}family.{0,24}(?:閉鎖|未確認.{0,12}consumer)/i,
-  /(?:閉鎖|未確認.{0,12}consumer).{0,24}採用済み.{0,24}family/i,
-];
+const ALLOWED_AUTHORIZATION_BASES = new Set([
+  'accepted_family_unvisited_consumer',
+  'remediation_regression',
+  'direct_acceptance_criterion_violation',
+  'required_consumer_migration',
+]);
 const INITIAL_ROUND_REASON_PATTERNS = [
   /(?:initial|earlier|previous|review evidence).{0,80}(?:covered only|limited|did not|not inspect|omitted|missed|unvisited|absent|not included|scope)/i,
   /(?:covered only|limited|did not|not inspect|omitted|missed|unvisited|absent|not included|scope).{0,80}(?:initial|earlier|previous|review evidence)/i,
@@ -131,12 +122,6 @@ export function extractFindingLifecycle(output) {
   return {
     reviewOutput,
     rows,
-    actionableSections: sections.filter(({ kind }) => (
-      kind === 'new'
-      || kind === 'persists'
-      || kind === 'reopened'
-      || kind === 'actionable'
-    )),
   };
 }
 
@@ -165,8 +150,7 @@ function extractNewFindingRows(lifecycle) {
 }
 
 function hasAllowedAuthorizationBasis(value) {
-  return ALLOWED_AUTHORIZATION_BASIS_PATTERNS.some((pattern) => pattern.test(value))
-    && !/^(?:none|n\/a|not applicable|なし|該当なし|-)$/i.test(value.trim());
+  return ALLOWED_AUTHORIZATION_BASES.has(value.replace(/`/g, '').trim().toLowerCase());
 }
 
 function hasMeaningfulInitialRoundReason(value) {
@@ -175,16 +159,23 @@ function hasMeaningfulInitialRoundReason(value) {
 }
 
 function keepsOldFindingNonActionable(lifecycle) {
-  const escapedId = OLD_NON_ACTIONABLE_FINDING.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const nonActionable = '(?:adjudicated[ _-]?non[ _-]?actionable|non[ _-]?actionable|out[ _-]?of[ _-]?scope|false[ _-]?positive|overreach|非修正対象|対象外)';
-  return new RegExp(`${escapedId}[^\\n]{0,240}${nonActionable}|${nonActionable}[^\\n]{0,240}${escapedId}`, 'i')
-    .test(lifecycle.reviewOutput);
+  return lifecycle.rows.some((row) => {
+    if (row.sectionKind !== 'disposition') return false;
+    const findingId = valueForHeader(row, /finding[_ -]?id/);
+    const disposition = valueForHeader(row, /disposition|re-?evaluation|再評価|裁定|扱い/);
+    return findingId?.replace(/`/g, '').trim() === OLD_NON_ACTIONABLE_FINDING
+      && disposition !== undefined
+      && /^(?:adjudicated[ _-]?non[ _-]?actionable|non[ _-]?actionable|out[ _-]?of[ _-]?scope|false[ _-]?positive|overreach|非修正対象|対象外)$/i
+        .test(disposition.replace(/`/g, '').trim());
+  });
 }
 
 function revivesOldFinding(lifecycle) {
-  return lifecycle.actionableSections.some(({ lines }) => lines.some((line) => (
-    line.includes(OLD_NON_ACTIONABLE_FINDING)
-  )));
+  return lifecycle.rows.some((row) => {
+    if (!['new', 'persists', 'reopened', 'actionable'].includes(row.sectionKind)) return false;
+    const findingId = valueForHeader(row, /finding[_ -]?id/);
+    return findingId?.replace(/`/g, '').trim() === OLD_NON_ACTIONABLE_FINDING;
+  });
 }
 
 export default function assertFinalReadinessSupervision(output) {

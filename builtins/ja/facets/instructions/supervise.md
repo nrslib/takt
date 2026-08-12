@@ -1,7 +1,6 @@
 実行済みのテスト・ビルド・動作確認の証跡を確認し、最終承認を行ってください。
 
 {{include:instructions/review-investigation-discipline}}
-{{include:instructions/final-gate-new-finding-scope}}
 
 ## ステップ固有の追加手順
 

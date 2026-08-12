@@ -163,11 +163,10 @@ function recordIncludesAllLocations(record, paths) {
 }
 
 function hasConnectedRouteEvidence(output, entryFunction, participants) {
-  const entryIndex = output.search(new RegExp(`\\b${entryFunction}\\b`, 'i'));
-  if (entryIndex < 0) return false;
-  const surroundingEvidence = output.slice(Math.max(0, entryIndex - 800), entryIndex + 1600);
-  return /(import|call|invoke|delegate|return|data[- ]?flow|参照|呼び出|経由|返却|データフロー)/i.test(surroundingEvidence)
-    && participants.every((participant) => surroundingEvidence.includes(participant));
+  const relation = /(call|invoke|delegate|return|pass|flow|route|呼び出|経由|渡|返却|フロー)/i;
+  const entry = new RegExp(`\\b${entryFunction}\\b`, 'i');
+  const evidenceLines = output.split('\n').filter((line) => entry.test(line) && relation.test(line));
+  return participants.every((participant) => evidenceLines.some((line) => line.includes(participant)));
 }
 
 function hasPathClassification(output, path, classifications) {

@@ -6,7 +6,7 @@
 1. 各指摘について、技術的な主張、実際に壊れるシナリオまたは実装品質問題の具体的証拠、file:line または再現証拠を確認する
 2. 技術的妥当性とは別に、受入条件の直接違反、今回差分が導入した退行、必須 consumer migration、採用済み contract family の閉鎖のいずれが今回の修正を許可するか確認する。重大度、REJECT、修正案だけを権限根拠にしない
 3. 各指摘を現在のコード、要求、観測可能な契約へ照合し、正式な disposition である `actionable`、`duplicate`、`false_positive`、`overreach`、`out_of_scope`、`no_issue_after_verification`、`environment_unverified` のいずれか1つへ分類する。現在のプロンプトに裁定・契約変更の判断基準が提供されている場合は適用する
-4. 同じ根本原因、正本、不変条件、受入条件を持つ指摘を1つの family にまとめ、元の finding ID と出典をすべて保持する。定義から terminal・API 出力まで同じ family を縦に閉じ、隣接する別契約を混ぜない
+4. 同じ根本原因、正本、不変条件、受入条件を持つ指摘を1つの family にまとめ、元の finding ID と出典をすべて保持する。定義から terminal・API 出力まで同じ family を縦に閉じ、隣接する別契約を混ぜない。許可済み family を閉じるために必要な未訪問 consumer は、この4条件をすべて共有する場合だけ `accepted_family_unvisited_consumer` または `required_consumer_migration` として追加できる。この例外を隣接契約の探索に広げない
 5. 過剰な修正方式を退ける場合も、証拠で確認でき修正権限を持つ元の欠陥と、それを解消する最小の内部修正を失わない。技術的に妥当でも権限のない水平改善は `out_of_scope` として修正対象へ入れない
 6. follow-up の新規 finding には、`accepted_family_unvisited_consumer`、`remediation_regression`、`direct_acceptance_criterion_violation`、`required_consumer_migration` のいずれかと、初回に含まれなかった理由を記録する
 7. `environment_unverified` は、現在のプロンプトに環境要因の判断基準が提供され全条件を満たす場合だけ使い、実装欠陥の証拠がある指摘を環境要因で退けない
