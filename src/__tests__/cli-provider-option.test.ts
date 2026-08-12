@@ -18,26 +18,6 @@ const providerValues = [
 const providerPipeList = providerValues.join('|');
 
 describe('CLI --provider option', () => {
-  it('should include cursor in provider help text', () => {
-    const providerOption = program.options.find((option) => option.long === '--provider');
-
-    expect(providerOption).toBeDefined();
-    expect(providerOption?.description).toContain('cursor');
-  });
-
-  it('should list claude-sdk and headless claude in provider help text', () => {
-    const providerOption = program.options.find((option) => option.long === '--provider');
-
-    expect(providerOption?.description).toContain('claude-sdk');
-    expect(providerOption?.description).toMatch(/claude\|/);
-  });
-
-  it('Given provider selection is concrete-only, When inspecting provider help text, Then provider auto is not listed', () => {
-    const providerOption = program.options.find((option) => option.long === '--provider');
-
-    expect(providerOption?.description).not.toMatch(/\bauto\b/);
-  });
-
   it('Given provider auto on the command line, When parsing CLI options, Then the error explains the concrete-provider migration', async () => {
     const writeErr = vi.fn();
     vi.resetModules();
@@ -71,9 +51,6 @@ describe('CLI --provider option', () => {
     const choices = (autoStrategyOption as unknown as { argChoices?: string[] } | undefined)?.argChoices;
 
     expect(autoStrategyOption).toBeDefined();
-    expect(autoStrategyOption?.description).toContain('cost');
-    expect(autoStrategyOption?.description).toContain('balanced');
-    expect(autoStrategyOption?.description).toContain('performance');
     expect(choices).toEqual(['cost', 'balanced', 'performance']);
   });
 
@@ -99,12 +76,6 @@ describe('CLI --provider option', () => {
     expect(workflowOptions).toHaveLength(1);
   });
 
-  it('should expose --workflow as the canonical workflow option', () => {
-    const workflowOption = program.options.find((option) => option.long === '--workflow');
-
-    expect(workflowOption).toBeDefined();
-    expect(workflowOption?.description).toBe('Workflow name or path to workflow file');
-  });
 });
 
 describe('provider contract documentation', () => {

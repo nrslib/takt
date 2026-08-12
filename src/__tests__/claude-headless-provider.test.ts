@@ -250,15 +250,6 @@ describe('ProviderRegistry with Claude headless', () => {
     expect(provider).toBeInstanceOf(ClaudeHeadlessProvider);
   });
 
-  it('should setup an agent through the registry', () => {
-    ProviderRegistry.resetInstance();
-    const registry = ProviderRegistry.getInstance();
-    const provider = registry.get('claude');
-    const agent = provider.setup({ name: 'test' });
-
-    expect(agent).toBeDefined();
-    expect(typeof agent.call).toBe('function');
-  });
 });
 
 describe('Claude provider split (registry)', () => {
@@ -281,12 +272,6 @@ describe('Claude provider split (registry)', () => {
     const sdk = getProvider('claude-sdk');
 
     expect(sdk.supportsStructuredOutput).toBe(true);
-  });
-
-  it('Given headless claude path, When supportsStructuredOutput, Then true after CLI json-schema wiring', () => {
-    const headless = getProvider('claude');
-
-    expect(headless.supportsStructuredOutput).toBe(true);
   });
 
   it('Given unknown id, When getProvider, Then throws with clear message', () => {

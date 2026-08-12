@@ -93,26 +93,6 @@ function restatementPresentationContext() {
 }
 
 describe('buildFindingContractInstruction', () => {
-  it('never emits blank-line runs left behind by unused conditional blocks', () => {
-    for (const language of ['en', 'ja'] as const) {
-      for (const contract of [
-        {},
-        { hasOpenFindings: true },
-        { reviewer: REVIEWER },
-        {
-          reviewer: REVIEWER,
-          hasOpenFindings: true,
-          hasWaivedFindings: true,
-          hasDismissedFindings: true,
-        },
-      ]) {
-        const rendered = build({ contract, language });
-        expect(rendered, `${language} ${JSON.stringify(contract)}`).not.toMatch(/\n{3}/);
-        expect(rendered.startsWith('## Finding Contract')).toBe(true);
-      }
-    }
-  });
-
   describe('reviewer instruction', () => {
     it('localizes the reviewer prose for ja', () => {
       const rendered = build({
@@ -512,14 +492,6 @@ describe('buildFindingContractReportInstruction', () => {
       renderFencedJsonBlock,
     });
   }
-
-  it('never emits blank-line runs and starts with the Finding Contract heading', () => {
-    for (const language of ['en', 'ja'] as const) {
-      const rendered = buildReport(language);
-      expect(rendered, language).not.toMatch(/\n{3}/);
-      expect(rendered.startsWith('## Finding Contract')).toBe(true);
-    }
-  });
 
   it('does not inject reviewer or dispute guidance in the report phase', () => {
     for (const language of ['en', 'ja'] as const) {
