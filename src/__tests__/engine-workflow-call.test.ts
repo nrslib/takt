@@ -1033,7 +1033,11 @@ steps:
         claude: { allowedTools: ['Stale'] },
       },
       personaProviders: {
-        reviewer: { provider: 'claude', model: 'target-model' },
+        reviewer: {
+          provider: 'claude',
+          model: 'target-model',
+          providerOptions: { claude: { allowedTools: ['Glob'] } },
+        },
       },
     }));
     engine.on('step:start', (step, _iteration, _instruction, providerInfo) => {

@@ -189,10 +189,10 @@ export class OptionsBuilder {
     const baseProviderOptions = this.resolveProfileScopedBaseProviderOptions(resolvedProviderSource);
     const profileLayers = this.resolveProfileScopedProviderOptionLayers(step, resolvedProviderSource);
     const tracedLayers = [
+      ...profileLayers,
       ...(this.engineOptions.workflowCallProviderOptions === undefined
         ? []
         : [{ source: 'workflow_call' as const, options: this.engineOptions.workflowCallProviderOptions }]),
-      ...profileLayers,
     ];
     const providerOptionsSources = resolveProviderOptionsSources(
       resolveDirectStepProviderOptions(step),
@@ -219,11 +219,11 @@ export class OptionsBuilder {
     const providerOptionsSources = resolveProviderOptionsSources(
       resolveDirectStepProviderOptions(step),
       [
+        { source: runtimeSource, options: runtime.providerInfo.providerOptions } satisfies ProviderOptionsLayer,
+        ...profileLayers,
         ...(this.engineOptions.workflowCallProviderOptions === undefined
           ? []
           : [{ source: 'workflow_call' as const, options: this.engineOptions.workflowCallProviderOptions }]),
-        ...profileLayers,
-        { source: runtimeSource, options: runtime.providerInfo.providerOptions } satisfies ProviderOptionsLayer,
       ],
       baseProviderOptions,
       this.engineOptions.providerOptionsOriginResolver,
@@ -243,11 +243,11 @@ export class OptionsBuilder {
       return runtime.providerInfo?.providerOptions;
     }
     const middleProviderOptions = mergeProviderOptions(
-      this.engineOptions.workflowCallProviderOptions,
       ...this.resolveProfileScopedProviderOptionLayers(
         step,
         resolvedProviderInfo.providerSource,
       ).map((layer) => layer.options),
+      this.engineOptions.workflowCallProviderOptions,
     );
     const directStepProviderOptions = resolveDirectStepProviderOptions(step);
     const runtimeProviderOptions = runtime?.providerInfo?.providerOptions;
@@ -256,6 +256,15 @@ export class OptionsBuilder {
     );
 
     if (runtimeProviderOptions && !runtime.teamLeaderPart) {
+      if (runtime.providerInfo?.providerSource !== 'promotion') {
+        return resolveEffectiveProviderOptions(
+          this.engineOptions.providerOptionsSource,
+          this.engineOptions.providerOptionsOriginResolver,
+          baseProviderOptions,
+          directStepProviderOptions,
+          mergeProviderOptions(runtimeProviderOptions, middleProviderOptions),
+        );
+      }
       const stepProviderOptions = mergeRuntimeAndDirectStepProviderOptions(
         runtime,
         runtimeProviderOptions,
