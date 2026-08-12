@@ -70,6 +70,82 @@ describe('facet include expansion', () => {
     expect(content).not.toContain('{{include:instructions/review-pr-context}}');
   });
 
+  it.each(['en', 'ja'] as const)(
+    'should keep directly resolved base instruction and output contract facets scenario-free in %s',
+    (lang) => {
+      const facetContext = { projectDir: tempDir, lang };
+      const instructionScenarioPartials = [
+        'requirement-scenario-planning',
+        'requirement-scenario-test-mapping',
+        'requirement-scenario-maintenance',
+        'requirement-scenario-verification',
+      ].map((name) => readFileSync(
+        join(
+          getLanguageResourcesDir(lang),
+          'facets',
+          'partials',
+          'instructions',
+          `${name}.md`,
+        ),
+        'utf-8',
+      ).trim());
+      const outputScenarioPartials = [
+        'requirement-scenarios-plan',
+        'requirement-scenarios-fix-plan',
+        'requirement-scenarios-test-report',
+      ].map((name) => readFileSync(
+        join(
+          getLanguageResourcesDir(lang),
+          'facets',
+          'partials',
+          'output-contracts',
+          `${name}.md`,
+        ),
+        'utf-8',
+      ).trim());
+
+      for (const name of [
+        'plan',
+        'plan-maintenance',
+        'write-tests-first',
+        'replan-implementation',
+        'fix-plan-from-review-resolution',
+        'review-merge-readiness',
+        'supervise-merge-readiness',
+      ]) {
+        const content = resolveRefToContent(
+          name,
+          undefined,
+          tempDir,
+          'instructions',
+          facetContext,
+        );
+
+        expect(content, name).toBeDefined();
+        expect(content, name).not.toContain('{{include:');
+        for (const scenarioPartial of instructionScenarioPartials) {
+          expect(content, name).not.toContain(scenarioPartial);
+        }
+      }
+
+      for (const name of ['plan', 'fix-plan', 'test-report']) {
+        const content = resolveRefToContent(
+          name,
+          undefined,
+          tempDir,
+          'output-contracts',
+          facetContext,
+        );
+
+        expect(content, name).toBeDefined();
+        expect(content, name).not.toContain('{{include:');
+        for (const scenarioPartial of outputScenarioPartials) {
+          expect(content, name).not.toContain(scenarioPartial);
+        }
+      }
+    },
+  );
+
   it.each(['en', 'ja'] as const)('should compose the builtin fix-family contract into fix instructions in %s', (lang) => {
     const partial = readFileSync(
       join(getLanguageResourcesDir(lang), 'facets', 'partials', 'instructions', 'fix-family-completion.md'),

@@ -4,7 +4,6 @@ Meet these requirements:
 
 - Address unresolved issues and recurrence paths with the same cause together
 - Keep the original objective, constraints, and acceptance criteria fixed. Do not turn a reviewer-suggested implementation into a new requirement or narrow the task into an easier problem
-- Maintain and update the boundary-risk classification (structured input, identifier generation) of the completion contracts and the Requirement Scenarios section. Scenarios concretize existing completion contracts and never create new requirements
 - Recheck the feature's role in the system and the owners of its entry points, trust boundaries, state, authority, and side effects, then distinguish unnecessary abstraction from missing required production behavior
 - Only when user or external input, authorization, sensitive information, external execution, persistence, retries, or concurrency actually participates, include the relevant validation, rejection, and failure handling in the plan
 - Do not repeat a failed fix or a substantively identical plan

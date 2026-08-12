@@ -9,7 +9,14 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  rmSync,
+  existsSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -48,6 +55,7 @@ import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader
 import { listBuiltinWorkflowNames } from '../infra/config/loaders/workflowResolver.js';
 import { loadGlobalConfig } from '../infra/config/global/globalConfig.js';
 import { validateWorkflowConfig } from '../core/workflow/engine/WorkflowValidator.js';
+import { getLanguageResourcesDir } from '../infra/resources/index.js';
 
 const loadWorkflowConfig = loadWorkflow;
 const listBuiltinWorkflowLabels = listBuiltinWorkflowNames;
@@ -98,6 +106,83 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
     expect(Array.from(workflows.values()).every(({ source }) => source === 'builtin')).toBe(true);
     expect(onWarning).not.toHaveBeenCalled();
   });
+
+  it.each(['en', 'ja'] as const)(
+    'should keep scenario contracts opt-in across representative %s builtin compositions',
+    (language) => {
+      languageState.value = language;
+      const partial = (facetKind: 'instructions' | 'output-contracts', name: string): string =>
+        readFileSync(
+          join(
+            getLanguageResourcesDir(language),
+            'facets',
+            'partials',
+            facetKind,
+            `${name}.md`,
+          ),
+          'utf-8',
+        ).trim();
+      const step = (workflowName: string, stepName: string) => {
+        const workflow = loadWorkflow(workflowName, testDir);
+        expect(workflow, `${workflowName} should load`).not.toBeNull();
+        const resolvedStep = workflow!.steps.find((candidate) => candidate.name === stepName);
+        expect(resolvedStep, `${workflowName}.${stepName} should exist`).toBeDefined();
+        return resolvedStep!;
+      };
+      const instruction = (workflowName: string, stepName: string): string => {
+        const resolvedStep = step(workflowName, stepName);
+        expect(resolvedStep.kind).toBe('agent');
+        return (resolvedStep as { instruction: string }).instruction;
+      };
+      const reportFormat = (workflowName: string, stepName: string): string => {
+        const resolvedStep = step(workflowName, stepName);
+        expect(resolvedStep.kind).toBe('agent');
+        const reports = (resolvedStep as {
+          outputContracts?: Array<{ format: string }>;
+        }).outputContracts;
+        expect(reports).toHaveLength(1);
+        return reports![0]!.format;
+      };
+
+      const planning = partial('instructions', 'requirement-scenario-planning');
+      const testMapping = partial('instructions', 'requirement-scenario-test-mapping');
+      const maintenance = partial('instructions', 'requirement-scenario-maintenance');
+      const verification = partial('instructions', 'requirement-scenario-verification');
+      const scenarioPlanReport = partial('output-contracts', 'requirement-scenarios-plan');
+      const scenarioFixPlanReport = partial('output-contracts', 'requirement-scenarios-fix-plan');
+      const scenarioTestReport = partial('output-contracts', 'requirement-scenarios-test-report');
+
+      expect(instruction('development-core', 'plan')).not.toContain(planning);
+      expect(reportFormat('development-core', 'plan')).not.toContain(scenarioPlanReport);
+      expect(instruction('development-core', 'write_tests')).not.toContain(testMapping);
+      expect(reportFormat('development-core', 'write_tests')).not.toContain(scenarioTestReport);
+      expect(instruction('development-core', 'replan')).not.toContain(maintenance);
+      expect(instruction('development-remediation', 'fix-plan')).not.toContain(maintenance);
+      expect(reportFormat('development-remediation', 'fix-plan'))
+        .not.toContain(scenarioFixPlanReport);
+      expect(instruction('development-remediation-dynamic', 'fix-plan')).not.toContain(maintenance);
+      expect(reportFormat('development-remediation-dynamic', 'fix-plan'))
+        .not.toContain(scenarioFixPlanReport);
+      expect(instruction('peer-review', 'final-gate')).not.toContain(verification);
+      expect(instruction('simple-core', 'plan')).not.toContain(planning);
+      expect(reportFormat('simple-core', 'plan')).not.toContain(scenarioPlanReport);
+      expect(instruction('simple-core', 'write_tests')).not.toContain(testMapping);
+      expect(reportFormat('simple-core', 'write_tests')).not.toContain(scenarioTestReport);
+      expect(instruction('review-remediation', 'fix-plan')).not.toContain(maintenance);
+      expect(reportFormat('review-remediation', 'fix-plan')).not.toContain(scenarioFixPlanReport);
+      expect(instruction('review-default', 'merge-readiness-review')).not.toContain(verification);
+      expect(instruction('merge-readiness-final-gate', 'merge-readiness-review'))
+        .not.toContain(verification);
+      expect(instruction('merge-readiness-final-gate', 'supervise')).not.toContain(verification);
+      expect(instruction('merge-readiness-dual-final-gate', 'merge-readiness-review'))
+        .not.toContain(verification);
+      expect(instruction('merge-readiness-dual-final-gate', 'supervise'))
+        .not.toContain(verification);
+      expect(instruction('terraform', 'plan')).not.toContain(planning);
+      expect(reportFormat('terraform', 'plan')).not.toContain(scenarioPlanReport);
+      expect(instruction('terraform', 'merge-readiness-review')).not.toContain(verification);
+    },
+  );
 
   it('should return null for non-existent workflow', () => {
     const config = loadWorkflow('non-existent-workflow-xyz', testDir);

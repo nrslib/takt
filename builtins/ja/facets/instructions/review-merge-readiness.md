@@ -1,3 +1,1 @@
-# Merge Readiness Review
-
-{{include:instructions/merge-readiness-checks}}
+{{include:instructions/base-review-merge-readiness}}

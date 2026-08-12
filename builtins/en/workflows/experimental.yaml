@@ -11,6 +11,14 @@ steps:
       implementation_pool: coding-facets
       implementation_workflow: development-implement-dynamic
       remediation_workflow: development-remediation-dynamic
+      plan_instruction: scenario-based-plan
+      plan_report_format: scenario-based-plan
+      replan_instruction: scenario-based-replan-implementation
+      testing_instruction: scenario-based-write-tests-first
+      testing_report_format: scenario-based-test-report
+      fix_plan_instruction: scenario-based-fix-plan-from-review-resolution
+      fix_plan_report_format: scenario-based-fix-plan
+      final_gate_instruction: scenario-based-supervise-merge-readiness
       implementation_companions:
         fixed: [ai-antipattern-review-companion, testing-review-companion]
         pool: []

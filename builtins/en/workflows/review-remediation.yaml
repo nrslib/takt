@@ -92,6 +92,7 @@ steps:
       fix_knowledge:
         $param: fix_knowledge
       plan_instruction: fix-plan-from-review-resolution
+      plan_report_format: fix-plan
     rules:
       - condition: Fix plan finalized
         next: fix

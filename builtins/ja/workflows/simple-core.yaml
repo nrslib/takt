@@ -103,6 +103,7 @@ steps:
         $param: testing_knowledge
       testing_instruction:
         $param: testing_instruction
+      testing_report_format: test-report
     rules:
       - condition: テスト作成が完了した
         next: implement

@@ -34,6 +34,10 @@ subworkflow:
       type: facet_ref
       facet_kind: instruction
       default: plan
+    plan_report_format:
+      type: facet_ref
+      facet_kind: report_format
+      default: plan
     replan_instruction:
       type: facet_ref
       facet_kind: instruction
@@ -50,6 +54,10 @@ subworkflow:
       type: facet_ref
       facet_kind: instruction
       default: write-tests-first
+    testing_report_format:
+      type: facet_ref
+      facet_kind: report_format
+      default: test-report
     development_policy:
       type: facet_ref[]
       facet_kind: policy
@@ -74,6 +82,18 @@ subworkflow:
       type: facet_ref[]
       facet_kind: knowledge
       default: [architecture, unit-testing, e2e-testing]
+    fix_plan_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: fix-plan-from-review-resolution
+    fix_plan_report_format:
+      type: facet_ref
+      facet_kind: report_format
+      default: fix-plan
+    final_gate_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: supervise-merge-readiness
 initial_step: plan
 
 facet_pools:
@@ -93,7 +113,8 @@ steps:
         $param: plan_knowledge
       plan_instruction:
         $param: plan_instruction
-      plan_report_format: plan
+      plan_report_format:
+        $param: plan_report_format
     rules:
       - condition: Requirements are clear and implementation is feasible
         next: write_tests
@@ -117,7 +138,8 @@ steps:
     output_contracts:
       report:
         - name: plan.md
-          format: plan
+          format:
+            $param: plan_report_format
     rules:
       - condition: An actionable, untried project-scoped change or investigation and its verification steps were defined
         next: implement
@@ -136,6 +158,8 @@ steps:
         $param: testing_knowledge
       testing_instruction:
         $param: testing_instruction
+      testing_report_format:
+        $param: testing_report_format
     rules:
       - condition: Test creation is complete
         next: implement
@@ -198,6 +222,12 @@ steps:
         $param: review_knowledge
       verification_policy:
         $param: review_policy
+      fix_plan_instruction:
+        $param: fix_plan_instruction
+      fix_plan_report_format:
+        $param: fix_plan_report_format
+      final_gate_instruction:
+        $param: final_gate_instruction
     rules:
       - condition: COMPLETE
         next: COMPLETE

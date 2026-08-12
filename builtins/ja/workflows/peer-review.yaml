@@ -60,6 +60,18 @@ subworkflow:
         - coding
         - testing
         - review
+    fix_plan_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: fix-plan-from-review-resolution
+    fix_plan_report_format:
+      type: facet_ref
+      facet_kind: report_format
+      default: fix-plan
+    final_gate_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: supervise-merge-readiness
 facet_pools:
   coding-facets:
     uses: coding-facets
@@ -166,6 +178,8 @@ steps:
         $param: verification_policy
       review_knowledge:
         $param: review_knowledge_additions
+      final_gate_instruction:
+        $param: final_gate_instruction
     rules:
       - condition: マージ可能
         next: COMPLETE
@@ -194,6 +208,10 @@ steps:
         $param: plan_policy
       verification_policy:
         $param: verification_policy
+      fix_plan_instruction:
+        $param: fix_plan_instruction
+      fix_plan_report_format:
+        $param: fix_plan_report_format
     rules:
       - condition: COMPLETE
         next: reviewers

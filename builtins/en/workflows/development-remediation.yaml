@@ -31,6 +31,14 @@ subworkflow:
       type: facet_ref[]
       facet_kind: knowledge
       default: [architecture, unit-testing, e2e-testing]
+    fix_plan_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: fix-plan-from-review-resolution
+    fix_plan_report_format:
+      type: facet_ref
+      facet_kind: report_format
+      default: fix-plan
 facet_pools:
   coding-facets:
     uses: coding-facets
@@ -75,7 +83,10 @@ steps:
         $param: plan_policy
       fix_knowledge:
         $param: fix_knowledge
-      plan_instruction: fix-plan-from-review-resolution
+      plan_instruction:
+        $param: fix_plan_instruction
+      plan_report_format:
+        $param: fix_plan_report_format
     rules:
       - condition: Fix plan finalized
         next: fix
