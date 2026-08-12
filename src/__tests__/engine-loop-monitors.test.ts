@@ -1289,6 +1289,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
 
       const judgeCall = vi.mocked(runAgent).mock.calls.find((call) => call[0] === 'supervisor');
       expect(judgeCall?.[2]).toEqual(expect.objectContaining({
+        failureDir: expect.stringMatching(/[/\\]failures$/),
         resolvedExecution: {
           provider: 'opencode',
           model: 'opencode/cli-judge-model',

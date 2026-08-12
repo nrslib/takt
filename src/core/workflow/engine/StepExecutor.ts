@@ -1033,6 +1033,7 @@ export class StepExecutor {
                   language: agentOptions.language,
                   abortSignal: agentOptions.abortSignal,
                   childProcessEnv: agentOptions.childProcessEnv,
+                  failureDir: agentOptions.failureDir,
                   onStream: agentOptions.onStream,
                   onPromptResolved,
                   workflowMeta: agentOptions.workflowMeta,
