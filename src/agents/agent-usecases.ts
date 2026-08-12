@@ -59,7 +59,7 @@ export async function executeIsolatedStructuredInternalAgent(
   } = options;
   return runAgent(undefined, instruction, {
     ...executionOptions,
-    executionProfile: 'isolated-structured',
+    ...(resolution.provider === 'opencode' ? { executionProfile: 'isolated-structured' } : {}),
     ...(agentName === undefined ? {} : { internalAgentName: agentName }),
     sessionId: undefined,
     internalSystemPrompt: systemPrompt,

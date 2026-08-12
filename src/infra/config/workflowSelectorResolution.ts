@@ -11,7 +11,7 @@ import type { ProviderType } from '../../shared/types/provider.js';
 import type { StepProviderOptions } from '../../core/models/workflow-types.js';
 import type { WorkflowCallResolver } from '../../core/workflow/types.js';
 import { resolveWorkflowCallTarget } from './loaders/workflowCallResolver.js';
-import { collectWorkflowCallSteps } from './loaders/workflowParallelTraversal.js';
+import { collectReachableWorkflowCallSteps } from './loaders/workflowParallelTraversal.js';
 import {
   assertProviderSupportsSelectorExecution,
   resolveStrictInternalAgentNativeTools,
@@ -84,7 +84,7 @@ function workflowGraphHasDynamicFacets(
     return true;
   }
 
-  for (const step of collectWorkflowCallSteps(workflow.steps)) {
+  for (const step of collectReachableWorkflowCallSteps(workflow)) {
     const childDepth = depth + 1;
     if (childDepth > MAX_WORKFLOW_CALL_DEPTH) {
       throw new Error(
@@ -134,7 +134,7 @@ function workflowGraphHasDynamicParallel(
     return true;
   }
 
-  for (const step of collectWorkflowCallSteps(workflow.steps)) {
+  for (const step of collectReachableWorkflowCallSteps(workflow)) {
     const childDepth = depth + 1;
     if (childDepth > MAX_WORKFLOW_CALL_DEPTH) {
       throw new Error(
