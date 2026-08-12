@@ -37,7 +37,7 @@ import { executeAgent } from '../../../agents/agent-usecases.js';
 import {
   executeStructuredTextAgent,
   requireStructuredAgentProvider,
-  StructuredAgentContractError,
+  StructuredAgentResponseError,
 } from '../../../agents/structured-caller/transport.js';
 import { InstructionBuilder } from '../instruction/InstructionBuilder.js';
 import type {
@@ -1043,7 +1043,7 @@ export class StepExecutor {
                   return freshResponse;
                 }).catch((error: unknown) => {
                   if (
-                    !(error instanceof StructuredAgentContractError)
+                    !(error instanceof StructuredAgentResponseError)
                     || error.response.status === 'done'
                   ) {
                     throw error;

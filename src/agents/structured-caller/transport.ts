@@ -4,6 +4,7 @@ import { validateStructuredOutputAgainstSchema } from '../../core/workflow/engin
 import { resolveAllowedToolsForProvider } from '../../core/workflow/engine/engine-provider-options.js';
 import { providerSupportsStructuredOutput } from '../../infra/providers/provider-capabilities.js';
 import { buildStructuredJsonSchemaInstruction } from '../../shared/prompts/index.js';
+import { createAgentResponseFailureError } from '../../shared/types/agent-failure.js';
 import type { ProviderType } from '../../shared/types/provider.js';
 import type { RunAgentOptions } from '../runner.js';
 import { executeAgent } from '../agent-usecases.js';
@@ -43,13 +44,24 @@ export interface StructuredAgentResponse<T extends Record<string, unknown>> exte
   structuredOutput: T;
 }
 
-export class StructuredAgentContractError extends Error {
+export class StructuredAgentResponseError extends Error {
   constructor(
     message: string,
     readonly response: AgentResponse,
     options?: ErrorOptions,
   ) {
     super(message, options);
+    this.name = 'StructuredAgentResponseError';
+  }
+}
+
+export class StructuredAgentContractError extends StructuredAgentResponseError {
+  constructor(
+    message: string,
+    response: AgentResponse,
+    options?: ErrorOptions,
+  ) {
+    super(message, response, options);
     this.name = 'StructuredAgentContractError';
   }
 }
@@ -152,7 +164,10 @@ export async function executeStructuredAgent<T extends Record<string, unknown>>(
   );
 
   if (response.status !== 'done') {
-    throw new StructuredAgentContractError(
+    if (response.failureCategory !== undefined) {
+      throw createAgentResponseFailureError(response, `Structured agent "${options.name}" did not complete`);
+    }
+    throw new StructuredAgentResponseError(
       response.error || response.content || `Structured agent "${options.name}" did not complete`,
       response,
     );

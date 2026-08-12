@@ -11,7 +11,7 @@ import type { StepProviderOptions } from '../core/models/workflow-types.js';
 import {
   executeStructuredAgent,
   requireStructuredAgentProvider,
-  StructuredAgentContractError,
+  StructuredAgentResponseError,
 } from './structured-caller/transport.js';
 import { parseParts } from '../core/workflow/engine/task-decomposer.js';
 import { loadDecompositionSchema, loadMorePartsSchema } from '../infra/resources/schema-loader.js';
@@ -126,7 +126,7 @@ export async function requestDecompositionRawResponse(
       onPromptResolved: options.onPromptResolved,
     });
   } catch (error) {
-    if (error instanceof StructuredAgentContractError) {
+    if (error instanceof StructuredAgentResponseError) {
       response = error.response;
     } else {
       if (options.abortSignal?.aborted !== true) {
@@ -223,7 +223,7 @@ export async function requestMorePartsRawResponse(
       failureDir: options.failureDir,
     });
   } catch (error) {
-    if (error instanceof StructuredAgentContractError) {
+    if (error instanceof StructuredAgentResponseError) {
       response = error.response;
     } else {
       if (options.abortSignal?.aborted !== true) {

@@ -11,7 +11,7 @@ import {
   executeStructuredAgent,
   executeStructuredTextAgent,
   requireStructuredAgentProvider,
-  StructuredAgentContractError,
+  StructuredAgentResponseError,
 } from './structured-caller/transport.js';
 import {
   assertStructuredOutputSchema,
@@ -207,7 +207,7 @@ export async function evaluateCondition(
       failureDir: options.failureDir,
     });
   } catch (error) {
-    if (!(error instanceof StructuredAgentContractError)) {
+    if (!(error instanceof StructuredAgentResponseError)) {
       throw error;
     }
     response = error.response;
@@ -400,7 +400,7 @@ export async function judgeStatus(
       },
     );
   } catch (error) {
-    const contractResponse = error instanceof StructuredAgentContractError
+    const failedResponse = error instanceof StructuredAgentResponseError
       ? error.response
       : undefined;
     options.onJudgeStage?.({
@@ -408,10 +408,10 @@ export async function judgeStatus(
       method: 'structured_output',
       status: options.abortSignal?.aborted === true
         ? 'error'
-        : contractResponse?.status === 'done' ? 'done' : 'error',
+        : failedResponse?.status === 'done' ? 'done' : 'error',
       instruction: structuredInstruction,
-      response: contractResponse?.content ?? getErrorMessage(error),
-      providerUsage: contractResponse?.providerUsage,
+      response: failedResponse?.content ?? getErrorMessage(error),
+      providerUsage: failedResponse?.providerUsage,
     });
     return runJudgeFallbackStages(
       structuredInstruction,
