@@ -19,6 +19,7 @@ import { USAGE_MISSING_REASONS } from '../core/logging/contracts.js';
 import type { ProviderEventLogRecord } from '../core/logging/providerEvent.js';
 import type { UsageEventLogRecord } from '../core/logging/usageEvent.js';
 import { DebugLogger } from '../shared/utils/debug.js';
+import { MAX_AGENT_FAILURE_MESSAGE_BYTES } from '../shared/types/agent-failure.js';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -150,7 +151,11 @@ function createBoundedParseFailure(fullTextPath: string): string {
   const truncationMarker = `[TRUNCATED: 428000 bytes, full text: ${fullTextPath}]`;
   return [
     prefix,
-    'x'.repeat(8192 - Buffer.byteLength(prefix) - Buffer.byteLength(truncationMarker)),
+    'x'.repeat(
+      MAX_AGENT_FAILURE_MESSAGE_BYTES
+      - Buffer.byteLength(prefix)
+      - Buffer.byteLength(truncationMarker),
+    ),
     truncationMarker,
   ].join('');
 }
@@ -1053,8 +1058,10 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       reason: boundedParseFailure,
       error: boundedParseFailure,
     });
-    expect(Buffer.byteLength(String(abortReason))).toBe(8192);
-    expect(Buffer.byteLength(String(abortFailure?.error))).toBe(8192);
+    expect(Buffer.byteLength(String(abortReason))).toBe(MAX_AGENT_FAILURE_MESSAGE_BYTES);
+    expect(Buffer.byteLength(String(abortFailure?.error))).toBe(
+      MAX_AGENT_FAILURE_MESSAGE_BYTES,
+    );
   });
 
   it('team leader call が reject した場合も失敗 usage を1件だけ記録する', async () => {

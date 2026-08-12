@@ -30,7 +30,10 @@ import {
 } from '../core/workflow/engine/team-leader-part-runner.js';
 import type { AgentResponse, WorkflowStep, WorkflowState } from '../core/models/types.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
-import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
+import {
+  AGENT_FAILURE_CATEGORIES,
+  MAX_AGENT_FAILURE_MESSAGE_BYTES,
+} from '../shared/types/agent-failure.js';
 import { InstructionBuilder } from '../core/workflow/instruction/InstructionBuilder.js';
 import { makeInstructionContext } from './test-helpers.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
@@ -2562,8 +2565,12 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       expect(result.response.error).toContain('part-2: part timeout: Part timeout after 1000ms');
       expect(result.response.error).toContain('timeout-continuation: part timeout: Continuation timeout after 1000ms');
       expect(result.response.error).not.toContain('timeout-continuation-2');
-      expect(Buffer.byteLength(result.response.content, 'utf8')).toBeLessThanOrEqual(8192);
-      expect(Buffer.byteLength(result.response.error ?? '', 'utf8')).toBeLessThanOrEqual(8192);
+      expect(Buffer.byteLength(result.response.content, 'utf8')).toBeLessThanOrEqual(
+        MAX_AGENT_FAILURE_MESSAGE_BYTES,
+      );
+      expect(Buffer.byteLength(result.response.error ?? '', 'utf8')).toBeLessThanOrEqual(
+        MAX_AGENT_FAILURE_MESSAGE_BYTES,
+      );
       for (const marker of markers.slice(1)) {
         expect(result.response.content).toContain(marker);
         expect(result.response.error).toContain(marker);
@@ -2816,7 +2823,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       const secret = 'token=x';
       const fullTextPath = '/tmp/project/.takt/runs/sample/failures/provider-failure.txt';
       const marker = `[TRUNCATED: 123456 bytes, full text: ${fullTextPath}]`;
-      const failure = `${secret}\n${'x'.repeat(8192)}\n${marker}`;
+      const failure = `${secret}\n${'x'.repeat(MAX_AGENT_FAILURE_MESSAGE_BYTES)}\n${marker}`;
       mockExecuteAgent.mockResolvedValueOnce({
         persona: 'coder',
         status: 'error',
@@ -2854,12 +2861,16 @@ describe('TeamLeaderRunner with structuredCaller', () => {
 
       for (const response of [result.response, storedResponse, state.lastOutput]) {
         expect(response.failureCategory).toBe(AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR);
-        expect(Buffer.byteLength(response.content, 'utf8')).toBeLessThanOrEqual(8192);
+        expect(Buffer.byteLength(response.content, 'utf8')).toBeLessThanOrEqual(
+          MAX_AGENT_FAILURE_MESSAGE_BYTES,
+        );
         expect(response.error).toBeDefined();
         if (response.error === undefined) {
           throw new Error('Team leader failure response did not include an error');
         }
-        expect(Buffer.byteLength(response.error, 'utf8')).toBeLessThanOrEqual(8192);
+        expect(Buffer.byteLength(response.error, 'utf8')).toBeLessThanOrEqual(
+          MAX_AGENT_FAILURE_MESSAGE_BYTES,
+        );
         for (const message of [response.content, response.error]) {
           expect(message).toContain('[REDACTED]');
           expect(message).toContain(marker);
@@ -2914,8 +2925,12 @@ describe('TeamLeaderRunner with structuredCaller', () => {
 
       expect(result.response.status).toBe('error');
       expect(result.response.failureCategory).toBe(AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR);
-      expect(Buffer.byteLength(result.response.content, 'utf8')).toBeLessThanOrEqual(8192);
-      expect(Buffer.byteLength(result.response.error ?? '', 'utf8')).toBeLessThanOrEqual(8192);
+      expect(Buffer.byteLength(result.response.content, 'utf8')).toBeLessThanOrEqual(
+        MAX_AGENT_FAILURE_MESSAGE_BYTES,
+      );
+      expect(Buffer.byteLength(result.response.error ?? '', 'utf8')).toBeLessThanOrEqual(
+        MAX_AGENT_FAILURE_MESSAGE_BYTES,
+      );
       for (const failure of failures) {
         expect(result.response.content).toContain(failure.marker);
         expect(result.response.content).not.toContain(failure.secret);
@@ -2983,8 +2998,12 @@ describe('TeamLeaderRunner with structuredCaller', () => {
 
       expect(result.response.status).toBe('error');
       expect(result.response.failureCategory).toBe(AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR);
-      expect(Buffer.byteLength(result.response.content, 'utf8')).toBeLessThanOrEqual(8192);
-      expect(Buffer.byteLength(result.response.error ?? '', 'utf8')).toBeLessThanOrEqual(8192);
+      expect(Buffer.byteLength(result.response.content, 'utf8')).toBeLessThanOrEqual(
+        MAX_AGENT_FAILURE_MESSAGE_BYTES,
+      );
+      expect(Buffer.byteLength(result.response.error ?? '', 'utf8')).toBeLessThanOrEqual(
+        MAX_AGENT_FAILURE_MESSAGE_BYTES,
+      );
       for (const failure of failures) {
         expect(result.response.content).toContain(failure.marker);
         expect(result.response.content).not.toContain(failure.secret);

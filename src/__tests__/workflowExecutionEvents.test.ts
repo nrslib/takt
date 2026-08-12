@@ -15,6 +15,7 @@ import { WorkflowCallExecutor } from '../core/workflow/engine/WorkflowCallExecut
 import { resetDebugLogger, setVerboseConsole } from '../shared/utils/debug.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import type { ProviderType } from '../shared/types/provider.js';
+import { MAX_TERMINAL_OUTPUT_BYTES } from '../shared/utils/text.js';
 
 class TestEngine extends EventEmitter {
   public abort = vi.fn();
@@ -1451,7 +1452,7 @@ describe('bindWorkflowExecutionEvents', () => {
     });
   });
 
-  it('step error の最終端末表示を8192バイト以内に収め、truncation markerを保持する', async () => {
+  it(`step error の最終端末表示を${MAX_TERMINAL_OUTPUT_BYTES}バイト以内に収め、truncation markerを保持する`, async () => {
     const eventSink = vi.fn().mockResolvedValue(undefined);
     const { bridge, engine, out } = createBridgeHarness({ eventSink });
     const step = {
@@ -1460,7 +1461,9 @@ describe('bindWorkflowExecutionEvents', () => {
       instruction: '',
     } as WorkflowStep;
     const marker = '[TRUNCATED: 12000 bytes, full text: /tmp/failure.txt]';
-    const error = `${'x'.repeat(8192 - Buffer.byteLength(marker, 'utf8'))}${marker}`;
+    const error = `${'x'.repeat(
+      MAX_TERMINAL_OUTPUT_BYTES - Buffer.byteLength(marker, 'utf8'),
+    )}${marker}`;
 
     engine.emit('step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' }, 'parent', step.name);
     engine.emit('step:complete', step, {
@@ -1473,7 +1476,9 @@ describe('bindWorkflowExecutionEvents', () => {
     await bridge.flushEventSink();
 
     const terminalMessage = out.error.mock.calls[0]?.[0] as string;
-    expect(Buffer.byteLength(terminalMessage, 'utf8')).toBeLessThanOrEqual(8192);
+    expect(Buffer.byteLength(terminalMessage, 'utf8')).toBeLessThanOrEqual(
+      MAX_TERMINAL_OUTPUT_BYTES,
+    );
     expect(terminalMessage).toContain(marker);
     expect(eventSink).toHaveBeenCalledWith({
       type: 'error',

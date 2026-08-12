@@ -3,6 +3,11 @@ import type { ProviderType } from '../../../shared/types/provider.js';
 import { createAbortError } from './abort.js';
 import { appendCompanionEvidenceSystemGuard } from './evidence.js';
 import { safeExternalErrorMessage } from '../../../shared/utils/safeExternalErrorMessage.js';
+import {
+  AGENT_FAILURE_CATEGORIES,
+  createProviderStreamParseError,
+  isProviderStreamParseError,
+} from '../../../shared/types/agent-failure.js';
 
 export type CompanionAgentPurpose = 'selector' | 'reviewer' | 'moderator' | 'judge';
 
@@ -61,10 +66,14 @@ export async function executeCompanionStructuredAgent(input: {
     try {
       const response = await executeCompanionStructuredAgentInternal(input);
       if (response.status === 'done') return response;
+      if (response.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR) {
+        throw createProviderStreamParseError(response.error ?? response.content ?? response.status);
+      }
       if (attempt >= MAX_COMPANION_CALL_ATTEMPTS) {
         throw new Error(companionResponseFailureMessage(input, response));
       }
     } catch (error) {
+      if (isProviderStreamParseError(error)) throw error;
       if (input.abortSignal?.aborted || attempt >= MAX_COMPANION_CALL_ATTEMPTS) {
         throw error;
       }

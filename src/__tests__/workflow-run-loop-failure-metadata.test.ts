@@ -8,6 +8,7 @@ import { createWorkflowRunLoopTestContract } from './test-helpers.js';
 import {
   AGENT_FAILURE_CATEGORIES,
   createProviderStreamParseError,
+  MAX_AGENT_FAILURE_MESSAGE_BYTES,
 } from '../shared/types/agent-failure.js';
 
 function makeConfig(step: WorkflowStep): WorkflowConfig {
@@ -76,7 +77,9 @@ describe('WorkflowRunLoop failure metadata', () => {
     });
     const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
     const prefix = 'provider error: ';
-    const boundedFailure = `${prefix}${'x'.repeat(8192 - Buffer.byteLength(prefix, 'utf8'))}`;
+    const boundedFailure = `${prefix}${'x'.repeat(
+      MAX_AGENT_FAILURE_MESSAGE_BYTES - Buffer.byteLength(prefix, 'utf8'),
+    )}`;
     const response = makeResponse({
       persona: 'implement',
       status: 'error',
@@ -94,8 +97,12 @@ describe('WorkflowRunLoop failure metadata', () => {
       reason: boundedFailure,
       error: boundedFailure,
     });
-    expect(Buffer.byteLength(result.abort?.reason ?? '', 'utf8')).toBe(8192);
-    expect(Buffer.byteLength(result.abort?.failure?.reason ?? '', 'utf8')).toBe(8192);
+    expect(Buffer.byteLength(result.abort?.reason ?? '', 'utf8')).toBe(
+      MAX_AGENT_FAILURE_MESSAGE_BYTES,
+    );
+    expect(Buffer.byteLength(result.abort?.failure?.reason ?? '', 'utf8')).toBe(
+      MAX_AGENT_FAILURE_MESSAGE_BYTES,
+    );
   });
 
   it('Given a maximum-sized provider error containing a secret, When the workflow aborts, Then masking does not expand the final failure beyond the byte limit', async () => {
@@ -104,7 +111,9 @@ describe('WorkflowRunLoop failure metadata', () => {
     });
     const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
     const secret = 'token=x';
-    const failure = `${secret}\n${'x'.repeat(8192 - Buffer.byteLength(secret, 'utf8') - 1)}`;
+    const failure = `${secret}\n${'x'.repeat(
+      MAX_AGENT_FAILURE_MESSAGE_BYTES - Buffer.byteLength(secret, 'utf8') - 1,
+    )}`;
     const response = makeResponse({
       persona: 'implement',
       status: 'error',
@@ -118,8 +127,12 @@ describe('WorkflowRunLoop failure metadata', () => {
     const reason = result.abort?.reason ?? '';
     const metadataError = result.abort?.failure?.error ?? '';
 
-    expect(Buffer.byteLength(reason, 'utf8')).toBeLessThanOrEqual(8192);
-    expect(Buffer.byteLength(metadataError, 'utf8')).toBeLessThanOrEqual(8192);
+    expect(Buffer.byteLength(reason, 'utf8')).toBeLessThanOrEqual(
+      MAX_AGENT_FAILURE_MESSAGE_BYTES,
+    );
+    expect(Buffer.byteLength(metadataError, 'utf8')).toBeLessThanOrEqual(
+      MAX_AGENT_FAILURE_MESSAGE_BYTES,
+    );
     expect(reason).toContain('[REDACTED]');
     expect(metadataError).toContain('[REDACTED]');
     expect(reason).toContain('[TRUNCATED:');

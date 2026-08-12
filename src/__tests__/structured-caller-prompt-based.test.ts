@@ -29,13 +29,18 @@ import { PromptBasedStructuredCaller } from '../agents/structured-caller.js';
 import { RETRY_DELAY_MS } from '../agents/structured-caller/prompt-based-structured-caller.js';
 import { resolveStructuredStep } from '../agents/structured-caller/shared.js';
 import { FindingContractTeamLeaderDecisionValidationError } from '../core/workflow/team-leader-finding-contract-decision.js';
+import { MAX_AGENT_FAILURE_MESSAGE_BYTES } from '../shared/types/agent-failure.js';
 
 function createBoundedParseFailure(fullTextPath: string): string {
   const prefix = 'provider stream parse error: Failed to parse item: ';
   const truncationMarker = `[TRUNCATED: 428000 bytes, full text: ${fullTextPath}]`;
   return [
     prefix,
-    'x'.repeat(8192 - Buffer.byteLength(prefix) - Buffer.byteLength(truncationMarker)),
+    'x'.repeat(
+      MAX_AGENT_FAILURE_MESSAGE_BYTES
+      - Buffer.byteLength(prefix)
+      - Buffer.byteLength(truncationMarker),
+    ),
     truncationMarker,
   ].join('');
 }
@@ -1312,7 +1317,7 @@ describe('PromptBasedStructuredCaller', () => {
       failureCategory: 'provider_stream_parse_error',
       message: boundedParseFailure,
     });
-    expect(Buffer.byteLength(boundedParseFailure)).toBe(8192);
+    expect(Buffer.byteLength(boundedParseFailure)).toBe(MAX_AGENT_FAILURE_MESSAGE_BYTES);
     expect(mockRunAgent).toHaveBeenCalledOnce();
     expect(infoMock).not.toHaveBeenCalled();
   });
@@ -1341,7 +1346,7 @@ describe('PromptBasedStructuredCaller', () => {
       failureCategory: 'provider_stream_parse_error',
       message: boundedParseFailure,
     });
-    expect(Buffer.byteLength(boundedParseFailure)).toBe(8192);
+    expect(Buffer.byteLength(boundedParseFailure)).toBe(MAX_AGENT_FAILURE_MESSAGE_BYTES);
     expect(mockRunAgent).toHaveBeenCalledOnce();
   });
 

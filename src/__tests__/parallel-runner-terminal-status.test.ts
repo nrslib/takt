@@ -2,7 +2,10 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ParallelRunner, type ParallelRunnerDeps } from '../core/workflow/engine/ParallelRunner.js';
 import type { AgentResponse, AgentWorkflowStep, WorkflowState, WorkflowStep } from '../core/models/index.js';
 import { makeRule, makeStep } from './test-helpers.js';
-import { createProviderStreamParseError } from '../shared/types/agent-failure.js';
+import {
+  createProviderStreamParseError,
+  MAX_AGENT_FAILURE_MESSAGE_BYTES,
+} from '../shared/types/agent-failure.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
@@ -544,9 +547,9 @@ describe('ParallelRunner terminal sub-step statuses', () => {
     const marker = '[TRUNCATED: 12000 bytes, full text: /tmp/failure.txt]';
     const secretAssignment = 'api_key=x';
     const error = `${secretAssignment}${'x'.repeat(
-      8192 - Buffer.byteLength(`${secretAssignment}${marker}`, 'utf8'),
+      MAX_AGENT_FAILURE_MESSAGE_BYTES - Buffer.byteLength(`${secretAssignment}${marker}`, 'utf8'),
     )}${marker}`;
-    expect(Buffer.byteLength(error, 'utf8')).toBe(8192);
+    expect(Buffer.byteLength(error, 'utf8')).toBe(MAX_AGENT_FAILURE_MESSAGE_BYTES);
 
     queueAgentResponse(makeAgentResponse({
       persona: 'ai-antipattern-review-2nd',
@@ -583,7 +586,9 @@ describe('ParallelRunner terminal sub-step statuses', () => {
     expect(workflowCallFailure?.kind).toBe('step_error');
     for (const value of parentFailureValues) {
       expect(value).toBeDefined();
-      expect(Buffer.byteLength(value ?? '', 'utf8')).toBeLessThanOrEqual(8192);
+      expect(Buffer.byteLength(value ?? '', 'utf8')).toBeLessThanOrEqual(
+        MAX_AGENT_FAILURE_MESSAGE_BYTES,
+      );
       expect(value).toContain(marker);
       expect(value).not.toContain(secretAssignment);
       expect(value).toContain('api_key=[REDACTED]');
