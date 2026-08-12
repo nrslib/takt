@@ -22,7 +22,7 @@ import {
   resolveWorkflowSelector,
   type SelectorProviderOverrides,
 } from '../../infra/config/index.js';
-import { resolveAuxiliaryProviderEnvironment } from '../../infra/config/runtime-provider/provider-environment.js';
+import { resolveAuxiliaryRuntimeEnvironment } from '../../infra/config/runtime-provider/provider-environment.js';
 import { inspectWorkflowFile, resolveWorkflowDoctorTargets } from '../../infra/config/loaders/workflowDoctor.js';
 import { isMissingWorkflowCallArgError } from '../../infra/config/loaders/workflowCallableArgResolver.js';
 import { loadWorkflowFileWithResolutionOptions } from '../../infra/config/loaders/workflowResolvedLoader.js';
@@ -74,19 +74,25 @@ function validateWorkflowRuntimeContract(
   let workflow: ReturnType<typeof loadWorkflowForRuntimeValidation> | undefined;
   try {
     workflow = loadWorkflowForRuntimeValidation(target, projectDir);
+    const runtimeEnvironment = resolveAuxiliaryRuntimeEnvironment(projectDir, workflow);
+    const env = runtimeEnvironment.providerEnvironment;
     resolveWorkflowSelector(workflow, {
       projectCwd: projectDir,
       lookupCwd: target.lookupCwd ?? projectDir,
       overrides: selectorOverrides,
+      companionEnabled: runtimeEnvironment.companionEnabled,
+      providerEnvironment: env,
+      providerConfigMode: runtimeEnvironment.providerConfigMode,
     });
     // Validate provider/model/personaProviders/providerRouting/autoRouting through the same
     // compiled bundle as execution and preview, so a runtime-v1 environment validates the
     // runtime.yaml `profiles.default` resolution (and a mixed configuration fails fast here too).
-    const env = resolveAuxiliaryProviderEnvironment(projectDir, workflow);
-    resolveWorkflowCompanions(workflow, env, {
-      projectCwd: projectDir,
-      lookupCwd: target.lookupCwd ?? projectDir,
-    });
+    if (runtimeEnvironment.companionEnabled) {
+      resolveWorkflowCompanions(workflow, env, {
+        projectCwd: projectDir,
+        lookupCwd: target.lookupCwd ?? projectDir,
+      });
+    }
     validateWorkflowCallContracts(workflow, projectDir, target.lookupCwd ?? projectDir, {
       providerValidationOptions: {
         provider: env.provider,

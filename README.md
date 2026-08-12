@@ -414,6 +414,18 @@ naming the file and the key to migrate to. Without a `runtime.yaml`,
 [docs/configuration.md](docs/configuration.md) for the schema and the
 migration table.
 
+Companion reviewers are enabled by default. To disable them, set the
+top-level policy in `runtime.yaml`:
+
+```yaml
+version: 1
+companion:
+  enabled: false
+```
+
+The global and project policies are combined with logical AND, so a global
+`false` cannot be re-enabled by a project setting.
+
 ## Customization
 
 ### Custom workflows

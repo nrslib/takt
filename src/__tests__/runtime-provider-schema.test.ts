@@ -100,6 +100,21 @@ describe('RuntimeProviderFileSchema', () => {
     if (result.success) expect(result.data.provider).toBeUndefined();
   });
 
+  it('Given a companion policy, When parsed, Then enabled is required and strict', () => {
+    expect(RuntimeProviderFileSchema.safeParse({
+      version: 1,
+      companion: { enabled: false },
+    }).success).toBe(true);
+    expect(RuntimeProviderFileSchema.safeParse({
+      version: 1,
+      companion: {},
+    }).success).toBe(false);
+    expect(RuntimeProviderFileSchema.safeParse({
+      version: 1,
+      companion: { enabled: false, extra: true },
+    }).success).toBe(false);
+  });
+
   it('Given a missing version, When parsed, Then it is rejected (C1)', () => {
     const result = RuntimeProviderFileSchema.safeParse({ provider: {} });
     expect(result.success).toBe(false);

@@ -61,6 +61,12 @@ const CompanionAssignmentSchema = z
   })
   .strict();
 
+const RuntimeCompanionPolicySchema = z
+  .object({
+    enabled: z.boolean(),
+  })
+  .strict();
+
 /** An auto-routing pool candidate references a profile; it must not inline provider/model. */
 const CandidateSchema = z
   .object({
@@ -107,6 +113,7 @@ const ProviderSectionSchema = z
 export const RuntimeProviderFileSchema = z
   .object({
     version: z.literal(RUNTIME_PROVIDER_VERSION),
+    companion: RuntimeCompanionPolicySchema.optional(),
     provider: ProviderSectionSchema.optional(),
   })
   .strict();

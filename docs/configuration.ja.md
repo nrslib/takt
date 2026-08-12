@@ -589,6 +589,18 @@ steps:
 1. `~/.takt/runtime.yaml`
 2. `<project>/.takt/runtime.yaml`
 
+companion reviewer は既定で有効です。無効化する場合は、トップレベルの
+`companion.enabled` を設定します。
+
+```yaml
+version: 1
+companion:
+  enabled: false
+```
+
+global と project の値は論理積で合成されるため、global 側で無効化した companion を
+project 側の `true` で再有効化することはできません。
+
 runtime モードはファイルの存在ではなく、有効な `provider` セクションの有無で有効化されます。`version: 1` だけのファイルは inactive で、従来の `config.yaml` による provider 解決がそのまま使われます。
 
 ### 設定例

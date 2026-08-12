@@ -275,6 +275,7 @@ export interface StepExecutorDeps {
   ) => void;
   readonly getRunId: () => string;
   readonly getRunPathNamespace: () => readonly string[];
+  readonly companionEnabled: boolean;
   readonly companionDefinitions?: WorkflowConfig['companions'];
   readonly companionProviders?: WorkflowEngineOptions['companionProviders'];
   readonly companionSelectorProvider?: WorkflowEngineOptions['selectorProvider'];
@@ -2196,7 +2197,9 @@ export class StepExecutor {
       fallbackContext,
       workflowState: state,
       findingContract: this.buildFindingContractInstructionContext(step, findingContractPolicy),
-      ...(!isNormalAgentWorkflowStep(step) || step.companion === undefined
+      ...(!this.deps.companionEnabled
+        || !isNormalAgentWorkflowStep(step)
+        || step.companion === undefined
         ? {}
         : {
             companion: {
@@ -2596,7 +2599,11 @@ export class StepExecutor {
 
     // Phase 1: main execution (Write excluded if step has report)
     let companionRuntime: CompanionStepRuntime | undefined;
-    if (isNormalAgentWorkflowStep(executableStep) && executableStep.companion !== undefined) {
+    if (
+      this.deps.companionEnabled
+      && isNormalAgentWorkflowStep(executableStep)
+      && executableStep.companion !== undefined
+    ) {
       const companionDefinitions = this.deps.companionDefinitions;
       const companionProviders = this.deps.companionProviders;
       const companionDiffReader = this.deps.companionDiffReader;

@@ -20,6 +20,7 @@ import { applyRuntimeProviderOverride } from './override.js';
 import { resolveRuntimeProviderFile } from './loader.js';
 import {
   determineProviderConfigMode,
+  type ProviderConfigMode,
   type LegacyProviderSignal,
 } from './mode.js';
 import {
@@ -36,6 +37,13 @@ import {
 } from '../index.js';
 import { resolveEffectiveAutoRouting } from '../../../core/workflow/auto-routing/effective-auto-routing.js';
 import type { WorkflowConfig } from '../../../core/models/index.js';
+import type { RuntimeProviderFile } from './schema.js';
+
+export interface ResolvedRuntimeEnvironment {
+  providerEnvironment: CompiledProviderEnvironment;
+  companionEnabled: boolean;
+  providerConfigMode: ProviderConfigMode;
+}
 
 export interface ResolveProviderEnvironmentInput {
   /** Project root; its `.takt/runtime.yaml` overrides the global one. */
@@ -49,18 +57,32 @@ export interface ResolveProviderEnvironmentInput {
 export function resolveCompiledProviderEnvironment(
   input: ResolveProviderEnvironmentInput,
 ): CompiledProviderEnvironment {
+  return resolveRuntimeEnvironment(input).providerEnvironment;
+}
+
+export function resolveRuntimeEnvironment(
+  input: ResolveProviderEnvironmentInput,
+): ResolvedRuntimeEnvironment {
   const runtimeFile = resolveRuntimeProviderFile({
     globalConfigDir: getGlobalConfigDir(),
     projectConfigDir: getProjectConfigDir(input.projectCwd),
   });
+  const companionEnabled = runtimeFile?.companion?.enabled ?? true;
+  const runtimeFileForProviderResolution = companionEnabled
+    ? runtimeFile
+    : withoutCompanionTargets(runtimeFile);
   const { mode } = determineProviderConfigMode({
-    runtimeFile,
+    runtimeFile: runtimeFileForProviderResolution,
     legacyProviderSignals: input.legacySignals,
   });
   if (mode === 'legacy') {
-    return compileProviderEnvironment({ kind: 'legacy', legacy: input.legacy });
+    return {
+      providerEnvironment: compileProviderEnvironment({ kind: 'legacy', legacy: input.legacy }),
+      companionEnabled,
+      providerConfigMode: mode,
+    };
   }
-  const section = runtimeFile?.provider;
+  const section = runtimeFileForProviderResolution?.provider;
   if (section === undefined) {
     // Unreachable: runtime-v1 mode requires an active provider section.
     throw new Error('runtime-v1 mode resolved without a provider section');
@@ -68,15 +90,36 @@ export function resolveCompiledProviderEnvironment(
   // The runtime-v1 bundle carries only the runtime.yaml `profiles.default`; re-apply the CLI/env
   // provider/model override the bootstrap already resolved so the main execution path honors an
   // explicit `--provider`/`--model` the same way the selector seam does.
-  return applyRuntimeProviderOverride(
-    compileProviderEnvironment({ kind: 'runtime-v1', section }),
-    {
-      provider: input.legacy.provider,
-      providerSource: input.legacy.providerSource,
-      model: input.legacy.model,
-      modelSource: input.legacy.modelSource,
+  return {
+    providerEnvironment: applyRuntimeProviderOverride(
+      compileProviderEnvironment({ kind: 'runtime-v1', section }),
+      {
+        provider: input.legacy.provider,
+        providerSource: input.legacy.providerSource,
+        model: input.legacy.model,
+        modelSource: input.legacy.modelSource,
+      },
+    ),
+    companionEnabled,
+    providerConfigMode: mode,
+  };
+}
+
+function withoutCompanionTargets(
+  runtimeFile: RuntimeProviderFile | undefined,
+): RuntimeProviderFile | undefined {
+  if (runtimeFile?.provider?.targets === undefined) {
+    return runtimeFile;
+  }
+  const targets = { ...runtimeFile.provider.targets };
+  delete targets.companions;
+  return {
+    ...runtimeFile,
+    provider: {
+      ...runtimeFile.provider,
+      targets,
     },
-  );
+  };
 }
 
 /**
@@ -91,6 +134,14 @@ export function resolveAuxiliaryProviderEnvironment(
   workflow: Pick<WorkflowConfig, 'name' | 'provider' | 'model' | 'autoRouting'>
     & Partial<Pick<WorkflowConfig, 'steps'>>,
 ): CompiledProviderEnvironment {
+  return resolveAuxiliaryRuntimeEnvironment(projectCwd, workflow).providerEnvironment;
+}
+
+export function resolveAuxiliaryRuntimeEnvironment(
+  projectCwd: string,
+  workflow: Pick<WorkflowConfig, 'name' | 'provider' | 'model' | 'autoRouting'>
+    & Partial<Pick<WorkflowConfig, 'steps'>>,
+): ResolvedRuntimeEnvironment {
   const resolved = resolveWorkflowConfigValues(projectCwd, [
     'personaProviders',
     'providerRouting',
@@ -117,7 +168,7 @@ export function resolveAuxiliaryProviderEnvironment(
       loadGlobalConfig().taktProviders,
     ),
   };
-  return resolveCompiledProviderEnvironment({
+  return resolveRuntimeEnvironment({
     projectCwd,
     legacy,
     legacySignals: collectLegacyProviderSignals(

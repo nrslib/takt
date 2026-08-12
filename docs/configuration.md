@@ -599,6 +599,18 @@ steps:
 1. `~/.takt/runtime.yaml`
 2. `<project>/.takt/runtime.yaml`
 
+Companion reviewers are enabled by default. Disable them with the top-level
+`companion.enabled` policy:
+
+```yaml
+version: 1
+companion:
+  enabled: false
+```
+
+The global and project values are combined with logical AND; a project value
+of `true` cannot re-enable a globally disabled companion.
+
 Runtime mode is enabled by the presence of an active `provider` section, not by the file existing. A file that only contains `version: 1` is inactive and leaves the legacy `config.yaml` provider resolution in place.
 
 ### Configuration example

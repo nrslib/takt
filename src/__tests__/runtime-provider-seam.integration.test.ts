@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { stringify as stringifyYaml } from 'yaml';
 import {
   resolveCompiledProviderEnvironment,
+  resolveRuntimeEnvironment,
 } from '../infra/config/runtime-provider/provider-environment.js';
 import type { LegacyProviderEnvironmentInput } from '../infra/config/runtime-provider/environment.js';
 import type { LegacyProviderSignal } from '../infra/config/runtime-provider/mode.js';
@@ -125,6 +126,80 @@ describe('resolveCompiledProviderEnvironment seam', () => {
       tags: { 'high-stakes': { provider: 'claude', model: 'sonnet' } },
       steps: { 'wf/impl': { provider: 'cursor', model: 'cur-m' } },
     });
+  });
+
+  it('skips companion target semantic resolution when companion is disabled', () => {
+    writeGlobalRuntimeFile({
+      version: 1,
+      companion: { enabled: false },
+      provider: {
+        defaults: { profile: 'default' },
+        profiles: { default: { provider: 'codex', model: 'gpt-default' } },
+        targets: {
+          companions: { missing: { profile: 'missing-profile' } },
+        },
+      },
+    });
+
+    const resolved = resolveRuntimeEnvironment({
+      projectCwd,
+      legacy: legacyInput,
+      legacySignals: [],
+    });
+
+    expect(resolved.companionEnabled).toBe(false);
+    expect(resolved.providerEnvironment.provider).toBe('codex');
+    expect(resolved.providerEnvironment.companions).toBeUndefined();
+  });
+
+  it('does not re-enable a globally disabled companion policy from project runtime.yaml', () => {
+    writeGlobalRuntimeFile({
+      version: 1,
+      companion: { enabled: false },
+      provider: {
+        defaults: { profile: 'default' },
+        profiles: { default: { provider: 'codex', model: 'global-model' } },
+      },
+    });
+    writeFileSync(join(projectCwd, '.takt', RUNTIME_PROVIDER_FILENAME), stringifyYaml({
+      version: 1,
+      companion: { enabled: true },
+      provider: {
+        defaults: { profile: 'default' },
+        profiles: { default: { provider: 'codex', model: 'project-model' } },
+      },
+    }));
+
+    const resolved = resolveRuntimeEnvironment({
+      projectCwd,
+      legacy: legacyInput,
+      legacySignals: [],
+    });
+
+    expect(resolved.companionEnabled).toBe(false);
+    expect(resolved.providerEnvironment.model).toBe('project-model');
+  });
+
+  it('does not activate runtime-v1 mode for a disabled companion-only target', () => {
+    writeGlobalRuntimeFile({
+      version: 1,
+      companion: { enabled: false },
+      provider: {
+        targets: {
+          companions: { security: { profile: 'missing-profile' } },
+        },
+      },
+    });
+
+    const resolved = resolveRuntimeEnvironment({
+      projectCwd,
+      legacy: legacyInput,
+      legacySignals: [],
+    });
+
+    expect(resolved.companionEnabled).toBe(false);
+    expect(resolved.providerEnvironment.providerSource).toBe('global');
+    expect(resolved.providerEnvironment.provider).toBe('codex');
   });
 
   it('passes legacy engine-options through unchanged when no runtime.yaml exists', () => {

@@ -23,7 +23,7 @@ import {
 import { createTeamLeaderPlanningStep } from '../../../core/workflow/engine/team-leader-common.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { resolveProviderOptionsWithTrace } from '../resolveConfigValue.js';
-import { resolveAuxiliaryProviderEnvironment } from '../runtime-provider/provider-environment.js';
+import { resolveAuxiliaryRuntimeEnvironment } from '../runtime-provider/provider-environment.js';
 import {
   resolveEffectiveProviderOptions,
   resolveDirectStepProviderOptions,
@@ -85,6 +85,7 @@ interface PreviewProviderResolution extends ProviderModelResolutionContext {
   providerOptionsOriginResolver: ReturnType<typeof resolveProviderOptionsWithTrace>['originResolver'];
   /** runtime.yaml internal_agents の解決済み seat。合成ロールの表示を実行時と一致させる。 */
   internalAgentSeats: InternalAgentSeats | undefined;
+  companionEnabled: boolean;
   selectorProvider?: SelectorProviderInfo;
 }
 
@@ -342,7 +343,8 @@ function resolvePreviewProviderResolution(
   // same compiled bundle as execution, so a runtime-v1 environment previews the runtime.yaml
   // `profiles.default` resolution (and a mixed configuration fails fast here too). providerOptions
   // source/originResolver stay on the trace resolver, matching how the executor traces them.
-  const env = resolveAuxiliaryProviderEnvironment(projectCwd, workflow);
+  const runtimeEnvironment = resolveAuxiliaryRuntimeEnvironment(projectCwd, workflow);
+  const env = runtimeEnvironment.providerEnvironment;
   const {
     source: providerOptionsSource,
     originResolver: providerOptionsOriginResolver,
@@ -351,6 +353,9 @@ function resolvePreviewProviderResolution(
     projectCwd,
     lookupCwd,
     overrides: selectorOverrides,
+    companionEnabled: runtimeEnvironment.companionEnabled,
+    providerEnvironment: env,
+    providerConfigMode: runtimeEnvironment.providerConfigMode,
     workflowCallResolver,
   });
 
@@ -367,6 +372,7 @@ function resolvePreviewProviderResolution(
     providerOptionsSource,
     providerOptionsOriginResolver,
     internalAgentSeats: env.internalAgents,
+    companionEnabled: runtimeEnvironment.companionEnabled,
     ...(selectorResolution.applies
       ? { selectorProvider: selectorResolution.selectorProvider }
       : {}),

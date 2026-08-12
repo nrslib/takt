@@ -31,6 +31,7 @@ import type { TaskAttachment } from '../attachments.js';
 import type { TraceTaskContext } from './traceTaskMetadata.js';
 import type { RunFinalizationIssue } from './workflowRunExecution.js';
 import type { ResolvedTaskSpec } from './taskSpecContext.js';
+import type { SelectorProviderOverrides } from '../../../infra/config/selectorProviderResolution.js';
 
 /** Info captured when iteration limit is hit in non-interactive mode */
 export interface ExceededInfo {
@@ -240,6 +241,7 @@ export interface WorkflowExecutionOptions {
   /** Resolved provider options */
   providerOptions?: StepProviderOptions;
   selectorProvider?: SelectorProviderInfo;
+  selectorProviderOverrides?: SelectorProviderOverrides;
   /** Resolved automatic provider/model routing configuration */
   autoRouting?: AutoRoutingConfig;
   /** Strategy override for automatic provider/model routing. */

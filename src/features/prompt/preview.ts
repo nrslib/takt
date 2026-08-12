@@ -12,7 +12,7 @@ import {
   type SelectorProviderOverrides,
 } from '../../infra/config/index.js';
 import { validateWorkflowCallContracts } from '../../infra/config/loaders/workflowResolver.js';
-import { resolveAuxiliaryProviderEnvironment } from '../../infra/config/runtime-provider/provider-environment.js';
+import { resolveAuxiliaryRuntimeEnvironment } from '../../infra/config/runtime-provider/provider-environment.js';
 import type { CompiledProviderEnvironment } from '../../infra/config/runtime-provider/environment.js';
 import { resolveWorkflowCompanions } from '../../infra/config/workflowCompanionResolution.js';
 import { InstructionBuilder } from '../../core/workflow/instruction/InstructionBuilder.js';
@@ -105,6 +105,9 @@ type PreviewProviderResolution = CompiledProviderEnvironment & ProviderModelReso
   providerSource: ProviderResolutionSource;
   modelSource: ProviderResolutionSource;
   tagConflictPolicy: TagRoutingConflictPolicy;
+  companionEnabled: boolean;
+  providerEnvironment: CompiledProviderEnvironment;
+  providerConfigMode: ReturnType<typeof resolveAuxiliaryRuntimeEnvironment>['providerConfigMode'];
   /** runtime.yaml internal_agents の解決済み seat。合成ロールの表示を実行時と一致させる。 */
   internalAgentSeats: InternalAgentSeats | undefined;
 };
@@ -113,10 +116,13 @@ function resolvePreviewProviderResolution(
   cwd: string,
   config: WorkflowConfig,
 ): PreviewProviderResolution {
-  const env = resolveAuxiliaryProviderEnvironment(cwd, config);
+  const runtimeEnvironment = resolveAuxiliaryRuntimeEnvironment(cwd, config);
   return {
-    ...env,
-    internalAgentSeats: env.internalAgents,
+    ...runtimeEnvironment.providerEnvironment,
+    companionEnabled: runtimeEnvironment.companionEnabled,
+    providerEnvironment: runtimeEnvironment.providerEnvironment,
+    providerConfigMode: runtimeEnvironment.providerConfigMode,
+    internalAgentSeats: runtimeEnvironment.providerEnvironment.internalAgents,
   };
 }
 
@@ -316,11 +322,16 @@ export async function previewPrompts(
     projectCwd: cwd,
     lookupCwd: cwd,
     overrides: selectorOverrides,
+    companionEnabled: providerResolution.companionEnabled,
+    providerEnvironment: providerResolution.providerEnvironment,
+    providerConfigMode: providerResolution.providerConfigMode,
   });
-  resolveWorkflowCompanions(config, providerResolution, {
-    projectCwd: cwd,
-    lookupCwd: cwd,
-  });
+  if (providerResolution.companionEnabled) {
+    resolveWorkflowCompanions(config, providerResolution, {
+      projectCwd: cwd,
+      lookupCwd: cwd,
+    });
+  }
   const selectorProvider = selectorResolution.applies
     ? selectorResolution.selectorProvider
     : undefined;

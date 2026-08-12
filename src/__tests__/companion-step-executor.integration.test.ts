@@ -138,6 +138,7 @@ function createDeps(input: {
   companionDiffReader: CompanionDiffReader;
   abortSignal: AbortSignal;
   emitEvent: StepExecutorDeps['emitEvent'];
+  companionEnabled?: boolean;
 }): StepExecutorDeps {
   return {
     optionsBuilder: {
@@ -167,6 +168,7 @@ function createDeps(input: {
     getRunId: () => 'test-run',
     getRunPathNamespace: () => [],
     getFindingCallNamespace: () => '',
+    companionEnabled: input.companionEnabled ?? true,
     companionDefinitions: {
       'security-reviewer': {
         name: 'security-reviewer',
@@ -243,6 +245,42 @@ describe('companion StepExecutor lifecycle', () => {
     );
 
     expect(getEventListeners(abortController.signal, 'abort')).toHaveLength(0);
+  });
+
+  it('should skip companion runtime creation and mailbox injection when disabled', async () => {
+    const abortController = new AbortController();
+    const companionDiffReader = createCompanionDiffReader();
+    mockSuccessfulImplementer();
+    const state = makeState();
+    const emitEvent = vi.fn();
+    const deps = createDeps({
+      cwd,
+      runPaths,
+      companionDiffReader,
+      abortSignal: abortController.signal,
+      emitEvent,
+      companionEnabled: false,
+    });
+
+    await new StepExecutor(deps).runNormalStep(
+      createCompanionStep(),
+      state,
+      'task',
+      5,
+      vi.fn(),
+      'Implement.',
+    );
+
+    expect(state.companion).toBeUndefined();
+    expect(companionDiffReader.readBaselineSha).not.toHaveBeenCalled();
+    expect(executeAgent).toHaveBeenCalledOnce();
+    expect(executeAgent.mock.calls[0]?.[1]).not.toContain('mailbox');
+    expect(emitEvent.mock.calls.filter(([event]) => (
+      typeof event === 'string' && event.startsWith('companion:')
+    ))).toHaveLength(0);
+    expect(vi.mocked(deps.recordSynthesizedAgentUsage).mock.calls.filter(([stepName]) => (
+      typeof stepName === 'string' && stepName.startsWith('companion:')
+    ))).toHaveLength(0);
   });
 
   it('should continue condition evaluation when companion startup fails', async () => {

@@ -73,7 +73,9 @@ import { SessionLogger } from './sessionLogger.js';
 import type { TraceReportMode } from './traceReport.js';
 import { sanitizeTextForStorage } from './traceReportRedaction.js';
 import type { WorkflowExecutionOptions } from './types.js';
-import { resolveCompiledProviderEnvironment } from '../../../infra/config/runtime-provider/provider-environment.js';
+import {
+  resolveRuntimeEnvironment,
+} from '../../../infra/config/runtime-provider/provider-environment.js';
 import {
   collectLegacyProviderSignals,
   collectStepPromotionEntries,
@@ -85,6 +87,7 @@ import type { WorkflowRunBootstrap } from './workflowRunLifecycle.js';
 import { inheritWorkflowConfigMetadata } from '../../../shared/workflowConfigMetadata.js';
 import { validateWorkflowCallContracts } from '../../../infra/config/loaders/workflowResolver.js';
 import { resolveWorkflowCompanions } from '../../../infra/config/workflowCompanionResolution.js';
+import { resolveWorkflowSelector } from '../../../infra/config/workflowSelectorResolution.js';
 
 const log = createLogger('workflow');
 
@@ -120,6 +123,8 @@ export interface WorkflowExecutionBootstrap {
   providerLadders: ProviderLadderConfig | undefined;
   providerEscalation: ProviderEscalationTarget | undefined;
   internalAgentSeats: InternalAgentSeats | undefined;
+  selectorProvider: WorkflowExecutionOptions['selectorProvider'];
+  companionEnabled: boolean;
   companionProviders: Readonly<Record<string, ProviderRoutingEntry>>;
   providerRoutingTagConflictPolicy: TagRoutingConflictPolicy;
   providerOptions: WorkflowExecutionOptions['providerOptions'];
@@ -538,7 +543,7 @@ export async function createWorkflowExecutionBootstrap(
       loadGlobalConfig().taktProviders,
     ),
   };
-  const providerEnvironment = resolveCompiledProviderEnvironment({
+  const resolvedRuntimeEnvironment = resolveRuntimeEnvironment({
     projectCwd,
     legacy: legacyProviderEnvironment,
     legacySignals: collectLegacyProviderSignals(
@@ -553,6 +558,8 @@ export async function createWorkflowExecutionBootstrap(
       options.providerOptionsSource,
     ),
   });
+  const providerEnvironment = resolvedRuntimeEnvironment.providerEnvironment;
+  const companionEnabled = resolvedRuntimeEnvironment.companionEnabled;
   const currentProvider = providerEnvironment.provider;
   // Fail fast when neither the legacy config nor a runtime.yaml profile resolves a provider.
   // A runtime-v1 pool default legitimately leaves the fixed provider unset (auto routing
@@ -590,12 +597,29 @@ export async function createWorkflowExecutionBootstrap(
     maxSteps: effectiveMaxSteps,
   };
   inheritWorkflowConfigMetadata(workflowConfig, effectiveWorkflowConfig);
-  const companionProviders = Object.fromEntries(
-    resolveWorkflowCompanions(effectiveWorkflowConfig, providerEnvironment, {
+  let selectorProvider = options.selectorProvider;
+  if (selectorProvider === undefined) {
+    const selectorResolution = resolveWorkflowSelector(effectiveWorkflowConfig, {
       projectCwd,
       lookupCwd: cwd,
+      overrides: options.selectorProviderOverrides,
+      companionEnabled,
       workflowCallResolver: options.workflowCallResolver,
-    }),
+      providerEnvironment,
+      providerConfigMode: resolvedRuntimeEnvironment.providerConfigMode,
+    });
+    selectorProvider = selectorResolution.applies
+      ? selectorResolution.selectorProvider
+      : undefined;
+  }
+  const companionProviders = Object.fromEntries(
+    companionEnabled
+      ? resolveWorkflowCompanions(effectiveWorkflowConfig, providerEnvironment, {
+          projectCwd,
+          lookupCwd: cwd,
+          workflowCallResolver: options.workflowCallResolver,
+        })
+      : [],
   );
   validateWorkflowCallContracts(effectiveWorkflowConfig, projectCwd, cwd, {
     providerValidationOptions: {
@@ -723,6 +747,8 @@ export async function createWorkflowExecutionBootstrap(
     providerLadders: effectiveProviderLadders,
     providerEscalation: providerEnvironment.escalation,
     internalAgentSeats: providerEnvironment.internalAgents,
+    selectorProvider,
+    companionEnabled,
     companionProviders,
     providerRoutingTagConflictPolicy,
     providerOptions: effectiveProviderOptions,

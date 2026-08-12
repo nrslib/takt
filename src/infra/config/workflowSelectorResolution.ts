@@ -17,10 +17,13 @@ import {
   resolveStrictInternalAgentNativeTools,
 } from '../providers/provider-capabilities.js';
 import {
-  resolveSelectorProviderForProject,
+  resolveSelectorProviderFromLegacyProject,
+  resolveSelectorProviderFromRuntimeEnvironment,
   type ResolvedSelectorProvider,
   type SelectorProviderOverrides,
 } from './selectorProviderResolution.js';
+import type { CompiledProviderEnvironment } from './runtime-provider/environment.js';
+import type { ProviderConfigMode } from './runtime-provider/mode.js';
 
 type ResolvedActiveSelectorProvider = ResolvedSelectorProvider & {
   readonly provider: ProviderType;
@@ -41,6 +44,9 @@ export interface WorkflowSelectorResolutionOptions {
   readonly lookupCwd: string;
   readonly overrides?: SelectorProviderOverrides;
   readonly workflowCallResolver?: WorkflowCallResolver;
+  readonly companionEnabled?: boolean;
+  readonly providerEnvironment: CompiledProviderEnvironment;
+  readonly providerConfigMode: ProviderConfigMode;
 }
 
 function hasDynamicParallel(workflow: WorkflowConfig): boolean {
@@ -74,7 +80,7 @@ function workflowGraphHasDynamicFacets(
   activeReferences: ReadonlySet<string>,
   depth: number,
 ): boolean {
-  if (hasDynamicFacets(workflow) || hasCompanionPool(workflow)) {
+  if (hasDynamicFacets(workflow) || (options.companionEnabled !== false && hasCompanionPool(workflow))) {
     return true;
   }
 
@@ -213,10 +219,9 @@ export function resolveWorkflowSelector(
     return { applies: false };
   }
 
-  const selectorProvider = resolveSelectorProviderForProject(
-    options.projectCwd,
-    options.overrides,
-  );
+  const selectorProvider = options.providerConfigMode === 'runtime-v1'
+    ? resolveSelectorProviderFromRuntimeEnvironment(options.providerEnvironment, options.overrides)
+    : resolveSelectorProviderFromLegacyProject(options.projectCwd, options.overrides);
   if (selectorProvider.provider === undefined) {
     throw new Error('Dynamic selector has no resolved provider');
   }

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { join } from 'node:path';
 import type { WorkflowConfig } from '../core/models/index.js';
+import type { SelectorProviderInfo } from '../core/workflow/types.js';
 
 const workflowEngineError = new Error('workflow-engine-constructor-called');
 const mockWorkflowEngine = vi.fn().mockImplementation(function MockWorkflowEngine() {
@@ -341,6 +342,54 @@ describe('workflow execution canonical entrypoints', () => {
           runSlug: 'test-report-dir',
         },
       }),
+    );
+  });
+
+  it('should preserve an explicit selector provider through bootstrap into WorkflowEngine', async () => {
+    const { executeWorkflow } = await import('../features/tasks/execute/workflowExecution.js');
+    const config: WorkflowConfig = {
+      name: 'dynamic',
+      initialStep: 'reviewers',
+      maxSteps: 1,
+      steps: [{
+        name: 'reviewers',
+        instruction: 'Review',
+        parallel: {
+          kind: 'dynamic',
+          fixed: [],
+          pool: [{
+            name: 'security',
+            description: 'Review security',
+            instruction: 'Review security',
+            personaDisplayName: 'security',
+            rules: [{ condition: 'done' }],
+          }],
+          selection: { mode: 'replace' },
+        },
+        personaDisplayName: 'reviewers',
+        rules: [{ condition: 'all("done")', next: 'COMPLETE' }],
+      }],
+    };
+    const selectorProvider: SelectorProviderInfo = {
+      provider: 'mock',
+      model: 'explicit-selector',
+      providerOptions: {},
+      nativeTools: [],
+    };
+
+    await expect(
+      executeWorkflow(config, 'task', '/tmp/project', {
+        projectCwd: '/tmp/project',
+        provider: 'mock',
+        selectorProvider,
+      }),
+    ).rejects.toBeInstanceOf(Error);
+
+    expect(mockWorkflowEngine).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'dynamic' }),
+      '/tmp/project',
+      'task',
+      expect.objectContaining({ selectorProvider }),
     );
   });
 });

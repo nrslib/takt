@@ -64,6 +64,7 @@ interface HarnessOptions {
   abortFailure?: WorkflowStepFailureSummary;
   resolverError?: Error;
   resolverReturnsNull?: boolean;
+  companionEnabled?: boolean;
   createEngineError?: Error;
   runError?: Error;
   setActiveResumePointError?: Error;
@@ -75,6 +76,7 @@ interface LifecycleHarness {
   emit: ReturnType<typeof vi.fn>;
   order: string[];
   state: WorkflowState;
+  getChildOptions: () => WorkflowEngineOptions | undefined;
   execute: () => Promise<unknown>;
   executeIsolated: () => Promise<unknown>;
 }
@@ -150,6 +152,7 @@ function createLifecycleHarness(options: HarnessOptions = {}): LifecycleHarness 
     provider: 'mock',
     model: 'parent-model',
     initialIteration: 1,
+    companionEnabled: options.companionEnabled,
   };
   const state = createInitialState(parentWorkflow, engineOptions);
   state.stepIterations.set(stepName, callInstance);
@@ -159,7 +162,9 @@ function createLifecycleHarness(options: HarnessOptions = {}): LifecycleHarness 
     childWorkflow,
     options.childStatus ?? 'completed',
   );
-  const createEngine = vi.fn(() => {
+  let childOptions: WorkflowEngineOptions | undefined;
+  const createEngine = vi.fn((_config, _cwd, _task, childEngineOptions: WorkflowEngineOptions) => {
+    childOptions = childEngineOptions;
     if (options.createEngineError !== undefined) {
       throw options.createEngineError;
     }
@@ -241,6 +246,7 @@ function createLifecycleHarness(options: HarnessOptions = {}): LifecycleHarness 
     emit,
     order,
     state,
+    getChildOptions: () => childOptions,
     execute: async () => {
       const token = activate();
       return runner.run(workflowStep, token, runtime);
@@ -416,6 +422,14 @@ describe('WorkflowCallRunner lifecycle events', () => {
         }),
       ],
     ]);
+  });
+
+  it('inherits companionEnabled false in a workflow_call child', async () => {
+    const harness = createLifecycleHarness({ companionEnabled: false });
+
+    await harness.execute();
+
+    expect(harness.getChildOptions()?.companionEnabled).toBe(false);
   });
 
   it('retains the complete canonical ancestor stack for nested calls', async () => {

@@ -867,6 +867,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
   if (companionReviewAuthority === undefined) {
     throw new Error('Companion review authority is missing from shared workflow runtime');
   }
+  const companionEnabled = params.options.companionEnabled ?? true;
 
   const stepExecutor = new StepExecutor({
     optionsBuilder,
@@ -905,6 +906,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       recordAgentUsageEvent(params.options, stepName, 'normal', providerInfo, success, usage),
     getRunId: () => params.runPaths.slug,
     getRunPathNamespace: () => params.options.runPathNamespace ?? [],
+    companionEnabled,
     companionDefinitions: params.config.companions,
     companionProviders: params.options.companionProviders,
     companionSelectorProvider: params.options.selectorProvider,

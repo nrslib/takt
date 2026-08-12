@@ -324,6 +324,44 @@ steps:
     expect(mockError).not.toHaveBeenCalled();
   });
 
+  it('skips disabled companion provider resolution while validating companion declarations', async () => {
+    writeWorkflow(projectDir, '.takt/companions/security-reviewer.yaml', `name: security-reviewer
+description: security review
+interval_ms: 60000
+`);
+    writeWorkflow(projectDir, '.takt/runtime.yaml', `version: 1
+companion:
+  enabled: false
+provider:
+  defaults:
+    profile: default
+  profiles:
+    default:
+      provider: mock
+      model: mock-model
+  targets:
+    companions:
+      security-reviewer:
+        profile: missing-profile
+`);
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/disabled-companion.yaml', `name: disabled-companion
+max_steps: 1
+initial_step: implement
+steps:
+  - name: implement
+    instruction: implement
+    companion: [security-reviewer]
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    await expect(doctorWorkflowCommand([filePath], projectDir)).resolves.toBeUndefined();
+
+    expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining('disabled-companion.yaml'));
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
   it('reports selector resolution failures when only a called workflow is dynamic', async () => {
     writeWorkflow(projectDir, '.takt/config.yaml', [
       'takt_providers:',
