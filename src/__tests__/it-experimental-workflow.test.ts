@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -18,7 +18,6 @@ import { resolveRefToContent } from '../infra/config/loaders/resource-resolver.j
 import {
   getBuiltinWorkflowsDir,
 } from '../infra/config/paths.js';
-import { getLanguageResourcesDir } from '../infra/resources/index.js';
 import {
   invalidateAllResolvedConfigCache,
   invalidateGlobalConfigCache,
@@ -448,34 +447,20 @@ describe('experimental builtin workflow', () => {
     (language) => {
       writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${language}\n`);
       invalidateAllResolvedConfigCache();
-      const partial = (facetKind: 'instructions' | 'output-contracts', name: string): string =>
-        readFileSync(join(
-          getLanguageResourcesDir(language),
-          'facets',
-          'partials',
-          facetKind,
-          `${name}.md`,
-        ), 'utf-8').trim();
-      const instruction = (workflow: WorkflowConfig, stepName: string): string => {
-        const step = findWorkflowStep(workflow, stepName);
-        expect(step.kind, `${workflow.name}.${stepName}`).toBe('agent');
-        return (step as { instruction: string }).instruction;
+      const scenarioSelection = {
+        plan_instruction: 'scenario-based-plan',
+        plan_report_format: 'scenario-based-plan',
+        replan_instruction: 'scenario-based-replan-implementation',
+        testing_instruction: 'scenario-based-write-tests-first',
+        testing_report_format: 'scenario-based-test-report',
+        fix_plan_instruction: 'scenario-based-fix-plan-from-review-resolution',
+        fix_plan_report_format: 'scenario-based-fix-plan',
+        final_gate_instruction: 'scenario-based-supervise-merge-readiness',
       };
-      const reportFormat = (workflow: WorkflowConfig, stepName: string): string => {
-        const step = findWorkflowStep(workflow, stepName);
-        expect(step.kind, `${workflow.name}.${stepName}`).toBe('agent');
-        const reports = (step as { outputContracts?: Array<{ format: string }> }).outputContracts;
+      const reportFormatRef = (workflow: WorkflowConfig, stepName: string): string | undefined => {
+        const reports = findWorkflowStep(workflow, stepName).outputContracts;
         expect(reports, `${workflow.name}.${stepName}`).toHaveLength(1);
-        return reports![0]!.format;
-      };
-      const scenarioParts = {
-        planning: partial('instructions', 'requirement-scenario-planning'),
-        testMapping: partial('instructions', 'requirement-scenario-test-mapping'),
-        testReport: partial('output-contracts', 'requirement-scenarios-test-report'),
-        maintenance: partial('instructions', 'requirement-scenario-maintenance'),
-        verification: partial('instructions', 'requirement-scenario-verification'),
-        planReport: partial('output-contracts', 'requirement-scenarios-plan'),
-        fixPlanReport: partial('output-contracts', 'requirement-scenarios-fix-plan'),
+        return reports![0]!.formatRef;
       };
       const resolvedStages = (workflowName: string) => {
         const wrapper = loadWorkflowFromFile(
@@ -485,33 +470,58 @@ describe('experimental builtin workflow', () => {
         const core = loadCoreForWrapper(language, wrapper, projectDir);
         const peerReview = loadPeerReviewForCore(language, core, projectDir);
         const remediation = loadRemediationForPeerReview(language, peerReview, projectDir);
-        return { core, peerReview, remediation };
+        return { wrapper, core, peerReview, remediation };
       };
 
       for (const workflowName of ['experimental', 'takt-experimental']) {
-        const { core, peerReview, remediation } = resolvedStages(workflowName);
-        expect(instruction(core, 'plan')).toContain(scenarioParts.planning);
-        expect(reportFormat(core, 'plan')).toContain(scenarioParts.planReport);
-        expect(instruction(core, 'replan')).toContain(scenarioParts.maintenance);
-        expect(reportFormat(core, 'replan')).toContain(scenarioParts.planReport);
-        expect(instruction(core, 'write_tests')).toContain(scenarioParts.testMapping);
-        expect(reportFormat(core, 'write_tests')).toContain(scenarioParts.testReport);
-        expect(instruction(remediation, 'fix-plan')).toContain(scenarioParts.maintenance);
-        expect(reportFormat(remediation, 'fix-plan')).toContain(scenarioParts.fixPlanReport);
-        expect(instruction(peerReview, 'final-gate')).toContain(scenarioParts.verification);
+        const { wrapper, core, peerReview, remediation } = resolvedStages(workflowName);
+        expect(findWorkflowStep(wrapper, 'develop')).toMatchObject({
+          kind: 'workflow_call',
+          args: scenarioSelection,
+        });
+        expect(findWorkflowStep(core, 'peer-review')).toMatchObject({
+          kind: 'workflow_call',
+          args: {
+            fix_plan_instruction: scenarioSelection.fix_plan_instruction,
+            fix_plan_report_format: scenarioSelection.fix_plan_report_format,
+            final_gate_instruction: scenarioSelection.final_gate_instruction,
+          },
+        });
+        expect(findWorkflowStep(peerReview, 'remediation')).toMatchObject({
+          kind: 'workflow_call',
+          args: {
+            fix_plan_instruction: scenarioSelection.fix_plan_instruction,
+            fix_plan_report_format: scenarioSelection.fix_plan_report_format,
+          },
+        });
+        expect(reportFormatRef(core, 'plan')).toBe(scenarioSelection.plan_report_format);
+        expect(reportFormatRef(core, 'replan')).toBe(scenarioSelection.plan_report_format);
+        expect(reportFormatRef(core, 'write_tests')).toBe(scenarioSelection.testing_report_format);
+        expect(reportFormatRef(remediation, 'fix-plan'))
+          .toBe(scenarioSelection.fix_plan_report_format);
       }
 
       for (const workflowName of ['default', 'backend-maintenance', 'frontend-maintenance']) {
         const { core, peerReview, remediation } = resolvedStages(workflowName);
-        expect(instruction(core, 'plan')).not.toContain(scenarioParts.planning);
-        expect(reportFormat(core, 'plan')).not.toContain(scenarioParts.planReport);
-        expect(instruction(core, 'replan')).not.toContain(scenarioParts.maintenance);
-        expect(reportFormat(core, 'replan')).not.toContain(scenarioParts.planReport);
-        expect(instruction(core, 'write_tests')).not.toContain(scenarioParts.testMapping);
-        expect(reportFormat(core, 'write_tests')).not.toContain(scenarioParts.testReport);
-        expect(instruction(remediation, 'fix-plan')).not.toContain(scenarioParts.maintenance);
-        expect(reportFormat(remediation, 'fix-plan')).not.toContain(scenarioParts.fixPlanReport);
-        expect(instruction(peerReview, 'final-gate')).not.toContain(scenarioParts.verification);
+        expect(findWorkflowStep(core, 'peer-review')).toMatchObject({
+          kind: 'workflow_call',
+          args: {
+            fix_plan_instruction: 'fix-plan-from-review-resolution',
+            fix_plan_report_format: 'fix-plan',
+            final_gate_instruction: 'supervise-merge-readiness',
+          },
+        });
+        expect(findWorkflowStep(peerReview, 'remediation')).toMatchObject({
+          kind: 'workflow_call',
+          args: {
+            fix_plan_instruction: 'fix-plan-from-review-resolution',
+            fix_plan_report_format: 'fix-plan',
+          },
+        });
+        expect(reportFormatRef(core, 'plan')).toBe('plan');
+        expect(reportFormatRef(core, 'replan')).toBe('plan');
+        expect(reportFormatRef(core, 'write_tests')).toBe('test-report');
+        expect(reportFormatRef(remediation, 'fix-plan')).toBe('fix-plan');
       }
     },
   );

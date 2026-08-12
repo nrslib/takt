@@ -71,77 +71,69 @@ describe('facet include expansion', () => {
   });
 
   it.each(['en', 'ja'] as const)(
-    'should keep directly resolved base instruction and output contract facets scenario-free in %s',
+    'should keep scenario addons structurally separate from base facets in %s',
     (lang) => {
       const facetContext = { projectDir: tempDir, lang };
-      const instructionScenarioPartials = [
-        'requirement-scenario-planning',
-        'requirement-scenario-test-mapping',
-        'requirement-scenario-maintenance',
-        'requirement-scenario-verification',
-      ].map((name) => readFileSync(
-        join(
+      const assertions = [
+        ['instructions', 'plan', 'base-plan', 'requirement-scenario-planning'],
+        ['instructions', 'plan-maintenance', 'base-plan-maintenance', 'requirement-scenario-planning'],
+        ['instructions', 'write-tests-first', 'base-write-tests-first', 'requirement-scenario-test-mapping'],
+        ['instructions', 'replan-implementation', 'base-replan-implementation', 'requirement-scenario-maintenance'],
+        ['instructions', 'fix-plan-from-review-resolution', 'base-fix-plan-from-review-resolution', 'requirement-scenario-maintenance'],
+        ['instructions', 'review-merge-readiness', 'base-review-merge-readiness', 'requirement-scenario-verification'],
+        ['instructions', 'supervise-merge-readiness', 'base-supervise-merge-readiness', 'requirement-scenario-verification'],
+        ['output-contracts', 'plan', 'base-plan', 'requirement-scenarios-plan'],
+        ['output-contracts', 'fix-plan', 'base-fix-plan', 'requirement-scenarios-fix-plan'],
+        ['output-contracts', 'test-report', 'base-test-report', 'requirement-scenarios-test-report'],
+      ] as const;
+
+      for (const [kind, name, basePartial, scenarioPartial] of assertions) {
+        const normalSource = readFileSync(join(
+          getLanguageResourcesDir(lang),
+          'facets',
+          kind,
+          `${name}.md`,
+        ), 'utf-8').trim();
+        const scenarioName = `scenario-based-${name}`;
+        const scenarioSource = readFileSync(join(
+          getLanguageResourcesDir(lang),
+          'facets',
+          kind,
+          `${scenarioName}.md`,
+        ), 'utf-8').trim();
+        const normalDirective = `{{include:${kind}/${basePartial}}}`;
+        const scenarioDirective = `{{include:${kind}/${scenarioPartial}}}`;
+        const scenarioAddon = readFileSync(join(
           getLanguageResourcesDir(lang),
           'facets',
           'partials',
-          'instructions',
-          `${name}.md`,
-        ),
-        'utf-8',
-      ).trim());
-      const outputScenarioPartials = [
-        'requirement-scenarios-plan',
-        'requirement-scenarios-fix-plan',
-        'requirement-scenarios-test-report',
-      ].map((name) => readFileSync(
-        join(
-          getLanguageResourcesDir(lang),
-          'facets',
-          'partials',
-          'output-contracts',
-          `${name}.md`,
-        ),
-        'utf-8',
-      ).trim());
+          kind,
+          `${scenarioPartial}.md`,
+        ), 'utf-8').trim();
 
-      for (const name of [
-        'plan',
-        'plan-maintenance',
-        'write-tests-first',
-        'replan-implementation',
-        'fix-plan-from-review-resolution',
-        'review-merge-readiness',
-        'supervise-merge-readiness',
-      ]) {
-        const content = resolveRefToContent(
+        expect(normalSource, name).toBe(normalDirective);
+        expect(scenarioSource, scenarioName).toBe(`${normalDirective}\n\n${scenarioDirective}`);
+
+        const normalContent = resolveRefToContent(
           name,
           undefined,
           tempDir,
-          'instructions',
+          kind,
           facetContext,
         );
-
-        expect(content, name).toBeDefined();
-        expect(content, name).not.toContain('{{include:');
-        for (const scenarioPartial of instructionScenarioPartials) {
-          expect(content, name).not.toContain(scenarioPartial);
-        }
-      }
-
-      for (const name of ['plan', 'fix-plan', 'test-report']) {
-        const content = resolveRefToContent(
-          name,
+        const scenarioContent = resolveRefToContent(
+          scenarioName,
           undefined,
           tempDir,
-          'output-contracts',
+          kind,
           facetContext,
         );
 
-        expect(content, name).toBeDefined();
-        expect(content, name).not.toContain('{{include:');
-        for (const scenarioPartial of outputScenarioPartials) {
-          expect(content, name).not.toContain(scenarioPartial);
-        }
+        expect(normalContent, name).toBeDefined();
+        expect(scenarioContent, scenarioName).toBeDefined();
+        const normalizeFacetSpacing = (value: string): string => value.trim().replace(/\n{3,}/gu, '\n\n');
+        expect(normalizeFacetSpacing(scenarioContent!), scenarioName)
+          .toBe(normalizeFacetSpacing(`${normalContent!}\n\n${scenarioAddon}`));
       }
     },
   );

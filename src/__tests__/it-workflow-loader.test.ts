@@ -13,12 +13,14 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   writeFileSync,
   rmSync,
   existsSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { parse as parseYaml } from 'yaml';
 
 // --- Mocks ---
 const languageState = vi.hoisted(() => ({ value: 'en' as 'en' | 'ja' }));
@@ -108,79 +110,135 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
   });
 
   it.each(['en', 'ja'] as const)(
-    'should keep scenario contracts opt-in across representative %s builtin compositions',
+    'should select scenario facets only from the %s experimental wrappers and forward their params',
     (language) => {
       languageState.value = language;
-      const partial = (facetKind: 'instructions' | 'output-contracts', name: string): string =>
-        readFileSync(
-          join(
-            getLanguageResourcesDir(language),
-            'facets',
-            'partials',
-            facetKind,
-            `${name}.md`,
-          ),
-          'utf-8',
-        ).trim();
-      const step = (workflowName: string, stepName: string) => {
-        const workflow = loadWorkflow(workflowName, testDir);
-        expect(workflow, `${workflowName} should load`).not.toBeNull();
-        const resolvedStep = workflow!.steps.find((candidate) => candidate.name === stepName);
-        expect(resolvedStep, `${workflowName}.${stepName} should exist`).toBeDefined();
-        return resolvedStep!;
+      interface RawWorkflow {
+        subworkflow?: { params?: Record<string, unknown> };
+        steps?: Array<Record<string, unknown>>;
+      }
+      const resourceRoot = getLanguageResourcesDir(language);
+      const readRaw = (directory: 'workflows' | 'steps', name: string): RawWorkflow =>
+        parseYaml(readFileSync(join(resourceRoot, directory, `${name}.yaml`), 'utf-8')) as RawWorkflow;
+      const findRawStep = (workflow: RawWorkflow, name: string): Record<string, unknown> => {
+        const step = workflow.steps?.find((candidate) => candidate.name === name);
+        expect(step, name).toBeDefined();
+        return step!;
       };
-      const instruction = (workflowName: string, stepName: string): string => {
-        const resolvedStep = step(workflowName, stepName);
-        expect(resolvedStep.kind).toBe('agent');
-        return (resolvedStep as { instruction: string }).instruction;
-      };
-      const reportFormat = (workflowName: string, stepName: string): string => {
-        const resolvedStep = step(workflowName, stepName);
-        expect(resolvedStep.kind).toBe('agent');
-        const reports = (resolvedStep as {
-          outputContracts?: Array<{ format: string }>;
-        }).outputContracts;
-        expect(reports).toHaveLength(1);
-        return reports![0]!.format;
+      const collectScenarioRefs = (value: unknown): string[] => {
+        if (typeof value === 'string') return value.startsWith('scenario-based-') ? [value] : [];
+        if (Array.isArray(value)) return value.flatMap(collectScenarioRefs);
+        if (value === null || typeof value !== 'object') return [];
+        return Object.values(value).flatMap(collectScenarioRefs);
       };
 
-      const planning = partial('instructions', 'requirement-scenario-planning');
-      const testMapping = partial('instructions', 'requirement-scenario-test-mapping');
-      const maintenance = partial('instructions', 'requirement-scenario-maintenance');
-      const verification = partial('instructions', 'requirement-scenario-verification');
-      const scenarioPlanReport = partial('output-contracts', 'requirement-scenarios-plan');
-      const scenarioFixPlanReport = partial('output-contracts', 'requirement-scenarios-fix-plan');
-      const scenarioTestReport = partial('output-contracts', 'requirement-scenarios-test-report');
+      const scenarioRefsByFile = ['workflows', 'steps'].flatMap((directory) =>
+        readdirSync(join(resourceRoot, directory), { withFileTypes: true })
+          .filter((entry) => entry.isFile() && entry.name.endsWith('.yaml'))
+          .sort((left, right) => left.name.localeCompare(right.name))
+          .map((entry) => ({
+            file: `${directory}/${entry.name}`,
+            refs: collectScenarioRefs(parseYaml(readFileSync(
+              join(resourceRoot, directory, entry.name),
+              'utf-8',
+            ))).sort(),
+          }))
+          .filter(({ refs }) => refs.length > 0));
+      const scenarioSelection = [
+        'scenario-based-plan',
+        'scenario-based-plan',
+        'scenario-based-replan-implementation',
+        'scenario-based-write-tests-first',
+        'scenario-based-test-report',
+        'scenario-based-fix-plan-from-review-resolution',
+        'scenario-based-fix-plan',
+        'scenario-based-supervise-merge-readiness',
+      ].sort();
+      expect(scenarioRefsByFile).toEqual([
+        { file: 'workflows/experimental.yaml', refs: scenarioSelection },
+        { file: 'workflows/takt-experimental.yaml', refs: scenarioSelection },
+      ]);
 
-      expect(instruction('development-core', 'plan')).not.toContain(planning);
-      expect(reportFormat('development-core', 'plan')).not.toContain(scenarioPlanReport);
-      expect(instruction('development-core', 'write_tests')).not.toContain(testMapping);
-      expect(reportFormat('development-core', 'write_tests')).not.toContain(scenarioTestReport);
-      expect(instruction('development-core', 'replan')).not.toContain(maintenance);
-      expect(instruction('development-remediation', 'fix-plan')).not.toContain(maintenance);
-      expect(reportFormat('development-remediation', 'fix-plan'))
-        .not.toContain(scenarioFixPlanReport);
-      expect(instruction('development-remediation-dynamic', 'fix-plan')).not.toContain(maintenance);
-      expect(reportFormat('development-remediation-dynamic', 'fix-plan'))
-        .not.toContain(scenarioFixPlanReport);
-      expect(instruction('peer-review', 'final-gate')).not.toContain(verification);
-      expect(instruction('simple-core', 'plan')).not.toContain(planning);
-      expect(reportFormat('simple-core', 'plan')).not.toContain(scenarioPlanReport);
-      expect(instruction('simple-core', 'write_tests')).not.toContain(testMapping);
-      expect(reportFormat('simple-core', 'write_tests')).not.toContain(scenarioTestReport);
-      expect(instruction('review-remediation', 'fix-plan')).not.toContain(maintenance);
-      expect(reportFormat('review-remediation', 'fix-plan')).not.toContain(scenarioFixPlanReport);
-      expect(instruction('review-default', 'merge-readiness-review')).not.toContain(verification);
-      expect(instruction('merge-readiness-final-gate', 'merge-readiness-review'))
-        .not.toContain(verification);
-      expect(instruction('merge-readiness-final-gate', 'supervise')).not.toContain(verification);
-      expect(instruction('merge-readiness-dual-final-gate', 'merge-readiness-review'))
-        .not.toContain(verification);
-      expect(instruction('merge-readiness-dual-final-gate', 'supervise'))
-        .not.toContain(verification);
-      expect(instruction('terraform', 'plan')).not.toContain(planning);
-      expect(reportFormat('terraform', 'plan')).not.toContain(scenarioPlanReport);
-      expect(instruction('terraform', 'merge-readiness-review')).not.toContain(verification);
+      const core = readRaw('workflows', 'development-core');
+      expect(core.subworkflow?.params).toMatchObject({
+        plan_instruction: { default: 'plan' },
+        plan_report_format: { default: 'plan' },
+        replan_instruction: { default: 'replan-implementation' },
+        testing_instruction: { default: 'write-tests-first' },
+        testing_report_format: { default: 'test-report' },
+        fix_plan_instruction: { default: 'fix-plan-from-review-resolution' },
+        fix_plan_report_format: { default: 'fix-plan' },
+        final_gate_instruction: { default: 'supervise-merge-readiness' },
+      });
+      expect(findRawStep(core, 'plan')).toMatchObject({
+        with: {
+          plan_instruction: { $param: 'plan_instruction' },
+          plan_report_format: { $param: 'plan_report_format' },
+        },
+      });
+      expect(findRawStep(core, 'replan')).toMatchObject({
+        instruction: { $param: 'replan_instruction' },
+        output_contracts: { report: [{ format: { $param: 'plan_report_format' } }] },
+      });
+      expect(findRawStep(core, 'write_tests')).toMatchObject({
+        with: {
+          testing_instruction: { $param: 'testing_instruction' },
+          testing_report_format: { $param: 'testing_report_format' },
+        },
+      });
+      expect(findRawStep(core, 'peer-review')).toMatchObject({
+        args: {
+          fix_plan_instruction: { $param: 'fix_plan_instruction' },
+          fix_plan_report_format: { $param: 'fix_plan_report_format' },
+          final_gate_instruction: { $param: 'final_gate_instruction' },
+        },
+      });
+
+      const peerReview = readRaw('workflows', 'peer-review');
+      expect(peerReview.subworkflow?.params).toMatchObject({
+        fix_plan_instruction: { default: 'fix-plan-from-review-resolution' },
+        fix_plan_report_format: { default: 'fix-plan' },
+        final_gate_instruction: { default: 'supervise-merge-readiness' },
+      });
+      expect(findRawStep(peerReview, 'final-gate')).toMatchObject({
+        with: { final_gate_instruction: { $param: 'final_gate_instruction' } },
+      });
+      expect(findRawStep(peerReview, 'remediation')).toMatchObject({
+        args: {
+          fix_plan_instruction: { $param: 'fix_plan_instruction' },
+          fix_plan_report_format: { $param: 'fix_plan_report_format' },
+        },
+      });
+
+      for (const name of ['development-remediation', 'development-remediation-dynamic']) {
+        const remediation = readRaw('workflows', name);
+        expect(remediation.subworkflow?.params).toMatchObject({
+          fix_plan_instruction: { default: 'fix-plan-from-review-resolution' },
+          fix_plan_report_format: { default: 'fix-plan' },
+        });
+        expect(findRawStep(remediation, 'fix-plan')).toMatchObject({
+          with: {
+            plan_instruction: { $param: 'fix_plan_instruction' },
+            plan_report_format: { $param: 'fix_plan_report_format' },
+          },
+        });
+      }
+      const writeTestsFragment = parseYaml(readFileSync(
+        join(resourceRoot, 'steps', 'development-core-write-tests.yaml'),
+        'utf-8',
+      )) as Record<string, unknown>;
+      expect(writeTestsFragment).toMatchObject({
+        params: { testing_report_format: { facet_kind: 'report_format' } },
+        output_contracts: { report: [{ format: { $param: 'testing_report_format' } }] },
+      });
+      const finalGateFragment = parseYaml(readFileSync(
+        join(resourceRoot, 'steps', 'peer-review-final-gate.yaml'),
+        'utf-8',
+      )) as Record<string, unknown>;
+      expect(finalGateFragment).toMatchObject({
+        params: { final_gate_instruction: { facet_kind: 'instruction' } },
+        instruction: { $param: 'final_gate_instruction' },
+      });
     },
   );
 
