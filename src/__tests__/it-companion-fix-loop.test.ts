@@ -235,9 +235,9 @@ describe('CT-COMP-10 fail-soft and abort lifecycle', () => {
       onAttemptFailure,
     });
 
-    expect(result.phaseResponse).toBe(original);
+    expect(result.phaseResponse).toEqual(original);
     expect(result.attemptFailures).toEqual([expectedFailure]);
-    expect(onAttemptFailure).toHaveBeenCalledWith(result.attemptFailures[0]);
+    expect(onAttemptFailure).toHaveBeenCalledExactlyOnceWith(expectedFailure);
   });
 
   it('should retain the latest successful response when a companion fix throws', async () => {
