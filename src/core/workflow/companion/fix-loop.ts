@@ -1,6 +1,9 @@
 import type { AgentResponse, CompanionFindingEvidence } from '../../models/index.js';
+import { createLogger } from '../../../shared/utils/index.js';
 import { createAbortError } from './abort.js';
 import { buildCompanionFixInstruction } from './evidence.js';
+
+const log = createLogger('companion-fix-loop');
 
 export interface CompanionFixReviewContext {
   readonly afterFix: boolean;
@@ -124,7 +127,11 @@ function recordFailure(
   failure: CompanionFixAttemptFailure,
 ): void {
   failures.push(failure);
-  onAttemptFailure?.(failure);
+  try {
+    onAttemptFailure?.(failure);
+  } catch {
+    log.warn('Companion attempt failure observer failed; continuing advisory loop');
+  }
 }
 
 function errorMessage(error: unknown): string {

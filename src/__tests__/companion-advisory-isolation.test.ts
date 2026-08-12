@@ -151,11 +151,24 @@ describe('companion advisory isolation', () => {
     expect(judgeStatus).toHaveBeenCalledOnce();
   });
 
-  it('should reject a programmatic workflow rule that reads advisory state', async () => {
+  it.each([
+    {
+      label: 'directly',
+      condition: { kind: 'when', expression: 'companion.escalated' } as const,
+    },
+    {
+      label: 'inside a composed condition',
+      condition: {
+        kind: 'and',
+        left: { kind: 'semantic', label: 'Implementation is complete' },
+        right: { kind: 'when', expression: 'companion.escalated' },
+      } as const,
+    },
+  ])('should reject a programmatic workflow rule that reads advisory state $label', async ({ condition }) => {
     const judgeStatus = judge();
     const step = companionStep();
     step.rules = [{
-      condition: { kind: 'when', expression: 'companion.escalated' },
+      condition,
       next: 'ABORT',
     }, ...step.rules ?? []];
 

@@ -2857,9 +2857,27 @@ export class StepExecutor {
                       onPromptResolved,
                     },
                   ),
-                  onPhaseStart: this.deps.onPhaseStart,
+                  onPhaseStart: (
+                    phaseStep,
+                    phase,
+                    phaseName,
+                    instruction,
+                    promptParts,
+                    phaseExecutionId,
+                    iteration,
+                  ) => {
+                    promptResolvedAttempts.add(phaseAttempt.sequence);
+                    this.deps.onPhaseStart?.(
+                      phaseStep,
+                      phase,
+                      phaseName,
+                      instruction,
+                      promptParts,
+                      phaseExecutionId,
+                      iteration,
+                    );
+                  },
                 });
-                if (observed.promptResolved) promptResolvedAttempts.add(phaseAttempt.sequence);
                 return observed.response;
               } catch (error) {
                 const failedResponse: AgentResponse = {
@@ -2869,13 +2887,15 @@ export class StepExecutor {
                   error: getErrorMessage(error),
                   timestamp: new Date(),
                 };
-                completeObservedPhase1Attempt({
-                  eventStep: step,
-                  iteration: state.iteration,
-                  attempt: phaseAttempt,
-                  response: failedResponse,
-                  onPhaseComplete: this.deps.onPhaseComplete,
-                });
+                if (promptResolvedAttempts.has(phaseAttempt.sequence)) {
+                  completeObservedPhase1Attempt({
+                    eventStep: step,
+                    iteration: state.iteration,
+                    attempt: phaseAttempt,
+                    response: failedResponse,
+                    onPhaseComplete: this.deps.onPhaseComplete,
+                  });
+                }
                 this.deps.recordSynthesizedAgentUsage(step.name, providerInfo, false, undefined);
                 throw error;
               }
@@ -2905,23 +2925,6 @@ export class StepExecutor {
           if (!promptResolvedAttempts.has(finalAttempt.sequence)) {
             const error = new Error(
               `Missing prompt parts for companion fix: ${step.name}:1:${finalAttempt.sequence}`,
-            );
-            completeObservedPhase1Attempt({
-              eventStep: step,
-              iteration: state.iteration,
-              attempt: finalAttempt,
-              response: {
-                ...recovery.response,
-                status: 'error',
-                error: error.message,
-              },
-              onPhaseComplete: this.deps.onPhaseComplete,
-            });
-            this.deps.recordSynthesizedAgentUsage(
-              step.name,
-              providerInfo,
-              false,
-              recovery.response.providerUsage,
             );
             throw error;
           }

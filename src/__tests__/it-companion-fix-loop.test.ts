@@ -192,6 +192,30 @@ describe('CT-COMP-10 fail-soft and abort lifecycle', () => {
     expect(onAttemptFailure).toHaveBeenCalledWith(result.attemptFailures[0]);
   });
 
+  it('should retain the recorded failure when its observer throws', async () => {
+    const original = response('implementation succeeded', 'session-1');
+    const observerFailure = new Error('failure observer crashed');
+    const onAttemptFailure = vi.fn(() => {
+      throw observerFailure;
+    });
+
+    const result = await runCompanionFixLoop({
+      initialResponse: original,
+      phase1Options: phase1Options(),
+      completeReview: vi.fn().mockRejectedValue(new Error('review provider crashed')),
+      executeFix: vi.fn(),
+      onAttemptFailure,
+    });
+
+    expect(result.phaseResponse).toBe(original);
+    expect(result.attemptFailures).toEqual([{
+      stage: 'review',
+      fixRound: 0,
+      reason: 'review provider crashed',
+    }]);
+    expect(onAttemptFailure).toHaveBeenCalledWith(result.attemptFailures[0]);
+  });
+
   it('should retain the latest successful response when a companion fix throws', async () => {
     const original = response('implementation succeeded', 'session-1');
     const onAttemptFailure = vi.fn();

@@ -497,6 +497,66 @@ describe('companion StepExecutor lifecycle', () => {
     expect(new Set(completedIds)).toEqual(new Set(startedIds));
   });
 
+  it.each(['rejects', 'returns'] as const)(
+    'should not complete a companion fix phase that %s before resolving its prompt',
+    async (behavior) => {
+      const abortController = new AbortController();
+      const state = makeState();
+      writeOpenFinding(cwd);
+      vi.mocked(executeAgent)
+        .mockImplementationOnce(async (_persona, prompt, options) => {
+          options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: prompt });
+          return {
+            persona: 'coder',
+            status: 'done',
+            content: 'implemented',
+            sessionId: 'session-1',
+            timestamp: new Date('2026-08-08T00:00:00.000Z'),
+          };
+        })
+        .mockImplementationOnce(async () => {
+          if (behavior === 'rejects') throw new Error('repair failed before prompt resolution');
+          return {
+            persona: 'coder',
+            status: 'done',
+            content: 'repair returned before prompt resolution',
+            sessionId: 'session-2',
+            timestamp: new Date('2026-08-08T00:00:00.000Z'),
+          };
+        });
+      const deps = createDeps({
+        cwd,
+        runPaths,
+        companionDiffReader: createCompanionDiffReader(),
+        abortSignal: abortController.signal,
+        emitEvent: vi.fn(),
+      });
+
+      const result = await new StepExecutor(deps).runNormalStep(
+        createCompanionStep([makeRule('Implementation is complete', 'COMPLETE')]),
+        state,
+        'task',
+        5,
+        vi.fn(),
+        'Implement.',
+      );
+
+      const startedIds = vi.mocked(deps.onPhaseStart!).mock.calls.map((call) => call[5]);
+      const completedIds = vi.mocked(deps.onPhaseComplete!).mock.calls.map((call) => call[6]);
+      expect(result.response).toMatchObject({
+        status: 'done',
+        content: 'implemented',
+        sessionId: 'session-1',
+        matchedRuleIndex: 0,
+      });
+      expect(startedIds).toHaveLength(1);
+      expect(completedIds).toEqual(startedIds);
+      if (behavior === 'returns') {
+        expect(deps.recordSynthesizedAgentUsage).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it('should apply empty-output recovery to a companion fix and retain the successful session', async () => {
     const abortController = new AbortController();
     const state = makeState();
