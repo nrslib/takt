@@ -1,4 +1,5 @@
 import type { AgentResponse, Language, ReviewCompletionConfig } from '../models/types.js';
+import type { ReviewCompletionEvidence } from './review-completion-evidence.js';
 
 export const REVIEW_COMPLETION_JUDGE_NAME = 'review-completion-judge';
 export const REVIEW_COMPLETION_SCHEMA_REF = 'takt.review-completion.decision';
@@ -144,12 +145,14 @@ export function buildReviewCompletionJudgePrompt(input: {
   readonly language: Language | undefined;
   readonly task: string;
   readonly reviewScope: unknown;
+  readonly evidence: ReviewCompletionEvidence;
   readonly reviewResponse: string;
   readonly mode: ReviewCompletionMode;
 }): { systemPrompt: string; instruction: string } {
   const payload = JSON.stringify({
     task: input.task,
     changed_targets: input.reviewScope,
+    repository_evidence: input.evidence,
     reviewer_report: input.reviewResponse,
     review_mode: input.mode,
   }, null, 2);
@@ -157,7 +160,7 @@ export function buildReviewCompletionJudgePrompt(input: {
     return {
       systemPrompt: 'あなたは読み取り専用のレビュー網羅性判定者です。指摘の正否やworkflow状態ではなく、対象review modeで要求された調査経路が実コードと報告根拠により閉じたかだけを判定します。',
       instruction: [
-        '報告と実コードを照合し、changedまたはaccepted contract familyについて definition、producer、normalizer/validator、全consumer、retry/fallback/parallel、persistence/restoration、terminal/API の実接続と根拠を検査してください。',
+        'repository_evidenceとして提示された実コードと差分を報告に照合し、changedまたはaccepted contract familyについて definition、producer、normalizer/validator、全consumer、retry/fallback/parallel、persistence/restoration、terminal/API の実接続と根拠を検査してください。omissionsは未確認範囲であり、不足を補作してはいけません。',
         input.mode === 'initial'
           ? 'changed targetsとacceptance criteriaの未走査はinitial_changed_target_gap、発見済みfamily内の縦経路不足はfamily_lifecycle_gapです。'
           : '一般的な横方向探索は禁止です。不足をretry対象にできるのはaccepted_family_unvisited_consumer、remediation_regression、direct_acceptance_criterion_violation、required_consumer_migrationの4種だけです。縦経路の不足も、この4種のauthorization basisへ分類できない場合は返してはいけません。',
@@ -169,7 +172,7 @@ export function buildReviewCompletionJudgePrompt(input: {
   return {
     systemPrompt: 'You are a read-only review-completeness judge. Decide only whether the required investigation paths for the review mode are closed by repository evidence and the report; do not produce workflow semantic status.',
     instruction: [
-      'Compare the report with actual code. For every changed or accepted contract family, verify evidence and real connections through definition, producer, normalizer/validator, every consumer, retry/fallback/parallel, persistence/restoration, and terminal/API.',
+      'Compare the report with the actual code and diff supplied as repository_evidence. For every changed or accepted contract family, verify evidence and real connections through definition, producer, normalizer/validator, every consumer, retry/fallback/parallel, persistence/restoration, and terminal/API. Treat omissions as unverified coverage and do not invent missing evidence.',
       input.mode === 'initial'
         ? 'Classify an unvisited changed target or acceptance criterion as initial_changed_target_gap, and a vertical omission inside a discovered family as family_lifecycle_gap.'
         : 'General horizontal exploration is forbidden. Only accepted_family_unvisited_consumer, remediation_regression, direct_acceptance_criterion_violation, and required_consumer_migration may authorize a retry. Do not return a vertical gap that cannot be classified under one of these four bases.',

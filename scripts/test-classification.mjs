@@ -42,6 +42,7 @@ const legacyParallelIntegrationTestFiles = Object.freeze([
   'src/__tests__/promptEvalProbeLifecycle.test.ts',
   'src/__tests__/releaseVerificationWiring.test.ts',
   'src/__tests__/report-phase-blocked.test.ts',
+  'src/__tests__/review-completion-evidence.test.ts',
   'src/__tests__/runAllTasks-concurrency.test.ts',
   'src/__tests__/selector-input-reader.test.ts',
   'src/__tests__/step-executor.test.ts',

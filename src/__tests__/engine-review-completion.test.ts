@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import type { AgentResponse, WorkflowConfig, WorkflowStep } from '../core/models/index.js';
 import type { ReportPhaseRunnerContext } from '../core/workflow/phase-runner.js';
 
@@ -125,6 +126,40 @@ describe('WorkflowEngine review completion wiring', () => {
     expect(runReportPhase).toHaveBeenCalledOnce();
     const phase2 = vi.mocked(runReportPhase).mock.calls[0]![2] as ReportPhaseRunnerContext;
     expect(phase2.getSessionId(phase2.resolveSessionKey(step))).toBe('review-session-2');
+  });
+
+  it('includes bounded repository source and diff in the judge prompt without relying on tools', async () => {
+    execFileSync('git', ['init'], { cwd });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd });
+    writeFileSync(`${cwd}/review-target.ts`, 'export const version = 1;\n');
+    execFileSync('git', ['add', 'review-target.ts'], { cwd });
+    execFileSync('git', ['commit', '-m', 'base'], { cwd });
+    writeFileSync(`${cwd}/review-target.ts`, 'export const version = 2;\n');
+    const step = reviewStep('reviewer', {
+      reviewCompletion: { ...completion, maxRetry: 0 },
+    });
+    engine = new WorkflowEngine(normalConfig(step), cwd, 'task', { projectCwd: cwd, provider: 'mock' });
+    let judgeInstruction: string | undefined;
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      if (options.internalAgentName === 'review-completion-judge') {
+        judgeInstruction = instruction;
+        expect(options.allowedTools).toEqual(['Read', 'Glob', 'Grep']);
+        return judgeResponse(true);
+      }
+      options.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: instruction });
+      return reviewerResponse(String(persona), 'review report', 'review-session');
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    const judgePayload = JSON.parse(judgeInstruction!.slice(judgeInstruction!.indexOf('{')));
+    expect(judgePayload.repository_evidence.files).toEqual([expect.objectContaining({
+      path: 'review-target.ts',
+      content: 'export const version = 2;\n',
+    })]);
+    expect(judgePayload.repository_evidence.diff).toMatch(/-export const version = 1;[\s\S]*\+export const version = 2;/);
   });
 
   it('keeps parallel reviewer completion episodes independent', async () => {
