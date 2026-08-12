@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { join } from 'node:path';
+import { stringify as stringifyYaml } from 'yaml';
 import type { AgentResponse, WorkflowConfig, WorkflowStep } from '../core/models/index.js';
 import type { ReportPhaseRunnerContext } from '../core/workflow/phase-runner.js';
+import type { LegacyProviderEnvironmentInput } from '../infra/config/runtime-provider/environment.js';
 
 vi.mock('../agents/runner.js', () => ({ runAgent: vi.fn() }));
 
@@ -25,6 +28,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 import { runAgent } from '../agents/runner.js';
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { runReportPhase, runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
+import { resolveCompiledProviderEnvironment } from '../infra/config/runtime-provider/provider-environment.js';
 import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 import {
   applyDefaultMocks,
@@ -135,24 +139,63 @@ describe('WorkflowEngine review completion wiring', () => {
     expect(phase2.getSessionId(phase2.resolveSessionKey(step))).toBe('review-session-2');
   });
 
-  it('passes the review-completion judge seat options, permission, and failure directory through the common transport', async () => {
+  it('loads the review-completion judge runtime seat through to the common transport', async () => {
     const step = reviewStep('reviewer', {
       provider: 'mock',
       providerSpecified: true,
       reviewCompletion: { ...completion, maxRetry: 0 },
     });
-    engine = new WorkflowEngine(normalConfig(step), cwd, 'task', {
-      projectCwd: cwd,
-      internalAgentSeats: {
-        reviewCompletionJudge: {
-          provider: 'claude',
-          model: 'judge-model',
-          permissionMode: 'readonly',
-          providerOptions: {
-            claude: { allowedTools: ['Read'] },
+    mkdirSync(join(cwd, '.takt'), { recursive: true });
+    writeFileSync(join(cwd, '.takt', 'runtime.yaml'), stringifyYaml({
+      version: 1,
+      provider: {
+        defaults: { profile: 'default' },
+        profiles: {
+          default: { provider: 'mock', model: 'default-model' },
+          judge: {
+            provider: 'claude',
+            model: 'judge-model',
+            permission_mode: 'readonly',
+            options: { allowed_tools: ['Read'] },
+          },
+        },
+        targets: {
+          internal_agents: {
+            'review-completion-judge': { profile: 'judge' },
           },
         },
       },
+    }));
+    const legacy: LegacyProviderEnvironmentInput = {
+      provider: 'mock',
+      providerSource: 'default',
+      model: undefined,
+      modelSource: 'default',
+      personaProviders: undefined,
+      providerRouting: undefined,
+      autoRouting: undefined,
+      providerOptions: undefined,
+    };
+    const environment = resolveCompiledProviderEnvironment({
+      projectCwd: cwd,
+      legacy,
+      legacySignals: [],
+    });
+    expect(environment.internalAgents?.reviewCompletionJudge).toEqual({
+      provider: 'claude',
+      model: 'judge-model',
+      permissionMode: 'readonly',
+      providerOptions: { claude: { allowedTools: ['Read'] } },
+    });
+    engine = new WorkflowEngine(normalConfig(step), cwd, 'task', {
+      projectCwd: cwd,
+      provider: environment.provider,
+      providerSource: environment.providerSource,
+      model: environment.model,
+      modelSource: environment.modelSource,
+      providerOptions: environment.providerOptions,
+      providerPermissionMode: environment.permissionMode,
+      internalAgentSeats: environment.internalAgents,
     });
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       if (options.internalAgentName === 'review-completion-judge') {

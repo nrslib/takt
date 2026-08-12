@@ -254,6 +254,30 @@ function expectResolvedReviewerInstructions(
   }
 }
 
+function expectResolvedReviewCompletionRetryInstruction(
+  language: 'en' | 'ja',
+  reviewerCall: WorkflowStep,
+  reviewerSteps: readonly ReviewerStepReference[],
+  projectDir: string,
+): string {
+  const instructionRef = reviewerCall.args?.review_completion_retry_instruction;
+  if (typeof instructionRef !== 'string') {
+    throw new Error(`Review completion instruction argument not found for "${reviewerCall.name}"`);
+  }
+  const resolvedInstruction = resolveRefToContent(
+    instructionRef,
+    undefined,
+    projectDir,
+    'instructions',
+    { projectDir, lang: language },
+  );
+  expect(resolvedInstruction).not.toBe('');
+  for (const { step } of reviewerSteps) {
+    expect(step.reviewCompletion?.retryInstruction).toBe(resolvedInstruction);
+  }
+  return resolvedInstruction;
+}
+
 function collectReviewerSteps(
   language: 'en' | 'ja',
   workflow: WorkflowConfig,
@@ -565,18 +589,21 @@ describe('experimental builtin workflow', () => {
           expect(initialInstruction).not.toBe('');
           expect(followUpReviewers.get(reviewer)).not.toBe(initialInstruction);
         }
-        const horizontalExplorationText = language === 'ja'
-          ? '一般的な横方向探索を再開せず'
-          : 'Do not restart general horizontal exploration';
-        for (const { step } of initialReviewerSteps) {
-          expect(step.reviewCompletion?.retryInstruction).not.toContain(horizontalExplorationText);
-        }
-        for (const { step } of followUpReviewerSteps) {
-          expect(step.reviewCompletion?.retryInstruction).toContain(horizontalExplorationText);
-          expect(step.reviewCompletion?.retryInstruction).toContain(
-            language === 'ja' ? '元のreviewer instruction' : 'original reviewer instruction',
-          );
-        }
+        const initialRetryInstruction = expectResolvedReviewCompletionRetryInstruction(
+          language,
+          reviewerCalls[0]!,
+          initialReviewerSteps,
+          projectDir,
+        );
+        const followUpRetryInstruction = expectResolvedReviewCompletionRetryInstruction(
+          language,
+          reviewerCalls[1]!,
+          followUpReviewerSteps,
+          projectDir,
+        );
+        expect(reviewerCalls[0]!.args?.review_completion_retry_instruction)
+          .not.toBe(reviewerCalls[1]!.args?.review_completion_retry_instruction);
+        expect(initialRetryInstruction).not.toBe(followUpRetryInstruction);
 
         const reviewerSuite = initialSuite!;
         const securityReview = findWorkflowStep(reviewerSuite, 'security-review');

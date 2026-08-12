@@ -609,6 +609,8 @@ provider:
     internal_agents:
       selector:
         profile: router
+      review-completion-judge:
+        profile: router
 
   auto_routing:
     strategy: balanced
@@ -642,7 +644,7 @@ defaults
   < steps
 ```
 
-内部 agent（`selector`、`assistant`、`loop-judge`）は別のラダーで解決します。seat はすべて任意で、未指定なら通常の既定解決を使います。
+内部 agent（`selector`、`assistant`、`loop-judge`、`review-completion-judge`）は別のラダーで解決します。`selector` は動的な作業選択、`assistant` は対話セッション、`loop-judge` は loop monitor の判定、`review-completion-judge` は opt-in した reviewer に再確認が必要かの判定を担当します。seat はすべて任意で、未指定なら通常の既定解決を使います。
 
 ```text
 defaults

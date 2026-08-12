@@ -615,6 +615,8 @@ provider:
     internal_agents:
       selector:
         profile: router
+      review-completion-judge:
+        profile: router
 
   auto_routing:
     strategy: balanced
@@ -648,7 +650,7 @@ defaults
   < steps
 ```
 
-The internal `selector`, `assistant`, and `loop-judge` agents resolve through a separate ladder. Every seat is optional; an unassigned seat uses the ordinary default resolution.
+The internal `selector`, `assistant`, `loop-judge`, and `review-completion-judge` agents resolve through a separate ladder. `selector` chooses dynamic work, `assistant` backs interactive sessions, `loop-judge` evaluates loop monitors, and `review-completion-judge` decides whether an opted-in reviewer needs another pass. Every seat is optional; an unassigned seat uses the ordinary default resolution.
 
 ```text
 defaults
