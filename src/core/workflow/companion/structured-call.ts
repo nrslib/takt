@@ -4,6 +4,7 @@ import type { ProviderRoutingEntry } from '../../models/config-types.js';
 import {
   executeCompanionStructuredAgent,
   type CompanionAgentPurpose,
+  type CompanionCallAudit,
   type CompanionStructuredResponseValidator,
 } from './review-runner.js';
 
@@ -20,6 +21,13 @@ export class CompanionStructuredCaller {
       success: boolean,
       usage: AgentResponse['providerUsage'],
     ) => void;
+    readonly recordCall: (event: CompanionCallAudit) => void;
+    readonly onCallAuditPersistenceFailure?: (failure: {
+      purpose: CompanionAgentPurpose;
+      agentName: string;
+      attempt: number;
+      error: unknown;
+    }) => void;
   }) {}
 
   call(request: {
@@ -64,6 +72,7 @@ export class CompanionStructuredCaller {
           agentName: request.agentName,
           language: this.input.language,
           abortSignal: options.abortSignal,
+          onPromptResolved: options.onPromptResolved,
           resolution: {
             provider: options.resolution.provider,
             model: options.resolution.model,
@@ -74,6 +83,10 @@ export class CompanionStructuredCaller {
       recordUsage: ({ success, usage }) => {
         this.input.recordUsage(request.agentName, request.provider, success, usage);
       },
+      recordCall: (event) => {
+        this.input.recordCall(event);
+      },
+      onCallAuditPersistenceFailure: this.input.onCallAuditPersistenceFailure,
     });
   }
 }

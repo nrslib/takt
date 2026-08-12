@@ -1,5 +1,9 @@
 import type { CompanionFindingEvidence, WorkflowState } from '../../models/types.js';
-import type { CompanionChangeDetector } from './change-detector.js';
+import type {
+  CompanionChangeDetector,
+  CompanionChangeSkipReason,
+  CompanionChangeCandidate,
+} from './change-detector.js';
 import type { CompanionDiff } from './diff-reader.js';
 import type { CompanionEventPublisher } from './event-publisher.js';
 import type { CompanionReviewQueue } from './review-queue.js';
@@ -25,6 +29,11 @@ export class CompanionCompletionCoordinator {
     readonly events: CompanionEventPublisher;
     readonly abortSignal?: AbortSignal;
     readonly onError: () => void;
+    readonly onSkipped?: (input: {
+      readonly companionName: string;
+      readonly reason: CompanionChangeSkipReason;
+      readonly candidate: CompanionChangeCandidate;
+    }) => void;
   }) {}
 
   async complete(
@@ -92,7 +101,17 @@ export class CompanionCompletionCoordinator {
       if (detector === undefined || candidate === undefined) {
         throw new Error(`Missing completion state for companion "${name}"`);
       }
-      const trigger = await detector.evaluateCandidate(candidate, snapshot);
+      let skippedReason: CompanionChangeSkipReason | undefined;
+      const trigger = await detector.evaluateCandidate(candidate, snapshot, (reason) => {
+        skippedReason = reason;
+      });
+      if (skippedReason !== undefined) {
+        this.input.onSkipped?.({
+          companionName: name,
+          reason: skippedReason,
+          candidate,
+        });
+      }
       if (trigger === undefined) {
         await this.input.queue.settle(name);
         return;

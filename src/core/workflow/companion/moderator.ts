@@ -1,5 +1,6 @@
 import type { CompanionFinding, CompanionFindingSeverity } from '../../models/companion-types.js';
 import type { CompanionReviewOutput } from './contracts.js';
+import type { CompanionReviewAuditSnapshot } from './review-state-store.js';
 
 export interface ModeratorResult {
   readonly findings: readonly {
@@ -10,6 +11,11 @@ export interface ModeratorResult {
     targetId?: string;
   }[];
   readonly updates: CompanionReviewOutput['updates'];
+}
+
+export interface ModeratedCompanionResult {
+  readonly moderator: ModeratorResult;
+  readonly accepted: CompanionReviewOutput;
 }
 
 export async function moderateCompanionResult(input: {
@@ -24,12 +30,21 @@ export async function moderateCompanionResult(input: {
     implementerExplanation?: string;
   }) => Promise<ModeratorResult>;
   commit: (result: CompanionReviewOutput) => Promise<void>;
-}): Promise<void> {
+  moderatorName?: string;
+  onCommitAudit?: (audit: CompanionReviewAuditSnapshot) => void;
+}): Promise<ModeratedCompanionResult | undefined> {
+  const moderatorName = input.moderatorName ?? 'moderator';
   if (input.reviewerResult.findings.length === 0 && input.reviewerResult.updates.length === 0) {
     if (input.reviewerResult.notes !== undefined) {
-      await input.commit({ findings: [], updates: [], notes: input.reviewerResult.notes });
+      const accepted = { findings: [], updates: [], notes: input.reviewerResult.notes };
+      input.onCommitAudit?.({
+        reviewerResult: input.reviewerResult,
+        accepted,
+        moderator: { name: moderatorName, invoked: false, reason: 'reviewer_result_empty' },
+      });
+      await input.commit(accepted);
     }
-    return;
+    return undefined;
   }
   const moderated = await input.runModerator({
     reviewerResult: input.reviewerResult,
@@ -51,11 +66,18 @@ export async function moderateCompanionResult(input: {
       ...(decision.finding === undefined ? {} : { finding: decision.finding }),
     }];
   });
-  await input.commit({
+  const accepted: CompanionReviewOutput = {
     findings,
     updates: moderated.updates,
     ...(input.reviewerResult.notes === undefined ? {} : { notes: input.reviewerResult.notes }),
+  };
+  input.onCommitAudit?.({
+    reviewerResult: input.reviewerResult,
+    accepted,
+    moderator: { name: moderatorName, invoked: true, result: moderated },
   });
+  await input.commit(accepted);
+  return { moderator: moderated, accepted };
 }
 
 export function validateModeratorDecisions(

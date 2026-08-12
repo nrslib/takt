@@ -28,6 +28,21 @@ interface CompanionCallOptions {
   mcpServers: Record<string, never>;
   sessionId: undefined;
   abortSignal: AbortSignal;
+  onPromptResolved?: (prompt: { systemPrompt: string; userInstruction: string }) => void;
+}
+
+export interface CompanionCallAudit {
+  readonly purpose: CompanionAgentPurpose;
+  readonly agentName: string;
+  readonly attempt: number;
+  readonly status: 'completed' | 'failed';
+  readonly provider: ProviderType;
+  readonly model?: string;
+  readonly systemPrompt?: string;
+  readonly prompt?: string;
+  readonly promptResolved: boolean;
+  readonly response?: AgentResponse;
+  readonly error?: string;
 }
 
 export type CompanionStructuredResponseValidator = (response: AgentResponse) => void;
@@ -61,10 +76,17 @@ export async function executeCompanionStructuredAgent(input: {
     success: boolean;
     usage?: AgentResponse['providerUsage'];
   }) => void;
+  recordCall?: (event: CompanionCallAudit) => void;
+  onCallAuditPersistenceFailure?: (failure: {
+    purpose: CompanionAgentPurpose;
+    agentName: string;
+    attempt: number;
+    error: unknown;
+  }) => void;
 }): Promise<AgentResponse> {
   for (let attempt = 1; ; attempt += 1) {
     try {
-      const response = await executeCompanionStructuredAgentInternal(input);
+      const response = await executeCompanionStructuredAgentInternal(input, attempt);
       if (response.status === 'done') return response;
       if (response.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR) {
         throw createProviderStreamParseError(response.error ?? response.content ?? response.status);
@@ -94,7 +116,7 @@ function companionResponseFailureMessage(
 
 async function executeCompanionStructuredAgentInternal(input: Parameters<
   typeof executeCompanionStructuredAgent
->[0]): Promise<AgentResponse> {
+>[0], attempt: number): Promise<AgentResponse> {
   const controller = new AbortController();
   let rejectParentAbort: ((error: Error) => void) | undefined;
   let parentAborted = false;
@@ -110,6 +132,51 @@ async function executeCompanionStructuredAgentInternal(input: Parameters<
   input.abortSignal?.addEventListener('abort', abortFromParent, { once: true });
   let timer: ReturnType<typeof setTimeout> | undefined;
   let response: AgentResponse | undefined;
+  let callAuditRecorded = false;
+  const guardedSystemPrompt = appendCompanionEvidenceSystemGuard(input.systemPrompt);
+  let actualSystemPrompt: string | undefined;
+  let actualPrompt: string | undefined;
+  let promptResolved = false;
+  const recordCall = (audit: Omit<CompanionCallAudit, 'purpose' | 'agentName' | 'attempt' | 'provider' | 'model' | 'systemPrompt'> & {
+    readonly systemPrompt?: string;
+  }): void => {
+    if (input.recordCall === undefined) return;
+    callAuditRecorded = true;
+    try {
+      input.recordCall({
+        purpose: input.purpose,
+        agentName: input.agentName,
+        attempt,
+        provider: input.resolution.provider,
+        ...(input.resolution.model === undefined ? {} : { model: input.resolution.model }),
+        ...(audit.promptResolved
+          ? {
+            promptResolved: true,
+            ...(audit.systemPrompt === undefined && actualSystemPrompt === undefined
+              ? {}
+              : { systemPrompt: audit.systemPrompt ?? actualSystemPrompt }),
+            ...(audit.prompt === undefined && actualPrompt === undefined
+              ? {}
+              : { prompt: audit.prompt ?? actualPrompt }),
+          }
+          : { promptResolved: false }),
+        status: audit.status,
+        ...(audit.response === undefined ? {} : { response: audit.response }),
+        ...(audit.error === undefined ? {} : { error: audit.error }),
+      });
+    } catch (error) {
+      try {
+        input.onCallAuditPersistenceFailure?.({
+          purpose: input.purpose,
+          agentName: input.agentName,
+          attempt,
+          error,
+        });
+      } catch {
+        // Audit diagnostics must not change the provider result or retry policy.
+      }
+    }
+  };
   try {
     const timeoutMs = input.timeoutMs ?? COMPANION_CALL_TIMEOUT_MS;
     const timeout = new Promise<never>((_resolve, reject) => {
@@ -120,7 +187,7 @@ async function executeCompanionStructuredAgentInternal(input: Parameters<
     });
     void timeout.catch(() => undefined);
     const call = input.call(
-      appendCompanionEvidenceSystemGuard(input.systemPrompt),
+      guardedSystemPrompt,
       input.prompt,
       input.outputSchema,
       {
@@ -134,6 +201,11 @@ async function executeCompanionStructuredAgentInternal(input: Parameters<
         mcpServers: {},
         sessionId: undefined,
         abortSignal: controller.signal,
+        onPromptResolved: ({ systemPrompt, userInstruction }) => {
+          actualSystemPrompt = systemPrompt;
+          actualPrompt = userInstruction;
+          promptResolved = true;
+        },
       },
     );
     void call.catch(() => undefined);
@@ -145,6 +217,16 @@ async function executeCompanionStructuredAgentInternal(input: Parameters<
     if (response.status === 'done') {
       input.validateResponse?.(response);
     }
+    recordCall({
+      ...(promptResolved ? {
+        promptResolved: true,
+        systemPrompt: actualSystemPrompt,
+        prompt: actualPrompt,
+      } : { promptResolved: false }),
+      status: response.status === 'done' ? 'completed' : 'failed',
+      response,
+      ...(response.status === 'done' ? {} : { error: response.error ?? response.content }),
+    });
     input.recordUsage({
       purpose: input.purpose,
       agentName: input.agentName,
@@ -153,6 +235,18 @@ async function executeCompanionStructuredAgentInternal(input: Parameters<
     });
     return response;
   } catch (error) {
+    if (!callAuditRecorded) {
+      recordCall({
+        ...(promptResolved ? {
+          promptResolved: true,
+          systemPrompt: actualSystemPrompt,
+          prompt: actualPrompt,
+        } : { promptResolved: false }),
+        status: 'failed',
+        ...(response === undefined ? {} : { response }),
+        error: safeExternalErrorMessage(error),
+      });
+    }
     if (!parentAborted) {
       input.recordUsage({
         purpose: input.purpose,

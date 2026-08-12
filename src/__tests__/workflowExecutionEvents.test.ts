@@ -100,6 +100,8 @@ function createBridgeHarness(options?: {
     onWorkflowAbort: vi.fn(),
     onCompanionReviewRound: vi.fn(),
     onCompanionQueueCoalesced: vi.fn(),
+    onCompanionCall: vi.fn(),
+    onCompanionReviewSkipped: vi.fn(),
   };
   const sessionLog = {
     task: 'task',
@@ -197,6 +199,69 @@ describe('bindWorkflowExecutionEvents', () => {
     expect(sessionLogger.onWorkflowCallComplete).toHaveBeenCalledWith(complete);
   });
 
+  it('Companion監査のSessionLogger失敗をワークフローへ伝播させない', () => {
+    const sessionLogger = {
+      onCompanionCall: vi.fn(() => { throw new Error('call audit append failed'); }),
+      onCompanionReviewRound: vi.fn(() => { throw new Error('review audit append failed'); }),
+      onCompanionReviewSkipped: vi.fn(() => { throw new Error('skip audit append failed'); }),
+    } as unknown as SessionLogger;
+    const { engine } = createBridgeHarness({ sessionLogger });
+
+    expect(() => {
+      engine.emit('companion:call', {
+        step: 'review',
+        agent: 'security-reviewer',
+        purpose: 'reviewer',
+        attempt: 1,
+        status: 'completed',
+        provider: 'mock',
+        promptResolved: false,
+      });
+      engine.emit('companion:review_round', {
+        step: 'review',
+        companion: 'security-reviewer',
+        trigger: 'quiet',
+        digest: 'digest',
+        changedLines: 1,
+        findingCount: 0,
+        reviewerFindings: [],
+        reviewerUpdates: [],
+        acceptedFindings: [],
+        acceptedUpdates: [],
+      });
+      engine.emit('companion:review_skipped', {
+        step: 'review',
+        companion: 'security-reviewer',
+        phase: 'live',
+        reason: 'unchanged_digest',
+      });
+    }).not.toThrow();
+
+    expect(sessionLogger.onCompanionCall).toHaveBeenCalledOnce();
+    expect(sessionLogger.onCompanionReviewRound).toHaveBeenCalledOnce();
+    expect(sessionLogger.onCompanionReviewSkipped).toHaveBeenCalledOnce();
+  });
+
+  it('SessionLoggerの監査NDJSON失敗時に未永続レコードをメモリへ残さない', () => {
+    const logsDir = mkdtempSync(join(tmpdir(), 'takt-companion-audit-failure-'));
+    try {
+      const sessionLogger = new SessionLogger(logsDir, false);
+      const { engine } = createBridgeHarness({ sessionLogger });
+
+      expect(() => engine.emit('companion:review_skipped', {
+        step: 'review',
+        companion: 'security-reviewer',
+        phase: 'live',
+        reason: 'unchanged_digest',
+        observedGeneration: 2,
+      })).not.toThrow();
+
+      expect(sessionLogger.getNdjsonRecords()).toEqual([]);
+    } finally {
+      rmSync(logsDir, { recursive: true, force: true });
+    }
+  });
+
   it('child workflow の companion review event を relay と親 bridge 経由で run NDJSON に記録する', async () => {
     const logsDir = mkdtempSync(join(tmpdir(), 'takt-companion-relay-'));
     try {
@@ -242,17 +307,24 @@ describe('bindWorkflowExecutionEvents', () => {
         status: 'completed',
       };
       const listeners = new Map<string, (...args: unknown[]) => void>();
+      const childScope = ['subworkflows', 'iteration-1--step-delegate--workflow-child'];
       const reviewRoundPayload = {
         step: 'review',
         companion: 'security-reviewer',
         trigger: 'quiet',
         digest: 'child-digest',
         changedLines: 12,
-        findingCount: 2,
+        findingCount: 0,
+        reviewerFindings: [],
+        reviewerUpdates: [],
+        acceptedFindings: [],
+        acceptedUpdates: [],
+        runPathNamespace: childScope,
       };
       const queueCoalescedPayload = {
         step: 'review',
         companion: 'security-reviewer',
+        runPathNamespace: childScope,
         replaced: {
           trigger: 'quiet',
           digest: 'child-digest',
@@ -266,6 +338,23 @@ describe('bindWorkflowExecutionEvents', () => {
           observedGeneration: 2,
         },
       };
+      const callPayload = {
+        step: 'review',
+        agent: 'security-reviewer',
+        purpose: 'reviewer' as const,
+        attempt: 1,
+        status: 'completed' as const,
+        provider: 'mock' as const,
+        promptResolved: false,
+        runPathNamespace: childScope,
+      };
+      const skippedPayload = {
+        step: 'review',
+        companion: 'security-reviewer',
+        phase: 'fix' as const,
+        reason: 'unchanged_digest' as const,
+        runPathNamespace: childScope,
+      };
       const childEngine = {
         on: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
           listeners.set(event, listener);
@@ -273,6 +362,8 @@ describe('bindWorkflowExecutionEvents', () => {
         runWithResult: vi.fn().mockImplementation(async () => {
           listeners.get('companion:review_round')?.(reviewRoundPayload);
           listeners.get('companion:queue_coalesced')?.(queueCoalescedPayload);
+          listeners.get('companion:call')?.(callPayload);
+          listeners.get('companion:review_skipped')?.(skippedPayload);
           return { state: childState };
         }),
       };
@@ -319,7 +410,18 @@ describe('bindWorkflowExecutionEvents', () => {
         trigger: 'quiet',
         digest: 'child-digest',
         changedLines: 12,
-        findingCount: 2,
+        findingCount: 0,
+        runPathNamespace: childScope,
+      }));
+      expect(records).toContainEqual(expect.objectContaining({
+        type: 'companion_call',
+        promptResolved: false,
+        runPathNamespace: childScope,
+      }));
+      expect(records).toContainEqual(expect.objectContaining({
+        type: 'companion_review_skipped',
+        phase: 'fix',
+        runPathNamespace: childScope,
       }));
       expect(records).toContainEqual(expect.objectContaining({
         type: 'companion_queue_coalesced',
@@ -327,6 +429,7 @@ describe('bindWorkflowExecutionEvents', () => {
         companion: 'security-reviewer',
         replaced: expect.objectContaining({ digest: 'child-digest' }),
         replacement: expect.objectContaining({ digest: 'child-digest-2' }),
+        runPathNamespace: childScope,
       }));
     } finally {
       rmSync(logsDir, { recursive: true, force: true });
@@ -1975,7 +2078,26 @@ describe('bindWorkflowExecutionEvents', () => {
         trigger: 'quiet',
         digest: 'digest-2',
         changedLines: 12,
-        findingCount: 2,
+        findingCount: 1,
+        reviewerFindings: [{
+          severity: 'must_fix',
+          file: 'src/private.ts',
+          line: 7,
+          finding: 'candidate-private-detail',
+        }],
+        reviewerUpdates: [],
+        moderator: {
+          name: 'moderator',
+          invoked: true,
+          decisions: [{ action: 'accept', sourceIndex: 0 }],
+        },
+        acceptedFindings: [{
+          severity: 'must_fix',
+          file: 'src/private.ts',
+          line: 7,
+          finding: 'candidate-private-detail',
+        }],
+        acceptedUpdates: [],
       }],
       ['companion:queue_coalesced', {
         step: 'implement',
@@ -2039,7 +2161,7 @@ describe('bindWorkflowExecutionEvents', () => {
         trigger: 'quiet',
         digest: 'digest-2',
         changedLines: 12,
-        findingCount: 2,
+        findingCount: 1,
       },
       {
         type: 'companion',
@@ -2062,8 +2184,18 @@ describe('bindWorkflowExecutionEvents', () => {
     ]);
     expect(sessionLogger.onCompanionReviewRound).toHaveBeenCalledWith(events[5][1]);
     expect(sessionLogger.onCompanionQueueCoalesced).toHaveBeenCalledWith(events[6][1]);
-    expect(analyticsEmitter.onCompanionEvent.mock.calls.map(([name, payload]) => [name, payload]))
-      .toEqual(events);
+    expect(analyticsEmitter.onCompanionEvent.mock.calls.map(([name]) => name))
+      .toEqual(events.map(([name]) => name));
+    expect(analyticsEmitter.onCompanionEvent).toHaveBeenNthCalledWith(6, 'companion:review_round', {
+      step: 'implement',
+      companion: 'security-reviewer',
+      trigger: 'quiet',
+      digest: 'digest-2',
+      changedLines: 12,
+      findingCount: 1,
+    });
+    expect(JSON.stringify(eventSink.mock.calls)).not.toContain('candidate-private-detail');
+    expect(JSON.stringify(analyticsEmitter.onCompanionEvent.mock.calls)).not.toContain('candidate-private-detail');
     expect(out.info.mock.calls.map(([message]) => message)).toEqual([
       'Companion start for step "implement"',
       'Companion pool_selected for step "implement"',
@@ -2072,4 +2204,5 @@ describe('bindWorkflowExecutionEvents', () => {
       'Companion complete for step "implement"',
     ]);
   });
+
 });

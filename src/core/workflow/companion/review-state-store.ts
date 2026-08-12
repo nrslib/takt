@@ -15,6 +15,7 @@ import {
 import { appendCompanionMailboxRecords } from './mailbox-projection.js';
 import type { CompanionLoopDecision } from './terminal-decision.js';
 import type { CompanionReviewRequest } from './review-queue.js';
+import type { ModeratorResult } from './moderator.js';
 
 interface CompanionReviewState {
   mailbox: CompanionMailbox;
@@ -27,6 +28,17 @@ export interface CompanionReviewOwnerOperation {
   readonly ownerName: string;
   readonly path: string;
   readonly result: CompanionReviewOutput;
+}
+
+export interface CompanionReviewAuditSnapshot {
+  readonly reviewerResult: CompanionReviewOutput;
+  readonly accepted: CompanionReviewOutput;
+  readonly moderator?: {
+    readonly name: string;
+    readonly invoked: boolean;
+    readonly reason?: 'reviewer_result_empty' | 'not_configured';
+    readonly result?: ModeratorResult;
+  };
 }
 
 export interface CompanionReviewOperation {
@@ -42,6 +54,7 @@ export interface CompanionReviewOperation {
   readonly findingEvents: readonly CompanionFindingEvent[];
   readonly attemptedFindingEvents: ReadonlySet<string>;
   readonly roundDecision?: CompanionLoopDecision;
+  readonly audit?: CompanionReviewAuditSnapshot;
 }
 
 export interface CompanionFindingEvent {
@@ -349,6 +362,7 @@ function cloneOperationInput(
       path: owner.path,
       result: cloneReviewOutput(owner.result),
     })),
+    ...(operation.audit === undefined ? {} : { audit: cloneAuditSnapshot(operation.audit) }),
   };
 }
 
@@ -362,6 +376,26 @@ function cloneOperation(operation: CompanionReviewOperation): CompanionReviewOpe
     ...(operation.roundDecision === undefined
       ? {}
       : { roundDecision: cloneDecision(operation.roundDecision) }),
+  };
+}
+
+function cloneAuditSnapshot(audit: CompanionReviewAuditSnapshot): CompanionReviewAuditSnapshot {
+  return {
+    reviewerResult: cloneReviewOutput(audit.reviewerResult),
+    accepted: cloneReviewOutput(audit.accepted),
+    ...(audit.moderator === undefined ? {} : {
+      moderator: {
+        name: audit.moderator.name,
+        invoked: audit.moderator.invoked,
+        ...(audit.moderator.reason === undefined ? {} : { reason: audit.moderator.reason }),
+        ...(audit.moderator.result === undefined ? {} : {
+          result: {
+            findings: audit.moderator.result.findings.map((finding) => ({ ...finding })),
+            updates: audit.moderator.result.updates.map((update) => ({ ...update })),
+          },
+        }),
+      },
+    }),
   };
 }
 

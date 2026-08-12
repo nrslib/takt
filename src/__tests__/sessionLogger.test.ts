@@ -41,7 +41,11 @@ describe('SessionLogger', () => {
       trigger: 'quiet',
       digest: 'digest-2',
       changedLines: 12,
-      findingCount: 2,
+      findingCount: 0,
+      reviewerFindings: [],
+      reviewerUpdates: [],
+      acceptedFindings: [],
+      acceptedUpdates: [],
     });
     logger.onCompanionQueueCoalesced({
       step: 'implement',
@@ -73,7 +77,7 @@ describe('SessionLogger', () => {
         trigger: 'quiet',
         digest: 'digest-2',
         changedLines: 12,
-        findingCount: 2,
+        findingCount: 0,
       }),
       expect.objectContaining({
         type: 'companion_queue_coalesced',
@@ -81,6 +85,112 @@ describe('SessionLogger', () => {
         replacement: expect.objectContaining({ digest: 'digest-2' }),
       }),
     ]));
+  });
+
+  it('Companion の実呼び出し、採否結果、skip理由を run NDJSON に永続化する', () => {
+    const logsDir = createTempLogsDir();
+    const ndjsonPath = initNdjsonLog('session-companion-audit', 'task', 'workflow', { logsDir });
+    const logger = new SessionLogger(ndjsonPath, false);
+
+    logger.onCompanionCall({
+      step: 'implement',
+      agent: 'security-reviewer',
+      purpose: 'reviewer',
+      attempt: 1,
+      status: 'completed',
+      provider: 'mock',
+      model: 'mock-model',
+      systemPrompt: 'system token=super-secret',
+      prompt: 'prompt password=super-secret',
+      promptResolved: true,
+      response: {
+        persona: 'security-reviewer',
+        status: 'done',
+        content: 'review response',
+        structuredOutput: {
+          findings: [{ severity: 'must_fix', file: 'src/a.ts', line: 1, finding: 'candidate' }],
+          updates: [],
+          apiKey: 'sk-companion-actual-secret',
+          nested: { accessToken: 'nested-access-token-value' },
+        },
+        sessionId: 'provider-session-1',
+        providerUsage: { inputTokens: 10, outputTokens: 2, usageMissing: false },
+        timestamp: new Date('2026-08-13T00:00:00.000Z'),
+      },
+    });
+    logger.onCompanionReviewRound({
+      step: 'implement',
+      companion: 'security-reviewer',
+      trigger: 'completion',
+      digest: 'digest-1',
+      changedLines: 4,
+      reviewerFindings: [{
+        severity: 'must_fix',
+        file: 'src/a.ts',
+        line: 1,
+        finding: 'candidate',
+      }],
+      reviewerUpdates: [],
+      moderator: {
+        name: 'moderator',
+        invoked: true,
+        decisions: [{ action: 'accept', sourceIndex: 0 }],
+      },
+      acceptedFindings: [{
+        severity: 'must_fix',
+        file: 'src/a.ts',
+        line: 1,
+        finding: 'candidate',
+      }],
+      acceptedUpdates: [],
+      findingCount: 1,
+    });
+    logger.onCompanionReviewSkipped({
+      step: 'implement',
+      companion: 'security-reviewer',
+      phase: 'live',
+      reason: 'unchanged_digest',
+      observedGeneration: 3,
+    });
+
+    const records = readFileSync(ndjsonPath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map(parseNdjsonRecord);
+    const call = records.find((record) => record.type === 'companion_call');
+    const round = records.find((record) => (
+      record.type === 'companion_review_round' && record.digest === 'digest-1'
+    ));
+    const skipped = records.find((record) => record.type === 'companion_review_skipped');
+
+    expect(call).toMatchObject({
+      purpose: 'reviewer',
+      attempt: 1,
+      status: 'completed',
+      provider: 'mock',
+      sessionIdAvailable: true,
+      sessionId: 'provider-session-1',
+      response: 'review response',
+      structuredOutput: expect.stringContaining('candidate'),
+      promptResolved: true,
+      usage: expect.objectContaining({ inputTokens: 10, outputTokens: 2, usageMissing: false }),
+      systemPrompt: expect.stringContaining('[REDACTED]'),
+      prompt: expect.stringContaining('[REDACTED]'),
+    });
+    expect(call?.type).toBe('companion_call');
+    expect(call?.structuredOutput).not.toContain('sk-companion-actual-secret');
+    expect(call?.structuredOutput).not.toContain('nested-access-token-value');
+    expect(round).toMatchObject({
+      reviewerFindings: [expect.objectContaining({ finding: 'candidate' })],
+      moderator: expect.objectContaining({ invoked: true }),
+      acceptedFindings: [expect.objectContaining({ finding: 'candidate' })],
+      findingCount: 1,
+    });
+    expect(skipped).toMatchObject({
+      phase: 'live',
+      reason: 'unchanged_digest',
+      observedGeneration: 3,
+    });
   });
 
   it.each([

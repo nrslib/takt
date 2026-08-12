@@ -313,6 +313,50 @@ export interface CompanionQueueAuditEntry {
   readonly observedGeneration: number;
 }
 
+export type CompanionCallPurpose = 'selector' | 'reviewer' | 'moderator' | 'judge';
+export type CompanionCallStatus = 'completed' | 'failed';
+export type CompanionReviewPhase = 'initial' | 'live' | 'fix' | 'completion';
+export type CompanionReviewSkipReason =
+  | 'companion_disabled'
+  | 'companion_not_configured'
+  | 'companion_runtime_unavailable'
+  | 'selector_empty'
+  | 'empty_diff'
+  | 'unchanged_digest'
+  | 'below_minimum_changed_lines';
+export type CompanionReviewZeroReason =
+  | 'reviewer_returned_no_findings'
+  | 'moderator_not_invoked_for_empty_reviewer_result'
+  | 'moderator_rejected_or_merged_all_findings'
+  | 'no_new_finding_records';
+
+export interface CompanionModeratorDecisionAudit {
+  readonly action: 'accept' | 'reject' | 'merge' | 'downgrade';
+  readonly sourceIndex: number;
+  readonly severity?: 'must_fix' | 'should_fix' | 'nit';
+  readonly finding?: string;
+  readonly targetId?: string;
+}
+
+export interface CompanionAcceptedFindingAudit {
+  readonly severity: 'must_fix' | 'should_fix' | 'nit';
+  readonly file: string;
+  readonly line: number;
+  readonly finding: string;
+}
+
+export interface CompanionAcceptedUpdateAudit {
+  readonly id: string;
+  readonly status: 'resolved' | 'unresolved' | 'wontfix_accepted';
+}
+
+export interface CompanionModeratorAudit {
+  readonly name: string;
+  readonly invoked: boolean;
+  readonly reason?: 'reviewer_result_empty' | 'not_configured';
+  readonly decisions: readonly CompanionModeratorDecisionAudit[];
+}
+
 export interface WorkflowEvents {
   'workflow_call:start': (lifecycle: WorkflowCallLifecycle) => void;
   'workflow_call:complete': (lifecycle: WorkflowCallCompleteLifecycle) => void;
@@ -381,12 +425,44 @@ export interface WorkflowEvents {
     digest: string;
     changedLines: number;
     findingCount: number;
+    reviewerFindings: readonly CompanionAcceptedFindingAudit[];
+    reviewerUpdates: readonly CompanionAcceptedUpdateAudit[];
+    moderator?: CompanionModeratorAudit;
+    acceptedFindings: readonly CompanionAcceptedFindingAudit[];
+    acceptedUpdates: readonly CompanionAcceptedUpdateAudit[];
+    zeroReason?: CompanionReviewZeroReason;
+    runPathNamespace?: string[];
   }) => void;
   'companion:queue_coalesced': (payload: {
     step: string;
     companion: string;
     replaced: CompanionQueueAuditEntry;
     replacement: CompanionQueueAuditEntry;
+    runPathNamespace?: string[];
+  }) => void;
+  'companion:call': (payload: {
+    step: string;
+    agent: string;
+    purpose: CompanionCallPurpose;
+    attempt: number;
+    status: CompanionCallStatus;
+    provider: ProviderType;
+    model?: string;
+    systemPrompt?: string;
+    prompt?: string;
+    promptResolved: boolean;
+    runPathNamespace?: string[];
+    response?: AgentResponse;
+    error?: string;
+  }) => void;
+  'companion:review_skipped': (payload: {
+    step: string;
+    companion?: string;
+    phase: CompanionReviewPhase;
+    reason: CompanionReviewSkipReason;
+    fixRound?: number;
+    observedGeneration?: number;
+    runPathNamespace?: string[];
   }) => void;
   'step:blocked': (step: WorkflowStep, response: AgentResponse) => void;
   'step:rate_limited': (step: WorkflowStep, response: AgentResponse, rateLimitInfo: AgentResponse['rateLimitInfo']) => void;

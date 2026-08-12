@@ -105,6 +105,19 @@ import {
 
 const log = createLogger('step-executor');
 
+function emitCompanionReviewSkippedSafely(
+  emitEvent: StepExecutorDeps['emitEvent'],
+  payload: Record<string, unknown>,
+): void {
+  try {
+    emitEvent('companion:review_skipped', payload);
+  } catch (error) {
+    log.warn('Companion skip audit could not be emitted; continuing workflow', {
+      error: safeExternalErrorMessage(error),
+    });
+  }
+}
+
 function requireActiveCompanionState(
   state: WorkflowState,
   stepName: string,
@@ -866,6 +879,23 @@ export class StepExecutor {
 
     // Phase 1: main execution (Write excluded if step has report)
     let companionRuntime: CompanionStepRuntime | undefined;
+    if (isNormalAgentWorkflowStep(executableStep)) {
+      if (!this.deps.companionEnabled && executableStep.companion !== undefined) {
+        emitCompanionReviewSkippedSafely(this.deps.emitEvent, {
+          step: step.name,
+          phase: 'initial',
+          reason: 'companion_disabled',
+          runPathNamespace: [...this.deps.getRunPathNamespace()],
+        });
+      } else if (this.deps.companionEnabled && executableStep.companion === undefined) {
+        emitCompanionReviewSkippedSafely(this.deps.emitEvent, {
+          step: step.name,
+          phase: 'initial',
+          reason: 'companion_not_configured',
+          runPathNamespace: [...this.deps.getRunPathNamespace()],
+        });
+      }
+    }
     if (
       this.deps.companionEnabled
       && isNormalAgentWorkflowStep(executableStep)
@@ -927,6 +957,12 @@ export class StepExecutor {
           completionFailure: true,
           reason,
         };
+        emitCompanionReviewSkippedSafely(this.deps.emitEvent, {
+          step: step.name,
+          phase: 'initial',
+          reason: 'companion_runtime_unavailable',
+          runPathNamespace: [...this.deps.getRunPathNamespace()],
+        });
         log.warn(
           `Companion startup failed for "${step.name}"; main step will continue without completion review: ${reason}`,
         );

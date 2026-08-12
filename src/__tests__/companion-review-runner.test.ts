@@ -68,6 +68,152 @@ describe('CT-COMP-06 and CT-COMP-11 structured internal agent execution', () => 
     },
   );
 
+  it('should record the resolved prompt, response, session, and attempt outcome for each internal call', async () => {
+    const recordCall = vi.fn();
+    const call = vi.fn(async (
+      _systemPrompt: string,
+      _prompt: string,
+      _schema: Record<string, unknown>,
+      options: { onPromptResolved?: (parts: { systemPrompt: string; userInstruction: string }) => void },
+    ) => {
+      options.onPromptResolved?.({
+        systemPrompt: 'resolved system prompt',
+        userInstruction: 'resolved user prompt',
+      });
+      return {
+        ...response('done'),
+        sessionId: 'provider-session-1',
+      };
+    });
+
+    await executeCompanionStructuredAgent({
+      purpose: 'selector',
+      agentName: 'companion-selector',
+      systemPrompt: 'system',
+      prompt: 'prompt',
+      outputSchema: { type: 'object' },
+      cwd: '/worktree',
+      projectCwd: '/project',
+      language: 'en',
+      resolution: { provider: 'mock', model: 'mock-model', providerOptions: {} },
+      call,
+      recordUsage: vi.fn(),
+      recordCall,
+    });
+
+    expect(call.mock.calls[0]?.[3]).toMatchObject({ sessionId: undefined });
+    expect(recordCall).toHaveBeenCalledWith(expect.objectContaining({
+      purpose: 'selector',
+      agentName: 'companion-selector',
+      attempt: 1,
+      status: 'completed',
+      provider: 'mock',
+      model: 'mock-model',
+      systemPrompt: 'resolved system prompt',
+      prompt: 'resolved user prompt',
+      promptResolved: true,
+      response: expect.objectContaining({
+        sessionId: 'provider-session-1',
+        structuredOutput: { findings: [], updates: [] },
+      }),
+    }));
+  });
+
+  it('should record failed attempts when the provider rejects before returning a response', async () => {
+    const recordCall = vi.fn();
+    const failure = new Error('provider failed');
+
+    await expect(executeCompanionStructuredAgent({
+      purpose: 'reviewer',
+      agentName: 'security-reviewer',
+      systemPrompt: 'system',
+      prompt: 'prompt',
+      outputSchema: { type: 'object' },
+      cwd: '/worktree',
+      projectCwd: '/project',
+      language: 'en',
+      resolution: { provider: 'mock' },
+      call: vi.fn().mockRejectedValue(failure),
+      recordUsage: vi.fn(),
+      recordCall,
+    })).rejects.toBe(failure);
+
+    expect(recordCall).toHaveBeenCalledTimes(2);
+    expect(recordCall).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      purpose: 'reviewer',
+      attempt: 1,
+      status: 'failed',
+    }));
+    expect(recordCall).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      purpose: 'reviewer',
+      attempt: 2,
+      status: 'failed',
+    }));
+  });
+
+  it('should retain a provider response when persisting its call audit fails', async () => {
+    const call = vi.fn().mockResolvedValue(response('done'));
+    const recordCall = vi.fn(() => {
+      throw new Error('audit write failed');
+    });
+    const recordUsage = vi.fn();
+    const onCallAuditPersistenceFailure = vi.fn();
+
+    const result = await executeCompanionStructuredAgent({
+      purpose: 'reviewer',
+      agentName: 'security-reviewer',
+      systemPrompt: 'system',
+      prompt: 'prompt',
+      outputSchema: { type: 'object' },
+      cwd: '/worktree',
+      projectCwd: '/project',
+      language: 'en',
+      resolution: { provider: 'mock' },
+      call,
+      recordUsage,
+      recordCall,
+      onCallAuditPersistenceFailure,
+    });
+
+    expect(result.status).toBe('done');
+    expect(call).toHaveBeenCalledOnce();
+    expect(recordCall).toHaveBeenCalledOnce();
+    expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+    expect(onCallAuditPersistenceFailure).toHaveBeenCalledWith(expect.objectContaining({
+      purpose: 'reviewer',
+      agentName: 'security-reviewer',
+      attempt: 1,
+      error: expect.any(Error),
+    }));
+  });
+
+  it('should omit prompts when the provider fails before prompt resolution', async () => {
+    const recordCall = vi.fn();
+    const failure = new Error('capability resolution failed');
+
+    await expect(executeCompanionStructuredAgent({
+      purpose: 'selector',
+      agentName: 'companion-selector',
+      systemPrompt: 'guarded system prompt',
+      prompt: 'initial prompt',
+      outputSchema: { type: 'object' },
+      cwd: '/worktree',
+      projectCwd: '/project',
+      language: 'en',
+      resolution: { provider: 'mock' },
+      call: vi.fn().mockRejectedValue(failure),
+      recordUsage: vi.fn(),
+      recordCall,
+    })).rejects.toBe(failure);
+
+    expect(recordCall).toHaveBeenCalledWith(expect.objectContaining({
+      promptResolved: false,
+      status: 'failed',
+    }));
+    expect(recordCall.mock.calls[0]?.[0]).not.toHaveProperty('systemPrompt');
+    expect(recordCall.mock.calls[0]?.[0]).not.toHaveProperty('prompt');
+  });
+
   it('should record failed usage before propagating an internal call failure to the fail-soft boundary', async () => {
     const failure = new Error('provider failed');
     const recordUsage = vi.fn();

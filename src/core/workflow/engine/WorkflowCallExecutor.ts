@@ -456,6 +456,8 @@ export class WorkflowCallExecutor {
       'companion:complete',
       'companion:review_round',
       'companion:queue_coalesced',
+      'companion:call',
+      'companion:review_skipped',
       'step:blocked',
       'step:rate_limited',
       'step:user_input',

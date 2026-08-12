@@ -19,7 +19,8 @@ import {
   sanitizeTerminalTextWithinBytes,
 } from '../../../shared/utils/text.js';
 import { isDebugEnabled, isVerboseConsole } from '../../../shared/utils/debug.js';
-import { notifyWarning, playWarningSound } from '../../../shared/utils/index.js';
+import { createLogger, notifyWarning, playWarningSound } from '../../../shared/utils/index.js';
+import { safeExternalErrorMessage } from '../../../shared/utils/safeExternalErrorMessage.js';
 import type { ExceededInfo, WorkflowExecutionEvent, WorkflowExecutionOptions } from './types.js';
 import type { AnalyticsStepContext } from './analyticsEmitter.js';
 import { detectStepType, isQuietMode } from './workflowExecutionBootstrap.js';
@@ -135,6 +136,7 @@ type WorkflowTerminalIntent =
     };
 
 type OutInfo = { info: (line: string) => void };
+const log = createLogger('workflow-execution-events');
 
 function resolveStepProviderContext(
   providerInfo: StepProviderInfo,
@@ -409,12 +411,28 @@ export function bindWorkflowExecutionEvents(
   let preparedTerminalPublication:
     WorkflowTerminalPublicationPayload | undefined;
   let confirmationSequence = 0;
+  let companionAuditWriteFailureReported = false;
   const nextConfirmationId = (): string => {
     confirmationSequence += 1;
     return `confirmation-${confirmationSequence}`;
   };
   const onEventSinkFailure = (error: unknown): void => {
     finalizationIssues.push(new RunLiveDeliveryError(error));
+  };
+  const persistCompanionAudit = (
+    recordType: 'companion_call' | 'companion_review_round' | 'companion_review_skipped',
+    persist: () => void,
+  ): void => {
+    try {
+      persist();
+    } catch (error) {
+      if (companionAuditWriteFailureReported) return;
+      companionAuditWriteFailureReported = true;
+      log.warn('Companion audit record could not be persisted; continuing workflow', {
+        recordType,
+        error: safeExternalErrorMessage(error),
+      });
+    }
   };
   const syncLatestResumePoint = (): void => {
     if (!canReadResumePoint()) {
@@ -843,11 +861,22 @@ export function bindWorkflowExecutionEvents(
     );
   });
   deps.engine.on('companion:review_round', (payload) => {
-    deps.analyticsEmitter.onCompanionEvent('companion:review_round', payload);
-    deps.sessionLogger.onCompanionReviewRound(payload);
+    const summary = {
+      step: payload.step,
+      companion: payload.companion,
+      trigger: payload.trigger,
+      digest: payload.digest,
+      changedLines: payload.changedLines,
+      findingCount: payload.findingCount,
+      ...(payload.runPathNamespace === undefined
+        ? {}
+        : { runPathNamespace: payload.runPathNamespace }),
+    };
+    deps.analyticsEmitter.onCompanionEvent('companion:review_round', summary);
+    persistCompanionAudit('companion_review_round', () => deps.sessionLogger.onCompanionReviewRound(payload));
     emitWorkflowExecutionEvent(
       deps.eventSink,
-      { type: 'companion', action: 'review_round', ...payload },
+      { type: 'companion', action: 'review_round', ...summary },
       onEventSinkFailure,
       eventSinkDispatchState,
     );
@@ -861,6 +890,12 @@ export function bindWorkflowExecutionEvents(
       onEventSinkFailure,
       eventSinkDispatchState,
     );
+  });
+  deps.engine.on('companion:call', (payload) => {
+    persistCompanionAudit('companion_call', () => deps.sessionLogger.onCompanionCall(payload));
+  });
+  deps.engine.on('companion:review_skipped', (payload) => {
+    persistCompanionAudit('companion_review_skipped', () => deps.sessionLogger.onCompanionReviewSkipped(payload));
   });
 
   deps.engine.on('workflow:complete', (workflowState) => {

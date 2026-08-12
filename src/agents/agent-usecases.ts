@@ -39,6 +39,7 @@ export interface ResolvedInternalAgentOptions {
   readonly language?: Language;
   readonly childProcessEnv?: Readonly<Record<string, string>>;
   readonly sessionId?: string;
+  readonly onPromptResolved?: RunAgentOptions['onPromptResolved'];
   readonly resolution: {
     readonly provider: ProviderType;
     readonly model: string | undefined;
@@ -63,6 +64,7 @@ export async function executeIsolatedStructuredInternalAgent(
     ...(resolution.provider === 'opencode' ? { executionProfile: 'isolated-structured' } : {}),
     ...(agentName === undefined ? {} : { internalAgentName: agentName }),
     sessionId: undefined,
+    onPromptResolved: options.onPromptResolved,
     internalSystemPrompt: systemPrompt,
     internalAgentIsolation: 'strict-readonly',
     allowedTools: [],

@@ -250,7 +250,9 @@ describe('companion StepExecutor lifecycle', () => {
     const companionDiffReader = createCompanionDiffReader();
     mockSuccessfulImplementer();
     const state = makeState();
-    const emitEvent = vi.fn();
+    const emitEvent = vi.fn(() => {
+      throw new Error('audit listener unavailable');
+    });
     const deps = createDeps({
       cwd,
       runPaths,
@@ -273,9 +275,11 @@ describe('companion StepExecutor lifecycle', () => {
     expect(companionDiffReader.readBaselineSha).not.toHaveBeenCalled();
     expect(executeAgent).toHaveBeenCalledOnce();
     expect(executeAgent.mock.calls[0]?.[1]).not.toContain('mailbox');
-    expect(emitEvent.mock.calls.filter(([event]) => (
-      typeof event === 'string' && event.startsWith('companion:')
-    ))).toHaveLength(0);
+    expect(emitEvent).toHaveBeenCalledWith('companion:review_skipped', expect.objectContaining({
+      step: 'implement',
+      phase: 'initial',
+      reason: 'companion_disabled',
+    }));
     expect(vi.mocked(deps.recordSynthesizedAgentUsage).mock.calls.filter(([stepName]) => (
       typeof stepName === 'string' && stepName.startsWith('companion:')
     ))).toHaveLength(0);
@@ -286,12 +290,13 @@ describe('companion StepExecutor lifecycle', () => {
     mockSuccessfulImplementer();
     const state = makeState();
 
+    const emitEvent = vi.fn();
     const result = await new StepExecutor(createDeps({
       cwd,
       runPaths,
       companionDiffReader: createFailingStartupDiffReader(),
       abortSignal: abortController.signal,
-      emitEvent: vi.fn(),
+      emitEvent,
     })).runNormalStep(
       createCompanionStep([makeRule('Implementation is complete', 'COMPLETE')]),
       state,
@@ -308,6 +313,10 @@ describe('companion StepExecutor lifecycle', () => {
       completionFailure: true,
       openMustFixCount: 0,
     });
+    expect(emitEvent).toHaveBeenCalledWith('companion:review_skipped', expect.objectContaining({
+      phase: 'initial',
+      reason: 'companion_runtime_unavailable',
+    }));
   });
 
   it('should continue when required companion runtime configuration is unavailable', async () => {
