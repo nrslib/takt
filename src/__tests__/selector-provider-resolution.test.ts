@@ -318,6 +318,7 @@ describe('workflow selector resolution', () => {
       projectCwd: projectDir,
       lookupCwd: projectDir,
       ...options,
+      companionEnabled: options.companionEnabled ?? runtimeEnvironment.companionEnabled,
       providerEnvironment: runtimeEnvironment.providerEnvironment,
       providerConfigMode: runtimeEnvironment.providerConfigMode,
     });

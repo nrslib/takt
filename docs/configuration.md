@@ -1243,14 +1243,14 @@ provider:
         profile: review
 ```
 
-| Provider | Strict isolated companion execution | Implementer tool events |
+| Provider | Isolated structured companion execution | Implementer tool events |
 |---|---:|---:|
 | `claude-sdk` | Yes | Live |
 | `codex` | Yes | Live |
 | `claude` (headless) | Yes | Live |
 | `claude-terminal` | Yes | Replayed after the turn |
 | `mock` | Yes | Scenario-dependent |
-| `opencode` | No | Live |
+| `opencode` | Yes | Live |
 | `pi` | No | Live |
 | `cursor`, `copilot`, `kiro` | No | Unavailable |
 

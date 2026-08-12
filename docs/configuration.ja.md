@@ -1232,14 +1232,14 @@ provider:
         profile: review
 ```
 
-| Provider | Companion の strict 隔離実行 | 実装エージェントの tool event |
+| Provider | Companion の隔離構造化実行 | 実装エージェントの tool event |
 |---|---:|---:|
 | `claude-sdk` | 可 | ライブ |
 | `codex` | 可 | ライブ |
 | `claude`（headless） | 可 | ライブ |
 | `claude-terminal` | 可 | ターン後に再生 |
 | `mock` | 可 | scenario に依存 |
-| `opencode` | 不可 | ライブ |
+| `opencode` | 可 | ライブ |
 | `pi` | 不可 | ライブ |
 | `cursor`、`copilot`、`kiro` | 不可 | 利用不可 |
 
