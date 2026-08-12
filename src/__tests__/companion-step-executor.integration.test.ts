@@ -159,14 +159,12 @@ function createDeps(input: {
     getRetryNote: () => undefined,
     getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
     structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
-    findingManagerAuthority: { canMarkFindings: () => false },
     executionProvider: 'mock' as const,
     executionModel: undefined,
     emitEvent: input.emitEvent,
     recordSynthesizedAgentUsage: vi.fn(),
     getRunId: () => 'test-run',
     getRunPathNamespace: () => [],
-    getFindingCallNamespace: () => '',
     companionEnabled: input.companionEnabled ?? true,
     companionDefinitions: {
       'security-reviewer': {

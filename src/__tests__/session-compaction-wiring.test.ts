@@ -151,7 +151,6 @@ function makeParallelDeps(
     updateMaxSteps: vi.fn(),
     setActiveResumePoint: vi.fn(),
     getRunId: () => 'test-run',
-    getFindingCallNamespace: () => '',
     structuredCaller: {
       evaluateCondition: vi.fn(), judgeStatus: vi.fn(), decomposeTask: vi.fn(), requestMoreParts: vi.fn(),
     },
@@ -202,7 +201,6 @@ function makeNormalDeps(
     emitEvent: vi.fn(),
     recordSynthesizedAgentUsage: vi.fn(),
     getRunId: () => 'test-run',
-    getFindingCallNamespace: () => '',
     executionProvider: 'opencode',
     executionModel: 'opencode/big-pickle',
     ...overrides,

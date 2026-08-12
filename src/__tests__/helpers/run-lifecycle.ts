@@ -97,11 +97,6 @@ export function createWorkflowRunLifecycleCompositionTestDouble(
             };
           },
           bindExecution: async () => ({
-            findingAuthorityResolver: {
-              resolve: () => {
-                throw new Error('Mock engine must not resolve findings');
-              },
-            },
             execution: {
               run: async (operation) => operation(new AbortController()),
             },

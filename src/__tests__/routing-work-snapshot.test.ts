@@ -84,7 +84,7 @@ describe('buildRoutingWorkSnapshot', () => {
     expect(buildRoutingWorkSnapshot(input)).toStrictEqual(buildRoutingWorkSnapshot(input));
   });
 
-  it('keeps the bounded projection stable when omitted task text changes', () => {
+  it('keeps the bounded projection stable but changes the full-work fingerprint when omitted task text changes', () => {
     const createSnapshot = (tail: string) => buildRoutingWorkSnapshot({
       goal: 'Complete all requested work',
       userInputs: Array.from({ length: 100 }, (_, index) => (
@@ -97,7 +97,8 @@ describe('buildRoutingWorkSnapshot', () => {
 
     expect(first.remainingWork).toHaveLength(64);
     expect(normalizeRoutingWorkSnapshot(first).remainingWorkOmittedCount).toBe(36);
-    expect(createRoutingWorkFingerprint(replacement)).toBe(createRoutingWorkFingerprint(first));
+    expect(replacement.remainingWork).toEqual(first.remainingWork);
+    expect(createRoutingWorkFingerprint(replacement)).not.toBe(createRoutingWorkFingerprint(first));
   });
 
   it('keeps snapshots and their local identity immutable', () => {

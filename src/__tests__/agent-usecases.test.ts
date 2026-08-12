@@ -14,7 +14,7 @@ import {
   type DecomposeTaskOptions,
 } from '../agents/agent-usecases.js';
 import { runTagJudgeStage } from '../agents/judge-status-usecase.js';
-import { requestDecompositionRawResponse } from '../agents/decompose-task-usecase.js';
+import { requestMorePartsRawResponse } from '../agents/decompose-task-usecase.js';
 import { loadEvaluationSchema, loadJudgmentSchema } from '../infra/resources/schema-loader.js';
 import { OpenCodeProvider } from '../infra/providers/opencode.js';
 
@@ -921,7 +921,7 @@ describe('agent-usecases', () => {
     expect(onAgentError).not.toHaveBeenCalled();
   });
 
-  it('raw decomposition は中断後の遅延応答を上位境界へ返し、公開通知だけを抑止する', async () => {
+  it('raw follow-up は中断後の遅延応答を上位境界へ返し、公開通知だけを抑止する', async () => {
     const abortController = new AbortController();
     const onAgentResponse = vi.fn();
     let resolveRunAgent: ((response: ReturnType<typeof doneResponse>) => void) | undefined;
@@ -929,11 +929,17 @@ describe('agent-usecases', () => {
       resolveRunAgent = resolve;
     }));
 
-    const result = requestDecompositionRawResponse('instruction', 2, {
-      cwd: '/repo',
-      abortSignal: abortController.signal,
-      onAgentResponse,
-    });
+    const result = requestMorePartsRawResponse(
+      'instruction',
+      [],
+      [],
+      {
+        cwd: '/repo',
+        cancellablePartIds: [],
+        abortSignal: abortController.signal,
+        onAgentResponse,
+      },
+    );
     await vi.waitFor(() => expect(runAgent).toHaveBeenCalledOnce());
 
     abortController.abort(new Error('cancelled while waiting'));

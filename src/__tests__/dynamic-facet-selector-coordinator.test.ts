@@ -128,7 +128,6 @@ function buildDeps(overrides: Partial<DynamicFacetSelectorCoordinatorDeps> = {})
     getReportDirectory: () => '.takt/reports',
     getReportNames: () => [],
     getCwd: () => '/tmp/project',
-    getUnresolvedFindings: () => '',
     inputReader: {
       readInputs: vi.fn().mockResolvedValue({ reports: '', workingTreeDiff: '' }),
     } as unknown as DynamicFacetSelectorCoordinatorDeps['inputReader'],

@@ -673,13 +673,11 @@ describe('StepExecutor dynamic facet integration', () => {
         structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
         dynamicFacetSelectorCoordinator: coordinator as unknown as StepExecutorDeps['dynamicFacetSelectorCoordinator'],
         getFacetPool,
-        findingManagerAuthority: { canMarkFindings: () => false } as unknown as StepExecutorDeps['findingManagerAuthority'],
         executionProvider: 'cursor',
         executionModel: undefined,
         emitEvent: vi.fn(),
         recordSynthesizedAgentUsage: vi.fn(),
         getRunId: () => 'test-run',
-        getFindingCallNamespace: () => '',
       };
       const executor = new StepExecutor(deps);
       const state = makeState();

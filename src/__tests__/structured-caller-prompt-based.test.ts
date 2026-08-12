@@ -435,11 +435,11 @@ describe('PromptBasedStructuredCaller', () => {
     expect(mockRunAgent.mock.calls[1]?.[1]).toContain('decomposition.parts_invalid');
   });
 
-  it('retries prompt-only raw decomposition transport failures without parsing the response', async () => {
+  it('retries prompt-only follow-up transport failures before parsing the response', async () => {
     const rawResponse = {
       persona: 'leader',
       status: 'done' as const,
-      content: 'not parsed by the raw boundary',
+      content: '```json\n{"done":true,"reasoning":"complete","cancelPartIds":[],"parts":[]}\n```',
       timestamp: new Date(),
     };
     mockRunAgent
@@ -447,22 +447,29 @@ describe('PromptBasedStructuredCaller', () => {
       .mockResolvedValueOnce(rawResponse);
 
     const caller = new PromptBasedStructuredCaller();
-    const promise = caller.requestDecompositionRawResponse(
-      'break down the work',
-      3,
+    const promise = caller.requestMoreParts(
+      'continue the work',
+      [],
+      [],
       {
         cwd: '/tmp/project',
         provider: 'cursor',
         persona: 'team-leader',
+        cancellablePartIds: [],
       },
     );
     await vi.advanceTimersByTimeAsync(RETRY_DELAY_MS);
 
-    await expect(promise).resolves.toBe(rawResponse);
+    await expect(promise).resolves.toEqual({
+      done: true,
+      reasoning: 'complete',
+      cancelPartIds: [],
+      parts: [],
+    });
     expect(mockRunAgent).toHaveBeenCalledTimes(2);
   });
 
-  it('returns a delayed raw response after abort while suppressing its public notification', async () => {
+  it('returns a delayed follow-up result after abort while suppressing its public notification', async () => {
     const abortController = new AbortController();
     const onAgentResponse = vi.fn();
     let resolveRunAgent: ((response: {
@@ -475,13 +482,15 @@ describe('PromptBasedStructuredCaller', () => {
       resolveRunAgent = resolve;
     }));
     const caller = new PromptBasedStructuredCaller();
-    const result = caller.requestDecompositionRawResponse(
-      'break down the work',
-      3,
+    const result = caller.requestMoreParts(
+      'continue the work',
+      [],
+      [],
       {
         cwd: '/tmp/project',
         provider: 'cursor',
         persona: 'team-leader',
+        cancellablePartIds: [],
         abortSignal: abortController.signal,
         onAgentResponse,
       },
@@ -492,12 +501,17 @@ describe('PromptBasedStructuredCaller', () => {
     const response = {
       persona: 'leader',
       status: 'done' as const,
-      content: 'late raw response',
+      content: '```json\n{"done":true,"reasoning":"complete","cancelPartIds":[],"parts":[]}\n```',
       timestamp: new Date(),
     };
     resolveRunAgent?.(response);
 
-    await expect(result).resolves.toBe(response);
+    await expect(result).resolves.toEqual({
+      done: true,
+      reasoning: 'complete',
+      cancelPartIds: [],
+      parts: [],
+    });
     expect(onAgentResponse).not.toHaveBeenCalled();
   });
 
