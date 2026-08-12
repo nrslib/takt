@@ -18,7 +18,7 @@
 verifier の一覧は未完了範囲の例であり、今回の修正範囲の上限ではありません。列挙された箇所だけを修正して再提出しないでください。計画の前提、不変条件、修正境界、方法、または証拠能力を変更しなければ解消できない場合だけ、修正計画の見直しを要求してください。
 
 {{include:instructions/fix-plan-validity}}
-{{include:instructions/fix-family-completion}}
+{{include:instructions/contract-family-fix-retry}}
 
 {{include:instructions/post-edit-self-scan}}
 

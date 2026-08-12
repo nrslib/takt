@@ -13,7 +13,7 @@ Success means completing every fix unit and every completion obligation derived 
 - If task-level requirements or design must change, do not edit; provide evidence and report "Task-level replanning required"
 
 {{include:instructions/fix-plan-validity}}
-{{include:instructions/fix-family-completion}}
+{{include:instructions/contract-family-fix}}
 
 {{include:instructions/post-edit-self-scan}}
 

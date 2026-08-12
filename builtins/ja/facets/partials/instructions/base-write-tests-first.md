@@ -3,6 +3,7 @@ Workflow Contextに示されたReport Directory内のレポートのみ参照し
 
 **重要: プロダクションコードは作成・変更しないでください。テストファイルのみ作成可能です。**
 
+{{include:instructions/contract-family-test-authoring}}
 {{include:instructions/change-contract-traceability}}
 {{include:instructions/test-contract-discrimination}}
 

@@ -121,12 +121,7 @@ describe('facet include expansion', () => {
     },
   );
 
-  it.each(['en', 'ja'] as const)('should compose the builtin fix-family contract into fix instructions in %s', (lang) => {
-    const partial = readFileSync(
-      join(getLanguageResourcesDir(lang), 'facets', 'partials', 'instructions', 'fix-family-completion.md'),
-      'utf-8',
-    ).trim();
-
+  it.each(['en', 'ja'] as const)('should compose the builtin fix role into fix instructions in %s', (lang) => {
     for (const instruction of [
       'fix',
       'fix-finding-contract',
@@ -143,8 +138,10 @@ describe('facet include expansion', () => {
         { projectDir: tempDir, lang },
       );
 
-      expect(content).toContain(partial);
-      expect(content).not.toContain('{{include:instructions/fix-family-completion}}');
+      expect(content).toContain('**Contract family role: `fix`**');
+      expect(content).toContain('**Contract family core**');
+      expect(content).not.toContain('{{include:instructions/contract-family-fix}}');
+      expect(content).not.toContain('{{include:instructions/contract-family-core}}');
     }
   });
 

@@ -1,3 +1,4 @@
+{{include:instructions/contract-family-fix-plan}}
 {{include:instructions/fix-root-cause-analysis}}
 {{include:instructions/fix-plan-validity}}
 

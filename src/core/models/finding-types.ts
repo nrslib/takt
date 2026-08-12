@@ -279,6 +279,8 @@ export interface FindingContractManagerConfig {
   personaDisplayName?: string;
   providerRoutingPersonaKey?: string;
   instruction: string;
+  /** Loader-preserved instruction reference before facet resolution. */
+  instructionRef?: string;
   outputContract: string;
   policyContents?: readonly ResolvedFacetContent[];
   knowledgeContents?: readonly ResolvedFacetContent[];

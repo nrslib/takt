@@ -43,6 +43,7 @@ Small / Medium / Large
 - **Cost impact**: {If applicable}
 ```
 
+{{include:instructions/contract-family-implement}}
 {{include:instructions/post-edit-self-scan}}
 
 **Required output (include headings)**

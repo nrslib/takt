@@ -429,6 +429,7 @@ export function normalizeStepFromRaw(
     edit: step.edit,
     allowGitCommit: step.allow_git_commit ?? inheritedAllowGitCommit ?? false,
     instruction: instruction || '{task}',
+    instructionRef: step.instruction as string | undefined,
     delayBeforeMs: step.delay_before_ms,
     structuredOutput: normalizeStepField(stepPath, ['structured_output', 'schema_ref'], () => resolveStructuredOutput(step, workflowSchemas, {
       projectDir: context?.projectDir ?? workflowDir,

@@ -6,5 +6,5 @@ Determine whether the changed contract and real impact paths contain a CQRS+ES b
 Include the location, broken contract and concrete failure condition, and fix direction in every finding.
 {{include:instructions/review-round-scope}}
 {{include:instructions/review-investigation-discipline}}
-{{include:instructions/review-family-completion}}
+{{include:instructions/contract-family-review-by-mode}}
 {{include:instructions/review-pr-context}}

@@ -1,3 +1,5 @@
+{{include:instructions/contract-family-decomposition-boundary}}
+
 Plan remediation using the latest reviewer reports in the Report Directory as primary information.
 
 {{include:instructions/team-leader-fix-common}}

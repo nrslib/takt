@@ -6,7 +6,7 @@ Report Directory内のレポートを一次情報として参照してくださ�
 
 {{include:instructions/fix-root-cause-analysis}}
 
-{{include:instructions/fix-family-completion}}
+{{include:instructions/contract-family-fix}}
 
 {{include:instructions/post-edit-self-scan}}
 

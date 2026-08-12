@@ -10,6 +10,7 @@ Revise the plan taking that feedback into account.
 
 For small tasks, skip the design section.
 
+{{include:instructions/contract-family-plan-replan}}
 {{include:instructions/change-contract-traceability}}
 
 {{include:instructions/requirement-source-discipline}}

@@ -5,6 +5,7 @@ Independently verify whether the implementation fulfills the fix plan. Do not ed
 - Fix report: {report:fix-report.md}
 
 {{include:instructions/fix-plan-validity}}
+{{include:instructions/contract-family-fix-verifier}}
 
 **Verification procedure:**
 1. Inspect the latest reviewer reports in the Report Directory to confirm the findings and acceptance criteria covered by the plan

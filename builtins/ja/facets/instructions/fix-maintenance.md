@@ -9,7 +9,7 @@ Report Directory内のレビューレポートを確認し、指摘事項を変�
 
 {{include:instructions/fix-root-cause-analysis}}
 
-{{include:instructions/fix-family-completion}}
+{{include:instructions/contract-family-fix}}
 
 {{include:instructions/post-edit-self-scan}}
 

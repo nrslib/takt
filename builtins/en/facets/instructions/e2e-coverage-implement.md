@@ -1,3 +1,5 @@
+{{include:instructions/contract-family-test-authoring}}
+
 Implement missing E2E tests based on the test case list.
 
 **Important:** Refer to the test plan report: {report:01-e2e-coverage-plan.md}

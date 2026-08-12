@@ -8,6 +8,7 @@
  */
 
 import type { WorkflowStep } from '../../models/types.js';
+import { isReviewMode } from '../../models/review-mode.js';
 import type { InstructionContext } from './instruction-context.js';
 import { resolveWorkflowStateReference } from '../state/workflow-state-access.js';
 import { REPORT_REFERENCE_PATTERN, resolveReportReference } from './report-reference.js';
@@ -31,6 +32,9 @@ export function replaceTemplatePlaceholders(
     const variables = context.workflowCallVars;
     if (variables === undefined || !Object.hasOwn(variables, name)) {
       return 'unspecified';
+    }
+    if (name === 'review_mode' && !isReviewMode(variables[name])) {
+      return 'mode_unknown';
     }
     return escapeTemplateChars(String(variables[name]));
   });

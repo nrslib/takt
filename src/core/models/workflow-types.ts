@@ -273,6 +273,8 @@ interface WorkflowStepBase {
   providerRoutingPersonaKey?: string;
   tags?: string[];
   instruction: string;
+  /** Loader-preserved instruction reference or inline declaration before facet resolution. */
+  instructionRef?: string;
   delayBeforeMs?: number;
   rules?: WorkflowRule[];
   passPreviousResponse?: boolean;

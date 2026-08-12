@@ -9,6 +9,7 @@
 
 小規模タスクの場合は設計セクションを省略してください。ただし保守変更では、小規模でも既存契約と不要変更の確認は省略しないでください。
 
+{{include:instructions/contract-family-plan-replan}}
 {{include:instructions/change-contract-traceability}}
 
 {{include:instructions/requirement-source-discipline}}

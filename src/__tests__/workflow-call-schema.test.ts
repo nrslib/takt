@@ -825,6 +825,36 @@ describe('workflow_call schema', () => {
     },
   );
 
+  it.each([
+    ['Initial', 'case alias'],
+    ['follow-up', 'hyphen alias'],
+    ['', 'empty string'],
+    [1, 'number'],
+    [true, 'boolean'],
+  ])('rejects reserved review_mode outside its exact domain: %j (%s)', (value, _label) => {
+    const result = WorkflowStepRawSchema.safeParse(createWorkflowCallStep({
+      vars: { review_mode: value },
+    }));
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((issue) => (
+        issue.path.includes('vars') && issue.path.includes('review_mode')
+      ))).toBe(true);
+    }
+  });
+
+  it.each(['initial', 'follow_up', 'unspecified'])(
+    'accepts exact reserved review_mode value %s without narrowing other vars',
+    (reviewMode) => {
+      const result = WorkflowStepRawSchema.safeParse(createWorkflowCallStep({
+        vars: { review_mode: reviewMode, generic_number: 2, generic_boolean: true },
+      }));
+
+      expect(result.success).toBe(true);
+    },
+  );
+
   it('rejects vars on system steps', () => {
     const result = WorkflowStepRawSchema.safeParse({
       name: 'route',

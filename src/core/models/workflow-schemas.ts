@@ -4,6 +4,7 @@
 
 import { z } from 'zod/v4';
 import { INTERACTIVE_MODES } from './interactive-mode.js';
+import { isReviewMode, REVIEW_MODE_VALUES } from './review-mode.js';
 import { getWorkflowStepKind } from './workflow-step-kind.js';
 import {
   McpServersSchema,
@@ -109,10 +110,20 @@ const WorkflowCallArgsRawSchema = z.record(
     WorkflowParamReferenceRawSchema,
   ]),
 );
+const WorkflowCallVarsValueRawSchema = z.union([z.string(), z.number().finite(), z.boolean()]);
 const WorkflowCallVarsRawSchema = z.record(
   z.string().regex(/^[A-Za-z_][A-Za-z0-9_.-]*$/),
-  z.union([z.string(), z.number().finite(), z.boolean()]),
-);
+  WorkflowCallVarsValueRawSchema,
+).superRefine((vars, ctx) => {
+  if (!Object.hasOwn(vars, 'review_mode')) return;
+  if (!isReviewMode(vars.review_mode)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['review_mode'],
+      message: `review_mode must be one of: ${REVIEW_MODE_VALUES.join(', ')}`,
+    });
+  }
+});
 const WorkflowCallFindingContractAuthoritySchema = z.literal('terminal_adjudication');
 
 const WorkflowStepProviderOptionsSchema = StepProviderOptionsObjectSchema.extend({

@@ -1,3 +1,5 @@
+{{include:instructions/contract-family-decomposition-boundary}}
+
 Decompose the Finding Contract's actionable open findings into repair parts and make the final decision for the fix step. Treat the engine-provided Finding Contract summary, part claims, and compact index as authoritative.
 
 {{include:instructions/team-leader-fix-common}}

@@ -1,6 +1,6 @@
 Review the following change. The full file is available at `src/failure-aggregation.ts` in the working directory.
 
-Task intent: expose one parent outcome for a batch of concurrent operations.
+Task intent: expose one parent outcome for a batch of concurrent operations. This boundary's explicit selection policy chooses the first retryable outcome when one exists, otherwise the first outcome. Every projected field must derive from that selected outcome.
 
 ```diff
 diff --git a/src/failure-aggregation.ts b/src/failure-aggregation.ts

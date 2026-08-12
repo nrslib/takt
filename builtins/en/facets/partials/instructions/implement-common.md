@@ -1,3 +1,4 @@
+{{include:instructions/contract-family-implement}}
 {{include:instructions/change-contract-traceability}}
 
 **Implementation and verification:**

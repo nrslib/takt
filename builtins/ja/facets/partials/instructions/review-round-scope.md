@@ -4,6 +4,6 @@
 
 スコープ欄が範囲の限定・不足・算出不能を述べている場合は、その記述に従って不足分を自分で補ってください（省略件数、base をどう決めたか、変更を検出しなかった、Git リポジトリではない、算出していない、などの記述がこれにあたります）。この場合に限り、自前のコマンド実行で対象を追加します。
 
-レビューの走査範囲は、Finding Contract がある場合は台帳サマリの `reviewMode` に従ってください。ない場合は、呼び出し元から継承したレビュー区分 `{var:review_mode}` に従ってください。`initial` なら提示された変更対象一覧を全件確認し、変更契約へ適用される基準と、確認済みの同じ family を同じ回で出し切ってください。`follow_up` なら open findings、その修正箇所、直接影響する経路へ適用される基準を確認し、未変更領域の一般探索を再開しないでください。レビュー区分が `unspecified` の場合に限り、直接実行される reviewer step の `{step_iteration}` が `1` なら `initial`、`2` 以上なら `follow_up` としてください。
+Finding Contract の `reviewMode`、呼び出し元の `{var:review_mode}`、`{step_iteration}` は、有効な review authority policy の domain と precedence で解釈してください。確定した mode に対応する role procedure を実行し、conflict または unknown を独自に initial へ広げないでください。
 
 継続レビューで blocking finding がなく APPROVE を出す場合は、その直前に提示された変更対象一覧を回帰確認してください。新しい一般探索は行わず、open findings の修正が変更契約を壊していないことを確認します。継続レビューでは、確認した範囲と根拠を、出力契約が定める既存の検証・根拠欄へ記録してください。

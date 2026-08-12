@@ -171,6 +171,28 @@ const TARGETS = [
     step: 'testing-review',
     fixture: 'eval/fixtures/follow-up-review-repair-regression',
   },
+  {
+    id: 'review-mode-authority',
+    workflow: 'review-default',
+    step: 'coding-review',
+    fixture: 'eval/fixtures/review-mode-authority',
+  },
+  {
+    id: 'fix-verifier-family-boundary',
+    workflow: 'review-remediation',
+    step: 'fix-verifier',
+    fixture: 'eval/fixtures/fix-verifier-family-boundary',
+  },
+  {
+    id: 'companion-early-scan',
+    companion: 'ai-antipattern-review-companion',
+    fixture: 'eval/fixtures/companion-family-boundary',
+  },
+  {
+    id: 'companion-evidence-boundary',
+    companion: 'ai-antipattern-review-moderator',
+    fixture: 'eval/fixtures/companion-family-boundary',
+  },
   { id: 'review-adjudication', workflow: 'peer-review', step: 'review-adjudication', fixture: 'eval/fixtures/review-adjudication' },
   {
     id: 'final-readiness-merge-review',
@@ -227,6 +249,12 @@ const { getAllParallelSubSteps } = await import(
 );
 const { MAX_WORKFLOW_CALL_DEPTH } = await import(
   pathToFileURL(join(repoRoot, 'dist/core/workflow/workflow-call-depth.js')).href
+);
+const { loadCompanionDefinition } = await import(
+  pathToFileURL(join(repoRoot, 'dist/infra/config/loaders/companionDefinitionLoader.js')).href
+);
+const { getBuiltinCompanionsDir } = await import(
+  pathToFileURL(join(repoRoot, 'dist/infra/config/paths.js')).href
 );
 
 const requested = process.argv.slice(2);
@@ -288,6 +316,7 @@ function findStepThroughCall(workflow, callStepName, stepName) {
 for (const {
   id,
   workflow: workflowName,
+  companion: companionName,
   via,
   step: stepName,
   monitorCycle,
@@ -315,14 +344,39 @@ for (const {
   }
   const artifactDir = artifacts === undefined ? runDir : resolve(repoRoot, artifacts);
 
-  let config = loadWorkflowByIdentifier(workflowName, repoRoot);
-  if (!config) {
-    throw new Error(`Workflow not found: ${workflowName}`);
+  let config = null;
+  let companionSystemPrompt;
+  if (companionName !== undefined) {
+    const candidateDirs = [getBuiltinCompanionsDir(language)];
+    const definition = loadCompanionDefinition(companionName, {
+      candidateDirs,
+      language,
+      facetContext: { projectDir: runDir, lang: language },
+    });
+    companionSystemPrompt = [
+      definition.personaContent,
+      ...(definition.policyContents ?? []),
+      ...(definition.knowledgeContents ?? []),
+      definition.instruction,
+    ].filter((content) => content !== undefined).join('\n\n');
+    config = { name: companionName, maxSteps: 1, steps: [] };
+  } else {
+    config = loadWorkflowByIdentifier(workflowName, repoRoot);
+    if (!config) {
+      throw new Error(`Workflow not found: ${workflowName}`);
+    }
   }
 
   let target = null;
   let stepIndex = -1;
-  if (monitorCycle) {
+  if (companionSystemPrompt !== undefined) {
+    target = {
+      name: companionName,
+      instruction: companionSystemPrompt,
+      edit: false,
+      rules: [],
+    };
+  } else if (monitorCycle) {
     const monitor = config.loopMonitors?.find(({ cycle }) =>
       cycle.length === monitorCycle.length
       && cycle.every((name, index) => name === monitorCycle[index]),
@@ -424,7 +478,9 @@ for (const {
     language,
   };
 
-  const instruction = resolvedPhase === 'phase2'
+  const instruction = companionSystemPrompt !== undefined
+    ? `${companionSystemPrompt}\n\n## Supplied work-in-progress context\n${TASK_MARKER}\n\n## Prior findings and notes\n${PREV_MARKER}`
+    : resolvedPhase === 'phase2'
     ? new ReportInstructionBuilder(target, {
         cwd: runDir,
         task: TASK_MARKER,
@@ -456,8 +512,8 @@ for (const {
   const outPath = join(outDir, `${id}.${resolvedPhase}.md`);
   writeFileSync(outPath, assembled);
 
-  const targetName = monitorCycle ? `[${monitorCycle.join(' -> ')}] monitor` : stepName;
-  console.log(`[${id}] ${workflowName}/${targetName}${mutable ? ' (mutable copy)' : ''}`);
+  const targetName = companionName ?? (monitorCycle ? `[${monitorCycle.join(' -> ')}] monitor` : stepName);
+  console.log(`[${id}] ${workflowName ?? 'companion'}/${targetName}${mutable ? ' (mutable copy)' : ''}`);
   console.log(`  Prompt:             ${outPath} (${assembled.length} chars, language: ${language})`);
   console.log(`  Run dir:            ${runDir}`);
   console.log(`  Policy snapshot:    ${policySourcePath ?? '(none)'}`);

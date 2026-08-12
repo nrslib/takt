@@ -304,6 +304,7 @@ function normalizeFindingContractConfig(
       ...(providerRoutingPersonaKey ? { providerRoutingPersonaKey } : {}),
       ...(personaPath ? { personaPath } : {}),
       instruction,
+      instructionRef: raw.manager.instruction,
       outputContract,
       ...(policyContents === undefined ? {} : { policyContents }),
       ...(knowledgeContents === undefined ? {} : { knowledgeContents }),

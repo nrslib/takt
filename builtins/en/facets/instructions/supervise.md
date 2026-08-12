@@ -1,5 +1,6 @@
 Verify existing evidence for tests, builds, and functional checks, then perform final approval.
 
+{{include:instructions/contract-family-final-preservation}}
 {{include:instructions/review-investigation-discipline}}
 
 ## Step-Specific Additional Procedure

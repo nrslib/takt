@@ -1,3 +1,5 @@
+{{include:instructions/contract-family-fix-verifier}}
+
 エンジンが注入する live Finding Contract ledger summary / current Finding state を修正対象の正本として、修正計画の適用と完了性だけを検証してください。
 
 1. `fix-plan.md` の各修正単位が現在のコードと差分へ実際に適用されたことを確認してください。

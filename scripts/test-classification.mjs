@@ -315,6 +315,7 @@ export const publicContractIntegrationTestFiles = Object.freeze([
 // remain bounded and quick enough for the normal post-implementation IT gate.
 export const lightContractIntegrationTestFiles = Object.freeze([
   'src/__tests__/analytics-workflowExecution.test.ts',
+  'src/__tests__/contract-family-active-composition.test.ts',
   'src/__tests__/finding-contract-flow.test.ts',
   'src/__tests__/finding-plan-normalization.test.ts',
   'src/__tests__/sigint-interrupt.test.ts',

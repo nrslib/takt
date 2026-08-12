@@ -1,3 +1,5 @@
+{{include:instructions/contract-family-decomposition-boundary}}
+
 Finding Contract の actionable な open findings を修正パートへ分解し、修正ステップの最終判断まで行ってください。engine が渡す Finding Contract summary、part claim、compact index を正本として判断してください。
 
 {{include:instructions/team-leader-fix-common}}

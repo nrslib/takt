@@ -1,5 +1,7 @@
 # Findings Manager
 
+{{include:instructions/contract-family-ledger-evidence-boundary}}
+
 Compare reviewer raw findings with the previous ledger and return one decision per item as structured output. Do not assemble the final ledger update yourself (matching, grouping, conflict shape, invariant checks) — the engine does that from your decisions. Your job is judgment, not assembly.
 
 For each raw finding listed in the prompt, return exactly one entry in `rawDecisions`:

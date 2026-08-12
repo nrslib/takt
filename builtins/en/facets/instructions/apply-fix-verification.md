@@ -18,7 +18,7 @@ Correct the gaps found by the latest completion verification and finish the fina
 The verifier list contains examples of incomplete coverage; it is not an upper bound on this remediation. Do not correct only the listed locations and resubmit. Request fix-plan revision only when resolution requires changing the plan's assumptions, invariants, remediation boundary, methods, or evidentiary power.
 
 {{include:instructions/fix-plan-validity}}
-{{include:instructions/fix-family-completion}}
+{{include:instructions/contract-family-fix-retry}}
 
 {{include:instructions/post-edit-self-scan}}
 

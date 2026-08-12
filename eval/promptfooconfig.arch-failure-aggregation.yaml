@@ -26,21 +26,11 @@ defaultTest:
         model_reasoning_effort: low
 
 tests:
-  - description: 'recall: one primary failure must determine the parent outcome'
+  - description: 'recall: one policy-selected primary outcome must determine the parent projection'
     vars:
       task: file://cases/arch-failure-aggregation.md
       previous_response: file://cases/prev-gather-arch-failure-aggregation.md
     assert:
-      - type: llm-rubric
-        metric: recall/retryable-sibling-hides-fatal
-        value: |
-          Judge the review by the concrete control flow it attributes to
-          `aggregateFailures` in `src/failure-aggregation.ts`, not by keyword
-          presence. Pass only if it identifies that the `status` expression
-          returns `retry` whenever a retryable sibling exists even when the same
-          input also contains a non-retryable failure, so the parent continues
-          instead of stopping for that fatal failure. Fail if the target or
-          observable retry-versus-stop consequence is missing.
       - type: llm-rubric
         metric: recall/parent-failure-fields-have-different-sources
         value: |
@@ -48,24 +38,27 @@ tests:
           `aggregateFailures` in `src/failure-aggregation.ts`, not by keyword
           presence. Pass only if it identifies that `category` is selected from
           `fatal` while `abortReason` is selected from `retryable` when both are
-          present, and explains that the parent therefore exposes metadata from
-          different input failures instead of one primary failure. Fail if the
-          target, both fields, either source, or the observable mismatch is
-          missing.
+          present. The task's boundary policy explicitly selects the first
+          retryable outcome when one exists, so pass only if the review explains
+          that `category` violates that policy-selected primary while status and
+          reason use it. Fail if it instead demands a universal fatal-over-
+          retryable rule, or if the target, both sources, or observable mismatch
+          is missing.
 
-  - description: 'precision: a required operation may fail fast'
+  - description: 'precision: an explicit boundary policy may select a retryable primary'
     vars:
-      task: file://cases/arch-required-operation.md
-      previous_response: file://cases/prev-gather-arch-required-operation.md
+      task: file://cases/arch-failure-aggregation-policy.md
+      previous_response: file://cases/prev-gather-arch-failure-aggregation-policy.md
     assert:
       - type: llm-rubric
-        metric: precision/required-operation-fail-fast
+        metric: precision/boundary-specific-primary-policy
         value: |
           Judge the review by the concrete behavior it attributes to
-          `src/required-operation.ts`, not by keyword presence. The operation is
-          required: rejection stops `publishProfile`, while success returns the
-          exact stored value. Pass if the review approves this behavior or does
-          not report a defect in it. Fail if it demands retry, fallback,
-          continuation after rejection, an extra failure aggregation layer, or
-          claims that the successful stored value is lost. Findings unrelated
-          to this target behavior do not satisfy the metric.
+          `src/failure-aggregation-policy.ts`, not by keyword presence. The
+          boundary contract explicitly prioritizes retryable outcomes and the
+          implementation selects one such primary before deriving status,
+          category, and reason from it. Pass if the review approves this
+          behavior or does not report a defect in it. Fail if it demands that a
+          fatal sibling replace the policy-selected primary, invents a universal
+          fatal-over-retryable rule, or claims that the projected fields come
+          from different outcomes.

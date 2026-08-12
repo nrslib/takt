@@ -9,7 +9,7 @@ Use reports in the Report Directory and fix reviewer findings within the causall
 
 {{include:instructions/fix-root-cause-analysis}}
 
-{{include:instructions/fix-family-completion}}
+{{include:instructions/contract-family-fix}}
 
 {{include:instructions/post-edit-self-scan}}
 

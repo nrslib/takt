@@ -2,44 +2,37 @@
 
 ## Boundaries That Aggregate Multiple Failures
 
-A boundary that aggregates failures from multiple operations or layers must first select one primary failure. Classification, cause, recoverability, retry/fallback/stop decisions, external presentation, and abort records must all derive from that same failure.
+A boundary that aggregates multiple outcomes selects exactly one primary outcome through that boundary's explicit policy. Every control decision and external or terminal representation derives from that same selected outcome. Secondary outcomes may remain observable, but they do not replace the primary through a priority rule absent from the policy.
 
 | Criterion | Decision |
 |-----------|----------|
-| A fatal failure exists, but collection order or a retryable sibling takes priority | REJECT |
-| The parent category, displayed reason, and abort reason come from different failures | REJECT |
-| Classified detail is replaced with a generic error before the policy decision | REJECT |
-| Failure to persist an auxiliary artifact replaces the primary result or becomes unobservable | REJECT |
-| An explicit priority rule selects the primary failure and every decision and representation derives from it | OK |
-| An auxiliary persistence failure is recorded safely while the primary result is preserved | OK |
+| Parent status, category, displayed reason, and abort reason come from different sibling outcomes | REJECT |
+| A classified outcome is replaced with a generic error before boundary selection | REJECT |
+| A boundary-specific priority is embedded in the canonical classification owner | REJECT |
+| Classification, primary selection, and projection have separate owners | OK |
+| The boundary's explicit policy selects the primary once and every decision and representation derives from it | OK |
 
-Array order may represent occurrence or definition order, but it does not necessarily represent severity or recoverability priority. Preserve classified causes until the policy decision, and treat failures in auxiliary observability work as secondary failures.
+A canonical classification owner converts each raw response or exception exactly once into an outcome with classification, cause, and recovery attributes. A boundary selection policy chooses the primary according to the contract of that parallel, parent-child, or batch boundary. A projection owner derives status, category, reason, retry/fallback/stop decisions, and abort or terminal representations from the selected primary. Do not collapse these three responsibilities into one universal priority rule.
 
 ```typescript
-// NG - a retryable sibling hides a fatal failure and splits the output cause
-const retryable = failures.find((failure) => failure.recovery === 'retry');
-const fatal = failures.find((failure) => failure.recovery === 'stop');
+// NG - select different parent fields from different siblings
+const retryable = outcomes.find((outcome) => outcome.recovery === 'retry');
+const categorized = outcomes.find((outcome) => outcome.category !== undefined);
 return {
   action: retryable ? 'retry' : 'stop',
-  category: fatal?.category,
+  category: categorized?.category,
   abortReason: retryable?.detail,
 };
 
-// OK - select the primary failure first and keep decisions and external forms aligned
-const primary = selectPrimaryFailure(failures);
-const result = {
+// OK - select once through the boundary policy and project one primary
+const outcomes = responses.map(classifyOutcome);
+const primary = selectPrimaryOutcome(outcomes, boundaryPolicy);
+return {
   action: decideRecovery(primary.recovery),
   category: primary.category,
   reason: primary.detail,
   abortReason: primary.detail,
 };
-
-try {
-  persistFailureArtifact(primary);
-} catch (error) {
-  observeSecondaryFailure(error);
-}
-return result;
 ```
 
 ## Structure & Design

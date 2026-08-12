@@ -1,3 +1,5 @@
+{{include:instructions/contract-family-fix-verifier}}
+
 Treat the engine-injected live Finding Contract ledger summary / current Finding state as the authoritative remediation scope, and verify only fix-plan application and completion.
 
 1. Verify that every fix unit in `fix-plan.md` has actually been applied to the current code and diff.

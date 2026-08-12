@@ -1,0 +1,37 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+
+description: 'TAKT facet eval: legacy review mode authority and safe precedence'
+
+prompts:
+  - file://prompts/review-mode-authority.phase1.md
+
+providers:
+  - id: openai:codex-sdk
+    label: codex
+    config:
+      working_dir: fixtures/review-mode-authority
+      sandbox_mode: read-only
+      approval_policy: never
+      skip_git_repo_check: true
+      model_reasoning_effort: low
+
+tests:
+  - description: 'legacy mode: resolve same, single-source, fallback, conflict, and unknown cases safely'
+    vars:
+      task: file://cases/review-mode-authority.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: review-mode/domain-precedence-and-safe-ceiling
+        value: |
+          Judge the answer against the active review authority policy in the
+          assembled prompt. Pass only if all cases are classified as follows:
+          same explicit initial -> initial; same explicit follow_up ->
+          follow_up; ledger-only initial -> initial; caller-only follow_up ->
+          follow_up; both unspecified at iteration 1 -> initial; both
+          unspecified at iteration 2 -> follow_up; different explicit modes ->
+          mode_conflict; invalid/unknown source -> mode_unknown. It must also
+          apply the follow-up authority ceiling to conflict and unknown, refuse
+          adjacent-family discovery, and refuse APPROVE based on claimed
+          initial-coverage completion. Fail if casing, aliases, empty values,
+          or invalid scalar types are normalized into a valid mode.

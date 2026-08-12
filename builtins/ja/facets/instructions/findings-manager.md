@@ -1,5 +1,7 @@
 # Findings Manager
 
+{{include:instructions/contract-family-ledger-evidence-boundary}}
+
 各レビュワーの raw findings と前版 ledger を比較し、1件ごとの判断だけを structured output で返してください。最終結果の組み立て（対応づけ、グルーピング、conflict の形状、不変条件の検査）は自分で行わないでください。それはエンジンがあなたの判断から行います。あなたの仕事は判断であり、組み立てではありません。
 
 プロンプトに列挙された raw finding 1件につき、`rawDecisions` にちょうど1エントリを返してください。

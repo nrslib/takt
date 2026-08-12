@@ -5,6 +5,7 @@
 - 修正報告: {report:fix-report.md}
 
 {{include:instructions/fix-plan-validity}}
+{{include:instructions/contract-family-fix-verifier}}
 
 **検証手順:**
 1. Report Directory の最新レビューレポートで、計画が対象とした finding と受入条件を確認する

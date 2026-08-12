@@ -13,7 +13,7 @@
 - タスク全体の要求または設計の変更が必要な場合は編集せず、「タスク全体の再計画が必要」と根拠を報告する
 
 {{include:instructions/fix-plan-validity}}
-{{include:instructions/fix-family-completion}}
+{{include:instructions/contract-family-fix}}
 
 {{include:instructions/post-edit-self-scan}}
 
