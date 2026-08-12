@@ -427,23 +427,6 @@ describe('compileRuntimeProviderEnvironment (profile escalate)', () => {
     })).toThrow(/supports only .*loop-judge.*got "reviewer"/);
   });
 
-  it.each([
-    'intake-normalizer',
-    'findings-manager',
-    'terminal-adjudicator',
-    'escalation-reviewer',
-  ])('rejects the removed internal_agents seat %s', (seat) => {
-    expect(() => compileRuntimeProviderEnvironment({
-      defaults: { profile: 'weak' },
-      profiles: { weak: { provider: 'codex', model: 'weak-model' } },
-      targets: {
-        internal_agents: {
-          [seat]: { profile: 'weak' },
-        },
-      },
-    } as RuntimeProviderSection)).toThrow(`got "${seat}"`);
-  });
-
   it('does not hand internal agents an escalation target they never consume', () => {
     const env = compileRuntimeProviderEnvironment({
       defaults: { profile: 'weak' },

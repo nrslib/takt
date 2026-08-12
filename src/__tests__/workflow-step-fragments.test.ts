@@ -1033,42 +1033,6 @@ model: gpt-5
     expect(message).toContain(fragmentPath);
   });
 
-  it('should retain fragment provenance for a doctor workflow_call contract error', () => {
-    writeFile(projectDir, '.takt/workflows/required.yaml', [
-      'name: required',
-      'subworkflow:',
-      '  callable: true',
-      '  requires_finding_contract: true',
-      'initial_step: child',
-      'max_steps: 1',
-      'steps:',
-      '  - name: child',
-      '    instruction: child',
-      '    rules:',
-      '      - condition: done',
-      '        next: COMPLETE',
-      '',
-    ].join('\n'));
-    const fragmentPath = writeProjectFragment(projectDir, 'delegate', [
-      'kind: workflow_call',
-      'call: required',
-      '',
-    ].join('\n'));
-    const workflowPath = writeWorkflow(
-      projectDir,
-      'doctor-contract-fragment',
-      `  - uses: delegate${COMPLETE_CALLER_RULES}`,
-      'delegate',
-    );
-
-    const report = inspectWorkflowFile(workflowPath, projectDir);
-    const message = report.diagnostics[0]?.message ?? '';
-
-    expect(message).toContain('requires a finding_contract');
-    expect(message).toContain('step fragment "delegate"');
-    expect(message).toContain(fragmentPath);
-  });
-
   it('should retain fragment context for caller-originated missing required fields', () => {
     writeProjectFragment(projectDir, 'agent-step', 'instruction: valid\n');
     const workflowPath = writeWorkflow(projectDir, 'caller-required-field-error', `  - uses: agent-step

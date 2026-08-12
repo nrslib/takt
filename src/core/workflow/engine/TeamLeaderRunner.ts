@@ -134,7 +134,6 @@ export class TeamLeaderRunner {
       task,
       maxSteps,
       runtime?.fallback,
-      undefined,
       instructionTransaction,
     );
     const leaderRuntime = await this.resolveLeaderAutoRouting(leaderStep, runtime);
@@ -656,7 +655,6 @@ export class TeamLeaderRunner {
           task,
           maxSteps,
           runtime?.fallback,
-          undefined,
           instructionTransaction,
         );
       },

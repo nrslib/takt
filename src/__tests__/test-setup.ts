@@ -3,7 +3,6 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach } from 'vitest';
 import { clearTaktEnv, restoreTaktEnv, type TaktEnvSnapshot } from './helpers/taktEnv.js';
-import { cleanupTestFindingStorage } from './helpers/finding-storage-cleanup.js';
 
 const shouldForceNoTty = process.env.TAKT_TEST_FLG_TOUCH_TTY !== '1';
 const TEST_TMPDIR = realpathSync(tmpdir());
@@ -54,7 +53,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  cleanupTestFindingStorage();
   restoreTaktEnv(taktEnvSnapshot);
   for (const [key, value] of gitEnvSnapshot) {
     if (value === undefined) {

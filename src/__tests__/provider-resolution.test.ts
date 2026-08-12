@@ -14,11 +14,6 @@ import {
   resolveAssistantScopedProviderModelFromConfig,
   resolveNonWorkflowProviderModelFromConfig,
 } from '../core/config/provider-resolution.js';
-import { buildFindingManagerStep } from '../core/workflow/findings/manager-step.js';
-import {
-  buildFindingConflictAdjudicationStep,
-  buildFindingTerminalAdjudicationStep,
-} from '../core/workflow/findings/adjudication-step.js';
 import type { ProjectConfig } from '../core/models/config-types.js';
 
 describe('resolveProviderModelCandidates', () => {
@@ -192,103 +187,6 @@ describe('resolveStepProviderModel', () => {
       model,
       modelSource: source,
     });
-  });
-
-  it('should not inherit a persona model when the findings-manager seat is provider-only', () => {
-    const step = buildFindingManagerStep({
-      contract: {
-        manager: {
-          persona: 'findings-manager',
-          instruction: 'findings-manager',
-          outputContract: 'findings-manager',
-        },
-      },
-      internalAgentSeats: { findingsManager: { provider: 'codex' } },
-    });
-
-    const result = resolveStepProviderModel({
-      step,
-      personaProviders: {
-        'findings-manager': {
-          provider: 'opencode',
-          model: 'opencode/persona-model',
-        },
-      },
-    });
-
-    expect(result).toMatchObject({
-      provider: 'codex',
-      model: undefined,
-    });
-  });
-
-  it('should resolve conflict and terminal adjudicators through the same seat rules', () => {
-    const input = {
-      contract: {
-        manager: {
-          persona: 'findings-manager',
-          instruction: 'findings-manager',
-          outputContract: 'findings-manager',
-        },
-        adjudicator: {
-          persona: 'terminal-supervisor',
-          providerRoutingPersonaKey: 'terminal-supervisor',
-        },
-      },
-      workflowProvider: 'claude' as const,
-      workflowModel: 'workflow-model',
-      internalAgentSeats: { terminalAdjudicator: { provider: 'codex' as const } },
-    };
-
-    for (const step of [
-      buildFindingConflictAdjudicationStep(input),
-      buildFindingTerminalAdjudicationStep(input),
-    ]) {
-      expect(resolveStepProviderModel({
-        step,
-        providerRouting: {
-          personas: {
-            'terminal-supervisor': { provider: 'opencode', model: 'persona-model' },
-          },
-        },
-      })).toMatchObject({
-        provider: 'codex',
-        model: undefined,
-      });
-    }
-  });
-
-  it('should resolve conflict and terminal adjudicators through the same persona routing fallback', () => {
-    const input = {
-      contract: {
-        manager: {
-          persona: 'findings-manager',
-          instruction: 'findings-manager',
-          outputContract: 'findings-manager',
-        },
-        adjudicator: {
-          persona: 'terminal-supervisor',
-          providerRoutingPersonaKey: 'terminal-supervisor',
-        },
-      },
-    };
-
-    for (const step of [
-      buildFindingConflictAdjudicationStep(input),
-      buildFindingTerminalAdjudicationStep(input),
-    ]) {
-      expect(resolveStepProviderModel({
-        step,
-        providerRouting: {
-          personas: {
-            'terminal-supervisor': { provider: 'codex', model: 'strong-model' },
-          },
-        },
-      })).toMatchObject({
-        provider: 'codex',
-        model: 'strong-model',
-      });
-    }
   });
 
   it('should prefer step.provider over personaProviders.provider when both are defined', () => {

@@ -735,22 +735,7 @@ describe('agent-usecases', () => {
     ]);
   });
 
-  it('Finding Contract decomposition は構造化出力がない場合に汎用parserへフォールバックしない', async () => {
-    vi.mocked(runAgent).mockResolvedValue(doneResponse('```json [] ```'));
-
-    await expect(decomposeTask('instruction', 2, {
-      cwd: '/repo',
-      findingContract: {
-        targetFindingIds: ['F-0001'],
-        actionableFindings: '{"open":[{"id":"F-0001"}]}',
-      },
-    })).rejects.toThrow('requires structured output');
-
-    expect(parseParts).not.toHaveBeenCalled();
-    expect(runAgent).toHaveBeenCalledOnce();
-  });
-
-  it('非Finding Contract decomposition は意味的検証診断付きで全partsを再生成する', async () => {
+  it('decomposition は意味的検証診断付きで全partsを再生成する', async () => {
     vi.mocked(runAgent)
       .mockResolvedValueOnce(doneResponse('invalid', { parts: [] }))
       .mockResolvedValueOnce(doneResponse('valid', {
@@ -769,7 +754,7 @@ describe('agent-usecases', () => {
     expect(secondPrompt).toContain('regenerate all parts');
   });
 
-  it('非Finding Contract decomposition は provider 例外を再試行しない', async () => {
+  it('decomposition は provider 例外を再試行しない', async () => {
     const providerError = new Error('network unavailable');
     const onAgentError = vi.fn();
     vi.mocked(runAgent).mockRejectedValue(providerError);

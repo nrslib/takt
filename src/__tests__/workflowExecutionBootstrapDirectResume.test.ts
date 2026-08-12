@@ -157,8 +157,6 @@ import { RunMetaManager } from '../features/tasks/execute/runMeta.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import type { RunMeta } from '../core/workflow/run/run-meta.js';
 import { generateExecutionReportDir } from '../core/workflow/run/run-slug.js';
-import { FindingContractOperationJournal } from '../core/workflow/engine/team-leader-finding-contract-operation-journal.js';
-import { ExplicitPartFailureError } from '../core/workflow/operations/operation-recovery-error.js';
 import { createOperationJournalStore } from '../infra/workflow/operation-journal-store.js';
 import {
   generateReportDir,
@@ -1191,89 +1189,6 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     };
     expect(meta.source_run_slug).toBe('20260524-source-run');
     expect(meta.resume_mode).toBe('retry');
-  });
-
-  it('recovers an operation owner through the direct source run ancestry', async () => {
-    const projectDir = createTempProject();
-    seedResumeSourceRun(projectDir, 'run-a', {
-      journalRunSlug: 'run-a',
-      claimToken: 'claim-a',
-      status: 'running',
-    });
-    seedResumeSourceRun(projectDir, 'run-b', {
-      sourceRunSlug: 'run-a',
-      journalRunSlug: 'run-a',
-      claimToken: 'claim-b-never-owned',
-    });
-    seedResumeSourceRun(projectDir, 'run-c', {
-      sourceRunSlug: 'run-b',
-      journalRunSlug: 'run-a',
-      claimToken: 'claim-c-never-owned',
-    });
-    const store = createOperationJournalStore(buildRunPaths(projectDir, 'run-a').operationJournalAbs);
-    const operationA = FindingContractOperationJournal.open({
-      context: { store, journalRunSlug: 'run-a', claimToken: 'claim-a' },
-      workflowName: 'default',
-      stepName: 'fix',
-      stepIteration: 1,
-      executionScope: { runPathNamespace: [], workflowStack: [] },
-    });
-    operationA.boundary('decomposition', 'finding_contract_decomposition').complete({ parts: [] });
-    const request = {
-      partId: 'p1',
-      title: 'Repair',
-      instruction: 'Repair finding',
-      findingAssignment: {
-        findingIds: ['F-0001'],
-        role: 'repair' as const,
-        readPaths: ['src/fix.ts'],
-      },
-    };
-    operationA.boundary(
-      'part:p1:completion',
-      'finding_contract_part_completion',
-      request,
-    ).markApplied({
-      part: {
-        id: request.partId,
-        title: request.title,
-        instruction: request.instruction,
-        findingContract: request.findingAssignment,
-      },
-      response: {
-        persona: 'fix.p1',
-        status: 'error',
-        content: '',
-        error: 'preflight failure',
-        timestamp: new Date('2026-08-01T00:00:00.000Z'),
-      },
-    });
-    operationA.terminate(new ExplicitPartFailureError('typed failure', {
-      boundaryId: 'part:p1:completion',
-    }));
-
-    const bootstrap = await createWorkflowExecutionBootstrap(
-      workflowConfig,
-      'Resume ancestry',
-      projectDir,
-      {
-        projectCwd: projectDir,
-        provider: 'mock',
-        reportDirName: 'run-d',
-        resumeSource: { sourceRunSlug: 'run-c', resumeMode: 'requeue' },
-      },
-    );
-    expect(bootstrap.operationJournal.sourceClaimTokens).toEqual(
-      new Set(['claim-c-never-owned', 'claim-b-never-owned', 'claim-a']),
-    );
-    const recovered = FindingContractOperationJournal.open({
-      context: bootstrap.operationJournal,
-      workflowName: 'default',
-      stepName: 'fix',
-      stepIteration: 1,
-      executionScope: { runPathNamespace: [], workflowStack: [] },
-    });
-    expect(recovered.getChild('part:p1:completion').stage).toBe('reserved');
   });
 
   it('rejects a cycle in the direct source run ancestry', async () => {

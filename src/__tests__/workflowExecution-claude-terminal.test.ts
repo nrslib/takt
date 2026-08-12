@@ -6,8 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkflowConfig, WorkflowResumePoint } from '../core/models/index.js';
 import { buildWorkflowStepParticipationIdentity } from '../core/workflow/workflow-step-participation-index.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
-import { FindingDatabase } from '../infra/finding-storage/database.js';
-import { createTestFindingLedgerStore } from './helpers/finding-storage.js';
 
 const terminalMocks = vi.hoisted(() => ({
   start: vi.fn().mockResolvedValue({ id: 'tmux-session', name: 'takt-claude-terminal' }),
@@ -262,13 +260,6 @@ describe('executeWorkflow claude-terminal integration', () => {
     };
     sourceMeta.status = 'failed';
     await writeFile(sourceMetaPath, JSON.stringify(sourceMeta), 'utf-8');
-    createTestFindingLedgerStore({
-      projectCwd: projectDir,
-      runId: sourceRunSlug,
-      reportDir: join(projectDir, '.takt', 'runs', sourceRunSlug, 'reports'),
-      workflowName: makeConfig().name,
-    });
-
     await expect(executeWorkflow(makeConfig(), 'failed target task', projectDir, {
       projectCwd: projectDir,
       provider: 'claude-terminal',
@@ -302,17 +293,6 @@ describe('executeWorkflow claude-terminal integration', () => {
       operation_journal_run_slug: sourceMeta.operation_journal_run_slug,
       operation_claim_token: expect.any(String),
     });
-    FindingDatabase.openTarget({
-      databasePath: join(
-        projectDir,
-        '.takt',
-        'runs',
-        failedRunSlug,
-        'finding-contract.sqlite',
-      ),
-      runId: failedRunSlug,
-    }).close();
-
     terminalMocks.waitForAssistantResponse
       .mockResolvedValueOnce({
         sessionId: 'claude-session-1',
@@ -559,7 +539,7 @@ describe('executeWorkflow claude-terminal integration', () => {
     });
   });
 
-  it('FC非使用workflowのrequeueはsource finding DBを検証せず成功する', async () => {
+  it('normal workflow requeue leaves a residual SQLite file unchanged', async () => {
     const { executeWorkflow } = await import('../features/tasks/execute/workflowExecution.js');
     const sourceRunSlug = '20260801-non-finding-source';
     const targetRunSlug = '20260801-non-finding-target';
@@ -570,11 +550,14 @@ describe('executeWorkflow claude-terminal integration', () => {
       reportDirName: sourceRunSlug,
     });
     expect(sourceResult.success).toBe(true);
-    await writeFile(
-      join(projectDir, '.takt', 'runs', sourceRunSlug, 'finding-contract.sqlite'),
-      'not sqlite',
+    const residualDatabasePath = join(
+      projectDir,
+      '.takt',
+      'runs',
+      sourceRunSlug,
+      ['finding', 'contract.sqlite'].join('-'),
     );
-    const readSource = vi.spyOn(FindingDatabase, 'readSource');
+    await writeFile(residualDatabasePath, 'not sqlite');
 
     const resumedResult = await executeWorkflow(makeConfig(), 'resumed task', projectDir, {
       projectCwd: projectDir,
@@ -587,9 +570,15 @@ describe('executeWorkflow claude-terminal integration', () => {
     });
 
     expect(resumedResult.success).toBe(true);
-    expect(readSource).not.toHaveBeenCalled();
+    expect(readFileSync(residualDatabasePath, 'utf-8')).toBe('not sqlite');
     expect(existsSync(
-      join(projectDir, '.takt', 'runs', targetRunSlug, 'finding-contract.sqlite'),
+      join(
+        projectDir,
+        '.takt',
+        'runs',
+        targetRunSlug,
+        ['finding', 'contract.sqlite'].join('-'),
+      ),
     )).toBe(false);
   });
 

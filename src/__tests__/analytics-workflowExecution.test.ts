@@ -16,7 +16,7 @@ import {
   writeAnalyticsEvent,
 } from '../features/analytics/index.js';
 import { AnalyticsEmitter } from '../features/tasks/execute/analyticsEmitter.js';
-import type { AgentResponse, FindingLedger, WorkflowStep } from '../core/models/index.js';
+import type { AgentResponse, WorkflowStep } from '../core/models/index.js';
 import type {
   StepResultEvent,
   ReviewFindingEvent,
@@ -25,25 +25,6 @@ import type {
 } from '../features/analytics/index.js';
 import type { StepProviderInfo } from '../core/workflow/types.js';
 import { parseWorkflowRuleCondition } from '../core/models/workflow-rule-condition.js';
-import { computeFileQuoteEvidenceRecordId } from '../core/models/finding-evidence-record.js';
-import type { FindingEvidenceRecord } from '../core/models/finding-types.js';
-
-function fileQuoteEvidenceRecord(path: string, line: number): FindingEvidenceRecord {
-  const payload = {
-    kind: 'file_quote' as const,
-    path,
-    startLine: line,
-    endLine: line,
-    verbatimExcerpt: 'fixture evidence',
-    snapshotId: 'a'.repeat(64),
-    claimIdentityHash: 'b'.repeat(64),
-    fileHash: 'c'.repeat(64),
-  };
-  return {
-    evidenceId: computeFileQuoteEvidenceRecordId(payload),
-    ...payload,
-  };
-}
 
 describe('workflow execution analytics initialization', () => {
   let testDir: string;

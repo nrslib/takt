@@ -162,7 +162,6 @@ function createDeps(input: {
     findingManagerAuthority: { canMarkFindings: () => false },
     executionProvider: 'mock' as const,
     executionModel: undefined,
-    refreshFindingsState: vi.fn(),
     emitEvent: input.emitEvent,
     recordSynthesizedAgentUsage: vi.fn(),
     getRunId: () => 'test-run',

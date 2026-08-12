@@ -2604,7 +2604,7 @@ describe('auto clone path allocation', () => {
       const second = new CloneManager().createSharedClone('/project', {
         worktree: true,
         taskSlug: 'fix-review-comments',
-        branch: 'takt/816/implement-finding-contract',
+        branch: 'takt/816/implement-review-flow',
       });
 
       expect(first.path).toMatch(/^\/tmp\/takt-worktrees\/20260101T0000-fix-review-comments-[a-f0-9]{16}$/);
@@ -2645,7 +2645,7 @@ describe('auto clone path allocation', () => {
         new CloneManager().createSharedCloneAbortable('/project', {
           worktree: true,
           taskSlug: 'fix-review-comments',
-          branch: 'takt/816/implement-finding-contract',
+          branch: 'takt/816/implement-review-flow',
         }),
       ]);
       await vi.runAllTimersAsync();
@@ -2669,7 +2669,7 @@ describe('auto clone path allocation', () => {
         clonePath: first.path,
       });
       expect(metadataByBranch.get(second.branch)).toEqual({
-        filePath: '/project/.takt/clone-meta/takt--816--implement-finding-contract.json',
+        filePath: '/project/.takt/clone-meta/takt--816--implement-review-flow.json',
         clonePath: second.path,
       });
     } finally {

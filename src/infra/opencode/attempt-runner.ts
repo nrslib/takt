@@ -1352,8 +1352,8 @@ export class OpenCodeAttemptRunner {
           const rejection = extractOpenCodeToolRejection(toolPart);
           // onStream（→ provider event logging 有効時は *-provider-events.jsonl
           // へ永続化される）にも raw エラー文を流さない。マスク済みの
-          // コピーを downstream へ渡す（Finding Contract: onStream はライブ表示
-          // 専用ではなく永続化経路を含む）。
+          // コピーを downstream へ渡す（onStream はライブ表示専用ではなく
+          // 永続化経路を含む）。
           let partForDownstream: OpenCodePart = part;
           if (rejection !== undefined) {
             // 失敗したツール呼び出しの引数を残す。エラー文だけでは
@@ -1906,7 +1906,7 @@ export class OpenCodeAttemptRunner {
       // ガード発火（absolute_cost_limit / recovery 消費後の再発）は決定的な
       // ループ失敗であり transient ではない — retriable 判定に流さず即失敗する。
       // needs_fix / plan への自動迂回はしない（インフラ障害とレビュー判断を
-      // 混同しない — Finding Contract）。
+      // 混同しない。
       const retriable = toolGuardFailure === undefined
         && this.isRetriableError(message, abortCause);
       if (retriable && attempt < OPENCODE_RETRY_MAX_ATTEMPTS) {

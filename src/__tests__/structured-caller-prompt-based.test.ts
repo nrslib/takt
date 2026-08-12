@@ -28,7 +28,6 @@ vi.mock('../agents/runner.js', () => ({
 import { PromptBasedStructuredCaller } from '../agents/structured-caller.js';
 import { RETRY_DELAY_MS } from '../agents/structured-caller/prompt-based-structured-caller.js';
 import { resolveStructuredStep } from '../agents/structured-caller/shared.js';
-import { FindingContractTeamLeaderDecisionValidationError } from '../core/workflow/team-leader-finding-contract-decision.js';
 
 describe('PromptBasedStructuredCaller', () => {
   beforeEach(() => {
@@ -765,29 +764,6 @@ describe('PromptBasedStructuredCaller', () => {
     expect(retryPrompt).not.toContain('"content"');
   });
 
-  it('leaves Finding Contract decomposition recovery to the common acceptance boundary', async () => {
-    mockRunAgent.mockResolvedValue({
-      persona: 'leader',
-      status: 'done',
-      content: '```json\n[]\n```',
-      timestamp: new Date(),
-    });
-    const caller = new PromptBasedStructuredCaller();
-
-    await expect(caller.decomposeTask('repair findings', 3, {
-      cwd: '/tmp/project',
-      provider: 'cursor',
-      persona: 'team-leader',
-      findingContract: {
-        targetFindingIds: ['F-0001'],
-        actionableFindings: '{"open":[{"id":"F-0001"}]}',
-      },
-    })).rejects.toThrow();
-
-    expect(mockRunAgent).toHaveBeenCalledOnce();
-    expect(mockRunAgent.mock.calls[0]?.[1]).not.toContain('Previously rejected decomposition');
-  });
-
   it('should parse additional parts from fenced JSON without outputSchema', async () => {
     mockRunAgent.mockResolvedValue({
       persona: 'leader',
@@ -831,52 +807,6 @@ describe('PromptBasedStructuredCaller', () => {
         provider: 'cursor',
       }),
     );
-  });
-
-  it('leaves Finding Contract semantic retries to the Team Leader acceptance boundary', async () => {
-    mockRunAgent.mockResolvedValue({
-      persona: 'leader',
-      status: 'done',
-      content: [
-        '```json',
-        JSON.stringify({
-          decision: 'continue',
-          reasoning: 'invalid',
-          parts: [],
-          fixCoverage: [],
-          blockers: [],
-        }),
-        '```',
-      ].join('\n'),
-      timestamp: new Date(),
-    });
-
-    const caller = new PromptBasedStructuredCaller();
-    await expect(caller.requestMoreParts(
-      'original task',
-      [{ id: 'p1', title: 'First', status: 'done', content: 'done' }],
-      ['p1'],
-      {
-        cwd: '/tmp/project',
-        provider: 'cursor',
-        findingContract: {
-          targetFindingIds: ['F-0001'],
-          actionableFindings: '{"open":[{"id":"F-0001"}]}',
-          completedPartIndex: [],
-          plannedParts: [],
-          evidence: {
-            entries: [],
-            findings: [{
-              findingId: 'F-0001',
-              eligibleSupportingPartIds: { addressed: [], disputed: [] },
-              eligibleVerificationPartIds: [],
-              completeFeasible: false,
-            }],
-          },
-        },
-      },
-    )).rejects.toBeInstanceOf(FindingContractTeamLeaderDecisionValidationError);
-    expect(mockRunAgent).toHaveBeenCalledTimes(1);
   });
 
   it('prompt-based requestMoreParts は inspect tools を渡さず outputSchema も渡さない', async () => {

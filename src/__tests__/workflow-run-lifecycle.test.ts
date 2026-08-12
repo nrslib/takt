@@ -1,4 +1,3 @@
-import { DatabaseSync } from 'node:sqlite';
 import {
   existsSync,
   mkdtempSync,
@@ -32,7 +31,7 @@ function createRoot(): string {
   return root;
 }
 
-function workflow(name: string, withFindingContract: boolean): WorkflowConfig {
+function workflow(name: string): WorkflowConfig {
   return {
     name,
     maxSteps: 1,
@@ -43,18 +42,6 @@ function workflow(name: string, withFindingContract: boolean): WorkflowConfig {
       instruction: 'done',
       rules: [{ condition: 'done', next: 'COMPLETE' }],
     }],
-    ...(withFindingContract
-      ? {
-          findingContract: {
-            manager: {
-              persona: 'findings-manager',
-              instruction: 'manage',
-              outputContract: 'findings-manager',
-            },
-            adjudicator: { persona: 'supervisor' },
-          },
-        }
-      : {}),
   };
 }
 
@@ -164,52 +151,33 @@ describe('workflow run lifecycle composition', () => {
     })).toBe('failed');
   });
 
-  it('does not create Finding SQLite when no authority is reached', async () => {
-    const cwd = createRoot();
-    const run = await bindRun({
-      cwd,
-      runSlug: 'without-findings',
-      workflowConfig: workflow('without-findings', false),
-    });
-
-    expect(existsSync(run.handle.runPaths.findingContractDatabaseAbs)).toBe(false);
-    await finishRun(run);
-    expect(existsSync(run.handle.runPaths.findingContractDatabaseAbs)).toBe(false);
-    expect(JSON.parse(readFileSync(run.handle.runPaths.metaAbs, 'utf-8'))).toMatchObject({
-      status: 'completed',
-    });
-  });
-
-
-
-
-
-
-
   it('resumes a normal workflow without opening or changing a residual SQLite file', async () => {
     const cwd = createRoot();
     const source = await bindRun({
       cwd,
       runSlug: 'non-finding-source',
-      workflowConfig: workflow('non-finding-source', false),
+      workflowConfig: workflow('non-finding-source'),
     });
     const residualBytes = Buffer.from('residual database bytes');
-    writeFileSync(source.handle.runPaths.findingContractDatabaseAbs, residualBytes);
+    const residualDatabasePath = join(
+      source.handle.runPaths.runRootAbs,
+      ['finding', 'contract.sqlite'].join('-'),
+    );
+    writeFileSync(residualDatabasePath, residualBytes);
     await finishRun(source, 'failed');
 
     const target = await bindRun({
       cwd,
       runSlug: 'non-finding-target',
-      workflowConfig: workflow('non-finding-target', false),
+      workflowConfig: workflow('non-finding-target'),
       resumeSource: {
         sourceRunSlug: source.handle.runSlug,
         resumeMode: 'requeue',
       },
     });
 
-    expect(existsSync(target.handle.runPaths.findingContractDatabaseAbs)).toBe(false);
     await finishRun(target);
-    expect(readFileSync(source.handle.runPaths.findingContractDatabaseAbs)).toEqual(residualBytes);
+    expect(readFileSync(residualDatabasePath)).toEqual(residualBytes);
   });
 
 

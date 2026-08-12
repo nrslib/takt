@@ -56,7 +56,7 @@ describe('PR sync worktree paths', () => {
 
     try {
       const store = new Map<number, PrSyncSession>();
-      const first = acquirePrSyncSession(store, '/project', 816, 'takt/816/implement-finding-contract');
+      const first = acquirePrSyncSession(store, '/project', 816, 'takt/816/implement-review-flow');
       const second = acquirePrSyncSession(store, '/project', 827, 'takt/827/add-trace-task-metadata');
 
       expect(first.worktreePath).toMatch(/^\/tmp\/takt-worktrees\/pr-sync-\d+-[a-f0-9]{16}$/);
@@ -67,7 +67,7 @@ describe('PR sync worktree paths', () => {
       expect(mockCheckoutWorktreeBranchFromOrigin).toHaveBeenCalledWith(
         '/project',
         first.worktreePath,
-        'takt/816/implement-finding-contract',
+        'takt/816/implement-review-flow',
       );
       expect(mockCheckoutWorktreeBranchFromOrigin).toHaveBeenCalledWith(
         '/project',
@@ -81,7 +81,7 @@ describe('PR sync worktree paths', () => {
 
   it('should remove the generated path associated with the released PR session', () => {
     const store = new Map<number, PrSyncSession>();
-    const session = acquirePrSyncSession(store, '/project', 816, 'takt/816/implement-finding-contract');
+    const session = acquirePrSyncSession(store, '/project', 816, 'takt/816/implement-review-flow');
 
     releasePrSyncSession(store, 816);
 
@@ -95,7 +95,7 @@ describe('PR sync worktree paths', () => {
     });
     const store = new Map<number, PrSyncSession>();
 
-    expect(() => acquirePrSyncSession(store, '/project', 816, 'takt/816/implement-finding-contract'))
+    expect(() => acquirePrSyncSession(store, '/project', 816, 'takt/816/implement-review-flow'))
       .toThrow('checkout failed');
 
     const clonedPath = mockCloneAndIsolate.mock.calls[0]?.[1];

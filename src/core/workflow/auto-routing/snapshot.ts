@@ -30,9 +30,6 @@ function projectWorkForSnapshot(
     ...(work.title !== undefined
       ? { title: normalizeRoutingText(work.title, ROUTING_REMAINING_WORK_FIELD_BUDGET, sensitiveValues) }
       : {}),
-    ...(work.suggestion !== undefined
-      ? { suggestion: normalizeRoutingText(work.suggestion, ROUTING_REMAINING_WORK_FIELD_BUDGET, sensitiveValues) }
-      : {}),
   };
 }
 

@@ -24,51 +24,7 @@ vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
 }));
 
-vi.mock('../core/workflow/findings/contract-intake.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../core/workflow/findings/contract-intake.js')>();
-  return {
-    ...actual,
-    ingestFindingContractResults: vi.fn().mockResolvedValue({ status: 'updated' }),
-  };
-});
-
-// slot 本体の反復は finding-fc-restatement-slot.test.ts が持つ。ここで固定するのは
-// 単独ステップ経路が slot へ渡す配線（owner / 提示予算 / 取り込み契約 / terminal 置換）。
-vi.mock('../core/workflow/findings/restatement-slot-runner.js', async (importOriginal) => {
-  const actual = await importOriginal<
-    typeof import('../core/workflow/findings/restatement-slot-runner.js')
-  >();
-  return {
-    ...actual,
-    runFindingRestatementSlot: vi.fn().mockResolvedValue(undefined),
-  };
-});
-
 import { executeAgent } from '../agents/agent-usecases.js';
-import { ingestFindingContractResults } from '../core/workflow/findings/contract-intake.js';
-import {
-  runFindingRestatementSlot,
-  type FindingRestatementSlotInput,
-} from '../core/workflow/findings/restatement-slot-runner.js';
-import { createRawFindingsStructuredOutput } from '../core/workflow/findings/manager-agent.js';
-import { RawFindingsOutputValidationJsonSchema } from '../core/models/finding-schemas.js';
-import type { FindingManagerValidationReport } from '../core/workflow/findings/store.js';
-import { createTestFindingLedgerStore } from './helpers/finding-storage.js';
-import { initializeGitFixture } from './helpers/git-fixture.js';
-import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
-import { authorizeFindingLedgerFixture } from './helpers/finding-lifecycle-fixture.js';
-import type { CanonicalFindingReviewPublication } from '../core/workflow/findings/review-publication.js';
-import {
-  computeRestatementRequestId,
-  createFindingReviewPresentationContextV2,
-  createPendingFindingReviewNormalization,
-  createFindingReviewPublication,
-  loadPendingFindingReviewNormalization,
-  PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
-  persistPendingFindingReviewNormalization,
-  persistFindingReviewPublication,
-  publishFindingReviewPublication,
-} from '../core/workflow/findings/review-publication.js';
 
 function makeState(): WorkflowState {
   return {
@@ -695,7 +651,6 @@ describe('StepExecutor dynamic facet integration', () => {
           buildAgentOptions: vi.fn().mockReturnValue({}),
           buildPhaseRunnerContext: vi.fn().mockReturnValue({ childProcessEnv: undefined }),
           resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'cursor', model: undefined }),
-          buildFindingContractInstructionContext: vi.fn(),
         } as unknown as StepExecutorDeps['optionsBuilder'],
         getCwd: () => cwd,
         getProjectCwd: () => cwd,
@@ -721,7 +676,6 @@ describe('StepExecutor dynamic facet integration', () => {
         findingManagerAuthority: { canMarkFindings: () => false } as unknown as StepExecutorDeps['findingManagerAuthority'],
         executionProvider: 'cursor',
         executionModel: undefined,
-        refreshFindingsState: vi.fn(),
         emitEvent: vi.fn(),
         recordSynthesizedAgentUsage: vi.fn(),
         getRunId: () => 'test-run',

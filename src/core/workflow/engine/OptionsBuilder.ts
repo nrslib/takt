@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import type { AgentWorkflowStep, WorkflowStep, WorkflowState, Language, WorkflowResumePointEntry, McpServerConfig } from '../../models/types.js';
+import type { WorkflowStep, WorkflowState, Language, WorkflowResumePointEntry, McpServerConfig } from '../../models/types.js';
 import type { StepProviderOptions } from '../../models/workflow-types.js';
 import type { TaskReviewScope } from '../review-scope.js';
 import type { RunAgentOptions } from '../../../agents/runner.js';
@@ -42,9 +42,6 @@ import { getWorkflowStepKind } from '../step-kind.js';
 import { resolveStepProviderModel } from '../provider-resolution.js';
 import { resolveDeterministicAutoRoutingProviderInfo, toAutoRoutingStepMetadata } from '../auto-routing/resolver.js';
 import { buildPhase1WorkflowMeta } from './workflow-meta.js';
-import type { FindingContractInstructionContext } from '../instruction/instruction-context.js';
-import type { FindingRestatementSlotOwnerContexts } from '../findings/restatement-slot-runner.js';
-import type { FindingEvidenceSearchRequest } from '../findings/evidence-search.js';
 
 type ResolvedRunAgentOptions = RunAgentOptions & {
   resolvedProviderOptions?: StepProviderOptions;
@@ -85,35 +82,12 @@ export class OptionsBuilder {
     private readonly getReviewScope?: () => TaskReviewScope,
   ) {}
 
-  buildFindingContractInstructionContext(
-    _step: WorkflowStep,
-    _isReviewer: boolean,
-    _reviewScopeSnapshotId?: string,
-    _findingContractFreezeKey?: string,
-  ): FindingContractInstructionContext | undefined {
-    return undefined;
-  }
-
-  buildFindingRestatementSlotContexts(_input: {
-    ownerReviewerSteps: readonly AgentWorkflowStep[];
-    reviewScopeSnapshotId: string;
-  }): ReadonlyMap<string, FindingRestatementSlotOwnerContexts> {
-    return new Map();
-  }
-
-  buildFindingEvidenceSearchRequests(_input: {
-    ownerReviewerSteps: readonly AgentWorkflowStep[];
-    reviewScopeSnapshotId: string;
-  }): readonly FindingEvidenceSearchRequest[] {
-    return [];
-  }
-
   /**
    * 実行に使う provider/model の解決。構成レイヤー（step / persona / routing /
    * config）で provider が決まらない agent ステップは、auto_routing の
    * rules → strategy デフォルトへ決定的に補完する。実行ループの AI ルーターを
    * 通るステップは runtime.providerInfo が優先されるため補完は発動せず、
-   * ルーターを通らない合成ステップ（findings-manager 等）もこの共通経路で
+   * ルーターを通らない合成ステップもこの共通経路で
    * デフォルトまで落ちる。
    */
   resolveStepProviderModel(step: WorkflowStep, runtime?: RuntimeStepResolution): StepProviderInfo {

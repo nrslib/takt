@@ -1,6 +1,5 @@
 import type {
   AgentResponse,
-  FindingContractTeamLeaderDecision,
   Language,
   PartDefinition,
 } from '../core/models/types.js';
@@ -66,7 +65,6 @@ export interface MorePartsResponse {
   cancelPartIds: string[];
   parts: PartDefinition[];
   providerUsage?: ProviderUsageSnapshot;
-  findingContractDecision?: FindingContractTeamLeaderDecision;
 }
 
 export interface DecomposeTaskResponse {

@@ -48,10 +48,10 @@ app/cli/       CLI entrypoint, command wiring, routing
 core/          Engine internals — no IO providers here
   workflow/    Engine, step executors, rule evaluation, instruction builder,
   config/      Workflow/global/project config models
-  models/      Shared domain types + Zod schemas (schemas.ts, finding-*.ts)
+  models/      Shared domain types + Zod schemas
   runtime/     Runtime environment & shell presets
 features/      User-facing feature modules (interactive, pipeline, tasks, ...)
-infra/         Adapters — providers, fs, git/github/gitlab, finding-storage,
+infra/         Adapters — providers, fs, git/github/gitlab,
                observability, config loaders
 shared/        Constants, i18n, ui, utils, prompt templates
 agents/        agent-usecases (executeAgent, generateReport, judgeStatus, ...)

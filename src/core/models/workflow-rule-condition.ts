@@ -197,35 +197,8 @@ export function needsSemanticStatusJudgment(
   return semanticRuleCandidatesOf(rules, interactive).length > 1;
 }
 
-export function hasFindingsReference(condition: WorkflowRuleCondition): boolean {
-  switch (condition.kind) {
-    case 'when': return hasUnquotedFindingsReference(condition.expression);
-    case 'and': return hasFindingsReference(condition.left) || hasFindingsReference(condition.right);
-    default: return false;
-  }
-}
-
 function isReferenceBoundary(char: string | undefined): boolean {
   return char === undefined || !/[A-Za-z0-9_.]/.test(char);
-}
-
-/** Detects an unquoted findings state reference at an identifier boundary. */
-export function hasUnquotedFindingsReference(expression: string): boolean {
-  let inString = false;
-
-  for (let index = 0; index < expression.length; index++) {
-    if (expression[index] === '"') {
-      if (!isEscapedQuote(expression, index)) {
-        inString = !inString;
-      }
-      continue;
-    }
-    if (!inString && expression.startsWith('findings.', index) && isReferenceBoundary(expression[index - 1])) {
-      return true;
-    }
-  }
-
-  return false;
 }
 
 /** Detects an unquoted, complete state identifier reference. */

@@ -923,7 +923,6 @@ steps:
         emit: vi.fn(),
         resolveWorkflowCall: () => childConfig,
         createEngine,
-        refreshFindingsState: vi.fn(),
       });
       const step = parentConfig.steps[0] as never;
       const workflowCallExecution = runner.activateInvocation(step, 1, 1, []);

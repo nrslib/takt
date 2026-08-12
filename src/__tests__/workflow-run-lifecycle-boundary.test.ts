@@ -234,8 +234,6 @@ describe('workflow run lifecycle boundary', () => {
       expect(second.runSlug).not.toBe(first.runSlug);
       expect(existsSync(first.runPaths.runRootAbs)).toBe(true);
       expect(existsSync(second.runPaths.runRootAbs)).toBe(true);
-      expect(existsSync(first.runPaths.findingContractDatabaseAbs)).toBe(false);
-      expect(existsSync(second.runPaths.findingContractDatabaseAbs)).toBe(false);
       await failRun(first, cwd);
       await failRun(second, cwd);
     },

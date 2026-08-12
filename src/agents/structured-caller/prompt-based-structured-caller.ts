@@ -36,10 +36,6 @@ import {
   requestValidTeamLeaderDecomposition,
   TeamLeaderDecompositionValidationError,
 } from '../team-leader-decomposition-regeneration.js';
-import {
-  normalizeFindingIntake,
-  type NormalizeFindingIntakeOptions,
-} from '../finding-intake-normalizer-usecase.js';
 
 const log = createLogger('prompt-based-structured-caller');
 
@@ -47,13 +43,6 @@ const RETRY_MAX_ATTEMPTS = 3;
 export const RETRY_DELAY_MS = 1000;
 
 export class PromptBasedStructuredCaller implements StructuredCaller {
-  async normalizeFindingIntake(
-    report: string,
-    options: NormalizeFindingIntakeOptions,
-  ): Promise<AgentResponse> {
-    return normalizeFindingIntake(report, options);
-  }
-
   async judgeStatus(
     structuredInstruction: string,
     tagInstruction: string,

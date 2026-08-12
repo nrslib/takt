@@ -7,18 +7,14 @@ import type { RunPaths } from '../core/workflow/run/run-paths.js';
 import type { StepExecutorDeps } from '../core/workflow/engine/StepExecutor.js';
 import type { ParallelRunnerDeps } from '../core/workflow/engine/ParallelRunner.js';
 import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engine/structured-output-normalizer.js';
-import { parseFindingLedger } from '../core/workflow/findings/schemas.js';
-import type { FindingLedger } from '../core/workflow/findings/types.js';
-import { emptyFindingAuthorityProjection } from './helpers/finding-lifecycle-fixture.js';
 import {
   makeRule,
   makeStep,
   makeWorkflowResumePointEntry,
 } from './test-helpers.js';
 
-const { compactSessionBeforePhase1Mock, ingestFindingContractResultsMock } = vi.hoisted(() => ({
+const { compactSessionBeforePhase1Mock } = vi.hoisted(() => ({
   compactSessionBeforePhase1Mock: vi.fn().mockResolvedValue('reused'),
-  ingestFindingContractResultsMock: vi.fn().mockResolvedValue({}),
 }));
 
 vi.mock('../agents/agent-usecases.js', () => ({
@@ -28,14 +24,6 @@ vi.mock('../agents/agent-usecases.js', () => ({
 vi.mock('../core/workflow/engine/session-compaction.js', () => ({
   compactSessionBeforePhase1: compactSessionBeforePhase1Mock,
 }));
-
-vi.mock('../core/workflow/findings/contract-intake.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../core/workflow/findings/contract-intake.js')>();
-  return {
-    ...actual,
-    ingestFindingContractResults: ingestFindingContractResultsMock,
-  };
-});
 
 vi.mock('../core/workflow/phase-runner.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../core/workflow/phase-runner.js')>();
@@ -158,7 +146,6 @@ function makeParallelDeps(
     getTask: () => 'task',
     getInteractive: () => false,
     observabilityEnabled: false,
-    refreshFindingsState: vi.fn(),
     emitEvent: vi.fn(),
     claimStepOccurrence: vi.fn().mockReturnValue(1),
     updateMaxSteps: vi.fn(),
@@ -212,7 +199,6 @@ function makeNormalDeps(
       requestMoreParts: vi.fn(),
     },
     structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
-    refreshFindingsState: vi.fn(),
     emitEvent: vi.fn(),
     recordSynthesizedAgentUsage: vi.fn(),
     getRunId: () => 'test-run',

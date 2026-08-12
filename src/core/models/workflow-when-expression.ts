@@ -3,12 +3,6 @@ import {
   isEscapedQuote,
   splitTopLevelClausesOrThrow,
 } from './workflow-condition-expression.js';
-import {
-  describeFindingsNestedPath,
-  describeFindingsReferencePath,
-  type FindingsReferenceDescriptor,
-  type FindingsReferenceValueKind,
-} from './workflow-findings-reference.js';
 import { parseWorkflowStateReference } from './workflow-state-reference.js';
 
 export type WhenComparisonOperator = '>=' | '<=' | '!=' | '==' | '>' | '<';
@@ -57,7 +51,6 @@ const STATE_REFERENCE_PREFIXES = [
   'context.',
   'structured.',
   'effect.',
-  'findings.',
   'companion.',
 ] as const;
 
@@ -71,51 +64,18 @@ function isNonNumericLiteral(operand: WhenOperandExpression): boolean {
 
 type OperandParseContext =
   | { kind: 'workflow' }
-  | { kind: 'exists'; itemDescriptor?: FindingsReferenceDescriptor };
-
-function describeOperand(
-  operand: WhenOperandExpression,
-  context: OperandParseContext,
-): FindingsReferenceDescriptor | undefined {
-  if (operand.kind === 'literal') return undefined;
-  if (operand.kind === 'item') {
-    if (context.kind !== 'exists' || context.itemDescriptor === undefined) return undefined;
-    return describeFindingsNestedPath(
-      context.itemDescriptor,
-      operand.reference.slice('item.'.length).split('.'),
-    );
-  }
-
-  const reference = parseWorkflowStateReference(operand.reference);
-  return reference.root === 'findings'
-    ? describeFindingsReferencePath(reference.path)
-    : undefined;
-}
+  | { kind: 'exists' };
 
 function isStaticallyNonNumericOperand(
   operand: WhenOperandExpression,
-  context: OperandParseContext,
 ): boolean {
-  if (isNonNumericLiteral(operand)) return true;
-  const descriptor = describeOperand(operand, context);
-  return descriptor !== undefined && descriptor.kind !== 'number';
+  return isNonNumericLiteral(operand);
 }
 
-function assertOperandRole(
+function assertPathBearingStateOperand(
   operand: Extract<WhenOperandExpression, { kind: 'state' | 'item' }>,
   subject: string,
-  findingsKind: FindingsReferenceValueKind,
-  context: OperandParseContext,
 ): void {
-  const descriptor = describeOperand(operand, context);
-  if (descriptor !== undefined) {
-    if (descriptor?.kind !== findingsKind) {
-      throw new Error(
-        `${subject} requires a ${findingsKind} findings reference: "${operand.reference}"`,
-      );
-    }
-    return;
-  }
   if (operand.kind === 'item') return;
 
   const reference = parseWorkflowStateReference(operand.reference);
@@ -208,14 +168,10 @@ function parseQuotedLiteral(value: string, operand: string): WhenOperandExpressi
 function parseItemOperand(
   value: string,
   operand: string,
-  descriptor: FindingsReferenceDescriptor | undefined,
 ): WhenOperandExpression {
   const path = value.slice('item.'.length).split('.');
   if (path.some((segment) => segment.length === 0)) {
     throw new Error(`Invalid exists() operand "${operand}"`);
-  }
-  if (descriptor !== undefined && describeFindingsNestedPath(descriptor, path) === undefined) {
-    throw new Error(`Unsupported exists() operand "${value}"`);
   }
   return { kind: 'item', reference: value };
 }
@@ -239,17 +195,11 @@ function parseOperand(
     throw new Error(`Invalid when operand "${operand}"`);
   }
   if (STATE_REFERENCE_PREFIXES.some((prefix) => value.startsWith(prefix))) {
-    const reference = parseWorkflowStateReference(value);
-    if (
-      reference.root === 'findings'
-      && describeFindingsReferencePath(reference.path) === undefined
-    ) {
-      throw new Error(`Unsupported findings reference "${value}"`);
-    }
+    parseWorkflowStateReference(value);
     return { kind: 'state', reference: value };
   }
   if (context.kind === 'exists' && value.startsWith('item.')) {
-    return parseItemOperand(value, operand, context.itemDescriptor);
+    return parseItemOperand(value, operand);
   }
   throw new Error(`Unsupported when operand "${value}"`);
 }
@@ -310,8 +260,8 @@ function parseComparison(
   if (
     isOrderingOperator(operatorMatch.operator)
     && (
-      isStaticallyNonNumericOperand(left, context)
-      || isStaticallyNonNumericOperand(right, context)
+      isStaticallyNonNumericOperand(left)
+      || isStaticallyNonNumericOperand(right)
     )
   ) {
     throw new Error(
@@ -334,11 +284,7 @@ function parseExistsClause(clause: string): Extract<WhenClauseExpression, { kind
   if (parsedListExpression.kind !== 'state') {
     throw new Error(`exists() requires a workflow state reference: "${listExpression}"`);
   }
-  assertOperandRole(parsedListExpression, 'exists()', 'array', { kind: 'workflow' });
-  const listDescriptor = describeOperand(parsedListExpression, { kind: 'workflow' });
-  const itemDescriptor = listDescriptor?.kind === 'array'
-    ? listDescriptor.item
-    : undefined;
+  assertPathBearingStateOperand(parsedListExpression, 'exists()');
   const predicate = splitTopLevelClausesOrThrow(
     predicateExpression,
     '&&',
@@ -346,9 +292,9 @@ function parseExistsClause(clause: string): Extract<WhenClauseExpression, { kind
   ).map((predicateClause) => {
     const normalized = predicateClause.trim();
     if (normalized.startsWith('contains(')) {
-      return parseContainsClause(normalized, { kind: 'exists', itemDescriptor });
+      return parseContainsClause(normalized, { kind: 'exists' });
     }
-    const comparison = parseComparison(predicateClause, { kind: 'exists', itemDescriptor });
+    const comparison = parseComparison(predicateClause, { kind: 'exists' });
     if (comparison.operator !== '==') {
       throw new Error(`exists() only supports "==", "contains()", and "&&": "${predicateExpression}"`);
     }
@@ -377,7 +323,7 @@ function parseContainsClause(
   if (parsedListExpression.kind === 'literal') {
     throw new Error(`contains() requires a workflow state reference: "${listExpression}"`);
   }
-  assertOperandRole(parsedListExpression, 'contains()', 'array', context);
+  assertPathBearingStateOperand(parsedListExpression, 'contains()');
   return {
     kind: 'contains',
     listExpression: parsedListExpression,
@@ -400,7 +346,7 @@ function parseClause(clause: string): WhenClauseExpression {
   if (operand.kind !== 'state') {
     throw new Error(`Bare when clause must be boolean or a workflow state reference: "${normalized}"`);
   }
-  assertOperandRole(operand, 'Bare when clause', 'boolean', { kind: 'workflow' });
+  assertPathBearingStateOperand(operand, 'Bare when clause');
   return { kind: 'operand', operand };
 }
 

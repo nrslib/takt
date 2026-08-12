@@ -8,7 +8,6 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   parseFindingsFromReport,
-  buildReviewFindingEventsFromLedger,
   extractDecisionFromReport,
   inferSeverity,
   emitFixActionEvents,
@@ -17,28 +16,9 @@ import {
 import { initAnalyticsWriter } from '../features/analytics/writer.js';
 import { resetAnalyticsWriter } from '../features/analytics/writer.js';
 import type { FixActionEvent } from '../features/analytics/events.js';
-import type { FindingEvidenceRecord, FindingLedger } from '../core/models/types.js';
-import { computeFileQuoteEvidenceRecordId } from '../core/models/finding-evidence-record.js';
 
 const ANALYTICS_WORKFLOW_NAME = 'peer-review';
 const ANALYTICS_SCOPE_IDENTITY = '{"workflow":"peer-review","stack":[]}';
-
-function fileQuoteEvidenceRecord(path: string, line: number): FindingEvidenceRecord {
-  const payload = {
-    kind: 'file_quote' as const,
-    path,
-    startLine: line,
-    endLine: line,
-    verbatimExcerpt: 'fixture evidence',
-    snapshotId: 'a'.repeat(64),
-    claimIdentityHash: 'b'.repeat(64),
-    fileHash: 'c'.repeat(64),
-  };
-  return {
-    evidenceId: computeFileQuoteEvidenceRecordId(payload),
-    ...payload,
-  };
-}
 
 describe('parseFindingsFromReport', () => {
   it('should extract new findings from a review report', () => {

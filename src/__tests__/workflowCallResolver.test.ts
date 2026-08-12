@@ -11,7 +11,6 @@ import * as workflowResolver from '../infra/config/loaders/workflowResolver.js';
 import { getWorkflowSourcePath } from '../infra/config/loaders/workflowSourceMetadata.js';
 import { getWorkflowTrustInfo, resolveWorkflowTrustInfo } from '../infra/config/loaders/workflowTrustSource.js';
 import type { WorkflowConfig } from '../core/models/index.js';
-import type { AutoRoutingConfig } from '../core/models/config-types.js';
 import { findWorkflowCallStep } from './testUtils/workflowCallStepTestHelper.js';
 
 describe('workflowCallResolver module boundary', () => {
@@ -38,93 +37,6 @@ describe('workflowCallResolver module boundary', () => {
         lookupCwd: worktreeDir,
       }),
     });
-  }
-
-  function writeFindingContractCallFixture(
-    overridesYaml: string,
-    childAutoRoutingYaml = '',
-  ): void {
-    writeProjectWorkflow('root.yaml', `name: root
-finding_contract:
-  manager:
-    persona: findings-manager
-    instruction: findings-manager
-    output_contract: findings-manager
-  adjudicator:
-    persona: supervisor
-    instruction: adjudicate
-initial_step: delegate
-steps:
-  - name: delegate
-    kind: workflow_call
-    call: child
-${overridesYaml}    rules:
-      - condition: COMPLETE
-        next: COMPLETE
-`);
-    writeProjectWorkflow('child.yaml', `name: child
-subworkflow:
-  callable: true
-${childAutoRoutingYaml}initial_step: review
-steps:
-  - name: review
-    persona: reviewer
-    instruction: Review.
-    rules:
-      - condition: done
-        next: COMPLETE
-`);
-  }
-
-  function syntheticRoleAutoRouting(
-    provider: 'codex' | 'opencode',
-    strategy: AutoRoutingConfig['strategy'],
-  ): AutoRoutingConfig {
-    const candidateName = `${provider}-synthetic`;
-    return {
-      strategy,
-      router: { provider: 'claude-sdk', model: 'claude-haiku-4-5-20251001' },
-      candidates: [{
-        name: candidateName,
-        provider,
-        model: provider === 'opencode' ? 'opencode/good' : 'gpt-5',
-        routingTier: 'medium',
-      }],
-      defaultPool: 'synthetic',
-      candidatePools: {
-        synthetic: { candidates: [candidateName], fallback: candidateName },
-      },
-      rules: {
-        steps: { 'findings-terminal-adjudication': candidateName },
-      },
-    };
-  }
-
-  function childAutoRoutingYaml(
-    provider: 'codex' | 'opencode',
-    strategy: AutoRoutingConfig['strategy'],
-  ): string {
-    const candidateName = `${provider}-synthetic`;
-    const model = provider === 'opencode' ? 'opencode/good' : 'gpt-5';
-    return `auto_routing:
-  strategy: ${strategy}
-  router:
-    provider: claude-sdk
-    model: claude-haiku-4-5-20251001
-  candidates:
-    - name: ${candidateName}
-      provider: ${provider}
-      model: ${model}
-      routing_tier: medium
-  default_pool: synthetic
-  candidate_pools:
-    synthetic:
-      candidates: [${candidateName}]
-      fallback: ${candidateName}
-  rules:
-    steps:
-      findings-terminal-adjudication: ${candidateName}
-`;
   }
 
   beforeEach(() => {

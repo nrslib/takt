@@ -15,21 +15,9 @@ import {
   type MorePartsResponse,
   type TeamLeaderPartFeedbackResult,
 } from '../decompose-task-usecase.js';
-import type { AgentResponse } from '../../core/models/types.js';
 import type { StructuredCaller } from './contracts.js';
-import {
-  normalizeFindingIntake,
-  type NormalizeFindingIntakeOptions,
-} from '../finding-intake-normalizer-usecase.js';
 
 export class DefaultStructuredCaller implements StructuredCaller {
-  async normalizeFindingIntake(
-    report: string,
-    options: NormalizeFindingIntakeOptions,
-  ): Promise<AgentResponse> {
-    return normalizeFindingIntake(report, options);
-  }
-
   async judgeStatus(
     structuredInstruction: string,
     tagInstruction: string,

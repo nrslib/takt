@@ -46,8 +46,6 @@ export type ReportContentValidator = (
 ) => ReportContentValidationResult;
 
 export interface ReportPhaseGenerationOptions {
-  /** FC レビュアーの Phase 2 か。指示文へレビュアー契約を出すかどうかを決める。 */
-  readonly findingContractReviewer?: boolean;
   readonly validateReportContent?: ReportContentValidator;
   readonly retryMode?: 'standard' | 'single-attempt';
   readonly nextPhaseSequence?: () => number;
@@ -88,8 +86,7 @@ export class ReportPhaseGenerationError extends Error {
  * Phase 2: Report output.
  * Resumes the agent session with no tools to request report content.
  * Each report file is generated individually in a loop.
- * 通常レポートは plain text をそのまま扱う。Finding Contract reviewer は
- * structured publication の reportContent だけを正準本文として扱う。
+ * レポート本文は plain text として扱う。
  */
 export async function runReportPhase(
   step: WorkflowStep,

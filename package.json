@@ -24,7 +24,6 @@
     "analyze:usage": "node dist/commands/analyze-usage.js",
     "eval:prompts:prepare": "node eval/scripts/prepare.mjs",
     "eval:prompts": "npm run eval:prompts:prepare && node eval/scripts/run-evals.mjs",
-    "eval:finding-normalizer": "node eval/scripts/run-finding-normalizer-eval.mjs",
     "eval:finding-restatement:cases": "node eval/scripts/build-restatement-cases.mjs",
     "eval:finding-restatement": "node eval/scripts/run-finding-restatement-eval.mjs",
     "eval:finding-restatement:score": "node eval/scripts/score-finding-restatement-eval.mjs",
