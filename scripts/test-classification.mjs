@@ -71,7 +71,6 @@ export const auditedIntegrationBoundaryTestFiles = Object.freeze([
   'src/__tests__/assistantInitFiles.test.ts',
   'src/__tests__/catalog.test.ts',
   'src/__tests__/claude-terminal-client.test.ts',
-  'src/__tests__/codex-isolated-structured.test.ts',
   'src/__tests__/commandQualityGateRunner.test.ts',
   'src/__tests__/config-env-overrides.test.ts',
   'src/__tests__/config-project-local-priority.test.ts',
@@ -103,7 +102,6 @@ export const auditedIntegrationBoundaryTestFiles = Object.freeze([
   'src/__tests__/opencode-client-shared-server.test.ts',
   'src/__tests__/opencode-client-structured-output.test.ts',
   'src/__tests__/opencode-client-tool-loop.test.ts',
-  'src/__tests__/opencode-isolated-structured.test.ts',
   'src/__tests__/opencode-stream-handler.test.ts',
   'src/__tests__/otelFoundation.test.ts',
   'src/__tests__/phase-runner-report-history.test.ts',
@@ -356,7 +354,6 @@ export const serialGitTestFiles = Object.freeze([
 // worker RPC when they share a pool. Keep them in the IT gate, but run them
 // with the single-worker workflow runner.
 export const serialWorkflowTestFiles = Object.freeze([
-  'src/__tests__/codex-isolated-executor.test.ts',
   'src/__tests__/workflow-step-fragment-runtime.test.ts',
   'src/__tests__/workflowExecution-claude-terminal.test.ts',
 ]);

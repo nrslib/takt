@@ -29,6 +29,7 @@ export interface StructuredAgentCallOptions {
   readonly language?: Language;
   readonly abortSignal?: AbortSignal;
   readonly childProcessEnv?: Readonly<Record<string, string>>;
+  readonly failureDir?: RunAgentOptions['failureDir'];
   readonly onStream?: RunAgentOptions['onStream'];
   readonly onPromptResolved?: RunAgentOptions['onPromptResolved'];
   readonly onDispatch?: RunAgentOptions['onDispatch'];
@@ -96,6 +97,7 @@ async function executeFreshAgent(
     ...(options.language === undefined ? {} : { language: options.language }),
     ...(options.abortSignal === undefined ? {} : { abortSignal: options.abortSignal }),
     ...(options.childProcessEnv === undefined ? {} : { childProcessEnv: options.childProcessEnv }),
+    ...(options.failureDir === undefined ? {} : { failureDir: options.failureDir }),
     ...(options.onStream === undefined ? {} : { onStream: options.onStream }),
     ...(options.onPromptResolved === undefined ? {} : { onPromptResolved: options.onPromptResolved }),
     ...(options.onDispatch === undefined ? {} : { onDispatch: options.onDispatch }),

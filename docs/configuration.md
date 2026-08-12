@@ -130,7 +130,7 @@ assistant:
 #         reasoning_effort: medium
 ```
 
-`takt_providers.selector` is optional. Provider/model precedence is explicit CLI or environment override, project selector, global selector, project top-level, then global top-level. A model is accepted only when its candidate belongs to the resolved provider. Only selector entries contribute `provider_options`, merged by option leaf from global then project; top-level, persona, and pool sub-step options are not inherited by the selector. An empty selector entry or an empty `provider_options` entry is rejected during configuration loading. Dynamic selectors require a provider that guarantees strict read-only internal-agent isolation; Claude, Codex, and Mock satisfy this contract, while OpenCode, Cursor, Copilot, Kiro, and Pi are rejected before selector or participant startup. Selector settings remain unused and do not affect workflows without dynamic parallel.
+`takt_providers.selector` is optional. Provider/model precedence is explicit CLI or environment override, project selector, global selector, project top-level, then global top-level. A model is accepted only when its candidate belongs to the resolved provider. Only selector entries contribute `provider_options`, merged by option leaf from global then project; top-level, persona, and pool sub-step options are not inherited by the selector. An empty selector entry or an empty `provider_options` entry is rejected during configuration loading. Dynamic selectors use the provider-neutral fresh-session transport. Configure `capabilities` and `permission_mode` on a runtime profile when explicit restrictions are required; omitted fields add no selector-specific restrictions. Selector settings remain unused and do not affect workflows without dynamic parallel.
 
 ```yaml
 # ~/.takt/config.yaml (continued)
@@ -597,6 +597,8 @@ provider:
     router:
       provider: codex
       model: gpt-5.6-luna
+      capabilities: readonly
+      permission_mode: readonly
       options:
         reasoning_effort: high
 
@@ -629,7 +631,9 @@ provider:
         fallback_profile: sol-high
 ```
 
-`provider.profiles` holds named provider/model/options definitions. A profile's flat `options` bag applies to that profile's provider (for example `reasoning_effort` maps to the Codex `reasoning_effort` option). Profiles may reuse another profile with an explicit `extends`; there is no field-level merge between same-name profiles across the global and project files — the project definition replaces the whole profile.
+`provider.profiles` holds named provider/model/options definitions. A profile's flat `options` bag applies to that profile's provider (for example `reasoning_effort` maps to the Codex `reasoning_effort` option). Optional `capabilities` names one provider-options preset or a list of presets applied in order. Presets resolve project → global → builtin, like workflow capabilities, and inline `options` override preset values. Optional `permission_mode` selects the provider's exact permission mode. Profiles may reuse another profile with an explicit `extends`; there is no field-level merge between same-name profiles across the global and project files — the project definition replaces the whole profile.
+
+TAKT-owned structured agents always start a fresh session. Providers with native structured output receive the schema directly; other providers receive a JSON schema instruction, and TAKT parses and validates the returned object. TAKT does not add internal-agent-specific permission, tool, network, sandbox, skill, MCP, or bypass policy. Assign a profile with `capabilities`, `permission_mode`, or both when a role needs restrictions. If both are omitted, normal provider configuration is used unchanged.
 
 `provider.defaults` and every `provider.targets` entry choose exactly one of a fixed `profile` or an auto-routing `pool`. Steps are named `<leaf-workflow-name>/<step-name>`; control nodes that do not run an agent (such as `workflow_call`) are not resolution targets.
 
@@ -702,7 +706,7 @@ TAKT uses three provider-independent permission modes:
 | `edit` | Allow file edits with confirmation | `acceptEdits` | `workspace-write` | `workspace-write` | `read`, `grep`, `find`, `ls`, `edit`, `write`, `bash` | default flags (no `--force`) | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` |
 | `full` | Bypass all permission checks | `bypassPermissions` | `danger-full-access` | `danger-full-access` | all registered Pi tools | `--force` | `--yolo` | `--trust-all-tools` |
 
-Pi permission modes are SDK active-tool allowlists, not an operating-system sandbox, and TAKT does not add per-tool confirmation prompts for Pi. In particular, Pi `edit` enables `bash`, and Pi's file tools can accept absolute paths. Run Pi with trusted workflow input and extensions; TAKT does not use Pi for dynamic internal agents that require strict read-only isolation.
+Pi permission modes are SDK active-tool allowlists, not an operating-system sandbox, and TAKT does not add per-tool confirmation prompts for Pi. In particular, Pi `edit` enables `bash`, and Pi's file tools can accept absolute paths. Run Pi with trusted workflow input and extensions. If an internal-agent role needs narrower authority, configure capabilities and a permission mode on its Pi profile.
 
 ### Configuration
 
@@ -1144,17 +1148,17 @@ provider:
         profile: review
 ```
 
-| Provider | Isolated structured companion execution | Implementer tool events |
-|---|---:|---:|
-| `claude-sdk` | Yes | Live |
-| `codex` | Yes | Live |
-| `claude` (headless) | Yes | Live |
-| `claude-terminal` | Yes | Replayed after the turn |
-| `mock` | Yes | Scenario-dependent |
-| `opencode` | Yes | Live |
-| `pi` | No | Live |
-| `cursor`, `copilot`, `kiro` | No | Unavailable |
+Companion structured calls use the same provider-neutral fresh-session transport as other TAKT-owned structured agents. Native structured output is used where available; other providers use the validated JSON fallback. The resolved profile's capabilities and permission mode are applied unchanged, with no companion-specific restrictions.
 
-`No` means the workflow is rejected during loading; TAKT does not run a degraded, non-isolated companion.
+| Provider | Implementer tool events |
+|---|---:|
+| `claude-sdk` | Live |
+| `codex` | Live |
+| `claude` (headless) | Live |
+| `claude-terminal` | Replayed after the turn |
+| `mock` | Scenario-dependent |
+| `opencode` | Live |
+| `pi` | Live |
+| `cursor`, `copilot`, `kiro` | Unavailable |
 
 When live tool events are unavailable, completion review and the same-session fix loop still run.

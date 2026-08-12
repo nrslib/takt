@@ -100,7 +100,7 @@ describe('DynamicParallelSelectorCoordinator', () => {
 
     const outputSchema = mockedExecuteAgent.mock.calls[0]?.[1];
     if (outputSchema === undefined) throw new Error('Selector output schema was not sent');
-    expect(mockedExecuteAgent.mock.calls[0]?.[3]).toMatchObject({
+    expect(mockedExecuteAgent.mock.calls[0]?.[2]).toMatchObject({
       failureDir: '/project/.takt/runs/run/failures',
     });
     expect(() => assertStrictStructuredOutputSchema(outputSchema)).not.toThrow();

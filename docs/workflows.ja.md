@@ -295,7 +295,7 @@ TAKT は Normal / Parallel / Dynamic Parallel / Arpeggio / Team Leader / Workflo
 
 ### Dynamic Parallel Step
 
-`parallel` には、常時実行する `fixed` と selector が選ぶ `pool` を指定するオブジェクト形式も使えます。TAKT は step へ進入した時点で read-only の内部 selector を実行します。selector は workflow step ではなく、agent や workflow 定義を生成・変更できません。selector は read-only 権限、permission bypass 無効、MCP server 非継承、TAKT が所有する structured output contract で実行されます。
+`parallel` には、常時実行する `fixed` と selector が選ぶ `pool` を指定するオブジェクト形式も使えます。TAKT は step へ進入した時点で内部 selector を実行します。selector は workflow step ではなく、agent や workflow 定義を生成・変更できません。解決済み runtime profile を fresh session で使い、TAKT が所有する structured output contract を返します。明示的な制限が必要なら profile に `capabilities` と `permission_mode` を設定します。省略した項目について selector 専用の制限は追加されません。
 
 ```yaml
   - name: reviewers
@@ -515,7 +515,7 @@ pool 内の全候補は同じ形を持ちます。
 
 #### selector 契約
 
-`dynamic_facets` を持つ step へ進入したとき、TAKT は main agent 起動前に内部の read-only selector を実行します。selector は workflow step ではなく、agent や workflow 定義を生成・変更できず、read-only 権限、permission bypass 無効、MCP server 非継承、TAKT が所有する structured output contract で fresh session で実行します。
+`dynamic_facets` を持つ step へ進入したとき、TAKT は main agent 起動前に内部 selector を実行します。selector は workflow step ではなく、agent や workflow 定義を生成・変更できず、解決済み runtime profile と TAKT が所有する structured output contract を fresh session で使います。明示的な制限が必要なら profile に `capabilities` と `permission_mode` を設定します。省略した項目について selector 専用の制限は追加されません。
 
 selector には少なくとも次を渡します。
 
@@ -830,7 +830,7 @@ promotion は並列サブ step ではサポートされません。
 | `knowledge` | - | knowledge キーまたはキー配列（section map、または bare 名で project → user → builtin の順に解決） |
 | `instruction` | - | instruction キー（section map、または bare 名で project → user → builtin の順に解決） |
 | `edit` | - | step がプロジェクトファイルを編集できるか (`true` / `false`) |
-| `companion` | - | 通常の agent step と並行して隔離された read-only reviewer を実行（[Companion レビュアー](#companion-レビュアー)参照） |
+| `companion` | - | 解決済み runtime profile を使う Companion reviewer を通常 agent step と並行実行（[Companion レビュアー](#companion-レビュアー)参照） |
 | `pass_previous_response` | `true` | 前の step の出力を `{previous_response}` に渡す |
 | `provider_options.claude.allowed_tools` | - | step または workflow に対する Claude ツール許可リスト |
 | `provider_options.claude.base_url` | - | `claude` / `claude-sdk` 用の Anthropic 互換 base URL（[configuration ガイド](./configuration.ja.md#provider-base-url-base_url) 参照） |

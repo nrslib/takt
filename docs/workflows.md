@@ -296,7 +296,7 @@ Sub-steps execute concurrently, and the parent aggregates sub-step matches via `
 
 ### Dynamic Parallel Step
 
-`parallel` may instead define a fixed set and a selectable pool. TAKT runs an internal read-only selector when the step is entered; it is not a workflow step and cannot create agents or change the workflow. The selector runs with read-only permissions, permission bypass disabled, no inherited MCP servers, and a TAKT-owned structured output contract.
+`parallel` may instead define a fixed set and a selectable pool. TAKT runs an internal selector when the step is entered; it is not a workflow step and cannot create agents or change the workflow. The selector uses the resolved runtime profile in a fresh session and returns a TAKT-owned structured output contract. Configure `capabilities` and `permission_mode` on that profile when explicit restrictions are required; omitted fields add no selector-specific restrictions.
 
 ```yaml
   - name: reviewers
@@ -516,7 +516,7 @@ Every candidate in a pool shares the same shape:
 
 #### Selector contract
 
-When a step with `dynamic_facets` is entered, TAKT runs an internal read-only selector before the main agent starts. The selector is not a workflow step, cannot create agents or change the workflow, and runs with read-only permissions, permission bypass disabled, no inherited MCP servers, and a TAKT-owned structured output contract in a fresh session.
+When a step with `dynamic_facets` is entered, TAKT runs an internal selector before the main agent starts. The selector is not a workflow step, cannot create agents or change the workflow, and uses the resolved runtime profile with a TAKT-owned structured output contract in a fresh session. Configure `capabilities` and `permission_mode` on that profile when explicit restrictions are required; omitted fields add no selector-specific restrictions.
 
 The selector receives at least:
 
@@ -831,7 +831,7 @@ Promotion is not supported on parallel sub-steps.
 | `knowledge` | - | Knowledge key or array of keys (section map, or bare facet name resolved project → user → builtin) |
 | `instruction` | - | Instruction key (section map, or bare facet name resolved project → user → builtin) |
 | `edit` | - | Whether the step can edit project files (`true`/`false`) |
-| `companion` | - | Run isolated read-only reviewers alongside a normal agent step (see [Companion reviewers](#companion-reviewers)) |
+| `companion` | - | Run companion reviewers alongside a normal agent step using their resolved runtime profiles (see [Companion reviewers](#companion-reviewers)) |
 | `pass_previous_response` | `true` | Pass previous step's output to `{previous_response}` |
 | `provider_options.claude.allowed_tools` | - | Claude tool allowlist for the step or workflow |
 | `provider_options.claude.base_url` | - | Anthropic-compatible base URL for `claude` / `claude-sdk` (see [configuration guide](./configuration.md#provider-base-url-base_url)) |

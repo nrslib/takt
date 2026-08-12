@@ -130,7 +130,7 @@ assistant:
 #         reasoning_effort: medium
 ```
 
-`takt_providers.selector` は任意です。provider/model の優先順位は、明示的な CLI または環境 override、project selector、global selector、project top-level、global top-level の順です。model は解決済み provider と一致する候補だけを採用します。`provider_options` は selector entry だけを global → project の leaf 単位でマージし、top-level・persona・pool sub-step の options は selector に継承されません。空の selector entry と空の `provider_options` entry は設定読み込み時に拒否されます。dynamic selector には strict read-only の内部 agent 隔離を保証できる provider が必要です。Claude、Codex、Mock はこの契約を満たし、OpenCode、Cursor、Copilot、Kiro、Pi は selector・participant 起動前に拒否されます。dynamic parallel を使わない workflow では selector 設定を解決せず、既存実行へ影響しません。
+`takt_providers.selector` は任意です。provider/model の優先順位は、明示的な CLI または環境 override、project selector、global selector、project top-level、global top-level の順です。model は解決済み provider と一致する候補だけを採用します。`provider_options` は selector entry だけを global → project の leaf 単位でマージし、top-level・persona・pool sub-step の options は selector に継承されません。空の selector entry と空の `provider_options` entry は設定読み込み時に拒否されます。dynamic selector は provider-neutral な fresh-session transport を使います。明示的な制限が必要な runtime profile には `capabilities` と `permission_mode` を設定し、省略した項目には selector 専用の制限を追加しません。dynamic parallel を使わない workflow では selector 設定を解決せず、既存実行へ影響しません。
 
 ```yaml
 # ~/.takt/config.yaml（続き）
@@ -591,6 +591,8 @@ provider:
     router:
       provider: codex
       model: gpt-5.6-luna
+      capabilities: readonly
+      permission_mode: readonly
       options:
         reasoning_effort: high
 
@@ -623,7 +625,9 @@ provider:
         fallback_profile: sol-high
 ```
 
-`provider.profiles` は名前付きの provider/model/options 定義を保持します。profile のフラットな `options` はその profile の provider に適用されます（例えば `reasoning_effort` は Codex の `reasoning_effort` オプションになります）。profile は明示的な `extends` で別の profile を継承できます。global と project で同名の profile を field 単位で暗黙に混ぜることはなく、project の定義が profile 全体を置き換えます。
+`provider.profiles` は名前付きの provider/model/options 定義を保持します。profile のフラットな `options` はその profile の provider に適用されます（例えば `reasoning_effort` は Codex の `reasoning_effort` オプションになります）。任意の `capabilities` には provider-options preset 名、または適用順の preset 名リストを指定します。workflow の `capabilities` と同じ project → global → builtin の順で解決し、inline の `options` が preset より優先されます。任意の `permission_mode` は provider の正確な permission mode を設定します。profile は明示的な `extends` で別の profile を継承できます。global と project で同名の profile を field 単位で暗黙に混ぜることはなく、project の定義が profile 全体を置き換えます。
+
+TAKT が所有する structured agent は常に fresh session で起動します。native structured output 対応 provider には schema を直接渡し、非対応 provider には JSON schema instruction を渡して返却 object を parse・validate します。TAKT は internal agent 専用の permission、tool、network、sandbox、skill、MCP、bypass policy を追加しません。role を制限する場合は `capabilities` と `permission_mode` の一方または両方を明示した profile を割り当てます。両方を省略した場合は、通常の provider 設定をそのまま使用します。
 
 `provider.defaults` と各 `provider.targets` エントリは、固定の `profile` か auto routing を行う `pool` のいずれか一方だけを指定します。step は `<leaf-workflow-name>/<step-name>` 形式で指定し、agent を起動しない制御ノード（`workflow_call` など）は解決対象になりません。
 
@@ -696,7 +700,7 @@ TAKT は provider 非依存の3つのパーミッションモードを使用し�
 | `edit` | 確認付きでファイル編集を許可 | `acceptEdits` | `workspace-write` | `workspace-write` | `read`, `grep`, `find`, `ls`, `edit`, `write`, `bash` | デフォルトフラグ（`--force` なし） | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` |
 | `full` | すべてのパーミッションチェックをバイパス | `bypassPermissions` | `danger-full-access` | `danger-full-access` | 登録済み Pi tool すべて | `--force` | `--yolo` | `--trust-all-tools` |
 
-Pi の permission mode は SDK の active-tool allowlist であり、OS sandbox ではありません。また、TAKT は Pi に tool ごとの確認 prompt を追加しません。特に Pi の `edit` は `bash` を有効化し、file tool は絶対 path も受け取れます。信頼できる workflow input と extension だけで実行してください。TAKT は strict read-only isolation が必要な dynamic internal agent には Pi を使用しません。
+Pi の permission mode は SDK の active-tool allowlist であり、OS sandbox ではありません。また、TAKT は Pi に tool ごとの確認 prompt を追加しません。特に Pi の `edit` は `bash` を有効化し、file tool は絶対 path も受け取れます。信頼できる workflow input と extension だけで実行してください。internal agent の role に狭い権限が必要なら、Pi の profile に capabilities と permission mode を明示してください。
 
 ### 設定方法
 
@@ -1138,17 +1142,17 @@ provider:
         profile: review
 ```
 
-| Provider | Companion の隔離構造化実行 | 実装エージェントの tool event |
-|---|---:|---:|
-| `claude-sdk` | 可 | ライブ |
-| `codex` | 可 | ライブ |
-| `claude`（headless） | 可 | ライブ |
-| `claude-terminal` | 可 | ターン後に再生 |
-| `mock` | 可 | scenario に依存 |
-| `opencode` | 可 | ライブ |
-| `pi` | 不可 | ライブ |
-| `cursor`、`copilot`、`kiro` | 不可 | 利用不可 |
+Companion の structured call は、他の TAKT 所有 structured agent と同じ provider-neutral な fresh-session transport を使います。native structured output 対応 provider ではそれを使い、それ以外では検証付き JSON fallback を使います。解決された profile の capabilities と permission mode をそのまま適用し、Companion 専用の追加制約は加えません。
 
-`不可` の provider を指定した workflow はロード時に拒否され、隔離を弱めた縮退実行は行いません。
+| Provider | 実装エージェントの tool event |
+|---|---:|
+| `claude-sdk` | ライブ |
+| `codex` | ライブ |
+| `claude`（headless） | ライブ |
+| `claude-terminal` | ターン後に再生 |
+| `mock` | scenario に依存 |
+| `opencode` | ライブ |
+| `pi` | ライブ |
+| `cursor`、`copilot`、`kiro` | 利用不可 |
 
 ライブの tool event がない場合も、完了レビューと同一 session の修正ループは動作します。

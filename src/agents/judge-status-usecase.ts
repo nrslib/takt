@@ -33,6 +33,7 @@ export interface JudgeStatusOptions {
   language?: Language;
   childProcessEnv?: RunAgentOptions['childProcessEnv'];
   abortSignal?: AbortSignal;
+  failureDir?: RunAgentOptions['failureDir'];
   onStream?: StreamCallback;
   onJudgeStage?: (entry: JudgeStageLogEntry) => void;
   onStructuredPromptResolved?: (promptParts: {
@@ -64,6 +65,7 @@ export interface TagJudgeRunOptions {
   onStream?: StreamCallback;
   childProcessEnv?: RunAgentOptions['childProcessEnv'];
   abortSignal?: AbortSignal;
+  failureDir?: RunAgentOptions['failureDir'];
   stepName: string;
   onPromptResolved?: JudgeStatusOptions['onStructuredPromptResolved'];
 }
@@ -92,6 +94,7 @@ export async function runTagJudgeStage(
       onStream: runOptions.onStream,
       childProcessEnv: runOptions.childProcessEnv,
       abortSignal: runOptions.abortSignal,
+      failureDir: runOptions.failureDir,
       onPromptResolved: runOptions.onPromptResolved,
     });
   } catch (error) {
@@ -147,6 +150,7 @@ export interface EvaluateConditionOptions {
   projectCwd?: string;
   childProcessEnv?: RunAgentOptions['childProcessEnv'];
   abortSignal?: AbortSignal;
+  failureDir?: RunAgentOptions['failureDir'];
   onJudgeResponse?: (entry: {
     instruction: string;
     status: 'done' | 'error';
@@ -200,6 +204,7 @@ export async function evaluateCondition(
       },
       childProcessEnv: options.childProcessEnv,
       abortSignal: options.abortSignal,
+      failureDir: options.failureDir,
     });
   } catch (error) {
     if (!(error instanceof StructuredAgentContractError)) {
@@ -284,6 +289,7 @@ async function runAiJudgeStage(
       projectCwd: options.projectCwd,
       childProcessEnv: options.childProcessEnv,
       abortSignal: options.abortSignal,
+      failureDir: options.failureDir,
       onJudgeResponse: stage3.capture,
     });
   } catch (error) {
@@ -329,6 +335,7 @@ export async function runJudgeFallbackStages(
       onStream: options.onStream,
       childProcessEnv: options.childProcessEnv,
       abortSignal: options.abortSignal,
+      failureDir: options.failureDir,
       stepName: options.stepName,
       onPromptResolved: options.onStructuredPromptResolved,
     },
@@ -388,6 +395,7 @@ export async function judgeStatus(
         onStream: options.onStream,
         childProcessEnv: options.childProcessEnv,
         abortSignal: options.abortSignal,
+        failureDir: options.failureDir,
         onPromptResolved: options.onStructuredPromptResolved,
       },
     );

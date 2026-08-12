@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
-import { CapabilityAwareStructuredCaller, type StructuredCaller } from '../../../agents/structured-caller.js';
+import { ProviderNeutralStructuredCaller, type StructuredCaller } from '../../../agents/structured-caller.js';
 import { createWorkRequirementEstimator } from '../../../agents/auto-routing-usecase.js';
 import { createLogger, generateReportDir, getErrorMessage, isValidReportDirName } from '../../../shared/utils/index.js';
 import type {
@@ -165,7 +165,7 @@ export class WorkflowEngine extends EventEmitter {
       options.startStep,
     );
     assertTaskPrefixPair(options.taskPrefix, options.taskColorIndex);
-    this.structuredCaller = options.structuredCaller ?? new CapabilityAwareStructuredCaller();
+    this.structuredCaller = options.structuredCaller ?? new ProviderNeutralStructuredCaller();
     if (options.reportDirName !== undefined && !isValidReportDirName(options.reportDirName)) {
       throw new Error(`Invalid reportDirName: ${options.reportDirName}`);
     }

@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
-import { buildFindingManagerStep } from '../core/workflow/findings/manager-step.js';
 import type { WorkflowStep } from '../core/models/types.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 
@@ -16,6 +15,7 @@ function createStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
 
 type BuilderEngineOverrides = Partial<WorkflowEngineOptions> & {
   workflowName?: string;
+  failureDir?: string;
 };
 
 function createProcessSafetyByStep(parentRunPid: number): WorkflowEngineOptions['phase1ProcessSafetyByStep'] {
@@ -47,8 +47,9 @@ function createBuilder(step: WorkflowStep, engineOverrides: BuilderEngineOverrid
     () => engineOverrides.workflowName ?? 'default',
     () => 'test workflow',
     undefined,
-    undefined,
     () => 'Original workflow task',
+    undefined,
+    engineOverrides.failureDir === undefined ? undefined : () => engineOverrides.failureDir,
   );
 }
 
@@ -739,32 +740,6 @@ describe('OptionsBuilder auto routing deterministic completion', () => {
       ...overrides,
     });
   }
-
-  it('resolveStepProviderModel falls back to the strategy default candidate when auto routing suppresses the config provider', () => {
-    // 事故の再現: config デフォルト provider は auto_routing 有効時に抑止される。
-    // 実行ループの AI ルーターを通らない findings-manager（実際に合成される
-    // ステップそのもの）も、共通の解決経路で strategy デフォルトまで落ち、
-    // buildAgentOptions の structured_output ガードを通過すること。
-    const managerStep = buildFindingManagerStep({
-      contract: {
-        manager: {
-          persona: 'findings-manager',
-          instruction: 'findings-manager',
-          outputContract: 'findings-manager',
-        },
-      },
-    });
-    const builder = createBuilder(managerStep, { provider: 'codex', providerSource: 'global', autoRouting });
-
-    const resolved = builder.resolveStepProviderModel(managerStep);
-
-    expect(resolved).toMatchObject({
-      provider: 'codex',
-      model: 'default-candidate-model',
-      providerSource: 'auto.fallback',
-    });
-    expect(builder.buildAgentOptions(managerStep).resolvedProvider).toBe('codex');
-  });
 
   it('resolveStepProviderModel applies auto routing rules before the strategy default', () => {
     const step = createManagerLikeStep({ name: 'implement' });

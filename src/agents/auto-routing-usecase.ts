@@ -40,6 +40,7 @@ export interface WorkRequirementEstimatorOptions {
   language?: RunAgentOptions['language'];
   childProcessEnv?: RunAgentOptions['childProcessEnv'];
   abortSignal?: RunAgentOptions['abortSignal'];
+  failureDir?: RunAgentOptions['failureDir'];
 }
 
 interface EstimatorAbortScope {
@@ -156,6 +157,7 @@ export function createWorkRequirementEstimator(options: WorkRequirementEstimator
             abortSignal: abortScope.signal,
             language: options.language,
             childProcessEnv: options.childProcessEnv,
+            failureDir: options.failureDir,
           }),
           abortScope.aborted,
         ]);
