@@ -643,6 +643,7 @@ describe('session compaction Phase 1 wiring', () => {
       'review:1:1:3',
     ]);
     expect(recordSynthesizedAgentUsage).toHaveBeenCalledTimes(2);
+    expect(recordSynthesizedAgentUsage.mock.calls.map((call) => call[2])).toEqual([true, true]);
     expect(updatePersonaSession).toHaveBeenCalledWith(sessionKey, undefined);
     expect(state.personaSessions.get(sessionKey)).toBe('session-fresh');
     expect(result.response.content).toBe('approved fresh');
@@ -698,6 +699,7 @@ describe('session compaction Phase 1 wiring', () => {
       'api-review:1:1:3',
     ]);
     expect(delegatedUsage).toHaveBeenCalledTimes(3);
+    expect(delegatedUsage.mock.calls.map((call) => call[1].success)).toEqual([true, true, true]);
     expect(state.personaSessions.get(sessionKey)).toBe('session-fresh');
     expect(state.stepOutputs.get('api-review')?.content).toBe('approved fresh');
     expect(result.response.status).toBe('done');

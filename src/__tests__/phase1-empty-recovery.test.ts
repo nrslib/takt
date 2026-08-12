@@ -81,6 +81,29 @@ describe('Phase 1 empty response recovery', () => {
     expect(onPhaseComplete).toHaveBeenCalledOnce();
   });
 
+  it('records a failure without completing a phase when prompt resolution throws', async () => {
+    const onPhaseComplete = vi.fn();
+    const recordFailure = vi.fn();
+
+    await expect(executeObservedPhase1Attempt({
+      enabled: false,
+      workflowName: 'review',
+      eventStep: { kind: 'agent', name: 'reviewer', edit: false, rules: [] },
+      spanStep: { kind: 'agent', name: 'reviewer', edit: false, rules: [] },
+      iteration: 1,
+      attempt: { sequence: 2, reason: 'initial', instruction: 'review', sessionId: undefined },
+      providerInfo: { provider: 'mock', model: undefined },
+      execute: async () => {
+        throw new Error('prompt resolution failed');
+      },
+      onPhaseComplete,
+      recordFailure,
+    })).rejects.toThrow('prompt resolution failed');
+
+    expect(onPhaseComplete).not.toHaveBeenCalled();
+    expect(recordFailure).toHaveBeenCalledOnce();
+  });
+
   it('publication retryは指定sequenceでfresh Phase 1を一度だけ実行する', async () => {
     const discardSession = vi.fn();
     const complete = vi.fn();

@@ -81,6 +81,7 @@ describe('review completion episode', () => {
 
   it('returns a Phase 2 diagnostic without modifying the latest reviewer response', async () => {
     const latest = response('authoritative reviewer report');
+    const executeRetry = vi.fn();
     const result = await runReviewCompletionEpisode({
       config: {
         minRetry: 0,
@@ -90,13 +91,66 @@ describe('review completion episode', () => {
       originalInstruction: 'review',
       initialResponse: latest,
       initialSessionId: latest.sessionId,
-      executeRetry: vi.fn(),
+      executeRetry,
       judge: vi.fn().mockRejectedValue(new Error('judge unavailable')),
       isAbort: () => false,
     });
 
     expect(result.response).toBe(latest);
     expect(result.diagnostic?.kind).toBe('judge_unavailable');
+    expect(executeRetry).not.toHaveBeenCalled();
+  });
+
+  it('executes the configured minimum retry even when the initial review is complete', async () => {
+    const executeRetry = vi.fn(async () => response('mandatory retry', 'retry-session'));
+    const judge = vi.fn().mockResolvedValue({
+      complete: true,
+      reason: 'complete',
+      missingObligations: [],
+    });
+
+    const result = await runReviewCompletionEpisode({
+      config: { minRetry: 1, maxRetry: 2, retryInstruction: 'retry' },
+      originalInstruction: 'review',
+      initialResponse: response('initial'),
+      initialSessionId: 'review-session',
+      executeRetry,
+      judge,
+      isAbort: () => false,
+    });
+
+    expect(executeRetry).toHaveBeenCalledOnce();
+    expect(judge).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ attempts: 2, response: { content: 'mandatory retry' } });
+    expect(result.diagnostic).toBeUndefined();
+  });
+
+  it('reports max_retry_reached when the mandatory final retry remains incomplete', async () => {
+    const judge = vi.fn()
+      .mockResolvedValueOnce({ complete: true, reason: 'initially complete', missingObligations: [] })
+      .mockResolvedValueOnce({
+        complete: false,
+        reason: 'final retry introduced a gap',
+        missingObligations: [{
+          kind: 'remediation_regression',
+          contractFamily: 'review-completion',
+          path: 'consumer.ts',
+          reason: 'regression remains',
+        }],
+      });
+
+    const result = await runReviewCompletionEpisode({
+      config: { minRetry: 1, maxRetry: 1, retryInstruction: 'retry' },
+      originalInstruction: 'review',
+      initialResponse: response('initial'),
+      initialSessionId: 'review-session',
+      executeRetry: vi.fn(async () => response('mandatory retry', 'retry-session')),
+      judge,
+      isAbort: () => false,
+    });
+
+    expect(result.attempts).toBe(2);
+    expect(result.diagnostic?.kind).toBe('max_retry_reached');
   });
 
   it('uses one schema because the actual reviewer instruction defines scope', () => {

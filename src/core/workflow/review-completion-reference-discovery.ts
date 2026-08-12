@@ -165,20 +165,32 @@ function extractSeeds(
   return bounded;
 }
 
+interface CompiledReferenceSeed {
+  readonly seed: ReferenceSeed;
+  readonly pattern: RegExp;
+}
+
+function compileReferenceSeeds(seeds: readonly ReferenceSeed[]): CompiledReferenceSeed[] {
+  return seeds.map((seed) => ({
+    seed,
+    pattern: new RegExp(
+      `(^|[^A-Za-z0-9_$])${seed.value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Za-z0-9_$]|$)`,
+    ),
+  }));
+}
+
 function referenceMatch(
   path: string,
   lines: readonly string[],
-  seed: ReferenceSeed,
+  compiledSeed: CompiledReferenceSeed,
 ): ReviewCompletionReferenceEvidence | undefined {
-  const escapedSeed = seed.value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const boundedSeed = new RegExp(`(^|[^A-Za-z0-9_$])${escapedSeed}([^A-Za-z0-9_$]|$)`);
-  const lineIndex = lines.findIndex((line) => boundedSeed.test(line));
+  const lineIndex = lines.findIndex((line) => compiledSeed.pattern.test(line));
   if (lineIndex < 0) return undefined;
   return {
     path,
     line: lineIndex + 1,
-    relationKind: seed.kind,
-    seed: seed.value,
+    relationKind: compiledSeed.seed.kind,
+    seed: compiledSeed.seed.value,
   };
 }
 
@@ -224,6 +236,7 @@ export function discoverReviewCompletionReferences(input: {
   const omissions = new Map<ReviewCompletionReferenceOmissionReason, number>();
   const seeds = extractSeeds(input.changedFiles, input.diff, omissions);
   if (seeds.length === 0) return { references: [], omissions };
+  const compiledSeeds = compileReferenceSeeds(seeds);
 
   let inventory: string[];
   try {
@@ -268,9 +281,11 @@ export function discoverReviewCompletionReferences(input: {
     }
     scannedBytes += bytes;
     const lines = source.content.split('\n');
-    const reference = seeds
-      .map((seed) => referenceMatch(path, lines, seed))
-      .find((candidate) => candidate !== undefined);
+    let reference: ReviewCompletionReferenceEvidence | undefined;
+    for (const compiledSeed of compiledSeeds) {
+      reference = referenceMatch(path, lines, compiledSeed);
+      if (reference !== undefined) break;
+    }
     if (reference === undefined) continue;
     if (references.length < MAX_REFERENCE_CANDIDATES) {
       references.push(reference);

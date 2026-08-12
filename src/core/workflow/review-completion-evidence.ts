@@ -262,12 +262,35 @@ function enforceSerializedLimit(
     excess = Buffer.byteLength(JSON.stringify(evidence), 'utf8')
       - REVIEW_COMPLETION_EVIDENCE_MAX_TOTAL_BYTES;
   }
-  while (
-    files.length > 0
-    && Buffer.byteLength(JSON.stringify(evidence), 'utf8') > REVIEW_COMPLETION_EVIDENCE_MAX_TOTAL_BYTES
-  ) {
-    files.pop();
-    addOmission(omissionCounts, 'total_size_limit');
+  const trimTrailingItems = <T>(
+    items: T[],
+    reason: ReviewCompletionEvidenceOmissionReason,
+    buildCandidate: (
+      retainedItems: T[],
+      omissions: ReadonlyMap<ReviewCompletionEvidenceOmissionReason, number>,
+    ) => ReviewCompletionEvidence,
+  ): void => {
+    if (items.length === 0
+      || Buffer.byteLength(JSON.stringify(evidence), 'utf8') <= REVIEW_COMPLETION_EVIDENCE_MAX_TOTAL_BYTES) {
+      return;
+    }
+    const originalLength = items.length;
+    let minimumRemoved = 1;
+    let maximumRemoved = originalLength;
+    while (minimumRemoved < maximumRemoved) {
+      const removed = Math.floor((minimumRemoved + maximumRemoved) / 2);
+      const candidateOmissions = new Map(omissionCounts);
+      addOmission(candidateOmissions, reason, removed);
+      const retainedItems = items.slice(0, originalLength - removed);
+      const candidate = buildCandidate(retainedItems, candidateOmissions);
+      if (Buffer.byteLength(JSON.stringify(candidate), 'utf8') <= REVIEW_COMPLETION_EVIDENCE_MAX_TOTAL_BYTES) {
+        maximumRemoved = removed;
+      } else {
+        minimumRemoved = removed + 1;
+      }
+    }
+    items.splice(originalLength - minimumRemoved, minimumRemoved);
+    addOmission(omissionCounts, reason, minimumRemoved);
     evidence = buildEvidence(
       files,
       currentDiff,
@@ -276,52 +299,39 @@ function enforceSerializedLimit(
       priorGapPaths,
       omissionCounts,
     );
-  }
-  while (
-    references.length > 0
-    && Buffer.byteLength(JSON.stringify(evidence), 'utf8') > REVIEW_COMPLETION_EVIDENCE_MAX_TOTAL_BYTES
-  ) {
-    references.pop();
-    addOmission(omissionCounts, 'reference_candidate_limit');
-    evidence = buildEvidence(
-      files,
-      currentDiff,
-      references,
-      claimedPaths,
-      priorGapPaths,
-      omissionCounts,
-    );
-  }
-  while (
-    priorGapPaths.length > 0
-    && Buffer.byteLength(JSON.stringify(evidence), 'utf8') > REVIEW_COMPLETION_EVIDENCE_MAX_TOTAL_BYTES
-  ) {
-    priorGapPaths.pop();
-    addOmission(omissionCounts, 'total_size_limit');
-    evidence = buildEvidence(
-      files,
-      currentDiff,
-      references,
-      claimedPaths,
-      priorGapPaths,
-      omissionCounts,
-    );
-  }
-  while (
-    claimedPaths.length > 0
-    && Buffer.byteLength(JSON.stringify(evidence), 'utf8') > REVIEW_COMPLETION_EVIDENCE_MAX_TOTAL_BYTES
-  ) {
-    claimedPaths.pop();
-    addOmission(omissionCounts, 'total_size_limit');
-    evidence = buildEvidence(
-      files,
-      currentDiff,
-      references,
-      claimedPaths,
-      priorGapPaths,
-      omissionCounts,
-    );
-  }
+  };
+  trimTrailingItems(files, 'total_size_limit', (retained, omissions) => buildEvidence(
+    retained,
+    currentDiff,
+    references,
+    claimedPaths,
+    priorGapPaths,
+    omissions,
+  ));
+  trimTrailingItems(references, 'reference_candidate_limit', (retained, omissions) => buildEvidence(
+    files,
+    currentDiff,
+    retained,
+    claimedPaths,
+    priorGapPaths,
+    omissions,
+  ));
+  trimTrailingItems(priorGapPaths, 'total_size_limit', (retained, omissions) => buildEvidence(
+    files,
+    currentDiff,
+    references,
+    claimedPaths,
+    retained,
+    omissions,
+  ));
+  trimTrailingItems(claimedPaths, 'total_size_limit', (retained, omissions) => buildEvidence(
+    files,
+    currentDiff,
+    references,
+    retained,
+    priorGapPaths,
+    omissions,
+  ));
   return evidence;
 }
 

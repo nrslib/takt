@@ -126,6 +126,41 @@ describe('WorkflowEngine review completion wiring', () => {
     expect(phase2.getSessionId(phase2.resolveSessionKey(step))).toBe('review-session-2');
   });
 
+  it('records a done empty completion retry as successful usage before recovery', async () => {
+    const step = reviewStep('reviewer');
+    const delegatedUsage = vi.fn();
+    engine = new WorkflowEngine(normalConfig(step), cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'mock',
+      onDelegatedAgentUsage: delegatedUsage,
+    });
+    let reviewerCalls = 0;
+    let judgeCalls = 0;
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      if (options.internalAgentName === 'review-completion-judge') {
+        judgeCalls += 1;
+        return judgeResponse(judgeCalls === 2);
+      }
+      options.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: instruction });
+      reviewerCalls += 1;
+      return reviewerResponse(
+        String(persona),
+        reviewerCalls === 2 ? '  ' : `review-${reviewerCalls}`,
+        'review-session',
+      );
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(reviewerCalls).toBe(3);
+    const reviewerUsage = delegatedUsage.mock.calls
+      .filter(([context]) => context.step === step.name)
+      .map(([, result]) => result.success);
+    expect(reviewerUsage.length).toBeGreaterThan(0);
+    expect(reviewerUsage).not.toContain(false);
+  });
+
   it('includes bounded repository source and diff in the judge prompt without relying on tools', async () => {
     execFileSync('git', ['init'], { cwd });
     execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd });
@@ -321,12 +356,17 @@ describe('WorkflowEngine review completion wiring', () => {
       parallel: [reviewerA, reviewerB],
       rules: [makeRule('all("approved")', 'COMPLETE')],
     });
+    const delegatedUsage = vi.fn();
     engine = new WorkflowEngine({
       name: 'review-completion-parallel',
       maxSteps: 1,
       initialStep: parent.name,
       steps: [parent],
-    }, cwd, 'task', { projectCwd: cwd, provider: 'mock' });
+    }, cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'mock',
+      onDelegatedAgentUsage: delegatedUsage,
+    });
     const reviewerCalls = new Map<string, number>();
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       if (options.internalAgentName === 'review-completion-judge') {
@@ -336,13 +376,21 @@ describe('WorkflowEngine review completion wiring', () => {
       const name = String(persona).includes('reviewer-a') ? 'reviewer-a' : 'reviewer-b';
       const count = (reviewerCalls.get(name) ?? 0) + 1;
       reviewerCalls.set(name, count);
-      return reviewerResponse(name, `${name}-${count === 1 ? 'first' : 'retry'}`, `${name}-session-${count}`);
+      const content = name === 'reviewer-b' && count === 2
+        ? '  '
+        : `${name}-${count === 1 ? 'first' : 'retry'}`;
+      return reviewerResponse(name, content, `${name}-session-${count}`);
     });
 
     const state = await engine.run();
 
     expect(state.status).toBe('completed');
-    expect(Object.fromEntries(reviewerCalls)).toEqual({ 'reviewer-a': 1, 'reviewer-b': 2 });
+    expect(Object.fromEntries(reviewerCalls)).toEqual({ 'reviewer-a': 1, 'reviewer-b': 3 });
+    const reviewerBUsage = delegatedUsage.mock.calls
+      .filter(([context]) => context.step === 'reviewer-b')
+      .map(([, result]) => result.success);
+    expect(reviewerBUsage.length).toBeGreaterThan(0);
+    expect(reviewerBUsage).not.toContain(false);
     expect(runReportPhase).toHaveBeenCalledTimes(2);
     expect(vi.mocked(runReportPhase).mock.calls.map(([reportedStep]) => reportedStep.name).sort())
       .toEqual(['reviewer-a', 'reviewer-b']);

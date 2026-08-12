@@ -61,10 +61,7 @@ function hasSensitivePurposeFileName(fileName: string): boolean {
 
 export function isSensitiveProjectFilePath(relativePath: string): boolean {
   const lowerSegments = relativePath.split('/').map((segment) => segment.toLowerCase());
-  const lowerFileName = lowerSegments.at(-1);
-  if (lowerFileName === undefined) {
-    return true;
-  }
+  const lowerFileName = lowerSegments.at(-1)!;
   return lowerSegments.some((segment) => SENSITIVE_PROJECT_DIRECTORY_NAMES.has(segment))
     || lowerFileName.startsWith('.env')
     || SENSITIVE_PROJECT_FILE_NAMES.has(lowerFileName)

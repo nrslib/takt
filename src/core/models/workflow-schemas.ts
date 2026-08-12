@@ -585,11 +585,9 @@ const AgentParallelSubStepRawObjectSchema = z.object({
 function validateAgentParallelSubStepRules(
   data: {
     rules?: z.output<typeof WorkflowRulesSchema>;
-    review_completion?: unknown;
   },
   ctx: z.RefinementCtx,
 ): void {
-  validateReviewCompletionOptIn(data, ctx);
   validateParallelSubStepRules(data.rules, ctx);
   data.rules?.forEach((rule, index) => {
     if (rule.return !== undefined) {
