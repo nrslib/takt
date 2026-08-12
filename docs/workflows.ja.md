@@ -831,7 +831,7 @@ promotion は並列サブ step ではサポートされません。
 | `instruction` | - | instruction キー（section map、または bare 名で project → user → builtin の順に解決） |
 | `edit` | - | step がプロジェクトファイルを編集できるか (`true` / `false`) |
 | `companion` | - | 解決済み runtime profile を使う Companion reviewer を通常 agent step と並行実行（[Companion レビュアー](#companion-レビュアー)参照） |
-| `review_completion` | - | `true` でレビュー網羅性確認を有効化、または options object で再試行上限などを設定 |
+| `review_completion` | - | 必須の `retry_instruction` facet と任意の再試行上限を持つ object でレビュー網羅性確認を有効化 |
 | `pass_previous_response` | `true` | 前の step の出力を `{previous_response}` に渡す |
 | `provider_options.claude.allowed_tools` | - | step または workflow に対する Claude ツール許可リスト |
 | `provider_options.claude.base_url` | - | `claude` / `claude-sdk` 用の Anthropic 互換 base URL（[configuration ガイド](./configuration.ja.md#provider-base-url-base_url) 参照） |

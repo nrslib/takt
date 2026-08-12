@@ -137,7 +137,6 @@ function makeRunner(): { runner: ParallelRunner; deps: ParallelRunnerDeps } {
       buildInstruction: vi.fn((step: WorkflowStep) => `instruction:${step.name}`),
       emitStepReports: vi.fn(),
       persistPreviousResponseSnapshot: vi.fn(),
-      reviewCompletionMode: vi.fn().mockReturnValue('initial'),
       completeReviewerResponse: vi.fn(async ({ initialResponse }) => ({
         response: initialResponse,
         reviewerSessionId: initialResponse.sessionId,
