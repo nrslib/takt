@@ -3,7 +3,10 @@ import type {
   PartResult,
   WorkflowStep,
 } from '../../models/types.js';
-import { formatAgentFailure } from '../../../shared/types/agent-failure.js';
+import {
+  AGENT_FAILURE_CATEGORIES,
+  formatAgentFailure,
+} from '../../../shared/types/agent-failure.js';
 import { createFindingContractPartCompletionJsonSchema } from '../team-leader-finding-contract.js';
 
 export function summarizeParts(parts: PartDefinition[]): Array<{ id: string; title: string }> {
@@ -14,6 +17,9 @@ export function resolvePartErrorDetail(partResult: PartResult): string {
   const detail = partResult.response.error ?? partResult.response.content;
   if (!detail) {
     throw new Error(`Part "${partResult.part.id}" failed without error detail`);
+  }
+  if (partResult.response.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR) {
+    return detail;
   }
   if (partResult.response.failureCategory) {
     return formatAgentFailure({

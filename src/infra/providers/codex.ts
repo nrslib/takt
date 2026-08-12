@@ -32,6 +32,7 @@ function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
     codexPathOverride: resolveCodexCliPath(),
     outputSchema: options.outputSchema,
     imageAttachments: options.imageAttachments,
+    failureDir: options.failureDir,
     childProcessEnv: options.childProcessEnv,
   };
 }

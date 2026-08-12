@@ -301,6 +301,7 @@ function isAgentFailureCategory(value: string | undefined): value is AgentFailur
   return value === AGENT_FAILURE_CATEGORIES.EXTERNAL_ABORT
     || value === AGENT_FAILURE_CATEGORIES.PART_TIMEOUT
     || value === AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR
+    || value === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR
     || value === AGENT_FAILURE_CATEGORIES.STREAM_IDLE_TIMEOUT;
 }
 

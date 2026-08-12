@@ -87,6 +87,7 @@ function createContext(
   let currentSessionId = arguments.length >= 3 ? initialSessionId : 'session-resume-1';
   const primaryProvider = providers.primaryProvider ?? 'opencode';
   const fallbackProvider = providers.fallbackProvider ?? 'claude';
+  const failureDir = join(reportDir, '..', 'failures');
 
   const context = {
     cwd: reportDir,
@@ -100,6 +101,7 @@ function createContext(
     buildResumeOptions: (_step, sessionId, overrides) => ({
       cwd: reportDir,
       resolvedProvider: primaryProvider,
+      failureDir,
       sessionId,
       allowedTools: overrides.allowedTools,
       maxTurns: overrides.maxTurns,
@@ -107,6 +109,7 @@ function createContext(
     buildNewSessionReportOptions: (_step, overrides) => ({
       cwd: reportDir,
       resolvedProvider: primaryProvider,
+      failureDir,
       allowedTools: overrides.allowedTools,
       maxTurns: overrides.maxTurns,
     }),
@@ -120,6 +123,7 @@ function createContext(
 
       return {
         cwd: reportDir,
+        failureDir,
         permissionMode: 'readonly',
         resolvedProvider: fallbackProvider,
         resolvedModel: providers.fallbackModel,
@@ -145,6 +149,7 @@ function createContext(
     resolveStepProviderModel: (_step) => ({
       provider: primaryProvider,
     }),
+    failureDir,
   };
   return context;
 }
@@ -252,6 +257,25 @@ describe('runReportPhase retry with new session', () => {
       'Respond with the report content directly as text.',
     );
 
+  });
+
+  it('should fail fast on a provider stream parse error without report retry or fallback', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('02-coder.md');
+    const ctx = createContext(reportDir, 'Implemented feature X');
+    queueRunAgentResponses([{
+      persona: 'coder',
+      status: 'error',
+      content: '',
+      error: 'Failed to parse item: invalid stdout line',
+      failureCategory: 'provider_stream_parse_error',
+      timestamp: new Date('2026-02-11T00:00:00Z'),
+    }]);
+
+    await expect(generateReportPhase(step, 1, ctx)).rejects.toMatchObject({
+      failureCategory: 'provider_stream_parse_error',
+    });
+    expect(vi.mocked(runAgent)).toHaveBeenCalledOnce();
   });
 
   it('Finding Contract Phase 2 は本文テキストだけを要求する', async () => {

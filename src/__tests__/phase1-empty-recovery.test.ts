@@ -5,6 +5,7 @@ import {
   runPhase1WithEmptyRecovery,
   runSingleFreshPhase1Retry,
 } from '../core/workflow/engine/phase1-empty-recovery.js';
+import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
 
 function response(overrides: Partial<AgentResponse>): AgentResponse {
   return {
@@ -91,6 +92,12 @@ describe('Phase 1 empty response recovery', () => {
     ['structured output', response({ content: '', structuredOutput: { result: 'ok' } })],
     ['blocked response', response({ status: 'blocked', content: '' })],
     ['rate limited response', response({ status: 'rate_limited', content: '', errorKind: 'rate_limit' })],
+    ['provider stream parse error', response({
+      status: 'error',
+      content: '',
+      error: 'Failed to parse item: invalid stdout line',
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+    })],
   ])('does not retry a %s', async (_label, terminalResponse) => {
     const execute = vi.fn().mockResolvedValue(terminalResponse);
 

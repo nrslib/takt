@@ -142,6 +142,7 @@ export async function runStatusJudgmentPhase(
         resolvedModel: resolvedStepProvider.model,
         language: ctx.language,
         abortSignal: ctx.abortSignal,
+        failureDir: ctx.failureDir,
         childProcessEnv: ctx.childProcessEnv,
         onStream: ctx.onStream,
         onStructuredPromptResolved: (promptParts) => {

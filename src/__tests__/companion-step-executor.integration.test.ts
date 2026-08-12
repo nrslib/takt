@@ -148,6 +148,7 @@ function createDeps(input: {
     getProjectCwd: () => input.cwd,
     getReportDir: () => input.runPaths.reportsRel,
     getRunPaths: () => input.runPaths,
+    getFailureDir: () => join(input.runPaths.runRootAbs, 'failures'),
     getLanguage: () => 'en' as const,
     getInteractive: () => false,
     getWorkflowSteps: () => [{ name: 'implement' }],

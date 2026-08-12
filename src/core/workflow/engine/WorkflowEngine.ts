@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { join } from 'node:path';
 import { CapabilityAwareStructuredCaller, type StructuredCaller } from '../../../agents/structured-caller.js';
 import { createWorkRequirementEstimator } from '../../../agents/auto-routing-usecase.js';
 import { createLogger, generateReportDir, getErrorMessage, isValidReportDirName } from '../../../shared/utils/index.js';
@@ -224,6 +225,7 @@ export class WorkflowEngine extends EventEmitter {
         language: options.language,
         childProcessEnv: options.childProcessEnv,
         abortSignal: options.abortSignal,
+        failureDir: join(runPaths.runRootAbs, 'failures'),
       });
     const routingSensitiveValues = effectiveAutoRouting === undefined
       ? options.routingSensitiveValues

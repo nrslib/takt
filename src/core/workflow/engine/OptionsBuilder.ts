@@ -99,6 +99,7 @@ export class OptionsBuilder {
       ownerReviewerSteps: readonly AgentWorkflowStep[];
       reviewScopeSnapshotId: string;
     }) => readonly FindingEvidenceSearchRequest[],
+    private readonly getFailureDir?: () => string,
   ) {}
 
   /**
@@ -343,6 +344,7 @@ export class OptionsBuilder {
       bypassPermissions: this.engineOptions.bypassPermissions,
       workflowMeta,
       childProcessEnv: this.engineOptions.childProcessEnv,
+      ...(this.getFailureDir === undefined ? {} : { failureDir: this.getFailureDir() }),
     };
     return baseOptions;
   }
@@ -374,6 +376,7 @@ export class OptionsBuilder {
       onPermissionRequest: baseOptions.onPermissionRequest,
       onAskUserQuestion: baseOptions.onAskUserQuestion,
       workflowMeta: baseOptions.workflowMeta,
+      failureDir: baseOptions.failureDir,
       childProcessEnv: baseOptions.childProcessEnv,
     };
   }
@@ -634,6 +637,7 @@ export class OptionsBuilder {
       getCurrentWorkflowStack: this.getCurrentWorkflowStack,
       childProcessEnv: this.engineOptions.childProcessEnv,
       abortSignal: this.engineOptions.abortSignal,
+      ...(this.getFailureDir === undefined ? {} : { failureDir: this.getFailureDir() }),
       onStream: this.buildProviderStream(
         step,
         stepProvider.provider,

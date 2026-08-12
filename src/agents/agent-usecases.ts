@@ -34,6 +34,7 @@ export interface ResolvedInternalAgentOptions {
   readonly agentName?: string;
   readonly cwd: string;
   readonly projectCwd?: string;
+  readonly failureDir: string;
   readonly abortSignal?: AbortSignal;
   readonly language?: Language;
   readonly childProcessEnv?: Readonly<Record<string, string>>;

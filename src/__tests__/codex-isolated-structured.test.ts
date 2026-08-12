@@ -1,15 +1,74 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join, relative, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runAgent } from '../agents/runner.js';
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
 import { invalidateAllResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
+import { MAX_AGENT_FAILURE_MESSAGE_BYTES } from '../shared/types/agent-failure.js';
 import {
   assertValidIsolatedCodexEvent,
   buildIsolatedCodexArgs,
   callCodexIsolatedStructured,
 } from '../infra/codex/isolated-structured-client.js';
+
+type FailureMode = 'exact' | 'multibyte' | 'rate-limit';
+
+function createFailureCodex(mode: FailureMode): { cwd: string; executable: string } {
+  const cwd = mkdtempSync(join(tmpdir(), 'takt-isolated-failure-'));
+  const executable = join(cwd, 'fake-codex.mjs');
+  const messageExpression = mode === 'exact'
+    ? `'x'.repeat(${MAX_AGENT_FAILURE_MESSAGE_BYTES})`
+    : mode === 'multibyte'
+      ? `'界'.repeat(5000)`
+      : `'rate limit exceeded: ' + '界'.repeat(5000)`;
+  writeFileSync(executable, `#!/usr/bin/env node
+const message = ${messageExpression};
+process.stdout.write(JSON.stringify({ type: 'turn.failed', error: { message } }) + '\\n');
+`, { encoding: 'utf8', mode: 0o700 });
+  chmodSync(executable, 0o700);
+  return { cwd, executable };
+}
+
+function failureOptions(
+  fixture: { cwd: string; executable: string },
+  failureDir: string,
+): Parameters<typeof callCodexIsolatedStructured>[2] {
+  return {
+    cwd: fixture.cwd,
+    model: 'test-model',
+    outputSchema: { type: 'object' },
+    codexPathOverride: fixture.executable,
+    failureDir,
+  };
+}
+
+function assertExactTruncation(
+  error: string,
+  fullText: string,
+): string {
+  const match = /\[TRUNCATED: (\d+) bytes, full text: (.+)\]$/u.exec(error);
+  expect(match?.[1]).toBeDefined();
+  expect(match?.[2]).toBeDefined();
+  const prefix = error.slice(0, error.indexOf('[TRUNCATED'));
+  expect(fullText.startsWith(prefix)).toBe(true);
+  expect(Number(match![1])).toBe(
+    Buffer.byteLength(fullText, 'utf8') - Buffer.byteLength(prefix, 'utf8'),
+  );
+  expect(Buffer.byteLength(error, 'utf8')).toBeLessThanOrEqual(
+    MAX_AGENT_FAILURE_MESSAGE_BYTES,
+  );
+  return match![2]!;
+}
 
 describe('Codex strict isolated structured execution', () => {
   it('builds the hardened ephemeral no-tools CLI boundary', () => {
@@ -150,6 +209,94 @@ describe('Codex strict isolated structured execution', () => {
       expect(response.error).toContain('racing abort');
     } finally {
       rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves an exactly 8192-byte failure unchanged without creating the failure directory', async () => {
+    const fixture = createFailureCodex('exact');
+    const failureDir = join(fixture.cwd, 'failures');
+    const expectedMessage = 'x'.repeat(MAX_AGENT_FAILURE_MESSAGE_BYTES);
+    try {
+      const response = await callCodexIsolatedStructured(
+        'normalizer',
+        'report',
+        failureOptions(fixture, failureDir),
+      );
+
+      expect(response.status).toBe('error');
+      expect(response.error).toBe(expectedMessage);
+      expect(Buffer.byteLength(response.error ?? '', 'utf8')).toBe(MAX_AGENT_FAILURE_MESSAGE_BYTES);
+      expect(existsSync(failureDir)).toBe(false);
+    } finally {
+      rmSync(fixture.cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('persists the complete multibyte failure and returns a bounded marker response', async () => {
+    const fixture = createFailureCodex('multibyte');
+    const failureDir = join(fixture.cwd, 'failures');
+    const expectedMessage = '界'.repeat(5000);
+    try {
+      const response = await callCodexIsolatedStructured(
+        'normalizer',
+        'report',
+        failureOptions(fixture, failureDir),
+      );
+
+      expect(response.status).toBe('error');
+      const fullTextPath = assertExactTruncation(response.error ?? '', expectedMessage);
+      const absoluteFullTextPath = resolve(fixture.cwd, fullTextPath);
+      expect(relative(resolve(fixture.cwd), absoluteFullTextPath)).not.toMatch(
+        /^(?:\.\.(?:[\\/]|$)|[\\/])/u,
+      );
+      expect(readdirSync(failureDir)).toEqual([basename(absoluteFullTextPath)]);
+      expect(readFileSync(absoluteFullTextPath, 'utf8')).toBe(expectedMessage);
+      expect(statSync(absoluteFullTextPath).mode & 0o777).toBe(0o600);
+    } finally {
+      rmSync(fixture.cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('bounds and persists an oversized rate-limit failure response', async () => {
+    const fixture = createFailureCodex('rate-limit');
+    const failureDir = join(fixture.cwd, 'failures');
+    const expectedMessage = `rate limit exceeded: ${'界'.repeat(5000)}`;
+    try {
+      const response = await callCodexIsolatedStructured(
+        'normalizer',
+        'report',
+        failureOptions(fixture, failureDir),
+      );
+
+      expect(response.status).toBe('rate_limited');
+      expect(response.content).toBe('');
+      const fullTextPath = assertExactTruncation(response.error ?? '', expectedMessage);
+      expect(readFileSync(resolve(fixture.cwd, fullTextPath), 'utf8')).toBe(expectedMessage);
+      expect(statSync(resolve(fixture.cwd, fullTextPath)).mode & 0o777).toBe(0o600);
+    } finally {
+      rmSync(fixture.cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('returns a pathless bounded failure when the failure directory cannot be written', async () => {
+    const fixture = createFailureCodex('multibyte');
+    const failureDir = join(fixture.cwd, 'failures');
+    writeFileSync(failureDir, 'not a directory', 'utf8');
+    try {
+      const response = await callCodexIsolatedStructured(
+        'normalizer',
+        'report',
+        failureOptions(fixture, failureDir),
+      );
+
+      expect(response.status).toBe('error');
+      expect(Buffer.byteLength(response.error ?? '', 'utf8')).toBeLessThanOrEqual(
+        MAX_AGENT_FAILURE_MESSAGE_BYTES,
+      );
+      expect(response.error).toMatch(/\[TRUNCATED: \d+ bytes\]$/u);
+      expect(response.error).not.toContain('full text:');
+    } finally {
+      rmSync(fixture.cwd, { recursive: true, force: true });
     }
   });
 

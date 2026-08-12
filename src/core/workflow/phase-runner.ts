@@ -59,6 +59,8 @@ export interface BasePhaseRunnerContext {
   childProcessEnv?: RunAgentOptions['childProcessEnv'];
   /** Interrupts active provider calls when the workflow is cancelled. */
   abortSignal?: AbortSignal;
+  /** Run-local private directory for oversized provider failure details. */
+  failureDir?: string;
   /** Stream callback for provider event logging */
   onStream?: import('../../agents/types.js').StreamCallback;
   /** Parent workflow iteration for sub-step phase events */

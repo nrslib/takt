@@ -30,6 +30,10 @@ import {
 import type { FindingContractOperationBoundary } from './team-leader-finding-contract-operation-journal.js';
 import type { TeamLeaderExecutionPublicationFence } from './team-leader-execution-terminal.js';
 import { FindingContractAttemptUsageRecorder } from './finding-contract-attempt-usage-recorder.js';
+import {
+  AGENT_FAILURE_CATEGORIES,
+  createProviderStreamParseError,
+} from '../../../shared/types/agent-failure.js';
 
 type NormalizedPartCompletion = ReturnType<
   StepExecutor['normalizeStructuredOutputWithDiagnostics']
@@ -179,6 +183,9 @@ function createPartCompletionBoundaryAdapter(input: {
     boundaryKind: 'part_completion',
     requestOnce: async ({ recoveryContext, abortSignal, attemptToken }) => {
       const response = await requestCorrection(input, recoveryContext, abortSignal);
+      if (response.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR) {
+        throw createProviderStreamParseError(response.error ?? response.content);
+      }
       const normalized = input.deps.stepExecutor.normalizeStructuredOutputWithDiagnostics(
         input.partStep,
         response,

@@ -14,6 +14,20 @@ import {
 } from '../core/workflow/engine/structured-output-schema-validator.js';
 import { getErrorMessage } from '../shared/utils/index.js';
 import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
+import {
+  AGENT_FAILURE_CATEGORIES,
+  createProviderStreamParseError,
+} from '../shared/types/agent-failure.js';
+
+export function throwOnProviderStreamParseFailure(response: AgentResponse): void {
+  if (response.failureCategory !== AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR) {
+    return;
+  }
+
+  throw createProviderStreamParseError(
+    response.error || response.content || 'Codex stream item parsing failed',
+  );
+}
 
 export interface JudgeStatusOptions {
   cwd: string;
@@ -24,6 +38,7 @@ export interface JudgeStatusOptions {
   language?: Language;
   childProcessEnv?: RunAgentOptions['childProcessEnv'];
   abortSignal?: AbortSignal;
+  failureDir?: RunAgentOptions['failureDir'];
   onStream?: StreamCallback;
   onJudgeStage?: (entry: JudgeStageLogEntry) => void;
   onStructuredPromptResolved?: (promptParts: {
@@ -52,6 +67,7 @@ export interface TagJudgeRunOptions {
   onStream?: StreamCallback;
   childProcessEnv?: RunAgentOptions['childProcessEnv'];
   abortSignal?: AbortSignal;
+  failureDir?: RunAgentOptions['failureDir'];
   stepName: string;
   onPromptResolved?: JudgeStatusOptions['onStructuredPromptResolved'];
 }
@@ -76,6 +92,7 @@ export async function runTagJudgeStage(
       onStream: runOptions.onStream,
       childProcessEnv: runOptions.childProcessEnv,
       abortSignal: runOptions.abortSignal,
+      failureDir: runOptions.failureDir,
       onPromptResolved: runOptions.onPromptResolved,
     });
   } catch (error) {
@@ -101,6 +118,7 @@ export async function runTagJudgeStage(
   });
 
   runOptions.abortSignal?.throwIfAborted();
+  throwOnProviderStreamParseFailure(tagResponse);
 
   if (tagResponse.status === 'done') {
     const tagCandidateIndex = detectCandidateIndex(tagResponse.content, runOptions.stepName);
@@ -128,6 +146,7 @@ export interface EvaluateConditionOptions {
   resolvedModel?: string;
   childProcessEnv?: RunAgentOptions['childProcessEnv'];
   abortSignal?: AbortSignal;
+  failureDir?: RunAgentOptions['failureDir'];
   onJudgeResponse?: (entry: {
     instruction: string;
     status: 'done' | 'error';
@@ -174,6 +193,7 @@ export async function evaluateCondition(
     outputSchema: evaluationSchema,
     childProcessEnv: options.childProcessEnv,
     abortSignal: options.abortSignal,
+    failureDir: options.failureDir,
   });
 
   options.onJudgeResponse?.({
@@ -186,6 +206,7 @@ export async function evaluateCondition(
   });
 
   options.abortSignal?.throwIfAborted();
+  throwOnProviderStreamParseFailure(response);
 
   if (response.status !== 'done') {
     return -1;
@@ -249,6 +270,7 @@ async function runAiJudgeStage(
       resolvedModel: options.resolvedModel,
       childProcessEnv: options.childProcessEnv,
       abortSignal: options.abortSignal,
+      failureDir: options.failureDir,
       onJudgeResponse: stage3.capture,
     });
   } catch (error) {
@@ -291,6 +313,7 @@ export async function runJudgeFallbackStages(
       onStream: options.onStream,
       childProcessEnv: options.childProcessEnv,
       abortSignal: options.abortSignal,
+      failureDir: options.failureDir,
       stepName: options.stepName,
       onPromptResolved: options.onStructuredPromptResolved,
     },
@@ -335,6 +358,7 @@ export async function judgeStatus(
     onStream: options.onStream,
     childProcessEnv: options.childProcessEnv,
     abortSignal: options.abortSignal,
+    failureDir: options.failureDir,
   };
 
   const structuredResponse = await runAgent('conductor', structuredInstruction, {
@@ -358,6 +382,7 @@ export async function judgeStatus(
   });
 
   options.abortSignal?.throwIfAborted();
+  throwOnProviderStreamParseFailure(structuredResponse);
 
   if (structuredResponse.status === 'done' && isValidJudgeStructuredOutput(structuredResponse.structuredOutput, judgmentSchema)) {
     const stepNumber = structuredResponse.structuredOutput.step;

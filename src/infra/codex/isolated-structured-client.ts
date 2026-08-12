@@ -18,6 +18,7 @@ import {
 import type { CodexEvent, CodexItem } from './CodexStreamHandler.js';
 import { extractProviderUsageFromTurnCompleted } from './client.js';
 import type { CodexCallOptions } from './types.js';
+import { boundCodexFailureMessage } from './failure-message.js';
 
 const require = createRequire(import.meta.url);
 const STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
@@ -171,17 +172,20 @@ export function assertValidIsolatedCodexEvent(
 function createErrorResponse(
   agentType: string,
   error: unknown,
+  options: Pick<CodexCallOptions, 'cwd' | 'failureDir'>,
 ): AgentResponse {
-  const message = getErrorMessage(error);
-  if (containsRateLimitError(message)) {
+  const rawMessage = getErrorMessage(error);
+  if (containsRateLimitError(rawMessage)) {
+    const rateLimitedResponse = buildRateLimitedResponseFields('codex', 'sdk_error', rawMessage);
     return {
       persona: agentType,
       timestamp: new Date(),
-      ...buildRateLimitedResponseFields('codex', 'sdk_error', message),
+      ...rateLimitedResponse,
+      error: boundCodexFailureMessage(rateLimitedResponse.error, options, true),
     };
   }
-  const failure = createProviderErrorFailure(message);
-  const content = formatAgentFailure(failure);
+  const failure = createProviderErrorFailure(rawMessage);
+  const content = boundCodexFailureMessage(formatAgentFailure(failure), options, true);
   return {
     persona: agentType,
     status: 'error',
@@ -200,24 +204,27 @@ export async function callCodexIsolatedStructured(
   try {
     options.abortSignal?.throwIfAborted();
   } catch (error) {
-    return createErrorResponse(agentType, error);
+    return createErrorResponse(agentType, error, options);
   }
   if (options.sessionId !== undefined) {
     return createErrorResponse(
       agentType,
       'Strict isolated Codex execution does not accept a session',
+      options,
     );
   }
   if (options.outputSchema === undefined) {
     return createErrorResponse(
       agentType,
       'Strict isolated Codex execution requires an output schema',
+      options,
     );
   }
   if (options.imageAttachments !== undefined && options.imageAttachments.length > 0) {
     return createErrorResponse(
       agentType,
       'Strict isolated Codex execution does not accept image attachments',
+      options,
     );
   }
 
@@ -355,6 +362,6 @@ export async function callCodexIsolatedStructured(
       }
     }
   } catch (error) {
-    return createErrorResponse(agentType, error);
+    return createErrorResponse(agentType, error, options);
   }
 }

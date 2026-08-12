@@ -9,6 +9,10 @@ import {
 import { assertStrictStructuredOutputSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
 import { runAgent, type RunAgentOptions } from './runner.js';
 import { buildMaxTurnsOption } from './provider-call-options.js';
+import {
+  AGENT_FAILURE_CATEGORIES,
+  createProviderStreamParseError,
+} from '../shared/types/agent-failure.js';
 
 const OUTPUT_SCHEMA = {
   type: 'object',
@@ -36,6 +40,7 @@ export interface WorkRequirementEstimatorOptions {
   language?: RunAgentOptions['language'];
   childProcessEnv?: RunAgentOptions['childProcessEnv'];
   abortSignal?: RunAgentOptions['abortSignal'];
+  failureDir?: RunAgentOptions['failureDir'];
 }
 
 interface EstimatorAbortScope {
@@ -150,11 +155,15 @@ export function createWorkRequirementEstimator(options: WorkRequirementEstimator
             permissionMode: 'readonly',
             language: options.language,
             childProcessEnv: options.childProcessEnv,
+            failureDir: options.failureDir,
             outputSchema: OUTPUT_SCHEMA,
           }),
           abortScope.aborted,
         ]);
         if (response.status !== 'done') {
+          if (response.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR) {
+            throw createProviderStreamParseError(response.error || response.content || response.status);
+          }
           throw new Error('Auto routing estimator did not complete');
         }
         return parseEstimate(response.structuredOutput ?? JSON.parse(response.content));

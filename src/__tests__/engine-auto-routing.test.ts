@@ -29,6 +29,14 @@ import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
 import type { StepProviderInfo, WorkflowEngineOptions } from '../core/workflow/types.js';
 import type { AutoRoutingConfig, WorkflowConfig } from '../core/models/index.js';
+import type { RoutingModelInput, RoutingWorkSnapshot, WorkRequirementEstimator } from '../core/workflow/auto-routing/contracts.js';
+import { createWorkRequirementEstimator } from '../agents/auto-routing-usecase.js';
+import { RoutingRuntime } from '../core/workflow/auto-routing/runtime.js';
+import { resolveAutoRoutingRuntime } from '../core/workflow/auto-routing/resolver.js';
+import {
+  createProviderStreamParseError,
+  isProviderStreamParseError,
+} from '../shared/types/agent-failure.js';
 import { createProviderEventLogger } from '../core/logging/providerEventLogger.js';
 import { createUsageEventLogger, type UsageEventLoggerConfig } from '../core/logging/usageEventLogger.js';
 import { USAGE_MISSING_REASONS } from '../core/logging/contracts.js';
@@ -80,6 +88,23 @@ function createAutoRoutingConfig(): AutoRoutingConfig {
         implementation: 'coding',
         format: 'lightweight',
       },
+    },
+  };
+}
+
+function createRoutingSnapshot(): RoutingWorkSnapshot {
+  return {
+    goal: 'implement the feature',
+    step: {
+      name: 'implement',
+      tags: [],
+      stepType: 'normal',
+    },
+    remainingWork: [],
+    progress: {
+      previousAttemptFailed: false,
+      noProgress: false,
+      retryingSameWork: false,
     },
   };
 }
@@ -238,6 +263,9 @@ describe('WorkflowEngine auto routing integration', () => {
     const state = await engine.run();
 
     expect(state.status).toBe('completed');
+    expect(vi.mocked(runAgent).mock.calls.find(([persona]) => persona === 'auto-router')?.[2]).toMatchObject({
+      failureDir: join(tmpDir, '.takt', 'runs', 'test-report-dir', 'failures'),
+    });
     const providerRecords = readFileSync(providerLogger.filepath, 'utf-8')
       .trim()
       .split('\n')
@@ -1154,5 +1182,112 @@ describe('WorkflowEngine auto routing integration', () => {
     expect(usageRecords).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ step: 'reviewers' }),
     ]));
+  });
+
+  it('rethrows a provider stream parse failure from direct auto-routing without fallback warning', async () => {
+    const parseError = createProviderStreamParseError('Failed to parse item: invalid routing response');
+    const estimator: WorkRequirementEstimator = {
+      estimate: vi.fn().mockRejectedValue(parseError),
+    };
+    const logger = { warn: vi.fn() };
+
+    await expect(resolveAutoRoutingRuntime({
+      autoRouting: createAutoRoutingConfig(),
+      step: { name: 'implement', tags: [] },
+      snapshot: createRoutingSnapshot(),
+      currentProviderInfo: {
+        provider: undefined,
+        model: undefined,
+        providerSource: undefined,
+        modelSource: undefined,
+      },
+      estimator,
+      logger,
+    })).rejects.toBe(parseError);
+
+    expect(estimator.estimate).toHaveBeenCalledOnce();
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('preserves the provider stream parse category at the estimator boundary', async () => {
+    vi.mocked(runAgent).mockResolvedValue(makeResponse({
+      persona: 'auto-router',
+      status: 'error',
+      content: '',
+      error: 'provider stream parse error: Failed to parse item: invalid routing response',
+      failureCategory: 'provider_stream_parse_error',
+    }));
+    const estimator = createWorkRequirementEstimator({
+      cwd: tmpDir,
+      provider: 'claude-sdk',
+      model: 'claude-haiku-4-5-20251001',
+    });
+    const input: RoutingModelInput = {
+      ...createRoutingSnapshot(),
+      version: 'v1',
+    };
+
+    await expect(estimator.estimate(input)).rejects.toMatchObject({
+      name: 'ProviderStreamParseError',
+      failureCategory: 'provider_stream_parse_error',
+      message: 'provider stream parse error: Failed to parse item: invalid routing response',
+    });
+    expect(runAgent).toHaveBeenCalledOnce();
+  });
+
+  it('rethrows a provider stream parse failure from RoutingRuntime without selecting a configured fallback', async () => {
+    const parseError = createProviderStreamParseError('Failed to parse item: invalid routing response');
+    const estimator: WorkRequirementEstimator = {
+      estimate: vi.fn().mockRejectedValue(parseError),
+    };
+    const runtime = new RoutingRuntime({
+      autoRouting: createAutoRoutingConfig(),
+      estimator,
+    });
+    expect(isProviderStreamParseError(parseError)).toBe(true);
+
+    await expect(resolveAutoRoutingRuntime({
+      autoRouting: createAutoRoutingConfig(),
+      step: { name: 'implement', tags: [] },
+      snapshot: createRoutingSnapshot(),
+      currentProviderInfo: {
+        provider: undefined,
+        model: undefined,
+        providerSource: undefined,
+        modelSource: undefined,
+      },
+      estimator,
+      runtime,
+    })).rejects.toBe(parseError);
+
+    expect(estimator.estimate).toHaveBeenCalledOnce();
+  });
+
+  it('keeps configured fallback for generic auto-routing estimator failures', async () => {
+    const estimator: WorkRequirementEstimator = {
+      estimate: vi.fn().mockRejectedValue(new Error('estimator unavailable')),
+    };
+    const logger = { warn: vi.fn() };
+
+    const result = await resolveAutoRoutingRuntime({
+      autoRouting: createAutoRoutingConfig(),
+      step: { name: 'implement', tags: [] },
+      snapshot: createRoutingSnapshot(),
+      currentProviderInfo: {
+        provider: undefined,
+        model: undefined,
+        providerSource: undefined,
+        modelSource: undefined,
+      },
+      estimator,
+      logger,
+    });
+
+    expect(result?.providerInfo).toMatchObject({
+      provider: 'codex',
+      model: 'gpt-5',
+      providerSource: 'auto.fallback',
+    });
+    expect(logger.warn).toHaveBeenCalledOnce();
   });
 });

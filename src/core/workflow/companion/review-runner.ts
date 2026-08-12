@@ -14,6 +14,7 @@ interface CompanionAgentResolution {
 interface CompanionCallOptions {
   cwd: string;
   projectCwd: string;
+  failureDir: string;
   language: string;
   resolution: CompanionAgentResolution;
   permissionMode: PermissionMode;
@@ -33,6 +34,7 @@ export function executeCompanionStructuredAgent(input: {
   outputSchema: Record<string, unknown>;
   cwd: string;
   projectCwd: string;
+  failureDir: string;
   language: string;
   resolution: CompanionAgentResolution;
   timeoutMs?: number;
@@ -87,6 +89,7 @@ async function executeCompanionStructuredAgentInternal(input: Parameters<
       {
         cwd: input.cwd,
         projectCwd: input.projectCwd,
+        failureDir: input.failureDir,
         language: input.language,
         resolution: input.resolution,
         permissionMode: 'readonly',

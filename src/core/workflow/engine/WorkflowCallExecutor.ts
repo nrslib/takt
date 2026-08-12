@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import { mergeProviderOptions } from '../../../infra/config/providerOptions.js';
 import { createWorkRequirementEstimator } from '../../../agents/auto-routing-usecase.js';
 import type {
@@ -222,6 +223,7 @@ export class WorkflowCallExecutor {
         language: options.language,
         childProcessEnv: options.childProcessEnv,
         abortSignal: options.abortSignal,
+        failureDir: join(this.deps.runPaths.runRootAbs, 'failures'),
       });
     if (estimator === undefined) {
       throw new Error(`workflow_call child "${childWorkflow.name}" inherited auto routing without an estimator`);

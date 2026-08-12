@@ -167,4 +167,33 @@ describe('WorkflowEngine agent overrides', () => {
     const options = vi.mocked(runAgent).mock.calls[0][2];
     expect(options.childProcessEnv).toEqual(childProcessEnv);
   });
+
+  it('passes the current run failure directory to normal step AgentRunner options', async () => {
+    const step = makeStep('plan', {
+      rules: [makeRule('done', 'COMPLETE')],
+    });
+    const config: WorkflowConfig = {
+      name: 'failure-directory-test',
+      steps: [step],
+      initialStep: 'plan',
+      maxSteps: 1,
+    };
+
+    mockRunAgentSequence([
+      makeResponse({ persona: step.persona, content: 'done' }),
+    ]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+
+    const engine = new WorkflowEngine(config, '/tmp/project', 'failure directory task', {
+      projectCwd: '/tmp/project',
+    });
+
+    await engine.run();
+
+    const options = vi.mocked(runAgent).mock.calls[0][2];
+    expect(options).toHaveProperty(
+      'failureDir',
+      '/tmp/project/.takt/runs/test-report-dir/failures',
+    );
+  });
 });

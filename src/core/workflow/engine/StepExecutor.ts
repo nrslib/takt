@@ -70,7 +70,10 @@ import {
 import {
   providerSupportsStructuredOutput,
 } from '../../../infra/providers/provider-capabilities.js';
-import { AGENT_FAILURE_CATEGORIES } from '../../../shared/types/agent-failure.js';
+import {
+  AGENT_FAILURE_CATEGORIES,
+  createProviderStreamParseError,
+} from '../../../shared/types/agent-failure.js';
 import { buildStructuredJsonSchemaInstruction } from '../../../shared/prompts/index.js';
 import type {
   StructuredOutputFailureReason,
@@ -232,6 +235,7 @@ export interface StepExecutorDeps {
   readonly getProjectCwd: () => string;
   readonly getReportDir: () => string;
   readonly getRunPaths: () => RunPaths;
+  readonly getFailureDir: () => string;
   readonly getLanguage: () => Language | undefined;
   readonly getInteractive: () => boolean;
   readonly getWorkflowSteps: () => ReadonlyArray<{ name: string; description?: string }>;
@@ -1238,7 +1242,13 @@ export class StepExecutor {
   }
 
   private static isTerminalNormalizerResponse(response: AgentResponse): boolean {
-    return response.status === 'blocked' || response.status === 'rate_limited';
+    return response.status === 'blocked'
+      || response.status === 'rate_limited'
+      || response.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR;
+  }
+
+  private static isProviderStreamParseFailure(response: AgentResponse): boolean {
+    return response.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR;
   }
 
   /**
@@ -1273,6 +1283,7 @@ export class StepExecutor {
           provider: normalizerProvider,
           model: providerInfo.model,
           providerOptions: providerInfo.providerOptions,
+          failureDir: this.deps.getFailureDir(),
           language: this.deps.getLanguage(),
           abortSignal: this.deps.abortSignal,
           mode: mode === 'initial' ? input.initialMode ?? 'initial' : 'correction',
@@ -1365,6 +1376,9 @@ export class StepExecutor {
     };
 
     const initial = await execute('initial');
+    if (StepExecutor.isProviderStreamParseFailure(initial.response)) {
+      return { kind: 'terminal', result: { ...initial, terminal: true } };
+    }
     if (input.initialMode === 'evidence-search' && initial.response.status !== 'done') {
       return {
         kind: 'failed',
@@ -1386,6 +1400,9 @@ export class StepExecutor {
     const extractionFidelityCorrection = initial.invalidDetail === undefined
       && initial.response.status === 'done';
     const corrected = await execute('correction', extractionFidelityCorrection);
+    if (StepExecutor.isProviderStreamParseFailure(corrected.response)) {
+      return { kind: 'terminal', result: { ...corrected, terminal: true } };
+    }
     if (input.initialMode === 'evidence-search' && corrected.response.status !== 'done') {
       return {
         kind: 'failed',
@@ -1479,6 +1496,9 @@ export class StepExecutor {
             ...(terminal.rateLimitInfo === undefined
               ? {}
               : { rateLimitInfo: terminal.rateLimitInfo }),
+            ...(terminal.failureCategory === undefined
+              ? {}
+              : { failureCategory: terminal.failureCategory }),
           },
         };
       }
@@ -1604,10 +1624,7 @@ export class StepExecutor {
         runtime: input.runtime,
         presentationContext: pending.presentationContext,
       });
-      if (
-        normalized.response.status === 'blocked'
-        || normalized.response.status === 'rate_limited'
-      ) {
+      if (StepExecutor.isTerminalNormalizerResponse(normalized.response)) {
         return {
           terminalResponse: normalized.response,
           reviewerProviderInfo: persistedReviewerRuntime.providerInfo,
@@ -1870,10 +1887,7 @@ export class StepExecutor {
         }`,
       );
     }
-    if (
-      normalized.response.status === 'blocked'
-      || normalized.response.status === 'rate_limited'
-    ) {
+    if (StepExecutor.isTerminalNormalizerResponse(normalized.response)) {
       return {
         terminalResponse: normalized.response,
         reviewerProviderInfo: report.attemptIdentity.providerInfo,
@@ -2272,6 +2286,9 @@ export class StepExecutor {
         }
       } catch (reportError) {
         if (reportError instanceof ReportPhaseGenerationError) {
+          if (reportError.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR) {
+            throw createProviderStreamParseError(reportError.failureMessage ?? getErrorMessage(reportError));
+          }
           log.info('Report phase failed, continuing to status judgment', {
             step: step.name,
             error: getErrorMessage(reportError),
@@ -2612,6 +2629,7 @@ export class StepExecutor {
         companionRuntime = await CompanionStepRuntime.create({
           cwd: this.deps.getCwd(),
           projectCwd: this.deps.getProjectCwd(),
+          failureDir: this.deps.getFailureDir(),
           runSlug: this.deps.getRunId(),
           runPathNamespace: this.deps.getRunPathNamespace(),
           language: this.deps.getLanguage() ?? 'en',

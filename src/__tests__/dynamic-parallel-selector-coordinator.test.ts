@@ -62,6 +62,7 @@ function dependencies(): DynamicParallelSelectorCoordinatorDeps {
   };
   return {
     engineOptions,
+    failureDir: '/project/.takt/runs/run/failures',
     selectionStore: new DynamicParallelSelectionStore(new Map()),
     getCwd: () => '/project',
     getReportDirectory: () => '.takt/reports',
@@ -100,6 +101,9 @@ describe('DynamicParallelSelectorCoordinator', () => {
 
     const outputSchema = mockedExecuteAgent.mock.calls[0]?.[2];
     if (outputSchema === undefined) throw new Error('Selector output schema was not sent');
+    expect(mockedExecuteAgent.mock.calls[0]?.[3]).toMatchObject({
+      failureDir: '/project/.takt/runs/run/failures',
+    });
     expect(() => assertStrictStructuredOutputSchema(outputSchema)).not.toThrow();
     expect(outputSchema).not.toHaveProperty('properties.selected_ids.uniqueItems');
     expect(participants.map(({ name }) => name)).toEqual(['architecture', 'frontend']);

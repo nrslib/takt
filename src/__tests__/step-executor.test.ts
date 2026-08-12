@@ -266,6 +266,7 @@ describe('StepExecutor', () => {
         ?? createStructuredOutputNormalizerRegistry([]),
       structuredCaller: { normalizeFindingIntake },
       getRunPaths: () => runPaths,
+      getFailureDir: () => join(runPaths.runRootAbs, 'failures'),
       getFindingCallNamespace: () => '',
       getLanguage: () => 'en',
       getInteractive: () => false,
@@ -396,6 +397,7 @@ describe('StepExecutor', () => {
         model: 'normalizer-model',
         mode: 'initial',
         language: 'en',
+        failureDir: join(runPaths.runRootAbs, 'failures'),
       }),
     );
     expect(harness.recordSynthesizedAgentUsage).toHaveBeenCalledWith(
@@ -419,6 +421,95 @@ describe('StepExecutor', () => {
       model: 'normalizer-model',
       modelSpecified: true,
     });
+  });
+
+  it('Finding Intakeのparse failureは初回呼び出しだけでterminal応答へ伝播する', async () => {
+    const parseFailure = {
+      persona: 'default',
+      status: 'error' as const,
+      content: '',
+      error: 'provider stream parse error: Failed to parse item: invalid stdout line',
+      failureCategory: 'provider_stream_parse_error' as const,
+      timestamp: new Date('2026-07-31T00:00:01.000Z'),
+    };
+    const harness = createPlainTextPublicationHarness([parseFailure]);
+
+    const result = await harness.executor.prepareFindingReviewPublication({
+      step: harness.step,
+      executableStep: harness.step,
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      state: harness.state,
+      phase1Response: {
+        persona: 'reviewer',
+        status: 'done',
+        content: 'phase 1 investigation',
+        timestamp: new Date('2026-07-31T00:00:00.000Z'),
+      },
+      agentOptions: { resolvedProvider: 'mock' },
+      onProviderAttempt: vi.fn(),
+      updatePersonaSession: harness.updatePersonaSession,
+    });
+
+    expect(result).toMatchObject({
+      terminalResponse: {
+        status: 'error',
+        content: harness.reportContent,
+        error: parseFailure.error,
+        failureCategory: parseFailure.failureCategory,
+      },
+    });
+    expect(harness.normalizeFindingIntake).toHaveBeenCalledOnce();
+    expect(harness.normalizeFindingIntake.mock.calls[0]?.[1]).toMatchObject({ mode: 'initial' });
+  });
+
+  it('Finding Intakeの訂正時parse failureは訂正後に停止し、候補切替しない', async () => {
+    const parseFailure = {
+      persona: 'default',
+      status: 'error' as const,
+      content: '',
+      error: 'provider stream parse error: Failed to parse item: invalid correction line',
+      failureCategory: 'provider_stream_parse_error' as const,
+      timestamp: new Date('2026-07-31T00:00:02.000Z'),
+    };
+    const harness = createPlainTextPublicationHarness([
+      {
+        persona: 'default',
+        status: 'done',
+        content: '{"rawFindings":"invalid"}',
+        structuredOutput: { rawFindings: 'invalid' },
+        timestamp: new Date('2026-07-31T00:00:01.000Z'),
+      },
+      parseFailure,
+    ]);
+
+    const result = await harness.executor.prepareFindingReviewPublication({
+      step: harness.step,
+      executableStep: harness.step,
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      state: harness.state,
+      phase1Response: {
+        persona: 'reviewer',
+        status: 'done',
+        content: 'phase 1 investigation',
+        timestamp: new Date('2026-07-31T00:00:00.000Z'),
+      },
+      agentOptions: { resolvedProvider: 'mock' },
+      onProviderAttempt: vi.fn(),
+      updatePersonaSession: harness.updatePersonaSession,
+    });
+
+    expect(result).toMatchObject({
+      terminalResponse: {
+        error: parseFailure.error,
+        failureCategory: parseFailure.failureCategory,
+      },
+    });
+    expect(harness.normalizeFindingIntake.mock.calls.map(([, options]) => (
+      (options as { mode: string }).mode
+    ))).toEqual(['initial', 'correction']);
+    expect(harness.normalizeFindingIntake).toHaveBeenCalledTimes(2);
   });
 
   it('Phase 2 は明示指定された finding contract context を使い restatement-only 契約を保つ', async () => {
@@ -2449,6 +2540,7 @@ describe('StepExecutor', () => {
       getProjectCwd: () => cwd,
       getReportDir: () => reportDir,
       getRunPaths: () => runPaths,
+      getFailureDir: () => join(runPaths.runRootAbs, 'failures'),
       getLanguage: () => 'en',
       getInteractive: () => false,
       getWorkflowSteps: () => [{ name: 'review' }],

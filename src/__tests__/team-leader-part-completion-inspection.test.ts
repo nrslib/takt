@@ -20,6 +20,7 @@ import {
 import type {
   TeamLeaderExecutionTerminalState,
 } from '../core/workflow/engine/team-leader-execution-terminal.js';
+import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
 
 const { executeAgentMock } = vi.hoisted(() => ({ executeAgentMock: vi.fn() }));
 const { requestCorrectionMock } = vi.hoisted(() => ({
@@ -536,6 +537,67 @@ describe('Finding Contract part completion recovery', () => {
       JSON.stringify(['fix.repair', 'codex']),
       expect.anything(),
     );
+  });
+
+  it('fails fast when completion correction returns a provider stream parse failure', async () => {
+    requestCorrectionMock.mockResolvedValueOnce(makeRecoveryResponse({}, {
+      status: 'error',
+      content: '',
+      error: 'provider stream parse error: Failed to parse item: invalid correction',
+      structuredOutput: undefined,
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+    }));
+    const normalizeStructuredOutputWithDiagnostics = vi.fn((
+      _partStep: WorkflowStep,
+      correctionResponse: AgentResponse,
+    ) => ({ response: correctionResponse }));
+    const onAttempt = vi.fn();
+
+    const recovery = validateOrRecoverFindingContractPartCompletion(
+      {
+        optionsBuilder: {
+          resolveStepProviderModel: vi.fn().mockReturnValue({
+            provider: 'codex',
+            model: 'gpt-5',
+          }),
+        } as unknown as OptionsBuilder,
+        stepExecutor: {
+          normalizeStructuredOutputWithDiagnostics,
+        } as unknown as StepExecutor,
+        language: 'en',
+        recordUsage: vi.fn(),
+      },
+      {
+        step: recoveryStep,
+        part: recoveryPart,
+        response: makeRecoveryResponse({
+          findingOutcomes: [{
+            findingId: 'F-0001',
+            outcome: 'disputed',
+            evidence: ['missing location'],
+          }],
+          changedPaths: ['src/repair.ts'],
+          checks: [],
+          summary: 'repaired',
+        }),
+        updatePersonaSession: vi.fn(),
+        onAttempt,
+        abortSignal: new AbortController().signal,
+      },
+    );
+
+    await expect(recovery).rejects.toMatchObject({
+      name: 'ProviderStreamParseError',
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+      reason: 'Failed to parse item: invalid correction',
+    });
+    expect(requestCorrectionMock).toHaveBeenCalledOnce();
+    expect(normalizeStructuredOutputWithDiagnostics).toHaveBeenCalledOnce();
+    expect(onAttempt.mock.calls.map(([event]) => event.type)).toEqual([
+      'rejected',
+      'started',
+      'terminated',
+    ]);
   });
 
   it('publishes only late usage after the terminal fence closes', async () => {

@@ -13,7 +13,11 @@ import type {
   UsageEventLogger,
 } from '../../../core/logging/usageEventLogger.js';
 import { StreamDisplay } from '../../../shared/ui/index.js';
-import { sanitizeTerminalText } from '../../../shared/utils/text.js';
+import {
+  MAX_TERMINAL_OUTPUT_BYTES,
+  sanitizeTerminalText,
+  sanitizeTerminalTextWithinBytes,
+} from '../../../shared/utils/text.js';
 import { isDebugEnabled, isVerboseConsole } from '../../../shared/utils/debug.js';
 import { notifyWarning, playWarningSound } from '../../../shared/utils/index.js';
 import type { ExceededInfo, WorkflowExecutionEvent, WorkflowExecutionOptions } from './types.js';
@@ -627,7 +631,11 @@ export function bindWorkflowExecutionEvents(
     }
 
     if (response.error) {
-      deps.out.error(`Error: ${response.error}`);
+      const prefix = 'Error: ';
+      deps.out.error(`${prefix}${sanitizeTerminalTextWithinBytes(
+        response.error,
+        MAX_TERMINAL_OUTPUT_BYTES - Buffer.byteLength(prefix, 'utf8'),
+      )}`);
       emitWorkflowExecutionEvent(
         deps.eventSink,
         {

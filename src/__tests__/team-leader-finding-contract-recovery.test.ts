@@ -812,4 +812,55 @@ describe('Finding Contract control boundary adapters', () => {
       expect(error.issues.every((issue) => issue.category === 'shape')).toBe(true);
     }
   });
+
+  it('stops decomposition recovery on a provider stream parse failure', async () => {
+    const parseResponse: AgentResponse = {
+      persona: 'leader',
+      status: 'error',
+      content: '',
+      error: 'provider stream parse error: Failed to parse item: decomposition',
+      failureCategory: 'provider_stream_parse_error',
+      timestamp: new Date(),
+    };
+    const requestRaw = vi.fn().mockResolvedValue(parseResponse);
+
+    await expect(requestValidFindingContractControlOutput({
+      adapter: createFindingContractDecompositionBoundaryAdapter({
+        requestRaw,
+        maxInitialParts: 4,
+        targetFindingIds: ['F-0001'],
+      }),
+    })).rejects.toMatchObject({
+      name: 'ProviderStreamParseError',
+      failureCategory: 'provider_stream_parse_error',
+    });
+    expect(requestRaw).toHaveBeenCalledOnce();
+  });
+
+  it('stops decision recovery on a provider stream parse failure', async () => {
+    const parseResponse: AgentResponse = {
+      persona: 'leader',
+      status: 'error',
+      content: '',
+      error: 'provider stream parse error: Failed to parse item: decision',
+      failureCategory: 'provider_stream_parse_error',
+      timestamp: new Date(),
+    };
+    const requestRaw = vi.fn().mockResolvedValue(parseResponse);
+
+    await expect(requestValidFindingContractControlOutput({
+      adapter: createFindingContractDecisionBoundaryAdapter({
+        requestRaw,
+        validationContext: {
+          targetFindingIds: ['F-0001'],
+          plannedParts: [validPart],
+          evidence: { entries: [], findings: [] },
+        },
+      }),
+    })).rejects.toMatchObject({
+      name: 'ProviderStreamParseError',
+      failureCategory: 'provider_stream_parse_error',
+    });
+    expect(requestRaw).toHaveBeenCalledOnce();
+  });
 });

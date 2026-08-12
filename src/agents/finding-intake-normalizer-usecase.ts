@@ -15,6 +15,7 @@ export interface NormalizeFindingIntakeOptions {
   provider: ProviderType;
   model?: string;
   providerOptions?: StepProviderOptions;
+  failureDir: string;
   language?: Language;
   abortSignal?: AbortSignal;
   onPromptResolved?: (promptParts: {
@@ -50,6 +51,7 @@ export async function normalizeFindingIntake(
       outputSchema: createRawFindingsOutputJsonSchema(),
       language: options.language,
       providerOptions: options.providerOptions,
+      failureDir: options.failureDir,
     };
     const agent = provider.setupIsolatedStructured({
       name: 'finding-intake-normalizer',

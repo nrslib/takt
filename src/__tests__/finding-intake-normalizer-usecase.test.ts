@@ -30,6 +30,7 @@ describe('normalizeFindingIntake', () => {
     await normalizeFindingIntake('normal Markdown report', {
       provider: 'codex',
       model: 'gpt-5.6-terra',
+      failureDir: '/tmp/failures',
       providerOptions: {
         codex: { reasoningEffort: 'high' },
       },
@@ -48,6 +49,7 @@ describe('normalizeFindingIntake', () => {
     await normalizeFindingIntake('report', {
       provider: 'codex',
       model: 'gpt-5.6-terra',
+      failureDir: '/tmp/failures',
       providerOptions: {
         codex: { reasoningEffort: 'high' },
       },
@@ -63,6 +65,7 @@ describe('normalizeFindingIntake', () => {
       providerOptions: {
         codex: { reasoningEffort: 'high' },
       },
+      failureDir: '/tmp/failures',
     });
     expect(options).not.toHaveProperty('childProcessEnv');
     expect(options.cwd).toContain('takt-finding-intake-');
@@ -76,6 +79,7 @@ describe('normalizeFindingIntake', () => {
     await normalizeFindingIntake('authoritative report', {
       provider: 'codex',
       model: 'gpt-5.6-terra',
+      failureDir: '/tmp/failures',
       mode: 'correction',
     });
 
@@ -93,6 +97,7 @@ describe('normalizeFindingIntake', () => {
     await normalizeFindingIntake('extraction-fidelity report', {
       provider: 'codex',
       model: 'gpt-5.6-terra',
+      failureDir: '/tmp/failures',
       mode: 'correction',
       extractionFidelityCorrection: true,
     });
@@ -121,6 +126,7 @@ describe('normalizeFindingIntake', () => {
     await expect(normalizeFindingIntake('report', {
       provider: 'codex',
       model: 'gpt-5.6-terra',
+      failureDir: '/tmp/failures',
     })).rejects.toThrow('provider failed');
 
     expect(isolatedCwd).toBeDefined();

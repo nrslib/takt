@@ -121,6 +121,7 @@ function buildDeps(overrides: Partial<DynamicFacetSelectorCoordinatorDeps> = {})
   const store = new DynamicFacetSelectionStore(new Map());
   return {
     engineOptions: makeOptions(),
+    failureDir: '/tmp/project/.takt/runs/run/failures',
     selectionStore: store,
     getWorkflowReference: () => 'test-workflow',
     workflowCallPath: [],
@@ -206,6 +207,9 @@ describe('DynamicFacetSelectorCoordinator', () => {
 
     const outputSchema = mockedExecuteAgent.mock.calls[0]?.[2];
     if (outputSchema === undefined) throw new Error('Selector output schema was not sent');
+    expect(mockedExecuteAgent.mock.calls[0]?.[3]).toMatchObject({
+      failureDir: '/tmp/project/.takt/runs/run/failures',
+    });
     expect(() => assertStrictStructuredOutputSchema(outputSchema)).not.toThrow();
     expect(outputSchema).not.toHaveProperty('properties.selected_ids.uniqueItems');
     expect(outputSchema).toHaveProperty('properties.selected_ids.maxItems', 1);

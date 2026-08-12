@@ -11,6 +11,7 @@ import {
   getDisplayWidth,
   stripAnsi,
   sanitizeTerminalText,
+  truncateUtf8PreservingMarker,
   truncateText,
 } from '../shared/utils/text.js';
 
@@ -110,6 +111,23 @@ describe('sanitizeTerminalText', () => {
   it('should strip ANSI sequences before visualizing control characters', () => {
     expect(sanitizeTerminalText('\x1b[31mwarn\x1b[0m\n\x1b]0;title\x07\tok'))
       .toBe('warn\\n\\tok');
+  });
+});
+
+describe('truncateUtf8PreservingMarker', () => {
+  it('should preserve an existing marker within the UTF-8 byte limit', () => {
+    const marker = '[TRUNCATED: 12000 bytes, full text: .takt/runs/test/failures/provider-failure.txt]';
+    const result = truncateUtf8PreservingMarker(`${'あ'.repeat(5000)}${marker}`, 8192);
+
+    expect(Buffer.byteLength(result, 'utf8')).toBeLessThanOrEqual(8192);
+    expect(result.endsWith(marker)).toBe(true);
+  });
+
+  it('should append a marker when the input has no marker', () => {
+    const result = truncateUtf8PreservingMarker('x'.repeat(8193), 8192);
+
+    expect(Buffer.byteLength(result, 'utf8')).toBeLessThanOrEqual(8192);
+    expect(result).toMatch(/\[TRUNCATED: \d+ bytes\]$/);
   });
 });
 

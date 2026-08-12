@@ -118,6 +118,7 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
 
   it('passes childProcessEnv to phase 3 structured caller judgment', async () => {
     const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
+    const failureDir = '/tmp/project/.takt/runs/sample/failures';
     const structuredCaller = {
       judgeStatus: vi.fn().mockImplementation(async (_structured, _tag, _rules, options) => {
         options.onStructuredPromptResolved?.({
@@ -145,6 +146,7 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
       lastResponse: 'response body',
       iteration: 2,
       childProcessEnv,
+      failureDir,
       resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'codex', model: 'gpt-5.2-codex' }),
       structuredCaller,
     } as Parameters<typeof runStatusJudgmentPhase>[1] & {
@@ -158,7 +160,7 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
         { label: 'needs_fix' },
         { label: 'approved' },
       ],
-      expect.objectContaining({ childProcessEnv }),
+      expect.objectContaining({ childProcessEnv, failureDir }),
     );
   });
 

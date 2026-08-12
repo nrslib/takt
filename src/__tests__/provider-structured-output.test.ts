@@ -315,9 +315,11 @@ describe('CodexProvider — structured output', () => {
       name: 'normalizer',
       systemPrompt: 'system',
     });
+    const failureDir = '/project/.takt/runs/run-1/failures';
     await agent.call('report', {
       cwd: '/tmp/isolated',
       outputSchema: SCHEMA,
+      failureDir,
     });
 
     expect(mockCallCodexIsolatedStructured).toHaveBeenCalledWith(
@@ -327,6 +329,7 @@ describe('CodexProvider — structured output', () => {
         cwd: '/tmp/isolated',
         outputSchema: SCHEMA,
         codexPathOverride: '/opt/codex/bin/codex',
+        failureDir,
       }),
     );
     expect(mockCallCodex).not.toHaveBeenCalled();
@@ -427,6 +430,19 @@ describe('CodexProvider — structured output', () => {
 
     const opts = mockCallCodex.mock.calls[0]?.[2];
     expect(opts).toHaveProperty('childProcessEnv', childProcessEnv);
+  });
+
+  it('failureDir を callCodex に渡す', async () => {
+    mockCallCodex.mockResolvedValue(doneResponse('coder'));
+    const failureDir = '/project/.takt/runs/run-1/failures';
+
+    const agent = new CodexProvider().setup({ name: 'coder' });
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      failureDir,
+    });
+
+    expect(mockCallCodex.mock.calls[0]?.[2]).toHaveProperty('failureDir', failureDir);
   });
 
   it('systemPrompt 指定時も outputSchema が callCodexCustom に渡される', async () => {

@@ -144,4 +144,48 @@ describe('workflowExecutionReporting', () => {
       expect.stringContaining('Failed: SQLite setup failed'),
     );
   });
+
+  it('sanitizes only the terminal workflow failure while preserving the notification reason', () => {
+    const out = createOut();
+    const unsafeReason = 'provider failed\x1b]52;c;secret\x07\r\x00';
+
+    reportWorkflowFailure(
+      out as never,
+      createSessionLog(),
+      1,
+      unsafeReason,
+      'failed',
+      '/tmp/project/.takt/runs/run-843/logs/session.jsonl',
+      true,
+    );
+
+    const terminalMessage = out.error.mock.calls[0]?.[0] as string;
+    expect(terminalMessage).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
+    expect(terminalMessage).toContain('provider failed');
+    expect(terminalMessage).toContain('\\r\\x00');
+    expect(mockNotifyError).toHaveBeenCalledWith(
+      'TAKT',
+      expect.stringContaining(unsafeReason),
+    );
+  });
+
+  it('keeps the final workflow failure output within 8192 bytes while preserving a truncation marker', () => {
+    const out = createOut();
+    const marker = '[TRUNCATED: 12000 bytes, full text: /tmp/failure.txt]';
+    const reason = `${'x'.repeat(8192 - Buffer.byteLength(marker, 'utf8'))}${marker}`;
+
+    reportWorkflowFailure(
+      out as never,
+      createSessionLog(),
+      1,
+      reason,
+      'failed',
+      '/tmp/project/.takt/runs/run-843/logs/session.jsonl',
+      false,
+    );
+
+    const terminalMessage = out.error.mock.calls[0]?.[0] as string;
+    expect(Buffer.byteLength(terminalMessage, 'utf8')).toBeLessThanOrEqual(8192);
+    expect(terminalMessage).toContain(marker);
+  });
 });

@@ -45,6 +45,11 @@ import {
   TeamLeaderDecompositionValidationError,
   type RejectedTeamLeaderDecomposition,
 } from './team-leader-decomposition-regeneration.js';
+import {
+  AGENT_FAILURE_CATEGORIES,
+  createAgentFailureError,
+  createProviderStreamParseError,
+} from '../shared/types/agent-failure.js';
 
 export interface FindingContractDecompositionContext {
   readonly targetFindingIds: readonly string[];
@@ -85,6 +90,7 @@ export interface DecomposeTaskOptions {
   workflowMeta?: RunAgentOptions['workflowMeta'];
   childProcessEnv?: RunAgentOptions['childProcessEnv'];
   abortSignal?: RunAgentOptions['abortSignal'];
+  failureDir?: RunAgentOptions['failureDir'];
   mcpServers?: RunAgentOptions['mcpServers'];
   inspectTools?: string[];
   onPromptResolved?: (promptParts: {
@@ -162,6 +168,7 @@ async function requestDecompositionResponse(
       workflowMeta: options.workflowMeta,
       childProcessEnv: options.childProcessEnv,
       abortSignal: options.abortSignal,
+      failureDir: options.failureDir,
       onPromptResolved: options.onPromptResolved,
     });
   } catch (error) {
@@ -199,7 +206,13 @@ export async function decomposeTask(
   const response = await requestDecompositionResponse(instruction, maxInitialParts, options);
 
   if (response.status !== 'done') {
+    if (response.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR) {
+      throw createProviderStreamParseError(response.error || response.content || response.status);
+    }
     const detail = response.error || response.content || response.status;
+    if (response.failureCategory !== undefined) {
+      throw createAgentFailureError(response.failureCategory, detail);
+    }
     throw new Error(`Team leader failed: ${detail}`);
   }
 
@@ -233,7 +246,13 @@ function parseNonFindingContractDecomposition(
   maxInitialParts: number | undefined,
 ): DecomposeTaskResponse {
   if (response.status !== 'done') {
+    if (response.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR) {
+      throw createProviderStreamParseError(response.error || response.content || response.status);
+    }
     const detail = response.error || response.content || response.status;
+    if (response.failureCategory !== undefined) {
+      throw createAgentFailureError(response.failureCategory, detail);
+    }
     throw new Error(`Team leader failed: ${detail}`);
   }
 
@@ -290,6 +309,7 @@ export async function requestMorePartsRawResponse(
       workflowMeta: options.workflowMeta,
       childProcessEnv: options.childProcessEnv,
       abortSignal: options.abortSignal,
+      failureDir: options.failureDir,
     });
   } catch (error) {
     if (options.abortSignal?.aborted !== true) {
@@ -317,7 +337,13 @@ export async function requestMoreParts(
   );
 
   if (response.status !== 'done') {
+    if (response.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR) {
+      throw createProviderStreamParseError(response.error || response.content || response.status);
+    }
     const detail = response.error || response.content || response.status;
+    if (response.failureCategory !== undefined) {
+      throw createAgentFailureError(response.failureCategory, detail);
+    }
     throw new Error(`Team leader feedback failed: ${detail}`);
   }
 

@@ -9,7 +9,10 @@ import type { ParallelLogger } from './parallel-logger.js';
 import type { ProviderType } from '../../../shared/types/provider.js';
 import { createPartStep } from './team-leader-common.js';
 import { getErrorMessage } from '../../../shared/utils/index.js';
-import { classifyAbortSignalReason } from '../../../shared/types/agent-failure.js';
+import {
+  classifyAbortSignalReason,
+  isAgentFailureError,
+} from '../../../shared/types/agent-failure.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 import { buildSessionlessPartCompletionInspectionOptions } from './team-leader-part-completion-inspection.js';
 import { isTeamLeaderPartCancellation } from './team-leader-part-cancellation.js';
@@ -226,14 +229,18 @@ export function buildTeamLeaderErrorPartResult(
 ): PartResult {
   const message = getErrorMessage(error);
   const failure = abortSignal?.aborted ? classifyAbortSignalReason(abortSignal.reason) : undefined;
-  const errorMsg = failure ? failure.reason : message;
+  const errorMsg = failure ? failure.reason : isAgentFailureError(error) ? error.reason : message;
   const errorResponse: AgentResponse = {
     persona: `${step.name}.${part.id}`,
     status: 'error',
     content: '',
     timestamp: new Date(),
     error: errorMsg,
-    ...(failure ? { failureCategory: failure.category } : {}),
+    ...(failure
+      ? { failureCategory: failure.category }
+      : isAgentFailureError(error)
+        ? { failureCategory: error.failureCategory }
+        : {}),
   };
   return { part, response: errorResponse };
 }

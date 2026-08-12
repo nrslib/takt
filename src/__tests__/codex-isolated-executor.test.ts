@@ -830,6 +830,7 @@ describe('CodexClient strict read-only isolation', () => {
         {
           cwd: ambientRoot,
           projectCwd: ambientRoot,
+          failureDir: join(ambientRoot, 'failures'),
           resolution: {
             provider: 'codex',
             model: 'gpt-5',

@@ -395,7 +395,6 @@ describe('ParallelRunner terminal sub-step statuses', () => {
     const result = await runner.runParallelStep(step, state, 'test task', 5, vi.fn());
 
     expect(result.response.status).toBe('rate_limited');
-    expect(result.response.error).toBe(result.response.content);
     expect(result.response.content).toContain('ai-antipattern-review-2nd');
     expect(result.response.content).toContain('status: rate_limited');
     expect(result.response.content).toContain('Rate limit exceeded for ai reviewer.');
@@ -403,6 +402,7 @@ describe('ParallelRunner terminal sub-step statuses', () => {
     expect(result.response.content).toContain('status: error');
     expect(result.response.content).toContain('failureCategory: provider_error');
     expect(result.response.content).toContain('Security reviewer failed after retry.');
+    expect(result.response.error).toBe('Security reviewer failed after retry.');
   });
 
   it('purges the stale persona session when the fresh retry returns no session id', async () => {
@@ -494,6 +494,61 @@ describe('ParallelRunner terminal sub-step statuses', () => {
     expect(result.response.content).toContain('Authorization: Bearer [REDACTED]');
     expect(result.response.content).not.toContain('top-secret');
     expect(result.response.content).not.toContain('sk-secret123456');
-    expect(result.response.error).toBe(result.response.content);
+    expect(result.response.error).toBe(
+      'Provider failed with api_key=[REDACTED] and Authorization: Bearer [REDACTED]',
+    );
+  });
+
+  it('re-bounds masked parent failures while retaining the marker, path, and category', async () => {
+    const { runner } = makeRunner();
+    const step = makeParallelStep();
+    const state = makeState();
+    const marker = '[TRUNCATED: 12000 bytes, full text: /tmp/failure.txt]';
+    const secretAssignment = 'api_key=x';
+    const error = `${secretAssignment}${'x'.repeat(
+      8192 - Buffer.byteLength(`${secretAssignment}${marker}`, 'utf8'),
+    )}${marker}`;
+    expect(Buffer.byteLength(error, 'utf8')).toBe(8192);
+
+    queueAgentResponse(makeAgentResponse({
+      persona: 'ai-antipattern-review-2nd',
+      status: 'error',
+      content: '',
+      error,
+      failureCategory: 'provider_error',
+    }));
+    queueAgentResponse(makeAgentResponse({
+      persona: 'security-review',
+      content: '[SECURITY-REVIEW:1] approved',
+    }));
+    queueAgentResponse(makeAgentResponse({
+      persona: 'ai-antipattern-review-2nd',
+      status: 'error',
+      content: '',
+      error,
+      failureCategory: 'provider_error',
+    }));
+
+    const result = await runner.runParallelStep(step, state, 'test task', 5, vi.fn());
+    const workflowCallFailure = result.workflowCallFailure;
+    const parentFailureValues = [
+      result.response.error,
+      workflowCallFailure?.reason,
+      workflowCallFailure?.error,
+      state.stepOutputs.get('reviewers')?.error,
+    ];
+
+    expect(result.response.status).toBe('error');
+    expect(result.response.failureCategory).toBe('provider_error');
+    expect(result.response.content).toContain('failureCategory: provider_error');
+    expect(result.response.content).toContain(marker);
+    expect(workflowCallFailure?.kind).toBe('step_error');
+    for (const value of parentFailureValues) {
+      expect(value).toBeDefined();
+      expect(Buffer.byteLength(value ?? '', 'utf8')).toBeLessThanOrEqual(8192);
+      expect(value).toContain(marker);
+      expect(value).not.toContain(secretAssignment);
+      expect(value).toContain('api_key=[REDACTED]');
+    }
   });
 });

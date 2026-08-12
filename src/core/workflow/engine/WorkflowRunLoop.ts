@@ -39,6 +39,10 @@ import {
   reviewerOperationOrigin,
   sameFallbackOperationOrigin,
 } from './fallback-operation.js';
+import {
+  isAgentFailureError,
+  isProviderStreamParseError,
+} from '../../../shared/types/agent-failure.js';
 
 const log = createLogger('workflow-run-loop');
 
@@ -477,6 +481,23 @@ function abortWorkflowRuntimeError(deps: WorkflowRunLoopDeps, error: unknown): W
       { failure: error.failure },
     );
   }
+  if (isProviderStreamParseError(error)) {
+    const failureError = error.message;
+    return abortWorkflow(
+      deps,
+      'step_error',
+      failureError,
+      { clearLastOutput: true, failureError },
+    );
+  }
+  if (isAgentFailureError(error)) {
+    return abortWorkflow(
+      deps,
+      'step_error',
+      error.reason,
+      { clearLastOutput: true, failureError: error.reason },
+    );
+  }
   const errorMessage = getErrorMessage(error);
   return abortWorkflow(
     deps,
@@ -602,6 +623,14 @@ function abortStepError(
     );
   }
   const failureError = result.response.error ?? result.response.content;
+  if (result.response.failureCategory !== undefined) {
+    return abortWorkflow(
+      deps,
+      'step_error',
+      failureError,
+      { failureError },
+    );
+  }
   return abortWorkflow(
     deps,
     'step_error',

@@ -8,7 +8,11 @@ import {
 } from '../../../infra/config/index.js';
 import { getLabel } from '../../../shared/i18n/index.js';
 import { notifyError, notifySuccess } from '../../../shared/utils/index.js';
-import { sanitizeTerminalText } from '../../../shared/utils/text.js';
+import {
+  MAX_TERMINAL_OUTPUT_BYTES,
+  sanitizeTerminalText,
+  sanitizeTerminalTextWithinBytes,
+} from '../../../shared/utils/text.js';
 import { USAGE_MISSING_REASONS } from '../../../core/logging/contracts.js';
 import type { WorkflowTraceDiscovery } from '../../../core/workflow/observability/traceDiscovery.js';
 import { createOutputFns } from './outputFns.js';
@@ -111,7 +115,11 @@ export function reportWorkflowFailure(
 ): void {
   const elapsed = sessionLog.endTime ? formatElapsedTime(sessionLog.startTime, sessionLog.endTime) : '';
   const statusLabel = status === 'failed' ? 'failed' : 'aborted';
-  out.error(`Workflow ${statusLabel} after ${iteration} iterations${elapsed ? ` (${elapsed})` : ''}: ${reason}`);
+  const prefix = `Workflow ${statusLabel} after ${iteration} iterations${elapsed ? ` (${elapsed})` : ''}: `;
+  out.error(`${prefix}${sanitizeTerminalTextWithinBytes(
+    reason,
+    MAX_TERMINAL_OUTPUT_BYTES - Buffer.byteLength(prefix, 'utf8'),
+  )}`);
   out.info(`Session log: ${ndjsonLogPath}`);
   reportTraceDiscovery(out, traceDiscovery);
   if (shouldNotifyWorkflowAbort) {

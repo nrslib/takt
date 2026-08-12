@@ -145,6 +145,16 @@ function mockRunAgentRejectingOnAbort(onWaitingForAbort?: () => void): void {
   });
 }
 
+function createBoundedParseFailure(fullTextPath: string): string {
+  const prefix = 'provider stream parse error: Failed to parse item: ';
+  const truncationMarker = `[TRUNCATED: 428000 bytes, full text: ${fullTextPath}]`;
+  return [
+    prefix,
+    'x'.repeat(8192 - Buffer.byteLength(prefix) - Buffer.byteLength(truncationMarker)),
+    truncationMarker,
+  ].join('');
+}
+
 describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
   let tmpDir: string;
 
@@ -990,6 +1000,63 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     });
   });
 
+  it('member の provider stream parse failure は成功パートと混在しても即時 abort する', async () => {
+    const config = buildTeamLeaderConfig();
+    const step = config.steps[0];
+    if (!step?.teamLeader) {
+      throw new Error('teamLeader configuration is required');
+    }
+    step.teamLeader.maxConcurrency = 2;
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+      projectCwd: tmpDir,
+      provider: 'claude',
+    });
+    const workflowAborted = vi.fn();
+    engine.on('workflow:abort', workflowAborted);
+    const boundedParseFailure = createBoundedParseFailure(
+      '/tmp/project/.takt/runs/sample/failures/team-leader-provider-failure-1.txt',
+    );
+
+    mockRunAgentWithPrompt(
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: {
+          parts: [
+            { id: 'part-1', title: 'API', instruction: 'Implement API' },
+            { id: 'part-2', title: 'Test', instruction: 'Add tests' },
+          ],
+        },
+      }),
+      makeResponse({
+        persona: 'coder',
+        status: 'error',
+        content: '',
+        error: boundedParseFailure,
+        failureCategory: 'provider_stream_parse_error',
+      }),
+      makeResponse({ persona: 'coder', content: 'Tests done' }),
+    );
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(3);
+    expect(mockRuleEvaluation).not.toHaveBeenCalled();
+    expect(workflowAborted).toHaveBeenCalledOnce();
+    const abortReason = workflowAborted.mock.calls[0]?.[1];
+    const abortKind = workflowAborted.mock.calls[0]?.[2];
+    const abortFailure = workflowAborted.mock.calls[0]?.[3];
+    expect(abortKind).toBe('step_error');
+    expect(abortReason).toBe(boundedParseFailure);
+    expect(abortFailure).toMatchObject({
+      kind: 'step_error',
+      reason: boundedParseFailure,
+      error: boundedParseFailure,
+    });
+    expect(Buffer.byteLength(String(abortReason))).toBe(8192);
+    expect(Buffer.byteLength(String(abortFailure?.error))).toBe(8192);
+  });
+
   it('team leader call が reject した場合も失敗 usage を1件だけ記録する', async () => {
     const config = buildTeamLeaderConfig();
     const step = config.steps[0];
@@ -1458,7 +1525,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     ]);
   });
 
-  it('全パート失敗時は provider error の分類も集約メッセージに残す', async () => {
+  it('全パート失敗時は診断をcontentに残し、errorは最初のprovider failureに分離する', async () => {
     const config = buildTeamLeaderConfig();
     const engine = new WorkflowEngine(config, tmpDir, 'implement feature', { projectCwd: tmpDir, provider: 'claude' });
 
@@ -1497,11 +1564,16 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     expect(state.status).toBe('aborted');
     expect(state.stepOutputs.get('implement')).toMatchObject({
       status: 'error',
-      error: 'All team leader parts failed: part-1: provider error: Upstream model returned 500; part-2: provider error: Gateway unavailable',
+      error: 'Upstream model returned 500',
+      failureCategory: 'provider_error',
     });
+    expect(state.stepOutputs.get('implement')?.content).toBe(
+      'All team leader parts failed: part-1: Upstream model returned 500; part-2: Gateway unavailable',
+    );
     expect(state.lastOutput).toMatchObject({
       status: 'error',
-      error: 'All team leader parts failed: part-1: provider error: Upstream model returned 500; part-2: provider error: Gateway unavailable',
+      error: 'Upstream model returned 500',
+      failureCategory: 'provider_error',
     });
   });
 

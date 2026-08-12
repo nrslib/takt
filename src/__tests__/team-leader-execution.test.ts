@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { runTeamLeaderExecution } from '../core/workflow/engine/team-leader-execution.js';
 import type { PartDefinition, PartResult } from '../core/models/types.js';
+import { createProviderStreamParseError } from '../shared/types/agent-failure.js';
 
 function makePart(id: string): PartDefinition {
   return {
@@ -216,6 +217,28 @@ describe('runTeamLeaderExecution', () => {
 
     expect(result.partResults).toHaveLength(2);
     expect(onPlanningError).toHaveBeenCalledWith(expect.objectContaining({ message: 'feedback failed' }));
+  });
+
+  it('追加計画の provider stream parse failure は fallback と成功集約へ進まない', async () => {
+    const parts = ['p1', 'p2'].map(makePart);
+    const parseError = createProviderStreamParseError('Failed to parse item: feedback response');
+    const runPart = vi.fn(async (part: PartDefinition) => makeResult(part));
+    const requestMoreParts = vi.fn().mockRejectedValue(parseError);
+    const onPlanningError = vi.fn();
+    const onPlanningDone = vi.fn();
+
+    await expect(runTeamLeaderExecution({
+      initialParts: parts,
+      maxConcurrency: 1,
+      runPart,
+      requestMoreParts,
+      onPlanningError,
+      onPlanningDone,
+    })).rejects.toBe(parseError);
+
+    expect(requestMoreParts).toHaveBeenCalledOnce();
+    expect(onPlanningError).not.toHaveBeenCalled();
+    expect(onPlanningDone).not.toHaveBeenCalled();
   });
 
   it('重複IDだけ返された場合は追加せず終了する', async () => {

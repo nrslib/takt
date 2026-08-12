@@ -1420,6 +1420,68 @@ describe('bindWorkflowExecutionEvents', () => {
     });
   });
 
+  it('step error は端末表示だけをサニタイズし、event sink には元値を渡す', async () => {
+    const eventSink = vi.fn().mockResolvedValue(undefined);
+    const { bridge, engine, out } = createBridgeHarness({ eventSink });
+    const step = {
+      name: 'review',
+      personaDisplayName: 'Reviewer',
+      instruction: '',
+    } as WorkflowStep;
+    const unsafeError = 'provider failed\x1b]52;c;secret\x07\r\x00';
+
+    engine.emit('step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' }, 'parent', step.name);
+    engine.emit('step:complete', step, {
+      persona: 'reviewer',
+      status: 'error',
+      content: '',
+      error: unsafeError,
+      timestamp: new Date(),
+    }, 'instruction', step.name);
+    await bridge.flushEventSink();
+
+    const terminalMessage = out.error.mock.calls[0]?.[0] as string;
+    expect(terminalMessage).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
+    expect(terminalMessage).toContain('provider failed');
+    expect(terminalMessage).toContain('\\r\\x00');
+    expect(eventSink).toHaveBeenCalledWith({
+      type: 'error',
+      message: unsafeError,
+      step: 'review',
+    });
+  });
+
+  it('step error の最終端末表示を8192バイト以内に収め、truncation markerを保持する', async () => {
+    const eventSink = vi.fn().mockResolvedValue(undefined);
+    const { bridge, engine, out } = createBridgeHarness({ eventSink });
+    const step = {
+      name: 'review',
+      personaDisplayName: 'Reviewer',
+      instruction: '',
+    } as WorkflowStep;
+    const marker = '[TRUNCATED: 12000 bytes, full text: /tmp/failure.txt]';
+    const error = `${'x'.repeat(8192 - Buffer.byteLength(marker, 'utf8'))}${marker}`;
+
+    engine.emit('step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' }, 'parent', step.name);
+    engine.emit('step:complete', step, {
+      persona: 'reviewer',
+      status: 'error',
+      content: '',
+      error,
+      timestamp: new Date(),
+    }, 'instruction', step.name);
+    await bridge.flushEventSink();
+
+    const terminalMessage = out.error.mock.calls[0]?.[0] as string;
+    expect(Buffer.byteLength(terminalMessage, 'utf8')).toBeLessThanOrEqual(8192);
+    expect(terminalMessage).toContain(marker);
+    expect(eventSink).toHaveBeenCalledWith({
+      type: 'error',
+      message: error,
+      step: 'review',
+    });
+  });
+
   it('event sink へ rate limited の専用イベントを渡す', async () => {
     const eventSink = vi.fn().mockResolvedValue(undefined);
     const { bridge, engine } = createBridgeHarness({ eventSink });

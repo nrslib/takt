@@ -37,6 +37,7 @@ export interface ProviderCallOptions {
   outputSchema?: Record<string, unknown>;
   language?: Language;
   imageAttachments?: ProviderImageAttachment[];
+  failureDir?: string;
   childProcessEnv?: Readonly<Record<string, string>>;
 }
 

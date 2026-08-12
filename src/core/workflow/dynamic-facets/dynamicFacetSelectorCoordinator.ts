@@ -30,6 +30,7 @@ const SELECTOR_RATIONALE_LOG_MAX_BYTES = 1024;
 
 export interface DynamicFacetSelectorCoordinatorDeps {
   readonly engineOptions: WorkflowEngineOptions;
+  readonly failureDir: string;
   readonly selectionStore: DynamicFacetSelectionStore;
   readonly getWorkflowReference: () => string;
   readonly workflowCallPath: readonly WorkflowResumePointEntry[];
@@ -128,6 +129,7 @@ export class DynamicFacetSelectorCoordinator {
         {
           cwd: this.deps.getCwd(),
           projectCwd: this.deps.engineOptions.projectCwd,
+          failureDir: this.deps.failureDir,
           abortSignal: this.deps.engineOptions.abortSignal,
           language: this.deps.engineOptions.language,
           resolution: {

@@ -34,6 +34,7 @@ import { createRoutingScope, resolveAutoRoutingBatch } from '../auto-routing/res
 import { buildRoutingFindings, buildRoutingWorkSnapshot } from '../auto-routing/snapshot.js';
 import type { QualityGateRunResult } from '../quality-gates/types.js';
 import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
+import { truncateUtf8PreservingMarker } from '../../../shared/utils/text.js';
 import type { FindingContractConfig } from '../../models/types.js';
 import type { FindingManagerAuthority } from '../../models/finding-types.js';
 import type { FindingLedgerStore } from '../findings/store.js';
@@ -86,6 +87,12 @@ import {
 } from './fallback-operation.js';
 import type { DynamicParallelSelectorCoordinator } from '../dynamic-parallel/selector-coordinator.js';
 import { validateProviderModelRequirements } from '../provider-model-requirements.js';
+import {
+  AGENT_FAILURE_CATEGORIES,
+  MAX_AGENT_FAILURE_MESSAGE_BYTES,
+  createProviderStreamParseError,
+  isProviderStreamParseError,
+} from '../../../shared/types/agent-failure.js';
 
 const log = createLogger('parallel-runner');
 
@@ -104,6 +111,7 @@ type ParallelSubStepResult = {
   workflowCallStateSync?: WorkflowCallIsolatedStateSync;
   workflowCallFailure?: StepRunResult['workflowCallFailure'];
   workflowCallExecutionRejected?: boolean;
+  executionRejected?: boolean;
   terminalOperation?: StepRunResult['terminalOperation'];
   reviewerRuntime?: RuntimeStepResolution;
 };
@@ -838,6 +846,9 @@ export class ParallelRunner {
               }
             } catch (reportError) {
               if (reportError instanceof ReportPhaseGenerationError) {
+                if (reportError.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR) {
+                  throw createProviderStreamParseError(reportError.failureMessage ?? getErrorMessage(reportError));
+                }
                 log.info(
                   'Report phase failed for parallel sub-step, continuing to status judgment',
                   {
@@ -940,6 +951,9 @@ export class ParallelRunner {
         content: '',
         timestamp: new Date(),
         error: errorMsg,
+        ...(isProviderStreamParseError(result.reason)
+          ? { failureCategory: result.reason.failureCategory }
+          : {}),
       };
       state.stepOutputs.set(failedStep.name, errorResponse);
       const startedAt = subStepStartedAtByName.get(failedStep.name);
@@ -950,6 +964,7 @@ export class ParallelRunner {
         response: errorResponse,
         instruction: instruction === undefined ? '' : instruction,
         providerInfo: routedProviderInfoByStep.get(failedStep.name),
+        executionRejected: true,
         durationMs: startedAt === undefined
           ? 0
           : Math.max(0, errorResponse.timestamp.getTime() - startedAt),
@@ -1701,13 +1716,26 @@ export class ParallelRunner {
       options.terminalResults,
       options.status,
     );
-    const failureCategory = this.firstFailureCategory(options.terminalResults);
+    const primaryFailure = this.firstFailureResult(options.terminalResults);
+    const failureCategory = primaryFailure?.response.failureCategory;
+    const boundedContent = truncateUtf8PreservingMarker(content, MAX_AGENT_FAILURE_MESSAGE_BYTES);
+    const rejectedFailure = primaryFailure?.executionRejected === true;
+    const failureError = primaryFailure === undefined
+      ? undefined
+      : truncateUtf8PreservingMarker(
+        sanitizeSensitiveText(primaryFailure.response.error ?? primaryFailure.response.content),
+        MAX_AGENT_FAILURE_MESSAGE_BYTES,
+      );
     const response: AgentResponse = {
       persona: options.step.name,
       status: options.status,
-      content,
+      content: boundedContent,
       timestamp: new Date(),
-      ...(options.status === 'error' || options.status === 'rate_limited' ? { error: content } : {}),
+      ...(options.status === 'error' || options.status === 'rate_limited'
+        ? { error: failureCategory === undefined && rejectedFailure
+          ? boundedContent
+          : failureError ?? boundedContent }
+        : {}),
       ...(failureCategory && { failureCategory }),
       ...this.firstRateLimitMetadata(options.terminalResults),
     };
@@ -1725,7 +1753,7 @@ export class ParallelRunner {
 
     const selectedFailure = this.selectFailureByDefinitionOrder(
       options.subResults,
-      `Step "${options.step.name}" failed: ${content}`,
+      `Step "${options.step.name}" failed: ${boundedContent}`,
     );
     return {
       response,
@@ -1756,11 +1784,15 @@ export class ParallelRunner {
         return result.workflowCallFailure;
       }
       if (result.response.status === 'error') {
+        const failureError = truncateUtf8PreservingMarker(
+          sanitizeSensitiveText(result.response.error ?? result.response.content),
+          MAX_AGENT_FAILURE_MESSAGE_BYTES,
+        );
         return createRunFailure({
           kind: 'step_error',
           step: result.subStep.name,
-          reason: parentReason,
-          error: result.response.error ?? result.response.content,
+          reason: result.response.failureCategory === undefined ? parentReason : failureError,
+          error: failureError,
         });
       }
     }
@@ -1805,8 +1837,9 @@ export class ParallelRunner {
     ].join('\n');
   }
 
-  private firstFailureCategory(results: ParallelSubStepResult[]): AgentResponse['failureCategory'] | undefined {
-    return results.find((result) => result.response.failureCategory)?.response.failureCategory;
+  private firstFailureResult(results: ParallelSubStepResult[]): ParallelSubStepResult | undefined {
+    return results.find((result) => result.response.failureCategory !== undefined)
+      ?? results.find((result) => result.response.status === 'error');
   }
 
   private firstRateLimitMetadata(results: ParallelSubStepResult[]): Pick<AgentResponse, 'errorKind' | 'rateLimitInfo'> {

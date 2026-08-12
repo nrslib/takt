@@ -482,6 +482,7 @@ describe('FC evidence-search fallback', () => {
         getProjectCwd: () => projectCwd,
         getReportDir: () => runPaths.reportsAbs,
         getRunPaths: () => runPaths,
+        getFailureDir: () => join(runPaths.runRootAbs, 'failures'),
         getLanguage: () => 'en',
         getInteractive: () => false,
         getWorkflowSteps: () => [ownerStep],
@@ -626,6 +627,39 @@ describe('FC evidence-search fallback', () => {
       });
       expect(retried.kind).toBe('published');
       expect(retriedNormalizer).toHaveBeenCalledTimes(1);
+
+      const parseRequest = {
+        ...evidenceRequest,
+        request: {
+          ...request,
+          anomalyId: 'RA-STEP-EXECUTOR-PARSE-FAILURE',
+          restatementRequestId: computeRestatementRequestId({
+            ...requestWithoutId,
+            anomalyId: 'RA-STEP-EXECUTOR-PARSE-FAILURE',
+          }),
+        },
+      };
+      const parseNormalizer = vi.fn().mockResolvedValue({
+        persona: 'finding-intake-normalizer',
+        status: 'error',
+        content: '',
+        error: 'provider stream parse error: Failed to parse item: evidence search',
+        failureCategory: 'provider_stream_parse_error',
+        timestamp: new Date(),
+      });
+      const parseResult = await makeExecutor(parseNormalizer).runFindingEvidenceSearch({
+        ...input,
+        request: parseRequest,
+      });
+      expect(parseResult).toMatchObject({
+        kind: 'terminal',
+        response: {
+          status: 'error',
+          error: 'provider stream parse error: Failed to parse item: evidence search',
+          failureCategory: 'provider_stream_parse_error',
+        },
+      });
+      expect(parseNormalizer).toHaveBeenCalledOnce();
     } finally {
       rmSync(projectCwd, { recursive: true, force: true });
     }

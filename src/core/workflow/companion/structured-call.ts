@@ -7,6 +7,7 @@ export class CompanionStructuredCaller {
   constructor(private readonly input: {
     readonly cwd: string;
     readonly projectCwd: string;
+    readonly failureDir: string;
     readonly language: 'en' | 'ja';
     readonly abortSignal?: AbortSignal;
     readonly recordUsage: (
@@ -38,6 +39,7 @@ export class CompanionStructuredCaller {
       outputSchema: request.outputSchema,
       cwd: this.input.cwd,
       projectCwd: this.input.projectCwd,
+      failureDir: this.input.failureDir,
       language: this.input.language,
       resolution: {
         provider: request.provider.provider,
@@ -52,6 +54,7 @@ export class CompanionStructuredCaller {
         {
           cwd: options.cwd,
           projectCwd: options.projectCwd,
+          failureDir: options.failureDir,
           agentName: request.agentName,
           language: this.input.language,
           abortSignal: options.abortSignal,

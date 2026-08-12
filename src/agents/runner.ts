@@ -183,6 +183,7 @@ export class AgentRunner {
       bypassPermissions: options.bypassPermissions,
       outputSchema: options.outputSchema,
       language: options.language,
+      failureDir: options.failureDir,
       childProcessEnv: options.childProcessEnv,
     };
   }
