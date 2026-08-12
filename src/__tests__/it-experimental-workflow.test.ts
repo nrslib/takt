@@ -14,6 +14,7 @@ import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDet
 import type { SelectorGitCommandRunner } from '../core/workflow/dynamic-parallel/selector-git-command-runner.js';
 import { DefaultStructuredCaller } from '../agents/structured-caller.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
+import { resolveRefToContent } from '../infra/config/loaders/resource-resolver.js';
 import {
   getBuiltinWorkflowsDir,
 } from '../infra/config/paths.js';
@@ -178,30 +179,28 @@ function loadRemediationForPeerReview(
   );
 }
 
-function loadReviewerAdapterForPeerReview(
-  language: 'en' | 'ja',
-  peerReview: WorkflowConfig,
-  projectDir: string,
-): WorkflowConfig {
-  const reviewers = findWorkflowStep(peerReview, peerReview.initialStep);
-  if (reviewers.kind !== 'workflow_call' || typeof reviewers.call !== 'string') {
-    throw new Error(
-      `Workflow "${peerReview.name}" step "${peerReview.initialStep}" is not a workflow_call`,
-    );
-  }
-  return loadWorkflowFromFile(
-    join(getBuiltinWorkflowsDir(language), `${reviewers.call}.yaml`),
-    projectDir,
-    { callableArgs: reviewers.args },
-  );
-}
-
 function loadReviewerSuiteForPeerReview(
   language: 'en' | 'ja',
   peerReview: WorkflowConfig,
   projectDir: string,
 ): WorkflowConfig {
-  const adapter = loadReviewerAdapterForPeerReview(language, peerReview, projectDir);
+  const reviewers = findWorkflowStep(peerReview, peerReview.initialStep);
+  return loadReviewerSuiteForCall(language, reviewers, projectDir);
+}
+
+function loadReviewerSuiteForCall(
+  language: 'en' | 'ja',
+  reviewers: WorkflowStep,
+  projectDir: string,
+): WorkflowConfig {
+  if (reviewers.kind !== 'workflow_call' || typeof reviewers.call !== 'string') {
+    throw new Error(`Reviewer step "${reviewers.name}" is not a workflow_call`);
+  }
+  const adapter = loadWorkflowFromFile(
+    join(getBuiltinWorkflowsDir(language), `${reviewers.call}.yaml`),
+    projectDir,
+    { callableArgs: reviewers.args },
+  );
   const reviewCall = findWorkflowStep(adapter, adapter.initialStep);
   if (reviewCall.kind !== 'workflow_call' || typeof reviewCall.call !== 'string') {
     return adapter;
@@ -217,6 +216,38 @@ interface ReviewerStepReference {
   workflow: WorkflowConfig;
   step: WorkflowStep;
   persona: string;
+}
+
+const REVIEW_INSTRUCTION_PARAM_BY_PERSONA: Readonly<Record<string, string>> = {
+  'architecture-reviewer': 'architecture_review_instruction',
+  'security-reviewer': 'security_review_instruction',
+  'testing-reviewer': 'testing_review_instruction',
+  'coding-reviewer': 'coding_review_instruction',
+  'ai-antipattern-reviewer': 'ai_antipattern_review_instruction',
+  'frontend-reviewer': 'frontend_review_instruction',
+};
+
+function expectResolvedReviewerInstructions(
+  language: 'en' | 'ja',
+  reviewerCall: WorkflowStep,
+  reviewerSuite: WorkflowConfig,
+  projectDir: string,
+): void {
+  for (const { step, persona } of collectReviewerSteps(language, reviewerSuite, projectDir)) {
+    const param = REVIEW_INSTRUCTION_PARAM_BY_PERSONA[persona];
+    if (param === undefined) throw new Error(`Instruction parameter not found for persona "${persona}"`);
+    const instructionRef = reviewerCall.args?.[param];
+    if (typeof instructionRef !== 'string') {
+      throw new Error(`Instruction argument "${param}" not found for reviewer "${step.name}"`);
+    }
+    expect(step.instruction).toBe(resolveRefToContent(
+      instructionRef,
+      undefined,
+      projectDir,
+      'instructions',
+      { projectDir, lang: language },
+    ));
+  }
 }
 
 function collectReviewerSteps(
@@ -418,7 +449,27 @@ describe('experimental builtin workflow', () => {
         );
         const core = loadCoreForWrapper(language, wrapper, projectDir);
         const peerReview = loadPeerReviewForCore(language, core, projectDir);
-        const reviewerSuite = loadReviewerSuiteForPeerReview(language, peerReview, projectDir);
+        const reviewerCalls = peerReview.steps.filter((step) => (
+          step.kind === 'workflow_call'
+          && typeof step.args?.coding_review_instruction === 'string'
+        ));
+        expect(reviewerCalls).toHaveLength(2);
+        const [initialSuite, followUpSuite] = reviewerCalls.map((step) => (
+          loadReviewerSuiteForCall(language, step, projectDir)
+        ));
+        expectResolvedReviewerInstructions(language, reviewerCalls[0]!, initialSuite!, projectDir);
+        expectResolvedReviewerInstructions(language, reviewerCalls[1]!, followUpSuite!, projectDir);
+        const initialReviewers = new Map(collectReviewerSteps(language, initialSuite!, projectDir)
+          .map(({ step }) => [step.name, step.instruction]));
+        const followUpReviewers = new Map(collectReviewerSteps(language, followUpSuite!, projectDir)
+          .map(({ step }) => [step.name, step.instruction]));
+        expect([...followUpReviewers.keys()].sort()).toEqual([...initialReviewers.keys()].sort());
+        for (const [reviewer, initialInstruction] of initialReviewers) {
+          expect(initialInstruction).not.toBe('');
+          expect(followUpReviewers.get(reviewer)).not.toBe(initialInstruction);
+        }
+
+        const reviewerSuite = initialSuite!;
         const securityReview = findWorkflowStep(reviewerSuite, 'security-review');
         const poolName = securityReview.dynamicFacets?.pool;
         if (poolName === undefined) {

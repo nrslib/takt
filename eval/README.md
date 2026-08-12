@@ -197,6 +197,7 @@ npm run eval:prompts:follow-up-testing-review-repair-regression
 npm run eval:prompts:review-adjudication
 npm run eval:prompts:task-instruction-gherkin
 npm run eval:prompts:final-readiness-supervision
+npm run eval:prompts -- final-readiness-preservation
 npm run eval:prompts:final-readiness-precision
 npm run eval:finding-normalizer -- --models luna --batch-size 1 --repeat 3
 npm run eval:finding-normalizer -- --models sol,opus --reports 1,2,3

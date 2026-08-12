@@ -9,6 +9,6 @@ open findings の解消確認を中心に、修正箇所と直接影響する経
 - `direct_acceptance_criterion_violation`: 受入条件の直接違反
 - `required_consumer_migration`: 変更済み契約を成立させる必須 consumer migration
 
-新しい finding には Authorization Basis と Reason Absent（初回レビューに含まれなかった理由）を必ず記録してください。未確認 consumer は active accepted family へ紐付け、初回から存在したことだけを理由に持ち越し扱いにせず、未変更領域の一般探索を再開しないでください。通常経路と isolated failure path が同じ根本原因・正本・要求契約を共有する場合は同じ family として扱い、別 family を開かないでください。比較中に見つけた隣接・別 family の問題は new finding や fix scope へ追加しないでください。
+新しい finding 候補には Authorization Basis、Reason Absent（初回レビューに含まれなかった理由）、影響する path、裏付ける証拠を必ず記録してください。tracked issue の同一性、family との関係、continuity、recurrence、lifecycle の分類は、現在の finding records と検証済み証拠を使う adjudication に委ねてください。未変更領域の一般探索を再開せず、比較中に見つけた隣接・別 family の問題は new finding や fix scope へ追加しないでください。
 
 blocking finding がなく APPROVE を出す直前に、提示された変更対象一覧を回帰確認してください。新しい一般探索は行わず、open findings の修正が変更契約を壊していないことと、accepted family に未確認 consumer が残っていないことを確認し、確認範囲と根拠を出力契約の既存の検証・根拠欄へ記録してください。
