@@ -86,7 +86,9 @@ export class CompanionStructuredCaller {
       recordCall: (event) => {
         this.input.recordCall(event);
       },
-      onCallAuditPersistenceFailure: this.input.onCallAuditPersistenceFailure,
+      ...(this.input.onCallAuditPersistenceFailure === undefined
+        ? {}
+        : { onCallAuditPersistenceFailure: this.input.onCallAuditPersistenceFailure }),
     });
   }
 }

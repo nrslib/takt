@@ -110,6 +110,12 @@ export async function executeCompanionReviewRound(
     const findingCount = await commitOperation(input, pending);
     await finalizeOperation(input, mailboxPath);
     const audit = pending.audit ?? reconstructAuditSnapshot(pending);
+    const zeroReason = resolveZeroReason({
+      reviewerResult: audit.reviewerResult,
+      moderatorAudit: audit.moderator,
+      accepted: audit.accepted,
+      findingCount,
+    });
     input.onRoundCompleted({
       snapshot: pending.snapshot,
       trigger: pending.trigger,
@@ -117,12 +123,7 @@ export async function executeCompanionReviewRound(
       ...(audit.moderator === undefined ? {} : { moderator: audit.moderator }),
       accepted: audit.accepted,
       findingCount,
-      zeroReason: resolveZeroReason({
-        reviewerResult: audit.reviewerResult,
-        moderatorAudit: audit.moderator,
-        accepted: audit.accepted,
-        findingCount,
-      }),
+      ...(zeroReason === undefined ? {} : { zeroReason }),
     });
     if (
       pending.snapshot.digest === input.diff.digest
@@ -235,6 +236,12 @@ export async function executeCompanionReviewRound(
     await commit({ findings: [], updates: [] });
   }
   await finalizeOperation(input, mailboxPath);
+  const zeroReason = resolveZeroReason({
+    reviewerResult,
+    moderatorAudit,
+    accepted,
+    findingCount,
+  });
   input.onRoundCompleted({
     snapshot: input.diff,
     trigger: input.trigger,
@@ -242,12 +249,7 @@ export async function executeCompanionReviewRound(
     ...(moderatorAudit === undefined ? {} : { moderator: moderatorAudit }),
     accepted,
     findingCount,
-    zeroReason: resolveZeroReason({
-      reviewerResult,
-      moderatorAudit,
-      accepted,
-      findingCount,
-    }),
+    ...(zeroReason === undefined ? {} : { zeroReason }),
   });
   return { findingCount };
 }

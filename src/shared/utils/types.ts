@@ -257,6 +257,8 @@ export interface NdjsonCompanionCall {
   promptTruncated?: boolean;
   response?: string;
   responseTruncated?: boolean;
+  structuredOutput?: string;
+  structuredOutputTruncated?: boolean;
   usage: NdjsonCompanionUsage;
   error?: string;
   errorTruncated?: boolean;

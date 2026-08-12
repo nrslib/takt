@@ -255,6 +255,22 @@ describe('bindWorkflowExecutionEvents', () => {
         reason: 'unchanged_digest',
         observedGeneration: 2,
       })).not.toThrow();
+      expect(() => engine.emit('companion:queue_coalesced', {
+        step: 'review',
+        companion: 'security-reviewer',
+        replaced: {
+          trigger: 'quiet',
+          digest: 'digest-1',
+          changedLines: 1,
+          observedGeneration: 1,
+        },
+        replacement: {
+          trigger: 'quiet',
+          digest: 'digest-2',
+          changedLines: 2,
+          observedGeneration: 2,
+        },
+      })).not.toThrow();
 
       expect(sessionLogger.getNdjsonRecords()).toEqual([]);
     } finally {

@@ -409,7 +409,10 @@ export class SessionLogger {
   onCompanionQueueCoalesced(
     input: Omit<NdjsonCompanionQueueCoalesced, 'type' | 'timestamp'>,
   ): void {
-    this.appendRecord(buildCompanionQueueCoalescedRecord(input));
+    this.appendCompanionAuditRecord(
+      'companion_queue_coalesced',
+      () => buildCompanionQueueCoalescedRecord(input),
+    );
   }
 
   onCompanionCall(
@@ -442,7 +445,8 @@ export class SessionLogger {
 
   private appendCompanionAuditRecord(
     recordType: Extract<NdjsonRecord, {
-      type: 'companion_call' | 'companion_review_round' | 'companion_review_skipped';
+      type: 'companion_call' | 'companion_review_round' | 'companion_review_skipped'
+        | 'companion_queue_coalesced';
     }>['type'],
     buildRecord: () => NdjsonRecord,
   ): void {

@@ -563,7 +563,7 @@ function requireCompanionCallFields(
     throw new Error('NDJSON companion call status is invalid');
   }
   requireNdjsonInteger(record.attempt, 'attempt');
-  if ((record.attempt as number) < 1) {
+  if (record.attempt < 1) {
     throw new Error('NDJSON companion call attempt must be positive');
   }
   requireNdjsonString(record.provider, 'provider');
@@ -784,7 +784,7 @@ function requireOptionalNdjsonBoolean(value: unknown, field: string): void {
   if (value !== undefined) requireNdjsonBoolean(value, field);
 }
 
-function requireNdjsonInteger(value: unknown, field: string): void {
+function requireNdjsonInteger(value: unknown, field: string): asserts value is number {
   if (!Number.isSafeInteger(value) || (value as number) < 0) {
     throw new Error(`NDJSON ${field} must be a non-negative integer`);
   }

@@ -225,7 +225,9 @@ async function executeCompanionStructuredAgentInternal(input: Parameters<
       } : { promptResolved: false }),
       status: response.status === 'done' ? 'completed' : 'failed',
       response,
-      ...(response.status === 'done' ? {} : { error: response.error ?? response.content }),
+      ...(response.status === 'done'
+        ? {}
+        : { error: safeExternalErrorMessage(response.error ?? response.content) }),
     });
     input.recordUsage({
       purpose: input.purpose,

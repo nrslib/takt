@@ -94,6 +94,7 @@ describe('CT-COMP-06 and CT-COMP-11 structured internal agent execution', () => 
       outputSchema: { type: 'object' },
       cwd: '/worktree',
       projectCwd: '/project',
+      failureDir: '/project/.takt/runs/run/failures',
       language: 'en',
       resolution: { provider: 'mock', model: 'mock-model', providerOptions: {} },
       call,
@@ -131,6 +132,7 @@ describe('CT-COMP-06 and CT-COMP-11 structured internal agent execution', () => 
       outputSchema: { type: 'object' },
       cwd: '/worktree',
       projectCwd: '/project',
+      failureDir: '/project/.takt/runs/run/failures',
       language: 'en',
       resolution: { provider: 'mock' },
       call: vi.fn().mockRejectedValue(failure),
@@ -157,7 +159,9 @@ describe('CT-COMP-06 and CT-COMP-11 structured internal agent execution', () => 
       throw new Error('audit write failed');
     });
     const recordUsage = vi.fn();
-    const onCallAuditPersistenceFailure = vi.fn();
+    const onCallAuditPersistenceFailure = vi.fn(() => {
+      throw new Error('audit diagnostic failed');
+    });
 
     const result = await executeCompanionStructuredAgent({
       purpose: 'reviewer',
@@ -167,6 +171,7 @@ describe('CT-COMP-06 and CT-COMP-11 structured internal agent execution', () => 
       outputSchema: { type: 'object' },
       cwd: '/worktree',
       projectCwd: '/project',
+      failureDir: '/project/.takt/runs/run/failures',
       language: 'en',
       resolution: { provider: 'mock' },
       call,
@@ -199,6 +204,7 @@ describe('CT-COMP-06 and CT-COMP-11 structured internal agent execution', () => 
       outputSchema: { type: 'object' },
       cwd: '/worktree',
       projectCwd: '/project',
+      failureDir: '/project/.takt/runs/run/failures',
       language: 'en',
       resolution: { provider: 'mock' },
       call: vi.fn().mockRejectedValue(failure),
@@ -255,6 +261,7 @@ describe('CT-COMP-06 and CT-COMP-11 structured internal agent execution', () => 
       outputSchema: { type: 'object' },
       cwd: '/worktree',
       projectCwd: '/project',
+      failureDir: '/project/.takt/runs/run/failures',
       language: 'en',
       resolution: { provider: 'mock' },
       call,
@@ -348,6 +355,7 @@ describe('CT-COMP-06 and CT-COMP-11 structured internal agent execution', () => 
       outputSchema: { type: 'object' },
       cwd: '/worktree',
       projectCwd: '/project',
+      failureDir: '/project/.takt/runs/run/failures',
       language: 'en',
       resolution: { provider: 'mock' },
       abortSignal: new AbortController().signal,
@@ -386,6 +394,7 @@ describe('CT-COMP-06 and CT-COMP-11 structured internal agent execution', () => 
       outputSchema: { type: 'object' },
       cwd: '/worktree',
       projectCwd: '/project',
+      failureDir: '/project/.takt/runs/run/failures',
       language: 'en',
       resolution: { provider: 'mock' },
       call,

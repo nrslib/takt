@@ -178,6 +178,8 @@ describe('SessionLogger', () => {
       prompt: expect.stringContaining('[REDACTED]'),
     });
     expect(call?.type).toBe('companion_call');
+    expect(call?.systemPrompt).not.toContain('sk-companion-actual-secret');
+    expect(call?.prompt).not.toContain('nested-access-token-value');
     expect(call?.structuredOutput).not.toContain('sk-companion-actual-secret');
     expect(call?.structuredOutput).not.toContain('nested-access-token-value');
     expect(round).toMatchObject({

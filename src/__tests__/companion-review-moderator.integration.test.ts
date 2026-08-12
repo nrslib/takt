@@ -258,7 +258,7 @@ describe('CT-COMP-10 companion review terminal lifecycle', () => {
 
       expect(result.findingCount).toBe(1);
       expect(onRoundCompleted).toHaveBeenCalledOnce();
-      expect(onRoundCompleted).toHaveBeenCalledWith(expect.objectContaining({
+      expect(onRoundCompleted).toHaveBeenNthCalledWith(1, expect.objectContaining({
         snapshot: expect.objectContaining({ digest: 'digest' }),
         trigger: 'quiet',
         findingCount: 1,
