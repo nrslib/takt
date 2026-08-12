@@ -11,5 +11,6 @@ Procedure:
 8. Judge `resolved` against the original finding's expected result, acceptance criteria, and task requirement, not merely against the patch
 9. When the plan contains requirement scenarios (`SCN-` IDs), extract every scenario ID from the plan, confirm each ID appears verbatim in a test declaration name, confirm the test's inputs and assertions verify the scenario's observable result, and confirm the latest execution evidence for that test comes from the current diff and passes. Treat missing IDs, unexecuted or failing tests, and a plan lacking requirement scenarios despite a qualifying completion contract (structured-input classification/transformation, identifier generation) as merge-blocking issues
 10. Report only quality or maintainability issues that should block the merge, with location, impact, and fix direction
+{{include:instructions/final-gate-new-finding-scope}}
 {{include:instructions/review-family-completion}}
 {{include:instructions/review-pr-context}}

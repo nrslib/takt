@@ -15,6 +15,7 @@
  *         implement-contract-traceability,
  *         implementation-report-contract-traceability,
  *         review-adjudication, final-readiness-supervision,
+ *         final-readiness-preservation,
  *         task-instruction-gherkin
  *         (default: all except rescan suites,
  *         which need opencode auth)
@@ -56,6 +57,7 @@ const SUITES = {
   'follow-up-review-repair-regression': 'promptfooconfig.follow-up-review-repair-regression.yaml',
   'review-adjudication': 'promptfooconfig.review-adjudication.yaml',
   'final-readiness-supervision': 'promptfooconfig.final-readiness-supervision.yaml',
+  'final-readiness-preservation': 'promptfooconfig.final-readiness-preservation.yaml',
   'task-instruction-gherkin': 'promptfooconfig.task-instruction-gherkin.yaml',
 };
 

@@ -1,11 +1,11 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-# TAKT facet eval: review-fix-default / final-gate new-finding evidence.
+# TAKT facet eval: public final-gate Phase 1 scope authority.
 
-description: 'TAKT facet eval: public review-fix final-gate new-finding evidence'
+description: 'TAKT facet eval: public final-gate Phase 1 scope authority'
 
 prompts:
-  - file://prompts/final-readiness-merge-review.phase2.md
-  - file://prompts/final-readiness-supervision.phase2.md
+  - file://prompts/final-readiness-merge-review.phase1.md
+  - file://prompts/final-readiness-supervision.phase1.md
 
 providers:
   - id: openai:codex-sdk
@@ -18,11 +18,20 @@ providers:
       model_reasoning_effort: low
 
 tests:
-  - description: 'public final gate: explain the authority and initial-round omission for a newly found consumer gap'
+  - description: 'public final gate: independently bound a newly discovered consumer gap'
     vars:
       task: file://cases/final-readiness-supervision-task.md
-      previous_response: file://cases/final-readiness-new-finding-phase1.md
+      previous_response: ''
     assert:
-      - type: javascript
-        metric: review-fix-final-gate/new-finding-evidence
-        value: file://asserts/final-readiness-supervision.mjs
+      - type: llm-rubric
+        metric: review-fix-final-gate/phase1-scope-authority
+        value: |
+          Judge the review's code-backed scope classification, not headings, table shape, IDs, or exact wording. Pass only if the final-gate review rejects and does all of the following:
+
+          - It independently inspects the fixture and identifies that the project-configuration entry stores a supported mixed-case mode without applying the shared normalization used by the CLI entry.
+          - It treats this as a direct acceptance-criterion violation and/or a required migration of a consumer of the accepted normalization contract. Equivalent descriptions of these authorization bases are acceptable.
+          - It explains from the supplied review evidence why the initial round omitted this consumer. Merely saying that it is new, late, or previously missed without tying the omission to the reviewed evidence fails.
+          - It keeps the previously adjudicated documentation request non-actionable because the current code and requirements provide no new counter-evidence.
+          - It does not restart a general review of untouched areas or invent another horizontal problem family.
+
+          A response that receives the defect, authorization basis, or omission reason from the task or previous response should not be credited; those inputs provide only the generic requirement and no prior answer.

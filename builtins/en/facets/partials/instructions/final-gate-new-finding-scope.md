@@ -1,0 +1,3 @@
+When the final gate identifies a finding that was not present in the initial review evidence, authorize it only as a direct acceptance-criterion violation, a regression introduced by the current diff or remediation, a required consumer migration, or closure of an accepted family through a previously unvisited consumer. Record the authorization basis and why the initial review evidence did not contain the finding.
+
+Do not restart a general review of untouched areas. Follow an accepted family through its remaining consumers, but do not use that permission to open a different horizontal family or revive a finding already adjudicated as non-actionable without new counter-evidence from the current requirements, code, or execution evidence.

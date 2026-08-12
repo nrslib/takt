@@ -44,7 +44,7 @@
     "eval:prompts:follow-up-review-repair-regression": "node eval/scripts/prepare.mjs follow-up-review-repair-regression && node eval/scripts/run-evals.mjs follow-up-review-repair-regression",
     "eval:prompts:review-adjudication": "node eval/scripts/prepare.mjs review-adjudication && node eval/scripts/run-evals.mjs review-adjudication",
     "eval:prompts:task-instruction-gherkin": "node eval/scripts/run-evals.mjs task-instruction-gherkin",
-    "eval:prompts:final-readiness-supervision": "node eval/scripts/prepare.mjs final-readiness-merge-review final-readiness-supervision && node eval/scripts/run-evals.mjs final-readiness-supervision",
+    "eval:prompts:final-readiness-supervision": "node --test eval/asserts/final-readiness-supervision.test.mjs && node eval/scripts/prepare.mjs final-readiness-merge-review final-readiness-supervision final-readiness-merge-review-phase2 final-readiness-supervision-phase2 && node eval/scripts/run-evals.mjs final-readiness-supervision final-readiness-preservation",
     "eval:prompts:final-readiness-precision": "node eval/scripts/prepare.mjs final-readiness-precision && node eval/scripts/run-evals.mjs final-readiness-precision",
     "test": "npm run test:type-contracts && node scripts/run-npm-test.mjs",
     "test:type-contracts": "tsc --noEmit -p tsconfig.type-contracts.json",
