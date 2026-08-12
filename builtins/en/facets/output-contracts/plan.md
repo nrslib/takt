@@ -60,6 +60,7 @@ Scenario: [SCN-{contract ID}-N1] {one line for the rejected behavior}
 ~~~
 
 - As a rule, one positive and one discriminating negative scenario per qualifying class of each triggered completion contract (usually 2-4 scenarios; when more than 8 are needed, request contract or task splitting instead of omitting)
+- Scenario IDs must be unique within a contract; number a second class or additional pair `P2`/`N2` and so on
 - One line each for Given/When/Then (plus at most one And). Do not use Background, Scenario Outline, or Examples
 - Abstract wording such as "valid input" or "handled correctly" is prohibited. Write concrete input fragments and observable results
 - Scenarios concretize existing completion contracts and never create new requirements. Do not write origins, design rationale, implementation locations, or test paths in scenarios

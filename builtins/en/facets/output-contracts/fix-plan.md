@@ -30,6 +30,7 @@ Scenario: [SCN-{fix-unit ID}-N1] {one line for the rejected behavior}
 ~~~
 
 - As a rule, one positive and one discriminating negative scenario per qualifying class of each triggered fix unit (usually 2-4 scenarios; when more than 8 are needed, request fix-unit splitting instead of omitting)
+- Scenario IDs must be unique within a fix unit; number a second class or additional pair `P2`/`N2` and so on
 - One line each for Given/When/Then (plus at most one And). Do not use Background, Scenario Outline, or Examples
 - Abstract wording such as "valid input" or "handled correctly" is prohibited. Write concrete input fragments and observable results
 - Scenarios concretize acceptance criteria and contracts and never create new requirements
