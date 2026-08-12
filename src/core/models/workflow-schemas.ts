@@ -473,10 +473,9 @@ export const TeamLeaderConfigRawSchema = z.object({
 const WorkflowStepKindSchema = z.enum(['agent', 'system', 'workflow_call']);
 
 const ReviewCompletionOptionsRawSchema = z.object({
-  mode: z.enum(['initial', 'follow_up']).optional(),
   min_retry: z.number().int().min(0).max(MAX_REVIEW_COMPLETION_RETRY).optional(),
   max_retry: z.number().int().min(0).max(MAX_REVIEW_COMPLETION_RETRY).optional(),
-  retry_instruction: WorkflowFacetRefOrParamSchema.optional(),
+  retry_instruction: WorkflowFacetRefOrParamSchema,
 }).strict().superRefine((data, ctx) => {
   const minRetry = data.min_retry ?? 0;
   const maxRetry = data.max_retry ?? 1;
@@ -489,10 +488,7 @@ const ReviewCompletionOptionsRawSchema = z.object({
   }
 });
 
-const ReviewCompletionRawSchema = z.union([
-  z.literal(true),
-  ReviewCompletionOptionsRawSchema,
-]);
+const ReviewCompletionRawSchema = ReviewCompletionOptionsRawSchema;
 
 function validateReviewCompletionOptIn(
   data: {

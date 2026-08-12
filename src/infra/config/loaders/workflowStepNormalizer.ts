@@ -45,11 +45,6 @@ import type { McpServerConfig } from '../../../core/models/index.js';
 import { isWorkflowParamReference } from './workflowCallableParamRef.js';
 import { normalizeQualityGates } from '../configNormalizers.js';
 import { withWorkflowConfigErrorPath as withWorkflowStepErrorPath } from '../../../core/workflow/workflow-config-error.js';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { getBuiltinFacetDir } from '../paths.js';
-
-const DEFAULT_REVIEW_COMPLETION_RETRY_INSTRUCTION = 'review-completion-retry';
 
 function normalizeReviewCompletion(
   step: z.input<typeof WorkflowStepRawSchema>,
@@ -62,23 +57,7 @@ function normalizeReviewCompletion(
   if (raw === undefined) {
     return undefined;
   }
-  const options = raw === true ? {} : raw;
-  const retryInstructionRef = options.retry_instruction;
-  if (retryInstructionRef === undefined) {
-    const retryInstruction = readFileSync(
-      join(
-        getBuiltinFacetDir(context?.lang ?? 'en', 'instructions'),
-        `${DEFAULT_REVIEW_COMPLETION_RETRY_INSTRUCTION}.md`,
-      ),
-      'utf-8',
-    );
-    return {
-      mode: options.mode ?? 'initial',
-      minRetry: options.min_retry ?? 0,
-      maxRetry: options.max_retry ?? 1,
-      retryInstruction,
-    };
-  }
+  const retryInstructionRef = raw.retry_instruction;
   if (isWorkflowParamReference(retryInstructionRef)) {
     throw withWorkflowStepErrorPath(
       new Error(`Step "${step.name}" has unresolved $param in review_completion.retry_instruction`),
@@ -103,9 +82,8 @@ function normalizeReviewCompletion(
     );
   }
   return {
-    mode: options.mode ?? 'initial',
-    minRetry: options.min_retry ?? 0,
-    maxRetry: options.max_retry ?? 1,
+    minRetry: raw.min_retry ?? 0,
+    maxRetry: raw.max_retry ?? 1,
     retryInstruction,
   };
 }

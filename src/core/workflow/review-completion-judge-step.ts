@@ -5,12 +5,10 @@ import {
   REVIEW_COMPLETION_JUDGE_NAME,
   REVIEW_COMPLETION_SCHEMA_REF,
   buildReviewCompletionOutputSchema,
-  type ReviewCompletionMode,
 } from './review-completion.js';
 
 export function buildReviewCompletionJudgeStep(input: {
   readonly reviewerStepName: string;
-  readonly mode: ReviewCompletionMode;
   readonly workflowProvider?: WorkflowConfig['provider'];
   readonly workflowModel?: WorkflowConfig['model'];
   readonly internalAgentSeats?: InternalAgentSeats;
@@ -32,7 +30,7 @@ export function buildReviewCompletionJudgeStep(input: {
     edit: false,
     structuredOutput: {
       schemaRef: REVIEW_COMPLETION_SCHEMA_REF,
-      schema: buildReviewCompletionOutputSchema(input.mode),
+      schema: buildReviewCompletionOutputSchema(),
     },
   };
 }

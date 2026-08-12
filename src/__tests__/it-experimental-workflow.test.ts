@@ -554,14 +554,28 @@ describe('experimental builtin workflow', () => {
         ));
         expectResolvedReviewerInstructions(language, reviewerCalls[0]!, initialSuite!, projectDir);
         expectResolvedReviewerInstructions(language, reviewerCalls[1]!, followUpSuite!, projectDir);
-        const initialReviewers = new Map(collectReviewerSteps(language, initialSuite!, projectDir)
+        const initialReviewerSteps = collectReviewerSteps(language, initialSuite!, projectDir);
+        const followUpReviewerSteps = collectReviewerSteps(language, followUpSuite!, projectDir);
+        const initialReviewers = new Map(initialReviewerSteps
           .map(({ step }) => [step.name, step.instruction]));
-        const followUpReviewers = new Map(collectReviewerSteps(language, followUpSuite!, projectDir)
+        const followUpReviewers = new Map(followUpReviewerSteps
           .map(({ step }) => [step.name, step.instruction]));
         expect([...followUpReviewers.keys()].sort()).toEqual([...initialReviewers.keys()].sort());
         for (const [reviewer, initialInstruction] of initialReviewers) {
           expect(initialInstruction).not.toBe('');
           expect(followUpReviewers.get(reviewer)).not.toBe(initialInstruction);
+        }
+        const horizontalExplorationText = language === 'ja'
+          ? '一般的な横方向探索を再開せず'
+          : 'Do not restart general horizontal exploration';
+        for (const { step } of initialReviewerSteps) {
+          expect(step.reviewCompletion?.retryInstruction).not.toContain(horizontalExplorationText);
+        }
+        for (const { step } of followUpReviewerSteps) {
+          expect(step.reviewCompletion?.retryInstruction).toContain(horizontalExplorationText);
+          expect(step.reviewCompletion?.retryInstruction).toContain(
+            language === 'ja' ? '元のreviewer instruction' : 'original reviewer instruction',
+          );
         }
 
         const reviewerSuite = initialSuite!;

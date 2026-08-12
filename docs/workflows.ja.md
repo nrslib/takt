@@ -863,7 +863,7 @@ promotion は並列サブ step ではサポートされません。
 | `output_contracts` | - | レポートファイル設定（name, format） |
 | `quality_gates` | - | agent step 完了 gate。文字列は AI 向け指示、`type: command` は step 完了後に実行し、失敗時は同じ agent step に差し戻す |
 
-`review_completion` は明示的な opt-in です。省略すると無効、`review_completion: true` なら `mode: initial`、`min_retry: 0`、`max_retry: 1` と言語別の同梱 retry instruction を使い、options object ではそれらの既定値を上書きできます。`false` と文字列は拒否されます。`mode` は `initial` または `follow_up`、`min_retry` / `max_retry` は再試行回数の境界、`retry_instruction` は instruction facet 参照です。成功した各 reviewer response は fresh な completion judge が解決済み runtime profile で確認し、reviewer retry は同じ reviewer session を継続します。judge または retry の失敗は Phase 2 専用の advisory 診断として扱われ、最新の有効 reviewer response を置き換えません。
+`review_completion` は object だけを受け付ける明示的な opt-in です。省略すると無効です。object には、元の reviewer instruction の scope や権限を変えずに不足を閉じる方法を伝える instruction facet `retry_instruction` が必須です。`min_retry` / `max_retry` は任意の再試行回数境界で、既定値は `0` / `1` です。`true`、`false`、文字列、空 object、`mode` などの未対応 field は拒否されます。成功した各 reviewer response は fresh な completion judge が実際の元 reviewer instruction、task、scope、evidence、report と照合し、judge の解決済み runtime profile で実行します。reviewer retry は同じ reviewer session を継続します。judge または retry の失敗は Phase 2 専用の advisory 診断として扱われ、最新の有効 reviewer response を置き換えません。
 
 通常の agent step、parallel sub-step、`loop_monitors.judge` では、`model: null` は model の明示的な省略を表します。`model` 未指定とは異なります。未指定は routing、workflow、loop monitor judge のトリガー元 step、入力由来の model など、適用可能な下位優先度のソースへフォールバックしますが、`null` はその entry で model 解決を止めます。明示 model が必須の provider では検証エラーになります。
 

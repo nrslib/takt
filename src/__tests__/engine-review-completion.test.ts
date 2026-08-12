@@ -36,7 +36,6 @@ import {
 } from './engine-test-helpers.js';
 
 const completion = {
-  mode: 'initial' as const,
   minRetry: 0,
   maxRetry: 1,
   retryInstruction: 'Recheck the identified gaps.',

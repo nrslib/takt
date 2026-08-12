@@ -238,7 +238,6 @@ export interface DynamicFacetsConfig {
 export const MAX_REVIEW_COMPLETION_RETRY = 4;
 
 export interface ReviewCompletionConfig {
-  readonly mode: 'initial' | 'follow_up';
   readonly minRetry: number;
   readonly maxRetry: number;
   readonly retryInstruction: string;

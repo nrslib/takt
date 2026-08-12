@@ -42,6 +42,10 @@ subworkflow:
       type: facet_ref
       facet_kind: instruction
       default: cqrs-es-review
+    review_completion_retry_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: review-completion-retry
 initial_step: reviewers
 steps:
   - name: reviewers
@@ -61,6 +65,8 @@ steps:
         $param: coding_review_instruction
       ai_antipattern_review_instruction:
         $param: ai_antipattern_review_instruction
+      review_completion_retry_instruction:
+        $param: review_completion_retry_instruction
     rules:
       self:
         - condition: all("approved")

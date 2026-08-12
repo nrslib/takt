@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentResponse } from '../core/models/types.js';
 import {
+  buildReviewCompletionJudgePrompt,
   buildReviewCompletionOutputSchema,
   parseReviewCompletionDecision,
   runReviewCompletionEpisode,
@@ -17,7 +18,29 @@ function response(content: string, sessionId = 'review-session'): AgentResponse 
 }
 
 describe('review completion episode', () => {
-  it('keeps the configured review mode for same-session retries', async () => {
+  it('uses the actual reviewer instruction as the sole scope authority', () => {
+    const prompt = buildReviewCompletionJudgePrompt({
+      language: 'en',
+      task: 'review the change',
+      reviewerInstruction: 'Review only accepted-family regressions. Do not explore new families.',
+      reviewScope: { changedPaths: ['src/changed.ts'] },
+      evidence: {
+        status: 'collected',
+        files: [],
+        references: [],
+        claimedPaths: [],
+        priorGapPaths: [],
+        omissions: [],
+      },
+      reviewResponse: 'No regression found.',
+    });
+
+    expect(prompt.instruction).toContain('Review only accepted-family regressions');
+    expect(prompt.systemPrompt).toContain('sole source of scope and authority');
+    expect(prompt.instruction).not.toContain('review_mode');
+  });
+
+  it('keeps the reviewer session and original scope for retries', async () => {
     const executeRetry = vi.fn(async ({ sessionId }: { sessionId: string | undefined }) => (
       response('retry', sessionId)
     ));
@@ -26,7 +49,7 @@ describe('review completion episode', () => {
         complete: false,
         reason: 'missing consumer',
         missingObligations: [{
-          kind: 'initial_changed_target_gap',
+          kind: 'changed_target_gap',
           contractFamily: 'config',
           path: 'consumer.ts',
           reason: 'not inspected',
@@ -36,13 +59,11 @@ describe('review completion episode', () => {
 
     const result = await runReviewCompletionEpisode({
       config: {
-        mode: 'initial',
         minRetry: 0,
         maxRetry: 1,
-        retryInstruction: 'retry {review_mode}',
+        retryInstruction: 'close only the supplied gaps',
       },
       originalInstruction: 'review',
-      initialMode: 'initial',
       initialResponse: response('initial'),
       initialSessionId: 'review-session',
       executeRetry,
@@ -52,23 +73,21 @@ describe('review completion episode', () => {
 
     expect(result.attempts).toBe(2);
     expect(executeRetry).toHaveBeenCalledWith(expect.objectContaining({
-      mode: 'initial',
       sessionId: 'review-session',
+      instruction: expect.stringContaining('close only the supplied gaps'),
     }));
-    expect(judge.mock.calls.map((call) => call[2])).toEqual(['initial', 'initial']);
+    expect(judge).toHaveBeenCalledTimes(2);
   });
 
   it('returns a Phase 2 diagnostic without modifying the latest reviewer response', async () => {
     const latest = response('authoritative reviewer report');
     const result = await runReviewCompletionEpisode({
       config: {
-        mode: 'follow_up',
         minRetry: 0,
         maxRetry: 0,
         retryInstruction: 'retry',
       },
       originalInstruction: 'review',
-      initialMode: 'follow_up',
       initialResponse: latest,
       initialSessionId: latest.sessionId,
       executeRetry: vi.fn(),
@@ -80,19 +99,14 @@ describe('review completion episode', () => {
     expect(result.diagnostic?.kind).toBe('judge_unavailable');
   });
 
-  it('limits follow_up gaps to the four authorization bases', () => {
-    const schema = buildReviewCompletionOutputSchema('follow_up');
-    expect(JSON.stringify(schema)).not.toContain('initial_changed_target_gap');
-    expect(() => parseReviewCompletionDecision({
-      complete: false,
-      reason: 'invalid gap',
-      missing_obligations: [{
-        kind: 'family_lifecycle_gap',
-        contract_family: 'runtime',
-        path: 'consumer.ts',
-        reason: 'missing',
-      }],
-    }, 'follow_up')).toThrow(/kind/);
+  it('uses one schema because the actual reviewer instruction defines scope', () => {
+    const schema = buildReviewCompletionOutputSchema();
+    expect(JSON.stringify(schema)).toContain('required_consumer_migration');
+    expect(parseReviewCompletionDecision({
+      complete: true,
+      reason: 'complete within the reviewer instruction',
+      missing_obligations: [],
+    })).toMatchObject({ complete: true });
   });
 
   it.each([
@@ -101,9 +115,8 @@ describe('review completion episode', () => {
   ])('keeps the latest valid response when a reviewer retry %s', async (_name, executeRetry) => {
     const latest = response('authoritative reviewer report', 'stable-session');
     const result = await runReviewCompletionEpisode({
-      config: { mode: 'initial', minRetry: 0, maxRetry: 1, retryInstruction: 'retry' },
+      config: { minRetry: 0, maxRetry: 1, retryInstruction: 'retry' },
       originalInstruction: 'review',
-      initialMode: 'initial',
       initialResponse: latest,
       initialSessionId: latest.sessionId,
       executeRetry,

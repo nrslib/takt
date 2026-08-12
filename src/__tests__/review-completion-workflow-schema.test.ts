@@ -4,6 +4,7 @@ import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.
 function workflow(step: Record<string, unknown>) {
   return {
     name: 'custom-review',
+    instructions: { retry: 'Close only the supplied gaps.' },
     initial_step: 'reviewer',
     steps: [{
       name: 'reviewer',
@@ -17,23 +18,19 @@ function workflow(step: Record<string, unknown>) {
 }
 
 describe('review completion workflow contract', () => {
-  it.each(['en', 'ja'] as const)(
-    'loads the %s builtin default retry instruction for review_completion: true',
-    (lang) => {
-      const config = normalizeWorkflowConfig(
-        workflow({ review_completion: true }),
-        '/tmp/custom-review.yaml',
-        { lang },
-      );
+  it('normalizes the required retry instruction and retry defaults', () => {
+    const config = normalizeWorkflowConfig(
+      workflow({ review_completion: { retry_instruction: 'retry' } }),
+      '/tmp/custom-review.yaml',
+      { lang: 'en' },
+    );
 
-      expect(config.steps[0]?.reviewCompletion).toMatchObject({
-        mode: 'initial',
-        minRetry: 0,
-        maxRetry: 1,
-      });
-      expect(config.steps[0]?.reviewCompletion?.retryInstruction.trim().length).toBeGreaterThan(0);
-    },
-  );
+    expect(config.steps[0]?.reviewCompletion).toEqual({
+      minRetry: 0,
+      maxRetry: 1,
+      retryInstruction: 'Close only the supplied gaps.',
+    });
+  });
 
   it('leaves review completion disabled when the field is omitted', () => {
     const config = normalizeWorkflowConfig(
@@ -45,7 +42,7 @@ describe('review completion workflow contract', () => {
     expect(config.steps[0]?.reviewCompletion).toBeUndefined();
   });
 
-  it.each([false, 'yes'])(
+  it.each([true, false, 'yes', {}])(
     'rejects unsupported review_completion value %j',
     (reviewCompletion) => {
       expect(() => normalizeWorkflowConfig(
@@ -56,31 +53,24 @@ describe('review completion workflow contract', () => {
     },
   );
 
-  it('normalizes an empty options object with defaults', () => {
-    const config = normalizeWorkflowConfig(
-      workflow({ review_completion: {} }),
+  it('rejects the removed mode field', () => {
+    expect(() => normalizeWorkflowConfig(
+      workflow({ review_completion: { retry_instruction: 'retry', mode: 'follow_up' } }),
       '/tmp/custom-review.yaml',
       { lang: 'en' },
-    );
-
-    expect(config.steps[0]?.reviewCompletion).toMatchObject({
-      mode: 'initial',
-      minRetry: 0,
-      maxRetry: 1,
-    });
+    )).toThrow(/mode|Unrecognized key/);
   });
 
-  it('normalizes an explicit follow_up mode', () => {
+  it('normalizes explicit retry bounds', () => {
     const config = normalizeWorkflowConfig(
       workflow({
-        review_completion: { mode: 'follow_up', min_retry: 1, max_retry: 2 },
+        review_completion: { retry_instruction: 'retry', min_retry: 1, max_retry: 2 },
       }),
       '/tmp/custom-review.yaml',
       { lang: 'en' },
     );
 
     expect(config.steps[0]?.reviewCompletion).toMatchObject({
-      mode: 'follow_up',
       minRetry: 1,
       maxRetry: 2,
     });

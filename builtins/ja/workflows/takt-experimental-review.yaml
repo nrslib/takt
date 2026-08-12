@@ -22,6 +22,7 @@ subworkflow:
     coding_review_instruction: { type: facet_ref, facet_kind: instruction, default: coding-review }
     ai_antipattern_review_instruction: { type: facet_ref, facet_kind: instruction, default: ai-antipattern-review }
     frontend_review_instruction: { type: facet_ref, facet_kind: instruction, default: frontend-review }
+    review_completion_retry_instruction: { type: facet_ref, facet_kind: instruction, default: review-completion-retry }
 facet_pools:
   takt-security-review-facets:
     uses: takt-security-review-facets
@@ -42,13 +43,15 @@ steps:
       coding_review_instruction: { $param: coding_review_instruction }
       ai_antipattern_review_instruction: { $param: ai_antipattern_review_instruction }
       frontend_review_instruction: { $param: frontend_review_instruction }
+      review_completion_retry_instruction: { $param: review_completion_retry_instruction }
     parallel:
       pool:
         - name: architecture-review
           description: モジュール構造、責務分割、依存方向、呼び出し経路をレビューする
           capabilities: readonly
           tags: [review]
-          review_completion: true
+          review_completion:
+            retry_instruction: { $param: review_completion_retry_instruction }
           edit: false
           persona: architecture-reviewer
           policy: [contract-change, review]
@@ -64,7 +67,8 @@ steps:
           description: TAKTの変更で生じる具体的なセキュリティ境界をレビューする
           capabilities: readonly
           tags: [review]
-          review_completion: true
+          review_completion:
+            retry_instruction: { $param: review_completion_retry_instruction }
           edit: false
           persona: security-reviewer
           policy: [contract-change, security-review]
@@ -84,7 +88,8 @@ steps:
           description: テストカバレッジ、テスト設計、統合境界、E2E境界をレビューする
           capabilities: readonly
           tags: [review]
-          review_completion: true
+          review_completion:
+            retry_instruction: { $param: review_completion_retry_instruction }
           edit: false
           persona: testing-reviewer
           policy: [contract-change, review, testing, takt-testing]

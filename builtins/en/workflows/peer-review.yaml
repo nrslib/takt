@@ -131,6 +131,7 @@ steps:
       ai_antipattern_review_instruction: initial-ai-antipattern-review
       frontend_review_instruction: frontend-review
       cqrs_es_review_instruction: cqrs-es-review
+      review_completion_retry_instruction: initial-review-completion-retry
     rules:
       - condition: COMPLETE
         next: review-adjudication
@@ -152,6 +153,7 @@ steps:
       ai_antipattern_review_instruction: follow-up-ai-antipattern-review
       frontend_review_instruction: follow-up-frontend-review
       cqrs_es_review_instruction: follow-up-cqrs-es-review
+      review_completion_retry_instruction: follow-up-review-completion-retry
     rules:
       - condition: COMPLETE
         next: review-adjudication

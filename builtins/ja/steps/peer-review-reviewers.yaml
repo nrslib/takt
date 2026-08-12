@@ -20,6 +20,9 @@ params:
   ai_antipattern_review_instruction:
     type: facet_ref
     facet_kind: instruction
+  review_completion_retry_instruction:
+    type: facet_ref
+    facet_kind: instruction
 name: reviewers
 tags:
   - review
@@ -28,7 +31,9 @@ parallel:
     capabilities: readonly
     tags:
       - review
-    review_completion: true
+    review_completion:
+      retry_instruction:
+        $param: review_completion_retry_instruction
     edit: false
     persona: architecture-reviewer
     policy:
@@ -48,7 +53,9 @@ parallel:
     capabilities: readonly
     tags:
       - review
-    review_completion: true
+    review_completion:
+      retry_instruction:
+        $param: review_completion_retry_instruction
     edit: false
     persona: security-reviewer
     policy:
@@ -74,7 +81,9 @@ parallel:
     capabilities: readonly
     tags:
       - review
-    review_completion: true
+    review_completion:
+      retry_instruction:
+        $param: review_completion_retry_instruction
     edit: false
     persona: testing-reviewer
     policy:
@@ -97,7 +106,9 @@ parallel:
     capabilities: readonly
     tags:
       - review
-    review_completion: true
+    review_completion:
+      retry_instruction:
+        $param: review_completion_retry_instruction
     edit: false
     persona: coding-reviewer
     policy:
@@ -119,7 +130,9 @@ parallel:
     capabilities: readonly
     tags:
       - review
-    review_completion: true
+    review_completion:
+      retry_instruction:
+        $param: review_completion_retry_instruction
     edit: false
     persona: ai-antipattern-reviewer
     policy:

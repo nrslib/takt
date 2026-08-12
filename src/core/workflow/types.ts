@@ -468,26 +468,22 @@ export interface WorkflowEvents {
   'review_completion:judge:start': (payload: {
     step: string;
     attempt: number;
-    mode: 'initial' | 'follow_up';
     provider: string | undefined;
     model: string | undefined;
   }) => void;
   'review_completion:retry:start': (payload: {
     step: string;
     attempt: number;
-    mode: 'initial' | 'follow_up';
   }) => void;
   'review_completion:retry:complete': (payload: {
     step: string;
     attempt: number;
-    mode: 'initial' | 'follow_up';
     status: string;
     error?: string;
   }) => void;
   'review_completion:judge:complete': (payload: {
     step: string;
     attempt: number;
-    mode: 'initial' | 'follow_up';
     status: string;
     complete?: boolean;
     gapCount?: number;

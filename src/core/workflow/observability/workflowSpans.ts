@@ -131,7 +131,6 @@ export interface ReviewCompletionJudgeSpanParams {
   workflowName: string;
   reviewerStep: string;
   attempt: number;
-  mode: 'initial' | 'follow_up';
   providerInfo: StepProviderInfo;
 }
 
@@ -148,7 +147,6 @@ export async function runWithReviewCompletionJudgeSpan<T>(
       'takt.run.id': params.runId,
       'takt.review_completion.reviewer': params.reviewerStep,
       'takt.review_completion.attempt': params.attempt,
-      'takt.review_completion.mode': params.mode,
       ...providerAttributes(params.providerInfo),
     }),
     async (span) => {

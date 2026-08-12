@@ -222,30 +222,6 @@ describe('companion StepExecutor lifecycle', () => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
-  it('rejects an invalid inherited review mode instead of silently using the step default', () => {
-    const deps = createDeps({
-      cwd,
-      runPaths,
-      companionDiffReader: createCompanionDiffReader(),
-      abortSignal: new AbortController().signal,
-      emitEvent: vi.fn(),
-    });
-    deps.getWorkflowCallVars = () => ({ review_mode: 'followup' } as never);
-    const executor = new StepExecutor(deps);
-
-    expect(() => executor.reviewCompletionMode(makeStep({
-      name: 'reviewer',
-      edit: false,
-      rules: [],
-      reviewCompletion: {
-        mode: 'initial',
-        minRetry: 0,
-        maxRetry: 1,
-        retryInstruction: 'retry',
-      },
-    }))).toThrow(/Invalid workflow_call review_mode/);
-  });
-
   it('runs Companion after both the initial and review-completion retry responses', async () => {
     const abortController = new AbortController();
     const state = makeState();
@@ -298,7 +274,6 @@ describe('companion StepExecutor lifecycle', () => {
     const step = {
       ...createCompanionStep([makeRule('Implementation is complete', 'COMPLETE')]),
       reviewCompletion: {
-        mode: 'initial' as const,
         minRetry: 0,
         maxRetry: 1,
         retryInstruction: 'retry',
