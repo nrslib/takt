@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest';
 import {
   AGENT_FAILURE_CATEGORIES,
   classifyAbortSignalReason,
+  createAgentFailureError,
   createPartTimeoutReason,
   createProviderErrorFailure,
   createProviderStreamParseError,
   createProviderStreamParseFailure,
   createStreamIdleTimeoutFailure,
   formatAgentFailure,
+  isAgentFailureError,
   isProviderStreamParseError,
 } from '../shared/types/agent-failure.js';
 
@@ -38,6 +40,18 @@ describe('agent-failure', () => {
     expect(isProviderStreamParseError(error)).toBe(true);
     expect(error.reason).toBe('Failed to parse item: invalid stdout line');
     expect(error.message).toBe('provider stream parse error: Failed to parse item: invalid stdout line');
+  });
+
+  it('preserves the category and raw reason in the generic typed failure contract', () => {
+    const error = createAgentFailureError(
+      AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+      new Error('Gateway unavailable'),
+    );
+
+    expect(isAgentFailureError(error)).toBe(true);
+    expect(error.failureCategory).toBe(AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR);
+    expect(error.reason).toBe('Gateway unavailable');
+    expect(error.message).toBe('Gateway unavailable');
   });
 
   it('失敗分類の生成と表示整形を共通契約として扱う', () => {

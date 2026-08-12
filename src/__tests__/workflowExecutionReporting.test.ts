@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionLog } from '../shared/utils/index.js';
+import { MAX_AGENT_FAILURE_MESSAGE_BYTES } from '../shared/types/agent-failure.js';
 
 const { mockNotifyError } = vi.hoisted(() => ({
   mockNotifyError: vi.fn(),
@@ -169,10 +170,11 @@ describe('workflowExecutionReporting', () => {
     );
   });
 
-  it('keeps the final workflow failure output within 8192 bytes while preserving a truncation marker', () => {
+  it('keeps a multibyte workflow failure within the byte limit while preserving its marker', () => {
     const out = createOut();
     const marker = '[TRUNCATED: 12000 bytes, full text: /tmp/failure.txt]';
-    const reason = `${'x'.repeat(8192 - Buffer.byteLength(marker, 'utf8'))}${marker}`;
+    const contentBytes = MAX_AGENT_FAILURE_MESSAGE_BYTES - Buffer.byteLength(marker, 'utf8');
+    const reason = `${'界'.repeat(Math.floor(contentBytes / 3))}${'x'.repeat(contentBytes % 3)}${marker}`;
 
     reportWorkflowFailure(
       out as never,
@@ -185,7 +187,8 @@ describe('workflowExecutionReporting', () => {
     );
 
     const terminalMessage = out.error.mock.calls[0]?.[0] as string;
-    expect(Buffer.byteLength(terminalMessage, 'utf8')).toBeLessThanOrEqual(8192);
+    expect(Buffer.byteLength(terminalMessage, 'utf8')).toBeLessThanOrEqual(MAX_AGENT_FAILURE_MESSAGE_BYTES);
+    expect(terminalMessage).not.toContain('\uFFFD');
     expect(terminalMessage).toContain(marker);
   });
 });

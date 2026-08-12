@@ -833,6 +833,8 @@ describe('Finding Contract control boundary adapters', () => {
     })).rejects.toMatchObject({
       name: 'ProviderStreamParseError',
       failureCategory: 'provider_stream_parse_error',
+      reason: 'Failed to parse item: decomposition',
+      message: 'provider stream parse error: Failed to parse item: decomposition',
     });
     expect(requestRaw).toHaveBeenCalledOnce();
   });
@@ -860,6 +862,8 @@ describe('Finding Contract control boundary adapters', () => {
     })).rejects.toMatchObject({
       name: 'ProviderStreamParseError',
       failureCategory: 'provider_stream_parse_error',
+      reason: 'Failed to parse item: decision',
+      message: 'provider stream parse error: Failed to parse item: decision',
     });
     expect(requestRaw).toHaveBeenCalledOnce();
   });

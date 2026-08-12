@@ -49,6 +49,7 @@ export interface CodexCallOptions {
   /** JSON Schema for structured output */
   outputSchema?: Record<string, unknown>;
   imageAttachments?: ProviderImageAttachment[];
+  /** Directory for full oversized failure text, written as private 0600 files; omission disables persistence. */
   failureDir?: string;
   childProcessEnv?: Readonly<Record<string, string>>;
 }

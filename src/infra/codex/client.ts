@@ -44,7 +44,10 @@ import {
 } from './CodexStreamHandler.js';
 import { buildRateLimitedResponseFields, containsRateLimitError } from '../rate-limit/detection.js';
 import { executeIsolatedCodex } from './isolated-executor.js';
-import { boundCodexFailureMessage } from './failure-message.js';
+import {
+  boundCodexFailureMessage,
+  type CodexFailureMessageOptions,
+} from './failure-message.js';
 
 export type { CodexCallOptions } from './types.js';
 
@@ -293,12 +296,12 @@ export class CodexClient {
     };
   }
 
-  private async buildErrorResponse(
+  private buildErrorResponse(
     agentType: string,
     sessionId: string | undefined,
     failure: AgentFailureDetail,
     options: CodexCallOptions,
-  ): Promise<AgentResponse> {
+  ): AgentResponse {
     const message = boundCodexFailureMessage(formatAgentFailure(failure), options, true);
     return {
       persona: agentType,
@@ -311,12 +314,12 @@ export class CodexClient {
     };
   }
 
-  private async buildRateLimitedResponse(
+  private buildRateLimitedResponse(
     agentType: string,
     sessionId: string | undefined,
     message: string,
-    options: Pick<CodexCallOptions, 'cwd' | 'failureDir'>,
-  ): Promise<AgentResponse> {
+    options: CodexFailureMessageOptions,
+  ): AgentResponse {
     const response = buildRateLimitedResponseFields('codex', 'sdk_error', message);
     return {
       persona: agentType,
@@ -338,7 +341,7 @@ export class CodexClient {
       const failure = createProviderErrorFailure(
         'Strict read-only Codex execution cannot resume a session',
       );
-      const errorResponse = await this.buildErrorResponse(agentType, options.sessionId, failure, options);
+      const errorResponse = this.buildErrorResponse(agentType, options.sessionId, failure, options);
       emitResult(
         options.onStream,
         false,
@@ -372,7 +375,7 @@ export class CodexClient {
       input = buildCodexInput(fullPrompt, options.imageAttachments);
     } catch (error) {
       const failure = createProviderErrorFailure(getErrorMessage(error));
-      const errorResponse = await this.buildErrorResponse(agentType, threadId, failure, options);
+      const errorResponse = this.buildErrorResponse(agentType, threadId, failure, options);
       emitResult(options.onStream, false, errorResponse.error ?? errorResponse.content, threadId, failure.category);
       return errorResponse;
     }
@@ -392,7 +395,7 @@ export class CodexClient {
       const failure = createProviderErrorFailure(
         `Failed to discover Codex Skills: ${getErrorMessage(error)}`,
       );
-      const errorResponse = await this.buildErrorResponse(agentType, threadId, failure, options);
+      const errorResponse = this.buildErrorResponse(agentType, threadId, failure, options);
       emitResult(
         options.onStream,
         false,
@@ -625,7 +628,7 @@ export class CodexClient {
             failure.category !== AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR
             && containsRateLimitError(failureMessage)
           ) {
-            const rateLimitedResponse = await this.buildRateLimitedResponse(
+            const rateLimitedResponse = this.buildRateLimitedResponse(
               agentType,
               currentThreadId,
               failureMessage,
@@ -651,7 +654,7 @@ export class CodexClient {
           }
 
           const finalFailure = this.withReconnectFailureDiagnostics(failure, state.activeTool);
-          const errorResponse = await this.buildErrorResponse(agentType, currentThreadId, finalFailure, options);
+          const errorResponse = this.buildErrorResponse(agentType, currentThreadId, finalFailure, options);
           emitResult(
             options.onStream,
             false,
@@ -685,7 +688,7 @@ export class CodexClient {
           const failure = createProviderErrorFailure(
             `Codex safety filter refused the request after ${CODEX_REFUSAL_MAX_RETRIES + 1} attempts: ${trimmed.slice(0, 200)}`,
           );
-          const errorResponse = await this.buildErrorResponse(agentType, currentThreadId, failure, options);
+          const errorResponse = this.buildErrorResponse(agentType, currentThreadId, failure, options);
           emitResult(
             options.onStream,
             false,
@@ -724,7 +727,7 @@ export class CodexClient {
           failure.category !== AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR
           && containsRateLimitError(rawErrorMessage)
         ) {
-          const rateLimitedResponse = await this.buildRateLimitedResponse(
+          const rateLimitedResponse = this.buildRateLimitedResponse(
             agentType,
             currentThreadId,
             rawErrorMessage,
@@ -748,11 +751,11 @@ export class CodexClient {
         );
 
         if (this.shouldRetry(failure, standardRetryCount, timeoutRetryCount)) {
-          const boundedErrorMessage = boundCodexFailureMessage(errorMessage, options, true);
+          const retryErrorMessage = boundCodexFailureMessage(errorMessage, options, true);
           log.info('Retrying Codex call after transient exception', {
             agentType,
             attempt,
-            errorMessage: boundedErrorMessage,
+            errorMessage: retryErrorMessage,
           });
           threadId = isolated ? undefined : currentThreadId;
           const retryState = this.recordRetry(failure.category, standardRetryCount, timeoutRetryCount);
@@ -763,7 +766,7 @@ export class CodexClient {
         }
 
         const finalFailure = this.withReconnectFailureDiagnostics(failure, state.activeTool);
-        const errorResponse = await this.buildErrorResponse(agentType, currentThreadId, finalFailure, options);
+        const errorResponse = this.buildErrorResponse(agentType, currentThreadId, finalFailure, options);
         emitResult(
           options.onStream,
           false,

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ParallelRunner, type ParallelRunnerDeps } from '../core/workflow/engine/ParallelRunner.js';
 import type { AgentResponse, AgentWorkflowStep, WorkflowState, WorkflowStep } from '../core/models/index.js';
 import { makeRule, makeStep } from './test-helpers.js';
+import { createProviderStreamParseError } from '../shared/types/agent-failure.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
@@ -404,6 +405,42 @@ describe('ParallelRunner terminal sub-step statuses', () => {
     expect(result.response.content).toContain('failureCategory: provider_error');
     expect(result.response.content).toContain('Security reviewer failed after retry.');
     expect(result.response.error).toBe('Security reviewer failed after retry.');
+  });
+
+  it('uses a later parse failure for both parent response and step_error over an earlier categorized rate limit', async () => {
+    const { runner } = makeRunner();
+    const step = makeParallelStep();
+    const state = makeState();
+    queueAgentResponse(makeAgentResponse({
+      persona: 'ai-antipattern-review-2nd',
+      status: 'rate_limited',
+      content: '',
+      error: 'Rate limit exceeded for ai reviewer.',
+      errorKind: 'rate_limit',
+      failureCategory: 'provider_error',
+      rateLimitInfo: {
+        provider: 'claude',
+        detectedAt: new Date('2026-05-29T00:00:00.000Z'),
+        source: 'stream_marker',
+      },
+    }));
+    queueAgentRejection(createProviderStreamParseError('Failed to parse item: invalid stdout line'));
+
+    const result = await runner.runParallelStep(step, state, 'test task', 5, vi.fn());
+
+    expect(result.response.status).toBe('error');
+    expect(result.response.failureCategory).toBe('provider_stream_parse_error');
+    expect(result.response.error).toBe(
+      'provider stream parse error: Failed to parse item: invalid stdout line',
+    );
+    expect(result.response.errorKind).toBeUndefined();
+    expect(result.response.rateLimitInfo).toBeUndefined();
+    expect(result.workflowCallFailure).toMatchObject({
+      kind: 'step_error',
+      step: 'security-review',
+      reason: 'provider stream parse error: Failed to parse item: invalid stdout line',
+      error: 'provider stream parse error: Failed to parse item: invalid stdout line',
+    });
   });
 
   it('purges the stale persona session when the fresh retry returns no session id', async () => {

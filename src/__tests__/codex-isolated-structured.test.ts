@@ -34,7 +34,7 @@ function createFailureCodex(mode: FailureMode): { cwd: string; executable: strin
   writeFileSync(executable, `#!/usr/bin/env node
 const message = ${messageExpression};
 process.stdout.write(JSON.stringify({ type: 'turn.failed', error: { message } }) + '\\n');
-`, { encoding: 'utf8', mode: 0o700 });
+`, 'utf8');
   chmodSync(executable, 0o700);
   return { cwd, executable };
 }

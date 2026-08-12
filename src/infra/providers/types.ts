@@ -37,6 +37,7 @@ export interface ProviderCallOptions {
   outputSchema?: Record<string, unknown>;
   language?: Language;
   imageAttachments?: ProviderImageAttachment[];
+  /** Directory for full Codex failure text; when omitted, oversized failures are truncated without persistence. */
   failureDir?: string;
   childProcessEnv?: Readonly<Record<string, string>>;
 }

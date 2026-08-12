@@ -14,6 +14,7 @@ import {
   truncateUtf8PreservingMarker,
   truncateText,
 } from '../shared/utils/text.js';
+import { MAX_AGENT_FAILURE_MESSAGE_BYTES } from '../shared/types/agent-failure.js';
 
 describe('isFullWidth', () => {
   it('should return false for ASCII characters', () => {
@@ -117,17 +118,48 @@ describe('sanitizeTerminalText', () => {
 describe('truncateUtf8PreservingMarker', () => {
   it('should preserve an existing marker within the UTF-8 byte limit', () => {
     const marker = '[TRUNCATED: 12000 bytes, full text: .takt/runs/test/failures/provider-failure.txt]';
-    const result = truncateUtf8PreservingMarker(`${'あ'.repeat(5000)}${marker}`, 8192);
+    const result = truncateUtf8PreservingMarker(
+      `${'あ'.repeat(5000)}${marker}`,
+      MAX_AGENT_FAILURE_MESSAGE_BYTES,
+    );
 
-    expect(Buffer.byteLength(result, 'utf8')).toBeLessThanOrEqual(8192);
+    expect(Buffer.byteLength(result, 'utf8')).toBeLessThanOrEqual(MAX_AGENT_FAILURE_MESSAGE_BYTES);
     expect(result.endsWith(marker)).toBe(true);
   });
 
-  it('should append a marker when the input has no marker', () => {
-    const result = truncateUtf8PreservingMarker('x'.repeat(8193), 8192);
+  it.each([
+    [MAX_AGENT_FAILURE_MESSAGE_BYTES - 1, false],
+    [MAX_AGENT_FAILURE_MESSAGE_BYTES, false],
+    [MAX_AGENT_FAILURE_MESSAGE_BYTES + 1, true],
+  ] as const)(
+    'should handle an ASCII input of %i bytes at the truncation boundary',
+    (byteLength, shouldTruncate) => {
+      const input = 'x'.repeat(byteLength);
+      const result = truncateUtf8PreservingMarker(input, MAX_AGENT_FAILURE_MESSAGE_BYTES);
 
-    expect(Buffer.byteLength(result, 'utf8')).toBeLessThanOrEqual(8192);
-    expect(result).toMatch(/\[TRUNCATED: \d+ bytes\]$/);
+      expect(Buffer.byteLength(result, 'utf8')).toBeLessThanOrEqual(MAX_AGENT_FAILURE_MESSAGE_BYTES);
+      if (shouldTruncate) {
+        expect(result).toMatch(/\[TRUNCATED: \d+ bytes\]$/);
+      } else {
+        expect(result).toBe(input);
+      }
+    },
+  );
+
+  it.each([
+    [`${'界'.repeat(2730)}a`, false],
+    [`${'界'.repeat(2730)}ab`, false],
+    [`${'界'.repeat(2730)}abc`, true],
+  ] as const)('should preserve UTF-8 boundaries around the byte limit', (input, shouldTruncate) => {
+    const result = truncateUtf8PreservingMarker(input, MAX_AGENT_FAILURE_MESSAGE_BYTES);
+
+    expect(Buffer.byteLength(result, 'utf8')).toBeLessThanOrEqual(MAX_AGENT_FAILURE_MESSAGE_BYTES);
+    expect(result).not.toContain('\uFFFD');
+    if (shouldTruncate) {
+      expect(result).toMatch(/\[TRUNCATED: \d+ bytes\]$/);
+    } else {
+      expect(result).toBe(input);
+    }
   });
 });
 

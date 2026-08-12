@@ -18,7 +18,10 @@ import {
 import type { CodexEvent, CodexItem } from './CodexStreamHandler.js';
 import { extractProviderUsageFromTurnCompleted } from './client.js';
 import type { CodexCallOptions } from './types.js';
-import { boundCodexFailureMessage } from './failure-message.js';
+import {
+  boundCodexFailureMessage,
+  type CodexFailureMessageOptions,
+} from './failure-message.js';
 
 const require = createRequire(import.meta.url);
 const STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
@@ -172,7 +175,7 @@ export function assertValidIsolatedCodexEvent(
 function createErrorResponse(
   agentType: string,
   error: unknown,
-  options: Pick<CodexCallOptions, 'cwd' | 'failureDir'>,
+  options: CodexFailureMessageOptions,
 ): AgentResponse {
   const rawMessage = getErrorMessage(error);
   if (containsRateLimitError(rawMessage)) {

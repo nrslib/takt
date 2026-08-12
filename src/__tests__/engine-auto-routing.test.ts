@@ -1235,6 +1235,52 @@ describe('WorkflowEngine auto routing integration', () => {
     expect(runAgent).toHaveBeenCalledOnce();
   });
 
+  it('preserves a classified estimator failure detail before the resolver selects its fallback', async () => {
+    vi.mocked(runAgent).mockResolvedValue(makeResponse({
+      persona: 'auto-router',
+      status: 'error',
+      content: '',
+      error: 'upstream unavailable',
+      failureCategory: 'provider_error',
+    }));
+    const estimator = createWorkRequirementEstimator({
+      cwd: tmpDir,
+      provider: 'claude-sdk',
+      model: 'claude-haiku-4-5-20251001',
+    });
+    const logger = { warn: vi.fn() };
+
+    const failure = await estimator.estimate({
+      ...createRoutingSnapshot(),
+      version: 'v1',
+    }).catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({
+      name: 'AgentFailureError',
+      failureCategory: 'provider_error',
+      reason: 'upstream unavailable',
+      message: 'upstream unavailable',
+    });
+    const result = await resolveAutoRoutingRuntime({
+      autoRouting: createAutoRoutingConfig(),
+      step: { name: 'implement', tags: [] },
+      snapshot: createRoutingSnapshot(),
+      currentProviderInfo: {
+        provider: undefined,
+        model: undefined,
+        providerSource: undefined,
+        modelSource: undefined,
+      },
+      estimator: { estimate: vi.fn().mockRejectedValue(failure) },
+      logger,
+    });
+    expect(result?.providerInfo).toMatchObject({
+      providerSource: 'auto.fallback',
+      autoRoutingDecision: { fallbackReason: 'estimator-failure' },
+    });
+    expect(logger.warn).toHaveBeenCalledOnce();
+  });
+
   it('rethrows a provider stream parse failure from RoutingRuntime without selecting a configured fallback', async () => {
     const parseError = createProviderStreamParseError('Failed to parse item: invalid routing response');
     const estimator: WorkRequirementEstimator = {

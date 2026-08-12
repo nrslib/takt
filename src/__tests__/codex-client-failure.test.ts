@@ -1,15 +1,18 @@
 import { basename } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CodexCallOptions } from '../infra/codex/types.js';
+import { MAX_AGENT_FAILURE_MESSAGE_BYTES } from '../shared/types/agent-failure.js';
 
 const {
   ensurePrivateDirectoryMock,
   writeNewPrivateFileWithModeMock,
   infoMock,
+  warnMock,
 } = vi.hoisted(() => ({
   ensurePrivateDirectoryMock: vi.fn(),
   writeNewPrivateFileWithModeMock: vi.fn(),
   infoMock: vi.fn(),
+  warnMock: vi.fn(),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => {
@@ -20,7 +23,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => {
       trace: vi.fn(),
       debug: vi.fn(),
       info: infoMock,
-      warn: vi.fn(),
+      warn: warnMock,
       error: vi.fn(),
       enter: vi.fn(),
       exit: vi.fn(),
@@ -103,14 +106,7 @@ function createParseFailurePlan(message: string): RunPlan {
   return { type: 'iterator-throw', error: new Error(message) };
 }
 
-function createTurnFailedParseFailurePlan(message: string): RunPlan {
-  return {
-    type: 'events',
-    events: [{ type: 'turn.failed', error: { message } }],
-  };
-}
-
-function createTurnFailedFailurePlan(message: string): RunPlan {
+function createTurnFailedPlan(message: string): RunPlan {
   return {
     type: 'events',
     events: [{ type: 'turn.failed', error: { message } }],
@@ -128,8 +124,8 @@ async function assertOversizedRateLimitResponseIsBounded(
   expect(result.status).toBe('rate_limited');
   expect(result.error).toContain('HTTP 429:');
   expect(result.error).toMatch(/\[TRUNCATED: \d+ bytes, full text:/);
-  expect(Buffer.byteLength(result.content, 'utf8')).toBeLessThanOrEqual(8192);
-  expect(Buffer.byteLength(result.error ?? '', 'utf8')).toBeLessThanOrEqual(8192);
+  expect(Buffer.byteLength(result.content, 'utf8')).toBeLessThanOrEqual(MAX_AGENT_FAILURE_MESSAGE_BYTES);
+  expect(Buffer.byteLength(result.error ?? '', 'utf8')).toBeLessThanOrEqual(MAX_AGENT_FAILURE_MESSAGE_BYTES);
   expect(ensurePrivateDirectoryMock).toHaveBeenCalledWith(FAILURE_DIR);
   expect(writeNewPrivateFileWithModeMock).toHaveBeenCalledOnce();
   expect(writeNewPrivateFileWithModeMock.mock.calls[0]?.[1]).toBe(failureMessage);
@@ -182,7 +178,7 @@ describe('CodexClient failure handling', () => {
   });
 
   it('should classify a turn.failed parse failure as parse error even when the detail contains rate-limit text', async () => {
-    runPlans = [createTurnFailedParseFailurePlan('Failed to parse item: invalid stdout line; 429 Too Many Requests')];
+    runPlans = [createTurnFailedPlan('Failed to parse item: invalid stdout line; 429 Too Many Requests')];
 
     const result = await new CodexClient().call('coder', 'prompt', createFailureOptions());
 
@@ -197,7 +193,7 @@ describe('CodexClient failure handling', () => {
   });
 
   it('should bound an oversized rate-limit error from turn.failed', async () => {
-    await assertOversizedRateLimitResponseIsBounded(createTurnFailedParseFailurePlan);
+    await assertOversizedRateLimitResponseIsBounded(createTurnFailedPlan);
   });
 
   it('should keep the generic category when the parse phrase is not at the start', async () => {
@@ -227,7 +223,7 @@ describe('CodexClient failure handling', () => {
     expect(writtenPath.startsWith(`${FAILURE_DIR}/`)).toBe(true);
     expect(writtenText).toBe(failureMessage);
     expect(result.error).toBeDefined();
-    expect(Buffer.byteLength(result.error ?? '', 'utf8')).toBeLessThanOrEqual(8192);
+    expect(Buffer.byteLength(result.error ?? '', 'utf8')).toBeLessThanOrEqual(MAX_AGENT_FAILURE_MESSAGE_BYTES);
     expect(result.error).toContain('Upstream failure:');
     expect(result.error).toContain(
       `[TRUNCATED: `,
@@ -265,9 +261,9 @@ describe('CodexClient failure handling', () => {
     expect(paths.every((path) => path.startsWith(`${FAILURE_DIR}/`))).toBe(true);
   });
 
-  it('should preserve an error at the 8192-byte boundary without creating a file', async () => {
+  it('should preserve an error at the maximum byte boundary without creating a file', async () => {
     const failureMessage = `${'あ'.repeat(2730)}ab`;
-    expect(Buffer.byteLength(failureMessage, 'utf8')).toBe(8192);
+    expect(Buffer.byteLength(failureMessage, 'utf8')).toBe(MAX_AGENT_FAILURE_MESSAGE_BYTES);
     runPlans = [createParseFailurePlan(failureMessage)];
 
     const result = await new CodexClient().call('coder', 'prompt', createFailureOptions());
@@ -290,12 +286,16 @@ describe('CodexClient failure handling', () => {
     expect(result.failureCategory).toBe('provider_error');
     expect(result.error).toMatch(/\[TRUNCATED: \d+ bytes\]/);
     expect(result.error).not.toContain('full text:');
-    expect(Buffer.byteLength(result.error ?? '', 'utf8')).toBeLessThanOrEqual(8192);
+    expect(Buffer.byteLength(result.error ?? '', 'utf8')).toBeLessThanOrEqual(MAX_AGENT_FAILURE_MESSAGE_BYTES);
+    expect(warnMock).toHaveBeenCalledWith(
+      'Failed to persist full Codex failure text',
+      expect.objectContaining({ failureDir: FAILURE_DIR, error: 'disk full' }),
+    );
   });
 
   it('should not retry when a retryable pattern appears only after the retry prefix', async () => {
     vi.useFakeTimers();
-    runPlans = [createParseFailurePlan(`${'x'.repeat(4096)} network error`)];
+    runPlans = [createParseFailurePlan(`${'x'.repeat(MAX_AGENT_FAILURE_MESSAGE_BYTES)} network error`)];
 
     const resultPromise = new CodexClient().call('coder', 'prompt', createFailureOptions());
     await vi.advanceTimersByTimeAsync(1000);
@@ -309,7 +309,7 @@ describe('CodexClient failure handling', () => {
     vi.useFakeTimers();
     const failureMessage = `network error: ${'x'.repeat(10000)}`;
     runPlans = [
-      createTurnFailedFailurePlan(failureMessage),
+      createTurnFailedPlan(failureMessage),
       {
         type: 'events',
         events: [
@@ -326,7 +326,7 @@ describe('CodexClient failure handling', () => {
 
     const retryLog = infoMock.mock.calls[0]?.[1] as { message?: string } | undefined;
     expect(retryLog?.message).toMatch(/\[TRUNCATED: \d+ bytes, full text:/);
-    expect(Buffer.byteLength(retryLog?.message ?? '', 'utf8')).toBeLessThanOrEqual(8192);
+    expect(Buffer.byteLength(retryLog?.message ?? '', 'utf8')).toBeLessThanOrEqual(MAX_AGENT_FAILURE_MESSAGE_BYTES);
     expect(writeNewPrivateFileWithModeMock.mock.calls[0]?.[1]).toBe(failureMessage);
     expect(result.status).toBe('done');
   });
@@ -352,7 +352,7 @@ describe('CodexClient failure handling', () => {
 
     const retryLog = infoMock.mock.calls[0]?.[1] as { errorMessage?: string } | undefined;
     expect(retryLog?.errorMessage).toMatch(/\[TRUNCATED: \d+ bytes, full text:/);
-    expect(Buffer.byteLength(retryLog?.errorMessage ?? '', 'utf8')).toBeLessThanOrEqual(8192);
+    expect(Buffer.byteLength(retryLog?.errorMessage ?? '', 'utf8')).toBeLessThanOrEqual(MAX_AGENT_FAILURE_MESSAGE_BYTES);
     expect(writeNewPrivateFileWithModeMock.mock.calls[0]?.[1]).toBe(failureMessage);
     expect(result.status).toBe('done');
   });
@@ -382,7 +382,7 @@ describe('CodexClient failure handling', () => {
 
   it('should not add reconnect diagnostics when a reconnect pattern appears only after the retry prefix', async () => {
     vi.useFakeTimers();
-    runPlans = [createParseFailurePlan(`${'x'.repeat(4096)} Reconnecting... 2/5`)];
+    runPlans = [createParseFailurePlan(`${'x'.repeat(MAX_AGENT_FAILURE_MESSAGE_BYTES)} Reconnecting... 2/5`)];
 
     const resultPromise = new CodexClient().call('coder', 'prompt', createFailureOptions());
     await vi.advanceTimersByTimeAsync(1000);

@@ -135,21 +135,6 @@ export function formatAgentFailure(
   return withPrefix(FAILURE_CATEGORY_PREFIX[detail.category], detail.reason);
 }
 
-export class ProviderStreamParseError extends Error {
-  readonly failureCategory = AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR;
-  readonly reason: string;
-
-  constructor(reason: unknown) {
-    const message = stringifyFailureReason(reason);
-    const prefix = `${FAILURE_CATEGORY_PREFIX[AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR]}: `;
-    const normalizedReason = message.startsWith(prefix) ? message.slice(prefix.length) : message;
-    const detail = createProviderStreamParseFailure(normalizedReason);
-    super(formatAgentFailure(detail));
-    this.name = 'ProviderStreamParseError';
-    this.reason = detail.reason;
-  }
-}
-
 export class AgentFailureError extends Error {
   readonly failureCategory: AgentFailureCategory;
   readonly reason: string;
@@ -162,10 +147,23 @@ export class AgentFailureError extends Error {
   }
 }
 
+export class ProviderStreamParseError extends AgentFailureError {
+  constructor(reason: unknown) {
+    const message = stringifyFailureReason(reason);
+    const prefix = `${FAILURE_CATEGORY_PREFIX[AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR]}: `;
+    const normalizedReason = message.startsWith(prefix) ? message.slice(prefix.length) : message;
+    super(createProviderStreamParseFailure(normalizedReason));
+    this.name = 'ProviderStreamParseError';
+  }
+}
+
 export function createAgentFailureError(
   category: AgentFailureCategory,
   reason: unknown,
 ): AgentFailureError {
+  if (category === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR) {
+    return new ProviderStreamParseError(reason);
+  }
   return new AgentFailureError({
     category,
     reason: stringifyFailureReason(reason),

@@ -1035,6 +1035,22 @@ export class ParallelRunner {
     }
 
     const terminalResults = this.collectTerminalResults(subResults);
+    const parseFailureResult = terminalResults.find(
+      (result) => result.response.failureCategory
+        === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+    );
+    if (parseFailureResult) {
+      return this.createTerminalParentResult({
+        step,
+        state,
+        stepIteration,
+        subResults,
+        terminalResults,
+        status: 'error',
+        providerInfo: parseFailureResult.providerInfo ?? parentPm,
+        primaryFailure: parseFailureResult,
+      });
+    }
     const rateLimitedResult = terminalResults.find((r) => r.response.status === 'rate_limited');
     if (rateLimitedResult) {
       return this.createTerminalParentResult({
@@ -1748,6 +1764,7 @@ export class ParallelRunner {
     terminalResults: ParallelSubStepResult[];
     status: ParallelTerminalStatus;
     providerInfo: StepRunResult['providerInfo'];
+    primaryFailure?: ParallelSubStepResult;
     terminalOperation?: StepRunResult['terminalOperation'];
   }): StepRunResult {
     const content = this.buildTerminalDiagnostic(
@@ -1755,7 +1772,7 @@ export class ParallelRunner {
       options.terminalResults,
       options.status,
     );
-    const primaryFailure = this.firstFailureResult(options.terminalResults);
+    const primaryFailure = options.primaryFailure ?? this.firstFailureResult(options.terminalResults);
     const failureCategory = primaryFailure?.response.failureCategory;
     const boundedContent = truncateUtf8PreservingMarker(content, MAX_AGENT_FAILURE_MESSAGE_BYTES);
     const rejectedFailure = primaryFailure?.executionRejected === true;
@@ -1776,7 +1793,9 @@ export class ParallelRunner {
           : failureError ?? boundedContent }
         : {}),
       ...(failureCategory && { failureCategory }),
-      ...this.firstRateLimitMetadata(options.terminalResults),
+      ...(options.status === 'rate_limited'
+        ? this.firstRateLimitMetadata(options.terminalResults)
+        : {}),
     };
 
     options.state.stepOutputs.set(options.step.name, response);
@@ -1790,10 +1809,11 @@ export class ParallelRunner {
       );
     }
 
-    const selectedFailure = this.selectFailureByDefinitionOrder(
-      options.subResults,
-      `Step "${options.step.name}" failed: ${boundedContent}`,
-    );
+    const parentReason = `Step "${options.step.name}" failed: ${boundedContent}`;
+    const selectedFailure = options.primaryFailure === undefined
+      ? this.selectFailureByDefinitionOrder(options.subResults, parentReason)
+      : this.toRunFailure(options.primaryFailure, parentReason)
+        ?? this.selectFailureByDefinitionOrder(options.subResults, parentReason);
     return {
       response,
       instruction: options.subResults.map((result) => result.instruction).join('\n\n'),
@@ -1819,23 +1839,34 @@ export class ParallelRunner {
     parentReason: string,
   ): StepRunResult['workflowCallFailure'] {
     for (const result of results) {
-      if (result.workflowCallFailure !== undefined) {
-        return result.workflowCallFailure;
-      }
-      if (result.response.status === 'error') {
-        const failureError = truncateUtf8PreservingMarker(
-          sanitizeSensitiveText(result.response.error ?? result.response.content),
-          MAX_AGENT_FAILURE_MESSAGE_BYTES,
-        );
-        return createRunFailure({
-          kind: 'step_error',
-          step: result.subStep.name,
-          reason: result.response.failureCategory === undefined ? parentReason : failureError,
-          error: failureError,
-        });
+      const failure = this.toRunFailure(result, parentReason);
+      if (failure !== undefined) {
+        return failure;
       }
     }
     return undefined;
+  }
+
+  private toRunFailure(
+    result: ParallelSubStepResult,
+    parentReason: string,
+  ): StepRunResult['workflowCallFailure'] {
+    if (result.workflowCallFailure !== undefined) {
+      return result.workflowCallFailure;
+    }
+    if (result.response.status !== 'error') {
+      return undefined;
+    }
+    const failureError = truncateUtf8PreservingMarker(
+      sanitizeSensitiveText(result.response.error ?? result.response.content),
+      MAX_AGENT_FAILURE_MESSAGE_BYTES,
+    );
+    return createRunFailure({
+      kind: 'step_error',
+      step: result.subStep.name,
+      reason: result.response.failureCategory === undefined ? parentReason : failureError,
+      error: failureError,
+    });
   }
 
   private collectTerminalResults(results: ParallelSubStepResult[]): ParallelSubStepResult[] {
@@ -1877,7 +1908,11 @@ export class ParallelRunner {
   }
 
   private firstFailureResult(results: ParallelSubStepResult[]): ParallelSubStepResult | undefined {
-    return results.find((result) => result.response.failureCategory !== undefined)
+    return results.find(
+      (result) => result.response.failureCategory
+        === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+    )
+      ?? results.find((result) => result.response.failureCategory !== undefined)
       ?? results.find((result) => result.response.status === 'error');
   }
 
