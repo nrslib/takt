@@ -570,7 +570,7 @@ describe('executeWorkflow claude-terminal integration', () => {
     });
 
     expect(resumedResult.success).toBe(true);
-    expect(readFileSync(residualDatabasePath, 'utf-8')).toBe('not sqlite');
+    expect(await readFile(residualDatabasePath, 'utf-8')).toBe('not sqlite');
     expect(existsSync(
       join(
         projectDir,

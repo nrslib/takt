@@ -735,3 +735,4 @@ describe('workflow step fragment provenance', () => {
     expect(abortReasons[0]).toContain('step fragment "delegate"');
     expect(abortReasons[0]).toContain(fragmentPath);
   });
+});

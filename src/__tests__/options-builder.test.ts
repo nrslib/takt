@@ -46,7 +46,6 @@ function createBuilder(step: WorkflowStep, engineOverrides: BuilderEngineOverrid
     () => engineOverrides.workflowName ?? 'default',
     () => 'test workflow',
     undefined,
-    undefined,
     () => 'Original workflow task',
   );
 }

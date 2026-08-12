@@ -27,7 +27,7 @@ function createModelInput(): RoutingModelInput {
       stepType: 'normal',
       edit: true,
     },
-    remainingWork: [{ source: 'finding', description: 'A validation branch is incomplete.' }],
+    remainingWork: [{ source: 'task', description: 'A validation branch is incomplete.' }],
     progress: {
       previousAttemptFailed: false,
       noProgress: false,
@@ -114,7 +114,7 @@ describe('createWorkRequirementEstimator', () => {
       content: 'The estimate is available in structured output.',
       structuredOutput: {
         required_tier: 'high',
-        reason_codes: ['critical-finding'],
+        reason_codes: ['complex-work'],
         confidence: null,
       },
       timestamp: new Date('2026-01-01T00:00:00.000Z'),
@@ -127,7 +127,7 @@ describe('createWorkRequirementEstimator', () => {
 
     await expect(estimator.estimate(createModelInput())).resolves.toEqual({
       requiredTier: 'high',
-      reasonCodes: ['critical-finding'],
+      reasonCodes: ['complex-work'],
     });
   });
 
@@ -137,7 +137,7 @@ describe('createWorkRequirementEstimator', () => {
       status: 'done',
       content: JSON.stringify({
         required_tier: 'high',
-        reason_codes: ['critical-finding'],
+        reason_codes: ['complex-work'],
         confidence: null,
       }),
       timestamp: new Date('2026-01-01T00:00:00.000Z'),

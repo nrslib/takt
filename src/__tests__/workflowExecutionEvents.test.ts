@@ -834,8 +834,6 @@ describe('bindWorkflowExecutionEvents', () => {
       provider: 'codex' as const,
       model: 'gpt-5',
       workflowStack,
-      findingScopeIdentity: 'review-scope',
-      findingIds: ['F-0007'],
     };
 
     try {
@@ -854,7 +852,7 @@ describe('bindWorkflowExecutionEvents', () => {
         {
           iteration: 7,
           workflowName: 'parent',
-          scopeIdentity: 'review-scope',
+          scopeIdentity: '{"workflow":"parent","stack":[{"workflow":"parent","workflow_ref":"project:sha256:parent","step":"reviewers","kind":"parallel","occurrence":2}]}',
           provider: 'codex',
           model: 'gpt-5',
         },
