@@ -61,6 +61,10 @@ export class CompanionEventPublisher {
     this.emit('companion:complete', { step: this.step, openMustFixCount, escalated });
   }
 
+  beginAttempt(): void {
+    this.completed = false;
+  }
+
   reviewRound(input: {
     companion: string;
     trigger: CompanionReviewTrigger;

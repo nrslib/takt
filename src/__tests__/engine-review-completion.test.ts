@@ -1,0 +1,258 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { existsSync, rmSync } from 'node:fs';
+import type { AgentResponse, WorkflowConfig, WorkflowStep } from '../core/models/index.js';
+import type { ReportPhaseRunnerContext } from '../core/workflow/phase-runner.js';
+
+vi.mock('../agents/runner.js', () => ({ runAgent: vi.fn() }));
+
+vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/evaluation/index.js')>();
+  const { MockRuleEvaluator } = await import('./rule-evaluator-test-double.js');
+  return { ...actual, RuleEvaluator: MockRuleEvaluator };
+});
+
+vi.mock('../core/workflow/phase-runner.js', () => ({
+  runReportPhase: vi.fn().mockResolvedValue(undefined),
+  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ label: 'approved', method: 'structured_output' }),
+}));
+
+vi.mock('../shared/utils/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  generateReportDir: vi.fn().mockReturnValue('test-report-dir'),
+}));
+
+import { runAgent } from '../agents/runner.js';
+import { WorkflowEngine } from '../core/workflow/index.js';
+import { runReportPhase, runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
+import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
+import {
+  applyDefaultMocks,
+  cleanupWorkflowEngine,
+  createTestTmpDir,
+  makeResponse,
+  makeRule,
+  makeStep,
+} from './engine-test-helpers.js';
+
+const completion = {
+  mode: 'initial' as const,
+  minRetry: 0,
+  maxRetry: 1,
+  retryInstruction: 'Recheck the identified gaps.',
+};
+
+function reviewStep(name: string, overrides: Partial<WorkflowStep> = {}): WorkflowStep {
+  return makeStep(name, {
+    tags: ['review-completion'],
+    reviewCompletion: completion,
+    outputContracts: [{ name: `${name}.md`, format: name, useJudge: false }],
+    rules: [makeRule('approved', 'COMPLETE')],
+    ...overrides,
+  });
+}
+
+function normalConfig(step: WorkflowStep): WorkflowConfig {
+  return {
+    name: 'review-completion-normal',
+    maxSteps: 1,
+    initialStep: step.name,
+    steps: [step],
+  };
+}
+
+function reviewerResponse(persona: string, content: string, sessionId: string): AgentResponse {
+  return makeResponse({ persona, content, sessionId });
+}
+
+function judgeResponse(complete: boolean): AgentResponse {
+  return makeResponse({
+    persona: 'review-completion-judge',
+    content: 'decision',
+    sessionId: 'must-not-be-reused',
+    structuredOutput: {
+      complete,
+      reason: complete ? 'closed' : 'missing consumer',
+      missing_obligations: complete ? [] : [{
+        kind: 'family_lifecycle_gap',
+        contract_family: 'config',
+        path: 'consumer.ts',
+        reason: 'not inspected',
+      }],
+    },
+  });
+}
+
+describe('WorkflowEngine review completion wiring', () => {
+  let cwd: string;
+  let engine: WorkflowEngine | undefined;
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    applyDefaultMocks();
+    vi.mocked(mockRuleEvaluation).mockReturnValue({ index: 0, method: 'phase3_tag' });
+    cwd = createTestTmpDir();
+  });
+
+  afterEach(() => {
+    cleanupWorkflowEngine(engine);
+    if (existsSync(cwd)) rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it('runs the normal reviewer and fresh judge twice for min_retry and reports the latest session', async () => {
+    const step = reviewStep('reviewer', {
+      reviewCompletion: { ...completion, minRetry: 1 },
+    });
+    engine = new WorkflowEngine(normalConfig(step), cwd, 'task', { projectCwd: cwd, provider: 'mock' });
+    let reviewerCalls = 0;
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      if (options.internalAgentName === 'review-completion-judge') {
+        expect(options.sessionId).toBeUndefined();
+        return judgeResponse(true);
+      }
+      options.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: instruction });
+      reviewerCalls++;
+      expect(options.sessionId).toBe(reviewerCalls === 1 ? undefined : 'review-session-1');
+      return reviewerResponse(String(persona), `review-${reviewerCalls}`, `review-session-${reviewerCalls}`);
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(reviewerCalls).toBe(2);
+    expect(vi.mocked(runAgent).mock.calls.filter(([, , options]) => (
+      options.internalAgentName === 'review-completion-judge'
+    ))).toHaveLength(2);
+    expect(runReportPhase).toHaveBeenCalledOnce();
+    const phase2 = vi.mocked(runReportPhase).mock.calls[0]![2] as ReportPhaseRunnerContext;
+    expect(phase2.getSessionId(phase2.resolveSessionKey(step))).toBe('review-session-2');
+  });
+
+  it('keeps parallel reviewer completion episodes independent', async () => {
+    const reviewerA = reviewStep('reviewer-a');
+    const reviewerB = reviewStep('reviewer-b');
+    const parent = makeStep('reviewers', {
+      parallel: [reviewerA, reviewerB],
+      rules: [makeRule('all("approved")', 'COMPLETE')],
+    });
+    engine = new WorkflowEngine({
+      name: 'review-completion-parallel',
+      maxSteps: 1,
+      initialStep: parent.name,
+      steps: [parent],
+    }, cwd, 'task', { projectCwd: cwd, provider: 'mock' });
+    const reviewerCalls = new Map<string, number>();
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      if (options.internalAgentName === 'review-completion-judge') {
+        return judgeResponse(!instruction.includes('reviewer-b-first'));
+      }
+      options.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: instruction });
+      const name = String(persona).includes('reviewer-a') ? 'reviewer-a' : 'reviewer-b';
+      const count = (reviewerCalls.get(name) ?? 0) + 1;
+      reviewerCalls.set(name, count);
+      return reviewerResponse(name, `${name}-${count === 1 ? 'first' : 'retry'}`, `${name}-session-${count}`);
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(Object.fromEntries(reviewerCalls)).toEqual({ 'reviewer-a': 1, 'reviewer-b': 2 });
+    expect(runReportPhase).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(runReportPhase).mock.calls.map(([reportedStep]) => reportedStep.name).sort())
+      .toEqual(['reviewer-a', 'reviewer-b']);
+  });
+
+  it('keeps a judge failure in Phase 2 without leaking it to response, state, or Phase 3', async () => {
+    const step = reviewStep('reviewer', {
+      reviewCompletion: { ...completion, maxRetry: 0 },
+      rules: [makeRule('approved', 'COMPLETE'), makeRule('rejected', 'ABORT')],
+    });
+    engine = new WorkflowEngine(normalConfig(step), cwd, 'task', { projectCwd: cwd, provider: 'mock' });
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      if (options.internalAgentName === 'review-completion-judge') throw new Error('judge unavailable');
+      options.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: instruction });
+      return reviewerResponse(String(persona), 'authoritative report', 'review-session');
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    const phase2 = vi.mocked(runReportPhase).mock.calls[0]![2] as ReportPhaseRunnerContext;
+    expect(phase2.reviewCompletionDiagnostic).toContain('judge_unavailable');
+    const phase3 = vi.mocked(runStatusJudgmentPhase).mock.calls[0]![1] as Record<string, unknown>;
+    expect(phase3).not.toHaveProperty('reviewCompletionDiagnostic');
+    expect(state.stepOutputs.get(step.name)?.content).toBe('authoritative report');
+    expect(vi.mocked(runAgent).mock.calls.filter(([, , options]) => (
+      options.internalAgentName !== 'review-completion-judge'
+    ))).toHaveLength(1);
+    expect(JSON.stringify([...state.structuredOutputs.values()])).not.toContain('judge_unavailable');
+  });
+
+  it('uses only the mandatory retry when min_retry is one and the judge stays unavailable', async () => {
+    const step = reviewStep('reviewer', {
+      reviewCompletion: { ...completion, minRetry: 1, maxRetry: 2 },
+    });
+    engine = new WorkflowEngine(normalConfig(step), cwd, 'task', { projectCwd: cwd, provider: 'mock' });
+    let reviewerCalls = 0;
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      if (options.internalAgentName === 'review-completion-judge') throw new Error('judge unavailable');
+      options.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: instruction });
+      reviewerCalls++;
+      return reviewerResponse(String(persona), `review-${reviewerCalls}`, `session-${reviewerCalls}`);
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(reviewerCalls).toBe(2);
+    const phase2 = vi.mocked(runReportPhase).mock.calls[0]![2] as ReportPhaseRunnerContext;
+    expect(phase2.reviewCompletionDiagnostic).toContain('judge_unavailable');
+  });
+
+  it('fails soft at the engine boundary when the reviewer retry throws', async () => {
+    const step = reviewStep('reviewer');
+    engine = new WorkflowEngine(normalConfig(step), cwd, 'task', { projectCwd: cwd, provider: 'mock' });
+    let reviewerCalls = 0;
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      if (options.internalAgentName === 'review-completion-judge') return judgeResponse(false);
+      options.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: instruction });
+      reviewerCalls++;
+      if (reviewerCalls > 1) throw new Error('retry failed');
+      return reviewerResponse(String(persona), 'latest valid report', 'review-session');
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(state.stepOutputs.get(step.name)?.content).toBe('latest valid report');
+    const phase2 = vi.mocked(runReportPhase).mock.calls[0]![2] as ReportPhaseRunnerContext;
+    expect(phase2.reviewCompletionDiagnostic).toContain('reviewer_retry_failed');
+  });
+
+  it('propagates a parent abort raised during the reviewer retry', async () => {
+    const controller = new AbortController();
+    const step = reviewStep('reviewer');
+    engine = new WorkflowEngine(normalConfig(step), cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'mock',
+      abortSignal: controller.signal,
+    });
+    let reviewerCalls = 0;
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      if (options.internalAgentName === 'review-completion-judge') return judgeResponse(false);
+      options.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: instruction });
+      reviewerCalls++;
+      if (reviewerCalls > 1) {
+        controller.abort(new Error('parent stopped'));
+        const error = new Error('parent stopped');
+        error.name = 'AbortError';
+        throw error;
+      }
+      return reviewerResponse(String(persona), 'latest valid report', 'review-session');
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(runReportPhase).not.toHaveBeenCalled();
+  });
+});

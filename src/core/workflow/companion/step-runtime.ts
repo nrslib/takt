@@ -195,6 +195,14 @@ export class CompanionStepRuntime {
     });
   }
 
+  beginReviewAttempt(): void {
+    this.currentFixRound = undefined;
+    this.latestImplementerExplanation = undefined;
+    this.terminalDecision.reset();
+    this.events.beginAttempt();
+    this.requireScheduler().start();
+  }
+
   beginFixRound(sequence: number, openMustFixCount: number): void {
     this.currentFixRound = sequence - 1;
     this.events.fixRound(sequence, openMustFixCount);

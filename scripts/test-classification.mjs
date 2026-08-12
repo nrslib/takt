@@ -27,6 +27,7 @@ const legacyParallelIntegrationTestFiles = Object.freeze([
   'src/__tests__/engine-persona-providers.test.ts',
   'src/__tests__/engine-provider-options.test.ts',
   'src/__tests__/engine-rate-limit-fallback.test.ts',
+  'src/__tests__/engine-review-completion.test.ts',
   'src/__tests__/engine-report-inheritance.test.ts',
   'src/__tests__/engine-team-leader.test.ts',
   'src/__tests__/engine-workflow-call-iteration.test.ts',

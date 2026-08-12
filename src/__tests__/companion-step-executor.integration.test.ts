@@ -10,12 +10,13 @@ import { CompanionReviewAuthority } from '../core/workflow/companion/review-stat
 import { StepExecutor, type StepExecutorDeps } from '../core/workflow/engine/StepExecutor.js';
 import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engine/structured-output-normalizer.js';
 import type { RunPaths } from '../core/workflow/run/run-paths.js';
-import { executeAgent } from '../agents/agent-usecases.js';
+import { executeAgent, executeIsolatedStructuredInternalAgent } from '../agents/agent-usecases.js';
 import { initDebugLogger, resetDebugLogger } from '../shared/utils/debug.js';
 import { makeRule, makeStep } from './test-helpers.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
+  executeIsolatedStructuredInternalAgent: vi.fn(),
 }));
 
 function makeState(): WorkflowState {
@@ -219,6 +220,86 @@ describe('companion StepExecutor lifecycle', () => {
   afterEach(() => {
     resetDebugLogger();
     rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it('runs Companion after both the initial and review-completion retry responses', async () => {
+    const abortController = new AbortController();
+    const state = makeState();
+    const timeline: string[] = [];
+    let reviewerCalls = 0;
+    vi.mocked(executeAgent).mockImplementation(async (_persona, prompt, options) => {
+      options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: prompt });
+      reviewerCalls++;
+      timeline.push(`reviewer:${reviewerCalls}`);
+      expect(options?.sessionId).toBe(reviewerCalls === 1 ? undefined : 'session-1');
+      return {
+        persona: 'coder',
+        status: 'done',
+        content: `review-${reviewerCalls}`,
+        sessionId: `session-${reviewerCalls}`,
+        timestamp: new Date('2026-08-08T00:00:00.000Z'),
+      };
+    });
+    let judgeCalls = 0;
+    vi.mocked(executeIsolatedStructuredInternalAgent).mockImplementation(async () => {
+      judgeCalls++;
+      timeline.push(`judge:${judgeCalls}`);
+      return {
+        persona: 'review-completion-judge',
+        status: 'done',
+        content: 'decision',
+        timestamp: new Date('2026-08-08T00:00:00.000Z'),
+        structuredOutput: {
+          complete: judgeCalls === 2,
+          reason: judgeCalls === 2 ? 'closed' : 'gap',
+          missing_obligations: judgeCalls === 2 ? [] : [{
+            kind: 'family_lifecycle_gap',
+            contract_family: 'runtime',
+            path: 'consumer.ts',
+            reason: 'not inspected',
+          }],
+        },
+      };
+    });
+    const emitEvent = vi.fn((event: string) => {
+      if (event === 'companion:complete') timeline.push('companion:complete');
+    });
+    const deps = createDeps({
+      cwd,
+      runPaths,
+      companionDiffReader: createCompanionDiffReader(),
+      abortSignal: abortController.signal,
+      emitEvent,
+    });
+    const step = {
+      ...createCompanionStep([makeRule('Implementation is complete', 'COMPLETE')]),
+      tags: ['review-completion'],
+      reviewCompletion: {
+        mode: 'initial' as const,
+        minRetry: 0,
+        maxRetry: 1,
+        retryInstruction: 'retry',
+      },
+    };
+
+    const result = await new StepExecutor(deps).runNormalStep(
+      step,
+      state,
+      'task',
+      5,
+      vi.fn(),
+      'Review.',
+    );
+
+    expect(result.response).toMatchObject({ content: 'review-2', sessionId: 'session-2' });
+    expect(timeline).toEqual([
+      'reviewer:1',
+      'companion:complete',
+      'judge:1',
+      'reviewer:2',
+      'companion:complete',
+      'judge:2',
+    ]);
   });
 
   it('should release the companion parent abort listener after a successful normal step', async () => {

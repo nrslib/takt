@@ -304,6 +304,20 @@ export async function runReviewCompletionEpisode(input: {
 
     const retriesUsed = attemptIndex;
     const requiresMinimumRetry = retriesUsed < input.config.minRetry;
+    if (lastDecision === undefined && !requiresMinimumRetry) {
+      return {
+        response,
+        reviewerSessionId,
+        attempts: attemptIndex + 1,
+        diagnostic: {
+          kind: 'judge_unavailable',
+          attempts: attemptIndex + 1,
+          retriesUsed,
+          reason: lastJudgeFailure ?? 'Review completion judge was unavailable',
+          missingObligations: [],
+        },
+      };
+    }
     const incomplete = lastDecision?.complete !== true;
     if ((requiresMinimumRetry || incomplete) && retriesUsed < input.config.maxRetry) {
       continue;

@@ -154,6 +154,21 @@ describe('ClaudeTerminalProvider wiring', () => {
     }));
   });
 
+  it('preserves explicit read-only tools in isolated structured execution', async () => {
+    const agent = new ClaudeTerminalProvider().setupIsolatedStructured({ name: 'judge', systemPrompt: 'judge' });
+
+    await agent.call('prompt', {
+      cwd: '/tmp/worktree',
+      outputSchema: SCHEMA,
+      allowedTools: ['Read', 'Glob', 'Grep'],
+    });
+
+    expect(mockCallClaudeTerminal).toHaveBeenCalledWith('judge', expect.any(String), expect.objectContaining({
+      internalAgentIsolation: 'strict-readonly',
+      allowedTools: ['Read', 'Glob', 'Grep'],
+    }));
+  });
+
   it('Given claude sandbox provider option, When call is invoked, Then terminal provider ignores sandbox and continues', async () => {
     const provider = new ClaudeTerminalProvider();
     const agent = provider.setup({ name: 'coder' });

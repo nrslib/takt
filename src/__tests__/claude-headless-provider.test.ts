@@ -158,6 +158,22 @@ describe('ClaudeHeadlessProvider', () => {
     }));
   });
 
+  it('should preserve explicit read-only tools in isolated structured execution', async () => {
+    callClaudeHeadlessMock.mockResolvedValue({ persona: 'judge', status: 'done', content: 'ok', timestamp: new Date() });
+    const agent = new ClaudeHeadlessProvider().setupIsolatedStructured({ name: 'judge', systemPrompt: 'judge' });
+
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      outputSchema: { type: 'object' },
+      allowedTools: ['Read', 'Glob', 'Grep'],
+    });
+
+    expect(callClaudeHeadlessMock).toHaveBeenCalledWith('judge', expect.any(String), expect.objectContaining({
+      internalAgentIsolation: 'strict-readonly',
+      allowedTools: ['Read', 'Glob', 'Grep'],
+    }));
+  });
+
   it('should pass outputSchema to the headless client', async () => {
     callClaudeHeadlessMock.mockResolvedValue({
       persona: 'test',
