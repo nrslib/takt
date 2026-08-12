@@ -38,9 +38,13 @@ describe('review completion evidence', () => {
     const cwd = createDirectory('takt-review-completion-evidence-');
     const outside = createDirectory('takt-review-completion-outside-');
     mkdirSync(join(cwd, 'src'));
+    mkdirSync(join(cwd, 'src', 'auth'));
     mkdirSync(join(cwd, 'config'));
+    writeFileSync(join(cwd, 'src', 'auth', 'middleware.ts'), 'export const middleware = 1;\n');
+    writeFileSync(join(cwd, 'src', 'authorization-policy.ts'), 'export const policy = 1;\n');
     writeFileSync(join(cwd, 'src', 'safe.ts'), 'const api_key = "visible-secret";\nexport const value = 1;\n');
     writeFileSync(join(cwd, 'src', 'secretary.ts'), 'export const office = 1;\n');
+    writeFileSync(join(cwd, 'src', 'token-bucket.ts'), 'export const bucket = 1;\n');
     writeFileSync(join(cwd, '.env'), 'TOKEN=must-not-leak\n');
     writeFileSync(join(cwd, 'config', 'production-secrets.yaml'), 'token: production-secret\n');
     writeFileSync(join(cwd, 'credentials.json'), '{"opaque":"credential-file-marker"}\n');
@@ -63,13 +67,26 @@ describe('review completion evidence', () => {
         'prod-secrets.txt',
         'secrets.txt',
         'service-account.json',
+        'src/auth/middleware.ts',
+        'src/authorization-policy.ts',
         'src/safe.ts',
         'src/secretary.ts',
+        'src/token-bucket.ts',
       ]),
     });
 
     expect(evidence.status).toBe('collected');
     expect(evidence.files).toEqual([
+      {
+        path: 'src/auth/middleware.ts',
+        content: 'export const middleware = 1;\n',
+        truncated: false,
+      },
+      {
+        path: 'src/authorization-policy.ts',
+        content: 'export const policy = 1;\n',
+        truncated: false,
+      },
       {
         path: 'src/safe.ts',
         content: 'const api_key = "[REDACTED]";\nexport const value = 1;\n',
@@ -78,6 +95,11 @@ describe('review completion evidence', () => {
       {
         path: 'src/secretary.ts',
         content: 'export const office = 1;\n',
+        truncated: false,
+      },
+      {
+        path: 'src/token-bucket.ts',
+        content: 'export const bucket = 1;\n',
         truncated: false,
       },
     ]);
@@ -176,7 +198,11 @@ describe('review completion evidence', () => {
     );
     writeFileSync(join(cwd, 'prod-secrets.ts'), 'const prodSecret = stableContract;\n');
     writeFileSync(join(cwd, 'service_account.ts'), 'const serviceAccount = stableContract;\n');
+    mkdirSync(join(cwd, 'auth'));
+    writeFileSync(join(cwd, 'auth', 'middleware.ts'), 'const middleware = stableContract;\n');
+    writeFileSync(join(cwd, 'authorization-policy.ts'), 'const policy = stableContract;\n');
     writeFileSync(join(cwd, 'secretary.ts'), 'const secretary = stableContract;\n');
+    writeFileSync(join(cwd, 'token-bucket.ts'), 'const bucket = stableContract;\n');
     writeFileSync(join(outside, 'outside.ts'), 'const outsideConsumer = stableContract;\n');
     symlinkSync(join(outside, 'outside.ts'), join(cwd, 'linked.ts'));
     execFileSync('git', ['add', '.'], { cwd });
@@ -195,6 +221,18 @@ describe('review completion evidence', () => {
 
     expect(evidence.references).toEqual([
       {
+        path: 'auth/middleware.ts',
+        line: 1,
+        relationKind: 'declaration',
+        seed: 'stableContract',
+      },
+      {
+        path: 'authorization-policy.ts',
+        line: 1,
+        relationKind: 'declaration',
+        seed: 'stableContract',
+      },
+      {
         path: 'consumer.ts',
         line: 1,
         relationKind: 'module_name',
@@ -202,6 +240,12 @@ describe('review completion evidence', () => {
       },
       {
         path: 'secretary.ts',
+        line: 1,
+        relationKind: 'declaration',
+        seed: 'stableContract',
+      },
+      {
+        path: 'token-bucket.ts',
         line: 1,
         relationKind: 'declaration',
         seed: 'stableContract',
