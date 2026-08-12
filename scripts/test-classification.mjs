@@ -197,10 +197,8 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/analyze-usage-command.test.ts',
   'src/__tests__/arpeggio-csv.test.ts',
   'src/__tests__/builtin-workflow-categories-path.test.ts',
-  'src/__tests__/builtins-facets-deployment.test.ts',
   'src/__tests__/claude-headless-client.test.ts',
   'src/__tests__/claude-mcp-config.test.ts',
-  'src/__tests__/cli-lazy-loading-boundary.test.ts',
   'src/__tests__/cli-update-check.test.ts',
   'src/__tests__/clipboardImage.test.ts',
   'src/__tests__/codex-client-retry.test.ts',
@@ -214,7 +212,6 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/directRunResume.test.ts',
   'src/__tests__/entrypoint.test.ts',
   'src/__tests__/escape.test.ts',
-  'src/__tests__/exec-personaFacets.test.ts',
   'src/__tests__/exec-presetExport.test.ts',
   'src/__tests__/exec-presetStore.test.ts',
   'src/__tests__/executable-path.test.ts',
@@ -306,7 +303,6 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/workflowExecution-session-loading.test.ts',
   'src/__tests__/workflowExecution-structured-caller.test.ts',
   'src/__tests__/workflowExecutionEvents.test.ts',
-  'src/__tests__/yaml-schema-reference.test.ts',
 ]);
 
 // Importing the package barrel validates composition and export visibility

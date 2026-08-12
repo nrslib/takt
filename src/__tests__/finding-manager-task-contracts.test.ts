@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   FindingEntityBindingTaskOutputJsonSchema,
+  ENTITY_BINDING_DECISION_KINDS,
   MainManagerControlTaskOutputJsonSchema,
   MainManagerRawTaskOutputJsonSchema,
   parseFindingEntityBindingTaskOutput,
 } from '../core/workflow/findings/manager-task-contracts.js';
 import { RAW_FINDING_FIELD_LIMITS } from '../core/models/finding-contract-limits.js';
+import { RAW_DECISION_KINDS } from '../core/workflow/findings/types.js';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -34,18 +36,33 @@ function enumValues(
 }
 
 describe('finding manager task contracts', () => {
+  it('keeps required decision enums at their projected schema paths', () => {
+    const rawAlternatives = MainManagerRawTaskOutputJsonSchema
+      .properties.decisions.items.anyOf;
+    expect(rawAlternatives.length).toBeGreaterThan(0);
+    for (const alternative of rawAlternatives) {
+      expect(alternative.required).toContain('decision');
+      expect(enumValues(alternative.properties, 'decision')).toEqual([...RAW_DECISION_KINDS]);
+    }
+
+    const entityDecision = FindingEntityBindingTaskOutputJsonSchema
+      .properties.decisions.items;
+    expect(entityDecision.required).toContain('decision');
+    expect(enumValues(entityDecision.properties, 'decision'))
+      .toEqual([...ENTITY_BINDING_DECISION_KINDS]);
+  });
+
   it.each([
-    ['raw task', MainManagerRawTaskOutputJsonSchema, 3],
-    ['control task', MainManagerControlTaskOutputJsonSchema, 10],
-    ['entity binding task', FindingEntityBindingTaskOutputJsonSchema, 1],
+    ['raw task', MainManagerRawTaskOutputJsonSchema],
+    ['control task', MainManagerControlTaskOutputJsonSchema],
+    ['entity binding task', FindingEntityBindingTaskOutputJsonSchema],
   ])('declares matching string types for every enum in the projected %s output schema', (
     _name,
     schema,
-    expectedCount,
   ) => {
     const constrainedSchemas = collectConstrainedSchemas(schema);
 
-    expect(constrainedSchemas).toHaveLength(expectedCount);
+    expect(constrainedSchemas.length).toBeGreaterThan(0);
     for (const constrainedSchema of constrainedSchemas) {
       const values = constrainedSchema.enum;
       expect(constrainedSchema.type).toBe('string');

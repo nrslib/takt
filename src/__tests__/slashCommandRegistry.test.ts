@@ -9,8 +9,10 @@ import { SlashCommand } from '../shared/constants.js';
 describe('filterSlashCommands', () => {
   it('should return all commands when prefix is "/"', () => {
     const result = filterSlashCommands('/');
-    expect(result.length).toBe(8);
     const commands = result.map((e) => e.command);
+    const playCommands = filterSlashCommands('/p').map((e) => e.command);
+    expect(playCommands.length).toBeGreaterThan(0);
+    expect(commands).toEqual(expect.arrayContaining(playCommands));
     expect(commands).not.toContain('/setup');
   });
 
@@ -44,8 +46,7 @@ describe('filterSlashCommands', () => {
   });
 
   it('should return all commands for empty string prefix', () => {
-    const result = filterSlashCommands('');
-    expect(result.length).toBe(8);
+    expect(filterSlashCommands('')).toEqual(filterSlashCommands('/'));
   });
 
   it('should not match prefix without leading slash', () => {

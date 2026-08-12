@@ -256,9 +256,3 @@ describe.skipIf(!shouldRun)('IT: opencode list tool shim against the real binary
     expect(toolNames).toContain('todowrite');
   }, 120_000);
 });
-
-describe.skipIf(shouldRun)('IT: opencode list tool shim (skipped)', () => {
-  it('is skipped because the opencode binary or dist plugin is unavailable', () => {
-    expect(shouldRun).toBe(false);
-  });
-});

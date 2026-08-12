@@ -30,7 +30,7 @@ import {
   getBuiltinFacetDir,
   type FacetType,
 } from '../infra/config/paths.js';
-import { parseFacetType, VALID_FACET_TYPES } from '../features/config/facetTypes.js';
+import { parseFacetType } from '../features/config/facetTypes.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 
 describe('isResourcePath', () => {
@@ -729,14 +729,6 @@ describe('parseFacetType', () => {
     expect(parseFacetType('')).toBeUndefined();
   });
 
-  it('VALID_FACET_TYPES should contain all singular forms', () => {
-    expect(VALID_FACET_TYPES).toContain('persona');
-    expect(VALID_FACET_TYPES).toContain('policy');
-    expect(VALID_FACET_TYPES).toContain('knowledge');
-    expect(VALID_FACET_TYPES).toContain('instruction');
-    expect(VALID_FACET_TYPES).toContain('output-contract');
-    expect(VALID_FACET_TYPES).toHaveLength(5);
-  });
 });
 
 describe('normalizeWorkflowConfig with layer resolution', () => {

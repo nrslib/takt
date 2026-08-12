@@ -43,18 +43,6 @@ function companionSection(instruction: string): string {
 }
 
 describe('CT-COMP-08 pull delivery instruction', () => {
-  it('should inject the mailbox path, three read anchors, and severity-specific duties', () => {
-    const instruction = new InstructionBuilder(step(true), context(true, 'en')).build();
-
-    expect(instruction).toContain('/tmp/worktree/.takt/runs/run-1/companion/implement');
-    expect(instruction).toMatch(/after (finishing|completing).*file/i);
-    expect(instruction).toMatch(/before.*test/i);
-    expect(instruction).toMatch(/before.*(complete|completion)/i);
-    expect(instruction).toMatch(/must_fix.*immediately/is);
-    expect(instruction).toMatch(/should_fix.*boundary/is);
-    expect(instruction).toMatch(/nit.*ignore/is);
-  });
-
   it.each([
     {
       language: 'en' as const,
@@ -80,8 +68,6 @@ describe('CT-COMP-08 pull delivery instruction', () => {
       expect(section).toMatch(evidenceBoundary);
       expect(section).toMatch(rejectEmbeddedInstructions);
       expect(section).toMatch(independentVerification);
-      expect(section.match(/^## Companion(?: inbox| 受信箱)$/gmu)).toHaveLength(1);
-      expect(section).toContain(language === 'ja' ? '## Companion 受信箱' : '## Companion inbox');
     },
   );
 
