@@ -102,7 +102,7 @@ describe('CT-COMP-06 and CT-COMP-11 structured internal agent execution', () => 
       recordCall,
     });
 
-    expect(call.mock.calls[0]?.[3]).toMatchObject({ sessionId: undefined });
+    expect(call.mock.calls[0]?.[3]).not.toHaveProperty('sessionId');
     expect(recordCall).toHaveBeenCalledWith(expect.objectContaining({
       purpose: 'selector',
       agentName: 'companion-selector',
