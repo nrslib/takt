@@ -378,7 +378,6 @@ terminal tool の完全一致反復は、廃止された累積検出ではなく
 
 プロジェクト設定の値は、両方が設定されている場合にグローバル設定を上書きします。
 
-
 ### task 実行設定の環境変数上書き
 
 `auto_requeue_max_attempts` と `ignore_exceed` は
@@ -501,18 +500,6 @@ kiro_cli_path: /usr/local/bin/kiro-cli
 
 provider と model の選択には、[Provider Routing](#provider-routing) に記載した単一のフィールド別優先順位を使用します。通常 step、parallel sub-step、合成 step、workflow call は、各種類で利用可能なレイヤーについて同じ契約に従います。parallel sub-step は promotion をサポートしません。
 
-
-```yaml
-# runtime.yaml
-version: 1
-provider:
-  profiles:
-    strong: { provider: codex, model: <strong-model> }
-  targets:
-    internal_agents:
-      loop-judge:           { profile: strong }
-```
-
 workflow YAML では、通常 step、parallel sub-step、`loop_monitors.judge` の `model: null` は model の明示的な省略を表します。`model` 未指定とは異なります。未指定の場合は routing、workflow、loop monitor judge のトリガー元 step、入力由来の値など、適用可能な下位優先度のソースへフォールバックしますが、`model: null` はその entry で model 解決を止め、実効 model を未定義のままにします。解決済み provider に CLI または provider 側のデフォルトを使わせたい場合に指定します。明示 model が必須の provider では、model が供給されないため検証エラーになります。
 
 ### Provider 固有のモデルに関する注意
@@ -601,7 +588,6 @@ provider:
       model: gpt-5.6-sol
       options:
         reasoning_effort: low
-      escalate: sol-high
     router:
       provider: codex
       model: gpt-5.6-luna
@@ -621,9 +607,6 @@ provider:
     internal_agents:
       selector:
         profile: router
-        profile: sol-high
-        profile: sol-high
-        profile: sol-high
 
   auto_routing:
     strategy: balanced
@@ -644,27 +627,6 @@ provider:
 
 `provider.defaults` と各 `provider.targets` エントリは、固定の `profile` か auto routing を行う `pool` のいずれか一方だけを指定します。step は `<leaf-workflow-name>/<step-name>` 形式で指定し、agent を起動しない制御ノード（`workflow_call` など）は解決対象になりません。
 
-### `escalate` — その profile の最後の一手
-
-profile は `escalate` で別の profile を指名できます。「この profile で解決された作業が行き詰まったら、その profile へ渡す」という宣言です。弱い側の profile に1行書くだけで設定は完了し、workflow 側に provider 名やモデル名は一切現れません。
-
-```yaml
-provider:
-  profiles:
-    reviewer-local:
-      provider: opencode
-      model: ollama-cloud/gemma4:31b
-      escalate: strong
-    strong:
-      provider: opencode
-      model: ollama-cloud/glm-5.2
-```
-
-- 参照は agent を実行する前のコンパイル時に検証します。未定義 profile の参照、自己参照、`escalate` の循環はすべて読み込み時エラーです。
-- `escalate` は `provider` / `model` / `options` と同じく `extends` を通じて継承されます。
-- 消費されるのは常に1ホップだけです。`escalate` は作業者の最後の一手であり、段階的な ladder ではありません。
-- `--provider` や step YAML、`workflow_call` の上書きで provider が決まった step は、その profile で動いていないため格上げ先を持ちません。auto routing の `pool` で割り当てられた step も同様です。
-
 ### 解決の優先順位
 
 workflow agent の provider は次のラダーで解決し、後のエントリが前のエントリを上書きします。
@@ -678,6 +640,10 @@ defaults
 
 内部 agent（`selector`、`assistant`、`loop-judge`）は別のラダーで解決します。seat はすべて任意で、未指定なら通常の既定解決を使います。
 
+```text
+defaults
+  < internal_agents.<agent>
+```
 
 同じ優先度の target（例えば複数の一致する tag）が異なる provider を割り当てた場合は、暗黙に一方を選ばず fail-fast します。コマンドラインの `--provider` / `--model` は実行時 override であり、legacy と runtime のどちらのモードでも許可されます。
 
@@ -836,7 +802,6 @@ provider と model は各レイヤーで個別に解決されます。provider �
 「有効な promotion」とは、通常の agent step の `promotion` エントリのうち、実行回数条件（`at: <N>`）または `ai()` 条件が現在の実行にマッチしたものを指します。parallel sub-step では promotion を指定できないため、CLI/環境変数の明示 override の次に sub-step YAML の provider/model が優先されます。[Step レベルのプロバイダープロモーション](./workflows.ja.md#step-レベルのプロバイダープロモーション)を参照してください。
 
 指定された `internal_agents` seat は、そのロールの合成 step の `step YAML provider/model` 位置に入ります。seat の指定はすべて任意で、未指定なら以降のレイヤーへそのまま落ちます。
-
 
 ### Auto Routing
 

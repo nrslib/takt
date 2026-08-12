@@ -46,7 +46,7 @@ Two execution modes share the same engine: **Interactive** (`src/features/intera
 ```text
 app/cli/       CLI entrypoint, command wiring, routing
 core/          Engine internals — no IO providers here
-  workflow/    Engine, step executors, rule evaluation, instruction builder,
+  workflow/    Engine, step executors, rule evaluation, instruction builder
   config/      Workflow/global/project config models
   models/      Shared domain types + Zod schemas
   runtime/     Runtime environment & shell presets
@@ -67,7 +67,7 @@ Each normal step runs up to three phases on the same provider session: Phase 1 m
 
 ### Rule evaluation (5-stage fallback)
 
-`src/core/workflow/evaluation/` — first match wins: (1) aggregate `all()`/`any()` for parallel parents, (2) Phase 3 `[STEP:N]` tag, (3) Phase 1 tag, (4) AI judge for `ai("...")` conditions, (5) AI judge over every condition. Deterministic `when(...)` expressions (e.g. `findings.*`) are evaluated before tags. Quirks: tag rules match by array **index**; multiple tags → last match wins; if rules exist but nothing matches the workflow **fails fast** — silently picking a default is a bug.
+`src/core/workflow/evaluation/` — first match wins: (1) aggregate `all()`/`any()` for parallel parents, (2) Phase 3 `[STEP:N]` tag, (3) Phase 1 tag, (4) AI judge for `ai("...")` conditions, (5) AI judge over every condition. Deterministic `when(...)` expressions are evaluated before tags. Quirks: tag rules match by array **index**; multiple tags → last match wins; if rules exist but nothing matches the workflow **fails fast** — silently picking a default is a bug.
 
 ### Instruction assembly
 
@@ -89,10 +89,6 @@ Verified against `resolveStepProviderModel` / `PROVIDER_MODEL_SOURCE_PRIORITY` a
 6. `persona_providers` (deprecated)
 7. Auto routing (`auto.rules` / `auto.dynamic` / `auto.fallback`)
 8. Workflow → project (`.takt/config.yaml`) → global (`~/.takt/config.yaml`) → provider default
-
-
-`runtime.yaml` profiles may declare `escalate: <profile>`: "when work resolved to this profile runs out of room, hand it to that profile". The compiler resolves one hop into a provider/model and hangs it on the resolution result (`StepProviderInfo.escalation`), so consumers never re-read configuration or match model names. Unknown targets, self-reference, and cycles are load-time errors. Only profile-backed layers carry it — an explicit CLI/step/`workflow_call` provider override drops it, and auto-routing pools do not carry one.
-
 
 ### Config & workflow loading
 
@@ -116,7 +112,6 @@ Prompts are split into facet kinds — keep additions in the right bucket:
 
 Output contracts live under `facets/output-contracts/`. User overrides: `~/.takt/facets/<type>/` or `.takt/facets/<type>/`.
 
-
 ## Runtime directory layout
 
 ```text
@@ -125,6 +120,7 @@ Output contracts live under `facets/output-contracts/`. User overrides: `~/.takt
   config.yaml           provider / provider_routing / quality gates / overrides
   workflows/, facets/   project-level overrides
   tasks.yaml, tasks/    queued task specs
+  runs/{slug}/          per-run reports, logs, metadata, and context
   logs/, events/        NDJSON session logs / analytics (gitignored)
 builtins/{en,ja}/       Bundled facets + workflows (read from dist/ at runtime)
 ```

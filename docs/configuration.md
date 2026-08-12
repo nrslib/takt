@@ -383,7 +383,6 @@ Project config accepts most global keys and overrides their global values (e.g. 
 
 Project config values override global config when both are set.
 
-
 ### Task Execution Config Environment Overrides
 
 `auto_requeue_max_attempts` and `ignore_exceed` can also be set with
@@ -506,7 +505,6 @@ Paths must be absolute paths to executable files. Environment variables take pre
 
 Provider and model selection uses the single, field-by-field precedence contract documented under [Provider Routing](#provider-routing). Normal steps, parallel sub-steps, synthetic steps, and workflow calls follow that contract for the layers available to each kind. Parallel sub-steps do not support promotion.
 
-
 In workflow YAML, `model: null` is an explicit model omission for a normal step, parallel sub-step, or `loop_monitors.judge`. It differs from leaving `model` unspecified: an unspecified model continues to applicable lower-priority sources such as routing, workflow, the triggering step for loop monitor judges, and input sources, while `model: null` stops model resolution at that entry and leaves the effective model undefined. Use it when the resolved provider should use its own CLI or provider default instead of inheriting another model source. Providers that require an explicit model still fail validation when no model is supplied.
 
 ### Provider-specific Model Notes
@@ -596,7 +594,6 @@ provider:
       model: gpt-5.6-sol
       options:
         reasoning_effort: low
-      escalate: sol-high
     router:
       provider: codex
       model: gpt-5.6-luna
@@ -616,9 +613,6 @@ provider:
     internal_agents:
       selector:
         profile: router
-        profile: sol-high
-        profile: sol-high
-        profile: sol-high
 
   auto_routing:
     strategy: balanced
@@ -639,27 +633,6 @@ provider:
 
 `provider.defaults` and every `provider.targets` entry choose exactly one of a fixed `profile` or an auto-routing `pool`. Steps are named `<leaf-workflow-name>/<step-name>`; control nodes that do not run an agent (such as `workflow_call`) are not resolution targets.
 
-### `escalate` — this profile's last move
-
-A profile may name another profile with `escalate`. It declares "when work resolved to this profile runs out of room, hand it to that profile instead". One line on the weaker profile is the whole configuration; workflows never name a provider or a model.
-
-```yaml
-provider:
-  profiles:
-    reviewer-local:
-      provider: opencode
-      model: ollama-cloud/gemma4:31b
-      escalate: strong
-    strong:
-      provider: opencode
-      model: ollama-cloud/glm-5.2
-```
-
-- References are validated when the configuration is compiled, before any agent runs: an unknown target, a profile that escalates to itself, and a cyclic `escalate` chain are all load-time errors.
-- `escalate` is inherited through `extends`, like `provider` / `model` / `options`.
-- Only one hop is ever consumed. `escalate` is a worker's last move, not a ladder.
-- A step whose provider comes from an explicit `--provider`, step YAML, or `workflow_call` override is no longer running on that profile, so it has no escalation target. Steps assigned through an auto-routing `pool` do not carry one either.
-
 ### Resolution priority
 
 A workflow agent's provider is resolved by this ladder, later entries overriding earlier ones:
@@ -673,6 +646,10 @@ defaults
 
 The internal `selector`, `assistant`, and `loop-judge` agents resolve through a separate ladder. Every seat is optional; an unassigned seat uses the ordinary default resolution.
 
+```text
+defaults
+  < internal_agents.<agent>
+```
 
 When two targets at the same priority (for example two matching tags) assign different providers, resolution fails fast instead of picking one silently. Explicit `--provider` / `--model` on the command line are runtime overrides and are allowed in both legacy and runtime modes.
 
@@ -831,7 +808,6 @@ Provider and model are resolved independently at each layer. A provider-only ove
 `active promotion` means a normal agent step `promotion` entry whose execution-count (`at: <N>`) or `ai()` condition matched for the current execution. Parallel sub-steps cannot specify promotion, so their YAML provider/model follows an explicit CLI/environment override directly; see [Step-level Provider Promotion](./workflows.md#step-level-provider-promotion).
 
 An assigned `internal_agents` seat occupies the `step YAML provider/model` position for the role's synthetic step. Every seat is optional; an unassigned seat leaves the role on the layers below.
-
 
 ### Auto Routing
 

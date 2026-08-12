@@ -306,6 +306,8 @@ model: sonnet       # プロバイダーにそのまま渡されます
 language: ja        # en or ja
 ```
 
+run metadata、session、trace、report などの run artifact は `.takt/runs/<run>/` 配下の通常ファイルとして保存されます。resume / requeue では、該当する run state と report を引き継ぎます。
+
 TAKT に workflow step ごとの provider/model 選択を任せる場合は、top-level に具体 provider を設定したまま `auto_routing` の candidates を定義します。effective `auto_routing` の存在によって auto routing が有効になります。
 
 ```yaml
