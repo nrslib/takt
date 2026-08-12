@@ -553,6 +553,14 @@ describe('companion StepExecutor lifecycle', () => {
       expect(completedIds).toEqual(startedIds);
       if (behavior === 'returns') {
         expect(deps.recordSynthesizedAgentUsage).not.toHaveBeenCalled();
+      } else {
+        expect(deps.recordSynthesizedAgentUsage).toHaveBeenCalledOnce();
+        expect(deps.recordSynthesizedAgentUsage).toHaveBeenCalledWith(
+          'implement',
+          expect.objectContaining({ provider: 'mock' }),
+          false,
+          undefined,
+        );
       }
     },
   );

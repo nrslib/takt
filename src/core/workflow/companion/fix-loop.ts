@@ -129,8 +129,13 @@ function recordFailure(
   failures.push(failure);
   try {
     onAttemptFailure?.(failure);
-  } catch {
-    log.warn('Companion attempt failure observer failed; continuing advisory loop');
+  } catch (error) {
+    log.warn('Companion attempt failure observer failed; continuing advisory loop', {
+      stage: failure.stage,
+      fixRound: failure.fixRound,
+      sequence: failure.sequence,
+      reason: errorMessage(error),
+    });
   }
 }
 

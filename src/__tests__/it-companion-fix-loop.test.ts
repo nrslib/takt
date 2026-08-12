@@ -192,27 +192,51 @@ describe('CT-COMP-10 fail-soft and abort lifecycle', () => {
     expect(onAttemptFailure).toHaveBeenCalledWith(result.attemptFailures[0]);
   });
 
-  it('should retain the recorded failure when its observer throws', async () => {
+  it.each([
+    {
+      label: 'review rejects',
+      completeReview: vi.fn().mockRejectedValue(new Error('review provider crashed')),
+      executeFix: vi.fn(),
+      expectedFailure: { stage: 'review', fixRound: 0, reason: 'review provider crashed' },
+    },
+    {
+      label: 'fix throws',
+      completeReview: vi.fn().mockResolvedValue({
+        openMustFix: [finding('security-reviewer-1', 'a')],
+        escalated: false,
+      }),
+      executeFix: vi.fn().mockRejectedValue(new Error('fix provider crashed')),
+      expectedFailure: { stage: 'fix', fixRound: 1, sequence: 2, reason: 'fix provider crashed' },
+    },
+    {
+      label: 'fix returns a terminal status',
+      completeReview: vi.fn().mockResolvedValue({
+        openMustFix: [finding('security-reviewer-1', 'a')],
+        escalated: false,
+      }),
+      executeFix: vi.fn().mockResolvedValue(terminalResponse('error')),
+      expectedFailure: { stage: 'fix', fixRound: 1, sequence: 2, reason: 'provider failed' },
+    },
+  ])('should retain the recorded failure when its observer throws after $label', async ({
+    completeReview,
+    executeFix,
+    expectedFailure,
+  }) => {
     const original = response('implementation succeeded', 'session-1');
-    const observerFailure = new Error('failure observer crashed');
     const onAttemptFailure = vi.fn(() => {
-      throw observerFailure;
+      throw new Error('failure observer crashed');
     });
 
     const result = await runCompanionFixLoop({
       initialResponse: original,
       phase1Options: phase1Options(),
-      completeReview: vi.fn().mockRejectedValue(new Error('review provider crashed')),
-      executeFix: vi.fn(),
+      completeReview,
+      executeFix,
       onAttemptFailure,
     });
 
     expect(result.phaseResponse).toBe(original);
-    expect(result.attemptFailures).toEqual([{
-      stage: 'review',
-      fixRound: 0,
-      reason: 'review provider crashed',
-    }]);
+    expect(result.attemptFailures).toEqual([expectedFailure]);
     expect(onAttemptFailure).toHaveBeenCalledWith(result.attemptFailures[0]);
   });
 

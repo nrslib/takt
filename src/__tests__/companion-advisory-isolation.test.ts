@@ -164,9 +164,23 @@ describe('companion advisory isolation', () => {
         right: { kind: 'when', expression: 'companion.escalated' },
       } as const,
     },
+    {
+      label: 'inside a parallel aggregate condition',
+      condition: {
+        kind: 'aggregate',
+        aggregate: 'all',
+        targetConditions: [{ kind: 'when', expression: 'companion.escalated' }],
+      } as const,
+    },
   ])('should reject a programmatic workflow rule that reads advisory state $label', async ({ condition }) => {
     const judgeStatus = judge();
-    const step = companionStep();
+    const step = condition.kind === 'aggregate'
+      ? makeStep({
+          name: 'parallel-review',
+          parallel: [companionStep()],
+          rules: [],
+        })
+      : companionStep();
     step.rules = [{
       condition,
       next: 'ABORT',
