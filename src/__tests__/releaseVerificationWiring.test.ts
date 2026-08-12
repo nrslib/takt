@@ -1,6 +1,5 @@
 import { spawnSync } from 'node:child_process';
 import {
-  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -11,7 +10,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join, relative } from 'node:path';
+import { basename, dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
@@ -35,6 +34,10 @@ import serialGitConfig from '../../vitest.config.it.serial.git.js';
 import serialWorkflowConfig from '../../vitest.config.it.serial.workflow.js';
 import unitConfig from '../../vitest.config.unit.parallel.js';
 import { selectNpmTestRuns } from '../../scripts/run-npm-test.mjs';
+import {
+  RELEASE_GATE_SCRIPTS,
+  RELEASE_LOG_RELATIVE_PATH,
+} from '../../scripts/run-release-check.mjs';
 
 interface PackageManifest {
   scripts: Record<string, string>;
@@ -178,44 +181,49 @@ function hasIntegrationFileName(filePath: string): boolean {
     || fileName.endsWith('.performance.test.ts');
 }
 
-function releaseCommands(): string[] {
-  const [gateCommands, notification] = manifest.scripts['check:release'].split('; code=$?;');
-  expect(notification).toContain('exit $code');
-  return gateCommands.split(' && ');
-}
-
 function executeReleaseScript(failingCommand: string | undefined): {
   commands: string[];
   status: number | null;
   stdout: string;
+  log: string;
 } {
   const tempRoot = mkdtempSync(join(tmpdir(), 'takt-release-verification-'));
   const binDir = join(tempRoot, 'bin');
   const logPath = join(tempRoot, 'npm.log');
-  const npmStubPath = join(binDir, 'npm');
+  const releaseLogPath = join(process.cwd(), RELEASE_LOG_RELATIVE_PATH);
+  const npmStubPath = join(binDir, 'npm-cli.js');
   mkdirSync(binDir);
-  writeFileSync(npmStubPath, `#!/bin/sh
-printf '%s\\n' "$*" >> "$TAKT_RELEASE_LOG"
-if [ "$*" = "$TAKT_FAIL_COMMAND" ]; then
-  exit 23
-fi
-`);
-  chmodSync(npmStubPath, 0o755);
+  writeFileSync(npmStubPath, `
+import { appendFileSync } from 'node:fs';
+
+const command = process.argv.slice(2).join(' ');
+appendFileSync(process.env.TAKT_RELEASE_LOG, command + '\\n');
+process.stdout.write('stdout:' + command + '\\n');
+process.stderr.write('stderr:' + command + '\\n');
+if (command === process.env.TAKT_FAIL_COMMAND) {
+  process.exit(23);
+}
+  `);
+  mkdirSync(dirname(releaseLogPath), { recursive: true });
+  writeFileSync(releaseLogPath, 'stale log entry\\n');
 
   try {
     const result = spawnSync('/bin/sh', ['-c', manifest.scripts['check:release']], {
       encoding: 'utf8',
       env: {
         ...process.env,
-        PATH: binDir,
+        PATH: `${binDir}:${process.env.PATH}`,
+        npm_execpath: npmStubPath,
         TAKT_FAIL_COMMAND: failingCommand === undefined ? '' : failingCommand,
         TAKT_RELEASE_LOG: logPath,
       },
     });
     const commands = readFileSync(logPath, 'utf8').trim().split('\n');
-    return { commands, status: result.status, stdout: result.stdout };
+    const log = readFileSync(releaseLogPath, 'utf8');
+    return { commands, status: result.status, stdout: result.stdout, log };
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
+    rmSync(releaseLogPath, { force: true });
   }
 }
 
@@ -240,16 +248,15 @@ describe('release verification wiring', () => {
   });
 
   it('should run every release gate once', () => {
-    const commands = releaseCommands();
-
-    expect(commands).toEqual([
-      'npm run build',
-      'npm run lint',
-      'npm run test',
-      'npm run test:it:all',
-      'npm run test:e2e:all',
+    expect(manifest.scripts['check:release']).toBe('node scripts/run-release-check.mjs');
+    expect(RELEASE_GATE_SCRIPTS).toEqual([
+      'build',
+      'lint',
+      'test',
+      'test:it:all',
+      'test:e2e:all',
     ]);
-    expect(new Set(commands).size).toBe(commands.length);
+    expect(new Set(RELEASE_GATE_SCRIPTS).size).toBe(RELEASE_GATE_SCRIPTS.length);
   });
 
   it('should run light integration and isolated heavy integration shards as pull-request gates', () => {
@@ -313,7 +320,12 @@ describe('release verification wiring', () => {
       'run test:e2e:all',
     ]);
     expect(result.status).toBe(0);
+    expect(result.stdout).toContain(`[takt] check:release log: ${RELEASE_LOG_RELATIVE_PATH}`);
     expect(result.stdout).toContain('[takt] check:release passed');
+    expect(result.log).toContain(`[takt] check:release log: ${RELEASE_LOG_RELATIVE_PATH}`);
+    expect(result.log).toContain('stdout:run build');
+    expect(result.log).toContain('stderr:run build');
+    expect(result.log).not.toContain('stale log entry');
   });
 
   it.each([
@@ -343,7 +355,10 @@ describe('release verification wiring', () => {
 
     expect(result.commands).toEqual(expectedCommands);
     expect(result.status).toBe(23);
+    expect(result.stdout).toContain(`[takt] check:release log: ${RELEASE_LOG_RELATIVE_PATH}`);
     expect(result.stdout).toContain('[takt] check:release failed (exit=23)');
+    expect(result.log).toContain('[takt] check:release failed (exit=23)');
+    expect(result.log).not.toContain('stale log entry');
   });
 
   it('should keep fast unit and integration classifications disjoint', () => {

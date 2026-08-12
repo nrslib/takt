@@ -1,3 +1,8 @@
+import { once } from 'node:events';
+import { createWriteStream, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { Writable } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runTeedCommand } from '../../scripts/teed-command.mjs';
 
@@ -57,6 +62,48 @@ describe('teed command execution', () => {
     expect(result.code).toBe(3);
     expect(result.output).toContain('on-stdout');
     expect(result.output).toContain('on-stderr');
+  });
+
+  it('should write forwarded stdout and stderr to the provided log stream', async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'takt-teed-command-log-'));
+    const logPath = join(tempRoot, 'command.log');
+    const logStream = createWriteStream(logPath, { flags: 'w' });
+    captureStdout();
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    try {
+      await once(logStream, 'open');
+      await runTeedCommand(process.execPath, [
+        '-e',
+        "process.stdout.write('logged-stdout\\n'); process.stderr.write('logged-stderr\\n');",
+      ], { logStream });
+      logStream.end();
+      await once(logStream, 'finish');
+
+      const log = readFileSync(logPath, 'utf8');
+      expect(log).toContain('logged-stdout');
+      expect(log).toContain('logged-stderr');
+    } finally {
+      if (!logStream.closed) {
+        logStream.destroy();
+      }
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('should reject and stop the child when the log stream fails', async () => {
+    captureStdout();
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const logStream = new Writable({
+      write(_chunk, _encoding, callback) {
+        callback(new Error('log stream failed'));
+      },
+    });
+
+    await expect(runTeedCommand(process.execPath, [
+      '-e',
+      "setInterval(() => process.stdout.write('still-running\\n'), 10);",
+    ], { logStream })).rejects.toThrow('log stream failed');
   });
 
   it('should settle within the drain deadline when a grandchild still holds the pipe', async () => {
