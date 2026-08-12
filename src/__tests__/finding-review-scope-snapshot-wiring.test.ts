@@ -826,6 +826,7 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
         structuredCaller: { normalizeFindingIntake },
         findingContract: FINDING_CONTRACT,
         getRunPaths: () => ({ reportsAbs: reportDir }),
+        getFailureDir: () => join(targetPaths.runRootAbs, 'failures'),
         getFindingCallNamespace: () => '',
         getLanguage: () => 'en',
         getWorkflowName: () => 'test-workflow',

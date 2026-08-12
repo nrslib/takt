@@ -12,6 +12,7 @@ import { WorkflowCallExecutor } from '../core/workflow/engine/WorkflowCallExecut
 import { WorkflowCallRunner } from '../core/workflow/engine/WorkflowCallRunner.js';
 import { WorkflowEngine } from '../core/workflow/engine/WorkflowEngine.js';
 import { MAX_WORKFLOW_CALL_DEPTH } from '../core/workflow/workflow-call-depth.js';
+import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import type {
   RuntimeStepResolution,
   WorkflowCallCompleteLifecycle,
@@ -205,7 +206,7 @@ function createLifecycleHarness(options: HarnessOptions = {}): LifecycleHarness 
     sharedRuntime,
     resumeStackPrefix,
     consumeWorkflowCallContinuation: vi.fn(),
-    runPaths: { slug: 'run' } as never,
+    runPaths: buildRunPaths('/project', 'run'),
     setActiveResumePoint: vi.fn(() => {
       setActiveResumePointCalls++;
       if (
@@ -705,7 +706,7 @@ describe('WorkflowCallExecutor routing runtime', () => {
       sharedRuntime: { startedAtMs: 0 },
       resumeStackPrefix: [],
       consumeWorkflowCallContinuation: vi.fn(),
-      runPaths: { slug: 'run' },
+      runPaths: buildRunPaths('/project', 'run'),
       resolveWorkflowCall: vi.fn(),
       createEngine: vi.fn((_config, _cwd, _task, engineOptions) => {
         createdOptions.push(engineOptions as Record<string, unknown>);

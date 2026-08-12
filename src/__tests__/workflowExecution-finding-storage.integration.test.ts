@@ -486,7 +486,7 @@ steps:
     expect(existsSync(runPaths.findingContractDatabaseAbs)).toBe(true);
     expect(readMeta(projectDir, runSlug)).toMatchObject({
       status: 'failed',
-      reason: 'Step "implement" failed: injected provider failure',
+      reason: 'injected provider failure',
     });
     const sqlite = new DatabaseSync(runPaths.findingContractDatabaseAbs, {
       readOnly: true,
