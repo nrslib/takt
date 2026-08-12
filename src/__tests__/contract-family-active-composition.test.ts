@@ -389,7 +389,7 @@ describe('contract-family active composition', () => {
       'companion-moderate-review',
     )).toThrow();
     expect(() => assertCompanionDeclaration(
-      'ai-antipattern-review-moderator',
+      'review-companion-moderator',
       'companion-watch-review',
     )).toThrow();
   });

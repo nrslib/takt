@@ -6,7 +6,7 @@ import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { truncateUtf8 } from '../../shared/utils/utf8.js';
 import { assertPathSegmentsAreSafe } from '../../shared/utils/pathBoundary.js';
 import type { ReviewScopeBaseRange, TaskReviewScope } from './review-scope.js';
-import { resolveRealPathWithinProject } from './findings/admission-validation.js';
+import { resolveReviewCompletionPath } from './review-completion-path.js';
 import {
   discoverReviewCompletionReferences,
   type ReviewCompletionReferenceEvidence,
@@ -445,7 +445,7 @@ export function collectReviewCompletionEvidence(input: {
       addOmission(omissionCounts, 'file_unavailable');
       continue;
     }
-    const resolution = resolveRealPathWithinProject(input.cwd, path);
+    const resolution = resolveReviewCompletionPath(input.cwd, path);
     if (!resolution.ok) {
       addOmission(omissionCounts, 'file_unavailable');
       continue;

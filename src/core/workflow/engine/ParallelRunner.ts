@@ -59,6 +59,7 @@ import {
 } from './fallback-operation.js';
 import type { DynamicParallelSelectorCoordinator } from '../dynamic-parallel/selector-coordinator.js';
 import { validateProviderModelRequirements } from '../provider-model-requirements.js';
+import { formatReviewCompletionDiagnostic } from '../review-completion.js';
 import {
   AGENT_FAILURE_CATEGORIES,
   MAX_AGENT_FAILURE_MESSAGE_BYTES,
@@ -465,9 +466,24 @@ export class ParallelRunner {
                     sessionId,
                     onPromptResolved,
                   },
+                  executableSubStep.reviewCompletion === undefined,
                 )
               ),
               onPhaseStart: this.deps.onPhaseStart,
+              ...(executableSubStep.reviewCompletion === undefined
+                ? {}
+                : {
+                    onPhaseComplete: this.deps.onPhaseComplete,
+                    failurePersona: executableSubStep.persona ?? executableSubStep.name,
+                    recordFailure: () => recordAgentUsageEvent(
+                      this.deps.engineOptions,
+                      subStep.name,
+                      'parallel',
+                      subPm,
+                      false,
+                      undefined,
+                    ),
+                  }),
             });
             if (result.promptResolved) {
               promptResolvedAttempts.add(attempt.sequence);
@@ -492,9 +508,19 @@ export class ParallelRunner {
                 onPhaseComplete: this.deps.onPhaseComplete,
               });
             }
+            if (executableSubStep.reviewCompletion !== undefined) {
+              recordAgentUsageEvent(
+                this.deps.engineOptions,
+                subStep.name,
+                'parallel',
+                subPm,
+                supersededResponse.status === 'done',
+                supersededResponse.providerUsage,
+              );
+            }
           },
         });
-        const subResponse = phase1Result.response;
+        let subResponse = phase1Result.response;
         if (!promptResolvedAttempts.has(phase1Result.finalAttempt.sequence)) {
           throw new Error(`Missing prompt parts for phase start: ${subStep.name}:1`);
         }
@@ -506,13 +532,32 @@ export class ParallelRunner {
         if (subResponse.sessionId !== undefined) {
           updatePersonaSession(subSessionKey, subResponse.sessionId);
         }
-        completeObservedPhase1Attempt({
-          eventStep: subStep,
-          iteration: parentIteration,
-          attempt: phase1Result.finalAttempt,
-          response: subResponse,
-          onPhaseComplete: this.deps.onPhaseComplete,
-        });
+        if (executableSubStep.reviewCompletion !== undefined) {
+          subResponse = this.deps.stepExecutor.finalizeObservedReviewerAttempt({
+            eventStep: subStep,
+            executableStep: executableSubStep,
+            iteration: parentIteration,
+            attempt: phase1Result.finalAttempt,
+            response: subResponse,
+            runtime: subRuntime,
+            recordUsage: (success, usage) => recordAgentUsageEvent(
+              this.deps.engineOptions,
+              subStep.name,
+              'parallel',
+              subPm,
+              success,
+              usage,
+            ),
+          });
+        } else {
+          completeObservedPhase1Attempt({
+            eventStep: subStep,
+            iteration: parentIteration,
+            attempt: phase1Result.finalAttempt,
+            response: subResponse,
+            onPhaseComplete: this.deps.onPhaseComplete,
+          });
+        }
         if (subResponse.status === 'error' || subResponse.status === 'blocked' || subResponse.status === 'rate_limited') {
           state.stepOutputs.set(subStep.name, subResponse);
           return {
@@ -532,8 +577,122 @@ export class ParallelRunner {
           };
         }
 
+        let reviewCompletionDiagnostic: string | undefined;
+        if (executableSubStep.reviewCompletion !== undefined) {
+          let reviewerPhaseExecutionSequence = phase1Result.finalAttempt.sequence + 1;
+          const completion = await this.deps.stepExecutor.completeReviewerResponse({
+            step: executableSubStep,
+            originalInstruction: phase1Instruction,
+            initialResponse: subResponse,
+            executeRetry: async (instruction, sessionId) => {
+              const observedAttempts = new Map<number, typeof phase1Result.finalAttempt>();
+              const resolveObservedAttempt = (attempt: typeof phase1Result.finalAttempt) => {
+                const existing = observedAttempts.get(attempt.sequence);
+                if (existing !== undefined) return existing;
+                const created = { ...attempt, sequence: reviewerPhaseExecutionSequence++ };
+                observedAttempts.set(attempt.sequence, created);
+                return created;
+              };
+              const retry = await runPhase1WithEmptyRecovery({
+                instruction,
+                initialSessionId: sessionId,
+                retryProviderErrorFresh: false,
+                execute: async (attempt) => {
+                  const observedAttempt = resolveObservedAttempt(attempt);
+                  const observed = await executeObservedPhase1Attempt({
+                    enabled: this.deps.observabilityEnabled,
+                    runId: this.deps.observabilityRunId,
+                    workflowName: this.deps.getWorkflowName(),
+                    eventStep: subStep,
+                    spanStep: executableSubStep,
+                    iteration: parentIteration,
+                    attempt: observedAttempt,
+                    workflowStack: this.deps.getCurrentWorkflowStack?.(),
+                    sanitizeText: this.deps.sanitizeObservabilityText,
+                    providerInfo: subPm,
+                    execute: (attemptInstruction, attemptSessionId, onPromptResolved) => (
+                      this.executeSubStepAgent(
+                        executableSubStep,
+                        subPm,
+                        attemptInstruction,
+                        { ...agentOptions, sessionId: attemptSessionId, onPromptResolved },
+                        false,
+                      )
+                    ),
+                    onPhaseStart: this.deps.onPhaseStart,
+                    onPhaseComplete: this.deps.onPhaseComplete,
+                    failurePersona: executableSubStep.persona ?? executableSubStep.name,
+                    recordFailure: () => recordAgentUsageEvent(
+                      this.deps.engineOptions,
+                      subStep.name,
+                      'parallel',
+                      subPm,
+                      false,
+                      undefined,
+                    ),
+                  });
+                  return observed.response;
+                },
+                discardSession: () => undefined,
+                recordSupersededAttempt: (response, attempt) => {
+                  const observedAttempt = resolveObservedAttempt(attempt);
+                  completeObservedPhase1Attempt({
+                    eventStep: subStep,
+                    iteration: parentIteration,
+                    attempt: observedAttempt,
+                    response,
+                    onPhaseComplete: this.deps.onPhaseComplete,
+                  });
+                  recordAgentUsageEvent(
+                    this.deps.engineOptions,
+                    subStep.name,
+                    'parallel',
+                    subPm,
+                    response.status === 'done',
+                    response.providerUsage,
+                  );
+                },
+              });
+              return this.deps.stepExecutor.finalizeObservedReviewerAttempt({
+                eventStep: subStep,
+                executableStep: executableSubStep,
+                iteration: parentIteration,
+                attempt: resolveObservedAttempt(retry.finalAttempt),
+                response: retry.response,
+                runtime: subRuntime,
+                recordUsage: (success, usage) => recordAgentUsageEvent(
+                  this.deps.engineOptions,
+                  subStep.name,
+                  'parallel',
+                  subPm,
+                  success,
+                  usage,
+                ),
+              });
+            },
+          });
+          subResponse = completion.response;
+          updatePersonaSession(subSessionKey, completion.reviewerSessionId);
+          reviewCompletionDiagnostic = completion.diagnostic === undefined
+            ? undefined
+            : formatReviewCompletionDiagnostic(
+                completion.diagnostic,
+                this.deps.engineOptions.language,
+              );
+          if (subResponse.status === 'error' || subResponse.status === 'blocked' || subResponse.status === 'rate_limited') {
+            state.stepOutputs.set(subStep.name, subResponse);
+            return {
+              subStep,
+              response: subResponse,
+              instruction: phase1Instruction,
+              providerInfo: subPm,
+              durationMs: Math.max(0, subResponse.timestamp.getTime() - startedAt),
+            };
+          }
+        }
+
         let finalResponse = subResponse;
-        const phaseCtx = this.deps.optionsBuilder.buildPhaseRunnerContext(
+        const basePhaseContext = this.deps.optionsBuilder.buildPhaseRunnerContext(
             subStep,
             state,
             subResponse.content,
@@ -558,6 +717,9 @@ export class ParallelRunner {
               );
             },
           );
+          const phaseCtx = reviewCompletionDiagnostic === undefined
+            ? basePhaseContext
+            : { ...basePhaseContext, reviewCompletionDiagnostic };
           if (subStep.outputContracts && subStep.outputContracts.length > 0) {
             try {
               const reportResult = await runReportPhase(subStep, subIteration, phaseCtx);
@@ -1108,12 +1270,13 @@ export class ParallelRunner {
     providerInfo: NonNullable<StepRunResult['providerInfo']>,
     instruction: string,
     options: RunAgentOptions,
+    recordUsage = true,
   ): Promise<AgentResponse> {
     let response: AgentResponse;
     try {
       response = await executeAgent(subStep.persona, instruction, options);
     } catch (error) {
-      recordAgentUsageEvent(
+      if (recordUsage) recordAgentUsageEvent(
         this.deps.engineOptions,
         subStep.name,
         'parallel',
@@ -1123,7 +1286,7 @@ export class ParallelRunner {
       );
       throw error;
     }
-    recordAgentUsageEvent(
+    if (recordUsage) recordAgentUsageEvent(
       this.deps.engineOptions,
       subStep.name,
       'parallel',

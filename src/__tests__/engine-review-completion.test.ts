@@ -135,6 +135,45 @@ describe('WorkflowEngine review completion wiring', () => {
     expect(phase2.getSessionId(phase2.resolveSessionKey(step))).toBe('review-session-2');
   });
 
+  it('passes the review-completion judge seat options, permission, and failure directory through the common transport', async () => {
+    const step = reviewStep('reviewer', {
+      provider: 'mock',
+      providerSpecified: true,
+      reviewCompletion: { ...completion, maxRetry: 0 },
+    });
+    engine = new WorkflowEngine(normalConfig(step), cwd, 'task', {
+      projectCwd: cwd,
+      internalAgentSeats: {
+        reviewCompletionJudge: {
+          provider: 'claude',
+          model: 'judge-model',
+          permissionMode: 'readonly',
+          providerOptions: {
+            claude: { allowedTools: ['Read'] },
+          },
+        },
+      },
+    });
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      if (options.internalAgentName === 'review-completion-judge') {
+        expect(options.sessionId).toBeUndefined();
+        expect(options.resolvedExecution).toEqual({
+          provider: 'claude',
+          model: 'judge-model',
+          permissionMode: 'readonly',
+          providerOptions: { claude: { allowedTools: ['Read'] } },
+        });
+        expect(options.allowedTools).toEqual(['Read']);
+        expect(options.failureDir).toContain('.takt');
+        return judgeResponse(true);
+      }
+      options.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: instruction });
+      return reviewerResponse(String(persona), 'review', 'review-session');
+    });
+
+    await expect(engine.run()).resolves.toMatchObject({ status: 'completed' });
+  });
+
   it('clears the normal reviewer session after double-empty recovery succeeds fresh without one', async () => {
     const step = reviewStep('reviewer');
     const delegatedUsage = vi.fn();

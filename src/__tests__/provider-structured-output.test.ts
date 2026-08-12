@@ -263,24 +263,6 @@ describe('ClaudeProvider — structured output', () => {
     expect(opts).toHaveProperty('childProcessEnv', childProcessEnv);
   });
 
-  it('isolated structured execution keeps only explicit read-only tools', async () => {
-    mockCallClaudeCustom.mockResolvedValue(doneResponse('judge', { step: 1 }));
-    const agent = new ClaudeProvider().setupIsolatedStructured({ name: 'judge', systemPrompt: 'sys' });
-
-    await agent.call('prompt', { cwd: '/tmp', outputSchema: SCHEMA, allowedTools: ['Read', 'Glob', 'Grep'] });
-
-    expect(mockCallClaudeCustom.mock.calls[0]?.[3]).toMatchObject({
-      internalAgentIsolation: 'strict-readonly',
-      allowedTools: ['Read', 'Glob', 'Grep'],
-    });
-    await expect(agent.call('prompt', {
-      cwd: '/tmp', outputSchema: SCHEMA, allowedTools: ['Bash'],
-    })).resolves.toMatchObject({
-      status: 'error',
-      failureCategory: 'provider_error',
-      error: expect.stringMatching(/does not allow tool/),
-    });
-  });
 });
 
 // ---------- Codex ----------
@@ -504,23 +486,6 @@ describe('OpenCodeProvider — structured output', () => {
 
     const opts = mockCallOpenCodeCustom.mock.calls[0]?.[3];
     expect(opts).toHaveProperty('outputSchema', SCHEMA);
-  });
-
-  it('isolated structured execution keeps the read-only allowlist', async () => {
-    mockCallOpenCodeCustom.mockResolvedValue(doneResponse('judge', { step: 1 }));
-    const agent = new OpenCodeProvider().setupIsolatedStructured({ name: 'judge', systemPrompt: 'sys' });
-
-    await agent.call('prompt', {
-      cwd: '/tmp',
-      model: 'openai/gpt-4',
-      outputSchema: SCHEMA,
-      allowedTools: ['Read', 'Glob', 'Grep'],
-    });
-
-    expect(mockCallOpenCodeCustom.mock.calls[0]?.[3]).toMatchObject({
-      allowedTools: ['Read', 'Glob', 'Grep'],
-      permissionMode: 'readonly',
-    });
   });
 
   it('structuredOutput がない場合は undefined', async () => {

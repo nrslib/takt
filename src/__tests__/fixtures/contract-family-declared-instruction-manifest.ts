@@ -79,7 +79,7 @@ export const DECLARED_INSTRUCTION_MANIFEST: Readonly<Record<string, DeclaredInst
 export const COMPANION_DECLARATION_MANIFEST = {
   'ai-antipattern-review-companion': 'companion-watch-review',
   'testing-review-companion': 'companion-watch-testing',
-  'ai-antipattern-review-moderator': 'companion-moderate-review',
+  'review-companion-moderator': 'companion-moderate-review',
 } as const;
 
 interface CallerPathExpectation extends DeclaredInstructionExpectation {

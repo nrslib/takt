@@ -258,6 +258,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     abortSignal: params.options.abortSignal,
     executionProvider: params.options.provider,
     executionModel: params.options.model,
+    internalAgentSeats: params.options.internalAgentSeats,
     emitEvent: params.emitEvent,
     recordSynthesizedAgentUsage: (stepName, providerInfo, success, usage) =>
       recordAgentUsageEvent(params.options, stepName, 'normal', providerInfo, success, usage),

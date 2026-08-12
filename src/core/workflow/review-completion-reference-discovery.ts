@@ -3,7 +3,7 @@ import { extname, posix, resolve } from 'node:path';
 import { readRegularFileNoFollow } from '../../shared/utils/private-file.js';
 import { isSensitiveProjectFilePath } from '../../shared/utils/sensitive-file-path.js';
 import { assertPathSegmentsAreSafe } from '../../shared/utils/pathBoundary.js';
-import { resolveRealPathWithinProject } from './findings/admission-validation.js';
+import { resolveReviewCompletionPath } from './review-completion-path.js';
 
 const MAX_REFERENCE_SEEDS = 24;
 const MAX_REFERENCE_CANDIDATES = 16;
@@ -212,7 +212,7 @@ function safelyReadSource(
       (_violation, segmentPath) => new Error(`Unsafe review completion reference path: ${segmentPath}`),
     );
     if (inspected === null) return { kind: 'unavailable' };
-    const resolution = resolveRealPathWithinProject(cwd, path);
+    const resolution = resolveReviewCompletionPath(cwd, path);
     if (!resolution.ok) return { kind: 'unavailable' };
     if (resolution.stat.size > limits.maxFileBytes) return { kind: 'oversized' };
     const content = decodeUtf8(readRegularFileNoFollow(resolution.realPath, resolution.stat));
