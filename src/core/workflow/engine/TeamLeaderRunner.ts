@@ -120,6 +120,18 @@ function truncateTeamLeaderFailureContent(text: string): string {
   );
 }
 
+function selectPrimaryTeamLeaderFailure(failedResults: readonly PartResult[]): PartResult {
+  const primaryFailure = failedResults.find(
+    (result) => result.response.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+  )
+    ?? failedResults.find((result) => result.response.failureCategory !== undefined)
+    ?? failedResults[0];
+  if (primaryFailure === undefined) {
+    throw new Error('Team leader failure aggregation requires at least one failed part');
+  }
+  return primaryFailure;
+}
+
 export interface TeamLeaderRunnerDeps {
   readonly optionsBuilder: OptionsBuilder;
   readonly stepExecutor: StepExecutor;
@@ -796,13 +808,9 @@ export class TeamLeaderRunner {
         : timeoutContinuationFailed
           ? `Team leader timeout continuation failed: ${errors}`
           : `Team leader part failed: ${errors}`;
-      const providerFailure = failedResults.find(
-        (result) => result.response.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
-      );
+      const primaryFailure = selectPrimaryTeamLeaderFailure(failedResults);
       const boundedError = truncateTeamLeaderFailureContent(
-        sanitizeSensitiveText(providerFailure === undefined
-          ? errorMessage
-          : resolvePartErrorDetail(providerFailure)),
+        sanitizeSensitiveText(resolvePartErrorDetail(primaryFailure)),
       );
       const boundedContent = truncateTeamLeaderFailureContent(
         sanitizeSensitiveText(errorMessage),
@@ -813,9 +821,9 @@ export class TeamLeaderRunner {
         content: boundedContent,
         error: boundedError,
         timestamp: new Date(),
-        ...(providerFailure === undefined
+        ...(primaryFailure.response.failureCategory === undefined
           ? {}
-          : { failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR }),
+          : { failureCategory: primaryFailure.response.failureCategory }),
       };
       state.stepOutputs.set(step.name, errorResponse);
       state.lastOutput = errorResponse;

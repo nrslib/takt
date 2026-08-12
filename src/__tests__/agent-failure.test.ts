@@ -3,6 +3,7 @@ import {
   AGENT_FAILURE_CATEGORIES,
   classifyAbortSignalReason,
   createAgentFailureError,
+  createAgentResponseFailureError,
   createPartTimeoutReason,
   createProviderErrorFailure,
   createProviderStreamParseError,
@@ -52,6 +53,27 @@ describe('agent-failure', () => {
     expect(error.failureCategory).toBe(AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR);
     expect(error.reason).toBe('Gateway unavailable');
     expect(error.message).toBe('Gateway unavailable');
+  });
+
+  it('creates a typed failure from a categorized response', () => {
+    const error = createAgentResponseFailureError({
+      status: 'error',
+      content: '',
+      error: 'invalid stdout line',
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+    }, 'Agent failed');
+
+    expect(error.name).toBe('ProviderStreamParseError');
+    expect(error.message).toBe('provider stream parse error: invalid stdout line');
+  });
+
+  it('uses the shared detail fallback and boundary prefix for an unclassified response', () => {
+    const error = createAgentResponseFailureError({
+      status: 'blocked',
+      content: '',
+    }, 'Agent failed');
+
+    expect(error).toEqual(new Error('Agent failed: blocked'));
   });
 
   it('失敗分類の生成と表示整形を共通契約として扱う', () => {

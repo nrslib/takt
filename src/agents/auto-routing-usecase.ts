@@ -10,7 +10,7 @@ import { assertStrictStructuredOutputSchema } from '../core/workflow/engine/stru
 import { runAgent, type RunAgentOptions } from './runner.js';
 import { buildMaxTurnsOption } from './provider-call-options.js';
 import {
-  createAgentFailureError,
+  createAgentResponseFailureError,
 } from '../shared/types/agent-failure.js';
 
 const OUTPUT_SCHEMA = {
@@ -160,11 +160,10 @@ export function createWorkRequirementEstimator(options: WorkRequirementEstimator
           abortScope.aborted,
         ]);
         if (response.status !== 'done') {
-          const detail = response.error || response.content || response.status;
-          if (response.failureCategory !== undefined) {
-            throw createAgentFailureError(response.failureCategory, detail);
-          }
-          throw new Error(`Auto routing estimator did not complete: ${detail}`);
+          throw createAgentResponseFailureError(
+            response,
+            'Auto routing estimator did not complete',
+          );
         }
         return parseEstimate(response.structuredOutput ?? JSON.parse(response.content));
       } finally {

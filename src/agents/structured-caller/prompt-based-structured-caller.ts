@@ -55,9 +55,7 @@ import {
   type NormalizeFindingIntakeOptions,
 } from '../finding-intake-normalizer-usecase.js';
 import {
-  AGENT_FAILURE_CATEGORIES,
-  createAgentFailureError,
-  createProviderStreamParseError,
+  createAgentResponseFailureError,
   isProviderStreamParseError,
 } from '../../shared/types/agent-failure.js';
 
@@ -65,17 +63,6 @@ const log = createLogger('prompt-based-structured-caller');
 
 const RETRY_MAX_ATTEMPTS = 3;
 export const RETRY_DELAY_MS = 1000;
-
-function createStructuredCallFailure(response: AgentResponse, prefix: string): Error {
-  const detail = response.error || response.content || response.status;
-  if (response.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR) {
-    return createProviderStreamParseError(detail);
-  }
-  if (response.failureCategory !== undefined) {
-    return createAgentFailureError(response.failureCategory, detail);
-  }
-  return new Error(`${prefix}: ${detail}`);
-}
 
 function shouldRetryStructuredCall(error: unknown): boolean {
   return !isProviderStreamParseError(error);
@@ -240,7 +227,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
           );
 
           if (response.status !== 'done') {
-            throw createStructuredCallFailure(response, 'Team leader failed');
+            throw createAgentResponseFailureError(response, 'Team leader failed');
           }
 
           try {
@@ -277,7 +264,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
       const response = await this.requestPromptBasedRawResponse(prompt, options, options.inspectTools ?? []);
 
       if (response.status !== 'done') {
-        throw createStructuredCallFailure(response, 'Team leader failed');
+        throw createAgentResponseFailureError(response, 'Team leader failed');
       }
 
       let rawParts: unknown;
@@ -350,7 +337,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
       const response = await this.requestPromptBasedRawResponse(prompt, options, []);
 
       if (response.status !== 'done') {
-        throw createStructuredCallFailure(response, 'Team leader feedback failed');
+        throw createAgentResponseFailureError(response, 'Team leader feedback failed');
       }
 
       let raw: unknown;

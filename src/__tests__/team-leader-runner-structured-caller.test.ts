@@ -443,7 +443,8 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     expect(mockExecuteAgent).toHaveBeenCalledWith('coder', 'part-2', expect.any(Object));
     expect(result.response.status).toBe(expectedStatus);
     if (failOnPartError) {
-      expect(result.response.error).toBe('Team leader part failed: part-1: member failed');
+      expect(result.response.error).toBe('member failed');
+      expect(result.response.content).toBe('Team leader part failed: part-1: member failed');
     } else {
       expect(result.response.content).toContain('recovery complete');
     }
@@ -2450,9 +2451,11 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       );
 
       expect(result.response.status).toBe('error');
-      expect(result.response.error).toContain('part-1: part timeout: Part timeout after 1000ms');
-      expect(result.response.error).toContain('timeout-continuation: part timeout: Part timeout after 1000ms');
+      expect(result.response.error).toBe('part timeout: Part timeout after 1000ms');
       expect(result.response.error).not.toContain('timeout-continuation-2');
+      expect(result.response.failureCategory).toBe(AGENT_FAILURE_CATEGORIES.PART_TIMEOUT);
+      expect(result.response.content).toContain('part-1: part timeout: Part timeout after 1000ms');
+      expect(result.response.content).toContain('timeout-continuation: part timeout: Part timeout after 1000ms');
       expect(structuredCaller.requestMoreParts).toHaveBeenCalledTimes(2);
       expect(mockExecuteAgent).toHaveBeenCalledTimes(2);
       const [, continuationInstruction] = mockExecuteAgent.mock.calls[1] ?? [];
@@ -2561,10 +2564,11 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       );
 
       expect(result.response.status).toBe('error');
-      expect(result.response.error).toContain('Team leader timeout continuation failed');
-      expect(result.response.error).toContain('part-2: part timeout: Part timeout after 1000ms');
-      expect(result.response.error).toContain('timeout-continuation: part timeout: Continuation timeout after 1000ms');
+      expect(result.response.error).toContain('part timeout: Part timeout after 1000ms');
+      expect(result.response.error).not.toContain('Team leader timeout continuation failed');
+      expect(result.response.error).not.toContain('timeout-continuation:');
       expect(result.response.error).not.toContain('timeout-continuation-2');
+      expect(result.response.failureCategory).toBe(AGENT_FAILURE_CATEGORIES.PART_TIMEOUT);
       expect(Buffer.byteLength(result.response.content, 'utf8')).toBeLessThanOrEqual(
         MAX_AGENT_FAILURE_MESSAGE_BYTES,
       );
@@ -2573,12 +2577,117 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       );
       for (const marker of markers.slice(1)) {
         expect(result.response.content).toContain(marker);
-        expect(result.response.error).toContain(marker);
       }
+      expect(result.response.error).toContain(markers[1]);
+      expect(result.response.error).not.toContain(markers[2]);
       expect(mockExecuteAgent).toHaveBeenCalledTimes(3);
       const [, continuationInstruction] = mockExecuteAgent.mock.calls[2] ?? [];
       expect(continuationInstruction).toContain('Timed-out part: part-2');
     });
+
+    it.each([
+      AGENT_FAILURE_CATEGORIES.PART_TIMEOUT,
+      AGENT_FAILURE_CATEGORIES.STREAM_IDLE_TIMEOUT,
+      AGENT_FAILURE_CATEGORIES.EXTERNAL_ABORT,
+    ])('preserves the primary %s category and error when failOnPartError closes the boundary', async (failureCategory) => {
+      mockExecuteAgent.mockResolvedValueOnce({
+        persona: 'coder',
+        status: 'error',
+        content: '',
+        error: 'Boundary-specific failure detail',
+        failureCategory,
+        timestamp: new Date('2026-04-01T00:00:00.000Z'),
+      });
+      const structuredCaller = {
+        decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxInitialParts, options) => {
+          options.onPromptResolved?.({
+            systemPrompt: 'team-leader-system',
+            userInstruction: 'leader instruction',
+          });
+          return { parts: [{ id: 'part-1', title: 'Implementation', instruction: 'Implement everything' }] };
+        }),
+        requestMoreParts: vi.fn().mockResolvedValue({ done: true, reasoning: 'stop', parts: [] }),
+      };
+
+      const result = await buildRunner(structuredCaller).runTeamLeaderStep(
+        buildStep(1, true),
+        buildState(),
+        'implement feature',
+        5,
+        vi.fn(),
+      );
+
+      expect(result.response.status).toBe('error');
+      expect(result.response.failureCategory).toBe(failureCategory);
+      expect(result.response.error).toContain('Boundary-specific failure detail');
+      expect(result.response.content).toContain('All team leader parts failed');
+    });
+
+    it.each([false, true])(
+      'keeps categorized Team Leader lineage when categorized and generic parts are reversed (reversed=%s)',
+      async (reversed) => {
+        mockExecuteAgent.mockImplementation(async (_persona, executedInstruction: string) => {
+          if (executedInstruction.includes('categorized area')) {
+            return {
+              persona: 'coder',
+              status: 'error',
+              content: '',
+              error: 'Categorized idle failure',
+              failureCategory: AGENT_FAILURE_CATEGORIES.STREAM_IDLE_TIMEOUT,
+              timestamp: new Date('2026-04-01T00:00:00.000Z'),
+            };
+          }
+          return {
+            persona: 'coder',
+            status: 'error',
+            content: '',
+            error: 'Generic part failure',
+            timestamp: new Date('2026-04-01T00:00:01.000Z'),
+          };
+        });
+        const categorizedPart = {
+          id: 'categorized',
+          title: 'Categorized',
+          instruction: 'Implement categorized area',
+        };
+        const genericPart = {
+          id: 'generic',
+          title: 'Generic',
+          instruction: 'Implement generic area',
+        };
+        const structuredCaller = {
+          decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxInitialParts, options) => {
+            options.onPromptResolved?.({
+              systemPrompt: 'team-leader-system',
+              userInstruction: 'leader instruction',
+            });
+            return { parts: reversed
+              ? [genericPart, categorizedPart]
+              : [categorizedPart, genericPart] };
+          }),
+          requestMoreParts: vi.fn().mockResolvedValue({ done: true, reasoning: 'stop', parts: [] }),
+        };
+
+        const result = await buildRunner(structuredCaller).runTeamLeaderStep(
+          buildStep(2, true),
+          buildState(),
+          'implement feature',
+          5,
+          vi.fn(),
+        );
+
+        expect(result.response).toMatchObject({
+          status: 'error',
+          error: 'stream idle timeout: Categorized idle failure',
+          failureCategory: AGENT_FAILURE_CATEGORIES.STREAM_IDLE_TIMEOUT,
+        });
+        expect(result.response.content).toContain('categorized: stream idle timeout: Categorized idle failure');
+        expect(result.response.content).toContain('generic: Generic part failure');
+        expect(result.providerInfo).toBeUndefined();
+        expect(result.workflowCallFailure).toBeUndefined();
+        expect(result.terminalOperation).toBeUndefined();
+      },
+    );
 
     it('Given a successful part and a timeout continuation provider_error, When feedback fails, Then the step fails loud', async () => {
       mockExecuteAgent.mockImplementation(async (_persona, executedInstruction: string) => {

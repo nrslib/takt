@@ -46,9 +46,7 @@ import {
   type RejectedTeamLeaderDecomposition,
 } from './team-leader-decomposition-regeneration.js';
 import {
-  AGENT_FAILURE_CATEGORIES,
-  createAgentFailureError,
-  createProviderStreamParseError,
+  createAgentResponseFailureError,
 } from '../shared/types/agent-failure.js';
 
 export interface FindingContractDecompositionContext {
@@ -206,14 +204,7 @@ export async function decomposeTask(
   const response = await requestDecompositionResponse(instruction, maxInitialParts, options);
 
   if (response.status !== 'done') {
-    if (response.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR) {
-      throw createProviderStreamParseError(response.error || response.content || response.status);
-    }
-    const detail = response.error || response.content || response.status;
-    if (response.failureCategory !== undefined) {
-      throw createAgentFailureError(response.failureCategory, detail);
-    }
-    throw new Error(`Team leader failed: ${detail}`);
+    throw createAgentResponseFailureError(response, 'Team leader failed');
   }
 
   const parts = response.structuredOutput?.parts;
@@ -246,14 +237,7 @@ function parseNonFindingContractDecomposition(
   maxInitialParts: number | undefined,
 ): DecomposeTaskResponse {
   if (response.status !== 'done') {
-    if (response.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR) {
-      throw createProviderStreamParseError(response.error || response.content || response.status);
-    }
-    const detail = response.error || response.content || response.status;
-    if (response.failureCategory !== undefined) {
-      throw createAgentFailureError(response.failureCategory, detail);
-    }
-    throw new Error(`Team leader failed: ${detail}`);
+    throw createAgentResponseFailureError(response, 'Team leader failed');
   }
 
   const parts = response.structuredOutput?.parts;
@@ -337,14 +321,7 @@ export async function requestMoreParts(
   );
 
   if (response.status !== 'done') {
-    if (response.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR) {
-      throw createProviderStreamParseError(response.error || response.content || response.status);
-    }
-    const detail = response.error || response.content || response.status;
-    if (response.failureCategory !== undefined) {
-      throw createAgentFailureError(response.failureCategory, detail);
-    }
-    throw new Error(`Team leader feedback failed: ${detail}`);
+    throw createAgentResponseFailureError(response, 'Team leader feedback failed');
   }
 
   const findingContractDecision = options.findingContract === undefined

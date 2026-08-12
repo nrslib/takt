@@ -11,6 +11,13 @@ export const MAX_AGENT_FAILURE_MESSAGE_BYTES = 8 * 1024;
 export type AgentFailureCategory =
   typeof AGENT_FAILURE_CATEGORIES[keyof typeof AGENT_FAILURE_CATEGORIES];
 
+export interface AgentFailureResponseLike {
+  readonly status: string;
+  readonly content: string;
+  readonly error?: string;
+  readonly failureCategory?: AgentFailureCategory;
+}
+
 export function isAgentFailureCategory(value: unknown): value is AgentFailureCategory {
   return Object.values(AGENT_FAILURE_CATEGORIES).some((category) => category === value);
 }
@@ -172,6 +179,17 @@ export function createAgentFailureError(
     category,
     reason: stringifyFailureReason(reason),
   });
+}
+
+export function createAgentResponseFailureError(
+  response: AgentFailureResponseLike,
+  fallbackPrefix: string,
+): Error {
+  const detail = response.error || response.content || response.status;
+  if (response.failureCategory !== undefined) {
+    return createAgentFailureError(response.failureCategory, detail);
+  }
+  return new Error(`${fallbackPrefix}: ${detail}`);
 }
 
 export function isAgentFailureError(error: unknown): error is AgentFailureError {

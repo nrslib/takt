@@ -2706,9 +2706,7 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
     expect(state.status).toBe('aborted');
     expect(abortFn).toHaveBeenCalledOnce();
     const reason = abortFn.mock.calls[0]![1] as string;
-    expect(reason).toContain('Step "reviewers" failed');
-    expect(reason).toContain('arch-review');
-    expect(reason).toContain('Claude Code process exited with code 1');
+    expect(reason).toBe('Claude Code process exited with code 1');
     expect(reason).not.toContain('Status not found for step "reviewers"');
 
     const reviewersOutput = state.stepOutputs.get('reviewers');
@@ -2764,7 +2762,9 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
     expect(reason).not.toContain('sk-secret123456');
 
     const reviewersOutput = state.stepOutputs.get('reviewers');
-    expect(reviewersOutput?.error).toBe(reviewersOutput?.content);
+    expect(reviewersOutput?.error).toBe(
+      'Provider failed with api_key=[REDACTED] and Authorization: Bearer [REDACTED]',
+    );
     expect(reviewersOutput?.content).not.toContain('top-secret');
     expect(reviewersOutput?.content).not.toContain('sk-secret123456');
 

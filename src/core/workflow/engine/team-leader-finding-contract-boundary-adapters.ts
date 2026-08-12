@@ -40,9 +40,7 @@ import type {
   FindingContractRecoveryRequest,
 } from './team-leader-finding-contract-recovery.js';
 import {
-  AGENT_FAILURE_CATEGORIES,
-  createAgentFailureError,
-  createProviderStreamParseError,
+  createAgentResponseFailureError,
 } from '../../../shared/types/agent-failure.js';
 
 type RawResponseRequest<TDigest extends FindingContractRejectedDecompositionDigest | FindingContractRejectedDecisionDigest> = (
@@ -124,18 +122,9 @@ function assertDoneResponse(
   boundaryKind: FindingContractControlBoundaryKind,
 ): void {
   if (response.status === 'done') return;
-  if (response.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR) {
-    throw createProviderStreamParseError(response.error || response.content || response.status);
-  }
-  if (response.failureCategory !== undefined) {
-    throw createAgentFailureError(
-      response.failureCategory,
-      response.error ?? response.content ?? response.status,
-    );
-  }
-  throw new Error(
-    `Finding Contract ${boundaryKind} provider response failed: `
-    + `${response.error ?? response.content}`,
+  throw createAgentResponseFailureError(
+    response,
+    `Finding Contract ${boundaryKind} provider response failed`,
   );
 }
 

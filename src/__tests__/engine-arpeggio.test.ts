@@ -49,6 +49,10 @@ import {
   cleanupWorkflowEngine,
 } from './engine-test-helpers.js';
 import type { RuleMatch } from '../core/workflow/index.js';
+import {
+  AGENT_FAILURE_CATEGORIES,
+  createProviderStreamParseError,
+} from '../shared/types/agent-failure.js';
 
 const {
   mockRunWithPhaseSpan,
@@ -284,6 +288,129 @@ describe('ArpeggioRunner integration', () => {
     const state = await engine.run();
 
     expect(state.status).toBe('aborted');
+  });
+
+  it('fails fast with the typed parse category when attempt 1 returns a parse response', async () => {
+    const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
+    writeFileSync(csvPath, 'name,task\nAlice,review', 'utf-8');
+    const config = buildArpeggioWorkflowConfig(
+      createArpeggioConfig(csvPath, templatePath, { maxRetries: 2 }),
+      tmpDir,
+    );
+    const workflowAborted = vi.fn();
+    mockRunAgentWithPrompt(makeResponse({
+      status: 'error',
+      content: '',
+      error: 'invalid stdout line',
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+    }));
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
+    engine.on('workflow:abort', workflowAborted);
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
+    expect(workflowAborted).toHaveBeenCalledOnce();
+    expect(workflowAborted.mock.calls[0]?.[1]).toBe(
+      'provider stream parse error: invalid stdout line',
+    );
+    expect(workflowAborted.mock.calls[0]?.[3]).toMatchObject({
+      kind: 'step_error',
+      reason: 'provider stream parse error: invalid stdout line',
+      error: 'provider stream parse error: invalid stdout line',
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+    });
+  });
+
+  it('fails fast with the typed parse category when attempt 1 throws a parse error', async () => {
+    const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
+    writeFileSync(csvPath, 'name,task\nAlice,review', 'utf-8');
+    const config = buildArpeggioWorkflowConfig(
+      createArpeggioConfig(csvPath, templatePath, { maxRetries: 2 }),
+      tmpDir,
+    );
+    const workflowAborted = vi.fn();
+    vi.mocked(runAgent).mockImplementationOnce(async (_persona, instruction, options) => {
+      options?.onPromptResolved?.({ systemPrompt: '', userInstruction: instruction });
+      throw createProviderStreamParseError('thrown invalid stdout line');
+    });
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
+    engine.on('workflow:abort', workflowAborted);
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
+    expect(workflowAborted.mock.calls[0]?.[3]).toMatchObject({
+      reason: 'provider stream parse error: thrown invalid stdout line',
+      error: 'provider stream parse error: thrown invalid stdout line',
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+    });
+  });
+
+  it('keeps retrying a non-parse error response', async () => {
+    const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
+    writeFileSync(csvPath, 'name,task\nAlice,review', 'utf-8');
+    const config = buildArpeggioWorkflowConfig(
+      createArpeggioConfig(csvPath, templatePath, { maxRetries: 1 }),
+      tmpDir,
+    );
+    mockRunAgentWithPrompt(
+      makeResponse({
+        status: 'error',
+        content: '',
+        error: 'temporary provider failure',
+        failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+      }),
+      makeResponse({ content: 'Recovered batch' }),
+    );
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(state.lastOutput?.content).toBe('Recovered batch');
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not let a rate-limited sibling hide a parse failure', async () => {
+    const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
+    writeFileSync(csvPath, 'name,task\nAlice,review\nBob,implement', 'utf-8');
+    const config = buildArpeggioWorkflowConfig(
+      createArpeggioConfig(csvPath, templatePath, { concurrency: 2, maxRetries: 2 }),
+      tmpDir,
+    );
+    const workflowAborted = vi.fn();
+    vi.mocked(runAgent).mockImplementation(async (_persona, instruction, options) => {
+      options?.onPromptResolved?.({ systemPrompt: '', userInstruction: instruction });
+      if (instruction.includes('Alice')) {
+        return makeResponse({
+          status: 'error',
+          content: '',
+          error: 'parallel parse failure',
+          failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+        });
+      }
+      return makeResponse({
+        status: 'rate_limited',
+        content: '',
+        error: 'parallel rate limit',
+        errorKind: 'rate_limit',
+      });
+    });
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
+    engine.on('workflow:abort', workflowAborted);
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
+    expect(workflowAborted.mock.calls[0]?.[3]).toMatchObject({
+      reason: 'provider stream parse error: parallel parse failure',
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+    });
   });
 
   it('should write output file when output_path is configured', async () => {

@@ -1061,12 +1061,16 @@ export class ParallelRunner {
         terminalResults,
         status: 'rate_limited',
         providerInfo: rateLimitedResult.providerInfo ?? parentPm,
-        terminalOperation: rateLimitedResult.terminalOperation,
+        primaryFailure: rateLimitedResult,
       });
     }
 
     const errorResults = terminalResults.filter((r) => r.response.status === 'error');
     if (errorResults.length > 0) {
+      const primaryFailure = this.firstFailureResult(errorResults);
+      if (primaryFailure === undefined) {
+        throw new Error(`Parallel step "${step.name}" has no primary error result`);
+      }
       return this.createTerminalParentResult({
         step,
         state,
@@ -1074,12 +1078,17 @@ export class ParallelRunner {
         subResults,
         terminalResults,
         status: 'error',
-        providerInfo: errorResults[0]?.providerInfo ?? parentPm,
+        providerInfo: primaryFailure.providerInfo ?? parentPm,
+        primaryFailure,
       });
     }
 
     const blockedResults = terminalResults.filter((r) => r.response.status === 'blocked');
     if (blockedResults.length > 0) {
+      const primaryFailure = blockedResults[0];
+      if (primaryFailure === undefined) {
+        throw new Error(`Parallel step "${step.name}" has no primary blocked result`);
+      }
       return this.createTerminalParentResult({
         step,
         state,
@@ -1087,8 +1096,8 @@ export class ParallelRunner {
         subResults,
         terminalResults: blockedResults,
         status: 'blocked',
-        providerInfo: blockedResults[0]?.providerInfo ?? parentPm,
-        terminalOperation: blockedResults[0]?.terminalOperation,
+        providerInfo: primaryFailure.providerInfo ?? parentPm,
+        primaryFailure,
       });
     }
 
@@ -1237,29 +1246,28 @@ export class ParallelRunner {
         runtime,
       });
     if (restatementSlot !== undefined) {
+      const restatementTerminalResult: ParallelSubStepResult = {
+        subStep: restatementSlot.step,
+        response: restatementSlot.response,
+        instruction: '',
+        providerInfo: restatementSlot.providerInfo,
+        ...(restatementSlot.terminalOperation === undefined
+          ? {}
+          : { terminalOperation: restatementSlot.terminalOperation }),
+      };
       return this.createTerminalParentResult({
         step,
         state,
         stepIteration,
         subResults,
-        terminalResults: [{
-          subStep: restatementSlot.step,
-          response: restatementSlot.response,
-          instruction: '',
-          providerInfo: restatementSlot.providerInfo,
-          ...(restatementSlot.terminalOperation === undefined
-            ? {}
-            : { terminalOperation: restatementSlot.terminalOperation }),
-        }],
+        terminalResults: [restatementTerminalResult],
         status: restatementSlot.response.status === 'blocked'
           ? 'blocked'
           : restatementSlot.response.status === 'rate_limited'
             ? 'rate_limited'
             : 'error',
         providerInfo: restatementSlot.providerInfo,
-        ...(restatementSlot.terminalOperation === undefined
-          ? {}
-          : { terminalOperation: restatementSlot.terminalOperation }),
+        primaryFailure: restatementTerminalResult,
       });
     }
 
@@ -1328,10 +1336,7 @@ export class ParallelRunner {
         providerInfo: parentPm,
       },
     );
-    const selectedFailure = this.selectFailureByDefinitionOrder(
-      subResults,
-      `Step "${step.name}" failed`,
-    );
+    const selectedFailure = this.selectFailureByDefinitionOrder(subResults);
     return {
       response: aggregatedResponse,
       instruction: aggregatedInstruction,
@@ -1764,37 +1769,38 @@ export class ParallelRunner {
     terminalResults: ParallelSubStepResult[];
     status: ParallelTerminalStatus;
     providerInfo: StepRunResult['providerInfo'];
-    primaryFailure?: ParallelSubStepResult;
-    terminalOperation?: StepRunResult['terminalOperation'];
+    primaryFailure: ParallelSubStepResult;
   }): StepRunResult {
     const content = this.buildTerminalDiagnostic(
       options.step,
       options.terminalResults,
       options.status,
     );
-    const primaryFailure = options.primaryFailure ?? this.firstFailureResult(options.terminalResults);
-    const failureCategory = primaryFailure?.response.failureCategory;
+    const primaryFailure = options.primaryFailure;
+    const failureCategory = primaryFailure.response.failureCategory;
     const boundedContent = truncateUtf8PreservingMarker(content, MAX_AGENT_FAILURE_MESSAGE_BYTES);
-    const rejectedFailure = primaryFailure?.executionRejected === true;
-    const failureError = primaryFailure === undefined
-      ? undefined
-      : truncateUtf8PreservingMarker(
-        sanitizeSensitiveText(primaryFailure.response.error ?? primaryFailure.response.content),
-        MAX_AGENT_FAILURE_MESSAGE_BYTES,
-      );
+    const failureError = truncateUtf8PreservingMarker(
+      sanitizeSensitiveText(primaryFailure.response.error ?? primaryFailure.response.content),
+      MAX_AGENT_FAILURE_MESSAGE_BYTES,
+    );
     const response: AgentResponse = {
       persona: options.step.name,
       status: options.status,
       content: boundedContent,
       timestamp: new Date(),
       ...(options.status === 'error' || options.status === 'rate_limited'
-        ? { error: failureCategory === undefined && rejectedFailure
-          ? boundedContent
-          : failureError ?? boundedContent }
+        ? { error: failureError || boundedContent }
         : {}),
       ...(failureCategory && { failureCategory }),
       ...(options.status === 'rate_limited'
-        ? this.firstRateLimitMetadata(options.terminalResults)
+        ? {
+            ...(primaryFailure.response.errorKind === undefined
+              ? {}
+              : { errorKind: primaryFailure.response.errorKind }),
+            ...(primaryFailure.response.rateLimitInfo === undefined
+              ? {}
+              : { rateLimitInfo: primaryFailure.response.rateLimitInfo }),
+          }
         : {}),
     };
 
@@ -1809,18 +1815,14 @@ export class ParallelRunner {
       );
     }
 
-    const parentReason = `Step "${options.step.name}" failed: ${boundedContent}`;
-    const selectedFailure = options.primaryFailure === undefined
-      ? this.selectFailureByDefinitionOrder(options.subResults, parentReason)
-      : this.toRunFailure(options.primaryFailure, parentReason)
-        ?? this.selectFailureByDefinitionOrder(options.subResults, parentReason);
+    const selectedFailure = this.toRunFailure(primaryFailure);
     return {
       response,
       instruction: options.subResults.map((result) => result.instruction).join('\n\n'),
       providerInfo: options.providerInfo,
       ...(selectedFailure === undefined ? {} : { workflowCallFailure: selectedFailure }),
-      ...(options.terminalOperation !== undefined
-        ? { terminalOperation: options.terminalOperation }
+      ...(primaryFailure.terminalOperation !== undefined
+        ? { terminalOperation: primaryFailure.terminalOperation }
         : {}),
       consumedStepIterations: [
         options.step.name,
@@ -1836,10 +1838,9 @@ export class ParallelRunner {
 
   private selectFailureByDefinitionOrder(
     results: ParallelSubStepResult[],
-    parentReason: string,
   ): StepRunResult['workflowCallFailure'] {
     for (const result of results) {
-      const failure = this.toRunFailure(result, parentReason);
+      const failure = this.toRunFailure(result);
       if (failure !== undefined) {
         return failure;
       }
@@ -1849,7 +1850,6 @@ export class ParallelRunner {
 
   private toRunFailure(
     result: ParallelSubStepResult,
-    parentReason: string,
   ): StepRunResult['workflowCallFailure'] {
     if (result.workflowCallFailure !== undefined) {
       return result.workflowCallFailure;
@@ -1864,7 +1864,7 @@ export class ParallelRunner {
     return createRunFailure({
       kind: 'step_error',
       step: result.subStep.name,
-      reason: result.response.failureCategory === undefined ? parentReason : failureError,
+      reason: failureError,
       error: failureError,
       ...(result.response.failureCategory === undefined
         ? {}
@@ -1917,17 +1917,6 @@ export class ParallelRunner {
     )
       ?? results.find((result) => result.response.failureCategory !== undefined)
       ?? results.find((result) => result.response.status === 'error');
-  }
-
-  private firstRateLimitMetadata(results: ParallelSubStepResult[]): Pick<AgentResponse, 'errorKind' | 'rateLimitInfo'> {
-    const rateLimitedResult = results.find((result) => result.response.status === 'rate_limited');
-    if (!rateLimitedResult) {
-      return {};
-    }
-    return {
-      ...(rateLimitedResult.response.errorKind && { errorKind: rateLimitedResult.response.errorKind }),
-      ...(rateLimitedResult.response.rateLimitInfo && { rateLimitInfo: rateLimitedResult.response.rateLimitInfo }),
-    };
   }
 
 }
