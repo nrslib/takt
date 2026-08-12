@@ -125,6 +125,7 @@ export class WorkflowCallRunner {
     providerSource: WorkflowEngineOptions['providerSource'];
     model: string | undefined;
     modelSource: WorkflowEngineOptions['modelSource'];
+    providerPermissionMode: WorkflowEngineOptions['providerPermissionMode'];
     providerEscalation: WorkflowEngineOptions['providerEscalation'];
     providerOptions: WorkflowEngineOptions['providerOptions'];
   } {
@@ -136,6 +137,7 @@ export class WorkflowCallRunner {
       providerSource: options.providerSource,
       model: options.model,
       modelSource: options.modelSource,
+      permissionMode: options.providerPermissionMode,
     });
     const providerOptions = resolveEffectiveProviderOptions(
       options.providerOptionsSource,
@@ -149,6 +151,7 @@ export class WorkflowCallRunner {
       providerSource: providerInfo.providerSource,
       model: providerInfo.model,
       modelSource: providerInfo.modelSource,
+      providerPermissionMode: providerInfo.permissionMode,
       // 親 workflow 自身の provider 宣言が勝った場合、engine 既定 profile の
       // 格上げ先はもうその provider のものではないので引き継がない。
       providerEscalation: providerInfo.providerSource === options.providerSource
@@ -184,6 +187,9 @@ export class WorkflowCallRunner {
         providerSource: workflowCallProviderModel.providerSource,
         model: workflowCallProviderModel.model,
         modelSource: workflowCallProviderModel.modelSource,
+        permissionMode: workflowCallProviderModel.providerSource === parentProviderInfo.providerSource
+          ? parentProviderInfo.providerPermissionMode
+          : undefined,
       },
     };
   }
@@ -642,15 +648,21 @@ export class WorkflowCallRunner {
           providerSource: runtimeProviderInfo.providerSource,
           model: runtimeProviderInfo.model,
           modelSource: runtimeProviderInfo.modelSource,
+          permissionMode: runtimeProviderInfo.permissionMode,
           providerEscalation: undefined,
         }
       : this.resolveChildProviderModel(step, childWorkflow);
     const parentProviderContext = this.resolveParentWorkflowProviderContext();
+    const inheritedProviderOptions = runtime.fallback
+      ? runtimeProviderInfo.providerOptions
+      : childProviderModel.providerSource === parentProviderContext.providerSource
+        ? parentProviderContext.providerOptions
+        : undefined;
     const childResult = await this.executor.execute({
       step,
       preparedExecution,
       childProviderInfo: childProviderModel,
-      parentProviderOptions: parentProviderContext.providerOptions,
+      parentProviderOptions: inheritedProviderOptions,
       personaProviders: this.buildChildPersonaProviders(step),
       providerRouting: this.buildChildProviderRouting(step),
       providerLadders: this.buildChildProviderLadders(),

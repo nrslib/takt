@@ -57,6 +57,7 @@ class TaskSummarizer {
     private readonly providerType: ProviderType,
     private readonly model: string | undefined,
     private readonly providerOptions: StepProviderOptions | undefined,
+    private readonly permissionMode: import('../../core/models/types.js').PermissionMode | undefined,
   ) {}
 
   /**
@@ -84,7 +85,7 @@ class TaskSummarizer {
     const response = await agent.call(prompt, {
       cwd,
       model: this.model,
-      permissionMode: 'readonly',
+      permissionMode: this.permissionMode ?? 'readonly',
       providerOptions: this.providerOptions,
     });
 
@@ -124,6 +125,7 @@ export async function summarizeTaskName(
     resolved.provider,
     options.model ?? resolved.model,
     providerOptions,
+    resolved.permissionMode,
   );
   return summarizer.summarize(taskName, options.cwd);
 }

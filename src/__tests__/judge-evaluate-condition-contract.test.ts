@@ -47,11 +47,9 @@ describe('evaluateCondition judge instruction contract', () => {
     expect(instruction).toContain('worker result with a unique regression summary');
     expect(instruction).toContain('needs_fix when verification shows a regression');
     expect(instruction).toContain('approved when verification passes');
-    expect(runAgent).toHaveBeenCalledWith(undefined, instruction, expect.objectContaining({
+    expect(runAgent).toHaveBeenCalledWith(undefined, expect.stringContaining(instruction), expect.objectContaining({
       cwd: '/repo',
-      outputSchema: expect.objectContaining({
-        required: ['matched_index', 'reason'],
-      }),
+      maxTurns: 1,
     }));
   });
 });

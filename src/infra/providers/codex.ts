@@ -5,7 +5,6 @@
 import {
   callCodex,
   callCodexCustom,
-  callCodexIsolatedStructured,
   type CodexCallOptions,
 } from '../codex/index.js';
 import { resolveOpenaiApiKey, resolveCodexCliPath } from '../config/index.js';
@@ -17,7 +16,6 @@ function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
     cwd: options.cwd,
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
-    internalAgentIsolation: options.internalAgentIsolation,
     model: options.model,
     reasoningEffort: options.providerOptions?.codex?.reasoningEffort,
     permissionMode: options.permissionMode,
@@ -40,9 +38,7 @@ function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
 /** Codex provider — delegates to OpenAI Codex SDK */
 export class CodexProvider implements Provider {
   readonly supportsStructuredOutput = true;
-  readonly supportsIsolatedStructuredExecution = true;
   readonly supportsNativeImageInput = true;
-  readonly supportsStrictInternalAgentIsolation = true;
 
   getRuntimeInstructions(_allowedTools?: string[]): string | null {
     return null;
@@ -66,19 +62,4 @@ export class CodexProvider implements Provider {
     return { call };
   }
 
-  setupIsolatedStructured(config: AgentSetup): ProviderAgent {
-    const { name, systemPrompt } = config;
-    const call = async (
-      prompt: string,
-      options: ProviderCallOptions,
-    ): Promise<AgentResponse> => {
-      const codexOptions = toCodexOptions(options);
-      return callCodexIsolatedStructured(
-        name,
-        systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt,
-        codexOptions,
-      );
-    };
-    return { call };
-  }
 }

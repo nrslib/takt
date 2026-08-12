@@ -23,18 +23,7 @@ describe('PiProvider', () => {
     const provider = new PiProvider();
 
     expect(provider.supportsStructuredOutput).toBe(false);
-    expect(provider.supportsIsolatedStructuredExecution).toBe(false);
     expect(provider.supportsNativeImageInput).toBe(true);
-    expect(provider.supportsStrictInternalAgentIsolation).toBe(false);
-  });
-
-  it('returns an error response for isolated structured execution', async () => {
-    const agent = new PiProvider().setupIsolatedStructured({ name: 'worker', systemPrompt: '' });
-    const response = await agent.call('implement', { cwd: '/tmp/work', sessionId: 'session-1' });
-
-    expect(response.status).toBe('error');
-    expect(response.error).toBe('Provider "pi" does not support isolated structured execution');
-    expect(response.sessionId).toBe('session-1');
   });
 
   it('passes Pi options and the persona system prompt to the SDK client', async () => {

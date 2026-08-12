@@ -10,7 +10,6 @@ import type { PermissionMode, McpServerConfig } from '../../core/models/index.js
 import type { ClaudeEffort } from '../../core/models/workflow-types.js';
 import type { AgentErrorKind, ProviderUsageSnapshot, RateLimitInfo } from '../../core/models/response.js';
 import type { ProviderImageAttachment } from '../providers/types.js';
-import type { InternalAgentIsolation } from '../../shared/types/provider.js';
 import type {
   StreamEvent as SharedStreamEvent,
   StreamCallback as SharedStreamCallback,
@@ -104,7 +103,6 @@ export interface ClaudeCallOptions {
   cwd: string;
   abortSignal?: AbortSignal;
   sessionId?: string;
-  internalAgentIsolation?: InternalAgentIsolation;
   allowedTools?: string[];
   /** MCP servers configuration */
   mcpServers?: Record<string, McpServerConfig>;
@@ -144,7 +142,6 @@ export interface ClaudeSpawnOptions {
   cwd: string;
   abortSignal?: AbortSignal;
   sessionId?: string;
-  internalAgentIsolation?: InternalAgentIsolation;
   allowedTools?: string[];
   /** MCP servers configuration */
   mcpServers?: Record<string, McpServerConfig>;

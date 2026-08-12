@@ -73,8 +73,7 @@ describe('getWorkflowDescription', () => {
           provider: 'codex',
           model: 'gpt-selector',
           providerSource: 'project',
-          permissionMode: 'readonly',
-          allowedTools: ['request_user_input', 'update_plan', 'view_image', 'web_search'],
+          allowedTools: [],
           canEdit: false,
         },
         { name: 'architecture', parallelRole: 'fixed' },
@@ -154,7 +153,7 @@ describe('getWorkflowDescription', () => {
     });
   });
 
-  it('OpenCode selectorをpreview生成前に拒否する', () => {
+  it('OpenCode selectorをshared transportでpreviewできる', () => {
     const projectDir = createProject();
     const workflowDir = join(projectDir, '.takt', 'workflows');
     mkdirSync(workflowDir, { recursive: true });
@@ -182,11 +181,11 @@ describe('getWorkflowDescription', () => {
       '        next: COMPLETE',
     ].join('\n'));
 
-    expect(() => getWorkflowDescription(
+    expect(getWorkflowDescription(
       'unsupported-selector-preview',
       projectDir,
       1,
-    )).toThrow('Provider "opencode" does not support strict internal-agent isolation');
+    ).stepPreviews).toHaveLength(1);
   });
 
   it('AI向けselector previewへ実行用provider optionsを含めない', () => {
@@ -230,7 +229,6 @@ describe('getWorkflowDescription', () => {
       provider: 'codex',
       model: 'gpt-selector',
       providerSource: 'project',
-      permissionMode: 'readonly',
     });
     expect(selectorPreview).not.toHaveProperty('providerOptions');
     expect(serializedPreview).not.toContain('selector-user');

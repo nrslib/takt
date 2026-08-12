@@ -24,7 +24,7 @@ function response(status: AgentResponse['status']): AgentResponse {
 
 describe('CT-COMP-06 and CT-COMP-11 structured internal agent execution', () => {
   it.each(['selector', 'reviewer', 'moderator', 'judge'] as const)(
-    'should execute %s stateless, tool-free, strict-readonly and record successful usage',
+    'should execute %s with its resolved runtime profile and record successful usage',
     async (purpose) => {
       const call = vi.fn().mockResolvedValue(response('done'));
       const recordUsage = vi.fn();
@@ -54,12 +54,12 @@ describe('CT-COMP-06 and CT-COMP-11 structured internal agent execution', () => 
           failureDir: '/project/.takt/runs/run/failures',
           language: 'en',
           resolution: { provider: 'mock', model: 'mock-model', providerOptions: {} },
-          permissionMode: 'readonly',
-          allowedTools: [],
-          mcpServers: {},
-          sessionId: undefined,
         }),
       );
+      const callOptions = call.mock.calls[0]?.[3];
+      expect(callOptions).not.toHaveProperty('allowedTools');
+      expect(callOptions).not.toHaveProperty('mcpServers');
+      expect(callOptions).not.toHaveProperty('sessionId');
       expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({
         purpose,
         success: true,

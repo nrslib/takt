@@ -38,7 +38,7 @@ vi.mock('../shared/utils/index.js', async () => {
 import { runAgent } from '../agents/runner.js';
 import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 import { WorkflowEngine } from '../core/workflow/engine/WorkflowEngine.js';
-import { DefaultStructuredCaller } from '../agents/structured-caller.js';
+import { ProviderNeutralStructuredCaller } from '../agents/structured-caller.js';
 import type { WorkflowConfig, WorkflowStep, AgentResponse, ArpeggioStepConfig } from '../core/models/index.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import {
@@ -119,7 +119,7 @@ function createEngineOptions(tmpDir: string): WorkflowEngineOptions {
   return {
     projectCwd: tmpDir,
     reportDirName: 'test-report-dir',
-    structuredCaller: new DefaultStructuredCaller(),
+    structuredCaller: new ProviderNeutralStructuredCaller(),
   };
 }
 

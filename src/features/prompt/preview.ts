@@ -71,12 +71,7 @@ function printDynamicSelectorMetadata(
   info(`Dynamic selector provider source: ${formatConfiguredValue(selector.providerSource)}`);
   info(`Dynamic selector model source: ${formatConfiguredValue(selector.modelSource)}`);
   info(`Dynamic selector provider options: ${formatProviderOptions(selector.providerOptions)}`);
-  info('Dynamic selector permission: readonly');
-  info(`Dynamic selector native tools: ${
-    selector.nativeTools.length === 0
-      ? 'none'
-      : selector.nativeTools.map(sanitizeTerminalText).join(', ')
-  }`);
+  info(`Dynamic selector permission: ${formatConfiguredValue(selector.permissionMode)}`);
 }
 
 function formatConfiguredValue(value: string | undefined): string {
@@ -86,7 +81,7 @@ function formatConfiguredValue(value: string | undefined): string {
 function formatProviderOptions(
   providerOptions: SelectorProviderInfo['providerOptions'],
 ): string {
-  if (Object.keys(providerOptions).length === 0) {
+  if (providerOptions === undefined || Object.keys(providerOptions).length === 0) {
     return 'not configured';
   }
   return sanitizeTerminalText(JSON.stringify(redactProviderOptions(providerOptions)));

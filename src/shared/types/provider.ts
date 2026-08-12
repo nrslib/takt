@@ -15,14 +15,6 @@ export const PROVIDER_TYPES = [
 
 export type ProviderType = (typeof PROVIDER_TYPES)[number];
 
-export type InternalAgentIsolation = 'strict-readonly';
-
-export function createStrictInternalAgentIsolationError(provider: ProviderType): Error {
-  return new Error(
-    `Provider "${provider}" does not support strict internal-agent isolation required by dynamic parallel selector`,
-  );
-}
-
 const PROVIDER_TYPE_SET: ReadonlySet<string> = new Set(PROVIDER_TYPES);
 
 export function isProviderType(value: unknown): value is ProviderType {

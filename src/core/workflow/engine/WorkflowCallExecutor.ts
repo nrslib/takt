@@ -212,6 +212,8 @@ export class WorkflowCallExecutor {
         cwd: this.deps.getCwd(),
         provider: childAutoRouting.router.provider,
         model: childAutoRouting.router.model,
+        providerOptions: childAutoRouting.router.providerOptions,
+        permissionMode: childAutoRouting.router.permissionMode,
         language: options.language,
         childProcessEnv: options.childProcessEnv,
         abortSignal: options.abortSignal,
@@ -562,6 +564,9 @@ export class WorkflowCallExecutor {
       providerSource: request.childProviderInfo.providerSource,
       model: request.childProviderInfo.model,
       modelSource: request.childProviderInfo.modelSource,
+      // Explicitly overwrite the inherited value, including with undefined. The
+      // permission belongs to the profile that supplied childProviderInfo.provider.
+      providerPermissionMode: request.childProviderInfo.permissionMode,
       providerOptions: mergeProviderOptions(
         request.parentProviderOptions,
         request.step.overrides?.providerOptions,

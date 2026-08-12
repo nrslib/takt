@@ -12,7 +12,7 @@ import { WorkflowEngine } from '../core/workflow/index.js';
 import type { CompanionDiffReader } from '../core/workflow/companion/diff-reader.js';
 import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
 import type { SelectorGitCommandRunner } from '../core/workflow/dynamic-parallel/selector-git-command-runner.js';
-import { DefaultStructuredCaller } from '../agents/structured-caller.js';
+import { ProviderNeutralStructuredCaller } from '../agents/structured-caller.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
 import { resolveRefToContent } from '../infra/config/loaders/resource-resolver.js';
 import {
@@ -68,7 +68,6 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 const SELECTOR_PROVIDER = {
   provider: 'mock' as const,
   providerOptions: {},
-  nativeTools: [],
 };
 const SELECTOR_GIT_COMMAND_RUNNER: SelectorGitCommandRunner = {
   run: async () => ({ output: Buffer.alloc(0), bytes: 0 }),
@@ -344,7 +343,7 @@ function responseForReturn(
 
 function selection(selectedIds: string[], rationale: string): ScenarioEntry {
   return {
-    persona: 'takt-internal',
+    persona: 'dynamic-facet-selector',
     status: 'done',
     content: rationale,
     structuredOutput: {
@@ -655,7 +654,7 @@ describe('experimental builtin workflow', () => {
           'ai-antipattern-review-moderator': { provider: 'mock' },
         },
         companionDiffReader: COMPANION_DIFF_READER_WITH_FINDING,
-        structuredCaller: new DefaultStructuredCaller(),
+        structuredCaller: new ProviderNeutralStructuredCaller(),
         workflowCallResolver: ({ parentWorkflow, step, projectCwd, lookupCwd }) =>
           resolveWorkflowCallTarget(parentWorkflow, step, projectCwd, lookupCwd),
       });
@@ -761,7 +760,7 @@ describe('experimental builtin workflow', () => {
           'ai-antipattern-review-moderator': { provider: 'mock' },
         },
         companionDiffReader: COMPANION_DIFF_READER,
-        structuredCaller: new DefaultStructuredCaller(),
+        structuredCaller: new ProviderNeutralStructuredCaller(),
         workflowCallResolver: ({ parentWorkflow, step, projectCwd, lookupCwd }) =>
           resolveWorkflowCallTarget(parentWorkflow, step, projectCwd, lookupCwd),
       });
@@ -822,7 +821,7 @@ describe('experimental builtin workflow', () => {
         selectorProvider: SELECTOR_PROVIDER,
         selectorGitCommandRunner: SELECTOR_GIT_COMMAND_RUNNER,
         companionDiffReader: COMPANION_DIFF_READER,
-        structuredCaller: new DefaultStructuredCaller(),
+        structuredCaller: new ProviderNeutralStructuredCaller(),
         workflowCallResolver: ({ parentWorkflow, step, projectCwd, lookupCwd }) =>
           resolveWorkflowCallTarget(parentWorkflow, step, projectCwd, lookupCwd),
       });
@@ -881,7 +880,7 @@ describe('experimental builtin workflow', () => {
           'ai-antipattern-review-moderator': { provider: 'mock' },
         },
         companionDiffReader: COMPANION_DIFF_READER_WITH_FINDING,
-        structuredCaller: new DefaultStructuredCaller(),
+        structuredCaller: new ProviderNeutralStructuredCaller(),
         workflowCallResolver: ({ parentWorkflow, step, projectCwd, lookupCwd }) =>
           resolveWorkflowCallTarget(parentWorkflow, step, projectCwd, lookupCwd),
       });

@@ -15,6 +15,8 @@ export interface ProviderModelResolutionContext {
   personaProviders?: Record<string, PersonaProviderEntry>;
   /** `escalate` target of the profile behind the engine-level `provider`/`model` defaults. */
   escalation?: ProviderEscalationTarget;
+  /** Permission mode tied to the engine-level runtime defaults profile. */
+  permissionMode?: import('../models/types.js').PermissionMode;
 }
 
 export interface StepProviderModelInput extends ProviderModelResolutionContext {
@@ -42,6 +44,7 @@ export interface StepProviderModelOutput {
   model: string | undefined;
   providerSource?: ProviderResolutionSource;
   modelSource?: ProviderResolutionSource;
+  permissionMode?: import('../models/types.js').PermissionMode;
   /**
    * `escalate` target declared by the runtime.yaml profile that supplied the provider.
    * A profile always carries provider and model together, so the provider-winning layer is
@@ -56,6 +59,8 @@ export interface WorkflowCallProviderModelInput {
   providerSource?: ProviderResolutionSource;
   model?: string;
   modelSource?: ProviderResolutionSource;
+  /** Permission mode tied to the inherited provider source. */
+  permissionMode?: import('../models/types.js').PermissionMode;
 }
 
 export interface WorkflowCallProviderModelOutput {
@@ -63,6 +68,7 @@ export interface WorkflowCallProviderModelOutput {
   providerSource?: ProviderResolutionSource;
   model: string | undefined;
   modelSource?: ProviderResolutionSource;
+  permissionMode?: import('../models/types.js').PermissionMode;
 }
 
 export interface LoopMonitorJudgeProviderModelInput {
@@ -201,12 +207,12 @@ function stableSerialize(value: unknown): string {
 }
 
 export function tagRoutingEntryIdentity(
-  entry: Pick<ProviderRoutingEntry, 'provider' | 'model' | 'providerOptions' | 'escalation'>,
+  entry: Pick<ProviderRoutingEntry, 'provider' | 'model' | 'providerOptions' | 'permissionMode' | 'escalation'>,
 ): string {
   const options = entry.providerOptions !== undefined ? stableSerialize(entry.providerOptions) : '';
   // escalate 先が違えば別の割り当てである。identity から外すと、格上げ先だけが
   // 異なる2つの tag 割り当てが「同じ」と判定され、fail-fast を素通りする。
-  return `${entry.provider ?? ''}::${entry.model ?? ''}::${options}::${entry.escalation?.profile ?? ''}`;
+  return `${entry.provider ?? ''}::${entry.model ?? ''}::${options}::${entry.permissionMode ?? ''}::${entry.escalation?.profile ?? ''}`;
 }
 
 /**
@@ -233,7 +239,7 @@ function resolveTagProviderRoutingEntry(
   providerRouting: ProviderRoutingConfig | undefined,
   tags: readonly string[] | undefined,
   tagConflictPolicy: TagRoutingConflictPolicy | undefined,
-): Pick<ProviderRoutingEntry, 'provider' | 'model' | 'escalation'> | undefined {
+): Pick<ProviderRoutingEntry, 'provider' | 'model' | 'permissionMode' | 'escalation'> | undefined {
   if (!providerRouting?.tags || !tags || tags.length === 0) {
     return undefined;
   }
@@ -262,11 +268,15 @@ function resolveTagProviderRoutingEntry(
     const escalationOverride = entry.provider !== undefined
       ? entry.escalation
       : resolved?.escalation;
+    const permissionModeOverride = entry.provider !== undefined
+      ? entry.permissionMode
+      : resolved?.permissionMode;
     resolved = {
       ...(resolved?.provider !== undefined ? { provider: resolved.provider } : {}),
       ...(resolved?.model !== undefined ? { model: resolved.model } : {}),
       ...(entry.provider !== undefined ? { provider: entry.provider } : {}),
       ...(entry.model !== undefined ? { model: entry.model } : {}),
+      ...(permissionModeOverride !== undefined ? { permissionMode: permissionModeOverride } : {}),
       ...(escalationOverride !== undefined ? { escalation: escalationOverride } : {}),
     };
   }
@@ -398,14 +408,29 @@ export function resolveStepProviderModel(input: StepProviderModelInput): StepPro
     persona_providers: personaEntry?.escalation,
     'runtime-v1': input.escalation,
   });
+  const permissionMode = resolveValueForProviderSource(providerSource, {
+    'provider_routing.steps': routingStepEntry?.permissionMode,
+    'provider_routing.tags': routingTagEntry?.permissionMode,
+    'provider_routing.personas': routingPersonaEntry?.permissionMode,
+    persona_providers: personaEntry?.permissionMode,
+    'runtime-v1': input.permissionMode,
+  });
 
   return {
     provider,
     model,
     providerSource,
     modelSource,
+    ...(permissionMode !== undefined ? { permissionMode } : {}),
     ...(escalation !== undefined ? { escalation } : {}),
   };
+}
+
+function resolveValueForProviderSource<T>(
+  providerSource: ProviderResolutionSource | undefined,
+  bySource: Partial<Record<ProviderResolutionSource, T | undefined>>,
+): T | undefined {
+  return providerSource === undefined ? undefined : bySource[providerSource];
 }
 
 /**
@@ -416,7 +441,7 @@ function resolveEscalationForProviderSource(
   providerSource: ProviderResolutionSource | undefined,
   bySource: Partial<Record<ProviderResolutionSource, ProviderEscalationTarget | undefined>>,
 ): ProviderEscalationTarget | undefined {
-  return providerSource === undefined ? undefined : bySource[providerSource];
+  return resolveValueForProviderSource(providerSource, bySource);
 }
 
 export function resolveWorkflowCallProviderModel(
@@ -450,7 +475,18 @@ export function resolveWorkflowCallProviderModel(
   const modelSource = explicitModelSource !== undefined
     ? explicitModelSource
     : lowerModel?.source;
-  return { provider, providerSource, model, modelSource };
+  // Permission is part of the profile that supplied the provider. A child workflow
+  // provider declaration replaces that profile, while a model-only declaration does not.
+  const permissionMode = providerSource === input.providerSource
+    ? input.permissionMode
+    : undefined;
+  return {
+    provider,
+    providerSource,
+    model,
+    modelSource,
+    ...(permissionMode !== undefined ? { permissionMode } : {}),
+  };
 }
 
 export function resolveLoopMonitorJudgeProviderModel(

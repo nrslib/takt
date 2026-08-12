@@ -10,7 +10,7 @@ import type {
   StepProviderOptions,
   ProviderPermissionProfiles,
 } from '../core/models/index.js';
-import type { InternalAgentIsolation, ProviderType } from '../shared/types/provider.js';
+import type { ProviderType } from '../shared/types/provider.js';
 
 export type { StreamCallback };
 
@@ -37,7 +37,6 @@ export interface ResolvedAgentExecution {
 /** Common options for running agents */
 export interface RunAgentOptions {
   cwd: string;
-  executionProfile?: 'isolated-structured';
   projectCwd?: string;
   abortSignal?: AbortSignal;
   sessionId?: string;
@@ -49,7 +48,6 @@ export interface RunAgentOptions {
   workflowBundleResourceRoot?: string;
   internalSystemPrompt?: string;
   internalAgentName?: string;
-  internalAgentIsolation?: InternalAgentIsolation;
   allowedTools?: string[];
   mcpServers?: Record<string, McpServerConfig>;
   maxTurns?: number;

@@ -1,12 +1,11 @@
 import type { McpServerConfig, PermissionMode } from '../../core/models/index.js';
 import type { ClaudeEffort, ClaudeSandboxSettings } from '../../core/models/workflow-types.js';
-import type { InternalAgentIsolation, StreamCallback } from '../../shared/types/provider.js';
+import type { StreamCallback } from '../../shared/types/provider.js';
 
 export interface ClaudeHeadlessCallOptions {
   cwd: string;
   abortSignal?: AbortSignal;
   sessionId?: string;
-  internalAgentIsolation?: InternalAgentIsolation;
   model?: string;
   anthropicApiKey?: string;
   /** Anthropic-compatible API base URL */

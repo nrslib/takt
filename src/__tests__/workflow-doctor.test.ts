@@ -249,7 +249,7 @@ steps:
     expect(mockError).not.toHaveBeenCalled();
   });
 
-  it('reports an unresolved dynamic selector provider contract', async () => {
+  it('accepts a dynamic selector provider through the shared transport', async () => {
     writeWorkflow(projectDir, '.takt/config.yaml', [
       'takt_providers:',
       '  selector:',
@@ -270,13 +270,9 @@ steps:
         mode: replace
 `);
 
-    await expect(doctorWorkflowCommand([filePath], projectDir)).rejects.toThrow(
-      'Workflow validation failed',
-    );
-
-    expect(mockError).toHaveBeenCalledWith(
-      expect.stringContaining('Provider "opencode" does not support strict internal-agent isolation'),
-    );
+    await expect(doctorWorkflowCommand([filePath], projectDir)).resolves.toBeUndefined();
+    expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining('dynamic-selector-provider.yaml'));
+    expect(mockError).not.toHaveBeenCalled();
   });
 
   it('uses the CLI selector override for runtime contract validation', async () => {
@@ -348,7 +344,7 @@ steps:
     expect(mockError).not.toHaveBeenCalled();
   });
 
-  it('reports selector resolution failures when only a called workflow is dynamic', async () => {
+  it('accepts shared selector transport when only a called workflow is dynamic', async () => {
     writeWorkflow(projectDir, '.takt/config.yaml', [
       'takt_providers:',
       '  selector:',
@@ -387,12 +383,9 @@ steps:
         next: COMPLETE
 `);
 
-    await expect(doctorWorkflowCommand([parentPath], projectDir)).rejects.toThrow(
-      'Workflow validation failed',
-    );
-    expect(mockError).toHaveBeenCalledWith(
-      expect.stringContaining('Provider "opencode" does not support strict internal-agent isolation'),
-    );
+    await expect(doctorWorkflowCommand([parentPath], projectDir)).resolves.toBeUndefined();
+    expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining('parent-dynamic.yaml'));
+    expect(mockError).not.toHaveBeenCalled();
   });
 
   it('reports invalid team_leader inspect_tools from workflow doctor output', async () => {

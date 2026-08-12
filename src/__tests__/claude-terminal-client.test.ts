@@ -135,7 +135,7 @@ describe('Claude terminal client', () => {
     });
   });
 
-  it('Given strict read-only internal isolation, When terminal lifecycle starts, Then strict CLI flags are used', async () => {
+  it('Given readonly permission and restricted provider options, When terminal lifecycle starts, Then configured CLI flags are used', async () => {
     const backend = createBackend();
     const transcriptReader = createTranscriptReader({
       sessionId: 'claude-session-1',
@@ -146,7 +146,6 @@ describe('Claude terminal client', () => {
     await callClaudeTerminal('selector', 'select reviewers', {
       cwd: '/tmp/worktree',
       backend: 'tmux',
-      internalAgentIsolation: 'strict-readonly',
       permissionMode: 'readonly',
       skillsEnabled: true,
       terminalBackend: backend,

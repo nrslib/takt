@@ -401,6 +401,7 @@ async function executeWorkflowInternal(
         reportFallbackProvider: options.reportFallbackProvider,
         rateLimitFallback: bootstrap.effectiveWorkflowConfig.rateLimitFallback,
         providerOptions: bootstrap.providerOptions,
+        providerPermissionMode: bootstrap.providerPermissionMode,
         selectorProvider: bootstrap.selectorProvider,
         selectorGitCommandRunner: new GitSelectorCommandRunner(),
         companionDiffReader: new GitCompanionDiffReader(),

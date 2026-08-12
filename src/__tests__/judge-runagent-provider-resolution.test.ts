@@ -82,7 +82,6 @@ describe('judge runAgent provider/model resolution (#556)', () => {
         'judge prompt',
         expect.objectContaining({
           cwd: '/repo',
-          provider: 'codex',
           resolvedProvider: 'codex',
           resolvedModel: 'gpt-5.2-codex',
         }),
@@ -112,7 +111,6 @@ describe('judge runAgent provider/model resolution (#556)', () => {
         'tag instruction',
         expect.objectContaining({
           cwd: '/repo',
-          provider: 'codex',
           resolvedProvider: 'codex',
           resolvedModel: 'gpt-5.2-codex',
         }),
@@ -139,7 +137,6 @@ describe('judge runAgent provider/model resolution (#556)', () => {
         expect.objectContaining({
           resolvedProvider: 'codex',
           resolvedModel: 'gpt-5.2-codex',
-          provider: 'codex',
         }),
       );
       expect(runAgent).toHaveBeenNthCalledWith(
@@ -149,7 +146,6 @@ describe('judge runAgent provider/model resolution (#556)', () => {
         expect.objectContaining({
           resolvedProvider: 'codex',
           resolvedModel: 'gpt-5.2-codex',
-          provider: 'codex',
         }),
       );
       expect(runAgent).toHaveBeenNthCalledWith(
@@ -159,7 +155,6 @@ describe('judge runAgent provider/model resolution (#556)', () => {
         expect.objectContaining({
           resolvedProvider: 'codex',
           resolvedModel: 'gpt-5.2-codex',
-          provider: 'codex',
         }),
       );
     });

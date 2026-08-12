@@ -157,7 +157,7 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
     const engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
       provider: 'mock',
-      selectorProvider: { provider: 'mock', providerOptions: {}, nativeTools: [] },
+      selectorProvider: { provider: 'mock', providerOptions: {} },
       selectorGitCommandRunner: emptySelectorGitCommandRunner,
     });
     engine.on('workflow:abort', (_state, reason) => abortReasons.push(reason));
@@ -197,7 +197,7 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
     const engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
       provider: 'mock',
-      selectorProvider: { provider: 'mock', providerOptions: {}, nativeTools: [] },
+      selectorProvider: { provider: 'mock', providerOptions: {} },
       selectorGitCommandRunner: emptySelectorGitCommandRunner,
     });
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {

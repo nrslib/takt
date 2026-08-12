@@ -144,6 +144,7 @@ export class OptionsBuilder {
       tagConflictPolicy: this.engineOptions.providerRoutingTagConflictPolicy,
       personaProviders: this.engineOptions.personaProviders,
       escalation: this.engineOptions.providerEscalation,
+      permissionMode: this.engineOptions.providerPermissionMode,
     });
     const providerOptions = this.resolveMergedProviderOptions(step, resolved.provider, runtime);
     const providerOptionsSources = this.resolveProviderOptionsSourcesForStep(step);
@@ -155,6 +156,7 @@ export class OptionsBuilder {
       providerOptions,
       providerOptionsSources,
       ...(resolved.escalation !== undefined ? { escalation: resolved.escalation } : {}),
+      ...(resolved.permissionMode !== undefined ? { permissionMode: resolved.permissionMode } : {}),
     };
   }
 
@@ -288,7 +290,8 @@ export class OptionsBuilder {
     const steps = this.getWorkflowSteps();
     const currentIndex = steps.findIndex((currentStep) => currentStep.name === step.name);
     const currentPosition = currentIndex >= 0 ? `${currentIndex + 1}/${steps.length}` : '?/?';
-    const { provider: resolvedProvider, model: resolvedModel } = this.resolveStepProviderModel(step, runtime);
+    const providerInfo = this.resolveStepProviderModel(step, runtime);
+    const { provider: resolvedProvider, model: resolvedModel } = providerInfo;
 
     const providerOptions = mergedProviderOptions
       ?? this.resolveMergedProviderOptions(step, resolvedProvider, runtime);
@@ -307,15 +310,18 @@ export class OptionsBuilder {
       workflowBundleResourceRoot: this.engineOptions.workflowBundleResourceRoot,
       resolvedProvider,
       resolvedModel,
-      permissionResolution: {
-        stepName: step.name,
-        // edit: true はステップが編集する宣言。プロファイル解決の結果が
-        // readonly でも、下限として edit を要求する（書けないのに書けと
-        // 指示される構成矛盾を防ぐ）。
-        requiredPermissionMode: step.requiredPermissionMode
-          ?? (step.edit === true ? 'edit' : undefined),
-        providerProfiles: this.engineOptions.providerProfiles,
-      },
+      ...(step.internalPermissionMode !== undefined
+        ? { permissionMode: step.internalPermissionMode }
+        : providerInfo.permissionMode !== undefined
+          ? { permissionMode: providerInfo.permissionMode }
+          : {
+            permissionResolution: {
+              stepName: step.name,
+              requiredPermissionMode: step.requiredPermissionMode
+                ?? (step.edit === true ? 'edit' : undefined),
+              providerProfiles: this.engineOptions.providerProfiles,
+            },
+          }),
       providerOptions,
       resolvedProviderOptions: providerOptions,
       language: this.getLanguage(),

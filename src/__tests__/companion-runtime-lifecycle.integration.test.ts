@@ -302,7 +302,6 @@ describe('companion runtime lifecycle', () => {
           provider: 'mock',
           model: undefined,
           providerOptions: {},
-          nativeTools: [],
         },
       }));
 

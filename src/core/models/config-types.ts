@@ -8,6 +8,7 @@
  */
 
 import type { ProviderType } from '../../shared/types/provider.js';
+import type { PermissionMode } from './types.js';
 import type { QualityGate, RateLimitFallbackConfig, StepProviderOptions, WorkflowRuntimeConfig } from './workflow-types.js';
 import type { ProviderPermissionProfiles } from './provider-profiles.js';
 import type { VcsProviderType } from './vcs-types.js';
@@ -22,6 +23,7 @@ export interface AutoRoutingCandidate {
   model: string;
   routingTier: RoutingTier;
   providerOptions?: StepProviderOptions;
+  permissionMode?: PermissionMode;
 }
 
 export interface AutoRoutingConfig {
@@ -29,6 +31,8 @@ export interface AutoRoutingConfig {
   router: {
     provider: ProviderType;
     model: string;
+    providerOptions?: StepProviderOptions;
+    permissionMode?: PermissionMode;
   };
   candidates: AutoRoutingCandidate[];
   defaultPool: string;
@@ -58,12 +62,16 @@ export interface ProviderEscalationTarget {
   provider: ProviderType;
   model: string;
   providerOptions?: StepProviderOptions;
+  /** Exact permission mode declared by the escalation profile. */
+  permissionMode?: PermissionMode;
 }
 
 export interface PersonaProviderEntry {
   provider?: ProviderType;
   model?: string;
   providerOptions?: StepProviderOptions;
+  /** Exact permission mode declared by the resolved runtime profile. */
+  permissionMode?: PermissionMode;
   /** Set only by the runtime.yaml compiler, from the referenced profile's `escalate`. */
   escalation?: ProviderEscalationTarget;
 }

@@ -99,14 +99,12 @@ const selectorGitCommandRunner = new GitSelectorCommandRunner();
 const MOCK_SELECTOR_PROVIDER = {
   provider: 'mock' as const,
   providerOptions: {},
-  nativeTools: [],
 };
 
 const CODEX_SELECTOR_PROVIDER = {
   provider: 'codex' as const,
   model: 'gpt-5',
   providerOptions: {},
-  nativeTools: ['request_user_input', 'update_plan', 'view_image', 'web_search'],
 };
 
 class WorkflowEngine extends BaseWorkflowEngine {
@@ -580,7 +578,6 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       resolvedExecution: unknown;
       outputSchema: Record<string, unknown> | undefined;
       internalSystemPrompt: string | undefined;
-      internalAgentIsolation: string | undefined;
       instruction: string;
     }> = [];
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
@@ -593,7 +590,6 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
         resolvedExecution: options?.resolvedExecution,
         outputSchema: options?.outputSchema,
         internalSystemPrompt: options?.internalSystemPrompt,
-        internalAgentIsolation: options?.internalAgentIsolation,
         instruction,
       });
       if (options?.outputSchema) {
@@ -666,7 +662,6 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       },
       bypassPermissions: false,
       internalSystemPrompt: expect.stringContaining('internal dynamic parallel selector'),
-      internalAgentIsolation: 'strict-readonly',
       outputSchema: expect.objectContaining({
         additionalProperties: false,
         required: ['selected_ids', 'rationale'],

@@ -34,8 +34,16 @@ import type {
   TaktProvidersConfig,
 } from '../../../core/models/config-types.js';
 import type { StepProviderOptions } from '../../../core/models/workflow-types.js';
+import type { PermissionMode } from '../../../core/models/types.js';
 import type { ProviderResolutionSource } from '../../../core/workflow/provider-options-trace.js';
 import { normalizeProviderOptions } from '../providerOptions.js';
+import { mergeProviderOptions } from '../providerOptions.js';
+import { resolveCapabilitySets } from '../loaders/capabilitySetResolver.js';
+import type { FacetResolutionContext } from '../loaders/workflowPackageScope.js';
+import {
+  resolveRuntimeProfileResourceContext,
+  type RuntimeProviderResolutionContext,
+} from './resolution-context.js';
 import { validateRuntimeProviderSection, flattenProfiles, type FlatProfile } from './policy.js';
 import type {
   RuntimeCompanionProviderAssignment,
@@ -59,6 +67,7 @@ export interface CompiledProviderEnvironment {
   providerRouting: ProviderRoutingConfig | undefined;
   autoRouting: AutoRoutingConfig | undefined;
   providerOptions: StepProviderOptions | undefined;
+  permissionMode: PermissionMode | undefined;
   /**
    * `escalate` target of the profile behind `defaults`. Steps that resolve their provider from
    * this layer inherit it; steps resolved by a target entry carry the entry's own escalation.
@@ -107,7 +116,7 @@ export interface LegacyProviderEnvironmentInput {
 
 export type ProviderConfigModel =
   | { kind: 'legacy'; legacy: LegacyProviderEnvironmentInput }
-  | { kind: 'runtime-v1'; section: RuntimeProviderSection };
+  | { kind: 'runtime-v1'; section: RuntimeProviderSection; resolutionContext?: RuntimeProviderResolutionContext };
 
 /** Factory/registry: pick the matching compiler for the loaded configuration format. */
 export function compileProviderEnvironment(
@@ -117,7 +126,7 @@ export function compileProviderEnvironment(
     case 'legacy':
       return compileLegacyProviderEnvironment(model.legacy);
     case 'runtime-v1':
-      return compileRuntimeProviderEnvironment(model.section);
+      return compileRuntimeProviderEnvironment(model.section, model.resolutionContext);
   }
 }
 
@@ -134,6 +143,7 @@ export function compileLegacyProviderEnvironment(
     providerRouting: legacy.providerRouting,
     autoRouting: legacy.autoRouting,
     providerOptions: legacy.providerOptions,
+    permissionMode: undefined,
     escalation: undefined,
     tagConflictPolicy: 'last-wins',
     internalAgents: undefined,
@@ -148,6 +158,7 @@ export function compileLegacyProviderEnvironment(
  */
 export function compileRuntimeProviderEnvironment(
   section: RuntimeProviderSection,
+  resolutionContext?: RuntimeProviderResolutionContext,
 ): CompiledProviderEnvironment {
   // Reuse the runtime section's up-front validation: unknown profile/pool references,
   // cyclic `extends`, and profiles missing provider/model all throw here.
@@ -157,14 +168,14 @@ export function compileRuntimeProviderEnvironment(
 
   const defaultProfile = initialAssignmentProfile(section.defaults);
   const defaults = defaultProfile !== undefined
-    ? resolveProfileEntry(defaultProfile, flatProfiles)
+    ? resolveProfileEntry(defaultProfile, flatProfiles, resolutionContext)
     : undefined;
-  const personaProviders = mapTargetEntries(section.targets?.personas, flatProfiles);
-  const providerRouting = buildProviderRouting(section, flatProfiles);
-  const autoRouting = buildAutoRoutingConfig(section, flatProfiles);
-  const internalAgents = buildInternalAgents(section.targets?.internal_agents, flatProfiles);
-  const companions = buildCompanions(section.targets?.companions, flatProfiles);
-  const providerLadders = buildProviderLadders(section, flatProfiles);
+  const personaProviders = mapTargetEntries(section.targets?.personas, flatProfiles, resolutionContext);
+  const providerRouting = buildProviderRouting(section, flatProfiles, resolutionContext);
+  const autoRouting = buildAutoRoutingConfig(section, flatProfiles, resolutionContext);
+  const internalAgents = buildInternalAgents(section.targets?.internal_agents, flatProfiles, resolutionContext);
+  const companions = buildCompanions(section.targets?.companions, flatProfiles, resolutionContext);
+  const providerLadders = buildProviderLadders(section, flatProfiles, resolutionContext);
 
   return {
     provider: defaults?.provider,
@@ -175,6 +186,7 @@ export function compileRuntimeProviderEnvironment(
     providerRouting,
     autoRouting,
     providerOptions: defaults?.providerOptions,
+    permissionMode: defaults?.permissionMode,
     escalation: defaults?.escalation,
     tagConflictPolicy: 'fail-fast',
     internalAgents,
@@ -186,12 +198,13 @@ export function compileRuntimeProviderEnvironment(
 function buildCompanions(
   map: Record<string, RuntimeCompanionProviderAssignment> | undefined,
   flatProfiles: Map<string, FlatProfile>,
+  resolutionContext?: FacetResolutionContext,
 ): Record<string, ProviderRoutingEntry> | undefined {
   if (map === undefined) return undefined;
   return Object.fromEntries(
     Object.entries(map).map(([name, assignment]) => [
       name,
-      resolveProfileEntry(assignment.profile, flatProfiles),
+      resolveProfileEntry(assignment.profile, flatProfiles, resolutionContext),
     ]),
   );
 }
@@ -207,13 +220,14 @@ function buildCompanions(
 function buildProviderLadders(
   section: RuntimeProviderSection,
   flatProfiles: Map<string, FlatProfile>,
+  resolutionContext?: FacetResolutionContext,
 ): ProviderLadderConfig | undefined {
   const defaults = section.defaults?.ladder !== undefined
-    ? resolveLadderStages(section.defaults.ladder, flatProfiles)
+    ? resolveLadderStages(section.defaults.ladder, flatProfiles, resolutionContext)
     : undefined;
-  const steps = mapLadderEntries(section.targets?.steps, flatProfiles);
-  const tags = mapLadderEntries(section.targets?.tags, flatProfiles);
-  const personas = mapLadderEntries(section.targets?.personas, flatProfiles);
+  const steps = mapLadderEntries(section.targets?.steps, flatProfiles, resolutionContext);
+  const tags = mapLadderEntries(section.targets?.tags, flatProfiles, resolutionContext);
+  const personas = mapLadderEntries(section.targets?.personas, flatProfiles, resolutionContext);
   if (defaults === undefined && steps === undefined && tags === undefined && personas === undefined) {
     return undefined;
   }
@@ -228,6 +242,7 @@ function buildProviderLadders(
 function mapLadderEntries(
   map: Record<string, RuntimeProviderAssignment> | undefined,
   flatProfiles: Map<string, FlatProfile>,
+  resolutionContext?: FacetResolutionContext,
 ): Record<string, ProviderRoutingEntry[]> | undefined {
   if (map === undefined) {
     return undefined;
@@ -237,7 +252,7 @@ function mapLadderEntries(
     if (assignment.ladder === undefined) {
       continue;
     }
-    result[key] = resolveLadderStages(assignment.ladder, flatProfiles);
+    result[key] = resolveLadderStages(assignment.ladder, flatProfiles, resolutionContext);
   }
   return Object.keys(result).length > 0 ? result : undefined;
 }
@@ -245,8 +260,9 @@ function mapLadderEntries(
 function resolveLadderStages(
   ladder: readonly string[],
   flatProfiles: Map<string, FlatProfile>,
+  resolutionContext?: FacetResolutionContext,
 ): ProviderRoutingEntry[] {
-  return ladder.map((profileName) => resolveProfileEntry(profileName, flatProfiles));
+  return ladder.map((profileName) => resolveProfileEntry(profileName, flatProfiles, resolutionContext));
 }
 
 /**
@@ -264,6 +280,7 @@ function initialAssignmentProfile(
 function mapTargetEntries(
   map: Record<string, RuntimeProviderAssignment> | undefined,
   flatProfiles: Map<string, FlatProfile>,
+  resolutionContext?: FacetResolutionContext,
 ): Record<string, ProviderRoutingEntry> | undefined {
   if (map === undefined) {
     return undefined;
@@ -278,7 +295,7 @@ function mapTargetEntries(
     if (initialProfile === undefined) {
       continue;
     }
-    result[key] = resolveProfileEntry(initialProfile, flatProfiles);
+    result[key] = resolveProfileEntry(initialProfile, flatProfiles, resolutionContext);
   }
   return Object.keys(result).length > 0 ? result : undefined;
 }
@@ -286,9 +303,10 @@ function mapTargetEntries(
 function buildProviderRouting(
   section: RuntimeProviderSection,
   flatProfiles: Map<string, FlatProfile>,
+  resolutionContext?: FacetResolutionContext,
 ): ProviderRoutingConfig | undefined {
-  const tags = mapTargetEntries(section.targets?.tags, flatProfiles);
-  const steps = mapTargetEntries(section.targets?.steps, flatProfiles);
+  const tags = mapTargetEntries(section.targets?.tags, flatProfiles, resolutionContext);
+  const steps = mapTargetEntries(section.targets?.steps, flatProfiles, resolutionContext);
   if (tags === undefined && steps === undefined) {
     return undefined;
   }
@@ -301,6 +319,7 @@ function buildProviderRouting(
 function buildInternalAgents(
   map: Record<string, RuntimeProviderAssignment> | undefined,
   flatProfiles: Map<string, FlatProfile>,
+  resolutionContext?: FacetResolutionContext,
 ): InternalAgentEnvironment | undefined {
   if (map === undefined) {
     return undefined;
@@ -333,11 +352,12 @@ function buildInternalAgents(
     }
     // internal agents は `escalate` を消費しない（格上げは FC のレビュー枠だけの
     // 概念）。解決結果に残すと使われないデータになるので落とす。
-    const resolved = resolveProfileEntry(initialProfile, flatProfiles);
+    const resolved = resolveProfileEntry(initialProfile, flatProfiles, resolutionContext);
     result[seat] = {
       ...(resolved.provider !== undefined ? { provider: resolved.provider } : {}),
       ...(resolved.model !== undefined ? { model: resolved.model } : {}),
       ...(resolved.providerOptions !== undefined ? { providerOptions: resolved.providerOptions } : {}),
+      ...(resolved.permissionMode !== undefined ? { permissionMode: resolved.permissionMode } : {}),
     };
   }
   return Object.keys(result).length > 0 ? result : undefined;
@@ -354,6 +374,7 @@ const ROUTING_TIERS: readonly RoutingTier[] = ['low', 'medium', 'high'];
 function buildAutoRoutingConfig(
   section: RuntimeProviderSection,
   flatProfiles: Map<string, FlatProfile>,
+  resolutionContext?: FacetResolutionContext,
 ): AutoRoutingConfig | undefined {
   const autoRouting = section.auto_routing;
   if (autoRouting === undefined) {
@@ -368,7 +389,7 @@ function buildAutoRoutingConfig(
   if (autoRouting.router_profile === undefined) {
     throw new Error('runtime.yaml `provider.auto_routing` requires a `router_profile`');
   }
-  const router = resolveProfileEntry(autoRouting.router_profile, flatProfiles);
+  const router = resolveProfileEntry(autoRouting.router_profile, flatProfiles, resolutionContext);
   const strategy = resolveStrategy(autoRouting.strategy);
 
   const candidates = new Map<string, AutoRoutingCandidate>();
@@ -377,7 +398,7 @@ function buildAutoRoutingConfig(
     const candidateNames: string[] = [];
     for (const candidate of pool.candidates) {
       const tier = requireRoutingTier(candidate.tier, poolName, candidate.profile);
-      registerCandidate(candidates, candidate.profile, tier, flatProfiles);
+      registerCandidate(candidates, candidate.profile, tier, flatProfiles, resolutionContext);
       candidateNames.push(candidate.profile);
     }
     const fallback = pool.fallback_profile;
@@ -401,7 +422,12 @@ function buildAutoRoutingConfig(
 
   return {
     strategy,
-    router: { provider: router.provider as ProviderType, model: router.model as string },
+    router: {
+      provider: router.provider as ProviderType,
+      model: router.model as string,
+      ...(router.providerOptions !== undefined ? { providerOptions: router.providerOptions } : {}),
+      ...(router.permissionMode !== undefined ? { permissionMode: router.permissionMode } : {}),
+    },
     candidates: [...candidates.values()],
     defaultPool,
     candidatePools,
@@ -414,6 +440,7 @@ function registerCandidate(
   profileName: string,
   tier: RoutingTier,
   flatProfiles: Map<string, FlatProfile>,
+  resolutionContext?: FacetResolutionContext,
 ): void {
   const existing = candidates.get(profileName);
   if (existing !== undefined) {
@@ -424,13 +451,14 @@ function registerCandidate(
     }
     return;
   }
-  const entry = resolveProfileEntry(profileName, flatProfiles);
+  const entry = resolveProfileEntry(profileName, flatProfiles, resolutionContext);
   candidates.set(profileName, {
     name: profileName,
     provider: entry.provider as ProviderType,
     model: entry.model as string,
     routingTier: tier,
     ...(entry.providerOptions !== undefined ? { providerOptions: entry.providerOptions } : {}),
+    ...(entry.permissionMode !== undefined ? { permissionMode: entry.permissionMode } : {}),
   });
 }
 
@@ -513,6 +541,7 @@ function requireRoutingTier(
 function resolveProfileEntry(
   profileName: string,
   flatProfiles: Map<string, FlatProfile>,
+  resolutionContext?: FacetResolutionContext,
 ): ProviderRoutingEntry {
   const profile = flatProfiles.get(profileName);
   if (profile?.provider === undefined || profile.model === undefined) {
@@ -520,12 +549,13 @@ function resolveProfileEntry(
       `runtime.yaml \`provider.profiles."${profileName}"\` is not defined or is missing \`provider\`/\`model\``,
     );
   }
-  const options = resolveProfileProviderOptions(profile);
-  const escalation = resolveProfileEscalation(profile, flatProfiles);
+  const options = resolveProfileProviderOptions(profile, resolutionContext);
+  const escalation = resolveProfileEscalation(profile, flatProfiles, resolutionContext);
   return {
     provider: profile.provider as ProviderType,
     model: profile.model,
     ...(options !== undefined ? { providerOptions: options } : {}),
+    ...(profile.permissionMode !== undefined ? { permissionMode: profile.permissionMode } : {}),
     ...(escalation !== undefined ? { escalation } : {}),
   };
 }
@@ -537,6 +567,7 @@ function resolveProfileEntry(
 function resolveProfileEscalation(
   profile: FlatProfile,
   flatProfiles: Map<string, FlatProfile>,
+  resolutionContext?: FacetResolutionContext,
 ): ProviderEscalationTarget | undefined {
   if (profile.escalate === undefined) {
     return undefined;
@@ -547,12 +578,13 @@ function resolveProfileEscalation(
       `runtime.yaml \`provider.profiles."${profile.escalate}"\` referenced by \`escalate\` is not defined or is missing \`provider\`/\`model\``,
     );
   }
-  const options = resolveProfileProviderOptions(target);
+  const options = resolveProfileProviderOptions(target, resolutionContext);
   return {
     profile: profile.escalate,
     provider: target.provider as ProviderType,
     model: target.model,
     ...(options !== undefined ? { providerOptions: options } : {}),
+    ...(target.permissionMode !== undefined ? { permissionMode: target.permissionMode } : {}),
   };
 }
 
@@ -570,9 +602,25 @@ const PROVIDER_OPTIONS_RAW_KEY: Partial<Record<ProviderType, string>> = {
 
 function resolveProfileProviderOptions(
   profile: FlatProfile | undefined,
+  resolutionContext?: FacetResolutionContext | RuntimeProviderResolutionContext,
 ): StepProviderOptions | undefined {
-  if (profile?.options === undefined || profile.provider === undefined) {
+  if (profile === undefined || profile.provider === undefined) {
     return undefined;
+  }
+  const capabilityContext = profile.capabilitiesOriginProfile !== undefined
+    && resolutionContext !== undefined
+    && 'profileOrigins' in resolutionContext
+    ? resolveRuntimeProfileResourceContext(profile.capabilitiesOriginProfile, resolutionContext)
+    : resolutionContext;
+  const capabilityOptions = profile.capabilities === undefined
+    ? undefined
+    : resolveCapabilitySets(
+        profile.capabilities,
+        capabilityContext?.workflowDir ?? capabilityContext?.projectDir ?? '',
+        capabilityContext,
+      );
+  if (profile.options === undefined) {
+    return capabilityOptions;
   }
   const rawKey = PROVIDER_OPTIONS_RAW_KEY[profile.provider as ProviderType];
   if (rawKey === undefined) {
@@ -580,5 +628,8 @@ function resolveProfileProviderOptions(
       `runtime.yaml profile \`options\` are not supported for provider "${profile.provider}"`,
     );
   }
-  return normalizeProviderOptions({ [rawKey]: profile.options });
+  return mergeProviderOptions(
+    capabilityOptions,
+    normalizeProviderOptions({ [rawKey]: profile.options }),
+  );
 }

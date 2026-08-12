@@ -15,6 +15,7 @@ import type {
   FallbackContext,
   FallbackOperationOrigin,
   McpServerConfig,
+  PermissionMode,
 } from '../models/types.js';
 import type {
   AutoRoutingConfig,
@@ -120,6 +121,8 @@ export interface StepProviderInfo {
   modelSource?: ProviderResolutionSource;
   providerOptions?: StepProviderOptions;
   providerOptionsSources?: Readonly<Record<string, ProviderResolutionSource>>;
+  /** Permission mode from the same winning runtime profile as provider/model/options. */
+  permissionMode?: PermissionMode;
   /**
    * `escalate` target of the runtime.yaml profile this step resolved to. Present only when a
    * profile-backed layer supplied the provider; consumers treat its presence as the opt-in.
@@ -142,8 +145,6 @@ export interface StepProviderInfo {
 
 export interface SelectorProviderInfo extends StepProviderInfo {
   provider: ProviderType;
-  providerOptions: StepProviderOptions;
-  nativeTools: readonly string[];
 }
 
 export interface ProviderStreamContext {
@@ -592,6 +593,8 @@ export interface WorkflowEngineOptions {
   rateLimitFallback?: RateLimitFallbackConfig;
   /** Resolved provider options */
   providerOptions?: StepProviderOptions;
+  /** Permission mode from the runtime defaults profile. */
+  providerPermissionMode?: PermissionMode;
   selectorProvider?: SelectorProviderInfo;
   /** Reads the current working-tree evidence required by a dynamic selector. */
   selectorGitCommandRunner?: SelectorGitCommandRunner;

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
+import { buildFindingManagerStep } from '../core/workflow/findings/manager-step.js';
 import type { WorkflowStep } from '../core/models/types.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 
@@ -15,7 +16,6 @@ function createStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
 
 type BuilderEngineOverrides = Partial<WorkflowEngineOptions> & {
   workflowName?: string;
-  failureDir?: string;
 };
 
 function createProcessSafetyByStep(parentRunPid: number): WorkflowEngineOptions['phase1ProcessSafetyByStep'] {
@@ -47,9 +47,8 @@ function createBuilder(step: WorkflowStep, engineOverrides: BuilderEngineOverrid
     () => engineOverrides.workflowName ?? 'default',
     () => 'test workflow',
     undefined,
-    () => 'Original workflow task',
     undefined,
-    engineOverrides.failureDir === undefined ? undefined : () => engineOverrides.failureDir,
+    () => 'Original workflow task',
   );
 }
 
@@ -74,34 +73,31 @@ describe('OptionsBuilder.buildBaseOptions', () => {
     });
   });
 
-  it('propagates the run failure directory to every agent phase option set', () => {
+  it('passes runtime defaults permission mode to the actual provider call', () => {
     const step = createStep();
-    const failureDir = '/project/.takt/runs/sample/failures';
     const builder = createBuilder(step, {
-      failureDir,
-      structuredCaller: {
-        judgeStatus: vi.fn(),
+      providerSource: 'runtime-v1',
+      providerPermissionMode: 'readonly',
+    });
+
+    const options = builder.buildBaseOptions(step);
+
+    expect(options.permissionMode).toBe('readonly');
+    expect(options.permissionResolution).toBeUndefined();
+  });
+
+  it('passes the winning persona profile permission mode to the actual provider call', () => {
+    const step = createStep({ personaDisplayName: 'Reviewers' });
+    const builder = createBuilder(step, {
+      personaProviders: {
+        Reviewers: { provider: 'claude', model: 'review-model', permissionMode: 'edit' },
       },
     });
 
-    const phase1Options = builder.buildAgentOptions(step);
-    const resumeOptions = builder.buildResumeOptions(step, 'session-123', { maxTurns: 3 });
-    const newSessionOptions = builder.buildNewSessionReportOptions(step, {
-      allowedTools: [],
-      maxTurns: 3,
-    });
-    const state = {
-      currentStep: step.name,
-      stepCount: 1,
-      history: [],
-      personaSessions: new Map<string, string>(),
-    };
-    const phaseContext = builder.buildPhaseRunnerContext(step, state, 'response', vi.fn());
+    const options = builder.buildBaseOptions(step);
 
-    expect(phase1Options).toHaveProperty('failureDir', failureDir);
-    expect(resumeOptions).toHaveProperty('failureDir', failureDir);
-    expect(newSessionOptions).toHaveProperty('failureDir', failureDir);
-    expect(phaseContext).toHaveProperty('failureDir', failureDir);
+    expect(options.resolvedProvider).toBe('claude');
+    expect(options.permissionMode).toBe('edit');
   });
 
   it('includes requiredPermissionMode in permission resolution context', () => {
@@ -558,11 +554,11 @@ describe('OptionsBuilder auto routing deterministic completion', () => {
     rules: { steps: { implement: 'coding' } },
   };
 
-  function createSynthesizedStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
+  function createManagerLikeStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
     return createStep({
-      name: 'summary-agent',
+      name: 'findings-manager',
       structuredOutput: {
-        schemaRef: 'takt.summary',
+        schemaRef: 'takt.findings.manager',
         schema: { type: 'object' },
       },
       ...overrides,
@@ -571,24 +567,32 @@ describe('OptionsBuilder auto routing deterministic completion', () => {
 
   it('resolveStepProviderModel falls back to the strategy default candidate when auto routing suppresses the config provider', () => {
     // 事故の再現: config デフォルト provider は auto_routing 有効時に抑止される。
-    // 実行ループの AI ルーターを通らない合成ステップも、共通の解決経路で
-    // strategy デフォルトまで落ち、
+    // 実行ループの AI ルーターを通らない findings-manager（実際に合成される
+    // ステップそのもの）も、共通の解決経路で strategy デフォルトまで落ち、
     // buildAgentOptions の structured_output ガードを通過すること。
-    const synthesizedStep = createSynthesizedStep();
-    const builder = createBuilder(synthesizedStep, { provider: 'codex', providerSource: 'global', autoRouting });
+    const managerStep = buildFindingManagerStep({
+      contract: {
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+    });
+    const builder = createBuilder(managerStep, { provider: 'codex', providerSource: 'global', autoRouting });
 
-    const resolved = builder.resolveStepProviderModel(synthesizedStep);
+    const resolved = builder.resolveStepProviderModel(managerStep);
 
     expect(resolved).toMatchObject({
       provider: 'codex',
       model: 'default-candidate-model',
       providerSource: 'auto.fallback',
     });
-    expect(builder.buildAgentOptions(synthesizedStep).resolvedProvider).toBe('codex');
+    expect(builder.buildAgentOptions(managerStep).resolvedProvider).toBe('codex');
   });
 
   it('resolveStepProviderModel applies auto routing rules before the strategy default', () => {
-    const step = createSynthesizedStep({ name: 'implement' });
+    const step = createManagerLikeStep({ name: 'implement' });
     const builder = createBuilder(step, { provider: 'codex', providerSource: 'global', autoRouting });
 
     expect(builder.resolveStepProviderModel(step)).toMatchObject({
@@ -598,7 +602,7 @@ describe('OptionsBuilder auto routing deterministic completion', () => {
   });
 
   it('resolveStepProviderModel prefers runtime providerInfo routed by the run loop over the deterministic completion', () => {
-    const step = createSynthesizedStep();
+    const step = createManagerLikeStep();
     const builder = createBuilder(step, { provider: 'codex', providerSource: 'global', autoRouting });
 
     const resolved = builder.resolveStepProviderModel(step, {
@@ -609,12 +613,12 @@ describe('OptionsBuilder auto routing deterministic completion', () => {
   });
 
   it('resolveStepProviderModel does not override a provider resolved by persona providers', () => {
-    const step = createSynthesizedStep({ personaDisplayName: 'summary-agent' });
+    const step = createManagerLikeStep({ personaDisplayName: 'findings-manager' });
     const builder = createBuilder(step, {
       provider: 'codex',
       providerSource: 'global',
       autoRouting,
-      personaProviders: { 'summary-agent': { provider: 'claude', model: 'sonnet' } },
+      personaProviders: { 'findings-manager': { provider: 'claude', model: 'sonnet' } },
     });
 
     expect(builder.resolveStepProviderModel(step)).toMatchObject({
@@ -625,7 +629,7 @@ describe('OptionsBuilder auto routing deterministic completion', () => {
   });
 
   it('resolveStepProviderModelBeforeAutoRouting leaves the provider unresolved so the AI router keeps its say', () => {
-    const step = createSynthesizedStep();
+    const step = createManagerLikeStep();
     const builder = createBuilder(step, { provider: 'codex', providerSource: 'global', autoRouting });
 
     expect(builder.resolveStepProviderModelBeforeAutoRouting(step).provider).toBeUndefined();

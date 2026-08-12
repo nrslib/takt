@@ -85,13 +85,14 @@ describe('createWorkRequirementEstimator', () => {
     });
   });
 
-  it('Given a router without native structured output, When its JSON response omits optional confidence, Then the estimate is accepted', async () => {
+  it('Given a router without native structured output, When confidence is null, Then the estimate is accepted', async () => {
     vi.mocked(runAgent).mockResolvedValue({
       persona: 'auto-router',
       status: 'done',
       content: JSON.stringify({
         required_tier: 'medium',
         reason_codes: ['focused-change'],
+        confidence: null,
       }),
       timestamp: new Date('2026-01-01T00:00:00.000Z'),
     });
@@ -157,11 +158,8 @@ describe('createWorkRequirementEstimator', () => {
     expect(prompt).not.toMatch(/terra|sol|candidate_pool|gpt-5|\/repo/i);
     expect(options).toMatchObject({
       cwd: '/repo',
-      provider: 'claude-sdk',
       resolvedProvider: 'claude-sdk',
-      model: 'claude-haiku-4-5-20251001',
       resolvedModel: 'claude-haiku-4-5-20251001',
-      permissionMode: 'readonly',
       language: 'ja',
       childProcessEnv: { TAKT_TEST: '1' },
       outputSchema: {
@@ -236,7 +234,7 @@ describe('createWorkRequirementEstimator', () => {
       if (!(error instanceof Error)) {
         throw error;
       }
-      expect(error.message).toMatch(/invalid required_tier/i);
+      expect(error.message).toMatch(/required_tier.*allowed values/i);
       expect(error.message).not.toContain(rawContent);
       return;
     }
@@ -269,9 +267,7 @@ describe('createWorkRequirementEstimator', () => {
       model: 'claude-haiku-4-5-20251001',
     });
 
-    await expect(estimator.estimate(createModelInput())).rejects.toThrow(
-      'Auto routing estimator response has invalid reason_codes',
-    );
+    await expect(estimator.estimate(createModelInput())).rejects.toThrow(/reason_codes/);
   });
 
   it('Given an already aborted parent signal, When estimating work requirements, Then no provider call starts', async () => {

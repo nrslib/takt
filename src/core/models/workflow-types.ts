@@ -278,6 +278,8 @@ interface WorkflowStepBase {
    * injection (allowed).
    */
   engineSynthesized?: true;
+  /** Exact runtime-profile permission for engine-synthesized agents; never accepted from YAML. */
+  internalPermissionMode?: PermissionMode;
 }
 
 interface AgentWorkflowStepBase extends WorkflowStepBase {

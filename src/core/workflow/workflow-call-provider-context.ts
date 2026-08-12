@@ -18,6 +18,7 @@ export type WorkflowCallProviderContext = Pick<
   | 'providerSource'
   | 'model'
   | 'modelSource'
+  | 'providerPermissionMode'
   | 'providerEscalation'
   | 'autoRouting'
   | 'personaProviders'
@@ -30,6 +31,7 @@ export type WorkflowCallProviderModel = {
   providerSource: WorkflowEngineOptions['providerSource'];
   model: WorkflowEngineOptions['model'];
   modelSource: WorkflowEngineOptions['modelSource'];
+  permissionMode?: WorkflowEngineOptions['providerPermissionMode'];
   providerEscalation: WorkflowEngineOptions['providerEscalation'];
 };
 
@@ -80,7 +82,7 @@ function applyWorkflowCallOverridesToProviderEntries<T extends PersonaProviderEn
       } else if (overrideProvider === undefined && entry.model !== undefined) {
         nextEntry.model = entry.model;
       }
-      if (entry.providerOptions !== undefined) {
+      if (overrideProvider === undefined && entry.providerOptions !== undefined) {
         nextEntry.providerOptions = entry.providerOptions;
       }
       // escalate 先は provider を供給した profile のもの。provider を上書きしたら
@@ -88,6 +90,9 @@ function applyWorkflowCallOverridesToProviderEntries<T extends PersonaProviderEn
       // provider は profile 由来のままなので維持する。
       if (overrideProvider === undefined && entry.escalation !== undefined) {
         nextEntry.escalation = entry.escalation;
+      }
+      if (overrideProvider === undefined && entry.permissionMode !== undefined) {
+        nextEntry.permissionMode = entry.permissionMode;
       }
 
       return [key, nextEntry];
@@ -125,7 +130,12 @@ export function resolveWorkflowCallChildProviderModel(
   overrides: WorkflowCallStep['overrides'],
   parentContext: Pick<
     WorkflowCallProviderContext,
-    'provider' | 'providerSource' | 'model' | 'modelSource' | 'providerEscalation'
+    | 'provider'
+    | 'providerSource'
+    | 'model'
+    | 'modelSource'
+    | 'providerPermissionMode'
+    | 'providerEscalation'
   >,
 ): WorkflowCallProviderModel {
   const childProviderInfo = resolveWorkflowCallProviderModel({
@@ -134,6 +144,7 @@ export function resolveWorkflowCallChildProviderModel(
     providerSource: parentContext.providerSource,
     model: parentContext.model,
     modelSource: parentContext.modelSource,
+    permissionMode: parentContext.providerPermissionMode,
   });
   const resolved = applyProviderModelOverride(childProviderInfo, {
     provider: overrides?.provider,
@@ -149,11 +160,15 @@ export function resolveWorkflowCallChildProviderModel(
   const providerEscalation = resolved.providerSource === parentContext.providerSource
     ? parentContext.providerEscalation
     : undefined;
+  const permissionMode = resolved.providerSource === childProviderInfo.providerSource
+    ? childProviderInfo.permissionMode
+    : undefined;
   return {
     provider: resolved.provider,
     providerSource: resolved.providerSource,
     model: resolved.model,
     modelSource: resolved.modelSource,
+    permissionMode,
     providerEscalation,
   };
 }

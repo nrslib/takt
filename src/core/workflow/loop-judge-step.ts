@@ -2,6 +2,7 @@ import type { InternalAgentSeats } from '../models/config-types.js';
 import type { LoopMonitorJudge } from '../models/types.js';
 import type { ProviderType } from '../../shared/types/provider.js';
 import type { StepProviderOptions } from '../models/workflow-types.js';
+import type { PermissionMode } from '../models/types.js';
 import { mergeProviderOptions } from '../../infra/config/providerOptions.js';
 import { internalAgentSeatOverride } from './internal-agent-seat.js';
 
@@ -29,6 +30,7 @@ export interface LoopJudgeProviderFields {
   providerSpecified?: true;
   model?: string;
   modelSpecified?: boolean;
+  internalPermissionMode?: PermissionMode;
 }
 
 /**
@@ -52,6 +54,9 @@ export function loopJudgeProviderFields(
       providerSpecified: true,
       ...(seat.model === undefined ? {} : { model: seat.model }),
       modelSpecified: true,
+      ...(seat.internalPermissionMode === undefined
+        ? {}
+        : { internalPermissionMode: seat.internalPermissionMode }),
     };
   }
   return {

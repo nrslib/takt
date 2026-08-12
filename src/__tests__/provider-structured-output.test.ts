@@ -34,17 +34,14 @@ vi.mock('../infra/claude/client.js', () => ({
 const {
   mockCallCodex,
   mockCallCodexCustom,
-  mockCallCodexIsolatedStructured,
 } = vi.hoisted(() => ({
   mockCallCodex: vi.fn(),
   mockCallCodexCustom: vi.fn(),
-  mockCallCodexIsolatedStructured: vi.fn(),
 }));
 
 vi.mock('../infra/codex/index.js', () => ({
   callCodex: mockCallCodex,
   callCodexCustom: mockCallCodexCustom,
-  callCodexIsolatedStructured: mockCallCodexIsolatedStructured,
 }));
 
 // ===== OpenCode =====
@@ -196,20 +193,18 @@ describe('ClaudeProvider — structured output', () => {
     expect(result.structuredOutput).toEqual({ step: 1 });
   });
 
-  it('strict read-only internal agent isolation を Claude SDK client に渡す', async () => {
+  it('明示された runtime permission を Claude SDK client に渡す', async () => {
     mockCallClaudeCustom.mockResolvedValue(doneResponse('selector', {}));
 
     const agent = new ClaudeProvider().setup({ name: 'selector', systemPrompt: 'Select reviewers.' });
     await agent.call('prompt', {
       cwd: '/tmp',
-      internalAgentIsolation: 'strict-readonly',
       permissionMode: 'readonly',
       allowedTools: [],
       mcpServers: {},
     });
 
     expect(mockCallClaudeCustom.mock.calls[0]?.[3]).toMatchObject({
-      internalAgentIsolation: 'strict-readonly',
       permissionMode: 'readonly',
       allowedTools: [],
       mcpServers: {},
@@ -303,37 +298,6 @@ describe('CodexProvider — structured output', () => {
     });
 
     expect(mockCallCodex).toHaveBeenCalledOnce();
-    expect(mockCallCodexIsolatedStructured).not.toHaveBeenCalled();
-  });
-
-  it('setupIsolatedStructuredがhardened direct CLI経路を使う', async () => {
-    mockCallCodexIsolatedStructured.mockResolvedValue(
-      doneResponse('normalizer', { rawFindings: [] }),
-    );
-
-    const agent = new CodexProvider().setupIsolatedStructured({
-      name: 'normalizer',
-      systemPrompt: 'system',
-    });
-    const failureDir = '/project/.takt/runs/run-1/failures';
-    await agent.call('report', {
-      cwd: '/tmp/isolated',
-      outputSchema: SCHEMA,
-      failureDir,
-    });
-
-    expect(mockCallCodexIsolatedStructured).toHaveBeenCalledWith(
-      'normalizer',
-      'system\n\nreport',
-      expect.objectContaining({
-        cwd: '/tmp/isolated',
-        outputSchema: SCHEMA,
-        codexPathOverride: '/opt/codex/bin/codex',
-        failureDir,
-      }),
-    );
-    expect(mockCallCodex).not.toHaveBeenCalled();
-    expect(mockCallCodexCustom).not.toHaveBeenCalled();
   });
 
   it('provider_options.codex.reasoningEffort を callCodex に渡す', async () => {
@@ -390,13 +354,12 @@ describe('CodexProvider — structured output', () => {
     expect(opts).toHaveProperty('skills', { repo: false, user: false });
   });
 
-  it('strict read-only internal agent isolation を Codex client に渡す', async () => {
+  it('明示された runtime permission と provider options を Codex client に渡す', async () => {
     mockCallCodexCustom.mockResolvedValue(doneResponse('selector', {}));
 
     const agent = new CodexProvider().setup({ name: 'selector', systemPrompt: 'Select reviewers.' });
     await agent.call('prompt', {
       cwd: '/tmp',
-      internalAgentIsolation: 'strict-readonly',
       permissionMode: 'readonly',
       allowedTools: [],
       mcpServers: {},
@@ -410,7 +373,6 @@ describe('CodexProvider — structured output', () => {
     });
 
     expect(mockCallCodexCustom.mock.calls[0]?.[3]).toMatchObject({
-      internalAgentIsolation: 'strict-readonly',
       permissionMode: 'readonly',
       outputSchema: SCHEMA,
       networkAccess: false,
@@ -430,19 +392,6 @@ describe('CodexProvider — structured output', () => {
 
     const opts = mockCallCodex.mock.calls[0]?.[2];
     expect(opts).toHaveProperty('childProcessEnv', childProcessEnv);
-  });
-
-  it('failureDir を callCodex に渡す', async () => {
-    mockCallCodex.mockResolvedValue(doneResponse('coder'));
-    const failureDir = '/project/.takt/runs/run-1/failures';
-
-    const agent = new CodexProvider().setup({ name: 'coder' });
-    await agent.call('prompt', {
-      cwd: '/tmp',
-      failureDir,
-    });
-
-    expect(mockCallCodex.mock.calls[0]?.[2]).toHaveProperty('failureDir', failureDir);
   });
 
   it('systemPrompt 指定時も outputSchema が callCodexCustom に渡される', async () => {

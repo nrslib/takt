@@ -5,6 +5,8 @@ import type {
 } from '../../models/types.js';
 import type { RunAgentOptions } from '../../../agents/runner.js';
 import type { ProviderType } from '../../../shared/types/provider.js';
+import type { PermissionMode } from '../../models/types.js';
+import type { StepProviderOptions } from '../../models/workflow-types.js';
 
 export interface PromotionEvaluationContext {
   cwd: string;
@@ -13,6 +15,8 @@ export interface PromotionEvaluationContext {
   structuredCaller?: StructuredCaller;
   resolvedProvider?: ProviderType;
   resolvedModel?: string;
+  resolvedProviderOptions?: StepProviderOptions;
+  permissionMode?: PermissionMode;
   childProcessEnv?: RunAgentOptions['childProcessEnv'];
 }
 
@@ -83,6 +87,8 @@ async function matchesAiCondition(
       provider: context.resolvedProvider,
       resolvedProvider: context.resolvedProvider,
       resolvedModel: context.resolvedModel,
+      resolvedProviderOptions: context.resolvedProviderOptions,
+      permissionMode: context.permissionMode,
       childProcessEnv: context.childProcessEnv,
     },
   );

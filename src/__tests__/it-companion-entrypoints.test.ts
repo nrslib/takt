@@ -232,10 +232,9 @@ describe('companion runtime, preview, and doctor entrypoint parity', () => {
       errorPattern: /require runtime\.yaml|migrate provider configuration/,
     },
     {
-      name: 'rejects a provider without companion isolation support',
+      name: 'accepts a provider through the companion JSON fallback transport',
       options: { assignment: 'target', provider: 'cursor' },
-      succeeds: false,
-      errorPattern: /does not support companion isolated structured execution/,
+      succeeds: true,
     },
     {
       name: 'skips companion provider resolution when disabled',

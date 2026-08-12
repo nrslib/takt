@@ -152,7 +152,7 @@ describe('previewPrompts', () => {
             providerSource: 'project',
             modelSource: 'project',
             providerOptions: {},
-            nativeTools: ['request_user_input', 'update_plan', 'view_image', 'web_search'],
+            permissionMode: 'readonly',
           },
         }
       : { applies: false });
@@ -253,9 +253,6 @@ describe('previewPrompts', () => {
     expect(mockInfo).toHaveBeenCalledWith('Dynamic selector provider: codex');
     expect(mockInfo).toHaveBeenCalledWith('Dynamic selector provider options: not configured');
     expect(mockInfo).toHaveBeenCalledWith('Dynamic selector permission: readonly');
-    expect(mockInfo).toHaveBeenCalledWith(
-      'Dynamic selector native tools: request_user_input, update_plan, view_image, web_search',
-    );
     expect(console.log).toHaveBeenCalledWith(
       '\n--- fixed substep 1: architecture (persona: architect) ---\n',
     );
@@ -278,7 +275,6 @@ describe('previewPrompts', () => {
             reasoningEffort: 'medium',
           },
         },
-        nativeTools: [],
       },
     });
     mockLoadWorkflowByIdentifier.mockReturnValueOnce({

@@ -311,7 +311,7 @@ describe('IT: CLI list selector overrides', () => {
     expectCliSelectorPreview(retryContext!.workflowContext.stepPreviews);
     const starts = readProviderStarts(environment.mockCallLogPath);
     expect(starts).toEqual(expect.arrayContaining([
-      expect.objectContaining({ personaName: 'takt-internal', provider: 'mock', model: CLI_MODEL }),
+      expect.objectContaining({ personaName: 'dynamic-parallel-selector', provider: 'mock', model: CLI_MODEL }),
       expect.objectContaining({ personaName: 'architecture', provider: 'mock', model: CLI_MODEL }),
       expect.objectContaining({ personaName: 'frontend', provider: 'mock', model: CLI_MODEL }),
     ]));
@@ -333,7 +333,7 @@ describe('IT: CLI list selector overrides', () => {
     expectCliSelectorPreview(instructOptions!.workflowContext.stepPreviews);
     const starts = readProviderStarts(environment.mockCallLogPath);
     expect(starts).toEqual(expect.arrayContaining([
-      expect.objectContaining({ personaName: 'takt-internal', provider: 'mock', model: CLI_MODEL }),
+      expect.objectContaining({ personaName: 'dynamic-parallel-selector', provider: 'mock', model: CLI_MODEL }),
       expect.objectContaining({ personaName: 'architecture', provider: 'mock', model: CLI_MODEL }),
       expect.objectContaining({ personaName: 'frontend', provider: 'mock', model: CLI_MODEL }),
     ]));

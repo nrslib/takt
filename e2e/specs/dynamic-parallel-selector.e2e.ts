@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createIsolatedEnv, type IsolatedEnv, updateIsolatedConfig } from '../helpers/isolated-env';
 import { runTakt } from '../helpers/takt-runner';
 import { createTestRepo, type TestRepo } from '../helpers/test-repo';
 import { readSessionRecords } from '../helpers/session-log';
+import { readOnlyRunFindingLedger } from '../helpers/finding-ledger';
 
 function writeDynamicParallelFixture(
   repoPath: string,
@@ -325,6 +326,173 @@ function onlyRunRoot(repoPath: string): string {
   return join(repoPath, '.takt', 'runs', runIds[0]!);
 }
 
+function writeSelectedArtifactsFixture(repoPath: string): { workflowPath: string; scenarioPath: string } {
+  const workflowDir = join(repoPath, '.takt', 'workflows');
+  const agentsDir = join(workflowDir, 'agents');
+  mkdirSync(agentsDir, { recursive: true });
+  for (const name of ['architecture', 'frontend', 'backend', 'fix', 'findings-manager']) {
+    writeFileSync(join(agentsDir, `${name}.md`), `You are the ${name} agent.\n`, 'utf-8');
+  }
+
+  const reportContract = [
+    '          output_contracts:',
+    '            report:',
+    '              - name: REPORT_NAME',
+    '                format: review-finding-contract',
+  ];
+  const reviewer = (name: string, description?: string) => [
+    `        - name: ${name}`,
+    `          persona: ./agents/${name}.md`,
+    ...(description === undefined ? [] : [`          description: ${description}`]),
+    `          instruction: Review ${name}`,
+    ...reportContract.map((line) => line.replace('REPORT_NAME', `${name}-review.md`)),
+    '          rules:',
+    '            - condition: approved',
+    '            - condition: needs_fix',
+  ];
+  const workflowPath = join(workflowDir, 'dynamic-parallel-selected-artifacts.yaml');
+  writeFileSync(workflowPath, [
+    'name: e2e-dynamic-parallel-selected-artifacts',
+    'initial_step: reviewers',
+    'max_steps: 5',
+    'instructions:',
+    '  findings-manager: Reconcile raw findings.',
+    'report_formats:',
+    '  review-finding-contract: Return a concise E2E review report.',
+    '  findings-manager: Return the finding manager JSON contract.',
+    'finding_contract:',
+    '  review_budget:',
+    '    max_review_rounds: 1',
+    '  manager:',
+    '    persona: ./agents/findings-manager.md',
+    '    instruction: findings-manager',
+    '    output_contract: findings-manager',
+    'steps:',
+    '  - name: reviewers',
+    '    parallel:',
+    '      fixed:',
+    ...reviewer('architecture'),
+    '      pool:',
+    ...reviewer('frontend', 'Review frontend changes'),
+    ...reviewer('backend', 'Review backend changes'),
+    '      selection:',
+    '        mode: replace',
+    '    rules:',
+    '      - condition: any("needs_fix")',
+    '        next: fix',
+    '      - condition: all("approved")',
+    '        next: COMPLETE',
+    '  - name: fix',
+    '    persona: ./agents/fix.md',
+    '    instruction: Fix the reported issue',
+    '    rules:',
+    '      - condition: approved',
+    '        next: reviewers',
+    '',
+  ].join('\n'), 'utf-8');
+
+  // 一本道では raw findings を作るのは正規化係だけで、並列レビュアーのどの報告に
+  // 対する呼び出しかは実行順に依存する。どの報告へ渡っても source binding が
+  // 成立するよう、抜粋は全レビュアー共通の1文にする（reviewer 名はエンジンが
+  // レビュアー step から付けるので、テストの検証項目はこれで変わらない）。
+  const SHARED_EXCERPT = 'A selected-only finding was observed.';
+  const rawFinding = (id: string) => {
+    const rawExcerpt = SHARED_EXCERPT;
+    return {
+      rawExcerpt,
+      candidate: {
+        rawFindingId: id,
+        familyTag: 'selected-only',
+        severity: 'low',
+        title: `${id} finding`,
+        description: rawExcerpt,
+        suggestion: 'Keep the selected reviewer evidence.',
+        relation: 'new',
+        targetFindingIds: [],
+        reassertsReviewerAnomalyId: null,
+        target: { kind: 'code', paths: [`fixtures/${id}.ts`] },
+        evidenceRequests: [],
+      },
+    };
+  };
+  const executeResponse = (persona: string, content: string) => ({
+    persona: `agents/${persona}`,
+    status: 'done',
+    content,
+  });
+  // FC レビュアーは markdown レポートだけを書く。
+  const reportResponse = (persona: string, _id: string, round: number) => ({
+    persona: `agents/${persona}`,
+    status: 'done',
+    content: `${persona} report for round ${round}\n${SHARED_EXCERPT}`,
+  });
+  // raw findings は正規化係の単発呼び出しが作る（レビュアー1人につき1回）。
+  const normalizerResponse = (id: string) => ({
+    persona: 'finding-intake-normalizer',
+    status: 'done',
+    content: '',
+    structured_output: { rawFindings: [rawFinding(id)] },
+  });
+  // 差し戻し slot はレビュアーごとに「呼び出し + レポート + 正規化」を1組使う。
+  // 言い直しでは新しい観測を出さないので、正規化係は空の rawFindings を返す。
+  const followupResponses = (persona: string, round: number) => [
+    executeResponse(persona, `${persona} restated round ${round}`),
+    {
+      persona: `agents/${persona}`,
+      status: 'done',
+      content: `${persona} restatement for round ${round} added no new observation`,
+    },
+    { persona: 'finding-intake-normalizer', status: 'done', content: '', structured_output: { rawFindings: [] } },
+  ];
+  const judgeResponse = (step: number) => ({
+    persona: 'conductor',
+    status: 'done',
+    content: '',
+    structured_output: { step, reason: 'E2E status' },
+  });
+  const managerResponse = {
+    persona: 'agents/findings-manager',
+    status: 'done',
+    content: 'Manager left the findings unresolved for the final gate.',
+    structured_output: {
+      taskId: 'intentionally-unmatched-e2e-task',
+      decisions: [],
+    },
+  };
+  const scenarioPath = join(repoPath, '.takt', 'dynamic-parallel-selected-artifacts-scenario.json');
+  writeFileSync(scenarioPath, JSON.stringify([
+    { status: 'done', content: '', structured_output: { selected_ids: ['frontend'], rationale: 'Initial frontend review.' } },
+    executeResponse('architecture', 'approved'),
+    reportResponse('architecture', 'architecture-round-1', 1),
+    normalizerResponse('architecture-round-1'),
+    judgeResponse(1),
+    executeResponse('frontend', 'needs_fix'),
+    reportResponse('frontend', 'frontend-round-1', 1),
+    normalizerResponse('frontend-round-1'),
+    judgeResponse(2),
+    managerResponse,
+    ...followupResponses('architecture', 1),
+    ...followupResponses('frontend', 1),
+    // 言い直し枠の消尽後に evidence-search が1回ずつ走る。対象 fixture に
+    // 引用可能な実ファイルは無いため、両方とも空の rawFindings を返す。
+    { persona: 'finding-intake-normalizer', status: 'done', content: '', structured_output: { rawFindings: [] } },
+    { persona: 'finding-intake-normalizer', status: 'done', content: '', structured_output: { rawFindings: [] } },
+    { persona: 'agents/fix', status: 'done', content: 'approved' },
+    { status: 'done', content: '', structured_output: { selected_ids: ['backend'], rationale: 'Follow-up backend review.' } },
+    executeResponse('architecture', 'approved'),
+    reportResponse('architecture', 'architecture-round-2', 2),
+    normalizerResponse('architecture-round-2'),
+    judgeResponse(1),
+    executeResponse('backend', 'approved'),
+    reportResponse('backend', 'backend-round-2', 2),
+    normalizerResponse('backend-round-2'),
+    judgeResponse(1),
+    managerResponse,
+    ...followupResponses('backend', 2),
+  ]), 'utf-8');
+
+  return { workflowPath, scenarioPath };
+}
 
 describe('E2E: dynamic parallel selector (mock)', () => {
   let isolatedEnv: IsolatedEnv;
@@ -451,13 +619,11 @@ describe('E2E: dynamic parallel selector (mock)', () => {
     expect(doctor.exitCode, `${doctor.stdout}\n${doctor.stderr}`).toBe(0);
     expect(runtime.exitCode, `${runtime.stdout}\n${runtime.stderr}`).toBe(0);
     const selectorStarts = readJsonl(mockCallLogPath)
-      .filter((record) => record.event === 'start' && record.personaName === 'takt-internal');
+      .filter((record) => record.event === 'start' && record.personaName === 'dynamic-parallel-selector');
     expect(selectorStarts).toEqual([
       expect.objectContaining({ provider: 'mock', model: 'cli-selector-model' }),
     ]);
-    expect(withoutOverride.exitCode).toBe(1);
-    expect(`${withoutOverride.stdout}\n${withoutOverride.stderr}`)
-      .toContain('does not support strict internal-agent isolation');
+    expect(withoutOverride.exitCode, `${withoutOverride.stdout}\n${withoutOverride.stderr}`).toBe(0);
   }, 420_000);
 
   it('should execute selected pool reviewers in YAML order when the selector returns them in reverse order', () => {
@@ -508,7 +674,7 @@ describe('E2E: dynamic parallel selector (mock)', () => {
     expect(personaStartCount('agents/frontend')).toBe(expected.frontend * 2);
     expect(personaStartCount('agents/backend')).toBe(expected.backend * 2);
     const selectorStarts = providerStarts
-      .filter((record) => record.personaName === 'takt-internal');
+      .filter((record) => record.personaName === 'dynamic-parallel-selector');
     expect(selectorStarts).toHaveLength(expected.selectors);
     if (mode === 'cumulative') {
       const meta = JSON.parse(
@@ -673,7 +839,101 @@ describe('E2E: dynamic parallel selector (mock)', () => {
     expect(personaNames.filter((name) => name === 'agents/architecture')).toHaveLength(1);
     expect(personaNames.filter((name) => name === 'agents/frontend')).toHaveLength(0);
     expect(personaNames.filter((name) => name === 'agents/backend')).toHaveLength(1);
-    expect(personaNames.filter((name) => name === 'takt-internal')).toHaveLength(1);
+    expect(personaNames.filter((name) => name === 'dynamic-parallel-selector')).toHaveLength(1);
     expect(resumedStarts.every((record) => record.model === 'cli-resume-model')).toBe(true);
   }, 480_000);
+
+  it('should retain selected-only reports, raw findings, ledger records, and usage across replace rounds before the finding gate', () => {
+    const { workflowPath, scenarioPath } = writeSelectedArtifactsFixture(testRepo.path);
+    updateIsolatedConfig(isolatedEnv.taktDir, {
+      provider: 'mock',
+      model: 'mock-default',
+      concurrency: 1,
+      logging: { usage_events: true },
+    });
+
+    const result = runTakt({
+      args: ['--task', 'Review frontend then backend changes', '--workflow', workflowPath, '--provider', 'mock'],
+      cwd: testRepo.path,
+      env: { ...isolatedEnv.env, TAKT_MOCK_SCENARIO: scenarioPath },
+      timeout: 240_000,
+    });
+
+    expect(result.exitCode, `${result.stdout}\n${result.stderr}`).toBe(1);
+
+    const reportDir = join(onlyRunRoot(testRepo.path), 'reports');
+    expect(
+      readFileSync(join(reportDir, 'architecture-review.md'), 'utf-8'),
+      `${result.stdout}\n${result.stderr}`,
+    ).toContain('round 2');
+    expect(readFileSync(join(reportDir, 'frontend-review.md'), 'utf-8')).toContain('round 1');
+    expect(readFileSync(join(reportDir, 'backend-review.md'), 'utf-8')).toContain('round 2');
+    const historyDirectory = join(reportDir, '.takt-report-internal', 'history');
+    const historyContents = readdirSync(historyDirectory, { recursive: true })
+      .filter((entry) => typeof entry === 'string')
+      .map((entry) => join(historyDirectory, entry))
+      .filter((path) => statSync(path).isFile())
+      .map((path) => readFileSync(path, 'utf-8'));
+    expect(historyContents.filter((content) => content.includes('architecture report for round 1'))).toHaveLength(1);
+    expect(historyContents.some((content) => content.includes('frontend report'))).toBe(false);
+    expect(historyContents.some((content) => content.includes('backend report'))).toBe(false);
+
+    const rawSnapshotFiles = readdirSync(reportDir)
+      .filter((file) => file.startsWith('raw-findings.') && file.endsWith('.json'));
+    expect(rawSnapshotFiles).toHaveLength(1);
+    const rawBatches = [
+      readFileSync(join(reportDir, rawSnapshotFiles[0]!), 'utf-8'),
+      ...historyContents,
+    ].flatMap((content): Array<Array<{ reviewer: string }>> => {
+      try {
+        const parsed: unknown = JSON.parse(content);
+        // 差し戻し slot のパスも manager 取り込みを通るので、言い直しが新しい観測を
+        // 出さなかったパスは空の raw batch を残す。ここで見たいのはレビューラウンド
+        // ごとの観測なので、空の batch は raw スナップショットとして数えない。
+        return Array.isArray(parsed)
+          && parsed.length > 0
+          && parsed.every((entry) => (
+            typeof entry === 'object'
+            && entry !== null
+            && typeof Reflect.get(entry, 'reviewer') === 'string'
+          ))
+          ? [parsed as Array<{ reviewer: string }>]
+          : [];
+      } catch {
+        return [];
+      }
+    });
+    expect(rawBatches).toHaveLength(2);
+    const firstRoundRaw = rawBatches.find(
+      (batch) => batch.some((finding) => finding.reviewer === 'frontend'),
+    );
+    const secondRoundRaw = rawBatches.find(
+      (batch) => batch.some((finding) => finding.reviewer === 'backend'),
+    );
+    expect(firstRoundRaw?.map((finding) => finding.reviewer).sort())
+      .toEqual(['architecture', 'frontend']);
+    expect(secondRoundRaw?.map((finding) => finding.reviewer).sort())
+      .toEqual(['architecture', 'backend']);
+
+    const ledger = readOnlyRunFindingLedger(testRepo.path);
+    expect(ledger.rawFindings.map((finding) => finding.reviewer).sort())
+      .toEqual(['architecture', 'architecture', 'backend', 'frontend']);
+
+    const logsDirectory = join(onlyRunRoot(testRepo.path), 'logs');
+    const usageFile = readdirSync(logsDirectory).find((file) => file.endsWith('-usage-events.jsonl'));
+    expect(usageFile).toBeDefined();
+    const usageSteps = readJsonl(join(logsDirectory, usageFile!))
+      .filter((record) => record.step_type === 'parallel')
+      .map((record) => record.step);
+    const selectorIndexes = usageSteps
+      .map((step, index) => step.startsWith('dynamic-selector:') ? index : -1)
+      .filter((index) => index >= 0);
+    expect(selectorIndexes).toHaveLength(2);
+    const firstRoundUsage = usageSteps.slice(selectorIndexes[0]! + 1, selectorIndexes[1]!);
+    const secondRoundUsage = usageSteps.slice(selectorIndexes[1]! + 1);
+    expect(firstRoundUsage).toEqual(expect.arrayContaining(['architecture', 'frontend']));
+    expect(firstRoundUsage).not.toContain('backend');
+    expect(secondRoundUsage).toEqual(expect.arrayContaining(['architecture', 'backend']));
+    expect(secondRoundUsage).not.toContain('frontend');
+  }, 240_000);
 });

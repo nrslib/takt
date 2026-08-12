@@ -15,6 +15,7 @@ interface CompanionAgentResolution {
   readonly provider: ProviderType;
   readonly model?: string;
   readonly providerOptions?: StepProviderOptions;
+  readonly permissionMode?: PermissionMode;
 }
 
 interface CompanionCallOptions {
@@ -23,10 +24,6 @@ interface CompanionCallOptions {
   failureDir: string;
   language: string;
   resolution: CompanionAgentResolution;
-  permissionMode: PermissionMode;
-  allowedTools: string[];
-  mcpServers: Record<string, never>;
-  sessionId: undefined;
   abortSignal: AbortSignal;
   onPromptResolved?: (prompt: { systemPrompt: string; userInstruction: string }) => void;
 }
@@ -196,10 +193,6 @@ async function executeCompanionStructuredAgentInternal(input: Parameters<
         failureDir: input.failureDir,
         language: input.language,
         resolution: input.resolution,
-        permissionMode: 'readonly',
-        allowedTools: [],
-        mcpServers: {},
-        sessionId: undefined,
         abortSignal: controller.signal,
         onPromptResolved: ({ systemPrompt, userInstruction }) => {
           actualSystemPrompt = systemPrompt;

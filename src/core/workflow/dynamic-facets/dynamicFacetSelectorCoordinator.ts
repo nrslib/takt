@@ -1,4 +1,4 @@
-import { executeIsolatedStructuredInternalAgent } from '../../../agents/agent-usecases.js';
+import { executeStructuredAgent } from '../../../agents/structured-caller/transport.js';
 import type {
   AgentResponse,
   DynamicFacetSelectionSnapshot,
@@ -128,20 +128,22 @@ export class DynamicFacetSelectorCoordinator {
     let selectedIds: readonly string[];
     let snapshot: DynamicFacetSelectionSnapshot;
     try {
-      response = await executeIsolatedStructuredInternalAgent(
-        'You are TAKT\'s internal dynamic facet selector. Select only candidate IDs from the provided pool.',
+      response = await executeStructuredAgent(
         instruction,
         selectorContract.providerSchema,
         {
+          name: 'dynamic-facet-selector',
           cwd: this.deps.getCwd(),
           projectCwd: this.deps.engineOptions.projectCwd,
           failureDir: this.deps.failureDir,
           abortSignal: this.deps.engineOptions.abortSignal,
           language: this.deps.engineOptions.language,
+          systemPrompt: 'You are TAKT\'s internal dynamic facet selector. Select only candidate IDs from the provided pool.',
           resolution: {
             provider: selectorProvider.provider,
             model: selectorProvider.model,
             providerOptions: selectorProvider.providerOptions,
+            permissionMode: selectorProvider.permissionMode,
           },
         },
       );

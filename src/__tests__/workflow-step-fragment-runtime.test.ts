@@ -7,6 +7,12 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
+// 正規化係は共通 structured transport で走る。raw findings の
+// 唯一の生成元なのでここで差し替える。
+vi.mock('../agents/finding-intake-normalizer-usecase.js', () => ({
+  normalizeFindingIntake: vi.fn(),
+}));
+
 vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../core/workflow/evaluation/index.js')>();
   const { MockRuleEvaluator } = await import('./rule-evaluator-test-double.js');
@@ -28,6 +34,10 @@ import { WorkflowEngine } from './helpers/workflow-engine.js';
 import type { WorkflowConfig, WorkflowResumePoint } from '../core/models/types.js';
 import { getWorkflowReference } from '../core/workflow/workflow-reference.js';
 import { runAgent } from '../agents/runner.js';
+import { normalizeFindingIntake } from '../agents/finding-intake-normalizer-usecase.js';
+
+/** レビュアーが書く markdown レポート本文。正規化係へはこの本文がそのまま渡る。 */
+const REVIEW_REPORT_CONTENT = 'A finding emitted by the reviewer.';
 import { resolveWorkflowCallTarget } from '../infra/config/loaders/workflowCallResolver.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
 import {
@@ -44,6 +54,7 @@ import {
 } from './engine-test-helpers.js';
 import { isolateStepFragmentTestConfig } from './helpers/step-fragment-test-helpers.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
+import { DEFAULT_REVIEW_INTEGRITY_BUDGET } from '../core/workflow/findings/review-integrity.js';
 import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 
 function writeFile(root: string, relativePath: string, content: string): string {
@@ -53,6 +64,68 @@ function writeFile(root: string, relativePath: string, content: string): string 
   return filePath;
 }
 
+function schemaHasProperty(schema: unknown, property: string): boolean {
+  if (typeof schema !== 'object' || schema === null || Array.isArray(schema)) {
+    return false;
+  }
+  const properties = Reflect.get(schema, 'properties');
+  return typeof properties === 'object'
+    && properties !== null
+    && !Array.isArray(properties)
+    && property in properties;
+}
+
+function workflowSteps(fragmentName?: string): string {
+  const review = fragmentName
+    ? [
+        '  - name: review',
+        '    uses: ' + fragmentName,
+        '    rules:',
+        '      - condition: issue',
+        '        next: fix',
+      ].join('\n')
+    : [
+        '  - name: review',
+        '    instruction: review',
+        '    required_permission_mode: edit',
+        '    provider_options:',
+        '      claude:',
+        '        allowed_tools: [Read]',
+        '    output_contracts:',
+        '      report:',
+        '        - name: review.md',
+        '          format: review-finding-contract',
+        '    rules:',
+        '      - condition: issue',
+        '        next: fix',
+      ].join('\n');
+  return [
+    'name: fragment-runtime',
+    'initial_step: review',
+    'max_steps: 4',
+    'workflow_config:',
+    '  provider: claude',
+    'finding_contract:',
+    '  manager:',
+    '    persona: findings-manager',
+    '    instruction: findings-manager',
+    '    output_contract: findings-manager',
+    'loop_monitors:',
+    '  - cycle: [review, fix]',
+    '    threshold: 1',
+    '    judge:',
+    '      rules:',
+    '        - condition: stop',
+    '          next: COMPLETE',
+    'steps:',
+    review,
+    '  - name: fix',
+    '    instruction: fix',
+    '    rules:',
+    '      - condition: fixed',
+    '        next: review',
+  ].join('\n') + '\n';
+}
 
 function resumableWorkflowSteps(fragmentName?: string): string {
   const review = fragmentName
@@ -105,6 +178,188 @@ describe('workflow step fragment runtime contract', () => {
     if (existsSync(projectDir)) rmSync(projectDir, { recursive: true, force: true });
     restoreConfig();
   });
+
+  it('executes fragment and inline steps with identical transitions, finding contract, resume point, and loop monitor result', async () => {
+    writeFile(projectDir, '.takt/steps/review.yaml', [
+      'name: review',
+      'instruction: review',
+      'required_permission_mode: edit',
+      'provider_options:',
+      '  claude:',
+      '    allowed_tools: [Read]',
+      'output_contracts:',
+      '  report:',
+      '    - name: review.md',
+      '      format: review-finding-contract',
+      '',
+    ].join('\n'));
+    const inlinePath = writeFile(projectDir, '.takt/workflows/inline.yaml', workflowSteps());
+    const fragmentPath = writeFile(projectDir, '.takt/workflows/fragment.yaml', workflowSteps('review'));
+    writeFile(projectDir, '.takt/facets/output-contracts/review-finding-contract.md', 'Finding contract review report');
+    const inline = loadWorkflowFromFile(inlinePath, projectDir);
+    const fragment = loadWorkflowFromFile(fragmentPath, projectDir);
+
+    const execute = async (config: typeof inline) => {
+      const cwd = createTestTmpDir();
+      testCwds.push(cwd);
+      writeFile(cwd, 'src/reviewed.ts', 'export const reviewed = true;\n');
+      initializeGitFixture(cwd, ['src/reviewed.ts']);
+      const engine = new WorkflowEngine(config, cwd, 'test task', { projectCwd: cwd });
+      engines.push(engine);
+      const transitions: string[] = [];
+      const cycleCounts: number[] = [];
+      const ledgers: Array<{
+        findings: unknown[];
+        rawFindings: unknown[];
+        reviewIntegrity?: { roundMarkers: string[] };
+      }> = [];
+      engine.on('step:complete', (step) => transitions.push(step.name));
+      engine.on('step:cycle_detected', (_monitor, count) => cycleCounts.push(count));
+      engine.on('findings:ledger', (ledger) => ledgers.push(ledger));
+
+      vi.mocked(normalizeFindingIntake).mockReset();
+      vi.mocked(normalizeFindingIntake).mockImplementation(async () => makeResponse({
+        persona: 'finding-intake-normalizer',
+        content: '',
+        structuredOutput: {
+          rawFindings: [{
+            rawExcerpt: REVIEW_REPORT_CONTENT,
+            candidate: {
+              rawFindingId: 'review-issue',
+              familyTag: 'test',
+              severity: 'high',
+              title: 'Test finding',
+              description: REVIEW_REPORT_CONTENT,
+              suggestion: null,
+              relation: 'new',
+              targetFindingIds: [],
+              target: null,
+              evidenceRequests: [],
+            },
+          }],
+        },
+      }));
+      vi.mocked(runAgent).mockReset();
+      vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+        options?.onPromptResolved?.({
+          systemPrompt: 'test system prompt',
+          userInstruction: instruction,
+        });
+        if (persona === 'review' || options?.workflowMeta?.currentStep === 'review') {
+          return makeResponse({ persona, content: REVIEW_REPORT_CONTENT });
+        }
+        if (schemaHasProperty(options?.outputSchema, 'rawDecisions')) {
+          return makeResponse({
+            persona,
+            content: 'manager complete',
+            structuredOutput: {
+              rawDecisions: [],
+              disputeDecisions: [],
+              conflictDecisions: [],
+              invalidateDecisions: [],
+              duplicateDecisions: [],
+              dismissDecisions: [],
+            },
+          });
+        }
+        return makeResponse({
+          persona,
+          content: persona === 'supervisor' ? 'stop' : 'fixed',
+        });
+      });
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'ai_judge' },
+      ]);
+
+      const state = await engine.run();
+      const resumePoint = engine.getResumePoint();
+      const runAgentCalls = vi.mocked(runAgent).mock.calls.map(([, , options]) => ({
+        stepName: options?.workflowMeta?.currentStep,
+        allowedTools: options?.allowedTools,
+        bypassPermissions: options?.bypassPermissions,
+        providerOptions: options?.providerOptions,
+        resolvedModel: options?.resolvedModel,
+        resolvedProvider: options?.resolvedProvider,
+        resolvedProviderOptions: options?.resolvedProviderOptions,
+        requiredPermissionMode: options?.permissionResolution?.requiredPermissionMode,
+      }));
+      return { state, transitions, cycleCounts, ledgers, resumePoint, runAgentCalls };
+    };
+
+    const inlineResult = await execute(inline);
+    const fragmentResult = await execute(fragment);
+
+    expect(fragment.findingContract).toEqual(inline.findingContract);
+    expect(fragmentResult.transitions).toEqual(inlineResult.transitions);
+    expect(fragmentResult.cycleCounts).toEqual(inlineResult.cycleCounts);
+    expect(fragmentResult.runAgentCalls).toEqual(inlineResult.runAgentCalls);
+    expect(fragmentResult.runAgentCalls.find((call) => call.stepName === 'review')).toMatchObject({
+      allowedTools: ['Read'],
+      requiredPermissionMode: 'edit',
+    });
+    // このレビュアーは毎回同じ不完全 claim を返すので、差し戻し slot は提示予算を
+    // 使い切る。ledger event 数には publication・manager commit・terminal disposition
+    // が含まれるため、上限は event 数ではなく永続化された round marker で検証する。
+    expect(fragmentResult.ledgers).toHaveLength(inlineResult.ledgers.length);
+    expect(inlineResult.ledgers.length).toBeGreaterThan(0);
+    for (const result of [inlineResult, fragmentResult]) {
+      const finalLedger = result.ledgers.at(-1);
+      expect(finalLedger?.reviewIntegrity?.roundMarkers.length).toBeLessThanOrEqual(
+        DEFAULT_REVIEW_INTEGRITY_BUDGET.maxReviewRounds,
+      );
+    }
+    // 通常レビューの正規化係にはレビュアーの markdown レポート本文そのものを渡す。
+    // 提示予算を使い切った後の evidence-search は engine 指示文を入力する別経路なので、
+    // その経路も空文字や本編本文の誤転送になっていないことを分けて検証する。
+    const normalizerReports = vi.mocked(normalizeFindingIntake).mock.calls
+      .map(([report]) => report);
+    expect(normalizerReports.length).toBeGreaterThan(0);
+    expect(normalizerReports).toContain(REVIEW_REPORT_CONTENT);
+    expect(normalizerReports.some((report) => report.startsWith('Evidence-search request (engine-provided source only)')))
+      .toBe(true);
+    expect(normalizerReports.every((report) => report.length > 0)).toBe(true);
+    for (const result of [inlineResult, fragmentResult]) {
+      // 差し戻しを重ねても、決着しない観測は1件の anomaly のままで、product
+      // findings は空を保つ（周回のたびに finding が増えない）。
+      // FC intake 契約化後の landing: target 無し（review_scope）の独立 claim は
+      // provisional finding ではなく intake-contract-incomplete reviewer anomaly に
+      // 隔離され、product findings は空のまま completion を塞ぐ。
+      expect(result.ledgers[0]).toMatchObject({
+        rawFindings: [{
+          familyTag: 'test',
+          severity: 'high',
+          title: 'Test finding',
+          relation: 'new',
+          target: { kind: 'review_scope' },
+        }],
+        findings: [],
+        reviewerAnomalies: [{
+          kind: 'intake-contract-incomplete',
+          title: 'Test finding',
+          intakeContract: {
+            observationClass: 'claim-bearing',
+            missingRequirements: ['target'],
+          },
+        }],
+      });
+    }
+    expect(inlineResult.state.status).toBe('aborted');
+    expect(fragmentResult.state.status).toBe('aborted');
+    expect(fragmentResult.resumePoint?.stack[0]).toMatchObject({ step: 'fix', kind: 'agent' });
+    expect(fragmentResult.resumePoint?.stack[0]?.workflow_ref).toBe(getWorkflowReference(fragment));
+    expect(fragmentResult.resumePoint?.stack[0]?.workflow_ref).not.toContain(fragmentPath);
+    expect(fragmentResult.resumePoint?.stack[0]?.step_iterations).toEqual({
+      review: 1,
+      fix: 1,
+      _loop_judge_review_fix: 1,
+    });
+    expect(fragmentResult.resumePoint?.stack[0]?.step_iterations)
+      .toEqual(inlineResult.resumePoint?.stack[0]?.step_iterations);
+  // inline と fragment の engine を2本とも実走させるため、ローカルの cold run では
+  // 既定の120秒を超える。処理停止ではなく完走することを確認できる余裕を持たせる。
+  }, 240_000);
 
   it('resumes inline and fragment workflows from the same saved step, iteration, and transition', async () => {
     writeFile(projectDir, '.takt/steps/review.yaml', [

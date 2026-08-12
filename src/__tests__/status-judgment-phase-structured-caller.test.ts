@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkflowStep } from '../core/models/types.js';
 import { runStatusJudgmentPhase } from '../core/workflow/status-judgment-phase.js';
 import { runAgent } from '../agents/runner.js';
-import { PromptBasedStructuredCaller } from '../agents/structured-caller.js';
+import { ProviderNeutralStructuredCaller } from '../agents/structured-caller.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 
 vi.mock('../agents/runner.js', () => ({
@@ -254,7 +254,7 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
       lastResponse: 'response body',
       iteration: 2,
       resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'cursor', model: undefined }),
-      structuredCaller: new PromptBasedStructuredCaller(),
+      structuredCaller: new ProviderNeutralStructuredCaller(),
       onProviderAttempt,
     } as Parameters<typeof runStatusJudgmentPhase>[1])).rejects.toThrow('tag attempt rejected');
 
@@ -303,7 +303,7 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
       lastResponse: 'response body',
       iteration: 2,
       resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'cursor', model: undefined }),
-      structuredCaller: new PromptBasedStructuredCaller(),
+      structuredCaller: new ProviderNeutralStructuredCaller(),
       onProviderAttempt,
     } as Parameters<typeof runStatusJudgmentPhase>[1])).rejects.toThrow('ai judge attempt rejected');
 

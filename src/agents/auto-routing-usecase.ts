@@ -7,11 +7,10 @@ import {
   type RoutingModelInput,
 } from '../core/workflow/auto-routing/contracts.js';
 import { assertStrictStructuredOutputSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
-import { runAgent, type RunAgentOptions } from './runner.js';
-import { buildMaxTurnsOption } from './provider-call-options.js';
-import {
-  createAgentResponseFailureError,
-} from '../shared/types/agent-failure.js';
+import type { RunAgentOptions } from './runner.js';
+import type { PermissionMode } from '../core/models/types.js';
+import type { StepProviderOptions } from '../core/models/workflow-types.js';
+import { executeStructuredAgent } from './structured-caller/transport.js';
 
 const OUTPUT_SCHEMA = {
   type: 'object',
@@ -36,10 +35,11 @@ export interface WorkRequirementEstimatorOptions {
   cwd: string;
   provider: AutoRoutingConfig['router']['provider'];
   model: string;
+  providerOptions?: StepProviderOptions;
+  permissionMode?: PermissionMode;
   language?: RunAgentOptions['language'];
   childProcessEnv?: RunAgentOptions['childProcessEnv'];
   abortSignal?: RunAgentOptions['abortSignal'];
-  failureDir?: RunAgentOptions['failureDir'];
 }
 
 interface EstimatorAbortScope {
@@ -143,27 +143,25 @@ export function createWorkRequirementEstimator(options: WorkRequirementEstimator
       ]);
       try {
         const response = await Promise.race([
-          runAgent('auto-router', buildPrompt(input), {
+          executeStructuredAgent<Record<string, unknown>>(buildPrompt(input), OUTPUT_SCHEMA, {
+            name: 'auto-router',
+            persona: 'auto-router',
             cwd: options.cwd,
-            provider: options.provider,
-            resolvedProvider: options.provider,
-            model: options.model,
-            resolvedModel: options.model,
-            ...buildMaxTurnsOption(options.provider, options.provider, 1),
+            resolution: {
+              provider: options.provider,
+              model: options.model,
+              providerOptions: options.providerOptions,
+              permissionMode: options.permissionMode,
+            },
+            maxTurns: 1,
             abortSignal: abortScope.signal,
-            permissionMode: 'readonly',
             language: options.language,
             childProcessEnv: options.childProcessEnv,
-            failureDir: options.failureDir,
-            outputSchema: OUTPUT_SCHEMA,
           }),
           abortScope.aborted,
         ]);
         if (response.status !== 'done') {
-          throw createAgentResponseFailureError(
-            response,
-            'Auto routing estimator did not complete',
-          );
+          throw new Error('Auto routing estimator did not complete');
         }
         return parseEstimate(response.structuredOutput ?? JSON.parse(response.content));
       } finally {

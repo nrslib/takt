@@ -128,7 +128,7 @@ describe('ClaudeTerminalProvider wiring', () => {
     expect(Object.prototype.hasOwnProperty.call(terminalOptions, 'maxTurns')).toBe(false);
   });
 
-  it('Given strict read-only internal isolation, When call is invoked, Then it reaches the terminal client', async () => {
+  it('Given explicit runtime permissions, When call is invoked, Then they reach the terminal client', async () => {
     const agent = new ClaudeTerminalProvider().setup({
       name: 'selector',
       systemPrompt: 'Select reviewers.',
@@ -136,7 +136,6 @@ describe('ClaudeTerminalProvider wiring', () => {
 
     await agent.call('prompt', {
       cwd: '/tmp/worktree',
-      internalAgentIsolation: 'strict-readonly',
       permissionMode: 'readonly',
       allowedTools: [],
       mcpServers: {},
@@ -148,11 +147,10 @@ describe('ClaudeTerminalProvider wiring', () => {
     });
 
     expect(mockCallClaudeTerminal).toHaveBeenCalledWith('selector', 'prompt', expect.objectContaining({
-      internalAgentIsolation: 'strict-readonly',
       permissionMode: 'readonly',
       allowedTools: [],
       mcpServers: {},
-      skillsEnabled: false,
+      skillsEnabled: true,
     }));
   });
 

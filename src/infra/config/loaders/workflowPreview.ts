@@ -1,4 +1,4 @@
-import type { InteractiveMode, WorkflowConfig, WorkflowStep } from '../../../core/models/index.js';
+import type { InteractiveMode, PermissionMode, WorkflowConfig, WorkflowStep } from '../../../core/models/index.js';
 import { getAllParallelSubSteps, isDynamicParallelSubSteps } from '../../../core/models/types.js';
 import type { StepProviderOptions } from '../../../core/models/workflow-types.js';
 import type { InternalAgentSeats, TagRoutingConflictPolicy } from '../../../core/models/config-types.js';
@@ -46,7 +46,7 @@ export interface StepPreview {
   model?: StepProviderInfo['model'];
   providerSource?: ProviderResolutionSource;
   modelSource?: ProviderResolutionSource;
-  permissionMode?: 'readonly';
+  permissionMode?: PermissionMode;
   internalAgent?: boolean;
   sessionKey?: string;
   requiresUserInput?: boolean;
@@ -170,10 +170,17 @@ function buildDynamicSelectorPreview(
     personaDisplayName: 'TAKT internal selector',
     personaContent: '',
     instructionContent: '',
-    allowedTools: [...selectorProvider.nativeTools],
+    allowedTools: resolveAllowedToolsForProvider(
+      selectorProvider.providerOptions,
+      false,
+      undefined,
+      selectorProvider.provider,
+    ) ?? [],
     canEdit: false,
     internalAgent: true,
-    permissionMode: 'readonly',
+    ...(selectorProvider.permissionMode === undefined
+      ? {}
+      : { permissionMode: selectorProvider.permissionMode }),
     provider: selectorProvider.provider,
     model: selectorProvider.model,
     providerSource: selectorProvider.providerSource,

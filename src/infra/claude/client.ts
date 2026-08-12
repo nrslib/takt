@@ -38,7 +38,6 @@ export class ClaudeClient {
       cwd: options.cwd,
       abortSignal: options.abortSignal,
       sessionId: options.sessionId,
-      internalAgentIsolation: options.internalAgentIsolation,
       allowedTools: options.allowedTools,
       mcpServers: options.mcpServers,
       model: options.model,

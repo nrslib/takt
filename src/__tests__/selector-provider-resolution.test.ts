@@ -561,7 +561,7 @@ describe('workflow selector resolution', () => {
     });
   });
 
-  it('should preserve compatible Codex options and expose the runtime native tool profile', () => {
+  it('should preserve compatible Codex options', () => {
     const projectDir = createProject([
       'takt_providers:',
       '  selector:',
@@ -586,12 +586,11 @@ describe('workflow selector resolution', () => {
             skills: { repo: true, user: false },
           },
         },
-        nativeTools: ['request_user_input', 'update_plan', 'view_image', 'web_search'],
       }),
     });
   });
 
-  it('should keep compatible Claude options while exposing an empty native tool profile', () => {
+  it('should keep compatible Claude options', () => {
     const projectDir = createProject([
       'takt_providers:',
       '  selector:',
@@ -610,7 +609,6 @@ describe('workflow selector resolution', () => {
         providerOptions: {
           claude: { effort: 'low', skills: { enabled: false } },
         },
-        nativeTools: [],
       }),
     });
   });
@@ -622,7 +620,6 @@ describe('workflow selector resolution', () => {
         '        allowed_tools:',
         '          - Read',
       ],
-      path: 'takt_providers.selector.provider_options.claude.allowed_tools',
     },
     {
       label: 'enabled skills',
@@ -630,9 +627,8 @@ describe('workflow selector resolution', () => {
         '        skills:',
         '          enabled: true',
       ],
-      path: 'takt_providers.selector.provider_options.claude.skills.enabled',
     },
-  ])('should reject Claude $label before selector startup', ({ config, path }) => {
+  ])('should accept configured Claude $label for the shared selector transport', ({ config }) => {
     const projectDir = createProject([
       'takt_providers:',
       '  selector:',
@@ -642,11 +638,11 @@ describe('workflow selector resolution', () => {
       ...config,
     ].join('\n'));
 
-    expect(() => resolveWorkflowSelectorForProject(makeDynamicWorkflow(), projectDir)).toThrow(path);
+    expect(() => resolveWorkflowSelectorForProject(makeDynamicWorkflow(), projectDir)).not.toThrow();
   });
 
   it.each(['copilot', 'cursor', 'kiro', 'opencode'] as const)(
-    'should reject dynamic selector provider %s at the shared workflow resolution boundary',
+    'should accept dynamic selector provider %s at the shared workflow resolution boundary',
     (provider) => {
       const config = provider === 'opencode'
         ? 'provider: opencode\nmodel: opencode/big-pickle\n'
@@ -654,9 +650,10 @@ describe('workflow selector resolution', () => {
       const projectDir = createProject(config);
       const workflow = makeDynamicWorkflow();
 
-      expect(() => resolveWorkflowSelectorForProject(workflow, projectDir)).toThrow(
-        `Provider "${provider}" does not support strict internal-agent isolation`,
-      );
+      expect(resolveWorkflowSelectorForProject(workflow, projectDir)).toMatchObject({
+        applies: true,
+        selectorProvider: { provider },
+      });
     },
   );
 });

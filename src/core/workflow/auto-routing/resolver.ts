@@ -119,6 +119,7 @@ export function resolveAutoRoutingCandidateProviderInfo(candidate: AutoRoutingCa
   return {
     ...providerInfo,
     ...(candidate.providerOptions !== undefined ? { providerOptions: candidate.providerOptions, providerOptionsSources: collectProviderOptionsSources(candidate.providerOptions, source) } : {}),
+    ...(candidate.permissionMode !== undefined ? { permissionMode: candidate.permissionMode } : {}),
     autoRoutingDecision: {
       candidateName: candidate.name,
       routingTier: candidate.routingTier,

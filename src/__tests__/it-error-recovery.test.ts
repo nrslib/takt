@@ -13,7 +13,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setMockScenario, resetScenario } from '../infra/mock/index.js';
-import { DefaultStructuredCaller } from '../agents/structured-caller.js';
+import { ProviderNeutralStructuredCaller } from '../agents/structured-caller.js';
 import type { WorkflowConfig, WorkflowStep, WorkflowRule } from '../core/models/index.js';
 import { semanticRuleCandidatesOf } from '../core/models/workflow-rule-condition.js';
 import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
@@ -93,7 +93,7 @@ function createTestEnv(): { dir: string; agentPaths: Record<string, string> } {
 function buildEngineOptions(projectCwd: string) {
   return {
     projectCwd,
-    structuredCaller: new DefaultStructuredCaller(),
+    structuredCaller: new ProviderNeutralStructuredCaller(),
   };
 }
 
