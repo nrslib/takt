@@ -218,7 +218,7 @@ export async function runReviewCompletionEpisode(input: {
         });
         if (retryResponse.status === 'done') {
           response = retryResponse;
-          reviewerSessionId = retryResponse.sessionId ?? reviewerSessionId;
+          reviewerSessionId = retryResponse.sessionId;
           lastJudgeFailure = undefined;
         } else {
           lastJudgeFailure = retryResponse.error

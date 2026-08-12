@@ -63,6 +63,15 @@ function reviewerResponse(persona: string, content: string, sessionId: string): 
   return makeResponse({ persona, content, sessionId });
 }
 
+function reviewerResponseWithoutSession(persona: string, content: string): AgentResponse {
+  return {
+    persona,
+    status: 'done',
+    content,
+    timestamp: new Date(),
+  };
+}
+
 function judgeResponse(complete: boolean): AgentResponse {
   return makeResponse({
     persona: 'review-completion-judge',
@@ -126,7 +135,7 @@ describe('WorkflowEngine review completion wiring', () => {
     expect(phase2.getSessionId(phase2.resolveSessionKey(step))).toBe('review-session-2');
   });
 
-  it('records a done empty completion retry as successful usage before recovery', async () => {
+  it('clears the normal reviewer session after double-empty recovery succeeds fresh without one', async () => {
     const step = reviewStep('reviewer');
     const delegatedUsage = vi.fn();
     engine = new WorkflowEngine(normalConfig(step), cwd, 'task', {
@@ -143,22 +152,32 @@ describe('WorkflowEngine review completion wiring', () => {
       }
       options.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: instruction });
       reviewerCalls += 1;
-      return reviewerResponse(
-        String(persona),
-        reviewerCalls === 2 ? '  ' : `review-${reviewerCalls}`,
+      expect(options.sessionId).toBe([
+        undefined,
         'review-session',
+        'review-session',
+        undefined,
+      ][reviewerCalls - 1]);
+      if (reviewerCalls === 1) {
+        return reviewerResponse(String(persona), 'initial review', 'review-session');
+      }
+      return reviewerResponseWithoutSession(
+        String(persona),
+        reviewerCalls < 4 ? '  ' : 'fresh review',
       );
     });
 
     const state = await engine.run();
 
     expect(state.status).toBe('completed');
-    expect(reviewerCalls).toBe(3);
+    expect(reviewerCalls).toBe(4);
     const reviewerUsage = delegatedUsage.mock.calls
       .filter(([context]) => context.step === step.name)
       .map(([, result]) => result.success);
     expect(reviewerUsage.length).toBeGreaterThan(0);
     expect(reviewerUsage).not.toContain(false);
+    const phase2 = vi.mocked(runReportPhase).mock.calls[0]![2] as ReportPhaseRunnerContext;
+    expect(phase2.getSessionId(phase2.resolveSessionKey(step))).toBeUndefined();
   });
 
   it('includes bounded repository source and diff in the judge prompt without relying on tools', async () => {
@@ -368,6 +387,7 @@ describe('WorkflowEngine review completion wiring', () => {
       onDelegatedAgentUsage: delegatedUsage,
     });
     const reviewerCalls = new Map<string, number>();
+    const reviewerBSessions: Array<string | undefined> = [];
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       if (options.internalAgentName === 'review-completion-judge') {
         return judgeResponse(!instruction.includes('reviewer-b-first'));
@@ -376,16 +396,26 @@ describe('WorkflowEngine review completion wiring', () => {
       const name = String(persona).includes('reviewer-a') ? 'reviewer-a' : 'reviewer-b';
       const count = (reviewerCalls.get(name) ?? 0) + 1;
       reviewerCalls.set(name, count);
-      const content = name === 'reviewer-b' && count === 2
-        ? '  '
-        : `${name}-${count === 1 ? 'first' : 'retry'}`;
-      return reviewerResponse(name, content, `${name}-session-${count}`);
+      if (name === 'reviewer-b') {
+        reviewerBSessions.push(options.sessionId);
+        if (count === 1) {
+          return reviewerResponse(name, `${name}-first`, `${name}-session-1`);
+        }
+        return reviewerResponseWithoutSession(name, count < 4 ? '  ' : `${name}-fresh`);
+      }
+      return reviewerResponse(name, `${name}-first`, `${name}-session-1`);
     });
 
     const state = await engine.run();
 
     expect(state.status).toBe('completed');
-    expect(Object.fromEntries(reviewerCalls)).toEqual({ 'reviewer-a': 1, 'reviewer-b': 3 });
+    expect(Object.fromEntries(reviewerCalls)).toEqual({ 'reviewer-a': 1, 'reviewer-b': 4 });
+    expect(reviewerBSessions).toEqual([
+      undefined,
+      'reviewer-b-session-1',
+      'reviewer-b-session-1',
+      undefined,
+    ]);
     const reviewerBUsage = delegatedUsage.mock.calls
       .filter(([context]) => context.step === 'reviewer-b')
       .map(([, result]) => result.success);
@@ -394,6 +424,9 @@ describe('WorkflowEngine review completion wiring', () => {
     expect(runReportPhase).toHaveBeenCalledTimes(2);
     expect(vi.mocked(runReportPhase).mock.calls.map(([reportedStep]) => reportedStep.name).sort())
       .toEqual(['reviewer-a', 'reviewer-b']);
+    const reviewerBPhase2 = vi.mocked(runReportPhase).mock.calls
+      .find(([reportedStep]) => reportedStep.name === 'reviewer-b')![2] as ReportPhaseRunnerContext;
+    expect(reviewerBPhase2.getSessionId(reviewerBPhase2.resolveSessionKey(reviewerB))).toBeUndefined();
   });
 
   it('keeps a judge failure in Phase 2 without leaking it to response, state, or Phase 3', async () => {
