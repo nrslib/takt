@@ -240,13 +240,18 @@ function expectResolvedReviewerInstructions(
     if (typeof instructionRef !== 'string') {
       throw new Error(`Instruction argument "${param}" not found for reviewer "${step.name}"`);
     }
-    expect(step.instruction).toBe(resolveRefToContent(
+    const resolvedInstruction = resolveRefToContent(
       instructionRef,
       undefined,
       projectDir,
       'instructions',
       { projectDir, lang: language },
-    ));
+    );
+    expect(resolvedInstruction).toEqual(expect.any(String));
+    expect(resolvedInstruction).not.toBe('');
+    expect(step.instruction).toEqual(expect.any(String));
+    expect(step.instruction).not.toBe('');
+    expect(step.instruction).toBe(resolvedInstruction);
   }
 }
 
