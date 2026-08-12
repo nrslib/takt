@@ -8,9 +8,7 @@ import {
 } from '../judge-status-usecase.js';
 import {
   decomposeTask,
-  requestDecompositionRawResponse,
   requestMoreParts,
-  requestMorePartsRawResponse,
   type DecomposeTaskOptions,
   type DecomposeTaskResponse,
   type MorePartsOptions,
@@ -66,14 +64,6 @@ export class DefaultStructuredCaller implements StructuredCaller {
     return decomposeTask(instruction, maxInitialParts, options);
   }
 
-  async requestDecompositionRawResponse(
-    instruction: string,
-    maxInitialParts: number | undefined,
-    options: DecomposeTaskOptions,
-  ): Promise<AgentResponse> {
-    return requestDecompositionRawResponse(instruction, maxInitialParts, options);
-  }
-
   async requestMoreParts(
     originalInstruction: string,
     allResults: TeamLeaderPartFeedbackResult[],
@@ -88,17 +78,4 @@ export class DefaultStructuredCaller implements StructuredCaller {
     );
   }
 
-  async requestMorePartsRawResponse(
-    originalInstruction: string,
-    allResults: TeamLeaderPartFeedbackResult[],
-    existingIds: string[],
-    options: MorePartsOptions,
-  ): Promise<AgentResponse> {
-    return requestMorePartsRawResponse(
-      originalInstruction,
-      allResults,
-      existingIds,
-      options,
-    );
-  }
 }

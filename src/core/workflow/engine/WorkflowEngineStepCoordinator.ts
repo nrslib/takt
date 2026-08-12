@@ -7,8 +7,6 @@ import type {
   WorkflowStep,
 } from '../../models/types.js';
 import { getAllParallelSubSteps } from '../../models/types.js';
-import { ABORT_STEP, FINDING_CONFLICT_ADJUDICATION_STEP } from '../constants.js';
-import { FINDING_CONFLICT_ADJUDICATION_RULE_INDEX } from '../findings/adjudication-step.js';
 import { isDelegatedWorkflowStep, isSystemWorkflowStep, isWorkflowCallStep } from '../step-kind.js';
 import type {
   RuntimeStepResolution,
@@ -130,12 +128,6 @@ interface WorkflowEngineStepCoordinatorDeps {
     reportNames: readonly string[],
     parallelParentStepName?: string,
   ) => void;
-  /** Present only when the workflow has an effective finding_contract and the finding-conflict-adjudication step was injected (see WorkflowEngine). */
-  findingConflictAdjudicationRunner?: {
-    run: (step: WorkflowStep, state: WorkflowState, runtime?: RuntimeStepResolution) => Promise<StepRunResult>;
-    /** Origin the runner last resolved (state.previousStep or the pending attempt's durable originStep — origin-step requirement). */
-    getLastOriginStep: () => string | undefined;
-  };
 }
 
 export class WorkflowEngineStepCoordinator {
@@ -167,15 +159,7 @@ export class WorkflowEngineStepCoordinator {
     const updateSession = this.deps.updatePersonaSession;
     let result: StepRunResult;
 
-    if (step.name === FINDING_CONFLICT_ADJUDICATION_STEP && step.engineSynthesized === true) {
-      const runner = this.deps.findingConflictAdjudicationRunner;
-      if (!runner) {
-        throw new Error(
-          `Step "${step.name}" is the engine-synthesized conflict adjudication step but no adjudication runner is configured`,
-        );
-      }
-      result = await runner.run(step, this.deps.state, runtime);
-    } else if (step.parallel && getAllParallelSubSteps(step.parallel).length > 0) {
+    if (step.parallel && getAllParallelSubSteps(step.parallel).length > 0) {
       result = await this.deps.parallelRunner.runParallelStep(
         step,
         this.deps.state,
@@ -261,16 +245,6 @@ export class WorkflowEngineStepCoordinator {
     if (response.status !== 'done') {
       throw new Error(`Unhandled response status: ${response.status}`);
     }
-    if (
-      step.name === FINDING_CONFLICT_ADJUDICATION_STEP
-      && step.engineSynthesized === true
-      && response.matchedRuleIndex != null
-    ) {
-      const dynamicNext = this.resolveAdjudicationDynamicNextStep(response.matchedRuleIndex);
-      if (dynamicNext !== undefined) {
-        return { nextStep: dynamicNext };
-      }
-    }
     if (response.matchedRuleIndex != null && step.rules) {
       const transition = determineRuleTransition(step, response.matchedRuleIndex);
       if (transition && (transition.nextStep || transition.returnValue || transition.requiresUserInput)) {
@@ -278,75 +252,6 @@ export class WorkflowEngineStepCoordinator {
       }
     }
     throw new RuleDetectionExhaustedError(step.name);
-  }
-
-  /**
-   * Dynamic transitions of the engine-synthesized finding-conflict-adjudication
-   * step. The originating step (whose rule routed here) is only known at run
-   * time, so the FINDING_CLOSED / ACTIONABLE_FIX / UNRESOLVED rules carry no static `next`
-   * (see adjudication-step.ts) and are resolved from WorkflowState.previousStep:
-   *
-   * - FINDING_CLOSED — return to the origin step so it re-evaluates the updated
-   *   ledger.
-   * - ACTIONABLE_FIX — route to the origin step's fix path: its first non-AI
-   *   rule with `next: fix` (contract-intake.ts's
-   *   selectInvalidManagerOutputRuleIndex precedent); when absent, return to
-   *   the origin whose own `when(findings.conflicts.count == 0 &&
-   *   findings.open.count > 0)`-style rule routes to the fix path next round.
-   * - UNRESOLVED — return to the origin so its conflict ladder can continue
-   *   while stop budget remains, or select its terminal ABORT arm.
-   *
-   * Origin resolution order (origin-step requirement):
-   * 1. WorkflowState.previousStep (normal in-run entry),
-   * 2. the runner's last resolved origin — which covers the durable originStep
-   *    persisted on the conflict's pending attempt, so a resume that starts
-   *    directly at this step still returns to the true origin,
-   * 3. the UNIQUE step wiring a rule to this step (only when unambiguous —
-   *    guessing among multiple wiring steps such as reviewers vs final-gate
-   *    would misroute),
-   * 4. otherwise ABORT.
-   */
-  private resolveAdjudicationDynamicNextStep(matchedRuleIndex: number): string | undefined {
-    if (
-      matchedRuleIndex !== FINDING_CONFLICT_ADJUDICATION_RULE_INDEX.FINDING_CLOSED
-      && matchedRuleIndex !== FINDING_CONFLICT_ADJUDICATION_RULE_INDEX.ACTIONABLE_FIX
-      && matchedRuleIndex !== FINDING_CONFLICT_ADJUDICATION_RULE_INDEX.UNRESOLVED
-    ) {
-      return undefined;
-    }
-    const originName = this.resolveAdjudicationOriginStepName();
-    if (originName === undefined) {
-      return ABORT_STEP;
-    }
-    if (matchedRuleIndex === FINDING_CONFLICT_ADJUDICATION_RULE_INDEX.FINDING_CLOSED) {
-      return originName;
-    }
-    if (matchedRuleIndex === FINDING_CONFLICT_ADJUDICATION_RULE_INDEX.UNRESOLVED) {
-      return originName;
-    }
-    const originStep = this.deps.config.steps.find((candidate) => candidate.name === originName);
-    const fixRule = (originStep?.rules ?? []).find((rule) => rule.next === 'fix');
-    return fixRule?.next ?? originName;
-  }
-
-  private resolveAdjudicationOriginStepName(): string | undefined {
-    const isValidOrigin = (name: string | undefined): name is string => (
-      name !== undefined
-      && name !== FINDING_CONFLICT_ADJUDICATION_STEP
-      && this.deps.config.steps.some((candidate) => candidate.name === name)
-    );
-    const previous = this.deps.state.previousStep;
-    if (isValidOrigin(previous)) {
-      return previous;
-    }
-    const fromRunner = this.deps.findingConflictAdjudicationRunner?.getLastOriginStep();
-    if (isValidOrigin(fromRunner)) {
-      return fromRunner;
-    }
-    const wiringSteps = this.deps.config.steps.filter((candidate) => (
-      (candidate.rules ?? []).some((rule) => rule.next === FINDING_CONFLICT_ADJUDICATION_STEP)
-    ));
-    return wiringSteps.length === 1 ? wiringSteps[0]!.name : undefined;
   }
 
   buildInstruction(
@@ -370,8 +275,7 @@ export class WorkflowEngineStepCoordinator {
     runtime?: RuntimeStepResolution,
   ): Promise<PreparedNormalStepExecution | undefined> {
     if (
-      (step.name === FINDING_CONFLICT_ADJUDICATION_STEP && step.engineSynthesized === true)
-      || isDelegatedWorkflowStep(step)
+      isDelegatedWorkflowStep(step)
       || isSystemWorkflowStep(step)
       || isWorkflowCallStep(step)
     ) {

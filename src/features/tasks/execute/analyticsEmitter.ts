@@ -8,20 +8,15 @@
 import { readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import {
-  createLogger,
-  getErrorMessage,
-} from '../../../shared/utils/index.js';
-import {
   writeAnalyticsEvent,
   parseFindingsFromReport,
-  buildReviewFindingEventsFromLedger,
   extractDecisionFromReport,
   inferSeverity,
   emitFixActionEvents,
   emitRebuttalEvents,
 } from '../../analytics/index.js';
 import type { StepResultEvent, ReviewFindingEvent, RoutingDecisionEvent } from '../../analytics/index.js';
-import type { WorkflowStep, AgentResponse, FindingLedger } from '../../../core/models/index.js';
+import type { WorkflowStep, AgentResponse } from '../../../core/models/index.js';
 import { formatWorkflowRuleCondition } from '../../../core/models/workflow-rule-condition.js';
 import type { StepProviderInfo } from '../../../core/workflow/types.js';
 import type { ProviderResolutionSource } from '../../../core/workflow/provider-options-trace.js';
@@ -30,13 +25,9 @@ import { normalizeRoutingDecisionMetadata } from '../../../core/workflow/auto-ro
 import { needsStatusJudgmentPhase } from '../../../core/workflow/phase-runner.js';
 import { packageVersion } from '../../../shared/package-info.js';
 
-const log = createLogger('analytics-emitter');
-
 export class AnalyticsEmitter {
   private readonly runSlug: string;
   private readonly routingRunId: string;
-  private readonly findingContractFindingIdsByScope =
-    new Map<string, Set<string>>();
 
   constructor(
     runSlug: string,
@@ -45,17 +36,6 @@ export class AnalyticsEmitter {
   ) {
     this.runSlug = runSlug;
     this.routingRunId = routingRunId ?? randomUUID();
-  }
-
-  setFindingContractFindingIds(
-    scopeIdentity: string,
-    findingIds: readonly string[],
-  ): void {
-    const scopedIds = new Set<string>();
-    for (const findingId of findingIds) {
-      scopedIds.add(findingId);
-    }
-    this.findingContractFindingIdsByScope.set(scopeIdentity, scopedIds);
   }
 
   /** step:complete 時に StepResultEvent と FixAction/Rebuttal を発行する */
@@ -93,7 +73,6 @@ export class AnalyticsEmitter {
         response.timestamp,
         context.workflowName,
         context.scopeIdentity,
-        this.findingContractFindingIdsByScope.get(context.scopeIdentity),
       );
     }
 
@@ -105,7 +84,6 @@ export class AnalyticsEmitter {
         response.timestamp,
         context.workflowName,
         context.scopeIdentity,
-        this.findingContractFindingIdsByScope.get(context.scopeIdentity),
       );
     }
   }
@@ -227,42 +205,6 @@ export class AnalyticsEmitter {
         timestamp: new Date().toISOString(),
       };
       writeAnalyticsEvent(event);
-    }
-  }
-
-  onFindingLedgerUpdated(
-    ledger: FindingLedger,
-    context: {
-      readonly iteration: number;
-      readonly workflowName: string;
-      readonly scopeIdentity: string;
-    },
-  ): void {
-    try {
-      const findingIds = new Set<string>();
-      for (const finding of ledger.findings) {
-        findingIds.add(finding.id);
-      }
-      this.findingContractFindingIdsByScope.set(
-        context.scopeIdentity,
-        findingIds,
-      );
-      const events = buildReviewFindingEventsFromLedger(
-        ledger,
-        context.iteration,
-        context.workflowName,
-        context.scopeIdentity,
-        this.runSlug,
-        new Date(ledger.updatedAt),
-      );
-      for (const event of events) {
-        writeAnalyticsEvent(event);
-      }
-    } catch (error) {
-      log.warn('Failed to emit finding ledger analytics events', {
-        error: getErrorMessage(error),
-        workflowName: ledger.workflowName,
-      });
     }
   }
 

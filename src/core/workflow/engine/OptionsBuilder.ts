@@ -42,9 +42,7 @@ import { getWorkflowStepKind } from '../step-kind.js';
 import { resolveStepProviderModel } from '../provider-resolution.js';
 import { resolveDeterministicAutoRoutingProviderInfo, toAutoRoutingStepMetadata } from '../auto-routing/resolver.js';
 import { buildPhase1WorkflowMeta } from './workflow-meta.js';
-import type {
-  FindingContractInstructionContext,
-} from '../instruction/instruction-context.js';
+import type { FindingContractInstructionContext } from '../instruction/instruction-context.js';
 import type { FindingRestatementSlotOwnerContexts } from '../findings/restatement-slot-runner.js';
 import type { FindingEvidenceSearchRequest } from '../findings/evidence-search.js';
 
@@ -83,23 +81,32 @@ export class OptionsBuilder {
     private readonly getWorkflowName: () => string,
     private readonly getWorkflowDescription: () => string | undefined,
     private readonly getCurrentWorkflowStack: () => WorkflowResumePointEntry[] | undefined = () => undefined,
-    private readonly getFindingContractInstructionContext?: (
-      step: WorkflowStep,
-      isReviewer: boolean,
-      reviewScopeSnapshotId?: string,
-      findingContractFreezeKey?: string,
-    ) => FindingContractInstructionContext | undefined,
     private readonly getTask?: () => string,
-    private readonly getFindingRestatementSlotContexts?: (input: {
-      ownerReviewerSteps: readonly AgentWorkflowStep[];
-      reviewScopeSnapshotId: string;
-    }) => ReadonlyMap<string, FindingRestatementSlotOwnerContexts>,
     private readonly getReviewScope?: () => TaskReviewScope,
-    private readonly getFindingEvidenceSearchRequests?: (input: {
-      ownerReviewerSteps: readonly AgentWorkflowStep[];
-      reviewScopeSnapshotId: string;
-    }) => readonly FindingEvidenceSearchRequest[],
   ) {}
+
+  buildFindingContractInstructionContext(
+    _step: WorkflowStep,
+    _isReviewer: boolean,
+    _reviewScopeSnapshotId?: string,
+    _findingContractFreezeKey?: string,
+  ): FindingContractInstructionContext | undefined {
+    return undefined;
+  }
+
+  buildFindingRestatementSlotContexts(_input: {
+    ownerReviewerSteps: readonly AgentWorkflowStep[];
+    reviewScopeSnapshotId: string;
+  }): ReadonlyMap<string, FindingRestatementSlotOwnerContexts> {
+    return new Map();
+  }
+
+  buildFindingEvidenceSearchRequests(_input: {
+    ownerReviewerSteps: readonly AgentWorkflowStep[];
+    reviewScopeSnapshotId: string;
+  }): readonly FindingEvidenceSearchRequest[] {
+    return [];
+  }
 
   /**
    * 実行に使う provider/model の解決。構成レイヤー（step / persona / routing /
@@ -391,39 +398,6 @@ export class OptionsBuilder {
     return buildPhase1WorkflowMeta(workflowMeta, processSafety);
   }
 
-  buildFindingContractInstructionContext(
-    step: WorkflowStep,
-    isReviewer: boolean,
-    reviewScopeSnapshotId?: string,
-    findingContractFreezeKey?: string,
-  ): FindingContractInstructionContext | undefined {
-    return this.getFindingContractInstructionContext?.(
-      step,
-      isReviewer,
-      reviewScopeSnapshotId,
-      findingContractFreezeKey,
-    );
-  }
-
-  /**
-   * 言い直し slot の1パス分の owner 別 reviewer context。今のパスで提示する
-   * anomaly が無い owner・フェーズは含まれない。呼ぶたびに台帳と提示回数を
-   * 読み直す。
-   */
-  buildFindingRestatementSlotContexts(input: {
-    ownerReviewerSteps: readonly AgentWorkflowStep[];
-    reviewScopeSnapshotId: string;
-  }): ReadonlyMap<string, FindingRestatementSlotOwnerContexts> {
-    return this.getFindingRestatementSlotContexts?.(input) ?? new Map();
-  }
-
-  buildFindingEvidenceSearchRequests(input: {
-    ownerReviewerSteps: readonly AgentWorkflowStep[];
-    reviewScopeSnapshotId: string;
-  }): readonly FindingEvidenceSearchRequest[] {
-    return this.getFindingEvidenceSearchRequests?.(input) ?? [];
-  }
-
   private resolveSupportedMaxTurns(
     step: WorkflowStep,
     maxTurns: number | undefined,
@@ -642,8 +616,6 @@ export class OptionsBuilder {
       ),
       structuredCaller: this.requireStructuredCaller(),
       resolveStepProviderModel: (step) => this.resolveStepProviderModel(step, runtime),
-      buildFindingContractInstructionContext: (step, isReviewer) =>
-        this.buildFindingContractInstructionContext(step, isReviewer),
       getSessionId: (persona: string) => state.personaSessions.get(persona),
       resolveSessionKey: (step) => {
         const providerInfo = this.resolveStepProviderModel(step, runtime);

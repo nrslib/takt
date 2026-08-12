@@ -121,7 +121,6 @@ async function executeReportPhase(
   options: ReportPhaseGenerationOptions,
   acceptReport: (report: GeneratedReport) => void,
 ): Promise<ReportPhaseBlockedResult | ReportPhaseRateLimitedResult | void> {
-  const findingContractReviewer = options.findingContractReviewer === true;
   const primarySessionKey = ctx.resolveSessionKey(step);
   let currentSessionId = ctx.getSessionId(primarySessionKey);
   const hasLastResponse = ctx.lastResponse != null && ctx.lastResponse.trim().length > 0;
@@ -162,7 +161,6 @@ async function executeReportPhase(
       language: ctx.language,
       targetFile: fileName,
       lastResponse: currentSessionId ? undefined : ctx.lastResponse,
-      findingContract: ctx.buildFindingContractInstructionContext?.(step, findingContractReviewer),
     }).build();
     let firstAttemptOptions: RunAgentOptions;
     if (currentSessionId === undefined) {
@@ -231,7 +229,6 @@ async function executeReportPhase(
       language: ctx.language,
       targetFile: fileName,
       lastResponse: ctx.lastResponse,
-      findingContract: ctx.buildFindingContractInstructionContext?.(step, findingContractReviewer),
     }).build();
     const retryInstruction = firstAttempt.failureReason === 'invalid_output'
       ? [

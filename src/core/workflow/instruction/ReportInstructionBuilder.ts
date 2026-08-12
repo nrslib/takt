@@ -8,14 +8,12 @@
 import type { WorkflowStep, Language } from '../../models/types.js';
 import type { InstructionContext } from './instruction-context.js';
 import { buildGitRules } from './instruction-context.js';
-import { buildFindingContractReportInstruction } from './finding-contract-instruction.js';
 import { replaceTemplatePlaceholders } from './escape.js';
 import {
   isOutputContractItem,
   renderReportContext,
   renderReportOutputInstruction,
 } from './InstructionBuilder.js';
-import { renderFencedJsonBlock } from './fenced-block.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 
 /**
@@ -36,8 +34,6 @@ export interface ReportInstructionContext {
   targetFile?: string;
   /** Last response from Phase 1 (used when report phase retries in a new session) */
   lastResponse?: string;
-  /** Finding Contract context available in tool-less report phase. */
-  findingContract?: InstructionContext['findingContract'];
   /** Engine-computed changed file set for `{review_scope}` in output contracts. */
   reviewScope?: InstructionContext['reviewScope'];
 }
@@ -81,7 +77,6 @@ export class ReportInstructionBuilder {
       userInputs: [],
       reportDir: this.context.reportDir,
       language,
-      findingContract: this.context.findingContract,
       reviewScope: this.context.reviewScope,
       // phase 2 は「これから書く」フェーズ。契約テンプレート内の {report:X} が
       // 自分自身（未作成）を指す構成を存在検証で落とさない。consumer 保護
@@ -110,9 +105,6 @@ export class ReportInstructionBuilder {
       outputContract = replaceTemplatePlaceholders(targetContract.format.trimEnd(), this.step, instrContext);
       hasOutputContract = true;
     }
-    reportOutput = this.appendFindingContractReportInstruction(reportOutput, language);
-    hasReportOutput = hasReportOutput || this.context.findingContract !== undefined;
-
     return loadTemplate('perform_phase2_message', language, {
       workingDirectory: this.context.cwd,
       hasTask: this.context.task != null && this.context.task.trim().length > 0,
@@ -129,19 +121,4 @@ export class ReportInstructionBuilder {
     });
   }
 
-  private appendFindingContractReportInstruction(reportOutput: string, language: Language): string {
-    if (!this.context.findingContract) {
-      return reportOutput;
-    }
-
-    const findingContractInstruction = buildFindingContractReportInstruction({
-      contract: this.context.findingContract,
-      language,
-      renderFencedJsonBlock,
-    });
-
-    return reportOutput.length > 0
-      ? [reportOutput, '', findingContractInstruction].join('\n')
-      : findingContractInstruction;
-  }
 }

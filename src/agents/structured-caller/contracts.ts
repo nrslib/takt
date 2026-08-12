@@ -35,12 +35,6 @@ export interface StructuredCaller {
     options: DecomposeTaskOptions,
   ): Promise<DecomposeTaskResponse>;
 
-  requestDecompositionRawResponse(
-    instruction: string,
-    maxInitialParts: number | undefined,
-    options: DecomposeTaskOptions,
-  ): Promise<AgentResponse>;
-
   requestMoreParts(
     originalInstruction: string,
     allResults: TeamLeaderPartFeedbackResult[],
@@ -48,10 +42,4 @@ export interface StructuredCaller {
     options: MorePartsOptions,
   ): Promise<MorePartsResponse>;
 
-  requestMorePartsRawResponse(
-    originalInstruction: string,
-    allResults: TeamLeaderPartFeedbackResult[],
-    existingIds: string[],
-    options: MorePartsOptions,
-  ): Promise<AgentResponse>;
 }

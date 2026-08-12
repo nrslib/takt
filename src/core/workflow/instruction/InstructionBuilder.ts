@@ -11,7 +11,6 @@
 import type { WorkflowStep, Language, OutputContractItem, OutputContractEntry } from '../../models/types.js';
 import type { InstructionContext } from './instruction-context.js';
 import { buildEditRule, buildGitRules } from './instruction-context.js';
-import { buildFindingContractInstruction } from './finding-contract-instruction.js';
 import { escapeTemplateChars, replaceTemplatePlaceholders } from './escape.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import { renderFallbackNotice } from './fallback-notice.js';
@@ -21,7 +20,6 @@ import {
   prepareKnowledgeContent as prepareKnowledgeContentGeneric,
   preparePolicyContent as preparePolicyContentGeneric,
 } from 'faceted-prompting';
-import { renderFencedJsonBlock } from './fenced-block.js';
 import { renderPullRequestContext } from '../pr-context.js';
 import { isNormalAgentWorkflowStep } from '../../models/workflow-types.js';
 import { getCompanionInstructionCopy } from '../companion/evidence.js';
@@ -140,14 +138,14 @@ export class InstructionBuilder {
       : '';
 
     // Instructions (step instruction with placeholder processing)
-    const instructions = this.appendCompanionInstruction(this.appendFindingContractInstruction(replaceTemplatePlaceholders(
+    const instructions = this.appendCompanionInstruction(replaceTemplatePlaceholders(
       tmpl,
       this.step,
       {
         ...this.context,
         previousResponseText: previousResponsePrepared || undefined,
       },
-    )));
+    ));
 
     // Workflow name and description
     const workflowName = this.context.workflowName ?? '';
@@ -244,20 +242,6 @@ export class InstructionBuilder {
       return `- Step ${index + 1}: ${ws.name}${desc}${marker}`;
     });
     return [structureHeader, ...stepLines].join('\n');
-  }
-
-  private appendFindingContractInstruction(instructions: string): string {
-    if (!this.context.findingContract) {
-      return instructions;
-    }
-
-    const section = buildFindingContractInstruction({
-      contract: this.context.findingContract,
-      language: this.context.language ?? 'en',
-      renderFencedJsonBlock,
-    });
-
-    return [instructions, '', section].join('\n');
   }
 
   private appendCompanionInstruction(instructions: string): string {

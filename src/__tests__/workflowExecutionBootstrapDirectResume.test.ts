@@ -688,15 +688,6 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
       expect.objectContaining({ name: workflowConfig.name }),
       '/project',
       '/project',
-      {
-        providerValidationOptions: expect.objectContaining({
-          provider: 'codex',
-          providerSource: 'project',
-          model: 'project-model',
-          modelSource: 'project',
-          personaProviders: undefined,
-        }),
-      },
     );
   });
 
