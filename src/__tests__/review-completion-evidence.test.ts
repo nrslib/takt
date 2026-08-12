@@ -40,6 +40,7 @@ describe('review completion evidence', () => {
     writeFileSync(join(cwd, 'src', 'safe.ts'), 'const api_key = "visible-secret";\nexport const value = 1;\n');
     writeFileSync(join(cwd, '.env'), 'TOKEN=must-not-leak\n');
     writeFileSync(join(cwd, 'credentials.json'), '{"opaque":"credential-file-marker"}\n');
+    writeFileSync(join(cwd, 'secrets.txt'), 'opaque-secret-file-marker\n');
     writeFileSync(join(cwd, 'binary.dat'), Buffer.from([0, 1, 2, 3]));
     writeFileSync(join(outside, 'outside.ts'), 'outside-marker');
     symlinkSync(join(outside, 'outside.ts'), join(cwd, 'linked.ts'));
@@ -52,6 +53,7 @@ describe('review completion evidence', () => {
         'binary.dat',
         'credentials.json',
         'linked.ts',
+        'secrets.txt',
         'src/safe.ts',
       ]),
     });
@@ -63,13 +65,80 @@ describe('review completion evidence', () => {
       truncated: false,
     }]);
     expect(JSON.stringify(evidence))
-      .not.toMatch(/visible-secret|must-not-leak|credential-file-marker|outside-marker/);
+      .not.toMatch(/visible-secret|must-not-leak|credential-file-marker|opaque-secret-file-marker|outside-marker/);
     expect(Object.fromEntries(evidence.omissions.map(({ reason, count }) => [reason, count])))
       .toMatchObject({
         binary_file: 1,
         file_unavailable: 2,
-        sensitive_path: 2,
+        sensitive_path: 3,
       });
+  });
+
+  it('includes a deleted source file in diff evidence without requiring a source body', () => {
+    const cwd = createDirectory('takt-review-completion-deleted-evidence-');
+    execFileSync('git', ['init'], { cwd });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd });
+    writeFileSync(join(cwd, 'removed.ts'), 'export const removed = true;\n');
+    execFileSync('git', ['add', 'removed.ts'], { cwd });
+    execFileSync('git', ['commit', '-m', 'base'], { cwd });
+    const baseCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).trim();
+    rmSync(join(cwd, 'removed.ts'));
+
+    const evidence = collectReviewCompletionEvidence({
+      cwd,
+      reviewScope: {
+        kind: 'collected',
+        paths: ['removed.ts'],
+        source: { kind: 'working_tree', baseRange: { kind: 'branch_base', baseCommit } },
+      },
+    });
+
+    expect(evidence.files).toEqual([]);
+    expect(evidence.diff).toMatch(/-export const removed = true;/);
+    expect(evidence.omissions).toContainEqual({ reason: 'file_unavailable', count: 1 });
+  });
+
+  it('includes commits after a materialized PR head in local diff evidence', () => {
+    const cwd = createDirectory('takt-review-completion-pr-local-evidence-');
+    execFileSync('git', ['init'], { cwd });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd });
+    writeFileSync(join(cwd, 'source.ts'), 'export const version = 0;\n');
+    execFileSync('git', ['add', 'source.ts'], { cwd });
+    execFileSync('git', ['commit', '-m', 'base'], { cwd });
+    const baseCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).trim();
+    writeFileSync(join(cwd, 'source.ts'), 'export const version = 1;\n');
+    execFileSync('git', ['commit', '-am', 'pull request head'], { cwd });
+    const pullRequestHead = execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd,
+      encoding: 'utf8',
+    }).trim();
+    writeFileSync(join(cwd, 'source.ts'), 'export const version = 2;\n');
+    execFileSync('git', ['commit', '-am', 'local follow-up'], { cwd });
+
+    const evidence = collectReviewCompletionEvidence({
+      cwd,
+      reviewScope: {
+        kind: 'collected',
+        paths: ['source.ts'],
+        source: {
+          kind: 'pull_request',
+          prNumber: 1,
+          diffRange: { baseDiffRef: baseCommit, headDiffRef: pullRequestHead },
+          includesWorkingTree: true,
+          baseRange: { kind: 'branch_base', baseCommit },
+        },
+      },
+    });
+
+    expect(evidence.files).toEqual([{
+      path: 'source.ts',
+      content: 'export const version = 2;\n',
+      truncated: false,
+    }]);
+    expect(evidence.diff).toMatch(/\+export const version = 1;/);
+    expect(evidence.diff).toMatch(/\+export const version = 2;/);
   });
 
   it('enforces per-file and serialized evidence limits', () => {

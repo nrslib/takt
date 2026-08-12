@@ -95,7 +95,7 @@ function collectReviewScopeDiff(
     if (diff !== undefined) sections.push(diff);
   }
   if (scope.source.includesWorkingTree && scope.source.baseRange.kind !== 'no_commits') {
-    const diff = collectDiffText(cwd, 'HEAD', paths);
+    const diff = collectWorkingTreeDiff(cwd, scope.source.baseRange, paths);
     if (diff !== undefined) sections.push(diff);
   }
   return sections.length === 0 ? undefined : sections.join('\n\n');
@@ -196,13 +196,21 @@ export function collectReviewCompletionEvidence(input: {
       addOmission(omissionCounts, 'sensitive_path');
       continue;
     }
+    let inspectedStat: ReturnType<typeof assertPathSegmentsAreSafe>;
     try {
-      assertPathSegmentsAreSafe(
+      inspectedStat = assertPathSegmentsAreSafe(
         input.cwd,
         resolve(input.cwd, path),
         (_violation, segmentPath) => new Error(`Unsafe review completion evidence path: ${segmentPath}`),
       );
     } catch {
+      addOmission(omissionCounts, 'file_unavailable');
+      continue;
+    }
+    if (inspectedStat === null) {
+      // Deleted files have no source body to read, but their repository-relative
+      // path remains safe to pass to git so the deletion itself stays reviewable.
+      diffPaths.push(path);
       addOmission(omissionCounts, 'file_unavailable');
       continue;
     }

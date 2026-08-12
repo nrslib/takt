@@ -3,6 +3,8 @@ const SENSITIVE_PROJECT_FILE_NAMES = new Set([
   '.netrc',
   '.npmrc',
   '.pypirc',
+  '.vault-token',
+  'application_default_credentials.json',
   'credentials.json',
   'id_dsa',
   'id_ecdsa',
@@ -17,15 +19,20 @@ const SENSITIVE_PROJECT_FILE_EXTENSIONS = [
   '.p12',
   '.pem',
   '.pfx',
+  '.tfvars',
 ] as const;
 
 const SENSITIVE_PROJECT_DIRECTORY_NAMES = new Set([
   '.aws',
+  '.azure',
+  '.docker',
   '.git',
   '.gnupg',
   '.kube',
   '.ssh',
 ]);
+
+const SENSITIVE_CONFIG_FILE_NAME_PATTERN = /^(?:auth|authorization|credentials?|secrets?|tokens?|service[-_]account)(?:\.(?:conf(?:ig)?|ini|json|toml|txt|ya?ml))?$/;
 
 export function isSensitiveProjectFilePath(relativePath: string): boolean {
   const lowerSegments = relativePath.split('/').map((segment) => segment.toLowerCase());
@@ -36,5 +43,6 @@ export function isSensitiveProjectFilePath(relativePath: string): boolean {
   return lowerSegments.some((segment) => SENSITIVE_PROJECT_DIRECTORY_NAMES.has(segment))
     || lowerFileName.startsWith('.env')
     || SENSITIVE_PROJECT_FILE_NAMES.has(lowerFileName)
+    || SENSITIVE_CONFIG_FILE_NAME_PATTERN.test(lowerFileName)
     || SENSITIVE_PROJECT_FILE_EXTENSIONS.some((extension) => lowerFileName.endsWith(extension));
 }
