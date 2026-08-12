@@ -39,6 +39,12 @@ const SCENARIO_MARKER = '@@PROMPTFOO_SCENARIO@@';
 const TARGETS = [
   { id: 'coding-review', workflow: 'peer-review', step: 'coding-review', fixture: 'eval/fixtures/sample-project' },
   { id: 'arch-review', workflow: 'peer-review', step: 'arch-review', fixture: 'eval/fixtures/sample-project' },
+  {
+    id: 'arch-failure-aggregation',
+    workflow: 'peer-review',
+    step: 'arch-review',
+    fixture: 'eval/fixtures/arch-failure-aggregation',
+  },
   { id: 'antipattern-review', workflow: 'peer-review', step: 'ai-antipattern-review-2nd', fixture: 'eval/fixtures/sample-project' },
   { id: 'frontend-review', workflow: 'review-frontend', step: 'frontend-review', fixture: 'eval/fixtures/frontend-app' },
   { id: 'cqrs-review', workflow: 'review-backend-cqrs', step: 'cqrs-es-review', fixture: 'eval/fixtures/backend-cqrs' },

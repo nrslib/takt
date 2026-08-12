@@ -1,5 +1,47 @@
 # Architecture Knowledge
 
+## Boundaries That Aggregate Multiple Failures
+
+A boundary that aggregates failures from multiple operations or layers must first select one primary failure. Classification, cause, recoverability, retry/fallback/stop decisions, external presentation, and abort records must all derive from that same failure.
+
+| Criterion | Decision |
+|-----------|----------|
+| A fatal failure exists, but collection order or a retryable sibling takes priority | REJECT |
+| The parent category, displayed reason, and abort reason come from different failures | REJECT |
+| Classified detail is replaced with a generic error before the policy decision | REJECT |
+| Failure to persist an auxiliary artifact replaces the primary result or becomes unobservable | REJECT |
+| An explicit priority rule selects the primary failure and every decision and representation derives from it | OK |
+| An auxiliary persistence failure is recorded safely while the primary result is preserved | OK |
+
+Array order may represent occurrence or definition order, but it does not necessarily represent severity or recoverability priority. Preserve classified causes until the policy decision, and treat failures in auxiliary observability work as secondary failures.
+
+```typescript
+// NG - a retryable sibling hides a fatal failure and splits the output cause
+const retryable = failures.find((failure) => failure.recovery === 'retry');
+const fatal = failures.find((failure) => failure.recovery === 'stop');
+return {
+  action: retryable ? 'retry' : 'stop',
+  category: fatal?.category,
+  abortReason: retryable?.detail,
+};
+
+// OK - select the primary failure first and keep decisions and external forms aligned
+const primary = selectPrimaryFailure(failures);
+const result = {
+  action: decideRecovery(primary.recovery),
+  category: primary.category,
+  reason: primary.detail,
+  abortReason: primary.detail,
+};
+
+try {
+  persistFailureArtifact(primary);
+} catch (error) {
+  observeSecondaryFailure(error);
+}
+return result;
+```
+
 ## Structure & Design
 
 **File Organization:**

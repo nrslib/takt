@@ -1,0 +1,71 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+
+description: 'TAKT facet eval: failure aggregation architecture boundary'
+
+prompts:
+  - file://prompts/arch-failure-aggregation.phase1.md
+
+providers:
+  - id: openai:codex-sdk
+    label: codex
+    config:
+      working_dir: fixtures/arch-failure-aggregation
+      sandbox_mode: read-only
+      approval_policy: never
+      skip_git_repo_check: true
+      model_reasoning_effort: low
+
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+
+tests:
+  - description: 'recall: one primary failure must determine the parent outcome'
+    vars:
+      task: file://cases/arch-failure-aggregation.md
+      previous_response: file://cases/prev-gather-arch-failure-aggregation.md
+    assert:
+      - type: llm-rubric
+        metric: recall/retryable-sibling-hides-fatal
+        value: |
+          Judge the review by the concrete control flow it attributes to
+          `aggregateFailures` in `src/failure-aggregation.ts`, not by keyword
+          presence. Pass only if it identifies that the `status` expression
+          returns `retry` whenever a retryable sibling exists even when the same
+          input also contains a non-retryable failure, so the parent continues
+          instead of stopping for that fatal failure. Fail if the target or
+          observable retry-versus-stop consequence is missing.
+      - type: llm-rubric
+        metric: recall/parent-failure-fields-have-different-sources
+        value: |
+          Judge the review by the exact data flow it attributes to
+          `aggregateFailures` in `src/failure-aggregation.ts`, not by keyword
+          presence. Pass only if it identifies that `category` is selected from
+          `fatal` while `abortReason` is selected from `retryable` when both are
+          present, and explains that the parent therefore exposes metadata from
+          different input failures instead of one primary failure. Fail if the
+          target, both fields, either source, or the observable mismatch is
+          missing.
+
+  - description: 'precision: a required operation may fail fast'
+    vars:
+      task: file://cases/arch-required-operation.md
+      previous_response: file://cases/prev-gather-arch-required-operation.md
+    assert:
+      - type: llm-rubric
+        metric: precision/required-operation-fail-fast
+        value: |
+          Judge the review by the concrete behavior it attributes to
+          `src/required-operation.ts`, not by keyword presence. The operation is
+          required: rejection stops `publishProfile`, while success returns the
+          exact stored value. Pass if the review approves this behavior or does
+          not report a defect in it. Fail if it demands retry, fallback,
+          continuation after rejection, an extra failure aggregation layer, or
+          claims that the successful stored value is lost. Findings unrelated
+          to this target behavior do not satisfy the metric.

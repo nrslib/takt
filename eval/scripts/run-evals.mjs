@@ -4,7 +4,8 @@
  * (promptfoo exits non-zero when a test fails, which would break `&&` chains).
  *
  * Usage: node eval/scripts/run-evals.mjs [suite...] [--promptfoo-flags...]
- * Suites: coding, arch, antipattern, frontend, cqrs, rescan, rescan-coding,
+ * Suites: coding, arch, arch-failure-aggregation, antipattern, frontend, cqrs,
+ *         rescan, rescan-coding,
  *         frontend-coder,
  *         cqrs-coder, fix-closure, fix-plan-fresh-findings,
  *         fix-plan-boundary-preflight, review-family-closure,
@@ -29,6 +30,7 @@ import { fileURLToPath } from 'node:url';
 const SUITES = {
   coding: 'promptfooconfig.coding.yaml',
   arch: 'promptfooconfig.arch.yaml',
+  'arch-failure-aggregation': 'promptfooconfig.arch-failure-aggregation.yaml',
   antipattern: 'promptfooconfig.antipattern.yaml',
   frontend: 'promptfooconfig.frontend.yaml',
   cqrs: 'promptfooconfig.cqrs.yaml',

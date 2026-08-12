@@ -1,5 +1,47 @@
 # アーキテクチャ知識
 
+## 複数失敗を集約する境界
+
+複数の処理や層から失敗を集約する境界では、まず primary failure を一つ選ぶ。分類、原因、回復可能性、retry・fallback・停止の判断、外部表示、abort 記録は、すべてその同じ失敗から導出する。
+
+| 基準 | 判定 |
+|------|------|
+| fatal failure があるのに、collection order や retryable な sibling を優先する | REJECT |
+| 親の分類、表示理由、abort 理由が異なる失敗から作られている | REJECT |
+| 分類済みの detail を方針決定前に汎用エラーへ置き換える | REJECT |
+| 補助的な artifact 保存の失敗が primary result を置き換える、または観測不能になる | REJECT |
+| 明示した優先規則で primary failure を選び、すべての判断と表現をそこから導出する | OK |
+| 補助的な保存失敗を安全に記録し、primary result を保持する | OK |
+
+失敗の配列順は発生時刻や定義順を表せても、重大度や回復可能性の優先順位とは限らない。分類済みの原因は方針決定まで保持し、補助的な観測処理の失敗は secondary failure として扱う。
+
+```typescript
+// NG - retryable な sibling が fatal failure を隠し、出力の原因も分裂する
+const retryable = failures.find((failure) => failure.recovery === 'retry');
+const fatal = failures.find((failure) => failure.recovery === 'stop');
+return {
+  action: retryable ? 'retry' : 'stop',
+  category: fatal?.category,
+  abortReason: retryable?.detail,
+};
+
+// OK - primary failure を先に確定し、判断と外部表現を一貫させる
+const primary = selectPrimaryFailure(failures);
+const result = {
+  action: decideRecovery(primary.recovery),
+  category: primary.category,
+  reason: primary.detail,
+  abortReason: primary.detail,
+};
+
+try {
+  persistFailureArtifact(primary);
+} catch (error) {
+  observeSecondaryFailure(error);
+}
+return result;
+```
+
 ## 構造・設計
 
 **ファイル分割**

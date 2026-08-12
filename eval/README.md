@@ -33,6 +33,7 @@ results, not one pass/fail summary.
 |-------|-----------------|---------|----------|
 | `coding` | peer-review / coding-review | sample-project | recall on 5 planted coding-policy violations + precision on a clean diff |
 | `arch` | peer-review / arch-review | sample-project | recall on 3 planted architecture violations |
+| `arch-failure-aggregation` | peer-review / arch-review | arch-failure-aggregation | recall on inconsistent primary-failure aggregation and precision on a required fail-fast boundary |
 | `antipattern` | peer-review / ai-antipattern-review-2nd | sample-project | recall on 3 planted AI antipatterns |
 | `frontend` | review-frontend / frontend-review | frontend-app | recall on 3 planted layering violations |
 | `cqrs` | review-backend-cqrs / cqrs-es-review | backend-cqrs | recall on 3 planted CQRS+ES violations |
