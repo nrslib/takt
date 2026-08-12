@@ -2,6 +2,8 @@
 
 提出済み指摘の技術的妥当性と今回の修正権限を分離し、許可された修正対象だけを確定する。
 
+{{include:policies/review-scope-authority}}
+
 ## 原則
 
 | 原則 | 基準 |
@@ -35,10 +37,6 @@
 ## 非修正の分類
 
 `duplicate` は同じ根本原因と受入条件を持つ統合可能な指摘だけに使い、統合先 family を示す。`false_positive` / `no_issue_after_verification` は現在のコードまたは証跡が主張と矛盾する場合、`out_of_scope` は確認済みだが修正権限のない別契約の欠陥・改善、`overreach` は証拠または権限を超える方式・保証の要求、`environment_unverified` は環境要因の全条件を満たし実装欠陥を確認できない場合だけに使う。環境制限で実装欠陥の証拠を退けてはならない。
-
-## 継続レビューの新規指摘
-
-follow-up の修正対象を解消へ向けて収束させる。新規 finding を採用する場合は、`accepted_family_unvisited_consumer`、`remediation_regression`、`direct_acceptance_criterion_violation`、`required_consumer_migration` のいずれかと、初回に含まれなかった理由を記録する。初回から存在したことは、採用済み family の未確認 consumer を非修正にする根拠にならず、水平な新規 family は作らず同じ family へ紐付ける。一方、隣接する別契約の水平改善は新規 finding として修正計画へ渡さない。
 
 ## 裁定の完全性
 

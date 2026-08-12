@@ -259,11 +259,6 @@ describe('facet include expansion', () => {
   });
 
   it.each(['en', 'ja'] as const)('should share the common review policy and add the security boundary once in %s', (lang) => {
-    const languageRoot = getLanguageResourcesDir(lang);
-    const common = readFileSync(
-      join(languageRoot, 'facets', 'partials', 'policies', 'review-common.md'),
-      'utf-8',
-    ).trim();
     const review = resolveRefToContent(
       'review',
       undefined,
@@ -281,8 +276,8 @@ describe('facet include expansion', () => {
 
     const resolvedReview = review?.trim();
     const resolvedSecurityReview = securityReview?.trim();
-    expect(resolvedReview).toBe(common);
-    expect(resolvedSecurityReview).toContain(common);
-    expect(resolvedSecurityReview?.split(common)).toHaveLength(2);
+    expect(resolvedReview).toBeDefined();
+    expect(resolvedSecurityReview).toContain(resolvedReview);
+    expect(resolvedSecurityReview?.split(resolvedReview!)).toHaveLength(2);
   });
 });

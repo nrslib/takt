@@ -16,6 +16,12 @@ subworkflow:
     security_review_pool:
       type: facet_pool_ref
       default: takt-security-review-facets
+    architecture_review_instruction: { type: facet_ref, facet_kind: instruction, default: architecture-review }
+    security_review_instruction: { type: facet_ref, facet_kind: instruction, default: security-review }
+    testing_review_instruction: { type: facet_ref, facet_kind: instruction, default: testing-review }
+    coding_review_instruction: { type: facet_ref, facet_kind: instruction, default: coding-review }
+    ai_antipattern_review_instruction: { type: facet_ref, facet_kind: instruction, default: ai-antipattern-review }
+    frontend_review_instruction: { type: facet_ref, facet_kind: instruction, default: frontend-review }
 facet_pools:
   takt-security-review-facets:
     uses: takt-security-review-facets
@@ -30,6 +36,12 @@ steps:
         $param: review_knowledge_additions
       security_review_pool:
         $param: security_review_pool
+      architecture_review_instruction: { $param: architecture_review_instruction }
+      security_review_instruction: { $param: security_review_instruction }
+      testing_review_instruction: { $param: testing_review_instruction }
+      coding_review_instruction: { $param: coding_review_instruction }
+      ai_antipattern_review_instruction: { $param: ai_antipattern_review_instruction }
+      frontend_review_instruction: { $param: frontend_review_instruction }
     parallel:
       pool:
         - name: architecture-review
@@ -40,7 +52,8 @@ steps:
           persona: architecture-reviewer
           policy: [contract-change, review]
           knowledge: [takt, architecture]
-          instruction: review-arch
+          instruction:
+            $param: architecture_review_instruction
           pass_previous_response: false
           output_contracts:
             report:
@@ -58,7 +71,8 @@ steps:
             pool:
               $param: security_review_pool
             max_selected: 1
-          instruction: review-security
+          instruction:
+            $param: security_review_instruction
           pass_previous_response: false
           output_contracts:
             report:
@@ -72,7 +86,8 @@ steps:
           persona: testing-reviewer
           policy: [contract-change, review, testing, takt-testing]
           knowledge: [takt, unit-testing, e2e-testing]
-          instruction: review-test
+          instruction:
+            $param: testing_review_instruction
           pass_previous_response: false
           output_contracts:
             report:

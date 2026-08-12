@@ -6,6 +6,8 @@
 ## Summary
 {Summarize the result in 1-2 sentences}
 
+For every finding that requests a test, record the observable contract to preserve, the concrete failure path, and evidence that existing tests cannot detect it. Do not record findings whose only purpose is freezing internal structure or duplicating existing verification.
+
 ## Reviewed Aspects
 | Aspect | Result | Notes |
 |--------|--------|-------|

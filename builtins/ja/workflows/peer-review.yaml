@@ -105,8 +105,6 @@ loop_monitors:
 steps:
   - name: initial-reviewers
     uses: peer-review-suite-call
-    vars:
-      review_mode: initial
     with:
       reviewer_suite:
         $param: reviewer_suite
@@ -114,6 +112,13 @@ steps:
         $param: review_policy_additions
       review_knowledge_additions:
         $param: review_knowledge_additions
+      architecture_review_instruction: architecture-review
+      security_review_instruction: security-review
+      testing_review_instruction: testing-review
+      coding_review_instruction: coding-review
+      ai_antipattern_review_instruction: initial-ai-antipattern-review
+      frontend_review_instruction: frontend-review
+      cqrs_es_review_instruction: cqrs-es-review
     rules:
       - condition: COMPLETE
         next: review-adjudication
@@ -121,8 +126,6 @@ steps:
         next: review-adjudication
   - name: reviewers
     uses: peer-review-suite-call
-    vars:
-      review_mode: follow_up
     with:
       reviewer_suite:
         $param: reviewer_suite
@@ -130,6 +133,13 @@ steps:
         $param: review_policy_additions
       review_knowledge_additions:
         $param: review_knowledge_additions
+      architecture_review_instruction: follow-up-architecture-review
+      security_review_instruction: follow-up-security-review
+      testing_review_instruction: follow-up-testing-review
+      coding_review_instruction: follow-up-coding-review
+      ai_antipattern_review_instruction: follow-up-ai-antipattern-review
+      frontend_review_instruction: follow-up-frontend-review
+      cqrs_es_review_instruction: follow-up-cqrs-es-review
     rules:
       - condition: COMPLETE
         next: review-adjudication

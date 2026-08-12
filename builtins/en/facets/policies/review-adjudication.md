@@ -2,6 +2,8 @@
 
 Separate a finding's technical validity from authority to remediate it in this task, and establish only the authorized remediation set.
 
+{{include:policies/review-scope-authority}}
+
 ## Principles
 
 | Principle | Criteria |
@@ -35,10 +37,6 @@ When a finding combines a real defect with an excessive remediation mechanism, j
 ## Non-actionable dispositions
 
 Use `duplicate` only for findings with the same root cause and acceptance criteria, and name the target family. Use `false_positive` / `no_issue_after_verification` when current code or evidence contradicts the claim, `out_of_scope` for a confirmed defect or improvement in another contract without remediation authority, `overreach` for a mechanism or guarantee beyond the evidence or authority, and `environment_unverified` only when every environmental condition is satisfied and no implementation defect can be confirmed. Do not use environmental limitations to dismiss evidence of an implementation defect.
-
-## New findings in follow-up reviews
-
-Keep follow-up remediation converging toward closure. When accepting a new finding from a follow-up review, record one of `accepted_family_unvisited_consumer`, `remediation_regression`, `direct_acceptance_criterion_violation`, or `required_consumer_migration`, plus the reason it was absent from the initial round. Prior existence does not make an unvisited consumer in an accepted family non-actionable; attach it to that family rather than creating a horizontal family. A horizontal improvement to a neighboring contract does not enter fix planning as a new finding.
 
 ## Complete adjudication
 

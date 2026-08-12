@@ -1,5 +1,7 @@
 Adjudicate the review findings from evidence and establish the authoritative remediation set.
 
+{{include:instructions/review-family-authority-boundary}}
+
 **Important:** Do not perform a new broad review. Consider only findings submitted by the latest review reports under the Report Directory. Inspect the current code, requirements, plan, and execution evidence only as needed.
 
 **Tasks:**

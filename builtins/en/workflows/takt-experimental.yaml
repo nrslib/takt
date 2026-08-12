@@ -12,7 +12,7 @@ steps:
       implementation_workflow: development-implement-dynamic
       remediation_workflow: development-remediation-dynamic
       implementation_companions:
-        fixed: [ai-antipattern-review-companion]
+        fixed: [ai-antipattern-review-companion, testing-review-companion]
         pool: []
         moderator: ai-antipattern-review-moderator
       reviewer_suite: takt-experimental-review-adapter

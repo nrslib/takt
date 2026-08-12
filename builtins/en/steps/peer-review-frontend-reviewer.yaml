@@ -5,6 +5,9 @@ params:
   review_knowledge_additions:
     type: facet_ref[]
     facet_kind: knowledge
+  frontend_review_instruction:
+    type: facet_ref
+    facet_kind: instruction
 name: frontend-review
 capabilities: readonly
 tags:
@@ -20,7 +23,8 @@ knowledge:
   - frontend
   - react
   - $param: review_knowledge_additions
-instruction: review-frontend
+instruction:
+  $param: frontend_review_instruction
 output_contracts:
   report:
     - name: frontend-review.md
