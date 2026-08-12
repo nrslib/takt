@@ -516,6 +516,30 @@ function bindStepFields(
       case 'instruction':
         expanded[key] = substituteParam(value, INSTRUCTION_CONTRACT, declarations, bindings, options, fieldPath);
         break;
+      case 'review_completion': {
+        if (!isPlainObject(value)) {
+          assertNoParamReferences(value, options, fieldPath);
+          expanded[key] = value;
+          break;
+        }
+        const retryInstruction = getOwnValue(value, 'retry_instruction');
+        expanded[key] = {
+          ...value,
+          ...(retryInstruction === undefined
+            ? {}
+            : {
+                retry_instruction: substituteParam(
+                  retryInstruction,
+                  INSTRUCTION_CONTRACT,
+                  declarations,
+                  bindings,
+                  options,
+                  [...fieldPath, 'retry_instruction'],
+                ),
+              }),
+        };
+        break;
+      }
       case 'persona':
         expanded[key] = substituteParam(value, PERSONA_CONTRACT, declarations, bindings, options, fieldPath);
         break;

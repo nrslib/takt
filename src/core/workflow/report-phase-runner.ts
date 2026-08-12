@@ -161,6 +161,7 @@ async function executeReportPhase(
       language: ctx.language,
       targetFile: fileName,
       lastResponse: currentSessionId ? undefined : ctx.lastResponse,
+      reviewCompletionDiagnostic: ctx.reviewCompletionDiagnostic,
     }).build();
     let firstAttemptOptions: RunAgentOptions;
     if (currentSessionId === undefined) {
@@ -232,6 +233,7 @@ async function executeReportPhase(
       language: ctx.language,
       targetFile: fileName,
       lastResponse: ctx.lastResponse,
+      reviewCompletionDiagnostic: ctx.reviewCompletionDiagnostic,
     }).build();
     const retryInstruction = firstAttempt.failureReason === 'invalid_output'
       ? [

@@ -465,6 +465,32 @@ export interface WorkflowEvents {
     observedGeneration?: number;
     runPathNamespace?: string[];
   }) => void;
+  'review_completion:judge:start': (payload: {
+    step: string;
+    attempt: number;
+    mode: 'initial' | 'follow_up';
+    provider: string | undefined;
+    model: string | undefined;
+  }) => void;
+  'review_completion:retry:start': (payload: {
+    step: string;
+    attempt: number;
+    mode: 'initial' | 'follow_up';
+  }) => void;
+  'review_completion:retry:complete': (payload: {
+    step: string;
+    attempt: number;
+    status: string;
+    error?: string;
+  }) => void;
+  'review_completion:judge:complete': (payload: {
+    step: string;
+    attempt: number;
+    status: string;
+    complete?: boolean;
+    gapCount?: number;
+    error?: string;
+  }) => void;
   'step:blocked': (step: WorkflowStep, response: AgentResponse) => void;
   'step:rate_limited': (step: WorkflowStep, response: AgentResponse, rateLimitInfo: AgentResponse['rateLimitInfo']) => void;
   'step:user_input': (step: WorkflowStep, userInput: string) => void;

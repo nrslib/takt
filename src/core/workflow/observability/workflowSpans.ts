@@ -125,6 +125,49 @@ export interface JudgeStageSpanParams {
   providerInfo?: StepProviderInfo;
 }
 
+export interface ReviewCompletionJudgeSpanParams {
+  enabled: boolean;
+  runId?: string;
+  workflowName: string;
+  reviewerStep: string;
+  attempt: number;
+  mode: 'initial' | 'follow_up';
+  providerInfo: StepProviderInfo;
+}
+
+export async function runWithReviewCompletionJudgeSpan<T>(
+  params: ReviewCompletionJudgeSpanParams,
+  execute: () => Promise<T>,
+  outcome: (result: T) => { status: string; gapCount: number },
+): Promise<T> {
+  if (!params.enabled) return execute();
+  return runInSpan(
+    'takt.review_completion.judge',
+    compactAttributes({
+      'takt.workflow.name': params.workflowName,
+      'takt.run.id': params.runId,
+      'takt.review_completion.reviewer': params.reviewerStep,
+      'takt.review_completion.attempt': params.attempt,
+      'takt.review_completion.mode': params.mode,
+      ...providerAttributes(params.providerInfo),
+    }),
+    async (span) => {
+      try {
+        const result = await execute();
+        const value = outcome(result);
+        span.setAttributes({
+          'takt.review_completion.status': value.status,
+          'takt.review_completion.gap_count': value.gapCount,
+        });
+        return result;
+      } catch (error) {
+        span.setStatus({ code: SpanStatusCode.ERROR, message: getErrorMessage(error) });
+        throw error;
+      }
+    },
+  );
+}
+
 export async function runWithWorkflowSpan<T>(
   params: WorkflowSpanParams,
   execute: () => Promise<T>,

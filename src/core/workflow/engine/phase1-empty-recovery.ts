@@ -92,6 +92,9 @@ interface ObservedPhase1AttemptOptions {
     phaseExecutionId: string,
     iteration: number,
   ) => void) | undefined;
+  readonly onPhaseComplete?: CompleteObservedPhase1AttemptOptions['onPhaseComplete'];
+  readonly failurePersona?: string;
+  readonly recordFailure?: () => void;
 }
 
 interface CompleteObservedPhase1AttemptOptions {
@@ -133,7 +136,9 @@ export async function executeObservedPhase1Attempt(
       options.iteration,
     );
   };
-  const response = await runWithPhaseSpan({
+  let response: AgentResponse;
+  try {
+    response = await runWithPhaseSpan({
     enabled: options.enabled,
     runId: options.runId,
     workflowName: options.workflowName,
@@ -156,7 +161,28 @@ export async function executeObservedPhase1Attempt(
     content: result.content,
     error: result.error,
     providerUsage: result.providerUsage,
-  }));
+    }));
+  } catch (error) {
+    if (options.recordFailure !== undefined) {
+      if (resolvedPromptParts !== undefined) {
+        completeObservedPhase1Attempt({
+          eventStep: options.eventStep,
+          iteration: options.iteration,
+          attempt: options.attempt,
+          response: {
+            persona: options.failurePersona ?? options.spanStep.name,
+            status: 'error',
+            content: '',
+            error: error instanceof Error ? error.message : String(error),
+            timestamp: new Date(),
+          },
+          onPhaseComplete: options.onPhaseComplete,
+        });
+      }
+      options.recordFailure();
+    }
+    throw error;
+  }
   return {
     response,
     promptResolved: resolvedPromptParts !== undefined,

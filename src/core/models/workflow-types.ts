@@ -235,6 +235,16 @@ export interface DynamicFacetsConfig {
   readonly maxSelected?: number;
 }
 
+export const REVIEW_COMPLETION_TAG = 'review-completion';
+export const MAX_REVIEW_COMPLETION_RETRY = 4;
+
+export interface ReviewCompletionConfig {
+  readonly mode: 'initial' | 'follow_up';
+  readonly minRetry: number;
+  readonly maxRetry: number;
+  readonly retryInstruction: string;
+}
+
 export interface DynamicFacetSelectionSnapshot {
   identity: string;
   step_name: string;
@@ -320,6 +330,7 @@ interface AgentWorkflowStepBase extends WorkflowStepBase {
   teamLeader?: TeamLeaderConfig;
   policyContents?: readonly ResolvedFacetContent[];
   knowledgeContents?: readonly ResolvedFacetContent[];
+  reviewCompletion?: ReviewCompletionConfig;
 }
 
 export interface NormalAgentWorkflowStep extends AgentWorkflowStepBase {
@@ -425,6 +436,7 @@ export interface SystemWorkflowStep extends WorkflowStepBase {
   teamLeader?: never;
   policyContents?: never;
   knowledgeContents?: never;
+  reviewCompletion?: never;
 }
 
 export interface WorkflowCallStep extends WorkflowStepBase {
@@ -460,6 +472,7 @@ export interface WorkflowCallStep extends WorkflowStepBase {
   teamLeader?: never;
   policyContents?: never;
   knowledgeContents?: never;
+  reviewCompletion?: never;
 }
 
 export type WorkflowStep = AgentWorkflowStep | SystemWorkflowStep | WorkflowCallStep;

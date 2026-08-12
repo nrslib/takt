@@ -28,6 +28,8 @@ parallel:
     capabilities: readonly
     tags:
       - review
+      - review-completion
+    review_completion: {}
     edit: false
     persona: architecture-reviewer
     policy:
@@ -47,6 +49,8 @@ parallel:
     capabilities: readonly
     tags:
       - review
+      - review-completion
+    review_completion: {}
     edit: false
     persona: security-reviewer
     policy:
@@ -72,6 +76,8 @@ parallel:
     capabilities: readonly
     tags:
       - review
+      - review-completion
+    review_completion: {}
     edit: false
     persona: testing-reviewer
     policy:
@@ -94,6 +100,8 @@ parallel:
     capabilities: readonly
     tags:
       - review
+      - review-completion
+    review_completion: {}
     edit: false
     persona: coding-reviewer
     policy:
@@ -115,6 +123,8 @@ parallel:
     capabilities: readonly
     tags:
       - review
+      - review-completion
+    review_completion: {}
     edit: false
     persona: ai-antipattern-reviewer
     policy:

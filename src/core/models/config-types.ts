@@ -102,6 +102,8 @@ export interface InternalAgentSeats {
   /** `loop-judge`: loop_monitors の判定役。 */
   loopJudge?: ProviderRoutingEntry;
   escalationReviewer?: ProviderRoutingEntry;
+  /** `review-completion-judge`: review-completion episode の網羅性判定役。 */
+  reviewCompletionJudge?: ProviderRoutingEntry;
 }
 
 export interface ProviderRoutingConfig {

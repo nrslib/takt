@@ -34,6 +34,8 @@ export interface ReportInstructionContext {
   targetFile?: string;
   /** Last response from Phase 1 (used when report phase retries in a new session) */
   lastResponse?: string;
+  /** Advisory diagnostics emitted by the reviewer completion check. */
+  reviewCompletionDiagnostic?: string;
   /** Engine-computed changed file set for `{review_scope}` in output contracts. */
   reviewScope?: InstructionContext['reviewScope'];
 }
@@ -114,6 +116,9 @@ export class ReportInstructionBuilder {
       reportContext,
       hasLastResponse: this.context.lastResponse != null && this.context.lastResponse.trim().length > 0,
       lastResponse: this.context.lastResponse ?? '',
+      hasReviewCompletionDiagnostic:
+        this.context.reviewCompletionDiagnostic !== undefined,
+      reviewCompletionDiagnostic: this.context.reviewCompletionDiagnostic ?? '',
       hasReportOutput,
       reportOutput,
       hasOutputContract,

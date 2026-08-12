@@ -328,6 +328,7 @@ function buildInternalAgents(
     selector: 'selector',
     assistant: 'assistant',
     'loop-judge': 'loopJudge',
+    'review-completion-judge': 'reviewCompletionJudge',
   };
   const result: InternalAgentEnvironment = {};
   for (const [key, assignment] of Object.entries(map)) {

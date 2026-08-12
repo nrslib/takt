@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AgentResponse } from '../core/models/types.js';
 import {
   PHASE1_EMPTY_OUTPUT_ERROR,
+  executeObservedPhase1Attempt,
   runPhase1WithEmptyRecovery,
   runSingleFreshPhase1Retry,
 } from '../core/workflow/engine/phase1-empty-recovery.js';
@@ -18,6 +19,48 @@ function response(overrides: Partial<AgentResponse>): AgentResponse {
 }
 
 describe('Phase 1 empty response recovery', () => {
+  it('records a resolved thrown attempt as one failed completion and one failed usage', async () => {
+    const onPhaseComplete = vi.fn();
+    const recordFailure = vi.fn();
+    await expect(executeObservedPhase1Attempt({
+      enabled: false,
+      runId: undefined,
+      workflowName: 'review',
+      eventStep: { kind: 'agent', name: 'reviewer', edit: false, rules: [] },
+      spanStep: { kind: 'agent', name: 'reviewer', edit: false, rules: [] },
+      iteration: 1,
+      attempt: {
+        sequence: 2,
+        reason: 'initial',
+        instruction: 'review',
+        sessionId: 'session',
+      },
+      workflowStack: undefined,
+      sanitizeText: undefined,
+      providerInfo: { provider: 'mock', model: undefined },
+      execute: async (_instruction, _sessionId, onPromptResolved) => {
+        onPromptResolved({ systemPrompt: 'system', userPrompt: 'review' });
+        throw new Error('provider failed');
+      },
+      onPhaseStart: vi.fn(),
+      onPhaseComplete,
+      recordFailure,
+    })).rejects.toThrow('provider failed');
+
+    expect(onPhaseComplete).toHaveBeenCalledOnce();
+    expect(onPhaseComplete).toHaveBeenCalledWith(
+      expect.anything(),
+      1,
+      'execute',
+      '',
+      'error',
+      'provider failed',
+      expect.stringContaining(':1:2'),
+      1,
+    );
+    expect(recordFailure).toHaveBeenCalledOnce();
+  });
+
   it('publication retryは指定sequenceでfresh Phase 1を一度だけ実行する', async () => {
     const discardSession = vi.fn();
     const complete = vi.fn();

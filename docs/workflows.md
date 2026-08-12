@@ -832,6 +832,7 @@ Promotion is not supported on parallel sub-steps.
 | `instruction` | - | Instruction key (section map, or bare facet name resolved project → user → builtin) |
 | `edit` | - | Whether the step can edit project files (`true`/`false`) |
 | `companion` | - | Run companion reviewers alongside a normal agent step using their resolved runtime profiles (see [Companion reviewers](#companion-reviewers)) |
+| `review_completion` | - | Configure bounded completeness checks for a reviewer step |
 | `pass_previous_response` | `true` | Pass previous step's output to `{previous_response}` |
 | `provider_options.claude.allowed_tools` | - | Claude tool allowlist for the step or workflow |
 | `provider_options.claude.base_url` | - | Anthropic-compatible base URL for `claude` / `claude-sdk` (see [configuration guide](./configuration.md#provider-base-url-base_url)) |
