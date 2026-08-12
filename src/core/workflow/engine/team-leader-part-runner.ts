@@ -11,11 +11,7 @@ import { createPartStep } from './team-leader-common.js';
 import { getErrorMessage } from '../../../shared/utils/index.js';
 import { classifyAbortSignalReason } from '../../../shared/types/agent-failure.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
-import { buildSessionlessPartCompletionInspectionOptions } from './team-leader-part-completion-inspection.js';
 import { isTeamLeaderPartCancellation } from './team-leader-part-cancellation.js';
-import type {
-  FindingContractControlValidationIssue,
-} from '../team-leader-finding-contract-control-validation.js';
 import {
   ExplicitPartFailureError,
   OperationRecoveryError,
@@ -169,53 +165,6 @@ export async function runTeamLeaderPart(
   } finally {
     dispose();
   }
-}
-
-export async function requestTeamLeaderPartCompletionCorrection(
-  optionsBuilder: OptionsBuilder,
-  step: WorkflowStep,
-  part: PartDefinition,
-  instruction: string,
-  sessionId: string | undefined,
-  abortSignal: AbortSignal,
-  issues: readonly FindingContractControlValidationIssue[],
-  runtime?: RuntimeStepResolution,
-): Promise<AgentResponse> {
-  const partStep = createPartStep(step, part);
-  const schemaOptions = optionsBuilder.buildAgentOptions(partStep, runtime);
-  let correctionOptions: RunAgentOptions;
-  if (sessionId === undefined) {
-    const newSessionOptions = optionsBuilder.buildNewSessionReportOptions(
-      partStep,
-      { allowedTools: [], maxTurns: undefined },
-      runtime,
-    );
-    const inspectionOptions = buildSessionlessPartCompletionInspectionOptions(
-      newSessionOptions.cwd,
-      newSessionOptions.resolvedProvider,
-      issues,
-    );
-    correctionOptions = {
-      ...newSessionOptions,
-      ...inspectionOptions,
-    };
-  } else {
-    correctionOptions = optionsBuilder.buildResumeOptions(
-      partStep,
-      sessionId,
-      { maxTurns: undefined },
-      runtime,
-    );
-  }
-  const response = await executeAgent(partStep.persona, instruction, {
-    ...correctionOptions,
-    abortSignal,
-    outputSchema: schemaOptions.outputSchema,
-  });
-  return {
-    ...response,
-    persona: partStep.name,
-  };
 }
 
 export function buildTeamLeaderErrorPartResult(

@@ -21,7 +21,6 @@ import {
 import { loadCompanionDefinition } from '../infra/config/loaders/companionDefinitionLoader.js';
 import { resolveRefToContent } from '../infra/config/loaders/resource-resolver.js';
 import { resolveWorkflowCallTarget } from '../infra/config/loaders/workflowCallResolver.js';
-import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
 import {
   getBuiltinWorkflow,
   listBuiltinWorkflowNames,
@@ -37,7 +36,6 @@ import {
   callerPathExpectation,
   COMPANION_DECLARATION_MANIFEST,
   DECLARED_INSTRUCTION_MANIFEST,
-  FINDING_MANAGER_DECLARATION,
 } from './fixtures/contract-family-declared-instruction-manifest.js';
 
 const LANGUAGES = ['en', 'ja'] as const;
@@ -59,11 +57,11 @@ interface ManifestEntry {
   wrapper?: string;
   outsideReason?: string;
   tags: string[];
-  phase: 'plan' | 'edit' | 'review' | 'ledger' | 'companion' | 'outside';
+  phase: 'plan' | 'edit' | 'review' | 'companion' | 'outside';
   edit: boolean;
   requiredPermissionMode: string;
   toolClass: ContractFamilyToolClass;
-  executionKind: 'agent' | 'team-leader' | 'finding-manager' | 'companion';
+  executionKind: 'agent' | 'team-leader' | 'companion';
 }
 
 function rolesIn(instruction: string | undefined): string[] {
@@ -215,28 +213,6 @@ function collectResolvedCallers(
   for (const [index, step] of workflow.steps.entries()) {
     visit(step, `${rootName}/${prefix}steps[${index}]:${step.name}`);
   }
-  if (workflow.findingContract !== undefined) {
-    const manager = workflow.findingContract.manager;
-    const declaredInstruction = manager.instructionRef;
-    expect(declaredInstruction, `${rootName}/finding-manager`).toBeDefined();
-    expect(declaredInstruction, `${rootName}/finding-manager`).toBe(FINDING_MANAGER_DECLARATION);
-    const declaration = assertDeclaredInstructionContent(
-      declaredInstruction!, manager.instruction, lang, `${rootName}/finding-manager`,
-    );
-    entries.push({
-      path: `${rootName}/${prefix}finding-manager`,
-      classification: 'target',
-      role: declaration.role,
-      wrapper: declaration.wrapper,
-      declaredInstruction,
-      tags: ['ledger'],
-      phase: 'ledger',
-      edit: false,
-      requiredPermissionMode: 'engine-managed',
-      toolClass: 'engine-managed',
-      executionKind: 'finding-manager',
-    });
-  }
   return entries;
 }
 
@@ -285,49 +261,6 @@ function companionManifest(projectDir: string, lang: 'en' | 'ja'): ManifestEntry
     .sort((left, right) => left.path.localeCompare(right.path));
 }
 
-function findingManagerManifest(projectDir: string, lang: 'en' | 'ja'): ManifestEntry {
-  const workflowPath = join(projectDir, '.takt', 'workflows', 'manager-manifest.yaml');
-  mkdirSync(join(projectDir, '.takt', 'workflows'), { recursive: true });
-  writeFileSync(workflowPath, [
-    'name: manager-manifest',
-    'finding_contract:',
-    '  manager:',
-    '    persona: findings-manager',
-    '    instruction: findings-manager',
-    '    output_contract: findings-manager',
-    'steps:',
-    '  - name: review',
-    '    persona: coding-reviewer',
-    '    instruction: coding-review',
-    '    rules:',
-    '      - condition: done',
-    '        next: COMPLETE',
-    '',
-  ].join('\n'));
-  const workflow = loadWorkflowFromFile(workflowPath, projectDir);
-  const manager = workflow.findingContract?.manager;
-  expect(manager).toBeDefined();
-  const declaredInstruction = manager!.instructionRef;
-  expect(declaredInstruction).toBeDefined();
-  expect(declaredInstruction).toBe(FINDING_MANAGER_DECLARATION);
-  const declaration = assertDeclaredInstructionContent(
-    declaredInstruction!, manager!.instruction, lang, 'synthetic:finding-manager',
-  );
-  return {
-    path: 'synthetic:finding-manager',
-    classification: 'target',
-    role: declaration.role,
-    wrapper: declaration.wrapper,
-    declaredInstruction,
-    tags: ['ledger'],
-    phase: 'ledger',
-    edit: false,
-    requiredPermissionMode: 'engine-managed',
-    toolClass: 'engine-managed',
-    executionKind: 'finding-manager',
-  };
-}
-
 function assertRoleContract(entry: ManifestEntry): void {
   if (entry.classification === 'outside') {
     expect(entry.outsideReason, entry.path).toBeTruthy();
@@ -374,13 +307,6 @@ describe('contract-family active composition', () => {
     expect(manifests.ja.some(({ executionKind }) => executionKind === 'team-leader')).toBe(true);
     expect(manifests.ja.some(({ path }) => path.includes('/parallel['))).toBe(true);
     expect(manifests.ja.some(({ path }) => path.includes('/call:'))).toBe(true);
-  });
-
-  it('classifies the actual loader-resolved finding manager as an engine-managed ledger role', () => {
-    const ja = findingManagerManifest(projectDirs.ja, 'ja');
-    const en = findingManagerManifest(projectDirs.en, 'en');
-    expect(ja).toEqual(en);
-    assertRoleContract(ja);
   });
 
   it('classifies every real-loader companion without hard-coded role projection', () => {

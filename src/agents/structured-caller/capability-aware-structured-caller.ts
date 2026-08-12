@@ -1,5 +1,4 @@
 import type { SemanticRuleCandidate } from '../../core/models/workflow-rule-condition.js';
-import type { AgentResponse } from '../../core/models/types.js';
 import type { ProviderType } from '../../shared/types/provider.js';
 import type {
   JudgeStatusOptions,
@@ -71,22 +70,6 @@ export class CapabilityAwareStructuredCaller extends DefaultStructuredCaller {
     return super.decomposeTask(instruction, maxInitialParts, options);
   }
 
-  async requestDecompositionRawResponse(
-    instruction: string,
-    maxInitialParts: number | undefined,
-    options: DecomposeTaskOptions,
-  ): Promise<AgentResponse> {
-    const provider = resolveProvider(options.provider, options.resolvedProvider);
-    if (shouldUsePromptBased(provider)) {
-      return this.promptBased.requestDecompositionRawResponse(
-        instruction,
-        maxInitialParts,
-        options,
-      );
-    }
-    return super.requestDecompositionRawResponse(instruction, maxInitialParts, options);
-  }
-
   async requestMoreParts(
     originalInstruction: string,
     allResults: TeamLeaderPartFeedbackResult[],
@@ -111,26 +94,4 @@ export class CapabilityAwareStructuredCaller extends DefaultStructuredCaller {
     );
   }
 
-  async requestMorePartsRawResponse(
-    originalInstruction: string,
-    allResults: TeamLeaderPartFeedbackResult[],
-    existingIds: string[],
-    options: MorePartsOptions,
-  ): Promise<AgentResponse> {
-    const provider = resolveProvider(options.provider, options.resolvedProvider);
-    if (shouldUsePromptBased(provider)) {
-      return this.promptBased.requestMorePartsRawResponse(
-        originalInstruction,
-        allResults,
-        existingIds,
-        options,
-      );
-    }
-    return super.requestMorePartsRawResponse(
-      originalInstruction,
-      allResults,
-      existingIds,
-      options,
-    );
-  }
 }

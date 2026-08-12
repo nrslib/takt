@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
 
-description: 'TAKT facet eval: legacy review mode authority and safe precedence'
+description: 'TAKT facet eval: caller review mode authority and safe fallback'
 
 prompts:
   - file://prompts/review-mode-authority.phase1.md
@@ -16,22 +16,23 @@ providers:
       model_reasoning_effort: low
 
 tests:
-  - description: 'legacy mode: resolve same, single-source, fallback, conflict, and unknown cases safely'
+  - description: 'caller mode: resolve explicit, iteration fallback, and unknown cases safely'
     vars:
       task: file://cases/review-mode-authority.md
       previous_response: ''
     assert:
       - type: llm-rubric
-        metric: review-mode/domain-precedence-and-safe-ceiling
+        metric: review-mode/domain-fallback-and-safe-ceiling
         value: |
           Judge the answer against the active review authority policy in the
           assembled prompt. Pass only if all cases are classified as follows:
-          same explicit initial -> initial; same explicit follow_up ->
-          follow_up; ledger-only initial -> initial; caller-only follow_up ->
-          follow_up; both unspecified at iteration 1 -> initial; both
-          unspecified at iteration 2 -> follow_up; different explicit modes ->
-          mode_conflict; invalid/unknown source -> mode_unknown. It must also
-          apply the follow-up authority ceiling to conflict and unknown, refuse
-          adjacent-family discovery, and refuse APPROVE based on claimed
-          initial-coverage completion. Fail if casing, aliases, empty values,
-          or invalid scalar types are normalized into a valid mode.
+          explicit initial -> initial; explicit follow_up -> follow_up;
+          unspecified or absent at iteration 1 -> initial; unspecified or
+          absent at iteration 2 -> follow_up; invalid caller mode or an
+          unusable fallback iteration -> mode_unknown. It must apply the
+          follow-up authority ceiling to unknown mode, refuse general initial
+          discovery and adjacent-family findings, and refuse APPROVE based on
+          claimed initial-coverage completion. Fail if casing, aliases, empty
+          values, invalid scalar types, or an unexpanded iteration are
+          normalized into a valid mode. The answer must not depend on a second
+          authority source outside the caller and reviewer-step iteration.

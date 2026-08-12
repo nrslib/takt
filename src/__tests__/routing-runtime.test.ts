@@ -87,7 +87,7 @@ describe('RoutingRuntime', () => {
   it('Given a resolved finding changes the work fingerprint, When the new work estimates medium, Then the old high-tier floor is not retained', async () => {
     const estimator = {
       estimate: vi.fn()
-        .mockResolvedValueOnce({ requiredTier: 'high', reasonCodes: ['critical-finding'] })
+        .mockResolvedValueOnce({ requiredTier: 'high', reasonCodes: ['complex-work'] })
         .mockResolvedValueOnce({ requiredTier: 'medium', reasonCodes: ['focused-change'] }),
     };
     const runtime = new RoutingRuntime({ autoRouting: createAutoRoutingConfig(), estimator });
@@ -128,7 +128,7 @@ describe('RoutingRuntime', () => {
     });
     const estimator = {
       estimate: vi.fn()
-        .mockResolvedValueOnce({ requiredTier: 'high', reasonCodes: ['critical-finding'] })
+        .mockResolvedValueOnce({ requiredTier: 'high', reasonCodes: ['complex-work'] })
         .mockRejectedValueOnce('router unavailable'),
     };
     const runtime = new RoutingRuntime({ autoRouting, estimator });

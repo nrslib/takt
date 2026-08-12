@@ -281,7 +281,6 @@ export function attachLegacyWorkflowExecutionBundle(
   const evidence = collectHistoricalEvidence(meta);
   const identityBefore = {
     meta: hashFile(runPaths.metaAbs),
-    findingContractDatabase: hashFile(runPaths.findingContractDatabaseAbs),
     operationJournal: hashFile(buildRunPaths(
       options.projectDir,
       meta.operationJournalRunSlug ?? options.runSlug,
@@ -372,7 +371,6 @@ export function attachLegacyWorkflowExecutionBundle(
   );
   const identityAfterPreparation = {
     meta: hashFile(runPaths.metaAbs),
-    findingContractDatabase: hashFile(runPaths.findingContractDatabaseAbs),
     operationJournal: hashFile(buildRunPaths(
       options.projectDir,
       meta.operationJournalRunSlug ?? options.runSlug,

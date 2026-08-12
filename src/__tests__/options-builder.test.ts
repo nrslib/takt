@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
-import { buildFindingManagerStep } from '../core/workflow/findings/manager-step.js';
 import type { WorkflowStep } from '../core/models/types.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 
@@ -46,7 +45,6 @@ function createBuilder(step: WorkflowStep, engineOverrides: BuilderEngineOverrid
     () => [{ name: step.name }],
     () => engineOverrides.workflowName ?? 'default',
     () => 'test workflow',
-    undefined,
     undefined,
     () => 'Original workflow task',
   );
@@ -527,11 +525,11 @@ describe('OptionsBuilder auto routing deterministic completion', () => {
     rules: { steps: { implement: 'coding' } },
   };
 
-  function createManagerLikeStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
+  function createSynthesizedStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
     return createStep({
-      name: 'findings-manager',
+      name: 'summary-agent',
       structuredOutput: {
-        schemaRef: 'takt.findings.manager',
+        schemaRef: 'takt.summary',
         schema: { type: 'object' },
       },
       ...overrides,
@@ -540,32 +538,24 @@ describe('OptionsBuilder auto routing deterministic completion', () => {
 
   it('resolveStepProviderModel falls back to the strategy default candidate when auto routing suppresses the config provider', () => {
     // 事故の再現: config デフォルト provider は auto_routing 有効時に抑止される。
-    // 実行ループの AI ルーターを通らない findings-manager（実際に合成される
-    // ステップそのもの）も、共通の解決経路で strategy デフォルトまで落ち、
+    // 実行ループの AI ルーターを通らない合成ステップも、共通の解決経路で
+    // strategy デフォルトまで落ち、
     // buildAgentOptions の structured_output ガードを通過すること。
-    const managerStep = buildFindingManagerStep({
-      contract: {
-        manager: {
-          persona: 'findings-manager',
-          instruction: 'findings-manager',
-          outputContract: 'findings-manager',
-        },
-      },
-    });
-    const builder = createBuilder(managerStep, { provider: 'codex', providerSource: 'global', autoRouting });
+    const synthesizedStep = createSynthesizedStep();
+    const builder = createBuilder(synthesizedStep, { provider: 'codex', providerSource: 'global', autoRouting });
 
-    const resolved = builder.resolveStepProviderModel(managerStep);
+    const resolved = builder.resolveStepProviderModel(synthesizedStep);
 
     expect(resolved).toMatchObject({
       provider: 'codex',
       model: 'default-candidate-model',
       providerSource: 'auto.fallback',
     });
-    expect(builder.buildAgentOptions(managerStep).resolvedProvider).toBe('codex');
+    expect(builder.buildAgentOptions(synthesizedStep).resolvedProvider).toBe('codex');
   });
 
   it('resolveStepProviderModel applies auto routing rules before the strategy default', () => {
-    const step = createManagerLikeStep({ name: 'implement' });
+    const step = createSynthesizedStep({ name: 'implement' });
     const builder = createBuilder(step, { provider: 'codex', providerSource: 'global', autoRouting });
 
     expect(builder.resolveStepProviderModel(step)).toMatchObject({
@@ -575,7 +565,7 @@ describe('OptionsBuilder auto routing deterministic completion', () => {
   });
 
   it('resolveStepProviderModel prefers runtime providerInfo routed by the run loop over the deterministic completion', () => {
-    const step = createManagerLikeStep();
+    const step = createSynthesizedStep();
     const builder = createBuilder(step, { provider: 'codex', providerSource: 'global', autoRouting });
 
     const resolved = builder.resolveStepProviderModel(step, {
@@ -586,12 +576,12 @@ describe('OptionsBuilder auto routing deterministic completion', () => {
   });
 
   it('resolveStepProviderModel does not override a provider resolved by persona providers', () => {
-    const step = createManagerLikeStep({ personaDisplayName: 'findings-manager' });
+    const step = createSynthesizedStep({ personaDisplayName: 'summary-agent' });
     const builder = createBuilder(step, {
       provider: 'codex',
       providerSource: 'global',
       autoRouting,
-      personaProviders: { 'findings-manager': { provider: 'claude', model: 'sonnet' } },
+      personaProviders: { 'summary-agent': { provider: 'claude', model: 'sonnet' } },
     });
 
     expect(builder.resolveStepProviderModel(step)).toMatchObject({
@@ -602,7 +592,7 @@ describe('OptionsBuilder auto routing deterministic completion', () => {
   });
 
   it('resolveStepProviderModelBeforeAutoRouting leaves the provider unresolved so the AI router keeps its say', () => {
-    const step = createManagerLikeStep();
+    const step = createSynthesizedStep();
     const builder = createBuilder(step, { provider: 'codex', providerSource: 'global', autoRouting });
 
     expect(builder.resolveStepProviderModelBeforeAutoRouting(step).provider).toBeUndefined();

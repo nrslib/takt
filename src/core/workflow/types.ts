@@ -16,7 +16,6 @@ import type {
   FallbackOperationOrigin,
   McpServerConfig,
 } from '../models/types.js';
-import type { FindingManagerAuthority } from '../models/finding-types.js';
 import type {
   AutoRoutingConfig,
   AutoRoutingStrategy,
@@ -38,12 +37,9 @@ import type { RoutingRuntime } from './auto-routing/runtime.js';
 import type { SystemStepServicesFactory } from './system/system-step-services.js';
 import type { StructuredOutputNormalizerRegistry } from './engine/structured-output-normalizer.js';
 import type { ProviderOptionsOriginResolver, ProviderOptionsSource, ProviderResolutionSource } from './provider-options-trace.js';
-import type { FindingContractConfig, FindingLedger } from '../models/finding-types.js';
 import type { RunResumeSource } from './run/run-meta.js';
-import type { FindingLedgerStore } from './findings/store.js';
 import type { OperationJournalStore } from './operations/operation-journal-types.js';
 import type { PullRequestContext } from './pr-context.js';
-import type { RunPaths } from './run/run-paths.js';
 import type { DynamicParallelSelectionStore } from './dynamic-parallel/selection-store.js';
 import type { WorkflowCallInvocationEvidence } from './workflow-call-invocation-index.js';
 import type { WorkflowStepParticipationIndex } from './workflow-step-participation-index.js';
@@ -156,7 +152,7 @@ export interface ProviderStreamContext {
 }
 
 export interface DelegatedAgentUsageContext extends ProviderStreamContext {
-  /** 'normal' は実行ループ外の合成ステップ（findings-manager 等）の直接呼び出し。 */
+  /** 'normal' は実行ループ外の合成ステップの直接呼び出し。 */
   readonly stepType: 'parallel' | 'team_leader' | 'normal';
 }
 
@@ -279,15 +275,6 @@ export interface WorkflowCallResolutionRequest {
 
 export type WorkflowCallResolver = (request: WorkflowCallResolutionRequest) => WorkflowConfig | null;
 
-export interface FindingAuthorityResolver {
-  resolve(input: {
-    readonly workflowConfig: WorkflowConfig;
-    readonly runPaths: RunPaths;
-    readonly runPathNamespace: readonly string[];
-    readonly workflowCallSiteIdentity?: string;
-  }): FindingLedgerStore;
-}
-
 export interface WorkflowStepExecutionEventContext {
   readonly iteration: number;
   readonly workflowName: string;
@@ -297,8 +284,6 @@ export interface WorkflowStepExecutionEventContext {
   readonly provider: ProviderType;
   readonly model: string;
   readonly workflowStack: WorkflowResumePointEntry[];
-  readonly findingScopeIdentity: string | undefined;
-  readonly findingIds: readonly string[] | undefined;
 }
 
 export interface WorkflowCallLifecycle {
@@ -338,8 +323,6 @@ export interface WorkflowEvents {
     resumeStepName: string,
     stepIteration: number,
     workflowStack: WorkflowResumePointEntry[],
-    findingScopeIdentity: string | undefined,
-    findingIds: readonly string[] | undefined,
   ) => void;
   'step:complete': (
     step: WorkflowStep,
@@ -363,14 +346,6 @@ export interface WorkflowEvents {
     filePath: string,
     fileName: string,
     context: WorkflowStepExecutionEventContext,
-  ) => void;
-  'findings:ledger': (
-    ledger: FindingLedger,
-    context: {
-      readonly iteration: number;
-      readonly workflowName: string;
-      readonly scopeIdentity: string;
-    },
   ) => void;
   'companion:start': (payload: {
     step: string;
@@ -564,13 +539,7 @@ export interface WorkflowEngineOptions {
   providerRouting?: ProviderRoutingConfig;
   /** `escalate` target of the runtime.yaml profile behind the engine-level provider/model. */
   providerEscalation?: ProviderEscalationTarget;
-  /**
-   * runtime.yaml `provider.targets.internal_agents` の解決済み seat。エンジンが自前で
-   * 合成する役職（正規化係 / findings-manager / terminal adjudicator / loop judge /
-   * 格上げ枠）の宛先を runtime 側から名指しする。
-   *
-   * どの seat も指定は任意で、未指定の seat は従来どおりの既定解決へ落ちる。
-   */
+  /** runtime.yaml `provider.targets.internal_agents` の解決済み seat。 */
   internalAgentSeats?: InternalAgentSeats;
   /** runtime.yaml から解決済みの companion ごとの実行環境。 */
   companionEnabled?: boolean;
@@ -635,32 +604,6 @@ export interface WorkflowEngineOptions {
   workflowCallVars?: Readonly<Record<string, string | number | boolean>>;
   /** Exact verified resource root for the run's workflow execution bundle. */
   workflowBundleResourceRoot?: string;
-  /**
-   * Run-bound Finding authority selected by the application composition root.
-   * Local contracts resolve through it; inherited contracts keep the exact
-   * parent store instance.
-   */
-  findingAuthorityResolver?: FindingAuthorityResolver;
-  /**
-   * workflow_call の親から継承する Finding Contract。
-   * 継承しないと子の parallel レビューが出す raw findings が親の台帳に届かず、
-   * fix ステップへ渡らないまま reviewers ↔ fix が回り続ける（実測: 56周・9時間）。
-   * ledgerStore は親と同一インスタンスを渡し、同じ authority を共有する。
-   */
-  inheritedFindingContract?: {
-    contract: FindingContractConfig;
-    ledgerStore: FindingLedgerStore;
-    managerAuthority: FindingManagerAuthority;
-  };
-  /**
-   * workflow_call の呼び出しスタックを表す名前空間。raw finding id にこの値を
-   * 混ぜることで、親の parallel から同じ子ワークフローを複数同時に呼んだ場合の
-   * id 衝突を防ぐ。子エンジンは同じ親の runPaths.slug（= runId）を継承するため、
-   * 呼び出し元ステップ名で区別しないと2子の raw finding id が完全に一致し、
-   * 片方が他方の台帳エントリを上書きしてしまう。トップレベルの走行では
-   * undefined のままにし、既存の raw finding id の形を変えない。
-   */
-  findingCallNamespace?: string;
   /** Full resume-stack-derived identity for the workflow_call that owns this engine. */
   workflowCallSiteIdentity?: string;
 }

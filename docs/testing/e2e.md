@@ -308,9 +308,6 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
   - 目的: `team_leader` step がタスクを parts に分解して並列実行できることを実 provider で確認（provider 共通 suite）。
 - Team leader batch barrier（`e2e/specs/team-leader-batch-barrier.e2e.ts`）
   - 目的: 最初の part 正常完了後に feedback を開始し、遅い running part を集約対象にせず中断することを確認。
-- Team leader finding contract（`e2e/specs/team-leader-finding-contract.e2e.ts`）
-  - 目的: finding contract の明示的な decision に応じて `reviewers` / `replan` へルーティングされることを確認。
-- Team leader worker pool（`e2e/specs/team-leader-worker-pool.e2e.ts`）
   - 目的: worker-pool の動的スケジューリングで `max_parts` を超える件数のファイル生成を完了できること、および `inspect_tools` が child part に継承されないことを確認。
 - Workflow call budget（`e2e/specs/workflow-call-budget.e2e.ts`）
   - 目的: `workflow_call` で抽出した subworkflow が、親と同じ step budget を共有したまま完走することを確認。

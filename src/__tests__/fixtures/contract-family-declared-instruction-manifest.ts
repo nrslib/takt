@@ -11,7 +11,6 @@ export const DECLARED_INSTRUCTION_MANIFEST: Readonly<Record<string, DeclaredInst
   'plan-maintenance': expectation('plan-replan', 'contract-family-plan-replan'),
   'scenario-based-plan': expectation('plan-replan', 'contract-family-plan-replan'),
   'replan-implementation': expectation('plan-replan', 'contract-family-plan-replan'),
-  'replan-implementation-finding-contract': expectation('plan-replan', 'contract-family-plan-replan'),
   'scenario-based-replan-implementation': expectation('plan-replan', 'contract-family-plan-replan'),
   implement: expectation('implement', 'contract-family-implement'),
   'simple-implement': expectation('implement', 'contract-family-implement'),
@@ -25,19 +24,16 @@ export const DECLARED_INSTRUCTION_MANIFEST: Readonly<Record<string, DeclaredInst
   'implement-test': expectation('test-authoring', 'contract-family-test-authoring'),
   'e2e-coverage-implement': expectation('test-authoring', 'contract-family-test-authoring'),
   'fix-plan': expectation('fix-plan', 'contract-family-fix-plan'),
-  'fix-plan-finding-contract': expectation('fix-plan', 'contract-family-fix-plan'),
   'fix-plan-from-review-resolution': expectation('fix-plan', 'contract-family-fix-plan'),
   'scenario-based-fix-plan-from-review-resolution': expectation('fix-plan', 'contract-family-fix-plan'),
   fix: expectation('fix', 'contract-family-fix'),
   'simple-fix': expectation('fix', 'contract-family-fix'),
-  'fix-finding-contract': expectation('fix', 'contract-family-fix'),
   'ai-antipattern-fix': expectation('fix', 'contract-family-fix'),
   'fix-maintenance': expectation('fix', 'contract-family-fix'),
   'fix-supervisor': expectation('fix', 'contract-family-fix'),
   'apply-fix-plan': expectation('fix', 'contract-family-fix'),
   'apply-fix-verification': expectation('fix-retry', 'contract-family-fix-retry'),
   'verify-fix': expectation('fix-verifier', 'contract-family-fix-verifier'),
-  'verify-fix-finding-contract': expectation('fix-verifier', 'contract-family-fix-verifier'),
   'architecture-review': expectation('initial-review', 'contract-family-initial-review'),
   'coding-review': expectation('initial-review', 'contract-family-initial-review'),
   'cqrs-es-review': expectation('initial-review', 'contract-family-initial-review'),
@@ -65,8 +61,6 @@ export const DECLARED_INSTRUCTION_MANIFEST: Readonly<Record<string, DeclaredInst
   'review-test': expectation('review-by-mode', 'contract-family-review-by-mode'),
   'robustness-review': expectation('review-by-mode', 'contract-family-review-by-mode'),
   'adjudicate-review-findings': expectation('review-adjudication', 'contract-family-review-adjudication'),
-  'adjudicate-finding-contract': expectation('ledger-evidence-boundary', 'contract-family-ledger-evidence-boundary'),
-  'findings-manager': expectation('ledger-evidence-boundary', 'contract-family-ledger-evidence-boundary'),
   'review-merge-readiness': expectation('final-preservation', 'contract-family-final-preservation'),
   'scenario-based-review-merge-readiness': expectation('final-preservation', 'contract-family-final-preservation'),
   'supervise-merge-readiness': expectation('final-preservation', 'contract-family-final-preservation'),
@@ -79,7 +73,6 @@ export const DECLARED_INSTRUCTION_MANIFEST: Readonly<Record<string, DeclaredInst
   'team-leader-implement': expectation('decomposition-boundary', 'contract-family-decomposition-boundary'),
   'dual-team-leader-implement': expectation('decomposition-boundary', 'contract-family-decomposition-boundary'),
   'team-leader-fix': expectation('decomposition-boundary', 'contract-family-decomposition-boundary'),
-  'team-leader-finding-contract-fix': expectation('decomposition-boundary', 'contract-family-decomposition-boundary'),
   'team-leader-ai-antipattern-fix': expectation('decomposition-boundary', 'contract-family-decomposition-boundary'),
 };
 
@@ -88,8 +81,6 @@ export const COMPANION_DECLARATION_MANIFEST = {
   'testing-review-companion': 'companion-watch-testing',
   'ai-antipattern-review-moderator': 'companion-moderate-review',
 } as const;
-
-export const FINDING_MANAGER_DECLARATION = 'findings-manager';
 
 interface CallerPathExpectation extends DeclaredInstructionExpectation {
   readonly matches: RegExp;

@@ -15,7 +15,7 @@ describe('normalizeRoutingWorkSnapshot', () => {
       },
       remainingWork: [
         {
-          source: 'finding',
+          source: 'task',
           description: 'Repository github.com/acme/private-repo has an invalid Authorization: Bearer secret-value.',
         },
       ],
@@ -38,7 +38,7 @@ describe('normalizeRoutingWorkSnapshot', () => {
   it('Given long goal, instruction, and remaining-work fields, When normalizing, Then each field keeps its own bounded prefix', () => {
     const goal = `goal:${'g'.repeat(8_000)}`;
     const instruction = `instruction:${'i'.repeat(8_000)}`;
-    const remainingWork = `finding:${'w'.repeat(8_000)}`;
+    const remainingWork = `work:${'w'.repeat(8_000)}`;
 
     const input = normalizeRoutingWorkSnapshot({
       goal,
@@ -49,7 +49,7 @@ describe('normalizeRoutingWorkSnapshot', () => {
         stepType: 'normal',
         edit: true,
       },
-      remainingWork: [{ source: 'finding', description: remainingWork }],
+      remainingWork: [{ source: 'task', description: remainingWork }],
       progress: {
         previousAttemptFailed: false,
         noProgress: false,
@@ -59,7 +59,7 @@ describe('normalizeRoutingWorkSnapshot', () => {
 
     expect(input.goal).toContain('goal:');
     expect(input.step.instruction).toContain('instruction:');
-    expect(input.remainingWork[0]?.description).toContain('finding:');
+    expect(input.remainingWork[0]?.description).toContain('work:');
     expect(input.goal.length).toBeLessThan(goal.length);
     expect(input.step.instruction.length).toBeLessThan(instruction.length);
     expect(input.remainingWork[0]?.description.length).toBeLessThan(remainingWork.length);
@@ -84,7 +84,7 @@ describe('normalizeRoutingWorkSnapshot', () => {
     const input = normalizeRoutingWorkSnapshot({
       goal: 'Resolve Finding F-0128 with password=example-test-value',
       step: { name: 'implement', tags: [], instruction: 'Conflict C-0007 has token=example-token-value', stepType: 'normal' },
-      remainingWork: [{ source: 'finding', description: 'Finding F-0128 conflicts with C-0007.' }],
+      remainingWork: [{ source: 'task', description: 'Finding F-0128 conflicts with C-0007.' }],
       progress: { previousAttemptFailed: false, noProgress: false, retryingSameWork: false },
     });
     const serialized = JSON.stringify(input);
@@ -98,18 +98,9 @@ describe('normalizeRoutingWorkSnapshot', () => {
   it('Given a secret crossing each remaining-work field budget, When building a snapshot, Then redaction happens before truncation', () => {
     const crossingBoundary = `${'x'.repeat(995)}sk-abcdefghijklmnopqrstuvwxyz012345`;
     const snapshot = buildRoutingWorkSnapshot({
-      goal: 'Resolve the private finding',
-      userInputs: [],
+      goal: 'Resolve the private task',
+      userInputs: [crossingBoundary],
       step: { name: 'fix', tags: [], stepType: 'normal', passPreviousResponse: false },
-      findings: {
-        open: [{
-          id: 'F-1',
-          title: crossingBoundary,
-          description: crossingBoundary,
-          suggestion: crossingBoundary,
-        }],
-        conflicts: [],
-      },
     });
     const serializedSnapshot = JSON.stringify(snapshot);
     const serializedInput = JSON.stringify(normalizeRoutingWorkSnapshot(snapshot));
@@ -125,7 +116,6 @@ describe('normalizeRoutingWorkSnapshot', () => {
       goal: 'Fix nrslib/takt while preserving input/evidence and normal/parallel.',
       userInputs: ['The takt repository needs a focused change.'],
       step: { name: 'fix', tags: [], stepType: 'normal', passPreviousResponse: false },
-      findings: { open: [], conflicts: [] },
       sensitiveValues: ['nrslib/takt', 'takt'],
     });
     const input = normalizeRoutingWorkSnapshot(snapshot);
@@ -147,7 +137,7 @@ describe('normalizeRoutingWorkSnapshot', () => {
         instruction: 'Resolve C-2E12A3C28C63 at C:\\Users\\alice\\private-repo and \\server\\share\\private.txt.',
         stepType: 'agent',
       },
-      remainingWork: [{ source: 'finding', description: 'See src/core/router.ts:417.' }],
+      remainingWork: [{ source: 'task', description: 'See src/core/router.ts:417.' }],
       progress: { previousAttemptFailed: false, noProgress: false, retryingSameWork: false },
     });
     const serialized = JSON.stringify(input);
@@ -167,7 +157,7 @@ describe('normalizeRoutingWorkSnapshot', () => {
         instruction: 'Inspect file:///Users/Alice%20Smith/private-repo/secret.ts and ftp://private.example/team/repo.',
         stepType: 'normal',
       },
-      remainingWork: [{ source: 'finding', description: 'Do not alter input/evidence or success/failure.' }],
+      remainingWork: [{ source: 'task', description: 'Do not alter input/evidence or success/failure.' }],
       progress: { previousAttemptFailed: false, noProgress: false, retryingSameWork: false },
     });
     const serialized = JSON.stringify(input);
@@ -184,7 +174,7 @@ describe('normalizeRoutingWorkSnapshot', () => {
       goal: 'Inspect normalizer.ts:42, resolver.ts line 8, src/private/file.ts:9, and lib/private/file.ts line 10; retain v1.2.3 and v1.2.3:4.',
       step: { name: 'fix', tags: [], stepType: 'normal' },
       remainingWork: [{
-        source: 'finding',
+        source: 'task',
         description: 'Update normalizer.ts:42, resolver.ts line 8, src/private/file.ts:9, and lib/private/file.ts line 10; retain v1.2.3 and v1.2.3:4.',
       }],
       progress: { previousAttemptFailed: false, noProgress: false, retryingSameWork: false },
@@ -194,12 +184,11 @@ describe('normalizeRoutingWorkSnapshot', () => {
     expect(input.remainingWork[0]?.description).toBe('Update [PATH], [PATH], [PATH], and [PATH]; retain v1.2.3 and v1.2.3:4.');
   });
 
-  it('Given a replaced finding identity with otherwise identical work, When fingerprinting, Then it is treated as new local work without exposing the ID to the model', () => {
+  it('Given a replaced task identity, When fingerprinting, Then it is treated as new local work without exposing the ID to the model', () => {
     const createSnapshot = (id: string) => buildRoutingWorkSnapshot({
-      goal: 'Resolve the open validation failure',
-      userInputs: [],
+      goal: 'Resolve the validation failure',
+      userInputs: [`${id}: The same validation failure remains.`],
       step: { name: 'fix', tags: [], stepType: 'normal', passPreviousResponse: false },
-      findings: { open: [{ id, description: 'The same validation failure remains.' }], conflicts: [] },
     });
     const first = createSnapshot('F-1000');
     const replacement = createSnapshot('F-1001');
@@ -213,14 +202,14 @@ describe('normalizeRoutingWorkSnapshot', () => {
       goal: 'Apply focused fixes',
       step: { name: 'fix', tags: [], stepType: 'normal' },
       remainingWork: Array.from({ length: 100 }, (_, index) => ({
-        source: 'finding' as const,
-        description: `finding-${index}:${'x '.repeat(500)}`,
+        source: 'task' as const,
+        description: `task-${index}:${'x '.repeat(500)}`,
       })),
       progress: { previousAttemptFailed: false, noProgress: false, retryingSameWork: false },
     });
 
     expect(input.remainingWork).toHaveLength(7);
-    expect(input.remainingWork[0]?.description).toContain('finding-0:');
+    expect(input.remainingWork[0]?.description).toContain('task-0:');
     expect(input.remainingWorkOmittedCount).toBe(93);
     expect(JSON.stringify(input).length).toBeLessThan(10_000);
   });
@@ -231,8 +220,8 @@ describe('normalizeRoutingWorkSnapshot', () => {
       goal: 'Apply focused fixes',
       step: { name: 'fix', tags: [], stepType: 'normal' as const },
       remainingWork: Array.from({ length: 65 }, (_, index) => ({
-        source: 'finding' as const,
-        description: index === 64 ? `${prefix}tail-a` : `finding-${index}`,
+        source: 'task' as const,
+        description: index === 64 ? `${prefix}tail-a` : `task-${index}`,
       })),
       progress: { previousAttemptFailed: false, noProgress: false, retryingSameWork: false },
     };

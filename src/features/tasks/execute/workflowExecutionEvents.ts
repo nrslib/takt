@@ -524,8 +524,6 @@ export function bindWorkflowExecutionEvents(
     resumeStepName,
     stepIteration,
     workflowStack,
-    findingScopeIdentity,
-    findingIds,
   ) => {
     state.currentIteration = iteration;
     state.currentStepName = resumeStepName;
@@ -572,19 +570,7 @@ export function bindWorkflowExecutionEvents(
       deps.configuredModel,
     );
     const stepScopeKey = buildWorkflowStepScopeKey(step.name, workflowStack);
-    const analyticsScopeIdentity = findingScopeIdentity
-      ?? buildWorkflowScopeIdentity(workflowName, workflowStack);
-    if (findingScopeIdentity !== undefined) {
-      if (findingIds === undefined) {
-        throw new Error(
-          `Finding IDs are missing for scope "${findingScopeIdentity}"`,
-        );
-      }
-      deps.analyticsEmitter.setFindingContractFindingIds(
-        findingScopeIdentity,
-        findingIds,
-      );
-    }
+    const analyticsScopeIdentity = buildWorkflowScopeIdentity(workflowName, workflowStack);
     stepContextsByScope.set(stepScopeKey, {
       usage: {
         provider: stepProvider,
@@ -781,19 +767,10 @@ export function bindWorkflowExecutionEvents(
 
   deps.engine.on('step:report', (step, filePath, fileName, context) => {
     reportStepFile(filePath, fileName, deps.out);
-    if (
-      context.findingScopeIdentity !== undefined
-      && context.findingIds === undefined
-    ) {
-      throw new Error(
-        `Finding IDs are missing for scope "${context.findingScopeIdentity}"`,
-      );
-    }
-    const scopeIdentity = context.findingScopeIdentity
-      ?? buildWorkflowScopeIdentity(
-        context.workflowName,
-        context.workflowStack,
-      );
+    const scopeIdentity = buildWorkflowScopeIdentity(
+      context.workflowName,
+      context.workflowStack,
+    );
     deps.analyticsEmitter.onStepReport(
       step,
       filePath,
@@ -805,10 +782,6 @@ export function bindWorkflowExecutionEvents(
         model: context.model,
       },
     );
-  });
-
-  deps.engine.on('findings:ledger', (ledger, context) => {
-    deps.analyticsEmitter.onFindingLedgerUpdated(ledger, context);
   });
 
   deps.engine.on('companion:start', (payload) => {

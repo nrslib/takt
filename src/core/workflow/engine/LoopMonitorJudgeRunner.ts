@@ -52,13 +52,6 @@ interface LoopMonitorJudgeRunnerDeps {
   resetCycleDetector: () => void;
   /** runtime.yaml internal_agents の解決済み seat。`loop-judge` seat だけを消費する。 */
   internalAgentSeats?: InternalAgentSeats;
-  /**
-   * finding contract 有効時のみ。エンジン計算済みの findings 状態
-   * （完了ゲートの充足状況・暫定の滞留ラウンド数・解消経路）を judge の
-   * instruction 末尾へ注入する（loop-monitor-summary.ts 参照）。store を
-   * runner に直接読ませず、Setup が構築した読み取り依存だけを渡す。
-   */
-  getFindingsSummaryForJudge?: () => string | undefined;
 }
 
 export class LoopMonitorJudgeRunner {
@@ -89,10 +82,7 @@ export class LoopMonitorJudgeRunner {
       this.deps.task,
       maxSteps,
     );
-    const findingsSummary = this.deps.getFindingsSummaryForJudge?.();
-    const prebuiltInstruction = findingsSummary !== undefined
-      ? `${baseInstruction}\n\n## Findings state (engine-computed)\n${findingsSummary}`
-      : baseInstruction;
+    const prebuiltInstruction = baseInstruction;
 
     const providerInfo = this.deps.optionsBuilder.resolveStepProviderModel(judgeStep, resolvedRuntime);
     const stepEventWorkflowStack = this.deps.onStepStart(

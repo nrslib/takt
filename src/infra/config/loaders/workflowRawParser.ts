@@ -31,6 +31,28 @@ interface RawWorkflowFragmentContext {
 
 const fragmentContextByRawWorkflow = new WeakMap<object, RawWorkflowFragmentContext>();
 
+const FINDING_CONTRACT_REMOVED_MESSAGE = 'Finding Contract is removed; migrate to review-adjudication + requirement scenarios + final-gate (e.g. takt-experimental).';
+
+function containsRemovedFindingContractSyntax(value: unknown, topLevel = true): boolean {
+  if (typeof value === 'string') {
+    return /when\s*\(\s*findings\./.test(value);
+  }
+  if (Array.isArray(value)) {
+    return value.some((entry) => containsRemovedFindingContractSyntax(entry, false));
+  }
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+
+  return Object.entries(value).some(([key, entry]) => (
+    (topLevel && key === 'finding_contract')
+    || key === 'finding_contract_authority'
+    || key === 'requires_finding_contract'
+    || (key === 'mode' && entry === 'finding_contract_fix')
+    || containsRemovedFindingContractSyntax(entry, false)
+  ));
+}
+
 export interface WorkflowRawParserOptions {
   context?: FacetResolutionContext;
   workflowPath: string;
@@ -39,6 +61,9 @@ export interface WorkflowRawParserOptions {
 
 export function parseWorkflowRaw(raw: unknown, options: WorkflowRawParserOptions): ReturnType<typeof WorkflowConfigRawSchema.parse> {
   const resolved = resolveWorkflowStepFragments(raw, options);
+  if (containsRemovedFindingContractSyntax(resolved.raw)) {
+    throw new Error(FINDING_CONTRACT_REMOVED_MESSAGE);
+  }
   try {
     const parsed = WorkflowConfigRawSchema.parse(resolved.raw);
     fragmentContextByRawWorkflow.set(parsed, {

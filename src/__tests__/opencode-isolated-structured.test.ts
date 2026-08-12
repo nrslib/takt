@@ -21,8 +21,8 @@ const callOptions: ProviderCallOptions = {
   allowedTools: [],
   outputSchema: {
     type: 'object',
-    required: ['rawFindings'],
-    properties: { rawFindings: { type: 'array' } },
+    required: ['items'],
+    properties: { items: { type: 'array' } },
   },
 };
 
@@ -32,10 +32,10 @@ async function callIsolated(response: AgentResponse): Promise<AgentResponse> {
   openCodeMocks.callOpenCodeCustom.mockResolvedValue(response);
   const { OpenCodeProvider } = await import('../infra/providers/opencode.js');
   const agent = new OpenCodeProvider().setupIsolatedStructured({
-    name: 'finding-intake-normalizer',
+    name: 'structured-normalizer',
     systemPrompt: '',
   });
-  return agent.call('extract raw findings', callOptions);
+  return agent.call('extract structured items', callOptions);
 }
 
 describe('OpenCodeProvider.setupIsolatedStructured response contract', () => {
@@ -44,9 +44,9 @@ describe('OpenCodeProvider.setupIsolatedStructured response contract', () => {
   });
 
   it('should keep the response successful when the structured payload arrives outside the message body', async () => {
-    const structuredOutput = { rawFindings: [{ rawExcerpt: 'claim', candidate: null }] };
+    const structuredOutput = { items: [{ value: 'claim' }] };
     const response = await callIsolated({
-      persona: 'finding-intake-normalizer',
+      persona: 'structured-normalizer',
       status: 'done',
       // OpenCode の native structured output はモデルが本文を出さないことがあり、
       // 構造化ペイロードだけが assistant message の structured で返る。
@@ -57,7 +57,7 @@ describe('OpenCodeProvider.setupIsolatedStructured response contract', () => {
     });
 
     expect(response).toEqual({
-      persona: 'finding-intake-normalizer',
+      persona: 'structured-normalizer',
       status: 'done',
       content: '',
       structuredOutput,
@@ -68,7 +68,7 @@ describe('OpenCodeProvider.setupIsolatedStructured response contract', () => {
 
   it('should report a provider error when the response is fully empty', async () => {
     const response = await callIsolated({
-      persona: 'finding-intake-normalizer',
+      persona: 'structured-normalizer',
       status: 'done',
       content: '',
       sessionId: 'isolated-session',
@@ -78,7 +78,7 @@ describe('OpenCodeProvider.setupIsolatedStructured response contract', () => {
     const expectedError =
       'OpenCode isolated structured execution returned an empty response with no structured output';
     expect(response).toEqual({
-      persona: 'finding-intake-normalizer',
+      persona: 'structured-normalizer',
       status: 'error',
       content: expectedError,
       error: expectedError,
@@ -90,7 +90,7 @@ describe('OpenCodeProvider.setupIsolatedStructured response contract', () => {
 
   it('should report a provider error when the response body is not parsable structured output', async () => {
     const response = await callIsolated({
-      persona: 'finding-intake-normalizer',
+      persona: 'structured-normalizer',
       status: 'done',
       content: '  I could not extract anything from this report.  ',
       sessionId: 'isolated-session',
@@ -100,7 +100,7 @@ describe('OpenCodeProvider.setupIsolatedStructured response contract', () => {
     const expectedError = 'OpenCode isolated structured execution returned no structured output: '
       + 'I could not extract anything from this report.';
     expect(response).toEqual({
-      persona: 'finding-intake-normalizer',
+      persona: 'structured-normalizer',
       status: 'error',
       content: expectedError,
       error: expectedError,
@@ -112,7 +112,7 @@ describe('OpenCodeProvider.setupIsolatedStructured response contract', () => {
 
   it('should pass the response through unchanged when the provider already reported a failure', async () => {
     const response = await callIsolated({
-      persona: 'finding-intake-normalizer',
+      persona: 'structured-normalizer',
       status: 'error',
       content: 'upstream request failed',
       error: 'upstream request failed',
@@ -122,7 +122,7 @@ describe('OpenCodeProvider.setupIsolatedStructured response contract', () => {
     });
 
     expect(response).toEqual({
-      persona: 'finding-intake-normalizer',
+      persona: 'structured-normalizer',
       status: 'error',
       content: 'upstream request failed',
       error: 'upstream request failed',

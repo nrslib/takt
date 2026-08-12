@@ -308,11 +308,7 @@ function buildInternalAgents(
   const seats: Record<string, keyof InternalAgentEnvironment> = {
     selector: 'selector',
     assistant: 'assistant',
-    'intake-normalizer': 'intakeNormalizer',
-    'findings-manager': 'findingsManager',
-    'terminal-adjudicator': 'terminalAdjudicator',
     'loop-judge': 'loopJudge',
-    'escalation-reviewer': 'escalationReviewer',
   };
   const result: InternalAgentEnvironment = {};
   for (const [key, assignment] of Object.entries(map)) {

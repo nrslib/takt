@@ -256,12 +256,6 @@ function materializeWorkflowConfig(
   for (const monitor of cloned.loopMonitors ?? []) {
     materializePersona(monitor.judge, customAgents, projectCwd, resources, resourceKinds);
   }
-  if (cloned.findingContract !== undefined) {
-    materializePersona(cloned.findingContract.manager, customAgents, projectCwd, resources, resourceKinds);
-    if (cloned.findingContract.adjudicator !== undefined) {
-      materializePersona(cloned.findingContract.adjudicator, customAgents, projectCwd, resources, resourceKinds);
-    }
-  }
   return cloned;
 }
 
@@ -616,12 +610,6 @@ function rebindWorkflowResourcePaths(
     }
   });
   for (const monitor of config.loopMonitors ?? []) rebindPersona(monitor.judge);
-  if (config.findingContract !== undefined) {
-    rebindPersona(config.findingContract.manager);
-    if (config.findingContract.adjudicator !== undefined) {
-      rebindPersona(config.findingContract.adjudicator);
-    }
-  }
 }
 
 function validateMaterializedWorkflow(config: WorkflowConfig): void {
@@ -652,12 +640,6 @@ function validateMaterializedWorkflow(config: WorkflowConfig): void {
   });
   for (const [index, monitor] of (config.loopMonitors ?? []).entries()) {
     requireMaterializedPersona(monitor.judge, `loop monitor ${index + 1} judge`);
-  }
-  if (config.findingContract !== undefined) {
-    requireMaterializedPersona(config.findingContract.manager, 'finding manager');
-    if (config.findingContract.adjudicator !== undefined) {
-      requireMaterializedPersona(config.findingContract.adjudicator, 'finding adjudicator');
-    }
   }
 }
 

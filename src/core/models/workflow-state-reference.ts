@@ -1,4 +1,4 @@
-export type WorkflowStateRoot = 'context' | 'structured' | 'effect' | 'findings' | 'companion';
+export type WorkflowStateRoot = 'context' | 'structured' | 'effect' | 'companion';
 
 export interface ParsedWorkflowStateReference {
   root: WorkflowStateRoot;
@@ -60,12 +60,11 @@ export function parseWorkflowStateReference(reference: string): ParsedWorkflowSt
     root !== 'context'
     && root !== 'structured'
     && root !== 'effect'
-    && root !== 'findings'
     && root !== 'companion'
   ) {
     throw new Error(`Unsupported workflow state root "${root}"`);
   }
-  if (root === 'findings' || root === 'companion') {
+  if (root === 'companion') {
     const rootPath = segments.slice(1);
     return { root, path: parsePath(reference, rootPath) };
   }

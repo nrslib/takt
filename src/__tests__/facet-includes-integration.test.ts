@@ -124,7 +124,6 @@ describe('facet include expansion', () => {
   it.each(['en', 'ja'] as const)('should compose the builtin fix role into fix instructions in %s', (lang) => {
     for (const instruction of [
       'fix',
-      'fix-finding-contract',
       'ai-antipattern-fix',
       'fix-maintenance',
       'fix-supervisor',
@@ -153,9 +152,7 @@ describe('facet include expansion', () => {
 
     for (const instruction of [
       'fix-plan',
-      'fix-plan-finding-contract',
       'fix',
-      'fix-finding-contract',
       'ai-antipattern-fix',
       'fix-maintenance',
       'fix-supervisor',
@@ -181,7 +178,6 @@ describe('facet include expansion', () => {
 
     for (const instruction of [
       'fix-plan',
-      'fix-plan-finding-contract',
       'apply-fix-plan',
       'verify-fix',
     ]) {

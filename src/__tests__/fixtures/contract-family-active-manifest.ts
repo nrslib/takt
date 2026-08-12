@@ -1,8 +1,8 @@
-export type ContractFamilyToolClass = 'edit-tools' | 'read-tools' | 'tool-less' | 'engine-managed';
+export type ContractFamilyToolClass = 'edit-tools' | 'read-tools' | 'tool-less';
 
 export interface ContractFamilyRoleExpectation {
   readonly requiredTag: string;
-  readonly phase: 'plan' | 'edit' | 'review' | 'ledger' | 'companion';
+  readonly phase: 'plan' | 'edit' | 'review' | 'companion';
   readonly edit: boolean;
   readonly requiredPermissionModes: readonly string[];
   readonly toolClasses: readonly ContractFamilyToolClass[];
@@ -20,7 +20,6 @@ export const CONTRACT_FAMILY_ROLE_MANIFEST = {
   'follow-up-review': { requiredTag: 'review', phase: 'review', edit: false, requiredPermissionModes: ['unspecified'], toolClasses: ['read-tools'] },
   'review-by-mode': { requiredTag: 'review', phase: 'review', edit: false, requiredPermissionModes: ['unspecified'], toolClasses: ['read-tools'] },
   'review-adjudication': { requiredTag: 'review', phase: 'review', edit: false, requiredPermissionModes: ['unspecified'], toolClasses: ['read-tools'] },
-  'ledger-evidence-boundary': { requiredTag: 'ledger', phase: 'ledger', edit: false, requiredPermissionModes: ['engine-managed'], toolClasses: ['engine-managed'] },
   'final-preservation': { requiredTag: 'review', phase: 'review', edit: false, requiredPermissionModes: ['unspecified'], toolClasses: ['read-tools'] },
   'companion-early-scan': { requiredTag: 'companion', phase: 'companion', edit: false, requiredPermissionModes: ['tool-less'], toolClasses: ['tool-less'] },
   'companion-evidence-boundary': { requiredTag: 'companion', phase: 'companion', edit: false, requiredPermissionModes: ['tool-less'], toolClasses: ['tool-less'] },

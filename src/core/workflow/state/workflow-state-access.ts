@@ -6,7 +6,7 @@ import {
 
 export function resolveWorkflowStateRoot(
   state: WorkflowState,
-  root: Exclude<WorkflowStateRoot, 'findings' | 'companion'>,
+  root: Exclude<WorkflowStateRoot, 'companion'>,
 ): Map<string, Record<string, unknown>> {
   if (root === 'context') {
     return state.systemContexts;
@@ -42,8 +42,8 @@ export function resolveWorkflowStateReference(reference: string, state: Workflow
   const { root, scope, path } = parseWorkflowStateReference(reference);
 
   let current: unknown;
-  if (root === 'findings' || root === 'companion') {
-    current = root === 'findings' ? state.findings : state.companion;
+  if (root === 'companion') {
+    current = state.companion;
     if (current == null) {
       throw new Error(`Missing workflow ${root} state`);
     }

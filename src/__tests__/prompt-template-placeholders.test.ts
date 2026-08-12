@@ -9,7 +9,7 @@ import type { Language } from '../core/models/types.js';
  * テンプレートエンジン（faceted-prompting）が解釈できるのは `{{#if}}` /
  * `{{else}}` / `{{/if}}` と `{{var}}` だけで、`{{#unless}}` のような構文は
  * **黙ってリテラルのまま出力される**。実際に `{{#unless restatementOnly}}` が
- * Finding Contract のプロンプト全件へ漏れていた。
+ * 複数のプロンプトへ漏れていた。
  *
  * 全テンプレート × 代表的な変数集合（全 truthy / 全 falsy）で描画し、`{{` が
  * 1つでも残ったら失敗させる。未対応構文とタイポの両方をここで止める。

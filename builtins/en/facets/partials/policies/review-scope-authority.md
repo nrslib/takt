@@ -14,7 +14,6 @@ A bounded horizontal comparison is allowed as evidence gathering needed to close
 | Final preservation | Treat unmigrated paths, obsolete paths, one-sided updates, and remediation regressions in declared actionable families as merge blockers | Discover or add a new family |
 | Companion | Report early active-family candidates within the supplied cumulative diff and context | Claim hidden repository paths were verified or request repair of another family |
 | Companion Moderator | Accept, merge, downgrade, or reject submitted Companion evidence | Early scan, repository search, new findings, or a family-completion guarantee |
-| Ledger adjudication | Judge correspondence of the engine-issued subject, proof, and scope binding | Repository search, finding creation, or independent lifecycle changes |
 
 Only the following four Authorization Bases permit a new finding during follow-up. Every new finding must record its Authorization Basis and Reason Absent (why it was absent from the initial review).
 
@@ -29,20 +28,10 @@ Treat a normal path and an isolated failure path as one family when they share t
 
 A Companion must not promote an unauthorized adjacent or separate family to `must_fix`, `should_fix`, `nit`, or a note that substantively requests a repair. A Moderator must `reject` such a finding. Review Adjudication must classify a technically valid finding without remediation authority as `out_of_scope` and must not propagate it into an actionable family or fix plan.
 
-## Legacy Review Mode
+## Review Mode
 
-The mode domain is `initial | follow_up | unspecified`. Do not silently normalize different casing, aliases, empty strings, or non-string values.
+The caller-provided mode domain is exactly `initial | follow_up | unspecified`. Do not normalize different casing, aliases, empty strings, or non-string values.
 
-| Ledger mode | Caller mode | Iteration | Effective procedure |
-|-------------|-------------|-----------|---------------------|
-| Same explicit mode | Same explicit mode | Any | That mode |
-| Explicit mode | `unspecified` or absent | Any | Ledger mode |
-| `unspecified` or absent | Explicit mode | Any | Caller mode |
-| `unspecified` or absent | `unspecified` or absent | `1` | `initial` |
-| `unspecified` or absent | `unspecified` or absent | Integer `2` or greater | `follow_up` |
-| Different explicit modes | Different explicit modes | Any | `mode_conflict` |
-| Unknown | Any | Any | `mode_unknown` |
-| Any | Unknown | Any | `mode_unknown` |
-| `unspecified` or absent | `unspecified` or absent | Unexpanded, non-integer, or less than `1` | `mode_unknown` |
+Use an explicit `initial` or `follow_up` mode directly. For `unspecified` or an absent mode, use `initial` when the directly executed reviewer step iteration is `1`, and `follow_up` when it is an integer `2` or greater. An invalid mode, or an unexpanded, non-integer, or less-than-`1` iteration needed for fallback, is `mode_unknown`.
 
-For `mode_conflict` and `mode_unknown`, apply the same authority ceiling as follow-up. Inspect only accepted families, required migrations, and remediation regressions, and record the mode and reason in evidence. Do not conduct general initial discovery, report an adjacent family, or approve on a claim of completed initial coverage. The mere presence of a Finding Contract does not make an `unspecified` ledger mode override an explicit caller mode.
+For `mode_unknown`, apply the follow-up authority ceiling: inspect only accepted-family closure, required consumer migrations, and remediation regressions. Do not conduct general initial discovery, report an adjacent family, or APPROVE based on a claim that initial coverage is complete. Record the invalid mode or fallback reason in the evidence.

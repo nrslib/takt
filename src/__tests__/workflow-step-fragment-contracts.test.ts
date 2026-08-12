@@ -456,40 +456,6 @@ describe('workflow step fragment contracts', () => {
     expect(message).toContain('defined by the workflow');
   });
 
-  it('retains fragment context while identifying an inline workflow_call override as workflow-defined', () => {
-    writeFile(projectDir, '.takt/workflows/requires-contract.yaml', yaml(
-      'name: requires-contract',
-      'subworkflow:',
-      '  callable: true',
-      '  requires_finding_contract: true',
-      'initial_step: child',
-      'max_steps: 1',
-      'steps:',
-      '  - name: child',
-      '    instruction: child',
-      '    rules:',
-      '      - condition: done',
-      '        next: COMPLETE',
-    ));
-    const fragmentPath = writeFile(projectDir, '.takt/steps/delegate.yaml', yaml(
-      'kind: workflow_call',
-      'call: safe-child',
-    ));
-    const workflowPath = writeWorkflow(projectDir, 'inline-call-override', yaml(
-      '  - uses: delegate',
-      '    call: requires-contract',
-      '    rules:',
-      '      - condition: COMPLETE',
-      '        next: COMPLETE',
-    ).trimEnd(), 'delegate');
-
-    const message = errorMessage(() => loadWorkflowByIdentifier('inline-call-override', projectDir));
-
-    expect(message).toContain('requires a finding_contract inherited from its caller');
-    expectFragmentProvenance(message, workflowPath, 'delegate', fragmentPath, 'workflow');
-    expect(message).toContain('defined by the workflow');
-  });
-
   it.each([
     ['provider option resolution', 'invalid-provider-options', yaml(
       'instruction: work',

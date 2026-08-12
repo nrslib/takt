@@ -44,8 +44,8 @@ active workflow を探す Tempo TraceQL filter 例:
 { resource.service.name = "takt" && span."takt.run.id" = "<run-id>" }
 { resource.service.name = "takt" && span."takt.task.pr_number" = 826 }
 { resource.service.name = "takt" && span."takt.task.issue_number" = 792 }
-{ resource.service.name = "takt" && span."takt.git.branch" = "takt/816/implement-finding-contract" }
-{ resource.service.name = "takt" && span."takt.task.summary" =~ ".*finding contract.*" }
+{ resource.service.name = "takt" && span."takt.git.branch" = "takt/816/implement-review-flow" }
+{ resource.service.name = "takt" && span."takt.task.summary" =~ ".*review flow.*" }
 { resource.service.name = "takt" && name =~ "workflow_start\\..*" }
 ```
 
@@ -58,7 +58,7 @@ TraceQL discovery:
   { resource.service.name = "takt" && span."takt.run.id" = "<run-id>" }
   { resource.service.name = "takt" && span."takt.task.pr_number" = 826 }
   { resource.service.name = "takt" && span."takt.task.issue_number" = 792 }
-  { resource.service.name = "takt" && span."takt.git.branch" = "takt/816/implement-finding-contract" }
+  { resource.service.name = "takt" && span."takt.git.branch" = "takt/816/implement-review-flow" }
 ```
 
 workflow が abort/error で終わった場合、root `workflow.<name>` span には step-level の failure 属性も記録されます。

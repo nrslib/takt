@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import type { FindingLedger, WorkflowResumePoint, WorkflowStep } from '../core/models/index.js';
+import type { WorkflowResumePoint, WorkflowStep } from '../core/models/index.js';
 import { initAnalyticsWriter } from '../features/analytics/index.js';
 import { resetAnalyticsWriter } from '../features/analytics/writer.js';
 import { AnalyticsEmitter } from '../features/tasks/execute/analyticsEmitter.js';
@@ -19,10 +19,7 @@ import type { ProviderType } from '../shared/types/provider.js';
 class TestEngine extends EventEmitter {
   public abort = vi.fn();
 
-  constructor(
-    private readonly resumePoint: WorkflowResumePoint,
-    private readonly findingIds: string[] = [],
-  ) {
+  constructor(private readonly resumePoint: WorkflowResumePoint) {
     super();
   }
 
@@ -30,22 +27,12 @@ class TestEngine extends EventEmitter {
     return this.resumePoint;
   }
 
-  getState() {
-    return {
-      findings: {
-        open: {
-          items: this.findingIds.map((id) => ({ id })),
-        },
-      },
-    };
-  }
 }
 
 function createBridgeHarness(options?: {
   currentProvider?: ProviderType;
   configuredModel?: string;
   resumePoint?: WorkflowResumePoint;
-  findingIds?: string[];
   traceDiscovery?: { queries: string[] };
   eventSink?: ReturnType<typeof vi.fn>;
   shouldNotifyRateLimit?: boolean;
@@ -67,7 +54,7 @@ function createBridgeHarness(options?: {
     workflow_call_invocations: {},
     workflow_step_participations: {},
   } satisfies WorkflowResumePoint;
-  const engine = options?.engine ?? new TestEngine(resumePoint, options?.findingIds);
+  const engine = options?.engine ?? new TestEngine(resumePoint);
   const out = {
     info: vi.fn(),
     blankLine: vi.fn(),
@@ -93,8 +80,6 @@ function createBridgeHarness(options?: {
   const analyticsEmitter = {
     onStepComplete: vi.fn(),
     onStepReport: vi.fn(),
-    onFindingLedgerUpdated: vi.fn(),
-    setFindingContractFindingIds: vi.fn(),
     onRoutingDecision: vi.fn(),
     onCompanionEvent: vi.fn(),
   };
@@ -307,7 +292,6 @@ describe('bindWorkflowExecutionEvents', () => {
         emit: (event: string, ...args: unknown[]) => bridgeHarness.engine.emit(event, ...args),
         state: state as never,
         setActiveResumePoint: vi.fn(),
-        refreshFindingsState: vi.fn(),
       });
 
       const prepared = executor.prepare(step as never, childConfig as never, 1, []);
@@ -633,30 +617,6 @@ describe('bindWorkflowExecutionEvents', () => {
     });
   });
 
-  it('findings ledger event を analytics emitter に渡す', () => {
-    const { engine, analyticsEmitter } = createBridgeHarness();
-    const ledger: FindingLedger = {
-      workflowName: 'peer-review',
-      nextId: 1,
-      updatedAt: '2026-06-13T01:00:00.000Z',
-      findings: [],
-      rawFindings: [],
-      conflicts: [],
-    };
-
-    const context = {
-      iteration: 4,
-      workflowName: 'peer-review',
-      scopeIdentity: 'peer-review-scope',
-    };
-    engine.emit('findings:ledger', ledger, context);
-
-    expect(analyticsEmitter.onFindingLedgerUpdated).toHaveBeenCalledWith(
-      ledger,
-      context,
-    );
-  });
-
   it('workflow complete event が TraceQL discovery を完了出力へ渡す', () => {
     const { bridge, engine } = createBridgeHarness({
       traceDiscovery: {
@@ -696,97 +656,6 @@ describe('bindWorkflowExecutionEvents', () => {
     expect(payload.traceDiscovery?.queries).toEqual([
       '{ resource.service.name = "takt" && span."takt.task.issue_number" = 792 }',
     ]);
-  });
-
-  it('finding ledger analytics の書き込み失敗後も workflow complete を処理する', () => {
-    const analyticsRoot = mkdtempSync(join(tmpdir(), 'takt-test-ledger-analytics-failure-'));
-    const analyticsPath = join(analyticsRoot, 'not-a-directory');
-    writeFileSync(analyticsPath, 'not a directory', 'utf-8');
-    initAnalyticsWriter(true, analyticsPath);
-    try {
-      const actualAnalyticsEmitter = new AnalyticsEmitter('run-ledger', false);
-      const {
-        bridge,
-        engine,
-        runMetaManager,
-        analyticsEmitter,
-      } = createBridgeHarness();
-      analyticsEmitter.onFindingLedgerUpdated.mockImplementation((
-        ledger: FindingLedger,
-        context: {
-          readonly iteration: number;
-          readonly workflowName: string;
-          readonly scopeIdentity: string;
-        },
-      ) => {
-        actualAnalyticsEmitter.onFindingLedgerUpdated(ledger, context);
-      });
-      const ledger: FindingLedger = {
-        workflowName: 'peer-review',
-        nextId: 2,
-        updatedAt: '2026-06-13T02:30:00.000Z',
-        findings: [
-          {
-            id: 'F-0001',
-            status: 'open',
-            lifecycle: 'new',
-            revision: 1,
-            severity: 'high',
-            title: 'Analytics write should not abort workflow',
-            reviewers: ['architecture-reviewer'],
-            rawFindingIds: ['run:reviewers:1:architecture-review:architecture-review.md:raw-1'],
-            firstSeen: { runId: 'run', stepName: 'reviewers', timestamp: '2026-06-13T02:00:00.000Z' },
-            lastSeen: { runId: 'run', stepName: 'reviewers', timestamp: '2026-06-13T02:00:00.000Z' },
-          },
-        ],
-        rawFindings: [],
-        conflicts: [],
-      };
-
-      expect(() => engine.emit('findings:ledger', ledger, {
-        iteration: 2,
-        workflowName: 'peer-review',
-        scopeIdentity: 'peer-review-scope',
-      })).not.toThrow();
-      expect(() => engine.emit('workflow:complete', { iteration: 3 })).not.toThrow();
-      const payload = bridge.prepareTerminalPublicationPayload();
-
-      expect(runMetaManager.finalize).not.toHaveBeenCalled();
-      expect(payload).toMatchObject({
-        status: 'completed',
-        iterations: 3,
-      });
-    } finally {
-      resetAnalyticsWriter();
-      rmSync(analyticsRoot, { recursive: true, force: true });
-    }
-  });
-
-  it('direct child resumeの初回stepでchild ledgerの現行Finding IDsを渡す', () => {
-    const { analyticsEmitter, engine } = createBridgeHarness();
-    const step = {
-      name: 'fix',
-      personaDisplayName: 'Coder',
-      instruction: '',
-    } as WorkflowStep;
-    engine.emit(
-      'step:start',
-      step,
-      1,
-      'fix',
-      { provider: 'mock', model: 'test' },
-      'peer-review',
-      step.name,
-      1,
-      [],
-      'peer-review-scope',
-      ['F-1001', 'F-1002'],
-    );
-
-    expect(analyticsEmitter.setFindingContractFindingIds).toHaveBeenCalledWith(
-      'peer-review-scope',
-      ['F-1001', 'F-1002'],
-    );
   });
 
   it('routing decision event を analytics emitter に渡す', () => {
@@ -965,8 +834,6 @@ describe('bindWorkflowExecutionEvents', () => {
       provider: 'codex' as const,
       model: 'gpt-5',
       workflowStack,
-      findingScopeIdentity: 'review-scope',
-      findingIds: ['F-0007'],
     };
 
     try {
@@ -985,7 +852,7 @@ describe('bindWorkflowExecutionEvents', () => {
         {
           iteration: 7,
           workflowName: 'parent',
-          scopeIdentity: 'review-scope',
+          scopeIdentity: '{"workflow":"parent","stack":[{"workflow":"parent","workflow_ref":"project:sha256:parent","step":"reviewers","kind":"parallel","occurrence":2}]}',
           provider: 'codex',
           model: 'gpt-5',
         },
@@ -1049,8 +916,6 @@ describe('bindWorkflowExecutionEvents', () => {
       slowStep.name,
       1,
       slowStack,
-      'slow-finding-scope',
-      ['F-0001'],
     );
     engine.emit(
       'step:start',
@@ -1062,8 +927,6 @@ describe('bindWorkflowExecutionEvents', () => {
       fastStep.name,
       1,
       fastStack,
-      'fast-finding-scope',
-      ['F-0002'],
     );
     engine.emit('step:complete', fastStep, {
       persona: 'reviewer',
@@ -1089,7 +952,7 @@ describe('bindWorkflowExecutionEvents', () => {
         context: {
           iteration: 4,
           workflowName: 'shared-child',
-          scopeIdentity: 'fast-finding-scope',
+          scopeIdentity: expect.any(String),
           provider: 'claude',
           model: 'fast-model',
         },
@@ -1099,15 +962,11 @@ describe('bindWorkflowExecutionEvents', () => {
         context: {
           iteration: 3,
           workflowName: 'shared-child',
-          scopeIdentity: 'slow-finding-scope',
+          scopeIdentity: expect.any(String),
           provider: 'codex',
           model: 'slow-model',
         },
       },
-    ]);
-    expect(analyticsEmitter.setFindingContractFindingIds.mock.calls).toEqual([
-      ['slow-finding-scope', ['F-0001']],
-      ['fast-finding-scope', ['F-0002']],
     ]);
   });
 

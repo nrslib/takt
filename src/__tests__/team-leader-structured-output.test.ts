@@ -48,7 +48,6 @@ describe('Team Leader decomposition prompt', () => {
       maxInitialParts: 2,
       language,
       inspectTools: undefined,
-      findingContract: undefined,
       rejectedDecomposition: undefined,
     });
 

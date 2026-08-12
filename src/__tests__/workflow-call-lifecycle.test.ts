@@ -227,7 +227,6 @@ function createLifecycleHarness(options: HarnessOptions = {}): LifecycleHarness 
       return childWorkflow;
     }),
     createEngine,
-    refreshFindingsState: vi.fn(),
   });
   const runtime: RuntimeStepResolution = {
     providerInfo: {
@@ -719,7 +718,6 @@ describe('WorkflowCallExecutor routing runtime', () => {
       emit: vi.fn(),
       state,
       setActiveResumePoint: vi.fn(),
-      refreshFindingsState: vi.fn(),
     } as never);
 
     const execute = async (stepName: string) => {

@@ -16,15 +16,6 @@ export function reviewerOperationOrigin(
   });
 }
 
-export function findingIntakeNormalizerOperationOrigin(
-  reviewerStepName: string,
-): FallbackOperationOrigin {
-  return Object.freeze({
-    stage: 'finding_intake_normalizer',
-    reviewerStepName,
-  });
-}
-
 export function sameFallbackOperationOrigin(
   left: FallbackOperationOrigin,
   right: FallbackOperationOrigin,

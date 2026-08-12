@@ -2,10 +2,6 @@ import type { WorkflowConfig } from '../../../core/models/index.js';
 import { mkdirSync } from 'node:fs';
 import { generateSessionId } from '../../../infra/fs/index.js';
 import { join } from 'node:path';
-import type {
-  FindingAuthorityResolver,
-} from '../../../core/workflow/types.js';
-import type { FindingLedgerStore } from '../../../core/workflow/findings/store.js';
 import type { RunPaths } from '../../../core/workflow/run/run-paths.js';
 import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
 import type {
@@ -16,10 +12,6 @@ import {
   generateReportDir,
   isValidReportDirName,
 } from '../../../shared/utils/index.js';
-import {
-  FindingStorageResolver,
-  ROOT_FINDING_AUTHORITY_KEY,
-} from '../../../infra/finding-storage/index.js';
 import {
   RunMetaManager,
   type RunMetaManagerOptions,
@@ -35,7 +27,6 @@ import {
 import type {
   WorkflowTerminalPayloadFactory,
 } from './workflowTerminalPayload.js';
-import { resolveFindingStorageSource } from './findingStorageSource.js';
 export interface WorkflowRunExecutionContext {
   readonly workflowConfig: WorkflowConfig;
   readonly runPaths: RunPaths;
@@ -63,7 +54,6 @@ export interface WorkflowRunBootstrap {
 
 export interface WorkflowRunExecutionBinding {
   readonly execution: Pick<WorkflowRunExecutionHandle, 'run'>;
-  readonly findingAuthorityResolver: FindingAuthorityResolver;
 }
 
 export interface WorkflowRunHandle {
@@ -143,7 +133,6 @@ class WorkflowRunLifecycleAdapter {
       runPaths,
     });
     let runMetaManager: RunMetaManager | undefined;
-    let findingStorage: FindingStorageResolver | undefined;
     let bound = false;
     let finished = false;
 
@@ -164,11 +153,6 @@ class WorkflowRunLifecycleAdapter {
         publicationError = error;
       }
       const cleanupIssues: RunCleanupError[] = [];
-      try {
-        findingStorage?.close();
-      } catch (error) {
-        cleanupIssues.push(new RunCleanupError(error));
-      }
       if (publicationError !== undefined) {
         throw combineErrors(publicationError, cleanupIssues);
       }
@@ -227,26 +211,7 @@ class WorkflowRunLifecycleAdapter {
         const executionControl = createWorkflowRunExecutionControl(
           abortController,
         );
-        const getFindingStorage = (): FindingStorageResolver => {
-          if (finished) {
-            throw new Error(`Workflow run "${runPaths.slug}" is already finished`);
-          }
-          if (findingStorage === undefined) {
-            findingStorage = createFindingStorageResolver({
-              runPaths,
-              cwd: this.#cwd,
-              ...(input.resumeSource === undefined
-                ? {}
-                : { resumeSource: input.resumeSource }),
-            });
-          }
-          return findingStorage;
-        };
-        const findingAuthorityResolver = createFindingAuthorityResolver(
-          getFindingStorage,
-        );
         return {
-          findingAuthorityResolver,
           execution: {
             run: async <T>(
               operation: (
@@ -302,53 +267,6 @@ class WorkflowRunLifecycleAdapter {
       }
     }
   }
-}
-
-function createFindingStorageResolver(input: {
-  readonly runPaths: RunPaths;
-  readonly resumeSource?: RunResumeSource;
-  readonly cwd: string;
-}): FindingStorageResolver {
-  const source = resolveFindingStorageSource(input.cwd, input.resumeSource);
-  return new FindingStorageResolver({
-    databasePath: input.runPaths.findingContractDatabaseAbs,
-    runId: input.runPaths.slug,
-    ...(source === undefined ? {} : { source }),
-  });
-}
-
-function createFindingAuthorityResolver(
-  getStorage: () => FindingStorageResolver,
-): FindingAuthorityResolver {
-  const stores = new Map<string, FindingLedgerStore>();
-  return {
-    resolve({
-      workflowConfig,
-      runPaths,
-      workflowCallSiteIdentity,
-    }): FindingLedgerStore {
-      if (workflowConfig.findingContract === undefined) {
-        throw new Error(
-          `Finding authority requested for workflow `
-          + `"${workflowConfig.name}" without Finding Contract`,
-        );
-      }
-      const authorityKey = workflowCallSiteIdentity
-        ?? ROOT_FINDING_AUTHORITY_KEY;
-      const existing = stores.get(authorityKey);
-      if (existing !== undefined) {
-        return existing;
-      }
-      const storage = getStorage();
-      const store = storage.resolveAuthority({
-        authorityKey,
-        workflowName: workflowConfig.name,
-        reportDir: runPaths.reportsAbs,
-      });
-      stores.set(authorityKey, store);
-      return store;
-    },
-  };
 }
 
 function requireValidRunSlug(runSlug: string): string {

@@ -442,7 +442,6 @@ async function executeWorkflowInternal(
         }),
         workflowCallResolver,
         workflowBundleResourceRoot: executionBundle.resourceRoot,
-        findingAuthorityResolver: executionBinding.findingAuthorityResolver,
       });
 
       eventBridge = bindWorkflowExecutionEvents({
