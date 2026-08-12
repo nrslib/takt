@@ -290,7 +290,8 @@ describe('review completion evidence', () => {
         seed: 'stableContract',
       },
     ]);
-    expect(evidence.references.map(({ path }) => path)).not.toEqual(expect.arrayContaining([
+    const referencePaths = evidence.references.map(({ path }) => path);
+    [
       '.env.ts',
       'binary.ts',
       'client-secret',
@@ -302,7 +303,7 @@ describe('review completion evidence', () => {
       'prod-secrets.json',
       'service_account.toml',
       'untracked.ts',
-    ]));
+    ].forEach((path) => expect(referencePaths).not.toContain(path));
     expect(JSON.stringify(evidence)).not.toMatch(
       /unchangedBodyMarker|secretConsumer|binary-body-marker|stableContractClientSecret|stableContractClientSecretExtensionless|production-secret-reference|stableContractGithubToken|stableContractGithubSecretsExtensionless|stableContractProdSecret|stableContractServiceAccount|outsideConsumer|untrackedConsumer/,
     );

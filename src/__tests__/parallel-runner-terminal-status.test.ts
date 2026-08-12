@@ -306,6 +306,7 @@ describe('ParallelRunner terminal sub-step statuses', () => {
       childProcessEnv,
       step: expect.objectContaining({ name: 'security-review' }),
     }));
+    expect(deps.stepExecutor.completeReviewerResponse).not.toHaveBeenCalled();
   });
 
   it('returns parent error with rejected promise detail', async () => {

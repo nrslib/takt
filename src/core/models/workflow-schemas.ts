@@ -39,7 +39,6 @@ import {
 } from './workflow-session-constraints.js';
 import {
   MAX_REVIEW_COMPLETION_RETRY,
-  REVIEW_COMPLETION_TAG,
   WORKFLOW_SESSION_MODES,
 } from './workflow-types.js';
 import { classifyReportRelativePath } from './reserved-report-names.js';
@@ -473,7 +472,7 @@ export const TeamLeaderConfigRawSchema = z.object({
 /** Workflow step schema - raw YAML format */
 const WorkflowStepKindSchema = z.enum(['agent', 'system', 'workflow_call']);
 
-const ReviewCompletionRawSchema = z.object({
+const ReviewCompletionOptionsRawSchema = z.object({
   mode: z.enum(['initial', 'follow_up']).optional(),
   min_retry: z.number().int().min(0).max(MAX_REVIEW_COMPLETION_RETRY).optional(),
   max_retry: z.number().int().min(0).max(MAX_REVIEW_COMPLETION_RETRY).optional(),
@@ -490,9 +489,13 @@ const ReviewCompletionRawSchema = z.object({
   }
 });
 
+const ReviewCompletionRawSchema = z.union([
+  z.literal(true),
+  ReviewCompletionOptionsRawSchema,
+]);
+
 function validateReviewCompletionOptIn(
   data: {
-    tags?: readonly string[];
     review_completion?: unknown;
     parallel?: unknown;
     arpeggio?: unknown;
@@ -500,19 +503,14 @@ function validateReviewCompletionOptIn(
   },
   ctx: z.RefinementCtx,
 ): void {
-  const tagged = data.tags?.includes(REVIEW_COMPLETION_TAG) === true;
-  if (data.review_completion !== undefined && !tagged) {
+  if (
+    data.review_completion !== undefined
+    && (data.parallel !== undefined || data.arpeggio !== undefined || data.team_leader !== undefined)
+  ) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['review_completion'],
-      message: `review_completion requires the "${REVIEW_COMPLETION_TAG}" tag`,
-    });
-  }
-  if (tagged && (data.parallel !== undefined || data.arpeggio !== undefined || data.team_leader !== undefined)) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['tags'],
-      message: `${REVIEW_COMPLETION_TAG} is only supported on normal agent steps and parallel agent sub-steps`,
+      message: 'review_completion is only supported on normal agent steps and parallel agent sub-steps',
     });
   }
 }
@@ -591,7 +589,6 @@ const AgentParallelSubStepRawObjectSchema = z.object({
 function validateAgentParallelSubStepRules(
   data: {
     rules?: z.output<typeof WorkflowRulesSchema>;
-    tags?: readonly string[];
     review_completion?: unknown;
   },
   ctx: z.RefinementCtx,
@@ -788,11 +785,11 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     }
 
     const stepKind = getWorkflowStepKind(data);
-    if (data.tags?.includes(REVIEW_COMPLETION_TAG) && stepKind !== 'agent') {
+    if (data.review_completion !== undefined && stepKind !== 'agent') {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ['tags'],
-        message: `${REVIEW_COMPLETION_TAG} is only supported on agent steps`,
+        path: ['review_completion'],
+        message: 'review_completion is only supported on agent steps',
       });
     }
     if (stepKind !== 'workflow_call') {

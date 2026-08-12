@@ -111,7 +111,6 @@ export type {
 } from './workflow-types.js';
 
 export {
-  REVIEW_COMPLETION_TAG,
   MAX_REVIEW_COMPLETION_RETRY,
 } from './workflow-types.js';
 

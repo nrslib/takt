@@ -832,7 +832,7 @@ Promotion is not supported on parallel sub-steps.
 | `instruction` | - | Instruction key (section map, or bare facet name resolved project → user → builtin) |
 | `edit` | - | Whether the step can edit project files (`true`/`false`) |
 | `companion` | - | Run companion reviewers alongside a normal agent step using their resolved runtime profiles (see [Companion reviewers](#companion-reviewers)) |
-| `review_completion` | - | Configure bounded completeness checks for a reviewer step |
+| `review_completion` | - | Opt into bounded review completeness checks with `true` or configure them with an options object |
 | `pass_previous_response` | `true` | Pass previous step's output to `{previous_response}` |
 | `provider_options.claude.allowed_tools` | - | Claude tool allowlist for the step or workflow |
 | `provider_options.claude.base_url` | - | Anthropic-compatible base URL for `claude` / `claude-sdk` (see [configuration guide](./configuration.md#provider-base-url-base_url)) |
@@ -863,6 +863,8 @@ Promotion is not supported on parallel sub-steps.
 | `required_permission_mode` | - | Required minimum permission mode: `readonly`, `edit`, or `full` |
 | `output_contracts` | - | Report file configuration (name, format) |
 | `quality_gates` | - | Agent-step completion gates. String entries are AI instructions; `type: command` entries are executed after step completion and feed failures back into the same agent step |
+
+`review_completion` is an explicit opt-in. Omit the field to disable it, use `review_completion: true` for `mode: initial`, `min_retry: 0`, `max_retry: 1`, and the bundled language-specific retry instruction, or use an options object to override those defaults. `false` and string values are rejected. `mode` is `initial` or `follow_up`; `min_retry` and `max_retry` are bounded retry counts, and `retry_instruction` may reference an instruction facet. Each successful reviewer response is checked by a fresh completion judge using its resolved runtime profile. Reviewer retries continue the same reviewer session; a judge or retry failure remains an advisory Phase 2 diagnostic and does not replace the latest valid reviewer response.
 
 For normal agent steps, parallel sub-steps, and `loop_monitors.judge`, `model: null` explicitly omits the model. This is different from leaving `model` out: absence continues fallback to applicable lower-priority sources such as routing, workflow, the triggering step for loop monitor judges, and input models, while `null` stops model resolution at that entry. Providers that require an explicit model still fail validation.
 

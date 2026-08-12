@@ -235,7 +235,6 @@ export interface DynamicFacetsConfig {
   readonly maxSelected?: number;
 }
 
-export const REVIEW_COMPLETION_TAG = 'review-completion';
 export const MAX_REVIEW_COMPLETION_RETRY = 4;
 
 export interface ReviewCompletionConfig {

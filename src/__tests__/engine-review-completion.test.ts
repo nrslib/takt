@@ -44,7 +44,6 @@ const completion = {
 
 function reviewStep(name: string, overrides: Partial<WorkflowStep> = {}): WorkflowStep {
   return makeStep(name, {
-    tags: ['review-completion'],
     reviewCompletion: completion,
     outputContracts: [{ name: `${name}.md`, format: name, useJudge: false }],
     rules: [makeRule('approved', 'COMPLETE')],

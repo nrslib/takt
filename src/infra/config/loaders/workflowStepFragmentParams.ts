@@ -522,22 +522,24 @@ function bindStepFields(
           expanded[key] = value;
           break;
         }
-        const retryInstruction = getOwnValue(value, 'retry_instruction');
-        expanded[key] = {
-          ...value,
-          ...(retryInstruction === undefined
-            ? {}
-            : {
-                retry_instruction: substituteParam(
-                  retryInstruction,
-                  INSTRUCTION_CONTRACT,
-                  declarations,
-                  bindings,
-                  options,
-                  [...fieldPath, 'retry_instruction'],
-                ),
-              }),
-        };
+        const reviewCompletion: RawRecord = {};
+        for (const [option, optionValue] of Object.entries(value)) {
+          const optionPath = [...fieldPath, option];
+          if (option === 'retry_instruction') {
+            reviewCompletion[option] = substituteParam(
+              optionValue,
+              INSTRUCTION_CONTRACT,
+              declarations,
+              bindings,
+              options,
+              optionPath,
+            );
+          } else {
+            assertNoParamReferences(optionValue, options, optionPath);
+            reviewCompletion[option] = optionValue;
+          }
+        }
+        expanded[key] = reviewCompletion;
         break;
       }
       case 'persona':

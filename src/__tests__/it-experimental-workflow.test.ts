@@ -378,7 +378,7 @@ function acceptedAndMergedCompanionFinding(): ScenarioEntry[] {
       },
     },
     {
-      persona: 'ai-antipattern-review-moderator',
+      persona: 'review-companion-moderator',
       status: 'done',
       content: 'moderate',
       structuredOutput: {
@@ -409,7 +409,7 @@ function acceptedAndMergedCompanionFinding(): ScenarioEntry[] {
       },
     },
     {
-      persona: 'ai-antipattern-review-moderator',
+      persona: 'review-companion-moderator',
       status: 'done',
       content: 'moderate',
       structuredOutput: {
@@ -658,7 +658,7 @@ describe('experimental builtin workflow', () => {
         companionProviders: {
           'ai-antipattern-review-companion': { provider: 'mock' },
           'testing-review-companion': { provider: 'mock' },
-          'ai-antipattern-review-moderator': { provider: 'mock' },
+          'review-companion-moderator': { provider: 'mock' },
         },
         companionDiffReader: COMPANION_DIFF_READER_WITH_FINDING,
         structuredCaller: new ProviderNeutralStructuredCaller(),
@@ -764,7 +764,7 @@ describe('experimental builtin workflow', () => {
         selectorGitCommandRunner: SELECTOR_GIT_COMMAND_RUNNER,
         companionProviders: {
           'ai-antipattern-review-companion': { provider: 'mock' },
-          'ai-antipattern-review-moderator': { provider: 'mock' },
+          'review-companion-moderator': { provider: 'mock' },
         },
         companionDiffReader: COMPANION_DIFF_READER,
         structuredCaller: new ProviderNeutralStructuredCaller(),
@@ -884,7 +884,7 @@ describe('experimental builtin workflow', () => {
         companionProviders: {
           'ai-antipattern-review-companion': { provider: 'mock' },
           'testing-review-companion': { provider: 'mock' },
-          'ai-antipattern-review-moderator': { provider: 'mock' },
+          'review-companion-moderator': { provider: 'mock' },
         },
         companionDiffReader: COMPANION_DIFF_READER_WITH_FINDING,
         structuredCaller: new ProviderNeutralStructuredCaller(),

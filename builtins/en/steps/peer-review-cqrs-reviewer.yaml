@@ -12,8 +12,7 @@ name: cqrs-es-review
 capabilities: readonly
 tags:
   - review
-  - review-completion
-review_completion: {}
+review_completion: true
 edit: false
 persona: cqrs-es-reviewer
 policy:

@@ -152,18 +152,13 @@ export async function runWithReviewCompletionJudgeSpan<T>(
       ...providerAttributes(params.providerInfo),
     }),
     async (span) => {
-      try {
-        const result = await execute();
-        const value = outcome(result);
-        span.setAttributes({
-          'takt.review_completion.status': value.status,
-          'takt.review_completion.gap_count': value.gapCount,
-        });
-        return result;
-      } catch (error) {
-        span.setStatus({ code: SpanStatusCode.ERROR, message: getErrorMessage(error) });
-        throw error;
-      }
+      const result = await execute();
+      const value = outcome(result);
+      span.setAttributes({
+        'takt.review_completion.status': value.status,
+        'takt.review_completion.gap_count': value.gapCount,
+      });
+      return result;
     },
   );
 }

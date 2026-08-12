@@ -578,7 +578,11 @@ function expandStepFields(
     ) as RawWorkflowStep['instruction'];
   }
 
-  if (isWorkflowParamReference(expandedStep.review_completion?.retry_instruction)) {
+  if (
+    expandedStep.review_completion !== null
+    && typeof expandedStep.review_completion === 'object'
+    && isWorkflowParamReference(expandedStep.review_completion.retry_instruction)
+  ) {
     expandedStep.review_completion = {
       ...expandedStep.review_completion,
       retry_instruction: resolveExpandedParamValue(

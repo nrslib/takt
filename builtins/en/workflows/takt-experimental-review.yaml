@@ -47,8 +47,8 @@ steps:
         - name: architecture-review
           description: Review module structure, responsibility boundaries, dependency direction, and call paths.
           capabilities: readonly
-          tags: [review, review-completion]
-          review_completion: {}
+          tags: [review]
+          review_completion: true
           edit: false
           persona: architecture-reviewer
           policy: [contract-change, review]
@@ -63,8 +63,8 @@ steps:
         - name: security-review
           description: Review concrete security boundaries introduced by TAKT changes.
           capabilities: readonly
-          tags: [review, review-completion]
-          review_completion: {}
+          tags: [review]
+          review_completion: true
           edit: false
           persona: security-reviewer
           policy: [contract-change, security-review]
@@ -83,8 +83,8 @@ steps:
         - name: testing-review
           description: Review test coverage, test design, integration boundaries, and E2E boundaries.
           capabilities: readonly
-          tags: [review, review-completion]
-          review_completion: {}
+          tags: [review]
+          review_completion: true
           edit: false
           persona: testing-reviewer
           policy: [contract-change, review, testing, takt-testing]

@@ -1,4 +1,4 @@
-name: ai-antipattern-review-moderator
+name: review-companion-moderator
 description: Adjudicate implementation companion findings by accepting, rejecting, merging, or downgrading them from evidence.
 persona: review-adjudicator
 policy: [contract-change, review-adjudication]

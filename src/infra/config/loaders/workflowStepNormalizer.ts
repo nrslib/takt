@@ -18,7 +18,6 @@ import type {
   DynamicFacetsConfig,
   ReviewCompletionConfig,
 } from '../../../core/models/workflow-types.js';
-import { REVIEW_COMPLETION_TAG } from '../../../core/models/workflow-types.js';
 import type { CompanionSelection } from '../../../core/models/companion-types.js';
 import { applyQualityGateOverrides } from './qualityGateOverrides.js';
 import {
@@ -59,10 +58,12 @@ function normalizeReviewCompletion(
   sections: WorkflowSections,
   context: FacetResolutionContext | undefined,
 ): ReviewCompletionConfig | undefined {
-  if (!step.tags?.includes(REVIEW_COMPLETION_TAG)) {
+  const raw = step.review_completion;
+  if (raw === undefined) {
     return undefined;
   }
-  const retryInstructionRef = step.review_completion?.retry_instruction;
+  const options = raw === true ? {} : raw;
+  const retryInstructionRef = options.retry_instruction;
   if (retryInstructionRef === undefined) {
     const retryInstruction = readFileSync(
       join(
@@ -72,9 +73,9 @@ function normalizeReviewCompletion(
       'utf-8',
     );
     return {
-      mode: step.review_completion?.mode ?? 'initial',
-      minRetry: step.review_completion?.min_retry ?? 0,
-      maxRetry: step.review_completion?.max_retry ?? 1,
+      mode: options.mode ?? 'initial',
+      minRetry: options.min_retry ?? 0,
+      maxRetry: options.max_retry ?? 1,
       retryInstruction,
     };
   }
@@ -102,9 +103,9 @@ function normalizeReviewCompletion(
     );
   }
   return {
-    mode: step.review_completion?.mode ?? 'initial',
-    minRetry: step.review_completion?.min_retry ?? 0,
-    maxRetry: step.review_completion?.max_retry ?? 1,
+    mode: options.mode ?? 'initial',
+    minRetry: options.min_retry ?? 0,
+    maxRetry: options.max_retry ?? 1,
     retryInstruction,
   };
 }

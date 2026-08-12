@@ -39,7 +39,7 @@ describe('Phase 1 empty response recovery', () => {
       sanitizeText: undefined,
       providerInfo: { provider: 'mock', model: undefined },
       execute: async (_instruction, _sessionId, onPromptResolved) => {
-        onPromptResolved({ systemPrompt: 'system', userPrompt: 'review' });
+        onPromptResolved({ systemPrompt: 'system', userInstruction: 'review' });
         throw new Error('provider failed');
       },
       onPhaseStart: vi.fn(),
@@ -59,6 +59,26 @@ describe('Phase 1 empty response recovery', () => {
       1,
     );
     expect(recordFailure).toHaveBeenCalledOnce();
+  });
+
+  it('records a resolved thrown attempt even when no usage recorder is configured', async () => {
+    const onPhaseComplete = vi.fn();
+    await expect(executeObservedPhase1Attempt({
+      enabled: false,
+      workflowName: 'review',
+      eventStep: { kind: 'agent', name: 'reviewer', edit: false, rules: [] },
+      spanStep: { kind: 'agent', name: 'reviewer', edit: false, rules: [] },
+      iteration: 1,
+      attempt: { sequence: 2, reason: 'initial', instruction: 'review', sessionId: undefined },
+      providerInfo: { provider: 'mock', model: undefined },
+      execute: async (_instruction, _sessionId, onPromptResolved) => {
+        onPromptResolved({ systemPrompt: 'system', userInstruction: 'review' });
+        throw new Error('provider failed');
+      },
+      onPhaseComplete,
+    })).rejects.toThrow('provider failed');
+
+    expect(onPhaseComplete).toHaveBeenCalledOnce();
   });
 
   it('publication retryは指定sequenceでfresh Phase 1を一度だけ実行する', async () => {

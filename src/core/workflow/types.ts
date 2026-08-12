@@ -480,12 +480,14 @@ export interface WorkflowEvents {
   'review_completion:retry:complete': (payload: {
     step: string;
     attempt: number;
+    mode: 'initial' | 'follow_up';
     status: string;
     error?: string;
   }) => void;
   'review_completion:judge:complete': (payload: {
     step: string;
     attempt: number;
+    mode: 'initial' | 'follow_up';
     status: string;
     complete?: boolean;
     gapCount?: number;

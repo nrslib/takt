@@ -273,9 +273,13 @@ describe('ClaudeProvider — structured output', () => {
       internalAgentIsolation: 'strict-readonly',
       allowedTools: ['Read', 'Glob', 'Grep'],
     });
-    expect(() => agent.call('prompt', {
+    await expect(agent.call('prompt', {
       cwd: '/tmp', outputSchema: SCHEMA, allowedTools: ['Bash'],
-    })).toThrow(/does not allow tool/);
+    })).resolves.toMatchObject({
+      status: 'error',
+      failureCategory: 'provider_error',
+      error: expect.stringMatching(/does not allow tool/),
+    });
   });
 });
 

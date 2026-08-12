@@ -1,4 +1,4 @@
-name: ai-antipattern-review-moderator
+name: review-companion-moderator
 description: 実装 companion の指摘を証拠で裁定し、採用・却下・統合・重要度引き下げを決める moderator。
 persona: review-adjudicator
 policy: [contract-change, review-adjudication]

@@ -12,8 +12,7 @@ name: frontend-review
 capabilities: readonly
 tags:
   - review
-  - review-completion
-review_completion: {}
+review_completion: true
 edit: false
 persona: frontend-reviewer
 policy:

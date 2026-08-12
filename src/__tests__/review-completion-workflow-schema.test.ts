@@ -18,10 +18,10 @@ function workflow(step: Record<string, unknown>) {
 
 describe('review completion workflow contract', () => {
   it.each(['en', 'ja'] as const)(
-    'loads the %s builtin default retry instruction for a tag-only custom workflow',
+    'loads the %s builtin default retry instruction for review_completion: true',
     (lang) => {
       const config = normalizeWorkflowConfig(
-        workflow({ tags: ['review-completion'] }),
+        workflow({ review_completion: true }),
         '/tmp/custom-review.yaml',
         { lang },
       );
@@ -35,18 +35,44 @@ describe('review completion workflow contract', () => {
     },
   );
 
-  it('rejects review_completion options without the opt-in tag', () => {
-    expect(() => normalizeWorkflowConfig(
-      workflow({ review_completion: { max_retry: 2 } }),
+  it('leaves review completion disabled when the field is omitted', () => {
+    const config = normalizeWorkflowConfig(
+      workflow({ tags: ['review'] }),
       '/tmp/custom-review.yaml',
       { lang: 'en' },
-    )).toThrow(/review_completion requires/);
+    );
+
+    expect(config.steps[0]?.reviewCompletion).toBeUndefined();
+  });
+
+  it.each([false, 'yes'])(
+    'rejects unsupported review_completion value %j',
+    (reviewCompletion) => {
+      expect(() => normalizeWorkflowConfig(
+        workflow({ review_completion: reviewCompletion }),
+        '/tmp/custom-review.yaml',
+        { lang: 'en' },
+      )).toThrow();
+    },
+  );
+
+  it('normalizes an empty options object with defaults', () => {
+    const config = normalizeWorkflowConfig(
+      workflow({ review_completion: {} }),
+      '/tmp/custom-review.yaml',
+      { lang: 'en' },
+    );
+
+    expect(config.steps[0]?.reviewCompletion).toMatchObject({
+      mode: 'initial',
+      minRetry: 0,
+      maxRetry: 1,
+    });
   });
 
   it('normalizes an explicit follow_up mode', () => {
     const config = normalizeWorkflowConfig(
       workflow({
-        tags: ['review-completion'],
         review_completion: { mode: 'follow_up', min_retry: 1, max_retry: 2 },
       }),
       '/tmp/custom-review.yaml',

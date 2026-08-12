@@ -831,7 +831,7 @@ promotion は並列サブ step ではサポートされません。
 | `instruction` | - | instruction キー（section map、または bare 名で project → user → builtin の順に解決） |
 | `edit` | - | step がプロジェクトファイルを編集できるか (`true` / `false`) |
 | `companion` | - | 解決済み runtime profile を使う Companion reviewer を通常 agent step と並行実行（[Companion レビュアー](#companion-レビュアー)参照） |
-| `review_completion` | - | reviewer step の完了度を確認する上限付きチェックを設定 |
+| `review_completion` | - | `true` でレビュー網羅性確認を有効化、または options object で再試行上限などを設定 |
 | `pass_previous_response` | `true` | 前の step の出力を `{previous_response}` に渡す |
 | `provider_options.claude.allowed_tools` | - | step または workflow に対する Claude ツール許可リスト |
 | `provider_options.claude.base_url` | - | `claude` / `claude-sdk` 用の Anthropic 互換 base URL（[configuration ガイド](./configuration.ja.md#provider-base-url-base_url) 参照） |
@@ -862,6 +862,8 @@ promotion は並列サブ step ではサポートされません。
 | `required_permission_mode` | - | 最低限の権限モード: `readonly`, `edit`, `full` |
 | `output_contracts` | - | レポートファイル設定（name, format） |
 | `quality_gates` | - | agent step 完了 gate。文字列は AI 向け指示、`type: command` は step 完了後に実行し、失敗時は同じ agent step に差し戻す |
+
+`review_completion` は明示的な opt-in です。省略すると無効、`review_completion: true` なら `mode: initial`、`min_retry: 0`、`max_retry: 1` と言語別の同梱 retry instruction を使い、options object ではそれらの既定値を上書きできます。`false` と文字列は拒否されます。`mode` は `initial` または `follow_up`、`min_retry` / `max_retry` は再試行回数の境界、`retry_instruction` は instruction facet 参照です。成功した各 reviewer response は fresh な completion judge が解決済み runtime profile で確認し、reviewer retry は同じ reviewer session を継続します。judge または retry の失敗は Phase 2 専用の advisory 診断として扱われ、最新の有効 reviewer response を置き換えません。
 
 通常の agent step、parallel sub-step、`loop_monitors.judge` では、`model: null` は model の明示的な省略を表します。`model` 未指定とは異なります。未指定は routing、workflow、loop monitor judge のトリガー元 step、入力由来の model など、適用可能な下位優先度のソースへフォールバックしますが、`null` はその entry で model 解決を止めます。明示 model が必須の provider では検証エラーになります。
 
