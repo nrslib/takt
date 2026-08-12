@@ -991,17 +991,21 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     );
 
     const state = await engine.run();
+    const primaryError = 'api failed';
+    const aggregateContent = 'All team leader parts failed: part-1: api failed; part-2: test failed';
 
     expect(state.status).toBe('aborted');
     expect(state.stepOutputs.get('implement')).toMatchObject({
       persona: 'implement',
       status: 'error',
-      error: 'All team leader parts failed: part-1: api failed; part-2: test failed',
+      error: primaryError,
+      content: aggregateContent,
     });
     expect(state.lastOutput).toMatchObject({
       persona: 'implement',
       status: 'error',
-      error: 'All team leader parts failed: part-1: api failed; part-2: test failed',
+      error: primaryError,
+      content: aggregateContent,
     });
   });
 
@@ -1273,7 +1277,8 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     const state = await engine.run();
 
     expect(state.status).toBe('aborted');
-    const expectedError =
+    const primaryError = 'part timeout: Part timeout after 5ms';
+    const aggregateContent =
       'All team leader parts failed: part-1: part timeout: Part timeout after 5ms; part-2: part timeout: Part timeout after 5ms';
 
     const records = readFileSync(ndjsonPath, 'utf-8')
@@ -1287,11 +1292,12 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       type: 'step_complete',
       step: 'implement',
       status: 'error',
-      error: expectedError,
+      error: primaryError,
+      content: aggregateContent,
     });
     expect(workflowAbort).toMatchObject({
       type: 'workflow_abort',
-      reason: expect.stringContaining(expectedError),
+      reason: primaryError,
     });
 
     const trace = renderTraceReportFromLogs(
@@ -1303,7 +1309,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
         status: 'aborted',
         iterations: 1,
         endTime: '2026-04-25T00:00:00.000Z',
-        reason: expectedError,
+        reason: primaryError,
       },
       ndjsonPath,
       undefined,
@@ -1311,7 +1317,9 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     );
 
     expect(trace).toContain('- Step Status: error');
-    expect(trace).toContain(expectedError);
+    expect(trace).toContain(`- Reason: ${primaryError}`);
+    expect(trace).toContain(`- Error: ${primaryError}`);
+    expect(trace).toContain(aggregateContent);
 
     const usageRecords = readFileSync(usageLogger.filepath, 'utf-8')
       .trim()
@@ -1397,16 +1405,20 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
 
     expect(state.status).toBe('aborted');
 
-    const expectedError =
+    const primaryError =
+      'stream idle timeout: Codex stream timed out after 10 minutes of inactivity';
+    const aggregateContent =
       'All team leader parts failed: part-1: stream idle timeout: Codex stream timed out after 10 minutes of inactivity; part-2: stream idle timeout: Secondary stream timed out after 2 minutes of inactivity';
 
     expect(state.stepOutputs.get('implement')).toMatchObject({
       status: 'error',
-      error: expectedError,
+      error: primaryError,
+      content: aggregateContent,
     });
     expect(state.lastOutput).toMatchObject({
       status: 'error',
-      error: expectedError,
+      error: primaryError,
+      content: aggregateContent,
     });
 
     const records = readFileSync(ndjsonPath, 'utf-8')
@@ -1420,11 +1432,12 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       type: 'step_complete',
       step: 'implement',
       status: 'error',
-      error: expectedError,
+      error: primaryError,
+      content: aggregateContent,
     });
     expect(workflowAbort).toMatchObject({
       type: 'workflow_abort',
-      reason: expect.stringContaining(expectedError),
+      reason: primaryError,
     });
 
     const trace = renderTraceReportFromLogs(
@@ -1436,7 +1449,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
         status: 'aborted',
         iterations: 1,
         endTime: '2026-04-25T00:00:00.000Z',
-        reason: expectedError,
+        reason: primaryError,
       },
       ndjsonPath,
       undefined,
@@ -1444,7 +1457,9 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     );
 
     expect(trace).toContain('- Step Status: error');
-    expect(trace).toContain(expectedError);
+    expect(trace).toContain(`- Reason: ${primaryError}`);
+    expect(trace).toContain(`- Error: ${primaryError}`);
+    expect(trace).toContain(aggregateContent);
   });
 
   it('実際の親 AbortSignal でも part の失敗 usage を1件だけ記録する', async () => {
