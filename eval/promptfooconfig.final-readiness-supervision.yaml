@@ -1,10 +1,11 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-# TAKT facet eval: peer-review / final-gate merge-readiness supervision.
+# TAKT facet eval: review-fix-default / final-gate new-finding evidence.
 
-description: 'TAKT facet eval: final supervisor merge-readiness precision and recall'
+description: 'TAKT facet eval: public review-fix final-gate new-finding evidence'
 
 prompts:
-  - file://prompts/final-readiness-supervision.phase1.md
+  - file://prompts/final-readiness-merge-review.phase2.md
+  - file://prompts/final-readiness-supervision.phase2.md
 
 providers:
   - id: openai:codex-sdk
@@ -17,11 +18,11 @@ providers:
       model_reasoning_effort: low
 
 tests:
-  - description: 'final supervisor: reject an unmet configuration-entry requirement without reopening an adjudicated README request'
+  - description: 'public final gate: explain the authority and initial-round omission for a newly found consumer gap'
     vars:
       task: file://cases/final-readiness-supervision-task.md
-      previous_response: ''
+      previous_response: file://cases/final-readiness-new-finding-phase1.md
     assert:
       - type: javascript
-        metric: final-supervisor/merge-readiness
+        metric: review-fix-final-gate/new-finding-evidence
         value: file://asserts/final-readiness-supervision.mjs

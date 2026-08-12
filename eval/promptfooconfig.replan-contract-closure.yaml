@@ -39,7 +39,7 @@ tests:
           - It preserves the original objective and treats the review evidence as proof that the previous local approach was incomplete, rather than replacing the task with the reviewer's suggested helper assertion.
           - It replans the execution identity change across every relevant creator, derived key, persistence, checkpoint, event, and restore or resume participant in the fixture.
           - It includes a collision counterexample for two distinct supported executions and a continuous persistence-to-restoration or resumption scenario that rejects the collision.
-          - It recognizes that the fixture has models, projections, keys, and checkpoint helpers but no production execution boundary that consumes restored nested state. It plans the minimum missing execution path that resumes the exact selected nested checkpoint, delegates a control node to its child without invoking a worker, and preserves the ordinary task-to-worker path. Projection-only changes are not sufficient.
+          - It recognizes that inspectExecution() connects identity projections but never consumes restored nested state to execute it. It plans the minimum missing execution path that resumes the exact selected nested checkpoint, delegates a control node to its child without invoking a worker, and preserves the ordinary task-to-worker path. Projection-only changes are not sufficient.
           - It requires evidence through real production entry paths, not only isolated helpers or a broad test-suite pass.
           - It preserves the unrelated ordinary executable-task behavior required by the original task.
 

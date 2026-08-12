@@ -14,7 +14,8 @@
  *         write-tests-contract-traceability,
  *         implement-contract-traceability,
  *         implementation-report-contract-traceability,
- *         review-adjudication, task-instruction-gherkin
+ *         review-adjudication, final-readiness-supervision,
+ *         task-instruction-gherkin
  *         (default: all except rescan suites,
  *         which need opencode auth)
  * Example: npm run eval:prompts -- arch --repeat 3
@@ -54,6 +55,7 @@ const SUITES = {
   'implementation-report-contract-traceability': 'promptfooconfig.implementation-report-contract-traceability.yaml',
   'follow-up-review-repair-regression': 'promptfooconfig.follow-up-review-repair-regression.yaml',
   'review-adjudication': 'promptfooconfig.review-adjudication.yaml',
+  'final-readiness-supervision': 'promptfooconfig.final-readiness-supervision.yaml',
   'task-instruction-gherkin': 'promptfooconfig.task-instruction-gherkin.yaml',
 };
 

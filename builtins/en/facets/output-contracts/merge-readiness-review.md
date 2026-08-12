@@ -37,9 +37,9 @@
 | {problem family or contract reviewed} | {condition to preserve} | {locations checked} | {locations checked} | {paths checked} | {test assets checked} | {none or reason unchecked} | {no issue / finding number} |
 
 ## Current Iteration Findings (new)
-| # | finding_id | family_tag | Category | Location | Issue | Fix Suggestion |
-|---|------------|------------|----------|----------|-------|----------------|
-| 1 | MERGE-NEW-src-file-L42 | maintainability-readiness | Regression / Requirement gap / Missing tests / Contract break / Maintainability degradation / Scope creep | `src/file.ts:42` | Issue description | Fix suggestion |
+| # | finding_id | family_tag | Category | Location | Issue | Authorization Basis | Reason Absent from Initial Round | Fix Suggestion |
+|---|------------|------------|----------|----------|-------|---------------------|----------------------------------|----------------|
+| 1 | MERGE-NEW-src-file-L42 | maintainability-readiness | Regression / Requirement gap / Missing tests / Contract break / Maintainability degradation / Scope creep | `src/file.ts:42` | Issue description | {Direct acceptance-criterion violation / diff-introduced regression / required consumer migration / accepted-family closure} | {Why the initial review evidence did not include this finding} | Fix suggestion |
 
 ## Carry-over Findings (persists)
 | # | finding_id | family_tag | Previous Evidence | Current Evidence | Issue | Fix Suggestion |

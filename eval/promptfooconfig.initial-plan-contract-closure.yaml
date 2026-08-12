@@ -36,15 +36,15 @@ tests:
           Judge the plan by its executable meaning, not by headings, identifier format, table shape, or exact wording. Pass only when all of the following are true:
 
           - It assigns stable, reusable identifiers to at least two distinct changed-contract families and uses those identifiers to connect requirements, implementation scope, and verification work.
-          - It traces the public projection contract through every relevant producer and consumer in the fixture, including preview, doctor, summary, the list-command entry point and its separately named catalog-row projection, terminal output, API output, and their shared test coverage, without assuming that a shared helper alone proves every caller.
-          - It identifies same-responsibility paths from definitions, references, and actual callers rather than relying only on familiar file names, and classifies each existing projection path as requiring an update, contractually out of scope, or unchanged with evidence.
-          - It traces execution identity through every relevant definition, creator, normalizer, derived key, retry, fallback, parallel, persistence, checkpoint, event, restore/resume, terminal-output, and API-output participant in the fixture.
+          - Starting from inspectNode() in src/application.js, it follows the real call edges through every representation reached by that entry point and classifies each participant as requiring an update or remaining unchanged with evidence. A file list without call-path evidence is insufficient.
+          - It identifies same-responsibility paths from definitions, references, actual callers, and returned data rather than relying on familiar file names; it also records why the clean summary projection and the unrelated audit key do not require edits.
+          - Starting from inspectExecution() in src/application.js, it follows every imported identity producer and consumer through creation, storage, recovery, concurrency, restoration, and external representation. It must explain the data-flow role of each participant rather than merely copying paths from the fixture.
           - It includes a concrete counterexample where two distinct logical executions could be confused by a non-injective identifier representation, and plans verification that rejects that counterexample.
           - It includes a continuous persistence-to-restoration or resumption scenario that proves the same logical execution keeps its identity across the lifecycle.
           - It requires evidence through real production entry paths, not only isolated helpers or a broad test-suite pass.
           - It preserves the existing ordinary executable-task behavior and plans regression evidence for it.
 
-          Fail if any participant or lifecycle segment is omitted, if the plan lists only local edits without cross-boundary verification, or if it treats planned code or existing tests as sufficient proof without identifying the relevant scenario and assertion.
+          Fail if a reachable participant or lifecycle segment is omitted, if the plan gives only a path inventory without connection and classification evidence, if it lists only local edits without cross-boundary verification, or if it treats planned code or existing tests as sufficient proof without identifying the relevant scenario and assertion.
 
   - description: 'initial plan: keep a local output-format change local'
     vars:

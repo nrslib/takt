@@ -2,40 +2,50 @@ import { describe, expect, it } from 'vitest';
 import assertInitialReviewContractDiscovery from '../../eval/asserts/initial-review-contract-discovery.mjs';
 
 const projectionPaths = [
+  'src/application.js',
   'src/preview.js',
   'src/doctor.js',
-  'src/summary.js',
   'src/catalog-row.js',
   'src/list-command.js',
-  'src/terminal-node.js',
-  'src/node-api.js',
+  'src/node-text.js',
+  'src/node-record.js',
   'tests/public-projections.test.js',
 ];
 const identityPaths = [
+  'src/application.js',
   'src/name-schema.js',
   'src/path-key.js',
   'src/job-store.js',
   'src/checkpoint.js',
   'src/event-bus.js',
-  'src/retry-token.js',
-  'src/fallback-resume.js',
-  'src/parallel-slot.js',
+  'src/execution-token-a.js',
+  'src/execution-token-b.js',
+  'src/execution-token-c.js',
   'src/resume-codec.js',
-  'src/terminal-progress.js',
-  'src/status-api.js',
+  'src/progress-text.js',
+  'src/status-record.js',
 ];
 
 function tableRow(familyTag: string, location: string, problem: string, repair: string): string {
   return `| ${familyTag} | ${location} | ${problem} | ${repair} |`;
 }
 
-function tableOutput(rows: string[]): string {
-  return [
+function tableOutput(rows: string[], includeFlowEvidence = true): string {
+  const output = [
     'Verdict: REJECT',
     '| family_tag | Location | Problem | Fix |',
     '| --- | --- | --- | --- |',
     ...rows,
-  ].join('\n');
+    'src/summary.js is unchanged after verification.',
+    'src/audit-key.js is an adjacent contract and out_of_scope.',
+  ];
+  if (includeFlowEvidence) {
+    output.push(
+      'Data-flow evidence: inspectNode in src/application.js calls renderPreview, listNode, printNode, and nodeRecord.',
+      'Data-flow evidence: inspectExecution in src/application.js calls JobStore, tokenA, restoreResumeNamespace, and statusRecord.',
+    );
+  }
+  return output.join('\n');
 }
 
 const projectionProblem = 'control and worker task behavior is incorrect';
@@ -60,6 +70,15 @@ describe('initial review contract discovery assertion', () => {
     ];
 
     expect(assertInitialReviewContractDiscovery(tableOutput(rows)).pass).toBe(false);
+  });
+
+  it('rejects a complete path inventory without call-path evidence', () => {
+    const rows = [
+      ...projectionPaths.map((path) => tableRow('projection', path, projectionProblem, projectionRepair)),
+      ...identityPaths.map((path) => tableRow('identity', path, identityProblem, identityRepair)),
+    ];
+
+    expect(assertInitialReviewContractDiscovery(tableOutput(rows, false)).pass).toBe(false);
   });
 
   it('merges table and labeled records by case-insensitive family identity', () => {
@@ -98,6 +117,10 @@ describe('initial review contract discovery assertion', () => {
       ...identityPaths.slice(2).map((path) => `  - ${path}`),
       `- 問題: ${identityProblem}`,
       `- 修正方針: ${identityRepair}`,
+      'Data-flow evidence: inspectNode in src/application.js calls renderPreview, listNode, printNode, and nodeRecord.',
+      'Data-flow evidence: inspectExecution in src/application.js calls JobStore, tokenA, restoreResumeNamespace, and statusRecord.',
+      'src/summary.js is unchanged after verification.',
+      'src/audit-key.js is an adjacent contract and out_of_scope.',
     ].join('\n');
 
     expect(assertInitialReviewContractDiscovery(JSON.stringify({ output: review })).pass).toBe(true);

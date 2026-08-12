@@ -162,28 +162,48 @@ function recordIncludesAllLocations(record, paths) {
   return paths.every((path) => locationEvidence.includes(path));
 }
 
+function hasConnectedRouteEvidence(output, entryFunction, participants) {
+  const entryIndex = output.search(new RegExp(`\\b${entryFunction}\\b`, 'i'));
+  if (entryIndex < 0) return false;
+  const surroundingEvidence = output.slice(Math.max(0, entryIndex - 800), entryIndex + 1600);
+  return /(import|call|invoke|delegate|return|data[- ]?flow|参照|呼び出|経由|返却|データフロー)/i.test(surroundingEvidence)
+    && participants.every((participant) => surroundingEvidence.includes(participant));
+}
+
+function hasPathClassification(output, path, classifications) {
+  let pathIndex = output.indexOf(path);
+  while (pathIndex >= 0) {
+    const surroundingEvidence = output.slice(Math.max(0, pathIndex - 300), pathIndex + 500);
+    if (classifications.test(surroundingEvidence)) return true;
+    pathIndex = output.indexOf(path, pathIndex + path.length);
+  }
+  return false;
+}
+
 export default function assertInitialReviewContractDiscovery(output) {
   const reviewOutput = unwrapProviderOutput(output);
   const projectionPaths = [
+    'src/application.js',
     'src/preview.js',
     'src/doctor.js',
     'src/catalog-row.js',
     'src/list-command.js',
-    'src/terminal-node.js',
-    'src/node-api.js',
+    'src/node-text.js',
+    'src/node-record.js',
   ];
   const identityPaths = [
+    'src/application.js',
     'src/path-key.js',
     'src/name-schema.js',
     'src/job-store.js',
     'src/checkpoint.js',
     'src/event-bus.js',
-    'src/retry-token.js',
-    'src/fallback-resume.js',
-    'src/parallel-slot.js',
+    'src/execution-token-a.js',
+    'src/execution-token-b.js',
+    'src/execution-token-c.js',
     'src/resume-codec.js',
-    'src/terminal-progress.js',
-    'src/status-api.js',
+    'src/progress-text.js',
+    'src/status-record.js',
   ];
   const records = extractFamilyRecords(reviewOutput);
   const projectionRecord = records.find((record) => recordIncludesAllLocations(record, projectionPaths));
@@ -202,13 +222,33 @@ export default function assertInitialReviewContractDiscovery(output) {
     ['projection-contract-grounded', projectionRecord !== undefined
       && /(control|制御).*(worker|実行者|task|タスク)|(worker|実行者|task|タスク).*(control|制御)/is.test(projectionRecord.content)],
     ['projection-finding-actionable', hasProblemAndRepair(projectionRecord)],
+    ['projection-route-evidence', hasConnectedRouteEvidence(
+      reviewOutput,
+      'inspectNode',
+      ['renderPreview', 'listNode', 'printNode', 'nodeRecord'],
+    )],
     ['identity-family-complete', identityRecord !== undefined],
     ['identity-collision-demonstrated', identityRecord !== undefined
       && /(collision|衝突|injective|単射|同一.*key|same.*key)/is.test(identityRecord.content)],
     ['identity-finding-actionable', hasProblemAndRepair(identityRecord)],
+    ['identity-route-evidence', hasConnectedRouteEvidence(
+      reviewOutput,
+      'inspectExecution',
+      ['JobStore', 'tokenA', 'restoreResumeNamespace', 'statusRecord'],
+    )],
     ['families-separated', projectionRecord !== undefined
       && identityRecord !== undefined
       && projectionRecord.familyTag !== identityRecord.familyTag],
+    ['clean-projection-classified', hasPathClassification(
+      reviewOutput,
+      'src/summary.js',
+      /(unchanged|clean|no_issue_after_verification|問題なし|変更不要|修正不要)/i,
+    )],
+    ['adjacent-contract-classified', hasPathClassification(
+      reviewOutput,
+      'src/audit-key.js',
+      /(out[_ -]?of[_ -]?scope|outside_contract_jurisdiction|adjacent|対象外|別契約|隣接)/i,
+    )],
     ['clean-decoy-not-a-location', !records.some((record) => /audit(?:-key)?\.js/i.test(getRecordLocationEvidence(record)))],
   ];
   const failed = checks.filter(([, pass]) => !pass).map(([name]) => name);

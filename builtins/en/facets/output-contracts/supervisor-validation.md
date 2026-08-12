@@ -68,9 +68,9 @@ Extract requirements from the task spec and verify each one individually against
 | {Check} | `{command}` | {Actual error} | {Required runtime and version} | {Available runtime and version} | {Configuration and result or why unavailable} | {Evidence that the blocker is outside task scope} |
 
 ## Current Iteration Findings (new)
-| # | finding_id | Item | Evidence | Reason | Required Action |
-|---|------------|------|----------|--------|-----------------|
-| 1 | VAL-NEW-src-file-L42 | Requirement mismatch | `file:line` | Description | Fix required |
+| # | finding_id | Item | Evidence | Reason | Authorization Basis | Reason Absent from Initial Round | Required Action |
+|---|------------|------|----------|--------|---------------------|----------------------------------|-----------------|
+| 1 | VAL-NEW-src-file-L42 | Requirement mismatch | `file:line` | Description | {Direct acceptance-criterion violation / diff-introduced regression / required consumer migration / accepted-family closure} | {Why the initial review evidence did not include this finding} | Fix required |
 
 ## Carry-over Findings (persists)
 | # | finding_id | Previous Evidence | Current Evidence | Reason | Required Action |

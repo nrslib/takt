@@ -1,3 +1,3 @@
-export function statusResponse(resource, state) {
+export function resourceRecord(resource, state) {
   return { executionId: resource.jobId, state };
 }

@@ -1,5 +1,5 @@
 import { pathKey } from './path-key.js';
 
-export function terminalProgress(path) {
+export function progressText(path) {
   return `execution=${pathKey(path)}`;
 }

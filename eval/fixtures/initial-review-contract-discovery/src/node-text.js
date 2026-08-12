@@ -1,9 +1,9 @@
-function terminalHeading(node) {
+function heading(node) {
   return `${node.name} [${node.worker ?? node.name}]`;
 }
 
 export function printNode(node) {
   return node.kind === 'control'
-    ? `${terminalHeading(node)} -> ${node.child}`
-    : terminalHeading(node);
+    ? `${heading(node)} -> ${node.child}`
+    : heading(node);
 }

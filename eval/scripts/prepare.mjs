@@ -159,6 +159,22 @@ const TARGETS = [
     workflowCallVars: { review_mode: 'follow_up' },
   },
   { id: 'review-adjudication', workflow: 'peer-review', step: 'review-adjudication', fixture: 'eval/fixtures/review-adjudication' },
+  {
+    id: 'final-readiness-merge-review',
+    workflow: 'review-fix-default',
+    step: 'merge-readiness-review',
+    fixture: 'eval/fixtures/final-readiness-supervision',
+    phase: 'phase2',
+    targetFile: 'merge-readiness-review.md',
+  },
+  {
+    id: 'final-readiness-supervision',
+    workflow: 'review-fix-default',
+    step: 'supervise',
+    fixture: 'eval/fixtures/final-readiness-supervision',
+    phase: 'phase2',
+    targetFile: 'supervisor-validation.md',
+  },
 ];
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));

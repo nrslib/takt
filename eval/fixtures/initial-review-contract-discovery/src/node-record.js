@@ -1,4 +1,4 @@
-export function nodeResponse(node) {
+export function nodeRecord(node) {
   return {
     kind: node.kind,
     name: node.name,
