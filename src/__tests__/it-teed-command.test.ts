@@ -92,7 +92,7 @@ describe('teed command execution', () => {
   });
 
   it('should reject and stop the child when the log stream fails', async () => {
-    captureStdout();
+    const written = captureStdout();
     vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     const logStream = new Writable({
       write(_chunk, _encoding, callback) {
@@ -100,10 +100,15 @@ describe('teed command execution', () => {
       },
     });
 
-    await expect(runTeedCommand(process.execPath, [
+    const pending = runTeedCommand(process.execPath, [
       '-e',
-      "setInterval(() => process.stdout.write('still-running\\n'), 10);",
-    ], { logStream })).rejects.toThrow('log stream failed');
+      "process.on('SIGTERM', () => process.stdout.write('received-sigterm\\n', () => process.exit(0)));"
+      + " process.stdout.write('trigger-log-failure\\n');"
+      + ' setInterval(() => {}, 1000);',
+    ], { logStream });
+
+    await expect(pending).rejects.toThrow('log stream failed');
+    await waitUntil(() => written.join('').includes('received-sigterm'), 5000);
   });
 
   it('should settle within the drain deadline when a grandchild still holds the pipe', async () => {

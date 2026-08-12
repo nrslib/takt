@@ -11,9 +11,10 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative } from 'node:path';
+import { Writable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 import {
   auditedIntegrationBoundaryTestFiles,
@@ -37,6 +38,7 @@ import { selectNpmTestRuns } from '../../scripts/run-npm-test.mjs';
 import {
   RELEASE_GATE_SCRIPTS,
   RELEASE_LOG_RELATIVE_PATH,
+  runReleaseCheck,
 } from '../../scripts/run-release-check.mjs';
 
 interface PackageManifest {
@@ -188,9 +190,10 @@ function executeReleaseScript(failingCommand: string | undefined): {
   log: string;
 } {
   const tempRoot = mkdtempSync(join(tmpdir(), 'takt-release-verification-'));
+  const repositoryRoot = process.cwd();
   const binDir = join(tempRoot, 'bin');
   const logPath = join(tempRoot, 'npm.log');
-  const releaseLogPath = join(process.cwd(), RELEASE_LOG_RELATIVE_PATH);
+  const releaseLogPath = join(tempRoot, RELEASE_LOG_RELATIVE_PATH);
   const npmStubPath = join(binDir, 'npm-cli.js');
   mkdirSync(binDir);
   writeFileSync(npmStubPath, `
@@ -208,11 +211,11 @@ if (command === process.env.TAKT_FAIL_COMMAND) {
   writeFileSync(releaseLogPath, 'stale log entry\\n');
 
   try {
-    const result = spawnSync('/bin/sh', ['-c', manifest.scripts['check:release']], {
+    const result = spawnSync(process.execPath, [join(repositoryRoot, 'scripts/run-release-check.mjs')], {
       encoding: 'utf8',
+      cwd: tempRoot,
       env: {
         ...process.env,
-        PATH: `${binDir}:${process.env.PATH}`,
         npm_execpath: npmStubPath,
         TAKT_FAIL_COMMAND: failingCommand === undefined ? '' : failingCommand,
         TAKT_RELEASE_LOG: logPath,
@@ -223,7 +226,6 @@ if (command === process.env.TAKT_FAIL_COMMAND) {
     return { commands, status: result.status, stdout: result.stdout, log };
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
-    rmSync(releaseLogPath, { force: true });
   }
 }
 
@@ -326,6 +328,23 @@ describe('release verification wiring', () => {
     expect(result.log).toContain('stdout:run build');
     expect(result.log).toContain('stderr:run build');
     expect(result.log).not.toContain('stale log entry');
+  });
+
+  it('should fail when the release log rejects the final result write', async () => {
+    const logStream = new Writable({
+      write(chunk, _encoding, callback) {
+        const error = chunk.toString().includes('check:release passed')
+          ? new Error('final release log write failed')
+          : undefined;
+        callback(error);
+      },
+    });
+    const runCommand = vi.fn().mockResolvedValue({ code: 0, signal: null, output: '' });
+
+    const code = await runReleaseCheck(runCommand, async () => logStream);
+
+    expect(runCommand).toHaveBeenCalledTimes(RELEASE_GATE_SCRIPTS.length);
+    expect(code).toBe(1);
   });
 
   it.each([

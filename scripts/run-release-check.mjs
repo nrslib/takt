@@ -27,14 +27,17 @@ function openReleaseLog() {
   mkdirSync(dirname(logPath), { recursive: true });
   return new Promise((resolve, reject) => {
     const logStream = createWriteStream(logPath, { flags: 'w' });
-    releaseLogErrors.set(logStream, null);
-    logStream.on('error', (error) => {
-      if (releaseLogErrors.get(logStream) === null) {
-        releaseLogErrors.set(logStream, error);
-      }
-    });
     logStream.once('open', () => resolve(logStream));
     logStream.once('error', reject);
+  });
+}
+
+function trackReleaseLogErrors(logStream) {
+  releaseLogErrors.set(logStream, null);
+  logStream.on('error', (error) => {
+    if (releaseLogErrors.get(logStream) === null) {
+      releaseLogErrors.set(logStream, error);
+    }
   });
 }
 
@@ -43,7 +46,11 @@ function getReleaseLogError(logStream) {
 }
 
 function closeReleaseLog(logStream) {
-  if (logStream.destroyed || logStream.errored) {
+  const logError = getReleaseLogError(logStream) ?? logStream.errored;
+  if (logError) {
+    return Promise.reject(logError);
+  }
+  if (logStream.destroyed) {
     return Promise.resolve();
   }
   return new Promise((resolve, reject) => {
@@ -81,10 +88,10 @@ async function runNpmCommand(npmArgs, logStream) {
   }
 }
 
-export async function runReleaseCheck(runCommand = runNpmCommand) {
+export async function runReleaseCheck(runCommand = runNpmCommand, openLog = openReleaseLog) {
   let logStream;
   try {
-    logStream = await openReleaseLog();
+    logStream = await openLog();
   } catch (error) {
     process.stdout.write(`${RELEASE_LOG_MESSAGE}\n`);
     process.stderr.write(`[takt] Failed to open release log: ${error.message}\n`);
@@ -93,6 +100,7 @@ export async function runReleaseCheck(runCommand = runNpmCommand) {
     process.stdout.write(`${message}\n`);
     return 1;
   }
+  trackReleaseLogErrors(logStream);
   writeMessage(RELEASE_LOG_MESSAGE, logStream, process.stdout);
 
   let code = 0;
@@ -128,7 +136,10 @@ export async function runReleaseCheck(runCommand = runNpmCommand) {
     closeError = error;
     process.stderr.write(`[takt] Failed to close release log: ${error.message}\n`);
   }
-  const finalCode = code === 0 && closeError !== undefined ? 1 : code;
+  const finalCode = code === 0
+    && (getReleaseLogError(logStream) !== null || closeError !== undefined)
+    ? 1
+    : code;
   const finalMessage = finalCode === 0
     ? '[takt] check:release passed'
     : `[takt] check:release failed (exit=${finalCode})`;
