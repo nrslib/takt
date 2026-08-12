@@ -7,6 +7,13 @@ export interface CompanionFixReviewContext {
   readonly fixRound?: number;
 }
 
+export interface CompanionFixAttemptFailure {
+  readonly stage: 'review' | 'fix';
+  readonly fixRound: number;
+  readonly sequence?: number;
+  readonly reason: string;
+}
+
 export async function runCompanionFixLoop<TOptions extends object>(input: {
   initialResponse: AgentResponse;
   phase1Options: TOptions;
@@ -24,15 +31,18 @@ export async function runCompanionFixLoop<TOptions extends object>(input: {
     instruction: string;
   }) => Promise<AgentResponse>;
   abortSignal?: AbortSignal;
+  onAttemptFailure?: (failure: CompanionFixAttemptFailure) => void;
 }): Promise<{
   phaseResponse: AgentResponse;
   latestSessionId: string | undefined;
   fixRounds: number;
+  attemptFailures: readonly CompanionFixAttemptFailure[];
 }> {
   let latestResponse = input.initialResponse;
   let latestSessionId = input.initialResponse.sessionId;
   let latestImplementerResponse = input.initialResponse.content;
   let fixRounds = 0;
+  const attemptFailures: CompanionFixAttemptFailure[] = [];
   for (;;) {
     throwIfAborted(input.abortSignal);
     let review: Awaited<ReturnType<typeof input.completeReview>>;
@@ -42,13 +52,18 @@ export async function runCompanionFixLoop<TOptions extends object>(input: {
         afterFix: fixRounds > 0,
         ...(fixRounds > 0 ? { fixRound: fixRounds } : {}),
       });
-    } catch {
+    } catch (error) {
       if (input.abortSignal?.aborted) throw createAbortError(input.abortSignal.reason);
-      return terminal(latestResponse, latestSessionId, fixRounds);
+      recordFailure(attemptFailures, input.onAttemptFailure, {
+        stage: 'review',
+        fixRound: fixRounds,
+        reason: errorMessage(error),
+      });
+      return terminal(latestResponse, latestSessionId, fixRounds, attemptFailures);
     }
     throwIfAborted(input.abortSignal);
     if (review.escalated || review.openMustFix.length === 0) {
-      return terminal(latestResponse, latestSessionId, fixRounds);
+      return terminal(latestResponse, latestSessionId, fixRounds, attemptFailures);
     }
     const sequence = fixRounds + 2;
     let fixed: AgentResponse;
@@ -61,14 +76,27 @@ export async function runCompanionFixLoop<TOptions extends object>(input: {
         options: { ...input.phase1Options, sessionId: latestSessionId },
         instruction: buildCompanionFixInstruction(review.openMustFix),
       });
-    } catch {
+    } catch (error) {
       if (input.abortSignal?.aborted) throw createAbortError(input.abortSignal.reason);
-      return terminal(latestResponse, latestSessionId, fixRounds + 1);
+      fixRounds += 1;
+      recordFailure(attemptFailures, input.onAttemptFailure, {
+        stage: 'fix',
+        fixRound: fixRounds,
+        sequence,
+        reason: errorMessage(error),
+      });
+      return terminal(latestResponse, latestSessionId, fixRounds, attemptFailures);
     }
     throwIfAborted(input.abortSignal);
     fixRounds += 1;
     if (fixed.status !== 'done') {
-      return terminal(latestResponse, latestSessionId, fixRounds);
+      recordFailure(attemptFailures, input.onAttemptFailure, {
+        stage: 'fix',
+        fixRound: fixRounds,
+        sequence,
+        reason: fixed.error ?? `Companion fix returned status "${fixed.status}"`,
+      });
+      return terminal(latestResponse, latestSessionId, fixRounds, attemptFailures);
     }
     latestResponse = fixed;
     latestSessionId = fixed.sessionId ?? latestSessionId;
@@ -80,12 +108,27 @@ function terminal(
   phaseResponse: AgentResponse,
   latestSessionId: string | undefined,
   fixRounds: number,
+  attemptFailures: readonly CompanionFixAttemptFailure[],
 ) {
   return {
     phaseResponse,
     latestSessionId,
     fixRounds,
+    attemptFailures,
   };
+}
+
+function recordFailure(
+  failures: CompanionFixAttemptFailure[],
+  onAttemptFailure: ((failure: CompanionFixAttemptFailure) => void) | undefined,
+  failure: CompanionFixAttemptFailure,
+): void {
+  failures.push(failure);
+  onAttemptFailure?.(failure);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function throwIfAborted(signal?: AbortSignal): void {

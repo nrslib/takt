@@ -38,16 +38,44 @@ function companionStep() {
     name: 'implement',
     persona: 'coder',
     companion: { fixed: ['ai-antipattern-review-companion'], pool: [] },
-    rules: [makeRule('Implementation is complete', 'COMPLETE')],
+    rules: [
+      makeRule('Implementation is complete', 'COMPLETE'),
+      makeRule('Implementation needs more work', 'retry'),
+    ],
   });
 }
 
-function executor(): StepExecutor {
+function executor(judgeStatus: ReturnType<typeof vi.fn>): StepExecutor {
   return new StepExecutor({
     structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
-    optionsBuilder: { buildPhaseRunnerContext: vi.fn() } as unknown as StepExecutorDeps['optionsBuilder'],
+    optionsBuilder: {
+      buildPhaseRunnerContext: vi.fn((_step, _state, lastResponse) => ({
+        cwd: '/tmp',
+        reportDir: '/tmp',
+        workflowName: 'test-workflow',
+        iteration: 1,
+        lastResponse,
+        structuredCaller: { judgeStatus },
+        resolveStepProviderModel: () => ({ provider: 'mock' }),
+      })),
+    } as unknown as StepExecutorDeps['optionsBuilder'],
     getInteractive: () => false,
   } as unknown as StepExecutorDeps);
+}
+
+function judge(): ReturnType<typeof vi.fn> {
+  return vi.fn(async (
+    _structured: string,
+    _tag: string,
+    _candidates: readonly unknown[],
+    options: { onStructuredPromptResolved: (parts: { systemPrompt: string; userInstruction: string }) => void },
+  ) => {
+    options.onStructuredPromptResolved({
+      systemPrompt: 'system',
+      userInstruction: 'judge',
+    });
+    return { candidateIndex: 0, method: 'phase3_tag' as const };
+  });
 }
 
 describe('companion advisory isolation', () => {
@@ -90,8 +118,9 @@ describe('companion advisory isolation', () => {
     },
   ])('should evaluate ordinary conditions after $label', async ({ companion }) => {
     const latestResponse = response();
+    const judgeStatus = judge();
 
-    const result = await executor().applyPostExecutionPhases(
+    const result = await executor(judgeStatus).applyPostExecutionPhases(
       companionStep(),
       state(companion),
       1,
@@ -102,10 +131,15 @@ describe('companion advisory isolation', () => {
     expect(result.status).toBe('done');
     expect(result.content).toBe(latestResponse.content);
     expect(result.matchedRuleIndex).toBe(0);
+    expect(result.matchedRuleMethod).toBe('phase3_tag');
+    expect(judgeStatus).toHaveBeenCalledOnce();
+    expect(judgeStatus.mock.calls[0]?.[0]).toContain(latestResponse.content);
+    expect(judgeStatus.mock.calls[0]?.[2]).toHaveLength(2);
   });
 
   it('should evaluate ordinary conditions when advisory state is unavailable', async () => {
-    const result = await executor().applyPostExecutionRulesOnly(
+    const judgeStatus = judge();
+    const result = await executor(judgeStatus).applyPostExecutionRulesOnly(
       companionStep(),
       state(undefined),
       response(),
@@ -114,5 +148,29 @@ describe('companion advisory isolation', () => {
 
     expect(result.status).toBe('done');
     expect(result.matchedRuleIndex).toBe(0);
+    expect(judgeStatus).toHaveBeenCalledOnce();
+  });
+
+  it('should reject a programmatic workflow rule that reads advisory state', async () => {
+    const judgeStatus = judge();
+    const step = companionStep();
+    step.rules = [{
+      condition: { kind: 'when', expression: 'companion.escalated' },
+      next: 'ABORT',
+    }, ...step.rules ?? []];
+
+    await expect(executor(judgeStatus).applyPostExecutionRulesOnly(
+      step,
+      state({
+        escalated: true,
+        completionVerified: true,
+        openMustFixCount: 0,
+        openMustFix: [],
+      }),
+      response(),
+      vi.fn(),
+    )).rejects.toThrow('Workflow transition rules cannot reference advisory companion state');
+
+    expect(judgeStatus).not.toHaveBeenCalled();
   });
 });

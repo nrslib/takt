@@ -336,7 +336,7 @@ describe('workflow selector resolution', () => {
         name: 'implement',
         instruction: 'Implement',
         companion: { fixed: [], pool: ['security-reviewer'] },
-        rules: [{ condition: 'when(companion.escalated)', next: 'COMPLETE' }],
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
       }],
     };
 

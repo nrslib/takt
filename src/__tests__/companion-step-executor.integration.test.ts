@@ -430,6 +430,208 @@ describe('companion StepExecutor lifecycle', () => {
     },
   );
 
+  it('should apply empty-output recovery to a companion fix and retain the successful session', async () => {
+    const abortController = new AbortController();
+    const state = makeState();
+    writeOpenFinding(cwd);
+    vi.mocked(executeAgent)
+      .mockImplementationOnce(async (_persona, prompt, options) => {
+        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: prompt });
+        return {
+          persona: 'coder',
+          status: 'done',
+          content: 'implemented',
+          sessionId: 'session-1',
+          timestamp: new Date('2026-08-08T00:00:00.000Z'),
+        };
+      })
+      .mockImplementation(async (_persona, prompt, options) => {
+        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: prompt });
+        return {
+          persona: 'coder',
+          status: 'done',
+          content: '',
+          sessionId: options?.sessionId ?? 'failed-fresh-session',
+          timestamp: new Date('2026-08-08T00:00:00.000Z'),
+        };
+      });
+    const deps = createDeps({
+      cwd,
+      runPaths,
+      companionDiffReader: createCompanionDiffReader(),
+      abortSignal: abortController.signal,
+      emitEvent: vi.fn(),
+    });
+
+    const result = await new StepExecutor(deps).runNormalStep(
+      createCompanionStep([makeRule('Implementation is complete', 'COMPLETE')]),
+      state,
+      'task',
+      5,
+      vi.fn(),
+      'Implement.',
+    );
+
+    expect(executeAgent).toHaveBeenCalledTimes(4);
+    expect(result.response).toMatchObject({
+      status: 'done',
+      content: 'implemented',
+      sessionId: 'session-1',
+      matchedRuleIndex: 0,
+    });
+    expect(deps.onPhaseComplete).toHaveBeenCalledWith(
+      expect.anything(),
+      1,
+      'execute',
+      '',
+      'error',
+      'Phase 1 returned empty output',
+      expect.any(String),
+      state.iteration,
+    );
+  });
+
+  it('should reject invalid structured output from a companion fix without replacing the valid response', async () => {
+    const abortController = new AbortController();
+    const state = makeState();
+    writeOpenFinding(cwd);
+    vi.mocked(executeAgent)
+      .mockImplementationOnce(async (_persona, prompt, options) => {
+        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: prompt });
+        return {
+          persona: 'coder',
+          status: 'done',
+          content: 'implemented',
+          structuredOutput: { result: 'valid' },
+          sessionId: 'session-1',
+          timestamp: new Date('2026-08-08T00:00:00.000Z'),
+        };
+      })
+      .mockImplementationOnce(async (_persona, prompt, options) => {
+        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: prompt });
+        return {
+          persona: 'coder',
+          status: 'done',
+          content: 'invalid repair result',
+          structuredOutput: { unexpected: true },
+          sessionId: 'session-2',
+          timestamp: new Date('2026-08-08T00:00:00.000Z'),
+        };
+      });
+    const deps = createDeps({
+      cwd,
+      runPaths,
+      companionDiffReader: createCompanionDiffReader(),
+      abortSignal: abortController.signal,
+      emitEvent: vi.fn(),
+    });
+    const step = {
+      ...createCompanionStep([makeRule('Implementation is complete', 'COMPLETE')]),
+      structuredOutput: {
+        schemaRef: 'test-result',
+        schema: {
+          type: 'object',
+          required: ['result'],
+          additionalProperties: false,
+          properties: { result: { type: 'string' } },
+        },
+      },
+    };
+
+    const result = await new StepExecutor(deps).runNormalStep(
+      step,
+      state,
+      'task',
+      5,
+      vi.fn(),
+      'Implement.',
+    );
+
+    expect(result.response).toMatchObject({
+      status: 'done',
+      content: 'implemented',
+      structuredOutput: { result: 'valid' },
+      sessionId: 'session-1',
+      matchedRuleIndex: 0,
+    });
+    expect(deps.recordSynthesizedAgentUsage).toHaveBeenCalledWith(
+      'implement',
+      expect.objectContaining({ provider: 'mock' }),
+      false,
+      undefined,
+    );
+    expect(deps.onPhaseComplete).toHaveBeenCalledWith(
+      expect.anything(),
+      1,
+      'execute',
+      'invalid repair result',
+      'error',
+      expect.stringContaining('invalid structured_output'),
+      expect.any(String),
+      state.iteration,
+    );
+  });
+
+  it('should record a thrown companion fix attempt and continue with the successful response', async () => {
+    const abortController = new AbortController();
+    const state = makeState();
+    writeOpenFinding(cwd);
+    vi.mocked(executeAgent)
+      .mockImplementationOnce(async (_persona, prompt, options) => {
+        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: prompt });
+        return {
+          persona: 'coder',
+          status: 'done',
+          content: 'implemented',
+          sessionId: 'session-1',
+          timestamp: new Date('2026-08-08T00:00:00.000Z'),
+        };
+      })
+      .mockImplementationOnce(async (_persona, prompt, options) => {
+        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: prompt });
+        throw new Error('repair provider failed');
+      });
+    const deps = createDeps({
+      cwd,
+      runPaths,
+      companionDiffReader: createCompanionDiffReader(),
+      abortSignal: abortController.signal,
+      emitEvent: vi.fn(),
+    });
+
+    const result = await new StepExecutor(deps).runNormalStep(
+      createCompanionStep([makeRule('Implementation is complete', 'COMPLETE')]),
+      state,
+      'task',
+      5,
+      vi.fn(),
+      'Implement.',
+    );
+
+    expect(result.response).toMatchObject({
+      status: 'done',
+      content: 'implemented',
+      sessionId: 'session-1',
+      matchedRuleIndex: 0,
+    });
+    expect(deps.recordSynthesizedAgentUsage).toHaveBeenCalledWith(
+      'implement',
+      expect.objectContaining({ provider: 'mock' }),
+      false,
+      undefined,
+    );
+    expect(deps.onPhaseComplete).toHaveBeenCalledWith(
+      expect.anything(),
+      1,
+      'execute',
+      '',
+      'error',
+      'repair provider failed',
+      expect.any(String),
+      state.iteration,
+    );
+  });
+
   it('should continue when advisory state is removed after completion', async () => {
     const abortController = new AbortController();
     mockSuccessfulImplementer();

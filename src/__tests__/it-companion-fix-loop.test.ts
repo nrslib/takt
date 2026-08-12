@@ -172,20 +172,29 @@ describe('CT-COMP-10 fail-soft and abort lifecycle', () => {
   it('should retain the latest successful response when completion fails after retries', async () => {
     const failure = new Error('review provider crashed');
     const original = response('implementation succeeded', 'session-1');
+    const onAttemptFailure = vi.fn();
 
     const result = await runCompanionFixLoop({
       initialResponse: original,
       phase1Options: phase1Options(),
       completeReview: vi.fn().mockRejectedValue(failure),
       executeFix: vi.fn(),
+      onAttemptFailure,
     });
 
     expect(result.phaseResponse).toBe(original);
     expect(result.fixRounds).toBe(0);
+    expect(result.attemptFailures).toEqual([{
+      stage: 'review',
+      fixRound: 0,
+      reason: failure.message,
+    }]);
+    expect(onAttemptFailure).toHaveBeenCalledWith(result.attemptFailures[0]);
   });
 
   it('should retain the latest successful response when a companion fix throws', async () => {
     const original = response('implementation succeeded', 'session-1');
+    const onAttemptFailure = vi.fn();
 
     const result = await runCompanionFixLoop({
       initialResponse: original,
@@ -195,11 +204,19 @@ describe('CT-COMP-10 fail-soft and abort lifecycle', () => {
         escalated: false,
       }),
       executeFix: vi.fn().mockRejectedValue(new Error('fix provider crashed')),
+      onAttemptFailure,
     });
 
     expect(result.phaseResponse).toBe(original);
     expect(result.latestSessionId).toBe('session-1');
     expect(result.fixRounds).toBe(1);
+    expect(result.attemptFailures).toEqual([{
+      stage: 'fix',
+      fixRound: 1,
+      sequence: 2,
+      reason: 'fix provider crashed',
+    }]);
+    expect(onAttemptFailure).toHaveBeenCalledWith(result.attemptFailures[0]);
   });
 
   it('should stop completion and fix work when the main abort signal fires', async () => {

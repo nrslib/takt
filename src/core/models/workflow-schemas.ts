@@ -27,6 +27,7 @@ import { isAiConditionExpression } from './workflow-condition-expression.js';
 import {
   findSemanticAppendixConflicts,
   hasAggregateCondition,
+  hasCompanionReference,
   isParallelSubStepRuleCondition,
   parseWorkflowRuleCondition,
   type SemanticAppendixRule,
@@ -178,7 +179,13 @@ const WorkflowParamDeclarationRawSchema = z.union([
 
 const WorkflowRuleConditionRawSchema = z.string().trim().min(1).superRefine((condition, ctx) => {
   try {
-    parseWorkflowRuleCondition(condition);
+    const parsed = parseWorkflowRuleCondition(condition);
+    if (hasCompanionReference(parsed)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Workflow transition rules cannot reference advisory companion state',
+      });
+    }
   } catch (error) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,

@@ -51,9 +51,7 @@ describe('CT-COMP-12 worktree companion runtime continuity', () => {
       '    edit: true',
       '    companion: [security-reviewer]',
       '    rules:',
-      '      - condition: when(companion.escalated)',
-      '        next: ABORT',
-      '      - condition: when(companion.openMustFixCount == 0)',
+      '      - condition: done',
       '        next: COMPLETE',
       '',
     ].join('\n'));

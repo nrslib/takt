@@ -48,9 +48,7 @@ function createFixture(options: FixtureOptions): CompanionEntrypointFixture {
     '    edit: true',
     '    companion: [security-reviewer]',
     '    rules:',
-    '      - condition: when(companion.escalated)',
-    '        next: ABORT',
-    '      - condition: when(companion.openMustFixCount == 0)',
+    '      - condition: done',
     '        next: COMPLETE',
     '',
   ].join('\n'));

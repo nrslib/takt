@@ -1416,6 +1416,8 @@ steps:
       next: final-review
 ```
 
+workflow の遷移ルールから `companion.*` state は参照できません。Companion の指摘と失敗は advisory な診断情報であり、主 workflow の遷移は通常の semantic condition と Phase 3 の判定だけで決まります。
+
 定義 YAML は `.takt/companions/`、`~/.takt/companions/`、`builtins/{language}/companions/` の順で解決されます。指定できるのは `name`、`description`、facet 参照（`persona`、`policy`、`knowledge`、`instruction`）、`interval_ms` だけで、provider やツール設定は指定できません。`interval_ms` は `2,147,483,647` 以下の正整数である必要があります。
 
 TAKT は変更系 tool event を観測し、静穏時間または強制発火時間の経過後に累積差分をレビューします。実装エージェントの完了時には未レビュー変更を確認し、残っている場合だけレビューします。新しい完了レビューが不要でも、実行中・待機中のレビューを中断または待機してから完了します。指摘は `.takt/runs/{run}/companion/{step}/{companion}.jsonl` へ追記されます。各 companion の JSONL ファイルは実装エージェント向けの読取専用 projection であり、独立した transaction boundary です。そのファイルへの追記成功後にだけ cache、finding の採番、finding event が確定します。1ラウンドで複数 companion を更新する場合、後続 mailbox の失敗によって、すでに確定した先行 mailbox を rollback せず、再試行では未完了の mailbox 更新だけを再開します。projection の外部変更は拒否され、engine が所有する finding 状態には反映されません。post-execution condition の評価前に、エンジンは進展が続く間、同じ session の fix loop で open の `must_fix` を解消します。loop escalation はこの内部 fix loop だけを停止します。未解消指摘、completion review の失敗、内部 escalation は Companion の診断情報として記録されますが、主 workflow を block せず、post-execution 判定へ渡す response も変更しません。Companion 対応後は、成功した主 agent の最新 response だけを後続へ渡します。Companion 呼び出しは既定回数の retry 後に fail-soft とし、workflow または step の中断時は引き続き Companion も停止します。
