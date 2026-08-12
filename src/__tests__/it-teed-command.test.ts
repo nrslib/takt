@@ -102,9 +102,9 @@ describe('teed command execution', () => {
 
     const pending = runTeedCommand(process.execPath, [
       '-e',
-      "process.on('SIGTERM', () => process.stdout.write('received-sigterm\\n', () => process.exit(0)));"
+      "const fallback = setTimeout(() => process.exit(0), 1000);"
+      + " process.on('SIGTERM', () => { clearTimeout(fallback); process.stdout.write('received-sigterm\\n', () => process.exit(0)); });"
       + " process.stdout.write('trigger-log-failure\\n');"
-      + ' setInterval(() => {}, 1000);',
     ], { logStream });
 
     await expect(pending).rejects.toThrow('log stream failed');
