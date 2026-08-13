@@ -2,6 +2,8 @@ import { extractFindingObservation } from './finding-observation.mjs';
 
 const FINDING = 'AIP-PRIMARY-1';
 
+export const WEAKENING_EVIDENCE_PATTERN = /(?:\b(?:best[- ]?effort|optional|(?:safe|safer) default|safety preference)\b|任意|安全(?:性)?(?:を|の)?(?:優先|重視|好み|選好)|安全(?:なので|だから)(?:既定|デフォルト)?|安全側(?:の)?(?:既定値|デフォルト)|努力目標)/i;
+
 export default function assertFinalReadinessDefaultPriority(output) {
   const { onlyTargetFinding, fields } = extractFindingObservation(output, FINDING);
   const requiredFields = [
@@ -38,7 +40,7 @@ export default function assertFinalReadinessDefaultPriority(output) {
       && /(?:fresh|新規実行)/i.test(evidence)
       && /(?:selected leaf|failed leaf|選択(?:した)?\s*(?:失敗)?\s*leaf|失敗\s*leaf)/i.test(evidence)],
     ['existing-family', /^EXISTING\s+AIP-PRIMARY-1$/i.test(fields.family?.value ?? '')],
-    ['weakening-evidence', /(?:best[- ]?effort|optional|safe(?:r)? default|safety preference|任意|安全|努力目標)/i.test(evidence)],
+    ['weakening-evidence', WEAKENING_EVIDENCE_PATTERN.test(evidence)],
   ];
   const failed = checks.filter(([, pass]) => !pass).map(([name]) => name);
   return {
