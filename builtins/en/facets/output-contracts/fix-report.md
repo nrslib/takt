@@ -11,7 +11,7 @@
 ## Invariant Register Carry-forward
 | Fix Unit | Family ID | Invariant Stable ID | Authoritative Owner | Current Verifier Occurrence | Previous Verifier Occurrence | Previous Path | Current Path | Same-Invariant / Recurrence Judgment | Cumulative `incomplete` Count | Trigger | Enforcement-Point Candidate | Record Integrity |
 |----------|-----------|---------------------|---------------------|-----------------------------|------------------------------|---------------|--------------|--------------------------------------|-------------------------------|---------|-----------------------------|------------------|
-| {One row for every invariant in the fix plan; if no fix plan is provided: None} | {Stable family ID} | {Stable invariant ID} | {Owner from the plan} | {Copy unchanged; on initial fix: None; for a missing later row: indeterminate} | {Copy unchanged; on initial fix: None; for a missing later row: indeterminate} | {Copy unchanged; on initial fix: None; for a missing later row: indeterminate} | {Copy unchanged; on initial fix: None; for a missing later row: indeterminate} | {Copy unchanged; on initial fix: not yet evaluated; for a missing later row: indeterminate} | {Copy unchanged; on initial fix: 0; for a missing later row: indeterminate} | {Copy unchanged; on initial fix: false; for a missing later row: indeterminate} | {Copy unchanged; on initial fix: Not applicable; for a missing later row: plan value or indeterminate} | {Copy unchanged; on initial fix: complete; for a missing later row: artifact deficiency with reason} |
+| {One row for every invariant in the fix plan; if no fix plan is provided: None} | {Stable family ID} | {Stable invariant ID} | {Owner from the plan} | {Copy unchanged; on initial fix: None; for a missing later row: indeterminate} | {Copy unchanged; on initial fix: None; for a missing later row: indeterminate} | {Copy unchanged; on initial fix: None; for a missing later row: indeterminate} | {Copy unchanged; on initial fix: None; for a missing later row: indeterminate} | {Copy unchanged; on initial fix: not yet evaluated; for a missing later row: indeterminate} | {Copy unchanged; on initial fix: 0; for a missing later row: indeterminate} | {Copy a known carried true unchanged; on a complete initial row: false; only when no carried true is known and the trigger cannot be reconstructed: indeterminate} | {Copy unchanged; on initial fix: Not applicable; for a missing later row: plan value or indeterminate} | {Copy unchanged; on initial fix: complete; artifact deficiency with reason for a missing later row; plan deficiency with reason for missing or inconsistent plan metadata under the shared fix-plan-validity rules} |
 
 ## Carry-forward Deficiencies
 - {None, or invariant stable ID, missing or inconsistent field, reason, and conservative handling. Do not modify an existing recurrence row to record this}
@@ -32,7 +32,9 @@
 | {When applicable} | {Obligation ID} | {Observed gap} | {Unscanned path, weak observation, false assumption, incomplete migration, unexecuted counterexample, or overstated report} | {Added or corrected evidence} | {Obligation IDs, including obligations in other fix units} |
 
 ## Established Invariant Diff Scan
-- Established invariant scan: {invariant stable ID}={preserved / violated / unverified}, ...
+| Invariant Stable ID | Status | Evidence | Reason and Follow-up |
+|---------------------|--------|----------|----------------------|
+| {Every stable ID in the recorded bounded list, exactly once} | {preserved / violated / unverified} | {Result against the authoritative owner, recorded bounded graph, and representative adversarial counterexample} | {None, or mandatory reason and follow-up for violated / unverified} |
 
 ## Quality Gates
 | Type | Result | Evidence |

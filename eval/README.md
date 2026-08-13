@@ -27,6 +27,17 @@ all-or-nothing asserts: for load-bearing conclusions, run the complete
 `prepare -> eval` command three separate times and read per-metric
 results, not one pass/fail summary.
 
+The `fix-loop-convergence` suite probes the remediation-loop convergence
+rules with 11 decision scenarios, each run on **two providers** — the
+claude headless CLI (`eval/providers/claude-judge.sh`, model
+`claude-opus-5`) and the codex CLI (`eval/providers/codex-judge.sh`, model
+`gpt-5.6-luna`). Prompts are assembled at run time from the live
+`builtins/ja/facets` content (`eval/fix-loop-convergence-prompt.mjs`), so
+the suite always measures the current facet text. It needs both CLI
+logins, is excluded from the default suite run, and asserts on a fixed
+machine-readable `JUDGEMENT:` line — invoke it explicitly
+(`npm run eval:prompts:fix-loop-convergence`).
+
 ## Suites
 
 | Suite | Workflow / step | Fixture | Measures |
@@ -42,6 +53,7 @@ results, not one pass/fail summary.
 | `cqrs-coder` | backend-cqrs / implement | backend-cqrs (work copy) | artifact checks on the implemented change |
 | `fix-closure` | review-remediation / fix-retry | fix-closure (work copy) | whether verifier-return remediation closes every falsifiable obligation across multiple fix units and hierarchical projections instead of patching only the latest verifier example or relying on broad test success |
 | `fix-self-scan` | peer-review / fix | fix-self-scan (work copy) | whether the coder's post-edit self-scan removes change-induced dead code, keeps the declared layer direction, and consolidates duplicated override semantics instead of shipping a plan-complete but messy fix |
+| `fix-loop-convergence` | development-remediation / fix-retry, fix-verifier, fix, loop-monitor | inline scenario fixtures (`cases/fix-loop-convergence/`) | whether the convergence rules (invariant-recurrence trigger, ledger carry-forward, trigger monotonicity, established-invariants scan, monitor escape) steer each role's decision as intended, measured on both Claude Opus and Codex Luna Max |
 | `fix-plan-fresh-findings` | peer-review / fix-plan | fix-plan-fresh-findings | whether fix-plan uses the canonical actionable family, closes all same-invariant consumers, and does not revive non-actionable findings |
 | `fix-plan-boundary-preflight` | peer-review / fix-plan | fix-plan-boundary-preflight | whether fix-plan rejects a locally valid method that violates its representation and persistence boundary |
 | `review-family-closure` | peer-review-suite-base / coding-review | review-family-closure | whether one review reports every path affected by the same contract defect instead of stopping at a representative example |
