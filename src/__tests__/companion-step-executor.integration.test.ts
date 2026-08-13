@@ -9,6 +9,7 @@ import { buildCompanionMailboxPath } from '../core/workflow/companion/mailbox.js
 import { CompanionReviewAuthority } from '../core/workflow/companion/review-state-store.js';
 import { StepExecutor, type StepExecutorDeps } from '../core/workflow/engine/StepExecutor.js';
 import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engine/structured-output-normalizer.js';
+import { REVIEW_COMPLETION_JUDGE_NAME } from '../core/workflow/review-completion.js';
 import type { RunPaths } from '../core/workflow/run/run-paths.js';
 import { executeAgent } from '../agents/agent-usecases.js';
 import { initDebugLogger, resetDebugLogger } from '../shared/utils/debug.js';
@@ -228,7 +229,7 @@ describe('companion StepExecutor lifecycle', () => {
     let reviewerCalls = 0;
     let judgeCalls = 0;
     vi.mocked(executeAgent).mockImplementation(async (_persona, prompt, options) => {
-      if (options?.internalAgentName === 'review-completion-judge') {
+      if (options?.internalAgentName === REVIEW_COMPLETION_JUDGE_NAME) {
         judgeCalls++;
         timeline.push(`judge:${judgeCalls}`);
         return {

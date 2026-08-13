@@ -308,7 +308,7 @@ function enforceSerializedLimit(
     priorGapPaths,
     omissions,
   ));
-  trimTrailingItems(references, 'reference_candidate_limit', (retained, omissions) => buildEvidence(
+  trimTrailingItems(references, 'total_size_limit', (retained, omissions) => buildEvidence(
     files,
     currentDiff,
     retained,

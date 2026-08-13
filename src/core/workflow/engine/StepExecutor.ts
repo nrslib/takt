@@ -415,7 +415,7 @@ export class StepExecutor {
           });
           return decision;
         } catch (error) {
-          if (!usageRecorded) {
+          if (!usageRecorded && judgeProviderInfo.provider !== undefined) {
             this.deps.recordSynthesizedAgentUsage(
               REVIEW_COMPLETION_JUDGE_NAME,
               judgeProviderInfo,

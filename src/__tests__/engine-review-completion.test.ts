@@ -27,7 +27,9 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 import { runAgent } from '../agents/runner.js';
 import { WorkflowEngine } from '../core/workflow/index.js';
+import { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
 import { runReportPhase, runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
+import { REVIEW_COMPLETION_JUDGE_NAME } from '../core/workflow/review-completion.js';
 import { resolveCompiledProviderEnvironment } from '../infra/config/runtime-provider/provider-environment.js';
 import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 import {
@@ -535,6 +537,33 @@ describe('WorkflowEngine review completion wiring', () => {
       options.internalAgentName !== 'review-completion-judge'
     ))).toHaveLength(1);
     expect(JSON.stringify([...state.structuredOutputs.values()])).not.toContain('judge_unavailable');
+  });
+
+  it('preserves a judge provider-resolution failure when usage cannot be attributed', async () => {
+    const step = reviewStep('reviewer', {
+      reviewCompletion: { ...completion, maxRetry: 0 },
+    });
+    const resolveStepProviderModel = OptionsBuilder.prototype.resolveStepProviderModel;
+    const providerResolution = vi
+      .spyOn(OptionsBuilder.prototype, 'resolveStepProviderModel')
+      .mockImplementation(function (candidate, runtime) {
+        if (candidate.providerRoutingPersonaKey === REVIEW_COMPLETION_JUDGE_NAME) {
+          throw new Error('judge provider resolution failed');
+        }
+        return resolveStepProviderModel.call(this, candidate, runtime);
+      });
+    engine = new WorkflowEngine(normalConfig(step), cwd, 'task', { projectCwd: cwd, provider: 'mock' });
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      options.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: instruction });
+      return reviewerResponse(String(persona), 'authoritative report', 'review-session');
+    });
+
+    const state = await engine.run().finally(() => providerResolution.mockRestore());
+
+    expect(state.status).toBe('completed');
+    const phase2 = vi.mocked(runReportPhase).mock.calls[0]![2] as ReportPhaseRunnerContext;
+    expect(phase2.reviewCompletionDiagnostic).toContain('judge provider resolution failed');
+    expect(phase2.reviewCompletionDiagnostic).not.toContain('has no resolved provider');
   });
 
   it('uses only the mandatory retry when min_retry is one and the judge stays unavailable', async () => {

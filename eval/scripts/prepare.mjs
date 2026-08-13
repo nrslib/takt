@@ -197,7 +197,7 @@ const TARGETS = [
   },
   {
     id: 'companion-evidence-boundary',
-    companion: 'ai-antipattern-review-moderator',
+    companion: 'review-companion-moderator',
     fixture: 'eval/fixtures/companion-family-boundary',
   },
   { id: 'review-adjudication', workflow: 'peer-review', step: 'review-adjudication', fixture: 'eval/fixtures/review-adjudication' },

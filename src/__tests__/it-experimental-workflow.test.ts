@@ -271,6 +271,9 @@ function expectResolvedReviewCompletionRetryInstruction(
     'instructions',
     { projectDir, lang: language },
   );
+  if (typeof resolvedInstruction !== 'string') {
+    throw new Error(`Review completion instruction "${instructionRef}" could not be resolved`);
+  }
   expect(resolvedInstruction).not.toBe('');
   for (const { step } of reviewerSteps) {
     expect(step.reviewCompletion?.retryInstruction).toBe(resolvedInstruction);
