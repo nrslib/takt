@@ -30,7 +30,12 @@ function passesWithImplementation(workDir, source) {
     cpSync(join(workDir, 'tests'), join(tempDir, 'tests'), { recursive: true });
     cpSync(join(workDir, 'package.json'), join(tempDir, 'package.json'));
     writeFileSync(join(tempDir, 'src', 'retry-menu.js'), source);
-    execFileSync(process.execPath, ['--test'], { cwd: tempDir, stdio: 'pipe' });
+    execFileSync(process.execPath, ['--test'], {
+      cwd: tempDir,
+      stdio: 'pipe',
+      timeout: 10_000,
+      killSignal: 'SIGKILL',
+    });
     return true;
   } catch {
     return false;
