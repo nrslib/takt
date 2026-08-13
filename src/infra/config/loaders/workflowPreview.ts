@@ -11,6 +11,7 @@ import type { ProviderResolutionSource } from '../../../core/workflow/provider-o
 import {
   resolveRuleBasedAutoRoutingProviderInfo,
 } from '../../../core/workflow/auto-routing/resolver.js';
+import { hasAutoRoutingPoolAssignment } from '../../../core/workflow/auto-routing/selector.js';
 import {
   assertProviderResolvedForCapabilitySensitiveOptions,
   resolveAllowedToolsForProvider,
@@ -150,7 +151,14 @@ function resolvePreviewProviderInfo(
     tagConflictPolicy: resolution.tagConflictPolicy,
     permissionMode: resolution.permissionMode,
   });
-  if (resolution.autoRouting === undefined) {
+  if (
+    resolution.autoRouting === undefined
+    || !hasAutoRoutingPoolAssignment(resolution.autoRouting, {
+      name: step.name,
+      tags: step.tags,
+      personaKey: step.providerRoutingPersonaKey,
+    })
+  ) {
     return currentProviderInfo;
   }
   return resolveRuleBasedAutoRoutingProviderInfo({

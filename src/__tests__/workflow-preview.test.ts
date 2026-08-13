@@ -2,7 +2,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { getWorkflowDescription } from '../infra/config/loaders/workflowPreview.js';
+import type { AutoRoutingConfig, WorkflowConfig } from '../core/models/index.js';
+import {
+  getWorkflowDescription,
+  getWorkflowDescriptionFromConfig,
+} from '../infra/config/loaders/workflowPreview.js';
+import { withGlobalConfigDirOverride } from '../infra/config/paths.js';
 
 describe('getWorkflowDescription', () => {
   const tempRoots: string[] = [];
@@ -17,6 +22,42 @@ describe('getWorkflowDescription', () => {
     const root = mkdtempSync(join(tmpdir(), 'takt-workflow-preview-'));
     tempRoots.push(root);
     return root;
+  }
+
+  function createRuleBasedPreviewRouting(
+    poolRules?: AutoRoutingConfig['poolRules'],
+  ): AutoRoutingConfig {
+    return {
+      strategy: 'balanced',
+      router: { provider: 'mock', model: 'gpt-router' },
+      candidates: [{
+        name: 'rule-candidate',
+        description: 'Rule-based preview candidate',
+        provider: 'codex',
+        model: 'gpt-rule',
+        routingTier: 'medium',
+      }],
+      candidatePools: {
+        general: { candidates: ['rule-candidate'], fallback: 'rule-candidate' },
+      },
+      rules: { steps: { 'preview-auto-routing/implement': 'rule-candidate' } },
+      ...(poolRules === undefined ? {} : { poolRules }),
+    };
+  }
+
+  function createProgrammaticPreviewWorkflow(autoRouting: AutoRoutingConfig, model?: string): WorkflowConfig {
+    return {
+      name: 'preview-auto-routing',
+      initialStep: 'implement',
+      maxSteps: 1,
+      ...(model === undefined ? {} : { model }),
+      autoRouting,
+      steps: [{
+        name: 'implement',
+        instruction: 'Implement the task',
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      }],
+    } as WorkflowConfig;
   }
 
   it('dynamic parallel の mode と fixed/pool role、static child facet を preview に含める (DFP-002, DFP-008)', () => {
@@ -150,6 +191,39 @@ describe('getWorkflowDescription', () => {
           knowledgeRefs: [],
         }],
       },
+    });
+  });
+
+  it('pool未割当のauto-routing step ruleはdefaults previewを上書きしない', () => {
+    const projectDir = createProject();
+    const globalConfigDir = createProject();
+    const configDir = join(projectDir, '.takt');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: mock\nmodel: gpt-default\n');
+    const description = withGlobalConfigDirOverride(globalConfigDir, () => getWorkflowDescriptionFromConfig(
+      createProgrammaticPreviewWorkflow(createRuleBasedPreviewRouting(), 'gpt-default'),
+      projectDir,
+      1,
+    ));
+
+    expect(description.stepPreviews[0]).toMatchObject({ model: 'gpt-default' });
+    expect(description.stepPreviews[0]).toMatchObject({ provider: 'mock' });
+  });
+
+  it('明示的なpool割当があるauto-routing step ruleはrule-based previewを維持する', () => {
+    const projectDir = createProject();
+    const globalConfigDir = createProject();
+    const description = withGlobalConfigDirOverride(globalConfigDir, () => getWorkflowDescriptionFromConfig(
+      createProgrammaticPreviewWorkflow(
+        createRuleBasedPreviewRouting({ steps: { 'preview-auto-routing/implement': 'general' } }),
+      ),
+      projectDir,
+      1,
+    ));
+
+    expect(description.stepPreviews[0]).toMatchObject({
+      provider: 'codex',
+      model: 'gpt-rule',
     });
   });
 
