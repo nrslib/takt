@@ -80,6 +80,28 @@ The adjacent \`src/local-step-cache.js\` contract is preserved and outside this 
   assert.equal(result.pass, false);
 });
 
+test('rejects false-green evidence when only config uses the bare execute key', () => {
+  const review = `
+Result: REJECT
+
+The authoritative owner is \`docs/configuration.md\`. The workflow fixture
+\`workflows/sample-flow.json\` supplies \`sample-flow\` and \`execute\`, yielding
+the canonical \`sample-flow/execute\` identity. \`config/runtime.json\` alone stores
+the bare \`execute\` key, while the implementation in \`src/execution-target.js\`
+and \`src/preview-target.js\` resolves canonical \`sample-flow/execute\` through the
+execution and preview terminal paths. The green \`e2e/external-step.test.js\` is
+self-consistent with the canonical implementation. Canonical input still falls back
+to \`default-runner\`. Update the E2E test to require canonical
+\`sample-flow/execute\` behavior.
+
+The adjacent \`src/local-step-cache.js\` contract is preserved and outside this finding.
+`;
+
+  const result = assertInitialReviewExternalIdentityWiring(review);
+
+  assert.equal(result.pass, false);
+});
+
 test('rejects a review that turns the adjacent cache contract into a finding', () => {
   const review = completeReview.replace(
     '`e2e/external-step.test.js` |',

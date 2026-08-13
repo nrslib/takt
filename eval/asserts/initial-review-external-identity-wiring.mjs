@@ -120,6 +120,24 @@ function hasStandaloneExecuteEvidence(output, evidence) {
   return false;
 }
 
+function hasSharedNonCanonicalRepresentation(output) {
+  const statements = output
+    .replace(/\s+/g, ' ')
+    .split(/(?<=[.!?。！？])\s+/);
+  const implementation = /implementation|resolver|lookup|src\/(?:execution|preview)-target\.js|実装|解決処理|検索処理/i;
+  const fixtureOrTest = /fixture|test|e2e|テスト|フィクスチャ/i;
+  const shared = /\b(?:same|shared|share(?:s|d|ing)?|both|all)\b|同じ|共有|一致/i;
+  const nonCanonical = /raw|bare|short(?:ened)?|step\.name|短縮|生の|裸の/i;
+
+  return statements.some((statement) => (
+    implementation.test(statement)
+    && fixtureOrTest.test(statement)
+    && shared.test(statement)
+    && (nonCanonical.test(statement)
+      || hasStandaloneExecuteEvidence(statement, shared))
+  ));
+}
+
 function hasRejectVerdict(output) {
   return /(?:結果|判定|Result|Verdict)\s*:\s*(?:\*{1,2}|_{1,2}|`)?REJECT/i.test(output)
     || /^(?:#+\s*)?(?:[^\n（(]{0,40}[（(])?(?:\*{1,2}|_{1,2}|`)?REJECT(?:\*{1,2}|_{1,2}|`)?(?:[）)])?(?:\s+[—–-].*)?\s*$/im.test(output);
@@ -143,23 +161,23 @@ export default function assertInitialReviewExternalIdentityWiring(output) {
   const canonicalKey = /sample-flow\s*\/\s*execute/i;
   const defaultFallback = /default(?:-runner| target| fallback)|デフォルト(?:ターゲット|へ|に)|フォールバック/i;
   const falsePositiveEvidence = /(self[- ]consistent|false positive|green|pass(?:es|ed|ing)?|成功|通(?:る|って|過)|偽陽性|自己整合)/i;
-  const sharedRepresentationContext = /implementation|resolver|lookup|config|fixture|test|実装|設定|テスト/i;
-  const wrongSharedRepresentation = /(raw|bare|short(?:ened)?|step\.name|短縮|生の|裸の).{0,120}(?:implementation|resolver|lookup|config|fixture|test|実装|設定|テスト)|(?:implementation|resolver|lookup|config|fixture|test|実装|設定|テスト).{0,120}(?:raw|bare|short(?:ened)?|step\.name|短縮|生の|裸の)/is;
   const canonicalTestDemand = /(add|change|replace|require|assert|cover|update|追加|変更|置換|要求|検証|更新).{0,240}(?:test|e2e|テスト).{0,240}(?:canonical|sample-flow\s*\/\s*execute)|(?:test|e2e|テスト).{0,240}(?:add|change|replace|require|assert|cover|update|追加|変更|置換|要求|検証|更新).{0,240}(?:canonical|sample-flow\s*\/\s*execute)|(?:修正方針|fix suggestion|remediation).{0,500}canonical.{0,300}(?:期待値|case|ケース|test|e2e)/is;
   const hasConnectedIdentityEvidence = identityEvidenceBlocks.some((block) => (
     hasConnectedFamilyEvidence(block)
     && canonicalKey.test(block)
     && hasNearbyEvidence(block, 'sample-flow/execute', defaultFallback)
   ));
+  const hasFalseGreenEvidence = identityEvidenceBlocks.some((block) => (
+    falsePositiveEvidence.test(block)
+    && /e2e/i.test(block)
+    && hasSharedNonCanonicalRepresentation(block)
+  ));
   const checks = [
     ['reject-verdict', hasRejectVerdict(reviewOutput)],
     ['single-family-complete', hasConnectedIdentityEvidence],
     ['canonical-key-derived', hasConnectedIdentityEvidence],
     ['canonical-input-falls-to-default', hasConnectedIdentityEvidence],
-    ['false-green-explained', falsePositiveEvidence.test(reviewOutput)
-      && (wrongSharedRepresentation.test(reviewOutput)
-        || hasStandaloneExecuteEvidence(reviewOutput, sharedRepresentationContext))
-      && /e2e/i.test(reviewOutput)],
+    ['false-green-explained', hasFalseGreenEvidence],
     ['canonical-behavior-test-required', canonicalTestDemand.test(reviewOutput)],
     ['adjacent-path-classified', hasNearbyEvidence(
       reviewOutput,
