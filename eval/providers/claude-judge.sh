@@ -8,21 +8,35 @@ model="$1"
 prompt="$2"
 timeout_seconds="${CLAUDE_JUDGE_TIMEOUT_SECONDS:-600}"
 cd "$(dirname "$0")/.."
+tmp_dir=$(mktemp -d)
+prompt_file="$tmp_dir/prompt"
+timeout_marker="$tmp_dir/timed-out"
+trap 'rm -rf "$tmp_dir"' EXIT
+printf '%s' "$prompt" > "$prompt_file"
 
-printf '%s' "$prompt" | claude -p \
+set -m
+claude -p \
   --model "$model" \
-  --setting-sources=project 2>/dev/null &
+  --disallowedTools "*" \
+  --setting-sources=project < "$prompt_file" 2>/dev/null &
 claude_pid=$!
+set +m
 (
   sleep "$timeout_seconds"
-  kill -TERM "$claude_pid" 2>/dev/null || exit 0
+  : > "$timeout_marker"
+  kill -TERM -- "-$claude_pid" 2>/dev/null || exit 0
   sleep 15
-  kill -KILL "$claude_pid" 2>/dev/null || true
+  kill -KILL -- "-$claude_pid" 2>/dev/null || true
 ) >/dev/null 2>&1 &
 watchdog_pid=$!
 status=0
 wait "$claude_pid" || status=$?
-kill "$watchdog_pid" 2>/dev/null || true
+if [ -f "$timeout_marker" ]; then
+  wait "$watchdog_pid" 2>/dev/null || true
+else
+  kill "$watchdog_pid" 2>/dev/null || true
+  wait "$watchdog_pid" 2>/dev/null || true
+fi
 if [ "$status" -ne 0 ]; then
   echo "claude judge run failed or was killed after ${timeout_seconds}s (exit ${status})" >&2
 fi

@@ -65,7 +65,7 @@ tests:
     vars: { role: monitor, scenario: E07b }
     assert:
       - type: regex
-        value: 'JUDGEMENT: choice=(1|2)'
+        value: 'JUDGEMENT: choice=2'
   - description: E08 確立済み不変条件走査が持ち込み違反を検出する
     vars: { role: fix, scenario: E08 }
     assert:
@@ -77,11 +77,9 @@ tests:
     vars: { role: verifier, scenario: E09 }
     assert:
       - type: regex
-        value: 'JUDGEMENT: result=incomplete; recurrence=(非再発|判定不能); trigger=不成立; cumulative=1'
+        value: 'JUDGEMENT: result=incomplete; recurrence=判定不能（初回）; trigger=不成立; cumulative=1'
   - description: E10 一度成立したトリガーは同一経路の再失敗でも維持される
     vars: { role: verifier, scenario: E10 }
     assert:
       - type: regex
-        value: 'JUDGEMENT: result=incomplete'
-      - type: regex
-        value: 'trigger=成立; cumulative=3'
+        value: 'JUDGEMENT: result=incomplete; recurrence=非再発; trigger=成立; cumulative=3'

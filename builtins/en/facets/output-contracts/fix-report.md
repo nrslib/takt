@@ -34,7 +34,7 @@
 ## Established Invariant Diff Scan
 | Invariant Stable ID | Status | Evidence | Reason and Follow-up |
 |---------------------|--------|----------|----------------------|
-| {Every stable ID in the recorded bounded list, exactly once} | {preserved / violated / unverified} | {Result against the authoritative owner, recorded bounded graph, and representative adversarial counterexample} | {None, or mandatory reason and follow-up for violated / unverified} |
+| {Every stable ID in the recorded bounded list, exactly once} | {preserved / violated / unverified} | {Result against the authoritative owner and recorded bounded graph, with inspected path coverage from the counterexample set or exhaustive scan} | {None, or mandatory reason and follow-up for violated / unverified} |
 
 ## Quality Gates
 | Type | Result | Evidence |

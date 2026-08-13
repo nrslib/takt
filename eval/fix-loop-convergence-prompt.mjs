@@ -5,18 +5,19 @@
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { expandFacetIncludes } from 'faceted-prompting/cli/facet-includes';
 
 const EVAL_DIR = dirname(fileURLToPath(import.meta.url));
 const FACETS_ROOT = join(EVAL_DIR, '../builtins/ja/facets');
 
-function expandFacet(relativePath, seen = new Set()) {
-  const raw = readFileSync(join(FACETS_ROOT, relativePath), 'utf-8');
-  return raw.replace(/\{\{include:([a-z0-9/_-]+)\}\}/g, (_, ref) => {
-    const partialPath = `partials/${ref}.md`;
-    if (seen.has(partialPath)) return `(included above: ${ref})`;
-    seen.add(partialPath);
-    return expandFacet(partialPath, seen);
-  });
+function expandFacet(relativePath) {
+  const body = readFileSync(join(FACETS_ROOT, relativePath), 'utf-8');
+  return expandFacetIncludes({
+    body,
+    facetsRoots: [FACETS_ROOT],
+    repertoireDirs: [],
+    allowedRoots: [FACETS_ROOT],
+  }).body;
 }
 
 const DRY_RUN_NOTE = 'これは机上評価環境であり、実際のコード編集・コマンド実行はできない。編集内容は方針レベルの記述でよい。環境制約（編集・実行ができないこと）を「作業結果」や判定の選択理由にしてはならない。方針が修正境界内で実行可能なら、編集と対象テストが完了したものとみなして判定すること。instruction の判定手順と必須出力は厳密に守ること。レポート参照 {report:...} は本文中に実体を与える。';
