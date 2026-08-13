@@ -27,8 +27,34 @@ describe('review completion workflow contract', () => {
 
     expect(config.steps[0]?.reviewCompletion).toEqual({
       minRetry: 0,
-      maxRetry: 1,
+      maxRetry: 4,
       retryInstruction: 'Close only the supplied gaps.',
+    });
+  });
+
+  it('uses the internal ceiling when min_retry is set without max_retry', () => {
+    const config = normalizeWorkflowConfig(
+      workflow({ review_completion: { retry_instruction: 'retry', min_retry: 2 } }),
+      '/tmp/custom-review.yaml',
+      { lang: 'en' },
+    );
+
+    expect(config.steps[0]?.reviewCompletion).toMatchObject({
+      minRetry: 2,
+      maxRetry: 4,
+    });
+  });
+
+  it('preserves an explicitly configured zero retry bound', () => {
+    const config = normalizeWorkflowConfig(
+      workflow({ review_completion: { retry_instruction: 'retry', max_retry: 0 } }),
+      '/tmp/custom-review.yaml',
+      { lang: 'en' },
+    );
+
+    expect(config.steps[0]?.reviewCompletion).toMatchObject({
+      minRetry: 0,
+      maxRetry: 0,
     });
   });
 
@@ -61,10 +87,10 @@ describe('review completion workflow contract', () => {
     )).toThrow(/mode|Unrecognized key/);
   });
 
-  it('normalizes explicit retry bounds', () => {
+  it('normalizes explicit retry bounds beyond the internal ceiling', () => {
     const config = normalizeWorkflowConfig(
       workflow({
-        review_completion: { retry_instruction: 'retry', min_retry: 1, max_retry: 2 },
+        review_completion: { retry_instruction: 'retry', min_retry: 1, max_retry: 8 },
       }),
       '/tmp/custom-review.yaml',
       { lang: 'en' },
@@ -72,7 +98,7 @@ describe('review completion workflow contract', () => {
 
     expect(config.steps[0]?.reviewCompletion).toMatchObject({
       minRetry: 1,
-      maxRetry: 2,
+      maxRetry: 8,
     });
   });
 });

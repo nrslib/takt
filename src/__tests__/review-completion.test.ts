@@ -60,7 +60,7 @@ describe('review completion episode', () => {
     const result = await runReviewCompletionEpisode({
       config: {
         minRetry: 0,
-        maxRetry: 1,
+        maxRetry: 4,
         retryInstruction: 'close only the supplied gaps',
       },
       originalInstruction: 'review',
@@ -76,7 +76,34 @@ describe('review completion episode', () => {
       sessionId: 'review-session',
       instruction: expect.stringContaining('close only the supplied gaps'),
     }));
+    expect(executeRetry.mock.calls[0]?.[0].instruction).toContain('consumer.ts');
     expect(judge).toHaveBeenCalledTimes(2);
+    expect(result.diagnostic).toBeUndefined();
+  });
+
+  it('stops immediately when the judge confirms completeness', async () => {
+    const initial = response('complete review');
+    const executeRetry = vi.fn();
+    const result = await runReviewCompletionEpisode({
+      config: { minRetry: 0, maxRetry: 4, retryInstruction: 'retry' },
+      originalInstruction: 'review',
+      initialResponse: initial,
+      initialSessionId: initial.sessionId,
+      executeRetry,
+      judge: vi.fn().mockResolvedValue({
+        complete: true,
+        reason: 'complete',
+        missingObligations: [],
+      }),
+      isAbort: () => false,
+    });
+
+    expect(result).toMatchObject({
+      attempts: 1,
+      response: initial,
+    });
+    expect(result.diagnostic).toBeUndefined();
+    expect(executeRetry).not.toHaveBeenCalled();
   });
 
   it('returns a Phase 2 diagnostic without modifying the latest reviewer response', async () => {
@@ -98,6 +125,7 @@ describe('review completion episode', () => {
 
     expect(result.response).toBe(latest);
     expect(result.diagnostic?.kind).toBe('judge_unavailable');
+    expect(result.reviewerSessionId).toBe(latest.sessionId);
     expect(executeRetry).not.toHaveBeenCalled();
   });
 
@@ -151,6 +179,89 @@ describe('review completion episode', () => {
 
     expect(result.attempts).toBe(2);
     expect(result.diagnostic?.kind).toBe('max_retry_reached');
+    expect(result.diagnostic?.retriesUsed).toBe(1);
+    expect(result.diagnostic?.missingObligations).toEqual([{
+      kind: 'remediation_regression',
+      contractFamily: 'review-completion',
+      path: 'consumer.ts',
+      reason: 'regression remains',
+    }]);
+  });
+
+  it('stops at the internal ceiling when every completeness decision remains incomplete', async () => {
+    const missingObligation = {
+      kind: 'family_lifecycle_gap' as const,
+      contractFamily: 'config',
+      path: 'consumer.ts',
+      reason: 'unvisited',
+    };
+    const executeRetry = vi.fn(async ({ attemptIndex }: { attemptIndex: number }) => (
+      response(`retry-${attemptIndex}`, `retry-session-${attemptIndex}`)
+    ));
+    const judge = vi.fn().mockResolvedValue({
+      complete: false,
+      reason: 'gap remains',
+      missingObligations: [missingObligation],
+    });
+
+    const result = await runReviewCompletionEpisode({
+      config: { minRetry: 0, maxRetry: 4, retryInstruction: 'retry' },
+      originalInstruction: 'review',
+      initialResponse: response('initial'),
+      initialSessionId: 'review-session',
+      executeRetry,
+      judge,
+      isAbort: () => false,
+    });
+
+    expect(executeRetry).toHaveBeenCalledTimes(4);
+    expect(judge).toHaveBeenCalledTimes(5);
+    expect(result).toMatchObject({
+      attempts: 5,
+      diagnostic: {
+        kind: 'max_retry_reached',
+        retriesUsed: 4,
+        missingObligations: [missingObligation],
+      },
+    });
+  });
+
+  it('honors an explicit retry ceiling above the internal ceiling', async () => {
+    const missingObligation = {
+      kind: 'changed_target_gap' as const,
+      contractFamily: 'config',
+      path: 'consumer.ts',
+      reason: 'unvisited',
+    };
+    const executeRetry = vi.fn(async ({ attemptIndex }: { attemptIndex: number }) => (
+      response(`retry-${attemptIndex}`, `retry-session-${attemptIndex}`)
+    ));
+    const judge = vi.fn().mockResolvedValue({
+      complete: false,
+      reason: 'gap remains',
+      missingObligations: [missingObligation],
+    });
+
+    const result = await runReviewCompletionEpisode({
+      config: { minRetry: 0, maxRetry: 8, retryInstruction: 'retry' },
+      originalInstruction: 'review',
+      initialResponse: response('initial'),
+      initialSessionId: 'review-session',
+      executeRetry,
+      judge,
+      isAbort: () => false,
+    });
+
+    expect(executeRetry).toHaveBeenCalledTimes(8);
+    expect(judge).toHaveBeenCalledTimes(9);
+    expect(result).toMatchObject({
+      attempts: 9,
+      diagnostic: {
+        kind: 'max_retry_reached',
+        retriesUsed: 8,
+        missingObligations: [missingObligation],
+      },
+    });
   });
 
   it('uses one schema because the actual reviewer instruction defines scope', () => {

@@ -474,11 +474,11 @@ const WorkflowStepKindSchema = z.enum(['agent', 'system', 'workflow_call']);
 
 const ReviewCompletionOptionsRawSchema = z.object({
   min_retry: z.number().int().min(0).max(MAX_REVIEW_COMPLETION_RETRY).optional(),
-  max_retry: z.number().int().min(0).max(MAX_REVIEW_COMPLETION_RETRY).optional(),
+  max_retry: z.number().int().min(0).optional(),
   retry_instruction: WorkflowFacetRefOrParamSchema,
 }).strict().superRefine((data, ctx) => {
   const minRetry = data.min_retry ?? 0;
-  const maxRetry = data.max_retry ?? 1;
+  const maxRetry = data.max_retry ?? MAX_REVIEW_COMPLETION_RETRY;
   if (minRetry > maxRetry) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
