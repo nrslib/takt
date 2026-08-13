@@ -27,16 +27,26 @@ all-or-nothing asserts: for load-bearing conclusions, run the complete
 `prepare -> eval` command three separate times and read per-metric
 results, not one pass/fail summary.
 
-The `*-default-priority` suites run on the Claude headless CLI with model
-`opus` because they reproduce a primary-operation miss observed in an
-Opus-driven TAKT run. They are excluded from the default Codex suite and run
-together through `npm run eval:prompts:default-priority`. The three rows now
-follow the primary Requeue-to-runner path from selection and initial cursor
-through pending state, claim, and execution resolution to a fresh start; secondary checkpoint preservation is
-checked only as an explicit independent behavior. The write-tests row uses a
-disposable work copy, so rerun the complete command for each trial. Run
-`npm run eval:prompts:default-priority:codex` to cross-check the same three
-contracts with Codex; its mutable row uses a separate disposable work copy.
+The `write-tests-default-priority` suite runs on the Claude headless CLI with
+model `opus` because it reproduces a requirement-priority miss observed in an
+Opus-driven TAKT run. It is excluded from the default Codex suite and runs
+through `npm run eval:prompts:default-priority`. It verifies the primary manual
+Requeue-to-runner path from failed-leaf selection and initial cursor through
+pending persistence, normal runner claim, and fresh execution; checkpoint
+preservation is checked only as an explicit independent behavior. The suite
+uses a disposable work copy, so rerun the complete command for each trial.
+Run `npm run eval:prompts:default-priority:codex` to cross-check it with Codex.
+
+The `fix-loop-convergence` suite probes the remediation-loop convergence
+rules with 11 decision scenarios, each run on **two providers** — the
+claude headless CLI (`eval/providers/claude-judge.sh`, model
+`claude-opus-5`) and the codex CLI (`eval/providers/codex-judge.sh`, model
+`gpt-5.6-luna`). Prompts are assembled at run time from the live
+`builtins/ja/facets` content (`eval/fix-loop-convergence-prompt.mjs`), so
+the suite always measures the current facet text. It needs both CLI
+logins, is excluded from the default suite run, and asserts on a fixed
+machine-readable `JUDGEMENT:` line — invoke it explicitly
+(`npm run eval:prompts:fix-loop-convergence`).
 
 ## Suites
 
@@ -53,6 +63,7 @@ contracts with Codex; its mutable row uses a separate disposable work copy.
 | `cqrs-coder` | backend-cqrs / implement | backend-cqrs (work copy) | artifact checks on the implemented change |
 | `fix-closure` | review-remediation / fix-retry | fix-closure (work copy) | whether verifier-return remediation closes every falsifiable obligation across multiple fix units and hierarchical projections instead of patching only the latest verifier example or relying on broad test success |
 | `fix-self-scan` | peer-review / fix | fix-self-scan (work copy) | whether the coder's post-edit self-scan removes change-induced dead code, keeps the declared layer direction, and consolidates duplicated override semantics instead of shipping a plan-complete but messy fix |
+| `fix-loop-convergence` | development-remediation / fix-retry, fix-verifier, fix, loop-monitor | inline scenario fixtures (`cases/fix-loop-convergence/`) | whether the convergence rules (invariant-recurrence trigger, ledger carry-forward, trigger monotonicity, established-invariants scan, monitor escape) steer each role's decision as intended, measured on both Claude Opus and Codex Luna Max |
 | `fix-plan-fresh-findings` | peer-review / fix-plan | fix-plan-fresh-findings | whether fix-plan uses the canonical actionable family, closes all same-invariant consumers, and does not revive non-actionable findings |
 | `fix-plan-boundary-preflight` | peer-review / fix-plan | fix-plan-boundary-preflight | whether fix-plan rejects a locally valid method that violates its representation and persistence boundary |
 | `review-family-closure` | peer-review-suite-base / coding-review | review-family-closure | whether one review reports every path affected by the same contract defect instead of stopping at a representative example |
@@ -73,12 +84,10 @@ contracts with Codex; its mutable row uses a separate disposable work copy.
 | `follow-up-review-repair-regression` | peer-review / follow-up coding-review | follow-up-review-repair-regression | whether follow-up review independently falsifies completion claims and distinguishes repair-induced defects from adjacent omissions |
 | `follow-up-testing-review-repair-regression` | peer-review / follow-up testing-review | follow-up-review-repair-regression | whether test findings stay limited to missing regression detection in an authorized family and reject adjacent or structure-freezing test expansion |
 | `review-adjudication` | peer-review / review-adjudication | review-adjudication | whether adjudication separates technical validity from remediation authority, keeps accepted-family closure and diff-induced regressions actionable, and excludes even severe horizontal improvements from the fix plan |
-| `review-adjudication-default-priority` | peer-review / review-adjudication | review-adjudication-default-priority | whether adjudication keeps the primary Requeue-to-runner requirement actionable instead of weakening it to a secondary safety preference |
 | `task-instruction-gherkin` | interactive task summarization | direct English and Japanese conversations | whether implementation details and abstraction intent remain in Markdown while focused Gherkin captures only externally observable behavior |
 | `final-readiness-supervision` | review-fix-default / merge-readiness-review + supervise Phase 1 | final-readiness-supervision | whether both public final-gate producers independently authorize a newly discovered required consumer, explain its initial-round omission, and avoid horizontal exploration |
 | `final-readiness-preservation` | review-fix-default / merge-readiness-review + supervise Phase 2 | final-readiness-supervision | whether both public final-gate reports preserve the new finding and keep adjudicated noise non-actionable |
 | `final-readiness-precision` | peer-review / final-gate | final-readiness-precision | whether the final supervisor accepts a complete change without reopening an adjudicated documentation improvement |
-| `final-readiness-default-priority` | peer-review / final-gate | final-readiness-default-priority | whether the final supervisor reopens the same submitted finding when its secondary-path rationale contradicts the primary terminal consumer contract |
 
 Reviewer suites run read-only against `eval/fixtures/*`. Coder suites run
 with `sandbox_mode: workspace-write` in a disposable copy under `eval/.work/`

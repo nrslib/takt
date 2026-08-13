@@ -41,6 +41,7 @@ const SUITES = {
   'cqrs-coder': 'promptfooconfig.cqrs-coder.yaml',
   'fix-closure': 'promptfooconfig.fix-closure.yaml',
   'fix-self-scan': 'promptfooconfig.fix-self-scan.yaml',
+  'fix-loop-convergence': 'promptfooconfig.fix-loop-convergence.yaml',
   'fix-plan-fresh-findings': 'promptfooconfig.fix-plan-fresh-findings.yaml',
   'fix-plan-boundary-preflight': 'promptfooconfig.fix-plan-boundary-preflight.yaml',
   'review-family-closure': 'promptfooconfig.review-family-closure.yaml',
@@ -68,12 +69,8 @@ const SUITES = {
   'companion-early-scan': 'promptfooconfig.companion-early-scan.yaml',
   'companion-evidence-boundary': 'promptfooconfig.companion-evidence-boundary.yaml',
   'review-adjudication': 'promptfooconfig.review-adjudication.yaml',
-  'review-adjudication-default-priority': 'promptfooconfig.review-adjudication-default-priority.yaml',
-  'review-adjudication-default-priority-codex': 'promptfooconfig.review-adjudication-default-priority-codex.yaml',
   'final-readiness-supervision': 'promptfooconfig.final-readiness-supervision.yaml',
   'final-readiness-preservation': 'promptfooconfig.final-readiness-preservation.yaml',
-  'final-readiness-default-priority': 'promptfooconfig.final-readiness-default-priority.yaml',
-  'final-readiness-default-priority-codex': 'promptfooconfig.final-readiness-default-priority-codex.yaml',
   'task-instruction-gherkin': 'promptfooconfig.task-instruction-gherkin.yaml',
 };
 
@@ -94,16 +91,15 @@ for (const name of names) {
 // 弱いモデルの行は常に部分失敗するため、デフォルトのゲート実行からは除外する。
 // fix-self-scan は claude ヘッドレス CLI（要 claude ログイン）で走るため、
 // codex 前提のデフォルト実行からは除外し、明示的に呼び出す。
+// fix-loop-convergence も claude（opus）と codex（gpt-5.6-luna）の両ログインが
+// 必要な二重測定スイートのため、明示的に呼び出す。
 const DEFAULT_EXCLUDED = new Set([
   'rescan',
   'rescan-coding',
   'fix-self-scan',
+  'fix-loop-convergence',
   'write-tests-default-priority',
   'write-tests-default-priority-codex',
-  'review-adjudication-default-priority',
-  'review-adjudication-default-priority-codex',
-  'final-readiness-default-priority',
-  'final-readiness-default-priority-codex',
 ]);
 const selected = names.length > 0 ? names : Object.keys(SUITES).filter((s) => !DEFAULT_EXCLUDED.has(s));
 
