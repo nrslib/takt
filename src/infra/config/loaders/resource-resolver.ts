@@ -85,6 +85,12 @@ function isSelectorInstructionResourcePath(spec: string): boolean {
   return isResourcePath(spec) && !/\s/.test(spec);
 }
 
+function assertSelectorInstructionResourcePathExtension(spec: string): void {
+  if (isSelectorInstructionResourcePath(spec) && !spec.endsWith('.md')) {
+    throw new Error(`Selector instruction resource path must use a .md file: ${spec}`);
+  }
+}
+
 function selectorInstructionFacetRoots(
   context: FacetResolutionContext | undefined,
   includeRepertoireRoot: boolean,
@@ -183,6 +189,9 @@ export function resolveResourceContentWithSource(
 ): ResolvedFacetContent | undefined {
   if (spec == null) {
     return undefined;
+  }
+  if (selectorInstruction) {
+    assertSelectorInstructionResourcePathExtension(spec);
   }
   if (spec.endsWith('.md') && (!selectorInstruction || !/\s/.test(spec))) {
     const resolved = resolveResourcePath(spec, workflowDir);
@@ -654,6 +663,7 @@ export function resolveSelectorInstruction(
   workflowDir: string,
   context?: FacetResolutionContext,
 ): string | undefined {
+  assertSelectorInstructionResourcePathExtension(ref);
   return resolveRefToContentWithSource(
     ref,
     resolvedMap,
@@ -679,6 +689,7 @@ export function resolveRefToContentWithSource(
   if (mapped !== undefined) {
     const resolved = toResolvedContent(mapped, facetType, ref);
     if (options?.selectorInstruction && resolved.sourcePath !== undefined) {
+      assertSelectorInstructionResourcePathExtension(resolved.sourcePath);
       assertSelectorInstructionFileIsSafe(resolved.sourcePath, context);
     }
     if (

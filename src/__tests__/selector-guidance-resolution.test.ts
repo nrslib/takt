@@ -310,6 +310,39 @@ describe('selector guidance resolution', () => {
     });
   });
 
+  it('rejects a direct selector instruction resource path without a .md extension', () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-selector-guidance-direct-extension-'));
+    roots.push(projectDir);
+    const workflowDir = join(projectDir, '.takt', 'workflows');
+    mkdirSync(workflowDir, { recursive: true });
+
+    expect(() => normalizeInstructionFacetWorkflow(
+      createInstructionFacetWorkflow('./guide.txt'),
+      workflowDir,
+      { projectDir, workflowDir, lang: 'ja' },
+    )).toThrow('Selector instruction resource path must use a .md file: ./guide.txt');
+  });
+
+  it('rejects a selector instruction map value without a .md extension', () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-selector-guidance-map-extension-'));
+    roots.push(projectDir);
+    const workflowDir = join(projectDir, '.takt', 'workflows');
+    mkdirSync(workflowDir, { recursive: true });
+
+    const workflow = createInstructionFacetWorkflow('select.md');
+    workflow.instructions = {
+      implement: 'Implement the task.',
+      review: 'Review the task.',
+      'select.md': './guide.txt',
+    };
+
+    expect(() => normalizeInstructionFacetWorkflow(
+      workflow,
+      workflowDir,
+      { projectDir, workflowDir, lang: 'ja' },
+    )).toThrow('Selector instruction resource path must use a .md file: ./guide.txt');
+  });
+
   it.each(['facets', 'parallel'] as const)('rejects %s selector map sources when the referenced file is missing', (selector) => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-selector-guidance-map-missing-'));
     roots.push(projectDir);
@@ -546,6 +579,32 @@ describe('selector guidance resolution', () => {
         path: ['steps', 1, 'parallel', 'selection', 'selector', 'instruction'],
       }),
     ]));
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      message: 'step "reviewers" selector instruction references missing resource "missing-instruction"',
+    }));
+  });
+
+  it('includes selector instruction resolution errors in doctor diagnostics', () => {
+    const raw = WorkflowConfigRawSchema.parse(createInstructionFacetWorkflow('select-guidance'));
+    const sections = createSections(raw);
+    sections.resolvedInstructionsWithSource = {
+      'select-guidance': {
+        content: 'outside instruction',
+        sourcePath: '/outside/selector.md',
+      },
+    };
+    const diagnostics: Array<{
+      level: 'error' | 'warning';
+      message: string;
+      path?: readonly PropertyKey[];
+    }> = [];
+
+    validateWorkflowReferences(raw, sections, createResolutionContext(), diagnostics);
+
+    expect(diagnostics.some(({ message }) => (
+      message.includes('step "implement" selector instruction references missing resource "select-guidance"')
+      && message.includes('Selector instruction file must stay inside an allowed instruction facet root')
+    ))).toBe(true);
   });
 
   it('resolves a selector instruction from the project facet root by path', () => {

@@ -23,19 +23,30 @@ function isNamedRef(ref: string): boolean {
   return !isResourcePath(ref) && !/\s/.test(ref);
 }
 
+type RefResolution = boolean | {
+  resolved: boolean;
+  reason?: string;
+};
+
 function appendMissingRef(
   diagnostics: WorkflowDiagnostic[],
   label: string,
   ref: string | undefined,
-  resolver: () => boolean,
+  resolver: () => RefResolution,
   path: readonly PropertyKey[],
 ): void {
-  if (!ref || resolver()) {
+  if (!ref) {
     return;
   }
+  const result = resolver();
+  const resolved = typeof result === 'boolean' ? result : result.resolved;
+  if (resolved) {
+    return;
+  }
+  const reason = typeof result === 'boolean' ? undefined : result.reason;
   diagnostics.push({
     level: 'error',
-    message: `${label} references missing resource "${ref}"`,
+    message: `${label} references missing resource "${ref}"${reason === undefined ? '' : `: ${reason}`}`,
     path,
   });
 }
@@ -57,16 +68,21 @@ function canResolveSelectorInstruction(
   sections: WorkflowSections,
   workflowDir: string,
   context: FacetResolutionContext,
-): boolean {
+): { resolved: boolean; reason?: string } {
   try {
-    return resolveSelectorInstruction(
-      ref,
-      sections.resolvedInstructionsWithSource ?? sections.resolvedInstructions,
-      workflowDir,
-      context,
-    ) !== undefined;
-  } catch {
-    return false;
+    return {
+      resolved: resolveSelectorInstruction(
+        ref,
+        sections.resolvedInstructionsWithSource ?? sections.resolvedInstructions,
+        workflowDir,
+        context,
+      ) !== undefined,
+    };
+  } catch (error) {
+    return {
+      resolved: false,
+      reason: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 
