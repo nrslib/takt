@@ -72,3 +72,29 @@ test('rejects a review that turns the adjacent cache contract into a finding', (
   assert.equal(result.pass, false);
   assert.match(result.reason, /adjacent-path-not-a-finding/);
 });
+
+test('rejects canonical identity evidence distributed across separate findings', () => {
+  const review = `
+Result: REJECT
+
+## Finding F-1
+
+The authoritative owner is \`docs/configuration.md\`. The runtime configuration in
+\`config/runtime.json\` uses \`stepTargets\`, and \`src/execution-target.js\` reaches
+the terminal execution path. The canonical key is \`sample-flow/execute\`.
+
+## Finding F-2
+
+\`src/preview-target.js\` covers preview, while \`e2e/external-step.test.js\` is green.
+The raw \`step.name\` lookup shared by the config, implementation, and test is a
+self-consistent false positive. Canonical input falls back to \`default-runner\`.
+Update the E2E test to require canonical \`sample-flow/execute\` behavior.
+
+The adjacent \`src/local-step-cache.js\` contract is preserved and outside these findings.
+`;
+
+  const result = assertInitialReviewExternalIdentityWiring(review);
+
+  assert.equal(result.pass, false);
+  assert.match(result.reason, /single-family-complete/);
+});

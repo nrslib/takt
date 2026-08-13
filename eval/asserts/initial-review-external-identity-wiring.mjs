@@ -54,6 +54,49 @@ function extractFindingRows(output) {
   return rows;
 }
 
+function extractFindingBlocks(output) {
+  const lines = output.split('\n');
+  const starts = [];
+  const findingStart = /^\s{0,3}(?:#{1,6}\s*)?(?:finding|指摘)(?:\s+(?:id\s*)?)?[:#-]?\s*[A-Z]?-?\d+\b/i;
+  for (let index = 0; index < lines.length; index += 1) {
+    if (findingStart.test(lines[index])) starts.push(index);
+  }
+  return starts.map((start, index) => lines.slice(start, starts[index + 1] ?? lines.length).join('\n'));
+}
+
+function extractCanonicalEvidenceSections(output) {
+  const lines = output.split('\n');
+  const sections = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const heading = lines[index].match(/^\s{0,3}(#{1,6})\s+(.+)$/);
+    if (heading === null) continue;
+    if (!/(?:canonical.*(?:identity|contract)|(?:identity|contract).*canonical|正規.*(?:識別子|契約)|(?:識別子|契約).*正規)/i.test(heading[2])) {
+      continue;
+    }
+    const depth = heading[1].length;
+    let end = index + 1;
+    while (end < lines.length) {
+      const nextHeading = lines[end].match(/^\s{0,3}(#{1,6})\s+/);
+      if (nextHeading !== null && nextHeading[1].length <= depth) break;
+      end += 1;
+    }
+    sections.push(lines.slice(index, end).join('\n'));
+  }
+  return sections;
+}
+
+function extractIdentityEvidenceBlocks(output, findingRows) {
+  const findingBlocks = extractFindingBlocks(output);
+  const blocks = [
+    ...findingRows,
+    ...findingBlocks,
+    ...extractCanonicalEvidenceSections(output),
+  ];
+  const hasMultipleFindings = findingRows.length > 1 || findingBlocks.length > 1;
+  if (!hasMultipleFindings) blocks.push(output);
+  return [...new Set(blocks)];
+}
+
 function hasNearbyEvidence(output, anchor, evidence) {
   let index = output.indexOf(anchor);
   while (index >= 0) {
@@ -82,17 +125,22 @@ function hasConnectedFamilyEvidence(output) {
 export default function assertInitialReviewExternalIdentityWiring(output) {
   const reviewOutput = unwrapProviderOutput(output);
   const findingRows = extractFindingRows(reviewOutput);
+  const identityEvidenceBlocks = extractIdentityEvidenceBlocks(reviewOutput, findingRows);
   const canonicalKey = /sample-flow\s*\/\s*execute/i;
   const defaultFallback = /default(?:-runner| target| fallback)|デフォルト(?:ターゲット|へ|に)|フォールバック/i;
   const falsePositiveEvidence = /(self[- ]consistent|false positive|green|pass(?:es|ed|ing)?|成功|通(?:る|って|過)|偽陽性|自己整合)/i;
   const wrongSharedRepresentation = /(raw|bare|short(?:ened)?|step\.name|execute[^/]|短縮|生の|裸の).{0,120}(?:implementation|resolver|lookup|config|fixture|test|実装|設定|テスト)|(?:implementation|resolver|lookup|config|fixture|test|実装|設定|テスト).{0,120}(?:raw|bare|short(?:ened)?|step\.name|短縮|生の|裸の)/is;
   const canonicalTestDemand = /(add|change|replace|require|assert|cover|update|追加|変更|置換|要求|検証|更新).{0,240}(?:test|e2e|テスト).{0,240}(?:canonical|sample-flow\s*\/\s*execute)|(?:test|e2e|テスト).{0,240}(?:add|change|replace|require|assert|cover|update|追加|変更|置換|要求|検証|更新).{0,240}(?:canonical|sample-flow\s*\/\s*execute)|(?:修正方針|fix suggestion|remediation).{0,500}canonical.{0,300}(?:期待値|case|ケース|test|e2e)/is;
+  const hasConnectedIdentityEvidence = identityEvidenceBlocks.some((block) => (
+    hasConnectedFamilyEvidence(block)
+    && canonicalKey.test(block)
+    && hasNearbyEvidence(block, 'sample-flow/execute', defaultFallback)
+  ));
   const checks = [
     ['reject-verdict', hasRejectVerdict(reviewOutput)],
-    ['single-family-complete', hasConnectedFamilyEvidence(reviewOutput)],
-    ['canonical-key-derived', canonicalKey.test(reviewOutput)],
-    ['canonical-input-falls-to-default', canonicalKey.test(reviewOutput)
-      && hasNearbyEvidence(reviewOutput, 'sample-flow/execute', defaultFallback)],
+    ['single-family-complete', hasConnectedIdentityEvidence],
+    ['canonical-key-derived', hasConnectedIdentityEvidence],
+    ['canonical-input-falls-to-default', hasConnectedIdentityEvidence],
     ['false-green-explained', falsePositiveEvidence.test(reviewOutput)
       && wrongSharedRepresentation.test(reviewOutput)
       && /e2e/i.test(reviewOutput)],

@@ -1,3 +1,5 @@
+# Initial review: external identity wiring
+
 Review the cumulative implementation of external step target routing.
 
 The change adds a documented external step identity, a workflow fixture, runtime target configuration, execution and preview resolution, and an end-to-end test. A configured external target must be selected in both execution and preview; the default runner is only for steps without an explicit external target. Existing workflow-local cache behavior must remain intact.
