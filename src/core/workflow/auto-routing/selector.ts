@@ -80,7 +80,7 @@ export function hasAutoRoutingPoolAssignment(
   config: AutoRoutingConfig,
   step: RoutingPoolTarget,
 ): boolean {
-  return resolveExplicitPoolName(config, step) !== undefined || config.defaultPool !== undefined;
+  return resolveExplicitPoolName(config, step) !== undefined;
 }
 
 function resolvePoolName(config: AutoRoutingConfig, step: RoutingSelectionInput['step']): string {

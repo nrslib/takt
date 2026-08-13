@@ -1302,6 +1302,7 @@ describe('WorkflowEngine rate limit fallback', () => {
         ],
         defaultPool: 'general',
         candidatePools: { general: { candidates: ['balanced-claude'], fallback: 'balanced-claude' } },
+        poolRules: { tags: { implementation: 'general' }, steps: { implement: 'general' } },
         rules: {
           tags: {
             implementation: 'balanced-claude',

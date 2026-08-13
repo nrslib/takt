@@ -40,6 +40,7 @@ describe('getWorkflowDescription', () => {
       candidatePools: {
         general: { candidates: ['rule-candidate'], fallback: 'rule-candidate' },
       },
+      defaultPool: 'general',
       rules: { steps: { 'preview-auto-routing/implement': 'rule-candidate' } },
       ...(poolRules === undefined ? {} : { poolRules }),
     };

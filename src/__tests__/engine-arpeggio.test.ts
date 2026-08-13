@@ -223,6 +223,7 @@ describe('ArpeggioRunner integration', () => {
         candidatePools: {
           general: { candidates: ['batch'], fallback: 'batch' },
         },
+        poolRules: { steps: { process: 'general' } },
         rules: { steps: { process: 'batch' } },
       },
     });

@@ -24,6 +24,7 @@ function createAutoRoutingConfig(rules: AutoRoutingConfig['rules'] = {}): AutoRo
     ],
     defaultPool: 'general',
     candidatePools: { general: { candidates: ['terra', 'sol'], fallback: 'sol' } },
+    poolRules: { tags: { implementation: 'general' }, steps: { implement: 'general' } },
     rules,
   };
 }

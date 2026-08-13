@@ -275,6 +275,7 @@ describe('resolveStepProviderModel', () => {
         router: { provider: 'mock', model: 'router-model' },
         candidates: [],
         defaultPool: 'general',
+        poolRules: { steps: { implement: 'general' } },
       },
     });
 

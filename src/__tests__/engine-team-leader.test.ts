@@ -87,6 +87,11 @@ function createAutoRoutingConfig(): AutoRoutingConfig {
     candidatePools: {
       general: { candidates: ['coding'], fallback: 'coding' },
     },
+    poolRules: {
+      tags: { implementation: 'general' },
+      personas: { 'team-leader': 'general' },
+      steps: { implement: 'general' },
+    },
     rules: {
       tags: {
         implementation: 'coding',
@@ -417,6 +422,11 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       candidatePools: {
         general: { candidates: ['leader', 'coding'], fallback: 'leader' },
       },
+      poolRules: {
+        tags: { implementation: 'general' },
+        personas: { 'team-leader': 'general' },
+        steps: { implement: 'general' },
+      },
       rules: {
         tags: {
           implementation: 'coding',
@@ -578,6 +588,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       throw new Error('teamLeader configuration is required');
     }
     step.teamLeader.providerRoutingPersonaKey = 'team-leader';
+    step.teamLeader.partTags = ['implementation'];
     const secret = 'Authorization: Bearer TOP_SECRET_VALUE';
     const metadataSecret = 'UNIQUE_TEAM_LEADER_METADATA_SECRET';
     const credentialUrl = `https://${'a'.repeat(980)}:${metadataSecret}@example.com`;
@@ -608,6 +619,11 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       defaultPool: 'general',
       candidatePools: {
         general: { candidates: ['leader', 'coding'], fallback: 'leader' },
+      },
+      poolRules: {
+        tags: { implementation: 'general' },
+        personas: { 'team-leader': 'general' },
+        steps: { implement: 'general' },
       },
       rules: {
         personas: {
@@ -741,6 +757,12 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
 
   it('team leader の AI routing には raw instruction だけを渡し worker part instruction は渡さない', async () => {
     const config = buildTeamLeaderConfig();
+    const step = config.steps[0];
+    if (!step?.teamLeader) {
+      throw new Error('teamLeader configuration is required');
+    }
+    step.tags = ['implementation'];
+    step.teamLeader.partTags = ['implementation'];
     const autoRouting: AutoRoutingConfig = {
       ...createAutoRoutingConfig(),
       rules: undefined,
@@ -840,6 +862,10 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       defaultPool: 'general',
       candidatePools: {
         general: { candidates: ['leader', 'coding'], fallback: 'leader' },
+      },
+      poolRules: {
+        tags: { implementation: 'general' },
+        steps: { implement: 'general' },
       },
       rules: {
         tags: {
