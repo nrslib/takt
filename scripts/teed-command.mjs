@@ -16,6 +16,8 @@ export function runTeedCommand(executable, args, options) {
   const logStream = options?.logStream;
   return new Promise((resolve, reject) => {
     let child = spawn(executable, args, {
+      cwd: options?.cwd,
+      env: options?.env,
       stdio: ['inherit', 'pipe', 'pipe'],
       shell: false,
     });
