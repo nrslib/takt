@@ -224,6 +224,8 @@ async function runE2eMockShards(passthroughArgs) {
 }
 
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
-  const code = await runE2eMockShards(process.argv.slice(2));
-  process.exit(code);
+  // process.exit() would truncate teed shard output still flushing to the
+  // terminal; the exit code is set and the event loop drains naturally
+  // (runTeedCommand destroys lingering pipe ends at settle time).
+  process.exitCode = await runE2eMockShards(process.argv.slice(2));
 }

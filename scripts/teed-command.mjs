@@ -46,6 +46,12 @@ export function runTeedCommand(executable, args, options) {
       }
       isSettled = true;
       clearTimeout(drainTimer);
+      // A grandchild can inherit the child's pipe ends and keep them open past
+      // the drain deadline. Destroying our read ends releases them so a caller
+      // that sets process.exitCode can exit naturally instead of forcing
+      // process.exit while output is still flushing.
+      child.stdout.destroy();
+      child.stderr.destroy();
       const output = Buffer.concat(chunks).toString('utf8');
       child = null;
       chunks = [];

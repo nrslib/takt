@@ -41,6 +41,37 @@ describe('E2E mock shard birpc noise re-measurement', () => {
     expect(error).toHaveBeenCalledWith(expect.stringContaining('re-measuring this shard once'));
   });
 
+  it('should re-measure multiple noisy shards serially', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const shardOne = { shardNumber: 1, code: 1, signal: null, output: birpcNoiseOutput };
+    const shardTwo = { shardNumber: 2, code: 1, signal: null, output: birpcNoiseOutput };
+    const remeasuredOne = { shardNumber: 1, code: 0, signal: null, output: '' };
+    const remeasuredTwo = { shardNumber: 2, code: 0, signal: null, output: '' };
+    let finishFirstRemeasure: (result: typeof remeasuredOne) => void = () => undefined;
+    const remeasureShard = vi.fn((shardNumber: number) =>
+      shardNumber === 1
+        ? new Promise<typeof remeasuredOne>((resolve) => {
+            finishFirstRemeasure = resolve;
+          })
+        : Promise.resolve(remeasuredTwo),
+    );
+
+    const settledPromise = settleShardResults([shardOne, shardTwo], {
+      isCI: false,
+      remeasureShard,
+    });
+
+    expect(remeasureShard).toHaveBeenCalledTimes(1);
+    expect(remeasureShard).toHaveBeenCalledWith(1);
+
+    finishFirstRemeasure(remeasuredOne);
+    const settled = await settledPromise;
+
+    expect(remeasureShard).toHaveBeenCalledTimes(2);
+    expect(remeasureShard).toHaveBeenLastCalledWith(2);
+    expect(settled).toEqual([remeasuredOne, remeasuredTwo]);
+  });
+
   it('should not re-measure a shard with a real test failure', async () => {
     const output = birpcNoiseOutput.replace(
       '      Tests  28 passed (28)',
