@@ -6,6 +6,8 @@ import { runTakt } from '../helpers/takt-runner';
 import { createTestRepo, type TestRepo } from '../helpers/test-repo';
 import { readSessionRecords } from '../helpers/session-log';
 
+const INTERNAL_SELECTOR_PERSONA = 'takt-internal';
+
 function writeDynamicParallelFixture(
   repoPath: string,
   selectedIds: readonly string[] = ['frontend'],
@@ -451,7 +453,7 @@ describe('E2E: dynamic parallel selector (mock)', () => {
     expect(doctor.exitCode, `${doctor.stdout}\n${doctor.stderr}`).toBe(0);
     expect(runtime.exitCode, `${runtime.stdout}\n${runtime.stderr}`).toBe(0);
     const selectorStarts = readJsonl(mockCallLogPath)
-      .filter((record) => record.event === 'start' && record.personaName === 'dynamic-parallel-selector');
+      .filter((record) => record.event === 'start' && record.personaName === INTERNAL_SELECTOR_PERSONA);
     expect(selectorStarts).toEqual([
       expect.objectContaining({ provider: 'mock', model: 'cli-selector-model' }),
     ]);
@@ -506,7 +508,7 @@ describe('E2E: dynamic parallel selector (mock)', () => {
     expect(personaStartCount('agents/frontend')).toBe(expected.frontend * 2);
     expect(personaStartCount('agents/backend')).toBe(expected.backend * 2);
     const selectorStarts = providerStarts
-      .filter((record) => record.personaName === 'dynamic-parallel-selector');
+      .filter((record) => record.personaName === INTERNAL_SELECTOR_PERSONA);
     expect(selectorStarts).toHaveLength(expected.selectors);
     if (mode === 'cumulative') {
       const meta = JSON.parse(
@@ -671,7 +673,7 @@ describe('E2E: dynamic parallel selector (mock)', () => {
     expect(personaNames.filter((name) => name === 'agents/architecture')).toHaveLength(1);
     expect(personaNames.filter((name) => name === 'agents/frontend')).toHaveLength(0);
     expect(personaNames.filter((name) => name === 'agents/backend')).toHaveLength(1);
-    expect(personaNames.filter((name) => name === 'dynamic-parallel-selector')).toHaveLength(1);
+    expect(personaNames.filter((name) => name === INTERNAL_SELECTOR_PERSONA)).toHaveLength(1);
     expect(resumedStarts.every((record) => record.model === 'cli-resume-model')).toBe(true);
   }, 480_000);
 });

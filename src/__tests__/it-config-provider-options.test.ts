@@ -419,7 +419,7 @@ describe('IT: config provider_options reflection', () => {
         provider: 'claude',
         model: testCase.expectedModel,
         providerOptions: testCase.expectedOptions,
-        permissionMode: undefined,
+        permissionMode: 'readonly',
       },
     });
     expect(selectorLog).toMatchObject({
