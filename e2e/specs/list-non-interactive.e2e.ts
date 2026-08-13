@@ -318,6 +318,9 @@ describe('E2E: List tasks non-interactive (takt list)', () => {
             fallback: 'coding',
           },
         },
+        pool_rules: {
+          steps: { 'e2e-mock-single/execute': 'general' },
+        },
         rules: {
           steps: { execute: 'coding' },
         },
