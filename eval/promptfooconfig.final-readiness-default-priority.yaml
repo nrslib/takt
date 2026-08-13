@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'TAKT facet eval: final gate recovers from source-contradicting adjudication'
+
+prompts:
+  - file://prompts/final-readiness-default-priority.phase1.md
+
+providers:
+  - id: 'exec: bash providers/claude-review.sh opus fixtures/final-readiness-default-priority'
+    label: claude-opus
+
+tests:
+  - description: 'final gate: an existing source contradiction can invalidate non-actionable lock-in'
+    vars:
+      task: file://cases/final-readiness-default-priority-task.md
+      previous_response: ''
+    assert:
+      - type: javascript
+        metric: default-priority/final-gate-recovery
+        value: file://asserts/final-readiness-default-priority.mjs

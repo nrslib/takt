@@ -22,6 +22,14 @@ const MAX_SELECTOR_GIT_CONCURRENCY = 8;
 const MAX_SELECTOR_PATH_LIST_BYTES = 1024 * 1024;
 const TAKT_RUN_PATH_PREFIX = '.takt/runs/';
 
+type SelectorFileReadMode = 'complete' | 'truncated';
+
+interface SelectorFileRead {
+  readonly content: string;
+  readonly bytes: number;
+  readonly truncated: boolean;
+}
+
 export interface SelectorInputs {
   readonly reports: string;
   readonly workingTreeDiff: string;
@@ -115,15 +123,17 @@ export class SelectorInputReader {
       if (!stat.isFile() || stat.isSymbolicLink()) {
         throw new Error(`Selector report is not a regular file: ${relativePath}`);
       }
-      const content = this.readTextFileWithinLimit(
+      const file = this.readTextFile(
         reportPath,
         MAX_SELECTOR_ENTRY_BYTES,
         `Selector report "${relativePath}"`,
+        'complete',
       );
       const report = this.renderEntry(
         relativePath,
-        stat.size,
-        content,
+        file.bytes,
+        file.content,
+        'complete',
       );
       budget.consume(index === 0 ? report : `\n\n${report}`);
       return report;
@@ -150,13 +160,16 @@ export class SelectorInputReader {
       MAX_SELECTOR_ENTRY_BYTES,
       signal,
     );
-    if (result.bytes > MAX_SELECTOR_ENTRY_BYTES) {
-      throw new Error(`Dynamic selector path payload "${path}" exceeds ${MAX_SELECTOR_ENTRY_BYTES} bytes`);
-    }
+    const truncated = result.bytes > MAX_SELECTOR_ENTRY_BYTES;
     return this.renderEntry(
       path,
       result.bytes,
-      this.decodeUtf8(result.output, `Dynamic selector path payload "${path}"`),
+      this.decodeUtf8(
+        result.output,
+        `Dynamic selector path payload "${path}"`,
+        truncated,
+      ),
+      truncated ? 'truncated' : 'complete',
     );
   }
 
@@ -175,29 +188,51 @@ export class SelectorInputReader {
     const header = `diff --git a/${path} b/${path}\nnew file mode ${mode}\n--- /dev/null\n+++ b/${path}\n`;
     if (mode === '120000') {
       const content = `${header}Symbolic link target: ${readlinkSync(absolutePath)}`;
-      if (Buffer.byteLength(content, 'utf-8') > MAX_SELECTOR_ENTRY_BYTES) {
-        throw new Error(`Dynamic selector path payload "${path}" exceeds ${MAX_SELECTOR_ENTRY_BYTES} bytes`);
-      }
-      return this.renderEntry(path, Buffer.byteLength(content), content);
+      const sourceBytes = Buffer.byteLength(content, 'utf-8');
+      const bounded = this.boundUtf8Content(
+        content,
+        MAX_SELECTOR_ENTRY_BYTES,
+        `Dynamic selector path payload "${path}"`,
+      );
+      return this.renderEntry(
+        path,
+        sourceBytes,
+        bounded.content,
+        bounded.truncated ? 'truncated' : 'complete',
+      );
     }
-    const available = Math.max(0, MAX_SELECTOR_ENTRY_BYTES - Buffer.byteLength(header));
-    const content = this.readTextFileWithinLimit(
+    const headerBytes = Buffer.byteLength(header, 'utf-8');
+    const available = Math.max(0, MAX_SELECTOR_ENTRY_BYTES - headerBytes);
+    const file = this.readTextFile(
       absolutePath,
       available,
+      `Dynamic selector path payload "${path}"`,
+      'truncated',
+    );
+    const sourceBytes = headerBytes + file.bytes;
+    const bounded = this.boundUtf8Content(
+      `${header}${file.content}`,
+      MAX_SELECTOR_ENTRY_BYTES,
       `Dynamic selector path payload "${path}"`,
     );
     return this.renderEntry(
       path,
-      Buffer.byteLength(header) + stat.size,
-      `${header}${content}`,
+      sourceBytes,
+      bounded.content,
+      file.truncated || bounded.truncated ? 'truncated' : 'complete',
     );
   }
 
-  private renderEntry(path: string, bytes: number, content: string): string {
+  private renderEntry(
+    path: string,
+    bytes: number,
+    content: string,
+    status: 'complete' | 'truncated',
+  ): string {
     return [
       `## ${path}`,
       `Source bytes: ${bytes}`,
-      'Content status: complete',
+      `Content status: ${status}`,
       '',
       content,
     ].join('\n');
@@ -298,34 +333,56 @@ export class SelectorInputReader {
     }))];
   }
 
-  private readTextFileWithinLimit(
+  private readTextFile(
     path: string,
     maxBytes: number,
     sourceName: string,
-  ): string {
+    mode: SelectorFileReadMode,
+  ): SelectorFileRead {
     const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
     try {
       const stat = fstatSync(descriptor);
       if (!stat.isFile()) {
         throw new Error(`Selector input is not a regular file: ${path}`);
       }
-      if (stat.size > maxBytes) {
+      const truncated = mode === 'truncated' && stat.size > maxBytes;
+      if (mode === 'complete' && stat.size > maxBytes) {
         throw new Error(`${sourceName} exceeds ${MAX_SELECTOR_ENTRY_BYTES} bytes`);
       }
-      const content = Buffer.alloc(stat.size);
+      const bytesToRead = truncated ? maxBytes : stat.size;
+      const content = Buffer.alloc(bytesToRead);
       const readBytes = readSync(descriptor, content, 0, content.length, 0);
-      if (readBytes !== stat.size) {
+      if (readBytes !== bytesToRead) {
         throw new Error(`Unable to read complete selector input: ${path}`);
       }
-      return this.decodeUtf8(content, sourceName);
+      return {
+        content: this.decodeUtf8(content, sourceName, truncated),
+        bytes: stat.size,
+        truncated,
+      };
     } finally {
       closeSync(descriptor);
     }
   }
 
-  private decodeUtf8(content: Buffer, sourceName: string): string {
+  private boundUtf8Content(
+    content: string,
+    maxBytes: number,
+    sourceName: string,
+  ): { readonly content: string; readonly truncated: boolean } {
+    const bytes = Buffer.from(content, 'utf-8');
+    if (bytes.length <= maxBytes) {
+      return { content, truncated: false };
+    }
+    return {
+      content: this.decodeUtf8(bytes.subarray(0, maxBytes), sourceName, true),
+      truncated: true,
+    };
+  }
+
+  private decodeUtf8(content: Buffer, sourceName: string, truncated: boolean): string {
     try {
-      return new TextDecoder('utf-8', { fatal: true }).decode(content);
+      return new TextDecoder('utf-8', { fatal: true }).decode(content, { stream: truncated });
     } catch (error) {
       throw new Error(`${sourceName} is not valid UTF-8`, { cause: error });
     }
