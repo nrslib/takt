@@ -14,6 +14,7 @@ import {
   resolveAssistantScopedProviderModelFromConfig,
   resolveNonWorkflowProviderModelFromConfig,
 } from '../core/config/provider-resolution.js';
+import { resolveExecutableRoutingCandidates } from '../core/workflow/auto-routing/selector.js';
 import type { AutoRoutingConfig, ProjectConfig } from '../core/models/config-types.js';
 
 describe('resolveProviderModelCandidates', () => {
@@ -160,24 +161,41 @@ describe('resolveStepProviderModel', () => {
   });
 
   it('should leave an explicitly pooled target unresolved for auto routing', () => {
+    const autoRouting: AutoRoutingConfig = {
+      workflowName: 'e2e-mock-single',
+      strategy: 'balanced',
+      router: { provider: 'mock', model: 'router-model' },
+      candidates: [
+        { name: 'coding', provider: 'codex', model: 'gpt-5', routingTier: 'medium' },
+      ],
+      candidatePools: {
+        main: { candidates: ['coding'], fallback: 'coding' },
+      },
+      poolRules: { steps: { 'e2e-mock-single/execute': 'main' } },
+    };
     const result = resolveStepProviderModel({
       step: { name: 'execute', provider: undefined, model: undefined },
       provider: 'mock',
       providerSource: 'runtime-v1',
       model: 'runtime-default-model',
       modelSource: 'runtime-v1',
-      autoRouting: {
-        workflowName: 'e2e-mock-single',
-        strategy: 'balanced',
-        router: { provider: 'mock', model: 'router-model' },
-        candidates: [],
-        candidatePools: {},
-        poolRules: { steps: { 'e2e-mock-single/execute': 'main' } },
-      } as AutoRoutingConfig,
+      autoRouting,
     });
 
     expect(result.provider).toBeUndefined();
     expect(result.model).toBeUndefined();
+
+    const resolvedCandidates = resolveExecutableRoutingCandidates(autoRouting, {
+      name: 'execute',
+      tags: [],
+    });
+
+    expect(resolvedCandidates).toMatchObject({
+      poolName: 'main',
+      resolutionSource: 'auto.dynamic',
+      selectionCandidates: [{ name: 'coding' }],
+      fallbackCandidate: { name: 'coding' },
+    });
   });
 
   it('resolves a fully qualified runtime step target in the active workflow', () => {
