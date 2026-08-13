@@ -53,6 +53,12 @@ describe('selector guidance schema', () => {
     });
 
     expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        path: ['dynamic_facets', 'selector', 'instruction'],
+      }),
+    ]));
   });
 
   it.each([
@@ -88,6 +94,14 @@ describe('selector guidance schema', () => {
       rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
     }],
   ])('rejects unsupported selector fields for %s', (_label, step) => {
-    expect(WorkflowStepRawSchema.safeParse(step).success).toBe(false);
+    const result = WorkflowStepRawSchema.safeParse(step);
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    const path = _label === 'dynamic facet selector'
+      ? ['dynamic_facets', 'selector', 'policy']
+      : ['parallel', 'selection', 'selector', 'policy'];
+    expect(result.error.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path }),
+    ]));
   });
 });

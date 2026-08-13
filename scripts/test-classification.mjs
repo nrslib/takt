@@ -79,6 +79,7 @@ export const auditedIntegrationBoundaryTestFiles = Object.freeze([
   'src/__tests__/config.test.ts',
   'src/__tests__/debug.test.ts',
   'src/__tests__/eject-builtin-step-fragments.test.ts',
+  'src/__tests__/e2eMockShardsEntrypoint.test.ts',
   'src/__tests__/eject-facet.test.ts',
   'src/__tests__/exec-command.test.ts',
   'src/__tests__/exec-workflowTemplate.test.ts',

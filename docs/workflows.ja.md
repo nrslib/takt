@@ -336,38 +336,6 @@ TAKT は Normal / Parallel / Dynamic Parallel / Arpeggio / Team Leader / Workflo
 - 現在の diff には run 開始前から存在する変更も含まれます。run 中に commit された変更は `HEAD` との差分ではなくなるため、後続の selector 入力へ残ることを保証しません。前段レポートは別の証拠として引き続き参照できます。正常な空差分は明示的に渡します。非 Git directory、Git command の取得失敗、または `HEAD` が存在しない repository は agent 起動前に失敗します。
 - 保存する参加者 manifest のキーには workflow invocation path、workflow-call instance path、parallel step を含めます。report 継承と aggregate 評価はこの manifest を使用するため、`replace` により外れた reviewer の古い report や finding は現在 round に混入しません。
 
-#### selector guidance
-
-両方の selector 形式で、任意の `persona` guidance と必須の `instruction` guidance を指定できます。
-
-```yaml
-steps:
-  - name: fix
-    dynamic_facets:
-      pool: implementation
-      selector:
-        persona: facet-selector
-        instruction: select-implement-facets
-  - name: reviewers
-    parallel:
-      fixed: []
-      pool:
-        - name: backend
-          persona: backend-reviewer
-          description: backend の変更をレビューする
-          instruction: backend をレビューする
-          rules: [{ condition: approved }]
-      selection:
-        mode: replace
-        selector:
-          persona: reviewer-selector
-          instruction: select-reviewers
-```
-
-selector を設定した場合、`selector.instruction` は必須で、`persona` は任意です。selector guidance の責務は facet または participant の ID の選択方法を説明することだけです。証拠入力、structured output contract、候補検証、selection mode、read-only 実行、空の tools/MCP、permission bypass 無効は TAKT が管理します。selector は選択された agent の `persona`、`instruction`、provider、permission、tools、MCP 設定、output contract を変更できません。
-
-selector guidance は workflow 既存の persona と instruction resource を参照します。未知の selector key、空の selector、`instruction` のない selector、解決できない persona/instruction 参照は schema または workflow 検証時に設定 path 付きで失敗します。raw `$param` 参照は callable の引数展開後だけ有効で、callable でない workflow の未展開参照は拒否されます。
-
 ### Dynamic Facet Selection（facet pool）
 
 通常の agent step と `parallel` 配下の agent sub-step は、main agent の起動直前に、検証済み候補 pool から追加の `policy` / `knowledge` facet を動的に選択できます。step が既に宣言している固定 facet は維持したまま、現在の状況が必要とする facet だけを追加します。例えば、レビューで transaction 境界の懸念が指摘された後にだけ transaction-correctness policy を選ぶ、といった運用が可能です。
@@ -627,6 +595,38 @@ selector 実行時に次のいずれかが成立すると main agent 起動前�
 - 指定した `max_selected` の超過
 
 暗黙 fallback はありません。
+
+#### selector guidance
+
+両方の selector 形式で、任意の `persona` guidance と必須の `instruction` guidance を指定できます。
+
+```yaml
+steps:
+  - name: fix
+    dynamic_facets:
+      pool: implementation
+      selector:
+        persona: facet-selector
+        instruction: select-implement-facets
+  - name: reviewers
+    parallel:
+      fixed: []
+      pool:
+        - name: backend
+          persona: backend-reviewer
+          description: backend の変更をレビューする
+          instruction: backend をレビューする
+          rules: [{ condition: approved }]
+      selection:
+        mode: replace
+        selector:
+          persona: reviewer-selector
+          instruction: select-reviewers
+```
+
+selector を設定した場合、`selector.instruction` は必須で、`persona` は任意です。selector guidance の責務は facet または participant の ID の選択方法を説明することだけです。証拠入力、structured output contract、候補検証、selection mode、read-only 実行、空の tools/MCP、permission bypass 無効は TAKT が管理します。selector は選択された agent の `persona`、`instruction`、provider、permission、tools、MCP 設定、output contract を変更できません。
+
+selector guidance は workflow 既存の persona と instruction resource を参照します。未知の selector key、空の selector、`instruction` のない selector、解決できない persona/instruction 参照は schema または workflow 検証時に設定 path 付きで失敗します。raw `$param` 参照は callable の引数展開後だけ有効で、callable でない workflow の未展開参照は拒否されます。
 
 #### package、eject、authoring tool
 

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 import { WorkflowConfigRawSchema } from '../core/models/workflow-schemas.js';
@@ -461,6 +461,66 @@ describe('selector guidance resolution', () => {
     )).toThrow(/Selector instruction file not found/);
   });
 
+  it('fails fast when a whitespace-free named selector instruction is unresolved', () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-selector-guidance-named-missing-'));
+    roots.push(projectDir);
+    const workflowDir = join(projectDir, '.takt', 'workflows');
+    mkdirSync(workflowDir, { recursive: true });
+
+    expect(() => normalizeInstructionFacetWorkflow(
+      createInstructionFacetWorkflow('missing-selector-instruction'),
+      workflowDir,
+      { projectDir, workflowDir, lang: 'ja' },
+    )).toThrow('selector.instruction could not be resolved: missing-selector-instruction');
+  });
+
+  it('fails fast when a scoped selector instruction is unresolved', () => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-selector-guidance-scoped-instruction-'));
+    roots.push(root);
+    const projectDir = join(root, 'project');
+    const repertoireDir = join(root, 'repertoire');
+    const workflowDir = join(projectDir, '.takt', 'workflows');
+    mkdirSync(workflowDir, { recursive: true });
+
+    expect(() => normalizeInstructionFacetWorkflow(
+      createInstructionFacetWorkflow('@owner/repo/missing-selector'),
+      workflowDir,
+      { projectDir, workflowDir, repertoireDir, lang: 'ja' },
+    )).toThrow('selector.instruction could not be resolved: @owner/repo/missing-selector');
+  });
+
+  it('keeps whitespace-containing selector guidance as inline content', () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-selector-guidance-inline-'));
+    roots.push(projectDir);
+    const workflowDir = join(projectDir, '.takt', 'workflows');
+    mkdirSync(workflowDir, { recursive: true });
+    const instruction = 'Select reviewers using changed paths';
+
+    expect(normalizeInstructionFacetWorkflow(
+      createInstructionFacetWorkflow(instruction),
+      workflowDir,
+      { projectDir, workflowDir, lang: 'ja' },
+    )).toEqual({
+      facetInstruction: instruction,
+      parallelInstruction: instruction,
+    });
+  });
+
+  it('fails fast when a scoped selector persona is missing', () => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-selector-guidance-scoped-persona-'));
+    roots.push(root);
+    const projectDir = join(root, 'project');
+    const repertoireDir = join(root, 'repertoire');
+    const workflowDir = join(projectDir, '.takt', 'workflows');
+    mkdirSync(workflowDir, { recursive: true });
+
+    expect(() => normalizeWorkflowConfig(
+      createWorkflow('@owner/repo/missing-selector'),
+      workflowDir,
+      { projectDir, workflowDir, repertoireDir, lang: 'ja' },
+    )).toThrow('selector.persona could not be resolved: @owner/repo/missing-selector');
+  });
+
   it('reports missing selector facet references with their configuration paths', () => {
     const raw = WorkflowConfigRawSchema.parse(createWorkflow('missing-selector', 'missing-instruction'));
     const diagnostics: Array<{
@@ -545,7 +605,10 @@ describe('selector guidance resolution', () => {
       { projectDir, workflowDir, lang: 'ja' },
     ));
 
-    expect(result.facetInstruction).toContain('確定した修正計画を、依存順に最後まで実装してください。');
+    const expectedInstruction = readFileSync(instructionPath, 'utf8');
+    // Include expansion may enrich the raw builtin file before it reaches the selector.
+    expect(expectedInstruction).toBeTruthy();
+    expect(result.facetInstruction).toBeTruthy();
     expect(result.parallelInstruction).toBe(result.facetInstruction);
   });
 

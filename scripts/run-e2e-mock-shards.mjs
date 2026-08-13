@@ -143,7 +143,7 @@ export async function settleShardResults(results, { isCI, remeasureShard }) {
   return settledResults;
 }
 
-async function runShard(files, shardNumber, positionalFilters, vitestArgs) {
+export async function runShard(files, shardNumber, positionalFilters, vitestArgs) {
   const selectedFiles = selectFilesForFilters(files, positionalFilters);
   if (selectedFiles.length === 0) {
     return {

@@ -184,6 +184,29 @@ function materializePersona(
   owner.personaPath = addResource(resources, resourceKinds, prompt, 'prompt');
 }
 
+interface SelectorOwner {
+  readonly selector: { persona?: string; personaPath?: string };
+  readonly label: string;
+}
+
+function getSelectorOwners(step: WorkflowStep): readonly SelectorOwner[] {
+  const owners: SelectorOwner[] = [];
+  if (step.dynamicFacets?.selector !== undefined) {
+    owners.push({
+      selector: step.dynamicFacets.selector,
+      label: `dynamic facet selector for step "${step.name}"`,
+    });
+  }
+  if (step.parallel !== undefined && isDynamicParallelSubSteps(step.parallel)
+    && step.parallel.selection.selector !== undefined) {
+    owners.push({
+      selector: step.parallel.selection.selector,
+      label: `dynamic parallel selector for step "${step.name}"`,
+    });
+  }
+  return owners;
+}
+
 function materializeAgentStep(
   step: AgentWorkflowStep,
   customAgents: ReturnType<typeof loadCustomAgents>,
@@ -192,12 +215,8 @@ function materializeAgentStep(
   resourceKinds: Map<string, BundleManifest['resources'][string]['kind']>,
 ): void {
   materializePersona(step, customAgents, projectCwd, resources, resourceKinds);
-  if (step.dynamicFacets?.selector !== undefined) {
-    materializePersona(step.dynamicFacets.selector, customAgents, projectCwd, resources, resourceKinds);
-  }
-  if (step.parallel !== undefined && isDynamicParallelSubSteps(step.parallel)
-    && step.parallel.selection.selector !== undefined) {
-    materializePersona(step.parallel.selection.selector, customAgents, projectCwd, resources, resourceKinds);
+  for (const { selector } of getSelectorOwners(step)) {
+    materializePersona(selector, customAgents, projectCwd, resources, resourceKinds);
   }
   if (step.teamLeader !== undefined) {
     materializePersona(step.teamLeader, customAgents, projectCwd, resources, resourceKinds);
@@ -583,12 +602,8 @@ function rebindWorkflowResourcePaths(
   walkSteps(config.steps, (step) => {
     if (step.kind !== undefined && step.kind !== 'agent') return;
     rebindPersona(step);
-    if (step.dynamicFacets?.selector !== undefined) {
-      rebindPersona(step.dynamicFacets.selector);
-    }
-    if (step.parallel !== undefined && isDynamicParallelSubSteps(step.parallel)
-      && step.parallel.selection.selector !== undefined) {
-      rebindPersona(step.parallel.selection.selector);
+    for (const { selector } of getSelectorOwners(step)) {
+      rebindPersona(selector);
     }
     if (step.teamLeader !== undefined) {
       rebindPersona(step.teamLeader);
@@ -639,15 +654,8 @@ function validateMaterializedWorkflow(config: WorkflowConfig): void {
   walkSteps(config.steps, (step) => {
     if (step.kind !== undefined && step.kind !== 'agent') return;
     requireMaterializedPersona(step, `step "${step.name}"`);
-    if (step.dynamicFacets?.selector !== undefined) {
-      requireMaterializedPersona(step.dynamicFacets.selector, `dynamic facet selector for step "${step.name}"`);
-    }
-    if (step.parallel !== undefined && isDynamicParallelSubSteps(step.parallel)
-      && step.parallel.selection.selector !== undefined) {
-      requireMaterializedPersona(
-        step.parallel.selection.selector,
-        `dynamic parallel selector for step "${step.name}"`,
-      );
+    for (const { selector, label } of getSelectorOwners(step)) {
+      requireMaterializedPersona(selector, label);
     }
     if (step.teamLeader !== undefined) {
       requireMaterializedPersona(step.teamLeader, `team leader "${step.name}"`);

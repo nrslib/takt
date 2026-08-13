@@ -26,6 +26,7 @@ import {
   type WorkflowSections,
   extractPersonaDisplayName,
   isResourcePath,
+  isScopeRef,
   resolvePersona,
   resolveRefListWithSource,
   resolveRefToContent,
@@ -212,7 +213,11 @@ function normalizeSelectorGuidance(
       if (raw.persona.trim().length === 0) {
         throw new Error('selector.persona must not be empty');
       }
-      return resolvePersona(raw.persona, sections, workflowDir, context);
+      const resolved = resolvePersona(raw.persona, sections, workflowDir, context);
+      if (isScopeRef(raw.persona) && resolved.personaPath === undefined) {
+        throw new Error(`selector.persona could not be resolved: ${raw.persona}`);
+      }
+      return resolved;
     });
   const instruction = normalizeStepField(stepPath, [...selectorPath, 'instruction'], () => {
     if (typeof raw.instruction !== 'string') {

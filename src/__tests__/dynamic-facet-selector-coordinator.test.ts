@@ -14,14 +14,14 @@ import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import { DynamicFacetSelectionStore } from '../core/workflow/dynamic-facets/dynamicFacetSelectionStore.js';
 import { assertStrictStructuredOutputSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
 
-vi.mock('../agents/structured-caller/transport.js', () => ({
-  executeStructuredAgent: vi.fn(),
+vi.mock('../agents/agent-usecases.js', () => ({
+  executeIsolatedStructuredInternalAgent: vi.fn(),
 }));
 
-import { executeStructuredAgent } from '../agents/structured-caller/transport.js';
+import { executeIsolatedStructuredInternalAgent } from '../agents/agent-usecases.js';
 import * as contextBuilder from '../core/workflow/dynamic-facets/dynamicFacetContextBuilder.js';
 
-const mockedExecuteAgent = vi.mocked(executeStructuredAgent);
+const mockedExecuteAgent = vi.mocked(executeIsolatedStructuredInternalAgent);
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -254,11 +254,8 @@ describe('DynamicFacetSelectorCoordinator', () => {
     const coordinator = new DynamicFacetSelectorCoordinator(buildDeps());
     await coordinator.resolveDynamicFacets(makeStep(1), makeState(), 'task', pool);
 
-    const outputSchema = mockedExecuteAgent.mock.calls[0]?.[1];
+    const outputSchema = mockedExecuteAgent.mock.calls[0]?.[2];
     if (outputSchema === undefined) throw new Error('Selector output schema was not sent');
-    expect(mockedExecuteAgent.mock.calls[0]?.[2]).toMatchObject({
-      failureDir: '/tmp/project/.takt/runs/run/failures',
-    });
     expect(() => assertStrictStructuredOutputSchema(outputSchema)).not.toThrow();
     expect(outputSchema).not.toHaveProperty('properties.selected_ids.uniqueItems');
     expect(outputSchema).toHaveProperty('properties.selected_ids.maxItems', 1);

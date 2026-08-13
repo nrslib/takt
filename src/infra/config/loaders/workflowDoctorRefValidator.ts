@@ -5,8 +5,12 @@ import {
   isResourcePath,
   resolveFacetPath,
   resolvePersona,
+  resolveSelectorInstruction,
 } from './resource-resolver.js';
-import { isWorkflowParamReference } from './workflowCallableArgResolver.js';
+import {
+  collectSelectorInstructionRefs,
+  isWorkflowParamReference,
+} from './workflowCallableArgResolver.js';
 import type { FacetType } from '../paths.js';
 import type { WorkflowDiagnostic } from './workflowDoctorTypes.js';
 import { enumerateParallelSubSteps } from './workflowParallelTraversal.js';
@@ -46,6 +50,24 @@ function canResolveNamedFacetRef(
     return true;
   }
   return resolveFacetPath(ref, facetType, context) !== undefined;
+}
+
+function canResolveSelectorInstruction(
+  ref: string,
+  sections: WorkflowSections,
+  workflowDir: string,
+  context: FacetResolutionContext,
+): boolean {
+  try {
+    return resolveSelectorInstruction(
+      ref,
+      sections.resolvedInstructionsWithSource ?? sections.resolvedInstructions,
+      workflowDir,
+      context,
+    ) !== undefined;
+  } catch {
+    return false;
+  }
 }
 
 function collectNamedRefs(refs: string | string[] | undefined): string[] {
@@ -135,15 +157,9 @@ function collectUsedLocalKeys(raw: RawWorkflow): Record<'personas' | 'policies' 
     for (const ref of collectNamedRefsFromField(raw, step.dynamic_facets?.selector?.persona, ['facet_ref'], 'persona')) {
       used.personas.add(ref);
     }
-    for (const ref of collectNamedRefsFromField(raw, step.dynamic_facets?.selector?.instruction, ['facet_ref'], 'instruction')) {
-      used.instructions.add(ref);
-    }
     if (step.parallel !== undefined && !Array.isArray(step.parallel)) {
       for (const ref of collectNamedRefsFromField(raw, step.parallel.selection.selector?.persona, ['facet_ref'], 'persona')) {
         used.personas.add(ref);
-      }
-      for (const ref of collectNamedRefsFromField(raw, step.parallel.selection.selector?.instruction, ['facet_ref'], 'instruction')) {
-        used.instructions.add(ref);
       }
     }
     if (step.team_leader?.persona && isNamedRef(step.team_leader.persona)) {
@@ -176,6 +192,11 @@ function collectUsedLocalKeys(raw: RawWorkflow): Record<'personas' | 'policies' 
   };
   for (const step of raw.steps) {
     collectStep(step);
+  }
+  for (const ref of collectSelectorInstructionRefs(raw.steps, raw.subworkflow?.params)) {
+    if (isNamedRef(ref)) {
+      used.instructions.add(ref);
+    }
   }
   for (const monitor of raw.loop_monitors ?? []) {
     if (monitor.judge.persona && isNamedRef(monitor.judge.persona)) {
@@ -249,7 +270,7 @@ function validateStepRefs(
         diagnostics,
         `${label} selector instruction`,
         ref,
-        () => canResolveNamedFacetRef(ref, sections.resolvedInstructions, 'instructions', context),
+        () => canResolveSelectorInstruction(ref, sections, workflowDir, context),
         [...selectorPath, 'instruction'],
       );
     }

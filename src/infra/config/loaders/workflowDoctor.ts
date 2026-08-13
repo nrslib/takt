@@ -12,7 +12,10 @@ import {
   annotateWorkflowFragmentError,
   parseWorkflowRaw,
 } from './workflowRawParser.js';
-import { isMissingWorkflowCallArgError } from './workflowCallableArgResolver.js';
+import {
+  collectSelectorInstructionRefs,
+  isMissingWorkflowCallArgError,
+} from './workflowCallableArgResolver.js';
 import {
   findWorkflowInLookupDirs,
   getNamedWorkflowLookupDirs,
@@ -157,11 +160,17 @@ function buildSections(raw: RawWorkflow, context: FacetResolutionContext): Workf
   if (!workflowDir) {
     throw new Error('Workflow doctor facet resolution requires workflowDir');
   }
+  const selectorInstructionRefs = collectSelectorInstructionRefs(
+    raw.steps,
+    raw.subworkflow?.params,
+  );
   const resolvedInstructionsWithSource = resolveSectionMapWithSource(
     raw.instructions,
     workflowDir,
     'instructions',
     context,
+    undefined,
+    selectorInstructionRefs,
   );
   const resolvedKnowledgeWithSource = resolveSectionMapWithSource(raw.knowledge, workflowDir, 'knowledge', context);
   const resolvedPoliciesWithSource = resolveSectionMapWithSource(raw.policies, workflowDir, 'policies', context);

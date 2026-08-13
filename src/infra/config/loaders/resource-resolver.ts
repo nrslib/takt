@@ -40,6 +40,7 @@ export {
   resolveResourcePath,
   resolveSectionMap,
   extractPersonaDisplayName,
+  isScopeRef,
 } from 'faceted-prompting';
 
 export type { FacetResolutionContext } from './workflowPackageScope.js';
@@ -695,6 +696,10 @@ export function resolveRefToContentWithSource(
       : undefined;
   }
 
+  if (options?.selectorInstruction === true && isScopeRef(ref)) {
+    return undefined;
+  }
+
   if (isResourcePath(ref)) {
     if (options?.selectorInstruction) {
       assertSelectorInstructionFileIsSafe(resolveResourcePath(ref, workflowDir), context);
@@ -735,7 +740,23 @@ export function resolveRefToContentWithSource(
     return undefined;
   }
 
-  const resource = resolveResourceContentWithSource(ref, workflowDir, facetType, ref, context, options?.trustedRoot);
+  // Selector guidance treats a whitespace-free bare value as a named facet
+  // reference. Do not silently turn a missing name into the instruction text;
+  // whitespace-containing values remain supported as inline guidance.
+  if (options?.selectorInstruction === true && isBareName && !/\s/.test(ref)) {
+    return undefined;
+  }
+
+  const resource = resolveResourceContentWithSource(
+    ref,
+    workflowDir,
+    facetType,
+    ref,
+    context,
+    options?.trustedRoot,
+    undefined,
+    options?.selectorInstruction === true,
+  );
   return resource
     ? applyFacetIncludes(expandFacetInheritance(resource, facetType, context, [], options?.selectorInstruction === true), context)
     : undefined;

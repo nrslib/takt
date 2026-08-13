@@ -6,7 +6,13 @@ import { callMock, callMockCustom, type MockCallOptions } from '../mock/index.js
 import type { AgentResponse } from '../../core/models/index.js';
 import { keepsAllowedToolWithoutEdit as keepsClaudeAllowedToolWithoutEdit } from './allowed-tool-edit-policy.js';
 import { createLogger } from '../../shared/utils/index.js';
-import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from './types.js';
+import {
+  assertOutputSchema,
+  type AgentSetup,
+  type Provider,
+  type ProviderAgent,
+  type ProviderCallOptions,
+} from './types.js';
 
 const log = createLogger('mock-provider');
 
@@ -29,6 +35,7 @@ function toMockOptions(options: ProviderCallOptions): MockCallOptions {
 /** Mock provider — deterministic responses for testing */
 export class MockProvider implements Provider {
   readonly supportsStructuredOutput = true;
+  readonly supportsIsolatedStructuredExecution = true;
   readonly supportsNativeImageInput = false;
 
   getRuntimeInstructions(_allowedTools?: string[]): string | null {
@@ -54,4 +61,22 @@ export class MockProvider implements Provider {
     };
   }
 
+  setupIsolatedStructured(config: AgentSetup): ProviderAgent {
+    const { name, systemPrompt } = config;
+    const call = (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> => {
+      const isolatedOptions: ProviderCallOptions = {
+        ...options,
+        sessionId: undefined,
+        internalAgentIsolation: 'strict-readonly',
+        permissionMode: 'readonly',
+        allowedTools: [],
+        mcpServers: undefined,
+        imageAttachments: undefined,
+        outputSchema: assertOutputSchema(options.outputSchema, 'mock'),
+      };
+      const fullPrompt = systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt;
+      return callMockCustom(name, fullPrompt, '', toMockOptions(isolatedOptions));
+    };
+    return { call };
+  }
 }

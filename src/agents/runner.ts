@@ -170,6 +170,7 @@ export class AgentRunner {
       cwd: options.cwd,
       abortSignal: options.abortSignal,
       sessionId: options.sessionId,
+      internalAgentIsolation: options.internalAgentIsolation,
       allowedTools: options.allowedTools,
       mcpServers: options.mcpServers,
       ...(options.maxTurns !== undefined ? { maxTurns: options.maxTurns } : {}),
@@ -264,7 +265,16 @@ export class AgentRunner {
     const resolution = AgentRunner.resolveExecution(options.cwd, personaName, options);
     const provider = getProvider(resolution.provider);
     const callOptions = AgentRunner.buildCallOptions(resolution, options);
-    const setupAgent = provider.setup.bind(provider);
+    const setupAgent = (agentSetup: { name: string; systemPrompt?: string }) => {
+      if (options.executionProfile !== 'isolated-structured') {
+        return provider.setup(agentSetup);
+      }
+      const isolatedAgent = provider.setupIsolatedStructured?.(agentSetup);
+      if (isolatedAgent === undefined) {
+        throw new Error(`Provider "${resolution.provider}" does not support isolated structured execution`);
+      }
+      return isolatedAgent;
+    };
 
     if (options.internalSystemPrompt !== undefined) {
       const personaDefinition = options.personaPath === undefined
