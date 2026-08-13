@@ -163,6 +163,44 @@ describe('Claude terminal client', () => {
     expect(args).not.toContain('--disable-slash-commands');
   });
 
+  it('Given strict-readonly isolation, When terminal lifecycle starts, Then the command is tool, settings, MCP, and Skills free', async () => {
+    const backend = createBackend();
+    const transcriptReader = createTranscriptReader({
+      sessionId: 'claude-session-1',
+      assistantText: 'done',
+      events: [],
+    });
+
+    await callClaudeTerminal('selector', 'select reviewers', {
+      cwd: '/tmp/worktree',
+      backend: 'tmux',
+      internalAgentIsolation: 'strict-readonly',
+      allowedTools: ['Read'],
+      mcpServers: {
+        docs: { type: 'stdio', command: 'docs-mcp', args: ['serve'] },
+      },
+      permissionMode: 'readonly',
+      bypassPermissions: false,
+      skillsEnabled: true,
+      terminalBackend: backend,
+      transcriptReader,
+    });
+
+    const args = vi.mocked(backend.start).mock.calls[0]?.[0].command.args ?? [];
+    expect(args).toEqual(expect.arrayContaining([
+      '--tools',
+      '',
+      '--strict-mcp-config',
+      '--setting-sources',
+      '',
+      '--disable-slash-commands',
+      '--permission-mode',
+      'default',
+    ]));
+    expect(args).not.toContain('--allowed-tools');
+    expect(args).not.toContain('--mcp-config');
+  });
+
   it('Given disabled Skills, When terminal lifecycle runs, Then it keeps slash commands disabled while starting, prompting, receiving, and stopping the session', async () => {
     const backend = createBackend();
     const transcriptReader = createTranscriptReader({

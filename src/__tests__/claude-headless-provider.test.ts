@@ -236,6 +236,38 @@ describe('ClaudeHeadlessProvider', () => {
       skillsEnabled: false,
     }));
   });
+
+  it('Given isolated structured execution, When the provider calls the headless client, Then it forwards the strict marker and cleared ambient inputs', async () => {
+    callClaudeHeadlessMock.mockResolvedValue({
+      persona: 'selector',
+      status: 'done',
+      content: 'ok',
+      timestamp: new Date(),
+    });
+    const agent = new ClaudeHeadlessProvider().setupIsolatedStructured({
+      name: 'selector',
+      systemPrompt: 'Select reviewers.',
+    });
+
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      sessionId: 'ambient-session',
+      allowedTools: ['Read'],
+      mcpServers: { docs: { command: 'docs-mcp', args: ['serve'] } },
+      outputSchema: {
+        type: 'object',
+        properties: { decision: { type: 'string' } },
+      },
+    });
+
+    expect(callClaudeHeadlessMock).toHaveBeenCalledWith('selector', 'Select reviewers.\n\nprompt', expect.objectContaining({
+      internalAgentIsolation: 'strict-readonly',
+      sessionId: undefined,
+      skillsEnabled: false,
+      allowedTools: [],
+      mcpServers: undefined,
+    }));
+  });
 });
 
 describe('ProviderRegistry with Claude headless', () => {

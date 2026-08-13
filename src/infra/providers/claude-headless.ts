@@ -20,6 +20,7 @@ function toHeadlessOptions(options: ProviderCallOptions): ClaudeHeadlessCallOpti
     cwd: options.cwd,
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
+    internalAgentIsolation: options.internalAgentIsolation,
     model: options.model,
     anthropicApiKey: options.anthropicApiKey ?? resolveAnthropicApiKey(),
     baseUrl: claudeOptions?.baseUrl,

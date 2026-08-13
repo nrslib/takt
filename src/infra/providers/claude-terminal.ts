@@ -56,6 +56,7 @@ function toTerminalOptions(options: ProviderCallOptions): ClaudeTerminalCallOpti
     cwd: options.cwd,
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
+    internalAgentIsolation: options.internalAgentIsolation,
     model: options.model,
     effort: claudeOptions?.effort,
     skillsEnabled,
