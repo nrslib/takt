@@ -28,10 +28,15 @@ export default function assertFinalReadinessDefaultPriority(output) {
     ['source-contradiction', /(?:requirements\.md|requirement|要件|受入条件|primary source|正本)/i.test(evidence)
       && /(?:current implementation|現在(?:の)?実装|現在(?:の)?コード|現行実装)/i.test(evidence)
       && /(?:contradict|conflict|violate|unmet|missing|omits|矛盾|違反|不一致|未達|欠落|省略|読み替え|逆)/i.test(evidence)
-      && /(?:Requeue|再投入|再キュー)/i.test(evidence)
-      && /(?:pending|restartPoint|保留|再実行位置)/i.test(evidence)
-      && /(?:runner|takt run|通常実行)/i.test(evidence)
-      && /(?:fresh|selected leaf|failed leaf|選択(?:した)?(?:失敗)?leaf|新規実行)/i.test(evidence)],
+      && /(?:manual(?:ly)?(?:[- ]triggered)?\s+Requeue|手動(?:の|で)?\s*(?:Requeue|再投入|再キュー))/i.test(evidence)
+      && /(?:default|既定(?:値)?|デフォルト)/i.test(evidence)
+      && /(?:initial cursor|初期カーソル)/i.test(evidence)
+      && /(?:pending|保留)/i.test(evidence)
+      && /(?:restartPoint|再実行位置)/i.test(evidence)
+      && /(?:normal[- ]runner|takt run|通常(?:の)?(?:runner|ランナー|実行))/i.test(evidence)
+      && /(?:claim(?:ed|ing|s)?|取得)/i.test(evidence)
+      && /(?:fresh|新規実行)/i.test(evidence)
+      && /(?:selected leaf|failed leaf|選択(?:した)?\s*(?:失敗)?\s*leaf|失敗\s*leaf)/i.test(evidence)],
     ['existing-family', /^EXISTING\s+AIP-PRIMARY-1$/i.test(fields.family?.value ?? '')],
     ['weakening-evidence', /(?:best[- ]?effort|optional|safe(?:r)? default|safety preference|任意|安全|努力目標)/i.test(evidence)],
   ];

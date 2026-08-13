@@ -18,4 +18,4 @@ Keep the result, source contradiction, family identity, rejected weakening, and 
 
 The primary source includes the manual Requeue default and initial cursor, persistence of the selected `restartPoint` on a pending task, the normal runner's claim of that task, and execution resolution starting fresh at the selected leaf. Require evidence for that complete path; do not treat a secondary checkpoint preference as a substitute for it. Automatic requeue inside the runner is a separate path outside this case.
 
-Write each named field exactly once at the top level of the block. Continuation lines belong to the preceding field; do not use quoted or example field declarations as substitutes for the actual fields.
+Write each named field exactly once at the top level of the block. Continuation lines belong to the preceding field; do not use quoted or example field declarations as substitutes for the actual fields. Inside `evidence`, never start a continuation line with `result:`, `disposition:`, `authority:`, `family:`, `source_contradiction:`, `weakening:`, or `evidence:`; refer to those concepts without repeating field declarations.
