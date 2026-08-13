@@ -81,6 +81,10 @@ function isPathInsideOrSame(basePath: string, targetPath: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 
+function isSelectorInstructionResourcePath(spec: string): boolean {
+  return isResourcePath(spec) && !/\s/.test(spec);
+}
+
 function selectorInstructionFacetRoots(
   context: FacetResolutionContext | undefined,
   includeRepertoireRoot: boolean,
@@ -180,7 +184,7 @@ export function resolveResourceContentWithSource(
   if (spec == null) {
     return undefined;
   }
-  if (spec.endsWith('.md')) {
+  if (spec.endsWith('.md') && (!selectorInstruction || !/\s/.test(spec))) {
     const resolved = resolveResourcePath(spec, workflowDir);
     if (existsSync(resolved)) {
       if (selectorInstruction) {
@@ -658,7 +662,7 @@ export function resolveSelectorInstruction(
     context,
     {
       selectorInstruction: true,
-      ...(isResourcePath(ref) ? { requireFile: true } : {}),
+      ...(isSelectorInstructionResourcePath(ref) ? { requireFile: true } : {}),
     },
   )?.content;
 }
@@ -676,6 +680,29 @@ export function resolveRefToContentWithSource(
     const resolved = toResolvedContent(mapped, facetType, ref);
     if (options?.selectorInstruction && resolved.sourcePath !== undefined) {
       assertSelectorInstructionFileIsSafe(resolved.sourcePath, context);
+    }
+    if (
+      options?.requireFile === true
+      && resolved.sourcePath === undefined
+      && (options.selectorInstruction
+        ? isSelectorInstructionResourcePath(resolved.content)
+        : resolved.content.endsWith('.md'))
+    ) {
+      const resource = resolveResourceContentWithSource(
+        resolved.content,
+        workflowDir,
+        facetType,
+        ref,
+        context,
+        options.trustedRoot,
+        true,
+        options.selectorInstruction === true,
+      );
+      if (resource === undefined) return undefined;
+      return applyFacetIncludes(
+        expandFacetInheritance(resource, facetType, context, [], options.selectorInstruction === true),
+        context,
+      );
     }
     return applyFacetIncludes(expandFacetInheritance(resolved, facetType, context, [], options?.selectorInstruction === true), context);
   }
@@ -701,10 +728,19 @@ export function resolveRefToContentWithSource(
   }
 
   if (isResourcePath(ref)) {
-    if (options?.selectorInstruction) {
+    if (options?.selectorInstruction && isSelectorInstructionResourcePath(ref)) {
       assertSelectorInstructionFileIsSafe(resolveResourcePath(ref, workflowDir), context);
     }
-    const resource = resolveResourceContentWithSource(ref, workflowDir, facetType, ref, context, options?.trustedRoot, options?.requireFile);
+    const resource = resolveResourceContentWithSource(
+      ref,
+      workflowDir,
+      facetType,
+      ref,
+      context,
+      options?.trustedRoot,
+      options?.requireFile,
+      options?.selectorInstruction === true,
+    );
     return resource
       ? applyFacetIncludes(expandFacetInheritance(resource, facetType, context, [], options?.selectorInstruction === true), context)
       : undefined;

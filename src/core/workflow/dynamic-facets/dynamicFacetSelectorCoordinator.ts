@@ -30,7 +30,7 @@ const SELECTOR_RATIONALE_LOG_MAX_BYTES = 1024;
 
 export interface DynamicFacetSelectorCoordinatorDeps {
   readonly engineOptions: WorkflowEngineOptions;
-  readonly failureDir?: string;
+  readonly failureDir: string;
   readonly selectionStore: DynamicFacetSelectionStore;
   readonly getWorkflowReference: () => string;
   readonly workflowCallPath: readonly WorkflowResumePointEntry[];
@@ -140,11 +140,12 @@ export class DynamicFacetSelectorCoordinator {
           workflowBundleResourceRoot: this.deps.engineOptions.workflowBundleResourceRoot,
           abortSignal: this.deps.engineOptions.abortSignal,
           language: this.deps.engineOptions.language,
+          failureDir: this.deps.failureDir,
           personaPath: step.dynamicFacets.selector?.personaPath,
           resolution: {
             provider: selectorProvider.provider,
             model: selectorProvider.model,
-            providerOptions: selectorProvider.providerOptions,
+            providerOptions: selectorProvider.providerOptions ?? {},
           },
         },
       );

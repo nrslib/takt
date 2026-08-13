@@ -27,7 +27,7 @@ describe('CandidateSelector strict ID selection primitive (C-SHARED-SELECTOR, C-
     });
   });
 
-describe('createSelectorContract', () => {
+  describe('createSelectorContract', () => {
     it('should produce a provider-compatible schema and preserve semantic validation constraints (C-SELECTOR-OUTPUT)', () => {
       const contract = createSelectorContract(candidates(['backend', 'transaction', 'backward-compatibility']));
 

@@ -40,6 +40,7 @@ export interface ResolvedInternalAgentOptions {
   readonly abortSignal?: AbortSignal;
   readonly language?: Language;
   readonly childProcessEnv?: Readonly<Record<string, string>>;
+  readonly failureDir?: string;
   readonly sessionId?: string;
   readonly resolution: {
     readonly provider: ProviderType;

@@ -1,6 +1,32 @@
 import { describe, expect, it } from 'vitest';
 import { WorkflowStepRawSchema } from '../core/models/workflow-schemas.js';
 
+type SchemaIssue = {
+  readonly code?: string;
+  readonly path: readonly PropertyKey[];
+  readonly keys?: readonly string[];
+  readonly errors?: readonly SchemaIssue[][];
+};
+
+function hasUnrecognizedKeyAtPath(
+  issues: readonly SchemaIssue[],
+  expectedPath: readonly PropertyKey[],
+  prefix: readonly PropertyKey[] = [],
+): boolean {
+  return issues.some((issue) => {
+    const path = [...prefix, ...issue.path];
+    if (
+      issue.code === 'unrecognized_keys'
+      && issue.keys?.includes('policy')
+      && path.join('.') === expectedPath.join('.')
+    ) {
+      return true;
+    }
+    return issue.code === 'invalid_union'
+      && issue.errors?.some((branch) => hasUnrecognizedKeyAtPath(branch, expectedPath, path));
+  });
+}
+
 describe('selector guidance schema', () => {
   it('accepts guidance on both dynamic facet and dynamic parallel selectors', () => {
     const dynamicFacets = WorkflowStepRawSchema.safeParse({
@@ -98,10 +124,8 @@ describe('selector guidance schema', () => {
     expect(result.success).toBe(false);
     if (result.success) return;
     const path = _label === 'dynamic facet selector'
-      ? ['dynamic_facets', 'selector', 'policy']
-      : ['parallel', 'selection', 'selector', 'policy'];
-    expect(result.error.issues).toEqual(expect.arrayContaining([
-      expect.objectContaining({ path }),
-    ]));
+      ? ['dynamic_facets', 'selector']
+      : ['parallel', 'selection', 'selector'];
+    expect(hasUnrecognizedKeyAtPath(result.error.issues, path)).toBe(true);
   });
 });

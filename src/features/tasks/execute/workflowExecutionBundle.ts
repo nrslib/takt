@@ -190,6 +190,7 @@ interface SelectorOwner {
 }
 
 function getSelectorOwners(step: WorkflowStep): readonly SelectorOwner[] {
+  if (step.kind === 'system' || step.kind === 'workflow_call') return [];
   const owners: SelectorOwner[] = [];
   if (step.dynamicFacets?.selector !== undefined) {
     owners.push({

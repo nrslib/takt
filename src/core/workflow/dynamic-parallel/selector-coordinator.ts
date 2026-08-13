@@ -27,7 +27,7 @@ const SELECTOR_RATIONALE_LOG_MAX_BYTES = 1024;
 
 export interface DynamicParallelSelectorCoordinatorDeps {
   readonly engineOptions: WorkflowEngineOptions;
-  readonly failureDir?: string;
+  readonly failureDir: string;
   readonly selectionStore: DynamicParallelSelectionStore;
   readonly getCwd: () => string;
   readonly getReportDirectory: () => string;
@@ -110,11 +110,12 @@ export class DynamicParallelSelectorCoordinator {
           workflowBundleResourceRoot: this.deps.engineOptions.workflowBundleResourceRoot,
           abortSignal: this.deps.engineOptions.abortSignal,
           language: this.deps.engineOptions.language,
+          failureDir: this.deps.failureDir,
           personaPath: step.parallel.selection.selector?.personaPath,
           resolution: {
             provider: selectorProvider.provider,
             model: selectorProvider.model,
-            providerOptions: selectorProvider.providerOptions,
+            providerOptions: selectorProvider.providerOptions ?? {},
           },
         },
       );
