@@ -412,6 +412,9 @@ describe('SelectorInputReader', () => {
     expect(gitDiff.length).toBeGreaterThan(64 * 1024);
     expect(result.workingTreeDiff).toContain(`Source bytes: ${gitDiff.length}`);
     expect(result.workingTreeDiff).toContain('Content status: truncated');
+    expect(result.workingTreeDiff).toContain(
+      gitDiff.subarray(0, 64 * 1024).toString('utf-8'),
+    );
     expect(result.workingTreeDiff).not.toContain('Dynamic selector path payload');
   });
 
@@ -420,6 +423,7 @@ describe('SelectorInputReader', () => {
     const path = 'src/untracked.ts';
     const header = `diff --git a/${path} b/${path}\nnew file mode 100644\n--- /dev/null\n+++ b/${path}\n`;
     const content = 'u'.repeat(64 * 1024);
+    const available = 64 * 1024 - Buffer.byteLength(header, 'utf-8');
     mkdirSync(join(cwd, 'src'));
     writeFileSync(join(cwd, path), content);
     const runner = new FakeGitCommandRunner([], 0, () => Buffer.alloc(0), [path]);
@@ -435,6 +439,7 @@ describe('SelectorInputReader', () => {
       `Source bytes: ${Buffer.byteLength(header, 'utf-8') + Buffer.byteLength(content, 'utf-8')}`,
     );
     expect(result.workingTreeDiff).toContain('Content status: truncated');
+    expect(result.workingTreeDiff).toContain('u'.repeat(available));
     expect(result.workingTreeDiff).not.toContain(content);
   });
 
@@ -474,6 +479,8 @@ describe('SelectorInputReader', () => {
       undefined,
     );
     expect(result.reports).toContain(exact);
+    expect(result.reports).toContain('Source bytes: 65536');
+    expect(result.reports).toContain('Content status: complete');
 
     writeFileSync(join(reportDirectory, 'review.md'), `${exact}x`);
     await expect(reader.readInputs(
