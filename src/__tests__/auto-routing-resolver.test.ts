@@ -5,6 +5,7 @@ import {
   resolveAutoRoutingBatch,
   resolveAutoRoutingRuntime,
   resolveDeterministicAutoRoutingProviderInfo,
+  resolveRuleBasedAutoRoutingProviderInfo,
 } from '../core/workflow/auto-routing/resolver.js';
 import type { RoutingWorkSnapshot, WorkRequirementEstimator } from '../core/workflow/auto-routing/contracts.js';
 import type { AutoRoutingConfig } from '../core/models/config-types.js';
@@ -118,6 +119,42 @@ describe('resolveDeterministicAutoRoutingProviderInfo', () => {
     });
 
     expect(result).toMatchObject({ provider: 'claude-sdk', providerSource: 'auto.fallback', autoRoutingDecision: { candidateName: 'reasoning', routingTier: 'high', fallbackReason: 'estimator-failure' } });
+  });
+});
+
+describe('resolveRuleBasedAutoRoutingProviderInfo', () => {
+  it('keeps an unresolved provider when a matching workflow rule has no pool assignment', () => {
+    const result = resolveRuleBasedAutoRoutingProviderInfo({
+      autoRouting: createAutoRoutingConfig({
+        workflowName: 'preview-auto-routing',
+        defaultPool: undefined,
+        poolRules: undefined,
+        rules: { steps: { 'preview-auto-routing/implement': 'coding' } },
+      }),
+      step: createStepMetadata({ tags: [] }),
+      currentProviderInfo: { provider: undefined, model: 'gpt-default' },
+    });
+
+    expect(result).toBeUndefined();
+  });
+
+  it('resolves a matching workflow rule when its pool is explicitly assigned', () => {
+    const result = resolveRuleBasedAutoRoutingProviderInfo({
+      autoRouting: createAutoRoutingConfig({
+        workflowName: 'preview-auto-routing',
+        defaultPool: undefined,
+        poolRules: { steps: { 'preview-auto-routing/implement': 'implementation' } },
+        rules: { steps: { 'preview-auto-routing/implement': 'coding' } },
+      }),
+      step: createStepMetadata({ tags: [] }),
+      currentProviderInfo: { provider: undefined, model: undefined },
+    });
+
+    expect(result).toMatchObject({
+      provider: 'codex',
+      providerSource: 'auto.rules',
+      autoRoutingDecision: { candidateName: 'coding' },
+    });
   });
 });
 

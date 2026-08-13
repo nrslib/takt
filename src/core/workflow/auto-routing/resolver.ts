@@ -142,6 +142,7 @@ export function matchAutoRoutingRules(autoRouting: AutoRoutingConfig, step: Auto
 
 export function resolveRuleBasedAutoRoutingProviderInfo(input: Pick<ResolveAutoRoutingRuntimeInput, 'autoRouting' | 'step' | 'currentProviderInfo'>): StepProviderInfo | undefined {
   if (input.currentProviderInfo.provider !== undefined) return undefined;
+  if (!hasAutoRoutingPoolAssignment(input.autoRouting, input.step)) return undefined;
   const candidate = matchAutoRoutingRules(input.autoRouting, input.step);
   return candidate === undefined ? undefined : resolveAutoRoutingCandidateProviderInfo(candidate, 'auto.rules', input.autoRouting, input.currentProviderInfo);
 }
