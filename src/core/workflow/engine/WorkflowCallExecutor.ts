@@ -17,6 +17,8 @@ import {
 } from '../workflow-call-provider-context.js';
 import type { WorkRequirementEstimator } from '../auto-routing/contracts.js';
 import { RoutingRuntime } from '../auto-routing/runtime.js';
+import { applyAutoRoutingStrategyOverride } from '../auto-routing/resolver.js';
+import { withWorkflowTargetContext } from '../provider-target-resolution.js';
 import {
   buildWorkflowResumePointEntry,
   getWorkflowReference,
@@ -551,9 +553,15 @@ export class WorkflowCallExecutor {
     const inheritedSessions = new Map(this.deps.state.personaSessions);
     const sessionUpdates = new Map<string, WorkflowCallSessionUpdate>();
     const childAutoRouting = resolveWorkflowCallChildAutoRouting(childWorkflow, options.autoRouting);
-    const childRoutingRuntime = childAutoRouting === undefined
+    const childRuntimeAutoRouting = childAutoRouting === undefined
       ? undefined
-      : this.getChildRoutingRuntime(childWorkflow, childAutoRouting, options, request.step);
+      : withWorkflowTargetContext(
+        applyAutoRoutingStrategyOverride(childAutoRouting, options.autoStrategyOverride),
+        childWorkflow.name,
+      );
+    const childRoutingRuntime = childRuntimeAutoRouting === undefined
+      ? undefined
+      : this.getChildRoutingRuntime(childWorkflow, childRuntimeAutoRouting, options, request.step);
     const inheritedEstimatorSource = options.autoRoutingEstimatorSource;
     const childOptions: WorkflowEngineOptions = {
       ...inheritedOptions,

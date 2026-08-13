@@ -50,6 +50,7 @@ import {
 } from './engine-test-helpers.js';
 import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 import type {
+  AutoRoutingConfig,
   WorkflowConfig,
 } from '../core/models/index.js';
 import { initAnalyticsWriter } from '../features/analytics/index.js';
@@ -67,6 +68,18 @@ import {
   mockPersonaResponses,
   writeWorkflow,
 } from './helpers/engine-workflow-call-shared.js';
+
+function createQualifiedChildAutoRouting(): AutoRoutingConfig {
+  const autoRouting = createWorkflowCallAutoRoutingConfig();
+  return {
+    ...autoRouting,
+    candidatePools: {
+      ...autoRouting.candidatePools,
+      'child-special': { candidates: ['coding'], fallback: 'coding' },
+    },
+    poolRules: { steps: { 'takt/coding/review': 'child-special' } },
+  };
+}
 
 describe('WorkflowEngine workflow_call integration', () => {
   let tmpDir: string;
@@ -1792,12 +1805,10 @@ steps:
     });
     mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
+    const childAutoRouting = createQualifiedChildAutoRouting();
     engine = new WorkflowEngine(config, tmpDir, 'Route child workflow with child context', createWorkflowCallOptions(tmpDir, {
       provider: 'mock',
-      autoRouting: {
-        ...createWorkflowCallAutoRoutingConfig(),
-        poolRules: { steps: { 'takt/coding/review': 'general' } },
-      },
+      autoRouting: childAutoRouting,
     }));
     const abortReasons: string[] = [];
     engine.on('workflow:abort', (_state, reason) => abortReasons.push(reason));
@@ -1829,8 +1840,8 @@ steps:
     expect(routerCall?.[1]).toContain('"instruction":"Review child workflow"');
     expect(routerCall?.[1]).not.toContain('parent');
     expect(childCall?.[2]).toEqual(expect.objectContaining({
-      resolvedProvider: 'mock',
-      resolvedModel: 'parent-model',
+      resolvedProvider: 'codex',
+      resolvedModel: 'gpt-5',
     }));
     const records = readFileSync(join(routingEventsDir, '2026-02-18.jsonl'), 'utf-8')
       .trim()
@@ -1843,7 +1854,7 @@ steps:
       type: 'routing_decision',
       stepName: 'review',
       workflowName: 'takt/coding',
-      selectedCategory: 'delegate-runtime',
+      selectedCategory: 'coding',
     });
   });
 
@@ -1898,13 +1909,14 @@ steps:
     });
     mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
+    const childAutoRouting = {
+      ...createQualifiedChildAutoRouting(),
+      defaultPool: undefined,
+    };
     engine = new WorkflowEngine(config, tmpDir, 'Route inherited auto provider child workflow', createWorkflowCallOptions(tmpDir, {
       provider: 'mock',
       model: undefined,
-      autoRouting: {
-        ...createWorkflowCallAutoRoutingConfig(),
-        poolRules: { steps: { 'takt/coding/review': 'general' } },
-      },
+      autoRouting: childAutoRouting,
     }));
 
     const state = await engine.run();
@@ -1912,8 +1924,8 @@ steps:
 
     expect(state.status).toBeDefined();
     expect(childCall?.[2]).toEqual(expect.objectContaining({
-      resolvedProvider: 'mock',
-      resolvedModel: 'parent-model',
+      resolvedProvider: 'codex',
+      resolvedModel: 'gpt-5',
     }));
   });
 
@@ -1941,14 +1953,14 @@ auto_routing:
   default_pool: general
   candidate_pools:
     general:
+      candidates: [delegate-runtime]
+      fallback: delegate-runtime
+    child-special:
       candidates: [delegate-runtime, reasoning]
-      fallback: reasoning
+      fallback: delegate-runtime
   pool_rules:
     steps:
-      takt/coding/review: general
-  rules:
-    steps:
-      review: reasoning
+      takt/coding/review: child-special
 subworkflow:
   callable: true
 initial_step: review
@@ -1983,6 +1995,12 @@ steps:
         systemPrompt: typeof persona === 'string' ? persona : '',
         userInstruction: prompt,
       });
+      if (persona === 'auto-router') {
+        return makeResponse({
+          persona: 'auto-router',
+          content: '{"required_tier":"medium","reason_codes":["focused-change"],"confidence":null}',
+        });
+      }
       return makeResponse({ persona: 'reviewer', content: 'done' });
     });
     mockRuleEvaluationSequence([
@@ -1996,10 +2014,12 @@ steps:
       onEffectiveAutoRoutingReached,
     }));
     const state = await engine.run();
+    const routerCalls = vi.mocked(runAgent).mock.calls.filter(([persona]) => persona === 'auto-router');
     const childCall = vi.mocked(runAgent).mock.calls.find(([persona]) => String(persona).includes('reviewer'));
 
     expect(state.status).toBe('completed');
     expect(onEffectiveAutoRoutingReached).toHaveBeenCalledOnce();
+    expect(routerCalls).toHaveLength(1);
     expect(childCall?.[2]).toEqual(expect.objectContaining({
       resolvedProvider: 'claude-sdk',
       resolvedModel: 'claude-opus-4-20250514',
