@@ -6,6 +6,11 @@
 ## Summary
 {Decision and primary evidence}
 
+## Invariant Recurrence Record
+| Fix Unit | Family ID | Invariant Stable ID | Authoritative Owner | Current Verifier Occurrence | Previous Verifier Occurrence | Previous Path | Current Path | Same-Invariant / Recurrence Judgment | Cumulative `incomplete` Count | Trigger | Enforcement-Point Candidate | Record Integrity |
+|----------|-----------|---------------------|---------------------|-----------------------------|--------------------------------|---------------|--------------|--------------------------------------|-------------------------------|---------|-----------------------------|------------------|
+| {One row for every invariant in the fix plan} | {Stable family ID from the plan} | {Stable invariant ID from the plan} | {Owner from the plan} | {Current N when currently incomplete; otherwise carry unchanged} | {Prior incomplete occurrence when currently incomplete; otherwise carry unchanged} | {Prior incomplete `participates` path when currently incomplete; otherwise carry unchanged} | {Current violating path when currently incomplete; otherwise carry unchanged} | {same / different / recurrent / not recurrent / maintained / indeterminate} | {Increment at most once only when currently incomplete; otherwise carry unchanged; use indeterminate with reason when history cannot be reconstructed} | {Carried true OR newly established; once true for the same family ID, invariant stable ID, and owner, keep true unless an explicit plan change or invariant-ID change is made and the reason for that change is recorded; otherwise false / indeterminate} | {Required when recurrent; otherwise carry unchanged or Not applicable} | {complete / artifact deficiency / plan deficiency, with reason} |
+
 ## Fix Unit Compatibility
 | Fix Unit | Target Findings | Compatibility of Assumptions, Methods, and Evidentiary Power | Decision |
 |----------|-----------------|--------------------------------------------------------------|----------|
