@@ -7,13 +7,13 @@ For each submitted finding, emit exactly one dedicated observation block using t
 result: ACTIONABLE or NON_ACTIONABLE
 disposition: one formal adjudication disposition
 authority: DIRECT_ACCEPTANCE_CRITERION_VIOLATION or NONE
-winner: FAILED_LEAF, RESUME, or OTHER
-preserved: RESUME or NONE
+winner: REQUEUE, CHECKPOINT, or OTHER
+preserved: CHECKPOINT or NONE
 evidence: finding-specific evidence and reasoning
 </finding>
 ```
 
-Keep the disposition, requirement authority, coexistence winner, and preserved behavior for that finding inside its own block. `winner` names the operation that owns the contested default and initial cursor; `preserved` names the distinct operation that remains available. Do not place one finding's evidence in another finding's block. Every submitted or newly introduced finding ID must have its own block.
+Keep the disposition, requirement authority, primary operation, and preserved secondary behavior for that finding inside its own block. `winner` names the operation that owns the default, initial cursor, and manual Requeue-to-runner state transition; `preserved` names the distinct checkpoint action that remains available. Automatic requeue inside the runner is a separate path outside this case. Do not place one finding's evidence in another finding's block. Every submitted or newly introduced finding ID must have its own block.
 
 Write each named field exactly once at the top level of the block. Continuation lines belong to the preceding field; do not use quoted or example field declarations as substitutes for the actual fields.
 

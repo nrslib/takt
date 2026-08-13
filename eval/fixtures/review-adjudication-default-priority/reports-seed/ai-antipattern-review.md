@@ -4,4 +4,4 @@
 
 | finding ID | evidence | observation | reviewer disposition |
 |------------|----------|-------------|----------------------|
-| AIP-DEFAULT-1 | `src/retry-menu.js:2` | When Resume and the failed leaf coexist, Resume receives the default even though `requirements.md` assigns it to the failed leaf. The actions have different state semantics. | Non-finding: Resume is a safer default, so the documentation mismatch is minor. |
+| AIP-PRIMARY-1 | `src/retry-menu.js:15` | When the saved checkpoint and failed leaf coexist, the checkpoint receives the default. The manual Requeue path therefore does not choose the failed leaf before pending storage and normal-runner claim. | Non-finding: the checkpoint is a safer default, so the primary-path mismatch is minor. |

@@ -48,8 +48,11 @@ const implementation = ({
   defaultExpression,
   failedKind = 'restart',
   failedPreservesCheckpoint = false,
+  persistRestartPoint = true,
+  preserveExplicitResume = true,
+  resolveUsesRestartPoint = true,
 }) => `
-export function buildRetryMenu({ resumeValue, failedLeafValue, firstLeafValue }) {
+export function buildRequeuePlan({ resumeValue, failedLeafValue, firstLeafValue }) {
   const options = [];
   if (resumeValue !== undefined) {
     options.push({ value: resumeValue, kind: 'resume', preservesCheckpoint: true });
@@ -62,6 +65,43 @@ export function buildRetryMenu({ resumeValue, failedLeafValue, firstLeafValue })
   }
   return { options, defaultValue: ${defaultExpression} };
 }
+
+export function persistRequeue(task, selection) {
+  if (selection.kind === 'restart') {
+    return {
+      ...task,
+      status: 'pending',
+      ${persistRestartPoint
+        ? 'restartPoint: selection.value, resumePoint: undefined,'
+        : 'restartPoint: undefined, resumePoint: selection.value,'}
+    };
+  }
+
+  return {
+    ...task,
+    status: 'pending',
+    restartPoint: undefined,
+    resumePoint: ${preserveExplicitResume ? 'selection.value' : 'undefined'},
+  };
+}
+
+export function claimPendingTask(task) {
+  if (task.status !== 'pending') {
+    throw new Error('Only pending tasks can be claimed');
+  }
+
+  return {
+    ...task,
+    status: 'running',
+  };
+}
+
+export function resolveFreshStart(task) {
+  return {
+    startStep: ${resolveUsesRestartPoint ? 'task.restartPoint ?? task.startStep' : 'task.startStep'},
+    freshExecution: task.restartPoint !== undefined,
+  };
+}
 `;
 
 export function assertWriteTestsDefaultPriorityFor(workDirName) {
@@ -71,23 +111,31 @@ export function assertWriteTestsDefaultPriorityFor(workDirName) {
     ['production-unchanged', !changes.some((path) => path.startsWith('src/'))],
     ['tests-changed', changes.some((path) => path.startsWith('tests/'))],
     ['only-tests-changed', changes.every((path) => path.startsWith('tests/'))],
-    ['explicit-priority-passes', passesWithImplementation(workDir, implementation({
+    ['primary-requeue-path-passes', passesWithImplementation(workDir, implementation({
       defaultExpression: 'failedLeafValue ?? resumeValue ?? firstLeafValue',
     }))],
-    ['resume-priority-rejected', !passesWithImplementation(workDir, implementation({
+    ['checkpoint-first-default-rejected', !passesWithImplementation(workDir, implementation({
       defaultExpression: 'resumeValue ?? failedLeafValue ?? firstLeafValue',
     }))],
     ['first-leaf-priority-rejected', !passesWithImplementation(workDir, implementation({
       defaultExpression: 'firstLeafValue ?? failedLeafValue ?? resumeValue',
     }))],
-    ['label-only-default-rejected', !passesWithImplementation(workDir, implementation({
+    ['restart-action-kind-rejected', !passesWithImplementation(workDir, implementation({
       defaultExpression: 'failedLeafValue ?? resumeValue ?? firstLeafValue',
       failedKind: 'resume',
       failedPreservesCheckpoint: true,
     }))],
-    ['restart-checkpoint-retention-rejected', !passesWithImplementation(workDir, implementation({
+    ['restart-point-persistence-rejected', !passesWithImplementation(workDir, implementation({
       defaultExpression: 'failedLeafValue ?? resumeValue ?? firstLeafValue',
-      failedPreservesCheckpoint: true,
+      persistRestartPoint: false,
+    }))],
+    ['terminal-start-rejected', !passesWithImplementation(workDir, implementation({
+      defaultExpression: 'failedLeafValue ?? resumeValue ?? firstLeafValue',
+      resolveUsesRestartPoint: false,
+    }))],
+    ['explicit-checkpoint-preservation-rejected', !passesWithImplementation(workDir, implementation({
+      defaultExpression: 'failedLeafValue ?? resumeValue ?? firstLeafValue',
+      preserveExplicitResume: false,
     }))],
   ];
   const failed = checks.filter(([, pass]) => !pass).map(([name]) => name);
@@ -96,7 +144,7 @@ export function assertWriteTestsDefaultPriorityFor(workDirName) {
     pass: failed.length === 0,
     score: (checks.length - failed.length) / checks.length,
     reason: failed.length === 0
-      ? 'tests discriminate the explicit default winner when Resume and restart coexist'
+      ? 'tests trace manual Requeue from primary selection through pending storage, claim, and execution resolution to a fresh start'
       : `failed: ${failed.join(', ')}; changed files: ${changes.join(', ')}`,
   };
 }

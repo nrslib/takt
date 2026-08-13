@@ -12,6 +12,7 @@ Separate preservation of unaffected contracts, migration of current consumers, a
 | Require explicit authority | Allow backward compatibility, legacy support, migration support, or coexistence only for the target and scope explicitly required by the requirement source |
 | Use only necessary mechanisms | Add or retain only mechanisms necessary to satisfy the explicitly required target |
 | Resolve collisions at one decision boundary | When an explicit change and a preservation candidate compete to determine the same observable value, state transition, or side effect, apply the explicit change exactly in the overlapping state |
+| Carry the primary operation to its terminal consumer | Trace the primary operation's input and decision through production, persistence, state transition, and later execution, display, or API consumers before evaluating secondary paths |
 
 ## Judgment Criteria
 
@@ -38,6 +39,18 @@ When the requirement source explicitly changes a default, priority, selected res
 | When a selected value or cursor designates an operation whose effect distinguishes the candidates, checking only value equality without verifying the selected operation's kind and effect | REJECT |
 | Directly verifying the selected value and requirement-relevant state transitions or side effects in the smallest state where the competing candidates coexist | OK |
 | Combining contracts that do not share the same decision boundary for exhaustive coverage | REJECT. Do not introduce combination axes outside the contract |
+
+## Primary Operation and Terminal Consumer
+
+Treat a changed primary operation as incomplete until the downstream terminal consumer uses its decision. Evaluate recovery, compatibility, and fallback paths only after the primary path is closed, and preserve only the independently required behavior that does not replace the primary operation.
+
+| Criteria | Judgment |
+|----------|----------|
+| The primary operation's producer, persistence or state transition, later consumer, and terminal effect share the same invariant | Trace them as one path and verify each observable effect at its boundary |
+| A later execution or processor reads a value persisted by the primary operation | Verify the path from producing the value through the later consumer's execution before evaluating secondary paths |
+| A secondary operation shares a selector or state with the primary operation | Keep the primary winner authoritative and preserve only the secondary operation's independently required effect |
+| Secondary availability or compatibility is used to omit the primary operation's terminal consumer or state transition from evaluation | REJECT |
+| Primary and secondary combinations add axes not required by a real decision boundary or consumer | REJECT. Limit the contract to the smallest primary end-to-end path |
 
 ## Evidence Boundary
 

@@ -28,11 +28,14 @@ all-or-nothing asserts: for load-bearing conclusions, run the complete
 results, not one pass/fail summary.
 
 The `*-default-priority` suites run on the Claude headless CLI with model
-`opus` because they reproduce a requirement-priority miss observed in an
+`opus` because they reproduce a primary-operation miss observed in an
 Opus-driven TAKT run. They are excluded from the default Codex suite and run
-together through `npm run eval:prompts:default-priority`. The write-tests row
-uses a disposable work copy, so rerun the complete command for each trial.
-Run `npm run eval:prompts:default-priority:codex` to cross-check the same three
+together through `npm run eval:prompts:default-priority`. The three rows now
+follow the primary Requeue-to-runner path from selection and initial cursor
+through pending state, claim, and execution resolution to a fresh start; secondary checkpoint preservation is
+checked only as an explicit independent behavior. The write-tests row uses a
+disposable work copy, so rerun the complete command for each trial. Run
+`npm run eval:prompts:default-priority:codex` to cross-check the same three
 contracts with Codex; its mutable row uses a separate disposable work copy.
 
 ## Suites
@@ -60,7 +63,7 @@ contracts with Codex; its mutable row uses a separate disposable work copy.
 | `issue-plan-samples` | default / plan | nrslib/takt repository (read-only) | whether planning preserves explicit breadth, allowed design choices, and explicitly required architecture across Issues #1127, #1155, and #1136 |
 | `plan-report-source-authority` | default / plan report phase | synthetic Phase 1 draft (tool-less) | whether the final `plan.md` keeps the original task authoritative and demotes unsupported design details from requirements |
 | `write-tests-contract-traceability` | default / write_tests | write-tests-contract-traceability | whether generated tests accept the intended local contract, reject plausible mutations, and avoid inventing irrelevant impact paths |
-| `write-tests-default-priority` | default / write_tests | write-tests-default-priority | whether tests exercise coexistence of an explicit failed-leaf default and a preserved Resume action, rejecting the old Resume-first priority |
+| `write-tests-default-priority` | default / write_tests | write-tests-default-priority | whether tests trace manual Requeue from failed-leaf selection and initial cursor through pending persistence to a normal-runner fresh start, while retaining an explicit checkpoint action |
 | `scope-default-write-tests` | default / write_tests | scope-discipline-tests | whether tests observe behavior and remove an invalid internal-structure test instead of replacing it with another proxy |
 | `scope-maintenance-write-tests` | backend-maintenance / write_tests | scope-discipline-tests | whether the shared maintenance path applies the same behavioral test discipline |
 | `scope-architecture-search{,-none,-unrelated}` | peer-review / arch-review | scope-architecture-search | whether the same shared instruction discovers an unhinted second implementation and avoids an unrelated defect with relevant, absent, or unrelated Policy/Knowledge composition |
@@ -70,12 +73,12 @@ contracts with Codex; its mutable row uses a separate disposable work copy.
 | `follow-up-review-repair-regression` | peer-review / follow-up coding-review | follow-up-review-repair-regression | whether follow-up review independently falsifies completion claims and distinguishes repair-induced defects from adjacent omissions |
 | `follow-up-testing-review-repair-regression` | peer-review / follow-up testing-review | follow-up-review-repair-regression | whether test findings stay limited to missing regression detection in an authorized family and reject adjacent or structure-freezing test expansion |
 | `review-adjudication` | peer-review / review-adjudication | review-adjudication | whether adjudication separates technical validity from remediation authority, keeps accepted-family closure and diff-induced regressions actionable, and excludes even severe horizontal improvements from the fix plan |
-| `review-adjudication-default-priority` | peer-review / review-adjudication | review-adjudication-default-priority | whether adjudication keeps an explicit default requirement actionable instead of weakening it to a safe-default or best-effort preference |
+| `review-adjudication-default-priority` | peer-review / review-adjudication | review-adjudication-default-priority | whether adjudication keeps the primary Requeue-to-runner requirement actionable instead of weakening it to a secondary safety preference |
 | `task-instruction-gherkin` | interactive task summarization | direct English and Japanese conversations | whether implementation details and abstraction intent remain in Markdown while focused Gherkin captures only externally observable behavior |
 | `final-readiness-supervision` | review-fix-default / merge-readiness-review + supervise Phase 1 | final-readiness-supervision | whether both public final-gate producers independently authorize a newly discovered required consumer, explain its initial-round omission, and avoid horizontal exploration |
 | `final-readiness-preservation` | review-fix-default / merge-readiness-review + supervise Phase 2 | final-readiness-supervision | whether both public final-gate reports preserve the new finding and keep adjudicated noise non-actionable |
 | `final-readiness-precision` | peer-review / final-gate | final-readiness-precision | whether the final supervisor accepts a complete change without reopening an adjudicated documentation improvement |
-| `final-readiness-default-priority` | peer-review / final-gate | final-readiness-default-priority | whether the final supervisor reopens the same submitted finding when its non-actionable rationale directly contradicts the primary requirement source |
+| `final-readiness-default-priority` | peer-review / final-gate | final-readiness-default-priority | whether the final supervisor reopens the same submitted finding when its secondary-path rationale contradicts the primary terminal consumer contract |
 
 Reviewer suites run read-only against `eval/fixtures/*`. Coder suites run
 with `sandbox_mode: workspace-write` in a disposable copy under `eval/.work/`

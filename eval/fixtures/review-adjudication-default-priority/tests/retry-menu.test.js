@@ -1,16 +1,43 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { chooseDefault } from '../src/retry-menu.js';
+import {
+  buildRequeuePlan,
+  claimPendingTask,
+  persistRequeue,
+  resolveFreshStart,
+} from '../src/retry-menu.js';
 
-test('uses the failed leaf when no Resume checkpoint exists', () => {
-  const selected = chooseDefault({ failedLeafValue: 'restart:review', firstLeafValue: 'restart:plan' });
+test('covers the primary Requeue path through pending claim to fresh execution', () => {
+  const plan = buildRequeuePlan({
+    resumeValue: 'resume:checkpoint',
+    failedLeafValue: 'restart:review',
+    firstLeafValue: 'restart:plan',
+  });
+  const selection = plan.options.find(({ value }) => value === plan.defaultValue);
+  const pending = persistRequeue({ status: 'failed' }, selection);
+  const claimed = claimPendingTask(pending);
+  const execution = resolveFreshStart(claimed);
 
-  assert.equal(selected, 'restart:review');
+  assert.equal(plan.defaultValue, 'restart:review');
+  assert.equal(selection?.kind, 'restart');
+  assert.equal(pending.status, 'pending');
+  assert.equal(pending.restartPoint, 'restart:review');
+  assert.equal(pending.resumePoint, undefined);
+  assert.equal(execution.startStep, 'restart:review');
+  assert.equal(execution.freshExecution, true);
 });
 
-test('uses Resume when no failed leaf exists', () => {
-  const selected = chooseDefault({ resumeValue: 'resume:checkpoint', firstLeafValue: 'restart:plan' });
+test('keeps an explicitly selected checkpoint action available', () => {
+  const plan = buildRequeuePlan({
+    resumeValue: 'resume:checkpoint',
+    failedLeafValue: 'restart:review',
+    firstLeafValue: 'restart:plan',
+  });
+  const selection = plan.options.find(({ value }) => value === 'resume:checkpoint');
+  const pending = persistRequeue({ status: 'failed' }, selection);
 
-  assert.equal(selected, 'resume:checkpoint');
+  assert.equal(selection?.kind, 'resume');
+  assert.equal(pending.resumePoint, 'resume:checkpoint');
+  assert.equal(pending.restartPoint, undefined);
 });

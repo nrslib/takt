@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-description: 'TAKT facet cross-eval: Codex write-tests resolves an explicit default priority collision'
+description: 'TAKT facet cross-eval: Codex closes the primary Requeue-to-runner path'
 
 prompts:
   - file://prompts/write-tests-default-priority-codex.phase1.md
@@ -15,11 +15,11 @@ providers:
       model_reasoning_effort: medium
 
 tests:
-  - description: 'write-tests: Codex covers Resume and failed-leaf coexistence at the shared default boundary'
+  - description: 'write-tests: Codex traces manual Requeue through pending storage to the normal runner'
     vars:
       task: file://cases/write-tests-default-priority-task.md
       previous_response: file://cases/write-tests-default-priority-plan.md
     assert:
       - type: javascript
-        metric: default-priority/write-tests-coexistence-codex
+        metric: primary-requeue/write-tests-path-codex
         value: file://asserts/write-tests-default-priority-codex.mjs
