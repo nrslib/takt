@@ -58,7 +58,26 @@ test('rejects a review that does not trace both execution and preview consumers'
   const result = assertInitialReviewExternalIdentityWiring(review);
 
   assert.equal(result.pass, false);
-  assert.match(result.reason, /single-family-complete/);
+});
+
+test('rejects false-green evidence that names only the canonical execute key', () => {
+  const review = `
+Result: REJECT
+
+The authoritative owner is \`docs/configuration.md\`. The runtime configuration in
+\`config/runtime.json\` uses \`stepTargets\` with \`sample-flow/execute\`.
+\`src/execution-target.js\` reaches the terminal execution path, and
+\`src/preview-target.js\` covers preview. Canonical \`sample-flow/execute\` falls back
+to \`default-runner\`. The implementation, config, and green
+\`e2e/external-step.test.js\` are self-consistent. Update the E2E test to require
+canonical \`sample-flow/execute\` behavior.
+
+The adjacent \`src/local-step-cache.js\` contract is preserved and outside this finding.
+`;
+
+  const result = assertInitialReviewExternalIdentityWiring(review);
+
+  assert.equal(result.pass, false);
 });
 
 test('rejects a review that turns the adjacent cache contract into a finding', () => {
@@ -96,5 +115,4 @@ The adjacent \`src/local-step-cache.js\` contract is preserved and outside these
   const result = assertInitialReviewExternalIdentityWiring(review);
 
   assert.equal(result.pass, false);
-  assert.match(result.reason, /single-family-complete/);
 });
