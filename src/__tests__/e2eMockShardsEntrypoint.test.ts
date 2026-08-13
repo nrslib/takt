@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { runShardsSerially, settleShardResults } from '../../scripts/run-e2e-mock-shards.mjs';
+import { settleShardResults } from '../../scripts/run-e2e-mock-shards.mjs';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -22,36 +22,6 @@ const birpcNoiseOutput = [
   '   Start at  12:00:00',
   '   Duration  62.00s',
 ].join('\n');
-
-describe('E2E mock shard scheduling', () => {
-  it('should wait for each shard before starting the next one and preserve order', async () => {
-    const shards = [['spec-one'], ['spec-two'], ['spec-three']];
-    const results = [
-      { shardNumber: 1, code: 0 },
-      { shardNumber: 2, code: 1 },
-      { shardNumber: 3, code: 0 },
-    ];
-    let finishFirstShard: (result: (typeof results)[number]) => void = () => undefined;
-    const runShard = vi.fn((_files: string[], shardNumber: number) => {
-      if (shardNumber === 1) {
-        return new Promise<(typeof results)[number]>((resolve) => {
-          finishFirstShard = resolve;
-        });
-      }
-      return Promise.resolve(results[shardNumber - 1]);
-    });
-
-    const scheduled = runShardsSerially(shards, runShard);
-
-    expect(runShard).toHaveBeenCalledTimes(1);
-    expect(runShard).toHaveBeenCalledWith(shards[0], 1);
-
-    finishFirstShard(results[0]);
-    await expect(scheduled).resolves.toEqual(results);
-    expect(runShard).toHaveBeenNthCalledWith(2, shards[1], 2);
-    expect(runShard).toHaveBeenNthCalledWith(3, shards[2], 3);
-  });
-});
 
 describe('E2E mock shard birpc noise re-measurement', () => {
   it('should re-measure a noisy shard once and adopt the re-measured result', async () => {

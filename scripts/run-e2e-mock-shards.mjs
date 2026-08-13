@@ -127,14 +127,6 @@ function selectFilesForFilters(files, positionalFilters) {
   );
 }
 
-export async function runShardsSerially(shards, runShard) {
-  const results = [];
-  for (let index = 0; index < shards.length; index += 1) {
-    results.push(await runShard(shards[index], index + 1));
-  }
-  return results;
-}
-
 export async function settleShardResults(results, { isCI, remeasureShard }) {
   const settledResults = [];
   for (const result of results) {
@@ -210,9 +202,8 @@ async function runE2eMockShards(passthroughArgs) {
     }
   }
 
-  const results = await runShardsSerially(
-    mockE2eShards,
-    (files, shardNumber) => runShard(files, shardNumber, positionalFilters, vitestArgs),
+  const results = await Promise.all(
+    mockE2eShards.map((files, index) => runShard(files, index + 1, positionalFilters, vitestArgs)),
   );
   const settledResults = await settleShardResults(results, {
     isCI: Boolean(process.env.CI),
