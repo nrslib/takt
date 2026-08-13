@@ -3,13 +3,20 @@ import { extractFindingObservation } from './finding-observation.mjs';
 const FINDING = 'AIP-DEFAULT-1';
 
 export default function assertReviewAdjudicationDefaultPriority(output) {
-  const { onlyTargetFinding, context: findingContext } = extractFindingObservation(output, FINDING);
+  const { onlyTargetFinding, fields } = extractFindingObservation(output, FINDING);
+  const requiredFields = ['result', 'disposition', 'authority', 'winner', 'preserved', 'evidence'];
+  const hasRequiredFields = requiredFields.every((field) => (
+    fields[field]?.count === 1 && fields[field].value.length > 0
+  ));
   const checks = [
     ['only-target-finding', onlyTargetFinding],
-    ['actionable-result', /^result\s*[:：]\s*(?:ACTIONABLE|修正対象あり)\s*$/im.test(findingContext)],
-    ['actionable-disposition', /^disposition\s*[:：]\s*actionable\s*$/im.test(findingContext)],
-    ['direct-requirement-authority', /(?:direct_acceptance_criterion_violation|受入条件(?:へ|の)?直接違反|明示要件(?:へ|の)?違反)/i.test(findingContext)],
-    ['coexistence-winner', /(?:failed|失敗)[^\n]{0,120}(?:default|既定|初期)[^\n]{0,120}(?:Resume|再開)|(?:Resume|再開)[^\n]{0,120}(?:failed|失敗)[^\n]{0,120}(?:default|既定|優先)/i.test(findingContext)],
+    ['required-fields', hasRequiredFields],
+    ['actionable-result', /^(?:ACTIONABLE|修正対象あり)$/i.test(fields.result?.value ?? '')],
+    ['actionable-disposition', /^actionable$/i.test(fields.disposition?.value ?? '')],
+    ['direct-requirement-authority', /^DIRECT_ACCEPTANCE_CRITERION_VIOLATION$/i.test(fields.authority?.value ?? '')],
+    ['coexistence-winner', /^FAILED_LEAF$/i.test(fields.winner?.value ?? '')],
+    ['resume-preserved', /^RESUME$/i.test(fields.preserved?.value ?? '')],
+    ['coexistence-evidence', /(?:failed|失敗)[^\n]{0,160}(?:Resume|再開)|(?:Resume|再開)[^\n]{0,160}(?:failed|失敗)/i.test(fields.evidence?.value ?? '')],
   ];
   const failed = checks.filter(([, pass]) => !pass).map(([name]) => name);
   return {
