@@ -130,7 +130,7 @@ assistant:
 #         reasoning_effort: medium
 ```
 
-`takt_providers.selector` is optional. Provider/model precedence is explicit CLI or environment override, project selector, global selector, project top-level, then global top-level. A model is accepted only when its candidate belongs to the resolved provider. Only selector entries contribute `provider_options`, merged by option leaf from global then project; top-level, persona, and pool sub-step options are not inherited by the selector. An empty selector entry or an empty `provider_options` entry is rejected during configuration loading. Dynamic selectors require a provider that guarantees strict read-only internal-agent isolation; Claude, Codex, and Mock satisfy this contract, while OpenCode, Cursor, Copilot, Kiro, and Pi are rejected before selector or participant startup. Selector settings remain unused and do not affect workflows without dynamic parallel.
+`takt_providers.selector` is optional. Provider/model precedence is explicit CLI or environment override, project selector, global selector, project top-level, then global top-level. A model is accepted only when its candidate belongs to the resolved provider. Only selector entries contribute `provider_options`, merged by option leaf from global then project; top-level, persona, and pool sub-step options are not inherited by the selector. An empty selector entry or an empty `provider_options` entry is rejected during configuration loading. Dynamic selectors use the provider-neutral fresh-session transport. Configure `capabilities` and `permission_mode` on a runtime profile when explicit restrictions are required; omitted fields add no selector-specific restrictions. Selector settings remain unused and do not affect workflows without dynamic parallel.
 
 ```yaml
 # ~/.takt/config.yaml (continued)
@@ -383,39 +383,6 @@ Project config accepts most global keys and overrides their global values (e.g. 
 
 Project config values override global config when both are set.
 
-The Finding Contract intake normalizer has no `config.yaml` key. Every Finding
-Contract reviewer writes an ordinary Markdown report; TAKT saves that report and
-passes only it to a fresh tool-free structured session, once per reviewer per round.
-That session's provider/model resolve in this order: the runtime.yaml
-`provider.targets.internal_agents['intake-normalizer']` seat, then the reviewer's
-`escalate` target when its profile declares one, then the ordinary default
-resolution. The first candidate must support isolated structured execution; when it
-does not, the run fails with that reason instead of silently continuing. When the
-normalizer's output survives neither validation nor its single correction, TAKT
-retries the normalization once on the next candidate of that same chain that
-resolves to a different `(provider, model)` and can run isolated structured
-execution; if that also fails, the run stops with each candidate's concrete reason.
-The normalizer is a synthetic step and resolves like any other one, so an explicit
-CLI or environment provider/model override applies to it too. That is deliberate —
-an explicit override is the highest-priority layer everywhere in TAKT. The
-consequence is that overriding a Finding Contract run onto a provider without
-isolated structured execution stops the run with the normalizer's reason instead of
-silently degrading. A rate-limit fallback registered for the
-`finding_intake_normalizer` operation replaces the normalizer for that call only.
-
-The removed `finding_contract.intake_normalize` key no longer exists: normalization
-is built-in behavior now. A workflow that still declares it fails to load on the
-strict schema's unknown-key rejection — delete the block.
-
-Run metadata, session logs, traces, reports, and other run lifecycle artifacts
-are files under `.takt/runs/<run>/`. Finding Contract state is separate: TAKT
-lazily creates `.takt/runs/<run>/finding-contract.sqlite` only when a Finding
-authority is first resolved. The database is an internal, run-scoped authority
-for Finding Contract management, not the run record itself. Resume and requeue
-may seed a target run from the source run's Finding database even though the
-target is a different run. If the source has no Finding database, the target
-starts with an empty ledger instead of rejecting the resume.
-
 ### Task Execution Config Environment Overrides
 
 `auto_requeue_max_attempts` and `ignore_exceed` can also be set with
@@ -538,23 +505,6 @@ Paths must be absolute paths to executable files. Environment variables take pre
 
 Provider and model selection uses the single, field-by-field precedence contract documented under [Provider Routing](#provider-routing). Normal steps, parallel sub-steps, synthetic steps, and workflow calls follow that contract for the layers available to each kind. Parallel sub-steps do not support promotion.
 
-Finding Contract workflows never name a provider or model. The synthetic roles are assigned in `runtime.yaml` through the optional `provider.targets.internal_agents` seats, and an assigned seat is treated as a step-level value for that role's synthetic step. The implementation's field-by-field order is explicit CLI/environment override → promotion matching the current execution (normal agent steps only) → step or parallel sub-step provider/model (including an assigned seat) → `workflow_call` override → `provider_routing` step/tag/persona → deprecated `persona_providers` → auto routing → workflow → project → global → provider default. An unassigned seat uses the normal workflow-step fallback chain. A seat that names only a provider stops lower-priority model fallback; providers that require an explicit model fail validation.
-
-```yaml
-# runtime.yaml
-version: 1
-provider:
-  profiles:
-    strong: { provider: codex, model: <strong-model> }
-  targets:
-    internal_agents:
-      findings-manager:     { profile: strong }
-      terminal-adjudicator: { profile: strong }
-      loop-judge:           { profile: strong }
-      escalation-reviewer:  { profile: strong }
-      intake-normalizer:    { profile: strong }
-```
-
 In workflow YAML, `model: null` is an explicit model omission for a normal step, parallel sub-step, or `loop_monitors.judge`. It differs from leaving `model` unspecified: an unspecified model continues to applicable lower-priority sources such as routing, workflow, the triggering step for loop monitor judges, and input sources, while `model: null` stops model resolution at that entry and leaves the effective model undefined. Use it when the resolved provider should use its own CLI or provider default instead of inheriting another model source. Providers that require an explicit model still fail validation when no model is supplied.
 
 ### Provider-specific Model Notes
@@ -644,10 +594,11 @@ provider:
       model: gpt-5.6-sol
       options:
         reasoning_effort: low
-      escalate: sol-high
     router:
       provider: codex
       model: gpt-5.6-luna
+      capabilities: readonly
+      permission_mode: readonly
       options:
         reasoning_effort: high
 
@@ -664,12 +615,8 @@ provider:
     internal_agents:
       selector:
         profile: router
-      intake-normalizer:
-        profile: sol-high
-      findings-manager:
-        profile: sol-high
-      terminal-adjudicator:
-        profile: sol-high
+      review-completion-judge:
+        profile: router
 
   auto_routing:
     strategy: balanced
@@ -686,31 +633,11 @@ provider:
         fallback_profile: sol-high
 ```
 
-`provider.profiles` holds named provider/model/options definitions. A profile's flat `options` bag applies to that profile's provider (for example `reasoning_effort` maps to the Codex `reasoning_effort` option). Profiles may reuse another profile with an explicit `extends`; there is no field-level merge between same-name profiles across the global and project files — the project definition replaces the whole profile.
+`provider.profiles` holds named provider/model/options definitions. A profile's flat `options` bag applies to that profile's provider (for example `reasoning_effort` maps to the Codex `reasoning_effort` option). Optional `capabilities` names one provider-options preset or a list of presets applied in order. Presets resolve project → global → builtin, like workflow capabilities, and inline `options` override preset values. Optional `permission_mode` selects the provider's exact permission mode. Profiles may reuse another profile with an explicit `extends`; there is no field-level merge between same-name profiles across the global and project files — the project definition replaces the whole profile.
+
+TAKT-owned structured agents always start a fresh session. Providers with native structured output receive the schema directly; other providers receive a JSON schema instruction, and TAKT parses and validates the returned object. TAKT does not add internal-agent-specific permission, tool, network, sandbox, skill, MCP, or bypass policy. Assign a profile with `capabilities`, `permission_mode`, or both when a role needs restrictions. If both are omitted, normal provider configuration is used unchanged.
 
 `provider.defaults` and every `provider.targets` entry choose exactly one of a fixed `profile` or an auto-routing `pool`. Steps are named `<leaf-workflow-name>/<step-name>`; control nodes that do not run an agent (such as `workflow_call`) are not resolution targets.
-
-### `escalate` — this profile's last move
-
-A profile may name another profile with `escalate`. It declares "when work resolved to this profile runs out of room, hand it to that profile instead". One line on the weaker profile is the whole configuration; workflows never name a provider or a model.
-
-```yaml
-provider:
-  profiles:
-    reviewer-local:
-      provider: opencode
-      model: ollama-cloud/gemma4:31b
-      escalate: strong
-    strong:
-      provider: opencode
-      model: ollama-cloud/glm-5.2
-```
-
-- References are validated when the configuration is compiled, before any agent runs: an unknown target, a profile that escalates to itself, and a cyclic `escalate` chain are all load-time errors.
-- `escalate` is inherited through `extends`, like `provider` / `model` / `options`.
-- Only one hop is ever consumed. `escalate` is a worker's last move, not a ladder.
-- A step whose provider comes from an explicit `--provider`, step YAML, or `workflow_call` override is no longer running on that profile, so it has no escalation target. Steps assigned through an auto-routing `pool` do not carry one either.
-- Today the engine consumes `escalate` for Finding Contract escalated re-review; see [workflows.md](workflows.md).
 
 ### Resolution priority
 
@@ -723,28 +650,12 @@ defaults
   < steps
 ```
 
-The internal `selector`, `assistant`, `intake-normalizer`, `findings-manager`,
-`terminal-adjudicator`, `loop-judge`, and `escalation-reviewer` agents resolve through a separate
-ladder — `internal_agents` is not a generic override applied after step resolution:
+The internal `selector`, `assistant`, `loop-judge`, and `review-completion-judge` agents resolve through a separate ladder. `selector` chooses dynamic work, `assistant` backs interactive sessions, `loop-judge` evaluates loop monitors, and `review-completion-judge` decides whether an opted-in reviewer needs another pass. Every seat is optional; an unassigned seat uses the ordinary default resolution.
 
 ```text
 defaults
   < internal_agents.<agent>
 ```
-
-`terminal-adjudicator` is the runtime name of the role whose persona facet is `supervisor`; the
-two are deliberately different names for different things.
-
-**Every seat is optional.** An unassigned seat changes nothing: the role keeps the resolution it
-has always used. For the synthetic Finding Contract roles that means persona routing (the fixed
-keys `findings-manager` / `supervisor` / `loop-judge`) and then the workflow → project → global →
-provider-default chain. `intake-normalizer` continues past that into the reviewer profile's
-`escalate` target before the ordinary default resolution (see [workflows.md](workflows.md)).
-
-`escalation-reviewer` is the one seat that never changes *whether* a role runs. Escalated
-re-review fires only for a reviewer whose resolved profile declares `escalate`; a reviewer without
-that declaration keeps its own last presentation whether or not the seat is assigned. The seat only
-replaces the destination of an escalation that the `escalate` declaration already enabled.
 
 When two targets at the same priority (for example two matching tags) assign different providers, resolution fails fast instead of picking one silently. Explicit `--provider` / `--model` on the command line are runtime overrides and are allowed in both legacy and runtime modes.
 
@@ -763,17 +674,9 @@ Runtime and legacy provider settings must not be mixed. Move each legacy setting
 | `provider_routing.steps` | `provider.targets.steps` |
 | `persona_providers` | `provider.targets.personas` |
 | `takt_providers.selector` / `takt_providers.assistant` | `provider.targets.internal_agents` |
-| `finding_contract.manager.provider` / `model` | `provider.targets.internal_agents.findings-manager` |
-| `finding_contract.adjudicator.provider` / `model` | `provider.targets.internal_agents.terminal-adjudicator` |
 | `auto_routing` | `provider.auto_routing` |
 | auto routing candidates | pool candidates that reference `provider.profiles` |
 | workflow-level provider settings | `provider.targets.steps` |
-
-The last two rows are workflow YAML keys rather than `config.yaml` settings, and they are gone
-rather than deprecated: the `finding_contract` schema is strict, so a leftover `provider` or
-`model` under `manager` / `adjudicator` is rejected at load time as an unrecognized key, naming the
-key and its path. Move the value to the matching `internal_agents` seat, or drop it and let the
-role resolve through the layers below.
 
 ### Mixed configuration error
 
@@ -805,7 +708,7 @@ TAKT uses three provider-independent permission modes:
 | `edit` | Allow file edits with confirmation | `acceptEdits` | `workspace-write` | `workspace-write` | `read`, `grep`, `find`, `ls`, `edit`, `write`, `bash` | default flags (no `--force`) | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` |
 | `full` | Bypass all permission checks | `bypassPermissions` | `danger-full-access` | `danger-full-access` | all registered Pi tools | `--force` | `--yolo` | `--trust-all-tools` |
 
-Pi permission modes are SDK active-tool allowlists, not an operating-system sandbox, and TAKT does not add per-tool confirmation prompts for Pi. In particular, Pi `edit` enables `bash`, and Pi's file tools can accept absolute paths. Run Pi with trusted workflow input and extensions; TAKT does not use Pi for dynamic internal agents that require strict read-only isolation.
+Pi permission modes are SDK active-tool allowlists, not an operating-system sandbox, and TAKT does not add per-tool confirmation prompts for Pi. In particular, Pi `edit` enables `bash`, and Pi's file tools can accept absolute paths. Run Pi with trusted workflow input and extensions. If an internal-agent role needs narrower authority, configure capabilities and a permission mode on its Pi profile.
 
 ### Configuration
 
@@ -911,8 +814,6 @@ Provider and model are resolved independently at each layer. A provider-only ove
 `active promotion` means a normal agent step `promotion` entry whose execution-count (`at: <N>`) or `ai()` condition matched for the current execution. Parallel sub-steps cannot specify promotion, so their YAML provider/model follows an explicit CLI/environment override directly; see [Step-level Provider Promotion](./workflows.md#step-level-provider-promotion).
 
 An assigned `internal_agents` seat occupies the `step YAML provider/model` position for the role's synthetic step. Every seat is optional; an unassigned seat leaves the role on the layers below.
-
-Without a seat, synthetic Finding Contract roles resolve `provider_routing.personas` by a fixed persona key rather than the configured persona name: `findings-manager` (manager), `supervisor` (conflict and terminal adjudication), and `loop-judge` (loop monitor judges). Escalated re-review has no persona routing. It fires only for a reviewer whose resolved profile declares `escalate` — the `escalation-reviewer` seat does not enable it — and it inherits the owning reviewer's step, taking its model from that seat when one is assigned and otherwise from the `escalate` target itself. Its reviewer key is the fixed string `escalation-reviewer`, which is a reserved workflow step name in every Finding Contract workflow.
 
 ### Auto Routing
 
@@ -1249,17 +1150,17 @@ provider:
         profile: review
 ```
 
-| Provider | Isolated structured companion execution | Implementer tool events |
-|---|---:|---:|
-| `claude-sdk` | Yes | Live |
-| `codex` | Yes | Live |
-| `claude` (headless) | Yes | Live |
-| `claude-terminal` | Yes | Replayed after the turn |
-| `mock` | Yes | Scenario-dependent |
-| `opencode` | Yes | Live |
-| `pi` | No | Live |
-| `cursor`, `copilot`, `kiro` | No | Unavailable |
+Companion structured calls use the same provider-neutral fresh-session transport as other TAKT-owned structured agents. Native structured output is used where available; other providers use the validated JSON fallback. The resolved profile's capabilities and permission mode are applied unchanged, with no companion-specific restrictions.
 
-`No` means the workflow is rejected during loading; TAKT does not run a degraded, non-isolated companion.
+| Provider | Implementer tool events |
+|---|---:|
+| `claude-sdk` | Live |
+| `codex` | Live |
+| `claude` (headless) | Live |
+| `claude-terminal` | Replayed after the turn |
+| `mock` | Scenario-dependent |
+| `opencode` | Live |
+| `pi` | Live |
+| `cursor`, `copilot`, `kiro` | Unavailable |
 
 When live tool events are unavailable, completion review and the same-session fix loop still run.

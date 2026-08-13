@@ -83,6 +83,31 @@ beforeEach(() => {
 });
 
 describe('ladder stage progression across every assignment path (INV-A)', () => {
+  it('carries the promoted ladder profile permission mode with its provider identity', async () => {
+    const result = await resolvePromotionRuntime(
+      makeContext({
+        baseSource: 'provider_routing.steps',
+        providerLadders: {
+          steps: {
+            'development-core/fix': [
+              { ...MAIN, permissionMode: 'readonly' },
+              { ...STRONG, permissionMode: 'edit' },
+            ],
+          },
+        },
+      }),
+      makeStep({ promotion: [{ at: 1 }] }),
+      1,
+      undefined,
+    );
+
+    expect(result?.providerInfo).toMatchObject({
+      provider: 'claude',
+      model: 'opus',
+      permissionMode: 'edit',
+    });
+  });
+
   const cases: Array<{
     path: string;
     baseSource: ProviderResolutionSource;

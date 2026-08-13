@@ -7,6 +7,7 @@ import {
   normalizeRoutingWorkSnapshot,
 } from './normalizer.js';
 import { maxRoutingTier, promoteRoutingTier, selectRoutingCandidate } from './selector.js';
+import { isProviderStreamParseError } from '../../../shared/types/agent-failure.js';
 
 type PreviousResolution = {
   fingerprint: string;
@@ -47,6 +48,9 @@ export class RoutingRuntime {
         throw input.abortSignal.reason;
       }
       if (error instanceof Error && error.name === 'AbortError') {
+        throw error;
+      }
+      if (isProviderStreamParseError(error)) {
         throw error;
       }
       const estimatorFailure = error instanceof Error ? error : new Error(String(error));

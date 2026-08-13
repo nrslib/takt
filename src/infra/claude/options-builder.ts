@@ -76,18 +76,13 @@ export class SdkOptionsBuilder {
     const sdkOptions: Options = {
       cwd: this.options.cwd,
       permissionMode,
-      settingSources: this.options.internalAgentIsolation === 'strict-readonly' ? [] : ['project'],
+      settingSources: ['project'],
     };
 
-    if (this.options.internalAgentIsolation === 'strict-readonly') {
-      sdkOptions.tools = [];
-      sdkOptions.strictMcpConfig = true;
-      sdkOptions.skills = [];
-    }
     if (this.options.model) sdkOptions.model = this.options.model;
     // The SDK's TypeScript union can lag values accepted by the Claude CLI runtime.
     if (this.options.effort) sdkOptions.effort = this.options.effort as Options['effort'];
-    if (this.options.internalAgentIsolation !== 'strict-readonly' && this.options.skillsEnabled === false) {
+    if (this.options.skillsEnabled === false) {
       sdkOptions.skills = [];
     }
     if (this.options.maxTurns != null) sdkOptions.maxTurns = this.options.maxTurns;

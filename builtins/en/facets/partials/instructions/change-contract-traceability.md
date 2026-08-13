@@ -1,7 +1,4 @@
 **Change-contract traceability (required for implementation tasks):**
 1. Identify this task's completion conditions from the request, plan, and observable existing behavior that must remain unchanged. When the workflow supplies contract IDs, preserve their meanings; do not create IDs for implementation locations or work order.
-2. Start exploration from the definitions and references of changed values, state, types, schemas, resolvers, normalizers, adapters, and external side effects. Trace only input, transformation, persistence or transfer, restoration, and consumption paths that actually exist.
-3. When ownership is unclear, a new boundary is crossed, the same contract is reconstructed under another name, or evidence disproves an assumption, expand semantic search across the repository as needed. Do not mechanically add stages, entry points, failures, or concurrency axes that do not apply.
-4. Classify inspected paths as `changed / preserved / out of scope`. Reading broadly does not authorize broader findings or edits.
-5. If a later stage discovers a new completion obligation, show its causal link to the request or changed contract. If it changes the root cause or design, request replanning instead of rewriting an existing ID's meaning.
-6. Map completion evidence to a test or reproducible check that directly observes each changed contract. A broad test-suite pass alone is not evidence for an individual contract.
+2. If a later stage discovers a new completion obligation, show its causal link to the request or changed contract. If it changes the root cause or design, request replanning instead of rewriting an existing ID's meaning.
+3. Map completion evidence to a test or reproducible check that directly observes each changed contract. A broad test-suite pass alone is not evidence for an individual contract.

@@ -38,6 +38,7 @@ export interface SessionContext {
   personaName: string;
   sessionId: string | undefined;
   providerOptions?: StepProviderOptions;
+  permissionMode?: PermissionMode;
 }
 
 interface CallAIWithRetryOptions {
@@ -116,7 +117,7 @@ export async function callAIWithRetry(
       model: ctx.model,
       sessionId,
       allowedTools,
-      permissionMode: options.permissionMode,
+      permissionMode: options.permissionMode ?? ctx.permissionMode,
       providerOptions: ctx.providerOptions,
       abortSignal: abortController.signal,
       onStream: display?.createHandler(),
@@ -137,7 +138,7 @@ export async function callAIWithRetry(
         model: ctx.model,
         sessionId: undefined,
         allowedTools,
-        permissionMode: options.permissionMode,
+        permissionMode: options.permissionMode ?? ctx.permissionMode,
         providerOptions: ctx.providerOptions,
         abortSignal: abortController.signal,
         onStream: retryDisplay?.createHandler(),

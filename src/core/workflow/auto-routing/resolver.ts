@@ -8,6 +8,7 @@ import type { RoutingWorkSnapshot, WorkRequirementEstimate, WorkRequirementEstim
 import { normalizeRoutingWorkSnapshot } from './normalizer.js';
 import { resolveAutoRoutingRuleCandidate, selectRoutingCandidate } from './selector.js';
 import type { RoutingRuntime } from './runtime.js';
+import { isProviderStreamParseError } from '../../../shared/types/agent-failure.js';
 
 export interface AutoRoutingStepMetadata {
   name: string;
@@ -118,6 +119,7 @@ export function resolveAutoRoutingCandidateProviderInfo(candidate: AutoRoutingCa
   return {
     ...providerInfo,
     ...(candidate.providerOptions !== undefined ? { providerOptions: candidate.providerOptions, providerOptionsSources: collectProviderOptionsSources(candidate.providerOptions, source) } : {}),
+    ...(candidate.permissionMode !== undefined ? { permissionMode: candidate.permissionMode } : {}),
     autoRoutingDecision: {
       candidateName: candidate.name,
       routingTier: candidate.routingTier,
@@ -201,6 +203,9 @@ export async function resolveAutoRoutingRuntime(input: ResolveAutoRoutingRuntime
       throw input.abortSignal.reason;
     }
     if (error instanceof Error && error.name === 'AbortError') {
+      throw error;
+    }
+    if (isProviderStreamParseError(error)) {
       throw error;
     }
     input.logger?.warn('Auto routing estimator failed; using configured pool fallback');

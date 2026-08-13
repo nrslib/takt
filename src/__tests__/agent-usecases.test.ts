@@ -7,14 +7,14 @@ import {
   executeIsolatedStructuredInternalAgent,
   generateReport,
   executePart,
-  evaluateCondition,
-  judgeStatus,
-  decomposeTask,
-  requestMoreParts,
+  evaluateCondition as evaluateConditionImpl,
+  judgeStatus as judgeStatusImpl,
+  decomposeTask as decomposeTaskImpl,
+  requestMoreParts as requestMorePartsImpl,
   type DecomposeTaskOptions,
 } from '../agents/agent-usecases.js';
-import { runTagJudgeStage } from '../agents/judge-status-usecase.js';
-import { requestDecompositionRawResponse } from '../agents/decompose-task-usecase.js';
+import { runTagJudgeStage as runTagJudgeStageImpl } from '../agents/judge-status-usecase.js';
+import { requestDecompositionRawResponse as requestDecompositionRawResponseImpl } from '../agents/decompose-task-usecase.js';
 import { loadEvaluationSchema, loadJudgmentSchema } from '../infra/resources/schema-loader.js';
 import { OpenCodeProvider } from '../infra/providers/opencode.js';
 
@@ -22,22 +22,24 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../infra/resources/schema-loader.js', () => ({
-  loadJudgmentSchema: vi.fn(() => ({
-    type: 'object',
-    required: ['step', 'reason'],
-    properties: { step: { type: 'integer' }, reason: { type: 'string' } },
-    additionalProperties: false,
-  })),
-  loadEvaluationSchema: vi.fn(() => ({
-    type: 'object',
-    required: ['matched_index', 'reason'],
-    properties: { matched_index: { type: 'integer' }, reason: { type: 'string' } },
-    additionalProperties: false,
-  })),
-  loadDecompositionSchema: vi.fn((maxInitialParts?: number) => ({ type: 'decomposition', maxInitialParts })),
-  loadMorePartsSchema: vi.fn(() => ({ type: 'more-parts' })),
-}));
+vi.mock('../infra/resources/schema-loader.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../infra/resources/schema-loader.js')>();
+  return {
+    ...actual,
+    loadJudgmentSchema: vi.fn(() => ({
+      type: 'object',
+      required: ['step', 'reason'],
+      properties: { step: { type: 'integer' }, reason: { type: 'string' } },
+      additionalProperties: false,
+    })),
+    loadEvaluationSchema: vi.fn(() => ({
+      type: 'object',
+      required: ['matched_index', 'reason'],
+      properties: { matched_index: { type: 'integer' }, reason: { type: 'string' } },
+      additionalProperties: false,
+    })),
+  };
+});
 
 vi.mock('../core/workflow/engine/task-decomposer.js', () => ({
   parseParts: vi.fn(),
@@ -58,11 +60,51 @@ function doneResponse(content: string, structuredOutput?: Record<string, unknown
     status: 'done' as const,
     content,
     timestamp: new Date('2026-02-12T00:00:00Z'),
-    structuredOutput,
+    structuredOutput: structuredOutput ?? { content },
   };
 }
 
 const judgeOptions = { cwd: '/repo', stepName: 'review' };
+
+const withResolvedMockProvider = <T extends { provider?: unknown; resolvedProvider?: unknown }>(
+  options: T,
+): T => ({
+  ...options,
+  ...(options.provider === undefined && options.resolvedProvider === undefined
+    ? { resolvedProvider: 'mock' }
+    : {}),
+});
+
+const evaluateCondition = (...args: Parameters<typeof evaluateConditionImpl>) => evaluateConditionImpl(
+  args[0],
+  args[1],
+  withResolvedMockProvider(args[2]),
+);
+const judgeStatus = (...args: Parameters<typeof judgeStatusImpl>) => judgeStatusImpl(
+  args[0],
+  args[1],
+  args[2],
+  withResolvedMockProvider(args[3]),
+);
+const decomposeTask = (...args: Parameters<typeof decomposeTaskImpl>) => decomposeTaskImpl(
+  args[0],
+  args[1],
+  withResolvedMockProvider(args[2]),
+);
+const requestMoreParts = (...args: Parameters<typeof requestMorePartsImpl>) => requestMorePartsImpl(
+  args[0],
+  args[1],
+  args[2],
+  withResolvedMockProvider(args[3]),
+);
+const runTagJudgeStage = (...args: Parameters<typeof runTagJudgeStageImpl>) => runTagJudgeStageImpl(
+  args[0],
+  args[1],
+  withResolvedMockProvider(args[2]),
+);
+const requestDecompositionRawResponse = (
+  ...args: Parameters<typeof requestDecompositionRawResponseImpl>
+) => requestDecompositionRawResponseImpl(args[0], args[1], withResolvedMockProvider(args[2]));
 type JudgeStageLog = {
   stage: 1 | 2 | 3;
   method: 'structured_output' | 'phase3_tag' | 'ai_judge';
@@ -206,7 +248,6 @@ describe('agent-usecases', () => {
       expect(runAgent).not.toHaveBeenCalled();
     },
   );
-
   it('evaluateCondition は構造化出力の matched_index を優先する', async () => {
     vi.mocked(runAgent).mockResolvedValue(doneResponse('ignored', { matched_index: 2, reason: 'second condition' }));
 
@@ -216,11 +257,10 @@ describe('agent-usecases', () => {
     ], { cwd: '/repo' });
 
     expect(result).toBe(1);
-    expect(runAgent).toHaveBeenCalledWith(undefined, 'judge prompt', expect.objectContaining({
+    expect(runAgent).toHaveBeenCalledWith(undefined, expect.stringContaining('judge prompt'), expect.objectContaining({
       cwd: '/repo',
-      outputSchema: expect.objectContaining({
-        required: ['matched_index', 'reason'],
-      }),
+      resolvedExecution: expect.objectContaining({ provider: 'mock' }),
+      outputSchema: expect.any(Object),
     }));
   });
 
@@ -295,7 +335,7 @@ describe('agent-usecases', () => {
     expect(detectJudgeIndex).not.toHaveBeenCalled();
   });
 
-  it('evaluateCondition は maxTurns 非対応 provider では内部 maxTurns を渡さない', async () => {
+  it('evaluateCondition は provider 分岐なしで暗黙の maxTurns を付与しない', async () => {
     vi.mocked(runAgent).mockResolvedValue(doneResponse('ignored', { matched_index: 1, reason: 'first condition' }));
 
     await evaluateCondition('agent output', [
@@ -305,9 +345,9 @@ describe('agent-usecases', () => {
       resolvedProvider: 'claude-terminal',
     });
 
-    expect(runAgent).toHaveBeenCalledWith(undefined, 'judge prompt', expect.not.objectContaining({
-      maxTurns: expect.anything(),
-    }));
+    const options = vi.mocked(runAgent).mock.calls[0]?.[2];
+    expect(options?.resolvedExecution).toMatchObject({ provider: 'claude-terminal' });
+    expect(options).not.toHaveProperty('maxTurns');
   });
 
   // --- judgeStatus: 3-stage fallback ---
@@ -331,10 +371,8 @@ describe('agent-usecases', () => {
 
     expect(result).toEqual({ candidateIndex: 1, method: 'structured_output' });
     expect(runAgent).toHaveBeenCalledTimes(1);
-    expect(runAgent).toHaveBeenCalledWith('conductor', 'structured', expect.objectContaining({
-      outputSchema: expect.objectContaining({
-        required: ['step', 'reason'],
-      }),
+    expect(runAgent).toHaveBeenCalledWith('conductor', expect.stringContaining('structured'), expect.objectContaining({
+      outputSchema: expect.any(Object),
     }));
   });
 
@@ -351,12 +389,10 @@ describe('agent-usecases', () => {
 
     expect(result).toEqual({ candidateIndex: 1, method: 'phase3_tag' });
     expect(runAgent).toHaveBeenCalledTimes(2);
-    expect(runAgent).toHaveBeenNthCalledWith(1, 'conductor', 'structured', expect.objectContaining({
-      outputSchema: expect.objectContaining({
-        required: ['step', 'reason'],
-      }),
+    expect(runAgent).toHaveBeenNthCalledWith(1, 'conductor', expect.stringContaining('structured'), expect.objectContaining({
+      outputSchema: expect.any(Object),
     }));
-    expect(runAgent).toHaveBeenNthCalledWith(2, 'conductor', 'tag', expect.not.objectContaining({
+    expect(runAgent).toHaveBeenNthCalledWith(2, 'conductor', 'tag', expect.objectContaining({
       outputSchema: expect.anything(),
     }));
   });
@@ -498,7 +534,7 @@ describe('agent-usecases', () => {
     },
   );
 
-  it('judgeStatus は maxTurns 非対応 provider では全内部ステージで maxTurns を渡さない', async () => {
+  it('judgeStatus は provider 分岐なしで全内部ステージに暗黙の maxTurns を付与しない', async () => {
     vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('no match'));
     vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('no tag'));
     vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('ignored', { matched_index: 2, reason: 'second condition' }));
@@ -513,9 +549,8 @@ describe('agent-usecases', () => {
 
     expect(result).toEqual({ candidateIndex: 1, method: 'ai_judge' });
     expect(runAgent).toHaveBeenCalledTimes(3);
-    for (const call of vi.mocked(runAgent).mock.calls) {
-      expect(call[2]).not.toHaveProperty('maxTurns');
-    }
+    expect(vi.mocked(runAgent).mock.calls.every((call) => !('maxTurns' in (call[2] ?? {}))))
+      .toBe(true);
   });
 
   it('judgeStatus は Phase 3 の内部ステージログを順序どおりに通知する', async () => {
@@ -700,12 +735,16 @@ describe('agent-usecases', () => {
     ]);
     expect(parseParts).not.toHaveBeenCalled();
     expect(runAgent).toHaveBeenCalledWith('team-leader', expect.any(String), expect.objectContaining({
-      allowedTools: [],
-      permissionMode: 'readonly',
-      outputSchema: { type: 'decomposition', maxInitialParts: 3 },
+      outputSchema: expect.objectContaining({
+        properties: expect.objectContaining({
+          parts: expect.objectContaining({ maxItems: 3 }),
+        }),
+      }),
     }));
     const [, , callOptions] = vi.mocked(runAgent).mock.calls[0] ?? [];
     expect(callOptions).not.toHaveProperty('maxTurns');
+    expect(callOptions).not.toHaveProperty('allowedTools');
+    expect(callOptions).not.toHaveProperty('permissionMode');
   });
 
   it('Given inspectTools, When decomposeTask runs, Then it passes them to the parent decomposition call only', async () => {
@@ -723,9 +762,8 @@ describe('agent-usecases', () => {
 
     expect(runAgent).toHaveBeenCalledWith('team-leader', expect.any(String), expect.objectContaining({
       allowedTools: ['Read', 'Glob', 'Grep'],
-      permissionMode: 'readonly',
-      outputSchema: { type: 'decomposition', maxInitialParts: 3 },
     }));
+    expect(vi.mocked(runAgent).mock.calls[0]?.[2]).not.toHaveProperty('permissionMode');
   });
 
   it('decomposeTask は構造化出力がない場合 parseParts にフォールバックする', async () => {
@@ -742,22 +780,7 @@ describe('agent-usecases', () => {
     ]);
   });
 
-  it('Finding Contract decomposition は構造化出力がない場合に汎用parserへフォールバックしない', async () => {
-    vi.mocked(runAgent).mockResolvedValue(doneResponse('```json [] ```'));
-
-    await expect(decomposeTask('instruction', 2, {
-      cwd: '/repo',
-      findingContract: {
-        targetFindingIds: ['F-0001'],
-        actionableFindings: '{"open":[{"id":"F-0001"}]}',
-      },
-    })).rejects.toThrow('requires structured output');
-
-    expect(parseParts).not.toHaveBeenCalled();
-    expect(runAgent).toHaveBeenCalledOnce();
-  });
-
-  it('非Finding Contract decomposition は意味的検証診断付きで全partsを再生成する', async () => {
+  it('decomposition は意味的検証診断付きで全partsを再生成する', async () => {
     vi.mocked(runAgent)
       .mockResolvedValueOnce(doneResponse('invalid', { parts: [] }))
       .mockResolvedValueOnce(doneResponse('valid', {
@@ -776,7 +799,7 @@ describe('agent-usecases', () => {
     expect(secondPrompt).toContain('regenerate all parts');
   });
 
-  it('非Finding Contract decomposition は provider 例外を再試行しない', async () => {
+  it('decomposition は provider 例外を再試行しない', async () => {
     const providerError = new Error('network unavailable');
     const onAgentError = vi.fn();
     vi.mocked(runAgent).mockRejectedValue(providerError);
@@ -964,7 +987,7 @@ describe('agent-usecases', () => {
     });
     resolveRunAgent?.(response);
 
-    await expect(result).resolves.toBe(response);
+    await expect(result).resolves.toStrictEqual(response);
     expect(onAgentResponse).not.toHaveBeenCalled();
   });
 
@@ -1063,13 +1086,11 @@ describe('agent-usecases', () => {
       cancelPartIds: ['p2'],
       parts: [{ id: 'p3', title: 'Part 3', instruction: 'Do 3' }],
     });
-    expect(runAgent).toHaveBeenCalledWith('team-leader', expect.stringContaining('original instruction'), expect.objectContaining({
-      allowedTools: [],
-      outputSchema: { type: 'more-parts' },
-      permissionMode: 'readonly',
-    }));
+    expect(runAgent).toHaveBeenCalledWith('team-leader', expect.stringContaining('original instruction'), expect.any(Object));
     const [, , callOptions] = vi.mocked(runAgent).mock.calls[0] ?? [];
     expect(callOptions).not.toHaveProperty('maxTurns');
+    expect(callOptions).not.toHaveProperty('allowedTools');
+    expect(callOptions).not.toHaveProperty('permissionMode');
   });
 
   it('requestMoreParts は inspect tools を feedback planning call に渡さない', async () => {
@@ -1092,11 +1113,9 @@ describe('agent-usecases', () => {
       } as Parameters<typeof requestMoreParts>[3] & { inspectTools: string[] },
     );
 
-    expect(runAgent).toHaveBeenCalledWith('team-leader', expect.any(String), expect.objectContaining({
-      allowedTools: [],
-      outputSchema: { type: 'more-parts' },
-      permissionMode: 'readonly',
-    }));
+    expect(runAgent).toHaveBeenCalledWith('team-leader', expect.any(String), expect.any(Object));
+    expect(vi.mocked(runAgent).mock.calls[0]?.[2]).not.toHaveProperty('allowedTools');
+    expect(vi.mocked(runAgent).mock.calls[0]?.[2]).not.toHaveProperty('permissionMode');
   });
 
   it('requestMoreParts は done 以外をエラーにする', async () => {
@@ -1260,15 +1279,13 @@ describe('agent-usecases', () => {
     );
 
     expect(result).toEqual({ candidateIndex: 0, method: 'phase3_tag' });
-    expect(runAgent).toHaveBeenCalledWith('conductor', 'tag instruction', expect.objectContaining({
+    expect(runAgent).toHaveBeenCalledWith('conductor', expect.stringContaining('tag instruction'), expect.objectContaining({
       cwd: '/repo',
-      provider: 'cursor',
-      maxTurns: 3,
-      permissionMode: 'readonly',
+      resolvedExecution: expect.objectContaining({ provider: 'cursor' }),
     }));
   });
 
-  it('runTagJudgeStage は maxTurns 非対応 provider では内部 maxTurns を渡さない', async () => {
+  it('runTagJudgeStage は provider 分岐なしで暗黙の maxTurns を付与しない', async () => {
     vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('[REVIEW:1]'));
 
     const result = await runTagJudgeStage(
@@ -1278,9 +1295,9 @@ describe('agent-usecases', () => {
     );
 
     expect(result).toEqual({ candidateIndex: 0, method: 'phase3_tag' });
-    expect(runAgent).toHaveBeenCalledWith('conductor', 'tag instruction', expect.not.objectContaining({
-      maxTurns: expect.anything(),
-    }));
+    const options = vi.mocked(runAgent).mock.calls[0]?.[2];
+    expect(options?.resolvedExecution).toMatchObject({ provider: 'claude-terminal' });
+    expect(options).not.toHaveProperty('maxTurns');
   });
 
   it('runTagJudgeStage はタグ不一致時に undefined を返す', async () => {

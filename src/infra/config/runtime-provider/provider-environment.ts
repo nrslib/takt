@@ -17,7 +17,7 @@ import {
   type LegacyProviderEnvironmentInput,
 } from './environment.js';
 import { applyRuntimeProviderOverride } from './override.js';
-import { resolveRuntimeProviderFile } from './loader.js';
+import { resolveRuntimeProviderFileWithOrigins } from './loader.js';
 import {
   determineProviderConfigMode,
   type ProviderConfigMode,
@@ -38,6 +38,7 @@ import {
 import { resolveEffectiveAutoRouting } from '../../../core/workflow/auto-routing/effective-auto-routing.js';
 import type { WorkflowConfig } from '../../../core/models/index.js';
 import type { RuntimeProviderFile } from './schema.js';
+import { createRuntimeProviderResolutionContext } from './resolution-context.js';
 
 export interface ResolvedRuntimeEnvironment {
   providerEnvironment: CompiledProviderEnvironment;
@@ -63,10 +64,11 @@ export function resolveCompiledProviderEnvironment(
 export function resolveRuntimeEnvironment(
   input: ResolveProviderEnvironmentInput,
 ): ResolvedRuntimeEnvironment {
-  const runtimeFile = resolveRuntimeProviderFile({
+  const resolvedRuntimeFile = resolveRuntimeProviderFileWithOrigins({
     globalConfigDir: getGlobalConfigDir(),
     projectConfigDir: getProjectConfigDir(input.projectCwd),
   });
+  const runtimeFile = resolvedRuntimeFile.runtimeFile;
   const companionEnabled = runtimeFile?.companion?.enabled ?? true;
   const runtimeFileForProviderResolution = companionEnabled
     ? runtimeFile
@@ -92,7 +94,14 @@ export function resolveRuntimeEnvironment(
   // explicit `--provider`/`--model` the same way the selector seam does.
   return {
     providerEnvironment: applyRuntimeProviderOverride(
-      compileProviderEnvironment({ kind: 'runtime-v1', section }),
+      compileProviderEnvironment({
+        kind: 'runtime-v1',
+        section,
+        resolutionContext: createRuntimeProviderResolutionContext(
+          input.projectCwd,
+          resolvedRuntimeFile.profileOrigins,
+        ),
+      }),
       {
         provider: input.legacy.provider,
         providerSource: input.legacy.providerSource,

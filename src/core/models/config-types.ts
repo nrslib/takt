@@ -8,6 +8,7 @@
  */
 
 import type { ProviderType } from '../../shared/types/provider.js';
+import type { PermissionMode } from './types.js';
 import type { QualityGate, RateLimitFallbackConfig, StepProviderOptions, WorkflowRuntimeConfig } from './workflow-types.js';
 import type { ProviderPermissionProfiles } from './provider-profiles.js';
 import type { VcsProviderType } from './vcs-types.js';
@@ -22,6 +23,7 @@ export interface AutoRoutingCandidate {
   model: string;
   routingTier: RoutingTier;
   providerOptions?: StepProviderOptions;
+  permissionMode?: PermissionMode;
 }
 
 export interface AutoRoutingConfig {
@@ -29,6 +31,8 @@ export interface AutoRoutingConfig {
   router: {
     provider: ProviderType;
     model: string;
+    providerOptions?: StepProviderOptions;
+    permissionMode?: PermissionMode;
   };
   candidates: AutoRoutingCandidate[];
   defaultPool: string;
@@ -50,20 +54,24 @@ export interface AutoRoutingConfig {
 
 /**
  * The resolved `escalate` target of the runtime.yaml profile an agent was resolved to.
- * Carried on the resolution result so consumers (Finding Contract escalation) act on a
- * resolved provider/model instead of re-reading configuration or matching model names.
+ * Carried on the resolution result so consumers act on a resolved provider/model instead of
+ * re-reading configuration or matching model names.
  */
 export interface ProviderEscalationTarget {
   profile: string;
   provider: ProviderType;
   model: string;
   providerOptions?: StepProviderOptions;
+  /** Exact permission mode declared by the escalation profile. */
+  permissionMode?: PermissionMode;
 }
 
 export interface PersonaProviderEntry {
   provider?: ProviderType;
   model?: string;
   providerOptions?: StepProviderOptions;
+  /** Exact permission mode declared by the resolved runtime profile. */
+  permissionMode?: PermissionMode;
   /** Set only by the runtime.yaml compiler, from the referenced profile's `escalate`. */
   escalation?: ProviderEscalationTarget;
 }
@@ -88,16 +96,14 @@ export interface InternalAgentSeats {
   selector?: ProviderRoutingEntry;
   /** `assistant`: 対話モードのアシスタント。 */
   assistant?: ProviderRoutingEntry;
-  /** `intake-normalizer`: Finding Contract のレビュー報告を raw findings へ正規化する係。 */
   intakeNormalizer?: ProviderRoutingEntry;
-  /** `findings-manager`: Finding Contract の台帳マネージャ（取り込み・同一性判定）。 */
   findingsManager?: ProviderRoutingEntry;
-  /** `terminal-adjudicator`: Finding Contract の終端／衝突裁定役（persona facet は supervisor）。 */
   terminalAdjudicator?: ProviderRoutingEntry;
   /** `loop-judge`: loop_monitors の判定役。 */
   loopJudge?: ProviderRoutingEntry;
-  /** `escalation-reviewer`: Finding Contract 言い直しの最終枠（格上げ先）。 */
   escalationReviewer?: ProviderRoutingEntry;
+  /** `review-completion-judge`: review-completion episode の網羅性判定役。 */
+  reviewCompletionJudge?: ProviderRoutingEntry;
 }
 
 export interface ProviderRoutingConfig {

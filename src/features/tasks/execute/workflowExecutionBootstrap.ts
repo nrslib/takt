@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
-import { CapabilityAwareStructuredCaller } from '../../../agents/structured-caller.js';
+import { ProviderNeutralStructuredCaller } from '../../../agents/structured-caller.js';
 import type { WorkflowConfig } from '../../../core/models/index.js';
 import type {
   InternalAgentSeats,
@@ -10,6 +10,7 @@ import type {
   ResolvedObservabilityConfig,
   TagRoutingConflictPolicy,
 } from '../../../core/models/config-types.js';
+import type { PermissionMode } from '../../../core/models/types.js';
 import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
 import { readRunMetaBySlug } from '../../../core/workflow/run/run-meta.js';
 import {
@@ -128,6 +129,8 @@ export interface WorkflowExecutionBootstrap {
   companionProviders: Readonly<Record<string, ProviderRoutingEntry>>;
   providerRoutingTagConflictPolicy: TagRoutingConflictPolicy;
   providerOptions: WorkflowExecutionOptions['providerOptions'];
+  providerOptionsProviderSource: ProviderResolutionSource | undefined;
+  providerPermissionMode: PermissionMode | undefined;
   effectiveWorkflowConfig: WorkflowConfig;
   autoStrategyOverride: WorkflowExecutionOptions['autoStrategy'];
   onEffectiveAutoRoutingReached: () => void;
@@ -137,7 +140,7 @@ export interface WorkflowExecutionBootstrap {
   observability: ResolvedObservabilityConfig;
   observabilityHandle: OtelFoundationHandle;
   analyticsEmitter: AnalyticsEmitter;
-  structuredCaller: CapabilityAwareStructuredCaller;
+  structuredCaller: ProviderNeutralStructuredCaller;
   savedSessions: Record<string, string>;
   sessionUpdateHandler: (persona: string, sessionId: string | undefined) => void;
   traceReportMode: TraceReportMode;
@@ -621,21 +624,7 @@ export async function createWorkflowExecutionBootstrap(
         })
       : [],
   );
-  validateWorkflowCallContracts(effectiveWorkflowConfig, projectCwd, cwd, {
-    providerValidationOptions: {
-      provider: currentProvider,
-      providerSource: currentProviderSource,
-      model: configuredModel,
-      modelSource: configuredModelSource,
-      autoRouting: providerEnvironment.autoRouting,
-      personaProviders: effectivePersonaProviders,
-      providerRouting: effectiveProviderRouting,
-      providerRoutingTagConflictPolicy,
-      ...(providerEnvironment.internalAgents === undefined
-        ? {}
-        : { internalAgentSeats: providerEnvironment.internalAgents }),
-    },
-  });
+  validateWorkflowCallContracts(effectiveWorkflowConfig, projectCwd, cwd);
   const providerEventLogger = createProviderEventLogger({
     logsDir: runPaths.logsAbs,
     sessionId: workflowSessionId,
@@ -666,7 +655,7 @@ export async function createWorkflowExecutionBootstrap(
     interactiveUserInput,
     workflowSessionId,
   );
-  const structuredCaller = new CapabilityAwareStructuredCaller();
+  const structuredCaller = new ProviderNeutralStructuredCaller();
   const savedSessions = shouldLoadSavedSessions
     ? (isWorktree
       ? loadWorktreeSessions(projectCwd, cwd, currentProvider)
@@ -752,6 +741,10 @@ export async function createWorkflowExecutionBootstrap(
     companionProviders,
     providerRoutingTagConflictPolicy,
     providerOptions: effectiveProviderOptions,
+    providerOptionsProviderSource: resolvedRuntimeEnvironment.providerConfigMode === 'runtime-v1'
+      ? currentProviderSource
+      : undefined,
+    providerPermissionMode: providerEnvironment.permissionMode,
     effectiveWorkflowConfig,
     autoStrategyOverride,
     onEffectiveAutoRoutingReached,

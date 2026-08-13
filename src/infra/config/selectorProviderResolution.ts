@@ -3,6 +3,7 @@ import type { ProviderRoutingEntry } from '../../core/models/config-types.js';
 import type { StepProviderOptions } from '../../core/models/workflow-types.js';
 import type { ProviderResolutionSource } from '../../core/workflow/provider-options-trace.js';
 import type { ProviderType } from '../../shared/types/provider.js';
+import type { PermissionMode } from '../../core/models/types.js';
 import { mergeProviderOptions } from './providerOptions.js';
 import { validateProviderModelRequirements } from '../../core/workflow/provider-model-requirements.js';
 import { ConfiguredModelSchema } from '../../core/models/model-schema.js';
@@ -26,6 +27,7 @@ export interface ResolvedSelectorProvider {
   providerSource?: ProviderResolutionSource;
   modelSource?: ProviderResolutionSource;
   providerOptions?: StepProviderOptions;
+  permissionMode?: PermissionMode;
 }
 
 interface SelectorCandidate {
@@ -92,6 +94,7 @@ export function resolveSelectorProviderFromRuntimeEnvironment(
           provider: environment.provider,
           model: environment.model,
           providerOptions: environment.providerOptions,
+          permissionMode: environment.permissionMode,
         }
   );
   if (runtimeSelector === undefined) {
@@ -208,6 +211,7 @@ function resolveSelectorFromRuntimeValues(
       provider: runtime.provider,
       model: normalizeSelectorModel(runtime.model),
       providerOptions: runtime.providerOptions,
+      permissionMode: runtime.permissionMode,
     },
     { provider: providerOverride, model: normalizeSelectorModel(modelOverride) },
   );
@@ -234,6 +238,9 @@ function resolveSelectorFromRuntimeValues(
     ...(model === undefined ? {} : { model }),
     ...(modelSource === undefined ? {} : { modelSource }),
     ...(providerOptions === undefined ? {} : { providerOptions }),
+    ...(composed.permissionMode !== undefined
+      ? { permissionMode: composed.permissionMode }
+      : {}),
   };
 }
 

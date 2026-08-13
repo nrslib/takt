@@ -227,6 +227,21 @@ describe('callMock: response content when no scenario is set', () => {
     expect(result.content).toBe('Custom fixed response');
   });
 
+  it('should return native structured text for the common synthetic text schema', async () => {
+    const result = await callMock('supervisor', 'judge prompt', {
+      cwd: '/tmp/project',
+      mockResponse: 'Healthy loop',
+      outputSchema: {
+        type: 'object',
+        properties: { content: { type: 'string' } },
+        required: ['content'],
+        additionalProperties: false,
+      },
+    });
+
+    expect(result.structuredOutput).toEqual({ content: 'Healthy loop' });
+  });
+
   it('should use provided sessionId when given', async () => {
     const result = await callMock('coder', 'test prompt', {
       cwd: '/tmp/project',

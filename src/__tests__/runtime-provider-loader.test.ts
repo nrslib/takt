@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import {
   loadRuntimeProviderFileAt,
   resolveRuntimeProviderFile,
+  resolveRuntimeProviderFileWithOrigins,
 } from '../infra/config/runtime-provider/loader.js';
 import { RUNTIME_PROVIDER_FILENAME } from '../infra/config/runtime-provider/constants.js';
 
@@ -149,6 +150,42 @@ describe('runtime-provider loader', () => {
     // disjoint profiles from both layers are retained.
     expect(resolved?.provider?.profiles?.['global-only']?.model).toBe('keep-me');
     expect(resolved?.provider?.profiles?.['project-only']?.model).toBe('added');
+  });
+
+  it('tracks the origin layer of every profile after project replacement', () => {
+    writeRuntimeYaml(globalDir, [
+      'version: 1',
+      'provider:',
+      '  profiles:',
+      '    shared:',
+      '      provider: mock',
+      '      model: global',
+      '    global-only:',
+      '      provider: mock',
+      '      model: global-only',
+    ]);
+    writeRuntimeYaml(projectDir, [
+      'version: 1',
+      'provider:',
+      '  profiles:',
+      '    shared:',
+      '      provider: mock',
+      '      model: project',
+      '    project-only:',
+      '      provider: mock',
+      '      model: project-only',
+    ]);
+
+    const resolved = resolveRuntimeProviderFileWithOrigins({
+      globalConfigDir: globalDir,
+      projectConfigDir: projectDir,
+    });
+
+    expect(resolved.profileOrigins).toEqual(new Map([
+      ['shared', 'project'],
+      ['global-only', 'global'],
+      ['project-only', 'project'],
+    ]));
   });
 
   it('Given both files carry `targets`, When resolving, Then the whole targets section is replaced by project (no deep merge, C2)', () => {

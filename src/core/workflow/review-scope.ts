@@ -12,9 +12,7 @@
  * - HEAD と working tree の差分（削除を含む）
  * - untracked ファイル（ignored を除く）
  *
- * この作業ツリー計算は Finding Contract の証拠検証（snapshot.ts の
- * changedPaths）と共有する。別々の git コマンドで範囲を決めると
- * 「レビューした範囲」と「証拠として受理される範囲」がずれるためである。
+ * この作業ツリー計算はレビュー対象の一貫した範囲を決めるために共有する。
  *
  * ## PR diff range の合成（指示注入側だけの拡張）
  *

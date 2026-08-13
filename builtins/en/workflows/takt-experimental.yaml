@@ -22,7 +22,7 @@ steps:
       implementation_companions:
         fixed: [ai-antipattern-review-companion, testing-review-companion]
         pool: []
-        moderator: ai-antipattern-review-moderator
+        moderator: review-companion-moderator
       reviewer_suite: takt-experimental-review-adapter
       review_policy_additions: [takt-testing]
       review_policy: [coding, testing, takt-testing, review]

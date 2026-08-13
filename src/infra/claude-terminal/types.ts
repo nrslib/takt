@@ -1,7 +1,7 @@
 import type { McpServerConfig, PermissionMode } from '../../core/models/index.js';
 import type { ClaudeEffort } from '../../core/models/workflow-types.js';
 import type { PermissionHandler, AskUserQuestionHandler, AskUserQuestionInput } from '../../core/workflow/types.js';
-import type { InternalAgentIsolation, StreamCallback } from '../../shared/types/provider.js';
+import type { StreamCallback } from '../../shared/types/provider.js';
 
 export type ClaudeTerminalBackendName = 'tmux';
 
@@ -87,7 +87,6 @@ export interface ClaudeTerminalCallOptions {
   cwd: string;
   abortSignal?: AbortSignal;
   sessionId?: string;
-  internalAgentIsolation?: InternalAgentIsolation;
   model?: string;
   effort?: ClaudeEffort;
   skillsEnabled?: boolean;
@@ -113,7 +112,6 @@ export interface ClaudeTerminalCallOptions {
 
 export interface BuildClaudeTerminalCommandOptions {
   pathToClaudeCodeExecutable?: string;
-  internalAgentIsolation?: InternalAgentIsolation;
   model?: string;
   effort?: ClaudeEffort;
   skillsEnabled?: boolean;

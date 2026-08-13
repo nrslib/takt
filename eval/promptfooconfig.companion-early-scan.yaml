@@ -1,0 +1,35 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+
+description: 'TAKT facet eval: Companion early same-family scan and boundary precision'
+
+prompts:
+  - file://prompts/companion-early-scan.phase1.md
+
+providers:
+  - id: openai:codex-sdk
+    label: codex
+    config:
+      working_dir: fixtures/companion-family-boundary
+      sandbox_mode: read-only
+      approval_policy: never
+      skip_git_repo_check: true
+      model_reasoning_effort: low
+
+tests:
+  - description: 'companion: detect a same-family unmigrated consumer without promoting adjacent or unverified paths'
+    vars:
+      task: file://cases/companion-early-scan.md
+      previous_response: file://cases/prev-companion-early-scan.md
+    assert:
+      - type: llm-rubric
+        metric: companion/positive-reverse-boundary
+        value: |
+          Judge the response as an in-progress Companion review. Pass only if it
+          (positive) reports the CLI path that still reconstructs the changed
+          normalization family as actionable in the current step, (reverse)
+          does not request repair of the adjacent telemetry-label family, and
+          (boundary) does not claim a hidden mobile consumer is broken or
+          verified without supplied evidence. It may state that hidden paths
+          were not inspectable. Fail if it performs moderator adjudication,
+          invents repository evidence, or expands repair authority outside the
+          normalization family.

@@ -61,10 +61,12 @@ function dependencies(input: {
   providers?: Record<string, { provider: 'mock' }>;
   selectorProvider?: SelectorProviderInfo;
   intervalMs?: number;
+  emitEvent?: ReturnType<typeof vi.fn>;
 }) {
   return {
     cwd: '/project',
     projectCwd: '/project',
+    failureDir: '/project/.takt/runs/run/failures',
     runSlug: 'run',
     runPathNamespace: [],
     language: 'en' as const,
@@ -83,7 +85,7 @@ function dependencies(input: {
     diffReader: input.diffReader,
     abortSignal: input.abortSignal,
     stateStore: new CompanionReviewStateStore(),
-    emitEvent: vi.fn(),
+    emitEvent: input.emitEvent ?? vi.fn(),
     recordUsage: vi.fn(),
   };
 }
@@ -247,6 +249,29 @@ describe('companion runtime lifecycle', () => {
     setIntervalSpy.mockRestore();
   });
 
+  it('should record an initial selector-empty skip for an empty companion selection', async () => {
+    const emitEvent = vi.fn();
+    const runtime = await CompanionStepRuntime.create(dependencies({
+      workflowStep: {
+        ...step(),
+        companion: { fixed: [], pool: [] },
+      },
+      diffReader: {
+        readBaselineSha: vi.fn().mockResolvedValue('baseline'),
+        readDiff: vi.fn().mockResolvedValue({ status: 'ok', snapshot: emptySnapshot }),
+      },
+      emitEvent,
+    }));
+
+    runtime.stop();
+
+    expect(emitEvent).toHaveBeenCalledWith('companion:review_skipped', {
+      step: 'implement',
+      phase: 'initial',
+      reason: 'selector_empty',
+    });
+  });
+
   it('should send a provider-compatible schema when selecting companion reviewers', async () => {
     const workflowStep = {
       ...step(),
@@ -277,7 +302,6 @@ describe('companion runtime lifecycle', () => {
           provider: 'mock',
           model: undefined,
           providerOptions: {},
-          nativeTools: [],
         },
       }));
 

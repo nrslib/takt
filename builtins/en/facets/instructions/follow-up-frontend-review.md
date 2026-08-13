@@ -1,5 +1,5 @@
 {{include:instructions/frontend-review-focus}}
 
 {{include:instructions/review-target-scope}}
-{{include:instructions/follow-up-review-scope}}
+{{include:instructions/contract-family-follow-up-review}}
 {{include:instructions/review-pr-context}}

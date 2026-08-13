@@ -120,6 +120,7 @@ export interface NdjsonWorkflowAbort {
   type: 'workflow_abort';
   iterations: number;
   reason: string;
+  failureCategory?: AgentFailureCategory;
   endTime: string;
   publicationId?: string;
 }
@@ -193,6 +194,13 @@ export interface NdjsonCompanionReviewRound {
   digest: string;
   changedLines: number;
   findingCount: number;
+  reviewerFindings: NdjsonCompanionAcceptedFinding[];
+  reviewerUpdates: NdjsonCompanionAcceptedUpdate[];
+  moderator?: NdjsonCompanionModeratorAudit;
+  acceptedFindings: NdjsonCompanionAcceptedFinding[];
+  acceptedUpdates: NdjsonCompanionAcceptedUpdate[];
+  zeroReason?: NdjsonCompanionZeroReason;
+  runPathNamespace?: string[];
   timestamp: string;
 }
 
@@ -212,6 +220,103 @@ export interface NdjsonCompanionQueueCoalesced {
     changedLines: number;
     observedGeneration: number;
   };
+  runPathNamespace?: string[];
+  timestamp: string;
+}
+
+export type NdjsonCompanionCallPurpose = 'selector' | 'reviewer' | 'moderator' | 'judge';
+export type NdjsonCompanionCallStatus = 'completed' | 'failed';
+
+export interface NdjsonCompanionUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  cachedInputTokens?: number;
+  cacheCreationInputTokens?: number;
+  cacheReadInputTokens?: number;
+  usageMissing: boolean;
+  reason?: string;
+}
+
+export interface NdjsonCompanionCall {
+  type: 'companion_call';
+  step: string;
+  agent: string;
+  purpose: NdjsonCompanionCallPurpose;
+  attempt: number;
+  status: NdjsonCompanionCallStatus;
+  provider: string;
+  model?: string;
+  runPathNamespace?: string[];
+  sessionIdAvailable: boolean;
+  sessionId?: string;
+  promptResolved: boolean;
+  systemPrompt?: string;
+  systemPromptTruncated?: boolean;
+  prompt?: string;
+  promptTruncated?: boolean;
+  response?: string;
+  responseTruncated?: boolean;
+  structuredOutput?: string;
+  structuredOutputTruncated?: boolean;
+  usage: NdjsonCompanionUsage;
+  error?: string;
+  errorTruncated?: boolean;
+  timestamp: string;
+}
+
+export type NdjsonCompanionZeroReason =
+  | 'reviewer_returned_no_findings'
+  | 'moderator_not_invoked_for_empty_reviewer_result'
+  | 'moderator_rejected_or_merged_all_findings'
+  | 'no_new_finding_records';
+
+export interface NdjsonCompanionModeratorDecision {
+  action: 'accept' | 'reject' | 'merge' | 'downgrade';
+  sourceIndex: number;
+  severity?: 'must_fix' | 'should_fix' | 'nit';
+  finding?: string;
+  targetId?: string;
+}
+
+export interface NdjsonCompanionModeratorAudit {
+  name: string;
+  invoked: boolean;
+  reason?: 'reviewer_result_empty' | 'not_configured';
+  decisions: NdjsonCompanionModeratorDecision[];
+}
+
+export interface NdjsonCompanionAcceptedFinding {
+  severity: 'must_fix' | 'should_fix' | 'nit';
+  file: string;
+  line: number;
+  finding: string;
+}
+
+export interface NdjsonCompanionAcceptedUpdate {
+  id: string;
+  status: 'resolved' | 'unresolved' | 'wontfix_accepted';
+}
+
+export type NdjsonCompanionReviewPhase = 'initial' | 'live' | 'fix' | 'completion';
+export type NdjsonCompanionReviewSkipReason =
+  | 'companion_disabled'
+  | 'companion_not_configured'
+  | 'companion_runtime_unavailable'
+  | 'selector_empty'
+  | 'empty_diff'
+  | 'unchanged_digest'
+  | 'below_minimum_changed_lines';
+
+export interface NdjsonCompanionReviewSkipped {
+  type: 'companion_review_skipped';
+  step: string;
+  companion?: string;
+  phase: NdjsonCompanionReviewPhase;
+  reason: NdjsonCompanionReviewSkipReason;
+  fixRound?: number;
+  observedGeneration?: number;
+  runPathNamespace?: string[];
   timestamp: string;
 }
 
@@ -229,7 +334,9 @@ export type NdjsonRecord =
   | NdjsonInteractiveStart
   | NdjsonInteractiveEnd
   | NdjsonCompanionReviewRound
-  | NdjsonCompanionQueueCoalesced;
+  | NdjsonCompanionQueueCoalesced
+  | NdjsonCompanionCall
+  | NdjsonCompanionReviewSkipped;
 
 /** Record for debug prompt/response log (debug-*-prompts.jsonl) */
 export interface PromptLogRecord {

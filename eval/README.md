@@ -27,21 +27,43 @@ all-or-nothing asserts: for load-bearing conclusions, run the complete
 `prepare -> eval` command three separate times and read per-metric
 results, not one pass/fail summary.
 
+The `write-tests-default-priority` suite runs on the Claude headless CLI with
+model `opus` because it reproduces a requirement-priority miss observed in an
+Opus-driven TAKT run. It is excluded from the default Codex suite and runs
+through `npm run eval:prompts:default-priority`. It verifies the primary manual
+Requeue-to-runner path from failed-leaf selection and initial cursor through
+pending persistence, normal runner claim, and fresh execution; checkpoint
+preservation is checked only as an explicit independent behavior. The suite
+uses a disposable work copy, so rerun the complete command for each trial.
+Run `npm run eval:prompts:default-priority:codex` to cross-check it with Codex.
+
+The `fix-loop-convergence` suite probes the remediation-loop convergence
+rules with 11 decision scenarios, each run on **two providers** — the
+claude headless CLI (`eval/providers/claude-judge.sh`, model
+`claude-opus-5`) and the codex CLI (`eval/providers/codex-judge.sh`, model
+`gpt-5.6-luna`). Prompts are assembled at run time from the live
+`builtins/ja/facets` content (`eval/fix-loop-convergence-prompt.mjs`), so
+the suite always measures the current facet text. It needs both CLI
+logins, is excluded from the default suite run, and asserts on a fixed
+machine-readable `JUDGEMENT:` line — invoke it explicitly
+(`npm run eval:prompts:fix-loop-convergence`).
+
 ## Suites
 
 | Suite | Workflow / step | Fixture | Measures |
 |-------|-----------------|---------|----------|
 | `coding` | peer-review / coding-review | sample-project | recall on 5 planted coding-policy violations + precision on a clean diff |
 | `arch` | peer-review / arch-review | sample-project | recall on 3 planted architecture violations |
+| `arch-failure-aggregation` | peer-review / arch-review | arch-failure-aggregation | recall on inconsistent primary-failure aggregation and precision on a required fail-fast boundary |
 | `antipattern` | peer-review / ai-antipattern-review-2nd | sample-project | recall on 3 planted AI antipatterns |
 | `frontend` | review-frontend / frontend-review | frontend-app | recall on 3 planted layering violations |
 | `cqrs` | review-backend-cqrs / cqrs-es-review | backend-cqrs | recall on 3 planted CQRS+ES violations |
 | `rescan` | peer-review / arch-review (round 2) | inventory-es | re-scan evidence + recall on 4 planted defects after previous findings were resolved |
-| `finding-normalizer` | self-contained review + engine context -> Finding Contract JSON | direct FC assembly cases | schema validity, all 12 required fields, exact output, extra-key count, completion, and duration |
 | `frontend-coder` | frontend / implement | frontend-app (work copy) | artifact checks on the implemented change |
 | `cqrs-coder` | backend-cqrs / implement | backend-cqrs (work copy) | artifact checks on the implemented change |
 | `fix-closure` | review-remediation / fix-retry | fix-closure (work copy) | whether verifier-return remediation closes every falsifiable obligation across multiple fix units and hierarchical projections instead of patching only the latest verifier example or relying on broad test success |
 | `fix-self-scan` | peer-review / fix | fix-self-scan (work copy) | whether the coder's post-edit self-scan removes change-induced dead code, keeps the declared layer direction, and consolidates duplicated override semantics instead of shipping a plan-complete but messy fix |
+| `fix-loop-convergence` | development-remediation / fix-retry, fix-verifier, fix, loop-monitor | inline scenario fixtures (`cases/fix-loop-convergence/`) | whether the convergence rules (invariant-recurrence trigger, ledger carry-forward, trigger monotonicity, established-invariants scan, monitor escape) steer each role's decision as intended, measured on both Claude Opus and Codex Luna Max |
 | `fix-plan-fresh-findings` | peer-review / fix-plan | fix-plan-fresh-findings | whether fix-plan uses the canonical actionable family, closes all same-invariant consumers, and does not revive non-actionable findings |
 | `fix-plan-boundary-preflight` | peer-review / fix-plan | fix-plan-boundary-preflight | whether fix-plan rejects a locally valid method that violates its representation and persistence boundary |
 | `review-family-closure` | peer-review-suite-base / coding-review | review-family-closure | whether one review reports every path affected by the same contract defect instead of stopping at a representative example |
@@ -52,6 +74,7 @@ results, not one pass/fail summary.
 | `issue-plan-samples` | default / plan | nrslib/takt repository (read-only) | whether planning preserves explicit breadth, allowed design choices, and explicitly required architecture across Issues #1127, #1155, and #1136 |
 | `plan-report-source-authority` | default / plan report phase | synthetic Phase 1 draft (tool-less) | whether the final `plan.md` keeps the original task authoritative and demotes unsupported design details from requirements |
 | `write-tests-contract-traceability` | default / write_tests | write-tests-contract-traceability | whether generated tests accept the intended local contract, reject plausible mutations, and avoid inventing irrelevant impact paths |
+| `write-tests-default-priority` | default / write_tests | write-tests-default-priority | whether tests trace manual Requeue from failed-leaf selection and initial cursor through pending persistence to a normal-runner fresh start, while retaining an explicit checkpoint action |
 | `scope-default-write-tests` | default / write_tests | scope-discipline-tests | whether tests observe behavior and remove an invalid internal-structure test instead of replacing it with another proxy |
 | `scope-maintenance-write-tests` | backend-maintenance / write_tests | scope-discipline-tests | whether the shared maintenance path applies the same behavioral test discipline |
 | `scope-architecture-search{,-none,-unrelated}` | peer-review / arch-review | scope-architecture-search | whether the same shared instruction discovers an unhinted second implementation and avoids an unrelated defect with relevant, absent, or unrelated Policy/Knowledge composition |
@@ -70,39 +93,6 @@ Reviewer suites run read-only against `eval/fixtures/*`. Coder suites run
 with `sandbox_mode: workspace-write` in a disposable copy under `eval/.work/`
 (recreated by prepare on every run) and are scored by Node assertion scripts
 in `eval/asserts/` that inspect the files the agent actually wrote.
-
-`finding-normalizer` is a multi-provider JSON-assembly measurement, not a
-promptfoo suite. Each case supplies every reviewer-owned field, engine-bound
-field, and engine-verified current-code quote needed by the existing
-`RawFindingsOutputJsonSchema`. The model must return that schema directly:
-no prose, intermediate `claimSections`, classifications, or extra keys.
-The suite deliberately does not test missing-information, provisional, or
-multi-evidence policy; those require separate design cases.
-
-Measured result:
-
-- Sol, Luna, Terra, Opus, Haiku, and Sonnet passed all initial cases (3/3)
-  and the multiline `verbatimExcerpt` hard case across four runs (4/4 each).
-- Gemma4 passed 2/3 initial cases. On the hard case it passed 1/4 before prompt
-  tuning and 0/5 after explicit JSON-escape guidance. Its failures still had a
-  valid schema, zero extra keys, and the correct finding count; only one of 12
-  fields differed because newline became literal `\n`.
-
-This measures direct FC JSON assembly when every required value is supplied.
-It does not measure free-form semantic normalization or a future multi-evidence
-Finding Contract.
-
-All providers have an external wall-clock timeout. A timeout/error is saved and
-the remaining matrix continues. Completion requires `status === "done"` with
-no error. There is no silent retry or provider fallback.
-
-The earlier extract-only and semantic-verifier experiments remain historical
-evidence in `eval/baselines/finding-normalizer-2026-07-28.md`; they are not the
-main command's output contract.
-
-Result artifacts:
-`eval/.work/finding-normalizer/results/direct-{codex,claude,gemma4}/`,
-`repeat-{codex,claude,gemma4}/`, and `tuned-gemma4/`.
 
 The `issue-plan-samples` and `plan-report-source-authority` suites are the
 exceptions to the reviewer fixture rule: `eval/scripts/prepare.mjs` uses
@@ -201,21 +191,6 @@ npm run eval:prompts:task-instruction-gherkin
 npm run eval:prompts:final-readiness-supervision
 npm run eval:prompts -- final-readiness-preservation
 npm run eval:prompts:final-readiness-precision
-npm run eval:finding-normalizer -- --models luna --batch-size 1 --repeat 3
-npm run eval:finding-normalizer -- --models sol,opus --reports 1,2,3
-npm run eval:finding-normalizer -- --models terra,sonnet --reports 1,2
-npm run eval:finding-normalizer -- --render-only --reports 1,2,3
-npm run eval:finding-normalizer -- --models luna --reports 1,2 --score-only
-npm run eval:finding-normalizer -- --models terra --timeout-ms 600000
-npm run eval:finding-normalizer -- --models terra,luna --score-only --result-set current
-node eval/scripts/run-finding-report-normalizer-eval.mjs --render-only
-node eval/scripts/run-finding-report-normalizer-eval.mjs \
-  --self-test \
-  --result-set scorer-self-test
-node eval/scripts/run-finding-report-normalizer-eval.mjs \
-  --cases summary-only-review-report,broad-target-review-reports \
-  --models luna,terra \
-  --result-set synthetic-comparison
 npx promptfoo view               # browse results in the web UI
 ```
 
@@ -226,14 +201,6 @@ Run from the repo root. Note: `working_dir` in the configs is resolved
 relative to the config file's directory (`eval/`), not the process cwd.
 `run-evals.mjs` keeps going when a suite fails and prints a summary
 (promptfoo exits non-zero on test failures, which would break `&&` chains).
-The normalizer suite requires a prior `npm run build`; use `--render-only`
-to inspect its one-report prompts without calling a model. `--score-only`
-never calls a model and writes `*.rescored.json` plus
-`summary.rescored.json`, leaving the original response artifacts intact.
-The finding report normalizer is an extraction-only experiment. Its catalog,
-external-send guard, and measurement state are documented in
-`eval/cases/finding-normalizer/extraction-catalog.md`.
-
 ### Token budget rules
 
 - `model_reasoning_effort: low` is set on all providers and the grader to
@@ -256,12 +223,6 @@ eval/
   promptfooconfig.<suite>.yaml   provider + tests + assertions per suite
   scripts/prepare.mjs            facet placement + prompt rendering
   scripts/run-evals.mjs          suite runner (failures don't stop the batch)
-  scripts/run-finding-normalizer-eval.mjs
-                                 multi-provider normalizer runner + scorer
-  scripts/run-finding-report-normalizer-eval.mjs
-                                 extraction-only Finding Contract runner
-  scripts/run-finding-semantic-verifier-eval.mjs
-                                 archived repository-inspecting experiment
   baselines/                     recorded experiment decisions and metrics
   cases/                         per-test inputs (diffs, canned previous_response)
   asserts/                       artifact assertion scripts for coder suites

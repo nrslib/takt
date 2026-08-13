@@ -1,0 +1,34 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+
+description: 'TAKT facet eval: Companion moderator evidence boundary'
+
+prompts:
+  - file://prompts/companion-evidence-boundary.phase1.md
+
+providers:
+  - id: openai:codex-sdk
+    label: codex
+    config:
+      working_dir: fixtures/companion-family-boundary
+      sandbox_mode: read-only
+      approval_policy: never
+      skip_git_repo_check: true
+      model_reasoning_effort: low
+
+tests:
+  - description: 'moderator: merge duplicate proof, reject adjacent scope, and reject unsupported hidden-path claims'
+    vars:
+      task: file://cases/companion-evidence-boundary.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: companion-moderator/positive-reverse-boundary
+        value: |
+          Judge the response as evidence adjudication, not an early repository
+          scan. Pass only if it (positive) merges C-01 and C-02 as duplicate
+          evidence for one CLI normalization-family gap, (reverse) rejects C-03
+          because telemetry labels are a separate family, and (boundary)
+          rejects or marks C-04 unsupported because no evidence establishes the
+          hidden mobile path. Fail if it invents a new finding, claims to have
+          scanned the repository, or accepts an item merely because it is
+          nearby.

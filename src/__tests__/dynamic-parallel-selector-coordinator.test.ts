@@ -14,13 +14,13 @@ import { assertStrictStructuredOutputSchema } from '../core/workflow/engine/stru
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import { makeStep } from './engine-test-helpers.js';
 
-vi.mock('../agents/agent-usecases.js', () => ({
-  executeIsolatedStructuredInternalAgent: vi.fn(),
+vi.mock('../agents/structured-caller/transport.js', () => ({
+  executeStructuredAgent: vi.fn(),
 }));
 
-import { executeIsolatedStructuredInternalAgent } from '../agents/agent-usecases.js';
+import { executeStructuredAgent } from '../agents/structured-caller/transport.js';
 
-const mockedExecuteAgent = vi.mocked(executeIsolatedStructuredInternalAgent);
+const mockedExecuteAgent = vi.mocked(executeStructuredAgent);
 
 function dynamicParallelStep(selection: unknown = { mode: 'replace' }): WorkflowStep {
   return makeStep('reviewers', {
@@ -63,11 +63,11 @@ function dependencies(): DynamicParallelSelectorCoordinatorDeps {
       provider: 'mock',
       model: undefined,
       providerOptions: {},
-      nativeTools: [],
     },
   };
   return {
     engineOptions,
+    failureDir: '/project/.takt/runs/run/failures',
     selectionStore: new DynamicParallelSelectionStore(new Map()),
     getCwd: () => '/project',
     getReportDirectory: () => '.takt/reports',
@@ -104,8 +104,11 @@ describe('DynamicParallelSelectorCoordinator', () => {
       'review frontend changes',
     );
 
-    const outputSchema = mockedExecuteAgent.mock.calls[0]?.[2];
+    const outputSchema = mockedExecuteAgent.mock.calls[0]?.[1];
     if (outputSchema === undefined) throw new Error('Selector output schema was not sent');
+    expect(mockedExecuteAgent.mock.calls[0]?.[2]).toMatchObject({
+      failureDir: '/project/.takt/runs/run/failures',
+    });
     expect(() => assertStrictStructuredOutputSchema(outputSchema)).not.toThrow();
     expect(outputSchema).not.toHaveProperty('properties.selected_ids.uniqueItems');
     expect(participants.map(({ name }) => name)).toEqual(['architecture', 'frontend']);

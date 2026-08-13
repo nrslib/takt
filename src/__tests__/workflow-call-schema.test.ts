@@ -825,6 +825,36 @@ describe('workflow_call schema', () => {
     },
   );
 
+  it.each([
+    ['Initial', 'case alias'],
+    ['follow-up', 'hyphen alias'],
+    ['', 'empty string'],
+    [1, 'number'],
+    [true, 'boolean'],
+  ])('rejects reserved review_mode outside its exact domain: %j (%s)', (value, _label) => {
+    const result = WorkflowStepRawSchema.safeParse(createWorkflowCallStep({
+      vars: { review_mode: value },
+    }));
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((issue) => (
+        issue.path.includes('vars') && issue.path.includes('review_mode')
+      ))).toBe(true);
+    }
+  });
+
+  it.each(['initial', 'follow_up', 'unspecified'])(
+    'accepts exact reserved review_mode value %s without narrowing other vars',
+    (reviewMode) => {
+      const result = WorkflowStepRawSchema.safeParse(createWorkflowCallStep({
+        vars: { review_mode: reviewMode, generic_number: 2, generic_boolean: true },
+      }));
+
+      expect(result.success).toBe(true);
+    },
+  );
+
   it('rejects vars on system steps', () => {
     const result = WorkflowStepRawSchema.safeParse({
       name: 'route',
@@ -1186,52 +1216,6 @@ describe('workflow_call schema', () => {
     }));
 
     expect(result.success).toBe(true);
-  });
-
-  it('workflow_call step で terminal adjudication authority を保持する', () => {
-    const result = WorkflowStepRawSchema.safeParse(createWorkflowCallStep({
-      finding_contract_authority: 'terminal_adjudication',
-    }));
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data).toMatchObject({
-        finding_contract_authority: 'terminal_adjudication',
-      });
-    }
-  });
-
-  it.each(['standard', 'provider_trusted'])(
-    'workflow_call step で未許可の finding contract authority %s を reject する',
-    (authority) => {
-      const result = WorkflowStepRawSchema.safeParse(createWorkflowCallStep({
-        finding_contract_authority: authority,
-      }));
-
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(result.error.issues).toContainEqual(expect.objectContaining({
-          path: ['finding_contract_authority'],
-        }));
-      }
-    },
-  );
-
-  it('agent step で finding contract authority を reject する', () => {
-    const result = WorkflowStepRawSchema.safeParse({
-      name: 'review',
-      persona: 'reviewer',
-      instruction: 'Review the code',
-      finding_contract_authority: 'terminal_adjudication',
-      rules: [{ condition: 'done', next: 'COMPLETE' }],
-    });
-
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues).toContainEqual(expect.objectContaining({
-        path: ['finding_contract_authority'],
-      }));
-    }
   });
 
   it('workflow_call step で when rule を reject する', () => {
@@ -1761,7 +1745,6 @@ describe('workflow_call schema', () => {
           {
             name: 'delegate',
             call: 'takt/review-loop',
-            finding_contract_authority: 'terminal_adjudication',
             rules: [
               {
                 condition: 'COMPLETE',
@@ -1791,7 +1774,6 @@ describe('workflow_call schema', () => {
     expect(plan.kind).toBe('agent');
     expect(delegate.kind).toBe('workflow_call');
     expect(delegate.call).toBe('takt/review-loop');
-    expect(delegate.findingContractAuthority).toBe('terminal_adjudication');
     expect(routeContext.kind).toBe('system');
     expect('provider' in delegate).toBe(false);
     expect('persona' in routeContext).toBe(false);

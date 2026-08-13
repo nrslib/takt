@@ -1,3 +1,5 @@
+{{include:instructions/contract-family-decomposition-boundary}}
+
 実装タスクを分析し、分解が適切なら複数パートに分けて並列実行してください。
 
 **重要:** 計画レポートを参照してください: {report:plan.md}

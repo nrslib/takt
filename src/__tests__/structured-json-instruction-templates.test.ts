@@ -39,16 +39,3 @@ describe('parts/structured_json_schema_instruction rendering contract', () => {
     expect(rendered).toContain(CONTRACT_SENTENCE[lang]);
   });
 });
-
-describe('parts/structured_json_step_instruction rendering contract', () => {
-  it.each(['en', 'ja'] as const)('%s: shows the step shape in exactly one fenced JSON block with the no-extra-text contract', (lang) => {
-    const rendered = loadTemplate('parts/structured_json_step_instruction', lang, {
-      baseInstruction: 'BASE_INSTRUCTION_MARKER',
-    });
-
-    expect(rendered).toContain('BASE_INSTRUCTION_MARKER');
-    expect(rendered).toContain('{"step": 1}');
-    expect(countJsonFences(rendered)).toBe(1);
-    expect(rendered).toContain(CONTRACT_SENTENCE[lang]);
-  });
-});

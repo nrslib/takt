@@ -10,7 +10,7 @@ import type {
   StepProviderOptions,
   ProviderPermissionProfiles,
 } from '../core/models/index.js';
-import type { InternalAgentIsolation, ProviderType } from '../shared/types/provider.js';
+import type { ProviderType } from '../shared/types/provider.js';
 
 export type { StreamCallback };
 
@@ -30,14 +30,13 @@ export interface WorkflowMeta {
 export interface ResolvedAgentExecution {
   readonly provider: ProviderType;
   readonly model: string | undefined;
-  readonly providerOptions: StepProviderOptions;
-  readonly permissionMode: PermissionMode;
+  readonly providerOptions: StepProviderOptions | undefined;
+  readonly permissionMode: PermissionMode | undefined;
 }
 
 /** Common options for running agents */
 export interface RunAgentOptions {
   cwd: string;
-  executionProfile?: 'isolated-structured';
   projectCwd?: string;
   abortSignal?: AbortSignal;
   sessionId?: string;
@@ -49,7 +48,6 @@ export interface RunAgentOptions {
   workflowBundleResourceRoot?: string;
   internalSystemPrompt?: string;
   internalAgentName?: string;
-  internalAgentIsolation?: InternalAgentIsolation;
   allowedTools?: string[];
   mcpServers?: Record<string, McpServerConfig>;
   maxTurns?: number;
@@ -71,6 +69,7 @@ export interface RunAgentOptions {
   language?: Language;
   workflowMeta?: WorkflowMeta;
   outputSchema?: Record<string, unknown>;
+  failureDir?: string;
   childProcessEnv?: Readonly<Record<string, string>>;
   onPromptResolved?: (promptParts: {
     systemPrompt: string;

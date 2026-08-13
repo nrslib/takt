@@ -90,7 +90,6 @@ const integrationBoundaryNames = new Set([
   'prepareRuntimeEnvironment',
   'resolveTask',
   'initializeGitFixture',
-  'createTestFindingLedgerStore',
 ]);
 
 const integrationBuiltinModules = new Set([
@@ -481,11 +480,6 @@ describe('release verification wiring', () => {
       normalized: 'src/__tests__/companion-step-executor.integration.test.ts',
     },
     {
-      target: 'src/__tests__/finding-review-integrity-gate.test.ts',
-      script: 'test:it:heavy:serial:workflow',
-      normalized: 'src/__tests__/finding-review-integrity-gate.test.ts',
-    },
-    {
       target: 'src/__tests__/workflow-step-fragment-runtime.test.ts',
       script: 'test:it:heavy:serial:workflow',
       normalized: 'src/__tests__/workflow-step-fragment-runtime.test.ts',
@@ -494,16 +488,6 @@ describe('release verification wiring', () => {
       target: 'companion-diff-runtime.integration.test.ts',
       script: 'test:it:heavy:serial:git',
       normalized: 'src/__tests__/companion-diff-runtime.integration.test.ts',
-    },
-    {
-      target: 'it-team-leader-finding-contract-operation-journal.test.ts',
-      script: 'test:it:heavy:serial:git',
-      normalized: 'src/__tests__/it-team-leader-finding-contract-operation-journal.test.ts',
-    },
-    {
-      target: 'src/__tests__/it-team-leader-finding-contract-operation-journal.test.ts',
-      script: 'test:it:heavy:serial:git',
-      normalized: 'src/__tests__/it-team-leader-finding-contract-operation-journal.test.ts',
     },
   ])('should route $target to $script', ({ target, script, normalized }) => {
     expect(selectNpmTestRuns([target])).toEqual([{

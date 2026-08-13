@@ -233,7 +233,7 @@ describe('E2E: dynamic facet pool selector (mock)', () => {
     // Round 2 must contain only transaction, not backward-compatibility.
     const providerStarts = readJsonl(mockCallLogPath)
       .filter((record) => record.event === 'start');
-    const selectorStarts = providerStarts.filter((record) => record.personaName === 'takt-internal');
+    const selectorStarts = providerStarts.filter((record) => record.personaName === 'dynamic-facet-selector');
     expect(selectorStarts).toHaveLength(2);
 
     // The run reports must exist.
@@ -309,7 +309,7 @@ describe('E2E: dynamic facet pool selector (mock)', () => {
     expect(result.exitCode, `${result.stdout}\n${result.stderr}`).toBe(0);
 
     const selectorStarts = readJsonl(mockCallLogPath)
-      .filter((record) => record.event === 'start' && record.personaName === 'takt-internal');
+      .filter((record) => record.event === 'start' && record.personaName === 'dynamic-facet-selector');
     expect(selectorStarts).toHaveLength(2);
 
     const fixPhaseStarts = readSessionRecords(testRepo.path)
@@ -395,7 +395,7 @@ describe('E2E: dynamic facet pool selector (mock)', () => {
     const resumedStarts = readJsonl(resumedCallLogPath)
       .filter((record) => record.event === 'start');
     const personaNames = resumedStarts.map((record) => record.personaName);
-    expect(personaNames.filter((name) => name === 'takt-internal')).toHaveLength(1);
+    expect(personaNames.filter((name) => name === 'dynamic-facet-selector')).toHaveLength(1);
     expect(personaNames.filter((name) => name === 'coder').length).toBeGreaterThan(0);
 
     const runIds = readdirSync(join(testRepo.path, '.takt', 'runs')).sort();
@@ -467,7 +467,7 @@ describe('E2E: dynamic facet pool selector (mock)', () => {
     const personaNames = providerStarts.map((record) => record.personaName);
     expect(personaNames.filter((name) => name === 'coder')).toHaveLength(0);
     // The selector did start.
-    expect(personaNames.filter((name) => name === 'takt-internal')).toHaveLength(1);
+    expect(personaNames.filter((name) => name === 'dynamic-facet-selector')).toHaveLength(1);
   }, 240_000);
 
   it('should share the same external pool from a second workflow (C-TEST-MOCK-E2E: 7)', () => {

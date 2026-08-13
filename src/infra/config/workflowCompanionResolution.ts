@@ -9,10 +9,6 @@ import { resolveWorkflowCallTarget } from './loaders/workflowCallResolver.js';
 import { getWorkflowReference } from '../../core/workflow/workflow-reference.js';
 import { MAX_WORKFLOW_CALL_DEPTH } from '../../core/workflow/workflow-call-depth.js';
 import type { WorkflowCallResolver } from '../../core/workflow/types.js';
-import {
-  providerSupportsIsolatedStructuredExecution,
-  providerSupportsStructuredOutput,
-} from '../providers/provider-capabilities.js';
 
 function collectLocalCompanionNames(workflow: WorkflowConfig): string[] {
   const names = new Set<string>();
@@ -68,6 +64,7 @@ function defaultResolution(environment: CompiledProviderEnvironment): ProviderRo
     ...(environment.provider === undefined ? {} : { provider: environment.provider }),
     ...(environment.model === undefined ? {} : { model: environment.model }),
     ...(environment.providerOptions === undefined ? {} : { providerOptions: environment.providerOptions }),
+    ...(environment.permissionMode === undefined ? {} : { permissionMode: environment.permissionMode }),
     ...(environment.escalation === undefined ? {} : { escalation: environment.escalation }),
   };
 }
@@ -97,12 +94,6 @@ export function resolveWorkflowCompanions(
     const entry = environment.companions?.[name] ?? defaults;
     if (!entry?.provider) {
       throw new Error(`Companion "${name}" has no runtime.yaml provider target or defaults assignment`);
-    }
-    if (providerSupportsIsolatedStructuredExecution(entry.provider) !== true) {
-      throw new Error(`Provider "${entry.provider}" does not support companion isolated structured execution`);
-    }
-    if (providerSupportsStructuredOutput(entry.provider) !== true) {
-      throw new Error(`Provider "${entry.provider}" does not support companion structured output`);
     }
     resolved.set(name, { ...entry });
   }

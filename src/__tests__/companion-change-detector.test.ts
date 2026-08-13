@@ -149,6 +149,27 @@ describe('CT-COMP-05 event-driven companion change detection', () => {
     expect(await evaluateLive(detector)).toBeUndefined();
   });
 
+  it('should report the concrete live skip reason once when a candidate is consumed', async () => {
+    let now = 1_000;
+    const detector = new CompanionChangeDetector({
+      intervalMs: 100,
+      minimumChangedLines: 10,
+      now: () => now,
+      readDiff: vi.fn(),
+    });
+    detector.observe(tool('Edit'));
+    now = 1_100;
+    const candidate = detector.getTriggerCandidate(100);
+    const skipped: string[] = [];
+
+    expect(await detector.evaluateCandidate(candidate!, diff('small', 1), (reason) => {
+      skipped.push(reason);
+    })).toBeUndefined();
+    expect(skipped).toEqual(['below_minimum_changed_lines']);
+    expect(await evaluateLive(detector, diff('small', 1))).toBeUndefined();
+    expect(skipped).toEqual(['below_minimum_changed_lines']);
+  });
+
   it('should force a trigger after four intervals even when edits never become quiet', async () => {
     let now = 1_000;
     const detector = new CompanionChangeDetector({
@@ -549,6 +570,62 @@ describe('CT-COMP-05 event-driven companion change detection', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('should suppress a live skip when completion starts during candidate evaluation', async () => {
+    let now = 1_000;
+    let resolveSnapshot!: (snapshot: CompanionDiff) => void;
+    let releaseCandidate!: () => void;
+    let candidateStarted!: () => void;
+    const candidateStartedPromise = new Promise<void>((resolve) => {
+      candidateStarted = resolve;
+    });
+    const candidateGate = new Promise<void>((resolve) => {
+      releaseCandidate = resolve;
+    });
+    const readSnapshot = vi.fn(() => new Promise<CompanionDiff>((resolve) => {
+      resolveSnapshot = resolve;
+    }));
+    const detector = new CompanionChangeDetector({
+      intervalMs: 15_000,
+      minimumChangedLines: 10,
+      now: () => now,
+      readDiff: readSnapshot,
+    });
+    detector.observe(tool('Edit'));
+    now = 1_250;
+    const originalEvaluateCandidate = detector.evaluateCandidate.bind(detector);
+    vi.spyOn(detector, 'evaluateCandidate').mockImplementation(async (...args) => {
+      candidateStarted();
+      await candidateGate;
+      return originalEvaluateCandidate(...args);
+    });
+    const enqueue = vi.fn().mockResolvedValue(undefined);
+    const onSkipped = vi.fn();
+    const scheduler = new CompanionTriggerScheduler({
+      detectors: new Map([['security-reviewer', detector]]),
+      intervals: [15_000],
+      allowGitCommit: false,
+      queue: { enqueue } as unknown as CompanionReviewQueue,
+      initialSnapshot: diff('initial', 0),
+      readSnapshot,
+      isAborted: () => false,
+      onError: vi.fn(),
+      onSkipped,
+    });
+
+    const evaluation = scheduler.evaluateNow();
+    await Promise.resolve();
+    expect(readSnapshot).toHaveBeenCalledOnce();
+    resolveSnapshot(diff('small', 1));
+    await candidateStartedPromise;
+    scheduler.beginCompletion();
+    releaseCandidate();
+    await evaluation;
+
+    expect(onSkipped).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+    scheduler.stop();
   });
 
   it('should detect a Bash mutation from before/after diff snapshots without parsing the command', async () => {

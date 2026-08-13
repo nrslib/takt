@@ -135,7 +135,7 @@ describe('Claude terminal client', () => {
     });
   });
 
-  it('Given strict read-only internal isolation, When terminal lifecycle starts, Then strict CLI flags are used', async () => {
+  it('Given readonly permission, When terminal lifecycle starts, Then only the normal permission flag is used', async () => {
     const backend = createBackend();
     const transcriptReader = createTranscriptReader({
       sessionId: 'claude-session-1',
@@ -146,7 +146,6 @@ describe('Claude terminal client', () => {
     await callClaudeTerminal('selector', 'select reviewers', {
       cwd: '/tmp/worktree',
       backend: 'tmux',
-      internalAgentIsolation: 'strict-readonly',
       permissionMode: 'readonly',
       skillsEnabled: true,
       terminalBackend: backend,
@@ -155,18 +154,13 @@ describe('Claude terminal client', () => {
 
     expect(backend.start).toHaveBeenCalledWith(expect.objectContaining({
       command: expect.objectContaining({
-        args: expect.arrayContaining([
-          '--tools',
-          '',
-          '--setting-sources',
-          '',
-          '--strict-mcp-config',
-          '--disable-slash-commands',
-          '--permission-mode',
-          'default',
-        ]),
+        args: expect.arrayContaining(['--permission-mode', 'default']),
       }),
     }));
+    const args = vi.mocked(backend.start).mock.calls[0]?.[0].command.args ?? [];
+    expect(args).not.toContain('--tools');
+    expect(args).not.toContain('--strict-mcp-config');
+    expect(args).not.toContain('--disable-slash-commands');
   });
 
   it('Given disabled Skills, When terminal lifecycle runs, Then it keeps slash commands disabled while starting, prompting, receiving, and stopping the session', async () => {

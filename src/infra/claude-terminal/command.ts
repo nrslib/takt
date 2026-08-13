@@ -20,21 +20,13 @@ export function buildClaudeTerminalCommand(
 ): ClaudeTerminalCommand {
   const args: string[] = [];
   const permissionMode = resolvePermissionMode(options);
-  if (options.internalAgentIsolation === 'strict-readonly') {
-    args.push(
-      '--tools', '',
-      '--setting-sources', '',
-      '--strict-mcp-config',
-      '--disable-slash-commands',
-    );
-  }
   if (options.model) {
     args.push('--model', options.model);
   }
   if (options.effort) {
     args.push('--effort', options.effort);
   }
-  if (options.internalAgentIsolation !== 'strict-readonly' && options.skillsEnabled === false) {
+  if (options.skillsEnabled === false) {
     args.push('--disable-slash-commands');
   }
   if (options.allowedTools && options.allowedTools.length > 0) {

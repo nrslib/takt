@@ -4,8 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { WorkflowCallStep, WorkflowConfig } from '../core/models/index.js';
 import {
-  CapabilityAwareStructuredCaller,
-  DefaultStructuredCaller,
+  ProviderNeutralStructuredCaller,
   type StructuredCaller,
 } from '../agents/structured-caller.js';
 import { getWorkflowReference } from '../core/workflow/workflow-reference.js';
@@ -199,7 +198,8 @@ vi.mock('../infra/fs/index.js', () => ({
   appendNdjsonLine: vi.fn(),
 }));
 
-vi.mock('../shared/utils/index.js', () => ({
+vi.mock('../shared/utils/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   createLogger: vi.fn().mockReturnValue({
     debug: vi.fn(),
     info: vi.fn(),
@@ -357,13 +357,12 @@ describe('executeWorkflow structuredCaller injection', () => {
     mockRunAgent.mockResolvedValue({
       persona: 'default',
       status: 'done',
-      content: '[JUDGE:6]',
+      content: '[JUDGE:1]',
       timestamp: new Date('2026-04-01T00:00:00.000Z'),
     });
 
     const structuredCaller = getInjectedStructuredCaller();
-    expect(structuredCaller).toBeInstanceOf(CapabilityAwareStructuredCaller);
-    expect(structuredCaller).toBeInstanceOf(DefaultStructuredCaller);
+    expect(structuredCaller).toBeInstanceOf(ProviderNeutralStructuredCaller);
     const result = await structuredCaller.evaluateCondition(
       'agent output',
       [{ index: 5, text: 'approved' }],
@@ -376,10 +375,10 @@ describe('executeWorkflow structuredCaller injection', () => {
     expect(MockWorkflowEngine.lastInstance.receivedOptions.provider).toBe('cursor');
     expect(MockWorkflowEngine.lastInstance.receivedOptions.model).toBeUndefined();
     const [, prompt, runOptions] = mockRunAgent.mock.calls[0] ?? [];
-    expect(prompt).toContain('Output ONLY the tag `[JUDGE:N]`');
+    expect(prompt).toContain('Return exactly one fenced JSON block');
     expect(runOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
-      provider: 'cursor',
+      resolvedExecution: expect.objectContaining({ provider: 'cursor' }),
     }));
     expect(runOptions).not.toHaveProperty('outputSchema');
   });
@@ -413,8 +412,7 @@ describe('executeWorkflow structuredCaller injection', () => {
     });
 
     const structuredCaller = getInjectedStructuredCaller();
-    expect(structuredCaller).toBeInstanceOf(CapabilityAwareStructuredCaller);
-    expect(structuredCaller).toBeInstanceOf(DefaultStructuredCaller);
+    expect(structuredCaller).toBeInstanceOf(ProviderNeutralStructuredCaller);
     const result = await structuredCaller.evaluateCondition(
       'agent output',
       [
@@ -429,10 +427,10 @@ describe('executeWorkflow structuredCaller injection', () => {
     expect(MockWorkflowEngine.lastInstance.receivedOptions.callAiJudge).toBeUndefined();
     expect(MockWorkflowEngine.lastInstance.receivedOptions.provider).toBe('claude');
     const [, prompt, runOptions] = mockRunAgent.mock.calls[0] ?? [];
-    expect(prompt).toContain('Output ONLY the tag `[JUDGE:N]`');
+    expect(prompt).toContain('needs_fix');
     expect(runOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
-      provider: 'claude',
+      resolvedExecution: expect.objectContaining({ provider: 'claude' }),
     }));
     expect(runOptions).toHaveProperty('outputSchema');
   });
@@ -469,7 +467,7 @@ describe('executeWorkflow structuredCaller injection', () => {
       .mockResolvedValueOnce({
         persona: 'conductor',
         status: 'done',
-        content: '[IMPLEMENT:1]',
+        content: '```json\n{"content":"[IMPLEMENT:1]"}\n```',
         timestamp: new Date('2026-04-01T00:00:01.000Z'),
       });
 
@@ -496,8 +494,7 @@ describe('executeWorkflow structuredCaller injection', () => {
     expect(firstPrompt).toContain('structured judge prompt');
     expect(firstRunOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
-      provider: 'cursor',
-      resolvedProvider: 'cursor',
+      resolvedExecution: expect.objectContaining({ provider: 'cursor' }),
     }));
     expect(firstRunOptions).not.toHaveProperty('outputSchema');
     const [, secondPrompt, secondRunOptions] = mockRunAgent.mock.calls[1] ?? [];
@@ -558,9 +555,7 @@ describe('executeWorkflow structuredCaller injection', () => {
     expect(prompt).toContain('structured judge prompt');
     expect(runOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
-      provider: 'claude',
-      resolvedProvider: 'claude',
-      resolvedModel: 'sonnet',
+      resolvedExecution: expect.objectContaining({ provider: 'claude', model: 'sonnet' }),
     }));
     expect(runOptions).toHaveProperty('outputSchema');
   });
@@ -1005,8 +1000,8 @@ steps:
     });
 
     const structuredCaller = getInjectedStructuredCaller();
-    expect(structuredCaller).toBeInstanceOf(CapabilityAwareStructuredCaller);
-    expect(structuredCaller).toBeInstanceOf(DefaultStructuredCaller);
+    expect(structuredCaller).toBeInstanceOf(ProviderNeutralStructuredCaller);
+    expect(structuredCaller).toBeInstanceOf(ProviderNeutralStructuredCaller);
     expect(MockWorkflowEngine.lastInstance.receivedOptions.provider).toBe('mock');
   });
 
@@ -1132,8 +1127,7 @@ steps:
     expect(prompt).toContain('Output ONLY the tag `[JUDGE:N]`');
     expect(runOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
-      provider: 'cursor',
-      resolvedProvider: 'cursor',
+      resolvedExecution: expect.objectContaining({ provider: 'cursor' }),
     }));
     expect(runOptions).not.toHaveProperty('outputSchema');
   });
@@ -1169,7 +1163,7 @@ steps:
       persona: 'default',
       status: 'done',
       content: '[JUDGE:1]',
-      structuredOutput: { matched_index: 1 },
+      structuredOutput: { matched_index: 1, reason: 'approved matched' },
       timestamp: new Date('2026-04-01T00:00:00.000Z'),
     });
 
@@ -1185,8 +1179,7 @@ steps:
     expect(prompt).toContain('Output ONLY the tag `[JUDGE:N]`');
     expect(runOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
-      provider: 'claude',
-      resolvedProvider: 'claude',
+      resolvedExecution: expect.objectContaining({ provider: 'claude' }),
     }));
     expect(runOptions).toHaveProperty('outputSchema');
   });
@@ -1233,8 +1226,7 @@ steps:
     expect(prompt).toContain('```json');
     expect(runOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
-      resolvedProvider: 'cursor',
-      resolvedModel: 'cursor-fast',
+      resolvedExecution: expect.objectContaining({ provider: 'cursor', model: 'cursor-fast' }),
     }));
     expect(runOptions).not.toHaveProperty('outputSchema');
   });
@@ -1283,8 +1275,7 @@ steps:
     const [, , runOptions] = mockRunAgent.mock.calls[0] ?? [];
     expect(runOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
-      resolvedProvider: 'claude',
-      resolvedModel: 'sonnet',
+      resolvedExecution: expect.objectContaining({ provider: 'claude', model: 'sonnet' }),
     }));
     expect(runOptions).toHaveProperty('outputSchema');
   });
@@ -1329,8 +1320,7 @@ steps:
     expect(prompt).toContain('```json');
     expect(runOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
-      resolvedProvider: 'cursor',
-      resolvedModel: 'cursor-fast',
+      resolvedExecution: expect.objectContaining({ provider: 'cursor', model: 'cursor-fast' }),
     }));
     expect(runOptions).not.toHaveProperty('outputSchema');
   });
@@ -1380,8 +1370,7 @@ steps:
     const [, , runOptions] = mockRunAgent.mock.calls[0] ?? [];
     expect(runOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
-      resolvedProvider: 'claude',
-      resolvedModel: 'sonnet',
+      resolvedExecution: expect.objectContaining({ provider: 'claude', model: 'sonnet' }),
     }));
     expect(runOptions).toHaveProperty('outputSchema');
   });

@@ -1,4 +1,10 @@
 export type { StructuredCaller } from './structured-caller/contracts.js';
-export { CapabilityAwareStructuredCaller } from './structured-caller/capability-aware-structured-caller.js';
-export { DefaultStructuredCaller } from './structured-caller/default-structured-caller.js';
-export { PromptBasedStructuredCaller } from './structured-caller/prompt-based-structured-caller.js';
+export { ProviderNeutralStructuredCaller } from './structured-caller/provider-neutral-structured-caller.js';
+export {
+  executeStructuredTextAgent,
+  StructuredAgentContractError,
+  executeStructuredAgent,
+  type StructuredAgentCallOptions,
+  type StructuredAgentResolution,
+  type StructuredAgentResponse,
+} from './structured-caller/transport.js';

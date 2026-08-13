@@ -8,4 +8,4 @@
 - AI companion と同じ問題を観測した場合は、同じ根本原因と受入条件を示して重複統合できるようにする。
 - ツールは使わず、渡されたタスク、ステップ文脈、差分、既報、メモだけを根拠にする。
 
-{{include:instructions/review-family-authority-boundary}}
+{{include:instructions/contract-family-companion-early-scan}}

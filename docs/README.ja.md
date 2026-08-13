@@ -294,7 +294,7 @@ exec プリセットの解決順序はプロジェクト `.takt/exec/presets/` �
 
 exec の入力行を編集中に画像を添付できます。macOS では `/paste-image` または `Ctrl+V` でクリップボード画像を添付でき、対応ターミナルでは OSC 1337 のインライン画像ペーストも使えます。TAKT は `[Image #N]` プレースホルダーを挿入します。そのプレースホルダーを Assistant へのメッセージや `/go` の追加メモで参照すると、その Assistant 依頼に画像が渡されます。同じセッションで添付されていないプレースホルダーは通常テキストとして扱われます。`/go` 実行時は、参照された保存済み画像だけが生成タスク仕様へコピーされ、添付セクションに列挙されます。対応形式は PNG、JPEG、GIF、WebP です。インライン画像とクリップボード画像は 10 MiB までです。未対応形式、インライン画像のファイル名拡張子と実データの不一致、上限超過、保存済み添付の一時パス消失、symlink、通常ファイルではない添付元はエラーになります。ネイティブ画像入力に対応しない provider には、プロンプト内のローカルパス参照として渡されます。
 
-通常のエージェントステップ、並列サブステップ、ループ検出ジャッジで `session_key` を設定して、ペルソナセッションを共有または分離できます。システムステップ、workflow_call ステップ、並列親ステップでは `session_key` を設定できません。TAKT はランタイムキーを `session_key` に解決済みプロバイダを付加して構築するため、値は他の生成されたセッションルートと衝突しない空でない文字列にする必要があります。
+通常のエージェントステップと並列サブステップで `session_key` を設定して、ペルソナセッションを共有または分離できます。ループ検出ジャッジは常に新しいセッションを使います。システムステップ、workflow_call ステップ、ループ検出ジャッジ、並列親ステップでは `session_key` を設定できません。TAKT はランタイムキーを `session_key` に解決済みプロバイダを付加して構築するため、値は他の生成されたセッションルートと衝突しない空でない文字列にする必要があります。
 
 ## 設定
 
@@ -305,6 +305,8 @@ provider: claude    # claude, claude-sdk, claude-terminal, codex, opencode, curs
 model: sonnet       # プロバイダーにそのまま渡されます
 language: ja        # en or ja
 ```
+
+run metadata、session、trace、report などの run artifact は `.takt/runs/<run>/` 配下の通常ファイルとして保存されます。resume / requeue では、該当する run state と report を引き継ぎます。
 
 TAKT に workflow step ごとの provider/model 選択を任せる場合は、top-level に具体 provider を設定したまま `auto_routing` の candidates を定義します。effective `auto_routing` の存在によって auto routing が有効になります。
 

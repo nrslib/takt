@@ -21,9 +21,9 @@ describe('semanticRuleCandidatesOf', () => {
   it('keeps the first YAML occurrence of each interactive candidate', () => {
     const rules = [
       normalizeRule({ condition: 'approved', next: 'COMPLETE' }),
-      normalizeRule({ condition: 'needs_fix && when(findings.open.count > 0)', next: 'fix' }),
-      normalizeRule({ condition: 'approved && when(findings.open.count == 0)', next: 'COMPLETE' }),
-      normalizeRule({ condition: 'when(findings.conflicts.count > 0)', next: 'ABORT' }),
+      normalizeRule({ condition: 'needs_fix && when(context.review.pending_count > 0)', next: 'fix' }),
+      normalizeRule({ condition: 'approved && when(context.review.pending_count == 0)', next: 'COMPLETE' }),
+      normalizeRule({ condition: 'when(context.review.blocked_count > 0)', next: 'ABORT' }),
       normalizeRule({ condition: 'blocked', next: 'wait', interactive_only: true }),
     ];
 

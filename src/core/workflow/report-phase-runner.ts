@@ -12,6 +12,7 @@ import type { PhasePromptParts, StepProviderInfo } from './types.js';
 import type { ReportPhaseRunnerContext } from './phase-runner.js';
 import { runWithPhaseSpan } from './observability/workflowSpans.js';
 import { writeReportFile } from './report-writer.js';
+import { AGENT_FAILURE_CATEGORIES } from '../../shared/types/agent-failure.js';
 
 const log = createLogger('phase-runner');
 const REPORT_PHASE_MAX_TURNS = 3;
@@ -46,8 +47,6 @@ export type ReportContentValidator = (
 ) => ReportContentValidationResult;
 
 export interface ReportPhaseGenerationOptions {
-  /** FC レビュアーの Phase 2 か。指示文へレビュアー契約を出すかどうかを決める。 */
-  readonly findingContractReviewer?: boolean;
   readonly validateReportContent?: ReportContentValidator;
   readonly retryMode?: 'standard' | 'single-attempt';
   readonly nextPhaseSequence?: () => number;
@@ -78,6 +77,8 @@ export class ReportPhaseGenerationError extends Error {
     message: string,
     readonly failureReason: ReportRetryFailureReason,
     readonly recovery: ReportPhaseRecoveryMetadata,
+    readonly failureCategory?: AgentResponse['failureCategory'],
+    readonly failureMessage?: string,
   ) {
     super(message);
     this.name = 'ReportPhaseGenerationError';
@@ -88,8 +89,7 @@ export class ReportPhaseGenerationError extends Error {
  * Phase 2: Report output.
  * Resumes the agent session with no tools to request report content.
  * Each report file is generated individually in a loop.
- * 通常レポートは plain text をそのまま扱う。Finding Contract reviewer は
- * structured publication の reportContent だけを正準本文として扱う。
+ * レポート本文は plain text として扱う。
  */
 export async function runReportPhase(
   step: WorkflowStep,
@@ -121,7 +121,6 @@ async function executeReportPhase(
   options: ReportPhaseGenerationOptions,
   acceptReport: (report: GeneratedReport) => void,
 ): Promise<ReportPhaseBlockedResult | ReportPhaseRateLimitedResult | void> {
-  const findingContractReviewer = options.findingContractReviewer === true;
   const primarySessionKey = ctx.resolveSessionKey(step);
   let currentSessionId = ctx.getSessionId(primarySessionKey);
   const hasLastResponse = ctx.lastResponse != null && ctx.lastResponse.trim().length > 0;
@@ -162,7 +161,7 @@ async function executeReportPhase(
       language: ctx.language,
       targetFile: fileName,
       lastResponse: currentSessionId ? undefined : ctx.lastResponse,
-      findingContract: ctx.buildFindingContractInstructionContext?.(step, findingContractReviewer),
+      reviewCompletionDiagnostic: ctx.reviewCompletionDiagnostic,
     }).build();
     let firstAttemptOptions: RunAgentOptions;
     if (currentSessionId === undefined) {
@@ -212,6 +211,9 @@ async function executeReportPhase(
       log.debug('Report file generated', { step: step.name, fileName });
       continue;
     }
+    if (firstAttempt.kind === 'non_retryable_failure') {
+      throwNonRetryableReportFailure(fileName, firstAttempt);
+    }
     failureReasons.add(firstAttempt.failureReason);
 
     if (options.retryMode === 'single-attempt' || !hasLastResponse) {
@@ -231,7 +233,7 @@ async function executeReportPhase(
       language: ctx.language,
       targetFile: fileName,
       lastResponse: ctx.lastResponse,
-      findingContract: ctx.buildFindingContractInstructionContext?.(step, findingContractReviewer),
+      reviewCompletionDiagnostic: ctx.reviewCompletionDiagnostic,
     }).build();
     const retryInstruction = firstAttempt.failureReason === 'invalid_output'
       ? [
@@ -293,6 +295,9 @@ async function executeReportPhase(
         log.debug('Report file generated', { step: step.name, fileName });
         continue;
       }
+      if (retryAttempt.kind === 'non_retryable_failure') {
+        throwNonRetryableReportFailure(fileName, retryAttempt);
+      }
 
       retryFailure = retryAttempt;
       failureReasons.add(retryAttempt.failureReason);
@@ -341,6 +346,9 @@ async function executeReportPhase(
         response: fallbackAttempt.response,
         providerInfo: fallbackAttempt.providerInfo,
       };
+    }
+    if (fallbackAttempt.kind === 'non_retryable_failure') {
+      throwNonRetryableReportFailure(fileName, fallbackAttempt);
     }
     if (fallbackAttempt.kind === 'retryable_failure') {
       failureReasons.add(fallbackAttempt.failureReason);
@@ -435,6 +443,12 @@ type ReportAttemptResult =
   }
   | { kind: 'blocked'; response: AgentResponse; providerInfo: StepProviderInfo }
   | { kind: 'rate_limited'; response: AgentResponse; providerInfo: StepProviderInfo }
+  | {
+    kind: 'non_retryable_failure';
+    response: AgentResponse;
+    providerInfo: StepProviderInfo;
+    errorMessage: string;
+  }
   | {
     kind: 'retryable_failure';
     errorMessage: string;
@@ -604,6 +618,20 @@ async function runSingleReportAttempt(
     };
   }
 
+  if (
+    response.status !== 'done'
+    && response.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR
+  ) {
+    const errorMessage = resolveAgentErrorMessage(response.errorKind, response.error || response.content);
+    ctx.onPhaseComplete?.(step, 2, 'report', '', response.status, errorMessage, phaseExecutionId, ctx.iteration);
+    return {
+      kind: 'non_retryable_failure',
+      response,
+      providerInfo: attemptProviderInfo,
+      errorMessage,
+    };
+  }
+
   if (response.status !== 'done') {
     const fallbackMessage = response.error || response.content || 'Unknown error';
     const errorMessage = resolveAgentErrorMessage(response.errorKind, fallbackMessage);
@@ -693,6 +721,9 @@ function classifyRetryableFailure(
     return undefined;
   }
   if (response.status !== 'done') {
+    if (response.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR) {
+      return undefined;
+    }
     return {
       failureReason: 'provider_error',
       errorMessage: buildRetryableFailureEventError(
@@ -722,6 +753,22 @@ function classifyRetryableFailure(
     };
   }
   return undefined;
+}
+
+function throwNonRetryableReportFailure(
+  fileName: string,
+  failure: Extract<ReportAttemptResult, { kind: 'non_retryable_failure' }>,
+): never {
+  throw new ReportPhaseGenerationError(
+    `Report phase failed for ${fileName}: ${failure.errorMessage}`,
+    'provider_error',
+    {
+      requiresFreshPhase1: false,
+      failureReasons: ['provider_error'],
+    },
+    failure.response.failureCategory,
+    failure.errorMessage,
+  );
 }
 
 function buildReportAttemptIdentity(

@@ -9,7 +9,7 @@ import type {
   NdjsonWorkflowComplete,
   NdjsonWorkflowStackEntry,
 } from '../../shared/utils/index.js';
-import { AGENT_FAILURE_CATEGORIES, type AgentFailureCategory } from '../../shared/types/agent-failure.js';
+import { isAgentFailureCategory } from '../../shared/types/agent-failure.js';
 import {
   parseCanonicalWorkflowResumeFrame,
 } from '../../shared/types/workflow-resume.js';
@@ -66,10 +66,12 @@ function mapWorkflowEnd(span: SpanSnapshot): TerminalWorkflowRecord | undefined 
   const endTime = getTimestamp(span.endTime);
 
   if (status === 'aborted') {
+    const failureCategory = getString(span.attributes, 'takt.failure.category');
     return {
       type: 'workflow_abort',
       iterations,
       reason: getString(span.attributes, 'takt.workflow.abort.reason') ?? getString(span.attributes, 'takt.workflow.abort.kind') ?? 'Workflow aborted',
+      ...(isAgentFailureCategory(failureCategory) ? { failureCategory } : {}),
       endTime,
     };
   }
@@ -295,13 +297,6 @@ function parseJsonRecord(value: string | undefined): Record<string, string> | un
     }
   }
   return result;
-}
-
-function isAgentFailureCategory(value: string | undefined): value is AgentFailureCategory {
-  return value === AGENT_FAILURE_CATEGORIES.EXTERNAL_ABORT
-    || value === AGENT_FAILURE_CATEGORIES.PART_TIMEOUT
-    || value === AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR
-    || value === AGENT_FAILURE_CATEGORIES.STREAM_IDLE_TIMEOUT;
 }
 
 function getString(attributes: Record<string, unknown>, key: string): string | undefined {

@@ -9,7 +9,6 @@ export interface DynamicFacetSelectorInstructionInput {
   readonly isReentry: boolean;
   readonly stepIteration: number;
   readonly reports: string;
-  readonly unresolvedFindings: string;
   readonly cumulativeDiff: string;
   readonly pool: ResolvedFacetPool;
   readonly maxSelected?: number;
@@ -38,8 +37,6 @@ export function buildDynamicFacetSelectorInstruction(input: DynamicFacetSelector
     `Step iteration:\n${input.stepIteration}`,
     '',
     `Prior reports:\n${input.reports}`,
-    '',
-    `Unresolved findings:\n${input.unresolvedFindings}`,
     '',
     `Cumulative diff:\n${input.cumulativeDiff}`,
     '',

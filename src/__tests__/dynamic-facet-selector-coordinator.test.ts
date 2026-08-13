@@ -14,14 +14,14 @@ import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import { DynamicFacetSelectionStore } from '../core/workflow/dynamic-facets/dynamicFacetSelectionStore.js';
 import { assertStrictStructuredOutputSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
 
-vi.mock('../agents/agent-usecases.js', () => ({
-  executeIsolatedStructuredInternalAgent: vi.fn(),
+vi.mock('../agents/structured-caller/transport.js', () => ({
+  executeStructuredAgent: vi.fn(),
 }));
 
-import { executeIsolatedStructuredInternalAgent } from '../agents/agent-usecases.js';
+import { executeStructuredAgent } from '../agents/structured-caller/transport.js';
 import * as contextBuilder from '../core/workflow/dynamic-facets/dynamicFacetContextBuilder.js';
 
-const mockedExecuteAgent = vi.mocked(executeIsolatedStructuredInternalAgent);
+const mockedExecuteAgent = vi.mocked(executeStructuredAgent);
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -123,7 +123,6 @@ function makeOptions(overrides: Partial<WorkflowEngineOptions> = {}): WorkflowEn
       model: 'm',
       modelSource: 'step',
       providerOptions: {},
-      nativeTools: [],
     },
     ...overrides,
   } as unknown as WorkflowEngineOptions;
@@ -137,6 +136,7 @@ function buildDeps(overrides: Partial<DynamicFacetSelectorCoordinatorDeps> = {})
   const store = new DynamicFacetSelectionStore(new Map());
   return {
     engineOptions: makeOptions(),
+    failureDir: '/tmp/project/.takt/runs/run/failures',
     selectionStore: store,
     getWorkflowReference: () => 'test-workflow',
     workflowCallPath: [],
@@ -144,7 +144,6 @@ function buildDeps(overrides: Partial<DynamicFacetSelectorCoordinatorDeps> = {})
     getReportDirectory: () => '.takt/reports',
     getReportNames: () => [],
     getCwd: () => '/tmp/project',
-    getUnresolvedFindings: () => '',
     inputReader: {
       readInputs: vi.fn().mockResolvedValue({ reports: '', workingTreeDiff: '' }),
     } as unknown as DynamicFacetSelectorCoordinatorDeps['inputReader'],
@@ -238,7 +237,7 @@ describe('DynamicFacetSelectorCoordinator', () => {
     expect(result.effectiveKnowledgeContents).not.toContain('EXTRA KNOWLEDGE');
   });
 
-  it('sends a provider-compatible schema to the isolated selector', async () => {
+  it('sends a provider-compatible schema to the structured selector', async () => {
     const pool = makePool([
       { id: 'a', description: 'A' },
       { id: 'b', description: 'B' },
@@ -255,8 +254,11 @@ describe('DynamicFacetSelectorCoordinator', () => {
     const coordinator = new DynamicFacetSelectorCoordinator(buildDeps());
     await coordinator.resolveDynamicFacets(makeStep(1), makeState(), 'task', pool);
 
-    const outputSchema = mockedExecuteAgent.mock.calls[0]?.[2];
+    const outputSchema = mockedExecuteAgent.mock.calls[0]?.[1];
     if (outputSchema === undefined) throw new Error('Selector output schema was not sent');
+    expect(mockedExecuteAgent.mock.calls[0]?.[2]).toMatchObject({
+      failureDir: '/tmp/project/.takt/runs/run/failures',
+    });
     expect(() => assertStrictStructuredOutputSchema(outputSchema)).not.toThrow();
     expect(outputSchema).not.toHaveProperty('properties.selected_ids.uniqueItems');
     expect(outputSchema).toHaveProperty('properties.selected_ids.maxItems', 1);

@@ -139,6 +139,25 @@ describe('span-to-ndjson mapper', () => {
     });
   });
 
+  it('maps the stdout parse failure category into the session record', () => {
+    const record = mapSpanEndToNdjson({
+      name: 'step.implement',
+      attributes: {
+        'takt.step.name': 'implement',
+        'takt.step.persona': 'coder',
+        'takt.step.iteration': 1,
+        'takt.step.status': 'error',
+        'takt.step.result.content': 'Failed to parse item: invalid stdout line',
+        'takt.step.result.failure_category': 'provider_stream_parse_error',
+      },
+    });
+
+    expect(record).toMatchObject({
+      type: 'step_complete',
+      failureCategory: 'provider_stream_parse_error',
+    });
+  });
+
   it('maps terminal workflow spans and skips non-terminal running spans', () => {
     expect(mapSpanEndToNdjson({
       name: 'workflow.default',
@@ -159,6 +178,23 @@ describe('span-to-ndjson mapper', () => {
         'takt.workflow.status': 'running',
       },
     })).toBeUndefined();
+
+    expect(mapSpanEndToNdjson({
+      name: 'workflow.default',
+      endTime: [1_778_777_300, 0],
+      attributes: {
+        'takt.workflow.status': 'aborted',
+        'takt.workflow.iterations': 2,
+        'takt.workflow.abort.reason': 'provider stream parse error: invalid line',
+        'takt.failure.category': 'provider_stream_parse_error',
+      },
+    })).toEqual({
+      type: 'workflow_abort',
+      iterations: 2,
+      reason: 'provider stream parse error: invalid line',
+      failureCategory: 'provider_stream_parse_error',
+      endTime: '2026-05-14T16:48:20.000Z',
+    });
   });
 
   it('skips workflow_start discoverability spans for shadow session log parity', () => {

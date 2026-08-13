@@ -9,6 +9,7 @@ Analyze the task as maintenance work for an existing feature and produce a causa
 
 For small tasks, omit the design section. In maintenance work, do not omit existing-contract and unnecessary-change checks even for small tasks.
 
+{{include:instructions/contract-family-plan-replan}}
 {{include:instructions/change-contract-traceability}}
 
 {{include:instructions/requirement-source-discipline}}

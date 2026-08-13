@@ -17,6 +17,7 @@ import type {
   WorkflowStepKind,
   DynamicFacetsConfig,
   SelectorGuidance,
+  ReviewCompletionConfig,
 } from '../../../core/models/workflow-types.js';
 import type { CompanionSelection } from '../../../core/models/companion-types.js';
 import { applyQualityGateOverrides } from './qualityGateOverrides.js';
@@ -46,6 +47,48 @@ import type { McpServerConfig } from '../../../core/models/index.js';
 import { isWorkflowParamReference } from './workflowCallableParamRef.js';
 import { normalizeQualityGates } from '../configNormalizers.js';
 import { withWorkflowConfigErrorPath as withWorkflowStepErrorPath } from '../../../core/workflow/workflow-config-error.js';
+
+function normalizeReviewCompletion(
+  step: z.input<typeof WorkflowStepRawSchema>,
+  stepPath: readonly PropertyKey[],
+  workflowDir: string,
+  sections: WorkflowSections,
+  context: FacetResolutionContext | undefined,
+): ReviewCompletionConfig | undefined {
+  const raw = step.review_completion;
+  if (raw === undefined) {
+    return undefined;
+  }
+  const retryInstructionRef = raw.retry_instruction;
+  if (isWorkflowParamReference(retryInstructionRef)) {
+    throw withWorkflowStepErrorPath(
+      new Error(`Step "${step.name}" has unresolved $param in review_completion.retry_instruction`),
+      [...stepPath, 'review_completion', 'retry_instruction'],
+    );
+  }
+  const retryInstruction = normalizeStepField(
+    stepPath,
+    ['review_completion', 'retry_instruction'],
+    () => resolveRefToContent(
+      retryInstructionRef,
+      sections.resolvedInstructionsWithSource ?? sections.resolvedInstructions,
+      workflowDir,
+      'instructions',
+      context,
+    ),
+  );
+  if (retryInstruction === undefined) {
+    throw withWorkflowStepErrorPath(
+      new Error(`Failed to resolve review completion retry instruction "${retryInstructionRef}"`),
+      [...stepPath, 'review_completion', 'retry_instruction'],
+    );
+  }
+  return {
+    minRetry: raw.min_retry ?? 0,
+    maxRetry: raw.max_retry ?? 1,
+    retryInstruction,
+  };
+}
 
 type RawStep = z.output<typeof WorkflowStepRawSchema>;
 type RawSelectorGuidance = NonNullable<NonNullable<RawStep['dynamic_facets']>['selector']>;
@@ -370,6 +413,13 @@ export function normalizeStepFromRaw(
         context,
       ))
     : undefined;
+  const reviewCompletion = normalizeReviewCompletion(
+    step,
+    stepPath,
+    workflowDir,
+    sections,
+    context,
+  );
 
   validateWorkflowArpeggio(step.name, step.arpeggio, stepPath, workflowArpeggioPolicy);
   // Resolve `mcp:` references against the workflow's top-level definitions, then enforce the
@@ -405,7 +455,6 @@ export function normalizeStepFromRaw(
           }
         : undefined,
       args: normalizeStepField(stepPath, ['args'], () => normalizeWorkflowCallArgs(step.name, step.args)),
-      findingContractAuthority: step.finding_contract_authority,
       personaDisplayName: resolvedPersonaDisplayName,
       instruction: '',
       rules,
@@ -486,6 +535,7 @@ export function normalizeStepFromRaw(
     edit: step.edit,
     allowGitCommit: step.allow_git_commit ?? inheritedAllowGitCommit ?? false,
     instruction: instruction || '{task}',
+    instructionRef: step.instruction as string | undefined,
     delayBeforeMs: step.delay_before_ms,
     structuredOutput: normalizeStepField(stepPath, ['structured_output', 'schema_ref'], () => resolveStructuredOutput(step, workflowSchemas, {
       projectDir: context?.projectDir ?? workflowDir,
@@ -522,6 +572,7 @@ export function normalizeStepFromRaw(
     policyContents,
     knowledgeContents,
     companion: step.companion as CompanionSelection | undefined,
+    reviewCompletion,
   };
 
   // parallel 親の capabilities は sub-step の既定になる（sub-step 自身の宣言が置換する）。

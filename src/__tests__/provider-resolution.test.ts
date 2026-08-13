@@ -14,11 +14,6 @@ import {
   resolveAssistantScopedProviderModelFromConfig,
   resolveNonWorkflowProviderModelFromConfig,
 } from '../core/config/provider-resolution.js';
-import { buildFindingManagerStep } from '../core/workflow/findings/manager-step.js';
-import {
-  buildFindingConflictAdjudicationStep,
-  buildFindingTerminalAdjudicationStep,
-} from '../core/workflow/findings/adjudication-step.js';
 import type { ProjectConfig } from '../core/models/config-types.js';
 
 describe('resolveProviderModelCandidates', () => {
@@ -45,6 +40,34 @@ describe('resolveProviderModelCandidates', () => {
 });
 
 describe('resolveStepProviderModel', () => {
+  it('carries permission mode only from the profile that supplied the winning provider', () => {
+    const routed = resolveStepProviderModel({
+      step: { name: 'review', personaDisplayName: 'reviewer', tags: ['security'] },
+      provider: 'mock',
+      providerSource: 'runtime-v1',
+      permissionMode: 'full',
+      providerRouting: {
+        tags: {
+          security: { provider: 'claude', model: 'review-model', permissionMode: 'readonly' },
+        },
+      },
+    });
+    expect(routed.permissionMode).toBe('readonly');
+
+    const overridden = resolveStepProviderModel({
+      step: { name: 'review', personaDisplayName: 'reviewer', tags: ['security'] },
+      provider: 'codex',
+      providerSource: 'cli',
+      permissionMode: 'full',
+      providerRouting: {
+        tags: {
+          security: { provider: 'claude', model: 'review-model', permissionMode: 'readonly' },
+        },
+      },
+    });
+    expect(overridden.permissionMode).toBeUndefined();
+  });
+
   it.each([
     {
       label: 'provider only',
@@ -194,103 +217,6 @@ describe('resolveStepProviderModel', () => {
     });
   });
 
-  it('should not inherit a persona model when the findings-manager seat is provider-only', () => {
-    const step = buildFindingManagerStep({
-      contract: {
-        manager: {
-          persona: 'findings-manager',
-          instruction: 'findings-manager',
-          outputContract: 'findings-manager',
-        },
-      },
-      internalAgentSeats: { findingsManager: { provider: 'codex' } },
-    });
-
-    const result = resolveStepProviderModel({
-      step,
-      personaProviders: {
-        'findings-manager': {
-          provider: 'opencode',
-          model: 'opencode/persona-model',
-        },
-      },
-    });
-
-    expect(result).toMatchObject({
-      provider: 'codex',
-      model: undefined,
-    });
-  });
-
-  it('should resolve conflict and terminal adjudicators through the same seat rules', () => {
-    const input = {
-      contract: {
-        manager: {
-          persona: 'findings-manager',
-          instruction: 'findings-manager',
-          outputContract: 'findings-manager',
-        },
-        adjudicator: {
-          persona: 'terminal-supervisor',
-          providerRoutingPersonaKey: 'terminal-supervisor',
-        },
-      },
-      workflowProvider: 'claude' as const,
-      workflowModel: 'workflow-model',
-      internalAgentSeats: { terminalAdjudicator: { provider: 'codex' as const } },
-    };
-
-    for (const step of [
-      buildFindingConflictAdjudicationStep(input),
-      buildFindingTerminalAdjudicationStep(input),
-    ]) {
-      expect(resolveStepProviderModel({
-        step,
-        providerRouting: {
-          personas: {
-            'terminal-supervisor': { provider: 'opencode', model: 'persona-model' },
-          },
-        },
-      })).toMatchObject({
-        provider: 'codex',
-        model: undefined,
-      });
-    }
-  });
-
-  it('should resolve conflict and terminal adjudicators through the same persona routing fallback', () => {
-    const input = {
-      contract: {
-        manager: {
-          persona: 'findings-manager',
-          instruction: 'findings-manager',
-          outputContract: 'findings-manager',
-        },
-        adjudicator: {
-          persona: 'terminal-supervisor',
-          providerRoutingPersonaKey: 'terminal-supervisor',
-        },
-      },
-    };
-
-    for (const step of [
-      buildFindingConflictAdjudicationStep(input),
-      buildFindingTerminalAdjudicationStep(input),
-    ]) {
-      expect(resolveStepProviderModel({
-        step,
-        providerRouting: {
-          personas: {
-            'terminal-supervisor': { provider: 'codex', model: 'strong-model' },
-          },
-        },
-      })).toMatchObject({
-        provider: 'codex',
-        model: 'strong-model',
-      });
-    }
-  });
-
   it('should prefer step.provider over personaProviders.provider when both are defined', () => {
     const result = resolveStepProviderModel({
       step: { provider: 'codex', model: undefined, personaDisplayName: 'coder' },
@@ -421,6 +347,41 @@ describe('resolveStepProviderModel', () => {
     });
   });
 
+  it('keeps inherited permission for a model-only child declaration', () => {
+    const result = resolveWorkflowCallProviderModel({
+      workflow: { model: 'child-model' },
+      provider: 'codex',
+      providerSource: 'runtime-v1',
+      model: 'runtime-model',
+      modelSource: 'runtime-v1',
+      permissionMode: 'full',
+    });
+
+    expect(result).toEqual({
+      provider: 'codex',
+      providerSource: 'runtime-v1',
+      model: 'child-model',
+      modelSource: 'workflow',
+      permissionMode: 'full',
+    });
+  });
+
+  it('drops inherited permission when the child declares another provider', () => {
+    const result = resolveWorkflowCallProviderModel({
+      workflow: { provider: 'claude' },
+      provider: 'codex',
+      providerSource: 'runtime-v1',
+      permissionMode: 'full',
+    });
+
+    expect(result).toEqual({
+      provider: 'claude',
+      providerSource: 'workflow',
+      model: undefined,
+      modelSource: undefined,
+    });
+  });
+
 });
 
 describe('resolveStepProviderModel — tag routing conflict policy', () => {
@@ -499,6 +460,19 @@ describe('resolveStepProviderModel — tag routing conflict policy', () => {
         tagConflictPolicy: 'fail-fast',
       }),
     ).toThrow(/Conflicting provider routing for tags \[t1, t2\]/);
+  });
+
+  it('throws under fail-fast when tags share provider/model but differ in permission mode', () => {
+    expect(() => resolveStepProviderModel({
+      step: { name: 'implement', personaDisplayName: 'coder', tags: ['t1', 't2'] },
+      providerRouting: {
+        tags: {
+          t1: { provider: 'codex', model: 'm-a', permissionMode: 'readonly' },
+          t2: { provider: 'codex', model: 'm-a', permissionMode: 'edit' },
+        },
+      },
+      tagConflictPolicy: 'fail-fast',
+    })).toThrow(/Conflicting provider routing for tags \[t1, t2\]/);
   });
 
   it('does not throw under fail-fast when tags share identical provider/model/providerOptions', () => {

@@ -26,7 +26,7 @@ import { handleBlocked } from './blocked-handler.js';
 import { getWorkflowStepKind, isDelegatedWorkflowStep } from '../step-kind.js';
 import { resolvePromotionRuntime } from '../promotion/promotion-runtime.js';
 import { createRoutingScope, resolveAutoRoutingRuntime } from '../auto-routing/resolver.js';
-import { buildRoutingWorkSnapshot, type RoutingFindings } from '../auto-routing/snapshot.js';
+import { buildRoutingWorkSnapshot } from '../auto-routing/snapshot.js';
 import { runWithStepSpan, type StepSpanParams } from '../observability/workflowSpans.js';
 import type { QualityGateRunResult } from '../quality-gates/types.js';
 import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
@@ -34,11 +34,14 @@ import type { PreparedNormalStepExecution } from './StepExecutor.js';
 import type { WorkflowCallExecutionToken } from './WorkflowCallRunner.js';
 import { requireWorkflowResumeStackSnapshot } from '../run/resume-point.js';
 import { createRunFailure } from '../run/run-failure.js';
-import { FindingReviewCapacityError } from './WorkflowEngineSetup.js';
 import {
   reviewerOperationOrigin,
   sameFallbackOperationOrigin,
 } from './fallback-operation.js';
+import {
+  isAgentFailureError,
+  isProviderStreamParseError,
+} from '../../../shared/types/agent-failure.js';
 
 const log = createLogger('workflow-run-loop');
 
@@ -55,10 +58,7 @@ interface WorkflowRunLoopDeps {
   state: WorkflowState;
   options: WorkflowEngineOptions;
   getWorkflowName: () => string;
-  getFindingScopeIdentity: () => string | undefined;
-  getFindingIds: () => readonly string[] | undefined;
   getTask: () => string;
-  getRoutingFindings: () => RoutingFindings;
   getCurrentWorkflowStack: () => StepSpanParams['workflowStack'];
   getCwd: () => string;
   getMaxSteps: () => WorkflowMaxSteps;
@@ -122,32 +122,6 @@ interface WorkflowRunLoopDeps {
   addUserInput: (input: string) => void;
   emit: (event: string, ...args: unknown[]) => void;
   updateMaxSteps: (maxSteps: number) => void;
-  /**
-   * COMPLETE 遷移直前のエンジン最終不変条件: open な
-   * provisional finding が1件でもあれば COMPLETE を拒否する。バックストップ
-   * 発火は「workflow rules が findings.provisional.count を処理していない」
-   * 設定不備なので fail-fast abort（house の「マッチなしは黙ってデフォルトを
-   * 選ばず fail-fast」と同じ扱い）。violation.reason には provisional の
-   * id / kind / reason と修正ガイダンスを含める。
-   */
-  checkCompletionGate: () => { ok: true } | {
-    ok: false;
-    reason: string;
-    abortKind?: WorkflowAbortKind;
-    failure?: WorkflowStepFailureSummary;
-  };
-  /**
-   * returnValue 終端（`return: X`）の gate。自前の Finding Contract を持つ
-   * workflow では review-integrity を検証する。親から契約を継承した callable
-   * workflow では、return は最終完了ではなく契約所有者への制御返却なので通し、
-   * 最終的な COMPLETE は親の completion gate が検証する。
-   */
-  checkReturnValueGate: () => { ok: true } | {
-    ok: false;
-    reason: string;
-    abortKind?: WorkflowAbortKind;
-    failure?: WorkflowStepFailureSummary;
-  };
 }
 
 async function resolveStepPromotionRuntime(
@@ -211,7 +185,6 @@ async function resolveStepAutoRoutingRuntime(
         passPreviousResponse: step.passPreviousResponse === true,
       },
       lastOutput: deps.state.lastOutput?.content,
-      findings: deps.getRoutingFindings(),
       sensitiveValues: deps.options.routingSensitiveValues,
     }),
     currentProviderInfo,
@@ -411,12 +384,14 @@ function buildWorkflowAbortResult(
   stepName: string,
   reason: string,
   error: string,
+  failureCategory?: AgentResponse['failureCategory'],
 ): WorkflowAbortResult {
   const failure = createRunFailure({
     kind,
     step: stepName,
     reason,
     error,
+    ...(failureCategory === undefined ? {} : { failureCategory }),
   });
   return {
     kind,
@@ -432,6 +407,7 @@ function abortWorkflow(
   options: {
     clearLastOutput?: boolean;
     failureError?: string;
+    failureCategory?: AgentResponse['failureCategory'];
     failure?: WorkflowStepFailureSummary;
   } = {},
 ): WorkflowAbortResult {
@@ -443,7 +419,13 @@ function abortWorkflow(
     ? reason
     : options.failureError;
   const result = options.failure === undefined
-    ? buildWorkflowAbortResult(kind, deps.state.currentStep, reason, failureError)
+    ? buildWorkflowAbortResult(
+        kind,
+        deps.state.currentStep,
+        reason,
+        failureError,
+        options.failureCategory,
+      )
     : {
         kind: options.failure.kind,
         reason: options.failure.reason,
@@ -469,12 +451,29 @@ function abortWorkflowRuntimeError(deps: WorkflowRunLoopDeps, error: unknown): W
       }),
     });
   }
-  if (error instanceof FindingReviewCapacityError) {
+  if (isProviderStreamParseError(error)) {
+    const failureError = error.message;
     return abortWorkflow(
       deps,
-      'review_integrity_unresolved',
-      error.failure.reason,
-      { failure: error.failure },
+      'step_error',
+      failureError,
+      {
+        clearLastOutput: true,
+        failureError,
+        failureCategory: error.failureCategory,
+      },
+    );
+  }
+  if (isAgentFailureError(error)) {
+    return abortWorkflow(
+      deps,
+      'step_error',
+      error.reason,
+      {
+        clearLastOutput: true,
+        failureError: error.reason,
+        failureCategory: error.failureCategory,
+      },
     );
   }
   const errorMessage = getErrorMessage(error);
@@ -530,35 +529,8 @@ function buildInterruptedIterationResult(
   };
 }
 
-/**
- * 全ての完了経路（COMPLETE 遷移・returnValue 終端）が必ず通る fail-closed の
- * 一元判定（review-integrity requirement）。渡された gate 結果を評価し、通れば state.status を
- * 'completed' にして undefined を返す。塞がっていれば完了させず abort を返す。
- * どの完了終端もこの関数だけで status='completed' を確定させることで、gate を
- * 迂回する完了経路（かつて returnValue 終端が gate を呼ばず直接 completed にして
- * いた穴）を構造的に無くす。
- *
- * gate 結果は呼び出し元が選ぶ:
- *   - COMPLETE 遷移 → checkCompletionGate（product gate + review-integrity gate）
- *   - returnValue 終端 → checkReturnValueGate（自前契約なら review-integrity を検証し、
- *     継承契約なら契約所有者への制御返却として許可する）
- */
-function finalizeCompletionOrAbort(
-  deps: WorkflowRunLoopDeps,
-  gate: { ok: true } | {
-    ok: false;
-    reason: string;
-    abortKind?: WorkflowAbortKind;
-    failure?: WorkflowStepFailureSummary;
-  },
-): WorkflowAbortResult | undefined {
-  if (!gate.ok) {
-    return abortWorkflow(deps, gate.abortKind ?? 'provisional_findings', gate.reason, {
-      ...(gate.failure === undefined ? {} : { failure: gate.failure }),
-    });
-  }
+function finalizeCompletion(deps: WorkflowRunLoopDeps): void {
   deps.state.status = 'completed';
-  return undefined;
 }
 
 type TerminalTransitionResult =
@@ -602,6 +574,14 @@ function abortStepError(
     );
   }
   const failureError = result.response.error ?? result.response.content;
+  if (result.response.failureCategory !== undefined) {
+    return abortWorkflow(
+      deps,
+      'step_error',
+      failureError,
+      { failureError, failureCategory: result.response.failureCategory },
+    );
+  }
   return abortWorkflow(
     deps,
     'step_error',
@@ -616,10 +596,7 @@ function handleTerminalTransition(
   workflowCallFailure?: WorkflowStepFailureSummary,
 ): TerminalTransitionResult {
   if (nextStep === COMPLETE_STEP) {
-    const gateAbort = finalizeCompletionOrAbort(deps, deps.checkCompletionGate());
-    if (gateAbort) {
-      return { handled: true, transitionAccepted: false, abort: gateAbort };
-    }
+    finalizeCompletion(deps);
     deps.emit('workflow:complete', deps.state);
     return { handled: true, transitionAccepted: true };
   }
@@ -869,8 +846,6 @@ async function runWorkflowToCompletionCore(deps: WorkflowRunLoopDeps): Promise<W
         step.name,
         stepIteration,
         stepEventWorkflowStack,
-        deps.getFindingScopeIdentity(),
-        deps.getFindingIds(),
       );
     }
 
@@ -1017,11 +992,7 @@ async function runWorkflowToCompletionCore(deps: WorkflowRunLoopDeps): Promise<W
       }
 
       if (transition.returnValue !== undefined) {
-        const gateAbort = finalizeCompletionOrAbort(deps, deps.checkReturnValueGate());
-        if (gateAbort) {
-          abort = gateAbort;
-          break;
-        }
+        finalizeCompletion(deps);
         result.commitTransition?.({
           kind: 'return',
           returnValue: transition.returnValue,
@@ -1100,7 +1071,6 @@ export async function runSingleWorkflowIteration(deps: WorkflowRunLoopDeps): Pro
     if (
       !workflowInterruptRequested(deps)
       && !(error instanceof RuleDetectionExhaustedError)
-      && !(error instanceof FindingReviewCapacityError)
     ) {
       throw error;
     }
@@ -1328,10 +1298,7 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
   }
 
   if (transition.returnValue !== undefined) {
-    const gateAbort = finalizeCompletionOrAbort(deps, deps.checkReturnValueGate());
-    if (gateAbort) {
-      return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop, abort: gateAbort };
-    }
+    finalizeCompletion(deps);
     result.commitTransition?.({
       kind: 'return',
       returnValue: transition.returnValue,
@@ -1352,10 +1319,7 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
     result.commitTransition?.({ kind: 'next_step', nextStep });
     advanceActiveStep(deps, nextStep, deps.state.iteration);
   } else if (nextStep === COMPLETE_STEP) {
-    const gateAbort = finalizeCompletionOrAbort(deps, deps.checkCompletionGate());
-    if (gateAbort) {
-      return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop, abort: gateAbort };
-    }
+    finalizeCompletion(deps);
     result.commitTransition?.({ kind: 'next_step', nextStep });
   } else {
     result.commitTransition?.({ kind: 'next_step', nextStep });

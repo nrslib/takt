@@ -92,6 +92,17 @@ describe('replaceTemplatePlaceholders', () => {
     }))).toBe('explicit');
   });
 
+  it.each(['Initial', '', 1, true])(
+    'should render an unexpected runtime review_mode value as mode_unknown: %j',
+    (reviewMode) => {
+      expect(replaceTemplatePlaceholders(
+        '{var:review_mode}',
+        makeStep(),
+        makeInstructionContext({ workflowCallVars: { review_mode: reviewMode } }),
+      )).toBe('mode_unknown');
+    },
+  );
+
   it('should replace {previous_response} when passPreviousResponse is true', () => {
     const step = makeStep({ passPreviousResponse: true });
     const ctx = makeInstructionContext({

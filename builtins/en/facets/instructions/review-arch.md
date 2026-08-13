@@ -3,5 +3,5 @@ Do not assume another reviewer or step has already covered an issue. Detect any 
 
 {{include:instructions/review-round-scope}}
 {{include:instructions/review-investigation-discipline}}
-{{include:instructions/review-family-completion}}
+{{include:instructions/contract-family-review-by-mode}}
 {{include:instructions/review-pr-context}}

@@ -6,7 +6,6 @@
  * Phase 3: Status judgment (no tools, optional)
  */
 
-import type { InternalAgentSeats } from '../../models/config-types.js';
 import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type {
@@ -14,7 +13,6 @@ import type {
   WorkflowStep,
   WorkflowState,
   AgentResponse,
-  FindingContractConfig,
   Language,
   FallbackContext,
   WorkflowConfig,
@@ -22,11 +20,8 @@ import type {
   NormalAgentWorkflowStep,
   ResolvedFacetPool,
   ResolvedFacetContent,
-  WorkflowMaxSteps,
 } from '../../models/types.js';
 import { isNormalAgentWorkflowStep } from '../../models/types.js';
-import type { StructuredCaller } from '../../../agents/structured-caller.js';
-import type { FindingManagerAuthority } from '../../models/finding-types.js';
 import type {
   PhaseName,
   PhasePromptParts,
@@ -39,17 +34,21 @@ import type {
 } from '../types.js';
 import type { ProviderUsageSnapshot } from '../../models/response.js';
 import { executeAgent } from '../../../agents/agent-usecases.js';
+import {
+  executeStructuredAgent,
+  executeStructuredTextAgent,
+  requireStructuredAgentProvider,
+  StructuredAgentResponseError,
+} from '../../../agents/structured-caller/transport.js';
 import { InstructionBuilder } from '../instruction/InstructionBuilder.js';
 import type {
   DynamicFacetSelectionContext,
   DynamicFacetSelectorCoordinator,
 } from '../dynamic-facets/dynamicFacetSelectorCoordinator.js';
 import {
-  generateReportPhase,
   runReportPhase,
   ReportPhaseGenerationError,
 } from '../phase-runner.js';
-import { writeReportFile } from '../report-writer.js';
 import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
 import type {
   BasePhaseRunnerContext,
@@ -74,55 +73,22 @@ import {
 import {
   providerSupportsStructuredOutput,
 } from '../../../infra/providers/provider-capabilities.js';
-import { AGENT_FAILURE_CATEGORIES } from '../../../shared/types/agent-failure.js';
+import {
+  AGENT_FAILURE_CATEGORIES,
+  createProviderStreamParseError,
+} from '../../../shared/types/agent-failure.js';
 import { buildStructuredJsonSchemaInstruction } from '../../../shared/prompts/index.js';
 import type {
   StructuredOutputFailureReason,
   StructuredOutputNormalizerRegistry,
 } from './structured-output-normalizer.js';
-import type {
-  FindingContractInstructionContext,
-  FindingContractInstructionPolicy,
-} from '../instruction/instruction-context.js';
 import { compactSessionBeforePhase1 } from './session-compaction.js';
-import type { FindingLedgerStore } from '../findings/store.js';
-import type {
-  FindingManagerRunResult,
-  FindingManagerSubStepResult,
-} from '../findings/manager-runner.js';
-import {
-  runFindingRestatementSlot,
-  type FindingRestatementSlotTerminalOutcome,
-} from '../findings/restatement-slot-runner.js';
-import { resolveReviewIntegrityLimits } from '../findings/review-integrity.js';
-import {
-  assertFindingIntakeNormalizerProvider,
-  buildFindingIntakeNormalizerSteps,
-  supportsFindingIntakeNormalizerExecution,
-} from '../findings/intake-normalize-policy.js';
-import {
-  assertFindingContractReviewerStep,
-  ingestFindingContractResults,
-  resolveFindingContractIntakeStep,
-} from '../findings/contract-intake.js';
-import {
-  describeRawFindingExtractionFidelityFailure,
-  describeRawFindingExtractionFidelityFailures,
-  EXTRACTION_FIDELITY_INVALID_DETAIL,
-} from '../findings/extraction-fidelity.js';
-import type { ReviewerRelationClarification } from '../findings/relation-coherence.js';
-import {
-  RAW_FINDINGS_SCHEMA_REF,
-  projectReviewerRawStructuredOutputWithEnvelope,
-  type ReviewerRawResourceEnvelope,
-} from '../findings/raw-canonicalization.js';
 import { invalidateExpectedPersonaSession, invalidatePersonaSessionIfExpected } from './session-invalidation.js';
 import type { InstructionBuildTransaction } from './instruction-build-transaction.js';
 import { evaluatePostExecutionRules } from './post-execution-rule-evaluator.js';
 import type { PullRequestContext } from '../pr-context.js';
 import type { TaskReviewScope } from '../review-scope.js';
 import { requireWorkflowResumeStackSnapshot } from '../run/resume-point.js';
-import type { StructuredOutputNormalizationResult } from './structured-output-normalization.js';
 import {
   completeObservedPhase1Attempt,
   executeObservedPhase1Attempt,
@@ -138,43 +104,40 @@ import {
   type CompanionReviewAuthority,
 } from '../companion/review-state-store.js';
 import type { RunAgentOptions } from '../../../agents/types.js';
+import { isAbortError } from '../companion/abort.js';
 import {
-  createFindingReviewPublication,
-  createFindingReviewPresentationContextV2,
-  createPendingFindingReviewNormalization,
-  discardPendingFindingReviewNormalization,
-  FindingReviewPublicationSourceBindingError,
-  loadFindingReviewPublication,
-  loadPendingFindingReviewNormalization,
-  persistFindingReviewPublication,
-  persistPendingFindingReviewNormalization,
-  publishFindingReviewPublication,
-  releaseFindingEvidenceSearchAttempt,
-  reserveFindingEvidenceSearchAttempt,
-  PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
-  type CanonicalFindingReviewPublication,
-  type FindingReviewPresentationContext,
-  type FindingReviewPublicationIdentity,
-  type ReviewerExecutionIdentity,
-} from '../findings/review-publication.js';
+  buildReviewCompletionJudgePrompt,
+  formatReviewCompletionDiagnostic,
+  parseReviewCompletionDecision,
+  runReviewCompletionEpisode,
+  REVIEW_COMPLETION_JUDGE_NAME,
+  type ReviewCompletionDiagnostic,
+} from '../review-completion.js';
+import { buildReviewCompletionJudgeStep } from '../review-completion-judge-step.js';
 import {
-  findingEvidenceSearchReportName,
-  type FindingEvidenceSearchRequest,
-} from '../findings/evidence-search.js';
-import { recordVerdictClaimsMismatchAnomalies } from '../findings/verdict-claims-integrity.js';
-import {
-  recordReviewReportProtocolAnomalies,
-  reviewReportProtocolRejectionResponse,
-  type ReviewReportProtocolRejection,
-} from '../findings/review-report-protocol.js';
+  collectReviewCompletionEvidence,
+  reviewCompletionClaimedPaths,
+} from '../review-completion-evidence.js';
+import { runWithReviewCompletionJudgeSpan } from '../observability/workflowSpans.js';
 import {
   fallbackContextForOperation,
-  findingIntakeNormalizerOperationOrigin,
   reviewerOperationOrigin,
-  runtimeForOperation,
 } from './fallback-operation.js';
 
 const log = createLogger('step-executor');
+
+function emitCompanionReviewSkippedSafely(
+  emitEvent: StepExecutorDeps['emitEvent'],
+  payload: Record<string, unknown>,
+): void {
+  try {
+    emitEvent('companion:review_skipped', payload);
+  } catch (error) {
+    log.warn('Companion skip audit could not be emitted; continuing workflow', {
+      error: safeExternalErrorMessage(error),
+    });
+  }
+}
 
 function requireActiveCompanionState(
   state: WorkflowState,
@@ -186,55 +149,13 @@ function requireActiveCompanionState(
   return state.companion;
 }
 
-function reviewerExecutionIdentity(
-  providerInfo: StepProviderInfo,
-): ReviewerExecutionIdentity {
-  if (providerInfo.provider === undefined) {
-    throw new Error('Reviewer execution identity requires a resolved provider');
-  }
-  return Object.freeze({
-    provider: providerInfo.provider,
-    ...(providerInfo.model !== undefined ? { model: providerInfo.model } : {}),
-    ...(providerInfo.providerOptions !== undefined
-      ? { providerOptions: structuredClone(providerInfo.providerOptions) }
-      : {}),
-  });
-}
-
-function reviewerRuntime(
-  identity: ReviewerExecutionIdentity,
-): RuntimeStepResolution {
-  return {
-    providerInfoResolution: 'fully_resolved',
-    providerInfo: {
-      provider: identity.provider,
-      model: identity.model,
-      providerSource: 'step',
-      modelSource: identity.model !== undefined ? 'step' : undefined,
-      ...(identity.providerOptions !== undefined
-        ? { providerOptions: structuredClone(identity.providerOptions) }
-        : {}),
-    },
-  };
-}
-
-function replaceResponseProviderUsage(
-  response: AgentResponse,
-  providerUsage: ProviderUsageSnapshot | undefined,
-): AgentResponse {
-  const withoutProviderUsage = { ...response };
-  delete withoutProviderUsage.providerUsage;
-  return providerUsage === undefined
-    ? withoutProviderUsage
-    : { ...withoutProviderUsage, providerUsage };
-}
-
 export interface StepExecutorDeps {
   readonly optionsBuilder: OptionsBuilder;
   readonly getCwd: () => string;
   readonly getProjectCwd: () => string;
   readonly getReportDir: () => string;
   readonly getRunPaths: () => RunPaths;
+  readonly getFailureDir: () => string;
   readonly getLanguage: () => Language | undefined;
   readonly getInteractive: () => boolean;
   readonly getWorkflowSteps: () => ReadonlyArray<{ name: string; description?: string }>;
@@ -251,22 +172,12 @@ export interface StepExecutorDeps {
   readonly sanitizeObservabilityText?: (text: string) => string;
   readonly getCurrentWorkflowStack?: () => WorkflowResumePointEntry[] | undefined;
   readonly structuredOutputNormalizers: StructuredOutputNormalizerRegistry;
-  readonly structuredCaller?: StructuredCaller;
-  /** runtime.yaml `provider.targets.internal_agents` の解決済み seat。未指定 seat は既定解決。 */
-  readonly internalAgentSeats?: InternalAgentSeats;
   readonly abortSignal?: AbortSignal;
-  /** 自前 or workflow_call 親から継承した、この engine で有効な Finding Contract。 */
-  readonly findingContract?: FindingContractConfig;
-  readonly findingManagerAuthority: FindingManagerAuthority;
-  /** findings-manager の provider/model 未指定時の fallback（manager-runner.ts 参照）。 */
-  readonly workflowProvider?: WorkflowConfig['provider'];
-  readonly workflowModel?: WorkflowConfig['model'];
   readonly executionProvider: WorkflowConfig['provider'];
   readonly executionModel: WorkflowConfig['model'];
-  readonly findingLedgerStore?: FindingLedgerStore;
-  readonly refreshFindingsState: () => void;
+  readonly internalAgentSeats?: import('../../models/config-types.js').InternalAgentSeats;
   readonly emitEvent: (event: string, ...args: unknown[]) => void;
-  /** 合成ステップ（findings-manager 等）の LLM 呼び出しを usage-events へ記録する。 */
+  /** 実行ループ外の合成ステップの LLM 呼び出しを usage-events へ記録する。 */
   readonly recordSynthesizedAgentUsage: (
     stepName: string,
     providerInfo: StepProviderInfo,
@@ -281,8 +192,6 @@ export interface StepExecutorDeps {
   readonly companionSelectorProvider?: WorkflowEngineOptions['selectorProvider'];
   readonly companionDiffReader?: WorkflowEngineOptions['companionDiffReader'];
   readonly companionReviewAuthority?: CompanionReviewAuthority;
-  /** raw finding id 衝突対策の呼び出し名前空間。トップレベルでは空文字列。 */
-  readonly getFindingCallNamespace: () => string;
   readonly onPhaseStart?: (
     step: WorkflowStep,
     phase: 1 | 2 | 3,
@@ -320,121 +229,27 @@ export interface StepExecutorDeps {
  */
 export interface PreparedNormalStepExecution {
   readonly executableStep: AgentWorkflowStep;
-  readonly findingContractContext?: FindingContractInstructionContext;
   readonly phase1Instruction: string;
   readonly priorStepResponseText?: string;
   readonly stepIteration: number;
 }
 
-/** prepareFindingReviewPublication の入力。通常レビュアーと格上げ再レビューで共有する。 */
-export interface FindingReviewPublicationPreparationInput {
-  readonly step: AgentWorkflowStep;
-  readonly executableStep: AgentWorkflowStep;
-  readonly parentStepName: string;
-  readonly stepIteration: number;
-  readonly state: WorkflowState;
-  readonly phase1Response: AgentResponse;
-  readonly agentOptions: RunAgentOptions;
-  readonly onProviderAttempt: NonNullable<
-    BasePhaseRunnerContext['onProviderAttempt']
-  >;
-  readonly updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
-  readonly runtime?: RuntimeStepResolution;
-  readonly presentationContext?: FindingReviewPresentationContext;
-  /**
-   * Phase 2 で使う Finding Contract context。Phase 1 で凍結したものをそのまま
-   * 渡すこと。省略すると Phase 2 が step 名から組み直し、ledger と提示回数を
-   * 読み直して再提示 batch を作り直すため、Phase 1 と Phase 2 で request 集合が
-   * 食い違う（escalation slot では restatement-only 契約そのものが消える）。
-   */
-  readonly findingContractContext?: FindingContractInstructionContext;
-  /**
-   * この呼び出しが何として走ったか。publication へ永続化し、resume はその値を
-   * 採用する（引き当て時点の mode を被せると、言い直しだけで出た publication が
-   * 再開後にフルレビューの証拠として扱われる）。
-   *
-   * 通常のレビューステップも `review` を明示して渡す。省略を「通常レビュー」の
-   * 意味に流用すると、保存済み record の欠落と区別できなくなる。
-   */
-  readonly reviewerCallMode: 'review' | 'restatement-only';
+interface StructuredOutputNormalizationResult {
+  readonly response: AgentResponse;
+  readonly invalidDetail?: string;
+  readonly invalidKind?: 'model_output' | 'schema_config';
+  readonly invalidIssues?: readonly {
+    readonly path: string;
+    readonly keyword: string;
+    readonly message: string;
+  }[];
 }
-
-/** 正規化係の1候補（解決チェーンの1段）。 */
-interface FindingIntakeNormalizerCandidate {
-  readonly step: AgentWorkflowStep;
-  readonly providerInfo: StepProviderInfo;
-}
-
-type FindingIntakeNormalizationResult = StructuredOutputNormalizationResult & {
-  readonly providerInfo: StepProviderInfo;
-  readonly publication?: CanonicalFindingReviewPublication;
-  readonly terminal?: true;
-  /** 全候補が provider 未実行の明示応答だった場合だけ付与する。 */
-  readonly providerNotExecuted?: true;
-  /**
-   * 失敗の原因がレビュアーの報告側にある（rawExcerpt が報告本文に byte-exact で
-   * 束縛できない）。正規化係を乗り換えても解消しない種類の失敗。
-   */
-  readonly reportSourceBinding?: true;
-  /** 報告側原因が訂正1回でも解消しなかった。値は言い直し要求へ載せる具体的理由。 */
-  readonly reportSourceRejection?: string;
-};
-
-type FindingIntakeNormalizerAttempt =
-  | { readonly kind: 'published'; readonly result: FindingIntakeNormalizationResult }
-  | { readonly kind: 'terminal'; readonly result: FindingIntakeNormalizationResult }
-  | {
-      readonly kind: 'report_source';
-      readonly reason: string;
-      readonly result: FindingIntakeNormalizationResult;
-    }
-  | {
-      readonly kind: 'failed';
-      readonly reason: string;
-      /** engine 側スキーマの不備。別 provider でやり直しても直らないので後退しない。 */
-      readonly engineFault: boolean;
-      readonly result: FindingIntakeNormalizationResult;
-    };
-
-export type FindingEvidenceSearchRunResult =
-  | { readonly kind: 'published'; readonly result: FindingManagerSubStepResult }
-  | {
-      readonly kind: 'terminal';
-      readonly response: AgentResponse;
-      readonly providerInfo: StepProviderInfo;
-      readonly terminalOperation: NonNullable<StepRunResult['terminalOperation']>;
-    }
-  | { readonly kind: 'already-attempted' };
-
-/** 報告側原因で publication が成立しなかった1レビュアー分の結果。 */
-export interface FindingReviewPublicationReportRejection {
-  readonly reason: string;
-  readonly reportContent: string;
-}
-
-export type FindingReviewPublicationPreparation =
-  | {
-      readonly reportRejection: FindingReviewPublicationReportRejection;
-      readonly reviewerProviderInfo?: StepProviderInfo;
-      readonly reviewerRuntime?: RuntimeStepResolution;
-    }
-  | {
-      readonly publication: CanonicalFindingReviewPublication;
-      readonly response: AgentResponse;
-      readonly relationClarification?: ReviewerRelationClarification;
-      readonly reviewerProviderInfo?: StepProviderInfo;
-      readonly reviewerRuntime?: RuntimeStepResolution;
-      /** その publication を出した呼び出しの mode（永続値）。 */
-      readonly reviewerCallMode?: 'review' | 'restatement-only';
-    }
-  | {
-      readonly terminalResponse: AgentResponse;
-      readonly reviewerProviderInfo?: StepProviderInfo;
-      readonly reviewerRuntime?: RuntimeStepResolution;
-      readonly terminalOperation?: NonNullable<StepRunResult['terminalOperation']>;
-    };
 
 export class StepExecutor {
+  private static isProviderStreamParseFailure(response: AgentResponse): boolean {
+    return response.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR;
+  }
+
   private readonly structuredOutputNormalizers: StructuredOutputNormalizerRegistry;
   private readonly companionReviewState: CompanionReviewStateStore | undefined;
 
@@ -458,6 +273,413 @@ export class StepExecutor {
   ): string {
     const safeStepName = slugify(stepName) || 'step';
     return `${safeStepName}.${stepIteration}.${timestamp}.md`;
+  }
+
+  async completeReviewerResponse(input: {
+    readonly step: AgentWorkflowStep;
+    readonly originalInstruction: string;
+    readonly initialResponse: AgentResponse;
+    readonly executeRetry: (
+      instruction: string,
+      sessionId: string | undefined,
+    ) => Promise<AgentResponse>;
+  }): Promise<{
+    readonly response: AgentResponse;
+    readonly reviewerSessionId: string | undefined;
+    readonly diagnostic?: ReviewCompletionDiagnostic;
+  }> {
+    const config = input.step.reviewCompletion;
+    if (config === undefined) {
+      return {
+        response: input.initialResponse,
+        reviewerSessionId: input.initialResponse.sessionId,
+      };
+    }
+    const priorJudgeGapPaths = new Set<string>();
+    const result = await runReviewCompletionEpisode({
+      config,
+      originalInstruction: input.originalInstruction,
+      initialResponse: input.initialResponse,
+      initialSessionId: input.initialResponse.sessionId,
+      executeRetry: async ({ attemptIndex, instruction, sessionId }) => {
+        this.deps.emitEvent('review_completion:retry:start', {
+          step: input.step.name,
+          attempt: attemptIndex,
+        });
+        try {
+          const response = await input.executeRetry(instruction, sessionId);
+          this.deps.emitEvent('review_completion:retry:complete', {
+            step: input.step.name,
+            attempt: attemptIndex,
+            status: response.status,
+            ...(response.error === undefined ? {} : { error: response.error }),
+          });
+          return response;
+        } catch (error) {
+          this.deps.emitEvent('review_completion:retry:complete', {
+            step: input.step.name,
+            attempt: attemptIndex,
+            status: 'error',
+            error: getErrorMessage(error),
+          });
+          throw error;
+        }
+      },
+      judge: async (reviewResponse, attemptIndex) => {
+        const judgeStep = buildReviewCompletionJudgeStep({
+          reviewerStepName: input.step.name,
+          workflowProvider: this.deps.executionProvider,
+          workflowModel: this.deps.executionModel,
+          internalAgentSeats: this.deps.internalAgentSeats,
+        });
+        const reviewScope = this.deps.getReviewScope();
+        const prompt = buildReviewCompletionJudgePrompt({
+          language: this.deps.getLanguage(),
+          task: this.deps.getTask(),
+          reviewerInstruction: input.originalInstruction,
+          reviewScope,
+          evidence: collectReviewCompletionEvidence({
+            cwd: this.deps.getCwd(),
+            reviewScope,
+            claimedPaths: reviewCompletionClaimedPaths(reviewResponse.structuredOutput),
+            priorGapPaths: [...priorJudgeGapPaths],
+          }),
+          reviewResponse: reviewResponse.content,
+        });
+        let judgeProviderInfo: StepProviderInfo = { provider: undefined, model: undefined };
+        let usageRecorded = false;
+        try {
+          judgeProviderInfo = this.deps.optionsBuilder.resolveStepProviderModel(judgeStep);
+          const provider = requireStructuredAgentProvider(
+            judgeProviderInfo.provider,
+            REVIEW_COMPLETION_JUDGE_NAME,
+          );
+          const judgeOptions = this.deps.optionsBuilder.buildAgentOptions(judgeStep);
+          this.deps.emitEvent('review_completion:judge:start', {
+            step: input.step.name,
+            attempt: attemptIndex,
+            provider,
+            model: judgeProviderInfo.model,
+          });
+          const response = await runWithReviewCompletionJudgeSpan(
+            {
+              enabled: this.deps.observabilityEnabled?.() === true,
+              runId: this.deps.getObservabilityRunId?.(),
+              workflowName: this.deps.getWorkflowName(),
+              reviewerStep: input.step.name,
+              attempt: attemptIndex,
+              providerInfo: judgeProviderInfo,
+            },
+            () => executeStructuredAgent(
+              prompt.instruction,
+              judgeStep.structuredOutput!.schema,
+              {
+                name: REVIEW_COMPLETION_JUDGE_NAME,
+                cwd: this.deps.getCwd(),
+                projectCwd: this.deps.getProjectCwd(),
+                systemPrompt: prompt.systemPrompt,
+                language: this.deps.getLanguage(),
+                abortSignal: this.deps.abortSignal,
+                childProcessEnv: judgeOptions.childProcessEnv,
+                failureDir: judgeOptions.failureDir,
+                resolution: {
+                  provider,
+                  model: judgeProviderInfo.model,
+                  providerOptions: judgeOptions.providerOptions,
+                  permissionMode: judgeOptions.permissionMode,
+                },
+              },
+            ),
+            (judgeResponse) => ({
+              status: judgeResponse.status,
+              gapCount: Array.isArray(judgeResponse.structuredOutput?.missing_obligations)
+                ? judgeResponse.structuredOutput.missing_obligations.length
+                : 0,
+            }),
+          );
+          this.deps.recordSynthesizedAgentUsage(
+            REVIEW_COMPLETION_JUDGE_NAME,
+            judgeProviderInfo,
+            true,
+            response.providerUsage,
+          );
+          usageRecorded = true;
+          const decision = parseReviewCompletionDecision(response.structuredOutput);
+          decision.missingObligations.forEach((gap) => priorJudgeGapPaths.add(gap.path));
+          this.deps.emitEvent('review_completion:judge:complete', {
+            step: input.step.name,
+            attempt: attemptIndex,
+            status: response.status,
+            complete: decision.complete,
+            gapCount: decision.missingObligations.length,
+          });
+          return decision;
+        } catch (error) {
+          if (!usageRecorded && judgeProviderInfo.provider !== undefined) {
+            this.deps.recordSynthesizedAgentUsage(
+              REVIEW_COMPLETION_JUDGE_NAME,
+              judgeProviderInfo,
+              false,
+              undefined,
+            );
+          }
+          this.deps.emitEvent('review_completion:judge:complete', {
+            step: input.step.name,
+            attempt: attemptIndex,
+            status: 'error',
+            error: getErrorMessage(error),
+          });
+          throw error;
+        }
+      },
+      isAbort: (error) => isAbortError(error) || this.deps.abortSignal?.aborted === true,
+    });
+    return {
+      response: result.response,
+      reviewerSessionId: result.reviewerSessionId,
+      ...(result.diagnostic === undefined ? {} : { diagnostic: result.diagnostic }),
+    };
+  }
+
+  normalizeReviewerResponse(
+    step: AgentWorkflowStep,
+    response: AgentResponse,
+    runtime?: RuntimeStepResolution,
+  ): AgentResponse {
+    const normalized = this.normalizeStructuredOutputWithDiagnostics(step, response, runtime);
+    if (normalized.invalidDetail !== undefined) {
+      throw new Error(
+        `Reviewer attempt for step "${step.name}" produced invalid structured_output: ${normalized.invalidDetail}`,
+      );
+    }
+    return normalized.response;
+  }
+
+  finalizeObservedReviewerAttempt(input: {
+    readonly eventStep: WorkflowStep;
+    readonly executableStep: AgentWorkflowStep;
+    readonly iteration: number;
+    readonly attempt: Phase1Attempt;
+    readonly response: AgentResponse;
+    readonly runtime?: RuntimeStepResolution;
+    readonly recordUsage?: (success: boolean, usage: AgentResponse['providerUsage']) => void;
+  }): AgentResponse {
+    let normalized: AgentResponse;
+    try {
+      normalized = this.normalizeReviewerResponse(
+        input.executableStep,
+        input.response,
+        input.runtime,
+      );
+    } catch (error) {
+      completeObservedPhase1Attempt({
+        eventStep: input.eventStep,
+        iteration: input.iteration,
+        attempt: input.attempt,
+        response: {
+          ...input.response,
+          status: 'error',
+          error: getErrorMessage(error),
+        },
+        onPhaseComplete: this.deps.onPhaseComplete,
+      });
+      input.recordUsage?.(false, input.response.providerUsage);
+      throw error;
+    }
+    completeObservedPhase1Attempt({
+      eventStep: input.eventStep,
+      iteration: input.iteration,
+      attempt: input.attempt,
+      response: normalized,
+      onPhaseComplete: this.deps.onPhaseComplete,
+    });
+    input.recordUsage?.(normalized.status === 'done', normalized.providerUsage);
+    return normalized;
+  }
+
+  private async completeReviewerCompanion(input: {
+    readonly eventStep: WorkflowStep;
+    readonly executableStep: AgentWorkflowStep;
+    readonly state: WorkflowState;
+    readonly initialResponse: AgentResponse;
+    readonly agentOptions: RunAgentOptions;
+    readonly runtime?: RuntimeStepResolution;
+    readonly companionRuntime: CompanionStepRuntime | undefined;
+    readonly providerInfo: StepProviderInfo;
+    readonly nextSequence: () => number;
+  }): Promise<AgentResponse> {
+    if (input.companionRuntime === undefined) return input.initialResponse;
+    input.companionRuntime.beginReviewAttempt();
+    const fixLoop = await runCompanionFixLoop({
+      initialResponse: input.initialResponse,
+      phase1Options: input.agentOptions,
+      completeReview: ({ implementerResponse, afterFix, fixRound }) => (
+        input.companionRuntime!.complete(input.state, implementerResponse, { afterFix, fixRound })
+      ),
+      executeFix: async (attempt) => {
+        input.companionRuntime!.beginFixRound(attempt.sequence, attempt.openMustFixCount);
+        const promptResolvedAttempts = new Set<number>();
+        const phaseAttempts = new Map<number, Phase1Attempt>();
+        const resolvePhaseAttempt = (recoveryAttempt: Phase1Attempt): Phase1Attempt => {
+          const existing = phaseAttempts.get(recoveryAttempt.sequence);
+          if (existing !== undefined) return existing;
+          const created = {
+            ...recoveryAttempt,
+            sequence: input.nextSequence(),
+            reason: recoveryAttempt.reason === 'initial'
+              ? 'companion_fix' as const
+              : recoveryAttempt.reason,
+          };
+          phaseAttempts.set(recoveryAttempt.sequence, created);
+          return created;
+        };
+        const recovery = await runPhase1WithEmptyRecovery({
+          instruction: attempt.instruction,
+          initialSessionId: attempt.sessionId,
+          retryProviderErrorFresh: false,
+          execute: async (recoveryAttempt) => {
+            const phaseAttempt = resolvePhaseAttempt(recoveryAttempt);
+            try {
+              const observed = await executeObservedPhase1Attempt({
+                enabled: this.deps.observabilityEnabled?.() === true,
+                runId: this.deps.getObservabilityRunId?.(),
+                workflowName: this.deps.getWorkflowName(),
+                eventStep: input.eventStep,
+                spanStep: input.executableStep,
+                iteration: input.state.iteration,
+                attempt: phaseAttempt,
+                workflowStack: this.deps.getCurrentWorkflowStack?.(),
+                sanitizeText: this.deps.sanitizeObservabilityText,
+                providerInfo: input.providerInfo,
+                execute: (instruction, sessionId, onPromptResolved) => executeAgent(
+                  input.executableStep.persona,
+                  instruction,
+                  { ...attempt.options, sessionId, onPromptResolved },
+                ),
+                onPhaseStart: (...args) => {
+                  promptResolvedAttempts.add(phaseAttempt.sequence);
+                  this.deps.onPhaseStart?.(...args);
+                },
+              });
+              return observed.response;
+            } catch (error) {
+              if (promptResolvedAttempts.has(phaseAttempt.sequence)) {
+                completeObservedPhase1Attempt({
+                  eventStep: input.eventStep,
+                  iteration: input.state.iteration,
+                  attempt: phaseAttempt,
+                  response: {
+                    persona: input.executableStep.persona ?? input.executableStep.name,
+                    status: 'error',
+                    content: '',
+                    error: getErrorMessage(error),
+                    timestamp: new Date(),
+                  },
+                  onPhaseComplete: this.deps.onPhaseComplete,
+                });
+              }
+              this.deps.recordSynthesizedAgentUsage(
+                input.eventStep.name,
+                input.providerInfo,
+                false,
+                undefined,
+              );
+              throw error;
+            }
+          },
+          discardSession: () => undefined,
+          recordSupersededAttempt: (response, recoveryAttempt) => {
+            const phaseAttempt = resolvePhaseAttempt(recoveryAttempt);
+            if (promptResolvedAttempts.has(phaseAttempt.sequence)) {
+              completeObservedPhase1Attempt({
+                eventStep: input.eventStep,
+                iteration: input.state.iteration,
+                attempt: phaseAttempt,
+                response,
+                onPhaseComplete: this.deps.onPhaseComplete,
+              });
+            }
+            this.deps.recordSynthesizedAgentUsage(
+              input.eventStep.name,
+              input.providerInfo,
+              response.status === 'done',
+              response.providerUsage,
+            );
+          },
+        });
+        const finalAttempt = resolvePhaseAttempt(recovery.finalAttempt);
+        if (!promptResolvedAttempts.has(finalAttempt.sequence)) {
+          throw new Error(
+            `Missing prompt parts for companion fix: ${input.eventStep.name}:1:${finalAttempt.sequence}`,
+          );
+        }
+        if (input.executableStep.reviewCompletion !== undefined) {
+          return this.finalizeObservedReviewerAttempt({
+            eventStep: input.eventStep,
+            executableStep: input.executableStep,
+            iteration: input.state.iteration,
+            attempt: finalAttempt,
+            response: recovery.response,
+            runtime: input.runtime,
+            recordUsage: (success, usage) => this.deps.recordSynthesizedAgentUsage(
+              input.eventStep.name,
+              input.providerInfo,
+              success,
+              usage,
+            ),
+          });
+        }
+        const normalized = this.normalizeStructuredOutputWithDiagnostics(
+          input.executableStep,
+          recovery.response,
+          input.runtime,
+        );
+        if (normalized.invalidDetail !== undefined) {
+          const error = new Error(
+            `Companion fix for step "${input.executableStep.name}" produced invalid structured_output: ${normalized.invalidDetail}`,
+          );
+          completeObservedPhase1Attempt({
+            eventStep: input.eventStep,
+            iteration: input.state.iteration,
+            attempt: finalAttempt,
+            response: { ...recovery.response, status: 'error', error: error.message },
+            onPhaseComplete: this.deps.onPhaseComplete,
+          });
+          this.deps.recordSynthesizedAgentUsage(
+            input.eventStep.name,
+            input.providerInfo,
+            false,
+            recovery.response.providerUsage,
+          );
+          throw error;
+        }
+        completeObservedPhase1Attempt({
+          eventStep: input.eventStep,
+          iteration: input.state.iteration,
+          attempt: finalAttempt,
+          response: normalized.response,
+          onPhaseComplete: this.deps.onPhaseComplete,
+        });
+        this.deps.recordSynthesizedAgentUsage(
+          input.eventStep.name,
+          input.providerInfo,
+          normalized.response.status === 'done',
+          normalized.response.providerUsage,
+        );
+        return normalized.response;
+      },
+      abortSignal: this.deps.abortSignal,
+      onAttemptFailure: (failure) => {
+        log.warn('Companion advisory attempt failed; continuing with the latest successful response', {
+          step: input.eventStep.name,
+          stage: failure.stage,
+          fixRound: failure.fixRound,
+          sequence: failure.sequence,
+          reason: failure.reason,
+        });
+      },
+    });
+    return fixLoop.phaseResponse;
   }
 
   private resolveDynamicFacetPool(step: NormalAgentWorkflowStep): ResolvedFacetPool | undefined {
@@ -498,257 +720,6 @@ export class StepExecutor {
       policyContents: result.effectivePolicyContents.map((content) => ({ content })),
       knowledgeContents: result.effectiveKnowledgeContents.map((content) => ({ content })),
     } as AgentWorkflowStep;
-  }
-
-  private buildFindingContractInstructionContext(
-    step: WorkflowStep,
-    policy: FindingContractInstructionPolicy | undefined,
-  ): FindingContractInstructionContext | undefined {
-    if (policy?.mode === 'omit') {
-      return undefined;
-    }
-    if (policy?.mode === 'explicit') {
-      return policy.context;
-    }
-    return this.deps.optionsBuilder.buildFindingContractInstructionContext?.(step, false);
-  }
-
-  /**
-   * 単独ステップの Finding Contract 取り込み対象かどうかを判定する。
-   * 述語の実体は contract-intake.ts の resolveFindingContractIntakeStep
-   * （workflowPreview.ts と共有）。
-   */
-  private resolveFindingContractIntakeStep(step: WorkflowStep): AgentWorkflowStep | undefined {
-    return resolveFindingContractIntakeStep(step, this.deps.findingContract);
-  }
-
-  /**
-   * 単独 FC reviewer step の言い直し slot。owner publication の manager 取り込みが
-   * 終わった直後に実行する（parallel 経路と同型）。言い直し待ちの anomaly も
-   * 未取り込みの stored publication も無い場合は何も起きない。
-   */
-  private async runRestatementSlotForNormalStep(input: {
-    parentStepName: string;
-    ownerReviewerStep: AgentWorkflowStep;
-    findingContractContext: FindingContractInstructionContext | undefined;
-    stepIteration: number;
-    state: WorkflowState;
-    task: string;
-    maxSteps: WorkflowMaxSteps;
-    priorStepResponseText: string | undefined;
-    updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
-    runtime?: RuntimeStepResolution;
-  }): Promise<FindingRestatementSlotTerminalOutcome | undefined> {
-    const ownerReviewer = input.findingContractContext?.reviewer;
-    const findingContract = this.deps.findingContract;
-    if (findingContract === undefined || ownerReviewer === undefined) {
-      return undefined;
-    }
-    return runFindingRestatementSlot({
-      // owner 名は publication identity の reviewerStepName（= anomaly の
-      // presentationOwnerReviewer）と同じ値でなければならない。単独ステップでは
-      // parent step 名と一致するが、意味が違う値なので reviewer step から取る。
-      ownerReviewerSteps: [input.ownerReviewerStep],
-      buildSlotContexts: (contextInput) => (
-        this.deps.optionsBuilder.buildFindingRestatementSlotContexts(contextInput)
-      ),
-      buildEvidenceSearchRequests: (contextInput) => (
-        this.deps.optionsBuilder.buildFindingEvidenceSearchRequests?.(contextInput) ?? []
-      ),
-      ingest: async (results, ingestOptions) => {
-        await this.ingestFindingContractSubResults({
-          step: input.ownerReviewerStep,
-          stepIteration: input.stepIteration,
-          iteration: input.state.iteration,
-          subResults: results,
-          priorStepResponseText: input.priorStepResponseText,
-          budgetAccounting: 'excluded',
-          ...(ingestOptions?.deferClaimBearingTerminalDispositions === undefined
-            ? {}
-            : {
-                deferClaimBearingTerminalDispositions:
-                  ingestOptions.deferClaimBearingTerminalDispositions,
-              }),
-        });
-      },
-      reviewScopeSnapshotId: ownerReviewer.reviewScopeSnapshotId,
-      parentStepName: input.parentStepName,
-      stepIteration: input.stepIteration,
-      state: input.state,
-      task: input.task,
-      maxSteps: input.maxSteps,
-      optionsBuilder: this.deps.optionsBuilder,
-      stepExecutor: this,
-      updatePersonaSession: input.updatePersonaSession,
-      internalAgentSeats: this.deps.internalAgentSeats,
-      runtime: input.runtime,
-      presentationLimit: Math.max(
-        1,
-        resolveReviewIntegrityLimits(findingContract.reviewBudget).maxReviewRounds,
-      ),
-    });
-  }
-
-  private restatementSlotTerminalStepResult(input: {
-    step: WorkflowStep;
-    state: WorkflowState;
-    stepIteration: number;
-    instruction: string;
-    fallbackProviderInfo: StepProviderInfo;
-    slot: FindingRestatementSlotTerminalOutcome;
-  }): StepRunResult {
-    const response = input.slot.response;
-    input.state.stepOutputs.set(input.step.name, response);
-    input.state.lastOutput = response;
-    if (response.status === 'blocked') {
-      this.persistPreviousResponseSnapshot(
-        input.state,
-        input.step.name,
-        input.stepIteration,
-        response.content,
-      );
-    }
-    return {
-      response,
-      instruction: input.instruction,
-      providerInfo: input.slot.providerInfo ?? input.fallbackProviderInfo,
-      ...(input.slot.terminalOperation === undefined
-        ? {}
-        : { terminalOperation: input.slot.terminalOperation }),
-    };
-  }
-
-  /**
-   * 報告側原因で publication が成立しなかったレビュアーを台帳へ記録する。
-   * ParallelRunner も同じ入口を使う（記録規則を1箇所に保つ）。
-   */
-  async recordReviewReportProtocolRejections(input: {
-    readonly parentStepName: string;
-    readonly stepIteration: number;
-    /** そのラウンドで成立した publication の ID 全件。round marker の同一性に使う。 */
-    readonly publicationIds: readonly string[];
-    readonly rejections: readonly ReviewReportProtocolRejection[];
-  }): Promise<void> {
-    if (input.rejections.length === 0 || this.deps.findingContract === undefined) {
-      return;
-    }
-    await recordReviewReportProtocolAnomalies({
-      ledgerStore: this.deps.findingLedgerStore,
-      findingContract: this.deps.findingContract,
-      rejections: input.rejections,
-      publicationIds: input.publicationIds,
-      runId: this.deps.getRunId(),
-      callNamespace: this.deps.getFindingCallNamespace(),
-      parentStepName: input.parentStepName,
-      stepIteration: input.stepIteration,
-      timestamp: new Date().toISOString(),
-      refreshFindingsState: this.deps.refreshFindingsState,
-    });
-  }
-
-  private async ingestFindingContractForNormalStep(input: {
-    step: AgentWorkflowStep;
-    stepIteration: number;
-    iteration: number;
-    publication: CanonicalFindingReviewPublication;
-    priorStepResponseText: string | undefined;
-    relationClarification?: ReviewerRelationClarification;
-  }): Promise<FindingManagerRunResult> {
-    return this.ingestFindingContractSubResults({
-      step: input.step,
-      stepIteration: input.stepIteration,
-      iteration: input.iteration,
-      priorStepResponseText: input.priorStepResponseText,
-      // 単独ステップでは「レビュアー1件」を自分自身として渡す
-      // （manager-runner.ts の subResults は並列・単独どちらも同じ形で扱う）。
-      subResults: [{
-        subStep: input.step,
-        publication: input.publication,
-        ...(input.relationClarification !== undefined
-          ? { relationClarification: input.relationClarification }
-          : {}),
-      }],
-    });
-  }
-
-  /**
-   * 1ラウンド分の canonical publication を findings-manager へ渡す共通入口。
-   * レビュー本編と言い直し slot の各パスが同じ手順を通る。
-   */
-  private async ingestFindingContractSubResults(input: {
-    step: AgentWorkflowStep;
-    stepIteration: number;
-    iteration: number;
-    subResults: readonly FindingManagerSubStepResult[];
-    priorStepResponseText: string | undefined;
-    budgetAccounting?: 'round' | 'excluded';
-    deferClaimBearingTerminalDispositions?: boolean;
-  }): Promise<FindingManagerRunResult> {
-    if (!this.deps.findingLedgerStore) {
-      throw new Error('Finding contract is configured but finding ledger store is not available');
-    }
-    return ingestFindingContractResults({
-      contract: this.deps.findingContract!,
-      workflowProvider: this.deps.workflowProvider,
-      workflowModel: this.deps.workflowModel,
-      internalAgentSeats: this.deps.internalAgentSeats,
-      ledgerStore: this.deps.findingLedgerStore,
-      optionsBuilder: this.deps.optionsBuilder,
-      stepExecutor: this,
-      cwd: this.deps.getCwd(),
-      parentStep: input.step,
-      stepIteration: input.stepIteration,
-      iteration: input.iteration,
-      subResults: [...input.subResults],
-      ...(input.budgetAccounting === undefined ? {} : { budgetAccounting: input.budgetAccounting }),
-      ...(input.deferClaimBearingTerminalDispositions === undefined
-        ? {}
-        : { deferClaimBearingTerminalDispositions: input.deferClaimBearingTerminalDispositions }),
-      // 台帳の workflowName スタンプは店（ledgerStore）が束縛する正準名を使う。
-      // workflow_call の子が親の台帳を継承した場合、この engine 自身の
-      // getWorkflowName()（子のワークフロー名）を使うと reconcile 後の
-      // ledger.workflowName が親の台帳と食い違う（ParallelRunner と同じ理由）。
-      workflowName: this.deps.findingLedgerStore.workflowName,
-      workflowTask: this.deps.getTask(),
-      analyticsWorkflowName: this.deps.getWorkflowName(),
-      callNamespace: this.deps.getFindingCallNamespace(),
-      timestamp: new Date().toISOString(),
-      priorStepResponseText: input.priorStepResponseText,
-      managerAuthority: this.deps.findingManagerAuthority,
-      reviewPublicationDir: this.deps.getRunPaths().reportsAbs,
-      refreshFindingsState: this.deps.refreshFindingsState,
-      emitEvent: this.deps.emitEvent,
-    });
-  }
-
-  /**
-   * 単独 FC レビュアーの判定/claim 整合ゲート。新規実行と保存済み publication の
-   * 再開で共有する — 片方だけに配線すると、その副経路でだけ非承認判定が黙殺される。
-   */
-  private async recordVerdictClaimsMismatch(input: {
-    step: WorkflowStep;
-    response: AgentResponse;
-    publication: CanonicalFindingReviewPublication;
-    roundMarker: string;
-  }): Promise<void> {
-    if (this.deps.findingContract === undefined) {
-      return;
-    }
-    await recordVerdictClaimsMismatchAnomalies({
-      ledgerStore: this.deps.findingLedgerStore,
-      findingContract: this.deps.findingContract,
-      observations: [{
-        step: input.step,
-        response: input.response,
-        publication: input.publication,
-      }],
-      interactive: this.deps.getInteractive(),
-      runId: this.deps.getRunId(),
-      parentStepName: input.step.name,
-      roundMarker: input.roundMarker,
-      timestamp: new Date().toISOString(),
-      refreshFindingsState: this.deps.refreshFindingsState,
-    });
   }
 
   private writeSnapshot(
@@ -856,19 +827,6 @@ export class StepExecutor {
     stepIteration: number,
     runtime?: RuntimeStepResolution,
   ): Promise<PreparedNormalStepExecution> {
-    const findingContractIntakeStep = this.resolveFindingContractIntakeStep(step);
-    const reviewerRuntime = findingContractIntakeStep === undefined
-      ? runtime
-      : this.resolveReviewerRuntime(findingContractIntakeStep, runtime);
-    if (findingContractIntakeStep !== undefined) {
-      assertFindingContractReviewerStep(findingContractIntakeStep);
-    }
-    const findingContractContext = findingContractIntakeStep
-      ? this.deps.optionsBuilder.buildFindingContractInstructionContext(
-          findingContractIntakeStep,
-          true,
-        )
-      : this.buildFindingContractInstructionContext(step, undefined);
     const executableStep = await this.prepareDynamicFacetStep(
       step as AgentWorkflowStep,
       state,
@@ -882,21 +840,17 @@ export class StepExecutor {
       task,
       maxSteps,
       fallbackContextForOperation(
-        reviewerRuntime,
+        runtime,
         reviewerOperationOrigin(step.name),
       ),
-      findingContractContext === undefined
-        ? undefined
-        : { mode: 'explicit', context: findingContractContext },
     );
 
     return {
       executableStep,
-      ...(findingContractContext !== undefined ? { findingContractContext } : {}),
       phase1Instruction: this.buildPhase1Instruction(
         instruction,
         executableStep,
-        reviewerRuntime,
+        runtime,
       ),
       ...(state.lastOutput?.content !== undefined ? { priorStepResponseText: state.lastOutput.content } : {}),
       stepIteration,
@@ -904,7 +858,7 @@ export class StepExecutor {
   }
 
   /**
-   * 実行ループを通らない合成ステップ（findings-manager / findings-interpreter）
+   * 実行ループを通らない合成ステップ
    * の LLM 呼び出しを usage-events へ記録する。通常ステップは step:complete
    * イベント経由、parallel / team_leader は recordDelegatedAgentUsage 経由で
    * 記録されるが、合成ステップの executeAgent 直呼びはどちらの経路にも
@@ -913,7 +867,7 @@ export class StepExecutor {
    * `attemptProviderInfo` は、その呼び出しが実際に使った provider/model。
    * report phase の fallback のように attempt ごとに provider が変わる経路では
    * これを渡さないと、fallback で走った試行を primary として計上してしまう。
-   * 単発呼び出し（findings-manager 等）は省略でき、ステップ解決結果を使う。
+   * 単発呼び出しでは省略でき、ステップ解決結果を使う。
    */
   recordSynthesizedAgentUsage(
     step: WorkflowStep,
@@ -927,1027 +881,6 @@ export class StepExecutor {
       success,
       usage,
     );
-  }
-
-  /**
-   * 言い直し枯渇直前の単発 evidence-search。attempt 予約を provider 呼び出し
-   * より先に作り、通常の intake-normalizer 候補チェーンへ通す。
-   */
-  async runFindingEvidenceSearch(input: {
-    ownerStep: AgentWorkflowStep;
-    parentStepName: string;
-    stepIteration: number;
-    state: WorkflowState;
-    reviewScopeSnapshotId: string;
-    request: FindingEvidenceSearchRequest;
-    runtime?: RuntimeStepResolution;
-  }): Promise<FindingEvidenceSearchRunResult> {
-    const identity = this.findingReviewPublicationIdentity({
-      parentStepName: input.parentStepName,
-      stepIteration: input.stepIteration,
-      reviewerStepName: input.ownerStep.name,
-      reportName: findingEvidenceSearchReportName(
-        input.ownerStep.name,
-        input.request.request.anomalyId,
-      ),
-    });
-    const presentationContext = createFindingReviewPresentationContextV2({
-      reviewScopeSnapshotId: input.reviewScopeSnapshotId,
-      restatementRequests: [input.request.request],
-    });
-    const reportDir = this.deps.getRunPaths().reportsAbs;
-    const stored = loadFindingReviewPublication(reportDir, identity);
-    if (stored !== undefined) {
-      publishFindingReviewPublication(reportDir, stored.publication);
-      releaseFindingEvidenceSearchAttempt({
-        reportDir,
-        identity,
-        anomalyId: input.request.request.anomalyId,
-      });
-      return {
-        kind: 'published',
-        result: {
-          subStep: input.ownerStep,
-          publication: stored.publication,
-          reviewEvidence: 'none',
-          ...(stored.publication.repairOrigin === undefined
-            ? { repairOrigin: 'evidence-search' as const }
-            : { repairOrigin: stored.publication.repairOrigin }),
-        },
-      };
-    }
-
-    const candidates = this.resolveFindingIntakeNormalizerCandidates(
-      input.ownerStep,
-      input.runtime,
-    );
-    const primaryProviderInfo = candidates[0]!.providerInfo;
-    assertFindingIntakeNormalizerProvider(primaryProviderInfo.provider, input.ownerStep.name);
-    const reserved = reserveFindingEvidenceSearchAttempt({
-      reportDir,
-      identity,
-      anomalyId: input.request.request.anomalyId,
-      restatementRequestId: input.request.request.restatementRequestId,
-      reportContent: input.request.reportContent,
-    });
-    if (!reserved) {
-      return { kind: 'already-attempted' };
-    }
-
-    try {
-      const normalized = await this.normalizePlainTextFindingReview({
-        reviewerStep: input.ownerStep,
-        reportResponse: {
-          persona: input.ownerStep.name,
-          status: 'done',
-          content: input.request.reportContent,
-          timestamp: new Date(),
-        },
-        reportContent: input.request.reportContent,
-        state: input.state,
-        identity,
-        runtime: input.runtime,
-        presentationContext,
-        initialMode: 'evidence-search',
-        repairOrigin: 'evidence-search',
-      });
-      if (normalized.terminal === true || normalized.response.status !== 'done') {
-        // blocked/rate_limited は provider が実行されなかった明示応答なので再試行用に
-        // 解放できる。error は provider 応答を受け取ったか判定できないため、予約を
-        // 消費済みのまま残して 1 anomaly 1 回の保証を守る。
-        if (normalized.terminal === true || normalized.providerNotExecuted === true) {
-          releaseFindingEvidenceSearchAttempt({
-            reportDir,
-            identity,
-            anomalyId: input.request.request.anomalyId,
-          });
-        }
-        return {
-          kind: 'terminal',
-          response: normalized.response,
-          providerInfo: normalized.providerInfo,
-          terminalOperation: {
-            origin: findingIntakeNormalizerOperationOrigin(input.ownerStep.name),
-            providerInfo: normalized.providerInfo,
-          },
-        };
-      }
-      const publication = normalized.publication ?? createFindingReviewPublication({
-        identity,
-        protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
-        reportContent: input.request.reportContent,
-        rawFindings: [],
-        presentationContext,
-        repairOrigin: 'evidence-search',
-      });
-      const persisted = persistFindingReviewPublication(reportDir, {
-        publication,
-        reviewerExecutionIdentity: reviewerExecutionIdentity(normalized.providerInfo),
-        reviewerCallMode: 'restatement-only',
-      });
-      publishFindingReviewPublication(reportDir, persisted.publication);
-      releaseFindingEvidenceSearchAttempt({
-        reportDir,
-        identity,
-        anomalyId: input.request.request.anomalyId,
-      });
-      return {
-        kind: 'published',
-        result: {
-          subStep: input.ownerStep,
-          publication: persisted.publication,
-          reviewEvidence: 'none',
-          repairOrigin: 'evidence-search',
-        },
-      };
-    } catch (error) {
-      // 例外は provider 応答を受け取れたか不明であり、予約を消費済みのまま残す。
-      // blocked/rate_limited の明示応答だけが未実行と確定できるため、上の terminal
-      // 分岐で予約を解放して再試行可能にする。error は解放しない。
-      log.warn('Evidence-search normalizer attempt ended without a settled response', {
-        reviewer: input.ownerStep.name,
-        anomalyId: input.request.request.anomalyId,
-        reason: getErrorMessage(error),
-      });
-      return {
-        kind: 'terminal',
-        response: {
-          persona: input.ownerStep.name,
-          status: 'error',
-          content: input.request.reportContent,
-          timestamp: new Date(),
-          error: getErrorMessage(error),
-        },
-        providerInfo: primaryProviderInfo,
-        terminalOperation: {
-          origin: findingIntakeNormalizerOperationOrigin(input.ownerStep.name),
-          providerInfo: primaryProviderInfo,
-        },
-      };
-    }
-  }
-
-  private findingReviewPublicationIdentity(input: {
-    readonly parentStepName: string;
-    readonly stepIteration: number;
-    readonly reviewerStepName: string;
-    readonly reportName: string;
-  }): FindingReviewPublicationIdentity {
-    const ledgerStore = this.deps.findingLedgerStore;
-    if (ledgerStore === undefined) {
-      throw new Error('Finding contract reviewer requires a finding ledger store');
-    }
-    return {
-      scopeIdentity: ledgerStore.ledgerIdentity,
-      callNamespace: this.deps.getFindingCallNamespace(),
-      parentStepName: input.parentStepName,
-      stepIteration: input.stepIteration,
-      reviewerStepName: input.reviewerStepName,
-      reportName: input.reportName,
-    };
-  }
-
-  private rawFindingsFromResponse(
-    stepName: string,
-    response: AgentResponse,
-  ): readonly unknown[] {
-    const rawFindings = response.structuredOutput?.rawFindings;
-    if (!Array.isArray(rawFindings)) {
-      throw new Error(
-        `Finding contract reviewer "${stepName}" produced no rawFindings array`,
-      );
-    }
-    return rawFindings;
-  }
-
-  private resolveReviewerRuntime(
-    step: AgentWorkflowStep,
-    runtime?: RuntimeStepResolution,
-  ): RuntimeStepResolution | undefined {
-    const runtimeProviderBelongsToNormalizer =
-      runtime?.fallback?.origin.stage === 'finding_intake_normalizer'
-      && runtime.fallback.origin.reviewerStepName === step.name;
-    const reviewerBaseProviderInfo = runtimeProviderBelongsToNormalizer
-      ? this.deps.optionsBuilder.resolveStepProviderModel(step)
-      : runtime?.providerInfo;
-    return runtimeForOperation(
-      runtime,
-      reviewerOperationOrigin(step.name),
-      reviewerBaseProviderInfo,
-    );
-  }
-
-  /**
-   * 正規化係の合成ステップ列（ロード時 preflight と共有する builder）。
-   *
-   * escalate の解決に runtime を渡さないのは、rate-limit fallback で一時的に別
-   * provider へ振られていても格上げ先は構成上の profile から決まる値であり、
-   * 提示フェーズの判定（WorkflowEngineSetup）と同じ基準にそろえるため。
-   */
-  private buildFindingIntakeNormalizerSteps(
-    reviewerStep: AgentWorkflowStep,
-  ): readonly AgentWorkflowStep[] {
-    return buildFindingIntakeNormalizerSteps({
-      reviewerStepName: reviewerStep.name,
-      seat: this.deps.internalAgentSeats?.intakeNormalizer,
-      escalation: this.deps.optionsBuilder.resolveStepProviderModel(reviewerStep).escalation,
-      workflowProvider: this.deps.workflowProvider,
-      workflowModel: this.deps.workflowModel,
-    });
-  }
-
-  /**
-   * 実際に走らせる正規化係の候補。
-   *
-   * 先頭は必ず走るので、隔離 structured 実行に対応しないなら理由付きで止める。
-   * 2件目は「先頭と provider/model が異なり、かつ隔離 structured 実行に対応する
-   * チェーン上の最初の候補」だけを取る。レビュアーが markdown しか書かなくなった
-   * 以上、正規化係はラウンド唯一の関門であり、1モデルの出力事故でラウンド全体を
-   * 落とさないための1段だけの後退である。
-   */
-  private resolveFindingIntakeNormalizerCandidates(
-    reviewerStep: AgentWorkflowStep,
-    runtime: RuntimeStepResolution | undefined,
-  ): readonly FindingIntakeNormalizerCandidate[] {
-    const resolved = this.buildFindingIntakeNormalizerSteps(reviewerStep).map(
-      (step): FindingIntakeNormalizerCandidate => {
-        const baseProviderInfo = this.deps.optionsBuilder.resolveStepProviderModel(step);
-        const normalizerRuntime = runtimeForOperation(
-          runtime,
-          findingIntakeNormalizerOperationOrigin(reviewerStep.name),
-          baseProviderInfo,
-        );
-        return {
-          step,
-          providerInfo: {
-            ...(normalizerRuntime?.providerInfo ?? baseProviderInfo),
-            providerOptions: baseProviderInfo.providerOptions,
-          },
-        };
-      },
-    );
-    const primary = resolved[0];
-    if (primary === undefined) {
-      throw new Error(
-        `Finding intake normalizer has no resolution candidate for reviewer "${reviewerStep.name}"`,
-      );
-    }
-    assertFindingIntakeNormalizerProvider(primary.providerInfo.provider, reviewerStep.name);
-    const retry = resolved.slice(1).find((candidate) => (
-      supportsFindingIntakeNormalizerExecution(candidate.providerInfo.provider)
-      && (
-        candidate.providerInfo.provider !== primary.providerInfo.provider
-        || candidate.providerInfo.model !== primary.providerInfo.model
-      )
-    ));
-    return retry === undefined ? [primary] : [primary, retry];
-  }
-
-  private requireStructuredCaller(): StructuredCaller {
-    if (this.deps.structuredCaller === undefined) {
-      throw new Error(
-        'Finding intake normalizer requires a structured caller',
-      );
-    }
-    return this.deps.structuredCaller;
-  }
-
-  /**
-   * 1回の正規化呼び出しが「取り込める publication を作れなかった」理由を、必ず
-   * 非空の文字列で返す。undefined は成功。
-   *
-   * provider 応答の error / content がどちらも空になる経路があるため、
-   * `?? ''` 相当の連鎖で理由を組み立てない — 実走で「correction failed:」の後ろが
-   * 空文字になり、原因の特定が不能になった。
-   */
-  private static describeNormalizerAttemptFailure(
-    result: FindingIntakeNormalizationResult,
-  ): string | undefined {
-    if (result.invalidDetail !== undefined) {
-      return result.invalidDetail;
-    }
-    if (result.response.status !== 'done') {
-      const detail = result.response.error ?? result.response.content;
-      return `status=${result.response.status}: ${
-        detail !== undefined && detail.trim().length > 0 ? detail : 'no provider detail'
-      }`;
-    }
-    const fidelityFailures = describeRawFindingExtractionFidelityFailures(
-      result.response.structuredOutput,
-    );
-    if (fidelityFailures.length > 0) {
-      // 判定は projection 後の structuredOutput に対して行うため、モデルが出した
-      // 最終テキストだけではなく status と projection 後の内訳を必ず添える。
-      return `${EXTRACTION_FIDELITY_INVALID_DETAIL} [status=${result.response.status}; ${
-        describeRawFindingExtractionFidelityFailure(result.response.structuredOutput)
-      }]`;
-    }
-    return result.publication === undefined
-      ? 'produced no validated publication'
-      : undefined;
-  }
-
-  private static describeNormalizerCandidate(
-    candidate: FindingIntakeNormalizerCandidate,
-  ): string {
-    const { provider, model } = candidate.providerInfo;
-    return model === undefined ? `${provider}` : `${provider}/${model}`;
-  }
-
-  private static isTerminalNormalizerResponse(response: AgentResponse): boolean {
-    return response.status === 'blocked' || response.status === 'rate_limited';
-  }
-
-  /**
-   * 1候補の正規化係を「初回 + 訂正1回」まで走らせる。訂正を試みるのはモデル出力
-   * 起因の不正（invalidKind='model_output' / 抽出忠実性の退行）だけで、
-   * engine 側スキーマの不備（'schema_config'）は訂正もやり直しもせず即座に上げる。
-   */
-  private async runFindingIntakeNormalizerCandidate(input: {
-    readonly reviewerStep: AgentWorkflowStep;
-    readonly reportContent: string;
-    readonly state: WorkflowState;
-    readonly identity: FindingReviewPublicationIdentity;
-    readonly presentationContext?: FindingReviewPresentationContext;
-    readonly initialMode?: 'initial' | 'evidence-search';
-    readonly repairOrigin?: 'evidence-search';
-    readonly candidate: FindingIntakeNormalizerCandidate;
-  }): Promise<FindingIntakeNormalizerAttempt> {
-    const structuredCaller = this.requireStructuredCaller();
-    const normalizerStep = input.candidate.step;
-    const providerInfo = input.candidate.providerInfo;
-    assertFindingIntakeNormalizerProvider(providerInfo.provider, input.reviewerStep.name);
-    const normalizerProvider = providerInfo.provider;
-    const runtime: RuntimeStepResolution = { providerInfo };
-    const execute = async (
-      mode: 'initial' | 'correction',
-      extractionFidelityCorrection = false,
-    ): Promise<FindingIntakeNormalizationResult> => {
-      let response: AgentResponse;
-      let promptParts: PhasePromptParts | undefined;
-      try {
-        response = await structuredCaller.normalizeFindingIntake(input.reportContent, {
-          provider: normalizerProvider,
-          model: providerInfo.model,
-          providerOptions: providerInfo.providerOptions,
-          language: this.deps.getLanguage(),
-          abortSignal: this.deps.abortSignal,
-          mode: mode === 'initial' ? input.initialMode ?? 'initial' : 'correction',
-          extractionFidelityCorrection,
-          onPromptResolved: (resolved) => {
-            promptParts = resolved;
-            this.deps.onPhaseStart?.(
-              normalizerStep,
-              1,
-              'execute',
-              resolved.userInstruction,
-              resolved,
-              undefined,
-              input.state.iteration,
-            );
-          },
-        });
-      } catch (error) {
-        this.deps.recordSynthesizedAgentUsage(
-          normalizerStep.name,
-          providerInfo,
-          false,
-          undefined,
-        );
-        throw new Error(
-          `Finding intake normalizer for reviewer "${input.reviewerStep.name}" failed: ${
-            getErrorMessage(error)
-          }`,
-          { cause: error },
-        );
-      }
-      if (promptParts !== undefined) {
-        this.deps.onPhaseComplete?.(
-          normalizerStep,
-          1,
-          'execute',
-          response.content,
-          response.status,
-          response.error,
-          undefined,
-          input.state.iteration,
-        );
-      }
-      this.deps.recordSynthesizedAgentUsage(
-        normalizerStep.name,
-        providerInfo,
-        response.status === 'done',
-        response.providerUsage,
-      );
-      const normalized = this.normalizeStructuredOutputWithDiagnostics(
-        normalizerStep,
-        response,
-        runtime,
-      );
-      if (normalized.invalidDetail !== undefined || normalized.response.status !== 'done') {
-        return { ...normalized, providerInfo };
-      }
-      try {
-        return {
-          ...normalized,
-          providerInfo,
-          publication: createFindingReviewPublication({
-            identity: input.identity,
-            protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
-            reportContent: input.reportContent,
-            rawFindings: this.rawFindingsFromResponse(
-              input.reviewerStep.name,
-              normalized.response,
-            ),
-            reviewerRawResourceEnvelope: normalized.reviewerRawResourceEnvelope,
-            ...(input.repairOrigin === undefined ? {} : { repairOrigin: input.repairOrigin }),
-            ...(input.presentationContext === undefined
-              ? {}
-              : { presentationContext: input.presentationContext }),
-          }),
-        };
-      } catch (error) {
-        return {
-          ...normalized,
-          providerInfo,
-          invalidDetail: getErrorMessage(error),
-          invalidKind: 'model_output',
-          // 報告本文へ束縛できないのはレビュアーの報告側の問題。正規化係の
-          // 出力形の問題（スキーマ不成立・candidate 喪失）とは切り分ける。
-          ...(error instanceof FindingReviewPublicationSourceBindingError
-            ? { reportSourceBinding: true as const }
-            : {}),
-        };
-      }
-    };
-
-    const initial = await execute('initial');
-    if (input.initialMode === 'evidence-search' && initial.response.status !== 'done') {
-      return {
-        kind: 'failed',
-        reason: StepExecutor.describeNormalizerAttemptFailure(initial) ?? 'normalizer returned a non-done response',
-        engineFault: false,
-        result: initial,
-      };
-    }
-    if (StepExecutor.isTerminalNormalizerResponse(initial.response)) {
-      return { kind: 'terminal', result: { ...initial, terminal: true } };
-    }
-    const initialFailure = StepExecutor.describeNormalizerAttemptFailure(initial);
-    if (initialFailure === undefined) {
-      return { kind: 'published', result: initial };
-    }
-    if (initial.invalidKind === 'schema_config') {
-      return { kind: 'failed', reason: initialFailure, engineFault: true, result: initial };
-    }
-    const extractionFidelityCorrection = initial.invalidDetail === undefined
-      && initial.response.status === 'done';
-    const corrected = await execute('correction', extractionFidelityCorrection);
-    if (input.initialMode === 'evidence-search' && corrected.response.status !== 'done') {
-      return {
-        kind: 'failed',
-        reason: StepExecutor.describeNormalizerAttemptFailure(corrected) ?? 'normalizer returned a non-done response',
-        engineFault: false,
-        result: corrected,
-      };
-    }
-    if (StepExecutor.isTerminalNormalizerResponse(corrected.response)) {
-      return { kind: 'terminal', result: { ...corrected, terminal: true } };
-    }
-    const correctedFailure = StepExecutor.describeNormalizerAttemptFailure(corrected);
-    if (correctedFailure === undefined) {
-      return { kind: 'published', result: corrected };
-    }
-    if (initial.reportSourceBinding === true && corrected.reportSourceBinding === true) {
-      // 訂正しても報告本文へ束縛できない = 報告側の問題。別の正規化係でも
-      // 同じ報告を読む以上結果は変わらないので、やり直さず言い直しへ回す。
-      return {
-        kind: 'report_source',
-        reason: `report text could not be bound after one correction (initial: ${initialFailure}; corrected: ${correctedFailure})`,
-        result: corrected,
-      };
-    }
-    return {
-      kind: 'failed',
-      reason: `remained invalid after one correction (initial: ${initialFailure}; corrected: ${correctedFailure})`,
-      engineFault: corrected.invalidKind === 'schema_config',
-      result: corrected,
-    };
-  }
-
-  /**
-   * レビュアーの markdown レポートから raw findings を取り出す。経路はこれ1本で、
-   * 先頭候補が検証と訂正1回でも通らなければ解決チェーンの次の候補で1度だけ
-   * やり直す。それでも通らなければ理由を連ねて fail-loud にする。
-   */
-  private async normalizePlainTextFindingReview(input: {
-    readonly reviewerStep: AgentWorkflowStep;
-    readonly reportResponse: AgentResponse;
-    readonly reportContent: string;
-    readonly state: WorkflowState;
-    readonly identity: FindingReviewPublicationIdentity;
-    readonly runtime?: RuntimeStepResolution;
-    readonly presentationContext?: FindingReviewPresentationContext;
-    readonly initialMode?: 'initial' | 'evidence-search';
-    readonly repairOrigin?: 'evidence-search';
-  }): Promise<FindingIntakeNormalizationResult> {
-    const candidates = this.resolveFindingIntakeNormalizerCandidates(
-      input.reviewerStep,
-      input.runtime,
-    );
-    const failures: string[] = [];
-    let lastResult: FindingIntakeNormalizationResult | undefined;
-    let allAttemptsProviderNotExecuted = true;
-    for (const candidate of candidates) {
-      const attempt = await this.runFindingIntakeNormalizerCandidate({
-        reviewerStep: input.reviewerStep,
-        reportContent: input.reportContent,
-        state: input.state,
-        identity: input.identity,
-        ...(input.presentationContext === undefined
-          ? {}
-          : { presentationContext: input.presentationContext }),
-        ...(input.initialMode === undefined ? {} : { initialMode: input.initialMode }),
-        ...(input.repairOrigin === undefined ? {} : { repairOrigin: input.repairOrigin }),
-        candidate,
-      });
-      lastResult = attempt.result;
-      if (
-        attempt.result.response.status !== 'blocked'
-        && attempt.result.response.status !== 'rate_limited'
-      ) {
-        allAttemptsProviderNotExecuted = false;
-      }
-      if (attempt.kind === 'terminal') {
-        // 終端メタデータ（status / error / errorKind / rateLimitInfo / timestamp）は
-        // 正規化係の応答から取るが、本文はレビュアーのレポートを正本のまま残す。
-        // 正規化係の終端メッセージが本文を置き換えると、後続 step の
-        // {previous_response} と snapshot にレビュー結果でない文字列が流れる。
-        const terminal = attempt.result.response;
-        return {
-          ...attempt.result,
-          response: {
-            ...input.reportResponse,
-            content: input.reportContent,
-            status: terminal.status,
-            timestamp: terminal.timestamp,
-            ...(terminal.error === undefined ? {} : { error: terminal.error }),
-            ...(terminal.errorKind === undefined ? {} : { errorKind: terminal.errorKind }),
-            ...(terminal.rateLimitInfo === undefined
-              ? {}
-              : { rateLimitInfo: terminal.rateLimitInfo }),
-          },
-        };
-      }
-      if (attempt.kind === 'report_source') {
-        return {
-          response: {
-            ...attempt.result.response,
-            status: 'error',
-            error: `Finding intake normalizer for reviewer "${input.reviewerStep.name}" rejected the report: ${
-              attempt.reason
-            }`,
-          },
-          providerInfo: attempt.result.providerInfo,
-          reportSourceRejection: attempt.reason,
-        };
-      }
-      if (attempt.kind === 'published') {
-        return {
-          response: {
-            ...input.reportResponse,
-            content: input.reportContent,
-            structuredOutput: attempt.result.response.structuredOutput,
-          },
-          providerInfo: attempt.result.providerInfo,
-          reviewerRawResourceEnvelope: attempt.result.reviewerRawResourceEnvelope,
-          publication: attempt.result.publication,
-        };
-      }
-      failures.push(`${StepExecutor.describeNormalizerCandidate(candidate)}: ${attempt.reason}`);
-      if (attempt.engineFault) {
-        break;
-      }
-    }
-    if (lastResult === undefined) {
-      throw new Error(
-        `Finding intake normalizer for reviewer "${input.reviewerStep.name}" ran no candidate`,
-      );
-    }
-    return {
-      response: {
-        ...lastResult.response,
-        status: 'error',
-        error: `Finding intake normalizer for reviewer "${input.reviewerStep.name}" failed: ${
-          failures.join(' | ')
-        }`,
-      },
-      providerInfo: lastResult.providerInfo,
-      reviewerRawResourceEnvelope: lastResult.reviewerRawResourceEnvelope,
-      ...(allAttemptsProviderNotExecuted ? { providerNotExecuted: true as const } : {}),
-    };
-  }
-
-  async resumeFindingReviewPublication(input: {
-    readonly step: AgentWorkflowStep;
-    readonly parentStepName: string;
-    readonly stepIteration: number;
-    readonly state: WorkflowState;
-    readonly runtime?: RuntimeStepResolution;
-    readonly presentationContext?: FindingReviewPresentationContext;
-    /** 保留中の正規化を再開して publication を作る場合に刻む呼び出し mode。 */
-    readonly reviewerCallMode: 'review' | 'restatement-only';
-  }): Promise<{
-    readonly publication: CanonicalFindingReviewPublication;
-    readonly response: AgentResponse;
-    readonly relationClarification?: ReviewerRelationClarification;
-    readonly reviewerProviderInfo?: StepProviderInfo;
-    readonly reviewerRuntime?: RuntimeStepResolution;
-    /** その publication を出した呼び出しの mode（永続値）。 */
-    readonly reviewerCallMode?: 'review' | 'restatement-only';
-  } | {
-    readonly terminalResponse: AgentResponse;
-    readonly reviewerProviderInfo?: StepProviderInfo;
-    readonly reviewerRuntime?: RuntimeStepResolution;
-    readonly terminalOperation: NonNullable<StepRunResult['terminalOperation']>;
-  } | {
-    readonly reportRejection: FindingReviewPublicationReportRejection;
-    readonly reviewerProviderInfo?: StepProviderInfo;
-    readonly reviewerRuntime?: RuntimeStepResolution;
-  } | undefined> {
-    const reportFiles = input.step.outputContracts?.map((entry) => entry.name) ?? [];
-    if (reportFiles.length !== 1) {
-      throw new Error(
-        `Finding contract reviewer "${input.step.name}" requires exactly one report`,
-      );
-    }
-    const identity = this.findingReviewPublicationIdentity({
-      parentStepName: input.parentStepName,
-      stepIteration: input.stepIteration,
-      reviewerStepName: input.step.name,
-      reportName: reportFiles[0]!,
-    });
-    const reportDir = this.deps.getRunPaths().reportsAbs;
-    const preparation = loadFindingReviewPublication(
-      reportDir,
-      identity,
-    );
-    const pending = preparation === undefined
-      ? loadPendingFindingReviewNormalization(
-          reportDir,
-          identity,
-          this.deps.getWorkflowName(),
-        )
-      : undefined;
-    if (pending !== undefined) {
-      const reportResponse: AgentResponse = {
-        persona: input.step.name,
-        status: 'done',
-        content: pending.reportContent,
-        timestamp: new Date(),
-      };
-      const persistedReviewerRuntime = reviewerRuntime(
-        pending.reviewerExecutionIdentity,
-      );
-      // 保存済みの報告も「レポートは在る」状態にそろえる。正規化が拒否・失敗して
-      // publication が成立しない経路でも、Phase 3 と後続 step は同じファイルを読む。
-      writeReportFile(reportDir, pending.reportName, pending.reportContent);
-      const normalized = await this.normalizePlainTextFindingReview({
-        reviewerStep: input.step,
-        reportResponse,
-        reportContent: pending.reportContent,
-        state: input.state,
-        identity,
-        runtime: input.runtime,
-        presentationContext: pending.presentationContext,
-      });
-      if (
-        normalized.response.status === 'blocked'
-        || normalized.response.status === 'rate_limited'
-      ) {
-        return {
-          terminalResponse: normalized.response,
-          reviewerProviderInfo: persistedReviewerRuntime.providerInfo,
-          reviewerRuntime: persistedReviewerRuntime,
-          terminalOperation: {
-            origin: findingIntakeNormalizerOperationOrigin(input.step.name),
-            providerInfo: normalized.providerInfo,
-          },
-        };
-      }
-      if (normalized.reportSourceRejection !== undefined) {
-        // 保存済みの報告を読み直しても同じ結論になる（原因は報告側）。記録を
-        // 残すと resume のたびに同じ拒否を再生産して枠が塞がるので破棄し、
-        // 次の機会は新規レビューの生成経路から始める。
-        discardPendingFindingReviewNormalization(reportDir, identity);
-        return {
-          reportRejection: {
-            reason: normalized.reportSourceRejection,
-            reportContent: pending.reportContent,
-          },
-          reviewerProviderInfo: persistedReviewerRuntime.providerInfo,
-          reviewerRuntime: persistedReviewerRuntime,
-        };
-      }
-      if (
-        normalized.invalidDetail !== undefined
-        || normalized.response.status !== 'done'
-        || normalized.publication === undefined
-      ) {
-        throw new Error(
-          `Finding intake normalizer for reviewer "${input.step.name}" failed while resuming pending publication: ${
-            normalized.invalidDetail
-              ?? normalized.response.error
-              ?? normalized.response.content
-          }`,
-        );
-      }
-      const persisted = persistFindingReviewPublication(reportDir, {
-        publication: normalized.publication,
-        reviewerExecutionIdentity: pending.reviewerExecutionIdentity,
-        reviewerCallMode: input.reviewerCallMode,
-      });
-      publishFindingReviewPublication(reportDir, persisted.publication);
-      return {
-        publication: persisted.publication,
-        response: {
-          ...normalized.response,
-          content: persisted.publication.reportContent,
-          structuredOutput: {
-            rawFindings: [...persisted.publication.rawFindings],
-          },
-        },
-        reviewerProviderInfo: persistedReviewerRuntime.providerInfo,
-        reviewerRuntime: persistedReviewerRuntime,
-        ...(persisted.reviewerCallMode === undefined
-          ? {}
-          : { reviewerCallMode: persisted.reviewerCallMode }),
-      };
-    }
-    if (preparation === undefined) {
-      return undefined;
-    }
-    const { publication } = preparation;
-    publishFindingReviewPublication(reportDir, publication);
-    return {
-      publication,
-      response: {
-        persona: input.step.name,
-        status: 'done',
-        content: publication.reportContent,
-        structuredOutput: { rawFindings: [...publication.rawFindings] },
-        timestamp: new Date(),
-      },
-      // 引き当て時点の mode ではなく、その publication を出した呼び出しの mode。
-      ...(preparation.reviewerCallMode === undefined
-        ? {}
-        : { reviewerCallMode: preparation.reviewerCallMode }),
-      ...(preparation.relationClarification !== undefined
-        ? { relationClarification: preparation.relationClarification }
-        : {}),
-      ...(preparation.reviewerExecutionIdentity !== undefined
-        ? {
-            reviewerProviderInfo: reviewerRuntime(
-              preparation.reviewerExecutionIdentity,
-            ).providerInfo,
-            reviewerRuntime: reviewerRuntime(preparation.reviewerExecutionIdentity),
-          }
-        : {}),
-    };
-  }
-
-  async prepareFindingReviewPublication(
-    input: FindingReviewPublicationPreparationInput,
-  ): Promise<FindingReviewPublicationPreparation> {
-    const reviewerSelectionIdentity = reviewerExecutionIdentity(
-      this.deps.optionsBuilder.resolveStepProviderModel(input.step, input.runtime),
-    );
-    const reportStep = input.step;
-    const explicitFindingContractContext = input.findingContractContext;
-    const buildPhaseContext = (phase1Response: AgentResponse) => {
-      const phaseContext = this.deps.optionsBuilder.buildPhaseRunnerContext(
-        reportStep,
-        input.state,
-        phase1Response.content,
-        input.updatePersonaSession,
-        this.deps.onPhaseStart,
-        this.deps.onPhaseComplete,
-        this.deps.onJudgeStage,
-        input.state.iteration,
-        input.runtime,
-        input.onProviderAttempt,
-      );
-      return explicitFindingContractContext === undefined
-        ? phaseContext
-        : {
-            ...phaseContext,
-            buildFindingContractInstructionContext: () => explicitFindingContractContext,
-          };
-    };
-    const phaseContext = buildPhaseContext(input.phase1Response);
-    const reportFiles = input.step.outputContracts?.map((entry) => entry.name) ?? [];
-    if (reportFiles.length !== 1) {
-      throw new Error(
-        `Finding contract reviewer "${input.step.name}" requires exactly one report`,
-      );
-    }
-    const identity = this.findingReviewPublicationIdentity({
-      parentStepName: input.parentStepName,
-      stepIteration: input.stepIteration,
-      reviewerStepName: input.step.name,
-      reportName: reportFiles[0]!,
-    });
-    const publicationReportDir = this.deps.getRunPaths().reportsAbs;
-    const stored = loadFindingReviewPublication(
-      publicationReportDir,
-      identity,
-    );
-    if (stored !== undefined) {
-      publishFindingReviewPublication(publicationReportDir, stored.publication);
-      return {
-        publication: stored.publication,
-        response: {
-          ...input.phase1Response,
-          content: stored.publication.reportContent,
-          structuredOutput: { rawFindings: [...stored.publication.rawFindings] },
-        },
-        ...(stored.reviewerCallMode === undefined
-          ? {}
-          : { reviewerCallMode: stored.reviewerCallMode }),
-        ...(stored.relationClarification !== undefined
-          ? { relationClarification: stored.relationClarification }
-          : {}),
-        ...(stored.reviewerExecutionIdentity !== undefined
-          ? {
-              reviewerProviderInfo: reviewerRuntime(
-                stored.reviewerExecutionIdentity,
-              ).providerInfo,
-              reviewerRuntime: reviewerRuntime(stored.reviewerExecutionIdentity),
-            }
-          : {}),
-      };
-    }
-
-    let phaseSequence = 0;
-    const nextPhaseSequence = (): number => ++phaseSequence;
-    const activePhase1Response = input.phase1Response;
-    const generated = await generateReportPhase(
-      reportStep,
-      input.stepIteration,
-      phaseContext,
-      {
-        findingContractReviewer: true,
-        nextPhaseSequence,
-      },
-    );
-    if ('blocked' in generated) {
-      return {
-        terminalResponse: {
-          ...activePhase1Response,
-          status: 'blocked',
-          content: generated.response.content,
-        },
-        reviewerProviderInfo: generated.providerInfo,
-        reviewerRuntime: reviewerRuntime(
-          reviewerExecutionIdentity(generated.providerInfo),
-        ),
-        terminalOperation: {
-          origin: reviewerOperationOrigin(input.step.name),
-          providerInfo: generated.providerInfo,
-        },
-      };
-    }
-    if ('rateLimited' in generated) {
-      return {
-        terminalResponse: {
-          ...generated.response,
-          persona: input.step.name,
-        },
-        reviewerProviderInfo: generated.providerInfo,
-        reviewerRuntime: reviewerRuntime(
-          reviewerExecutionIdentity(generated.providerInfo),
-        ),
-        terminalOperation: {
-          origin: reviewerOperationOrigin(input.step.name),
-          providerInfo: generated.providerInfo,
-        },
-      };
-    }
-    if (generated.reports.length !== 1) {
-      throw new Error(
-        `Finding contract reviewer "${input.step.name}" generated ${generated.reports.length} reports`,
-      );
-    }
-    const report = generated.reports[0]!;
-    const reportResponse = report.response;
-    const completedReviewerExecutionIdentity = reviewerExecutionIdentity(
-      report.attemptIdentity.providerInfo,
-    );
-    const completedReviewerRuntime = reviewerRuntime(
-      completedReviewerExecutionIdentity,
-    );
-    // レビュアーの markdown レポートはこの時点で実在する。取り込み（正規化）の
-    // 成否はレポートの有無と関係ないので、publication の成立を待たずに書き出す。
-    // Phase 3 の use_judge も後続 step のレポート参照もこのファイルを読むため、
-    // 拒否・失敗した報告でも「レポートは在る」状態にそろえる。
-    writeReportFile(publicationReportDir, report.reportName, report.reportContent);
-    persistPendingFindingReviewNormalization(
-      publicationReportDir,
-      createPendingFindingReviewNormalization({
-        identity,
-        workflowName: this.deps.getWorkflowName(),
-        reportContent: report.reportContent,
-        reviewerExecutionIdentity: reviewerSelectionIdentity,
-        ...(input.presentationContext === undefined ? {} : { presentationContext: input.presentationContext }),
-      }),
-    );
-    const normalized = await this.normalizePlainTextFindingReview({
-      reviewerStep: input.step,
-      reportResponse,
-      reportContent: report.reportContent,
-      state: input.state,
-      identity,
-      runtime: input.runtime,
-      presentationContext: input.presentationContext,
-    });
-    if (normalized.reportSourceRejection !== undefined) {
-      return {
-        reportRejection: {
-          reason: normalized.reportSourceRejection,
-          reportContent: report.reportContent,
-        },
-        reviewerProviderInfo: report.attemptIdentity.providerInfo,
-        reviewerRuntime: completedReviewerRuntime,
-      };
-    }
-    if (normalized.invalidDetail !== undefined) {
-      throw new Error(
-        `Finding intake normalizer for reviewer "${input.step.name}" produced invalid intake: ${
-          normalized.invalidDetail
-        }`,
-      );
-    }
-    if (
-      normalized.response.status === 'blocked'
-      || normalized.response.status === 'rate_limited'
-    ) {
-      return {
-        terminalResponse: normalized.response,
-        reviewerProviderInfo: report.attemptIdentity.providerInfo,
-        reviewerRuntime: completedReviewerRuntime,
-        terminalOperation: {
-          origin: findingIntakeNormalizerOperationOrigin(input.step.name),
-          providerInfo: normalized.providerInfo,
-        },
-      };
-    }
-    if (normalized.response.status !== 'done') {
-      throw new Error(
-        normalized.response.error
-          ?? `Finding intake normalizer for reviewer "${input.step.name}" failed with status ${
-            normalized.response.status
-          }`,
-      );
-    }
-    const normalizedResponse = {
-      ...normalized.response,
-      content: report.reportContent,
-    };
-    if (normalizedResponse.sessionId !== undefined) {
-      input.updatePersonaSession(
-        report.attemptIdentity.sessionKey,
-        normalizedResponse.sessionId,
-      );
-    }
-    const publication = normalized.publication;
-    if (publication === undefined) {
-      throw new Error(
-        `Finding intake normalizer for reviewer "${input.step.name}" produced no validated publication`,
-      );
-    }
-    const persisted = persistFindingReviewPublication(
-      publicationReportDir,
-      {
-        publication,
-        reviewerExecutionIdentity: reviewerSelectionIdentity,
-        reviewerCallMode: input.reviewerCallMode,
-      },
-    );
-    const finalPublication = persisted.publication;
-    publishFindingReviewPublication(publicationReportDir, finalPublication);
-    return {
-      publication: finalPublication,
-      response: {
-        ...normalizedResponse,
-        content: finalPublication.reportContent,
-        structuredOutput: { rawFindings: [...finalPublication.rawFindings] },
-      },
-      reviewerProviderInfo: report.attemptIdentity.providerInfo,
-      reviewerRuntime: completedReviewerRuntime,
-      ...(persisted.reviewerCallMode === undefined
-        ? {}
-        : { reviewerCallMode: persisted.reviewerCallMode }),
-    };
   }
 
   normalizeStructuredOutput(
@@ -1965,17 +898,14 @@ export class StepExecutor {
     return result.response;
   }
 
-  /**
-   * Like normalizeStructuredOutput, but returns the validation failure as a
-   * diagnostic instead of throwing, so callers can attempt a corrective
-   * retry with the agent (weak models frequently emit malformed JSON on
-   * large structured outputs).
-   */
   normalizeStructuredOutputWithDiagnostics(
     step: WorkflowStep,
     response: AgentResponse,
     runtime?: RuntimeStepResolution,
   ): StructuredOutputNormalizationResult {
+    if (StepExecutor.isProviderStreamParseFailure(response)) {
+      return { response };
+    }
     if (!step.structuredOutput) {
       return { response };
     }
@@ -2005,70 +935,46 @@ export class StepExecutor {
 
     try {
       let structuredOutput = response.structuredOutput;
-      let reviewerRawResourceEnvelope: ReviewerRawResourceEnvelope | undefined;
-
       if (structuredOutput === undefined) {
         if (supportsStructuredOutput !== false) {
           throw new Error('Structured output response is missing');
         }
-
         structuredOutput = parseStructuredOutputObject(response.content);
       }
 
-      if (step.structuredOutput.schemaRef === RAW_FINDINGS_SCHEMA_REF) {
-        const projected = projectReviewerRawStructuredOutputWithEnvelope(structuredOutput);
-        structuredOutput = projected.structuredOutput;
-        reviewerRawResourceEnvelope = projected.resourceEnvelope;
-      }
-
-      // post-hoc 検証は寛容版（validationSchema）を優先する。provider へ渡る
-      // 生成拘束用 schema（strict 様式）とは役割が異なる — 詳細は
-      // WorkflowStructuredOutput の doc コメント参照。
       const validationSchema = step.structuredOutput.validationSchema
         ?? step.structuredOutput.schema;
-      validateStructuredOutputAgainstSchema(
-        structuredOutput,
-        validationSchema,
-      );
+      validateStructuredOutputAgainstSchema(structuredOutput, validationSchema);
       structuredOutput = this.structuredOutputNormalizers.normalize(structuredOutput, {
         step,
         language: this.deps.getLanguage(),
       });
       validateStructuredOutputAgainstSchema(structuredOutput, validationSchema);
       if (structuredOutput === response.structuredOutput) {
-        return {
-          response,
-          ...(reviewerRawResourceEnvelope !== undefined
-            ? { reviewerRawResourceEnvelope }
-            : {}),
-        };
+        return { response };
       }
-
       return {
         response: {
           ...response,
           structuredOutput,
         },
-        ...(reviewerRawResourceEnvelope !== undefined
-          ? { reviewerRawResourceEnvelope }
-          : {}),
       };
     } catch (error) {
       const detail = getErrorMessage(error);
+      const failureReason = supportsStructuredOutput !== false
+        && response.structuredOutput === undefined
+        ? 'missing'
+        : 'schema_error';
       const fallback = this.buildStructuredOutputFailureFallback(
         step,
         response,
-        supportsStructuredOutput !== false && response.structuredOutput === undefined ? 'missing' : 'schema_error',
+        failureReason,
         detail,
       );
       if (fallback) {
         return { response: fallback };
       }
-      this.logStructuredOutputFailure(
-        step,
-        supportsStructuredOutput !== false && response.structuredOutput === undefined ? 'missing' : 'schema_error',
-        detail,
-      );
+      this.logStructuredOutputFailure(step, failureReason, detail);
       return {
         response,
         invalidDetail: detail,
@@ -2140,7 +1046,6 @@ export class StepExecutor {
     task: string,
     maxSteps: number | 'infinite',
     fallbackContext?: FallbackContext,
-    findingContractPolicy?: FindingContractInstructionPolicy,
     transaction?: InstructionBuildTransaction,
   ): string {
     this.ensurePreviousResponseSnapshot(state, step.name, stepIteration, transaction);
@@ -2196,7 +1101,6 @@ export class StepExecutor {
       previousResponseSourcePath: state.previousResponseSourcePath,
       fallbackContext,
       workflowState: state,
-      findingContract: this.buildFindingContractInstructionContext(step, findingContractPolicy),
       ...(!this.deps.companionEnabled
         || !isNormalAgentWorkflowStep(step)
         || step.companion === undefined
@@ -2232,6 +1136,7 @@ export class StepExecutor {
     onTerminalOperation?: (
       terminalOperation: NonNullable<StepRunResult['terminalOperation']>,
     ) => void,
+    phase2Diagnostic?: string,
   ): Promise<AgentResponse> {
     let nextResponse = response;
 
@@ -2248,7 +1153,7 @@ export class StepExecutor {
           usage,
         );
       });
-    const phaseCtx = this.deps.optionsBuilder.buildPhaseRunnerContext(
+    const basePhaseContext = this.deps.optionsBuilder.buildPhaseRunnerContext(
       step,
       state,
       nextResponse.content,
@@ -2260,6 +1165,9 @@ export class StepExecutor {
       runtime,
       recordPhaseProviderAttempt,
     );
+    const phaseCtx = phase2Diagnostic === undefined
+      ? basePhaseContext
+      : { ...basePhaseContext, reviewCompletionDiagnostic: phase2Diagnostic };
 
     // Phase 2: report output (resume same session, Write only)
     // Report generation is only valid after a completed Phase 1 response.
@@ -2286,6 +1194,9 @@ export class StepExecutor {
         }
       } catch (reportError) {
         if (reportError instanceof ReportPhaseGenerationError) {
+          if (reportError.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR) {
+            throw createProviderStreamParseError(reportError.failureMessage ?? getErrorMessage(reportError));
+          }
           log.info('Report phase failed, continuing to status judgment', {
             step: step.name,
             error: getErrorMessage(reportError),
@@ -2296,7 +1207,23 @@ export class StepExecutor {
       }
     }
 
-    return this.applyPostExecutionRules(step, state, nextResponse, () => phaseCtx);
+    return this.applyPostExecutionRules(
+      step,
+      state,
+      nextResponse,
+      () => this.deps.optionsBuilder.buildPhaseRunnerContext(
+        step,
+        state,
+        nextResponse.content,
+        updatePersonaSession,
+        this.deps.onPhaseStart,
+        this.deps.onPhaseComplete,
+        this.deps.onJudgeStage,
+        state.iteration,
+        runtime,
+        recordPhaseProviderAttempt,
+      ),
+    );
   }
 
   private async applyPostExecutionRules(
@@ -2369,33 +1296,8 @@ export class StepExecutor {
       ? state.stepIterations.get(step.name) ?? 1
       : incrementStepIteration(state, step.name));
 
-    const findingContractIntakeStep = this.resolveFindingContractIntakeStep(step);
-    if (findingContractIntakeStep !== undefined) {
-      if (preparedExecution === undefined) {
-        throw new Error(
-          `Finding contract reviewer step "${step.name}" requires prepared execution input`,
-        );
-      }
-      if (preparedExecution.findingContractContext === undefined) {
-        throw new Error(`Prepared reviewer step "${step.name}" is missing finding contract context`);
-      }
-      if (preparedExecution.findingContractContext.reviewer === undefined) {
-        throw new Error(`Prepared reviewer step "${step.name}" is missing reviewer context`);
-      }
-      assertFindingContractReviewerStep(preparedExecution.executableStep);
-    }
-    const findingContractContext = preparedExecution?.findingContractContext;
     const executableStep = preparedExecution?.executableStep ?? step as AgentWorkflowStep;
-    const executionRuntime = this.resolveReviewerRuntime(executableStep, runtime);
-    const publicationResumeRuntime = runtimeForOperation(
-      runtime,
-      findingIntakeNormalizerOperationOrigin(step.name),
-      runtime?.providerInfo,
-    );
-    // 直前ステップ（通常は coder の fix）の応答。異議申告の裁定材料として
-    // manager に渡すため、Phase 1 実行で lastOutput が上書きされる前に捕捉する
-    // （ParallelRunner の priorStepResponseText 捕捉と同じタイミング）。
-    const priorStepResponseText = preparedExecution?.priorStepResponseText ?? state.lastOutput?.content;
+    const executionRuntime = runtime;
 
     const instruction = preparedExecution?.phase1Instruction
       ?? prebuiltInstruction
@@ -2416,179 +1318,6 @@ export class StepExecutor {
       provider: providerInfo.provider,
       model: providerInfo.model,
     });
-    if (findingContractIntakeStep !== undefined) {
-      const resumedPublication = await this.resumeFindingReviewPublication({
-        step: findingContractIntakeStep,
-        parentStepName: step.name,
-        stepIteration,
-        state,
-        runtime: publicationResumeRuntime,
-        presentationContext: findingContractContext?.reviewer?.presentationContext,
-        reviewerCallMode: 'review',
-      });
-      if (resumedPublication !== undefined) {
-        if ('terminalResponse' in resumedPublication) {
-          const response = resumedPublication.terminalResponse;
-          state.stepOutputs.set(step.name, response);
-          state.lastOutput = response;
-          if (response.status === 'blocked') {
-            this.persistPreviousResponseSnapshot(
-              state,
-              step.name,
-              stepIteration,
-              response.content,
-            );
-          }
-          return {
-            response,
-            instruction: phase1Instruction,
-            providerInfo: resumedPublication.reviewerProviderInfo ?? providerInfo,
-            terminalOperation: resumedPublication.terminalOperation,
-          };
-        }
-        if ('reportRejection' in resumedPublication) {
-          // 保存済み報告を読み直しても報告側原因。取り込みは行わず anomaly だけ
-          // 記録し、ラン全体は落とさずに言い直し経路へ回す。
-          await this.recordReviewReportProtocolRejections({
-            parentStepName: step.name,
-            stepIteration,
-            publicationIds: [],
-            rejections: [{
-              reviewerStepName: findingContractIntakeStep.name,
-              reviewerPersonaKey: findingContractIntakeStep.persona ?? findingContractIntakeStep.name,
-              reportContent: resumedPublication.reportRejection.reportContent,
-              reason: resumedPublication.reportRejection.reason,
-            }],
-          });
-          // 報告拒否は「そのレビュアーの差し戻し対象が1件増えた」状態。取り込みが
-          // 走らない経路でも slot は回す — ここを飛ばすと、記録した protocol
-          // anomaly の差し戻しが次のワークフローラウンドまで届かない。
-          const rejectedSlot = await this.runRestatementSlotForNormalStep({
-            parentStepName: step.name,
-            ownerReviewerStep: executableStep,
-            findingContractContext,
-            stepIteration,
-            state,
-            task,
-            maxSteps,
-            priorStepResponseText,
-            updatePersonaSession,
-            runtime: executionRuntime,
-          });
-          if (rejectedSlot !== undefined) {
-            return this.restatementSlotTerminalStepResult({
-              step,
-              state,
-              stepIteration,
-              instruction: phase1Instruction,
-              fallbackProviderInfo: resumedPublication.reviewerProviderInfo ?? providerInfo,
-              slot: rejectedSlot,
-            });
-          }
-          const rejectedResponse = reviewReportProtocolRejectionResponse({
-            stepName: step.name,
-            reportContent: resumedPublication.reportRejection.reportContent,
-          });
-          const response = await this.applyPostExecutionRulesOnly(
-            step,
-            state,
-            rejectedResponse,
-            updatePersonaSession,
-            resumedPublication.reviewerRuntime ?? executionRuntime,
-          );
-          state.stepOutputs.set(step.name, response);
-          state.lastOutput = response;
-          // 拒否された報告本文が後続 step の {previous_response} へ届くよう、
-          // 受理経路・新規実行の拒否経路と同じく snapshot も更新する。
-          this.persistPreviousResponseSnapshot(
-            state,
-            step.name,
-            stepIteration,
-            response.content,
-          );
-          return {
-            response,
-            instruction: phase1Instruction,
-            providerInfo: resumedPublication.reviewerProviderInfo ?? providerInfo,
-          };
-        }
-        const resumedIngest = await this.ingestFindingContractForNormalStep({
-          step: findingContractIntakeStep,
-          stepIteration,
-          iteration: state.iteration,
-          publication: resumedPublication.publication,
-          priorStepResponseText,
-          ...(resumedPublication.relationClarification !== undefined
-            ? { relationClarification: resumedPublication.relationClarification }
-            : {}),
-        });
-        // 遷移判定（applyPostExecutionRulesOnly）より前に回す。理由は新規実行側と同じ。
-        const resumedSlotOutcome = await this.runRestatementSlotForNormalStep({
-          parentStepName: step.name,
-          ownerReviewerStep: executableStep,
-          findingContractContext,
-          stepIteration,
-          state,
-          task,
-          maxSteps,
-          priorStepResponseText,
-          updatePersonaSession,
-          runtime: executionRuntime,
-        });
-        if (resumedSlotOutcome !== undefined) {
-          return this.restatementSlotTerminalStepResult({
-            step,
-            state,
-            stepIteration,
-            instruction: phase1Instruction,
-            fallbackProviderInfo: resumedPublication.reviewerProviderInfo ?? providerInfo,
-            slot: resumedSlotOutcome,
-          });
-        }
-        const response = await this.applyPostExecutionRulesOnly(
-          step,
-          state,
-          resumedPublication.response,
-          updatePersonaSession,
-          resumedPublication.reviewerRuntime
-            ?? (
-              resumedPublication.reviewerProviderInfo === undefined
-                ? executionRuntime
-                : { providerInfo: resumedPublication.reviewerProviderInfo }
-            ),
-        );
-        // 保存済み publication からの再開でも判定は今ここで確定する。この分岐を
-        // 飛ばすと、resume 経路だけ非承認判定が台帳に何も残さず消える。
-        await this.recordVerdictClaimsMismatch({
-          step,
-          response,
-          publication: resumedPublication.publication,
-          roundMarker: resumedIngest.roundMarker,
-        });
-        state.stepOutputs.set(step.name, response);
-        state.lastOutput = response;
-        this.persistPreviousResponseSnapshot(
-          state,
-          step.name,
-          stepIteration,
-          response.content,
-        );
-        this.emitStepReports(
-          step,
-          {
-            iteration: state.iteration,
-            resumeStepName: step.name,
-            stepIteration,
-            providerInfo: resumedPublication.reviewerProviderInfo ?? providerInfo,
-          },
-        );
-        return {
-          response,
-          instruction: phase1Instruction,
-          providerInfo: resumedPublication.reviewerProviderInfo ?? providerInfo,
-        };
-      }
-    }
     log.debug('Running step', {
       step: step.name,
       persona: step.persona ?? '(none)',
@@ -2599,6 +1328,23 @@ export class StepExecutor {
 
     // Phase 1: main execution (Write excluded if step has report)
     let companionRuntime: CompanionStepRuntime | undefined;
+    if (isNormalAgentWorkflowStep(executableStep)) {
+      if (!this.deps.companionEnabled && executableStep.companion !== undefined) {
+        emitCompanionReviewSkippedSafely(this.deps.emitEvent, {
+          step: step.name,
+          phase: 'initial',
+          reason: 'companion_disabled',
+          runPathNamespace: [...this.deps.getRunPathNamespace()],
+        });
+      } else if (this.deps.companionEnabled && executableStep.companion === undefined) {
+        emitCompanionReviewSkippedSafely(this.deps.emitEvent, {
+          step: step.name,
+          phase: 'initial',
+          reason: 'companion_not_configured',
+          runPathNamespace: [...this.deps.getRunPathNamespace()],
+        });
+      }
+    }
     if (
       this.deps.companionEnabled
       && isNormalAgentWorkflowStep(executableStep)
@@ -2626,6 +1372,7 @@ export class StepExecutor {
         companionRuntime = await CompanionStepRuntime.create({
           cwd: this.deps.getCwd(),
           projectCwd: this.deps.getProjectCwd(),
+          failureDir: this.deps.getFailureDir(),
           runSlug: this.deps.getRunId(),
           runPathNamespace: this.deps.getRunPathNamespace(),
           language: this.deps.getLanguage() ?? 'en',
@@ -2659,6 +1406,12 @@ export class StepExecutor {
           completionFailure: true,
           reason,
         };
+        emitCompanionReviewSkippedSafely(this.deps.emitEvent, {
+          step: step.name,
+          phase: 'initial',
+          reason: 'companion_runtime_unavailable',
+          runPathNamespace: [...this.deps.getRunPathNamespace()],
+        });
         log.warn(
           `Companion startup failed for "${step.name}"; main step will continue without completion review: ${reason}`,
         );
@@ -2687,7 +1440,9 @@ export class StepExecutor {
     const promptResolvedAttempts = new Set<number>();
     const phase1Result = await runPhase1WithEmptyRecovery({
       instruction: phase1Instruction,
-      initialSessionId: agentOptions.sessionId,
+      initialSessionId: executableStep.internalFreshSession === true
+        ? undefined
+        : agentOptions.sessionId,
       retryProviderErrorFresh: false,
       execute: async (attempt) => {
         const result = await executeObservedPhase1Attempt({
@@ -2701,16 +1456,69 @@ export class StepExecutor {
           workflowStack: this.deps.getCurrentWorkflowStack?.(),
           sanitizeText: this.deps.sanitizeObservabilityText,
           providerInfo,
-          execute: (attemptInstruction, sessionId, onPromptResolved) => executeAgent(
-            executableStep.persona,
-            attemptInstruction,
-            {
-              ...agentOptions,
-              sessionId,
-              onPromptResolved,
-            },
+          execute: (attemptInstruction, sessionId, onPromptResolved) => (
+            executableStep.internalFreshSession === true
+              ? executeStructuredTextAgent(attemptInstruction, {
+                  name: executableStep.name,
+                  cwd: agentOptions.cwd,
+                  projectCwd: agentOptions.projectCwd,
+                  persona: executableStep.persona,
+                  personaPath: agentOptions.personaPath,
+                  workflowBundleResourceRoot: agentOptions.workflowBundleResourceRoot,
+                  resolution: {
+                    provider: requireStructuredAgentProvider(
+                      providerInfo.provider,
+                      executableStep.name,
+                    ),
+                    model: providerInfo.model,
+                    providerOptions: providerInfo.providerOptions,
+                    permissionMode: agentOptions.permissionMode,
+                  },
+                  language: agentOptions.language,
+                  abortSignal: agentOptions.abortSignal,
+                  childProcessEnv: agentOptions.childProcessEnv,
+                  failureDir: agentOptions.failureDir,
+                  onStream: agentOptions.onStream,
+                  onPromptResolved,
+                  workflowMeta: agentOptions.workflowMeta,
+                }).then((response) => {
+                  const freshResponse = { ...response };
+                  delete freshResponse.sessionId;
+                  return freshResponse;
+                }).catch((error: unknown) => {
+                  if (
+                    !(error instanceof StructuredAgentResponseError)
+                    || error.response.status === 'done'
+                  ) {
+                    throw error;
+                  }
+                  const failedResponse = { ...error.response };
+                  delete failedResponse.sessionId;
+                  return failedResponse;
+                })
+              : executeAgent(
+                  executableStep.persona,
+                  attemptInstruction,
+                  {
+                    ...agentOptions,
+                    sessionId,
+                    onPromptResolved,
+                  },
+                )
           ),
           onPhaseStart: this.deps.onPhaseStart,
+          ...(executableStep.reviewCompletion === undefined
+            ? {}
+            : {
+                onPhaseComplete: this.deps.onPhaseComplete,
+                failurePersona: executableStep.persona ?? executableStep.name,
+                recordFailure: () => this.deps.recordSynthesizedAgentUsage(
+                  step.name,
+                  providerInfo,
+                  false,
+                  undefined,
+                ),
+              }),
         });
         if (result.promptResolved) {
           promptResolvedAttempts.add(attempt.sequence);
@@ -2718,6 +1526,9 @@ export class StepExecutor {
         return result.response;
       },
       discardSession: (sessionId) => {
+        if (executableStep.internalFreshSession === true) {
+          return;
+        }
         invalidatePersonaSessionIfExpected(
           state,
           sessionKey,
@@ -2751,8 +1562,22 @@ export class StepExecutor {
       log.info('Phase 1 returned empty output, treating as error', { step: step.name });
     }
 
-    if (findingContractIntakeStep !== undefined) {
-      if (response.sessionId !== undefined) {
+    if (executableStep.reviewCompletion === undefined) {
+      const normalizedPhase1 = this.normalizeStructuredOutputWithDiagnostics(
+        executableStep,
+        response,
+        executionRuntime,
+      );
+      if (normalizedPhase1.invalidDetail !== undefined) {
+        const provider = this.deps.optionsBuilder
+          .resolveStepProviderModel(executableStep, runtime)
+          .provider;
+        throw new Error(
+          `Step "${executableStep.name}" requires structured_output for provider "${provider}": ${normalizedPhase1.invalidDetail}`,
+        );
+      }
+      response = normalizedPhase1.response;
+      if (executableStep.internalFreshSession !== true && response.sessionId !== undefined) {
         updatePersonaSession(sessionKey, response.sessionId);
       }
       completeObservedPhase1Attempt({
@@ -2763,30 +1588,17 @@ export class StepExecutor {
         onPhaseComplete: this.deps.onPhaseComplete,
       });
     } else {
-      const normalizedPhase1 = this.normalizeStructuredOutputWithDiagnostics(
-          executableStep,
-          response,
-          executionRuntime,
-        );
-      if (normalizedPhase1.invalidDetail !== undefined) {
-        const provider = this.deps.optionsBuilder
-          .resolveStepProviderModel(executableStep, runtime)
-          .provider;
-        throw new Error(
-          `Step "${executableStep.name}" requires structured_output for provider "${provider}": ${normalizedPhase1.invalidDetail}`,
-        );
-      }
-      response = normalizedPhase1.response;
-      if (response.sessionId !== undefined) {
-        updatePersonaSession(sessionKey, response.sessionId);
-      }
-      completeObservedPhase1Attempt({
+      response = this.finalizeObservedReviewerAttempt({
         eventStep: step,
+        executableStep,
         iteration: state.iteration,
         attempt: phase1Result.finalAttempt,
         response,
-        onPhaseComplete: this.deps.onPhaseComplete,
+        runtime: executionRuntime,
       });
+      if (response.sessionId !== undefined) {
+        updatePersonaSession(sessionKey, response.sessionId);
+      }
     }
 
     // Provider failures should abort immediately.
@@ -2805,357 +1617,152 @@ export class StepExecutor {
       return { response, instruction: phase1Instruction, providerInfo };
     }
 
-    if (activeCompanionRuntime !== undefined) {
-      let companionPhaseExecutionSequence = phase1Result.finalAttempt.sequence + 1;
-      const fixLoop = await runCompanionFixLoop({
+    let reviewerPhaseExecutionSequence = phase1Result.finalAttempt.sequence + 1;
+    response = await this.completeReviewerCompanion({
+      eventStep: step,
+      executableStep,
+      state,
+      initialResponse: response,
+      agentOptions,
+      runtime: executionRuntime,
+      companionRuntime: activeCompanionRuntime,
+      providerInfo,
+      nextSequence: () => reviewerPhaseExecutionSequence++,
+    });
+    if (response.sessionId !== undefined) {
+      updatePersonaSession(sessionKey, response.sessionId);
+    }
+    if (response.status === 'error' || response.status === 'rate_limited') {
+      state.stepOutputs.set(step.name, response);
+      state.lastOutput = response;
+      return { response, instruction: phase1Instruction, providerInfo };
+    }
+    if (response.status === 'blocked') {
+      state.stepOutputs.set(step.name, response);
+      state.lastOutput = response;
+      this.persistPreviousResponseSnapshot(state, step.name, stepIteration, response.content);
+      return { response, instruction: phase1Instruction, providerInfo };
+    }
+    let reviewCompletionDiagnostic: string | undefined;
+    if (executableStep.reviewCompletion !== undefined) {
+      const completion = await this.completeReviewerResponse({
+        step: executableStep,
+        originalInstruction: phase1Instruction,
         initialResponse: response,
-        phase1Options: agentOptions,
-        completeReview: async ({ implementerResponse, afterFix, fixRound }) => {
-          const review = await activeCompanionRuntime.complete(state, implementerResponse, {
-            afterFix,
-            fixRound,
-          });
-          return review;
-        },
-        executeFix: async (attempt) => {
-          activeCompanionRuntime.beginFixRound(
-            attempt.sequence,
-            attempt.openMustFixCount,
-          );
-          const promptResolvedAttempts = new Set<number>();
-          const phaseAttempts = new Map<number, Phase1Attempt>();
-          const resolvePhaseAttempt = (recoveryAttempt: Phase1Attempt): Phase1Attempt => {
-            const existing = phaseAttempts.get(recoveryAttempt.sequence);
+        executeRetry: async (retryInstruction, retrySessionId) => {
+          const observedAttempts = new Map<number, Phase1Attempt>();
+          const resolveObservedAttempt = (attempt: Phase1Attempt): Phase1Attempt => {
+            const existing = observedAttempts.get(attempt.sequence);
             if (existing !== undefined) return existing;
-            const created = {
-              ...recoveryAttempt,
-              sequence: companionPhaseExecutionSequence++,
-              reason: recoveryAttempt.reason === 'initial'
-                ? 'companion_fix' as const
-                : recoveryAttempt.reason,
-            };
-            phaseAttempts.set(recoveryAttempt.sequence, created);
+            const created = { ...attempt, sequence: reviewerPhaseExecutionSequence++ };
+            observedAttempts.set(attempt.sequence, created);
             return created;
           };
-          const recovery = await runPhase1WithEmptyRecovery({
-            instruction: attempt.instruction,
-            initialSessionId: attempt.sessionId,
+          const retryResponse = await runPhase1WithEmptyRecovery({
+            instruction: retryInstruction,
+            initialSessionId: retrySessionId,
             retryProviderErrorFresh: false,
-            execute: async (recoveryAttempt) => {
-              const phaseAttempt = resolvePhaseAttempt(recoveryAttempt);
-              try {
-                const observed = await executeObservedPhase1Attempt({
-                  enabled: this.deps.observabilityEnabled?.() === true,
-                  runId: this.deps.getObservabilityRunId?.(),
-                  workflowName: this.deps.getWorkflowName(),
-                  eventStep: step,
-                  spanStep: executableStep,
-                  iteration: state.iteration,
-                  attempt: phaseAttempt,
-                  workflowStack: this.deps.getCurrentWorkflowStack?.(),
-                  sanitizeText: this.deps.sanitizeObservabilityText,
+            execute: async (attempt) => {
+              const observedAttempt = resolveObservedAttempt(attempt);
+              const observed = await executeObservedPhase1Attempt({
+                enabled: this.deps.observabilityEnabled?.() === true,
+                runId: this.deps.getObservabilityRunId?.(),
+                workflowName: this.deps.getWorkflowName(),
+                eventStep: step,
+                spanStep: executableStep,
+                iteration: state.iteration,
+                attempt: observedAttempt,
+                workflowStack: this.deps.getCurrentWorkflowStack?.(),
+                sanitizeText: this.deps.sanitizeObservabilityText,
+                providerInfo,
+                execute: (attemptInstruction, attemptSessionId, onPromptResolved) => executeAgent(
+                  executableStep.persona,
+                  attemptInstruction,
+                  { ...agentOptions, sessionId: attemptSessionId, onPromptResolved },
+                ),
+                onPhaseStart: this.deps.onPhaseStart,
+                onPhaseComplete: this.deps.onPhaseComplete,
+                failurePersona: executableStep.persona ?? executableStep.name,
+                recordFailure: () => this.deps.recordSynthesizedAgentUsage(
+                  step.name,
                   providerInfo,
-                  execute: (attemptInstruction, sessionId, onPromptResolved) => executeAgent(
-                    executableStep.persona,
-                    attemptInstruction,
-                    {
-                      ...attempt.options,
-                      sessionId,
-                      onPromptResolved,
-                    },
-                  ),
-                  onPhaseStart: (
-                    phaseStep,
-                    phase,
-                    phaseName,
-                    instruction,
-                    promptParts,
-                    phaseExecutionId,
-                    iteration,
-                  ) => {
-                    promptResolvedAttempts.add(phaseAttempt.sequence);
-                    this.deps.onPhaseStart?.(
-                      phaseStep,
-                      phase,
-                      phaseName,
-                      instruction,
-                      promptParts,
-                      phaseExecutionId,
-                      iteration,
-                    );
-                  },
-                });
-                return observed.response;
-              } catch (error) {
-                const failedResponse: AgentResponse = {
-                  persona: executableStep.persona ?? executableStep.name,
-                  status: 'error',
-                  content: '',
-                  error: getErrorMessage(error),
-                  timestamp: new Date(),
-                };
-                if (promptResolvedAttempts.has(phaseAttempt.sequence)) {
-                  completeObservedPhase1Attempt({
-                    eventStep: step,
-                    iteration: state.iteration,
-                    attempt: phaseAttempt,
-                    response: failedResponse,
-                    onPhaseComplete: this.deps.onPhaseComplete,
-                  });
-                }
-                this.deps.recordSynthesizedAgentUsage(step.name, providerInfo, false, undefined);
-                throw error;
-              }
+                  false,
+                  undefined,
+                ),
+              });
+              return observed.response;
             },
-            // A failed advisory repair must not invalidate the last successful main session.
             discardSession: () => undefined,
-            recordSupersededAttempt: (supersededResponse, recoveryAttempt) => {
-              const phaseAttempt = resolvePhaseAttempt(recoveryAttempt);
-              if (promptResolvedAttempts.has(phaseAttempt.sequence)) {
-                completeObservedPhase1Attempt({
-                  eventStep: step,
-                  iteration: state.iteration,
-                  attempt: phaseAttempt,
-                  response: supersededResponse,
-                  onPhaseComplete: this.deps.onPhaseComplete,
-                });
-              }
+            recordSupersededAttempt: (supersededResponse, attempt) => {
+              completeObservedPhase1Attempt({
+                eventStep: step,
+                iteration: state.iteration,
+                attempt: resolveObservedAttempt(attempt),
+                response: supersededResponse,
+                onPhaseComplete: this.deps.onPhaseComplete,
+              });
               this.deps.recordSynthesizedAgentUsage(
                 step.name,
                 providerInfo,
-                false,
+                supersededResponse.status === 'done',
                 supersededResponse.providerUsage,
               );
             },
           });
-          const finalAttempt = resolvePhaseAttempt(recovery.finalAttempt);
-          if (!promptResolvedAttempts.has(finalAttempt.sequence)) {
-            const error = new Error(
-              `Missing prompt parts for companion fix: ${step.name}:1:${finalAttempt.sequence}`,
-            );
-            throw error;
-          }
-          const normalized = this.normalizeStructuredOutputWithDiagnostics(
+          const normalized = this.finalizeObservedReviewerAttempt({
+            eventStep: step,
             executableStep,
-            recovery.response,
-            executionRuntime,
-          );
-          if (normalized.invalidDetail !== undefined) {
-            const error = new Error(
-              `Companion fix for step "${executableStep.name}" produced invalid structured_output: ${normalized.invalidDetail}`,
-            );
-            completeObservedPhase1Attempt({
-              eventStep: step,
-              iteration: state.iteration,
-              attempt: finalAttempt,
-              response: {
-                ...recovery.response,
-                status: 'error',
-                error: error.message,
-              },
-              onPhaseComplete: this.deps.onPhaseComplete,
-            });
-            this.deps.recordSynthesizedAgentUsage(
+            iteration: state.iteration,
+            attempt: resolveObservedAttempt(retryResponse.finalAttempt),
+            response: retryResponse.response,
+            runtime: executionRuntime,
+            recordUsage: (success, usage) => this.deps.recordSynthesizedAgentUsage(
               step.name,
               providerInfo,
-              false,
-              recovery.response.providerUsage,
-            );
-            throw error;
-          }
-          completeObservedPhase1Attempt({
+              success,
+              usage,
+            ),
+          });
+          return this.completeReviewerCompanion({
             eventStep: step,
-            iteration: state.iteration,
-            attempt: finalAttempt,
-            response: normalized.response,
-            onPhaseComplete: this.deps.onPhaseComplete,
-          });
-          this.deps.recordSynthesizedAgentUsage(
-            step.name,
-            providerInfo,
-            normalized.response.status === 'done',
-            normalized.response.providerUsage,
-          );
-          return normalized.response;
-        },
-        abortSignal: this.deps.abortSignal,
-        onAttemptFailure: (failure) => {
-          log.warn('Companion advisory attempt failed; continuing with the latest successful response', {
-            step: step.name,
-            stage: failure.stage,
-            fixRound: failure.fixRound,
-            sequence: failure.sequence,
-            reason: failure.reason,
-          });
-        },
-      });
-      if (fixLoop.latestSessionId !== undefined) {
-        updatePersonaSession(sessionKey, fixLoop.latestSessionId);
-      }
-      response = fixLoop.phaseResponse;
-      if (response.status === 'error' || response.status === 'rate_limited') {
-        state.stepOutputs.set(step.name, response);
-        state.lastOutput = response;
-        return { response, instruction: phase1Instruction, providerInfo };
-      }
-      if (response.status === 'blocked') {
-        state.stepOutputs.set(step.name, response);
-        state.lastOutput = response;
-        this.persistPreviousResponseSnapshot(state, step.name, stepIteration, response.content);
-        return { response, instruction: phase1Instruction, providerInfo };
-      }
-    }
-
-    let completedReviewerProviderInfo = providerInfo;
-    let completedReviewerRuntime: RuntimeStepResolution = {
-      providerInfo,
-    };
-    let reviewerPublication: CanonicalFindingReviewPublication | undefined;
-    let reviewerRoundMarker: string | undefined;
-    if (findingContractIntakeStep && findingContractContext) {
-      const phase1ProviderUsage = response.providerUsage;
-      const prepared = await this.prepareFindingReviewPublication({
-        step: findingContractIntakeStep,
-        executableStep,
-        // Phase 1 で凍結した context をそのまま Phase 2 へ渡す。
-        findingContractContext,
-        parentStepName: step.name,
-        stepIteration,
-        state,
-        phase1Response: response,
-        agentOptions,
-        onProviderAttempt: (providerInfo, success, usage) => {
-          this.deps.recordSynthesizedAgentUsage(
-            step.name,
-            providerInfo,
-            success,
-            usage,
-          );
-        },
-        updatePersonaSession,
-        runtime: executionRuntime,
-        presentationContext: findingContractContext?.reviewer?.presentationContext,
-        reviewerCallMode: 'review',
-      });
-      if ('terminalResponse' in prepared) {
-        response = replaceResponseProviderUsage(
-          prepared.terminalResponse,
-          phase1ProviderUsage,
-        );
-        state.stepOutputs.set(step.name, response);
-        state.lastOutput = response;
-        if (response.status === 'blocked') {
-          this.persistPreviousResponseSnapshot(
+            executableStep,
             state,
-            step.name,
-            stepIteration,
-            response.content,
-          );
-        }
-        return {
-          response,
-          instruction: phase1Instruction,
-          providerInfo: prepared.reviewerProviderInfo ?? providerInfo,
-          ...(prepared.terminalOperation !== undefined
-            ? { terminalOperation: prepared.terminalOperation }
-            : {}),
-        };
-      }
-      completedReviewerProviderInfo = prepared.reviewerProviderInfo ?? providerInfo;
-      completedReviewerRuntime = prepared.reviewerRuntime ?? {
-        providerInfo: completedReviewerProviderInfo,
-      };
-      if ('reportRejection' in prepared) {
-        // 報告側原因（rawExcerpt が報告本文へ束縛できない）。ラン全体を落とさず、
-        // そのレビュアーの protocol anomaly として記録して言い直し経路へ載せる。
-        await this.recordReviewReportProtocolRejections({
-          parentStepName: step.name,
-          stepIteration,
-          publicationIds: [],
-          rejections: [{
-            reviewerStepName: findingContractIntakeStep.name,
-            reviewerPersonaKey: findingContractIntakeStep.persona ?? findingContractIntakeStep.name,
-            reportContent: prepared.reportRejection.reportContent,
-            reason: prepared.reportRejection.reason,
-          }],
-        });
-        // ルールが読む本文は resume 経路と同じく「拒否されたその報告」にそろえる。
-        response = reviewReportProtocolRejectionResponse({
-          stepName: step.name,
-          reportContent: prepared.reportRejection.reportContent,
-        });
-      } else {
-        reviewerPublication = prepared.publication;
-        response = replaceResponseProviderUsage(
-          prepared.response,
-          phase1ProviderUsage,
-        );
-        reviewerRoundMarker = (await this.ingestFindingContractForNormalStep({
-          step: findingContractIntakeStep,
-          stepIteration,
-          iteration: state.iteration,
-          publication: prepared.publication,
-          priorStepResponseText,
-          relationClarification: prepared.relationClarification,
-        })).roundMarker;
-      }
-      // 差し戻し slot は受理・報告拒否のどちらでも回す（resume 経路と parallel 経路も
-      // 同じ）。報告拒否は「そのレビュアーの差し戻し対象が1件増えた」状態なので、
-      // ここを取り込み成功時だけにすると、記録した protocol anomaly の差し戻しが
-      // 次のワークフローラウンドまで届かない。
-      //
-      // 呼ぶのは post-execution rules より前。単独ステップではその rules 評価が
-      // このステップの遷移判定そのものなので、後に回すと when(findings.*) が slot の
-      // 取り込み前の台帳を読む（parallel では親の集約 rules が slot の後に評価される
-      // ので同じ順序になる）。verdict-claims-mismatch は slot の発火条件から外して
-      // あるため、verdict/claims の記録との前後関係は slot の挙動を変えない。
-      const slot = await this.runRestatementSlotForNormalStep({
-        parentStepName: step.name,
-        // dynamic facets 適用後の実行用ステップを owner として渡す（上と同じ理由）。
-        ownerReviewerStep: executableStep,
-        findingContractContext,
-        stepIteration,
-        state,
-        task,
-        maxSteps,
-        priorStepResponseText,
-        updatePersonaSession,
-        runtime: executionRuntime,
+            initialResponse: normalized,
+            agentOptions,
+            runtime: executionRuntime,
+            companionRuntime: activeCompanionRuntime,
+            providerInfo,
+            nextSequence: () => reviewerPhaseExecutionSequence++,
+          });
+        },
       });
-      if (slot !== undefined) {
-        return this.restatementSlotTerminalStepResult({
-          step,
-          state,
-          stepIteration,
-          instruction: phase1Instruction,
-          fallbackProviderInfo: completedReviewerProviderInfo,
-          slot,
-        });
+      response = completion.response;
+      updatePersonaSession(sessionKey, completion.reviewerSessionId);
+      reviewCompletionDiagnostic = completion.diagnostic === undefined
+        ? undefined
+        : formatReviewCompletionDiagnostic(completion.diagnostic, this.deps.getLanguage());
+      if (response.status === 'error' || response.status === 'rate_limited' || response.status === 'blocked') {
+        state.stepOutputs.set(step.name, response);
+        state.lastOutput = response;
+        return { response, instruction: phase1Instruction, providerInfo };
       }
     }
 
     let terminalOperation: StepRunResult['terminalOperation'];
     try {
-      response = findingContractIntakeStep !== undefined
-        ? await this.applyPostExecutionRulesOnly(
-            step,
-            state,
-            response,
-            updatePersonaSession,
-            completedReviewerRuntime,
-          )
-        : await this.applyPostExecutionPhases(
-            step,
-            state,
-            stepIteration,
-            response,
-            updatePersonaSession,
-            executionRuntime,
-            undefined,
-            (operation) => {
-              terminalOperation = operation;
-            },
-          );
+      response = await this.applyPostExecutionPhases(
+        step,
+        state,
+        stepIteration,
+        response,
+        updatePersonaSession,
+        executionRuntime,
+        undefined,
+        (operation) => {
+          terminalOperation = operation;
+        },
+        reviewCompletionDiagnostic,
+      );
     } catch (error) {
       if (error instanceof RuleDetectionExhaustedError) {
         invalidateExpectedPersonaSession(
@@ -3167,17 +1774,6 @@ export class StepExecutor {
         );
       }
       throw error;
-    }
-
-    if (reviewerPublication !== undefined && reviewerRoundMarker !== undefined) {
-      // 判定が確定した直後に、非承認判定 + claim ゼロ件を台帳へ残す。
-      // ここを逃すと非承認判定は台帳に何の痕跡も残さずに消える。
-      await this.recordVerdictClaimsMismatch({
-        step,
-        response,
-        publication: reviewerPublication,
-        roundMarker: reviewerRoundMarker,
-      });
     }
 
     state.stepOutputs.set(step.name, response);
@@ -3197,13 +1793,13 @@ export class StepExecutor {
         iteration: state.iteration,
         resumeStepName: step.name,
         stepIteration,
-        providerInfo: completedReviewerProviderInfo,
+        providerInfo,
       },
     );
     return {
       response,
       instruction: phase1Instruction,
-      providerInfo: completedReviewerProviderInfo,
+      providerInfo,
       ...(terminalOperation !== undefined ? { terminalOperation } : {}),
     };
   }
@@ -3217,18 +1813,6 @@ export class StepExecutor {
     const workflowStack = requireWorkflowResumeStackSnapshot(
       this.deps.getCurrentWorkflowStack?.(),
     );
-    const findingScopeIdentity = this.deps.findingLedgerStore?.ledgerIdentity;
-    const findingIds = findingScopeIdentity === undefined
-      ? undefined
-      : this.deps.findingLedgerStore
-        ?.loadLedger()
-        .findings
-        .map((finding) => finding.id);
-    if (findingScopeIdentity !== undefined && findingIds === undefined) {
-      throw new Error(
-        `Finding IDs are missing for scope "${findingScopeIdentity}"`,
-      );
-    }
     const provider = input.providerInfo.provider
       ?? this.deps.executionProvider;
     if (provider === undefined) {
@@ -3254,10 +1838,6 @@ export class StepExecutor {
       provider,
       model,
       workflowStack,
-      findingScopeIdentity,
-      findingIds: findingIds === undefined
-        ? undefined
-        : Object.freeze([...findingIds]),
     });
   }
 

@@ -10,6 +10,7 @@
 
 import { z } from 'zod';
 import { PROVIDER_TYPES } from '../../../shared/types/provider.js';
+import { PermissionModeSchema } from '../../../core/models/schema-base.js';
 import { RUNTIME_PROVIDER_VERSION } from './constants.js';
 
 const ProviderNameSchema = z.enum(PROVIDER_TYPES);
@@ -28,6 +29,11 @@ const ProfileSchema = z
     provider: ProviderNameSchema.optional(),
     model: z.string().min(1).optional(),
     options: ProfileOptionsSchema.optional(),
+    capabilities: z.union([
+      z.string().min(1),
+      z.array(z.string().min(1)).min(1),
+    ]).optional(),
+    permission_mode: PermissionModeSchema.optional(),
     extends: z.string().min(1).optional(),
     escalate: z.string().min(1).optional(),
   })

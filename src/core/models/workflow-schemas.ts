@@ -4,6 +4,7 @@
 
 import { z } from 'zod/v4';
 import { INTERACTIVE_MODES } from './interactive-mode.js';
+import { isReviewMode, REVIEW_MODE_VALUES } from './review-mode.js';
 import { getWorkflowStepKind } from './workflow-step-kind.js';
 import {
   McpServersSchema,
@@ -32,12 +33,14 @@ import {
   parseWorkflowRuleCondition,
   type SemanticAppendixRule,
 } from './workflow-rule-condition.js';
-import { FindingContractConfigRawSchema } from './finding-schemas.js';
 import {
   SESSION_AGENT_STEP_REQUIRED_MESSAGE,
   SESSION_NORMAL_AGENT_STEP_REQUIRED_MESSAGE,
 } from './workflow-session-constraints.js';
-import { WORKFLOW_SESSION_MODES } from './workflow-types.js';
+import {
+  MAX_REVIEW_COMPLETION_RETRY,
+  WORKFLOW_SESSION_MODES,
+} from './workflow-types.js';
 import { classifyReportRelativePath } from './reserved-report-names.js';
 
 const RESERVED_WORKFLOW_CALL_RESULTS = ['COMPLETE', 'ABORT'] as const;
@@ -114,11 +117,20 @@ const WorkflowCallArgsRawSchema = z.record(
     WorkflowParamReferenceRawSchema,
   ]),
 );
+const WorkflowCallVarsValueRawSchema = z.union([z.string(), z.number().finite(), z.boolean()]);
 const WorkflowCallVarsRawSchema = z.record(
   z.string().regex(/^[A-Za-z_][A-Za-z0-9_.-]*$/),
-  z.union([z.string(), z.number().finite(), z.boolean()]),
-);
-const WorkflowCallFindingContractAuthoritySchema = z.literal('terminal_adjudication');
+  WorkflowCallVarsValueRawSchema,
+).superRefine((vars, ctx) => {
+  if (!Object.hasOwn(vars, 'review_mode')) return;
+  if (!isReviewMode(vars.review_mode)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['review_mode'],
+      message: `review_mode must be one of: ${REVIEW_MODE_VALUES.join(', ')}`,
+    });
+  }
+});
 
 const WorkflowStepProviderOptionsSchema = StepProviderOptionsObjectSchema.extend({
   extends: z.string().min(1).optional(),
@@ -440,7 +452,6 @@ export const DynamicFacetsRawSchema = z.object({
 
 /** Team leader configuration schema for dynamic part decomposition */
 export const TeamLeaderConfigRawSchema = z.object({
-  mode: z.literal('finding_contract_fix').optional(),
   persona: z.string().optional(),
   max_parts: z.number().int().positive().max(3).optional(),
   max_concurrency: z.number().int().positive().max(3).optional(),
@@ -466,6 +477,45 @@ export const TeamLeaderConfigRawSchema = z.object({
 
 /** Workflow step schema - raw YAML format */
 const WorkflowStepKindSchema = z.enum(['agent', 'system', 'workflow_call']);
+
+const ReviewCompletionOptionsRawSchema = z.object({
+  min_retry: z.number().int().min(0).max(MAX_REVIEW_COMPLETION_RETRY).optional(),
+  max_retry: z.number().int().min(0).max(MAX_REVIEW_COMPLETION_RETRY).optional(),
+  retry_instruction: WorkflowFacetRefOrParamSchema,
+}).strict().superRefine((data, ctx) => {
+  const minRetry = data.min_retry ?? 0;
+  const maxRetry = data.max_retry ?? 1;
+  if (minRetry > maxRetry) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['min_retry'],
+      message: 'review_completion.min_retry must be less than or equal to max_retry',
+    });
+  }
+});
+
+const ReviewCompletionRawSchema = ReviewCompletionOptionsRawSchema;
+
+function validateReviewCompletionOptIn(
+  data: {
+    review_completion?: unknown;
+    parallel?: unknown;
+    arpeggio?: unknown;
+    team_leader?: unknown;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  if (
+    data.review_completion !== undefined
+    && (data.parallel !== undefined || data.arpeggio !== undefined || data.team_leader !== undefined)
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['review_completion'],
+      message: 'review_completion is only supported on normal agent steps and parallel agent sub-steps',
+    });
+  }
+}
 
 const WorkflowCallOverridesRawSchema = z.object({
   provider: ProviderReferenceSchema.optional(),
@@ -504,6 +554,7 @@ const AgentParallelSubStepRawObjectSchema = z.object({
   persona: WorkflowPersonaRefOrParamSchema.optional(),
   persona_name: z.string().optional(),
   tags: z.array(z.string().min(1)).optional(),
+  review_completion: ReviewCompletionRawSchema.optional(),
   policy: WorkflowFacetRefListOrParamSchema.optional(),
   knowledge: WorkflowFacetRefListOrParamSchema.optional(),
   allow_git_commit: z.boolean().optional(),
@@ -538,7 +589,9 @@ const AgentParallelSubStepRawObjectSchema = z.object({
 });
 
 function validateAgentParallelSubStepRules(
-  data: { rules?: z.output<typeof WorkflowRulesSchema> },
+  data: {
+    rules?: z.output<typeof WorkflowRulesSchema>;
+  },
   ctx: z.RefinementCtx,
 ): void {
   validateParallelSubStepRules(data.rules, ctx);
@@ -565,13 +618,13 @@ const WorkflowCallParallelSubStepRawSchema = z.object({
   overrides: WorkflowCallOverridesRawSchema.optional(),
   args: WorkflowCallArgsRawSchema.optional(),
   vars: WorkflowCallVarsRawSchema.optional(),
-  finding_contract_authority: WorkflowCallFindingContractAuthoritySchema.optional(),
   description: z.string().optional(),
   session_key: z.never().optional(),
   session: z.never().optional(),
   persona: z.never().optional(),
   persona_name: z.never().optional(),
   tags: z.never().optional(),
+  review_completion: z.never().optional(),
   policy: z.never().optional(),
   knowledge: z.never().optional(),
   allow_git_commit: z.never().optional(),
@@ -634,7 +687,6 @@ const CompanionSelectionRawSchema = z.union([
 const WorkflowSubworkflowRawSchema = z.object({
   callable: z.boolean().optional(),
   visibility: z.enum(['internal']).optional(),
-  requires_finding_contract: z.literal(true).optional(),
   returns: z.array(WorkflowResultLabelSchema).optional(),
   params: z.record(z.string().min(1), WorkflowParamDeclarationRawSchema).optional(),
 }).strict().superRefine((data, ctx) => {
@@ -659,7 +711,7 @@ const WorkflowSubworkflowRawSchema = z.object({
     return;
   }
 
-  for (const field of ['visibility', 'requires_finding_contract', 'returns', 'params'] as const) {
+  for (const field of ['visibility', 'returns', 'params'] as const) {
     if (data[field] !== undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -681,11 +733,11 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     overrides: WorkflowCallOverridesRawSchema.optional(),
     args: WorkflowCallArgsRawSchema.optional(),
     vars: WorkflowCallVarsRawSchema.optional(),
-    finding_contract_authority: WorkflowCallFindingContractAuthoritySchema.optional(),
     session: z.enum(WORKFLOW_SESSION_MODES).optional(),
     persona: WorkflowPersonaRefOrParamSchema.optional(),
     persona_name: z.string().optional(),
     tags: z.array(z.string().min(1)).optional(),
+    review_completion: ReviewCompletionRawSchema.optional(),
     policy: WorkflowFacetRefListOrParamSchema.optional(),
     knowledge: WorkflowFacetRefListOrParamSchema.optional(),
     allow_git_commit: z.boolean().optional(),
@@ -724,6 +776,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
       path: ['parallel'],
     },
   ).superRefine((data, ctx) => {
+    validateReviewCompletionOptIn(data, ctx);
     if (data.kind !== undefined && data.mode !== undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -733,6 +786,13 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     }
 
     const stepKind = getWorkflowStepKind(data);
+    if (data.review_completion !== undefined && stepKind !== 'agent') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['review_completion'],
+        message: 'review_completion is only supported on agent steps',
+      });
+    }
     if (stepKind !== 'workflow_call') {
       const hasParallelSubSteps = Array.isArray(data.parallel)
         ? data.parallel.length > 0
@@ -743,7 +803,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['session_key'],
-        message: 'session_key is only supported on agent steps, parallel sub-steps, and loop_monitors.judge',
+        message: 'session_key is only supported on agent steps and parallel sub-steps',
       });
     }
 
@@ -822,14 +882,6 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
       });
     }
 
-    if (data.finding_contract_authority !== undefined && stepKind !== 'workflow_call') {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['finding_contract_authority'],
-        message: 'Only workflow_call steps can declare "finding_contract_authority"',
-      });
-    }
-
     if (data.promotion !== undefined && stepKind !== 'agent') {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -900,6 +952,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
         'persona',
         'persona_name',
         'tags',
+        'review_completion',
         'policy',
         'knowledge',
         'allow_git_commit',
@@ -971,7 +1024,7 @@ export const LoopMonitorRuleSchema = z.object({
 
 /** Loop monitor judge schema */
 export const LoopMonitorJudgeSchema = z.object({
-  session_key: z.string().trim().min(1).optional(),
+  session_key: z.never({ message: 'session_key is not supported on loop_monitors.judge; judges always use a fresh session' }).optional(),
   persona: z.string().optional(),
   provider: ProviderReferenceSchema.optional(),
   model: z.string().min(1).nullable().optional(),
@@ -1096,7 +1149,6 @@ export const WorkflowConfigRawSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
   subworkflow: WorkflowSubworkflowRawSchema.optional(),
-  finding_contract: FindingContractConfigRawSchema.optional(),
   workflow_config: WorkflowProviderOptionsWithExtendsSchema,
   // Issue #1208: workflow-level capability-set reference (the default for every step) and the
   // portable, bundled MCP server definitions that step/sub-step `mcp:` references resolve against.

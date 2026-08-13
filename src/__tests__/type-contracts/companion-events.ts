@@ -39,6 +39,10 @@ emitCompanionEvent('companion:review_round', {
   digest: 'digest-1',
   changedLines: 12,
   findingCount: 1,
+  reviewerFindings: [],
+  reviewerUpdates: [],
+  acceptedFindings: [],
+  acceptedUpdates: [],
 });
 
 emitCompanionEvent('companion:queue_coalesced', {
@@ -66,6 +70,10 @@ emitCompanionEvent('companion:review_round', {
   digest: 'digest-1',
   changedLines: 12,
   findingCount: 1,
+  reviewerFindings: [],
+  reviewerUpdates: [],
+  acceptedFindings: [],
+  acceptedUpdates: [],
 });
 
 // @ts-expect-error Companion queue coalescing requires the replacement payload.

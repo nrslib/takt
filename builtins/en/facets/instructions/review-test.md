@@ -14,5 +14,5 @@ Focus on reviewing **test quality**.
 9. For new configuration boundaries, check normalization inputs such as empty strings, whitespace-only strings, empty arrays, and case variants when relevant
 10. Verify that E2E timeout, cleanup, and forced-termination handling follows existing same-kind test conventions
 {{include:instructions/review-investigation-discipline}}
-{{include:instructions/review-family-completion}}
+{{include:instructions/contract-family-review-by-mode}}
 {{include:instructions/review-pr-context}}

@@ -2,7 +2,7 @@ import type { InternalAgentSeats } from '../models/config-types.js';
 import type { LoopMonitorJudge } from '../models/types.js';
 import type { ProviderType } from '../../shared/types/provider.js';
 import type { StepProviderOptions } from '../models/workflow-types.js';
-import { mergeProviderOptions } from '../../infra/config/providerOptions.js';
+import type { PermissionMode } from '../models/types.js';
 import { internalAgentSeatOverride } from './internal-agent-seat.js';
 
 /**
@@ -29,6 +29,8 @@ export interface LoopJudgeProviderFields {
   providerSpecified?: true;
   model?: string;
   modelSpecified?: boolean;
+  internalProviderOptions?: StepProviderOptions;
+  internalPermissionMode?: PermissionMode;
 }
 
 /**
@@ -52,6 +54,12 @@ export function loopJudgeProviderFields(
       providerSpecified: true,
       ...(seat.model === undefined ? {} : { model: seat.model }),
       modelSpecified: true,
+      ...(seat.internalProviderOptions === undefined
+        ? {}
+        : { internalProviderOptions: seat.internalProviderOptions }),
+      ...(seat.internalPermissionMode === undefined
+        ? {}
+        : { internalPermissionMode: seat.internalPermissionMode }),
     };
   }
   return {
@@ -62,18 +70,12 @@ export function loopJudgeProviderFields(
 }
 
 /**
- * judge ステップの providerOptions を合成する。弱い順に「provider 既定 → workflow の
- * judge 設定 → seat の profile options」で重ねる。provider/model 指定と同じく、
- * 合成順をここ1箇所に固定する。
+ * workflow が judge に明示した共有 providerOptions を返す。seat profile の options は
+ * provider identity と一緒に loopJudgeProviderFields へ焼き込み、CLI/env override 時に
+ * provider と一緒に破棄できるよう分離する。
  */
 export function loopJudgeProviderOptions(input: {
-  readonly defaults: StepProviderOptions | undefined;
   readonly judge: Pick<LoopMonitorJudge, 'providerOptions'>;
-  readonly seats: InternalAgentSeats | undefined;
 }): StepProviderOptions | undefined {
-  const seat = internalAgentSeatOverride(input.seats?.loopJudge);
-  return mergeProviderOptions(
-    mergeProviderOptions(input.defaults, input.judge.providerOptions),
-    seat?.providerOptions,
-  );
+  return input.judge.providerOptions;
 }

@@ -5,6 +5,7 @@ import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engin
 import type { AgentResponse, AgentWorkflowStep, WorkflowState, WorkflowStep } from '../core/models/index.js';
 import { makeStep } from './test-helpers.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
+import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
@@ -95,6 +96,7 @@ function makeStepExecutor(): StepExecutor {
       logsAbs: '/tmp/project/.takt/runs/test/logs',
       metaAbs: '/tmp/project/.takt/runs/test/meta.json',
     }),
+    getFailureDir: () => '/tmp/project/.takt/runs/test/failures',
     getLanguage: () => undefined,
     getInteractive: () => false,
     getWorkflowSteps: () => [{ name: 'review' }],
@@ -130,6 +132,10 @@ function makeParallelRunner(): ParallelRunner {
       emitStepReports: vi.fn(),
       persistPreviousResponseSnapshot: vi.fn(),
       normalizeStructuredOutput: vi.fn((_step: WorkflowStep, response: AgentResponse) => response),
+      completeReviewerResponse: vi.fn(async ({ initialResponse }) => ({
+        response: initialResponse,
+        reviewerSessionId: initialResponse.sessionId,
+      })),
     } as unknown as ParallelRunnerDeps['stepExecutor'],
     engineOptions: {
       projectCwd: '/tmp/project',
@@ -224,6 +230,37 @@ describe('ReportPhaseGenerationError soft error', () => {
     expect(runStatusJudgmentPhase).not.toHaveBeenCalled();
   });
 
+  it('fails StepExecutor fast on a report parse failure without entering Phase 3', async () => {
+    const executor = makeStepExecutor();
+    const step = makeReportStep();
+    vi.mocked(runReportPhase).mockRejectedValue(
+      new ReportPhaseGenerationError(
+        'report parse failed',
+        'provider_error',
+        {
+          requiresFreshPhase1: false,
+          failureReasons: ['provider_error'],
+        },
+        AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+        'provider stream parse error: Failed to parse item: report output',
+      ),
+    );
+
+    await expect(executor.applyPostExecutionPhases(
+      step,
+      makeState(),
+      1,
+      makeDoneResponse(),
+      vi.fn(),
+    )).rejects.toMatchObject({
+      name: 'ProviderStreamParseError',
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+      message: 'provider stream parse error: Failed to parse item: report output',
+    });
+
+    expect(runStatusJudgmentPhase).not.toHaveBeenCalled();
+  });
+
   it('continues ParallelRunner sub-step to Phase 3 when report phase raises ReportPhaseGenerationError', async () => {
     const runner = makeParallelRunner();
     const subStep = makeReportStep({ name: 'security-review', persona: 'security-review' });
@@ -259,6 +296,39 @@ describe('ReportPhaseGenerationError soft error', () => {
     expect(runStatusJudgmentPhase).not.toHaveBeenCalled();
     expect(result.response.status).toBe('error');
     expect(result.response.error).toContain('generic report failure');
+  });
+
+  it('fails a ParallelRunner sub-step fast on a report parse failure without entering Phase 3', async () => {
+    const runner = makeParallelRunner();
+    const subStep = makeReportStep({ name: 'security-review', persona: 'security-review' });
+    const state = makeState();
+    queueAgentResponse(makeDoneResponse({ persona: 'security-review' }));
+    vi.mocked(runReportPhase).mockRejectedValue(
+      new ReportPhaseGenerationError(
+        'report parse failed',
+        'provider_error',
+        {
+          requiresFreshPhase1: false,
+          failureReasons: ['provider_error'],
+        },
+        AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+        'provider stream parse error: Failed to parse item: report output',
+      ),
+    );
+
+    const result = await runner.runParallelStep(makeParallelStep(subStep), state, 'review task', 5, vi.fn());
+
+    expect(runStatusJudgmentPhase).not.toHaveBeenCalled();
+    expect(result.response.status).toBe('error');
+    expect(state.stepOutputs.get('security-review')?.error)
+      .toBe('provider stream parse error: Failed to parse item: report output');
+    expect(state.stepOutputs.get('security-review')?.failureCategory)
+      .toBe(AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR);
+    expect(result.response.failureCategory)
+      .toBe(AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR);
+    expect(result.response.content).toContain('Sub-step diagnostics:');
+    expect(result.response.error).toContain('provider stream parse error: Failed to parse item: report output');
+    expect(result.response.error).not.toBe(result.response.content);
   });
 
   it('keeps blank-content structured output responses successful in ParallelRunner', async () => {

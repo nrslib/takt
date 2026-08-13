@@ -1,3 +1,5 @@
+{{include:instructions/contract-family-decomposition-boundary}}
+
 Decompose the AI Review findings into non-conflicting fix parts. The parent Team Leader must not use tools; it must plan only from the engine-provided previous response below.
 
 **AI Review response:**

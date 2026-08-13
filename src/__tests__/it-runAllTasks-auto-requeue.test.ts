@@ -49,11 +49,6 @@ function createEnv(): TestEnv {
     [
       'name: auto-requeue-it',
       'description: auto requeue integration test',
-      'finding_contract:',
-      '  manager:',
-      '    persona: findings-manager',
-      '    instruction: findings-manager',
-      '    output_contract: findings-manager',
       'max_steps: 2',
       'initial_step: plan',
       'steps:',

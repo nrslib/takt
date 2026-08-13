@@ -1,3 +1,5 @@
+{{include:instructions/contract-family-decomposition-boundary}}
+
 実装タスクを分析し、分解が適切なら複数パートに分けて並列実行してください。
 
 **重要:** 元のタスクと、以下で engine が渡す前ステップの応答を一次情報として使用してください。親 Team Leader 自身はツールを使わず、これらにない事実を補完しません。

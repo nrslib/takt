@@ -10,6 +10,4 @@
 7. 将来の保守者が変更理由、影響範囲、検証方法を追跡できるか確認する
 8. `resolved` 判定は修正差分ではなく、元 finding の期待結果・受入条件・元要件へ戻って確認する
 9. マージを止めるべき品質・保守性の問題だけを、場所・影響・修正方針付きで指摘する
-{{include:instructions/final-gate-new-finding-scope}}
-{{include:instructions/review-family-completion}}
 {{include:instructions/review-pr-context}}

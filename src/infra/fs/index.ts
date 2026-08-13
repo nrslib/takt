@@ -18,6 +18,8 @@ export type {
   NdjsonInteractiveEnd,
   NdjsonCompanionReviewRound,
   NdjsonCompanionQueueCoalesced,
+  NdjsonCompanionCall,
+  NdjsonCompanionReviewSkipped,
   NdjsonCompanionReviewTrigger,
   NdjsonRecord,
 } from './session.js';

@@ -15,8 +15,9 @@ import { getGlobalConfigDir, getProjectConfigDir } from '../paths.js';
 import type { ProviderRoutingEntry } from '../../../core/models/config-types.js';
 import { compileProviderEnvironment, type CompiledProviderEnvironment } from './environment.js';
 import { collectProjectLegacyProviderSignals } from './legacy-signals.js';
-import { resolveRuntimeProviderFile } from './loader.js';
+import { resolveRuntimeProviderFileWithOrigins } from './loader.js';
 import { determineProviderConfigMode } from './mode.js';
+import { createRuntimeProviderResolutionContext } from './resolution-context.js';
 
 export type RuntimeInternalAgent = 'selector' | 'assistant';
 
@@ -30,10 +31,11 @@ export type RuntimeInternalAgent = 'selector' | 'assistant';
 function resolveActiveRuntimeProviderEnvironment(
   projectCwd: string,
 ): CompiledProviderEnvironment | undefined {
-  const runtimeFile = resolveRuntimeProviderFile({
+  const resolvedRuntimeFile = resolveRuntimeProviderFileWithOrigins({
     globalConfigDir: getGlobalConfigDir(),
     projectConfigDir: getProjectConfigDir(projectCwd),
   });
+  const runtimeFile = resolvedRuntimeFile.runtimeFile;
   const { mode } = determineProviderConfigMode({
     runtimeFile,
     legacyProviderSignals: collectProjectLegacyProviderSignals(projectCwd),
@@ -47,7 +49,14 @@ function resolveActiveRuntimeProviderEnvironment(
     // resolveCompiledProviderEnvironment instead of silently falling back to legacy resolution.
     throw new Error('runtime-v1 mode resolved without a provider section');
   }
-  return compileProviderEnvironment({ kind: 'runtime-v1', section });
+  return compileProviderEnvironment({
+    kind: 'runtime-v1',
+    section,
+    resolutionContext: createRuntimeProviderResolutionContext(
+      projectCwd,
+      resolvedRuntimeFile.profileOrigins,
+    ),
+  });
 }
 
 /**
@@ -71,6 +80,7 @@ function defaultsProfileEntry(
     provider: env.provider,
     ...(env.model !== undefined ? { model: env.model } : {}),
     ...(env.providerOptions !== undefined ? { providerOptions: env.providerOptions } : {}),
+    ...(env.permissionMode !== undefined ? { permissionMode: env.permissionMode } : {}),
   };
 }
 

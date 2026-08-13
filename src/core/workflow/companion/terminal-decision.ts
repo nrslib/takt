@@ -22,6 +22,10 @@ export class CompanionTerminalDecisionTracker {
   get(): CompanionLoopDecision {
     return cloneDecision(this.current);
   }
+
+  reset(): void {
+    this.current = { decision: 'continue' };
+  }
 }
 
 function cloneDecision(decision: CompanionLoopDecision): CompanionLoopDecision {

@@ -16,15 +16,6 @@ export function reviewerOperationOrigin(
   });
 }
 
-export function findingIntakeNormalizerOperationOrigin(
-  reviewerStepName: string,
-): FallbackOperationOrigin {
-  return Object.freeze({
-    stage: 'finding_intake_normalizer',
-    reviewerStepName,
-  });
-}
-
 export function sameFallbackOperationOrigin(
   left: FallbackOperationOrigin,
   right: FallbackOperationOrigin,
@@ -67,7 +58,7 @@ export function runtimeForOperation(
       : { ...operationRuntime, providerInfo: baseProviderInfo };
   }
   const resolvedFallbackProviderInfo = fallbackProviderInfo(runtime.fallback);
-  const optionSource = [baseProviderInfo, runtime.providerInfo].find(
+  const optionSource = [runtime.providerInfo, baseProviderInfo].find(
     (providerInfo) =>
       providerInfo?.provider === resolvedFallbackProviderInfo.provider
       && providerInfo?.model === resolvedFallbackProviderInfo.model,
@@ -78,6 +69,9 @@ export function runtimeForOperation(
       ...resolvedFallbackProviderInfo,
       ...(optionSource?.providerOptions !== undefined
         ? { providerOptions: optionSource.providerOptions }
+        : {}),
+      ...(optionSource?.permissionMode !== undefined
+        ? { permissionMode: optionSource.permissionMode }
         : {}),
     },
   };

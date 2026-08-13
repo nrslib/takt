@@ -7,7 +7,6 @@ import { AGENT_FAILURE_CATEGORIES } from '../../shared/types/agent-failure.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
 import { keepsAllowedToolWithoutEdit as keepsClaudeAllowedToolWithoutEdit } from './allowed-tool-edit-policy.js';
 import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from './types.js';
-import { assertOutputSchema } from './types.js';
 
 function createProviderErrorResponse(
   agentName: string,
@@ -44,14 +43,11 @@ function createCaughtProviderErrorResponse(
 function toTerminalOptions(options: ProviderCallOptions): ClaudeTerminalCallOptions {
   const claudeOptions = options.providerOptions?.claude;
   const terminalOptions = options.providerOptions?.claudeTerminal;
-  const skillsEnabled = options.internalAgentIsolation === 'strict-readonly'
-    ? false
-    : claudeOptions?.skills?.enabled;
+  const skillsEnabled = claudeOptions?.skills?.enabled;
   return {
     cwd: options.cwd,
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
-    internalAgentIsolation: options.internalAgentIsolation,
     model: options.model,
     effort: claudeOptions?.effort,
     skillsEnabled,
@@ -75,9 +71,7 @@ function toTerminalOptions(options: ProviderCallOptions): ClaudeTerminalCallOpti
 
 export class ClaudeTerminalProvider implements Provider {
   readonly supportsStructuredOutput = true;
-  readonly supportsIsolatedStructuredExecution = true;
   readonly supportsNativeImageInput = false;
-  readonly supportsStrictInternalAgentIsolation = true;
 
   getRuntimeInstructions(_allowedTools?: string[]): string | null {
     return null;
@@ -104,28 +98,4 @@ export class ClaudeTerminalProvider implements Provider {
     };
   }
 
-  setupIsolatedStructured(config: AgentSetup): ProviderAgent {
-    const { name, systemPrompt } = config;
-    const call = async (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> => {
-      try {
-        const isolatedOptions: ProviderCallOptions = {
-          ...options,
-          sessionId: undefined,
-          internalAgentIsolation: 'strict-readonly',
-          allowedTools: [],
-          mcpServers: undefined,
-          imageAttachments: undefined,
-          outputSchema: assertOutputSchema(options.outputSchema, 'claude-terminal'),
-        };
-        const fullPrompt = systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt;
-        return await callClaudeTerminal(name, fullPrompt, {
-          ...toTerminalOptions(isolatedOptions),
-          systemPrompt: '',
-        });
-      } catch (error) {
-        return createCaughtProviderErrorResponse(name, options, error);
-      }
-    };
-    return { call };
-  }
 }

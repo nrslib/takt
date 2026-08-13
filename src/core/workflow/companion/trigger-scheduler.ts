@@ -3,6 +3,7 @@ import type { CompanionDiff } from './diff-reader.js';
 import {
   CompanionChangeDetector,
   COMPANION_CHANGE_DEBOUNCE_MS,
+  type CompanionChangeSkipReason,
   type CompanionChangeCandidate,
 } from './change-detector.js';
 import { isGitCommitCommand } from './git-command.js';
@@ -19,6 +20,7 @@ export class CompanionTriggerScheduler {
   private readonly knownSnapshotGenerations = new Map<string, number>();
   private snapshotOperation: Promise<void> = Promise.resolve();
   private evaluationEpoch = 0;
+  private lifecycleGeneration = 0;
   private readonly pendingBash = new Map<string, {
     readonly detectors: ReadonlyMap<string, {
       readonly dirty: boolean;
@@ -38,6 +40,11 @@ export class CompanionTriggerScheduler {
     readonly readSnapshot: () => Promise<CompanionDiff>;
     readonly isAborted: () => boolean;
     readonly onError: () => void;
+    readonly onSkipped?: (input: {
+      readonly companionName: string;
+      readonly reason: CompanionChangeSkipReason;
+      readonly candidate: CompanionChangeCandidate;
+    }) => void;
   }) {
     this.knownSnapshot = input.initialSnapshot;
     for (const [name, detector] of input.detectors) {
@@ -78,13 +85,13 @@ export class CompanionTriggerScheduler {
 
   start(): void {
     this.completing = false;
+    this.lifecycleGeneration += 1;
     if (this.pollTimer !== undefined || this.input.intervals.length === 0) return;
     const interval = Math.max(250, Math.min(...this.input.intervals));
     this.pollTimer = setInterval(() => void this.evaluateNow(), interval);
   }
 
   beginCompletion(): void {
-    this.completing = true;
     this.stop();
   }
 
@@ -96,6 +103,8 @@ export class CompanionTriggerScheduler {
   }
 
   stop(): void {
+    this.completing = true;
+    this.lifecycleGeneration += 1;
     if (this.pollTimer !== undefined) {
       clearInterval(this.pollTimer);
       this.pollTimer = undefined;
@@ -118,6 +127,7 @@ export class CompanionTriggerScheduler {
     if (candidates.length === 0) return;
     this.evaluating = true;
     this.evaluationEpoch += 1;
+    const lifecycleGeneration = this.lifecycleGeneration;
     const evaluationGenerations = new Map([...this.input.detectors].map(([name, detector]) => [
       name,
       detector.getObservedGeneration(),
@@ -125,7 +135,11 @@ export class CompanionTriggerScheduler {
     try {
       const snapshot = await this.runSnapshotOperation(async () => {
         const current = await this.input.readSnapshot();
-        if (this.completing || this.input.isAborted()) return undefined;
+        if (
+          this.completing
+          || this.input.isAborted()
+          || this.lifecycleGeneration !== lifecycleGeneration
+        ) return undefined;
         this.knownSnapshot = current;
         for (const [name, generation] of evaluationGenerations) {
           this.knownSnapshotGenerations.set(name, generation);
@@ -134,8 +148,21 @@ export class CompanionTriggerScheduler {
       });
       if (snapshot === undefined) return;
       await Promise.all(candidates.map(async ({ name, detector, candidate }) => {
-        const trigger = await detector.evaluateCandidate(candidate, snapshot);
-        if (trigger === undefined || this.completing) return;
+        let skippedReason: CompanionChangeSkipReason | undefined;
+        const trigger = await detector.evaluateCandidate(candidate, snapshot, (reason) => {
+          skippedReason = reason;
+        });
+        const staleEvaluation = this.completing
+          || this.input.isAborted()
+          || this.lifecycleGeneration !== lifecycleGeneration;
+        if (skippedReason !== undefined && !staleEvaluation) {
+          this.input.onSkipped?.({
+            companionName: name,
+            reason: skippedReason,
+            candidate,
+          });
+        }
+        if (trigger === undefined || staleEvaluation) return;
         await this.input.queue.enqueue({ companionName: name, ...trigger });
       }));
     } catch (error) {

@@ -5,13 +5,11 @@
  * sub-step output with `[name]` for readable interleaved display.
  */
 
-import type { InternalAgentSeats } from '../../models/config-types.js';
 import type {
   WorkflowStep,
   AgentWorkflowStep,
   WorkflowState,
   AgentResponse,
-  WorkflowConfig,
   WorkflowMaxSteps,
   WorkflowResumePointEntry,
 } from '../../models/types.js';
@@ -31,34 +29,10 @@ import type { RuntimeStepResolution } from '../types.js';
 import type { ParallelLoggerOptions } from './parallel-logger.js';
 import type { RunAgentOptions } from '../../../agents/types.js';
 import { createRoutingScope, resolveAutoRoutingBatch } from '../auto-routing/resolver.js';
-import { buildRoutingFindings, buildRoutingWorkSnapshot } from '../auto-routing/snapshot.js';
+import { buildRoutingWorkSnapshot } from '../auto-routing/snapshot.js';
 import type { QualityGateRunResult } from '../quality-gates/types.js';
 import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
-import type { FindingContractConfig } from '../../models/types.js';
-import type { FindingManagerAuthority } from '../../models/finding-types.js';
-import type { FindingLedgerStore } from '../findings/store.js';
-import type { FindingManagerRunResult } from '../findings/manager-runner.js';
-import {
-  assertFindingContractReviewerStep,
-  ingestFindingContractResults,
-  resolveFindingContractIntakeStep,
-} from '../findings/contract-intake.js';
-import type { FindingManagerSubStepResult } from '../findings/manager-runner.js';
-import {
-  runFindingRestatementSlot,
-  type FindingRestatementSlotTerminalOutcome,
-} from '../findings/restatement-slot-runner.js';
-import { resolveReviewIntegrityLimits } from '../findings/review-integrity.js';
-import type { ReviewerRelationClarification } from '../findings/relation-coherence.js';
-import {
-  reviewReportProtocolRejectionResponse,
-  type ReviewReportProtocolRejection,
-} from '../findings/review-report-protocol.js';
-import type { CanonicalFindingReviewPublication } from '../findings/review-publication.js';
-import {
-  recordVerdictClaimsMismatchAnomalies,
-  type VerdictClaimsMismatchObservation,
-} from '../findings/verdict-claims-integrity.js';
+import { truncateUtf8PreservingMarker } from '../../../shared/utils/text.js';
 import type { WorkflowCallRunner } from './WorkflowCallRunner.js';
 import {
   getWorkflowCallChildExecutionState,
@@ -80,22 +54,24 @@ import {
 } from './phase1-empty-recovery.js';
 import {
   fallbackContextForOperation,
-  findingIntakeNormalizerOperationOrigin,
   reviewerOperationOrigin,
   runtimeForOperation,
 } from './fallback-operation.js';
 import type { DynamicParallelSelectorCoordinator } from '../dynamic-parallel/selector-coordinator.js';
 import { validateProviderModelRequirements } from '../provider-model-requirements.js';
+import { formatReviewCompletionDiagnostic } from '../review-completion.js';
+import {
+  AGENT_FAILURE_CATEGORIES,
+  MAX_AGENT_FAILURE_MESSAGE_BYTES,
+  createProviderStreamParseError,
+  isProviderStreamParseError,
+} from '../../../shared/types/agent-failure.js';
 
 const log = createLogger('parallel-runner');
 
 type ParallelSubStepResult = {
   subStep: WorkflowStep;
   response: AgentResponse;
-  publication?: CanonicalFindingReviewPublication;
-  /** 報告側原因で publication が成立しなかったレビュアー。親が anomaly として記録する。 */
-  reportRejection?: ReviewReportProtocolRejection;
-  relationClarification?: ReviewerRelationClarification;
   instruction: string;
   providerInfo?: StepRunResult['providerInfo'];
   durationMs?: number;
@@ -104,8 +80,8 @@ type ParallelSubStepResult = {
   workflowCallStateSync?: WorkflowCallIsolatedStateSync;
   workflowCallFailure?: StepRunResult['workflowCallFailure'];
   workflowCallExecutionRejected?: boolean;
+  executionRejected?: boolean;
   terminalOperation?: StepRunResult['terminalOperation'];
-  reviewerRuntime?: RuntimeStepResolution;
 };
 
 type ParallelTerminalStatus = 'error' | 'blocked' | 'rate_limited';
@@ -158,16 +134,7 @@ export interface ParallelRunnerDeps {
   readonly observabilityRunId?: string;
   readonly sanitizeObservabilityText?: (text: string) => string;
   readonly getCurrentWorkflowStack?: () => WorkflowResumePointEntry[] | undefined;
-  readonly refreshFindingsState: () => void;
   readonly emitEvent: (event: string, ...args: unknown[]) => void;
-  readonly findingContract?: FindingContractConfig;
-  /** runtime.yaml `provider.targets.internal_agents` の解決済み seat。StepExecutor へそのまま渡る。 */
-  readonly internalAgentSeats?: InternalAgentSeats;
-  readonly findingManagerAuthority: FindingManagerAuthority;
-  /** findings-manager の provider/model 未指定時の fallback（manager-runner.ts 参照）。 */
-  readonly workflowProvider?: WorkflowConfig['provider'];
-  readonly workflowModel?: WorkflowConfig['model'];
-  readonly findingLedgerStore?: FindingLedgerStore;
   readonly getWorkflowCallRunner?: () => WorkflowCallRunner;
   readonly claimStepOccurrence: (
     step: WorkflowStep,
@@ -180,9 +147,6 @@ export interface ParallelRunnerDeps {
     occurrence: number,
   ) => void;
   readonly getRunId: () => string;
-  readonly reviewPublicationDir: string;
-  /** raw finding id 衝突対策の呼び出し名前空間。トップレベルでは空文字列。 */
-  readonly getFindingCallNamespace: () => string;
   readonly runQualityGates: (options: {
     qualityGates: WorkflowStep['qualityGates'];
     projectRoot: string;
@@ -219,8 +183,6 @@ export interface ParallelRunnerDeps {
 }
 
 export class ParallelRunner {
-  private findingContractFreezeSequence = 0;
-
   constructor(
     private readonly deps: ParallelRunnerDeps,
   ) {}
@@ -245,9 +207,6 @@ export class ParallelRunner {
       ? await this.deps.dynamicParallelSelector.selectParticipants(step, state, task)
       : step.parallel;
     this.deps.engineOptions.abortSignal?.throwIfAborted();
-    // 直前ステップ（通常は coder の fix）の応答。異議申告の裁定材料として
-    // manager に渡すため、サブステップ実行で lastOutput が変わる前に捕捉する。
-    const priorStepResponseText = state.lastOutput?.content;
     const stepIteration = activeStepIteration ?? incrementStepIteration(state, step.name);
     log.debug('Running parallel step', {
       step: step.name,
@@ -283,9 +242,6 @@ export class ParallelRunner {
       });
       return [subStep.name, providerInfo];
     }));
-    const routingLedger = this.deps.engineOptions.autoRouting && agentSubSteps.length > 0
-      ? this.deps.findingLedgerStore?.loadLedger()
-      : undefined;
     const routedProviderInfoByStep = this.deps.engineOptions.autoRouting
       ? await resolveAutoRoutingBatch({
           autoRouting: this.deps.engineOptions.autoRouting,
@@ -317,7 +273,6 @@ export class ParallelRunner {
                 passPreviousResponse: subStep.passPreviousResponse === true,
               },
               lastOutput: state.lastOutput?.content,
-              findings: buildRoutingFindings(routingLedger),
               sensitiveValues: this.deps.engineOptions.routingSensitiveValues,
             }),
             currentProviderInfo: configuredProviderInfoByStep.get(subStep.name)!,
@@ -328,29 +283,6 @@ export class ParallelRunner {
           abortSignal: this.deps.engineOptions.abortSignal,
         })
       : new Map();
-    const findingContractFreezeKey = `${step.name}\0${stepIteration}\0${++this.findingContractFreezeSequence}`;
-    const baseFindingContractContext = this.deps.findingContract
-      && agentSubSteps[0] !== undefined
-        ? this.deps.optionsBuilder.buildFindingContractInstructionContext(
-          agentSubSteps[0],
-          true,
-          undefined,
-          findingContractFreezeKey,
-        )
-      : undefined;
-    const sharedReviewerContext = baseFindingContractContext?.reviewer;
-    if (
-      this.deps.findingContract !== undefined
-      && agentSubSteps.length > 0
-      && (
-        sharedReviewerContext === undefined
-        || sharedReviewerContext.reviewScopeSnapshotId.length === 0
-      )
-    ) {
-      throw new Error(
-        'Parallel Finding Contract reviewers require one shared review scope snapshot',
-      );
-    }
     const workflowCallResumeStack = subSteps.some(isWorkflowCallStep)
       ? this.requireWorkflowCallResumeStack(step, stepIteration)
       : undefined;
@@ -451,27 +383,6 @@ export class ParallelRunner {
             reviewerOperationOrigin(subStep.name),
             routedRuntime?.providerInfo,
           );
-          const publicationResumeRuntime = runtimeForOperation(
-            routedRuntime,
-            findingIntakeNormalizerOperationOrigin(subStep.name),
-            routedRuntime?.providerInfo,
-          );
-          const findingContractContext = this.deps.findingContract !== undefined
-            ? this.deps.optionsBuilder.buildFindingContractInstructionContext(
-                subStep,
-                true,
-                sharedReviewerContext?.reviewScopeSnapshotId,
-                findingContractFreezeKey,
-              )
-            : undefined;
-          if (this.deps.findingContract !== undefined && findingContractContext?.reviewer === undefined) {
-            throw new Error(
-              'Parallel Finding Contract reviewers require one shared review scope snapshot',
-            );
-          }
-          if (findingContractContext !== undefined) {
-            assertFindingContractReviewerStep(subStep);
-          }
           const preparedSubStep = preparedAgentSubSteps.get(subStep.name);
           if (preparedSubStep === undefined) {
             throw new Error(`Prepared parallel sub-step is missing for "${subStep.name}"`);
@@ -487,9 +398,6 @@ export class ParallelRunner {
               subRuntime,
               reviewerOperationOrigin(subStep.name),
             ),
-            findingContractContext === undefined
-              ? undefined
-              : { mode: 'explicit', context: findingContractContext },
           );
           const phase1Instruction = subInstruction;
           subStepInstructionByName.set(subStep.name, phase1Instruction);
@@ -502,105 +410,6 @@ export class ParallelRunner {
             state,
             interactive: this.deps.getInteractive(),
           };
-
-        if (findingContractContext !== undefined) {
-          const resumedPublication = await this.deps.stepExecutor
-            .resumeFindingReviewPublication({
-              step: subStep,
-              parentStepName: step.name,
-              stepIteration,
-              state,
-              runtime: publicationResumeRuntime,
-              presentationContext: findingContractContext?.reviewer?.presentationContext,
-              reviewerCallMode: 'review',
-            });
-          if (resumedPublication !== undefined) {
-            if ('terminalResponse' in resumedPublication) {
-              state.stepOutputs.set(
-                subStep.name,
-                resumedPublication.terminalResponse,
-              );
-              return {
-                subStep,
-                response: resumedPublication.terminalResponse,
-                instruction: phase1Instruction,
-                providerInfo: resumedPublication.reviewerProviderInfo ?? subPm,
-                reviewerRuntime: resumedPublication.reviewerRuntime,
-                terminalOperation: resumedPublication.terminalOperation,
-                durationMs: Math.max(
-                  0,
-                  resumedPublication.terminalResponse.timestamp.getTime() - startedAt,
-                ),
-              };
-            }
-            // 報告側原因の拒否でも、受理時とまったく同じ後処理を通す。
-            // ここで早期 return すると quality gate 失敗が resume だけ検出されず、
-            // step report も経路依存で欠ける（review-report-protocol.ts の
-            // 「初回でも resume でも同じ扱い」という設計と食い違う）。
-            const resumedResponse = 'reportRejection' in resumedPublication
-              ? reviewReportProtocolRejectionResponse({
-                  stepName: subStep.name,
-                  reportContent: resumedPublication.reportRejection.reportContent,
-                })
-              : resumedPublication.response;
-            const qualityGateResult = await this.deps.runQualityGates({
-              qualityGates: subStep.qualityGates,
-              projectRoot: this.deps.getCwd(),
-              step: subStep,
-              childProcessEnv: this.deps.engineOptions.childProcessEnv,
-            });
-            if (!qualityGateResult.ok) {
-              state.stepOutputs.set(subStep.name, qualityGateResult.response);
-              return {
-                subStep,
-                response: qualityGateResult.response,
-                instruction: phase1Instruction,
-                providerInfo: subPm,
-                durationMs: Math.max(
-                  0,
-                  qualityGateResult.response.timestamp.getTime() - startedAt,
-                ),
-                qualityGateFailure: true,
-              };
-            }
-            state.stepOutputs.set(subStep.name, resumedResponse);
-            this.deps.stepExecutor.emitStepReports(
-              subStep,
-              {
-                iteration: parentIteration,
-                resumeStepName: step.name,
-                stepIteration: subIteration,
-                providerInfo: resumedPublication.reviewerProviderInfo ?? subPm,
-              },
-            );
-            return {
-              subStep,
-              ...('reportRejection' in resumedPublication
-                ? {
-                    reportRejection: {
-                      reviewerStepName: subStep.name,
-                      reviewerPersonaKey: subStep.persona ?? subStep.name,
-                      reportContent: resumedPublication.reportRejection.reportContent,
-                      reason: resumedPublication.reportRejection.reason,
-                    },
-                  }
-                : {
-                    publication: resumedPublication.publication,
-                    ...(resumedPublication.relationClarification !== undefined
-                      ? { relationClarification: resumedPublication.relationClarification }
-                      : {}),
-                  }),
-              response: resumedResponse,
-              instruction: phase1Instruction,
-              providerInfo: resumedPublication.reviewerProviderInfo ?? subPm,
-              reviewerRuntime: resumedPublication.reviewerRuntime,
-              durationMs: Math.max(
-                0,
-                resumedResponse.timestamp.getTime() - startedAt,
-              ),
-            };
-          }
-        }
 
         // Session key uses the same resolved provider as Phase 1 options and resume phases.
         const subSessionKey = buildSessionKey(executableSubStep, {
@@ -657,9 +466,24 @@ export class ParallelRunner {
                     sessionId,
                     onPromptResolved,
                   },
+                  executableSubStep.reviewCompletion === undefined,
                 )
               ),
               onPhaseStart: this.deps.onPhaseStart,
+              ...(executableSubStep.reviewCompletion === undefined
+                ? {}
+                : {
+                    onPhaseComplete: this.deps.onPhaseComplete,
+                    failurePersona: executableSubStep.persona ?? executableSubStep.name,
+                    recordFailure: () => recordAgentUsageEvent(
+                      this.deps.engineOptions,
+                      subStep.name,
+                      'parallel',
+                      subPm,
+                      false,
+                      undefined,
+                    ),
+                  }),
             });
             if (result.promptResolved) {
               promptResolvedAttempts.add(attempt.sequence);
@@ -684,9 +508,19 @@ export class ParallelRunner {
                 onPhaseComplete: this.deps.onPhaseComplete,
               });
             }
+            if (executableSubStep.reviewCompletion !== undefined) {
+              recordAgentUsageEvent(
+                this.deps.engineOptions,
+                subStep.name,
+                'parallel',
+                subPm,
+                supersededResponse.status === 'done',
+                supersededResponse.providerUsage,
+              );
+            }
           },
         });
-        const subResponse = phase1Result.response;
+        let subResponse = phase1Result.response;
         if (!promptResolvedAttempts.has(phase1Result.finalAttempt.sequence)) {
           throw new Error(`Missing prompt parts for phase start: ${subStep.name}:1`);
         }
@@ -698,13 +532,32 @@ export class ParallelRunner {
         if (subResponse.sessionId !== undefined) {
           updatePersonaSession(subSessionKey, subResponse.sessionId);
         }
-        completeObservedPhase1Attempt({
-          eventStep: subStep,
-          iteration: parentIteration,
-          attempt: phase1Result.finalAttempt,
-          response: subResponse,
-          onPhaseComplete: this.deps.onPhaseComplete,
-        });
+        if (executableSubStep.reviewCompletion !== undefined) {
+          subResponse = this.deps.stepExecutor.finalizeObservedReviewerAttempt({
+            eventStep: subStep,
+            executableStep: executableSubStep,
+            iteration: parentIteration,
+            attempt: phase1Result.finalAttempt,
+            response: subResponse,
+            runtime: subRuntime,
+            recordUsage: (success, usage) => recordAgentUsageEvent(
+              this.deps.engineOptions,
+              subStep.name,
+              'parallel',
+              subPm,
+              success,
+              usage,
+            ),
+          });
+        } else {
+          completeObservedPhase1Attempt({
+            eventStep: subStep,
+            iteration: parentIteration,
+            attempt: phase1Result.finalAttempt,
+            response: subResponse,
+            onPhaseComplete: this.deps.onPhaseComplete,
+          });
+        }
         if (subResponse.status === 'error' || subResponse.status === 'blocked' || subResponse.status === 'rate_limited') {
           state.stepOutputs.set(subStep.name, subResponse);
           return {
@@ -724,87 +577,122 @@ export class ParallelRunner {
           };
         }
 
-        let publication: CanonicalFindingReviewPublication | undefined;
-        let reportRejection: ReviewReportProtocolRejection | undefined;
-        let relationClarification: ReviewerRelationClarification | undefined;
-        let finalResponse = subResponse;
-        let completedReviewerProviderInfo = subPm;
-        let completedReviewerRuntime: RuntimeStepResolution = {
-          providerInfo: subPm,
-        };
-        if (findingContractContext !== undefined) {
-          const prepared = await this.deps.stepExecutor.prepareFindingReviewPublication({
-            step: subStep,
-            executableStep: executableSubStep,
-            // Phase 1 で凍結した context をそのまま Phase 2 へ渡す。組み直すと
-            // ledger と提示回数を読み直して再提示 batch が Phase 1 とずれる。
-            findingContractContext,
-            parentStepName: step.name,
-            stepIteration,
-            state,
-            phase1Response: subResponse,
-            agentOptions,
-            onProviderAttempt: (attemptProviderInfo, success, usage) => {
-              recordAgentUsageEvent(
-                this.deps.engineOptions,
-                subStep.name,
-                'parallel',
-                attemptProviderInfo,
-                success,
-                usage,
-              );
+        let reviewCompletionDiagnostic: string | undefined;
+        if (executableSubStep.reviewCompletion !== undefined) {
+          let reviewerPhaseExecutionSequence = phase1Result.finalAttempt.sequence + 1;
+          const completion = await this.deps.stepExecutor.completeReviewerResponse({
+            step: executableSubStep,
+            originalInstruction: phase1Instruction,
+            initialResponse: subResponse,
+            executeRetry: async (instruction, sessionId) => {
+              const observedAttempts = new Map<number, typeof phase1Result.finalAttempt>();
+              const resolveObservedAttempt = (attempt: typeof phase1Result.finalAttempt) => {
+                const existing = observedAttempts.get(attempt.sequence);
+                if (existing !== undefined) return existing;
+                const created = { ...attempt, sequence: reviewerPhaseExecutionSequence++ };
+                observedAttempts.set(attempt.sequence, created);
+                return created;
+              };
+              const retry = await runPhase1WithEmptyRecovery({
+                instruction,
+                initialSessionId: sessionId,
+                retryProviderErrorFresh: false,
+                execute: async (attempt) => {
+                  const observedAttempt = resolveObservedAttempt(attempt);
+                  const observed = await executeObservedPhase1Attempt({
+                    enabled: this.deps.observabilityEnabled,
+                    runId: this.deps.observabilityRunId,
+                    workflowName: this.deps.getWorkflowName(),
+                    eventStep: subStep,
+                    spanStep: executableSubStep,
+                    iteration: parentIteration,
+                    attempt: observedAttempt,
+                    workflowStack: this.deps.getCurrentWorkflowStack?.(),
+                    sanitizeText: this.deps.sanitizeObservabilityText,
+                    providerInfo: subPm,
+                    execute: (attemptInstruction, attemptSessionId, onPromptResolved) => (
+                      this.executeSubStepAgent(
+                        executableSubStep,
+                        subPm,
+                        attemptInstruction,
+                        { ...agentOptions, sessionId: attemptSessionId, onPromptResolved },
+                        false,
+                      )
+                    ),
+                    onPhaseStart: this.deps.onPhaseStart,
+                    onPhaseComplete: this.deps.onPhaseComplete,
+                    failurePersona: executableSubStep.persona ?? executableSubStep.name,
+                    recordFailure: () => recordAgentUsageEvent(
+                      this.deps.engineOptions,
+                      subStep.name,
+                      'parallel',
+                      subPm,
+                      false,
+                      undefined,
+                    ),
+                  });
+                  return observed.response;
+                },
+                discardSession: () => undefined,
+                recordSupersededAttempt: (response, attempt) => {
+                  const observedAttempt = resolveObservedAttempt(attempt);
+                  completeObservedPhase1Attempt({
+                    eventStep: subStep,
+                    iteration: parentIteration,
+                    attempt: observedAttempt,
+                    response,
+                    onPhaseComplete: this.deps.onPhaseComplete,
+                  });
+                  recordAgentUsageEvent(
+                    this.deps.engineOptions,
+                    subStep.name,
+                    'parallel',
+                    subPm,
+                    response.status === 'done',
+                    response.providerUsage,
+                  );
+                },
+              });
+              return this.deps.stepExecutor.finalizeObservedReviewerAttempt({
+                eventStep: subStep,
+                executableStep: executableSubStep,
+                iteration: parentIteration,
+                attempt: resolveObservedAttempt(retry.finalAttempt),
+                response: retry.response,
+                runtime: subRuntime,
+                recordUsage: (success, usage) => recordAgentUsageEvent(
+                  this.deps.engineOptions,
+                  subStep.name,
+                  'parallel',
+                  subPm,
+                  success,
+                  usage,
+                ),
+              });
             },
-            updatePersonaSession,
-            runtime: subRuntime,
-            presentationContext: findingContractContext?.reviewer?.presentationContext,
-            reviewerCallMode: 'review',
           });
-          if ('terminalResponse' in prepared) {
-            state.stepOutputs.set(subStep.name, prepared.terminalResponse);
+          subResponse = completion.response;
+          updatePersonaSession(subSessionKey, completion.reviewerSessionId);
+          reviewCompletionDiagnostic = completion.diagnostic === undefined
+            ? undefined
+            : formatReviewCompletionDiagnostic(
+                completion.diagnostic,
+                this.deps.engineOptions.language,
+              );
+          if (subResponse.status === 'error' || subResponse.status === 'blocked' || subResponse.status === 'rate_limited') {
+            state.stepOutputs.set(subStep.name, subResponse);
             return {
               subStep,
-              response: prepared.terminalResponse,
+              response: subResponse,
               instruction: phase1Instruction,
-              providerInfo: prepared.reviewerProviderInfo ?? subPm,
-              reviewerRuntime: prepared.reviewerRuntime,
-              ...(prepared.terminalOperation !== undefined
-                ? { terminalOperation: prepared.terminalOperation }
-                : {}),
-              durationMs: Math.max(
-                0,
-                prepared.terminalResponse.timestamp.getTime() - startedAt,
-              ),
+              providerInfo: subPm,
+              durationMs: Math.max(0, subResponse.timestamp.getTime() - startedAt),
             };
           }
-          if ('reportRejection' in prepared) {
-            // 報告側原因（rawExcerpt が報告本文へ束縛できない）。この sub-step は
-            // publication を持たないまま続行し、親が anomaly として記録する。
-            reportRejection = {
-              reviewerStepName: subStep.name,
-              reviewerPersonaKey: subStep.persona ?? subStep.name,
-              reportContent: prepared.reportRejection.reportContent,
-              reason: prepared.reportRejection.reason,
-            };
-            // ルールが読む本文は resume 経路と同じく「拒否されたその報告」にそろえる。
-            finalResponse = reviewReportProtocolRejectionResponse({
-              stepName: subStep.name,
-              reportContent: prepared.reportRejection.reportContent,
-            });
-            completedReviewerProviderInfo = prepared.reviewerProviderInfo ?? subPm;
-            completedReviewerRuntime = prepared.reviewerRuntime ?? {
-              providerInfo: completedReviewerProviderInfo,
-            };
-          } else {
-            publication = prepared.publication;
-            relationClarification = prepared.relationClarification;
-            finalResponse = prepared.response;
-            completedReviewerProviderInfo = prepared.reviewerProviderInfo ?? subPm;
-            completedReviewerRuntime = prepared.reviewerRuntime ?? {
-              providerInfo: completedReviewerProviderInfo,
-            };
-          }
-        } else {
-          const phaseCtx = this.deps.optionsBuilder.buildPhaseRunnerContext(
+        }
+
+        let finalResponse = subResponse;
+        const basePhaseContext = this.deps.optionsBuilder.buildPhaseRunnerContext(
             subStep,
             state,
             subResponse.content,
@@ -829,6 +717,9 @@ export class ParallelRunner {
               );
             },
           );
+          const phaseCtx = reviewCompletionDiagnostic === undefined
+            ? basePhaseContext
+            : { ...basePhaseContext, reviewCompletionDiagnostic };
           if (subStep.outputContracts && subStep.outputContracts.length > 0) {
             try {
               const reportResult = await runReportPhase(subStep, subIteration, phaseCtx);
@@ -877,6 +768,9 @@ export class ParallelRunner {
               }
             } catch (reportError) {
               if (reportError instanceof ReportPhaseGenerationError) {
+                if (reportError.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR) {
+                  throw createProviderStreamParseError(reportError.failureMessage ?? getErrorMessage(reportError));
+                }
                 log.info(
                   'Report phase failed for parallel sub-step, continuing to status judgment',
                   {
@@ -908,14 +802,13 @@ export class ParallelRunner {
             }
             throw error;
           }
-          finalResponse = match
-            ? {
-                ...subResponse,
-                matchedRuleIndex: match.index,
-                matchedRuleMethod: match.method,
-              }
-            : subResponse;
-        }
+        finalResponse = match
+          ? {
+              ...subResponse,
+              matchedRuleIndex: match.index,
+              matchedRuleMethod: match.method,
+            }
+          : subResponse;
 
         const qualityGateResult = await this.deps.runQualityGates({
           qualityGates: subStep.qualityGates,
@@ -942,19 +835,15 @@ export class ParallelRunner {
             iteration: parentIteration,
             resumeStepName: step.name,
             stepIteration: subIteration,
-            providerInfo: completedReviewerProviderInfo,
+            providerInfo: subPm,
           },
         );
 
         return {
           subStep,
           response: finalResponse,
-          ...(publication !== undefined ? { publication } : {}),
-          ...(reportRejection !== undefined ? { reportRejection } : {}),
-          ...(relationClarification !== undefined ? { relationClarification } : {}),
           instruction: phase1Instruction,
-          providerInfo: completedReviewerProviderInfo,
-          reviewerRuntime: completedReviewerRuntime,
+          providerInfo: subPm,
           durationMs: Math.max(0, finalResponse.timestamp.getTime() - startedAt),
         };
         } finally {
@@ -979,6 +868,9 @@ export class ParallelRunner {
         content: '',
         timestamp: new Date(),
         error: errorMsg,
+        ...(isProviderStreamParseError(result.reason)
+          ? { failureCategory: result.reason.failureCategory }
+          : {}),
       };
       state.stepOutputs.set(failedStep.name, errorResponse);
       const startedAt = subStepStartedAtByName.get(failedStep.name);
@@ -989,6 +881,7 @@ export class ParallelRunner {
         response: errorResponse,
         instruction: instruction === undefined ? '' : instruction,
         providerInfo: routedProviderInfoByStep.get(failedStep.name),
+        executionRejected: true,
         durationMs: startedAt === undefined
           ? 0
           : Math.max(0, errorResponse.timestamp.getTime() - startedAt),
@@ -1020,6 +913,22 @@ export class ParallelRunner {
     }
 
     const terminalResults = this.collectTerminalResults(subResults);
+    const parseFailureResult = terminalResults.find(
+      (result) => result.response.failureCategory
+        === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+    );
+    if (parseFailureResult) {
+      return this.createTerminalParentResult({
+        step,
+        state,
+        stepIteration,
+        subResults,
+        terminalResults,
+        status: 'error',
+        providerInfo: parseFailureResult.providerInfo ?? parentPm,
+        primaryFailure: parseFailureResult,
+      });
+    }
     const rateLimitedResult = terminalResults.find((r) => r.response.status === 'rate_limited');
     if (rateLimitedResult) {
       return this.createTerminalParentResult({
@@ -1030,12 +939,16 @@ export class ParallelRunner {
         terminalResults,
         status: 'rate_limited',
         providerInfo: rateLimitedResult.providerInfo ?? parentPm,
-        terminalOperation: rateLimitedResult.terminalOperation,
+        primaryFailure: rateLimitedResult,
       });
     }
 
     const errorResults = terminalResults.filter((r) => r.response.status === 'error');
     if (errorResults.length > 0) {
+      const primaryFailure = this.firstFailureResult(errorResults);
+      if (primaryFailure === undefined) {
+        throw new Error(`Parallel step "${step.name}" has no primary error result`);
+      }
       return this.createTerminalParentResult({
         step,
         state,
@@ -1043,12 +956,17 @@ export class ParallelRunner {
         subResults,
         terminalResults,
         status: 'error',
-        providerInfo: errorResults[0]?.providerInfo ?? parentPm,
+        providerInfo: primaryFailure.providerInfo ?? parentPm,
+        primaryFailure,
       });
     }
 
     const blockedResults = terminalResults.filter((r) => r.response.status === 'blocked');
     if (blockedResults.length > 0) {
+      const primaryFailure = blockedResults[0];
+      if (primaryFailure === undefined) {
+        throw new Error(`Parallel step "${step.name}" has no primary blocked result`);
+      }
       return this.createTerminalParentResult({
         step,
         state,
@@ -1056,8 +974,8 @@ export class ParallelRunner {
         subResults,
         terminalResults: blockedResults,
         status: 'blocked',
-        providerInfo: blockedResults[0]?.providerInfo ?? parentPm,
-        terminalOperation: blockedResults[0]?.terminalOperation,
+        providerInfo: primaryFailure.providerInfo ?? parentPm,
+        primaryFailure,
       });
     }
 
@@ -1084,152 +1002,6 @@ export class ParallelRunner {
           stepIteration,
         },
       };
-    }
-
-    const sharedReviewScopeSnapshotId = sharedReviewerContext?.reviewScopeSnapshotId;
-
-    // 報告側原因で取り込めなかったレビュアーは、manager の取り込みより先に
-    // anomaly として記録する。round marker は成立した publication の ID から
-    // 導くので manager と同じ値になり、二重計上しない。
-    const reportRejections = subResults.flatMap((result) => (
-      result.reportRejection === undefined ? [] : [result.reportRejection]
-    ));
-    if (reportRejections.length > 0) {
-      await this.deps.stepExecutor.recordReviewReportProtocolRejections({
-        parentStepName: step.name,
-        stepIteration,
-        publicationIds: subResults.flatMap((result) => (
-          result.publication === undefined ? [] : [result.publication.publicationId]
-        )),
-        rejections: reportRejections,
-      });
-    }
-
-    // 全 reviewer の canonical publication が揃った後に一度だけ取り込む。
-    // ここより前の失敗では ledger と rules のどちらも動かさない。
-    const managerResult = await this.runFindingContractManager(
-      step,
-      stepIteration,
-      state.iteration,
-      subResults,
-      priorStepResponseText,
-    );
-
-    const postExecutionRuntime = runtime?.fallback === undefined
-      ? runtime
-      : { ...runtime, fallback: undefined };
-    const findingContract = this.deps.findingContract;
-    if (findingContract !== undefined) {
-      const reviewerObservations: VerdictClaimsMismatchObservation[] = [];
-      for (const result of subResults) {
-        if (!isAgentParallelSubStep(result.subStep)) {
-          continue;
-        }
-        const subRuntime = result.reviewerRuntime
-          ?? (
-            result.providerInfo === undefined
-              ? postExecutionRuntime
-              : {
-                  ...postExecutionRuntime,
-                  providerInfo: result.providerInfo,
-                }
-          );
-        // 報告側原因のレビュアーもここまでは同じ扱いにする。ルールを適用せずに
-        // 飛ばすと、そのサブステップのラベルが確定せず親の all() / any() 集計が
-        // 壊れる（report rejection は「レビューが無かった」ではない）。
-        result.response = await this.deps.stepExecutor.applyPostExecutionRulesOnly(
-          result.subStep,
-          state,
-          result.response,
-          updatePersonaSession,
-          subRuntime,
-        );
-        state.stepOutputs.set(result.subStep.name, result.response);
-        const publication = result.publication;
-        if (publication === undefined) {
-          if (result.reportRejection !== undefined) {
-            // publication が無いので verdict/claims の突き合わせ対象にならない。
-            // このレビュアーの記録は protocol-anomaly 側で済んでいる。
-            continue;
-          }
-          throw new Error(
-            `Finding contract reviewer "${result.subStep.name}" has no canonical publication`,
-          );
-        }
-        reviewerObservations.push({
-          step: result.subStep,
-          response: result.response,
-          publication,
-        });
-      }
-      // 判定が確定した直後に、非承認判定 + claim ゼロ件を台帳へ残す。親の
-      // 集約ルール（when(findings.*)）より前でなければ、非承認判定が
-      // COMPLETE で上書きされる。取り込みが走らなかったラウンド
-      // （FC レビュアー 0 件）は round marker が無いので記録対象も無い。
-      if (managerResult !== undefined) {
-        await recordVerdictClaimsMismatchAnomalies({
-          ledgerStore: this.deps.findingLedgerStore,
-          findingContract,
-          observations: reviewerObservations,
-          interactive: this.deps.getInteractive(),
-          runId: this.deps.getRunId(),
-          parentStepName: step.name,
-          roundMarker: managerResult.roundMarker,
-          timestamp: new Date().toISOString(),
-          refreshFindingsState: this.deps.refreshFindingsState,
-        });
-      }
-    }
-
-    // 言い直しはレビューラウンドへ相乗りさせず、manager 取り込みが終わった
-    // 直後に、言い直し待ちの anomaly を持つレビュアーごとの直接呼び出しとして
-    // 発行する。提示予算の範囲で同一ラウンド内をインライン反復し、最終枠だけ
-    // 格上げ先モデルへ回す。親の集約ルール（when(findings.*)）はこの反復が
-    // 終わった後の台帳を読む。
-    const restatementSlot = sharedReviewScopeSnapshotId === undefined
-      ? undefined
-      : await this.runRestatementSlot({
-        step,
-        state,
-        task,
-        maxSteps,
-        stepIteration,
-        // owner 名と report 形式の継承元の両方を、実際に FC 台帳へ寄稿する
-        // reviewer sub-step だけに絞る（通常 agent sub-step が混在する構成で
-        // 誤継承・不当 throw を起こさない）。
-        ownerReviewerSteps: agentSubSteps.filter(
-          (subStep) => resolveFindingContractIntakeStep(subStep, this.deps.findingContract) !== undefined,
-        ),
-        reviewScopeSnapshotId: sharedReviewScopeSnapshotId,
-        priorStepResponseText,
-        updatePersonaSession,
-        runtime,
-      });
-    if (restatementSlot !== undefined) {
-      return this.createTerminalParentResult({
-        step,
-        state,
-        stepIteration,
-        subResults,
-        terminalResults: [{
-          subStep: restatementSlot.step,
-          response: restatementSlot.response,
-          instruction: '',
-          providerInfo: restatementSlot.providerInfo,
-          ...(restatementSlot.terminalOperation === undefined
-            ? {}
-            : { terminalOperation: restatementSlot.terminalOperation }),
-        }],
-        status: restatementSlot.response.status === 'blocked'
-          ? 'blocked'
-          : restatementSlot.response.status === 'rate_limited'
-            ? 'rate_limited'
-            : 'error',
-        providerInfo: restatementSlot.providerInfo,
-        ...(restatementSlot.terminalOperation === undefined
-          ? {}
-          : { terminalOperation: restatementSlot.terminalOperation }),
-      });
     }
 
     // Print completion summary
@@ -1267,7 +1039,7 @@ export class ParallelRunner {
         this.deps.onPhaseComplete,
         this.deps.onJudgeStage,
         state.iteration,
-        postExecutionRuntime,
+        runtime,
       ),
       parentRuleCtx,
     );
@@ -1297,10 +1069,7 @@ export class ParallelRunner {
         providerInfo: parentPm,
       },
     );
-    const selectedFailure = this.selectFailureByDefinitionOrder(
-      subResults,
-      `Step "${step.name}" failed`,
-    );
+    const selectedFailure = this.selectFailureByDefinitionOrder(subResults);
     return {
       response: aggregatedResponse,
       instruction: aggregatedInstruction,
@@ -1452,175 +1221,6 @@ export class ParallelRunner {
     }
   }
 
-  /**
-   * 言い直し slot の直接 provider call。言い直し待ちの anomaly も未取り込みの
-   * stored publication も無ければ何も起きない。
-   *
-   * 戻り値があるのは terminal（provider error / blocked / rate limited）のときだけ。
-   * publication 成立前の失敗なので提示回数は増えず、次の機会に同じ request を
-   * 再発行する。
-   */
-  private async runRestatementSlot(input: {
-    step: WorkflowStep;
-    state: WorkflowState;
-    task: string;
-    maxSteps: WorkflowMaxSteps;
-    stepIteration: number;
-    ownerReviewerSteps: AgentWorkflowStep[];
-    reviewScopeSnapshotId: string;
-    priorStepResponseText: string | undefined;
-    updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
-    runtime?: RuntimeStepResolution;
-  }): Promise<FindingRestatementSlotTerminalOutcome | undefined> {
-    const findingContract = this.deps.findingContract;
-    if (findingContract === undefined || input.ownerReviewerSteps.length === 0) {
-      return undefined;
-    }
-    return runFindingRestatementSlot({
-      ownerReviewerSteps: input.ownerReviewerSteps,
-      buildSlotContexts: (contextInput) => (
-        this.deps.optionsBuilder.buildFindingRestatementSlotContexts(contextInput)
-      ),
-      buildEvidenceSearchRequests: (contextInput) => (
-        this.deps.optionsBuilder.buildFindingEvidenceSearchRequests(contextInput)
-      ),
-      ingest: async (results, ingestOptions) => {
-        await this.ingestFindingContractSubResults({
-          step: input.step,
-          stepIteration: input.stepIteration,
-          iteration: input.state.iteration,
-          reviewerResults: results,
-          priorStepResponseText: input.priorStepResponseText,
-          budgetAccounting: 'excluded',
-          ...(ingestOptions?.deferClaimBearingTerminalDispositions === undefined
-            ? {}
-            : {
-                deferClaimBearingTerminalDispositions:
-                  ingestOptions.deferClaimBearingTerminalDispositions,
-              }),
-        });
-      },
-      reviewScopeSnapshotId: input.reviewScopeSnapshotId,
-      parentStepName: input.step.name,
-      stepIteration: input.stepIteration,
-      state: input.state,
-      task: input.task,
-      maxSteps: input.maxSteps,
-      optionsBuilder: this.deps.optionsBuilder,
-      stepExecutor: this.deps.stepExecutor,
-      updatePersonaSession: input.updatePersonaSession,
-      internalAgentSeats: this.deps.internalAgentSeats,
-      runtime: input.runtime,
-      presentationLimit: Math.max(
-        1,
-        resolveReviewIntegrityLimits(findingContract.reviewBudget).maxReviewRounds,
-      ),
-    });
-  }
-
-  private async runFindingContractManager(
-    step: WorkflowStep,
-    stepIteration: number,
-    iteration: number,
-    subResults: ParallelSubStepResult[],
-    priorStepResponseText: string | undefined,
-  ): Promise<FindingManagerRunResult | undefined> {
-    if (!this.deps.findingContract) {
-      return undefined;
-    }
-    const ledgerStore = this.deps.findingLedgerStore;
-    if (!ledgerStore) {
-      throw new Error('Finding contract is configured but finding ledger store is not available');
-    }
-    const reviewerResults = subResults.flatMap((result) => {
-      if (!isAgentParallelSubStep(result.subStep)) {
-        return [];
-      }
-      if (result.reportRejection !== undefined) {
-        // 報告側原因で取り込めなかったレビュアー。台帳へは anomaly だけを残し、
-        // manager の取り込み対象からは外す。
-        return [];
-      }
-      if (result.publication === undefined) {
-        throw new Error(
-          `Finding contract reviewer "${result.subStep.name}" has no canonical publication`,
-        );
-      }
-      return [{
-        subStep: result.subStep,
-        publication: result.publication,
-        ...(result.relationClarification !== undefined
-          ? { relationClarification: result.relationClarification }
-          : {}),
-      }];
-    });
-    if (reviewerResults.length === 0) {
-      return undefined;
-    }
-    return this.ingestFindingContractSubResults({
-      step,
-      stepIteration,
-      iteration,
-      reviewerResults,
-      priorStepResponseText,
-    });
-  }
-
-  /**
-   * 1ラウンド分の canonical publication を findings-manager へ渡す共通入口。
-   * レビュー本編（owner の publication 集合）と、言い直し slot の各パスが
-   * 同じ手順を通る。
-   */
-  private async ingestFindingContractSubResults(input: {
-    step: WorkflowStep;
-    stepIteration: number;
-    iteration: number;
-    reviewerResults: readonly FindingManagerSubStepResult[];
-    priorStepResponseText: string | undefined;
-    budgetAccounting?: 'round' | 'excluded';
-    deferClaimBearingTerminalDispositions?: boolean;
-  }): Promise<FindingManagerRunResult> {
-    const ledgerStore = this.deps.findingLedgerStore;
-    if (!this.deps.findingContract || !ledgerStore) {
-      throw new Error('Finding contract is configured but finding ledger store is not available');
-    }
-    return ingestFindingContractResults({
-      contract: this.deps.findingContract,
-      workflowProvider: this.deps.workflowProvider,
-      workflowModel: this.deps.workflowModel,
-      internalAgentSeats: this.deps.internalAgentSeats,
-      cwd: this.deps.getCwd(),
-      ledgerStore,
-      optionsBuilder: this.deps.optionsBuilder,
-      stepExecutor: this.deps.stepExecutor,
-      parentStep: input.step,
-      stepIteration: input.stepIteration,
-      iteration: input.iteration,
-      subResults: [...input.reviewerResults],
-      ...(input.budgetAccounting === undefined
-        ? {}
-        : { budgetAccounting: input.budgetAccounting }),
-      ...(input.deferClaimBearingTerminalDispositions === undefined
-        ? {}
-        : { deferClaimBearingTerminalDispositions: input.deferClaimBearingTerminalDispositions }),
-      // 台帳の workflowName スタンプは店（ledgerStore）が束縛する正準名を使う。
-      // workflow_call の子が親の台帳を継承した場合、この engine 自身の
-      // getWorkflowName()（子のワークフロー名）を使うと reconcile 後の
-      // ledger.workflowName が親の台帳と食い違い、次回 load/save で
-      // assertLedgerWorkflowName が例外を投げる。
-      workflowName: ledgerStore.workflowName,
-      workflowTask: this.deps.getTask(),
-      analyticsWorkflowName: this.deps.getWorkflowName(),
-      callNamespace: this.deps.getFindingCallNamespace(),
-      timestamp: new Date().toISOString(),
-      priorStepResponseText: input.priorStepResponseText,
-      managerAuthority: this.deps.findingManagerAuthority,
-      reviewPublicationDir: this.deps.reviewPublicationDir,
-      refreshFindingsState: this.deps.refreshFindingsState,
-      emitEvent: this.deps.emitEvent,
-    });
-  }
-
   private emitSubStepRoutingDecisionEvents(subResults: ParallelSubStepResult[], iteration: number): void {
     for (const result of subResults) {
       const providerInfo = result.providerInfo;
@@ -1670,12 +1270,13 @@ export class ParallelRunner {
     providerInfo: NonNullable<StepRunResult['providerInfo']>,
     instruction: string,
     options: RunAgentOptions,
+    recordUsage = true,
   ): Promise<AgentResponse> {
     let response: AgentResponse;
     try {
       response = await executeAgent(subStep.persona, instruction, options);
     } catch (error) {
-      recordAgentUsageEvent(
+      if (recordUsage) recordAgentUsageEvent(
         this.deps.engineOptions,
         subStep.name,
         'parallel',
@@ -1685,7 +1286,7 @@ export class ParallelRunner {
       );
       throw error;
     }
-    recordAgentUsageEvent(
+    if (recordUsage) recordAgentUsageEvent(
       this.deps.engineOptions,
       subStep.name,
       'parallel',
@@ -1733,22 +1334,39 @@ export class ParallelRunner {
     terminalResults: ParallelSubStepResult[];
     status: ParallelTerminalStatus;
     providerInfo: StepRunResult['providerInfo'];
-    terminalOperation?: StepRunResult['terminalOperation'];
+    primaryFailure: ParallelSubStepResult;
   }): StepRunResult {
     const content = this.buildTerminalDiagnostic(
       options.step,
       options.terminalResults,
       options.status,
     );
-    const failureCategory = this.firstFailureCategory(options.terminalResults);
+    const primaryFailure = options.primaryFailure;
+    const failureCategory = primaryFailure.response.failureCategory;
+    const boundedContent = truncateUtf8PreservingMarker(content, MAX_AGENT_FAILURE_MESSAGE_BYTES);
+    const failureError = truncateUtf8PreservingMarker(
+      sanitizeSensitiveText(primaryFailure.response.error ?? primaryFailure.response.content),
+      MAX_AGENT_FAILURE_MESSAGE_BYTES,
+    );
     const response: AgentResponse = {
       persona: options.step.name,
       status: options.status,
-      content,
+      content: boundedContent,
       timestamp: new Date(),
-      ...(options.status === 'error' || options.status === 'rate_limited' ? { error: content } : {}),
+      ...(options.status === 'error' || options.status === 'rate_limited'
+        ? { error: failureError || boundedContent }
+        : {}),
       ...(failureCategory && { failureCategory }),
-      ...this.firstRateLimitMetadata(options.terminalResults),
+      ...(options.status === 'rate_limited'
+        ? {
+            ...(primaryFailure.response.errorKind === undefined
+              ? {}
+              : { errorKind: primaryFailure.response.errorKind }),
+            ...(primaryFailure.response.rateLimitInfo === undefined
+              ? {}
+              : { rateLimitInfo: primaryFailure.response.rateLimitInfo }),
+          }
+        : {}),
     };
 
     options.state.stepOutputs.set(options.step.name, response);
@@ -1762,17 +1380,14 @@ export class ParallelRunner {
       );
     }
 
-    const selectedFailure = this.selectFailureByDefinitionOrder(
-      options.subResults,
-      `Step "${options.step.name}" failed: ${content}`,
-    );
+    const selectedFailure = this.toRunFailure(primaryFailure);
     return {
       response,
       instruction: options.subResults.map((result) => result.instruction).join('\n\n'),
       providerInfo: options.providerInfo,
       ...(selectedFailure === undefined ? {} : { workflowCallFailure: selectedFailure }),
-      ...(options.terminalOperation !== undefined
-        ? { terminalOperation: options.terminalOperation }
+      ...(primaryFailure.terminalOperation !== undefined
+        ? { terminalOperation: primaryFailure.terminalOperation }
         : {}),
       consumedStepIterations: [
         options.step.name,
@@ -1788,22 +1403,38 @@ export class ParallelRunner {
 
   private selectFailureByDefinitionOrder(
     results: ParallelSubStepResult[],
-    parentReason: string,
   ): StepRunResult['workflowCallFailure'] {
     for (const result of results) {
-      if (result.workflowCallFailure !== undefined) {
-        return result.workflowCallFailure;
-      }
-      if (result.response.status === 'error') {
-        return createRunFailure({
-          kind: 'step_error',
-          step: result.subStep.name,
-          reason: parentReason,
-          error: result.response.error ?? result.response.content,
-        });
+      const failure = this.toRunFailure(result);
+      if (failure !== undefined) {
+        return failure;
       }
     }
     return undefined;
+  }
+
+  private toRunFailure(
+    result: ParallelSubStepResult,
+  ): StepRunResult['workflowCallFailure'] {
+    if (result.workflowCallFailure !== undefined) {
+      return result.workflowCallFailure;
+    }
+    if (result.response.status !== 'error') {
+      return undefined;
+    }
+    const failureError = truncateUtf8PreservingMarker(
+      sanitizeSensitiveText(result.response.error ?? result.response.content),
+      MAX_AGENT_FAILURE_MESSAGE_BYTES,
+    );
+    return createRunFailure({
+      kind: 'step_error',
+      step: result.subStep.name,
+      reason: failureError,
+      error: failureError,
+      ...(result.response.failureCategory === undefined
+        ? {}
+        : { failureCategory: result.response.failureCategory }),
+    });
   }
 
   private collectTerminalResults(results: ParallelSubStepResult[]): ParallelSubStepResult[] {
@@ -1844,19 +1475,13 @@ export class ParallelRunner {
     ].join('\n');
   }
 
-  private firstFailureCategory(results: ParallelSubStepResult[]): AgentResponse['failureCategory'] | undefined {
-    return results.find((result) => result.response.failureCategory)?.response.failureCategory;
-  }
-
-  private firstRateLimitMetadata(results: ParallelSubStepResult[]): Pick<AgentResponse, 'errorKind' | 'rateLimitInfo'> {
-    const rateLimitedResult = results.find((result) => result.response.status === 'rate_limited');
-    if (!rateLimitedResult) {
-      return {};
-    }
-    return {
-      ...(rateLimitedResult.response.errorKind && { errorKind: rateLimitedResult.response.errorKind }),
-      ...(rateLimitedResult.response.rateLimitInfo && { rateLimitInfo: rateLimitedResult.response.rateLimitInfo }),
-    };
+  private firstFailureResult(results: ParallelSubStepResult[]): ParallelSubStepResult | undefined {
+    return results.find(
+      (result) => result.response.failureCategory
+        === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+    )
+      ?? results.find((result) => result.response.failureCategory !== undefined)
+      ?? results.find((result) => result.response.status === 'error');
   }
 
 }

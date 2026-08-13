@@ -1,6 +1,5 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -328,86 +327,102 @@ describe('workflow execution bundle', () => {
     }
   });
 
-  it('materializes and rebinds real facet personas for root-owned and inherited finding contracts', () => {
-    const root = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-finding-contract-'));
+  it.each([
+    ['dynamic facet selector for step "implement"', 'Facet selector filesystem persona', 'dynamicFacets'],
+    ['dynamic parallel selector for step "reviewers"', 'Parallel selector filesystem persona', 'parallel'],
+  ] as const)('rejects a bundle missing its %s resource', (label, removedContent, selectorKind) => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-selector-missing-'));
     roots.push(root);
     const workflowDir = join(root, '.takt', 'workflows');
-    for (const kind of ['personas', 'instructions', 'output-contracts']) {
-      mkdirSync(join(root, '.takt', 'facets', kind), { recursive: true });
-    }
+    const personasDir = join(root, '.takt', 'facets', 'personas');
     mkdirSync(workflowDir, { recursive: true });
-    writeFileSync(join(root, '.takt', 'facets', 'personas', 'manager.md'), 'Resolved manager persona');
-    writeFileSync(join(root, '.takt', 'facets', 'personas', 'supervisor.md'), 'Resolved adjudicator persona');
-    writeFileSync(join(root, '.takt', 'facets', 'instructions', 'manager.md'), 'Resolved manager instruction');
-    writeFileSync(join(root, '.takt', 'facets', 'instructions', 'adjudicate.md'), 'Resolved adjudication guidance');
-    writeFileSync(join(root, '.takt', 'facets', 'output-contracts', 'manager.md'), 'Resolved manager output');
-    const rawFindingContract = {
-      manager: { persona: 'manager', instruction: 'manager', output_contract: 'manager' },
-      adjudicator: { persona: 'supervisor', instruction: 'adjudicate' },
-    };
-    const context = { projectDir: root, workflowDir, lang: 'en' as const };
-    const child = attachWorkflowOpaqueRef(normalizeWorkflowConfig({
-      name: 'facet-child',
-      subworkflow: { callable: true, requires_finding_contract: true },
-      finding_contract: rawFindingContract,
-      initial_step: 'review',
-      max_steps: 2,
-      steps: [{
-        name: 'review',
-        persona: 'reviewer',
-        instruction: 'Review.',
-        rules: [{ condition: 'done', next: 'COMPLETE' }],
-      }],
-    }, workflowDir, context), `project:sha256:${'c'.repeat(64)}`);
-    const parent = attachWorkflowOpaqueRef(normalizeWorkflowConfig({
-      name: 'facet-parent',
-      finding_contract: rawFindingContract,
-      initial_step: 'delegate',
-      max_steps: 2,
-      steps: [{
-        name: 'delegate',
-        kind: 'workflow_call',
-        call: 'facet-child',
-        rules: [{ condition: 'done', next: 'COMPLETE' }],
-      }],
-    }, workflowDir, context), `project:sha256:${'p'.repeat(64)}`);
-    const paths = buildRunPaths(root, 'finding-contract-bundle-run');
+    mkdirSync(personasDir, { recursive: true });
+    writeFileSync(join(personasDir, 'facet-selector.md'), 'Facet selector filesystem persona');
+    writeFileSync(join(personasDir, 'reviewer-selector.md'), 'Parallel selector filesystem persona');
+    const config = normalizeWorkflowConfig({
+      name: 'root',
+      initial_step: 'implement',
+      max_steps: 5,
+      policies: { coding: 'Keep facet selection valid.' },
+      facet_pools: {
+        'implementation-facets': {
+          candidates: [{ id: 'frontend', description: 'Frontend implementation', policy: 'coding' }],
+        },
+      },
+      steps: [
+        {
+          name: 'implement',
+          instruction: '{task}',
+          dynamic_facets: {
+            pool: 'implementation-facets',
+            selector: { persona: 'facet-selector', instruction: 'Select facets for the implementation.' },
+          },
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        },
+        {
+          name: 'reviewers',
+          instruction: '{task}',
+          parallel: {
+            pool: [{ name: 'frontend', description: 'Frontend review', instruction: 'Review frontend changes', rules: [{ condition: 'approved', next: 'COMPLETE' }] }],
+            selection: {
+              mode: 'replace',
+              selector: { persona: 'reviewer-selector', instruction: 'Select reviewers for the implementation.' },
+            },
+          },
+          rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
+        },
+      ],
+    }, workflowDir, { projectDir: root, workflowDir, lang: 'en' });
     const prepared = prepareWorkflowExecutionBundle({
-      rootWorkflow: parent,
-      workflowCallResolver: () => child,
+      rootWorkflow: attachWorkflowOpaqueRef(config, `project:sha256:${'m'.repeat(64)}`),
+      workflowCallResolver: () => null,
       projectCwd: root,
       lookupCwd: root,
     });
-    publishWorkflowExecutionBundle(paths, prepared);
 
-    const loaded = loadWorkflowExecutionBundle(paths);
-    const loadedChild = loaded.workflowCallResolver({
-      parentWorkflow: loaded.rootWorkflow,
-      step: loaded.rootWorkflow.steps[0] as never,
-      projectCwd: root,
-      lookupCwd: root,
-    });
-    for (const config of [loaded.rootWorkflow, loadedChild]) {
-      const managerPath = config?.findingContract?.manager.personaPath;
-      const adjudicatorPath = config?.findingContract?.adjudicator?.personaPath;
-      expect(dirname(managerPath!)).toBe(loaded.resourceRoot);
-      expect(dirname(adjudicatorPath!)).toBe(loaded.resourceRoot);
-      expect(readFileSync(managerPath!, 'utf8')).toBe('Resolved manager persona');
-      expect(readFileSync(adjudicatorPath!, 'utf8')).toBe('Resolved adjudicator persona');
-    }
-    expect(prepared.manifest.resources).toEqual(expect.objectContaining({
-      [createHash('sha256').update('Resolved manager persona').digest('hex')]: {
-        kind: 'prompt',
-        size: Buffer.byteLength('Resolved manager persona'),
-      },
-      [createHash('sha256').update('Resolved adjudicator persona').digest('hex')]: {
-        kind: 'prompt',
-        size: Buffer.byteLength('Resolved adjudicator persona'),
-      },
-    }));
+    const [, encoded] = [...prepared.objects.entries()][0]!;
+    const node = JSON.parse(encoded) as {
+      nodeId: string;
+      originalWorkflowRef: string;
+      binding: unknown;
+      config: { steps: Array<Record<string, unknown>> };
+    };
+    const originalNodeId = node.nodeId;
+    const facetSelector = (node.config.steps[0]!.dynamicFacets as { selector: Record<string, unknown> }).selector;
+    const parallel = node.config.steps[1]!.parallel as { selection: { selector: Record<string, unknown> } };
+    const removedSelector = selectorKind === 'dynamicFacets'
+      ? facetSelector
+      : parallel.selection.selector;
+    delete removedSelector.personaPath;
+    const removedHash = createHash('sha256').update(removedContent).digest('hex');
+    const nodeId = createHash('sha256').update(canonicalJson({
+      originalWorkflowRef: node.originalWorkflowRef,
+      config: node.config,
+      binding: node.binding,
+    })).digest('hex');
+    node.nodeId = nodeId;
+    const nextEncoded = canonicalJson(node);
+    const nextObjectHash = createHash('sha256').update(nextEncoded).digest('hex');
+    const mutableManifest = prepared.manifest as unknown as {
+      root: { nodeId: string };
+      nodes: Record<string, string>;
+      resources: Record<string, { kind: 'prompt' | 'arpeggio-source'; size: number }>;
+    };
+    mutableManifest.root.nodeId = nodeId;
+    delete mutableManifest.nodes[originalNodeId];
+    mutableManifest.nodes = { [nodeId]: nextObjectHash };
+    delete mutableManifest.resources[removedHash];
+    const mutableObjects = prepared.objects as unknown as Map<string, string>;
+    mutableObjects.clear();
+    mutableObjects.set(nextObjectHash, nextEncoded);
+    (prepared.resources as unknown as Map<string, Buffer>).delete(removedHash);
+
+    const paths = buildRunPaths(root, `missing-${selectorKind}`);
+    publishWorkflowExecutionBundle(paths, prepared);
+    expect(() => loadWorkflowExecutionBundle(paths)).toThrow(label);
   });
 
-  it('attaches once without changing run metadata or Finding Contract SQLite bytes', () => {
+  it('attaches once without changing run metadata or residual SQLite bytes', () => {
     const project = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-attach-project-'));
     const source = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-attach-source-'));
     roots.push(project, source);
@@ -449,45 +464,14 @@ describe('workflow execution bundle', () => {
         workflow_step_participations: {},
       },
     }));
-    const findingDatabase = new DatabaseSync(paths.findingContractDatabaseAbs);
-    findingDatabase.exec(`
-      CREATE TABLE database_identity (
-        singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
-        database_instance_id TEXT NOT NULL,
-        run_id TEXT NOT NULL
-      ) STRICT;
-      CREATE TABLE finding_authorities (
-        authority_key TEXT PRIMARY KEY CHECK (length(authority_key) > 0),
-        workflow_name TEXT NOT NULL CHECK (length(workflow_name) > 0),
-        revision INTEGER NOT NULL CHECK (revision >= 1),
-        ledger_json TEXT NOT NULL CHECK (json_valid(ledger_json)),
-        updated_at TEXT NOT NULL
-      ) STRICT;
-    `);
-    findingDatabase.prepare(`
-      INSERT INTO database_identity (
-        singleton_id, database_instance_id, run_id
-      ) VALUES (1, 'attach-test-instance', 'legacy-run')
-    `).run();
-    findingDatabase.prepare(`
-      INSERT INTO finding_authorities (
-        authority_key, workflow_name, revision, ledger_json, updated_at
-      ) VALUES ('root', 'legacy', 3, ?, '2026-01-01T00:00:00.000Z')
-    `).run(JSON.stringify({
-      workflowName: 'legacy',
-      nextId: 1,
-      updatedAt: '2026-01-01T00:00:00.000Z',
-      findings: [],
-      evidenceRecords: [],
-      evidenceBindings: [],
-      lifecycleReservations: [],
-      lifecycleEvents: [],
-      rawFindings: [],
-      conflicts: [],
-    }));
-    findingDatabase.close();
+    const residualDatabasePath = join(
+      paths.runRootAbs,
+      ['finding', 'contract.sqlite'].join('-'),
+    );
+    const residualBytes = Buffer.from('legacy opaque database bytes');
+    writeFileSync(residualDatabasePath, residualBytes);
     const metaBefore = readFileSync(paths.metaAbs, 'utf-8');
-    const findingDatabaseBefore = readFileSync(paths.findingContractDatabaseAbs);
+    const findingDatabaseBefore = readFileSync(residualDatabasePath);
     const findingDatabaseHashBefore = createHash('sha256')
       .update(findingDatabaseBefore)
       .digest('hex');
@@ -501,7 +485,7 @@ describe('workflow execution bundle', () => {
 
     expect(result.rootWorkflowRef).toBe(historicalRef);
     expect(readFileSync(paths.metaAbs, 'utf-8')).toBe(metaBefore);
-    const findingDatabaseAfter = readFileSync(paths.findingContractDatabaseAbs);
+    const findingDatabaseAfter = readFileSync(residualDatabasePath);
     expect(findingDatabaseAfter.equals(findingDatabaseBefore)).toBe(true);
     expect(createHash('sha256').update(findingDatabaseAfter).digest('hex'))
       .toBe(findingDatabaseHashBefore);
@@ -580,43 +564,6 @@ describe('workflow execution bundle', () => {
         },
       },
     }));
-    const findingDatabase = new DatabaseSync(paths.findingContractDatabaseAbs);
-    findingDatabase.exec(`
-      CREATE TABLE database_identity (
-        singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
-        database_instance_id TEXT NOT NULL,
-        run_id TEXT NOT NULL
-      ) STRICT;
-      CREATE TABLE finding_authorities (
-        authority_key TEXT PRIMARY KEY CHECK (length(authority_key) > 0),
-        workflow_name TEXT NOT NULL CHECK (length(workflow_name) > 0),
-        revision INTEGER NOT NULL CHECK (revision >= 1),
-        ledger_json TEXT NOT NULL CHECK (json_valid(ledger_json)),
-        updated_at TEXT NOT NULL
-      ) STRICT;
-    `);
-    findingDatabase.prepare(`
-      INSERT INTO database_identity (
-        singleton_id, database_instance_id, run_id
-      ) VALUES (1, 'parallel-attach-instance', 'parallel-run')
-    `).run();
-    findingDatabase.prepare(`
-      INSERT INTO finding_authorities (
-        authority_key, workflow_name, revision, ledger_json, updated_at
-      ) VALUES ('root', 'legacy', 1, ?, '2026-01-01T00:00:00.000Z')
-    `).run(JSON.stringify({
-      workflowName: 'legacy',
-      nextId: 1,
-      updatedAt: '2026-01-01T00:00:00.000Z',
-      findings: [],
-      evidenceRecords: [],
-      evidenceBindings: [],
-      lifecycleReservations: [],
-      lifecycleEvents: [],
-      rawFindings: [],
-      conflicts: [],
-    }));
-    findingDatabase.close();
 
     const result = attachLegacyWorkflowExecutionBundle({
       projectDir: project,

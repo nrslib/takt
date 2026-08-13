@@ -23,8 +23,6 @@ import {
 import { buildWorkflowCallSiteIdentity } from '../core/workflow/workflow-call-site-identity.js';
 import { WorkflowCallInvocationIndex } from '../core/workflow/workflow-call-invocation-index.js';
 import { WorkflowStepParticipationIndex } from '../core/workflow/workflow-step-participation-index.js';
-import { createTestFindingLedgerStore } from './helpers/finding-storage.js';
-import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 
 const sourceRunSlug = '20260717-source-run';
 const resumeModes = ['requeue', 'retry', 'instruct'] as const;
@@ -37,7 +35,7 @@ interface TestEnvironment {
   globalDir: string;
 }
 
-function createEnvironment(withFindingContract: boolean): TestEnvironment {
+function createEnvironment(): TestEnvironment {
   const root = join(tmpdir(), `takt-report-inheritance-resume-${randomUUID()}`);
   const projectDir = join(root, 'project');
   const globalDir = join(root, 'global');
@@ -63,13 +61,6 @@ function createEnvironment(withFindingContract: boolean): TestEnvironment {
     'name: child-fix',
     'subworkflow:',
     '  callable: true',
-    ...(withFindingContract ? [
-      'finding_contract:',
-      '  manager:',
-      '    persona: findings-manager',
-      '    instruction: findings-manager',
-      '    output_contract: findings-manager',
-    ] : []),
     'initial_step: fix',
     'max_steps: 4',
     'steps:',
@@ -81,9 +72,7 @@ function createEnvironment(withFindingContract: boolean): TestEnvironment {
       '        output_contracts:',
       '          report:',
       '            - name: 05-arch-review.md',
-      ...(withFindingContract
-        ? ['              format: architecture-review-finding-contract']
-        : ['              format: "# Architecture Review"']),
+      '              format: "# Architecture Review"',
     '        rules:',
     '          - condition: approved',
     '            next: COMPLETE',
@@ -137,10 +126,6 @@ function buildWorkflowCallSite(projectDir: string, occurrence: number) {
 }
 
 function buildWorkflowCallNamespace(projectDir: string, occurrence: number): string {
-  return buildWorkflowCallSite(projectDir, occurrence).runPathSegment;
-}
-
-function buildWorkflowCallAuthorityKey(projectDir: string, occurrence: number): string {
   return buildWorkflowCallSite(projectDir, occurrence).runPathSegment;
 }
 
@@ -248,10 +233,8 @@ function writeSourceRunMeta(projectDir: string): void {
   }), 'utf-8');
 }
 
-async function writeSourceReports(projectDir: string, withFindingContract: boolean): Promise<{
+async function writeSourceReports(projectDir: string): Promise<{
   sourceReportDir: string;
-  sourceLedger?: ReturnType<typeof parseFindingLedger>;
-  sourceStore?: FindingLedgerStore;
 }> {
   writeSourceRunMeta(projectDir);
   const sourceReportDir = join(
@@ -266,19 +249,7 @@ async function writeSourceReports(projectDir: string, withFindingContract: boole
   mkdirSync(sourceReportDir, { recursive: true });
   writeFileSync(join(sourceReportDir, '05-arch-review.md'), 'previous architecture review', 'utf-8');
 
-  if (!withFindingContract) {
-    return { sourceReportDir };
-  }
-
-  const sourceStore = createTestFindingLedgerStore({
-    projectCwd: projectDir,
-    runId: sourceRunSlug,
-    reportDir: sourceReportDir,
-    workflowName: 'child-fix',
-    authorityKey: buildWorkflowCallAuthorityKey(projectDir, 1),
-  });
-  const sourceLedger = sourceStore.loadLedger();
-  return { sourceReportDir, sourceLedger, sourceStore };
+  return { sourceReportDir };
 }
 
 function findResumedRunSlug(projectDir: string): string {
@@ -327,8 +298,8 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
     }
   });
 
-  it.each([false, true])('honors report inheritance and finding storage contracts (finding contract: %s)', async (withFindingContract) => {
-    environment = createEnvironment(withFindingContract);
+  it('honors report inheritance across task resume', async () => {
+    environment = createEnvironment();
     process.env.TAKT_CONFIG_DIR = environment.globalDir;
     invalidateGlobalConfigCache();
 
@@ -348,7 +319,7 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
       };
     });
 
-    const source = await writeSourceReports(environment.projectDir, withFindingContract);
+    const source = await writeSourceReports(environment.projectDir);
     const runner = new TaskRunner(environment.projectDir);
     const resumedTask = prepareResumedTask(
       runner,
@@ -414,9 +385,6 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
         reason: 'target_exists',
       })],
     }));
-    if (source.sourceLedger !== undefined && source.sourceStore !== undefined) {
-      expect(source.sourceStore.loadLedger()).toEqual(source.sourceLedger);
-    }
   });
 });
 
@@ -442,7 +410,7 @@ describe('IT: missing report source through task resume', () => {
   });
 
   it('should fail before the resumed fix agent runs and publish an empty source snapshot when source reports are missing', async () => {
-    environment = createEnvironment(false);
+    environment = createEnvironment();
     process.env.TAKT_CONFIG_DIR = environment.globalDir;
     invalidateGlobalConfigCache();
 

@@ -1,6 +1,7 @@
 import type { InternalAgentSeats, ProviderRoutingEntry } from '../models/config-types.js';
 import type { StepProviderOptions } from '../models/workflow-types.js';
 import type { ProviderType } from '../../shared/types/provider.js';
+import type { PermissionMode } from '../models/types.js';
 
 export type { InternalAgentSeats };
 
@@ -16,7 +17,8 @@ export interface InternalAgentSeatOverride {
   providerSpecified: true;
   model?: string;
   modelSpecified: true;
-  providerOptions?: StepProviderOptions;
+  internalProviderOptions?: StepProviderOptions;
+  internalPermissionMode?: PermissionMode;
 }
 
 /**
@@ -42,6 +44,7 @@ export function internalAgentSeatOverride(
     providerSpecified: true,
     ...(seat.model === undefined ? {} : { model: seat.model }),
     modelSpecified: true,
-    ...(seat.providerOptions === undefined ? {} : { providerOptions: seat.providerOptions }),
+    ...(seat.providerOptions === undefined ? {} : { internalProviderOptions: seat.providerOptions }),
+    ...(seat.permissionMode === undefined ? {} : { internalPermissionMode: seat.permissionMode }),
   };
 }

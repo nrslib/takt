@@ -415,13 +415,11 @@ describe('IT: config provider_options reflection', () => {
 
     expect(ok).toBe(true);
     expect(selectorOptions).toMatchObject({
-      internalAgentIsolation: 'strict-readonly',
-      allowedTools: [],
       resolvedExecution: {
         provider: 'claude',
         model: testCase.expectedModel,
         providerOptions: testCase.expectedOptions,
-        permissionMode: 'readonly',
+        permissionMode: undefined,
       },
     });
     expect(selectorLog).toMatchObject({

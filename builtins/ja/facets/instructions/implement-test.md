@@ -1,3 +1,5 @@
+{{include:instructions/contract-family-test-authoring}}
+
 テスト計画に従って単体テストを実装してください。
 Workflow Contextに示されたReport Directory内のファイルのみ参照してください。他のレポートディレクトリは検索/参照しないでください。
 

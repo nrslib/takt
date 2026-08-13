@@ -51,6 +51,7 @@ function createAutoRuntime(): RuntimeStepResolution {
         'codex.networkAccess': 'auto.rules',
         'codex.reasoningEffort': 'auto.rules',
       },
+      permissionMode: 'readonly',
     },
   };
 }
@@ -78,6 +79,7 @@ describe('auto routing provider_options merge', () => {
         reasoningEffort: 'low',
       },
     });
+    expect(options.permissionMode).toBe('readonly');
   });
 
   it('Given auto candidate provider_options, When resolving provider info, Then provider option sources preserve auto source only for candidate-owned leaves', () => {

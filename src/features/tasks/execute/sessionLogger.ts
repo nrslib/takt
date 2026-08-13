@@ -9,7 +9,7 @@ import {
   parseNdjsonRecord,
 } from '../../../infra/fs/index.js';
 import type { InteractiveMetadata } from './types.js';
-import { isDebugEnabled, writePromptLog } from '../../../shared/utils/index.js';
+import { createLogger, isDebugEnabled, writePromptLog } from '../../../shared/utils/index.js';
 import type { PromptLogRecord, NdjsonRecord } from '../../../shared/utils/index.js';
 import type { WorkflowResumePointEntry, WorkflowStep, AgentResponse, WorkflowState } from '../../../core/models/index.js';
 import type {
@@ -18,11 +18,13 @@ import type {
   StepProviderInfo,
   WorkflowCallCompleteLifecycle,
   WorkflowCallLifecycle,
+  WorkflowEvents,
 } from '../../../core/workflow/types.js';
 import { parsePhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js';
 import { sanitizeTextForStorage } from './traceReportRedaction.js';
 import { buildWorkflowStepScopeKey } from './workflowStepScope.js';
 import { SessionLoggerPhaseTracker } from './sessionLoggerPhaseTracker.js';
+import { safeExternalErrorMessage } from '../../../shared/utils/safeExternalErrorMessage.js';
 import {
   buildInteractiveRecords,
   buildPhaseCompleteRecord,
@@ -37,8 +39,11 @@ import {
   buildWorkflowCompleteRecord,
   buildCompanionReviewRoundRecord,
   buildCompanionQueueCoalescedRecord,
+  buildCompanionCallRecord,
+  buildCompanionReviewSkippedRecord,
 } from './sessionLoggerRecordFactory.js';
 import type {
+  NdjsonCompanionReviewSkipped,
   NdjsonCompanionQueueCoalesced,
   NdjsonCompanionReviewRound,
 } from '../../../shared/utils/types.js';
@@ -49,6 +54,7 @@ import {
 } from '../../../shared/utils/private-file.js';
 
 const SESSION_LOG_MODE = 0o600;
+const log = createLogger('session-logger');
 
 type TerminalSessionRecord = Extract<
   NdjsonRecord,
@@ -171,6 +177,7 @@ export class SessionLogger {
   private readonly ndjsonRecords: NdjsonRecord[] = [];
   private readonly promptRecords: PromptLogRecord[] = [];
   private workflowTerminalLogged = false;
+  private companionAuditWriteFailureReported = false;
 
   constructor(ndjsonLogPath: string, allowSensitiveData: boolean) {
     this.ndjsonLogPath = ndjsonLogPath;
@@ -373,24 +380,54 @@ export class SessionLogger {
     this.workflowTerminalLogged = true;
   }
 
-  onWorkflowAbort(state: WorkflowState, reason: string): void {
+  onWorkflowAbort(
+    state: WorkflowState,
+    reason: string,
+    failureCategory?: AgentResponse['failureCategory'],
+  ): void {
     if (this.workflowTerminalLogged) {
       return;
     }
-    this.appendRecord(buildWorkflowAbortRecord(state, reason, this.sanitizeText.bind(this)));
+    this.appendRecord(buildWorkflowAbortRecord(
+      state,
+      reason,
+      this.sanitizeText.bind(this),
+      failureCategory,
+    ));
     this.workflowTerminalLogged = true;
   }
 
   onCompanionReviewRound(
     input: Omit<NdjsonCompanionReviewRound, 'type' | 'timestamp'>,
   ): void {
-    this.appendRecord(buildCompanionReviewRoundRecord(input));
+    this.appendCompanionAuditRecord('companion_review_round', () => buildCompanionReviewRoundRecord(
+      input,
+      this.sanitizeText.bind(this),
+    ));
   }
 
   onCompanionQueueCoalesced(
     input: Omit<NdjsonCompanionQueueCoalesced, 'type' | 'timestamp'>,
   ): void {
-    this.appendRecord(buildCompanionQueueCoalescedRecord(input));
+    this.appendCompanionAuditRecord(
+      'companion_queue_coalesced',
+      () => buildCompanionQueueCoalescedRecord(input),
+    );
+  }
+
+  onCompanionCall(
+    input: Parameters<WorkflowEvents['companion:call']>[0],
+  ): void {
+    this.appendCompanionAuditRecord('companion_call', () => buildCompanionCallRecord(
+      input,
+      this.sanitizeText.bind(this),
+    ));
+  }
+
+  onCompanionReviewSkipped(
+    input: Omit<NdjsonCompanionReviewSkipped, 'type' | 'timestamp'>,
+  ): void {
+    this.appendCompanionAuditRecord('companion_review_skipped', () => buildCompanionReviewSkippedRecord(input));
   }
 
   getNdjsonRecords(): NdjsonRecord[] {
@@ -404,6 +441,27 @@ export class SessionLogger {
   private appendRecord(record: NdjsonRecord): void {
     this.ndjsonRecords.push(record);
     appendNdjsonLine(this.ndjsonLogPath, record);
+  }
+
+  private appendCompanionAuditRecord(
+    recordType: Extract<NdjsonRecord, {
+      type: 'companion_call' | 'companion_review_round' | 'companion_review_skipped'
+        | 'companion_queue_coalesced';
+    }>['type'],
+    buildRecord: () => NdjsonRecord,
+  ): void {
+    try {
+      const record = buildRecord();
+      appendNdjsonLine(this.ndjsonLogPath, record);
+      this.ndjsonRecords.push(record);
+    } catch (error) {
+      if (this.companionAuditWriteFailureReported) return;
+      this.companionAuditWriteFailureReported = true;
+      log.warn('Companion audit record could not be persisted; continuing workflow', {
+        recordType,
+        error: safeExternalErrorMessage(error),
+      });
+    }
   }
 
   private sanitizeText(text: string): string {

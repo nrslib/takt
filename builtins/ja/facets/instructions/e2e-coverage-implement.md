@@ -1,3 +1,5 @@
+{{include:instructions/contract-family-test-authoring}}
+
 テストケースリストに基づき、不足しているE2Eテストを実装してください。
 
 **重要:** テスト計画レポートを参照してください: {report:01-e2e-coverage-plan.md}

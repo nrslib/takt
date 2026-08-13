@@ -10,5 +10,5 @@ Procedure:
 
 {{include:instructions/review-round-scope}}
 {{include:instructions/review-investigation-discipline}}
-{{include:instructions/review-family-completion}}
+{{include:instructions/contract-family-review-by-mode}}
 {{include:instructions/review-pr-context}}

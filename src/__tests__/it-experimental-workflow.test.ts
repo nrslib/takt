@@ -12,7 +12,7 @@ import { WorkflowEngine } from '../core/workflow/index.js';
 import type { CompanionDiffReader } from '../core/workflow/companion/diff-reader.js';
 import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
 import type { SelectorGitCommandRunner } from '../core/workflow/dynamic-parallel/selector-git-command-runner.js';
-import { DefaultStructuredCaller } from '../agents/structured-caller.js';
+import { ProviderNeutralStructuredCaller } from '../agents/structured-caller.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
 import { resolveRefToContent } from '../infra/config/loaders/resource-resolver.js';
 import {
@@ -68,7 +68,6 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 const SELECTOR_PROVIDER = {
   provider: 'mock' as const,
   providerOptions: {},
-  nativeTools: [],
 };
 const SELECTOR_GIT_COMMAND_RUNNER: SelectorGitCommandRunner = {
   run: async () => ({ output: Buffer.alloc(0), bytes: 0 }),
@@ -255,6 +254,33 @@ function expectResolvedReviewerInstructions(
   }
 }
 
+function expectResolvedReviewCompletionRetryInstruction(
+  language: 'en' | 'ja',
+  reviewerCall: WorkflowStep,
+  reviewerSteps: readonly ReviewerStepReference[],
+  projectDir: string,
+): string {
+  const instructionRef = reviewerCall.args?.review_completion_retry_instruction;
+  if (typeof instructionRef !== 'string') {
+    throw new Error(`Review completion instruction argument not found for "${reviewerCall.name}"`);
+  }
+  const resolvedInstruction = resolveRefToContent(
+    instructionRef,
+    undefined,
+    projectDir,
+    'instructions',
+    { projectDir, lang: language },
+  );
+  if (typeof resolvedInstruction !== 'string') {
+    throw new Error(`Review completion instruction "${instructionRef}" could not be resolved`);
+  }
+  expect(resolvedInstruction).not.toBe('');
+  for (const { step } of reviewerSteps) {
+    expect(step.reviewCompletion?.retryInstruction).toBe(resolvedInstruction);
+  }
+  return resolvedInstruction;
+}
+
 function collectReviewerSteps(
   language: 'en' | 'ja',
   workflow: WorkflowConfig,
@@ -344,13 +370,20 @@ function responseForReturn(
 
 function selection(selectedIds: string[], rationale: string): ScenarioEntry {
   return {
-    persona: 'takt-internal',
+    persona: 'dynamic-facet-selector',
     status: 'done',
     content: rationale,
     structuredOutput: {
       selected_ids: selectedIds,
       rationale,
     },
+  };
+}
+
+function parallelSelection(selectedIds: string[], rationale: string): ScenarioEntry {
+  return {
+    ...selection(selectedIds, rationale),
+    persona: 'dynamic-parallel-selector',
   };
 }
 
@@ -372,7 +405,7 @@ function acceptedAndMergedCompanionFinding(): ScenarioEntry[] {
       },
     },
     {
-      persona: 'ai-antipattern-review-moderator',
+      persona: 'review-companion-moderator',
       status: 'done',
       content: 'moderate',
       structuredOutput: {
@@ -403,7 +436,7 @@ function acceptedAndMergedCompanionFinding(): ScenarioEntry[] {
       },
     },
     {
-      persona: 'ai-antipattern-review-moderator',
+      persona: 'review-companion-moderator',
       status: 'done',
       content: 'moderate',
       structuredOutput: {
@@ -548,15 +581,32 @@ describe('experimental builtin workflow', () => {
         ));
         expectResolvedReviewerInstructions(language, reviewerCalls[0]!, initialSuite!, projectDir);
         expectResolvedReviewerInstructions(language, reviewerCalls[1]!, followUpSuite!, projectDir);
-        const initialReviewers = new Map(collectReviewerSteps(language, initialSuite!, projectDir)
+        const initialReviewerSteps = collectReviewerSteps(language, initialSuite!, projectDir);
+        const followUpReviewerSteps = collectReviewerSteps(language, followUpSuite!, projectDir);
+        const initialReviewers = new Map(initialReviewerSteps
           .map(({ step }) => [step.name, step.instruction]));
-        const followUpReviewers = new Map(collectReviewerSteps(language, followUpSuite!, projectDir)
+        const followUpReviewers = new Map(followUpReviewerSteps
           .map(({ step }) => [step.name, step.instruction]));
         expect([...followUpReviewers.keys()].sort()).toEqual([...initialReviewers.keys()].sort());
         for (const [reviewer, initialInstruction] of initialReviewers) {
           expect(initialInstruction).not.toBe('');
           expect(followUpReviewers.get(reviewer)).not.toBe(initialInstruction);
         }
+        const initialRetryInstruction = expectResolvedReviewCompletionRetryInstruction(
+          language,
+          reviewerCalls[0]!,
+          initialReviewerSteps,
+          projectDir,
+        );
+        const followUpRetryInstruction = expectResolvedReviewCompletionRetryInstruction(
+          language,
+          reviewerCalls[1]!,
+          followUpReviewerSteps,
+          projectDir,
+        );
+        expect(reviewerCalls[0]!.args?.review_completion_retry_instruction)
+          .not.toBe(reviewerCalls[1]!.args?.review_completion_retry_instruction);
+        expect(initialRetryInstruction).not.toBe(followUpRetryInstruction);
 
         const reviewerSuite = initialSuite!;
         const securityReview = findWorkflowStep(reviewerSuite, 'security-review');
@@ -612,7 +662,7 @@ describe('experimental builtin workflow', () => {
         selection(['testing'], 'Testing implementation facets are required.'),
         responseForNext(implementation, 'implement', 'COMPLETE'),
         ...acceptedAndMergedCompanionFinding(),
-        selection(['architecture-review'], 'The first review round covers architecture changes.'),
+        parallelSelection(['architecture-review'], 'The first review round covers architecture changes.'),
         response(reviewerSuite, 'coding-review', 'coding-reviewer', 'needs_fix'),
         response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'needs_fix'),
         response(reviewerSuite, 'architecture-review', 'architecture-reviewer', 'needs_fix'),
@@ -626,7 +676,7 @@ describe('experimental builtin workflow', () => {
         responseForNext(remediation, 'fix-retry', 'fix-verifier'),
         ...acceptedAndMergedCompanionFinding(),
         responseForNext(remediation, 'fix-verifier', 'COMPLETE'),
-        selection(['security-review'], 'The second review round covers security changes.'),
+        parallelSelection(['security-review'], 'The second review round covers security changes.'),
         selection(['cli'], 'The TAKT local execution security knowledge matches the changed surface.'),
         response(reviewerSuite, 'coding-review', 'coding-reviewer', 'approved'),
         response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
@@ -638,7 +688,7 @@ describe('experimental builtin workflow', () => {
         responseForNext(remediation, 'fix', 'fix-verifier'),
         ...acceptedAndMergedCompanionFinding(),
         responseForNext(remediation, 'fix-verifier', 'COMPLETE'),
-        selection([], 'The fixed reviewers cover the final-gate remediation.'),
+        parallelSelection([], 'The fixed reviewers cover the final-gate remediation.'),
         response(reviewerSuite, 'coding-review', 'coding-reviewer', 'approved'),
         response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
         responseForNext(peerReview, 'review-adjudication', 'final-gate'),
@@ -652,10 +702,10 @@ describe('experimental builtin workflow', () => {
         companionProviders: {
           'ai-antipattern-review-companion': { provider: 'mock' },
           'testing-review-companion': { provider: 'mock' },
-          'ai-antipattern-review-moderator': { provider: 'mock' },
+          'review-companion-moderator': { provider: 'mock' },
         },
         companionDiffReader: COMPANION_DIFF_READER_WITH_FINDING,
-        structuredCaller: new DefaultStructuredCaller(),
+        structuredCaller: new ProviderNeutralStructuredCaller(),
         workflowCallResolver: ({ parentWorkflow, step, projectCwd, lookupCwd }) =>
           resolveWorkflowCallTarget(parentWorkflow, step, projectCwd, lookupCwd),
       });
@@ -727,7 +777,7 @@ describe('experimental builtin workflow', () => {
         responseForNext(core, 'replan', 'implement'),
         selection(['testing'], 'The replanned implementation still changes test boundaries.'),
         responseForNext(implementation, 'implement', 'COMPLETE'),
-        selection([], 'The fixed TAKT reviewers cover the changed path.'),
+        parallelSelection([], 'The fixed TAKT reviewers cover the changed path.'),
         response(reviewerSuite, 'coding-review', 'coding-reviewer', 'needs_fix'),
         response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'needs_fix'),
         responseForNext(peerReview, 'review-adjudication', 'remediation'),
@@ -737,7 +787,7 @@ describe('experimental builtin workflow', () => {
         responseForNext(core, 'replan', 'implement'),
         selection(['testing'], 'The second replanned implementation changes test boundaries.'),
         responseForNext(implementation, 'implement', 'COMPLETE'),
-        selection([], 'The fixed TAKT reviewers cover the replanned path.'),
+        parallelSelection([], 'The fixed TAKT reviewers cover the replanned path.'),
         response(reviewerSuite, 'coding-review', 'coding-reviewer', 'approved'),
         response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
         responseForNext(peerReview, 'review-adjudication', 'final-gate'),
@@ -745,7 +795,7 @@ describe('experimental builtin workflow', () => {
         responseForNext(core, 'replan', 'implement'),
         selection(['testing'], 'The final-gate replan still changes test boundaries.'),
         responseForNext(implementation, 'implement', 'COMPLETE'),
-        selection([], 'The fixed reviewers cover the final-gate replan.'),
+        parallelSelection([], 'The fixed reviewers cover the final-gate replan.'),
         response(reviewerSuite, 'coding-review', 'coding-reviewer', 'approved'),
         response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
         responseForNext(peerReview, 'review-adjudication', 'final-gate'),
@@ -758,10 +808,10 @@ describe('experimental builtin workflow', () => {
         selectorGitCommandRunner: SELECTOR_GIT_COMMAND_RUNNER,
         companionProviders: {
           'ai-antipattern-review-companion': { provider: 'mock' },
-          'ai-antipattern-review-moderator': { provider: 'mock' },
+          'review-companion-moderator': { provider: 'mock' },
         },
         companionDiffReader: COMPANION_DIFF_READER,
-        structuredCaller: new DefaultStructuredCaller(),
+        structuredCaller: new ProviderNeutralStructuredCaller(),
         workflowCallResolver: ({ parentWorkflow, step, projectCwd, lookupCwd }) =>
           resolveWorkflowCallTarget(parentWorkflow, step, projectCwd, lookupCwd),
       });
@@ -822,7 +872,7 @@ describe('experimental builtin workflow', () => {
         selectorProvider: SELECTOR_PROVIDER,
         selectorGitCommandRunner: SELECTOR_GIT_COMMAND_RUNNER,
         companionDiffReader: COMPANION_DIFF_READER,
-        structuredCaller: new DefaultStructuredCaller(),
+        structuredCaller: new ProviderNeutralStructuredCaller(),
         workflowCallResolver: ({ parentWorkflow, step, projectCwd, lookupCwd }) =>
           resolveWorkflowCallTarget(parentWorkflow, step, projectCwd, lookupCwd),
       });
@@ -863,7 +913,7 @@ describe('experimental builtin workflow', () => {
         selection(['testing'], 'Testing implementation facets are required.'),
         responseForNext(implementation, 'implement', 'COMPLETE'),
         ...acceptedAndMergedCompanionFinding(),
-        selection(['testing-review'], 'Testing review is required.'),
+        parallelSelection(['testing-review'], 'Testing review is required.'),
         response(reviewerSuite, 'coding-review', 'coding-reviewer', 'approved'),
         response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
         response(reviewerSuite, 'testing-review', 'testing-reviewer', 'approved'),
@@ -878,10 +928,10 @@ describe('experimental builtin workflow', () => {
         companionProviders: {
           'ai-antipattern-review-companion': { provider: 'mock' },
           'testing-review-companion': { provider: 'mock' },
-          'ai-antipattern-review-moderator': { provider: 'mock' },
+          'review-companion-moderator': { provider: 'mock' },
         },
         companionDiffReader: COMPANION_DIFF_READER_WITH_FINDING,
-        structuredCaller: new DefaultStructuredCaller(),
+        structuredCaller: new ProviderNeutralStructuredCaller(),
         workflowCallResolver: ({ parentWorkflow, step, projectCwd, lookupCwd }) =>
           resolveWorkflowCallTarget(parentWorkflow, step, projectCwd, lookupCwd),
       });

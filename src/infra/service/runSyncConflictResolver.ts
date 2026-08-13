@@ -55,7 +55,7 @@ export async function runSyncConflictResolver(
   return agent.call(prompt, {
     cwd: options.cwd,
     model: resolvedProviderModel.model,
-    permissionMode: 'edit',
+    permissionMode: resolvedProviderModel.permissionMode ?? 'edit',
     providerOptions,
     onPermissionRequest,
     onStream: options.onStream,

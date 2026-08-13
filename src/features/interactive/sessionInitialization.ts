@@ -38,5 +38,6 @@ export function initializeSession(
     personaName,
     sessionId: undefined,
     providerOptions,
+    permissionMode: resolved.permissionMode,
   };
 }

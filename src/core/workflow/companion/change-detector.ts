@@ -16,6 +16,11 @@ export interface CompanionChangeTrigger extends CompanionChangeCandidate {
   readonly snapshot: CompanionDiff;
 }
 
+export type CompanionChangeSkipReason =
+  | 'empty_diff'
+  | 'unchanged_digest'
+  | 'below_minimum_changed_lines';
+
 export class CompanionChangeDetector {
   private readonly intervalMs: number;
   private readonly minimumChangedLines: number;
@@ -124,18 +129,20 @@ export class CompanionChangeDetector {
   async evaluateCandidate(
     candidate: CompanionChangeCandidate,
     providedSnapshot?: CompanionDiff,
+    onSkipped?: (reason: CompanionChangeSkipReason) => void,
   ): Promise<CompanionChangeTrigger | undefined> {
     const snapshot = providedSnapshot ?? await this.readDiff();
     const ignoreMinimum = candidate.reason === 'completion' || candidate.reason === 'commit';
-    if (
-      (snapshot.changedLines === 0 && snapshot.changedFiles.length === 0)
-      || (
-        snapshot.digest === this.lastReviewedDigest
-        && candidate.allowUnchangedDigest !== true
-      )
-      || (!ignoreMinimum && snapshot.changedLines < this.minimumChangedLines)
-    ) {
+    const skipReason = snapshot.changedLines === 0 && snapshot.changedFiles.length === 0
+      ? 'empty_diff'
+      : snapshot.digest === this.lastReviewedDigest && candidate.allowUnchangedDigest !== true
+        ? 'unchanged_digest'
+        : !ignoreMinimum && snapshot.changedLines < this.minimumChangedLines
+          ? 'below_minimum_changed_lines'
+          : undefined;
+    if (skipReason !== undefined) {
       this.consumeThrough(candidate.observedGeneration);
+      onSkipped?.(skipReason);
       return undefined;
     }
     return { snapshot, ...candidate };

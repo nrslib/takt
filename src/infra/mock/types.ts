@@ -14,6 +14,8 @@ export interface MockCallOptions {
   model?: string;
   onStream?: StreamCallback;
   allowedTools?: string[];
+  /** Native structured-output schema requested by the caller. */
+  outputSchema?: Record<string, unknown>;
   /** Fixed response content (optional, defaults to generic mock response) */
   mockResponse?: string;
   /** Fixed status to return (optional, defaults to 'done') */

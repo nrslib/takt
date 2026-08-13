@@ -6,5 +6,5 @@
 各指摘には場所、壊れる契約と具体的な条件、修正方針を含めてください。
 {{include:instructions/review-round-scope}}
 {{include:instructions/review-investigation-discipline}}
-{{include:instructions/review-family-completion}}
+{{include:instructions/contract-family-review-by-mode}}
 {{include:instructions/review-pr-context}}
