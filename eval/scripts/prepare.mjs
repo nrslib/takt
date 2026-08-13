@@ -109,6 +109,20 @@ const TARGETS = [
     mutable: true,
   },
   {
+    id: 'write-tests-default-priority',
+    workflow: 'default',
+    step: 'write_tests',
+    fixture: 'eval/fixtures/write-tests-default-priority',
+    mutable: true,
+  },
+  {
+    id: 'write-tests-default-priority-codex',
+    workflow: 'default',
+    step: 'write_tests',
+    fixture: 'eval/fixtures/write-tests-default-priority',
+    mutable: true,
+  },
+  {
     id: 'scope-default-write-tests',
     workflow: 'default',
     step: 'write_tests',
@@ -202,6 +216,12 @@ const TARGETS = [
   },
   { id: 'review-adjudication', workflow: 'peer-review', step: 'review-adjudication', fixture: 'eval/fixtures/review-adjudication' },
   {
+    id: 'review-adjudication-default-priority',
+    workflow: 'peer-review',
+    step: 'review-adjudication',
+    fixture: 'eval/fixtures/review-adjudication-default-priority',
+  },
+  {
     id: 'final-readiness-merge-review',
     workflow: 'review-fix-default',
     step: 'merge-readiness-review',
@@ -228,6 +248,12 @@ const TARGETS = [
     fixture: 'eval/fixtures/final-readiness-supervision',
     phase: 'phase2',
     targetFile: 'supervisor-validation.md',
+  },
+  {
+    id: 'final-readiness-default-priority',
+    workflow: 'peer-review',
+    step: 'final-gate',
+    fixture: 'eval/fixtures/final-readiness-default-priority',
   },
 ];
 

@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'TAKT facet eval: write-tests resolves an explicit default priority collision'
+
+prompts:
+  - file://prompts/write-tests-default-priority.phase1.md
+
+providers:
+  - id: 'exec: bash providers/claude-coder.sh opus .work/write-tests-default-priority'
+    label: claude-opus
+
+tests:
+  - description: 'write-tests: cover Resume and failed-leaf coexistence at the shared default boundary'
+    vars:
+      task: file://cases/write-tests-default-priority-task.md
+      previous_response: file://cases/write-tests-default-priority-plan.md
+    assert:
+      - type: javascript
+        metric: default-priority/write-tests-coexistence
+        value: file://asserts/write-tests-default-priority.mjs

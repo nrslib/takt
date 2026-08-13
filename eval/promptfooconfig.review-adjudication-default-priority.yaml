@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'TAKT facet eval: adjudication cannot weaken an explicit default priority'
+
+prompts:
+  - file://prompts/review-adjudication-default-priority.phase1.md
+
+providers:
+  - id: 'exec: bash providers/claude-review.sh opus fixtures/review-adjudication-default-priority'
+    label: claude-opus
+
+tests:
+  - description: 'adjudication: safe-default preference cannot override the requirement source'
+    vars:
+      task: file://cases/review-adjudication-default-priority-task.md
+      previous_response: ''
+    assert:
+      - type: javascript
+        metric: default-priority/adjudication-authority
+        value: file://asserts/review-adjudication-default-priority.mjs

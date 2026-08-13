@@ -29,7 +29,7 @@ claude_pid=$!
   kill -TERM "$claude_pid" 2>/dev/null || exit 0
   sleep 15
   kill -KILL "$claude_pid" 2>/dev/null || true
-) &
+) >/dev/null 2>&1 &
 watchdog_pid=$!
 
 status=0

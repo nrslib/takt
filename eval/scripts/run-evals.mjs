@@ -51,6 +51,8 @@ const SUITES = {
   'issue-plan-samples': 'promptfooconfig.issue-plan-samples.yaml',
   'plan-report-source-authority': 'promptfooconfig.plan-report-source-authority.yaml',
   'write-tests-contract-traceability': 'promptfooconfig.write-tests-contract-traceability.yaml',
+  'write-tests-default-priority': 'promptfooconfig.write-tests-default-priority.yaml',
+  'write-tests-default-priority-codex': 'promptfooconfig.write-tests-default-priority-codex.yaml',
   'scope-default-write-tests': 'promptfooconfig.scope-default-write-tests.yaml',
   'scope-maintenance-write-tests': 'promptfooconfig.scope-maintenance-write-tests.yaml',
   'scope-architecture-search': 'promptfooconfig.scope-architecture-search.yaml',
@@ -66,8 +68,12 @@ const SUITES = {
   'companion-early-scan': 'promptfooconfig.companion-early-scan.yaml',
   'companion-evidence-boundary': 'promptfooconfig.companion-evidence-boundary.yaml',
   'review-adjudication': 'promptfooconfig.review-adjudication.yaml',
+  'review-adjudication-default-priority': 'promptfooconfig.review-adjudication-default-priority.yaml',
+  'review-adjudication-default-priority-codex': 'promptfooconfig.review-adjudication-default-priority-codex.yaml',
   'final-readiness-supervision': 'promptfooconfig.final-readiness-supervision.yaml',
   'final-readiness-preservation': 'promptfooconfig.final-readiness-preservation.yaml',
+  'final-readiness-default-priority': 'promptfooconfig.final-readiness-default-priority.yaml',
+  'final-readiness-default-priority-codex': 'promptfooconfig.final-readiness-default-priority-codex.yaml',
   'task-instruction-gherkin': 'promptfooconfig.task-instruction-gherkin.yaml',
 };
 
@@ -88,7 +94,17 @@ for (const name of names) {
 // 弱いモデルの行は常に部分失敗するため、デフォルトのゲート実行からは除外する。
 // fix-self-scan は claude ヘッドレス CLI（要 claude ログイン）で走るため、
 // codex 前提のデフォルト実行からは除外し、明示的に呼び出す。
-const DEFAULT_EXCLUDED = new Set(['rescan', 'rescan-coding', 'fix-self-scan']);
+const DEFAULT_EXCLUDED = new Set([
+  'rescan',
+  'rescan-coding',
+  'fix-self-scan',
+  'write-tests-default-priority',
+  'write-tests-default-priority-codex',
+  'review-adjudication-default-priority',
+  'review-adjudication-default-priority-codex',
+  'final-readiness-default-priority',
+  'final-readiness-default-priority-codex',
+]);
 const selected = names.length > 0 ? names : Object.keys(SUITES).filter((s) => !DEFAULT_EXCLUDED.has(s));
 
 const summary = [];
