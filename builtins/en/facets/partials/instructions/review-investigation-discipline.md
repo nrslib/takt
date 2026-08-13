@@ -4,6 +4,8 @@ Use only the judgment criteria and supporting material classified as applicable 
 
 The diff is the starting point for reading, not an absolute ceiling. Inspect the code and evidence needed to apply each relevant criterion. Follow the active role procedure and review authority policy for investigation scope and finding authority:
 
+When the changed contract includes an identifier supplied through external configuration or an API, or an otherwise documented identifier, derive a canonical concrete value and its components from the authoritative contract. Trace whether the same identity is preserved from the producer through normalization or lookup, consumers, and the terminal. When fixtures, mocks, or test inputs provide the components in separate fields, reconstruct the identity from those fields and compare it with the canonical contract independently of defects in their other fields. Do not treat a green test in which the fixture and implementation merely agree on the same non-canonical representation as independent evidence of canonical behavior.
+
 - compare observable behavior before and after a replacement or move
 - for changes to values, state, types, schemas, resolvers, normalizers, adapters, or shared helpers, trace definitions, references, reachable entries, and consumers
 - inspect failure, interruption, retry, concurrency, and auxiliary entries only when those state dimensions exist in the changed contract or a reachable impact path

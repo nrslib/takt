@@ -41,7 +41,7 @@ The `fix-loop-convergence` suite probes the remediation-loop convergence
 rules with 11 decision scenarios, each run on **two providers** — the
 claude headless CLI (`eval/providers/claude-judge.sh`, model
 `claude-opus-5`) and the codex CLI (`eval/providers/codex-judge.sh`, model
-`gpt-5.6-luna`). Prompts are assembled at run time from the live
+`gpt-5.6-luna`, reasoning effort `max`). Prompts are assembled at run time from the live
 `builtins/ja/facets` content (`eval/fix-loop-convergence-prompt.mjs`), so
 the suite always measures the current facet text. It needs both CLI
 logins, is excluded from the default suite run, and asserts on a fixed
@@ -52,6 +52,16 @@ The `fix-plan-cause-check` suite uses the same two providers and one-at-a-time
 execution. It checks that a planner does not treat failure during parallel
 execution as proof that serial execution is the fix. Invoke it explicitly with
 `npm run eval:prompts:fix-plan-cause-check`.
+
+The `initial-review-external-identity-wiring` suite runs the actual initial
+`coding-review` composition from `takt-experimental-review` on both Claude
+Opus 5 and Codex Luna Max (`gpt-5.6-luna`, reasoning effort `max`). It checks
+that a reviewer derives the canonical external identity from documentation,
+traces config and both consumers to terminal behavior, rejects a false-green
+E2E whose fixture shares the implementation's short key, requires canonical
+behavior coverage, and leaves a workflow-local cache contract alone. It needs
+both CLI logins and is excluded from the default suite run; invoke it with
+`npm run eval:prompts:initial-review-external-identity-wiring`.
 
 ## Suites
 
@@ -74,6 +84,7 @@ execution as proof that serial execution is the fix. Invoke it explicitly with
 | `fix-plan-boundary-preflight` | peer-review / fix-plan | fix-plan-boundary-preflight | whether fix-plan rejects a locally valid method that violates its representation and persistence boundary |
 | `review-family-closure` | peer-review-suite-base / coding-review | review-family-closure | whether one review reports every path affected by the same contract defect instead of stopping at a representative example |
 | `initial-review-contract-discovery` | peer-review / initial coding-review | initial-review-contract-discovery | whether the initial review independently discovers multiple blocking families and completes each family sweep |
+| `initial-review-external-identity-wiring` | takt-experimental-review / initial coding-review | initial-review-external-identity-wiring | whether Opus 5 and Luna Max reject an external target identity that is self-consistently shortened across config, two consumers, and a green E2E, require a canonical behavior test, and preserve an adjacent local-cache contract |
 | `testing-review-observable-evidence` | peer-review / initial testing-review | testing-review-observable-evidence | whether testing review requires one missing behavior-level integration check while rejecting module-count, per-hop, and already-covered test expansion |
 | `initial-plan-contract-closure` | default / plan | initial-review-contract-discovery | whether the initial plan discovers same-responsibility paths even under different names, closes real multi-boundary impact paths, and keeps local changes local |
 | `replan-contract-closure` | default / replan | initial-review-contract-discovery | whether replanning preserves the original task while adding required production boundaries and rejecting unrelated reviewer proposals |
@@ -182,6 +193,7 @@ npm run eval:prompts:fix-plan-fresh-findings
 npm run eval:prompts:fix-plan-boundary-preflight
 npm run eval:prompts:review-family-closure
 npm run eval:prompts:initial-review-contract-discovery
+npm run eval:prompts:initial-review-external-identity-wiring
 npm run eval:prompts:testing-review-observable-evidence
 npm run eval:prompts:initial-plan-contract-closure
 npm run eval:prompts:replan-contract-closure
@@ -209,11 +221,15 @@ relative to the config file's directory (`eval/`), not the process cwd.
 (promptfoo exits non-zero on test failures, which would break `&&` chains).
 ### Token budget rules
 
-- `model_reasoning_effort: low` is set on all providers and the grader to
+- `model_reasoning_effort: low` is set on the regular Codex SDK providers and
+  the grader to
   save subscription quota. This trades fidelity vs production runs — only
   compare scores between runs with the same effort setting. Known effect:
   minor findings (e.g. the TODO-without-issue plant) become flaky at low
-  effort; quantify with `--repeat` before judging a facet change.
+  effort; quantify with `--repeat` before judging a facet change. The
+  `fix-loop-convergence` and `initial-review-external-identity-wiring` suites
+  are explicit production-condition exceptions: their Codex CLI rows use
+  Luna with reasoning effort `max`.
 - Iterating on **assertions only** is free: promptfoo caches provider
   responses, so unchanged prompts re-score against cached outputs without
   calling codex. Facet changes alter the prompt and trigger real calls

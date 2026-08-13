@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
-# promptfoo exec プロバイダ: codex CLI での判定専用実行（read-only）。
-# 使い方: exec: bash providers/codex-judge.sh <model>
-# fix-loop-convergence スイートで使用。モデルを明示指定するため
-# openai:codex-sdk ではなく CLI を直接使う。
+# promptfoo exec provider: run a read-only Codex review in a fixture.
 set -euo pipefail
+
 model="$1"
-prompt="$2"
-timeout_seconds="${CODEX_JUDGE_TIMEOUT_SECONDS:-600}"
-cd "$(dirname "$0")/.."
+work_dir="$2"
+prompt="$3"
+timeout_seconds="${CODEX_REVIEW_TIMEOUT_SECONDS:-900}"
 codex_pid=''
 watchdog_pid=''
 tmp_dir=$(mktemp -d)
@@ -33,6 +31,8 @@ cleanup() {
 trap cleanup EXIT
 trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
+
+cd "$(dirname "$0")/../${work_dir}"
 printf '%s' "$prompt" > "$prompt_file"
 
 set -m
@@ -60,7 +60,7 @@ kill "$watchdog_pid" 2>/dev/null || true
 wait "$watchdog_pid" 2>/dev/null || true
 watchdog_pid=''
 if [ "$status" -ne 0 ]; then
-  echo "codex judge run failed or was killed after ${timeout_seconds}s (exit ${status})" >&2
+  echo "codex review failed or was killed after ${timeout_seconds}s (exit ${status})" >&2
   exit "$status"
 fi
 cat "$out"

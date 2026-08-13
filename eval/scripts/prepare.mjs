@@ -68,6 +68,12 @@ const TARGETS = [
     fixture: 'eval/fixtures/initial-review-contract-discovery',
   },
   {
+    id: 'initial-review-external-identity-wiring',
+    workflow: 'takt-experimental-review',
+    step: 'coding-review',
+    fixture: 'eval/fixtures/initial-review-external-identity-wiring',
+  },
+  {
     id: 'testing-review-observable-evidence',
     workflow: 'peer-review',
     via: 'initial-reviewers',
