@@ -276,7 +276,17 @@ export class AgentRunner {
         : provider.setup(agentSetup);
 
     if (options.internalSystemPrompt !== undefined) {
-      const systemPrompt = buildWrappedSystemPrompt(options.internalSystemPrompt, {
+      const personaDefinition = options.personaPath === undefined
+        ? personaSpec
+        : loadPersonaPromptFromPath(
+          options.personaPath,
+          options.projectCwd ?? options.cwd,
+          options.workflowBundleResourceRoot,
+        );
+      const internalAgentDefinition = personaDefinition === undefined
+        ? options.internalSystemPrompt
+        : `${personaDefinition}\n\n${options.internalSystemPrompt}`;
+      const systemPrompt = buildWrappedSystemPrompt(internalAgentDefinition, {
         ...options,
         providerRuntimeInstructions: provider.getRuntimeInstructions(options.allowedTools, callOptions.permissionMode, callOptions.providerOptions?.opencode?.networkAccess),
       });

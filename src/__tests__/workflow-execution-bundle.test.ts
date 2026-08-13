@@ -232,6 +232,102 @@ describe('workflow execution bundle', () => {
     expect(partStep.personaPath).toBe(partPersonaPath);
   });
 
+  it('materializes and rebinds dynamic selector personas', () => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-selector-'));
+    roots.push(root);
+    const workflowDir = join(root, '.takt', 'workflows');
+    const personasDir = join(root, '.takt', 'facets', 'personas');
+    mkdirSync(workflowDir, { recursive: true });
+    mkdirSync(personasDir, { recursive: true });
+    const facetSelectorPersonaPath = join(personasDir, 'facet-selector.md');
+    const parallelSelectorPersonaPath = join(personasDir, 'reviewer-selector.md');
+    writeFileSync(facetSelectorPersonaPath, 'Facet selector filesystem persona');
+    writeFileSync(parallelSelectorPersonaPath, 'Parallel selector filesystem persona');
+
+    const config = attachWorkflowOpaqueRef(normalizeWorkflowConfig({
+      name: 'root',
+      initial_step: 'implement',
+      max_steps: 5,
+      policies: { coding: 'Keep facet selection valid.' },
+      facet_pools: {
+        'implementation-facets': {
+          candidates: [{
+            id: 'frontend',
+            description: 'Frontend implementation',
+            policy: 'coding',
+          }],
+        },
+      },
+      steps: [
+        {
+          name: 'implement',
+          instruction: '{task}',
+          dynamic_facets: {
+            pool: 'implementation-facets',
+            selector: {
+              persona: 'facet-selector',
+              instruction: 'Select facets for the implementation.',
+            },
+          },
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        },
+        {
+          name: 'reviewers',
+          instruction: '{task}',
+          parallel: {
+            pool: [{
+              name: 'frontend',
+              description: 'Frontend review',
+              instruction: 'Review frontend changes',
+              rules: [{ condition: 'approved', next: 'COMPLETE' }],
+            }],
+            selection: {
+              mode: 'replace',
+              selector: {
+                persona: 'reviewer-selector',
+                instruction: 'Select reviewers for the implementation.',
+              },
+            },
+          },
+          rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
+        },
+      ],
+    }, workflowDir, { projectDir: root, workflowDir, lang: 'en' }), `project:sha256:${'r'.repeat(64)}`);
+
+    expect(config.steps[0]?.dynamicFacets?.selector?.personaPath).toBe(facetSelectorPersonaPath);
+    const normalizedParallel = config.steps[1]?.parallel;
+    if (normalizedParallel === undefined || Array.isArray(normalizedParallel)) {
+      throw new Error('Expected a dynamic parallel step');
+    }
+    expect(normalizedParallel.selection.selector?.personaPath).toBe(parallelSelectorPersonaPath);
+
+    const paths = buildRunPaths(root, 'selector-persona-run');
+    publishWorkflowExecutionBundle(paths, prepareWorkflowExecutionBundle({
+      rootWorkflow: config,
+      workflowCallResolver: () => null,
+      projectCwd: root,
+      lookupCwd: root,
+    }));
+
+    const loaded = loadWorkflowExecutionBundle(paths);
+    const facetSelector = loaded.rootWorkflow.steps[0]?.dynamicFacets?.selector;
+    const parallel = loaded.rootWorkflow.steps[1]?.parallel;
+    if (parallel === undefined || Array.isArray(parallel)) {
+      throw new Error('Expected a dynamic parallel step');
+    }
+    const parallelSelector = parallel.selection.selector;
+    for (const [selector, expectedContent] of [
+      [facetSelector, 'Facet selector filesystem persona'],
+      [parallelSelector, 'Parallel selector filesystem persona'],
+    ] as const) {
+      const personaPath = selector?.personaPath;
+      expect(personaPath).toBeDefined();
+      expect(dirname(personaPath!)).toBe(loaded.resourceRoot);
+      expect(basename(personaPath!)).toMatch(/^[0-9a-f]{64}$/);
+      expect(readFileSync(personaPath!, 'utf-8')).toBe(expectedContent);
+    }
+  });
+
   it('materializes and rebinds real facet personas for root-owned and inherited finding contracts', () => {
     const root = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-finding-contract-'));
     roots.push(root);

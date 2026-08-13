@@ -284,6 +284,8 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/runtime-yaml-boundary-capabilities-resolution.test.ts',
   'src/__tests__/saveTaskFile.test.ts',
   'src/__tests__/selectAndExecute-skipTaskList.test.ts',
+  'src/__tests__/selector-guidance-resolution.test.ts',
+  'src/__tests__/selector-guidance-runtime-boundary.test.ts',
   'src/__tests__/session-reader.test.ts',
   'src/__tests__/sessionStore.test.ts',
   'src/__tests__/task-delete-task.test.ts',

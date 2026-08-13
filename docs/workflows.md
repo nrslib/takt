@@ -397,6 +397,38 @@ are unaffected.
 - The current diff includes changes that already existed when the run started. Changes committed during a run are no longer different from `HEAD` and are not guaranteed to remain in later selector inputs; prior reports remain available as separate evidence. A normal empty diff is passed explicitly. A non-Git directory, an unavailable Git command, or a repository without `HEAD` fails before agent startup.
 - The saved participant manifest is keyed by the workflow invocation path, workflow-call instance path, and parallel step. Report inheritance and aggregate evaluation use that manifest, so a reviewer removed by `replace` cannot contribute stale reports or findings to the current round.
 
+#### Selector guidance
+
+Both selector forms accept optional `persona` guidance and required `instruction` guidance:
+
+```yaml
+steps:
+  - name: fix
+    dynamic_facets:
+      pool: implementation
+      selector:
+        persona: facet-selector
+        instruction: select-implement-facets
+  - name: reviewers
+    parallel:
+      fixed: []
+      pool:
+        - name: backend
+          persona: backend-reviewer
+          description: Review backend changes
+          instruction: Review the backend
+          rules: [{ condition: approved }]
+      selection:
+        mode: replace
+        selector:
+          persona: reviewer-selector
+          instruction: select-reviewers
+```
+
+`selector.instruction` is required whenever a selector is configured; `persona` is optional. The selector guidance only describes how to select facet or participant IDs. TAKT retains responsibility for the evidence input, structured output contract, candidate validation, selection mode, read-only execution, empty tools/MCP, and disabled permission bypass. A selector cannot change the selected agent's `persona`, `instruction`, provider, permissions, tools, MCP configuration, or output contract.
+
+The selector guidance references the workflow's existing persona and instruction resources. Unknown selector keys, an empty selector, a selector without `instruction`, or an unresolved persona/instruction reference fails during schema or workflow validation with the configuration path. A raw `$param` reference is valid only after callable argument expansion; an unexpanded reference in a non-callable workflow is rejected.
+
 ### Dynamic Facet Selection (facet pools)
 
 A normal agent step, or an agent sub-step under `parallel`, can dynamically select additional `policy` and `knowledge` facets from a validated candidate pool right before its main agent runs. This keeps the fixed facets the step already declares and adds only the facets the current situation requires — for example, selecting a transaction-correctness policy only after a review surfaces transaction-boundary concerns.

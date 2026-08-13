@@ -132,6 +132,20 @@ function collectUsedLocalKeys(raw: RawWorkflow): Record<'personas' | 'policies' 
     for (const ref of collectNamedRefsFromField(raw, step.persona, ['facet_ref'], 'persona')) {
       used.personas.add(ref);
     }
+    for (const ref of collectNamedRefsFromField(raw, step.dynamic_facets?.selector?.persona, ['facet_ref'], 'persona')) {
+      used.personas.add(ref);
+    }
+    for (const ref of collectNamedRefsFromField(raw, step.dynamic_facets?.selector?.instruction, ['facet_ref'], 'instruction')) {
+      used.instructions.add(ref);
+    }
+    if (step.parallel !== undefined && !Array.isArray(step.parallel)) {
+      for (const ref of collectNamedRefsFromField(raw, step.parallel.selection.selector?.persona, ['facet_ref'], 'persona')) {
+        used.personas.add(ref);
+      }
+      for (const ref of collectNamedRefsFromField(raw, step.parallel.selection.selector?.instruction, ['facet_ref'], 'instruction')) {
+        used.instructions.add(ref);
+      }
+    }
     if (step.team_leader?.persona && isNamedRef(step.team_leader.persona)) {
       used.personas.add(step.team_leader.persona);
     }
@@ -214,6 +228,40 @@ function validateStepRefs(
       () => sections.personas?.[ref] !== undefined
         || resolvePersona(ref, sections, workflowDir, context).personaPath !== undefined,
       [...stepPath, 'persona'],
+    );
+  }
+  const validateSelectorRefs = (
+    selector: { persona?: unknown; instruction?: unknown } | undefined,
+    selectorPath: readonly PropertyKey[],
+  ): void => {
+    for (const ref of collectNamedRefsFromField(raw, selector?.persona, ['facet_ref'], 'persona')) {
+      appendMissingRef(
+        diagnostics,
+        `${label} selector persona`,
+        ref,
+        () => sections.personas?.[ref] !== undefined
+          || resolvePersona(ref, sections, workflowDir, context).personaPath !== undefined,
+        [...selectorPath, 'persona'],
+      );
+    }
+    for (const ref of collectNamedRefsFromField(raw, selector?.instruction, ['facet_ref'], 'instruction')) {
+      appendMissingRef(
+        diagnostics,
+        `${label} selector instruction`,
+        ref,
+        () => canResolveNamedFacetRef(ref, sections.resolvedInstructions, 'instructions', context),
+        [...selectorPath, 'instruction'],
+      );
+    }
+  };
+  validateSelectorRefs(
+    step.dynamic_facets?.selector,
+    [...stepPath, 'dynamic_facets', 'selector'],
+  );
+  if (step.parallel !== undefined && !Array.isArray(step.parallel)) {
+    validateSelectorRefs(
+      step.parallel.selection.selector,
+      [...stepPath, 'parallel', 'selection', 'selector'],
     );
   }
   if (step.team_leader?.persona && isNamedRef(step.team_leader.persona)) {

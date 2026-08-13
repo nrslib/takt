@@ -26,6 +26,30 @@ function assertNoParamReferencesInStep(
     if (isWorkflowParamReference(step.instruction)) {
       throw withWorkflowStepErrorPath(new Error(`Step "${step.name}" cannot use $param in instruction outside a callable subworkflow`), [...stepPath, 'instruction']);
     }
+    const assertNoParamReferencesInSelector = (
+      selector: { persona?: unknown; instruction?: unknown } | undefined,
+      selectorPath: readonly PropertyKey[],
+    ): void => {
+      for (const field of ['persona', 'instruction'] as const) {
+        if (!isWorkflowParamReference(selector?.[field])) {
+          continue;
+        }
+        throw withWorkflowStepErrorPath(
+          new Error(`Step "${step.name}" cannot use $param in selector.${field} outside a callable subworkflow`),
+          [...selectorPath, field],
+        );
+      }
+    };
+    assertNoParamReferencesInSelector(
+      step.dynamic_facets?.selector,
+      [...stepPath, 'dynamic_facets', 'selector'],
+    );
+    if (step.parallel !== undefined && !Array.isArray(step.parallel)) {
+      assertNoParamReferencesInSelector(
+        step.parallel.selection.selector,
+        [...stepPath, 'parallel', 'selection', 'selector'],
+      );
+    }
     if (isWorkflowParamReference(step.companion)) {
       throw withWorkflowStepErrorPath(new Error(`Step "${step.name}" cannot use $param in companion outside a callable subworkflow`), [...stepPath, 'companion']);
     }

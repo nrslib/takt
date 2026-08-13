@@ -19,7 +19,7 @@ import type {
   WorkflowConfig,
   WorkflowStep,
 } from '../../../core/models/index.js';
-import { getAllParallelSubSteps } from '../../../core/models/index.js';
+import { getAllParallelSubSteps, isDynamicParallelSubSteps } from '../../../core/models/index.js';
 import type { WorkflowCallResolver } from '../../../core/workflow/types.js';
 import { isWorkflowCallStep } from '../../../core/workflow/step-kind.js';
 import { findWorkflowStepLocation } from '../../../core/workflow/workflow-step-location.js';
@@ -192,6 +192,13 @@ function materializeAgentStep(
   resourceKinds: Map<string, BundleManifest['resources'][string]['kind']>,
 ): void {
   materializePersona(step, customAgents, projectCwd, resources, resourceKinds);
+  if (step.dynamicFacets?.selector !== undefined) {
+    materializePersona(step.dynamicFacets.selector, customAgents, projectCwd, resources, resourceKinds);
+  }
+  if (step.parallel !== undefined && isDynamicParallelSubSteps(step.parallel)
+    && step.parallel.selection.selector !== undefined) {
+    materializePersona(step.parallel.selection.selector, customAgents, projectCwd, resources, resourceKinds);
+  }
   if (step.teamLeader !== undefined) {
     materializePersona(step.teamLeader, customAgents, projectCwd, resources, resourceKinds);
     const partOwner = {
@@ -582,6 +589,13 @@ function rebindWorkflowResourcePaths(
   walkSteps(config.steps, (step) => {
     if (step.kind !== undefined && step.kind !== 'agent') return;
     rebindPersona(step);
+    if (step.dynamicFacets?.selector !== undefined) {
+      rebindPersona(step.dynamicFacets.selector);
+    }
+    if (step.parallel !== undefined && isDynamicParallelSubSteps(step.parallel)
+      && step.parallel.selection.selector !== undefined) {
+      rebindPersona(step.parallel.selection.selector);
+    }
     if (step.teamLeader !== undefined) {
       rebindPersona(step.teamLeader);
       if (step.teamLeader.partPersonaPath !== undefined) {
@@ -637,6 +651,16 @@ function validateMaterializedWorkflow(config: WorkflowConfig): void {
   walkSteps(config.steps, (step) => {
     if (step.kind !== undefined && step.kind !== 'agent') return;
     requireMaterializedPersona(step, `step "${step.name}"`);
+    if (step.dynamicFacets?.selector !== undefined) {
+      requireMaterializedPersona(step.dynamicFacets.selector, `dynamic facet selector for step "${step.name}"`);
+    }
+    if (step.parallel !== undefined && isDynamicParallelSubSteps(step.parallel)
+      && step.parallel.selection.selector !== undefined) {
+      requireMaterializedPersona(
+        step.parallel.selection.selector,
+        `dynamic parallel selector for step "${step.name}"`,
+      );
+    }
     if (step.teamLeader !== undefined) {
       requireMaterializedPersona(step.teamLeader, `team leader "${step.name}"`);
       if (step.teamLeader.partPersona !== undefined && step.teamLeader.partPersonaPath === undefined) {

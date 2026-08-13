@@ -115,6 +115,7 @@ export type {
   ResolvedFacetPoolCandidate,
   ResolvedFacetContent,
   DynamicFacetsConfig,
+  SelectorGuidance,
   DynamicFacetSelectionSnapshot,
 } from './workflow-types.js';
 

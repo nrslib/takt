@@ -34,6 +34,9 @@ export interface ResolvedInternalAgentOptions {
   readonly agentName?: string;
   readonly cwd: string;
   readonly projectCwd?: string;
+  readonly persona?: string;
+  readonly workflowBundleResourceRoot?: string;
+  readonly personaPath?: string;
   readonly abortSignal?: AbortSignal;
   readonly language?: Language;
   readonly childProcessEnv?: Readonly<Record<string, string>>;
@@ -55,9 +58,10 @@ export async function executeIsolatedStructuredInternalAgent(
   const {
     resolution,
     agentName,
+    persona,
     ...executionOptions
   } = options;
-  return runAgent(undefined, instruction, {
+  return runAgent(persona, instruction, {
     ...executionOptions,
     ...(resolution.provider === 'opencode' ? { executionProfile: 'isolated-structured' } : {}),
     ...(agentName === undefined ? {} : { internalAgentName: agentName }),

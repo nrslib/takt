@@ -12,6 +12,7 @@ import { getWorkflowSourcePath } from '../infra/config/loaders/workflowSourceMet
 import { getWorkflowTrustInfo, resolveWorkflowTrustInfo } from '../infra/config/loaders/workflowTrustSource.js';
 import type { WorkflowConfig } from '../core/models/index.js';
 import type { AutoRoutingConfig } from '../core/models/config-types.js';
+import { getWorkflowConfigErrorPath } from '../core/workflow/workflow-config-error.js';
 import { findWorkflowCallStep } from './testUtils/workflowCallStepTestHelper.js';
 
 describe('workflowCallResolver module boundary', () => {
@@ -487,6 +488,280 @@ steps:
         }),
       ],
     });
+  });
+
+  it('expands callable selector persona and instruction refs for facet and parallel selectors', () => {
+    writeProjectWorkflow('parent.yaml', `name: parent
+initial_step: delegate
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: child
+    args:
+      selector_persona: selector-persona
+      selector_instruction: selector-guidance
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+    writeProjectWorkflow('child.yaml', `name: child
+subworkflow:
+  callable: true
+  params:
+    selector_persona:
+      type: facet_ref
+      facet_kind: persona
+    selector_instruction:
+      type: facet_ref
+      facet_kind: instruction
+initial_step: facets
+personas:
+  selector-persona: Selector persona content
+instructions:
+  selector-guidance: Selector guidance content
+knowledge:
+  architecture: Architecture guidance content
+facet_pools:
+  selector-facets:
+    candidates:
+      - id: architecture
+        description: Architecture review
+        knowledge: architecture
+steps:
+  - name: facets
+    instruction: Implement
+    dynamic_facets:
+      pool: selector-facets
+      selector:
+        persona:
+          $param: selector_persona
+        instruction:
+          $param: selector_instruction
+    rules:
+      - condition: done
+        next: COMPLETE
+  - name: reviewers
+    parallel:
+      pool:
+        - name: architecture
+          description: Architecture review
+          instruction: Review architecture
+          rules:
+            - condition: approved
+              next: COMPLETE
+      selection:
+        mode: replace
+        selector:
+          persona:
+            $param: selector_persona
+          instruction:
+            $param: selector_instruction
+    rules:
+      - condition: all("approved")
+        next: COMPLETE
+`);
+
+    const parentWorkflow = loadProjectWorkflow('parent.yaml');
+    const childWorkflow = workflowCallResolver.resolveWorkflowCallTarget(
+      parentWorkflow!,
+      findWorkflowCallStep(parentWorkflow!, 'delegate'),
+      projectDir,
+      projectDir,
+    );
+
+    expect(childWorkflow).not.toBeNull();
+    const facetSelector = childWorkflow!.steps[0]?.dynamicFacets?.selector;
+    expect(facetSelector).toEqual({
+      persona: 'Selector persona content',
+      instruction: 'Selector guidance content',
+    });
+    const parallel = childWorkflow!.steps[1]?.parallel;
+    if (parallel === undefined || Array.isArray(parallel)) {
+      throw new Error('Expected a dynamic parallel step');
+    }
+    expect(parallel.selection.selector).toEqual({
+      persona: 'Selector persona content',
+      instruction: 'Selector guidance content',
+    });
+    expect(JSON.stringify(childWorkflow)).not.toContain('$param');
+  });
+
+  it('rejects a callable selector instruction that expands to an external absolute path', () => {
+    const secretPath = join(externalDir, 'selector-secret.md');
+    writeFileSync(secretPath, 'SECRET-OUTSIDE-PROJECT', 'utf-8');
+    writeProjectWorkflow('parent.yaml', `name: parent
+initial_step: delegate
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: child
+    args:
+      selector_instruction: ${secretPath}
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+    writeProjectWorkflow('child.yaml', `name: child
+subworkflow:
+  callable: true
+  params:
+    selector_instruction:
+      type: facet_ref
+      facet_kind: instruction
+initial_step: facets
+knowledge:
+  architecture: Architecture guidance content
+steps:
+  - name: facets
+    instruction: Implement
+    dynamic_facets:
+      pool: selector-facets
+      selector:
+        instruction:
+          $param: selector_instruction
+    rules:
+      - condition: done
+        next: COMPLETE
+facet_pools:
+  selector-facets:
+    candidates:
+      - id: architecture
+        description: Architecture review
+        knowledge: architecture
+`);
+
+    const parentWorkflow = loadProjectWorkflow('parent.yaml');
+    expect(parentWorkflow).not.toBeNull();
+
+    expect(() => workflowCallResolver.resolveWorkflowCallTarget(
+      parentWorkflow!,
+      findWorkflowCallStep(parentWorkflow!, 'delegate'),
+      projectDir,
+      projectDir,
+    )).toThrow(/Selector instruction file must stay inside an allowed instruction facet root/);
+  });
+
+  it('rejects a callable selector map source outside the instruction facet root', () => {
+    const secretPath = join(externalDir, 'selector-map-secret.md');
+    writeFileSync(secretPath, 'SECRET-OUTSIDE-INSTRUCTION-ROOT', 'utf-8');
+    writeProjectWorkflow('parent.yaml', `name: parent
+initial_step: delegate
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: child
+    args:
+      selector_instruction: selector.md
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+    writeProjectWorkflow('child.yaml', `name: child
+subworkflow:
+  callable: true
+  params:
+    selector_instruction:
+      type: facet_ref
+      facet_kind: instruction
+initial_step: facets
+knowledge:
+  architecture: Architecture guidance content
+instructions:
+  selector.md: ${secretPath}
+steps:
+  - name: facets
+    instruction: Implement
+    dynamic_facets:
+      pool: selector-facets
+      selector:
+        instruction:
+          $param: selector_instruction
+    rules:
+      - condition: done
+        next: COMPLETE
+facet_pools:
+  selector-facets:
+    candidates:
+      - id: architecture
+        description: Architecture review
+        knowledge: architecture
+`);
+
+    const parentWorkflow = loadProjectWorkflow('parent.yaml');
+    expect(parentWorkflow).not.toBeNull();
+
+    expect(() => workflowCallResolver.resolveWorkflowCallTarget(
+      parentWorkflow!,
+      findWorkflowCallStep(parentWorkflow!, 'delegate'),
+      projectDir,
+      projectDir,
+    )).toThrow(/Selector instruction file must stay inside an allowed instruction facet root/);
+  });
+
+  it('rejects selector parameter references outside a callable workflow', () => {
+    writeProjectWorkflow('non-callable.yaml', `name: non-callable
+initial_step: facets
+steps:
+  - name: facets
+    instruction: Implement
+    dynamic_facets:
+      pool: selector-facets
+      selector:
+        instruction:
+          $param: selector_instruction
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    expect(() => loadProjectWorkflow('non-callable.yaml')).toThrow(
+      /cannot use \$param in selector\.instruction outside a callable subworkflow/,
+    );
+  });
+
+  it('rejects raw parameter references in a non-callable parallel selector with its configuration path', () => {
+    writeProjectWorkflow('non-callable-parallel.yaml', `name: non-callable-parallel
+initial_step: reviewers
+steps:
+  - name: reviewers
+    instruction: Review
+    parallel:
+      pool:
+        - name: architecture
+          description: Architecture review
+          instruction: Review architecture
+          rules:
+            - condition: approved
+              next: COMPLETE
+      selection:
+        mode: replace
+        selector:
+          instruction:
+            $param: selector_instruction
+    rules:
+      - condition: all("approved")
+        next: COMPLETE
+`);
+
+    let validationError: unknown;
+    try {
+      loadProjectWorkflow('non-callable-parallel.yaml');
+    } catch (error) {
+      validationError = error;
+    }
+
+    expect(validationError).toBeInstanceOf(Error);
+    expect((validationError as Error).message).toContain(
+      'cannot use $param in selector.instruction outside a callable subworkflow',
+    );
+    expect(getWorkflowConfigErrorPath(validationError)).toEqual([
+      'steps',
+      0,
+      'parallel',
+      'selection',
+      'selector',
+      'instruction',
+    ]);
   });
 
   it('expands callable $param values inside nested workflow_call args', () => {

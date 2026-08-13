@@ -115,6 +115,7 @@ export class DynamicFacetSelectorCoordinator {
       cumulativeDiff: inputs.workingTreeDiff,
       pool,
       maxSelected: step.dynamicFacets.maxSelected,
+      selectorInstruction: step.dynamicFacets.selector?.instruction,
     });
 
     const sensitiveValues = createBoundedSensitiveValues();
@@ -139,8 +140,11 @@ export class DynamicFacetSelectorCoordinator {
         {
           cwd: this.deps.getCwd(),
           projectCwd: this.deps.engineOptions.projectCwd,
+          persona: step.dynamicFacets.selector?.persona,
+          workflowBundleResourceRoot: this.deps.engineOptions.workflowBundleResourceRoot,
           abortSignal: this.deps.engineOptions.abortSignal,
           language: this.deps.engineOptions.language,
+          personaPath: step.dynamicFacets.selector?.personaPath,
           resolution: {
             provider: selectorProvider.provider,
             model: selectorProvider.model,

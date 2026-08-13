@@ -1,4 +1,5 @@
 import type { ResolvedFacetPool } from '../../models/workflow-types.js';
+import { buildSelectorGuidanceLines } from '../selector-contract.js';
 
 export interface DynamicFacetSelectorInstructionInput {
   readonly task: string;
@@ -12,6 +13,7 @@ export interface DynamicFacetSelectorInstructionInput {
   readonly cumulativeDiff: string;
   readonly pool: ResolvedFacetPool;
   readonly maxSelected?: number;
+  readonly selectorInstruction?: string;
 }
 
 export function buildDynamicFacetSelectorInstruction(input: DynamicFacetSelectorInstructionInput): string {
@@ -25,6 +27,7 @@ export function buildDynamicFacetSelectorInstruction(input: DynamicFacetSelector
   return [
     'You are TAKT\'s internal dynamic facet selector. Select only candidate IDs from the provided pool.',
     'Return only the requested structured output.',
+    ...buildSelectorGuidanceLines(input.selectorInstruction),
     '',
     `Task:\n${input.task}`,
     '',

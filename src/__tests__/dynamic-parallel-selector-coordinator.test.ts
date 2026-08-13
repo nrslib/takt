@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AgentResponse, WorkflowState, WorkflowStep } from '../core/models/types.js';
+import type {
+  AgentResponse,
+  DynamicParallelSubSteps,
+  WorkflowState,
+  WorkflowStep,
+} from '../core/models/types.js';
 import {
   DynamicParallelSelectorCoordinator,
   type DynamicParallelSelectorCoordinatorDeps,
@@ -17,7 +22,7 @@ import { executeIsolatedStructuredInternalAgent } from '../agents/agent-usecases
 
 const mockedExecuteAgent = vi.mocked(executeIsolatedStructuredInternalAgent);
 
-function dynamicParallelStep(): WorkflowStep {
+function dynamicParallelStep(selection: unknown = { mode: 'replace' }): WorkflowStep {
   return makeStep('reviewers', {
     parallel: {
       kind: 'dynamic',
@@ -26,7 +31,7 @@ function dynamicParallelStep(): WorkflowStep {
         { ...makeStep('frontend'), description: 'frontend review' },
         { ...makeStep('backend'), description: 'backend review' },
       ],
-      selection: { mode: 'replace' },
+      selection: selection as DynamicParallelSubSteps['selection'],
     },
   });
 }
@@ -53,6 +58,7 @@ function workflowState(): WorkflowState {
 function dependencies(): DynamicParallelSelectorCoordinatorDeps {
   const engineOptions: WorkflowEngineOptions = {
     projectCwd: '/project',
+    workflowBundleResourceRoot: '/project/.takt/runs/bundle/resources',
     selectorProvider: {
       provider: 'mock',
       model: undefined,
@@ -104,6 +110,56 @@ describe('DynamicParallelSelectorCoordinator', () => {
     expect(outputSchema).not.toHaveProperty('properties.selected_ids.uniqueItems');
     expect(participants.map(({ name }) => name)).toEqual(['architecture', 'frontend']);
     expect(deps.commitSelection).toHaveBeenCalledOnce();
+  });
+
+  it('passes selector guidance to the isolated agent without changing participant selection', async () => {
+    mockedExecuteAgent.mockResolvedValueOnce({
+      persona: 'selector',
+      status: 'done',
+      content: '',
+      timestamp: new Date(),
+      structuredOutput: { selected_ids: ['frontend'], rationale: 'frontend changes are present' },
+    });
+    const deps = dependencies();
+    const coordinator = new DynamicParallelSelectorCoordinator(deps);
+    const step = dynamicParallelStep({
+      mode: 'replace',
+      selector: {
+        persona: 'reviewer-selector',
+        personaPath: '/project/.takt/facets/personas/reviewer-selector.md',
+        instruction: 'Select reviewers from the changed paths and prior reports.',
+      },
+    });
+
+    const participants = await coordinator.selectParticipants(
+      step,
+      workflowState(),
+      'review frontend changes',
+    );
+
+    const [systemPrompt, instruction, outputSchema, options] = mockedExecuteAgent.mock.calls[0] ?? [];
+    expect(systemPrompt).toContain('internal dynamic parallel selector');
+    expect(instruction).toContain('Select reviewers from the changed paths and prior reports.');
+    expect(instruction).toContain('Task:\nreview frontend changes');
+    expect(instruction).toContain('- frontend: frontend review');
+    expect(outputSchema).toMatchObject({
+      type: 'object',
+      additionalProperties: false,
+      required: ['selected_ids', 'rationale'],
+      properties: {
+        selected_ids: {
+          type: 'array',
+          items: { type: 'string', enum: ['frontend', 'backend'] },
+        },
+        rationale: { type: 'string' },
+      },
+    });
+    expect(options).toEqual(expect.objectContaining({
+      persona: 'reviewer-selector',
+      personaPath: '/project/.takt/facets/personas/reviewer-selector.md',
+      workflowBundleResourceRoot: '/project/.takt/runs/bundle/resources',
+    }));
+    expect(participants.map(({ name }) => name)).toEqual(['architecture', 'frontend']);
   });
 
   it('should run the selector when run-local state has no resume selection', async () => {

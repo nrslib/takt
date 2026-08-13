@@ -106,6 +106,7 @@ export type {
   ResolvedFacetPoolCandidate,
   ResolvedFacetContent,
   DynamicFacetsConfig,
+  SelectorGuidance,
   DynamicFacetSelectionSnapshot,
 } from './types.js';
 

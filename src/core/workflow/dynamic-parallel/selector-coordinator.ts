@@ -80,6 +80,7 @@ export class DynamicParallelSelectorCoordinator {
       workingTreeDiff: inputs.workingTreeDiff,
       pool: step.parallel.pool,
       selection: step.parallel.selection,
+      selectorInstruction: step.parallel.selection.selector?.instruction,
       ...(previous === undefined ? {} : { previousSnapshot: previous }),
     });
     const sensitiveValues = createBoundedSensitiveValues();
@@ -104,8 +105,11 @@ export class DynamicParallelSelectorCoordinator {
         {
           cwd: this.deps.getCwd(),
           projectCwd: this.deps.engineOptions.projectCwd,
+          persona: step.parallel.selection.selector?.persona,
+          workflowBundleResourceRoot: this.deps.engineOptions.workflowBundleResourceRoot,
           abortSignal: this.deps.engineOptions.abortSignal,
           language: this.deps.engineOptions.language,
+          personaPath: step.parallel.selection.selector?.personaPath,
           resolution: {
             provider: selectorProvider.provider,
             model: selectorProvider.model,

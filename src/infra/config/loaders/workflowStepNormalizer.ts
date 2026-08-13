@@ -16,6 +16,7 @@ import type {
   WorkflowCallArgValue,
   WorkflowStepKind,
   DynamicFacetsConfig,
+  SelectorGuidance,
 } from '../../../core/models/workflow-types.js';
 import type { CompanionSelection } from '../../../core/models/companion-types.js';
 import { applyQualityGateOverrides } from './qualityGateOverrides.js';
@@ -27,6 +28,7 @@ import {
   resolvePersona,
   resolveRefListWithSource,
   resolveRefToContent,
+  resolveSelectorInstruction,
 } from './resource-resolver.js';
 import { mergeProviderOptions } from '../providerOptions.js';
 import { normalizeProviderBlockOptions } from '../providerBlockOptions.js';
@@ -46,6 +48,7 @@ import { normalizeQualityGates } from '../configNormalizers.js';
 import { withWorkflowConfigErrorPath as withWorkflowStepErrorPath } from '../../../core/workflow/workflow-config-error.js';
 
 type RawStep = z.output<typeof WorkflowStepRawSchema>;
+type RawSelectorGuidance = NonNullable<NonNullable<RawStep['dynamic_facets']>['selector']>;
 type RawProviderReference = RawStep['provider'];
 
 /** Workflow-level inputs threaded down to every step so `capabilities:` / `mcp:` references resolve. */
@@ -120,6 +123,9 @@ export function normalizeProviderReference(
 function normalizeDynamicFacets(
   raw: RawStep['dynamic_facets'],
   stepPath: readonly PropertyKey[],
+  workflowDir: string,
+  sections: WorkflowSections,
+  context?: FacetResolutionContext,
 ): DynamicFacetsConfig | undefined {
   if (raw === undefined) {
     return undefined;
@@ -133,7 +139,58 @@ function normalizeDynamicFacets(
   return normalizeStepField(stepPath, ['dynamic_facets'], () => ({
     pool,
     ...(raw.max_selected === undefined ? {} : { maxSelected: raw.max_selected }),
+    ...(raw.selector === undefined ? {} : {
+      selector: normalizeSelectorGuidance(
+        raw.selector,
+        stepPath,
+        ['dynamic_facets', 'selector'],
+        workflowDir,
+        sections,
+        context,
+      ),
+    }),
   }));
+}
+
+function normalizeSelectorGuidance(
+  raw: RawSelectorGuidance,
+  stepPath: readonly PropertyKey[],
+  selectorPath: readonly PropertyKey[],
+  workflowDir: string,
+  sections: WorkflowSections,
+  context?: FacetResolutionContext,
+): SelectorGuidance {
+  const normalizedPersona = raw.persona === undefined
+    ? undefined
+    : normalizeStepField(stepPath, [...selectorPath, 'persona'], () => {
+      if (typeof raw.persona !== 'string') {
+        throw new Error('selector.persona has an unresolved parameter reference');
+      }
+      if (raw.persona.trim().length === 0) {
+        throw new Error('selector.persona must not be empty');
+      }
+      return resolvePersona(raw.persona, sections, workflowDir, context);
+    });
+  const instruction = normalizeStepField(stepPath, [...selectorPath, 'instruction'], () => {
+    if (typeof raw.instruction !== 'string') {
+      throw new Error('selector.instruction has an unresolved parameter reference');
+    }
+    const resolved = resolveSelectorInstruction(
+      raw.instruction,
+      sections.resolvedInstructionsWithSource ?? sections.resolvedInstructions,
+      workflowDir,
+      context,
+    );
+    if (resolved === undefined) {
+      throw new Error(`selector.instruction could not be resolved: ${raw.instruction}`);
+    }
+    return resolved;
+  });
+  return {
+    ...(normalizedPersona?.personaSpec === undefined ? {} : { persona: normalizedPersona.personaSpec }),
+    ...(normalizedPersona?.personaPath === undefined ? {} : { personaPath: normalizedPersona.personaPath }),
+    instruction,
+  };
 }
 
 function normalizePromotionEntry(
@@ -544,7 +601,19 @@ export function normalizeStepFromRaw(
       kind: 'dynamic' as const,
       fixed,
       pool,
-      selection: step.parallel.selection,
+      selection: {
+        mode: step.parallel.selection.mode,
+        ...(step.parallel.selection.selector === undefined ? {} : {
+          selector: normalizeSelectorGuidance(
+            step.parallel.selection.selector,
+            stepPath,
+            ['parallel', 'selection', 'selector'],
+            workflowDir,
+            sections,
+            context,
+          ),
+        }),
+      },
     };
     return {
       ...normalizedAgentFields,
@@ -572,7 +641,7 @@ export function normalizeStepFromRaw(
   return {
     ...normalizedAgentFields,
     session: step.session,
-    dynamicFacets: normalizeDynamicFacets(step.dynamic_facets, stepPath),
+    dynamicFacets: normalizeDynamicFacets(step.dynamic_facets, stepPath, workflowDir, sections, context),
   };
   } catch (error) {
     throw withWorkflowStepErrorPath(error, stepPath);

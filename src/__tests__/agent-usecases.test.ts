@@ -96,24 +96,28 @@ describe('agent-usecases', () => {
     ));
     const schema = { type: 'object', additionalProperties: false };
 
+    const internalOptions = {
+      cwd: '/tmp',
+      workflowBundleResourceRoot: '/tmp/workflow-bundle/resources',
+      agentName: 'security-reviewer',
+      personaPath: '/project/.takt/facets/personas/security-reviewer.md',
+      sessionId: 'ambient-session',
+      resolution: {
+        provider: 'opencode' as const,
+        model: 'opencode/model',
+        providerOptions: {
+          codex: { skills: { repo: true, user: true } },
+          opencode: { allowedTools: ['write'] },
+          claude: { allowedTools: ['Bash'], skills: { enabled: true } },
+        },
+      },
+    } as unknown as Parameters<typeof executeIsolatedStructuredInternalAgent>[3];
+
     const response = await executeIsolatedStructuredInternalAgent(
       'selector system prompt',
       'select reviewers',
       schema,
-      {
-        cwd: '/tmp',
-        agentName: 'security-reviewer',
-        sessionId: 'ambient-session',
-        resolution: {
-          provider: 'opencode',
-          model: 'opencode/model',
-          providerOptions: {
-            codex: { skills: { repo: true, user: true } },
-            opencode: { allowedTools: ['write'] },
-            claude: { allowedTools: ['Bash'], skills: { enabled: true } },
-          },
-        },
-      },
+      internalOptions,
     );
 
     expect(response.structuredOutput).toEqual({
@@ -127,6 +131,9 @@ describe('agent-usecases', () => {
         executionProfile: 'isolated-structured',
         internalAgentIsolation: 'strict-readonly',
         internalAgentName: 'security-reviewer',
+        personaPath: '/project/.takt/facets/personas/security-reviewer.md',
+        workflowBundleResourceRoot: '/tmp/workflow-bundle/resources',
+        internalSystemPrompt: 'selector system prompt',
         allowedTools: [],
         mcpServers: {},
         bypassPermissions: false,
