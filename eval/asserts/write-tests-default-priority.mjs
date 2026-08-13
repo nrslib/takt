@@ -51,6 +51,8 @@ const implementation = ({
   persistRestartPoint = true,
   preserveExplicitResume = true,
   resolveUsesRestartPoint = true,
+  claimTransitionsToRunning = true,
+  claimRejectsNonPending = true,
 }) => `
 export function buildRequeuePlan({ resumeValue, failedLeafValue, firstLeafValue }) {
   const options = [];
@@ -86,13 +88,13 @@ export function persistRequeue(task, selection) {
 }
 
 export function claimPendingTask(task) {
-  if (task.status !== 'pending') {
+  if (${claimRejectsNonPending} && task.status !== 'pending') {
     throw new Error('Only pending tasks can be claimed');
   }
 
   return {
     ...task,
-    status: 'running',
+    status: '${claimTransitionsToRunning ? 'running' : 'pending'}',
   };
 }
 
@@ -132,6 +134,14 @@ export function assertWriteTestsDefaultPriorityFor(workDirName) {
     ['terminal-start-rejected', !passesWithImplementation(workDir, implementation({
       defaultExpression: 'failedLeafValue ?? resumeValue ?? firstLeafValue',
       resolveUsesRestartPoint: false,
+    }))],
+    ['claim-transition-rejected', !passesWithImplementation(workDir, implementation({
+      defaultExpression: 'failedLeafValue ?? resumeValue ?? firstLeafValue',
+      claimTransitionsToRunning: false,
+    }))],
+    ['non-pending-claim-rejected', !passesWithImplementation(workDir, implementation({
+      defaultExpression: 'failedLeafValue ?? resumeValue ?? firstLeafValue',
+      claimRejectsNonPending: false,
     }))],
     ['explicit-checkpoint-preservation-rejected', !passesWithImplementation(workDir, implementation({
       defaultExpression: 'failedLeafValue ?? resumeValue ?? firstLeafValue',

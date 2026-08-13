@@ -28,6 +28,7 @@ export default function assertFinalReadinessDefaultPriority(output) {
     ['source-contradiction', /(?:requirements\.md|requirement|要件|受入条件|primary source|正本)/i.test(evidence)
       && /(?:current implementation|現在(?:の)?実装|現在(?:の)?コード|現行実装)/i.test(evidence)
       && /(?:contradict|conflict|violate|unmet|missing|omits|矛盾|違反|不一致|未達|欠落|省略|読み替え|逆)/i.test(evidence)
+      && /(?:Requeue|再投入|再キュー)/i.test(evidence)
       && /(?:pending|restartPoint|保留|再実行位置)/i.test(evidence)
       && /(?:runner|takt run|通常実行)/i.test(evidence)
       && /(?:fresh|selected leaf|failed leaf|選択(?:した)?(?:失敗)?leaf|新規実行)/i.test(evidence)],
