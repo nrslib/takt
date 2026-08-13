@@ -389,12 +389,13 @@ export class CodexClient {
       return errorResponse;
     }
 
-    const codexConfig: CodexOptions['config'] = options.reasoningEffort === undefined
-      ? skillConfig
-      : {
-          ...(skillConfig ?? {}),
-          model_reasoning_effort: options.reasoningEffort,
-        };
+    const codexConfig: CodexOptions['config'] = {
+      ...(skillConfig ?? {}),
+      ...(options.reasoningEffort === undefined
+        ? {}
+        : { model_reasoning_effort: options.reasoningEffort }),
+      model_reasoning_summary: 'auto',
+    };
 
     while (true) {
       const attempt = standardRetryCount + timeoutRetryCount + refusalRetryCount + 1;
@@ -407,7 +408,7 @@ export class CodexClient {
         ...(options.openaiApiKey ? { apiKey: options.openaiApiKey } : {}),
         ...(options.baseUrl !== undefined ? { baseUrl: options.baseUrl } : {}),
         ...(options.codexPathOverride ? { codexPathOverride: options.codexPathOverride } : {}),
-        ...(codexConfig !== undefined ? { config: codexConfig } : {}),
+        config: codexConfig,
       };
       const codex = new Codex(codexClientOptions);
       const thread = threadId

@@ -476,16 +476,14 @@ describe('CT-COMP-06 and CT-COMP-11 structured internal agent execution', () => 
     expect(recordUsage).not.toHaveBeenCalled();
   });
 
-  it('should retry and record failed usage when companion calls reach their timeout', async () => {
+  it('should continue past 300 seconds and complete when the provider resolves', async () => {
     vi.useFakeTimers();
     const recordUsage = vi.fn();
-    const call = vi.fn((_system, _prompt, _schema, options: { abortSignal: AbortSignal }) => (
-      new Promise<AgentResponse>((_resolve, reject) => {
-        options.abortSignal.addEventListener('abort', () => {
-          reject(new DOMException('Aborted', 'AbortError'));
-        }, { once: true });
-      })
-    ));
+    const recordCall = vi.fn();
+    let resolveCall!: (value: AgentResponse) => void;
+    const call = vi.fn(() => new Promise<AgentResponse>((resolve) => {
+      resolveCall = resolve;
+    }));
 
     try {
       const execution = executeCompanionStructuredAgent({
@@ -499,21 +497,24 @@ describe('CT-COMP-06 and CT-COMP-11 structured internal agent execution', () => 
         failureDir: '/project/.takt/runs/run/failures',
         language: 'en',
         resolution: { provider: 'mock', model: 'mock-model', providerOptions: {} },
-        timeoutMs: 100,
         call,
         recordUsage,
+        recordCall,
       });
-      const rejection = expect(execution).rejects.toThrow(/timeout|timed out/i);
-      await vi.advanceTimersByTimeAsync(100);
-      await vi.advanceTimersByTimeAsync(100);
 
-      await rejection;
-      expect(call).toHaveBeenCalledTimes(2);
-      expect(recordUsage).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(300_001);
+      expect(call).toHaveBeenCalledOnce();
+      expect(call.mock.calls[0]?.[3]).toMatchObject({
+        abortSignal: { aborted: false },
+      });
+
+      resolveCall(response('done'));
+      await expect(execution).resolves.toMatchObject({ status: 'done' });
       expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({
         purpose: 'reviewer',
-        success: false,
+        success: true,
       }));
+      expect(recordCall.mock.calls[0]?.[0]).not.toHaveProperty('error');
     } finally {
       vi.useRealTimers();
     }
