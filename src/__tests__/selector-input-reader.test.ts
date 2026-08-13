@@ -320,9 +320,10 @@ describe('SelectorInputReader', () => {
     );
 
     expect(result.workingTreeDiff).toContain('d'.repeat(64 * 1024));
+    expect(result.workingTreeDiff).toContain('Content status: complete');
   });
 
-  it('should reject a tracked path payload one byte above 64 KiB', async () => {
+  it('should truncate a tracked path payload one byte above 64 KiB', async () => {
     const cwd = createGitDirectory();
     const runner = new FakeGitCommandRunner(
       ['src/a.ts'],
@@ -330,12 +331,131 @@ describe('SelectorInputReader', () => {
       () => Buffer.alloc(64 * 1024 + 1, 'd'),
     );
 
+    const result = await new SelectorInputReader(runner).readInputs(
+      join(cwd, 'reports'),
+      [],
+      cwd,
+      undefined,
+    );
+
+    expect(result.workingTreeDiff).toContain('Source bytes: 65537');
+    expect(result.workingTreeDiff).toContain('Content status: truncated');
+    expect(result.workingTreeDiff).toContain('d'.repeat(64 * 1024));
+  });
+
+  it('should preserve valid UTF-8 when a tracked payload ends mid-character', async () => {
+    const cwd = createGitDirectory();
+    const payload = Buffer.concat([
+      Buffer.alloc(64 * 1024 - 1, 'a'),
+      Buffer.from('界', 'utf-8'),
+    ]);
+    const runner = new FakeGitCommandRunner(
+      ['src/a.ts'],
+      Buffer.byteLength('src/a.ts\0'),
+      () => payload,
+    );
+
+    const result = await new SelectorInputReader(runner).readInputs(
+      join(cwd, 'reports'),
+      [],
+      cwd,
+      undefined,
+    );
+
+    expect(result.workingTreeDiff).toContain('Source bytes: 65538');
+    expect(result.workingTreeDiff).toContain('Content status: truncated');
+    expect(result.workingTreeDiff).toContain('a'.repeat(64 * 1024 - 1));
+    expect(result.workingTreeDiff).not.toContain('\uFFFD');
+  });
+
+  it('should reject invalid UTF-8 inside an oversized tracked payload', async () => {
+    const cwd = createGitDirectory();
+    const payload = Buffer.concat([
+      Buffer.from([0xc3, 0x28]),
+      Buffer.alloc(64 * 1024, 'd'),
+    ]);
+    const runner = new FakeGitCommandRunner(
+      ['src/a.ts'],
+      Buffer.byteLength('src/a.ts\0'),
+      () => payload,
+    );
+
     await expect(new SelectorInputReader(runner).readInputs(
       join(cwd, 'reports'),
       [],
       cwd,
       undefined,
-    )).rejects.toThrow('path payload "src/a.ts" exceeds 65536 bytes');
+    )).rejects.toThrow('is not valid UTF-8');
+  });
+
+  it('should truncate an oversized tracked diff from Git while preserving source bytes', async () => {
+    const cwd = createRepository();
+    const path = 'src/large.ts';
+    mkdirSync(join(cwd, 'src'));
+    writeFileSync(join(cwd, path), 'const value = "before";\n');
+    execFileSync('git', ['add', '-A'], { cwd });
+    execFileSync('git', ['commit', '--quiet', '-m', 'baseline'], { cwd });
+    writeFileSync(join(cwd, path), `const value = "${'x'.repeat(80_000)}";\n`);
+    const gitDiff = execFileSync(
+      'git',
+      ['diff', '--no-ext-diff', '--no-textconv', 'HEAD', '--end-of-options', '--', path],
+      { cwd },
+    );
+
+    const result = await new SelectorInputReader(new GitSelectorCommandRunner()).readInputs(
+      join(cwd, 'reports'),
+      [],
+      cwd,
+      undefined,
+    );
+
+    expect(gitDiff.length).toBeGreaterThan(64 * 1024);
+    expect(result.workingTreeDiff).toContain(`Source bytes: ${gitDiff.length}`);
+    expect(result.workingTreeDiff).toContain('Content status: truncated');
+    expect(result.workingTreeDiff).not.toContain('Dynamic selector path payload');
+  });
+
+  it('should truncate an oversized untracked regular file without rejecting the selector', async () => {
+    const cwd = createGitDirectory();
+    const path = 'src/untracked.ts';
+    const header = `diff --git a/${path} b/${path}\nnew file mode 100644\n--- /dev/null\n+++ b/${path}\n`;
+    const content = 'u'.repeat(64 * 1024);
+    mkdirSync(join(cwd, 'src'));
+    writeFileSync(join(cwd, path), content);
+    const runner = new FakeGitCommandRunner([], 0, () => Buffer.alloc(0), [path]);
+
+    const result = await new SelectorInputReader(runner).readInputs(
+      join(cwd, 'reports'),
+      [],
+      cwd,
+      undefined,
+    );
+
+    expect(result.workingTreeDiff).toContain(
+      `Source bytes: ${Buffer.byteLength(header, 'utf-8') + Buffer.byteLength(content, 'utf-8')}`,
+    );
+    expect(result.workingTreeDiff).toContain('Content status: truncated');
+    expect(result.workingTreeDiff).not.toContain(content);
+  });
+
+  it('should distinguish complete and truncated untracked files at the entry boundary', async () => {
+    const cwd = createGitDirectory();
+    const path = 'src/untracked.ts';
+    const header = `diff --git a/${path} b/${path}\nnew file mode 100644\n--- /dev/null\n+++ b/${path}\n`;
+    const available = 64 * 1024 - Buffer.byteLength(header, 'utf-8');
+    mkdirSync(join(cwd, 'src'));
+    writeFileSync(join(cwd, path), 'u'.repeat(available));
+    const runner = new FakeGitCommandRunner([], 0, () => Buffer.alloc(0), [path]);
+    const reader = new SelectorInputReader(runner);
+
+    const complete = await reader.readInputs(join(cwd, 'reports'), [], cwd, undefined);
+    expect(complete.workingTreeDiff).toContain('Source bytes: 65536');
+    expect(complete.workingTreeDiff).toContain('Content status: complete');
+
+    writeFileSync(join(cwd, path), 'u'.repeat(available + 1));
+    const truncated = await reader.readInputs(join(cwd, 'reports'), [], cwd, undefined);
+    expect(truncated.workingTreeDiff).toContain('Source bytes: 65537');
+    expect(truncated.workingTreeDiff).toContain('Content status: truncated');
   });
 
   it('should enforce the 64 KiB report limit using UTF-8 bytes', async () => {
