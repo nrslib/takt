@@ -665,9 +665,14 @@ describe('selector guidance resolution', () => {
     ));
 
     const expectedInstruction = readFileSync(instructionPath, 'utf8');
-    // Include expansion may enrich the raw builtin file before it reaches the selector.
-    expect(expectedInstruction).toBeTruthy();
-    expect(result.facetInstruction).toBeTruthy();
+    const stableLine = expectedInstruction
+      .split('\n')
+      .map((line) => line.trim())
+      .find((line) => line.length > 0 && !line.startsWith('{{include:'));
+    if (stableLine === undefined) {
+      throw new Error('Expected the builtin instruction to contain a non-include line');
+    }
+    expect(result.facetInstruction).toContain(stableLine);
     expect(result.parallelInstruction).toBe(result.facetInstruction);
   });
 
