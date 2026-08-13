@@ -1794,7 +1794,10 @@ steps:
 
     engine = new WorkflowEngine(config, tmpDir, 'Route child workflow with child context', createWorkflowCallOptions(tmpDir, {
       provider: 'mock',
-      autoRouting: createWorkflowCallAutoRoutingConfig(),
+      autoRouting: {
+        ...createWorkflowCallAutoRoutingConfig(),
+        poolRules: { steps: { 'takt/coding/review': 'general' } },
+      },
     }));
     const abortReasons: string[] = [];
     engine.on('workflow:abort', (_state, reason) => abortReasons.push(reason));
@@ -1898,7 +1901,10 @@ steps:
     engine = new WorkflowEngine(config, tmpDir, 'Route inherited auto provider child workflow', createWorkflowCallOptions(tmpDir, {
       provider: 'mock',
       model: undefined,
-      autoRouting: createWorkflowCallAutoRoutingConfig(),
+      autoRouting: {
+        ...createWorkflowCallAutoRoutingConfig(),
+        poolRules: { steps: { 'takt/coding/review': 'general' } },
+      },
     }));
 
     const state = await engine.run();
@@ -1937,6 +1943,9 @@ auto_routing:
     general:
       candidates: [delegate-runtime, reasoning]
       fallback: reasoning
+  pool_rules:
+    steps:
+      takt/coding/review: general
   rules:
     steps:
       review: reasoning
