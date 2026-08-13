@@ -28,6 +28,8 @@ describe('getWorkflowDescription', () => {
     writeFileSync(join(projectDir, '.takt', 'runtime.yaml'), [
       'version: 1',
       'provider:',
+      '  defaults:',
+      '    profile: manager',
       '  profiles:',
       '    manager:',
       ...profileLines.map((line) => `      ${line}`),

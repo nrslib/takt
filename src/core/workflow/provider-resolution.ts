@@ -6,6 +6,7 @@ import {
 } from '../provider-resolution.js';
 import type { ProviderType } from './types.js';
 import type { ProviderResolutionSource } from './provider-options-trace.js';
+import { hasAutoRoutingPoolAssignment } from './auto-routing/selector.js';
 
 export interface ProviderModelResolutionContext {
   provider?: ProviderType;
@@ -324,6 +325,12 @@ export function resolveStepProviderModel(input: StepProviderModelInput): StepPro
     : undefined;
   const workflowCallProvider = input.providerSource === 'workflow_call' ? input.provider : undefined;
   const workflowCallModelIsResolved = input.modelSource === 'workflow_call';
+  const autoRoutingApplies = input.autoRouting !== undefined
+    && hasAutoRoutingPoolAssignment(input.autoRouting, {
+      name: input.step.name,
+      tags: input.step.tags,
+      personaKey: input.step.providerRoutingPersonaKey,
+    });
   const lowerProvider = resolveLowerPriorityValue(
     input.provider,
     input.providerSource,
@@ -358,7 +365,7 @@ export function resolveStepProviderModel(input: StepProviderModelInput): StepPro
   } else if (personaEntry?.provider !== undefined) {
     provider = personaEntry.provider;
     providerSource = 'persona_providers';
-  } else if (input.autoRouting === undefined && lowerProvider !== undefined) {
+  } else if (!autoRoutingApplies && lowerProvider !== undefined) {
     provider = lowerProvider.value;
     providerSource = lowerProvider.source;
   }
@@ -386,7 +393,7 @@ export function resolveStepProviderModel(input: StepProviderModelInput): StepPro
   } else if (personaEntry?.model !== undefined) {
     model = personaEntry.model;
     modelSource = 'persona_providers';
-  } else if ((input.autoRouting === undefined || provider !== undefined) && lowerModel !== undefined) {
+  } else if ((!autoRoutingApplies || provider !== undefined) && lowerModel !== undefined) {
     model = lowerModel.value;
     modelSource = lowerModel.source;
   }

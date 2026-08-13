@@ -202,6 +202,24 @@ describe('resolveCompiledProviderEnvironment seam', () => {
     expect(resolved.providerEnvironment.provider).toBe('codex');
   });
 
+  it('rejects an enabled companion-only target without defaults before compilation', () => {
+    writeGlobalRuntimeFile({
+      version: 1,
+      companion: { enabled: true },
+      provider: {
+        targets: {
+          companions: { security: { profile: 'security' } },
+        },
+      },
+    });
+
+    expect(() => resolveRuntimeEnvironment({
+      projectCwd,
+      legacy: legacyInput,
+      legacySignals: [],
+    })).toThrow(/provider\.defaults/);
+  });
+
   it('passes legacy engine-options through unchanged when no runtime.yaml exists', () => {
     const env = resolveCompiledProviderEnvironment({
       projectCwd,

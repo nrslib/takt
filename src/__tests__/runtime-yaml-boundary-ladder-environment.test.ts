@@ -24,6 +24,7 @@ const STRONG_ENTRY = { provider: 'claude', model: 'opus' };
 
 function section(overrides: Partial<RuntimeProviderSection>): RuntimeProviderSection {
   return {
+    defaults: { profile: 'base' },
     profiles: { ...PROFILES },
     ...overrides,
   } as unknown as RuntimeProviderSection;
@@ -143,7 +144,7 @@ describe('every ladder stage is preserved for the promotion seam (issue #1208)',
   });
 });
 
-describe('ladder honoring preserves the `pool` assignment contracts', () => {
+describe('ladder honoring preserves the explicit pool assignment contracts', () => {
   function autoRoutingSection(overrides: Partial<RuntimeProviderSection>): RuntimeProviderSection {
     return section({
       auto_routing: {
@@ -154,18 +155,17 @@ describe('ladder honoring preserves the `pool` assignment contracts', () => {
     });
   }
 
-  it('should leave provider/model unset and build auto_routing when `defaults` declares a pool', () => {
-    const env = compileRuntimeProviderEnvironment(autoRoutingSection({ defaults: { pool: 'general' } }));
-    expect(env.provider).toBeUndefined();
-    expect(env.model).toBeUndefined();
-    expect(env.autoRouting?.defaultPool).toBe('general');
+  it('should keep concrete defaults and build auto_routing without an implicit default pool', () => {
+    const env = compileRuntimeProviderEnvironment(autoRoutingSection({}));
+    expect(env.provider).toBe('mock');
+    expect(env.model).toBe('base-model');
+    expect(env.autoRouting).not.toHaveProperty('defaultPool');
   });
 
   it('should throw when `internal_agents.selector` declares a pool (pools are not allowed for internal agents)', () => {
     expect(() =>
       compileRuntimeProviderEnvironment(
         autoRoutingSection({
-          defaults: { pool: 'general' },
           targets: { internal_agents: { selector: { pool: 'general' } } },
         }),
       ),

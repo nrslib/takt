@@ -31,7 +31,8 @@ export interface AutoRoutingConfig {
     model: string;
   };
   candidates: AutoRoutingCandidate[];
-  defaultPool: string;
+  /** Legacy auto routing default; runtime.yaml requires an explicit target pool instead. */
+  defaultPool?: string;
   candidatePools: Record<string, {
     candidates: string[];
     fallback: string;

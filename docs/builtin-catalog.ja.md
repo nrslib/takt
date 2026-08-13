@@ -132,7 +132,10 @@ synthetic role を完全に固定する場合は、`runtime.yaml` の `internal_
 
 ```yaml
 # runtime.yaml
+version: 1
 provider:
+  defaults:
+    profile: strong
   profiles:
     strong: { provider: codex, model: <strong-model> }
   targets:

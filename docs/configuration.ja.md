@@ -534,6 +534,8 @@ Finding Contract workflow に provider や model の名前は書きません。�
 # runtime.yaml
 version: 1
 provider:
+  defaults:
+    profile: strong
   profiles:
     strong: { provider: codex, model: <strong-model> }
   targets:
@@ -615,7 +617,7 @@ version: 1
 
 provider:
   defaults:
-    pool: sol-pool
+    profile: sol-medium
 
   profiles:
     sol-high:
@@ -650,6 +652,8 @@ provider:
     steps:
       default/supervise:
         profile: sol-high
+      default/implement:
+        pool: sol-pool
     internal_agents:
       selector:
         profile: router
@@ -677,14 +681,19 @@ provider:
 
 `provider.profiles` は名前付きの provider/model/options 定義を保持します。profile のフラットな `options` はその profile の provider に適用されます（例えば `reasoning_effort` は Codex の `reasoning_effort` オプションになります）。profile は明示的な `extends` で別の profile を継承できます。global と project で同名の profile を field 単位で暗黙に混ぜることはなく、project の定義が profile 全体を置き換えます。
 
-`provider.defaults` と各 `provider.targets` エントリは、固定の `profile` か auto routing を行う `pool` のいずれか一方だけを指定します。step は `<leaf-workflow-name>/<step-name>` 形式で指定し、agent を起動しない制御ノード（`workflow_call` など）は解決対象になりません。
+有効な provider section では `provider.defaults` の指定が必須で、固定の `profile` または順序付きの `ladder` のいずれか一方だけを指定します。`pool` は指定できません。`provider.targets.personas`、`provider.targets.tags`、`provider.targets.steps` のエントリは、固定の `profile`、順序付きの `ladder`、または auto routing 用の `pool` のいずれか一方を指定できます。`pool` はこれらの明示的な workflow target に限り指定できます。`internal_agents` のエントリは固定の `profile` または順序付きの `ladder` を指定できますが、`pool` は指定できません。`companions` のエントリは固定の `profile` のみ指定でき、`pool` と `ladder` は指定できません。step は `<leaf-workflow-name>/<step-name>` 形式で指定し、agent を起動しない制御ノード（`workflow_call` など）は解決対象になりません。
+
+`provider.auto_routing` が存在しても、`pool` を明示した target だけが自動ルーティング対象になります。pool を明示していない target、AI による task slug 生成などの非ワークフロー処理、その他の補助処理は `provider.defaults` を使用します。暗黙の既定 pool はなく、`fallback_profile` は明示的に選択された pool の中だけで使用されます。
 
 ### `escalate` — その profile の最後の一手
 
 profile は `escalate` で別の profile を指名できます。「この profile で解決された作業が行き詰まったら、その profile へ渡す」という宣言です。弱い側の profile に1行書くだけで設定は完了し、workflow 側に provider 名やモデル名は一切現れません。
 
 ```yaml
+version: 1
 provider:
+  defaults:
+    profile: reviewer-local
   profiles:
     reviewer-local:
       provider: opencode

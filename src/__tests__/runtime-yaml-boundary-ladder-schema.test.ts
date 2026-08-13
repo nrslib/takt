@@ -29,6 +29,7 @@ function ladderDoc(): LooseRuntimeDoc {
   return {
     version: 1,
     provider: {
+      defaults: { profile: 'main' },
       profiles: {
         main: { provider: 'opencode', model: 'ollama-cloud/glm-5.2' },
         strong: { provider: 'claude', model: 'opus' },

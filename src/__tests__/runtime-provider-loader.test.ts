@@ -52,6 +52,41 @@ describe('runtime-provider loader', () => {
     expect(() => loadRuntimeProviderFileAt(filePath)).toThrow(filePath);
   });
 
+  it.each([
+    ['without auto_routing', [
+      'version: 1',
+      'provider:',
+      '  profiles:',
+      '    default:',
+      '      provider: mock',
+      '      model: runtime-model',
+    ]],
+    ['with auto_routing', [
+      'version: 1',
+      'provider:',
+      '  profiles:',
+      '    default:',
+      '      provider: mock',
+      '      model: runtime-model',
+      '    router:',
+      '      provider: mock',
+      '      model: router-model',
+      '  auto_routing:',
+      '    router_profile: router',
+      '    pools:',
+      '      main:',
+      '        candidates:',
+      '          - profile: default',
+      '            tier: low',
+      '        fallback_profile: default',
+    ]],
+  ])('Given an active provider file %s without defaults, When loading, Then it fails with the defaults cause', (_label, lines) => {
+    writeRuntimeYaml(globalDir, lines);
+    const filePath = join(globalDir, RUNTIME_PROVIDER_FILENAME);
+
+    expect(() => loadRuntimeProviderFileAt(filePath)).toThrow(/defaults/);
+  });
+
   it('Given an empty runtime.yaml, When loading, Then it is treated as unset (C1)', () => {
     writeRuntimeYaml(globalDir, ['']);
     expect(loadRuntimeProviderFileAt(join(globalDir, RUNTIME_PROVIDER_FILENAME))).toBeUndefined();
@@ -133,6 +168,8 @@ describe('runtime-provider loader', () => {
     writeRuntimeYaml(projectDir, [
       'version: 1',
       'provider:',
+      '  defaults:',
+      '    profile: shared',
       '  profiles:',
       '    shared:',
       '      provider: codex',
@@ -155,6 +192,8 @@ describe('runtime-provider loader', () => {
     writeRuntimeYaml(globalDir, [
       'version: 1',
       'provider:',
+      '  defaults:',
+      '    profile: p',
       '  profiles:',
       '    p:',
       '      provider: mock',
@@ -167,6 +206,8 @@ describe('runtime-provider loader', () => {
     writeRuntimeYaml(projectDir, [
       'version: 1',
       'provider:',
+      '  defaults:',
+      '    profile: p',
       '  profiles:',
       '    p:',
       '      provider: mock',
@@ -182,7 +223,7 @@ describe('runtime-provider loader', () => {
     expect(resolved?.provider?.targets?.personas).toBeUndefined();
   });
 
-  it('Given project lacks `defaults` but global has it, When resolving, Then defaults falls back to global (C3)', () => {
+  it('Given project has an active provider section without defaults, When resolving with a valid global file, Then the project file is rejected', () => {
     writeRuntimeYaml(globalDir, [
       'version: 1',
       'provider:',
@@ -201,24 +242,24 @@ describe('runtime-provider loader', () => {
       '      provider: codex',
       '      model: project-model',
     ]);
-    const resolved = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
-    // defaults is absent in project, so the global defaults survives.
-    expect(resolved?.provider?.defaults?.profile).toBe('g-default');
-    // disjoint profiles from both layers are retained.
-    expect(resolved?.provider?.profiles?.['g-default']?.model).toBe('m');
-    expect(resolved?.provider?.profiles?.p?.model).toBe('project-model');
+    expect(() => resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir }))
+      .toThrow(/defaults/);
   });
 
   it('Given both files carry `auto_routing`, When resolving, Then project auto_routing replaces global (C3)', () => {
     writeRuntimeYaml(globalDir, [
       'version: 1',
       'provider:',
+      '  defaults:',
+      '    profile: default',
       '  auto_routing:',
       '    strategy: balanced',
     ]);
     writeRuntimeYaml(projectDir, [
       'version: 1',
       'provider:',
+      '  defaults:',
+      '    profile: default',
       '  auto_routing:',
       '    strategy: performance',
     ]);

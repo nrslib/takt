@@ -9,6 +9,7 @@ import {
 import type { RoutingWorkSnapshot, WorkRequirementEstimator } from '../core/workflow/auto-routing/contracts.js';
 import type { AutoRoutingConfig } from '../core/models/config-types.js';
 import { RoutingRuntime } from '../core/workflow/auto-routing/runtime.js';
+import { resolveExecutableRoutingCandidates } from '../core/workflow/auto-routing/selector.js';
 
 function createAutoRoutingConfig(overrides: Partial<AutoRoutingConfig> = {}): AutoRoutingConfig {
   return {
@@ -117,6 +118,28 @@ describe('resolveDeterministicAutoRoutingProviderInfo', () => {
     });
 
     expect(result).toMatchObject({ provider: 'claude-sdk', providerSource: 'auto.fallback', autoRoutingDecision: { candidateName: 'reasoning', routingTier: 'high', fallbackReason: 'estimator-failure' } });
+  });
+});
+
+describe('runtime auto-routing pool selection', () => {
+  it('uses the pool explicitly assigned to a target without requiring an implicit default pool', () => {
+    const autoRouting = {
+      ...createAutoRoutingConfig(),
+      defaultPool: undefined,
+      rules: {},
+      poolRules: { steps: { execute: 'implementation' } },
+    } as AutoRoutingConfig;
+
+    const resolved = resolveExecutableRoutingCandidates(autoRouting, {
+      name: 'execute',
+      tags: [],
+      personaKey: 'coder',
+    });
+
+    expect(resolved.resolutionSource).toBe('auto.dynamic');
+    expect(resolved.poolName).toBe('implementation');
+    expect(resolved.selectionCandidates.map((candidate) => candidate.name))
+      .toEqual(['coding', 'reasoning']);
   });
 });
 

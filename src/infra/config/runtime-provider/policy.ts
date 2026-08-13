@@ -17,6 +17,7 @@ import type {
   RuntimeProviderProfile,
   RuntimeProviderAssignment,
 } from './schema.js';
+import { hasActiveProviderContent } from './schema.js';
 
 export interface FlatProfile {
   provider?: string;
@@ -30,6 +31,14 @@ export interface FlatProfile {
  * references, cyclic `extends`, and referenced profiles missing `provider`/`model`.
  */
 export function validateRuntimeProviderSection(section: RuntimeProviderSection): void {
+  if (hasActiveProviderContent(section) && section.defaults === undefined) {
+    throw new Error('runtime.yaml active provider section must specify `provider.defaults`');
+  }
+
+  if (section.defaults !== undefined && 'pool' in section.defaults) {
+    throw new Error('runtime.yaml `provider.defaults.pool` is not allowed; use `profile` or `ladder`');
+  }
+
   const flatProfiles = flattenProfiles(section.profiles ?? {});
   const poolNames = new Set(Object.keys(section.auto_routing?.pools ?? {}));
   validateReferences(section, flatProfiles, poolNames);

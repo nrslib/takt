@@ -663,7 +663,10 @@ workflow に provider や model の名前は書きません。`finding_contract.
 
 ```yaml
 # runtime.yaml
+version: 1
 provider:
+  defaults:
+    profile: strong
   profiles:
     strong: { provider: codex, model: gpt-5.5 }
   targets:
@@ -1109,7 +1112,10 @@ workflow YAML には何も現れません（step ではありません）。
 
 ```yaml
 # runtime.yaml
+version: 1
 provider:
+  defaults:
+    profile: reviewer-local
   profiles:
     reviewer-local:
       provider: opencode

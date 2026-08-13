@@ -32,6 +32,8 @@ export type ExecutableRoutingCandidates =
     resolutionSource: 'auto.dynamic';
   };
 
+type RoutingPoolTarget = { name?: string; tags?: string[]; personaKey?: string };
+
 function findCandidate(config: AutoRoutingConfig, candidateName: string | undefined): AutoRoutingCandidate | undefined {
   return candidateName === undefined ? undefined : config.candidates.find((candidate) => candidate.name === candidateName);
 }
@@ -58,7 +60,10 @@ export function resolveAutoRoutingRuleCandidate(
   return findCandidate(autoRouting, matchRule(autoRouting.rules, step));
 }
 
-function resolvePoolName(config: AutoRoutingConfig, step: RoutingSelectionInput['step']): string {
+function resolveExplicitPoolName(
+  config: AutoRoutingConfig,
+  step: RoutingPoolTarget,
+): string | undefined {
   let matchedPool: string | undefined;
   for (const tag of step.tags ?? []) {
     const poolName = findMappingValue(config.poolRules?.tags, tag);
@@ -66,8 +71,22 @@ function resolvePoolName(config: AutoRoutingConfig, step: RoutingSelectionInput[
   }
   return matchedPool
     ?? findMappingValue(config.poolRules?.steps, step.name)
-    ?? findMappingValue(config.poolRules?.personas, step.personaKey)
-    ?? config.defaultPool;
+    ?? findMappingValue(config.poolRules?.personas, step.personaKey);
+}
+
+export function hasAutoRoutingPoolAssignment(
+  config: AutoRoutingConfig,
+  step: RoutingPoolTarget,
+): boolean {
+  return resolveExplicitPoolName(config, step) !== undefined || config.defaultPool !== undefined;
+}
+
+function resolvePoolName(config: AutoRoutingConfig, step: RoutingSelectionInput['step']): string {
+  const poolName = resolveExplicitPoolName(config, step) ?? config.defaultPool;
+  if (poolName === undefined) {
+    throw new Error(`Auto routing has no pool assignment for step "${step.name}"`);
+  }
+  return poolName;
 }
 
 function resolveCandidate(config: AutoRoutingConfig, poolName: string, candidateName: string, reference: 'candidate' | 'fallback'): AutoRoutingCandidate {

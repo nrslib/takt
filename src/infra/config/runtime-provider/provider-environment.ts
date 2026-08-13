@@ -37,7 +37,7 @@ import {
 } from '../index.js';
 import { resolveEffectiveAutoRouting } from '../../../core/workflow/auto-routing/effective-auto-routing.js';
 import type { WorkflowConfig } from '../../../core/models/index.js';
-import type { RuntimeProviderFile } from './schema.js';
+import { getEffectiveRuntimeProviderFile } from './schema.js';
 
 export interface ResolvedRuntimeEnvironment {
   providerEnvironment: CompiledProviderEnvironment;
@@ -68,9 +68,7 @@ export function resolveRuntimeEnvironment(
     projectConfigDir: getProjectConfigDir(input.projectCwd),
   });
   const companionEnabled = runtimeFile?.companion?.enabled ?? true;
-  const runtimeFileForProviderResolution = companionEnabled
-    ? runtimeFile
-    : withoutCompanionTargets(runtimeFile);
+  const runtimeFileForProviderResolution = getEffectiveRuntimeProviderFile(runtimeFile);
   const { mode } = determineProviderConfigMode({
     runtimeFile: runtimeFileForProviderResolution,
     legacyProviderSignals: input.legacySignals,
@@ -102,23 +100,6 @@ export function resolveRuntimeEnvironment(
     ),
     companionEnabled,
     providerConfigMode: mode,
-  };
-}
-
-function withoutCompanionTargets(
-  runtimeFile: RuntimeProviderFile | undefined,
-): RuntimeProviderFile | undefined {
-  if (runtimeFile?.provider?.targets === undefined) {
-    return runtimeFile;
-  }
-  const targets = { ...runtimeFile.provider.targets };
-  delete targets.companions;
-  return {
-    ...runtimeFile,
-    provider: {
-      ...runtimeFile.provider,
-      targets,
-    },
   };
 }
 

@@ -19,7 +19,7 @@ import {
   buildFindingConflictAdjudicationStep,
   buildFindingTerminalAdjudicationStep,
 } from '../core/workflow/findings/adjudication-step.js';
-import type { ProjectConfig } from '../core/models/config-types.js';
+import type { AutoRoutingConfig, ProjectConfig } from '../core/models/config-types.js';
 
 describe('resolveProviderModelCandidates', () => {
   it('should resolve first defined provider and model independently', () => {
@@ -112,6 +112,49 @@ describe('resolveStepProviderModel', () => {
     expect(result).toEqual(expected);
   });
 
+  it('should use runtime defaults when auto routing has no matching explicit pool target', () => {
+    const result = resolveStepProviderModel({
+      step: { name: 'review', provider: undefined, model: undefined },
+      provider: 'mock',
+      providerSource: 'runtime-v1',
+      model: 'runtime-default-model',
+      modelSource: 'runtime-v1',
+      autoRouting: {
+        strategy: 'balanced',
+        router: { provider: 'mock', model: 'router-model' },
+        candidates: [],
+        candidatePools: {},
+      } as AutoRoutingConfig,
+    });
+
+    expect(result).toEqual({
+      provider: 'mock',
+      providerSource: 'runtime-v1',
+      model: 'runtime-default-model',
+      modelSource: 'runtime-v1',
+    });
+  });
+
+  it('should leave an explicitly pooled target unresolved for auto routing', () => {
+    const result = resolveStepProviderModel({
+      step: { name: 'execute', provider: undefined, model: undefined },
+      provider: 'mock',
+      providerSource: 'runtime-v1',
+      model: 'runtime-default-model',
+      modelSource: 'runtime-v1',
+      autoRouting: {
+        strategy: 'balanced',
+        router: { provider: 'mock', model: 'router-model' },
+        candidates: [],
+        candidatePools: {},
+        poolRules: { steps: { execute: 'main' } },
+      } as AutoRoutingConfig,
+    });
+
+    expect(result.provider).toBeUndefined();
+    expect(result.model).toBeUndefined();
+  });
+
   it.each([
     { layer: 'CLI', source: 'env', provider: 'mock' },
     { layer: 'step', source: 'step', provider: 'codex' },
@@ -183,6 +226,7 @@ describe('resolveStepProviderModel', () => {
         strategy: 'cost',
         router: { provider: 'mock', model: 'router-model' },
         candidates: [],
+        defaultPool: 'general',
       },
     });
 

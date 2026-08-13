@@ -675,7 +675,10 @@ leftover key is rejected at load time. The destination is assigned in `runtime.y
 
 ```yaml
 # runtime.yaml
+version: 1
 provider:
+  defaults:
+    profile: strong
   profiles:
     strong: { provider: codex, model: gpt-5.5 }
   targets:
@@ -1127,7 +1130,10 @@ The **last** restatement presentation of each intake anomaly (the presentation w
 
 ```yaml
 # runtime.yaml
+version: 1
 provider:
+  defaults:
+    profile: reviewer-local
   profiles:
     reviewer-local:
       provider: opencode

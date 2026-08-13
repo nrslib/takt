@@ -132,7 +132,10 @@ To pin a synthetic role outright, assign its `internal_agents` seat in `runtime.
 
 ```yaml
 # runtime.yaml
+version: 1
 provider:
+  defaults:
+    profile: strong
   profiles:
     strong: { provider: codex, model: <strong-model> }
   targets:
