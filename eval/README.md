@@ -27,13 +27,12 @@ all-or-nothing asserts: for load-bearing conclusions, run the complete
 `prepare -> eval` command three separate times and read per-metric
 results, not one pass/fail summary.
 
-The `*-default-priority` suites run on the Claude headless CLI with model
-`opus` because they reproduce a requirement-priority miss observed in an
-Opus-driven TAKT run. They are excluded from the default Codex suite and run
-together through `npm run eval:prompts:default-priority`. The write-tests row
-uses a disposable work copy, so rerun the complete command for each trial.
-Run `npm run eval:prompts:default-priority:codex` to cross-check the same three
-contracts with Codex; its mutable row uses a separate disposable work copy.
+The `write-tests-default-priority` suite runs on the Claude headless CLI with
+model `opus` because it reproduces a requirement-priority miss observed in an
+Opus-driven TAKT run. It is excluded from the default Codex suite and runs
+through `npm run eval:prompts:default-priority`. The suite uses a disposable
+work copy, so rerun the complete command for each trial. Run
+`npm run eval:prompts:default-priority:codex` to cross-check it with Codex.
 
 ## Suites
 
@@ -70,12 +69,10 @@ contracts with Codex; its mutable row uses a separate disposable work copy.
 | `follow-up-review-repair-regression` | peer-review / follow-up coding-review | follow-up-review-repair-regression | whether follow-up review independently falsifies completion claims and distinguishes repair-induced defects from adjacent omissions |
 | `follow-up-testing-review-repair-regression` | peer-review / follow-up testing-review | follow-up-review-repair-regression | whether test findings stay limited to missing regression detection in an authorized family and reject adjacent or structure-freezing test expansion |
 | `review-adjudication` | peer-review / review-adjudication | review-adjudication | whether adjudication separates technical validity from remediation authority, keeps accepted-family closure and diff-induced regressions actionable, and excludes even severe horizontal improvements from the fix plan |
-| `review-adjudication-default-priority` | peer-review / review-adjudication | review-adjudication-default-priority | whether adjudication keeps an explicit default requirement actionable instead of weakening it to a safe-default or best-effort preference |
 | `task-instruction-gherkin` | interactive task summarization | direct English and Japanese conversations | whether implementation details and abstraction intent remain in Markdown while focused Gherkin captures only externally observable behavior |
 | `final-readiness-supervision` | review-fix-default / merge-readiness-review + supervise Phase 1 | final-readiness-supervision | whether both public final-gate producers independently authorize a newly discovered required consumer, explain its initial-round omission, and avoid horizontal exploration |
 | `final-readiness-preservation` | review-fix-default / merge-readiness-review + supervise Phase 2 | final-readiness-supervision | whether both public final-gate reports preserve the new finding and keep adjudicated noise non-actionable |
 | `final-readiness-precision` | peer-review / final-gate | final-readiness-precision | whether the final supervisor accepts a complete change without reopening an adjudicated documentation improvement |
-| `final-readiness-default-priority` | peer-review / final-gate | final-readiness-default-priority | whether the final supervisor reopens the same submitted finding when its non-actionable rationale directly contradicts the primary requirement source |
 
 Reviewer suites run read-only against `eval/fixtures/*`. Coder suites run
 with `sandbox_mode: workspace-write` in a disposable copy under `eval/.work/`

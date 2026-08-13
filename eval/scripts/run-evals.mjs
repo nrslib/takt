@@ -68,12 +68,8 @@ const SUITES = {
   'companion-early-scan': 'promptfooconfig.companion-early-scan.yaml',
   'companion-evidence-boundary': 'promptfooconfig.companion-evidence-boundary.yaml',
   'review-adjudication': 'promptfooconfig.review-adjudication.yaml',
-  'review-adjudication-default-priority': 'promptfooconfig.review-adjudication-default-priority.yaml',
-  'review-adjudication-default-priority-codex': 'promptfooconfig.review-adjudication-default-priority-codex.yaml',
   'final-readiness-supervision': 'promptfooconfig.final-readiness-supervision.yaml',
   'final-readiness-preservation': 'promptfooconfig.final-readiness-preservation.yaml',
-  'final-readiness-default-priority': 'promptfooconfig.final-readiness-default-priority.yaml',
-  'final-readiness-default-priority-codex': 'promptfooconfig.final-readiness-default-priority-codex.yaml',
   'task-instruction-gherkin': 'promptfooconfig.task-instruction-gherkin.yaml',
 };
 
@@ -100,10 +96,6 @@ const DEFAULT_EXCLUDED = new Set([
   'fix-self-scan',
   'write-tests-default-priority',
   'write-tests-default-priority-codex',
-  'review-adjudication-default-priority',
-  'review-adjudication-default-priority-codex',
-  'final-readiness-default-priority',
-  'final-readiness-default-priority-codex',
 ]);
 const selected = names.length > 0 ? names : Object.keys(SUITES).filter((s) => !DEFAULT_EXCLUDED.has(s));
 

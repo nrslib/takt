@@ -216,12 +216,6 @@ const TARGETS = [
   },
   { id: 'review-adjudication', workflow: 'peer-review', step: 'review-adjudication', fixture: 'eval/fixtures/review-adjudication' },
   {
-    id: 'review-adjudication-default-priority',
-    workflow: 'peer-review',
-    step: 'review-adjudication',
-    fixture: 'eval/fixtures/review-adjudication-default-priority',
-  },
-  {
     id: 'final-readiness-merge-review',
     workflow: 'review-fix-default',
     step: 'merge-readiness-review',
@@ -248,12 +242,6 @@ const TARGETS = [
     fixture: 'eval/fixtures/final-readiness-supervision',
     phase: 'phase2',
     targetFile: 'supervisor-validation.md',
-  },
-  {
-    id: 'final-readiness-default-priority',
-    workflow: 'peer-review',
-    step: 'final-gate',
-    fixture: 'eval/fixtures/final-readiness-default-priority',
   },
 ];
 
@@ -307,14 +295,15 @@ function findStepTarget(workflow, stepName, depth = 0) {
   }
 
   for (const [stepIndex, step] of workflow.steps.entries()) {
-    if (step.name === stepName) {
+    if (step.name === stepName && step.kind !== 'workflow_call') {
       return { workflow, target: step, stepIndex };
     }
+  }
+
+  for (const [stepIndex, step] of workflow.steps.entries()) {
     const substep = (step.parallel === undefined ? [] : getAllParallelSubSteps(step.parallel))
-      .find((candidate) => candidate.name === stepName);
-    if (substep) {
-      return { workflow, target: substep, stepIndex };
-    }
+      .find((candidate) => candidate.name === stepName && candidate.kind !== 'workflow_call');
+    if (substep) return { workflow, target: substep, stepIndex };
   }
 
   for (const step of workflow.steps) {
@@ -329,6 +318,17 @@ function findStepTarget(workflow, stepName, depth = 0) {
       const found = findStepTarget(child, stepName, depth + 1);
       if (found) return found;
     }
+  }
+
+  const directWorkflowCall = workflow.steps.find((step) => (
+    step.name === stepName && step.kind === 'workflow_call'
+  ));
+  if (directWorkflowCall) {
+    return {
+      workflow,
+      target: directWorkflowCall,
+      stepIndex: workflow.steps.indexOf(directWorkflowCall),
+    };
   }
 
   return null;

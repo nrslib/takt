@@ -1,8 +1,0 @@
-{
-  "name": "review-adjudication-default-priority-fixture",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "test": "node --test"
-  }
-}
