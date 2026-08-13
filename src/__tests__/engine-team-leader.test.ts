@@ -19,6 +19,7 @@ import { USAGE_MISSING_REASONS } from '../core/logging/contracts.js';
 import type { ProviderEventLogRecord } from '../core/logging/providerEvent.js';
 import type { UsageEventLogRecord } from '../core/logging/usageEvent.js';
 import { DebugLogger } from '../shared/utils/debug.js';
+import { MAX_AGENT_FAILURE_MESSAGE_BYTES } from '../shared/types/agent-failure.js';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -143,6 +144,20 @@ function mockRunAgentRejectingOnAbort(onWaitingForAbort?: () => void): void {
       onWaitingForAbort?.();
     });
   });
+}
+
+function createBoundedParseFailure(fullTextPath: string): string {
+  const prefix = 'provider stream parse error: Failed to parse item: ';
+  const truncationMarker = `[TRUNCATED: 428000 bytes, full text: ${fullTextPath}]`;
+  return [
+    prefix,
+    'x'.repeat(
+      MAX_AGENT_FAILURE_MESSAGE_BYTES
+      - Buffer.byteLength(prefix)
+      - Buffer.byteLength(truncationMarker),
+    ),
+    truncationMarker,
+  ].join('');
 }
 
 describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
@@ -474,7 +489,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       options?.onStream?.({
         type: 'init',
         data: {
-          model: options.resolvedModel ?? '(default)',
+          model: options.resolvedExecution?.model ?? options.resolvedModel ?? '(default)',
           sessionId: `team-session-${responseIndex}`,
         },
       });
@@ -512,8 +527,12 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       },
     });
     expect(vi.mocked(runAgent).mock.calls[0]?.[2]).toMatchObject({
-      resolvedProvider: 'mock',
-      resolvedModel: 'mock-1',
+      resolvedExecution: {
+        provider: 'mock',
+        model: 'mock-1',
+        providerOptions: undefined,
+        permissionMode: undefined,
+      },
     });
 
     const providerRecords = readFileSync(providerLogger.filepath, 'utf-8')
@@ -647,7 +666,8 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
         systemPrompt: typeof persona === 'string' ? persona : '',
         userInstruction: instruction,
       });
-      if (options?.resolvedProvider === 'claude-sdk') {
+      const provider = options?.resolvedExecution?.provider ?? options?.resolvedProvider;
+      if (provider === 'claude-sdk') {
         options.onStream?.({ type: 'text', data: { text: 'routing' } });
         const selections = [
           { id: longPartId, required_tier: 'medium' },
@@ -655,14 +675,14 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
         ];
         return makeResponse({
           persona: 'auto-router',
-          content: JSON.stringify({ required_tier: 'medium', reason_codes: ['focused-change'] }),
-          structuredOutput: { required_tier: 'medium', reason_codes: ['focused-change'] },
+          content: JSON.stringify({ required_tier: 'medium', reason_codes: ['focused-change'], confidence: null }),
+          structuredOutput: { required_tier: 'medium', reason_codes: ['focused-change'], confidence: null },
         });
       }
-      if (options?.resolvedProvider === 'mock') {
+      if (provider === 'mock') {
         return nextLeaderResponse();
       }
-      if (options?.resolvedProvider === 'codex') {
+      if (provider === 'codex') {
         options.onStream?.({ type: 'text', data: { text: 'part execution' } });
         return makeResponse({
           persona: 'coder',
@@ -675,7 +695,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
           },
         });
       }
-      throw new Error(`Unexpected provider: ${options?.resolvedProvider ?? '(missing)'}`);
+      throw new Error(`Unexpected provider: ${provider ?? '(missing)'}`);
     });
     vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
@@ -976,18 +996,82 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     );
 
     const state = await engine.run();
+    const primaryError = 'api failed';
+    const aggregateContent = 'All team leader parts failed: part-1: api failed; part-2: test failed';
 
     expect(state.status).toBe('aborted');
     expect(state.stepOutputs.get('implement')).toMatchObject({
       persona: 'implement',
       status: 'error',
-      error: 'All team leader parts failed: part-1: api failed; part-2: test failed',
+      error: primaryError,
+      content: aggregateContent,
     });
     expect(state.lastOutput).toMatchObject({
       persona: 'implement',
       status: 'error',
-      error: 'All team leader parts failed: part-1: api failed; part-2: test failed',
+      error: primaryError,
+      content: aggregateContent,
     });
+  });
+
+  it('member の provider stream parse failure は成功パートと混在しても即時 abort する', async () => {
+    const config = buildTeamLeaderConfig();
+    const step = config.steps[0];
+    if (!step?.teamLeader) {
+      throw new Error('teamLeader configuration is required');
+    }
+    step.teamLeader.maxConcurrency = 2;
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+      projectCwd: tmpDir,
+      provider: 'claude',
+    });
+    const workflowAborted = vi.fn();
+    engine.on('workflow:abort', workflowAborted);
+    const boundedParseFailure = createBoundedParseFailure(
+      '/tmp/project/.takt/runs/sample/failures/team-leader-provider-failure-1.txt',
+    );
+
+    mockRunAgentWithPrompt(
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: {
+          parts: [
+            { id: 'part-1', title: 'API', instruction: 'Implement API' },
+            { id: 'part-2', title: 'Test', instruction: 'Add tests' },
+          ],
+        },
+      }),
+      makeResponse({
+        persona: 'coder',
+        status: 'error',
+        content: '',
+        error: boundedParseFailure,
+        failureCategory: 'provider_stream_parse_error',
+      }),
+      makeResponse({ persona: 'coder', content: 'Tests done' }),
+    );
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(3);
+    expect(mockRuleEvaluation).not.toHaveBeenCalled();
+    expect(workflowAborted).toHaveBeenCalledOnce();
+    const abortReason = workflowAborted.mock.calls[0]?.[1];
+    const abortKind = workflowAborted.mock.calls[0]?.[2];
+    const abortFailure = workflowAborted.mock.calls[0]?.[3];
+    expect(abortKind).toBe('step_error');
+    expect(abortReason).toBe(boundedParseFailure);
+    expect(abortFailure).toMatchObject({
+      kind: 'step_error',
+      reason: boundedParseFailure,
+      error: boundedParseFailure,
+      failureCategory: 'provider_stream_parse_error',
+    });
+    expect(Buffer.byteLength(String(abortReason))).toBe(MAX_AGENT_FAILURE_MESSAGE_BYTES);
+    expect(Buffer.byteLength(String(abortFailure?.error))).toBe(
+      MAX_AGENT_FAILURE_MESSAGE_BYTES,
+    );
   });
 
   it('team leader call が reject した場合も失敗 usage を1件だけ記録する', async () => {
@@ -1040,7 +1124,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     ]);
   });
 
-  it('prompt-based team leader の意味的再生成と feedback retry を全attempt分記録する', async () => {
+  it('prompt-based team leader の意味的再生成と feedback 契約失敗を全attempt分記録する', async () => {
     vi.useFakeTimers();
     try {
       const config = buildTeamLeaderConfig();
@@ -1094,15 +1178,6 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
           persona: 'team-leader',
           status: 'error',
           error: 'feedback first failed',
-        }))
-        .mockRejectedValueOnce(new Error('feedback second rejected'))
-        .mockResolvedValueOnce(makeResponse({
-          persona: 'team-leader',
-          content: [
-            '```json',
-            JSON.stringify({ done: true, reasoning: 'enough', parts: [] }),
-            '```',
-          ].join('\n'),
         }));
       vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
@@ -1121,8 +1196,6 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
         true,
         true,
         false,
-        false,
-        true,
       ]);
     } finally {
       vi.useRealTimers();
@@ -1198,7 +1271,8 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     const state = await engine.run();
 
     expect(state.status).toBe('aborted');
-    const expectedError =
+    const primaryError = 'part timeout: Part timeout after 5ms';
+    const aggregateContent =
       'All team leader parts failed: part-1: part timeout: Part timeout after 5ms; part-2: part timeout: Part timeout after 5ms';
 
     const records = readFileSync(ndjsonPath, 'utf-8')
@@ -1212,11 +1286,12 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       type: 'step_complete',
       step: 'implement',
       status: 'error',
-      error: expectedError,
+      error: primaryError,
+      content: aggregateContent,
     });
     expect(workflowAbort).toMatchObject({
       type: 'workflow_abort',
-      reason: expect.stringContaining(expectedError),
+      reason: primaryError,
     });
 
     const trace = renderTraceReportFromLogs(
@@ -1228,7 +1303,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
         status: 'aborted',
         iterations: 1,
         endTime: '2026-04-25T00:00:00.000Z',
-        reason: expectedError,
+        reason: primaryError,
       },
       ndjsonPath,
       undefined,
@@ -1236,7 +1311,9 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     );
 
     expect(trace).toContain('- Step Status: error');
-    expect(trace).toContain(expectedError);
+    expect(trace).toContain(`- Reason: ${primaryError}`);
+    expect(trace).toContain(`- Error: ${primaryError}`);
+    expect(trace).toContain(aggregateContent);
 
     const usageRecords = readFileSync(usageLogger.filepath, 'utf-8')
       .trim()
@@ -1322,16 +1399,20 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
 
     expect(state.status).toBe('aborted');
 
-    const expectedError =
+    const primaryError =
+      'stream idle timeout: Codex stream timed out after 10 minutes of inactivity';
+    const aggregateContent =
       'All team leader parts failed: part-1: stream idle timeout: Codex stream timed out after 10 minutes of inactivity; part-2: stream idle timeout: Secondary stream timed out after 2 minutes of inactivity';
 
     expect(state.stepOutputs.get('implement')).toMatchObject({
       status: 'error',
-      error: expectedError,
+      error: primaryError,
+      content: aggregateContent,
     });
     expect(state.lastOutput).toMatchObject({
       status: 'error',
-      error: expectedError,
+      error: primaryError,
+      content: aggregateContent,
     });
 
     const records = readFileSync(ndjsonPath, 'utf-8')
@@ -1345,11 +1426,12 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       type: 'step_complete',
       step: 'implement',
       status: 'error',
-      error: expectedError,
+      error: primaryError,
+      content: aggregateContent,
     });
     expect(workflowAbort).toMatchObject({
       type: 'workflow_abort',
-      reason: expect.stringContaining(expectedError),
+      reason: primaryError,
     });
 
     const trace = renderTraceReportFromLogs(
@@ -1361,7 +1443,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
         status: 'aborted',
         iterations: 1,
         endTime: '2026-04-25T00:00:00.000Z',
-        reason: expectedError,
+        reason: primaryError,
       },
       ndjsonPath,
       undefined,
@@ -1369,7 +1451,9 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     );
 
     expect(trace).toContain('- Step Status: error');
-    expect(trace).toContain(expectedError);
+    expect(trace).toContain(`- Reason: ${primaryError}`);
+    expect(trace).toContain(`- Error: ${primaryError}`);
+    expect(trace).toContain(aggregateContent);
   });
 
   it('実際の親 AbortSignal でも part の失敗 usage を1件だけ記録する', async () => {
@@ -1458,7 +1542,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     ]);
   });
 
-  it('全パート失敗時は provider error の分類も集約メッセージに残す', async () => {
+  it('全パート失敗時は診断をcontentに残し、errorは最初のprovider failureに分離する', async () => {
     const config = buildTeamLeaderConfig();
     const engine = new WorkflowEngine(config, tmpDir, 'implement feature', { projectCwd: tmpDir, provider: 'claude' });
 
@@ -1497,11 +1581,16 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     expect(state.status).toBe('aborted');
     expect(state.stepOutputs.get('implement')).toMatchObject({
       status: 'error',
-      error: 'All team leader parts failed: part-1: provider error: Upstream model returned 500; part-2: provider error: Gateway unavailable',
+      error: 'Upstream model returned 500',
+      failureCategory: 'provider_error',
     });
+    expect(state.stepOutputs.get('implement')?.content).toBe(
+      'All team leader parts failed: part-1: Upstream model returned 500; part-2: Gateway unavailable',
+    );
     expect(state.lastOutput).toMatchObject({
       status: 'error',
-      error: 'All team leader parts failed: part-1: provider error: Upstream model returned 500; part-2: provider error: Gateway unavailable',
+      error: 'Upstream model returned 500',
+      failureCategory: 'provider_error',
     });
   });
 

@@ -1,3 +1,5 @@
+{{include:instructions/contract-family-decomposition-boundary}}
+
 Analyze the implementation task and, if decomposition is appropriate, split into multiple parts for parallel execution.
 
 **Important:** Reference the plan report: {report:plan.md}

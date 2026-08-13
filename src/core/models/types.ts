@@ -31,12 +31,6 @@ export type {
   PartDefinition,
   PartResult,
   TeamLeaderConfig,
-  TeamLeaderMode,
-  FindingContractPartAssignment,
-  FindingContractFindingOutcome,
-  FindingContractPartCompletionClaim,
-  FindingContractFixCoverage,
-  FindingContractTeamLeaderDecision,
 } from './part.js';
 
 // Workflow configuration and runtime state
@@ -80,9 +74,6 @@ export type {
   StepProviderOptions,
   OpenCodeGuardOptions,
   OpenCodeGuardProfile,
-  FindingContractConfig,
-  FindingLedger,
-  FindingsRuleContext,
   AgentWorkflowStep,
   NormalAgentWorkflowStep,
   ParallelWorkflowStep,
@@ -116,6 +107,11 @@ export type {
   ResolvedFacetContent,
   DynamicFacetsConfig,
   DynamicFacetSelectionSnapshot,
+  ReviewCompletionConfig,
+} from './workflow-types.js';
+
+export {
+  MAX_REVIEW_COMPLETION_RETRY,
 } from './workflow-types.js';
 
 export type {

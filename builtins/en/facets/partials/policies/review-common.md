@@ -164,44 +164,14 @@ A finding must be directly supported by current code, types, schemas, primary sp
 
 To prevent circular rejections, track findings by ID.
 
-Finding Contract applies to the whole review workflow, not to individual findings.
-Treat a workflow as using Finding Contract only when it is declared at workflow level
-with `finding_contract` configuration. A `findings-ledger.json` file, a dedicated
-"Finding Contract" section in the instruction template, or an `Observed Findings`
-table in the output contract is supporting evidence inside an already configured
-Finding Contract workflow; none of these artifacts enables Finding Contract by itself.
-
-When Finding Contract is in use, reviewers must not allocate new final `finding_id`
-values or decide final lifecycle state. Report observed problems as evidence-backed
-raw findings in the `Observed Findings` table. Use only the raw relations `new`,
-`persists`, `resolution_confirmation`, and `reopened`; refer to existing IDs only
-when they are present in the ledger. Final lifecycle decisions and finding-ID matching
-belong to the findings-manager and engine.
-
-When a workflow is configured with Finding Contract and a parseable ledger is available,
-the ledger is the authoritative source for tracked findings. Individual reports and raw
-finding details are supporting evidence. If a ledger exists but is incomplete, follow
-mapped findings from the ledger and treat unmapped raw findings as potential new entries
-pending findings-manager reconciliation. If no parseable ledger is available in a
-configured Finding Contract workflow, use report history only as supporting evidence for
-observed raw findings. Do not assign final `finding_id` values or lifecycle states and
-do not apply the legacy rules; wait for ledger regeneration or findings-manager
-reconciliation.
-
-### Legacy Finding ID Rules (for workflows without Finding Contract)
-
-When a workflow does not use `finding_contract` configuration, follow these legacy rules.
-This section and the following reopen and immutable-meaning rules do not apply to Finding
-Contract workflows. When a recurrence is a different problem under Finding Contract, the
-reviewer reports raw relation `new` and does not issue a final `finding_id`; the
-findings-manager and engine decide the final ID and lifecycle.
+### Finding ID Rules
 
 - Every issue raised in a REJECT must include a `finding_id`
 - If the same issue is raised again, reuse the same `finding_id`
 - For repeated issues, set status to `persists` and include concrete evidence (file/line) that it remains unresolved
 - New issues must use status `new`
 - Resolved issues must be listed with status `resolved`
-- Issues without `finding_id` are invalid (cannot be used as rejection grounds). This legacy rule does not apply to Finding Contract workflows.
+- Issues without `finding_id` are invalid (cannot be used as rejection grounds)
 - REJECT is allowed only when there is at least one `new` or `persists` issue
 - Before treating a prior finding as resolved, verify that the fix did not introduce a different structural or contract problem
 

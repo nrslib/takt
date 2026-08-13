@@ -76,15 +76,6 @@ describe('ladder initial-stage honoring across every assignment path', () => {
     expect(env.internalAgents?.assistant).toEqual(MAIN_ENTRY);
   });
 
-  it('should resolve the intake normalizer to the ladder first profile when `internal_agents.intake-normalizer` declares a ladder', () => {
-    const env = compileRuntimeProviderEnvironment(
-      section({ targets: { internal_agents: { 'intake-normalizer': { ladder: ['strong', 'main'] } } } }),
-    );
-    // The seat is keyed `intake-normalizer` in runtime.yaml but `intakeNormalizer` on the compiled
-    // environment, so a seat-mapping regression would drop the assignment rather than misroute it.
-    expect(env.internalAgents?.intakeNormalizer).toEqual(STRONG_ENTRY);
-  });
-
   it('should still resolve the default profile independently when a step assignment declares a ladder', () => {
     const env = compileRuntimeProviderEnvironment(
       section({

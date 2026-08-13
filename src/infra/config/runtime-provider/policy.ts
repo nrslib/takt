@@ -23,6 +23,9 @@ export interface FlatProfile {
   provider?: string;
   model?: string;
   options?: Record<string, unknown>;
+  capabilities?: string | string[];
+  capabilitiesOriginProfile?: string;
+  permissionMode?: 'readonly' | 'edit' | 'full';
   escalate?: string;
 }
 
@@ -74,6 +77,15 @@ export function flattenProfiles(
     }
     if (profile.options !== undefined) {
       flat.options = profile.options;
+    }
+    if (profile.capabilities !== undefined) {
+      flat.capabilities = Array.isArray(profile.capabilities)
+        ? [...profile.capabilities]
+        : profile.capabilities;
+      flat.capabilitiesOriginProfile = name;
+    }
+    if (profile.permission_mode !== undefined) {
+      flat.permissionMode = profile.permission_mode;
     }
     if (profile.escalate !== undefined) {
       flat.escalate = profile.escalate;

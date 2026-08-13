@@ -178,7 +178,7 @@ steps:
 
 `persona_name` は表示名専用です。config の `provider_routing.personas` は raw `persona` キーに一致し、`provider_routing.tags` は step の任意の `tags` 配列に書かれた順で一致します。同じ provider / model / provider_options leaf では後ろの tag が前の tag を上書きします。
 
-`session_key` は通常の agent step、parallel sub-step、`loop_monitors.judge` で指定できます。system step、workflow-call step、parallel parent step では agent session を所有しないため指定できません。同じ persona を使う複数の agent step のセッションを分離したい場合、または別の agent step で意図的に同じセッションを共有したい場合に使います。実行時の有効キーは `session_key` に解決済み provider を付けた形になり、例: `shared-coder:claude` です。`session_key` を省略した場合は persona キー、persona が無い場合は step 名が使われます。空文字列と空白のみの値は workflow 検証で拒否されます。
+`session_key` は通常の agent step と parallel sub-step で指定できます。system step、workflow-call step、loop-monitor judge、parallel parent step では再開可能な agent session を所有しないため指定できません。同じ persona を使う複数の agent step のセッションを分離したい場合、または別の agent step で意図的に同じセッションを共有したい場合に使います。実行時の有効キーは `session_key` に解決済み provider を付けた形になり、例: `shared-coder:claude` です。`session_key` を省略した場合は persona キー、persona が無い場合は step 名が使われます。空文字列と空白のみの値は workflow 検証で拒否されます。
 
 `quality_gates` の文字列は従来どおり agent step の AI への完了条件としてプロンプトに含まれます。`type: command` の gate は agent step 完了後に worktree 内で実行され、終了コード `0` の場合のみ成功します。workflow YAML の command gate を使うには config 側で `workflow_command_gates.custom_scripts: true` を有効にする必要があります。失敗時は command のメタデータ、cwd、終了コードまたは timeout / output limit 情報、非公開 output log path が同じ agent step の差し戻し入力に含まれます。サニタイズ済み stdout / stderr はローカルの非公開ログだけに保存され、agent feedback には挿入されません。`system` と `workflow_call` step では `quality_gates` を指定できません。
 
@@ -200,8 +200,6 @@ steps:
 
 - 作業ツリー計算（常に行われます）: base コミット以降のコミット済み変更、未コミット変更、未追跡ファイル（ignored を除く）の和集合。タスクの変更が既にブランチへコミット済みで working tree 差分が空になる構成でも一覧に出ます
 - PR 由来の実行（`takt --pr N` 等で PR context を持つ実行）: 上の作業ツリー計算に PR の diff range `base...head` を**加えた**和集合になります。`--pr` は PR のレビューコメントを取り込んで修正するフローで、同じ実行の中で作業ツリーが変わるため、両方を対象にします。diff range がローカルに用意されていない場合はその旨を述べ、ローカル変更だけを一覧にします
-
-Finding Contract の証拠検証は上の作業ツリー計算と同じ結果を使います。PR diff range の合成はレビュアーへの指示注入だけの拡張で、証拠検証側には入りません（証拠検証は cwd の実体に対する byte-exact 照合のため）。
 
 作業ディレクトリが Git リポジトリでない場合や変更が検出されない場合も、その事実を述べる文言に解決されます（空文字にはなりません）。ファイル数が 200 件を超える場合は残件数を明示して打ち切ります。組み込みの汎用レビュアーは partial `instructions/review-round-scope` 経由でこの変数を自動的に受け取ります。
 
@@ -295,57 +293,9 @@ TAKT は Normal / Parallel / Dynamic Parallel / Arpeggio / Team Leader / Workflo
 - 並列サブ step は `promotion` をサポートしません
 - 親 step には任意の `concurrency: <N>`（最小 1）を指定でき、同時実行するサブ step 数を制限できます。未指定時は全サブ step が同時に開始します
 
-### Finding Contract reviewer 出力の normalization
-
-経路は1本だけで、Finding Contract の reviewer は全員そこを通ります。reviewer は常に
-通常の Markdown レビュー報告だけを書き（JSON も構造化出力契約も持ちません）、正規化係の
-単発呼び出しがその報告を raw findings へ変換します。格上げ再レビューも同じ1本道です。
-どのモデルが構造化契約を守れるかを宣言する仕組みはありません。reviewer に構造化契約を
-持たせないからです。
-
-コスト特性は「レビュアー×ラウンドごとに正規化1呼び出し」です。reviewer 自身のフェーズに
-加えて毎ラウンド固定でかかる費用であり、失敗後に発生する追加費用ではありません。
-
-3つの役割は別々の判断を持ちます。**reviewer は観察専任**です。何が・どこで・なぜ壊れて
-いるかと、証拠として引用できる場所だけを、報告の `## Finding Contract Claims` 節へ
-ラベル付きフィールド（Target files / Description / Evidence）で書きます。severity・
-title・問題系列タグ・台帳 relation は書きません。**正規化係**はその観察を抽出し、
-`severity`・`title`・`familyTag` の分類を claim の内容から付与します。捏造が禁止されるのは
-観測事実（path、行範囲、引用、finding ID、lifecycle 判定）であり、この分類は対象外です。
-publication には `classificationAuthority: intake-normalizer` が記録されるので、台帳の
-severity を誰が付けたのかを後から追えます。**findings-manager** は台帳と照らして同一性を
-裁定します（新規か、open な指摘の再主張か、解消の確認か）。したがって intake 契約が
-reviewer に要求するのは観察の実質——claim 本文・対象・提示された証拠——だけで、severity や
-タグの欠落が言い直しの差し戻し理由になることはありません。
-
-正規化係の provider/model は、runtime.yaml の
-`provider.targets.internal_agents['intake-normalizer']` seat → reviewer の profile が宣言する
-`escalate` 先 → 通常の既定解決、の順で決まります。「通常の既定解決」は `findings-manager` と
-同じ優先度ティアであり、`provider_routing` は従来どおり効きます。CLI や環境変数の明示 override は
-他のステップと同じくこれらより上位です。先頭の候補は isolated structured execution に対応して
-いる必要があり、対応していない場合は黙って続行せずその理由を示して停止します。ワークフローの
-読み込みと `takt workflow doctor` も、agent を1つも起動する前にその構成を拒否します。
-
-正規化係がラウンド唯一の関門になったため、失敗は原因で切り分けます。
-
-**正規化係の出力側**に原因がある場合（スキーマ不成立、`rawExcerpt` と `candidate` の間で
-claim を失う等）で、既存の訂正1回でも直らないときは、TAKT は同じ解決チェーンの**次の候補**
-——すでに使った候補と `(provider, model)` が異なり、かつ isolated structured execution に
-対応する最初のもの——で正規化をもう一度だけ実行します。やり直しはこの1回だけで、エンジン側
-スキーマの不備は別 provider でやり直しません。それでも失敗した場合は、候補ごとの具体的な
-理由（どの item がどの検証に落ちたか）をメッセージに含めて停止します。
-
-**報告側**に原因がある場合、ランは止まりません。markdown の契約を無視したレビュアー——たとえば
-報告本文そのものを JSON で出力したレビュアー——の抽出結果は、自分の報告本文に byte-exact で
-見つからない引用になります。どの正規化係が読んでも同じ結論になるので、TAKT はそのレビュアーの
-`protocol-anomaly` として台帳へ記録します。anomaly には報告本文を claim 抜粋として持たせ、
-「通常の markdown 散文で書き直せ」という是正指示を添えて、既存の言い直し経路へ載せます。その
-ラウンドのそのレビュアーからは台帳へ何も届きませんが、ラウンド自体は `review_budget` に計上され、
-同じラウンドの他のレビュアーには影響しません。
-
 ### Dynamic Parallel Step
 
-`parallel` には、常時実行する `fixed` と selector が選ぶ `pool` を指定するオブジェクト形式も使えます。TAKT は step へ進入した時点で read-only の内部 selector を実行します。selector は workflow step ではなく、agent や workflow 定義を生成・変更できません。selector は read-only 権限、permission bypass 無効、MCP server 非継承、TAKT が所有する structured output contract で実行されます。
+`parallel` には、常時実行する `fixed` と selector が選ぶ `pool` を指定するオブジェクト形式も使えます。TAKT は step へ進入した時点で内部 selector を実行します。selector は workflow step ではなく、agent や workflow 定義を生成・変更できません。解決済み runtime profile を fresh session で使い、TAKT が所有する structured output contract を返します。明示的な制限が必要なら profile に `capabilities` と `permission_mode` を設定します。省略した項目について selector 専用の制限は追加されません。
 
 ```yaml
   - name: reviewers
@@ -565,7 +515,7 @@ pool 内の全候補は同じ形を持ちます。
 
 #### selector 契約
 
-`dynamic_facets` を持つ step へ進入したとき、TAKT は main agent 起動前に内部の read-only selector を実行します。selector は workflow step ではなく、agent や workflow 定義を生成・変更できず、read-only 権限、permission bypass 無効、MCP server 非継承、TAKT が所有する structured output contract で fresh session で実行します。
+`dynamic_facets` を持つ step へ進入したとき、TAKT は main agent 起動前に内部 selector を実行します。selector は workflow step ではなく、agent や workflow 定義を生成・変更できず、解決済み runtime profile と TAKT が所有する structured output contract を fresh session で使います。明示的な制限が必要なら profile に `capabilities` と `permission_mode` を設定します。省略した項目について selector 専用の制限は追加されません。
 
 selector には少なくとも次を渡します。
 
@@ -573,7 +523,6 @@ selector には少なくとも次を渡します。
 - leaf workflow、workflow-call instance、step の identity
 - 初回進入か再進入か、および step iteration
 - 現在の workflow-call scope から参照できる前段 report
-- 未解決 finding
 - タスク開始時点からの累積差分
 - 候補 ID と description
 
@@ -655,93 +604,6 @@ selector 実行時に次のいずれかが成立すると main agent 起動前�
 - `takt workflow preview` は dynamic pool 名、候補 ID、参照 facet、source を表示します。
 - builtin の ja/en pool を提供する場合、候補 ID 集合を一致させます。
 
-### Finding Contract 合成ロールの provider/model
-
-workflow に provider や model の名前は書きません。`finding_contract.manager` と
-`finding_contract.adjudicator` は `provider` / `model` フィールドを受け付けず、strict スキーマなので
-書き残しはロード時に拒否されます。宛先は `runtime.yaml` の `internal_agents` seat で指名します。
-
-```yaml
-# runtime.yaml
-version: 1
-provider:
-  defaults:
-    profile: strong
-  profiles:
-    strong: { provider: codex, model: gpt-5.5 }
-  targets:
-    internal_agents:
-      findings-manager:     { profile: strong }
-      terminal-adjudicator: { profile: strong }
-      loop-judge:           { profile: strong }
-      escalation-reviewer:  { profile: strong }
-      intake-normalizer:    { profile: strong }
-```
-
-レポートはnormalizationより先に保存され、normalizerにはその1件のレポートだけが
-toolなしの新規sessionで渡されます。
-
-**seat の指定はすべて任意です。** 未指定の seat は、そのロールが従来から使ってきた既定解決
-（persona routing → workflow → project → global → provider 既定。正規化係ではレビュアー
-profile の `escalate` 連鎖も含む）へそのまま落ちます。指定した seat はそのロールの
-step レベル `provider` / `model` として扱われ、`provider_routing`、deprecated の
-`persona_providers`、effective auto routing、workflow/project/global fallback より優先されます。
-CLI と環境変数の明示 override はそれより高い優先順位を維持します。provider だけを指名した seat は
-下位優先度の model fallback を止めるため、provider と model が食い違う組み合わせにはなりません。
-
-`escalation-reviewer` seat だけは**宛先しか決めません**。格上げ再レビューは従来どおり、
-レビュアーが解決された profile が `escalate` を宣言している場合にだけ発火します。seat を置いても、
-格上げ先を持たないレビュアーの最終提示が本人から離れることはありません。
-
-### Finding Contract の provisional finding と完了ゲート
-
-すべての raw finding には必ず行き先が与えられます。台帳へ確定 finding として適用されるか、active conflict として記録されるか、**provisional finding** — 意味を確定できなかった観測を表す、`provisional` メタデータ付きの open な台帳エントリ — として保持されます（relation/target ラベリングの矛盾、reviewer 出力のハード上限超過、解釈の中断、保存時前提条件の失効、解釈予算の枯渇）。1件の不正な raw finding、Finding Manager の壊れた応答、解釈予算の超過が run を abort させることはありません。
-
-provisional finding は final gate を塞ぎます。
-
-- `when()` rule で `findings.provisional.count`（と `findings.provisional.items`）が使えます。builtin workflow は `findings.provisional.count > 0` を再計画（plan）ステップへルーティングします — provisional はコード変更で直せない system finding です。
-- エンジンは最終不変条件を強制します: provisional finding が1件でも open な状態で `COMPLETE` へ遷移すると、workflow は fail-fast で abort します（abort 理由に provisional の id / kind / reason が列挙されます）。`finding_contract` を使う custom workflow は、`COMPLETE` の rule より前に `findings.provisional.count` でルーティングしてください。
-
-provisional finding を確定・解消できるのは後続ラウンドの clean なレビュー証拠だけです。同じ claim の clean な再観測は確定 finding へ昇格させ、既存 finding への決定的な対応づけは resolved にします。「後のラウンドで言及されなかった」だけでは決して解消されず、waive / invalidate / supersede もできません。
-
-open finding の各 item は、fixer instruction と `when()` の rule state の両方で `familyTags` を公開します。配列順に依存せず family でルーティングするには、`exists()` 内で `contains()` を使います。
-
-```yaml
-- condition: when(exists(findings.open.items, contains(item.familyTags, "provider-e2e")))
-  next: fix
-```
-
-ledger が既に存在しない raw finding を参照している場合、その id は黙って破棄されたり ledger 全体を読めなくしたりせず、`unknownRawFindingIds` に公開されます。どちらの配列も重複排除・ソート済みで、`contains(item.unknownRawFindingIds, "raw-id")` も同じ包含構文を使います。
-
-invalid・欠落した Finding Manager の判断は provisional finding として台帳へ着地し、run は継続します。`COMPLETE` の rule より*前*に `when(findings.provisional.count > 0 && findings.conflicts.count == 0)` を再計画ステップへ向ける rule を追加してください。`finding_contract` を使う workflow が `findings.provisional` を一切参照していない場合、`takt workflow doctor` が警告します。
-
-### conflict の裁定と接地再裁定
-
-active conflict はまずエンジン合成の `finding-conflict-adjudication` step へ入ります。裁定結果が
-`verification_undetermined` のとき、エンジンはその conflict についてそのラウンドに1回だけ、同じ
-`terminal-adjudicator` seat、persona 解決、provider 予算、lease 経路で接地再裁定を行います。
-workflow の step や新しい role は追加しません。
-
-再裁定の prompt には immutable な review-scope snapshot から作った bounded window を添付します。
-window は争点の finding の `target.paths` と file-quote evidence の行アンカーから構成し、
-`evidence-search` と同じ digest 束縛の窓機構を使います。裁定者はその窓だけを根拠にし、live な作業
-ツリーへ戻る fallback はありません。provider call の予約は呼び出し前に永続化するため、crash / replay
-時も同じ attempt を再開し、重複呼び出しを発行しません。2回目も `verification_undetermined` なら
-そのラウンドを未確定として確定し、元のレビューステップへ戻ります。
-
-裁定 prompt の履歴参照は直近3件を本文として残し、それ以前は件数と digest に縮約します。
-これにより異議対応の関係を判断できる参照を残しながら、入力サイズを有界に保ちます。
-
-再裁定の snapshot identity には、争点の `target.paths` について review-scope capture が取得した
-現在内容の digest も含まれます。台帳の射影が同じでも fix によって対象コードの digest が変われば、
-新しい snapshot として再裁定できます。逆に対象コードも台帳射影も変わらない場合は再裁定しません。
-非 regular file は例外です。安定した通常ファイル内容 digest を取得できないため、capture ごとに常に変化扱いとなり、fresh snapshot を追加して再裁定できます。ただし再裁定回数と workflow の上限による有限性は維持されます。
-未確定かつコード無変化の反復では stop budget は進まないため、loop monitor または workflow の
-`max_steps` が有限停止を担います。
-
-conflict の ladder は `findings.rounds.budgetExhausted == false` の間、active conflict を fix / 再レビュー
-ループへ戻さなければなりません。最後の `when(findings.conflicts.count > 0)` → `ABORT` は予算枯渇後だけの
-出口であり、予算付きのループ rule より後ろに置きます。
 
 ### Arpeggio Step（データ駆動バッチ）
 
@@ -801,8 +663,6 @@ CSV / JSON などのデータソースを反復し、同じ step テンプレー
 `max_concurrency` は同時に実行する独立した part 数を制御します。`max_concurrency` と互換キーの `max_parts` はどちらも上限 `3` で、超える値は workflow ロード時にエラーになります。どちらも未指定の場合のデフォルトは `3` です。`initial_max_parts` は指定した場合に限り、最初の分解バッチの part 数を制限します。step 全体の part 総数に上限はなく、Team Leader が追加作業不要と判断するか、新しい一意な part を返さなくなるまで batch を追加します。scheduler は現在のバッチの part がすべて完了してから次のバッチを要求するため、同じバッチ内の part は相互に依存してはいけません。実装結果が必要な検証は後続 batch に置きます。`fail_on_part_error: true` の場合、生成された part が失敗した後でも Team Leader は新たな回復 part を計画・実行し得ます。その後、この step は error で終了します。未指定時は通常の回復フローに従います。旧名の `max_parts` は互換性のため `max_concurrency` として扱われます。`refill_threshold` は互換キーであり、省略または `0` のみ指定できます。batch 障壁と両立しないため、非0は workflow ロード時にエラーになります。`part_tags` は生成される part step の provider routing tag です。未指定時は親 step の `tags` を継承します。空文字や空白のみの tag は無効です。`part_tags` は通常の `provider_routing.tags` として解決されるため、`part_persona` による persona routing より優先されます。
 
 `inspect_tools` は親 Team Leader のタスク分解フェーズだけで read-only inspection tools (`read`, `glob`, `grep`) を許可します。不正な tool 名は workflow ロード時にエラーになります。生成される子 part には影響せず、子 part の tool は引き続き `part_allowed_tools` で別に制御されます。inspection tools は Claude 系 provider や OpenCode など、`allowedTools` に対応する provider で利用できます。Team Leader inspection tools に対応しない provider では、実行時に明確なエラーになります。
-
-Finding Contract の修正ステップでは `team_leader.mode: finding_contract_fix` を指定できます。この mode は有効な `finding_contract` を必須とし、各 part を actionable finding へ明示的に割り当てます。assignment の `readPaths` は調査対象の目安となる作業ディレクトリからのリテラルな相対パスであり、completion の `changedPaths` は worker が実際に変更したファイルの申告です。どちらにもワイルドカードの `*` と `?` は使えず、`[]` などその他の文字は展開されずパスの一部として扱われます。part の編集範囲は通常の part 権限に従い、複数 part の変更が重なった場合は Team Leader が次の decision で後続の repair または verify part を計画し、最終状態を確認します。bounded index の `omittedPartCount` またはいずれかの `omittedChangedPathCount` が1以上なら `complete` にせず、後続の集約した repair または verify part で最終状態を確認します。Team Leader は過去の raw 応答を累積せず、最新 batch 全体で上限を設けた raw excerpt・engine 検証済みの finding 単位 claim digest と、過去 batch における finding ごとの最新 digest から `continue`、`complete`、`replan` を判断します。`complete` にはステップ開始時の全 actionable finding を覆う `fixCoverage` と成功した検証が必要です。これは reviewer へ引き渡せるという step-local な判断であり、ledger の finding を解決するのは引き続き Finding Manager です。遷移は `when(structured.fix.decision == "complete")` のような機械条件で定義します。
 
 ### Workflow Call Step（サブワークフロー）
 
@@ -970,7 +830,8 @@ promotion は並列サブ step ではサポートされません。
 | `knowledge` | - | knowledge キーまたはキー配列（section map、または bare 名で project → user → builtin の順に解決） |
 | `instruction` | - | instruction キー（section map、または bare 名で project → user → builtin の順に解決） |
 | `edit` | - | step がプロジェクトファイルを編集できるか (`true` / `false`) |
-| `companion` | - | 通常の agent step と並行して隔離された read-only reviewer を実行（[Companion レビュアー](#companion-レビュアー)参照） |
+| `companion` | - | 解決済み runtime profile を使う Companion reviewer を通常 agent step と並行実行（[Companion レビュアー](#companion-レビュアー)参照） |
+| `review_completion` | - | 必須の `retry_instruction` facet と任意の再試行上限を持つ object でレビュー網羅性確認を有効化 |
 | `pass_previous_response` | `true` | 前の step の出力を `{previous_response}` に渡す |
 | `provider_options.claude.allowed_tools` | - | step または workflow に対する Claude ツール許可リスト |
 | `provider_options.claude.base_url` | - | `claude` / `claude-sdk` 用の Anthropic 互換 base URL（[configuration ガイド](./configuration.ja.md#provider-base-url-base_url) 参照） |
@@ -1001,6 +862,8 @@ promotion は並列サブ step ではサポートされません。
 | `required_permission_mode` | - | 最低限の権限モード: `readonly`, `edit`, `full` |
 | `output_contracts` | - | レポートファイル設定（name, format） |
 | `quality_gates` | - | agent step 完了 gate。文字列は AI 向け指示、`type: command` は step 完了後に実行し、失敗時は同じ agent step に差し戻す |
+
+`review_completion` は object だけを受け付ける明示的な opt-in です。省略すると無効です。object には、元の reviewer instruction の scope や権限を変えずに不足を閉じる方法を伝える instruction facet `retry_instruction` が必須です。`min_retry` / `max_retry` は任意の再試行回数境界で、既定値は `0` / `1` です。`true`、`false`、文字列、空 object、`mode` などの未対応 field は拒否されます。成功した各 reviewer response は fresh な completion judge が実際の元 reviewer instruction、task、scope、evidence、report と照合し、judge の解決済み runtime profile で実行します。reviewer retry は同じ reviewer session を継続します。judge または retry の失敗は Phase 2 専用の advisory 診断として扱われ、最新の有効 reviewer response を置き換えません。
 
 通常の agent step、parallel sub-step、`loop_monitors.judge` では、`model: null` は model の明示的な省略を表します。`model` 未指定とは異なります。未指定は routing、workflow、loop monitor judge のトリガー元 step、入力由来の model など、適用可能な下位優先度のソースへフォールバックしますが、`null` はその entry で model 解決を止めます。明示 model が必須の provider では検証エラーになります。
 
@@ -1033,112 +896,6 @@ schemas:
 ### `auto_routing`
 
 workflow レベルの自動 provider ルーティングです。AI の `router`（provider + model）が step ごとに provider/model の `candidate` を選択します。`candidates` に選択可能な provider/model エントリを宣言し、`candidate_pools` で pool ごとの `fallback` 付きにグループ化し、`default_pool` でより特異的な一致がない場合の pool を指定し、`pool_rules` / `rules` で step の `tags`、`steps`（step 名）、`personas` ごとに pool や candidate を固定できます。rule は宣言済みの candidate / pool を参照する必要があり、未知の名前は検証エラーになります。
-
-### `finding_contract`
-
-workflow の Finding Contract を宣言します（実行時のセマンティクスは前述の Finding Contract 各節を参照）。`ledger_path`、`raw_findings_path`、`manager` は必須です。`manager` は `persona`、`instruction`、`output_contract` が必須で、`policy` / `knowledge` の追加は任意です。`manager` も `adjudicator` も `provider` / `model` フィールドは受け付けません（runtime.yaml の `findings-manager` / `terminal-adjudicator` seat で指名します）。任意の予算として `stop_budget`（`max_rounds`、デフォルト 40。`max_minutes` は未指定時は時間上限なし）と `review_budget`（`max_review_rounds`）を指定できます。
-
-```yaml
-finding_contract:
-  ledger_path: .takt/findings/review.json
-  raw_findings_path: .takt/findings/review/raw
-  manager:
-    persona: findings-manager
-    instruction: findings-manager
-    output_contract: findings-manager
-  stop_budget:
-    max_rounds: 40
-```
-
-### レビュアーの差し戻し（言い直し slot）
-
-レビュアー由来の未決着（言い直し待ちの intake anomaly、および protocol-anomaly /
-verdict-claims-mismatch のように後続の完全レビュー成立でしか決着しない anomaly）は、
-**次のレビューラウンドへ回さず、同じラウンド内でそのレビュアーへ直接差し戻します**。
-workflow YAML には何も現れません（step ではありません）。
-
-- 発火点は「レビューラウンドの findings-manager 取り込みが終わった直後」です。対象の
-  anomaly を持つレビュアーごとに、そのレビュアーの persona / policy / knowledge /
-  MCP サーバ / report 形式を継承した合成ステップで provider call を1回発行します。
-- 1回の差し戻しは「呼び出し → 正規化 → manager 取り込み」で1パスです。まだ言い直し待ちが
-  残っていれば同じラウンド内で次のパスへ進み、提示予算（`presentationLimit` =
-  `review_budget.max_review_rounds`）の範囲で反復します。提示は従来の
-  「次ラウンドでの提示」と同じく `presentedReviewerAnomalyIds` へ計上されますが、
-  slot のパスは `review_budget` / `stop_budget` のラウンドとしては数えません —
-  レビューラウンドの内側の差し戻しであって新しいレビューラウンドではないためです。
-- 言い直し要求は**1呼び出しあたり10件まで**です。超過分は同じラウンドの次のパスへ回ります。
-- 照合ゲートが要求する claim 本文を選べない観測（description も抜粋も持たない）は、
-  言い直し要求を作りません。どう答えても受理されないためです。この anomaly は提示を
-  1回も行わずに kind `undemandable_claim_atom` でその場で終端します。outcome は
-  observationClass に従い、`claim-bearing` なら `review_integrity_unresolved`、
-  `protocol-noise` なら `non_claim_observation_rejected` です。どちらでも以後ゲートを
-  塞ぎません。
-- 終端経路の整理: intake anomaly は「言い直しの照合成立による昇格」「提示予算の枯渇」
-  「言い直しで要求できる claim 本文が無い」のいずれかで終端します。後続の完全レビュー
-  成立による取り下げ（withdrawal）が終端になるのは、言い直し予算を持たない非 intake
-  anomaly（protocol-anomaly / verdict-claims-mismatch など）だけです。
-- 後続の完全レビュー成立でしか決着しない anomaly を持つレビュアーには、言い直し専用では
-  なく**完全な再レビュー**を発行します。レビュアー自身の指示文とツール集合をそのまま使い、
-  言い直し要求があれば「レビューに加えてこれにも答える」形で同じ呼び出しに同梱します。この枠は
-  1ラウンドにつきレビュアーごと1回までで、以降のパスは言い直し専用へ格下げされます。
-  取り下げの根拠になるのは完全な再レビューだけで、言い直し専用の呼び出しは根拠になりません。
-- 「この anomaly を言い直した」と申告した主張が照合ゲートを通らなかった場合、新規の
-  product finding は作りません。当該 anomaly への再試行として記録します。
-- 言い直し提示数が `presentationLimit` に達した claim-bearing anomaly は、終端処分の
-  直前に **evidence-search を1 anomaly につき生涯1回だけ**実行します。エンジンが
-  `target.paths` の実ファイルを読み、ファイルが大きい場合は主張された行範囲の周辺窓に
-  絞り、元の claim・提示履歴とともに既存の isolated structured 正規化係へ渡します。
-  正規化係にはツールを与えず、解決順も `intake-normalizer` seat → `escalate` → 既定値の
-  既存チェーンを使います。
-- evidence-search は新しい workflow step ではありません。正規化係が返す候補は既存の
-  `evidenceRequests` として通常の evidence issuer / byte-exact 照合を通り、成立したとき
-  だけ既存の昇格経路へ入り、anomaly の台帳へ `promotionOrigin: evidence-search` を記録
-  します。候補なし、照合不一致、対象不一致は従来どおり
-  `restatement_exhausted_claim_bearing` です。
-- evidence-search の呼び出しと manager 取り込みは slot と同じく `budget-excluded` で、
-  提示予算を増やしません。publication を先に永続化するため、中断・再開でも同じ anomaly
-  に2回目を発火しません。
-
-`withdrawn_by_subsequent_review` は「その anomaly を出したレビュアーが後続の完全な
-レビューを成立させた」ことによる決着であって、元の観測の当否を判定したものではありません。
-同じ検証不能な主張を出し続けるレビュアーでは、毎ラウンド「前の episode を取り下げて
-同じ stable key の新しい episode を記録する」循環になります。これは意図した読み方です —
-台帳は全 episode を監査記録として残し、未決着はつねに1件で、循環は review-integrity 予算が
-有界にします。主張が受理されたという意味ではありません。
-
-### 格上げ再レビュー（`escalate`）
-
-各 intake anomaly の**最後の1回**の言い直し提示（`review_budget.max_review_rounds` から決まる `presentationLimit` と同じ ordinal の提示）を、元のレビュアーへもう一度返す代わりに、より強いモデルへ回せます。workflow 側に設定は必要ありません。レビュアーが `escalate` を宣言した `runtime.yaml` の profile へ解決されたときに有効になり、格上げ先モデルはその `escalate` が指す profile です。
-
-```yaml
-# runtime.yaml
-version: 1
-provider:
-  defaults:
-    profile: reviewer-local
-  profiles:
-    reviewer-local:
-      provider: opencode
-      model: ollama-cloud/gemma4:31b
-      escalate: strong
-    strong:
-      provider: opencode
-      model: ollama-cloud/glm-5.2
-  targets:
-    steps:
-      peer-review/architecture-review:
-        profile: reviewer-local
-```
-
-- 格上げレビュアーは owner レビュアーの完全な代打です。persona / policy / knowledge / MCP サーバ / report 形式を、その回に実際に走った step のもの（動的に選択された facet を含む）からそのまま継承し、変わるのはモデル（`escalate` 先）と指示文だけです。指示文は通常のレビュー手順ではなく、エンジンが持つ「言い直しのみ」の契約になります。専用の persona facet も workflow 設定ブロックもありません。
-- persona を owner と共有する帰結として、格上げの主張は lifecycle 上 **owner のレビュアー識別**を引き継ぎます（別人の新規観測として着地せず、owner の finding lifecycle を継続します）。異なるのは publication identity だけです（reviewer キー `escalation-reviewer` と owner 別の report 名）。
-- workflow の step では**ありません**。言い直し slot の最終枠として、`findings-manager` や terminal adjudication と同じくエンジンが合成して直接 provider call を発行し、その出力を通常の取り込み経路（正規化、canonical publication、byte 一致検証、昇格の対応づけ）へ流します。
-- 同じパスで複数のレビュアーが最終提示に到達した場合、エンジンは owner ごとに request をまとめ、owner ごとに1回ずつ呼び出します。1回の格上げ呼び出しが持つ persona と report 形式は常に1レビュアー分だけです。
-- reviewer キーはどの格上げ呼び出しでも固定文字列 `escalation-reviewer` です。この値が raw finding の `reviewer` と publication identity になります。owner は anomaly の `presentationOwnerReviewer` と言い直しの対応づけを通じて保持されます。レポートは owner とパスごとに `escalation-reviewer-<owner-step>-<pass>.md` として出力されます（言い直し slot の owner 宛呼び出しは `followup-<owner-step>-<pass>.md`）。
-- Phase 1 は読み取り専用で動きます。格上げレビュアーはリポジトリを自分で読んで byte 一致の引用を作れますが、書き込みはできません。
-- Finding Contract workflow では `escalation-reviewer` は常に**予約 step 名**です。同名の step（parallel sub-step を含む）を持つ workflow は読み込みに失敗します。
-- `presentationLimit == 1` の場合、最初で最後の1回がそのまま格上げ提示になります。profile に `escalate` が無いレビュアーは、最後の1回も従来どおり元のレビュアーへ戻ります。
-- 格上げレビューが publication 成立前に失敗した場合は何も計上せず、次の機会に同じ escalation request を再発行します。有限停止は提示予算と workflow の `max_steps` が保証します。
 
 ### `interactive_mode`
 
@@ -1241,7 +998,6 @@ loop_monitors:
     ignore_steps: [verify]
     threshold: 3
     judge:
-      session_key: loop-supervisor
       persona: supervisor
       instruction: "fix ループに進捗があるかを評価してください..."
       rules:
@@ -1255,7 +1011,7 @@ loop_monitors:
 
 `loop_monitors.judge` は agent step と同じ provider/model 検証で `provider`、`model`、`provider_options` を指定できます。`provider` を省略した場合、judge はトリガー元 step の provider と model を継承します。`provider` を指定して `model` を省略した場合、継承 model はクリアされます。トリガー元 step に解決済み model があっても provider または CLI のデフォルトを使わせたい場合は、`model: null` を指定してください。
 
-`loop_monitors.judge.session_key` も step の `session_key` と同じく、実行時は provider suffix 付きのキーになります。同じ persona を使う複数の監視 judge が同じセッションを resume してはいけない場合に指定してください。
+loop-monitor judge は常に新しい provider session で実行されます。そのため `loop_monitors.judge` では `session_key` を指定できません。
 
 ### `rate_limit_fallback`
 
@@ -1280,7 +1036,6 @@ rate_limit_fallback:
 subworkflow:
   callable: true
   visibility: internal
-  requires_finding_contract: true
   params:
     impl_knowledge:
       type: facet_ref[]
@@ -1298,8 +1053,6 @@ subworkflow:
 builtin callable workflow では、call tree 全体の予算を root workflow が所有するため `max_steps` を省略します。同じ実装に直接実行の入口も必要な場合は standalone の root wrapper に `max_steps` を指定し、callable child は `workflow_call` から呼び出す設計にします。
 
 callable workflow の facet parameter は `facet_ref` / `facet_ref[]` と、`policy` / `knowledge` / `instruction` / `persona` / `report_format` の5種の `facet_kind` を使います。呼び出す callable workflow を表す `workflow_ref` parameter には `facet_kind` を指定せず、`call: { $param: reviewer_suite }` の形で利用できます。`facet_pool_ref` parameter も `facet_kind` を指定せず、callable child のトップレベル `facet_pools` map にある pool 名の scalar を表します。`dynamic_facets.pool: { $param: implementation_pool }` の形で使用できます。`companion_ref[]` parameter も `facet_kind` を指定せず、`companion: { $param: implementation_companions }` の形で通常の agent step の固定 companion 配列を表します。空配列は `companion` を省略し、残存する未引用の `companion.*` state 参照を拒否します。literal な空 companion は許可しません。default は省略可能です。`facet_ref[]` の引数と default には空配列を指定でき、任意の追加 facet を表現できます。`policy` / `knowledge` では固定参照と scalar/list parameter を混在でき、list parameter は field の記載順を保ってその位置へ平坦化されます。`facet_pool_ref` の必須引数未設定、配列などの型不一致、child-local でない pool、未展開 `$param` は実行前に fail-fast し、暗黙の pool fallback はありません。`companion_ref[]` の配列以外の引数、未宣言参照、未知の companion 定義も実行前に fail-fast します。parameter は `workflow_call.args` を通じてさらに下位へ渡すこともできます。
-
-子が継承した `findings.*` 状態や Finding Contract 用出力形式を使う場合、または同じ要件を持つ別のサブワークフローへ委譲する場合は、`requires_finding_contract: true` を指定します。直近の呼出元は `finding_contract` を宣言するか、さらに上位の呼出元へ同じ要件を宣言する必要があります。連鎖内の各子は独自の台帳を作らず、契約所有元と同じ契約・台帳を使用します。
 
 ## 例
 

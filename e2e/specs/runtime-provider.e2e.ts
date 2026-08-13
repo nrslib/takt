@@ -77,7 +77,7 @@ function writeAutoRoutingRuntimeProviderFile(taktDir: string): void {
         },
         targets: {
           steps: {
-            execute: { pool: 'main-pool' },
+            'e2e-mock-single/execute': { pool: 'main-pool' },
           },
           internal_agents: {
             selector: { profile: 'router' },

@@ -13,6 +13,7 @@ import {
   PROVIDER_OPTION_PATHS,
 } from '../../../infra/config/providerOptions.js';
 import { createLogger } from '../../../shared/utils/index.js';
+import { resolveWorkflowStepTarget } from '../provider-target-resolution.js';
 
 const log = createLogger('workflow-promotion');
 
@@ -138,6 +139,8 @@ export async function resolvePromotionRuntime(
     structuredCaller: context.structuredCaller,
     resolvedProvider: baseProviderInfo.provider,
     resolvedModel: baseProviderInfo.model,
+    resolvedProviderOptions: baseProviderInfo.providerOptions,
+    permissionMode: baseProviderInfo.permissionMode,
     childProcessEnv: context.childProcessEnv,
   });
 
@@ -148,6 +151,7 @@ export async function resolvePromotionRuntime(
       model: promotion.model,
       modelSpecified: promotion.model !== undefined,
       providerOptions: promotion.providerOptions,
+      permissionMode: undefined,
     });
   }
 
@@ -190,6 +194,7 @@ export async function resolvePromotionRuntime(
     model: stageEntry.model,
     modelSpecified: stageEntry.model !== undefined,
     providerOptions: stageEntry.providerOptions,
+    permissionMode: stageEntry.permissionMode,
   });
 }
 
@@ -199,6 +204,7 @@ interface PromotionTarget {
   model: StepProviderInfo['model'];
   modelSpecified: boolean;
   providerOptions: StepProviderInfo['providerOptions'];
+  permissionMode: StepProviderInfo['permissionMode'];
 }
 
 /** Apply a resolved promotion target (targeted entry or ladder stage) onto the base resolution. */
@@ -227,6 +233,9 @@ function applyPromotionTarget(
         baseProviderInfo.providerOptionsSources,
         promotionProviderOptions,
       ),
+      ...(target.providerSpecified
+        ? { permissionMode: target.permissionMode }
+        : {}),
     },
   };
 }
@@ -248,7 +257,7 @@ function resolveGoverningLadder(
   }
   switch (baseSource) {
     case 'provider_routing.steps':
-      return ladders.steps?.[step.name];
+      return resolveWorkflowStepTarget(ladders.steps, step.name, ladders.workflowName);
     case 'provider_routing.tags':
       return resolveTagLadder(ladders.tags, step.tags, tagConflictPolicy);
     // runtime.yaml `targets.personas` compiles into `personaProviders`, not

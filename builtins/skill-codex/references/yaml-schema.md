@@ -151,29 +151,7 @@ fragment root の `params` は必須の型付き parameter を宣言し、`uses`
 
 Team Leader はタスクを独立 part に分解する。`initial_max_parts` を指定した場合のみ初回 batch の part 数を制限し、未指定時は初回 part 数にも上限を設けない。`max_concurrency` は同時実行上限であり、全 batch 合計の上限はない。同一 batch の part は互いに独立でなければならず、実装結果を必要とする検証は全 part 完了後の後続 batch に置く。`fail_on_part_error: true` は回復 part 実行後も親 step を error にする。`refill_threshold` は逐次 refill と batch 障壁が両立しないため互換キーとして 0 のみ受理し、非0はロード時エラーになる。
 
-`mode: finding_contract_fix` は Finding Contract の修正専用契約を有効にする。有効な `finding_contract` が必須で、part ごとの finding assignment、明示的な `continue | complete | replan` decision、全 actionable finding の `fixCoverage`、latest batch 全体で bounded な raw excerpt と検証済み finding 単位 claim digest を使用する。過去 batch は finding ごとの最新 digest だけを渡す。Team Leader 用の actionable summary は既存項目を維持したまま raw finding ID だけを除外する。worker の割当詳細と ledger には raw finding ID を残し、完全な provenance を保持する。assignment の `readPaths` は調査対象の目安となる作業ディレクトリからのリテラルな相対パスであり、completion の `changedPaths` は実際の変更ファイルを申告する。どちらにもワイルドカードの `*` と `?` は使えない。`[]` などその他の文字は展開されず、パスの一部として扱われる。part は通常の編集権限で動作し、変更が重なった場合は Team Leader が後続の repair または verify part を計画する。bounded index の `omittedPartCount` またはいずれかの `omittedChangedPathCount` が1以上なら `complete` にせず、後続の集約した repair または verify part で最終状態を確認する。`complete` は reviewer へ引き渡せるという step-local な判断で、ledger lifecycle は Finding Manager が更新する。遷移は `when(structured.fix.decision == "complete")` / `when(structured.fix.decision == "replan")` で定義する。
 
-### Finding Contract 合成ロールの provider/model
-
-`finding_contract.manager` / `finding_contract.adjudicator` に `provider` / `model` は書けない（strict スキーマなので未知キーとして拒否される）。合成ロールの宛先は runtime.yaml の seat で指名する。
-
-```yaml
-# runtime.yaml
-version: 1
-provider:
-  profiles:
-    strong: { provider: codex, model: gpt-5.5 }
-  targets:
-    internal_agents:
-      findings-manager:     { profile: strong }
-      terminal-adjudicator: { profile: strong }
-```
-
-seat の指定は任意である。指定した seat は step レベル provider/model として扱われ、`provider_routing`、deprecated の `persona_providers.findings-manager`、workflow 既定値より優先される（CLI/環境変数の明示 override だけが上位）。未指定の seat は通常の workflow step provider/model 解決へそのまま落ちる。
-
-### Finding Contract provisional finding の明示的 route
-
-Finding Manager の invalid・欠落した判断は provisional finding として台帳へ保存され、旧 invalid-manager-output 用の detour rule は自動選択されない。`finding_contract` を使う workflow は、`COMPLETE` の rule より前に `when(findings.provisional.count > 0)` などの rule を置き、再計画先を明示する。
 
 ## Rules 定義
 
@@ -192,13 +170,9 @@ rules:
 | 記法 | 説明 | 例 |
 |-----|------|-----|
 | 意味ラベル | status judge が一度だけ選択 | `approved` |
-| `when(...)` | workflow state を決定的に評価 | `when(findings.open.count == 0)` |
 | `all("...")` | 全サブステップがマッチ（parallel 親のみ） | `all("approved")` |
 | `any("...")` | いずれかがマッチ（parallel 親のみ） | `any("needs_fix")` |
 | `all("X", "Y")` | 位置対応で全マッチ（parallel 親のみ） | `all("問題なし", "テスト成功")` |
-| `<label> && when(...)` | 意味ラベルと state predicate の AND | `approved && when(findings.open.count == 0)` |
-| `all("...") && when(...)` | 全 sub-step の集約と state predicate の AND | `all("approved") && when(findings.open.count == 0)` |
-| `any("...") && when(...)` | いずれかの sub-step の集約と state predicate の AND | `any("needs_fix") && when(findings.open.count > 0)` |
 
 rule は YAML 順の first-match で評価する。workflow rule では `ai(...)` と `when:` 別名を使わない。どの rule も成立しない場合は `rule_no_match` で ABORT する。
 

@@ -1,5 +1,6 @@
 import { resolveNonWorkflowProviderModelFromConfig } from '../../core/config/provider-resolution.js';
 import type { StepProviderOptions } from '../../core/models/workflow-types.js';
+import type { PermissionMode } from '../../core/models/types.js';
 import type { ProviderType } from '../../core/workflow/types.js';
 import { validateProviderModelRequirements } from '../../core/workflow/provider-model-requirements.js';
 import { loadGlobalConfig } from './global/globalConfig.js';
@@ -19,6 +20,7 @@ export interface ResolvedNonWorkflowProvider {
   provider?: ProviderType;
   model?: string;
   providerOptions?: StepProviderOptions;
+  permissionMode?: PermissionMode;
   runtimeManaged: boolean;
 }
 
@@ -40,7 +42,12 @@ export function resolveNonWorkflowProviderModel(cwd: string): ResolvedNonWorkflo
     const configuredProvider = resolveConfigValueWithSource(cwd, 'provider');
     const configuredModel = resolveConfigValueWithSource(cwd, 'model');
     const composed = composeRuntimeProviderOverride(
-      { provider: runtime.provider, model: runtime.model, providerOptions: runtime.providerOptions },
+      {
+        provider: runtime.provider,
+        model: runtime.model,
+        providerOptions: runtime.providerOptions,
+        permissionMode: runtime.permissionMode,
+      },
       {
         provider: configuredProvider.source === 'env' ? configuredProvider.value : undefined,
         model: configuredModel.source === 'env' ? configuredModel.value : undefined,
@@ -56,6 +63,7 @@ export function resolveNonWorkflowProviderModel(cwd: string): ResolvedNonWorkflo
       provider: composed.provider,
       ...(composed.model !== undefined ? { model: composed.model } : {}),
       ...(composed.providerOptions !== undefined ? { providerOptions: composed.providerOptions } : {}),
+      ...(composed.permissionMode !== undefined ? { permissionMode: composed.permissionMode } : {}),
     };
   }
   const legacy = resolveNonWorkflowProviderModelFromConfig({

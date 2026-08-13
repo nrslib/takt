@@ -1,4 +1,4 @@
-import { executeIsolatedStructuredInternalAgent } from '../../../agents/agent-usecases.js';
+import { executeStructuredAgent } from '../../../agents/structured-caller/transport.js';
 import {
   isDynamicParallelSubSteps,
   type AgentResponse,
@@ -27,6 +27,7 @@ const SELECTOR_RATIONALE_LOG_MAX_BYTES = 1024;
 
 export interface DynamicParallelSelectorCoordinatorDeps {
   readonly engineOptions: WorkflowEngineOptions;
+  readonly failureDir: string;
   readonly selectionStore: DynamicParallelSelectionStore;
   readonly getCwd: () => string;
   readonly getReportDirectory: () => string;
@@ -97,19 +98,22 @@ export class DynamicParallelSelectorCoordinator {
     let snapshot: DynamicParallelSelectionSnapshot;
     let participants: WorkflowStep[];
     try {
-      response = await executeIsolatedStructuredInternalAgent(
-        'You are TAKT\'s internal dynamic parallel selector. Select only candidate IDs from the provided pool.',
+      response = await executeStructuredAgent(
         instruction,
         selectorContract.providerSchema,
         {
+          name: 'dynamic-parallel-selector',
           cwd: this.deps.getCwd(),
           projectCwd: this.deps.engineOptions.projectCwd,
+          failureDir: this.deps.failureDir,
           abortSignal: this.deps.engineOptions.abortSignal,
           language: this.deps.engineOptions.language,
+          systemPrompt: 'You are TAKT\'s internal dynamic parallel selector. Select only candidate IDs from the provided pool.',
           resolution: {
             provider: selectorProvider.provider,
             model: selectorProvider.model,
             providerOptions: selectorProvider.providerOptions,
+            permissionMode: selectorProvider.permissionMode,
           },
         },
       );

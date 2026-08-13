@@ -127,6 +127,9 @@ describe('RuntimeProviderFileSchema', () => {
       version: 1,
       companion: { enabled: false },
       provider: {
+        profiles: {
+          security: { provider: 'mock', model: 'mock-security' },
+        },
         targets: { companions: { security: { profile: 'security' } } },
       },
     });

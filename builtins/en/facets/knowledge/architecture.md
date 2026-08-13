@@ -1,5 +1,40 @@
 # Architecture Knowledge
 
+## Boundaries That Aggregate Multiple Failures
+
+A boundary that aggregates multiple outcomes selects exactly one primary outcome through that boundary's explicit policy. Every control decision and external or terminal representation derives from that same selected outcome. Secondary outcomes may remain observable, but they do not replace the primary through a priority rule absent from the policy.
+
+| Criterion | Decision |
+|-----------|----------|
+| Parent status, category, displayed reason, and abort reason come from different sibling outcomes | REJECT |
+| A classified outcome is replaced with a generic error before boundary selection | REJECT |
+| A boundary-specific priority is embedded in the canonical classification owner | REJECT |
+| Classification, primary selection, and projection have separate owners | OK |
+| The boundary's explicit policy selects the primary once and every decision and representation derives from it | OK |
+
+A canonical classification owner converts each raw response or exception exactly once into an outcome with classification, cause, and recovery attributes. A boundary selection policy chooses the primary according to the contract of that parallel, parent-child, or batch boundary. A projection owner derives status, category, reason, retry/fallback/stop decisions, and abort or terminal representations from the selected primary. Do not collapse these three responsibilities into one universal priority rule.
+
+```typescript
+// NG - select different parent fields from different siblings
+const retryable = outcomes.find((outcome) => outcome.recovery === 'retry');
+const categorized = outcomes.find((outcome) => outcome.category !== undefined);
+return {
+  action: retryable ? 'retry' : 'stop',
+  category: categorized?.category,
+  abortReason: retryable?.detail,
+};
+
+// OK - select once through the boundary policy and project one primary
+const outcomes = responses.map(classifyOutcome);
+const primary = selectPrimaryOutcome(outcomes, boundaryPolicy);
+return {
+  action: decideRecovery(primary.recovery),
+  category: primary.category,
+  reason: primary.detail,
+  abortReason: primary.detail,
+};
+```
+
 ## Structure & Design
 
 **File Organization:**

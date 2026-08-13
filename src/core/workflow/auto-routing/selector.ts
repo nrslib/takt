@@ -1,5 +1,6 @@
 import type { AutoRoutingCandidate, AutoRoutingConfig, RoutingTier } from '../../models/config-types.js';
 import type { WorkRequirementEstimate } from './contracts.js';
+import { resolveWorkflowStepTarget } from '../provider-target-resolution.js';
 
 const TIER_ORDER: Record<RoutingTier, number> = { low: 0, medium: 1, high: 2 };
 
@@ -42,14 +43,15 @@ function findMappingValue(mapping: Record<string, string> | undefined, key: stri
   return key !== undefined && mapping !== undefined && Object.hasOwn(mapping, key) ? mapping[key] : undefined;
 }
 
-function matchRule(rules: AutoRoutingConfig['rules'], step: RoutingSelectionInput['step']): AutoRoutingCandidate['name'] | undefined {
+function matchRule(config: AutoRoutingConfig, step: RoutingSelectionInput['step']): AutoRoutingCandidate['name'] | undefined {
+  const rules = config.rules;
   let matchedCandidate: AutoRoutingCandidate['name'] | undefined;
   for (const tag of step.tags ?? []) {
     const candidate = findMappingValue(rules?.tags, tag);
     if (candidate !== undefined) matchedCandidate = candidate;
   }
   return matchedCandidate
-    ?? findMappingValue(rules?.steps, step.name)
+    ?? resolveWorkflowStepTarget(rules?.steps, step.name, config.workflowName)
     ?? findMappingValue(rules?.personas, step.personaKey);
 }
 
@@ -57,7 +59,7 @@ export function resolveAutoRoutingRuleCandidate(
   autoRouting: AutoRoutingConfig,
   step: RoutingSelectionInput['step'],
 ): AutoRoutingCandidate | undefined {
-  return findCandidate(autoRouting, matchRule(autoRouting.rules, step));
+  return findCandidate(autoRouting, matchRule(autoRouting, step));
 }
 
 function resolveExplicitPoolName(
@@ -70,7 +72,7 @@ function resolveExplicitPoolName(
     if (poolName !== undefined) matchedPool = poolName;
   }
   return matchedPool
-    ?? findMappingValue(config.poolRules?.steps, step.name)
+    ?? resolveWorkflowStepTarget(config.poolRules?.steps, step.name, config.workflowName)
     ?? findMappingValue(config.poolRules?.personas, step.personaKey);
 }
 

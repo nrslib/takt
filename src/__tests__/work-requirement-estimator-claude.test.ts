@@ -60,7 +60,7 @@ function createModelInput(): RoutingModelInput {
       stepType: 'normal',
       edit: true,
     },
-    remainingWork: [{ source: 'finding', description: 'A validation branch is incomplete.' }],
+    remainingWork: [{ source: 'task', description: 'A validation branch is incomplete.' }],
     progress: {
       previousAttemptFailed: false,
       noProgress: false,
@@ -79,7 +79,7 @@ describe('work requirement estimator Claude provider integration', () => {
   it('Given a Claude SDK router, When querying the Agent SDK, Then the common raw schema reaches outputFormat and its structured value is used', async () => {
     query.mockReturnValue(createSdkQuery({
       required_tier: 'high',
-      reason_codes: ['critical-finding'],
+      reason_codes: ['complex-work'],
       confidence: null,
     }));
     const estimator = createWorkRequirementEstimator({
@@ -90,7 +90,7 @@ describe('work requirement estimator Claude provider integration', () => {
 
     await expect(estimator.estimate(createModelInput())).resolves.toEqual({
       requiredTier: 'high',
-      reasonCodes: ['critical-finding'],
+      reasonCodes: ['complex-work'],
     });
 
     expect(query).toHaveBeenCalledOnce();
@@ -116,7 +116,6 @@ describe('work requirement estimator Claude provider integration', () => {
               enum: [
                 'api-change',
                 'complex-work',
-                'critical-finding',
                 'focused-change',
                 'formatting',
                 'initial-complexity',

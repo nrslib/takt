@@ -6,22 +6,6 @@ import { WorkflowStepRawSchema } from '../core/models/schemas.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 
 describe('team_leader schema', () => {
-  it('finding_contract_fix mode を受け付け、それ以外を拒否する', () => {
-    const valid = WorkflowStepRawSchema.safeParse({
-      name: 'fix',
-      team_leader: { mode: 'finding_contract_fix' },
-      instruction: 'fix',
-    });
-    const invalid = WorkflowStepRawSchema.safeParse({
-      name: 'fix',
-      team_leader: { mode: 'unsupported' },
-      instruction: 'fix',
-    });
-
-    expect(valid.success).toBe(true);
-    expect(invalid.success).toBe(false);
-  });
-
   it('max_parts <= 3 の設定を受け付ける', () => {
     const raw = {
       name: 'implement',
@@ -277,7 +261,6 @@ describe('normalizeWorkflowConfig team_leader', () => {
           name: 'implement',
           allow_git_commit: true,
           team_leader: {
-            mode: 'finding_contract_fix',
             persona: 'team-leader',
             max_concurrency: 2,
             initial_max_parts: 2,
@@ -300,7 +283,6 @@ describe('normalizeWorkflowConfig team_leader', () => {
     expect(step).toBeDefined();
     expect(step!.allowGitCommit).toBe(true);
     expect(step!.teamLeader).toEqual({
-      mode: 'finding_contract_fix',
       persona: 'team-leader',
       personaPath: undefined,
       personaDisplayName: 'team-leader',

@@ -35,6 +35,14 @@
 
 {{lastResponse}}
 {{/if}}
+{{#if hasReviewCompletionDiagnostic}}
+
+## レビュー網羅性診断
+
+この診断はPhase 2レポートだけの補助文脈です。findingやstatusへ変換せず、レビュアー応答の一部だったとも記載しないでください:
+
+{{reviewCompletionDiagnostic}}
+{{/if}}
 
 ## Instructions
 

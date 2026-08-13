@@ -49,9 +49,7 @@ function toPiOptions(options: ProviderCallOptions, systemPrompt?: string): PiCal
 
 export class PiProvider implements Provider {
   readonly supportsStructuredOutput = false;
-  readonly supportsIsolatedStructuredExecution = false;
   readonly supportsNativeImageInput = true;
-  readonly supportsStrictInternalAgentIsolation = false;
 
   getRuntimeInstructions(_allowedTools?: string[]): string | null {
     return null;
@@ -73,16 +71,4 @@ export class PiProvider implements Provider {
     };
   }
 
-  setupIsolatedStructured(config: AgentSetup): ProviderAgent {
-    return {
-      call: async (_prompt: string, options: ProviderCallOptions): Promise<AgentResponse> => ({
-        persona: config.name,
-        status: 'error',
-        content: 'Provider "pi" does not support isolated structured execution',
-        error: 'Provider "pi" does not support isolated structured execution',
-        timestamp: new Date(),
-        sessionId: options.sessionId,
-      }),
-    };
-  }
 }

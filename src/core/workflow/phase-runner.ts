@@ -10,9 +10,6 @@ import type { StructuredCaller } from '../../agents/structured-caller.js';
 import type { PhaseName, PhasePromptParts, JudgeStageEntry, StepProviderInfo } from './types.js';
 import type { RunAgentOptions } from '../../agents/runner.js';
 import { needsSemanticStatusJudgment } from '../models/workflow-rule-condition.js';
-import type {
-  FindingContractInstructionContext,
-} from './instruction/instruction-context.js';
 import type { TaskReviewScope } from './review-scope.js';
 export {
   generateReportPhase,
@@ -45,6 +42,8 @@ export interface BasePhaseRunnerContext {
   interactive?: boolean;
   /** Last response from Phase 1 */
   lastResponse?: string;
+  /** Phase 2-only non-finding diagnostic produced by the review-completion controller. */
+  reviewCompletionDiagnostic?: string;
   /** Workflow name for observability spans */
   workflowName: string;
   /** Run-local identifier for observability artifact routing */
@@ -59,6 +58,8 @@ export interface BasePhaseRunnerContext {
   childProcessEnv?: RunAgentOptions['childProcessEnv'];
   /** Interrupts active provider calls when the workflow is cancelled. */
   abortSignal?: AbortSignal;
+  /** Run-local private directory for oversized provider failure details. */
+  failureDir?: string;
   /** Stream callback for provider event logging */
   onStream?: import('../../agents/types.js').StreamCallback;
   /** Parent workflow iteration for sub-step phase events */
@@ -108,10 +109,6 @@ export interface ReportPhaseRunnerContext extends BasePhaseRunnerContext {
   resolveReportFallbackProviderModel: () => StepProviderInfo | undefined;
   /** Update persona session after a phase run */
   updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
-  buildFindingContractInstructionContext?: (
-    step: WorkflowStep,
-    isReviewer: boolean,
-  ) => FindingContractInstructionContext | undefined;
   resolveStepProviderModel: (step: WorkflowStep) => StepProviderInfo;
 }
 

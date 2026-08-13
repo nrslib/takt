@@ -135,6 +135,7 @@ describe('getWorkflowDescription consumes the compiled provider environment', ()
             provider: 'opencode',
             model: 'opencode/big-pickle',
             options: { allowed_tools: ['read', 'grep'] },
+            permission_mode: 'readonly',
           },
         },
       },
@@ -154,12 +155,61 @@ describe('getWorkflowDescription consumes the compiled provider environment', ()
     ]);
 
     const description = getWorkflowDescription('preview-runtime', projectCwd, 1);
-    const step = description.stepPreviews[0] as { name: string; provider?: string; model?: string; allowedTools: string[] };
+    const step = description.stepPreviews[0] as {
+      name: string;
+      provider?: string;
+      model?: string;
+      permissionMode?: string;
+      allowedTools: string[];
+    };
 
     // provider/model come from the runtime.yaml bundle, and allowed-tools resolve from that
     // profile's provider options (not a silent legacy default).
-    expect(step).toMatchObject({ name: 'implement', provider: 'opencode', model: 'opencode/big-pickle' });
+    expect(step).toMatchObject({
+      name: 'implement',
+      provider: 'opencode',
+      model: 'opencode/big-pickle',
+      permissionMode: 'readonly',
+    });
     expect(step.allowedTools).toEqual(['read', 'grep']);
+  });
+
+  it('previews only the winning step profile options and permission', () => {
+    writeGlobalConfig(['language: en']);
+    writeGlobalRuntimeFile({
+      version: 1,
+      provider: {
+        defaults: { profile: 'default' },
+        profiles: {
+          default: {
+            provider: 'opencode',
+            model: 'opencode/big-pickle',
+            options: { allowed_tools: ['read', 'grep'] },
+            permission_mode: 'readonly',
+          },
+          plain: { provider: 'claude', model: 'sonnet' },
+        },
+        targets: { steps: { implement: { profile: 'plain' } } },
+      },
+    });
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+    writeWorkflow('preview-step-profile.yaml', [
+      'name: preview-step-profile',
+      'initial_step: implement',
+      'max_steps: 1',
+      'steps:',
+      '  - name: implement',
+      '    instruction: Implement the change.',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
+    ]);
+
+    const step = getWorkflowDescription('preview-step-profile', projectCwd, 1).stepPreviews[0];
+
+    expect(step).toMatchObject({ provider: 'claude', model: 'sonnet', allowedTools: [] });
+    expect(step).not.toHaveProperty('permissionMode');
   });
 
   it('fails fast when a step maps to conflicting same-priority tag routing in runtime-v1', () => {

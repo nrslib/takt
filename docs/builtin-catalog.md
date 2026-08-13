@@ -96,59 +96,6 @@ Organized by category.
 
 To run an existing workflow entirely with local models, configure its provider and model normally. For a custom hybrid setup, route ordinary `review` steps to the local provider and apply a later `final-gate` tag to the steps that must return to a high-assurance provider. Later tags override earlier tags for the same provider, model, and provider-options fields.
 
-For a custom Finding Contract workflow, the following `.takt/config.yaml` example routes regular reviewers and fixes to lightweight models while keeping the Finding Manager, automatically derived supervisor, and terminal final gate on strong models.
-
-```yaml
-provider_routing:
-  tags:
-    review:
-      provider: opencode
-      model: <weak-local-review-model>
-    final-gate:
-      provider: codex
-      model: <strong-model>
-  steps:
-    fix:
-      provider: opencode
-      model: <weak-local-fix-model>
-    fix-retry:
-      provider: opencode
-      model: <weak-local-fix-model>
-  personas:
-    findings-manager:
-      provider: codex
-      model: <strong-model>
-    loop-judge:
-      provider: codex
-      model: <strong-model>
-    supervisor:
-      provider: codex
-      model: <strong-model>
-```
-
-The `final-gate` tag is applied after `review`, so final-gate steps return to the strong model while regular reviews remain local. The Finding Manager uses `findings-manager`; loop judges use the fixed `loop-judge` routing key regardless of the configured judge persona; and the adjudicator automatically derived by the current engine uses `supervisor`. Without a `loop-judge` route, a loop judge inherits the resolved provider and model of the step that triggered the cycle.
-
-To pin a synthetic role outright, assign its `internal_agents` seat in `runtime.yaml`. Workflow YAML has no provider/model field for these roles.
-
-```yaml
-# runtime.yaml
-version: 1
-provider:
-  defaults:
-    profile: strong
-  profiles:
-    strong: { provider: codex, model: <strong-model> }
-  targets:
-    internal_agents:
-      findings-manager:     { profile: strong }
-      terminal-adjudicator: { profile: strong }
-      loop-judge:           { profile: strong }
-      escalation-reviewer:  { profile: strong }
-      intake-normalizer:    { profile: strong }
-```
-
-Every seat is optional: leave one out and that role keeps the persona-routing chain above. At runtime, provider and model are resolved field by field in this order: explicit CLI/environment override → promotion matching the current execution (normal agent steps only) → step or parallel sub-step provider/model (including an assigned seat) → `workflow_call` override → `provider_routing` step/tag/persona → deprecated `persona_providers` → auto routing → workflow → project → global → provider default. Parallel sub-steps do not support promotion, so their direct values come immediately after an explicit CLI/environment override. A seat that names only a provider stops lower-priority model fallback.
-
 Run `takt` to choose a workflow interactively.
 
 ## Builtin Personas
@@ -184,7 +131,6 @@ Run `takt` to choose a workflow interactively.
 | **melchior** | MAGI deliberation system: MELCHIOR-1 (scientist perspective) |
 | **balthasar** | MAGI deliberation system: BALTHASAR-2 (mother perspective) |
 | **casper** | MAGI deliberation system: CASPER-3 (woman perspective) |
-| **findings-manager** | Reconciles raw findings from multiple reviewers into a consolidated ledger with lifecycle tracking |
 | **pr-commenter** | Posts review findings as GitHub PR comments |
 
 `exec-assistant` and `exec-worker` also exist as builtin persona files, but they are internal personas for `exec`-generated workflows and are not intended for direct use in custom workflows.
@@ -230,5 +176,3 @@ persona_providers:
 ```
 
 This configuration applies globally to all workflows. Any step using the specified persona will be routed to the corresponding provider, regardless of which workflow is being executed.
-
-For Finding Contract manager routing, prefer the `runtime.yaml` `provider.targets.internal_agents.findings-manager` seat. It is explicit to the ledger manager and takes priority over `persona_providers.findings-manager`.

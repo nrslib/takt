@@ -894,7 +894,7 @@ steps:
       method: selection === undefined ? 'aggregate' : 'phase3_tag',
     }));
     engine = new WorkflowEngine(config, tmpDir, 'Review frontend changes', createWorkflowCallOptions(tmpDir, {
-      selectorProvider: { provider: 'mock', providerOptions: {}, nativeTools: [] },
+      selectorProvider: { provider: 'mock', providerOptions: {} },
     }));
 
     const state = await engine.run();
@@ -946,7 +946,7 @@ steps:
         rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
       }],
     });
-    const selectorProvider = { provider: 'mock', providerOptions: {}, nativeTools: [] };
+    const selectorProvider = { provider: 'mock', providerOptions: {} };
     vi.mocked(mockRuleEvaluation).mockImplementation((_step, selection) => ({
       index: 0,
       method: selection === undefined ? 'aggregate' : 'phase3_tag',
@@ -1064,7 +1064,7 @@ steps:
       method: selection === undefined ? 'aggregate' : 'phase3_tag',
     }));
     engine = new WorkflowEngine(config, tmpDir, 'Review frontend and backend changes', createWorkflowCallOptions(tmpDir, {
-      selectorProvider: { provider: 'mock', providerOptions: {}, nativeTools: [] },
+      selectorProvider: { provider: 'mock', providerOptions: {} },
     }));
     const state = await engine.run();
     const selections = [...state.dynamicParallelSelections.values()];

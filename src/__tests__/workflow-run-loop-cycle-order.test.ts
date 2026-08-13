@@ -52,8 +52,6 @@ function makeDeps(nextStep: string) {
     addUserInput: vi.fn(),
     emit: vi.fn(),
     updateMaxSteps: vi.fn(),
-    checkCompletionGate: vi.fn(() => ({ ok: true as const })),
-    checkReturnValueGate: vi.fn(() => ({ ok: true as const })),
     commitTransition,
     ...createWorkflowRunLoopTestContract(config, state, 'test task'),
   };
@@ -84,30 +82,29 @@ describe('WorkflowRunLoop loop monitor ordering', () => {
     expect(deps.runLoopMonitorJudge).not.toHaveBeenCalled();
   });
 
-  it('does not commit a natural COMPLETE transition rejected by the completion gate', async () => {
+  it('commits a natural COMPLETE transition after terminal handling', async () => {
     const deps = makeDeps('COMPLETE');
-    deps.checkCompletionGate.mockReturnValue({
-      ok: false,
-      reason: 'provisional findings remain',
-    });
 
     const result = await runWorkflowToCompletion(deps);
 
-    expect(result.abort?.kind).toBe('provisional_findings');
-    expect(deps.commitTransition).not.toHaveBeenCalled();
+    expect(result.state.status).toBe('completed');
+    expect(deps.commitTransition).toHaveBeenCalledWith({
+      kind: 'next_step',
+      nextStep: 'COMPLETE',
+    });
   });
 
-  it('does not commit a monitored COMPLETE transition rejected by the completion gate', async () => {
+  it('commits a monitored COMPLETE transition after the monitor overrides a non-terminal transition', async () => {
     const deps = makeDeps('reviewers');
     deps.runLoopMonitorJudge.mockResolvedValue('COMPLETE');
-    deps.checkCompletionGate.mockReturnValue({
-      ok: false,
-      reason: 'provisional findings remain',
-    });
 
     const result = await runWorkflowToCompletion(deps);
 
-    expect(result.abort?.kind).toBe('provisional_findings');
-    expect(deps.commitTransition).not.toHaveBeenCalled();
+    expect(result.state.status).toBe('completed');
+    expect(deps.runLoopMonitorJudge).toHaveBeenCalledOnce();
+    expect(deps.commitTransition).toHaveBeenCalledWith({
+      kind: 'next_step',
+      nextStep: 'COMPLETE',
+    });
   });
 });

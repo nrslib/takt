@@ -9,7 +9,11 @@ import {
 } from './contracts.js';
 import type { CompanionDiff } from './diff-reader.js';
 import type { CompanionLoopRound } from './loop-guard.js';
-import { moderateCompanionResult, validateModeratorDecisions } from './moderator.js';
+import {
+  moderateCompanionResult,
+  validateModeratorDecisions,
+  type ModeratorResult,
+} from './moderator.js';
 import {
   buildCompanionModeratorPrompt,
   buildCompanionReviewPrompt,
@@ -18,7 +22,10 @@ import type {
   CompanionAgentPurpose,
   CompanionStructuredResponseValidator,
 } from './review-runner.js';
-import type { CompanionReviewStateStore } from './review-state-store.js';
+import type {
+  CompanionReviewAuditSnapshot,
+  CompanionReviewStateStore,
+} from './review-state-store.js';
 import type { CompanionReviewOperation } from './review-state-store.js';
 import type { CompanionLoopDecision } from './terminal-decision.js';
 import type { CompanionReviewRequest } from './review-queue.js';
@@ -73,6 +80,19 @@ interface CompanionReviewRoundInput {
     readonly snapshot: CompanionDiff;
     readonly trigger: CompanionReviewRequest['reason'];
     readonly findingCount: number;
+    readonly reviewerResult: CompanionReviewOutput;
+    readonly moderator?: {
+      readonly name: string;
+      readonly invoked: boolean;
+      readonly reason?: 'reviewer_result_empty' | 'not_configured';
+      readonly result?: ModeratorResult;
+    };
+    readonly accepted: CompanionReviewOutput;
+    readonly zeroReason?:
+      | 'reviewer_returned_no_findings'
+      | 'moderator_not_invoked_for_empty_reviewer_result'
+      | 'moderator_rejected_or_merged_all_findings'
+      | 'no_new_finding_records';
   }) => void;
 }
 
@@ -89,10 +109,21 @@ export async function executeCompanionReviewRound(
   if (pending !== undefined) {
     const findingCount = await commitOperation(input, pending);
     await finalizeOperation(input, mailboxPath);
+    const audit = pending.audit ?? reconstructAuditSnapshot(pending);
+    const zeroReason = resolveZeroReason({
+      reviewerResult: audit.reviewerResult,
+      moderatorAudit: audit.moderator,
+      accepted: audit.accepted,
+      findingCount,
+    });
     input.onRoundCompleted({
       snapshot: pending.snapshot,
       trigger: pending.trigger,
+      reviewerResult: audit.reviewerResult,
+      ...(audit.moderator === undefined ? {} : { moderator: audit.moderator }),
+      accepted: audit.accepted,
       findingCount,
+      ...(zeroReason === undefined ? {} : { zeroReason }),
     });
     if (
       pending.snapshot.digest === input.diff.digest
@@ -131,16 +162,30 @@ export async function executeCompanionReviewRound(
   input.signal.throwIfAborted();
   const reviewerResult = parseCompanionReviewOutput(response.structuredOutput);
   let findingCount = 0;
+  let accepted: CompanionReviewOutput = { findings: [], updates: [] };
+  let moderatorAudit: {
+    readonly name: string;
+    readonly invoked: boolean;
+    readonly reason?: 'reviewer_result_empty' | 'not_configured';
+    readonly result?: ModeratorResult;
+  } | undefined;
+  let pendingCommitAudit: CompanionReviewAuditSnapshot | undefined;
   const commit = createCommit(input, mailboxPath, (count) => {
     findingCount = count;
-  });
+  }, () => pendingCommitAudit);
   const moderatorName = input.moderatorName;
 
   if (moderatorName === undefined) {
-    await commit(reviewerResult);
+    moderatorAudit = { name: 'not-configured', invoked: false, reason: 'not_configured' };
+    accepted = reviewerResult;
+    await commit(reviewerResult, {
+      reviewerResult,
+      accepted: reviewerResult,
+      moderator: moderatorAudit,
+    });
   } else {
     const openFindings = input.openFindings();
-    await moderateCompanionResult({
+    const moderated = await moderateCompanionResult({
       reviewerResult,
       openFindings,
       diffSummary: input.diffSummary,
@@ -162,27 +207,107 @@ export async function executeCompanionReviewRound(
         input.signal.throwIfAborted();
         return parseModeratorOutput(moderated.structuredOutput);
       },
+      moderatorName,
       commit,
+      onCommitAudit: (audit) => {
+        pendingCommitAudit = audit;
+      },
     });
+    if (moderated === undefined) {
+      moderatorAudit = {
+        name: moderatorName,
+        invoked: false,
+        reason: 'reviewer_result_empty',
+      };
+      accepted = reviewerResult.notes === undefined
+        ? { findings: [], updates: [] }
+        : { findings: [], updates: [], notes: reviewerResult.notes };
+      pendingCommitAudit = {
+        reviewerResult,
+        accepted,
+        moderator: moderatorAudit,
+      };
+    } else {
+      moderatorAudit = { name: moderatorName, invoked: true, result: moderated.moderator };
+      accepted = moderated.accepted;
+    }
   }
   if (input.stateStore.getPendingOperation(mailboxPath) === undefined) {
     await commit({ findings: [], updates: [] });
   }
   await finalizeOperation(input, mailboxPath);
+  const zeroReason = resolveZeroReason({
+    reviewerResult,
+    moderatorAudit,
+    accepted,
+    findingCount,
+  });
   input.onRoundCompleted({
     snapshot: input.diff,
     trigger: input.trigger,
+    reviewerResult,
+    ...(moderatorAudit === undefined ? {} : { moderator: moderatorAudit }),
+    accepted,
     findingCount,
+    ...(zeroReason === undefined ? {} : { zeroReason }),
   });
   return { findingCount };
+}
+
+function resolveZeroReason(input: {
+  readonly reviewerResult: CompanionReviewOutput;
+  readonly moderatorAudit?: {
+    readonly name: string;
+    readonly invoked: boolean;
+    readonly reason?: 'reviewer_result_empty' | 'not_configured';
+  };
+  readonly accepted: CompanionReviewOutput;
+  readonly findingCount: number;
+}):
+  | 'reviewer_returned_no_findings'
+  | 'moderator_not_invoked_for_empty_reviewer_result'
+  | 'moderator_rejected_or_merged_all_findings'
+  | 'no_new_finding_records'
+  | undefined {
+  if (input.findingCount !== 0) return undefined;
+  if (input.reviewerResult.findings.length === 0) {
+    return input.moderatorAudit?.reason === 'reviewer_result_empty'
+      ? 'moderator_not_invoked_for_empty_reviewer_result'
+      : 'reviewer_returned_no_findings';
+  }
+  if (
+    input.moderatorAudit?.invoked === true
+    && input.accepted.findings.length === 0
+  ) {
+    return 'moderator_rejected_or_merged_all_findings';
+  }
+  return 'no_new_finding_records';
+}
+
+function reconstructAuditSnapshot(operation: CompanionReviewOperation): CompanionReviewAuditSnapshot {
+  const result = operation.owners.reduce<CompanionReviewOutput>(
+    (combined, owner) => ({
+      findings: [...combined.findings, ...owner.result.findings],
+      updates: [...combined.updates, ...owner.result.updates],
+      ...(combined.notes === undefined && owner.result.notes === undefined
+        ? {}
+        : { notes: owner.result.notes ?? combined.notes }),
+    }),
+    { findings: [], updates: [] },
+  );
+  return { reviewerResult: result, accepted: result };
 }
 
 function createCommit(
   input: CompanionReviewRoundInput,
   scope: string,
   onFindingCount: (count: number) => void,
-): (accepted: CompanionReviewOutput) => Promise<void> {
-  return async (accepted) => {
+  getAudit: () => CompanionReviewAuditSnapshot | undefined = () => undefined,
+): (
+  accepted: CompanionReviewOutput,
+  audit?: CompanionReviewAuditSnapshot,
+) => Promise<void> {
+  return async (accepted, audit) => {
     input.signal.throwIfAborted();
     const ownersByFindingId = buildFindingOwnerIndex(input);
     validateUpdates(input, accepted.updates, ownersByFindingId);
@@ -197,6 +322,7 @@ function createCommit(
         ? [{ ownerName, path: input.mailboxPath(ownerName), result }]
         : [];
     });
+    const committedAudit = audit ?? getAudit();
     input.stateStore.beginOperation({
       scope,
       snapshot: input.diff,
@@ -207,6 +333,7 @@ function createCommit(
         ? {}
         : { implementerExplanation: input.implementerExplanation }),
       owners,
+      ...(committedAudit === undefined ? {} : { audit: committedAudit }),
     });
     const operation = input.stateStore.getPendingOperation(scope);
     if (operation === undefined) {

@@ -1,3 +1,5 @@
+{{include:instructions/contract-family-decomposition-boundary}}
+
 Report Directory 内の最新レビューレポートを一次情報として、修正作業を計画してください。
 
 {{include:instructions/team-leader-fix-common}}

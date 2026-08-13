@@ -28,6 +28,11 @@ import { buildGitRules } from '../instruction/instruction-context.js';
 import { renderFallbackNotice } from '../instruction/fallback-notice.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 import { USAGE_MISSING_REASONS } from '../../logging/contracts.js';
+import {
+  AGENT_FAILURE_CATEGORIES,
+  createAgentResponseFailureError,
+  isProviderStreamParseError,
+} from '../../../shared/types/agent-failure.js';
 
 const log = createLogger('arpeggio-runner');
 
@@ -146,6 +151,12 @@ async function executeBatchWithRetry(
       try {
         const response = await executeAgent(persona, prompt, agentOptions);
         if (response.status === 'error') {
+          if (
+            response.failureCategory
+            === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR
+          ) {
+            throw createAgentResponseFailureError(response, 'Arpeggio batch failed');
+          }
           lastError = response.error ?? response.content ?? 'Agent returned error status';
           log.info('Batch execution failed, retrying', {
             batchIndex: batch.batchIndex,
@@ -182,6 +193,9 @@ async function executeBatchWithRetry(
           providerUsage: response.providerUsage,
         };
       } catch (error) {
+        if (isProviderStreamParseError(error)) {
+          throw error;
+        }
         lastError = error instanceof Error ? error.message : String(error);
         log.info('Batch execution threw, retrying', {
           batchIndex: batch.batchIndex,

@@ -162,7 +162,6 @@ export function buildExecWorkflowYaml(config: ExecConfig, options: BuildExecWork
         cycle: ['execute', 'review'],
         threshold: config.loop.smallThreshold,
         judge: {
-          session_key: 'exec-loop-monitor-small',
           persona: 'exec-assistant',
           instruction: 'exec-loop-monitor',
           ...buildSessionReviewProviderFields(config),
@@ -176,7 +175,6 @@ export function buildExecWorkflowYaml(config: ExecConfig, options: BuildExecWork
         cycle: ['replan', 'execute', 'review'],
         threshold: config.loop.largeThreshold,
         judge: {
-          session_key: 'exec-loop-monitor-large',
           persona: 'exec-assistant',
           instruction: 'exec-loop-monitor',
           ...buildSessionReviewProviderFields(config),

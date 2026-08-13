@@ -1,4 +1,4 @@
-import { executeIsolatedStructuredInternalAgent } from '../../../agents/agent-usecases.js';
+import { executeStructuredAgent } from '../../../agents/structured-caller/transport.js';
 import type {
   AgentResponse,
   DynamicFacetSelectionSnapshot,
@@ -30,6 +30,7 @@ const SELECTOR_RATIONALE_LOG_MAX_BYTES = 1024;
 
 export interface DynamicFacetSelectorCoordinatorDeps {
   readonly engineOptions: WorkflowEngineOptions;
+  readonly failureDir: string;
   readonly selectionStore: DynamicFacetSelectionStore;
   readonly getWorkflowReference: () => string;
   readonly workflowCallPath: readonly WorkflowResumePointEntry[];
@@ -41,7 +42,6 @@ export interface DynamicFacetSelectorCoordinatorDeps {
   readonly getReportNames: (step: NormalAgentWorkflowStep, state: WorkflowState) => readonly string[];
   readonly getCwd: () => string;
   readonly inputReader?: SelectorInputReader;
-  readonly getUnresolvedFindings: () => string;
 }
 
 export interface DynamicFacetSelectionContext {
@@ -101,8 +101,6 @@ export class DynamicFacetSelectorCoordinator {
       signal,
     );
     signal?.throwIfAborted();
-    const unresolvedFindings = this.deps.getUnresolvedFindings();
-
     const instruction = buildDynamicFacetSelectorInstruction({
       task,
       workflowName: state.workflowName,
@@ -111,7 +109,6 @@ export class DynamicFacetSelectorCoordinator {
       isReentry: previous !== undefined,
       stepIteration,
       reports: inputs.reports,
-      unresolvedFindings,
       cumulativeDiff: inputs.workingTreeDiff,
       pool,
       maxSelected: step.dynamicFacets.maxSelected,
@@ -123,7 +120,6 @@ export class DynamicFacetSelectorCoordinator {
       reports: inputs.reports,
       working_tree_diff: inputs.workingTreeDiff,
       candidates: pool.candidates.map((candidate) => ({ id: candidate.id, description: candidate.description })),
-      unresolved_findings: unresolvedFindings,
     });
     const redact = (text: string): string => sanitizeSensitiveTextWithKnownValues(text, sensitiveValues);
 
@@ -132,19 +128,22 @@ export class DynamicFacetSelectorCoordinator {
     let selectedIds: readonly string[];
     let snapshot: DynamicFacetSelectionSnapshot;
     try {
-      response = await executeIsolatedStructuredInternalAgent(
-        'You are TAKT\'s internal dynamic facet selector. Select only candidate IDs from the provided pool.',
+      response = await executeStructuredAgent(
         instruction,
         selectorContract.providerSchema,
         {
+          name: 'dynamic-facet-selector',
           cwd: this.deps.getCwd(),
           projectCwd: this.deps.engineOptions.projectCwd,
+          failureDir: this.deps.failureDir,
           abortSignal: this.deps.engineOptions.abortSignal,
           language: this.deps.engineOptions.language,
+          systemPrompt: 'You are TAKT\'s internal dynamic facet selector. Select only candidate IDs from the provided pool.',
           resolution: {
             provider: selectorProvider.provider,
             model: selectorProvider.model,
             providerOptions: selectorProvider.providerOptions,
+            permissionMode: selectorProvider.permissionMode,
           },
         },
       );

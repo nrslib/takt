@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
-import { buildFindingManagerStep } from '../core/workflow/findings/manager-step.js';
 import type { WorkflowStep } from '../core/models/types.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 
@@ -16,6 +15,7 @@ function createStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
 
 type BuilderEngineOverrides = Partial<WorkflowEngineOptions> & {
   workflowName?: string;
+  failureDir?: string;
 };
 
 function createProcessSafetyByStep(parentRunPid: number): WorkflowEngineOptions['phase1ProcessSafetyByStep'] {
@@ -47,8 +47,9 @@ function createBuilder(step: WorkflowStep, engineOverrides: BuilderEngineOverrid
     () => engineOverrides.workflowName ?? 'default',
     () => 'test workflow',
     undefined,
-    undefined,
     () => 'Original workflow task',
+    undefined,
+    engineOverrides.failureDir === undefined ? undefined : () => engineOverrides.failureDir,
   );
 }
 
@@ -70,6 +71,208 @@ describe('OptionsBuilder.buildBaseOptions', () => {
       providerProfiles: {
         codex: { defaultPermissionMode: 'full' },
       },
+    });
+  });
+
+  it('passes runtime defaults permission mode to the actual provider call', () => {
+    const step = createStep();
+    const builder = createBuilder(step, {
+      providerSource: 'runtime-v1',
+      providerPermissionMode: 'readonly',
+    });
+
+    const options = builder.buildBaseOptions(step);
+
+    expect(options.permissionMode).toBe('readonly');
+    expect(options.permissionResolution).toBeUndefined();
+  });
+
+  it('passes the winning persona profile permission mode to the actual provider call', () => {
+    const step = createStep({ personaDisplayName: 'Reviewers' });
+    const builder = createBuilder(step, {
+      personaProviders: {
+        Reviewers: { provider: 'claude', model: 'review-model', permissionMode: 'edit' },
+      },
+    });
+
+    const options = builder.buildBaseOptions(step);
+
+    expect(options.resolvedProvider).toBe('claude');
+    expect(options.permissionMode).toBe('edit');
+  });
+
+  it.each([
+    { label: 'same provider', targetProvider: 'codex' as const },
+    { label: 'different provider', targetProvider: 'claude' as const },
+  ])('does not leak defaults profile capabilities into a plain target profile ($label)', ({ targetProvider }) => {
+    const step = createStep({ personaDisplayName: 'Reviewers' });
+    const builder = createBuilder(step, {
+      provider: 'codex',
+      providerSource: 'runtime-v1',
+      providerOptionsProviderSource: 'runtime-v1',
+      providerOptions: {
+        codex: { networkAccess: false },
+        claude: { allowedTools: ['Read'] },
+      },
+      personaProviders: {
+        Reviewers: { provider: targetProvider, model: 'target-model' },
+      },
+    });
+
+    expect(builder.buildAgentOptions(step).providerOptions).toBeUndefined();
+  });
+
+  it('does not leak a runtime default profile into a direct step provider override', () => {
+    const step = createStep({ provider: 'claude', model: 'step-model' });
+    const builder = createBuilder(step, {
+      provider: 'codex',
+      providerSource: 'runtime-v1',
+      providerOptionsProviderSource: 'runtime-v1',
+      providerOptions: {
+        codex: { networkAccess: false },
+        claude: { allowedTools: ['Read'] },
+      },
+    });
+
+    expect(builder.buildAgentOptions(step).providerOptions).toBeUndefined();
+  });
+
+  it('passes only the winning target profile capabilities to the actual provider call', () => {
+    const step = createStep({ personaDisplayName: 'Reviewers' });
+    const builder = createBuilder(step, {
+      provider: 'codex',
+      providerSource: 'runtime-v1',
+      providerOptionsProviderSource: 'runtime-v1',
+      providerOptions: {
+        codex: { networkAccess: false },
+      },
+      personaProviders: {
+        Reviewers: {
+          provider: 'claude',
+          model: 'target-model',
+          providerOptions: { claude: { allowedTools: ['Read', 'Glob'] } },
+        },
+      },
+    });
+
+    expect(builder.buildAgentOptions(step).providerOptions).toEqual({
+      claude: { allowedTools: ['Read', 'Glob'] },
+    });
+  });
+
+  it('drops synthesized seat options and permission when a CLI provider override wins', () => {
+    const step = createStep({
+      provider: 'claude',
+      model: 'seat-model',
+      internalProviderOptions: {
+        codex: { networkAccess: false },
+        claude: { allowedTools: ['Read'] },
+      },
+      internalPermissionMode: 'readonly',
+    });
+    const builder = createBuilder(step, {
+      provider: 'codex',
+      providerSource: 'cli',
+      model: 'cli-model',
+      modelSource: 'cli',
+    });
+
+    const options = builder.buildAgentOptions(step);
+
+    expect(options.resolvedProvider).toBe('codex');
+    expect(options.resolvedModel).toBe('cli-model');
+    expect(options.providerOptions).toBeUndefined();
+    expect(options.permissionMode).toBeUndefined();
+  });
+
+  it('keeps synthesized seat options and permission when the seat provider wins', () => {
+    const step = createStep({
+      provider: 'claude',
+      model: 'seat-model',
+      internalProviderOptions: { claude: { allowedTools: ['Read'] } },
+      internalPermissionMode: 'readonly',
+    });
+    const options = createBuilder(step).buildAgentOptions(step);
+
+    expect(options.providerOptions).toEqual({ claude: { allowedTools: ['Read'] } });
+    expect(options.permissionMode).toBe('readonly');
+  });
+
+  it('keeps synthesized seat options and permission across a model-only CLI override', () => {
+    const step = createStep({
+      provider: 'codex',
+      model: 'seat-model',
+      internalProviderOptions: { codex: { networkAccess: false } },
+      internalPermissionMode: 'readonly',
+    });
+    const options = createBuilder(step, {
+      provider: 'codex',
+      providerSource: 'runtime-v1',
+      model: 'cli-model',
+      modelSource: 'cli',
+    }).buildAgentOptions(step);
+
+    expect(options.resolvedProvider).toBe('codex');
+    expect(options.resolvedModel).toBe('cli-model');
+    expect(options.providerOptions).toEqual({ codex: { networkAccess: false } });
+    expect(options.permissionMode).toBe('readonly');
+  });
+
+  it.each([
+    { label: 'persona', personaOptions: { codex: { networkAccess: false } }, tagOptions: undefined },
+    { label: 'tag', personaOptions: undefined, tagOptions: { codex: { networkAccess: false } } },
+  ])('drops a constrained $label profile when a plain step profile wins', ({ personaOptions, tagOptions }) => {
+    const step = createStep({ name: 'reviewers', personaDisplayName: 'Reviewers', tags: ['review'] });
+    const builder = createBuilder(step, {
+      provider: 'codex',
+      providerSource: 'runtime-v1',
+      providerOptionsProviderSource: 'runtime-v1',
+      personaProviders: personaOptions === undefined ? undefined : {
+        Reviewers: { provider: 'codex', model: 'persona-model', providerOptions: personaOptions },
+      },
+      providerRouting: {
+        tags: tagOptions === undefined ? undefined : {
+          review: { provider: 'codex', model: 'tag-model', providerOptions: tagOptions },
+        },
+        steps: { reviewers: { provider: 'claude', model: 'step-model' } },
+      },
+    });
+
+    expect(builder.buildAgentOptions(step).providerOptions).toBeUndefined();
+  });
+
+  it('keeps workflow capability options independent of the winning runtime profile', () => {
+    const step = createStep({
+      personaDisplayName: 'Reviewers',
+      capabilityProviderOptions: { claude: { allowedTools: ['Read'] } },
+    });
+    const builder = createBuilder(step, {
+      provider: 'codex',
+      providerSource: 'runtime-v1',
+      providerOptionsProviderSource: 'runtime-v1',
+      personaProviders: {
+        Reviewers: { provider: 'claude', model: 'target-model' },
+      },
+    });
+
+    expect(builder.buildAgentOptions(step).providerOptions).toEqual({
+      claude: { allowedTools: ['Read'] },
+    });
+  });
+
+  it('keeps legacy persona and step option layering when runtime profiles are not active', () => {
+    const step = createStep({
+      personaDisplayName: 'Reviewers',
+      providerOptions: { codex: { reasoningEffort: 'high' } },
+    });
+    const builder = createBuilder(step, {
+      personaProviders: {
+        Reviewers: { provider: 'codex', providerOptions: { codex: { networkAccess: false } } },
+      },
+    });
+
+    expect(builder.buildAgentOptions(step).providerOptions).toEqual({
+      codex: { networkAccess: false, reasoningEffort: 'high' },
     });
   });
 
@@ -537,32 +740,6 @@ describe('OptionsBuilder auto routing deterministic completion', () => {
       ...overrides,
     });
   }
-
-  it('resolveStepProviderModel falls back to the strategy default candidate when auto routing suppresses the config provider', () => {
-    // 事故の再現: config デフォルト provider は auto_routing 有効時に抑止される。
-    // 実行ループの AI ルーターを通らない findings-manager（実際に合成される
-    // ステップそのもの）も、共通の解決経路で strategy デフォルトまで落ち、
-    // buildAgentOptions の structured_output ガードを通過すること。
-    const managerStep = buildFindingManagerStep({
-      contract: {
-        manager: {
-          persona: 'findings-manager',
-          instruction: 'findings-manager',
-          outputContract: 'findings-manager',
-        },
-      },
-    });
-    const builder = createBuilder(managerStep, { provider: 'codex', providerSource: 'global', autoRouting });
-
-    const resolved = builder.resolveStepProviderModel(managerStep);
-
-    expect(resolved).toMatchObject({
-      provider: 'codex',
-      model: 'default-candidate-model',
-      providerSource: 'auto.fallback',
-    });
-    expect(builder.buildAgentOptions(managerStep).resolvedProvider).toBe('codex');
-  });
 
   it('resolveStepProviderModel applies auto routing rules before the strategy default', () => {
     const step = createManagerLikeStep({ name: 'implement' });

@@ -6,9 +6,15 @@
  */
 
 /** Status of a review finding across iterations */
-import type { FindingLifecycle } from '../../core/models/finding-types.js';
-
-export type FindingStatus = FindingLifecycle;
+export type FindingStatus =
+  | 'new'
+  | 'persists'
+  | 'resolved'
+  | 'reopened'
+  | 'waived'
+  | 'invalidated'
+  | 'superseded'
+  | 'dismissed';
 
 /** Severity level of a review finding */
 export type FindingSeverity = 'error' | 'warning';

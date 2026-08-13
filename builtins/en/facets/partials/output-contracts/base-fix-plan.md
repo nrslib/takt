@@ -8,10 +8,15 @@
 |---------------------|---------------------|----------|----------------------|-------------------------------------|----------------|----------------------------------------------|
 | {ID or report name} | {Basis recorded by adjudication} | {Report or file:line} | {Stable ID} | {Causal chain verified in code} | {Local / Structural / Undemonstrable due to environmental factors} | {Completion condition and excluded neighboring contract or adjacent work} |
 
+## Invariant Register
+| Fix Unit | Family ID | Invariant Stable ID | Observable Invariant | Authoritative Owner | Classification and Recorded Recurrence Trigger | Enforcement Point |
+|----------|-----------|---------------------|----------------------|---------------------|------------------------------------------------|-------------------|
+| {Stable fix-unit ID} | {Stable family ID} | {Stable ID within the family} | {Externally observable condition} | {Single responsibility and source of truth} | {Local / Structural; true / false / not evaluable with reason} | {Required for a structural issue or a unit whose recorded trigger is true: single change point, single validation point, or type/structure that makes violation impossible. For an independent local defect: Not required; direct repair at the existing owner} |
+
 ## Defect-Family Final State
 | Fix Unit | Authoritative Contract | Complete Invariant Set | Target Responsibility and Source of Truth | Participating Contract Paths | Valid, Failing, and Boundary Examples | Migration and Removal |
 |----------|------------------------|------------------------|-------------------------------------------|------------------------------|---------------------------------------|-----------------------|
-| {Fix unit} | {Requirement, specification, schema, or public contract} | {Conditions beyond the finding examples} | {Target location, or unchanged for a local issue} | {Only affected paths that actually exist: definition, production, normalization, validation, consumers, terminal or API output, plus retry, fallback, parallel execution, persistence, or restoration only when applicable. Omit non-applicable paths rather than exploring or listing them} | {Representative cases to verify} | {Only existing consumers and duplicate or obsolete paths that require migration or removal; None when no such target exists. Exclude unrelated migration or removal work} |
+| {Fix unit} | {Requirement, specification, schema, or public contract} | {Conditions beyond the finding examples} | {Target location, or unchanged for a local issue} | {Confirmed bounded graph of affected paths that actually exist: definition, production, normalization, validation, consumers, terminal or API output, plus retry, fallback, parallel execution, persistence, or restoration only when applicable. Omit non-applicable paths rather than exploring or listing them} | {Representative valid, failing, boundary, and adversarial cases} | {Only existing consumers and duplicate or obsolete paths that require migration or removal; None when no such target exists. Exclude unrelated migration or removal work} |
 
 ## Execution Order
 | Order | Fix Unit | Operation | Dependencies | Targets | Completion Criteria and Evidence |

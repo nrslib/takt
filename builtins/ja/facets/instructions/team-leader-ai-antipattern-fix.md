@@ -1,3 +1,5 @@
+{{include:instructions/contract-family-decomposition-boundary}}
+
 AI Review の指摘を、競合しない修正パートへ分解してください。親 Team Leader 自身はツールを使わず、以下で engine が渡す前ステップの応答だけで分解します。
 
 **AI Review 応答:**

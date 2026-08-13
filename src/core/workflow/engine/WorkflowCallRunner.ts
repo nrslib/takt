@@ -1,14 +1,12 @@
 import { resolveEffectiveProviderOptions } from '../../../infra/config/providerOptions.js';
 import type {
   AgentResponse,
-  FindingContractConfig,
   WorkflowConfig,
   WorkflowCallStep,
   WorkflowMaxSteps,
   WorkflowResumePointEntry,
   WorkflowState,
 } from '../../models/types.js';
-import type { FindingLedgerStore } from '../findings/store.js';
 import type { RunPaths } from '../run/run-paths.js';
 import {
   applyProviderModelOverride,
@@ -83,11 +81,6 @@ interface WorkflowCallRunnerDeps {
     task: string,
     options: WorkflowEngineOptions,
   ) => WorkflowCallChildEngine;
-  /** 自前 or 継承済みの、この engine で有効な Finding Contract。子へ引き継ぐ。 */
-  findingContract?: FindingContractConfig;
-  findingLedgerStore?: FindingLedgerStore;
-  /** workflow_call 完了後、子が書き込んだ台帳を親の state.findings へ反映する。 */
-  refreshFindingsState: () => void;
 }
 
 export interface WorkflowCallExecutionToken {
@@ -132,6 +125,7 @@ export class WorkflowCallRunner {
     providerSource: WorkflowEngineOptions['providerSource'];
     model: string | undefined;
     modelSource: WorkflowEngineOptions['modelSource'];
+    providerPermissionMode: WorkflowEngineOptions['providerPermissionMode'];
     providerEscalation: WorkflowEngineOptions['providerEscalation'];
     providerOptions: WorkflowEngineOptions['providerOptions'];
   } {
@@ -143,6 +137,7 @@ export class WorkflowCallRunner {
       providerSource: options.providerSource,
       model: options.model,
       modelSource: options.modelSource,
+      permissionMode: options.providerPermissionMode,
     });
     const providerOptions = resolveEffectiveProviderOptions(
       options.providerOptionsSource,
@@ -156,6 +151,7 @@ export class WorkflowCallRunner {
       providerSource: providerInfo.providerSource,
       model: providerInfo.model,
       modelSource: providerInfo.modelSource,
+      providerPermissionMode: providerInfo.permissionMode,
       // 親 workflow 自身の provider 宣言が勝った場合、engine 既定 profile の
       // 格上げ先はもうその provider のものではないので引き継がない。
       providerEscalation: providerInfo.providerSource === options.providerSource
@@ -191,6 +187,9 @@ export class WorkflowCallRunner {
         providerSource: workflowCallProviderModel.providerSource,
         model: workflowCallProviderModel.model,
         modelSource: workflowCallProviderModel.modelSource,
+        permissionMode: workflowCallProviderModel.providerSource === parentProviderInfo.providerSource
+          ? parentProviderInfo.providerPermissionMode
+          : undefined,
       },
     };
   }
@@ -201,6 +200,7 @@ export class WorkflowCallRunner {
     return applyWorkflowCallOverridesToPersonaProviders(
       this.deps.getOptions().personaProviders,
       step.overrides,
+      this.deps.getOptions().providerOptionsProviderSource !== undefined,
     );
   }
 
@@ -210,6 +210,7 @@ export class WorkflowCallRunner {
     return applyWorkflowCallOverridesToProviderRouting(
       this.deps.getOptions().providerRouting,
       step.overrides,
+      this.deps.getOptions().providerOptionsProviderSource !== undefined,
     );
   }
 
@@ -649,15 +650,22 @@ export class WorkflowCallRunner {
           providerSource: runtimeProviderInfo.providerSource,
           model: runtimeProviderInfo.model,
           modelSource: runtimeProviderInfo.modelSource,
+          permissionMode: runtimeProviderInfo.permissionMode,
           providerEscalation: undefined,
         }
       : this.resolveChildProviderModel(step, childWorkflow);
     const parentProviderContext = this.resolveParentWorkflowProviderContext();
+    const profileScopedOptions = this.deps.getOptions().providerOptionsProviderSource !== undefined;
+    const inheritedProviderOptions = runtime.fallback
+      ? runtimeProviderInfo.providerOptions
+      : !profileScopedOptions || childProviderModel.providerSource === parentProviderContext.providerSource
+        ? parentProviderContext.providerOptions
+        : undefined;
     const childResult = await this.executor.execute({
       step,
       preparedExecution,
       childProviderInfo: childProviderModel,
-      parentProviderOptions: parentProviderContext.providerOptions,
+      parentProviderOptions: inheritedProviderOptions,
       personaProviders: this.buildChildPersonaProviders(step),
       providerRouting: this.buildChildProviderRouting(step),
       providerLadders: this.buildChildProviderLadders(),

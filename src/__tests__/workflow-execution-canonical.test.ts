@@ -66,9 +66,7 @@ vi.mock('../features/tasks/execute/workflowExecutionBundle.js', () => {
 });
 
 vi.mock('../agents/structured-caller.js', () => ({
-  CapabilityAwareStructuredCaller: class {},
-  DefaultStructuredCaller: class {},
-  PromptBasedStructuredCaller: class {},
+  ProviderNeutralStructuredCaller: class {},
 }));
 
 vi.mock('../infra/config/index.js', () => ({
@@ -374,7 +372,6 @@ describe('workflow execution canonical entrypoints', () => {
       provider: 'mock',
       model: 'explicit-selector',
       providerOptions: {},
-      nativeTools: [],
     };
 
     await expect(

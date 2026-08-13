@@ -27,12 +27,34 @@ all-or-nothing asserts: for load-bearing conclusions, run the complete
 `prepare -> eval` command three separate times and read per-metric
 results, not one pass/fail summary.
 
+The `write-tests-default-priority` suite runs on the Claude headless CLI with
+model `opus` because it reproduces a requirement-priority miss observed in an
+Opus-driven TAKT run. It is excluded from the default Codex suite and runs
+through `npm run eval:prompts:default-priority`. It verifies the primary manual
+Requeue-to-runner path from failed-leaf selection and initial cursor through
+pending persistence, normal runner claim, and fresh execution; checkpoint
+preservation is checked only as an explicit independent behavior. The suite
+uses a disposable work copy, so rerun the complete command for each trial.
+Run `npm run eval:prompts:default-priority:codex` to cross-check it with Codex.
+
+The `fix-loop-convergence` suite probes the remediation-loop convergence
+rules with 11 decision scenarios, each run on **two providers** — the
+claude headless CLI (`eval/providers/claude-judge.sh`, model
+`claude-opus-5`) and the codex CLI (`eval/providers/codex-judge.sh`, model
+`gpt-5.6-luna`). Prompts are assembled at run time from the live
+`builtins/ja/facets` content (`eval/fix-loop-convergence-prompt.mjs`), so
+the suite always measures the current facet text. It needs both CLI
+logins, is excluded from the default suite run, and asserts on a fixed
+machine-readable `JUDGEMENT:` line — invoke it explicitly
+(`npm run eval:prompts:fix-loop-convergence`).
+
 ## Suites
 
 | Suite | Workflow / step | Fixture | Measures |
 |-------|-----------------|---------|----------|
 | `coding` | peer-review / coding-review | sample-project | recall on 5 planted coding-policy violations + precision on a clean diff |
 | `arch` | peer-review / arch-review | sample-project | recall on 3 planted architecture violations |
+| `arch-failure-aggregation` | peer-review / arch-review | arch-failure-aggregation | recall on inconsistent primary-failure aggregation and precision on a required fail-fast boundary |
 | `antipattern` | peer-review / ai-antipattern-review-2nd | sample-project | recall on 3 planted AI antipatterns |
 | `frontend` | review-frontend / frontend-review | frontend-app | recall on 3 planted layering violations |
 | `cqrs` | review-backend-cqrs / cqrs-es-review | backend-cqrs | recall on 3 planted CQRS+ES violations |
@@ -41,6 +63,7 @@ results, not one pass/fail summary.
 | `cqrs-coder` | backend-cqrs / implement | backend-cqrs (work copy) | artifact checks on the implemented change |
 | `fix-closure` | review-remediation / fix-retry | fix-closure (work copy) | whether verifier-return remediation closes every falsifiable obligation across multiple fix units and hierarchical projections instead of patching only the latest verifier example or relying on broad test success |
 | `fix-self-scan` | peer-review / fix | fix-self-scan (work copy) | whether the coder's post-edit self-scan removes change-induced dead code, keeps the declared layer direction, and consolidates duplicated override semantics instead of shipping a plan-complete but messy fix |
+| `fix-loop-convergence` | development-remediation / fix-retry, fix-verifier, fix, loop-monitor | inline scenario fixtures (`cases/fix-loop-convergence/`) | whether the convergence rules (invariant-recurrence trigger, ledger carry-forward, trigger monotonicity, established-invariants scan, monitor escape) steer each role's decision as intended, measured on both Claude Opus and Codex Luna Max |
 | `fix-plan-fresh-findings` | peer-review / fix-plan | fix-plan-fresh-findings | whether fix-plan uses the canonical actionable family, closes all same-invariant consumers, and does not revive non-actionable findings |
 | `fix-plan-boundary-preflight` | peer-review / fix-plan | fix-plan-boundary-preflight | whether fix-plan rejects a locally valid method that violates its representation and persistence boundary |
 | `review-family-closure` | peer-review-suite-base / coding-review | review-family-closure | whether one review reports every path affected by the same contract defect instead of stopping at a representative example |
@@ -51,6 +74,7 @@ results, not one pass/fail summary.
 | `issue-plan-samples` | default / plan | nrslib/takt repository (read-only) | whether planning preserves explicit breadth, allowed design choices, and explicitly required architecture across Issues #1127, #1155, and #1136 |
 | `plan-report-source-authority` | default / plan report phase | synthetic Phase 1 draft (tool-less) | whether the final `plan.md` keeps the original task authoritative and demotes unsupported design details from requirements |
 | `write-tests-contract-traceability` | default / write_tests | write-tests-contract-traceability | whether generated tests accept the intended local contract, reject plausible mutations, and avoid inventing irrelevant impact paths |
+| `write-tests-default-priority` | default / write_tests | write-tests-default-priority | whether tests trace manual Requeue from failed-leaf selection and initial cursor through pending persistence to a normal-runner fresh start, while retaining an explicit checkpoint action |
 | `scope-default-write-tests` | default / write_tests | scope-discipline-tests | whether tests observe behavior and remove an invalid internal-structure test instead of replacing it with another proxy |
 | `scope-maintenance-write-tests` | backend-maintenance / write_tests | scope-discipline-tests | whether the shared maintenance path applies the same behavioral test discipline |
 | `scope-architecture-search{,-none,-unrelated}` | peer-review / arch-review | scope-architecture-search | whether the same shared instruction discovers an unhinted second implementation and avoids an unrelated defect with relevant, absent, or unrelated Policy/Knowledge composition |

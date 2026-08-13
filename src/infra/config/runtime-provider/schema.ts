@@ -10,6 +10,7 @@
 
 import { z } from 'zod';
 import { PROVIDER_TYPES } from '../../../shared/types/provider.js';
+import { PermissionModeSchema } from '../../../core/models/schema-base.js';
 import { RUNTIME_PROVIDER_VERSION } from './constants.js';
 
 const ProviderNameSchema = z.enum(PROVIDER_TYPES);
@@ -28,6 +29,11 @@ const ProfileSchema = z
     provider: ProviderNameSchema.optional(),
     model: z.string().min(1).optional(),
     options: ProfileOptionsSchema.optional(),
+    capabilities: z.union([
+      z.string().min(1),
+      z.array(z.string().min(1)).min(1),
+    ]).optional(),
+    permission_mode: PermissionModeSchema.optional(),
     extends: z.string().min(1).optional(),
     escalate: z.string().min(1).optional(),
   })
@@ -128,25 +134,110 @@ const ProviderSectionSchema = z
 
 type RuntimeProviderSectionShape = z.infer<typeof ProviderSectionSchema>;
 
+function addAssignmentProfiles(
+  profiles: Set<string>,
+  assignment: { profile?: string; ladder?: string[] },
+): void {
+  if (assignment.profile !== undefined) {
+    profiles.add(assignment.profile);
+  }
+  for (const profile of assignment.ladder ?? []) {
+    profiles.add(profile);
+  }
+}
+
+function collectProfileClosure(
+  profiles: Record<string, z.infer<typeof ProfileSchema>>,
+  roots: ReadonlySet<string>,
+): Set<string> {
+  const closure = new Set<string>();
+  const visit = (name: string): void => {
+    if (closure.has(name)) {
+      return;
+    }
+    closure.add(name);
+    const profile = profiles[name];
+    if (profile?.extends !== undefined) {
+      visit(profile.extends);
+    }
+    if (profile?.escalate !== undefined) {
+      visit(profile.escalate);
+    }
+  };
+  roots.forEach(visit);
+  return closure;
+}
+
+function getEffectiveProviderSection(
+  section: RuntimeProviderSectionShape | undefined,
+  companionEnabled: boolean,
+): RuntimeProviderSectionShape | undefined {
+  const companionTargets = section?.targets?.companions;
+  if (section === undefined || companionEnabled || companionTargets === undefined) {
+    return section;
+  }
+
+  const profiles = section.profiles ?? {};
+  const companionRoots = new Set(Object.values(companionTargets).map((target) => target.profile));
+  const nonCompanionRoots = new Set<string>();
+  if (section.defaults !== undefined) {
+    addAssignmentProfiles(nonCompanionRoots, section.defaults);
+  }
+  for (const targetMap of [
+    section.targets?.personas,
+    section.targets?.tags,
+    section.targets?.steps,
+    section.targets?.internal_agents,
+  ]) {
+    Object.values(targetMap ?? {}).forEach((assignment) => {
+      addAssignmentProfiles(nonCompanionRoots, assignment);
+    });
+  }
+  if (section.auto_routing?.router_profile !== undefined) {
+    nonCompanionRoots.add(section.auto_routing.router_profile);
+  }
+  for (const pool of Object.values(section.auto_routing?.pools ?? {})) {
+    pool.candidates.forEach((candidate) => nonCompanionRoots.add(candidate.profile));
+    if (pool.fallback_profile !== undefined) {
+      nonCompanionRoots.add(pool.fallback_profile);
+    }
+  }
+
+  const companionClosure = collectProfileClosure(profiles, companionRoots);
+  const nonCompanionClosure = collectProfileClosure(profiles, nonCompanionRoots);
+  const effectiveProfiles = Object.fromEntries(
+    Object.entries(profiles).filter(([name]) => (
+      !companionClosure.has(name) || nonCompanionClosure.has(name)
+    )),
+  );
+  const targets = { ...section.targets };
+  delete targets.companions;
+  return {
+    ...section,
+    profiles: effectiveProfiles,
+    targets,
+  };
+}
+
 /** Determine whether a provider section has active runtime configuration. */
 export function hasActiveProviderContent(
   section: RuntimeProviderSectionShape | undefined,
   companionEnabled = true,
 ): boolean {
-  if (section === undefined) {
+  const effectiveSection = getEffectiveProviderSection(section, companionEnabled);
+  if (effectiveSection === undefined) {
     return false;
   }
-  const hasTargets = Object.entries(section.targets ?? {}).some(
-    ([targetName, targetMap]) => targetMap !== undefined
-      && Object.keys(targetMap).length > 0
-      && (targetName !== 'companions' || companionEnabled),
+  const hasTargets = Object.values(effectiveSection.targets ?? {}).some(
+    (targetMap) => targetMap !== undefined && Object.keys(targetMap).length > 0,
   );
-  const hasDefaults = section.defaults !== undefined
-    && Object.keys(section.defaults).length > 0;
+  const hasDefaults = effectiveSection.defaults !== undefined
+    && Object.keys(effectiveSection.defaults).length > 0;
   return hasDefaults
-    || (section.profiles !== undefined && Object.keys(section.profiles).length > 0)
+    || (effectiveSection.profiles !== undefined && Object.keys(effectiveSection.profiles).length > 0)
     || hasTargets
-    || (section.auto_routing !== undefined && Object.keys(section.auto_routing).length > 0);
+    || (effectiveSection.auto_routing !== undefined
+      && Object.keys(effectiveSection.auto_routing).length > 0);
 }
 
 export const RuntimeProviderFileSchema = z
@@ -178,17 +269,15 @@ export type RuntimeProviderAutoRouting = z.infer<typeof AutoRoutingSchema>;
 export function getEffectiveRuntimeProviderFile(
   file: RuntimeProviderFile | undefined,
 ): RuntimeProviderFile | undefined {
-  if (file?.companion?.enabled !== false || file.provider?.targets?.companions === undefined) {
+  if (file === undefined) {
     return file;
   }
-
-  const targets = { ...file.provider.targets };
-  delete targets.companions;
+  const provider = getEffectiveProviderSection(
+    file.provider,
+    file.companion?.enabled ?? true,
+  );
   return {
     ...file,
-    provider: {
-      ...file.provider,
-      targets,
-    },
+    ...(provider === undefined ? {} : { provider }),
   };
 }

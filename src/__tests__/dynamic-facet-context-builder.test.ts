@@ -12,7 +12,7 @@ const pool: ResolvedFacetPool = {
 };
 
 describe('DynamicFacetContextBuilder (C-SELECTOR-INPUT, C-SELECTOR-INVOKE)', () => {
-  it('should include user request, identity, entry type, iteration, reports, findings, diff, and candidate ID+description in the selector instruction (C-SELECTOR-INPUT)', () => {
+  it('should include user request, identity, entry type, iteration, reports, diff, and candidate ID+description in the selector instruction (C-SELECTOR-INPUT)', () => {
     const instruction = buildDynamicFacetSelectorInstruction({
       task: 'Fix the transaction boundary issue',
       workflowName: 'backend-fix',
@@ -21,7 +21,6 @@ describe('DynamicFacetContextBuilder (C-SELECTOR-INPUT, C-SELECTOR-INVOKE)', () 
       isReentry: false,
       stepIteration: 1,
       reports: 'prior review report content',
-      unresolvedFindings: '2 unresolved findings',
       cumulativeDiff: 'diff --git a/file.ts b/file.ts',
       pool,
       maxSelected: 4,
@@ -34,7 +33,7 @@ describe('DynamicFacetContextBuilder (C-SELECTOR-INPUT, C-SELECTOR-INVOKE)', () 
     expect(instruction).toContain('initial entry');
     expect(instruction).toContain('1');
     expect(instruction).toContain('prior review report content');
-    expect(instruction).toContain('2 unresolved findings');
+    expect(instruction).toContain('Workflow call path:\n(root)');
     expect(instruction).toContain('diff --git a/file.ts b/file.ts');
     // Candidate IDs and descriptions.
     expect(instruction).toContain('backend');
@@ -54,7 +53,6 @@ describe('DynamicFacetContextBuilder (C-SELECTOR-INPUT, C-SELECTOR-INVOKE)', () 
       isReentry: true,
       stepIteration: 2,
       reports: '',
-      unresolvedFindings: '',
       cumulativeDiff: '',
       pool,
       maxSelected: 4,
@@ -74,7 +72,6 @@ describe('DynamicFacetContextBuilder (C-SELECTOR-INPUT, C-SELECTOR-INVOKE)', () 
       isReentry: false,
       stepIteration: 1,
       reports: '',
-      unresolvedFindings: '',
       cumulativeDiff: '',
       pool,
       maxSelected: 4,
@@ -99,7 +96,6 @@ describe('DynamicFacetContextBuilder (C-SELECTOR-INPUT, C-SELECTOR-INVOKE)', () 
       isReentry: false,
       stepIteration: 1,
       reports: '',
-      unresolvedFindings: '',
       cumulativeDiff: '',
       pool,
       maxSelected: 4,
@@ -119,7 +115,6 @@ describe('DynamicFacetContextBuilder (C-SELECTOR-INPUT, C-SELECTOR-INVOKE)', () 
       isReentry: false,
       stepIteration: 1,
       reports: '',
-      unresolvedFindings: '',
       cumulativeDiff: '',
       pool,
     });

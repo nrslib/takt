@@ -9,6 +9,7 @@ import { buildCompanionMailboxPath } from '../core/workflow/companion/mailbox.js
 import { CompanionReviewAuthority } from '../core/workflow/companion/review-state-store.js';
 import { StepExecutor, type StepExecutorDeps } from '../core/workflow/engine/StepExecutor.js';
 import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engine/structured-output-normalizer.js';
+import { REVIEW_COMPLETION_JUDGE_NAME } from '../core/workflow/review-completion.js';
 import type { RunPaths } from '../core/workflow/run/run-paths.js';
 import { executeAgent } from '../agents/agent-usecases.js';
 import { initDebugLogger, resetDebugLogger } from '../shared/utils/debug.js';
@@ -150,6 +151,7 @@ function createDeps(input: {
     getProjectCwd: () => input.cwd,
     getReportDir: () => input.runPaths.reportsRel,
     getRunPaths: () => input.runPaths,
+    getFailureDir: () => join(input.runPaths.runRootAbs, 'failures'),
     getLanguage: () => 'en' as const,
     getInteractive: () => false,
     getWorkflowSteps: () => [{ name: 'implement' }],
@@ -159,15 +161,12 @@ function createDeps(input: {
     getRetryNote: () => undefined,
     getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
     structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
-    findingManagerAuthority: { canMarkFindings: () => false },
     executionProvider: 'mock' as const,
     executionModel: undefined,
-    refreshFindingsState: vi.fn(),
     emitEvent: input.emitEvent,
     recordSynthesizedAgentUsage: vi.fn(),
     getRunId: () => 'test-run',
     getRunPathNamespace: () => [],
-    getFindingCallNamespace: () => '',
     companionEnabled: input.companionEnabled ?? true,
     companionDefinitions: {
       'security-reviewer': {
@@ -223,6 +222,84 @@ describe('companion StepExecutor lifecycle', () => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
+  it('runs Companion after both the initial and review-completion retry responses', async () => {
+    const abortController = new AbortController();
+    const state = makeState();
+    const timeline: string[] = [];
+    let reviewerCalls = 0;
+    let judgeCalls = 0;
+    vi.mocked(executeAgent).mockImplementation(async (_persona, prompt, options) => {
+      if (options?.internalAgentName === REVIEW_COMPLETION_JUDGE_NAME) {
+        judgeCalls++;
+        timeline.push(`judge:${judgeCalls}`);
+        return {
+          persona: 'review-completion-judge',
+          status: 'done',
+          content: 'decision',
+          timestamp: new Date('2026-08-08T00:00:00.000Z'),
+          structuredOutput: {
+            complete: judgeCalls === 2,
+            reason: judgeCalls === 2 ? 'closed' : 'gap',
+            missing_obligations: judgeCalls === 2 ? [] : [{
+              kind: 'family_lifecycle_gap',
+              contract_family: 'runtime',
+              path: 'consumer.ts',
+              reason: 'not inspected',
+            }],
+          },
+        };
+      }
+      options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: prompt });
+      reviewerCalls++;
+      timeline.push(`reviewer:${reviewerCalls}`);
+      expect(options?.sessionId).toBe(reviewerCalls === 1 ? undefined : 'session-1');
+      return {
+        persona: 'coder',
+        status: 'done',
+        content: `review-${reviewerCalls}`,
+        sessionId: `session-${reviewerCalls}`,
+        timestamp: new Date('2026-08-08T00:00:00.000Z'),
+      };
+    });
+    const emitEvent = vi.fn((event: string) => {
+      if (event === 'companion:complete') timeline.push('companion:complete');
+    });
+    const deps = createDeps({
+      cwd,
+      runPaths,
+      companionDiffReader: createCompanionDiffReader(),
+      abortSignal: abortController.signal,
+      emitEvent,
+    });
+    const step = {
+      ...createCompanionStep([makeRule('Implementation is complete', 'COMPLETE')]),
+      reviewCompletion: {
+        minRetry: 0,
+        maxRetry: 1,
+        retryInstruction: 'retry',
+      },
+    };
+
+    const result = await new StepExecutor(deps).runNormalStep(
+      step,
+      state,
+      'task',
+      5,
+      vi.fn(),
+      'Review.',
+    );
+
+    expect(result.response).toMatchObject({ content: 'review-2', sessionId: 'session-2' });
+    expect(timeline).toEqual([
+      'reviewer:1',
+      'companion:complete',
+      'judge:1',
+      'reviewer:2',
+      'companion:complete',
+      'judge:2',
+    ]);
+  });
+
   it('should release the companion parent abort listener after a successful normal step', async () => {
     const abortController = new AbortController();
     mockSuccessfulImplementer();
@@ -252,7 +329,9 @@ describe('companion StepExecutor lifecycle', () => {
     const companionDiffReader = createCompanionDiffReader();
     mockSuccessfulImplementer();
     const state = makeState();
-    const emitEvent = vi.fn();
+    const emitEvent = vi.fn(() => {
+      throw new Error('audit listener unavailable');
+    });
     const deps = createDeps({
       cwd,
       runPaths,
@@ -275,9 +354,11 @@ describe('companion StepExecutor lifecycle', () => {
     expect(companionDiffReader.readBaselineSha).not.toHaveBeenCalled();
     expect(executeAgent).toHaveBeenCalledOnce();
     expect(executeAgent.mock.calls[0]?.[1]).not.toContain('mailbox');
-    expect(emitEvent.mock.calls.filter(([event]) => (
-      typeof event === 'string' && event.startsWith('companion:')
-    ))).toHaveLength(0);
+    expect(emitEvent).toHaveBeenCalledWith('companion:review_skipped', expect.objectContaining({
+      step: 'implement',
+      phase: 'initial',
+      reason: 'companion_disabled',
+    }));
     expect(vi.mocked(deps.recordSynthesizedAgentUsage).mock.calls.filter(([stepName]) => (
       typeof stepName === 'string' && stepName.startsWith('companion:')
     ))).toHaveLength(0);
@@ -288,12 +369,13 @@ describe('companion StepExecutor lifecycle', () => {
     mockSuccessfulImplementer();
     const state = makeState();
 
+    const emitEvent = vi.fn();
     const result = await new StepExecutor(createDeps({
       cwd,
       runPaths,
       companionDiffReader: createFailingStartupDiffReader(),
       abortSignal: abortController.signal,
-      emitEvent: vi.fn(),
+      emitEvent,
     })).runNormalStep(
       createCompanionStep([makeRule('Implementation is complete', 'COMPLETE')]),
       state,
@@ -310,6 +392,10 @@ describe('companion StepExecutor lifecycle', () => {
       completionFailure: true,
       openMustFixCount: 0,
     });
+    expect(emitEvent).toHaveBeenCalledWith('companion:review_skipped', expect.objectContaining({
+      phase: 'initial',
+      reason: 'companion_runtime_unavailable',
+    }));
   });
 
   it('should continue when required companion runtime configuration is unavailable', async () => {

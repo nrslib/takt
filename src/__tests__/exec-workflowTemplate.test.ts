@@ -441,7 +441,6 @@ describe('exec workflow template', () => {
           cycle: ['execute', 'review'],
           threshold: 4,
           judge: expect.objectContaining({
-            sessionKey: 'exec-loop-monitor-small',
             persona: 'exec-assistant',
             instruction: 'exec-loop-monitor {cycle_count} instruction',
             rules: [
@@ -454,7 +453,6 @@ describe('exec workflow template', () => {
           cycle: ['replan', 'execute', 'review'],
           threshold: 2,
           judge: expect.objectContaining({
-            sessionKey: 'exec-loop-monitor-large',
             persona: 'exec-assistant',
             instruction: 'exec-loop-monitor {cycle_count} instruction',
             rules: [

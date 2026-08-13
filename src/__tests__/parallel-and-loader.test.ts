@@ -1025,17 +1025,17 @@ describe('all()/any() aggregate condition expression parsing', () => {
   });
 
   it('should only parse a standalone aggregate condition', () => {
-    expect(parseAggregateConditionExpression('all("approved") && findings.open.count == 0')).toBeUndefined();
-    expect(parseAggregateConditionExpression('all("approved") && && when(findings.open.count == 0)')).toBeUndefined();
-    expect(parseAggregateConditionExpression('all("approved") && when(findings.open.count == 0)')).toBeUndefined();
+    expect(parseAggregateConditionExpression('all("approved") && context.review.pending_count == 0')).toBeUndefined();
+    expect(parseAggregateConditionExpression('all("approved") && && when(context.review.pending_count == 0)')).toBeUndefined();
+    expect(parseAggregateConditionExpression('all("approved") && when(context.review.pending_count == 0)')).toBeUndefined();
   });
 
   it('should reject a composite condition when locating escaped aggregate arguments', () => {
-    expect(parseAggregateConditionExpression('any("approved with \\"quoted ) text\\"") && when(findings.open.count == 0)')).toBeUndefined();
+    expect(parseAggregateConditionExpression('any("approved with \\"quoted ) text\\"") && when(context.review.pending_count == 0)')).toBeUndefined();
   });
 
   it('should reject a composite condition after an even backslash run', () => {
-    expect(parseAggregateConditionExpression(String.raw`any("path ends with \\") && when(findings.open.count == 0)`)).toBeUndefined();
+    expect(parseAggregateConditionExpression(String.raw`any("path ends with \\") && when(context.review.pending_count == 0)`)).toBeUndefined();
   });
 
   it('should not match regular condition text', () => {
@@ -1112,7 +1112,7 @@ describe('all()/any() condition in WorkflowStepRawSchema', () => {
       const children = [
         ' approved ',
         'when( true )',
-        'needs_fix && when( findings.open.count > 0 )',
+        'needs_fix && when( context.review.pending_count > 0 )',
       ];
       const source = `${aggregate}(${children.map((child) => JSON.stringify(child)).join(', ')})`;
 
@@ -1125,7 +1125,7 @@ describe('all()/any() condition in WorkflowStepRawSchema', () => {
           {
             kind: 'and',
             left: { kind: 'semantic', label: 'needs_fix' },
-            right: { kind: 'when', expression: 'findings.open.count > 0' },
+            right: { kind: 'when', expression: 'context.review.pending_count > 0' },
           },
         ],
       });
@@ -1207,8 +1207,8 @@ describe('all()/any() condition in WorkflowStepRawSchema', () => {
 });
 
 describe('when expression syntax at the raw workflow boundary', () => {
-  const invalidWhen = 'when(findings.open.count ==)';
-  const validWhen = 'when(findings.open.count == 0)';
+  const invalidWhen = 'when(context.review.pending_count ==)';
+  const validWhen = 'when(context.review.pending_count == 0)';
 
   const makeAgentStep = (condition: string) => ({
     name: 'review',

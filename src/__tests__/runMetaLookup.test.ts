@@ -98,6 +98,7 @@ describe('run-meta lookup', () => {
       failure: {
         step: 'reviewers',
         error: 'NEEDS_ADJUDICATION: finding invariant failed',
+        failureCategory: 'provider_stream_parse_error',
       },
     });
 
@@ -108,6 +109,7 @@ describe('run-meta lookup', () => {
     expect(meta?.failure).toEqual({
       step: 'reviewers',
       error: 'NEEDS_ADJUDICATION: finding invariant failed',
+      failureCategory: 'provider_stream_parse_error',
     });
   });
 

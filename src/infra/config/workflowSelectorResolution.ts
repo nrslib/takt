@@ -13,10 +13,6 @@ import type { WorkflowCallResolver } from '../../core/workflow/types.js';
 import { resolveWorkflowCallTarget } from './loaders/workflowCallResolver.js';
 import { collectReachableWorkflowCallSteps } from './loaders/workflowParallelTraversal.js';
 import {
-  assertProviderSupportsSelectorExecution,
-  resolveStrictInternalAgentNativeTools,
-} from '../providers/provider-capabilities.js';
-import {
   resolveSelectorProviderFromLegacyProject,
   resolveSelectorProviderFromRuntimeEnvironment,
   type ResolvedSelectorProvider,
@@ -28,8 +24,7 @@ import type { ProviderConfigMode } from './runtime-provider/mode.js';
 type ResolvedActiveSelectorProvider = ResolvedSelectorProvider & {
   readonly provider: ProviderType;
   readonly model: string | undefined;
-  readonly providerOptions: StepProviderOptions;
-  readonly nativeTools: readonly string[];
+  readonly providerOptions?: StepProviderOptions;
 };
 
 export type WorkflowSelectorResolution =
@@ -176,29 +171,6 @@ function workflowGraphHasDynamicParallel(
   return false;
 }
 
-function resolveEffectiveSelectorProviderOptions(
-  provider: ProviderType,
-  providerOptions: StepProviderOptions | undefined,
-): StepProviderOptions {
-  const resolved = providerOptions ?? {};
-  if (provider !== 'claude' && provider !== 'claude-sdk' && provider !== 'claude-terminal') {
-    return resolved;
-  }
-  if ((resolved.claude?.allowedTools?.length ?? 0) > 0) {
-    throw new Error(
-      'Configuration error: takt_providers.selector.provider_options.claude.allowed_tools '
-      + 'must be empty for the strict read-only selector',
-    );
-  }
-  if (resolved.claude?.skills?.enabled === true) {
-    throw new Error(
-      'Configuration error: takt_providers.selector.provider_options.claude.skills.enabled '
-      + 'cannot be true for the strict read-only selector',
-    );
-  }
-  return resolved;
-}
-
 export function resolveWorkflowSelector(
   workflow: WorkflowConfig,
   options: WorkflowSelectorResolutionOptions,
@@ -225,19 +197,13 @@ export function resolveWorkflowSelector(
   if (selectorProvider.provider === undefined) {
     throw new Error('Dynamic selector has no resolved provider');
   }
-  assertProviderSupportsSelectorExecution(selectorProvider.provider);
-  const providerOptions = resolveEffectiveSelectorProviderOptions(
-    selectorProvider.provider,
-    selectorProvider.providerOptions,
-  );
   return {
     applies: true,
     selectorProvider: {
       ...selectorProvider,
       provider: selectorProvider.provider,
       model: selectorProvider.model,
-      providerOptions,
-      nativeTools: resolveStrictInternalAgentNativeTools(selectorProvider.provider),
+      providerOptions: selectorProvider.providerOptions,
     },
   };
 }

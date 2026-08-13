@@ -9,9 +9,12 @@ import type {
 } from '../../models/index.js';
 import { truncateUtf8 } from '../../../shared/utils/utf8.js';
 import type { StreamEvent } from '../../../shared/types/provider.js';
-import type { SelectorProviderInfo } from '../types.js';
+import type { CompanionReviewPhase, SelectorProviderInfo } from '../types.js';
 import { createLogger } from '../../../shared/utils/index.js';
-import { CompanionChangeDetector } from './change-detector.js';
+import {
+  CompanionChangeDetector,
+  type CompanionChangeSkipReason,
+} from './change-detector.js';
 import {
   LOOP_JUDGE_OUTPUT_JSON_SCHEMA,
   parseLoopJudgeOutput,
@@ -38,6 +41,7 @@ import {
   type CompanionEventEmitter,
 } from './event-publisher.js';
 import { CompanionStructuredCaller } from './structured-call.js';
+import type { CompanionCallAudit } from './review-runner.js';
 import { CompanionTriggerScheduler } from './trigger-scheduler.js';
 import { CompanionCompletionCoordinator } from './completion-coordinator.js';
 import { CompanionTerminalDecisionTracker } from './terminal-decision.js';
@@ -51,6 +55,7 @@ const log = createLogger('companion-step-runtime');
 interface CompanionStepRuntimeDeps {
   readonly cwd: string;
   readonly projectCwd: string;
+  readonly failureDir: string;
   readonly runSlug: string;
   readonly runPathNamespace: readonly string[];
   readonly language: 'en' | 'ja';
@@ -84,15 +89,46 @@ export class CompanionStepRuntime {
   private currentFixRound: number | undefined;
   private stopped = false;
   private latestImplementerExplanation: string | undefined;
+  private readonly emittedReviewSkips = new Set<string>();
+  private companionAuditWriteFailureReported = false;
 
   private constructor(private readonly deps: CompanionStepRuntimeDeps) {
-    this.events = new CompanionEventPublisher(deps.step.name, deps.emitEvent);
+    this.events = new CompanionEventPublisher(
+      deps.step.name,
+      deps.emitEvent,
+      deps.runPathNamespace,
+    );
     this.structuredCaller = new CompanionStructuredCaller({
       cwd: deps.cwd,
       projectCwd: deps.projectCwd,
+      failureDir: deps.failureDir,
       language: deps.language,
       abortSignal: deps.abortSignal,
       recordUsage: deps.recordUsage,
+      recordCall: (call: CompanionCallAudit) => {
+        this.events.call({
+          agent: call.agentName,
+          purpose: call.purpose,
+          attempt: call.attempt,
+          status: call.status,
+          provider: call.provider,
+          ...(call.model === undefined ? {} : { model: call.model }),
+          ...(call.promptResolved ? {
+            promptResolved: true,
+            systemPrompt: call.systemPrompt,
+            prompt: call.prompt,
+          } : { promptResolved: false }),
+          ...(call.response === undefined ? {} : { response: call.response }),
+          ...(call.error === undefined ? {} : { error: call.error }),
+        });
+      },
+      onCallAuditPersistenceFailure: ({ purpose, agentName, attempt, error }) => {
+        this.reportCompanionAuditWriteFailure('companion_call', error, {
+          purpose,
+          agent: agentName,
+          attempt,
+        });
+      },
     });
     this.queue = new CompanionReviewQueue({
       runReview: async (request) => {
@@ -159,6 +195,14 @@ export class CompanionStepRuntime {
     });
   }
 
+  beginReviewAttempt(): void {
+    this.currentFixRound = undefined;
+    this.latestImplementerExplanation = undefined;
+    this.terminalDecision.reset();
+    this.events.beginAttempt();
+    this.requireScheduler().start();
+  }
+
   beginFixRound(sequence: number, openMustFixCount: number): void {
     this.currentFixRound = sequence - 1;
     this.events.fixRound(sequence, openMustFixCount);
@@ -198,6 +242,12 @@ export class CompanionStepRuntime {
       },
       runSelector: async (request) => this.runSelector(request),
     });
+    if (selected.length === 0) {
+      this.emitReviewSkipped({
+        phase: 'initial',
+        reason: 'selector_empty',
+      });
+    }
     const resolved = selected.map((item) => {
       const definition = definitions.get(item.name);
       if (definition === undefined) throw new Error(`Undefined companion "${item.name}"`);
@@ -232,6 +282,15 @@ export class CompanionStepRuntime {
       onError: () => log.warn('Companion live review failed; the change remains unreviewed', {
         step: this.deps.step.name,
       }),
+      onSkipped: ({ companionName, reason, candidate }) => this.emitReviewSkipped({
+        companion: companionName,
+        phase: candidate.reason === 'completion'
+          ? 'completion'
+          : this.currentFixRound === undefined ? 'live' : 'fix',
+        reason,
+        ...(this.currentFixRound === undefined ? {} : { fixRound: this.currentFixRound }),
+        observedGeneration: candidate.observedGeneration,
+      }),
     });
     this.completionCoordinator = new CompanionCompletionCoordinator({
       activeNames: () => [...this.active.keys()],
@@ -253,6 +312,13 @@ export class CompanionStepRuntime {
       abortSignal: this.deps.abortSignal,
       onError: () => log.warn('Companion completion review failed; confirmed findings were retained', {
         step: this.deps.step.name,
+      }),
+      onSkipped: ({ companionName, reason, candidate }) => this.emitReviewSkipped({
+        companion: companionName,
+        phase: 'completion',
+        reason,
+        ...(this.currentFixRound === undefined ? {} : { fixRound: this.currentFixRound }),
+        observedGeneration: candidate.observedGeneration,
       }),
     });
     this.scheduler.start();
@@ -354,13 +420,34 @@ export class CompanionStepRuntime {
           )
         ),
         applyRoundDecision: (decision) => this.terminalDecision.update(decision),
-        onRoundCompleted: (round) => this.events.reviewRound({
-          companion: companionName,
-          trigger: round.trigger,
-          digest: round.snapshot.digest,
-          changedLines: round.snapshot.changedLines,
-          findingCount: round.findingCount,
-        }),
+        onRoundCompleted: (round) => {
+          try {
+            this.events.reviewRound({
+              companion: companionName,
+              trigger: round.trigger,
+              digest: round.snapshot.digest,
+              changedLines: round.snapshot.changedLines,
+              findingCount: round.findingCount,
+              reviewerFindings: round.reviewerResult.findings,
+              reviewerUpdates: round.reviewerResult.updates,
+              ...(round.moderator === undefined ? {} : {
+                moderator: {
+                  name: round.moderator.name,
+                  invoked: round.moderator.invoked,
+                  ...(round.moderator.reason === undefined ? {} : { reason: round.moderator.reason }),
+                  decisions: round.moderator.result?.findings ?? [],
+                },
+              }),
+              acceptedFindings: round.accepted.findings,
+              acceptedUpdates: round.accepted.updates,
+              ...(round.zeroReason === undefined ? {} : { zeroReason: round.zeroReason }),
+            });
+          } catch (error) {
+            this.reportCompanionAuditWriteFailure('companion_review_round', error, {
+              companion: companionName,
+            });
+          }
+        },
       });
     } catch (error) {
       if (!isCompanionCapacityError(error)) throw error;
@@ -534,6 +621,51 @@ export class CompanionStepRuntime {
       throw new Error('Companion completion coordinator is not initialized');
     }
     return this.completionCoordinator;
+  }
+
+  private emitReviewSkipped(input: {
+    readonly companion?: string;
+    readonly phase: CompanionReviewPhase;
+    readonly reason: CompanionChangeSkipReason | 'selector_empty';
+    readonly fixRound?: number;
+    readonly observedGeneration?: number;
+  }): void {
+    if (this.stopped) return;
+    const key = input.companion === undefined || input.observedGeneration === undefined
+      ? undefined
+      : `${input.companion}\0${input.observedGeneration}`;
+    if (key !== undefined) {
+      if (this.emittedReviewSkips.has(key)) return;
+      this.emittedReviewSkips.add(key);
+    }
+    try {
+      this.events.reviewSkipped({
+        ...(input.companion === undefined ? {} : { companion: input.companion }),
+        phase: input.phase,
+        reason: input.reason,
+        ...(input.fixRound === undefined ? {} : { fixRound: input.fixRound }),
+        ...(input.observedGeneration === undefined
+          ? {}
+          : { observedGeneration: input.observedGeneration }),
+      });
+    } catch (error) {
+      this.reportCompanionAuditWriteFailure('companion_review_skipped', error);
+    }
+  }
+
+  private reportCompanionAuditWriteFailure(
+    recordType: 'companion_call' | 'companion_review_round' | 'companion_review_skipped',
+    error: unknown,
+    context: Record<string, unknown> = {},
+  ): void {
+    if (this.companionAuditWriteFailureReported) return;
+    this.companionAuditWriteFailureReported = true;
+    log.warn('Companion audit record could not be persisted; continuing workflow', {
+      step: this.deps.step.name,
+      recordType,
+      ...context,
+      error: safeExternalErrorMessage(error),
+    });
   }
 }
 

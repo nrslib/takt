@@ -76,6 +76,37 @@ function scenarioStructuredOutput(
   return entry?.structuredOutput;
 }
 
+function structuredTextOutput(
+  schema: Record<string, unknown> | undefined,
+  content: string,
+): Record<string, unknown> | undefined {
+  if (schema?.type !== 'object' || schema.additionalProperties !== false) {
+    return undefined;
+  }
+  const properties = schema.properties;
+  const required = schema.required;
+  if (
+    typeof properties !== 'object'
+    || properties === null
+    || Array.isArray(properties)
+    || !Array.isArray(required)
+    || required.length !== 1
+    || required[0] !== 'content'
+  ) {
+    return undefined;
+  }
+  const contentSchema = Reflect.get(properties, 'content');
+  if (
+    typeof contentSchema !== 'object'
+    || contentSchema === null
+    || Array.isArray(contentSchema)
+    || Reflect.get(contentSchema, 'type') !== 'string'
+  ) {
+    return undefined;
+  }
+  return { content };
+}
+
 function recordMockCall(
   event: 'start' | 'complete',
   personaName: string,
@@ -252,7 +283,9 @@ export async function callMock(
     content,
     timestamp: new Date(),
     sessionId,
-    structuredOutput: scenarioStructuredOutput(scenarioEntry, prompt) ?? options.structuredOutput,
+    structuredOutput: scenarioStructuredOutput(scenarioEntry, prompt)
+      ?? options.structuredOutput
+      ?? structuredTextOutput(options.outputSchema, content),
     error: scenarioEntry?.error ?? options.error,
     failureCategory: scenarioEntry?.failureCategory ?? options.failureCategory,
   };

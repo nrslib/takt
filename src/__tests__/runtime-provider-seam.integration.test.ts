@@ -128,6 +128,87 @@ describe('resolveCompiledProviderEnvironment seam', () => {
     });
   });
 
+  it('resolves explicit capabilities and permission_mode while leaving omitted profiles unconstrained', () => {
+    const providerOptionsDir = join(projectCwd, '.takt', 'provider-options');
+    mkdirSync(providerOptionsDir, { recursive: true });
+    writeFileSync(join(providerOptionsDir, 'internal-readonly.yaml'), stringifyYaml({
+      codex: { network_access: false, skills: { repo: false, user: false } },
+    }));
+    writeFileSync(join(projectCwd, '.takt', RUNTIME_PROVIDER_FILENAME), stringifyYaml({
+      version: 1,
+      provider: {
+        defaults: { profile: 'plain' },
+        profiles: {
+          plain: { provider: 'codex', model: 'gpt-default' },
+          constrained: {
+            provider: 'codex',
+            model: 'gpt-review',
+            capabilities: 'internal-readonly',
+            permission_mode: 'readonly',
+          },
+        },
+        targets: {
+          internal_agents: { selector: { profile: 'constrained' } },
+        },
+      },
+    }));
+
+    const env = resolveCompiledProviderEnvironment({
+      projectCwd,
+      legacy: legacyInput,
+      legacySignals: [],
+    });
+
+    expect(env.providerOptions).toBeUndefined();
+    expect(env.permissionMode).toBeUndefined();
+    expect(env.internalAgents?.selector).toEqual({
+      provider: 'codex',
+      model: 'gpt-review',
+      providerOptions: {
+        codex: { networkAccess: false, skills: { repo: false, user: false } },
+      },
+      permissionMode: 'readonly',
+    });
+  });
+
+  it('resolves a global profile capability from the global layer instead of a project shadow', () => {
+    const capabilityName = 'runtime-profile-origin-proof';
+    const globalProviderOptionsDir = join(getGlobalConfigDir(), 'provider-options');
+    const projectProviderOptionsDir = join(projectCwd, '.takt', 'provider-options');
+    mkdirSync(globalProviderOptionsDir, { recursive: true });
+    mkdirSync(projectProviderOptionsDir, { recursive: true });
+    writeFileSync(join(globalProviderOptionsDir, `${capabilityName}.yaml`), stringifyYaml({
+      codex: { network_access: false },
+    }));
+    writeFileSync(join(projectProviderOptionsDir, `${capabilityName}.yaml`), stringifyYaml({
+      codex: { network_access: true },
+    }));
+    writeGlobalRuntimeFile({
+      version: 1,
+      provider: {
+        defaults: { profile: 'global-profile' },
+        profiles: {
+          'global-profile': {
+            provider: 'codex',
+            model: 'gpt-default',
+            capabilities: capabilityName,
+          },
+        },
+      },
+    });
+
+    try {
+      const env = resolveCompiledProviderEnvironment({
+        projectCwd,
+        legacy: legacyInput,
+        legacySignals: [],
+      });
+      expect(env.providerOptions).toEqual({ codex: { networkAccess: false } });
+    } finally {
+      rmSync(join(globalProviderOptionsDir, `${capabilityName}.yaml`), { force: true });
+    }
+  });
+
   it('skips companion target semantic resolution when companion is disabled', () => {
     writeGlobalRuntimeFile({
       version: 1,
@@ -252,7 +333,12 @@ describe('resolveCompiledProviderEnvironment seam', () => {
       provider: {
         defaults: { profile: 'default' },
         profiles: {
-          default: { provider: 'codex', model: 'gpt-default', options: { reasoning_effort: 'high' } },
+          default: {
+            provider: 'codex',
+            model: 'gpt-default',
+            options: { reasoning_effort: 'high' },
+            permission_mode: 'readonly',
+          },
         },
       },
     });
@@ -273,6 +359,7 @@ describe('resolveCompiledProviderEnvironment seam', () => {
     expect(env.providerSource).toBe('cli');
     expect(env.model).toBeUndefined();
     expect(env.providerOptions).toBeUndefined();
+    expect(env.permissionMode).toBeUndefined();
   });
 
   it('re-applies a CLI provider+model override on a runtime-v1 environment', () => {

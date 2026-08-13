@@ -215,7 +215,7 @@ describe('CT-COMP-03 runtime-only companion provider resolution', () => {
       .toThrow(/runtime\.yaml/);
   });
 
-  it('should accept OpenCode isolated structured execution', () => {
+  it('should accept OpenCode as a companion provider', () => {
     const environment = compileRuntimeProviderEnvironment({
       defaults: { profile: 'opencode' },
       profiles: { opencode: { provider: 'opencode', model: 'opencode/model' } },
@@ -229,13 +229,17 @@ describe('CT-COMP-03 runtime-only companion provider resolution', () => {
     );
   });
 
-  it('should reject a provider without isolated structured execution support', () => {
+  it('should accept Cursor as a companion provider', () => {
     const environment = compileRuntimeProviderEnvironment({
       defaults: { profile: 'unsupported' },
       profiles: { unsupported: { provider: 'cursor', model: 'cursor/model' } },
     });
 
-    expect(() => resolveWorkflowCompanions(companionWorkflow(), environment))
-      .toThrow(/cursor.*companion isolated structured execution|companion isolated structured execution.*cursor/i);
+    expect(resolveWorkflowCompanions(companionWorkflow(), environment)).toMatchObject(
+      new Map([
+        ['security-reviewer', { provider: 'cursor', model: 'cursor/model' }],
+        ['design-reviewer', { provider: 'cursor', model: 'cursor/model' }],
+      ]),
+    );
   });
 });

@@ -578,6 +578,26 @@ function expandStepFields(
     ) as RawWorkflowStep['instruction'];
   }
 
+  if (
+    expandedStep.review_completion !== null
+    && typeof expandedStep.review_completion === 'object'
+    && isWorkflowParamReference(expandedStep.review_completion.retry_instruction)
+  ) {
+    expandedStep.review_completion = {
+      ...expandedStep.review_completion,
+      retry_instruction: resolveExpandedParamValue(
+        step.name,
+        'review_completion.retry_instruction',
+        expandedStep.review_completion.retry_instruction,
+        ['facet_ref'],
+        'instruction',
+        params,
+        resolvedArgs,
+        [...stepPath, 'review_completion', 'retry_instruction'],
+      ) as string,
+    };
+  }
+
   if (expandedStep.output_contracts?.report) {
     expandedStep.output_contracts.report = expandedStep.output_contracts.report.map((report, index) => {
       if (!isWorkflowParamReference(report.format)) {

@@ -5,6 +5,11 @@ import { runSingleWorkflowIteration, runWorkflowToCompletion } from '../core/wor
 import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
 import { makeResponse, makeRule, makeStep } from './engine-test-helpers.js';
 import { createWorkflowRunLoopTestContract } from './test-helpers.js';
+import {
+  AGENT_FAILURE_CATEGORIES,
+  createProviderStreamParseError,
+  MAX_AGENT_FAILURE_MESSAGE_BYTES,
+} from '../shared/types/agent-failure.js';
 
 function makeConfig(step: WorkflowStep): WorkflowConfig {
   return {
@@ -66,6 +71,77 @@ function makeDeps(
 }
 
 describe('WorkflowRunLoop failure metadata', () => {
+  it('Given a bounded categorized provider error, When the workflow aborts, Then reason and failure metadata preserve it without a step prefix', async () => {
+    const step = makeStep('implement', {
+      rules: [makeRule('Implementation complete', 'COMPLETE')],
+    });
+    const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
+    const prefix = 'provider error: ';
+    const boundedFailure = `${prefix}${'x'.repeat(
+      MAX_AGENT_FAILURE_MESSAGE_BYTES - Buffer.byteLength(prefix, 'utf8'),
+    )}`;
+    const response = makeResponse({
+      persona: 'implement',
+      status: 'error',
+      content: '',
+      error: boundedFailure,
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+    });
+    const deps = makeDeps(state, step, response);
+
+    const result = await runWorkflowToCompletion(deps);
+
+    expect(result.state.status).toBe('aborted');
+    expect(result.abort?.reason).toBe(boundedFailure);
+    expect(result.abort?.failure).toMatchObject({
+      reason: boundedFailure,
+      error: boundedFailure,
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+    });
+    expect(Buffer.byteLength(result.abort?.reason ?? '', 'utf8')).toBe(
+      MAX_AGENT_FAILURE_MESSAGE_BYTES,
+    );
+    expect(Buffer.byteLength(result.abort?.failure?.reason ?? '', 'utf8')).toBe(
+      MAX_AGENT_FAILURE_MESSAGE_BYTES,
+    );
+  });
+
+  it('Given a maximum-sized provider error containing a secret, When the workflow aborts, Then masking does not expand the final failure beyond the byte limit', async () => {
+    const step = makeStep('implement', {
+      rules: [makeRule('Implementation complete', 'COMPLETE')],
+    });
+    const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
+    const secret = 'token=x';
+    const failure = `${secret}\n${'x'.repeat(
+      MAX_AGENT_FAILURE_MESSAGE_BYTES - Buffer.byteLength(secret, 'utf8') - 1,
+    )}`;
+    const response = makeResponse({
+      persona: 'implement',
+      status: 'error',
+      content: '',
+      error: failure,
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+    });
+    const deps = makeDeps(state, step, response);
+
+    const result = await runWorkflowToCompletion(deps);
+    const reason = result.abort?.reason ?? '';
+    const metadataError = result.abort?.failure?.error ?? '';
+
+    expect(Buffer.byteLength(reason, 'utf8')).toBeLessThanOrEqual(
+      MAX_AGENT_FAILURE_MESSAGE_BYTES,
+    );
+    expect(Buffer.byteLength(metadataError, 'utf8')).toBeLessThanOrEqual(
+      MAX_AGENT_FAILURE_MESSAGE_BYTES,
+    );
+    expect(reason).toContain('[REDACTED]');
+    expect(metadataError).toContain('[REDACTED]');
+    expect(reason).toContain('[TRUNCATED:');
+    expect(metadataError).toContain('[TRUNCATED:');
+    expect(reason).not.toContain(secret);
+    expect(metadataError).not.toContain(secret);
+  });
+
   it('Given a step error, When the workflow aborts, Then the abort result includes step-level failure summary', async () => {
     const step = makeStep('implement', {
       rules: [makeRule('Implementation complete', 'COMPLETE')],
@@ -97,6 +173,49 @@ describe('WorkflowRunLoop failure metadata', () => {
         step: 'implement',
         reason: 'Step "implement" failed: provider exploded',
         error: 'provider exploded',
+      },
+    );
+  });
+
+  it('Given a completion recovery parse failure, When the workflow aborts, Then it preserves step_error', async () => {
+    const step = makeStep('implement', {
+      rules: [makeRule('Implementation complete', 'COMPLETE')],
+    });
+    const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
+    const response = makeResponse({
+      persona: 'implement',
+      status: 'done',
+      content: 'initial completion',
+    });
+    const deps = makeDeps(state, step, response);
+    const parseFailure = createProviderStreamParseError('Failed to parse correction item');
+    vi.mocked(deps.runStep).mockRejectedValue(parseFailure);
+
+    const result = await runWorkflowToCompletion(deps);
+
+    expect(result.state.status).toBe('aborted');
+    expect(result.abort).toEqual({
+      kind: 'step_error',
+      reason: 'provider stream parse error: Failed to parse correction item',
+      failure: {
+        kind: 'step_error',
+        step: 'implement',
+        reason: 'provider stream parse error: Failed to parse correction item',
+        error: 'provider stream parse error: Failed to parse correction item',
+        failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+      },
+    });
+    expect(deps.emit).toHaveBeenCalledWith(
+      'workflow:abort',
+      result.state,
+      'provider stream parse error: Failed to parse correction item',
+      'step_error',
+      {
+        kind: 'step_error',
+        step: 'implement',
+        reason: 'provider stream parse error: Failed to parse correction item',
+        error: 'provider stream parse error: Failed to parse correction item',
+        failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
       },
     );
   });

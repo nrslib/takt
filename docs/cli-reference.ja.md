@@ -214,7 +214,7 @@ exec モード内の主なコマンド:
 
 exec 入力の編集中に画像を添付できます。macOS では `/paste-image` または `Ctrl+V` でクリップボード画像を添付でき、対応ターミナルでは OSC 1337 のインライン画像ペーストも使えます。TAKT は `[Image #N]` プレースホルダーを挿入します。画像は、現在の Assistant メッセージまたは `/go <note>` がそのプレースホルダーを参照した場合だけ Assistant 依頼に送信されます。同じセッションで添付されていないプレースホルダーは通常テキストとして扱われます。`/go` 実行時は、参照された保存済み画像だけが生成タスク仕様へコピーされ、添付セクションに列挙されます。対応形式は PNG、JPEG、GIF、WebP です。インライン画像とクリップボード画像は 10 MiB までです。未対応形式、インライン画像のファイル名拡張子と実データの不一致、上限超過、保存済み添付の一時パス消失、symlink、通常ファイルではない添付元はエラーになります。ネイティブ画像入力に対応しない provider には、プロンプト内のローカルパス参照として渡されます。
 
-生成される exec workflow は `session_key` でワーカーエージェント、レビューエージェント、再計画エージェント、ループ検知のセッションを分離します。ユーザー定義 workflow では通常の agent step、parallel sub-step、`loop_monitors.judge` にだけ `session_key` を指定できます。system step、workflow_call step、parallel parent step では指定できません。実際のセッションキーは解決済み provider を付けた形になります。
+生成される exec workflow は `session_key` でワーカーエージェント、レビューエージェント、再計画エージェントのセッションを分離します。ループ検知 judge は常に新しいセッションを使います。ユーザー定義 workflow では通常の agent step と parallel sub-step にだけ `session_key` を指定できます。system step、workflow_call step、loop-monitor judge、parallel parent step では指定できません。実際のセッションキーは解決済み provider を付けた形になります。
 
 ## GitHub Issue タスク
 

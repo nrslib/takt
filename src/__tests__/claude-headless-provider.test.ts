@@ -126,7 +126,7 @@ describe('ClaudeHeadlessProvider', () => {
     }));
   });
 
-  it('should pass strict read-only internal agent isolation to the headless client', async () => {
+  it('should pass explicitly configured runtime permissions to the headless client', async () => {
     callClaudeHeadlessMock.mockResolvedValue({
       persona: 'selector',
       status: 'done',
@@ -140,7 +140,6 @@ describe('ClaudeHeadlessProvider', () => {
 
     await agent.call('prompt', {
       cwd: '/tmp',
-      internalAgentIsolation: 'strict-readonly',
       permissionMode: 'readonly',
       allowedTools: [],
       mcpServers: {},
@@ -152,11 +151,10 @@ describe('ClaudeHeadlessProvider', () => {
     });
 
     expect(callClaudeHeadlessMock).toHaveBeenCalledWith('selector', 'prompt', expect.objectContaining({
-      internalAgentIsolation: 'strict-readonly',
       permissionMode: 'readonly',
       allowedTools: [],
       mcpServers: {},
-      skillsEnabled: false,
+      skillsEnabled: true,
     }));
   });
 

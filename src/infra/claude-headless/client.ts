@@ -87,14 +87,6 @@ async function buildSpawnArgs(
     '--permission-mode',
     resolveCliPermissionMode(options.permissionMode, options.bypassPermissions),
   ];
-  if (options.internalAgentIsolation === 'strict-readonly') {
-    args.push(
-      '--tools', '',
-      '--setting-sources', '',
-      '--strict-mcp-config',
-      '--disable-slash-commands',
-    );
-  }
   if (options.model) {
     args.push('--model', options.model);
   }
@@ -106,7 +98,7 @@ async function buildSpawnArgs(
   if (options.effort) {
     args.push('--effort', options.effort);
   }
-  if (options.internalAgentIsolation !== 'strict-readonly' && options.skillsEnabled === false) {
+  if (options.skillsEnabled === false) {
     args.push('--disable-slash-commands');
   }
 
@@ -162,7 +154,7 @@ export async function callClaudeHeadless(
   let response: AgentResponse;
 
   try {
-    if (options.internalAgentIsolation === 'strict-readonly' || options.skillsEnabled === false) {
+    if (options.skillsEnabled === false) {
       await assertClaudeSkillsDisableSupported(
         options.claudeCliPath ?? 'claude',
         options.abortSignal,

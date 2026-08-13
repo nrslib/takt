@@ -130,7 +130,7 @@ assistant:
 #         reasoning_effort: medium
 ```
 
-`takt_providers.selector` は任意です。provider/model の優先順位は、明示的な CLI または環境 override、project selector、global selector、project top-level、global top-level の順です。model は解決済み provider と一致する候補だけを採用します。`provider_options` は selector entry だけを global → project の leaf 単位でマージし、top-level・persona・pool sub-step の options は selector に継承されません。空の selector entry と空の `provider_options` entry は設定読み込み時に拒否されます。dynamic selector には strict read-only の内部 agent 隔離を保証できる provider が必要です。Claude、Codex、Mock はこの契約を満たし、OpenCode、Cursor、Copilot、Kiro、Pi は selector・participant 起動前に拒否されます。dynamic parallel を使わない workflow では selector 設定を解決せず、既存実行へ影響しません。
+`takt_providers.selector` は任意です。provider/model の優先順位は、明示的な CLI または環境 override、project selector、global selector、project top-level、global top-level の順です。model は解決済み provider と一致する候補だけを採用します。`provider_options` は selector entry だけを global → project の leaf 単位でマージし、top-level・persona・pool sub-step の options は selector に継承されません。空の selector entry と空の `provider_options` entry は設定読み込み時に拒否されます。dynamic selector は provider-neutral な fresh-session transport を使います。明示的な制限が必要な runtime profile には `capabilities` と `permission_mode` を設定し、省略した項目には selector 専用の制限を追加しません。dynamic parallel を使わない workflow では selector 設定を解決せず、既存実行へ影響しません。
 
 ```yaml
 # ~/.takt/config.yaml（続き）
@@ -378,34 +378,6 @@ terminal tool の完全一致反復は、廃止された累積検出ではなく
 
 プロジェクト設定の値は、両方が設定されている場合にグローバル設定を上書きします。
 
-Finding Contract の正規化係に `config.yaml` のキーはありません。Finding Contract の reviewer は
-全員が通常の Markdown report を書き、TAKT はその report を保存して、それだけを tool なしの新規
-structured session へ渡します。呼び出しはレビュアー×ラウンドごとに1回です。その session の
-provider/model は、runtime.yaml の
-`provider.targets.internal_agents['intake-normalizer']` seat → reviewer の profile が宣言する
-`escalate` 先 → 通常の既定解決、の順で決まります。先頭の候補は isolated structured
-execution に対応している必要があり、対応していない場合は黙って続行せずその理由を示して停止します。
-正規化係の出力が検証と訂正1回のどちらも通らなかった場合は、同じチェーンの次の候補（すでに使った
-候補と `(provider, model)` が異なり、isolated structured execution に対応する最初のもの）で
-1度だけやり直します。それでも失敗した場合は候補ごとの具体的な理由を示して停止します。正規化係も合成ステップとして通常どおり解決されるため、CLI や環境変数による明示的な
-provider/model override は正規化係にも適用されます。これは意図した挙動です — 明示 override は
-TAKT のどこでも最優先レイヤだからです。その帰結として、isolated structured execution に対応
-しない provider を明示指定して Finding Contract ランを走らせると、黙って劣化するのではなく
-正規化係の理由を示して停止します。`finding_intake_normalizer` operation に登録された rate-limit
-fallback は、その呼び出しに限って正規化係を差し替えます。
-
-廃止された `finding_contract.intake_normalize` キーはもう存在しません。正規化は組み込み動作に
-なりました。まだこのブロックを書いている workflow は strict スキーマの未知キー拒否で読み込みに
-失敗します。ブロックごと削除してください。
-
-run metadata、session log、trace、report などのrun lifecycle artifactは、
-引き続き `.takt/runs/<run>/` 配下のファイルです。Finding Contractの状態だけは
-分離され、Finding authorityを初めて解決した時点で
-`.takt/runs/<run>/finding-contract.sqlite` を遅延作成します。このDBはFinding
-Contract管理用のrun-scopedな内部authorityであり、run自体の記録ではありません。
-resumeやrequeueでは別runであってもsource runのFinding DBからtargetをseedできます。
-sourceにFinding DBがなければ、resumeを拒否せず空のledgerから開始します。
-
 ### task 実行設定の環境変数上書き
 
 `auto_requeue_max_attempts` と `ignore_exceed` は
@@ -528,25 +500,6 @@ kiro_cli_path: /usr/local/bin/kiro-cli
 
 provider と model の選択には、[Provider Routing](#provider-routing) に記載した単一のフィールド別優先順位を使用します。通常 step、parallel sub-step、合成 step、workflow call は、各種類で利用可能なレイヤーについて同じ契約に従います。parallel sub-step は promotion をサポートしません。
 
-Finding Contract workflow に provider や model の名前は書きません。合成ロールの宛先は `runtime.yaml` の `provider.targets.internal_agents` seat（すべて任意）で指名し、指定された seat はそのロールの合成 step の step レベル provider/model として扱われます。実装上のフィールド別優先順は、CLI/環境変数の明示 override → 実行時にマッチした promotion（通常の agent step のみ）→ step または parallel sub-step の provider/model（seat 指定を含む）→ `workflow_call` override → `provider_routing` の step/tag/persona → deprecated の `persona_providers` → auto routing → workflow → project → global → provider default です。seat 未指定のロールは通常の workflow step と同じ fallback chain を使います。provider だけを指名した seat は下位優先度の model fallback を止めるため、明示 model が必須の provider では検証エラーになります。
-
-```yaml
-# runtime.yaml
-version: 1
-provider:
-  defaults:
-    profile: strong
-  profiles:
-    strong: { provider: codex, model: <strong-model> }
-  targets:
-    internal_agents:
-      findings-manager:     { profile: strong }
-      terminal-adjudicator: { profile: strong }
-      loop-judge:           { profile: strong }
-      escalation-reviewer:  { profile: strong }
-      intake-normalizer:    { profile: strong }
-```
-
 workflow YAML では、通常 step、parallel sub-step、`loop_monitors.judge` の `model: null` は model の明示的な省略を表します。`model` 未指定とは異なります。未指定の場合は routing、workflow、loop monitor judge のトリガー元 step、入力由来の値など、適用可能な下位優先度のソースへフォールバックしますが、`model: null` はその entry で model 解決を止め、実効 model を未定義のままにします。解決済み provider に CLI または provider 側のデフォルトを使わせたい場合に指定します。明示 model が必須の provider では、model が供給されないため検証エラーになります。
 
 ### Provider 固有のモデルに関する注意
@@ -635,10 +588,11 @@ provider:
       model: gpt-5.6-sol
       options:
         reasoning_effort: low
-      escalate: sol-high
     router:
       provider: codex
       model: gpt-5.6-luna
+      capabilities: readonly
+      permission_mode: readonly
       options:
         reasoning_effort: high
 
@@ -657,12 +611,8 @@ provider:
     internal_agents:
       selector:
         profile: router
-      intake-normalizer:
-        profile: sol-high
-      findings-manager:
-        profile: sol-high
-      terminal-adjudicator:
-        profile: sol-high
+      review-completion-judge:
+        profile: router
 
   auto_routing:
     strategy: balanced
@@ -679,36 +629,13 @@ provider:
         fallback_profile: sol-high
 ```
 
-`provider.profiles` は名前付きの provider/model/options 定義を保持します。profile のフラットな `options` はその profile の provider に適用されます（例えば `reasoning_effort` は Codex の `reasoning_effort` オプションになります）。profile は明示的な `extends` で別の profile を継承できます。global と project で同名の profile を field 単位で暗黙に混ぜることはなく、project の定義が profile 全体を置き換えます。
+`provider.profiles` は名前付きの provider/model/options 定義を保持します。profile のフラットな `options` はその profile の provider に適用されます（例えば `reasoning_effort` は Codex の `reasoning_effort` オプションになります）。任意の `capabilities` には provider-options preset 名、または適用順の preset 名リストを指定します。workflow の `capabilities` と同じ project → global → builtin の順で解決し、inline の `options` が preset より優先されます。任意の `permission_mode` は provider の正確な permission mode を設定します。profile は明示的な `extends` で別の profile を継承できます。global と project で同名の profile を field 単位で暗黙に混ぜることはなく、project の定義が profile 全体を置き換えます。
+
+TAKT が所有する structured agent は常に fresh session で起動します。native structured output 対応 provider には schema を直接渡し、非対応 provider には JSON schema instruction を渡して返却 object を parse・validate します。TAKT は internal agent 専用の permission、tool、network、sandbox、skill、MCP、bypass policy を追加しません。role を制限する場合は `capabilities` と `permission_mode` の一方または両方を明示した profile を割り当てます。両方を省略した場合は、通常の provider 設定をそのまま使用します。
 
 有効な provider section では `provider.defaults` の指定が必須で、固定の `profile` または順序付きの `ladder` のいずれか一方だけを指定します。`pool` は指定できません。`provider.targets.personas`、`provider.targets.tags`、`provider.targets.steps` のエントリは、固定の `profile`、順序付きの `ladder`、または auto routing 用の `pool` のいずれか一方を指定できます。`pool` はこれらの明示的な workflow target に限り指定できます。`internal_agents` のエントリは固定の `profile` または順序付きの `ladder` を指定できますが、`pool` は指定できません。`companions` のエントリは固定の `profile` のみ指定でき、`pool` と `ladder` は指定できません。step は `<leaf-workflow-name>/<step-name>` 形式で指定し、agent を起動しない制御ノード（`workflow_call` など）は解決対象になりません。
 
 `provider.auto_routing` が存在しても、`pool` を明示した target だけが自動ルーティング対象になります。pool を明示していない target、AI による task slug 生成などの非ワークフロー処理、その他の補助処理は `provider.defaults` を使用します。暗黙の既定 pool はなく、`fallback_profile` は明示的に選択された pool の中だけで使用されます。
-
-### `escalate` — その profile の最後の一手
-
-profile は `escalate` で別の profile を指名できます。「この profile で解決された作業が行き詰まったら、その profile へ渡す」という宣言です。弱い側の profile に1行書くだけで設定は完了し、workflow 側に provider 名やモデル名は一切現れません。
-
-```yaml
-version: 1
-provider:
-  defaults:
-    profile: reviewer-local
-  profiles:
-    reviewer-local:
-      provider: opencode
-      model: ollama-cloud/gemma4:31b
-      escalate: strong
-    strong:
-      provider: opencode
-      model: ollama-cloud/glm-5.2
-```
-
-- 参照は agent を実行する前のコンパイル時に検証します。未定義 profile の参照、自己参照、`escalate` の循環はすべて読み込み時エラーです。
-- `escalate` は `provider` / `model` / `options` と同じく `extends` を通じて継承されます。
-- 消費されるのは常に1ホップだけです。`escalate` は作業者の最後の一手であり、段階的な ladder ではありません。
-- `--provider` や step YAML、`workflow_call` の上書きで provider が決まった step は、その profile で動いていないため格上げ先を持ちません。auto routing の `pool` で割り当てられた step も同様です。
-- 現在エンジンが `escalate` を消費するのは Finding Contract の格上げ再レビューです。[workflows.ja.md](workflows.ja.md) を参照してください。
 
 ### 解決の優先順位
 
@@ -721,28 +648,12 @@ defaults
   < steps
 ```
 
-内部 agent（`selector` / `assistant` / `intake-normalizer` / `findings-manager` /
-`terminal-adjudicator` / `loop-judge` / `escalation-reviewer`）は別のラダーで解決します。
-`internal_agents` は step 解決後に汎用的に上書きされる target ではありません。
+内部 agent（`selector`、`assistant`、`loop-judge`、`review-completion-judge`）は別のラダーで解決します。`selector` は動的な作業選択、`assistant` は対話セッション、`loop-judge` は loop monitor の判定、`review-completion-judge` は opt-in した reviewer に再確認が必要かの判定を担当します。seat はすべて任意で、未指定なら通常の既定解決を使います。
 
 ```text
 defaults
   < internal_agents.<agent>
 ```
-
-`terminal-adjudicator` は persona facet「supervisor」に対応するロールの runtime 上の名前で、
-両者は意図的に別の名前です。
-
-**seat の指定はすべて任意です。** 未指定の seat は何も変えません。そのロールは従来どおりの
-解決を続けます。Finding Contract の合成ロールでは persona routing（固定キー
-`findings-manager` / `supervisor` / `loop-judge`）→ workflow → project → global →
-provider 既定の順です。`intake-normalizer` はその先にも候補が続き、レビュアー profile の
-`escalate` 先 → 通常の既定解決の順で決まります（[workflows.ja.md](workflows.ja.md) 参照）。
-
-`escalation-reviewer` だけは「そのロールが走るかどうか」を一切変えません。格上げ再レビューは
-レビュアーが解決された profile が `escalate` を宣言している場合にだけ発火し、宣言の無い
-レビュアーは seat の有無にかかわらず最終提示も本人が受け持ちます。seat は
-`escalate` 宣言によって既に発火した格上げの宛先だけを差し替えます。
 
 同じ優先度の target（例えば複数の一致する tag）が異なる provider を割り当てた場合は、暗黙に一方を選ばず fail-fast します。コマンドラインの `--provider` / `--model` は実行時 override であり、legacy と runtime のどちらのモードでも許可されます。
 
@@ -761,16 +672,9 @@ runtime と legacy の provider 設定は混在させられません。各 legac
 | `provider_routing.steps` | `provider.targets.steps` |
 | `persona_providers` | `provider.targets.personas` |
 | `takt_providers.selector` / `takt_providers.assistant` | `provider.targets.internal_agents` |
-| `finding_contract.manager.provider` / `model` | `provider.targets.internal_agents.findings-manager` |
-| `finding_contract.adjudicator.provider` / `model` | `provider.targets.internal_agents.terminal-adjudicator` |
 | `auto_routing` | `provider.auto_routing` |
 | auto routing candidates | `provider.profiles` を参照する pool candidates |
 | workflow 内の provider 指定 | `provider.targets.steps` |
-
-末尾2行は `config.yaml` の設定ではなく workflow YAML のキーで、deprecated ではなく削除済みです。
-`finding_contract` のスキーマは strict なので、`manager` / `adjudicator` に `provider` や `model`
-が残っているとロード時に未知キーとして拒否され、キー名とパスが示されます。値は対応する
-`internal_agents` seat へ移すか、削除して以降のレイヤーへ委ねてください。
 
 ### 混在エラー
 
@@ -802,7 +706,7 @@ TAKT は provider 非依存の3つのパーミッションモードを使用し�
 | `edit` | 確認付きでファイル編集を許可 | `acceptEdits` | `workspace-write` | `workspace-write` | `read`, `grep`, `find`, `ls`, `edit`, `write`, `bash` | デフォルトフラグ（`--force` なし） | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` |
 | `full` | すべてのパーミッションチェックをバイパス | `bypassPermissions` | `danger-full-access` | `danger-full-access` | 登録済み Pi tool すべて | `--force` | `--yolo` | `--trust-all-tools` |
 
-Pi の permission mode は SDK の active-tool allowlist であり、OS sandbox ではありません。また、TAKT は Pi に tool ごとの確認 prompt を追加しません。特に Pi の `edit` は `bash` を有効化し、file tool は絶対 path も受け取れます。信頼できる workflow input と extension だけで実行してください。TAKT は strict read-only isolation が必要な dynamic internal agent には Pi を使用しません。
+Pi の permission mode は SDK の active-tool allowlist であり、OS sandbox ではありません。また、TAKT は Pi に tool ごとの確認 prompt を追加しません。特に Pi の `edit` は `bash` を有効化し、file tool は絶対 path も受け取れます。信頼できる workflow input と extension だけで実行してください。internal agent の role に狭い権限が必要なら、Pi の profile に capabilities と permission mode を明示してください。
 
 ### 設定方法
 
@@ -908,8 +812,6 @@ provider と model は各レイヤーで個別に解決されます。provider �
 「有効な promotion」とは、通常の agent step の `promotion` エントリのうち、実行回数条件（`at: <N>`）または `ai()` 条件が現在の実行にマッチしたものを指します。parallel sub-step では promotion を指定できないため、CLI/環境変数の明示 override の次に sub-step YAML の provider/model が優先されます。[Step レベルのプロバイダープロモーション](./workflows.ja.md#step-レベルのプロバイダープロモーション)を参照してください。
 
 指定された `internal_agents` seat は、そのロールの合成 step の `step YAML provider/model` 位置に入ります。seat の指定はすべて任意で、未指定なら以降のレイヤーへそのまま落ちます。
-
-seat 未指定の場合、合成された Finding Contract ロールは、設定した persona 名ではなく固定の persona キーで `provider_routing.personas` を解決します。`findings-manager`（manager）、`supervisor`（conflict / terminal adjudication）、`loop-judge`（loop monitor の judge）です。格上げ再レビューに persona routing はありません。発火するのはレビュアーが解決された profile が `escalate` を宣言している場合だけで、`escalation-reviewer` seat は発火条件を動かしません。owner レビュアーの step をそのまま継承し、モデルは seat があればそこから、無ければ `escalate` 先から取ります。reviewer キーは固定文字列 `escalation-reviewer` で、Finding Contract workflow では常に予約 step 名です。
 
 ### Auto Routing
 
@@ -1246,17 +1148,17 @@ provider:
         profile: review
 ```
 
-| Provider | Companion の隔離構造化実行 | 実装エージェントの tool event |
-|---|---:|---:|
-| `claude-sdk` | 可 | ライブ |
-| `codex` | 可 | ライブ |
-| `claude`（headless） | 可 | ライブ |
-| `claude-terminal` | 可 | ターン後に再生 |
-| `mock` | 可 | scenario に依存 |
-| `opencode` | 可 | ライブ |
-| `pi` | 不可 | ライブ |
-| `cursor`、`copilot`、`kiro` | 不可 | 利用不可 |
+Companion の structured call は、他の TAKT 所有 structured agent と同じ provider-neutral な fresh-session transport を使います。native structured output 対応 provider ではそれを使い、それ以外では検証付き JSON fallback を使います。解決された profile の capabilities と permission mode をそのまま適用し、Companion 専用の追加制約は加えません。
 
-`不可` の provider を指定した workflow はロード時に拒否され、隔離を弱めた縮退実行は行いません。
+| Provider | 実装エージェントの tool event |
+|---|---:|
+| `claude-sdk` | ライブ |
+| `codex` | ライブ |
+| `claude`（headless） | ライブ |
+| `claude-terminal` | ターン後に再生 |
+| `mock` | scenario に依存 |
+| `opencode` | ライブ |
+| `pi` | ライブ |
+| `cursor`、`copilot`、`kiro` | 利用不可 |
 
 ライブの tool event がない場合も、完了レビューと同一 session の修正ループは動作します。

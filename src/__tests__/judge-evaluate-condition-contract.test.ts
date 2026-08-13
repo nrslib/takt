@@ -39,7 +39,7 @@ describe('evaluateCondition judge instruction contract', () => {
         { index: 0, text: 'needs_fix when verification shows a regression' },
         { index: 1, text: 'approved when verification passes' },
       ],
-      { cwd: '/repo' },
+      { cwd: '/repo', resolvedProvider: 'mock' },
     );
 
     const instruction = vi.mocked(runAgent).mock.calls[0]?.[1];
@@ -47,11 +47,11 @@ describe('evaluateCondition judge instruction contract', () => {
     expect(instruction).toContain('worker result with a unique regression summary');
     expect(instruction).toContain('needs_fix when verification shows a regression');
     expect(instruction).toContain('approved when verification passes');
-    expect(runAgent).toHaveBeenCalledWith(undefined, instruction, expect.objectContaining({
+    expect(runAgent).toHaveBeenCalledWith(undefined, expect.stringContaining(instruction), expect.objectContaining({
       cwd: '/repo',
-      outputSchema: expect.objectContaining({
-        required: ['matched_index', 'reason'],
-      }),
+      resolvedExecution: expect.objectContaining({ provider: 'mock' }),
+      outputSchema: expect.any(Object),
     }));
+    expect(vi.mocked(runAgent).mock.calls[0]?.[2]).not.toHaveProperty('maxTurns');
   });
 });

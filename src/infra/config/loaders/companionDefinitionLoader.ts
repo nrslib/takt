@@ -7,7 +7,7 @@ import { MAX_COMPANION_INTERVAL_MS } from '../../../core/models/companion-types.
 import { resolveNamedResourceWithSource } from './namedResourceResolver.js';
 import { getBuiltinFacetDir } from '../paths.js';
 import {
-  resolveFacetByNameWithSource,
+  resolveRefToContent,
   type FacetResolutionContext,
 } from './resource-resolver.js';
 
@@ -64,9 +64,10 @@ function resolveFacetContent(
   context: FacetResolutionContext | undefined,
 ): string {
   if (context === undefined) return loadFacet(name, candidateDirs, kind, language);
-  const resolved = resolveFacetByNameWithSource(name, kind, context);
+  const workflowDir = context.workflowDir ?? context.projectDir ?? candidateDirs[0]!;
+  const resolved = resolveRefToContent(name, undefined, workflowDir, kind, context);
   if (resolved === undefined) throw new Error(`Undefined companion ${kind} facet "${name}"`);
-  return resolved.content;
+  return resolved;
 }
 
 export function loadCompanionDefinition(
@@ -136,6 +137,7 @@ export function loadCompanionDefinition(
       input.language,
       input.facetContext,
     ),
+    instructionRef: instructionName,
     intervalMs: parsed.interval_ms ?? DEFAULT_COMPANION_INTERVAL_MS,
     sourcePath: resolved.path,
   };

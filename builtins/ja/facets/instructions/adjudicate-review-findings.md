@@ -1,6 +1,6 @@
 レビューレポートの指摘を証拠で裁定し、修正対象の正本を確定してください。
 
-{{include:instructions/review-family-authority-boundary}}
+{{include:instructions/contract-family-review-adjudication}}
 
 **重要:** 新しい網羅レビューは行わず、Report Directory 配下の最新レビューレポートが提出した指摘だけを対象にしてください。必要な範囲で現在のコード、要求、計画、実行証跡を確認してください。
 

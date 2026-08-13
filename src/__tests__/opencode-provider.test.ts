@@ -138,10 +138,6 @@ describe('OpenCodeProvider tool naming addendum', () => {
     agentRunnerMocks.loadPersonaPromptFromPathMock.mockReset();
   });
 
-  it('should declare strict internal-agent isolation unsupported', () => {
-    expect(new OpenCodeProvider().supportsStrictInternalAgentIsolation).toBe(false);
-  });
-
   it('should expose OpenCode tool naming text as provider runtime instructions', () => {
     const provider = new OpenCodeProvider() as {
       getRuntimeInstructions(allowedTools?: string[]): string | null;

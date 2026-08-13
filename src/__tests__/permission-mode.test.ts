@@ -105,26 +105,7 @@ describe('SdkOptionsBuilder.build() — mcpServers', () => {
 });
 
 describe('SdkOptionsBuilder.build() — settingSources', () => {
-  it('isolates strict read-only internal agents from tools, filesystem settings, and ambient MCP', () => {
-    const options = buildSdkOptions({
-      cwd: '/test',
-      internalAgentIsolation: 'strict-readonly',
-      allowedTools: [],
-      mcpServers: {},
-      permissionMode: 'readonly',
-    });
-
-    expect(options).toMatchObject({
-      tools: [],
-      settingSources: [],
-      strictMcpConfig: true,
-      allowedTools: [],
-      mcpServers: {},
-      permissionMode: 'default',
-    });
-  });
-
-  it('does not apply strict internal isolation to an ordinary Claude call', () => {
+  it('maps readonly permission without changing ordinary Claude settings', () => {
     const options = buildSdkOptions({ cwd: '/test', permissionMode: 'readonly' });
 
     expect(options.settingSources).toEqual(['project']);

@@ -14,9 +14,9 @@ vi.mock('../agents/decompose-task-usecase.js', () => ({
   requestMoreParts: vi.fn(),
 }));
 
-import { DefaultStructuredCaller } from '../agents/structured-caller.js';
+import { ProviderNeutralStructuredCaller } from '../agents/structured-caller.js';
 
-describe('DefaultStructuredCaller.evaluateCondition', () => {
+describe('ProviderNeutralStructuredCaller.evaluateCondition', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -26,7 +26,7 @@ describe('DefaultStructuredCaller.evaluateCondition', () => {
     // underlying evaluateCondition receives normalized positions (0, 1) and returns position 1 → original index 5
     mockEvaluateCondition.mockResolvedValueOnce(1);
 
-    const caller = new DefaultStructuredCaller();
+    const caller = new ProviderNeutralStructuredCaller();
     const result = await caller.evaluateCondition(
       'agent output',
       [
@@ -50,7 +50,7 @@ describe('DefaultStructuredCaller.evaluateCondition', () => {
   it('should return -1 when matchedPosition is negative', async () => {
     mockEvaluateCondition.mockResolvedValueOnce(-1);
 
-    const caller = new DefaultStructuredCaller();
+    const caller = new ProviderNeutralStructuredCaller();
     const result = await caller.evaluateCondition(
       'agent output',
       [
@@ -68,7 +68,7 @@ describe('DefaultStructuredCaller.evaluateCondition', () => {
     // underlying returns position 0 → original index 10
     mockEvaluateCondition.mockResolvedValueOnce(0);
 
-    const caller = new DefaultStructuredCaller();
+    const caller = new ProviderNeutralStructuredCaller();
     const result = await caller.evaluateCondition(
       'agent output',
       [{ index: 10, text: 'first' }],
@@ -82,7 +82,7 @@ describe('DefaultStructuredCaller.evaluateCondition', () => {
     // underlying returns a position that is >= conditions.length
     mockEvaluateCondition.mockResolvedValueOnce(5);
 
-    const caller = new DefaultStructuredCaller();
+    const caller = new ProviderNeutralStructuredCaller();
     const result = await caller.evaluateCondition(
       'agent output',
       [

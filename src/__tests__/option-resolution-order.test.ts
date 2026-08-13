@@ -364,6 +364,41 @@ describe('option resolution order', () => {
     );
   });
 
+  it('should preserve omitted resolved options without reloading project or persona config', async () => {
+    loadProjectConfigMock.mockImplementation(() => {
+      throw new Error('project config must not be read');
+    });
+    loadGlobalConfigMock.mockImplementation(() => {
+      throw new Error('global config must not be read');
+    });
+    resolveConfigValueMock.mockImplementation(() => {
+      throw new Error('persona config must not be read');
+    });
+    resolveProviderOptionsWithTraceMock.mockImplementation(() => {
+      throw new Error('provider options must not be resolved');
+    });
+
+    await runAgent(undefined, 'task', {
+      cwd: '/repo',
+      internalSystemPrompt: 'internal',
+      resolvedExecution: {
+        provider: 'mock',
+        model: undefined,
+        providerOptions: undefined,
+        permissionMode: undefined,
+      },
+    });
+
+    expect(loadProjectConfigMock).not.toHaveBeenCalled();
+    expect(loadGlobalConfigMock).not.toHaveBeenCalled();
+    expect(resolveConfigValueMock).not.toHaveBeenCalled();
+    expect(resolveProviderOptionsWithTraceMock).not.toHaveBeenCalled();
+    expect(providerCallMock).toHaveBeenCalledWith(
+      'task',
+      expect.objectContaining({ providerOptions: undefined, permissionMode: undefined }),
+    );
+  });
+
   it('should reject a resolved handoff mixed with unresolved resolution inputs', async () => {
     await expect(runAgent(undefined, 'task', {
       cwd: '/repo',

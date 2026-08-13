@@ -12,6 +12,7 @@ import { WorkflowCallExecutor } from '../core/workflow/engine/WorkflowCallExecut
 import { WorkflowCallRunner } from '../core/workflow/engine/WorkflowCallRunner.js';
 import { WorkflowEngine } from '../core/workflow/engine/WorkflowEngine.js';
 import { MAX_WORKFLOW_CALL_DEPTH } from '../core/workflow/workflow-call-depth.js';
+import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import type {
   RuntimeStepResolution,
   WorkflowCallCompleteLifecycle,
@@ -19,6 +20,7 @@ import type {
   WorkflowSharedRuntimeState,
   WorkflowStepFailureSummary,
 } from '../core/workflow/types.js';
+import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import { buildWorkflowCallCompleteRecord } from '../features/tasks/execute/sessionLoggerRecordFactory.js';
 import type { AutoRoutingConfig } from '../core/models/config-types.js';
@@ -205,7 +207,7 @@ function createLifecycleHarness(options: HarnessOptions = {}): LifecycleHarness 
     sharedRuntime,
     resumeStackPrefix,
     consumeWorkflowCallContinuation: vi.fn(),
-    runPaths: { slug: 'run' } as never,
+    runPaths: buildRunPaths('/project', 'run'),
     setActiveResumePoint: vi.fn(() => {
       setActiveResumePointCalls++;
       if (
@@ -227,7 +229,6 @@ function createLifecycleHarness(options: HarnessOptions = {}): LifecycleHarness 
       return childWorkflow;
     }),
     createEngine,
-    refreshFindingsState: vi.fn(),
   });
   const runtime: RuntimeStepResolution = {
     providerInfo: {
@@ -473,6 +474,7 @@ describe('WorkflowCallRunner lifecycle events', () => {
       step: 'deepest-review',
       reason: 'child rejection',
       error: 'child rejection',
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
     };
     const harness = createLifecycleHarness({
       childStatus: 'aborted',
@@ -705,7 +707,7 @@ describe('WorkflowCallExecutor routing runtime', () => {
       sharedRuntime: { startedAtMs: 0 },
       resumeStackPrefix: [],
       consumeWorkflowCallContinuation: vi.fn(),
-      runPaths: { slug: 'run' },
+      runPaths: buildRunPaths('/project', 'run'),
       resolveWorkflowCall: vi.fn(),
       createEngine: vi.fn((_config, _cwd, _task, engineOptions) => {
         createdOptions.push(engineOptions as Record<string, unknown>);
@@ -719,7 +721,6 @@ describe('WorkflowCallExecutor routing runtime', () => {
       emit: vi.fn(),
       state,
       setActiveResumePoint: vi.fn(),
-      refreshFindingsState: vi.fn(),
     } as never);
 
     const execute = async (stepName: string) => {

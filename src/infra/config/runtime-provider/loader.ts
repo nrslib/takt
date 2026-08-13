@@ -42,20 +42,37 @@ export interface ResolveRuntimeProviderInput {
   projectConfigDir: string;
 }
 
+export type RuntimeProviderProfileOrigin = 'global' | 'project';
+
+export interface ResolvedRuntimeProviderFileWithOrigins {
+  readonly runtimeFile: RuntimeProviderFile | undefined;
+  readonly profileOrigins: ReadonlyMap<string, RuntimeProviderProfileOrigin>;
+}
+
+/** Resolve the effective file together with the layer that contributed each profile. */
+export function resolveRuntimeProviderFileWithOrigins(
+  input: ResolveRuntimeProviderInput,
+): ResolvedRuntimeProviderFileWithOrigins {
+  const global = loadRuntimeProviderFileAt(join(input.globalConfigDir, RUNTIME_PROVIDER_FILENAME));
+  const project = loadRuntimeProviderFileAt(join(input.projectConfigDir, RUNTIME_PROVIDER_FILENAME));
+  const profileOrigins = new Map<string, RuntimeProviderProfileOrigin>();
+  for (const name of Object.keys(global?.provider?.profiles ?? {})) {
+    profileOrigins.set(name, 'global');
+  }
+  for (const name of Object.keys(project?.provider?.profiles ?? {})) {
+    profileOrigins.set(name, 'project');
+  }
+  return {
+    runtimeFile: !global ? project : !project ? global : mergeRuntimeProviderFiles(global, project),
+    profileOrigins,
+  };
+}
+
 /** Resolve the effective runtime.yaml from the global and project layers (project wins). */
 export function resolveRuntimeProviderFile(
   input: ResolveRuntimeProviderInput,
 ): RuntimeProviderFile | undefined {
-  const global = loadRuntimeProviderFileAt(join(input.globalConfigDir, RUNTIME_PROVIDER_FILENAME));
-  const project = loadRuntimeProviderFileAt(join(input.projectConfigDir, RUNTIME_PROVIDER_FILENAME));
-
-  if (!global) {
-    return project;
-  }
-  if (!project) {
-    return global;
-  }
-  return mergeRuntimeProviderFiles(global, project);
+  return resolveRuntimeProviderFileWithOrigins(input).runtimeFile;
 }
 
 function mergeRuntimeProviderFiles(

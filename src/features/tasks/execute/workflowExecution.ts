@@ -401,6 +401,8 @@ async function executeWorkflowInternal(
         reportFallbackProvider: options.reportFallbackProvider,
         rateLimitFallback: bootstrap.effectiveWorkflowConfig.rateLimitFallback,
         providerOptions: bootstrap.providerOptions,
+        providerOptionsProviderSource: bootstrap.providerOptionsProviderSource,
+        providerPermissionMode: bootstrap.providerPermissionMode,
         selectorProvider: bootstrap.selectorProvider,
         selectorGitCommandRunner: new GitSelectorCommandRunner(),
         companionDiffReader: new GitCompanionDiffReader(),
@@ -442,7 +444,6 @@ async function executeWorkflowInternal(
         }),
         workflowCallResolver,
         workflowBundleResourceRoot: executionBundle.resourceRoot,
-        findingAuthorityResolver: executionBinding.findingAuthorityResolver,
       });
 
       eventBridge = bindWorkflowExecutionEvents({

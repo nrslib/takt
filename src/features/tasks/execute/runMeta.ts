@@ -193,6 +193,7 @@ export class RunMetaManager {
         && this.runMeta.reason === input.reason
         && this.runMeta.failure?.step === input.failure?.step
         && this.runMeta.failure?.error === input.failure?.error
+        && this.runMeta.failure?.failureCategory === input.failure?.failureCategory
       ) {
         return;
       }

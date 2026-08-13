@@ -1,12 +1,18 @@
-import type { AgentResponse, RuleMatchMethod, Language } from '../core/models/types.js';
+import type { AgentResponse, RuleMatchMethod, Language, PermissionMode } from '../core/models/types.js';
+import type { StepProviderOptions } from '../core/models/workflow-types.js';
 import type { SemanticRuleCandidate } from '../core/models/workflow-rule-condition.js';
 import type { ProviderUsageSnapshot } from '../core/models/response.js';
 import type { ProviderType } from '../core/workflow/types.js';
-import { runAgent, type RunAgentOptions, type StreamCallback } from './runner.js';
+import type { RunAgentOptions, StreamCallback } from './runner.js';
 import { detectJudgeIndex, buildJudgePrompt } from './judge-utils.js';
 import { loadJudgmentSchema, loadEvaluationSchema } from '../infra/resources/schema-loader.js';
 import { detectCandidateIndex } from '../shared/utils/ruleIndex.js';
-import { buildMaxTurnsOption } from './provider-call-options.js';
+import {
+  executeStructuredAgent,
+  executeStructuredTextAgent,
+  requireStructuredAgentProvider,
+  StructuredAgentResponseError,
+} from './structured-caller/transport.js';
 import {
   assertStructuredOutputSchema,
   StructuredOutputValueValidationError,
@@ -21,9 +27,13 @@ export interface JudgeStatusOptions {
   provider?: ProviderType;
   resolvedProvider?: ProviderType;
   resolvedModel?: string;
+  resolvedProviderOptions?: StepProviderOptions;
+  permissionMode?: PermissionMode;
+  projectCwd?: string;
   language?: Language;
   childProcessEnv?: RunAgentOptions['childProcessEnv'];
   abortSignal?: AbortSignal;
+  failureDir?: RunAgentOptions['failureDir'];
   onStream?: StreamCallback;
   onJudgeStage?: (entry: JudgeStageLogEntry) => void;
   onStructuredPromptResolved?: (promptParts: {
@@ -48,10 +58,14 @@ export interface TagJudgeRunOptions {
   provider?: ProviderType;
   resolvedProvider?: ProviderType;
   resolvedModel?: string;
+  resolvedProviderOptions?: StepProviderOptions;
+  permissionMode?: PermissionMode;
+  projectCwd?: string;
   language?: Language;
   onStream?: StreamCallback;
   childProcessEnv?: RunAgentOptions['childProcessEnv'];
   abortSignal?: AbortSignal;
+  failureDir?: RunAgentOptions['failureDir'];
   stepName: string;
   onPromptResolved?: JudgeStatusOptions['onStructuredPromptResolved'];
 }
@@ -65,17 +79,22 @@ export async function runTagJudgeStage(
   runOptions.abortSignal?.throwIfAborted();
   let tagResponse: AgentResponse;
   try {
-    tagResponse = await runAgent('conductor', tagInstruction, {
+    tagResponse = await executeStructuredTextAgent(tagInstruction, {
+      name: 'conductor',
+      persona: 'conductor',
       cwd: runOptions.cwd,
-      provider: runOptions.provider,
-      resolvedProvider: runOptions.resolvedProvider,
-      resolvedModel: runOptions.resolvedModel,
-      ...buildMaxTurnsOption(runOptions.provider, runOptions.resolvedProvider, 3),
-      permissionMode: 'readonly',
+      projectCwd: runOptions.projectCwd,
+      resolution: {
+        provider: requireStructuredAgentProvider(runOptions.resolvedProvider ?? runOptions.provider, 'conductor'),
+        model: runOptions.resolvedModel,
+        providerOptions: runOptions.resolvedProviderOptions,
+        permissionMode: runOptions.permissionMode,
+      },
       language: runOptions.language,
       onStream: runOptions.onStream,
       childProcessEnv: runOptions.childProcessEnv,
       abortSignal: runOptions.abortSignal,
+      failureDir: runOptions.failureDir,
       onPromptResolved: runOptions.onPromptResolved,
     });
   } catch (error) {
@@ -126,8 +145,12 @@ export interface EvaluateConditionOptions {
   provider?: ProviderType;
   resolvedProvider?: ProviderType;
   resolvedModel?: string;
+  resolvedProviderOptions?: StepProviderOptions;
+  permissionMode?: PermissionMode;
+  projectCwd?: string;
   childProcessEnv?: RunAgentOptions['childProcessEnv'];
   abortSignal?: AbortSignal;
+  failureDir?: RunAgentOptions['failureDir'];
   onJudgeResponse?: (entry: {
     instruction: string;
     status: 'done' | 'error';
@@ -164,17 +187,31 @@ export async function evaluateCondition(
   const prompt = buildJudgePrompt(agentOutput, conditions);
   const evaluationSchema = loadEvaluationSchema();
   assertStructuredOutputSchema(evaluationSchema);
-  const response = await runAgent(undefined, prompt, {
-    cwd: options.cwd,
-    provider: options.provider,
-    resolvedProvider: options.resolvedProvider,
-    resolvedModel: options.resolvedModel,
-    ...buildMaxTurnsOption(options.provider, options.resolvedProvider, 1),
-    permissionMode: 'readonly',
-    outputSchema: evaluationSchema,
-    childProcessEnv: options.childProcessEnv,
-    abortSignal: options.abortSignal,
-  });
+  let response: AgentResponse;
+  try {
+    response = await executeStructuredAgent<Record<string, unknown>>(prompt, evaluationSchema, {
+      name: 'condition-evaluator',
+      cwd: options.cwd,
+      projectCwd: options.projectCwd,
+      resolution: {
+        provider: requireStructuredAgentProvider(
+          options.resolvedProvider ?? options.provider,
+          'condition-evaluator',
+        ),
+        model: options.resolvedModel,
+        providerOptions: options.resolvedProviderOptions,
+        permissionMode: options.permissionMode,
+      },
+      childProcessEnv: options.childProcessEnv,
+      abortSignal: options.abortSignal,
+      failureDir: options.failureDir,
+    });
+  } catch (error) {
+    if (!(error instanceof StructuredAgentResponseError)) {
+      throw error;
+    }
+    response = error.response;
+  }
 
   options.onJudgeResponse?.({
     instruction: prompt,
@@ -247,8 +284,12 @@ async function runAiJudgeStage(
       provider: options.provider,
       resolvedProvider: options.resolvedProvider,
       resolvedModel: options.resolvedModel,
+      resolvedProviderOptions: options.resolvedProviderOptions,
+      permissionMode: options.permissionMode,
+      projectCwd: options.projectCwd,
       childProcessEnv: options.childProcessEnv,
       abortSignal: options.abortSignal,
+      failureDir: options.failureDir,
       onJudgeResponse: stage3.capture,
     });
   } catch (error) {
@@ -287,10 +328,14 @@ export async function runJudgeFallbackStages(
       provider: options.provider,
       resolvedProvider: options.resolvedProvider,
       resolvedModel: options.resolvedModel,
+      resolvedProviderOptions: options.resolvedProviderOptions,
+      permissionMode: options.permissionMode,
+      projectCwd: options.projectCwd,
       language: options.language,
       onStream: options.onStream,
       childProcessEnv: options.childProcessEnv,
       abortSignal: options.abortSignal,
+      failureDir: options.failureDir,
       stepName: options.stepName,
       onPromptResolved: options.onStructuredPromptResolved,
     },
@@ -327,24 +372,56 @@ export async function judgeStatus(
   const judgmentSchema = loadJudgmentSchema();
   assertStructuredOutputSchema(judgmentSchema);
 
-  const agentOptions = {
-    cwd: options.cwd,
-    ...buildMaxTurnsOption(options.provider, options.resolvedProvider, 3),
-    permissionMode: 'readonly' as const,
-    language: options.language,
-    onStream: options.onStream,
-    childProcessEnv: options.childProcessEnv,
-    abortSignal: options.abortSignal,
-  };
-
-  const structuredResponse = await runAgent('conductor', structuredInstruction, {
-    ...agentOptions,
-    provider: options.provider,
-    resolvedProvider: options.resolvedProvider,
-    resolvedModel: options.resolvedModel,
-    outputSchema: judgmentSchema,
-    onPromptResolved: options.onStructuredPromptResolved,
-  });
+  let structuredResponse: AgentResponse;
+  try {
+    structuredResponse = await executeStructuredAgent<Record<string, unknown>>(
+      structuredInstruction,
+      judgmentSchema,
+      {
+        name: 'conductor',
+        persona: 'conductor',
+        cwd: options.cwd,
+        projectCwd: options.projectCwd,
+        resolution: {
+          provider: requireStructuredAgentProvider(
+            options.resolvedProvider ?? options.provider,
+            'conductor',
+          ),
+          model: options.resolvedModel,
+          providerOptions: options.resolvedProviderOptions,
+          permissionMode: options.permissionMode,
+        },
+        language: options.language,
+        onStream: options.onStream,
+        childProcessEnv: options.childProcessEnv,
+        abortSignal: options.abortSignal,
+        failureDir: options.failureDir,
+        onPromptResolved: options.onStructuredPromptResolved,
+      },
+    );
+  } catch (error) {
+    const failedResponse = error instanceof StructuredAgentResponseError
+      ? error.response
+      : undefined;
+    options.onJudgeStage?.({
+      stage: 1,
+      method: 'structured_output',
+      status: options.abortSignal?.aborted === true
+        ? 'error'
+        : failedResponse?.status === 'done' ? 'done' : 'error',
+      instruction: structuredInstruction,
+      response: failedResponse?.content ?? getErrorMessage(error),
+      providerUsage: failedResponse?.providerUsage,
+    });
+    return runJudgeFallbackStages(
+      structuredInstruction,
+      tagInstruction,
+      candidates,
+      options,
+      evaluateCondition,
+      getErrorMessage(error),
+    );
+  }
 
   options.onJudgeStage?.({
     stage: 1,

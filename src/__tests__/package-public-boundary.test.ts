@@ -116,7 +116,6 @@ describe('package public boundary', () => {
   });
 
   it.each([
-    'takt/dist/core/workflow/findings/resume-capability.js',
     'takt/dist/shared/utils/private-file-lock-guard.js',
     'takt/dist/shared/utils/private-file-lock.js',
     'takt/dist/shared/utils/private-file.js',

@@ -1,26 +1,15 @@
 import { dirname } from 'node:path';
 import type {
-  FindingContractConfig,
   WorkflowCallArgValue,
   WorkflowConfig,
 } from '../../../core/models/index.js';
-import type { FindingManagerAuthority } from '../../../core/models/finding-types.js';
 import { canonicalJson } from '../../../shared/utils/canonical-json.js';
 import { validateWorkflowCallRulesAgainstChildReturns } from './workflowCallContracts.js';
 import { getWorkflowSourcePath } from './workflowSourceMetadata.js';
 import { getWorkflowTrustInfo, type WorkflowTrustInfo } from './workflowTrustSource.js';
-import { withWorkflowConfigErrorPath as withWorkflowStepErrorPath } from '../../../core/workflow/workflow-config-error.js';
 import { findWorkflowStepLocation } from '../../../core/workflow/workflow-step-location.js';
 import { annotateWorkflowConfigFragmentError } from './workflowRawParser.js';
 import { collectWorkflowCallSteps } from './workflowParallelTraversal.js';
-import {
-  validateFindingContractSyntheticProviderModels,
-  type FindingContractSyntheticProviderValidationOptions,
-} from '../../../core/workflow/engine/WorkflowValidator.js';
-import {
-  getWorkflowCallOverrideErrorPath,
-  resolveWorkflowCallChildProviderContext,
-} from '../../../core/workflow/workflow-call-provider-context.js';
 
 interface WorkflowCallValidationLookupOptions {
   basePath?: string;
@@ -42,19 +31,11 @@ interface ValidateWorkflowCallContractsDeps {
 interface WorkflowCallContractValidationOptions {
   allowPathBasedCalls?: boolean;
   lookupCwd?: string;
-  providerValidationOptions?: FindingContractSyntheticProviderValidationOptions;
 }
 
 interface WorkflowCallContractValidationTraversal {
   active: Set<string>;
   completed: Set<string>;
-}
-
-interface FindingContractTraversalContext {
-  available: boolean;
-  effectiveContract?: FindingContractConfig;
-  effectiveManagerAuthority: FindingManagerAuthority;
-  providerValidationOptions?: FindingContractSyntheticProviderValidationOptions;
 }
 
 function getWorkflowCallInvocationIdentity(
@@ -64,36 +45,13 @@ function getWorkflowCallInvocationIdentity(
   return canonicalJson({ call, args: args ?? {} });
 }
 
-function getProviderValidationIdentity(
-  options: FindingContractSyntheticProviderValidationOptions,
-): string {
-  return canonicalJson(JSON.parse(JSON.stringify(options)) as unknown);
-}
-
 function getWorkflowCallValidationKey(
   workflow: WorkflowConfig,
   lookupCwd: string,
-  findingContractContext: FindingContractTraversalContext,
   invocationIdentity: string,
 ): string {
-  const sourcePath = getWorkflowSourcePath(workflow);
-  const workflowKey = sourcePath ?? `${lookupCwd}:${workflow.name}`;
-  return canonicalJson({
-    findingContractAvailable: findingContractContext.available,
-    ...(findingContractContext.effectiveContract === undefined
-      ? {}
-      : { effectiveContract: findingContractContext.effectiveContract }),
-    effectiveManagerAuthority: findingContractContext.effectiveManagerAuthority,
-    ...(findingContractContext.providerValidationOptions === undefined
-      ? {}
-      : {
-          providerValidationIdentity: getProviderValidationIdentity(
-            findingContractContext.providerValidationOptions,
-          ),
-        }),
-    invocation: invocationIdentity,
-    workflow: workflowKey,
-  });
+  const workflowKey = getWorkflowSourcePath(workflow) ?? `${lookupCwd}:${workflow.name}`;
+  return canonicalJson({ invocation: invocationIdentity, workflow: workflowKey });
 }
 
 function validateWorkflowCallContractsRecursive(
@@ -103,15 +61,9 @@ function validateWorkflowCallContractsRecursive(
   traversal: WorkflowCallContractValidationTraversal,
   deps: ValidateWorkflowCallContractsDeps,
   allowPathBasedCalls: boolean,
-  findingContractContext: FindingContractTraversalContext,
   invocationIdentity: string,
 ): void {
-  const validationKey = getWorkflowCallValidationKey(
-    workflow,
-    lookupCwd,
-    findingContractContext,
-    invocationIdentity,
-  );
+  const validationKey = getWorkflowCallValidationKey(workflow, lookupCwd, invocationIdentity);
   if (traversal.completed.has(validationKey)) {
     return;
   }
@@ -140,65 +92,8 @@ function validateWorkflowCallContractsRecursive(
         parentTrustInfo,
         skipWorkflowCallContractValidation: true,
       });
-
       if (!childWorkflow) {
         continue;
-      }
-
-      const parentProvidesFindingContract = findingContractContext.available
-        || workflow.findingContract !== undefined
-        || workflow.subworkflow?.requiresFindingContract === true;
-      if (childWorkflow.subworkflow?.requiresFindingContract === true && !parentProvidesFindingContract) {
-        const error = new Error(
-          `Configuration error: workflow_call step "${step.name}" calls workflow "${childWorkflow.name}", `
-          + 'which requires a finding_contract inherited from its caller, but the calling workflow does not provide one',
-        );
-        throw annotateWorkflowConfigFragmentError(
-          stepPath ? withWorkflowStepErrorPath(error, [...stepPath, 'call']) : error,
-          workflow,
-        );
-      }
-
-      const childInheritedContract = findingContractContext.effectiveContract;
-      const childEffectiveContract = childInheritedContract ?? childWorkflow.findingContract;
-      const childManagerAuthority = childInheritedContract === undefined
-        ? 'standard'
-        : step.findingContractAuthority ?? 'standard';
-      const parentProviderValidationOptions = findingContractContext.providerValidationOptions;
-      const childProviderValidationOptions = parentProviderValidationOptions === undefined
-        ? undefined
-        : {
-            ...resolveWorkflowCallChildProviderContext(
-              childWorkflow,
-              step,
-              parentProviderValidationOptions,
-            ),
-            providerRoutingTagConflictPolicy:
-              parentProviderValidationOptions.providerRoutingTagConflictPolicy,
-          };
-      if (childProviderValidationOptions !== undefined) {
-        try {
-          validateFindingContractSyntheticProviderModels(childWorkflow, {
-            ...childProviderValidationOptions,
-            ...(childInheritedContract === undefined
-              ? {}
-              : {
-                  inheritedFindingContract: {
-                    contract: childInheritedContract,
-                    managerAuthority: childManagerAuthority,
-                  },
-                }),
-          });
-        } catch (error) {
-          const overridePath = getWorkflowCallOverrideErrorPath(step, error);
-          if (overridePath !== undefined && stepPath !== undefined) {
-            throw annotateWorkflowConfigFragmentError(
-              withWorkflowStepErrorPath(error, [...stepPath, ...overridePath]),
-              workflow,
-            );
-          }
-          throw annotateWorkflowConfigFragmentError(error, childWorkflow);
-        }
       }
 
       validateWorkflowCallContractsRecursive(
@@ -208,12 +103,6 @@ function validateWorkflowCallContractsRecursive(
         traversal,
         deps,
         allowPathBasedCalls,
-        {
-          available: parentProvidesFindingContract || childWorkflow.findingContract !== undefined,
-          ...(childEffectiveContract === undefined ? {} : { effectiveContract: childEffectiveContract }),
-          effectiveManagerAuthority: childManagerAuthority,
-          providerValidationOptions: childProviderValidationOptions,
-        },
         getWorkflowCallInvocationIdentity(step.call, step.args),
       );
       try {
@@ -241,14 +130,6 @@ export function validateWorkflowCallContracts(
     { active: new Set<string>(), completed: new Set<string>() },
     deps,
     options?.allowPathBasedCalls !== false,
-    {
-      available: workflow.findingContract !== undefined,
-      ...(workflow.findingContract === undefined
-        ? {}
-        : { effectiveContract: workflow.findingContract }),
-      effectiveManagerAuthority: 'standard',
-      providerValidationOptions: options?.providerValidationOptions,
-    },
     canonicalJson({ root: true }),
   );
 }

@@ -1,7 +1,7 @@
+import { join } from 'node:path';
 import { mergeProviderOptions } from '../../../infra/config/providerOptions.js';
 import { createWorkRequirementEstimator } from '../../../agents/auto-routing-usecase.js';
 import type {
-  FindingContractConfig,
   WorkflowConfig,
   WorkflowCallStep,
   WorkflowCallInvocationRecord,
@@ -9,7 +9,6 @@ import type {
   WorkflowResumePointEntry,
   WorkflowState,
 } from '../../models/types.js';
-import type { FindingLedgerStore } from '../findings/store.js';
 import type { RunPaths } from '../run/run-paths.js';
 import { trimResumePointStackForWorkflow } from '../run/resume-point.js';
 import {
@@ -40,7 +39,6 @@ import type {
   WorkflowSharedRuntimeState,
   WorkflowStepFailureSummary,
 } from '../types.js';
-import { validateFindingContractSyntheticProviderModels } from './WorkflowValidator.js';
 import { withWorkflowConfigErrorPath } from '../workflow-config-error.js';
 import { findWorkflowStepLocation } from '../workflow-step-location.js';
 import { translateWorkflowConfigError } from '../../../shared/workflowConfigMetadata.js';
@@ -144,11 +142,6 @@ interface WorkflowCallExecutorDeps {
     occurrence: number,
     resumeStackPrefix: readonly WorkflowResumePointEntry[],
   ) => void;
-  /** 自前 or 継承済みの、この engine で有効な Finding Contract。子へ引き継ぐ。 */
-  findingContract?: FindingContractConfig;
-  findingLedgerStore?: FindingLedgerStore;
-  /** workflow_call 完了後、子が書き込んだ台帳を親の state.findings へ反映する。 */
-  refreshFindingsState: () => void;
 }
 
 export interface PreparedWorkflowCallExecution {
@@ -219,9 +212,12 @@ export class WorkflowCallExecutor {
         cwd: this.deps.getCwd(),
         provider: childAutoRouting.router.provider,
         model: childAutoRouting.router.model,
+        providerOptions: childAutoRouting.router.providerOptions,
+        permissionMode: childAutoRouting.router.permissionMode,
         language: options.language,
         childProcessEnv: options.childProcessEnv,
         abortSignal: options.abortSignal,
+        failureDir: join(this.deps.runPaths.runRootAbs, 'failures'),
       });
     if (estimator === undefined) {
       throw new Error(`workflow_call child "${childWorkflow.name}" inherited auto routing without an estimator`);
@@ -236,29 +232,6 @@ export class WorkflowCallExecutor {
     return created;
   }
 
-  /**
-   * raw finding id 用の呼び出し名前空間を組み立てる。子エンジンは
-   * reportDirName（= runId）を親からそのまま継承するため、親の parallel から
-   * 同じ子ワークフローを複数同時に呼ぶと2子の runId が一致し、findings
-   * manager-runner.ts の normalizeRawFindingId が生成する raw finding id が
-   * 完全に衝突する（実測: parentStepName / stepIteration / subStepName /
-   * rawFindingId のいずれも子ワークフロー内では同一になるため）。
-   * 呼び出し元ステップ名（parallel の子ステップ間で一意）を積み上げることで
-   * 衝突を避ける。親が既に名前空間を持つ場合（さらに深い入れ子）は連結する。
-   * トップレベルの走行では親の名前空間が undefined のため、この関数は常に
-   * 呼ばれるが、その戻り値は options.findingCallNamespace としてのみ子へ渡り、
-   * 親自身が undefined のままなら raw finding id の形は変わらない。
-   *
-   * ステップ名だけでは、同じ workflow_call ステップがループで再実行された
-   * ケースを区別できない。resume continuation では stepIterations を復元するが、
-   * 同一 run 内の新規 workflow_call は子エンジンを新規生成するため、子の最初の
-   * レビューは stepIteration=1 になる。ステップ名・parentStepName・stepIteration・
-   * subStepName が全て一致すれば、ローカルの raw finding id が同じ場合に
-   * 正規化後の id も完全に一致し、後勝ちで前回の raw finding が台帳から
-   * 消える。buildWorkflowCallNamespace() と同じ workflow_call step の
-   * occurrence をステップ名に組み合わせ、ループの各回を区別する。resume
-   * continuation では source frame の occurrence を再利用する。
-   */
   private buildWorkflowCallNamespace(record: WorkflowCallInvocationRecord): string[] {
     const baseNamespace = this.deps.getOptions().runPathNamespace ?? [];
     return [
@@ -443,8 +416,6 @@ export class WorkflowCallExecutor {
         ,
         stepIteration,
         workflowStack,
-        findingScopeIdentity,
-        findingIds,
       ] = args as Parameters<WorkflowEvents['step:start']>;
       this.deps.emit(
         'step:start',
@@ -456,8 +427,6 @@ export class WorkflowCallExecutor {
         resumeStepName,
         stepIteration,
         workflowStack,
-        findingScopeIdentity,
-        findingIds,
       );
     });
     childEngine.on('step:complete', (...args) => {
@@ -482,7 +451,6 @@ export class WorkflowCallExecutor {
       'workflow_call:complete',
       'routing:decision',
       'step:report',
-      'findings:ledger',
       'companion:start',
       'companion:pool_selected',
       'companion:finding',
@@ -490,6 +458,8 @@ export class WorkflowCallExecutor {
       'companion:complete',
       'companion:review_round',
       'companion:queue_coalesced',
+      'companion:call',
+      'companion:review_skipped',
       'step:blocked',
       'step:rate_limited',
       'step:user_input',
@@ -518,13 +488,6 @@ export class WorkflowCallExecutor {
     this.deps.state.personaSessions.clear();
     for (const [sessionKey, sessionId] of childState.personaSessions) {
       this.deps.state.personaSessions.set(sessionKey, sessionId);
-    }
-    // 子が Finding Contract の台帳（親と共有）へ書き込んでいても、iteration /
-    // session の同期だけでは親の state.findings は古いまま。親の
-    // when(findings.*) ルールが子の取り込み結果を見られるよう、ここで
-    // ParallelRunner の manager 実行後と同じ再読込を行う。
-    if (this.deps.findingLedgerStore !== undefined) {
-      this.deps.refreshFindingsState();
     }
   }
 
@@ -601,8 +564,15 @@ export class WorkflowCallExecutor {
       providerSource: request.childProviderInfo.providerSource,
       model: request.childProviderInfo.model,
       modelSource: request.childProviderInfo.modelSource,
-      providerOptions: mergeProviderOptions(
-        request.parentProviderOptions,
+      // Explicitly overwrite the inherited value, including with undefined. The
+      // permission belongs to the profile that supplied childProviderInfo.provider.
+      providerPermissionMode: request.childProviderInfo.permissionMode,
+      providerOptions: request.parentProviderOptions,
+      providerOptionsProviderSource: options.providerOptionsProviderSource === undefined
+        ? undefined
+        : request.childProviderInfo.providerSource,
+      workflowCallProviderOptions: mergeProviderOptions(
+        options.workflowCallProviderOptions,
         request.step.overrides?.providerOptions,
       ),
       autoRouting: childAutoRouting,
@@ -648,7 +618,6 @@ export class WorkflowCallExecutor {
       initialIteration: this.deps.state.iteration,
       reportDirName: this.deps.runPaths.slug,
       runPathNamespace: this.buildWorkflowCallNamespace(invocation),
-      findingCallNamespace: workflowCallSite.runPathSegment,
       workflowCallSiteIdentity: workflowCallSite.runPathSegment,
       workflowCallVars: {
         ...options.workflowCallVars,
@@ -659,29 +628,9 @@ export class WorkflowCallExecutor {
         ...resumeStackPrefix,
         workflowCallFrame,
       ],
-      // 親の Finding Contract と ledger store を子エンジンへ継承する。継承値は
-      // 子のローカル finding_contract より優先され、親子で同じ authority を使う。
-      // 継承しないと子の parallel レビューが出す raw findings が親の台帳に入らず、
-      // fix に届かないまま reviewers ↔ fix が回り続ける（実測: 56周・9時間）。
-      ...(this.deps.findingContract !== undefined && this.deps.findingLedgerStore !== undefined
-        ? {
-            inheritedFindingContract: {
-              contract: this.deps.findingContract,
-              ledgerStore: this.deps.findingLedgerStore,
-              managerAuthority: request.step.findingContractAuthority ?? 'standard',
-            },
-          }
-        : {}),
     };
-    // 子が継承する Finding Contract の manager provider/model を、子を実際に
-    // 構築する前に検証する。子ワークフローの workflow provider/model は親と
-    // 異なりうるため、WorkflowValidator の同じチェックを子の config + 継承
-    // 契約入り options に対してもう一度行わないと、不正な組み合わせが素通り
-    // したまま manager 起動時に初めて失敗する（WorkflowValidator.ts はここで
-    // 検証済みの childOptions を再利用する）。
     let childEngine: WorkflowCallChildEngine;
     try {
-      validateFindingContractSyntheticProviderModels(childWorkflow, childOptions);
       childEngine = this.deps.createEngine(childWorkflow, this.deps.getCwd(), this.deps.task, childOptions);
     } catch (error) {
       const overridePath = getWorkflowCallOverrideErrorPath(request.step, error);

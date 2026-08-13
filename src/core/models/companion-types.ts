@@ -16,6 +16,7 @@ export interface ResolvedCompanionDefinition {
   readonly knowledge?: readonly string[];
   readonly knowledgeContents?: readonly string[];
   readonly instruction: string;
+  readonly instructionRef: string;
   readonly intervalMs: number;
   readonly sourcePath?: string;
 }

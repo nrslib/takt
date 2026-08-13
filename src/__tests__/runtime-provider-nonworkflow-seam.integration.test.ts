@@ -108,9 +108,12 @@ describe('runtime.yaml non-workflow provider resolution', () => {
       version: 1,
       companion: { enabled: false },
       provider: {
+        profiles: {
+          security: { provider: 'mock', model: 'mock-security' },
+        },
         targets: { companions: { security: { profile: 'security' } } },
       },
-    } as unknown as RuntimeProviderFile);
+    });
     invalidate();
 
     expect(resolveRuntimeNonWorkflowProvider(projectCwd)).toBeUndefined();
@@ -127,7 +130,12 @@ describe('runtime.yaml non-workflow provider resolution', () => {
       provider: {
         defaults: { profile: 'default' },
         profiles: {
-          default: { provider: 'codex', model: 'gpt-default', options: { reasoning_effort: 'high' } },
+          default: {
+            provider: 'codex',
+            model: 'gpt-default',
+            options: { reasoning_effort: 'high' },
+            permission_mode: 'readonly',
+          },
         },
       },
     });
@@ -139,6 +147,7 @@ describe('runtime.yaml non-workflow provider resolution', () => {
     expect(ctx.providerType).toBe('codex');
     expect(ctx.model).toBe('gpt-default');
     expect(ctx.providerOptions).toEqual({ codex: { reasoningEffort: 'high' } });
+    expect(ctx.permissionMode).toBe('readonly');
   });
 
   it('treats an env-source provider as an override that drops the runtime model/options', () => {

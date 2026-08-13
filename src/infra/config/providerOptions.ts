@@ -15,6 +15,7 @@ import type {
   ProviderOptionsTraceOrigin,
   ProviderResolutionSource,
 } from '../../core/workflow/provider-options-trace.js';
+import { resolveWorkflowStepTarget } from '../../core/workflow/provider-target-resolution.js';
 import type { ProviderType } from '../../shared/types/provider.js';
 import { providerSupportsClaudeAllowedTools } from '../providers/provider-capabilities.js';
 
@@ -601,7 +602,11 @@ export function resolveStepProviderOptionsLayers(
   }
   layers.push({
     source: 'provider_routing.steps',
-    options: context.providerRouting?.steps?.[step.name]?.providerOptions,
+    options: resolveWorkflowStepTarget(
+      context.providerRouting?.steps,
+      step.name,
+      context.providerRouting?.workflowName,
+    )?.providerOptions,
   });
 
   return layers.filter((layer) => layer.options !== undefined);
@@ -614,6 +619,40 @@ export function mergeStepProviderOptionsLayers(
   return mergeProviderOptions(
     ...resolveStepProviderOptionsLayers(step, context).map((layer) => layer.options),
   );
+}
+
+/**
+ * Runtime profile options are identity-scoped: only the profile that supplied the winning
+ * provider contributes options. Legacy configuration keeps its historical layered merge.
+ */
+export function resolveProfileScopedProviderOptionsLayers(
+  step: WorkflowStep,
+  context: StepProviderOptionsLayerContext,
+  resolvedProviderSource: ProviderResolutionSource | undefined,
+  profileScoped: boolean,
+): ProviderOptionsLayer[] {
+  const layers = resolveStepProviderOptionsLayers(step, context);
+  if (!profileScoped) {
+    return layers;
+  }
+  const nonProfileLayers = layers.filter((layer) => (
+    layer.source === 'capabilities' || layer.source === 'workflow'
+  ));
+  if (resolvedProviderSource === 'provider_routing.tags') {
+    const winningTag = [...(step.tags ?? [])].reverse().find((tag) => (
+      context.providerRouting?.tags?.[tag]?.provider !== undefined
+    ));
+    const options = winningTag === undefined
+      ? undefined
+      : context.providerRouting?.tags?.[winningTag]?.providerOptions;
+    return options === undefined
+      ? nonProfileLayers
+      : [...nonProfileLayers, { source: 'provider_routing.tags', options }];
+  }
+  return [
+    ...nonProfileLayers,
+    ...layers.filter((layer) => layer.source === resolvedProviderSource),
+  ];
 }
 
 export function resolveEffectiveProviderOptions(

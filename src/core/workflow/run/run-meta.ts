@@ -5,6 +5,10 @@ import { getErrorMessage } from '../../../shared/utils/error.js';
 import type { WorkflowResumePoint } from '../../models/types.js';
 import { parseWorkflowResumePoint } from '../resume-point-codec.js';
 import type { WorkflowTraceDiscovery } from '../observability/traceDiscovery.js';
+import {
+  isAgentFailureCategory,
+  type AgentFailureCategory,
+} from '../../../shared/types/agent-failure.js';
 import { buildRunPaths } from './run-paths.js';
 import {
   decodePullRequestContext,
@@ -26,6 +30,7 @@ export interface RunResumeSource {
 export interface RunFailure {
   readonly step: string;
   readonly error: string;
+  readonly failureCategory?: AgentFailureCategory;
 }
 
 export interface RunMeta {
@@ -279,7 +284,7 @@ function requiredResumeMode(value: unknown): RunResumeMode {
 function parseRunFailure(value: unknown): RunFailure {
   const failure = requireRecord(value, 'failure');
   const unsupportedKey = Object.keys(failure).find(
-    (key) => key !== 'step' && key !== 'error',
+    (key) => key !== 'step' && key !== 'error' && key !== 'failureCategory',
   );
   if (unsupportedKey !== undefined) {
     throw new Error(`Run metadata failure.${unsupportedKey} is not supported`);
@@ -287,7 +292,17 @@ function parseRunFailure(value: unknown): RunFailure {
   return {
     step: requiredString(failure.step, 'failure.step'),
     error: requiredString(failure.error, 'failure.error'),
+    ...(failure.failureCategory === undefined
+      ? {}
+      : { failureCategory: requiredAgentFailureCategory(failure.failureCategory) }),
   };
+}
+
+function requiredAgentFailureCategory(value: unknown): AgentFailureCategory {
+  if (!isAgentFailureCategory(value)) {
+    throw new Error('Run metadata failure.failureCategory is invalid');
+  }
+  return value;
 }
 
 function parseRunMetaObservability(value: unknown): RunMetaObservability {

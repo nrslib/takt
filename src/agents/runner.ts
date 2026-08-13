@@ -13,7 +13,7 @@ import {
   resolveEffectiveProviderOptions,
   resolvePersonaProviderOptions,
 } from '../infra/config/providerOptions.js';
-import { getProvider, type ProviderType, type ProviderCallOptions, type ProviderAgent, type AgentSetup } from '../infra/providers/index.js';
+import { getProvider, type ProviderType, type ProviderCallOptions } from '../infra/providers/index.js';
 import type { AgentResponse, CustomAgentConfig } from '../core/models/index.js';
 import { resolveAgentProviderModel } from '../core/workflow/provider-resolution.js';
 import { mergeGlobalPermissionProfiles, resolveStepPermissionMode } from '../core/workflow/permission-profile-resolution.js';
@@ -170,7 +170,6 @@ export class AgentRunner {
       cwd: options.cwd,
       abortSignal: options.abortSignal,
       sessionId: options.sessionId,
-      internalAgentIsolation: options.internalAgentIsolation,
       allowedTools: options.allowedTools,
       mcpServers: options.mcpServers,
       ...(options.maxTurns !== undefined ? { maxTurns: options.maxTurns } : {}),
@@ -183,6 +182,7 @@ export class AgentRunner {
       bypassPermissions: options.bypassPermissions,
       outputSchema: options.outputSchema,
       language: options.language,
+      failureDir: options.failureDir,
       childProcessEnv: options.childProcessEnv,
     };
   }
@@ -234,15 +234,10 @@ export class AgentRunner {
       userInstruction: task,
     });
 
-    const agent = options.executionProfile === 'isolated-structured'
-      ? provider.setupIsolatedStructured({
-          name: agentConfig.name,
-          systemPrompt,
-        })
-      : provider.setup({
-          name: agentConfig.name,
-          systemPrompt,
-        });
+    const agent = provider.setup({
+      name: agentConfig.name,
+      systemPrompt,
+    });
 
     options.onDispatch?.(resolution.permissionMode);
     return agent.call(task, callOptions);
@@ -269,11 +264,7 @@ export class AgentRunner {
     const resolution = AgentRunner.resolveExecution(options.cwd, personaName, options);
     const provider = getProvider(resolution.provider);
     const callOptions = AgentRunner.buildCallOptions(resolution, options);
-    const useIsolatedStructured = options.executionProfile === 'isolated-structured';
-    const setupAgent = (agentSetup: AgentSetup): ProviderAgent =>
-      useIsolatedStructured
-        ? provider.setupIsolatedStructured(agentSetup)
-        : provider.setup(agentSetup);
+    const setupAgent = provider.setup.bind(provider);
 
     if (options.internalSystemPrompt !== undefined) {
       const systemPrompt = buildWrappedSystemPrompt(options.internalSystemPrompt, {

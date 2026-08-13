@@ -24,10 +24,7 @@ function requireJsonObject(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-/**
- * Parses a structured response only when the whole response is one JSON object.
- * A final fenced JSON block remains supported for prompt-based compatibility.
- */
+/** Parses a whole-response JSON object or the fenced object requested by the shared JSON fallback. */
 export function parseStructuredOutputObject(content: string): Record<string, unknown> {
   const trimmed = content.trim();
   let wholeResponse: unknown;
@@ -40,21 +37,3 @@ export function parseStructuredOutputObject(content: string): Record<string, unk
 
   return requireJsonObject(wholeResponse);
 }
-
-export function buildPromptBasedStructuredInstruction(baseInstruction: string): string {
-  return loadTemplate('parts/structured_json_step_instruction', 'en', { baseInstruction });
-}
-
-export function resolveStructuredStep(json: unknown): number {
-  if (typeof json !== 'object' || json == null || Array.isArray(json)) {
-    return -1;
-  }
-
-  const step = (json as Record<string, unknown>).step;
-  return typeof step === 'number' && Number.isInteger(step) ? step - 1 : -1;
-}
-
-export function getErrorDetail(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-import { loadTemplate } from '../../shared/prompts/index.js';
