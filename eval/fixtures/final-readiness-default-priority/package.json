@@ -1,5 +1,8 @@
 {
   "name": "final-readiness-default-priority-fixture",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
 }
