@@ -59,9 +59,7 @@ import { loadGlobalConfig } from '../infra/config/global/globalConfig.js';
 import { validateWorkflowConfig } from '../core/workflow/engine/WorkflowValidator.js';
 import { getLanguageResourcesDir } from '../infra/resources/index.js';
 import {
-  aggregateConditionsOf,
   PARALLEL_TERMINAL_ERROR_LABEL,
-  semanticLabelsOf,
 } from '../core/models/workflow-rule-condition.js';
 
 const loadWorkflowConfig = loadWorkflow;
@@ -128,11 +126,12 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
           if (step.parallel === undefined || !step.tags?.includes('review')) continue;
           const firstRule = step.rules?.[0];
           const handlesError = firstRule !== undefined
-            && aggregateConditionsOf(firstRule.condition).some((condition) => (
-              condition.targetConditions.some((target) => (
-                semanticLabelsOf(target).includes(PARALLEL_TERMINAL_ERROR_LABEL)
-              ))
-            ));
+            && firstRule.condition.kind === 'aggregate'
+            && firstRule.condition.aggregate === 'any'
+            && firstRule.condition.targetConditions.length === 1
+            && firstRule.condition.targetConditions[0]?.kind === 'semantic'
+            && firstRule.condition.targetConditions[0].label === PARALLEL_TERMINAL_ERROR_LABEL
+            && firstRule.next === step.name;
           if (!handlesError) missing.push(`${name}/${step.name}`);
         }
       }

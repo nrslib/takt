@@ -988,6 +988,10 @@ export class ParallelRunner {
       (result) => result.response.failureCategory
         === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
     );
+    const rateLimitedResult = terminalResults.find((r) => r.response.status === 'rate_limited');
+    if (parseFailureResult !== undefined || rateLimitedResult !== undefined) {
+      this.explicitErrorAttemptsByStep.delete(step.name);
+    }
     if (parseFailureResult) {
       return this.createTerminalParentResult({
         step,
@@ -1000,7 +1004,6 @@ export class ParallelRunner {
         primaryFailure: parseFailureResult,
       });
     }
-    const rateLimitedResult = terminalResults.find((r) => r.response.status === 'rate_limited');
     if (rateLimitedResult) {
       return this.createTerminalParentResult({
         step,
@@ -1566,7 +1569,10 @@ export class ParallelRunner {
 
   private buildSubStepErrorDiagnostic(result: ParallelSubStepResult): string {
     const failureCategory = result.response.failureCategory ?? 'none';
-    const detail = sanitizeSensitiveText(result.response.error ?? result.response.content);
+    const detail = truncateUtf8PreservingMarker(
+      sanitizeSensitiveText(result.response.error ?? result.response.content),
+      MAX_AGENT_FAILURE_MESSAGE_BYTES,
+    );
     return [
       '[ERROR]',
       `status: ${result.response.status}`,

@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { ParallelRunner, type ParallelRunnerDeps } from '../core/workflow/engine/ParallelRunner.js';
+import {
+  MAX_EXPLICIT_PARALLEL_ERROR_RETRIES,
+  ParallelRunner,
+  type ParallelRunnerDeps,
+} from '../core/workflow/engine/ParallelRunner.js';
 import type { AgentResponse, AgentWorkflowStep, WorkflowState, WorkflowStep } from '../core/models/index.js';
 import { makeRule, makeStep } from './test-helpers.js';
 import {
@@ -323,6 +327,113 @@ describe('ParallelRunner terminal sub-step statuses', () => {
       kind: 'step_error',
       failureCategory: 'part_timeout',
     });
+  });
+
+  it.each(['provider_stream_parse_error', 'rate_limited'] as const)(
+    '%s の早期終端後は明示的 error 再試行を新しい1回目から数える',
+    async (terminalKind) => {
+      const { runner } = makeRunner();
+      const step = makeErrorAwareParallelStep();
+      vi.mocked(mockRuleEvaluation).mockImplementation((evaluatedStep) => {
+        if (evaluatedStep.name === 'reviewers') return { index: 0, method: 'phase3_tag' };
+        if (evaluatedStep.name === 'security-review') return { index: 0, method: 'phase3_tag' };
+        return undefined;
+      });
+      const explicitError = makeAgentResponse({
+        persona: 'ai-antipattern-review-2nd',
+        status: 'error',
+        content: '',
+        error: 'Part timeout after 100ms',
+        failureCategory: 'part_timeout',
+      });
+      const approved = makeAgentResponse({
+        persona: 'security-review',
+        content: '[SECURITY-REVIEW:1] approved',
+      });
+      const runExplicitError = async () => {
+        queueAgentResponse(explicitError);
+        queueAgentResponse(approved);
+        queueAgentResponse(explicitError);
+        return runner.runParallelStep(step, makeState(), 'test task', 5, vi.fn());
+      };
+
+      expect((await runExplicitError()).response.status).toBe('done');
+
+      if (terminalKind === 'provider_stream_parse_error') {
+        queueAgentRejection(createProviderStreamParseError('invalid provider stream'));
+      } else {
+        queueAgentResponse(makeAgentResponse({
+          persona: 'ai-antipattern-review-2nd',
+          status: 'rate_limited',
+          content: '',
+          error: 'Rate limit exceeded.',
+          errorKind: 'rate_limit',
+        }));
+      }
+      queueAgentResponse(approved);
+
+      const terminalResult = await runner.runParallelStep(
+        step,
+        makeState(),
+        'test task',
+        5,
+        vi.fn(),
+      );
+      expect(terminalResult.response.status).toBe(
+        terminalKind === 'provider_stream_parse_error' ? 'error' : 'rate_limited',
+      );
+
+      for (let attempt = 0; attempt < MAX_EXPLICIT_PARALLEL_ERROR_RETRIES; attempt++) {
+        expect((await runExplicitError()).response.status).toBe('done');
+      }
+
+      const exceeded = await runExplicitError();
+      expect(exceeded.response.status).toBe('error');
+      expect(exceeded.workflowCallFailure?.reason).toContain(
+        `explicit error retry limit (${MAX_EXPLICIT_PARALLEL_ERROR_RETRIES})`,
+      );
+    },
+  );
+
+  it('明示的 error 集約へ保存する詳細を機密除去後の UTF-8 byte 上限に収める', async () => {
+    const { runner } = makeRunner();
+    const step = makeErrorAwareParallelStep();
+    const state = makeState();
+    vi.mocked(mockRuleEvaluation).mockImplementation((evaluatedStep) => {
+      if (evaluatedStep.name === 'reviewers') return { index: 0, method: 'phase3_tag' };
+      if (evaluatedStep.name === 'security-review') return { index: 0, method: 'phase3_tag' };
+      return undefined;
+    });
+    const oversizedError = `api_key=top-secret ${'界'.repeat(MAX_AGENT_FAILURE_MESSAGE_BYTES)}`;
+    const errorResponse = makeAgentResponse({
+      persona: 'ai-antipattern-review-2nd',
+      status: 'error',
+      content: '',
+      error: oversizedError,
+      failureCategory: 'provider_error',
+    });
+    queueAgentResponse(errorResponse);
+    queueAgentResponse(makeAgentResponse({
+      persona: 'security-review',
+      content: '[SECURITY-REVIEW:1] approved',
+    }));
+    queueAgentResponse(errorResponse);
+
+    const result = await runner.runParallelStep(step, state, 'test task', 5, vi.fn());
+    const detail = result.response.content
+      .split('detail: ')[1]
+      ?.split('\n\n---\n\n')[0];
+
+    expect(result.response.status).toBe('done');
+    expect(detail).toBeDefined();
+    expect(Buffer.byteLength(detail ?? '', 'utf8')).toBeLessThanOrEqual(
+      MAX_AGENT_FAILURE_MESSAGE_BYTES,
+    );
+    expect(detail).toContain('[TRUNCATED:');
+    expect(detail).toContain('api_key=[REDACTED]');
+    expect(detail).not.toContain('top-secret');
+    expect(state.stepOutputs.get('reviewers')).toBe(result.response);
+    expect(state.lastOutput).toBe(result.response);
   });
 
   it('passes engine childProcessEnv to parallel sub-step quality gates', async () => {
