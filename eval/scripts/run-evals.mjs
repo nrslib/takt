@@ -8,7 +8,8 @@
  *         rescan, rescan-coding,
  *         frontend-coder,
  *         cqrs-coder, fix-closure, fix-plan-fresh-findings,
- *         fix-plan-boundary-preflight, review-family-closure,
+ *         fix-plan-boundary-preflight, fix-plan-cause-check,
+ *         review-family-closure,
  *         initial-review-contract-discovery, testing-review-observable-evidence,
  *         follow-up-review-repair-regression,
  *         follow-up-testing-review-repair-regression,
@@ -20,8 +21,7 @@
  *         review-adjudication, final-readiness-supervision,
  *         final-readiness-preservation,
  *         task-instruction-gherkin
- *         (default: all except rescan suites,
- *         which need opencode auth)
+ *         (default: all except suites that require optional CLI authentication)
  * Example: npm run eval:prompts -- arch --repeat 3
  */
 import { spawnSync } from 'node:child_process';
@@ -44,6 +44,7 @@ const SUITES = {
   'fix-loop-convergence': 'promptfooconfig.fix-loop-convergence.yaml',
   'fix-plan-fresh-findings': 'promptfooconfig.fix-plan-fresh-findings.yaml',
   'fix-plan-boundary-preflight': 'promptfooconfig.fix-plan-boundary-preflight.yaml',
+  'fix-plan-cause-check': 'promptfooconfig.fix-plan-cause-check.yaml',
   'review-family-closure': 'promptfooconfig.review-family-closure.yaml',
   'initial-review-contract-discovery': 'promptfooconfig.initial-review-contract-discovery.yaml',
   'testing-review-observable-evidence': 'promptfooconfig.testing-review-observable-evidence.yaml',
@@ -91,13 +92,14 @@ for (const name of names) {
 // 弱いモデルの行は常に部分失敗するため、デフォルトのゲート実行からは除外する。
 // fix-self-scan は claude ヘッドレス CLI（要 claude ログイン）で走るため、
 // codex 前提のデフォルト実行からは除外し、明示的に呼び出す。
-// fix-loop-convergence も claude（opus）と codex（gpt-5.6-luna）の両ログインが
-// 必要な二重測定スイートのため、明示的に呼び出す。
+// fix-loop-convergence と fix-plan-cause-check も claude（opus）と
+// codex（gpt-5.6-luna）の両ログインが必要な二重測定スイートのため、明示的に呼び出す。
 const DEFAULT_EXCLUDED = new Set([
   'rescan',
   'rescan-coding',
   'fix-self-scan',
   'fix-loop-convergence',
+  'fix-plan-cause-check',
   'write-tests-default-priority',
   'write-tests-default-priority-codex',
 ]);

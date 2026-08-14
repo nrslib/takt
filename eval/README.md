@@ -48,6 +48,11 @@ logins, is excluded from the default suite run, and asserts on a fixed
 machine-readable `JUDGEMENT:` line — invoke it explicitly
 (`npm run eval:prompts:fix-loop-convergence`).
 
+The `fix-plan-cause-check` suite uses the same two providers and one-at-a-time
+execution. It checks that a planner does not treat failure during parallel
+execution as proof that serial execution is the fix. Invoke it explicitly with
+`npm run eval:prompts:fix-plan-cause-check`.
+
 ## Suites
 
 | Suite | Workflow / step | Fixture | Measures |
@@ -64,6 +69,7 @@ machine-readable `JUDGEMENT:` line — invoke it explicitly
 | `fix-closure` | review-remediation / fix-retry | fix-closure (work copy) | whether verifier-return remediation closes every falsifiable obligation across multiple fix units and hierarchical projections instead of patching only the latest verifier example or relying on broad test success |
 | `fix-self-scan` | peer-review / fix | fix-self-scan (work copy) | whether the coder's post-edit self-scan removes change-induced dead code, keeps the declared layer direction, and consolidates duplicated override semantics instead of shipping a plan-complete but messy fix |
 | `fix-loop-convergence` | development-remediation / fix-retry, fix-verifier, fix, loop-monitor | inline scenario fixtures (`cases/fix-loop-convergence/`) | whether the convergence rules (invariant-recurrence trigger, ledger carry-forward, trigger monotonicity, established-invariants scan, monitor escape) steer each role's decision as intended, measured on both Claude Opus and Codex Luna Max |
+| `fix-plan-cause-check` | peer-review / fix-plan | fix-plan-cause-check | whether fix-plan distinguishes observed failures from possible causes and declines to serialize E2E shards until the cause is confirmed, measured on both Claude Opus and Codex Luna Max |
 | `fix-plan-fresh-findings` | peer-review / fix-plan | fix-plan-fresh-findings | whether fix-plan uses the canonical actionable family, closes all same-invariant consumers, and does not revive non-actionable findings |
 | `fix-plan-boundary-preflight` | peer-review / fix-plan | fix-plan-boundary-preflight | whether fix-plan rejects a locally valid method that violates its representation and persistence boundary |
 | `review-family-closure` | peer-review-suite-base / coding-review | review-family-closure | whether one review reports every path affected by the same contract defect instead of stopping at a representative example |
