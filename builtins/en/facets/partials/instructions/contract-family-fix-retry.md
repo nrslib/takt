@@ -2,7 +2,7 @@
 
 {{include:instructions/contract-family-core}}
 
-Reconstruct the complete graph of every accepted family that the fix verifier classified as `incomplete`. When the fix verifier recorded a failed search or proof method, invalidate it, reopen every affected path closed by the same assumption, and rescan and repair aliases, obsolete paths, unmigrated consumers, and one-sided updates.
+Reconstruct the complete graph of every accepted family that the fix verifier classified as `incomplete`. Reopen only paths whose family ID, invariant name, and responsible source match that `incomplete` row and that remain inside the bounded graph recorded in fix-plan.md; add a previously unvisited consumer only when it has the same three values and is required by the recorded acceptance criteria, and do not add an adjacent contract. When the fix verifier recorded a failed search or proof method, invalidate it, reopen every affected path closed by the same assumption, and rescan and repair aliases, obsolete paths, unmigrated consumers, and one-sided updates.
 
 The recurrence record in fix-verification.md authorizes fix-retry to apply the plan's structural enforcement without recomputing verification numbers, cumulative count, or whether recurrence on a different path is confirmed. When the record says `confirmed`, or says `cannot determine` because an artifact is deficient, apply conservative enforcement-point-oriented remediation rather than a path-local-only repair.
 

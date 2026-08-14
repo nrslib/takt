@@ -26,7 +26,7 @@
     "eval:prompts": "npm run eval:prompts:prepare && node eval/scripts/run-evals.mjs",
     "eval:prompts:fix-closure": "node eval/scripts/prepare.mjs fix-closure && node eval/scripts/run-evals.mjs fix-closure",
     "eval:prompts:fix-self-scan": "node eval/scripts/prepare.mjs fix-self-scan && node eval/scripts/run-evals.mjs fix-self-scan",
-    "eval:prompts:fix-loop-convergence": "node eval/scripts/run-evals.mjs fix-loop-convergence",
+    "eval:prompts:fix-loop-convergence": "node --test eval/asserts/fix-loop-convergence.test.mjs && node eval/scripts/run-evals.mjs fix-loop-convergence",
     "eval:prompts:fix-plan-fresh-findings": "node eval/scripts/prepare.mjs fix-plan-fresh-findings && node eval/scripts/run-evals.mjs fix-plan-fresh-findings",
     "eval:prompts:fix-plan-boundary-preflight": "node eval/scripts/prepare.mjs fix-plan-boundary-preflight && node eval/scripts/run-evals.mjs fix-plan-boundary-preflight",
     "eval:prompts:fix-plan-cause-check": "node --test eval/providers/cli-review.test.mjs && node eval/scripts/prepare.mjs fix-plan-cause-check && node eval/scripts/run-evals.mjs fix-plan-cause-check",

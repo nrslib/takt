@@ -31,9 +31,11 @@ reviews:
       - "renovate[bot]"
 
   path_filters:
-    # eval/fixtures はレビュアーモデルの検出力を測るための意図的に不完全な試験体。
+    # eval/fixtures と eval/cases はレビュアーモデルの検出力を測るための
+    # 意図的に不完全な試験体（サンプルプロジェクトとインライン入力）。
     # 修正提案の対象にしない（直すと測定器が壊れる）。
     - "!eval/fixtures/**"
+    - "!eval/cases/**"
     - "!dist/**"
     - "!node_modules/**"
     - "!package-lock.json"

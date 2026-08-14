@@ -51,15 +51,16 @@ tests:
     assert:
       - type: regex
         value: 'JUDGEMENT: recurrence_confirmed=判定できない; approach=(強制点|状態統合|計画見直し)'
+      - type: icontains
+        value: '引き継ぎ元の欠落'
   - description: E06 verifier が再発を全台帳行つきで記録する
     vars: { role: verifier, scenario: E06 }
     assert:
       - type: regex
-        value: 'JUDGEMENT: result=(incomplete|plan_invalid); recurrence=(再発|同一・再発|別)'
-      - type: regex
-        value: 'recurrence_confirmed=確認済み; cumulative=2'
-      - type: icontains
-        value: 'INV-BUDGET-50'
+        value: 'JUDGEMENT: result=(incomplete|plan_invalid); recurrence=(再発|同一・再発|別); recurrence_confirmed=確認済み; cumulative=2\s*$'
+      - type: javascript
+        metric: invariant-record-rows
+        value: file://asserts/fix-loop-convergence.mjs
   - description: E07a 同一不変条件の反復かつ計画に強制点なしなら再計画
     vars: { role: monitor, scenario: E07a }
     assert:
@@ -81,14 +82,17 @@ tests:
     vars: { role: verifier, scenario: E09 }
     assert:
       - type: regex
-        value: 'JUDGEMENT: result=incomplete; recurrence=判定できない（初回）; recurrence_confirmed=未確認; cumulative=1'
+        value: 'JUDGEMENT: result=incomplete; recurrence=判定できない（初回）; recurrence_confirmed=未確認; cumulative=1\s*$'
   - description: E10 一度確認済みとなった別経路での再発は同一経路の再失敗でも確認済みのまま維持される
     vars: { role: verifier, scenario: E10 }
     assert:
       - type: regex
-        value: 'JUDGEMENT: result=incomplete; recurrence=非再発; recurrence_confirmed=確認済み; cumulative=3'
+        value: 'JUDGEMENT: result=incomplete; recurrence=非再発; recurrence_confirmed=確認済み; cumulative=3\s*$'
   - description: E12 fix-plan が裁定の引き継ぎ表から台帳を継承し非 actionable を修正対象にしない
     vars: { role: fix-plan, scenario: E12 }
     assert:
       - type: regex
-        value: 'JUDGEMENT: bw2_inherited=継承; bw2_recurrence_confirmed=確認済み; bw2_cumulative=3; nonactionable_in_work=含まない'
+        value: 'JUDGEMENT: bw2_inherited=継承; bw2_recurrence_confirmed=確認済み; bw2_cumulative=3; nonactionable_in_work=含まない\s*$'
+      - type: javascript
+        metric: carry-forward-and-work-boundary
+        value: file://asserts/fix-loop-convergence.mjs

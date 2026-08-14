@@ -13,7 +13,9 @@ Carry-forward source: {Copy the value recorded in the current review-resolution.
 
 | Fix Unit | Family ID | Invariant Name | Responsible Source | Current Verification Number | Previous Verification Number | Previous Path | Current Path | Same-Invariant / Recurrence Judgment | Cumulative `incomplete` Count | Recurrence on a Different Path Confirmed? | Enforcement-Point Candidate | Record Integrity |
 |----------|-----------|----------------|---------------------------|-----------------------------|------------------------------|---------------|--------------|--------------------------------------|-------------------------------|-----------------------|-----------------------------|------------------|
-| {Copy every row from the Invariant Register Carry-forward in the current review-resolution.md unchanged} | {Unchanged / Not applicable} | {Unchanged / Not applicable} | {Unchanged / Not applicable} | {Unchanged / Not applicable} | {Unchanged / Not applicable} | {Unchanged / Not applicable} | {Unchanged / Not applicable} | {Unchanged / Not applicable} | {Unchanged / Not applicable} | {Unchanged / Not applicable} | {Unchanged / Not applicable} | {Unchanged / reason for Carry-forward source missing} |
+| {Copy one invariant row from the Invariant Register Carry-forward in the current review-resolution.md unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} |
+
+When the source statement is No prior remediation or Carry-forward source missing, copy it and its reason on the `Carry-forward source` line and do not create an invariant row for it.
 
 ### Mapping When a Name or Responsible Source Changed
 - {None, or old family ID, invariant name, and responsible source (the single responsibility and source that defines the invariant and guarantees it holds) -> the three new values and the reason, copied unchanged from the current review-resolution.md; do not treat only moving or splitting files as a change}

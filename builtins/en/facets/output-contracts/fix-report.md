@@ -36,9 +36,9 @@ Apply the initial values of no verification number, cumulative `incomplete` coun
 | {When applicable} | {Obligation ID} | {Observed gap} | {Unscanned path, weak observation, false assumption, incomplete migration, unexecuted counterexample, or overstated report} | {Added or corrected evidence} | {Obligation IDs, including obligations in other fix units} |
 
 ## Established Invariant Diff Scan
-| Invariant Name | Status | Evidence | Reason and Follow-up |
-|---------------------|--------|----------|----------------------|
-| {Every invariant name in the recorded bounded list, exactly once} | {preserved / violated / unverified} | {Result against the responsible source that defines the invariant and guarantees it holds and against the recorded bounded graph, with inspected path coverage from the counterexample set or exhaustive scan} | {None, or mandatory reason and follow-up for violated / unverified} |
+| Family ID | Invariant Name | Responsible Source | Status | Evidence | Reason and Follow-up |
+|-----------|----------------|--------------------|--------|----------|----------------------|
+| {Every distinct family ID, invariant name, and responsible source from the recorded bounded list, exactly once} | {Invariant name} | {The single responsibility and source that defines the invariant and guarantees it holds} | {preserved / violated / unverified} | {Result against the responsible source and recorded bounded graph, with inspected path coverage from the counterexample set or exhaustive scan} | {None, or mandatory reason and follow-up for violated / unverified} |
 
 ## Quality Gates
 | Type | Result | Evidence |

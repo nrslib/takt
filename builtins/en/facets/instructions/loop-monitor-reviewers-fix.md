@@ -6,7 +6,7 @@ Review the latest review and fix reports in the Report Directory and determine w
 {{include:instructions/invariant-recurrence}}
 
 **First establish the observation point:**
-- Use report chronology to determine whether a fix verifier or review ran after the latest fix. If one did, rely on that latest report and compare its `incomplete` reasons, unmet acceptance criteria, and evidence changed by each retry. Repeated fix-verifier results with the same reason and evidence indicate a stall.
+- Use report chronology to determine whether a fix verifier or review ran after the latest fix. If the latest report is fix-verification.md, compare its `incomplete` reasons, unmet verification obligations, and evidence changed by each retry; repeated results with the same reason and evidence indicate a stall. If the latest report is review-resolution.md or another review report, compare finding IDs, dispositions, acceptance criteria, and current evidence instead.
 - If a fix just completed and neither a verifier nor a post-fix review exists yet, an issue reported as addressed after its latest review is awaiting post-fix verification rather than repeating or stalled. Include this state under the healthy / progress option.
 - When no fix reports addressing the issue, do not infer that the loop is healthy merely because no later verification report exists.
 

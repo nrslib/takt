@@ -35,6 +35,10 @@ const ROLES = {
     '--- INSTRUCTION（全文） ---',
     expandFacet('instructions/fix-plan-from-review-resolution.md'),
     '--- INSTRUCTION ここまで ---',
+    '出力は次の output contract に従うこと。',
+    '--- OUTPUT CONTRACT（全文） ---',
+    expandFacet('output-contracts/fix-plan.md'),
+    '--- OUTPUT CONTRACT ここまで ---',
     DRY_RUN_NOTE,
   ].join('\n\n'),
   fix: () => [
