@@ -958,6 +958,7 @@ export async function callPi(
     return await runWithPiSessionLock(record, options.abortSignal, async () => {
       const session = record.session;
       if (isAbortRequested(options.abortSignal)) {
+        await retireSessionRecord(record);
         throw new Error('Pi session aborted');
       }
       if (record.extensionErrors.length > 0) {
@@ -973,8 +974,26 @@ export async function callPi(
       };
       const initialMessageCount = session.messages.length;
       const unsubscribe = session.subscribe((event) => handlePiEvent(event, options, state));
+      let rejectPromptAbort: ((error: unknown) => void) | undefined;
+      let abortCleanup: Promise<void> | undefined;
+      let abortStarted = false;
+      const promptAbort = new Promise<never>((_resolve, reject) => {
+        rejectPromptAbort = reject;
+      });
+      promptAbort.catch(() => undefined);
       const onAbort = (): void => {
-        void session.abort().catch(() => undefined);
+        if (abortStarted) {
+          return;
+        }
+        abortStarted = true;
+        // Retire before releasing the session lock so a following call cannot
+        // acquire this session while the SDK is still stopping it.
+        void retireSessionRecord(record);
+        abortCleanup = Promise.resolve()
+          .then(() => session.abort())
+          .then(() => undefined)
+          .catch(() => undefined);
+        rejectPromptAbort?.(new Error('Pi session aborted'));
       };
 
       options.onStream?.({
@@ -999,10 +1018,17 @@ export async function callPi(
         const imagePrompt = options.imageAttachments && options.imageAttachments.length > 0
           ? `${prompt}\n\n${options.imageAttachments.map((attachment) => attachment.placeholder).join('\n')}`
           : prompt;
-        await session.prompt(imagePrompt, images.length > 0 ? { images } : undefined);
+        const promptPromise = session.prompt(
+          imagePrompt,
+          images.length > 0 ? { images } : undefined,
+        );
+        await Promise.race([promptPromise, promptAbort]);
       } finally {
         options.abortSignal?.removeEventListener('abort', onAbort);
         unsubscribe();
+        if (abortCleanup !== undefined) {
+          await abortCleanup;
+        }
       }
 
       if (isAbortRequested(options.abortSignal) || state.assistantAborted) {

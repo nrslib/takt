@@ -9,6 +9,7 @@ import type {
   WorkflowState,
   WorkflowStep,
 } from '../../models/types.js';
+import { isNormalAgentWorkflowStep } from '../../models/types.js';
 import { ABORT_STEP, COMPLETE_STEP, ERROR_MESSAGES } from '../constants.js';
 import type {
   RuntimeStepResolution,
@@ -42,6 +43,10 @@ import {
   isAgentFailureError,
   isProviderStreamParseError,
 } from '../../../shared/types/agent-failure.js';
+import type {
+  WorkflowStepAbortSignalContext,
+  WorkflowStepDeadline,
+} from './step-deadline.js';
 
 const log = createLogger('workflow-run-loop');
 
@@ -65,6 +70,14 @@ interface WorkflowRunLoopDeps {
   getReportDir: () => string;
   abortRequested: () => boolean;
   getStep: (name: string) => WorkflowStep;
+  beginStepDeadline?: (
+    step: WorkflowStep,
+    runtime: RuntimeStepResolution | undefined,
+    stepIteration: number,
+  ) => WorkflowStepDeadline;
+  disposeStepDeadline?: (step: WorkflowStep, stepIteration: number) => void;
+  disposeAllStepDeadlines?: () => void;
+  stepAbortSignalContext?: WorkflowStepAbortSignalContext;
   applyRuntimeEnvironment: (stage: 'step') => void;
   loopDetectorCheck: (stepName: string) => { shouldWarn?: boolean; shouldAbort?: boolean; count: number; isLoop: boolean };
   cycleDetectorRecordAndCheck: (stepName: string, nextStep: string) => { triggered: boolean; monitor?: LoopMonitorConfig; cycleCount: number };
@@ -122,6 +135,21 @@ interface WorkflowRunLoopDeps {
   addUserInput: (input: string) => void;
   emit: (event: string, ...args: unknown[]) => void;
   updateMaxSteps: (maxSteps: number) => void;
+}
+
+async function runWithStepDeadline<T>(
+  deps: WorkflowRunLoopDeps,
+  deadline: WorkflowStepDeadline | undefined,
+  operation: () => Promise<T>,
+): Promise<T> {
+  if (deadline === undefined || deps.stepAbortSignalContext === undefined) {
+    return operation();
+  }
+  return deps.stepAbortSignalContext.runWith(deadline.signal, operation);
+}
+
+function resolveStepAbortSignal(deps: WorkflowRunLoopDeps): AbortSignal | undefined {
+  return deps.stepAbortSignalContext?.getAbortSignal() ?? deps.options.abortSignal;
 }
 
 async function resolveStepPromotionRuntime(
@@ -191,7 +219,7 @@ async function resolveStepAutoRoutingRuntime(
     estimator: deps.options.autoRoutingEstimator,
     runtime: deps.options.routingRuntime,
     logger: log,
-    abortSignal: deps.options.abortSignal,
+    abortSignal: resolveStepAbortSignal(deps),
   });
   if (!autoRuntime) {
     return runtime;
@@ -720,6 +748,7 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
   try {
     return await runWorkflowToCompletionCore(deps);
   } finally {
+    deps.disposeAllStepDeadlines?.();
     deps.cancelPendingStepActivation();
   }
 }
@@ -791,6 +820,7 @@ async function runWorkflowToCompletionCore(deps: WorkflowRunLoopDeps): Promise<W
       abort = abortWorkflowRuntimeError(deps, error);
       break;
     }
+    let stepDeadline: WorkflowStepDeadline | undefined;
     let stepRuntime: RuntimeStepResolution | undefined;
     let preparedExecution: PreparedNormalStepExecution | undefined;
     let executionStep: WorkflowStep;
@@ -799,28 +829,59 @@ async function runWorkflowToCompletionCore(deps: WorkflowRunLoopDeps): Promise<W
     let providerInfo: StepProviderInfo;
     let stepEventWorkflowStack: StepSpanParams['workflowStack'];
     try {
-      const baseStepRuntime = deps.resolveRuntimeForStep(step);
-      const promotedRuntime = await resolveStepPromotionRuntime(
-        deps,
-        step,
-        isDelegated ? undefined : stepIteration,
-        baseStepRuntime,
-      );
-      const fallbackRuntime = withFallbackRuntime(deps.state, step, promotedRuntime);
-      stepRuntime = await resolveStepAutoRoutingRuntime(deps, step, fallbackRuntime, step.instruction);
-      preparedExecution = await deps.prepareNormalStepExecution(step, stepIteration, stepRuntime);
-      executionStep = preparedExecution?.executableStep ?? step;
-      prebuiltInstruction = preparedExecution === undefined && !isDelegated
-        ? deps.buildInstruction(step, stepIteration, stepRuntime?.fallback)
+      stepDeadline = isNormalAgentWorkflowStep(step)
+        ? deps.beginStepDeadline?.(
+            step,
+            withFallbackRuntime(deps.state, step, undefined),
+            stepIteration,
+          )
         : undefined;
-      stepInstruction = preparedExecution?.phase1Instruction
-        ?? (prebuiltInstruction
-        ? deps.buildPhase1Instruction(step, prebuiltInstruction, stepRuntime)
-        : '');
-      providerInfo = deps.resolveStepProviderModel(executionStep, stepRuntime);
-      stepEventWorkflowStack = requireWorkflowResumeStackSnapshot(
-        deps.getCurrentWorkflowStack(),
-      );
+      const prepared = await runWithStepDeadline(deps, stepDeadline, async () => {
+        const baseStepRuntime = deps.resolveRuntimeForStep(step);
+        const promotedRuntime = await resolveStepPromotionRuntime(
+          deps,
+          step,
+          isDelegated ? undefined : stepIteration,
+          baseStepRuntime,
+        );
+        const fallbackRuntime = withFallbackRuntime(deps.state, step, promotedRuntime);
+        const resolvedRuntime = await resolveStepAutoRoutingRuntime(deps, step, fallbackRuntime, step.instruction);
+        const resolvedPreparedExecution = await deps.prepareNormalStepExecution(
+          step,
+          stepIteration,
+          resolvedRuntime,
+        );
+        const resolvedExecutionStep = resolvedPreparedExecution?.executableStep ?? step;
+        const resolvedPrebuiltInstruction = resolvedPreparedExecution === undefined && !isDelegated
+          ? deps.buildInstruction(step, stepIteration, resolvedRuntime?.fallback)
+          : undefined;
+        const resolvedStepInstruction = resolvedPreparedExecution?.phase1Instruction
+          ?? (resolvedPrebuiltInstruction
+          ? deps.buildPhase1Instruction(step, resolvedPrebuiltInstruction, resolvedRuntime)
+          : '');
+        const resolvedProviderInfo = deps.resolveStepProviderModel(resolvedExecutionStep, resolvedRuntime);
+        const resolvedWorkflowStack = requireWorkflowResumeStackSnapshot(
+          deps.getCurrentWorkflowStack(),
+        );
+        return {
+          stepRuntime: resolvedRuntime,
+          preparedExecution: resolvedPreparedExecution,
+          executionStep: resolvedExecutionStep,
+          prebuiltInstruction: resolvedPrebuiltInstruction,
+          stepInstruction: resolvedStepInstruction,
+          providerInfo: resolvedProviderInfo,
+          stepEventWorkflowStack: resolvedWorkflowStack,
+        };
+      });
+      ({
+        stepRuntime,
+        preparedExecution,
+        executionStep,
+        prebuiltInstruction,
+        stepInstruction,
+        providerInfo,
+        stepEventWorkflowStack,
+      } = prepared);
     } catch (error) {
       workflowCallExecution?.fail(error);
       if (workflowInterruptRequested(deps)) {
@@ -859,22 +920,26 @@ async function runWorkflowToCompletionCore(deps: WorkflowRunLoopDeps): Promise<W
         preparedExecution,
         workflowCallExecution,
       );
-      const result = consumesIterationBudget
-        ? await runWithStepSpan({
-            enabled: deps.options.observability?.enabled === true,
-            runId: deps.options.observabilityRunId,
-            workflowName: deps.getWorkflowName(),
-            step: executionStep,
-            iteration: activeIteration,
-            stepIteration,
-            instruction: stepInstruction,
-            workflowStack: stepEventWorkflowStack,
-            sanitizeText: deps.options.sanitizeObservabilityText,
-            providerInfo,
-            getFinalStepIteration: () => deps.state.stepIterations.get(step.name),
-            traceTaskMetadata: deps.options.traceTaskMetadata,
-          }, executeStep)
-        : await executeStep();
+      const result = await runWithStepDeadline(
+        deps,
+        stepDeadline,
+        consumesIterationBudget
+          ? () => runWithStepSpan({
+              enabled: deps.options.observability?.enabled === true,
+              runId: deps.options.observabilityRunId,
+              workflowName: deps.getWorkflowName(),
+              step: executionStep,
+              iteration: activeIteration,
+              stepIteration,
+              instruction: stepInstruction,
+              workflowStack: stepEventWorkflowStack,
+              sanitizeText: deps.options.sanitizeObservabilityText,
+              providerInfo,
+              getFinalStepIteration: () => deps.state.stepIterations.get(step.name),
+              traceTaskMetadata: deps.options.traceTaskMetadata,
+            }, executeStep)
+          : executeStep,
+      );
       if (workflowInterruptRequested(deps)) {
         abort = abortInterruptedWorkflow(deps);
         break;
@@ -1065,8 +1130,12 @@ export async function runSingleWorkflowIteration(deps: WorkflowRunLoopDeps): Pro
     if (result.isComplete || result.abort !== undefined) {
       deps.cancelPendingStepActivation();
     }
+    if (result.isComplete || result.nextStep !== step.name) {
+      deps.disposeStepDeadline?.(step, deps.state.stepIterations.get(step.name) ?? 0);
+    }
     return result;
   } catch (error) {
+    deps.disposeAllStepDeadlines?.();
     deps.cancelPendingStepActivation();
     if (
       !workflowInterruptRequested(deps)
@@ -1134,62 +1203,88 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
   const isDelegated = isDelegatedWorkflowStep(step);
   const stepIteration = deps.claimStepOccurrence(step);
   const workflowCallExecution = deps.setActiveStep(step, activeIteration, stepIteration);
+  let stepDeadline: WorkflowStepDeadline | undefined;
   try {
-  const baseStepRuntime = deps.resolveRuntimeForStep(step);
-  const promotedRuntime = await resolveStepPromotionRuntime(
-    deps,
-    step,
-    isDelegated ? undefined : stepIteration,
-    baseStepRuntime,
-  );
-  const fallbackRuntime = withFallbackRuntime(deps.state, step, promotedRuntime);
-  let stepRuntime: RuntimeStepResolution | undefined;
-  try {
-    stepRuntime = await resolveStepAutoRoutingRuntime(deps, step, fallbackRuntime, step.instruction);
-  } catch (error) {
+    stepDeadline = isNormalAgentWorkflowStep(step)
+      ? deps.beginStepDeadline?.(
+          step,
+          withFallbackRuntime(deps.state, step, undefined),
+          stepIteration,
+        )
+      : undefined;
+    const prepared = await runWithStepDeadline(deps, stepDeadline, async () => {
+      const baseStepRuntime = deps.resolveRuntimeForStep(step);
+      const promotedRuntime = await resolveStepPromotionRuntime(
+        deps,
+        step,
+        isDelegated ? undefined : stepIteration,
+        baseStepRuntime,
+      );
+      const fallbackRuntime = withFallbackRuntime(deps.state, step, promotedRuntime);
+      const resolvedRuntime = await resolveStepAutoRoutingRuntime(deps, step, fallbackRuntime, step.instruction);
+      const resolvedPreparedExecution = await deps.prepareNormalStepExecution(
+        step,
+        stepIteration,
+        resolvedRuntime,
+      );
+      const resolvedExecutionStep = resolvedPreparedExecution?.executableStep ?? step;
+      const resolvedPrebuiltInstruction = resolvedPreparedExecution === undefined && !isDelegated
+        ? deps.buildInstruction(step, stepIteration, resolvedRuntime?.fallback)
+        : undefined;
+      const resolvedStepInstruction = resolvedPreparedExecution?.phase1Instruction
+        ?? (deps.options.observability?.enabled === true && resolvedPrebuiltInstruction
+          ? deps.buildPhase1Instruction(step, resolvedPrebuiltInstruction, resolvedRuntime)
+          : '');
+      const resolvedProviderInfo = deps.resolveStepProviderModel(resolvedExecutionStep, resolvedRuntime);
+      return {
+        stepRuntime: resolvedRuntime,
+        preparedExecution: resolvedPreparedExecution,
+        executionStep: resolvedExecutionStep,
+        prebuiltInstruction: resolvedPrebuiltInstruction,
+        stepInstruction: resolvedStepInstruction,
+        providerInfo: resolvedProviderInfo,
+      };
+    });
     if (workflowInterruptRequested(deps)) {
       return buildInterruptedIterationResult(deps, step, loopCheck.isLoop);
     }
-    throw error;
-  }
-  if (workflowInterruptRequested(deps)) {
-    return buildInterruptedIterationResult(deps, step, loopCheck.isLoop);
-  }
-  const preparedExecution = await deps.prepareNormalStepExecution(step, stepIteration, stepRuntime);
-  const executionStep = preparedExecution?.executableStep ?? step;
-  const prebuiltInstruction = preparedExecution === undefined && !isDelegated
-    ? deps.buildInstruction(step, stepIteration, stepRuntime?.fallback)
-    : undefined;
-  const stepInstruction = preparedExecution?.phase1Instruction
-    ?? (deps.options.observability?.enabled === true && prebuiltInstruction
-      ? deps.buildPhase1Instruction(step, prebuiltInstruction, stepRuntime)
-      : '');
-  const providerInfo = deps.resolveStepProviderModel(executionStep, stepRuntime);
-  const startedAt = Date.now();
-  const executeStep = () => deps.runStep(
-    step,
-    prebuiltInstruction,
-    stepRuntime,
-    stepIteration,
-    preparedExecution,
-    workflowCallExecution,
-  );
-  const result = getWorkflowStepKind(step) === 'workflow_call'
-    ? await executeStep()
-    : await runWithStepSpan({
-        enabled: deps.options.observability?.enabled === true,
-        runId: deps.options.observabilityRunId,
-        workflowName: deps.getWorkflowName(),
-        step: executionStep,
-        iteration: activeIteration,
-        stepIteration,
-        instruction: stepInstruction,
-        workflowStack: deps.getCurrentWorkflowStack(),
-        sanitizeText: deps.options.sanitizeObservabilityText,
-        providerInfo,
-        getFinalStepIteration: () => deps.state.stepIterations.get(step.name),
-        traceTaskMetadata: deps.options.traceTaskMetadata,
-      }, executeStep);
+    const {
+      stepRuntime,
+      preparedExecution,
+      executionStep,
+      prebuiltInstruction,
+      stepInstruction,
+      providerInfo,
+    } = prepared;
+    const startedAt = Date.now();
+    const executeStep = () => deps.runStep(
+      step,
+      prebuiltInstruction,
+      stepRuntime,
+      stepIteration,
+      preparedExecution,
+      workflowCallExecution,
+    );
+    const result = await runWithStepDeadline(
+      deps,
+      stepDeadline,
+      getWorkflowStepKind(step) === 'workflow_call'
+        ? executeStep
+        : () => runWithStepSpan({
+            enabled: deps.options.observability?.enabled === true,
+            runId: deps.options.observabilityRunId,
+            workflowName: deps.getWorkflowName(),
+            step: executionStep,
+            iteration: activeIteration,
+            stepIteration,
+            instruction: stepInstruction,
+            workflowStack: deps.getCurrentWorkflowStack(),
+            sanitizeText: deps.options.sanitizeObservabilityText,
+            providerInfo,
+            getFinalStepIteration: () => deps.state.stepIterations.get(step.name),
+            traceTaskMetadata: deps.options.traceTaskMetadata,
+          }, executeStep),
+    );
   if (workflowInterruptRequested(deps)) {
     return buildInterruptedIterationResult(deps, step, loopCheck.isLoop);
   }

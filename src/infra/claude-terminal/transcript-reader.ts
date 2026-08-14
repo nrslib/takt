@@ -291,22 +291,25 @@ async function sleepWithAbort(pollIntervalMs: number, signal: AbortSignal | unde
 }
 
 async function pollUntil<T>(
-  timeoutMs: number,
+  deadlineAt: number,
   pollIntervalMs: number,
   abortSignal: AbortSignal | undefined,
   attempt: () => Promise<T | undefined>,
   timeoutMessage: string,
 ): Promise<T> {
-  const deadline = Date.now() + timeoutMs;
   throwIfAborted(abortSignal);
-  while (Date.now() <= deadline) {
+  while (Date.now() <= deadlineAt) {
     throwIfAborted(abortSignal);
     const value = await attempt();
     throwIfAborted(abortSignal);
     if (value !== undefined) {
       return value;
     }
-    await sleepWithAbort(pollIntervalMs, abortSignal);
+    const remainingMs = deadlineAt - Date.now();
+    if (remainingMs <= 0) {
+      break;
+    }
+    await sleepWithAbort(Math.min(pollIntervalMs, remainingMs), abortSignal);
     throwIfAborted(abortSignal);
   }
   throwIfAborted(abortSignal);
@@ -366,8 +369,14 @@ export class ProjectClaudeTranscriptReader implements ClaudeTranscriptReader {
   }
 
   async findSession(options: FindClaudeSessionOptions): Promise<ClaudeSessionRef> {
+    const deadlineAt = options.deadlineAt ?? (options.timeoutMs === undefined
+      ? undefined
+      : Date.now() + options.timeoutMs);
+    if (deadlineAt === undefined) {
+      throw new Error('Claude terminal session deadline is required.');
+    }
     return pollUntil(
-      options.timeoutMs,
+      deadlineAt,
       options.pollIntervalMs,
       options.abortSignal,
       async () => {
@@ -388,8 +397,14 @@ export class ProjectClaudeTranscriptReader implements ClaudeTranscriptReader {
   }
 
   async waitForAssistantResponse(options: WaitForClaudeResponseOptions): Promise<ClaudeTerminalTranscript> {
+    const deadlineAt = options.deadlineAt ?? (options.timeoutMs === undefined
+      ? undefined
+      : Date.now() + options.timeoutMs);
+    if (deadlineAt === undefined) {
+      throw new Error('Claude terminal response deadline is required.');
+    }
     return pollUntil(
-      options.timeoutMs,
+      deadlineAt,
       options.pollIntervalMs,
       options.abortSignal,
       async () => {

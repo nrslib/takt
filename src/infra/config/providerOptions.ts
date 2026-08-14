@@ -19,12 +19,17 @@ import { resolveWorkflowStepTarget } from '../../core/workflow/provider-target-r
 import type { ProviderType } from '../../shared/types/provider.js';
 import { providerSupportsClaudeAllowedTools } from '../providers/provider-capabilities.js';
 
+type RawProviderGuardOptions = {
+  call_timeout_ms?: number;
+};
+
 type RawProviderOptions = {
   extends?: string;
   codex?: {
     base_url?: string;
     network_access?: boolean;
     reasoning_effort?: CodexReasoningEffort;
+    guards?: RawProviderGuardOptions;
     skills?: {
       repo?: boolean;
       user?: boolean;
@@ -47,6 +52,7 @@ type RawProviderOptions = {
     base_url?: string;
     allowed_tools?: string[];
     effort?: ClaudeEffort;
+    guards?: RawProviderGuardOptions;
     skills?: {
       enabled?: boolean;
     };
@@ -57,17 +63,24 @@ type RawProviderOptions = {
   };
   claude_terminal?: {
     backend?: ClaudeTerminalProviderOptions['backend'];
+    guards?: RawProviderGuardOptions;
     timeout_ms?: number;
     keep_session?: boolean;
     transcript_poll_interval_ms?: number;
   };
   copilot?: {
     effort?: CopilotEffort;
+    guards?: RawProviderGuardOptions;
   };
   kiro?: {
     agent?: string;
+    guards?: RawProviderGuardOptions;
+  };
+  cursor?: {
+    guards?: RawProviderGuardOptions;
   };
   pi?: {
+    guards?: RawProviderGuardOptions;
     extensions?: string[];
     no_extensions?: boolean;
     no_skills?: boolean;
@@ -195,6 +208,7 @@ export function normalizeProviderOptions(
     options.codex?.base_url !== undefined
     || options.codex?.network_access !== undefined
     || options.codex?.reasoning_effort !== undefined
+    || options.codex?.guards !== undefined
     || options.codex?.skills?.repo !== undefined
     || options.codex?.skills?.user !== undefined
   ) {
@@ -209,6 +223,9 @@ export function normalizeProviderOptions(
         : {}),
       ...(options.codex.reasoning_effort !== undefined
         ? { reasoningEffort: options.codex.reasoning_effort }
+        : {}),
+      ...(options.codex.guards?.call_timeout_ms !== undefined
+        ? { guards: { callTimeoutMs: options.codex.guards.call_timeout_ms } }
         : {}),
       ...(options.codex.skills?.repo !== undefined || options.codex.skills?.user !== undefined
         ? {
@@ -266,6 +283,7 @@ export function normalizeProviderOptions(
     options.claude?.base_url !== undefined
     || options.claude?.allowed_tools !== undefined
     || options.claude?.effort !== undefined
+    || options.claude?.guards !== undefined
     || options.claude?.skills?.enabled !== undefined
     || options.claude?.sandbox
   ) {
@@ -280,6 +298,9 @@ export function normalizeProviderOptions(
     }
     if (options.claude.effort !== undefined) {
       claude.effort = options.claude.effort;
+    }
+    if (options.claude.guards?.call_timeout_ms !== undefined) {
+      claude.guards = { callTimeoutMs: options.claude.guards.call_timeout_ms };
     }
     if (options.claude.skills?.enabled !== undefined) {
       claude.skills = { enabled: options.claude.skills.enabled };
@@ -301,11 +322,28 @@ export function normalizeProviderOptions(
       result.claude = claude;
     }
   }
-  if (options.copilot?.effort !== undefined) {
-    result.copilot = { effort: options.copilot.effort };
+  if (options.copilot?.effort !== undefined || options.copilot?.guards !== undefined) {
+    result.copilot = {
+      ...(options.copilot.effort !== undefined ? { effort: options.copilot.effort } : {}),
+      ...(options.copilot.guards?.call_timeout_ms !== undefined
+        ? { guards: { callTimeoutMs: options.copilot.guards.call_timeout_ms } }
+        : {}),
+    };
   }
-  if (options.kiro?.agent !== undefined) {
-    result.kiro = { agent: options.kiro.agent };
+  if (options.kiro?.agent !== undefined || options.kiro?.guards !== undefined) {
+    result.kiro = {
+      ...(options.kiro.agent !== undefined ? { agent: options.kiro.agent } : {}),
+      ...(options.kiro.guards?.call_timeout_ms !== undefined
+        ? { guards: { callTimeoutMs: options.kiro.guards.call_timeout_ms } }
+        : {}),
+    };
+  }
+  if (options.cursor?.guards !== undefined) {
+    result.cursor = {
+      ...(options.cursor.guards.call_timeout_ms !== undefined
+        ? { guards: { callTimeoutMs: options.cursor.guards.call_timeout_ms } }
+        : {}),
+    };
   }
   if (options.pi !== undefined) {
     const pi: PiProviderOptions = {
@@ -317,6 +355,9 @@ export function normalizeProviderOptions(
         : {}),
       ...(options.pi.no_themes !== undefined ? { noThemes: options.pi.no_themes } : {}),
       ...(options.pi.no_context_files !== undefined ? { noContextFiles: options.pi.no_context_files } : {}),
+      ...(options.pi.guards?.call_timeout_ms !== undefined
+        ? { guards: { callTimeoutMs: options.pi.guards.call_timeout_ms } }
+        : {}),
     };
     if (Object.keys(pi).length > 0) {
       result.pi = pi;
@@ -324,6 +365,7 @@ export function normalizeProviderOptions(
   }
   if (
     options.claude_terminal?.backend !== undefined
+    || options.claude_terminal?.guards !== undefined
     || options.claude_terminal?.timeout_ms !== undefined
     || options.claude_terminal?.keep_session !== undefined
     || options.claude_terminal?.transcript_poll_interval_ms !== undefined
@@ -331,6 +373,9 @@ export function normalizeProviderOptions(
     result.claudeTerminal = {
       ...(options.claude_terminal.backend !== undefined
         ? { backend: options.claude_terminal.backend }
+        : {}),
+      ...(options.claude_terminal.guards?.call_timeout_ms !== undefined
+        ? { guards: { callTimeoutMs: options.claude_terminal.guards.call_timeout_ms } }
         : {}),
       ...(options.claude_terminal.timeout_ms !== undefined
         ? { timeoutMs: options.claude_terminal.timeout_ms }
@@ -365,6 +410,9 @@ export function mergeProviderOptions(
           : {}),
         ...(layer.codex.reasoningEffort !== undefined
           ? { reasoningEffort: layer.codex.reasoningEffort }
+          : {}),
+        ...(layer.codex.guards !== undefined
+          ? { guards: { ...result.codex?.guards, ...layer.codex.guards } }
           : {}),
         ...(layer.codex.skills !== undefined
           ? {
@@ -427,6 +475,9 @@ export function mergeProviderOptions(
         ...(layer.claude.effort !== undefined
           ? { effort: layer.claude.effort }
           : {}),
+        ...(layer.claude.guards !== undefined
+          ? { guards: { ...result.claude?.guards, ...layer.claude.guards } }
+          : {}),
         ...(layer.claude.skills?.enabled !== undefined
           ? { skills: { enabled: layer.claude.skills.enabled } }
           : {}),
@@ -441,6 +492,9 @@ export function mergeProviderOptions(
         ...(layer.copilot.effort !== undefined
           ? { effort: layer.copilot.effort }
           : {}),
+        ...(layer.copilot.guards !== undefined
+          ? { guards: { ...result.copilot?.guards, ...layer.copilot.guards } }
+          : {}),
       };
     }
     if (layer.kiro) {
@@ -449,11 +503,25 @@ export function mergeProviderOptions(
         ...(layer.kiro.agent !== undefined
           ? { agent: layer.kiro.agent }
           : {}),
+        ...(layer.kiro.guards !== undefined
+          ? { guards: { ...result.kiro?.guards, ...layer.kiro.guards } }
+          : {}),
+      };
+    }
+    if (layer.cursor) {
+      result.cursor = {
+        ...result.cursor,
+        ...(layer.cursor.guards !== undefined
+          ? { guards: { ...result.cursor?.guards, ...layer.cursor.guards } }
+          : {}),
       };
     }
     if (layer.pi) {
       result.pi = {
         ...result.pi,
+        ...(layer.pi.guards !== undefined
+          ? { guards: { ...result.pi?.guards, ...layer.pi.guards } }
+          : {}),
         ...(layer.pi.extensions !== undefined ? { extensions: [...layer.pi.extensions] } : {}),
         ...(layer.pi.noExtensions !== undefined ? { noExtensions: layer.pi.noExtensions } : {}),
         ...(layer.pi.noSkills !== undefined ? { noSkills: layer.pi.noSkills } : {}),
@@ -465,7 +533,13 @@ export function mergeProviderOptions(
       };
     }
     if (layer.claudeTerminal) {
-      result.claudeTerminal = { ...result.claudeTerminal, ...layer.claudeTerminal };
+      result.claudeTerminal = {
+        ...result.claudeTerminal,
+        ...layer.claudeTerminal,
+        ...(layer.claudeTerminal.guards !== undefined
+          ? { guards: { ...result.claudeTerminal?.guards, ...layer.claudeTerminal.guards } }
+          : {}),
+      };
     }
   }
 
@@ -712,6 +786,12 @@ export function resolveEffectiveProviderOptions(
     stepOptions?.claude?.skills?.enabled,
     resolveProviderOptionOrigin(originResolver, 'claude.skills.enabled', source),
   );
+  const claudeCallTimeoutMs = selectProviderValue(
+    resolvedConfigOptions.claude?.guards?.callTimeoutMs,
+    personaOptions?.claude?.guards?.callTimeoutMs,
+    stepOptions?.claude?.guards?.callTimeoutMs,
+    resolveProviderOptionOrigin(originResolver, 'claude.guards.callTimeoutMs', source),
+  );
 
   const codexNetworkAccess = selectProviderValue(
     resolvedConfigOptions.codex?.networkAccess,
@@ -741,6 +821,12 @@ export function resolveEffectiveProviderOptions(
     personaOptions?.codex?.skills?.user,
     stepOptions?.codex?.skills?.user,
     resolveProviderOptionOrigin(originResolver, 'codex.skills.user', source),
+  );
+  const codexCallTimeoutMs = selectProviderValue(
+    resolvedConfigOptions.codex?.guards?.callTimeoutMs,
+    personaOptions?.codex?.guards?.callTimeoutMs,
+    stepOptions?.codex?.guards?.callTimeoutMs,
+    resolveProviderOptionOrigin(originResolver, 'codex.guards.callTimeoutMs', source),
   );
   const opencodeNetworkAccess = selectProviderValue(
     resolvedConfigOptions.opencode?.networkAccess,
@@ -844,6 +930,30 @@ export function resolveEffectiveProviderOptions(
     stepOptions?.pi?.noContextFiles,
     resolveProviderOptionOrigin(originResolver, 'pi.noContextFiles', source),
   );
+  const piCallTimeoutMs = selectProviderValue(
+    resolvedConfigOptions.pi?.guards?.callTimeoutMs,
+    personaOptions?.pi?.guards?.callTimeoutMs,
+    stepOptions?.pi?.guards?.callTimeoutMs,
+    resolveProviderOptionOrigin(originResolver, 'pi.guards.callTimeoutMs', source),
+  );
+  const copilotCallTimeoutMs = selectProviderValue(
+    resolvedConfigOptions.copilot?.guards?.callTimeoutMs,
+    personaOptions?.copilot?.guards?.callTimeoutMs,
+    stepOptions?.copilot?.guards?.callTimeoutMs,
+    resolveProviderOptionOrigin(originResolver, 'copilot.guards.callTimeoutMs', source),
+  );
+  const kiroCallTimeoutMs = selectProviderValue(
+    resolvedConfigOptions.kiro?.guards?.callTimeoutMs,
+    personaOptions?.kiro?.guards?.callTimeoutMs,
+    stepOptions?.kiro?.guards?.callTimeoutMs,
+    resolveProviderOptionOrigin(originResolver, 'kiro.guards.callTimeoutMs', source),
+  );
+  const cursorCallTimeoutMs = selectProviderValue(
+    resolvedConfigOptions.cursor?.guards?.callTimeoutMs,
+    personaOptions?.cursor?.guards?.callTimeoutMs,
+    stepOptions?.cursor?.guards?.callTimeoutMs,
+    resolveProviderOptionOrigin(originResolver, 'cursor.guards.callTimeoutMs', source),
+  );
   const claudeTerminalBackend = selectProviderValue(
     resolvedConfigOptions.claudeTerminal?.backend,
     personaOptions?.claudeTerminal?.backend,
@@ -855,6 +965,12 @@ export function resolveEffectiveProviderOptions(
     personaOptions?.claudeTerminal?.timeoutMs,
     stepOptions?.claudeTerminal?.timeoutMs,
     resolveProviderOptionOrigin(originResolver, 'claudeTerminal.timeoutMs', source),
+  );
+  const claudeTerminalCallTimeoutMs = selectProviderValue(
+    resolvedConfigOptions.claudeTerminal?.guards?.callTimeoutMs,
+    personaOptions?.claudeTerminal?.guards?.callTimeoutMs,
+    stepOptions?.claudeTerminal?.guards?.callTimeoutMs,
+    resolveProviderOptionOrigin(originResolver, 'claudeTerminal.guards.callTimeoutMs', source),
   );
   const claudeTerminalKeepSession = selectProviderValue(
     resolvedConfigOptions.claudeTerminal?.keepSession,
@@ -873,6 +989,7 @@ export function resolveEffectiveProviderOptions(
     ...(codexBaseUrl !== undefined
       || codexNetworkAccess !== undefined
       || codexReasoningEffort !== undefined
+      || codexCallTimeoutMs !== undefined
       || codexRepoSkills !== undefined
       || codexUserSkills !== undefined
       ? {
@@ -880,6 +997,9 @@ export function resolveEffectiveProviderOptions(
             ...(codexBaseUrl !== undefined ? { baseUrl: codexBaseUrl } : {}),
             ...(codexNetworkAccess !== undefined ? { networkAccess: codexNetworkAccess } : {}),
             ...(codexReasoningEffort !== undefined ? { reasoningEffort: codexReasoningEffort } : {}),
+            ...(codexCallTimeoutMs !== undefined
+              ? { guards: { callTimeoutMs: codexCallTimeoutMs } }
+              : {}),
             ...(codexRepoSkills !== undefined || codexUserSkills !== undefined
               ? {
                   skills: {
@@ -939,6 +1059,7 @@ export function resolveEffectiveProviderOptions(
       || claudeAllowedTools !== undefined
       || claudeBaseUrl !== undefined
       || claudeEffort !== undefined
+      || claudeCallTimeoutMs !== undefined
       || claudeSkillsEnabled !== undefined
       ? {
           claude: {
@@ -946,13 +1067,38 @@ export function resolveEffectiveProviderOptions(
             ...(claudeAllowedTools !== undefined ? { allowedTools: claudeAllowedTools } : {}),
             ...(claudeBaseUrl !== undefined ? { baseUrl: claudeBaseUrl } : {}),
             ...(claudeEffort !== undefined ? { effort: claudeEffort } : {}),
+            ...(claudeCallTimeoutMs !== undefined
+              ? { guards: { callTimeoutMs: claudeCallTimeoutMs } }
+              : {}),
             ...(claudeSkillsEnabled !== undefined ? { skills: { enabled: claudeSkillsEnabled } } : {}),
           },
         }
       : {}),
-    ...(copilotEffort !== undefined ? { copilot: { effort: copilotEffort } } : {}),
-    ...(kiroAgent !== undefined ? { kiro: { agent: kiroAgent } } : {}),
+    ...(copilotEffort !== undefined || copilotCallTimeoutMs !== undefined
+      ? {
+          copilot: {
+            ...(copilotEffort !== undefined ? { effort: copilotEffort } : {}),
+            ...(copilotCallTimeoutMs !== undefined
+              ? { guards: { callTimeoutMs: copilotCallTimeoutMs } }
+              : {}),
+          },
+        }
+      : {}),
+    ...(kiroAgent !== undefined || kiroCallTimeoutMs !== undefined
+      ? {
+          kiro: {
+            ...(kiroAgent !== undefined ? { agent: kiroAgent } : {}),
+            ...(kiroCallTimeoutMs !== undefined
+              ? { guards: { callTimeoutMs: kiroCallTimeoutMs } }
+              : {}),
+          },
+        }
+      : {}),
+    ...(cursorCallTimeoutMs !== undefined
+      ? { cursor: { guards: { callTimeoutMs: cursorCallTimeoutMs } } }
+      : {}),
     ...(piExtensions !== undefined
+      || piCallTimeoutMs !== undefined
       || piNoExtensions !== undefined
       || piNoSkills !== undefined
       || piNoPromptTemplates !== undefined
@@ -960,6 +1106,9 @@ export function resolveEffectiveProviderOptions(
       || piNoContextFiles !== undefined
       ? {
           pi: {
+            ...(piCallTimeoutMs !== undefined
+              ? { guards: { callTimeoutMs: piCallTimeoutMs } }
+              : {}),
             ...(piExtensions !== undefined ? { extensions: [...piExtensions] } : {}),
             ...(piNoExtensions !== undefined ? { noExtensions: piNoExtensions } : {}),
             ...(piNoSkills !== undefined ? { noSkills: piNoSkills } : {}),
@@ -970,12 +1119,16 @@ export function resolveEffectiveProviderOptions(
         }
       : {}),
     ...(claudeTerminalBackend !== undefined
+      || claudeTerminalCallTimeoutMs !== undefined
       || claudeTerminalTimeoutMs !== undefined
       || claudeTerminalKeepSession !== undefined
       || claudeTerminalTranscriptPollIntervalMs !== undefined
       ? {
           claudeTerminal: {
             ...(claudeTerminalBackend !== undefined ? { backend: claudeTerminalBackend } : {}),
+            ...(claudeTerminalCallTimeoutMs !== undefined
+              ? { guards: { callTimeoutMs: claudeTerminalCallTimeoutMs } }
+              : {}),
             ...(claudeTerminalTimeoutMs !== undefined ? { timeoutMs: claudeTerminalTimeoutMs } : {}),
             ...(claudeTerminalKeepSession !== undefined ? { keepSession: claudeTerminalKeepSession } : {}),
             ...(claudeTerminalTranscriptPollIntervalMs !== undefined
@@ -1004,6 +1157,9 @@ function stripClaudeAllowedTools(
         ...(providerOptions.claude.effort !== undefined
           ? { effort: providerOptions.claude.effort }
           : {}),
+        ...(providerOptions.claude.guards !== undefined
+          ? { guards: { ...providerOptions.claude.guards } }
+          : {}),
         ...(providerOptions.claude.skills?.enabled !== undefined
           ? { skills: { enabled: providerOptions.claude.skills.enabled } }
           : {}),
@@ -1023,6 +1179,9 @@ function stripClaudeAllowedTools(
     ...(sanitizedClaude !== undefined && Object.keys(sanitizedClaude).length > 0
       ? { claude: sanitizedClaude }
       : {}),
+    ...(providerOptions.cursor !== undefined
+      ? { cursor: { ...providerOptions.cursor } }
+      : {}),
     ...(providerOptions.copilot !== undefined
       ? { copilot: { ...providerOptions.copilot } }
       : {}),
@@ -1032,6 +1191,9 @@ function stripClaudeAllowedTools(
     ...(providerOptions.pi !== undefined
       ? {
           pi: {
+            ...(providerOptions.pi.guards !== undefined
+              ? { guards: { ...providerOptions.pi.guards } }
+              : {}),
             ...(providerOptions.pi.extensions !== undefined
               ? { extensions: [...providerOptions.pi.extensions] }
               : {}),
@@ -1095,9 +1257,11 @@ export const PROVIDER_OPTION_PATHS = [
   'claude.sandbox.allowUnsandboxedCommands',
   'claude.sandbox.excludedCommands',
   'claude.skills.enabled',
+  'claude.guards.callTimeoutMs',
   'codex.baseUrl',
   'codex.networkAccess',
   'codex.reasoningEffort',
+  'codex.guards.callTimeoutMs',
   'codex.skills.repo',
   'codex.skills.user',
   'opencode.networkAccess',
@@ -1110,14 +1274,19 @@ export const PROVIDER_OPTION_PATHS = [
   'opencode.guards.textByteLimit',
   'opencode.guards.reasoningByteLimit',
   'copilot.effort',
+  'copilot.guards.callTimeoutMs',
   'kiro.agent',
+  'kiro.guards.callTimeoutMs',
+  'cursor.guards.callTimeoutMs',
   'pi.extensions',
+  'pi.guards.callTimeoutMs',
   'pi.noExtensions',
   'pi.noSkills',
   'pi.noPromptTemplates',
   'pi.noThemes',
   'pi.noContextFiles',
   'claudeTerminal.backend',
+  'claudeTerminal.guards.callTimeoutMs',
   'claudeTerminal.timeoutMs',
   'claudeTerminal.keepSession',
   'claudeTerminal.transcriptPollIntervalMs',

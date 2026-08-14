@@ -6,6 +6,7 @@ import {
   classifyAbortSignalReason,
   type AgentFailureCategory,
 } from '../../shared/types/agent-failure.js';
+import { PROVIDER_CALL_TIMEOUT_DEFAULT_MS } from '../../shared/types/provider-deadline.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { prepareClaudeMcpConfig } from '../claude/mcp-config.js';
 import {
@@ -27,7 +28,6 @@ import type {
 } from './types.js';
 
 const DEFAULT_BACKEND: ClaudeTerminalBackendName = 'tmux';
-const DEFAULT_TIMEOUT_MS = 900000;
 const DEFAULT_POLL_INTERVAL_MS = 500;
 const log = createLogger('claude-terminal');
 
@@ -158,7 +158,8 @@ export async function callClaudeTerminal(
   options: ClaudeTerminalCallOptions,
 ): Promise<AgentResponse> {
   const backendName = options.backend ?? DEFAULT_BACKEND;
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const callTimeoutMs = options.callTimeoutMs ?? options.timeoutMs ?? PROVIDER_CALL_TIMEOUT_DEFAULT_MS;
+  const deadlineAt = Date.now() + callTimeoutMs;
   const pollIntervalMs = options.transcriptPollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const keepSession = options.keepSession === true;
   const terminalBackend = resolveTerminalBackend(backendName, options.terminalBackend);
@@ -298,7 +299,8 @@ export async function callClaudeTerminal(
     const session = await withAbort(() => transcriptReader.findSession({
       cwd: options.cwd,
       sessionId: claudeSessionId,
-      timeoutMs,
+      deadlineAt,
+      timeoutMs: callTimeoutMs,
       pollIntervalMs,
       abortSignal: options.abortSignal,
     }));
@@ -312,7 +314,8 @@ export async function callClaudeTerminal(
         session,
         baseline,
         cwd: options.cwd,
-        timeoutMs,
+        deadlineAt,
+        timeoutMs: callTimeoutMs,
         pollIntervalMs,
         abortSignal: options.abortSignal,
       }));

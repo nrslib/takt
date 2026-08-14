@@ -173,6 +173,7 @@ export interface StepExecutorDeps {
   readonly getCurrentWorkflowStack?: () => WorkflowResumePointEntry[] | undefined;
   readonly structuredOutputNormalizers: StructuredOutputNormalizerRegistry;
   readonly abortSignal?: AbortSignal;
+  readonly getAbortSignal?: () => AbortSignal | undefined;
   readonly executionProvider: WorkflowConfig['provider'];
   readonly executionModel: WorkflowConfig['model'];
   readonly internalAgentSeats?: import('../../models/config-types.js').InternalAgentSeats;
@@ -260,6 +261,10 @@ export class StepExecutor {
     this.companionReviewState = deps.companionReviewAuthority === undefined
       ? undefined
       : new CompanionReviewStateStore(deps.companionReviewAuthority);
+  }
+
+  private resolveAbortSignal(): AbortSignal | undefined {
+    return this.deps.getAbortSignal?.() ?? this.deps.abortSignal;
   }
 
   private static buildTimestamp(): string {
@@ -379,7 +384,7 @@ export class StepExecutor {
                 projectCwd: this.deps.getProjectCwd(),
                 systemPrompt: prompt.systemPrompt,
                 language: this.deps.getLanguage(),
-                abortSignal: this.deps.abortSignal,
+                abortSignal: this.resolveAbortSignal(),
                 childProcessEnv: judgeOptions.childProcessEnv,
                 failureDir: judgeOptions.failureDir,
                 resolution: {
@@ -432,7 +437,7 @@ export class StepExecutor {
           throw error;
         }
       },
-      isAbort: (error) => isAbortError(error) || this.deps.abortSignal?.aborted === true,
+      isAbort: (error) => isAbortError(error) || this.resolveAbortSignal()?.aborted === true,
     });
     return {
       response: result.response,
@@ -668,7 +673,7 @@ export class StepExecutor {
         );
         return normalized.response;
       },
-      abortSignal: this.deps.abortSignal,
+      abortSignal: this.resolveAbortSignal(),
       onAttemptFailure: (failure) => {
         log.warn('Companion advisory attempt failed; continuing with the latest successful response', {
           step: input.eventStep.name,
@@ -1382,7 +1387,7 @@ export class StepExecutor {
           providers: companionProviders,
           selectorProvider: this.deps.companionSelectorProvider,
           diffReader: companionDiffReader,
-          abortSignal: this.deps.abortSignal,
+          abortSignal: this.resolveAbortSignal(),
           stateStore: companionReviewState,
           emitEvent: this.deps.emitEvent,
           recordUsage: (name, companionProvider, success, usage) => {
@@ -1399,7 +1404,7 @@ export class StepExecutor {
           },
         });
       } catch (error) {
-        this.deps.abortSignal?.throwIfAborted();
+        this.resolveAbortSignal()?.throwIfAborted();
         const reason = safeExternalErrorMessage(error);
         state.companion = {
           ...requireActiveCompanionState(state, step.name),

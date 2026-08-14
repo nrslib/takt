@@ -9,10 +9,15 @@ import {
   resolveOpenCodeStreamLimits,
   type OpenCodeStreamLimits,
 } from '../OpenCodeStreamHandler.js';
+import {
+  PROVIDER_CALL_TIMEOUT_DEFAULT_MS,
+  PROVIDER_CALL_TIMEOUT_MAX_MS,
+  PROVIDER_CALL_TIMEOUT_MIN_MS,
+} from '../../../shared/types/provider-deadline.js';
 
-export const OPENCODE_CALL_TIMEOUT_MIN_MS = 60_000;
-export const OPENCODE_CALL_TIMEOUT_MAX_MS = 86_400_000;
-export const OPENCODE_CALL_TIMEOUT_DEFAULT_MS = 3_600_000;
+export const OPENCODE_CALL_TIMEOUT_MIN_MS = PROVIDER_CALL_TIMEOUT_MIN_MS;
+export const OPENCODE_CALL_TIMEOUT_MAX_MS = PROVIDER_CALL_TIMEOUT_MAX_MS;
+export const OPENCODE_CALL_TIMEOUT_DEFAULT_MS = PROVIDER_CALL_TIMEOUT_DEFAULT_MS;
 export const OPENCODE_EXACT_TOOL_REPEAT_LIMIT = 12;
 
 const DEPRECATED_OPENCODE_GUARD_ENV_VARS = [
@@ -46,7 +51,6 @@ export interface ResolvedOpenCodeToolGuardPolicy {
 export interface ResolvedOpenCodeGuardPolicy {
   profile: OpenCodeGuardProfile;
   callTimeoutMs: number;
-  streamIdleTimeoutMs: number;
   messageCycleBudget: number;
   exactToolRepeatLimit: number;
   streamLimits: OpenCodeStreamLimits;
@@ -87,7 +91,7 @@ function resolveCallTimeoutMs(configured: number | undefined): number {
  *   自分の指定が効いていないことに気づけない。
  * - `TAKT_OPENCODE_*`（resolvePositiveEnvInt）は実験・テスト用のアドホックな
  *   上書きなので、不正値は無視して既定値へ fallback する。全ての兄弟 env
- *   （idle timeout / cycle budget / tool guard 各値）と揃えた挙動。
+ *   （cycle budget / tool guard 各値）と揃えた挙動。
  */
 function assertPositiveLimit(name: string, value: number | undefined): void {
   if (value !== undefined && (!Number.isInteger(value) || value <= 0)) {
@@ -106,7 +110,6 @@ export function resolveOpenCodeGuardPolicy(
   return {
     profile,
     callTimeoutMs: resolveCallTimeoutMs(guards?.callTimeoutMs),
-    streamIdleTimeoutMs: resolvePositiveEnvInt('TAKT_OPENCODE_STREAM_IDLE_TIMEOUT_MS', 10 * 60 * 1000),
     messageCycleBudget: resolvePositiveEnvInt('TAKT_OPENCODE_MESSAGE_CYCLE_BUDGET', 120),
     exactToolRepeatLimit: OPENCODE_EXACT_TOOL_REPEAT_LIMIT,
     streamLimits: resolveOpenCodeStreamLimits(guards),

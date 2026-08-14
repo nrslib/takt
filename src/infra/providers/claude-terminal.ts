@@ -57,6 +57,7 @@ function toTerminalOptions(options: ProviderCallOptions): ClaudeTerminalCallOpti
     permissionMode: options.permissionMode,
     bypassPermissions: options.bypassPermissions,
     backend: terminalOptions?.backend,
+    callTimeoutMs: terminalOptions?.guards?.callTimeoutMs,
     timeoutMs: terminalOptions?.timeoutMs,
     keepSession: terminalOptions?.keepSession,
     transcriptPollIntervalMs: terminalOptions?.transcriptPollIntervalMs,

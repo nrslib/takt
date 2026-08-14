@@ -53,6 +53,7 @@ import { getErrorMessage } from '../../../shared/utils/error.js';
 interface WorkflowCallRunnerDeps {
   getConfig: () => WorkflowConfig;
   getMaxSteps: () => WorkflowMaxSteps;
+  getAbortSignal?: () => AbortSignal | undefined;
   updateMaxSteps: (maxSteps: WorkflowMaxSteps) => void;
   state: WorkflowState;
   projectCwd: string;

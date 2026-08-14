@@ -61,8 +61,23 @@ import type {
 } from './team-leader-execution-terminal.js';
 import { createAbortScope } from './abort-signal.js';
 import { isTeamLeaderPartCancellation } from './team-leader-part-cancellation.js';
+import type {
+  WorkflowStepDeadline,
+  WorkflowStepExecutionDeadlineContext,
+} from './step-deadline.js';
 
 const log = createLogger('team-leader-runner');
+
+async function runWithExecutionDeadline<T>(
+  context: WorkflowStepExecutionDeadlineContext | undefined,
+  deadline: WorkflowStepDeadline | undefined,
+  operation: () => Promise<T>,
+): Promise<T> {
+  if (context === undefined || deadline === undefined) {
+    return operation();
+  }
+  return context.runWith(deadline, operation);
+}
 
 function truncateTeamLeaderFailureContent(text: string): string {
   if (Buffer.byteLength(text, 'utf8') <= MAX_AGENT_FAILURE_MESSAGE_BYTES) {
@@ -102,6 +117,7 @@ export interface TeamLeaderRunnerDeps {
   readonly optionsBuilder: OptionsBuilder;
   readonly stepExecutor: StepExecutor;
   readonly engineOptions: WorkflowEngineOptions;
+  readonly getAbortSignal?: () => AbortSignal | undefined;
   readonly getCwd: () => string;
   readonly getTask: () => string;
   readonly getState: () => WorkflowState;
@@ -150,6 +166,10 @@ export class TeamLeaderRunner {
     private readonly deps: TeamLeaderRunnerDeps,
   ) {}
 
+  private resolveAbortSignal(): AbortSignal | undefined {
+    return this.deps.getAbortSignal?.() ?? this.deps.engineOptions.abortSignal;
+  }
+
   async runTeamLeaderStep(
     step: WorkflowStep,
     state: WorkflowState,
@@ -158,6 +178,7 @@ export class TeamLeaderRunner {
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
     runtime?: RuntimeStepResolution,
     activeStepIteration?: number,
+    executionDeadlineContext?: WorkflowStepExecutionDeadlineContext,
   ): Promise<StepRunResult> {
     if (!step.teamLeader) {
       throw new Error(`Step "${step.name}" has no teamLeader configuration`);
@@ -181,7 +202,12 @@ export class TeamLeaderRunner {
     const leaderRuntime = await this.resolveLeaderAutoRouting(leaderStep, runtime);
     const leaderProviderInfo = this.deps.optionsBuilder.resolveStepProviderModel(leaderStep, leaderRuntime);
     const { provider: leaderProvider, model: leaderModel } = leaderProviderInfo;
-    const leaderBaseOptions = this.deps.optionsBuilder.buildBaseOptions(leaderStep, undefined, leaderRuntime);
+    const leaderDeadline = executionDeadlineContext?.begin('team-leader:leader', leaderProviderInfo);
+    const leaderBaseOptions = this.deps.optionsBuilder.buildBaseOptions(
+      leaderStep,
+      undefined,
+      leaderRuntime,
+    );
     const leaderWorkflowMeta = this.deps.optionsBuilder.buildPhase1WorkflowMeta(
       leaderBaseOptions.workflowMeta,
     );
@@ -256,27 +282,31 @@ export class TeamLeaderRunner {
         buildDecompositionOptions(),
       );
     };
-    const decomposition = await runWithPhaseSpan(
-      {
-        enabled: this.deps.observabilityEnabled,
-        runId: this.deps.observabilityRunId,
-        workflowName: this.deps.getWorkflowName(),
-        step: leaderStep,
-        iteration: parentIteration,
-        phase: 1,
-        phaseName: 'execute',
-        instruction,
-        phaseExecutionId,
-        workflowStack: this.deps.getCurrentWorkflowStack?.(),
-        sanitizeText: this.deps.sanitizeObservabilityText,
-        providerInfo: leaderProviderInfo,
-        getPromptParts: () => resolvedPromptParts,
-      },
-      requestDecomposition,
-      (result) => ({
-        status: 'done',
-        content: JSON.stringify({ parts: result.parts }, null, 2),
-      }),
+    const decomposition = await runWithExecutionDeadline(
+      executionDeadlineContext,
+      leaderDeadline,
+      () => runWithPhaseSpan(
+        {
+          enabled: this.deps.observabilityEnabled,
+          runId: this.deps.observabilityRunId,
+          workflowName: this.deps.getWorkflowName(),
+          step: leaderStep,
+          iteration: parentIteration,
+          phase: 1,
+          phaseName: 'execute',
+          instruction,
+          phaseExecutionId,
+          workflowStack: this.deps.getCurrentWorkflowStack?.(),
+          sanitizeText: this.deps.sanitizeObservabilityText,
+          providerInfo: leaderProviderInfo,
+          getPromptParts: () => resolvedPromptParts,
+        },
+        requestDecomposition,
+        (result) => ({
+          status: 'done',
+          content: JSON.stringify({ parts: result.parts }, null, 2),
+        }),
+      ),
     );
     const parts = decomposition.parts;
     if (!didEmitPhaseStart) {
@@ -328,12 +358,19 @@ export class TeamLeaderRunner {
       ))
       : undefined;
     const coveredTimedOutPartIds = new Set<string>();
-    const routedProviderInfoByPart = await this.resolvePartAutoRouting(step, parts, runtime);
+    const routedProviderInfoByPart = await runWithExecutionDeadline(
+      executionDeadlineContext,
+      leaderDeadline,
+      () => this.resolvePartAutoRouting(step, parts, runtime),
+    );
 
     const executionAbortScope = createAbortScope(leaderBaseOptions.abortSignal);
     let executionResult: Awaited<ReturnType<typeof runTeamLeaderExecution>>;
     try {
-      executionResult = await runTeamLeaderExecution({
+      executionResult = await runWithExecutionDeadline(
+        executionDeadlineContext,
+        leaderDeadline,
+        () => runTeamLeaderExecution({
         initialParts: parts,
         maxConcurrency: teamLeaderConfig.maxConcurrency,
         abortSignal: executionAbortScope.signal,
@@ -472,28 +509,40 @@ export class TeamLeaderRunner {
           throw error;
         }
       },
-        runPart: async (part, partIndex, publicationFence, partAbortSignal) => this.runSinglePart(
-        step,
-        leaderWorkflowMeta,
-        part,
-        partIndex,
-        parentIteration,
-        state,
-        task,
-        maxSteps,
-        teamLeaderConfig.timeoutMs,
-        updatePersonaSession,
-        parallelLogger,
-        this.buildPartRuntime(runtime, routedProviderInfoByPart.get(part.id)),
-        instructionTransaction,
-        partAbortSignal,
-        publicationFence,
-        ).catch((error) => {
+        runPart: async (part, partIndex, publicationFence, partAbortSignal) => {
+          const partRuntime = this.buildPartRuntime(runtime, routedProviderInfoByPart.get(part.id));
+          const partStep = createPartStep(step, part);
+          const partProviderInfo = this.deps.optionsBuilder.resolveStepProviderModel(partStep, partRuntime);
+          const partDeadline = executionDeadlineContext?.begin(`team-leader:part:${part.id}`, partProviderInfo);
+          return runWithExecutionDeadline(
+            executionDeadlineContext,
+            partDeadline,
+            () => this.runSinglePart(
+              step,
+              leaderWorkflowMeta,
+              part,
+              partIndex,
+              parentIteration,
+              state,
+              task,
+              maxSteps,
+              teamLeaderConfig.timeoutMs,
+              updatePersonaSession,
+              parallelLogger,
+              partRuntime,
+              instructionTransaction,
+              partAbortSignal,
+              publicationFence,
+              partDeadline?.signal,
+            ),
+          ).catch((error) => {
           if (isTeamLeaderPartCancellation(error)) throw error;
           if (isProviderStreamParseError(error)) throw error;
           return buildTeamLeaderErrorPartResult(step, part, error);
+          });
+        },
         }),
-      });
+      );
     } finally {
       executionAbortScope.dispose();
     }
@@ -663,7 +712,7 @@ export class TeamLeaderRunner {
       estimator: this.deps.engineOptions.autoRoutingEstimator,
       runtime: this.deps.engineOptions.routingRuntime,
       logger: log,
-      abortSignal: this.deps.engineOptions.abortSignal,
+      abortSignal: this.resolveAbortSignal(),
     });
     if (!autoRuntime) {
       return runtime;
@@ -690,6 +739,7 @@ export class TeamLeaderRunner {
     instructionTransaction?: InstructionBuildTransaction,
     executionAbortSignal?: AbortSignal,
     publicationFence?: TeamLeaderExecutionPublicationFence,
+    deadlineSignal?: AbortSignal,
   ): Promise<PartResult> {
     publicationFence?.assertRunning('part.worker_start');
     const startedAt = Date.now();
@@ -724,6 +774,7 @@ export class TeamLeaderRunner {
       },
       runtime,
       executionAbortSignal,
+      { forceNewSession: false, deadlineSignal },
     );
     publicationFence?.assertRunning('part.completed');
     if (result.providerInfo !== undefined) {
@@ -921,7 +972,7 @@ export class TeamLeaderRunner {
       estimator: this.deps.engineOptions.autoRoutingEstimator,
       runtime: this.deps.engineOptions.routingRuntime,
       logger: log,
-      abortSignal: this.deps.engineOptions.abortSignal,
+      abortSignal: this.resolveAbortSignal(),
     });
 
     for (const [partId, providerInfo] of routed.entries()) {

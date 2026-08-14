@@ -73,11 +73,18 @@ const CodexSkillsShape = {
 
 const ProviderEffortSchema = z.string().trim().min(1, 'effort must not be empty');
 
+const ProviderGuardOptionShape = {
+  call_timeout_ms: z.number().int().min(60_000).max(86_400_000).optional(),
+};
+
+const ProviderGuardOptionsSchema = z.object(ProviderGuardOptionShape).strict();
+
 const CodexProviderOptionShape = {
   base_url: z.string().min(1).optional(),
   network_access: z.boolean().optional(),
   reasoning_effort: ProviderEffortSchema.optional(),
   skills: z.object(CodexSkillsShape).optional(),
+  guards: ProviderGuardOptionsSchema.optional(),
 };
 
 const CodexProviderOptionsSchema = z.object(CodexProviderOptionShape);
@@ -122,6 +129,7 @@ const ClaudeProviderOptionShape = {
   effort: ProviderEffortSchema.optional(),
   skills: ClaudeSkillsSchema.optional(),
   sandbox: z.object(ClaudeSandboxShape).optional(),
+  guards: ProviderGuardOptionsSchema.optional(),
 };
 
 const ClaudeProviderOptionsSchema = z.object(ClaudeProviderOptionShape);
@@ -133,6 +141,7 @@ const StrictClaudeProviderOptionsSchema = z.object({
 
 const ClaudeTerminalProviderOptionsSchema = z.object({
   backend: z.enum(['tmux']).optional(),
+  guards: ProviderGuardOptionsSchema.optional(),
   timeout_ms: z.number().int().positive().optional(),
   keep_session: z.boolean().optional(),
   transcript_poll_interval_ms: z.number().int().positive().optional(),
@@ -140,13 +149,20 @@ const ClaudeTerminalProviderOptionsSchema = z.object({
 
 const CopilotProviderOptionsSchema = z.object({
   effort: ProviderEffortSchema.optional(),
+  guards: ProviderGuardOptionsSchema.optional(),
 });
 
 const KiroProviderOptionsSchema = z.object({
   agent: z.string().min(1).optional(),
+  guards: ProviderGuardOptionsSchema.optional(),
+});
+
+const CursorProviderOptionsSchema = z.object({
+  guards: ProviderGuardOptionsSchema.optional(),
 });
 
 const PiProviderOptionsSchema = z.object({
+  guards: ProviderGuardOptionsSchema.optional(),
   extensions: z.array(z.string().min(1)).optional(),
   no_extensions: z.boolean().optional(),
   no_skills: z.boolean().optional(),
@@ -160,6 +176,7 @@ export const StepProviderOptionsObjectSchema = z.object({
   opencode: OpenCodeProviderOptionsSchema.optional(),
   claude: ClaudeProviderOptionsSchema.optional(),
   claude_terminal: ClaudeTerminalProviderOptionsSchema.optional(),
+  cursor: CursorProviderOptionsSchema.optional(),
   copilot: CopilotProviderOptionsSchema.optional(),
   kiro: KiroProviderOptionsSchema.optional(),
   pi: PiProviderOptionsSchema.optional(),
@@ -172,6 +189,7 @@ const StrictStepProviderOptionsSchema = z.object({
   opencode: StrictOpenCodeProviderOptionsSchema.optional(),
   claude: StrictClaudeProviderOptionsSchema.optional(),
   claude_terminal: ClaudeTerminalProviderOptionsSchema.strict().optional(),
+  cursor: CursorProviderOptionsSchema.strict().optional(),
   copilot: CopilotProviderOptionsSchema.strict().optional(),
   kiro: KiroProviderOptionsSchema.strict().optional(),
   pi: PiProviderOptionsSchema.strict().optional(),

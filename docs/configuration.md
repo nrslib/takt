@@ -263,6 +263,8 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 #     - .takt/assistant-notes.md
 
 # Provider-specific options (project defaults; env-resolved leaf overrides win, otherwise step > provider_routing > deprecated persona_providers > workflow > project > global)
+# codex / claude / claude_terminal / cursor / copilot / kiro / pi also support
+#   guards.call_timeout_ms (60 minutes when omitted).
 # provider_options:
 #   codex:
 #     network_access: true
@@ -300,7 +302,16 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 
 Pi SDK sessions are kept in memory for the current TAKT process. TAKT does not write Pi session JSONL files. For `provider_options.pi` resource loading (`extensions`, `no_*`), temporary resolution, and trust boundaries, see [Pi resource loading](#pi-resource-loading).
 
-### OpenCode execution guards
+### Provider call deadline and OpenCode execution guards
+
+Every provider uses `guards.call_timeout_ms` for its call-wide wall-clock deadline.
+It applies to `codex`, `opencode`, `claude` (including `claude-sdk`),
+`claude_terminal`, `cursor`, `copilot`, `kiro`, and `pi`. Values are integer
+milliseconds from 60,000 through 86,400,000; the default is 3,600,000 ms
+(60 minutes). The normal `provider_options` profile resolution path resolves
+this value into the engine's parent-step deadline, and the same `AbortSignal`
+is passed to every provider. `claude_terminal.timeout_ms` is retained for
+compatibility and is used only when `guards.call_timeout_ms` is unset.
 
 `provider_options.opencode.guards.profile` is `standard` by default. `minimal`
 disables heuristic loop detection only; time, bounded-resource, integrity, and
@@ -317,22 +328,12 @@ example — must explicitly set `call_timeout_ms` from 60,000 through 86,400,000
 `TAKT_OPENCODE_STREAM_EVENT_LIMIT`. `text_byte_limit` defaults to 1 MiB and
 `reasoning_byte_limit` to 4 MiB.
 
-Stream silence counts as an idle timeout after 10 minutes
-(`TAKT_OPENCODE_STREAM_IDLE_TIMEOUT_MS` overrides it), but the clock is not
-running while a tool call is in flight. OpenCode emits no events between
-tool_use and tool_result, so treating a long-running tool — a test suite run,
-for example — as inactivity would cut a healthy execution. A tool that never
-returns is handled by the `call_timeout_ms` wall-clock limit. The operational
-consequence: while a tool is in flight, a genuinely stuck run is detected after
-`call_timeout_ms` (60 minutes by default, longer if you raise it) rather than
-after 10 minutes. A dropped tool-result event does not disable detection either
-— an in-flight call is discarded as stale once six times the idle timeout has
-passed since it was registered. The converse also holds: if a single tool call
-can stay silent for longer than six idle timeouts — for example when you raise
-`call_timeout_ms` to allow long-running tools — raise
-`TAKT_OPENCODE_STREAM_IDLE_TIMEOUT_MS` as well. Staleness is measured against
-the idle timeout, so raising only one of the two makes a healthy tool run count
-as stale.
+The OpenCode output-idle watchdog is disabled by default. OpenCode may emit no
+events between tool_use and tool_result, so treating silence during reasoning
+or a long-running tool as inactivity can terminate a healthy call. Calls with
+no output are instead bounded by the `call_timeout_ms` wall-clock limit. An
+additional provider/model-specific watchdog may be enabled only for a transport
+whose emission interval has been authenticated.
 
 Invalid numeric limits are treated differently per input path. Values written
 under `guards.*` (including those from `TAKT_PROVIDER_OPTIONS_*`) are declared

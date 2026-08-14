@@ -36,8 +36,8 @@ export function readOpenCodeToolPart(event: OpenCodeStreamEvent): OpenCodeToolPa
 /**
  * ツール呼び出しの同一性キー。用途で影響度が違うので、片方の都合で緩めない。
  * ToolOutcomeLedger では terminal の重複排除（誤れば outcome の二重計上）、
- * IdleTimeoutGuard では安全装置を止める判断（誤れば健全な実行の切断、または
- * アイドル検知の停止）に使う。
+ * 認証済み transport が追加する IdleTimeoutGuard では安全装置を止める判断
+ * （誤れば健全な実行の切断、またはアイドル検知の停止）に使う。
  */
 export function openCodeToolCallKey(toolPart: OpenCodeToolPart): string {
   return `${toolPart.sessionID}\0${toolPart.callID || toolPart.id}`;

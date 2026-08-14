@@ -141,6 +141,7 @@ export class WorkflowEngine extends EventEmitter {
   private readonly systemStepExecutor: WorkflowEngineServices['systemStepExecutor'];
   private readonly loopMonitorJudgeRunner: WorkflowEngineServices['loopMonitorJudgeRunner'];
   private readonly workflowCallRunner: WorkflowEngineServices['workflowCallRunner'];
+  private readonly stepAbortSignalContext: WorkflowEngineServices['stepAbortSignalContext'];
   private readonly stepCoordinator: WorkflowEngineStepCoordinator;
   private readonly structuredCaller: StructuredCaller;
 
@@ -335,12 +336,15 @@ export class WorkflowEngine extends EventEmitter {
     this.systemStepExecutor = services.systemStepExecutor;
     this.loopMonitorJudgeRunner = services.loopMonitorJudgeRunner;
     this.workflowCallRunner = services.workflowCallRunner;
+    this.stepAbortSignalContext = services.stepAbortSignalContext;
     this.stepCoordinator = new WorkflowEngineStepCoordinator({
       config: this.config,
       state: this.state,
       task: this.task,
       getMaxSteps: () => this.maxSteps,
       getOptions: () => this.options,
+      optionsBuilder: this.optionsBuilder,
+      stepAbortSignalContext: this.stepAbortSignalContext,
       stepExecutor: this.stepExecutor,
       parallelRunner: this.parallelRunner,
       arpeggioRunner: this.arpeggioRunner,
@@ -381,6 +385,10 @@ export class WorkflowEngine extends EventEmitter {
           getReportDir: () => this.runPaths.reportsAbs,
           abortRequested: () => this.abortRequested,
           getStep: this.stepCoordinator.getStep.bind(this.stepCoordinator),
+          beginStepDeadline: this.stepCoordinator.beginStepDeadline.bind(this.stepCoordinator),
+          disposeStepDeadline: this.stepCoordinator.disposeStepDeadline.bind(this.stepCoordinator),
+          disposeAllStepDeadlines: this.stepCoordinator.disposeAllStepDeadlines.bind(this.stepCoordinator),
+          stepAbortSignalContext: this.stepAbortSignalContext,
           applyRuntimeEnvironment: (stage) => applyRuntimeEnvironment(this.cwd, this.config, stage),
           loopDetectorCheck: (stepName) => {
             const result = this.loopDetector.check(stepName);
@@ -833,6 +841,10 @@ export class WorkflowEngine extends EventEmitter {
           getReportDir: () => this.runPaths.reportsAbs,
           abortRequested: () => this.abortRequested,
           getStep: this.stepCoordinator.getStep.bind(this.stepCoordinator),
+          beginStepDeadline: this.stepCoordinator.beginStepDeadline.bind(this.stepCoordinator),
+          disposeStepDeadline: this.stepCoordinator.disposeStepDeadline.bind(this.stepCoordinator),
+          disposeAllStepDeadlines: this.stepCoordinator.disposeAllStepDeadlines.bind(this.stepCoordinator),
+          stepAbortSignalContext: this.stepAbortSignalContext,
           applyRuntimeEnvironment: (stage) => applyRuntimeEnvironment(this.cwd, this.config, stage),
           loopDetectorCheck: (stepName) => {
             const loopResult = this.loopDetector.check(stepName);

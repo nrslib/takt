@@ -80,7 +80,12 @@ export class OptionsBuilder {
     private readonly getTask?: () => string,
     private readonly getReviewScope?: () => TaskReviewScope,
     private readonly getFailureDir?: () => string,
+    private readonly getAbortSignal: () => AbortSignal | undefined = () => this.engineOptions.abortSignal,
   ) {}
+
+  private resolveAbortSignal(): AbortSignal | undefined {
+    return this.getAbortSignal();
+  }
 
   /**
    * 実行に使う provider/model の解決。構成レイヤー（step / persona / routing /
@@ -381,7 +386,7 @@ export class OptionsBuilder {
     const baseOptions: ResolvedRunAgentOptions = {
       cwd: this.getCwd(),
       projectCwd: this.getProjectCwd(),
-      abortSignal: this.engineOptions.abortSignal,
+      abortSignal: this.resolveAbortSignal(),
       personaPath: step.personaPath,
       workflowBundleResourceRoot: this.engineOptions.workflowBundleResourceRoot,
       resolvedProvider,
@@ -665,7 +670,7 @@ export class OptionsBuilder {
       sanitizeObservabilityText: this.engineOptions.sanitizeObservabilityText,
       getCurrentWorkflowStack: this.getCurrentWorkflowStack,
       childProcessEnv: this.engineOptions.childProcessEnv,
-      abortSignal: this.engineOptions.abortSignal,
+      abortSignal: this.resolveAbortSignal(),
       ...(this.getFailureDir === undefined ? {} : { failureDir: this.getFailureDir() }),
       onStream: this.buildProviderStream(
         step,

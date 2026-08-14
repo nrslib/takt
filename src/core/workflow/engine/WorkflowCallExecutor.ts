@@ -111,6 +111,7 @@ interface ChildRoutingRuntime {
 interface WorkflowCallExecutorDeps {
   getConfig: () => WorkflowConfig;
   getOptions: () => WorkflowEngineOptions;
+  getAbortSignal?: () => AbortSignal | undefined;
   getMaxSteps: () => WorkflowMaxSteps;
   updateMaxSteps: (maxSteps: WorkflowMaxSteps) => void;
   getCwd: () => string;
@@ -218,6 +219,8 @@ export class WorkflowCallExecutor {
         permissionMode: childAutoRouting.router.permissionMode,
         language: options.language,
         childProcessEnv: options.childProcessEnv,
+        // The estimator is cached across workflow-call steps; pass the
+        // per-call signal to estimate() instead of capturing a step deadline.
         abortSignal: options.abortSignal,
         failureDir: join(this.deps.runPaths.runRootAbs, 'failures'),
       });
@@ -565,6 +568,7 @@ export class WorkflowCallExecutor {
     const inheritedEstimatorSource = options.autoRoutingEstimatorSource;
     const childOptions: WorkflowEngineOptions = {
       ...inheritedOptions,
+      abortSignal: this.deps.getAbortSignal?.() ?? options.abortSignal,
       maxStepsOverride: this.deps.sharedRuntime.maxSteps ?? this.deps.getMaxSteps(),
       initialSessions: Object.fromEntries(this.deps.state.personaSessions),
       initialUserInputs: [...this.deps.state.userInputs],

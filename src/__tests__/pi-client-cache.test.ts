@@ -1,6 +1,6 @@
 import * as path from 'node:path';
 import { tmpdir } from 'node:os';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => {
   interface Deferred {
@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => {
     gate: Deferred;
     listener?: (event: unknown) => void;
     promptRejects: boolean;
+    abortGate?: Deferred;
     shutdownRejects: boolean;
     shutdownGate?: Deferred;
     disposed: boolean;
@@ -100,7 +101,11 @@ const mocks = vi.hoisted(() => {
           },
         });
       }),
-      abort: vi.fn(async () => undefined),
+      abort: vi.fn(async () => {
+        events.push(`abort:start:${instanceId}`);
+        await state.abortGate?.promise;
+        events.push(`abort:end:${instanceId}`);
+      }),
       getLastAssistantText: vi.fn(() => `response:${instanceId}`),
     };
 
@@ -118,6 +123,12 @@ const mocks = vi.hoisted(() => {
   });
 
   return {
+    reset: () => {
+      sequence = 0;
+      states.length = 0;
+      events.length = 0;
+      started.clear();
+    },
     createAgentSession,
     modelRuntimeCreate: vi.fn(async () => ({
       getModel: vi.fn((provider: string, id: string) => ({ provider, id })),
@@ -156,6 +167,15 @@ const mocks = vi.hoisted(() => {
       }
       const gate = deferred();
       state.shutdownGate = gate;
+      return gate;
+    },
+    holdAbort: (requestedId: string) => {
+      const state = [...states].reverse().find((candidate) => candidate.requestedId === requestedId);
+      if (state === undefined) {
+        throw new Error(`Missing session state for ${requestedId}`);
+      }
+      const gate = deferred();
+      state.abortGate = gate;
       return gate;
     },
     releaseLatest: (requestedId: string) => {
@@ -199,6 +219,45 @@ function options(sessionId: string) {
 }
 
 describe('Pi SDK session cache', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.reset();
+  });
+
+  it('retires an aborted session before releasing its lock', async () => {
+    const controller = new AbortController();
+    const first = callPi('worker', 'first', {
+      ...options('abort-session'),
+      abortSignal: controller.signal,
+    });
+
+    await vi.waitFor(() => expect(mocks.started.size).toBe(1));
+    const firstState = mocks.latestState('abort-session')!;
+    const abortGate = mocks.holdAbort('abort-session');
+    controller.abort(new Error('deadline reached'));
+
+    await vi.waitFor(() => expect(mocks.events).toContain(`abort:start:${firstState.instanceId}`));
+    const second = callPi('worker', 'second', options('abort-session'));
+    await vi.waitFor(() => expect(mocks.states.filter((state) => state.requestedId === 'abort-session')).toHaveLength(2));
+    const secondState = mocks.latestState('abort-session')!;
+    expect(secondState).not.toBe(firstState);
+
+    let firstSettled = false;
+    void first.then(() => {
+      firstSettled = true;
+    });
+    await Promise.resolve();
+    expect(firstSettled).toBe(false);
+
+    abortGate.resolve();
+    expect((await first).status).toBe('error');
+    mocks.releaseLatest('abort-session');
+    expect((await second).status).toBe('done');
+    expect(mocks.events.indexOf(`abort:end:${firstState.instanceId}`)).toBeLessThan(
+      mocks.events.indexOf(`dispose:${firstState.instanceId}`),
+    );
+  });
+
   it('converges to the idle cache limit after 65 active sessions finish', async () => {
     const sessionIds = Array.from({ length: 65 }, (_, index) => `cache-session-${index}`);
     const calls = sessionIds.map((sessionId) => callPi('worker', 'work', options(sessionId)));

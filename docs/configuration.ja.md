@@ -263,6 +263,8 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 #     - .takt/assistant-notes.md
 
 # provider 固有オプション（プロジェクト既定値。env 起源の leaf が最優先で、それ以外は step > provider_routing > deprecated persona_providers > workflow > project > global の順）
+# codex / claude / claude_terminal / cursor / copilot / kiro / pi も
+#   guards.call_timeout_ms（未指定時 60 分）を利用できます。
 # provider_options:
 #   codex:
 #     network_access: true
@@ -300,7 +302,15 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 
 Pi SDK session は現在の TAKT process 内だけ memory に保持します。TAKT は Pi の session JSONL を書き込みません。`provider_options.pi` のリソース読み込み（`extensions`、`no_*`）、temporary resolution、信頼境界は [Pi のリソース読み込み](#pi-resource-loading) を参照してください。
 
-### OpenCode 実行ガード
+### プロバイダ call deadline と OpenCode 実行ガード
+
+全 provider の call-wide wall-clock deadline は `guards.call_timeout_ms` で設定します。
+対象は `codex`、`opencode`、`claude`（`claude-sdk` を含む）、`claude_terminal`、
+`cursor`、`copilot`、`kiro`、`pi` です。値は 60,000〜86,400,000 ms の整数で、
+未指定時は 3,600,000 ms（60 分）です。通常の `provider_options` profile 解決を経て
+エンジンの親ステップ deadline になり、全 provider に同じ `AbortSignal` が渡されます。
+`claude_terminal.timeout_ms` は互換用の旧設定で、`guards.call_timeout_ms` が未指定の
+場合だけ使われます。
 
 `provider_options.opencode.guards.profile` の既定値は `standard` です。
 `minimal` が無効にするのはヒューリスティックなループ検出だけで、時間・有界資源・
@@ -316,19 +326,11 @@ OpenCode の単一 call には既定で 3,600,000 ms（60分）の wall-clock �
 `TAKT_OPENCODE_STREAM_EVENT_LIMIT` でも上書きできます。`text_byte_limit` の既定値は 1 MiB、
 `reasoning_byte_limit` は 4 MiB です。
 
-ストリームの無音は 10 分（`TAKT_OPENCODE_STREAM_IDLE_TIMEOUT_MS` で上書き可）で
-idle timeout として扱われますが、ツール呼び出しが in-flight の間は計測しません。
-OpenCode は tool_use から tool_result までイベントを流さないため、テストスイート
-実行のような長時間のツールを無音と判定すると健全な実行を切ってしまうからです。
-結果が返らないツールは `call_timeout_ms` の wall-clock 上限が受け持ちます。運用上の
-帰結として、ツール実行中に本当に処理が止まった場合の検知は既定 10 分ではなく
-`call_timeout_ms`（既定 60 分、引き上げればさらに）まで伸びます。ツール結果イベントを
-取りこぼした場合も、in-flight 登録から idle timeout の6倍を過ぎた時点で stale として
-捨てるため、検知が止まったままにはなりません。逆に、単一のツール呼び出しが idle
-timeout の6倍を超えて無音になり得る場合（`call_timeout_ms` を既定より大きくして
-長時間のツールを許す場合など）は、`TAKT_OPENCODE_STREAM_IDLE_TIMEOUT_MS` も併せて
-引き上げてください。stale 判定は idle timeout を基準にするため、片方だけを
-引き上げると健全なツール実行が stale 扱いされます。
+OpenCode の output-idle watchdog は既定で無効です。OpenCode は tool_use から
+tool_result までイベントを流さないことがあり、推論や長時間のツール実行中の無音を
+idle と誤認し得るためです。出力がない call も `call_timeout_ms` の wall-clock 上限で
+終了します。発行間隔を認証できる transport だけが、provider/model 単位の明示的な
+追加 watchdog を有効化できます。
 
 数値上限の不正値は入力経路で扱いが異なります。`guards.*` に書いた値（および
 `TAKT_PROVIDER_OPTIONS_*` 由来の値）は宣言された設定なので、正の整数でなければ

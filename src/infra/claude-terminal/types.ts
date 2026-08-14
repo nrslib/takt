@@ -63,7 +63,10 @@ export interface ClaudeSessionRef {
 export interface FindClaudeSessionOptions {
   cwd: string;
   sessionId: string;
-  timeoutMs: number;
+  /** 親呼び出し全体の絶対期限。 */
+  deadlineAt?: number;
+  /** 互換用。deadlineAt がない直接利用時だけ相対期限として使う。 */
+  timeoutMs?: number;
   pollIntervalMs: number;
   abortSignal?: AbortSignal;
 }
@@ -72,7 +75,10 @@ export interface WaitForClaudeResponseOptions {
   session: ClaudeSessionRef;
   baseline: ClaudeTranscriptBaseline;
   cwd: string;
-  timeoutMs: number;
+  /** 親呼び出し全体の絶対期限。 */
+  deadlineAt?: number;
+  /** 互換用。deadlineAt がない直接利用時だけ相対期限として使う。 */
+  timeoutMs?: number;
   pollIntervalMs: number;
   abortSignal?: AbortSignal;
 }
@@ -96,6 +102,8 @@ export interface ClaudeTerminalCallOptions {
   permissionMode?: PermissionMode;
   bypassPermissions?: boolean;
   backend?: ClaudeTerminalBackendName;
+  callTimeoutMs?: number;
+  /** 互換用。callTimeoutMs が未指定の場合だけ使う。 */
   timeoutMs?: number;
   keepSession?: boolean;
   transcriptPollIntervalMs?: number;

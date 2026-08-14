@@ -20,12 +20,17 @@ import { incrementStepIteration } from './state-manager.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { StepExecutor } from './StepExecutor.js';
 import { formatWorkflowRuleCondition } from '../../models/workflow-rule-condition.js';
+import {
+  createWorkflowStepDeadline,
+  type WorkflowStepAbortSignalContext,
+} from './step-deadline.js';
 
 const log = createLogger('loop-monitor-judge-runner');
 
 interface LoopMonitorJudgeRunnerDeps {
   optionsBuilder: OptionsBuilder;
   stepExecutor: StepExecutor;
+  stepAbortSignalContext: WorkflowStepAbortSignalContext;
   state: WorkflowState;
   task: string;
   getMaxSteps: () => WorkflowMaxSteps;
@@ -84,56 +89,67 @@ export class LoopMonitorJudgeRunner {
     const prebuiltInstruction = baseInstruction;
 
     const providerInfo = this.deps.optionsBuilder.resolveStepProviderModel(judgeStep, resolvedRuntime);
-    const stepEventWorkflowStack = this.deps.onStepStart(
-      judgeStep,
-      this.deps.state.iteration,
-      prebuiltInstruction,
-      providerInfo,
-      triggeringStep.name,
-      stepIteration,
+    const deadline = createWorkflowStepDeadline(
+      providerInfo.provider,
+      providerInfo.providerOptions,
+      this.deps.stepAbortSignalContext.getAbortSignal(),
     );
+    try {
+      return await this.deps.stepAbortSignalContext.runWith(deadline.signal, async () => {
+        const stepEventWorkflowStack = this.deps.onStepStart(
+          judgeStep,
+          this.deps.state.iteration,
+          prebuiltInstruction,
+          providerInfo,
+          triggeringStep.name,
+          stepIteration,
+        );
 
-    const { response, instruction } = await this.deps.stepExecutor.runNormalStep(
-      judgeStep,
-      this.deps.state,
-      this.deps.task,
-      maxSteps,
-      this.deps.updatePersonaSession,
-      prebuiltInstruction,
-      resolvedRuntime,
-    );
+        const { response, instruction } = await this.deps.stepExecutor.runNormalStep(
+          judgeStep,
+          this.deps.state,
+          this.deps.task,
+          maxSteps,
+          this.deps.updatePersonaSession,
+          prebuiltInstruction,
+          resolvedRuntime,
+        );
 
-    this.deps.emitCollectedReports();
-    this.deps.onStepComplete(
-      judgeStep,
-      response,
-      instruction,
-      triggeringStep.name,
-      stepEventWorkflowStack,
-    );
+        this.deps.emitCollectedReports();
+        this.deps.onStepComplete(
+          judgeStep,
+          response,
+          instruction,
+          triggeringStep.name,
+          stepEventWorkflowStack,
+        );
 
-    if (response.status !== 'done') {
-      // 監視は衛生装置であり、判定役自身の障害（プロバイダエラー等）で
-      // 走行本体を落とさない。介入しなかった場合の自然な遷移で続行する。
-      // リセットしないと次のサイクル末尾ステップ完了のたびに壊れた判定役を
-      // 呼び直すため、成功時と同様に検出状態をリセットする。
-      log.warn('Loop monitor judge did not produce a decision; continuing with the natural transition', {
-        cycle: monitor.cycle,
-        status: response.status,
-        error: response.error,
-        fallbackNextStep,
+        if (response.status !== 'done') {
+          // 監視は衛生装置であり、判定役自身の障害（プロバイダエラー等）で
+          // 走行本体を落とさない。介入しなかった場合の自然な遷移で続行する。
+          // リセットしないと次のサイクル末尾ステップ完了のたびに壊れた判定役を
+          // 呼び直すため、成功時と同様に検出状態をリセットする。
+          log.warn('Loop monitor judge did not produce a decision; continuing with the natural transition', {
+            cycle: monitor.cycle,
+            status: response.status,
+            error: response.error,
+            fallbackNextStep,
+          });
+          this.deps.resetCycleDetector();
+          return fallbackNextStep;
+        }
+        const nextStep = this.deps.resolveNextStepFromDone(judgeStep, response);
+        log.info('Loop monitor judge decision', {
+          cycle: monitor.cycle,
+          nextStep,
+          matchedRuleIndex: response.matchedRuleIndex,
+        });
+        this.deps.resetCycleDetector();
+        return nextStep;
       });
-      this.deps.resetCycleDetector();
-      return fallbackNextStep;
+    } finally {
+      deadline.dispose();
     }
-    const nextStep = this.deps.resolveNextStepFromDone(judgeStep, response);
-    log.info('Loop monitor judge decision', {
-      cycle: monitor.cycle,
-      nextStep,
-      matchedRuleIndex: response.matchedRuleIndex,
-    });
-    this.deps.resetCycleDetector();
-    return nextStep;
   }
 
   private createJudgeStep(

@@ -6,7 +6,7 @@ import type {
   WorkflowState,
   WorkflowStep,
 } from '../../models/types.js';
-import { getAllParallelSubSteps } from '../../models/types.js';
+import { getAllParallelSubSteps, isNormalAgentWorkflowStep } from '../../models/types.js';
 import { isDelegatedWorkflowStep, isSystemWorkflowStep, isWorkflowCallStep } from '../step-kind.js';
 import type {
   RuntimeStepResolution,
@@ -14,10 +14,19 @@ import type {
   WorkflowEngineOptions,
   WorkflowStepExecutionEventContext,
 } from '../types.js';
+import type { WorkflowStepAbortSignalContext } from './step-deadline.js';
 import type { PreparedNormalStepExecution } from './StepExecutor.js';
 import type { WorkflowCallExecutionToken } from './WorkflowCallRunner.js';
 import { determineRuleTransition, type WorkflowRuleTransition } from './transitions.js';
 import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
+import {
+  createWorkflowStepCompositeDeadline,
+  createWorkflowStepDeadline,
+  type WorkflowStepDeadline,
+  type WorkflowStepDeadlineProviderInfo,
+  type WorkflowStepExecutionDeadlineContext,
+} from './step-deadline.js';
+import type { OptionsBuilder } from './OptionsBuilder.js';
 
 interface WorkflowEngineStepCoordinatorDeps {
   config: {
@@ -27,6 +36,8 @@ interface WorkflowEngineStepCoordinatorDeps {
   task: string;
   getMaxSteps: () => WorkflowMaxSteps;
   getOptions: () => WorkflowEngineOptions;
+  optionsBuilder: OptionsBuilder;
+  stepAbortSignalContext?: WorkflowStepAbortSignalContext;
   stepExecutor: {
     runNormalStep: (
       step: WorkflowStep,
@@ -71,6 +82,7 @@ interface WorkflowEngineStepCoordinatorDeps {
       updateSession: (persona: string, sessionId: string | undefined) => void,
       runtime?: RuntimeStepResolution,
       activeStepIteration?: number,
+      executionDeadlineContext?: WorkflowStepExecutionDeadlineContext,
     ) => Promise<StepRunResult>;
   };
   arpeggioRunner: {
@@ -90,6 +102,7 @@ interface WorkflowEngineStepCoordinatorDeps {
       updateSession: (persona: string, sessionId: string | undefined) => void,
       runtime?: RuntimeStepResolution,
       activeStepIteration?: number,
+      executionDeadlineContext?: WorkflowStepExecutionDeadlineContext,
     ) => Promise<StepRunResult>;
   };
   systemStepExecutor: {
@@ -131,7 +144,152 @@ interface WorkflowEngineStepCoordinatorDeps {
 }
 
 export class WorkflowEngineStepCoordinator {
+  private readonly stepDeadlines = new Map<string, WorkflowStepDeadline>();
+
   constructor(private readonly deps: WorkflowEngineStepCoordinatorDeps) {}
+
+  beginStepDeadline(
+    step: WorkflowStep,
+    runtime: RuntimeStepResolution | undefined,
+    stepIteration: number,
+  ): WorkflowStepDeadline {
+    const providerInfos = this.resolveStepDeadlineProviderInfos(step, runtime);
+    return this.getOrCreateStepDeadline(
+      step,
+      stepIteration,
+      'step',
+      () => createWorkflowStepCompositeDeadline(providerInfos, this.deps.getOptions().abortSignal),
+    );
+  }
+
+  beginExecutionUnitDeadline(
+    step: WorkflowStep,
+    stepIteration: number,
+    executionUnitKey: string,
+    providerInfo: WorkflowStepDeadlineProviderInfo,
+  ): WorkflowStepDeadline {
+    return this.getOrCreateStepDeadline(
+      step,
+      stepIteration,
+      executionUnitKey,
+      () => createWorkflowStepDeadline(
+        providerInfo.provider,
+        providerInfo.providerOptions,
+        this.deps.getOptions().abortSignal,
+      ),
+    );
+  }
+
+  disposeStepDeadline(step: WorkflowStep, stepIteration: number): void {
+    const occurrencePrefix = this.stepDeadlineOccurrencePrefix(step, stepIteration);
+    let disposed = false;
+    for (const [activeKey, activeDeadline] of this.stepDeadlines) {
+      if (activeKey.startsWith(occurrencePrefix)) {
+        activeDeadline.dispose();
+        this.stepDeadlines.delete(activeKey);
+        disposed = true;
+      }
+    }
+    if (disposed) return;
+
+    // A delegated runner can roll back its iteration counter before returning
+    // a terminal result. There is still only one active occurrence, so clean
+    // that step's deadline by name when the exact counter is no longer visible.
+    const stepPrefix = this.stepDeadlineStepPrefix(step);
+    for (const [activeKey, activeDeadline] of this.stepDeadlines) {
+      if (activeKey.startsWith(stepPrefix)) {
+        activeDeadline.dispose();
+        this.stepDeadlines.delete(activeKey);
+      }
+    }
+  }
+
+  disposeAllStepDeadlines(): void {
+    for (const deadline of this.stepDeadlines.values()) {
+      deadline.dispose();
+    }
+    this.stepDeadlines.clear();
+  }
+
+  private stepDeadlineStepPrefix(step: WorkflowStep): string {
+    return `${step.name}\u0000`;
+  }
+
+  private stepDeadlineOccurrencePrefix(step: WorkflowStep, stepIteration: number): string {
+    return `${this.stepDeadlineStepPrefix(step)}${stepIteration}\u0000`;
+  }
+
+  private stepDeadlineKey(
+    step: WorkflowStep,
+    stepIteration: number,
+    executionUnitKey: string,
+  ): string {
+    return `${this.stepDeadlineOccurrencePrefix(step, stepIteration)}${executionUnitKey}`;
+  }
+
+  private getOrCreateStepDeadline(
+    step: WorkflowStep,
+    stepIteration: number,
+    executionUnitKey: string,
+    create: () => WorkflowStepDeadline,
+  ): WorkflowStepDeadline {
+    const key = this.stepDeadlineKey(step, stepIteration, executionUnitKey);
+    const existing = this.stepDeadlines.get(key);
+    if (existing !== undefined) {
+      return existing;
+    }
+
+    const occurrencePrefix = this.stepDeadlineOccurrencePrefix(step, stepIteration);
+    for (const [activeKey, deadline] of this.stepDeadlines) {
+      if (!activeKey.startsWith(occurrencePrefix)) {
+        deadline.dispose();
+        this.stepDeadlines.delete(activeKey);
+      }
+    }
+
+    const deadline = create();
+    this.stepDeadlines.set(key, deadline);
+    return deadline;
+  }
+
+  private createExecutionDeadlineContext(
+    step: WorkflowStep,
+    stepIteration: number | undefined,
+  ): WorkflowStepExecutionDeadlineContext | undefined {
+    if (stepIteration === undefined) {
+      return undefined;
+    }
+    return {
+      begin: (executionUnitKey, providerInfo) => this.beginExecutionUnitDeadline(
+        step,
+        stepIteration,
+        executionUnitKey,
+        providerInfo,
+      ),
+      runWith: <T>(deadline: WorkflowStepDeadline, operation: () => Promise<T>): Promise<T> => {
+        if (this.deps.stepAbortSignalContext === undefined) {
+          return operation();
+        }
+        return this.deps.stepAbortSignalContext.runWith(deadline.signal, operation);
+      },
+    };
+  }
+
+  private resolveStepDeadlineProviderInfos(
+    step: WorkflowStep,
+    runtime: RuntimeStepResolution | undefined,
+  ): WorkflowStepDeadlineProviderInfo[] {
+    const providerInfos = [this.deps.optionsBuilder.resolveStepProviderModel(step, runtime)];
+
+    if (isNormalAgentWorkflowStep(step) && step.dynamicFacets !== undefined) {
+      const selectorProvider = this.deps.getOptions().selectorProvider;
+      if (selectorProvider !== undefined) {
+        providerInfos.push(selectorProvider);
+      }
+    }
+
+    return providerInfos;
+  }
 
   getStep(name: string): WorkflowStep {
     const step = this.deps.config.steps.find((candidate) => candidate.name === name);
@@ -157,6 +315,7 @@ export class WorkflowEngineStepCoordinator {
     workflowCallExecution?: WorkflowCallExecutionToken,
   ): Promise<StepRunResult> {
     const updateSession = this.deps.updatePersonaSession;
+    const executionDeadlineContext = this.createExecutionDeadlineContext(step, stepIteration);
     let result: StepRunResult;
 
     if (step.parallel && getAllParallelSubSteps(step.parallel).length > 0) {
@@ -168,6 +327,7 @@ export class WorkflowEngineStepCoordinator {
         updateSession,
         runtime,
         stepIteration,
+        executionDeadlineContext,
       );
     } else if (step.arpeggio) {
       result = await this.deps.arpeggioRunner.runArpeggioStep(
@@ -185,6 +345,7 @@ export class WorkflowEngineStepCoordinator {
         updateSession,
         runtime,
         stepIteration,
+        executionDeadlineContext,
       );
     } else if (isSystemWorkflowStep(step)) {
       result = {

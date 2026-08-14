@@ -49,6 +49,10 @@ import {
 import { SelectorInputReader } from '../dynamic-parallel/selector-input-reader.js';
 import { restoreWorkflowStepParticipationIndex } from '../workflow-step-participation-index.js';
 import { CompanionReviewAuthority } from '../companion/review-state-store.js';
+import {
+  createWorkflowStepAbortSignalContext,
+  type WorkflowStepAbortSignalContext,
+} from './step-deadline.js';
 
 const log = createLogger('workflow-engine');
 
@@ -104,6 +108,7 @@ interface WorkflowEngineSetupParams {
 }
 
 export interface WorkflowEngineServices {
+  stepAbortSignalContext: WorkflowStepAbortSignalContext;
   optionsBuilder: OptionsBuilder;
   stepExecutor: StepExecutor;
   parallelRunner: ParallelRunner;
@@ -176,6 +181,7 @@ export function applyRuntimeEnvironment(
 }
 
 export function createWorkflowEngineServices(params: WorkflowEngineSetupParams): WorkflowEngineServices {
+  const stepAbortSignalContext = createWorkflowStepAbortSignalContext(params.options.abortSignal);
   const phaseRelay = createWorkflowPhaseRelay(
     (event, ...args) => params.emitEvent(event, ...args),
     params.getCurrentWorkflowStack,
@@ -201,10 +207,12 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     () => params.task,
     getReviewScope,
     () => failureDir,
+    stepAbortSignalContext.getAbortSignal,
   );
 
   const dynamicFacetSelector = new DynamicFacetSelectorCoordinator({
     engineOptions: params.options,
+    getAbortSignal: stepAbortSignalContext.getAbortSignal,
     failureDir,
     selectionStore: params.sharedRuntime.dynamicFacetSelectionStore!,
     getCwd: params.getCwd,
@@ -256,6 +264,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getCurrentWorkflowStack: params.getCurrentWorkflowStack,
     structuredOutputNormalizers: params.options.structuredOutputNormalizers,
     abortSignal: params.options.abortSignal,
+    getAbortSignal: stepAbortSignalContext.getAbortSignal,
     executionProvider: params.options.provider,
     executionModel: params.options.model,
     internalAgentSeats: params.options.internalAgentSeats,
@@ -284,6 +293,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getCwd: params.getCwd,
     task: params.task,
     getOptions: () => params.options,
+    getAbortSignal: stepAbortSignalContext.getAbortSignal,
     sharedRuntime: params.sharedRuntime,
     resumeStackPrefix: [...(params.resumeStackPrefix ?? [])],
     consumeWorkflowCallContinuation: params.consumeWorkflowCallContinuation,
@@ -296,6 +306,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
 
   const dynamicParallelSelector = new DynamicParallelSelectorCoordinator({
     engineOptions: params.options,
+    getAbortSignal: stepAbortSignalContext.getAbortSignal,
     failureDir,
     selectionStore: params.sharedRuntime.dynamicParallelSelectionStore!,
     getCwd: params.getCwd,
@@ -323,6 +334,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     optionsBuilder,
     stepExecutor,
     engineOptions: params.options,
+    getAbortSignal: stepAbortSignalContext.getAbortSignal,
     getCwd: params.getCwd,
     dynamicParallelSelector,
     getWorkflowName: () => params.config.name,
@@ -366,6 +378,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     optionsBuilder,
     stepExecutor,
     engineOptions: params.options,
+    getAbortSignal: stepAbortSignalContext.getAbortSignal,
     getCwd: params.getCwd,
     getTask: () => params.task,
     getState: () => params.state,
@@ -409,6 +422,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
   const loopMonitorJudgeRunner = new LoopMonitorJudgeRunner({
     optionsBuilder,
     stepExecutor,
+    stepAbortSignalContext,
     state: params.state as never,
     task: params.task,
     getMaxSteps: params.getMaxSteps,
@@ -463,6 +477,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
   });
 
   return {
+    stepAbortSignalContext,
     optionsBuilder,
     stepExecutor,
     parallelRunner,

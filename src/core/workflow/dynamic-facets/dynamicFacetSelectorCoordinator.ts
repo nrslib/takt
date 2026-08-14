@@ -30,6 +30,7 @@ const SELECTOR_RATIONALE_LOG_MAX_BYTES = 1024;
 
 export interface DynamicFacetSelectorCoordinatorDeps {
   readonly engineOptions: WorkflowEngineOptions;
+  readonly getAbortSignal?: () => AbortSignal | undefined;
   readonly failureDir: string;
   readonly selectionStore: DynamicFacetSelectionStore;
   readonly getWorkflowReference: () => string;
@@ -66,7 +67,7 @@ export class DynamicFacetSelectorCoordinator {
     pool: ResolvedFacetPool,
     context?: DynamicFacetSelectionContext,
   ): Promise<DynamicFacetSelectionResult> {
-    const signal = this.deps.engineOptions.abortSignal;
+    const signal = this.deps.getAbortSignal?.() ?? this.deps.engineOptions.abortSignal;
     signal?.throwIfAborted();
     if (step.dynamicFacets === undefined) {
       throw new Error(`Step "${step.name}" has no dynamic_facets configuration`);
@@ -136,7 +137,7 @@ export class DynamicFacetSelectorCoordinator {
           cwd: this.deps.getCwd(),
           projectCwd: this.deps.engineOptions.projectCwd,
           failureDir: this.deps.failureDir,
-          abortSignal: this.deps.engineOptions.abortSignal,
+          abortSignal: signal,
           language: this.deps.engineOptions.language,
           systemPrompt: 'You are TAKT\'s internal dynamic facet selector. Select only candidate IDs from the provided pool.',
           resolution: {

@@ -10,10 +10,10 @@ export function describeOpenCodeIdleTimeout(timeoutMs: number): string {
   return `OpenCode stream timed out after ${Math.round(timeoutMs / 60000)} minutes of inactivity`;
 }
 
-// ツール結果イベントを取りこぼしても劣化を有界にするための倍率。in-flight 登録から
-// idle timeout の6倍（既定 10分 → 60分）を過ぎた呼び出しは stale として捨て、
-// アイドル検知を再開する。正常な長時間ツールを stale と誤判定しない大きさで、
-// かつ wall-clock 既定値（3,600,000ms）と同じ桁に収まる値。
+// カスタムの認証済み transport が idle watchdog を明示的に登録する場合に、
+// ツール結果イベントの取りこぼしで in-flight が残り続ける状態を有界にする倍率。
+// 既定 registry には IdleTimeoutGuard を登録せず、通常の OpenCode 呼び出しでは
+// 親ステップの wall-clock deadline のみを安全装置として使う。
 const STALE_IN_FLIGHT_TOOL_FACTOR = 6;
 
 export class WallClockGuard implements OpenCodeGuard {
@@ -92,7 +92,7 @@ export class IdleTimeoutGuard implements OpenCodeGuard {
   private arm(): void {
     if (this.onVerdict === undefined) return;
     this.disarm();
-    // テストスイート実行のような長時間のツール呼び出しの間、OpenCode は
+    // 長時間のツール呼び出しの間、OpenCode は
     // tool_use から tool_result までイベントを1つも流さない。この無音を
     // アイドルと判定すると健全な実行を切ってしまうため、in-flight のツール
     // 呼び出しが1つでもある間はアイドル計測をしない。

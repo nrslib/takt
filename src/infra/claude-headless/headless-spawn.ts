@@ -8,8 +8,8 @@ import {
 } from './stream-json-lines.js';
 import type { ClaudeHeadlessCallOptions } from './types.js';
 
-const HEADLESS_STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const HEADLESS_MAX_BUFFER_BYTES = 10 * 1024 * 1024;
+const HEADLESS_FORCE_KILL_DELAY_MS = 1_000;
 export const HEADLESS_ABORTED_MESSAGE = 'Claude CLI execution aborted';
 export const HEADLESS_RATE_LIMIT_MESSAGE = 'Claude CLI stream reported a rate limit';
 const CLAUDE_COMMAND = 'claude';
@@ -70,30 +70,25 @@ export function runHeadlessCli(
     let stdoutBytes = 0;
     let stderrBytes = 0;
     let settled = false;
-    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
+    let childClosed = false;
 
-    const clearIdle = (): void => {
-      if (idleTimer !== undefined) {
-        clearTimeout(idleTimer);
-        idleTimer = undefined;
+    const clearForceKillTimer = (): void => {
+      if (forceKillTimer !== undefined) {
+        clearTimeout(forceKillTimer);
+        forceKillTimer = undefined;
       }
     };
 
-    const scheduleIdle = (): void => {
-      clearIdle();
-      idleTimer = setTimeout(() => {
-        if (settled) {
-          return;
+    const scheduleForceKill = (): void => {
+      clearForceKillTimer();
+      forceKillTimer = setTimeout(() => {
+        forceKillTimer = undefined;
+        if (!settled && !childClosed) {
+          child.kill('SIGKILL');
         }
-        child.kill('SIGTERM');
-        rejectOnce(
-          createExecError('Claude CLI stream idle timeout: no output within time limit', {
-            stdout,
-            stderr,
-          }),
-        );
-      }, HEADLESS_STREAM_IDLE_TIMEOUT_MS);
-      idleTimer.unref?.();
+      }, HEADLESS_FORCE_KILL_DELAY_MS);
+      forceKillTimer.unref?.();
     };
 
     const abortHandler = (): void => {
@@ -101,10 +96,11 @@ export function runHeadlessCli(
         return;
       }
       child.kill('SIGTERM');
+      scheduleForceKill();
     };
 
     const cleanup = (): void => {
-      clearIdle();
+      clearForceKillTimer();
       if (options.abortSignal) {
         options.abortSignal.removeEventListener('abort', abortHandler);
       }
@@ -146,7 +142,6 @@ export function runHeadlessCli(
           return;
         }
         stdout += text;
-        scheduleIdle();
         if (containsRateLimitMarker(stdout)) {
           child.kill('SIGTERM');
           rejectOnce(
@@ -226,6 +221,7 @@ export function runHeadlessCli(
     });
 
     child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
+      childClosed = true;
       if (settled) {
         return;
       }
@@ -273,6 +269,5 @@ export function runHeadlessCli(
       }
     }
 
-    scheduleIdle();
   });
 }

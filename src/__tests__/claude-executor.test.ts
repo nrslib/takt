@@ -50,6 +50,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => {
 
 import { QueryExecutor } from '../infra/claude/executor.js';
 import { buildSdkOptions } from '../infra/claude/options-builder.js';
+import { getActiveQueryCount } from '../infra/claude/query-manager.js';
 import { sdkMessageToStreamEvent } from '../infra/claude/stream-converter.js';
 
 const RATE_LIMIT_MESSAGE = 'Rate limit exceeded. Please try again later.';
@@ -441,6 +442,62 @@ describe('QueryExecutor abortSignal wiring', () => {
 
     expect(interruptMock).toHaveBeenCalledTimes(1);
     expect(result.interrupted).toBe(true);
+  });
+
+  it('abort後はinterruptとiteratorの終了完了までquery registryから外さない', async () => {
+    const controller = new AbortController();
+    let resolveInterrupt!: () => void;
+    let resolveReturn!: () => void;
+    const interruptGate = new Promise<void>((resolve) => {
+      resolveInterrupt = resolve;
+    });
+    const returnGate = new Promise<void>((resolve) => {
+      resolveReturn = resolve;
+    });
+    let iteratorReturnStarted = false;
+    const iterator: AsyncIterator<Record<string, unknown>> = {
+      next: vi.fn(() => new Promise<IteratorResult<Record<string, unknown>>>(() => {})),
+      return: vi.fn(async () => {
+        iteratorReturnStarted = true;
+        await returnGate;
+        return { done: true, value: undefined };
+      }),
+    };
+    const query = {
+      interrupt: vi.fn(async () => {
+        await interruptGate;
+      }),
+      [Symbol.asyncIterator]: () => iterator,
+    };
+    queryMock.mockReturnValue(query);
+    const activeBefore = getActiveQueryCount();
+    const executor = new QueryExecutor();
+    const execution = executor.execute('test', {
+      cwd: '/tmp/project',
+      abortSignal: controller.signal,
+    });
+
+    await vi.waitFor(() => expect(getActiveQueryCount()).toBe(activeBefore + 1));
+    controller.abort();
+    await vi.waitFor(() => {
+      expect(query.interrupt).toHaveBeenCalledTimes(1);
+      expect(iteratorReturnStarted).toBe(true);
+    });
+    expect(getActiveQueryCount()).toBe(activeBefore + 1);
+
+    let settled = false;
+    void execution.finally(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    resolveInterrupt();
+    resolveReturn();
+    const result = await execution;
+
+    expect(result.interrupted).toBe(true);
+    expect(getActiveQueryCount()).toBe(activeBefore);
   });
 });
 

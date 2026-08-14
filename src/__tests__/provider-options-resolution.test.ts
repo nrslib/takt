@@ -732,6 +732,7 @@ describe('providerOptionsContract', () => {
       'provider_options.codex.base_url',
       'provider_options.codex.network_access',
       'provider_options.codex.reasoning_effort',
+      'provider_options.codex.guards.call_timeout_ms',
       'provider_options.codex.skills.repo',
       'provider_options.codex.skills.user',
       'provider_options.opencode.network_access',
@@ -745,16 +746,22 @@ describe('providerOptionsContract', () => {
       'provider_options.opencode.guards.reasoning_byte_limit',
       'provider_options.claude.base_url',
       'provider_options.claude.effort',
+      'provider_options.claude.guards.call_timeout_ms',
       'provider_options.claude.skills.enabled',
       'provider_options.claude.sandbox.allow_unsandboxed_commands',
       'provider_options.claude.sandbox.excluded_commands',
       'provider_options.claude_terminal.backend',
+      'provider_options.claude_terminal.guards.call_timeout_ms',
       'provider_options.claude_terminal.timeout_ms',
       'provider_options.claude_terminal.keep_session',
       'provider_options.claude_terminal.transcript_poll_interval_ms',
       'provider_options.copilot.effort',
+      'provider_options.copilot.guards.call_timeout_ms',
       'provider_options.kiro.agent',
+      'provider_options.kiro.guards.call_timeout_ms',
+      'provider_options.cursor.guards.call_timeout_ms',
       'provider_options.pi.extensions',
+      'provider_options.pi.guards.call_timeout_ms',
       'provider_options.pi.no_extensions',
       'provider_options.pi.no_skills',
       'provider_options.pi.no_prompt_templates',
@@ -766,6 +773,7 @@ describe('providerOptionsContract', () => {
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude.allowed_tools');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude.skills.enabled');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.reasoning_effort');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.guards.call_timeout_ms');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.skills.repo');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.skills.user');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.opencode.variant');
@@ -775,10 +783,15 @@ describe('providerOptionsContract', () => {
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.opencode.guards.event_limit');
     expect(PROVIDER_OPTIONS_TRACKED_KEYS).toContain('provider_options.opencode.guards.event_limit');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.copilot.effort');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.copilot.guards.call_timeout_ms');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude_terminal.timeout_ms');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude_terminal.guards.call_timeout_ms');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.kiro');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.kiro.agent');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.kiro.guards.call_timeout_ms');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.cursor.guards.call_timeout_ms');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.pi');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.pi.guards.call_timeout_ms');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.pi.extensions');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.pi.no_extensions');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.pi.no_skills');
@@ -808,6 +821,8 @@ describe('providerOptionsContract', () => {
       .toBe('provider_options.claude.skills.enabled');
     expect(toProviderOptionsTracePath('codex.reasoningEffort'))
       .toBe('provider_options.codex.reasoning_effort');
+    expect(toProviderOptionsTracePath('codex.guards.callTimeoutMs'))
+      .toBe('provider_options.codex.guards.call_timeout_ms');
     expect(toProviderOptionsTracePath('codex.skills.repo'))
       .toBe('provider_options.codex.skills.repo');
     expect(toProviderOptionsTracePath('codex.skills.user'))
@@ -844,6 +859,7 @@ describe('providerOptionsContract', () => {
         baseUrl: 'http://127.0.0.1:8787/v1',
         networkAccess: true,
         reasoningEffort: 'high',
+        guards: { callTimeoutMs: 120_000 },
         skills: { repo: false, user: true },
       },
       opencode: {
@@ -854,15 +870,18 @@ describe('providerOptionsContract', () => {
       claude: {
         baseUrl: 'http://127.0.0.1:8787',
         effort: 'medium',
+        guards: { callTimeoutMs: 180_000 },
         sandbox: { excludedCommands: ['rm -rf'] },
         skills: { enabled: false },
       },
-      claudeTerminal: { backend: 'tmux', keepSession: false },
-      copilot: { effort: 'high' },
+      claudeTerminal: { backend: 'tmux', guards: { callTimeoutMs: 240_000 }, keepSession: false },
+      copilot: { effort: 'high', guards: { callTimeoutMs: 300_000 } },
+      cursor: { guards: { callTimeoutMs: 360_000 } },
     } as Parameters<typeof getPresentProviderOptionPaths>[0])).toEqual([
       'codex.baseUrl',
       'codex.networkAccess',
       'codex.reasoningEffort',
+      'codex.guards.callTimeoutMs',
       'codex.skills.repo',
       'codex.skills.user',
       'opencode.variant',
@@ -870,11 +889,15 @@ describe('providerOptionsContract', () => {
       'opencode.guards.eventLimit',
       'claude.baseUrl',
       'claude.effort',
+      'claude.guards.callTimeoutMs',
       'claude.sandbox.excludedCommands',
       'claude.skills.enabled',
       'claudeTerminal.backend',
+      'claudeTerminal.guards.callTimeoutMs',
       'claudeTerminal.keepSession',
       'copilot.effort',
+      'copilot.guards.callTimeoutMs',
+      'cursor.guards.callTimeoutMs',
     ]);
   });
 
@@ -893,6 +916,7 @@ describe('providerOptionsContract', () => {
   it('enumerates pi SDK options when present', () => {
     expect(getPresentProviderOptionPaths({
       pi: {
+        guards: { callTimeoutMs: 420_000 },
         extensions: ['npm:example-extension'],
         noExtensions: true,
         noSkills: true,
@@ -902,6 +926,7 @@ describe('providerOptionsContract', () => {
       },
     })).toEqual([
       'pi.extensions',
+      'pi.guards.callTimeoutMs',
       'pi.noExtensions',
       'pi.noSkills',
       'pi.noPromptTemplates',
@@ -1056,10 +1081,17 @@ describe('claude_terminal provider_options normalization', () => {
   it('Given provider option trace paths, When listing paths, Then claudeTerminal leaves are included', () => {
     expect(PROVIDER_OPTION_PATHS).toEqual(expect.arrayContaining([
       'claudeTerminal.backend',
+      'claudeTerminal.guards.callTimeoutMs',
       'claudeTerminal.timeoutMs',
       'claudeTerminal.keepSession',
       'claudeTerminal.transcriptPollIntervalMs',
       'opencode.guards.eventLimit',
+      'claude.guards.callTimeoutMs',
+      'codex.guards.callTimeoutMs',
+      'copilot.guards.callTimeoutMs',
+      'kiro.guards.callTimeoutMs',
+      'cursor.guards.callTimeoutMs',
+      'pi.guards.callTimeoutMs',
     ]));
   });
 

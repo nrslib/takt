@@ -49,7 +49,6 @@ import {
 } from './tool-guard.js';
 import {
   resolveOpenCodeGuardSuite,
-  describeOpenCodeIdleTimeout,
   type OpenCodeGuardAbortKind,
   type OpenCodeGuardEvaluation,
   type OpenCodeGuardSuite,
@@ -251,8 +250,8 @@ function extractStatusCode(error: unknown): number | undefined {
  * 直近の assistant メッセージのエラーを検死し、レート制限ならその内容を返す。
  *
  * OpenCode サーバはプロバイダの 429 を内部リトライで握り、イベントバスへ
- * session.error を流さない。takt からは「無音のまま停止したセッション」に
- * 見えるため、無音ウォッチドッグのタイムアウト後にここで死因を確かめる。
+ * session.error を流さない。認証済み transport が追加する無音ウォッチドッグで
+ * セッションを停止した場合に、ここで死因を確かめる。
  *
  * 判定するのは「最新の assistant メッセージ」だけに限る。sessionId は phase や
  * resume で再利用されるため、過去の assistant に残る古い 429 を今回の死因と
@@ -771,7 +770,6 @@ export class OpenCodeAttemptRunner {
       profile: guardSuite.profile,
       enabledGuardIds: guardSuite.enabledGuardIds,
       callTimeoutMs: guardSuite.policy.callTimeoutMs,
-      streamIdleTimeoutMs: guardSuite.policy.streamIdleTimeoutMs,
       messageCycleBudget: guardSuite.policy.messageCycleBudget,
       exactToolRepeatLimit: guardSuite.policy.exactToolRepeatLimit,
       streamEventLimit: guardSuite.policy.streamEventLimit,
@@ -828,7 +826,7 @@ export class OpenCodeAttemptRunner {
   callState: OpenCodeCallState,
   ): Promise<AgentResponse | typeof RETRY_ATTEMPT> {
   const streamAbortController = new AbortController();
-  const timeoutMessage = describeOpenCodeIdleTimeout(guardSuite.policy.streamIdleTimeoutMs);
+  let timeoutMessage = OPENCODE_STREAM_ABORTED_MESSAGE;
   let abortCause: OpenCodeAbortCause | undefined;
   let diagRef: StreamDiagnostics | undefined;
   let release: (() => void) | undefined;
@@ -1093,7 +1091,7 @@ export class OpenCodeAttemptRunner {
     );
     throwIfCallAborted();
     guardSuite.startAttempt((failure) => {
-      diagRef?.onIdleTimeoutFired();
+      timeoutMessage = failure.verdict.reason;
       log.warn(failure.verdict.reason, { sessionId, model: options.model });
       abortCause = 'timeout';
       streamAbortController.abort(new Error(failure.verdict.reason));
@@ -1686,7 +1684,7 @@ export class OpenCodeAttemptRunner {
 
     throwIfServerInvalidated();
 
-    // The idle watchdog and external aborts cancel the stream. If the
+    // Guard-triggered and external aborts cancel the stream. If the
     // iterator ends without throwing, the loop falls through with
     // success still true - do not let a timed-out or aborted stream
     // pass as a completed call (a stalled stream after a rejected
@@ -1753,7 +1751,8 @@ export class OpenCodeAttemptRunner {
           sessionId: activeSessionId,
         };
       }
-      // 無音タイムアウトで止めた場合、死因はサーバが握った 429 かもしれない。
+      // 認証済み transport の無音タイムアウトで止めた場合、死因はサーバが握った
+      // 429 かもしれない。
       // メッセージ文字列だけでは判別できないため、セッションを検死する。
       if (
         abortCause === 'timeout'

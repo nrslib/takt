@@ -21,10 +21,16 @@ export interface McpHttpServerConfig {
 
 export type McpServerConfig = McpStdioServerConfig | McpSseServerConfig | McpHttpServerConfig;
 
+export interface ProviderGuardOptions {
+  /** 呼び出し全体の wall-clock 上限 (ms)。既定 60 分。 */
+  callTimeoutMs?: number;
+}
+
 export interface CodexProviderOptions {
   baseUrl?: string;
   networkAccess?: boolean;
   reasoningEffort?: CodexReasoningEffort;
+  guards?: ProviderGuardOptions;
   skills?: {
     repo?: boolean;
     user?: boolean;
@@ -37,9 +43,10 @@ export type OpenCodeGuardProfile = (typeof OPENCODE_GUARD_PROFILES)[number];
 /**
  * OpenCode 実行ガード設定。
  * profile が切るのはヒューリスティック検出（連続エラー・burst・cycle budget・
- * 連続完全一致反復）のみ。時間（idle / wall-clock）・有界資源（容量・イベント
- * 数・追跡ID数）・機密リダクションの fail-closed・厳密検出（edit conflict /
- * unavailable / invalid + correction）は minimal でも常時有効。
+ * 連続完全一致反復）のみ。wall-clock・有界資源（容量・イベント数・追跡ID数）・
+ * 機密リダクションの fail-closed・厳密検出（edit conflict / unavailable / invalid
+ * + correction）は minimal でも常時有効。idle watchdog は認証済み transport
+ * の拡張として明示的に追加する場合だけ利用する。
  */
 export interface OpenCodeGuardOptions {
   /** standard（既定）= 全ガード有効。minimal = ヒューリスティック検出のみ無効。 */
@@ -95,10 +102,13 @@ export interface ClaudeProviderOptions {
   effort?: ClaudeEffort;
   skills?: ClaudeSkillOptions;
   sandbox?: ClaudeSandboxSettings;
+  guards?: ProviderGuardOptions;
 }
 
 export interface ClaudeTerminalProviderOptions {
   backend?: 'tmux';
+  guards?: ProviderGuardOptions;
+  /** 旧設定。guards.callTimeoutMs が未指定の場合だけ呼び出し上限として使う。 */
   timeoutMs?: number;
   keepSession?: boolean;
   transcriptPollIntervalMs?: number;
@@ -106,14 +116,21 @@ export interface ClaudeTerminalProviderOptions {
 
 export interface CopilotProviderOptions {
   effort?: CopilotEffort;
+  guards?: ProviderGuardOptions;
 }
 
 export interface KiroProviderOptions {
   agent?: string;
+  guards?: ProviderGuardOptions;
+}
+
+export interface CursorProviderOptions {
+  guards?: ProviderGuardOptions;
 }
 
 /** Pi SDK resource-loading options. Extension sources are resolved temporarily. */
 export interface PiProviderOptions {
+  guards?: ProviderGuardOptions;
   extensions?: string[];
   noExtensions?: boolean;
   noSkills?: boolean;
@@ -127,6 +144,7 @@ export interface StepProviderOptions {
   opencode?: OpenCodeProviderOptions;
   claude?: ClaudeProviderOptions;
   claudeTerminal?: ClaudeTerminalProviderOptions;
+  cursor?: CursorProviderOptions;
   copilot?: CopilotProviderOptions;
   kiro?: KiroProviderOptions;
   pi?: PiProviderOptions;

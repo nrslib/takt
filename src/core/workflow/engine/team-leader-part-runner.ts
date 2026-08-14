@@ -13,6 +13,7 @@ import {
   classifyAbortSignalReason,
   isAgentFailureError,
 } from '../../../shared/types/agent-failure.js';
+import { hasWorkflowStepCallTimeoutGuard } from './step-deadline.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 import { isTeamLeaderPartCancellation } from './team-leader-part-cancellation.js';
 import {
@@ -32,6 +33,7 @@ export interface TeamLeaderPartObservability {
 export interface TeamLeaderPartExecutionOptions {
   readonly forceNewSession: boolean;
   readonly onDispatch?: RunAgentOptions['onDispatch'];
+  readonly deadlineSignal?: AbortSignal;
 }
 
 export function buildPartScopedSessionKey(
@@ -78,10 +80,29 @@ export async function runTeamLeaderPart(
   const baseOptions = executionOptions?.forceNewSession === true
     ? { ...resolvedBaseOptions, sessionId: undefined }
     : resolvedBaseOptions;
-  const { signal, dispose } = buildAbortSignal(
-    defaultTimeoutMs,
-    executionAbortSignal ?? baseOptions.abortSignal,
-  );
+  const deadlineSignal = executionOptions?.deadlineSignal;
+  let signal: AbortSignal;
+  let dispose: () => void;
+  if (deadlineSignal === undefined) {
+    const legacyDeadline = buildAbortSignal(
+      defaultTimeoutMs,
+      executionAbortSignal ?? baseOptions.abortSignal,
+    );
+    signal = legacyDeadline.signal;
+    dispose = legacyDeadline.dispose;
+  } else {
+    const legacyDeadline = !hasWorkflowStepCallTimeoutGuard(
+      partProviderInfo.provider,
+      partProviderInfo.providerOptions,
+    )
+      ? buildAbortSignal(defaultTimeoutMs, executionAbortSignal ?? baseOptions.abortSignal)
+      : undefined;
+    const signals = [executionAbortSignal, deadlineSignal, legacyDeadline?.signal].filter(
+      (candidate): candidate is AbortSignal => candidate !== undefined,
+    );
+    signal = signals.length === 1 ? signals[0]! : AbortSignal.any(signals);
+    dispose = legacyDeadline?.dispose ?? (() => {});
+  }
   const options = parallelLogger
     ? {
       ...baseOptions,

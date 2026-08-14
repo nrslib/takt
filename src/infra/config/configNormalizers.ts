@@ -664,6 +664,7 @@ export function denormalizeProviderOptions(
     providerOptions.codex?.baseUrl !== undefined
     || providerOptions.codex?.networkAccess !== undefined
     || providerOptions.codex?.reasoningEffort !== undefined
+    || providerOptions.codex?.guards !== undefined
     || providerOptions.codex?.skills?.repo !== undefined
     || providerOptions.codex?.skills?.user !== undefined
   ) {
@@ -733,6 +734,12 @@ export function denormalizeProviderOptions(
         : {}),
     };
   }
+  if (providerOptions.codex?.guards?.callTimeoutMs !== undefined) {
+    raw.codex = {
+      ...(raw.codex ?? {}),
+      guards: { call_timeout_ms: providerOptions.codex.guards.callTimeoutMs },
+    };
+  }
   if (providerOptions.claude) {
     const claude: Record<string, unknown> = {};
     if (providerOptions.claude.baseUrl !== undefined) {
@@ -743,6 +750,9 @@ export function denormalizeProviderOptions(
     }
     if (providerOptions.claude.effort !== undefined) {
       claude.effort = providerOptions.claude.effort;
+    }
+    if (providerOptions.claude.guards?.callTimeoutMs !== undefined) {
+      claude.guards = { call_timeout_ms: providerOptions.claude.guards.callTimeoutMs };
     }
     if (providerOptions.claude.skills?.enabled !== undefined) {
       claude.skills = { enabled: providerOptions.claude.skills.enabled };
@@ -761,14 +771,36 @@ export function denormalizeProviderOptions(
       raw.claude = claude;
     }
   }
-  if (providerOptions.copilot?.effort !== undefined) {
-    raw.copilot = { effort: providerOptions.copilot.effort };
+  if (providerOptions.copilot?.effort !== undefined || providerOptions.copilot?.guards !== undefined) {
+    raw.copilot = {
+      ...(providerOptions.copilot.effort !== undefined ? { effort: providerOptions.copilot.effort } : {}),
+      ...(providerOptions.copilot.guards?.callTimeoutMs !== undefined
+        ? { guards: { call_timeout_ms: providerOptions.copilot.guards.callTimeoutMs } }
+        : {}),
+    };
   }
-  if (providerOptions.kiro?.agent !== undefined) {
-    raw.kiro = { agent: providerOptions.kiro.agent };
+  if (providerOptions.kiro?.agent !== undefined || providerOptions.kiro?.guards !== undefined) {
+    raw.kiro = {
+      ...(providerOptions.kiro.agent !== undefined ? { agent: providerOptions.kiro.agent } : {}),
+      ...(providerOptions.kiro.guards?.callTimeoutMs !== undefined
+        ? { guards: { call_timeout_ms: providerOptions.kiro.guards.callTimeoutMs } }
+        : {}),
+    };
+  }
+  if (providerOptions.cursor?.guards !== undefined) {
+    raw.cursor = {
+      guards: {
+        ...(providerOptions.cursor.guards.callTimeoutMs !== undefined
+          ? { call_timeout_ms: providerOptions.cursor.guards.callTimeoutMs }
+          : {}),
+      },
+    };
   }
   if (providerOptions.pi !== undefined) {
     const pi = {
+      ...(providerOptions.pi.guards?.callTimeoutMs !== undefined
+        ? { guards: { call_timeout_ms: providerOptions.pi.guards.callTimeoutMs } }
+        : {}),
       ...(providerOptions.pi.extensions !== undefined ? { extensions: [...providerOptions.pi.extensions] } : {}),
       ...(providerOptions.pi.noExtensions !== undefined ? { no_extensions: providerOptions.pi.noExtensions } : {}),
       ...(providerOptions.pi.noSkills !== undefined ? { no_skills: providerOptions.pi.noSkills } : {}),
@@ -788,6 +820,9 @@ export function denormalizeProviderOptions(
     const claudeTerminal: Record<string, unknown> = {};
     if (providerOptions.claudeTerminal.backend !== undefined) {
       claudeTerminal.backend = providerOptions.claudeTerminal.backend;
+    }
+    if (providerOptions.claudeTerminal.guards?.callTimeoutMs !== undefined) {
+      claudeTerminal.guards = { call_timeout_ms: providerOptions.claudeTerminal.guards.callTimeoutMs };
     }
     if (providerOptions.claudeTerminal.timeoutMs !== undefined) {
       claudeTerminal.timeout_ms = providerOptions.claudeTerminal.timeoutMs;

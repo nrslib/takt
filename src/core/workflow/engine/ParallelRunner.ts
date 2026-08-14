@@ -26,6 +26,10 @@ import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { StepExecutor } from './StepExecutor.js';
 import type { WorkflowEngineOptions, PhaseName, PhasePromptParts, JudgeStageEntry, StepRunResult } from '../types.js';
 import type { RuntimeStepResolution } from '../types.js';
+import type {
+  WorkflowStepDeadline,
+  WorkflowStepExecutionDeadlineContext,
+} from './step-deadline.js';
 import type { ParallelLoggerOptions } from './parallel-logger.js';
 import type { RunAgentOptions } from '../../../agents/types.js';
 import { createRoutingScope, resolveAutoRoutingBatch } from '../auto-routing/resolver.js';
@@ -90,6 +94,17 @@ function isAgentParallelSubStep(step: WorkflowStep): step is AgentWorkflowStep {
   return !isWorkflowCallStep(step) && step.kind !== 'system';
 }
 
+async function runWithExecutionDeadline<T>(
+  context: WorkflowStepExecutionDeadlineContext | undefined,
+  deadline: WorkflowStepDeadline | undefined,
+  operation: () => Promise<T>,
+): Promise<T> {
+  if (context === undefined || deadline === undefined) {
+    return operation();
+  }
+  return context.runWith(deadline, operation);
+}
+
 /**
  * Simple semaphore for controlling concurrency.
  * Limits the number of concurrent async operations.
@@ -125,6 +140,7 @@ export interface ParallelRunnerDeps {
   readonly optionsBuilder: OptionsBuilder;
   readonly stepExecutor: StepExecutor;
   readonly engineOptions: WorkflowEngineOptions;
+  readonly getAbortSignal?: () => AbortSignal | undefined;
   readonly getCwd: () => string;
   readonly dynamicParallelSelector: DynamicParallelSelectorCoordinator;
   readonly getWorkflowName: () => string;
@@ -187,6 +203,10 @@ export class ParallelRunner {
     private readonly deps: ParallelRunnerDeps,
   ) {}
 
+  private resolveAbortSignal(): AbortSignal | undefined {
+    return this.deps.getAbortSignal?.() ?? this.deps.engineOptions.abortSignal;
+  }
+
   /**
    * Run a parallel step: execute all sub-steps concurrently, then aggregate results.
    * The aggregated output becomes the parent step response for rules evaluation.
@@ -199,14 +219,23 @@ export class ParallelRunner {
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
     runtime?: RuntimeStepResolution,
     activeStepIteration?: number,
+    executionDeadlineContext?: WorkflowStepExecutionDeadlineContext,
   ): Promise<StepRunResult> {
     if (!step.parallel) {
       throw new Error(`Step "${step.name}" has no parallel sub-steps`);
     }
+    const selectorProvider = this.deps.engineOptions.selectorProvider;
+    const selectorDeadline = isDynamicParallelSubSteps(step.parallel) && selectorProvider !== undefined
+      ? executionDeadlineContext?.begin('parallel-selector', selectorProvider)
+      : undefined;
     const subSteps = isDynamicParallelSubSteps(step.parallel)
-      ? await this.deps.dynamicParallelSelector.selectParticipants(step, state, task)
+      ? await runWithExecutionDeadline(
+          executionDeadlineContext,
+          selectorDeadline,
+          () => this.deps.dynamicParallelSelector.selectParticipants(step, state, task),
+        )
       : step.parallel;
-    this.deps.engineOptions.abortSignal?.throwIfAborted();
+    this.resolveAbortSignal()?.throwIfAborted();
     const stepIteration = activeStepIteration ?? incrementStepIteration(state, step.name);
     log.debug('Running parallel step', {
       step: step.name,
@@ -280,7 +309,7 @@ export class ParallelRunner {
           estimator: this.deps.engineOptions.autoRoutingEstimator,
           runtime: this.deps.engineOptions.routingRuntime,
           logger: log,
-          abortSignal: this.deps.engineOptions.abortSignal,
+          abortSignal: this.resolveAbortSignal(),
         })
       : new Map();
     const workflowCallResumeStack = subSteps.some(isWorkflowCallStep)
@@ -302,6 +331,24 @@ export class ParallelRunner {
       return [subStep.name, providerInfo];
     }));
 
+    const subStepDeadlineByName = new Map<string, WorkflowStepDeadline>();
+    const getSubStepDeadline = (subStep: WorkflowStep): WorkflowStepDeadline | undefined => {
+      if (executionDeadlineContext === undefined) {
+        return undefined;
+      }
+      const existing = subStepDeadlineByName.get(subStep.name);
+      if (existing !== undefined) {
+        return existing;
+      }
+      const providerInfo = providerInfoByStep.get(subStep.name);
+      if (providerInfo === undefined) {
+        throw new Error(`Provider preflight result is missing for parallel sub-step "${subStep.name}"`);
+      }
+      const deadline = executionDeadlineContext.begin(`parallel:${subStep.name}`, providerInfo);
+      subStepDeadlineByName.set(subStep.name, deadline);
+      return deadline;
+    };
+
     const subStepStartedAtByName = new Map<string, number>();
     const subStepInstructionByName = new Map<string, string>();
     const dynamicFacetIdentityPath = this.deps.getCurrentWorkflowStack?.() ?? [];
@@ -311,18 +358,25 @@ export class ParallelRunner {
           await semaphore.acquire();
         }
         try {
-          const subIteration = incrementStepIteration(
-            state,
-            buildScopedStepIterationIdentity(subStep.name, [step.name]),
+          const subStepDeadline = getSubStepDeadline(subStep);
+          return await runWithExecutionDeadline(
+            executionDeadlineContext,
+            subStepDeadline,
+            async () => {
+              const subIteration = incrementStepIteration(
+                state,
+                buildScopedStepIterationIdentity(subStep.name, [step.name]),
+              );
+              const executableSubStep = await this.deps.stepExecutor.prepareDynamicFacetStep(
+                subStep,
+                state,
+                task,
+                subIteration,
+                { identityPath: dynamicFacetIdentityPath },
+              );
+              return [subStep.name, { executableSubStep, subIteration }] as const;
+            },
           );
-          const executableSubStep = await this.deps.stepExecutor.prepareDynamicFacetStep(
-            subStep,
-            state,
-            task,
-            subIteration,
-            { identityPath: dynamicFacetIdentityPath },
-          );
-          return [subStep.name, { executableSubStep, subIteration }] as const;
         } finally {
           if (semaphore) {
             semaphore.release();
@@ -352,7 +406,14 @@ export class ParallelRunner {
         }
         const startedAt = Date.now();
         subStepStartedAtByName.set(subStep.name, startedAt);
+        const subStepDeadline = isAgentParallelSubStep(subStep)
+          ? getSubStepDeadline(subStep)
+          : undefined;
         try {
+          return await runWithExecutionDeadline(
+            executionDeadlineContext,
+            subStepDeadline,
+            async () => {
           if (isWorkflowCallStep(subStep)) {
             if (workflowCallResumeStack === undefined) {
               throw new Error(
@@ -846,6 +907,8 @@ export class ParallelRunner {
           providerInfo: subPm,
           durationMs: Math.max(0, finalResponse.timestamp.getTime() - startedAt),
         };
+            },
+          );
         } finally {
           if (semaphore) {
             semaphore.release();
