@@ -1,10 +1,13 @@
 const NON_ACTIONABLE_FINDING = 'OLD-REVIEW-readme-L1';
 
 function hasNearbyEvidence(output, anchor, evidence) {
-  const index = output.indexOf(anchor);
-  if (index < 0) return false;
-  const context = output.slice(Math.max(0, index - 300), index + anchor.length + 700);
-  return evidence.test(context);
+  let index = output.indexOf(anchor);
+  while (index >= 0) {
+    const context = output.slice(Math.max(0, index - 300), index + anchor.length + 700);
+    if (evidence.test(context)) return true;
+    index = output.indexOf(anchor, index + anchor.length);
+  }
+  return false;
 }
 
 export default function assertFinalReadinessPrecision(output) {
@@ -16,7 +19,7 @@ export default function assertFinalReadinessPrecision(output) {
       NON_ACTIONABLE_FINDING,
       /(adjudicated_non_actionable|非修正対象(?:として)?(?:維持|扱)|再開[^。\n]*(?:しない|せず|ない|なし)|(?:not|without)\s+reopen|remains?\s+non-actionable)/i,
     )],
-    ['not-rejected', !/(結果:\s*(修正が必要|タスク全体の再計画が必要|実行環境により判定不能)|Result:\s*(FIX REQUIRED|TASK REPLAN REQUIRED|BLOCKED BY ENVIRONMENT))/i.test(output)],
+    ['not-rejected', !/(結果\s*[:：]\s*(修正が必要|タスク全体の再計画が必要|実行環境により判定不能)|Result\s*:\s*(FIX REQUIRED|TASK REPLAN REQUIRED|BLOCKED BY ENVIRONMENT))/i.test(output)],
   ];
   const failed = checks.filter(([, pass]) => !pass).map(([name]) => name);
 

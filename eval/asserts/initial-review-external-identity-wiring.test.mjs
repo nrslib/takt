@@ -135,7 +135,8 @@ test('rejects false-green evidence that names only the documented execute key', 
 Result: REJECT
 
 The authoritative owner is \`docs/configuration.md\`. The runtime configuration in
-\`config/runtime.json\` uses \`stepTargets\` with \`sample-flow/execute\`.
+\`config/runtime.json\` uses \`stepTargets\` with \`sample-flow/execute\`, and
+\`src/target-lookup.js\` resolves that key.
 \`src/execution-target.js\` reaches the terminal execution path, and
 \`src/preview-target.js\` covers preview. Canonical \`sample-flow/execute\` falls back
 to \`default-runner\`. The implementation, config, and green
@@ -157,9 +158,10 @@ Result: REJECT
 The authoritative owner is \`docs/configuration.md\`. The workflow fixture
 \`workflows/sample-flow.json\` supplies \`sample-flow\` and \`execute\`, yielding
 the canonical \`sample-flow/execute\` identity. \`config/runtime.json\` alone stores
-the bare \`execute\` key, while the implementation in \`src/execution-target.js\`
-and \`src/preview-target.js\` resolves canonical \`sample-flow/execute\` through the
-execution and preview terminal paths. The green \`e2e/external-step.test.js\` is
+the bare \`execute\` key, while \`src/target-lookup.js\` and the implementation in
+\`src/execution-target.js\` and \`src/preview-target.js\` resolve canonical
+\`sample-flow/execute\` through the execution and preview terminal paths. The green
+\`e2e/external-step.test.js\` is
 self-consistent with the canonical implementation. Canonical input still falls back
 to \`default-runner\`. Update the E2E test to require canonical
 \`sample-flow/execute\` behavior.
@@ -225,6 +227,31 @@ use bare \`execute\`, so \`src/execution-target.js\` falls back to
 \`src/preview-target.js\` also falls back for preview. The green
 \`e2e/external-step.test.js\` reads the same bare-key fixture, so it is a false green.
 Update that E2E to cover \`sample-flow/execute\`.
+
+\`local-step-cache.js\` is outside these findings.
+`;
+
+  const result = assertInitialReviewExternalIdentityWiring(review);
+
+  assert.equal(result.pass, false);
+});
+
+test('rejects a documented-value test request placed in a separate finding', () => {
+  const review = `
+Result: REJECT
+
+## Finding F-1
+
+\`docs/configuration.md\` and \`workflows/sample-flow.json\` define
+\`sample-flow/execute\`. \`config/runtime.json\` and \`src/target-lookup.js\`
+use bare \`execute\`, so \`src/execution-target.js\` and \`src/preview-target.js\`
+fall back to \`default-runner\` for execution and preview. The green
+\`e2e/external-step.test.js\` shares the same bare key with the implementation,
+so it is a self-consistent false positive.
+
+## Finding F-2
+
+Update a test to cover the documented \`sample-flow/execute\` value.
 
 \`local-step-cache.js\` is outside these findings.
 `;

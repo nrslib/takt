@@ -12,7 +12,16 @@ else
   reasoning_effort="max"
   prompt="$2"
 fi
-timeout_seconds="${CODEX_JUDGE_TIMEOUT_SECONDS:-600}"
+raw_timeout_seconds="${CODEX_JUDGE_TIMEOUT_SECONDS:-600}"
+if [[ ! "$raw_timeout_seconds" =~ ^0*([1-9][0-9]{0,6})$ ]]; then
+  echo "CODEX_JUDGE_TIMEOUT_SECONDS must be an integer from 1 through 2147483" >&2
+  exit 2
+fi
+timeout_seconds="${BASH_REMATCH[1]}"
+if [ "$timeout_seconds" -gt 2147483 ]; then
+  echo "CODEX_JUDGE_TIMEOUT_SECONDS must be an integer from 1 through 2147483" >&2
+  exit 2
+fi
 cd "$(dirname "$0")/.."
 codex_pid=''
 watchdog_pid=''

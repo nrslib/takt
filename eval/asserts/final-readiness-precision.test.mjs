@@ -61,3 +61,29 @@ FINAL-NEW-readme-L1 is actionable.
 
   assert.equal(assertFinalReadinessPrecision(output).pass, false);
 });
+
+test('accepts preservation evidence near a later occurrence of the same finding', () => {
+  const output = `
+Result: MERGEABLE
+
+Summary mentions OLD-REVIEW-readme-L1 without deciding its status.
+
+${'Unrelated summary text. '.repeat(50)}
+
+The final decision keeps OLD-REVIEW-readme-L1 non-actionable and does not reopen it.
+`;
+
+  assert.equal(assertFinalReadinessPrecision(output).pass, true);
+});
+
+test('rejects contradictory English and Japanese results with a full-width colon', () => {
+  const output = `
+Result: MERGEABLE
+
+OLD-REVIEW-readme-L1 remains non-actionable.
+
+結果：修正が必要
+`;
+
+  assert.equal(assertFinalReadinessPrecision(output).pass, false);
+});

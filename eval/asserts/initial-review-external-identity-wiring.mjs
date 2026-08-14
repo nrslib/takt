@@ -162,15 +162,16 @@ export default function assertInitialReviewExternalIdentityWiring(output) {
   const defaultFallback = /default(?:-runner| target| fallback)|デフォルト(?:ターゲット|へ|に)|フォールバック/i;
   const falsePositiveEvidence = /(self[- ]consistent|false positive|green|pass(?:es|ed|ing)?|成功|通(?:る|って|過)|偽陽性|自己整合)/i;
   const testChange = /(?:test|e2e|テスト).{0,240}(?:add|change|replace|require|assert|cover|update|追加|変更|置換|要求|検証|更新)|(?:add|change|replace|require|assert|cover|update|追加|変更|置換|要求|検証|更新).{0,240}(?:test|e2e|テスト)/is;
-  const documentedValueTestDemand = hasNearbyEvidence(
-    reviewOutput,
-    'sample-flow/execute',
-    testChange,
-  );
   const hasConnectedIdentityEvidence = identityEvidenceBlocks.some((block) => (
     hasConnectedFamilyEvidence(block)
     && canonicalKey.test(block)
     && hasNearbyEvidence(block, 'sample-flow/execute', defaultFallback)
+  ));
+  const documentedValueTestDemand = identityEvidenceBlocks.some((block) => (
+    hasConnectedFamilyEvidence(block)
+    && canonicalKey.test(block)
+    && hasNearbyEvidence(block, 'sample-flow/execute', defaultFallback)
+    && hasNearbyEvidence(block, 'sample-flow/execute', testChange)
   ));
   const hasFalseGreenEvidence = identityEvidenceBlocks.some((block) => (
     falsePositiveEvidence.test(block)

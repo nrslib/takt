@@ -13,7 +13,16 @@ else
   work_dir="$2"
   prompt="$3"
 fi
-timeout_seconds="${CODEX_REVIEW_TIMEOUT_SECONDS:-900}"
+raw_timeout_seconds="${CODEX_REVIEW_TIMEOUT_SECONDS:-900}"
+if [[ ! "$raw_timeout_seconds" =~ ^0*([1-9][0-9]{0,6})$ ]]; then
+  echo "CODEX_REVIEW_TIMEOUT_SECONDS must be an integer from 1 through 2147483" >&2
+  exit 2
+fi
+timeout_seconds="${BASH_REMATCH[1]}"
+if [ "$timeout_seconds" -gt 2147483 ]; then
+  echo "CODEX_REVIEW_TIMEOUT_SECONDS must be an integer from 1 through 2147483" >&2
+  exit 2
+fi
 codex_pid=''
 watchdog_pid=''
 tmp_dir=$(mktemp -d)
