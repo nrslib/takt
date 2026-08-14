@@ -1,8 +1,11 @@
 レビューレポートの指摘を証拠で裁定し、修正対象の正本を確定してください。
 
 {{include:instructions/contract-family-review-adjudication}}
+{{include:instructions/invariant-recurrence}}
 
 **重要:** 新しい網羅レビューは行わず、Report Directory 配下の最新レビューレポートが提出した指摘だけを対象にしてください。必要な範囲で現在のコード、要求、計画、実行証跡を確認してください。
+
+共有の不変条件再発規則に従い、review-resolution の「再発台帳の引き継ぎ」を記載してください。
 
 **やること:**
 1. 各指摘について、技術的な主張、実際に壊れるシナリオまたは実装品質問題の具体的証拠、file:line または再現証拠を確認する

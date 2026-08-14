@@ -1,8 +1,11 @@
 Adjudicate the review findings from evidence and establish the authoritative remediation set.
 
 {{include:instructions/contract-family-review-adjudication}}
+{{include:instructions/invariant-recurrence}}
 
 **Important:** Do not perform a new broad review. Consider only findings submitted by the latest review reports under the Report Directory. Inspect the current code, requirements, plan, and execution evidence only as needed.
+
+Populate the review resolution's Invariant Register Carry-forward under the shared invariant-recurrence rules.
 
 **Tasks:**
 1. For each finding, verify its technical claim, concrete failure scenario or specific evidence of an implementation-quality problem, and file:line or reproduction evidence

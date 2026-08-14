@@ -83,3 +83,8 @@ tests:
     assert:
       - type: regex
         value: 'JUDGEMENT: result=incomplete; recurrence=非再発; trigger=成立; cumulative=3'
+  - description: E12 fix-plan が裁定の引き継ぎ表から台帳を継承し非 actionable を修正対象にしない
+    vars: { role: fix-plan, scenario: E12 }
+    assert:
+      - type: regex
+        value: 'JUDGEMENT: bw2_inherited=継承; bw2_trigger=成立; bw2_cumulative=3; nonactionable_in_work=含まない'

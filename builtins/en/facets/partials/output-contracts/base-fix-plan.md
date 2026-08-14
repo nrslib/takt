@@ -9,6 +9,14 @@
 | {ID or report name} | {Basis recorded by adjudication} | {Report or file:line} | {Stable ID} | {Causal chain verified in code} | {Local / Structural / Undemonstrable due to environmental factors} | {Completion condition and excluded neighboring contract or adjacent work} |
 
 ## Invariant Register
+Carry-forward source: {Latest fix-verification in the same remediation / relative path recorded by the review resolution / No prior remediation / Carry-forward source missing: reason}
+
+### Rows from the Carry-forward Source
+| Fix Unit | Family ID | Invariant Stable ID | Authoritative Owner | Current Verifier Occurrence | Previous Verifier Occurrence | Previous Path | Current Path | Same-Invariant / Recurrence Judgment | Cumulative `incomplete` Count | Trigger | Enforcement-Point Candidate | Record Integrity |
+|----------|-----------|---------------------|---------------------|-----------------------------|--------------------------------|---------------|--------------|--------------------------------------|-------------------------------|---------|-----------------------------|------------------|
+| {Copy every invariant row from the source selected under the shared rules unchanged, one row at a time; do not make No prior remediation or Carry-forward source missing into rows, and preserve their distinction in the source statement above} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} |
+
+### New and Current Planning Rows
 | Fix Unit | Family ID | Invariant Stable ID | Observable Invariant | Authoritative Owner | Classification and Recorded Recurrence Trigger | Enforcement Point |
 |----------|-----------|---------------------|----------------------|---------------------|------------------------------------------------|-------------------|
 | {Stable fix-unit ID} | {Stable family ID} | {Stable ID within the family} | {Externally observable condition} | {Single responsibility and source of truth} | {Local / Structural; true / false / not evaluable with reason} | {Required for a structural issue or a unit whose recorded trigger is true: single change point, single validation point, or type/structure that makes violation impossible. For an independent local defect: Not required; direct repair at the existing owner} |
