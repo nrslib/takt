@@ -54,6 +54,7 @@ const legacyParallelIntegrationTestFiles = Object.freeze([
   'src/__tests__/workflow-call-lifecycle.test.ts',
   'src/__tests__/workflow-engine-single-iteration-span.test.ts',
   'src/__tests__/workflow-promotion-engine.test.ts',
+  'src/__tests__/workflow-resume-continuation-engine.test.ts',
   'src/__tests__/workflow-step-fragment-contracts.test.ts',
   'src/__tests__/workflow-step-fragment-provenance.test.ts',
   'src/__tests__/workflow-step-fragment-provider-provenance.test.ts',

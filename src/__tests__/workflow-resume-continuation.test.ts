@@ -1,43 +1,18 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
-const { mockWorkflowEngineWarn } = vi.hoisted(() => ({
-  mockWorkflowEngineWarn: vi.fn(),
-}));
-
-vi.mock('../shared/utils/index.js', async (importOriginal) => {
-  const original = await importOriginal<typeof import('../shared/utils/index.js')>();
-  return {
-    ...original,
-    createLogger: (name: string) => {
-      const logger = original.createLogger(name);
-      return name === 'workflow-engine'
-        ? { ...logger, warn: mockWorkflowEngineWarn }
-        : logger;
-    },
-  };
-});
+import { describe, expect, it } from 'vitest';
 
 import type {
   WorkflowConfig,
   WorkflowResumePoint,
   WorkflowState,
 } from '../core/models/index.js';
-import type { WorkflowSharedRuntimeState } from '../core/workflow/types.js';
-import { WorkflowEngine } from '../core/workflow/engine/WorkflowEngine.js';
 import { WorkflowResumeContinuation } from '../core/workflow/engine/workflow-resume-continuation.js';
 import { buildScopedStepIterationIdentity } from '../core/workflow/step-iteration-identity.js';
 import { buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
-import { RESUME_ARTIFACTS_FILE_NAME } from '../core/workflow/run/resume-report-snapshot.js';
 import { ResumeArtifactOccurrenceIndex } from '../core/workflow/run/resume-artifact-occurrence-index.js';
 import { buildWorkflowCallInvocationIdentity } from '../core/workflow/workflow-call-invocation-index.js';
 import { buildWorkflowCallSiteIdentity } from '../core/workflow/workflow-call-site-identity.js';
-import { makeRule, makeStep } from './test-helpers.js';
 
 const ARTIFACT_HASH = '0'.repeat(64);
-const testDirectories: string[] = [];
 
 function invocationRecord(
   workflow: WorkflowConfig,
@@ -95,83 +70,6 @@ function sourceResumePoint(records: readonly ReturnType<typeof invocationRecord>
     workflow_step_participations: {},
   };
 }
-
-function engineWorkflow(): WorkflowConfig {
-  return {
-    name: 'resume-index-engine-test',
-    initialStep: 'work',
-    maxSteps: 2,
-    steps: [makeStep({
-      name: 'work',
-      rules: [makeRule('done', 'COMPLETE')],
-    })],
-  };
-}
-
-function createEngineCwd(): string {
-  const cwd = mkdtempSync(join(tmpdir(), 'takt-resume-index-engine-'));
-  testDirectories.push(cwd);
-  return cwd;
-}
-
-function constructEngine(
-  cwd: string,
-  resumeMode: 'retry' | 'requeue',
-  sharedRuntime: WorkflowSharedRuntimeState,
-): void {
-  new WorkflowEngine(engineWorkflow(), cwd, 'test task', {
-    projectCwd: cwd,
-    reportDirName: 'target-run',
-    resumeSource: { sourceRunSlug: 'source-run', resumeMode },
-    sharedRuntime,
-  });
-}
-
-afterEach(() => {
-  mockWorkflowEngineWarn.mockClear();
-  for (const directory of testDirectories.splice(0)) {
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-describe('WorkflowEngine resume occurrence index gate', () => {
-  it('通常 resume では artifact occurrence index を作らない', () => {
-    const sharedRuntime: WorkflowSharedRuntimeState = { startedAtMs: Date.now() };
-
-    constructEngine(createEngineCwd(), 'retry', sharedRuntime);
-
-    expect(sharedRuntime.resumeArtifactOccurrenceIndex).toBeUndefined();
-  });
-
-  it('requeue では artifact occurrence index を作る', () => {
-    const sharedRuntime: WorkflowSharedRuntimeState = { startedAtMs: Date.now() };
-
-    constructEngine(createEngineCwd(), 'requeue', sharedRuntime);
-
-    expect(sharedRuntime.resumeArtifactOccurrenceIndex).toBeInstanceOf(
-      ResumeArtifactOccurrenceIndex,
-    );
-  });
-
-  it('manifest があるのに source resume point を取得できなければ警告する', () => {
-    const cwd = createEngineCwd();
-    const reportsDir = join(cwd, '.takt', 'runs', 'target-run', 'reports');
-    const manifest = artifactManifest([]);
-    mkdirSync(reportsDir, { recursive: true });
-    writeFileSync(
-      join(reportsDir, RESUME_ARTIFACTS_FILE_NAME),
-      JSON.stringify(manifest),
-      'utf-8',
-    );
-
-    constructEngine(cwd, 'requeue', { startedAtMs: Date.now() });
-
-    expect(mockWorkflowEngineWarn).toHaveBeenCalledWith(
-      'Requeue artifact occurrence restoration is unavailable because source run metadata or resume point is missing',
-      { sourceRunSlug: 'source-run' },
-    );
-  });
-});
 
 describe('WorkflowResumeContinuation', () => {
   it('requeue で継承した workflow_call 成果物の最大 occurrence の続きから採番する', () => {
