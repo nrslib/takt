@@ -14,7 +14,7 @@ npm run build
 npm run lint
 npm test
 npm run test:it
-npm run test:prompt-evals
+npm run test:opencode-probe
 npm run test:e2e:mock
 ```
 
@@ -42,11 +42,11 @@ npm run build
 npm run lint
 npm test
 npm run test:it
-npm run test:prompt-evals
+npm run test:opencode-probe
 npm run test:e2e:mock
 ```
 
-`npm test` is the fast unit gate for the development loop. Run `npm run test:it` after implementation for light integration coverage of real filesystem, SQLite, bounded storage, and multi-component contracts. Heavy integration uses one worker locally; pull-request CI shards it across isolated runners for real child processes, Git, complete engines, integration/regression/performance suites, and measured resource-heavy serial groups. If you add or change an IT, run `npm test -- src/__tests__/releaseVerificationWiring.test.ts` by itself. If it is a heavy IT, also run that file yourself with `npm test -- <test-file>` before submitting; PR-wide execution must not be its first run. The deterministic OpenCode prompt smoke suite runs through `npm run test:prompt-evals`. Release maintainers can run `npm run check:release` for the complete path: fast unit shards, light IT, heavy IT, and all provider E2E suites.
+`npm test` is the fast unit gate for the development loop. Run `npm run test:it` after implementation for light integration coverage of real filesystem, SQLite, bounded storage, and multi-component contracts. Heavy integration uses one worker locally; pull-request CI shards it across isolated runners for real child processes, Git, complete engines, integration/regression/performance suites, and measured resource-heavy serial groups. If you add or change an IT, run `npm test -- src/__tests__/releaseVerificationWiring.test.ts` by itself. If it is a heavy IT, also run that file yourself with `npm test -- <test-file>` before submitting; PR-wide execution must not be its first run. The deterministic OpenCode prompt smoke suite runs through `npm run test:opencode-probe`. Release maintainers can run `npm run check:release` for the complete path: fast unit shards, light IT, heavy IT, and all provider E2E suites.
 
 See the [E2E testing overview](./docs/testing/e2e.md) for how to run the E2E suites and their prerequisites.
 

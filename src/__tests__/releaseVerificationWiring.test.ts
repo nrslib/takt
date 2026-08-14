@@ -244,7 +244,8 @@ describe('release verification wiring', () => {
       'test:it:all': 'npm run test:it && npm run test:it:heavy',
       'test:it:serial:git': 'npm run test:it:heavy:serial:git',
       'test:it:serial:workflow': 'npm run test:it:heavy:serial:workflow',
-      'test:prompt-evals': 'node prompt-evals/run-smoke.mjs',
+      'test:opencode-probe': 'node tools/opencode-probe/run-smoke.mjs',
+      'test:prompt-evals': 'npm run test:opencode-probe',
     });
     expect(manifest.scripts['test:e2e:provider:claude-sdk'])
       .toMatch(/TAKT_E2E_PROVIDER=claude-sdk/);

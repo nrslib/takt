@@ -14,21 +14,21 @@ import {
   summarizeOpenCodeSession,
   type OpenCodeProbeClient,
   type OpenCodeRunnableProbeClient,
-} from '../../prompt-evals/opencode-probe-lifecycle.mjs';
+} from '../../tools/opencode-probe/opencode-probe-lifecycle.mjs';
 import {
   parseProbeResult,
   runProbeProcess,
-} from '../../prompt-evals/probe-process.mjs';
-import { terminateWindowsProcessTree } from '../../prompt-evals/process-tree.mjs';
+} from '../../tools/opencode-probe/probe-process.mjs';
+import { terminateWindowsProcessTree } from '../../tools/opencode-probe/process-tree.mjs';
 import {
   runSmokeScript,
   type SmokeBatchResult,
-} from '../../prompt-evals/smoke-process.mjs';
+} from '../../tools/opencode-probe/smoke-process.mjs';
 import {
   markProbeWorkerEnvironment,
   prepareIsolatedProbeEnvironment,
-} from '../../prompt-evals/probe-environment.mjs';
-import { withProbeWorkspace } from '../../prompt-evals/probe-workspace.mjs';
+} from '../../tools/opencode-probe/probe-environment.mjs';
+import { withProbeWorkspace } from '../../tools/opencode-probe/probe-workspace.mjs';
 
 interface SmokeFixtureCase {
   name: string;
@@ -44,10 +44,10 @@ const PROBE_PHASE_BUDGET_MS = process.platform === 'win32' ? 2_000 : 500;
 const OWNED_ENTRYPOINT_TIMEOUT_MS = process.platform === 'win32' ? 10_000 : 2_000;
 
 const smokeBatchFixture = fileURLToPath(
-  new URL('../../prompt-evals/fixtures/run-smoke-batch.mjs', import.meta.url),
+  new URL('../../tools/opencode-probe/fixtures/run-smoke-batch.mjs', import.meta.url),
 );
 const smokeCaseFixture = fileURLToPath(
-  new URL('../../prompt-evals/fixtures/smoke-case.mjs', import.meta.url),
+  new URL('../../tools/opencode-probe/fixtures/smoke-case.mjs', import.meta.url),
 );
 
 describe('prompt eval probe lifecycle', () => {
@@ -312,8 +312,8 @@ describe('prompt eval probe lifecycle', () => {
     const testRoot = mkdtempSync(join(tmpdir(), 'takt-probe-startup-failure-'));
     temporaryDirectories.push(testRoot);
     const script = join(testRoot, 'startup-failure.mjs');
-    const lifecycleUrl = new URL('../../prompt-evals/opencode-probe-lifecycle.mjs', import.meta.url).href;
-    const processUrl = new URL('../../prompt-evals/probe-process.mjs', import.meta.url).href;
+    const lifecycleUrl = new URL('../../tools/opencode-probe/opencode-probe-lifecycle.mjs', import.meta.url).href;
+    const processUrl = new URL('../../tools/opencode-probe/probe-process.mjs', import.meta.url).href;
     writeFileSync(script, [
       `import { runOpenCodeProbe } from ${JSON.stringify(lifecycleUrl)}`,
       `import { reportProbePhase } from ${JSON.stringify(processUrl)}`,
@@ -962,7 +962,7 @@ describe('prompt eval probe lifecycle', () => {
     const testRoot = mkdtempSync(join(tmpdir(), 'takt-smoke-outer-timeout-'));
     temporaryDirectories.push(testRoot);
     const script = join(testRoot, 'outer-probe.mjs');
-    const probeProcessUrl = new URL('../../prompt-evals/probe-process.mjs', import.meta.url).href;
+    const probeProcessUrl = new URL('../../tools/opencode-probe/probe-process.mjs', import.meta.url).href;
     const workerSource = [
       "const { spawn } = require('node:child_process')",
       "const worker = spawn(process.execPath, ['-e', \"process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)\"], { stdio: 'ignore' })",
@@ -1174,7 +1174,7 @@ describe('prompt eval probe lifecycle', () => {
     const testRoot = mkdtempSync(join(tmpdir(), 'takt-probe-owned-entrypoint-'));
     temporaryDirectories.push(testRoot);
     const script = join(testRoot, 'owned-entrypoint-probe.mjs');
-    const entrypointUrl = new URL('../../prompt-evals/probe-entrypoint.mjs', import.meta.url).href;
+    const entrypointUrl = new URL('../../tools/opencode-probe/probe-entrypoint.mjs', import.meta.url).href;
     writeFileSync(script, [
       "import { mkdtempSync } from 'node:fs'",
       "import { tmpdir } from 'node:os'",
@@ -1204,7 +1204,7 @@ describe('prompt eval probe lifecycle', () => {
     const testRoot = mkdtempSync(join(tmpdir(), 'takt-probe-entrypoint-output-'));
     temporaryDirectories.push(testRoot);
     const script = join(testRoot, 'owned-entrypoint-output.mjs');
-    const entrypointUrl = new URL('../../prompt-evals/probe-entrypoint.mjs', import.meta.url).href;
+    const entrypointUrl = new URL('../../tools/opencode-probe/probe-entrypoint.mjs', import.meta.url).href;
     const stdoutPayloadBytes = 256 * 1024;
     const stderrPayloadBytes = 128 * 1024;
     writeFileSync(script, [

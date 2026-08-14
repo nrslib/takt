@@ -19,7 +19,7 @@
     "takt-mcp": "./dist/app/mcp/index.js"
   },
   "scripts": {
-    "build": "tsc && tsc -p tsconfig.prompt-evals.json && node scripts/copy-build-assets.mjs",
+    "build": "tsc && tsc -p tsconfig.opencode-probe.json && node scripts/copy-build-assets.mjs",
     "watch": "tsc --watch",
     "analyze:usage": "node dist/commands/analyze-usage.js",
     "eval:prompts:prepare": "node eval/scripts/prepare.mjs",
@@ -68,7 +68,8 @@
     "test:it:serial": "npm run test:it:heavy:serial",
     "test:it:serial:git": "npm run test:it:heavy:serial:git",
     "test:it:serial:workflow": "npm run test:it:heavy:serial:workflow",
-    "test:prompt-evals": "node prompt-evals/run-smoke.mjs",
+    "test:opencode-probe": "node tools/opencode-probe/run-smoke.mjs",
+    "test:prompt-evals": "npm run test:opencode-probe",
     "test:watch": "vitest --config vitest.config.unit.parallel.ts",
     "test:e2e": "tmp=\"$(mktemp -t takt-e2e.XXXXXX)\"; npm run test:e2e:mock >\"$tmp\" 2>&1; code=$?; cat \"$tmp\"; if grep -q \"error connecting to api.github.com\" \"$tmp\"; then echo \"[takt] GitHub connectivity error detected in E2E output\"; code=1; fi; rm -f \"$tmp\"; if [ \"$code\" -eq 0 ]; then msg='test:e2e passed'; else msg=\"test:e2e failed (exit=$code)\"; fi; if command -v osascript >/dev/null 2>&1; then osascript -e \"display notification \\\"$msg\\\" with title \\\"takt\\\" subtitle \\\"E2E\\\"\" >/dev/null 2>&1 || true; fi; echo \"[takt] $msg\"; exit $code",
     "test:e2e:smoke": "TAKT_E2E_PROVIDER=mock vitest run --config vitest.config.e2e.smoke.ts --outputFile.json=e2e/results/smoke.json",
