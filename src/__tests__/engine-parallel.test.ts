@@ -82,6 +82,7 @@ import {
 import { buildWorkflowCallInvocationIdentity } from '../core/workflow/workflow-call-invocation-index.js';
 import { getWorkflowReference } from '../core/workflow/workflow-reference.js';
 import { buildWorkflowStepParticipationIdentity } from '../core/workflow/workflow-step-participation-index.js';
+import { MAX_EXPLICIT_PARALLEL_ERROR_RETRIES } from '../core/workflow/engine/ParallelRunner.js';
 import {
   makeResponse,
   makeStep,
@@ -2486,6 +2487,47 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
     if (existsSync(tmpDir)) {
       rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  it('ignoreIterationLimit 下でも persistent parallel error retry を明示上限で abort する', async () => {
+    const config = buildParallelOnlyConfig();
+    config.maxSteps = 1;
+    config.steps[0]!.rules = [
+      makeRule('any("error")', 'reviewers'),
+      ...(config.steps[0]!.rules ?? []),
+    ];
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      ignoreIterationLimit: true,
+    });
+    vi.mocked(runAgent).mockImplementation(async (persona, task, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: task,
+      });
+      return makeResponse({
+        persona,
+        status: 'error',
+        content: '',
+        error: 'Part timeout after 100ms',
+        failureCategory: 'part_timeout',
+      });
+    });
+    vi.mocked(mockRuleEvaluation).mockImplementation((step) => (
+      step.name === 'reviewers' ? { index: 0, method: 'aggregate' } : undefined
+    ));
+    const abortFn = vi.fn();
+    engine.on('workflow:abort', abortFn);
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(state.stepIterations.get('reviewers')).toBe(MAX_EXPLICIT_PARALLEL_ERROR_RETRIES + 1);
+    expect(runAgent).toHaveBeenCalledTimes((MAX_EXPLICIT_PARALLEL_ERROR_RETRIES + 1) * 4);
+    expect(abortFn).toHaveBeenCalledOnce();
+    const reason = abortFn.mock.calls[0]![1] as string;
+    expect(reason).toContain(`explicit error retry limit (${MAX_EXPLICIT_PARALLEL_ERROR_RETRIES})`);
+    expect(reason).not.toBe('rule_no_match');
   });
 
   it('should retry a sub-step once with a fresh session when the provider errors', async () => {

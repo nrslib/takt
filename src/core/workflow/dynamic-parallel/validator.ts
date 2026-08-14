@@ -2,6 +2,7 @@ import type { WorkflowRuleCondition } from '../../models/workflow-rule-condition
 import {
   aggregateConditionsOf,
   dynamicParallelAggregateTargetLabel,
+  PARALLEL_TERMINAL_ERROR_LABEL,
   semanticLabelsOf,
 } from '../../models/workflow-rule-condition.js';
 import type {
@@ -82,7 +83,8 @@ function validateAggregateContracts(
   stepPath: readonly PropertyKey[],
 ): void {
   const requiredLabels = new Set((step.rules ?? []).flatMap((rule, index) =>
-    aggregateTargetLabels(rule.condition, [...stepPath, 'rules', index, 'condition'])));
+    aggregateTargetLabels(rule.condition, [...stepPath, 'rules', index, 'condition']))
+    .filter((label) => label !== PARALLEL_TERMINAL_ERROR_LABEL));
   for (const role of ['fixed', 'pool'] as const) {
     for (const [index, subStep] of parallel[role].entries()) {
       const labels = new Set((subStep.rules ?? []).flatMap((rule) => semanticLabelsOf(rule.condition)));

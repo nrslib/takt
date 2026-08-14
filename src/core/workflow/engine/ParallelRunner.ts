@@ -46,7 +46,12 @@ import {
 import { compactSessionBeforePhase1 } from './session-compaction.js';
 import { invalidateExpectedPersonaSession, invalidatePersonaSessionIfExpected } from './session-invalidation.js';
 import { recordAgentUsageEvent } from './agent-usage-event.js';
-import { formatWorkflowRuleCondition } from '../../models/workflow-rule-condition.js';
+import {
+  aggregateConditionsOf,
+  formatWorkflowRuleCondition,
+  PARALLEL_TERMINAL_ERROR_LABEL,
+  semanticLabelsOf,
+} from '../../models/workflow-rule-condition.js';
 import { evaluatePostExecutionRules } from './post-execution-rule-evaluator.js';
 import { buildScopedStepIterationIdentity } from '../step-iteration-identity.js';
 import { createRunFailure } from '../run/run-failure.js';
@@ -72,6 +77,7 @@ import {
 } from '../../../shared/types/agent-failure.js';
 
 const log = createLogger('parallel-runner');
+export const MAX_EXPLICIT_PARALLEL_ERROR_RETRIES = 3;
 
 type ParallelSubStepResult = {
   subStep: WorkflowStep;
@@ -199,6 +205,8 @@ export interface ParallelRunnerDeps {
 }
 
 export class ParallelRunner {
+  private readonly explicitErrorAttemptsByStep = new Map<string, number>();
+
   constructor(
     private readonly deps: ParallelRunnerDeps,
   ) {}
@@ -996,6 +1004,10 @@ export class ParallelRunner {
       (result) => result.response.failureCategory
         === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
     );
+    const rateLimitedResult = terminalResults.find((r) => r.response.status === 'rate_limited');
+    if (parseFailureResult !== undefined || rateLimitedResult !== undefined) {
+      this.explicitErrorAttemptsByStep.delete(step.name);
+    }
     if (parseFailureResult) {
       return this.createTerminalParentResult({
         step,
@@ -1008,7 +1020,6 @@ export class ParallelRunner {
         primaryFailure: parseFailureResult,
       });
     }
-    const rateLimitedResult = terminalResults.find((r) => r.response.status === 'rate_limited');
     if (rateLimitedResult) {
       return this.createTerminalParentResult({
         step,
@@ -1023,7 +1034,11 @@ export class ParallelRunner {
     }
 
     const errorResults = terminalResults.filter((r) => r.response.status === 'error');
-    if (errorResults.length > 0) {
+    const hasExplicitErrorRule = this.hasExplicitErrorAggregateRule(step);
+    if (errorResults.length === 0) {
+      this.explicitErrorAttemptsByStep.delete(step.name);
+    } else if (!hasExplicitErrorRule) {
+      this.explicitErrorAttemptsByStep.delete(step.name);
       const primaryFailure = this.firstFailureResult(errorResults);
       if (primaryFailure === undefined) {
         throw new Error(`Parallel step "${step.name}" has no primary error result`);
@@ -1038,6 +1053,35 @@ export class ParallelRunner {
         providerInfo: primaryFailure.providerInfo ?? parentPm,
         primaryFailure,
       });
+    } else {
+      const attempts = (this.explicitErrorAttemptsByStep.get(step.name) ?? 0) + 1;
+      this.explicitErrorAttemptsByStep.set(step.name, attempts);
+      if (attempts > MAX_EXPLICIT_PARALLEL_ERROR_RETRIES) {
+        const primaryFailure = this.firstFailureResult(errorResults);
+        if (primaryFailure === undefined) {
+          throw new Error(`Parallel step "${step.name}" has no primary error result`);
+        }
+        const reason = `Parallel step "${step.name}" exceeded its explicit error retry limit (${MAX_EXPLICIT_PARALLEL_ERROR_RETRIES})`;
+        return this.createTerminalParentResult({
+          step,
+          state,
+          stepIteration,
+          subResults,
+          terminalResults: errorResults,
+          status: 'error',
+          providerInfo: primaryFailure.providerInfo ?? parentPm,
+          primaryFailure,
+          failure: createRunFailure({
+            kind: 'step_error',
+            step: step.name,
+            reason,
+            error: reason,
+            ...(primaryFailure.response.failureCategory === undefined
+              ? {}
+              : { failureCategory: primaryFailure.response.failureCategory }),
+          }),
+        });
+      }
     }
 
     const blockedResults = terminalResults.filter((r) => r.response.status === 'blocked');
@@ -1100,7 +1144,9 @@ export class ParallelRunner {
 
     // Aggregate sub-step outputs into the parent step response
     const aggregatedContent = subResults
-      .map((r) => `## ${r.subStep.name}\n${r.response.content}`)
+      .map((r) => `## ${r.subStep.name}\n${r.response.status === 'error'
+        ? this.buildSubStepErrorDiagnostic(r)
+        : r.response.content}`)
       .join('\n\n---\n\n');
 
     const aggregatedInstruction = subResults
@@ -1414,6 +1460,7 @@ export class ParallelRunner {
     status: ParallelTerminalStatus;
     providerInfo: StepRunResult['providerInfo'];
     primaryFailure: ParallelSubStepResult;
+    failure?: StepRunResult['workflowCallFailure'];
   }): StepRunResult {
     const content = this.buildTerminalDiagnostic(
       options.step,
@@ -1424,7 +1471,11 @@ export class ParallelRunner {
     const failureCategory = primaryFailure.response.failureCategory;
     const boundedContent = truncateUtf8PreservingMarker(content, MAX_AGENT_FAILURE_MESSAGE_BYTES);
     const failureError = truncateUtf8PreservingMarker(
-      sanitizeSensitiveText(primaryFailure.response.error ?? primaryFailure.response.content),
+      sanitizeSensitiveText(
+        options.failure?.error
+          ?? primaryFailure.response.error
+          ?? primaryFailure.response.content,
+      ),
       MAX_AGENT_FAILURE_MESSAGE_BYTES,
     );
     const response: AgentResponse = {
@@ -1459,7 +1510,7 @@ export class ParallelRunner {
       );
     }
 
-    const selectedFailure = this.toRunFailure(primaryFailure);
+    const selectedFailure = options.failure ?? this.toRunFailure(primaryFailure);
     return {
       response,
       instruction: options.subResults.map((result) => result.instruction).join('\n\n'),
@@ -1522,6 +1573,28 @@ export class ParallelRunner {
       || result.response.status === 'blocked'
       || result.response.status === 'rate_limited'
     ));
+  }
+
+  private hasExplicitErrorAggregateRule(step: WorkflowStep): boolean {
+    return step.rules?.some((rule) => aggregateConditionsOf(rule.condition).some(
+      (condition) => condition.targetConditions.some(
+        (target) => semanticLabelsOf(target).includes(PARALLEL_TERMINAL_ERROR_LABEL),
+      ),
+    )) === true;
+  }
+
+  private buildSubStepErrorDiagnostic(result: ParallelSubStepResult): string {
+    const failureCategory = result.response.failureCategory ?? 'none';
+    const detail = truncateUtf8PreservingMarker(
+      sanitizeSensitiveText(result.response.error ?? result.response.content),
+      MAX_AGENT_FAILURE_MESSAGE_BYTES,
+    );
+    return [
+      '[ERROR]',
+      `status: ${result.response.status}`,
+      `failureCategory: ${failureCategory}`,
+      `detail: ${detail}`,
+    ].join('\n');
   }
 
   private buildTerminalDiagnostic(

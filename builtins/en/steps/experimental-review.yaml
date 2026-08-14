@@ -13,7 +13,6 @@ params:
   coding_review_instruction: { type: facet_ref, facet_kind: instruction }
   ai_antipattern_review_instruction: { type: facet_ref, facet_kind: instruction }
   frontend_review_instruction: { type: facet_ref, facet_kind: instruction }
-  completion_retry_instruction: { type: facet_ref, facet_kind: instruction }
 
 name: review
 tags: [review]
@@ -22,8 +21,6 @@ parallel:
     - name: coding-review
       capabilities: readonly
       tags: [review]
-      completion_retry:
-        retry_instruction: { $param: completion_retry_instruction }
       edit: false
       persona: coding-reviewer
       policy:
@@ -47,8 +44,6 @@ parallel:
     - name: ai-antipattern-review
       capabilities: readonly
       tags: [review]
-      completion_retry:
-        retry_instruction: { $param: completion_retry_instruction }
       edit: false
       persona: ai-antipattern-reviewer
       policy:
@@ -71,8 +66,6 @@ parallel:
       description: Review module structure, responsibility boundaries, dependency direction, and call paths.
       capabilities: readonly
       tags: [review]
-      completion_retry:
-        retry_instruction: { $param: completion_retry_instruction }
       edit: false
       persona: architecture-reviewer
       policy: [contract-change, review]
@@ -88,8 +81,6 @@ parallel:
       description: Review UI, components, state management, accessibility, and presentation.
       capabilities: readonly
       tags: [review]
-      completion_retry:
-        retry_instruction: { $param: completion_retry_instruction }
       edit: false
       persona: frontend-reviewer
       policy: [contract-change, review]
@@ -105,8 +96,6 @@ parallel:
       description: Review APIs, domain logic, server-side processing, and persistence.
       capabilities: readonly
       tags: [review]
-      completion_retry:
-        retry_instruction: { $param: completion_retry_instruction }
       edit: false
       persona: coding-reviewer
       policy: [contract-change, review, coding]
@@ -122,8 +111,6 @@ parallel:
       description: Review authentication, authorization, input validation, secrets, dependencies, and security boundaries.
       capabilities: readonly
       tags: [review]
-      completion_retry:
-        retry_instruction: { $param: completion_retry_instruction }
       edit: false
       persona: security-reviewer
       policy: [contract-change, security-review]
@@ -143,8 +130,6 @@ parallel:
       description: Review test coverage, test design, integration boundaries, and E2E boundaries.
       capabilities: readonly
       tags: [review]
-      completion_retry:
-        retry_instruction: { $param: completion_retry_instruction }
       edit: false
       persona: testing-reviewer
       policy: [contract-change, review, testing]
