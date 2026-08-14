@@ -577,3 +577,7 @@ Quality attributes become design constraints only when their need is supported b
 Assess scope by whether it forms a coherent set of requirements, root causes, and affected paths with the same contract, not by line count. A broad change may be indispensable, while a small unrelated edit is still scope expansion.
 
 Logical cohesion can be explained by a shared requirement, root cause, contract, or real boundary. A coder's scope declaration is supporting evidence; when it differs from the actual change, evaluate against the request and affected paths as the authority.
+
+## Termination-Path Completeness
+
+For features that create temporary files or external resources, verify that they are released not only on normal completion but at every terminal: failure, cancellation, and forced termination. `process.exit()` and forced termination (repeated SIGINT, an abort handler that exits immediately) do not run `finally` blocks. Cleanup that relies on `finally` is bypassed on any path that calls `process.exit` inside it and on forced-termination paths. For each entry point that creates resources, build the list of terminals (normal, failure, cancellation, forced termination) and enumerate the terminals where cleanup does not run.

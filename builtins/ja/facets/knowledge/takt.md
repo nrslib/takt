@@ -198,3 +198,7 @@ Report Phase は Phase 1 の成果物を読む Phase 2 であり、readonly か�
 | 継続すべき Phase 間でセッションが切れている | REJECT（コンテキスト喪失） |
 | 新規セッション retry 成功後に、古い resumed session を残している | REJECT（意図しない resume） |
 | report retry/fallback で readonly、tool-free、能力 override が落ちている | REJECT |
+
+## 終了経路の完全性
+
+一時ファイルや外部リソースを生成する機能では、正常終了だけでなく、失敗、キャンセル、強制終了の各終端でも解放されるかを確認します。`process.exit()` と強制終了（SIGINT 連打、abort ハンドラの即時終了）は `finally` を実行しません。`finally` に依存した cleanup は、その内側で `process.exit` が呼ばれる経路や強制終了経路では迂回されます。リソースを生成する入口ごとに、終端の一覧（正常・失敗・キャンセル・強制終了）を作り、cleanup が実行されない終端を列挙してください。
