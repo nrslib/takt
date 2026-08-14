@@ -1,4 +1,5 @@
 import type { AgentResponse, CompanionFinding } from '../../models/index.js';
+import { safeExternalErrorMessage } from '../../../shared/utils/safeExternalErrorMessage.js';
 import { createAbortError } from './abort.js';
 import { buildCompanionFollowUpInstruction } from './evidence.js';
 
@@ -25,6 +26,7 @@ export async function runCompanionFixLoop<TOptions extends object>(input: {
   readonly phaseResponse: AgentResponse;
   readonly latestSessionId: string | undefined;
   readonly followUpRounds: number;
+  readonly followUpFailureReason?: string;
 }> {
   let latestResponse = input.initialResponse;
   let latestSessionId = input.initialResponse.sessionId;
@@ -42,24 +44,40 @@ export async function runCompanionFixLoop<TOptions extends object>(input: {
       return { phaseResponse: latestResponse, latestSessionId, followUpRounds };
     }
 
-    const fixed = await input.executeFollowUp({
-      sequence: followUpRounds + 2,
-      phase: 1,
-      findingCount: review.findings.length,
-      sessionId: latestSessionId,
-      options: { ...input.phase1Options, sessionId: latestSessionId },
-      instruction: buildCompanionFollowUpInstruction(review.findings),
-    });
+    let fixed: AgentResponse;
+    try {
+      fixed = await input.executeFollowUp({
+        sequence: followUpRounds + 2,
+        phase: 1,
+        findingCount: review.findings.length,
+        sessionId: latestSessionId,
+        options: { ...input.phase1Options, sessionId: latestSessionId },
+        instruction: buildCompanionFollowUpInstruction(review.findings),
+      });
+    } catch (error) {
+      followUpRounds += 1;
+      throwIfAborted(input.abortSignal);
+      return {
+        phaseResponse: latestResponse,
+        latestSessionId,
+        followUpRounds,
+        followUpFailureReason: safeExternalErrorMessage(error),
+      };
+    }
     throwIfAborted(input.abortSignal);
     followUpRounds += 1;
-    latestResponse = fixed;
-    latestSessionId = fixed.sessionId ?? latestSessionId;
     if (fixed.status !== 'done') {
-      const phaseResponse = fixed.sessionId === undefined && latestSessionId !== undefined
-        ? { ...fixed, sessionId: latestSessionId }
-        : fixed;
-      return { phaseResponse, latestSessionId, followUpRounds };
+      return {
+        phaseResponse: latestResponse,
+        latestSessionId,
+        followUpRounds,
+        followUpFailureReason: safeExternalErrorMessage(fixed.error ?? fixed.content),
+      };
     }
+    latestSessionId = fixed.sessionId ?? latestSessionId;
+    latestResponse = fixed.sessionId === undefined && latestSessionId !== undefined
+      ? { ...fixed, sessionId: latestSessionId }
+      : fixed;
     latestImplementerResponse = fixed.content;
   }
 }

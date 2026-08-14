@@ -275,7 +275,7 @@ describe('companion StepExecutor lifecycle', () => {
   });
 
   it.each(['error', 'rate_limited', 'blocked'] as const)(
-    'propagates a %s companion follow-up response through normal failure handling',
+    'records a %s companion follow-up failure and continues with the latest success',
     async (status) => {
       setMockScenario([
         { persona: 'coder', status: 'done', content: 'implemented' },
@@ -305,7 +305,9 @@ describe('companion StepExecutor lifecycle', () => {
           persona: 'coder',
           status,
           content: `follow-up ${status}`,
-          ...(status === 'error' ? { error: 'follow-up failed' } : {}),
+          ...(status === 'error'
+            ? { error: 'follow-up failed: token=secret at /private/project/file.ts' }
+            : {}),
         },
       ]);
       const executeAgentMock = vi.mocked(executeAgent);
@@ -333,17 +335,20 @@ describe('companion StepExecutor lifecycle', () => {
         emitEvent: vi.fn(),
       })).runNormalStep(step, workflowState, 'task', 5, vi.fn(), 'Implement.');
 
-      expect(result.response).toMatchObject({ status, content: `follow-up ${status}` });
+      expect(result.response).toMatchObject({ status: 'done', content: 'implemented' });
       const coderCalls = executeAgentMock.mock.calls.filter(([persona]) => persona === 'coder');
       expect(coderCalls).toHaveLength(2);
       expect(coderCalls[1]?.[2]?.sessionId).toBeDefined();
       expect(result.response.sessionId).toBe(coderCalls[1]?.[2]?.sessionId);
-      expect(result.response.content).not.toBe('implemented');
       expect(workflowState.stepOutputs.get('implement')).toBe(result.response);
       expect(workflowState.lastOutput).toBe(result.response);
       expect(workflowState.companion).toEqual({
         completionSettled: false,
+        completionFailure: true,
         followUpRounds: 1,
+        reason: status === 'error'
+          ? 'follow-up failed: token=[REDACTED] at [path]'
+          : `follow-up ${status}`,
       });
     },
   );

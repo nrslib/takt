@@ -46,10 +46,13 @@ describe('companion follow-up loop', () => {
   });
 
   it.each(['error', 'rate_limited', 'blocked'] as const)(
-    'propagates a %s follow-up response with the latest session ID',
+    'stops after a %s follow-up response and returns the latest success',
     async (status) => {
       const executeFollowUp = vi.fn()
-        .mockResolvedValueOnce(response('done', 'session-2'))
+        .mockResolvedValueOnce({
+          ...response('done', 'session-2'),
+          content: 'first follow-up succeeded',
+        })
         .mockResolvedValueOnce(response(status));
       const result = await runCompanionFixLoop({
         initialResponse: response('done', 'session-1'),
@@ -58,20 +61,47 @@ describe('companion follow-up loop', () => {
         executeFollowUp,
       });
 
-      expect(result.phaseResponse.status).toBe(status);
+      expect(result.phaseResponse).toMatchObject({
+        status: 'done',
+        content: 'first follow-up succeeded',
+        sessionId: 'session-2',
+      });
       expect(result.phaseResponse.sessionId).toBe('session-2');
       expect(result.latestSessionId).toBe('session-2');
       expect(result.followUpRounds).toBe(2);
+      expect(result.followUpFailureReason).toBe(`${status} response`);
+      expect(executeFollowUp).toHaveBeenCalledTimes(2);
     },
   );
 
-  it('propagates a thrown follow-up failure', async () => {
-    const failure = new Error('follow-up failed');
+  it('stops after a thrown follow-up failure and sanitizes the diagnostic', async () => {
+    const result = await runCompanionFixLoop({
+      initialResponse: response('done', 'session-1'),
+      phase1Options: {},
+      completeReview: vi.fn().mockResolvedValue({ findings: [finding] }),
+      executeFollowUp: vi.fn().mockRejectedValue(
+        new Error('Provider failed: token=secret at /private/project/file.ts'),
+      ),
+    });
+
+    expect(result.phaseResponse).toMatchObject({ status: 'done', sessionId: 'session-1' });
+    expect(result.latestSessionId).toBe('session-1');
+    expect(result.followUpRounds).toBe(1);
+    expect(result.followUpFailureReason).toBe('Provider failed: token=[REDACTED] at [path]');
+  });
+
+  it('propagates AbortSignal cancellation during a follow-up', async () => {
+    const controller = new AbortController();
+
     await expect(runCompanionFixLoop({
       initialResponse: response('done', 'session-1'),
       phase1Options: {},
       completeReview: vi.fn().mockResolvedValue({ findings: [finding] }),
-      executeFollowUp: vi.fn().mockRejectedValue(failure),
-    })).rejects.toBe(failure);
+      executeFollowUp: vi.fn().mockImplementation(async () => {
+        controller.abort(new Error('cancelled by user'));
+        throw new Error('follow-up stopped');
+      }),
+      abortSignal: controller.signal,
+    })).rejects.toMatchObject({ name: 'AbortError', message: 'cancelled by user' });
   });
 });

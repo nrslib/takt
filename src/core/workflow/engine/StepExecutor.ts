@@ -666,10 +666,16 @@ export class StepExecutor {
       },
       abortSignal: this.resolveAbortSignal(),
     });
-    input.state.companion = {
-      ...requireActiveCompanionState(input.state, input.eventStep.name),
-      followUpRounds: fixLoop.followUpRounds,
-    };
+    const companionState = requireActiveCompanionState(input.state, input.eventStep.name);
+    input.state.companion = fixLoop.followUpFailureReason === undefined
+      ? { ...companionState, followUpRounds: fixLoop.followUpRounds }
+      : {
+          ...companionState,
+          completionSettled: false,
+          completionFailure: true,
+          followUpRounds: fixLoop.followUpRounds,
+          reason: fixLoop.followUpFailureReason,
+        };
     return fixLoop.phaseResponse;
   }
 
