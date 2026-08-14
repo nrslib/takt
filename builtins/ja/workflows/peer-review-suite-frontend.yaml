@@ -21,7 +21,6 @@ subworkflow:
     ai_antipattern_review_instruction: { type: facet_ref, facet_kind: instruction, default: ai-antipattern-review }
     frontend_review_instruction: { type: facet_ref, facet_kind: instruction, default: frontend-review }
     cqrs_es_review_instruction: { type: facet_ref, facet_kind: instruction, default: cqrs-es-review }
-    completion_retry_instruction: { type: facet_ref, facet_kind: instruction, default: review-completion-retry }
 initial_step: reviewers
 steps:
   - name: reviewers
@@ -44,8 +43,6 @@ steps:
             $param: coding_review_instruction
           ai_antipattern_review_instruction:
             $param: ai_antipattern_review_instruction
-          completion_retry_instruction:
-            $param: completion_retry_instruction
         rules:
           - condition: COMPLETE
           - condition: needs_fix
@@ -58,8 +55,6 @@ steps:
             $param: review_knowledge_additions
           frontend_review_instruction:
             $param: frontend_review_instruction
-          completion_retry_instruction:
-            $param: completion_retry_instruction
         rules:
           - condition: approved
           - condition: needs_fix
