@@ -28,6 +28,7 @@ watchdog_pid=''
 tmp_dir=$(mktemp -d)
 out="$tmp_dir/output"
 prompt_file="$tmp_dir/prompt"
+timeout_marker="$tmp_dir/timed-out"
 
 cleanup() {
   trap - INT TERM
@@ -57,21 +58,26 @@ codex_pid=$!
 set +m
 
 node -e '
+  const { writeFileSync } = require("node:fs");
   const pid = Number(process.argv[1]);
   const timeoutMs = Number(process.argv[2]) * 1000;
+  const timeoutMarker = process.argv[3];
   setTimeout(() => {
+    writeFileSync(timeoutMarker, "");
     try { process.kill(-pid, "SIGTERM"); } catch { process.exit(0); }
     setTimeout(() => {
       try { process.kill(-pid, "SIGKILL"); } catch {}
     }, 15_000);
   }, timeoutMs);
-' "$codex_pid" "$timeout_seconds" >/dev/null 2>&1 &
+' "$codex_pid" "$timeout_seconds" "$timeout_marker" >/dev/null 2>&1 &
 watchdog_pid=$!
 
 status=0
 wait "$codex_pid" || status=$?
 codex_pid=''
-kill "$watchdog_pid" 2>/dev/null || true
+if [ ! -f "$timeout_marker" ]; then
+  kill "$watchdog_pid" 2>/dev/null || true
+fi
 wait "$watchdog_pid" 2>/dev/null || true
 watchdog_pid=''
 if [ "$status" -ne 0 ]; then

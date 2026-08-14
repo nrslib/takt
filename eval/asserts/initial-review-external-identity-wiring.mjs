@@ -85,8 +85,7 @@ function extractCanonicalEvidenceSections(output) {
   return sections;
 }
 
-function extractIdentityEvidenceBlocks(output, findingRows) {
-  const findingBlocks = extractFindingBlocks(output);
+function extractIdentityEvidenceBlocks(output, findingRows, findingBlocks) {
   const blocks = [
     ...findingRows,
     ...findingBlocks,
@@ -157,11 +156,13 @@ function hasConnectedFamilyEvidence(output) {
 export default function assertInitialReviewExternalIdentityWiring(output) {
   const reviewOutput = unwrapProviderOutput(output);
   const findingRows = extractFindingRows(reviewOutput);
-  const identityEvidenceBlocks = extractIdentityEvidenceBlocks(reviewOutput, findingRows);
+  const findingBlocks = extractFindingBlocks(reviewOutput);
+  const identityEvidenceBlocks = extractIdentityEvidenceBlocks(reviewOutput, findingRows, findingBlocks);
   const canonicalKey = /sample-flow\s*\/\s*execute/i;
   const defaultFallback = /default(?:-runner| target| fallback)|デフォルト(?:ターゲット|へ|に)|フォールバック/i;
   const falsePositiveEvidence = /(self[- ]consistent|false positive|green|pass(?:es|ed|ing)?|成功|通(?:る|って|過)|偽陽性|自己整合)/i;
   const testChange = /(?:test|e2e|テスト).{0,240}(?:add|change|replace|require|assert|cover|update|追加|変更|置換|要求|検証|更新)|(?:add|change|replace|require|assert|cover|update|追加|変更|置換|要求|検証|更新).{0,240}(?:test|e2e|テスト)/is;
+  const adjacentPathPreserved = /(outside|preserved|adjacent|clean|no issue|out of scope|対象外|保持|隣接|問題なし|変更不要)/i;
   const hasConnectedIdentityEvidence = identityEvidenceBlocks.some((block) => (
     hasConnectedFamilyEvidence(block)
     && canonicalKey.test(block)
@@ -188,9 +189,14 @@ export default function assertInitialReviewExternalIdentityWiring(output) {
     ['adjacent-path-classified', hasNearbyEvidence(
       reviewOutput,
       'local-step-cache.js',
-      /(outside|preserved|adjacent|clean|no issue|out of scope|対象外|保持|隣接|問題なし|変更不要)/i,
+      adjacentPathPreserved,
     )],
-    ['adjacent-path-not-a-finding', !findingRows.some((row) => row.includes('local-step-cache.js'))],
+    ['adjacent-path-not-a-finding',
+      !findingRows.some((row) => row.includes('local-step-cache.js'))
+      && !findingBlocks.some((block) => (
+        block.includes('local-step-cache.js')
+        && !hasNearbyEvidence(block, 'local-step-cache.js', adjacentPathPreserved)
+      ))],
   ];
   const failed = checks.filter(([, passed]) => !passed).map(([name]) => name);
   return {

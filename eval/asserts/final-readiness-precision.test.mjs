@@ -99,3 +99,15 @@ Final Decision: FIX REQUIRED
 
   assert.equal(assertFinalReadinessPrecision(output).pass, false);
 });
+
+test('rejects contradictory final decisions in Japanese', () => {
+  const output = `
+最終裁定: マージ可能
+
+OLD-REVIEW-readme-L1 は非修正対象として維持する。
+
+最終裁定：修正が必要
+`;
+
+  assert.equal(assertFinalReadinessPrecision(output).pass, false);
+});

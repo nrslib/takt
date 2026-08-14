@@ -186,6 +186,21 @@ test('rejects a review that turns the adjacent cache contract into a finding', (
   assert.match(result.reason, /adjacent-path-not-a-finding/);
 });
 
+test('rejects a heading finding that treats the adjacent cache as a problem', () => {
+  const review = `${completeReview}
+
+## Finding F-2
+
+\`src/local-step-cache.js\` uses a local key and must be changed to use
+\`sample-flow/execute\` too.
+`;
+
+  const result = assertInitialReviewExternalIdentityWiring(review);
+
+  assert.equal(result.pass, false);
+  assert.match(result.reason, /adjacent-path-not-a-finding/);
+});
+
 test('rejects documented-key evidence distributed across separate findings', () => {
   const review = `
 Result: REJECT
