@@ -4,7 +4,7 @@
 
 変更差分は読み取りの起点であり、上限ではありません。適用する基準の判断に必要なコードと証拠を確認してください。探索範囲と finding 権限は、有効な role procedure と review authority policy に従ってください。
 
-外部設定や API を介して渡される識別子、または文書化された識別子が変更契約に含まれる場合は、authoritative contract から canonical な具体値とその構成要素を導出してください。producer から normalize / lookup、consumer、terminal まで同じ identity が保たれることを追跡してください。fixture・mock・test input が構成要素を別フィールドで与える場合は、それらから identity を組み立て、他のフィールドの問題とは独立に canonical contract と照合してください。fixture と実装が同じ非 canonical 表現で一致するだけの green test は、canonical behavior の独立した証拠にしないでください。
+外部設定や API から渡される識別子、または文書に形式が定められた識別子を変更する場合は、仕様に書かれた具体例から実際の値を組み立ててください。その値が、作成する箇所から変換・検索、利用箇所、最終結果まで同じ形式で渡るか確認してください。fixture・mock・test input が値の一部を別々のフィールドで持つ場合も、仕様どおりに組み立てて実装と照合してください。fixture と実装が同じ誤った形式を使っているだけの成功テストは、正しい動作の証拠にしないでください。実装とテストが同じ誤りを共有する場合は、別の問題に分けず、同じ finding で説明してください。
 
 - 置換・移動では、変更前後の観測可能な挙動を比較する
 - 値、状態、型、schema、resolver、normalizer、adapter、共有 helper の変更では、その定義、参照、実際に到達する入口と消費先を追う
