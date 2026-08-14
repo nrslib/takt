@@ -9,6 +9,7 @@ import type { ParallelLogger } from './parallel-logger.js';
 import type { ProviderType } from '../../../shared/types/provider.js';
 import { createPartStep } from './team-leader-common.js';
 import { getErrorMessage } from '../../../shared/utils/index.js';
+import type { StepProviderInfo } from '../types.js';
 import {
   classifyAbortSignalReason,
   isAgentFailureError,
@@ -34,6 +35,7 @@ export interface TeamLeaderPartExecutionOptions {
   readonly forceNewSession: boolean;
   readonly onDispatch?: RunAgentOptions['onDispatch'];
   readonly deadlineSignal?: AbortSignal;
+  readonly providerInfo: StepProviderInfo;
 }
 
 export function buildPartScopedSessionKey(
@@ -66,9 +68,10 @@ export async function runTeamLeaderPart(
   executionOptions?: TeamLeaderPartExecutionOptions,
 ): Promise<PartResult> {
   const partStep = createPartStep(step, part);
-  const partProviderInfo = runtime
-    ? optionsBuilder.resolveStepProviderModel(partStep, runtime)
-    : optionsBuilder.resolveStepProviderModel(partStep);
+  const partProviderInfo = executionOptions?.providerInfo
+    ?? (runtime
+      ? optionsBuilder.resolveStepProviderModel(partStep, runtime)
+      : optionsBuilder.resolveStepProviderModel(partStep));
   const resolvedBaseOptions = optionsBuilder.buildAgentOptions(partStep, {
     ...runtime,
     providerInfo: partProviderInfo,

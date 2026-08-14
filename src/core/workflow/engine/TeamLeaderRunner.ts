@@ -530,6 +530,7 @@ export class TeamLeaderRunner {
               updatePersonaSession,
               parallelLogger,
               partRuntime,
+              partProviderInfo,
               instructionTransaction,
               partAbortSignal,
               publicationFence,
@@ -735,7 +736,8 @@ export class TeamLeaderRunner {
     defaultTimeoutMs: number,
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
     parallelLogger: ParallelLogger | undefined,
-    runtime?: RuntimeStepResolution,
+    runtime: RuntimeStepResolution | undefined,
+    providerInfo: StepProviderInfo,
     instructionTransaction?: InstructionBuildTransaction,
     executionAbortSignal?: AbortSignal,
     publicationFence?: TeamLeaderExecutionPublicationFence,
@@ -774,7 +776,11 @@ export class TeamLeaderRunner {
       },
       runtime,
       executionAbortSignal,
-      { forceNewSession: false, deadlineSignal },
+      {
+        forceNewSession: false,
+        deadlineSignal,
+        providerInfo,
+      },
     );
     publicationFence?.assertRunning('part.completed');
     if (result.providerInfo !== undefined) {
