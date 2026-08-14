@@ -134,6 +134,15 @@ export class CompanionStepRuntime {
       runReview: async (request) => {
         await this.runReview(request);
       },
+      refreshRetryRequest: async (request) => {
+        const detector = this.detectors.get(request.companionName);
+        if (detector === undefined) {
+          throw new Error(`Missing detector for companion "${request.companionName}"`);
+        }
+        const observedGeneration = detector.getObservedGeneration();
+        const snapshot = await this.readSnapshot();
+        return { ...request, snapshot, observedGeneration };
+      },
       onCoalesced: (event) => this.events.queueCoalesced({
         companion: event.companionName,
         replaced: event.replaced,
