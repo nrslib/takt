@@ -226,12 +226,13 @@ describe('review completion episode', () => {
       reason: 'gap remains',
       missingObligations: [missingObligation],
     });
+    const initialResponse = response('initial');
 
     const result = await runReviewCompletionEpisode({
       config: { minRetry: 0, maxRetry: 0, retryInstruction: 'retry' },
       originalInstruction: 'review',
-      initialResponse: response('initial'),
-      initialSessionId: 'review-session',
+      initialResponse,
+      initialSessionId: initialResponse.sessionId,
       executeRetry,
       judge,
       isAbort: () => false,
@@ -241,6 +242,8 @@ describe('review completion episode', () => {
     expect(executeRetry).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       attempts: 1,
+      response: initialResponse,
+      reviewerSessionId: initialResponse.sessionId,
       diagnostic: {
         kind: 'max_retry_reached',
         retriesUsed: 0,
