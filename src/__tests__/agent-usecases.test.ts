@@ -17,6 +17,11 @@ import { runTagJudgeStage as runTagJudgeStageImpl } from '../agents/judge-status
 import { requestDecompositionRawResponse as requestDecompositionRawResponseImpl } from '../agents/decompose-task-usecase.js';
 import { loadEvaluationSchema, loadJudgmentSchema } from '../infra/resources/schema-loader.js';
 import { OpenCodeProvider } from '../infra/providers/opencode.js';
+import {
+  createWorkflowStepDeadline,
+  recordWorkflowStepProviderActivity,
+  recordWorkflowStepProviderEventActivity,
+} from '../core/workflow/engine/step-deadline.js';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -250,17 +255,21 @@ describe('agent-usecases', () => {
   );
   it('evaluateCondition は構造化出力の matched_index を優先する', async () => {
     vi.mocked(runAgent).mockResolvedValue(doneResponse('ignored', { matched_index: 2, reason: 'second condition' }));
+    const onStream = vi.fn();
+    const onActivity = vi.fn();
 
     const result = await evaluateCondition('agent output', [
       { index: 0, text: 'first' },
       { index: 1, text: 'second' },
-    ], { cwd: '/repo' });
+    ], { cwd: '/repo', onStream, onActivity });
 
     expect(result).toBe(1);
     expect(runAgent).toHaveBeenCalledWith(undefined, expect.stringContaining('judge prompt'), expect.objectContaining({
       cwd: '/repo',
       resolvedExecution: expect.objectContaining({ provider: 'mock' }),
       outputSchema: expect.any(Object),
+      onStream,
+      onActivity,
     }));
   });
 
@@ -429,6 +438,96 @@ describe('agent-usecases', () => {
 
     expect(result).toEqual({ candidateIndex: 1, method: 'ai_judge' });
     expect(runAgent).toHaveBeenCalledTimes(3);
+  });
+
+  it('judgeStatus は ai_judge fallback の活動中に親 deadline を生存させる', async () => {
+    vi.useFakeTimers();
+    const inactivityTimeoutMs = 60_000;
+    const deadline = createWorkflowStepDeadline('opencode', {
+      opencode: { guards: { callTimeoutMs: inactivityTimeoutMs } },
+    }, undefined);
+    let resolveAiJudgeStarted: (() => void) | undefined;
+    const aiJudgeStarted = new Promise<void>((resolve) => {
+      resolveAiJudgeStarted = resolve;
+    });
+    let releaseStreamActivity: (() => void) | undefined;
+    const streamActivity = new Promise<void>((resolve) => {
+      releaseStreamActivity = resolve;
+    });
+    let releaseRetryActivity: (() => void) | undefined;
+    const retryActivity = new Promise<void>((resolve) => {
+      releaseRetryActivity = resolve;
+    });
+    let releaseAiJudge: (() => void) | undefined;
+    const aiJudgeCompletion = new Promise<void>((resolve) => {
+      releaseAiJudge = resolve;
+    });
+    let providerStage = 0;
+    vi.mocked(runAgent).mockImplementation(async (_persona, _instruction, options) => {
+      providerStage++;
+      if (providerStage === 1) {
+        return {
+          persona: 'conductor',
+          status: 'error',
+          content: 'structured stage failed',
+          timestamp: new Date('2026-08-15T00:00:00.000Z'),
+        };
+      }
+      if (providerStage === 2) {
+        return doneResponse('tag did not match');
+      }
+      options.onActivity?.({ kind: 'attempt_started' });
+      resolveAiJudgeStarted?.();
+      await streamActivity;
+      options.onStream?.({ type: 'text', data: { text: 'ai judge is still working' } });
+      await retryActivity;
+      options.onActivity?.({ kind: 'attempt_started' });
+      await aiJudgeCompletion;
+      return doneResponse('ignored', { matched_index: 2, reason: 'second condition' });
+    });
+
+    try {
+      const judgment = judgeStatus('structured', 'tag', [
+        { label: 'a' },
+        { label: 'b' },
+      ], {
+        ...judgeOptions,
+        abortSignal: deadline.signal,
+        onStream: (event) => recordWorkflowStepProviderEventActivity(
+          deadline.recordActivity,
+          'review',
+          event,
+        ),
+        onActivity: (activity) => recordWorkflowStepProviderActivity(
+          deadline.recordActivity,
+          'review',
+          activity,
+        ),
+      });
+      await aiJudgeStarted;
+      await vi.advanceTimersByTimeAsync(40_000);
+      releaseStreamActivity?.();
+      await vi.advanceTimersByTimeAsync(40_000);
+      releaseRetryActivity?.();
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      expect(deadline.signal.aborted).toBe(false);
+      expect(runAgent).toHaveBeenNthCalledWith(
+        3,
+        undefined,
+        expect.any(String),
+        expect.objectContaining({
+          onStream: expect.any(Function),
+          onActivity: expect.any(Function),
+        }),
+      );
+
+      releaseAiJudge?.();
+      await expect(judgment).resolves.toEqual({ candidateIndex: 1, method: 'ai_judge' });
+    } finally {
+      deadline.dispose();
+      vi.useRealTimers();
+    }
   });
 
   it('judgeStatus passes childProcessEnv to all Phase 3 internal agent calls', async () => {
@@ -862,17 +961,25 @@ describe('agent-usecases', () => {
     vi.mocked(runAgent).mockResolvedValue(response);
     const abortController = new AbortController();
     const onAgentResponse = vi.fn();
+    const onStream = vi.fn();
+    const onActivity = vi.fn();
 
     const result = await decomposeTask('instruction', 2, {
       cwd: '/repo',
       abortSignal: abortController.signal,
+      onStream,
+      onActivity,
       onAgentResponse,
     });
 
     expect(runAgent).toHaveBeenCalledWith(
       undefined,
       expect.any(String),
-      expect.objectContaining({ abortSignal: abortController.signal }),
+      expect.objectContaining({
+        abortSignal: abortController.signal,
+        onStream: expect.any(Function),
+        onActivity,
+      }),
     );
     expect(onAgentResponse).toHaveBeenCalledWith(response);
     expect(result.providerUsage).toEqual(providerUsage);
@@ -1152,6 +1259,8 @@ describe('agent-usecases', () => {
     vi.mocked(runAgent).mockResolvedValue(response);
     const abortController = new AbortController();
     const onAgentResponse = vi.fn();
+    const onStream = vi.fn();
+    const onActivity = vi.fn();
 
     const result = await requestMoreParts(
       'instruction',
@@ -1161,6 +1270,8 @@ describe('agent-usecases', () => {
         cwd: '/repo',
         cancellablePartIds: [],
         abortSignal: abortController.signal,
+        onStream,
+        onActivity,
         onAgentResponse,
       },
     );
@@ -1168,7 +1279,11 @@ describe('agent-usecases', () => {
     expect(runAgent).toHaveBeenCalledWith(
       undefined,
       expect.any(String),
-      expect.objectContaining({ abortSignal: abortController.signal }),
+      expect.objectContaining({
+        abortSignal: abortController.signal,
+        onStream: expect.any(Function),
+        onActivity,
+      }),
     );
     expect(onAgentResponse).toHaveBeenCalledWith(response);
     expect(result.providerUsage).toEqual(providerUsage);

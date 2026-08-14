@@ -1,7 +1,11 @@
 import type { McpServerConfig, PermissionMode } from '../../core/models/index.js';
 import type { ClaudeEffort } from '../../core/models/workflow-types.js';
 import type { PermissionHandler, AskUserQuestionHandler, AskUserQuestionInput } from '../../core/workflow/types.js';
-import type { InternalAgentIsolation, StreamCallback } from '../../shared/types/provider.js';
+import type {
+  InternalAgentIsolation,
+  ProviderActivityCallback,
+  StreamCallback,
+} from '../../shared/types/provider.js';
 
 export type ClaudeTerminalBackendName = 'tmux';
 
@@ -63,24 +67,26 @@ export interface ClaudeSessionRef {
 export interface FindClaudeSessionOptions {
   cwd: string;
   sessionId: string;
-  /** 親呼び出し全体の絶対期限。 */
+  /** 互換用。timeoutMs がない直接利用時だけ使う絶対期限。 */
   deadlineAt?: number;
-  /** 互換用。deadlineAt がない直接利用時だけ相対期限として使う。 */
+  /** transcript に変化がない時間の上限。変化するたびに更新する。 */
   timeoutMs?: number;
   pollIntervalMs: number;
   abortSignal?: AbortSignal;
+  onActivity?: ProviderActivityCallback;
 }
 
 export interface WaitForClaudeResponseOptions {
   session: ClaudeSessionRef;
   baseline: ClaudeTranscriptBaseline;
   cwd: string;
-  /** 親呼び出し全体の絶対期限。 */
+  /** 互換用。timeoutMs がない直接利用時だけ使う絶対期限。 */
   deadlineAt?: number;
-  /** 互換用。deadlineAt がない直接利用時だけ相対期限として使う。 */
+  /** transcript に変化がない時間の上限。変化するたびに更新する。 */
   timeoutMs?: number;
   pollIntervalMs: number;
   abortSignal?: AbortSignal;
+  onActivity?: ProviderActivityCallback;
 }
 
 export interface ClaudeTranscriptReader {
@@ -109,6 +115,7 @@ export interface ClaudeTerminalCallOptions {
   keepSession?: boolean;
   transcriptPollIntervalMs?: number;
   onStream?: StreamCallback;
+  onActivity?: ProviderActivityCallback;
   onPermissionRequest?: PermissionHandler;
   onAskUserQuestion?: AskUserQuestionHandler;
   outputSchema?: Record<string, unknown>;

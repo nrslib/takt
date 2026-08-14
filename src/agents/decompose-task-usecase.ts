@@ -52,6 +52,7 @@ export interface DecomposeTaskOptions {
   permissionMode?: PermissionMode;
   projectCwd?: string;
   onStream?: StreamCallback;
+  onActivity?: RunAgentOptions['onActivity'];
   workflowMeta?: RunAgentOptions['workflowMeta'];
   childProcessEnv?: RunAgentOptions['childProcessEnv'];
   abortSignal?: RunAgentOptions['abortSignal'];
@@ -119,6 +120,7 @@ export async function requestDecompositionRawResponse(
       ...(options.inspectTools === undefined ? {} : { allowedTools: options.inspectTools }),
       mcpServers: options.mcpServers,
       onStream: createPublicationGuardedStreamCallback(options.onStream, options.abortSignal),
+      onActivity: options.onActivity,
       workflowMeta: options.workflowMeta,
       childProcessEnv: options.childProcessEnv,
       abortSignal: options.abortSignal,
@@ -217,6 +219,7 @@ export async function requestMorePartsRawResponse(
       },
       mcpServers: options.mcpServers,
       onStream: createPublicationGuardedStreamCallback(options.onStream, options.abortSignal),
+      onActivity: options.onActivity,
       workflowMeta: options.workflowMeta,
       childProcessEnv: options.childProcessEnv,
       abortSignal: options.abortSignal,

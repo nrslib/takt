@@ -31,6 +31,7 @@ function toKiroOptions(options: ProviderCallOptions, systemPrompt?: string): Kir
     systemPrompt,
     permissionMode: options.permissionMode,
     onStream: options.onStream,
+    onActivity: options.onActivity,
     kiroApiKey: options.kiroApiKey ?? resolveKiroApiKey(),
     kiroCliPath: resolveKiroCliPath(),
     agent: options.providerOptions?.kiro?.agent,

@@ -166,12 +166,14 @@ for (const c of cases) {
 
       const provider = c.createProvider();
       const agent = provider.setup({ name: 'coder' });
+      const onActivity = vi.fn();
 
       await agent.call('implement', {
         cwd: '/tmp/work',
         model: c.model,
         sessionId: 'sess-1',
         permissionMode: 'full',
+        onActivity,
       });
 
       expect(c.mockCall).toHaveBeenCalledWith(
@@ -182,6 +184,7 @@ for (const c of cases) {
           model: c.model,
           sessionId: 'sess-1',
           permissionMode: 'full',
+          onActivity,
           [c.keyOption]: c.resolvedKey,
         }),
       );

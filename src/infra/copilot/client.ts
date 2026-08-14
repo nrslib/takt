@@ -498,6 +498,7 @@ export class CopilotClient {
       log.debug('mkdtemp failed, skipping session extraction', { err });
     }
 
+    options.onActivity?.({ kind: 'attempt_started' });
     const executionOutcome = await executeCopilotCall(
       prompt,
       options,

@@ -498,6 +498,7 @@ export class CursorClient {
     let cliConfigRenameRetryCount = 0;
 
     while (true) {
+      options.onActivity?.({ kind: 'attempt_started' });
       try {
         const { stdout } = await execCursor(args, options);
         const parsed = parseCursorOutput(stdout);

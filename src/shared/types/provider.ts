@@ -128,3 +128,18 @@ export type StreamEvent =
   | { type: 'error'; data: StreamErrorEventData };
 
 export type StreamCallback = (event: StreamEvent) => void;
+
+export type ProviderActivityEvent =
+  | { readonly kind: 'attempt_started'; readonly executionUnitKey?: string }
+  | {
+    readonly kind: 'tool_started';
+    readonly executionUnitKey: string;
+    readonly toolCallKey: string;
+  }
+  | {
+    readonly kind: 'tool_finished';
+    readonly executionUnitKey: string;
+    readonly toolCallKey: string;
+  };
+
+export type ProviderActivityCallback = (event?: ProviderActivityEvent) => void;

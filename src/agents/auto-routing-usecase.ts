@@ -134,7 +134,7 @@ export function createWorkRequirementEstimator(options: WorkRequirementEstimator
   return {
     async estimate(
       input: RoutingModelInput,
-      estimateOptions?: { abortSignal?: AbortSignal },
+      estimateOptions?: Parameters<WorkRequirementEstimator['estimate']>[1],
     ): Promise<WorkRequirementEstimate> {
       options.abortSignal?.throwIfAborted();
       estimateOptions?.abortSignal?.throwIfAborted();
@@ -155,6 +155,8 @@ export function createWorkRequirementEstimator(options: WorkRequirementEstimator
               permissionMode: options.permissionMode,
             },
             abortSignal: abortScope.signal,
+            onStream: estimateOptions?.onStream,
+            onActivity: estimateOptions?.onActivity,
             language: options.language,
             childProcessEnv: options.childProcessEnv,
             failureDir: options.failureDir,

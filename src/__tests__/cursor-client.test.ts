@@ -301,6 +301,7 @@ describe('callCursor', () => {
 
   it('should retry cli-config rename ENOENT and return successful retry result', async () => {
     vi.useFakeTimers();
+    const onActivity = vi.fn();
     mockSpawnWithScenarios([
       {
         code: 1,
@@ -315,6 +316,7 @@ describe('callCursor', () => {
     const resultPromise = callCursor('coding-review', 'review changes', {
       cwd: '/repo',
       sessionId: 'sess-before-retry',
+      onActivity,
     });
 
     await vi.advanceTimersByTimeAsync(999);
@@ -327,6 +329,11 @@ describe('callCursor', () => {
     expect(result.status).toBe('done');
     expect(result.content).toBe('retry succeeded');
     expect(result.sessionId).toBe('sess-after-retry');
+    expect(onActivity).toHaveBeenCalledTimes(2);
+    expect(onActivity).toHaveBeenNthCalledWith(2, { kind: 'attempt_started' });
+    expect(onActivity.mock.invocationCallOrder[1]).toBeLessThan(
+      mockSpawn.mock.invocationCallOrder[1]!,
+    );
   });
 
   it('should stop cli-config rename ENOENT retry when aborted during retry delay', async () => {

@@ -30,6 +30,7 @@ function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
     maxTurns: options.maxTurns,
     permissionMode: options.permissionMode,
     onStream: options.onStream,
+    onActivity: options.onActivity,
     onPermissionRequest: options.onPermissionRequest,
     onAskUserQuestion: options.onAskUserQuestion,
     bypassPermissions: options.bypassPermissions,

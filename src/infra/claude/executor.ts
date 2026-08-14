@@ -157,6 +157,7 @@ export class QueryExecutor {
     prompt: string,
     options: ClaudeSpawnOptions,
   ): Promise<ClaudeResult> {
+    options.onActivity?.({ kind: 'attempt_started' });
     const queryId = generateQueryId();
 
     log.debug('Executing Claude query via SDK', {

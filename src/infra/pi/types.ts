@@ -1,7 +1,7 @@
 import type { PermissionMode } from '../../core/models/index.js';
 import type { PiProviderOptions } from '../../core/models/workflow-provider-options.js';
 import type { ProviderImageAttachment } from '../providers/types.js';
-import type { StreamCallback } from '../../shared/types/provider.js';
+import type { ProviderActivityCallback, StreamCallback } from '../../shared/types/provider.js';
 
 /** Options for one Pi SDK session. */
 export interface PiCallOptions {
@@ -15,5 +15,6 @@ export interface PiCallOptions {
   imageAttachments?: ProviderImageAttachment[];
   providerOptions?: PiProviderOptions;
   onStream?: StreamCallback;
+  onActivity?: ProviderActivityCallback;
   childProcessEnv?: Readonly<Record<string, string>>;
 }

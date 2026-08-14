@@ -399,6 +399,7 @@ export class CodexClient {
 
     while (true) {
       const attempt = standardRetryCount + timeoutRetryCount + refusalRetryCount + 1;
+      options.onActivity?.({ kind: 'attempt_started' });
       let currentThreadId = threadId;
       const codexClientOptions: CodexOptions = {
         env: buildEnvWithNestedObservabilitySnapshot(

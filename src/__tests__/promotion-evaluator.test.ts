@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { evaluatePromotion } from '../core/workflow/promotion/PromotionEvaluator.js';
+import {
+  evaluatePromotion,
+  type PromotionEvaluationContext,
+} from '../core/workflow/promotion/PromotionEvaluator.js';
 import type { AgentWorkflowStep, StepProviderOptions } from '../core/models/index.js';
 import type { StructuredCaller } from '../agents/structured-caller.js';
 import type { ProviderType } from '../shared/types/provider.js';
@@ -39,6 +42,8 @@ function makeContext(overrides: {
   resolvedProvider?: ProviderType;
   resolvedModel?: string;
   childProcessEnv?: Readonly<Record<string, string>>;
+  onStream?: PromotionEvaluationContext['onStream'];
+  onActivity?: PromotionEvaluationContext['onActivity'];
 }) {
   return {
     cwd: '/tmp/project',
@@ -48,6 +53,8 @@ function makeContext(overrides: {
     resolvedProvider: overrides.resolvedProvider,
     resolvedModel: overrides.resolvedModel,
     childProcessEnv: overrides.childProcessEnv,
+    onStream: overrides.onStream,
+    onActivity: overrides.onActivity,
   };
 }
 
@@ -100,6 +107,8 @@ describe('evaluatePromotion', () => {
         model: 'gpt-5.5',
       },
     ]);
+    const onStream = vi.fn();
+    const onActivity = vi.fn();
 
     const result = await evaluatePromotion(step, makeContext({
       stepIteration: 1,
@@ -107,6 +116,8 @@ describe('evaluatePromotion', () => {
       structuredCaller: makeStructuredCaller(evaluateCondition),
       resolvedProvider: 'codex',
       resolvedModel: 'gpt-5.4',
+      onStream,
+      onActivity,
     }));
 
     expect(result).toMatchObject({ model: 'gpt-5.5' });
@@ -118,6 +129,8 @@ describe('evaluatePromotion', () => {
         provider: 'codex',
         resolvedProvider: 'codex',
         resolvedModel: 'gpt-5.4',
+        onStream,
+        onActivity,
       }),
     );
   });

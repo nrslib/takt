@@ -262,6 +262,7 @@ describe('DynamicFacetSelectorCoordinator', () => {
   });
 
   it('passes selector guidance to the isolated agent without replacing the engine contract', async () => {
+    const onActivity = vi.fn();
     const pool = makePool([
       { id: 'frontend', description: 'Frontend changes' },
       { id: 'backend', description: 'Backend changes' },
@@ -274,7 +275,7 @@ describe('DynamicFacetSelectorCoordinator', () => {
       structuredOutput: { selected_ids: ['frontend'], rationale: 'changed paths are frontend-only' },
     });
 
-    const coordinator = new DynamicFacetSelectorCoordinator(buildDeps());
+    const coordinator = new DynamicFacetSelectorCoordinator(buildDeps({ onActivity }));
     await coordinator.resolveDynamicFacets(makeGuidedStep(), makeState(), 'task', pool);
 
     const [systemPrompt, instruction, outputSchema, options] = mockedExecuteAgent.mock.calls[0] ?? [];
@@ -299,6 +300,7 @@ describe('DynamicFacetSelectorCoordinator', () => {
       persona: 'facet-selector',
       personaPath: '/project/.takt/facets/personas/facet-selector.md',
       workflowBundleResourceRoot: '/tmp/project/.takt/runs/bundle/resources',
+      onActivity,
     }));
   });
 

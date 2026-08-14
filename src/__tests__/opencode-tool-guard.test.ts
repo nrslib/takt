@@ -23,6 +23,7 @@ import {
 import { readOpenCodeToolPart } from '../infra/opencode/guards/tool-events.js';
 import { ExactLoopGuard } from '../infra/opencode/guards/integrity-guards.js';
 import { SensitiveBudgetGuard } from '../infra/opencode/guards/resource-guards.js';
+import { STALE_IN_FLIGHT_TOOL_FACTOR } from '../infra/opencode/guards/time-guards.js';
 import { createBoundedSensitiveValues } from '../shared/utils/sensitiveText.js';
 
 const DEPRECATED_ENV_KEYS = [
@@ -139,7 +140,7 @@ describe('OpenCode guard registry / Strategy', () => {
       { id: 'event-count', layer: 'resource', mandatory: true },
       { id: 'tracked-ids', layer: 'resource', mandatory: true },
       { id: 'sensitive-budget', layer: 'integrity', mandatory: true },
-      { id: 'wall-clock', layer: 'time', mandatory: true },
+      { id: 'inactivity-timeout', layer: 'time', mandatory: true },
       { id: 'exact-loop', layer: 'integrity', mandatory: true },
       { id: 'consecutive-errors', layer: 'heuristic', mandatory: false },
       { id: 'cycle-budget', layer: 'heuristic', mandatory: false },
@@ -155,7 +156,7 @@ describe('OpenCode guard registry / Strategy', () => {
     expect(minimal.enabledGuardIds).toEqual(
       OPENCODE_GUARD_REGISTRY.filter((guard) => guard.mandatory).map((guard) => guard.id),
     );
-    expect(minimal.enabledGuardIds).toContain('wall-clock');
+    expect(minimal.enabledGuardIds).toContain('inactivity-timeout');
     expect(minimal.enabledGuardIds).toContain('exact-loop');
   });
 
@@ -450,15 +451,20 @@ describe('OpenCode guard suite', () => {
     expect(minimal.onEvent(errorTool('m-3', 'tool-3', 'failure-3')).failure).toBeUndefined();
   });
 
-  it('wall-clock は call scope 全体で発火する', () => {
+  it('provider event と attempt 開始で無応答期限を更新する', () => {
     vi.useFakeTimers();
     const suite = resolveOpenCodeGuardSuite({ callTimeoutMs: 60_000 }, 'opencode/big-pickle');
     const failures: string[] = [];
     suite.startCall((failure) => failures.push(failure.guardId));
+    vi.advanceTimersByTime(40_000);
+    suite.onEvent(runningTool('call-1', { command: 'npm test' }));
+    vi.advanceTimersByTime(40_000);
+    suite.startAttempt((failure) => failures.push(failure.guardId));
     vi.advanceTimersByTime(59_999);
     expect(failures).toEqual([]);
     vi.advanceTimersByTime(1);
-    expect(failures).toEqual(['wall-clock']);
+    expect(failures).toEqual(['inactivity-timeout']);
+    suite.stopAttempt();
     suite.stopCall();
   });
 
@@ -475,7 +481,7 @@ describe('OpenCode guard suite', () => {
     suite.stopAttempt();
   });
 
-  it('終端イベントが来ないツールは wall-clock が拾う', () => {
+  it('終端イベント後に無応答が続くと inactivity timeout が発火する', () => {
     vi.useFakeTimers();
     const suite = resolveOpenCodeGuardSuite({ callTimeoutMs: 60_000 }, 'opencode/big-pickle');
     const failures: string[] = [];
@@ -483,11 +489,37 @@ describe('OpenCode guard suite', () => {
     suite.startAttempt((failure) => failures.push(failure.guardId));
 
     suite.onEvent(runningTool('call-1', { command: 'npm run test:it' }));
+    vi.advanceTimersByTime(2 * 60_000);
+    expect(failures).toEqual([]);
+    suite.onEvent(completedTool(
+      'call-1',
+      { command: 'npm run test:it' },
+      'tests passed',
+      { tool: 'bash', exit: 0 },
+    ));
     vi.advanceTimersByTime(59_999);
     expect(failures).toEqual([]);
     vi.advanceTimersByTime(1);
-    expect(failures).toEqual(['wall-clock']);
-    expect(suite.getCallFailure()).toMatchObject({ guardId: 'wall-clock' });
+    expect(failures).toEqual(['inactivity-timeout']);
+    expect(suite.getCallFailure()).toMatchObject({ guardId: 'inactivity-timeout' });
+    suite.stopAttempt();
+    suite.stopCall();
+  });
+
+  it('終端イベントが欠落した in-flight tool は stale 上限で PART_TIMEOUT にする', () => {
+    vi.useFakeTimers();
+    const callTimeoutMs = 60_000;
+    const suite = resolveOpenCodeGuardSuite({ callTimeoutMs }, 'opencode/big-pickle');
+    const failures: string[] = [];
+    suite.startCall((failure) => failures.push(failure.guardId));
+    suite.startAttempt((failure) => failures.push(failure.guardId));
+
+    suite.onEvent(runningTool('call-1', { command: 'npm run test:it' }));
+    vi.advanceTimersByTime(callTimeoutMs * STALE_IN_FLIGHT_TOOL_FACTOR - 1);
+    expect(failures).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(failures).toEqual(['inactivity-timeout']);
+    expect(suite.getCallFailure()?.verdict.reason).toContain('Part timeout');
     suite.stopAttempt();
     suite.stopCall();
   });

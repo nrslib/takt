@@ -325,9 +325,11 @@ steps:
 
 `provider_options.pi` は、`extensions` や `no_*` の探索制御など、Pi リソースを読み込むための別経路です。これらの option は認証、model、thinking level を宣言するものではありません。明示したリソース source は TAKT 実行時だけ temporary resolution され、Pi settings には永続化されません。リソースの信頼境界については [Pi のリソース読み込み](#pi-resource-loading) を参照してください。
 
-### プロバイダ call deadline と OpenCode 実行ガード
+### プロバイダ無応答 deadline と OpenCode 実行ガード
 
-全 provider の call-wide wall-clock deadline は `guards.call_timeout_ms` で設定します。
+全 provider で観測可能な provider event が届かない時間の上限は
+`guards.call_timeout_ms` で設定します。stream/tool event、phase 完了、新しい provider
+試行の開始ごとにタイマーをリセットし、累積実行時間には上限を設けません。
 対象は `codex`、`opencode`、`claude`（`claude-sdk` を含む）、`claude_terminal`、
 `cursor`、`copilot`、`kiro`、`pi` です。値は 60,000〜86,400,000 ms の整数で、
 未指定時は 3,600,000 ms（60 分）です。通常の `provider_options` profile 解決を経て
@@ -342,18 +344,16 @@ steps:
 各 leaf は provider option の各レイヤー間で個別にマージされますが、上位優先度の
 `model_profiles` は下位の map 全体を置換します。
 
-OpenCode の単一 call には既定で 3,600,000 ms（60分）の wall-clock 上限があります。
-60分を超える可能性がある call は、60,000〜86,400,000 の
-`call_timeout_ms` を明示してください。テストスイートの実行のような長時間の作業を
-含む step は、この上限に達して切断されます。`event_limit` の既定値は 500,000 で、
+OpenCode の単一 call には既定で 3,600,000 ms（60分）の provider event 無応答上限が
+あります。event が継続して届く健全な call は60分を超えて実行できます。
+`event_limit` の既定値は 500,000 で、
 `TAKT_OPENCODE_STREAM_EVENT_LIMIT` でも上書きできます。`text_byte_limit` の既定値は 1 MiB、
 `reasoning_byte_limit` は 4 MiB です。
 
-OpenCode の output-idle watchdog は既定で無効です。OpenCode は tool_use から
-tool_result までイベントを流さないことがあり、推論や長時間のツール実行中の無音を
-idle と誤認し得るためです。出力がない call も `call_timeout_ms` の wall-clock 上限で
-終了します。発行間隔を認証できる transport だけが、provider/model 単位の明示的な
-追加 watchdog を有効化できます。
+この上限は provider から実際に届く event を観測し、TAKT は keepalive を合成しません。
+OpenCode では tool の実行開始 event から終端 event までを in-flight として追跡し、その間は
+通常の無応答判定を停止します。終端 event が欠落した完全ハングを無界に待たないよう、
+in-flight 状態自体は `call_timeout_ms` の6倍で stale と判定し、`PART_TIMEOUT` で終了します。
 
 数値上限の不正値は入力経路で扱いが異なります。`guards.*` に書いた値（および
 `TAKT_PROVIDER_OPTIONS_*` 由来の値）は宣言された設定なので、正の整数でなければ

@@ -62,7 +62,7 @@ import type {
 import { createAbortScope } from './abort-signal.js';
 import { isTeamLeaderPartCancellation } from './team-leader-part-cancellation.js';
 import type {
-  WorkflowStepDeadline,
+  WorkflowStepInactivityDeadline,
   WorkflowStepExecutionDeadlineContext,
 } from './step-deadline.js';
 
@@ -70,7 +70,7 @@ const log = createLogger('team-leader-runner');
 
 async function runWithExecutionDeadline<T>(
   context: WorkflowStepExecutionDeadlineContext | undefined,
-  deadline: WorkflowStepDeadline | undefined,
+  deadline: WorkflowStepInactivityDeadline | undefined,
   operation: () => Promise<T>,
 ): Promise<T> {
   if (context === undefined || deadline === undefined) {
@@ -263,6 +263,7 @@ export class TeamLeaderRunner {
       failureDir: leaderBaseOptions.failureDir,
       abortSignal: leaderAbortSignal,
       onStream: leaderBaseOptions.onStream,
+      onActivity: leaderBaseOptions.onActivity,
       onAgentResponse: (response: AgentResponse) => {
         this.recordUsage(
           leaderStep.name,
@@ -475,6 +476,7 @@ export class TeamLeaderRunner {
             cancellablePartIds: cancellablePartIdsCopy,
             abortSignal,
             onStream: leaderBaseOptions.onStream,
+            onActivity: leaderBaseOptions.onActivity,
             onAgentResponse: (response: AgentResponse) => {
               this.recordUsage(
                 leaderStep.name,
@@ -732,6 +734,9 @@ export class TeamLeaderRunner {
       runtime: this.deps.engineOptions.routingRuntime,
       logger: log,
       abortSignal: this.resolveAbortSignal(),
+      ...this.deps.optionsBuilder.buildDeadlineActivityCallbacks(
+        `team-leader:auto-routing:${leaderStep.name}`,
+      ),
     });
     if (!autoRuntime) {
       return runtime;
@@ -997,6 +1002,9 @@ export class TeamLeaderRunner {
       runtime: this.deps.engineOptions.routingRuntime,
       logger: log,
       abortSignal: this.resolveAbortSignal(),
+      ...this.deps.optionsBuilder.buildDeadlineActivityCallbacks(
+        `team-parts:auto-routing:${step.name}`,
+      ),
     });
 
     for (const [partId, providerInfo] of routed.entries()) {

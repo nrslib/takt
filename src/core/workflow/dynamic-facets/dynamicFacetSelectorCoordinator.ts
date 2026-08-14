@@ -24,6 +24,10 @@ import {
   sanitizeSensitiveTextWithKnownValues,
 } from '../../../shared/utils/sensitiveText.js';
 import { SelectorInputReader } from '../dynamic-parallel/selector-input-reader.js';
+import type {
+  ProviderActivityCallback,
+  StreamCallback,
+} from '../../../shared/types/provider.js';
 
 const log = createLogger('dynamic-facet-selector');
 const SELECTOR_RATIONALE_LOG_MAX_BYTES = 1024;
@@ -31,6 +35,8 @@ const SELECTOR_RATIONALE_LOG_MAX_BYTES = 1024;
 export interface DynamicFacetSelectorCoordinatorDeps {
   readonly engineOptions: WorkflowEngineOptions;
   readonly getAbortSignal?: () => AbortSignal | undefined;
+  readonly onStream?: StreamCallback;
+  readonly onActivity?: ProviderActivityCallback;
   readonly failureDir: string;
   readonly selectionStore: DynamicFacetSelectionStore;
   readonly getWorkflowReference: () => string;
@@ -140,6 +146,8 @@ export class DynamicFacetSelectorCoordinator {
           persona: step.dynamicFacets.selector?.persona,
           workflowBundleResourceRoot: this.deps.engineOptions.workflowBundleResourceRoot,
           abortSignal: signal,
+          onStream: this.deps.onStream,
+          onActivity: this.deps.onActivity,
           language: this.deps.engineOptions.language,
           failureDir: this.deps.failureDir,
           personaPath: step.dynamicFacets.selector?.personaPath,

@@ -266,7 +266,7 @@ describe('OpenCodeClient retry', () => {
     expect(result.content).toBe('');
   });
 
-  it('出力がなくても idle では retry せず、call wall-clock で終了する', async () => {
+  it('出力がないと call inactivity timeout で終了する', async () => {
     vi.useFakeTimers();
     runPlans = [{
       type: 'stream',
@@ -290,13 +290,14 @@ describe('OpenCodeClient retry', () => {
     const result = await resultPromise;
 
     expect(result.status).toBe('error');
-    expect(result.error).toContain('wall-clock timeout exceeded');
+    expect(result.error).toContain('Part timeout after 60000ms');
+    expect(result.failureCategory).toBe('part_timeout');
     expect(sessionCreate).toHaveBeenCalledOnce();
     expect(promptAsync).toHaveBeenCalledOnce();
     expect(subscribe).toHaveBeenCalledOnce();
   });
 
-  it('call wall-clock timeout は全体を abort し retry しない', async () => {
+  it('call inactivity timeout は全体を abort し retry しない', async () => {
     vi.useFakeTimers();
     runPlans = [{
       type: 'stream',
@@ -320,14 +321,14 @@ describe('OpenCodeClient retry', () => {
     const result = await resultPromise;
 
     expect(result.status).toBe('error');
-    expect(result.error).toContain('wall-clock timeout exceeded');
+    expect(result.error).toContain('Part timeout after 60000ms');
     expect(sessionCreate).toHaveBeenCalledOnce();
     expect(promptAsync).toHaveBeenCalledOnce();
     expect(subscribe).toHaveBeenCalledOnce();
     expect(abort).toHaveBeenCalledOnce();
   });
 
-  it('wall-clock signal は未完了の prompt 待ちと iterator close を打ち切る', async () => {
+  it('inactivity timeout signal は未完了の prompt 待ちと iterator close を打ち切る', async () => {
     vi.useFakeTimers();
     const iteratorReturn = vi.fn(() => new Promise<IteratorResult<MockStreamEvent>>(() => {}));
     runPlans = [{
@@ -350,7 +351,7 @@ describe('OpenCodeClient retry', () => {
     const result = await resultPromise;
 
     expect(result.status).toBe('error');
-    expect(result.error).toContain('wall-clock timeout exceeded');
+    expect(result.error).toContain('Part timeout after 60000ms');
     expect(iteratorReturn).toHaveBeenCalledOnce();
   });
 
@@ -400,7 +401,7 @@ describe('OpenCodeClient retry', () => {
     const result = await resultPromise;
 
     expect(result.status).toBe('error');
-    expect(result.error).toContain('wall-clock timeout exceeded');
+    expect(result.error).toContain('Part timeout after 60000ms');
     expect(onStream).toHaveBeenCalledTimes(streamCallsBeforeDeadline);
     expect(promptAsync).toHaveBeenCalledOnce();
     expect(onAskUserQuestion).not.toHaveBeenCalled();
@@ -476,6 +477,7 @@ describe('OpenCodeClient retry', () => {
     ];
     const { sessionCreate, promptAsync, subscribe } = installOpenCodeMock();
     const onStream = vi.fn();
+    const onActivity = vi.fn();
     const logsDir = mkdtempSync(join(tmpdir(), 'takt-opencode-retry-thinking-'));
     const providerLogger = createProviderEventLogger({
       logsDir,
@@ -496,6 +498,7 @@ describe('OpenCodeClient retry', () => {
       const result = await client.call('coder', 'prompt', {
         cwd: '/tmp',
         model: 'opencode/big-pickle',
+        onActivity,
         onStream: (event) => {
           providerLogger.logEvent(logContext, event);
           onStream(event);
@@ -506,6 +509,11 @@ describe('OpenCodeClient retry', () => {
       expect(sessionCreate).toHaveBeenCalledTimes(2);
       expect(promptAsync).toHaveBeenCalledTimes(2);
       expect(subscribe).toHaveBeenCalledTimes(2);
+      expect(onActivity).toHaveBeenCalledTimes(2);
+      expect(onActivity).toHaveBeenNthCalledWith(2, { kind: 'attempt_started' });
+      expect(onActivity.mock.invocationCallOrder[1]).toBeLessThan(
+        promptAsync.mock.invocationCallOrder[1]!,
+      );
       expect(onStream.mock.calls.filter(([event]) => (
         event.type === 'text' && event.data.text === 'transient retry tail'
       ))).toHaveLength(1);

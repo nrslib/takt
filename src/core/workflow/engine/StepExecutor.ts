@@ -387,6 +387,8 @@ export class StepExecutor {
                 abortSignal: this.resolveAbortSignal(),
                 childProcessEnv: judgeOptions.childProcessEnv,
                 failureDir: judgeOptions.failureDir,
+                onStream: judgeOptions.onStream,
+                onActivity: judgeOptions.onActivity,
                 resolution: {
                   provider,
                   model: judgeProviderInfo.model,
@@ -1331,6 +1333,11 @@ export class StepExecutor {
       sessionId: state.personaSessions.get(sessionKey) ?? 'new',
     });
 
+    const builtAgentOptions = this.deps.optionsBuilder.buildAgentOptions(
+      executableStep,
+      executionRuntime,
+    );
+
     // Phase 1: main execution (Write excluded if step has report)
     let companionRuntime: CompanionStepRuntime | undefined;
     if (isNormalAgentWorkflowStep(executableStep)) {
@@ -1388,6 +1395,8 @@ export class StepExecutor {
           selectorProvider: this.deps.companionSelectorProvider,
           diffReader: companionDiffReader,
           abortSignal: this.resolveAbortSignal(),
+          onStream: builtAgentOptions.onStream,
+          onActivity: builtAgentOptions.onActivity,
           stateStore: companionReviewState,
           emitEvent: this.deps.emitEvent,
           recordUsage: (name, companionProvider, success, usage) => {
@@ -1423,10 +1432,6 @@ export class StepExecutor {
       }
     }
     using activeCompanionRuntime = companionRuntime;
-    const builtAgentOptions = this.deps.optionsBuilder.buildAgentOptions(
-      executableStep,
-      executionRuntime,
-    );
     const baseAgentOptions = activeCompanionRuntime?.composeOptions(builtAgentOptions)
       ?? builtAgentOptions;
     const compactionOutcome = await compactSessionBeforePhase1(executableStep, baseAgentOptions);
@@ -1484,6 +1489,7 @@ export class StepExecutor {
                   childProcessEnv: agentOptions.childProcessEnv,
                   failureDir: agentOptions.failureDir,
                   onStream: agentOptions.onStream,
+                  onActivity: agentOptions.onActivity,
                   onPromptResolved,
                   workflowMeta: agentOptions.workflowMeta,
                 }).then((response) => {

@@ -24,6 +24,7 @@ import type {
   StreamAssistantErrorEventData as SharedAssistantErrorEventData,
   StreamRateLimitEventData as SharedRateLimitEventData,
   InternalAgentIsolation,
+  ProviderActivityCallback,
 } from '../../shared/types/provider.js';
 
 export type { SandboxSettings };
@@ -119,6 +120,7 @@ export interface ClaudeCallOptions {
   permissionMode?: PermissionMode;
   /** Enable streaming mode with callback for real-time output */
   onStream?: StreamCallback;
+  onActivity?: ProviderActivityCallback;
   /** Custom permission handler for interactive permission prompts */
   onPermissionRequest?: PermissionHandler;
   /** Custom handler for AskUserQuestion tool */
@@ -155,6 +157,7 @@ export interface ClaudeSpawnOptions {
   systemPrompt?: string;
   /** Enable streaming mode with callback */
   onStream?: StreamCallback;
+  onActivity?: ProviderActivityCallback;
   /** Custom agents to register */
   agents?: Record<string, AgentDefinition>;
   /** Permission mode for tool execution (TAKT abstract value, mapped to SDK value in SdkOptionsBuilder) */

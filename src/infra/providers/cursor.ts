@@ -31,6 +31,7 @@ function toCursorOptions(options: ProviderCallOptions): CursorCallOptions {
     model: options.model,
     permissionMode: options.permissionMode,
     onStream: options.onStream,
+    onActivity: options.onActivity,
     cursorApiKey: options.cursorApiKey ?? resolveCursorApiKey(),
     cursorCliPath: resolveCursorCliPath(),
     childProcessEnv: options.childProcessEnv,

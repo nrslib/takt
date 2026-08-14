@@ -1,6 +1,7 @@
 import { executeStructuredAgent } from '../../../agents/structured-caller/transport.js';
 import type { AgentResponse } from '../../models/types.js';
 import type { ProviderRoutingEntry } from '../../models/config-types.js';
+import type { RunAgentOptions } from '../../../agents/runner.js';
 import {
   executeCompanionStructuredAgent,
   type CompanionAgentPurpose,
@@ -15,6 +16,8 @@ export class CompanionStructuredCaller {
     readonly failureDir: string;
     readonly language: 'en' | 'ja';
     readonly abortSignal?: AbortSignal;
+    readonly onStream?: RunAgentOptions['onStream'];
+    readonly onActivity?: RunAgentOptions['onActivity'];
     readonly recordUsage: (
       name: string,
       provider: ProviderRoutingEntry,
@@ -73,6 +76,8 @@ export class CompanionStructuredCaller {
           systemPrompt,
           language: this.input.language,
           abortSignal: options.abortSignal,
+          onStream: this.input.onStream,
+          onActivity: this.input.onActivity,
           onPromptResolved: options.onPromptResolved,
           resolution: {
             provider: options.resolution.provider,

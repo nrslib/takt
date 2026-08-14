@@ -35,6 +35,7 @@ export interface JudgeStatusOptions {
   abortSignal?: AbortSignal;
   failureDir?: RunAgentOptions['failureDir'];
   onStream?: StreamCallback;
+  onActivity?: () => void;
   onJudgeStage?: (entry: JudgeStageLogEntry) => void;
   onStructuredPromptResolved?: (promptParts: {
     systemPrompt: string;
@@ -63,6 +64,7 @@ export interface TagJudgeRunOptions {
   projectCwd?: string;
   language?: Language;
   onStream?: StreamCallback;
+  onActivity?: () => void;
   childProcessEnv?: RunAgentOptions['childProcessEnv'];
   abortSignal?: AbortSignal;
   failureDir?: RunAgentOptions['failureDir'];
@@ -92,6 +94,7 @@ export async function runTagJudgeStage(
       },
       language: runOptions.language,
       onStream: runOptions.onStream,
+      onActivity: runOptions.onActivity,
       childProcessEnv: runOptions.childProcessEnv,
       abortSignal: runOptions.abortSignal,
       failureDir: runOptions.failureDir,
@@ -151,6 +154,8 @@ export interface EvaluateConditionOptions {
   childProcessEnv?: RunAgentOptions['childProcessEnv'];
   abortSignal?: AbortSignal;
   failureDir?: RunAgentOptions['failureDir'];
+  onStream?: RunAgentOptions['onStream'];
+  onActivity?: RunAgentOptions['onActivity'];
   onJudgeResponse?: (entry: {
     instruction: string;
     status: 'done' | 'error';
@@ -205,6 +210,8 @@ export async function evaluateCondition(
       childProcessEnv: options.childProcessEnv,
       abortSignal: options.abortSignal,
       failureDir: options.failureDir,
+      onStream: options.onStream,
+      onActivity: options.onActivity,
     });
   } catch (error) {
     if (!(error instanceof StructuredAgentResponseError)) {
@@ -290,6 +297,8 @@ async function runAiJudgeStage(
       childProcessEnv: options.childProcessEnv,
       abortSignal: options.abortSignal,
       failureDir: options.failureDir,
+      onStream: options.onStream,
+      onActivity: options.onActivity,
       onJudgeResponse: stage3.capture,
     });
   } catch (error) {
@@ -333,6 +342,7 @@ export async function runJudgeFallbackStages(
       projectCwd: options.projectCwd,
       language: options.language,
       onStream: options.onStream,
+      onActivity: options.onActivity,
       childProcessEnv: options.childProcessEnv,
       abortSignal: options.abortSignal,
       failureDir: options.failureDir,
@@ -393,6 +403,7 @@ export async function judgeStatus(
         },
         language: options.language,
         onStream: options.onStream,
+        onActivity: options.onActivity,
         childProcessEnv: options.childProcessEnv,
         abortSignal: options.abortSignal,
         failureDir: options.failureDir,

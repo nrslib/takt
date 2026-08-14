@@ -71,6 +71,7 @@ function toTerminalOptions(options: ProviderCallOptions): ClaudeTerminalCallOpti
     keepSession: terminalOptions?.keepSession,
     transcriptPollIntervalMs: terminalOptions?.transcriptPollIntervalMs,
     onStream: options.onStream,
+    onActivity: options.onActivity,
     onPermissionRequest: options.onPermissionRequest,
     onAskUserQuestion: options.onAskUserQuestion,
     outputSchema: options.outputSchema,

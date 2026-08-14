@@ -62,6 +62,8 @@ export interface BasePhaseRunnerContext {
   failureDir?: string;
   /** Stream callback for provider event logging */
   onStream?: import('../../agents/types.js').StreamCallback;
+  /** Records provider activity that does not produce a public stream event. */
+  onActivity?: RunAgentOptions['onActivity'];
   /** Parent workflow iteration for sub-step phase events */
   iteration?: number;
   /** Callback for phase lifecycle logging */

@@ -69,12 +69,14 @@ describe('KiroProvider', () => {
 
     const provider = new KiroProvider();
     const agent = provider.setup({ name: 'coder' });
+    const onActivity = vi.fn();
 
     await agent.call('implement', {
       cwd: '/tmp/work',
       model: 'claude-3-opus',
       sessionId: 'sess-1',
       permissionMode: 'full',
+      onActivity,
     });
 
     expect(mockCallKiro).toHaveBeenCalledWith(
@@ -85,6 +87,7 @@ describe('KiroProvider', () => {
         model: 'claude-3-opus',
         sessionId: 'sess-1',
         permissionMode: 'full',
+        onActivity,
         kiroApiKey: 'resolved-key',
         kiroCliPath: '/custom/bin/kiro-cli',
       }),

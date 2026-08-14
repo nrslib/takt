@@ -120,7 +120,8 @@ describe('DynamicParallelSelectorCoordinator', () => {
       timestamp: new Date(),
       structuredOutput: { selected_ids: ['frontend'], rationale: 'frontend changes are present' },
     });
-    const deps = dependencies();
+    const onActivity = vi.fn();
+    const deps = { ...dependencies(), onActivity };
     const coordinator = new DynamicParallelSelectorCoordinator(deps);
     const step = dynamicParallelStep({
       mode: 'replace',
@@ -158,6 +159,7 @@ describe('DynamicParallelSelectorCoordinator', () => {
       persona: 'reviewer-selector',
       personaPath: '/project/.takt/facets/personas/reviewer-selector.md',
       workflowBundleResourceRoot: '/project/.takt/runs/bundle/resources',
+      onActivity,
     }));
     expect(participants.map(({ name }) => name)).toEqual(['architecture', 'frontend']);
   });

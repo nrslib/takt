@@ -1,5 +1,6 @@
 import type { AutoRoutingConfig, RoutingTier } from '../../models/config-types.js';
 import type { RoutingWorkSnapshot, WorkRequirementEstimate, WorkRequirementEstimator } from './contracts.js';
+import type { ProviderActivityCallback, StreamCallback } from '../../../shared/types/provider.js';
 import {
   createRoutingModelInputDigest,
   createRoutingWorkFingerprint,
@@ -23,7 +24,13 @@ export class RoutingRuntime {
 
   constructor(private readonly options: { autoRouting: AutoRoutingConfig; estimator: WorkRequirementEstimator }) {}
 
-  async resolve(input: { scope: string; snapshot: RoutingWorkSnapshot; abortSignal?: AbortSignal }) {
+  async resolve(input: {
+    scope: string;
+    snapshot: RoutingWorkSnapshot;
+    abortSignal?: AbortSignal;
+    onStream?: StreamCallback;
+    onActivity?: ProviderActivityCallback;
+  }) {
     input.abortSignal?.throwIfAborted();
     const fingerprint = createRoutingWorkFingerprint(input.snapshot);
     const previous = this.resolutions.get(input.scope);
@@ -40,6 +47,8 @@ export class RoutingRuntime {
       } else {
         estimate = await this.options.estimator.estimate(modelInput, {
           abortSignal: input.abortSignal,
+          onStream: input.onStream,
+          onActivity: input.onActivity,
         });
         this.estimates.set(estimateCacheKey, this.copyEstimate(estimate));
       }

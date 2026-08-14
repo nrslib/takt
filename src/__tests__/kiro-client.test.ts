@@ -196,6 +196,7 @@ describe('callKiro', () => {
   });
 
   it('Given full permission and a session, When called, Then invokes kiro-cli headless with trust-all and resume-id', async () => {
+    const onActivity = vi.fn();
     mockSpawnWithScenario({
       stdout: 'Implementation complete.',
       code: 0,
@@ -206,11 +207,13 @@ describe('callKiro', () => {
       sessionId: 'sess-prev',
       permissionMode: 'full',
       kiroApiKey: 'kiro-secret',
+      onActivity,
     });
 
     expect(result.status).toBe('done');
     expect(result.content).toBe('Implementation complete.');
     expect(result.sessionId).toBe('sess-prev');
+    expect(onActivity).toHaveBeenCalledOnce();
 
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     const [command, args, options] = mockSpawn.mock.calls[0] as [

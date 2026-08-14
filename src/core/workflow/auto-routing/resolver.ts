@@ -9,6 +9,7 @@ import { normalizeRoutingWorkSnapshot } from './normalizer.js';
 import { hasAutoRoutingPoolAssignment, resolveAutoRoutingRuleCandidate, selectRoutingCandidate } from './selector.js';
 import type { RoutingRuntime } from './runtime.js';
 import { isProviderStreamParseError } from '../../../shared/types/agent-failure.js';
+import type { ProviderActivityCallback, StreamCallback } from '../../../shared/types/provider.js';
 
 export interface AutoRoutingStepMetadata {
   name: string;
@@ -39,6 +40,8 @@ export interface ResolveAutoRoutingRuntimeInput {
   runtime?: RoutingRuntime;
   logger?: AutoRoutingLogger;
   abortSignal?: AbortSignal;
+  onStream?: StreamCallback;
+  onActivity?: ProviderActivityCallback;
 }
 
 export interface ResolveAutoRoutingBatchItem {
@@ -57,6 +60,8 @@ export interface ResolveAutoRoutingBatchInput {
   runtime?: RoutingRuntime;
   logger?: AutoRoutingLogger;
   abortSignal?: AbortSignal;
+  onStream?: StreamCallback;
+  onActivity?: ProviderActivityCallback;
 }
 
 const CLAUDE_MODEL_ALIASES = new Set(['opus', 'sonnet', 'haiku']);
@@ -174,6 +179,8 @@ export async function resolveAutoRoutingRuntime(input: ResolveAutoRoutingRuntime
       scope: resolveRoutingScope(input),
       snapshot: input.snapshot,
       abortSignal: input.abortSignal,
+      onStream: input.onStream,
+      onActivity: input.onActivity,
     });
     if (decision.fallbackReason !== undefined) {
       input.logger?.warn('Auto routing estimator failed; using configured pool fallback');
@@ -200,6 +207,8 @@ export async function resolveAutoRoutingRuntime(input: ResolveAutoRoutingRuntime
   try {
     estimate = await input.estimator.estimate(normalizeRoutingWorkSnapshot(input.snapshot), {
       abortSignal: input.abortSignal,
+      onStream: input.onStream,
+      onActivity: input.onActivity,
     });
   } catch (error) {
     if (input.abortSignal?.aborted) {

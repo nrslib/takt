@@ -66,6 +66,8 @@ interface CompanionStepRuntimeDeps {
   readonly selectorProvider?: SelectorProviderInfo;
   readonly diffReader: CompanionDiffReader;
   readonly abortSignal?: AbortSignal;
+  readonly onStream?: RunAgentOptions['onStream'];
+  readonly onActivity?: RunAgentOptions['onActivity'];
   readonly stateStore: CompanionReviewStateStore;
   readonly emitEvent: CompanionEventEmitter;
   readonly recordUsage: (
@@ -104,6 +106,8 @@ export class CompanionStepRuntime {
       failureDir: deps.failureDir,
       language: deps.language,
       abortSignal: deps.abortSignal,
+      onStream: deps.onStream,
+      onActivity: deps.onActivity,
       recordUsage: deps.recordUsage,
       recordCall: (call: CompanionCallAudit) => {
         this.events.call({

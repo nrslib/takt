@@ -5,40 +5,112 @@ import {
   readOpenCodeToolPart,
 } from './tool-events.js';
 import type { OpenCodeGuard, OpenCodeGuardLifecycleScope, OpenCodeGuardVerdict } from './types.js';
+import { createPartTimeoutReason } from '../../../shared/types/agent-failure.js';
+import { STALE_IN_FLIGHT_TOOL_FACTOR } from '../../../shared/types/provider-deadline.js';
+
+export { STALE_IN_FLIGHT_TOOL_FACTOR } from '../../../shared/types/provider-deadline.js';
 
 export function describeOpenCodeIdleTimeout(timeoutMs: number): string {
   return `OpenCode stream timed out after ${Math.round(timeoutMs / 60000)} minutes of inactivity`;
 }
 
-// カスタムの認証済み transport が idle watchdog を明示的に登録する場合に、
-// ツール結果イベントの取りこぼしで in-flight が残り続ける状態を有界にする倍率。
-// 既定 registry には IdleTimeoutGuard を登録せず、通常の OpenCode 呼び出しでは
-// 親ステップの wall-clock deadline のみを安全装置として使う。
-const STALE_IN_FLIGHT_TOOL_FACTOR = 6;
+// 正当な長時間 tool を通常の無応答として切らず、終端イベント欠落だけを
+// 有界にする。既存の call timeout を基準にすることで、別設定の解決経路を増やさない。
+class InFlightToolTracker {
+  readonly #startedAtByKey = new Map<string, number>();
 
-export class WallClockGuard implements OpenCodeGuard {
-  readonly id = 'wall-clock';
+  observe(event: OpenCodeStreamEvent): void {
+    const toolPart = readOpenCodeToolPart(event);
+    if (toolPart === undefined) return;
+    const key = openCodeToolCallKey(toolPart);
+    if (isOpenCodeToolTerminal(toolPart)) {
+      this.#startedAtByKey.delete(key);
+      return;
+    }
+    if (!this.#startedAtByKey.has(key)) {
+      this.#startedAtByKey.set(key, Date.now());
+    }
+  }
+
+  clear(): void {
+    this.#startedAtByKey.clear();
+  }
+
+  earliestStaleDeadline(staleAfterMs: number): number | undefined {
+    if (this.#startedAtByKey.size === 0) return undefined;
+    return Math.min(...this.#startedAtByKey.values()) + staleAfterMs;
+  }
+
+  pruneStale(staleAfterMs: number): void {
+    const staleBefore = Date.now() - staleAfterMs;
+    for (const [key, startedAt] of this.#startedAtByKey) {
+      if (startedAt <= staleBefore) this.#startedAtByKey.delete(key);
+    }
+  }
+}
+
+export class InactivityTimeoutGuard implements OpenCodeGuard {
+  readonly id = 'inactivity-timeout';
   readonly layer = 'time' as const;
   private timeoutId: ReturnType<typeof setTimeout> | undefined;
+  private onVerdict: ((verdict: OpenCodeGuardVerdict) => void) | undefined;
+  private readonly inFlightTools = new InFlightToolTracker();
+  private readonly staleAfterMs: number;
 
-  constructor(private readonly timeoutMs: number) {}
+  constructor(private readonly timeoutMs: number) {
+    this.staleAfterMs = timeoutMs * STALE_IN_FLIGHT_TOOL_FACTOR;
+  }
 
   start(scope: OpenCodeGuardLifecycleScope, onVerdict: (verdict: OpenCodeGuardVerdict) => void): void {
-    if (scope !== 'call') return;
-    this.stop('call');
-    const timeoutId = setTimeout(() => {
-      onVerdict({
-        action: 'fail',
-        reason: `OpenCode call wall-clock timeout exceeded (${this.timeoutMs} ms)`,
-        abortKind: 'deadline',
-      });
-    }, this.timeoutMs);
-    timeoutId.unref();
-    this.timeoutId = timeoutId;
+    if (scope === 'call') {
+      this.onVerdict = onVerdict;
+    } else {
+      this.inFlightTools.clear();
+    }
+    if (this.onVerdict === undefined) return;
+    this.arm();
+  }
+
+  onEvent(event: OpenCodeStreamEvent): OpenCodeGuardVerdict | undefined {
+    this.inFlightTools.observe(event);
+    this.arm();
+    return undefined;
   }
 
   stop(scope: OpenCodeGuardLifecycleScope): void {
-    if (scope !== 'call' || this.timeoutId === undefined) return;
+    if (scope !== 'call') return;
+    this.disarm();
+    this.inFlightTools.clear();
+    this.onVerdict = undefined;
+  }
+
+  private arm(): void {
+    this.disarm();
+    const staleDeadline = this.inFlightTools.earliestStaleDeadline(this.staleAfterMs);
+    this.timeoutId = staleDeadline === undefined
+      ? this.schedule(() => this.fail(), this.timeoutMs)
+      : this.schedule(() => {
+          this.inFlightTools.pruneStale(this.staleAfterMs);
+          this.fail();
+        }, staleDeadline - Date.now());
+  }
+
+  private fail(): void {
+    this.onVerdict?.({
+      action: 'fail',
+      reason: createPartTimeoutReason(this.timeoutMs),
+      abortKind: 'deadline',
+    });
+  }
+
+  private schedule(handler: () => void, delayMs: number): ReturnType<typeof setTimeout> {
+    const timeoutId = setTimeout(handler, Math.max(delayMs, 0));
+    timeoutId.unref();
+    return timeoutId;
+  }
+
+  private disarm(): void {
+    if (this.timeoutId === undefined) return;
     clearTimeout(this.timeoutId);
     this.timeoutId = undefined;
   }
@@ -49,8 +121,7 @@ export class IdleTimeoutGuard implements OpenCodeGuard {
   readonly layer = 'time' as const;
   private timeoutId: ReturnType<typeof setTimeout> | undefined;
   private onVerdict: ((verdict: OpenCodeGuardVerdict) => void) | undefined;
-  /** in-flight のツール呼び出しキー → 登録時刻。時刻は stale 判定にだけ使う。 */
-  private readonly inFlightToolCalls = new Map<string, number>();
+  private readonly inFlightTools = new InFlightToolTracker();
   private readonly staleAfterMs: number;
 
   constructor(private readonly timeoutMs: number) {
@@ -59,13 +130,13 @@ export class IdleTimeoutGuard implements OpenCodeGuard {
 
   start(scope: OpenCodeGuardLifecycleScope, onVerdict: (verdict: OpenCodeGuardVerdict) => void): void {
     if (scope !== 'attempt') return;
-    this.inFlightToolCalls.clear();
+    this.inFlightTools.clear();
     this.onVerdict = onVerdict;
     this.arm();
   }
 
   onEvent(event: OpenCodeStreamEvent): OpenCodeGuardVerdict | undefined {
-    this.trackToolFlight(event);
+    this.inFlightTools.observe(event);
     this.arm();
     return undefined;
   }
@@ -73,20 +144,8 @@ export class IdleTimeoutGuard implements OpenCodeGuard {
   stop(scope: OpenCodeGuardLifecycleScope): void {
     if (scope !== 'attempt') return;
     this.disarm();
-    this.inFlightToolCalls.clear();
+    this.inFlightTools.clear();
     this.onVerdict = undefined;
-  }
-
-  private trackToolFlight(event: OpenCodeStreamEvent): void {
-    const toolPart = readOpenCodeToolPart(event);
-    if (toolPart === undefined) return;
-    const key = openCodeToolCallKey(toolPart);
-    if (isOpenCodeToolTerminal(toolPart)) {
-      this.inFlightToolCalls.delete(key);
-      return;
-    }
-    if (this.inFlightToolCalls.has(key)) return;
-    this.inFlightToolCalls.set(key, Date.now());
   }
 
   private arm(): void {
@@ -102,7 +161,7 @@ export class IdleTimeoutGuard implements OpenCodeGuard {
       // 続くと arm() も呼ばれないので、stale 期限にタイマーを置いて自力で
       // 除去し、劣化を有界にする（永久停止させない）。
       this.timeoutId = this.schedule(() => {
-        this.pruneStaleToolCalls();
+        this.inFlightTools.pruneStale(this.staleAfterMs);
         this.arm();
       }, staleDeadline - Date.now());
       return;
@@ -116,15 +175,7 @@ export class IdleTimeoutGuard implements OpenCodeGuard {
   }
 
   private earliestStaleDeadline(): number | undefined {
-    if (this.inFlightToolCalls.size === 0) return undefined;
-    return Math.min(...this.inFlightToolCalls.values()) + this.staleAfterMs;
-  }
-
-  private pruneStaleToolCalls(): void {
-    const staleBefore = Date.now() - this.staleAfterMs;
-    for (const [key, registeredAt] of this.inFlightToolCalls) {
-      if (registeredAt <= staleBefore) this.inFlightToolCalls.delete(key);
-    }
+    return this.inFlightTools.earliestStaleDeadline(this.staleAfterMs);
   }
 
   private schedule(handler: () => void, delayMs: number): ReturnType<typeof setTimeout> {

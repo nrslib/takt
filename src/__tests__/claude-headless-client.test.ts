@@ -201,6 +201,7 @@ describe('callClaudeHeadless', () => {
   });
 
   it('returns done when stream-json yields text and process exits 0', async () => {
+    const onActivity = vi.fn();
     stubSpawn({
       stdoutChunks: [
         `${JSON.stringify({ type: 'text', text: 'ok' })}\n`,
@@ -208,9 +209,10 @@ describe('callClaudeHeadless', () => {
       ],
       closeCode: 0,
     });
-    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp' });
+    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp', onActivity });
     expect(res.status).toBe('done');
     expect(res.content).toBe('ok');
+    expect(onActivity).toHaveBeenCalledOnce();
   });
 
   it('passes only run-local observability snapshot to headless child env', async () => {

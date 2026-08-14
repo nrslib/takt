@@ -493,7 +493,7 @@ describe('Claude terminal transcript reader', () => {
         baseline: { byteOffset: 0, lineNumberOffset: 0 },
         timeoutMs: 30,
         pollIntervalMs: 5,
-      })).rejects.toThrow(/timed out waiting for claude terminal assistant response/i);
+      })).rejects.toThrow('Part timeout after 30ms');
     } finally {
       if (originalHome === undefined) {
         delete process.env.HOME;

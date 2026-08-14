@@ -767,6 +767,7 @@ describe('Claude terminal client', () => {
     const backend = createBackend();
     const onPermissionRequest = vi.fn();
     const onAskUserQuestion = vi.fn().mockResolvedValue({ answer: 'Use option A.' });
+    const onActivity = vi.fn();
     const transcriptReader = {
       readBaseline: vi.fn().mockResolvedValue({ byteOffset: 0, lineNumberOffset: 0 }),
       findSession: vi.fn().mockResolvedValue({ sessionId: 'claude-session-1' }),
@@ -793,6 +794,7 @@ describe('Claude terminal client', () => {
       backend: 'tmux',
       onPermissionRequest,
       onAskUserQuestion,
+      onActivity,
       terminalBackend: backend,
       transcriptReader,
     });
@@ -813,6 +815,13 @@ describe('Claude terminal client', () => {
       'Use option A.',
     );
     expect(transcriptReader.waitForAssistantResponse).toHaveBeenCalledTimes(2);
+    expect(onActivity).toHaveBeenCalledTimes(3);
+    expect(onActivity.mock.invocationCallOrder[1]).toBeLessThan(
+      transcriptReader.waitForAssistantResponse.mock.invocationCallOrder[0]!,
+    );
+    expect(onActivity.mock.invocationCallOrder[2]).toBeLessThan(
+      transcriptReader.waitForAssistantResponse.mock.invocationCallOrder[1]!,
+    );
     expect(result).toMatchObject({
       persona: 'coder',
       status: 'done',

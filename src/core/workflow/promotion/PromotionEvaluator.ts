@@ -18,6 +18,9 @@ export interface PromotionEvaluationContext {
   resolvedProviderOptions?: StepProviderOptions;
   permissionMode?: PermissionMode;
   childProcessEnv?: RunAgentOptions['childProcessEnv'];
+  abortSignal?: RunAgentOptions['abortSignal'];
+  onStream?: RunAgentOptions['onStream'];
+  onActivity?: RunAgentOptions['onActivity'];
 }
 
 function matchesAt(entry: WorkflowPromotionEntry, stepIteration: number): boolean {
@@ -90,6 +93,9 @@ async function matchesAiCondition(
       resolvedProviderOptions: context.resolvedProviderOptions,
       permissionMode: context.permissionMode,
       childProcessEnv: context.childProcessEnv,
+      abortSignal: context.abortSignal,
+      onStream: context.onStream,
+      onActivity: context.onActivity,
     },
   );
   return matchedIndex === entryIndex;

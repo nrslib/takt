@@ -10,6 +10,7 @@ import { CompanionReviewAuthority } from '../core/workflow/companion/review-stat
 import { StepExecutor, type StepExecutorDeps } from '../core/workflow/engine/StepExecutor.js';
 import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engine/structured-output-normalizer.js';
 import { COMPLETION_RETRY_JUDGE_NAME } from '../core/workflow/completion-retry.js';
+import { CompanionStepRuntime } from '../core/workflow/companion/step-runtime.js';
 import type { RunPaths } from '../core/workflow/run/run-paths.js';
 import { executeAgent } from '../agents/agent-usecases.js';
 import { initDebugLogger, resetDebugLogger } from '../shared/utils/debug.js';
@@ -271,6 +272,14 @@ describe('companion StepExecutor lifecycle', () => {
       abortSignal: abortController.signal,
       emitEvent,
     });
+    const onStream = vi.fn();
+    const onActivity = vi.fn();
+    vi.mocked(deps.optionsBuilder.buildAgentOptions).mockReturnValue({
+      cwd,
+      onStream,
+      onActivity,
+    });
+    const createRuntime = vi.spyOn(CompanionStepRuntime, 'create');
     const step = {
       ...createCompanionStep([makeRule('Implementation is complete', 'COMPLETE')]),
       completionRetry: {
@@ -290,6 +299,10 @@ describe('companion StepExecutor lifecycle', () => {
     );
 
     expect(result.response).toMatchObject({ content: 'review-2', sessionId: 'session-2' });
+    expect(createRuntime).toHaveBeenCalledWith(expect.objectContaining({
+      onStream,
+      onActivity,
+    }));
     expect(timeline).toEqual([
       'reviewer:1',
       'companion:complete',
@@ -298,6 +311,7 @@ describe('companion StepExecutor lifecycle', () => {
       'companion:complete',
       'judge:2',
     ]);
+    createRuntime.mockRestore();
   });
 
   it('should release the companion parent abort listener after a successful normal step', async () => {

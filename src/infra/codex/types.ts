@@ -5,7 +5,7 @@
 import type { PermissionMode } from '../../core/models/index.js';
 import type { CodexReasoningEffort } from '../../core/models/workflow-types.js';
 import type { ProviderImageAttachment } from '../providers/types.js';
-import type { StreamCallback } from '../../shared/types/provider.js';
+import type { ProviderActivityCallback, StreamCallback } from '../../shared/types/provider.js';
 
 /** Codex sandbox mode values */
 export type CodexSandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
@@ -34,6 +34,8 @@ export interface CodexCallOptions {
   networkAccess?: boolean;
   /** Enable streaming mode with callback (best-effort) */
   onStream?: StreamCallback;
+  /** Notify the workflow inactivity deadline immediately before each provider attempt. */
+  onActivity?: ProviderActivityCallback;
   /** OpenAI API key (bypasses CLI auth) */
   openaiApiKey?: string;
   /** OpenAI-compatible API base URL */

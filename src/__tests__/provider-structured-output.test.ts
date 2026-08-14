@@ -645,3 +645,28 @@ describe('ClaudeProvider abortSignal wiring', () => {
     expect(callOptions).toHaveProperty('abortSignal', controller.signal);
   });
 });
+
+describe('Provider activity wiring', () => {
+  it.each([
+    ['claude', () => new ClaudeProvider(), mockCallClaude, undefined],
+    ['codex', () => new CodexProvider(), mockCallCodex, undefined],
+    ['opencode', () => new OpenCodeProvider(), mockCallOpenCode, 'opencode/big-pickle'],
+  ] as const)('%s provider は onActivity を client へ渡す', async (
+    _name,
+    createProvider,
+    callMock,
+    model,
+  ) => {
+    vi.clearAllMocks();
+    callMock.mockResolvedValue(doneResponse('coder'));
+    const onActivity = vi.fn();
+
+    await createProvider().setup({ name: 'coder' }).call('prompt', {
+      cwd: '/tmp/project',
+      onActivity,
+      ...(model === undefined ? {} : { model }),
+    });
+
+    expect(callMock.mock.calls[0]?.[2]).toHaveProperty('onActivity', onActivity);
+  });
+});

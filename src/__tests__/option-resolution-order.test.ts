@@ -80,6 +80,17 @@ describe('option resolution order', () => {
     getRuntimeInstructionsMock.mockReturnValue(null);
   });
 
+  it('records an attempt-boundary activity before provider dispatch', async () => {
+    const onActivity = vi.fn();
+
+    await runAgent(undefined, 'task', { cwd: '/repo', provider: 'mock', onActivity });
+
+    expect(onActivity).toHaveBeenCalledOnce();
+    expect(onActivity.mock.invocationCallOrder[0]).toBeLessThan(
+      providerCallMock.mock.invocationCallOrder[0]!,
+    );
+  });
+
   it('should resolve provider in order: CLI > local config > global config', async () => {
     loadProjectConfigMock.mockReturnValue({ provider: 'opencode' });
     loadGlobalConfigMock.mockReturnValue({

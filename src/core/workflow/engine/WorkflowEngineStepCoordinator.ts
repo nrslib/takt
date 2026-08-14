@@ -22,7 +22,7 @@ import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhauste
 import {
   createWorkflowStepCompositeDeadline,
   createWorkflowStepDeadline,
-  type WorkflowStepDeadline,
+  type WorkflowStepInactivityDeadline,
   type WorkflowStepDeadlineProviderInfo,
   type WorkflowStepExecutionDeadlineContext,
 } from './step-deadline.js';
@@ -144,7 +144,7 @@ interface WorkflowEngineStepCoordinatorDeps {
 }
 
 export class WorkflowEngineStepCoordinator {
-  private readonly stepDeadlines = new Map<string, WorkflowStepDeadline>();
+  private readonly stepDeadlines = new Map<string, WorkflowStepInactivityDeadline>();
 
   constructor(private readonly deps: WorkflowEngineStepCoordinatorDeps) {}
 
@@ -152,7 +152,7 @@ export class WorkflowEngineStepCoordinator {
     step: WorkflowStep,
     runtime: RuntimeStepResolution | undefined,
     stepIteration: number,
-  ): WorkflowStepDeadline {
+  ): WorkflowStepInactivityDeadline {
     const providerInfos = this.resolveStepDeadlineProviderInfos(step, runtime);
     return this.getOrCreateStepDeadline(
       step,
@@ -166,7 +166,7 @@ export class WorkflowEngineStepCoordinator {
     step: WorkflowStep,
     runtime: RuntimeStepResolution | undefined,
     stepIteration: number,
-  ): WorkflowStepDeadline {
+  ): WorkflowStepInactivityDeadline {
     const key = this.stepDeadlineKey(step, stepIteration, 'step');
     const existing = this.stepDeadlines.get(key);
     if (existing === undefined) {
@@ -177,7 +177,6 @@ export class WorkflowEngineStepCoordinator {
     const deadline = createWorkflowStepCompositeDeadline(
       providerInfos,
       this.deps.getOptions().abortSignal,
-      existing.startedAt,
     );
     this.stepDeadlines.set(key, deadline);
     return deadline;
@@ -188,7 +187,7 @@ export class WorkflowEngineStepCoordinator {
     stepIteration: number,
     executionUnitKey: string,
     providerInfo: WorkflowStepDeadlineProviderInfo,
-  ): WorkflowStepDeadline {
+  ): WorkflowStepInactivityDeadline {
     return this.getOrCreateStepDeadline(
       step,
       stepIteration,
@@ -252,8 +251,8 @@ export class WorkflowEngineStepCoordinator {
     step: WorkflowStep,
     stepIteration: number,
     executionUnitKey: string,
-    create: () => WorkflowStepDeadline,
-  ): WorkflowStepDeadline {
+    create: () => WorkflowStepInactivityDeadline,
+  ): WorkflowStepInactivityDeadline {
     const key = this.stepDeadlineKey(step, stepIteration, executionUnitKey);
     const existing = this.stepDeadlines.get(key);
     if (existing !== undefined) {
@@ -287,11 +286,11 @@ export class WorkflowEngineStepCoordinator {
         executionUnitKey,
         providerInfo,
       ),
-      runWith: <T>(deadline: WorkflowStepDeadline, operation: () => Promise<T>): Promise<T> => {
+      runWith: <T>(deadline: WorkflowStepInactivityDeadline, operation: () => Promise<T>): Promise<T> => {
         if (this.deps.stepAbortSignalContext === undefined) {
           return operation();
         }
-        return this.deps.stepAbortSignalContext.runWith(deadline.signal, operation);
+        return this.deps.stepAbortSignalContext.runWith(deadline, operation);
       },
     };
   }

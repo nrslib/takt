@@ -10,7 +10,11 @@ import type {
   StepProviderOptions,
   ProviderPermissionProfiles,
 } from '../core/models/index.js';
-import type { InternalAgentIsolation, ProviderType } from '../shared/types/provider.js';
+import type {
+  InternalAgentIsolation,
+  ProviderActivityCallback,
+  ProviderType,
+} from '../shared/types/provider.js';
 
 export type { StreamCallback };
 
@@ -64,6 +68,7 @@ export interface RunAgentOptions {
   resolvedProviderOptions?: StepProviderOptions | null;
   resolvedExecution?: ResolvedAgentExecution;
   onStream?: StreamCallback;
+  onActivity?: ProviderActivityCallback;
   onPermissionRequest?: PermissionHandler;
   onAskUserQuestion?: AskUserQuestionHandler;
   onDispatch?: (permissionMode: PermissionMode | undefined) => void;

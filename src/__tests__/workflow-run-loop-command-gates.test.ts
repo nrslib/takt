@@ -570,7 +570,7 @@ describe('WorkflowRunLoop step deadline', () => {
     })).toBe(MINUTE * 2);
   });
 
-  it('fallback を跨ぐ同一 occurrence は絶対期限をリセットしない', async () => {
+  it('fallback の試行境界で同一 occurrence の無応答期限をリセットする', async () => {
     vi.useFakeTimers();
     const step = makeStep('work', {
       provider: 'opencode',
@@ -608,6 +608,7 @@ describe('WorkflowRunLoop step deadline', () => {
           instruction,
         };
       }
+      context.recordActivity();
       return await new Promise((resolve) => {
         const finish = (): void => {
           signal.removeEventListener('abort', finish);
@@ -633,14 +634,15 @@ describe('WorkflowRunLoop step deadline', () => {
     expect(deps.runStep).toHaveBeenCalledTimes(2);
     expect(callStartedAt).toEqual([startedAt, startedAt + (40 * MINUTE / 60)]);
     expect(providerSignals[0]).toBe(providerSignals[1]);
+    expect(providerSignals[0]?.aborted).toBe(false);
 
-    await vi.advanceTimersByTimeAsync(MINUTE - (40 * MINUTE / 60));
+    await vi.advanceTimersByTimeAsync(MINUTE);
     const result = await execution;
 
     expect(result.state.status).toBe('aborted');
     expect(providerSignals[0]?.aborted).toBe(true);
     expect(providerSignals[1]?.aborted).toBe(true);
-    expect(Date.now()).toBe(startedAt + MINUTE);
+    expect(Date.now()).toBe(startedAt + (40 * MINUTE / 60) + MINUTE);
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -813,6 +815,7 @@ describe('WorkflowRunLoop step deadline', () => {
     vi.useFakeTimers();
     const tmpDir = mkdtempSync(join(tmpdir(), 'takt-dynamic-facet-deadline-'));
     let selectorSignal: AbortSignal | undefined;
+    let selectorOnActivity: unknown;
     const step = makeStep('dynamic-review', {
       provider: 'opencode',
       model: 'opencode/step-model',
@@ -869,6 +872,7 @@ describe('WorkflowRunLoop step deadline', () => {
         });
         if (options?.internalSystemPrompt?.includes('dynamic facet selector') === true) {
           selectorSignal = options.abortSignal;
+          selectorOnActivity = options.onActivity;
         }
         if (options?.abortSignal === undefined) {
           throw new Error('dynamic facet selector did not receive a deadline signal');
@@ -879,11 +883,72 @@ describe('WorkflowRunLoop step deadline', () => {
 
       const execution = engine.run();
       await waitForCondition(() => selectorSignal !== undefined, 'dynamic facet selector invocation');
+      expect(selectorOnActivity).toEqual(expect.any(Function));
       await vi.advanceTimersByTimeAsync(MINUTE);
       const result = await execution;
 
       expect(result.status).toBe('aborted');
       expect(selectorSignal?.aborted).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      engine.removeAllListeners();
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('OpenCode tool 実行中は1倍の親期限で生存し、6倍の stale 上限で PART_TIMEOUT にする', async () => {
+    vi.useFakeTimers();
+    const tmpDir = mkdtempSync(join(tmpdir(), 'takt-opencode-tool-deadline-'));
+    let providerSignal: AbortSignal | undefined;
+    const step = makeStep('long-tool', {
+      provider: 'opencode',
+      model: 'opencode/tool-model',
+      providerOptions: { opencode: { guards: { callTimeoutMs: MINUTE } } },
+      rules: [makeRule('approved', 'COMPLETE')],
+    });
+    const config: WorkflowConfig = {
+      name: 'opencode-tool-deadline-workflow',
+      maxSteps: 1,
+      initialStep: step.name,
+      steps: [step],
+    };
+    const engine = new WorkflowEngine(config, tmpDir, 'long tool task', {
+      projectCwd: tmpDir,
+      provider: 'opencode',
+      reportDirName: 'opencode-tool-deadline',
+    });
+    try {
+      mockRuleEvaluation.mockReturnValue(undefined);
+      vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+        options.onPromptResolved?.({
+          systemPrompt: typeof persona === 'string' ? persona : '',
+          userInstruction: instruction,
+        });
+        options.onActivity?.({ kind: 'attempt_started' });
+        options.onStream?.({
+          type: 'tool_use',
+          data: { tool: 'Bash', input: { command: 'npm test' }, id: 'tool-1' },
+        });
+        providerSignal = options.abortSignal;
+        if (providerSignal === undefined) {
+          throw new Error('OpenCode provider did not receive a deadline signal');
+        }
+        return { ...await waitForAbort(providerSignal), persona: persona ?? 'long-tool' };
+      });
+
+      const execution = engine.run();
+      await waitForCondition(() => providerSignal !== undefined, 'OpenCode tool invocation');
+      await vi.advanceTimersByTimeAsync(MINUTE);
+      expect(providerSignal?.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(MINUTE * 5 - 1);
+      expect(providerSignal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await execution;
+
+      expect(result.status).toBe('aborted');
+      expect(providerSignal?.aborted).toBe(true);
+      expect((providerSignal?.reason as Error).message).toBe(`Part timeout after ${MINUTE}ms`);
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       engine.removeAllListeners();

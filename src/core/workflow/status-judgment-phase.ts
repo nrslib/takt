@@ -147,6 +147,7 @@ export async function runStatusJudgmentPhase(
         failureDir: ctx.failureDir,
         childProcessEnv: ctx.childProcessEnv,
         onStream: ctx.onStream,
+        onActivity: ctx.onActivity,
         onStructuredPromptResolved: (promptParts) => {
           if (!didEmitPhaseStart) {
             emitPhaseStart(promptParts);
