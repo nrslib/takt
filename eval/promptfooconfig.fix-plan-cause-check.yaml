@@ -21,6 +21,7 @@ providers:
 
 evaluateOptions:
   maxConcurrency: 1
+  repeat: 3
 
 tests:
   - description: 'fix-plan: preserve parallel execution when resource contention has not been confirmed'

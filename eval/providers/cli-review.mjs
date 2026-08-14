@@ -1,85 +1,76 @@
-import { spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnManagedProcess } from '../../dist/shared/utils/spawn.js';
 
 const evalDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-function runProcess(command, args, { cwd, input, timeoutMs, abortSignal }) {
+export async function runProcess(command, args, { cwd, input, timeoutMs, abortSignal }) {
   if (abortSignal?.aborted) {
-    return Promise.reject(new Error(`${command} was aborted before it started`));
+    throw new Error(`${command} was aborted before it started`);
   }
 
-  return new Promise((resolveRun, rejectRun) => {
-    const child = spawn(command, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
-    const stdout = [];
-    const stderr = [];
-    let timedOut = false;
-    let aborted = false;
-    let settled = false;
-    let forceKillTimer;
-    let inputError;
+  const controller = new AbortController();
+  const managed = spawnManagedProcess(
+    command,
+    args,
+    { cwd, stdio: ['pipe', 'pipe', 'pipe'] },
+    controller.signal,
+  );
+  const { child } = managed;
+  const stdout = [];
+  const stderr = [];
+  let timedOut = false;
+  let aborted = false;
+  let inputError;
 
-    const stop = () => {
-      if (child.exitCode !== null || child.signalCode !== null) return;
-      child.kill('SIGTERM');
-      forceKillTimer ??= setTimeout(() => child.kill('SIGKILL'), 5_000);
-    };
-    const abort = () => {
-      aborted = true;
-      stop();
-    };
-    const cleanup = () => {
-      clearTimeout(timer);
-      clearTimeout(forceKillTimer);
-      abortSignal?.removeEventListener('abort', abort);
-    };
-    const timer = setTimeout(() => {
-      timedOut = true;
-      stop();
-    }, timeoutMs);
-    abortSignal?.addEventListener('abort', abort, { once: true });
+  const stop = (reason) => {
+    if (!controller.signal.aborted) controller.abort(reason);
+  };
+  const abort = () => {
+    aborted = true;
+    stop(new Error(`${command} was aborted`));
+  };
+  const timer = setTimeout(() => {
+    timedOut = true;
+    stop(new Error(`${command} timed out after ${timeoutMs}ms`));
+  }, timeoutMs);
+  abortSignal?.addEventListener('abort', abort, { once: true });
 
-    child.stdout.on('data', (chunk) => stdout.push(chunk));
-    child.stderr.on('data', (chunk) => stderr.push(chunk));
-    child.stdin.on('error', (error) => {
-      if (settled) return;
-      inputError = error;
-      stop();
-    });
-    child.once('error', (error) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      rejectRun(error);
-    });
-    child.once('close', (code, signal) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      const output = Buffer.concat(stdout).toString('utf8');
-      const errorOutput = Buffer.concat(stderr).toString('utf8');
-      if (inputError !== undefined) {
-        rejectRun(inputError);
-        return;
-      }
-      if (aborted) {
-        rejectRun(new Error(`${command} was aborted`));
-        return;
-      }
-      if (code !== 0) {
-        const reason = timedOut
-          ? `timed out after ${timeoutMs}ms`
-          : `exited with code ${code}${signal ? ` after signal ${signal}` : ''}`;
-        rejectRun(new Error(`${command} ${reason}: ${errorOutput}`));
-        return;
-      }
-      resolveRun(output);
-    });
-
-    child.stdin.end(input);
+  child.stdout.on('data', (chunk) => stdout.push(chunk));
+  child.stderr.on('data', (chunk) => stderr.push(chunk));
+  child.stdin.on('error', (error) => {
+    inputError = error;
+    stop(error);
   });
+
+  try {
+    child.stdin.end(input);
+    const { code, signal } = await managed.wait();
+    const output = Buffer.concat(stdout).toString('utf8');
+    const errorOutput = Buffer.concat(stderr).toString('utf8');
+    if (inputError !== undefined) throw inputError;
+    if (aborted) throw new Error(`${command} was aborted`);
+    if (timedOut) throw new Error(`${command} timed out after ${timeoutMs}ms: ${errorOutput}`);
+    if (code !== 0) {
+      throw new Error(
+        `${command} exited with code ${code}${signal ? ` after signal ${signal}` : ''}: ${errorOutput}`,
+      );
+    }
+    return output;
+  } catch (error) {
+    if (inputError !== undefined) throw inputError;
+    if (aborted) throw new Error(`${command} was aborted`);
+    if (timedOut) {
+      const errorOutput = Buffer.concat(stderr).toString('utf8');
+      throw new Error(`${command} timed out after ${timeoutMs}ms: ${errorOutput}`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    abortSignal?.removeEventListener('abort', abort);
+  }
 }
 
 export default class CliReviewProvider {
