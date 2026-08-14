@@ -3,6 +3,7 @@ import { createWriteStream } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import { dirname, resolve } from 'node:path';
 import { finished } from 'node:stream/promises';
+import { fileURLToPath } from 'node:url';
 import { Codex } from '@openai/codex-sdk';
 
 function isRecord(value) {
@@ -94,6 +95,7 @@ function createEventRecorder() {
     maxEventGap: undefined,
     usage: undefined,
     status: 'running',
+    error: undefined,
   };
 }
 
@@ -134,6 +136,11 @@ function recordEvent(file, recorder, event) {
   }
   if (event.type === 'turn.failed') {
     recorder.status = 'failed';
+    recorder.error = String(event.error?.message ?? 'Codex turn failed');
+  }
+  if (event.type === 'error') {
+    recorder.status = 'error';
+    recorder.error = typeof event.message === 'string' ? event.message : 'Codex stream error';
   }
   recorder.previousMonotonicMs = monotonicMs;
   recorder.previousEventType = event.type;
@@ -141,6 +148,7 @@ function recordEvent(file, recorder, event) {
 }
 
 function buildSummary(options, recorder, error) {
+  const summaryError = error ?? recorder.error;
   const durationMs = recorder.turnStartedMonotonicMs === undefined
     || recorder.turnCompletedMonotonicMs === undefined
     ? null
@@ -164,7 +172,7 @@ function buildSummary(options, recorder, error) {
       toEventType: recorder.maxEventGap.toEventType,
     },
     usage: recorder.usage ?? null,
-    ...(error === undefined ? {} : { error }),
+    ...(summaryError === undefined ? {} : { error: summaryError }),
   };
 }
 
@@ -186,6 +194,9 @@ async function runProbe(options) {
   const file = createWriteStream(options.output, { encoding: 'utf8' });
   const recorder = createEventRecorder();
   let streamError;
+  const fileFinished = finished(file).catch((error) => {
+    streamError ??= error instanceof Error ? error.message : String(error);
+  });
   try {
     for await (const event of events) {
       recordEvent(file, recorder, event);
@@ -194,16 +205,12 @@ async function runProbe(options) {
     streamError = error instanceof Error ? error.message : String(error);
   } finally {
     file.end();
-    try {
-      await finished(file);
-    } catch (error) {
-      streamError ??= error instanceof Error ? error.message : String(error);
-    }
+    await fileFinished;
   }
 
   const summary = buildSummary(probeOptions, recorder, streamError);
   process.stdout.write(`${JSON.stringify(summary)}\n`);
-  if (streamError !== undefined) {
+  if (streamError !== undefined || recorder.status !== 'completed') {
     process.exitCode = 1;
   }
 }
@@ -217,7 +224,14 @@ async function main() {
   await runProbe(options);
 }
 
-main().catch((error) => {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n${usageText()}\n`);
-  process.exitCode = 1;
-});
+export { parseArguments, runProbe };
+
+if (
+  process.argv[1] !== undefined
+  && resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  main().catch((error) => {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n${usageText()}\n`);
+    process.exitCode = 1;
+  });
+}

@@ -48,7 +48,10 @@ export class CompanionReviewQueue {
 
   constructor(private readonly input: {
     runReview: (request: CompanionReviewRequest & { signal: AbortSignal }) => Promise<void>;
-    refreshRetryRequest: (request: CompanionReviewRequest) => Promise<CompanionReviewRequest>;
+    refreshRetryRequest: (
+      request: CompanionReviewRequest,
+      signal: AbortSignal,
+    ) => Promise<CompanionReviewRequest>;
     onCoalesced?: (event: CompanionReviewQueueCoalesced) => void;
   }) {}
 
@@ -125,7 +128,7 @@ export class CompanionReviewQueue {
         let request = batch.request;
         if (batch.retried) {
           if (this.stopped || controller.signal.aborted) throw createAbortError();
-          request = await this.input.refreshRetryRequest(request);
+          request = await this.input.refreshRetryRequest(request, controller.signal);
           if (this.stopped || controller.signal.aborted) throw createAbortError();
         }
         await this.input.runReview({ ...request, signal: controller.signal });

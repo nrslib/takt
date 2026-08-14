@@ -224,7 +224,7 @@ describe('CT-COMP-05 companion review queue lifecycle', () => {
     await expect(queue.enqueue(request('stale'))).resolves.toBeUndefined();
 
     expect(refreshRetryRequest).toHaveBeenCalledTimes(1);
-    expect(refreshRetryRequest).toHaveBeenCalledWith(request('stale'));
+    expect(refreshRetryRequest).toHaveBeenCalledWith(request('stale'), expect.any(AbortSignal));
     expect(starts).toEqual([
       {
         companionName: 'security-reviewer',
@@ -239,6 +239,43 @@ describe('CT-COMP-05 companion review queue lifecycle', () => {
         observedGeneration: 7,
       },
     ]);
+  });
+
+  it('should abort retry refresh before starting the completion batch', async () => {
+    const refreshStarted = deferred<void>();
+    const starts: string[] = [];
+    const queue = new CompanionReviewQueue({
+      runReview: vi.fn(async ({ reason }: CompanionReviewRequest) => {
+        starts.push(reason);
+        if (reason === 'quiet') throw new Error('review failed');
+      }),
+      refreshRetryRequest: vi.fn(async (
+        current: CompanionReviewRequest,
+        signal: AbortSignal,
+      ) => {
+        refreshStarted.resolve();
+        await new Promise<void>((_resolve, reject) => {
+          signal.addEventListener(
+            'abort',
+            () => reject(new DOMException('Aborted', 'AbortError')),
+            { once: true },
+          );
+        });
+        return current;
+      }),
+    });
+
+    const failed = queue.enqueue(request('failed'));
+    const failedRejected = expect(failed).rejects.toMatchObject({ name: 'AbortError' });
+    await refreshStarted.promise;
+
+    const completion = queue.complete({ ...request('completion', 'completion') });
+    await Promise.all([
+      failedRejected,
+      expect(completion).resolves.toBeUndefined(),
+    ]);
+
+    expect(starts).toEqual(['quiet', 'completion']);
   });
 
   it('should reject after one retry and keep later batches alive', async () => {

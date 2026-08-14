@@ -138,5 +138,6 @@ describe('CodexStreamHandler reasoning summaries', () => {
       type: 'thinking',
       data: { thinking: ' completed\n' },
     });
+    expect(onStream).toHaveBeenCalledTimes(2);
   });
 });

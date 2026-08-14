@@ -514,6 +514,7 @@ describe('CT-COMP-06 and CT-COMP-11 structured internal agent execution', () => 
         purpose: 'reviewer',
         success: true,
       }));
+      expect(recordCall).toHaveBeenCalledOnce();
       expect(recordCall.mock.calls[0]?.[0]).not.toHaveProperty('error');
     } finally {
       vi.useRealTimers();
