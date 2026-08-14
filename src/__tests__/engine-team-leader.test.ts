@@ -806,8 +806,9 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     const config = buildTeamLeaderConfig();
     const abortController = new AbortController();
     const abortReason = new Error('leader routing aborted');
+    let estimatorAbortSignal: AbortSignal | undefined;
     const estimate = vi.fn().mockImplementation(async (_input, options) => {
-      expect(options?.abortSignal).toBe(abortController.signal);
+      estimatorAbortSignal = options?.abortSignal;
       abortController.abort(abortReason);
       throw abortReason;
     });
@@ -826,6 +827,9 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
 
     expect(state.status).toBe('aborted');
     expect(estimate).toHaveBeenCalledOnce();
+    expect(estimatorAbortSignal).not.toBe(abortController.signal);
+    expect(estimatorAbortSignal?.aborted).toBe(true);
+    expect(estimatorAbortSignal?.reason).toBe(abortReason);
     expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
   });
 
