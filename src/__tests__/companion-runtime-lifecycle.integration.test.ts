@@ -77,6 +77,7 @@ function dependencies(cwd: string, workflowStep: NormalAgentWorkflowStep, diffRe
     },
     providers: { reviewer: { provider: 'mock' as const } },
     diffReader,
+    buildProviderCallCallbacks: () => ({ finish: vi.fn() }),
     emitEvent: vi.fn(),
     recordUsage: vi.fn(),
   };

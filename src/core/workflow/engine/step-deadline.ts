@@ -57,6 +57,12 @@ export function recordWorkflowStepProviderActivity(
   recordActivity(activity);
 }
 
+export function captureWorkflowStepProviderActivity(
+  recordActivity: ProviderActivityCallback,
+): ProviderActivityCallback {
+  return AsyncLocalStorage.bind(recordActivity);
+}
+
 export function createWorkflowStepAbortSignalContext(
   parentSignal: AbortSignal | undefined,
 ): WorkflowStepAbortSignalContext {

@@ -7,6 +7,11 @@ import type { CompanionDiffReader } from '../core/workflow/companion/diff-reader
 import { CompanionReviewQueue } from '../core/workflow/companion/review-queue.js';
 import { CompanionStepRuntime } from '../core/workflow/companion/step-runtime.js';
 import { StepExecutor, type StepExecutorDeps } from '../core/workflow/engine/StepExecutor.js';
+import { buildInactivityAbortSignal } from '../core/workflow/engine/abort-signal.js';
+import {
+  recordWorkflowStepProviderActivity,
+  recordWorkflowStepProviderEventActivity,
+} from '../core/workflow/engine/step-deadline.js';
 import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engine/structured-output-normalizer.js';
 import type { RunPaths } from '../core/workflow/run/run-paths.js';
 import { executeAgent } from '../agents/agent-usecases.js';
@@ -113,6 +118,7 @@ function deps(input: {
           permissionMode: 'edit',
         },
       }),
+      buildProviderCallCallbacks: vi.fn().mockReturnValue({ finish: vi.fn() }),
       buildPhaseRunnerContext: vi.fn().mockReturnValue({ childProcessEnv: undefined }),
       resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'mock', model: undefined }),
     },
@@ -258,6 +264,10 @@ describe('companion StepExecutor lifecycle', () => {
     });
     const onStream = vi.fn();
     const onActivity = vi.fn();
+    const companionCallbackPairs: Array<{
+      onStream: ReturnType<typeof vi.fn>;
+      onActivity: ReturnType<typeof vi.fn>;
+    }> = [];
     vi.mocked(executorDeps.optionsBuilder.buildAgentOptions).mockReturnValue({
       cwd,
       onStream,
@@ -269,15 +279,41 @@ describe('companion StepExecutor lifecycle', () => {
         permissionMode: 'edit',
       },
     });
+    vi.mocked(executorDeps.optionsBuilder.buildProviderCallCallbacks)
+      .mockImplementation(() => {
+        const callbacks = { onStream: vi.fn(), onActivity: vi.fn() };
+        companionCallbackPairs.push(callbacks);
+        return { ...callbacks, finish: vi.fn() };
+      });
     const createRuntime = vi.spyOn(CompanionStepRuntime, 'create');
 
     const result = await new StepExecutor(executorDeps)
       .runNormalStep(step, workflowState, 'task', 5, vi.fn(), 'Implement.');
 
     expect(createRuntime).toHaveBeenCalledWith(expect.objectContaining({
-      onStream,
-      onActivity,
+      buildProviderCallCallbacks: expect.any(Function),
     }));
+    expect(vi.mocked(executorDeps.optionsBuilder.buildAgentOptions).mock.invocationCallOrder[0])
+      .toBeLessThan(createRuntime.mock.invocationCallOrder[0]!);
+    const runtimeInput = createRuntime.mock.calls[0]?.[0];
+    expect(runtimeInput).not.toHaveProperty('onStream');
+    expect(runtimeInput).not.toHaveProperty('onActivity');
+    const executionUnitKeys = vi.mocked(executorDeps.optionsBuilder.buildProviderCallCallbacks)
+      .mock.calls.map((call) => call[3]);
+    expect(executionUnitKeys).toHaveLength(2);
+    expect(new Set(executionUnitKeys).size).toBe(2);
+    for (const key of executionUnitKeys) {
+      expect(JSON.parse(key)).toEqual([
+        'companion',
+        'implement',
+        expect.any(String),
+        expect.stringMatching(/^(reviewer|moderator)$/),
+        expect.any(Number),
+      ]);
+    }
+    expect(companionCallbackPairs).toHaveLength(2);
+    expect(companionCallbackPairs.every((callbacks) => callbacks.onStream !== onStream)).toBe(true);
+    expect(companionCallbackPairs.every((callbacks) => callbacks.onActivity !== onActivity)).toBe(true);
     createRuntime.mockRestore();
 
     const executeAgentMock = vi.mocked(executeAgent);
@@ -296,6 +332,100 @@ describe('companion StepExecutor lifecycle', () => {
       completionSettled: true,
       followUpRounds: 1,
     });
+  });
+
+  it('discards a failed queue attempt unfinished tool before retrying with a new execution unit', async () => {
+    vi.useFakeTimers();
+    const deadline = buildInactivityAbortSignal(100, undefined);
+    try {
+      setMockScenario([
+        { persona: 'coder', status: 'done', content: 'implemented' },
+        {
+          persona: 'reviewer',
+          status: 'error',
+          content: 'provider retry',
+        },
+        {
+          persona: 'reviewer',
+          status: 'error',
+          content: 'queue retry',
+          streamEvents: [{
+            type: 'tool_use',
+            tool: 'Read',
+            id: 'unfinished-tool',
+            input: { path: 'src/a.ts' },
+          }],
+        },
+        {
+          persona: 'reviewer',
+          status: 'done',
+          content: 'reviewed',
+          structuredOutput: { findings: [], notes: null },
+        },
+      ]);
+      const executorDeps = deps({
+        cwd,
+        paths,
+        companionEnabled: true,
+        companionDiffReader: reviewableDiffReader(),
+        emitEvent: vi.fn(),
+      });
+      vi.mocked(executorDeps.optionsBuilder.buildProviderCallCallbacks)
+        .mockImplementation((_, __, ___, executionUnitKey) => ({
+          onStream: (event) => recordWorkflowStepProviderEventActivity(
+            deadline.recordActivity,
+            executionUnitKey,
+            event,
+          ),
+          onActivity: (activity) => recordWorkflowStepProviderActivity(
+            deadline.recordActivity,
+            executionUnitKey,
+            activity,
+          ),
+          finish: () => deadline.recordActivity({
+            kind: 'execution_unit_finished',
+            executionUnitKey,
+          }),
+        }));
+      const step = makeStep({
+        name: 'implement',
+        persona: 'coder',
+        instruction: 'Implement.',
+        companion: { fixed: ['reviewer'], pool: [] },
+        rules: [],
+      });
+
+      await new StepExecutor(executorDeps)
+        .runNormalStep(step, state(), 'task', 5, vi.fn(), 'Implement.');
+
+      const executionUnitKeys = vi.mocked(executorDeps.optionsBuilder.buildProviderCallCallbacks)
+        .mock.calls.map((call) => call[3]);
+      expect(executionUnitKeys).toHaveLength(3);
+      expect(executionUnitKeys[0]).toBe(executionUnitKeys[1]);
+      expect(executionUnitKeys[2]).not.toBe(executionUnitKeys[1]);
+      expect(JSON.parse(executionUnitKeys[0]!)).toEqual([
+        'companion',
+        'implement',
+        'reviewer',
+        'reviewer',
+        1,
+      ]);
+      expect(JSON.parse(executionUnitKeys[2]!)).toEqual([
+        'companion',
+        'implement',
+        'reviewer',
+        'reviewer',
+        2,
+      ]);
+
+      await vi.advanceTimersByTimeAsync(99);
+      expect(deadline.signal.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(deadline.signal.aborted).toBe(true);
+    } finally {
+      deadline.dispose();
+      vi.useRealTimers();
+    }
   });
 
   it.each(['error', 'rate_limited', 'blocked'] as const)(
@@ -351,12 +481,13 @@ describe('companion StepExecutor lifecycle', () => {
         rules: [],
       });
 
+      const emitEvent = vi.fn();
       const result = await new StepExecutor(deps({
         cwd,
         paths,
         companionEnabled: true,
         companionDiffReader: reviewableDiffReader(),
-        emitEvent: vi.fn(),
+        emitEvent,
       })).runNormalStep(step, workflowState, 'task', 5, vi.fn(), 'Implement.');
 
       expect(result.response).toMatchObject({ status: 'done', content: 'implemented' });
@@ -374,6 +505,138 @@ describe('companion StepExecutor lifecycle', () => {
           ? 'follow-up failed: token=[REDACTED] at [path]'
           : `follow-up ${status}`,
       });
+      const reason = status === 'error'
+        ? 'follow-up failed: token=[REDACTED] at [path]'
+        : `follow-up ${status}`;
+      expect(emitEvent.mock.calls.filter(([event]) => event === 'companion:complete')).toEqual([
+        ['companion:complete', {
+          step: 'implement',
+          completionSettled: false,
+          completionFailure: true,
+          followUpRounds: 1,
+          reason,
+        }],
+      ]);
     },
   );
+
+  it('continues completion retry when the fail-soft companion completion event throws', async () => {
+    setMockScenario([
+      { persona: 'coder', status: 'done', content: 'initial review' },
+      {
+        persona: 'reviewer',
+        status: 'done',
+        content: 'reviewed',
+        structuredOutput: {
+          findings: [{
+            severity: 'should_fix',
+            file: 'src/a.ts',
+            line: 1,
+            finding: 'Fix the accepted defect.',
+          }],
+          notes: null,
+        },
+      },
+      {
+        persona: 'moderator',
+        status: 'done',
+        content: 'moderated',
+        structuredOutput: {
+          findings: [{ action: 'accept', sourceIndex: 0 }],
+        },
+      },
+      {
+        persona: 'coder',
+        status: 'error',
+        content: 'follow-up failed',
+        error: 'follow-up failed',
+      },
+      {
+        persona: 'review-completion-judge',
+        status: 'done',
+        content: 'incomplete',
+        structuredOutput: {
+          complete: false,
+          reason: 'consumer not checked',
+          missing_obligations: [{
+            kind: 'family_lifecycle_gap',
+            contract_family: 'companion',
+            path: 'src/a.ts',
+            reason: 'retry the review',
+          }],
+        },
+      },
+      { persona: 'coder', status: 'done', content: 'retry review complete' },
+      {
+        persona: 'review-completion-judge',
+        status: 'done',
+        content: 'complete',
+        structuredOutput: {
+          complete: true,
+          reason: 'closed',
+          missing_obligations: [],
+        },
+      },
+    ]);
+    let companionCompleteEmissions = 0;
+    const emitEvent = vi.fn((event: string) => {
+      if (event === 'companion:complete' && companionCompleteEmissions++ === 0) {
+        throw new Error('companion completion audit failed');
+      }
+    });
+    const workflowState = state();
+    const step = makeStep({
+      name: 'implement',
+      persona: 'coder',
+      instruction: 'Implement.',
+      companion: { fixed: ['reviewer'], pool: [], moderator: 'moderator' },
+      completionRetry: {
+        minRetry: 0,
+        maxRetry: 1,
+        retryInstruction: 'Recheck the identified gaps.',
+      },
+      rules: [],
+    });
+
+    const result = await new StepExecutor(deps({
+      cwd,
+      paths,
+      companionEnabled: true,
+      companionDiffReader: reviewableDiffReader(),
+      emitEvent,
+    })).runNormalStep(step, workflowState, 'task', 5, vi.fn(), 'Implement.');
+
+    expect(result.response).toMatchObject({ status: 'done', content: 'retry review complete' });
+    expect(workflowState.companion).toEqual({
+      completionSettled: true,
+      followUpRounds: 0,
+    });
+    const terminalEvents = emitEvent.mock.calls.filter(([event]) => event === 'companion:complete');
+    expect(terminalEvents).toEqual([
+      ['companion:complete', {
+        step: 'implement',
+        completionSettled: false,
+        completionFailure: true,
+        followUpRounds: 1,
+        reason: 'follow-up failed',
+      }],
+      ['companion:complete', {
+        step: 'implement',
+        completionSettled: true,
+        completionFailure: false,
+        followUpRounds: 0,
+      }],
+    ]);
+    const firstCompleteOrder = emitEvent.mock.invocationCallOrder[
+      emitEvent.mock.calls.findIndex(([event]) => event === 'companion:complete')
+    ]!;
+    const retryStartOrder = emitEvent.mock.invocationCallOrder[
+      emitEvent.mock.calls.findIndex(([event]) => event === 'review_completion:retry:start')
+    ]!;
+    const lastCompleteIndex = emitEvent.mock.calls.findLastIndex(
+      ([event]) => event === 'companion:complete',
+    );
+    expect(firstCompleteOrder).toBeLessThan(retryStartOrder);
+    expect(retryStartOrder).toBeLessThan(emitEvent.mock.invocationCallOrder[lastCompleteIndex]!);
+  });
 });

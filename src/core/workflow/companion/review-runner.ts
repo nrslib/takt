@@ -23,8 +23,10 @@ interface CompanionCallOptions {
   projectCwd: string;
   failureDir: string;
   language: string;
+  attempt: number;
   resolution: CompanionAgentResolution;
   abortSignal: AbortSignal;
+  registerFinish: (finish: () => void) => void;
   onPromptResolved?: (prompt: { systemPrompt: string; userInstruction: string }) => void;
 }
 
@@ -115,11 +117,13 @@ async function executeCompanionStructuredAgentInternal(input: Parameters<
   const controller = new AbortController();
   let rejectParentAbort: ((error: Error) => void) | undefined;
   let parentAborted = false;
+  let finishCall: (() => void) | undefined;
   const parentAbort = new Promise<never>((_resolve, reject) => {
     rejectParentAbort = reject;
   });
   const abortFromParent = () => {
     parentAborted = true;
+    finishCall?.();
     controller.abort(input.abortSignal?.reason);
     rejectParentAbort?.(createAbortError(input.abortSignal?.reason));
   };
@@ -181,8 +185,13 @@ async function executeCompanionStructuredAgentInternal(input: Parameters<
         projectCwd: input.projectCwd,
         failureDir: input.failureDir,
         language: input.language,
+        attempt,
         resolution: input.resolution,
         abortSignal: controller.signal,
+        registerFinish: (finish) => {
+          finishCall = finish;
+          if (parentAborted) finish();
+        },
         onPromptResolved: ({ systemPrompt, userInstruction }) => {
           actualSystemPrompt = systemPrompt;
           actualPrompt = userInstruction;
@@ -240,6 +249,7 @@ async function executeCompanionStructuredAgentInternal(input: Parameters<
     }
     throw error;
   } finally {
+    finishCall?.();
     input.abortSignal?.removeEventListener('abort', abortFromParent);
   }
 }

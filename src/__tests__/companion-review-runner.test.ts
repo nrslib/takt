@@ -81,6 +81,7 @@ describe('CT-COMP-06 and CT-COMP-11 structured internal agent execution', () => 
       projectCwd: '/project',
       failureDir: '/project/.takt/runs/run/failures',
       language: 'en',
+      buildProviderCallCallbacks: () => ({ finish: vi.fn() }),
       recordUsage: vi.fn(),
       recordCall: vi.fn(),
     });

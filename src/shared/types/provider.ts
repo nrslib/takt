@@ -131,6 +131,7 @@ export type StreamCallback = (event: StreamEvent) => void;
 
 export type ProviderActivityEvent =
   | { readonly kind: 'attempt_started'; readonly executionUnitKey?: string }
+  | { readonly kind: 'execution_unit_finished'; readonly executionUnitKey: string }
   | {
     readonly kind: 'tool_started';
     readonly executionUnitKey: string;

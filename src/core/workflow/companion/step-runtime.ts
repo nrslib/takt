@@ -36,7 +36,10 @@ import {
   sanitizeCompanionSelectorRationale,
   selectActiveCompanions,
 } from './selection.js';
-import { CompanionStructuredCaller } from './structured-call.js';
+import {
+  CompanionStructuredCaller,
+  type CompanionProviderCallCallbacksBuilder,
+} from './structured-call.js';
 import { CompanionTriggerScheduler } from './trigger-scheduler.js';
 
 const MINIMUM_CHANGED_LINES = 10;
@@ -57,8 +60,7 @@ interface CompanionStepRuntimeDeps {
   readonly selectorProvider?: SelectorProviderInfo;
   readonly diffReader: CompanionDiffReader;
   readonly abortSignal?: AbortSignal;
-  readonly onStream?: RunAgentOptions['onStream'];
-  readonly onActivity?: RunAgentOptions['onActivity'];
+  readonly buildProviderCallCallbacks: CompanionProviderCallCallbacksBuilder;
   readonly emitEvent: CompanionEventEmitter;
   readonly recordUsage: (
     name: string,
@@ -96,8 +98,7 @@ export class CompanionStepRuntime {
       failureDir: deps.failureDir,
       language: deps.language,
       abortSignal: deps.abortSignal,
-      onStream: deps.onStream,
-      onActivity: deps.onActivity,
+      buildProviderCallCallbacks: deps.buildProviderCallCallbacks,
       recordUsage: deps.recordUsage,
       recordCall: (call: CompanionCallAudit) => {
         this.events.call({
@@ -199,6 +200,26 @@ export class CompanionStepRuntime {
       });
     }
     return { findings };
+  }
+
+  completeFollowUpFailure(
+    state: WorkflowState,
+    followUpRounds: number,
+    reason: string,
+  ): void {
+    const sanitizedReason = safeExternalErrorMessage(reason);
+    const completion = {
+      completionSettled: false,
+      completionFailure: true,
+      followUpRounds,
+      reason: sanitizedReason,
+    } as const;
+    state.companion = completion;
+    try {
+      this.events.complete(completion);
+    } catch (error) {
+      this.reportCompanionAuditWriteFailure('companion_complete', error);
+    }
   }
 
   beginReviewAttempt(): void {
@@ -504,7 +525,11 @@ export class CompanionStepRuntime {
   }
 
   private reportCompanionAuditWriteFailure(
-    recordType: 'companion_call' | 'companion_review_round' | 'companion_review_skipped',
+    recordType:
+      | 'companion_call'
+      | 'companion_complete'
+      | 'companion_review_round'
+      | 'companion_review_skipped',
     error: unknown,
     context: Record<string, unknown> = {},
   ): void {

@@ -238,6 +238,7 @@ function resolveFailureStepForRequeueNote(
   failure: TaskFailure,
   runMeta: RunMeta | null,
   resumePoint: WorkflowResumePoint | undefined,
+  restartPoint: WorkflowRestartPoint | undefined,
 ): string | undefined {
   const failureStep = failure.step?.trim();
   if (failureStep) {
@@ -257,6 +258,11 @@ function resolveFailureStepForRequeueNote(
   const resumeStep = resumePoint?.stack[0]?.step.trim();
   if (resumeStep) {
     return resumeStep;
+  }
+
+  const restartStep = restartPoint?.stack.at(-1)?.step.trim();
+  if (restartStep) {
+    return restartStep;
   }
 
   return undefined;
@@ -324,7 +330,12 @@ async function prepareFailedTaskRetrySelection(
   }
 
   const resumePoint = resolveRetryResumePoint(task, runMeta);
-  const failedStep = resolveFailureStepForRequeueNote(failure, runMeta, resumePoint);
+  const failedStep = resolveFailureStepForRequeueNote(
+    failure,
+    runMeta,
+    resumePoint,
+    task.data?.restart_point,
+  );
   const preferredRootStep = resolveRetryDefaultStep(workflowConfig, failure, resumePoint);
   const selectedStart = await selectRetryStart(workflowConfig, {
     projectCwd: projectDir,

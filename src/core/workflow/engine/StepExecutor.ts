@@ -99,6 +99,7 @@ import {
 import { buildCompanionMailboxDirectory } from '../companion/mailbox.js';
 import { runCompanionFixLoop } from '../companion/fix-loop.js';
 import { CompanionStepRuntime } from '../companion/step-runtime.js';
+import type { CompanionAgentPurpose } from '../companion/review-runner.js';
 import type { RunAgentOptions } from '../../../agents/types.js';
 import { isAbortError } from '../companion/abort.js';
 import {
@@ -143,6 +144,21 @@ function requireActiveCompanionState(
     throw new Error(`Missing companion workflow state for active step "${stepName}"`);
   }
   return state.companion;
+}
+
+function buildCompanionExecutionUnitKey(input: {
+  readonly stepName: string;
+  readonly agentName: string;
+  readonly purpose: CompanionAgentPurpose;
+  readonly callSequence: number;
+}): string {
+  return JSON.stringify([
+    'companion',
+    input.stepName,
+    input.agentName,
+    input.purpose,
+    input.callSequence,
+  ]);
 }
 
 export interface StepExecutorDeps {
@@ -668,16 +684,16 @@ export class StepExecutor {
       },
       abortSignal: this.resolveAbortSignal(),
     });
-    const companionState = requireActiveCompanionState(input.state, input.eventStep.name);
-    input.state.companion = fixLoop.followUpFailureReason === undefined
-      ? { ...companionState, followUpRounds: fixLoop.followUpRounds }
-      : {
-          ...companionState,
-          completionSettled: false,
-          completionFailure: true,
-          followUpRounds: fixLoop.followUpRounds,
-          reason: fixLoop.followUpFailureReason,
-        };
+    if (fixLoop.followUpFailureReason === undefined) {
+      const companionState = requireActiveCompanionState(input.state, input.eventStep.name);
+      input.state.companion = { ...companionState, followUpRounds: fixLoop.followUpRounds };
+    } else {
+      input.companionRuntime.completeFollowUpFailure(
+        input.state,
+        fixLoop.followUpRounds,
+        fixLoop.followUpFailureReason,
+      );
+    }
     return fixLoop.phaseResponse;
   }
 
@@ -1383,8 +1399,22 @@ export class StepExecutor {
           selectorProvider: this.deps.companionSelectorProvider,
           diffReader: companionDiffReader,
           abortSignal: this.resolveAbortSignal(),
-          onStream: builtAgentOptions.onStream,
-          onActivity: builtAgentOptions.onActivity,
+          buildProviderCallCallbacks: ({
+            agentName,
+            purpose,
+            callSequence,
+            provider,
+          }) => this.deps.optionsBuilder.buildProviderCallCallbacks(
+            executableStep,
+            provider.provider,
+            provider.model,
+            buildCompanionExecutionUnitKey({
+              stepName: step.name,
+              agentName,
+              purpose,
+              callSequence,
+            }),
+          ),
           emitEvent: this.deps.emitEvent,
           recordUsage: (name, companionProvider, success, usage) => {
             this.deps.recordSynthesizedAgentUsage(
