@@ -210,7 +210,11 @@ export class TeamLeaderRunner {
       runtime?.fallback,
       instructionTransaction,
     );
-    const leaderRuntime = await this.resolveLeaderAutoRouting(leaderStep, runtime);
+    const leaderRuntime = await this.resolveLeaderAutoRouting(
+      leaderStep,
+      runtime,
+      executionDeadlineContext,
+    );
     const leaderProviderInfo = this.deps.optionsBuilder.resolveStepProviderModel(leaderStep, leaderRuntime);
     const { provider: leaderProvider, model: leaderModel } = leaderProviderInfo;
     const leaderDeadline = executionDeadlineContext?.begin('team-leader:leader', leaderProviderInfo);
@@ -694,50 +698,64 @@ export class TeamLeaderRunner {
   private async resolveLeaderAutoRouting(
     leaderStep: WorkflowStep,
     runtime: RuntimeStepResolution | undefined,
+    executionDeadlineContext: WorkflowStepExecutionDeadlineContext | undefined,
   ): Promise<RuntimeStepResolution | undefined> {
-    if (!this.deps.engineOptions.autoRouting || runtime?.fallback) {
+    const autoRouting = this.deps.engineOptions.autoRouting;
+    if (!autoRouting || runtime?.fallback) {
       return runtime;
     }
 
     const currentProviderInfo = this.deps.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(leaderStep, runtime);
-    const autoRuntime = await resolveAutoRoutingRuntime({
-      autoRouting: this.deps.engineOptions.autoRouting,
-      scope: createRoutingScope({
-        workflow: this.deps.getWorkflowName(),
-        parentStep: leaderStep.name,
-        workItem: 'leader',
-      }),
-      step: {
-        name: leaderStep.name,
-        tags: leaderStep.tags,
-        personaKey: leaderStep.providerRoutingPersonaKey,
-        instruction: leaderStep.instruction,
+    const routingDeadline = executionDeadlineContext?.begin(
+      `team-leader:auto-routing:${leaderStep.name}`,
+      {
+        provider: autoRouting.router.provider,
+        providerOptions: autoRouting.router.providerOptions,
       },
-      snapshot: buildRoutingWorkSnapshot({
-        goal: this.deps.getTask(),
-        userInputs: this.deps.getState().userInputs,
-        retryNote: this.deps.engineOptions.retryNote,
+    );
+    const autoRuntime = await runWithExecutionDeadline(
+      executionDeadlineContext,
+      routingDeadline,
+      () => resolveAutoRoutingRuntime({
+        autoRouting,
+        scope: createRoutingScope({
+          workflow: this.deps.getWorkflowName(),
+          parentStep: leaderStep.name,
+          workItem: 'leader',
+        }),
         step: {
           name: leaderStep.name,
-          tags: leaderStep.tags ?? [],
+          tags: leaderStep.tags,
           personaKey: leaderStep.providerRoutingPersonaKey,
           instruction: leaderStep.instruction,
-          stepType: 'agent',
-          edit: leaderStep.edit,
-          passPreviousResponse: leaderStep.passPreviousResponse === true,
         },
-        lastOutput: this.deps.getState().lastOutput?.content,
-        sensitiveValues: this.deps.engineOptions.routingSensitiveValues,
+        snapshot: buildRoutingWorkSnapshot({
+          goal: this.deps.getTask(),
+          userInputs: this.deps.getState().userInputs,
+          retryNote: this.deps.engineOptions.retryNote,
+          step: {
+            name: leaderStep.name,
+            tags: leaderStep.tags ?? [],
+            personaKey: leaderStep.providerRoutingPersonaKey,
+            instruction: leaderStep.instruction,
+            stepType: 'agent',
+            edit: leaderStep.edit,
+            passPreviousResponse: leaderStep.passPreviousResponse === true,
+          },
+          lastOutput: this.deps.getState().lastOutput?.content,
+          sensitiveValues: this.deps.engineOptions.routingSensitiveValues,
+        }),
+        currentProviderInfo,
+        estimator: this.deps.engineOptions.autoRoutingEstimator,
+        runtime: this.deps.engineOptions.routingRuntime,
+        logger: log,
+        abortSignal: this.resolveAbortSignal(),
+        ...this.deps.optionsBuilder.buildDeadlineActivityCallbacks(
+          `team-leader:auto-routing:${leaderStep.name}`,
+          routingDeadline?.recordActivity,
+        ),
       }),
-      currentProviderInfo,
-      estimator: this.deps.engineOptions.autoRoutingEstimator,
-      runtime: this.deps.engineOptions.routingRuntime,
-      logger: log,
-      abortSignal: this.resolveAbortSignal(),
-      ...this.deps.optionsBuilder.buildDeadlineActivityCallbacks(
-        `team-leader:auto-routing:${leaderStep.name}`,
-      ),
-    });
+    );
     if (!autoRuntime) {
       return runtime;
     }

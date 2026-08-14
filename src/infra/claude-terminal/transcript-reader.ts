@@ -385,6 +385,7 @@ export class ProjectClaudeTranscriptReader implements ClaudeTranscriptReader {
     if (deadlineAt === undefined) {
       throw new Error('Claude terminal session deadline is required.');
     }
+    let observedTranscript: string | undefined;
     return pollUntil(
       deadlineAt,
       options.timeoutMs,
@@ -396,7 +397,10 @@ export class ProjectClaudeTranscriptReader implements ClaudeTranscriptReader {
         if (transcript === undefined || transcript.trim().length === 0) {
           return undefined;
         }
-        recordActivity();
+        if (transcript !== observedTranscript) {
+          observedTranscript = transcript;
+          recordActivity();
+        }
         const parsed = parseClaudeTerminalTranscript(transcript, {
           allowIncompleteFinalLine: true,
         });

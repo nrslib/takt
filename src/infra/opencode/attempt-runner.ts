@@ -982,6 +982,13 @@ export class OpenCodeAttemptRunner {
     throw new Error(failure?.verdict.reason ?? OPENCODE_STREAM_ABORTED_MESSAGE);
   };
 
+  guardSuite.startAttempt((failure) => {
+    timeoutMessage = failure.verdict.reason;
+    log.warn(failure.verdict.reason, { sessionId, model: options.model });
+    abortCause = 'timeout';
+    streamAbortController.abort(new Error(failure.verdict.reason));
+  });
+
   let attemptResult: AgentResponse | typeof RETRY_ATTEMPT;
   try {
     attemptResult = await (async (): Promise<AgentResponse | typeof RETRY_ATTEMPT> => {
@@ -1095,12 +1102,6 @@ export class OpenCodeAttemptRunner {
       { signal: streamAbortController.signal },
     );
     throwIfCallAborted();
-    guardSuite.startAttempt((failure) => {
-      timeoutMessage = failure.verdict.reason;
-      log.warn(failure.verdict.reason, { sessionId, model: options.model });
-      abortCause = 'timeout';
-      streamAbortController.abort(new Error(failure.verdict.reason));
-    });
     diag.onConnected();
     if (appliedPermissionRuleset) {
       emitPermissionSummary(options.onStream, {

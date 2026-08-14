@@ -201,15 +201,16 @@ export class OptionsBuilder {
 
   buildDeadlineActivityCallbacks(
     executionUnitKey: string,
+    recordActivity: ProviderActivityCallback = this.recordActivity,
   ): Pick<RunAgentOptions, 'onStream' | 'onActivity'> {
     return {
       onStream: (event) => recordWorkflowStepProviderEventActivity(
-        this.recordActivity,
+        recordActivity,
         executionUnitKey,
         event,
       ),
       onActivity: (activity) => recordWorkflowStepProviderActivity(
-        this.recordActivity,
+        recordActivity,
         executionUnitKey,
         activity,
       ),
@@ -470,6 +471,7 @@ export class OptionsBuilder {
       resolvedProviderOptions: baseOptions.resolvedProviderOptions,
       language: baseOptions.language,
       onStream: baseOptions.onStream,
+      onActivity: baseOptions.onActivity,
       onPermissionRequest: baseOptions.onPermissionRequest,
       onAskUserQuestion: baseOptions.onAskUserQuestion,
       workflowMeta: baseOptions.workflowMeta,

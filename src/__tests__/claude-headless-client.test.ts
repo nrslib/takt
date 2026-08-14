@@ -213,6 +213,7 @@ describe('callClaudeHeadless', () => {
     expect(res.status).toBe('done');
     expect(res.content).toBe('ok');
     expect(onActivity).toHaveBeenCalledOnce();
+    expect(onActivity).toHaveBeenCalledWith({ kind: 'attempt_started' });
   });
 
   it('passes only run-local observability snapshot to headless child env', async () => {

@@ -795,6 +795,7 @@ describe('QueryExecutor rate limit cause preservation', () => {
     expect(result.error).toBe(EXIT_CODE_MESSAGE);
     expect(queryMock).toHaveBeenCalledTimes(2);
     expect(onActivity).toHaveBeenCalledTimes(2);
+    expect(onActivity).toHaveBeenNthCalledWith(1, { kind: 'attempt_started' });
     expect(onActivity).toHaveBeenNthCalledWith(2, { kind: 'attempt_started' });
     expect(onActivity.mock.invocationCallOrder[1]).toBeLessThan(
       queryMock.mock.invocationCallOrder[1]!,

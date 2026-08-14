@@ -271,9 +271,16 @@ export class ParallelRunner {
       });
       return [subStep.name, providerInfo];
     }));
-    const routedProviderInfoByStep = this.deps.engineOptions.autoRouting
-      ? await resolveAutoRoutingBatch({
-          autoRouting: this.deps.engineOptions.autoRouting,
+    const autoRouting = this.deps.engineOptions.autoRouting;
+    const routingDeadline = autoRouting === undefined
+      ? undefined
+      : executionDeadlineContext?.begin(`parallel:auto-routing:${step.name}`, {
+          provider: autoRouting.router.provider,
+          providerOptions: autoRouting.router.providerOptions,
+        });
+    const routedProviderInfoByStep = autoRouting
+      ? await runWithExecutionDeadline(executionDeadlineContext, routingDeadline, () => resolveAutoRoutingBatch({
+          autoRouting,
           concurrency: step.concurrency,
           items: agentSubSteps.map((subStep) => ({
             id: subStep.name,
@@ -312,8 +319,9 @@ export class ParallelRunner {
           abortSignal: this.resolveAbortSignal(),
           ...this.deps.optionsBuilder.buildDeadlineActivityCallbacks(
             `parallel:auto-routing:${step.name}`,
+            routingDeadline?.recordActivity,
           ),
-        })
+        }))
       : new Map();
     const workflowCallResumeStack = subSteps.some(isWorkflowCallStep)
       ? this.requireWorkflowCallResumeStack(step, stepIteration)

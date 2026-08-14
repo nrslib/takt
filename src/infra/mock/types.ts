@@ -4,7 +4,7 @@
 
 import type { Status } from '../../core/models/status.js';
 import type { AgentFailureCategory } from '../../shared/types/agent-failure.js';
-import type { StreamCallback } from '../../shared/types/provider.js';
+import type { ProviderActivityCallback, StreamCallback } from '../../shared/types/provider.js';
 
 /** Options for mock calls */
 export interface MockCallOptions {
@@ -13,6 +13,7 @@ export interface MockCallOptions {
   sessionId?: string;
   model?: string;
   onStream?: StreamCallback;
+  onActivity?: ProviderActivityCallback;
   allowedTools?: string[];
   /** Native structured-output schema requested by the caller. */
   outputSchema?: Record<string, unknown>;

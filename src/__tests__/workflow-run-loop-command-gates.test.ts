@@ -32,6 +32,7 @@ import {
   resolveWorkflowStepCallTimeoutMs,
 } from '../core/workflow/engine/step-deadline.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
+import type { ProviderActivityCallback } from '../shared/types/provider.js';
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
 import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
@@ -449,7 +450,7 @@ function makeDeadlineCoordinator(
   options: WorkflowEngineOptions,
   step: WorkflowStep,
   context: ReturnType<typeof createWorkflowStepAbortSignalContext>,
-): WorkflowEngineStepCoordinator {
+): { coordinator: WorkflowEngineStepCoordinator; optionsBuilder: OptionsBuilder } {
   const optionsBuilder = new OptionsBuilder(
     options,
     () => '/worktree',
@@ -465,12 +466,14 @@ function makeDeadlineCoordinator(
     undefined,
     () => '/worktree/.takt/runs/test/failures',
     context.getAbortSignal,
+    context.recordActivity,
   );
-  return new WorkflowEngineStepCoordinator({
+  const coordinator = new WorkflowEngineStepCoordinator({
     getOptions: () => options,
     optionsBuilder,
     stepAbortSignalContext: context,
   } as never);
+  return { coordinator, optionsBuilder };
 }
 
 function makeDeadlineDeps(
@@ -583,17 +586,23 @@ describe('WorkflowRunLoop step deadline', () => {
     };
     const state = createInitialState(makeDeadlineConfig(step), options);
     const context = createWorkflowStepAbortSignalContext(undefined);
-    const coordinator = makeDeadlineCoordinator(options, step, context);
+    const { coordinator, optionsBuilder } = makeDeadlineCoordinator(options, step, context);
     const deps = makeDeadlineDeps(state, step, options, context, coordinator);
     const providerSignals: AbortSignal[] = [];
     const callStartedAt: number[] = [];
     const startedAt = Date.now();
     let attempt = 0;
-    deps.runStep = vi.fn(async (_step: WorkflowStep, instruction: string) => {
+    deps.runStep = vi.fn(async (
+      currentStep: WorkflowStep,
+      instruction: string,
+      runtime: Parameters<OptionsBuilder['buildAgentOptions']>[1],
+    ) => {
       const signal = context.getAbortSignal();
       if (signal === undefined) {
         throw new Error('step deadline signal was not propagated');
       }
+      const providerOptions = optionsBuilder.buildAgentOptions(currentStep, runtime);
+      providerOptions.onActivity?.({ kind: 'attempt_started' });
       providerSignals.push(signal);
       callStartedAt.push(Date.now());
       if (attempt++ === 0) {
@@ -608,7 +617,6 @@ describe('WorkflowRunLoop step deadline', () => {
           instruction,
         };
       }
-      context.recordActivity();
       return await new Promise((resolve) => {
         const finish = (): void => {
           signal.removeEventListener('abort', finish);
@@ -729,6 +737,144 @@ describe('WorkflowRunLoop step deadline', () => {
       expect(result.status).toBe('aborted');
       expect(providerSignal?.aborted).toBe(true);
       expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      engine.removeAllListeners();
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('parallel auto-routing 自体を router provider の無応答期限スコープで実行する', async () => {
+    vi.useFakeTimers();
+    const tmpDir = mkdtempSync(join(tmpdir(), 'takt-parallel-routing-deadline-'));
+    let routingSignal: AbortSignal | undefined;
+    let routingActivity: ProviderActivityCallback | undefined;
+    const subStep = makeStep('routed-substep', {
+      rules: [makeRule('approved', 'COMPLETE')],
+    });
+    const step = makeStep('parallel-routing', {
+      parallel: [subStep],
+      rules: [makeRule('all("approved")', 'COMPLETE')],
+    });
+    const config: WorkflowConfig = {
+      name: 'parallel-routing-deadline-workflow',
+      maxSteps: 1,
+      initialStep: step.name,
+      steps: [step],
+    };
+    const estimate = vi.fn((_input, estimatorOptions) => {
+      routingSignal = estimatorOptions?.abortSignal;
+      routingActivity = estimatorOptions?.onActivity;
+      setTimeout(() => estimatorOptions?.onActivity?.({ kind: 'attempt_started' }), 40_000);
+      return new Promise<never>((_resolve, reject) => {
+        const abort = (): void => reject(routingSignal?.reason ?? new Error('routing aborted'));
+        if (routingSignal?.aborted) abort();
+        else routingSignal?.addEventListener('abort', abort, { once: true });
+      });
+    });
+    const engine = new WorkflowEngine(config, tmpDir, 'parallel routing deadline task', {
+      projectCwd: tmpDir,
+      autoRouting: {
+        strategy: 'balanced',
+        router: {
+          provider: 'opencode',
+          model: 'opencode/router-model',
+          providerOptions: { opencode: { guards: { callTimeoutMs: MINUTE } } },
+        },
+        candidates: [{
+          name: 'worker',
+          provider: 'mock',
+          model: 'worker-model',
+          routingTier: 'medium',
+        }],
+        defaultPool: 'default',
+        candidatePools: { default: { candidates: ['worker'], fallback: 'worker' } },
+        poolRules: { steps: { 'routed-substep': 'default' } },
+      },
+      autoRoutingEstimator: { estimate },
+    });
+
+    try {
+      const execution = engine.run();
+      await waitForCondition(() => routingSignal !== undefined, 'parallel auto-routing invocation');
+      expect(routingActivity).toEqual(expect.any(Function));
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(routingSignal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(40_000);
+      const result = await execution;
+
+      expect(result.status).toBe('aborted');
+      expect(routingSignal?.aborted).toBe(true);
+    } finally {
+      engine.removeAllListeners();
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('team leader auto-routing 自体を router provider の無応答期限スコープで実行する', async () => {
+    vi.useFakeTimers();
+    const tmpDir = mkdtempSync(join(tmpdir(), 'takt-leader-routing-deadline-'));
+    let routingSignal: AbortSignal | undefined;
+    let routingActivity: ProviderActivityCallback | undefined;
+    const step = makeStep('leader-routing', {
+      teamLeader: {
+        persona: '../personas/team-leader.md',
+        maxConcurrency: 1,
+        timeoutMs: MINUTE,
+        partPersona: '../personas/coder.md',
+      },
+      rules: [makeRule('done', 'COMPLETE')],
+    });
+    const config: WorkflowConfig = {
+      name: 'leader-routing-deadline-workflow',
+      maxSteps: 1,
+      initialStep: step.name,
+      steps: [step],
+    };
+    const estimate = vi.fn((_input, estimatorOptions) => {
+      routingSignal = estimatorOptions?.abortSignal;
+      routingActivity = estimatorOptions?.onActivity;
+      setTimeout(() => estimatorOptions?.onActivity?.({ kind: 'attempt_started' }), 40_000);
+      return new Promise<never>((_resolve, reject) => {
+        const abort = (): void => reject(routingSignal?.reason ?? new Error('routing aborted'));
+        if (routingSignal?.aborted) abort();
+        else routingSignal?.addEventListener('abort', abort, { once: true });
+      });
+    });
+    const engine = new WorkflowEngine(config, tmpDir, 'leader routing deadline task', {
+      projectCwd: tmpDir,
+      autoRouting: {
+        strategy: 'balanced',
+        router: {
+          provider: 'opencode',
+          model: 'opencode/router-model',
+          providerOptions: { opencode: { guards: { callTimeoutMs: MINUTE } } },
+        },
+        candidates: [{
+          name: 'leader',
+          provider: 'mock',
+          model: 'leader-model',
+          routingTier: 'medium',
+        }],
+        defaultPool: 'default',
+        candidatePools: { default: { candidates: ['leader'], fallback: 'leader' } },
+        poolRules: { steps: { 'leader-routing': 'default' } },
+      },
+      autoRoutingEstimator: { estimate },
+    });
+
+    try {
+      const execution = engine.run();
+      await waitForCondition(() => routingSignal !== undefined, 'team leader auto-routing invocation');
+      expect(routingActivity).toEqual(expect.any(Function));
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(routingSignal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(40_000);
+      const result = await execution;
+
+      expect(result.status).toBe('aborted');
+      expect(routingSignal?.aborted).toBe(true);
     } finally {
       engine.removeAllListeners();
       rmSync(tmpDir, { recursive: true, force: true });

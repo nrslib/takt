@@ -279,6 +279,7 @@ describe('CodexClient retry', () => {
     expect(result.status).toBe('done');
     expect(result.content).toBe('retry succeeded');
     expect(onActivity).toHaveBeenCalledTimes(2);
+    expect(onActivity).toHaveBeenNthCalledWith(1, { kind: 'attempt_started' });
     expect(onActivity).toHaveBeenNthCalledWith(2, { kind: 'attempt_started' });
     expect(attemptOrder).toEqual(['activity', 'provider', 'activity', 'provider']);
   });

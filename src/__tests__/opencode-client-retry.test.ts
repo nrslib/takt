@@ -510,6 +510,7 @@ describe('OpenCodeClient retry', () => {
       expect(promptAsync).toHaveBeenCalledTimes(2);
       expect(subscribe).toHaveBeenCalledTimes(2);
       expect(onActivity).toHaveBeenCalledTimes(2);
+      expect(onActivity).toHaveBeenNthCalledWith(1, { kind: 'attempt_started' });
       expect(onActivity).toHaveBeenNthCalledWith(2, { kind: 'attempt_started' });
       expect(onActivity.mock.invocationCallOrder[1]).toBeLessThan(
         promptAsync.mock.invocationCallOrder[1]!,
@@ -534,6 +535,60 @@ describe('OpenCodeClient retry', () => {
     } finally {
       rmSync(logsDir, { recursive: true, force: true });
     }
+  });
+
+  it('resets the internal inactivity deadline before retry attempt initialization', async () => {
+    vi.useFakeTimers();
+    runPlans = [
+      {
+        type: 'events',
+        events: [{
+          type: 'session.error',
+          properties: {
+            sessionID: 'session-1',
+            error: { name: 'RequestError', data: { message: 'fetch failed' } },
+          },
+        }],
+      },
+      {
+        type: 'events',
+        events: [
+          textPartUpdated('session-1', 'recovered', 'recovered'),
+          { type: 'session.idle', properties: { sessionID: 'session-1' } },
+        ],
+      },
+    ];
+    const { sessionCreate, promptAsync, setActiveSessionId } = installOpenCodeMock();
+    setActiveSessionId('session-1');
+    sessionCreate
+      .mockResolvedValueOnce({ data: { id: 'session-1' } })
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        setTimeout(() => resolve({ data: { id: 'session-1' } }), 59_900);
+      }));
+    const onActivity = vi.fn();
+
+    const resultPromise = new OpenCodeClient().call('coder', 'prompt', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      guards: { callTimeoutMs: 60_000 },
+      onActivity,
+    });
+
+    await vi.advanceTimersByTimeAsync(250);
+    expect(sessionCreate).toHaveBeenCalledTimes(2);
+    expect(onActivity).toHaveBeenNthCalledWith(2, { kind: 'attempt_started' });
+    expect(onActivity.mock.invocationCallOrder[1]).toBeLessThan(
+      sessionCreate.mock.invocationCallOrder[1]!,
+    );
+
+    await vi.advanceTimersByTimeAsync(59_750);
+    expect(promptAsync).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(150);
+    const result = await resultPromise;
+
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('recovered');
+    expect(promptAsync).toHaveBeenCalledTimes(2);
   });
 
   it('replays the OpenCode event order from issue #1130 without mixing reasoning and text', async () => {

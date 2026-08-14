@@ -198,6 +198,7 @@ export async function callMock(
   prompt: string,
   options: MockCallOptions
 ): Promise<AgentResponse> {
+  options.onActivity?.({ kind: 'attempt_started' });
   const sessionId = options.sessionId ?? generateMockSessionId();
 
   // Scenario queue takes priority over explicit options

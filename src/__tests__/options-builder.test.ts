@@ -24,7 +24,11 @@ function createProcessSafetyByStep(parentRunPid: number): WorkflowEngineOptions[
   };
 }
 
-function createBuilder(step: WorkflowStep, engineOverrides: BuilderEngineOverrides = {}): OptionsBuilder {
+function createBuilder(
+  step: WorkflowStep,
+  engineOverrides: BuilderEngineOverrides = {},
+  recordActivity: NonNullable<ConstructorParameters<typeof OptionsBuilder>[14]> = () => {},
+): OptionsBuilder {
   const engineOptions: WorkflowEngineOptions = {
     projectCwd: '/project',
     provider: 'codex',
@@ -50,6 +54,8 @@ function createBuilder(step: WorkflowStep, engineOverrides: BuilderEngineOverrid
     () => 'Original workflow task',
     undefined,
     engineOverrides.failureDir === undefined ? undefined : () => engineOverrides.failureDir,
+    () => engineOptions.abortSignal,
+    recordActivity,
   );
 }
 
@@ -865,6 +871,44 @@ describe('OptionsBuilder.buildResumeOptions', () => {
     expect(resumeOptions.outputSchema).toBeUndefined();
     expect(newSessionOptions.outputSchema).toBeUndefined();
     expect(fallbackOptions.outputSchema).toBeUndefined();
+  });
+
+  it('read-only phase options retain the workflow deadline activity callback', () => {
+    const step = createStep({ provider: 'opencode', model: 'opencode/report-model' });
+    const recordActivity = vi.fn();
+    const builder = createBuilder(step, {
+      reportFallbackProvider: { provider: 'mock', model: 'mock-report-model' },
+    }, recordActivity);
+    const resumeOptions = builder.buildResumeOptions(step, 'session-123', { maxTurns: 3 });
+    const newSessionOptions = builder.buildNewSessionReportOptions(step, {
+      allowedTools: [],
+      maxTurns: 3,
+    });
+    const fallbackOptions = builder.buildFallbackReportOptions(step, newSessionOptions, {
+      allowedTools: [],
+      maxTurns: 3,
+    });
+
+    if (fallbackOptions === undefined) {
+      throw new Error('Expected fallback report options');
+    }
+    resumeOptions.onActivity?.({ kind: 'attempt_started' });
+    newSessionOptions.onActivity?.({ kind: 'attempt_started' });
+    fallbackOptions.onActivity?.({ kind: 'attempt_started' });
+
+    expect(recordActivity).toHaveBeenCalledTimes(3);
+    expect(recordActivity).toHaveBeenNthCalledWith(1, {
+      kind: 'attempt_started',
+      executionUnitKey: step.name,
+    });
+    expect(recordActivity).toHaveBeenNthCalledWith(2, {
+      kind: 'attempt_started',
+      executionUnitKey: step.name,
+    });
+    expect(recordActivity).toHaveBeenNthCalledWith(3, {
+      kind: 'attempt_started',
+      executionUnitKey: step.name,
+    });
   });
 
   it('removes report/status phase maxTurns when provider does not support it', () => {

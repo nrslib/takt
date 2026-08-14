@@ -190,6 +190,7 @@ describe('Pi SDK client', () => {
     expect(response.sessionId).toMatch(/^sdk-session-\d+$/u);
     expect(events).toEqual(['init', 'text', 'result']);
     expect(onActivity).toHaveBeenCalledOnce();
+    expect(onActivity).toHaveBeenCalledWith({ kind: 'attempt_started' });
     expect(mocks.modelRuntimeCreate).toHaveBeenCalledWith({
       credentials: expect.anything(),
       modelsPath: path.join(tmpdir(), 'pi-agent-test', 'models.json'),

@@ -816,6 +816,9 @@ describe('Claude terminal client', () => {
     );
     expect(transcriptReader.waitForAssistantResponse).toHaveBeenCalledTimes(2);
     expect(onActivity).toHaveBeenCalledTimes(3);
+    expect(onActivity).toHaveBeenNthCalledWith(1, { kind: 'attempt_started' });
+    expect(onActivity).toHaveBeenNthCalledWith(2, { kind: 'attempt_started' });
+    expect(onActivity).toHaveBeenNthCalledWith(3, { kind: 'attempt_started' });
     expect(onActivity.mock.invocationCallOrder[1]).toBeLessThan(
       transcriptReader.waitForAssistantResponse.mock.invocationCallOrder[0]!,
     );

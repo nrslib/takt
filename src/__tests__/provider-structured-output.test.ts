@@ -651,6 +651,7 @@ describe('Provider activity wiring', () => {
     ['claude', () => new ClaudeProvider(), mockCallClaude, undefined],
     ['codex', () => new CodexProvider(), mockCallCodex, undefined],
     ['opencode', () => new OpenCodeProvider(), mockCallOpenCode, 'opencode/big-pickle'],
+    ['mock', () => new MockProvider(), mockCallMock, undefined],
   ] as const)('%s provider は onActivity を client へ渡す', async (
     _name,
     createProvider,
