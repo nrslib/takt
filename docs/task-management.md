@@ -260,6 +260,8 @@ When you select **Retry** on a failed task, TAKT:
 
 **Requeue** uses the same workflow and start-position selection, but saves the task as `pending` without opening a conversation. With Retry and Requeue you choose between **Resume** (continue from the failure point, preserving execution state) and **Restart** (start a new execution from any step of your choice). Steps nested under `workflow_call` sub-workflows can also be selected as the start position.
 
+After a requeue, execution uses a new namespace, so its ledger is not inherited and starts empty.
+
 After `/go`, the retry conversation offers the same choices as Instruct mode (**Save as Task** / **Continue editing**), with `/accept` and `/replay` for immediate re-execution and `/cancel` to abort. Both saving and immediate re-execution use the selected Resume or Restart position. Retry notes are appended to the task record, accumulating across multiple retry attempts.
 
 ### Non-Interactive Mode (`--non-interactive`)

@@ -260,6 +260,8 @@ takt list
 
 **Requeue** も同じ workflow と開始位置の選択を使用しますが、会話を開かずタスクを `pending` として保存します。Retry / Requeue では、失敗地点から実行状態を引き継いで再開する **Resume** か、任意の step から新しい実行を始める **Restart** を選べます。ネストした `workflow_call` 配下の step も開始位置として選択できます。
 
+Requeue 後は新しい namespace で実行されるため、台帳を引き継がず白紙で開始します。
+
 `/go` の後、リトライ会話は Instruct モードと同じ選択肢（**Save as Task** / **Continue editing**）を提供し、即時再実行には `/accept` と `/replay`、中断には `/cancel` を使用します。保存と即時再実行のどちらも、選択した Resume または Restart の開始位置を使用します。リトライのメモは複数のリトライ試行にわたってタスクレコードに蓄積されます。
 
 ### 非インタラクティブモード（`--non-interactive`）

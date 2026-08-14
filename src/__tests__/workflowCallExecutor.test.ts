@@ -220,9 +220,6 @@ describe('WorkflowCallExecutor', () => {
       step.name,
       childWorkflowStack,
     );
-    expect(childEngine.on).toHaveBeenCalledWith('workflow:warning', expect.any(Function));
-    listeners.get('workflow:warning')?.('child warning');
-    expect(emit).toHaveBeenCalledWith('workflow:warning', 'child warning');
     for (const eventName of [
       'companion:start',
       'companion:pool_selected',

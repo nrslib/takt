@@ -172,15 +172,6 @@ function createBridgeHarness(options?: {
 }
 
 describe('bindWorkflowExecutionEvents', () => {
-  it('workflow warning を通常の警告出力へ橋渡しする', () => {
-    const { engine, out } = createBridgeHarness();
-    const message = 'recorded_call_instance=1, runtime_call_instance=2';
-
-    engine.emit('workflow:warning', message);
-
-    expect(out.warn).toHaveBeenCalledWith(message);
-  });
-
   it('workflow_call lifecycle を SessionLogger へ橋渡しする', () => {
     const { engine, sessionLogger } = createBridgeHarness();
     const lifecycle = {

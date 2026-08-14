@@ -8,7 +8,6 @@ import type {
 import { getWorkflowStepKind, isWorkflowCallStep } from '../step-kind.js';
 import {
   getWorkflowReference,
-  normalizeWorkflowResumePointEntry,
   workflowRestartEntryMatchesWorkflow,
 } from '../workflow-reference.js';
 import { isWorkflowRestartTarget } from '../workflow-restart-target.js';
@@ -45,12 +44,11 @@ export class WorkflowRestartNavigator {
   resolveChildStartStep(
     childWorkflow: WorkflowConfig,
     callStack: readonly WorkflowResumePointEntry[],
-    onWarning: (message: string) => void,
   ): string | undefined {
     if (!this.active) {
       return undefined;
     }
-    this.assertCallStackMatches(callStack, onWarning);
+    this.assertCallStackMatches(callStack);
 
     const nextEntry = this.restartPoint.stack[callStack.length];
     if (nextEntry === undefined) {
@@ -91,31 +89,20 @@ export class WorkflowRestartNavigator {
     return targetStep;
   }
 
-  private assertCallStackMatches(
-    callStack: readonly WorkflowResumePointEntry[],
-    onWarning: (message: string) => void,
-  ): void {
+  private assertCallStackMatches(callStack: readonly WorkflowResumePointEntry[]): void {
     if (callStack.length > this.restartPoint.stack.length) {
       throw new Error('Runtime workflow_call stack exceeds the selected restart path');
     }
     for (let index = 0; index < callStack.length; index += 1) {
       const runtimeEntry = callStack[index]!;
-      const normalizedRuntimeEntry = normalizeWorkflowResumePointEntry(runtimeEntry);
       const selectedEntry = this.restartPoint.stack[index]!;
       if (
-        normalizedRuntimeEntry.workflow_ref !== selectedEntry.workflow_ref
+        runtimeEntry.workflow_ref !== selectedEntry.workflow_ref
         || runtimeEntry.step !== selectedEntry.step
         || runtimeEntry.kind !== selectedEntry.kind
       ) {
         throw new Error(
           `Runtime workflow_call stack does not match restart path at "${selectedEntry.workflow} > ${selectedEntry.step}"`,
-        );
-      }
-      if (normalizedRuntimeEntry.call_instance !== selectedEntry.call_instance) {
-        onWarning(
-          `Runtime workflow_call call_instance differs from restart path at "${selectedEntry.workflow} > ${selectedEntry.step}" `
-          + `(recorded_call_instance=${selectedEntry.call_instance}, runtime_call_instance=${normalizedRuntimeEntry.call_instance}); `
-          + 'continuing from the selected restart step',
         );
       }
     }

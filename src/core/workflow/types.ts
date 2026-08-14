@@ -360,7 +360,6 @@ export interface CompanionModeratorAudit {
 }
 
 export interface WorkflowEvents {
-  'workflow:warning': (message: string) => void;
   'workflow_call:start': (lifecycle: WorkflowCallLifecycle) => void;
   'workflow_call:complete': (lifecycle: WorkflowCallCompleteLifecycle) => void;
   'step:start': (

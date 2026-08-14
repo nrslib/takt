@@ -89,7 +89,6 @@ function makeExecutor(options: {
   engineOwnsRestartPoint?: boolean;
 }) {
   const createEngine = vi.fn().mockReturnValue(options.childEngine);
-  const emit = vi.fn();
   const sharedRuntime = options.sharedRuntime ?? {
     startedAtMs: Date.now(),
     restartNavigator: new WorkflowRestartNavigator(options.restartPoint),
@@ -112,13 +111,13 @@ function makeExecutor(options: {
     runPaths: { slug: 'run' } as never,
     resolveWorkflowCall: vi.fn(),
     createEngine,
-    emit,
+    emit: vi.fn(),
     state: options.state,
     setActiveResumePoint: vi.fn(),
     setActiveResumeStack: vi.fn(),
     adoptResumeCheckpoint: vi.fn(),
   });
-  return { executor, createEngine, emit, sharedRuntime };
+  return { executor, createEngine, sharedRuntime };
 }
 
 function makeRequest(executor: WorkflowCallExecutor, options: {
@@ -398,7 +397,7 @@ describe('WorkflowCallExecutor nested restart contract', () => {
       effects: [],
     }]);
 
-    const startStep = navigator.resolveChildStartStep(child, [restartPoint.stack[0]!], vi.fn());
+    const startStep = navigator.resolveChildStartStep(child, [restartPoint.stack[0]!]);
 
     expect(startStep).toBe('checkpoint');
     expect(navigator.isActive()).toBe(false);
@@ -466,13 +465,13 @@ describe('WorkflowCallExecutor nested restart contract', () => {
       { name: 'review', persona: 'reviewer', instruction: 'Review' },
     ]);
 
-    expect(() => navigator.resolveChildStartStep(child, [runtimeEntry], vi.fn())).toThrow(
+    expect(() => navigator.resolveChildStartStep(child, [runtimeEntry])).toThrow(
       'Runtime workflow_call stack does not match restart path',
     );
     expect(navigator.isActive()).toBe(true);
   });
 
-  it('should continue from the selected restart step with a warning when call_instance differs', async () => {
+  it('should continue from the selected restart step when call_instance differs', async () => {
     const step = makeCallStep('delegate', 'coding');
     const parent = makeWorkflow('default', 'delegate', [step]);
     const child = makeWorkflow('coding', 'review', [
@@ -484,7 +483,7 @@ describe('WorkflowCallExecutor nested restart contract', () => {
         { workflow: 'coding', workflow_ref: 'coding', step: 'review', kind: 'agent' },
       ],
     };
-    const { executor, createEngine, emit } = makeExecutor({
+    const { executor, createEngine } = makeExecutor({
       parent,
       state: makeState('default', 'delegate', 2),
       restartPoint,
@@ -509,11 +508,6 @@ describe('WorkflowCallExecutor nested restart contract', () => {
         initialIteration: 0,
       }),
     );
-    expect(emit).toHaveBeenCalledWith(
-      'workflow:warning',
-      'Runtime workflow_call call_instance differs from restart path at "default > delegate" '
-      + '(recorded_call_instance=1, runtime_call_instance=2); continuing from the selected restart step',
-    );
   });
 
   it('should reject a runtime call stack that exceeds an active selected path', () => {
@@ -528,7 +522,7 @@ describe('WorkflowCallExecutor nested restart contract', () => {
     expect(() => navigator.resolveChildStartStep(child, [
       makeRuntimeCallEntry('default', 'delegate'),
       makeRuntimeCallEntry('coding', 'nested'),
-    ], vi.fn())).toThrow(/exceeds/i);
+    ])).toThrow(/exceeds/i);
     expect(navigator.isActive()).toBe(true);
   });
 });
