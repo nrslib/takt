@@ -221,6 +221,7 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/pathBoundary.test.ts',
   'src/__tests__/pi-client.test.ts',
   'src/__tests__/policy-persona.test.ts',
+  'src/__tests__/probe-codex-reasoning-stream.test.ts',
   'src/__tests__/projectBoundaryError.test.ts',
   'src/__tests__/projectLocalTaktSync.test.ts',
   'src/__tests__/promotion-schema-normalizer.test.ts',
