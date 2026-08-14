@@ -238,7 +238,6 @@ function resolveFailureStepForRequeueNote(
   failure: TaskFailure,
   runMeta: RunMeta | null,
   resumePoint: WorkflowResumePoint | undefined,
-  restartPoint: WorkflowRestartPoint | undefined,
 ): string | undefined {
   const failureStep = failure.step?.trim();
   if (failureStep) {
@@ -260,19 +259,7 @@ function resolveFailureStepForRequeueNote(
     return resumeStep;
   }
 
-  const restartStep = restartPoint?.stack.at(-1)?.step.trim();
-  if (restartStep) {
-    return restartStep;
-  }
-
   return undefined;
-}
-
-function requireFailedStepForRequeueNote(failedStep: string | undefined): string {
-  if (!failedStep) {
-    throw new Error('Failed task step name could not be resolved for auto requeue note.');
-  }
-  return failedStep;
 }
 
 function resolveWorktreePath(task: TaskListItem): string {
@@ -330,12 +317,7 @@ async function prepareFailedTaskRetrySelection(
   }
 
   const resumePoint = resolveRetryResumePoint(task, runMeta);
-  const failedStep = resolveFailureStepForRequeueNote(
-    failure,
-    runMeta,
-    resumePoint,
-    task.data?.restart_point,
-  );
+  const failedStep = resolveFailureStepForRequeueNote(failure, runMeta, resumePoint);
   const preferredRootStep = resolveRetryDefaultStep(workflowConfig, failure, resumePoint);
   const selectedStart = await selectRetryStart(workflowConfig, {
     projectCwd: projectDir,
@@ -381,7 +363,7 @@ export async function requeueFailedTask(
     task.data?.retry_note,
     buildAutoRequeueNote({
       ...selection.failure,
-      step: requireFailedStepForRequeueNote(selection.failedStep),
+      step: selection.failedStep,
     }),
   );
   const runner = new TaskRunner(projectDir);
