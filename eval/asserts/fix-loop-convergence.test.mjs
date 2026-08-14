@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import buildFixLoopConvergencePrompt from '../fix-loop-convergence-prompt.mjs';
@@ -35,6 +36,18 @@ const E12_OUTPUT = `
 const E12_JUDGEMENT = 'JUDGEMENT: bw2_inherited=継承; '
   + 'bw2_recurrence_confirmed=確認済み; bw2_cumulative=3; '
   + 'nonactionable_in_work=含まない';
+const E12_CLAUDE_OPUS_OUTPUT = readFileSync(
+  new URL('../fixtures/fix-loop-convergence/e12-claude-opus-output.md', import.meta.url),
+  'utf8',
+);
+const E12_CODEX_SOL_OUTPUT = readFileSync(
+  new URL('../fixtures/fix-loop-convergence/e12-codex-sol-output.md', import.meta.url),
+  'utf8',
+);
+const FIX_PLAN_OUTPUT_CONTRACT = readFileSync(
+  new URL('../../builtins/ja/facets/partials/output-contracts/base-fix-plan.md', import.meta.url),
+  'utf8',
+);
 
 function run(output, scenario) {
   return assertFixLoopConvergence(output, { vars: { scenario } });
@@ -46,9 +59,7 @@ test('fix-plan prompt includes the expanded output contract', async () => {
   });
 
   assert.match(prompt, /--- OUTPUT CONTRACT（全文） ---/);
-  assert.match(prompt, /## 不変条件台帳/);
-  assert.match(prompt, /### 引き継ぎ元からの行/);
-  assert.match(prompt, /## 実施順序/);
+  assert.ok(prompt.includes(FIX_PLAN_OUTPUT_CONTRACT));
   assert.doesNotMatch(prompt, /\{\{include:output-contracts\/base-fix-plan\}\}/);
 });
 
@@ -58,6 +69,15 @@ test('E06 accepts each planned invariant exactly once in recurrence-record rows'
 
 test('E06 accepts a provider output envelope', () => {
   assert.equal(run(JSON.stringify({ output: E06_OUTPUT }), 'E06').pass, true);
+});
+
+test('E06 accepts recurrence rows under a child heading', () => {
+  const nestedRows = E06_OUTPUT.replace(
+    '## 不変条件の再発記録\n\n',
+    '## 不変条件の再発記録\n\n### 詳細\n\n',
+  );
+
+  assert.equal(run(nestedRows, 'E06').pass, true);
 });
 
 test('E06 rejects a missing or duplicate planned invariant row', () => {
@@ -82,6 +102,14 @@ test('E12 accepts unchanged BW-2 fields, a separate actionable row, and bounded 
   assert.equal(run(E12_OUTPUT, 'E12').pass, true);
 });
 
+test('E12 accepts explanatory mentions of the non-actionable invariant', () => {
+  assert.equal(run(E12_CLAUDE_OPUS_OUTPUT, 'E12').pass, true);
+});
+
+test('E12 accepts explanatory mentions of the actionable finding', () => {
+  assert.equal(run(E12_CODEX_SOL_OUTPUT, 'E12').pass, true);
+});
+
 test('E12 accepts a report wrapped once in an outer fenced code block', () => {
   const withLanguage = '```markdown\n' + E12_OUTPUT + '```';
   const withoutLanguage = '~~~\n' + E12_OUTPUT + '~~~';
@@ -99,8 +127,32 @@ test('E12 accepts a final JUDGEMENT line after the outer fenced report', () => {
 });
 
 test('E12 rejects a changed carried value or an actionable finding merged into the BW-2 row', () => {
+  const actionableFindingMergedIntoBw2 = E12_OUTPUT
+    .replace(
+      '| 修正単位 | family ID | 不変条件の名前 | 担当箇所 |',
+      '| finding ID / 出典 | family ID | 不変条件の名前 | 担当箇所 |',
+    )
+    .replace(
+      '| FP-PICKER-STATE | FAM-RETRY-PICKER | BW-2 |',
+      '| ARCH-NEW-picker-L520 | FAM-RETRY-PICKER | BW-2 |',
+    );
+
   assert.equal(run(E12_OUTPUT.replace('| 3 | 確認済み |', '| 2 | 確認済み |'), 'E12').pass, false);
-  assert.equal(run(E12_OUTPUT.replace('単一 window setter への集約', 'ARCH-NEW-picker-L520'), 'E12').pass, false);
+  assert.equal(run(actionableFindingMergedIntoBw2, 'E12').pass, false);
+});
+
+test('E12 rejects the actionable finding as execution work or a key outside planning sections', () => {
+  const executionWork = E12_OUTPUT.replace('picker order setter', 'ARCH-NEW-picker-L520');
+  const keyOutsidePlanning = `${E12_OUTPUT}
+## 制約適合性
+
+| finding ID / 出典 | 根拠 |
+|---|---|
+| ARCH-NEW-picker-L520 | 説明 |
+`;
+
+  assert.equal(run(executionWork, 'E12').pass, false);
+  assert.equal(run(keyOutsidePlanning, 'E12').pass, false);
 });
 
 test('E12 rejects the non-actionable invariant in execution or code-change-target sections', () => {

@@ -9,6 +9,16 @@ const E12_CARRIED_ROW = {
 const E12_ACTIONABLE_FINDING = 'ARCH-NEW-picker-L520';
 const E12_NON_ACTIONABLE_INVARIANT = 'INV-EMPTY-TERM';
 const INVARIANT_NAME_HEADERS = [/^不変条件の名前$/, /^invariant name$/i];
+const WORK_ITEM_KEY_HEADERS = [
+  /^finding id(?: \/ (?:出典|source))?$/i,
+  /^family id$/i,
+  ...INVARIANT_NAME_HEADERS,
+  /^修正単位(?: \/ 後続確認)?$/,
+  /^change unit(?: \/ follow-up)?$/i,
+  /^変更対象$/,
+  /^code change targets?$/i,
+  /^implementation targets?$/i,
+];
 
 function unwrapProviderOutput(output) {
   try {
@@ -155,6 +165,10 @@ function extractTableRows(section) {
   return rows;
 }
 
+function extractRowsWithinSection(section) {
+  return extractTableRows({ heading: section.heading, directLines: section.lines });
+}
+
 function extractReport(output) {
   const report = unwrapOuterFence(unwrapProviderOutput(output));
   const sections = extractSections(report);
@@ -184,8 +198,10 @@ function gradingResult(checks, successReason) {
 }
 
 function assertE06(report) {
-  const recurrenceRows = report.rows.filter(({ section }) =>
-    /^(?:不変条件の再発記録|invariant recurrence record)$/i.test(section));
+  const recurrenceRows = report.sections
+    .filter(({ heading }) =>
+      /^(?:不変条件の再発記録|invariant recurrence record)$/i.test(heading))
+    .flatMap(extractRowsWithinSection);
   const checks = E06_INVARIANT_NAMES.map((invariantName) => [
     `one-row-for-${invariantName}`,
     recurrenceRows.filter((row) =>
@@ -232,17 +248,45 @@ function isCodeChangeTargetSection(heading) {
     .test(heading);
 }
 
+function rowUsesIdentifierAsKey(row, identifier) {
+  return row.cells[0] === identifier
+    || row.headers.some((header, index) =>
+      WORK_ITEM_KEY_HEADERS.some((pattern) => pattern.test(header))
+        && row.cells[index] === identifier);
+}
+
+function lineUsesIdentifierAsWorkItem(line, identifier) {
+  const normalizedLine = normalize(line);
+  if (normalizedLine === identifier) return true;
+  const item = /^ {0,3}(?:[-+*]|\d+[.)])[ \t]+(.+)$/.exec(line);
+  if (item === null) return false;
+  const normalizedItem = normalize(item[1]);
+  return normalizedItem === identifier
+    || normalizedItem.startsWith(`${identifier} `)
+    || normalizedItem.startsWith(`${identifier}:`)
+    || normalizedItem.startsWith(`${identifier}：`);
+}
+
+function sectionUsesIdentifierAsWorkItem(section, identifier) {
+  const rows = extractRowsWithinSection(section);
+  return rows.some((row) => rowUsesIdentifierAsKey(row, identifier))
+    || section.lines.some((line) => lineUsesIdentifierAsWorkItem(line, identifier));
+}
+
 function assertE12(report) {
   const bw2Rows = report.rows.filter((row) =>
     valueForHeader(row, INVARIANT_NAME_HEADERS) === E12_CARRIED_ROW.invariantName);
   const carriedBw2Rows = bw2Rows.filter((row) =>
     isCarryForwardRowsSection(row.section) && isCarriedBw2Row(row));
-  const actionableRows = report.rows.filter((row) =>
-    row.cells.some((cell) => cell.includes(E12_ACTIONABLE_FINDING)));
-  const actionablePlanningRows = actionableRows.filter((row) =>
+  const actionableKeyRows = report.rows.filter((row) =>
+    rowUsesIdentifierAsKey(row, E12_ACTIONABLE_FINDING));
+  const actionablePlanningRows = actionableKeyRows.filter((row) =>
     isFindingCoverageSection(row.section) || isNewPlanningRowsSection(row.section));
   const executionOrderSections = report.sections.filter(({ heading }) =>
     isExecutionOrderSection(heading));
+  const actionableExecutionItems = executionOrderSections.some((section) =>
+    section.lines.some((line) =>
+      lineUsesIdentifierAsWorkItem(line, E12_ACTIONABLE_FINDING)));
   const workSections = report.sections.filter(({ heading }) =>
     isFindingCoverageSection(heading)
       || isExecutionOrderSection(heading)
@@ -251,14 +295,18 @@ function assertE12(report) {
     ['one-unchanged-bw2-row-in-carry-forward-section',
       bw2Rows.length === 1 && carriedBw2Rows.length === 1],
     ['actionable-finding-only-in-planning-sections',
-      actionableRows.length > 0 && actionablePlanningRows.length === actionableRows.length],
+      actionableKeyRows.length > 0
+        && actionablePlanningRows.length === actionableKeyRows.length
+        && !actionableExecutionItems],
     ['actionable-finding-is-not-in-bw2-row',
-      actionableRows.every((row) => !row.cells.includes(E12_CARRIED_ROW.invariantName))
+      actionableKeyRows.every((row) =>
+        valueForHeader(row, INVARIANT_NAME_HEADERS) !== E12_CARRIED_ROW.invariantName)
         && carriedBw2Rows.every((row) =>
-          row.cells.every((cell) => !cell.includes(E12_ACTIONABLE_FINDING)))],
+          !rowUsesIdentifierAsKey(row, E12_ACTIONABLE_FINDING))],
     ['execution-order-section-present', executionOrderSections.length > 0],
-    ['non-actionable-invariant-absent-from-work-sections', workSections.every(({ lines }) =>
-      !lines.join('\n').includes(E12_NON_ACTIONABLE_INVARIANT))],
+    ['non-actionable-invariant-absent-from-work-sections',
+      workSections.every((section) =>
+        !sectionUsesIdentifierAsWorkItem(section, E12_NON_ACTIONABLE_INVARIANT))],
   ];
   return gradingResult(
     checks,

@@ -7,7 +7,7 @@ Review the latest review and fix reports in the Report Directory and determine w
 
 **First establish the observation point:**
 - Use report chronology to determine whether a fix verifier or review ran after the latest fix. If the latest report is fix-verification.md, compare its `incomplete` reasons, unmet verification obligations, and evidence changed by each retry; repeated results with the same reason and evidence indicate a stall. If the latest report is review-resolution.md or another review report, compare finding IDs, dispositions, acceptance criteria, and current evidence instead.
-- If a fix just completed and neither a verifier nor a post-fix review exists yet, an issue reported as addressed after its latest review is awaiting post-fix verification rather than repeating or stalled. Include this state under the healthy / progress option.
+- If a fix just completed and neither a verifier nor a post-fix review exists yet, classify it as awaiting post-fix verification and include it under the healthy / progress option only when the latest fix-report.md records every Completion Obligation for the affected fix unit as `complete` or `not applicable` and records no Open Obligations. A statement that the issue was addressed does not override an incomplete obligation; treat such a report as an incomplete fix.
 - When no fix reports addressing the issue, do not infer that the loop is healthy merely because no later verification report exists.
 
 **Judgment criteria:**
