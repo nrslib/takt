@@ -189,7 +189,6 @@ async function runProbe(options) {
     sandboxMode: 'read-only',
     approvalPolicy: 'never',
   });
-  const { events } = await thread.runStreamed(options.prompt);
   await mkdir(dirname(options.output), { recursive: true });
   const file = createWriteStream(options.output, { encoding: 'utf8' });
   const recorder = createEventRecorder();
@@ -198,6 +197,7 @@ async function runProbe(options) {
     streamError ??= error instanceof Error ? error.message : String(error);
   });
   try {
+    const { events } = await thread.runStreamed(options.prompt);
     for await (const event of events) {
       recordEvent(file, recorder, event);
     }
