@@ -87,3 +87,15 @@ OLD-REVIEW-readme-L1 remains non-actionable.
 
   assert.equal(assertFinalReadinessPrecision(output).pass, false);
 });
+
+test('rejects contradictory final decisions in English', () => {
+  const output = `
+Final Decision: MERGEABLE
+
+OLD-REVIEW-readme-L1 remains non-actionable.
+
+Final Decision: FIX REQUIRED
+`;
+
+  assert.equal(assertFinalReadinessPrecision(output).pass, false);
+});
