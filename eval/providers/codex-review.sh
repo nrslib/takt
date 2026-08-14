@@ -64,26 +64,58 @@ node -e '
   const pid = Number(process.argv[1]);
   const timeoutMs = Number(process.argv[2]) * 1000;
   const timeoutMarker = process.argv[3];
+  let timedOut = false;
+  let failed = false;
+  process.on("SIGTERM", () => {
+    if (!timedOut) process.exit(0);
+  });
   setTimeout(() => {
-    writeFileSync(timeoutMarker, "");
-    try { process.kill(-pid, "SIGTERM"); } catch { process.exit(0); }
+    timedOut = true;
+    try {
+      writeFileSync(timeoutMarker, "");
+    } catch (error) {
+      console.error(`failed to record timeout: ${error.message}`);
+      failed = true;
+    }
+    try {
+      process.kill(-pid, "SIGTERM");
+    } catch (error) {
+      console.error(`failed to terminate Codex process group: ${error.message}`);
+      process.kill(process.ppid, "SIGTERM");
+      process.exit(1);
+    }
     setTimeout(() => {
-      try { process.kill(-pid, "SIGKILL"); } catch {}
+      try {
+        process.kill(-pid, "SIGKILL");
+      } catch (error) {
+        if (error.code !== "ESRCH") {
+          console.error(`failed to kill Codex process group: ${error.message}`);
+          failed = true;
+        }
+      }
+      process.exit(failed ? 1 : 0);
     }, 15_000);
   }, timeoutMs);
-' "$codex_pid" "$timeout_seconds" "$timeout_marker" >/dev/null 2>&1 &
+' "$codex_pid" "$timeout_seconds" "$timeout_marker" >/dev/null &
 watchdog_pid=$!
 
 status=0
 wait "$codex_pid" || status=$?
-codex_pid=''
-if [ ! -f "$timeout_marker" ]; then
-  kill "$watchdog_pid" 2>/dev/null || true
-fi
-wait "$watchdog_pid" 2>/dev/null || true
+kill -TERM "$watchdog_pid" 2>/dev/null || true
+watchdog_status=0
+wait "$watchdog_pid" 2>/dev/null || watchdog_status=$?
 watchdog_pid=''
+if [ "$watchdog_status" -ne 0 ] && { [ -f "$timeout_marker" ] || [ "$watchdog_status" -ne 143 ]; }; then
+  echo "codex review watchdog failed (exit ${watchdog_status})" >&2
+  exit 125
+fi
+if [ -f "$timeout_marker" ]; then
+  echo "codex review timed out after ${timeout_seconds}s" >&2
+  exit 124
+fi
 if [ "$status" -ne 0 ]; then
-  echo "codex review failed or was killed after ${timeout_seconds}s (exit ${status})" >&2
+  echo "codex review failed (exit ${status})" >&2
   exit "$status"
 fi
+codex_pid=''
 cat "$out"

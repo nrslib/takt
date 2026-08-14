@@ -158,11 +158,11 @@ export default function assertInitialReviewExternalIdentityWiring(output) {
   const findingRows = extractFindingRows(reviewOutput);
   const findingBlocks = extractFindingBlocks(reviewOutput);
   const identityEvidenceBlocks = extractIdentityEvidenceBlocks(reviewOutput, findingRows, findingBlocks);
-  const canonicalKey = /sample-flow\s*\/\s*execute/i;
+  const canonicalKey = /\bsample-flow\s*\/\s*execute(?![\w/-])/i;
   const defaultFallback = /default(?:-runner| target| fallback)|デフォルト(?:ターゲット|へ|に)|フォールバック/i;
   const falsePositiveEvidence = /(self[- ]consistent|false positive|green|pass(?:es|ed|ing)?|成功|通(?:る|って|過)|偽陽性|自己整合)/i;
-  const testChange = /(?:test|e2e|テスト).{0,240}(?:add|change|replace|require|assert|cover|update|追加|変更|置換|要求|検証|更新)|(?:add|change|replace|require|assert|cover|update|追加|変更|置換|要求|検証|更新).{0,240}(?:test|e2e|テスト)/is;
-  const adjacentPathPreserved = /(outside|preserved|adjacent|clean|no issue|out of scope|対象外|保持|隣接|問題なし|変更不要)/i;
+  const testChange = /(?:\b(?:test|e2e)\b|テスト).{0,240}(?:\b(?:add|change|replace|require|assert|cover|update)\b|追加|変更|置換|要求|検証|更新)|(?:\b(?:add|change|replace|require|assert|cover|update)\b|追加|変更|置換|要求|検証|更新).{0,240}(?:\b(?:test|e2e)\b|テスト)/is;
+  const adjacentPathPreserved = /(?:outside (?:this|the) finding|out of scope|(?:is|remains|kept) preserved|`?preserved`?\s*:|no (?:issue|change)s?|does not (?:need|require) changes?|対象外|保持(?:する|される)?|維持(?:する|して|される|しており)?|問題なし|変更不要|この指摘には含めない)/i;
   const hasConnectedIdentityEvidence = identityEvidenceBlocks.some((block) => (
     hasConnectedFamilyEvidence(block)
     && canonicalKey.test(block)
