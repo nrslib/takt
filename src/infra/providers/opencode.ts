@@ -67,6 +67,7 @@ function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
     variant: options.providerOptions?.opencode?.variant,
     guards: options.providerOptions?.opencode?.guards,
     onStream: options.onStream,
+    onActivity: options.onActivity,
     onAskUserQuestion: options.onAskUserQuestion,
     opencodeApiKey: options.opencodeApiKey ?? resolveOpencodeApiKey(),
     childProcessEnv: options.childProcessEnv,

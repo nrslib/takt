@@ -32,6 +32,7 @@ function toCopilotOptions(options: ProviderCallOptions): CopilotCallOptions {
     effort: options.providerOptions?.copilot?.effort,
     permissionMode: options.permissionMode,
     onStream: options.onStream,
+    onActivity: options.onActivity,
     copilotGithubToken: options.copilotGithubToken ?? resolveCopilotGithubToken(),
     copilotCliPath: resolveCopilotCliPath(),
     childProcessEnv: options.childProcessEnv,

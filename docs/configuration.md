@@ -325,9 +325,11 @@ The `provider` and `model` declarations select the provider, model, and thinking
 
 `provider_options.pi` is a separate path for loading Pi resources such as `extensions` and `no_*` discovery controls. These options do not declare authentication, model, or thinking level. Explicit resource sources are resolved temporarily for the TAKT run and are not persisted to Pi settings; see [Pi resource loading](#pi-resource-loading) for the resource trust boundary.
 
-### Provider call deadline and OpenCode execution guards
+### Provider inactivity deadline and OpenCode execution guards
 
-Every provider uses `guards.call_timeout_ms` for its call-wide wall-clock deadline.
+Every provider uses `guards.call_timeout_ms` as its maximum period without an
+observable provider event. Each stream/tool event, phase completion, and new
+provider attempt resets the timer; cumulative execution time is not capped.
 It applies to `codex`, `opencode`, `claude` (including `claude-sdk`),
 `claude_terminal`, `cursor`, `copilot`, `kiro`, and `pi`. Values are integer
 milliseconds from 60,000 through 86,400,000; the default is 3,600,000 ms
@@ -344,19 +346,18 @@ wildcard. Guard leaves merge independently across provider-option layers, while
 each higher-priority `model_profiles` value replaces the complete lower-priority
 map.
 
-Each OpenCode call has a 3,600,000 ms (60 minute) wall-clock limit. A call that
-may run longer than 60 minutes — a step that runs a full test suite, for
-example — must explicitly set `call_timeout_ms` from 60,000 through 86,400,000.
+Each OpenCode call has a 3,600,000 ms (60 minute) provider-event inactivity
+limit. A healthy call may run longer while events continue to arrive.
 `event_limit` defaults to 500,000 and can be overridden by
 `TAKT_OPENCODE_STREAM_EVENT_LIMIT`. `text_byte_limit` defaults to 1 MiB and
 `reasoning_byte_limit` to 4 MiB.
 
-The OpenCode output-idle watchdog is disabled by default. OpenCode may emit no
-events between tool_use and tool_result, so treating silence during reasoning
-or a long-running tool as inactivity can terminate a healthy call. Calls with
-no output are instead bounded by the `call_timeout_ms` wall-clock limit. An
-additional provider/model-specific watchdog may be enabled only for a transport
-whose emission interval has been authenticated.
+The timeout observes provider events as delivered; TAKT does not synthesize
+keepalives. OpenCode tracks the interval from a tool-start event through its
+terminal event as in-flight and suspends the ordinary inactivity check during
+that interval. To keep a missing terminal event or complete hang bounded, the
+in-flight state becomes stale after six times `call_timeout_ms` and ends as
+`PART_TIMEOUT`.
 
 Invalid numeric limits are treated differently per input path. Values written
 under `guards.*` (including those from `TAKT_PROVIDER_OPTIONS_*`) are declared

@@ -8,16 +8,10 @@ params:
   frontend_review_instruction:
     type: facet_ref
     facet_kind: instruction
-  completion_retry_instruction:
-    type: facet_ref
-    facet_kind: instruction
 name: frontend-review
 capabilities: readonly
 tags:
   - review
-completion_retry:
-  retry_instruction:
-    $param: completion_retry_instruction
 edit: false
 persona: frontend-reviewer
 policy:

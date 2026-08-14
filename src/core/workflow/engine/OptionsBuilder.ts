@@ -26,7 +26,11 @@ import {
   providerSupportsMaxTurns,
   providerSupportsStructuredOutput,
 } from '../../../infra/providers/provider-capabilities.js';
-import type { ProviderType, StreamCallback } from '../../../shared/types/provider.js';
+import type {
+  ProviderActivityCallback,
+  ProviderType,
+  StreamCallback,
+} from '../../../shared/types/provider.js';
 import type {
   WorkflowEngineOptions,
   PhaseName,
@@ -41,6 +45,10 @@ import { getWorkflowStepKind } from '../step-kind.js';
 import { resolveStepProviderModel } from '../provider-resolution.js';
 import { resolveDeterministicAutoRoutingProviderInfo, toAutoRoutingStepMetadata } from '../auto-routing/resolver.js';
 import { buildPhase1WorkflowMeta } from './workflow-meta.js';
+import {
+  recordWorkflowStepProviderActivity,
+  recordWorkflowStepProviderEventActivity,
+} from './step-deadline.js';
 
 type ResolvedRunAgentOptions = RunAgentOptions & {
   resolvedProviderOptions?: StepProviderOptions;
@@ -81,6 +89,7 @@ export class OptionsBuilder {
     private readonly getReviewScope?: () => TaskReviewScope,
     private readonly getFailureDir?: () => string,
     private readonly getAbortSignal: () => AbortSignal | undefined = () => this.engineOptions.abortSignal,
+    private readonly recordActivity: ProviderActivityCallback = () => {},
   ) {}
 
   private resolveAbortSignal(): AbortSignal | undefined {
@@ -174,19 +183,37 @@ export class OptionsBuilder {
     output: StreamCallback | undefined,
   ): StreamCallback | undefined {
     const onProviderStream = this.engineOptions.onProviderStream;
-    if (!onProviderStream) {
-      return output;
-    }
-    if (!provider) {
+    if (onProviderStream && !provider) {
       throw new Error(`Step "${step.name}" has no resolved provider for provider event logging`);
     }
     return (event): void => {
-      onProviderStream({
-        step: step.name,
-        provider,
-        providerModel: providerModel ?? '(default)',
-      }, event);
+      recordWorkflowStepProviderEventActivity(this.recordActivity, step.name, event);
+      if (onProviderStream && provider) {
+        onProviderStream({
+          step: step.name,
+          provider,
+          providerModel: providerModel ?? '(default)',
+        }, event);
+      }
       output?.(event);
+    };
+  }
+
+  buildDeadlineActivityCallbacks(
+    executionUnitKey: string,
+    recordActivity: ProviderActivityCallback = this.recordActivity,
+  ): Pick<RunAgentOptions, 'onStream' | 'onActivity'> {
+    return {
+      onStream: (event) => recordWorkflowStepProviderEventActivity(
+        recordActivity,
+        executionUnitKey,
+        event,
+      ),
+      onActivity: (activity) => recordWorkflowStepProviderActivity(
+        recordActivity,
+        executionUnitKey,
+        activity,
+      ),
     };
   }
 
@@ -405,6 +432,11 @@ export class OptionsBuilder {
       resolvedProviderOptions: providerOptions,
       language: this.getLanguage(),
       onStream: this.buildProviderStream(step, resolvedProvider, resolvedModel, this.engineOptions.onStream),
+      onActivity: (activity) => recordWorkflowStepProviderActivity(
+        this.recordActivity,
+        step.name,
+        activity,
+      ),
       onPermissionRequest: this.engineOptions.onPermissionRequest,
       onAskUserQuestion: this.engineOptions.onAskUserQuestion,
       bypassPermissions: this.engineOptions.bypassPermissions,
@@ -439,6 +471,7 @@ export class OptionsBuilder {
       resolvedProviderOptions: baseOptions.resolvedProviderOptions,
       language: baseOptions.language,
       onStream: baseOptions.onStream,
+      onActivity: baseOptions.onActivity,
       onPermissionRequest: baseOptions.onPermissionRequest,
       onAskUserQuestion: baseOptions.onAskUserQuestion,
       workflowMeta: baseOptions.workflowMeta,
@@ -677,6 +710,11 @@ export class OptionsBuilder {
         stepProvider.provider,
         stepProvider.model,
         this.engineOptions.onStream,
+      ),
+      onActivity: (activity) => recordWorkflowStepProviderActivity(
+        this.recordActivity,
+        step.name,
+        activity,
       ),
       structuredCaller: this.requireStructuredCaller(),
       resolveStepProviderModel: (step) => this.resolveStepProviderModel(step, runtime),

@@ -1,5 +1,5 @@
 import type { PermissionMode } from '../../core/models/index.js';
-import type { StreamCallback } from '../../shared/types/provider.js';
+import type { ProviderActivityCallback, StreamCallback } from '../../shared/types/provider.js';
 
 export interface KiroCallOptions {
   cwd: string;
@@ -9,6 +9,7 @@ export interface KiroCallOptions {
   systemPrompt?: string;
   permissionMode?: PermissionMode;
   onStream?: StreamCallback;
+  onActivity?: ProviderActivityCallback;
   kiroApiKey?: string;
   kiroCliPath?: string;
   agent?: string;

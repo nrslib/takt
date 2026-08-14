@@ -27,6 +27,7 @@ function toMockOptions(options: ProviderCallOptions): MockCallOptions {
     sessionId: options.sessionId,
     model: options.model,
     onStream: options.onStream,
+    onActivity: options.onActivity,
     allowedTools: options.allowedTools,
     outputSchema: options.outputSchema,
   };

@@ -97,12 +97,14 @@ describe('ClaudeHeadlessProvider', () => {
       name: 'test',
       systemPrompt: 'sys',
     });
+    const onActivity = vi.fn();
 
     await agent.call('prompt', {
       cwd: '/tmp',
       sessionId: 'opaque-session-id-from-report-phase',
       permissionMode: 'edit',
       bypassPermissions: true,
+      onActivity,
       providerOptions: {
         claude: {
           sandbox: {
@@ -118,6 +120,7 @@ describe('ClaudeHeadlessProvider', () => {
       sessionId: 'opaque-session-id-from-report-phase',
       permissionMode: 'edit',
       bypassPermissions: true,
+      onActivity,
       anthropicApiKey: 'sk-ant-from-config',
       sandbox: {
         allowUnsandboxedCommands: true,

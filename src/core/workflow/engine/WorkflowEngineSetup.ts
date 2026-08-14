@@ -50,6 +50,8 @@ import { SelectorInputReader } from '../dynamic-parallel/selector-input-reader.j
 import { restoreWorkflowStepParticipationIndex } from '../workflow-step-participation-index.js';
 import {
   createWorkflowStepAbortSignalContext,
+  recordWorkflowStepProviderActivity,
+  recordWorkflowStepProviderEventActivity,
   type WorkflowStepAbortSignalContext,
 } from './step-deadline.js';
 
@@ -183,6 +185,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
   const phaseRelay = createWorkflowPhaseRelay(
     (event, ...args) => params.emitEvent(event, ...args),
     params.getCurrentWorkflowStack,
+    stepAbortSignalContext.recordActivity,
   );
   // base の解決は ref 走査を伴うため、ラン境界で一度だけ解決して保持する。
   const getReviewScope = createTaskReviewScopeResolver({
@@ -206,11 +209,22 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getReviewScope,
     () => failureDir,
     stepAbortSignalContext.getAbortSignal,
+    stepAbortSignalContext.recordActivity,
   );
 
   const dynamicFacetSelector = new DynamicFacetSelectorCoordinator({
     engineOptions: params.options,
     getAbortSignal: stepAbortSignalContext.getAbortSignal,
+    onStream: (event) => recordWorkflowStepProviderEventActivity(
+      stepAbortSignalContext.recordActivity,
+      'dynamic-facet-selector',
+      event,
+    ),
+    onActivity: (activity) => recordWorkflowStepProviderActivity(
+      stepAbortSignalContext.recordActivity,
+      'dynamic-facet-selector',
+      activity,
+    ),
     failureDir,
     selectionStore: params.sharedRuntime.dynamicFacetSelectionStore!,
     getCwd: params.getCwd,
@@ -300,6 +314,16 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
   const dynamicParallelSelector = new DynamicParallelSelectorCoordinator({
     engineOptions: params.options,
     getAbortSignal: stepAbortSignalContext.getAbortSignal,
+    onStream: (event) => recordWorkflowStepProviderEventActivity(
+      stepAbortSignalContext.recordActivity,
+      'dynamic-parallel-selector',
+      event,
+    ),
+    onActivity: (activity) => recordWorkflowStepProviderActivity(
+      stepAbortSignalContext.recordActivity,
+      'dynamic-parallel-selector',
+      activity,
+    ),
     failureDir,
     selectionStore: params.sharedRuntime.dynamicParallelSelectionStore!,
     getCwd: params.getCwd,

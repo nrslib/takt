@@ -178,6 +178,7 @@ export class AgentRunner {
       permissionMode: resolution.permissionMode,
       providerOptions: resolution.providerOptions,
       onStream: options.onStream,
+      onActivity: options.onActivity,
       onPermissionRequest: options.onPermissionRequest,
       onAskUserQuestion: options.onAskUserQuestion,
       bypassPermissions: options.bypassPermissions,
@@ -364,5 +365,7 @@ export async function runAgent(
   task: string,
   options: RunAgentOptions,
 ): Promise<AgentResponse> {
+  // Provider dispatch is an attempt boundary even when the provider emits no stream events.
+  options.onActivity?.();
   return defaultRunner.run(personaSpec, task, options);
 }

@@ -115,6 +115,8 @@ steps:
           - condition: approved
           - condition: needs_fix
     rules:
+      - condition: any("error")
+        next: reviewers
       - condition: all("Terraform規約に準拠", "AI特有の問題なし", "approved")
         next: merge-readiness-review
       - condition: any("規約違反あり", "AI特有の問題あり", "needs_fix")

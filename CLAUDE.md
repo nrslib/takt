@@ -12,7 +12,7 @@ TAKT (TAKT Agent Koordination Topology) is a multi-agent orchestration CLI. It r
 
 | Command | Notes |
 |---------|-------|
-| `npm run build` | `tsc` (+ prompt-evals tsconfig) plus copies of `src/shared/prompts/{en,ja}/**/*.md`, `src/shared/i18n/*.yaml`, and `src/core/runtime/presets/*.sh` into `dist/`. Skipping any copy breaks runtime resolution. |
+| `npm run build` | `tsc` (+ opencode-probe tsconfig) plus copies of `src/shared/prompts/{en,ja}/**/*.md`, `src/shared/i18n/*.yaml`, and `src/core/runtime/presets/*.sh` into `dist/`. Skipping any copy breaks runtime resolution. |
 | `npm run watch` | TypeScript incremental build (no asset copy). |
 | `npm run lint` | ESLint on `src/`. `no-explicit-any` is error; unused vars must be prefixed `_`. |
 | `npm test` | Fast unit gate: type-contracts tsc, then 4 shards launched **concurrently** (`Promise.all` in `scripts/run-npm-test.mjs`, each shard `--maxWorkers=1`). Excludes integration tests; the output names the follow-up command. |
@@ -20,10 +20,10 @@ TAKT (TAKT Agent Koordination Topology) is a multi-agent orchestration CLI. It r
 | `npm run test:it:heavy` | Full heavy integration gate for real child processes, Git, complete engines, integration/regression/performance suites, and serial groups. Local execution uses one worker; PR CI shards across isolated runners. |
 | `npm test -- src/__tests__/<file>.test.ts` | Route a single file to the correct unit, light-IT, heavy-parallel-IT, or heavy-serial-IT runner. For an added or changed IT, also run `releaseVerificationWiring.test.ts` by itself. Always target-run an added or changed heavy IT before handoff. |
 | `npm test -- -t "<pattern>"` | Run unit tests whose name matches `<pattern>`. |
-| `npm run test:prompt-evals` | Deterministic OpenCode prompt-eval smoke gate (11 cases, no API cost). Part of `check:release`; not part of routine gates. |
+| `npm run test:opencode-probe` | Deterministic OpenCode probe smoke gate (11 cases, no API cost). Standalone; not part of routine gates or `check:release`. |
 | `npm run test:e2e:mock` | Full mock-provider E2E suite (parallel shards). Single spec: `npx vitest run --config vitest.config.e2e.mock.ts e2e/specs/<file>.e2e.ts`. |
 | `npm run test:e2e:provider:{claude,claude-sdk,codex,opencode,cursor}` | E2E against a real provider (slow, costs API credits). |
-| `npm run check:release` | Full pre-release gate: build + lint + fast 4-shard unit + light IT + heavy IT + prompt-evals + e2e. |
+| `npm run check:release` | Full pre-release gate: build + lint + fast 4-shard unit + light IT + heavy IT + e2e. |
 
 ### Test pool behavior (worth knowing before "fixing" flakes)
 
@@ -133,7 +133,7 @@ builtins/{en,ja}/       Bundled facets + workflows (read from dist/ at runtime)
 ## Debugging
 
 - `logging.debug: true` in `~/.takt/config.yaml` → debug logs under `.takt/runs/debug-{timestamp}/logs/`. `TAKT_VERBOSE=true` for verbose console. Session logs at `.takt/logs/{sessionId}.jsonl`.
-- OpenCode's composed system prompt cannot be read from the binary or SDK; `prompt-evals/sdk-prompt-capture.mjs` points OpenCode at a local OpenAI-compatible probe endpoint and records real request bodies. Facts established with it (re-verify — OpenCode changes): the system prompt concatenates `agent.prompt` + the user's `~/.claude/CLAUDE.md` + skills + `config.instructions`; every prompt triggers a thread-title call on `small_model` before the real one (capture tooling that grabs the first request measures the title generator). Do not use `opencode run` (CLI) as a measurement instrument — it intermittently hangs; production uses `createOpencode` from the SDK.
+- OpenCode's composed system prompt cannot be read from the binary or SDK; `tools/opencode-probe/sdk-prompt-capture.mjs` points OpenCode at a local OpenAI-compatible probe endpoint and records real request bodies. Facts established with it (re-verify — OpenCode changes): the system prompt concatenates `agent.prompt` + the user's `~/.claude/CLAUDE.md` + skills + `config.instructions`; every prompt triggers a thread-title call on `small_model` before the real one (capture tooling that grabs the first request measures the title generator). Do not use `opencode run` (CLI) as a measurement instrument — it intermittently hangs; production uses `createOpencode` from the SDK.
 
 ## House conventions (from AGENTS.md / CONTRIBUTING.md)
 

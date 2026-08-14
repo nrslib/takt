@@ -253,6 +253,7 @@ export class KiroClient {
 
     try {
       const args = buildArgs(effectiveOptions, promptText);
+      options.onActivity?.({ kind: 'attempt_started' });
       const { stdout } = await execKiro(args, effectiveOptions);
       const content = cleanKiroOutput(stdout);
       const outputError = content.length === 0

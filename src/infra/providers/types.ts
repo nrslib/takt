@@ -1,6 +1,10 @@
 import type { AgentResponse, Language, PermissionMode, McpServerConfig, StepProviderOptions } from '../../core/models/index.js';
 import type { ProviderType as SharedProviderType } from '../../shared/types/provider.js';
-import type { InternalAgentIsolation, StreamCallback } from '../../shared/types/provider.js';
+import type {
+  InternalAgentIsolation,
+  ProviderActivityCallback,
+  StreamCallback,
+} from '../../shared/types/provider.js';
 import type { PermissionHandler, AskUserQuestionHandler } from '../../core/workflow/types.js';
 
 export interface AgentSetup {
@@ -25,6 +29,7 @@ export interface ProviderCallOptions {
   permissionMode?: PermissionMode;
   providerOptions?: StepProviderOptions;
   onStream?: StreamCallback;
+  onActivity?: ProviderActivityCallback;
   onPermissionRequest?: PermissionHandler;
   onAskUserQuestion?: AskUserQuestionHandler;
   bypassPermissions?: boolean;

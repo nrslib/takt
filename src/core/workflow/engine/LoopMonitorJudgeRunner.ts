@@ -95,7 +95,7 @@ export class LoopMonitorJudgeRunner {
       this.deps.stepAbortSignalContext.getAbortSignal(),
     );
     try {
-      return await this.deps.stepAbortSignalContext.runWith(deadline.signal, async () => {
+      return await this.deps.stepAbortSignalContext.runWith(deadline, async () => {
         const stepEventWorkflowStack = this.deps.onStepStart(
           judgeStep,
           this.deps.state.iteration,

@@ -43,6 +43,7 @@ function toPiOptions(options: ProviderCallOptions, systemPrompt?: string): PiCal
     imageAttachments: options.imageAttachments,
     providerOptions: options.providerOptions?.pi,
     onStream: options.onStream,
+    onActivity: options.onActivity,
     childProcessEnv: options.childProcessEnv,
   };
 }

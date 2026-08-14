@@ -8,6 +8,10 @@ import {
   OPENCODE_STREAM_REASONING_BYTE_LIMIT,
   OPENCODE_STREAM_TEXT_BYTE_LIMIT,
 } from '../infra/opencode/OpenCodeStreamHandler.js';
+import {
+  OpenCodeGuardSuite,
+  type OpenCodeGuardEvaluation,
+} from '../infra/opencode/guards/index.js';
 
 type MockStreamEvent = Record<string, unknown>;
 type RunPlan =
@@ -266,7 +270,7 @@ describe('OpenCodeClient retry', () => {
     expect(result.content).toBe('');
   });
 
-  it('出力がなくても idle では retry せず、call wall-clock で終了する', async () => {
+  it('出力がないと call inactivity timeout で終了する', async () => {
     vi.useFakeTimers();
     runPlans = [{
       type: 'stream',
@@ -290,13 +294,14 @@ describe('OpenCodeClient retry', () => {
     const result = await resultPromise;
 
     expect(result.status).toBe('error');
-    expect(result.error).toContain('wall-clock timeout exceeded');
+    expect(result.error).toContain('Part timeout after 60000ms');
+    expect(result.failureCategory).toBe('part_timeout');
     expect(sessionCreate).toHaveBeenCalledOnce();
     expect(promptAsync).toHaveBeenCalledOnce();
     expect(subscribe).toHaveBeenCalledOnce();
   });
 
-  it('call wall-clock timeout は全体を abort し retry しない', async () => {
+  it('call inactivity timeout は全体を abort し retry しない', async () => {
     vi.useFakeTimers();
     runPlans = [{
       type: 'stream',
@@ -320,14 +325,80 @@ describe('OpenCodeClient retry', () => {
     const result = await resultPromise;
 
     expect(result.status).toBe('error');
-    expect(result.error).toContain('wall-clock timeout exceeded');
+    expect(result.error).toContain('Part timeout after 60000ms');
     expect(sessionCreate).toHaveBeenCalledOnce();
     expect(promptAsync).toHaveBeenCalledOnce();
     expect(subscribe).toHaveBeenCalledOnce();
     expect(abort).toHaveBeenCalledOnce();
   });
 
-  it('wall-clock signal は未完了の prompt 待ちと iterator close を打ち切る', async () => {
+  it('call deadline と attempt timeout が同時発生しても PART_TIMEOUT 分類を保持する', async () => {
+    let notifyStreamReady!: () => void;
+    const streamReady = new Promise<void>((resolve) => {
+      notifyStreamReady = resolve;
+    });
+    runPlans = [{
+      type: 'stream',
+      createStream: (signal?: AbortSignal) => (async function* () {
+        notifyStreamReady();
+        await waitForAbort(signal);
+      })(),
+    }];
+    const deadlineFailure: OpenCodeGuardEvaluation = {
+      guardId: 'inactivity-timeout',
+      verdict: {
+        action: 'fail',
+        reason: 'Part timeout after 60000ms',
+        abortKind: 'deadline',
+      },
+    };
+    const attemptTimeoutFailure: OpenCodeGuardEvaluation = {
+      guardId: 'idle-timeout',
+      verdict: {
+        action: 'fail',
+        reason: 'OpenCode attempt timed out',
+      },
+    };
+    let failAttempt: ((failure: OpenCodeGuardEvaluation) => void) | undefined;
+    const originalStartAttempt = OpenCodeGuardSuite.prototype.startAttempt;
+    const startAttemptSpy = vi.spyOn(OpenCodeGuardSuite.prototype, 'startAttempt')
+      .mockImplementation(function captureAttemptFailure(onFailure) {
+        failAttempt = onFailure;
+        originalStartAttempt.call(this, onFailure);
+      });
+    const getCallFailureSpy = vi.spyOn(OpenCodeGuardSuite.prototype, 'getCallFailure')
+      .mockReturnValue(deadlineFailure);
+    const { sessionCreate, promptAsync, subscribe } = installOpenCodeMock();
+    const controller = new AbortController();
+
+    try {
+      const resultPromise = new OpenCodeClient().call('coder', 'prompt', {
+        cwd: '/tmp',
+        model: 'opencode/big-pickle',
+        abortSignal: controller.signal,
+      });
+
+      await streamReady;
+      if (failAttempt === undefined) {
+        throw new Error('OpenCode attempt guard callback was not registered');
+      }
+      controller.abort(new Error(deadlineFailure.verdict.reason));
+      failAttempt(attemptTimeoutFailure);
+      const result = await resultPromise;
+
+      expect(result.status).toBe('error');
+      expect(result.error).toContain(deadlineFailure.verdict.reason);
+      expect(result.failureCategory).toBe('part_timeout');
+      expect(sessionCreate).toHaveBeenCalledOnce();
+      expect(promptAsync).toHaveBeenCalledOnce();
+      expect(subscribe).toHaveBeenCalledOnce();
+    } finally {
+      startAttemptSpy.mockRestore();
+      getCallFailureSpy.mockRestore();
+    }
+  });
+
+  it('inactivity timeout signal は未完了の prompt 待ちと iterator close を打ち切る', async () => {
     vi.useFakeTimers();
     const iteratorReturn = vi.fn(() => new Promise<IteratorResult<MockStreamEvent>>(() => {}));
     runPlans = [{
@@ -350,7 +421,7 @@ describe('OpenCodeClient retry', () => {
     const result = await resultPromise;
 
     expect(result.status).toBe('error');
-    expect(result.error).toContain('wall-clock timeout exceeded');
+    expect(result.error).toContain('Part timeout after 60000ms');
     expect(iteratorReturn).toHaveBeenCalledOnce();
   });
 
@@ -400,7 +471,7 @@ describe('OpenCodeClient retry', () => {
     const result = await resultPromise;
 
     expect(result.status).toBe('error');
-    expect(result.error).toContain('wall-clock timeout exceeded');
+    expect(result.error).toContain('Part timeout after 60000ms');
     expect(onStream).toHaveBeenCalledTimes(streamCallsBeforeDeadline);
     expect(promptAsync).toHaveBeenCalledOnce();
     expect(onAskUserQuestion).not.toHaveBeenCalled();
@@ -476,6 +547,7 @@ describe('OpenCodeClient retry', () => {
     ];
     const { sessionCreate, promptAsync, subscribe } = installOpenCodeMock();
     const onStream = vi.fn();
+    const onActivity = vi.fn();
     const logsDir = mkdtempSync(join(tmpdir(), 'takt-opencode-retry-thinking-'));
     const providerLogger = createProviderEventLogger({
       logsDir,
@@ -496,6 +568,7 @@ describe('OpenCodeClient retry', () => {
       const result = await client.call('coder', 'prompt', {
         cwd: '/tmp',
         model: 'opencode/big-pickle',
+        onActivity,
         onStream: (event) => {
           providerLogger.logEvent(logContext, event);
           onStream(event);
@@ -506,6 +579,12 @@ describe('OpenCodeClient retry', () => {
       expect(sessionCreate).toHaveBeenCalledTimes(2);
       expect(promptAsync).toHaveBeenCalledTimes(2);
       expect(subscribe).toHaveBeenCalledTimes(2);
+      expect(onActivity).toHaveBeenCalledTimes(2);
+      expect(onActivity).toHaveBeenNthCalledWith(1, { kind: 'attempt_started' });
+      expect(onActivity).toHaveBeenNthCalledWith(2, { kind: 'attempt_started' });
+      expect(onActivity.mock.invocationCallOrder[1]).toBeLessThan(
+        promptAsync.mock.invocationCallOrder[1]!,
+      );
       expect(onStream.mock.calls.filter(([event]) => (
         event.type === 'text' && event.data.text === 'transient retry tail'
       ))).toHaveLength(1);
@@ -526,6 +605,60 @@ describe('OpenCodeClient retry', () => {
     } finally {
       rmSync(logsDir, { recursive: true, force: true });
     }
+  });
+
+  it('resets the internal inactivity deadline before retry attempt initialization', async () => {
+    vi.useFakeTimers();
+    runPlans = [
+      {
+        type: 'events',
+        events: [{
+          type: 'session.error',
+          properties: {
+            sessionID: 'session-1',
+            error: { name: 'RequestError', data: { message: 'fetch failed' } },
+          },
+        }],
+      },
+      {
+        type: 'events',
+        events: [
+          textPartUpdated('session-1', 'recovered', 'recovered'),
+          { type: 'session.idle', properties: { sessionID: 'session-1' } },
+        ],
+      },
+    ];
+    const { sessionCreate, promptAsync, setActiveSessionId } = installOpenCodeMock();
+    setActiveSessionId('session-1');
+    sessionCreate
+      .mockResolvedValueOnce({ data: { id: 'session-1' } })
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        setTimeout(() => resolve({ data: { id: 'session-1' } }), 59_900);
+      }));
+    const onActivity = vi.fn();
+
+    const resultPromise = new OpenCodeClient().call('coder', 'prompt', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      guards: { callTimeoutMs: 60_000 },
+      onActivity,
+    });
+
+    await vi.advanceTimersByTimeAsync(250);
+    expect(sessionCreate).toHaveBeenCalledTimes(2);
+    expect(onActivity).toHaveBeenNthCalledWith(2, { kind: 'attempt_started' });
+    expect(onActivity.mock.invocationCallOrder[1]).toBeLessThan(
+      sessionCreate.mock.invocationCallOrder[1]!,
+    );
+
+    await vi.advanceTimersByTimeAsync(59_750);
+    expect(promptAsync).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(150);
+    const result = await resultPromise;
+
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('recovered');
+    expect(promptAsync).toHaveBeenCalledTimes(2);
   });
 
   it('replays the OpenCode event order from issue #1130 without mixing reasoning and text', async () => {

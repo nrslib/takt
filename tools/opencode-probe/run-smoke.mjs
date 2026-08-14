@@ -37,7 +37,7 @@ async function runScript(script, args = []) {
 async function verifyDirectPluginProbe() {
   const { stdout } = await withProbeWorkspace(root, 'direct-runtime-', (runtimeRoot) => (
     runSmokeScript(
-      resolve('prompt-evals/plugin-probe.mjs'),
+      resolve('tools/opencode-probe/plugin-probe.mjs'),
       ['--plugin', 'none'],
       prepareIsolatedProbeEnvironment(process.env, runtimeRoot),
       { timeoutMs: SMOKE_SCRIPT_TIMEOUT_MS },
@@ -52,9 +52,9 @@ async function verifyDirectPluginProbe() {
 
 async function runCapture(needle) {
   return withProbeWorkspace(root, 'capture-', (workspace) => (
-    runScript('prompt-evals/sdk-prompt-capture.mjs', [
+    runScript('tools/opencode-probe/sdk-prompt-capture.mjs', [
       '--cwd', workspace,
-      '--taktPrompt', resolve('prompt-evals/prompts/round1.txt'),
+      '--taktPrompt', resolve('tools/opencode-probe/prompts/round1.txt'),
       '--needle', needle,
     ])
   ));
@@ -69,7 +69,7 @@ function assertWorkspaceRemoved(result) {
 async function verifyPluginMode(mode, iteration) {
   let result;
   await withProbeWorkspace(root, `plugin-${mode}-${iteration}-`, async (workspace) => {
-    const { stdout } = await runScript('prompt-evals/plugin-probe.mjs', [
+    const { stdout } = await runScript('tools/opencode-probe/plugin-probe.mjs', [
       '--plugin', mode,
       '--cwd', workspace,
     ]);
@@ -95,7 +95,7 @@ async function verifyPluginMode(mode, iteration) {
 }
 
 async function verifySummarizeProbe() {
-  const { stdout } = await runScript('prompt-evals/summarize-probe.mjs');
+  const { stdout } = await runScript('tools/opencode-probe/summarize-probe.mjs');
   const result = parseProbeResult(stdout);
   assertWorkspaceRemoved(result);
   if (!Number.isInteger(result.summaryCount) || result.summaryCount < 1) {
@@ -107,7 +107,7 @@ async function verifySdkToolCleanupProbe() {
   let result;
   await withProbeWorkspace(root, 'sdk-tool-cleanup-', async (workspace) => {
     const outPath = join(workspace, 'cleanup-result.json');
-    const { stdout } = await runScript('prompt-evals/sdk-tool-eval.mjs', [
+    const { stdout } = await runScript('tools/opencode-probe/sdk-tool-eval.mjs', [
       '--cleanupProbe', 'true',
       '--cwd', workspace,
       '--out', outPath,
@@ -204,7 +204,7 @@ async function verifySdkToolNormalProbe() {
         expectedToolPath = join(workspace, 'tool-target.txt');
         writeFileSync(promptPath, 'Read tool-target.txt with the read tool, then report completion.\n', 'utf8');
         writeFileSync(expectedToolPath, 'SDK_TOOL_PROBE_CONTENT\n', 'utf8');
-        const { stdout } = await runScript('prompt-evals/sdk-tool-eval.mjs', [
+        const { stdout } = await runScript('tools/opencode-probe/sdk-tool-eval.mjs', [
           '--model', 'probe/probe',
           '--providerBaseUrl', `http://127.0.0.1:${address.port}/v1`,
           '--prompt', promptPath,

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkflowState } from '../core/models/types.js';
 import type { CompanionDiffReader } from '../core/workflow/companion/diff-reader.js';
 import { CompanionReviewQueue } from '../core/workflow/companion/review-queue.js';
+import { CompanionStepRuntime } from '../core/workflow/companion/step-runtime.js';
 import { StepExecutor, type StepExecutorDeps } from '../core/workflow/engine/StepExecutor.js';
 import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engine/structured-output-normalizer.js';
 import type { RunPaths } from '../core/workflow/run/run-paths.js';
@@ -248,13 +249,36 @@ describe('companion StepExecutor lifecycle', () => {
       rules: [],
     });
 
-    const result = await new StepExecutor(deps({
+    const executorDeps = deps({
       cwd,
       paths,
       companionEnabled: true,
       companionDiffReader: reviewableDiffReader(),
       emitEvent: vi.fn(),
-    })).runNormalStep(step, workflowState, 'task', 5, vi.fn(), 'Implement.');
+    });
+    const onStream = vi.fn();
+    const onActivity = vi.fn();
+    vi.mocked(executorDeps.optionsBuilder.buildAgentOptions).mockReturnValue({
+      cwd,
+      onStream,
+      onActivity,
+      resolvedExecution: {
+        provider: 'mock',
+        model: undefined,
+        providerOptions: undefined,
+        permissionMode: 'edit',
+      },
+    });
+    const createRuntime = vi.spyOn(CompanionStepRuntime, 'create');
+
+    const result = await new StepExecutor(executorDeps)
+      .runNormalStep(step, workflowState, 'task', 5, vi.fn(), 'Implement.');
+
+    expect(createRuntime).toHaveBeenCalledWith(expect.objectContaining({
+      onStream,
+      onActivity,
+    }));
+    createRuntime.mockRestore();
 
     const executeAgentMock = vi.mocked(executeAgent);
     const coderCallIndices = executeAgentMock.mock.calls

@@ -227,6 +227,27 @@ describe('resolveAutoRoutingRuntime', () => {
     });
   });
 
+  it('passes deadline-scoped callbacks through the resolver to the estimator', async () => {
+    const estimate = vi.fn().mockResolvedValue({ requiredTier: 'low', reasonCodes: ['focused-change'] });
+    const onStream = vi.fn();
+    const onActivity = vi.fn();
+
+    await resolveAutoRoutingRuntime({
+      autoRouting: createAutoRoutingConfig({ rules: {}, poolRules: { steps: { unknown: 'general' } } }),
+      step: createStepMetadata({ name: 'unknown', tags: [] }),
+      snapshot: createSnapshot(),
+      estimator: { estimate },
+      currentProviderInfo: { provider: undefined, model: undefined },
+      onStream,
+      onActivity,
+    });
+
+    expect(estimate).toHaveBeenCalledWith(expect.any(Object), expect.objectContaining({
+      onStream,
+      onActivity,
+    }));
+  });
+
   it('Given an estimator failure, When resolving auto routing, Then it warns and uses the configured pool fallback', async () => {
     const warn = vi.fn();
     const estimator: WorkRequirementEstimator = { estimate: vi.fn().mockRejectedValue(new Error('router timeout')) };

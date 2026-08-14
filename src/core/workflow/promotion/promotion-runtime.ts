@@ -22,6 +22,9 @@ export interface PromotionRuntimeContext {
   previousResponseContent: string;
   structuredCaller?: StructuredCaller;
   childProcessEnv?: RunAgentOptions['childProcessEnv'];
+  abortSignal?: RunAgentOptions['abortSignal'];
+  onStream?: RunAgentOptions['onStream'];
+  onActivity?: RunAgentOptions['onActivity'];
   resolveStepProviderModel: (step: WorkflowStep, runtime?: RuntimeStepResolution) => StepProviderInfo;
   /**
    * Fully-resolved runtime.yaml `ladder` stages (issue #1208). A matched target-less `{at:N}`
@@ -142,6 +145,9 @@ export async function resolvePromotionRuntime(
     resolvedProviderOptions: baseProviderInfo.providerOptions,
     permissionMode: baseProviderInfo.permissionMode,
     childProcessEnv: context.childProcessEnv,
+    abortSignal: context.abortSignal,
+    onStream: context.onStream,
+    onActivity: context.onActivity,
   });
 
   if (promotion !== undefined && isTargetedPromotionEntry(promotion)) {

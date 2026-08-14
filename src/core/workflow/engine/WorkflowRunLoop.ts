@@ -43,10 +43,16 @@ import {
   isAgentFailureError,
   isProviderStreamParseError,
 } from '../../../shared/types/agent-failure.js';
-import type {
-  WorkflowStepAbortSignalContext,
-  WorkflowStepDeadline,
+import {
+  recordWorkflowStepProviderActivity,
+  recordWorkflowStepProviderEventActivity,
+  type WorkflowStepAbortSignalContext,
+  type WorkflowStepInactivityDeadline,
 } from './step-deadline.js';
+import type {
+  ProviderActivityCallback,
+  StreamCallback,
+} from '../../../shared/types/provider.js';
 
 const log = createLogger('workflow-run-loop');
 
@@ -74,12 +80,12 @@ interface WorkflowRunLoopDeps {
     step: WorkflowStep,
     runtime: RuntimeStepResolution | undefined,
     stepIteration: number,
-  ) => WorkflowStepDeadline;
+  ) => WorkflowStepInactivityDeadline;
   refreshStepDeadline?: (
     step: WorkflowStep,
     runtime: RuntimeStepResolution | undefined,
     stepIteration: number,
-  ) => WorkflowStepDeadline;
+  ) => WorkflowStepInactivityDeadline;
   disposeStepDeadline?: (step: WorkflowStep, stepIteration: number) => void;
   disposeAllStepDeadlines?: () => void;
   stepAbortSignalContext?: WorkflowStepAbortSignalContext;
@@ -144,17 +150,39 @@ interface WorkflowRunLoopDeps {
 
 async function runWithStepDeadline<T>(
   deps: WorkflowRunLoopDeps,
-  deadline: WorkflowStepDeadline | undefined,
+  deadline: WorkflowStepInactivityDeadline | undefined,
   operation: () => Promise<T>,
 ): Promise<T> {
   if (deadline === undefined || deps.stepAbortSignalContext === undefined) {
     return operation();
   }
-  return deps.stepAbortSignalContext.runWith(deadline.signal, operation);
+  return deps.stepAbortSignalContext.runWith(deadline, operation);
 }
 
 function resolveStepAbortSignal(deps: WorkflowRunLoopDeps): AbortSignal | undefined {
   return deps.stepAbortSignalContext?.getAbortSignal() ?? deps.options.abortSignal;
+}
+
+function buildDeadlineActivityCallbacks(
+  deps: WorkflowRunLoopDeps,
+  executionUnitKey: string,
+): { onStream?: StreamCallback; onActivity?: ProviderActivityCallback } {
+  const recordActivity = deps.stepAbortSignalContext?.recordActivity;
+  if (recordActivity === undefined) {
+    return {};
+  }
+  return {
+    onStream: (event) => recordWorkflowStepProviderEventActivity(
+      recordActivity,
+      executionUnitKey,
+      event,
+    ),
+    onActivity: (activity) => recordWorkflowStepProviderActivity(
+      recordActivity,
+      executionUnitKey,
+      activity,
+    ),
+  };
 }
 
 async function resolveStepPromotionRuntime(
@@ -171,6 +199,8 @@ async function resolveStepPromotionRuntime(
     resolveStepProviderModel: deps.resolveStepProviderModelBeforeAutoRouting,
     providerLadders: deps.options.providerLadders,
     providerRoutingTagConflictPolicy: deps.options.providerRoutingTagConflictPolicy,
+    abortSignal: resolveStepAbortSignal(deps),
+    ...buildDeadlineActivityCallbacks(deps, `promotion:${step.name}`),
   }, step, stepIteration, runtime);
 }
 
@@ -225,6 +255,7 @@ async function resolveStepAutoRoutingRuntime(
     runtime: deps.options.routingRuntime,
     logger: log,
     abortSignal: resolveStepAbortSignal(deps),
+    ...buildDeadlineActivityCallbacks(deps, `auto-routing:${step.name}`),
   });
   if (!autoRuntime) {
     return runtime;
@@ -825,7 +856,7 @@ async function runWorkflowToCompletionCore(deps: WorkflowRunLoopDeps): Promise<W
       abort = abortWorkflowRuntimeError(deps, error);
       break;
     }
-    let stepDeadline: WorkflowStepDeadline | undefined;
+    let stepDeadline: WorkflowStepInactivityDeadline | undefined;
     let stepRuntime: RuntimeStepResolution | undefined;
     let preparedExecution: PreparedNormalStepExecution | undefined;
     let executionStep: WorkflowStep;
@@ -1217,7 +1248,7 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
   const isDelegated = isDelegatedWorkflowStep(step);
   const stepIteration = deps.claimStepOccurrence(step);
   const workflowCallExecution = deps.setActiveStep(step, activeIteration, stepIteration);
-  let stepDeadline: WorkflowStepDeadline | undefined;
+  let stepDeadline: WorkflowStepInactivityDeadline | undefined;
   try {
     stepDeadline = isNormalAgentWorkflowStep(step)
       ? deps.beginStepDeadline?.(

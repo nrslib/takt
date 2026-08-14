@@ -69,6 +69,7 @@ import {
 } from './unavailable-tool-recovery.js';
 import { createOpenCodeSessionLifecycle } from './session-lifecycle.js';
 import type { OpenCodeSessionLifecycle } from './session-lifecycle.js';
+import { AGENT_FAILURE_CATEGORIES } from '../../shared/types/agent-failure.js';
 import { buildRateLimitedResponseFields, containsRateLimitError } from '../rate-limit/detection.js';
 import {
   createSensitiveTextStreamRedactor,
@@ -796,6 +797,7 @@ export class OpenCodeAttemptRunner {
     const provisionalKey = `provisional-${nextProvisionalId++}`;
     try {
       for (let attempt = 1; attempt <= callState.maxAttempts; attempt++) {
+        guardedOptions.onActivity?.({ kind: 'attempt_started' });
         const result = await this.runAttempt(
           agentType,
           prompt,
@@ -931,6 +933,9 @@ export class OpenCodeAttemptRunner {
       error: errorMessage,
       timestamp: new Date(),
       sessionId,
+      ...(abortCause === 'deadline'
+        ? { failureCategory: AGENT_FAILURE_CATEGORIES.PART_TIMEOUT }
+        : {}),
     };
   };
 
@@ -976,6 +981,14 @@ export class OpenCodeAttemptRunner {
     const failure = guardSuite.getCallFailure();
     throw new Error(failure?.verdict.reason ?? OPENCODE_STREAM_ABORTED_MESSAGE);
   };
+
+  guardSuite.startAttempt((failure) => {
+    if (streamAbortController.signal.aborted) return;
+    timeoutMessage = failure.verdict.reason;
+    log.warn(failure.verdict.reason, { sessionId, model: options.model });
+    abortCause = 'timeout';
+    streamAbortController.abort(new Error(failure.verdict.reason));
+  });
 
   let attemptResult: AgentResponse | typeof RETRY_ATTEMPT;
   try {
@@ -1090,12 +1103,6 @@ export class OpenCodeAttemptRunner {
       { signal: streamAbortController.signal },
     );
     throwIfCallAborted();
-    guardSuite.startAttempt((failure) => {
-      timeoutMessage = failure.verdict.reason;
-      log.warn(failure.verdict.reason, { sessionId, model: options.model });
-      abortCause = 'timeout';
-      streamAbortController.abort(new Error(failure.verdict.reason));
-    });
     diag.onConnected();
     if (appliedPermissionRuleset) {
       emitPermissionSummary(options.onStream, {
@@ -2093,6 +2100,9 @@ export class OpenCodeAttemptRunner {
       error: sanitizedErrorMessage,
       timestamp: new Date(),
       sessionId,
+      ...(abortCause === 'deadline'
+        ? { failureCategory: AGENT_FAILURE_CATEGORIES.PART_TIMEOUT }
+        : {}),
     };
   } finally {
     guardSuite.stopAttempt();

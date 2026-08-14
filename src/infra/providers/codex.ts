@@ -27,6 +27,7 @@ function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
     permissionMode: options.permissionMode,
     networkAccess: options.providerOptions?.codex?.networkAccess,
     onStream: options.onStream,
+    onActivity: options.onActivity,
     openaiApiKey: options.openaiApiKey ?? resolveOpenaiApiKey(),
     baseUrl: options.providerOptions?.codex?.baseUrl,
     skills: options.internalAgentIsolation === 'strict-readonly'

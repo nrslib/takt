@@ -4,6 +4,6 @@
     "noEmit": true,
     "rootDir": "."
   },
-  "include": ["prompt-evals/**/*.d.mts"],
+  "include": ["tools/opencode-probe/**/*.d.mts"],
   "exclude": ["node_modules", "dist"]
 }

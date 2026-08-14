@@ -37,6 +37,7 @@ describe('PiProvider', () => {
     const provider = new PiProvider();
     const agent = provider.setup({ name: 'worker', systemPrompt: 'Be concise.' });
     const onStream = vi.fn();
+    const onActivity = vi.fn();
     const abortController = new AbortController();
 
     await agent.call('implement', {
@@ -51,6 +52,7 @@ describe('PiProvider', () => {
       },
       abortSignal: abortController.signal,
       onStream,
+      onActivity,
     });
 
     expect(mockCallPi).toHaveBeenCalledWith('worker', 'implement', {
@@ -64,6 +66,7 @@ describe('PiProvider', () => {
       abortSignal: abortController.signal,
       systemPrompt: 'Be concise.',
       onStream,
+      onActivity,
       childProcessEnv: undefined,
     });
   });

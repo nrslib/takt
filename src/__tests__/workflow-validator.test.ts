@@ -505,6 +505,22 @@ describe('validateWorkflowConfig', () => {
     );
   });
 
+  it('allows the engine-produced terminal error aggregate label without reviewer-authored error rules', () => {
+    const workflow = createProgrammaticDynamicParallelWorkflow([], [{
+      name: 'frontend',
+      description: 'Review frontend',
+      personaDisplayName: 'frontend',
+      instruction: 'review frontend',
+      rules: [normalizeRule({ condition: 'approved' })],
+    }]);
+    workflow.steps[0]!.rules = [
+      normalizeRule({ condition: 'any("error")', next: 'reviewers' }),
+      normalizeRule({ condition: 'all("approved")', next: 'COMPLETE' }),
+    ];
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).not.toThrow();
+  });
+
   it('fails fast when a parallel step contains duplicate sibling sub-step names', () => {
     const workflow = createWorkflow({
       initialStep: 'reviewers',

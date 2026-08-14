@@ -782,16 +782,24 @@ describe('QueryExecutor rate limit cause preservation', () => {
     // Given
     queryMock.mockImplementation(() => createMockQuery([], new Error(EXIT_CODE_MESSAGE)));
     const executor = new QueryExecutor();
+    const onActivity = vi.fn();
 
     // When
     const result = await executor.execute('test prompt', {
       cwd: '/tmp/project',
       sessionId: 'resume-session-1',
+      onActivity,
     });
 
     // Then
     expect(result.error).toBe(EXIT_CODE_MESSAGE);
     expect(queryMock).toHaveBeenCalledTimes(2);
+    expect(onActivity).toHaveBeenCalledTimes(2);
+    expect(onActivity).toHaveBeenNthCalledWith(1, { kind: 'attempt_started' });
+    expect(onActivity).toHaveBeenNthCalledWith(2, { kind: 'attempt_started' });
+    expect(onActivity.mock.invocationCallOrder[1]).toBeLessThan(
+      queryMock.mock.invocationCallOrder[1]!,
+    );
     expect(
       (queryMock.mock.calls[0]?.[0] as { options?: { resume?: string } }).options?.resume,
     ).toBe('resume-session-1');

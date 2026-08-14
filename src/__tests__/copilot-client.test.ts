@@ -98,6 +98,7 @@ describe('callCopilot', () => {
   });
 
   it('should invoke copilot with required args including --silent, --no-color', async () => {
+    const onActivity = vi.fn();
     mockSpawnWithScenario({
       stdout: 'Implementation complete. All tests pass.',
       code: 0,
@@ -109,11 +110,13 @@ describe('callCopilot', () => {
       sessionId: 'sess-prev',
       permissionMode: 'full',
       copilotGithubToken: 'gh-token',
+      onActivity,
     });
 
     expect(result.status).toBe('done');
     expect(result.content).toBe('Implementation complete. All tests pass.');
     expect(result.sessionId).toBe('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee');
+    expect(onActivity).toHaveBeenCalledOnce();
 
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     const [command, args, options] = mockSpawn.mock.calls[0] as [string, string[], { env?: NodeJS.ProcessEnv; stdio?: unknown }];

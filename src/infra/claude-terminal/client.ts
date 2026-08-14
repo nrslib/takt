@@ -159,7 +159,6 @@ export async function callClaudeTerminal(
 ): Promise<AgentResponse> {
   const backendName = options.backend ?? DEFAULT_BACKEND;
   const callTimeoutMs = options.callTimeoutMs ?? options.timeoutMs ?? PROVIDER_CALL_TIMEOUT_DEFAULT_MS;
-  const deadlineAt = Date.now() + callTimeoutMs;
   const pollIntervalMs = options.transcriptPollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const keepSession = options.keepSession === true;
   const terminalBackend = resolveTerminalBackend(backendName, options.terminalBackend);
@@ -277,6 +276,7 @@ export async function callClaudeTerminal(
       outputSchema: options.outputSchema,
     });
 
+    options.onActivity?.({ kind: 'attempt_started' });
     const startedSession = await withAbort(() => {
       const startPromise = terminalBackend.start({
         cwd: options.cwd,
@@ -301,10 +301,10 @@ export async function callClaudeTerminal(
     const session = await withAbort(() => transcriptReader.findSession({
       cwd: options.cwd,
       sessionId: claudeSessionId,
-      deadlineAt,
       timeoutMs: callTimeoutMs,
       pollIntervalMs,
       abortSignal: options.abortSignal,
+      onActivity: options.onActivity,
     }));
     responseSessionId = session.sessionId;
     emitInit(options, session.sessionId);
@@ -312,14 +312,15 @@ export async function callClaudeTerminal(
     const handledEvents: ClaudeTerminalEvent[] = [];
     let response: ClaudeTerminalTranscript;
     while (true) {
+      options.onActivity?.({ kind: 'attempt_started' });
       response = await withAbort(() => transcriptReader.waitForAssistantResponse({
         session,
         baseline,
         cwd: options.cwd,
-        deadlineAt,
         timeoutMs: callTimeoutMs,
         pollIntervalMs,
         abortSignal: options.abortSignal,
+        onActivity: options.onActivity,
       }));
 
       handledEvents.push(...response.events);
@@ -361,7 +362,16 @@ export async function callClaudeTerminal(
     ) {
       return createAbortResponse(agentName, error.reason, responseSessionId);
     }
-    return createErrorResponse(agentName, getErrorMessage(error), AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR, responseSessionId);
+    const errorMessage = getErrorMessage(error);
+    const classified = classifyAbortSignalReason(errorMessage);
+    return createErrorResponse(
+      agentName,
+      errorMessage,
+      classified.category === AGENT_FAILURE_CATEGORIES.PART_TIMEOUT
+        ? classified.category
+        : AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+      responseSessionId,
+    );
   } finally {
     if (abortHandler) {
       options.abortSignal?.removeEventListener('abort', abortHandler);

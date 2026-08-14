@@ -13,8 +13,8 @@
  *   Fix: toMockOptions() now forwards options.abortSignal.
  */
 
-import { afterEach, describe, expect, it } from 'vitest';
-import { callMock } from '../infra/mock/client.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { callMock, callMockCustom } from '../infra/mock/client.js';
 import { ScenarioQueue, setMockScenario, resetScenario } from '../infra/mock/scenario.js';
 
 afterEach(() => {
@@ -69,6 +69,24 @@ describe('ScenarioQueue: persona name matching for path-style persona specs', ()
 // ---------------------------------------------------------------------------
 
 describe('callMock: abortSignal propagation during mock delay', () => {
+  it.each([
+    ['standard', (onActivity: ReturnType<typeof vi.fn>) => callMock('coder', 'task', {
+      cwd: '/tmp/project',
+      onActivity,
+    })],
+    ['custom', (onActivity: ReturnType<typeof vi.fn>) => callMockCustom('coder', 'task', 'system', {
+      cwd: '/tmp/project',
+      onActivity,
+    })],
+  ])('%s call emits attempt_started before completing', async (_label, invoke) => {
+    const onActivity = vi.fn();
+
+    await invoke(onActivity);
+
+    expect(onActivity).toHaveBeenCalledOnce();
+    expect(onActivity).toHaveBeenCalledWith({ kind: 'attempt_started' });
+  });
+
   it('should remain pending until waitForAbort receives an abort signal', async () => {
     setMockScenario([{ status: 'done', content: 'Done', waitForAbort: true }]);
     const controller = new AbortController();

@@ -15,6 +15,7 @@ let startThreadCalls: Array<Record<string, unknown> | undefined> = [];
 let resumeThreadCalls: Array<{ threadId: string; options?: Record<string, unknown> }> = [];
 let runStreamedInputs: unknown[] = [];
 let codexConstructorCalls: Array<Record<string, unknown> | undefined> = [];
+let attemptOrder: string[] = [];
 const tempRoots = new Set<string>();
 const CODEX_STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const CODEX_RECONNECT_FAILURE_MESSAGE = 'Reconnecting... 2/5 (timeout waiting for child process to exit)';
@@ -122,11 +123,13 @@ vi.mock('@openai/codex-sdk', () => {
       }
 
       async startThread(options?: Record<string, unknown>) {
+        attemptOrder.push('provider');
         startThreadCalls.push(options);
         return createThread('thread-1');
       }
 
       async resumeThread(threadId: string, options?: Record<string, unknown>) {
+        attemptOrder.push('provider');
         resumeThreadCalls.push({ threadId, options });
         return createThread(threadId);
       }
@@ -146,6 +149,7 @@ describe('CodexClient retry', () => {
     resumeThreadCalls = [];
     runStreamedInputs = [];
     codexConstructorCalls = [];
+    attemptOrder = [];
   });
 
   afterEach(() => {
@@ -255,8 +259,9 @@ describe('CodexClient retry', () => {
     ];
 
     const client = new CodexClient();
+    const onActivity = vi.fn(() => attemptOrder.push('activity'));
 
-    const resultPromise = client.call('coder', 'prompt', { cwd: '/tmp' });
+    const resultPromise = client.call('coder', 'prompt', { cwd: '/tmp', onActivity });
 
     await vi.advanceTimersByTimeAsync(999);
     expect(resumeThreadCalls).toHaveLength(0);
@@ -273,6 +278,10 @@ describe('CodexClient retry', () => {
     ]);
     expect(result.status).toBe('done');
     expect(result.content).toBe('retry succeeded');
+    expect(onActivity).toHaveBeenCalledTimes(2);
+    expect(onActivity).toHaveBeenNthCalledWith(1, { kind: 'attempt_started' });
+    expect(onActivity).toHaveBeenNthCalledWith(2, { kind: 'attempt_started' });
+    expect(attemptOrder).toEqual(['activity', 'provider', 'activity', 'provider']);
   });
 
   it('retry と session resume に同じ Codex Skill override を適用する', async () => {

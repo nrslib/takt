@@ -177,16 +177,20 @@ describe('Pi SDK client', () => {
   it('streams text and returns the SDK session response', async () => {
     mocks.resetTransient();
     const events: string[] = [];
+    const onActivity = vi.fn();
 
     const response = await callPi('worker', 'do the work', {
       ...sessionOptions('pi-sdk-success'),
       onStream: (event) => events.push(event.type),
+      onActivity,
     });
 
     expect(response.status).toBe('done');
     expect(response.content).toBe('hello from pi');
     expect(response.sessionId).toMatch(/^sdk-session-\d+$/u);
     expect(events).toEqual(['init', 'text', 'result']);
+    expect(onActivity).toHaveBeenCalledOnce();
+    expect(onActivity).toHaveBeenCalledWith({ kind: 'attempt_started' });
     expect(mocks.modelRuntimeCreate).toHaveBeenCalledWith({
       credentials: expect.anything(),
       modelsPath: path.join(tmpdir(), 'pi-agent-test', 'models.json'),

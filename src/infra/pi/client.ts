@@ -1041,6 +1041,7 @@ export async function callPi(
         const imagePrompt = options.imageAttachments && options.imageAttachments.length > 0
           ? `${prompt}\n\n${options.imageAttachments.map((attachment) => attachment.placeholder).join('\n')}`
           : prompt;
+        options.onActivity?.({ kind: 'attempt_started' });
         const promptPromise = session.prompt(
           imagePrompt,
           images.length > 0 ? { images } : undefined,

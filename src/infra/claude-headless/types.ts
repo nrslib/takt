@@ -1,6 +1,10 @@
 import type { McpServerConfig, PermissionMode } from '../../core/models/index.js';
 import type { ClaudeEffort, ClaudeSandboxSettings } from '../../core/models/workflow-types.js';
-import type { InternalAgentIsolation, StreamCallback } from '../../shared/types/provider.js';
+import type {
+  InternalAgentIsolation,
+  ProviderActivityCallback,
+  StreamCallback,
+} from '../../shared/types/provider.js';
 
 export interface ClaudeHeadlessCallOptions {
   cwd: string;
@@ -19,6 +23,7 @@ export interface ClaudeHeadlessCallOptions {
   bypassPermissions?: boolean;
   sandbox?: ClaudeSandboxSettings;
   onStream?: StreamCallback;
+  onActivity?: ProviderActivityCallback;
   claudeCliPath?: string;
   systemPrompt?: string;
   outputSchema?: Record<string, unknown>;

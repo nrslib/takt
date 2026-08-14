@@ -14,21 +14,21 @@ import {
   summarizeOpenCodeSession,
   type OpenCodeProbeClient,
   type OpenCodeRunnableProbeClient,
-} from '../../prompt-evals/opencode-probe-lifecycle.mjs';
+} from '../../tools/opencode-probe/opencode-probe-lifecycle.mjs';
 import {
   parseProbeResult,
   runProbeProcess,
-} from '../../prompt-evals/probe-process.mjs';
-import { terminateWindowsProcessTree } from '../../prompt-evals/process-tree.mjs';
+} from '../../tools/opencode-probe/probe-process.mjs';
+import { terminateWindowsProcessTree } from '../../tools/opencode-probe/process-tree.mjs';
 import {
   runSmokeScript,
   type SmokeBatchResult,
-} from '../../prompt-evals/smoke-process.mjs';
+} from '../../tools/opencode-probe/smoke-process.mjs';
 import {
   markProbeWorkerEnvironment,
   prepareIsolatedProbeEnvironment,
-} from '../../prompt-evals/probe-environment.mjs';
-import { withProbeWorkspace } from '../../prompt-evals/probe-workspace.mjs';
+} from '../../tools/opencode-probe/probe-environment.mjs';
+import { withProbeWorkspace } from '../../tools/opencode-probe/probe-workspace.mjs';
 
 interface SmokeFixtureCase {
   name: string;
@@ -44,10 +44,10 @@ const PROBE_PHASE_BUDGET_MS = process.platform === 'win32' ? 2_000 : 500;
 const OWNED_ENTRYPOINT_TIMEOUT_MS = process.platform === 'win32' ? 10_000 : 2_000;
 
 const smokeBatchFixture = fileURLToPath(
-  new URL('../../prompt-evals/fixtures/run-smoke-batch.mjs', import.meta.url),
+  new URL('../../tools/opencode-probe/fixtures/run-smoke-batch.mjs', import.meta.url),
 );
 const smokeCaseFixture = fileURLToPath(
-  new URL('../../prompt-evals/fixtures/smoke-case.mjs', import.meta.url),
+  new URL('../../tools/opencode-probe/fixtures/smoke-case.mjs', import.meta.url),
 );
 
 describe('prompt eval probe lifecycle', () => {
@@ -312,8 +312,8 @@ describe('prompt eval probe lifecycle', () => {
     const testRoot = mkdtempSync(join(tmpdir(), 'takt-probe-startup-failure-'));
     temporaryDirectories.push(testRoot);
     const script = join(testRoot, 'startup-failure.mjs');
-    const lifecycleUrl = new URL('../../prompt-evals/opencode-probe-lifecycle.mjs', import.meta.url).href;
-    const processUrl = new URL('../../prompt-evals/probe-process.mjs', import.meta.url).href;
+    const lifecycleUrl = new URL('../../tools/opencode-probe/opencode-probe-lifecycle.mjs', import.meta.url).href;
+    const processUrl = new URL('../../tools/opencode-probe/probe-process.mjs', import.meta.url).href;
     writeFileSync(script, [
       `import { runOpenCodeProbe } from ${JSON.stringify(lifecycleUrl)}`,
       `import { reportProbePhase } from ${JSON.stringify(processUrl)}`,
@@ -450,18 +450,82 @@ describe('prompt eval probe lifecycle', () => {
     expect(executeFile).toHaveBeenCalledWith(
       'taskkill',
       ['/PID', '4321', '/T', '/F'],
+      { timeout: 5_000 },
     );
   });
 
+  it.each([
+    ['PowerShell fails', () => { throw new Error('PowerShell failed'); }],
+    ['PowerShell returns malformed JSON', () => ({ stdout: '{invalid' })],
+  ])('should still taskkill the root when %s during the initial snapshot', async (_scenario, query) => {
+    const executeFile = vi.fn(async (file: string) => (
+      file === 'powershell.exe' ? query() : undefined
+    ));
+
+    await expect(terminateWindowsProcessTree(4321, executeFile)).resolves.toBeUndefined();
+
+    expect(executeFile).toHaveBeenCalledWith(
+      'taskkill',
+      ['/PID', '4321', '/T', '/F'],
+      { timeout: 5_000 },
+    );
+  });
+
+  it.each(['descendant identity', 'final remaining-process'])(
+    'should keep taskkill best-effort when the %s query returns malformed JSON',
+    async (failureStage) => {
+      let fullSnapshot = 0;
+      const executeFile = vi.fn(async (file: string, args: readonly string[]) => {
+        if (file !== 'powershell.exe') return undefined;
+        if (args[3]?.includes('-Filter')) {
+          return failureStage === 'descendant identity'
+            ? { stdout: '{invalid' }
+            : { stdout: JSON.stringify({
+              ProcessId: 5001,
+              ParentProcessId: 4321,
+              CreationDate: 'created-5001',
+            }) };
+        }
+        fullSnapshot += 1;
+        if (fullSnapshot === 1) {
+          return { stdout: JSON.stringify({
+            ProcessId: 5001,
+            ParentProcessId: 4321,
+            CreationDate: 'created-5001',
+          }) };
+        }
+        return failureStage === 'final remaining-process'
+          ? { stdout: '{invalid' }
+          : { stdout: '[]' };
+      });
+
+      await expect(terminateWindowsProcessTree(4321, executeFile)).resolves.toBeUndefined();
+
+      expect(executeFile).toHaveBeenCalledWith(
+        'taskkill',
+        ['/PID', '5001', '/T', '/F'],
+        { timeout: 5_000 },
+      );
+    },
+  );
+
   it('should terminate recorded Windows descendants after the parent has already exited', async () => {
-    let snapshot = 0;
+    let fullSnapshot = 0;
     const executeFile = vi.fn(async (file: string, args: readonly string[]) => {
       if (file === 'powershell.exe') {
-        snapshot += 1;
-        return snapshot === 1
+        if (args[3]?.includes('-Filter')) {
+          const processId = args[3].includes('5002') ? 5002 : 5001;
+          return { stdout: JSON.stringify({
+            ProcessId: processId,
+            ParentProcessId: processId === 5002 ? 5001 : 4321,
+            CreationDate: `created-${processId}`,
+          }) };
+        }
+        fullSnapshot += 1;
+        return fullSnapshot === 1
           ? { stdout: JSON.stringify([
-            { ProcessId: 5001, ParentProcessId: 4321 },
-            { ProcessId: 5002, ParentProcessId: 5001 },
+            { ProcessId: 5001, ParentProcessId: 4321, CreationDate: 'created-5001' },
+            { ProcessId: 5002, ParentProcessId: 5001, CreationDate: 'created-5002' },
           ]) }
           : { stdout: '[]' };
       }
@@ -470,21 +534,73 @@ describe('prompt eval probe lifecycle', () => {
       }
       return undefined;
     });
-    const killSpy = vi.spyOn(process, 'kill').mockImplementation((pid) => {
-      if (pid === 4321) {
-        throw Object.assign(new Error('not found'), { code: 'ESRCH' });
+
+    await terminateWindowsProcessTree(4321, executeFile);
+
+    expect(executeFile).toHaveBeenCalledWith(
+      'taskkill',
+      ['/PID', '5002', '/T', '/F'],
+      { timeout: 5_000 },
+    );
+    expect(executeFile).toHaveBeenCalledWith(
+      'taskkill',
+      ['/PID', '5001', '/T', '/F'],
+      { timeout: 5_000 },
+    );
+  });
+
+  it('should ignore taskkill failure when a descendant PID is later reused', async () => {
+    let fullSnapshot = 0;
+    const executeFile = vi.fn(async (file: string, args: readonly string[]) => {
+      if (file === 'taskkill' && args[1] === '5001') {
+        throw new Error('taskkill failed');
       }
-      return true;
+      if (args[3]?.includes('-Filter')) {
+        return { stdout: JSON.stringify({
+          ProcessId: 5001,
+          ParentProcessId: 4321,
+          CreationDate: 'created-original',
+        }) };
+      }
+      fullSnapshot += 1;
+      return fullSnapshot === 1
+        ? { stdout: JSON.stringify({
+          ProcessId: 5001,
+          ParentProcessId: 4321,
+          CreationDate: 'created-original',
+        }) }
+        : { stdout: JSON.stringify({
+          ProcessId: 5001,
+          ParentProcessId: 9999,
+          CreationDate: 'created-reused',
+        }) };
     });
 
-    try {
-      await terminateWindowsProcessTree(4321, executeFile);
-    } finally {
-      killSpy.mockRestore();
-    }
+    await expect(terminateWindowsProcessTree(4321, executeFile)).resolves.toBeUndefined();
 
-    expect(executeFile).toHaveBeenCalledWith('taskkill', ['/PID', '5002', '/T', '/F']);
-    expect(executeFile).toHaveBeenCalledWith('taskkill', ['/PID', '5001', '/T', '/F']);
+    expect(executeFile).toHaveBeenCalledWith(
+      'taskkill',
+      ['/PID', '5001', '/T', '/F'],
+      { timeout: 5_000 },
+    );
+  });
+
+  it('should throw when a snapshotted Windows process remains alive', async () => {
+    const processSnapshot = JSON.stringify({
+      ProcessId: 4321,
+      ParentProcessId: 1000,
+      CreationDate: 'created-root',
+    });
+    const executeFile = vi.fn(async (file: string) => {
+      if (file === 'taskkill') {
+        throw new Error('taskkill failed');
+      }
+      return { stdout: processSnapshot };
+    });
+
+    await expect(terminateWindowsProcessTree(4321, executeFile)).rejects.toThrow(
+      'Windows process tree 4321 retained processes: 4321',
+    );
   });
 
   it('should stop the timed-out child and grandchild before removing the parent-owned workspace', async () => {
@@ -846,7 +962,7 @@ describe('prompt eval probe lifecycle', () => {
     const testRoot = mkdtempSync(join(tmpdir(), 'takt-smoke-outer-timeout-'));
     temporaryDirectories.push(testRoot);
     const script = join(testRoot, 'outer-probe.mjs');
-    const probeProcessUrl = new URL('../../prompt-evals/probe-process.mjs', import.meta.url).href;
+    const probeProcessUrl = new URL('../../tools/opencode-probe/probe-process.mjs', import.meta.url).href;
     const workerSource = [
       "const { spawn } = require('node:child_process')",
       "const worker = spawn(process.execPath, ['-e', \"process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)\"], { stdio: 'ignore' })",
@@ -1058,7 +1174,7 @@ describe('prompt eval probe lifecycle', () => {
     const testRoot = mkdtempSync(join(tmpdir(), 'takt-probe-owned-entrypoint-'));
     temporaryDirectories.push(testRoot);
     const script = join(testRoot, 'owned-entrypoint-probe.mjs');
-    const entrypointUrl = new URL('../../prompt-evals/probe-entrypoint.mjs', import.meta.url).href;
+    const entrypointUrl = new URL('../../tools/opencode-probe/probe-entrypoint.mjs', import.meta.url).href;
     writeFileSync(script, [
       "import { mkdtempSync } from 'node:fs'",
       "import { tmpdir } from 'node:os'",
@@ -1088,7 +1204,7 @@ describe('prompt eval probe lifecycle', () => {
     const testRoot = mkdtempSync(join(tmpdir(), 'takt-probe-entrypoint-output-'));
     temporaryDirectories.push(testRoot);
     const script = join(testRoot, 'owned-entrypoint-output.mjs');
-    const entrypointUrl = new URL('../../prompt-evals/probe-entrypoint.mjs', import.meta.url).href;
+    const entrypointUrl = new URL('../../tools/opencode-probe/probe-entrypoint.mjs', import.meta.url).href;
     const stdoutPayloadBytes = 256 * 1024;
     const stderrPayloadBytes = 128 * 1024;
     writeFileSync(script, [

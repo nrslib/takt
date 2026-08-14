@@ -204,6 +204,7 @@ export interface WorkflowSharedRuntimeState {
   dynamicFacetSelectionStore?: import('./dynamic-facets/dynamicFacetSelectionStore.js').DynamicFacetSelectionStore;
   workflowCallInvocationEvidence?: WorkflowCallInvocationEvidence;
   workflowStepParticipationIndex?: WorkflowStepParticipationIndex;
+  resumeArtifactOccurrenceIndex?: import('./run/resume-artifact-occurrence-index.js').ResumeArtifactOccurrenceIndex;
 }
 
 export type WorkflowAbortKind =

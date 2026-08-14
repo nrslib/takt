@@ -166,6 +166,7 @@ export async function callClaudeHeadless(
     const prepared = await buildSpawnArgs(prompt, options);
     cleanup = prepared.cleanup;
     const { args, expectedSessionId } = prepared;
+    options.onActivity?.({ kind: 'attempt_started' });
     const { stdout, stderr } = await runHeadlessCli(args, options);
     const parsed = aggregateResultFromStdout(stdout);
     const sessionId = extractSessionIdFromStdout(stdout) ?? expectedSessionId;

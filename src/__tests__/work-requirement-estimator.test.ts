@@ -305,6 +305,35 @@ describe('createWorkRequirementEstimator', () => {
     expect(vi.mocked(runAgent).mock.calls[0]?.[2]?.abortSignal).toBeInstanceOf(AbortSignal);
   });
 
+  it('passes deadline-scoped stream and activity callbacks to the structured provider call', async () => {
+    vi.mocked(runAgent).mockResolvedValue({
+      persona: 'auto-router',
+      status: 'done',
+      content: '{}',
+      timestamp: new Date('2026-08-14T00:00:00.000Z'),
+      structuredOutput: {
+        required_tier: 'low',
+        reason_codes: ['focused-change'],
+        confidence: null,
+      },
+    });
+    const estimator = createWorkRequirementEstimator({
+      cwd: '/repo',
+      provider: 'claude-sdk',
+      model: 'claude-haiku-4-5-20251001',
+    });
+    const onStream = vi.fn();
+    const onActivity = vi.fn();
+
+    await estimator.estimate(createModelInput(), { onStream, onActivity });
+
+    expect(runAgent).toHaveBeenCalledWith(
+      'auto-router',
+      expect.any(String),
+      expect.objectContaining({ onStream, onActivity }),
+    );
+  });
+
   it('Given the router never responds, When the estimator timeout elapses, Then it fails instead of hanging the workflow', async () => {
     vi.useFakeTimers();
     vi.mocked(runAgent).mockReturnValue(new Promise(() => {}));

@@ -32,6 +32,7 @@ function toHeadlessOptions(options: ProviderCallOptions): ClaudeHeadlessCallOpti
     bypassPermissions: options.bypassPermissions,
     sandbox: claudeOptions?.sandbox,
     onStream: options.onStream,
+    onActivity: options.onActivity,
     claudeCliPath: resolveClaudeCliPath() ?? undefined,
     outputSchema: options.outputSchema,
     childProcessEnv: options.childProcessEnv,

@@ -121,6 +121,8 @@ describe('WorkflowEngine completion retry wiring', () => {
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       if (options.internalAgentName === 'review-completion-judge') {
         expect(options.sessionId).toBeUndefined();
+        expect(options.onStream).toEqual(expect.any(Function));
+        expect(options.onActivity).toEqual(expect.any(Function));
         return judgeResponse(true);
       }
       options.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: instruction });

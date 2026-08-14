@@ -75,6 +75,8 @@ steps:
                 - {action}
                 ```
     rules:
+      - condition: any("error")
+        next: evaluate
       - condition: any("done")
         next: synthesize
   - name: synthesize
@@ -94,8 +96,8 @@ steps:
       1. Read reports in the Report Directory
          - `eye1-review.md` (eye 1's response)
          - `eye2-review.md` (eye 2's response)
-         Note: If one report is missing (that eye failed), synthesize from the available report only
-      2. If both reports exist, compare and clarify:
+         Both reports are required; the evaluate step retries when either eye ends in error.
+      2. Compare and clarify:
          - Points of agreement
          - Points of disagreement
          - Points mentioned by only one eye

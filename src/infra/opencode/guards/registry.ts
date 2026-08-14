@@ -7,7 +7,7 @@ import {
   TextVolumeGuard,
   TrackedIdsGuard,
 } from './resource-guards.js';
-import { WallClockGuard } from './time-guards.js';
+import { InactivityTimeoutGuard } from './time-guards.js';
 import type { OpenCodeGuardDescriptor } from './types.js';
 
 export const OPENCODE_GUARD_REGISTRY: readonly OpenCodeGuardDescriptor[] = Object.freeze([
@@ -21,7 +21,7 @@ export const OPENCODE_GUARD_REGISTRY: readonly OpenCodeGuardDescriptor[] = Objec
     mandatory: true,
     create: (_policy, context) => new SensitiveBudgetGuard(context.sensitiveValues),
   },
-  { id: 'wall-clock', layer: 'time', mandatory: true, create: (policy) => new WallClockGuard(policy.callTimeoutMs) },
+  { id: 'inactivity-timeout', layer: 'time', mandatory: true, create: (policy) => new InactivityTimeoutGuard(policy.callTimeoutMs) },
   { id: 'exact-loop', layer: 'integrity', mandatory: true, create: (policy) => new ExactLoopGuard(policy) },
   { id: 'consecutive-errors', layer: 'heuristic', mandatory: false, create: (policy) => new ConsecutiveErrorsGuard(policy) },
   { id: 'cycle-budget', layer: 'heuristic', mandatory: false, create: (policy) => new CycleBudgetGuard(policy.messageCycleBudget) },

@@ -1255,9 +1255,104 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       const judgeCalls = vi.mocked(runAgent).mock.calls.filter((call) => call[0] === 'supervisor');
       expect(state.status).toBe('completed');
       expect(judgeCalls.map((call) => call[2]?.sessionId)).toEqual([undefined, undefined]);
+      expect(judgeCalls.every((call) => typeof call[2]?.onStream === 'function')).toBe(true);
+      expect(judgeCalls.every((call) => typeof call[2]?.onActivity === 'function')).toBe(true);
       expect(state.personaSessions.has(
         '["supervisor","opencode","opencode/zai-coding-plan/glm-5.1"]',
       )).toBe(false);
+    });
+
+    it('keeps the loop monitor judge alive past one inactivity window while internal activity continues', async () => {
+      vi.useFakeTimers();
+      const inactivityTimeoutMs = 60_000;
+      const config = buildConfigWithLoopMonitor(1, {
+        judge: {
+          persona: 'supervisor',
+          provider: 'opencode',
+          model: 'opencode/judge-model',
+          providerOptions: {
+            opencode: { guards: { callTimeoutMs: inactivityTimeoutMs } },
+          },
+          rules: loopJudgeRules(),
+        },
+      } as Partial<LoopMonitorConfig>);
+      engine = new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        provider: 'mock',
+      });
+      const regularResponses = [
+        makeResponse({ persona: 'implement', content: 'Implementation done' }),
+        makeResponse({ persona: 'ai_review', content: 'Issues found: X' }),
+        makeResponse({ persona: 'ai_fix', content: 'Fixed X' }),
+        makeResponse({ persona: 'reviewers', content: 'All approved' }),
+      ];
+      let resolveJudgeStarted: (() => void) | undefined;
+      const judgeStarted = new Promise<void>((resolve) => {
+        resolveJudgeStarted = resolve;
+      });
+      let releaseStreamActivity: (() => void) | undefined;
+      const streamActivity = new Promise<void>((resolve) => {
+        releaseStreamActivity = resolve;
+      });
+      let releaseRetryActivity: (() => void) | undefined;
+      const retryActivity = new Promise<void>((resolve) => {
+        releaseRetryActivity = resolve;
+      });
+      let releaseJudgeCompletion: (() => void) | undefined;
+      const judgeCompletion = new Promise<void>((resolve) => {
+        releaseJudgeCompletion = resolve;
+      });
+      let judgeSignal: AbortSignal | undefined;
+      vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+        options.onPromptResolved?.({
+          systemPrompt: typeof persona === 'string' ? persona : '',
+          userInstruction: instruction,
+        });
+        if (options.outputSchema === undefined) {
+          const response = regularResponses.shift();
+          if (response === undefined) throw new Error('Unexpected regular agent call');
+          return response;
+        }
+        judgeSignal = options.abortSignal;
+        options.onActivity?.({ kind: 'attempt_started' });
+        resolveJudgeStarted?.();
+        await streamActivity;
+        options.onStream?.({ type: 'text', data: { text: 'judge is still working' } });
+        await retryActivity;
+        options.onActivity?.({ kind: 'attempt_started' });
+        await judgeCompletion;
+        return makeResponse({
+          persona: 'supervisor',
+          content: 'Unproductive loop detected',
+          structuredOutput: { content: 'Unproductive loop detected' },
+        });
+      });
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'ai_judge' },
+        { index: 0, method: 'phase3_tag' },
+      ]);
+
+      try {
+        const execution = engine.run();
+        await judgeStarted;
+        await vi.advanceTimersByTimeAsync(40_000);
+        releaseStreamActivity?.();
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(judgeSignal?.aborted).toBe(false);
+        await vi.advanceTimersByTimeAsync(20_000);
+        releaseRetryActivity?.();
+        await vi.advanceTimersByTimeAsync(20_000);
+        releaseJudgeCompletion?.();
+        const state = await execution;
+
+        expect(state.status).toBe('completed');
+        expect(judgeSignal?.aborted).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('keeps loop-judge seat capabilities and permission across a model-only CLI override', async () => {

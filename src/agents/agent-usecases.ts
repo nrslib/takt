@@ -5,7 +5,8 @@ import {
 } from '../infra/providers/provider-capabilities.js';
 import type { StepProviderOptions } from '../core/models/workflow-types.js';
 import type { Language } from '../core/models/types.js';
-import type { ProviderType } from '../shared/types/provider.js';
+import type { ProviderActivityCallback, ProviderType } from '../shared/types/provider.js';
+import type { StreamCallback } from '../shared/types/provider.js';
 
 export {
   evaluateCondition,
@@ -42,6 +43,8 @@ export interface ResolvedInternalAgentOptions {
   readonly childProcessEnv?: Readonly<Record<string, string>>;
   readonly failureDir?: string;
   readonly sessionId?: string;
+  readonly onStream?: StreamCallback;
+  readonly onActivity?: ProviderActivityCallback;
   readonly resolution: {
     readonly provider: ProviderType;
     readonly model: string | undefined;
