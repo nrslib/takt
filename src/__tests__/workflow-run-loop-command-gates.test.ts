@@ -867,7 +867,7 @@ describe('WorkflowRunLoop step deadline', () => {
           systemPrompt: typeof persona === 'string' ? persona : '',
           userInstruction: instruction,
         });
-        if (options?.internalAgentName === 'dynamic-facet-selector') {
+        if (options?.internalSystemPrompt?.includes('dynamic facet selector') === true) {
           selectorSignal = options.abortSignal;
         }
         if (options?.abortSignal === undefined) {
