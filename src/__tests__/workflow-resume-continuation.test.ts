@@ -72,6 +72,33 @@ function sourceResumePoint(records: readonly ReturnType<typeof invocationRecord>
 }
 
 describe('WorkflowResumeContinuation', () => {
+  it('通常実行の nested workflow_call namespace を祖先 invocation ごとに分離する', () => {
+    const parent = { name: 'parent', steps: [] } as unknown as WorkflowConfig;
+    const child = { name: 'child', steps: [] } as unknown as WorkflowConfig;
+    const grandchild = { name: 'grandchild', steps: [] } as unknown as WorkflowConfig;
+    const firstParentCall = buildWorkflowResumePointEntry(
+      parent,
+      'delegate',
+      'workflow_call',
+      1,
+      undefined,
+      1,
+    );
+    const secondParentCall = buildWorkflowResumePointEntry(
+      parent,
+      'delegate',
+      'workflow_call',
+      2,
+      undefined,
+      2,
+    );
+
+    const first = invocationRecord(child, 'nested', grandchild, [firstParentCall], 1);
+    const second = invocationRecord(child, 'nested', grandchild, [secondParentCall], 1);
+
+    expect(first.namespace).not.toBe(second.namespace);
+  });
+
   it('requeue で継承した workflow_call 成果物の最大 occurrence の続きから採番する', () => {
     const workflow = {
       name: 'parent',
