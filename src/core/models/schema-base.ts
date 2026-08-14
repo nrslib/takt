@@ -596,6 +596,9 @@ const NormalizedStepProviderOptionsSchema = z.object({
     baseUrl: z.string().min(1).optional(),
     networkAccess: z.boolean().optional(),
     reasoningEffort: ProviderEffortSchema.optional(),
+    guards: z.object({
+      callTimeoutMs: z.number().int().min(60_000).max(86_400_000).optional(),
+    }).strict().optional(),
     skills: z.object(CodexSkillsShape).strict().optional(),
   }).strict().optional(),
   opencode: z.object({
@@ -618,6 +621,9 @@ const NormalizedStepProviderOptionsSchema = z.object({
     baseUrl: z.string().min(1).optional(),
     allowedTools: z.array(z.string()).optional(),
     effort: ProviderEffortSchema.optional(),
+    guards: z.object({
+      callTimeoutMs: z.number().int().min(60_000).max(86_400_000).optional(),
+    }).strict().optional(),
     skills: z.object(ClaudeSkillsShape).strict().optional(),
     sandbox: z.object({
       allowUnsandboxedCommands: z.boolean().optional(),
@@ -626,17 +632,34 @@ const NormalizedStepProviderOptionsSchema = z.object({
   }).strict().optional(),
   claudeTerminal: z.object({
     backend: z.enum(['tmux']).optional(),
+    guards: z.object({
+      callTimeoutMs: z.number().int().min(60_000).max(86_400_000).optional(),
+    }).strict().optional(),
     timeoutMs: z.number().int().positive().optional(),
     keepSession: z.boolean().optional(),
     transcriptPollIntervalMs: z.number().int().positive().optional(),
   }).strict().optional(),
   copilot: z.object({
     effort: ProviderEffortSchema.optional(),
+    guards: z.object({
+      callTimeoutMs: z.number().int().min(60_000).max(86_400_000).optional(),
+    }).strict().optional(),
   }).strict().optional(),
   kiro: z.object({
     agent: z.string().min(1).optional(),
+    guards: z.object({
+      callTimeoutMs: z.number().int().min(60_000).max(86_400_000).optional(),
+    }).strict().optional(),
+  }).strict().optional(),
+  cursor: z.object({
+    guards: z.object({
+      callTimeoutMs: z.number().int().min(60_000).max(86_400_000).optional(),
+    }).strict().optional(),
   }).strict().optional(),
   pi: z.object({
+    guards: z.object({
+      callTimeoutMs: z.number().int().min(60_000).max(86_400_000).optional(),
+    }).strict().optional(),
     extensions: z.array(z.string().min(1)).optional(),
     noExtensions: z.boolean().optional(),
     noSkills: z.boolean().optional(),

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RuntimeStepResolution } from '../core/workflow/types.js';
+import type { WorkflowStepDeadline, WorkflowStepExecutionDeadlineContext } from '../core/workflow/engine/step-deadline.js';
 import {
   requestValidTeamLeaderDecomposition,
   TeamLeaderDecompositionValidationError,
@@ -71,6 +72,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       model: 'opencode/zai-coding-plan/glm-5.1',
     });
 
+    let feedbackAbortSignal: AbortSignal | undefined;
     const structuredCaller = {
       judgeStatus: vi.fn(),
       evaluateCondition: vi.fn(),
@@ -83,12 +85,38 @@ describe('TeamLeaderRunner with structuredCaller', () => {
           { id: 'part-1', title: 'API', instruction: 'Implement API' },
         ] };
       }),
-      requestMoreParts: vi.fn().mockResolvedValue({
-        done: true,
-        reasoning: 'enough',
-        cancelPartIds: [],
-        parts: [],
+      requestMoreParts: vi.fn().mockImplementation(async (
+        _instruction,
+        _results,
+        _existingIds,
+        options: { abortSignal: AbortSignal },
+      ) => {
+        feedbackAbortSignal = options.abortSignal;
+        return {
+          done: true,
+          reasoning: 'enough',
+          cancelPartIds: [],
+          parts: [],
+        };
       }),
+    };
+    const leaderAbortController = new AbortController();
+    const leaderDeadline: WorkflowStepDeadline = {
+      signal: leaderAbortController.signal,
+      dispose: vi.fn(),
+      startedAt: Date.now(),
+      timeoutMs: 60_000,
+    };
+    const executionDeadlineContext: WorkflowStepExecutionDeadlineContext = {
+      begin: vi.fn((executionUnitKey) => executionUnitKey === 'team-leader:leader'
+        ? leaderDeadline
+        : {
+            signal: new AbortController().signal,
+            dispose: vi.fn(),
+            startedAt: Date.now(),
+            timeoutMs: 60_000,
+          }),
+      runWith: vi.fn(async (_deadline, operation) => operation()),
     };
     const buildInstruction = vi.fn(buildLeaderOrMemberInstruction);
 
@@ -180,6 +208,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       'implement feature',
       5,
       vi.fn(),
+      undefined,
+      undefined,
+      executionDeadlineContext,
     );
 
     expect(result.response.status).toBe('done');
@@ -195,6 +226,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         resolvedModel: 'opencode/zai-coding-plan/glm-5.1',
         resolvedProvider: 'opencode',
         failureDir: '/tmp/project/.takt/runs/sample/failures',
+        abortSignal: leaderAbortController.signal,
       }),
     );
     expect(structuredCaller.requestMoreParts).toHaveBeenCalledWith(
@@ -218,6 +250,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         failureDir: '/tmp/project/.takt/runs/sample/failures',
       }),
     );
+    expect(feedbackAbortSignal).toBeDefined();
+    leaderAbortController.abort(new Error('leader deadline reached'));
+    expect(feedbackAbortSignal?.aborted).toBe(true);
     expect(resolveStepProviderModel).toHaveBeenCalledWith(
       expect.objectContaining({
         name: 'implement',

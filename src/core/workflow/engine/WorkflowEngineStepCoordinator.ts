@@ -162,6 +162,27 @@ export class WorkflowEngineStepCoordinator {
     );
   }
 
+  refreshStepDeadline(
+    step: WorkflowStep,
+    runtime: RuntimeStepResolution | undefined,
+    stepIteration: number,
+  ): WorkflowStepDeadline {
+    const key = this.stepDeadlineKey(step, stepIteration, 'step');
+    const existing = this.stepDeadlines.get(key);
+    if (existing === undefined) {
+      throw new Error(`Step deadline for "${step.name}" occurrence ${stepIteration} is not active`);
+    }
+    existing.dispose();
+    const providerInfos = this.resolveStepDeadlineProviderInfos(step, runtime);
+    const deadline = createWorkflowStepCompositeDeadline(
+      providerInfos,
+      this.deps.getOptions().abortSignal,
+      existing.startedAt,
+    );
+    this.stepDeadlines.set(key, deadline);
+    return deadline;
+  }
+
   beginExecutionUnitDeadline(
     step: WorkflowStep,
     stepIteration: number,

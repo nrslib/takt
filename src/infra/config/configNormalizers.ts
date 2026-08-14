@@ -664,7 +664,7 @@ export function denormalizeProviderOptions(
     providerOptions.codex?.baseUrl !== undefined
     || providerOptions.codex?.networkAccess !== undefined
     || providerOptions.codex?.reasoningEffort !== undefined
-    || providerOptions.codex?.guards !== undefined
+    || providerOptions.codex?.guards?.callTimeoutMs !== undefined
     || providerOptions.codex?.skills?.repo !== undefined
     || providerOptions.codex?.skills?.user !== undefined
   ) {
@@ -771,7 +771,7 @@ export function denormalizeProviderOptions(
       raw.claude = claude;
     }
   }
-  if (providerOptions.copilot?.effort !== undefined || providerOptions.copilot?.guards !== undefined) {
+  if (providerOptions.copilot?.effort !== undefined || providerOptions.copilot?.guards?.callTimeoutMs !== undefined) {
     raw.copilot = {
       ...(providerOptions.copilot.effort !== undefined ? { effort: providerOptions.copilot.effort } : {}),
       ...(providerOptions.copilot.guards?.callTimeoutMs !== undefined
@@ -779,7 +779,7 @@ export function denormalizeProviderOptions(
         : {}),
     };
   }
-  if (providerOptions.kiro?.agent !== undefined || providerOptions.kiro?.guards !== undefined) {
+  if (providerOptions.kiro?.agent !== undefined || providerOptions.kiro?.guards?.callTimeoutMs !== undefined) {
     raw.kiro = {
       ...(providerOptions.kiro.agent !== undefined ? { agent: providerOptions.kiro.agent } : {}),
       ...(providerOptions.kiro.guards?.callTimeoutMs !== undefined
@@ -787,7 +787,7 @@ export function denormalizeProviderOptions(
         : {}),
     };
   }
-  if (providerOptions.cursor?.guards !== undefined) {
+  if (providerOptions.cursor?.guards?.callTimeoutMs !== undefined) {
     raw.cursor = {
       guards: {
         ...(providerOptions.cursor.guards.callTimeoutMs !== undefined

@@ -12,6 +12,7 @@ export interface WorkflowStepAbortSignalContext {
 export interface WorkflowStepDeadline {
   readonly signal: AbortSignal;
   readonly dispose: () => void;
+  readonly startedAt: number;
   readonly timeoutMs: number;
 }
 
@@ -104,15 +105,17 @@ export function createWorkflowStepDeadline(
   parentSignal: AbortSignal | undefined,
 ): WorkflowStepDeadline {
   const timeoutMs = resolveWorkflowStepCallTimeoutMs(provider, providerOptions);
-  const deadline = buildAbortSignal(timeoutMs, parentSignal);
-  return { ...deadline, timeoutMs };
+  const startedAt = Date.now();
+  const deadline = buildAbortSignal(timeoutMs, parentSignal, startedAt + timeoutMs);
+  return { ...deadline, startedAt, timeoutMs };
 }
 
 export function createWorkflowStepCompositeDeadline(
   providerInfos: readonly WorkflowStepDeadlineProviderInfo[],
   parentSignal: AbortSignal | undefined,
+  startedAt = Date.now(),
 ): WorkflowStepDeadline {
   const timeoutMs = resolveWorkflowStepCompositeCallTimeoutMs(providerInfos);
-  const deadline = buildAbortSignal(timeoutMs, parentSignal);
-  return { ...deadline, timeoutMs };
+  const deadline = buildAbortSignal(timeoutMs, parentSignal, startedAt + timeoutMs);
+  return { ...deadline, startedAt, timeoutMs };
 }

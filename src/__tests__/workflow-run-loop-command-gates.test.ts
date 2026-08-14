@@ -492,6 +492,7 @@ function makeDeadlineDeps(
     abortRequested: () => false,
     getStep: () => step,
     beginStepDeadline: coordinator.beginStepDeadline.bind(coordinator),
+    refreshStepDeadline: coordinator.refreshStepDeadline.bind(coordinator),
     disposeStepDeadline: coordinator.disposeStepDeadline.bind(coordinator),
     disposeAllStepDeadlines: coordinator.disposeAllStepDeadlines.bind(coordinator),
     stepAbortSignalContext: context,
@@ -638,6 +639,7 @@ describe('WorkflowRunLoop step deadline', () => {
 
     expect(result.state.status).toBe('aborted');
     expect(providerSignals[0]?.aborted).toBe(true);
+    expect(providerSignals[1]?.aborted).toBe(true);
     expect(Date.now()).toBe(startedAt + MINUTE);
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -713,6 +715,82 @@ describe('WorkflowRunLoop step deadline', () => {
       expect(firstAgentOptions).toEqual(expect.objectContaining({ resolvedProvider: 'opencode' }));
       expect(resolvedProvider).toBe('opencode');
       expect(resolvedModel).toBe('opencode/long-model');
+      expect(resolvedProviderOptions).toEqual({
+        opencode: { guards: { callTimeoutMs: longProviderTimeout } },
+      });
+
+      await vi.advanceTimersByTimeAsync(60 * MINUTE);
+      expect(providerSignal?.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(longProviderTimeout - 60 * MINUTE);
+      const result = await execution;
+      expect(result.status).toBe('aborted');
+      expect(providerSignal?.aborted).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      engine.removeAllListeners();
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('通常ステップの auto-routing 後に解決された provider の期限を適用する', async () => {
+    vi.useFakeTimers();
+    const tmpDir = mkdtempSync(join(tmpdir(), 'takt-normal-deadline-'));
+    const longProviderTimeout = THREE_HOURS;
+    let providerSignal: AbortSignal | undefined;
+    let resolvedProviderOptions: unknown;
+    const step = makeStep('long-step', {
+      rules: [makeRule('approved', 'COMPLETE')],
+    });
+    const config: WorkflowConfig = {
+      name: 'normal-deadline-workflow',
+      description: 'normal deadline workflow',
+      maxSteps: 1,
+      initialStep: step.name,
+      steps: [step],
+    };
+    const autoRouting = {
+      strategy: 'performance' as const,
+      router: { provider: 'opencode' as const, model: 'router-model' },
+      candidates: [{
+        name: 'long-provider',
+        provider: 'opencode' as const,
+        model: 'opencode/long-model',
+        routingTier: 'high' as const,
+        providerOptions: {
+          opencode: { guards: { callTimeoutMs: longProviderTimeout } },
+        },
+      }],
+      defaultPool: 'default',
+      candidatePools: {
+        default: { candidates: ['long-provider'], fallback: 'long-provider' },
+      },
+      poolRules: { steps: { 'long-step': 'default' } },
+      rules: { steps: { 'long-step': 'long-provider' } },
+    };
+    const engine = new WorkflowEngine(config, tmpDir, 'normal deadline task', {
+      projectCwd: tmpDir,
+      autoRouting,
+      reportDirName: 'normal-deadline',
+    });
+    try {
+      mockRuleEvaluation.mockReturnValue(undefined);
+      vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+        options?.onPromptResolved?.({
+          systemPrompt: typeof persona === 'string' ? persona : '',
+          userInstruction: instruction,
+        });
+        providerSignal = options?.abortSignal;
+        resolvedProviderOptions = options?.resolvedProviderOptions;
+        if (providerSignal === undefined) {
+          throw new Error('normal provider did not receive a deadline signal');
+        }
+        const response = await waitForAbort(providerSignal);
+        return { ...response, persona: persona ?? 'long-step' };
+      });
+
+      const execution = engine.run();
+      await waitForCondition(() => providerSignal !== undefined, 'normal provider invocation');
       expect(resolvedProviderOptions).toEqual({
         opencode: { guards: { callTimeoutMs: longProviderTimeout } },
       });

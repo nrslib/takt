@@ -162,6 +162,53 @@ describe('denormalizeProviderOptions', () => {
     expect(denormalizeProviderOptions(normalizedProviderOptions)).toEqual(rawProviderOptions);
   });
 
+  it('should round-trip provider call timeout guards for every provider', () => {
+    const rawProviderOptions = {
+      codex: { guards: { call_timeout_ms: 120_000 } },
+      claude: { guards: { call_timeout_ms: 120_000 } },
+      claude_terminal: { guards: { call_timeout_ms: 120_000 } },
+      copilot: { guards: { call_timeout_ms: 120_000 } },
+      kiro: { guards: { call_timeout_ms: 120_000 } },
+      cursor: { guards: { call_timeout_ms: 120_000 } },
+      pi: { guards: { call_timeout_ms: 120_000 } },
+    };
+
+    const normalizedProviderOptions = normalizeProviderOptions(rawProviderOptions);
+
+    expect(normalizedProviderOptions).toEqual({
+      codex: { guards: { callTimeoutMs: 120_000 } },
+      claude: { guards: { callTimeoutMs: 120_000 } },
+      claudeTerminal: { guards: { callTimeoutMs: 120_000 } },
+      copilot: { guards: { callTimeoutMs: 120_000 } },
+      kiro: { guards: { callTimeoutMs: 120_000 } },
+      cursor: { guards: { callTimeoutMs: 120_000 } },
+      pi: { guards: { callTimeoutMs: 120_000 } },
+    });
+    expect(denormalizeProviderOptions(normalizedProviderOptions)).toEqual(rawProviderOptions);
+    expect(buildRawTaktProvidersOrThrow({
+      selector: {
+        provider: 'codex',
+        model: 'selector-model',
+        providerOptions: normalizedProviderOptions,
+      },
+    })).toEqual({
+      selector: {
+        provider: 'codex',
+        model: 'selector-model',
+        provider_options: rawProviderOptions,
+      },
+    });
+  });
+
+  it('should omit empty provider guard blocks when denormalizing', () => {
+    expect(denormalizeProviderOptions({
+      codex: { guards: {} },
+      copilot: { guards: {} },
+      kiro: { guards: {} },
+      cursor: { guards: {} },
+    })).toBeUndefined();
+  });
+
   it('should round-trip Claude Skill enabled through normalize and denormalize', () => {
     const rawProviderOptions = {
       claude: {

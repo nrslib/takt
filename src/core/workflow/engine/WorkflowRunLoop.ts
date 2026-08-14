@@ -75,6 +75,11 @@ interface WorkflowRunLoopDeps {
     runtime: RuntimeStepResolution | undefined,
     stepIteration: number,
   ) => WorkflowStepDeadline;
+  refreshStepDeadline?: (
+    step: WorkflowStep,
+    runtime: RuntimeStepResolution | undefined,
+    stepIteration: number,
+  ) => WorkflowStepDeadline;
   disposeStepDeadline?: (step: WorkflowStep, stepIteration: number) => void;
   disposeAllStepDeadlines?: () => void;
   stepAbortSignalContext?: WorkflowStepAbortSignalContext;
@@ -846,32 +851,41 @@ async function runWorkflowToCompletionCore(deps: WorkflowRunLoopDeps): Promise<W
         );
         const fallbackRuntime = withFallbackRuntime(deps.state, step, promotedRuntime);
         const resolvedRuntime = await resolveStepAutoRoutingRuntime(deps, step, fallbackRuntime, step.instruction);
-        const resolvedPreparedExecution = await deps.prepareNormalStepExecution(
-          step,
-          stepIteration,
-          resolvedRuntime,
-        );
-        const resolvedExecutionStep = resolvedPreparedExecution?.executableStep ?? step;
-        const resolvedPrebuiltInstruction = resolvedPreparedExecution === undefined && !isDelegated
-          ? deps.buildInstruction(step, stepIteration, resolvedRuntime?.fallback)
-          : undefined;
-        const resolvedStepInstruction = resolvedPreparedExecution?.phase1Instruction
-          ?? (resolvedPrebuiltInstruction
-          ? deps.buildPhase1Instruction(step, resolvedPrebuiltInstruction, resolvedRuntime)
-          : '');
-        const resolvedProviderInfo = deps.resolveStepProviderModel(resolvedExecutionStep, resolvedRuntime);
-        const resolvedWorkflowStack = requireWorkflowResumeStackSnapshot(
-          deps.getCurrentWorkflowStack(),
-        );
-        return {
-          stepRuntime: resolvedRuntime,
-          preparedExecution: resolvedPreparedExecution,
-          executionStep: resolvedExecutionStep,
-          prebuiltInstruction: resolvedPrebuiltInstruction,
-          stepInstruction: resolvedStepInstruction,
-          providerInfo: resolvedProviderInfo,
-          stepEventWorkflowStack: resolvedWorkflowStack,
-        };
+        if (
+          stepDeadline !== undefined
+          && resolvedRuntime?.fallback === undefined
+          && resolvedRuntime?.providerInfo?.autoRoutingDecision !== undefined
+        ) {
+          stepDeadline = deps.refreshStepDeadline?.(step, resolvedRuntime, stepIteration) ?? stepDeadline;
+        }
+        return runWithStepDeadline(deps, stepDeadline, async () => {
+          const resolvedPreparedExecution = await deps.prepareNormalStepExecution(
+            step,
+            stepIteration,
+            resolvedRuntime,
+          );
+          const resolvedExecutionStep = resolvedPreparedExecution?.executableStep ?? step;
+          const resolvedPrebuiltInstruction = resolvedPreparedExecution === undefined && !isDelegated
+            ? deps.buildInstruction(step, stepIteration, resolvedRuntime?.fallback)
+            : undefined;
+          const resolvedStepInstruction = resolvedPreparedExecution?.phase1Instruction
+            ?? (resolvedPrebuiltInstruction
+            ? deps.buildPhase1Instruction(step, resolvedPrebuiltInstruction, resolvedRuntime)
+            : '');
+          const resolvedProviderInfo = deps.resolveStepProviderModel(resolvedExecutionStep, resolvedRuntime);
+          const resolvedWorkflowStack = requireWorkflowResumeStackSnapshot(
+            deps.getCurrentWorkflowStack(),
+          );
+          return {
+            stepRuntime: resolvedRuntime,
+            preparedExecution: resolvedPreparedExecution,
+            executionStep: resolvedExecutionStep,
+            prebuiltInstruction: resolvedPrebuiltInstruction,
+            stepInstruction: resolvedStepInstruction,
+            providerInfo: resolvedProviderInfo,
+            stepEventWorkflowStack: resolvedWorkflowStack,
+          };
+        });
       });
       ({
         stepRuntime,
@@ -1222,28 +1236,37 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
       );
       const fallbackRuntime = withFallbackRuntime(deps.state, step, promotedRuntime);
       const resolvedRuntime = await resolveStepAutoRoutingRuntime(deps, step, fallbackRuntime, step.instruction);
-      const resolvedPreparedExecution = await deps.prepareNormalStepExecution(
-        step,
-        stepIteration,
-        resolvedRuntime,
-      );
-      const resolvedExecutionStep = resolvedPreparedExecution?.executableStep ?? step;
-      const resolvedPrebuiltInstruction = resolvedPreparedExecution === undefined && !isDelegated
-        ? deps.buildInstruction(step, stepIteration, resolvedRuntime?.fallback)
-        : undefined;
-      const resolvedStepInstruction = resolvedPreparedExecution?.phase1Instruction
-        ?? (deps.options.observability?.enabled === true && resolvedPrebuiltInstruction
-          ? deps.buildPhase1Instruction(step, resolvedPrebuiltInstruction, resolvedRuntime)
-          : '');
-      const resolvedProviderInfo = deps.resolveStepProviderModel(resolvedExecutionStep, resolvedRuntime);
-      return {
-        stepRuntime: resolvedRuntime,
-        preparedExecution: resolvedPreparedExecution,
-        executionStep: resolvedExecutionStep,
-        prebuiltInstruction: resolvedPrebuiltInstruction,
-        stepInstruction: resolvedStepInstruction,
-        providerInfo: resolvedProviderInfo,
-      };
+      if (
+        stepDeadline !== undefined
+        && resolvedRuntime?.fallback === undefined
+        && resolvedRuntime?.providerInfo?.autoRoutingDecision !== undefined
+      ) {
+        stepDeadline = deps.refreshStepDeadline?.(step, resolvedRuntime, stepIteration) ?? stepDeadline;
+      }
+      return runWithStepDeadline(deps, stepDeadline, async () => {
+        const resolvedPreparedExecution = await deps.prepareNormalStepExecution(
+          step,
+          stepIteration,
+          resolvedRuntime,
+        );
+        const resolvedExecutionStep = resolvedPreparedExecution?.executableStep ?? step;
+        const resolvedPrebuiltInstruction = resolvedPreparedExecution === undefined && !isDelegated
+          ? deps.buildInstruction(step, stepIteration, resolvedRuntime?.fallback)
+          : undefined;
+        const resolvedStepInstruction = resolvedPreparedExecution?.phase1Instruction
+          ?? (deps.options.observability?.enabled === true && resolvedPrebuiltInstruction
+            ? deps.buildPhase1Instruction(step, resolvedPrebuiltInstruction, resolvedRuntime)
+            : '');
+        const resolvedProviderInfo = deps.resolveStepProviderModel(resolvedExecutionStep, resolvedRuntime);
+        return {
+          stepRuntime: resolvedRuntime,
+          preparedExecution: resolvedPreparedExecution,
+          executionStep: resolvedExecutionStep,
+          prebuiltInstruction: resolvedPrebuiltInstruction,
+          stepInstruction: resolvedStepInstruction,
+          providerInfo: resolvedProviderInfo,
+        };
+      });
     });
     if (workflowInterruptRequested(deps)) {
       return buildInterruptedIterationResult(deps, step, loopCheck.isLoop);

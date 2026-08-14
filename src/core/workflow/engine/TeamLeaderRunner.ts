@@ -79,6 +79,17 @@ async function runWithExecutionDeadline<T>(
   return context.runWith(deadline, operation);
 }
 
+function combineAbortSignals(signals: readonly (AbortSignal | undefined)[]): AbortSignal | undefined {
+  const activeSignals = signals.filter((signal): signal is AbortSignal => signal !== undefined);
+  if (activeSignals.length === 0) {
+    return undefined;
+  }
+  if (activeSignals.length === 1) {
+    return activeSignals[0];
+  }
+  return AbortSignal.any(activeSignals);
+}
+
 function truncateTeamLeaderFailureContent(text: string): string {
   if (Buffer.byteLength(text, 'utf8') <= MAX_AGENT_FAILURE_MESSAGE_BYTES) {
     return text;
@@ -211,6 +222,10 @@ export class TeamLeaderRunner {
     const leaderWorkflowMeta = this.deps.optionsBuilder.buildPhase1WorkflowMeta(
       leaderBaseOptions.workflowMeta,
     );
+    const leaderAbortSignal = combineAbortSignals([
+      leaderBaseOptions.abortSignal,
+      leaderDeadline?.signal,
+    ]);
     const inspectTools = resolveInspectToolsForProvider(teamLeaderConfig.inspectTools, leaderProvider);
     const leaderMcpServers = this.deps.optionsBuilder.resolveMcpServersForStep(leaderStep, leaderProvider);
 
@@ -246,7 +261,7 @@ export class TeamLeaderRunner {
       workflowMeta: leaderWorkflowMeta,
       childProcessEnv: this.deps.engineOptions.childProcessEnv,
       failureDir: leaderBaseOptions.failureDir,
-      abortSignal: leaderBaseOptions.abortSignal,
+      abortSignal: leaderAbortSignal,
       onStream: leaderBaseOptions.onStream,
       onAgentResponse: (response: AgentResponse) => {
         this.recordUsage(
@@ -436,6 +451,9 @@ export class TeamLeaderRunner {
             ? `[ERROR] ${resolvePartErrorDetail(result)}`
             : result.response.content,
         }));
+        const feedbackSignal = leaderDeadline?.signal === undefined
+          ? feedbackAbortSignal
+          : AbortSignal.any([feedbackAbortSignal, leaderDeadline.signal]);
         try {
           const buildFeedbackOptions = (abortSignal: AbortSignal) => ({
             cwd: this.deps.getCwd(),
@@ -476,11 +494,11 @@ export class TeamLeaderRunner {
             scheduledIdsCopy,
             buildFeedbackOptions(abortSignal),
           );
-          const moreParts: MorePartsResponse = await requestFeedback(feedbackAbortSignal);
+          const moreParts: MorePartsResponse = await requestFeedback(feedbackSignal);
           await this.addPartAutoRouting(routedProviderInfoByPart, step, moreParts.parts, runtime);
           return moreParts;
         } catch (error) {
-          if (feedbackAbortSignal.aborted) {
+          if (feedbackSignal.aborted) {
             throw error;
           }
           if (isProviderStreamParseError(error)) {

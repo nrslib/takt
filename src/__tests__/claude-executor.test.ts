@@ -489,7 +489,7 @@ describe('QueryExecutor abortSignal wiring', () => {
     void execution.finally(() => {
       settled = true;
     });
-    await Promise.resolve();
+    await new Promise<void>((resolve) => setImmediate(resolve));
     expect(settled).toBe(false);
 
     resolveInterrupt();
@@ -498,6 +498,43 @@ describe('QueryExecutor abortSignal wiring', () => {
 
     expect(result.interrupted).toBe(true);
     expect(getActiveQueryCount()).toBe(activeBefore);
+  });
+
+  it('abort後のSDK cleanupがハングしても有限時間でqueryを解放する', async () => {
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      const iterator: AsyncIterator<Record<string, unknown>> = {
+        next: vi.fn(() => new Promise<IteratorResult<Record<string, unknown>>>(() => {})),
+        return: vi.fn(() => new Promise<IteratorResult<Record<string, unknown>>>(() => {})),
+      };
+      const query = {
+        interrupt: vi.fn(() => new Promise<void>(() => {})),
+        [Symbol.asyncIterator]: () => iterator,
+      };
+      queryMock.mockReturnValue(query);
+      const activeBefore = getActiveQueryCount();
+      const execution = new QueryExecutor().execute('test', {
+        cwd: '/tmp/project',
+        abortSignal: controller.signal,
+      });
+
+      expect(getActiveQueryCount()).toBe(activeBefore + 1);
+      controller.abort();
+      for (let attempt = 0; attempt < 10 && vi.getTimerCount() === 0; attempt += 1) {
+        await Promise.resolve();
+      }
+      expect(query.interrupt).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      const result = await execution;
+
+      expect(result.interrupted).toBe(true);
+      expect(getActiveQueryCount()).toBe(activeBefore);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

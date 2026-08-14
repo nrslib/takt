@@ -25,11 +25,12 @@ export function createAbortScope(parentSignal: AbortSignal | undefined): AbortSc
 export function buildAbortSignal(
   timeoutMs: number,
   parentSignal: AbortSignal | undefined,
+  deadlineAt?: number,
 ): { signal: AbortSignal; dispose: () => void } {
   const timeoutController = new AbortController();
   const timeoutId = setTimeout(() => {
     timeoutController.abort(new Error(createPartTimeoutReason(timeoutMs)));
-  }, timeoutMs);
+  }, deadlineAt === undefined ? timeoutMs : Math.max(0, deadlineAt - Date.now()));
 
   let abortListener: (() => void) | undefined;
   if (parentSignal) {

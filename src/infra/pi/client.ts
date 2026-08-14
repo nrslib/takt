@@ -32,7 +32,7 @@ import {
   formatAgentFailure,
 } from '../../shared/types/agent-failure.js';
 import type { StreamCallback } from '../../shared/types/provider.js';
-import { getErrorMessage } from '../../shared/utils/index.js';
+import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import type { ProviderImageAttachment } from '../providers/types.js';
 import { validateProviderImageAttachments } from '../providers/imageAttachments.js';
@@ -77,6 +77,29 @@ interface PiSessionCreation {
 const sessions = new Map<string, PiSessionRecord>();
 const sessionCreations = new Map<string, PiSessionCreation>();
 const MAX_CACHED_PI_SESSIONS = 64;
+const ABORT_CLEANUP_TIMEOUT_MS = 30_000;
+const log = createLogger('pi');
+
+async function awaitAbortCleanup(cleanup: Promise<void>): Promise<void> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      cleanup,
+      new Promise<void>((resolve) => {
+        timeoutId = setTimeout(() => {
+          log.debug('Pi session abort cleanup timed out', {
+            timeoutMs: ABORT_CLEANUP_TIMEOUT_MS,
+          });
+          resolve();
+        }, ABORT_CLEANUP_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeoutId !== undefined) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
 
 function isCredential(value: unknown): value is Credential {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
@@ -1027,7 +1050,7 @@ export async function callPi(
         options.abortSignal?.removeEventListener('abort', onAbort);
         unsubscribe();
         if (abortCleanup !== undefined) {
-          await abortCleanup;
+          await awaitAbortCleanup(abortCleanup);
         }
       }
 

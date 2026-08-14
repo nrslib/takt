@@ -234,7 +234,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
 
     expect(state.status).toBe('aborted');
     expect(vi.mocked(runAgent)).toHaveBeenCalledOnce();
-    expect(vi.mocked(runAgent).mock.calls[0]?.[2]?.abortSignal).toBe(abortController.signal);
+    expect(vi.mocked(runAgent).mock.calls[0]?.[2]?.abortSignal?.aborted).toBe(true);
   });
 
   it('timeout part 後の feedback call 中に親中断された場合は継続 part を routing しない', async () => {

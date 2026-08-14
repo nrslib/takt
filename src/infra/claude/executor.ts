@@ -40,6 +40,29 @@ import { buildClaudePromptInput } from './image-input.js';
 import { extractClaudeProviderUsage } from './usage.js';
 
 const log = createLogger('claude-sdk');
+const ABORT_CLEANUP_TIMEOUT_MS = 30_000;
+
+async function awaitAbortCleanup(cleanup: Promise<void>, queryId: string): Promise<void> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      cleanup,
+      new Promise<void>((resolve) => {
+        timeoutId = setTimeout(() => {
+          log.debug('Claude query cleanup timed out after abort', {
+            queryId,
+            timeoutMs: ABORT_CLEANUP_TIMEOUT_MS,
+          });
+          resolve();
+        }, ABORT_CLEANUP_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeoutId !== undefined) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
 
 function isRejectedRateLimitEvent(message: SDKRateLimitEvent): boolean {
   // SDK は rate_limit_event を情報イベントとして毎回流す。
@@ -165,7 +188,7 @@ export class QueryExecutor {
     let onExternalAbort: (() => void) | undefined;
     let iterator: AsyncIterator<SDKMessage> | undefined;
     let rejectAbort: ((error: unknown) => void) | undefined;
-    let abortPromise: Promise<never> | undefined;
+    let abortPromise: Promise<never>;
     let abortRequested = false;
     let interruptPromise: Promise<void> | undefined;
     let iteratorClosePromise: Promise<void> | undefined;
@@ -275,9 +298,7 @@ export class QueryExecutor {
 
       while (true) {
         const nextMessage = iterator.next();
-        const messageResult = abortPromise === undefined
-          ? await nextMessage
-          : await Promise.race([nextMessage, abortPromise]);
+        const messageResult = await Promise.race([nextMessage, abortPromise]);
         if (messageResult.done) {
           break;
         }
@@ -369,10 +390,15 @@ export class QueryExecutor {
       if (onExternalAbort && options.abortSignal) {
         options.abortSignal.removeEventListener('abort', onExternalAbort);
       }
-      await Promise.all([
+      const cleanup = Promise.all([
         closeIterator(),
         interruptPromise ?? Promise.resolve(),
-      ]);
+      ]).then(() => undefined);
+      if (abortRequested) {
+        await awaitAbortCleanup(cleanup, queryId);
+      } else {
+        await cleanup;
+      }
       unregisterQuery(queryId);
     }
   }

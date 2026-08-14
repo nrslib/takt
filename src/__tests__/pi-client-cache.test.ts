@@ -246,7 +246,7 @@ describe('Pi SDK session cache', () => {
     void first.then(() => {
       firstSettled = true;
     });
-    await Promise.resolve();
+    await new Promise<void>((resolve) => setImmediate(resolve));
     expect(firstSettled).toBe(false);
 
     abortGate.resolve();
@@ -256,6 +256,36 @@ describe('Pi SDK session cache', () => {
     expect(mocks.events.indexOf(`abort:end:${firstState.instanceId}`)).toBeLessThan(
       mocks.events.indexOf(`dispose:${firstState.instanceId}`),
     );
+  });
+
+  it('abort cleanupがハングしても有限時間で呼び出しを解放する', async () => {
+    let releaseAbort: (() => void) | undefined;
+    try {
+      const controller = new AbortController();
+      const first = callPi('worker', 'first', {
+        ...options('abort-timeout-session'),
+        abortSignal: controller.signal,
+      });
+
+      await vi.waitFor(() => expect(mocks.started.size).toBe(1));
+      const state = mocks.latestState('abort-timeout-session')!;
+      const abortGate = mocks.holdAbort('abort-timeout-session');
+      releaseAbort = abortGate.resolve;
+      vi.useFakeTimers();
+      controller.abort(new Error('deadline reached'));
+
+      for (let attempt = 0; attempt < 20 && vi.getTimerCount() === 0; attempt += 1) {
+        await Promise.resolve();
+      }
+      expect(mocks.events).toContain(`abort:start:${state.instanceId}`);
+      expect(vi.getTimerCount()).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect((await first).status).toBe('error');
+    } finally {
+      releaseAbort?.();
+      vi.useRealTimers();
+    }
   });
 
   it('converges to the idle cache limit after 65 active sessions finish', async () => {
