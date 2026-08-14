@@ -71,6 +71,9 @@ import { WorkflowResumeContinuation } from './workflow-resume-continuation.js';
 import { inheritWorkflowConfigMetadata, translateWorkflowConfigError } from '../../../shared/workflowConfigMetadata.js';
 import { WorkflowRestartNavigator } from './WorkflowRestartNavigator.js';
 import { withWorkflowTargetContext } from '../provider-target-resolution.js';
+import { readResumeReportSnapshotManifest } from '../run/resume-report-snapshot.js';
+import { ResumeArtifactOccurrenceIndex } from '../run/resume-artifact-occurrence-index.js';
+import { readRunMetaBySlug } from '../run/run-meta.js';
 const log = createLogger('workflow-engine');
 
 type WorkflowEngineRuntimeOptions = WorkflowEngineOptions & {
@@ -254,6 +257,18 @@ export class WorkflowEngine extends EventEmitter {
     this.sharedRuntime.workflowStepParticipationIndex ??=
       restoreWorkflowStepParticipationIndex(this.options.resumePoint);
     this.sharedRuntime.companionReviewAuthority ??= new CompanionReviewAuthority();
+    if (
+      this.sharedRuntime.resumeArtifactOccurrenceIndex === undefined
+      && this.options.resumeSource?.resumeMode === 'requeue'
+    ) {
+      const manifest = readResumeReportSnapshotManifest(this.cwd, runPaths.slug);
+      this.sharedRuntime.resumeArtifactOccurrenceIndex = new ResumeArtifactOccurrenceIndex(
+        manifest,
+        manifest === undefined
+          ? undefined
+          : readRunMetaBySlug(this.cwd, manifest.sourceRunSlug)?.resumePoint,
+      );
+    }
     restoreActiveResumePoint(
       this.sharedRuntime,
       this.options.resumePoint,
@@ -276,6 +291,7 @@ export class WorkflowEngine extends EventEmitter {
     this.resumeContinuation = new WorkflowResumeContinuation(
       this.config,
       this.options.resumePoint,
+      this.sharedRuntime.resumeArtifactOccurrenceIndex,
     );
     this.syncStateDynamicParallelSelections();
     this.syncStateDynamicFacetSelections();

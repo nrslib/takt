@@ -206,6 +206,7 @@ export interface WorkflowSharedRuntimeState {
   workflowCallInvocationEvidence?: WorkflowCallInvocationEvidence;
   workflowStepParticipationIndex?: WorkflowStepParticipationIndex;
   companionReviewAuthority?: CompanionReviewAuthority;
+  resumeArtifactOccurrenceIndex?: import('./run/resume-artifact-occurrence-index.js').ResumeArtifactOccurrenceIndex;
 }
 
 export type WorkflowAbortKind =
