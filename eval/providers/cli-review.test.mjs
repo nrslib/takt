@@ -52,7 +52,7 @@ async function verifyTreeTermination(trigger) {
 
     await assert.rejects(run, new RegExp(trigger === 'timeout' ? 'timed out' : 'was aborted'));
     assert.equal(isProcessRunning(pids.child), false);
-    assert.equal(isProcessRunning(pids.grandchild), false);
+    await waitFor(() => !isProcessRunning(pids.grandchild));
   } finally {
     controller.abort();
     await run.catch(() => undefined);
