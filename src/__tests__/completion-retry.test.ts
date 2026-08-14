@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentResponse } from '../core/models/types.js';
 import {
-  buildReviewCompletionJudgePrompt,
-  buildReviewCompletionOutputSchema,
-  parseReviewCompletionDecision,
-  runReviewCompletionEpisode,
-} from '../core/workflow/review-completion.js';
+  buildCompletionRetryJudgePrompt,
+  buildCompletionRetryOutputSchema,
+  parseCompletionRetryDecision,
+  runCompletionRetryEpisode,
+} from '../core/workflow/completion-retry.js';
 
 function response(content: string, sessionId = 'review-session'): AgentResponse {
   return {
@@ -17,9 +17,9 @@ function response(content: string, sessionId = 'review-session'): AgentResponse 
   };
 }
 
-describe('review completion episode', () => {
+describe('completion retry episode', () => {
   it('uses the actual reviewer instruction as the sole scope authority', () => {
-    const prompt = buildReviewCompletionJudgePrompt({
+    const prompt = buildCompletionRetryJudgePrompt({
       language: 'en',
       task: 'review the change',
       reviewerInstruction: 'Review only accepted-family regressions. Do not explore new families.',
@@ -57,7 +57,7 @@ describe('review completion episode', () => {
       })
       .mockResolvedValueOnce({ complete: true, reason: 'closed', missingObligations: [] });
 
-    const result = await runReviewCompletionEpisode({
+    const result = await runCompletionRetryEpisode({
       config: {
         minRetry: 0,
         maxRetry: 4,
@@ -84,7 +84,7 @@ describe('review completion episode', () => {
   it('stops immediately when the judge confirms completeness', async () => {
     const initial = response('complete review');
     const executeRetry = vi.fn();
-    const result = await runReviewCompletionEpisode({
+    const result = await runCompletionRetryEpisode({
       config: { minRetry: 0, maxRetry: 4, retryInstruction: 'retry' },
       originalInstruction: 'review',
       initialResponse: initial,
@@ -109,7 +109,7 @@ describe('review completion episode', () => {
   it('returns a Phase 2 diagnostic without modifying the latest reviewer response', async () => {
     const latest = response('authoritative reviewer report');
     const executeRetry = vi.fn();
-    const result = await runReviewCompletionEpisode({
+    const result = await runCompletionRetryEpisode({
       config: {
         minRetry: 0,
         maxRetry: 0,
@@ -132,7 +132,7 @@ describe('review completion episode', () => {
   it('stops immediately with judge_unavailable even before the configured minimum retry', async () => {
     const initial = response('initial');
     const executeRetry = vi.fn();
-    const result = await runReviewCompletionEpisode({
+    const result = await runCompletionRetryEpisode({
       config: { minRetry: 2, maxRetry: 4, retryInstruction: 'retry' },
       originalInstruction: 'review',
       initialResponse: initial,
@@ -162,7 +162,7 @@ describe('review completion episode', () => {
       missingObligations: [],
     });
 
-    const result = await runReviewCompletionEpisode({
+    const result = await runCompletionRetryEpisode({
       config: { minRetry: 1, maxRetry: 2, retryInstruction: 'retry' },
       originalInstruction: 'review',
       initialResponse: response('initial'),
@@ -192,7 +192,7 @@ describe('review completion episode', () => {
         }],
       });
 
-    const result = await runReviewCompletionEpisode({
+    const result = await runCompletionRetryEpisode({
       config: { minRetry: 1, maxRetry: 1, retryInstruction: 'retry' },
       originalInstruction: 'review',
       initialResponse: response('initial'),
@@ -228,7 +228,7 @@ describe('review completion episode', () => {
     });
     const initialResponse = response('initial');
 
-    const result = await runReviewCompletionEpisode({
+    const result = await runCompletionRetryEpisode({
       config: { minRetry: 0, maxRetry: 0, retryInstruction: 'retry' },
       originalInstruction: 'review',
       initialResponse,
@@ -268,7 +268,7 @@ describe('review completion episode', () => {
       missingObligations: [missingObligation],
     });
 
-    const result = await runReviewCompletionEpisode({
+    const result = await runCompletionRetryEpisode({
       config: { minRetry: 0, maxRetry: 4, retryInstruction: 'retry' },
       originalInstruction: 'review',
       initialResponse: response('initial'),
@@ -306,7 +306,7 @@ describe('review completion episode', () => {
       missingObligations: [missingObligation],
     });
 
-    const result = await runReviewCompletionEpisode({
+    const result = await runCompletionRetryEpisode({
       config: { minRetry: 0, maxRetry: 8, retryInstruction: 'retry' },
       originalInstruction: 'review',
       initialResponse: response('initial'),
@@ -329,9 +329,9 @@ describe('review completion episode', () => {
   });
 
   it('uses one schema because the actual reviewer instruction defines scope', () => {
-    const schema = buildReviewCompletionOutputSchema();
+    const schema = buildCompletionRetryOutputSchema();
     expect(JSON.stringify(schema)).toContain('required_consumer_migration');
-    expect(parseReviewCompletionDecision({
+    expect(parseCompletionRetryDecision({
       complete: true,
       reason: 'complete within the reviewer instruction',
       missing_obligations: [],
@@ -343,7 +343,7 @@ describe('review completion episode', () => {
     ['throw', async () => { throw new Error('retry threw'); }],
   ])('keeps the latest valid response when a reviewer retry %s', async (_name, executeRetry) => {
     const latest = response('authoritative reviewer report', 'stable-session');
-    const result = await runReviewCompletionEpisode({
+    const result = await runCompletionRetryEpisode({
       config: { minRetry: 0, maxRetry: 1, retryInstruction: 'retry' },
       originalInstruction: 'review',
       initialResponse: latest,

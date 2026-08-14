@@ -12,9 +12,9 @@ import type {
 import { getWorkflowStepKind } from '../../../core/models/workflow-step-kind.js';
 import type { WorkflowArpeggioConfig, WorkflowMcpServersConfig, WorkflowOverrides } from '../../../core/models/config-types.js';
 import {
-  MAX_REVIEW_COMPLETION_RETRY,
+  MAX_COMPLETION_RETRY,
   type DynamicFacetsConfig,
-  type ReviewCompletionConfig,
+  type CompletionRetryConfig,
   type SelectorGuidance,
   type StepProviderOptions,
   type WorkflowCallArgValue,
@@ -50,27 +50,27 @@ import { isWorkflowParamReference } from './workflowCallableParamRef.js';
 import { normalizeQualityGates } from '../configNormalizers.js';
 import { withWorkflowConfigErrorPath as withWorkflowStepErrorPath } from '../../../core/workflow/workflow-config-error.js';
 
-function normalizeReviewCompletion(
+function normalizeCompletionRetry(
   step: z.input<typeof WorkflowStepRawSchema>,
   stepPath: readonly PropertyKey[],
   workflowDir: string,
   sections: WorkflowSections,
   context: FacetResolutionContext | undefined,
-): ReviewCompletionConfig | undefined {
-  const raw = step.review_completion;
+): CompletionRetryConfig | undefined {
+  const raw = step.completion_retry;
   if (raw === undefined) {
     return undefined;
   }
   const retryInstructionRef = raw.retry_instruction;
   if (isWorkflowParamReference(retryInstructionRef)) {
     throw withWorkflowStepErrorPath(
-      new Error(`Step "${step.name}" has unresolved $param in review_completion.retry_instruction`),
-      [...stepPath, 'review_completion', 'retry_instruction'],
+      new Error(`Step "${step.name}" has unresolved $param in completion_retry.retry_instruction`),
+      [...stepPath, 'completion_retry', 'retry_instruction'],
     );
   }
   const retryInstruction = normalizeStepField(
     stepPath,
-    ['review_completion', 'retry_instruction'],
+    ['completion_retry', 'retry_instruction'],
     () => resolveRefToContent(
       retryInstructionRef,
       sections.resolvedInstructionsWithSource ?? sections.resolvedInstructions,
@@ -81,13 +81,13 @@ function normalizeReviewCompletion(
   );
   if (retryInstruction === undefined) {
     throw withWorkflowStepErrorPath(
-      new Error(`Failed to resolve review completion retry instruction "${retryInstructionRef}"`),
-      [...stepPath, 'review_completion', 'retry_instruction'],
+      new Error(`Failed to resolve completion retry instruction "${retryInstructionRef}"`),
+      [...stepPath, 'completion_retry', 'retry_instruction'],
     );
   }
   return {
     minRetry: raw.min_retry ?? 0,
-    maxRetry: raw.max_retry ?? MAX_REVIEW_COMPLETION_RETRY,
+    maxRetry: raw.max_retry ?? MAX_COMPLETION_RETRY,
     retryInstruction,
   };
 }
@@ -419,7 +419,7 @@ export function normalizeStepFromRaw(
         context,
       ))
     : undefined;
-  const reviewCompletion = normalizeReviewCompletion(
+  const completionRetry = normalizeCompletionRetry(
     step,
     stepPath,
     workflowDir,
@@ -578,7 +578,7 @@ export function normalizeStepFromRaw(
     policyContents,
     knowledgeContents,
     companion: step.companion as CompanionSelection | undefined,
-    reviewCompletion,
+    completionRetry,
   };
 
   // parallel 親の capabilities は sub-step の既定になる（sub-step 自身の宣言が置換する）。

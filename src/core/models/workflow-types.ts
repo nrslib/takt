@@ -244,9 +244,9 @@ export interface SelectorGuidance {
   readonly instruction: string;
 }
 
-export const MAX_REVIEW_COMPLETION_RETRY = 4;
+export const MAX_COMPLETION_RETRY = 4;
 
-export interface ReviewCompletionConfig {
+export interface CompletionRetryConfig {
   readonly minRetry: number;
   readonly maxRetry: number;
   readonly retryInstruction: string;
@@ -337,7 +337,7 @@ interface AgentWorkflowStepBase extends WorkflowStepBase {
   teamLeader?: TeamLeaderConfig;
   policyContents?: readonly ResolvedFacetContent[];
   knowledgeContents?: readonly ResolvedFacetContent[];
-  reviewCompletion?: ReviewCompletionConfig;
+  completionRetry?: CompletionRetryConfig;
 }
 
 export interface NormalAgentWorkflowStep extends AgentWorkflowStepBase {
@@ -446,7 +446,7 @@ export interface SystemWorkflowStep extends WorkflowStepBase {
   teamLeader?: never;
   policyContents?: never;
   knowledgeContents?: never;
-  reviewCompletion?: never;
+  completionRetry?: never;
 }
 
 export interface WorkflowCallStep extends WorkflowStepBase {
@@ -482,7 +482,7 @@ export interface WorkflowCallStep extends WorkflowStepBase {
   teamLeader?: never;
   policyContents?: never;
   knowledgeContents?: never;
-  reviewCompletion?: never;
+  completionRetry?: never;
 }
 
 export type WorkflowStep = AgentWorkflowStep | SystemWorkflowStep | WorkflowCallStep;

@@ -329,7 +329,7 @@ function buildInternalAgents(
     selector: 'selector',
     assistant: 'assistant',
     'loop-judge': 'loopJudge',
-    'review-completion-judge': 'reviewCompletionJudge',
+    'review-completion-judge': 'completionRetryJudge',
   };
   const result: InternalAgentEnvironment = {};
   for (const [key, assignment] of Object.entries(map)) {

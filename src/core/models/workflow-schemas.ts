@@ -38,7 +38,7 @@ import {
   SESSION_NORMAL_AGENT_STEP_REQUIRED_MESSAGE,
 } from './workflow-session-constraints.js';
 import {
-  MAX_REVIEW_COMPLETION_RETRY,
+  MAX_COMPLETION_RETRY,
   WORKFLOW_SESSION_MODES,
 } from './workflow-types.js';
 import { classifyReportRelativePath } from './reserved-report-names.js';
@@ -478,27 +478,27 @@ export const TeamLeaderConfigRawSchema = z.object({
 /** Workflow step schema - raw YAML format */
 const WorkflowStepKindSchema = z.enum(['agent', 'system', 'workflow_call']);
 
-const ReviewCompletionOptionsRawSchema = z.object({
-  min_retry: z.number().int().min(0).max(MAX_REVIEW_COMPLETION_RETRY).optional(),
+const CompletionRetryOptionsRawSchema = z.object({
+  min_retry: z.number().int().min(0).max(MAX_COMPLETION_RETRY).optional(),
   max_retry: z.number().int().min(0).optional(),
   retry_instruction: WorkflowFacetRefOrParamSchema,
 }).strict().superRefine((data, ctx) => {
   const minRetry = data.min_retry ?? 0;
-  const maxRetry = data.max_retry ?? MAX_REVIEW_COMPLETION_RETRY;
+  const maxRetry = data.max_retry ?? MAX_COMPLETION_RETRY;
   if (minRetry > maxRetry) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['min_retry'],
-      message: 'review_completion.min_retry must be less than or equal to max_retry',
+      message: 'completion_retry.min_retry must be less than or equal to max_retry',
     });
   }
 });
 
-const ReviewCompletionRawSchema = ReviewCompletionOptionsRawSchema;
+const CompletionRetryRawSchema = CompletionRetryOptionsRawSchema;
 
-function validateReviewCompletionOptIn(
+function validateCompletionRetryOptIn(
   data: {
-    review_completion?: unknown;
+    completion_retry?: unknown;
     parallel?: unknown;
     arpeggio?: unknown;
     team_leader?: unknown;
@@ -506,13 +506,13 @@ function validateReviewCompletionOptIn(
   ctx: z.RefinementCtx,
 ): void {
   if (
-    data.review_completion !== undefined
+    data.completion_retry !== undefined
     && (data.parallel !== undefined || data.arpeggio !== undefined || data.team_leader !== undefined)
   ) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      path: ['review_completion'],
-      message: 'review_completion is only supported on normal agent steps and parallel agent sub-steps',
+      path: ['completion_retry'],
+      message: 'completion_retry is only supported on normal agent steps and parallel agent sub-steps',
     });
   }
 }
@@ -554,7 +554,7 @@ const AgentParallelSubStepRawObjectSchema = z.object({
   persona: WorkflowPersonaRefOrParamSchema.optional(),
   persona_name: z.string().optional(),
   tags: z.array(z.string().min(1)).optional(),
-  review_completion: ReviewCompletionRawSchema.optional(),
+  completion_retry: CompletionRetryRawSchema.optional(),
   policy: WorkflowFacetRefListOrParamSchema.optional(),
   knowledge: WorkflowFacetRefListOrParamSchema.optional(),
   allow_git_commit: z.boolean().optional(),
@@ -624,7 +624,7 @@ const WorkflowCallParallelSubStepRawSchema = z.object({
   persona: z.never().optional(),
   persona_name: z.never().optional(),
   tags: z.never().optional(),
-  review_completion: z.never().optional(),
+  completion_retry: z.never().optional(),
   policy: z.never().optional(),
   knowledge: z.never().optional(),
   allow_git_commit: z.never().optional(),
@@ -737,7 +737,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     persona: WorkflowPersonaRefOrParamSchema.optional(),
     persona_name: z.string().optional(),
     tags: z.array(z.string().min(1)).optional(),
-    review_completion: ReviewCompletionRawSchema.optional(),
+    completion_retry: CompletionRetryRawSchema.optional(),
     policy: WorkflowFacetRefListOrParamSchema.optional(),
     knowledge: WorkflowFacetRefListOrParamSchema.optional(),
     allow_git_commit: z.boolean().optional(),
@@ -776,7 +776,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
       path: ['parallel'],
     },
   ).superRefine((data, ctx) => {
-    validateReviewCompletionOptIn(data, ctx);
+    validateCompletionRetryOptIn(data, ctx);
     if (data.kind !== undefined && data.mode !== undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -786,11 +786,11 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     }
 
     const stepKind = getWorkflowStepKind(data);
-    if (data.review_completion !== undefined && stepKind !== 'agent') {
+    if (data.completion_retry !== undefined && stepKind !== 'agent') {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ['review_completion'],
-        message: 'review_completion is only supported on agent steps',
+        path: ['completion_retry'],
+        message: 'completion_retry is only supported on agent steps',
       });
     }
     if (stepKind !== 'workflow_call') {
@@ -952,7 +952,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
         'persona',
         'persona_name',
         'tags',
-        'review_completion',
+        'completion_retry',
         'policy',
         'knowledge',
         'allow_git_commit',

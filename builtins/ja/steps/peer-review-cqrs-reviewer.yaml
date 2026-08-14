@@ -8,16 +8,16 @@ params:
   cqrs_es_review_instruction:
     type: facet_ref
     facet_kind: instruction
-  review_completion_retry_instruction:
+  completion_retry_instruction:
     type: facet_ref
     facet_kind: instruction
 name: cqrs-es-review
 capabilities: readonly
 tags:
   - review
-review_completion:
+completion_retry:
   retry_instruction:
-    $param: review_completion_retry_instruction
+    $param: completion_retry_instruction
 edit: false
 persona: cqrs-es-reviewer
 policy:

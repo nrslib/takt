@@ -125,7 +125,7 @@ export interface JudgeStageSpanParams {
   providerInfo?: StepProviderInfo;
 }
 
-export interface ReviewCompletionJudgeSpanParams {
+export interface CompletionRetryJudgeSpanParams {
   enabled: boolean;
   runId?: string;
   workflowName: string;
@@ -134,8 +134,8 @@ export interface ReviewCompletionJudgeSpanParams {
   providerInfo: StepProviderInfo;
 }
 
-export async function runWithReviewCompletionJudgeSpan<T>(
-  params: ReviewCompletionJudgeSpanParams,
+export async function runWithCompletionRetryJudgeSpan<T>(
+  params: CompletionRetryJudgeSpanParams,
   execute: () => Promise<T>,
   outcome: (result: T) => { status: string; gapCount: number },
 ): Promise<T> {

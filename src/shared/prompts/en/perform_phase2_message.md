@@ -36,13 +36,13 @@ The following is the output from Phase 1 (your main work). Use this as context t
 
 {{lastResponse}}
 {{/if}}
-{{#if hasReviewCompletionDiagnostic}}
+{{#if hasCompletionRetryDiagnostic}}
 
-## Review Completion Diagnostic
+## Completion Retry Diagnostic
 
 This diagnostic is only context for this Phase 2 report. Do not convert it into a finding or status, and do not claim that it was part of the reviewer response:
 
-{{reviewCompletionDiagnostic}}
+{{completionRetryDiagnostic}}
 {{/if}}
 
 ## Instructions

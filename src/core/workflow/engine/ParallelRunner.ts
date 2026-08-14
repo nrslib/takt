@@ -63,7 +63,7 @@ import {
 } from './fallback-operation.js';
 import type { DynamicParallelSelectorCoordinator } from '../dynamic-parallel/selector-coordinator.js';
 import { validateProviderModelRequirements } from '../provider-model-requirements.js';
-import { formatReviewCompletionDiagnostic } from '../review-completion.js';
+import { formatCompletionRetryDiagnostic } from '../completion-retry.js';
 import {
   AGENT_FAILURE_CATEGORIES,
   MAX_AGENT_FAILURE_MESSAGE_BYTES,
@@ -527,11 +527,11 @@ export class ParallelRunner {
                     sessionId,
                     onPromptResolved,
                   },
-                  executableSubStep.reviewCompletion === undefined,
+                  executableSubStep.completionRetry === undefined,
                 )
               ),
               onPhaseStart: this.deps.onPhaseStart,
-              ...(executableSubStep.reviewCompletion === undefined
+              ...(executableSubStep.completionRetry === undefined
                 ? {}
                 : {
                     onPhaseComplete: this.deps.onPhaseComplete,
@@ -569,7 +569,7 @@ export class ParallelRunner {
                 onPhaseComplete: this.deps.onPhaseComplete,
               });
             }
-            if (executableSubStep.reviewCompletion !== undefined) {
+            if (executableSubStep.completionRetry !== undefined) {
               recordAgentUsageEvent(
                 this.deps.engineOptions,
                 subStep.name,
@@ -593,7 +593,7 @@ export class ParallelRunner {
         if (subResponse.sessionId !== undefined) {
           updatePersonaSession(subSessionKey, subResponse.sessionId);
         }
-        if (executableSubStep.reviewCompletion !== undefined) {
+        if (executableSubStep.completionRetry !== undefined) {
           subResponse = this.deps.stepExecutor.finalizeObservedReviewerAttempt({
             eventStep: subStep,
             executableStep: executableSubStep,
@@ -638,8 +638,8 @@ export class ParallelRunner {
           };
         }
 
-        let reviewCompletionDiagnostic: string | undefined;
-        if (executableSubStep.reviewCompletion !== undefined) {
+        let completionRetryDiagnostic: string | undefined;
+        if (executableSubStep.completionRetry !== undefined) {
           let reviewerPhaseExecutionSequence = phase1Result.finalAttempt.sequence + 1;
           const completion = await this.deps.stepExecutor.completeReviewerResponse({
             step: executableSubStep,
@@ -734,9 +734,9 @@ export class ParallelRunner {
           });
           subResponse = completion.response;
           updatePersonaSession(subSessionKey, completion.reviewerSessionId);
-          reviewCompletionDiagnostic = completion.diagnostic === undefined
+          completionRetryDiagnostic = completion.diagnostic === undefined
             ? undefined
-            : formatReviewCompletionDiagnostic(
+            : formatCompletionRetryDiagnostic(
                 completion.diagnostic,
                 this.deps.engineOptions.language,
               );
@@ -778,9 +778,9 @@ export class ParallelRunner {
               );
             },
           );
-          const phaseCtx = reviewCompletionDiagnostic === undefined
+          const phaseCtx = completionRetryDiagnostic === undefined
             ? basePhaseContext
-            : { ...basePhaseContext, reviewCompletionDiagnostic };
+            : { ...basePhaseContext, completionRetryDiagnostic };
           if (subStep.outputContracts && subStep.outputContracts.length > 0) {
             try {
               const reportResult = await runReportPhase(subStep, subIteration, phaseCtx);

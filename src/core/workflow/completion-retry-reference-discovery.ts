@@ -3,7 +3,7 @@ import { extname, posix, resolve } from 'node:path';
 import { readRegularFileNoFollow } from '../../shared/utils/private-file.js';
 import { isSensitiveProjectFilePath } from '../../shared/utils/sensitive-file-path.js';
 import { assertPathSegmentsAreSafe } from '../../shared/utils/pathBoundary.js';
-import { resolveReviewCompletionPath } from './review-completion-path.js';
+import { resolveCompletionRetryPath } from './completion-retry-path.js';
 
 const MAX_REFERENCE_SEEDS = 24;
 const MAX_REFERENCE_CANDIDATES = 16;
@@ -32,7 +32,7 @@ const GENERIC_REFERENCE_SEEDS = new Set([
   'target', 'type', 'value',
 ]);
 
-export type ReviewCompletionReferenceOmissionReason =
+export type CompletionRetryReferenceOmissionReason =
   | 'reference_binary_file'
   | 'reference_candidate_limit'
   | 'reference_discovery_unavailable'
@@ -42,32 +42,32 @@ export type ReviewCompletionReferenceOmissionReason =
   | 'reference_scan_limit'
   | 'reference_seed_limit';
 
-export type ReviewCompletionReferenceKind =
+export type CompletionRetryReferenceKind =
   | 'config_key'
   | 'declaration'
   | 'import_specifier'
   | 'module_name';
 
-export interface ReviewCompletionReferenceEvidence {
+export interface CompletionRetryReferenceEvidence {
   readonly path: string;
   readonly line: number;
-  readonly relationKind: ReviewCompletionReferenceKind;
+  readonly relationKind: CompletionRetryReferenceKind;
   readonly seed: string;
 }
 
-export interface ReviewCompletionReferenceDiscoveryResult {
-  readonly references: readonly ReviewCompletionReferenceEvidence[];
-  readonly omissions: ReadonlyMap<ReviewCompletionReferenceOmissionReason, number>;
+export interface CompletionRetryReferenceDiscoveryResult {
+  readonly references: readonly CompletionRetryReferenceEvidence[];
+  readonly omissions: ReadonlyMap<CompletionRetryReferenceOmissionReason, number>;
 }
 
-export interface ReviewCompletionReferenceDiscoveryLimits {
+export interface CompletionRetryReferenceDiscoveryLimits {
   readonly maxPathBytes: number;
   readonly maxFileBytes: number;
 }
 
 interface ReferenceSeed {
   readonly value: string;
-  readonly kind: ReviewCompletionReferenceKind;
+  readonly kind: CompletionRetryReferenceKind;
 }
 
 type SourceReadResult =
@@ -78,8 +78,8 @@ type SourceReadResult =
   | { readonly kind: 'unavailable' };
 
 function addOmission(
-  counts: Map<ReviewCompletionReferenceOmissionReason, number>,
-  reason: ReviewCompletionReferenceOmissionReason,
+  counts: Map<CompletionRetryReferenceOmissionReason, number>,
+  reason: CompletionRetryReferenceOmissionReason,
   count = 1,
 ): void {
   counts.set(reason, (counts.get(reason) ?? 0) + count);
@@ -126,9 +126,9 @@ function isReviewableSource(path: string): boolean {
 }
 
 function addSeed(
-  seeds: Map<string, ReviewCompletionReferenceKind>,
+  seeds: Map<string, CompletionRetryReferenceKind>,
   value: string,
-  kind: ReviewCompletionReferenceKind,
+  kind: CompletionRetryReferenceKind,
 ): void {
   const trimmed = value.trim();
   if (trimmed.length < 5 || trimmed.length > 128) return;
@@ -140,14 +140,14 @@ function addSeed(
 function extractSeeds(
   changedFiles: readonly { readonly path: string; readonly content: string }[],
   diff: string | undefined,
-  omissions: Map<ReviewCompletionReferenceOmissionReason, number>,
+  omissions: Map<CompletionRetryReferenceOmissionReason, number>,
 ): ReferenceSeed[] {
-  const seeds = new Map<string, ReviewCompletionReferenceKind>();
+  const seeds = new Map<string, CompletionRetryReferenceKind>();
   for (const file of changedFiles) {
     addSeed(seeds, posix.basename(file.path, posix.extname(file.path)), 'module_name');
   }
   const source = `${changedFiles.map(({ content }) => content).join('\n')}\n${diff ?? ''}`;
-  const patterns: readonly [RegExp, ReviewCompletionReferenceKind][] = [
+  const patterns: readonly [RegExp, CompletionRetryReferenceKind][] = [
     [/\b(?:export\s+)?(?:declare\s+)?(?:async\s+)?(?:class|function|const|let|var|interface|type|enum)\s+([A-Za-z_$][\w$]*)/g, 'declaration'],
     [/\b(?:from\s*|import\s*\(\s*|require\s*\(\s*)['"]([^'"\r\n]+)['"]/g, 'import_specifier'],
     [/(?:^|\n)[+\- ]*\s*["']?([A-Za-z_][\w.-]*)["']?\s*:/g, 'config_key'],
@@ -183,7 +183,7 @@ function referenceMatch(
   path: string,
   lines: readonly string[],
   compiledSeed: CompiledReferenceSeed,
-): ReviewCompletionReferenceEvidence | undefined {
+): CompletionRetryReferenceEvidence | undefined {
   const lineIndex = lines.findIndex((line) => compiledSeed.pattern.test(line));
   if (lineIndex < 0) return undefined;
   return {
@@ -197,7 +197,7 @@ function referenceMatch(
 function safelyReadSource(
   cwd: string,
   path: string,
-  limits: ReviewCompletionReferenceDiscoveryLimits,
+  limits: CompletionRetryReferenceDiscoveryLimits,
 ): SourceReadResult {
   if (!isCanonicalRepositoryPath(path)
     || Buffer.byteLength(path, 'utf8') > limits.maxPathBytes
@@ -209,10 +209,10 @@ function safelyReadSource(
     const inspected = assertPathSegmentsAreSafe(
       cwd,
       resolve(cwd, path),
-      (_violation, segmentPath) => new Error(`Unsafe review completion reference path: ${segmentPath}`),
+      (_violation, segmentPath) => new Error(`Unsafe completion retry reference path: ${segmentPath}`),
     );
     if (inspected === null) return { kind: 'unavailable' };
-    const resolution = resolveReviewCompletionPath(cwd, path);
+    const resolution = resolveCompletionRetryPath(cwd, path);
     if (!resolution.ok) return { kind: 'unavailable' };
     if (resolution.stat.size > limits.maxFileBytes) return { kind: 'oversized' };
     const content = decodeUtf8(readRegularFileNoFollow(resolution.realPath, resolution.stat));
@@ -226,14 +226,14 @@ function safelyReadSource(
  * Source content remains host-local. Returned seeds already occur in changed
  * evidence, so discovery does not create a new source-text disclosure channel.
  */
-export function discoverReviewCompletionReferences(input: {
+export function discoverCompletionRetryReferences(input: {
   readonly cwd: string;
   readonly changedFiles: readonly { readonly path: string; readonly content: string }[];
   readonly diff: string | undefined;
   readonly excludedPaths: ReadonlySet<string>;
-  readonly limits: ReviewCompletionReferenceDiscoveryLimits;
-}): ReviewCompletionReferenceDiscoveryResult {
-  const omissions = new Map<ReviewCompletionReferenceOmissionReason, number>();
+  readonly limits: CompletionRetryReferenceDiscoveryLimits;
+}): CompletionRetryReferenceDiscoveryResult {
+  const omissions = new Map<CompletionRetryReferenceOmissionReason, number>();
   const seeds = extractSeeds(input.changedFiles, input.diff, omissions);
   if (seeds.length === 0) return { references: [], omissions };
   const compiledSeeds = compileReferenceSeeds(seeds);
@@ -257,7 +257,7 @@ export function discoverReviewCompletionReferences(input: {
     addOmission(omissions, 'reference_inventory_limit', candidates.length - boundedInventory.length);
   }
 
-  const references: ReviewCompletionReferenceEvidence[] = [];
+  const references: CompletionRetryReferenceEvidence[] = [];
   let scannedBytes = 0;
   for (const [index, path] of boundedInventory.entries()) {
     const source = safelyReadSource(input.cwd, path, input.limits);
@@ -281,7 +281,7 @@ export function discoverReviewCompletionReferences(input: {
     }
     scannedBytes += bytes;
     const lines = source.content.split('\n');
-    let reference: ReviewCompletionReferenceEvidence | undefined;
+    let reference: CompletionRetryReferenceEvidence | undefined;
     for (const compiledSeed of compiledSeeds) {
       reference = referenceMatch(path, lines, compiledSeed);
       if (reference !== undefined) break;

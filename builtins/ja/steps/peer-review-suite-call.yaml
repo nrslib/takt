@@ -20,8 +20,8 @@ args:
     $param: frontend_review_instruction
   cqrs_es_review_instruction:
     $param: cqrs_es_review_instruction
-  review_completion_retry_instruction:
-    $param: review_completion_retry_instruction
+  completion_retry_instruction:
+    $param: completion_retry_instruction
 params:
   reviewer_suite:
     type: workflow_ref
@@ -52,6 +52,6 @@ params:
   cqrs_es_review_instruction:
     type: facet_ref
     facet_kind: instruction
-  review_completion_retry_instruction:
+  completion_retry_instruction:
     type: facet_ref
     facet_kind: instruction

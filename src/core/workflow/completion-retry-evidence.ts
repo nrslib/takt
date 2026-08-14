@@ -6,21 +6,21 @@ import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { truncateUtf8 } from '../../shared/utils/utf8.js';
 import { assertPathSegmentsAreSafe } from '../../shared/utils/pathBoundary.js';
 import type { ReviewScopeBaseRange, TaskReviewScope } from './review-scope.js';
-import { resolveReviewCompletionPath } from './review-completion-path.js';
+import { resolveCompletionRetryPath } from './completion-retry-path.js';
 import {
-  discoverReviewCompletionReferences,
-  type ReviewCompletionReferenceEvidence,
-  type ReviewCompletionReferenceOmissionReason,
-} from './review-completion-reference-discovery.js';
+  discoverCompletionRetryReferences,
+  type CompletionRetryReferenceEvidence,
+  type CompletionRetryReferenceOmissionReason,
+} from './completion-retry-reference-discovery.js';
 
-export const REVIEW_COMPLETION_EVIDENCE_MAX_PATHS = 64;
-const REVIEW_COMPLETION_EVIDENCE_MAX_CLAIMED_PATHS = 16;
-export const REVIEW_COMPLETION_EVIDENCE_MAX_PATH_BYTES = 1024;
-export const REVIEW_COMPLETION_EVIDENCE_MAX_FILE_BYTES = 32 * 1024;
-export const REVIEW_COMPLETION_EVIDENCE_MAX_DIFF_BYTES = 256 * 1024;
-export const REVIEW_COMPLETION_EVIDENCE_MAX_TOTAL_BYTES = 512 * 1024;
+export const COMPLETION_RETRY_EVIDENCE_MAX_PATHS = 64;
+const COMPLETION_RETRY_EVIDENCE_MAX_CLAIMED_PATHS = 16;
+export const COMPLETION_RETRY_EVIDENCE_MAX_PATH_BYTES = 1024;
+export const COMPLETION_RETRY_EVIDENCE_MAX_FILE_BYTES = 32 * 1024;
+export const COMPLETION_RETRY_EVIDENCE_MAX_DIFF_BYTES = 256 * 1024;
+export const COMPLETION_RETRY_EVIDENCE_MAX_TOTAL_BYTES = 512 * 1024;
 
-type ReviewCompletionEvidenceOmissionReason = ReviewCompletionReferenceOmissionReason
+type CompletionRetryEvidenceOmissionReason = CompletionRetryReferenceOmissionReason
   | 'binary_file'
   | 'diff_size_limit'
   | 'diff_unavailable'
@@ -33,25 +33,25 @@ type ReviewCompletionEvidenceOmissionReason = ReviewCompletionReferenceOmissionR
   | 'total_size_limit'
   | 'unsupported_scope';
 
-export interface ReviewCompletionEvidenceFile {
+export interface CompletionRetryEvidenceFile {
   readonly path: string;
   readonly content: string;
   readonly truncated: boolean;
 }
 
-export interface ReviewCompletionEvidenceOmission {
-  readonly reason: ReviewCompletionEvidenceOmissionReason;
+export interface CompletionRetryEvidenceOmission {
+  readonly reason: CompletionRetryEvidenceOmissionReason;
   readonly count: number;
 }
 
-export interface ReviewCompletionEvidence {
+export interface CompletionRetryEvidence {
   readonly status: 'collected' | 'omitted';
-  readonly files: readonly ReviewCompletionEvidenceFile[];
+  readonly files: readonly CompletionRetryEvidenceFile[];
   readonly diff?: string;
-  readonly references: readonly ReviewCompletionReferenceEvidence[];
+  readonly references: readonly CompletionRetryReferenceEvidence[];
   readonly claimedPaths: readonly string[];
   readonly priorGapPaths: readonly string[];
-  readonly omissions: readonly ReviewCompletionEvidenceOmission[];
+  readonly omissions: readonly CompletionRetryEvidenceOmission[];
 }
 
 function collectDiffText(cwd: string, range: string, paths: readonly string[]): string | undefined {
@@ -61,12 +61,12 @@ function collectDiffText(cwd: string, range: string, paths: readonly string[]): 
     {
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
-      maxBuffer: REVIEW_COMPLETION_EVIDENCE_MAX_DIFF_BYTES,
+      maxBuffer: COMPLETION_RETRY_EVIDENCE_MAX_DIFF_BYTES,
     },
   );
   const decoded = decodeUtf8(output);
   if (decoded === undefined) {
-    throw new Error('Review completion diff is not UTF-8 text');
+    throw new Error('Completion retry diff is not UTF-8 text');
   }
   const trimmed = decoded.trim();
   return trimmed.length === 0 ? undefined : trimmed;
@@ -87,7 +87,7 @@ function trackedClaimedPaths(cwd: string, paths: readonly string[]): Set<string>
   const output = execFileSync('git', ['ls-files', '--cached', '-z', '--', ...paths], {
     cwd,
     stdio: ['ignore', 'pipe', 'pipe'],
-    maxBuffer: REVIEW_COMPLETION_EVIDENCE_MAX_DIFF_BYTES,
+    maxBuffer: COMPLETION_RETRY_EVIDENCE_MAX_DIFF_BYTES,
   });
   return new Set(decodeNulPaths(output));
 }
@@ -109,13 +109,13 @@ function stringArray(value: unknown): string[] {
 /**
  * Extract repository paths only from the reviewer's structured finding contract.
  * Free-form prose is deliberately ignored: every returned path still has to pass
- * the tracked-file and filesystem safety checks in collectReviewCompletionEvidence.
+ * the tracked-file and filesystem safety checks in collectCompletionRetryEvidence.
  */
-export function reviewCompletionClaimedPaths(structuredOutput: Record<string, unknown> | undefined): string[] {
+export function completionRetryClaimedPaths(structuredOutput: Record<string, unknown> | undefined): string[] {
   const rawFindings = structuredOutput?.rawFindings;
   if (!Array.isArray(rawFindings)) return [];
   const paths = new Set<string>();
-  for (const entry of rawFindings.slice(0, REVIEW_COMPLETION_EVIDENCE_MAX_CLAIMED_PATHS)) {
+  for (const entry of rawFindings.slice(0, COMPLETION_RETRY_EVIDENCE_MAX_CLAIMED_PATHS)) {
     if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue;
     const raw = entry as Record<string, unknown>;
     const candidate = typeof raw.candidate === 'object' && raw.candidate !== null
@@ -188,29 +188,29 @@ function decodeUtf8(content: Buffer): string | undefined {
 }
 
 function addOmission(
-  counts: Map<ReviewCompletionEvidenceOmissionReason, number>,
-  reason: ReviewCompletionEvidenceOmissionReason,
+  counts: Map<CompletionRetryEvidenceOmissionReason, number>,
+  reason: CompletionRetryEvidenceOmissionReason,
   count = 1,
 ): void {
   counts.set(reason, (counts.get(reason) ?? 0) + count);
 }
 
 function omissionsFrom(
-  counts: ReadonlyMap<ReviewCompletionEvidenceOmissionReason, number>,
-): ReviewCompletionEvidenceOmission[] {
+  counts: ReadonlyMap<CompletionRetryEvidenceOmissionReason, number>,
+): CompletionRetryEvidenceOmission[] {
   return [...counts.entries()]
     .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
     .map(([reason, count]) => ({ reason, count }));
 }
 
 function buildEvidence(
-  files: readonly ReviewCompletionEvidenceFile[],
+  files: readonly CompletionRetryEvidenceFile[],
   diff: string | undefined,
-  references: readonly ReviewCompletionReferenceEvidence[],
+  references: readonly CompletionRetryReferenceEvidence[],
   claimedPaths: readonly string[],
   priorGapPaths: readonly string[],
-  omissionCounts: ReadonlyMap<ReviewCompletionEvidenceOmissionReason, number>,
-): ReviewCompletionEvidence {
+  omissionCounts: ReadonlyMap<CompletionRetryEvidenceOmissionReason, number>,
+): CompletionRetryEvidence {
   return {
     status: files.length === 0
       && diff === undefined
@@ -229,13 +229,13 @@ function buildEvidence(
 }
 
 function enforceSerializedLimit(
-  files: ReviewCompletionEvidenceFile[],
+  files: CompletionRetryEvidenceFile[],
   diff: string | undefined,
-  references: ReviewCompletionReferenceEvidence[],
+  references: CompletionRetryReferenceEvidence[],
   claimedPaths: string[],
   priorGapPaths: string[],
-  omissionCounts: Map<ReviewCompletionEvidenceOmissionReason, number>,
-): ReviewCompletionEvidence {
+  omissionCounts: Map<CompletionRetryEvidenceOmissionReason, number>,
+): CompletionRetryEvidence {
   let currentDiff = diff;
   let evidence = buildEvidence(
     files,
@@ -246,7 +246,7 @@ function enforceSerializedLimit(
     omissionCounts,
   );
   let excess = Buffer.byteLength(JSON.stringify(evidence), 'utf8')
-    - REVIEW_COMPLETION_EVIDENCE_MAX_TOTAL_BYTES;
+    - COMPLETION_RETRY_EVIDENCE_MAX_TOTAL_BYTES;
   while (excess > 0 && currentDiff !== undefined) {
     const retainedBytes = Math.max(0, Buffer.byteLength(currentDiff, 'utf8') - excess);
     currentDiff = retainedBytes === 0 ? undefined : truncateUtf8(currentDiff, retainedBytes).value;
@@ -260,18 +260,18 @@ function enforceSerializedLimit(
       omissionCounts,
     );
     excess = Buffer.byteLength(JSON.stringify(evidence), 'utf8')
-      - REVIEW_COMPLETION_EVIDENCE_MAX_TOTAL_BYTES;
+      - COMPLETION_RETRY_EVIDENCE_MAX_TOTAL_BYTES;
   }
   const trimTrailingItems = <T>(
     items: T[],
-    reason: ReviewCompletionEvidenceOmissionReason,
+    reason: CompletionRetryEvidenceOmissionReason,
     buildCandidate: (
       retainedItems: T[],
-      omissions: ReadonlyMap<ReviewCompletionEvidenceOmissionReason, number>,
-    ) => ReviewCompletionEvidence,
+      omissions: ReadonlyMap<CompletionRetryEvidenceOmissionReason, number>,
+    ) => CompletionRetryEvidence,
   ): void => {
     if (items.length === 0
-      || Buffer.byteLength(JSON.stringify(evidence), 'utf8') <= REVIEW_COMPLETION_EVIDENCE_MAX_TOTAL_BYTES) {
+      || Buffer.byteLength(JSON.stringify(evidence), 'utf8') <= COMPLETION_RETRY_EVIDENCE_MAX_TOTAL_BYTES) {
       return;
     }
     const originalLength = items.length;
@@ -283,7 +283,7 @@ function enforceSerializedLimit(
       addOmission(candidateOmissions, reason, removed);
       const retainedItems = items.slice(0, originalLength - removed);
       const candidate = buildCandidate(retainedItems, candidateOmissions);
-      if (Buffer.byteLength(JSON.stringify(candidate), 'utf8') <= REVIEW_COMPLETION_EVIDENCE_MAX_TOTAL_BYTES) {
+      if (Buffer.byteLength(JSON.stringify(candidate), 'utf8') <= COMPLETION_RETRY_EVIDENCE_MAX_TOTAL_BYTES) {
         maximumRemoved = removed;
       } else {
         minimumRemoved = removed + 1;
@@ -339,11 +339,11 @@ function collectSupplementalPaths(input: {
   readonly cwd: string;
   readonly paths: readonly string[];
   readonly excludedPaths: ReadonlySet<string>;
-  readonly omissionCounts: Map<ReviewCompletionEvidenceOmissionReason, number>;
+  readonly omissionCounts: Map<CompletionRetryEvidenceOmissionReason, number>;
 }): string[] {
   const novelPaths = [...new Set(input.paths)]
     .filter((path) => !input.excludedPaths.has(path));
-  const boundedPaths = novelPaths.slice(0, REVIEW_COMPLETION_EVIDENCE_MAX_CLAIMED_PATHS);
+  const boundedPaths = novelPaths.slice(0, COMPLETION_RETRY_EVIDENCE_MAX_CLAIMED_PATHS);
   if (novelPaths.length > boundedPaths.length) {
     addOmission(input.omissionCounts, 'path_limit', novelPaths.length - boundedPaths.length);
   }
@@ -352,7 +352,7 @@ function collectSupplementalPaths(input: {
       addOmission(input.omissionCounts, 'claimed_path_unverified');
       return false;
     }
-    if (Buffer.byteLength(path, 'utf8') > REVIEW_COMPLETION_EVIDENCE_MAX_PATH_BYTES) {
+    if (Buffer.byteLength(path, 'utf8') > COMPLETION_RETRY_EVIDENCE_MAX_PATH_BYTES) {
       addOmission(input.omissionCounts, 'path_size_limit');
       return false;
     }
@@ -379,7 +379,7 @@ function collectSupplementalPaths(input: {
       const inspected = assertPathSegmentsAreSafe(
         input.cwd,
         resolve(input.cwd, path),
-        (_violation, segmentPath) => new Error(`Unsafe review completion reference path: ${segmentPath}`),
+        (_violation, segmentPath) => new Error(`Unsafe completion retry reference path: ${segmentPath}`),
       );
       if (inspected === null || !inspected.isFile()) {
         addOmission(input.omissionCounts, 'claimed_path_unverified');
@@ -394,20 +394,20 @@ function collectSupplementalPaths(input: {
   return admittedPaths;
 }
 
-export function collectReviewCompletionEvidence(input: {
+export function collectCompletionRetryEvidence(input: {
   readonly cwd: string;
   readonly reviewScope: TaskReviewScope | undefined;
   readonly claimedPaths?: readonly string[];
   readonly priorGapPaths?: readonly string[];
-}): ReviewCompletionEvidence {
-  const omissionCounts = new Map<ReviewCompletionEvidenceOmissionReason, number>();
+}): CompletionRetryEvidence {
+  const omissionCounts = new Map<CompletionRetryEvidenceOmissionReason, number>();
   if (input.reviewScope === undefined || input.reviewScope.kind !== 'collected') {
     addOmission(omissionCounts, 'unsupported_scope');
     return buildEvidence([], undefined, [], [], [], omissionCounts);
   }
   const reviewScope = input.reviewScope;
 
-  const selectedPaths = reviewScope.paths.slice(0, REVIEW_COMPLETION_EVIDENCE_MAX_PATHS);
+  const selectedPaths = reviewScope.paths.slice(0, COMPLETION_RETRY_EVIDENCE_MAX_PATHS);
   if (reviewScope.paths.length > selectedPaths.length) {
     addOmission(
       omissionCounts,
@@ -416,10 +416,10 @@ export function collectReviewCompletionEvidence(input: {
     );
   }
 
-  const files: ReviewCompletionEvidenceFile[] = [];
+  const files: CompletionRetryEvidenceFile[] = [];
   const diffPaths: string[] = [];
   for (const path of selectedPaths) {
-    if (Buffer.byteLength(path, 'utf8') > REVIEW_COMPLETION_EVIDENCE_MAX_PATH_BYTES) {
+    if (Buffer.byteLength(path, 'utf8') > COMPLETION_RETRY_EVIDENCE_MAX_PATH_BYTES) {
       addOmission(omissionCounts, 'path_size_limit');
       continue;
     }
@@ -432,7 +432,7 @@ export function collectReviewCompletionEvidence(input: {
       inspectedStat = assertPathSegmentsAreSafe(
         input.cwd,
         resolve(input.cwd, path),
-        (_violation, segmentPath) => new Error(`Unsafe review completion evidence path: ${segmentPath}`),
+        (_violation, segmentPath) => new Error(`Unsafe completion retry evidence path: ${segmentPath}`),
       );
     } catch {
       addOmission(omissionCounts, 'file_unavailable');
@@ -445,12 +445,12 @@ export function collectReviewCompletionEvidence(input: {
       addOmission(omissionCounts, 'file_unavailable');
       continue;
     }
-    const resolution = resolveReviewCompletionPath(input.cwd, path);
+    const resolution = resolveCompletionRetryPath(input.cwd, path);
     if (!resolution.ok) {
       addOmission(omissionCounts, 'file_unavailable');
       continue;
     }
-    if (resolution.stat.size > REVIEW_COMPLETION_EVIDENCE_MAX_FILE_BYTES) {
+    if (resolution.stat.size > COMPLETION_RETRY_EVIDENCE_MAX_FILE_BYTES) {
       addOmission(omissionCounts, 'file_size_limit');
       continue;
     }
@@ -467,7 +467,7 @@ export function collectReviewCompletionEvidence(input: {
       continue;
     }
     const sanitized = sanitizeSensitiveText(decoded);
-    const bounded = truncateUtf8(sanitized, REVIEW_COMPLETION_EVIDENCE_MAX_FILE_BYTES);
+    const bounded = truncateUtf8(sanitized, COMPLETION_RETRY_EVIDENCE_MAX_FILE_BYTES);
     files.push({
       path,
       content: bounded.value,
@@ -483,7 +483,7 @@ export function collectReviewCompletionEvidence(input: {
       const sanitizedDiff = sanitizeSensitiveText(collectedDiff);
       const boundedDiff = truncateUtf8(
         sanitizedDiff,
-        REVIEW_COMPLETION_EVIDENCE_MAX_DIFF_BYTES,
+        COMPLETION_RETRY_EVIDENCE_MAX_DIFF_BYTES,
       );
       diff = boundedDiff.value;
       if (boundedDiff.bytes < Buffer.byteLength(sanitizedDiff, 'utf8')) {
@@ -507,14 +507,14 @@ export function collectReviewCompletionEvidence(input: {
     excludedPaths: new Set([...selectedPathSet, ...claimedPaths]),
     omissionCounts,
   });
-  const discovered = discoverReviewCompletionReferences({
+  const discovered = discoverCompletionRetryReferences({
     cwd: input.cwd,
     changedFiles: files.map(({ path, content }) => ({ path, content })),
     diff,
     excludedPaths: new Set([...selectedPathSet, ...claimedPaths, ...priorGapPaths]),
     limits: {
-      maxPathBytes: REVIEW_COMPLETION_EVIDENCE_MAX_PATH_BYTES,
-      maxFileBytes: REVIEW_COMPLETION_EVIDENCE_MAX_FILE_BYTES,
+      maxPathBytes: COMPLETION_RETRY_EVIDENCE_MAX_PATH_BYTES,
+      maxFileBytes: COMPLETION_RETRY_EVIDENCE_MAX_FILE_BYTES,
     },
   });
   for (const [reason, count] of discovered.omissions) {

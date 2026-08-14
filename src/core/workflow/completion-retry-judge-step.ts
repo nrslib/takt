@@ -2,23 +2,23 @@ import type { InternalAgentSeats } from '../models/config-types.js';
 import type { AgentWorkflowStep, WorkflowConfig } from '../models/types.js';
 import { internalAgentSeatOverride } from './internal-agent-seat.js';
 import {
-  REVIEW_COMPLETION_JUDGE_NAME,
-  REVIEW_COMPLETION_SCHEMA_REF,
-  buildReviewCompletionOutputSchema,
-} from './review-completion.js';
+  COMPLETION_RETRY_JUDGE_NAME,
+  COMPLETION_RETRY_SCHEMA_REF,
+  buildCompletionRetryOutputSchema,
+} from './completion-retry.js';
 
-export function buildReviewCompletionJudgeStep(input: {
+export function buildCompletionRetryJudgeStep(input: {
   readonly reviewerStepName: string;
   readonly workflowProvider?: WorkflowConfig['provider'];
   readonly workflowModel?: WorkflowConfig['model'];
   readonly internalAgentSeats?: InternalAgentSeats;
 }): AgentWorkflowStep {
-  const seat = internalAgentSeatOverride(input.internalAgentSeats?.reviewCompletionJudge);
+  const seat = internalAgentSeatOverride(input.internalAgentSeats?.completionRetryJudge);
   return {
     kind: 'agent',
-    name: `_review_completion_judge_${input.reviewerStepName}`,
-    personaDisplayName: REVIEW_COMPLETION_JUDGE_NAME,
-    providerRoutingPersonaKey: REVIEW_COMPLETION_JUDGE_NAME,
+    name: `_completion_retry_judge_${input.reviewerStepName}`,
+    personaDisplayName: COMPLETION_RETRY_JUDGE_NAME,
+    providerRoutingPersonaKey: COMPLETION_RETRY_JUDGE_NAME,
     ...(seat ?? {
       provider: input.workflowProvider,
       providerSpecified: false,
@@ -29,8 +29,8 @@ export function buildReviewCompletionJudgeStep(input: {
     session: 'refresh',
     edit: false,
     structuredOutput: {
-      schemaRef: REVIEW_COMPLETION_SCHEMA_REF,
-      schema: buildReviewCompletionOutputSchema(),
+      schemaRef: COMPLETION_RETRY_SCHEMA_REF,
+      schema: buildCompletionRetryOutputSchema(),
     },
   };
 }

@@ -701,21 +701,21 @@ function expandStepFields(
   }
 
   if (
-    expandedStep.review_completion !== null
-    && typeof expandedStep.review_completion === 'object'
-    && isWorkflowParamReference(expandedStep.review_completion.retry_instruction)
+    expandedStep.completion_retry !== null
+    && typeof expandedStep.completion_retry === 'object'
+    && isWorkflowParamReference(expandedStep.completion_retry.retry_instruction)
   ) {
-    expandedStep.review_completion = {
-      ...expandedStep.review_completion,
+    expandedStep.completion_retry = {
+      ...expandedStep.completion_retry,
       retry_instruction: resolveExpandedParamValue(
         step.name,
-        'review_completion.retry_instruction',
-        expandedStep.review_completion.retry_instruction,
+        'completion_retry.retry_instruction',
+        expandedStep.completion_retry.retry_instruction,
         ['facet_ref'],
         'instruction',
         params,
         resolvedArgs,
-        [...stepPath, 'review_completion', 'retry_instruction'],
+        [...stepPath, 'completion_retry', 'retry_instruction'],
       ) as string,
     };
   }

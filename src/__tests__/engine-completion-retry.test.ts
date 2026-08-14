@@ -29,7 +29,7 @@ import { runAgent } from '../agents/runner.js';
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
 import { runReportPhase, runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
-import { REVIEW_COMPLETION_JUDGE_NAME } from '../core/workflow/review-completion.js';
+import { COMPLETION_RETRY_JUDGE_NAME } from '../core/workflow/completion-retry.js';
 import { resolveCompiledProviderEnvironment } from '../infra/config/runtime-provider/provider-environment.js';
 import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 import {
@@ -49,7 +49,7 @@ const completion = {
 
 function reviewStep(name: string, overrides: Partial<WorkflowStep> = {}): WorkflowStep {
   return makeStep(name, {
-    reviewCompletion: completion,
+    completionRetry: completion,
     outputContracts: [{ name: `${name}.md`, format: name, useJudge: false }],
     rules: [makeRule('approved', 'COMPLETE')],
     ...overrides,
@@ -96,7 +96,7 @@ function judgeResponse(complete: boolean): AgentResponse {
   });
 }
 
-describe('WorkflowEngine review completion wiring', () => {
+describe('WorkflowEngine completion retry wiring', () => {
   let cwd: string;
   let engine: WorkflowEngine | undefined;
 
@@ -114,7 +114,7 @@ describe('WorkflowEngine review completion wiring', () => {
 
   it('runs the normal reviewer and fresh judge twice for min_retry and reports the latest session', async () => {
     const step = reviewStep('reviewer', {
-      reviewCompletion: { ...completion, minRetry: 1 },
+      completionRetry: { ...completion, minRetry: 1 },
     });
     engine = new WorkflowEngine(normalConfig(step), cwd, 'task', { projectCwd: cwd, provider: 'mock' });
     let reviewerCalls = 0;
@@ -145,7 +145,7 @@ describe('WorkflowEngine review completion wiring', () => {
     const step = reviewStep('reviewer', {
       provider: 'mock',
       providerSpecified: true,
-      reviewCompletion: { ...completion, maxRetry: 0 },
+      completionRetry: { ...completion, maxRetry: 0 },
     });
     mkdirSync(join(cwd, '.takt'), { recursive: true });
     writeFileSync(join(cwd, '.takt', 'runtime.yaml'), stringifyYaml({
@@ -183,7 +183,7 @@ describe('WorkflowEngine review completion wiring', () => {
       legacy,
       legacySignals: [],
     });
-    expect(environment.internalAgents?.reviewCompletionJudge).toEqual({
+    expect(environment.internalAgents?.completionRetryJudge).toEqual({
       provider: 'claude',
       model: 'judge-model',
       permissionMode: 'readonly',
@@ -273,7 +273,7 @@ describe('WorkflowEngine review completion wiring', () => {
     execFileSync('git', ['commit', '-m', 'base'], { cwd });
     writeFileSync(`${cwd}/review-target.ts`, 'export const version = 2;\n');
     const step = reviewStep('reviewer', {
-      reviewCompletion: { ...completion, maxRetry: 0 },
+      completionRetry: { ...completion, maxRetry: 0 },
     });
     engine = new WorkflowEngine(normalConfig(step), cwd, 'task', { projectCwd: cwd, provider: 'mock' });
     let judgeInstruction: string | undefined;
@@ -307,7 +307,7 @@ describe('WorkflowEngine review completion wiring', () => {
     execFileSync('git', ['add', '.'], { cwd });
     execFileSync('git', ['commit', '-m', 'base'], { cwd });
     writeFileSync(`${cwd}/review-target.ts`, 'export const version = 2;\n');
-    const step = reviewStep('reviewer', { reviewCompletion: { ...completion, maxRetry: 0 } });
+    const step = reviewStep('reviewer', { completionRetry: { ...completion, maxRetry: 0 } });
     engine = new WorkflowEngine(normalConfig(step), cwd, 'task', { projectCwd: cwd, provider: 'mock' });
     let judgeInstruction = '';
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
@@ -515,7 +515,7 @@ describe('WorkflowEngine review completion wiring', () => {
 
   it('keeps a judge failure in Phase 2 without leaking it to response, state, or Phase 3', async () => {
     const step = reviewStep('reviewer', {
-      reviewCompletion: { ...completion, maxRetry: 0 },
+      completionRetry: { ...completion, maxRetry: 0 },
       rules: [makeRule('approved', 'COMPLETE'), makeRule('rejected', 'ABORT')],
     });
     engine = new WorkflowEngine(normalConfig(step), cwd, 'task', { projectCwd: cwd, provider: 'mock' });
@@ -529,9 +529,9 @@ describe('WorkflowEngine review completion wiring', () => {
 
     expect(state.status).toBe('completed');
     const phase2 = vi.mocked(runReportPhase).mock.calls[0]![2] as ReportPhaseRunnerContext;
-    expect(phase2.reviewCompletionDiagnostic).toContain('judge_unavailable');
+    expect(phase2.completionRetryDiagnostic).toContain('judge_unavailable');
     const phase3 = vi.mocked(runStatusJudgmentPhase).mock.calls[0]![1] as Record<string, unknown>;
-    expect(phase3).not.toHaveProperty('reviewCompletionDiagnostic');
+    expect(phase3).not.toHaveProperty('completionRetryDiagnostic');
     expect(state.stepOutputs.get(step.name)?.content).toBe('authoritative report');
     expect(vi.mocked(runAgent).mock.calls.filter(([, , options]) => (
       options.internalAgentName !== 'review-completion-judge'
@@ -541,13 +541,13 @@ describe('WorkflowEngine review completion wiring', () => {
 
   it('preserves a judge provider-resolution failure when usage cannot be attributed', async () => {
     const step = reviewStep('reviewer', {
-      reviewCompletion: { ...completion, maxRetry: 0 },
+      completionRetry: { ...completion, maxRetry: 0 },
     });
     const resolveStepProviderModel = OptionsBuilder.prototype.resolveStepProviderModel;
     const providerResolution = vi
       .spyOn(OptionsBuilder.prototype, 'resolveStepProviderModel')
       .mockImplementation(function (candidate, runtime) {
-        if (candidate.providerRoutingPersonaKey === REVIEW_COMPLETION_JUDGE_NAME) {
+        if (candidate.providerRoutingPersonaKey === COMPLETION_RETRY_JUDGE_NAME) {
           throw new Error('judge provider resolution failed');
         }
         return resolveStepProviderModel.call(this, candidate, runtime);
@@ -562,13 +562,13 @@ describe('WorkflowEngine review completion wiring', () => {
 
     expect(state.status).toBe('completed');
     const phase2 = vi.mocked(runReportPhase).mock.calls[0]![2] as ReportPhaseRunnerContext;
-    expect(phase2.reviewCompletionDiagnostic).toContain('judge provider resolution failed');
-    expect(phase2.reviewCompletionDiagnostic).not.toContain('has no resolved provider');
+    expect(phase2.completionRetryDiagnostic).toContain('judge provider resolution failed');
+    expect(phase2.completionRetryDiagnostic).not.toContain('has no resolved provider');
   });
 
   it('stops before the mandatory retry when min_retry is one and the judge stays unavailable', async () => {
     const step = reviewStep('reviewer', {
-      reviewCompletion: { ...completion, minRetry: 1, maxRetry: 2 },
+      completionRetry: { ...completion, minRetry: 1, maxRetry: 2 },
     });
     engine = new WorkflowEngine(normalConfig(step), cwd, 'task', { projectCwd: cwd, provider: 'mock' });
     let reviewerCalls = 0;
@@ -585,9 +585,9 @@ describe('WorkflowEngine review completion wiring', () => {
     expect(reviewerCalls).toBe(1);
     expect(state.stepOutputs.get(step.name)?.content).toBe('review-1');
     const phase2 = vi.mocked(runReportPhase).mock.calls[0]![2] as ReportPhaseRunnerContext;
-    expect(phase2.reviewCompletionDiagnostic).toContain('judge_unavailable');
-    expect(phase2.reviewCompletionDiagnostic).toContain('attempts: 1');
-    expect(phase2.reviewCompletionDiagnostic).toContain('retries_used: 0');
+    expect(phase2.completionRetryDiagnostic).toContain('judge_unavailable');
+    expect(phase2.completionRetryDiagnostic).toContain('attempts: 1');
+    expect(phase2.completionRetryDiagnostic).toContain('retries_used: 0');
   });
 
   it('fails soft at the engine boundary when the reviewer retry throws', async () => {
@@ -607,7 +607,7 @@ describe('WorkflowEngine review completion wiring', () => {
     expect(state.status).toBe('completed');
     expect(state.stepOutputs.get(step.name)?.content).toBe('latest valid report');
     const phase2 = vi.mocked(runReportPhase).mock.calls[0]![2] as ReportPhaseRunnerContext;
-    expect(phase2.reviewCompletionDiagnostic).toContain('reviewer_retry_failed');
+    expect(phase2.completionRetryDiagnostic).toContain('reviewer_retry_failed');
   });
 
   it('propagates a parent abort raised during the reviewer retry', async () => {

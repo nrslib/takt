@@ -42,8 +42,8 @@ export interface BasePhaseRunnerContext {
   interactive?: boolean;
   /** Last response from Phase 1 */
   lastResponse?: string;
-  /** Phase 2-only non-finding diagnostic produced by the review-completion controller. */
-  reviewCompletionDiagnostic?: string;
+  /** Phase 2-only non-finding diagnostic produced by the completion-retry controller. */
+  completionRetryDiagnostic?: string;
   /** Workflow name for observability spans */
   workflowName: string;
   /** Run-local identifier for observability artifact routing */

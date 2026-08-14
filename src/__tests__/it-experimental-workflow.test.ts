@@ -254,15 +254,15 @@ function expectResolvedReviewerInstructions(
   }
 }
 
-function expectResolvedReviewCompletionRetryInstruction(
+function expectResolvedCompletionRetryInstruction(
   language: 'en' | 'ja',
   reviewerCall: WorkflowStep,
   reviewerSteps: readonly ReviewerStepReference[],
   projectDir: string,
 ): string {
-  const instructionRef = reviewerCall.args?.review_completion_retry_instruction;
+  const instructionRef = reviewerCall.args?.completion_retry_instruction;
   if (typeof instructionRef !== 'string') {
-    throw new Error(`Review completion instruction argument not found for "${reviewerCall.name}"`);
+    throw new Error(`Completion retry instruction argument not found for "${reviewerCall.name}"`);
   }
   const resolvedInstruction = resolveRefToContent(
     instructionRef,
@@ -272,11 +272,11 @@ function expectResolvedReviewCompletionRetryInstruction(
     { projectDir, lang: language },
   );
   if (typeof resolvedInstruction !== 'string') {
-    throw new Error(`Review completion instruction "${instructionRef}" could not be resolved`);
+    throw new Error(`Completion retry instruction "${instructionRef}" could not be resolved`);
   }
   expect(resolvedInstruction).not.toBe('');
   for (const { step } of reviewerSteps) {
-    expect(step.reviewCompletion?.retryInstruction).toBe(resolvedInstruction);
+    expect(step.completionRetry?.retryInstruction).toBe(resolvedInstruction);
   }
   return resolvedInstruction;
 }
@@ -594,20 +594,20 @@ describe('experimental builtin workflow', () => {
           expect(initialInstruction).not.toBe('');
           expect(followUpReviewers.get(reviewer)).not.toBe(initialInstruction);
         }
-        const initialRetryInstruction = expectResolvedReviewCompletionRetryInstruction(
+        const initialRetryInstruction = expectResolvedCompletionRetryInstruction(
           language,
           reviewerCalls[0]!,
           initialReviewerSteps,
           projectDir,
         );
-        const followUpRetryInstruction = expectResolvedReviewCompletionRetryInstruction(
+        const followUpRetryInstruction = expectResolvedCompletionRetryInstruction(
           language,
           reviewerCalls[1]!,
           followUpReviewerSteps,
           projectDir,
         );
-        expect(reviewerCalls[0]!.args?.review_completion_retry_instruction)
-          .not.toBe(reviewerCalls[1]!.args?.review_completion_retry_instruction);
+        expect(reviewerCalls[0]!.args?.completion_retry_instruction)
+          .not.toBe(reviewerCalls[1]!.args?.completion_retry_instruction);
         expect(initialRetryInstruction).not.toBe(followUpRetryInstruction);
 
         const reviewerSuite = initialSuite!;

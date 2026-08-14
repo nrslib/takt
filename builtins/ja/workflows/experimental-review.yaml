@@ -22,7 +22,7 @@ subworkflow:
     coding_review_instruction: { type: facet_ref, facet_kind: instruction, default: coding-review }
     ai_antipattern_review_instruction: { type: facet_ref, facet_kind: instruction, default: ai-antipattern-review }
     frontend_review_instruction: { type: facet_ref, facet_kind: instruction, default: frontend-review }
-    review_completion_retry_instruction: { type: facet_ref, facet_kind: instruction, default: review-completion-retry }
+    completion_retry_instruction: { type: facet_ref, facet_kind: instruction, default: review-completion-retry }
 facet_pools:
   security-review-facets:
     uses: security-review-facets
@@ -43,7 +43,7 @@ steps:
       coding_review_instruction: { $param: coding_review_instruction }
       ai_antipattern_review_instruction: { $param: ai_antipattern_review_instruction }
       frontend_review_instruction: { $param: frontend_review_instruction }
-      review_completion_retry_instruction: { $param: review_completion_retry_instruction }
+      completion_retry_instruction: { $param: completion_retry_instruction }
     rules:
       self:
         - condition: all("approved")

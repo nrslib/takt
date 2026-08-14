@@ -106,19 +106,19 @@ import {
 import type { RunAgentOptions } from '../../../agents/types.js';
 import { isAbortError } from '../companion/abort.js';
 import {
-  buildReviewCompletionJudgePrompt,
-  formatReviewCompletionDiagnostic,
-  parseReviewCompletionDecision,
-  runReviewCompletionEpisode,
-  REVIEW_COMPLETION_JUDGE_NAME,
-  type ReviewCompletionDiagnostic,
-} from '../review-completion.js';
-import { buildReviewCompletionJudgeStep } from '../review-completion-judge-step.js';
+  buildCompletionRetryJudgePrompt,
+  formatCompletionRetryDiagnostic,
+  parseCompletionRetryDecision,
+  runCompletionRetryEpisode,
+  COMPLETION_RETRY_JUDGE_NAME,
+  type CompletionRetryDiagnostic,
+} from '../completion-retry.js';
+import { buildCompletionRetryJudgeStep } from '../completion-retry-judge-step.js';
 import {
-  collectReviewCompletionEvidence,
-  reviewCompletionClaimedPaths,
-} from '../review-completion-evidence.js';
-import { runWithReviewCompletionJudgeSpan } from '../observability/workflowSpans.js';
+  collectCompletionRetryEvidence,
+  completionRetryClaimedPaths,
+} from '../completion-retry-evidence.js';
+import { runWithCompletionRetryJudgeSpan } from '../observability/workflowSpans.js';
 import {
   fallbackContextForOperation,
   reviewerOperationOrigin,
@@ -291,9 +291,9 @@ export class StepExecutor {
   }): Promise<{
     readonly response: AgentResponse;
     readonly reviewerSessionId: string | undefined;
-    readonly diagnostic?: ReviewCompletionDiagnostic;
+    readonly diagnostic?: CompletionRetryDiagnostic;
   }> {
-    const config = input.step.reviewCompletion;
+    const config = input.step.completionRetry;
     if (config === undefined) {
       return {
         response: input.initialResponse,
@@ -301,7 +301,7 @@ export class StepExecutor {
       };
     }
     const priorJudgeGapPaths = new Set<string>();
-    const result = await runReviewCompletionEpisode({
+    const result = await runCompletionRetryEpisode({
       config,
       originalInstruction: input.originalInstruction,
       initialResponse: input.initialResponse,
@@ -331,22 +331,22 @@ export class StepExecutor {
         }
       },
       judge: async (reviewResponse, attemptIndex) => {
-        const judgeStep = buildReviewCompletionJudgeStep({
+        const judgeStep = buildCompletionRetryJudgeStep({
           reviewerStepName: input.step.name,
           workflowProvider: this.deps.executionProvider,
           workflowModel: this.deps.executionModel,
           internalAgentSeats: this.deps.internalAgentSeats,
         });
         const reviewScope = this.deps.getReviewScope();
-        const prompt = buildReviewCompletionJudgePrompt({
+        const prompt = buildCompletionRetryJudgePrompt({
           language: this.deps.getLanguage(),
           task: this.deps.getTask(),
           reviewerInstruction: input.originalInstruction,
           reviewScope,
-          evidence: collectReviewCompletionEvidence({
+          evidence: collectCompletionRetryEvidence({
             cwd: this.deps.getCwd(),
             reviewScope,
-            claimedPaths: reviewCompletionClaimedPaths(reviewResponse.structuredOutput),
+            claimedPaths: completionRetryClaimedPaths(reviewResponse.structuredOutput),
             priorGapPaths: [...priorJudgeGapPaths],
           }),
           reviewResponse: reviewResponse.content,
@@ -357,7 +357,7 @@ export class StepExecutor {
           judgeProviderInfo = this.deps.optionsBuilder.resolveStepProviderModel(judgeStep);
           const provider = requireStructuredAgentProvider(
             judgeProviderInfo.provider,
-            REVIEW_COMPLETION_JUDGE_NAME,
+            COMPLETION_RETRY_JUDGE_NAME,
           );
           const judgeOptions = this.deps.optionsBuilder.buildAgentOptions(judgeStep);
           this.deps.emitEvent('review_completion:judge:start', {
@@ -366,7 +366,7 @@ export class StepExecutor {
             provider,
             model: judgeProviderInfo.model,
           });
-          const response = await runWithReviewCompletionJudgeSpan(
+          const response = await runWithCompletionRetryJudgeSpan(
             {
               enabled: this.deps.observabilityEnabled?.() === true,
               runId: this.deps.getObservabilityRunId?.(),
@@ -379,7 +379,7 @@ export class StepExecutor {
               prompt.instruction,
               judgeStep.structuredOutput!.schema,
               {
-                name: REVIEW_COMPLETION_JUDGE_NAME,
+                name: COMPLETION_RETRY_JUDGE_NAME,
                 cwd: this.deps.getCwd(),
                 projectCwd: this.deps.getProjectCwd(),
                 systemPrompt: prompt.systemPrompt,
@@ -403,13 +403,13 @@ export class StepExecutor {
             }),
           );
           this.deps.recordSynthesizedAgentUsage(
-            REVIEW_COMPLETION_JUDGE_NAME,
+            COMPLETION_RETRY_JUDGE_NAME,
             judgeProviderInfo,
             true,
             response.providerUsage,
           );
           usageRecorded = true;
-          const decision = parseReviewCompletionDecision(response.structuredOutput);
+          const decision = parseCompletionRetryDecision(response.structuredOutput);
           decision.missingObligations.forEach((gap) => priorJudgeGapPaths.add(gap.path));
           this.deps.emitEvent('review_completion:judge:complete', {
             step: input.step.name,
@@ -422,7 +422,7 @@ export class StepExecutor {
         } catch (error) {
           if (!usageRecorded && judgeProviderInfo.provider !== undefined) {
             this.deps.recordSynthesizedAgentUsage(
-              REVIEW_COMPLETION_JUDGE_NAME,
+              COMPLETION_RETRY_JUDGE_NAME,
               judgeProviderInfo,
               false,
               undefined,
@@ -618,7 +618,7 @@ export class StepExecutor {
             `Missing prompt parts for companion fix: ${input.eventStep.name}:1:${finalAttempt.sequence}`,
           );
         }
-        if (input.executableStep.reviewCompletion !== undefined) {
+        if (input.executableStep.completionRetry !== undefined) {
           return this.finalizeObservedReviewerAttempt({
             eventStep: input.eventStep,
             executableStep: input.executableStep,
@@ -1172,7 +1172,7 @@ export class StepExecutor {
     );
     const phaseCtx = phase2Diagnostic === undefined
       ? basePhaseContext
-      : { ...basePhaseContext, reviewCompletionDiagnostic: phase2Diagnostic };
+      : { ...basePhaseContext, completionRetryDiagnostic: phase2Diagnostic };
 
     // Phase 2: report output (resume same session, Write only)
     // Report generation is only valid after a completed Phase 1 response.
@@ -1512,7 +1512,7 @@ export class StepExecutor {
                 )
           ),
           onPhaseStart: this.deps.onPhaseStart,
-          ...(executableStep.reviewCompletion === undefined
+          ...(executableStep.completionRetry === undefined
             ? {}
             : {
                 onPhaseComplete: this.deps.onPhaseComplete,
@@ -1567,7 +1567,7 @@ export class StepExecutor {
       log.info('Phase 1 returned empty output, treating as error', { step: step.name });
     }
 
-    if (executableStep.reviewCompletion === undefined) {
+    if (executableStep.completionRetry === undefined) {
       const normalizedPhase1 = this.normalizeStructuredOutputWithDiagnostics(
         executableStep,
         response,
@@ -1648,8 +1648,8 @@ export class StepExecutor {
       this.persistPreviousResponseSnapshot(state, step.name, stepIteration, response.content);
       return { response, instruction: phase1Instruction, providerInfo };
     }
-    let reviewCompletionDiagnostic: string | undefined;
-    if (executableStep.reviewCompletion !== undefined) {
+    let completionRetryDiagnostic: string | undefined;
+    if (executableStep.completionRetry !== undefined) {
       const completion = await this.completeReviewerResponse({
         step: executableStep,
         originalInstruction: phase1Instruction,
@@ -1743,9 +1743,9 @@ export class StepExecutor {
       });
       response = completion.response;
       updatePersonaSession(sessionKey, completion.reviewerSessionId);
-      reviewCompletionDiagnostic = completion.diagnostic === undefined
+      completionRetryDiagnostic = completion.diagnostic === undefined
         ? undefined
-        : formatReviewCompletionDiagnostic(completion.diagnostic, this.deps.getLanguage());
+        : formatCompletionRetryDiagnostic(completion.diagnostic, this.deps.getLanguage());
       if (response.status === 'error' || response.status === 'rate_limited' || response.status === 'blocked') {
         state.stepOutputs.set(step.name, response);
         state.lastOutput = response;
@@ -1766,7 +1766,7 @@ export class StepExecutor {
         (operation) => {
           terminalOperation = operation;
         },
-        reviewCompletionDiagnostic,
+        completionRetryDiagnostic,
       );
     } catch (error) {
       if (error instanceof RuleDetectionExhaustedError) {

@@ -1,10 +1,10 @@
-import type { AgentResponse, Language, ReviewCompletionConfig } from '../models/types.js';
-import type { ReviewCompletionEvidence } from './review-completion-evidence.js';
+import type { AgentResponse, Language, CompletionRetryConfig } from '../models/types.js';
+import type { CompletionRetryEvidence } from './completion-retry-evidence.js';
 
-export const REVIEW_COMPLETION_JUDGE_NAME = 'review-completion-judge';
-export const REVIEW_COMPLETION_SCHEMA_REF = 'takt.review-completion.decision';
+export const COMPLETION_RETRY_JUDGE_NAME = 'review-completion-judge';
+export const COMPLETION_RETRY_SCHEMA_REF = 'takt.review-completion.decision';
 
-export const REVIEW_COMPLETION_GAP_KINDS = [
+export const COMPLETION_RETRY_GAP_KINDS = [
   'changed_target_gap',
   'family_lifecycle_gap',
   'accepted_family_unvisited_consumer',
@@ -13,9 +13,9 @@ export const REVIEW_COMPLETION_GAP_KINDS = [
   'required_consumer_migration',
 ] as const;
 
-export type ReviewCompletionGapKind = typeof REVIEW_COMPLETION_GAP_KINDS[number];
+export type CompletionRetryGapKind = typeof COMPLETION_RETRY_GAP_KINDS[number];
 
-export function buildReviewCompletionOutputSchema(): Record<string, unknown> {
+export function buildCompletionRetryOutputSchema(): Record<string, unknown> {
   return {
     type: 'object',
     additionalProperties: false,
@@ -30,7 +30,7 @@ export function buildReviewCompletionOutputSchema(): Record<string, unknown> {
           additionalProperties: false,
           required: ['kind', 'contract_family', 'path', 'reason'],
           properties: {
-            kind: { type: 'string', enum: [...REVIEW_COMPLETION_GAP_KINDS] },
+            kind: { type: 'string', enum: [...COMPLETION_RETRY_GAP_KINDS] },
             contract_family: { type: 'string', minLength: 1 },
             path: { type: 'string', minLength: 1 },
             reason: { type: 'string', minLength: 1 },
@@ -41,35 +41,35 @@ export function buildReviewCompletionOutputSchema(): Record<string, unknown> {
   };
 }
 
-export interface ReviewCompletionGap {
-  readonly kind: ReviewCompletionGapKind;
+export interface CompletionRetryGap {
+  readonly kind: CompletionRetryGapKind;
   readonly contractFamily: string;
   readonly path: string;
   readonly reason: string;
 }
 
-export interface ReviewCompletionDecision {
+export interface CompletionRetryDecision {
   readonly complete: boolean;
   readonly reason: string;
-  readonly missingObligations: readonly ReviewCompletionGap[];
+  readonly missingObligations: readonly CompletionRetryGap[];
 }
 
-export interface ReviewCompletionDiagnostic {
+export interface CompletionRetryDiagnostic {
   readonly kind: 'max_retry_reached' | 'judge_unavailable' | 'reviewer_retry_failed';
   readonly attempts: number;
   readonly retriesUsed: number;
   readonly reason: string;
-  readonly missingObligations: readonly ReviewCompletionGap[];
+  readonly missingObligations: readonly CompletionRetryGap[];
 }
 
-export interface ReviewCompletionEpisodeResult {
+export interface CompletionRetryEpisodeResult {
   readonly response: AgentResponse;
   readonly reviewerSessionId: string | undefined;
   readonly attempts: number;
-  readonly diagnostic?: ReviewCompletionDiagnostic;
+  readonly diagnostic?: CompletionRetryDiagnostic;
 }
 
-export interface ReviewCompletionAttemptInput {
+export interface CompletionRetryAttemptInput {
   readonly attemptIndex: number;
   readonly instruction: string;
   readonly sessionId: string | undefined;
@@ -77,38 +77,38 @@ export interface ReviewCompletionAttemptInput {
 
 function requiredString(value: unknown, field: string): string {
   if (typeof value !== 'string' || value.trim().length === 0) {
-    throw new Error(`Review completion judge returned invalid ${field}`);
+    throw new Error(`Completion retry judge returned invalid ${field}`);
   }
   return value.trim();
 }
 
-export function parseReviewCompletionDecision(
+export function parseCompletionRetryDecision(
   value: unknown,
-): ReviewCompletionDecision {
+): CompletionRetryDecision {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new Error('Review completion judge returned no structured decision');
+    throw new Error('Completion retry judge returned no structured decision');
   }
   const raw = value as Record<string, unknown>;
   if (typeof raw.complete !== 'boolean' || !Array.isArray(raw.missing_obligations)) {
-    throw new Error('Review completion judge returned an invalid structured decision');
+    throw new Error('Completion retry judge returned an invalid structured decision');
   }
   const missingObligations = raw.missing_obligations.map((entry, index) => {
     if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
-      throw new Error(`Review completion judge returned invalid missing_obligations[${index}]`);
+      throw new Error(`Completion retry judge returned invalid missing_obligations[${index}]`);
     }
     const gap = entry as Record<string, unknown>;
-    if (!REVIEW_COMPLETION_GAP_KINDS.includes(gap.kind as ReviewCompletionGapKind)) {
-      throw new Error(`Review completion judge returned invalid missing_obligations[${index}].kind`);
+    if (!COMPLETION_RETRY_GAP_KINDS.includes(gap.kind as CompletionRetryGapKind)) {
+      throw new Error(`Completion retry judge returned invalid missing_obligations[${index}].kind`);
     }
     return {
-      kind: gap.kind as ReviewCompletionGapKind,
+      kind: gap.kind as CompletionRetryGapKind,
       contractFamily: requiredString(gap.contract_family, `missing_obligations[${index}].contract_family`),
       path: requiredString(gap.path, `missing_obligations[${index}].path`),
       reason: requiredString(gap.reason, `missing_obligations[${index}].reason`),
     };
   });
   if (raw.complete === (missingObligations.length > 0)) {
-    throw new Error('Review completion decision and missing obligations disagree');
+    throw new Error('Completion retry decision and missing obligations disagree');
   }
   return {
     complete: raw.complete,
@@ -117,12 +117,12 @@ export function parseReviewCompletionDecision(
   };
 }
 
-export function buildReviewCompletionJudgePrompt(input: {
+export function buildCompletionRetryJudgePrompt(input: {
   readonly language: Language | undefined;
   readonly task: string;
   readonly reviewerInstruction: string;
   readonly reviewScope: unknown;
-  readonly evidence: ReviewCompletionEvidence;
+  readonly evidence: CompletionRetryEvidence;
   readonly reviewResponse: string;
 }): { systemPrompt: string; instruction: string } {
   const payload = JSON.stringify({
@@ -152,10 +152,10 @@ export function buildReviewCompletionJudgePrompt(input: {
   };
 }
 
-export function buildReviewCompletionRetryInstruction(input: {
+export function buildCompletionRetryInstruction(input: {
   readonly originalInstruction: string;
   readonly retryInstruction: string;
-  readonly missingObligations: readonly ReviewCompletionGap[];
+  readonly missingObligations: readonly CompletionRetryGap[];
 }): string {
   const typedGaps = input.missingObligations.map((gap) =>
     `- [${gap.kind}] ${gap.contractFamily}: ${gap.path} — ${gap.reason}`,
@@ -168,8 +168,8 @@ export function buildReviewCompletionRetryInstruction(input: {
   ].join('\n');
 }
 
-export function formatReviewCompletionDiagnostic(
-  diagnostic: ReviewCompletionDiagnostic,
+export function formatCompletionRetryDiagnostic(
+  diagnostic: CompletionRetryDiagnostic,
   language: Language | undefined,
 ): string {
   const heading = language === 'ja'
@@ -187,21 +187,21 @@ export function formatReviewCompletionDiagnostic(
   ].join('\n');
 }
 
-export async function runReviewCompletionEpisode(input: {
-  readonly config: ReviewCompletionConfig;
+export async function runCompletionRetryEpisode(input: {
+  readonly config: CompletionRetryConfig;
   readonly originalInstruction: string;
   readonly initialResponse: AgentResponse;
   readonly initialSessionId: string | undefined;
-  readonly executeRetry: (attempt: ReviewCompletionAttemptInput) => Promise<AgentResponse>;
+  readonly executeRetry: (attempt: CompletionRetryAttemptInput) => Promise<AgentResponse>;
   readonly judge: (
     response: AgentResponse,
     attemptIndex: number,
-  ) => Promise<ReviewCompletionDecision>;
+  ) => Promise<CompletionRetryDecision>;
   readonly isAbort: (error: unknown) => boolean;
-}): Promise<ReviewCompletionEpisodeResult> {
+}): Promise<CompletionRetryEpisodeResult> {
   let response = input.initialResponse;
   let reviewerSessionId = input.initialSessionId;
-  let lastDecision: ReviewCompletionDecision | undefined;
+  let lastDecision: CompletionRetryDecision | undefined;
   let lastJudgeFailure: string | undefined;
 
   for (let attemptIndex = 0; attemptIndex <= input.config.maxRetry; attemptIndex++) {
@@ -209,7 +209,7 @@ export async function runReviewCompletionEpisode(input: {
       try {
         const retryResponse = await input.executeRetry({
           attemptIndex,
-          instruction: buildReviewCompletionRetryInstruction({
+          instruction: buildCompletionRetryInstruction({
             originalInstruction: input.originalInstruction,
             retryInstruction: input.config.retryInstruction,
             missingObligations: lastDecision?.missingObligations ?? [],
@@ -280,7 +280,7 @@ export async function runReviewCompletionEpisode(input: {
           kind: 'judge_unavailable',
           attempts: attemptIndex + 1,
           retriesUsed,
-          reason: lastJudgeFailure ?? 'Review completion judge was unavailable',
+          reason: lastJudgeFailure ?? 'Completion retry judge was unavailable',
           missingObligations: [],
         },
       };
@@ -305,5 +305,5 @@ export async function runReviewCompletionEpisode(input: {
     }
     return { response, reviewerSessionId, attempts: attemptIndex + 1 };
   }
-  throw new Error('Review completion episode exhausted without a terminal result');
+  throw new Error('Completion retry episode exhausted without a terminal result');
 }

@@ -6,11 +6,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { TaskReviewScope } from '../core/workflow/review-scope.js';
 import { isSensitiveProjectFilePath } from '../shared/utils/sensitive-file-path.js';
 import {
-  collectReviewCompletionEvidence,
-  reviewCompletionClaimedPaths,
-  REVIEW_COMPLETION_EVIDENCE_MAX_FILE_BYTES,
-  REVIEW_COMPLETION_EVIDENCE_MAX_TOTAL_BYTES,
-} from '../core/workflow/review-completion-evidence.js';
+  collectCompletionRetryEvidence,
+  completionRetryClaimedPaths,
+  COMPLETION_RETRY_EVIDENCE_MAX_FILE_BYTES,
+  COMPLETION_RETRY_EVIDENCE_MAX_TOTAL_BYTES,
+} from '../core/workflow/completion-retry-evidence.js';
 
 function scope(paths: readonly string[]): TaskReviewScope {
   return {
@@ -20,7 +20,7 @@ function scope(paths: readonly string[]): TaskReviewScope {
   };
 }
 
-describe('review completion evidence', () => {
+describe('completion retry evidence', () => {
   const directories: string[] = [];
 
   afterEach(() => {
@@ -62,7 +62,7 @@ describe('review completion evidence', () => {
   });
 
   it('provides sanitized source while excluding sensitive, symlink, binary, and outside paths', () => {
-    const cwd = createDirectory('takt-review-completion-evidence-');
+    const cwd = createDirectory('takt-completion-retry-evidence-');
     const outside = createDirectory('takt-review-completion-outside-');
     mkdirSync(join(cwd, 'src'));
     mkdirSync(join(cwd, 'src', 'auth'));
@@ -86,7 +86,7 @@ describe('review completion evidence', () => {
     writeFileSync(join(outside, 'outside.ts'), 'outside-marker');
     symlinkSync(join(outside, 'outside.ts'), join(cwd, 'linked.ts'));
 
-    const evidence = collectReviewCompletionEvidence({
+    const evidence = collectCompletionRetryEvidence({
       cwd,
       reviewScope: scope([
         '.env',
@@ -159,7 +159,7 @@ describe('review completion evidence', () => {
     const baseCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).trim();
     rmSync(join(cwd, 'removed.ts'));
 
-    const evidence = collectReviewCompletionEvidence({
+    const evidence = collectCompletionRetryEvidence({
       cwd,
       reviewScope: {
         kind: 'collected',
@@ -185,7 +185,7 @@ describe('review completion evidence', () => {
     execFileSync('git', ['commit', '-m', 'base'], { cwd });
     const baseCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).trim();
     writeFileSync(join(cwd, 'changed.ts'), 'export const changed = 2;\n');
-    const claimedPaths = reviewCompletionClaimedPaths({
+    const claimedPaths = completionRetryClaimedPaths({
       rawFindings: [{
         candidate: {
           target: { kind: 'code', paths: ['consumer.ts', 'secrets.txt', '../outside.ts'] },
@@ -194,7 +194,7 @@ describe('review completion evidence', () => {
       }],
     });
 
-    const evidence = collectReviewCompletionEvidence({
+    const evidence = collectCompletionRetryEvidence({
       cwd,
       reviewScope: {
         kind: 'collected',
@@ -249,7 +249,7 @@ describe('review completion evidence', () => {
     writeFileSync(join(cwd, 'untracked.ts'), 'const untrackedConsumer = stableContract;\n');
     writeFileSync(join(cwd, 'changed.ts'), 'export const stableContract = 2;\n');
 
-    const evidence = collectReviewCompletionEvidence({
+    const evidence = collectCompletionRetryEvidence({
       cwd,
       reviewScope: {
         kind: 'collected',
@@ -331,7 +331,7 @@ describe('review completion evidence', () => {
     writeFileSync(join(cwd, 'source.ts'), 'export const version = 2;\n');
     execFileSync('git', ['commit', '-am', 'local follow-up'], { cwd });
 
-    const evidence = collectReviewCompletionEvidence({
+    const evidence = collectCompletionRetryEvidence({
       cwd,
       reviewScope: {
         kind: 'collected',
@@ -361,20 +361,20 @@ describe('review completion evidence', () => {
     for (let index = 0; index < 20; index += 1) {
       const path = `source-${index}.ts`;
       paths.push(path);
-      writeFileSync(join(cwd, path), 'x'.repeat(REVIEW_COMPLETION_EVIDENCE_MAX_FILE_BYTES));
+      writeFileSync(join(cwd, path), 'x'.repeat(COMPLETION_RETRY_EVIDENCE_MAX_FILE_BYTES));
     }
     writeFileSync(
       join(cwd, 'oversized.ts'),
-      'y'.repeat(REVIEW_COMPLETION_EVIDENCE_MAX_FILE_BYTES + 1),
+      'y'.repeat(COMPLETION_RETRY_EVIDENCE_MAX_FILE_BYTES + 1),
     );
 
-    const evidence = collectReviewCompletionEvidence({
+    const evidence = collectCompletionRetryEvidence({
       cwd,
       reviewScope: scope([...paths, 'oversized.ts']),
     });
 
     expect(Buffer.byteLength(JSON.stringify(evidence), 'utf8'))
-      .toBeLessThanOrEqual(REVIEW_COMPLETION_EVIDENCE_MAX_TOTAL_BYTES);
+      .toBeLessThanOrEqual(COMPLETION_RETRY_EVIDENCE_MAX_TOTAL_BYTES);
     expect(evidence.omissions).toEqual(expect.arrayContaining([
       expect.objectContaining({ reason: 'file_size_limit', count: 1 }),
       expect.objectContaining({ reason: 'total_size_limit' }),
@@ -398,7 +398,7 @@ describe('review completion evidence', () => {
       writeFileSync(join(cwd, paths[index]!), `export const after${index} = "${'b'.repeat(30_000)}";\n`);
     }
 
-    const evidence = collectReviewCompletionEvidence({
+    const evidence = collectCompletionRetryEvidence({
       cwd,
       reviewScope: {
         kind: 'collected',

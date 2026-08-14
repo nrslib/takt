@@ -516,17 +516,17 @@ function bindStepFields(
       case 'instruction':
         expanded[key] = substituteParam(value, INSTRUCTION_CONTRACT, declarations, bindings, options, fieldPath);
         break;
-      case 'review_completion': {
+      case 'completion_retry': {
         if (!isPlainObject(value)) {
           assertNoParamReferences(value, options, fieldPath);
           expanded[key] = value;
           break;
         }
-        const reviewCompletion: RawRecord = {};
+        const completionRetry: RawRecord = {};
         for (const [option, optionValue] of Object.entries(value)) {
           const optionPath = [...fieldPath, option];
           if (option === 'retry_instruction') {
-            reviewCompletion[option] = substituteParam(
+            completionRetry[option] = substituteParam(
               optionValue,
               INSTRUCTION_CONTRACT,
               declarations,
@@ -536,10 +536,10 @@ function bindStepFields(
             );
           } else {
             assertNoParamReferences(optionValue, options, optionPath);
-            reviewCompletion[option] = optionValue;
+            completionRetry[option] = optionValue;
           }
         }
-        expanded[key] = reviewCompletion;
+        expanded[key] = completionRetry;
         break;
       }
       case 'persona':

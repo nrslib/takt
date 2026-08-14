@@ -1,7 +1,7 @@
 import { lstatSync, realpathSync, type Stats } from 'node:fs';
 import { resolve, sep } from 'node:path';
 
-export type ReviewCompletionRealPathResolution =
+export type CompletionRetryRealPathResolution =
   | { readonly ok: true; readonly realPath: string; readonly stat: Stats }
   | { readonly ok: false };
 
@@ -11,10 +11,10 @@ function isInsideBase(base: string, candidate: string): boolean {
 }
 
 /** Resolve a regular evidence path without permitting lexical or symlink escape. */
-export function resolveReviewCompletionPath(
+export function resolveCompletionRetryPath(
   cwd: string,
   path: string,
-): ReviewCompletionRealPathResolution {
+): CompletionRetryRealPathResolution {
   const resolvedBase = resolve(cwd);
   const resolvedPath = resolve(resolvedBase, path);
   if (!isInsideBase(resolvedBase, resolvedPath)) return { ok: false };

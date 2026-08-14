@@ -108,11 +108,11 @@ export type {
   DynamicFacetsConfig,
   SelectorGuidance,
   DynamicFacetSelectionSnapshot,
-  ReviewCompletionConfig,
+  CompletionRetryConfig,
 } from './workflow-types.js';
 
 export {
-  MAX_REVIEW_COMPLETION_RETRY,
+  MAX_COMPLETION_RETRY,
 } from './workflow-types.js';
 
 export type {

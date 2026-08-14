@@ -9,7 +9,7 @@ import { buildCompanionMailboxPath } from '../core/workflow/companion/mailbox.js
 import { CompanionReviewAuthority } from '../core/workflow/companion/review-state-store.js';
 import { StepExecutor, type StepExecutorDeps } from '../core/workflow/engine/StepExecutor.js';
 import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engine/structured-output-normalizer.js';
-import { REVIEW_COMPLETION_JUDGE_NAME } from '../core/workflow/review-completion.js';
+import { COMPLETION_RETRY_JUDGE_NAME } from '../core/workflow/completion-retry.js';
 import type { RunPaths } from '../core/workflow/run/run-paths.js';
 import { executeAgent } from '../agents/agent-usecases.js';
 import { initDebugLogger, resetDebugLogger } from '../shared/utils/debug.js';
@@ -222,14 +222,14 @@ describe('companion StepExecutor lifecycle', () => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
-  it('runs Companion after both the initial and review-completion retry responses', async () => {
+  it('runs Companion after both the initial and completion-retry responses', async () => {
     const abortController = new AbortController();
     const state = makeState();
     const timeline: string[] = [];
     let reviewerCalls = 0;
     let judgeCalls = 0;
     vi.mocked(executeAgent).mockImplementation(async (_persona, prompt, options) => {
-      if (options?.internalAgentName === REVIEW_COMPLETION_JUDGE_NAME) {
+      if (options?.internalAgentName === COMPLETION_RETRY_JUDGE_NAME) {
         judgeCalls++;
         timeline.push(`judge:${judgeCalls}`);
         return {
@@ -273,7 +273,7 @@ describe('companion StepExecutor lifecycle', () => {
     });
     const step = {
       ...createCompanionStep([makeRule('Implementation is complete', 'COMPLETE')]),
-      reviewCompletion: {
+      completionRetry: {
         minRetry: 0,
         maxRetry: 1,
         retryInstruction: 'retry',
