@@ -38,10 +38,11 @@ uses a disposable work copy, so rerun the complete command for each trial.
 Run `npm run eval:prompts:default-priority:codex` to cross-check it with Codex.
 
 The `fix-loop-convergence` suite probes the remediation-loop convergence
-rules with 11 decision scenarios, each run on **two providers** — the
+rules with 11 decision scenarios, each run on **three providers** — the
 claude headless CLI (`eval/providers/claude-judge.sh`, model
 `claude-opus-5`) and the codex CLI (`eval/providers/codex-judge.sh`, model
-`gpt-5.6-luna`, reasoning effort `max`). Prompts are assembled at run time from the live
+`gpt-5.6-luna`, reasoning effort `max`, and `gpt-5.6-sol`, reasoning effort
+`high`). Prompts are assembled at run time from the live
 `builtins/ja/facets` content (`eval/fix-loop-convergence-prompt.mjs`), so
 the suite always measures the current facet text. It needs both CLI
 logins, is excluded from the default suite run, and asserts on a fixed
@@ -54,13 +55,14 @@ execution as proof that serial execution is the fix. Invoke it explicitly with
 `npm run eval:prompts:fix-plan-cause-check`.
 
 The `initial-review-external-identity-wiring` suite runs the actual initial
-`coding-review` composition from `takt-experimental-review` on both Claude
-Opus 5 and Codex Luna Max (`gpt-5.6-luna`, reasoning effort `max`). It checks
-that a reviewer derives the canonical external identity from documentation,
-traces config and both consumers to terminal behavior, rejects a false-green
-E2E whose fixture shares the implementation's short key, requires canonical
-behavior coverage, and leaves a workflow-local cache contract alone. It needs
-both CLI logins and is excluded from the default suite run; invoke it with
+`coding-review` composition from `takt-experimental-review` on Claude Opus 5,
+Codex Luna Max (`gpt-5.6-luna`, reasoning effort `max`), and Codex Sol High
+(`gpt-5.6-sol`, reasoning effort `high`). It checks that a reviewer builds the
+documented external step value, traces config and both consumers to terminal
+behavior, rejects a false-green E2E whose fixture shares the implementation's
+short key, requires coverage using the documented value, and leaves a
+workflow-local cache contract alone. It needs both CLI logins and is excluded
+from the default suite run; invoke it with
 `npm run eval:prompts:initial-review-external-identity-wiring`.
 
 ## Suites
@@ -78,13 +80,13 @@ both CLI logins and is excluded from the default suite run; invoke it with
 | `cqrs-coder` | backend-cqrs / implement | backend-cqrs (work copy) | artifact checks on the implemented change |
 | `fix-closure` | review-remediation / fix-retry | fix-closure (work copy) | whether verifier-return remediation closes every falsifiable obligation across multiple fix units and hierarchical projections instead of patching only the latest verifier example or relying on broad test success |
 | `fix-self-scan` | peer-review / fix | fix-self-scan (work copy) | whether the coder's post-edit self-scan removes change-induced dead code, keeps the declared layer direction, and consolidates duplicated override semantics instead of shipping a plan-complete but messy fix |
-| `fix-loop-convergence` | development-remediation / fix-retry, fix-verifier, fix, loop-monitor | inline scenario fixtures (`cases/fix-loop-convergence/`) | whether the convergence rules (invariant-recurrence trigger, ledger carry-forward, trigger monotonicity, established-invariants scan, monitor escape) steer each role's decision as intended, measured on both Claude Opus and Codex Luna Max |
+| `fix-loop-convergence` | development-remediation / fix-retry, fix-verifier, fix, loop-monitor | inline scenario fixtures (`cases/fix-loop-convergence/`) | whether repeated failures switch from local patches to a structural fix, history is preserved across retries, new regressions are found, and the monitor chooses the correct next step, measured on Claude Opus, Codex Luna Max, and Codex Sol High |
 | `fix-plan-cause-check` | peer-review / fix-plan | fix-plan-cause-check | whether fix-plan distinguishes observed failures from possible causes and declines to serialize E2E shards until the cause is confirmed, measured on both Claude Opus and Codex Luna Max |
-| `fix-plan-fresh-findings` | peer-review / fix-plan | fix-plan-fresh-findings | whether fix-plan uses the canonical actionable family, closes all same-invariant consumers, and does not revive non-actionable findings |
+| `fix-plan-fresh-findings` | peer-review / fix-plan | fix-plan-fresh-findings | whether fix-plan uses the accepted group of findings, covers every affected use of the same rule, and does not revive findings that were excluded |
 | `fix-plan-boundary-preflight` | peer-review / fix-plan | fix-plan-boundary-preflight | whether fix-plan rejects a locally valid method that violates its representation and persistence boundary |
 | `review-family-closure` | peer-review-suite-base / coding-review | review-family-closure | whether one review reports every path affected by the same contract defect instead of stopping at a representative example |
 | `initial-review-contract-discovery` | peer-review / initial coding-review | initial-review-contract-discovery | whether the initial review independently discovers multiple blocking families and completes each family sweep |
-| `initial-review-external-identity-wiring` | takt-experimental-review / initial coding-review | initial-review-external-identity-wiring | whether Opus 5 and Luna Max reject an external target identity that is self-consistently shortened across config, two consumers, and a green E2E, require a canonical behavior test, and preserve an adjacent local-cache contract |
+| `initial-review-external-identity-wiring` | takt-experimental-review / initial coding-review | initial-review-external-identity-wiring | whether Opus 5, Luna Max, and Sol High reject an external target value that is shortened in the same way across config, two consumers, and a green E2E, require a test using the documented value, and preserve an adjacent local-cache contract |
 | `testing-review-observable-evidence` | peer-review / initial testing-review | testing-review-observable-evidence | whether testing review requires one missing behavior-level integration check while rejecting module-count, per-hop, and already-covered test expansion |
 | `initial-plan-contract-closure` | default / plan | initial-review-contract-discovery | whether the initial plan discovers same-responsibility paths even under different names, closes real multi-boundary impact paths, and keeps local changes local |
 | `replan-contract-closure` | default / replan | initial-review-contract-discovery | whether replanning preserves the original task while adding required production boundaries and rejecting unrelated reviewer proposals |
@@ -104,7 +106,7 @@ both CLI logins and is excluded from the default suite run; invoke it with
 | `task-instruction-gherkin` | interactive task summarization | direct English and Japanese conversations | whether implementation details and abstraction intent remain in Markdown while focused Gherkin captures only externally observable behavior |
 | `final-readiness-supervision` | review-fix-default / merge-readiness-review + supervise Phase 1 | final-readiness-supervision | whether both public final-gate producers independently authorize a newly discovered required consumer, explain its initial-round omission, and avoid horizontal exploration |
 | `final-readiness-preservation` | review-fix-default / merge-readiness-review + supervise Phase 2 | final-readiness-supervision | whether both public final-gate reports preserve the new finding and keep adjudicated noise non-actionable |
-| `final-readiness-precision` | peer-review / final-gate | final-readiness-precision | whether the final supervisor accepts a complete change without reopening an adjudicated documentation improvement |
+| `final-readiness-precision` | review-fix-default / supervise | final-readiness-precision | whether the final supervisor accepts a complete change without reopening an adjudicated documentation improvement |
 
 Reviewer suites run read-only against `eval/fixtures/*`. Coder suites run
 with `sandbox_mode: workspace-write` in a disposable copy under `eval/.work/`
@@ -229,7 +231,7 @@ relative to the config file's directory (`eval/`), not the process cwd.
   effort; quantify with `--repeat` before judging a facet change. The
   `fix-loop-convergence` and `initial-review-external-identity-wiring` suites
   are explicit production-condition exceptions: their Codex CLI rows use
-  Luna with reasoning effort `max`.
+  Luna with reasoning effort `max` and Sol with reasoning effort `high`.
 - Iterating on **assertions only** is free: promptfoo caches provider
   responses, so unchanged prompts re-score against cached outputs without
   calling codex. Facet changes alter the prompt and trigger real calls

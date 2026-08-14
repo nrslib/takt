@@ -57,7 +57,7 @@ function extractFindingRows(output) {
 function extractFindingBlocks(output) {
   const lines = output.split('\n');
   const starts = [];
-  const findingStart = /^\s{0,3}(?:#{1,6}\s*)?(?:finding|指摘)(?:\s+(?:id\s*)?)?[:#-]?\s*[A-Z]?-?\d+\b/i;
+  const findingStart = /^\s{0,3}(?:(?:#{1,6}\s*)?(?:finding|指摘)(?:\s+(?:id\s*)?)?[:#-]?\s*`?(?:[A-Z][A-Z0-9-]*-)?\d+\b|#{1,6}\s*(?:\[[^\]]+\]\s*)?`?(?:[A-Z][A-Z0-9-]*-)?\d+\b)/i;
   for (let index = 0; index < lines.length; index += 1) {
     if (findingStart.test(lines[index])) starts.push(index);
   }
@@ -127,11 +127,10 @@ function hasSharedNonCanonicalRepresentation(output) {
   const implementation = /implementation|resolver|lookup|src\/(?:execution|preview)-target\.js|実装|解決処理|検索処理/i;
   const fixtureOrTest = /fixture|test|e2e|テスト|フィクスチャ/i;
   const shared = /\b(?:same|shared|share(?:s|d|ing)?|both|all)\b|同じ|共有|一致/i;
-  const nonCanonical = /raw|bare|short(?:ened)?|step\.name|短縮|生の|裸の/i;
+  const nonCanonical = /raw|bare|short(?:ened)?|step\.name|wrong\s+(?:key\s+)?format|短縮|生の|裸の|誤った(?:キー)?形式|誤形式/i;
 
-  return statements.some((statement) => (
-    implementation.test(statement)
-    && fixtureOrTest.test(statement)
+  return implementation.test(output) && statements.some((statement) => (
+    fixtureOrTest.test(statement)
     && shared.test(statement)
     && (nonCanonical.test(statement)
       || hasStandaloneExecuteEvidence(statement, shared))
@@ -147,6 +146,7 @@ function hasConnectedFamilyEvidence(output) {
   const routeStages = [
     /(docs\/configuration\.md|authoritative|owner|正本)/i,
     /(config\/runtime\.json|runtime config|config\.stepTargets|stepTargets|設定)/i,
+    /(resolveExternalTarget|target-lookup\.js|target lookup|target の検索|target検索)/i,
     /(resolveExecutionTarget|execution-target\.js|executeStep|execution|terminal(?:\s+string)?|実行経路|実行用|実行結果|terminal\s*文字列)/i,
     /(resolvePreviewTarget|preview-target\.js|previewStep|preview|プレビュー|表示)/i,
     /(e2e|behavior test|回帰テスト|振る舞いテスト)/i,
@@ -161,7 +161,12 @@ export default function assertInitialReviewExternalIdentityWiring(output) {
   const canonicalKey = /sample-flow\s*\/\s*execute/i;
   const defaultFallback = /default(?:-runner| target| fallback)|デフォルト(?:ターゲット|へ|に)|フォールバック/i;
   const falsePositiveEvidence = /(self[- ]consistent|false positive|green|pass(?:es|ed|ing)?|成功|通(?:る|って|過)|偽陽性|自己整合)/i;
-  const canonicalTestDemand = /(add|change|replace|require|assert|cover|update|追加|変更|置換|要求|検証|更新).{0,240}(?:test|e2e|テスト).{0,240}(?:canonical|sample-flow\s*\/\s*execute)|(?:test|e2e|テスト).{0,240}(?:add|change|replace|require|assert|cover|update|追加|変更|置換|要求|検証|更新).{0,240}(?:canonical|sample-flow\s*\/\s*execute)|(?:修正方針|fix suggestion|remediation).{0,500}canonical.{0,300}(?:期待値|case|ケース|test|e2e)/is;
+  const testChange = /(?:test|e2e|テスト).{0,240}(?:add|change|replace|require|assert|cover|update|追加|変更|置換|要求|検証|更新)|(?:add|change|replace|require|assert|cover|update|追加|変更|置換|要求|検証|更新).{0,240}(?:test|e2e|テスト)/is;
+  const documentedValueTestDemand = hasNearbyEvidence(
+    reviewOutput,
+    'sample-flow/execute',
+    testChange,
+  );
   const hasConnectedIdentityEvidence = identityEvidenceBlocks.some((block) => (
     hasConnectedFamilyEvidence(block)
     && canonicalKey.test(block)
@@ -178,20 +183,20 @@ export default function assertInitialReviewExternalIdentityWiring(output) {
     ['canonical-key-derived', hasConnectedIdentityEvidence],
     ['canonical-input-falls-to-default', hasConnectedIdentityEvidence],
     ['false-green-explained', hasFalseGreenEvidence],
-    ['canonical-behavior-test-required', canonicalTestDemand.test(reviewOutput)],
+    ['documented-value-test-required', documentedValueTestDemand],
     ['adjacent-path-classified', hasNearbyEvidence(
       reviewOutput,
-      'src/local-step-cache.js',
+      'local-step-cache.js',
       /(outside|preserved|adjacent|clean|no issue|out of scope|対象外|保持|隣接|問題なし|変更不要)/i,
     )],
-    ['adjacent-path-not-a-finding', !findingRows.some((row) => row.includes('src/local-step-cache.js'))],
+    ['adjacent-path-not-a-finding', !findingRows.some((row) => row.includes('local-step-cache.js'))],
   ];
   const failed = checks.filter(([, passed]) => !passed).map(([name]) => name);
   return {
     pass: failed.length === 0,
     score: (checks.length - failed.length) / checks.length,
     reason: failed.length === 0
-      ? 'the initial review rejects the canonical external identity wiring defect without expanding into the adjacent cache contract'
+      ? 'the initial review rejects the documented external target lookup defect without expanding into the adjacent cache behavior'
       : `failed: ${failed.join(', ')}`,
   };
 }

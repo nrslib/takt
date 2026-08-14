@@ -1,11 +1,11 @@
 # External step targets
 
-External step target keys use the canonical `<workflow>/<step>` form. For the
+External step target keys use the `<workflow>/<step>` form. For the
 `execute` step in `sample-flow`, the key is `sample-flow/execute`.
 
 Runtime configuration, API payloads, fixtures, mocks, and tests must preserve
-that canonical key through lookup and terminal execution. The default target is
-used only when no canonical external target is configured.
+that complete key through lookup and final execution. The default target is
+used only when no external target is configured for the step.
 
 Workflow-local caches are a separate contract. They are already scoped to one
 workflow instance and therefore use the bare step name as their local key.

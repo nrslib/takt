@@ -1,10 +1,18 @@
 #!/usr/bin/env bash
 # promptfoo exec provider: run a read-only Codex review in a fixture.
+# Usage: codex-review.sh <model> [reasoning-effort] <work-dir>
 set -euo pipefail
 
 model="$1"
-work_dir="$2"
-prompt="$3"
+if [ "$#" -ge 4 ]; then
+  reasoning_effort="$2"
+  work_dir="$3"
+  prompt="$4"
+else
+  reasoning_effort="max"
+  work_dir="$2"
+  prompt="$3"
+fi
 timeout_seconds="${CODEX_REVIEW_TIMEOUT_SECONDS:-900}"
 codex_pid=''
 watchdog_pid=''
@@ -37,7 +45,7 @@ printf '%s' "$prompt" > "$prompt_file"
 
 set -m
 codex exec -m "$model" -s read-only --skip-git-repo-check \
-  -c model_reasoning_effort=max -o "$out" - < "$prompt_file" >/dev/null 2>&1 &
+  -c "model_reasoning_effort=$reasoning_effort" -o "$out" - < "$prompt_file" >/dev/null 2>&1 &
 codex_pid=$!
 set +m
 

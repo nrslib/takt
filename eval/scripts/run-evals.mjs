@@ -22,6 +22,7 @@
  *         implementation-report-contract-traceability,
  *         review-adjudication, final-readiness-supervision,
  *         final-readiness-preservation,
+ *         final-readiness-precision,
  *         task-instruction-gherkin
  *         (default: all except suites that require optional CLI authentication)
  * Example: npm run eval:prompts -- arch --repeat 3
@@ -75,6 +76,7 @@ const SUITES = {
   'review-adjudication': 'promptfooconfig.review-adjudication.yaml',
   'final-readiness-supervision': 'promptfooconfig.final-readiness-supervision.yaml',
   'final-readiness-preservation': 'promptfooconfig.final-readiness-preservation.yaml',
+  'final-readiness-precision': 'promptfooconfig.final-readiness-precision.yaml',
   'task-instruction-gherkin': 'promptfooconfig.task-instruction-gherkin.yaml',
 };
 
@@ -95,10 +97,12 @@ for (const name of names) {
 // 弱いモデルの行は常に部分失敗するため、デフォルトのゲート実行からは除外する。
 // fix-self-scan は claude ヘッドレス CLI（要 claude ログイン）で走るため、
 // codex 前提のデフォルト実行からは除外し、明示的に呼び出す。
-// fix-loop-convergence と fix-plan-cause-check も claude（opus）と
-// codex（gpt-5.6-luna）の両ログインが必要な二重測定スイートのため、明示的に呼び出す。
-// initial-review-external-identity-wiring も同じ2つの外部 CLI を使うため、
+// fix-loop-convergence も claude（opus）と codex（Luna Max / Sol High）の
+// 両ログインが必要な3モデル測定スイートのため、明示的に呼び出す。
+// initial-review-external-identity-wiring も同じ2つの外部 CLI で3モデルを使うため、
 // デフォルト実行から除外して明示的に呼び出す。
+// fix-plan-cause-check も claude（opus）と codex（gpt-5.6-luna）の
+// 両ログインが必要な二重測定スイートのため、明示的に呼び出す。
 const DEFAULT_EXCLUDED = new Set([
   'rescan',
   'rescan-coding',

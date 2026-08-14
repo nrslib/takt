@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
 # promptfoo exec プロバイダ: codex CLI での判定専用実行（read-only）。
-# 使い方: exec: bash providers/codex-judge.sh <model>
+# 使い方: exec: bash providers/codex-judge.sh <model> [reasoning-effort]
 # fix-loop-convergence スイートで使用。モデルを明示指定するため
 # openai:codex-sdk ではなく CLI を直接使う。
 set -euo pipefail
 model="$1"
-prompt="$2"
+if [ "$#" -ge 3 ]; then
+  reasoning_effort="$2"
+  prompt="$3"
+else
+  reasoning_effort="max"
+  prompt="$2"
+fi
 timeout_seconds="${CODEX_JUDGE_TIMEOUT_SECONDS:-600}"
 cd "$(dirname "$0")/.."
 codex_pid=''
@@ -37,7 +43,7 @@ printf '%s' "$prompt" > "$prompt_file"
 
 set -m
 codex exec -m "$model" -s read-only --skip-git-repo-check \
-  -c model_reasoning_effort=max -o "$out" - < "$prompt_file" >/dev/null 2>&1 &
+  -c "model_reasoning_effort=$reasoning_effort" -o "$out" - < "$prompt_file" >/dev/null 2>&1 &
 codex_pid=$!
 set +m
 

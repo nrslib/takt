@@ -250,6 +250,12 @@ const TARGETS = [
     phase: 'phase2',
     targetFile: 'supervisor-validation.md',
   },
+  {
+    id: 'final-readiness-precision',
+    workflow: 'review-fix-default',
+    step: 'supervise',
+    fixture: 'eval/fixtures/final-readiness-precision',
+  },
 ];
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
