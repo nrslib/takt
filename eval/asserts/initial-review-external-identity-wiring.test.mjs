@@ -316,6 +316,5 @@ test('accepts an explicit preserved label for the adjacent path', () => {
     '`preserved`: `src/local-step-cache.js` keeps its workflow-local behavior unchanged.',
   );
 
-  assert.match(review, /`preserved`:/);
   assert.equal(assertInitialReviewExternalIdentityWiring(review).pass, true);
 });
