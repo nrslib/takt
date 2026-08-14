@@ -22,6 +22,13 @@ The adjacent \`src/local-step-cache.js\` contract is preserved and outside this 
 | F-1 | external-step-target | \`docs/configuration.md\`, \`workflows/sample-flow.json\`, \`config/runtime.json\`, \`src/target-lookup.js\`, \`src/execution-target.js\`, \`src/preview-target.js\`, \`e2e/external-step.test.js\` |
 `;
 
+function replaceRequired(source, target, replacement) {
+  assert.ok(source.includes(target), `missing expected fixture text: ${target}`);
+  const updated = source.replace(target, replacement);
+  assert.notEqual(updated, source);
+  return updated;
+}
+
 test('accepts a complete external identity family and excludes the adjacent contract', () => {
   const result = assertInitialReviewExternalIdentityWiring(completeReview);
 
@@ -283,8 +290,9 @@ test('rejects a documented key with a trailing identifier suffix', () => {
 });
 
 test('rejects test-change evidence that only contains longer English words', () => {
-  const review = completeReview.replace(
-    'Update the E2E test to assert the canonical\n\`sample-flow/execute\` behavior.',
+  const review = replaceRequired(
+    completeReview,
+    'Update the E2E test to assert the canonical\n`sample-flow/execute` behavior.',
     'The E2E test should address unrelated coverage later.',
   );
 
@@ -292,19 +300,22 @@ test('rejects test-change evidence that only contains longer English words', () 
 });
 
 test('rejects an adjacent path classified only by the word adjacent', () => {
-  const review = completeReview.replace(
-    'The adjacent \`src/local-step-cache.js\` contract is preserved and outside this finding.',
-    'The adjacent \`src/local-step-cache.js\` contract should be investigated.',
+  const review = replaceRequired(
+    completeReview,
+    'The adjacent `src/local-step-cache.js` contract is preserved and outside this finding.',
+    'The adjacent `src/local-step-cache.js` contract should be investigated.',
   );
 
   assert.equal(assertInitialReviewExternalIdentityWiring(review).pass, false);
 });
 
 test('accepts an explicit preserved label for the adjacent path', () => {
-  const review = completeReview.replace(
-    'The adjacent \`src/local-step-cache.js\` contract is preserved and outside this finding.',
-    '\`preserved\`: \`src/local-step-cache.js\` keeps its workflow-local behavior unchanged.',
+  const review = replaceRequired(
+    completeReview,
+    'The adjacent `src/local-step-cache.js` contract is preserved and outside this finding.',
+    '`preserved`: `src/local-step-cache.js` keeps its workflow-local behavior unchanged.',
   );
 
+  assert.match(review, /`preserved`:/);
   assert.equal(assertInitialReviewExternalIdentityWiring(review).pass, true);
 });
