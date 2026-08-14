@@ -262,11 +262,18 @@ export class WorkflowEngine extends EventEmitter {
       && this.options.resumeSource?.resumeMode === 'requeue'
     ) {
       const manifest = readResumeReportSnapshotManifest(this.cwd, runPaths.slug);
+      const sourceResumePoint = manifest === undefined
+        ? undefined
+        : readRunMetaBySlug(this.cwd, manifest.sourceRunSlug)?.resumePoint;
+      if (manifest !== undefined && sourceResumePoint === undefined) {
+        log.warn(
+          'Requeue artifact occurrence restoration is unavailable because source run metadata or resume point is missing',
+          { sourceRunSlug: manifest.sourceRunSlug },
+        );
+      }
       this.sharedRuntime.resumeArtifactOccurrenceIndex = new ResumeArtifactOccurrenceIndex(
         manifest,
-        manifest === undefined
-          ? undefined
-          : readRunMetaBySlug(this.cwd, manifest.sourceRunSlug)?.resumePoint,
+        sourceResumePoint,
       );
     }
     restoreActiveResumePoint(
