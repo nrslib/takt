@@ -43,7 +43,6 @@ interface CompanionReviewRoundInput {
   readonly signal: AbortSignal;
   readonly task: string;
   readonly stepName: string;
-  readonly stepInstruction: string;
   readonly activeNames: readonly string[];
   readonly moderatorName?: string;
   readonly stateStore: CompanionReviewStateStore;
@@ -142,7 +141,6 @@ export async function executeCompanionReviewRound(
       companionName: input.companionName,
       task: input.task,
       stepName: input.stepName,
-      stepInstruction: input.stepInstruction,
       cumulativeDiff: input.diff.content,
       changedSincePreviousReview: input.changedRegionsSincePreviousReview,
       diffSummary: input.diffSummary,

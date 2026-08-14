@@ -387,7 +387,6 @@ export class CompanionStepRuntime {
         signal,
         task: this.deps.task,
         stepName: this.deps.step.name,
-        stepInstruction: this.deps.step.instruction ?? '',
         activeNames: [...this.active.keys()],
         moderatorName: this.deps.step.companion?.moderator,
         stateStore: this.deps.stateStore,

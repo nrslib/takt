@@ -26,12 +26,11 @@ function history(rounds: readonly CompanionLoopRound[]) {
 }
 
 describe('CT-COMP-06 companion prompt isolation', () => {
-  it('should inject only the active reviewer mailbox, notes, bounded diff, and step context', () => {
+  it('should inject only the active reviewer mailbox, notes, bounded diff, and review metadata', () => {
     const prompt = buildCompanionReviewPrompt({
       companionName: 'security-reviewer',
       task: 'Implement login',
       stepName: 'implement',
-      stepInstruction: 'Implement the task',
       cumulativeDiff: 'diff --git a/src/a.ts b/src/a.ts',
       changedSincePreviousReview: ['src/a.ts:1-4'],
       diffSummary: '{"changedFiles":["src/a.ts"]}',
@@ -60,7 +59,6 @@ describe('CT-COMP-06 companion prompt isolation', () => {
       companionName: 'custom-reviewer',
       task: 'Review the change',
       stepName: 'implement',
-      stepInstruction: 'Review only',
       cumulativeDiff: commandLikeText,
       changedSincePreviousReview: [commandLikeText],
       diffSummary: commandLikeText,
@@ -81,6 +79,60 @@ describe('CT-COMP-06 companion prompt isolation', () => {
     expect(prompt).toContain('"severity":"must_fix"');
     expect(prompt).toContain('"file":"src/a.ts"');
     expect(prompt).toContain('"line":7');
+  });
+
+  it('should keep the step implementation instruction out of the reviewer command section', () => {
+    const instruction = [
+      'Fix the implementation using {report:fix-plan.md}.',
+      '## 作業結果',
+    ].join('\n');
+    const input = {
+      companionName: 'security-reviewer',
+      task: 'Review the cumulative change',
+      stepName: 'fix',
+      stepInstruction: instruction,
+      cumulativeDiff: 'diff --git a/src/a.ts b/src/a.ts',
+      changedSincePreviousReview: [],
+      diffSummary: 'summary',
+      findings: [],
+    };
+
+    const prompt = buildCompanionReviewPrompt({ ...input });
+    const commandSection = prompt.slice(0, prompt.indexOf('BEGIN COMPANION EVIDENCE'));
+
+    expect(commandSection).not.toContain('Fix the implementation');
+    expect(commandSection).not.toContain('## 作業結果');
+    expect(prompt).not.toContain(instruction);
+    expect(prompt).not.toContain('{report:fix-plan.md}');
+  });
+
+  it('should keep command-like diff text inside cumulative diff evidence', () => {
+    const cumulativeDiff = [
+      '+const heading = "## 作業結果";',
+      '+const report = "{report:fix-plan.md}";',
+    ].join('\n');
+    const input = {
+      companionName: 'security-reviewer',
+      task: 'Review the cumulative change',
+      stepName: 'fix',
+      stepInstruction: 'Fix the implementation using {report:fix-plan.md}.',
+      cumulativeDiff,
+      changedSincePreviousReview: [],
+      diffSummary: 'summary',
+      findings: [],
+    };
+
+    const prompt = buildCompanionReviewPrompt({ ...input });
+    const commandSection = prompt.slice(0, prompt.indexOf('BEGIN COMPANION EVIDENCE'));
+    const cumulativeDiffEvidence = prompt
+      .split('\n')
+      .filter((line) => line.startsWith('{"label":'))
+      .map((line) => JSON.parse(line) as { label: string; value: unknown })
+      .find((evidence) => evidence.label === 'cumulative_diff');
+
+    expect(commandSection).not.toContain('## 作業結果');
+    expect(commandSection).not.toContain('{report:fix-plan.md}');
+    expect(cumulativeDiffEvidence).toEqual({ label: 'cumulative_diff', value: cumulativeDiff });
   });
 
   it('should keep the engine guard when a custom companion supplies its own instruction', () => {
@@ -127,7 +179,6 @@ describe('CT-COMP-06 companion prompt isolation', () => {
       companionName: 'security-reviewer',
       task: 'task',
       stepName: 'implement',
-      stepInstruction: 'implement',
       cumulativeDiff: '',
       changedSincePreviousReview: [],
       diffSummary: '',
