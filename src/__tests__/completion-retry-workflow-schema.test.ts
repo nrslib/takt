@@ -1,12 +1,41 @@
-import { describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
+
+const virtualStepFragment = vi.hoisted(() => ({
+  content: '',
+  descriptor: 7,
+  path: '/virtual/project/.takt/steps/completion-retry-contract.yaml',
+}));
+
+vi.mock('node:fs', async (importOriginal) => ({
+  ...await importOriginal<typeof import('node:fs')>(),
+  closeSync: vi.fn(),
+  existsSync: vi.fn((path: import('node:fs').PathLike) => (
+    String(path) === virtualStepFragment.path
+  )),
+  fstatSync: vi.fn(() => ({
+    isFile: () => true,
+    size: Buffer.byteLength(virtualStepFragment.content),
+  })),
+  lstatSync: vi.fn(() => ({ isSymbolicLink: () => false })),
+  openSync: vi.fn(() => virtualStepFragment.descriptor),
+  readSync: vi.fn((
+    _fd: number,
+    buffer: NodeJS.ArrayBufferView,
+    offset: number,
+    length: number,
+    position: number,
+  ) => {
+    const content = Buffer.from(virtualStepFragment.content);
+    return content.copy(buffer as Buffer, offset, position, position + length);
+  }),
+  realpathSync: vi.fn((path: import('node:fs').PathLike) => String(path)),
+}));
+
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
-import {
-  captureConfigErrorMessage,
-  writeStepFragmentTestFile,
-} from './helpers/step-fragment-test-helpers.js';
+import { captureConfigErrorMessage } from './helpers/step-fragment-test-helpers.js';
+
+const VIRTUAL_PROJECT_DIR = '/virtual/project';
+const VIRTUAL_WORKFLOW_DIR = `${VIRTUAL_PROJECT_DIR}/.takt/workflows`;
 
 function workflow(step: Record<string, unknown>) {
   return {
@@ -59,18 +88,9 @@ function parallelWorkflow(step: Record<string, unknown>) {
   };
 }
 
-function withStepFragment<T>(content: string, action: (projectDir: string) => T): T {
-  const projectDir = mkdtempSync(join(tmpdir(), 'takt-completion-retry-schema-'));
-  try {
-    writeStepFragmentTestFile(
-      projectDir,
-      '.takt/steps/completion-retry-contract.yaml',
-      content,
-    );
-    return action(projectDir);
-  } finally {
-    rmSync(projectDir, { recursive: true, force: true });
-  }
+function withStepFragment<T>(content: string, action: () => T): T {
+  virtualStepFragment.content = content;
+  return action();
 }
 
 describe('completion retry workflow contract', () => {
@@ -156,10 +176,14 @@ describe('completion retry workflow contract', () => {
       'review_completion:',
       '  retry_instruction: retry',
       '',
-    ].join('\n'), (projectDir) => normalizeWorkflowConfig(
+    ].join('\n'), () => normalizeWorkflowConfig(
       workflow({ uses: 'completion-retry-contract' }),
-      projectDir,
-      { lang: 'en', projectDir, workflowDir: projectDir },
+      VIRTUAL_WORKFLOW_DIR,
+      {
+        lang: 'en',
+        projectDir: VIRTUAL_PROJECT_DIR,
+        workflowDir: VIRTUAL_WORKFLOW_DIR,
+      },
     ));
 
     expect(config.steps[0]?.completionRetry).toEqual({
@@ -170,19 +194,21 @@ describe('completion retry workflow contract', () => {
   });
 
   it('rejects both completion retry keys on the same step fragment', () => {
-    const errorMessage = withStepFragment([
+    expect(() => withStepFragment([
       'completion_retry:',
       '  retry_instruction: retry',
       'review_completion:',
       '  retry_instruction: retry',
       '',
-    ].join('\n'), (projectDir) => captureConfigErrorMessage(() => normalizeWorkflowConfig(
+    ].join('\n'), () => normalizeWorkflowConfig(
       workflow({ uses: 'completion-retry-contract' }),
-      projectDir,
-      { lang: 'en', projectDir, workflowDir: projectDir },
-    )));
-
-    expect(errorMessage).toMatch(
+      VIRTUAL_WORKFLOW_DIR,
+      {
+        lang: 'en',
+        projectDir: VIRTUAL_PROJECT_DIR,
+        workflowDir: VIRTUAL_WORKFLOW_DIR,
+      },
+    ))).toThrow(
       /cannot specify both "completion_retry" and deprecated alias "review_completion"/,
     );
   });
