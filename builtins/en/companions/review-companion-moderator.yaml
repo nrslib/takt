@@ -1,6 +1,6 @@
 name: review-companion-moderator
 description: Adjudicate current-round implementation companion findings by accepting or rejecting each one from evidence.
-persona: review-adjudicator
-policy: [contract-change, review-adjudication]
+persona: companion-round-adjudicator
+policy: [contract-change, companion-round-adjudication]
 knowledge: architecture
 instruction: companion-moderate-review

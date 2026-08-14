@@ -55,7 +55,10 @@ export async function runCompanionFixLoop<TOptions extends object>(input: {
     latestResponse = fixed;
     latestSessionId = fixed.sessionId ?? latestSessionId;
     if (fixed.status !== 'done') {
-      return { phaseResponse: fixed, latestSessionId, followUpRounds };
+      const phaseResponse = fixed.sessionId === undefined && latestSessionId !== undefined
+        ? { ...fixed, sessionId: latestSessionId }
+        : fixed;
+      return { phaseResponse, latestSessionId, followUpRounds };
     }
     latestImplementerResponse = fixed.content;
   }

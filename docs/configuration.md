@@ -1207,7 +1207,7 @@ provider:
         profile: review
 ```
 
-Companion structured calls use the same provider-neutral fresh-session transport as other TAKT-owned structured agents. Native structured output is used where available; other providers use the validated JSON fallback. The resolved profile's capabilities and permission mode are applied unchanged, with no companion-specific restrictions.
+Companion structured calls use the same provider-neutral fresh-session transport as other TAKT-owned structured agents. Native structured output is used where available; other providers use the validated JSON fallback. Companion reviewer, moderator, and selector calls always run in `readonly` permission mode; the permission mode configured on the resolved profile is not applied to these calls.
 
 | Provider | Implementer tool events |
 |---|---:|
@@ -1220,4 +1220,4 @@ Companion structured calls use the same provider-neutral fresh-session transport
 | `pi` | Live |
 | `cursor`, `copilot`, `kiro` | Unavailable |
 
-When live tool events are unavailable, completion review and the same-session fix loop still run.
+When live tool events are unavailable, completion review and turn-boundary finding delivery still run.

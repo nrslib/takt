@@ -140,6 +140,8 @@ async function moderateReviewerResult(
 
   const moderated = await moderateCompanionResult({
     reviewerResult,
+    task: input.task,
+    cumulativeDiff: input.diff.content,
     diffSummary: input.diffSummary,
     implementerExplanation: input.implementerExplanation,
     runModerator: async (request) => {

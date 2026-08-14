@@ -1,4 +1,11 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -61,5 +68,33 @@ describe('companion mailbox', () => {
       findings: [{ severity: 'should_fix', file: 'a.ts', line: 1, finding: 'check' }],
     })).not.toThrow();
     expect(readFileSync(path, 'utf8')).toContain('agent-owned audit text\n{');
+  });
+
+  it('rejects appending after the mailbox is replaced with a symlink', () => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-companion-mailbox-symlink-'));
+    roots.push(root);
+    const path = buildCompanionMailboxPath({
+      cwd: root,
+      runSlug: 'run-1',
+      runPathNamespace: [],
+      stepName: 'implement',
+      companionName: 'security-reviewer',
+    });
+    const input = {
+      path,
+      companionName: 'security-reviewer',
+      reviewedAt: '2026-08-14T00:00:00.000Z',
+      reviewedDigest: 'digest-3',
+      findings: [{ severity: 'must_fix' as const, file: 'src/a.ts', line: 3, finding: 'first' }],
+    };
+    appendCompanionMailboxFindings(input);
+
+    const outside = join(root, 'outside.jsonl');
+    writeFileSync(outside, 'outside\n', 'utf8');
+    unlinkSync(path);
+    symlinkSync(outside, path);
+
+    expect(() => appendCompanionMailboxFindings(input)).toThrow(/symlink/);
+    expect(readFileSync(outside, 'utf8')).toBe('outside\n');
   });
 });

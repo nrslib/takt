@@ -1,3 +1,4 @@
+import { safeExternalErrorMessage } from '../../../shared/utils/safeExternalErrorMessage.js';
 import type {
   CompanionChangeCandidate,
   CompanionChangeDetector,
@@ -52,7 +53,7 @@ export class CompanionCompletionCoordinator {
       return {
         completionSettled: false,
         completionFailure: true,
-        reason: errorMessage(error),
+        reason: safeExternalErrorMessage(error),
       };
     }
   }
@@ -83,8 +84,4 @@ export class CompanionCompletionCoordinator {
     ));
     if (failure !== undefined) throw failure.reason;
   }
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

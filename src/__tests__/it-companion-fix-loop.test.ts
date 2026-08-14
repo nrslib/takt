@@ -2,12 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AgentResponse, CompanionFinding } from '../core/models/index.js';
 import { runCompanionFixLoop } from '../core/workflow/companion/fix-loop.js';
 
-function response(status: AgentResponse['status'], sessionId: string): AgentResponse {
+function response(status: AgentResponse['status'], sessionId?: string): AgentResponse {
   return {
     persona: 'coder',
     status,
     content: `${status} response`,
-    sessionId,
+    ...(sessionId === undefined ? {} : { sessionId }),
     timestamp: new Date('2026-08-14T00:00:00.000Z'),
   };
 }
@@ -46,18 +46,22 @@ describe('companion follow-up loop', () => {
   });
 
   it.each(['error', 'rate_limited', 'blocked'] as const)(
-    'propagates a %s follow-up response',
+    'propagates a %s follow-up response with the latest session ID',
     async (status) => {
+      const executeFollowUp = vi.fn()
+        .mockResolvedValueOnce(response('done', 'session-2'))
+        .mockResolvedValueOnce(response(status));
       const result = await runCompanionFixLoop({
         initialResponse: response('done', 'session-1'),
         phase1Options: {},
         completeReview: vi.fn().mockResolvedValue({ findings: [finding] }),
-        executeFollowUp: vi.fn().mockResolvedValue(response(status, 'session-2')),
+        executeFollowUp,
       });
 
       expect(result.phaseResponse.status).toBe(status);
       expect(result.phaseResponse.sessionId).toBe('session-2');
-      expect(result.followUpRounds).toBe(1);
+      expect(result.latestSessionId).toBe('session-2');
+      expect(result.followUpRounds).toBe(2);
     },
   );
 

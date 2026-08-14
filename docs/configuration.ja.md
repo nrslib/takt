@@ -1202,7 +1202,7 @@ provider:
         profile: review
 ```
 
-Companion の structured call は、他の TAKT 所有 structured agent と同じ provider-neutral な fresh-session transport を使います。native structured output 対応 provider ではそれを使い、それ以外では検証付き JSON fallback を使います。解決された profile の capabilities と permission mode をそのまま適用し、Companion 専用の追加制約は加えません。
+Companion の structured call は、他の TAKT 所有 structured agent と同じ provider-neutral な fresh-session transport を使います。native structured output 対応 provider ではそれを使い、それ以外では検証付き JSON fallback を使います。Companion reviewer、moderator、selector の呼び出しは常に `readonly` permission mode で実行し、解決された profile に設定された permission mode は適用しません。
 
 | Provider | 実装エージェントの tool event |
 |---|---:|
@@ -1215,4 +1215,4 @@ Companion の structured call は、他の TAKT 所有 structured agent と同�
 | `pi` | ライブ |
 | `cursor`、`copilot`、`kiro` | 利用不可 |
 
-ライブの tool event がない場合も、完了レビューと同一 session の修正ループは動作します。
+ライブの tool event がない場合も、完了レビューとターン境界での指摘配達は動作します。

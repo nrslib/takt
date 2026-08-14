@@ -79,7 +79,7 @@ export class CompanionStepRuntime {
   private currentFollowUpRound = 0;
   private stopped = false;
   private latestImplementerExplanation: string | undefined;
-  private readonly emittedReviewSkips = new Set<string>();
+  private readonly emittedReviewSkipGenerations = new Map<string, number>();
   private companionAuditWriteFailureReported = false;
 
   private constructor(private readonly deps: CompanionStepRuntimeDeps) {
@@ -480,12 +480,9 @@ export class CompanionStepRuntime {
     readonly observedGeneration?: number;
   }): void {
     if (this.stopped) return;
-    const key = input.companion === undefined || input.observedGeneration === undefined
-      ? undefined
-      : `${input.companion}\0${input.observedGeneration}`;
-    if (key !== undefined) {
-      if (this.emittedReviewSkips.has(key)) return;
-      this.emittedReviewSkips.add(key);
+    if (input.companion !== undefined && input.observedGeneration !== undefined) {
+      if (this.emittedReviewSkipGenerations.get(input.companion) === input.observedGeneration) return;
+      this.emittedReviewSkipGenerations.set(input.companion, input.observedGeneration);
     }
     try {
       this.events.reviewSkipped({

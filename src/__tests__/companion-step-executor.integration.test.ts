@@ -4,10 +4,12 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkflowState } from '../core/models/types.js';
 import type { CompanionDiffReader } from '../core/workflow/companion/diff-reader.js';
+import { CompanionReviewQueue } from '../core/workflow/companion/review-queue.js';
 import { StepExecutor, type StepExecutorDeps } from '../core/workflow/engine/StepExecutor.js';
 import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engine/structured-output-normalizer.js';
 import type { RunPaths } from '../core/workflow/run/run-paths.js';
 import { executeAgent } from '../agents/agent-usecases.js';
+import { callMock, resetScenario, setMockScenario } from '../infra/mock/index.js';
 import { makeStep } from './test-helpers.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({ executeAgent: vi.fn() }));
@@ -73,6 +75,25 @@ function diffReader(): CompanionDiffReader {
   };
 }
 
+function reviewableDiffReader(): CompanionDiffReader {
+  return {
+    readBaselineSha: vi.fn().mockResolvedValue('baseline'),
+    readDiff: vi.fn().mockResolvedValue({
+      status: 'ok',
+      snapshot: {
+        digest: 'digest-1',
+        changedLines: 1,
+        content: '+const unsafe = true;\n',
+        changedFiles: ['src/a.ts'],
+        fileFingerprints: { 'src/a.ts': 'file-1' },
+        hunkFingerprints: { 'src/a.ts:1-1': 'hunk-1' },
+        omittedBytes: 0,
+        truncated: false,
+      },
+    }),
+  };
+}
+
 function deps(input: {
   cwd: string;
   paths: RunPaths;
@@ -82,7 +103,15 @@ function deps(input: {
 }): StepExecutorDeps {
   return {
     optionsBuilder: {
-      buildAgentOptions: vi.fn().mockReturnValue({ cwd: input.cwd }),
+      buildAgentOptions: vi.fn().mockReturnValue({
+        cwd: input.cwd,
+        resolvedExecution: {
+          provider: 'mock',
+          model: undefined,
+          providerOptions: undefined,
+          permissionMode: 'edit',
+        },
+      }),
       buildPhaseRunnerContext: vi.fn().mockReturnValue({ childProcessEnv: undefined }),
       resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'mock', model: undefined }),
     },
@@ -114,8 +143,17 @@ function deps(input: {
         instruction: 'review',
         intervalMs: 60_000,
       },
+      moderator: {
+        name: 'moderator',
+        description: 'moderate',
+        instruction: 'moderate',
+        intervalMs: 60_000,
+      },
     },
-    companionProviders: { reviewer: { provider: 'mock' } },
+    companionProviders: {
+      reviewer: { provider: 'mock' },
+      moderator: { provider: 'mock' },
+    },
     companionDiffReader: input.companionDiffReader,
     onPhaseStart: vi.fn(),
     onPhaseComplete: vi.fn(),
@@ -131,20 +169,16 @@ describe('companion StepExecutor lifecycle', () => {
     cwd = mkdtempSync(join(tmpdir(), 'companion-step-executor-'));
     paths = runPaths(cwd);
     mkdirSync(paths.contextPreviousResponsesAbs, { recursive: true });
-    vi.mocked(executeAgent).mockImplementation(async (_persona, prompt, options) => {
+    vi.mocked(executeAgent).mockImplementation(async (persona, prompt, options) => {
       options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: prompt });
-      return {
-        persona: 'coder',
-        status: 'done',
-        content: 'implemented',
-        sessionId: 'session-1',
-        timestamp: new Date('2026-08-14T00:00:00.000Z'),
-      };
+      return callMock(options.internalAgentName ?? persona ?? 'default', prompt, options);
     });
   });
 
   afterEach(() => {
+    resetScenario();
     rmSync(cwd, { recursive: true, force: true });
+    vi.restoreAllMocks();
     vi.clearAllMocks();
   });
 
@@ -176,4 +210,141 @@ describe('companion StepExecutor lifecycle', () => {
       reason: 'companion_disabled',
     }));
   });
+
+  it('delivers moderator-accepted findings in a follow-up prompt after draining reviews', async () => {
+    setMockScenario([
+      { persona: 'coder', status: 'done', content: 'implemented' },
+      {
+        persona: 'reviewer',
+        status: 'done',
+        content: 'reviewed',
+        structuredOutput: {
+          findings: [{
+            severity: 'must_fix',
+            file: 'src/a.ts',
+            line: 1,
+            finding: 'Remove the unsafe assignment.',
+          }],
+          notes: null,
+        },
+      },
+      {
+        persona: 'moderator',
+        status: 'done',
+        content: 'moderated',
+        structuredOutput: {
+          findings: [{ action: 'accept', sourceIndex: 0 }],
+        },
+      },
+      { persona: 'coder', status: 'done', content: 'fixed' },
+    ]);
+    const drain = vi.spyOn(CompanionReviewQueue.prototype, 'drain');
+    const workflowState = state();
+    const step = makeStep({
+      name: 'implement',
+      persona: 'coder',
+      instruction: 'Implement.',
+      companion: { fixed: ['reviewer'], pool: [], moderator: 'moderator' },
+      rules: [],
+    });
+
+    const result = await new StepExecutor(deps({
+      cwd,
+      paths,
+      companionEnabled: true,
+      companionDiffReader: reviewableDiffReader(),
+      emitEvent: vi.fn(),
+    })).runNormalStep(step, workflowState, 'task', 5, vi.fn(), 'Implement.');
+
+    const executeAgentMock = vi.mocked(executeAgent);
+    const coderCallIndices = executeAgentMock.mock.calls
+      .flatMap(([persona], index) => persona === 'coder' ? [index] : []);
+    const coderPrompts = coderCallIndices.map((index) => executeAgentMock.mock.calls[index]![1]);
+    expect(drain).toHaveBeenCalled();
+    expect(coderPrompts).toHaveLength(2);
+    expect(drain.mock.invocationCallOrder[0]).toBeLessThan(
+      executeAgentMock.mock.invocationCallOrder[coderCallIndices[1]!]!,
+    );
+    expect(coderPrompts[1]).toContain('BEGIN COMPANION EVIDENCE');
+    expect(coderPrompts[1]).toContain('Remove the unsafe assignment.');
+    expect(result.response).toMatchObject({ status: 'done', content: 'fixed' });
+    expect(workflowState.companion).toEqual({
+      completionSettled: true,
+      followUpRounds: 1,
+    });
+  });
+
+  it.each(['error', 'rate_limited', 'blocked'] as const)(
+    'propagates a %s companion follow-up response through normal failure handling',
+    async (status) => {
+      setMockScenario([
+        { persona: 'coder', status: 'done', content: 'implemented' },
+        {
+          persona: 'reviewer',
+          status: 'done',
+          content: 'reviewed',
+          structuredOutput: {
+            findings: [{
+              severity: 'should_fix',
+              file: 'src/a.ts',
+              line: 1,
+              finding: 'Fix the accepted defect.',
+            }],
+            notes: null,
+          },
+        },
+        {
+          persona: 'moderator',
+          status: 'done',
+          content: 'moderated',
+          structuredOutput: {
+            findings: [{ action: 'accept', sourceIndex: 0 }],
+          },
+        },
+        {
+          persona: 'coder',
+          status,
+          content: `follow-up ${status}`,
+          ...(status === 'error' ? { error: 'follow-up failed' } : {}),
+        },
+      ]);
+      const executeAgentMock = vi.mocked(executeAgent);
+      executeAgentMock.mockImplementation(async (persona, prompt, options) => {
+        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: prompt });
+        const response = await callMock(options.internalAgentName ?? persona ?? 'default', prompt, options);
+        return persona === 'coder' && response.status === status
+          ? { ...response, sessionId: undefined }
+          : response;
+      });
+      const workflowState = state();
+      const step = makeStep({
+        name: 'implement',
+        persona: 'coder',
+        instruction: 'Implement.',
+        companion: { fixed: ['reviewer'], pool: [], moderator: 'moderator' },
+        rules: [],
+      });
+
+      const result = await new StepExecutor(deps({
+        cwd,
+        paths,
+        companionEnabled: true,
+        companionDiffReader: reviewableDiffReader(),
+        emitEvent: vi.fn(),
+      })).runNormalStep(step, workflowState, 'task', 5, vi.fn(), 'Implement.');
+
+      expect(result.response).toMatchObject({ status, content: `follow-up ${status}` });
+      const coderCalls = executeAgentMock.mock.calls.filter(([persona]) => persona === 'coder');
+      expect(coderCalls).toHaveLength(2);
+      expect(coderCalls[1]?.[2]?.sessionId).toBeDefined();
+      expect(result.response.sessionId).toBe(coderCalls[1]?.[2]?.sessionId);
+      expect(result.response.content).not.toBe('implemented');
+      expect(workflowState.stepOutputs.get('implement')).toBe(result.response);
+      expect(workflowState.lastOutput).toBe(result.response);
+      expect(workflowState.companion).toEqual({
+        completionSettled: false,
+        followUpRounds: 1,
+      });
+    },
+  );
 });

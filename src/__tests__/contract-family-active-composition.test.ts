@@ -393,4 +393,29 @@ describe('contract-family active composition', () => {
       'companion-watch-review',
     )).toThrow();
   });
+
+  it.each(LANGUAGES)('loads the dedicated Companion round adjudication facets in %s', (lang) => {
+    const definition = loadCompanionDefinition('review-companion-moderator', {
+      candidateDirs: [getBuiltinCompanionsDir(lang)],
+      language: lang,
+      facetContext: { projectDir: projectDirs[lang], lang },
+    });
+
+    expect(definition.policy).toEqual([
+      'contract-change',
+      'companion-round-adjudication',
+    ]);
+    expect(definition.policy).not.toContain('review-adjudication');
+    expect(definition.policyContents?.[1]).toContain(
+      lang === 'en'
+        ? '# Companion Round Adjudication Policy'
+        : '# Companion ラウンド裁定ポリシー',
+    );
+    expect(definition.persona).toBe('companion-round-adjudicator');
+    expect(definition.personaContent).toContain(
+      lang === 'en'
+        ? '# Companion Round Adjudicator'
+        : '# Companion ラウンド裁定者',
+    );
+  });
 });

@@ -1,8 +1,7 @@
-import { appendFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { CompanionFinding } from '../../models/companion-types.js';
 import type { CompanionReviewOutput } from './contracts.js';
-import { ensurePrivateDirectory } from '../../../shared/utils/private-file.js';
+import { appendPrivateFile, ensurePrivateDirectory } from '../../../shared/utils/private-file.js';
 
 export const COMPANION_MAILBOX_DIRECTORY = 'companion';
 
@@ -22,10 +21,9 @@ export function appendCompanionMailboxFindings(input: {
   if (rows.length === 0) return rows;
 
   ensurePrivateDirectory(dirname(input.path));
-  appendFileSync(
+  appendPrivateFile(
     input.path,
     rows.map((row) => `${JSON.stringify(row)}\n`).join(''),
-    { encoding: 'utf8', mode: 0o600 },
   );
   return rows;
 }

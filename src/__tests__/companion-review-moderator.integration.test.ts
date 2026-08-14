@@ -3,6 +3,7 @@ import {
   moderateCompanionResult,
   validateModeratorDecisions,
 } from '../core/workflow/companion/moderator.js';
+import { executeCompanionReviewRound } from '../core/workflow/companion/review-round.js';
 
 const reviewerResult = {
   findings: [
@@ -11,10 +12,16 @@ const reviewerResult = {
   ],
 };
 
+const moderatorEvidence = {
+  task: 'implement the requested contract',
+  cumulativeDiff: '+const changed = true;',
+};
+
 describe('companion moderator', () => {
   it('returns only accepted findings from the current round', async () => {
     const result = await moderateCompanionResult({
       reviewerResult,
+      ...moderatorEvidence,
       diffSummary: 'two files',
       runModerator: vi.fn().mockResolvedValue({
         findings: [
@@ -31,12 +38,68 @@ describe('companion moderator', () => {
     const runModerator = vi.fn();
     const result = await moderateCompanionResult({
       reviewerResult: { findings: [] },
+      ...moderatorEvidence,
       diffSummary: 'empty',
       runModerator,
     });
 
     expect(result).toBeUndefined();
     expect(runModerator).not.toHaveBeenCalled();
+  });
+
+  it('passes the task and reviewed cumulative diff snapshot to the moderator prompt', async () => {
+    const moderatorPrompts: string[] = [];
+
+    await executeCompanionReviewRound({
+      companionName: 'reviewer',
+      diff: {
+        digest: 'digest-1',
+        changedLines: 1,
+        content: moderatorEvidence.cumulativeDiff,
+        changedFiles: ['src/a.ts'],
+        fileFingerprints: { 'src/a.ts': 'fingerprint' },
+        hunkFingerprints: { 'src/a.ts:1': 'hunk' },
+        omittedBytes: 0,
+        truncated: false,
+      },
+      trigger: 'completion',
+      observedGeneration: 1,
+      changedRegionsSincePreviousReview: ['src/a.ts:1'],
+      diffSummary: 'one file',
+      signal: new AbortController().signal,
+      task: moderatorEvidence.task,
+      stepName: 'implement',
+      moderatorName: 'moderator',
+      mailboxPath: '/unused/rejected-findings.jsonl',
+      systemPrompt: (name) => name,
+      callStructured: async (purpose, _agentName, _systemPrompt, prompt) => {
+        if (purpose === 'reviewer') {
+          return { status: 'done', content: 'review', structuredOutput: reviewerResult };
+        }
+        moderatorPrompts.push(prompt);
+        return {
+          status: 'done',
+          content: 'moderate',
+          structuredOutput: {
+            findings: reviewerResult.findings.map((_, sourceIndex) => ({
+              action: 'reject',
+              sourceIndex,
+            })),
+          },
+        };
+      },
+      emitFinding: () => undefined,
+      markReviewed: () => undefined,
+      onRoundCompleted: () => undefined,
+    });
+
+    expect(moderatorPrompts).toHaveLength(1);
+    expect(moderatorPrompts[0]).toContain(
+      '"label":"task","value":"implement the requested contract"',
+    );
+    expect(moderatorPrompts[0]).toContain(
+      '"label":"cumulative_diff","value":"+const changed = true;"',
+    );
   });
 
   it.each([

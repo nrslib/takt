@@ -37,5 +37,8 @@ describe('companion structured output contracts', () => {
     expect(() => parseModeratorOutput({
       findings: [{ action: 'downgrade', sourceIndex: 0 }],
     })).toThrow();
+    expect(() => parseModeratorOutput({
+      findings: [{ action: 'accept', sourceIndex: 0, reason: 'extra field' }],
+    })).toThrow();
   });
 });

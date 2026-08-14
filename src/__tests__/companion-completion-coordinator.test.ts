@@ -81,4 +81,26 @@ describe('companion completion coordinator', () => {
     });
     expect(readSnapshot).not.toHaveBeenCalled();
   });
+
+  it('sanitizes completion failures before exposing the reason', async () => {
+    const coordinator = new CompanionCompletionCoordinator({
+      activeNames: () => ['reviewer'],
+      detectors: new Map([['reviewer', detector()]]),
+      queue: {
+        drain: vi.fn(),
+        complete: vi.fn().mockRejectedValue(
+          new Error('Provider failed: token=super-secret at /Users/alice/private/config.json'),
+        ),
+      } as never,
+      readSnapshot: vi.fn().mockResolvedValue(snapshot),
+      synchronizeSnapshot: vi.fn(),
+      onError: vi.fn(),
+    });
+
+    await expect(coordinator.complete()).resolves.toEqual({
+      completionSettled: false,
+      completionFailure: true,
+      reason: 'Provider failed: token=[REDACTED] at [path]',
+    });
+  });
 });

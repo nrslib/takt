@@ -666,6 +666,10 @@ export class StepExecutor {
       },
       abortSignal: this.resolveAbortSignal(),
     });
+    input.state.companion = {
+      ...requireActiveCompanionState(input.state, input.eventStep.name),
+      followUpRounds: fixLoop.followUpRounds,
+    };
     return fixLoop.phaseResponse;
   }
 
