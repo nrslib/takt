@@ -146,6 +146,7 @@ describe('review completion episode', () => {
     expect(result).toMatchObject({
       attempts: 1,
       response: initial,
+      reviewerSessionId: initial.sessionId,
       diagnostic: {
         kind: 'judge_unavailable',
         retriesUsed: 0,
@@ -210,6 +211,42 @@ describe('review completion episode', () => {
       path: 'consumer.ts',
       reason: 'regression remains',
     }]);
+  });
+
+  it('reports the incomplete decision when the explicit retry ceiling is zero', async () => {
+    const missingObligation = {
+      kind: 'family_lifecycle_gap' as const,
+      contractFamily: 'config',
+      path: 'consumer.ts',
+      reason: 'unvisited',
+    };
+    const executeRetry = vi.fn();
+    const judge = vi.fn().mockResolvedValue({
+      complete: false,
+      reason: 'gap remains',
+      missingObligations: [missingObligation],
+    });
+
+    const result = await runReviewCompletionEpisode({
+      config: { minRetry: 0, maxRetry: 0, retryInstruction: 'retry' },
+      originalInstruction: 'review',
+      initialResponse: response('initial'),
+      initialSessionId: 'review-session',
+      executeRetry,
+      judge,
+      isAbort: () => false,
+    });
+
+    expect(judge).toHaveBeenCalledOnce();
+    expect(executeRetry).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      attempts: 1,
+      diagnostic: {
+        kind: 'max_retry_reached',
+        retriesUsed: 0,
+        missingObligations: [missingObligation],
+      },
+    });
   });
 
   it('stops at the internal ceiling when every completeness decision remains incomplete', async () => {
