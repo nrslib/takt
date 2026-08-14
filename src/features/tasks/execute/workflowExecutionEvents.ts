@@ -537,6 +537,10 @@ export function bindWorkflowExecutionEvents(
     deps.sessionLogger.onWorkflowCallComplete(lifecycle);
   });
 
+  deps.engine.on('workflow:warning', (message) => {
+    deps.out.warn(message);
+  });
+
   deps.engine.on('step:start', (
     step,
     iteration,

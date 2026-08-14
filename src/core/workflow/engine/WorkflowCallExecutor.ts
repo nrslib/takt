@@ -452,6 +452,7 @@ export class WorkflowCallExecutor {
       );
     });
     for (const eventName of [
+      'workflow:warning',
       'workflow_call:start',
       'workflow_call:complete',
       'routing:decision',
@@ -625,6 +626,7 @@ export class WorkflowCallExecutor {
         : this.deps.sharedRuntime.restartNavigator.resolveChildStartStep(
             childWorkflow,
             [...resumeStackPrefix, workflowCallFrame],
+            (message) => this.deps.emit('workflow:warning', message),
           ),
       resumePoint: childResumePoint,
       initialIteration: this.deps.state.iteration,

@@ -87,15 +87,6 @@ export function workflowRestartEntryMatchesWorkflow(
   return entry.workflow_ref === getWorkflowReference(workflow);
 }
 
-export function workflowRestartEntryMatchesRuntime(
-  runtimeEntry: WorkflowResumePointEntry,
-  restartEntry: WorkflowRestartPointEntry,
-): boolean {
-  const normalizedRuntimeEntry = normalizeWorkflowResumePointEntry(runtimeEntry);
-  return normalizedRuntimeEntry.workflow_ref === restartEntry.workflow_ref
-    && normalizedRuntimeEntry.call_instance === restartEntry.call_instance;
-}
-
 export function workflowEntriesMatch(
   left: WorkflowResumePointEntry,
   right: WorkflowResumePointEntry,
