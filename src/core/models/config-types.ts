@@ -27,6 +27,8 @@ export interface AutoRoutingCandidate {
 }
 
 export interface AutoRoutingConfig {
+  /** Engine-local workflow identity used to resolve runtime.yaml `<workflow>/<step>` targets. */
+  workflowName?: string;
   strategy: AutoRoutingStrategy;
   router: {
     provider: ProviderType;
@@ -35,7 +37,8 @@ export interface AutoRoutingConfig {
     permissionMode?: PermissionMode;
   };
   candidates: AutoRoutingCandidate[];
-  defaultPool: string;
+  /** Legacy auto routing default; runtime.yaml requires an explicit target pool instead. */
+  defaultPool?: string;
   candidatePools: Record<string, {
     candidates: string[];
     fallback: string;
@@ -107,6 +110,8 @@ export interface InternalAgentSeats {
 }
 
 export interface ProviderRoutingConfig {
+  /** Engine-local workflow identity used to resolve runtime.yaml `<workflow>/<step>` targets. */
+  workflowName?: string;
   personas?: Record<string, ProviderRoutingEntry>;
   tags?: Record<string, ProviderRoutingEntry>;
   steps?: Record<string, ProviderRoutingEntry>;
@@ -121,6 +126,8 @@ export interface ProviderRoutingConfig {
  * persona display name (runtime `targets.personas` compiles into `personaProviders`).
  */
 export interface ProviderLadderConfig {
+  /** Engine-local workflow identity used to resolve runtime.yaml `<workflow>/<step>` targets. */
+  workflowName?: string;
   defaults?: ProviderRoutingEntry[];
   personas?: Record<string, ProviderRoutingEntry[]>;
   tags?: Record<string, ProviderRoutingEntry[]>;

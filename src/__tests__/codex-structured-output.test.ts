@@ -64,8 +64,13 @@ describe('CodexClient — structuredOutput 抽出', () => {
 
   it('outputSchema 指定時に agent_message の JSON テキストを structuredOutput として返す', async () => {
     const schema = { type: 'object', properties: { step: { type: 'integer' } } };
+    const onStream = vi.fn();
     mockEvents = [
       { type: 'thread.started', thread_id: 'thread-1' },
+      {
+        type: 'item.completed',
+        item: { id: 'reasoning-1', type: 'reasoning', text: 'internal reasoning summary' },
+      },
       {
         type: 'item.completed',
         item: { id: 'msg-1', type: 'agent_message', text: '{"step": 2, "reason": "approved"}' },
@@ -74,10 +79,15 @@ describe('CodexClient — structuredOutput 抽出', () => {
     ];
 
     const client = new CodexClient();
-    const result = await client.call('coder', 'prompt', { cwd: '/tmp', outputSchema: schema });
+    const result = await client.call('coder', 'prompt', { cwd: '/tmp', outputSchema: schema, onStream });
 
     expect(result.status).toBe('done');
     expect(result.structuredOutput).toEqual({ step: 2, reason: 'approved' });
+    expect(result.content).not.toContain('internal reasoning summary');
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'thinking',
+      data: { thinking: 'internal reasoning summary\n' },
+    });
   });
 
   it('複数の agent_message JSON がある場合は最後の JSON を structuredOutput として返す', async () => {
@@ -334,9 +344,26 @@ describe('CodexClient — structuredOutput 抽出', () => {
     expect(lastCodexConstructorOptions).toMatchObject({
       config: {
         model_reasoning_effort: 'vendor"level',
+        model_reasoning_summary: 'auto',
       },
     });
     expect(lastThreadOptions).not.toHaveProperty('modelReasoningEffort');
+  });
+
+  it('reasoningEffort がなくても Codex config に reasoning summary を設定する', async () => {
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+
+    const client = new CodexClient();
+    await client.call('coder', 'prompt', { cwd: '/tmp' });
+
+    expect(lastCodexConstructorOptions).toMatchObject({
+      config: {
+        model_reasoning_summary: 'auto',
+      },
+    });
   });
 
   it('codexPathOverride が Codex constructor options に反映される', async () => {

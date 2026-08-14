@@ -5,7 +5,7 @@
 # claude / codex 両 CLI のログインが必要。デフォルトスイートからは除外。
 # Run via npm run eval:prompts:fix-loop-convergence
 
-description: 'TAKT facet eval: fix ループ収束規則の挙動（Claude Opus / Codex Luna Max）'
+description: 'TAKT facet eval: fix ループ収束規則の挙動（Claude Opus / Codex Luna Max / Codex Sol High）'
 
 prompts:
   - file://fix-loop-convergence-prompt.mjs
@@ -13,11 +13,13 @@ prompts:
 providers:
   - id: 'exec: bash providers/claude-judge.sh claude-opus-5'
     label: claude-opus
-  - id: 'exec: bash providers/codex-judge.sh gpt-5.6-luna'
+  - id: 'exec: bash providers/codex-judge.sh gpt-5.6-luna max'
     label: codex-luna-max
+  - id: 'exec: bash providers/codex-judge.sh gpt-5.6-sol high'
+    label: codex-sol-high
 
 evaluateOptions:
-  maxConcurrency: 2
+  maxConcurrency: 3
 
 tests:
   - description: E01 トリガー成立時は局所修正を拒否し強制点方向を選ぶ

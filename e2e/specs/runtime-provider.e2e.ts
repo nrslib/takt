@@ -58,10 +58,9 @@ function writeActiveRuntimeProviderFile(taktDir: string): void {
 }
 
 /**
- * Active runtime.yaml exercising the auto_routing (`defaults.pool`) and `internal_agents`
- * compile paths (issue #1136). A provider-agnostic single-step workflow resolves its provider
- * through the deterministic auto-routing fallback candidate, and the `internal_agents` target
- * compiles without tripping the previous "not yet wired" fail-fast.
+ * Active runtime.yaml exercising explicit auto_routing target selection and `internal_agents`
+ * compile paths (issue #1136). The single workflow step explicitly names its pool, while the
+ * runtime defaults remain concrete for non-workflow provider resolution.
  */
 function writeAutoRoutingRuntimeProviderFile(taktDir: string): void {
   writeFileSync(
@@ -69,13 +68,17 @@ function writeAutoRoutingRuntimeProviderFile(taktDir: string): void {
     stringifyYaml({
       version: 1,
       provider: {
-        defaults: { pool: 'main-pool' },
+        defaults: { profile: 'default' },
         profiles: {
+          default: { provider: 'mock', model: 'mock-default' },
           high: { provider: 'mock', model: 'mock-high' },
           low: { provider: 'mock', model: 'mock-low' },
           router: { provider: 'mock', model: 'mock-router' },
         },
         targets: {
+          steps: {
+            'e2e-mock-single/execute': { pool: 'main-pool' },
+          },
           internal_agents: {
             selector: { profile: 'router' },
           },
@@ -199,10 +202,10 @@ describe('E2E: runtime.yaml provider section (runtime-v1, mock)', () => {
     }));
   }, 240_000);
 
-  it('fails fast from the CLI when an active runtime.yaml resolves no default provider', () => {
+  it('fails fast from the CLI when an active runtime.yaml omits defaults', () => {
     writeCleanConfig(isolatedEnv.taktDir);
-    // Active section (non-empty targets) but no `defaults` profile/pool: no fixed provider and
-    // no auto routing can be resolved, so the CLI must exit non-zero before any agent runs.
+    // Active section with no defaults is invalid even without auto_routing, so the CLI must exit
+    // non-zero before any agent runs.
     writeFileSync(
       join(isolatedEnv.taktDir, 'runtime.yaml'),
       stringifyYaml({
@@ -233,6 +236,6 @@ describe('E2E: runtime.yaml provider section (runtime-v1, mock)', () => {
     });
 
     expect(result.exitCode).not.toBe(0);
-    expect(`${result.stdout}\n${result.stderr}`).toContain('No provider configured');
+    expect(`${result.stdout}\n${result.stderr}`).toContain('provider.defaults');
   }, 240_000);
 });

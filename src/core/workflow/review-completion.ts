@@ -271,7 +271,7 @@ export async function runReviewCompletionEpisode(input: {
 
     const retriesUsed = attemptIndex;
     const requiresMinimumRetry = retriesUsed < input.config.minRetry;
-    if (lastDecision === undefined && !requiresMinimumRetry) {
+    if (lastDecision === undefined) {
       return {
         response,
         reviewerSessionId,

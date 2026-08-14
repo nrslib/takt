@@ -298,8 +298,30 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 
 ```
 
-Pi SDK sessions are kept in memory for the current TAKT process. TAKT does not write Pi session JSONL files or persist `provider_options.pi.extensions` into Pi settings; explicitly requested packages use Pi's temporary resolution path.
-Implicit project-local Pi extensions are not trusted or loaded. Explicit Pi extensions execute inside the TAKT process, so only configure trusted local paths and package sources. Extension URLs containing embedded credentials or secret-bearing query parameters are rejected.
+### Pi provider session boundary
+
+The TAKT Pi provider uses an embedded, in-memory Pi SDK session for the current TAKT process. It does not write Pi session JSONL files, and it does not read or write the Pi CLI global `settings.json`. Consequently, Pi global settings such as the default model, thinking level, shell, and retry options are not automatically inherited by TAKT.
+
+Set the model explicitly in TAKT configuration when it should be the default for Pi. A Pi model can include a `:<thinking-level>` suffix, for example:
+
+```yaml
+# ~/.takt/config.yaml or .takt/config.yaml
+provider: pi
+model: provider/model:high
+```
+
+You can also set the model and thinking level on a workflow step:
+
+```yaml
+steps:
+  - name: implement
+    provider: pi
+    model: provider/model:high
+```
+
+The `provider` and `model` declarations select the provider, model, and thinking level for a TAKT run; they do not import Pi CLI settings. Pi authentication is handled separately through the Pi SDK credential store or provider-native environment variables. The boundary avoids unintended writes to global settings and keeps project-local configuration trustworthy and predictable.
+
+`provider_options.pi` is a separate path for loading Pi resources such as `extensions` and `no_*` discovery controls. These options do not declare authentication, model, or thinking level. Explicit resource sources are resolved temporarily for the TAKT run and are not persisted to Pi settings; see [Pi resource loading](#pi-resource-loading) for the resource trust boundary.
 
 ### OpenCode execution guards
 
@@ -576,7 +598,7 @@ version: 1
 
 provider:
   defaults:
-    pool: sol-pool
+    profile: sol-medium
 
   profiles:
     sol-high:
@@ -612,6 +634,8 @@ provider:
     steps:
       default/supervise:
         profile: sol-high
+      default/implement:
+        pool: sol-pool
     internal_agents:
       selector:
         profile: router
@@ -637,7 +661,9 @@ provider:
 
 TAKT-owned structured agents always start a fresh session. Providers with native structured output receive the schema directly; other providers receive a JSON schema instruction, and TAKT parses and validates the returned object. TAKT does not add internal-agent-specific permission, tool, network, sandbox, skill, MCP, or bypass policy. Assign a profile with `capabilities`, `permission_mode`, or both when a role needs restrictions. If both are omitted, normal provider configuration is used unchanged.
 
-`provider.defaults` and every `provider.targets` entry choose exactly one of a fixed `profile` or an auto-routing `pool`. Steps are named `<leaf-workflow-name>/<step-name>`; control nodes that do not run an agent (such as `workflow_call`) are not resolution targets.
+`provider.defaults` is required in every active provider section and must choose exactly one of a fixed `profile` or an ordered `ladder`. It cannot specify `pool`. Entries under `provider.targets.personas`, `provider.targets.tags`, and `provider.targets.steps` choose exactly one of a fixed `profile`, an ordered `ladder`, or an auto-routing `pool`; `pool` is valid only on these explicit workflow targets. `internal_agents` entries may use a fixed `profile` or an ordered `ladder`, but cannot use `pool`. `companions` entries must use a fixed `profile` and cannot use `pool` or `ladder`. Steps are named `<leaf-workflow-name>/<step-name>`; control nodes that do not run an agent (such as `workflow_call`) are not resolution targets.
+
+When `provider.auto_routing` is present, only targets that explicitly name a `pool` are auto-routed. Targets without an explicit pool, non-workflow operations such as AI task-slug generation, and other auxiliary processing use `provider.defaults`; there is no implicit default pool. `fallback_profile` belongs to the explicitly selected pool and is not used as a non-workflow default.
 
 ### Resolution priority
 
@@ -1018,6 +1044,36 @@ provider_options:
 ```
 
 File-edit permissions continue to be governed by `permission_mode`.
+
+<a id="pi-resource-loading"></a>
+
+#### Pi resource loading (`extensions`, `no_*`)
+
+Use `provider_options.pi` when a TAKT run should load Pi packages / extensions or restrict which Pi resource types are discovered:
+
+```yaml
+provider_options:
+  pi:
+    extensions:
+      - npm:pi-fff
+      # - git:https://github.com/example/pi-extension
+      # - /absolute/path/to/local-extension
+    no_extensions: true       # Disable discovery; still load the explicit extensions above
+    no_skills: true           # Disable Pi Skill discovery
+    no_prompt_templates: true # Disable Pi prompt-template discovery
+    no_themes: true           # Disable Pi theme discovery
+    no_context_files: true    # Disable Pi context-file discovery
+```
+
+- `extensions` accepts npm packages, Git sources, and local paths.
+- Explicit sources are resolved temporarily for the TAKT run and are not persisted into Pi settings.
+- `no_extensions` disables extension discovery but still loads the sources listed in `extensions`.
+- The other `no_*` options disable discovery of their respective resource types.
+- Implicit project-local Pi extensions are not trusted or loaded.
+- Explicit extensions execute inside the TAKT process, so configure only trusted local paths and package sources.
+- Extension URLs containing embedded credentials or secret-bearing query parameters are rejected.
+
+These settings follow normal provider-option leaf priority, including `TAKT_PROVIDER_OPTIONS_PI_*`.
 
 <a id="workflow-categories"></a>
 

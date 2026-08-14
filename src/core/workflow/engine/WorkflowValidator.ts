@@ -30,7 +30,7 @@ import {
   resolveAutoRoutingCandidateProviderInfo,
   validateAutoRoutingResolvedProviderModel,
 } from '../auto-routing/resolver.js';
-import { resolveExecutableRoutingCandidates } from '../auto-routing/selector.js';
+import { hasAutoRoutingPoolAssignment, resolveExecutableRoutingCandidates } from '../auto-routing/selector.js';
 import { findDuplicateWorkflowStepName } from '../../../shared/workflowStepNameValidator.js';
 import { withWorkflowConfigErrorPath } from '../workflow-config-error.js';
 import { findWorkflowStepLocation } from '../workflow-step-location.js';
@@ -68,6 +68,11 @@ function expandAutoRoutingProviderInfos(
     autoRouting === undefined
     || currentProviderInfo.provider !== undefined
     || getWorkflowStepKind(step) !== 'agent'
+    || !hasAutoRoutingPoolAssignment(autoRouting, {
+      name: step.name,
+      tags: step.tags,
+      personaKey: step.providerRoutingPersonaKey,
+    })
   ) {
     return [{ providerInfo: currentProviderInfo, autoRouted: false }];
   }

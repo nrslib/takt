@@ -4,9 +4,9 @@
 ## Result: Fix plan finalized / Task-level replanning required
 
 ## Finding Coverage
-| Finding ID / Source | Authorization Basis | Evidence | Fix Unit / Follow-up | Problem → Direct Cause → Root Cause | Classification | Acceptance Criteria and Remediation Boundary |
-|---------------------|---------------------|----------|----------------------|-------------------------------------|----------------|----------------------------------------------|
-| {ID or report name} | {Basis recorded by adjudication} | {Report or file:line} | {Stable ID} | {Causal chain verified in code} | {Local / Structural / Undemonstrable due to environmental factors} | {Completion condition and excluded neighboring contract or adjacent work} |
+| Finding ID / Source | Authorization Basis | Evidence | Fix Unit / Follow-up | Problem → Direct Cause → Root Cause | Evidence for the Cause / Other Causes Checked | Classification | Acceptance Criteria and Remediation Boundary |
+|---------------------|---------------------|----------|----------------------|-------------------------------------|--------------------------------------------------|----------------|----------------------------------------------|
+| {ID or report name} | {Basis recorded by adjudication} | {Report or file:line} | {Stable ID} | {Confirmed facts, possible causes, and confirmed cause and effect} | {Evidence for the cause and other causes checked; if unconfirmed, the investigation required} | {Local / Structural / Undemonstrable due to environmental factors} | {Completion condition and excluded neighboring contract or adjacent work} |
 
 ## Invariant Register
 | Fix Unit | Family ID | Invariant Stable ID | Observable Invariant | Authoritative Owner | Classification and Recorded Recurrence Trigger | Enforcement Point |
@@ -29,5 +29,5 @@
 | {Fix unit} | {Requirements, Policy / Knowledge, and public contracts} | {Selected method and rationale for accepting or rejecting candidates} | {Deterministic evidence available now. If environmental factors prevent demonstration, include the factor, alternative evidence, and follow-up} | {Why the constraints are satisfied} | {Commands} |
 
 ## Replanning Requirements
-- {None, or evidence preventing a sound fix plan and the decision required}
+- {None, or evidence preventing a sound fix plan, the cause that remains unconfirmed, and the investigation or decision required}
 ```

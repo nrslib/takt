@@ -160,7 +160,8 @@ describe('companion runtime lifecycle', () => {
       type: 'tool_use',
       data: { tool: 'Bash', input: { command: 'git commit -m change' }, id: 'commit' },
     });
-    await vi.waitFor(() => expect(readDiff).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(readDiff).toHaveBeenCalledTimes(3));
+    expect(readDiff.mock.calls.at(-1)?.[2]).toBeInstanceOf(AbortSignal);
     runtime.stop();
   });
 

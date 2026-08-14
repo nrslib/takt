@@ -117,8 +117,11 @@ describe('ladder stage progression across every assignment path (INV-A)', () => 
     {
       path: 'steps',
       baseSource: 'provider_routing.steps',
-      step: { name: 'development-core/fix' },
-      providerLadders: { steps: { 'development-core/fix': [MAIN, STRONG] } },
+      step: { name: 'fix' },
+      providerLadders: {
+        workflowName: 'development-core',
+        steps: { 'development-core/fix': [MAIN, STRONG] },
+      },
     },
     {
       path: 'tags',

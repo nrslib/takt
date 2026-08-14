@@ -102,6 +102,28 @@ describe('runtime.yaml non-workflow provider resolution', () => {
     });
   });
 
+  it('keeps disabled companion-only targets in legacy mode for non-workflow resolution', () => {
+    writeGlobalConfig(['language: en', 'provider: claude', 'model: legacy-model']);
+    writeGlobalRuntimeFile({
+      version: 1,
+      companion: { enabled: false },
+      provider: {
+        profiles: {
+          security: { provider: 'mock', model: 'mock-security' },
+        },
+        targets: { companions: { security: { profile: 'security' } } },
+      },
+    });
+    invalidate();
+
+    expect(resolveRuntimeNonWorkflowProvider(projectCwd)).toBeUndefined();
+    expect(resolveNonWorkflowProviderModel(projectCwd)).toEqual({
+      runtimeManaged: false,
+      provider: 'claude',
+      model: 'legacy-model',
+    });
+  });
+
   it('flows the runtime defaults profile options into a non-assistant session context', () => {
     writeGlobalRuntimeFile({
       version: 1,
@@ -196,20 +218,18 @@ describe('runtime.yaml non-workflow provider resolution', () => {
     }
   });
 
-  it('fails fast when the active section resolves no defaults profile and no auto routing', () => {
-    // targets-only active section: runtime-v1 owns the resolution, so the seam must not
-    // silently fall back to the legacy config.yaml provider.
+  it('fails fast when the active section omits defaults and has no auto routing', () => {
     writeGlobalRuntimeFile({
       version: 1,
       provider: {
         profiles: { router: { provider: 'claude', model: 'sonnet' } },
         targets: { internal_agents: { selector: { profile: 'router' } } },
       },
-    });
+    } as unknown as RuntimeProviderFile);
     invalidate();
 
-    expect(() => resolveRuntimeNonWorkflowProvider(projectCwd)).toThrow(/No provider configured/);
-    expect(() => resolveNonWorkflowProviderModel(projectCwd)).toThrow(/No provider configured/);
+    expect(() => resolveRuntimeNonWorkflowProvider(projectCwd)).toThrow(/defaults/);
+    expect(() => resolveNonWorkflowProviderModel(projectCwd)).toThrow(/defaults/);
   });
 
   it('fails fast when an env provider override requires a model the override does not carry', () => {

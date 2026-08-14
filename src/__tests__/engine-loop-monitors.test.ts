@@ -344,6 +344,14 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         }],
         defaultPool: 'general',
         candidatePools: { general: { candidates: ['workflow-candidate'], fallback: 'workflow-candidate' } },
+        poolRules: {
+          steps: {
+            implement: 'general',
+            ai_review: 'general',
+            ai_fix: 'general',
+            reviewers: 'general',
+          },
+        },
         rules: {
           steps: {
             implement: 'workflow-candidate',
@@ -1513,6 +1521,15 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         }],
         defaultPool: 'general',
         candidatePools: { general: { candidates: ['loop-candidate'], fallback: 'loop-candidate' } },
+        poolRules: {
+          steps: {
+            implement: 'general',
+            ai_review: 'general',
+            ai_fix: 'general',
+            reviewers: 'general',
+            _loop_judge_ai_review_ai_fix: 'general',
+          },
+        },
         rules: { steps: { ai_fix: 'loop-candidate' } },
       };
 
@@ -1536,6 +1553,15 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         }],
         defaultPool: 'general',
         candidatePools: { general: { candidates: ['loop-candidate'], fallback: 'loop-candidate' } },
+        poolRules: {
+          steps: {
+            implement: 'general',
+            ai_review: 'general',
+            ai_fix: 'general',
+            reviewers: 'general',
+            _loop_judge_ai_review_ai_fix: 'general',
+          },
+        },
         rules: { steps: { ai_fix: 'loop-candidate' } },
       };
 

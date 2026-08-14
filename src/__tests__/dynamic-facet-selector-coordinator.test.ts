@@ -14,14 +14,14 @@ import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import { DynamicFacetSelectionStore } from '../core/workflow/dynamic-facets/dynamicFacetSelectionStore.js';
 import { assertStrictStructuredOutputSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
 
-vi.mock('../agents/structured-caller/transport.js', () => ({
-  executeStructuredAgent: vi.fn(),
+vi.mock('../agents/agent-usecases.js', () => ({
+  executeIsolatedStructuredInternalAgent: vi.fn(),
 }));
 
-import { executeStructuredAgent } from '../agents/structured-caller/transport.js';
+import { executeIsolatedStructuredInternalAgent } from '../agents/agent-usecases.js';
 import * as contextBuilder from '../core/workflow/dynamic-facets/dynamicFacetContextBuilder.js';
 
-const mockedExecuteAgent = vi.mocked(executeStructuredAgent);
+const mockedExecuteAgent = vi.mocked(executeIsolatedStructuredInternalAgent);
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -59,6 +59,21 @@ function makeUnlimitedStep(): NormalAgentWorkflowStep {
     personaDisplayName: 'coder',
     instruction: 'Fix',
     dynamicFacets: { pool: 'fix' },
+  };
+}
+
+function makeGuidedStep(): NormalAgentWorkflowStep {
+  return {
+    ...makeStep(),
+    dynamicFacets: {
+      pool: 'fix',
+      maxSelected: 4,
+      selector: {
+        persona: 'facet-selector',
+        personaPath: '/project/.takt/facets/personas/facet-selector.md',
+        instruction: 'Select facets from the changed paths and unresolved findings.',
+      },
+    } as unknown as NormalAgentWorkflowStep['dynamicFacets'],
   };
 }
 
@@ -101,6 +116,7 @@ function makeState(snapshot?: DynamicFacetSelectionSnapshot): WorkflowState {
 function makeOptions(overrides: Partial<WorkflowEngineOptions> = {}): WorkflowEngineOptions {
   return {
     projectCwd: '/tmp/project',
+    workflowBundleResourceRoot: '/tmp/project/.takt/runs/bundle/resources',
     selectorProvider: {
       provider: 'cursor',
       providerSource: 'step',
@@ -238,14 +254,52 @@ describe('DynamicFacetSelectorCoordinator', () => {
     const coordinator = new DynamicFacetSelectorCoordinator(buildDeps());
     await coordinator.resolveDynamicFacets(makeStep(1), makeState(), 'task', pool);
 
-    const outputSchema = mockedExecuteAgent.mock.calls[0]?.[1];
+    const outputSchema = mockedExecuteAgent.mock.calls[0]?.[2];
     if (outputSchema === undefined) throw new Error('Selector output schema was not sent');
-    expect(mockedExecuteAgent.mock.calls[0]?.[2]).toMatchObject({
-      failureDir: '/tmp/project/.takt/runs/run/failures',
-    });
     expect(() => assertStrictStructuredOutputSchema(outputSchema)).not.toThrow();
     expect(outputSchema).not.toHaveProperty('properties.selected_ids.uniqueItems');
     expect(outputSchema).toHaveProperty('properties.selected_ids.maxItems', 1);
+  });
+
+  it('passes selector guidance to the isolated agent without replacing the engine contract', async () => {
+    const pool = makePool([
+      { id: 'frontend', description: 'Frontend changes' },
+      { id: 'backend', description: 'Backend changes' },
+    ]);
+    mockedExecuteAgent.mockResolvedValueOnce({
+      persona: 'selector',
+      status: 'done',
+      content: '',
+      timestamp: new Date(),
+      structuredOutput: { selected_ids: ['frontend'], rationale: 'changed paths are frontend-only' },
+    });
+
+    const coordinator = new DynamicFacetSelectorCoordinator(buildDeps());
+    await coordinator.resolveDynamicFacets(makeGuidedStep(), makeState(), 'task', pool);
+
+    const [systemPrompt, instruction, outputSchema, options] = mockedExecuteAgent.mock.calls[0] ?? [];
+    expect(systemPrompt).toContain('internal dynamic facet selector');
+    expect(instruction).toContain('Select facets from the changed paths and unresolved findings.');
+    expect(instruction).toContain('Task:\ntask');
+    expect(instruction).toContain('- frontend: Frontend changes');
+    expect(outputSchema).toMatchObject({
+      type: 'object',
+      additionalProperties: false,
+      required: ['selected_ids', 'rationale'],
+      properties: {
+        selected_ids: {
+          type: 'array',
+          maxItems: 4,
+          items: { type: 'string', enum: ['frontend', 'backend'] },
+        },
+        rationale: { type: 'string' },
+      },
+    });
+    expect(options).toEqual(expect.objectContaining({
+      persona: 'facet-selector',
+      personaPath: '/project/.takt/facets/personas/facet-selector.md',
+      workflowBundleResourceRoot: '/tmp/project/.takt/runs/bundle/resources',
+    }));
   });
 
   it('should run the selector instead of restoring a run-local selection as a resume snapshot', async () => {

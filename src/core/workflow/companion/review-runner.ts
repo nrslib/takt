@@ -44,7 +44,6 @@ export interface CompanionCallAudit {
 
 export type CompanionStructuredResponseValidator = (response: AgentResponse) => void;
 
-const COMPANION_CALL_TIMEOUT_MS = 300_000;
 const MAX_COMPANION_CALL_ATTEMPTS = 2;
 
 export async function executeCompanionStructuredAgent(input: {
@@ -58,7 +57,6 @@ export async function executeCompanionStructuredAgent(input: {
   failureDir: string;
   language: string;
   resolution: CompanionAgentResolution;
-  timeoutMs?: number;
   abortSignal?: AbortSignal;
   call: (
     systemPrompt: string,
@@ -127,7 +125,6 @@ async function executeCompanionStructuredAgentInternal(input: Parameters<
   };
   if (input.abortSignal?.aborted) throw createAbortError(input.abortSignal.reason);
   input.abortSignal?.addEventListener('abort', abortFromParent, { once: true });
-  let timer: ReturnType<typeof setTimeout> | undefined;
   let response: AgentResponse | undefined;
   let callAuditRecorded = false;
   const guardedSystemPrompt = appendCompanionEvidenceSystemGuard(input.systemPrompt);
@@ -175,14 +172,6 @@ async function executeCompanionStructuredAgentInternal(input: Parameters<
     }
   };
   try {
-    const timeoutMs = input.timeoutMs ?? COMPANION_CALL_TIMEOUT_MS;
-    const timeout = new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => {
-        reject(new Error(`Companion ${input.purpose} call timed out after ${timeoutMs}ms`));
-        controller.abort();
-      }, timeoutMs);
-    });
-    void timeout.catch(() => undefined);
     const call = input.call(
       guardedSystemPrompt,
       input.prompt,
@@ -204,7 +193,6 @@ async function executeCompanionStructuredAgentInternal(input: Parameters<
     void call.catch(() => undefined);
     response = await Promise.race([
       call,
-      timeout,
       parentAbort,
     ]);
     if (response.status === 'done') {
@@ -252,7 +240,6 @@ async function executeCompanionStructuredAgentInternal(input: Parameters<
     }
     throw error;
   } finally {
-    if (timer !== undefined) clearTimeout(timer);
     input.abortSignal?.removeEventListener('abort', abortFromParent);
   }
 }

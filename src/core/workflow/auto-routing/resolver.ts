@@ -6,7 +6,7 @@ import { withProviderValidationErrorSource } from '../provider-validation-error.
 import type { RuntimeStepResolution, StepProviderInfo } from '../types.js';
 import type { RoutingWorkSnapshot, WorkRequirementEstimate, WorkRequirementEstimator } from './contracts.js';
 import { normalizeRoutingWorkSnapshot } from './normalizer.js';
-import { resolveAutoRoutingRuleCandidate, selectRoutingCandidate } from './selector.js';
+import { hasAutoRoutingPoolAssignment, resolveAutoRoutingRuleCandidate, selectRoutingCandidate } from './selector.js';
 import type { RoutingRuntime } from './runtime.js';
 import { isProviderStreamParseError } from '../../../shared/types/agent-failure.js';
 
@@ -142,12 +142,14 @@ export function matchAutoRoutingRules(autoRouting: AutoRoutingConfig, step: Auto
 
 export function resolveRuleBasedAutoRoutingProviderInfo(input: Pick<ResolveAutoRoutingRuntimeInput, 'autoRouting' | 'step' | 'currentProviderInfo'>): StepProviderInfo | undefined {
   if (input.currentProviderInfo.provider !== undefined) return undefined;
+  if (!hasAutoRoutingPoolAssignment(input.autoRouting, input.step)) return undefined;
   const candidate = matchAutoRoutingRules(input.autoRouting, input.step);
   return candidate === undefined ? undefined : resolveAutoRoutingCandidateProviderInfo(candidate, 'auto.rules', input.autoRouting, input.currentProviderInfo);
 }
 
 export function resolveDeterministicAutoRoutingProviderInfo(input: Pick<ResolveAutoRoutingRuntimeInput, 'autoRouting' | 'step' | 'currentProviderInfo'>): StepProviderInfo | undefined {
   if (input.currentProviderInfo.provider !== undefined) return undefined;
+  if (!hasAutoRoutingPoolAssignment(input.autoRouting, input.step)) return undefined;
   const rule = resolveRuleBasedAutoRoutingProviderInfo(input);
   if (rule !== undefined) return rule;
   const selection = selectRoutingCandidate({ autoRouting: input.autoRouting, step: input.step, estimatorFailure: new Error('estimator unavailable') });
@@ -157,6 +159,7 @@ export function resolveDeterministicAutoRoutingProviderInfo(input: Pick<ResolveA
 export async function resolveAutoRoutingRuntime(input: ResolveAutoRoutingRuntimeInput): Promise<RuntimeStepResolution | undefined> {
   input.abortSignal?.throwIfAborted();
   if (input.currentProviderInfo.provider !== undefined) return undefined;
+  if (!hasAutoRoutingPoolAssignment(input.autoRouting, input.step)) return undefined;
   const hardRule = resolveRuleBasedAutoRoutingProviderInfo(input);
   if (hardRule !== undefined) return { providerInfo: hardRule };
   if (input.estimator === undefined) {

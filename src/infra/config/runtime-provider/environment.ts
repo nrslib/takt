@@ -153,8 +153,8 @@ export function compileLegacyProviderEnvironment(
 
 /**
  * RuntimeProviderPolicyCompiler: map a validated runtime.yaml `provider` section into the
- * shared engine-options bundle. Profile `options`, `pool`/`auto_routing`, and `internal_agents`
- * are all compiled into the bundle here; nothing is left unwired.
+ * shared engine-options bundle. Profile `options`, target `pool`/`auto_routing`, and
+ * `internal_agents` are all compiled into the bundle here; nothing is left unwired.
  */
 export function compileRuntimeProviderEnvironment(
   section: RuntimeProviderSection,
@@ -167,9 +167,10 @@ export function compileRuntimeProviderEnvironment(
   const flatProfiles = flattenProfiles(section.profiles ?? {});
 
   const defaultProfile = initialAssignmentProfile(section.defaults);
-  const defaults = defaultProfile !== undefined
-    ? resolveProfileEntry(defaultProfile, flatProfiles, resolutionContext)
-    : undefined;
+  if (defaultProfile === undefined) {
+    throw new Error('runtime.yaml active provider section must specify `provider.defaults`');
+  }
+  const defaults = resolveProfileEntry(defaultProfile, flatProfiles, resolutionContext);
   const personaProviders = mapTargetEntries(section.targets?.personas, flatProfiles, resolutionContext);
   const providerRouting = buildProviderRouting(section, flatProfiles, resolutionContext);
   const autoRouting = buildAutoRoutingConfig(section, flatProfiles, resolutionContext);
@@ -370,7 +371,7 @@ const ROUTING_TIERS: readonly RoutingTier[] = ['low', 'medium', 'high'];
 /**
  * Map a runtime.yaml `provider.auto_routing` section (which references profiles) into the
  * resolved `AutoRoutingConfig` the routing selector consumes. Built only when `auto_routing`
- * is present; the pool assignments on `defaults`/`targets` decide which pool each step uses.
+ * is present; only pool assignments on `targets` decide which pool each step uses.
  */
 function buildAutoRoutingConfig(
   section: RuntimeProviderSection,
@@ -380,12 +381,6 @@ function buildAutoRoutingConfig(
   const autoRouting = section.auto_routing;
   if (autoRouting === undefined) {
     return undefined;
-  }
-  const defaultPool = section.defaults?.pool;
-  if (defaultPool === undefined) {
-    throw new Error(
-      'runtime.yaml `provider.defaults` must specify a `pool` when `provider.auto_routing` is configured',
-    );
   }
   if (autoRouting.router_profile === undefined) {
     throw new Error('runtime.yaml `provider.auto_routing` requires a `router_profile`');
@@ -414,11 +409,6 @@ function buildAutoRoutingConfig(
     candidatePools[poolName] = { candidates: candidateNames, fallback };
   }
 
-  if (!Object.hasOwn(candidatePools, defaultPool)) {
-    throw new Error(
-      `runtime.yaml \`provider.defaults.pool\` "${defaultPool}" is not defined in \`provider.auto_routing.pools\``,
-    );
-  }
   const poolRules = collectPoolRules(section, candidatePools);
 
   return {
@@ -430,7 +420,6 @@ function buildAutoRoutingConfig(
       ...(router.permissionMode !== undefined ? { permissionMode: router.permissionMode } : {}),
     },
     candidates: [...candidates.values()],
-    defaultPool,
     candidatePools,
     ...(poolRules !== undefined ? { poolRules } : {}),
   };

@@ -5,10 +5,12 @@ import {
   resolveAutoRoutingBatch,
   resolveAutoRoutingRuntime,
   resolveDeterministicAutoRoutingProviderInfo,
+  resolveRuleBasedAutoRoutingProviderInfo,
 } from '../core/workflow/auto-routing/resolver.js';
 import type { RoutingWorkSnapshot, WorkRequirementEstimator } from '../core/workflow/auto-routing/contracts.js';
 import type { AutoRoutingConfig } from '../core/models/config-types.js';
 import { RoutingRuntime } from '../core/workflow/auto-routing/runtime.js';
+import { resolveExecutableRoutingCandidates } from '../core/workflow/auto-routing/selector.js';
 
 function createAutoRoutingConfig(overrides: Partial<AutoRoutingConfig> = {}): AutoRoutingConfig {
   return {
@@ -111,12 +113,86 @@ describe('resolveDeterministicAutoRoutingProviderInfo', () => {
 
   it('Given no hard rule and no estimator, When resolving deterministically, Then the configured pool fallback is selected', () => {
     const result = resolveDeterministicAutoRoutingProviderInfo({
-      autoRouting: createAutoRoutingConfig({ rules: {} }),
+      autoRouting: createAutoRoutingConfig({ rules: {}, poolRules: { steps: { unknown: 'general' } } }),
       step: createStepMetadata({ name: 'unknown', tags: [] }),
       currentProviderInfo: { provider: undefined, model: undefined },
     });
 
     expect(result).toMatchObject({ provider: 'claude-sdk', providerSource: 'auto.fallback', autoRoutingDecision: { candidateName: 'reasoning', routingTier: 'high', fallbackReason: 'estimator-failure' } });
+  });
+
+  it('does not select a matching workflow rule for an unassigned target with a legacy default pool', () => {
+    const result = resolveDeterministicAutoRoutingProviderInfo({
+      autoRouting: createAutoRoutingConfig({
+        workflowName: 'preview-auto-routing',
+        defaultPool: 'general',
+        poolRules: undefined,
+        rules: { steps: { 'preview-auto-routing/implement': 'coding' } },
+      }),
+      step: createStepMetadata({ tags: [] }),
+      currentProviderInfo: { provider: undefined, model: 'gpt-default' },
+    });
+
+    expect(result).toBeUndefined();
+  });
+});
+
+describe('resolveRuleBasedAutoRoutingProviderInfo', () => {
+  it('keeps an unresolved provider when a matching workflow rule has no pool assignment', () => {
+    const result = resolveRuleBasedAutoRoutingProviderInfo({
+      autoRouting: createAutoRoutingConfig({
+        workflowName: 'preview-auto-routing',
+        defaultPool: 'general',
+        poolRules: undefined,
+        rules: { steps: { 'preview-auto-routing/implement': 'coding' } },
+      }),
+      step: createStepMetadata({ tags: [] }),
+      currentProviderInfo: { provider: undefined, model: 'gpt-default' },
+    });
+
+    expect(result).toBeUndefined();
+  });
+
+  it('resolves a matching workflow rule when its pool is explicitly assigned', () => {
+    const result = resolveRuleBasedAutoRoutingProviderInfo({
+      autoRouting: createAutoRoutingConfig({
+        workflowName: 'preview-auto-routing',
+        defaultPool: 'general',
+        poolRules: { steps: { 'preview-auto-routing/implement': 'implementation' } },
+        rules: { steps: { 'preview-auto-routing/implement': 'coding' } },
+      }),
+      step: createStepMetadata({ tags: [] }),
+      currentProviderInfo: { provider: undefined, model: undefined },
+    });
+
+    expect(result).toMatchObject({
+      provider: 'codex',
+      providerSource: 'auto.rules',
+      autoRoutingDecision: { candidateName: 'coding' },
+    });
+  });
+});
+
+describe('runtime auto-routing pool selection', () => {
+  it('uses the pool explicitly assigned to a target without requiring an implicit default pool', () => {
+    const autoRouting = {
+      ...createAutoRoutingConfig(),
+      defaultPool: undefined,
+      workflowName: 'e2e-mock-single',
+      rules: {},
+      poolRules: { steps: { 'e2e-mock-single/execute': 'implementation' } },
+    } as AutoRoutingConfig;
+
+    const resolved = resolveExecutableRoutingCandidates(autoRouting, {
+      name: 'execute',
+      tags: [],
+      personaKey: 'coder',
+    });
+
+    expect(resolved.resolutionSource).toBe('auto.dynamic');
+    expect(resolved.poolName).toBe('implementation');
+    expect(resolved.selectionCandidates.map((candidate) => candidate.name))
+      .toEqual(['coding', 'reasoning']);
   });
 });
 
@@ -140,7 +216,7 @@ describe('resolveAutoRoutingRuntime', () => {
     };
 
     const result = await resolveAutoRoutingRuntime({
-      autoRouting: createAutoRoutingConfig({ rules: {} }),
+      autoRouting: createAutoRoutingConfig({ rules: {}, poolRules: { steps: { unknown: 'general' } } }),
       step: createStepMetadata({ name: 'unknown', tags: [] }), snapshot: createSnapshot(), estimator,
       currentProviderInfo: { provider: undefined, model: undefined },
     });
@@ -156,7 +232,7 @@ describe('resolveAutoRoutingRuntime', () => {
     const estimator: WorkRequirementEstimator = { estimate: vi.fn().mockRejectedValue(new Error('router timeout')) };
 
     const result = await resolveAutoRoutingRuntime({
-      autoRouting: createAutoRoutingConfig({ rules: {} }),
+      autoRouting: createAutoRoutingConfig({ rules: {}, poolRules: { steps: { unknown: 'general' } } }),
       step: createStepMetadata({ name: 'unknown', tags: [] }), snapshot: createSnapshot(), estimator,
       currentProviderInfo: { provider: undefined, model: undefined }, logger: { warn },
     });
@@ -167,7 +243,7 @@ describe('resolveAutoRoutingRuntime', () => {
 
   it('Given a run-scoped routing runtime, When estimation fails, Then it preserves the fallback warning', async () => {
     const warn = vi.fn();
-    const autoRouting = createAutoRoutingConfig({ rules: {} });
+    const autoRouting = createAutoRoutingConfig({ rules: {}, poolRules: { steps: { unknown: 'general' } } });
     const estimator: WorkRequirementEstimator = {
       estimate: vi.fn().mockRejectedValue(new Error('router timeout')),
     };
@@ -200,10 +276,30 @@ describe('resolveAutoRoutingRuntime', () => {
     };
 
     await expect(resolveAutoRoutingRuntime({
-      autoRouting: createAutoRoutingConfig({ rules: {} }),
+      autoRouting: createAutoRoutingConfig({ rules: {}, poolRules: { steps: { unknown: 'general' } } }),
       step: createStepMetadata({ name: 'unknown', tags: [] }), snapshot: createSnapshot(), estimator,
       currentProviderInfo: { provider: undefined, model: undefined }, abortSignal: abortController.signal,
     })).rejects.toBe(reason);
+  });
+
+  it('does not invoke the estimator for an unassigned target with a legacy default pool', async () => {
+    const estimator: WorkRequirementEstimator = { estimate: vi.fn() };
+
+    const result = await resolveAutoRoutingRuntime({
+      autoRouting: createAutoRoutingConfig({
+        workflowName: 'preview-auto-routing',
+        defaultPool: 'general',
+        poolRules: undefined,
+        rules: { steps: { 'preview-auto-routing/implement': 'coding' } },
+      }),
+      step: createStepMetadata({ tags: [] }),
+      snapshot: createSnapshot(),
+      estimator,
+      currentProviderInfo: { provider: undefined, model: 'gpt-default' },
+    });
+
+    expect(result).toBeUndefined();
+    expect(estimator.estimate).not.toHaveBeenCalled();
   });
 });
 
@@ -216,7 +312,7 @@ describe('resolveAutoRoutingBatch', () => {
     };
 
     const result = await resolveAutoRoutingBatch({
-      autoRouting: createAutoRoutingConfig({ rules: {} }), estimator,
+      autoRouting: createAutoRoutingConfig({ rules: {}, poolRules: { steps: { 'part-1': 'general', 'part-2': 'general' } } }), estimator,
       items: [
         { id: 'part-1', step: createStepMetadata({ name: 'part-1', tags: [] }), snapshot: createSnapshot(), currentProviderInfo: { provider: undefined, model: undefined } },
         { id: 'part-2', step: createStepMetadata({ name: 'part-2', tags: [] }), snapshot: createSnapshot(), currentProviderInfo: { provider: undefined, model: undefined } },
@@ -242,7 +338,7 @@ describe('resolveAutoRoutingBatch', () => {
       }),
     };
     const resolving = resolveAutoRoutingBatch({
-      autoRouting: createAutoRoutingConfig({ rules: {} }),
+      autoRouting: createAutoRoutingConfig({ rules: {}, poolRules: { steps: { 'part-1': 'general', 'part-2': 'general', 'part-3': 'general' } } }),
       estimator,
       concurrency: 2,
       items: ['part-1', 'part-2', 'part-3'].map((id) => ({

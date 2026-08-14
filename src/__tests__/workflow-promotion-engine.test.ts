@@ -224,6 +224,7 @@ describe('WorkflowEngine promotion', () => {
         }],
         defaultPool: 'general',
         candidatePools: { general: { candidates: ['workflow-candidate'], fallback: 'workflow-candidate' } },
+        poolRules: { steps: { implement: 'general', review: 'general' } },
         rules: {
           steps: {
             implement: 'workflow-candidate',

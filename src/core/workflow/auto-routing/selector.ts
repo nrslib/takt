@@ -1,5 +1,6 @@
 import type { AutoRoutingCandidate, AutoRoutingConfig, RoutingTier } from '../../models/config-types.js';
 import type { WorkRequirementEstimate } from './contracts.js';
+import { resolveWorkflowStepTarget } from '../provider-target-resolution.js';
 
 const TIER_ORDER: Record<RoutingTier, number> = { low: 0, medium: 1, high: 2 };
 
@@ -32,6 +33,8 @@ export type ExecutableRoutingCandidates =
     resolutionSource: 'auto.dynamic';
   };
 
+type RoutingPoolTarget = { name?: string; tags?: string[]; personaKey?: string };
+
 function findCandidate(config: AutoRoutingConfig, candidateName: string | undefined): AutoRoutingCandidate | undefined {
   return candidateName === undefined ? undefined : config.candidates.find((candidate) => candidate.name === candidateName);
 }
@@ -40,14 +43,15 @@ function findMappingValue(mapping: Record<string, string> | undefined, key: stri
   return key !== undefined && mapping !== undefined && Object.hasOwn(mapping, key) ? mapping[key] : undefined;
 }
 
-function matchRule(rules: AutoRoutingConfig['rules'], step: RoutingSelectionInput['step']): AutoRoutingCandidate['name'] | undefined {
+function matchRule(config: AutoRoutingConfig, step: RoutingSelectionInput['step']): AutoRoutingCandidate['name'] | undefined {
+  const rules = config.rules;
   let matchedCandidate: AutoRoutingCandidate['name'] | undefined;
   for (const tag of step.tags ?? []) {
     const candidate = findMappingValue(rules?.tags, tag);
     if (candidate !== undefined) matchedCandidate = candidate;
   }
   return matchedCandidate
-    ?? findMappingValue(rules?.steps, step.name)
+    ?? resolveWorkflowStepTarget(rules?.steps, step.name, config.workflowName)
     ?? findMappingValue(rules?.personas, step.personaKey);
 }
 
@@ -55,19 +59,36 @@ export function resolveAutoRoutingRuleCandidate(
   autoRouting: AutoRoutingConfig,
   step: RoutingSelectionInput['step'],
 ): AutoRoutingCandidate | undefined {
-  return findCandidate(autoRouting, matchRule(autoRouting.rules, step));
+  return findCandidate(autoRouting, matchRule(autoRouting, step));
 }
 
-function resolvePoolName(config: AutoRoutingConfig, step: RoutingSelectionInput['step']): string {
+function resolveExplicitPoolName(
+  config: AutoRoutingConfig,
+  step: RoutingPoolTarget,
+): string | undefined {
   let matchedPool: string | undefined;
   for (const tag of step.tags ?? []) {
     const poolName = findMappingValue(config.poolRules?.tags, tag);
     if (poolName !== undefined) matchedPool = poolName;
   }
   return matchedPool
-    ?? findMappingValue(config.poolRules?.steps, step.name)
-    ?? findMappingValue(config.poolRules?.personas, step.personaKey)
-    ?? config.defaultPool;
+    ?? resolveWorkflowStepTarget(config.poolRules?.steps, step.name, config.workflowName)
+    ?? findMappingValue(config.poolRules?.personas, step.personaKey);
+}
+
+export function hasAutoRoutingPoolAssignment(
+  config: AutoRoutingConfig,
+  step: RoutingPoolTarget,
+): boolean {
+  return resolveExplicitPoolName(config, step) !== undefined;
+}
+
+function resolvePoolName(config: AutoRoutingConfig, step: RoutingSelectionInput['step']): string {
+  const poolName = resolveExplicitPoolName(config, step) ?? config.defaultPool;
+  if (poolName === undefined) {
+    throw new Error(`Auto routing has no pool assignment for step "${step.name}"`);
+  }
+  return poolName;
 }
 
 function resolveCandidate(config: AutoRoutingConfig, poolName: string, candidateName: string, reference: 'candidate' | 'fallback'): AutoRoutingCandidate {

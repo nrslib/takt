@@ -129,27 +129,26 @@ describe('review completion episode', () => {
     expect(executeRetry).not.toHaveBeenCalled();
   });
 
-  it('stops with judge_unavailable after satisfying the configured minimum retry', async () => {
-    const executeRetry = vi.fn(async ({ attemptIndex }: { attemptIndex: number }) => (
-      response(`mandatory retry ${attemptIndex}`, `retry-session-${attemptIndex}`)
-    ));
+  it('stops immediately with judge_unavailable even before the configured minimum retry', async () => {
+    const initial = response('initial');
+    const executeRetry = vi.fn();
     const result = await runReviewCompletionEpisode({
       config: { minRetry: 2, maxRetry: 4, retryInstruction: 'retry' },
       originalInstruction: 'review',
-      initialResponse: response('initial'),
-      initialSessionId: 'review-session',
+      initialResponse: initial,
+      initialSessionId: initial.sessionId,
       executeRetry,
       judge: vi.fn().mockRejectedValue(new Error('judge unavailable')),
       isAbort: () => false,
     });
 
-    expect(executeRetry).toHaveBeenCalledTimes(2);
+    expect(executeRetry).not.toHaveBeenCalled();
     expect(result).toMatchObject({
-      attempts: 3,
-      response: { content: 'mandatory retry 2' },
+      attempts: 1,
+      response: initial,
       diagnostic: {
         kind: 'judge_unavailable',
-        retriesUsed: 2,
+        retriesUsed: 0,
       },
     });
   });

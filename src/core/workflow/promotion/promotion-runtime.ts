@@ -13,6 +13,7 @@ import {
   PROVIDER_OPTION_PATHS,
 } from '../../../infra/config/providerOptions.js';
 import { createLogger } from '../../../shared/utils/index.js';
+import { resolveWorkflowStepTarget } from '../provider-target-resolution.js';
 
 const log = createLogger('workflow-promotion');
 
@@ -256,7 +257,7 @@ function resolveGoverningLadder(
   }
   switch (baseSource) {
     case 'provider_routing.steps':
-      return ladders.steps?.[step.name];
+      return resolveWorkflowStepTarget(ladders.steps, step.name, ladders.workflowName);
     case 'provider_routing.tags':
       return resolveTagLadder(ladders.tags, step.tags, tagConflictPolicy);
     // runtime.yaml `targets.personas` compiles into `personaProviders`, not

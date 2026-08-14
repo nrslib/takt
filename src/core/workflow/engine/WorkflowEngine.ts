@@ -70,6 +70,7 @@ import { getRemoteRepositoryIdentifiers } from '../../../infra/git/detect.js';
 import { WorkflowResumeContinuation } from './workflow-resume-continuation.js';
 import { inheritWorkflowConfigMetadata, translateWorkflowConfigError } from '../../../shared/workflowConfigMetadata.js';
 import { WorkflowRestartNavigator } from './WorkflowRestartNavigator.js';
+import { withWorkflowTargetContext } from '../provider-target-resolution.js';
 const log = createLogger('workflow-engine');
 
 type WorkflowEngineRuntimeOptions = WorkflowEngineOptions & {
@@ -180,9 +181,9 @@ export class WorkflowEngine extends EventEmitter {
     if (options.autoStrategyOverride !== undefined && inheritedAutoRouting !== undefined) {
       options.onEffectiveAutoRoutingReached?.();
     }
-    const effectiveAutoRouting = applyAutoRoutingStrategyOverride(
-      inheritedAutoRouting,
-      options.autoStrategyOverride,
+    const effectiveAutoRouting = withWorkflowTargetContext(
+      applyAutoRoutingStrategyOverride(inheritedAutoRouting, options.autoStrategyOverride),
+      config.name,
     );
     const inheritedEstimatorSource = options.autoRoutingEstimatorSource;
     const autoRoutingEstimatorSource = inheritedEstimatorSource
@@ -220,6 +221,8 @@ export class WorkflowEngine extends EventEmitter {
       structuredCaller: this.structuredCaller,
       structuredOutputNormalizers: options.structuredOutputNormalizers ?? createStructuredOutputNormalizerRegistry([]),
       autoRouting: effectiveAutoRouting,
+      providerRouting: withWorkflowTargetContext(options.providerRouting, config.name),
+      providerLadders: withWorkflowTargetContext(options.providerLadders, config.name),
       autoRoutingEstimator,
       autoRoutingEstimatorSource,
       routingRuntime,

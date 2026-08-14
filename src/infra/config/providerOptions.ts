@@ -15,6 +15,7 @@ import type {
   ProviderOptionsTraceOrigin,
   ProviderResolutionSource,
 } from '../../core/workflow/provider-options-trace.js';
+import { resolveWorkflowStepTarget } from '../../core/workflow/provider-target-resolution.js';
 import type { ProviderType } from '../../shared/types/provider.js';
 import { providerSupportsClaudeAllowedTools } from '../providers/provider-capabilities.js';
 
@@ -601,7 +602,11 @@ export function resolveStepProviderOptionsLayers(
   }
   layers.push({
     source: 'provider_routing.steps',
-    options: context.providerRouting?.steps?.[step.name]?.providerOptions,
+    options: resolveWorkflowStepTarget(
+      context.providerRouting?.steps,
+      step.name,
+      context.providerRouting?.workflowName,
+    )?.providerOptions,
   });
 
   return layers.filter((layer) => layer.options !== undefined);

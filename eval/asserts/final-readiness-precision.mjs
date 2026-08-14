@@ -1,30 +1,25 @@
 const NON_ACTIONABLE_FINDING = 'OLD-REVIEW-readme-L1';
 
-function extractSection(output, headings) {
-  const lines = output.split('\n');
-  const start = lines.findIndex((line) => headings.some((heading) => heading.test(line.trim())));
-  if (start < 0) return '';
-  const endOffset = lines.slice(start + 1).findIndex((line) => /^##\s+/.test(line.trim()));
-  const end = endOffset < 0 ? lines.length : start + 1 + endOffset;
-  return lines.slice(start + 1, end).join('\n');
+function hasNearbyEvidence(output, anchor, evidence) {
+  let index = output.indexOf(anchor);
+  while (index >= 0) {
+    const context = output.slice(Math.max(0, index - 300), index + anchor.length + 700);
+    if (evidence.test(context)) return true;
+    index = output.indexOf(anchor, index + anchor.length);
+  }
+  return false;
 }
 
 export default function assertFinalReadinessPrecision(output) {
-  const actionable = extractSection(output, [
-    /^##\s+修正対象\s*family$/i,
-    /^##\s+Actionable Families$/i,
-  ]);
-  const priorFindings = extractSection(output, [
-    /^##\s+前段\s*finding\s*の扱い$/i,
-    /^##\s+Prior Finding Dispositions$/i,
-  ]);
   const checks = [
-    ['mergeable', /(結果:\s*マージ可能|Result:\s*MERGEABLE)/i.test(output)],
-    ['no-actionable-family', actionable.trim().length === 0
-      || !/(FINAL-(?:NEW|PERSIST)-[^\s|]+)/i.test(actionable)],
-    ['non-actionable-preserved', priorFindings.includes(NON_ACTIONABLE_FINDING)
-      && /(adjudicated_non_actionable|非修正対象)/i.test(priorFindings)],
-    ['not-rejected', !/(結果:\s*(修正が必要|タスク全体の再計画が必要|実行環境により判定不能)|Result:\s*(FIX REQUIRED|TASK REPLAN REQUIRED|BLOCKED BY ENVIRONMENT))/i.test(output)],
+    ['mergeable', /(?:結果|最終裁定)\s*[:：]\s*マージ可能|(?:Result|Final Decision)\s*:\s*MERGEABLE/i.test(output)],
+    ['no-actionable-family', !/(FINAL-(?:NEW|PERSIST)-[^\s|]+)/i.test(output)],
+    ['non-actionable-preserved', hasNearbyEvidence(
+      output,
+      NON_ACTIONABLE_FINDING,
+      /(adjudicated_non_actionable|非修正対象(?:として)?(?:維持|扱)|再開[^。\n]*(?:しない|せず|ない|なし)|(?:not|without)\s+reopen|remains?\s+non-actionable)/i,
+    )],
+    ['not-rejected', !/(?:(?:結果|最終裁定)\s*[:：]\s*(修正が必要|タスク全体の再計画が必要|実行環境により判定不能)|(?:Result|Final Decision)\s*:\s*(FIX REQUIRED|TASK REPLAN REQUIRED|BLOCKED BY ENVIRONMENT))/i.test(output)],
   ];
   const failed = checks.filter(([, pass]) => !pass).map(([name]) => name);
 

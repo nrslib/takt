@@ -83,6 +83,15 @@ function createAutoRoutingConfig(): AutoRoutingConfig {
     candidatePools: {
       general: { candidates: ['lightweight', 'coding'], fallback: 'coding' },
     },
+    poolRules: {
+      tags: { implementation: 'general', format: 'general' },
+      steps: {
+        implement: 'general',
+        'security-audit': 'general',
+        'api-review': 'general',
+        'format-review': 'general',
+      },
+    },
     rules: {
       tags: {
         implementation: 'coding',

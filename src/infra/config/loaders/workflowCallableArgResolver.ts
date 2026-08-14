@@ -21,6 +21,7 @@ import { hasOwnFacetPool } from './workflowFacetPoolLookup.js';
 
 type RawWorkflowConfig = z.output<typeof WorkflowConfigRawSchema>;
 type RawWorkflowStep = RawWorkflowConfig['steps'][number];
+type RawSelectorGuidance = NonNullable<NonNullable<RawWorkflowStep['dynamic_facets']>['selector']>;
 type WorkflowParamType = NonNullable<NonNullable<RawWorkflowConfig['subworkflow']>['params']>[string]['type'];
 
 export interface WorkflowCallArgResolutionPolicy {
@@ -37,6 +38,57 @@ interface ExpandCallableWorkflowOptions {
 type WorkflowFacetKind = 'knowledge' | 'policy' | 'instruction' | 'persona' | 'report_format';
 export { isWorkflowParamReference } from './workflowCallableParamRef.js';
 
+export function collectSelectorInstructionRefs(
+  steps: RawWorkflowConfig['steps'],
+  params?: NonNullable<RawWorkflowConfig['subworkflow']>['params'],
+  resolvedArgs?: Record<string, WorkflowCallArgValue>,
+): ReadonlySet<string> {
+  const refs = new Set<string>();
+
+  const collectSelectorInstruction = (selector: { instruction?: unknown } | undefined): void => {
+    const rawInstruction = selector?.instruction;
+    if (typeof rawInstruction === 'string') {
+      refs.add(rawInstruction);
+      return;
+    }
+    if (!isWorkflowParamReference(rawInstruction)) {
+      return;
+    }
+    const suppliedValue = resolvedArgs?.[rawInstruction.$param];
+    const defaultValue = params?.[rawInstruction.$param]?.default;
+    const resolvedValue = typeof suppliedValue === 'string'
+      ? suppliedValue
+      : typeof defaultValue === 'string'
+        ? defaultValue
+        : undefined;
+    if (resolvedValue !== undefined) {
+      refs.add(resolvedValue);
+    }
+  };
+
+  const collectStep = (step: RawWorkflowStep): void => {
+    collectSelectorInstruction(step.dynamic_facets?.selector);
+    if (step.parallel === undefined) {
+      return;
+    }
+    if (Array.isArray(step.parallel)) {
+      for (const substep of step.parallel) {
+        collectStep(substep as RawWorkflowStep);
+      }
+      return;
+    }
+    collectSelectorInstruction(step.parallel.selection.selector);
+    for (const substep of [...step.parallel.fixed, ...step.parallel.pool]) {
+      collectStep(substep as RawWorkflowStep);
+    }
+  };
+
+  for (const step of steps) {
+    collectStep(step);
+  }
+  return refs;
+}
+
 export function isMissingWorkflowCallArgError(error: unknown): boolean {
   return error instanceof Error
     && /^Step ".+" requires workflow_call arg ".+" for .+$/.test(error.message);
@@ -46,6 +98,7 @@ function createWorkflowSections(
   raw: RawWorkflowConfig,
   workflowDir: string,
   context: FacetResolutionContext | undefined,
+  selectorInstructionRefs: ReadonlySet<string>,
 ): WorkflowSections {
   const resolvedPoliciesWithSource = resolveSectionMapWithSource(raw.policies, workflowDir, 'policies', context);
   const resolvedKnowledgeWithSource = resolveSectionMapWithSource(raw.knowledge, workflowDir, 'knowledge', context);
@@ -54,6 +107,8 @@ function createWorkflowSections(
     workflowDir,
     'instructions',
     context,
+    undefined,
+    selectorInstructionRefs,
   );
   const resolvedReportFormatsWithSource = resolveSectionMapWithSource(
     raw.report_formats,
@@ -227,7 +282,12 @@ function resolveCallableArgs(
   argPolicy: WorkflowCallArgResolutionPolicy | undefined,
 ): Record<string, WorkflowCallArgValue> {
   const params = raw.subworkflow?.params ?? {};
-  const sections = createWorkflowSections(raw, workflowDir, context);
+  const sections = createWorkflowSections(
+    raw,
+    workflowDir,
+    context,
+    collectSelectorInstructionRefs(raw.steps, params, args),
+  );
   const resolvedArgs = new Map<string, WorkflowCallArgValue>();
 
   for (const [name, value] of Object.entries(args ?? {})) {
@@ -285,6 +345,49 @@ function resolveExpandedParamValue(
     throw withWorkflowStepErrorPath(new Error(`Step "${stepName}" requires workflow_call arg "${paramRef.$param}" for ${fieldName}`), errorPath);
   }
   return Array.isArray(value) ? [...value] : value;
+}
+
+function expandSelectorGuidance(
+  step: RawWorkflowStep,
+  selector: RawSelectorGuidance | undefined,
+  params: NonNullable<RawWorkflowConfig['subworkflow']>['params'] | undefined,
+  resolvedArgs: Record<string, WorkflowCallArgValue>,
+  selectorPath: readonly PropertyKey[],
+): RawSelectorGuidance | undefined {
+  if (selector === undefined) {
+    return undefined;
+  }
+  return {
+    ...selector,
+    ...(isWorkflowParamReference(selector.persona)
+      ? {
+          persona: resolveExpandedParamValue(
+            step.name,
+            'selector.persona',
+            selector.persona,
+            ['facet_ref'],
+            'persona',
+            params,
+            resolvedArgs,
+            [...selectorPath, 'persona'],
+          ) as string,
+        }
+      : {}),
+    ...(isWorkflowParamReference(selector.instruction)
+      ? {
+          instruction: resolveExpandedParamValue(
+            step.name,
+            'selector.instruction',
+            selector.instruction,
+            ['facet_ref'],
+            'instruction',
+            params,
+            resolvedArgs,
+            [...selectorPath, 'instruction'],
+          ) as string,
+        }
+      : {}),
+  };
 }
 
 function resolveExpandedFacetPoolValue(
@@ -528,6 +631,13 @@ function expandStepFields(
   );
 
   if (isWorkflowParamReference(step.dynamic_facets?.pool)) {
+    const selector = expandSelectorGuidance(
+      step,
+      step.dynamic_facets?.selector,
+      params,
+      resolvedArgs,
+      [...stepPath, 'dynamic_facets', 'selector'],
+    );
     expandedStep.dynamic_facets = {
       ...step.dynamic_facets,
       pool: resolveExpandedFacetPoolValue(
@@ -537,6 +647,18 @@ function expandStepFields(
         resolvedArgs,
         facetPools,
         [...stepPath, 'dynamic_facets', 'pool'],
+      ),
+      ...(selector === undefined ? {} : { selector }),
+    };
+  } else if (step.dynamic_facets?.selector !== undefined) {
+    expandedStep.dynamic_facets = {
+      ...step.dynamic_facets,
+      selector: expandSelectorGuidance(
+        step,
+        step.dynamic_facets.selector,
+        params,
+        resolvedArgs,
+        [...stepPath, 'dynamic_facets', 'selector'],
       ),
     };
   }
@@ -625,13 +747,25 @@ function expandStepFields(
     expandedStep.parallel = expandedStep.parallel.map((substep, index) =>
       expandStepFields(substep as RawWorkflowStep, params, resolvedArgs, facetPools, [...stepPath, 'parallel', index]),
     ) as RawWorkflowStep['parallel'];
-  } else if (expandedStep.parallel) {
+  } else if (step.parallel !== undefined && !Array.isArray(step.parallel)) {
+    const dynamicParallel = step.parallel;
+    const selector = expandSelectorGuidance(
+      step,
+      dynamicParallel.selection.selector,
+      params,
+      resolvedArgs,
+      [...stepPath, 'parallel', 'selection', 'selector'],
+    );
     expandedStep.parallel = {
-      ...expandedStep.parallel,
-      fixed: expandedStep.parallel.fixed.map((substep, index) =>
+      ...dynamicParallel,
+      selection: {
+        ...dynamicParallel.selection,
+        ...(selector === undefined ? {} : { selector }),
+      },
+      fixed: dynamicParallel.fixed.map((substep, index) =>
         expandStepFields(substep as RawWorkflowStep, params, resolvedArgs, facetPools, [...stepPath, 'parallel', 'fixed', index]),
       ),
-      pool: expandedStep.parallel.pool.map((substep, index) =>
+      pool: dynamicParallel.pool.map((substep, index) =>
         expandStepFields(substep as RawWorkflowStep, params, resolvedArgs, facetPools, [...stepPath, 'parallel', 'pool', index]),
       ),
     } as RawWorkflowStep['parallel'];

@@ -1,4 +1,4 @@
-import { executeStructuredAgent } from '../../../agents/structured-caller/transport.js';
+import { executeIsolatedStructuredInternalAgent } from '../../../agents/agent-usecases.js';
 import type {
   AgentResponse,
   DynamicFacetSelectionSnapshot,
@@ -112,6 +112,7 @@ export class DynamicFacetSelectorCoordinator {
       cumulativeDiff: inputs.workingTreeDiff,
       pool,
       maxSelected: step.dynamicFacets.maxSelected,
+      selectorInstruction: step.dynamicFacets.selector?.instruction,
     });
 
     const sensitiveValues = createBoundedSensitiveValues();
@@ -128,22 +129,23 @@ export class DynamicFacetSelectorCoordinator {
     let selectedIds: readonly string[];
     let snapshot: DynamicFacetSelectionSnapshot;
     try {
-      response = await executeStructuredAgent(
+      response = await executeIsolatedStructuredInternalAgent(
+        'You are TAKT\'s internal dynamic facet selector. Select only candidate IDs from the provided pool.',
         instruction,
         selectorContract.providerSchema,
         {
-          name: 'dynamic-facet-selector',
           cwd: this.deps.getCwd(),
           projectCwd: this.deps.engineOptions.projectCwd,
-          failureDir: this.deps.failureDir,
+          persona: step.dynamicFacets.selector?.persona,
+          workflowBundleResourceRoot: this.deps.engineOptions.workflowBundleResourceRoot,
           abortSignal: this.deps.engineOptions.abortSignal,
           language: this.deps.engineOptions.language,
-          systemPrompt: 'You are TAKT\'s internal dynamic facet selector. Select only candidate IDs from the provided pool.',
+          failureDir: this.deps.failureDir,
+          personaPath: step.dynamicFacets.selector?.personaPath,
           resolution: {
             provider: selectorProvider.provider,
             model: selectorProvider.model,
-            providerOptions: selectorProvider.providerOptions,
-            permissionMode: selectorProvider.permissionMode,
+            providerOptions: selectorProvider.providerOptions ?? {},
           },
         },
       );

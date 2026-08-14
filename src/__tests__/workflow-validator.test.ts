@@ -83,6 +83,7 @@ function createValidatorAutoRouting(rules?: AutoRoutingConfig['rules']): AutoRou
     ],
     defaultPool: 'general',
     candidatePools: { general: { candidates: ['claude', 'codex'], fallback: 'claude' } },
+    poolRules: { steps: { plan: 'general', review: 'general' } },
     ...(rules !== undefined ? { rules } : {}),
   };
 }

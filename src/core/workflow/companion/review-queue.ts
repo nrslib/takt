@@ -32,6 +32,7 @@ interface QueueWaiter {
 interface PendingBatch {
   request: CompanionReviewRequest;
   readonly waiters: QueueWaiter[];
+  readonly retried: boolean;
 }
 
 interface QueueState {
@@ -47,6 +48,10 @@ export class CompanionReviewQueue {
 
   constructor(private readonly input: {
     runReview: (request: CompanionReviewRequest & { signal: AbortSignal }) => Promise<void>;
+    refreshRetryRequest: (
+      request: CompanionReviewRequest,
+      signal: AbortSignal,
+    ) => Promise<CompanionReviewRequest>;
     onCoalesced?: (event: CompanionReviewQueueCoalesced) => void;
   }) {}
 
@@ -65,7 +70,7 @@ export class CompanionReviewQueue {
         replacement: toQueueAuditRequest(request),
       });
     } else {
-      state.pending.push({ request, waiters: [waiter.waiter] });
+      state.pending.push({ request, waiters: [waiter.waiter], retried: false });
     }
     this.startDrain(state);
     return waiter.promise;
@@ -81,6 +86,7 @@ export class CompanionReviewQueue {
     state.pending.push({
       request: { ...request, reason: 'completion' },
       waiters: [waiter.waiter],
+      retried: false,
     });
     this.startDrain(state);
     return waiter.promise;
@@ -119,11 +125,25 @@ export class CompanionReviewQueue {
       const controller = new AbortController();
       state.running = controller;
       try {
-        await this.input.runReview({ ...batch.request, signal: controller.signal });
+        let request = batch.request;
+        if (batch.retried) {
+          if (this.stopped || controller.signal.aborted) throw createAbortError();
+          request = await this.input.refreshRetryRequest(request, controller.signal);
+          if (this.stopped || controller.signal.aborted) throw createAbortError();
+        }
+        await this.input.runReview({ ...request, signal: controller.signal });
         for (const waiter of batch.waiters) waiter.resolve();
       } catch (error) {
-        for (const waiter of batch.waiters) waiter.reject(error);
-        if (!isAbortError(error)) this.rejectPending(state, error);
+        if (
+          !batch.retried
+          && !isAbortError(error)
+          && !controller.signal.aborted
+          && !this.stopped
+        ) {
+          state.pending.push({ ...batch, retried: true });
+        } else {
+          for (const waiter of batch.waiters) waiter.reject(error);
+        }
       } finally {
         state.running = undefined;
       }

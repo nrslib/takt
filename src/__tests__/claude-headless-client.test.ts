@@ -1172,6 +1172,39 @@ describe('callClaudeHeadless', () => {
     expect(argv).not.toContain('--strict-mcp-config');
   });
 
+  it('strict-readonly isolation passes explicit tool, settings, MCP, and Skills restrictions to Claude CLI', async () => {
+    stubSpawn({
+      stdoutChunks: [`${JSON.stringify({ type: 'text', text: 'x' })}\n`],
+      closeCode: 0,
+    });
+
+    await callClaudeHeadless('selector', 'p', {
+      cwd: '/tmp',
+      internalAgentIsolation: 'strict-readonly',
+      allowedTools: ['Read'],
+      mcpServers: {
+        docs: { command: 'docs-mcp', args: ['serve'] },
+      },
+      permissionMode: 'readonly',
+      bypassPermissions: false,
+      skillsEnabled: true,
+    });
+
+    const argv = lastSpawnArgv();
+    expect(argv).toEqual(expect.arrayContaining([
+      '--tools',
+      '',
+      '--strict-mcp-config',
+      '--setting-sources',
+      '',
+      '--disable-slash-commands',
+      '--permission-mode',
+      'default',
+    ]));
+    expect(argv).not.toContain('--allowed-tools');
+    expect(argv).not.toContain('--mcp-config');
+  });
+
   it('passes --effort without --allowed-tools when tools list is empty', async () => {
     stubSpawn({
       stdoutChunks: [`${JSON.stringify({ type: 'text', text: 'x' })}\n`],

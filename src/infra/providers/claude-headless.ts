@@ -3,15 +3,24 @@ import type { ClaudeHeadlessCallOptions } from '../claude-headless/types.js';
 import { resolveAnthropicApiKey, resolveClaudeCliPath } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import { keepsAllowedToolWithoutEdit as keepsClaudeAllowedToolWithoutEdit } from './allowed-tool-edit-policy.js';
-import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from './types.js';
+import {
+  assertOutputSchema,
+  type AgentSetup,
+  type Provider,
+  type ProviderAgent,
+  type ProviderCallOptions,
+} from './types.js';
 
 function toHeadlessOptions(options: ProviderCallOptions): ClaudeHeadlessCallOptions {
   const claudeOptions = options.providerOptions?.claude;
-  const skillsEnabled = claudeOptions?.skills?.enabled;
+  const skillsEnabled = options.internalAgentIsolation === 'strict-readonly'
+    ? false
+    : claudeOptions?.skills?.enabled;
   return {
     cwd: options.cwd,
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
+    internalAgentIsolation: options.internalAgentIsolation,
     model: options.model,
     anthropicApiKey: options.anthropicApiKey ?? resolveAnthropicApiKey(),
     baseUrl: claudeOptions?.baseUrl,
@@ -31,6 +40,7 @@ function toHeadlessOptions(options: ProviderCallOptions): ClaudeHeadlessCallOpti
 
 export class ClaudeHeadlessProvider implements Provider {
   readonly supportsStructuredOutput = true;
+  readonly supportsIsolatedStructuredExecution = true;
   readonly supportsNativeImageInput = false;
 
   getRuntimeInstructions(_allowedTools?: string[]): string | null {
@@ -53,4 +63,24 @@ export class ClaudeHeadlessProvider implements Provider {
     };
   }
 
+  setupIsolatedStructured(config: AgentSetup): ProviderAgent {
+    const { name, systemPrompt } = config;
+    const call = (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> => {
+      const isolatedOptions: ProviderCallOptions = {
+        ...options,
+        sessionId: undefined,
+        internalAgentIsolation: 'strict-readonly',
+        allowedTools: [],
+        mcpServers: undefined,
+        imageAttachments: undefined,
+        outputSchema: assertOutputSchema(options.outputSchema, 'claude-headless'),
+      };
+      const fullPrompt = systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt;
+      return callClaudeHeadless(name, fullPrompt, {
+        ...toHeadlessOptions(isolatedOptions),
+        systemPrompt: '',
+      });
+    };
+    return { call };
+  }
 }

@@ -2,17 +2,17 @@
 
 ## Boundaries That Aggregate Multiple Failures
 
-A boundary that aggregates multiple outcomes selects exactly one primary outcome through that boundary's explicit policy. Every control decision and external or terminal representation derives from that same selected outcome. Secondary outcomes may remain observable, but they do not replace the primary through a priority rule absent from the policy.
+When a process combines multiple results, it selects one result using the rule defined for that process. Every control decision and external representation comes from that same result. Other results may remain recorded, but they do not replace the selected result through a priority rule that was not defined.
 
 | Criterion | Decision |
 |-----------|----------|
-| Parent status, category, displayed reason, and abort reason come from different sibling outcomes | REJECT |
-| A classified outcome is replaced with a generic error before boundary selection | REJECT |
-| A boundary-specific priority is embedded in the canonical classification owner | REJECT |
-| Classification, primary selection, and projection have separate owners | OK |
-| The boundary's explicit policy selects the primary once and every decision and representation derives from it | OK |
+| Status, category, displayed reason, and abort reason come from different results | REJECT |
+| A classified result is replaced with a generic error before a result is selected | REJECT |
+| Priority rules for a parallel operation or batch are embedded in the shared classification step | REJECT |
+| Classification, selection of one result, and output are handled separately | OK |
+| The rule for the operation selects one result once, and every decision and representation comes from it | OK |
 
-A canonical classification owner converts each raw response or exception exactly once into an outcome with classification, cause, and recovery attributes. A boundary selection policy chooses the primary according to the contract of that parallel, parent-child, or batch boundary. A projection owner derives status, category, reason, retry/fallback/stop decisions, and abort or terminal representations from the selected primary. Do not collapse these three responsibilities into one universal priority rule.
+A shared classification step converts each response or exception exactly once into a result with its classification, cause, and recovery method. Each parallel operation, parent-child operation, or batch selects one result using its own rule. The output step derives status, category, reason, retry, fallback, stop decisions, abort reasons, and external representations from the selected result. Do not replace these three steps with one universal priority rule.
 
 ```typescript
 // NG - select different parent fields from different siblings

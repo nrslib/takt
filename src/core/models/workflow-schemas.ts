@@ -72,6 +72,11 @@ const WorkflowFacetRefListOrParamSchema = z.union([
 ]);
 const WorkflowReferenceOrParamSchema = z.union([WorkflowFacetRefScalarSchema, WorkflowParamReferenceRawSchema]);
 
+const SelectorGuidanceRawSchema = z.object({
+  persona: WorkflowPersonaRefOrParamSchema.optional(),
+  instruction: WorkflowFacetRefOrParamSchema,
+}).strict();
+
 const CompanionSelectionObjectRawSchema = z.object({
   fixed: z.array(z.string().trim().min(1)).optional().default([]),
   pool: z.array(z.string().trim().min(1)).optional().default([]),
@@ -442,6 +447,7 @@ export const FacetPoolRawSchema = z.union([
 export const DynamicFacetsRawSchema = z.object({
   pool: z.union([z.string().min(1), WorkflowParamReferenceRawSchema]),
   max_selected: z.number().int().positive().optional(),
+  selector: SelectorGuidanceRawSchema.optional(),
 }).strict();
 
 /** Team leader configuration schema for dynamic part decomposition */
@@ -668,6 +674,7 @@ const DynamicParallelRawSchema = z.object({
   pool: z.array(DynamicParallelPoolSubStepRawSchema).min(1),
   selection: z.object({
     mode: z.enum(['replace', 'cumulative']).optional().default('replace'),
+    selector: SelectorGuidanceRawSchema.optional(),
   }).strict().optional().default({ mode: 'replace' }),
 }).strict();
 

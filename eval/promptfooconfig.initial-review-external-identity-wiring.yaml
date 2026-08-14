@@ -1,0 +1,26 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'TAKT facet eval: initial review external identity wiring'
+
+prompts:
+  - file://prompts/initial-review-external-identity-wiring.phase1.md
+
+providers:
+  - id: 'exec: bash providers/claude-review.sh claude-opus-5 fixtures/initial-review-external-identity-wiring'
+    label: claude-opus
+  - id: 'exec: bash providers/codex-review.sh gpt-5.6-luna max fixtures/initial-review-external-identity-wiring'
+    label: codex-luna-max
+  - id: 'exec: bash providers/codex-review.sh gpt-5.6-sol high fixtures/initial-review-external-identity-wiring'
+    label: codex-sol-high
+
+evaluateOptions:
+  maxConcurrency: 3
+
+tests:
+  - description: 'initial review: derive and trace the documented external step target value'
+    vars:
+      task: file://cases/initial-review-external-identity-wiring-task.md
+      previous_response: ''
+    assert:
+      - type: javascript
+        metric: review/external-identity-wiring
+        value: file://asserts/initial-review-external-identity-wiring.mjs

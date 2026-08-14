@@ -32,6 +32,7 @@ import {
   type SelectorProviderOverrides,
 } from '../selectorProviderResolution.js';
 import { resolveWorkflowSelector } from '../workflowSelectorResolution.js';
+import { withWorkflowTargetContext } from '../../../core/workflow/provider-target-resolution.js';
 
 const log = createLogger('workflow-preview');
 
@@ -307,9 +308,9 @@ function resolvePreviewProviderResolution(
     providerSource: env.providerSource,
     model: env.model,
     modelSource: env.modelSource,
-    autoRouting: env.autoRouting,
+    autoRouting: withWorkflowTargetContext(env.autoRouting, workflow.name),
     personaProviders: env.personaProviders,
-    providerRouting: env.providerRouting,
+    providerRouting: withWorkflowTargetContext(env.providerRouting, workflow.name),
     tagConflictPolicy: env.tagConflictPolicy,
     permissionMode: env.permissionMode,
     providerOptions: env.providerOptions,

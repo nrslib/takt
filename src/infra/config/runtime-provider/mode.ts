@@ -8,7 +8,7 @@
  * than silently merging or preferring one side.
  */
 
-import type { RuntimeProviderFile } from './schema.js';
+import { hasActiveProviderContent, type RuntimeProviderFile } from './schema.js';
 
 export type ProviderConfigMode = 'legacy' | 'runtime-v1';
 
@@ -28,23 +28,7 @@ export interface DetermineProviderConfigModeInput {
 
 /** True only when the runtime.yaml carries a provider section with meaningful content. */
 export function hasActiveProviderSection(file: RuntimeProviderFile | undefined): boolean {
-  const provider = file?.provider;
-  if (!provider) {
-    return false;
-  }
-  // Empty nested maps (`defaults: {}`, `targets: { personas: {} }`, `auto_routing: {}`) carry no
-  // assignment and must not flip the mode to runtime-v1 (they would trip the mixed-config gate
-  // for nothing). The schema rejects an empty `defaults` anyway; this keeps the direct-call
-  // contract consistent.
-  const hasDefaults = provider.defaults !== undefined
-    && Object.keys(provider.defaults).length > 0;
-  const hasProfiles = provider.profiles !== undefined && Object.keys(provider.profiles).length > 0;
-  const hasTargets = Object.values(provider.targets ?? {}).some(
-    (map) => Object.keys(map ?? {}).length > 0,
-  );
-  const hasAutoRouting = provider.auto_routing !== undefined
-    && Object.keys(provider.auto_routing).length > 0;
-  return hasDefaults || hasProfiles || hasTargets || hasAutoRouting;
+  return hasActiveProviderContent(file?.provider, file?.companion?.enabled ?? true);
 }
 
 export function determineProviderConfigMode(

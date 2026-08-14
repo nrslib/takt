@@ -298,8 +298,30 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 
 ```
 
-Pi SDK session は現在の TAKT process 内だけ memory に保持します。TAKT は Pi の session JSONL を書き込まず、`provider_options.pi.extensions` を Pi settings に永続化しません。明示した package は Pi の temporary resolution path で解決します。
-暗黙の project-local Pi extension は信頼せず、読み込みません。明示した Pi extension は TAKT process 内で実行されるため、信頼できる local path と package source だけを設定してください。認証情報を埋め込んだ URL や secret 系 query parameter を含む extension URL は拒否します。
+### Pi provider の session 境界
+
+TAKT の Pi provider は、現在の TAKT process 内だけで使う embedded な in-memory Pi SDK session を使用します。Pi の session JSONL ファイルを書き込まず、Pi CLI のグローバル `settings.json` も読み書きしません。そのため、デフォルト model、thinking level、shell、retry option などの Pi グローバル設定は TAKT に自動継承されません。
+
+Pi のデフォルトとして使う model は TAKT の設定で明示してください。Pi の model には `:<thinking-level>` suffix を付けられます。例えば次のように設定します。
+
+```yaml
+# ~/.takt/config.yaml または .takt/config.yaml
+provider: pi
+model: provider/model:high
+```
+
+workflow の step に model と thinking level を設定することもできます。
+
+```yaml
+steps:
+  - name: implement
+    provider: pi
+    model: provider/model:high
+```
+
+`provider` と `model` の宣言は TAKT 実行で使う provider、model、thinking level を選択するもので、Pi CLI の設定を取り込むものではありません。Pi の認証は Pi SDK credential store または provider-native 環境変数で別途処理されます。この境界により、グローバル設定への意図しない書き込みを防ぎ、プロジェクトローカル設定の信頼性と予測可能性を保ちます。
+
+`provider_options.pi` は、`extensions` や `no_*` の探索制御など、Pi リソースを読み込むための別経路です。これらの option は認証、model、thinking level を宣言するものではありません。明示したリソース source は TAKT 実行時だけ temporary resolution され、Pi settings には永続化されません。リソースの信頼境界については [Pi のリソース読み込み](#pi-resource-loading) を参照してください。
 
 ### OpenCode 実行ガード
 
@@ -570,7 +592,7 @@ version: 1
 
 provider:
   defaults:
-    pool: sol-pool
+    profile: sol-medium
 
   profiles:
     sol-high:
@@ -606,6 +628,8 @@ provider:
     steps:
       default/supervise:
         profile: sol-high
+      default/implement:
+        pool: sol-pool
     internal_agents:
       selector:
         profile: router
@@ -631,7 +655,9 @@ provider:
 
 TAKT が所有する structured agent は常に fresh session で起動します。native structured output 対応 provider には schema を直接渡し、非対応 provider には JSON schema instruction を渡して返却 object を parse・validate します。TAKT は internal agent 専用の permission、tool、network、sandbox、skill、MCP、bypass policy を追加しません。role を制限する場合は `capabilities` と `permission_mode` の一方または両方を明示した profile を割り当てます。両方を省略した場合は、通常の provider 設定をそのまま使用します。
 
-`provider.defaults` と各 `provider.targets` エントリは、固定の `profile` か auto routing を行う `pool` のいずれか一方だけを指定します。step は `<leaf-workflow-name>/<step-name>` 形式で指定し、agent を起動しない制御ノード（`workflow_call` など）は解決対象になりません。
+有効な provider section では `provider.defaults` の指定が必須で、固定の `profile` または順序付きの `ladder` のいずれか一方だけを指定します。`pool` は指定できません。`provider.targets.personas`、`provider.targets.tags`、`provider.targets.steps` のエントリは、固定の `profile`、順序付きの `ladder`、または auto routing 用の `pool` のいずれか一方を指定できます。`pool` はこれらの明示的な workflow target に限り指定できます。`internal_agents` のエントリは固定の `profile` または順序付きの `ladder` を指定できますが、`pool` は指定できません。`companions` のエントリは固定の `profile` のみ指定でき、`pool` と `ladder` は指定できません。step は `<leaf-workflow-name>/<step-name>` 形式で指定し、agent を起動しない制御ノード（`workflow_call` など）は解決対象になりません。
+
+`provider.auto_routing` が存在しても、`pool` を明示した target だけが自動ルーティング対象になります。pool を明示していない target、AI による task slug 生成などの非ワークフロー処理、その他の補助処理は `provider.defaults` を使用します。暗黙の既定 pool はなく、`fallback_profile` は明示的に選択された pool の中だけで使用されます。
 
 ### 解決の優先順位
 
@@ -1012,6 +1038,36 @@ provider_options:
 ```
 
 ファイル編集の権限は引き続き `permission_mode` で制御されます。
+
+<a id="pi-resource-loading"></a>
+
+#### Pi のリソース読み込み (`extensions`, `no_*`)
+
+TAKT 実行時に Pi package / extension を読み込む、または探索する Pi リソース種別を制限するには `provider_options.pi` を使います。
+
+```yaml
+provider_options:
+  pi:
+    extensions:
+      - npm:pi-fff
+      # - git:https://github.com/example/pi-extension
+      # - /absolute/path/to/local-extension
+    no_extensions: true        # 探索を無効化。上記の明示した extension は読み込む
+    no_skills: true            # Pi Skill の探索を無効化
+    no_prompt_templates: true  # Pi prompt template の探索を無効化
+    no_themes: true            # Pi theme の探索を無効化
+    no_context_files: true     # Pi context file の探索を無効化
+```
+
+- `extensions` には npm package、Git source、local path を指定できます。
+- 明示した source は TAKT 実行時に temporary resolution され、Pi settings には永続化されません。
+- `no_extensions` は extension 探索を無効にしますが、`extensions` に列挙した source は読み込みます。
+- その他の `no_*` オプションは、それぞれ対応するリソース種別の探索を無効にします。
+- 暗黙の project-local Pi extension は信頼せず、読み込みません。
+- 明示した extension は TAKT process 内で実行されるため、信頼できる local path と package source だけを設定してください。
+- 認証情報を埋め込んだ URL や secret 系 query parameter を含む extension URL は拒否します。
+
+これらの設定は通常の provider option leaf 優先順位に従い、`TAKT_PROVIDER_OPTIONS_PI_*` でも上書きできます。
 
 <a id="workflow-categories"></a>
 

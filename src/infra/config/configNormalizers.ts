@@ -190,6 +190,9 @@ export function denormalizeAutoRoutingConfig(
   if (!config) {
     return undefined;
   }
+  if (config.defaultPool === undefined) {
+    throw new Error('Cannot serialize auto routing without a default pool');
+  }
   return {
     strategy: config.strategy,
     router: {

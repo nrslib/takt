@@ -1,6 +1,6 @@
 import type { AgentResponse, Language, PermissionMode, McpServerConfig, StepProviderOptions } from '../../core/models/index.js';
 import type { ProviderType as SharedProviderType } from '../../shared/types/provider.js';
-import type { StreamCallback } from '../../shared/types/provider.js';
+import type { InternalAgentIsolation, StreamCallback } from '../../shared/types/provider.js';
 import type { PermissionHandler, AskUserQuestionHandler } from '../../core/workflow/types.js';
 
 export interface AgentSetup {
@@ -17,6 +17,7 @@ export interface ProviderCallOptions {
   cwd: string;
   abortSignal?: AbortSignal;
   sessionId?: string;
+  internalAgentIsolation?: InternalAgentIsolation;
   model?: string;
   allowedTools?: string[];
   mcpServers?: Record<string, McpServerConfig>;
@@ -55,12 +56,27 @@ export interface ProviderAgent {
 
 export interface Provider {
   supportsStructuredOutput: boolean;
+  /** Whether this provider has a dedicated strict structured execution path. */
+  supportsIsolatedStructuredExecution?: boolean;
   supportsNativeImageInput: boolean;
   getRuntimeInstructions(allowedTools?: string[], permissionMode?: import('../../core/models/index.js').PermissionMode, networkAccess?: boolean): string | null;
   keepsAllowedToolWithoutEdit(tool: string): boolean;
   getDefaultAllowedToolsWithoutEdit?(): readonly string[];
   setup(config: AgentSetup): ProviderAgent;
+  setupIsolatedStructured?(config: AgentSetup): ProviderAgent;
   compactSession?(options: ProviderCompactSessionOptions): Promise<void>;
 }
 
 export type ProviderType = SharedProviderType;
+
+export function assertOutputSchema(
+  schema: Record<string, unknown> | undefined,
+  provider: string,
+): Record<string, unknown> {
+  if (schema === undefined) {
+    throw new Error(
+      `Provider "${provider}" cannot run isolated structured execution without an output schema`,
+    );
+  }
+  return schema;
+}

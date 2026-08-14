@@ -727,6 +727,7 @@ describe('OptionsBuilder auto routing deterministic completion', () => {
     ],
     defaultPool: 'general',
     candidatePools: { general: { candidates: ['coding'], fallback: 'coding' } },
+    poolRules: { steps: { implement: 'general', 'findings-manager': 'general' } },
     rules: { steps: { implement: 'coding' } },
   };
 

@@ -3,6 +3,7 @@ import type {
   DynamicParallelSubSteps,
   DynamicParallelSelectionSnapshot,
 } from '../../models/types.js';
+import { buildSelectorGuidanceLines } from '../selector-contract.js';
 
 export interface DynamicSelectorInput {
   readonly task: string;
@@ -11,6 +12,7 @@ export interface DynamicSelectorInput {
   readonly pool: readonly DynamicParallelPoolSubStep[];
   readonly selection: DynamicParallelSubSteps['selection'];
   readonly previousSnapshot?: DynamicParallelSelectionSnapshot;
+  readonly selectorInstruction?: string;
 }
 
 export function buildDynamicSelectorInstruction(input: DynamicSelectorInput): string {
@@ -18,6 +20,7 @@ export function buildDynamicSelectorInstruction(input: DynamicSelectorInput): st
   return [
     'Select the pool reviewer IDs that are required for this task.',
     'Return only the requested structured output.',
+    ...buildSelectorGuidanceLines(input.selectorInstruction),
     '',
     `Task:\n${input.task}`,
     '',
