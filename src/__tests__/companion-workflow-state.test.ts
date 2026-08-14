@@ -12,56 +12,23 @@ function config() {
   } as never;
 }
 
-describe('CT-COMP-09 companion workflow state and when routing', () => {
-  it('should parse companion as a root without requiring a step scope', () => {
-    expect(parseWorkflowStateReference('companion.escalated')).toEqual({
+describe('companion workflow diagnostics', () => {
+  it('exposes only mechanical completion diagnostics', () => {
+    const state = createInitialState(config(), { projectCwd: '/worktree' });
+    state.companion = {
+      completionSettled: false,
+      completionFailure: true,
+      followUpRounds: 2,
+      reason: 'completion review failed',
+    };
+
+    expect(parseWorkflowStateReference('companion.completionSettled')).toEqual({
       root: 'companion',
-      path: ['escalated'],
+      path: ['completionSettled'],
     });
-  });
-
-  it('should expose escalated, open must_fix count, findings, and reason to when evaluation', () => {
-    const state = createInitialState(config(), { projectCwd: '/worktree' });
-    state.companion = {
-      escalated: true,
-      completionVerified: true,
-      openMustFixCount: 1,
-      openMustFix: [{
-        id: 'security-reviewer-1', severity: 'must_fix', file: 'src/a.ts', line: 1,
-        finding: 'unsafe write',
-      }],
-      reason: 'unchanged diff after fix round',
-    };
-
-    expect(resolveWorkflowStateReference('companion.escalated', state)).toBe(true);
-    expect(resolveWorkflowStateReference('companion.openMustFixCount', state)).toBe(1);
-    expect(resolveWorkflowStateReference('companion.openMustFix[0].id', state))
-      .toBe('security-reviewer-1');
-    expect(resolveWorkflowStateReference('companion.reason', state))
-      .toBe('unchanged diff after fix round');
-  });
-
-  it('should return defensive state snapshots instead of the coordinator-owned mutable array', () => {
-    const state = createInitialState(config(), { projectCwd: '/worktree' });
-    const owned = [{
-      id: 'security-reviewer-1', severity: 'must_fix' as const, file: 'src/a.ts', line: 1,
-      finding: 'unsafe write',
-    }];
-    state.companion = {
-      escalated: true,
-      completionVerified: true,
-      openMustFixCount: 1,
-      openMustFix: owned,
-      reason: 'loop',
-    };
-
-    const exposed = resolveWorkflowStateReference('companion.openMustFix', state) as Array<{ id: string }>;
-    exposed.push({ id: 'foreign' });
-
-    expect(owned).toEqual([{
-      id: 'security-reviewer-1', severity: 'must_fix', file: 'src/a.ts', line: 1,
-      finding: 'unsafe write',
-    }]);
-    expect(resolveWorkflowStateReference('companion.openMustFix.length', state)).toBe(1);
+    expect(resolveWorkflowStateReference('companion.completionSettled', state)).toBe(false);
+    expect(resolveWorkflowStateReference('companion.completionFailure', state)).toBe(true);
+    expect(resolveWorkflowStateReference('companion.followUpRounds', state)).toBe(2);
+    expect(resolveWorkflowStateReference('companion.reason', state)).toBe('completion review failed');
   });
 });

@@ -1,5 +1,5 @@
 name: review-companion-moderator
-description: Adjudicate implementation companion findings by accepting, rejecting, merging, or downgrading them from evidence.
+description: Adjudicate current-round implementation companion findings by accepting or rejecting each one from evidence.
 persona: review-adjudicator
 policy: [contract-change, review-adjudication]
 knowledge: architecture

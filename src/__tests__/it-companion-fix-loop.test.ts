@@ -1,300 +1,73 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { AgentResponse } from '../core/models/index.js';
+import type { AgentResponse, CompanionFinding } from '../core/models/index.js';
 import { runCompanionFixLoop } from '../core/workflow/companion/fix-loop.js';
 
-function finding(id: string, text: string) {
-  return { id, severity: 'must_fix' as const, file: 'src/a.ts', line: 1, finding: text };
-}
-
-function response(content: string, sessionId: string): AgentResponse {
+function response(status: AgentResponse['status'], sessionId: string): AgentResponse {
   return {
     persona: 'coder',
-    status: 'done',
-    content,
-    sessionId,
-    timestamp: new Date('2026-08-08T00:00:00.000Z'),
-  };
-}
-
-function terminalResponse(status: 'error' | 'blocked' | 'rate_limited'): AgentResponse {
-  return {
-    ...response(`fix ${status}`, 'session-terminal'),
     status,
-    error: status === 'error' ? 'provider failed' : undefined,
+    content: `${status} response`,
+    sessionId,
+    timestamp: new Date('2026-08-14T00:00:00.000Z'),
   };
 }
 
-function phase1Options() {
-  return {
-    permissionMode: 'edit' as const,
-    allowedTools: ['Read', 'Edit', 'Bash'],
-    mcpServers: { test: { command: 'test-mcp' } },
-    onStream: vi.fn(),
-    provider: 'mock' as const,
-    model: 'mock-model',
-  };
-}
+const finding: CompanionFinding = {
+  companion: 'security-reviewer',
+  reviewedAt: '2026-08-14T00:00:00.000Z',
+  reviewedDigest: 'digest-1',
+  severity: 'must_fix',
+  file: 'src/a.ts',
+  line: 1,
+  finding: 'unsafe write',
+};
 
-describe('CT-COMP-08 same-session companion fix loop', () => {
-  it('should fix only open must_fix findings with sequence 2+ and return the latest Phase 1 output', async () => {
-    const original = response('original phase 1 result', 'session-1');
-    const fixed = response('fixed the finding', 'session-2');
-    const options = phase1Options();
-    const completeReview = vi.fn()
-      .mockResolvedValueOnce({
-        openMustFix: [finding('security-reviewer-1', 'unsafe write')],
-        escalated: false,
-      })
-      .mockResolvedValueOnce({ openMustFix: [], escalated: false });
-    const executeFix = vi.fn().mockResolvedValue(fixed);
+describe('companion follow-up loop', () => {
+  it('delivers each finding batch once at a turn boundary', async () => {
+    const batches = [[finding], []];
+    const completeReview = vi.fn(async () => ({ findings: batches.shift()! }));
+    const executeFollowUp = vi.fn().mockResolvedValue(response('done', 'session-2'));
 
     const result = await runCompanionFixLoop({
-      initialResponse: original,
-      phase1Options: options,
+      initialResponse: response('done', 'session-1'),
+      phase1Options: {},
       completeReview,
-      executeFix,
+      executeFollowUp,
     });
 
-    expect(executeFix).toHaveBeenCalledOnce();
-    expect(executeFix).toHaveBeenCalledWith(expect.objectContaining({
-      sequence: 2,
-      phase: 1,
-      openMustFixCount: 1,
-      sessionId: 'session-1',
-      options: expect.objectContaining({
-        permissionMode: 'edit',
-        allowedTools: ['Read', 'Edit', 'Bash'],
-        mcpServers: options.mcpServers,
-        onStream: options.onStream,
-        provider: 'mock',
-        model: 'mock-model',
-      }),
-      instruction: expect.stringContaining('security-reviewer-1'),
+    expect(result.phaseResponse.sessionId).toBe('session-2');
+    expect(result.followUpRounds).toBe(1);
+    expect(executeFollowUp).toHaveBeenCalledOnce();
+    expect(executeFollowUp.mock.calls[0]?.[0].instruction).toContain('digest-1');
+    expect(completeReview).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      followUpRound: 1,
+      implementerResponse: 'done response',
     }));
-    const instruction = executeFix.mock.calls[0]?.[0].instruction;
-    expect(instruction).toContain('"severity":"must_fix"');
-    expect(instruction).toContain('"file":"src/a.ts"');
-    expect(instruction).toContain('"line":1');
-    expect(instruction).not.toContain('- security-reviewer-1:');
-    expect(result.phaseResponse).toBe(fixed);
-    expect(result.latestSessionId).toBe('session-2');
-    expect(result.fixRounds).toBe(1);
-    expect(completeReview.mock.calls).toEqual([
-      [{ implementerResponse: 'original phase 1 result', afterFix: false }],
-      [{ implementerResponse: 'fixed the finding', afterFix: true, fixRound: 1 }],
-    ]);
   });
 
-  it('should proceed without another implementer call when no must_fix is open', async () => {
-    const executeFix = vi.fn();
-
-    const result = await runCompanionFixLoop({
-      initialResponse: response('done', 'session-1'),
-      phase1Options: phase1Options(),
-      completeReview: vi.fn().mockResolvedValue({ openMustFix: [], escalated: false }),
-      executeFix,
-    });
-
-    expect(executeFix).not.toHaveBeenCalled();
-    expect(result.fixRounds).toBe(0);
-  });
-
-  it('should keep running until implementer stopped, final review completed, and must_fix reached zero', async () => {
-    const completeReview = vi.fn()
-      .mockResolvedValueOnce({ openMustFix: [finding('security-reviewer-1', 'a')], escalated: false })
-      .mockResolvedValueOnce({ openMustFix: [finding('security-reviewer-2', 'b')], escalated: false })
-      .mockResolvedValueOnce({ openMustFix: [], escalated: false });
-    const executeFix = vi.fn()
-      .mockResolvedValueOnce(response('fix a', 'session-2'))
-      .mockResolvedValueOnce(response('fix b', 'session-3'));
-
-    const result = await runCompanionFixLoop({
-      initialResponse: response('done', 'session-1'),
-      phase1Options: phase1Options(),
-      completeReview,
-      executeFix,
-    });
-
-    expect(completeReview).toHaveBeenCalledTimes(3);
-    expect(executeFix.mock.calls.map(([attempt]) => attempt.sequence)).toEqual([2, 3]);
-    expect(executeFix.mock.calls.map(([attempt]) => attempt.sessionId)).toEqual([
-      'session-1',
-      'session-2',
-    ]);
-    expect(result.phaseResponse.content).toBe('fix b');
-    expect(result.latestSessionId).toBe('session-3');
-  });
-
-  it.each(['error', 'blocked', 'rate_limited'] as const)(
-    'should keep the latest successful response when a companion fix returns %s',
+  it.each(['error', 'rate_limited', 'blocked'] as const)(
+    'propagates a %s follow-up response',
     async (status) => {
-      const executeFix = vi.fn().mockResolvedValue(terminalResponse(status));
-
       const result = await runCompanionFixLoop({
         initialResponse: response('done', 'session-1'),
-        phase1Options: phase1Options(),
-        completeReview: vi.fn().mockResolvedValue({
-          openMustFix: [finding('security-reviewer-1', 'a')],
-          escalated: false,
-        }),
-        executeFix,
+        phase1Options: {},
+        completeReview: vi.fn().mockResolvedValue({ findings: [finding] }),
+        executeFollowUp: vi.fn().mockResolvedValue(response(status, 'session-2')),
       });
 
-      expect(result.phaseResponse).toMatchObject({ status: 'done', content: 'done', sessionId: 'session-1' });
-      expect(result.latestSessionId).toBe('session-1');
-      expect(result.fixRounds).toBe(1);
+      expect(result.phaseResponse.status).toBe(status);
+      expect(result.phaseResponse.sessionId).toBe('session-2');
+      expect(result.followUpRounds).toBe(1);
     },
   );
 
-  it('should not claim a successful post-fix completion for a non-done fix response', async () => {
-    const completeReview = vi.fn().mockResolvedValue({
-      openMustFix: [finding('security-reviewer-1', 'a')],
-      escalated: false,
-    });
-    const result = await runCompanionFixLoop({
-      initialResponse: response('done', 'session-1'),
-      phase1Options: phase1Options(),
-      completeReview,
-      executeFix: vi.fn().mockResolvedValue(terminalResponse('blocked')),
-    });
-
-    expect(result.fixRounds).toBe(1);
-    expect(result.phaseResponse).toMatchObject({ status: 'done', content: 'done' });
-    expect(completeReview).toHaveBeenCalledOnce();
-    expect(completeReview).toHaveBeenCalledWith({
-      implementerResponse: 'done',
-      afterFix: false,
-    });
-  });
-});
-
-describe('CT-COMP-10 fail-soft and abort lifecycle', () => {
-  it('should retain the latest successful response when completion fails after retries', async () => {
-    const failure = new Error('review provider crashed');
-    const original = response('implementation succeeded', 'session-1');
-    const onAttemptFailure = vi.fn();
-
-    const result = await runCompanionFixLoop({
-      initialResponse: original,
-      phase1Options: phase1Options(),
-      completeReview: vi.fn().mockRejectedValue(failure),
-      executeFix: vi.fn(),
-      onAttemptFailure,
-    });
-
-    expect(result.phaseResponse).toBe(original);
-    expect(result.fixRounds).toBe(0);
-    expect(result.attemptFailures).toEqual([{
-      stage: 'review',
-      fixRound: 0,
-      reason: failure.message,
-    }]);
-    expect(onAttemptFailure).toHaveBeenCalledWith(result.attemptFailures[0]);
-  });
-
-  it.each([
-    {
-      label: 'review rejects',
-      completeReview: vi.fn().mockRejectedValue(new Error('review provider crashed')),
-      executeFix: vi.fn(),
-      expectedFailure: { stage: 'review', fixRound: 0, reason: 'review provider crashed' },
-    },
-    {
-      label: 'fix throws',
-      completeReview: vi.fn().mockResolvedValue({
-        openMustFix: [finding('security-reviewer-1', 'a')],
-        escalated: false,
-      }),
-      executeFix: vi.fn().mockRejectedValue(new Error('fix provider crashed')),
-      expectedFailure: { stage: 'fix', fixRound: 1, sequence: 2, reason: 'fix provider crashed' },
-    },
-    {
-      label: 'fix returns a terminal status',
-      completeReview: vi.fn().mockResolvedValue({
-        openMustFix: [finding('security-reviewer-1', 'a')],
-        escalated: false,
-      }),
-      executeFix: vi.fn().mockResolvedValue(terminalResponse('error')),
-      expectedFailure: { stage: 'fix', fixRound: 1, sequence: 2, reason: 'provider failed' },
-    },
-  ])('should retain the recorded failure when its observer throws after $label', async ({
-    completeReview,
-    executeFix,
-    expectedFailure,
-  }) => {
-    const original = response('implementation succeeded', 'session-1');
-    const onAttemptFailure = vi.fn(() => {
-      throw new Error('failure observer crashed');
-    });
-
-    const result = await runCompanionFixLoop({
-      initialResponse: original,
-      phase1Options: phase1Options(),
-      completeReview,
-      executeFix,
-      onAttemptFailure,
-    });
-
-    expect(result.phaseResponse).toEqual(original);
-    expect(result.attemptFailures).toEqual([expectedFailure]);
-    expect(onAttemptFailure).toHaveBeenCalledExactlyOnceWith(expectedFailure);
-  });
-
-  it('should retain the latest successful response when a companion fix throws', async () => {
-    const original = response('implementation succeeded', 'session-1');
-    const onAttemptFailure = vi.fn();
-
-    const result = await runCompanionFixLoop({
-      initialResponse: original,
-      phase1Options: phase1Options(),
-      completeReview: vi.fn().mockResolvedValue({
-        openMustFix: [finding('security-reviewer-1', 'a')],
-        escalated: false,
-      }),
-      executeFix: vi.fn().mockRejectedValue(new Error('fix provider crashed')),
-      onAttemptFailure,
-    });
-
-    expect(result.phaseResponse).toBe(original);
-    expect(result.latestSessionId).toBe('session-1');
-    expect(result.fixRounds).toBe(1);
-    expect(result.attemptFailures).toEqual([{
-      stage: 'fix',
-      fixRound: 1,
-      sequence: 2,
-      reason: 'fix provider crashed',
-    }]);
-    expect(onAttemptFailure).toHaveBeenCalledWith(result.attemptFailures[0]);
-  });
-
-  it('should stop completion and fix work when the main abort signal fires', async () => {
-    const controller = new AbortController();
-    const executeFix = vi.fn();
-    const completeReview = vi.fn(async () => {
-      controller.abort();
-      return { openMustFix: [finding('security-reviewer-1', 'a')], escalated: false };
-    });
-
+  it('propagates a thrown follow-up failure', async () => {
+    const failure = new Error('follow-up failed');
     await expect(runCompanionFixLoop({
       initialResponse: response('done', 'session-1'),
-      phase1Options: phase1Options(),
-      completeReview,
-      executeFix,
-      abortSignal: controller.signal,
-    })).rejects.toMatchObject({ name: 'AbortError' });
-    expect(executeFix).not.toHaveBeenCalled();
-  });
-
-  it('should use the completion trigger even when no live tool event was observed', async () => {
-    const completeReview = vi.fn().mockResolvedValue({ openMustFix: [], escalated: false });
-
-    await runCompanionFixLoop({
-      initialResponse: response('done', 'session-1'),
-      phase1Options: phase1Options(),
-      completeReview,
-      executeFix: vi.fn(),
-    });
-
-    expect(completeReview).toHaveBeenCalledOnce();
+      phase1Options: {},
+      completeReview: vi.fn().mockResolvedValue({ findings: [finding] }),
+      executeFollowUp: vi.fn().mockRejectedValue(failure),
+    })).rejects.toBe(failure);
   });
 });

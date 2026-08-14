@@ -9,7 +9,7 @@ import {
   isProviderStreamParseError,
 } from '../../../shared/types/agent-failure.js';
 
-export type CompanionAgentPurpose = 'selector' | 'reviewer' | 'moderator' | 'judge';
+export type CompanionAgentPurpose = 'selector' | 'reviewer' | 'moderator';
 
 interface CompanionAgentResolution {
   readonly provider: ProviderType;

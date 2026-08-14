@@ -33,7 +33,6 @@ import type {
   CompanionCallStatus,
   CompanionModeratorAudit,
   CompanionAcceptedFindingAudit,
-  CompanionAcceptedUpdateAudit,
   CompanionReviewPhase,
   CompanionReviewSkipReason,
   CompanionReviewZeroReason,
@@ -46,12 +45,12 @@ import {
 import type { InteractiveMetadata } from './types.js';
 import { truncateUtf8 } from '../../../shared/utils/utf8.js';
 import { isSensitiveKeyName } from '../../../shared/utils/sensitiveText.js';
-import { COMPANION_CUMULATIVE_LIMITS } from '../../../core/workflow/companion/limits.js';
+import { COMPANION_PROMPT_LIMITS } from '../../../core/workflow/companion/limits.js';
 import { COMPANION_OUTPUT_LIMITS } from '../../../core/workflow/companion/output-envelope.js';
 
 type SanitizeText = (text: string) => string;
 
-const COMPANION_AUDIT_PROMPT_MAX_BYTES = COMPANION_CUMULATIVE_LIMITS.maxPromptBytes;
+const COMPANION_AUDIT_PROMPT_MAX_BYTES = COMPANION_PROMPT_LIMITS.maxPromptBytes;
 const COMPANION_AUDIT_RESPONSE_MAX_BYTES = COMPANION_OUTPUT_LIMITS.maxSerializedBytes;
 
 function serializeWorkflowStack(stack: WorkflowResumePointEntry[] | undefined): {
@@ -326,10 +325,8 @@ export function buildCompanionReviewRoundRecord(input: {
   readonly changedLines: number;
   readonly findingCount: number;
   readonly reviewerFindings: readonly CompanionAcceptedFindingAudit[];
-  readonly reviewerUpdates: readonly CompanionAcceptedUpdateAudit[];
   readonly moderator?: CompanionModeratorAudit;
   readonly acceptedFindings: readonly CompanionAcceptedFindingAudit[];
-  readonly acceptedUpdates: readonly CompanionAcceptedUpdateAudit[];
   readonly zeroReason?: CompanionReviewZeroReason;
   readonly runPathNamespace?: readonly string[];
 }, sanitizeText: SanitizeText): NdjsonCompanionReviewRound {
@@ -342,12 +339,10 @@ export function buildCompanionReviewRoundRecord(input: {
     changedLines: input.changedLines,
     findingCount: input.findingCount,
     reviewerFindings: sanitizeAcceptedFindings(input.reviewerFindings, sanitizeText),
-    reviewerUpdates: sanitizeAcceptedUpdates(input.reviewerUpdates, sanitizeText),
     ...(input.moderator === undefined ? {} : {
       moderator: sanitizeModeratorAudit(input.moderator, sanitizeText),
     }),
     acceptedFindings: sanitizeAcceptedFindings(input.acceptedFindings, sanitizeText),
-    acceptedUpdates: sanitizeAcceptedUpdates(input.acceptedUpdates, sanitizeText),
     ...(input.zeroReason === undefined ? {} : { zeroReason: input.zeroReason }),
     ...(input.runPathNamespace === undefined || input.runPathNamespace.length === 0
       ? {}
@@ -471,16 +466,6 @@ function sanitizeAcceptedFindings(
   }));
 }
 
-function sanitizeAcceptedUpdates(
-  updates: readonly CompanionAcceptedUpdateAudit[],
-  sanitizeText: SanitizeText,
-): NdjsonCompanionReviewRound['acceptedUpdates'] {
-  return updates.map((update) => ({
-    id: sanitizeText(update.id),
-    status: update.status,
-  }));
-}
-
 export function buildCompanionReviewSkippedRecord(
   input: {
     readonly step: string;
@@ -563,15 +548,12 @@ function sanitizeModeratorAudit(
   sanitizeText: SanitizeText,
 ): NonNullable<NdjsonCompanionReviewRound['moderator']> {
   return {
-    name: moderator.name,
+    name: sanitizeText(moderator.name),
     invoked: moderator.invoked,
     ...(moderator.reason === undefined ? {} : { reason: moderator.reason }),
     decisions: moderator.decisions.map((decision) => ({
       action: decision.action,
       sourceIndex: decision.sourceIndex,
-      ...(decision.severity === undefined ? {} : { severity: decision.severity }),
-      ...(decision.finding === undefined ? {} : { finding: sanitizeText(decision.finding) }),
-      ...(decision.targetId === undefined ? {} : { targetId: sanitizeText(decision.targetId) }),
     })),
   };
 }

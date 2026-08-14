@@ -112,15 +112,16 @@ export interface CompanionAnalyticsEvent {
   companion?: string;
   selected?: string[];
   rationale?: string;
-  findingId?: string;
   severity?: 'must_fix' | 'should_fix' | 'nit';
   sequence?: number;
-  openMustFixCount?: number;
-  escalated?: boolean;
+  findingCount?: number;
+  completionSettled?: boolean;
+  completionFailure?: boolean;
+  followUpRounds?: number;
+  reason?: string;
   trigger?: 'quiet' | 'forced' | 'completion' | 'commit';
   digest?: string;
   changedLines?: number;
-  findingCount?: number;
   replaced?: {
     trigger: 'quiet' | 'forced' | 'completion' | 'commit';
     digest: string;

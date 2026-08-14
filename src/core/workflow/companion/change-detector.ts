@@ -9,7 +9,6 @@ export const COMPANION_CHANGE_DEBOUNCE_MS = 250;
 export interface CompanionChangeCandidate {
   readonly reason: 'quiet' | 'forced' | 'completion' | 'commit';
   readonly observedGeneration: number;
-  readonly allowUnchangedDigest?: boolean;
 }
 
 export interface CompanionChangeTrigger extends CompanionChangeCandidate {
@@ -118,11 +117,10 @@ export class CompanionChangeDetector {
     };
   }
 
-  getCompletionCandidate(allowUnchangedDigest: boolean): CompanionChangeCandidate {
+  getCompletionCandidate(): CompanionChangeCandidate {
     return {
       reason: 'completion',
       observedGeneration: this.generation,
-      ...(allowUnchangedDigest ? { allowUnchangedDigest: true } : {}),
     };
   }
 
@@ -135,7 +133,7 @@ export class CompanionChangeDetector {
     const ignoreMinimum = candidate.reason === 'completion' || candidate.reason === 'commit';
     const skipReason = snapshot.changedLines === 0 && snapshot.changedFiles.length === 0
       ? 'empty_diff'
-      : snapshot.digest === this.lastReviewedDigest && candidate.allowUnchangedDigest !== true
+      : snapshot.digest === this.lastReviewedDigest
         ? 'unchanged_digest'
         : !ignoreMinimum && snapshot.changedLines < this.minimumChangedLines
           ? 'below_minimum_changed_lines'

@@ -4,7 +4,6 @@ import type {
   CompanionCallStatus,
   CompanionModeratorAudit,
   CompanionAcceptedFindingAudit,
-  CompanionAcceptedUpdateAudit,
   CompanionReviewTrigger,
   CompanionReviewPhase,
   CompanionReviewSkipReason,
@@ -12,6 +11,7 @@ import type {
   WorkflowEvents,
 } from '../types.js';
 import type { AgentResponse } from '../../models/index.js';
+import type { CompanionFinding } from '../../models/companion-types.js';
 import type { ProviderType } from '../../../shared/types/provider.js';
 
 type CompanionEventName = Extract<keyof WorkflowEvents, `companion:${string}`>;
@@ -42,23 +42,27 @@ export class CompanionEventPublisher {
     });
   }
 
-  finding(companion: string, findingId: string, severity: 'must_fix' | 'should_fix' | 'nit'): void {
+  finding(finding: CompanionFinding): void {
     this.emit('companion:finding', {
       step: this.step,
-      companion,
-      findingId,
-      severity,
+      companion: finding.companion,
+      severity: finding.severity,
     });
   }
 
-  fixRound(sequence: number, openMustFixCount: number): void {
-    this.emit('companion:fix_round', { step: this.step, sequence, openMustFixCount });
+  fixRound(sequence: number, findingCount: number): void {
+    this.emit('companion:fix_round', { step: this.step, sequence, findingCount });
   }
 
-  complete(openMustFixCount: number, escalated: boolean): void {
+  complete(input: {
+    completionSettled: boolean;
+    completionFailure: boolean;
+    followUpRounds: number;
+    reason?: string;
+  }): void {
     if (this.completed) throw new Error(`Companion completion already published for "${this.step}"`);
     this.completed = true;
-    this.emit('companion:complete', { step: this.step, openMustFixCount, escalated });
+    this.emit('companion:complete', { step: this.step, ...input });
   }
 
   beginAttempt(): void {
@@ -72,10 +76,8 @@ export class CompanionEventPublisher {
     changedLines: number;
     findingCount: number;
     reviewerFindings: readonly CompanionAcceptedFindingAudit[];
-    reviewerUpdates: readonly CompanionAcceptedUpdateAudit[];
     moderator?: CompanionModeratorAudit;
     acceptedFindings: readonly CompanionAcceptedFindingAudit[];
-    acceptedUpdates: readonly CompanionAcceptedUpdateAudit[];
     zeroReason?: CompanionReviewZeroReason;
   }): void {
     this.emit('companion:review_round', {

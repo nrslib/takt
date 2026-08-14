@@ -48,7 +48,6 @@ import {
 } from '../workflow-call-invocation-index.js';
 import { SelectorInputReader } from '../dynamic-parallel/selector-input-reader.js';
 import { restoreWorkflowStepParticipationIndex } from '../workflow-step-participation-index.js';
-import { CompanionReviewAuthority } from '../companion/review-state-store.js';
 import {
   createWorkflowStepAbortSignalContext,
   type WorkflowStepAbortSignalContext,
@@ -139,7 +138,6 @@ export function createSharedRuntime(
     dynamicFacetSelectionStore: new DynamicFacetSelectionStore(new Map()),
     workflowCallInvocationEvidence: restoreWorkflowCallInvocationEvidence(resumePoint),
     workflowStepParticipationIndex: restoreWorkflowStepParticipationIndex(resumePoint),
-    companionReviewAuthority: new CompanionReviewAuthority(),
   };
 }
 
@@ -235,10 +233,6 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       ? {}
       : { inputReader: new SelectorInputReader(params.options.selectorGitCommandRunner) }),
   });
-  const companionReviewAuthority = params.sharedRuntime.companionReviewAuthority;
-  if (companionReviewAuthority === undefined) {
-    throw new Error('Companion review authority is missing from shared workflow runtime');
-  }
   const companionEnabled = params.options.companionEnabled ?? true;
 
   const stepExecutor = new StepExecutor({
@@ -278,7 +272,6 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     companionProviders: params.options.companionProviders,
     companionSelectorProvider: params.options.selectorProvider,
     companionDiffReader: params.options.companionDiffReader,
-    companionReviewAuthority,
     ...phaseRelay,
     getFacetPool: (name: string) => params.config.facetPools?.[name],
     dynamicFacetSelectorCoordinator: dynamicFacetSelector,

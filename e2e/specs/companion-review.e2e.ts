@@ -103,7 +103,6 @@ describe('E2E: companion review', () => {
             line: 1,
             finding: 'The exported value must not be negative.',
           }],
-          updates: [],
           notes: 'Check the value again.',
         },
       },
@@ -120,11 +119,10 @@ describe('E2E: companion review', () => {
       },
       {
         persona: 'security-reviewer',
-        content: 'The finding is resolved.',
+        content: 'No findings remain.',
         structured_output: {
           findings: [],
-          updates: [{ id: 'security-reviewer-1', status: 'resolved' }],
-          notes: 'Resolved.',
+          notes: 'No findings.',
         },
       },
     ]), 'utf8');
@@ -159,8 +157,12 @@ describe('E2E: companion review', () => {
       'security-reviewer.jsonl',
     ), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
     expect(mailbox).toEqual([
-      expect.objectContaining({ id: 'security-reviewer-1', severity: 'must_fix', status: 'open' }),
-      { id: 'security-reviewer-1', status: 'resolved' },
+      expect.objectContaining({
+        companion: 'security-reviewer',
+        reviewedDigest: expect.any(String),
+        reviewedAt: expect.any(String),
+        severity: 'must_fix',
+      }),
     ]);
     const calls = readFileSync(callLogPath, 'utf8').trim().split('\n')
       .map((line) => JSON.parse(line) as {

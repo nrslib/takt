@@ -1,5 +1,5 @@
 name: review-companion-moderator
-description: 実装 companion の指摘を証拠で裁定し、採用・却下・統合・重要度引き下げを決める moderator。
+description: 現在のラウンドの実装 companion 指摘を証拠で裁定し、各指摘の採用・却下を決める moderator。
 persona: review-adjudicator
 policy: [contract-change, review-adjudication]
 knowledge: architecture

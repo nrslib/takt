@@ -79,9 +79,6 @@ export class CompanionReviewQueue {
   complete(request: Omit<CompanionReviewRequest, 'reason'>): Promise<void> {
     this.throwIfStopped();
     const state = this.getState(request.companionName);
-    const error = createAbortError();
-    this.rejectPending(state, error);
-    state.running?.abort();
     const waiter = promiseWaiter();
     state.pending.push({
       request: { ...request, reason: 'completion' },
@@ -92,12 +89,9 @@ export class CompanionReviewQueue {
     return waiter.promise;
   }
 
-  async settle(companionName: string): Promise<void> {
+  async drain(companionName: string): Promise<void> {
     this.throwIfStopped();
     const state = this.getState(companionName);
-    const error = createAbortError();
-    this.rejectPending(state, error);
-    state.running?.abort();
     if (!state.draining && state.running === undefined) return;
     await new Promise<void>((resolve) => state.idleWaiters.push(resolve));
   }
@@ -115,10 +109,10 @@ export class CompanionReviewQueue {
   private startDrain(state: QueueState): void {
     if (state.draining) return;
     state.draining = true;
-    void this.drain(state);
+    void this.drainState(state);
   }
 
-  private async drain(state: QueueState): Promise<void> {
+  private async drainState(state: QueueState): Promise<void> {
     while (!this.stopped && state.pending.length > 0) {
       const batch = state.pending.shift();
       if (batch === undefined) throw new Error('Companion review queue lost a pending batch');

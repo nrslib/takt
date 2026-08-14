@@ -1,57 +1,48 @@
 import type { RunAgentOptions } from '../../../agents/types.js';
+import type { StreamEvent } from '../../../shared/types/provider.js';
+import { createLogger } from '../../../shared/utils/index.js';
+import { safeExternalErrorMessage } from '../../../shared/utils/safeExternalErrorMessage.js';
+import { truncateUtf8 } from '../../../shared/utils/utf8.js';
 import type { ProviderRoutingEntry } from '../../models/config-types.js';
 import type {
   AgentResponse,
-  CompanionFindingEvidence,
+  CompanionFinding,
   NormalAgentWorkflowStep,
   ResolvedCompanionDefinition,
   WorkflowState,
 } from '../../models/index.js';
-import { truncateUtf8 } from '../../../shared/utils/utf8.js';
-import type { StreamEvent } from '../../../shared/types/provider.js';
+import { createSelectorContract, validateSelectorResponse } from '../selector-contract.js';
 import type { CompanionReviewPhase, SelectorProviderInfo } from '../types.js';
-import { createLogger } from '../../../shared/utils/index.js';
+import { createAbortError } from './abort.js';
 import {
   CompanionChangeDetector,
   type CompanionChangeSkipReason,
 } from './change-detector.js';
-import {
-  LOOP_JUDGE_OUTPUT_JSON_SCHEMA,
-  parseLoopJudgeOutput,
-} from './contracts.js';
-import { CompanionReviewQueue, type CompanionReviewRequest } from './review-queue.js';
-import {
-  sanitizeCompanionSelectorRationale,
-  selectActiveCompanions,
-} from './selection.js';
+import { CompanionCompletionCoordinator } from './completion-coordinator.js';
 import type { CompanionDiff, CompanionDiffReader } from './diff-reader.js';
-import { buildCompanionMailboxPath } from './mailbox.js';
-import { CompanionReviewStateStore } from './review-state-store.js';
-import {
-  buildCompanionLoopJudgePrompt,
-  evaluateCompanionLoop,
-  type CompanionLoopRound,
-} from './loop-guard.js';
-import { createAbortError } from './abort.js';
-import { isCompanionCapacityError } from './limits.js';
-import { executeCompanionReviewRound } from './review-round.js';
-import type { CompanionFixReviewContext } from './fix-loop.js';
 import {
   CompanionEventPublisher,
   type CompanionEventEmitter,
 } from './event-publisher.js';
-import { CompanionStructuredCaller } from './structured-call.js';
+import type { CompanionFollowUpContext } from './fix-loop.js';
+import { buildCompanionMailboxPath } from './mailbox.js';
+import { CompanionReviewQueue, type CompanionReviewRequest } from './review-queue.js';
 import type { CompanionCallAudit } from './review-runner.js';
+import {
+  executeCompanionReviewRound,
+  type CompanionReviewRoundAudit,
+} from './review-round.js';
+import {
+  sanitizeCompanionSelectorRationale,
+  selectActiveCompanions,
+} from './selection.js';
+import { CompanionStructuredCaller } from './structured-call.js';
 import { CompanionTriggerScheduler } from './trigger-scheduler.js';
-import { CompanionCompletionCoordinator } from './completion-coordinator.js';
-import { CompanionTerminalDecisionTracker } from './terminal-decision.js';
-import { createSelectorContract, validateSelectorResponse } from '../selector-contract.js';
-import { toCompanionFindingEvidence } from './evidence.js';
-import { safeExternalErrorMessage } from '../../../shared/utils/safeExternalErrorMessage.js';
 
 const MINIMUM_CHANGED_LINES = 10;
 const ROUND_CONTEXT_MAX_BYTES = 4 * 1024;
 const log = createLogger('companion-step-runtime');
+
 interface CompanionStepRuntimeDeps {
   readonly cwd: string;
   readonly projectCwd: string;
@@ -66,7 +57,6 @@ interface CompanionStepRuntimeDeps {
   readonly selectorProvider?: SelectorProviderInfo;
   readonly diffReader: CompanionDiffReader;
   readonly abortSignal?: AbortSignal;
-  readonly stateStore: CompanionReviewStateStore;
   readonly emitEvent: CompanionEventEmitter;
   readonly recordUsage: (
     name: string,
@@ -82,11 +72,11 @@ export class CompanionStepRuntime {
   private readonly queue: CompanionReviewQueue;
   private readonly events: CompanionEventPublisher;
   private readonly structuredCaller: CompanionStructuredCaller;
-  private readonly terminalDecision = new CompanionTerminalDecisionTracker();
+  private readonly undeliveredFindings: CompanionFinding[] = [];
   private scheduler: CompanionTriggerScheduler | undefined;
   private completionCoordinator: CompanionCompletionCoordinator | undefined;
   private baselineSha = '';
-  private currentFixRound: number | undefined;
+  private currentFollowUpRound = 0;
   private stopped = false;
   private latestImplementerExplanation: string | undefined;
   private readonly emittedReviewSkips = new Set<string>();
@@ -131,17 +121,14 @@ export class CompanionStepRuntime {
       },
     });
     this.queue = new CompanionReviewQueue({
-      runReview: async (request) => {
-        await this.runReview(request);
-      },
+      runReview: async (request) => this.runReview(request),
       refreshRetryRequest: async (request, signal) => {
-        const detector = this.detectors.get(request.companionName);
-        if (detector === undefined) {
-          throw new Error(`Missing detector for companion "${request.companionName}"`);
-        }
-        const observedGeneration = detector.getObservedGeneration();
-        const snapshot = await this.readSnapshot(signal);
-        return { ...request, snapshot, observedGeneration };
+        const detector = this.requireDetector(request.companionName);
+        return {
+          ...request,
+          snapshot: await this.readSnapshot(signal),
+          observedGeneration: detector.getObservedGeneration(),
+        };
       },
       onCoalesced: (event) => this.events.queueCoalesced({
         companion: event.companionName,
@@ -165,7 +152,7 @@ export class CompanionStepRuntime {
   }
 
   observe(event: StreamEvent): void {
-    this.requireScheduler().observe(event);
+    this.scheduler?.observe(event);
   }
 
   composeOptions(options: RunAgentOptions): RunAgentOptions {
@@ -182,40 +169,45 @@ export class CompanionStepRuntime {
   async complete(
     state: WorkflowState,
     implementerResponse: string,
-    context: CompanionFixReviewContext,
-  ): Promise<{
-    openMustFix: CompanionFindingEvidence[];
-    escalated: boolean;
-    reason?: string;
-  }> {
-    const explanation = truncateUtf8(
-      implementerResponse,
-      ROUND_CONTEXT_MAX_BYTES,
-    ).value.trim();
+    context: CompanionFollowUpContext,
+  ): Promise<{ readonly findings: readonly CompanionFinding[] }> {
+    const explanation = truncateUtf8(implementerResponse, ROUND_CONTEXT_MAX_BYTES).value.trim();
     this.latestImplementerExplanation = explanation.length === 0 ? undefined : explanation;
-    this.requireScheduler().beginCompletion();
-    return this.requireCompletionCoordinator().complete(state, {
-      allowUnchangedDigest: (companionName) => (
-        context.afterFix
-        && context.fixRound === this.currentFixRound
-        && this.latestImplementerExplanation !== undefined
-        && this.hasOpenMustFix(companionName)
-      ),
-    });
+    this.scheduler?.beginCompletion();
+
+    const completion = this.completionCoordinator === undefined
+      ? { completionSettled: true, completionFailure: false }
+      : await this.completionCoordinator.complete();
+    const findings = this.takeUndeliveredFindings();
+    const completionSettled = completion.completionSettled && findings.length === 0;
+    state.companion = {
+      completionSettled,
+      followUpRounds: context.followUpRound,
+      ...(completion.completionFailure ? { completionFailure: true } : {}),
+      ...(completion.reason === undefined ? {} : { reason: completion.reason }),
+    };
+    if (findings.length === 0) {
+      this.events.complete({
+        completionSettled,
+        completionFailure: completion.completionFailure,
+        followUpRounds: context.followUpRound,
+        ...(completion.reason === undefined ? {} : { reason: completion.reason }),
+      });
+    }
+    return { findings };
   }
 
   beginReviewAttempt(): void {
-    this.currentFixRound = undefined;
+    this.currentFollowUpRound = 0;
     this.latestImplementerExplanation = undefined;
-    this.terminalDecision.reset();
     this.events.beginAttempt();
-    this.requireScheduler().start();
+    this.scheduler?.start();
   }
 
-  beginFixRound(sequence: number, openMustFixCount: number): void {
-    this.currentFixRound = sequence - 1;
-    this.events.fixRound(sequence, openMustFixCount);
-    this.requireScheduler().start();
+  beginFollowUpRound(sequence: number, findingCount: number): void {
+    this.currentFollowUpRound = sequence - 1;
+    this.events.fixRound(sequence, findingCount);
+    this.scheduler?.start();
   }
 
   stop = (): void => {
@@ -231,10 +223,6 @@ export class CompanionStepRuntime {
   }
 
   private async initialize(): Promise<void> {
-    this.baselineSha = await this.deps.diffReader.readBaselineSha(
-      this.deps.cwd,
-      this.deps.abortSignal,
-    );
     const definitions = new Map(Object.entries(this.deps.definitions));
     const moderatorName = this.deps.step.companion?.moderator;
     if (moderatorName !== undefined) {
@@ -252,26 +240,23 @@ export class CompanionStepRuntime {
       runSelector: async (request) => this.runSelector(request),
     });
     if (selected.length === 0) {
-      this.emitReviewSkipped({
-        phase: 'initial',
-        reason: 'selector_empty',
-      });
+      this.emitReviewSkipped({ phase: 'initial', reason: 'selector_empty' });
+      return;
     }
+
     const resolved = selected.map((item) => {
       const definition = definitions.get(item.name);
       if (definition === undefined) throw new Error(`Undefined companion "${item.name}"`);
       this.requireProvider(item.name);
       return { name: item.name, definition };
     });
+    this.baselineSha = await this.deps.diffReader.readBaselineSha(
+      this.deps.cwd,
+      this.deps.abortSignal,
+    );
     const initialSnapshot = await this.readSnapshot(this.deps.abortSignal);
     for (const { name, definition } of resolved) {
       this.active.set(name, definition);
-      try {
-        this.deps.stateStore.get(this.mailboxPath(name), name);
-      } catch (error) {
-        if (!isCompanionCapacityError(error)) throw error;
-        this.recordCapacityExceeded(name);
-      }
       this.detectors.set(name, new CompanionChangeDetector({
         intervalMs: definition.intervalMs,
         minimumChangedLines: MINIMUM_CHANGED_LINES,
@@ -293,11 +278,9 @@ export class CompanionStepRuntime {
       }),
       onSkipped: ({ companionName, reason, candidate }) => this.emitReviewSkipped({
         companion: companionName,
-        phase: candidate.reason === 'completion'
-          ? 'completion'
-          : this.currentFixRound === undefined ? 'live' : 'fix',
+        phase: this.currentFollowUpRound === 0 ? 'live' : 'fix',
         reason,
-        ...(this.currentFixRound === undefined ? {} : { fixRound: this.currentFixRound }),
+        ...(this.currentFollowUpRound === 0 ? {} : { fixRound: this.currentFollowUpRound }),
         observedGeneration: candidate.observedGeneration,
       }),
     });
@@ -306,27 +289,17 @@ export class CompanionStepRuntime {
       detectors: this.detectors,
       queue: this.queue,
       readSnapshot: () => this.readSnapshot(this.deps.abortSignal),
-      synchronizeSnapshot: (snapshot) => this.requireScheduler().synchronizeSnapshot(snapshot),
-      openMustFix: () => this.openMustFix(),
-      recordCompletionRound: async (snapshot) => this.recordStandaloneRound(
-        snapshot.digest,
-        summarizeDiff(snapshot),
-        this.latestImplementerExplanation,
-        [],
-        this.currentFixRound,
-        this.deps.abortSignal,
-      ),
-      decision: this.terminalDecision,
-      events: this.events,
+      synchronizeSnapshot: (snapshot) => this.scheduler?.synchronizeSnapshot(snapshot),
       abortSignal: this.deps.abortSignal,
-      onError: () => log.warn('Companion completion review failed; confirmed findings were retained', {
+      onError: (error) => log.warn('Companion completion review failed', {
         step: this.deps.step.name,
+        error: safeExternalErrorMessage(error),
       }),
       onSkipped: ({ companionName, reason, candidate }) => this.emitReviewSkipped({
         companion: companionName,
         phase: 'completion',
         reason,
-        ...(this.currentFixRound === undefined ? {} : { fixRound: this.currentFixRound }),
+        ...(this.currentFollowUpRound === 0 ? {} : { fixRound: this.currentFollowUpRound }),
         observedGeneration: candidate.observedGeneration,
       }),
     });
@@ -370,209 +343,91 @@ export class CompanionStepRuntime {
     request: CompanionReviewRequest & { signal: AbortSignal },
   ): Promise<void> {
     const { companionName, snapshot: diff, observedGeneration, signal } = request;
-    if (!this.active.has(companionName)) {
-      throw new Error(`Inactive companion "${companionName}"`);
-    }
-    const detector = this.detectors.get(companionName);
-    if (detector === undefined) throw new Error(`Missing detector for companion "${companionName}"`);
+    if (!this.active.has(companionName)) throw new Error(`Inactive companion "${companionName}"`);
+    const detector = this.requireDetector(companionName);
+    const result = await executeCompanionReviewRound({
+      companionName,
+      diff,
+      trigger: request.reason,
+      observedGeneration,
+      changedRegionsSincePreviousReview: detector.changedRegionsSinceLastReview(diff),
+      diffSummary: summarizeDiff(diff),
+      implementerExplanation: this.latestImplementerExplanation,
+      signal,
+      task: this.deps.task,
+      stepName: this.deps.step.name,
+      moderatorName: this.deps.step.companion?.moderator,
+      mailboxPath: this.mailboxPath(companionName),
+      systemPrompt: (name) => this.definitionSystemPrompt(name),
+      callStructured: async (
+        purpose,
+        agentName,
+        systemPrompt,
+        prompt,
+        schema,
+        reviewSignal,
+        validateResponse,
+      ) => this.structuredCaller.call({
+        purpose,
+        agentName,
+        provider: this.requireProvider(agentName),
+        systemPrompt,
+        prompt,
+        outputSchema: schema,
+        abortSignal: reviewSignal,
+        validateResponse,
+      }),
+      emitFinding: (finding) => this.emitFinding(finding),
+      markReviewed: (snapshot, generation) => detector.markReviewed(snapshot, generation),
+      onRoundCompleted: (round) => this.emitReviewRound(companionName, round),
+    });
+    this.undeliveredFindings.push(...result.acceptedRows);
+  }
+
+  private emitFinding(finding: CompanionFinding): void {
     try {
-      await executeCompanionReviewRound({
-        companionName,
-        diff,
-        trigger: request.reason,
-        observedGeneration,
-        changedRegionsSincePreviousReview: detector.changedRegionsSinceLastReview(diff),
-        diffSummary: summarizeDiff(diff),
-        implementerExplanation: this.latestImplementerExplanation,
-        signal,
-        task: this.deps.task,
-        stepName: this.deps.step.name,
-        activeNames: [...this.active.keys()],
-        moderatorName: this.deps.step.companion?.moderator,
-        stateStore: this.deps.stateStore,
-        mailboxPath: (name) => this.mailboxPath(name),
-        systemPrompt: (name) => this.definitionSystemPrompt(name),
-        openFindings: () => this.openFindings(),
-        callStructured: async (
-          purpose,
-          agentName,
-          systemPrompt,
-          prompt,
-          schema,
-          reviewSignal,
-          validateResponse,
-        ) => (
-          this.structuredCaller.call({
-            purpose,
-            agentName,
-            provider: this.requireProvider(agentName),
-            systemPrompt,
-            prompt,
-            outputSchema: schema,
-            abortSignal: reviewSignal,
-            validateResponse,
-          })
-        ),
-        emitFinding: (ownerName, findingId, severity) => {
-          this.events.finding(ownerName, findingId, severity);
+      this.events.finding(finding);
+    } catch (error) {
+      this.reportCompanionAuditWriteFailure('companion_review_round', error, {
+        companion: finding.companion,
+      });
+    }
+  }
+
+  private emitReviewRound(
+    companionName: string,
+    round: CompanionReviewRoundAudit,
+  ): void {
+    try {
+      this.events.reviewRound({
+        companion: companionName,
+        trigger: round.trigger,
+        digest: round.snapshot.digest,
+        changedLines: round.snapshot.changedLines,
+        findingCount: round.acceptedRows.length,
+        reviewerFindings: round.reviewerResult.findings,
+        moderator: {
+          name: round.moderator.name,
+          invoked: round.moderator.invoked,
+          ...(round.moderator.reason === undefined ? {} : { reason: round.moderator.reason }),
+          decisions: round.moderator.result?.findings ?? [],
         },
-        markReviewed: (snapshot, generation) => detector.markReviewed(snapshot, generation),
-        evaluateRound: async (digest, diffSummary, implementerExplanation, transitions) => (
-          this.evaluateRound(
-            digest,
-            diffSummary,
-            implementerExplanation,
-            transitions,
-            this.currentFixRound,
-            signal,
-          )
-        ),
-        applyRoundDecision: (decision) => this.terminalDecision.update(decision),
-        onRoundCompleted: (round) => {
-          try {
-            this.events.reviewRound({
-              companion: companionName,
-              trigger: round.trigger,
-              digest: round.snapshot.digest,
-              changedLines: round.snapshot.changedLines,
-              findingCount: round.findingCount,
-              reviewerFindings: round.reviewerResult.findings,
-              reviewerUpdates: round.reviewerResult.updates,
-              ...(round.moderator === undefined ? {} : {
-                moderator: {
-                  name: round.moderator.name,
-                  invoked: round.moderator.invoked,
-                  ...(round.moderator.reason === undefined ? {} : { reason: round.moderator.reason }),
-                  decisions: round.moderator.result?.findings ?? [],
-                },
-              }),
-              acceptedFindings: round.accepted.findings,
-              acceptedUpdates: round.accepted.updates,
-              ...(round.zeroReason === undefined ? {} : { zeroReason: round.zeroReason }),
-            });
-          } catch (error) {
-            this.reportCompanionAuditWriteFailure('companion_review_round', error, {
-              companion: companionName,
-            });
-          }
-        },
+        acceptedFindings: round.accepted.findings,
+        ...(round.reviewerResult.findings.length === 0
+          ? { zeroReason: 'reviewer_returned_no_findings' as const }
+          : round.accepted.findings.length === 0
+            ? { zeroReason: 'moderator_rejected_all_findings' as const }
+            : {}),
       });
     } catch (error) {
-      if (!isCompanionCapacityError(error)) throw error;
-      this.recordCapacityExceeded(companionName);
+      this.reportCompanionAuditWriteFailure('companion_review_round', error, {
+        companion: companionName,
+      });
     }
   }
 
-  private async evaluateRound(
-    diffDigest: string,
-    diffSummary: string,
-    implementerExplanation: string | undefined,
-    transitions: CompanionLoopRound['transitions'],
-    fixRound?: number,
-    abortSignal?: AbortSignal,
-  ) {
-    const openFindings = this.openFindings();
-    const historyScope = this.historyScope();
-    const round: CompanionLoopRound = {
-      diffDigest,
-      diffSummary,
-      ...(implementerExplanation === undefined ? {} : { implementerExplanation }),
-      openCount: openFindings.length,
-      transitions,
-      ...(fixRound === undefined ? {} : { fixRound }),
-    };
-    const history = this.deps.stateStore.previewRound(historyScope, round);
-    const evaluated = await evaluateCompanionLoop({
-      history,
-      judge: async ({ history: judgeHistory, signals }) => {
-        const judgeName = this.deps.step.companion?.moderator ?? this.active.keys().next().value;
-        if (judgeName === undefined) return { decision: 'continue' as const };
-        const response = await this.structuredCaller.call({
-          purpose: 'judge',
-          agentName: judgeName,
-          provider: this.requireProvider(judgeName),
-          systemPrompt: this.definitionSystemPrompt(judgeName),
-          prompt: buildCompanionLoopJudgePrompt(judgeHistory, signals),
-          outputSchema: LOOP_JUDGE_OUTPUT_JSON_SCHEMA,
-          abortSignal,
-          validateResponse: (candidate) => {
-            parseLoopJudgeOutput(candidate.structuredOutput);
-          },
-        });
-        return parseLoopJudgeOutput(response.structuredOutput);
-      },
-    });
-    return {
-      historyScope,
-      round,
-      decision: {
-        decision: evaluated.decision,
-        ...(evaluated.reason === undefined ? {} : { reason: evaluated.reason }),
-      },
-    };
-  }
-
-  private async recordStandaloneRound(
-    diffDigest: string,
-    diffSummary: string,
-    implementerExplanation: string | undefined,
-    transitions: CompanionLoopRound['transitions'],
-    fixRound?: number,
-    abortSignal?: AbortSignal,
-  ): Promise<void> {
-    const evaluated = await this.evaluateRound(
-      diffDigest,
-      diffSummary,
-      implementerExplanation,
-      transitions,
-      fixRound,
-      abortSignal,
-    );
-    this.deps.stateStore.recordRound(evaluated.historyScope, evaluated.round);
-    this.terminalDecision.update(evaluated.decision);
-  }
-
-  private openFindings() {
-    const open = [];
-    for (const name of this.active.keys()) {
-      try {
-        open.push(...this.deps.stateStore.get(this.mailboxPath(name), name).mailbox.findings.filter(
-          ({ status }) => status === 'open' || status === 'unresolved',
-        ));
-      } catch (error) {
-        if (!isCompanionCapacityError(error)) throw error;
-        this.recordCapacityExceeded(name);
-      }
-    }
-    return open;
-  }
-
-  private hasOpenMustFix(companionName: string): boolean {
-    try {
-      return this.deps.stateStore.get(
-        this.mailboxPath(companionName),
-        companionName,
-      ).mailbox.findings.some(({ severity, status }) => (
-        severity === 'must_fix' && (status === 'open' || status === 'unresolved')
-      ));
-    } catch (error) {
-      if (!isCompanionCapacityError(error)) throw error;
-      this.recordCapacityExceeded(companionName);
-      return false;
-    }
-  }
-
-  private recordCapacityExceeded(companionName: string): void {
-    this.terminalDecision.update({
-      decision: 'escalate',
-      reason: `Companion "${companionName}" reached its cumulative capacity.`,
-    });
-  }
-
-  private openMustFix(): CompanionFindingEvidence[] {
-    return this.openFindings()
-      .filter(({ severity }) => severity === 'must_fix')
-      .map(toCompanionFindingEvidence);
+  private takeUndeliveredFindings(): CompanionFinding[] {
+    return this.undeliveredFindings.splice(0);
   }
 
   private definitionSystemPrompt(name: string): string {
@@ -586,16 +441,8 @@ export class CompanionStepRuntime {
     ].filter((content): content is string => content !== undefined).join('\n\n');
   }
 
-  private historyScope(): string {
-    return [this.deps.runSlug, ...this.deps.runPathNamespace, this.deps.step.name].join('\0');
-  }
-
   private async readSnapshot(signal: AbortSignal | undefined): Promise<CompanionDiff> {
-    const result = await this.deps.diffReader.readDiff(
-      this.deps.cwd,
-      this.baselineSha,
-      signal,
-    );
+    const result = await this.deps.diffReader.readDiff(this.deps.cwd, this.baselineSha, signal);
     if (result.status === 'ok') return result.snapshot;
     if (result.failure.code === 'aborted') throw createAbortError();
     throw new Error(
@@ -609,6 +456,12 @@ export class CompanionStepRuntime {
     return provider;
   }
 
+  private requireDetector(name: string): CompanionChangeDetector {
+    const detector = this.detectors.get(name);
+    if (detector === undefined) throw new Error(`Missing detector for companion "${name}"`);
+    return detector;
+  }
+
   private mailboxPath(name: string): string {
     return buildCompanionMailboxPath({
       cwd: this.deps.cwd,
@@ -617,18 +470,6 @@ export class CompanionStepRuntime {
       stepName: this.deps.step.name,
       companionName: name,
     });
-  }
-
-  private requireScheduler(): CompanionTriggerScheduler {
-    if (this.scheduler === undefined) throw new Error('Companion trigger scheduler is not initialized');
-    return this.scheduler;
-  }
-
-  private requireCompletionCoordinator(): CompanionCompletionCoordinator {
-    if (this.completionCoordinator === undefined) {
-      throw new Error('Companion completion coordinator is not initialized');
-    }
-    return this.completionCoordinator;
   }
 
   private emitReviewSkipped(input: {

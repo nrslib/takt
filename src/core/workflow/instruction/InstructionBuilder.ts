@@ -258,14 +258,14 @@ export class InstructionBuilder {
           `${companionCopy.inboxLabel}: ${this.context.companion.mailboxDirectory}`,
           '各ファイルの実装完了後、テスト実行前、作業完了宣言の直前に新規レコードを確認してください。',
           companionCopy.evidenceGuard,
-          '`must_fix` は直ちに対応し、`should_fix` は作業の区切りで対応し、`nit` は無視して構いません。',
+          '指摘は参考情報です。現在のコードで検証し、対応するかどうかは自分で判断してください。対応しない場合は理由を応答に書いてください。',
         ].join('\n')
       : [
           `## ${companionCopy.heading}`,
           `${companionCopy.inboxLabel}: ${this.context.companion.mailboxDirectory}`,
           'Read new records after finishing each file, before running tests, and before declaring completion.',
           companionCopy.evidenceGuard,
-          'Address must_fix immediately, handle should_fix at a work boundary, and nit findings may be ignored.',
+          'Findings are advisory. Verify them against the current code and decide whether to act. Explain in your response why you do not address a finding.',
         ].join('\n');
     return [instructions, '', section].join('\n');
   }
