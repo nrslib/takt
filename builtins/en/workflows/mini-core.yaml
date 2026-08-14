@@ -133,6 +133,8 @@ steps:
               format: supervisor-summary
               use_judge: false
     rules:
+      - condition: any("error")
+        next: reviewers
       - condition: any("BLOCKED")
         next: ABORT
       - condition: all("No AI-specific issues", "All checks passed")

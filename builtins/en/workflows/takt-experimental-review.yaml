@@ -103,6 +103,8 @@ steps:
                 format: testing-review
     rules:
       self:
+        - condition: any("error")
+          next: review
         - condition: all("approved")
           next: COMPLETE
         - condition: any("needs_fix")

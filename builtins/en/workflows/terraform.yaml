@@ -115,6 +115,8 @@ steps:
           - condition: approved
           - condition: needs_fix
     rules:
+      - condition: any("error")
+        next: reviewers
       - condition: all("Complies with Terraform conventions", "No AI-specific issues", "approved")
         next: merge-readiness-review
       - condition: any("Convention violations found", "AI-specific issues found", "needs_fix")

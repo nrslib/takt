@@ -7,6 +7,7 @@ import {
 import {
   dynamicParallelAggregateTargetLabel,
   formatWorkflowRuleCondition,
+  PARALLEL_TERMINAL_ERROR_LABEL,
   semanticLabelsOf,
   type WorkflowRuleCondition,
 } from '../../models/workflow-rule-condition.js';
@@ -64,6 +65,9 @@ export class AggregateEvaluator {
 
   private matchedCondition(subStep: WorkflowStep): WorkflowRuleCondition | undefined {
     const output = this.state.stepOutputs.get(subStep.name);
+    if (output?.status === 'error') {
+      return { kind: 'semantic', label: PARALLEL_TERMINAL_ERROR_LABEL };
+    }
     return output?.matchedRuleIndex === undefined
       ? undefined
       : subStep.rules?.[output.matchedRuleIndex]?.condition;

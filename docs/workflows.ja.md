@@ -871,8 +871,8 @@ promotion は並列サブ step ではサポートされません。
 | `provider_options.claude.skills.enabled` | `false` | `claude-sdk`、`claude`、`claude-terminal` の Claude filesystem Skill 探索を有効化する（[configuration ガイド](./configuration.ja.md#claude-skill-の継承-skills) 参照） |
 | `provider_options.opencode.allowed_tools` | - | OpenCode のツール許可リスト。ツール名は `read`, `glob`, `grep`, `bash`, `websearch`, `webfetch` のように lowercase |
 | `provider_options.opencode.variant` | - | OpenCode の model variant。プロバイダー / model 固有の文字列としてパススルー |
-| `provider_options.opencode.guards` | `standard` / 60分 | OpenCode の guard profile、先勝ちの `model_profiles`、call wall-clock、text/reasoning byte 上限（[configuration ガイド](./configuration.ja.md#プロバイダ-call-deadline-と-opencode-実行ガード)参照） |
-| `provider_options.*.guards.call_timeout_ms` | 60分 | `codex`、`opencode`、`claude`、`claude_terminal`、`cursor`、`copilot`、`kiro`、`pi` の call-wide wall-clock deadline |
+| `provider_options.opencode.guards` | `standard` / 60分 | OpenCode の guard profile、先勝ちの `model_profiles`、provider event の無応答上限、text/reasoning byte 上限（[configuration ガイド](./configuration.ja.md#プロバイダ無応答-deadline-と-opencode-実行ガード)参照） |
+| `provider_options.*.guards.call_timeout_ms` | 60分 | `codex`、`opencode`、`claude`、`claude_terminal`、`cursor`、`copilot`、`kiro`、`pi` で観測可能な provider event が届かない時間の上限。event 到達と provider 試行開始ごとにタイマーをリセットする |
 | `provider_options.codex.base_url` | - | Codex SDK constructor option 用の OpenAI 互換 base URL（[configuration ガイド](./configuration.ja.md#provider-base-url-base_url) 参照） |
 | `provider_options.codex.network_access` | - | Codex サンドボックスからのネットワークアクセスを許可（[configuration ガイド](./configuration.ja.md#ネットワークアクセス-network_access) 参照） |
 | `provider_options.codex.reasoning_effort` | - | Codex の provider 固有 reasoning effort 文字列。TAKT は値を provider へそのまま渡す |

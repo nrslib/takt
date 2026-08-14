@@ -58,6 +58,11 @@ import { listBuiltinWorkflowNames } from '../infra/config/loaders/workflowResolv
 import { loadGlobalConfig } from '../infra/config/global/globalConfig.js';
 import { validateWorkflowConfig } from '../core/workflow/engine/WorkflowValidator.js';
 import { getLanguageResourcesDir } from '../infra/resources/index.js';
+import {
+  aggregateConditionsOf,
+  PARALLEL_TERMINAL_ERROR_LABEL,
+  semanticLabelsOf,
+} from '../core/models/workflow-rule-condition.js';
 
 const loadWorkflowConfig = loadWorkflow;
 const listBuiltinWorkflowLabels = listBuiltinWorkflowNames;
@@ -108,6 +113,33 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
     expect(Array.from(workflows.values()).every(({ source }) => source === 'builtin')).toBe(true);
     expect(onWarning).not.toHaveBeenCalled();
   });
+
+  it.each(['en', 'ja'] as const)(
+    'parallel 親に review tag を持つ全 %s builtin workflow は error を先頭で明示処理する',
+    (language) => {
+      languageState.value = language;
+      const workflows = loadAllStandaloneWorkflowsWithSources(testDir);
+      const missing: string[] = [];
+
+      for (const name of workflows.keys()) {
+        const config = loadWorkflow(name, testDir);
+        expect(config, name).not.toBeNull();
+        for (const step of config.steps) {
+          if (step.parallel === undefined || !step.tags?.includes('review')) continue;
+          const firstRule = step.rules?.[0];
+          const handlesError = firstRule !== undefined
+            && aggregateConditionsOf(firstRule.condition).some((condition) => (
+              condition.targetConditions.some((target) => (
+                semanticLabelsOf(target).includes(PARALLEL_TERMINAL_ERROR_LABEL)
+              ))
+            ));
+          if (!handlesError) missing.push(`${name}/${step.name}`);
+        }
+      }
+
+      expect(missing).toEqual([]);
+    },
+  );
 
   it.each(['en', 'ja'] as const)(
     'should select scenario facets only from the %s experimental wrappers and forward their params',

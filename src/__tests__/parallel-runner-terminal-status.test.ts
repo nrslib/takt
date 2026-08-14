@@ -81,6 +81,15 @@ function makeParallelStep(): WorkflowStep {
   });
 }
 
+function makeErrorAwareParallelStep(): WorkflowStep {
+  const step = makeParallelStep();
+  step.rules = [
+    makeRule('any("error")', 'reviewers'),
+    ...(step.rules ?? []),
+  ];
+  return step;
+}
+
 function makeParallelStepInOrder(reversed: boolean): WorkflowStep {
   const aiReview = makeReviewStep('ai-antipattern-review-2nd');
   const securityReview = makeReviewStep('security-review');
@@ -278,6 +287,42 @@ describe('ParallelRunner terminal sub-step statuses', () => {
     expect(result.response.content).toContain('aggregate');
     expect(state.stepOutputs.get('reviewers')).toBe(result.response);
     expect(state.lastOutput).toBe(result.response);
+  });
+
+  it('明示した any("error") で part timeout を集約し、親を done として再試行ルールへ渡す', async () => {
+    const { runner } = makeRunner();
+    const step = makeErrorAwareParallelStep();
+    const state = makeState();
+    vi.mocked(mockRuleEvaluation).mockImplementation((evaluatedStep) => {
+      if (evaluatedStep.name === 'reviewers') return { index: 0, method: 'phase3_tag' };
+      if (evaluatedStep.name === 'security-review') return { index: 0, method: 'phase3_tag' };
+      return undefined;
+    });
+    const timeout = makeAgentResponse({
+      persona: 'ai-antipattern-review-2nd',
+      status: 'error',
+      content: '',
+      error: 'Part timeout after 100ms',
+      failureCategory: 'part_timeout',
+    });
+    queueAgentResponse(timeout);
+    queueAgentResponse(makeAgentResponse({
+      persona: 'security-review',
+      content: '[SECURITY-REVIEW:1] approved',
+    }));
+    queueAgentResponse(timeout);
+
+    const result = await runner.runParallelStep(step, state, 'test task', 5, vi.fn());
+
+    expect(result.response.status).toBe('done');
+    expect(result.response.matchedRuleIndex).toBe(0);
+    expect(result.response.content).toContain('[ERROR]');
+    expect(result.response.content).toContain('failureCategory: part_timeout');
+    expect(result.response.content).toContain('Part timeout after 100ms');
+    expect(result.workflowCallFailure).toMatchObject({
+      kind: 'step_error',
+      failureCategory: 'part_timeout',
+    });
   });
 
   it('passes engine childProcessEnv to parallel sub-step quality gates', async () => {

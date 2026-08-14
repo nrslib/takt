@@ -15,6 +15,9 @@ export type WorkflowRuleCondition =
   | { kind: 'aggregate'; aggregate: 'all' | 'any'; targetConditions: WorkflowRuleCondition[] }
   | { kind: 'and'; left: WorkflowRuleCondition; right: WorkflowRuleCondition };
 
+/** Engine-produced aggregate label for a parallel participant that ended in terminal error. */
+export const PARALLEL_TERMINAL_ERROR_LABEL = 'error';
+
 /** A semantic label selectable during Phase 3 status judgment. */
 export interface SemanticRuleCandidate {
   label: string;

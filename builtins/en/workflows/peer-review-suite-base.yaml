@@ -69,6 +69,8 @@ steps:
         $param: completion_retry_instruction
     rules:
       self:
+        - condition: any("error")
+          next: reviewers
         - condition: all("approved")
           next: COMPLETE
         - condition: any("needs_fix")

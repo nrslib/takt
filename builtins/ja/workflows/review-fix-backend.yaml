@@ -92,6 +92,8 @@ steps:
           - condition: needs_fix
 
     rules:
+      - condition: any("error")
+        next: reviewers
       - condition: all("approved")
         next: final-gate
       - condition: any("needs_fix")
