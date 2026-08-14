@@ -8,6 +8,10 @@ import {
   OPENCODE_STREAM_REASONING_BYTE_LIMIT,
   OPENCODE_STREAM_TEXT_BYTE_LIMIT,
 } from '../infra/opencode/OpenCodeStreamHandler.js';
+import {
+  OpenCodeGuardSuite,
+  type OpenCodeGuardEvaluation,
+} from '../infra/opencode/guards/index.js';
 
 type MockStreamEvent = Record<string, unknown>;
 type RunPlan =
@@ -326,6 +330,72 @@ describe('OpenCodeClient retry', () => {
     expect(promptAsync).toHaveBeenCalledOnce();
     expect(subscribe).toHaveBeenCalledOnce();
     expect(abort).toHaveBeenCalledOnce();
+  });
+
+  it('call deadline と attempt timeout が同時発生しても PART_TIMEOUT 分類を保持する', async () => {
+    let notifyStreamReady!: () => void;
+    const streamReady = new Promise<void>((resolve) => {
+      notifyStreamReady = resolve;
+    });
+    runPlans = [{
+      type: 'stream',
+      createStream: (signal?: AbortSignal) => (async function* () {
+        notifyStreamReady();
+        await waitForAbort(signal);
+      })(),
+    }];
+    const deadlineFailure: OpenCodeGuardEvaluation = {
+      guardId: 'inactivity-timeout',
+      verdict: {
+        action: 'fail',
+        reason: 'Part timeout after 60000ms',
+        abortKind: 'deadline',
+      },
+    };
+    const attemptTimeoutFailure: OpenCodeGuardEvaluation = {
+      guardId: 'idle-timeout',
+      verdict: {
+        action: 'fail',
+        reason: 'OpenCode attempt timed out',
+      },
+    };
+    let failAttempt: ((failure: OpenCodeGuardEvaluation) => void) | undefined;
+    const originalStartAttempt = OpenCodeGuardSuite.prototype.startAttempt;
+    const startAttemptSpy = vi.spyOn(OpenCodeGuardSuite.prototype, 'startAttempt')
+      .mockImplementation(function captureAttemptFailure(onFailure) {
+        failAttempt = onFailure;
+        originalStartAttempt.call(this, onFailure);
+      });
+    const getCallFailureSpy = vi.spyOn(OpenCodeGuardSuite.prototype, 'getCallFailure')
+      .mockReturnValue(deadlineFailure);
+    const { sessionCreate, promptAsync, subscribe } = installOpenCodeMock();
+    const controller = new AbortController();
+
+    try {
+      const resultPromise = new OpenCodeClient().call('coder', 'prompt', {
+        cwd: '/tmp',
+        model: 'opencode/big-pickle',
+        abortSignal: controller.signal,
+      });
+
+      await streamReady;
+      if (failAttempt === undefined) {
+        throw new Error('OpenCode attempt guard callback was not registered');
+      }
+      controller.abort(new Error(deadlineFailure.verdict.reason));
+      failAttempt(attemptTimeoutFailure);
+      const result = await resultPromise;
+
+      expect(result.status).toBe('error');
+      expect(result.error).toContain(deadlineFailure.verdict.reason);
+      expect(result.failureCategory).toBe('part_timeout');
+      expect(sessionCreate).toHaveBeenCalledOnce();
+      expect(promptAsync).toHaveBeenCalledOnce();
+      expect(subscribe).toHaveBeenCalledOnce();
+    } finally {
+      startAttemptSpy.mockRestore();
+      getCallFailureSpy.mockRestore();
+    }
   });
 
   it('inactivity timeout signal は未完了の prompt 待ちと iterator close を打ち切る', async () => {

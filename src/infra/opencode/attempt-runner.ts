@@ -983,6 +983,7 @@ export class OpenCodeAttemptRunner {
   };
 
   guardSuite.startAttempt((failure) => {
+    if (streamAbortController.signal.aborted) return;
     timeoutMessage = failure.verdict.reason;
     log.warn(failure.verdict.reason, { sessionId, model: options.model });
     abortCause = 'timeout';
