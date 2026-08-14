@@ -40,6 +40,7 @@ export {
   resolveResourcePath,
   resolveSectionMap,
   extractPersonaDisplayName,
+  isScopeRef,
 } from 'faceted-prompting';
 
 export type { FacetResolutionContext } from './workflowPackageScope.js';
@@ -78,6 +79,64 @@ function isPathInside(basePath: string, targetPath: string): boolean {
 function isPathInsideOrSame(basePath: string, targetPath: string): boolean {
   const rel = relative(resolve(basePath), resolve(targetPath));
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+function isSelectorInstructionResourcePath(spec: string): boolean {
+  return isResourcePath(spec) && !/\s/.test(spec);
+}
+
+function assertSelectorInstructionResourcePathExtension(spec: string): void {
+  if (isSelectorInstructionResourcePath(spec) && !spec.endsWith('.md')) {
+    throw new Error(`Selector instruction resource path must use a .md file: ${spec}`);
+  }
+}
+
+function selectorInstructionFacetRoots(
+  context: FacetResolutionContext | undefined,
+  includeRepertoireRoot: boolean,
+): readonly string[] {
+  if (!context) {
+    return [];
+  }
+  return [
+    ...buildCandidateDirsWithPackage('instructions', context),
+    ...(includeRepertoireRoot && context.repertoireDir ? [context.repertoireDir] : []),
+  ];
+}
+
+function assertSelectorInstructionFileIsSafe(
+  filePath: string,
+  context: FacetResolutionContext | undefined,
+  includeRepertoireRoot = false,
+): void {
+  const allowedRoot = selectorInstructionFacetRoots(context, includeRepertoireRoot)
+    .find((root) => isPathInside(root, filePath));
+  if (!allowedRoot) {
+    throw new Error(`Selector instruction file must stay inside an allowed instruction facet root: ${filePath}`);
+  }
+
+  const stats = assertPathSegmentsAreSafe(
+    allowedRoot,
+    filePath,
+    (_violation, segmentPath) => new Error(`Selector instruction file must stay inside an allowed instruction facet root and must not use symlinks: ${segmentPath}`),
+  );
+  if (!stats) {
+    throw new Error(`Selector instruction file not found: ${filePath}`);
+  }
+
+  const rootStats = lstatSync(allowedRoot);
+  if (rootStats.isSymbolicLink() || !rootStats.isDirectory()) {
+    throw new Error(`Selector instruction facet root must be a directory and must not be a symlink: ${allowedRoot}`);
+  }
+  if (stats.isSymbolicLink() || !stats.isFile()) {
+    throw new Error(`Selector instruction file must be a regular file and must not be a symlink: ${filePath}`);
+  }
+
+  const realRoot = realpathSync(allowedRoot);
+  const realFilePath = realpathSync(filePath);
+  if (!isPathInside(realRoot, realFilePath)) {
+    throw new Error(`Selector instruction file must stay inside an allowed instruction facet root: ${filePath}`);
+  }
 }
 
 function contentSourceLabel(content: ResolvedFacetContent): string {
@@ -126,13 +185,20 @@ export function resolveResourceContentWithSource(
   context?: FacetResolutionContext,
   trustedRoot?: string,
   requireFile?: boolean,
+  selectorInstruction = false,
 ): ResolvedFacetContent | undefined {
   if (spec == null) {
     return undefined;
   }
-  if (spec.endsWith('.md')) {
+  if (selectorInstruction) {
+    assertSelectorInstructionResourcePathExtension(spec);
+  }
+  if (spec.endsWith('.md') && (!selectorInstruction || !/\s/.test(spec))) {
     const resolved = resolveResourcePath(spec, workflowDir);
     if (existsSync(resolved)) {
+      if (selectorInstruction) {
+        assertSelectorInstructionFileIsSafe(resolved, context);
+      }
       if (trustedRoot !== undefined) {
         assertPathSegmentsAreSafe(
           trustedRoot,
@@ -160,13 +226,28 @@ export function resolveSectionMapWithSource(
   facetType: FacetType,
   context?: FacetResolutionContext,
   trustedRoot?: string,
+  selectorInstructionRefs?: ReadonlySet<string>,
 ): ResolvedSectionMap | undefined {
   if (!raw) {
     return undefined;
   }
   const resolved: ResolvedSectionMap = {};
   for (const [name, value] of Object.entries(raw)) {
-    const content = resolveResourceContentWithSource(value, workflowDir, facetType, name, context, trustedRoot);
+    const selectorInstruction = facetType === 'instructions'
+      && selectorInstructionRefs?.has(name) === true;
+    const requireFile = selectorInstruction
+      && isResourcePath(value)
+      && !/\s/.test(value);
+    const content = resolveResourceContentWithSource(
+      value,
+      workflowDir,
+      facetType,
+      name,
+      context,
+      trustedRoot,
+      requireFile,
+      selectorInstruction,
+    );
     if (content?.content) {
       resolved[name] = content;
     }
@@ -378,6 +459,7 @@ function resolveFacetFromCandidateDirs(
   refName: string,
   context?: FacetResolutionContext,
   excludeSourcePath?: string,
+  selectorInstruction = false,
 ): ResolvedFacetContent | undefined {
   for (const dir of candidateDirs) {
     const filePath = join(dir, `${name}.md`);
@@ -385,6 +467,9 @@ function resolveFacetFromCandidateDirs(
       continue;
     }
     if (existsSync(filePath)) {
+      if (selectorInstruction) {
+        assertSelectorInstructionFileIsSafe(filePath, context);
+      }
       return {
         content: readFacetFile(filePath, facetType, context),
         sourcePath: filePath,
@@ -401,6 +486,7 @@ function resolveParentFacetWithSource(
   facetType: FacetType,
   context: FacetResolutionContext | undefined,
   currentSourcePath: string,
+  selectorInstruction = false,
 ): ResolvedFacetContent | undefined {
   if (!context) {
     return undefined;
@@ -409,7 +495,15 @@ function resolveParentFacetWithSource(
   const candidateDirs = buildCandidateDirsWithPackage(facetType, context);
   const sourceLayerIndex = findSourceLayerIndex(currentSourcePath, candidateDirs);
   const searchDirs = candidateDirs.slice(sourceLayerIndex ?? 0);
-  return resolveFacetFromCandidateDirs(parentName, facetType, searchDirs, parentName, context, currentSourcePath);
+  return resolveFacetFromCandidateDirs(
+    parentName,
+    facetType,
+    searchDirs,
+    parentName,
+    context,
+    currentSourcePath,
+    selectorInstruction,
+  );
 }
 
 function expandFacetInheritance(
@@ -417,6 +511,7 @@ function expandFacetInheritance(
   facetType: FacetType | undefined,
   context: FacetResolutionContext | undefined,
   frames: FacetInheritanceFrame[] = [],
+  selectorInstruction = false,
 ): ResolvedFacetContent {
   if (!facetType) {
     return resolved;
@@ -436,7 +531,13 @@ function expandFacetInheritance(
     throw new Error(`Facet inheritance cycle detected: ${formatInheritanceChain(frames, resolved)}`);
   }
 
-  const parent = resolveParentFacetWithSource(directive.parentName, facetType, context, resolved.sourcePath);
+  const parent = resolveParentFacetWithSource(
+    directive.parentName,
+    facetType,
+    context,
+    resolved.sourcePath,
+    selectorInstruction,
+  );
   if (!parent) {
     throw new Error(`Facet extends parent "${directive.parentName}" not found for ${sourceLabel}`);
   }
@@ -444,7 +545,7 @@ function expandFacetInheritance(
   const expandedParent = expandFacetInheritance(parent, facetType, context, [
     ...frames,
     { sourcePath: resolved.sourcePath, refName: resolved.refName },
-  ]);
+  ], selectorInstruction);
   return {
     ...resolved,
     content: `${resolved.content.slice(0, directive.start)}${expandedParent.content}${resolved.content.slice(directive.end)}`,
@@ -552,6 +653,28 @@ export interface ResolveRefToContentWithSourceOptions {
    * リテラル文字列として本文に混入するのを防ぐために指定する。
    */
   readonly requireFile?: boolean;
+  /** selector instruction の path-like resource を許可 facet root に限定する。 */
+  readonly selectorInstruction?: boolean;
+}
+
+export function resolveSelectorInstruction(
+  ref: string,
+  resolvedMap: ResolvedMapInput | undefined,
+  workflowDir: string,
+  context?: FacetResolutionContext,
+): string | undefined {
+  assertSelectorInstructionResourcePathExtension(ref);
+  return resolveRefToContentWithSource(
+    ref,
+    resolvedMap,
+    workflowDir,
+    'instructions',
+    context,
+    {
+      selectorInstruction: true,
+      ...(isSelectorInstructionResourcePath(ref) ? { requireFile: true } : {}),
+    },
+  )?.content;
 }
 
 export function resolveRefToContentWithSource(
@@ -565,46 +688,93 @@ export function resolveRefToContentWithSource(
   const mapped = resolvedMap?.[ref];
   if (mapped !== undefined) {
     const resolved = toResolvedContent(mapped, facetType, ref);
-    // When requireFile is set and the mapped value is a .md path that was never
-    // resolved to an actual file (sourcePath is undefined), the path string leaked
-    // into content. Re-resolve with requireFile to fail-fast on missing files.
+    if (options?.selectorInstruction && resolved.sourcePath !== undefined) {
+      assertSelectorInstructionResourcePathExtension(resolved.sourcePath);
+      assertSelectorInstructionFileIsSafe(resolved.sourcePath, context);
+    }
     if (
       options?.requireFile === true
       && resolved.sourcePath === undefined
-      && resolved.content.endsWith('.md')
+      && (options.selectorInstruction
+        ? isSelectorInstructionResourcePath(resolved.content)
+        : resolved.content.endsWith('.md'))
     ) {
-      const resource = resolveResourceContentWithSource(resolved.content, workflowDir, facetType, ref, context, options?.trustedRoot, true);
+      const resource = resolveResourceContentWithSource(
+        resolved.content,
+        workflowDir,
+        facetType,
+        ref,
+        context,
+        options.trustedRoot,
+        true,
+        options.selectorInstruction === true,
+      );
       if (resource === undefined) return undefined;
-      return applyFacetIncludes(expandFacetInheritance(resource, facetType, context), context);
+      return applyFacetIncludes(
+        expandFacetInheritance(resource, facetType, context, [], options.selectorInstruction === true),
+        context,
+      );
     }
-    return applyFacetIncludes(expandFacetInheritance(resolved, facetType, context), context);
+    return applyFacetIncludes(expandFacetInheritance(resolved, facetType, context, [], options?.selectorInstruction === true), context);
   }
 
   if (facetType && context && isScopeRef(ref) && context.repertoireDir) {
     const scopeRef = parseScopeRef(ref);
     const filePath = resolveScopeRef(scopeRef, facetType, context.repertoireDir);
+    if (options?.selectorInstruction && existsSync(filePath)) {
+      assertSelectorInstructionFileIsSafe(filePath, context, true);
+    }
     return existsSync(filePath)
       ? applyFacetIncludes(expandFacetInheritance({
           content: readScopedFacetFile(filePath, context),
           sourcePath: filePath,
           facetType,
           refName: ref,
-        }, facetType, context), context)
+        }, facetType, context, [], options?.selectorInstruction === true), context)
       : undefined;
   }
 
+  if (options?.selectorInstruction === true && isScopeRef(ref)) {
+    return undefined;
+  }
+
   if (isResourcePath(ref)) {
-    const resource = resolveResourceContentWithSource(ref, workflowDir, facetType, ref, context, options?.trustedRoot, options?.requireFile);
-    return resource ? applyFacetIncludes(expandFacetInheritance(resource, facetType, context), context) : undefined;
+    if (options?.selectorInstruction && isSelectorInstructionResourcePath(ref)) {
+      assertSelectorInstructionFileIsSafe(resolveResourcePath(ref, workflowDir), context);
+    }
+    const resource = resolveResourceContentWithSource(
+      ref,
+      workflowDir,
+      facetType,
+      ref,
+      context,
+      options?.trustedRoot,
+      options?.requireFile,
+      options?.selectorInstruction === true,
+    );
+    return resource
+      ? applyFacetIncludes(expandFacetInheritance(resource, facetType, context, [], options?.selectorInstruction === true), context)
+      : undefined;
   }
 
   const candidateDirs = facetType && context
     ? buildCandidateDirsWithPackage(facetType, context)
     : undefined;
   if (candidateDirs) {
-    const facetContent = resolveFacetFromCandidateDirs(ref, facetType!, candidateDirs, ref, context);
+    const facetContent = resolveFacetFromCandidateDirs(
+      ref,
+      facetType!,
+      candidateDirs,
+      ref,
+      context,
+      undefined,
+      options?.selectorInstruction === true,
+    );
     if (facetContent !== undefined) {
-      return applyFacetIncludes(expandFacetInheritance(facetContent, facetType, context), context);
+      return applyFacetIncludes(
+        expandFacetInheritance(facetContent, facetType, context, [], options?.selectorInstruction === true),
+        context,
+      );
     }
   }
 
@@ -617,8 +787,26 @@ export function resolveRefToContentWithSource(
     return undefined;
   }
 
-  const resource = resolveResourceContentWithSource(ref, workflowDir, facetType, ref, context, options?.trustedRoot);
-  return resource ? applyFacetIncludes(expandFacetInheritance(resource, facetType, context), context) : undefined;
+  // Selector guidance treats a whitespace-free bare value as a named facet
+  // reference. Do not silently turn a missing name into the instruction text;
+  // whitespace-containing values remain supported as inline guidance.
+  if (options?.selectorInstruction === true && isBareName && !/\s/.test(ref)) {
+    return undefined;
+  }
+
+  const resource = resolveResourceContentWithSource(
+    ref,
+    workflowDir,
+    facetType,
+    ref,
+    context,
+    options?.trustedRoot,
+    undefined,
+    options?.selectorInstruction === true,
+  );
+  return resource
+    ? applyFacetIncludes(expandFacetInheritance(resource, facetType, context, [], options?.selectorInstruction === true), context)
+    : undefined;
 }
 
 export function resolveRefList(

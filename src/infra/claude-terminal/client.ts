@@ -246,6 +246,7 @@ export async function callClaudeTerminal(
   }
 
   try {
+    const isStrictReadonly = options.internalAgentIsolation === 'strict-readonly';
     if (
       options.skillsEnabled === false
       && options.terminalBackend === undefined
@@ -255,18 +256,19 @@ export async function callClaudeTerminal(
         options.abortSignal,
       );
     }
-    const prepared = await prepareClaudeMcpConfig(options.mcpServers);
+    const prepared = await prepareClaudeMcpConfig(isStrictReadonly ? undefined : options.mcpServers);
     cleanup = prepared.cleanup;
     if (options.abortSignal?.aborted) {
       throw new ClaudeTerminalAbortError(options.abortSignal.reason);
     }
     const command = buildClaudeTerminalCommand({
       pathToClaudeCodeExecutable: options.pathToClaudeCodeExecutable,
+      internalAgentIsolation: options.internalAgentIsolation,
       model: options.model,
       effort: options.effort,
       skillsEnabled: options.skillsEnabled,
       allowedTools: options.allowedTools,
-      mcpConfigPath: prepared.path,
+      mcpConfigPath: isStrictReadonly ? undefined : prepared.path,
       permissionMode: options.permissionMode,
       bypassPermissions: options.bypassPermissions,
       sessionId: options.sessionId,

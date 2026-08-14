@@ -652,15 +652,15 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     expect(selectorOutputSchema).not.toHaveProperty('properties.selected_ids.uniqueItems');
     expect(selectorCall).toMatchObject({
       persona: undefined,
-      allowedTools: undefined,
-      mcpServers: undefined,
+      allowedTools: [],
+      mcpServers: {},
       resolvedExecution: {
         provider: 'mock',
         model: undefined,
         providerOptions: {},
-        permissionMode: undefined,
+        permissionMode: 'readonly',
       },
-      bypassPermissions: undefined,
+      bypassPermissions: false,
       internalSystemPrompt: expect.stringContaining('internal dynamic parallel selector'),
       outputSchema: expect.objectContaining({
         additionalProperties: false,
@@ -1619,7 +1619,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     expect(abortReason).toContain('[REDACTED]');
   });
 
-  it('should execute a Codex selector without implicit capability or permission constraints', async () => {
+  it('should execute a Codex selector through strict readonly isolation', async () => {
     const config = normalizeWorkflowConfig(dynamicParallelWorkflowRaw(), tmpDir);
     vi.mocked(runAgent).mockImplementation(async (persona, _instruction, options) => {
       if (options?.outputSchema !== undefined) {
@@ -1656,14 +1656,14 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
           provider: 'codex',
           model: 'gpt-5',
           providerOptions: {},
-          permissionMode: undefined,
+          permissionMode: 'readonly',
         },
         outputSchema: expect.any(Object),
       }),
     );
-    expect(selectorCall?.[2].bypassPermissions).toBeUndefined();
-    expect(selectorCall?.[2].allowedTools).toBeUndefined();
-    expect(selectorCall?.[2].mcpServers).toBeUndefined();
+    expect(selectorCall?.[2].bypassPermissions).toBe(false);
+    expect(selectorCall?.[2].allowedTools).toEqual([]);
+    expect(selectorCall?.[2].mcpServers).toEqual({});
   });
 
   it('should apply dynamic effective selection to the shared concurrency semaphore', async () => {

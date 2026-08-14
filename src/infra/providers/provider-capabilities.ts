@@ -38,6 +38,7 @@ const MAX_TURNS_PROVIDERS = new Set<ProviderType>([
 
 interface ProviderCapabilities {
   supportsStructuredOutput: boolean;
+  supportsIsolatedStructuredExecution: boolean;
   supportsNativeImageInput: boolean;
   supportsMcpServers: boolean;
   supportsAllowedTools: boolean;
@@ -57,6 +58,7 @@ function resolveProviderCapabilities(
 
   return {
     supportsStructuredOutput: providerImpl.supportsStructuredOutput,
+    supportsIsolatedStructuredExecution: providerImpl.supportsIsolatedStructuredExecution === true,
     supportsNativeImageInput: providerImpl.supportsNativeImageInput,
     supportsMcpServers: MCP_SERVER_PROVIDERS.has(provider),
     supportsAllowedTools: ALLOWED_TOOLS_PROVIDERS.has(provider),
@@ -64,6 +66,20 @@ function resolveProviderCapabilities(
     supportsOpenCodeAllowedTools: OPENCODE_ALLOWED_TOOLS_PROVIDERS.has(provider),
     supportsMaxTurns: MAX_TURNS_PROVIDERS.has(provider),
   };
+}
+
+export function providerSupportsIsolatedStructuredExecution(
+  provider: ProviderType | undefined,
+): boolean | undefined {
+  return resolveProviderCapabilities(provider)?.supportsIsolatedStructuredExecution;
+}
+
+export function assertProviderSupportsIsolatedStructuredExecution(
+  provider: ProviderType,
+): void {
+  if (providerSupportsIsolatedStructuredExecution(provider) !== true) {
+    throw new Error(`Provider "${provider}" does not support isolated structured execution`);
+  }
 }
 
 export function providerSupportsStructuredOutput(

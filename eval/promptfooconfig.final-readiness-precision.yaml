@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-# TAKT facet eval: peer-review / final-gate precision on a mergeable change.
+# TAKT facet eval: review-fix-default / supervise precision on a mergeable change.
 
 description: 'TAKT facet eval: final supervisor merge-readiness precision'
 

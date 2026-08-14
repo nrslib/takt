@@ -566,7 +566,7 @@ describe('WorkflowEngine review completion wiring', () => {
     expect(phase2.reviewCompletionDiagnostic).not.toContain('has no resolved provider');
   });
 
-  it('uses only the mandatory retry when min_retry is one and the judge stays unavailable', async () => {
+  it('stops before the mandatory retry when min_retry is one and the judge stays unavailable', async () => {
     const step = reviewStep('reviewer', {
       reviewCompletion: { ...completion, minRetry: 1, maxRetry: 2 },
     });
@@ -582,9 +582,12 @@ describe('WorkflowEngine review completion wiring', () => {
     const state = await engine.run();
 
     expect(state.status).toBe('completed');
-    expect(reviewerCalls).toBe(2);
+    expect(reviewerCalls).toBe(1);
+    expect(state.stepOutputs.get(step.name)?.content).toBe('review-1');
     const phase2 = vi.mocked(runReportPhase).mock.calls[0]![2] as ReportPhaseRunnerContext;
     expect(phase2.reviewCompletionDiagnostic).toContain('judge_unavailable');
+    expect(phase2.reviewCompletionDiagnostic).toContain('attempts: 1');
+    expect(phase2.reviewCompletionDiagnostic).toContain('retries_used: 0');
   });
 
   it('fails soft at the engine boundary when the reviewer retry throws', async () => {

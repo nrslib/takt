@@ -597,6 +597,38 @@ Selector execution fails before the main agent starts when:
 
 There is no implicit fallback.
 
+#### Selector guidance
+
+Both selector forms accept optional `persona` guidance and required `instruction` guidance:
+
+```yaml
+steps:
+  - name: fix
+    dynamic_facets:
+      pool: implementation
+      selector:
+        persona: facet-selector
+        instruction: select-implement-facets
+  - name: reviewers
+    parallel:
+      fixed: []
+      pool:
+        - name: backend
+          persona: backend-reviewer
+          description: Review backend changes
+          instruction: Review the backend
+          rules: [{ condition: approved }]
+      selection:
+        mode: replace
+        selector:
+          persona: reviewer-selector
+          instruction: select-reviewers
+```
+
+`selector.instruction` is required whenever a selector is configured; `persona` is optional. The selector guidance only describes how to select facet or participant IDs. TAKT retains responsibility for the evidence input, structured output contract, candidate validation, selection mode, read-only execution, empty tools/MCP, and disabled permission bypass. A selector cannot change the selected agent's `persona`, `instruction`, provider, permissions, tools, MCP configuration, or output contract.
+
+The selector guidance references the workflow's existing persona and instruction resources. Unknown selector keys, an empty selector, a selector without `instruction`, or an unresolved persona/instruction reference fails during schema or workflow validation with the configuration path. A raw `$param` reference is valid only after callable argument expansion; an unexpanded reference in a non-callable workflow is rejected.
+
 #### Packages, eject, and authoring tools
 
 - Repertoire packages can install and remove `facet-pools/`, and package-local / scoped pools resolve through the same lookup order as step fragments.
@@ -865,7 +897,7 @@ Promotion is not supported on parallel sub-steps.
 | `output_contracts` | - | Report file configuration (name, format) |
 | `quality_gates` | - | Agent-step completion gates. String entries are AI instructions; `type: command` entries are executed after step completion and feed failures back into the same agent step |
 
-`review_completion` is an explicit object-only opt-in. Omit the field to disable it. The object requires `retry_instruction`, an instruction facet that tells the reviewer how to close gaps without changing the scope or authority of its original instruction; `min_retry` and `max_retry` are optional bounded retry counts and default to `0` and `1`. `true`, `false`, strings, an empty object, and unsupported fields such as `mode` are rejected. Each successful reviewer response is checked by a fresh completion judge against the actual original reviewer instruction, task, scope, evidence, and report, using the judge's resolved runtime profile. Reviewer retries continue the same reviewer session; a judge or retry failure remains an advisory Phase 2 diagnostic and does not replace the latest valid reviewer response.
+`review_completion` is an explicit object-only opt-in. Omit the field to disable it. The object requires `retry_instruction`, an instruction facet that tells the reviewer how to close gaps without changing the scope or authority of its original instruction; `min_retry` is an optional non-negative integer bounded by `4`, while `max_retry` is an optional non-negative integer. When `max_retry` is omitted, it defaults to the internal ceiling of `4` (`min_retry` defaults to `0`): after `min_retry` has been satisfied, the completion judge can stop the episode early by returning `complete: true`, and incomplete results are retried up to that ceiling. An explicitly supplied `max_retry` takes precedence and may be any non-negative integer, including values above `4`. `true`, `false`, strings, an empty object, and unsupported fields such as `mode` are rejected. Each successful reviewer response is checked by a fresh completion judge against the actual original reviewer instruction, task, scope, evidence, and report, using the judge's resolved runtime profile. Reviewer retries continue the same reviewer session. Judge unavailability stops the episode immediately regardless of `min_retry`, while reviewer retry failures continue only while retry budget remains. On a terminal failure, TAKT preserves the latest valid reviewer response and emits an advisory Phase 2 diagnostic. When an incomplete decision reaches the retry ceiling, the `max_retry_reached` diagnostic retains the remaining `missingObligations`.
 
 For normal agent steps, parallel sub-steps, and `loop_monitors.judge`, `model: null` explicitly omits the model. This is different from leaving `model` out: absence continues fallback to applicable lower-priority sources such as routing, workflow, the triggering step for loop monitor judges, and input models, while `null` stops model resolution at that entry. Providers that require an explicit model still fail validation.
 

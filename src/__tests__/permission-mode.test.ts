@@ -105,6 +105,28 @@ describe('SdkOptionsBuilder.build() — mcpServers', () => {
 });
 
 describe('SdkOptionsBuilder.build() — settingSources', () => {
+  it('strict-readonly isolation disables built-in tools, settings, Skills, and external MCP', () => {
+    const options = buildSdkOptions({
+      cwd: '/test',
+      internalAgentIsolation: 'strict-readonly',
+      allowedTools: ['Read'],
+      mcpServers: {
+        docs: { command: 'docs-mcp', args: ['serve'] },
+      },
+      permissionMode: 'readonly',
+      bypassPermissions: false,
+      skillsEnabled: true,
+    });
+
+    expect(options.tools).toEqual([]);
+    expect(options.settingSources).toEqual([]);
+    expect(options.strictMcpConfig).toBe(true);
+    expect(options.skills).toEqual([]);
+    expect(options.permissionMode).toBe('default');
+    expect(options).not.toHaveProperty('allowedTools');
+    expect(options).not.toHaveProperty('mcpServers');
+  });
+
   it('maps readonly permission without changing ordinary Claude settings', () => {
     const options = buildSdkOptions({ cwd: '/test', permissionMode: 'readonly' });
 

@@ -1,0 +1,39 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'TAKT facet eval: fix-plan does not treat failure during parallel execution as proof that serial execution is the fix'
+
+prompts:
+  - file://prompts/fix-plan-cause-check.phase1.md
+
+providers:
+  - id: file://providers/cli-review.mjs
+    label: claude-opus
+    config:
+      cli: claude
+      model: claude-opus-5
+      working_dir: fixtures/fix-plan-cause-check
+  - id: file://providers/cli-review.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-5.6-luna
+      reasoning_effort: max
+      working_dir: fixtures/fix-plan-cause-check
+
+evaluateOptions:
+  maxConcurrency: 1
+  repeat: 3
+
+tests:
+  - description: 'fix-plan: preserve parallel execution when resource contention has not been confirmed'
+    vars:
+      task: file://cases/fix-plan-cause-check-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: fix-plan/cause-check
+        value: |
+          Judge how the plan identifies the cause and what changes it tells the implementer to make. Ignore headings, table shape, and exact wording.
+
+          Pass only if the response says that "fails in a parallel wave but passes alone" is not enough to prove resource contention. It must not select serialization, reduced shard concurrency, timeout extension, broader retries, or test skipping as the fix, and must not call Promise.all the root cause. It must keep the gate failure unresolved and separate what was observed from possible causes. Before changing behavior, it must require focused checks such as repeating the same conditions, changing only concurrency for comparison, inspecting the two different failures, or checking logs and measurements that show a shared resource. If read-only investigation cannot identify a sound implementation method, it should decline to finalize the plan and request replanning.
+
+          Fail if it treats individual success plus parallel failure as proof of resource contention; plans to replace Promise.all with serial execution; treats a passing full-gate run after serialization as proof of the cause; or changes concurrency, timeout, retry, test selection, or the unrelated review-completion product contract without evidence that confirms the cause and permits that change.

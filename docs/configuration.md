@@ -300,7 +300,30 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 
 ```
 
-Pi SDK sessions are kept in memory for the current TAKT process. TAKT does not write Pi session JSONL files. For `provider_options.pi` resource loading (`extensions`, `no_*`), temporary resolution, and trust boundaries, see [Pi resource loading](#pi-resource-loading).
+### Pi provider session boundary
+
+The TAKT Pi provider uses an embedded, in-memory Pi SDK session for the current TAKT process. It does not write Pi session JSONL files, and it does not read or write the Pi CLI global `settings.json`. Consequently, Pi global settings such as the default model, thinking level, shell, and retry options are not automatically inherited by TAKT.
+
+Set the model explicitly in TAKT configuration when it should be the default for Pi. A Pi model can include a `:<thinking-level>` suffix, for example:
+
+```yaml
+# ~/.takt/config.yaml or .takt/config.yaml
+provider: pi
+model: provider/model:high
+```
+
+You can also set the model and thinking level on a workflow step:
+
+```yaml
+steps:
+  - name: implement
+    provider: pi
+    model: provider/model:high
+```
+
+The `provider` and `model` declarations select the provider, model, and thinking level for a TAKT run; they do not import Pi CLI settings. Pi authentication is handled separately through the Pi SDK credential store or provider-native environment variables. The boundary avoids unintended writes to global settings and keeps project-local configuration trustworthy and predictable.
+
+`provider_options.pi` is a separate path for loading Pi resources such as `extensions` and `no_*` discovery controls. These options do not declare authentication, model, or thinking level. Explicit resource sources are resolved temporarily for the TAKT run and are not persisted to Pi settings; see [Pi resource loading](#pi-resource-loading) for the resource trust boundary.
 
 ### Provider call deadline and OpenCode execution guards
 

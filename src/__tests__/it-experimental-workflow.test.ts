@@ -368,9 +368,11 @@ function responseForReturn(
   return response(workflow, stepName, step.persona, ruleLabel);
 }
 
+const INTERNAL_SELECTOR_PERSONA = 'takt-internal';
+
 function selection(selectedIds: string[], rationale: string): ScenarioEntry {
   return {
-    persona: 'dynamic-facet-selector',
+    persona: INTERNAL_SELECTOR_PERSONA,
     status: 'done',
     content: rationale,
     structuredOutput: {
@@ -383,7 +385,7 @@ function selection(selectedIds: string[], rationale: string): ScenarioEntry {
 function parallelSelection(selectedIds: string[], rationale: string): ScenarioEntry {
   return {
     ...selection(selectedIds, rationale),
-    persona: 'dynamic-parallel-selector',
+    persona: INTERNAL_SELECTOR_PERSONA,
   };
 }
 

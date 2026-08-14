@@ -76,8 +76,9 @@ async function buildSpawnArgs(
   prompt: string,
   options: ClaudeHeadlessCallOptions,
 ): Promise<{ args: string[]; expectedSessionId: string; cleanup: () => Promise<void> }> {
+  const isStrictReadonly = options.internalAgentIsolation === 'strict-readonly';
   const session = resolveSessionArgs(options);
-  const preparedMcpConfig = await prepareClaudeMcpConfig(options.mcpServers);
+  const preparedMcpConfig = await prepareClaudeMcpConfig(isStrictReadonly ? undefined : options.mcpServers);
   const args: string[] = [
     '-p',
     '--verbose',
@@ -91,14 +92,16 @@ async function buildSpawnArgs(
     args.push('--model', options.model);
   }
 
-  if (options.allowedTools && options.allowedTools.length > 0) {
+  if (!isStrictReadonly && options.allowedTools && options.allowedTools.length > 0) {
     args.push('--allowed-tools', options.allowedTools.join(','));
   }
 
   if (options.effort) {
     args.push('--effort', options.effort);
   }
-  if (options.skillsEnabled === false) {
+  if (isStrictReadonly) {
+    args.push('--tools', '', '--strict-mcp-config', '--setting-sources', '', '--disable-slash-commands');
+  } else if (options.skillsEnabled === false) {
     args.push('--disable-slash-commands');
   }
 

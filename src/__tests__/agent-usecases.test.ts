@@ -4,6 +4,7 @@ import { parseParts } from '../core/workflow/engine/task-decomposer.js';
 import { detectJudgeIndex } from '../agents/judge-utils.js';
 import {
   executeAgent,
+  executeIsolatedStructuredInternalAgent,
   generateReport,
   executePart,
   evaluateCondition as evaluateConditionImpl,
@@ -15,6 +16,7 @@ import {
 import { runTagJudgeStage as runTagJudgeStageImpl } from '../agents/judge-status-usecase.js';
 import { requestDecompositionRawResponse as requestDecompositionRawResponseImpl } from '../agents/decompose-task-usecase.js';
 import { loadEvaluationSchema, loadJudgmentSchema } from '../infra/resources/schema-loader.js';
+import { OpenCodeProvider } from '../infra/providers/opencode.js';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -129,6 +131,123 @@ describe('agent-usecases', () => {
     expect(runAgent).toHaveBeenNthCalledWith(3, 'coder', 'part work', { cwd: '/tmp' });
   });
 
+  it('should execute internal structured agents with a provider-neutral read-only contract', async () => {
+    vi.mocked(runAgent).mockResolvedValue(doneResponse(
+      'ignored',
+      { selected_ids: ['frontend'], rationale: 'UI changed' },
+    ));
+    const schema = { type: 'object', additionalProperties: false };
+
+    const internalOptions = {
+      cwd: '/tmp',
+      workflowBundleResourceRoot: '/tmp/workflow-bundle/resources',
+      agentName: 'security-reviewer',
+      personaPath: '/project/.takt/facets/personas/security-reviewer.md',
+      sessionId: 'ambient-session',
+      resolution: {
+        provider: 'opencode' as const,
+        model: 'opencode/model',
+        providerOptions: {
+          codex: { skills: { repo: true, user: true } },
+          opencode: { allowedTools: ['write'] },
+          claude: { allowedTools: ['Bash'], skills: { enabled: true } },
+        },
+      },
+    } as unknown as Parameters<typeof executeIsolatedStructuredInternalAgent>[3];
+
+    const response = await executeIsolatedStructuredInternalAgent(
+      'selector system prompt',
+      'select reviewers',
+      schema,
+      internalOptions,
+    );
+
+    expect(response.structuredOutput).toEqual({
+      selected_ids: ['frontend'],
+      rationale: 'UI changed',
+    });
+    expect(runAgent).toHaveBeenCalledWith(
+      undefined,
+      'select reviewers',
+      expect.objectContaining({
+        executionProfile: 'isolated-structured',
+        internalAgentIsolation: 'strict-readonly',
+        internalAgentName: 'security-reviewer',
+        personaPath: '/project/.takt/facets/personas/security-reviewer.md',
+        workflowBundleResourceRoot: '/tmp/workflow-bundle/resources',
+        internalSystemPrompt: 'selector system prompt',
+        allowedTools: [],
+        mcpServers: {},
+        bypassPermissions: false,
+        sessionId: undefined,
+        outputSchema: schema,
+        resolvedExecution: {
+          provider: 'opencode',
+          model: 'opencode/model',
+          permissionMode: 'readonly',
+          providerOptions: {
+            codex: { skills: { repo: true, user: true } },
+            opencode: { allowedTools: ['write'] },
+            claude: { allowedTools: ['Bash'], skills: { enabled: true } },
+          },
+        },
+      }),
+    );
+  });
+
+  it('routes OpenCode internal structured execution through setupIsolatedStructured', async () => {
+    const actualRunner = await vi.importActual<typeof import('../agents/runner.js')>(
+      '../agents/runner.js',
+    );
+    const setupIsolatedStructured = vi.spyOn(OpenCodeProvider.prototype, 'setupIsolatedStructured')
+      .mockReturnValue({
+        call: vi.fn().mockResolvedValue(doneResponse('ignored', { selected_ids: ['frontend'] })),
+      });
+    vi.mocked(runAgent).mockImplementation(actualRunner.runAgent);
+
+    try {
+      await executeIsolatedStructuredInternalAgent(
+        'selector system prompt',
+        'select reviewers',
+        { type: 'object' },
+        {
+          cwd: '/tmp',
+          resolution: {
+            provider: 'opencode',
+            model: 'opencode/model',
+            providerOptions: {},
+          },
+        },
+      );
+
+      expect(setupIsolatedStructured).toHaveBeenCalledWith(expect.objectContaining({
+        name: 'takt-internal',
+      }));
+    } finally {
+      setupIsolatedStructured.mockRestore();
+    }
+  });
+
+  it.each(['copilot', 'cursor', 'kiro'] as const)(
+    'should reject %s before invoking an internal agent without isolated structured execution support',
+    async (provider) => {
+      await expect(executeIsolatedStructuredInternalAgent(
+        'selector system prompt',
+        'select reviewers',
+        { type: 'object' },
+        {
+          cwd: '/tmp',
+          resolution: {
+            provider,
+            model: undefined,
+            providerOptions: {},
+          },
+        },
+      )).rejects.toThrow(`Provider "${provider}" does not support isolated structured execution`);
+
+      expect(runAgent).not.toHaveBeenCalled();
+    },
+  );
   it('evaluateCondition は構造化出力の matched_index を優先する', async () => {
     vi.mocked(runAgent).mockResolvedValue(doneResponse('ignored', { matched_index: 2, reason: 'second condition' }));
 

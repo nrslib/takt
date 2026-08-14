@@ -596,6 +596,38 @@ selector 実行時に次のいずれかが成立すると main agent 起動前�
 
 暗黙 fallback はありません。
 
+#### selector guidance
+
+両方の selector 形式で、任意の `persona` guidance と必須の `instruction` guidance を指定できます。
+
+```yaml
+steps:
+  - name: fix
+    dynamic_facets:
+      pool: implementation
+      selector:
+        persona: facet-selector
+        instruction: select-implement-facets
+  - name: reviewers
+    parallel:
+      fixed: []
+      pool:
+        - name: backend
+          persona: backend-reviewer
+          description: backend の変更をレビューする
+          instruction: backend をレビューする
+          rules: [{ condition: approved }]
+      selection:
+        mode: replace
+        selector:
+          persona: reviewer-selector
+          instruction: select-reviewers
+```
+
+selector を設定した場合、`selector.instruction` は必須で、`persona` は任意です。selector guidance の責務は facet または participant の ID の選択方法を説明することだけです。証拠入力、structured output contract、候補検証、selection mode、read-only 実行、空の tools/MCP、permission bypass 無効は TAKT が管理します。selector は選択された agent の `persona`、`instruction`、provider、permission、tools、MCP 設定、output contract を変更できません。
+
+selector guidance は workflow 既存の persona と instruction resource を参照します。未知の selector key、空の selector、`instruction` のない selector、解決できない persona/instruction 参照は schema または workflow 検証時に設定 path 付きで失敗します。raw `$param` 参照は callable の引数展開後だけ有効で、callable でない workflow の未展開参照は拒否されます。
+
 #### package、eject、authoring tool
 
 - repertoire package で `facet-pools/` を install/remove でき、package-local / scoped pool は step fragment と同じ探索順で解決します。
@@ -864,7 +896,7 @@ promotion は並列サブ step ではサポートされません。
 | `output_contracts` | - | レポートファイル設定（name, format） |
 | `quality_gates` | - | agent step 完了 gate。文字列は AI 向け指示、`type: command` は step 完了後に実行し、失敗時は同じ agent step に差し戻す |
 
-`review_completion` は object だけを受け付ける明示的な opt-in です。省略すると無効です。object には、元の reviewer instruction の scope や権限を変えずに不足を閉じる方法を伝える instruction facet `retry_instruction` が必須です。`min_retry` / `max_retry` は任意の再試行回数境界で、既定値は `0` / `1` です。`true`、`false`、文字列、空 object、`mode` などの未対応 field は拒否されます。成功した各 reviewer response は fresh な completion judge が実際の元 reviewer instruction、task、scope、evidence、report と照合し、judge の解決済み runtime profile で実行します。reviewer retry は同じ reviewer session を継続します。judge または retry の失敗は Phase 2 専用の advisory 診断として扱われ、最新の有効 reviewer response を置き換えません。
+`review_completion` は object だけを受け付ける明示的な opt-in です。省略すると無効です。object には、元の reviewer instruction の scope や権限を変えずに不足を閉じる方法を伝える instruction facet `retry_instruction` が必須です。`min_retry` は `4` 以下の任意の非負整数、`max_retry` は任意の非負整数の再試行回数です。`max_retry` を省略した場合の既定値は内部天井の `4`（`min_retry` は `0`）です。この場合、`min_retry` を満たした後は completion judge が `complete: true` を返すと早期に停止し、不完全な結果が続く間はその天井まで再走査します。`max_retry` を明示した場合はその値が優先され、`4` を超える非負整数も指定できます。`true`、`false`、文字列、空 object、`mode` などの未対応 field は拒否されます。成功した各 reviewer response は fresh な completion judge が実際の元 reviewer instruction、task、scope、evidence、report と照合し、judge の解決済み runtime profile で実行します。reviewer retry は同じ reviewer session を継続します。judge が利用不能な場合は `min_retry` に関係なく即座に episode を停止し、reviewer retry の失敗は retry budget が残っている間だけ再試行します。終端失敗時は最新の有効 reviewer response を保持して Phase 2 専用の advisory 診断を出力します。不完全判定のまま再試行上限に達した場合は、`max_retry_reached` 診断に残りの `missingObligations` を保持します。
 
 通常の agent step、parallel sub-step、`loop_monitors.judge` では、`model: null` は model の明示的な省略を表します。`model` 未指定とは異なります。未指定は routing、workflow、loop monitor judge のトリガー元 step、入力由来の model など、適用可能な下位優先度のソースへフォールバックしますが、`null` はその entry で model 解決を止めます。明示 model が必須の provider では検証エラーになります。
 

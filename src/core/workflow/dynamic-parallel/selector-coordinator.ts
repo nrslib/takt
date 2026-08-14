@@ -1,4 +1,4 @@
-import { executeStructuredAgent } from '../../../agents/structured-caller/transport.js';
+import { executeIsolatedStructuredInternalAgent } from '../../../agents/agent-usecases.js';
 import {
   isDynamicParallelSubSteps,
   type AgentResponse,
@@ -86,6 +86,7 @@ export class DynamicParallelSelectorCoordinator {
       workingTreeDiff: inputs.workingTreeDiff,
       pool: step.parallel.pool,
       selection: step.parallel.selection,
+      selectorInstruction: step.parallel.selection.selector?.instruction,
       ...(previous === undefined ? {} : { previousSnapshot: previous }),
     });
     const sensitiveValues = createBoundedSensitiveValues();
@@ -103,22 +104,23 @@ export class DynamicParallelSelectorCoordinator {
     let snapshot: DynamicParallelSelectionSnapshot;
     let participants: WorkflowStep[];
     try {
-      response = await executeStructuredAgent(
+      response = await executeIsolatedStructuredInternalAgent(
+        'You are TAKT\'s internal dynamic parallel selector. Select only candidate IDs from the provided pool.',
         instruction,
         selectorContract.providerSchema,
         {
-          name: 'dynamic-parallel-selector',
           cwd: this.deps.getCwd(),
           projectCwd: this.deps.engineOptions.projectCwd,
-          failureDir: this.deps.failureDir,
+          persona: step.parallel.selection.selector?.persona,
+          workflowBundleResourceRoot: this.deps.engineOptions.workflowBundleResourceRoot,
           abortSignal: signal,
           language: this.deps.engineOptions.language,
-          systemPrompt: 'You are TAKT\'s internal dynamic parallel selector. Select only candidate IDs from the provided pool.',
+          failureDir: this.deps.failureDir,
+          personaPath: step.parallel.selection.selector?.personaPath,
           resolution: {
             provider: selectorProvider.provider,
             model: selectorProvider.model,
-            providerOptions: selectorProvider.providerOptions,
-            permissionMode: selectorProvider.permissionMode,
+            providerOptions: selectorProvider.providerOptions ?? {},
           },
         },
       );

@@ -2,17 +2,17 @@
 
 ## 複数失敗を集約する境界
 
-複数の outcome を集約する境界では、その境界の明示 policy により primary outcome を一つ選ぶ。制御判断と外部・terminal 表現は、すべて選択した同じ outcome から導出する。secondary outcome は観測可能に保持できるが、policy に定義されていない優先規則で primary を置き換えない。
+複数の結果をまとめる処理では、その処理に定められた規則で基準となる結果を一つ選ぶ。制御判断と外部向けの表現は、すべて同じ結果から作る。ほかの結果を記録に残してもよいが、規則にない優先順位で基準の結果を置き換えない。
 
 | 基準 | 判定 |
 |------|------|
-| status、分類、表示理由、abort 理由が異なる sibling outcome から作られている | REJECT |
-| 分類済み outcome を選択 policy の前に汎用エラーへ置き換える | REJECT |
-| boundary 固有の優先順位を canonical classification owner に埋め込む | REJECT |
-| classification、primary selection、projection の所有者が分離されている | OK |
-| boundary の明示 policy が primary を一度選び、全判断と表現がそこから導出される | OK |
+| status、分類、表示理由、abort 理由を別々の結果から作る | REJECT |
+| 分類した結果を選ぶ前に汎用エラーへ置き換える | REJECT |
+| 並列処理や batch ごとの優先順位を、共通の分類処理に埋め込む | REJECT |
+| 分類、基準となる結果の選択、出力を別々の処理が担当する | OK |
+| 対象の処理に定められた規則で結果を一度選び、すべての判断と表現をそこから作る | OK |
 
-canonical classification owner は、各 raw response や exception を分類、原因、回復属性を持つ outcome へ一度だけ変換する。boundary selection policy は、並行処理、親子処理、batch など各境界の契約に従って primary を選ぶ。projection owner は、選ばれた primary から status、category、reason、retry・fallback・停止判断、abort・terminal 表現を作る。この3責務を一つの汎用優先順位に潰さない。
+各 response や exception は、共通の分類処理で、分類、原因、回復方法を持つ結果へ一度だけ変換する。並列処理、親子処理、batch などは、それぞれに定められた規則で基準となる結果を選ぶ。出力処理は、選ばれた結果から status、category、reason、retry・fallback・停止判断、abort 理由、外部向けの表現を作る。この3つの処理を、一つの汎用的な優先順位へまとめない。
 
 ```typescript
 // NG - sibling ごとに別々の親フィールドを選ぶ

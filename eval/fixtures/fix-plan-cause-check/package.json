@@ -1,0 +1,8 @@
+{
+  "name": "fix-plan-cause-check-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:e2e:mock": "node scripts/run-e2e-mock-shards.mjs"
+  }
+}
