@@ -394,28 +394,39 @@ describe('contract-family active composition', () => {
     )).toThrow();
   });
 
-  it.each(LANGUAGES)('loads the dedicated Companion round adjudication facets in %s', (lang) => {
+  it.each(LANGUAGES)('resolves and composes the Companion moderator facets in %s', (lang) => {
+    const projectDir = projectDirs[lang];
+    const facetContext = { projectDir, lang };
+    const resolveDeclaredFacet = (
+      ref: string,
+      facetType: 'personas' | 'policies' | 'knowledge' | 'instructions',
+    ): string => {
+      const content = resolveRefToContent(ref, undefined, projectDir, facetType, facetContext);
+      expect(content, `${facetType}:${ref}`).toEqual(expect.stringMatching(/\S/u));
+      return content!;
+    };
     const definition = loadCompanionDefinition('review-companion-moderator', {
       candidateDirs: [getBuiltinCompanionsDir(lang)],
       language: lang,
-      facetContext: { projectDir: projectDirs[lang], lang },
+      facetContext,
     });
 
-    expect(definition.policy).toEqual([
-      'contract-change',
-      'companion-round-adjudication',
-    ]);
-    expect(definition.policy).not.toContain('review-adjudication');
-    expect(definition.policyContents?.[1]).toContain(
-      lang === 'en'
-        ? '# Companion Round Adjudication Policy'
-        : '# Companion ラウンド裁定ポリシー',
-    );
-    expect(definition.persona).toBe('companion-round-adjudicator');
-    expect(definition.personaContent).toContain(
-      lang === 'en'
-        ? '# Companion Round Adjudicator'
-        : '# Companion ラウンド裁定者',
-    );
+    expect(definition.persona).toEqual(expect.stringMatching(/\S/u));
+    expect(definition.personaContent).toBe(resolveDeclaredFacet(definition.persona!, 'personas'));
+
+    expect(definition.policy).toHaveLength(2);
+    expect(definition.policyContents).toHaveLength(definition.policy!.length);
+    expect(definition.policyContents).toEqual(definition.policy!.map((policy) => (
+      resolveDeclaredFacet(policy, 'policies')
+    )));
+
+    expect(definition.knowledge).toHaveLength(1);
+    expect(definition.knowledgeContents).toHaveLength(definition.knowledge!.length);
+    expect(definition.knowledgeContents).toEqual(definition.knowledge!.map((knowledge) => (
+      resolveDeclaredFacet(knowledge, 'knowledge')
+    )));
+
+    expect(definition.instructionRef).toEqual(expect.stringMatching(/\S/u));
+    expect(definition.instruction).toBe(resolveDeclaredFacet(definition.instructionRef, 'instructions'));
   });
 });

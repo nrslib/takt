@@ -82,6 +82,52 @@ describe('companion completion coordinator', () => {
     expect(readSnapshot).not.toHaveBeenCalled();
   });
 
+  it('throws before starting completion when already aborted', async () => {
+    const controller = new AbortController();
+    const abortReason = new Error('completion aborted before start');
+    controller.abort(abortReason);
+    const activeNames = vi.fn(() => ['reviewer']);
+    const onError = vi.fn();
+    const coordinator = new CompanionCompletionCoordinator({
+      activeNames,
+      detectors: new Map([['reviewer', detector()]]),
+      queue: {} as never,
+      readSnapshot: vi.fn(),
+      synchronizeSnapshot: vi.fn(),
+      abortSignal: controller.signal,
+      onError,
+    });
+
+    await expect(coordinator.complete()).rejects.toBe(abortReason);
+    expect(activeNames).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('rethrows a completion error when aborted during processing', async () => {
+    const controller = new AbortController();
+    const failure = new Error('completion interrupted');
+    const onError = vi.fn();
+    const readSnapshot = vi.fn();
+    const coordinator = new CompanionCompletionCoordinator({
+      activeNames: () => ['reviewer'],
+      detectors: new Map([['reviewer', detector()]]),
+      queue: {
+        drain: vi.fn(async () => {
+          controller.abort(new Error('stop completion'));
+          throw failure;
+        }),
+      } as never,
+      readSnapshot,
+      synchronizeSnapshot: vi.fn(),
+      abortSignal: controller.signal,
+      onError,
+    });
+
+    await expect(coordinator.complete()).rejects.toBe(failure);
+    expect(readSnapshot).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+  });
+
   it('sanitizes completion failures before exposing the reason', async () => {
     const coordinator = new CompanionCompletionCoordinator({
       activeNames: () => ['reviewer'],

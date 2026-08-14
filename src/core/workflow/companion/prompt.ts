@@ -1,9 +1,5 @@
-import { Buffer } from 'node:buffer';
 import type { CompanionReviewOutput } from './contracts.js';
-import {
-  assertCompanionPromptCapacity,
-  COMPANION_PROMPT_LIMITS,
-} from './limits.js';
+import { assertCompanionPromptCapacity } from './limits.js';
 import { formatCompanionEvidence } from './evidence.js';
 
 export function buildCompanionReviewPrompt(input: {
@@ -45,8 +41,6 @@ export function buildCompanionModeratorPrompt(input: {
 }
 
 function assertPromptCapacity(prompt: string): string {
-  assertCompanionPromptCapacity(
-    Buffer.byteLength(prompt, 'utf8') <= COMPANION_PROMPT_LIMITS.maxPromptBytes,
-  );
+  assertCompanionPromptCapacity(prompt);
   return prompt;
 }

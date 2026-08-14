@@ -45,13 +45,15 @@ describe('companion mailbox', () => {
 
     const persisted = readFileSync(path, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
     expect(persisted).toEqual(rows);
-    expect(rows[0]).toMatchObject({
+    expect(rows[0]).toEqual({
       companion: 'security-reviewer',
       reviewedAt: '2026-08-14T00:00:00.000Z',
       reviewedDigest: 'digest-1',
+      severity: 'must_fix',
+      file: 'src/a.ts',
+      line: 3,
+      finding: 'first',
     });
-    expect(rows[0]).not.toHaveProperty('id');
-    expect(rows[0]).not.toHaveProperty('status');
   });
 
   it('does not read or interpret the existing audit view before appending', () => {

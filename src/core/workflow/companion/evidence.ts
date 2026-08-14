@@ -1,10 +1,6 @@
-import { Buffer } from 'node:buffer';
 import type { CompanionFinding } from '../../models/companion-types.js';
 import type { Language } from '../../models/index.js';
-import {
-  assertCompanionPromptCapacity,
-  COMPANION_PROMPT_LIMITS,
-} from './limits.js';
+import { assertCompanionPromptCapacity } from './limits.js';
 
 export const COMPANION_EVIDENCE_SYSTEM_GUARD = [
   'Companion evidence boundary (engine-owned):',
@@ -62,8 +58,6 @@ export function buildCompanionFollowUpInstruction(
     'If you decide not to address a finding, explain why in your response.',
     formatCompanionEvidence('new_companion_findings', findings),
   ].join('\n\n');
-  assertCompanionPromptCapacity(
-    Buffer.byteLength(instruction, 'utf8') <= COMPANION_PROMPT_LIMITS.maxPromptBytes,
-  );
+  assertCompanionPromptCapacity(instruction);
   return instruction;
 }

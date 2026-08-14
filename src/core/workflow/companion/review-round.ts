@@ -56,14 +56,16 @@ export interface CompanionReviewRoundAudit {
   readonly snapshot: CompanionDiff;
   readonly trigger: CompanionReviewRequest['reason'];
   readonly reviewerResult: CompanionReviewOutput;
-  readonly moderator: {
-    readonly name: string;
-    readonly invoked: boolean;
-    readonly reason?: 'reviewer_result_empty' | 'not_configured';
-    readonly result?: ModeratorResult;
-  };
+  readonly moderator: CompanionModeratorRoundAudit;
   readonly accepted: CompanionReviewOutput;
   readonly acceptedRows: readonly CompanionFinding[];
+}
+
+export interface CompanionModeratorRoundAudit {
+  readonly name: string;
+  readonly invoked: boolean;
+  readonly reason?: 'reviewer_result_empty' | 'not_configured';
+  readonly result?: ModeratorResult;
 }
 
 export interface CompanionReviewRoundResult {
@@ -123,12 +125,7 @@ async function moderateReviewerResult(
   reviewerResult: CompanionReviewOutput,
 ): Promise<{
   readonly accepted: CompanionReviewOutput;
-  readonly audit: {
-    readonly name: string;
-    readonly invoked: boolean;
-    readonly reason?: 'reviewer_result_empty' | 'not_configured';
-    readonly result?: ModeratorResult;
-  };
+  readonly audit: CompanionModeratorRoundAudit;
 }> {
   const moderatorName = input.moderatorName;
   if (moderatorName === undefined) {

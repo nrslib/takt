@@ -108,6 +108,10 @@ describe('companion runtime lifecycle', () => {
     try {
       runtime.beginReviewAttempt();
       const first = await runtime.complete(workflowState, 'done', { followUpRound: 0 });
+      expect(workflowState.companion).toEqual({
+        completionSettled: false,
+        followUpRounds: 0,
+      });
       const second = await runtime.complete(workflowState, 'unchanged', { followUpRound: 1 });
 
       expect(first.findings).toHaveLength(1);

@@ -74,39 +74,44 @@ describe('CT-COMP-06 and CT-COMP-11 structured internal agent execution', () => 
     },
   );
 
-  it('forces selector, reviewer, and moderator transport calls to readonly', async () => {
-    vi.mocked(executeStructuredAgent).mockResolvedValue(response('done'));
-    const caller = new CompanionStructuredCaller({
-      cwd: '/worktree',
-      projectCwd: '/project',
-      failureDir: '/project/.takt/runs/run/failures',
-      language: 'en',
-      buildProviderCallCallbacks: () => ({ finish: vi.fn() }),
-      recordUsage: vi.fn(),
-      recordCall: vi.fn(),
-    });
+  it.each(['selector', 'reviewer', 'moderator'] as const)(
+    'forces %s transport calls to readonly',
+    async (purpose) => {
+      const execute = vi.mocked(executeStructuredAgent);
+      execute.mockClear();
+      execute.mockResolvedValue(response('done'));
+      const caller = new CompanionStructuredCaller({
+        cwd: '/worktree',
+        projectCwd: '/project',
+        failureDir: '/project/.takt/runs/run/failures',
+        language: 'en',
+        buildProviderCallCallbacks: () => ({ finish: vi.fn() }),
+        recordUsage: vi.fn(),
+        recordCall: vi.fn(),
+      });
 
-    await caller.call({
-      purpose: 'reviewer',
-      agentName: 'security-reviewer',
-      provider: {
-        provider: 'mock',
-        model: 'mock-model',
-        permissionMode: 'full',
-      },
-      systemPrompt: 'system',
-      prompt: 'prompt',
-      outputSchema: { type: 'object' },
-    });
+      await caller.call({
+        purpose,
+        agentName: purpose === 'reviewer' ? 'security-reviewer' : `companion-${purpose}`,
+        provider: {
+          provider: 'mock',
+          model: 'mock-model',
+          permissionMode: 'full',
+        },
+        systemPrompt: 'system',
+        prompt: 'prompt',
+        outputSchema: { type: 'object' },
+      });
 
-    expect(vi.mocked(executeStructuredAgent).mock.calls[0]?.[2]).toMatchObject({
-      resolution: {
-        provider: 'mock',
-        model: 'mock-model',
-        permissionMode: 'readonly',
-      },
-    });
-  });
+      expect(execute.mock.calls[0]?.[2]).toMatchObject({
+        resolution: {
+          provider: 'mock',
+          model: 'mock-model',
+          permissionMode: 'readonly',
+        },
+      });
+    },
+  );
 
   it('should record the resolved prompt, response, session, and attempt outcome for each internal call', async () => {
     const recordCall = vi.fn();

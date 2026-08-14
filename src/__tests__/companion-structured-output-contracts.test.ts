@@ -22,7 +22,7 @@ describe('companion structured output contracts', () => {
     })).toThrow();
   });
 
-  it('accepts only round-local accept and reject moderator decisions', () => {
+  it('accepts round-local accept and reject moderator decisions', () => {
     expect(parseModeratorOutput({
       findings: [
         { action: 'accept', sourceIndex: 0 },
@@ -34,11 +34,18 @@ describe('companion structured output contracts', () => {
         { action: 'reject', sourceIndex: 1 },
       ],
     });
-    expect(() => parseModeratorOutput({
-      findings: [{ action: 'downgrade', sourceIndex: 0 }],
-    })).toThrow();
-    expect(() => parseModeratorOutput({
-      findings: [{ action: 'accept', sourceIndex: 0, reason: 'extra field' }],
-    })).toThrow();
+  });
+
+  it.each([
+    {
+      caseName: 'an unsupported action',
+      output: { findings: [{ action: 'downgrade', sourceIndex: 0 }] },
+    },
+    {
+      caseName: 'an additional decision field',
+      output: { findings: [{ action: 'accept', sourceIndex: 0, reason: 'extra field' }] },
+    },
+  ])('rejects $caseName', ({ output }) => {
+    expect(() => parseModeratorOutput(output)).toThrow();
   });
 });

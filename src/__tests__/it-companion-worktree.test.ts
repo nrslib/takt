@@ -175,11 +175,14 @@ describe('CT-COMP-12 worktree companion runtime continuity', () => {
     expect(mailbox).toEqual([
       expect.objectContaining({
         companion: 'security-reviewer',
-        reviewedDigest: expect.any(String),
+        reviewedDigest: expect.stringMatching(/.+/),
         reviewedAt: expect.any(String),
         severity: 'must_fix',
       }),
     ]);
+    const reviewedAt = mailbox[0]?.reviewedAt;
+    if (typeof reviewedAt !== 'string') throw new TypeError('Expected reviewedAt to be a string');
+    expect(new Date(reviewedAt).toISOString()).toBe(reviewedAt);
     const calls = readFileSync(callLogPath, 'utf-8').trim().split('\n')
       .map((line) => JSON.parse(line) as {
         event: string;

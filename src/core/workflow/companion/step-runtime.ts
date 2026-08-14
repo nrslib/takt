@@ -413,7 +413,7 @@ export class CompanionStepRuntime {
     try {
       this.events.finding(finding);
     } catch (error) {
-      this.reportCompanionAuditWriteFailure('companion_review_round', error, {
+      this.reportCompanionAuditWriteFailure('companion_finding', error, {
         companion: finding.companion,
       });
     }
@@ -528,6 +528,7 @@ export class CompanionStepRuntime {
     recordType:
       | 'companion_call'
       | 'companion_complete'
+      | 'companion_finding'
       | 'companion_review_round'
       | 'companion_review_skipped',
     error: unknown,

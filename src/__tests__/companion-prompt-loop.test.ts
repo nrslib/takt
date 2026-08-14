@@ -4,10 +4,7 @@ import {
   buildCompanionReviewPrompt,
 } from '../core/workflow/companion/prompt.js';
 import { buildCompanionFollowUpInstruction } from '../core/workflow/companion/evidence.js';
-import {
-  CompanionPromptCapacityError,
-  COMPANION_PROMPT_LIMITS,
-} from '../core/workflow/companion/limits.js';
+import { COMPANION_PROMPT_LIMITS } from '../core/workflow/companion/limits.js';
 
 describe('companion prompt contract', () => {
   it('reviews only the current diff without prior finding state', () => {
@@ -25,6 +22,28 @@ describe('companion prompt contract', () => {
     expect(prompt).not.toContain('prior_findings');
     expect(prompt).not.toContain('prior_notes');
     expect(prompt).not.toContain('open_findings');
+  });
+
+  it('embeds the current task, step, and review evidence in the review prompt', () => {
+    const prompt = buildCompanionReviewPrompt({
+      companionName: 'architecture-reviewer',
+      task: 'refactor the companion runtime',
+      stepName: 'implement-contract',
+      cumulativeDiff: '+const changed = true;',
+      changedSincePreviousReview: ['src/a.ts:1-2', 'src/b.ts:4-5'],
+      diffSummary: 'two files changed',
+      implementerExplanation: 'centralized prompt capacity checks',
+    });
+
+    expect(prompt).toContain('Task: refactor the companion runtime');
+    expect(prompt).toContain('Step: implement-contract');
+    expect(prompt).toContain(
+      '"label":"changed_since_previous_review","value":["src/a.ts:1-2","src/b.ts:4-5"]',
+    );
+    expect(prompt).toContain('"label":"diff_summary","value":"two files changed"');
+    expect(prompt).toContain(
+      '"label":"implementer_explanation","value":"centralized prompt capacity checks"',
+    );
   });
 
   it('gives the moderator the current reviewer result and its verification evidence', () => {
@@ -69,6 +88,8 @@ describe('companion prompt contract', () => {
       file: 'src/a.ts',
       line: 1,
       finding: 'x'.repeat(COMPANION_PROMPT_LIMITS.maxPromptBytes),
-    }])).toThrow(CompanionPromptCapacityError);
+    }])).toThrow(new RegExp(
+      `Companion prompt capacity exceeded: \\d+ bytes exceeds limit of ${COMPANION_PROMPT_LIMITS.maxPromptBytes} bytes`,
+    ));
   });
 });
