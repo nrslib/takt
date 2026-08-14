@@ -6,30 +6,30 @@
 ## Finding Coverage
 | Finding ID / Source | Authorization Basis | Evidence | Fix Unit / Follow-up | Problem → Direct Cause → Root Cause | Classification | Acceptance Criteria and Remediation Boundary |
 |---------------------|---------------------|----------|----------------------|-------------------------------------|----------------|----------------------------------------------|
-| {ID or report name} | {Basis recorded by adjudication} | {Report or file:line} | {Stable ID} | {Causal chain verified in code} | {Local / Structural / Undemonstrable due to environmental factors} | {Completion condition and excluded neighboring contract or adjacent work} |
+| {ID or report name} | {Basis recorded by adjudication} | {Report or file:line} | {Fix-unit name, which must not change once chosen} | {Causal chain verified in code} | {Local / Structural / Undemonstrable due to environmental factors} | {Completion condition and excluded neighboring contract or adjacent work} |
 
 ## Invariant Register
 Carry-forward source: {Latest fix-verification in the same remediation / relative path recorded by the review resolution / No prior remediation / Carry-forward source missing: reason}
 
 ### Rows from the Carry-forward Source
-| Fix Unit | Family ID | Invariant Stable ID | Authoritative Owner | Current Verifier Occurrence | Previous Verifier Occurrence | Previous Path | Current Path | Same-Invariant / Recurrence Judgment | Cumulative `incomplete` Count | Trigger | Enforcement-Point Candidate | Record Integrity |
+| Fix Unit | Family ID | Invariant Name | Responsible Source | Current Verification Number | Previous Verification Number | Previous Path | Current Path | Same-Invariant / Recurrence Judgment | Cumulative `incomplete` Count | Recurrence on a Different Path Confirmed? | Enforcement-Point Candidate | Record Integrity |
 |----------|-----------|---------------------|---------------------|-----------------------------|--------------------------------|---------------|--------------|--------------------------------------|-------------------------------|---------|-----------------------------|------------------|
-| {Copy every invariant row from the source selected under the shared rules unchanged, one row at a time; do not make No prior remediation or Carry-forward source missing into rows, and preserve their distinction in the source statement above} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} |
+| {Copy every invariant row from the carry-forward source stated above unchanged, one row at a time; do not make No prior remediation or Carry-forward source missing into rows, and preserve their distinction in the source statement above} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} |
 
 ### New and Current Planning Rows
-| Fix Unit | Family ID | Invariant Stable ID | Observable Invariant | Authoritative Owner | Classification and Recorded Recurrence Trigger | Enforcement Point |
-|----------|-----------|---------------------|----------------------|---------------------|------------------------------------------------|-------------------|
-| {Stable fix-unit ID} | {Stable family ID} | {Stable ID within the family} | {Externally observable condition} | {Single responsibility and source of truth} | {Local / Structural; true / false / not evaluable with reason} | {Required for a structural issue or a unit whose recorded trigger is true: single change point, single validation point, or type/structure that makes violation impossible. For an independent local defect: Not required; direct repair at the existing owner} |
+| Fix Unit | Family ID | Invariant Name | Observable Invariant | Responsible Source | Classification | Recurrence on a Different Path Confirmed? | Enforcement Point |
+|----------|-----------|----------------|----------------------|--------------------|----------------|-------------------------------------------|-------------------|
+| {Fix-unit name, which must not change once chosen} | {Family ID} | {Invariant name, which must not change once chosen} | {Externally observable condition} | {Single responsibility and source that defines this invariant and guarantees it holds; do not change it for only moving or splitting files} | {Local / Structural, independently from whether recurrence has been confirmed} | {confirmed / not confirmed / cannot determine with reason} | {Required for a structural issue. When recurrence on a different path is `confirmed` or `cannot determine`, state a single change point, single validation point, or type/state structure that makes violation impossible; when none can be defined, state why the plan must be revised. For an independent local defect with `not confirmed`: Not required; repair directly at the existing responsible source} |
 
 ## Defect-Family Final State
-| Fix Unit | Authoritative Contract | Complete Invariant Set | Target Responsibility and Source of Truth | Participating Contract Paths | Valid, Failing, and Boundary Examples | Migration and Removal |
+| Fix Unit | Contract to Preserve | Complete Invariant Set | Target Responsibility and Source | Affected Contract Paths | Valid, Failing, and Boundary Examples | Migration and Removal |
 |----------|------------------------|------------------------|-------------------------------------------|------------------------------|---------------------------------------|-----------------------|
 | {Fix unit} | {Requirement, specification, schema, or public contract} | {Conditions beyond the finding examples} | {Target location, or unchanged for a local issue} | {Confirmed bounded graph of affected paths that actually exist: definition, production, normalization, validation, consumers, terminal or API output, plus retry, fallback, parallel execution, persistence, or restoration only when applicable. Omit non-applicable paths rather than exploring or listing them} | {Representative valid, failing, boundary, and adversarial cases} | {Only existing consumers and duplicate or obsolete paths that require migration or removal; None when no such target exists. Exclude unrelated migration or removal work} |
 
 ## Execution Order
 | Order | Fix Unit | Operation | Dependencies | Targets | Completion Criteria and Evidence |
 |-------|----------|-----------|--------------|---------|----------------------------------|
-| {N} | {Stable fix-unit ID from Finding Coverage; exclude follow-up verification} | {Boundary change / consumer migration / removal / local fix} | {Prior operations or None} | {file:line} | {Verifiable condition and observation point} |
+| {N} | {Fix-unit name from Finding Coverage; exclude follow-up verification} | {Boundary change / consumer migration / removal / local fix} | {Prior operations or None} | {file:line} | {Verifiable condition and observation point} |
 
 ## Constraint Compatibility
 | Fix Unit | Constraint References | Implementation Method and Candidate Decision | Verification Method, Observation Point, and Execution Conditions | Compatibility Rationale | Quality Gates |

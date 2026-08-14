@@ -1,11 +1,11 @@
-Adjudicate the review findings from evidence and establish the authoritative remediation set.
+Adjudicate the review findings from evidence and determine which findings may be fixed.
 
 {{include:instructions/contract-family-review-adjudication}}
 {{include:instructions/invariant-recurrence}}
 
 **Important:** Do not perform a new broad review. Consider only findings submitted by the latest review reports under the Report Directory. Inspect the current code, requirements, plan, and execution evidence only as needed.
 
-Populate the review resolution's Invariant Register Carry-forward under the shared invariant-recurrence rules.
+Populate the Invariant Register Carry-forward in review-resolution.md. Consider only `subworkflows/iteration-N--step-remediation--*/fix-verification.md` directly under the same peer review's Report Directory, exclude `.takt-report-internal`, and copy every row and all 13 fields unchanged from the single candidate with the greatest numeric `N`. Record No prior remediation when there is no candidate; record Carry-forward source missing with the reason when the greatest `N` is not unique, the file is unreadable or missing, or its recurrence record is missing, and do not fill the gap from an older candidate.
 
 **Tasks:**
 1. For each finding, verify its technical claim, concrete failure scenario or specific evidence of an implementation-quality problem, and file:line or reproduction evidence

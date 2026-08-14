@@ -1,11 +1,11 @@
-レビューレポートの指摘を証拠で裁定し、修正対象の正本を確定してください。
+レビューレポートの指摘を証拠で裁定し、修正してよい対象を確定してください。
 
 {{include:instructions/contract-family-review-adjudication}}
 {{include:instructions/invariant-recurrence}}
 
 **重要:** 新しい網羅レビューは行わず、Report Directory 配下の最新レビューレポートが提出した指摘だけを対象にしてください。必要な範囲で現在のコード、要求、計画、実行証跡を確認してください。
 
-共有の不変条件再発規則に従い、review-resolution の「再発台帳の引き継ぎ」を記載してください。
+review-resolution.md の「再発台帳の引き継ぎ」を記載してください。同じ peer-review の Report Directory 直下にある `subworkflows/iteration-N--step-remediation--*/fix-verification.md` だけを候補とし、`.takt-report-internal` 配下を除外して数値 `N` が最大の1件から全行・全13項目を無変更で記載します。候補がなければ「先行 remediation なし」、最大の `N` を一意に選べない、ファイルを読めない・欠落している、または再発記録が欠落している場合は「引き継ぎ元の欠落」と理由を記載し、古い候補から補わないでください。
 
 **やること:**
 1. 各指摘について、技術的な主張、実際に壊れるシナリオまたは実装品質問題の具体的証拠、file:line または再現証拠を確認する

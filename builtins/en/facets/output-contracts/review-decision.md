@@ -9,12 +9,12 @@
 ## Invariant Register Carry-forward
 Carry-forward source: {Relative path of the selected fix-verification / No prior remediation / Carry-forward source missing: reason}
 
-| Fix Unit | Family ID | Invariant Stable ID | Authoritative Owner | Current Verifier Occurrence | Previous Verifier Occurrence | Previous Path | Current Path | Same-Invariant / Recurrence Judgment | Cumulative `incomplete` Count | Trigger | Enforcement-Point Candidate | Record Integrity |
+| Fix Unit | Family ID | Invariant Name | Responsible Source | Current Verification Number | Previous Verification Number | Previous Path | Current Path | Same-Invariant / Recurrence Judgment | Cumulative `incomplete` Count | Recurrence on a Different Path Confirmed? | Enforcement-Point Candidate | Record Integrity |
 |----------|-----------|---------------------|---------------------|-----------------------------|--------------------------------|---------------|--------------|--------------------------------------|-------------------------------|---------|-----------------------------|------------------|
 | {Copy every row from the selected single source unchanged; when applicable use No prior remediation or Carry-forward source missing} | {Unchanged / Not applicable} | {Unchanged / Not applicable} | {Unchanged / Not applicable} | {Unchanged / Not applicable} | {Unchanged / Not applicable} | {Unchanged / Not applicable} | {Unchanged / Not applicable} | {Unchanged / Not applicable} | {Unchanged / Not applicable} | {Unchanged / Not applicable} | {Unchanged / Not applicable} | {Unchanged / reason for Carry-forward source missing} |
 
-### Identity-Change Mapping
-- {None, or old family ID, invariant stable ID, and authoritative owner -> new identity fields, with the reason for the change}
+### Mapping When a Name or Responsible Source Changed
+- {None, or old family ID, invariant name, and responsible source (the single responsibility and source that defines the invariant and guarantees it holds) -> the three new values, with the reason; do not treat only moving or splitting files as a change}
 
 ## Actionable Families
 | family | Finding ID / source | Authorization basis | Evidence | Problem -> root cause | Affected contract paths | Acceptance criteria | Remediation boundary |

@@ -5,6 +5,8 @@
 **現在のレビュー裁定:**
 {report:review-resolution.md}
 
+現在の review-resolution.md の「再発台帳の引き継ぎ」にある引き継ぎ元、全行・全13項目、名前や担当箇所を変更した場合の対応を、最終裁定で書く review-resolution.md の同名節へ無変更で記載してください。
+
 {{include:instructions/final-readiness-checks}}
 
 ## 最終 supervisor の裁定境界

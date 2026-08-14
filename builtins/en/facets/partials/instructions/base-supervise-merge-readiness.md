@@ -5,6 +5,8 @@
 **Current review resolution:**
 {report:review-resolution.md}
 
+Copy the carry-forward source, every row and all 13 fields, and any mapping for a changed invariant name or responsible source from the current review-resolution.md's Invariant Register Carry-forward unchanged into the same section of the final review-resolution.md.
+
 {{include:instructions/final-readiness-checks}}
 
 ## Final supervisor decision boundary
