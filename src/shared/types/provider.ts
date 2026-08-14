@@ -15,6 +15,9 @@ export const PROVIDER_TYPES = [
 
 export type ProviderType = (typeof PROVIDER_TYPES)[number];
 
+/** Isolation mode used by TAKT-owned selector calls. */
+export type InternalAgentIsolation = 'strict-readonly';
+
 const PROVIDER_TYPE_SET: ReadonlySet<string> = new Set(PROVIDER_TYPES);
 
 export function isProviderType(value: unknown): value is ProviderType {

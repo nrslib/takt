@@ -23,6 +23,7 @@ import type {
   StreamErrorEventData as SharedErrorEventData,
   StreamAssistantErrorEventData as SharedAssistantErrorEventData,
   StreamRateLimitEventData as SharedRateLimitEventData,
+  InternalAgentIsolation,
 } from '../../shared/types/provider.js';
 
 export type { SandboxSettings };
@@ -103,6 +104,7 @@ export interface ClaudeCallOptions {
   cwd: string;
   abortSignal?: AbortSignal;
   sessionId?: string;
+  internalAgentIsolation?: InternalAgentIsolation;
   allowedTools?: string[];
   /** MCP servers configuration */
   mcpServers?: Record<string, McpServerConfig>;
@@ -142,6 +144,7 @@ export interface ClaudeSpawnOptions {
   cwd: string;
   abortSignal?: AbortSignal;
   sessionId?: string;
+  internalAgentIsolation?: InternalAgentIsolation;
   allowedTools?: string[];
   /** MCP servers configuration */
   mcpServers?: Record<string, McpServerConfig>;

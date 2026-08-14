@@ -233,6 +233,13 @@ export interface ResolvedFacetPool {
 export interface DynamicFacetsConfig {
   readonly pool: string;
   readonly maxSelected?: number;
+  readonly selector?: SelectorGuidance;
+}
+
+export interface SelectorGuidance {
+  readonly persona?: string;
+  readonly personaPath?: string;
+  readonly instruction: string;
 }
 
 export const MAX_REVIEW_COMPLETION_RETRY = 4;
@@ -362,7 +369,10 @@ export interface DynamicParallelSubSteps {
   readonly kind: 'dynamic';
   readonly fixed: readonly DynamicParallelFixedSubStep[];
   readonly pool: readonly DynamicParallelPoolSubStep[];
-  readonly selection: { readonly mode: DynamicParallelSelectionMode };
+  readonly selection: {
+    readonly mode: DynamicParallelSelectionMode;
+    readonly selector?: SelectorGuidance;
+  };
 }
 
 export type ParallelSubSteps = WorkflowStep[] | DynamicParallelSubSteps;

@@ -17,6 +17,12 @@ export interface SelectorContract {
   readonly validationSchema: Record<string, unknown>;
 }
 
+export function buildSelectorGuidanceLines(selectorInstruction: string | undefined): readonly string[] {
+  return selectorInstruction === undefined
+    ? []
+    : ['', `Selector guidance:\n${selectorInstruction}`];
+}
+
 export function createSelectorContract(
   candidates: readonly SelectorCandidate[],
   maxSelected?: number,

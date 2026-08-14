@@ -58,6 +58,7 @@ const TARGETS = [
   { id: 'fix-self-scan', workflow: 'peer-review', step: 'fix', fixture: 'eval/fixtures/fix-self-scan', mutable: true },
   { id: 'fix-plan-fresh-findings', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-fresh-findings' },
   { id: 'fix-plan-boundary-preflight', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-boundary-preflight' },
+  { id: 'fix-plan-cause-check', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-cause-check' },
   { id: 'review-family-closure', workflow: 'peer-review-suite-base', step: 'coding-review', fixture: 'eval/fixtures/review-family-closure' },
   {
     id: 'initial-review-contract-discovery',
@@ -65,6 +66,12 @@ const TARGETS = [
     via: 'initial-reviewers',
     step: 'coding-review',
     fixture: 'eval/fixtures/initial-review-contract-discovery',
+  },
+  {
+    id: 'initial-review-external-identity-wiring',
+    workflow: 'takt-experimental-review',
+    step: 'coding-review',
+    fixture: 'eval/fixtures/initial-review-external-identity-wiring',
   },
   {
     id: 'testing-review-observable-evidence',
@@ -242,6 +249,12 @@ const TARGETS = [
     fixture: 'eval/fixtures/final-readiness-supervision',
     phase: 'phase2',
     targetFile: 'supervisor-validation.md',
+  },
+  {
+    id: 'final-readiness-precision',
+    workflow: 'review-fix-default',
+    step: 'supervise',
+    fixture: 'eval/fixtures/final-readiness-precision',
   },
 ];
 

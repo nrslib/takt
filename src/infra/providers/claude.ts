@@ -3,16 +3,25 @@ import type { ClaudeCallOptions } from '../claude/types.js';
 import { resolveAnthropicApiKey, resolveClaudeCliPath } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import { keepsAllowedToolWithoutEdit as keepsClaudeAllowedToolWithoutEdit } from './allowed-tool-edit-policy.js';
-import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from './types.js';
+import {
+  assertOutputSchema,
+  type AgentSetup,
+  type Provider,
+  type ProviderAgent,
+  type ProviderCallOptions,
+} from './types.js';
 
 function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
   const claudeSandbox = options.providerOptions?.claude?.sandbox;
   const effort = options.providerOptions?.claude?.effort;
-  const skillsEnabled = options.providerOptions?.claude?.skills?.enabled;
+  const skillsEnabled = options.internalAgentIsolation === 'strict-readonly'
+    ? false
+    : options.providerOptions?.claude?.skills?.enabled;
   return {
     cwd: options.cwd,
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
+    internalAgentIsolation: options.internalAgentIsolation,
     allowedTools: options.allowedTools,
     mcpServers: options.mcpServers,
     model: options.model,
@@ -39,6 +48,7 @@ function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
 
 export class ClaudeProvider implements Provider {
   readonly supportsStructuredOutput = true;
+  readonly supportsIsolatedStructuredExecution = true;
   readonly supportsNativeImageInput = true;
 
   getRuntimeInstructions(_allowedTools?: string[]): string | null {
@@ -64,4 +74,21 @@ export class ClaudeProvider implements Provider {
     };
   }
 
+  setupIsolatedStructured(config: AgentSetup): ProviderAgent {
+    const { name, systemPrompt } = config;
+    const call = (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> => {
+      const isolatedOptions: ProviderCallOptions = {
+        ...options,
+        sessionId: undefined,
+        internalAgentIsolation: 'strict-readonly',
+        allowedTools: [],
+        mcpServers: undefined,
+        imageAttachments: undefined,
+        outputSchema: assertOutputSchema(options.outputSchema, 'claude'),
+      };
+      const fullPrompt = systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt;
+      return callClaudeCustom(name, fullPrompt, '', toClaudeOptions(isolatedOptions));
+    };
+    return { call };
+  }
 }

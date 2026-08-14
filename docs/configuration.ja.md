@@ -298,7 +298,30 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 
 ```
 
-Pi SDK session は現在の TAKT process 内だけ memory に保持します。TAKT は Pi の session JSONL を書き込みません。`provider_options.pi` のリソース読み込み（`extensions`、`no_*`）、temporary resolution、信頼境界は [Pi のリソース読み込み](#pi-resource-loading) を参照してください。
+### Pi provider の session 境界
+
+TAKT の Pi provider は、現在の TAKT process 内だけで使う embedded な in-memory Pi SDK session を使用します。Pi の session JSONL ファイルを書き込まず、Pi CLI のグローバル `settings.json` も読み書きしません。そのため、デフォルト model、thinking level、shell、retry option などの Pi グローバル設定は TAKT に自動継承されません。
+
+Pi のデフォルトとして使う model は TAKT の設定で明示してください。Pi の model には `:<thinking-level>` suffix を付けられます。例えば次のように設定します。
+
+```yaml
+# ~/.takt/config.yaml または .takt/config.yaml
+provider: pi
+model: provider/model:high
+```
+
+workflow の step に model と thinking level を設定することもできます。
+
+```yaml
+steps:
+  - name: implement
+    provider: pi
+    model: provider/model:high
+```
+
+`provider` と `model` の宣言は TAKT 実行で使う provider、model、thinking level を選択するもので、Pi CLI の設定を取り込むものではありません。Pi の認証は Pi SDK credential store または provider-native 環境変数で別途処理されます。この境界により、グローバル設定への意図しない書き込みを防ぎ、プロジェクトローカル設定の信頼性と予測可能性を保ちます。
+
+`provider_options.pi` は、`extensions` や `no_*` の探索制御など、Pi リソースを読み込むための別経路です。これらの option は認証、model、thinking level を宣言するものではありません。明示したリソース source は TAKT 実行時だけ temporary resolution され、Pi settings には永続化されません。リソースの信頼境界については [Pi のリソース読み込み](#pi-resource-loading) を参照してください。
 
 ### OpenCode 実行ガード
 

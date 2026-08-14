@@ -315,6 +315,7 @@ describe('CodexClient retry', () => {
       skills: {
         config: [{ path: fs.realpathSync(skillPath), enabled: false }],
       },
+      model_reasoning_summary: 'auto',
     };
 
     expect(result.status).toBe('done');

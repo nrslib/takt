@@ -72,6 +72,11 @@ const WorkflowFacetRefListOrParamSchema = z.union([
 ]);
 const WorkflowReferenceOrParamSchema = z.union([WorkflowFacetRefScalarSchema, WorkflowParamReferenceRawSchema]);
 
+const SelectorGuidanceRawSchema = z.object({
+  persona: WorkflowPersonaRefOrParamSchema.optional(),
+  instruction: WorkflowFacetRefOrParamSchema,
+}).strict();
+
 const CompanionSelectionObjectRawSchema = z.object({
   fixed: z.array(z.string().trim().min(1)).optional().default([]),
   pool: z.array(z.string().trim().min(1)).optional().default([]),
@@ -442,6 +447,7 @@ export const FacetPoolRawSchema = z.union([
 export const DynamicFacetsRawSchema = z.object({
   pool: z.union([z.string().min(1), WorkflowParamReferenceRawSchema]),
   max_selected: z.number().int().positive().optional(),
+  selector: SelectorGuidanceRawSchema.optional(),
 }).strict();
 
 /** Team leader configuration schema for dynamic part decomposition */
@@ -474,11 +480,11 @@ const WorkflowStepKindSchema = z.enum(['agent', 'system', 'workflow_call']);
 
 const ReviewCompletionOptionsRawSchema = z.object({
   min_retry: z.number().int().min(0).max(MAX_REVIEW_COMPLETION_RETRY).optional(),
-  max_retry: z.number().int().min(0).max(MAX_REVIEW_COMPLETION_RETRY).optional(),
+  max_retry: z.number().int().min(0).optional(),
   retry_instruction: WorkflowFacetRefOrParamSchema,
 }).strict().superRefine((data, ctx) => {
   const minRetry = data.min_retry ?? 0;
-  const maxRetry = data.max_retry ?? 1;
+  const maxRetry = data.max_retry ?? MAX_REVIEW_COMPLETION_RETRY;
   if (minRetry > maxRetry) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -668,6 +674,7 @@ const DynamicParallelRawSchema = z.object({
   pool: z.array(DynamicParallelPoolSubStepRawSchema).min(1),
   selection: z.object({
     mode: z.enum(['replace', 'cumulative']).optional().default('replace'),
+    selector: SelectorGuidanceRawSchema.optional(),
   }).strict().optional().default({ mode: 'replace' }),
 }).strict();
 

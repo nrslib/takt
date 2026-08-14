@@ -54,6 +54,7 @@ describe('companion completion coordinator', () => {
           }, { once: true });
         });
       },
+      refreshRetryRequest: async (request) => request,
     });
     const running = queue.enqueue({
       companionName: 'security-reviewer',
@@ -180,6 +181,7 @@ describe('companion completion coordinator', () => {
     });
     const queue = new CompanionReviewQueue({
       runReview: vi.fn().mockRejectedValue(new Error('review failed')),
+      refreshRetryRequest: async (request) => request,
     });
     const synchronizeSnapshot = vi.fn();
     const coordinator = createCoordinator({ current, queue, synchronizeSnapshot });
@@ -304,7 +306,10 @@ function createCoordinator(input: {
   decision?: CompanionTerminalDecisionTracker;
   abortSignal?: AbortSignal;
 }): CompanionCompletionCoordinator {
-  const queue = input.queue ?? new CompanionReviewQueue({ runReview: vi.fn() });
+  const queue = input.queue ?? new CompanionReviewQueue({
+    runReview: vi.fn(),
+    refreshRetryRequest: async (request) => request,
+  });
   return new CompanionCompletionCoordinator({
     activeNames: () => ['security-reviewer'],
     detectors: new Map([['security-reviewer', input.current]]),

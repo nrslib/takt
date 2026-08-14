@@ -260,4 +260,26 @@ describe('ClaudeTerminalProvider wiring', () => {
       skillsEnabled: false,
     }));
   });
+
+  it('Given isolated structured execution, When the provider calls the terminal client, Then it forwards the strict marker and cleared ambient inputs', async () => {
+    const agent = new ClaudeTerminalProvider().setupIsolatedStructured({
+      name: 'selector',
+      systemPrompt: 'Select reviewers.',
+    });
+    await agent.call('prompt', {
+      cwd: '/tmp/worktree',
+      sessionId: 'ambient-session',
+      allowedTools: ['Read'],
+      mcpServers: { docs: { type: 'stdio', command: 'docs-mcp', args: ['serve'] } },
+      outputSchema: SCHEMA,
+    });
+
+    expect(mockCallClaudeTerminal).toHaveBeenCalledWith('selector', 'Select reviewers.\n\nprompt', expect.objectContaining({
+      internalAgentIsolation: 'strict-readonly',
+      sessionId: undefined,
+      skillsEnabled: false,
+      allowedTools: [],
+      mcpServers: undefined,
+    }));
+  });
 });

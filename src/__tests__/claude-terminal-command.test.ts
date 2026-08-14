@@ -109,4 +109,29 @@ describe('Claude terminal command builder', () => {
     expect(command.args).not.toContain('--disable-slash-commands');
   });
 
+  it('strict-readonly isolation disables tools, settings, MCP, and Skills in the terminal command', () => {
+    const command = buildClaudeTerminalCommand({
+      pathToClaudeCodeExecutable: 'claude',
+      internalAgentIsolation: 'strict-readonly',
+      allowedTools: ['Read'],
+      mcpConfigPath: '/tmp/mcp-config.json',
+      permissionMode: 'readonly',
+      bypassPermissions: false,
+      skillsEnabled: true,
+    });
+
+    expect(command.args).toEqual(expect.arrayContaining([
+      '--tools',
+      '',
+      '--strict-mcp-config',
+      '--setting-sources',
+      '',
+      '--disable-slash-commands',
+      '--permission-mode',
+      'default',
+    ]));
+    expect(command.args).not.toContain('--allowed-tools');
+    expect(command.args).not.toContain('--mcp-config');
+  });
+
 });

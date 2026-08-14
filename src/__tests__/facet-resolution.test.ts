@@ -509,6 +509,22 @@ describe('facet inheritance', () => {
     expect(config.steps[0]!.outputContracts?.[0]?.format).toBe('Base report\nCustom report');
   });
 
+  it('should resolve a workflow resource-path policy with inheritance without selector-only validation', () => {
+    writeProjectFacet('policies', 'base-policy', 'Base policy');
+    const childPolicyPath = join(getProjectFacetDir(projectDir, 'policies'), 'child-policy.md');
+    writeFileSync(childPolicyPath, '{extends:base-policy}\nChild policy');
+
+    const content = resolveRefToContent(
+      childPolicyPath,
+      undefined,
+      workflowDir,
+      'policies',
+      context,
+    );
+
+    expect(content).toBe('Base policy\nChild policy');
+  });
+
   it('should keep runtime placeholders interpolated after inheritance expansion', () => {
     writeProjectFacet('instructions', 'base', 'Parent task: {task}');
     writeProjectFacet('instructions', 'custom', '{extends:base}\nChild instruction');

@@ -134,6 +134,15 @@ export class CompanionStepRuntime {
       runReview: async (request) => {
         await this.runReview(request);
       },
+      refreshRetryRequest: async (request, signal) => {
+        const detector = this.detectors.get(request.companionName);
+        if (detector === undefined) {
+          throw new Error(`Missing detector for companion "${request.companionName}"`);
+        }
+        const observedGeneration = detector.getObservedGeneration();
+        const snapshot = await this.readSnapshot(signal);
+        return { ...request, snapshot, observedGeneration };
+      },
       onCoalesced: (event) => this.events.queueCoalesced({
         companion: event.companionName,
         replaced: event.replaced,
@@ -254,7 +263,7 @@ export class CompanionStepRuntime {
       this.requireProvider(item.name);
       return { name: item.name, definition };
     });
-    const initialSnapshot = await this.readSnapshot();
+    const initialSnapshot = await this.readSnapshot(this.deps.abortSignal);
     for (const { name, definition } of resolved) {
       this.active.set(name, definition);
       try {
@@ -267,7 +276,7 @@ export class CompanionStepRuntime {
         intervalMs: definition.intervalMs,
         minimumChangedLines: MINIMUM_CHANGED_LINES,
         now: Date.now,
-        readDiff: async () => this.readSnapshot(),
+        readDiff: async () => this.readSnapshot(this.deps.abortSignal),
       }));
       this.events.start(name);
     }
@@ -277,7 +286,7 @@ export class CompanionStepRuntime {
       allowGitCommit: this.deps.step.allowGitCommit === true,
       queue: this.queue,
       initialSnapshot,
-      readSnapshot: () => this.readSnapshot(),
+      readSnapshot: () => this.readSnapshot(this.deps.abortSignal),
       isAborted: () => this.deps.abortSignal?.aborted === true,
       onError: () => log.warn('Companion live review failed; the change remains unreviewed', {
         step: this.deps.step.name,
@@ -296,7 +305,7 @@ export class CompanionStepRuntime {
       activeNames: () => [...this.active.keys()],
       detectors: this.detectors,
       queue: this.queue,
-      readSnapshot: () => this.readSnapshot(),
+      readSnapshot: () => this.readSnapshot(this.deps.abortSignal),
       synchronizeSnapshot: (snapshot) => this.requireScheduler().synchronizeSnapshot(snapshot),
       openMustFix: () => this.openMustFix(),
       recordCompletionRound: async (snapshot) => this.recordStandaloneRound(
@@ -582,11 +591,11 @@ export class CompanionStepRuntime {
     return [this.deps.runSlug, ...this.deps.runPathNamespace, this.deps.step.name].join('\0');
   }
 
-  private async readSnapshot(): Promise<CompanionDiff> {
+  private async readSnapshot(signal: AbortSignal | undefined): Promise<CompanionDiff> {
     const result = await this.deps.diffReader.readDiff(
       this.deps.cwd,
       this.baselineSha,
-      this.deps.abortSignal,
+      signal,
     );
     if (result.status === 'ok') return result.snapshot;
     if (result.failure.code === 'aborted') throw createAbortError();

@@ -211,6 +211,32 @@ describe('ClaudeProvider — structured output', () => {
     });
   });
 
+  it('isolated structured execution forwards the strict marker and clears ambient inputs', async () => {
+    mockCallClaudeCustom.mockResolvedValue(doneResponse('selector', { step: 1 }));
+
+    const agent = new ClaudeProvider().setupIsolatedStructured({
+      name: 'selector',
+      systemPrompt: 'Select reviewers.',
+    });
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      sessionId: 'ambient-session',
+      allowedTools: ['Read'],
+      mcpServers: { docs: { command: 'docs-mcp', args: ['serve'] } },
+      imageAttachments: [{ placeholder: '[Image #1]', path: '/tmp/image.png' }],
+      outputSchema: SCHEMA,
+    });
+
+    expect(mockCallClaudeCustom.mock.calls[0]?.[3]).toMatchObject({
+      internalAgentIsolation: 'strict-readonly',
+      sessionId: undefined,
+      allowedTools: [],
+      mcpServers: undefined,
+      imageAttachments: undefined,
+      outputSchema: SCHEMA,
+    });
+  });
+
   it('structuredOutput がない場合は undefined', async () => {
     mockCallClaude.mockResolvedValue(doneResponse('coder'));
 

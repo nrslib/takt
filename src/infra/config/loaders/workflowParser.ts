@@ -33,6 +33,7 @@ import { compileFacetPool, type FacetPoolCompilationInput } from './facetPoolCom
 import { hasOwnFacetPool } from './workflowFacetPoolLookup.js';
 import type { ResolvedFacetPool } from '../../../core/models/index.js';
 import {
+  collectSelectorInstructionRefs,
   expandCallableSubworkflowRaw,
   type WorkflowCallArgResolutionPolicy,
 } from './workflowCallableArgResolver.js';
@@ -140,9 +141,17 @@ export function normalizeWorkflowConfig(
       context,
     },
   );
+  const selectorInstructionRefs = collectSelectorInstructionRefs(parsed.steps);
   const resolvedPoliciesWithSource = resolveSectionMapWithSource(parsed.policies, workflowDir, 'policies', context);
   const resolvedKnowledgeWithSource = resolveSectionMapWithSource(parsed.knowledge, workflowDir, 'knowledge', context);
-  const resolvedInstructionsWithSource = resolveSectionMapWithSource(parsed.instructions, workflowDir, 'instructions', context);
+  const resolvedInstructionsWithSource = resolveSectionMapWithSource(
+    parsed.instructions,
+    workflowDir,
+    'instructions',
+    context,
+    undefined,
+    selectorInstructionRefs,
+  );
   const resolvedReportFormatsWithSource = resolveSectionMapWithSource(parsed.report_formats, workflowDir, 'output-contracts', context);
   const sections: WorkflowSections = {
     personas: parsed.personas,

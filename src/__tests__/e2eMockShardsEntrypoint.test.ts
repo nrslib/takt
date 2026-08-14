@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { settleShardResults } from '../../scripts/run-e2e-mock-shards.mjs';
+import { runTeedCommand } from '../../scripts/teed-command.mjs';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { runShard, settleShardResults } from '../../scripts/run-e2e-mock-shards.mjs';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -23,7 +26,36 @@ const birpcNoiseOutput = [
   '   Duration  62.00s',
 ].join('\n');
 
+const repoRoot = resolve(fileURLToPath(new URL('../..', import.meta.url)));
+
 describe('E2E mock shard birpc noise re-measurement', () => {
+  it('should execute a real shard through runShard and capture its child-process result', async () => {
+    const result = await runShard(
+      ['e2e/specs/cli-help.e2e.ts'],
+      1,
+      [],
+      ['--maxWorkers=1'],
+    );
+
+    expect(result.code).toBe(0);
+    expect(result.signal).toBeNull();
+    expect(result.output).toContain('Test Files');
+    expect(result.output).toContain('Tests');
+  }, 120_000);
+
+  it('should launch the real shard entrypoint with isolated mock env and capture its process result', async () => {
+    const result = await runTeedCommand(process.execPath, [
+      resolve(repoRoot, 'scripts/run-e2e-mock-shards.mjs'),
+      'e2e/specs/cli-help.e2e.ts',
+      '--maxWorkers=1',
+    ], { cwd: repoRoot });
+
+    expect(result.code).toBe(0);
+    expect(result.signal).toBeNull();
+    expect(result.output).toContain('Test Files');
+    expect(result.output).toContain('Tests');
+  }, 120_000);
+
   it('should re-measure a noisy shard once and adopt the re-measured result', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const initialResult = { shardNumber: 2, code: 1, signal: null, output: birpcNoiseOutput };

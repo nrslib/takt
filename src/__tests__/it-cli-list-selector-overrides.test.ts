@@ -108,6 +108,7 @@ import { TaskRunner, type TaskInfo } from '../infra/task/index.js';
 
 const CLI_MODEL = 'cli-list-selector-model';
 const WORKFLOW_NAME = 'dynamic-list-selector';
+const INTERNAL_SELECTOR_PERSONA = 'takt-internal';
 
 interface TestEnvironment {
   readonly projectDir: string;
@@ -311,7 +312,7 @@ describe('IT: CLI list selector overrides', () => {
     expectCliSelectorPreview(retryContext!.workflowContext.stepPreviews);
     const starts = readProviderStarts(environment.mockCallLogPath);
     expect(starts).toEqual(expect.arrayContaining([
-      expect.objectContaining({ personaName: 'dynamic-parallel-selector', provider: 'mock', model: CLI_MODEL }),
+      expect.objectContaining({ personaName: INTERNAL_SELECTOR_PERSONA, provider: 'mock', model: CLI_MODEL }),
       expect.objectContaining({ personaName: 'architecture', provider: 'mock', model: CLI_MODEL }),
       expect.objectContaining({ personaName: 'frontend', provider: 'mock', model: CLI_MODEL }),
     ]));
@@ -333,7 +334,7 @@ describe('IT: CLI list selector overrides', () => {
     expectCliSelectorPreview(instructOptions!.workflowContext.stepPreviews);
     const starts = readProviderStarts(environment.mockCallLogPath);
     expect(starts).toEqual(expect.arrayContaining([
-      expect.objectContaining({ personaName: 'dynamic-parallel-selector', provider: 'mock', model: CLI_MODEL }),
+      expect.objectContaining({ personaName: INTERNAL_SELECTOR_PERSONA, provider: 'mock', model: CLI_MODEL }),
       expect.objectContaining({ personaName: 'architecture', provider: 'mock', model: CLI_MODEL }),
       expect.objectContaining({ personaName: 'frontend', provider: 'mock', model: CLI_MODEL }),
     ]));
