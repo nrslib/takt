@@ -108,7 +108,7 @@ import { TaskRunner, type TaskInfo } from '../infra/task/index.js';
 
 const CLI_MODEL = 'cli-list-selector-model';
 const WORKFLOW_NAME = 'dynamic-list-selector';
-const INTERNAL_SELECTOR_PERSONA = 'takt-internal';
+const DYNAMIC_PARALLEL_SELECTOR_PERSONA = 'dynamic-parallel-selector';
 
 interface TestEnvironment {
   readonly projectDir: string;
@@ -215,6 +215,7 @@ function createTerminalTask(projectDir: string, status: 'completed' | 'failed'):
 function setSuccessfulDynamicSelectorScenario(): void {
   setMockScenario([
     {
+      persona: DYNAMIC_PARALLEL_SELECTOR_PERSONA,
       status: 'done',
       content: '',
       structuredOutput: {
@@ -312,7 +313,7 @@ describe('IT: CLI list selector overrides', () => {
     expectCliSelectorPreview(retryContext!.workflowContext.stepPreviews);
     const starts = readProviderStarts(environment.mockCallLogPath);
     expect(starts).toEqual(expect.arrayContaining([
-      expect.objectContaining({ personaName: INTERNAL_SELECTOR_PERSONA, provider: 'mock', model: CLI_MODEL }),
+      expect.objectContaining({ personaName: DYNAMIC_PARALLEL_SELECTOR_PERSONA, provider: 'mock', model: CLI_MODEL }),
       expect.objectContaining({ personaName: 'architecture', provider: 'mock', model: CLI_MODEL }),
       expect.objectContaining({ personaName: 'frontend', provider: 'mock', model: CLI_MODEL }),
     ]));
@@ -334,7 +335,7 @@ describe('IT: CLI list selector overrides', () => {
     expectCliSelectorPreview(instructOptions!.workflowContext.stepPreviews);
     const starts = readProviderStarts(environment.mockCallLogPath);
     expect(starts).toEqual(expect.arrayContaining([
-      expect.objectContaining({ personaName: INTERNAL_SELECTOR_PERSONA, provider: 'mock', model: CLI_MODEL }),
+      expect.objectContaining({ personaName: DYNAMIC_PARALLEL_SELECTOR_PERSONA, provider: 'mock', model: CLI_MODEL }),
       expect.objectContaining({ personaName: 'architecture', provider: 'mock', model: CLI_MODEL }),
       expect.objectContaining({ personaName: 'frontend', provider: 'mock', model: CLI_MODEL }),
     ]));

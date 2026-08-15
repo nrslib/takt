@@ -6,7 +6,7 @@ import { runTakt } from '../helpers/takt-runner';
 import { createTestRepo, type TestRepo } from '../helpers/test-repo';
 import { readSessionRecords } from '../helpers/session-log';
 
-const INTERNAL_SELECTOR_PERSONA = 'takt-internal';
+const DYNAMIC_PARALLEL_SELECTOR_PERSONA = 'dynamic-parallel-selector';
 
 function writeDynamicParallelFixture(
   repoPath: string,
@@ -53,6 +53,7 @@ function writeDynamicParallelFixture(
   const scenarioPath = join(repoPath, '.takt', 'dynamic-parallel-selector-scenario.json');
   writeFileSync(scenarioPath, JSON.stringify([
     {
+      persona: DYNAMIC_PARALLEL_SELECTOR_PERSONA,
       status: 'done',
       content: '',
       structured_output: {
@@ -166,7 +167,12 @@ function writeReentryFixture(
   const cumulativeShrinkRound = mode === 'cumulative'
     ? [
         { persona: 'agents/fix', status: 'done', content: 'approved' },
-        { status: 'done', content: '', structured_output: { selected_ids: [], rationale: 'No pool reviewer is newly required.' } },
+        {
+          persona: DYNAMIC_PARALLEL_SELECTOR_PERSONA,
+          status: 'done',
+          content: '',
+          structured_output: { selected_ids: [], rationale: 'No pool reviewer is newly required.' },
+        },
         { persona: 'agents/architecture', status: 'done', content: '[STEP:1]\napproved' },
         { persona: 'agents/architecture', status: 'done', content: 'architecture report after shrink selection' },
         judgeResponse(1, 'Architecture shrink-round review approved.'),
@@ -179,7 +185,12 @@ function writeReentryFixture(
       ]
     : [];
   writeFileSync(scenarioPath, JSON.stringify([
-    { status: 'done', content: '', structured_output: { selected_ids: ['frontend'], rationale: 'Initial frontend review.' } },
+    {
+      persona: DYNAMIC_PARALLEL_SELECTOR_PERSONA,
+      status: 'done',
+      content: '',
+      structured_output: { selected_ids: ['frontend'], rationale: 'Initial frontend review.' },
+    },
     { persona: 'agents/architecture', status: 'done', content: '[STEP:1]\napproved' },
     { persona: 'agents/architecture', status: 'done', content: 'architecture report after initial review' },
     judgeResponse(1, 'Architecture review approved.'),
@@ -187,7 +198,12 @@ function writeReentryFixture(
     { persona: 'agents/frontend', status: 'done', content: 'frontend report after initial review' },
     judgeResponse(2, 'Frontend review needs a fix.'),
     { persona: 'agents/fix', status: 'done', content: 'approved' },
-    { status: 'done', content: '', structured_output: { selected_ids: ['backend'], rationale: 'Follow-up backend review.' } },
+    {
+      persona: DYNAMIC_PARALLEL_SELECTOR_PERSONA,
+      status: 'done',
+      content: '',
+      structured_output: { selected_ids: ['backend'], rationale: 'Follow-up backend review.' },
+    },
     { persona: 'agents/architecture', status: 'done', content: '[STEP:1]\napproved' },
     { persona: 'agents/architecture', status: 'done', content: 'architecture report after follow-up review' },
     judgeResponse(1, 'Architecture follow-up review approved.'),
@@ -276,7 +292,12 @@ function writeProcessResumeReplaceFixture(
   });
   const firstScenarioPath = join(repoPath, '.takt', 'dynamic-parallel-process-resume-first.json');
   writeFileSync(firstScenarioPath, JSON.stringify([
-    { status: 'done', content: '', structured_output: { selected_ids: ['frontend', 'backend'], rationale: 'Frontend review.' } },
+    {
+      persona: DYNAMIC_PARALLEL_SELECTOR_PERSONA,
+      status: 'done',
+      content: '',
+      structured_output: { selected_ids: ['frontend', 'backend'], rationale: 'Frontend review.' },
+    },
     { persona: 'agents/architecture', status: 'done', content: '[STEP:1]\napproved' },
     { persona: 'agents/architecture', status: 'done', content: 'architecture report round 1' },
     judgeResponse(1, 'Architecture round 1 approved.'),
@@ -287,7 +308,12 @@ function writeProcessResumeReplaceFixture(
     { persona: 'agents/backend', status: 'done', content: 'backend report round 1' },
     judgeResponse(2, 'Backend round 1 approved.'),
     { persona: 'agents/fix', status: 'done', content: 'approved' },
-    { status: 'done', content: '', structured_output: { selected_ids: ['backend'], rationale: 'Backend review.' } },
+    {
+      persona: DYNAMIC_PARALLEL_SELECTOR_PERSONA,
+      status: 'done',
+      content: '',
+      structured_output: { selected_ids: ['backend'], rationale: 'Backend review.' },
+    },
     { persona: 'agents/architecture', status: 'done', content: '[STEP:1]\napproved' },
     { persona: 'agents/architecture', status: 'done', content: 'architecture report round 2' },
     judgeResponse(1, 'Architecture round 2 approved.'),
@@ -304,7 +330,12 @@ function writeProcessResumeReplaceFixture(
   const resumedScenarioPath = join(repoPath, '.takt', 'dynamic-parallel-process-resume-resumed.json');
   writeFileSync(resumedScenarioPath, JSON.stringify([
     { persona: 'agents/fix', status: 'done', content: 'approved' },
-    { status: 'done', content: '', structured_output: { selected_ids: [], rationale: 'No further pool review.' } },
+    {
+      persona: DYNAMIC_PARALLEL_SELECTOR_PERSONA,
+      status: 'done',
+      content: '',
+      structured_output: { selected_ids: [], rationale: 'No further pool review.' },
+    },
     { persona: 'agents/architecture', status: 'done', content: '[STEP:1]\napproved' },
     { persona: 'agents/architecture', status: 'done', content: 'architecture report after resume' },
     judgeResponse(1, 'Architecture after resume approved.'),
@@ -453,7 +484,7 @@ describe('E2E: dynamic parallel selector (mock)', () => {
     expect(doctor.exitCode, `${doctor.stdout}\n${doctor.stderr}`).toBe(0);
     expect(runtime.exitCode, `${runtime.stdout}\n${runtime.stderr}`).toBe(0);
     const selectorStarts = readJsonl(mockCallLogPath)
-      .filter((record) => record.event === 'start' && record.personaName === INTERNAL_SELECTOR_PERSONA);
+      .filter((record) => record.event === 'start' && record.personaName === DYNAMIC_PARALLEL_SELECTOR_PERSONA);
     expect(selectorStarts).toEqual([
       expect.objectContaining({ provider: 'mock', model: 'cli-selector-model' }),
     ]);
@@ -508,7 +539,7 @@ describe('E2E: dynamic parallel selector (mock)', () => {
     expect(personaStartCount('agents/frontend')).toBe(expected.frontend * 2);
     expect(personaStartCount('agents/backend')).toBe(expected.backend * 2);
     const selectorStarts = providerStarts
-      .filter((record) => record.personaName === INTERNAL_SELECTOR_PERSONA);
+      .filter((record) => record.personaName === DYNAMIC_PARALLEL_SELECTOR_PERSONA);
     expect(selectorStarts).toHaveLength(expected.selectors);
     if (mode === 'cumulative') {
       const meta = JSON.parse(
@@ -607,6 +638,7 @@ describe('E2E: dynamic parallel selector (mock)', () => {
     ].join('\n'), 'utf-8');
     writeFileSync(firstScenarioPath, JSON.stringify([
       {
+        persona: DYNAMIC_PARALLEL_SELECTOR_PERSONA,
         status: 'done',
         content: '',
         structured_output: {
@@ -643,6 +675,7 @@ describe('E2E: dynamic parallel selector (mock)', () => {
 
     writeFileSync(resumedScenarioPath, JSON.stringify([
       {
+        persona: DYNAMIC_PARALLEL_SELECTOR_PERSONA,
         status: 'done',
         content: '',
         structured_output: {
@@ -673,7 +706,7 @@ describe('E2E: dynamic parallel selector (mock)', () => {
     expect(personaNames.filter((name) => name === 'agents/architecture')).toHaveLength(1);
     expect(personaNames.filter((name) => name === 'agents/frontend')).toHaveLength(0);
     expect(personaNames.filter((name) => name === 'agents/backend')).toHaveLength(1);
-    expect(personaNames.filter((name) => name === INTERNAL_SELECTOR_PERSONA)).toHaveLength(1);
+    expect(personaNames.filter((name) => name === DYNAMIC_PARALLEL_SELECTOR_PERSONA)).toHaveLength(1);
     expect(resumedStarts.every((record) => record.model === 'cli-resume-model')).toBe(true);
   }, 480_000);
 });
