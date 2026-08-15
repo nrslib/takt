@@ -557,6 +557,8 @@ export type AutoRoutingEstimatorSource = 'injected' | 'engine-default' | 'absent
 /** Options for workflow engine */
 export interface WorkflowEngineOptions {
   abortSignal?: AbortSignal;
+  /** Emits user-visible workflow warnings at the application boundary. */
+  onWarning?: (message: string) => void;
   /** Callback for streaming real-time output */
   onStream?: StreamCallback;
   onProviderStream?: (context: ProviderStreamContext, event: StreamEvent) => void;

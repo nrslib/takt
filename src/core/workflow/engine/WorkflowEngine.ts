@@ -265,6 +265,7 @@ export class WorkflowEngine extends EventEmitter {
       this.sharedRuntime.resumeArtifactOccurrenceIndex = new ResumeArtifactOccurrenceIndex(
         manifest,
         sourceResumePoint,
+        this.options.onWarning ?? ((message) => log.warn(message)),
       );
     }
     restoreActiveResumePoint(
@@ -314,11 +315,7 @@ export class WorkflowEngine extends EventEmitter {
         this.sharedRuntime.maxSteps = maxSteps;
       },
       claimStepOccurrence: (step, resumeStackPrefix) => (
-        this.resumeContinuation.claimStepOccurrence({
-          step,
-          resumeStackPrefix,
-          state: this.state,
-        })
+        this.claimStepOccurrence(step, resumeStackPrefix)
       ),
       consumeWorkflowCallContinuation: (step, occurrence, resumeStackPrefix) => (
         this.resumeContinuation.consumeWorkflowCallFrame({
@@ -427,11 +424,7 @@ export class WorkflowEngine extends EventEmitter {
           resolveStepProviderModelBeforeAutoRouting: (step, runtime) => this.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(step, runtime),
           resolveRuntimeForStep: this.stepCoordinator.resolveRuntimeForStep.bind(this.stepCoordinator),
           claimStepOccurrence: (step) => (
-            this.resumeContinuation.claimStepOccurrence({
-              step,
-              resumeStackPrefix: this.resumeStackPrefix,
-              state: this.state,
-            })
+            this.claimStepOccurrence(step, this.resumeStackPrefix)
           ),
           setActiveStep: this.activateStep.bind(this),
           cancelPendingStepActivation: () => this.workflowCallRunner.cancelPendingInvocation(),
@@ -466,6 +459,28 @@ export class WorkflowEngine extends EventEmitter {
 
   getState(): WorkflowState {
     return snapshotWorkflowState(this.state);
+  }
+
+  private claimStepOccurrence(
+    step: WorkflowStep,
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
+  ): number {
+    return this.resumeContinuation.claimStepOccurrence({
+      step,
+      resumeStackPrefix,
+      state: this.state,
+      ...(isWorkflowCallStep(step)
+        ? {
+            isOccurrenceNamespaceReserved: (occurrence: number) => (
+              this.workflowCallRunner.isArtifactNamespaceReserved(
+                step,
+                occurrence,
+                resumeStackPrefix,
+              )
+            ),
+          }
+        : {}),
+    });
   }
 
   private emitEvent(event: string, ...args: unknown[]): void {
@@ -884,11 +899,7 @@ export class WorkflowEngine extends EventEmitter {
           resolveStepProviderModelBeforeAutoRouting: (step, runtime) => this.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(step, runtime),
           resolveRuntimeForStep: this.stepCoordinator.resolveRuntimeForStep.bind(this.stepCoordinator),
           claimStepOccurrence: (step) => (
-            this.resumeContinuation.claimStepOccurrence({
-              step,
-              resumeStackPrefix: this.resumeStackPrefix,
-              state: this.state,
-            })
+            this.claimStepOccurrence(step, this.resumeStackPrefix)
           ),
           setActiveStep: this.activateStep.bind(this),
           cancelPendingStepActivation: () => this.workflowCallRunner.cancelPendingInvocation(),

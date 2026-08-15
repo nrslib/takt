@@ -25,6 +25,7 @@ import {
 } from '../workflow-reference.js';
 import { MAX_WORKFLOW_CALL_DEPTH } from '../workflow-call-depth.js';
 import { buildWorkflowCallInvocationIdentity } from '../workflow-call-invocation-index.js';
+import { buildWorkflowCallSiteIdentity } from '../workflow-call-site-identity.js';
 import { withWorkflowConfigErrorPath } from '../workflow-config-error.js';
 import { findWorkflowStepLocation } from '../workflow-step-location.js';
 import type {
@@ -193,6 +194,38 @@ export class WorkflowCallRunner {
           : undefined,
       },
     };
+  }
+
+  isArtifactNamespaceReserved(
+    step: WorkflowCallStep,
+    occurrence: number,
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
+  ): boolean {
+    const occurrenceIndex = this.deps.sharedRuntime.resumeArtifactOccurrenceIndex;
+    if (occurrenceIndex === undefined) {
+      return false;
+    }
+    const parentConfig = this.deps.getConfig();
+    const childWorkflow = this.resolveCallableChildWorkflow(step, resumeStackPrefix);
+    const namespace = buildWorkflowCallSiteIdentity({
+      stack: [
+        ...resumeStackPrefix,
+        buildWorkflowResumePointEntry(
+          parentConfig,
+          step.name,
+          'workflow_call',
+          occurrence,
+          this.deps.state.stepIterations,
+          occurrence,
+        ),
+      ],
+      childWorkflow,
+    }).runPathSegment;
+    return occurrenceIndex.hasArtifactNamespacePath([
+      ...(this.deps.getOptions().runPathNamespace ?? []),
+      'subworkflows',
+      namespace,
+    ]);
   }
 
   private buildChildPersonaProviders(

@@ -39,6 +39,7 @@ export class WorkflowResumeContinuation {
     readonly step: WorkflowStep;
     readonly resumeStackPrefix: readonly WorkflowResumePointEntry[];
     readonly state: WorkflowState;
+    readonly isOccurrenceNamespaceReserved?: (occurrence: number) => boolean;
   }): number {
     const frameIndex = input.resumeStackPrefix.length;
     const stepIterationIdentity = buildWorkflowStackStepIterationIdentity(
@@ -71,7 +72,11 @@ export class WorkflowResumeContinuation {
           input.state.stepIterations.set(stepIterationIdentity, inheritedMax);
         }
       }
-      return incrementStepIteration(input.state, stepIterationIdentity);
+      let occurrence = incrementStepIteration(input.state, stepIterationIdentity);
+      while (input.isOccurrenceNamespaceReserved?.(occurrence) === true) {
+        occurrence = incrementStepIteration(input.state, stepIterationIdentity);
+      }
+      return occurrence;
     }
 
     const restoredOccurrence = input.state.stepIterations.get(stepIterationIdentity);
