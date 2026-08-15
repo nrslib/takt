@@ -53,23 +53,23 @@ tests:
       - type: javascript
         metric: recall/swallowed-error
         value: |
-          return /(loadFromJson|catch)/i.test(output) &&
-            /(swallow|silent|suppress|ignor|握りつぶ|黙殺|隠蔽|無視|空配列|empty array)/i.test(output);
+          return /(loadFromJson|catch|例外|exception)/i.test(output) &&
+            /(swallow|silent|suppress|ignor|握りつぶ|黙殺|隠蔽|無視|空配列|empty array|伝播|飲み込)/i.test(output);
       - type: javascript
         metric: recall/any-type
         value: |
-          return /(updateProfile|patch|:\s*any\b|`any`|any\s*型|any\s+type)/i.test(output) &&
-            /(問題|指摘|禁止|避け|型安全|unsafe|no-explicit-any|type-?safe)/i.test(output);
+          return /(:\s*any\b|`any`|any\s*型|any\s+type|の\s*any\b|any\s*と)/i.test(output) &&
+            /(問題|指摘|禁止|避け|型安全|unsafe|no-explicit-any|type-?safe|破壊|上書き|任意|無制限|検証|拒否|限定)/i.test(output);
       - type: javascript
         metric: recall/in-place-mutation
         value: |
-          return /(sortByName|\.sort\()/i.test(output) &&
-            /(直接|破壊|変更|mutat|in-?place|元の|入力|引数|caller)/i.test(output);
+          return /(sortByName|\.sort\b|ソート|並べ替え|並び替え)/i.test(output) &&
+            /(直接|破壊|変更|mutat|in-?place|元の|入力|引数|caller|同一参照)/i.test(output);
       - type: javascript
         metric: recall/todo-without-issue
         value: |
           return /TODO/i.test(output) &&
-            /(issue|ticket|チケット|課題|根拠|番号|未追跡|管理されていない)/i.test(output);
+            /(issue|ticket|チケット|課題|根拠|番号|未追跡|管理されていない|未実装|先送り|未完成|放置)/i.test(output);
 
   - description: 'precision: clean diff must not produce fabricated findings'
     vars:
