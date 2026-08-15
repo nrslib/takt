@@ -16,7 +16,7 @@ The executable, arguments, environment, working directory, loader, plugin, and s
 
 ## Path and Filesystem Authority
 
-Separate lexical path selection from authority over the resolved target. Relative normalization can establish lexical containment; existing symlinks and filesystem races require canonical or handle-based evidence only where the contract forbids escape. Identify who controls the path, which root is protected, the resolved read, write, or delete target, and the confidentiality or integrity impact.
+Separate lexical path selection from authority over the resolved target. Relative normalization can establish lexical containment. Existing symlinks require canonical-path or handle-based evidence where the contract forbids escape. A canonical path is containment evidence only when no filesystem race can occur. Where a race can occur between validation and use, require a stable handle or an equivalent atomic no-follow operation; canonicalization alone does not prove that the operated-on target stayed the same. Identify who controls the path, which root is protected, the resolved read, write, or delete target, and the confidentiality or integrity impact.
 
 ## Terminal Interpretation
 

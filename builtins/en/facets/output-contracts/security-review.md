@@ -3,10 +3,9 @@
 
 {{include:output-contracts/base-review-result}}
 
-## Severity: None / Low / Medium / High / Critical
+{{include:output-contracts/base-review-summary}}
 
-## Summary
-{Summarize the verified security result in one or two sentences}
+## Severity: None / Low / Medium / High / Critical
 
 {{include:output-contracts/base-review-problem-family-completion-sweep}}
 

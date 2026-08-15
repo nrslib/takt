@@ -3,10 +3,9 @@
 
 {{include:output-contracts/base-review-result}}
 
-## 重大度: None / Low / Medium / High / Critical
+{{include:output-contracts/base-review-summary}}
 
-## サマリー
-{確認したセキュリティ結果を1～2文で要約}
+## 重大度: None / Low / Medium / High / Critical
 
 {{include:output-contracts/base-review-problem-family-completion-sweep}}
 

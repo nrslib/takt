@@ -5,6 +5,9 @@ params:
   review_knowledge_additions:
     type: facet_ref[]
     facet_kind: knowledge
+  security_review_knowledge_additions:
+    type: facet_ref[]
+    facet_kind: knowledge
   security_review_pool:
     type: facet_pool_ref
   architecture_review_instruction: { type: facet_ref, facet_kind: instruction }
@@ -68,8 +71,13 @@ parallel:
       tags: [review]
       edit: false
       persona: architecture-reviewer
-      policy: [contract-change, review]
-      knowledge: architecture
+      policy:
+        - contract-change
+        - review
+        - $param: review_policy_additions
+      knowledge:
+        - architecture
+        - $param: review_knowledge_additions
       instruction:
         $param: architecture_review_instruction
       pass_previous_response: false
@@ -83,8 +91,14 @@ parallel:
       tags: [review]
       edit: false
       persona: frontend-reviewer
-      policy: [contract-change, review]
-      knowledge: [frontend, react]
+      policy:
+        - contract-change
+        - review
+        - $param: review_policy_additions
+      knowledge:
+        - frontend
+        - react
+        - $param: review_knowledge_additions
       instruction:
         $param: frontend_review_instruction
       pass_previous_response: false
@@ -98,8 +112,15 @@ parallel:
       tags: [review]
       edit: false
       persona: coding-reviewer
-      policy: [contract-change, review, coding]
-      knowledge: [backend, architecture]
+      policy:
+        - contract-change
+        - review
+        - coding
+        - $param: review_policy_additions
+      knowledge:
+        - backend
+        - architecture
+        - $param: review_knowledge_additions
       instruction:
         $param: coding_review_instruction
       pass_previous_response: false
@@ -108,19 +129,25 @@ parallel:
           - name: backend-review.md
             format: coding-review
     - name: security-review
-      description: Do not select by default. Select only when (a) the change may affect secrets, credentials, external-input handling, process execution, filesystem, network, or terminal boundaries, permissions, or sandboxing, or (b) the change is large enough that security impact cannot be confidently ruled out. Do not select for documentation-only, comment-only, or test-only changes, or small localized fixes.
+      description: Do not select by default. Select only when (a) the change may affect secret or credential handling, external-input handling, process execution, filesystem operations, network or terminal boundaries, sandboxing, or permissions, or (b) the change is large enough that security impact cannot be confidently ruled out. Do not select for documentation-only, comment-only, or test-only changes, or small localized fixes.
       capabilities: readonly
       tags: [review]
       edit: false
       persona: security-reviewer
-      policy: [contract-change, security-review]
-      knowledge: [security, security-data, security-dependencies]
+      policy:
+        - contract-change
+        - security-review
+        - $param: review_policy_additions
+      knowledge:
+        - security
+        - security-data
+        - security-dependencies
+        - $param: security_review_knowledge_additions
       dynamic_facets:
         pool:
           $param: security_review_pool
         selector:
-          instruction: >-
-            Inspect the changed content and the target agent prompt, not only changed filenames. Identify who controls each input, which trust or authority boundary it crosses, and which processing or asset it reaches, then select every candidate whose description applies. If no candidate applies, return an empty array; the security reviewer will still perform the minimal review with only its fixed generic Knowledge. If input is missing or truncated and non-applicability cannot be determined, select every candidate that may apply.
+          instruction: select-applicable-candidates
       instruction:
         $param: security_review_instruction
       pass_previous_response: false
@@ -134,8 +161,15 @@ parallel:
       tags: [review]
       edit: false
       persona: testing-reviewer
-      policy: [contract-change, review, testing]
-      knowledge: [unit-testing, e2e-testing]
+      policy:
+        - contract-change
+        - review
+        - testing
+        - $param: review_policy_additions
+      knowledge:
+        - unit-testing
+        - e2e-testing
+        - $param: review_knowledge_additions
       instruction:
         $param: testing_review_instruction
       pass_previous_response: false
@@ -144,7 +178,5 @@ parallel:
           - name: testing-review.md
             format: testing-review
   selection:
-    mode: replace
     selector:
-      instruction: >-
-        Select only pool candidates whose description conditions apply to the changed content. Do not select security-review unless the conditions in its description apply.
+      instruction: select-applicable-candidates

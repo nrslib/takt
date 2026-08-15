@@ -13,6 +13,10 @@ subworkflow:
       type: facet_ref[]
       facet_kind: knowledge
       default: [takt]
+    security_review_knowledge_additions:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: [takt]
     security_review_pool:
       type: facet_pool_ref
       default: takt-security-review-facets
@@ -34,6 +38,8 @@ steps:
         $param: review_policy_additions
       review_knowledge_additions:
         $param: review_knowledge_additions
+      security_review_knowledge_additions:
+        $param: security_review_knowledge_additions
       security_review_pool:
         $param: security_review_pool
       architecture_review_instruction: { $param: architecture_review_instruction }
@@ -42,108 +48,6 @@ steps:
       coding_review_instruction: { $param: coding_review_instruction }
       ai_antipattern_review_instruction: { $param: ai_antipattern_review_instruction }
       frontend_review_instruction: { $param: frontend_review_instruction }
-    parallel:
-      fixed:
-        - name: coding-review
-          capabilities: readonly
-          tags: [review]
-          edit: false
-          persona: coding-reviewer
-          policy:
-            - contract-change
-            - review
-            - coding
-            - testing
-            - $param: review_policy_additions
-          knowledge:
-            - architecture
-            - unit-testing
-            - e2e-testing
-            - $param: review_knowledge_additions
-          instruction:
-            $param: coding_review_instruction
-          pass_previous_response: false
-          output_contracts:
-            report:
-              - name: coding-review.md
-                format: coding-review
-        - name: ai-antipattern-review
-          capabilities: readonly
-          tags: [review]
-          edit: false
-          persona: ai-antipattern-reviewer
-          policy:
-            - contract-change
-            - review
-            - ai-antipattern
-            - $param: review_policy_additions
-          knowledge:
-            - architecture
-            - $param: review_knowledge_additions
-          instruction:
-            $param: ai_antipattern_review_instruction
-          pass_previous_response: false
-          output_contracts:
-            report:
-              - name: ai-antipattern-review.md
-                format: ai-antipattern-review
-      pool:
-        - name: architecture-review
-          description: モジュール構造、責務分割、依存方向、呼び出し経路をレビューする
-          capabilities: readonly
-          tags: [review]
-          edit: false
-          persona: architecture-reviewer
-          policy: [contract-change, review]
-          knowledge: [takt, architecture]
-          instruction:
-            $param: architecture_review_instruction
-          pass_previous_response: false
-          output_contracts:
-            report:
-              - name: architecture-review.md
-                format: architecture-review
-        - name: security-review
-          description: 既定では選ばない。(a) TAKT の変更が secrets・credential・外部入力の処理・プロセス起動・権限、または workflow・facet・provider・tool・sandbox・worktree・ファイルシステム・ネットワーク・端末の境界に触れるおそれがある場合、または (b) 修正の規模が大きく、セキュリティへの影響がないと判断しきれない場合に限って選ぶ。ドキュメントのみ・コメントのみ・テストのみの変更や小さな局所修正では選ばない。
-          capabilities: readonly
-          tags: [review]
-          edit: false
-          persona: security-reviewer
-          policy: [contract-change, security-review]
-          knowledge: [takt, security, security-data, security-dependencies]
-          dynamic_facets:
-            pool:
-              $param: security_review_pool
-            selector:
-              instruction: >-
-                変更ファイル名だけでなく変更内容と対象エージェントのプロンプトを確認し、入力を制御する主体・越える trust または権限境界・到達する処理や資産を判定して、description に該当する候補をすべて選ぶ。いずれにも該当しなければ空配列を返す。この場合も security reviewer は固定された汎用 Knowledge だけで最小レビューを行う。入力が欠落・切り詰めで非該当と判定できない場合は、該当し得る候補をすべて選ぶ。
-          instruction:
-            $param: security_review_instruction
-          pass_previous_response: false
-          output_contracts:
-            report:
-              - name: security-review.md
-                format: security-review
-        - name: testing-review
-          description: テストカバレッジ、テスト設計、統合境界、E2E境界をレビューする
-          capabilities: readonly
-          tags: [review]
-          edit: false
-          persona: testing-reviewer
-          policy: [contract-change, review, testing, takt-testing]
-          knowledge: [takt, unit-testing, e2e-testing]
-          instruction:
-            $param: testing_review_instruction
-          pass_previous_response: false
-          output_contracts:
-            report:
-              - name: testing-review.md
-                format: testing-review
-      selection:
-        mode: replace
-        selector:
-          instruction: >-
-            変更内容について description の条件に該当する pool 候補だけを選ぶ。security-review は description の条件に該当しない限り選ばない。
     rules:
       self:
         - condition: any("error")
@@ -156,5 +60,7 @@ steps:
         coding-review: [{ condition: approved }, { condition: needs_fix }]
         ai-antipattern-review: [{ condition: approved }, { condition: needs_fix }]
         architecture-review: [{ condition: approved }, { condition: needs_fix }]
+        frontend-review: [{ condition: approved }, { condition: needs_fix }]
+        backend-review: [{ condition: approved }, { condition: needs_fix }]
         security-review: [{ condition: approved }, { condition: needs_fix }]
         testing-review: [{ condition: approved }, { condition: needs_fix }]

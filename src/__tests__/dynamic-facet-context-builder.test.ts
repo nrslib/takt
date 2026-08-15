@@ -164,6 +164,8 @@ describe('DynamicFacetContextBuilder (C-SELECTOR-INPUT, C-SELECTOR-INVOKE)', () 
 
     expect(prompt).not.toContain('Persona:');
     expect(prompt).not.toContain('persona-less-step');
+    expect(prompt).toContain('Policy:\n(none)');
+    expect(prompt).toContain('Knowledge:\n(none)');
     expect(prompt).toContain('Instruction:\nTARGET INSTRUCTION');
   });
 });

@@ -261,6 +261,26 @@ describe('selector guidance resolution', () => {
     });
   });
 
+  it.each(['en', 'ja'] as const)(
+    'resolves the shared builtin candidate-selection instruction into both %s selector configurations',
+    (lang) => {
+      const instruction = readFileSync(
+        join(getBuiltinFacetDir(lang, 'instructions'), 'select-applicable-candidates.md'),
+        'utf-8',
+      );
+      const result = normalizeInstructionFacetWorkflow(
+        createInstructionFacetWorkflow('select-applicable-candidates'),
+        '/project/.takt/workflows',
+        { projectDir: '/project', workflowDir: '/project/.takt/workflows', lang },
+      );
+
+      expect(result).toEqual({
+        facetInstruction: instruction,
+        parallelInstruction: instruction,
+      });
+    },
+  );
+
   it('resolves a .md selector instruction reference from the section map before filesystem paths', () => {
     const workflow = createInstructionFacetWorkflow('select.md');
     workflow.instructions = {

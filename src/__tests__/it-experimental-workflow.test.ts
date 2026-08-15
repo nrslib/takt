@@ -568,28 +568,50 @@ describe('experimental builtin workflow', () => {
           'coding-review',
           'ai-antipattern-review',
         ]);
-        expect(reviewRoot.parallel.pool.map(({ name }) => name)).toEqual(
-          workflowName === 'experimental'
-            ? ['architecture-review', 'frontend-review', 'backend-review', 'security-review', 'testing-review']
-            : ['architecture-review', 'security-review', 'testing-review'],
-        );
-        expect(reviewRoot.parallel.pool.find(({ name }) => name === 'security-review')?.description).toContain(
+        expect(reviewRoot.parallel.pool.map(({ name }) => name)).toEqual([
+          'architecture-review',
+          'frontend-review',
+          'backend-review',
+          'security-review',
+          'testing-review',
+        ]);
+        const securityDescription = reviewRoot.parallel.pool
+          .find(({ name }) => name === 'security-review')?.description;
+        expect(securityDescription).toContain(
           language === 'en' ? 'Do not select by default' : '既定では選ばない',
         );
-        expect(reviewRoot.parallel.selection.selector?.instruction).toContain(
-          language === 'en'
-            ? 'Do not select security-review unless'
-            : 'security-review は description の条件に該当しない限り選ばない',
+        for (const category of ['credential', 'process', 'filesystem', 'terminal', 'sandbox']) {
+          expect(securityDescription).toContain(category);
+        }
+        expect(securityDescription).toContain(language === 'en' ? 'permissions' : '権限');
+        expect(securityDescription).not.toMatch(/\b(?:TAKT|worktree|provider|facet)\b/u);
+        expect(reviewRoot.parallel.selection.mode).toBe('replace');
+        const selectorInstruction = reviewRoot.parallel.selection.selector?.instruction;
+        expect(selectorInstruction).toContain(
+          language === 'en' ? 'changed content and reports' : '変更内容とレポート',
         );
         expect(securityReview.knowledgeContents?.map(({ sourcePath }) => basename(sourcePath ?? '')))
           .toEqual(workflowName === 'experimental'
-            ? ['security.md', 'security-data.md', 'security-dependencies.md']
-            : ['takt.md', 'security.md', 'security-data.md', 'security-dependencies.md']);
-        expect(securityReview.dynamicFacets?.selector?.instruction).toContain(
-          language === 'en'
-            ? 'changed content and the target agent prompt'
-            : '変更内容と対象エージェントのプロンプト',
-        );
+            ? [
+                'security.md',
+                'security-data.md',
+                'security-dependencies.md',
+              ]
+            : [
+                'security.md',
+                'security-data.md',
+                'security-dependencies.md',
+                'takt.md',
+              ]);
+        if (workflowName === 'takt-experimental') {
+          for (const reviewer of getAllParallelSubSteps(reviewRoot.parallel)) {
+            expect(reviewer.policyContents?.map(({ sourcePath }) => basename(sourcePath ?? '')))
+              .toContain('takt-testing.md');
+            expect(reviewer.knowledgeContents?.map(({ sourcePath }) => basename(sourcePath ?? '')))
+              .toContain('takt.md');
+          }
+        }
+        expect(securityReview.dynamicFacets?.selector?.instruction).toBe(selectorInstruction);
         const poolName = securityReview.dynamicFacets?.pool;
         if (poolName === undefined) {
           throw new Error(`Security reviewer in "${reviewerSuite.name}" has no dynamic facet pool`);
@@ -607,6 +629,46 @@ describe('experimental builtin workflow', () => {
               { id: 'cli', knowledgeRefs: ['security-local'] },
             ]);
       }
+    },
+  );
+
+  it.each(['en', 'ja'] as const)(
+    'should compose every %s TAKT reviewer from the common step with injected facets and rules',
+    (language) => {
+      writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${language}\n`);
+      invalidateAllResolvedConfigCache();
+      const reviewerSuite = loadWorkflowFromFile(
+        join(getBuiltinWorkflowsDir(language), 'takt-experimental-review.yaml'),
+        projectDir,
+      );
+      const reviewRoot = findWorkflowStep(reviewerSuite, reviewerSuite.initialStep);
+      if (reviewRoot.parallel === undefined || Array.isArray(reviewRoot.parallel)) {
+        throw new Error(`Review workflow "${reviewerSuite.name}" has no dynamic parallel reviewers`);
+      }
+      const reviewers = getAllParallelSubSteps(reviewRoot.parallel);
+      expect(reviewers.map(({ name }) => name)).toEqual([
+        'coding-review',
+        'ai-antipattern-review',
+        'architecture-review',
+        'frontend-review',
+        'backend-review',
+        'security-review',
+        'testing-review',
+      ]);
+      for (const reviewer of reviewers) {
+        expect(reviewer.policyContents?.map(({ sourcePath }) => basename(sourcePath ?? '')))
+          .toContain('takt-testing.md');
+        expect(reviewer.knowledgeContents?.map(({ sourcePath }) => basename(sourcePath ?? '')))
+          .toContain('takt.md');
+        expect(semanticRuleCandidatesOf(reviewer.rules ?? [], false).map(({ label }) => label))
+          .toEqual(['approved', 'needs_fix']);
+      }
+      const securityReview = findWorkflowStep(reviewerSuite, 'security-review');
+      expect(securityReview.knowledgeContents?.map(({ sourcePath }) => basename(sourcePath ?? '')))
+        .toEqual(['security.md', 'security-data.md', 'security-dependencies.md', 'takt.md']);
+      expect(securityReview.description).toContain(
+        language === 'en' ? 'Do not select by default' : '既定では選ばない',
+      );
     },
   );
 

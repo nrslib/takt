@@ -584,6 +584,38 @@ describe('SelectorInputReader', () => {
     ).toBeLessThanOrEqual(1024 * 1024);
   });
 
+  it('should reject when inputs without the target prompt fit under 1 MiB but the prompt exceeds the shared budget', async () => {
+    const cwd = createGitDirectory();
+    const reportDirectory = join(cwd, 'reports');
+    mkdirSync(reportDirectory);
+    const requestedNames = Array.from({ length: 15 }, (_, index) => `report-${index}.md`);
+    for (const name of requestedNames) {
+      writeFileSync(join(reportDirectory, name), 'r'.repeat(64 * 1024));
+    }
+    const reader = new SelectorInputReader(
+      new FakeGitCommandRunner([], 0, () => Buffer.alloc(0)),
+    );
+
+    const withoutPrompt = await reader.readInputs(
+      reportDirectory,
+      requestedNames,
+      cwd,
+      undefined,
+    );
+    expect(
+      Buffer.byteLength(withoutPrompt.reports)
+      + Buffer.byteLength(withoutPrompt.workingTreeDiff),
+    ).toBeLessThan(1024 * 1024);
+
+    await expect(reader.readInputs(
+      reportDirectory,
+      requestedNames,
+      cwd,
+      undefined,
+      'p'.repeat(64 * 1024),
+    )).rejects.toThrow('Dynamic selector input exceeds 1048576 bytes');
+  });
+
   it('should accept an aggregate evidence payload at exactly 1 MiB', async () => {
     const cwd = createGitDirectory();
     const reportDirectory = join(cwd, 'reports');
