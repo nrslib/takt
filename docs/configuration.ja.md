@@ -130,7 +130,7 @@ assistant:
 #         reasoning_effort: medium
 ```
 
-`takt_providers.selector` は任意です。provider/model の優先順位は、明示的な CLI または環境 override、project selector、global selector、project top-level、global top-level の順です。model は解決済み provider と一致する候補だけを採用します。`provider_options` は selector entry だけを global → project の leaf 単位でマージし、top-level・persona・pool sub-step の options は selector に継承されません。空の selector entry と空の `provider_options` entry は設定読み込み時に拒否されます。dynamic selector は provider-neutral な fresh-session transport を使います。明示的な制限が必要な runtime profile には `capabilities` と `permission_mode` を設定し、省略した項目には selector 専用の制限を追加しません。dynamic parallel を使わない workflow では selector 設定を解決せず、既存実行へ影響しません。
+`takt_providers.selector` は任意です。provider/model の優先順位は、明示的な CLI または環境 override、project selector、global selector、project top-level、global top-level の順です。model は解決済み provider と一致する候補だけを採用します。`provider_options` は selector entry だけを global → project の leaf 単位でマージし、top-level・persona・pool sub-step の options は selector に継承されません。空の selector entry と空の `provider_options` entry は設定読み込み時に拒否されます。dynamic selector は provider-neutral な fresh-session transport を使い、`permission_mode: readonly` と固定の read-only tool allowlist `Read`・`Glob`・`Grep` を常に渡します。selector profile の options から Bash、編集・書き込み、その他の tool が追加されることはありません。dynamic parallel を使わない workflow では selector 設定を解決せず、既存実行へ影響しません。
 
 ```yaml
 # ~/.takt/config.yaml（続き）

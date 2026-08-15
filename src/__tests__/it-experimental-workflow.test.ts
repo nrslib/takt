@@ -341,11 +341,12 @@ function responseForReturn(
   return response(workflow, stepName, step.persona, ruleLabel);
 }
 
-const INTERNAL_SELECTOR_PERSONA = 'takt-internal';
+const DYNAMIC_FACET_SELECTOR_PERSONA = 'dynamic-facet-selector';
+const DYNAMIC_PARALLEL_SELECTOR_PERSONA = 'dynamic-parallel-selector';
 
 function selection(selectedIds: string[], rationale: string): ScenarioEntry {
   return {
-    persona: INTERNAL_SELECTOR_PERSONA,
+    persona: DYNAMIC_FACET_SELECTOR_PERSONA,
     status: 'done',
     content: rationale,
     structuredOutput: {
@@ -358,7 +359,7 @@ function selection(selectedIds: string[], rationale: string): ScenarioEntry {
 function parallelSelection(selectedIds: string[], rationale: string): ScenarioEntry {
   return {
     ...selection(selectedIds, rationale),
-    persona: INTERNAL_SELECTOR_PERSONA,
+    persona: DYNAMIC_PARALLEL_SELECTOR_PERSONA,
   };
 }
 
@@ -589,7 +590,19 @@ describe('experimental builtin workflow', () => {
         expect(reviewRoot.parallel.selection.reports).toEqual(['review-resolution.md']);
         const selectorInstruction = reviewRoot.parallel.selection.selector?.instruction;
         expect(selectorInstruction).toContain(
-          language === 'en' ? 'changed content and reports' : '変更内容とレポート',
+          language === 'en'
+            ? 'Read the implementation report, plan, and latest review-resolution.md first'
+            : 'まず実装報告、計画、最新の review-resolution.md を読み',
+        );
+        expect(selectorInstruction).toContain(
+          language === 'en'
+            ? 'If no candidate applies, return an empty array'
+            : 'どの候補にも該当しなければ空配列を返し',
+        );
+        expect(selectorInstruction).toContain(
+          language === 'en'
+            ? 'keep selecting that candidate even when its description does not apply'
+            : 'その候補の description が該当しなくても選び続ける',
         );
         expect(securityReview.knowledgeContents?.map(({ sourcePath }) => basename(sourcePath ?? '')))
           .toEqual(workflowName === 'experimental'

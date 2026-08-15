@@ -310,7 +310,7 @@ Sub-steps execute concurrently, and the parent aggregates sub-step matches via `
 
 ### Dynamic Parallel Step
 
-`parallel` may instead define a fixed set and a selectable pool. TAKT runs an internal selector when the step is entered; it is not a workflow step and cannot create agents or change the workflow. The selector uses the resolved runtime profile in a fresh session and returns a TAKT-owned structured output contract. Configure `capabilities` and `permission_mode` on that profile when explicit restrictions are required; omitted fields add no selector-specific restrictions.
+`parallel` may instead define a fixed set and a selectable pool. TAKT runs an internal selector when the step is entered; it is not a workflow step and cannot create agents or change the workflow. The selector runs with read-only permission and cannot modify or write files. Providers that honor the tool allowlist permit only `Read`, `Glob`, and `Grep`. It uses the resolved runtime profile in a fresh session and returns a TAKT-owned structured output contract.
 
 ```yaml
   - name: reviewers
@@ -346,9 +346,9 @@ Sub-steps execute concurrently, and the parent aggregates sub-step matches via `
 - `all()` and `any()` aggregate only the fixed and selected pool items of the current round. Dynamic parallel rejects position-dependent aggregate expressions.
 - Invalid selector output or an unknown selection fails before a fixed or pool agent starts; there is no all-pool fallback.
 - Loading fails before execution when `pool` is missing or empty, a pool description is empty, a fragment cannot expand, an expanded name is duplicated, a fixed/pool item is not an agent sub-step, `selection.mode` is not `replace` or `cumulative`, or an aggregate label is not defined by every candidate. Selector execution also fails before reviewer startup when the provider is unresolved, its strict output is invalid, or fixed plus selected pool items is empty. Resume points containing the removed dynamic selection fields are not supported.
-- The selector input contains the task, reports available in the current workflow-call scope, the current staged, unstaged, deleted, and untracked changes against `HEAD`, candidate IDs and descriptions, the previous selection for `cumulative`, and whether this is an initial entry or a new round. Its output must be a completed JSON object with only `selected_ids` and `rationale`; non-arrays, non-string IDs, duplicate IDs, and extra properties are rejected.
-- Selector evidence is complete on success and uses UTF-8 byte limits. Each report and each changed-path payload may be at most 64 KiB; at most 1,024 changed paths are accepted; each Git path list may be at most 1 MiB; and the combined rendered reports and current diff may be at most 1 MiB. A value exactly at a limit is accepted, while one byte or one path above it fails before the selector or any participant starts. `.takt/runs/` paths are excluded. Untracked symlinks contribute only their link target text and are never dereferenced; other non-regular files are rejected.
-- The current diff includes changes that already existed when the run started. Changes committed during a run are no longer different from `HEAD` and are not guaranteed to remain in later selector inputs; prior reports remain available as separate evidence. A normal empty diff is passed explicitly. A non-Git directory, an unavailable Git command, or a repository without `HEAD` fails before agent startup.
+- The selector input contains the task, the Report Directory path, the target report names (including names from `selection.reports`), the changed file paths against `HEAD`, candidate IDs and descriptions, the previous selection for `cumulative`, and whether this is an initial entry or a new round. The selector resolves report references through the current workflow scope, exact resume snapshot, and parent workflow scope before passing the resulting paths. It is configured with a tool allowlist of `Read`, `Glob`, and `Grep` for reading referenced files and reports; providers that honor the allowlist permit only those tools. Its output must be a completed JSON object with only `selected_ids` and `rationale`; non-arrays, non-string IDs, duplicate IDs, and extra properties are rejected.
+- The changed path list includes staged, unstaged, deleted, and untracked names against `HEAD`; `.takt/runs/` paths are excluded. Report references are resolved through the existing report-reference rules before they are passed as paths; report contents are read by the selector when needed.
+- Changes committed during a run are no longer different from `HEAD` and are not guaranteed to remain in later selector path lists; prior reports remain available through their report references. A non-Git directory or an unavailable Git command produces an empty changed-path list or fails according to the Git boundary.
 - The saved participant manifest is keyed by the workflow invocation path, workflow-call instance path, and parallel step. Report inheritance and aggregate evaluation use that manifest, so a reviewer removed by `replace` cannot contribute stale reports or findings to the current round.
 
 ### Dynamic Facet Selection (facet pools)
@@ -530,18 +530,18 @@ Every candidate in a pool shares the same shape:
 
 #### Selector contract
 
-When a step with `dynamic_facets` is entered, TAKT runs an internal selector before the main agent starts. The selector is not a workflow step, cannot create agents or change the workflow, and uses the resolved runtime profile with a TAKT-owned structured output contract in a fresh session. Configure `capabilities` and `permission_mode` on that profile when explicit restrictions are required; omitted fields add no selector-specific restrictions.
+When a step with `dynamic_facets` is entered, TAKT runs an internal selector before the main agent starts. The selector is not a workflow step, cannot create agents or change the workflow, and uses the resolved runtime profile in a fresh session. It runs with read-only permission and cannot modify or write files. Providers that honor the tool allowlist permit only `Read`, `Glob`, and `Grep`.
 
 The selector receives at least:
 
 - The user request
 - The leaf workflow, workflow-call instance, and step identity
 - Whether this is an initial entry or a re-entry, and the step iteration
-- Reports available in the current workflow-call scope
-- The cumulative diff since the task started
+- The Report Directory path and report names available in the current workflow-call scope
+- The changed file paths from the working tree at selector invocation time (equivalent to `git diff HEAD`)
 - Candidate IDs and descriptions
 
-Facet bodies are not sent to the selector. The selector returns only candidate IDs and a rationale against a strict structured output schema (`additionalProperties: false`, `selected_ids` as a unique array whose items are an `enum` of the pool's candidate IDs, plus a required `rationale` string). Pool-external IDs, duplicate IDs, and selections exceeding a specified `max_selected` are rejected. Selector failure stops the run before the main agent starts; there is no implicit fallback to all candidates or to an empty selection. The selector itself is not subject to dynamic facet selection or auto routing.
+Candidate facet bodies are not sent separately to the selector. The selector receives the target-agent prompt inline, resolves the referenced reports through the current workflow scope, exact resume snapshot, and parent workflow scope, and is configured with a tool allowlist of `Read`, `Glob`, and `Grep` for reading the referenced files and reports; providers that honor the allowlist permit only those tools. It returns only candidate IDs and a rationale against a strict structured output schema (`additionalProperties: false`, `selected_ids` as a unique array whose items are an `enum` of the pool's candidate IDs, plus a required `rationale` string). Pool-external IDs, duplicate IDs, and selections exceeding a specified `max_selected` are rejected. Selector failure stops the run before the main agent starts; there is no implicit fallback to all candidates or to an empty selection. The selector itself is not subject to dynamic facet selection or auto routing.
 
 The selector provider is resolved through #1136's `provider.targets.internal_agents.selector` in `runtime.yaml`. When left unspecified, the runtime's normal default is used.
 
@@ -639,7 +639,7 @@ steps:
           instruction: select-reviewers
 ```
 
-`selector.instruction` is required whenever a selector is configured; `persona` is optional. The selector guidance only describes how to select facet or participant IDs. TAKT retains responsibility for the evidence input, structured output contract, candidate validation, selection mode, read-only execution, empty tools/MCP, and disabled permission bypass. A selector cannot change the selected agent's `persona`, `instruction`, provider, permissions, tools, MCP configuration, or output contract.
+`selector.instruction` is required whenever a selector is configured; `persona` is optional. The selector guidance only describes how to select facet or participant IDs. TAKT retains responsibility for the evidence references, read-only structured execution and tools, structured output contract, candidate validation, selection mode, and disabled permission bypass. A selector cannot change the selected agent's `persona`, `instruction`, provider, permissions, tools, MCP configuration, or output contract.
 
 The selector guidance references the workflow's existing persona and instruction resources. Unknown selector keys, an empty selector, a selector without `instruction`, or an unresolved persona/instruction reference fails during schema or workflow validation with the configuration path. A raw `$param` reference is valid only after callable argument expansion; an unexpanded reference in a non-callable workflow is rejected.
 

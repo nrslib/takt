@@ -309,7 +309,7 @@ TAKT は Normal / Parallel / Dynamic Parallel / Arpeggio / Team Leader / Workflo
 
 ### Dynamic Parallel Step
 
-`parallel` には、常時実行する `fixed` と selector が選ぶ `pool` を指定するオブジェクト形式も使えます。TAKT は step へ進入した時点で内部 selector を実行します。selector は workflow step ではなく、agent や workflow 定義を生成・変更できません。解決済み runtime profile を fresh session で使い、TAKT が所有する structured output contract を返します。明示的な制限が必要なら profile に `capabilities` と `permission_mode` を設定します。省略した項目について selector 専用の制限は追加されません。
+`parallel` には、常時実行する `fixed` と selector が選ぶ `pool` を指定するオブジェクト形式も使えます。TAKT は step へ進入した時点で内部 selector を実行します。selector は workflow step ではなく、agent や workflow 定義を生成・変更できません。selector は読み取り専用で実行され、ファイルの変更・書き込みはできません。ツール許可リストを尊重する provider では `Read`・`Glob`・`Grep` のみが許可されます。解決済み runtime profile を fresh session で使い、TAKT が所有する structured output contract を返します。
 
 ```yaml
   - name: reviewers
@@ -345,9 +345,9 @@ TAKT は Normal / Parallel / Dynamic Parallel / Arpeggio / Team Leader / Workflo
 - `all()` と `any()` は当該 round で実行する fixed と選択済み pool だけを集約します。固定位置に依存する aggregate 式は dynamic parallel では使えません。
 - 不正な selector 出力や pool 外の ID は fixed/pool agent の起動前に失敗します。全 pool を実行する fallback はありません。
 - ロード時には、`pool` の未指定・空配列、pool の空 `description`、fragment 展開失敗、展開後の名前重複、agent sub-step 以外の fixed/pool、無効な `selection.mode`、または全候補が定義しない aggregate 結果ラベルを検出して実行前に失敗します。selector の provider 未解決・strict 出力不正、fixed と選択済み pool を結合した実行対象の空集合も reviewer 起動前に失敗します。削除された dynamic selection fields を含む resume point はサポートしません。
-- selector には、タスク、現在の workflow-call scope で参照できるレポート、`HEAD` に対する現在の staged・unstaged・削除・未追跡変更、候補 ID と説明、`cumulative` の過去の選択、および初回か新しい round かを渡します。出力は `selected_ids` と `rationale` だけを持つ完了済み JSON object でなければならず、非配列・非文字列 ID・重複 ID・追加プロパティは拒否します。
-- selector の証拠入力は、成功時には全文を含み、上限は UTF-8 byte 数で判定します。各 report と各変更 path の payload は 64 KiB 以下、変更 path は 1,024 件以下、各 Git path list は 1 MiB 以下、render 済み report と現在の diff の合計は 1 MiB 以下です。上限ちょうどは受理し、1 byte または 1 path でも超えると selector と全 participant の起動前に失敗します。`.takt/runs/` 配下は除外します。未追跡 symbolic link は link target の文字列だけを入力し、参照先を読みません。それ以外の非通常ファイルは拒否します。
-- 現在の diff には run 開始前から存在する変更も含まれます。run 中に commit された変更は `HEAD` との差分ではなくなるため、後続の selector 入力へ残ることを保証しません。前段レポートは別の証拠として引き続き参照できます。正常な空差分は明示的に渡します。非 Git directory、Git command の取得失敗、または `HEAD` が存在しない repository は agent 起動前に失敗します。
+- selector には、タスク、Report Directory のパス、対象レポート名（`selection.reports` の指定を含む）、`HEAD` に対する変更ファイルのパス一覧、候補 ID と説明、`cumulative` の過去の選択、および初回か新しい round かを渡します。selector は既存の report-reference の探索順（現在の workflow scope、exact resume snapshot、親 workflow scope）でレポート参照を解決してからパスを受け取ります。参照先のファイルとレポートを読むために `Read`・`Glob`・`Grep` のツール許可リストが設定され、許可リストを尊重する provider ではそれらの tool のみが許可されます。出力は `selected_ids` と `rationale` だけを持つ完了済み JSON object でなければならず、非配列・非文字列 ID・重複 ID・追加プロパティは拒否します。
+- 変更パス一覧には `HEAD` に対する staged・unstaged・削除・未追跡のファイル名が含まれ、`.takt/runs/` 配下は除外します。レポート参照は既存の report-reference ルールで解決されたパスとして渡し、本文の読み取りは selector が必要に応じて行います。
+- run 中に commit された変更は `HEAD` との差分ではなくなるため、後続 selector のパス一覧に残ることを保証しません。前段レポートはレポート参照を通じて引き続き利用できます。非 Git directory や Git command の取得失敗は、Git 境界の規則に従って空の変更パス一覧または失敗になります。
 - 保存する参加者 manifest のキーには workflow invocation path、workflow-call instance path、parallel step を含めます。report 継承と aggregate 評価はこの manifest を使用するため、`replace` により外れた reviewer の古い report や finding は現在 round に混入しません。
 
 ### Dynamic Facet Selection（facet pool）
@@ -529,18 +529,18 @@ pool 内の全候補は同じ形を持ちます。
 
 #### selector 契約
 
-`dynamic_facets` を持つ step へ進入したとき、TAKT は main agent 起動前に内部 selector を実行します。selector は workflow step ではなく、agent や workflow 定義を生成・変更できず、解決済み runtime profile と TAKT が所有する structured output contract を fresh session で使います。明示的な制限が必要なら profile に `capabilities` と `permission_mode` を設定します。省略した項目について selector 専用の制限は追加されません。
+`dynamic_facets` を持つ step へ進入したとき、TAKT は main agent 起動前に内部 selector を実行します。selector は workflow step ではなく、agent や workflow 定義を生成・変更できません。selector は読み取り専用で実行され、ファイルの変更・書き込みはできません。ツール許可リストを尊重する provider では `Read`・`Glob`・`Grep` のみが許可されます。解決済み runtime profile を fresh session で使い、TAKT が所有する structured output contract を返します。
 
 selector には少なくとも次を渡します。
 
 - ユーザー要求
 - leaf workflow、workflow-call instance、step の identity
 - 初回進入か再進入か、および step iteration
-- 現在の workflow-call scope から参照できる前段 report
-- タスク開始時点からの累積差分
+- 現在の workflow-call scope から参照できる Report Directory のパスとレポート名
+- selector 呼び出し時点の working tree の変更（`git diff HEAD` 相当）を示す変更ファイルのパス一覧
 - 候補 ID と description
 
-facet 本文は selector に渡しません。selector は厳格な structured output schema（`additionalProperties: false`、`selected_ids` は pool の候補 ID を `enum` とする unique array、加えて必須の `rationale` 文字列）に対して候補 ID と理由だけを返します。pool 外 ID、重複 ID、指定した `max_selected` の超過は拒否します。selector 失敗時は main agent を起動せず fail-fast し、全候補や空選択への暗黙 fallback はありません。selector 自身を dynamic facet selection や auto routing の対象にしません。
+候補 facet の本文は個別には selector に渡しません。対象 agent の prompt は本文で渡し、selector は既存の report-reference の探索順（現在の workflow scope、exact resume snapshot、親 workflow scope）でレポート参照を解決してから、参照先のファイルとレポートを読むための `Read`・`Glob`・`Grep` のツール許可リストを使います。許可リストを尊重する provider ではそれらの tool のみが許可されます。厳格な structured output schema（`additionalProperties: false`、`selected_ids` は pool の候補 ID を `enum` とする unique array、加えて必須の `rationale` 文字列）に対して候補 ID と理由だけを返します。pool 外 ID、重複 ID、指定した `max_selected` の超過は拒否します。selector 失敗時は main agent を起動せず fail-fast し、全候補や空選択への暗黙 fallback はありません。selector 自身を dynamic facet selection や auto routing の対象にしません。
 
 selector provider は #1136 の `runtime.yaml` の `provider.targets.internal_agents.selector` で解決します。未指定時は runtime の通常 default を使います。
 
@@ -638,7 +638,7 @@ steps:
           instruction: select-reviewers
 ```
 
-selector を設定した場合、`selector.instruction` は必須で、`persona` は任意です。selector guidance の責務は facet または participant の ID の選択方法を説明することだけです。証拠入力、structured output contract、候補検証、selection mode、read-only 実行、空の tools/MCP、permission bypass 無効は TAKT が管理します。selector は選択された agent の `persona`、`instruction`、provider、permission、tools、MCP 設定、output contract を変更できません。
+selector を設定した場合、`selector.instruction` は必須で、`persona` は任意です。selector guidance の責務は facet または participant の ID の選択方法を説明することだけです。証拠参照、read-only structured 実行とツール、structured output contract、候補検証、selection mode、permission bypass 無効は TAKT が管理します。selector は選択された agent の `persona`、`instruction`、provider、permission、tools、MCP 設定、output contract を変更できません。
 
 selector guidance は workflow 既存の persona と instruction resource を参照します。未知の selector key、空の selector、`instruction` のない selector、解決できない persona/instruction 参照は schema または workflow 検証時に設定 path 付きで失敗します。raw `$param` 参照は callable の引数展開後だけ有効で、callable でない workflow の未展開参照は拒否されます。
 

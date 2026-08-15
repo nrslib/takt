@@ -233,6 +233,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     selectionStore: params.sharedRuntime.dynamicFacetSelectionStore!,
     getCwd: params.getCwd,
     getReportDirectory: () => params.runPaths.reportsAbs,
+    getReportsRootDirectory: () => params.runPaths.reportsRootAbs,
     getReportNames: (step, state) => getSelectorReportNames(
       step,
       params.config,

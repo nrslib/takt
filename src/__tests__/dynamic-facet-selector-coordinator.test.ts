@@ -14,14 +14,18 @@ import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import { DynamicFacetSelectionStore } from '../core/workflow/dynamic-facets/dynamicFacetSelectionStore.js';
 import { assertStrictStructuredOutputSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
 
-vi.mock('../agents/agent-usecases.js', () => ({
-  executeIsolatedStructuredInternalAgent: vi.fn(),
-}));
+vi.mock('../agents/structured-caller/transport.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../agents/structured-caller/transport.js')>();
+  return {
+    ...actual,
+    executeStructuredAgent: vi.fn(),
+  };
+});
 
-import { executeIsolatedStructuredInternalAgent } from '../agents/agent-usecases.js';
+import { executeStructuredAgent } from '../agents/structured-caller/transport.js';
 import * as contextBuilder from '../core/workflow/dynamic-facets/dynamicFacetContextBuilder.js';
 
-const mockedExecuteAgent = vi.mocked(executeIsolatedStructuredInternalAgent);
+const mockedExecuteAgent = vi.mocked(executeStructuredAgent);
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -142,16 +146,18 @@ function buildDeps(overrides: Partial<DynamicFacetSelectorCoordinatorDeps> = {})
     workflowCallPath: [],
     commitSelection: vi.fn().mockResolvedValue(undefined),
     getReportDirectory: () => '.takt/reports',
+    getReportsRootDirectory: () => '.takt/reports',
     getReportNames: () => [],
     getCwd: () => '/tmp/project',
     inputReader: {
       readInputs: vi.fn().mockImplementation(async (
-        _reportDirectory: string,
-        _reportNames: readonly string[],
-        _cwd: string,
-        _signal: AbortSignal | undefined,
-        targetAgentPrompt: string,
-      ) => ({ reports: '', workingTreeDiff: '', targetAgentPrompt })),
+        reportDirectory: string,
+        reportNames: readonly string[],
+      ) => ({
+        reportDirectory,
+        reportNames,
+        changedPaths: ['src/changed.ts'],
+      })),
     } as unknown as DynamicFacetSelectorCoordinatorDeps['inputReader'],
     ...overrides,
   };
@@ -204,8 +210,8 @@ describe('DynamicFacetSelectorCoordinator', () => {
     const result = await coordinator.resolveDynamicFacets(step, makeState(), 'task', pool);
 
     expect(result.selectedIds).toEqual(['a', 'b', 'c']);
-    const executeOptions = mockedExecuteAgent.mock.calls[0]?.[2] as { properties?: { selected_ids?: { maxItems?: number } } };
-    expect(executeOptions.properties?.selected_ids?.maxItems).toBeUndefined();
+    const outputSchema = mockedExecuteAgent.mock.calls[0]?.[1] as { properties?: { selected_ids?: { maxItems?: number } } };
+    expect(outputSchema.properties?.selected_ids?.maxItems).toBeUndefined();
   });
 
   it('keeps base facets unchanged when the selector returns an empty selection (DFP-005)', async () => {
@@ -260,14 +266,14 @@ describe('DynamicFacetSelectorCoordinator', () => {
     const coordinator = new DynamicFacetSelectorCoordinator(buildDeps());
     await coordinator.resolveDynamicFacets(makeStep(1), makeState(), 'task', pool);
 
-    const outputSchema = mockedExecuteAgent.mock.calls[0]?.[2];
+    const outputSchema = mockedExecuteAgent.mock.calls[0]?.[1];
     if (outputSchema === undefined) throw new Error('Selector output schema was not sent');
     expect(() => assertStrictStructuredOutputSchema(outputSchema)).not.toThrow();
     expect(outputSchema).not.toHaveProperty('properties.selected_ids.uniqueItems');
     expect(outputSchema).toHaveProperty('properties.selected_ids.maxItems', 1);
   });
 
-  it('passes selector guidance to the isolated agent without replacing the engine contract', async () => {
+  it('passes selector guidance to the read-only structured agent without replacing the engine contract', async () => {
     const onActivity = vi.fn();
     const pool = makePool([
       { id: 'frontend', description: 'Frontend changes' },
@@ -284,10 +290,11 @@ describe('DynamicFacetSelectorCoordinator', () => {
     const coordinator = new DynamicFacetSelectorCoordinator(buildDeps({ onActivity }));
     await coordinator.resolveDynamicFacets(makeGuidedStep(), makeState(), 'task', pool);
 
-    const [systemPrompt, instruction, outputSchema, options] = mockedExecuteAgent.mock.calls[0] ?? [];
-    expect(systemPrompt).toContain('internal dynamic facet selector');
+    const [instruction, outputSchema, options] = mockedExecuteAgent.mock.calls[0] ?? [];
+    expect(options?.systemPrompt).toContain('internal dynamic facet selector');
     expect(instruction).toContain('Select facets from the changed paths and unresolved findings.');
     expect(instruction).toContain('Task:\ntask');
+    expect(instruction).toContain('Changed file paths:\n- src/changed.ts');
     expect(instruction).toContain('Target agent prompt:\n');
     expect(instruction).toContain('Instruction:\nFix');
     expect(instruction).toContain('- frontend: Frontend changes');
@@ -309,6 +316,8 @@ describe('DynamicFacetSelectorCoordinator', () => {
       personaPath: '/project/.takt/facets/personas/facet-selector.md',
       workflowBundleResourceRoot: '/tmp/project/.takt/runs/bundle/resources',
       onActivity,
+      allowedTools: ['Read', 'Glob', 'Grep'],
+      resolution: expect.objectContaining({ permissionMode: 'readonly' }),
     }));
   });
 
@@ -366,16 +375,14 @@ describe('DynamicFacetSelectorCoordinator', () => {
       [],
       '/tmp/project',
       undefined,
-      expect.stringContaining('Instruction:\nFix'),
-      '{"workflow":"test-workflow","step":"fix","calls":[]}',
     );
     expect(instructionSpy).toHaveBeenCalledOnce();
     const instructionInput = instructionSpy.mock.calls[0]![0] as {
       isReentry: boolean;
-      reports: string;
+      reportNames: readonly string[];
     };
     expect(instructionInput.isReentry).toBe(false);
-    expect(instructionInput.reports).toBe('');
+    expect(instructionInput.reportNames).toEqual([]);
   });
 
   it('throws when selector provider is not resolved', async () => {

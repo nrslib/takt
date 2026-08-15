@@ -1,4 +1,7 @@
-import { executeIsolatedStructuredInternalAgent } from '../../../agents/agent-usecases.js';
+import {
+  executeStructuredAgent,
+  StructuredAgentResponseError,
+} from '../../../agents/structured-caller/transport.js';
 import {
   isDynamicParallelSubSteps,
   type AgentResponse,
@@ -12,8 +15,15 @@ import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { recordAgentUsageEvent } from '../engine/agent-usage-event.js';
 import { buildDynamicParallelSelectionIdentityFromPath } from './identity.js';
 import { createDynamicParallelSelectionSnapshot, resolveDynamicParallelSelection } from './snapshot.js';
-import { createSelectorContract, validateSelectorResponse } from '../selector-contract.js';
-import { buildDynamicSelectorInstruction } from './selector-input.js';
+import {
+  createSelectorContract,
+  SELECTOR_READ_ONLY_TOOLS,
+  validateSelectorResponse,
+} from '../selector-contract.js';
+import {
+  buildDynamicSelectorInstruction,
+  resolveSelectorReportNames,
+} from './selector-input.js';
 import { SelectorInputReader } from './selector-input-reader.js';
 import type { DynamicParallelSelectionStore } from './selection-store.js';
 import { truncateUtf8 } from '../../../shared/utils/utf8.js';
@@ -25,7 +35,6 @@ import type {
   ProviderActivityCallback,
   StreamCallback,
 } from '../../../shared/types/provider.js';
-import { buildResumeReportConsumerKey } from '../run/resume-report-consumer.js';
 
 const log = createLogger('dynamic-parallel-selector');
 const SELECTOR_RATIONALE_LOG_MAX_BYTES = 1024;
@@ -81,25 +90,30 @@ export class DynamicParallelSelectorCoordinator {
     if (this.inputReader === undefined) {
       throw new Error('Dynamic parallel selector requires an input reader');
     }
+    const reportDirectory = this.deps.getReportDirectory();
+    const reportNames = resolveSelectorReportNames({
+      reportDirectory,
+      reportsRootDirectory: this.deps.getReportsRootDirectory(),
+      reportNames: [...new Set([
+        ...this.deps.getReportNames(step, state),
+        ...(step.parallel.selection.reports ?? []),
+      ])],
+      stepName: step.name,
+      workflowReference: this.deps.getWorkflowReference(),
+      workflowCallPath: this.deps.workflowCallPath,
+    });
     const inputs = await this.inputReader.readInputs(
-      this.deps.getReportDirectory(),
-      this.deps.getReportNames(step, state),
+      reportDirectory,
+      reportNames,
       this.deps.getCwd(),
       signal,
-      undefined,
-      buildResumeReportConsumerKey(
-        this.deps.getWorkflowReference(),
-        step.name,
-        this.deps.workflowCallPath,
-      ),
-      this.deps.getReportsRootDirectory(),
-      step.parallel.selection.reports ?? [],
     );
     signal?.throwIfAborted();
     const instruction = buildDynamicSelectorInstruction({
       task,
-      reports: inputs.reports,
-      workingTreeDiff: inputs.workingTreeDiff,
+      reportDirectory: inputs.reportDirectory,
+      reportNames: inputs.reportNames,
+      changedPaths: inputs.changedPaths,
       pool: step.parallel.pool,
       selection: step.parallel.selection,
       selectorInstruction: step.parallel.selection.selector?.instruction,
@@ -108,8 +122,9 @@ export class DynamicParallelSelectorCoordinator {
     const sensitiveValues = createBoundedSensitiveValues();
     sensitiveValues.collect({
       task,
-      reports: inputs.reports,
-      working_tree_diff: inputs.workingTreeDiff,
+      report_directory: inputs.reportDirectory,
+      report_names: inputs.reportNames,
+      changed_paths: inputs.changedPaths,
       candidates: step.parallel.pool.map(({ name, description }) => ({ name, description })),
     });
     const redact = (text: string): string =>
@@ -120,25 +135,28 @@ export class DynamicParallelSelectorCoordinator {
     let snapshot: DynamicParallelSelectionSnapshot;
     let participants: WorkflowStep[];
     try {
-      response = await executeIsolatedStructuredInternalAgent(
-        'You are TAKT\'s internal dynamic parallel selector. Select only candidate IDs from the provided pool.',
+      response = await executeStructuredAgent(
         instruction,
         selectorContract.providerSchema,
         {
+          name: 'dynamic-parallel-selector',
           cwd: this.deps.getCwd(),
           projectCwd: this.deps.engineOptions.projectCwd,
           persona: step.parallel.selection.selector?.persona,
           workflowBundleResourceRoot: this.deps.engineOptions.workflowBundleResourceRoot,
+          systemPrompt: 'You are TAKT\'s internal dynamic parallel selector. Select only candidate IDs from the provided pool.',
           abortSignal: signal,
           onStream: this.deps.onStream,
           onActivity: this.deps.onActivity,
           language: this.deps.engineOptions.language,
           failureDir: this.deps.failureDir,
           personaPath: step.parallel.selection.selector?.personaPath,
+          allowedTools: [...SELECTOR_READ_ONLY_TOOLS],
           resolution: {
             provider: selectorProvider.provider,
             model: selectorProvider.model,
             providerOptions: selectorProvider.providerOptions ?? {},
+            permissionMode: 'readonly',
           },
         },
       );
@@ -165,6 +183,9 @@ export class DynamicParallelSelectorCoordinator {
       participants = resolveDynamicParallelSelection(step.parallel, snapshot);
       signal?.throwIfAborted();
     } catch (error) {
+      if (error instanceof StructuredAgentResponseError) {
+        response = error.response;
+      }
       recordAgentUsageEvent(
         this.deps.engineOptions,
         `dynamic-selector:${identity}`,

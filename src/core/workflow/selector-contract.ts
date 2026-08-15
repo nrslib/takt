@@ -17,6 +17,8 @@ export interface SelectorContract {
   readonly validationSchema: Record<string, unknown>;
 }
 
+export const SELECTOR_READ_ONLY_TOOLS = ['Read', 'Glob', 'Grep'] as const;
+
 export function buildSelectorGuidanceLines(selectorInstruction: string | undefined): readonly string[] {
   return selectorInstruction === undefined
     ? []

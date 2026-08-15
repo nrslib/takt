@@ -14,13 +14,17 @@ import { assertStrictStructuredOutputSchema } from '../core/workflow/engine/stru
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import { makeStep } from './engine-test-helpers.js';
 
-vi.mock('../agents/agent-usecases.js', () => ({
-  executeIsolatedStructuredInternalAgent: vi.fn(),
-}));
+vi.mock('../agents/structured-caller/transport.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../agents/structured-caller/transport.js')>();
+  return {
+    ...actual,
+    executeStructuredAgent: vi.fn(),
+  };
+});
 
-import { executeIsolatedStructuredInternalAgent } from '../agents/agent-usecases.js';
+import { executeStructuredAgent } from '../agents/structured-caller/transport.js';
 
-const mockedExecuteAgent = vi.mocked(executeIsolatedStructuredInternalAgent);
+const mockedExecuteAgent = vi.mocked(executeStructuredAgent);
 
 function dynamicParallelStep(selection: unknown = { mode: 'replace' }): WorkflowStep {
   return makeStep('reviewers', {
@@ -71,13 +75,17 @@ function dependencies(): DynamicParallelSelectorCoordinatorDeps {
     selectionStore: new DynamicParallelSelectionStore(new Map()),
     getCwd: () => '/project',
     getReportDirectory: () => '.takt/reports',
-    getReportsRootDirectory: () => '.takt/runs/run/reports',
+    getReportsRootDirectory: () => '.takt/reports',
     getReportNames: () => [],
     getWorkflowReference: () => 'test-workflow',
     workflowCallPath: [],
     commitSelection: vi.fn().mockResolvedValue(undefined),
     inputReader: {
-      readInputs: vi.fn().mockResolvedValue({ reports: '', workingTreeDiff: '' }),
+      readInputs: vi.fn().mockImplementation(async (reportDirectory, reportNames) => ({
+        reportDirectory,
+        reportNames,
+        changedPaths: ['src/changed.ts'],
+      })),
     } as DynamicParallelSelectorCoordinatorDeps['inputReader'],
   };
 }
@@ -110,11 +118,8 @@ describe('DynamicParallelSelectorCoordinator', () => {
       [],
       '/project',
       undefined,
-      undefined,
-      '.takt/runs/run/reports',
-      [],
     );
-    const outputSchema = mockedExecuteAgent.mock.calls[0]?.[2];
+    const outputSchema = mockedExecuteAgent.mock.calls[0]?.[1];
     if (outputSchema === undefined) throw new Error('Selector output schema was not sent');
     expect(() => assertStrictStructuredOutputSchema(outputSchema)).not.toThrow();
     expect(outputSchema).not.toHaveProperty('properties.selected_ids.uniqueItems');
@@ -122,7 +127,35 @@ describe('DynamicParallelSelectorCoordinator', () => {
     expect(deps.commitSelection).toHaveBeenCalledOnce();
   });
 
-  it('passes selector guidance to the isolated agent without changing participant selection', async () => {
+  it('passes configured selector reports to the input reader', async () => {
+    mockedExecuteAgent.mockResolvedValueOnce({
+      persona: 'selector',
+      status: 'done',
+      content: '',
+      timestamp: new Date(),
+      structuredOutput: { selected_ids: ['frontend'], rationale: 'frontend is relevant' },
+    });
+    const deps = dependencies();
+    const coordinator = new DynamicParallelSelectorCoordinator(deps);
+
+    await coordinator.selectParticipants(
+      dynamicParallelStep({
+        mode: 'replace',
+        reports: ['review-resolution.md'],
+      }),
+      workflowState(),
+      'review frontend changes',
+    );
+
+    expect(deps.inputReader?.readInputs).toHaveBeenCalledWith(
+      '.takt/reports',
+      ['review-resolution.md'],
+      '/project',
+      undefined,
+    );
+  });
+
+  it('passes selector guidance to the read-only structured agent without changing participant selection', async () => {
     mockedExecuteAgent.mockResolvedValueOnce({
       persona: 'selector',
       status: 'done',
@@ -148,10 +181,11 @@ describe('DynamicParallelSelectorCoordinator', () => {
       'review frontend changes',
     );
 
-    const [systemPrompt, instruction, outputSchema, options] = mockedExecuteAgent.mock.calls[0] ?? [];
-    expect(systemPrompt).toContain('internal dynamic parallel selector');
+    const [instruction, outputSchema, options] = mockedExecuteAgent.mock.calls[0] ?? [];
+    expect(options?.systemPrompt).toContain('internal dynamic parallel selector');
     expect(instruction).toContain('Select reviewers from the changed paths and prior reports.');
     expect(instruction).toContain('Task:\nreview frontend changes');
+    expect(instruction).toContain('Changed file paths:\n- src/changed.ts');
     expect(instruction).toContain('- frontend: frontend review');
     expect(outputSchema).toMatchObject({
       type: 'object',
@@ -170,6 +204,8 @@ describe('DynamicParallelSelectorCoordinator', () => {
       personaPath: '/project/.takt/facets/personas/reviewer-selector.md',
       workflowBundleResourceRoot: '/project/.takt/runs/bundle/resources',
       onActivity,
+      allowedTools: ['Read', 'Glob', 'Grep'],
+      resolution: expect.objectContaining({ permissionMode: 'readonly' }),
     }));
     expect(participants.map(({ name }) => name)).toEqual(['architecture', 'frontend']);
   });

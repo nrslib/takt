@@ -15,7 +15,7 @@ const pool: ResolvedFacetPool = {
 };
 
 describe('DynamicFacetContextBuilder (C-SELECTOR-INPUT, C-SELECTOR-INVOKE)', () => {
-  it('should include user request, identity, entry type, iteration, reports, diff, and candidate ID+description in the selector instruction (C-SELECTOR-INPUT)', () => {
+  it('should include user request, identity, entry type, iteration, references, and candidate ID+description in the selector instruction (C-SELECTOR-INPUT)', () => {
     const instruction = buildDynamicFacetSelectorInstruction({
       task: 'Fix the transaction boundary issue',
       workflowName: 'backend-fix',
@@ -23,8 +23,9 @@ describe('DynamicFacetContextBuilder (C-SELECTOR-INPUT, C-SELECTOR-INVOKE)', () 
       workflowCallPath: [],
       isReentry: false,
       stepIteration: 1,
-      reports: 'prior review report content',
-      cumulativeDiff: 'diff --git a/file.ts b/file.ts',
+      reportDirectory: '/project/.takt/runs/run/reports',
+      reportNames: ['review-resolution.md'],
+      changedPaths: ['file.ts'],
       targetAgentPrompt: 'target persona and fixed facets',
       pool,
       maxSelected: 4,
@@ -36,9 +37,10 @@ describe('DynamicFacetContextBuilder (C-SELECTOR-INPUT, C-SELECTOR-INVOKE)', () 
     expect(instruction).toContain('fix');
     expect(instruction).toContain('initial entry');
     expect(instruction).toContain('1');
-    expect(instruction).toContain('prior review report content');
+    expect(instruction).toContain('Report Directory:\n/project/.takt/runs/run/reports');
+    expect(instruction).toContain('- review-resolution.md');
     expect(instruction).toContain('Workflow call path:\n(root)');
-    expect(instruction).toContain('diff --git a/file.ts b/file.ts');
+    expect(instruction).toContain('Changed file paths:\n- file.ts');
     expect(instruction).toContain('Target agent prompt:\ntarget persona and fixed facets');
     // Candidate IDs and descriptions.
     expect(instruction).toContain('backend');
@@ -57,8 +59,9 @@ describe('DynamicFacetContextBuilder (C-SELECTOR-INPUT, C-SELECTOR-INVOKE)', () 
       workflowCallPath: [],
       isReentry: true,
       stepIteration: 2,
-      reports: '',
-      cumulativeDiff: '',
+      reportDirectory: '/project/.takt/runs/run/reports',
+      reportNames: [],
+      changedPaths: [],
       targetAgentPrompt: 'target prompt',
       pool,
       maxSelected: 4,
@@ -77,8 +80,9 @@ describe('DynamicFacetContextBuilder (C-SELECTOR-INPUT, C-SELECTOR-INVOKE)', () 
       workflowCallPath: [],
       isReentry: false,
       stepIteration: 1,
-      reports: '',
-      cumulativeDiff: '',
+      reportDirectory: '/project/.takt/runs/run/reports',
+      reportNames: [],
+      changedPaths: [],
       targetAgentPrompt: 'target prompt',
       pool,
       maxSelected: 4,
@@ -102,8 +106,9 @@ describe('DynamicFacetContextBuilder (C-SELECTOR-INPUT, C-SELECTOR-INVOKE)', () 
       ],
       isReentry: false,
       stepIteration: 1,
-      reports: '',
-      cumulativeDiff: '',
+      reportDirectory: '/project/.takt/runs/run/reports',
+      reportNames: [],
+      changedPaths: [],
       targetAgentPrompt: 'target prompt',
       pool,
       maxSelected: 4,
@@ -122,8 +127,9 @@ describe('DynamicFacetContextBuilder (C-SELECTOR-INPUT, C-SELECTOR-INVOKE)', () 
       workflowCallPath: [],
       isReentry: false,
       stepIteration: 1,
-      reports: '',
-      cumulativeDiff: '',
+      reportDirectory: '/project/.takt/runs/run/reports',
+      reportNames: [],
+      changedPaths: [],
       targetAgentPrompt: 'target prompt',
       pool,
     });

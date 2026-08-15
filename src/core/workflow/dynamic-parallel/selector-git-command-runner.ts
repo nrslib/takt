@@ -8,7 +8,7 @@ export interface SelectorGitCommandRunner {
   run(
     cwd: string,
     args: readonly string[],
-    captureLimit: number,
+    captureLimit: number | undefined,
     signal: AbortSignal | undefined,
   ): Promise<SelectorGitOutput>;
 }

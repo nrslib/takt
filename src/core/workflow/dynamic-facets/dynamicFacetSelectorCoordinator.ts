@@ -1,4 +1,7 @@
-import { executeIsolatedStructuredInternalAgent } from '../../../agents/agent-usecases.js';
+import {
+  executeStructuredAgent,
+  StructuredAgentResponseError,
+} from '../../../agents/structured-caller/transport.js';
 import type {
   AgentResponse,
   DynamicFacetSelectionSnapshot,
@@ -13,12 +16,14 @@ import { recordAgentUsageEvent } from '../engine/agent-usage-event.js';
 import { buildDynamicParallelSelectionIdentityFromPath } from '../dynamic-parallel/identity.js';
 import {
   createSelectorContract,
+  SELECTOR_READ_ONLY_TOOLS,
   validateSelectorResponse,
 } from '../selector-contract.js';
 import {
   buildDynamicFacetSelectorInstruction,
   buildDynamicFacetTargetAgentPrompt,
 } from './dynamicFacetContextBuilder.js';
+import { resolveSelectorReportNames } from '../dynamic-parallel/selector-input.js';
 import { composeDynamicFacets, type FixedFacets } from './dynamicFacetComposer.js';
 import type { DynamicFacetSelectionStore } from './dynamicFacetSelectionStore.js';
 import { truncateUtf8 } from '../../../shared/utils/utf8.js';
@@ -31,7 +36,6 @@ import type {
   ProviderActivityCallback,
   StreamCallback,
 } from '../../../shared/types/provider.js';
-import { buildResumeReportConsumerKey } from '../run/resume-report-consumer.js';
 
 const log = createLogger('dynamic-facet-selector');
 const SELECTOR_RATIONALE_LOG_MAX_BYTES = 1024;
@@ -50,6 +54,7 @@ export interface DynamicFacetSelectorCoordinatorDeps {
     snapshot: DynamicFacetSelectionSnapshot,
   ) => Promise<void>;
   readonly getReportDirectory: () => string;
+  readonly getReportsRootDirectory: () => string;
   readonly getReportNames: (step: NormalAgentWorkflowStep, state: WorkflowState) => readonly string[];
   readonly getCwd: () => string;
   readonly inputReader?: SelectorInputReader;
@@ -101,27 +106,26 @@ export class DynamicFacetSelectorCoordinator {
     );
     const previous = selections.get(identity);
 
-    const reportNames = this.deps.getReportNames(step, state);
+    const reportDirectory = this.deps.getReportDirectory();
+    const reportNames = resolveSelectorReportNames({
+      reportDirectory,
+      reportsRootDirectory: this.deps.getReportsRootDirectory(),
+      reportNames: this.deps.getReportNames(step, state),
+      stepName: step.name,
+      workflowReference: this.deps.getWorkflowReference(),
+      workflowCallPath: identityPath,
+    });
     if (this.deps.inputReader === undefined) {
       throw new Error('Dynamic facet selector requires an input reader');
     }
     const targetAgentPrompt = buildDynamicFacetTargetAgentPrompt(step);
     const inputs = await this.deps.inputReader.readInputs(
-      this.deps.getReportDirectory(),
+      reportDirectory,
       reportNames,
       this.deps.getCwd(),
       signal,
-      targetAgentPrompt,
-      buildResumeReportConsumerKey(
-        this.deps.getWorkflowReference(),
-        step.name,
-        identityPath,
-      ),
     );
     signal?.throwIfAborted();
-    if (inputs.targetAgentPrompt === undefined) {
-      throw new Error(`Dynamic facet selector for "${step.name}" requires a target agent prompt`);
-    }
     const instruction = buildDynamicFacetSelectorInstruction({
       task,
       workflowName: state.workflowName,
@@ -129,9 +133,10 @@ export class DynamicFacetSelectorCoordinator {
       workflowCallPath: identityPath,
       isReentry: previous !== undefined,
       stepIteration,
-      reports: inputs.reports,
-      cumulativeDiff: inputs.workingTreeDiff,
-      targetAgentPrompt: inputs.targetAgentPrompt,
+      reportDirectory: inputs.reportDirectory,
+      reportNames: inputs.reportNames,
+      changedPaths: inputs.changedPaths,
+      targetAgentPrompt,
       pool,
       maxSelected: step.dynamicFacets.maxSelected,
       selectorInstruction: step.dynamicFacets.selector?.instruction,
@@ -140,9 +145,10 @@ export class DynamicFacetSelectorCoordinator {
     const sensitiveValues = createBoundedSensitiveValues();
     sensitiveValues.collect({
       task,
-      reports: inputs.reports,
-      working_tree_diff: inputs.workingTreeDiff,
-      targetAgentPrompt: inputs.targetAgentPrompt,
+      report_directory: inputs.reportDirectory,
+      report_names: inputs.reportNames,
+      changed_paths: inputs.changedPaths,
+      targetAgentPrompt,
       candidates: pool.candidates.map((candidate) => ({ id: candidate.id, description: candidate.description })),
     });
     const redact = (text: string): string => sanitizeSensitiveTextWithKnownValues(text, sensitiveValues);
@@ -152,25 +158,28 @@ export class DynamicFacetSelectorCoordinator {
     let selectedIds: readonly string[];
     let snapshot: DynamicFacetSelectionSnapshot;
     try {
-      response = await executeIsolatedStructuredInternalAgent(
-        'You are TAKT\'s internal dynamic facet selector. Select only candidate IDs from the provided pool.',
+      response = await executeStructuredAgent(
         instruction,
         selectorContract.providerSchema,
         {
+          name: 'dynamic-facet-selector',
           cwd: this.deps.getCwd(),
           projectCwd: this.deps.engineOptions.projectCwd,
           persona: step.dynamicFacets.selector?.persona,
           workflowBundleResourceRoot: this.deps.engineOptions.workflowBundleResourceRoot,
+          systemPrompt: 'You are TAKT\'s internal dynamic facet selector. Select only candidate IDs from the provided pool.',
           abortSignal: signal,
           onStream: this.deps.onStream,
           onActivity: this.deps.onActivity,
           language: this.deps.engineOptions.language,
           failureDir: this.deps.failureDir,
           personaPath: step.dynamicFacets.selector?.personaPath,
+          allowedTools: [...SELECTOR_READ_ONLY_TOOLS],
           resolution: {
             provider: selectorProvider.provider,
             model: selectorProvider.model,
             providerOptions: selectorProvider.providerOptions ?? {},
+            permissionMode: 'readonly',
           },
         },
       );
@@ -202,6 +211,9 @@ export class DynamicFacetSelectorCoordinator {
       snapshot = this.createSnapshot(identity, step.name, pool, selectedIds, selectorResult.rationale, previous);
       signal?.throwIfAborted();
     } catch (error) {
+      if (error instanceof StructuredAgentResponseError) {
+        response = error.response;
+      }
       recordAgentUsageEvent(
         this.deps.engineOptions,
         `dynamic-facet-selector:${identity}`,

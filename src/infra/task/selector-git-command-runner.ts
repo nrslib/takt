@@ -28,11 +28,13 @@ class BoundedBufferCapture {
   private capturedBytes = 0;
   private totalBytes = 0;
 
-  constructor(private readonly limit: number) {}
+  constructor(private readonly limit: number | undefined) {}
 
   append(raw: Buffer): void {
     this.totalBytes += raw.length;
-    const remaining = Math.max(0, this.limit - this.capturedBytes);
+    const remaining = this.limit === undefined
+      ? raw.length
+      : Math.max(0, this.limit - this.capturedBytes);
     if (remaining === 0) return;
     const chunk = raw.subarray(0, remaining);
     this.chunks.push(chunk);
@@ -43,7 +45,7 @@ class BoundedBufferCapture {
     return {
       output: Buffer.concat(this.chunks),
       bytes: this.totalBytes,
-      truncated: this.totalBytes > this.capturedBytes,
+      truncated: this.limit !== undefined && this.totalBytes > this.capturedBytes,
     };
   }
 }
@@ -105,7 +107,7 @@ export class GitSelectorCommandRunner implements SelectorGitCommandRunner {
   async run(
     cwd: string,
     args: readonly string[],
-    captureLimit: number,
+    captureLimit: number | undefined,
     signal: AbortSignal | undefined,
   ): Promise<SelectorGitOutput> {
     signal?.throwIfAborted();

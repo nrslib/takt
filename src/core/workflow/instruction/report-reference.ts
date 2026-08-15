@@ -69,6 +69,11 @@ export interface ResolvedReportReference {
   readonly scope: ResolvedReportReferenceScope;
 }
 
+export interface ResolvedReportReferencePath {
+  readonly path: string;
+  readonly scope: Exclude<ResolvedReportReferenceScope, 'missing'>;
+}
+
 /** サブワークフロー名前空間のディレクトリ名（run-paths.ts の構造と対）。 */
 const SUBWORKFLOWS_NAMESPACE_DIR = 'subworkflows';
 
@@ -118,7 +123,7 @@ function readRegularReportFile(
   pathAbs: string,
   reference: string,
   stepName: string,
-): string | undefined {
+): { readonly path: string; readonly content: string } | undefined {
   const baseAbs = resolve(trustedRootDir);
   const relativeTarget = relative(baseAbs, pathAbs);
   const components = relativeTarget.split(sep).filter((component) => component.length > 0);
@@ -154,9 +159,10 @@ function readRegularReportFile(
       `Report reference "${reference}" for step "${stepName}" is not a regular file: "${pathAbs}"`,
     );
   }
-  return readPathValueOrUndefined(
+  const content = readPathValueOrUndefined(
     () => readRegularFileNoFollow(pathAbs, targetStat).toString('utf-8'),
   );
+  return content === undefined ? undefined : { path: pathAbs, content };
 }
 
 function assertContained(reportDir: string, reference: string, stepName: string): string {
@@ -195,6 +201,61 @@ function getParentWorkflowReportDirs(reportDir: string, reportsRootDir: string):
   return parents;
 }
 
+interface ExistingReportReferenceResolution extends ResolvedReportReferencePath {
+  readonly content: string;
+}
+
+function resolveExistingReportReference(
+  reportDir: string,
+  normalizedReference: string,
+  reference: string,
+  targetAbs: string,
+  context: ResolveReportReferenceContext,
+): ExistingReportReferenceResolution | undefined {
+  const reportsRoot = context.reportsRootDir;
+  const trustedRoot = reportsRoot ?? reportDir;
+  const stepFile = readRegularReportFile(trustedRoot, targetAbs, reference, context.stepName);
+  if (stepFile !== undefined) {
+    return { ...stepFile, scope: 'step' };
+  }
+  const runInfo = deriveRunInfoFromReportDir(reportDir);
+  if (runInfo !== undefined && reportsRoot !== undefined && context.resumeReportConsumerKey !== undefined) {
+    const manifest = readPathValueOrUndefined(
+      () => readResumeReportSnapshotManifest(runInfo.cwd, runInfo.runSlug),
+    );
+    const snapshotReference = manifest?.resumeReportConsumers
+      ?.find((consumer) => consumer.consumerKey === context.resumeReportConsumerKey)
+      ?.references.find((entry) => entry.reference === normalizedReference);
+    if (snapshotReference !== undefined) {
+      const snapshotTargetAbs = assertContained(reportsRoot, snapshotReference.path, context.stepName);
+      const snapshotFile = readRegularReportFile(
+        reportsRoot,
+        snapshotTargetAbs,
+        reference,
+        context.stepName,
+      );
+      if (snapshotFile !== undefined) {
+        return { ...snapshotFile, scope: 'resume-snapshot-readonly' };
+      }
+    }
+  }
+  if (reportsRoot !== undefined) {
+    for (const parentReportDir of getParentWorkflowReportDirs(reportDir, reportsRoot)) {
+      const parentTargetAbs = assertContained(parentReportDir, normalizedReference, context.stepName);
+      const parentFile = readRegularReportFile(
+        reportsRoot,
+        parentTargetAbs,
+        reference,
+        context.stepName,
+      );
+      if (parentFile !== undefined) {
+        return { ...parentFile, scope: 'parent-run-readonly' };
+      }
+    }
+  }
+  return undefined;
+}
+
 /**
  * {report:X} を実パスへ解決する。containment / 存在 / 通常ファイル
  * （symlink 拒否）を検証する。無いファイルだけは欠落文に置換する。
@@ -225,46 +286,47 @@ export function resolveReportReferenceDetailed(
   const reportsRoot = context.reportsRootDir;
   const trustedRoot = reportsRoot ?? reportDir;
   assertContained(trustedRoot, relative(resolve(trustedRoot), resolve(reportDir)), context.stepName);
-  const stepContent = readRegularReportFile(trustedRoot, targetAbs, reference, context.stepName);
-  if (stepContent !== undefined) {
-    return { content: stepContent, scope: 'step' };
-  }
-  const runInfo = deriveRunInfoFromReportDir(reportDir);
-  if (runInfo !== undefined && reportsRoot !== undefined && context.resumeReportConsumerKey !== undefined) {
-    const manifest = readPathValueOrUndefined(
-      () => readResumeReportSnapshotManifest(runInfo.cwd, runInfo.runSlug),
+  const resolved = resolveExistingReportReference(
+    reportDir,
+    normalizedReference,
+    reference,
+    targetAbs,
+    context,
+  );
+  return resolved === undefined
+    ? { content: formatMissingReportReference(normalizedReference), scope: 'missing' }
+    : { content: resolved.content, scope: resolved.scope };
+}
+
+export function resolveReportReferencePath(
+  reportDir: string,
+  reference: string,
+  context: ResolveReportReferenceContext,
+): ResolvedReportReferencePath | undefined {
+  const classification = classifyReportRelativePath(reference);
+  if (classification.kind !== 'public') {
+    throw new Error(
+      `Report reference for step "${context.stepName}" is invalid: ${reportPathRejectionMessage(reference)}`,
     );
-    const snapshotReference = manifest?.resumeReportConsumers
-      ?.find((consumer) => consumer.consumerKey === context.resumeReportConsumerKey)
-      ?.references.find((entry) => entry.reference === normalizedReference);
-    if (snapshotReference !== undefined) {
-      const snapshotTargetAbs = assertContained(reportsRoot, snapshotReference.path, context.stepName);
-      const snapshotContent = readRegularReportFile(
-        reportsRoot,
-        snapshotTargetAbs,
-        reference,
-        context.stepName,
-      );
-      if (snapshotContent !== undefined) {
-        return { content: snapshotContent, scope: 'resume-snapshot-readonly' };
-      }
-    }
   }
-  if (reportsRoot !== undefined) {
-    for (const parentReportDir of getParentWorkflowReportDirs(reportDir, reportsRoot)) {
-      const parentTargetAbs = assertContained(parentReportDir, normalizedReference, context.stepName);
-      const parentContent = readRegularReportFile(
-        reportsRoot,
-        parentTargetAbs,
-        reference,
-        context.stepName,
-      );
-      if (parentContent !== undefined) {
-        return { content: parentContent, scope: 'parent-run-readonly' };
-      }
-    }
+  const normalizedReference = classification.normalizedPath;
+  const targetAbs = assertContained(reportDir, normalizedReference, context.stepName);
+  if (context.validateExistence === false) {
+    return { path: targetAbs, scope: 'step' };
   }
-  return { content: formatMissingReportReference(normalizedReference), scope: 'missing' };
+  const reportsRoot = context.reportsRootDir;
+  const trustedRoot = reportsRoot ?? reportDir;
+  assertContained(trustedRoot, relative(resolve(trustedRoot), resolve(reportDir)), context.stepName);
+  const resolved = resolveExistingReportReference(
+    reportDir,
+    normalizedReference,
+    reference,
+    targetAbs,
+    context,
+  );
+  return resolved === undefined
+    ? undefined
+    : { path: resolved.path, scope: resolved.scope };
 }
 
 export function resolveReportReference(

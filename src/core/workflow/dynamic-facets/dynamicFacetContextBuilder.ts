@@ -12,8 +12,9 @@ export interface DynamicFacetSelectorInstructionInput {
   readonly workflowCallPath: readonly { readonly step: string }[];
   readonly isReentry: boolean;
   readonly stepIteration: number;
-  readonly reports: string;
-  readonly cumulativeDiff: string;
+  readonly reportDirectory: string;
+  readonly reportNames: readonly string[];
+  readonly changedPaths: readonly string[];
   readonly targetAgentPrompt: string;
   readonly pool: ResolvedFacetPool;
   readonly maxSelected?: number;
@@ -23,6 +24,10 @@ export interface DynamicFacetSelectorInstructionInput {
 function joinFacetContents(contents: readonly ResolvedFacetContent[] | undefined): string {
   if (contents === undefined || contents.length === 0) return '(none)';
   return contents.map(({ content }) => content).join('\n\n---\n\n');
+}
+
+function renderList(values: readonly string[]): string {
+  return values.length === 0 ? '(none)' : values.map((value) => `- ${value}`).join('\n');
 }
 
 export function buildDynamicFacetTargetAgentPrompt(step: NormalAgentWorkflowStep): string {
@@ -55,9 +60,11 @@ export function buildDynamicFacetSelectorInstruction(input: DynamicFacetSelector
     `Entry type:\n${entryType}`,
     `Step iteration:\n${input.stepIteration}`,
     '',
-    `Prior reports:\n${input.reports}`,
+    `Report Directory:\n${input.reportDirectory}`,
     '',
-    `Cumulative diff:\n${input.cumulativeDiff}`,
+    `Reports to inspect:\n${renderList(input.reportNames)}`,
+    '',
+    `Changed file paths:\n${renderList(input.changedPaths)}`,
     '',
     `Target agent prompt:\n${input.targetAgentPrompt}`,
     '',

@@ -9,7 +9,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -378,7 +378,6 @@ function ensureGitTemplate(): string {
 
 describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
   let tmpDir: string;
-  let externalSelectorInputPath: string | undefined;
 
   afterAll(() => {
     if (gitTemplateDir !== undefined) {
@@ -393,13 +392,9 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     vi.mocked(runReportPhase).mockResolvedValue(undefined);
     tmpDir = createTestTmpDir();
     cpSync(join(ensureGitTemplate(), '.git'), join(tmpDir, '.git'), { recursive: true });
-    externalSelectorInputPath = undefined;
   });
 
   afterEach(() => {
-    if (externalSelectorInputPath && existsSync(externalSelectorInputPath)) {
-      rmSync(externalSelectorInputPath, { force: true });
-    }
     if (existsSync(tmpDir)) {
       rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -638,17 +633,16 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     const engine = new WorkflowEngine(config, tmpDir, 'Review frontend changes', {
       projectCwd: tmpDir,
       provider: 'mock',
-      selectorProvider: MOCK_SELECTOR_PROVIDER,
+      selectorProvider: {
+        provider: 'mock',
+        providerOptions: {},
+      },
     });
     writeFileSync(join(tmpDir, 'tracked.ts'), 'const scope = "after task start";\n', 'utf-8');
     writeFileSync(join(tmpDir, '.takt', 'runs', 'tracked-internal.txt'), 'after task start internal state\n', 'utf-8');
     execFileSync('git', ['add', 'tracked.ts'], { cwd: tmpDir });
     writeFileSync(join(tmpDir, '1-untracked-selector-input.ts'), 'const untracked = true;\n', 'utf-8');
     writeFileSync(join(tmpDir, '2-untracked-selector-input.ts'), 'const secondUntracked = true;\n', 'utf-8');
-    externalSelectorInputPath = `${tmpDir}-selector-external-content.txt`;
-    writeFileSync(externalSelectorInputPath, 'external content must not reach the selector', 'utf-8');
-    symlinkSync(externalSelectorInputPath, join(tmpDir, '0-untracked-selector-link.ts'));
-
     const state = await engine.run();
 
     const selectorCall = agentCalls.find((call) => call.outputSchema !== undefined);
@@ -663,15 +657,13 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     expect(selectorOutputSchema).not.toHaveProperty('properties.selected_ids.uniqueItems');
     expect(selectorCall).toMatchObject({
       persona: undefined,
-      allowedTools: [],
-      mcpServers: {},
+      allowedTools: ['Read', 'Glob', 'Grep'],
       resolvedExecution: {
         provider: 'mock',
         model: undefined,
         providerOptions: {},
         permissionMode: 'readonly',
       },
-      bypassPermissions: false,
       internalSystemPrompt: expect.stringContaining('internal dynamic parallel selector'),
       onActivity: expect.any(Function),
       outputSchema: expect.objectContaining({
@@ -697,20 +689,15 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     const resumePoint = engine.getResumePoint();
     expect(resumePoint).toBeDefined();
     expect(resumePoint).not.toHaveProperty('dynamic_parallel_selections');
-    expect(selectorCall?.instruction).not.toContain('\uFFFD');
-    expect(selectorCall?.instruction).toContain('界');
-    expect(selectorCall?.instruction).toContain('unresolved finding from security review');
-    expect(selectorCall?.instruction).not.toContain('unrelated report must not reach the selector');
-    expect(selectorCall?.instruction).not.toContain('nested report must not reach the selector');
-    expect(selectorCall?.instruction).toContain('after task start');
-    expect(selectorCall?.instruction).toContain('const untracked = true;');
-    expect(selectorCall?.instruction).toContain('const secondUntracked = true;');
-    expect(selectorCall?.instruction).toContain('Content status: complete');
-    expect(selectorCall?.instruction).not.toContain('content omitted');
-    expect(selectorCall?.instruction).toContain('Symbolic link target:');
-    expect(selectorCall?.instruction).not.toContain('external content must not reach the selector');
-    expect(selectorCall?.instruction).not.toContain('.takt/runs/test-report-dir/reports/prior.md');
-    expect(selectorCall?.instruction).not.toContain('after task start internal state');
+    expect(selectorCall?.instruction).toContain(`Report Directory:\n${reportDirectory}`);
+    expect(selectorCall?.instruction).toContain(`- ${join(reportDirectory, 'review-resolution.md')}`);
+    expect(selectorCall?.instruction).toContain('Changed file paths:');
+    expect(selectorCall?.instruction).toContain('- tracked.ts');
+    expect(selectorCall?.instruction).toContain('- 1-untracked-selector-input.ts');
+    expect(selectorCall?.instruction).toContain('- 2-untracked-selector-input.ts');
+    expect(selectorCall?.instruction).not.toContain('.takt/runs/tracked-internal.txt');
+    expect(selectorCall?.instruction).not.toContain('unresolved finding from security review');
+    expect(selectorCall?.instruction).not.toContain('const untracked = true;');
   });
 
   it('should run the participant selector before facet selection and only select dynamic participants (DFP-003)', async () => {
@@ -1197,29 +1184,6 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     });
   });
 
-  it('should reject more than 1,024 changed paths before selector or participants start', async () => {
-    const config = normalizeWorkflowConfig(dynamicParallelWorkflowRaw(), tmpDir);
-    execFileSync('git', ['-c', 'user.email=test@example.com', '-c', 'user.name=Test', 'commit', '--allow-empty', '--quiet', '-m', 'initial'], {
-      cwd: tmpDir,
-    });
-    const engine = new WorkflowEngine(config, tmpDir, 'Review changes', {
-      projectCwd: tmpDir,
-      provider: 'mock',
-      selectorProvider: MOCK_SELECTOR_PROVIDER,
-    });
-    const changedDirectory = join(tmpDir, 'changed');
-    mkdirSync(changedDirectory);
-    for (let index = 0; index < 1_025; index += 1) {
-      writeFileSync(join(changedDirectory, `${index}.ts`), '');
-    }
-
-    const state = await engine.run();
-
-    expect(state.status).toBe('aborted');
-    expect(runAgent).not.toHaveBeenCalled();
-    expect(state.dynamicParallelSelections).toEqual(new Map());
-  });
-
   it('should preflight a selected invalid provider before starting fixed or pool reviewers', async () => {
     const config = normalizeWorkflowConfig(dynamicParallelWorkflowRaw(), tmpDir);
     const parallel = config.steps[0]?.parallel;
@@ -1632,7 +1596,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     expect(abortReason).toContain('[REDACTED]');
   });
 
-  it('should execute a Codex selector through strict readonly isolation', async () => {
+  it('should execute a Codex selector through the read-only structured transport', async () => {
     const config = normalizeWorkflowConfig(dynamicParallelWorkflowRaw(), tmpDir);
     vi.mocked(runAgent).mockImplementation(async (persona, _instruction, options) => {
       if (options?.outputSchema !== undefined) {
@@ -1674,9 +1638,6 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
         outputSchema: expect.any(Object),
       }),
     );
-    expect(selectorCall?.[2].bypassPermissions).toBe(false);
-    expect(selectorCall?.[2].allowedTools).toEqual([]);
-    expect(selectorCall?.[2].mcpServers).toEqual({});
   });
 
   it('should apply dynamic effective selection to the shared concurrency semaphore', async () => {
@@ -1851,8 +1812,9 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     vi.spyOn(SelectorInputReader.prototype, 'readInputs').mockImplementationOnce(async () => {
       controller.abort(new Error('input collection aborted'));
       return {
-        reports: '(no reports available)',
-        workingTreeDiff: '(no working tree changes)',
+        reportDirectory: '.takt/reports',
+        reportNames: [],
+        changedPaths: [],
       };
     });
 
@@ -1979,52 +1941,6 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     expect(state.stepOutputs.size).toBe(0);
     expect(state.dynamicParallelSelections.size).toBe(0);
     expect(selectorUsage).toEqual([false]);
-  });
-
-  it('should fail before selector and reviewer execution when report scanning exceeds the entry limit', async () => {
-    const config = normalizeWorkflowConfig(dynamicParallelWorkflowRaw(), tmpDir);
-    const reportDirectory = join(tmpDir, '.takt', 'runs', 'test-report-dir', 'reports');
-    mkdirSync(reportDirectory, { recursive: true });
-    for (let index = 0; index <= 1_024; index += 1) {
-      writeFileSync(join(reportDirectory, `report-${index}.md`), 'report', 'utf-8');
-    }
-    const agentCalls: Array<{ outputSchema: Record<string, unknown> | undefined }> = [];
-    vi.mocked(runAgent).mockImplementation(async (_persona, _instruction, options) => {
-      agentCalls.push({ outputSchema: options?.outputSchema });
-      return makeResponse({ persona: 'unexpected-agent' });
-    });
-
-    const state = await new WorkflowEngine(config, tmpDir, 'Review changes', {
-      projectCwd: tmpDir,
-      provider: 'mock',
-      selectorProvider: MOCK_SELECTOR_PROVIDER,
-    }).run();
-
-    expect(state.status).toBe('aborted');
-    expect(agentCalls).toEqual([]);
-  });
-
-  it('should leave selector and workflow side effects empty when current diff input is invalid UTF-8', async () => {
-    const config = normalizeWorkflowConfig(dynamicParallelWorkflowRaw(), tmpDir);
-    const delegatedUsage = vi.fn();
-    const engine = new WorkflowEngine(config, tmpDir, 'Review changes', {
-      projectCwd: tmpDir,
-      provider: 'mock',
-      selectorProvider: MOCK_SELECTOR_PROVIDER,
-      onDelegatedAgentUsage: delegatedUsage,
-    });
-    writeFileSync(join(tmpDir, 'invalid-selector-input.txt'), Buffer.from([0xc3, 0x28]));
-
-    const state = await engine.run();
-    const reportDirectory = join(tmpDir, '.takt', 'runs', 'test-report-dir', 'reports');
-
-    expect(state.status).toBe('aborted');
-    expect(runAgent).not.toHaveBeenCalled();
-    expect(delegatedUsage).not.toHaveBeenCalled();
-    expect(state.stepOutputs).toEqual(new Map());
-    expect(state.dynamicParallelSelections).toEqual(new Map());
-    expect(state.personaSessions).toEqual(new Map());
-    expect(readdirSync(reportDirectory)).toEqual([]);
   });
 
   it('should save routed parallel sub-step sessions with the resolved provider key', async () => {
