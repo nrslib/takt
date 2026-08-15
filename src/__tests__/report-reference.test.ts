@@ -47,6 +47,7 @@ vi.mock('node:fs', async () => {
   };
 });
 import { resolveReportReferenceDetailed } from '../core/workflow/instruction/report-reference.js';
+import { inheritResumeReportSnapshot } from '../core/workflow/run/resume-report-snapshot.js';
 
 describe('resolveReportReferenceDetailed', () => {
   const temporaryDirectories: string[] = [];
@@ -290,6 +291,38 @@ describe('resolveReportReferenceDetailed', () => {
     })).toEqual({
       content: '（参照先の報告 review.md はこの run に存在しない）',
       scope: 'missing',
+    });
+  });
+
+  it('current step に同名 report が無い場合は root の同名 report より snapshot exact mapping を優先する', () => {
+    const root = makeTemporaryDirectory();
+    const sourceReports = join(root, '.takt', 'runs', 'source-run', 'reports');
+    const exactPath = 'subworkflows/old-peer/review-resolution.md';
+    const consumerKey = '{"workflow":"review-gate","step":"final-gate","calls":[]}';
+    mkdirSync(join(sourceReports, 'subworkflows', 'old-peer'), { recursive: true });
+    writeFileSync(join(sourceReports, 'review-resolution.md'), 'WRONG ROOT');
+    writeFileSync(join(sourceReports, ...exactPath.split('/')), 'EXACT SOURCE');
+    inheritResumeReportSnapshot({
+      cwd: root,
+      sourceRunSlug: 'source-run',
+      targetRunSlug: 'run-1',
+      resumeReportConsumers: [{
+        consumerKey,
+        reportDirectories: ['subworkflows/old-peer'],
+        references: [{ reference: 'review-resolution.md', path: exactPath }],
+      }],
+    });
+    const reports = join(root, '.takt', 'runs', 'run-1', 'reports');
+    const currentReports = join(reports, 'subworkflows', 'new-peer');
+    mkdirSync(currentReports, { recursive: true });
+
+    expect(resolveReportReferenceDetailed(currentReports, 'review-resolution.md', {
+      stepName: 'final-gate',
+      reportsRootDir: reports,
+      resumeReportConsumerKey: consumerKey,
+    })).toEqual({
+      content: 'EXACT SOURCE',
+      scope: 'resume-snapshot-readonly',
     });
   });
 

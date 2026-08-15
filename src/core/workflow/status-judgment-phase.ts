@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { WorkflowStep, RuleMatchMethod } from '../models/types.js';
 import { StatusJudgmentBuilder, type StatusJudgmentContext } from './instruction/StatusJudgmentBuilder.js';
@@ -13,13 +13,13 @@ import { formatMissingReportReference } from './instruction/report-reference.js'
 
 const log = createLogger('phase-runner');
 
-function readJudgmentReport(filePath: string, fileName: string): string {
+function readJudgmentReport(filePath: string): string | undefined {
   try {
     return readFileSync(filePath, 'utf-8');
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === 'ENOENT' || code === 'ENOTDIR') {
-      return formatMissingReportReference(fileName);
+      return undefined;
     }
     throw error;
   }
@@ -41,13 +41,24 @@ function buildBaseContext(
   const reportFiles = getJudgmentReportFiles(step.outputContracts);
 
   if (reportFiles.length > 0) {
+    let availableReportCount = 0;
     const reports = reportFiles.map((fileName) => {
       const filePath = resolve(ctx.reportDir, fileName);
-      const content = existsSync(filePath)
-        ? readJudgmentReport(filePath, fileName)
-        : formatMissingReportReference(fileName);
+      const reportContent = readJudgmentReport(filePath);
+      if (reportContent !== undefined) {
+        availableReportCount += 1;
+      }
+      const content = reportContent ?? formatMissingReportReference(fileName);
       return `# ${fileName}\n\n${content}`;
     });
+    if (availableReportCount === 0 && ctx.lastResponse) {
+      return {
+        language: ctx.language,
+        interactive: ctx.interactive,
+        lastResponse: ctx.lastResponse,
+        inputSource: 'response',
+      };
+    }
     return {
       language: ctx.language,
       interactive: ctx.interactive,

@@ -200,8 +200,8 @@ function getParentWorkflowReportDirs(reportDir: string, reportsRootDir: string):
  * （symlink 拒否）を検証する。無いファイルだけは欠落文に置換する。
  * `path` は従来と同じ `${dir}/${reference}` 形式（プロンプト本文の互換性維持）。
  *
- * workflow_call の子（subworkflows 名前空間）で見つからない場合のみ、直近の
- * 親 workflow から run の reports ルートまで順にフォールバックする。親候補は
+ * 探索順は、現在の workflow 名前空間、resume snapshot の consumer exact mapping、
+ * 直近の親 workflow から run の reports ルート。親候補は
  * `context.reportsRootDir` から構造検証した名前空間だけを使う。その場合 `scope` は
  * `parent-run-readonly` — 親成果物の読み取り専用参照であり、書き込みは常に自分の
  * reportDir に対して行われる。
@@ -229,20 +229,6 @@ export function resolveReportReferenceDetailed(
   if (stepContent !== undefined) {
     return { content: stepContent, scope: 'step' };
   }
-  if (reportsRoot !== undefined) {
-    for (const parentReportDir of getParentWorkflowReportDirs(reportDir, reportsRoot)) {
-      const parentTargetAbs = assertContained(parentReportDir, normalizedReference, context.stepName);
-      const parentContent = readRegularReportFile(
-        reportsRoot,
-        parentTargetAbs,
-        reference,
-        context.stepName,
-      );
-      if (parentContent !== undefined) {
-        return { content: parentContent, scope: 'parent-run-readonly' };
-      }
-    }
-  }
   const runInfo = deriveRunInfoFromReportDir(reportDir);
   if (runInfo !== undefined && reportsRoot !== undefined && context.resumeReportConsumerKey !== undefined) {
     const manifest = readPathValueOrUndefined(
@@ -261,6 +247,20 @@ export function resolveReportReferenceDetailed(
       );
       if (snapshotContent !== undefined) {
         return { content: snapshotContent, scope: 'resume-snapshot-readonly' };
+      }
+    }
+  }
+  if (reportsRoot !== undefined) {
+    for (const parentReportDir of getParentWorkflowReportDirs(reportDir, reportsRoot)) {
+      const parentTargetAbs = assertContained(parentReportDir, normalizedReference, context.stepName);
+      const parentContent = readRegularReportFile(
+        reportsRoot,
+        parentTargetAbs,
+        reference,
+        context.stepName,
+      );
+      if (parentContent !== undefined) {
+        return { content: parentContent, scope: 'parent-run-readonly' };
       }
     }
   }

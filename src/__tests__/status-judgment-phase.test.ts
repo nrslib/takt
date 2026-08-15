@@ -174,6 +174,50 @@ describe('runStatusJudgmentPhase', () => {
     );
   });
 
+  it('should judge a missing use_judge report from the available last response', async () => {
+    const lastResponse = 'REJECT: concrete blocking finding';
+    const structuredCaller = {
+      judgeStatus: vi.fn().mockImplementation(async (
+        structured,
+        tag,
+        _candidates,
+        options,
+      ) => {
+        expect(structured).toContain(lastResponse);
+        expect(tag).toContain(lastResponse);
+        expect(structured).not.toContain('（参照先の報告 review.md はこの run に存在しない）');
+        expect(tag).not.toContain('（参照先の報告 review.md はこの run に存在しない）');
+        options.onStructuredPromptResolved?.({
+          systemPrompt: 'conductor-system',
+          userInstruction: 'structured prompt',
+        });
+        return { candidateIndex: 1, method: 'structured_output' as const };
+      }),
+    };
+    const step: WorkflowStep = {
+      name: 'review',
+      persona: 'reviewer',
+      personaDisplayName: 'reviewer',
+      instruction: 'Review',
+      outputContracts: [{ name: 'review.md', format: '# Review', useJudge: true }],
+      rules: [
+        normalizeRule({ condition: 'approved', next: 'COMPLETE' }),
+        normalizeRule({ condition: 'needs_fix', next: 'fix' }),
+      ],
+    };
+
+    const result = await runStatusJudgmentPhase(step, {
+      cwd: '/tmp/project',
+      reportDir: '/tmp/project/.takt/runs/run/reports',
+      lastResponse,
+      iteration: 1,
+      resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'cursor', model: undefined }),
+      structuredCaller,
+    });
+
+    expect(result.label).toBe('needs_fix');
+  });
+
   it('should pass abortSignal to the Phase 3 structured caller', async () => {
     const abortController = new AbortController();
     const structuredCaller = {
