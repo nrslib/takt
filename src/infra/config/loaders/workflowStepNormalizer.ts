@@ -660,6 +660,9 @@ export function normalizeStepFromRaw(
       pool,
       selection: {
         mode: step.parallel.selection.mode,
+        ...(step.parallel.selection.reports === undefined ? {} : {
+          reports: [...step.parallel.selection.reports],
+        }),
         ...(step.parallel.selection.selector === undefined ? {} : {
           selector: normalizeSelectorGuidance(
             step.parallel.selection.selector,

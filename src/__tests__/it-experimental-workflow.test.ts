@@ -586,6 +586,7 @@ describe('experimental builtin workflow', () => {
         expect(securityDescription).toContain(language === 'en' ? 'permissions' : '権限');
         expect(securityDescription).not.toMatch(/\b(?:TAKT|worktree|provider|facet)\b/u);
         expect(reviewRoot.parallel.selection.mode).toBe('replace');
+        expect(reviewRoot.parallel.selection.reports).toEqual(['review-resolution.md']);
         const selectorInstruction = reviewRoot.parallel.selection.selector?.instruction;
         expect(selectorInstruction).toContain(
           language === 'en' ? 'changed content and reports' : '変更内容とレポート',

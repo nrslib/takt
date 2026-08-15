@@ -13,6 +13,7 @@ import type {
   WorkflowStep,
   WorkflowWideRule,
 } from '../../models/types.js';
+import { isDynamicParallelSubSteps } from '../../models/types.js';
 import { prepareRuntimeEnvironment } from '../../runtime/runtime-environment.js';
 import type { RunPaths } from '../run/run-paths.js';
 import type {
@@ -231,7 +232,8 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     selectionStore: params.sharedRuntime.dynamicFacetSelectionStore!,
     getCwd: params.getCwd,
     getReportDirectory: () => params.runPaths.reportsAbs,
-    getReportNames: (_step, state) => getSelectorReportNames(
+    getReportNames: (step, state) => getSelectorReportNames(
+      step,
       params.config,
       state,
       params.resumeStackPrefix,
@@ -335,7 +337,9 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     selectionStore: params.sharedRuntime.dynamicParallelSelectionStore!,
     getCwd: params.getCwd,
     getReportDirectory: () => params.runPaths.reportsAbs,
-    getReportNames: (_step, state) => getSelectorReportNames(
+    getReportsRootDirectory: () => params.runPaths.reportsRootAbs,
+    getReportNames: (step, state) => getSelectorReportNames(
+      step,
       params.config,
       state,
       params.resumeStackPrefix,
@@ -515,6 +519,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
 }
 
 function getSelectorReportNames(
+  step: WorkflowStep,
   config: WorkflowConfig,
   state: WorkflowState,
   resumeStackPrefix: readonly WorkflowResumePointEntry[],
@@ -525,9 +530,12 @@ function getSelectorReportNames(
   workflowStepParticipationIndex: import('../workflow-step-participation-index.js').WorkflowStepParticipationIndex,
   dynamicParallelSelections: ReadonlyMap<string, import('../../models/types.js').DynamicParallelSelectionSnapshot>,
 ): readonly string[] {
+  const configuredReportNames = step.parallel !== undefined && isDynamicParallelSubSteps(step.parallel)
+    ? step.parallel.selection.reports ?? []
+    : [];
   const results = config.steps
-    .map((step) => resolveWorkflowStepReportNamesWithDiagnostics(step, createReviewReportDiscoveryContext({
-      step,
+    .map((candidateStep) => resolveWorkflowStepReportNamesWithDiagnostics(candidateStep, createReviewReportDiscoveryContext({
+      step: candidateStep,
       workflow: config,
       workflowCallResolver,
       projectCwd,
@@ -547,5 +555,8 @@ function getSelectorReportNames(
       `Unable to resolve dynamic selector report inputs: ${failures.map((failure) => failure.reason).join('; ')}`,
     );
   }
-  return results.flatMap((result) => result.reportNames);
+  return [...new Set([
+    ...configuredReportNames,
+    ...results.flatMap((result) => result.reportNames),
+  ])];
 }

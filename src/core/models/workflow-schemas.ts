@@ -13,6 +13,7 @@ import {
   OutputContractsFieldSchema,
   PermissionModeSchema,
   ProviderReferenceSchema,
+  ReportRelativePathSchema,
   RateLimitFallbackSchema,
   QualityGatesSchema,
   hasProviderOptionsLeaf,
@@ -686,6 +687,7 @@ const DynamicParallelRawSchema = z.object({
   pool: z.array(DynamicParallelPoolSubStepRawSchema).min(1),
   selection: z.object({
     mode: z.enum(['replace', 'cumulative']).optional().default('replace'),
+    reports: z.array(ReportRelativePathSchema).optional(),
     selector: SelectorGuidanceRawSchema.optional(),
   }).strict().optional().default({ mode: 'replace' }),
 }).strict();

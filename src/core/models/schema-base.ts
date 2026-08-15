@@ -425,21 +425,27 @@ export const WorkflowProviderOptionsSchema = z.object({
   runtime: RuntimeConfigSchema,
 }).optional();
 
-/**
- * Output contract item schema (new structured format).
- */
-export const OutputContractItemSchema = z.object({
-  name: z.string().min(1).transform((name, ctx) => {
+function createReportRelativePathSchema(label: string) {
+  return z.string().min(1).transform((name, ctx) => {
     const classification = classifyReportRelativePath(name);
     if (classification.kind !== 'public') {
       ctx.addIssue({
         code: 'custom',
-        message: `output contract report name ${reportPathRejectionMessage(name)}`,
+        message: `${label} ${reportPathRejectionMessage(name)}`,
       });
       return z.NEVER;
     }
     return classification.normalizedPath;
-  }),
+  });
+}
+
+export const ReportRelativePathSchema = createReportRelativePathSchema('report path');
+
+/**
+ * Output contract item schema (new structured format).
+ */
+export const OutputContractItemSchema = z.object({
+  name: createReportRelativePathSchema('output contract report name'),
   format: z.union([
     z.string().min(1),
     z.object({

@@ -379,6 +379,7 @@ export interface DynamicParallelSubSteps {
   readonly pool: readonly DynamicParallelPoolSubStep[];
   readonly selection: {
     readonly mode: DynamicParallelSelectionMode;
+    readonly reports?: readonly string[];
     readonly selector?: SelectorGuidance;
   };
 }

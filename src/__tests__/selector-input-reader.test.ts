@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   utimesSync,
@@ -863,6 +864,72 @@ describe('SelectorInputReader', () => {
 
     expect(result.reports).toContain('current report');
     expect(result.reports).not.toContain('stale report');
+  });
+
+  it('should read an explicitly requested report from the nearest parent workflow scope', async () => {
+    const cwd = createGitDirectory();
+    const reportDirectory = join(cwd, 'reports');
+    const childDirectory = join(
+      reportDirectory,
+      'subworkflows',
+      'iteration-2--step-review--workflow-child',
+    );
+    mkdirSync(childDirectory, { recursive: true });
+    const reader = new SelectorInputReader(
+      new FakeGitCommandRunner([], 0, () => Buffer.alloc(0)),
+    );
+
+    const withoutResolution = await reader.readInputs(
+      childDirectory,
+      ['review-resolution.md'],
+      cwd,
+      undefined,
+      undefined,
+      reportDirectory,
+      ['review-resolution.md'],
+    );
+    expect(withoutResolution.reports).toBe('(no reports available)');
+
+    writeFileSync(join(reportDirectory, 'review-resolution.md'), 'parent resolution');
+    const withResolution = await reader.readInputs(
+      childDirectory,
+      ['review-resolution.md'],
+      cwd,
+      undefined,
+      undefined,
+      reportDirectory,
+      ['review-resolution.md'],
+    );
+    expect(withResolution.reports).toContain('parent resolution');
+  });
+
+  it('should reject a symlink replacement of a report directory during parent scope exploration', async () => {
+    const cwd = createGitDirectory();
+    const reportDirectory = join(cwd, 'reports');
+    const childDirectory = join(
+      reportDirectory,
+      'subworkflows',
+      'iteration-2--step-review--workflow-child',
+    );
+    const originalChildDirectory = join(cwd, 'original-child-reports');
+    const outsideDirectory = join(cwd, 'outside-reports');
+    mkdirSync(childDirectory, { recursive: true });
+    mkdirSync(outsideDirectory);
+    writeFileSync(join(outsideDirectory, 'review-resolution.md'), 'outside report');
+    renameSync(childDirectory, originalChildDirectory);
+    symlinkSync(outsideDirectory, childDirectory, 'dir');
+
+    await expect(new SelectorInputReader(
+      new FakeGitCommandRunner([], 0, () => Buffer.alloc(0)),
+    ).readInputs(
+      childDirectory,
+      ['review-resolution.md'],
+      cwd,
+      undefined,
+      undefined,
+      reportDirectory,
+      ['review-resolution.md'],
+    )).rejects.toThrow(/symlink/i);
   });
 
   it('should choose one deterministic latest report for a legacy wildcard namespace', async () => {

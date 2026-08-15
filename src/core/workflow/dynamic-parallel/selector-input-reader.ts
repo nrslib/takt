@@ -11,6 +11,7 @@ import {
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { scanReportEntries } from '../report-file-index.js';
 import { workflowCallReportRequestPathsMatch } from '../workflow-call-namespace.js';
+import { assertPathSegmentsAreSafe, isPathInside, isRealPathInside } from '../../../shared/utils/index.js';
 import {
   type SelectorGitCommandRunner,
 } from './selector-git-command-runner.js';
@@ -21,6 +22,7 @@ const MAX_SELECTOR_INPUT_BYTES = 1024 * 1024;
 const MAX_SELECTOR_GIT_CONCURRENCY = 8;
 const MAX_SELECTOR_PATH_LIST_BYTES = 1024 * 1024;
 const TAKT_RUN_PATH_PREFIX = '.takt/runs/';
+const SUBWORKFLOWS_NAMESPACE_DIR = 'subworkflows';
 
 type SelectorFileReadMode = 'complete' | 'truncated';
 
@@ -28,6 +30,11 @@ interface SelectorFileRead {
   readonly content: string;
   readonly bytes: number;
   readonly truncated: boolean;
+}
+
+interface SelectorReportFile {
+  readonly directory: string;
+  readonly relativePath: string;
 }
 
 export interface SelectorInputs {
@@ -57,13 +64,23 @@ export class SelectorInputReader {
     cwd: string,
     signal: AbortSignal | undefined,
     targetAgentPrompt?: string,
+    reportsRootDirectory?: string,
+    parentReportNames?: readonly string[],
   ): Promise<SelectorInputs> {
     signal?.throwIfAborted();
     const budget = new SelectorInputBudget();
     const boundedTargetAgentPrompt = targetAgentPrompt === undefined
       ? undefined
       : this.readTargetAgentPrompt(targetAgentPrompt, budget);
-    const reports = this.readReports(reportDirectory, requestedNames, budget, signal);
+    const reports = this.readReports(
+      reportDirectory,
+      requestedNames,
+      cwd,
+      budget,
+      signal,
+      reportsRootDirectory,
+      parentReportNames,
+    );
     signal?.throwIfAborted();
     const workingTreeDiff = await this.readWorkingTreeDiff(cwd, budget, signal);
     signal?.throwIfAborted();
@@ -137,22 +154,51 @@ export class SelectorInputReader {
   private readReports(
     reportDirectory: string,
     requestedNames: readonly string[],
+    cwd: string,
     budget: SelectorInputBudget,
     signal: AbortSignal | undefined,
+    reportsRootDirectory: string | undefined,
+    parentReportNames: readonly string[] | undefined,
   ): string {
     signal?.throwIfAborted();
-    if (!existsSync(reportDirectory)) {
+    const reportDirectories = this.resolveReportDirectories(reportDirectory, reportsRootDirectory, cwd)
+      .filter((directory) => existsSync(directory));
+    if (reportDirectories.length === 0) {
       return this.consumeEmptyValue('(no reports available)', budget);
     }
-    const reports = this.resolveExistingReportNames(reportDirectory, requestedNames).map((relativePath, index) => {
+    if (requestedNames.length === 0) {
+      return this.consumeEmptyValue('(no reports available)', budget);
+    }
+    const seenPaths = new Set<string>();
+    const reportFiles: SelectorReportFile[] = [];
+    const explicitlyParentScoped = new Set(parentReportNames ?? []);
+    const currentReportDirectories = reportDirectories.filter(
+      (directory) => directory === resolve(reportDirectory),
+    );
+    for (const requestedName of [...new Set(requestedNames)]) {
+      const directories = explicitlyParentScoped.has(requestedName)
+        ? reportDirectories
+        : currentReportDirectories;
+      for (const directory of directories) {
+        const relativePath = this.resolveExistingReportNames(directory, [requestedName])[0];
+        if (relativePath === undefined) continue;
+        const key = `${directory}\0${relativePath}`;
+        if (!seenPaths.has(key)) {
+          seenPaths.add(key);
+          reportFiles.push({ directory, relativePath });
+        }
+        break;
+      }
+    }
+    const reports = reportFiles.map(({ directory, relativePath }, index) => {
       signal?.throwIfAborted();
-      const reportPath = join(reportDirectory, relativePath);
-      const stat = lstatSync(reportPath);
+      const scopedReportPath = join(directory, relativePath);
+      const stat = lstatSync(scopedReportPath);
       if (!stat.isFile() || stat.isSymbolicLink()) {
         throw new Error(`Selector report is not a regular file: ${relativePath}`);
       }
       const file = this.readTextFile(
-        reportPath,
+        scopedReportPath,
         MAX_SELECTOR_ENTRY_BYTES,
         `Selector report "${relativePath}"`,
         'complete',
@@ -170,6 +216,54 @@ export class SelectorInputReader {
       return this.consumeEmptyValue('(no reports available)', budget);
     }
     return reports.join('\n\n');
+  }
+
+  private resolveReportDirectories(
+    reportDirectory: string,
+    reportsRootDirectory: string | undefined,
+    cwd: string,
+  ): readonly string[] {
+    const currentDirectory = resolve(reportDirectory);
+    this.assertSafeReportDirectory(cwd, currentDirectory);
+    if (reportsRootDirectory === undefined) {
+      return [currentDirectory];
+    }
+    const rootDirectory = resolve(reportsRootDirectory);
+    this.assertSafeReportDirectory(cwd, rootDirectory);
+    if (!isPathInside(rootDirectory, currentDirectory)
+      || !isRealPathInside(rootDirectory, currentDirectory)) {
+      throw new Error(`Selector report directory is outside the report root: ${currentDirectory}`);
+    }
+    const components = relative(rootDirectory, currentDirectory)
+      .split(sep)
+      .filter((component) => component.length > 0);
+    if (
+      components.length === 0
+      || components.length % 2 !== 0
+      || components.some((component, index) => (
+        index % 2 === 0 && component !== SUBWORKFLOWS_NAMESPACE_DIR
+      ))
+    ) {
+      return [currentDirectory];
+    }
+    const directories = [currentDirectory];
+    for (let length = components.length - 2; length >= 0; length -= 2) {
+      directories.push(resolve(rootDirectory, ...components.slice(0, length)));
+    }
+    return directories;
+  }
+
+  private assertSafeReportDirectory(cwd: string, directory: string): void {
+    assertPathSegmentsAreSafe(
+      cwd,
+      directory,
+      (_violation, segmentPath) => new Error(
+        `Selector report directory must stay inside the working directory and must not contain symlinks: ${segmentPath}`,
+      ),
+    );
+    if (!isRealPathInside(cwd, directory)) {
+      throw new Error(`Selector report directory resolves outside the working directory: ${directory}`);
+    }
   }
 
   private consumeEmptyValue(value: string, budget: SelectorInputBudget): string {

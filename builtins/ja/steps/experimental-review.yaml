@@ -178,5 +178,7 @@ parallel:
           - name: testing-review.md
             format: testing-review
   selection:
+    reports:
+      - review-resolution.md
     selector:
       instruction: select-applicable-candidates

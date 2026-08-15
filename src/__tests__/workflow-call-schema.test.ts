@@ -231,6 +231,56 @@ const workflowCallForbiddenFieldCases = [
 ] as const;
 
 describe('workflow_call schema', () => {
+  it('should accept dynamic parallel selection reports as report-relative paths', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'reviewers',
+      parallel: {
+        pool: [{
+          name: 'frontend',
+          description: 'Review frontend changes',
+          instruction: 'Review frontend changes',
+          rules: [{ condition: 'approved', next: 'COMPLETE' }],
+        }],
+        selection: {
+          reports: ['review.md', 'nested/review.md'],
+        },
+      },
+      rules: [{ condition: 'approved', next: 'COMPLETE' }],
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.parallel).toMatchObject({
+        selection: { reports: ['review.md', 'nested/review.md'] },
+      });
+    }
+  });
+
+  it.each([
+    ['reserved manifest', 'resume-artifacts.json'],
+    ['internal namespace', '.takt-report-internal/history/review.md'],
+    ['dot path segment', '../review.md'],
+    ['absolute path', '/tmp/review.md'],
+    ['non-canonical separator', 'nested\\review.md'],
+    ['leading whitespace', ' review.md'],
+  ])('should reject a dynamic parallel selection report with %s at load time', (_label, reportName) => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'reviewers',
+      parallel: {
+        pool: [{
+          name: 'frontend',
+          description: 'Review frontend changes',
+          instruction: 'Review frontend changes',
+          rules: [{ condition: 'approved', next: 'COMPLETE' }],
+        }],
+        selection: { reports: [reportName] },
+      },
+      rules: [{ condition: 'approved', next: 'COMPLETE' }],
+    });
+
+    expect(result.success).toBe(false);
+  });
+
   it('should preserve an explicit max_steps on a root workflow', () => {
     const workflow = normalizeWorkflowConfig({
       name: 'root',

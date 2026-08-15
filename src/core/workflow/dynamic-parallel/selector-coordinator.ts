@@ -38,6 +38,7 @@ export interface DynamicParallelSelectorCoordinatorDeps {
   readonly selectionStore: DynamicParallelSelectionStore;
   readonly getCwd: () => string;
   readonly getReportDirectory: () => string;
+  readonly getReportsRootDirectory: () => string;
   readonly getReportNames: (step: WorkflowStep, state: WorkflowState) => readonly string[];
   readonly getWorkflowReference: () => string;
   readonly workflowCallPath: readonly WorkflowResumePointEntry[];
@@ -84,6 +85,9 @@ export class DynamicParallelSelectorCoordinator {
       this.deps.getReportNames(step, state),
       this.deps.getCwd(),
       signal,
+      undefined,
+      this.deps.getReportsRootDirectory(),
+      step.parallel.selection.reports ?? [],
     );
     signal?.throwIfAborted();
     const instruction = buildDynamicSelectorInstruction({

@@ -278,6 +278,10 @@ describe('selector guidance resolution', () => {
         facetInstruction: instruction,
         parallelInstruction: instruction,
       });
+      expect(result.parallelInstruction).toContain('review-resolution.md');
+      expect(result.parallelInstruction).toContain(
+        lang === 'en' ? 'unresolved actionable finding' : '未解消の actionable finding',
+      );
     },
   );
 

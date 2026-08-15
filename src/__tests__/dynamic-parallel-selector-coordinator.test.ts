@@ -71,6 +71,7 @@ function dependencies(): DynamicParallelSelectorCoordinatorDeps {
     selectionStore: new DynamicParallelSelectionStore(new Map()),
     getCwd: () => '/project',
     getReportDirectory: () => '.takt/reports',
+    getReportsRootDirectory: () => '.takt/runs/run/reports',
     getReportNames: () => [],
     getWorkflowReference: () => 'test-workflow',
     workflowCallPath: [],
@@ -104,6 +105,15 @@ describe('DynamicParallelSelectorCoordinator', () => {
       'review frontend changes',
     );
 
+    expect(deps.inputReader?.readInputs).toHaveBeenCalledWith(
+      '.takt/reports',
+      [],
+      '/project',
+      undefined,
+      undefined,
+      '.takt/runs/run/reports',
+      [],
+    );
     const outputSchema = mockedExecuteAgent.mock.calls[0]?.[2];
     if (outputSchema === undefined) throw new Error('Selector output schema was not sent');
     expect(() => assertStrictStructuredOutputSchema(outputSchema)).not.toThrow();

@@ -144,6 +144,7 @@ function dynamicParallelWorkflowRaw(
   selectionMode: 'replace' | 'cumulative' = 'replace',
   concurrency?: number,
   includeSecurity = false,
+  selectorReports: readonly string[] = [],
 ) {
   const reviewers = {
     name: 'reviewers',
@@ -179,7 +180,10 @@ function dynamicParallelWorkflowRaw(
           rules: [{ condition: 'approved', next: 'COMPLETE' }],
         }] : []),
       ],
-      selection: { mode: selectionMode },
+      selection: {
+        mode: selectionMode,
+        ...(selectorReports.length === 0 ? {} : { reports: [...selectorReports] }),
+      },
     },
     ...(concurrency === undefined ? {} : { concurrency }),
     rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
@@ -559,7 +563,10 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
   });
 
   it('should execute fixed and selected pool reviewers only through the dynamic parallel workflow path', async () => {
-    const config = normalizeWorkflowConfig(dynamicParallelWorkflowRaw(true), tmpDir);
+    const config = normalizeWorkflowConfig(
+      dynamicParallelWorkflowRaw(true, 'replace', undefined, false, ['review-resolution.md']),
+      tmpDir,
+    );
     const identity = dynamicSelectionIdentity(config);
     const parallel = config.steps.find((step) => step.name === 'reviewers')?.parallel;
     if (parallel === undefined || !isDynamicParallelSubSteps(parallel)) {
@@ -623,6 +630,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     const reportDirectory = join(tmpDir, '.takt', 'runs', 'test-report-dir', 'reports');
     mkdirSync(reportDirectory, { recursive: true });
     writeFileSync(join(reportDirectory, 'prior.md'), '界'.repeat(100), 'utf-8');
+    writeFileSync(join(reportDirectory, 'review-resolution.md'), 'unresolved finding from security review', 'utf-8');
     writeFileSync(join(reportDirectory, 'unrelated.md'), 'unrelated report must not reach the selector', 'utf-8');
     mkdirSync(join(reportDirectory, 'subworkflows'), { recursive: true });
     writeFileSync(join(reportDirectory, 'subworkflows', 'nested.md'), 'nested report must not reach the selector', 'utf-8');
@@ -691,6 +699,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     expect(resumePoint).not.toHaveProperty('dynamic_parallel_selections');
     expect(selectorCall?.instruction).not.toContain('\uFFFD');
     expect(selectorCall?.instruction).toContain('界');
+    expect(selectorCall?.instruction).toContain('unresolved finding from security review');
     expect(selectorCall?.instruction).not.toContain('unrelated report must not reach the selector');
     expect(selectorCall?.instruction).not.toContain('nested report must not reach the selector');
     expect(selectorCall?.instruction).toContain('after task start');
