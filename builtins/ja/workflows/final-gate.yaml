@@ -1,4 +1,4 @@
-name: supervisor-final-gate
+name: final-gate
 description: 現在のコードと前段の報告から、supervisor が要件の充足状態と必要な次の対応を判断する。
 subworkflow:
   callable: true

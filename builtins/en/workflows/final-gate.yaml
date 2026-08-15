@@ -1,4 +1,4 @@
-name: supervisor-final-gate
+name: final-gate
 description: A supervisor determines requirement fulfillment and the required next action from current code and preceding reports.
 subworkflow:
   callable: true

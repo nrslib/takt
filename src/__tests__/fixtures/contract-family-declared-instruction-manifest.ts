@@ -126,7 +126,7 @@ const CALLER_PATH_MANIFEST: readonly CallerPathExpectation[] = [
   caller(/\/steps\[\d+\]:review-adjudication$/u, 'review-adjudication', 'contract-family-review-adjudication'),
   caller(/\/steps\[\d+\]:final-gate$/u, 'final-preservation', 'contract-family-final-preservation'),
   caller(/^review-[^/]+\/steps\[\d+\]:(?:review-synthesis|supervise)$/u, 'final-preservation', 'contract-family-final-preservation'),
-  caller(/(?:^|\/call:)supervisor-final-gate\/steps\[\d+\]:supervise$/u, 'final-preservation', 'contract-family-final-preservation'),
+  caller(/(?:^|\/call:)final-gate\/steps\[\d+\]:supervise$/u, 'final-preservation', 'contract-family-final-preservation'),
   caller(/(?:^|\/call:)(?:mini-core|simple-core)\/steps\[\d+\]:(?:reviewers\/parallel\[1\]:)?supervise$/u, 'final-preservation', 'contract-family-final-preservation'),
 ];
 
