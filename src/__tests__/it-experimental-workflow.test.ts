@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import {
   getAllParallelSubSteps,
   type WorkflowConfig,
@@ -560,6 +560,36 @@ describe('experimental builtin workflow', () => {
         }
         const reviewerSuite = initialSuite!;
         const securityReview = findWorkflowStep(reviewerSuite, 'security-review');
+        const reviewRoot = findWorkflowStep(reviewerSuite, reviewerSuite.initialStep);
+        if (reviewRoot.parallel === undefined || Array.isArray(reviewRoot.parallel)) {
+          throw new Error(`Review workflow "${reviewerSuite.name}" has no dynamic parallel reviewers`);
+        }
+        expect(reviewRoot.parallel.fixed.map(({ name }) => name)).toEqual([
+          'coding-review',
+          'ai-antipattern-review',
+        ]);
+        expect(reviewRoot.parallel.pool.map(({ name }) => name)).toEqual(
+          workflowName === 'experimental'
+            ? ['architecture-review', 'frontend-review', 'backend-review', 'security-review', 'testing-review']
+            : ['architecture-review', 'security-review', 'testing-review'],
+        );
+        expect(reviewRoot.parallel.pool.find(({ name }) => name === 'security-review')?.description).toContain(
+          language === 'en' ? 'Do not select by default' : '既定では選ばない',
+        );
+        expect(reviewRoot.parallel.selection.selector?.instruction).toContain(
+          language === 'en'
+            ? 'Do not select security-review unless'
+            : 'security-review は description の条件に該当しない限り選ばない',
+        );
+        expect(securityReview.knowledgeContents?.map(({ sourcePath }) => basename(sourcePath ?? '')))
+          .toEqual(workflowName === 'experimental'
+            ? ['security.md', 'security-data.md', 'security-dependencies.md']
+            : ['takt.md', 'security.md', 'security-data.md', 'security-dependencies.md']);
+        expect(securityReview.dynamicFacets?.selector?.instruction).toContain(
+          language === 'en'
+            ? 'changed content and the target agent prompt'
+            : '変更内容と対象エージェントのプロンプト',
+        );
         const poolName = securityReview.dynamicFacets?.pool;
         if (poolName === undefined) {
           throw new Error(`Security reviewer in "${reviewerSuite.name}" has no dynamic facet pool`);
@@ -612,9 +642,14 @@ describe('experimental builtin workflow', () => {
         selection(['testing'], 'Testing implementation facets are required.'),
         responseForNext(implementation, 'implement', 'COMPLETE'),
         ...acceptedCompanionFinding(responseForNext(implementation, 'implement', 'COMPLETE')),
-        parallelSelection(['architecture-review'], 'The first review round covers architecture changes.'),
+        parallelSelection(
+          ['architecture-review', 'security-review'],
+          'The first review round covers architecture and security changes.',
+        ),
+        selection(['cli'], 'The TAKT local execution security knowledge matches the changed surface.'),
         response(reviewerSuite, 'coding-review', 'coding-reviewer', 'needs_fix'),
         response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'needs_fix'),
+        response(reviewerSuite, 'security-review', 'security-reviewer', 'needs_fix'),
         response(reviewerSuite, 'architecture-review', 'architecture-reviewer', 'needs_fix'),
         responseForNext(peerReview, 'review-adjudication', 'remediation'),
         responseForNext(remediation, 'fix-plan', 'fix'),
@@ -638,9 +673,11 @@ describe('experimental builtin workflow', () => {
         responseForNext(remediation, 'fix', 'fix-verifier'),
         ...acceptedCompanionFinding(responseForNext(remediation, 'fix', 'fix-verifier')),
         responseForNext(remediation, 'fix-verifier', 'COMPLETE'),
-        parallelSelection([], 'The fixed reviewers cover the final-gate remediation.'),
+        parallelSelection(['security-review'], 'The final-gate remediation covers security changes.'),
+        selection([], 'The fixed generic security knowledge covers the final-gate remediation.'),
         response(reviewerSuite, 'coding-review', 'coding-reviewer', 'approved'),
         response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
+        response(reviewerSuite, 'security-review', 'security-reviewer', 'approved'),
         responseForNext(peerReview, 'review-adjudication', 'final-gate'),
         responseForNext(peerReview, 'final-gate', 'COMPLETE'),
       ]);
@@ -689,6 +726,14 @@ describe('experimental builtin workflow', () => {
         companionStarts,
       })).toBe('completed');
       expect(getScenarioQueue()?.remaining).toBe(0);
+      const reviewerSelections = [...state.dynamicParallelSelections.values()].filter(
+        ({ step_name: stepName }) => stepName === reviewerSuite.initialStep,
+      );
+      expect(reviewerSelections.length).toBeGreaterThan(0);
+      for (const reviewerSelection of reviewerSelections) {
+        expect(reviewerSelection.selected_pool_ids).toContain('security-review');
+        expect(reviewerSelection.effective_selection_ids).toContain('security-review');
+      }
       const companionSteps = ['implement', 'fix', 'fix-retry', 'fix'];
       expect(companionStarts).toEqual(companionSteps.flatMap((step) => [
         { step, companion: 'ai-antipattern-review-companion' },

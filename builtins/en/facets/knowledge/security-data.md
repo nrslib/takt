@@ -2,83 +2,22 @@
 
 ## Applicability
 
-Apply to changes that involve sensitive information, logs, error responses, or cryptography.
+Apply when a change affects credentials, personal or protected data, logs, errors, responses, artifacts, repository content, or cryptographic material.
 
-## Data Protection
+## Exposure Boundaries
 
-**Sensitive information exposure:**
+Do not decide from a field name or the presence of logging alone. Identify the data, where it originates, which output or storage receives it, every actor allowed to observe that destination, and the concrete unauthorized observer.
 
-- Hardcoded API keys, secrets → Immediate REJECT
-- Sensitive info in logs → REJECT
-- Internal info exposure in error messages → REJECT
-- Committed `.env` files → REJECT
+| Condition | Exposure and impact to verify |
+|-----------|-------------------------------|
+| A password, token, API key, session value, or authentication header reaches logs or artifacts | Determine who can read the destination and what access the credential grants |
+| A request, object, exception, or serialized value is emitted as a whole | Establish which sensitive fields are included and which unauthorized observer receives them |
+| Internal paths, queries, stacks, or another resource's content reach a response | Identify the caller and whether the disclosed information or data is protected from that caller |
+| Personal information is logged | Identify the data classification, operational need, retention, destination readers, and unauthorized exposure |
+| A secret or protected file is committed to a repository | Identify who can read the repository or downstream artifact and what capability or data becomes available |
 
-## Logging & Masking
+Masking and exclusion are effective only when they cover the actual serialization path. A disabled log level changes exposure only when deployment and configuration prevent the value from reaching outputs available to unauthorized observers.
 
-Prevent sensitive information from leaking into logs and responses.
+## Cryptographic Material and Semantics
 
-**Never log:**
-- Passwords, tokens, API keys
-- Credit card numbers, personal identification numbers
-- Session IDs, authentication header values
-- Personal information (email, phone) unless necessary for debugging
-
-**Masking patterns:**
-
-```typescript
-// NG - Password exposed in logs
-logger.info('User login attempt', { email, password })
-
-// OK - Exclude sensitive fields
-logger.info('User login attempt', { email })
-```
-
-```kotlin
-// NG - Logging entire request object
-logger.info("Request: {}", request)
-
-// OK - Log only safe fields
-logger.info("Request: userId={}, action={}", request.userId, request.action)
-```
-
-**Structured logging field filtering:**
-
-When passing objects to log output, ensure `toString()` or JSON serialization does not include sensitive fields.
-
-```kotlin
-// NG - data class toString() includes password
-data class UserCredentials(val email: String, val password: String)
-
-// OK - Override toString() to mask sensitive fields
-data class UserCredentials(val email: String, val password: String) {
-    override fun toString(): String = "UserCredentials(email=$email, password=***)"
-}
-```
-
-| Criteria | Verdict |
-|----------|---------|
-| Log output contains passwords, tokens, or API keys | REJECT |
-| Error responses contain stack traces or internal paths | REJECT |
-| data class toString() exposes sensitive fields | REJECT |
-| Sensitive info can be output regardless of log level | REJECT |
-| Debug logs contain PII but disabled in production | Warning. Risk of misconfiguration |
-
-## Cryptography
-
-- Use of weak crypto algorithms → REJECT
-- Fixed IV/Nonce usage → REJECT
-- Hardcoded encryption keys → Immediate REJECT
-- No HTTPS (production) → REJECT
-
-## Error Handling
-
-- Stack trace exposure in production → REJECT
-- Detailed error message exposure → REJECT
-- Swallowing security events → REJECT
-
-## OWASP Top 10 Checklist
-
-| Category | Check Items |
-|----------|-------------|
-| A02 Cryptographic Failures | Encryption, sensitive data protection |
-| A09 Logging Failures | Security logging |
+For algorithms, keys, nonces, transport protection, and hashes, identify the protected property, attacker capability, runtime or protocol semantics, and concrete loss of confidentiality or integrity. A deprecated name alone does not establish impact; a hardcoded key, repeated nonce, or unprotected transport can establish impact when the relevant actor and observation or modification path are reachable.

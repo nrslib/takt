@@ -16,7 +16,13 @@ Treat an issue as a Security blocking finding only when all of the following are
 
 If the attacker, controlled input, broken boundary, execution path, or impact cannot be verified, do not make it a blocking finding. Do not REJECT on speculation alone.
 
-Do not make the count or size of repository-author-controlled prompts, configuration, or rules, or their provider cost, a blocking finding unless it violates an existing quantitative contract or demonstrates reproducible resource exhaustion or billing impact. Do not require a new limit that the requirements do not define.
+The absence of sanitization, a limit, validation, or confirmation is not by itself a finding. Show how that absence satisfies every blocking condition above.
+
+Each blocking condition may be established from code, a primary specification, and known runtime or interpreter behavior. A successful attack PoC or reproduced real-world harm is not required when those sources establish the complete reachable path and concrete impact.
+
+A concrete threat actor may be an attacker who injects input or an unauthorized observer who can read logs, artifacts, repository content, or other outputs. In either case, identify the actor's actual access and the protected information or capability exposed across the boundary.
+
+Do not make the count or size of repository-author-controlled configuration, inputs, or data, or the resulting external-service usage or cost, a blocking finding unless the evidence shows a violation of an existing quantitative contract or a reproducible resource-exhaustion or cost impact. Do not require a new limit that the requirements do not define.
 
 Treat an unmodified repository-derived string reaching terminal output as blocking only when a concrete terminal effect through CSI, OSC, or an equivalent sequence is reproduced, such as display spoofing or clipboard manipulation. The arrival of a single byte such as ESC is not blocking evidence.
 

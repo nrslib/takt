@@ -5,13 +5,8 @@
 
 ## 重大度: None / Low / Medium / High / Critical
 
-## チェック結果
-| カテゴリ | 結果 | 備考 |
-|---------|------|------|
-| インジェクション | ✅ | - |
-| 認証・認可 | ✅ | - |
-| データ保護 | ✅ | - |
-| 依存関係 | ✅ | - |
+## サマリー
+{確認したセキュリティ結果を1～2文で要約}
 
 {{include:output-contracts/base-review-problem-family-completion-sweep}}
 
@@ -45,7 +40,8 @@
 ```
 
 **認知負荷軽減ルール:**
-- 問題なし → チェック表のみ（10行以内）
-- 警告のみ → + 警告1-2行（15行以内）
+- 初回の APPROVE で finding も引き継ぐ裁定もない → 結果: APPROVE、重大度: None、1～2文のサマリーだけ
+- APPROVE で警告のみ → 警告を1～2行追加
+- follow-up の APPROVE → follow-up 契約で必要な裁定済み・解消済み・検証の既存 section だけを追加
 - 脆弱性あり → 確認済みの指摘をすべて表へ記載し、同じ原因の場所は集約
 {{include:output-contracts/base-review-adjudicated-out-of-scope-reporting}}

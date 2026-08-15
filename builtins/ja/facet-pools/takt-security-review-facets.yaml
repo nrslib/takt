@@ -2,5 +2,5 @@ knowledge:
   security-local: ../facets/knowledge/security-local.md
 candidates:
   - id: cli
-    description: CLI入力がサブプロセス、worktree、パス、ローカルファイル、設定へ到達する変更に限ってレビューする。
+    description: repository が制御する workflow、facet、provider・tool 設定、または CLI 入力が、process、tool、sandbox、worktree、filesystem、credential、ローカル権限の境界を越える変更で選ぶ。
     knowledge: security-local

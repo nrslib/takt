@@ -208,6 +208,14 @@ const TARGETS = [
     includeOutputContract: true,
   },
   {
+    id: 'security-review-method',
+    workflow: 'peer-review',
+    via: 'initial-reviewers',
+    step: 'security-review',
+    fixture: 'eval/fixtures/security-review-method',
+    includeOutputContract: true,
+  },
+  {
     id: 'review-mode-authority',
     workflow: 'review-default',
     step: 'coding-review',

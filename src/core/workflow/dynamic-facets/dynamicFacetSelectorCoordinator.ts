@@ -15,7 +15,10 @@ import {
   createSelectorContract,
   validateSelectorResponse,
 } from '../selector-contract.js';
-import { buildDynamicFacetSelectorInstruction } from './dynamicFacetContextBuilder.js';
+import {
+  buildDynamicFacetSelectorInstruction,
+  buildDynamicFacetTargetAgentPrompt,
+} from './dynamicFacetContextBuilder.js';
 import { composeDynamicFacets, type FixedFacets } from './dynamicFacetComposer.js';
 import type { DynamicFacetSelectionStore } from './dynamicFacetSelectionStore.js';
 import { truncateUtf8 } from '../../../shared/utils/utf8.js';
@@ -101,13 +104,18 @@ export class DynamicFacetSelectorCoordinator {
     if (this.deps.inputReader === undefined) {
       throw new Error('Dynamic facet selector requires an input reader');
     }
+    const targetAgentPrompt = buildDynamicFacetTargetAgentPrompt(step);
     const inputs = await this.deps.inputReader.readInputs(
       this.deps.getReportDirectory(),
       reportNames,
       this.deps.getCwd(),
       signal,
+      targetAgentPrompt,
     );
     signal?.throwIfAborted();
+    if (inputs.targetAgentPrompt === undefined) {
+      throw new Error(`Dynamic facet selector for "${step.name}" requires a target agent prompt`);
+    }
     const instruction = buildDynamicFacetSelectorInstruction({
       task,
       workflowName: state.workflowName,
@@ -117,6 +125,7 @@ export class DynamicFacetSelectorCoordinator {
       stepIteration,
       reports: inputs.reports,
       cumulativeDiff: inputs.workingTreeDiff,
+      targetAgentPrompt: inputs.targetAgentPrompt,
       pool,
       maxSelected: step.dynamicFacets.maxSelected,
       selectorInstruction: step.dynamicFacets.selector?.instruction,
@@ -127,6 +136,7 @@ export class DynamicFacetSelectorCoordinator {
       task,
       reports: inputs.reports,
       working_tree_diff: inputs.workingTreeDiff,
+      targetAgentPrompt: inputs.targetAgentPrompt,
       candidates: pool.candidates.map((candidate) => ({ id: candidate.id, description: candidate.description })),
     });
     const redact = (text: string): string => sanitizeSensitiveTextWithKnownValues(text, sensitiveValues);

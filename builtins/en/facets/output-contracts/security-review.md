@@ -5,13 +5,8 @@
 
 ## Severity: None / Low / Medium / High / Critical
 
-## Check Results
-| Category | Result | Notes |
-|----------|--------|-------|
-| Injection | ✅ | - |
-| Authentication & Authorization | ✅ | - |
-| Data Protection | ✅ | - |
-| Dependencies | ✅ | - |
+## Summary
+{Summarize the verified security result in one or two sentences}
 
 {{include:output-contracts/base-review-problem-family-completion-sweep}}
 
@@ -45,7 +40,8 @@
 ```
 
 **Cognitive load reduction rules:**
-- No issues → Checklist only (10 lines or fewer)
-- Warnings only → + Warnings in 1-2 lines (15 lines or fewer)
+- Initial APPROVE with no findings or prior adjudication to carry → Result: APPROVE, Severity: None, and a one- or two-sentence Summary only
+- APPROVE with warnings → add Warnings in 1-2 lines
+- Follow-up APPROVE → include only the existing adjudicated, resolved, or verification sections required by the follow-up contract
 - Vulnerabilities found → include every verified finding in tables and aggregate locations with the same cause
 {{include:output-contracts/base-review-adjudicated-out-of-scope-reporting}}

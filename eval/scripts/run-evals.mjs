@@ -71,6 +71,7 @@ const SUITES = {
   'follow-up-review-repair-regression': 'promptfooconfig.follow-up-review-repair-regression.yaml',
   'follow-up-testing-review-repair-regression': 'promptfooconfig.follow-up-testing-review-repair-regression.yaml',
   'review-adjudication-binding': 'promptfooconfig.review-adjudication-binding.yaml',
+  'security-review-method': 'promptfooconfig.security-review-method.yaml',
   'review-mode-authority': 'promptfooconfig.review-mode-authority.yaml',
   'fix-verifier-family-boundary': 'promptfooconfig.fix-verifier-family-boundary.yaml',
   'companion-early-scan': 'promptfooconfig.companion-early-scan.yaml',
@@ -105,6 +106,8 @@ for (const name of names) {
 // デフォルト実行から除外して明示的に呼び出す。
 // review-adjudication-binding も同じ2つの外部 CLI で3モデルを使うため、
 // デフォルト実行から除外して明示的に呼び出す。
+// security-review-method も同じ2つの外部 CLI で3モデルを使うため、
+// デフォルト実行から除外して明示的に呼び出す。
 // fix-plan-cause-check も claude（opus）と codex（gpt-5.6-luna）の
 // 両ログインが必要な二重測定スイートのため、明示的に呼び出す。
 const DEFAULT_EXCLUDED = new Set([
@@ -115,6 +118,7 @@ const DEFAULT_EXCLUDED = new Set([
   'fix-plan-cause-check',
   'initial-review-external-identity-wiring',
   'review-adjudication-binding',
+  'security-review-method',
   'write-tests-default-priority',
   'write-tests-default-priority-codex',
 ]);

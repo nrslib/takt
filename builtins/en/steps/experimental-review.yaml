@@ -108,17 +108,19 @@ parallel:
           - name: backend-review.md
             format: coding-review
     - name: security-review
-      description: Review authentication, authorization, input validation, secrets, dependencies, and security boundaries.
+      description: Do not select by default. Select only when (a) the change may affect secrets, credentials, external-input handling, process execution, filesystem, network, or terminal boundaries, permissions, or sandboxing, or (b) the change is large enough that security impact cannot be confidently ruled out. Do not select for documentation-only, comment-only, or test-only changes, or small localized fixes.
       capabilities: readonly
       tags: [review]
       edit: false
       persona: security-reviewer
       policy: [contract-change, security-review]
-      knowledge: security
+      knowledge: [security, security-data, security-dependencies]
       dynamic_facets:
         pool:
           $param: security_review_pool
-        max_selected: 1
+        selector:
+          instruction: >-
+            Inspect the changed content and the target agent prompt, not only changed filenames. Identify who controls each input, which trust or authority boundary it crosses, and which processing or asset it reaches, then select every candidate whose description applies. If no candidate applies, return an empty array; the security reviewer will still perform the minimal review with only its fixed generic Knowledge. If input is missing or truncated and non-applicability cannot be determined, select every candidate that may apply.
       instruction:
         $param: security_review_instruction
       pass_previous_response: false
@@ -143,3 +145,6 @@ parallel:
             format: testing-review
   selection:
     mode: replace
+    selector:
+      instruction: >-
+        Select only pool candidates whose description conditions apply to the changed content. Do not select security-review unless the conditions in its description apply.

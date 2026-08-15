@@ -74,6 +74,10 @@ terminal effect. It needs both CLI logins and is excluded from the default
 suite run; invoke it with
 `npm run eval:prompts:review-adjudication-binding`.
 
+The `security-review-method` suite measures the initial security-review method
+against seven boundary and evidence cases on Opus 5, Luna Max, and Sol High.
+Run it through `npm run eval:prompts:security-review-method`.
+
 ## Suites
 
 | Suite | Workflow / step | Fixture | Measures |
@@ -113,6 +117,7 @@ suite run; invoke it with
 | `follow-up-testing-review-repair-regression` | peer-review / follow-up testing-review | follow-up-review-repair-regression | whether test findings stay limited to missing regression detection in an authorized family and reject adjacent or structure-freezing test expansion |
 | `review-adjudication` | peer-review / review-adjudication | review-adjudication | whether adjudication separates technical validity from remediation authority, keeps accepted-family closure and diff-induced regressions actionable, and excludes even severe horizontal improvements from the fix plan |
 | `review-adjudication-binding` | peer-review / follow-up security-review | review-adjudication-binding | whether Opus 5, Luna Max, and Sol High keep three out-of-scope findings non-blocking, reopen only with an allowed basis, and distinguish bare ESC or unconstrained repository-owned rules from a reproduced OSC terminal effect |
+| `security-review-method` | peer-review / initial security-review | security-review-method | whether Opus 5, Luna Max, and Sol High approve unchanged boundaries and bound SQL, reject verified SQL injection, authorization bypass, credential exposure, and helper-mediated command injection, and keep repository-author-controlled size alone non-blocking |
 | `task-instruction-gherkin` | interactive task summarization | direct English and Japanese conversations | whether implementation details and abstraction intent remain in Markdown while focused Gherkin captures only externally observable behavior |
 | `final-readiness-supervision` | review-fix-default / merge-readiness-review + supervise Phase 1 | final-readiness-supervision | whether both public final-gate producers independently authorize a newly discovered required consumer, explain its initial-round omission, and avoid horizontal exploration |
 | `final-readiness-preservation` | review-fix-default / merge-readiness-review + supervise Phase 2 | final-readiness-supervision | whether both public final-gate reports preserve the new finding and keep adjudicated noise non-actionable |
@@ -217,6 +222,7 @@ npm run eval:prompts:implement-contract-traceability
 npm run eval:prompts:follow-up-review-repair-regression
 npm run eval:prompts:follow-up-testing-review-repair-regression
 npm run eval:prompts:review-adjudication
+npm run eval:prompts:security-review-method
 npm run eval:prompts:task-instruction-gherkin
 npm run eval:prompts:final-readiness-supervision
 npm run eval:prompts -- final-readiness-preservation

@@ -145,7 +145,13 @@ function buildDeps(overrides: Partial<DynamicFacetSelectorCoordinatorDeps> = {})
     getReportNames: () => [],
     getCwd: () => '/tmp/project',
     inputReader: {
-      readInputs: vi.fn().mockResolvedValue({ reports: '', workingTreeDiff: '' }),
+      readInputs: vi.fn().mockImplementation(async (
+        _reportDirectory: string,
+        _reportNames: readonly string[],
+        _cwd: string,
+        _signal: AbortSignal | undefined,
+        targetAgentPrompt: string,
+      ) => ({ reports: '', workingTreeDiff: '', targetAgentPrompt })),
     } as unknown as DynamicFacetSelectorCoordinatorDeps['inputReader'],
     ...overrides,
   };
@@ -282,6 +288,8 @@ describe('DynamicFacetSelectorCoordinator', () => {
     expect(systemPrompt).toContain('internal dynamic facet selector');
     expect(instruction).toContain('Select facets from the changed paths and unresolved findings.');
     expect(instruction).toContain('Task:\ntask');
+    expect(instruction).toContain('Target agent prompt:\n');
+    expect(instruction).toContain('Instruction:\nFix');
     expect(instruction).toContain('- frontend: Frontend changes');
     expect(outputSchema).toMatchObject({
       type: 'object',
@@ -358,6 +366,7 @@ describe('DynamicFacetSelectorCoordinator', () => {
       [],
       '/tmp/project',
       undefined,
+      expect.stringContaining('Instruction:\nFix'),
     );
     expect(instructionSpy).toHaveBeenCalledOnce();
     const instructionInput = instructionSpy.mock.calls[0]![0] as {

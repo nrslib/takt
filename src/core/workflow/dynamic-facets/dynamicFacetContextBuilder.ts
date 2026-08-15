@@ -1,4 +1,8 @@
-import type { ResolvedFacetPool } from '../../models/workflow-types.js';
+import type {
+  NormalAgentWorkflowStep,
+  ResolvedFacetContent,
+  ResolvedFacetPool,
+} from '../../models/workflow-types.js';
 import { buildSelectorGuidanceLines } from '../selector-contract.js';
 
 export interface DynamicFacetSelectorInstructionInput {
@@ -10,9 +14,24 @@ export interface DynamicFacetSelectorInstructionInput {
   readonly stepIteration: number;
   readonly reports: string;
   readonly cumulativeDiff: string;
+  readonly targetAgentPrompt: string;
   readonly pool: ResolvedFacetPool;
   readonly maxSelected?: number;
   readonly selectorInstruction?: string;
+}
+
+function joinFacetContents(contents: readonly ResolvedFacetContent[] | undefined): string {
+  if (contents === undefined || contents.length === 0) return '(none)';
+  return contents.map(({ content }) => content).join('\n\n---\n\n');
+}
+
+export function buildDynamicFacetTargetAgentPrompt(step: NormalAgentWorkflowStep): string {
+  return [
+    ...(step.persona === undefined ? [] : [`Persona:\n${step.persona}`]),
+    `Policy:\n${joinFacetContents(step.policyContents)}`,
+    `Knowledge:\n${joinFacetContents(step.knowledgeContents)}`,
+    `Instruction:\n${step.instruction}`,
+  ].join('\n\n');
 }
 
 export function buildDynamicFacetSelectorInstruction(input: DynamicFacetSelectorInstructionInput): string {
@@ -39,6 +58,8 @@ export function buildDynamicFacetSelectorInstruction(input: DynamicFacetSelector
     `Prior reports:\n${input.reports}`,
     '',
     `Cumulative diff:\n${input.cumulativeDiff}`,
+    '',
+    `Target agent prompt:\n${input.targetAgentPrompt}`,
     '',
     `Candidates:\n${candidates}`,
     '',

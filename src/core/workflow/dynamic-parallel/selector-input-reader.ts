@@ -33,6 +33,7 @@ interface SelectorFileRead {
 export interface SelectorInputs {
   readonly reports: string;
   readonly workingTreeDiff: string;
+  readonly targetAgentPrompt?: string;
 }
 
 class SelectorInputBudget {
@@ -55,14 +56,41 @@ export class SelectorInputReader {
     requestedNames: readonly string[],
     cwd: string,
     signal: AbortSignal | undefined,
+    targetAgentPrompt?: string,
   ): Promise<SelectorInputs> {
     signal?.throwIfAborted();
     const budget = new SelectorInputBudget();
+    const boundedTargetAgentPrompt = targetAgentPrompt === undefined
+      ? undefined
+      : this.readTargetAgentPrompt(targetAgentPrompt, budget);
     const reports = this.readReports(reportDirectory, requestedNames, budget, signal);
     signal?.throwIfAborted();
     const workingTreeDiff = await this.readWorkingTreeDiff(cwd, budget, signal);
     signal?.throwIfAborted();
-    return { reports, workingTreeDiff };
+    return {
+      reports,
+      workingTreeDiff,
+      ...(boundedTargetAgentPrompt === undefined
+        ? {}
+        : { targetAgentPrompt: boundedTargetAgentPrompt }),
+    };
+  }
+
+  private readTargetAgentPrompt(value: string, budget: SelectorInputBudget): string {
+    const sourceBytes = Buffer.byteLength(value, 'utf-8');
+    const bounded = this.boundUtf8Content(
+      value,
+      MAX_SELECTOR_ENTRY_BYTES,
+      'Dynamic selector target agent prompt',
+    );
+    const rendered = [
+      `Source bytes: ${sourceBytes}`,
+      `Content status: ${bounded.truncated ? 'truncated' : 'complete'}`,
+      '',
+      bounded.content,
+    ].join('\n');
+    budget.consume(rendered);
+    return rendered;
   }
 
   private async readWorkingTreeDiff(

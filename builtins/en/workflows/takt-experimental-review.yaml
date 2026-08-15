@@ -43,6 +43,50 @@ steps:
       ai_antipattern_review_instruction: { $param: ai_antipattern_review_instruction }
       frontend_review_instruction: { $param: frontend_review_instruction }
     parallel:
+      fixed:
+        - name: coding-review
+          capabilities: readonly
+          tags: [review]
+          edit: false
+          persona: coding-reviewer
+          policy:
+            - contract-change
+            - review
+            - coding
+            - testing
+            - $param: review_policy_additions
+          knowledge:
+            - architecture
+            - unit-testing
+            - e2e-testing
+            - $param: review_knowledge_additions
+          instruction:
+            $param: coding_review_instruction
+          pass_previous_response: false
+          output_contracts:
+            report:
+              - name: coding-review.md
+                format: coding-review
+        - name: ai-antipattern-review
+          capabilities: readonly
+          tags: [review]
+          edit: false
+          persona: ai-antipattern-reviewer
+          policy:
+            - contract-change
+            - review
+            - ai-antipattern
+            - $param: review_policy_additions
+          knowledge:
+            - architecture
+            - $param: review_knowledge_additions
+          instruction:
+            $param: ai_antipattern_review_instruction
+          pass_previous_response: false
+          output_contracts:
+            report:
+              - name: ai-antipattern-review.md
+                format: ai-antipattern-review
       pool:
         - name: architecture-review
           description: Review module structure, responsibility boundaries, dependency direction, and call paths.
@@ -60,17 +104,19 @@ steps:
               - name: architecture-review.md
                 format: architecture-review
         - name: security-review
-          description: Review concrete security boundaries introduced by TAKT changes.
+          description: Do not select by default. Select only when (a) the TAKT change may affect secrets, credentials, external-input handling, process execution, permissions, or workflow, facet, provider, tool, sandbox, worktree, filesystem, network, or terminal boundaries, or (b) the change is large enough that security impact cannot be confidently ruled out. Do not select for documentation-only, comment-only, or test-only changes, or small localized fixes.
           capabilities: readonly
           tags: [review]
           edit: false
           persona: security-reviewer
           policy: [contract-change, security-review]
-          knowledge: [takt]
+          knowledge: [takt, security, security-data, security-dependencies]
           dynamic_facets:
             pool:
               $param: security_review_pool
-            max_selected: 1
+            selector:
+              instruction: >-
+                Inspect the changed content and the target agent prompt, not only changed filenames. Identify who controls each input, which trust or authority boundary it crosses, and which processing or asset it reaches, then select every candidate whose description applies. If no candidate applies, return an empty array; the security reviewer will still perform the minimal review with only its fixed generic Knowledge. If input is missing or truncated and non-applicability cannot be determined, select every candidate that may apply.
           instruction:
             $param: security_review_instruction
           pass_previous_response: false
@@ -93,6 +139,11 @@ steps:
             report:
               - name: testing-review.md
                 format: testing-review
+      selection:
+        mode: replace
+        selector:
+          instruction: >-
+            Select only pool candidates whose description conditions apply to the changed content. Do not select security-review unless the conditions in its description apply.
     rules:
       self:
         - condition: any("error")

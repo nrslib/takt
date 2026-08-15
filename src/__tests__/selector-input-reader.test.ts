@@ -560,6 +560,30 @@ describe('SelectorInputReader', () => {
     )).rejects.toThrow('Dynamic selector input exceeds 1048576 bytes');
   });
 
+  it('should include the target agent prompt in the shared budget and mark existing entry-limit truncation', async () => {
+    const cwd = createGitDirectory();
+    const targetAgentPrompt = 'p'.repeat(64 * 1024 + 1);
+
+    const result = await new SelectorInputReader(
+      new FakeGitCommandRunner([], 0, () => Buffer.alloc(0)),
+    ).readInputs(
+      join(cwd, 'reports'),
+      [],
+      cwd,
+      undefined,
+      targetAgentPrompt,
+    );
+
+    expect(result.targetAgentPrompt).toContain(`Source bytes: ${64 * 1024 + 1}`);
+    expect(result.targetAgentPrompt).toContain('Content status: truncated');
+    expect(result.targetAgentPrompt).toContain('p'.repeat(64 * 1024));
+    expect(
+      Buffer.byteLength(result.targetAgentPrompt ?? '')
+      + Buffer.byteLength(result.reports)
+      + Buffer.byteLength(result.workingTreeDiff),
+    ).toBeLessThanOrEqual(1024 * 1024);
+  });
+
   it('should accept an aggregate evidence payload at exactly 1 MiB', async () => {
     const cwd = createGitDirectory();
     const reportDirectory = join(cwd, 'reports');

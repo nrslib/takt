@@ -2,43 +2,32 @@
 
 ## 適用条件
 
-低信頼のrequestがserver側の認証、認可、resource選択、interpreter、外部接続、または永続化へ到達する変更に適用する。endpointが存在するだけ、または内部実装だけを変えて信頼境界が変わらない場合には適用しない。
+低信頼の request が server 側の認証、認可、resource 選択、interpreter、外部接続、永続化へ到達する変更に適用する。endpoint の存在だけでは境界変更を示さない。
 
-## 入力からinterpreterへの境界
+## 入力から interpreter・宛先への境界
 
-SQL、template、query language、expression、server-side requestなど、入力を別の言語や宛先として解釈する境界を追跡する。API名や「validation済み」という名称だけではなく、dataと命令・宛先が分離されていることを確認する。
+SQL、template、query language、expression、外部接続先は server 権限で値を解釈する。どの部分が data のままで、どの部分が命令または宛先になり得るかを追跡する。
 
-| 基準 | 判定 |
-|------|------|
-| 低信頼の値をqueryやtemplateの命令部分へ連結する | REJECT |
-| 低信頼のURL・hostが内部networkやcredential付きrequestの宛先を選べる | REJECT |
-| parameter bindingや構造化builderでdataと命令を分離する | OK |
-| 外部接続先をscheme・host・redirectを含めて必要な範囲へ制約する | OK |
+| 条件 | 確認する境界・影響 |
+|------|--------------------|
+| request の値を query や template の命令部分へ連結する | request source から interpreter と、その権限で可能な database・service 操作まで追う |
+| request の URL・host が外部接続先を選ぶ | 到達可能な scheme・host・redirect・内部 target・付随 credential を特定する |
+| parameter binding または構造化 builder を使う | interpreter 境界で値が data のまま分離されることを確認する |
+| 宛先を制約する | scheme・host・redirect・credential が要求範囲に留まることを確認する |
+
+request 入力から連結または resource 選択を経て interpreter と保護資産へ至る連鎖は、静的なコード経路で立証できる。コードと既知の interpreter 挙動で各 link と具体的影響を示せる場合、成功した攻撃 PoC は必須ではない。
 
 ## 認証・認可・resource scope
 
-認証は呼び出し主体を確立し、認可はその主体が操作できるactionとresourceを制約する。routeに認可middlewareがあるかだけでなく、取得・更新・削除の全経路で同じresource scopeが適用されることを確認する。
+認証は caller、認可は許可 action、resource scope は操作可能な owner・tenant・workspace・account を確立する。route middleware の存在だけでは resource scope を立証できない。
 
-| 基準 | 判定 |
-|------|------|
-| privateまたは所有領域付きresourceをrequest由来のIDだけで取得し、主体との関係を検証しない | REJECT |
-| 保護対象の読込にはscopeを適用するが、対応する更新・削除には適用しない | REJECT |
-| client指定のowner・tenant・roleを、独立した認可なしに認証済み主体より優先する | REJECT |
-| 認証済み主体からactionとresource scopeを解決し、全操作へ一貫して適用する | OK |
+| 条件 | 確認する境界・影響 |
+|------|--------------------|
+| request 指定 ID で保護 resource を取得・変更する | 認証済み caller から導いた所有 scope も操作へ適用されるか確認する |
+| 読み取りには scope があるが対応する更新・削除にはない | caller が別の所有領域を変更できるか追跡する |
+| client 指定の owner・tenant・role が caller identity を上書きする | override を許可する独立した認可の有無を確認する |
+| 認証済み caller から scope を解決する | 同じ制約が関連する全ての read・write へ到達するか確認する |
 
-## 入出力契約とresource消費
+## 入出力契約と resource 消費
 
-型・形式・列挙値・長さ・件数は、後段が依存する契約に合わせて境界で制約する。ただし、validationやrate limitがないという一般論だけでは問題にせず、低信頼の入力から権限逸脱、解釈境界、または現実的なresource枯渇へ至る経路を示す。
-
-responseとerrorには、呼び出し元へ返す必要のないcredential、内部path、query、stack、他resourceの内容を含めない。
-
-## 所有領域の分離
-
-複数のowner、tenant、workspace、accountなどを扱う場合、認可（誰が操作できるか）とscope（どの所有領域か）を別々に確立し、組み合わせて問い合わせる。
-
-| 基準 | 判定 |
-|------|------|
-| 読み取りは所有領域でscopeされるが、書き込みはscopeされない | REJECT |
-| client指定の所有領域を認証済み主体との照合なしに使う | REJECT |
-| roleやtoken種別ごとの分岐に、scopeが確立されない経路がある | REJECT |
-| 認証済み主体からscopeを解決し、読み書きのqueryへ同じ制約を適用する | OK |
+型・形式・列挙値・長さ・件数は、後段の契約が依存する場合に判断材料になる。validation や rate limit の欠如は、権限逸脱、解釈、保護された出力、現実的な resource 枯渇への経路と結び付く場合にだけセキュリティ上の証拠になる。response・error では、credential、内部情報、他 resource の内容を受け取れる caller または観測者を特定する。

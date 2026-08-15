@@ -2,29 +2,25 @@
 
 ## Applicability
 
-Apply when low-trust values reach HTML, JavaScript, CSS, URLs, the DOM, or requests that a browser interprets or sends. Do not apply to static presentation changes or internal representation changes that do not cross a trust boundary.
+Apply when low-trust values reach HTML, JavaScript, CSS, URLs, the DOM, browser storage, or requests that a browser interprets or sends. Static presentation changes and internal representations do not imply this boundary.
 
-## Browser Interpretation Boundaries
+## Browser Interpretation Semantics
 
-Review the context in which the browser ultimately interprets a value, not merely whether it was validated. HTML, attributes, scripts, styles, and URLs require different defenses.
+Browser semantics determine whether a value remains text, becomes executable content, changes an origin or navigation target, or is sent with credentials. A validation or sanitization function name does not establish the resulting browser context.
 
-| Criterion | Verdict |
-|-----------|---------|
-| A low-trust value reaches executable HTML or a script sink without contextual handling | REJECT |
-| A low-trust value can select a dangerous URL scheme, open redirect target, or credential destination | REJECT |
-| Framework default escaping matches the text or attribute context, with URL allow conditions checked separately | OK |
-| Encoding, sanitization, or allowlisting matches the value's use context at the boundary | OK |
+| Condition | Browser boundary and impact to verify |
+|-----------|---------------------------------------|
+| A low-trust value reaches HTML, script, style, or a DOM sink | Determine the final parsing context and whether the browser can execute or reinterpret the value in the victim origin |
+| A value reaches text or an attribute through framework rendering | Confirm the framework's escaping semantics for that context and separately evaluate URL behavior |
+| A value selects a URL, redirect, frame, or resource | Establish allowed schemes, origins, destinations, and whether credentials or protected data accompany the request |
+| A value is stored and rendered later | Trace the stored source through the later renderer to the browser sink and affected observer |
 
-## Origins and Requests
+Known browser parsing and request behavior can establish execution or credential effects without running a payload when the reachable source-to-sink path is clear.
 
-CORS controls which origins may read a response in a browser; it is not a substitute for authentication or authorization. For state-changing requests that use automatically sent credentials such as cookies, also verify that an unintended origin cannot initiate the action.
+## Origins and Credentialed Requests
 
-| Criterion | Verdict |
-|-----------|---------|
-| CORS permission is treated as server-side authorization | REJECT |
-| A credentialed request can be initiated from any origin and reach a state change | REJECT |
-| Allowed origins are limited to operational need and the server still authorizes the action | OK |
+CORS controls which origins may read a response in a browser; it does not establish server-side authorization. For state-changing requests, identify whether the browser automatically attaches cookies or other credentials, which origins can initiate the request, and whether the server independently authenticates, authorizes, and scopes the action.
 
 ## Files Received from Browsers
 
-Treat filenames, content types, and extensions as low-trust metadata. Trace the storage location, publication behavior, and downstream parser or renderer. Report a problem only when there is a concrete path to execution, overwrite, or reinterpretation as another format.
+Filenames, content types, and extensions are low-trust metadata. Trace storage location, publication behavior, and downstream parser or renderer. The relevant impact is execution, overwrite, protected-data access, or reinterpretation under a higher-trust origin or service.

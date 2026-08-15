@@ -4,8 +4,8 @@ knowledge:
   security-local: ../facets/knowledge/security-local.md
 candidates:
   - id: web
-    description: ブラウザとHTTP APIの境界、認証・認可、オリジン、入出力を扱う変更に限ってレビューする。
+    description: 低信頼のブラウザ・HTTP 入力、またはブラウザで解釈される値が、認証・認可、resource 選択、interpreter、origin、外部接続、永続化、実行可能な browser sink へ到達する変更で選ぶ。
     knowledge: [security-web, security-api]
   - id: cli
-    description: CLI入力がサブプロセス、パス、ローカルファイル、設定へ到達する変更に限ってレビューする。
+    description: 低信頼の CLI 引数、環境変数、設定、repository 内容が、process 実行、filesystem、terminal、credential、sandbox、ローカル権限へ到達する変更で選ぶ。
     knowledge: security-local

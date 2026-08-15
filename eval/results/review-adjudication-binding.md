@@ -1,7 +1,7 @@
 # Review adjudication binding eval result
 
 - Date: 2026-08-15
-- Eval ID: `eval-aHg-2026-08-15T01:31:23`
+- Eval ID: `eval-ODL-2026-08-15T04:27:14`
 - Command: `npm run eval:prompts:review-adjudication-binding`
 - Prompt: generated from the current follow-up `security-review` facets by `eval/scripts/prepare.mjs`
 - Result: 15 passed, 0 failed, 0 errors
@@ -14,4 +14,4 @@
 
 ## Facet adjustments
 
-None. The first complete three-provider run passed every case, so the English and Japanese facets from d1510960 were not changed.
+None after measurement. The first complete three-provider run after the security-review method update passed every case.
