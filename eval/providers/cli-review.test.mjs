@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
+  createIsolatedWorkingDirectory,
   prepareWorkingDirectory,
   rewriteWorkingDirectoryPaths,
   runProcess,
@@ -105,4 +106,16 @@ test('isolated working directory copies only the provider fixture', () => {
     isolated.cleanup();
     rmSync(outerDirectory, { recursive: true, force: true });
   }
+});
+
+test('isolated working directory is removed when copying fails', () => {
+  let copiedDestination;
+  assert.throws(
+    () => createIsolatedWorkingDirectory('/missing', (_source, destination) => {
+      copiedDestination = destination;
+      throw new Error('copy failed');
+    }),
+    /copy failed/,
+  );
+  assert.equal(existsSync(join(copiedDestination, '..')), false);
 });

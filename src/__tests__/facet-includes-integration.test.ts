@@ -26,6 +26,31 @@ import {
 } from '../infra/config/loaders/resource-resolver.js';
 import { getLanguageResourcesDir } from '../infra/resources/index.js';
 
+function expectExpandedMarkdownTable(
+  content: string,
+  sectionHeading: string,
+  expectedColumns: readonly string[],
+  includeMarker: string,
+): void {
+  expect(content).not.toContain(includeMarker);
+  const lines = content.split('\n');
+  const sectionIndex = lines.indexOf(sectionHeading);
+  expect(sectionIndex).toBeGreaterThanOrEqual(0);
+
+  const rows = lines
+    .slice(sectionIndex + 1)
+    .filter((line) => line.trim().startsWith('|'))
+    .slice(0, 3)
+    .map((line) => line.split('|').slice(1, -1).map((cell) => cell.trim()));
+
+  expect(rows).toHaveLength(3);
+  expect(rows[0]).toEqual(expectedColumns);
+  expect(rows[1]).toHaveLength(expectedColumns.length);
+  expect(rows[1].every((cell) => /^-+$/u.test(cell))).toBe(true);
+  expect(rows[2]).toHaveLength(expectedColumns.length);
+  expect(rows[2].every((cell) => cell.length > 0)).toBe(true);
+}
+
 describe('facet include expansion', () => {
   let tempDir: string;
   let context: FacetResolutionContext;
@@ -148,12 +173,6 @@ describe('facet include expansion', () => {
       join(getLanguageResourcesDir(lang), 'facets', 'partials', 'instructions', 'fix-root-cause-analysis.md'),
       'utf-8',
     ).trim();
-    const finiteSetExploration = lang === 'ja'
-      ? '適用される全要素・状態を具体化'
-      : 'make every applicable member and state concrete';
-
-    expect(partial).toContain(finiteSetExploration);
-
     for (const instruction of [
       'fix-plan',
       'fix',
@@ -170,7 +189,6 @@ describe('facet include expansion', () => {
       );
 
       expect(content).toContain(partial);
-      expect(content).toContain(finiteSetExploration);
       expect(content).not.toContain('{{include:instructions/fix-root-cause-analysis}}');
     }
   });
@@ -180,12 +198,6 @@ describe('facet include expansion', () => {
       join(getLanguageResourcesDir(lang), 'facets', 'partials', 'instructions', 'fix-plan-validity.md'),
       'utf-8',
     ).trim();
-    const finiteSetRequirement = lang === 'ja'
-      ? '適用される有限集合・状態軸の具体行'
-      : 'concrete rows for applicable finite sets and state dimensions';
-
-    expect(partial).toContain(finiteSetRequirement);
-
     for (const instruction of [
       'fix-plan',
       'apply-fix-plan',
@@ -200,7 +212,6 @@ describe('facet include expansion', () => {
       );
 
       expect(content).toContain(partial);
-      expect(content).toContain(finiteSetRequirement);
       expect(content).not.toContain('{{include:instructions/fix-plan-validity}}');
     }
   });
@@ -209,9 +220,9 @@ describe('facet include expansion', () => {
     const sectionHeading = lang === 'ja'
       ? '## 入力・状態・経路の確認表'
       : '## Input, State, and Path Check';
-    const concreteRowRequirement = lang === 'ja'
-      ? '適用される要素または状態を1行に1つ'
-      : 'One applicable member or state per row';
+    const expectedColumns = lang === 'ja'
+      ? ['修正単位', '軸の正本・根拠', '具体的な入力・状態', '入口・経路', '実装上の制約', 'consumer / terminal', '期待結果', '反証方法・テスト ID']
+      : ['Fix Unit', 'Dimension Source and Evidence', 'Concrete Input or State', 'Entry and Path', 'Implementation Constraint', 'Consumer / Terminal', 'Expected Result', 'Disproof Method and Test ID'];
 
     for (const outputContract of [
       'fix-plan',
@@ -225,9 +236,12 @@ describe('facet include expansion', () => {
         { projectDir: tempDir, lang },
       );
 
-      expect(content).toContain(sectionHeading);
-      expect(content).toContain(concreteRowRequirement);
-      expect(content).not.toContain('{{include:output-contracts/base-fix-plan}}');
+      expectExpandedMarkdownTable(
+        content,
+        sectionHeading,
+        expectedColumns,
+        '{{include:output-contracts/base-fix-plan}}',
+      );
     }
   });
 

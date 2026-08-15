@@ -6,19 +6,31 @@ import { spawnManagedProcess } from '../../dist/shared/utils/spawn.js';
 
 const evalDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
+export function createIsolatedWorkingDirectory(sourceDirectory, copyDirectory = cpSync) {
+  const isolatedRoot = mkdtempSync(join(tmpdir(), 'takt-prompt-eval-fixture-'));
+  const cwd = join(isolatedRoot, 'project');
+  try {
+    copyDirectory(sourceDirectory, cwd, { recursive: true });
+  } catch (error) {
+    rmSync(isolatedRoot, { recursive: true, force: true });
+    throw error;
+  }
+  return {
+    cwd,
+    cleanup: () => rmSync(isolatedRoot, { recursive: true, force: true }),
+  };
+}
+
 export function prepareWorkingDirectory(config) {
   const sourceDirectory = resolve(evalDirectory, config.working_dir);
   if (!config.isolate_working_dir) {
     return { sourceDirectory, cwd: sourceDirectory, cleanup: () => undefined };
   }
 
-  const isolatedRoot = mkdtempSync(join(tmpdir(), 'takt-prompt-eval-fixture-'));
-  const cwd = join(isolatedRoot, 'project');
-  cpSync(sourceDirectory, cwd, { recursive: true });
+  const isolated = createIsolatedWorkingDirectory(sourceDirectory);
   return {
     sourceDirectory,
-    cwd,
-    cleanup: () => rmSync(isolatedRoot, { recursive: true, force: true }),
+    ...isolated,
   };
 }
 
