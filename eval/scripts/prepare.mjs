@@ -206,6 +206,11 @@ const TARGETS = [
     step: 'security-review',
     fixture: 'eval/fixtures/review-adjudication-binding',
     includeOutputContract: true,
+    dynamicFacetSelection: {
+      sourceWorkflow: 'experimental-review',
+      pool: 'security-review-facets',
+      candidateIds: ['cli'],
+    },
   },
   {
     id: 'security-review-method',
@@ -214,6 +219,11 @@ const TARGETS = [
     step: 'security-review',
     fixture: 'eval/fixtures/security-review-method',
     includeOutputContract: true,
+    dynamicFacetSelection: {
+      sourceWorkflow: 'experimental-review',
+      pool: 'security-review-facets',
+      candidateIds: ['cli'],
+    },
   },
   {
     id: 'review-mode-authority',
@@ -279,6 +289,9 @@ const { ReportInstructionBuilder } = await import(
 );
 const { StatusJudgmentBuilder } = await import(
   pathToFileURL(join(repoRoot, 'dist/core/workflow/instruction/StatusJudgmentBuilder.js')).href
+);
+const { composeDynamicFacets } = await import(
+  pathToFileURL(join(repoRoot, 'dist/core/workflow/dynamic-facets/dynamicFacetComposer.js')).href
 );
 const { getAllParallelSubSteps } = await import(
   pathToFileURL(join(repoRoot, 'dist/core/models/types.js')).href
@@ -361,6 +374,47 @@ function findStepThroughCall(workflow, callStepName, stepName) {
   return findStepTarget(child, stepName, 1);
 }
 
+function composeConfiguredDynamicFacets(target, selection, targetId, stepName) {
+  if (selection === undefined) return target;
+
+  const sourceWorkflow = loadWorkflowByIdentifier(selection.sourceWorkflow, repoRoot);
+  if (!sourceWorkflow) {
+    throw new Error(`Dynamic facet source workflow not found: ${selection.sourceWorkflow}`);
+  }
+  const source = findStepTarget(sourceWorkflow, stepName);
+  if (!source || source.target.dynamicFacets === undefined) {
+    throw new Error(`Dynamic facet source step not found: ${selection.sourceWorkflow}/${stepName}`);
+  }
+  if (source.target.dynamicFacets.pool !== selection.pool) {
+    throw new Error(
+      `Dynamic facet pool mismatch for eval target "${targetId}": `
+      + `expected "${selection.pool}", source uses "${source.target.dynamicFacets.pool}"`,
+    );
+  }
+
+  const pool = source.workflow.facetPools?.[selection.pool];
+  if (pool === undefined) {
+    throw new Error(`Dynamic facet pool not found: ${selection.sourceWorkflow}/${selection.pool}`);
+  }
+  const knownCandidateIds = new Set(pool.candidates.map(({ id }) => id));
+  const unknownCandidateId = selection.candidateIds.find((id) => !knownCandidateIds.has(id));
+  if (unknownCandidateId !== undefined) {
+    throw new Error(
+      `Unknown dynamic facet candidate "${unknownCandidateId}" for eval target "${targetId}"`,
+    );
+  }
+
+  const composed = composeDynamicFacets(pool, selection.candidateIds, {
+    policyContents: target.policyContents ?? [],
+    knowledgeContents: source.target.knowledgeContents ?? [],
+  });
+  return {
+    ...target,
+    policyContents: composed.policyContents.map((content) => ({ content })),
+    knowledgeContents: composed.knowledgeContents.map((content) => ({ content })),
+  };
+}
+
 for (const {
   id,
   workflow: workflowName,
@@ -376,6 +430,7 @@ for (const {
   phase: requestedPhase,
   targetFile,
   includeOutputContract,
+  dynamicFacetSelection,
 } of targets) {
   if (requestedPhase !== undefined && monitorCycle !== undefined) {
     throw new Error(`Target "${id}" cannot define both phase and monitorCycle`);
@@ -486,6 +541,8 @@ for (const {
     };
   }
 
+  target = composeConfiguredDynamicFacets(target, dynamicFacetSelection, id, stepName);
+
   if (facetMode === 'none') {
     target = { ...target, policyContents: [], knowledgeContents: [] };
   } else if (facetMode === 'unrelated') {
@@ -591,4 +648,9 @@ for (const {
   console.log(`  Run dir:            ${runDir}`);
   console.log(`  Policy snapshot:    ${policySourcePath ?? '(none)'}`);
   console.log(`  Knowledge snapshot: ${knowledgeSourcePath ?? '(none)'}`);
+  if (dynamicFacetSelection !== undefined) {
+    console.log(
+      `  Dynamic selection:  ${dynamicFacetSelection.pool} -> ${dynamicFacetSelection.candidateIds.join(', ') || '(none)'}`,
+    );
+  }
 }
