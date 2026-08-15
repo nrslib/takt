@@ -1,10 +1,25 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { cpSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnManagedProcess } from '../../dist/shared/utils/spawn.js';
 
 const evalDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+export function prepareWorkingDirectory(config) {
+  const sourceDirectory = resolve(evalDirectory, config.working_dir);
+  if (!config.isolate_working_dir) {
+    return { cwd: sourceDirectory, cleanup: () => undefined };
+  }
+
+  const isolatedRoot = mkdtempSync(join(tmpdir(), 'takt-prompt-eval-fixture-'));
+  const cwd = join(isolatedRoot, 'project');
+  cpSync(sourceDirectory, cwd, { recursive: true });
+  return {
+    cwd,
+    cleanup: () => rmSync(isolatedRoot, { recursive: true, force: true }),
+  };
+}
 
 export async function runProcess(command, args, { cwd, input, timeoutMs, abortSignal }) {
   if (abortSignal?.aborted) {
@@ -83,7 +98,8 @@ export default class CliReviewProvider {
   }
 
   async callApi(prompt, _context, options = {}) {
-    const cwd = resolve(evalDirectory, this.config.working_dir);
+    const workingDirectory = prepareWorkingDirectory(this.config);
+    const { cwd } = workingDirectory;
     const timeoutMs = this.config.timeout_ms ?? 900_000;
 
     try {
@@ -121,6 +137,8 @@ export default class CliReviewProvider {
       return { error: `Unsupported CLI provider: ${this.config.cli}` };
     } catch (error) {
       return { error: error instanceof Error ? error.message : String(error) };
+    } finally {
+      workingDirectory.cleanup();
     }
   }
 }

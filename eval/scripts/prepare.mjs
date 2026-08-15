@@ -59,6 +59,7 @@ const TARGETS = [
   { id: 'fix-plan-fresh-findings', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-fresh-findings' },
   { id: 'fix-plan-boundary-preflight', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-boundary-preflight' },
   { id: 'fix-plan-cause-check', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-cause-check' },
+  { id: 'fix-plan-bounded-proof', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-bounded-proof' },
   { id: 'review-family-closure', workflow: 'peer-review-suite-base', step: 'coding-review', fixture: 'eval/fixtures/review-family-closure' },
   {
     id: 'initial-review-contract-discovery',
