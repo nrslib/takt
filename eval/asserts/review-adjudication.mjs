@@ -209,6 +209,16 @@ function hasDispositionSchema(table) {
   return findingIndex >= 0 && dispositionIndex >= 0 && detailIndex >= 0;
 }
 
+function hasFieldInEveryDispositionRow(table, headerPattern) {
+  const index = table.header.findIndex((cell) => headerPattern.test(cell));
+  return index >= 0
+    && table.rows.length > 0
+    && table.rows.every((row) => {
+      const value = row[index]?.trim() ?? '';
+      return value.length > 0 && !/^[-—]$/u.test(value);
+    });
+}
+
 function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -258,6 +268,22 @@ export default function assertReviewAdjudication(output) {
   const checks = [
     ['actionable-result', /((?:裁定)?結果(?:\s*[:：]\s*|は\s*[「『"']?\s*)修正対象あり|Result\s*[:：]\s*ACTIONABLE FINDINGS|(?:修正対象は\s*[1-9]\d*|[1-9]\d*つの修正対象)\s*family)/i.test(output)],
     ['disposition-schema', hasDispositionSchema(dispositionTable)],
+    ['technical-validity-present', hasFieldInEveryDispositionRow(
+      dispositionTable,
+      /^(?:Technical validity|技術的妥当性)$/i,
+    )],
+    ['reason-to-change-present', hasFieldInEveryDispositionRow(
+      dispositionTable,
+      /^(?:Reason to change from the same cause|同じ原因で変更される理由)$/i,
+    )],
+    ['authorization-basis-present', hasFieldInEveryDispositionRow(
+      dispositionTable,
+      /^Authorization basis$/i,
+    )],
+    ['reason-absent-present', hasFieldInEveryDispositionRow(
+      dispositionTable,
+      /^(?:Reason absent from initial round|初回に含まれなかった理由)$/i,
+    )],
     ['one-disposition-per-finding', [codeRows, architectureRows, horizontalRows, testingRows, securityRows, antipatternRows]
       .every((rows) => rows.length === 1)],
     ['code-actionable', /^actionable$/i.test(dispositionOf(codeRow))],
