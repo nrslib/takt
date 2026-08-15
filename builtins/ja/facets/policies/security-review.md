@@ -16,6 +16,12 @@ Security reviewer の脆弱性判定を、共通ポリシーの一般的な品�
 
 攻撃者、制御入力、破られる境界、実行経路、影響のいずれかを確認できない場合は blocking finding にしない。推測だけで REJECT しない。
 
+リポジトリ作者が制御する prompt、設定、rule の件数・サイズ・provider cost は、既存の定量契約への違反、または再現可能な資源枯渇・課金影響を示せない限り blocking finding にしない。要求に存在しない上限値の新設を要求しない。
+
+リポジトリ由来の文字列が未加工で端末出力へ到達する問題は、CSI、OSC、または同等のシーケンスによる表示偽装、clipboard 操作などの具体的な端末効果を再現できた場合だけ blocking finding にする。ESC などの単一バイトの到達は blocking の証拠にしない。
+
+symlink または canonical-path の問題は、攻撃者が制御するリポジトリ内パス、被害者環境に現実に存在し得る外部 target、実行可能な解決経路、具体的な機密性または完全性への影響を示す場合だけ blocking finding にする。実験者が symlink と外部 target の両方を自作した再現は security impact の証拠にしない。
+
 ### Warning（非ブロッキング）
 
 次の事項はセキュリティ上の推奨として記録してよいが、blocking finding にはしない。

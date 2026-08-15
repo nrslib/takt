@@ -16,6 +16,12 @@ Treat an issue as a Security blocking finding only when all of the following are
 
 If the attacker, controlled input, broken boundary, execution path, or impact cannot be verified, do not make it a blocking finding. Do not REJECT on speculation alone.
 
+Do not make the count or size of repository-author-controlled prompts, configuration, or rules, or their provider cost, a blocking finding unless it violates an existing quantitative contract or demonstrates reproducible resource exhaustion or billing impact. Do not require a new limit that the requirements do not define.
+
+Treat an unmodified repository-derived string reaching terminal output as blocking only when a concrete terminal effect through CSI, OSC, or an equivalent sequence is reproduced, such as display spoofing or clipboard manipulation. The arrival of a single byte such as ESC is not blocking evidence.
+
+Make a symlink or canonical-path issue blocking only when evidence shows an attacker-controlled repository path, an external target that can realistically exist in the victim environment, an executable resolution path, and a concrete confidentiality or integrity impact. A reproduction in which the experimenter creates both the symlink and the external target is not evidence of security impact.
+
 ### Warning (non-blocking)
 
 The following may be recorded as security recommendations but must not become blocking findings.

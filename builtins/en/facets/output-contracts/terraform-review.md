@@ -29,6 +29,8 @@ For a follow-up finding, `Authorization Basis` must be exactly `accepted_family_
 
 Scope: "In-scope" (fixable in this change) / "Out-of-scope" (existing issue, non-blocking)
 
+`persists` is limited to an unresolved finding that the latest `review-resolution.md` adjudicates as `actionable`, or that has not yet been adjudicated. A finding adjudicated as `out_of_scope`, `overreach`, `false_positive`, `no_issue_after_verification`, or `duplicate` with its canonical finding consolidated must not appear in `persists`.
+
 ## Carry-over Findings (persists)
 | # | finding_id | family_tag | Previous Evidence | Current Evidence | Issue | Fix Suggestion |
 |---|------------|------------|-------------------|------------------|-------|----------------|
@@ -39,16 +41,25 @@ Scope: "In-scope" (fixable in this change) / "Out-of-scope" (existing issue, non
 |------------|---------------------|
 | TF-RESOLVED-file-L10 | `file.tf:10` now satisfies the convention |
 
+## Findings adjudicated out of scope
+| finding_id | Latest Disposition | Adjudication Evidence |
+|------------|--------------------|-----------------------|
+| {finding_id} | out_of_scope / overreach / false_positive / no_issue_after_verification / duplicate | `review-resolution.md` disposition and evidence |
+
 ## Reopened Findings (reopened)
-| # | finding_id | family_tag | Prior Resolution Evidence | Recurrence Evidence | Issue | Fix Suggestion |
-|---|------------|------------|--------------------------|---------------------|-------|----------------|
-| 1 | TF-REOPENED-file-L55 | tf-convention | `Previously fixed at file.tf:10` | `Recurred at file.tf:55` | Issue description | Fix approach |
+| # | finding_id | family_tag | Immediately Preceding Adjudication | Reopening Basis (a-d) | New Evidence | Issue | Fix Suggestion |
+|---|------------|------------|------------------------------------|-----------------------|--------------|-------|----------------|
+| 1 | TF-REOPENED-file-L55 | tf-convention | `review-resolution.md`: previously resolved | d | `Recurred at file.tf:55` | Issue description | Fix approach |
+
+`reopened` requires explicitly citing the immediately preceding adjudication and showing one of: (a) requirements or acceptance criteria changed after that adjudication; (b) new concrete evidence satisfies blocking conditions that adjudication found missing; (c) the current code disproves a factual premise of that adjudication; or (d) remediation reintroduced the same issue. Remeasuring the same event, adding samples, or rephrasing severity is not a basis for `reopened`.
 
 ## Rejection Gate
-- REJECT is valid only when at least one finding exists in `new`, `persists`, or `reopened`
+- REJECT is valid only when at least one finding exists in `new` with a valid `Authorization Basis`, `persists` under its adjudication-bound definition, or `reopened` with a valid basis (a-d)
+- Findings adjudicated out of scope do not count toward REJECT
 - Findings without `finding_id` are invalid
 ```
 
 **Cognitive load reduction rules:**
 - APPROVE → Summary only (5 lines or fewer)
 - REJECT → Include every verified finding row and aggregate locations with the same cause
+- Include findings adjudicated out of scope whenever the latest resolution contains findings with any of the listed dispositions
