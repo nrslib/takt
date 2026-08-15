@@ -4,7 +4,6 @@
 description: 'TAKT facet eval: public final-gate Phase 1 scope authority'
 
 prompts:
-  - file://prompts/final-readiness-merge-review.phase1.md
   - file://prompts/final-readiness-supervision.phase1.md
 
 providers:
@@ -17,6 +16,16 @@ providers:
       skip_git_repo_check: true
       model_reasoning_effort: low
 
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+
 tests:
   - description: 'public final gate: independently bound a newly discovered consumer gap'
     vars:
@@ -26,12 +35,11 @@ tests:
       - type: llm-rubric
         metric: review-fix-final-gate/phase1-scope-authority
         value: |
-          Judge the review's code-backed scope classification, not headings, table shape, IDs, or exact wording. Pass only if the final-gate review rejects and does all of the following:
+          Judge the final-gate decision against the task requirements and current implementation, not headings, table shape, IDs, or exact wording. Pass only if the final-gate review rejects and does all of the following:
 
           - It independently inspects the fixture and identifies that the project-configuration entry stores a supported mixed-case mode without applying the shared normalization used by the CLI entry.
-          - It treats this as a direct acceptance-criterion violation and/or a required migration of a consumer of the accepted normalization contract. Equivalent descriptions of these authorization bases are acceptable.
-          - It explains from the supplied review evidence why the initial round omitted this consumer. Merely saying that it is new, late, or previously missed without tying the omission to the reviewed evidence fails.
+          - It connects that implementation defect to the unmet acceptance criteria for consistent normalization, normalized storage, and invalid-value rejection across both entries.
           - It keeps the previously adjudicated documentation request non-actionable because the current code and requirements provide no new counter-evidence.
           - It does not restart a general review of untouched areas or invent another horizontal problem family.
 
-          A response that receives the defect, authorization basis, or omission reason from the task or previous response should not be credited; those inputs provide only the generic requirement and no prior answer.
+          The task provides only the generic requirement and no prior answer, so credit requires identifying the defect from the fixture's current implementation.

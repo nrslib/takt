@@ -1,4 +1,10 @@
 const NON_ACTIONABLE_FINDING = 'OLD-REVIEW-readme-L1';
+const FINAL_DECISION_HEADING = /(?:^|\n)\s*#{1,6}\s*(?:Result|Final Decision|結果|最終判定)\s*[:：]\s*(APPROVE|REJECT|BLOCKED)\b/gim;
+
+function hasFinalDecision(output, decision) {
+  return [...output.matchAll(FINAL_DECISION_HEADING)]
+    .some((match) => match[1].toUpperCase() === decision);
+}
 
 function hasNearbyEvidence(output, anchor, evidence) {
   let index = output.indexOf(anchor);
@@ -10,16 +16,24 @@ function hasNearbyEvidence(output, anchor, evidence) {
   return false;
 }
 
+function hasNearbyReopening(output, anchor) {
+  const lines = output.split(/\r?\n/);
+  return lines.some((line, index) => line.includes(anchor)
+    && /(?:remains?\s+open|requires?\s+(?:a\s+)?fix|(?:is|remains?|becomes?)\s+actionable|再開(?:する|が必要)|修正(?:が)?必要)/i
+      .test([lines[index - 1], line, lines[index + 1]].filter(Boolean).join(' ')));
+}
+
 export default function assertFinalReadinessPrecision(output) {
   const checks = [
-    ['mergeable', /(?:結果|最終裁定)\s*[:：]\s*マージ可能|(?:Result|Final Decision)\s*:\s*MERGEABLE/i.test(output)],
+    ['approve', hasFinalDecision(output, 'APPROVE')],
     ['no-actionable-family', !/(FINAL-(?:NEW|PERSIST)-[^\s|]+)/i.test(output)],
     ['non-actionable-preserved', hasNearbyEvidence(
       output,
       NON_ACTIONABLE_FINDING,
-      /(adjudicated_non_actionable|非修正対象(?:として)?(?:維持|扱)|再開[^。\n]*(?:しない|せず|ない|なし)|(?:not|without)\s+reopen|remains?\s+non-actionable)/i,
+      /(false_positive|overreach|out_of_scope|no_issue_after_verification|environment_unverified|非修正対象(?:として)?(?:維持|扱)|非\s*actionable\s*(?:です|である|として(?:維持|扱))|再開[^。\n]*(?:しない|せず|ない|なし)|(?:not|without)\s+reopen|(?:is|remains?)\s+non-actionable)/i,
     )],
-    ['not-rejected', !/(?:(?:結果|最終裁定)\s*[:：]\s*(修正が必要|タスク全体の再計画が必要|実行環境により判定不能)|(?:Result|Final Decision)\s*:\s*(FIX REQUIRED|TASK REPLAN REQUIRED|BLOCKED BY ENVIRONMENT))/i.test(output)],
+    ['old-finding-not-reopened', !hasNearbyReopening(output, NON_ACTIONABLE_FINDING)],
+    ['not-rejected', !hasFinalDecision(output, 'REJECT') && !hasFinalDecision(output, 'BLOCKED')],
   ];
   const failed = checks.filter(([, pass]) => !pass).map(([name]) => name);
 

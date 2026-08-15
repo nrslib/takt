@@ -57,7 +57,7 @@ function classifyLifecycleSection(heading) {
     return 'actionable';
   }
   if (/resolved findings|解消済み/.test(normalized)) return 'resolved';
-  if (/prior finding dispositions|re-evaluation of prior findings|finding dispositions|前段.*(?:扱い|再評価)|finding.*裁定/.test(normalized)) {
+  if (/prior finding dispositions|re-evaluation of prior findings|finding dispositions|前段.*(?:扱い|再評価)|finding.*裁定|指摘.*裁定/.test(normalized)) {
     return 'disposition';
   }
   return 'other';
@@ -132,21 +132,31 @@ function valueForHeader(row, pattern) {
 
 function extractNewFindingRows(lifecycle) {
   return lifecycle.rows
-    .filter(({ sectionKind }) => sectionKind === 'new')
+    .filter(({ sectionKind }) => sectionKind === 'disposition')
     .flatMap((row) => {
       const findingId = valueForHeader(row, /finding[_ -]?id/);
       const basis = valueForHeader(row, /authorization\s+basis|権限根拠/);
       const absentReason = valueForHeader(row, /reason.*initial|initial.*reason|初回.*理由/);
+      const disposition = valueForHeader(row, /disposition|裁定/);
       if (
         findingId === undefined
         || basis === undefined
         || absentReason === undefined
+        || disposition === undefined
+        || !/^actionable$/i.test(disposition.replace(/`/g, '').trim())
         || !/\b(?:MERGE|VAL)-NEW-[A-Za-z0-9_-]+/i.test(findingId)
       ) {
         return [];
       }
       return [{ ...row, findingId, basis, absentReason }];
     });
+}
+
+function hasActionableFamily(lifecycle, findingId) {
+  return lifecycle.rows.some((row) => row.sectionKind === 'actionable'
+    && row.content.includes(findingId)
+    && /(config|configuration|設定)/i.test(row.content)
+    && /(normalize|normalization|正規化)/i.test(row.content));
 }
 
 function hasAllowedAuthorizationBasis(value) {
@@ -185,8 +195,10 @@ export default function assertFinalReadinessSupervision(output) {
     /(config|configuration|設定)/i.test(finding.content)
       && /(normalize|normalization|正規化)/i.test(finding.content));
   const checks = [
-    ['reject-verdict', /(?:Result|結果)\s*:\s*REJECT/i.test(lifecycle.reviewOutput)],
+    ['reject-verdict', /(?:Result|結果)\s*[:：]\s*REJECT\b/i.test(lifecycle.reviewOutput)],
     ['configuration-consumer-finding', configurationGap !== undefined],
+    ['actionable-family', configurationGap !== undefined
+      && hasActionableFamily(lifecycle, configurationGap.findingId.replace(/`/g, '').trim())],
     ['authorization-basis', configurationGap !== undefined
       && hasAllowedAuthorizationBasis(configurationGap.basis)],
     ['initial-round-reason', configurationGap !== undefined
