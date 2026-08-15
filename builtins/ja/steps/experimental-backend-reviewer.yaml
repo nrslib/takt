@@ -5,7 +5,7 @@ params:
   review_knowledge_additions:
     type: facet_ref[]
     facet_kind: knowledge
-  backend_review_instruction: { type: facet_ref, facet_kind: instruction }
+  coding_review_instruction: { type: facet_ref, facet_kind: instruction }
 name: backend-review
 description: API、ドメインロジック、サーバー側処理、永続化をレビューする
 capabilities: readonly
@@ -22,7 +22,7 @@ knowledge:
   - architecture
   - $param: review_knowledge_additions
 instruction:
-  $param: backend_review_instruction
+  $param: coding_review_instruction
 pass_previous_response: false
 output_contracts:
   report:

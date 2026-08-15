@@ -23,7 +23,7 @@ subworkflow:
     architecture_review_instruction: { type: facet_ref, facet_kind: instruction, default: architecture-review }
     security_review_instruction: { type: facet_ref, facet_kind: instruction, default: security-review }
     testing_review_instruction: { type: facet_ref, facet_kind: instruction, default: testing-review }
-    backend_review_instruction: { type: facet_ref, facet_kind: instruction, default: coding-review }
+    coding_review_instruction: { type: facet_ref, facet_kind: instruction, default: coding-review }
     ai_antipattern_review_instruction: { type: facet_ref, facet_kind: instruction, default: ai-antipattern-review }
     frontend_review_instruction: { type: facet_ref, facet_kind: instruction, default: frontend-review }
     cqrs_es_review_instruction: { type: facet_ref, facet_kind: instruction, default: cqrs-es-review }
@@ -61,7 +61,7 @@ steps:
           with:
             review_policy_additions: { $param: review_policy_additions }
             review_knowledge_additions: { $param: review_knowledge_additions }
-            backend_review_instruction: { $param: backend_review_instruction }
+            coding_review_instruction: { $param: coding_review_instruction }
           rules: *reviewer_rules
         - uses: peer-review-cqrs-reviewer
           description: CQRS、イベントソーシング、集約境界、投影の整合性をレビューする
