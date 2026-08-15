@@ -922,18 +922,26 @@ describe('experimental builtin workflow', () => {
       const remediation = loadRemediationForPeerReview(language, peerReview, projectDir);
       const reviewerSuite = loadReviewerSuiteForPeerReview(language, peerReview, projectDir);
       const reviewerSteps = collectReviewerSteps(language, reviewerSuite, projectDir);
+      const reviewRoot = findWorkflowStep(reviewerSuite, reviewerSuite.initialStep);
+      if (reviewRoot.parallel === undefined || Array.isArray(reviewRoot.parallel)) {
+        throw new Error(`Review workflow "${reviewerSuite.name}" has no dynamic parallel reviewers`);
+      }
+      const fixedReviewerNames = new Set(reviewRoot.parallel.fixed.map(({ name }) => name));
+      const fixedReviewerSteps = reviewerSteps.filter(({ step }) => fixedReviewerNames.has(step.name));
       const reviewResponses = (verdict: 'approved' | 'needs_fix'): ScenarioEntry[] =>
-        reviewerSteps.map(({ workflow: reviewerWorkflow, step, persona }) =>
+        fixedReviewerSteps.map(({ workflow: reviewerWorkflow, step, persona }) =>
           response(reviewerWorkflow, step.name, persona, verdict));
       setMockScenario([
         responseForNext(core, 'plan', 'write_tests'),
         responseForNext(core, 'write_tests', 'implement'),
         responseForNext(implementation, 'implement', 'COMPLETE'),
+        parallelSelection([], 'The standard workflow change does not require security review.'),
         ...reviewResponses('needs_fix'),
         responseForNext(peerReview, 'review-adjudication', 'remediation'),
         responseForNext(remediation, 'fix-plan', 'fix'),
         responseForNext(remediation, 'fix', 'fix-verifier'),
         responseForNext(remediation, 'fix-verifier', 'COMPLETE'),
+        parallelSelection([], 'The verified remediation does not require security review.'),
         ...reviewResponses('approved'),
         responseForNext(peerReview, 'review-adjudication', 'final-gate'),
         responseForNext(peerReview, 'final-gate', 'COMPLETE'),

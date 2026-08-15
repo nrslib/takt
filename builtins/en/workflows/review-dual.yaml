@@ -1,6 +1,9 @@
 name: review-dual
 description: Frontend + backend focused review (structure, modularization, component design, security, coding)
 max_steps: 10
+facet_pools:
+  security-review-facets:
+    uses: security-review-facets
 initial_step: gather
 
 steps:
@@ -16,6 +19,7 @@ steps:
     tags:
       - review
     parallel:
+      fixed:
       - name: arch-review
         capabilities: readonly
         tags:
@@ -58,25 +62,6 @@ steps:
           - condition: approved
           - condition: needs_fix
 
-      - name: security-review
-        capabilities: readonly
-        tags:
-          - review
-        edit: false
-        persona: security-reviewer
-        policy:
-          - contract-change
-          - security-review
-        knowledge: [security, security-web, security-api, security-data, security-dependencies]
-        instruction: review-security
-        output_contracts:
-          report:
-            - name: security-review.md
-              format: security-review
-        rules:
-          - condition: approved
-          - condition: needs_fix
-
       - name: coding-review
         capabilities: readonly
         tags:
@@ -95,6 +80,37 @@ steps:
         rules:
           - condition: approved
           - condition: needs_fix
+
+      pool:
+      - name: security-review
+        description: Do not select by default. Select only when (a) the change may affect secret or credential handling, external-input handling, process execution, filesystem operations, network or terminal boundaries, sandboxing, or permissions, or (b) the change is large enough that security impact cannot be confidently ruled out. Do not select for documentation-only, comment-only, or test-only changes, or small localized fixes.
+        capabilities: readonly
+        tags:
+          - review
+        edit: false
+        persona: security-reviewer
+        policy:
+          - contract-change
+          - security-review
+        knowledge:
+          - security
+          - security-data
+          - security-dependencies
+        dynamic_facets:
+          pool: security-review-facets
+          selector:
+            instruction: select-applicable-candidates
+        instruction: review-security
+        output_contracts:
+          report:
+            - name: security-review.md
+              format: security-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+      selection:
+        selector:
+          instruction: select-applicable-candidates
 
     rules:
       - condition: any("error")

@@ -28,6 +28,13 @@ subworkflow:
       default:
         - architecture
         - takt
+    security_review_knowledge_additions:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: []
+    security_review_pool:
+      type: facet_pool_ref
+      default: security-review-facets
     fix_knowledge:
       type: facet_ref[]
       facet_kind: knowledge
@@ -77,6 +84,10 @@ facet_pools:
     uses: coding-facets
   takt-coding-facets:
     uses: takt-coding-facets
+  security-review-facets:
+    uses: security-review-facets
+  takt-security-review-facets:
+    uses: takt-security-review-facets
 initial_step: initial-reviewers
 loop_monitors:
   - cycle:
@@ -124,6 +135,10 @@ steps:
         $param: review_policy_additions
       review_knowledge_additions:
         $param: review_knowledge_additions
+      security_review_knowledge_additions:
+        $param: security_review_knowledge_additions
+      security_review_pool:
+        $param: security_review_pool
       architecture_review_instruction: architecture-review
       security_review_instruction: security-review
       testing_review_instruction: testing-review
@@ -145,6 +160,10 @@ steps:
         $param: review_policy_additions
       review_knowledge_additions:
         $param: review_knowledge_additions
+      security_review_knowledge_additions:
+        $param: security_review_knowledge_additions
+      security_review_pool:
+        $param: security_review_pool
       architecture_review_instruction: follow-up-architecture-review
       security_review_instruction: follow-up-security-review
       testing_review_instruction: follow-up-testing-review
