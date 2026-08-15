@@ -141,7 +141,9 @@ steps:
       - review
     pass_previous_response: false
     rules:
-      - condition: approved
+      - condition: APPROVE
+        next: COMPLETE
+      - condition: REJECT
         next: COMPLETE
     instruction: &review_synthesis_instruction |
       ## レビュー結果
@@ -216,7 +218,9 @@ steps:
       - review
     pass_previous_response: false
     rules:
-      - condition: レビュー統合完了
+      - condition: APPROVE
+        next: COMPLETE
+      - condition: REJECT
         next: COMPLETE
     instruction: *review_synthesis_instruction
     output_contracts: *review_synthesis_output_contracts

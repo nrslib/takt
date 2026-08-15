@@ -25,6 +25,17 @@ test('accepts the observed Japanese decision and unmet project-source row', () =
   assert.equal(assertFinalReadinessRequirementGap(output).pass, true);
 });
 
+test('accepts an explicit statement that test logs are not required', () => {
+  const output = `
+## Result: REJECT
+
+The project configuration result is missing the required source field.
+Test logs are not required for this decision.
+`;
+
+  assert.equal(assertFinalReadinessRequirementGap(output).pass, true);
+});
+
 test('rejects an unrelated unmet project-configuration row without source', () => {
   const output = `
 # 最終判定: REJECT
