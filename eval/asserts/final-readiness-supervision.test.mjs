@@ -3,122 +3,97 @@ import test from 'node:test';
 
 import assertFinalReadinessSupervision from './final-readiness-supervision.mjs';
 
-function newFindingTable() {
+function actionableFamily() {
   return [
-    '## Current Iteration Findings (new)',
-    '| finding_id | Location | Issue | Authorization Basis | Reason Absent from Initial Round |',
-    '|------------|----------|-------|---------------------|----------------------------------|',
-    '| MERGE-NEW-mode-L1 | `src/mode.js` configuration entry | Missing normalization | required_consumer_migration | Initial evidence covered only another entry |',
+    '## Actionable Families',
+    '| family | Finding ID / source | Evidence | Problem -> root cause |',
+    '|--------|---------------------|----------|-----------------------|',
+    '| configuration-normalization | MERGE-NEW-mode-L1 | `src/mode.js` project configuration entry | Project configuration consumer skips normalization |',
   ].join('\n');
 }
 
-function priorDisposition() {
+function findingDispositions() {
   return [
-    '## Re-evaluation of Prior Findings',
-    '| finding_id | Re-evaluation | Evidence |',
-    '|------------|---------------|----------|',
-    '| OLD-REVIEW-readme-L1 | out_of_scope | No current counter-evidence |',
+    '## Finding Dispositions',
+    '| Finding ID / source | Disposition | Authorization Basis | Reason absent from initial round | Evidence |',
+    '|---------------------|-------------|---------------------|----------------------------------|----------|',
+    '| MERGE-NEW-mode-L1 | actionable | required_consumer_migration | Initial review evidence covered only the CLI entry | Project configuration normalization is missing |',
+    '| OLD-REVIEW-readme-L1 | out_of_scope | none | not applicable | No current counter-evidence |',
   ].join('\n');
 }
 
 function outputWith(...sections) {
-  return ['## Result: REJECT', newFindingTable(), priorDisposition(), ...sections].join('\n\n');
+  return ['## Result: REJECT', actionableFamily(), findingDispositions(), ...sections].join('\n\n');
 }
 
-test('accepts an authorized new finding while preserving a non-actionable disposition', () => {
+test('accepts REJECT with an authorized actionable family and preserved disposition', () => {
   assert.equal(assertFinalReadinessSupervision(outputWith()).pass, true);
+});
+
+test('rejects the removed FIX REQUIRED result vocabulary', () => {
+  const output = outputWith().replace('## Result: REJECT', '## Result: FIX REQUIRED');
+  assert.equal(assertFinalReadinessSupervision(output).pass, false);
 });
 
 test('accepts the same report from a provider output envelope', () => {
   assert.equal(assertFinalReadinessSupervision(JSON.stringify({ output: outputWith() })).pass, true);
 });
 
-test('accepts the equivalent Japanese lifecycle structure', () => {
+test('accepts the equivalent Japanese contract structure', () => {
   const output = [
     '## 結果: REJECT',
-    '## 今回の指摘（new）',
-    '| finding_id | 項目 | 理由 | Authorization basis | 初回に含まれなかった理由 |',
-    '|------------|------|------|---------------------|--------------------------|',
-    '| VAL-NEW-mode-L1 | project設定 | 正規化が不足 | required_consumer_migration | 初回証跡はCLI入口だけに限定 |',
-    '## 前段 finding の再評価',
-    '| finding_id | 再評価 |',
-    '|------------|--------|',
-    '| OLD-REVIEW-readme-L1 | 対象外 |',
+    '## 修正対象 family',
+    '| family | finding ID / 出典 | 根拠 | 問題 → 根本原因 |',
+    '|--------|-------------------|------|-------------------|',
+    '| project-setting | VAL-NEW-mode-L1 | `src/mode.js` project設定 | project設定の正規化が不足 |',
+    '## 指摘ごとの裁定',
+    '| finding ID / 出典 | 裁定 | Authorization basis | 初回に含まれなかった理由 | 根拠 |',
+    '|-------------------|------|---------------------|--------------------------|------|',
+    '| VAL-NEW-mode-L1 | actionable | required_consumer_migration | 初回の確認は CLI 入口に限定 | project設定の正規化が不足 |',
+    '| OLD-REVIEW-readme-L1 | out_of_scope | なし | 該当なし | 新しい反証なし |',
   ].join('\n');
 
   assert.equal(assertFinalReadinessSupervision(output).pass, true);
 });
 
-for (const [name, heading, id] of [
-  ['new', 'Current Iteration Findings (new)', 'MERGE-NEW-readme-L1'],
-  ['carry-over', 'Carry-over Findings (persists)', 'MERGE-PERSIST-mode-L1'],
-  ['reopened', 'Reopened Findings (reopened)', 'MERGE-REOPENED-mode-L1'],
-  ['actionable', 'Actionable Families', 'family-mode'],
+for (const [name, heading] of [
+  ['actionable family', 'Actionable Families'],
+  ['current finding', 'Current Iteration Findings (new)'],
 ]) {
-  test(`rejects a previously non-actionable finding revived as ${name}`, () => {
+  test(`rejects a previously excluded finding revived as ${name}`, () => {
     const revived = [
       `## ${heading}`,
-      '| finding_id | Issue |',
-      '|------------|-------|',
-      `| OLD-REVIEW-readme-L1 | ${id} requires work |`,
+      '| Finding ID / source | Issue |',
+      '|---------------------|-------|',
+      '| OLD-REVIEW-readme-L1 | requires work |',
     ].join('\n');
 
     const result = assertFinalReadinessSupervision(outputWith(revived));
-
     assert.equal(result.pass, false);
     assert.equal(result.reason.includes('old-finding-not-revived'), true);
   });
 }
 
-test('does not infer a prior disposition from explanatory prose', () => {
-  const output = outputWith().replace(
-    priorDisposition(),
-    'The OLD-REVIEW-readme-L1 item was described as out_of_scope in earlier prose.',
-  );
-
+test('rejects omission of the prior finding disposition', () => {
+  const output = ['## Result: REJECT', actionableFamily(), findingDispositions().split('\n').slice(0, 4).join('\n')].join('\n\n');
   const result = assertFinalReadinessSupervision(output);
-
   assert.equal(result.pass, false);
   assert.equal(result.reason.includes('old-finding-disposition'), true);
 });
 
-test('does not revive a prior finding mentioned only in actionable prose', () => {
-  const actionable = [
-    '## Actionable Families',
-    '| finding_id | Issue |',
-    '|------------|-------|',
-    '| MERGE-NEW-mode-L2 | This is distinct from OLD-REVIEW-readme-L1 |',
-  ].join('\n');
-
-  assert.equal(assertFinalReadinessSupervision(outputWith(actionable)).pass, true);
-});
-
-test('rejects omission of the prior non-actionable disposition', () => {
-  const output = ['## Result: REJECT', newFindingTable()].join('\n\n');
-
-  const result = assertFinalReadinessSupervision(output);
-
-  assert.equal(result.pass, false);
-  assert.equal(result.reason.includes('old-finding-disposition'), true);
-});
-
-test('rejects an authorization label outside the allowed bases', () => {
+test('rejects an authorization value outside the allowed values', () => {
   const output = outputWith().replace('required_consumer_migration', 'General quality improvement');
-
   const result = assertFinalReadinessSupervision(output);
-
   assert.equal(result.pass, false);
   assert.equal(result.reason.includes('authorization-basis'), true);
 });
 
-test('rejects an omission label without evidence for why the initial review missed it', () => {
+test('rejects an omission reason without evidence for the initial review boundary', () => {
   const output = outputWith().replace(
-    'Initial evidence covered only another entry',
+    'Initial review evidence covered only the CLI entry',
     'Initial review finding',
   );
-
   const result = assertFinalReadinessSupervision(output);
-
   assert.equal(result.pass, false);
   assert.equal(result.reason.includes('initial-round-reason'), true);
 });

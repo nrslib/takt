@@ -4,7 +4,6 @@
 description: 'TAKT facet eval: public final-gate Phase 2 finding preservation'
 
 prompts:
-  - file://prompts/final-readiness-merge-review-phase2.phase2.md
   - file://prompts/final-readiness-supervision-phase2.phase2.md
 
 providers:

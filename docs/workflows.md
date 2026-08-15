@@ -130,7 +130,7 @@ For example, `.takt/steps/final-gate.yaml` can contain:
 
 ```yaml
 kind: workflow_call
-call: merge-readiness-final-gate
+call: supervisor-final-gate
 ```
 
 Every concrete workflow step that declares `uses`, including a parallel sub-step, must declare its own non-empty rule specification. A non-parallel fragment caller uses a `rules` array; a parallel fragment caller uses the rule tree described below. A fragment cannot declare `rules` at its root or on any parallel sub-step. This keeps routing owned by the workflow that knows the destination step names; fragment-to-fragment `uses` is exempt until a concrete workflow calls the chain. The loader does not copy, inherit, or synthesize fallback rules.

@@ -2,112 +2,92 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import assertFinalReadinessPrecision from './final-readiness-precision.mjs';
 
-test('accepts plain wording that keeps the rejected documentation request closed', () => {
+function approvedOutput(extra = '') {
+  return `
+## Result: APPROVE
+
+## Finding Dispositions
+| Finding ID / source | Disposition | Evidence |
+|---------------------|-------------|----------|
+| OLD-REVIEW-readme-L1 | overreach | No current counter-evidence; do not reopen |
+
+${extra}
+`;
+}
+
+test('accepts APPROVE while preserving the excluded finding', () => {
+  assert.equal(assertFinalReadinessPrecision(approvedOutput()).pass, true);
+});
+
+test('accepts the equivalent Japanese disposition', () => {
   const output = `
-## 結果: マージ可能
+## 結果: APPROVE
+
+OLD-REVIEW-readme-L1 は overreach のため再開しない。
+`;
+
+  assert.equal(assertFinalReadinessPrecision(output).pass, true);
+});
+
+test('accepts the observed final-decision heading without reopening a negated actionable finding', () => {
+  const output = `
+# 最終判定: APPROVE
 
 ### 前段 finding
 
-OLD-REVIEW-readme-L1 は overreach と確定している。新しい反証はなく、
-非修正対象として維持する。
+OLD-REVIEW-readme-L1 は overreach のため解消要求なしです。未解消の actionable finding はありません。
 `;
 
   assert.equal(assertFinalReadinessPrecision(output).pass, true);
 });
 
-test('accepts the documented machine value without requiring a fixed heading', () => {
+test('accepts the observed Japanese non-actionable preservation statement', () => {
   const output = `
-Result: MERGEABLE
+# 最終判定: APPROVE
 
-OLD-REVIEW-readme-L1 remains non-actionable as adjudicated_non_actionable.
+## 前段 finding
+
+OLD-REVIEW-readme-L1 は、全表記を README に列挙する要求が元要件にないため、前段裁定どおり非 actionable です。未解消の actionable finding はありません。
 `;
 
   assert.equal(assertFinalReadinessPrecision(output).pass, true);
 });
 
-test('accepts a plain final decision and no evidence for reopening', () => {
-  const output = `
-# 最終裁定: マージ可能
-
-- 前段 finding: OLD-REVIEW-readme-L1 は overreach。再開する反証なし
-`;
-
-  assert.equal(assertFinalReadinessPrecision(output).pass, true);
-});
-
-test('rejects a mergeable result that omits the prior finding', () => {
-  const result = assertFinalReadinessPrecision('Result: MERGEABLE');
-
-  assert.equal(result.pass, false);
+test('rejects APPROVE when the prior finding is omitted', () => {
+  assert.equal(assertFinalReadinessPrecision('## Result: APPROVE').pass, false);
 });
 
 test('rejects reopening the prior finding', () => {
-  const output = `
-Result: MERGEABLE
+  const output = approvedOutput('OLD-REVIEW-readme-L1 remains open and requires a fix.');
+  assert.equal(assertFinalReadinessPrecision(output).pass, false);
+});
 
-OLD-REVIEW-readme-L1 remains_open and requires a documentation fix.
+test('rejects explicitly making the prior finding actionable', () => {
+  const output = approvedOutput('OLD-REVIEW-readme-L1 is actionable.');
+  assert.equal(assertFinalReadinessPrecision(output).pass, false);
+});
+
+test('rejects reopening a finding after mentioning its prior non-actionable disposition', () => {
+  const output = `
+# 最終判定: APPROVE
+
+OLD-REVIEW-readme-L1 は前段裁定どおり非 actionable です。しかし今回は actionable として再開する。
 `;
 
   assert.equal(assertFinalReadinessPrecision(output).pass, false);
 });
 
-test('rejects a newly actionable family in a mergeable result', () => {
-  const output = `
-Result: MERGEABLE
-
-OLD-REVIEW-readme-L1 remains non-actionable.
-FINAL-NEW-readme-L1 is actionable.
-`;
-
+test('rejects a newly actionable family in an approved result', () => {
+  const output = approvedOutput('FINAL-NEW-readme-L1 is actionable.');
   assert.equal(assertFinalReadinessPrecision(output).pass, false);
 });
 
-test('accepts preservation evidence near a later occurrence of the same finding', () => {
-  const output = `
-Result: MERGEABLE
-
-Summary mentions OLD-REVIEW-readme-L1 without deciding its status.
-
-${'Unrelated summary text. '.repeat(50)}
-
-The final decision keeps OLD-REVIEW-readme-L1 non-actionable and does not reopen it.
-`;
-
-  assert.equal(assertFinalReadinessPrecision(output).pass, true);
-});
-
-test('rejects contradictory English and Japanese results with a full-width colon', () => {
-  const output = `
-Result: MERGEABLE
-
-OLD-REVIEW-readme-L1 remains non-actionable.
-
-結果：修正が必要
-`;
-
+test('rejects contradictory APPROVE and REJECT results', () => {
+  const output = `${approvedOutput()}\n## 結果: REJECT`;
   assert.equal(assertFinalReadinessPrecision(output).pass, false);
 });
 
-test('rejects contradictory final decisions in English', () => {
-  const output = `
-Final Decision: MERGEABLE
-
-OLD-REVIEW-readme-L1 remains non-actionable.
-
-Final Decision: FIX REQUIRED
-`;
-
-  assert.equal(assertFinalReadinessPrecision(output).pass, false);
-});
-
-test('rejects contradictory final decisions in Japanese', () => {
-  const output = `
-最終裁定: マージ可能
-
-OLD-REVIEW-readme-L1 は非修正対象として維持する。
-
-最終裁定：修正が必要
-`;
-
+test('rejects the removed MERGEABLE result vocabulary', () => {
+  const output = approvedOutput().replace('Result: APPROVE', 'Result: MERGEABLE');
   assert.equal(assertFinalReadinessPrecision(output).pass, false);
 });
