@@ -39,6 +39,12 @@ description: 任意の説明
 max_steps: 10
 initial_step: first-step          # 省略可、デフォルトは最初の step
 
+all_steps:
+  rules:
+    - findings-handling
+    - ref: careful-findings
+      position: before_instruction
+
 # セクションマップ（キー → workflow YAML からの相対パス）
 personas:
   planner: ../facets/personas/planner.md
@@ -98,6 +104,14 @@ steps:
 step はキー名で section map を参照します (例: `persona: coder`)。ファイルパスではありません。section map の中のパスは workflow YAML ファイルのディレクトリからの相対で解決されます。
 
 section map は任意です。facet は bare name で直接参照できます（`personas` マップの項目がなくても `persona: coder` と書けます）。bare name は project `.takt/facets/<type>/` → global `~/.takt/facets/<type>/` → 同梱の `builtins/{lang}/facets/<type>/` の優先順で解決されます。section map が必要になるのは、カスタムエイリアスや明示的なファイルパスを使いたい場合だけです。
+
+### ワークフロー横断ルール（`all_steps.rules`）
+
+すべての agent step に適用するルールは `all_steps.rules` に宣言します。各要素はルール参照文字列、または `ref` と任意の `position: before_instruction` を持つ object です。`position` を省略すると自動実行ルールの後に配置され、`before_instruction` は step の `Instructions` セクション直前に配置されます。
+
+ルールファイルは `workflows/rules/<ref>.md` です。project `.takt/workflows/rules/` → global `~/.takt/workflows/rules/` → 同梱 builtin ディレクトリの順で解決します。適用通知とルール見出しは prompt ごとに1回だけ出力されます。対象は Phase 1 の agent 指示だけで、レポート出力、ステータスルーティング、companion reviewer には適用されません。`workflow_call` 先は親のルールを先に継承し、自身の `all_steps.rules` を後ろに加算します。
+
+ルールファイルに必須出力見出しまたは `{report:...}` 参照を含めることはできません。違反時は参照されたファイルを示して workflow の読み込みに失敗します。`all_steps` を省略した場合、既存の prompt は維持されます。将来の workflow 横断宣言は `all_steps` 配下に追加し、未知のトップレベルキーは引き続き拒否されます。
 
 ### 再利用可能な step fragment
 
@@ -1198,6 +1212,9 @@ steps:
 
 通常の agent step に `companion` を指定すると、実装エージェントの編集と並行して、ステートレスかつ read-only のレビュアーが動きます。名前配列は固定レビュアーの短縮形です。object 形式では固定レビュアー、step 開始時に1回だけ選抜する pool、任意の moderator を組み合わせられます。同時実行は最大3名です。
 
+companion reviewer は既定で無効です。workflow に宣言した reviewer を実行するには、
+`runtime.yaml` で `companion.enabled: true` を設定します。
+
 ```yaml
 - name: implement
   persona: coder
@@ -1214,7 +1231,9 @@ workflow の遷移ルールから `companion.*` state は参照できません�
 
 定義 YAML は `.takt/companions/`、`~/.takt/companions/`、`builtins/{language}/companions/` の順で解決されます。指定できるのは `name`、`description`、facet 参照（`persona`、`policy`、`knowledge`、`instruction`）、`interval_ms` だけで、provider やツール設定は指定できません。`interval_ms` は `2,147,483,647` 以下の正整数である必要があります。
 
-TAKT は変更系 tool event を観測し、静穏時間または強制発火時間の経過後に累積差分をレビューします。実装エージェントの完了時には未レビュー変更を確認し、残っている場合だけレビューします。新しい完了レビューが不要でも、実行中・待機中のレビューを中断または待機してから完了します。指摘は `.takt/runs/{run}/companion/{step}/{companion}.jsonl` へ追記されます。各 companion の JSONL ファイルは実装エージェント向けの読取専用 projection であり、独立した transaction boundary です。そのファイルへの追記成功後にだけ cache、finding の採番、finding event が確定します。1ラウンドで複数 companion を更新する場合、後続 mailbox の失敗によって、すでに確定した先行 mailbox を rollback せず、再試行では未完了の mailbox 更新だけを再開します。projection の外部変更は拒否され、engine が所有する finding 状態には反映されません。post-execution condition の評価前に、エンジンは進展が続く間、同じ session の fix loop で open の `must_fix` を解消します。loop escalation はこの内部 fix loop だけを停止します。未解消指摘、completion review の失敗、内部 escalation は Companion の診断情報として記録されますが、主 workflow を block せず、post-execution 判定へ渡す response も変更しません。Companion 対応後は、成功した主 agent の最新 response だけを後続へ渡します。Companion 呼び出しは既定回数の retry 後に fail-soft とし、workflow または step の中断時は引き続き Companion も停止します。
+TAKT は変更系 tool event を観測し、静穏時間または強制発火時間の経過後に現在の累積差分をレビューします。各レビューラウンドでは指摘一覧を新しく生成し、任意の moderator がラウンド内 index によって提出済みの全指摘を `accept` または `reject` します。指摘をラウンド間で引き継ぐことはありません。採用した指摘は `.takt/runs/{run}/companion/{step}/{companion}.jsonl` へ1行1件の NDJSON として追記します。この mailbox は監査ログ兼参考ビューであり、実装エージェントは任意のタイミングで読めます。engine は mailbox へ書き込みますが、配達や完了の判定では読み取り、解釈、保護を行いません。
+
+実装エージェントの各ターン境界で、TAKT は未配達の採用済み指摘を follow-up prompt 本文へ直接埋め込み、その後メモリ上の配達バッファを空にします。各指摘へ対応するかは実装エージェントが判断し、対応しない場合は応答で理由を説明します。完了時には新規 trigger を停止し、実行中および queue 済みのレビューラウンドを drain してから現在の diff digest を読み、未レビューの digest だけを完了レビューします。指摘が生成された場合は別の follow-up ターンへ配達し、完了処理を繰り返します。未配達の指摘がなく、最後に指摘を配達した時点から digest が変わっていない場合にだけ step を終了します。Companion の follow-up ループに上限はなく、workflow または step の AbortSignal による中断が終了手段です。follow-up が `error`、`rate_limited`、`blocked` を返すか例外を送出した場合、その follow-up を再試行せず Companion の follow-up ループを打ち切り、最後に成功した実装エージェント応答と session ID で step を続行します。Companion の診断値には `completionSettled: false`、実際に試行した `followUpRounds`、サニタイズ済みの失敗理由を記録します。AbortSignal による中断は従来どおり伝播します。Companion 呼び出しは provider に対する既定回数の retry 後に fail-soft とします。
 
 ## ベストプラクティス
 

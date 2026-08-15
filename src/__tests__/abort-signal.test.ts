@@ -126,6 +126,32 @@ describe('buildInactivityAbortSignal', () => {
     deadline.dispose();
   });
 
+  it('execution unit 終了時にその unit の未完了 tool だけを破棄する', () => {
+    const deadline = buildInactivityAbortSignal(100, undefined);
+
+    deadline.recordActivity({
+      kind: 'tool_started',
+      executionUnitKey: 'part-a',
+      toolCallKey: 'part-a\0tool-1',
+    });
+    deadline.recordActivity({
+      kind: 'tool_started',
+      executionUnitKey: 'part-b',
+      toolCallKey: 'part-b\0tool-1',
+    });
+    vi.advanceTimersByTime(50);
+    deadline.recordActivity({ kind: 'execution_unit_finished', executionUnitKey: 'part-a' });
+    vi.advanceTimersByTime(100);
+    expect(deadline.signal.aborted).toBe(false);
+
+    deadline.recordActivity({ kind: 'execution_unit_finished', executionUnitKey: 'part-b' });
+    vi.advanceTimersByTime(99);
+    expect(deadline.signal.aborted).toBe(false);
+    vi.advanceTimersByTime(1);
+    expect(deadline.signal.aborted).toBe(true);
+    deadline.dispose();
+  });
+
   it('新しい attempt 開始時に欠落した tool 状態を破棄して通常期限を満額取り直す', () => {
     const deadline = buildInactivityAbortSignal(100, undefined);
 

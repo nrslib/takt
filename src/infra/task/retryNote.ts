@@ -13,14 +13,6 @@ function requireAutoRequeueError(failure: TaskFailure): string {
   return error;
 }
 
-function requireAutoRequeueStep(failure: TaskFailure): string {
-  const step = failure.step?.trim();
-  if (!step) {
-    throw new Error('Failed task failure.step is required for auto requeue note.');
-  }
-  return step;
-}
-
 function stringifyDiagnosticLine(value: Record<string, string | number>): string {
   return JSON.stringify(value)
     .replace(/\u2028/g, '\\u2028')
@@ -45,10 +37,10 @@ export function buildAutoRequeueNote(
   failure: TaskFailure,
   options?: AutoRequeueNoteOptions,
 ): string {
-  const failedStep = requireAutoRequeueStep(failure);
+  const failedStep = failure.step?.trim();
   const error = requireAutoRequeueError(failure);
   const diagnostic = stringifyDiagnosticLine({
-    failedStep,
+    ...(failedStep ? { failedStep } : {}),
     error,
     ...(options ? { attempt: options.attempt, maxAttempts: options.maxAttempts } : {}),
   });

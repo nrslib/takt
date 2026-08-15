@@ -153,6 +153,7 @@ function buildInstructionContext(
     validateReportReferences: false,
     language,
     reviewScope,
+    workflowRules: step.engineSynthesized === true ? undefined : config.allStepsRules,
   };
 }
 
@@ -236,6 +237,14 @@ export async function previewPrompts(
   header(`Workflow Prompt Preview: ${safeWorkflowName}`);
   info(`Steps: ${config.steps.length}`);
   info(`Language: ${language}`);
+  if (config.allStepsRules && config.allStepsRules.length > 0) {
+    info('Workflow-wide rules:');
+    for (const rule of config.allStepsRules) {
+      info(`- ref: ${sanitizeTerminalText(rule.ref)}`);
+      info(`  position: ${sanitizeTerminalText(rule.position)}`);
+      info(`  content: ${sanitizeTerminalText(rule.content)}`);
+    }
+  }
   blankLine();
 
   const reviewScope = resolvePreviewReviewScope(cwd);

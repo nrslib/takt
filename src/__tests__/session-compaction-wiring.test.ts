@@ -190,6 +190,7 @@ function makeNormalDeps(
     getWorkflowName: () => 'test-workflow',
     getTask: () => 'task',
     getWorkflowDescription: () => undefined,
+    getWorkflowRules: () => undefined,
     getRetryNote: () => undefined,
     getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
     structuredCaller: {
@@ -255,6 +256,7 @@ describe('session compaction Phase 1 wiring', () => {
       getWorkflowSteps: () => [{ name: 'review' }],
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
+      getWorkflowRules: () => undefined,
       getRetryNote: () => undefined,
       getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
       structuredCaller: {
@@ -303,6 +305,7 @@ describe('session compaction Phase 1 wiring', () => {
       getWorkflowSteps: () => [{ name: 'review' }],
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
+      getWorkflowRules: () => undefined,
       getRetryNote: () => undefined,
       getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
       structuredCaller: {
@@ -378,6 +381,7 @@ describe('session compaction Phase 1 wiring', () => {
         makeWorkflowResumePointEntry({ step: 'review' }),
       ],
       getWorkflowDescription: () => undefined,
+      getWorkflowRules: () => undefined,
       getRetryNote: () => undefined,
       getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
       structuredCaller: {

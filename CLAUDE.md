@@ -137,7 +137,7 @@ builtins/{en,ja}/       Bundled facets + workflows (read from dist/ at runtime)
 
 ## House conventions (from AGENTS.md / CONTRIBUTING.md)
 
-- Prefer simple code over defensive fallback-heavy logic. TAKT is a local tool: no audit trails, tamper-resistance, or security theater — the threat model is provider output and engine wiring mistakes, not hostile users editing their own files.
+- Prefer simple code over defensive fallback-heavy logic. TAKT is a local tool: no audit trails, tamper-resistance, or security theater.
 - Filenames mostly `kebab-case`. Conventional Commit style with occasional `(#issue)` suffix.
 - Don't commit secrets; provider keys live in env vars or `~/.takt/config.yaml`.
 - A TAKT review pass is recommended before a PR: `takt -t "#<PR>" -w review-takt-default`. For CodeRabbit comments: judge each, act on the valid ones, resolve every thread; don't post replies.

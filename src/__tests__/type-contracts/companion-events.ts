@@ -16,20 +16,20 @@ emitCompanionEvent('companion:pool_selected', {
 emitCompanionEvent('companion:finding', {
   step: 'implement',
   companion: 'security-reviewer',
-  findingId: 'security-reviewer-1',
   severity: 'must_fix',
 });
 
 emitCompanionEvent('companion:fix_round', {
   step: 'implement',
   sequence: 2,
-  openMustFixCount: 1,
+  findingCount: 1,
 });
 
 emitCompanionEvent('companion:complete', {
   step: 'implement',
-  openMustFixCount: 0,
-  escalated: false,
+  completionSettled: true,
+  completionFailure: false,
+  followUpRounds: 1,
 });
 
 emitCompanionEvent('companion:review_round', {
@@ -40,9 +40,7 @@ emitCompanionEvent('companion:review_round', {
   changedLines: 12,
   findingCount: 1,
   reviewerFindings: [],
-  reviewerUpdates: [],
   acceptedFindings: [],
-  acceptedUpdates: [],
 });
 
 emitCompanionEvent('companion:queue_coalesced', {
@@ -71,9 +69,7 @@ emitCompanionEvent('companion:review_round', {
   changedLines: 12,
   findingCount: 1,
   reviewerFindings: [],
-  reviewerUpdates: [],
   acceptedFindings: [],
-  acceptedUpdates: [],
 });
 
 // @ts-expect-error Companion queue coalescing requires the replacement payload.
@@ -90,8 +86,9 @@ emitCompanionEvent('companion:queue_coalesced', {
 
 emitCompanionEvent('companion:complete', {
   step: 'implement',
-  openMustFixCount: 0,
-  escalated: false,
+  completionSettled: true,
+  completionFailure: false,
+  followUpRounds: 0,
   // @ts-expect-error Companion completion events do not expose error details.
   error: 'private detail',
 });

@@ -196,9 +196,9 @@ describe('TAKT ACP agent adapter', () => {
   it.each([
     { type: 'companion' as const, action: 'start' as const, step: 'prepare', companion: 'security' },
     { type: 'companion' as const, action: 'pool_selected' as const, step: 'select', selected: ['security'], rationale: 'selected' },
-    { type: 'companion' as const, action: 'finding' as const, step: 'review', companion: 'security', findingId: 'security-1', severity: 'must_fix' as const },
-    { type: 'companion' as const, action: 'fix_round' as const, step: 'repair', sequence: 2, openMustFixCount: 1 },
-    { type: 'companion' as const, action: 'complete' as const, step: 'finalize', openMustFixCount: 0, escalated: false },
+    { type: 'companion' as const, action: 'finding' as const, step: 'review', companion: 'security', severity: 'must_fix' as const },
+    { type: 'companion' as const, action: 'fix_round' as const, step: 'repair', sequence: 2, findingCount: 1 },
+    { type: 'companion' as const, action: 'complete' as const, step: 'finalize', completionSettled: true, completionFailure: false, followUpRounds: 1 },
   ])(
     'should map companion $action events to ACP updates while preserving the step',
     (event) => {

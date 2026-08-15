@@ -120,7 +120,9 @@ steps:
       - review
     pass_previous_response: false
     rules:
-      - condition: approved
+      - condition: APPROVE
+        next: COMPLETE
+      - condition: REJECT
         next: COMPLETE
     instruction: &review_synthesis_instruction |
       ## Review Results
@@ -219,7 +221,9 @@ steps:
       - review
     pass_previous_response: false
     rules:
-      - condition: Review synthesis complete
+      - condition: APPROVE
+        next: COMPLETE
+      - condition: REJECT
         next: COMPLETE
     instruction: *review_synthesis_instruction
     output_contracts: *review_synthesis_output_contracts

@@ -195,10 +195,8 @@ export interface NdjsonCompanionReviewRound {
   changedLines: number;
   findingCount: number;
   reviewerFindings: NdjsonCompanionAcceptedFinding[];
-  reviewerUpdates: NdjsonCompanionAcceptedUpdate[];
   moderator?: NdjsonCompanionModeratorAudit;
   acceptedFindings: NdjsonCompanionAcceptedFinding[];
-  acceptedUpdates: NdjsonCompanionAcceptedUpdate[];
   zeroReason?: NdjsonCompanionZeroReason;
   runPathNamespace?: string[];
   timestamp: string;
@@ -224,7 +222,7 @@ export interface NdjsonCompanionQueueCoalesced {
   timestamp: string;
 }
 
-export type NdjsonCompanionCallPurpose = 'selector' | 'reviewer' | 'moderator' | 'judge';
+export type NdjsonCompanionCallPurpose = 'selector' | 'reviewer' | 'moderator';
 export type NdjsonCompanionCallStatus = 'completed' | 'failed';
 
 export interface NdjsonCompanionUsage {
@@ -267,16 +265,11 @@ export interface NdjsonCompanionCall {
 
 export type NdjsonCompanionZeroReason =
   | 'reviewer_returned_no_findings'
-  | 'moderator_not_invoked_for_empty_reviewer_result'
-  | 'moderator_rejected_or_merged_all_findings'
-  | 'no_new_finding_records';
+  | 'moderator_rejected_all_findings';
 
 export interface NdjsonCompanionModeratorDecision {
-  action: 'accept' | 'reject' | 'merge' | 'downgrade';
+  action: 'accept' | 'reject';
   sourceIndex: number;
-  severity?: 'must_fix' | 'should_fix' | 'nit';
-  finding?: string;
-  targetId?: string;
 }
 
 export interface NdjsonCompanionModeratorAudit {
@@ -291,11 +284,6 @@ export interface NdjsonCompanionAcceptedFinding {
   file: string;
   line: number;
   finding: string;
-}
-
-export interface NdjsonCompanionAcceptedUpdate {
-  id: string;
-  status: 'resolved' | 'unresolved' | 'wontfix_accepted';
 }
 
 export type NdjsonCompanionReviewPhase = 'initial' | 'live' | 'fix' | 'completion';

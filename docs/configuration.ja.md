@@ -568,17 +568,19 @@ steps:
 1. `~/.takt/runtime.yaml`
 2. `<project>/.takt/runtime.yaml`
 
-companion reviewer は既定で有効です。無効化する場合は、トップレベルの
+companion reviewer は既定で無効です。有効化する場合は、トップレベルの
 `companion.enabled` を設定します。
 
 ```yaml
 version: 1
 companion:
-  enabled: false
+  enabled: true
 ```
 
-global と project の値は論理積で合成されるため、global 側で無効化した companion を
-project 側の `true` で再有効化することはできません。
+global と project の両方にポリシーがある場合、その値は論理積で合成されるため、global
+側で無効化した companion を project 側の `true` で再有効化することはできません。
+レイヤー合成時に未指定のポリシーは中立として扱い、両方とも未指定なら companion は
+無効のままです。
 
 companion の provider target（`targets.companions`）とプロバイダ能力要件が適用されるのは
 companion が有効な間だけです。無効時も companion 宣言と `targets.companions` の構造検証は
@@ -1202,7 +1204,7 @@ provider:
         profile: review
 ```
 
-Companion の structured call は、他の TAKT 所有 structured agent と同じ provider-neutral な fresh-session transport を使います。native structured output 対応 provider ではそれを使い、それ以外では検証付き JSON fallback を使います。解決された profile の capabilities と permission mode をそのまま適用し、Companion 専用の追加制約は加えません。
+Companion の structured call は、他の TAKT 所有 structured agent と同じ provider-neutral な fresh-session transport を使います。native structured output 対応 provider ではそれを使い、それ以外では検証付き JSON fallback を使います。Companion reviewer、moderator、selector の呼び出しは常に `readonly` permission mode で実行し、解決された profile に設定された permission mode は適用しません。
 
 | Provider | 実装エージェントの tool event |
 |---|---:|
@@ -1215,4 +1217,4 @@ Companion の structured call は、他の TAKT 所有 structured agent と同�
 | `pi` | ライブ |
 | `cursor`、`copilot`、`kiro` | 利用不可 |
 
-ライブの tool event がない場合も、完了レビューと同一 session の修正ループは動作します。
+ライブの tool event がない場合も、完了レビューとターン境界での指摘配達は動作します。

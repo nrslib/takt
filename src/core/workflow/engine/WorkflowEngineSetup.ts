@@ -2,6 +2,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { StructuredCaller } from '../../../agents/structured-caller.js';
 import { createLogger } from '../../../shared/utils/index.js';
+import { DEFAULT_COMPANION_ENABLED } from '../../../shared/constants.js';
 import type {
   AgentResponse,
   WorkflowConfig,
@@ -10,6 +11,7 @@ import type {
   WorkflowResumePointEntry,
   WorkflowState,
   WorkflowStep,
+  WorkflowWideRule,
 } from '../../models/types.js';
 import { prepareRuntimeEnvironment } from '../../runtime/runtime-environment.js';
 import type { RunPaths } from '../run/run-paths.js';
@@ -48,7 +50,6 @@ import {
 } from '../workflow-call-invocation-index.js';
 import { SelectorInputReader } from '../dynamic-parallel/selector-input-reader.js';
 import { restoreWorkflowStepParticipationIndex } from '../workflow-step-participation-index.js';
-import { CompanionReviewAuthority } from '../companion/review-state-store.js';
 import {
   createWorkflowStepAbortSignalContext,
   recordWorkflowStepProviderActivity,
@@ -141,7 +142,6 @@ export function createSharedRuntime(
     dynamicFacetSelectionStore: new DynamicFacetSelectionStore(new Map()),
     workflowCallInvocationEvidence: restoreWorkflowCallInvocationEvidence(resumePoint),
     workflowStepParticipationIndex: restoreWorkflowStepParticipationIndex(resumePoint),
-    companionReviewAuthority: new CompanionReviewAuthority(),
   };
 }
 
@@ -249,11 +249,11 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       ? {}
       : { inputReader: new SelectorInputReader(params.options.selectorGitCommandRunner) }),
   });
-  const companionReviewAuthority = params.sharedRuntime.companionReviewAuthority;
-  if (companionReviewAuthority === undefined) {
-    throw new Error('Companion review authority is missing from shared workflow runtime');
-  }
-  const companionEnabled = params.options.companionEnabled ?? true;
+  const companionEnabled = params.options.companionEnabled ?? DEFAULT_COMPANION_ENABLED;
+  const workflowRules: readonly WorkflowWideRule[] = [
+    ...(params.options.inheritedWorkflowRules ?? []),
+    ...(params.config.allStepsRules ?? []),
+  ];
 
   const stepExecutor = new StepExecutor({
     optionsBuilder,
@@ -268,6 +268,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getWorkflowName: () => params.config.name,
     getTask: () => params.task,
     getWorkflowDescription: () => params.config.description,
+    getWorkflowRules: () => workflowRules,
     getWorkflowCallVars: () => params.options.workflowCallVars,
     getRetryNote: () => params.options.retryNote,
     getPrContext: () => params.options.prContext,
@@ -292,7 +293,6 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     companionProviders: params.options.companionProviders,
     companionSelectorProvider: params.options.selectorProvider,
     companionDiffReader: params.options.companionDiffReader,
-    companionReviewAuthority,
     ...phaseRelay,
     getFacetPool: (name: string) => params.config.facetPools?.[name],
     dynamicFacetSelectorCoordinator: dynamicFacetSelector,
@@ -388,6 +388,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     stepExecutor,
     getCwd: params.getCwd,
     getWorkflowName: () => params.config.name,
+    getWorkflowRules: () => workflowRules,
     getInteractive: () => params.options.interactive === true,
     childProcessEnv: params.options.childProcessEnv,
     observabilityEnabled: params.options.observability?.enabled === true,

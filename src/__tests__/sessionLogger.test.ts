@@ -43,9 +43,7 @@ describe('SessionLogger', () => {
       changedLines: 12,
       findingCount: 0,
       reviewerFindings: [],
-      reviewerUpdates: [],
       acceptedFindings: [],
-      acceptedUpdates: [],
     });
     logger.onCompanionQueueCoalesced({
       step: 'implement',
@@ -109,7 +107,6 @@ describe('SessionLogger', () => {
         content: 'review response',
         structuredOutput: {
           findings: [{ severity: 'must_fix', file: 'src/a.ts', line: 1, finding: 'candidate' }],
-          updates: [],
           apiKey: 'sk-companion-actual-secret',
           nested: { accessToken: 'nested-access-token-value' },
         },
@@ -130,7 +127,6 @@ describe('SessionLogger', () => {
         line: 1,
         finding: 'candidate',
       }],
-      reviewerUpdates: [],
       moderator: {
         name: 'moderator',
         invoked: true,
@@ -142,7 +138,6 @@ describe('SessionLogger', () => {
         line: 1,
         finding: 'candidate',
       }],
-      acceptedUpdates: [],
       findingCount: 1,
     });
     logger.onCompanionReviewSkipped({

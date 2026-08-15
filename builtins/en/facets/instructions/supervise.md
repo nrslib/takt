@@ -7,7 +7,7 @@ Determine requirement fulfillment, resolution of preceding findings, and recurre
 2. Read statements in preceding reports as supporting material, and prefer current code when they conflict
 3. Map each preceding finding to its original acceptance criteria and determine whether it is resolved
 4. Record the recurrence register from the current carry-forward source in this Report Directory under the invariant-recurrence rules
-5. Select APPROVE when every requirement is fulfilled and every preceding finding is resolved
+5. Select APPROVE when every requirement is fulfilled, every preceding finding is resolved, and the recurrence register is carried forward under the invariant-recurrence rules
 6. Select REJECT when a requirement is unfulfilled or a finding remains unresolved, and record its actionable family, acceptance criteria, and narrow remediation boundary
 7. Select BLOCKED only when current code and preceding reports cannot decide a requirement and task-scope code changes cannot provide the required external decision or information
 

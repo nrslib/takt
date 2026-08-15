@@ -262,13 +262,6 @@ function resolveFailureStepForRequeueNote(
   return undefined;
 }
 
-function requireFailedStepForRequeueNote(failedStep: string | undefined): string {
-  if (!failedStep) {
-    throw new Error('Failed task step name could not be resolved for auto requeue note.');
-  }
-  return failedStep;
-}
-
 function resolveWorktreePath(task: TaskListItem): string {
   if (!task.worktreePath) {
     throw new Error(`Worktree path is not set for task: ${task.name}`);
@@ -370,7 +363,7 @@ export async function requeueFailedTask(
     task.data?.retry_note,
     buildAutoRequeueNote({
       ...selection.failure,
-      step: requireFailedStepForRequeueNote(selection.failedStep),
+      step: selection.failedStep,
     }),
   );
   const runner = new TaskRunner(projectDir);

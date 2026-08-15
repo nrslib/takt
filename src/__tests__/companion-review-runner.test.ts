@@ -1,10 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentResponse } from '../core/models/index.js';
+import { executeStructuredAgent } from '../agents/structured-caller/transport.js';
 import { executeCompanionStructuredAgent } from '../core/workflow/companion/review-runner.js';
+import { CompanionStructuredCaller } from '../core/workflow/companion/structured-call.js';
 import {
   AGENT_FAILURE_CATEGORIES,
   createProviderStreamParseError,
 } from '../shared/types/agent-failure.js';
+
+vi.mock('../agents/structured-caller/transport.js', () => ({
+  executeStructuredAgent: vi.fn(),
+}));
 
 function response(status: AgentResponse['status']): AgentResponse {
   return {
@@ -12,7 +18,7 @@ function response(status: AgentResponse['status']): AgentResponse {
     status,
     content: status === 'done' ? 'reviewed' : 'failed',
     timestamp: new Date('2026-08-08T00:00:00.000Z'),
-    structuredOutput: { findings: [], updates: [] },
+    structuredOutput: { findings: [], notes: null },
     providerUsage: {
       inputTokens: 20,
       outputTokens: 10,
@@ -23,7 +29,7 @@ function response(status: AgentResponse['status']): AgentResponse {
 }
 
 describe('CT-COMP-06 and CT-COMP-11 structured internal agent execution', () => {
-  it.each(['selector', 'reviewer', 'moderator', 'judge'] as const)(
+  it.each(['selector', 'reviewer', 'moderator'] as const)(
     'should execute %s with its resolved runtime profile and record successful usage',
     async (purpose) => {
       const call = vi.fn().mockResolvedValue(response('done'));
@@ -65,6 +71,45 @@ describe('CT-COMP-06 and CT-COMP-11 structured internal agent execution', () => 
         success: true,
         usage: expect.objectContaining({ totalTokens: 30 }),
       }));
+    },
+  );
+
+  it.each(['selector', 'reviewer', 'moderator'] as const)(
+    'forces %s transport calls to readonly',
+    async (purpose) => {
+      const execute = vi.mocked(executeStructuredAgent);
+      execute.mockClear();
+      execute.mockResolvedValue(response('done'));
+      const caller = new CompanionStructuredCaller({
+        cwd: '/worktree',
+        projectCwd: '/project',
+        failureDir: '/project/.takt/runs/run/failures',
+        language: 'en',
+        buildProviderCallCallbacks: () => ({ finish: vi.fn() }),
+        recordUsage: vi.fn(),
+        recordCall: vi.fn(),
+      });
+
+      await caller.call({
+        purpose,
+        agentName: purpose === 'reviewer' ? 'security-reviewer' : `companion-${purpose}`,
+        provider: {
+          provider: 'mock',
+          model: 'mock-model',
+          permissionMode: 'full',
+        },
+        systemPrompt: 'system',
+        prompt: 'prompt',
+        outputSchema: { type: 'object' },
+      });
+
+      expect(execute.mock.calls[0]?.[2]).toMatchObject({
+        resolution: {
+          provider: 'mock',
+          model: 'mock-model',
+          permissionMode: 'readonly',
+        },
+      });
     },
   );
 
@@ -115,7 +160,7 @@ describe('CT-COMP-06 and CT-COMP-11 structured internal agent execution', () => 
       promptResolved: true,
       response: expect.objectContaining({
         sessionId: 'provider-session-1',
-        structuredOutput: { findings: [], updates: [] },
+        structuredOutput: { findings: [], notes: null },
       }),
     }));
   });
@@ -387,8 +432,8 @@ describe('CT-COMP-06 and CT-COMP-11 structured internal agent execution', () => 
       .mockImplementationOnce(() => undefined);
 
     const result = await executeCompanionStructuredAgent({
-      purpose: 'judge',
-      agentName: 'companion-judge',
+      purpose: 'moderator',
+      agentName: 'companion-moderator',
       systemPrompt: 'system',
       prompt: 'prompt',
       outputSchema: { type: 'object' },
@@ -406,12 +451,12 @@ describe('CT-COMP-06 and CT-COMP-11 structured internal agent execution', () => 
     expect(call).toHaveBeenCalledTimes(2);
     expect(validateResponse).toHaveBeenCalledTimes(2);
     expect(recordUsage).toHaveBeenNthCalledWith(1, expect.objectContaining({
-      purpose: 'judge',
+      purpose: 'moderator',
       success: false,
       usage: expect.objectContaining({ totalTokens: 30 }),
     }));
     expect(recordUsage).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      purpose: 'judge',
+      purpose: 'moderator',
       success: true,
       usage: expect.objectContaining({ totalTokens: 30 }),
     }));

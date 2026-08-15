@@ -29,14 +29,14 @@ function adjudicationOutput(): string {
     '',
     '## Finding Dispositions',
     '',
-    '| Finding ID | Disposition | Target family | Evidence |',
-    '|------------|-------------|---------------|----------|',
-    `| ${findings.code} | actionable | FAM-channel-normalization | The confirmed DRY defect remains actionable; the reviewer-suggested transaction is out of scope. |`,
-    `| ${findings.architecture} | duplicate | FAM-channel-normalization | Same responsibility-boundary defect; atomicity has no requirement and is not adopted. |`,
-    `| ${findings.horizontal} | out_of_scope | none | The duplication is technically valid but belongs to an unchanged neighboring contract. |`,
-    `| ${findings.testing} | out_of_scope | none | README variation coverage is unrelated to the changed execution path. |`,
-    `| ${findings.security} | false_positive | none | Current code contains no secret leak. |`,
-    `| ${findings.antipattern} | environment_unverified | none | The environment-only proof cannot establish an implementation defect. |`,
+    '| Finding ID / source | Technical validity | Disposition | Target family | Reason to change from the same cause | Authorization basis | Reason absent from initial round | Evidence |',
+    '|---------------------|--------------------|-------------|---------------|--------------------------------------|---------------------|----------------------------------|----------|',
+    `| ${findings.code} | Confirmed | actionable | FAM-channel-normalization | Every execution path must use the shared channel normalization boundary. | direct_acceptance_criterion_violation | not applicable | The confirmed DRY defect remains actionable; the reviewer-suggested transaction is out of scope. |`,
+    `| ${findings.architecture} | Confirmed | duplicate | FAM-channel-normalization | Every execution path must use the shared channel normalization boundary. | direct_acceptance_criterion_violation | not applicable | Same responsibility-boundary defect; atomicity has no requirement and is not adopted. |`,
+    `| ${findings.horizontal} | Confirmed | out_of_scope | none | Build labels change independently from channel normalization. | none | not applicable | The duplication is technically valid but belongs to an unchanged neighboring contract. |`,
+    `| ${findings.testing} | Confirmed | out_of_scope | none | README examples change independently from the execution contract. | none | not applicable | README variation coverage is unrelated to the changed execution path. |`,
+    `| ${findings.security} | Disproved | false_positive | none | not applicable | none | not applicable | Current code contains no secret leak. |`,
+    `| ${findings.antipattern} | Unverified | environment_unverified | none | not applicable | none | not applicable | The environment-only proof cannot establish an implementation defect. |`,
   ].join('\n');
 }
 
@@ -46,14 +46,14 @@ function compactJapaneseAdjudicationOutput(): string {
     '',
     '修正対象は1 familyです。',
     '',
-    '| Finding ID | 裁定 | 統合先／理由 |',
-    '|---|---|---|',
-    `| ${findings.code} | actionable | F-CHANNEL-NORMALIZATION。代表 finding |`,
-    `| ${findings.architecture} | duplicate | F-CHANNEL-NORMALIZATION。同じ根本原因へ統合し、transaction方式は不採用 |`,
-    `| ${findings.horizontal} | out_of_scope | 別契約の技術的に妥当な重複だが修正権限なし |`,
-    `| ${findings.testing} | out_of_scope | 文書の全パターン列挙は変更の正しさと無関係 |`,
-    `| ${findings.security} | false_positive | 現コードは秘密値を出力しない |`,
-    `| ${findings.antipattern} | out_of_scope | Windows証跡は要求されていない |`,
+    '| finding ID / 出典 | 技術的妥当性 | 裁定 | 対象 family | 同じ原因で変更される理由 | authorization basis | 初回に含まれなかった理由 | 根拠 |',
+    '|---|---|---|---|---|---|---|---|',
+    `| ${findings.code} | 確認済み | actionable | F-CHANNEL-NORMALIZATION | 全実行経路を共通の正規化境界へ揃える | direct_acceptance_criterion_violation | 該当なし | 代表 finding |`,
+    `| ${findings.architecture} | 確認済み | duplicate | F-CHANNEL-NORMALIZATION | 全実行経路を共通の正規化境界へ揃える | direct_acceptance_criterion_violation | 該当なし | 同じ根本原因へ統合し、transaction方式は不採用 |`,
+    `| ${findings.horizontal} | 確認済み | out_of_scope | なし | build label は channel 正規化とは別の理由で変更される | なし | 該当なし | 別契約の技術的に妥当な重複だが修正権限なし |`,
+    `| ${findings.testing} | 確認済み | out_of_scope | なし | 文書例は実行契約とは別の理由で変更される | なし | 該当なし | 文書の全パターン列挙は変更の正しさと無関係 |`,
+    `| ${findings.security} | 反証済み | false_positive | なし | 該当なし | なし | 該当なし | 現コードは秘密値を出力しない |`,
+    `| ${findings.antipattern} | 未確認 | out_of_scope | なし | 該当なし | なし | 該当なし | Windows証跡は要求されていない |`,
     '',
     '### Actionable family: `channel-normalization`',
     '',
@@ -71,6 +71,37 @@ function compactJapaneseAdjudicationOutput(): string {
   ].join('\n');
 }
 
+function currentFamilyMergeOutput(): string {
+  return [
+    '裁定結果は「修正対象あり」です。次工程へ渡す正本は1 familyです。',
+    '',
+    '## 修正対象 family',
+    '',
+    '- Family ID: `FAM-channel-normalization`',
+    '- 不変条件: accepted `local` / `cloud` strings are normalized once and retained by every execution path.',
+    '- 担当箇所: `normalizeChannel` in `src/channel.js`',
+    '- 権限根拠: `direct_acceptance_criterion_violation`',
+    '- 現在の違反: execution.js が独自に raw 値を検証・保持するため、" LOCAL " など要求上有効な入力を拒否する。',
+    '- 受入条件:',
+    '  - 大小文字と周辺空白を無視して `local` / `cloud` を受理する。',
+    '  - execution object には必ず正規化済みの小文字値を保持する。',
+    '  - その他の値は execution 作成前に失敗する。',
+    '  - legacy alias は追加しない。',
+    '- 修正境界: buildExecution を既存の normalizeChannel へ配線し、返された値を保持する。transaction、rollback は含めない。',
+    '',
+    '## 指摘ごとの裁定',
+    '',
+    '| finding ID / 出典 | 技術的妥当性 | 裁定 | 対象 family | 同じ原因で変更される理由 | authorization basis | 初回に含まれなかった理由 | 根拠 |',
+    '|---|---|---|---|---|---|---|---|',
+    `| ${findings.code} | 確認済み | actionable | FAM-channel-normalization | 全実行経路を共通の正規化境界へ揃える | direct_acceptance_criterion_violation | 該当なし | 上記 family。" LOCAL " が現在の execution 経路で拒否される直接違反。 |`,
+    `| ${findings.architecture} | 確認済み | duplicate | FAM-channel-normalization | 全実行経路を共通の正規化境界へ揃える | direct_acceptance_criterion_violation | 該当なし | 同じ担当箇所・不変条件・根本原因。FAM-channel-normalization へ統合。transaction 提案は過剰方式として不採用。 |`,
+    `| ${findings.horizontal} | 確認済み | out_of_scope | なし | build label は channel 正規化とは別の理由で変更される | なし | 該当なし | 重複実装は確認できるが、channel 契約とは owner・不変条件・変更理由が異なり、修正権限がない。 |`,
+    `| ${findings.testing} | 確認済み | out_of_scope | なし | 文書例は実行契約とは別の理由で変更される | なし | 該当なし | 全表記の文書列挙は受入条件でも必須 consumer migration でもない。 |`,
+    `| ${findings.security} | 反証済み | false_positive | なし | 該当なし | なし | 該当なし | エラーは固定文字列で、raw 値を含まない。 |`,
+    `| ${findings.antipattern} | 反証済み | overreach | なし | 該当なし | なし | 該当なし | Windows 実行を要求する契約も実装欠陥の証拠もない。 |`,
+  ].join('\n');
+}
+
 function withSourceFindingsTable(output: string, sourceFindings: string): string {
   return output.replace(
     '### FAM-channel-normalization',
@@ -82,6 +113,15 @@ function withSourceFindingsTable(output: string, sourceFindings: string): string
       '### FAM-channel-normalization',
     ].join('\n'),
   );
+}
+
+function withoutDispositionField(output: string, findingId: string, columnIndex: number): string {
+  return output.split('\n').map((line) => {
+    if (!line.includes(`| ${findingId} |`)) return line;
+    const cells = line.split('|');
+    cells[columnIndex + 1] = ' ';
+    return cells.join('|');
+  }).join('\n');
 }
 
 describe('review adjudication assertion', () => {
@@ -164,16 +204,46 @@ describe('review adjudication assertion', () => {
 
   it('accepts a generic adjudication detail column containing family and evidence', () => {
     const output = compactJapaneseAdjudicationOutput()
-      .replace('統合先／理由', '裁定')
+      .replace('| 根拠 |', '| 裁定詳細 |')
       .replace(
         '- " LOCAL " は "local"、"Cloud" は "cloud" として受理する。',
         '- `local`、`LOCAL`、" local " は `local` として受理する。\n- `cloud`、`CLOUD`、" cloud " は `cloud` として受理する。',
       )
       .replace('不正値は即座に例外とする。', 'local / cloud 以外は実行オブジェクト生成前に失敗する。');
-    expect(output).toContain('| Finding ID | 裁定 | 裁定 |');
+    expect(output).toContain('| 初回に含まれなかった理由 | 裁定詳細 |');
 
     const result = assertReviewAdjudication(output);
 
     expect(result.pass, result.reason).toBe(true);
+  });
+
+  it.each([
+    ['Technical validity', findings.code, 1, 'technical-validity-present'],
+    ['Reason to change from the same cause', findings.architecture, 4, 'reason-to-change-present'],
+    ['Authorization basis', findings.horizontal, 5, 'authorization-basis-present'],
+    ['Reason absent from initial round', findings.antipattern, 6, 'reason-absent-present'],
+  ] as const)('rejects a disposition row missing %s', (_field, findingId, columnIndex, failedCheck) => {
+    const output = withoutDispositionField(adjudicationOutput(), findingId, columnIndex);
+    const result = assertReviewAdjudication(output);
+
+    expect(result.pass).toBe(false);
+    expect(result.reason).toContain(failedCheck);
+  });
+
+  it('accepts a compact family merger expressed through the actionable family and disposition rationale', () => {
+    const result = assertReviewAdjudication(currentFamilyMergeOutput());
+
+    expect(result.pass, result.reason).toBe(true);
+  });
+
+  it('rejects a compact merger when the duplicate targets a different family', () => {
+    const output = currentFamilyMergeOutput().replace(
+      `| ${findings.architecture} | 確認済み | duplicate | FAM-channel-normalization |`,
+      `| ${findings.architecture} | 確認済み | duplicate | FAM-other-channel-contract |`,
+    );
+    const result = assertReviewAdjudication(output);
+
+    expect(result.pass).toBe(false);
+    expect(result.reason).toContain('same-actionable-family');
   });
 });

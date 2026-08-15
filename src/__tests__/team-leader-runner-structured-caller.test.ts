@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RuntimeStepResolution } from '../core/workflow/types.js';
-import type { WorkflowStepInactivityDeadline, WorkflowStepExecutionDeadlineContext } from '../core/workflow/engine/step-deadline.js';
+import {
+  createWorkflowStepAbortSignalContext,
+  type WorkflowStepInactivityDeadline,
+  type WorkflowStepExecutionDeadlineContext,
+} from '../core/workflow/engine/step-deadline.js';
 import {
   requestValidTeamLeaderDecomposition,
   TeamLeaderDecompositionValidationError,
@@ -60,7 +64,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     mockRunWithPhaseSpan.mockImplementation(async (_params, execute) => execute());
   });
 
-  it('should delegate decomposition and feedback to structuredCaller instead of legacy usecases', async () => {
+  it('should delegate decomposition and route provider tool activity through the leader deadline', async () => {
     mockExecuteAgent.mockResolvedValue({
       persona: 'coder',
       status: 'done',
@@ -80,6 +84,14 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         options.onPromptResolved?.({
           systemPrompt: 'team-leader-system',
           userInstruction: 'leader instruction',
+        });
+        options.onStream?.({
+          type: 'tool_use',
+          data: { tool: 'Read', input: {}, id: 'leader-tool-1' },
+        });
+        options.onStream?.({
+          type: 'tool_result',
+          data: { id: 'leader-tool-1', content: 'done', isError: false },
         });
         return { parts: [
           { id: 'part-1', title: 'API', instruction: 'Implement API' },
@@ -103,6 +115,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     const leaderAbortController = new AbortController();
     const leaderOnStream = vi.fn();
     const leaderOnActivity = vi.fn();
+    const deadlineContext = createWorkflowStepAbortSignalContext(undefined);
     const leaderDeadline: WorkflowStepInactivityDeadline = {
       signal: leaderAbortController.signal,
       recordActivity: vi.fn(),
@@ -118,8 +131,26 @@ describe('TeamLeaderRunner with structuredCaller', () => {
             dispose: vi.fn(),
             inactivityTimeoutMs: 60_000,
           }),
-      runWith: vi.fn(async (_deadline, operation) => operation()),
+      runWith: vi.fn((deadline, operation) => deadlineContext.runWith(deadline, operation)),
     };
+    const providerStreamBuilder = new OptionsBuilder(
+      { projectCwd: '/tmp/project', provider: 'opencode' },
+      () => '/tmp/project',
+      () => '/tmp/project',
+      () => undefined,
+      () => '/tmp/project/.takt/runs/sample/reports',
+      () => 'ja',
+      () => [{ name: 'implement' }],
+      () => 'workflow',
+      () => undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      deadlineContext.getAbortSignal,
+      deadlineContext.recordActivity,
+    );
+    let leaderProviderStream: ReturnType<OptionsBuilder['buildProviderStream']> = undefined;
     const buildInstruction = vi.fn(buildLeaderOrMemberInstruction);
 
     const runner = new TeamLeaderRunner({
@@ -128,10 +159,18 @@ describe('TeamLeaderRunner with structuredCaller', () => {
           cwd: '/tmp/project',
           failureDir: '/tmp/project/.takt/runs/sample/failures',
         }),
-        buildBaseOptions: vi.fn().mockReturnValue({
-          failureDir: '/tmp/project/.takt/runs/sample/failures',
-          onStream: leaderOnStream,
-          onActivity: leaderOnActivity,
+        buildBaseOptions: vi.fn().mockImplementation((leaderStep: WorkflowStep) => {
+          leaderProviderStream = providerStreamBuilder.buildProviderStream(
+            leaderStep,
+            'opencode',
+            'opencode/zai-coding-plan/glm-5.1',
+            leaderOnStream,
+          );
+          return {
+            failureDir: '/tmp/project/.takt/runs/sample/failures',
+            onStream: leaderProviderStream,
+            onActivity: leaderOnActivity,
+          };
         }),
         buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
         resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
@@ -231,7 +270,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         resolvedProvider: 'opencode',
         failureDir: '/tmp/project/.takt/runs/sample/failures',
         abortSignal: leaderAbortController.signal,
-        onStream: leaderOnStream,
+        onStream: leaderProviderStream,
         onActivity: leaderOnActivity,
       }),
     );
@@ -254,10 +293,20 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         resolvedModel: 'opencode/zai-coding-plan/glm-5.1',
         resolvedProvider: 'opencode',
         failureDir: '/tmp/project/.takt/runs/sample/failures',
-        onStream: leaderOnStream,
+        onStream: leaderProviderStream,
         onActivity: leaderOnActivity,
       }),
     );
+    expect(leaderDeadline.recordActivity).toHaveBeenNthCalledWith(1, {
+      kind: 'tool_started',
+      executionUnitKey: 'implement',
+      toolCallKey: JSON.stringify(['implement', 'leader-tool-1']),
+    });
+    expect(leaderDeadline.recordActivity).toHaveBeenNthCalledWith(2, {
+      kind: 'tool_finished',
+      executionUnitKey: 'implement',
+      toolCallKey: JSON.stringify(['implement', 'leader-tool-1']),
+    });
     expect(feedbackAbortSignal).toBeDefined();
     leaderAbortController.abort(new Error('leader deadline reached'));
     expect(feedbackAbortSignal?.aborted).toBe(true);

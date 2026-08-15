@@ -46,6 +46,7 @@ import { resolveStepProviderModel } from '../provider-resolution.js';
 import { resolveDeterministicAutoRoutingProviderInfo, toAutoRoutingStepMetadata } from '../auto-routing/resolver.js';
 import { buildPhase1WorkflowMeta } from './workflow-meta.js';
 import {
+  captureWorkflowStepProviderActivity,
   recordWorkflowStepProviderActivity,
   recordWorkflowStepProviderEventActivity,
 } from './step-deadline.js';
@@ -182,12 +183,58 @@ export class OptionsBuilder {
     providerModel: string | undefined,
     output: StreamCallback | undefined,
   ): StreamCallback | undefined {
+    return this.buildProviderStreamForExecutionUnit(
+      step,
+      provider,
+      providerModel,
+      step.name,
+      output,
+      this.recordActivity,
+    );
+  }
+
+  buildProviderCallCallbacks(
+    step: WorkflowStep,
+    provider: ProviderType | undefined,
+    providerModel: string | undefined,
+    executionUnitKey: string,
+  ): Pick<RunAgentOptions, 'onStream' | 'onActivity'> & { finish: () => void } {
+    const recordActivity = captureWorkflowStepProviderActivity(this.recordActivity);
+    return {
+      onStream: this.buildProviderStreamForExecutionUnit(
+        step,
+        provider,
+        providerModel,
+        executionUnitKey,
+        this.engineOptions.onStream,
+        recordActivity,
+      ),
+      onActivity: (activity) => recordWorkflowStepProviderActivity(
+        recordActivity,
+        executionUnitKey,
+        activity,
+      ),
+      finish: () => recordActivity({
+        kind: 'execution_unit_finished',
+        executionUnitKey,
+      }),
+    };
+  }
+
+  private buildProviderStreamForExecutionUnit(
+    step: WorkflowStep,
+    provider: ProviderType | undefined,
+    providerModel: string | undefined,
+    executionUnitKey: string,
+    output: StreamCallback | undefined,
+    recordActivity: ProviderActivityCallback,
+  ): StreamCallback | undefined {
     const onProviderStream = this.engineOptions.onProviderStream;
     if (onProviderStream && !provider) {
       throw new Error(`Step "${step.name}" has no resolved provider for provider event logging`);
     }
     return (event): void => {
-      recordWorkflowStepProviderEventActivity(this.recordActivity, step.name, event);
+      recordWorkflowStepProviderEventActivity(recordActivity, executionUnitKey, event);
       if (onProviderStream && provider) {
         onProviderStream({
           step: step.name,

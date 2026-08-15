@@ -22,6 +22,16 @@ const PROJECT_SOURCE_GAP_PATTERNS = [
   /\|\s*\*{0,2}(?:unmet|unfulfilled|not (?:fulfilled|satisfied)|未充足)\*{0,2}\s*\|/i,
 ];
 const MACHINE_GATE_RECORD_PATTERN = /(?:\b(?:test|build|execution|quality[- ]?gate|mock e2e)\b.{0,40}\b(?:evidence|logs?|results?|records?)\b|(?:テスト|ビルド|実行|品質ゲート).{0,40}(?:証跡|ログ|結果|記録))/i;
+const MACHINE_GATE_RECORD_GAP_PATTERN = /(?:\b(?:missing|absent|lack(?:s|ing)?|required|needed|must|should|not (?:present|provided|recorded|available))\b|(?:不足|欠落|存在しない|提供されていない|記録されていない|必要|要求))/i;
+const MACHINE_GATE_RECORD_NOT_REQUIRED_PATTERN = /(?:\b(?:not|no longer)\s+(?:required|needed)\b|\bdo(?:es)?\s+not\s+(?:require|need)\b|(?:不要|必要(?:は|が)?ない|要求(?:・審査)?しない|なくてよい))/i;
+
+function hasMachineGateRecordRequirement(output) {
+  return output
+    .split(/\r?\n|[.!?。！？](?:\s+|$)/u)
+    .some((context) => MACHINE_GATE_RECORD_PATTERN.test(context)
+      && MACHINE_GATE_RECORD_GAP_PATTERN.test(context)
+      && !MACHINE_GATE_RECORD_NOT_REQUIRED_PATTERN.test(context));
+}
 
 function hasProjectSourceGap(output) {
   return output
@@ -29,7 +39,7 @@ function hasProjectSourceGap(output) {
     .some((context) => PROJECT_CONFIGURATION_PATTERN.test(context)
       && PROJECT_SOURCE_PATTERN.test(context)
       && PROJECT_SOURCE_GAP_PATTERNS.some((pattern) => pattern.test(context))
-      && !MACHINE_GATE_RECORD_PATTERN.test(context));
+      && !hasMachineGateRecordRequirement(context));
 }
 
 function hasFinalDecision(output, decision) {
@@ -42,7 +52,7 @@ export default function assertFinalReadinessRequirementGap(output) {
   const checks = [
     ['reject', hasFinalDecision(reviewOutput, 'REJECT')],
     ['project-source-gap', hasProjectSourceGap(reviewOutput)],
-    ['no-machine-gate-record-review', !MACHINE_GATE_RECORD_PATTERN.test(reviewOutput)],
+    ['no-machine-gate-record-review', !hasMachineGateRecordRequirement(reviewOutput)],
     ['not-approved', !hasFinalDecision(reviewOutput, 'APPROVE')],
   ];
   const failed = checks.filter(([, pass]) => !pass).map(([name]) => name);

@@ -137,7 +137,6 @@ export type WorkflowExecutionEvent =
       action: 'finding';
       step: string;
       companion: string;
-      findingId: string;
       severity: 'must_fix' | 'should_fix' | 'nit';
     }
   | {
@@ -145,14 +144,16 @@ export type WorkflowExecutionEvent =
       action: 'fix_round';
       step: string;
       sequence: number;
-      openMustFixCount: number;
+      findingCount: number;
     }
   | {
       type: 'companion';
       action: 'complete';
       step: string;
-      openMustFixCount: number;
-      escalated: boolean;
+      completionSettled: boolean;
+      completionFailure: boolean;
+      followUpRounds: number;
+      reason?: string;
     }
   | {
       type: 'companion';

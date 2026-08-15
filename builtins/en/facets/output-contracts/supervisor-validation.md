@@ -16,21 +16,21 @@
 | {ID and report name} | {Original finding acceptance criteria} | {Resolved / Unresolved / false_positive / overreach} | {Current-code file:line or a statement in a preceding report} |
 
 ## Actionable Families
-| family | Finding ID / source | Authorization basis | Evidence | Problem -> root cause | Affected contract paths | Acceptance criteria | Remediation boundary |
-|--------|---------------------|---------------------|----------|-----------------------|-------------------------|---------------------|----------------------|
-| {Stable family name} | {All IDs and report names} | {Direct acceptance-criterion violation / regression introduced by this diff / required consumer migration / accepted-family closure} | {file:line or a statement in a preceding report} | {Verified causal chain} | {Actual contract paths} | {Observable completion conditions} | {Required minimal change and explicitly excluded scope} |
+| family | Responsible source | Observable invariant | Reason to change from the same cause | Finding ID / source | Authorization basis | Evidence | Problem -> root cause | Added path | Affected contract paths | Acceptance criteria | Remediation boundary |
+|--------|--------------------|----------------------|--------------------------------------|---------------------|---------------------|----------|-----------------------|------------|-------------------------|---------------------|----------------------|
+| {Stable family name} | {Single responsibility and source that defines the invariant and guarantees it holds} | {Condition to preserve} | {Why the paths need to change for the same cause} | {All IDs and report names} | {Direct acceptance-criterion violation / regression introduced by this diff / required consumer migration / accepted-family closure} | {file:line or a statement in a preceding report} | {Verified causal chain} | {New path checked in this review, or none} | {Actual contract paths} | {Observable completion conditions} | {Required minimal change and explicitly excluded scope} |
 
 ## Finding Dispositions
-| Finding ID / source | Technical validity | Disposition | Target family | Authorization basis | Reason absent from initial round | Evidence |
-|---------------------|--------------------|-------------|---------------|---------------------|----------------------------------|----------|
-| {ID and report name} | {Confirmed / Disproved / Unverified} | {actionable / duplicate / false_positive / overreach / out_of_scope / no_issue_after_verification / environment_unverified} | {Actionable family or none} | {Authorization basis or none} | {Required only for a new follow-up finding; otherwise not applicable} | {Current-code file:line or a statement in a preceding report} |
+| Finding ID / source | Technical validity | Disposition | Target family | Reason to change from the same cause | Rationale | Authorization basis | Reason absent from initial round | Evidence |
+|---------------------|--------------------|-------------|---------------|--------------------------------------|-----------|---------------------|----------------------------------|----------|
+| {ID and report name} | {Confirmed / Disproved / Unverified} | {actionable / duplicate / false_positive / overreach / out_of_scope / no_issue_after_verification / environment_unverified} | {Actionable family or none} | {Same reason as the target family, reason for keeping a separate family, or not applicable} | {Reason for merging into the target family, keeping a separate family, or not applicable} | {Authorization basis or none} | {Required only for a new follow-up finding; otherwise not applicable} | {Current-code file:line or a statement in a preceding report} |
 
 ## Reason the Decision Cannot Be Made (when BLOCKED)
 - {Requirement that current code and preceding reports cannot decide, required external decision or information, and why task-scope code changes cannot provide it}
 ```
 
 **Cognitive-load rules:**
-- Select APPROVE only when every requirement is fulfilled, every preceding finding is resolved, and the recurrence register has been carried forward
+- Select APPROVE only when every requirement is fulfilled, every preceding finding is resolved, and the recurrence register has been carried forward under the invariant-recurrence rules
 - Select REJECT only when an unfulfilled requirement or unresolved finding is recorded as an actionable family
 - Select BLOCKED only when current code and preceding reports cannot decide a requirement and task-scope code changes cannot provide the required external decision or information
 - Do not request or inspect machine-gate execution status, results, or logs, including tests and builds, and do not use their absence as a reason for REJECT or BLOCKED

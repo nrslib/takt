@@ -80,11 +80,12 @@ function mergeRuntimeProviderFiles(
   project: RuntimeProviderFile,
 ): RuntimeProviderFile {
   const provider = mergeProviderSections(global.provider, project.provider);
-  const companionEnabled = (global.companion?.enabled ?? true)
-    && (project.companion?.enabled ?? true);
   const companion = global.companion === undefined && project.companion === undefined
     ? undefined
-    : { enabled: companionEnabled };
+    : {
+        enabled: global.companion?.enabled !== false
+          && project.companion?.enabled !== false,
+      };
   return provider
     ? {
         version: RUNTIME_PROVIDER_VERSION,

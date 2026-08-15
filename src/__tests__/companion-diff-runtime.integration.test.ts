@@ -11,10 +11,7 @@ import {
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { NormalAgentWorkflowStep } from '../core/models/index.js';
-import { CompanionStepRuntime } from '../core/workflow/companion/step-runtime.js';
 import { GitCompanionDiffReader } from '../infra/task/companion-git-diff-reader.js';
-import { CompanionReviewStateStore } from '../core/workflow/companion/review-state-store.js';
 import type { CompanionDiff } from '../core/workflow/companion/diff-reader.js';
 
 const roots: string[] = [];
@@ -215,65 +212,6 @@ describe('CT-COMP-05 companion cumulative diff reader', () => {
     );
     expect(modeChanged.fileFingerprints['regular.txt']).toBe(first.fileFingerprints['regular.txt']);
     expect(modeChanged.fileFingerprints['link.txt']).toBe(first.fileFingerprints['link.txt']);
-  });
-
-  it('should initialize fixed companions once and compose the existing stream callback', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'takt-companion-runtime-'));
-    roots.push(root);
-    execFileSync('git', ['init'], { cwd: root });
-    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: root });
-    execFileSync('git', ['config', 'user.name', 'Test'], { cwd: root });
-    writeFileSync(join(root, 'tracked.txt'), 'baseline\n', 'utf8');
-    execFileSync('git', ['add', 'tracked.txt'], { cwd: root });
-    execFileSync('git', ['commit', '-m', 'baseline'], { cwd: root });
-    const emitEvent = vi.fn();
-    const existingStream = vi.fn();
-    const step = {
-      name: 'implement',
-      instruction: 'Implement',
-      companion: { fixed: ['security-reviewer'], pool: [] },
-      rules: [],
-    } as unknown as NormalAgentWorkflowStep;
-    const stateStore = new CompanionReviewStateStore();
-    const loadState = vi.spyOn(stateStore, 'get');
-    const runtime = await CompanionStepRuntime.create({
-      cwd: root,
-      projectCwd: root,
-      runSlug: 'run',
-      runPathNamespace: [],
-      language: 'en',
-      task: 'task',
-      step,
-      definitions: {
-        'security-reviewer': {
-          name: 'security-reviewer',
-          description: 'security',
-          instruction: 'review',
-          intervalMs: 60_000,
-        },
-      },
-      providers: { 'security-reviewer': { provider: 'mock' } },
-      diffReader: new GitCompanionDiffReader(),
-      stateStore,
-      emitEvent,
-      recordUsage: vi.fn(),
-    });
-    const options = runtime.composeOptions({ cwd: root, onStream: existingStream });
-    options.onStream?.({
-      type: 'tool_use',
-      data: { tool: 'Edit', input: { path: 'tracked.txt' }, id: 'tool-1' },
-    });
-    runtime.stop();
-
-    expect(existingStream).toHaveBeenCalledOnce();
-    expect(emitEvent).toHaveBeenCalledWith('companion:start', {
-      step: 'implement',
-      companion: 'security-reviewer',
-    });
-    expect(loadState).toHaveBeenCalledWith(
-      expect.stringContaining('security-reviewer.jsonl'),
-      'security-reviewer',
-    );
   });
 
   it('should return a bounded snapshot and stable full-content digest for an oversized untracked file', async () => {

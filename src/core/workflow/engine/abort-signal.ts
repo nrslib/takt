@@ -92,17 +92,22 @@ export function buildInactivityAbortSignal(
         : earliestToolStart + toolStaleTimeoutMs,
     );
   };
+  const clearExecutionUnitTools = (executionUnitKey: string): void => {
+    for (const [toolCallKey, tool] of inFlightTools) {
+      if (tool.executionUnitKey === executionUnitKey) {
+        inFlightTools.delete(toolCallKey);
+      }
+    }
+  };
   const applyActivity = (activity: ProviderActivityEvent | undefined): void => {
     if (activity?.kind === 'attempt_started') {
       if (activity.executionUnitKey === undefined) {
         inFlightTools.clear();
       } else {
-        for (const [toolCallKey, tool] of inFlightTools) {
-          if (tool.executionUnitKey === activity.executionUnitKey) {
-            inFlightTools.delete(toolCallKey);
-          }
-        }
+        clearExecutionUnitTools(activity.executionUnitKey);
       }
+    } else if (activity?.kind === 'execution_unit_finished') {
+      clearExecutionUnitTools(activity.executionUnitKey);
     } else if (activity?.kind === 'tool_started') {
       if (!inFlightTools.has(activity.toolCallKey)) {
         inFlightTools.set(activity.toolCallKey, {

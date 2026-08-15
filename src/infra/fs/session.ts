@@ -509,10 +509,8 @@ function requireCompanionReviewRoundFields(
   requireNdjsonInteger(record.changedLines, 'changedLines');
   requireNdjsonInteger(record.findingCount, 'findingCount');
   requireCompanionAcceptedFindings(record.reviewerFindings);
-  requireCompanionAcceptedUpdates(record.reviewerUpdates);
   requireOptionalCompanionModeratorAudit(record.moderator);
   requireCompanionAcceptedFindings(record.acceptedFindings);
-  requireCompanionAcceptedUpdates(record.acceptedUpdates);
   requireOptionalCompanionZeroReason(record.zeroReason);
   requireOptionalNdjsonStringArray(record.runPathNamespace, 'runPathNamespace');
   requireNdjsonString(record.timestamp, 'timestamp');
@@ -555,7 +553,6 @@ function requireCompanionCallFields(
     record.purpose !== 'selector'
     && record.purpose !== 'reviewer'
     && record.purpose !== 'moderator'
-    && record.purpose !== 'judge'
   ) {
     throw new Error('NDJSON companion call purpose is invalid');
   }
@@ -639,26 +636,6 @@ function requireCompanionAcceptedFindings(value: unknown): void {
   });
 }
 
-function requireCompanionAcceptedUpdates(value: unknown): void {
-  if (!Array.isArray(value)) {
-    throw new Error('NDJSON companion accepted updates must be an array');
-  }
-  value.forEach((update, index) => {
-    if (update === null || typeof update !== 'object' || Array.isArray(update)) {
-      throw new Error(`NDJSON companion accepted update[${index}] must be an object`);
-    }
-    const item = update as Record<string, unknown>;
-    requireNdjsonString(item.id, `acceptedUpdates[${index}].id`);
-    if (
-      item.status !== 'resolved'
-      && item.status !== 'unresolved'
-      && item.status !== 'wontfix_accepted'
-    ) {
-      throw new Error(`NDJSON companion accepted update[${index}] status is invalid`);
-    }
-  });
-}
-
 function requireOptionalCompanionModeratorAudit(value: unknown): void {
   if (value === undefined) return;
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
@@ -683,20 +660,10 @@ function requireOptionalCompanionModeratorAudit(value: unknown): void {
     if (
       item.action !== 'accept'
       && item.action !== 'reject'
-      && item.action !== 'merge'
-      && item.action !== 'downgrade'
     ) {
       throw new Error(`NDJSON companion moderator decision[${index}] action is invalid`);
     }
     requireNdjsonInteger(item.sourceIndex, `moderator.decisions[${index}].sourceIndex`);
-    if (item.severity !== undefined
-      && item.severity !== 'must_fix'
-      && item.severity !== 'should_fix'
-      && item.severity !== 'nit') {
-      throw new Error(`NDJSON companion moderator decision[${index}] severity is invalid`);
-    }
-    requireOptionalNdjsonString(item.finding, `moderator.decisions[${index}].finding`);
-    requireOptionalNdjsonString(item.targetId, `moderator.decisions[${index}].targetId`);
   });
 }
 
@@ -704,9 +671,7 @@ function requireOptionalCompanionZeroReason(value: unknown): void {
   if (value === undefined) return;
   if (
     value !== 'reviewer_returned_no_findings'
-    && value !== 'moderator_not_invoked_for_empty_reviewer_result'
-    && value !== 'moderator_rejected_or_merged_all_findings'
-    && value !== 'no_new_finding_records'
+    && value !== 'moderator_rejected_all_findings'
   ) {
     throw new Error('NDJSON companion zero reason is invalid');
   }

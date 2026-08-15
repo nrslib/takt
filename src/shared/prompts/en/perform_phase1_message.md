@@ -7,6 +7,8 @@
         hasReport, reportInfo, phaseNote, hasTaskSection, userRequest, hasPreviousResponse,
         previousResponse, hasUserInputs, userInputs, hasRetryNote, retryNote, hasPrContext, prContext, hasPolicy,
         policyContent, hasKnowledge, knowledgeContent, hasQualityGates, qualityGatesContent,
+        hasWorkflowRulesAfterExecution, workflowRulesNoticeAfterExecution, workflowRulesAfterExecution,
+        hasWorkflowRulesBeforeInstruction, workflowRulesNoticeBeforeInstruction, workflowRulesBeforeInstruction,
         instructions
   builder: InstructionBuilder
 -->
@@ -22,6 +24,9 @@
 {{/if}}
 - **Do NOT use `cd` in Bash commands.** Your working directory is already set correctly. Run commands directly without changing directories.
 {{#if editRule}}- {{editRule}}
+{{/if}}{{#if hasWorkflowRulesAfterExecution}}
+{{workflowRulesNoticeAfterExecution}}
+{{workflowRulesAfterExecution}}
 {{/if}}
 Note: This section is metadata. Follow the language used in the rest of the prompt.
 
@@ -85,7 +90,10 @@ Knowledge may be truncated. Always follow Source paths and read original files b
 {{/if}}
 
 ## Instructions
-{{instructions}}
+{{#if hasWorkflowRulesBeforeInstruction}}{{workflowRulesNoticeBeforeInstruction}}
+{{workflowRulesBeforeInstruction}}
+
+{{/if}}{{instructions}}
 {{#if hasQualityGates}}
 
 ## Quality Gates

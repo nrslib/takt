@@ -87,7 +87,7 @@ describe('CT-COMP-12 mock provider companion scenarios', () => {
       {
         persona: 'security-reviewer',
         content: 'review response',
-        structured_output: { findings: [], updates: [] },
+        structured_output: { findings: [], notes: null },
       },
     ]));
 
@@ -95,7 +95,7 @@ describe('CT-COMP-12 mock provider companion scenarios', () => {
     const coder = await callMock('coder', 'implement', { cwd });
 
     expect(review.content).toBe('review response');
-    expect(review.structuredOutput).toEqual({ findings: [], updates: [] });
+    expect(review.structuredOutput).toEqual({ findings: [], notes: null });
     expect(coder.content).toBe('coder response');
   });
 });

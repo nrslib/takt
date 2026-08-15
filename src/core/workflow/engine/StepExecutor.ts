@@ -16,6 +16,7 @@ import type {
   Language,
   FallbackContext,
   WorkflowConfig,
+  WorkflowWideRule,
   WorkflowResumePointEntry,
   NormalAgentWorkflowStep,
   ResolvedFacetPool,
@@ -99,10 +100,7 @@ import {
 import { buildCompanionMailboxDirectory } from '../companion/mailbox.js';
 import { runCompanionFixLoop } from '../companion/fix-loop.js';
 import { CompanionStepRuntime } from '../companion/step-runtime.js';
-import {
-  CompanionReviewStateStore,
-  type CompanionReviewAuthority,
-} from '../companion/review-state-store.js';
+import type { CompanionAgentPurpose } from '../companion/review-runner.js';
 import type { RunAgentOptions } from '../../../agents/types.js';
 import { isAbortError } from '../companion/abort.js';
 import {
@@ -149,6 +147,21 @@ function requireActiveCompanionState(
   return state.companion;
 }
 
+function buildCompanionExecutionUnitKey(input: {
+  readonly stepName: string;
+  readonly agentName: string;
+  readonly purpose: CompanionAgentPurpose;
+  readonly callSequence: number;
+}): string {
+  return JSON.stringify([
+    'companion',
+    input.stepName,
+    input.agentName,
+    input.purpose,
+    input.callSequence,
+  ]);
+}
+
 export interface StepExecutorDeps {
   readonly optionsBuilder: OptionsBuilder;
   readonly getCwd: () => string;
@@ -162,6 +175,7 @@ export interface StepExecutorDeps {
   readonly getWorkflowName: () => string;
   readonly getTask: () => string;
   readonly getWorkflowDescription: () => string | undefined;
+  readonly getWorkflowRules: () => readonly WorkflowWideRule[] | undefined;
   readonly getWorkflowCallVars?: () => Readonly<Record<string, string | number | boolean>> | undefined;
   readonly getRetryNote: () => string | undefined;
   readonly getPrContext?: () => PullRequestContext | undefined;
@@ -192,7 +206,6 @@ export interface StepExecutorDeps {
   readonly companionProviders?: WorkflowEngineOptions['companionProviders'];
   readonly companionSelectorProvider?: WorkflowEngineOptions['selectorProvider'];
   readonly companionDiffReader?: WorkflowEngineOptions['companionDiffReader'];
-  readonly companionReviewAuthority?: CompanionReviewAuthority;
   readonly onPhaseStart?: (
     step: WorkflowStep,
     phase: 1 | 2 | 3,
@@ -252,15 +265,11 @@ export class StepExecutor {
   }
 
   private readonly structuredOutputNormalizers: StructuredOutputNormalizerRegistry;
-  private readonly companionReviewState: CompanionReviewStateStore | undefined;
 
   constructor(
     private readonly deps: StepExecutorDeps,
   ) {
     this.structuredOutputNormalizers = deps.structuredOutputNormalizers;
-    this.companionReviewState = deps.companionReviewAuthority === undefined
-      ? undefined
-      : new CompanionReviewStateStore(deps.companionReviewAuthority);
   }
 
   private resolveAbortSignal(): AbortSignal | undefined {
@@ -520,11 +529,11 @@ export class StepExecutor {
     const fixLoop = await runCompanionFixLoop({
       initialResponse: input.initialResponse,
       phase1Options: input.agentOptions,
-      completeReview: ({ implementerResponse, afterFix, fixRound }) => (
-        input.companionRuntime!.complete(input.state, implementerResponse, { afterFix, fixRound })
+      completeReview: ({ implementerResponse, followUpRound }) => (
+        input.companionRuntime!.complete(input.state, implementerResponse, { followUpRound })
       ),
-      executeFix: async (attempt) => {
-        input.companionRuntime!.beginFixRound(attempt.sequence, attempt.openMustFixCount);
+      executeFollowUp: async (attempt) => {
+        input.companionRuntime!.beginFollowUpRound(attempt.sequence, attempt.findingCount);
         const promptResolvedAttempts = new Set<number>();
         const phaseAttempts = new Map<number, Phase1Attempt>();
         const resolvePhaseAttempt = (recoveryAttempt: Phase1Attempt): Phase1Attempt => {
@@ -676,16 +685,17 @@ export class StepExecutor {
         return normalized.response;
       },
       abortSignal: this.resolveAbortSignal(),
-      onAttemptFailure: (failure) => {
-        log.warn('Companion advisory attempt failed; continuing with the latest successful response', {
-          step: input.eventStep.name,
-          stage: failure.stage,
-          fixRound: failure.fixRound,
-          sequence: failure.sequence,
-          reason: failure.reason,
-        });
-      },
     });
+    if (fixLoop.followUpFailureReason === undefined) {
+      const companionState = requireActiveCompanionState(input.state, input.eventStep.name);
+      input.state.companion = { ...companionState, followUpRounds: fixLoop.followUpRounds };
+    } else {
+      input.companionRuntime.completeFollowUpFailure(
+        input.state,
+        fixLoop.followUpRounds,
+        fixLoop.followUpFailureReason,
+      );
+    }
     return fixLoop.phaseResponse;
   }
 
@@ -1108,6 +1118,7 @@ export class StepExecutor {
       previousResponseSourcePath: state.previousResponseSourcePath,
       fallbackContext,
       workflowState: state,
+      ...(step.engineSynthesized === true ? {} : { workflowRules: this.deps.getWorkflowRules() }),
       ...(!this.deps.companionEnabled
         || !isNormalAgentWorkflowStep(step)
         || step.companion === undefined
@@ -1365,19 +1376,15 @@ export class StepExecutor {
       const companionDefinitions = this.deps.companionDefinitions;
       const companionProviders = this.deps.companionProviders;
       const companionDiffReader = this.deps.companionDiffReader;
-      const companionReviewState = this.companionReviewState;
       state.companion = {
-        escalated: false,
-        completionVerified: false,
-        openMustFixCount: 0,
-        openMustFix: [],
+        completionSettled: false,
+        followUpRounds: 0,
       };
       try {
         if (
           companionDefinitions === undefined
           || companionProviders === undefined
           || companionDiffReader === undefined
-          || companionReviewState === undefined
         ) {
           throw new Error(`Companion runtime configuration is missing for step "${step.name}"`);
         }
@@ -1395,9 +1402,22 @@ export class StepExecutor {
           selectorProvider: this.deps.companionSelectorProvider,
           diffReader: companionDiffReader,
           abortSignal: this.resolveAbortSignal(),
-          onStream: builtAgentOptions.onStream,
-          onActivity: builtAgentOptions.onActivity,
-          stateStore: companionReviewState,
+          buildProviderCallCallbacks: ({
+            agentName,
+            purpose,
+            callSequence,
+            provider,
+          }) => this.deps.optionsBuilder.buildProviderCallCallbacks(
+            executableStep,
+            provider.provider,
+            provider.model,
+            buildCompanionExecutionUnitKey({
+              stepName: step.name,
+              agentName,
+              purpose,
+              callSequence,
+            }),
+          ),
           emitEvent: this.deps.emitEvent,
           recordUsage: (name, companionProvider, success, usage) => {
             this.deps.recordSynthesizedAgentUsage(

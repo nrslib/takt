@@ -143,7 +143,7 @@
     "@earendil-works/pi-ai": "^0.84.1",
     "@earendil-works/pi-coding-agent": "^0.84.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@openai/codex-sdk": "^0.144.1",
+    "@openai/codex-sdk": "^0.147.0",
     "@opencode-ai/sdk": "1.18.2",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/exporter-metrics-otlp-http": "^0.219.0",

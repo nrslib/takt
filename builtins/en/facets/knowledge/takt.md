@@ -198,3 +198,7 @@ The Report Phase is Phase 2 and reads Phase 1 outputs. Its execution contract is
 | Session broken between phases that should continue context | REJECT (context loss) |
 | Old resumed session remains after successful new-session retry | REJECT (unintended resume) |
 | Report retry/fallback drops readonly mode, tool-free execution, or capability overrides | REJECT |
+
+## Termination-Path Completeness
+
+For features that create temporary files or external resources, verify that they are released not only on normal completion but at every terminal: failure, cancellation, and forced termination. `process.exit()` and forced termination (repeated SIGINT, an abort handler that exits immediately) do not run `finally` blocks. Cleanup that relies on `finally` is bypassed on any path that calls `process.exit` inside it and on forced-termination paths. For each entry point that creates resources, build the list of terminals (normal, failure, cancellation, forced termination) and enumerate the terminals where cleanup does not run.

@@ -2,6 +2,6 @@
 
 {{include:instructions/contract-family-core}}
 
-Check only the evidence, family identity, duplicate relation, and authority of submitted Companion findings. Do not perform an early scan, search the repository, create a new finding, or guarantee family completion.
+Accept or reject each submitted Companion finding using only its supplied evidence and remediation authority. Do not perform an early scan, search the repository, create or replace a finding, combine findings, change severity, or guarantee family completion.
 
-Follow the active review authority policy for accept, merge, downgrade, and reject decisions.
+Follow the active Companion round adjudication policy for accept and reject decisions.

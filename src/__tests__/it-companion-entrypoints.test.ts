@@ -136,6 +136,13 @@ function createFixture(options: FixtureOptions): CompanionEntrypointFixture {
       ...targets,
       '',
     ].join('\n'));
+  } else if (options.companionEnabled !== undefined) {
+    writeFileSync(join(projectDir, '.takt', 'runtime.yaml'), [
+      'version: 1',
+      'companion:',
+      `  enabled: ${options.companionEnabled}`,
+      '',
+    ].join('\n'));
   }
   writeFileSync(join(configDir, 'config.yaml'), [
     'language: en',
@@ -220,17 +227,17 @@ describe('companion runtime, preview, and doctor entrypoint parity', () => {
   }[] = [
     {
       name: 'accepts an explicit companion target',
-      options: { assignment: 'target' },
+      options: { assignment: 'target', companionEnabled: true },
       succeeds: true,
     },
     {
       name: 'accepts provider defaults when the target is omitted',
-      options: { assignment: 'defaults' },
+      options: { assignment: 'defaults', companionEnabled: true },
       succeeds: true,
     },
     {
       name: 'rejects legacy provider configuration',
-      options: { assignment: 'legacy' },
+      options: { assignment: 'legacy', companionEnabled: true },
       succeeds: false,
       errorPattern: /require runtime\.yaml|migrate provider configuration/,
     },
@@ -242,6 +249,11 @@ describe('companion runtime, preview, and doctor entrypoint parity', () => {
     {
       name: 'skips companion provider resolution when disabled',
       options: { assignment: 'target', companionEnabled: false, invalidCompanionTarget: true },
+      succeeds: true,
+    },
+    {
+      name: 'skips companion provider resolution when the policy is omitted',
+      options: { assignment: 'target', invalidCompanionTarget: true },
       succeeds: true,
     },
     {

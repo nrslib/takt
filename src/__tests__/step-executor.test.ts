@@ -662,6 +662,7 @@ describe('StepExecutor dynamic facet integration', () => {
         getWorkflowName: () => 'test-workflow',
         getTask: () => 'task',
         getWorkflowDescription: () => undefined,
+        getWorkflowRules: () => undefined,
         getRetryNote: () => undefined,
         getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
         structuredCaller: {
