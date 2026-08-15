@@ -1,6 +1,6 @@
 # Coding Review
 
-## Result: REJECT
+## Result: FIX REQUIRED
 
 ## Findings
 | family | Finding ID | Evidence | Problem -> root cause | Affected contract paths | Acceptance criteria |
@@ -14,7 +14,7 @@
 ## Non-actionable observations
 | Finding ID | State | Evidence |
 |------------|-------|----------|
-| OLD-REVIEW-doc-example-L1 | out_of_scope | Documentation formatting is unrelated to identity preservation |
+| OLD-REVIEW-doc-example-L1 | adjudicated_non_actionable | Documentation formatting is unrelated to identity preservation |
 
 ## Unresolved Premises and Environmental Constraints
 - None.

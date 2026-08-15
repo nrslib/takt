@@ -223,10 +223,24 @@ const TARGETS = [
   },
   { id: 'review-adjudication', workflow: 'peer-review', step: 'review-adjudication', fixture: 'eval/fixtures/review-adjudication' },
   {
+    id: 'final-readiness-merge-review',
+    workflow: 'review-fix-default',
+    step: 'merge-readiness-review',
+    fixture: 'eval/fixtures/final-readiness-supervision',
+  },
+  {
     id: 'final-readiness-supervision',
     workflow: 'review-fix-default',
     step: 'supervise',
     fixture: 'eval/fixtures/final-readiness-supervision',
+  },
+  {
+    id: 'final-readiness-merge-review-phase2',
+    workflow: 'review-fix-default',
+    step: 'merge-readiness-review',
+    fixture: 'eval/fixtures/final-readiness-supervision',
+    phase: 'phase2',
+    targetFile: 'merge-readiness-review.md',
   },
   {
     id: 'final-readiness-supervision-phase2',

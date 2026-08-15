@@ -8,11 +8,11 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 
 | Workflow | 推奨用途 |
 |----------|-----------------|
-| `simple` | 強いモデルの判断力を信頼するシンプルな開発 workflow です。モデル自身が関連 SKILL を選び、計画 → テスト作成 → 実装 → コードレビュー → 修正ループ → 要件充足の最終確認 → 完了。 |
-| `simple-mini` | 強いモデルの判断力を信頼する軽量版です。独立したテスト作成と要件充足の最終確認を省き、計画 → 実装 → コードレビュー → 修正ループ → 完了。 |
+| `simple` | 強いモデルの判断力を信頼するシンプルな開発 workflow です。モデル自身が関連 SKILL を選び、計画 → テスト作成 → 実装 → コードレビュー → 修正ループ → 最終監督 → 完了。 |
+| `simple-mini` | 強いモデルの判断力を信頼する軽量版です。独立したテスト作成と最終監督を省き、計画 → 実装 → コードレビュー → 修正ループ → 完了。 |
 | `default` | 共通開発フローを標準ファセットで実行するテスト先行開発ワークフロー。 |
 | `default-mini` | 標準ファセットを共通Mini開発フローへ注入する、テスト作成ステップなしの軽量ワークフロー。 |
-| `default-high` | 共通開発コアを直接実装で使い、専門ピアレビュー、収束修正、follow-up review、要件充足の最終確認まで行うフルスペック workflow です。 |
+| `default-high` | 共通開発コアを直接実装で使い、専門ピアレビュー、収束修正、follow-up review、最終監督まで行うフルスペック workflow です。 |
 | `frontend` | フロントエンド特化開発 workflow。React/Next.js に焦点を当てたレビューとナレッジ注入付き。 |
 | `backend` | バックエンド向けファセットを共通開発フローへ注入するワークフロー。 |
 | `dual` | フロントエンドとバックエンドのファセットを共通開発フローへ注入するワークフロー。 |
@@ -23,22 +23,22 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 
 | カテゴリ | Workflow | 説明 |
 |---------|----------|-------------|
-| 🚀 クイックスタート | `simple` | 強いモデルの判断力を信頼するシンプルな開発 workflow。モデル自身が関連 SKILL を選び、計画 → テスト作成 → 実装 → コードレビュー → 修正ループ → 要件充足の最終確認 → 完了。 |
+| 🚀 クイックスタート | `simple` | 強いモデルの判断力を信頼するシンプルな開発 workflow。モデル自身が関連 SKILL を選び、計画 → テスト作成 → 実装 → コードレビュー → 修正ループ → 最終監督 → 完了。 |
 | | `default` | 共通開発フローを標準ファセットで実行するテスト先行開発ワークフロー。 |
 | | `default-mini` | 標準ファセットを共通Mini開発フローへ注入する、テスト作成ステップなしの軽量ワークフロー。 |
-| | `default-high` | 共通開発コアを直接実装で使い、専門ピアレビュー、収束修正、follow-up review、要件充足の最終確認まで行うフルスペック workflow です。 |
+| | `default-high` | 共通開発コアを直接実装で使い、専門ピアレビュー、収束修正、follow-up review、最終監督まで行うフルスペック workflow です。 |
 | | `cli` | CLI開発向けファセットを共通開発フローへ注入するワークフロー。 |
 | | `frontend` | フロントエンド特化開発 workflow。React/Next.js に焦点を当てたレビューとナレッジ注入付き。 |
 | | `backend` | バックエンド向けファセットを共通開発フローへ注入するワークフロー。 |
 | | `dual` | フロントエンドとバックエンドのファセットを共通開発フローへ注入するワークフロー。 |
 | ✨ Simple | `simple` | 強いモデルの判断力を信頼する汎用版。モデル自身が関連 SKILL を選び、最小限の構成で開発を進める。 |
-| | `simple-mini` | 強いモデルの判断力を信頼し、独立したテスト作成と要件充足の最終確認を省いた軽量版。 |
+| | `simple-mini` | 強いモデルの判断力を信頼し、独立したテスト作成と最終監督を省いた軽量版。 |
 | | `simple-frontend` | 強いモデル向けの簡潔なフロントエンド版。frontend、React、security、architecture、testing のナレッジとポリシーを注入する。 |
 | | `simple-backend` | 強いモデル向けの簡潔なバックエンド版。backend、security、architecture、testing のナレッジとポリシーを注入する。 |
 | | `simple-dual` | 強いモデル向けの簡潔なデュアル版。frontend、React、backend、security、architecture、testing のナレッジとポリシーを注入する。 |
 | | `simple-cqrs` | 強いモデル向けの簡潔な CQRS+ES 版。backend、CQRS+ES、security、architecture、testing のナレッジとポリシーを注入する。 |
 | | `simple-dual-cqrs` | 強いモデル向けの簡潔なデュアル CQRS+ES 版。frontend、React、backend、CQRS+ES、security、architecture、testing のナレッジとポリシーを注入する。 |
-| ⚡ Mini | `simple-mini` | 強いモデルの判断力を信頼する軽量版。独立したテスト作成と要件充足の最終確認を省き、計画 → 実装 → コードレビュー → 修正ループ → 完了。 |
+| ⚡ Mini | `simple-mini` | 強いモデルの判断力を信頼する軽量版。独立したテスト作成と最終監督を省き、計画 → 実装 → コードレビュー → 修正ループ → 完了。 |
 | | `default-mini` | 標準ファセットを共通Mini開発フローへ注入する、テスト作成ステップなしの軽量ワークフロー。 |
 | | `frontend-mini` | フロントエンド向けMini開発ワークフロー（plan → implement → 並列レビュー → 修正 → 完了）。 |
 | | `backend-mini` | バックエンド向けMini開発ワークフロー（plan → implement → 並列レビュー → 修正 → 完了）。 |
@@ -53,7 +53,7 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 | | `simple-cqrs` | 強いモデル向け。`simple-core` にバックエンドと CQRS+ES のナレッジとポリシーを注入するシンプル版。 |
 | | `backend` | バックエンド向けファセットを共通開発フローへ注入するワークフロー。 |
 | | `backend-mini` | バックエンド向けMini開発ワークフロー（plan → implement → 並列レビュー → 修正 → 完了）。 |
-| | `backend-maintenance` | バックエンド本番保守向け厳密 workflow。専門ピアレビュー、収束修正、follow-up review、要件充足の最終確認を行う。 |
+| | `backend-maintenance` | バックエンド本番保守向け厳密 workflow。専門ピアレビュー、収束修正、follow-up review、最終監督を行う。 |
 | | `backend-cqrs` | CQRS+ES 特化バックエンド開発 workflow。CQRS+ES 知識を注入した専門ピアレビューと収束修正付き。 |
 | | `backend-cqrs-mini` | CQRS+ES向けMini開発ワークフロー（plan → implement → 並列レビュー → 修正 → 完了）。 |
 | 🔧 デュアル | `simple-dual` | 強いモデル向け。`simple-core` にフロントエンドとバックエンドのナレッジとポリシーを注入するシンプル版。 |
@@ -63,8 +63,8 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 | | `dual-cqrs` | フロントエンド＋バックエンド開発 workflow (CQRS+ES 特化)。CQRS+ES、frontend、security、testing レビューと収束修正付き。 |
 | | `dual-cqrs-mini` | CQRS+ES フロントエンド＋バックエンド向けMini開発ワークフロー（plan → implement → 並列レビュー → 修正 → 完了）。CQRS+ESナレッジ注入付き。 |
 | 🏗️ インフラストラクチャ | `terraform` | Terraform IaC 開発 workflow: plan → implement → 並列レビュー → 監督検証 → 修正 → 完了。 |
-| 🔍 レビュー | `review-default` | 多角コードレビュー: PR/ブランチ/作業中の差分を自動判定し、architecture、security、testing、coding を専門並列レビューした後、supervisor が統合結果を出力。 |
-| | `review-fix-default` | 多角レビュー＋修正ループ（architecture/security/testing/coding の専門並列レビュー後に supervisor が最終判定）。 |
+| 🔍 レビュー | `review-default` | 多角コードレビュー: PR/ブランチ/作業中の差分を自動判定し、architecture、security、testing、coding を専門並列レビューした後、merge-readiness ゲートを実行して統合結果を出力。 |
+| | `review-fix-default` | 多角レビュー＋修正ループ（architecture/security/testing/coding の専門並列レビュー後に merge-readiness review）。 |
 | | `review-frontend` | フロントエンド特化レビュー（architecture、frontend、security、coding）。 |
 | | `review-fix-frontend` | フロントエンド特化レビュー＋修正ループ（architecture、frontend、security、coding）。 |
 | | `review-backend` | バックエンド特化レビュー（architecture、security、coding）。 |
@@ -85,7 +85,7 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 | | `audit-architecture-backend` | バックエンド特化アーキテクチャ監査。サービスモジュールと境界を列挙。 |
 | | `audit-architecture-dual` | フルスタックアーキテクチャ監査。フロントエンド/バックエンドの境界とクロスレイヤー配線を列挙。 |
 | 🎵 TAKT開発 | `takt-default` | 計画、テスト、実装、レビュー、修正へ TAKT 固有知識を注入して共通開発コアを実行する workflow です。 |
-| | `takt-experimental` | 共通開発コアの裁定・修正検証・follow-up review・要件充足の最終確認へ、TAKT固有 reviewer と実装 companion を追加する実験的 TAKT 開発 workflow です。 |
+| | `takt-experimental` | 共通開発コアの裁定・修正検証・follow-up review・マージ準備判定へ、TAKT固有 reviewer と実装 companion を追加する実験的 TAKT 開発 workflow です。 |
 | | `auto-improvement-loop` | PR・Issue・新規改善を巡回しながら次の task を積み続ける orchestration loop workflow。 |
 | | `review-takt-default` | TAKT開発向け多角レビュー（AIアンチパターン・コーディングレビュー含む5観点レビュー）。 |
 | | `review-fix-takt-default` | レビュー対象を収集してから、TAKT固有ファセットを共通開発フローへ注入するワークフロー。 |
@@ -113,7 +113,7 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 | **cqrs-es-reviewer** | CQRS+Event Sourcing のアーキテクチャと実装のレビュー |
 | **security-reviewer** | セキュリティ脆弱性の評価 |
 | **conductor** | Phase 3 判定スペシャリスト: レポート/レスポンスを読み取りステータスタグを出力 |
-| **supervisor** | 要件充足、finding 解消、再発台帳引き継ぎの最終判定 |
+| **supervisor** | 最終検証、承認 |
 | **dual-supervisor** | 複数専門レビューの統合検証とリリース可否判断 |
 | **research-planner** | リサーチタスクの計画とスコープ定義 |
 | **research-analyzer** | リサーチ結果の解釈と追加調査計画 |
@@ -121,6 +121,8 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 | **research-supervisor** | リサーチ品質の検証と完全性の評価 |
 | **test-planner** | テスト戦略の分析と包括的なテスト計画 |
 | **testing-reviewer** | テスト重視のコードレビューとインテグレーションテスト要件分析 |
+| **merge-readiness-reviewer** | 今後保守する前提で、品質面から受け入れ可能かを確認する横断レビュー |
+| **merge-readiness-supervisor** | 専門レビューと修正検証の後、成果物がマージ可能かを裁定する最終監督者 |
 | **review-adjudicator** | 証拠に基づいてレビュー指摘を裁定し、正式な修正対象セットを確定する |
 | **contract-lifecycle-reviewer** | 契約の定義・生成・利用・検証・移行経路を横断して確認するレビュー |
 | **robustness-reviewer** | 障害処理、境界条件、運用上の耐性を確認する堅牢性レビュー |
