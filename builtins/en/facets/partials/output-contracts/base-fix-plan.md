@@ -28,6 +28,11 @@ When review-resolution.md merges a new finding into an existing family, preserve
 |----------|------------------------|------------------------|-------------------------------------------|------------------------------|---------------------------------------|-----------------------|
 | {Fix unit} | {Requirement, specification, schema, or public contract} | {Conditions beyond the finding examples} | {Target location, or unchanged for a local issue} | {Confirmed bounded graph of affected paths that actually exist: definition, production, normalization, validation, consumers, terminal or API output, plus retry, fallback, parallel execution, persistence, or restoration only when applicable. Omit non-applicable paths rather than exploring or listing them} | {Representative valid, failing, boundary, and adversarial cases} | {Only existing consumers and duplicate or obsolete paths that require migration or removal; None when no such target exists. Exclude unrelated migration or removal work} |
 
+## Input, State, and Path Check
+| Fix Unit | Dimension Source and Evidence | Concrete Input or State | Entry and Path | Implementation Constraint | Consumer / Terminal | Expected Result | Disproof Method and Test ID |
+|----------|-------------------------------|-------------------------|----------------|---------------------------|---------------------|-----------------|-----------------------------|
+| {Fix unit} | {Requirement, schema, type, or implementation file:line defining the finite set or state dimension} | {One applicable member or state per row; do not summarize with "all" or "and so on." When no dimension applies, write "Not applicable: evidence checked"} | {Existing entry and path reached} | {Result limit, search order, no-match behavior, fallback, or Not applicable} | {Existing location that consumes or exposes the result} | {Externally observable result} | {Check and test ID that fails if this row is omitted or violated} |
+
 ## Execution Order
 | Order | Fix Unit | Operation | Dependencies | Targets | Completion Criteria and Evidence |
 |-------|----------|-----------|--------------|---------|----------------------------------|

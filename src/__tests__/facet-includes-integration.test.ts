@@ -148,6 +148,11 @@ describe('facet include expansion', () => {
       join(getLanguageResourcesDir(lang), 'facets', 'partials', 'instructions', 'fix-root-cause-analysis.md'),
       'utf-8',
     ).trim();
+    const finiteSetExploration = lang === 'ja'
+      ? '適用される全要素・状態を具体化'
+      : 'make every applicable member and state concrete';
+
+    expect(partial).toContain(finiteSetExploration);
 
     for (const instruction of [
       'fix-plan',
@@ -165,6 +170,7 @@ describe('facet include expansion', () => {
       );
 
       expect(content).toContain(partial);
+      expect(content).toContain(finiteSetExploration);
       expect(content).not.toContain('{{include:instructions/fix-root-cause-analysis}}');
     }
   });
@@ -174,6 +180,11 @@ describe('facet include expansion', () => {
       join(getLanguageResourcesDir(lang), 'facets', 'partials', 'instructions', 'fix-plan-validity.md'),
       'utf-8',
     ).trim();
+    const finiteSetRequirement = lang === 'ja'
+      ? '適用される有限集合・状態軸の具体行'
+      : 'concrete rows for applicable finite sets and state dimensions';
+
+    expect(partial).toContain(finiteSetRequirement);
 
     for (const instruction of [
       'fix-plan',
@@ -189,7 +200,34 @@ describe('facet include expansion', () => {
       );
 
       expect(content).toContain(partial);
+      expect(content).toContain(finiteSetRequirement);
       expect(content).not.toContain('{{include:instructions/fix-plan-validity}}');
+    }
+  });
+
+  it.each(['en', 'ja'] as const)('should require concrete input, state, and path rows in fix-plan output contracts in %s', (lang) => {
+    const sectionHeading = lang === 'ja'
+      ? '## 入力・状態・経路の確認表'
+      : '## Input, State, and Path Check';
+    const concreteRowRequirement = lang === 'ja'
+      ? '適用される要素または状態を1行に1つ'
+      : 'One applicable member or state per row';
+
+    for (const outputContract of [
+      'fix-plan',
+      'scenario-based-fix-plan',
+    ]) {
+      const content = resolveRefToContent(
+        outputContract,
+        undefined,
+        tempDir,
+        'output-contracts',
+        { projectDir: tempDir, lang },
+      );
+
+      expect(content).toContain(sectionHeading);
+      expect(content).toContain(concreteRowRequirement);
+      expect(content).not.toContain('{{include:output-contracts/base-fix-plan}}');
     }
   });
 
