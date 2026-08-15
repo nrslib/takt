@@ -122,13 +122,8 @@ steps:
 
   - name: final-gate
     kind: workflow_call
-    call: merge-readiness-dual-final-gate
+    call: supervisor-final-gate
     args:
-      merge_readiness_knowledge:
-        - backend
-        - cqrs-es
-        - security
-        - architecture
       supervise_knowledge:
         - backend
         - cqrs-es
@@ -140,7 +135,7 @@ steps:
       - condition: needs_fix
         next: remediation
       - condition: need_replan
-        next: remediation
+        next: ABORT
       - condition: ABORT
         next: ABORT
   - name: remediation

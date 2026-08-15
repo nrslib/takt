@@ -1,5 +1,5 @@
 name: review-default
-description: 多角レビュー - 専門レビュアーで並列レビューした後、merge-readiness review の証跡を使ってレビュー結果を統合する
+description: 多角レビュー - 専門レビュアーで並列レビューした後、supervisor がレビュー結果を統合する
 max_steps: 10
 initial_step: gather
 
@@ -103,17 +103,9 @@ steps:
       - condition: any("error")
         next: reviewers
       - condition: all("approved")
-        next: merge-readiness-review
+        next: review-synthesis
       - condition: any("needs_fix")
         next: supervise
-
-  - name: merge-readiness-review
-    uses: merge-readiness-to-review-synthesis
-    rules:
-      - condition: approved
-        next: review-synthesis
-      - condition: needs_fix
-        next: review-synthesis
 
   - name: review-synthesis
     capabilities: readonly

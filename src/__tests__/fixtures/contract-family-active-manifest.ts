@@ -37,7 +37,7 @@ const OUTSIDE_RULES: readonly OutsideRule[] = [
   { matches: /^(?:deep-research|research)\//u, reason: 'Research planning and synthesis do not edit or verify a code contract family.' },
   { matches: /^magi\//u, reason: 'Generic deliberation has no code-family authority.' },
   { matches: /^review-[^/]+\/[^/]+:gather$/u, reason: 'Review target gathering supplies evidence but does not inspect or decide a family.' },
-  { matches: /^review-(?:default|takt-default)\/[^/]+:(?:review-synthesis|supervise)$/u, reason: 'This legacy inline step only consolidates existing reports; merge-readiness inspection runs in the preceding step.' },
+  { matches: /^review-(?:default|takt-default)\/[^/]+:(?:review-synthesis|supervise)$/u, reason: 'This legacy inline step only consolidates existing reports outside the peer-review remediation contract.' },
 ];
 
 export function outsideContractFamilyReason(path: string): string | undefined {

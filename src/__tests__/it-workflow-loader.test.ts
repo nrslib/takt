@@ -113,6 +113,108 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
   });
 
   it.each(['en', 'ja'] as const)(
+    'should route every %s final requirement gate through the supervisor family',
+    (language) => {
+      const resourceRoot = getLanguageResourcesDir(language);
+      const removedResources = [
+        ['facets', 'personas', 'merge-readiness-reviewer.md'],
+        ['facets', 'personas', 'merge-readiness-supervisor.md'],
+        ['facets', 'output-contracts', 'merge-readiness-review.md'],
+        ['facets', 'output-contracts', 'merge-readiness-supervision.md'],
+        ['workflows', 'merge-readiness-final-gate.yaml'],
+        ['workflows', 'merge-readiness-dual-final-gate.yaml'],
+      ];
+      for (const pathParts of removedResources) {
+        expect(existsSync(join(resourceRoot, ...pathParts)), pathParts.join('/')).toBe(false);
+      }
+
+      const reviewDecision = readFileSync(join(
+        resourceRoot,
+        'facets',
+        'output-contracts',
+        'review-decision.md',
+      ), 'utf-8');
+      expect(reviewDecision).toContain(language === 'ja'
+        ? '## 結果: 修正対象あり / 修正対象なし / タスク全体の再計画が必要'
+        : '## Result: ACTIONABLE FINDINGS / NO ACTIONABLE FINDINGS / REPLAN REQUIRED');
+      expect(reviewDecision).not.toMatch(/MERGEABLE|FIX REQUIRED|マージ可能|修正が必要/u);
+
+      const supervisorValidation = readFileSync(join(
+        resourceRoot,
+        'facets',
+        'output-contracts',
+        'supervisor-validation.md',
+      ), 'utf-8');
+      expect(supervisorValidation).toContain(language === 'ja'
+        ? '## 結果: APPROVE / REJECT / BLOCKED'
+        : '## Result: APPROVE / REJECT / BLOCKED');
+
+      const peerFinalGate = parseYaml(readFileSync(
+        join(resourceRoot, 'steps', 'peer-review-final-gate.yaml'),
+        'utf-8',
+      )) as Record<string, unknown>;
+      expect(peerFinalGate).toMatchObject({
+        persona: 'supervisor',
+        output_contracts: {
+          report: [{ name: 'review-resolution.md', format: 'supervisor-validation' }],
+        },
+      });
+
+      const supervisorGate = parseYaml(readFileSync(
+        join(resourceRoot, 'workflows', 'supervisor-final-gate.yaml'),
+        'utf-8',
+      )) as {
+        initial_step?: string;
+        subworkflow?: { returns?: string[] };
+        steps?: Array<Record<string, unknown>>;
+      };
+      expect(supervisorGate.initial_step).toBe('supervise');
+      expect(supervisorGate.subworkflow?.returns).toEqual(['needs_fix', 'need_replan']);
+      expect(supervisorGate.steps).toHaveLength(1);
+      expect(supervisorGate.steps?.[0]).toMatchObject({
+        name: 'supervise',
+        instruction: 'supervise',
+        output_contracts: {
+          report: [
+            { name: 'supervisor-validation.md', format: 'supervisor-validation' },
+            { name: 'summary.md', format: 'supervisor-summary', use_judge: false },
+          ],
+        },
+        rules: [
+          { condition: 'BLOCKED', return: 'need_replan' },
+          { condition: 'APPROVE', next: 'COMPLETE' },
+          { condition: 'REJECT', return: 'needs_fix' },
+        ],
+      });
+
+      const peerReview = parseYaml(readFileSync(
+        join(resourceRoot, 'workflows', 'peer-review.yaml'),
+        'utf-8',
+      )) as { steps?: Array<Record<string, unknown>> };
+      expect(peerReview.steps?.find((step) => step.name === 'review-adjudication')).toMatchObject({
+        rules: language === 'ja'
+          ? [
+            { condition: '修正対象あり', next: 'remediation' },
+            { condition: '修正対象なし', next: 'final-gate' },
+            { condition: 'タスク全体の再計画が必要', return: 'need_replan' },
+          ]
+          : [
+            { condition: 'ACTIONABLE FINDINGS', next: 'remediation' },
+            { condition: 'NO ACTIONABLE FINDINGS', next: 'final-gate' },
+            { condition: 'REPLAN REQUIRED', return: 'need_replan' },
+          ],
+      });
+      expect(peerReview.steps?.find((step) => step.name === 'final-gate')).toMatchObject({
+        rules: [
+          { condition: 'APPROVE', next: 'COMPLETE' },
+          { condition: 'REJECT', next: 'remediation' },
+          { condition: 'BLOCKED', return: 'need_replan' },
+        ],
+      });
+    },
+  );
+
+  it.each(['en', 'ja'] as const)(
     'parallel 親に review tag を持つ全 %s builtin workflow は error を先頭で明示処理する',
     (language) => {
       languageState.value = language;
@@ -183,7 +285,7 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
         'scenario-based-test-report',
         'scenario-based-fix-plan-from-review-resolution',
         'scenario-based-fix-plan',
-        'scenario-based-supervise-merge-readiness',
+        'scenario-based-supervise-review-resolution',
       ].sort();
       expect(scenarioRefsByFile).toEqual([
         { file: 'workflows/experimental.yaml', refs: scenarioSelection },
@@ -199,7 +301,7 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
         testing_report_format: { default: 'test-report' },
         fix_plan_instruction: { default: 'fix-plan-from-review-resolution' },
         fix_plan_report_format: { default: 'fix-plan' },
-        final_gate_instruction: { default: 'supervise-merge-readiness' },
+        final_gate_instruction: { default: 'supervise-review-resolution' },
       });
       expect(findRawStep(core, 'plan')).toMatchObject({
         with: {
@@ -223,13 +325,18 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
           fix_plan_report_format: { $param: 'fix_plan_report_format' },
           final_gate_instruction: { $param: 'final_gate_instruction' },
         },
+        rules: [
+          { condition: 'COMPLETE', next: 'COMPLETE' },
+          { condition: 'need_replan', next: 'replan' },
+          { condition: 'ABORT', next: 'ABORT' },
+        ],
       });
 
       const peerReview = readRaw('workflows', 'peer-review');
       expect(peerReview.subworkflow?.params).toMatchObject({
         fix_plan_instruction: { default: 'fix-plan-from-review-resolution' },
         fix_plan_report_format: { default: 'fix-plan' },
-        final_gate_instruction: { default: 'supervise-merge-readiness' },
+        final_gate_instruction: { default: 'supervise-review-resolution' },
       });
       expect(findRawStep(peerReview, 'final-gate')).toMatchObject({
         with: { final_gate_instruction: { $param: 'final_gate_instruction' } },

@@ -124,17 +124,9 @@ steps:
       - condition: any("error")
         next: reviewers
       - condition: all("approved")
-        next: merge-readiness-review
+        next: review-synthesis
       - condition: any("needs_fix")
         next: supervise
-
-  - name: merge-readiness-review
-    uses: merge-readiness-to-review-synthesis
-    rules:
-      - condition: approved
-        next: review-synthesis
-      - condition: needs_fix
-        next: review-synthesis
 
   - name: review-synthesis
     capabilities: readonly

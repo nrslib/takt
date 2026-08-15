@@ -1,5 +1,5 @@
 name: development-core
-description: Shared development flow with injectable planning, testing, implementation, peer review, adjudication, verified remediation, and merge-readiness context.
+description: Shared development flow with injectable planning, testing, implementation, peer review, adjudication, verified remediation, and a final requirement check.
 subworkflow:
   callable: true
   visibility: internal
@@ -93,7 +93,7 @@ subworkflow:
     final_gate_instruction:
       type: facet_ref
       facet_kind: instruction
-      default: supervise-merge-readiness
+      default: supervise-review-resolution
 initial_step: plan
 
 facet_pools:

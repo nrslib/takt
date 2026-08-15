@@ -1,7 +1,4 @@
 params:
-  merge_readiness_policy:
-    type: facet_ref[]
-    facet_kind: policy
   review_knowledge:
     type: facet_ref[]
     facet_kind: knowledge
@@ -13,13 +10,11 @@ capabilities: readonly
 tags:
   - review
   - final-gate
-  - merge-readiness
   - supervise
 edit: false
-persona: merge-readiness-supervisor
+persona: supervisor
 policy:
   - contract-change
-  - $param: merge_readiness_policy
 knowledge:
   $param: review_knowledge
 pass_previous_response: false
@@ -28,4 +23,4 @@ instruction:
 output_contracts:
   report:
     - name: review-resolution.md
-      format: merge-readiness-supervision
+      format: supervisor-validation

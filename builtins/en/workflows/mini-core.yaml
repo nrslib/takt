@@ -97,7 +97,6 @@ steps:
         persona: ai-antipattern-reviewer
         policy:
           - contract-change
-          - review
           - ai-antipattern
         instruction: ai-antipattern-review
         rules:
@@ -117,14 +116,13 @@ steps:
           $param: supervisor_persona
         policy:
           - contract-change
-          - review
         knowledge:
           $param: development_knowledge
         instruction: supervise
         rules:
           - condition: BLOCKED
-          - condition: All checks passed
-          - condition: Requirements unmet, tests failing
+          - condition: APPROVE
+          - condition: REJECT
         output_contracts:
           report:
             - name: supervisor-validation.md
@@ -137,13 +135,13 @@ steps:
         next: reviewers
       - condition: any("BLOCKED")
         next: ABORT
-      - condition: all("No AI-specific issues", "All checks passed")
+      - condition: all("No AI-specific issues", "APPROVE")
         next: COMPLETE
-      - condition: all("AI-specific issues found", "Requirements unmet, tests failing")
+      - condition: all("AI-specific issues found", "REJECT")
         next: fix_both
       - condition: any("AI-specific issues found")
         next: ai-antipattern-fix
-      - condition: any("Requirements unmet, tests failing")
+      - condition: any("REJECT")
         next: supervise_fix
 
   - name: fix_both

@@ -1,5 +1,5 @@
 name: review-default
-description: Multi-perspective Code Review - reviews changes with specialist parallel reviewers, then synthesizes the results using recorded merge-readiness evidence.
+description: Multi-perspective Code Review - reviews changes with specialist parallel reviewers, then has a supervisor synthesize the results.
 max_steps: 10
 initial_step: gather
 
@@ -103,17 +103,9 @@ steps:
       - condition: any("error")
         next: reviewers
       - condition: all("approved")
-        next: merge-readiness-review
+        next: review-synthesis
       - condition: any("needs_fix")
         next: supervise
-
-  - name: merge-readiness-review
-    uses: merge-readiness-to-review-synthesis
-    rules:
-      - condition: approved
-        next: review-synthesis
-      - condition: needs_fix
-        next: review-synthesis
 
   - name: review-synthesis
     capabilities: readonly

@@ -118,54 +118,26 @@ steps:
       - condition: any("error")
         next: reviewers
       - condition: all("Complies with Terraform conventions", "No AI-specific issues", "approved")
-        next: merge-readiness-review
+        next: final-supervise
       - condition: any("Convention violations found", "AI-specific issues found", "needs_fix")
         next: supervise
-  - name: merge-readiness-review
-    capabilities: readonly
-    tags:
-      - review
-      - final-gate
-      - merge-readiness
-    edit: false
-    persona: merge-readiness-reviewer
-    policy:
-      - contract-change
-      - review
-    rules:
-      - condition: approved
-        next: final-supervise
-      - condition: needs_fix
-        next: final-supervise
-    instruction: review-merge-readiness
-    output_contracts:
-      report:
-        - name: merge-readiness-review.md
-          format: merge-readiness-review
-
   - name: final-supervise
     capabilities: readonly
     tags:
       - review
-    edit: &terraform_supervise_edit false
-    persona: &terraform_supervise_persona supervisor
-    policy: &terraform_supervise_policy [contract-change, review]
-    knowledge: &terraform_supervise_knowledge terraform-aws
-    instruction: &terraform_supervise_instruction supervise
+    edit: false
+    persona: supervisor
+    policy: [contract-change]
+    knowledge: terraform-aws
+    instruction: supervise
     rules:
       - condition: BLOCKED
         next: ABORT
-      - condition: All reviewers approved and mergeable quality
+      - condition: APPROVE
         next: COMPLETE
-      - condition: Only AI-specific issues need fixing
-        next: ai-antipattern-fix
-      - condition: Only convention violations or mergeability issues need fixing
+      - condition: REJECT
         next: supervise_fix
-      - condition: Multiple types of issues found
-        next: fix_both
-      - condition: Irreconcilable requirement conflict, user decision needed
-        next: ABORT
-    output_contracts: &terraform_supervise_output_contracts
+    output_contracts:
       report:
         - name: supervisor-validation.md
           format: supervisor-validation
@@ -178,25 +150,25 @@ steps:
     tags:
       - review
       - supervise
-    edit: *terraform_supervise_edit
-    persona: *terraform_supervise_persona
-    policy: *terraform_supervise_policy
-    knowledge: *terraform_supervise_knowledge
-    instruction: *terraform_supervise_instruction
+    edit: &terraform_supervise_edit false
+    persona: &terraform_supervise_persona supervisor
+    policy: &terraform_supervise_policy [contract-change, review]
+    knowledge: &terraform_supervise_knowledge terraform-aws
+    instruction: &terraform_supervise_instruction supervise
     rules:
       - condition: BLOCKED
         next: ABORT
-      - condition: All reviewers approved and mergeable quality
+      - condition: APPROVE
         next: COMPLETE
-      - condition: Only AI-specific issues need fixing
-        next: ai-antipattern-fix
-      - condition: Only convention violations or mergeability issues need fixing
+      - condition: REJECT
         next: supervise_fix
-      - condition: Multiple types of issues found
-        next: fix_both
-      - condition: Irreconcilable requirement conflict, user decision needed
-        next: ABORT
-    output_contracts: *terraform_supervise_output_contracts
+    output_contracts: &terraform_supervise_output_contracts
+      report:
+        - name: supervisor-validation.md
+          format: supervisor-validation
+        - name: summary.md
+          format: supervisor-summary
+          use_judge: false
   - name: fix_both
     tags:
       - coding

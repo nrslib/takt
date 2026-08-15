@@ -349,8 +349,8 @@ describe('contract-family active composition', () => {
       ['fix', 'apply-fix-verification'],
       ['apply-fix-verification', 'verify-fix'],
       ['verify-fix', 'fix'],
-      ['plan', 'review-merge-readiness'],
-      ['review-merge-readiness', 'plan'],
+      ['plan', 'supervise-review-resolution'],
+      ['supervise-review-resolution', 'plan'],
     ] as const;
     for (const [declaredInstruction, swappedInstruction] of swaps) {
       const swappedContent = resolveRefToContent(
@@ -374,7 +374,7 @@ describe('contract-family active composition', () => {
       ['fixture/steps[0]:fix', 'apply-fix-verification'],
       ['fixture/steps[0]:fix-retry', 'verify-fix'],
       ['fixture/steps[0]:fix-verifier', 'fix'],
-      ['fixture/steps[0]:plan', 'review-merge-readiness'],
+      ['fixture/steps[0]:plan', 'supervise-review-resolution'],
       ['fixture/steps[0]:final-gate', 'plan'],
     ] as const;
     for (const [path, swappedInstruction] of swaps) {

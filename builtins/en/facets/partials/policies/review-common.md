@@ -35,7 +35,7 @@ This review is a defensive quality and security audit performed, on request, aga
 | A current defect is verified in code or evidence and requires correction | Report it as an issue |
 | Evidence is insufficient, the search scope is incomplete, or the result cannot be verified | Record it as unverified scope, not as an issue |
 | Claiming absence or missing wiring | Report a locationless issue only when the original requirement or existing public contract makes existence or wiring necessary and every required route was searched |
-| Questioning whether quality gates were run or their evidence was reported | Not an issue. Evaluating verification results is the final gate's jurisdiction |
+| Questioning whether quality gates were run or their evidence was reported | Not an issue |
 | Environmental factors prevent demonstration, and neither current code nor reproducible evidence confirms a defect requiring correction | Record it as unverified scope; do not create an issue or REJECT |
 
 - APPROVE means zero issues and REJECT means one or more issues. Never pad issues with approvals, summaries, or normal confirmations.
@@ -141,20 +141,17 @@ Checks that only inspect configuration values, logs, snapshots, or the last obse
 
 ### Division of Verification Responsibility
 
-Verifying that the full test suite passes is not the reviewer's responsibility. The fixing step's quality gates cover verification of the changed scope (whatever gates are imposed on it, such as the build, static checks, and changed-scope tests); the final gate immediately before merge covers the full suite. Reviewers do not re-run the full suite and instead spend that time reproducing findings and running risk-based targeted checks.
+Verifying that the full test suite passes or that quality-gate records are complete is not the reviewer's responsibility. Reviewers do not re-run the full suite and instead spend that time reproducing findings and running risk-based targeted checks.
 
 | Evidence | Judgment |
 |----------|----------|
 | Reproduced your own behavioral finding by operating on or executing the target code | OK (required for behavioral findings) |
 | Verified a statically determinable finding (types, contracts, specs, non-executable assets) by reading and cross-checking the relevant sources | OK |
 | Verified the main changed behaviors with targeted execution or tests | OK (recommended) |
-| Referenced the execution records of all quality gates imposed on the fixing step | OK (no re-run needed) |
 | Closing an individual finding based solely on full-suite passage | REJECT |
 | A behavioral claim not reproduced or verified by execution | REJECT |
 
-Even when the fixing step's execution records lack evidence for one of its imposed quality gates, do not file that as an issue — evaluating verification results is the final gate's jurisdiction, and a missing-evidence claim would only sit on the completion gate as a mechanically unverifiable provisional. Record the missing evidence as unverified scope, and treat behavioral claims in that scope as not reproduced by execution. Full-suite evidence is the final gate's responsibility, so do not demand it from the fixing step.
-
-Exception: when suite execution is imposed on your own step as a quality gate (the final-gate role), follow the gate's instructions and run it. This section governs reviewers without such gates not spending time on the full suite; it does not exempt an imposed gate.
+Do not file an issue when the fix report has no quality-gate record. Do not infer and require an unrecorded gate from the fix plan or another report.
 
 ## Fact-Checking
 

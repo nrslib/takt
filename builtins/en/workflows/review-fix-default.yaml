@@ -1,5 +1,5 @@
 name: review-fix-default
-description: Multi-perspective review + fix loop (architecture, security, testing, and coding in parallel, followed by merge-readiness review and then supervision)
+description: Multi-perspective review + fix loop (architecture, security, testing, and coding in parallel, followed by a supervisor checking whether requirements are met)
 max_steps: 30
 initial_step: gather
 loop_monitors:
@@ -125,14 +125,14 @@ steps:
 
   - name: final-gate
     kind: workflow_call
-    call: merge-readiness-final-gate
+    call: supervisor-final-gate
     rules:
       - condition: COMPLETE
         next: COMPLETE
       - condition: needs_fix
         next: remediation
       - condition: need_replan
-        next: remediation
+        next: ABORT
       - condition: ABORT
         next: ABORT
   - name: remediation

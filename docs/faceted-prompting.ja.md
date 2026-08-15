@@ -382,7 +382,7 @@ instructions、policies、knowledge、output contracts の facet ファイルは
 
 canonical form はコロン後にスペースを入れない `{extends:fix}` だが、`{extends: fix}` も受理される。親名は bare facet name のみで、path reference や `@scope` reference による継承はサポートしない。親 lookup では現在の source file を候補から除外するため、project-level の `fix.md` は自身を再帰的に読むことなく lower-layer の `fix.md` を継承できる。persona facet は継承対象外である。
 
-workflow step は scalar の `instruction` フィールドで1つの instruction facet を選択する。再利用可能な instruction の関心を合成する場合は wrapper facet を作り、`{{include:instructions/<name>}}` で同じ kind の partial を取り込む。output contract でも同様に `{{include:output-contracts/<name>}}` を使用できる。builtin の `scenario-based-*` facet はこの構成で、要求シナリオの計画、テスト対応、維持、最終検証を明示的に有効化する。これらの step 間契約を有効にするのは `experimental` と `takt-experimental` だけであり、通常の development、maintenance、review、merge-readiness、Terraform、simple workflow はシナリオ非依存の facet を使う。
+workflow step は scalar の `instruction` フィールドで1つの instruction facet を選択する。再利用可能な instruction の関心を合成する場合は wrapper facet を作り、`{{include:instructions/<name>}}` で同じ kind の partial を取り込む。output contract でも同様に `{{include:output-contracts/<name>}}` を使用できる。builtin の `scenario-based-*` facet はこの構成で、要求シナリオの計画、テスト対応、維持、最終検証を明示的に有効化する。これらの step 間契約を有効にするのは `experimental` と `takt-experimental` だけであり、通常の development、maintenance、review、要件充足の最終確認、Terraform、simple workflow はシナリオ非依存の facet を使う。
 
 ## 既存手法との違い
 

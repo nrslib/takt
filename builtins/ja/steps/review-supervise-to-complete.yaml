@@ -7,7 +7,6 @@ edit: false
 persona: supervisor
 policy:
   - contract-change
-  - review
 pass_previous_response: false
 instruction: supervise
 output_contracts:

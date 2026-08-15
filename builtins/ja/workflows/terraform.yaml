@@ -118,54 +118,26 @@ steps:
       - condition: any("error")
         next: reviewers
       - condition: all("Terraform規約に準拠", "AI特有の問題なし", "approved")
-        next: merge-readiness-review
+        next: final-supervise
       - condition: any("規約違反あり", "AI特有の問題あり", "needs_fix")
         next: supervise
-  - name: merge-readiness-review
-    capabilities: readonly
-    tags:
-      - review
-      - final-gate
-      - merge-readiness
-    edit: false
-    persona: merge-readiness-reviewer
-    policy:
-      - contract-change
-      - review
-    rules:
-      - condition: approved
-        next: final-supervise
-      - condition: needs_fix
-        next: final-supervise
-    instruction: review-merge-readiness
-    output_contracts:
-      report:
-        - name: merge-readiness-review.md
-          format: merge-readiness-review
-
   - name: final-supervise
     capabilities: readonly
     tags:
       - review
-    edit: &terraform_supervise_edit false
-    persona: &terraform_supervise_persona supervisor
-    policy: &terraform_supervise_policy [contract-change, review]
-    knowledge: &terraform_supervise_knowledge terraform-aws
-    instruction: &terraform_supervise_instruction supervise
+    edit: false
+    persona: supervisor
+    policy: [contract-change]
+    knowledge: terraform-aws
+    instruction: supervise
     rules:
       - condition: BLOCKED
         next: ABORT
-      - condition: レビュアー全員承認かつマージ可能な品質
+      - condition: APPROVE
         next: COMPLETE
-      - condition: AI特有の問題のみ要修正
-        next: ai-antipattern-fix
-      - condition: 規約違反または要件未達のみ要修正
+      - condition: REJECT
         next: supervise_fix
-      - condition: 複数種別の問題あり
-        next: fix_both
-      - condition: 要件矛盾で収束不能、ユーザー判断が必要
-        next: ABORT
-    output_contracts: &terraform_supervise_output_contracts
+    output_contracts:
       report:
         - name: supervisor-validation.md
           format: supervisor-validation
@@ -178,25 +150,25 @@ steps:
     tags:
       - review
       - supervise
-    edit: *terraform_supervise_edit
-    persona: *terraform_supervise_persona
-    policy: *terraform_supervise_policy
-    knowledge: *terraform_supervise_knowledge
-    instruction: *terraform_supervise_instruction
+    edit: &terraform_supervise_edit false
+    persona: &terraform_supervise_persona supervisor
+    policy: &terraform_supervise_policy [contract-change, review]
+    knowledge: &terraform_supervise_knowledge terraform-aws
+    instruction: &terraform_supervise_instruction supervise
     rules:
       - condition: BLOCKED
         next: ABORT
-      - condition: レビュアー全員承認かつマージ可能な品質
+      - condition: APPROVE
         next: COMPLETE
-      - condition: AI特有の問題のみ要修正
-        next: ai-antipattern-fix
-      - condition: 規約違反または要件未達のみ要修正
+      - condition: REJECT
         next: supervise_fix
-      - condition: 複数種別の問題あり
-        next: fix_both
-      - condition: 要件矛盾で収束不能、ユーザー判断が必要
-        next: ABORT
-    output_contracts: *terraform_supervise_output_contracts
+    output_contracts: &terraform_supervise_output_contracts
+      report:
+        - name: supervisor-validation.md
+          format: supervisor-validation
+        - name: summary.md
+          format: supervisor-summary
+          use_judge: false
   - name: fix_both
     tags:
       - coding

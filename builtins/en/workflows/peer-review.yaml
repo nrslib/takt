@@ -1,5 +1,5 @@
 name: peer-review
-description: Specialist parallel peer reviewers (+ ai-antipattern-review-2nd) -> finding adjudication -> shared remediation loop, followed by one supervisor that integrates merge-readiness checks into the final decision.
+description: Specialist parallel peer reviewers (+ ai-antipattern-review-2nd) -> finding adjudication -> shared remediation loop, followed by one supervisor that makes the final requirement-fulfillment decision.
 subworkflow:
   callable: true
   visibility: internal
@@ -71,7 +71,7 @@ subworkflow:
     final_gate_instruction:
       type: facet_ref
       facet_kind: instruction
-      default: supervise-merge-readiness
+      default: supervise-review-resolution
 facet_pools:
   coding-facets:
     uses: coding-facets
@@ -174,21 +174,17 @@ steps:
   - name: final-gate
     uses: peer-review-final-gate
     with:
-      merge_readiness_policy:
-        $param: verification_policy
       review_knowledge:
         $param: review_knowledge_additions
       final_gate_instruction:
         $param: final_gate_instruction
     rules:
-      - condition: MERGEABLE
+      - condition: APPROVE
         next: COMPLETE
-      - condition: FIX REQUIRED
+      - condition: REJECT
         next: remediation
-      - condition: TASK REPLAN REQUIRED
+      - condition: BLOCKED
         return: need_replan
-      - condition: BLOCKED BY ENVIRONMENT
-        next: ABORT
   - name: remediation
     kind: workflow_call
     call:

@@ -15,8 +15,7 @@
 - 新しい問題の網羅的な探索（各専門 Reviewer が担当）
 - 修正方法の詳細計画（Planner が担当）
 - コードの修正（Coder が担当）
-- マージ可否の最終判定（Supervisor が担当）
-- 実行ゲートの再実行（Merge Readiness Reviewer が担当）
+- 要件充足の最終判定（Supervisor が担当）
 
 ## 行動姿勢
 

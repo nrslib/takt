@@ -1,5 +1,5 @@
 name: experimental
-description: 動的実装 companion と、共通コアの裁定・修正検証付きピアレビュー収束ループ、マージ準備ゲートを使う実験的コーディングワークフロー。
+description: 動的実装 companion と、共通コアの裁定・修正検証付きピアレビュー収束ループ、要件の最終確認を使う実験的コーディングワークフロー。
 max_steps: 51
 initial_step: develop
 
@@ -18,7 +18,7 @@ steps:
       testing_report_format: scenario-based-test-report
       fix_plan_instruction: scenario-based-fix-plan-from-review-resolution
       fix_plan_report_format: scenario-based-fix-plan
-      final_gate_instruction: scenario-based-supervise-merge-readiness
+      final_gate_instruction: scenario-based-supervise-review-resolution
       implementation_companions:
         fixed: [ai-antipattern-review-companion, testing-review-companion]
         pool: []

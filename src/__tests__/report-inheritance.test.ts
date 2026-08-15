@@ -450,7 +450,7 @@ describe('inheritReviewReports', () => {
     const sourcePath = writeSourceReport(
       projectDirectory,
       namespace,
-      'merge-readiness-review.md',
+      'review-resolution.md',
       'nested review',
       new Date('2026-07-17T00:00:00.000Z'),
     );
@@ -473,12 +473,12 @@ describe('inheritReviewReports', () => {
       currentRunSlug,
       targetReportDirectory: targetDirectory,
       reviewReportNames: [
-        'subworkflows/iteration-*--step-final-gate--workflow-final-gate/subworkflows/iteration-*--step-reviewers--workflow-reviewers/merge-readiness-review.md',
+        'subworkflows/iteration-*--step-final-gate--workflow-final-gate/subworkflows/iteration-*--step-reviewers--workflow-reviewers/review-resolution.md',
       ],
     });
 
     // Then
-    const copiedPath = join(targetDirectory, 'merge-readiness-review.md');
+    const copiedPath = join(targetDirectory, 'review-resolution.md');
     expect(result.copied).toEqual([
       expect.objectContaining({ sourcePath, targetPath: copiedPath }),
     ]);

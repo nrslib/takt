@@ -32,9 +32,9 @@ Carry-forward source: {Latest fix-verification in the same remediation / relativ
 | {N} | {Fix-unit name from Finding Coverage; exclude follow-up verification} | {Boundary change / consumer migration / removal / local fix} | {Prior operations or None} | {file:line} | {Verifiable condition and observation point} |
 
 ## Constraint Compatibility
-| Fix Unit | Constraint References | Implementation Method and Candidate Decision | Verification Method, Observation Point, and Execution Conditions | Compatibility Rationale | Quality Gates |
-|----------|-----------------------|----------------------------------------------|----------------------------------------------------------------|-------------------------|---------------|
-| {Fix unit} | {Requirements, Policy / Knowledge, and public contracts} | {Selected method and rationale for accepting or rejecting candidates} | {Deterministic evidence available now. If environmental factors prevent demonstration, include the factor, alternative evidence, and follow-up} | {Why the constraints are satisfied} | {Commands} |
+| Fix Unit | Constraint References | Implementation Method and Candidate Decision | Verification Method, Observation Point, and Execution Conditions | Compatibility Rationale |
+|----------|-----------------------|----------------------------------------------|----------------------------------------------------------------|-------------------------|
+| {Fix unit} | {Requirements, Policy / Knowledge, and public contracts} | {Selected method and rationale for accepting or rejecting candidates} | {Deterministic evidence available now. If environmental factors prevent demonstration, include the factor, alternative evidence, and follow-up} | {Why the constraints are satisfied} |
 
 ## Replanning Requirements
 - {None, or evidence preventing a sound fix plan, the cause that remains unconfirmed, and the investigation or decision required}

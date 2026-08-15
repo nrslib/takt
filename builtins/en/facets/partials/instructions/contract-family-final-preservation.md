@@ -2,6 +2,6 @@
 
 {{include:instructions/contract-family-core}}
 
-Inspect only families already declared actionable, accepted finding families, and families changed by the current remediation. Check them for unmigrated consumers, obsolete paths, one-sided migration, remediation regression, and required migration. Classify a problem that cannot be tied to an existing family ID and evidence as `outside`; do not discover or report a new family.
+Inspect only families already declared actionable, accepted finding families, and families changed by the current remediation. Check them for unmigrated consumers, obsolete paths, one-sided migration, remediation regression, and required migration. Classify a problem that cannot be tied to an existing family ID and current code or a preceding report as `outside`; do not discover or report a new family.
 
-Follow the active review authority policy for the boundary of a merge blocker.
+Treat only an unmet original requirement, an unresolved or recurrent prior finding in a declared actionable family, or an inconsistent invariant-register carry-forward as a merge blocker.

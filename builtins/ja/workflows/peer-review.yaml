@@ -1,5 +1,5 @@
 name: peer-review
-description: 専門並列ピアレビュー（+ ai-antipattern-review-2nd）→ 指摘裁定 → 共通修正ループ後、merge-readiness 観点を統合した supervisor が最終裁定する。
+description: 専門並列ピアレビュー（+ ai-antipattern-review-2nd）→ 指摘裁定 → 共通修正ループ後、supervisor が要件充足を最終裁定する。
 subworkflow:
   callable: true
   visibility: internal
@@ -71,7 +71,7 @@ subworkflow:
     final_gate_instruction:
       type: facet_ref
       facet_kind: instruction
-      default: supervise-merge-readiness
+      default: supervise-review-resolution
 facet_pools:
   coding-facets:
     uses: coding-facets
@@ -174,21 +174,17 @@ steps:
   - name: final-gate
     uses: peer-review-final-gate
     with:
-      merge_readiness_policy:
-        $param: verification_policy
       review_knowledge:
         $param: review_knowledge_additions
       final_gate_instruction:
         $param: final_gate_instruction
     rules:
-      - condition: マージ可能
+      - condition: APPROVE
         next: COMPLETE
-      - condition: 修正が必要
+      - condition: REJECT
         next: remediation
-      - condition: タスク全体の再計画が必要
+      - condition: BLOCKED
         return: need_replan
-      - condition: 実行環境により判定不能
-        next: ABORT
   - name: remediation
     kind: workflow_call
     call:

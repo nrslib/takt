@@ -4,94 +4,33 @@
 ## Result: APPROVE / REJECT / BLOCKED
 
 ## Requirements Fulfillment Check
+| # | Decomposed Requirement | Original Requirement Source | Status | Basis |
+|---|------------------------|-----------------------------|--------|-------|
+| 1 | {Requirement} | {Location in the task specification} | {Fulfilled / Unfulfilled / Cannot determine} | {Current-code file:line or a statement in a preceding report} |
 
-Extract requirements from the task spec and verify each one individually against actual code.
-
-| # | Decomposed requirement | Original Requirement Source | Met | Evidence (file:line) | Exception / Optionalization Evidence |
-|---|------------------------|-----------------------------|-----|----------------------|------------------------------------|
-| 1 | {requirement 1} | `order.md:10` | ✅/❌/unverified | `src/file.ts:42` | none |
-| 2 | {requirement 2} | `order.md:11` | ✅/❌/unverified | `src/file.ts:55` | none |
-
-- If a sentence contains multiple conditions, split it into the smallest independently verifiable rows
-- Do not combine parallel conditions such as `A/B`, `global/project`, `JSON/leaf`, `allow/deny`, or `read/write` into one row
-- If any ❌ exists, REJECT is mandatory
-- When environmental constraints prevent evidence collection, mark the requirement `unverified`, record the verification blocker, and select BLOCKED
-- ✅ without evidence is invalid (must verify against actual code)
-- Do not mark a row as ✅ when the evidence covers only part of the cases
-- Treat optionalization, exclusion, or exception not present in the task spec as unmet
-- Do not rely on plan report's judgment; independently verify maintainability-aware merge quality
+{{include:output-contracts/invariant-register-carry-forward}}
 
 ## Re-evaluation of Prior Findings
-| finding_id | Prior Status | Original Expected Result | Re-evaluation | Evidence |
-|------------|--------------|--------------------------|---------------|----------|
-| {id} | new / persists / resolved | {Original finding acceptance criteria} | valid / false_positive / overreach | `src/file.ts:42`, `reports/plan.md` |
+| Finding ID / Source | Original Acceptance Criteria | Resolution Status | Basis |
+|---------------------|------------------------------|-------------------|-------|
+| {ID and report name} | {Original finding acceptance criteria} | {Resolved / Unresolved / false_positive / overreach} | {Current-code file:line or a statement in a preceding report} |
 
-- If final judgment differs from prior review conclusions, explain why with evidence
-- Treat `resolved` as valid only when it satisfies the original expected result and original requirement
-- If marking `false_positive` or `overreach`, state whether it conflicts with the task objective, the plan, or both
+## Actionable Families
+| family | Finding ID / source | Authorization basis | Evidence | Problem -> root cause | Affected contract paths | Acceptance criteria | Remediation boundary |
+|--------|---------------------|---------------------|----------|-----------------------|-------------------------|---------------------|----------------------|
+| {Stable family name} | {All IDs and report names} | {Direct acceptance-criterion violation / regression introduced by this diff / required consumer migration / accepted-family closure} | {file:line or a statement in a preceding report} | {Verified causal chain} | {Actual contract paths} | {Observable completion conditions} | {Required minimal change and explicitly excluded scope} |
 
-## Unclassified Concern Check
-| Review | Concern | Finding State | Supervisor Judgment | Evidence |
-|--------|---------|---------------|---------------------|----------|
-| {Review name} | {Concern, or "none"} | made finding / classified non-finding / unclassified | valid / REJECT reason / out of scope | `src/file.ts:42` |
+## Finding Dispositions
+| Finding ID / source | Technical validity | Disposition | Target family | Authorization basis | Reason absent from initial round | Evidence |
+|---------------------|--------------------|-------------|---------------|---------------------|----------------------------------|----------|
+| {ID and report name} | {Confirmed / Disproved / Unverified} | {actionable / duplicate / false_positive / overreach / out_of_scope / no_issue_after_verification / environment_unverified} | {Actionable family or none} | {Authorization basis or none} | {Required only for a new follow-up finding; otherwise not applicable} | {Current-code file:line or a statement in a preceding report} |
 
-## Maintenance Scope Check (maintenance workflows only)
-
-| Check | Result | Evidence |
-|-------|--------|----------|
-| Only required changes remain | ✅/❌ | {Evidence} |
-| Related changes have clear reasons | ✅/❌ | {Evidence} |
-| No unnecessary changes remain | ✅/❌ | {Evidence} |
-| No out-of-scope comment deletion occurred | ✅/❌ | {Evidence} |
-| Type names, file placement, and public APIs did not change out of scope | ✅/❌ | {Evidence} |
-| UI copy, accessible names, and test expectations did not change out of scope | ✅/❌ | {Evidence} |
-
-## Validation Summary
-| Item | Status | Verification Method |
-|------|--------|-------------------|
-| Tests | ✅ / ⚠️ / ❌ | {Execution log, report, CI result, or why unverified} |
-| Build | ✅ / ⚠️ / ❌ | {Execution log, report, CI result, or why unverified} |
-| Functional check | ✅ / ⚠️ / ❌ | {Evidence used, or state that it was not verified} |
-
-- Do not claim success/failure/not-runnable for commands that were never executed
-- When using `⚠️`, explain the missing evidence and the verified scope in the method column
-- If report text conflicts with execution evidence, treat that inconsistency itself as a finding
-
-## Unverified Scope
-| Item | Impact | Treatment |
-|------|--------|-----------|
-| {Unverified scope, or "none"} | {Primary or supporting requirement} | APPROVE allowed / REJECT reason / BLOCKED reason |
-
-## Verification Blockers (when BLOCKED)
-| Required Check | Attempted Command | Result | Required Environment | Available Environment | runtime.prepare | Why Code Changes Cannot Resolve It |
-|----------------|-------------------|--------|----------------------|-----------------------|-----------------|------------------------------------|
-| {Check} | `{command}` | {Actual error} | {Required runtime and version} | {Available runtime and version} | {Configuration and result or why unavailable} | {Evidence that the blocker is outside task scope} |
-
-## Current Iteration Findings (new)
-| # | finding_id | Item | Evidence | Reason | Authorization Basis | Reason Absent from Initial Round | Required Action |
-|---|------------|------|----------|--------|---------------------|----------------------------------|-----------------|
-| 1 | VAL-NEW-src-file-L42 | Requirement mismatch | `file:line` | Description | {accepted_family_unvisited_consumer / remediation_regression / direct_acceptance_criterion_violation / required_consumer_migration} | {Independent evidence explaining why the initial review omitted this finding} | Fix required |
-
-## Carry-over Findings (persists)
-| # | finding_id | Previous Evidence | Current Evidence | Reason | Required Action |
-|---|------------|-------------------|------------------|--------|-----------------|
-| 1 | VAL-PERSIST-src-file-L77 | `file:line` | `file:line` | Still unresolved | Apply fix |
-
-## Resolved Findings (resolved)
-| finding_id | Original Expected Result | Resolution Evidence |
-|------------|--------------------------|---------------------|
-| VAL-RESOLVED-src-file-L10 | {Original finding acceptance criteria} | `file:line` now passes validation |
-
-## Deliverables
-- Created: {Created files}
-- Modified: {Modified files}
-
-## Outstanding Items (if REJECT)
-| # | Item | Reason |
-|---|------|--------|
-| 1 | {Item} | {Reason} |
-
-## Rejection Gate
-- REJECT is valid only when at least one finding exists in `new` or `persists`
-- Findings without `finding_id` are invalid
+## Reason the Decision Cannot Be Made (when BLOCKED)
+- {Requirement that current code and preceding reports cannot decide, required external decision or information, and why task-scope code changes cannot provide it}
 ```
+
+**Cognitive-load rules:**
+- Select APPROVE only when every requirement is fulfilled, every preceding finding is resolved, and the recurrence register has been carried forward
+- Select REJECT only when an unfulfilled requirement or unresolved finding is recorded as an actionable family
+- Select BLOCKED only when current code and preceding reports cannot decide a requirement and task-scope code changes cannot provide the required external decision or information
+- Do not request or inspect machine-gate execution status, results, or logs, including tests and builds, and do not use their absence as a reason for REJECT or BLOCKED

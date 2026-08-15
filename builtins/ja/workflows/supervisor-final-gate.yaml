@@ -1,0 +1,49 @@
+name: supervisor-final-gate
+description: 現在のコードと前段の報告から、supervisor が要件の充足状態と必要な次の対応を判断する。
+subworkflow:
+  callable: true
+  visibility: internal
+  returns:
+    - needs_fix
+    - need_replan
+  params:
+    supervise_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default:
+        - architecture
+    supervisor_persona:
+      type: facet_ref
+      facet_kind: persona
+      default: supervisor
+capabilities: readonly
+initial_step: supervise
+steps:
+  - name: supervise
+    tags:
+      - review
+      - final-gate
+      - supervise
+    edit: false
+    persona:
+      $param: supervisor_persona
+    policy:
+      - contract-change
+    knowledge:
+      $param: supervise_knowledge
+    pass_previous_response: false
+    instruction: supervise
+    output_contracts:
+      report:
+        - name: supervisor-validation.md
+          format: supervisor-validation
+        - name: summary.md
+          format: supervisor-summary
+          use_judge: false
+    rules:
+      - condition: BLOCKED
+        return: need_replan
+      - condition: APPROVE
+        next: COMPLETE
+      - condition: REJECT
+        return: needs_fix

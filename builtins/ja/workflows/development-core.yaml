@@ -1,5 +1,5 @@
 name: development-core
-description: 計画・テスト・実装・ピアレビュー・裁定・検証付き修正・マージ準備判定のコンテキストを注入できる共有開発フロー。
+description: 計画・テスト・実装・ピアレビュー・裁定・検証付き修正・要件確認のコンテキストを注入できる共有開発フロー。
 subworkflow:
   callable: true
   visibility: internal
@@ -93,7 +93,7 @@ subworkflow:
     final_gate_instruction:
       type: facet_ref
       facet_kind: instruction
-      default: supervise-merge-readiness
+      default: supervise-review-resolution
 initial_step: plan
 
 facet_pools:

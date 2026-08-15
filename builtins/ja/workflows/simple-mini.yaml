@@ -1,5 +1,5 @@
 name: simple-mini
-description: 強いモデルの判断力を信頼する軽量な開発ワークフロー（plan → implement → review ⇄ fix → COMPLETE）。独立したテスト作成と最終監督を省き、利用可能な関連SKILLをモデル自身が選ぶ。
+description: 強いモデルの判断力を信頼する軽量な開発ワークフロー（plan → implement → review ⇄ fix → COMPLETE）。独立したテスト作成と要件充足の最終確認を省き、利用可能な関連SKILLをモデル自身が選ぶ。
 capabilities: [readonly, enable-skills]
 max_steps: 20
 initial_step: plan
