@@ -63,6 +63,8 @@ describe('CT-COMP-12 worktree companion runtime continuity', () => {
     ].join('\n'));
     writeFileSync(join(projectDir, '.takt', 'runtime.yaml'), [
       'version: 1',
+      'companion:',
+      '  enabled: true',
       'provider:',
       '  profiles:',
       '    mock:',

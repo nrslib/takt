@@ -499,6 +499,60 @@ describe('ArpeggioRunner integration', () => {
     expect(phaseStarts.every((instruction) => instruction.includes('git check-ignore -v'))).toBe(true);
   });
 
+  it('injects workflow-wide rules into every arpeggio Phase 1 batch prompt', async () => {
+    const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
+    const config = {
+      ...buildArpeggioWorkflowConfig(
+        createArpeggioConfig(csvPath, templatePath),
+        tmpDir,
+      ),
+      allStepsRules: [
+        {
+          ref: 'arpeggio-execution-rule',
+          position: 'after_execution_rules' as const,
+          content: 'ARPEGGIO_EXECUTION_RULE',
+        },
+        {
+          ref: 'arpeggio-instruction-rule',
+          position: 'before_instruction' as const,
+          content: 'ARPEGGIO_INSTRUCTION_RULE',
+        },
+      ],
+    };
+    const phaseStarts: string[] = [];
+
+    mockRunAgentWithPrompt(
+      makeResponse({ content: 'A' }),
+      makeResponse({ content: 'B' }),
+      makeResponse({ content: 'C' }),
+    );
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
+    engine.on('phase:start', (step, phase, phaseName, instruction) => {
+      if (step.name !== 'process' || phase !== 1 || phaseName !== 'execute') return;
+      phaseStarts.push(instruction);
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(phaseStarts).toHaveLength(3);
+    expect(phaseStarts.every((instruction) => instruction.includes('ARPEGGIO_EXECUTION_RULE'))).toBe(true);
+    expect(phaseStarts.every((instruction) => instruction.includes('ARPEGGIO_INSTRUCTION_RULE'))).toBe(true);
+    expect(phaseStarts.every((instruction) => (
+      instruction.match(/all steps in this workflow/gi) ?? []
+    ).length === 1)).toBe(true);
+    for (const instruction of phaseStarts) {
+      expect(instruction.indexOf('ARPEGGIO_EXECUTION_RULE')).toBeGreaterThan(
+        instruction.indexOf('Do NOT use `cd` in Bash commands.'),
+      );
+      expect(instruction.indexOf('ARPEGGIO_INSTRUCTION_RULE')).toBeLessThan(
+        instruction.indexOf('Process '),
+      );
+    }
+  });
+
   it('wraps arpeggio batch executions in phase spans', async () => {
     const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
     const arpeggioConfig = createArpeggioConfig(csvPath, templatePath, { concurrency: 2 });

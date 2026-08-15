@@ -302,12 +302,14 @@ describe('resolveCompiledProviderEnvironment seam', () => {
   });
 
   it('passes legacy engine-options through unchanged when no runtime.yaml exists', () => {
-    const env = resolveCompiledProviderEnvironment({
+    const resolved = resolveRuntimeEnvironment({
       projectCwd,
       legacy: legacyInput,
       legacySignals: [],
     });
 
+    const env = resolved.providerEnvironment;
+    expect(resolved.companionEnabled).toBe(false);
     expect(env.provider).toBe('codex');
     expect(env.providerSource).toBe('global');
     expect(env.model).toBe('gpt-x');

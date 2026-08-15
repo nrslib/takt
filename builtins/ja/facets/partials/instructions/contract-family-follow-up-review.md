@@ -1,6 +1,7 @@
 **Contract family role: `follow-up-review`**
 
 {{include:instructions/contract-family-core}}
+{{include:instructions/existing-family-lookup}}
 
 finding を分類する前に、Report Directory 内の最新の `review-resolution.md` を読み、各 finding の裁定（disposition）を確認してください。非対象と裁定された finding を open として再構築せず、「裁定済みの対象外指摘」欄に記載してください。
 

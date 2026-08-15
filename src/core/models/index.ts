@@ -58,6 +58,7 @@ export type {
   ProviderRoutingConfig,
   ProviderRoutingEntry,
   WorkflowRule,
+  WorkflowWideRule,
   StepProviderOptions,
   OpenCodeGuardOptions,
   OpenCodeGuardProfile,

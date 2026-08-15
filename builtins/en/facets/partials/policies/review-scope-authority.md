@@ -1,8 +1,8 @@
 ## Exploration Authority and Finding / Remediation Authority
 
-A contract family is limited to paths that share the observable invariant, authoritative owner or source of truth, reason to change from the root cause, and external or terminal consequence. Similar names, types, or proximity alone do not establish one family.
+Use the contract-family identity defined by the active role instruction; this authority policy does not redefine it. Names, types, or proximity alone are grounds neither for merging nor for splitting a family.
 
-A bounded horizontal comparison is allowed as evidence gathering needed to close an active contract family: use it to identify the common owner, duplicate implementations that reconstruct the same meaning under another name, and unvisited or unmigrated consumers. Observing an adjacent, separate family during that comparison does not itself authorize a finding, a Companion repair request, or expansion of remediation scope.
+A bounded horizontal comparison is allowed as evidence gathering needed to close an active contract family: use it to identify the responsible source, duplicate implementations that reconstruct the same meaning under another name, and unvisited or unmigrated consumers. Observing an adjacent, separate family during that comparison does not itself authorize a finding, a Companion repair request, or expansion of remediation scope.
 
 ## Authority by Role
 
@@ -19,12 +19,12 @@ Only the following four Authorization Bases permit a new finding during follow-u
 
 | Authorization Basis | Authorization condition |
 |---------------------|-------------------------|
-| `accepted_family_unvisited_consumer` | An unvisited consumer with the same invariant, source of truth, and root cause as an active accepted family |
+| `accepted_family_unvisited_consumer` | An unvisited consumer with the same invariant, responsible source, and reason to change from the same cause as an active accepted family |
 | `remediation_regression` | A regression introduced by the current remediation |
 | `direct_acceptance_criterion_violation` | A direct violation of the original acceptance criteria |
 | `required_consumer_migration` | A consumer migration required to make the changed contract valid |
 
-Treat a normal path and an isolated failure path as one family when they share the same invariant, source of truth, and root cause. Do not create a new finding or expand remediation scope for an adjacent or separate family observed during bounded horizontal comparison unless it satisfies one of the four Authorization Bases. `direct_acceptance_criterion_violation` also requires the evidence to share the identity of an acceptance-contract family already presented. A problem that requires a new owner or root cause does not become a new family during final or follow-up review.
+Treat a normal path and an isolated failure path as one family when they share the same invariant, responsible source, and reason to change from the same cause. Do not create a new finding or expand remediation scope for an adjacent or separate family observed during bounded horizontal comparison unless it satisfies one of the four Authorization Bases. `direct_acceptance_criterion_violation` also requires the evidence to share the identity of an acceptance-contract family already presented. A problem that requires a different responsible source or reason to change does not become a new family during final or follow-up review.
 
 A Companion must not promote an unauthorized adjacent or separate family to `must_fix`, `should_fix`, `nit`, or a note that substantively requests a repair. A Moderator must `reject` such a finding. Review Adjudication must classify a technically valid finding without remediation authority as `out_of_scope` and must not propagate it into an actionable family or fix plan.
 

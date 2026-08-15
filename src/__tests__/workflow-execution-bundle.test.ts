@@ -15,6 +15,7 @@ import {
 } from '../features/tasks/execute/workflowExecutionBundle.js';
 import { attachLegacyWorkflowExecutionBundle } from '../features/workflowAuthoring/attachExecutionBundle.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
+import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
 import { buildWorkflowStepParticipationIdentity } from '../core/workflow/workflow-step-participation-index.js';
 import { canonicalJson } from '../shared/utils/canonical-json.js';
 
@@ -34,6 +35,51 @@ function workflow(name: string, steps: WorkflowConfig['steps']): WorkflowConfig 
 }
 
 describe('workflow execution bundle', () => {
+  it('restores normalized workflow-wide rules after the source rule file is removed', () => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-rules-'));
+    roots.push(root);
+    const workflowDir = join(root, '.takt', 'workflows');
+    const rulePath = join(workflowDir, 'rules', 'bundle-rule.md');
+    const workflowPath = join(workflowDir, 'root.yaml');
+    mkdirSync(join(workflowDir, 'rules'), { recursive: true });
+    writeFileSync(rulePath, 'BUNDLE_RULE_BODY', 'utf-8');
+    writeFileSync(workflowPath, `name: root
+initial_step: work
+max_steps: 1
+all_steps:
+  rules:
+    - bundle-rule
+steps:
+  - name: work
+    persona: coder
+    instruction: Work
+`, 'utf-8');
+
+    const config = loadWorkflowFromFile(workflowPath, root);
+    const originalRules = (config as unknown as {
+      readonly allStepsRules: readonly unknown[];
+    }).allStepsRules;
+    expect(originalRules).toEqual([{
+      ref: 'bundle-rule',
+      position: 'after_execution_rules',
+      content: 'BUNDLE_RULE_BODY',
+    }]);
+
+    const paths = buildRunPaths(root, 'bundle-rules-run');
+    publishWorkflowExecutionBundle(paths, prepareWorkflowExecutionBundle({
+      rootWorkflow: config,
+      workflowCallResolver: () => null,
+      projectCwd: root,
+      lookupCwd: root,
+    }));
+    rmSync(rulePath);
+
+    const loaded = loadWorkflowExecutionBundle(paths);
+    expect((loaded.rootWorkflow as unknown as {
+      readonly allStepsRules: readonly unknown[];
+    }).allStepsRules).toEqual(originalRules);
+  });
+
   it('round-trips an args-specific graph without replacing workflow_ref with node hashes', () => {
     const root = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-'));
     roots.push(root);

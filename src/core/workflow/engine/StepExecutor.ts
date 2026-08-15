@@ -16,6 +16,7 @@ import type {
   Language,
   FallbackContext,
   WorkflowConfig,
+  WorkflowWideRule,
   WorkflowResumePointEntry,
   NormalAgentWorkflowStep,
   ResolvedFacetPool,
@@ -174,6 +175,7 @@ export interface StepExecutorDeps {
   readonly getWorkflowName: () => string;
   readonly getTask: () => string;
   readonly getWorkflowDescription: () => string | undefined;
+  readonly getWorkflowRules: () => readonly WorkflowWideRule[] | undefined;
   readonly getWorkflowCallVars?: () => Readonly<Record<string, string | number | boolean>> | undefined;
   readonly getRetryNote: () => string | undefined;
   readonly getPrContext?: () => PullRequestContext | undefined;
@@ -1116,6 +1118,7 @@ export class StepExecutor {
       previousResponseSourcePath: state.previousResponseSourcePath,
       fallbackContext,
       workflowState: state,
+      ...(step.engineSynthesized === true ? {} : { workflowRules: this.deps.getWorkflowRules() }),
       ...(!this.deps.companionEnabled
         || !isNormalAgentWorkflowStep(step)
         || step.companion === undefined

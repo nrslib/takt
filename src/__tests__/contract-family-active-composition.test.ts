@@ -48,6 +48,12 @@ const OLD_ALIASES = [
   'follow-up-review-scope',
   'final-gate-new-finding-scope',
 ] as const;
+const EXISTING_FAMILY_LOOKUP_WRAPPERS = new Set([
+  'contract-family-initial-review.md',
+  'contract-family-follow-up-review.md',
+  'contract-family-review-by-mode.md',
+  'contract-family-final-preservation.md',
+]);
 
 interface ManifestEntry {
   path: string;
@@ -62,6 +68,75 @@ interface ManifestEntry {
   requiredPermissionMode: string;
   toolClass: ContractFamilyToolClass;
   executionKind: 'agent' | 'team-leader' | 'companion';
+  familyRecordingContracts?: Array<{ name: string; formatRef?: string }>;
+}
+
+const FAMILY_RECORDING_SHAPES = {
+  ja: [
+    {
+      heading: '## 問題系列の完了走査',
+      sectionMarkers: ['family_tag / 変更契約', '担当箇所', '観測可能な不変条件', '同じ原因で変更される理由', '追加した経路'],
+      formatMarkers: ['| # | finding_id | family_tag |'],
+    },
+    {
+      heading: '## 修正対象 family',
+      sectionMarkers: ['| family |', '担当箇所', '観測可能な不変条件', '同じ原因で変更される理由', '追加した経路'],
+      formatMarkers: [],
+    },
+  ],
+  en: [
+    {
+      heading: '## Problem-Family Completion Sweep',
+      sectionMarkers: ['family_tag / changed contract', 'Responsible source', 'Observable invariant', 'Reason to change from the same cause', 'Added path'],
+      formatMarkers: ['| # | finding_id | family_tag |'],
+    },
+    {
+      heading: '## Actionable Families',
+      sectionMarkers: ['| family |', 'Responsible source', 'Observable invariant', 'Reason to change from the same cause', 'Added path'],
+      formatMarkers: [],
+    },
+  ],
+} as const;
+
+function markdownSection(content: string, heading: string): string | undefined {
+  const start = content.indexOf(heading);
+  if (start < 0) return undefined;
+  const end = content.indexOf('\n## ', start + heading.length);
+  return content.slice(start, end < 0 ? undefined : end);
+}
+
+function assertExistingFamilyRecordingContracts(
+  step: WorkflowStep,
+  path: string,
+  lang: 'en' | 'ja',
+): Array<{ name: string; formatRef?: string }> {
+  const marker = lang === 'ja' ? '**既出 family の照合:**' : '**Existing-family lookup:**';
+  expect(step.instruction, path).toContain(marker);
+  const writableContracts = (step.outputContracts ?? [])
+    .filter(({ useJudge }) => useJudge !== false);
+  for (const { format, formatRef } of writableContracts) {
+    if (formatRef !== 'merge-readiness-supervision') continue;
+    const heading = lang === 'ja' ? '## 前段 finding の扱い' : '## Prior Finding Dispositions';
+    const markers = lang === 'ja'
+      ? ['対象 family', '同じ原因で変更される理由', '合流根拠']
+      : ['Target family', 'Reason to change from the same cause', 'Rationale'];
+    const section = markdownSection(format, heading);
+    expect(section, `${path}:${formatRef}`).toBeDefined();
+    for (const value of markers) expect(section, `${path}:${formatRef}:${value}`).toContain(value);
+  }
+  const matchingContracts = writableContracts
+    .filter(({ format }) => FAMILY_RECORDING_SHAPES[lang]
+      .some(({ heading, sectionMarkers, formatMarkers }) => {
+        const section = markdownSection(format, heading);
+        return section !== undefined
+          && sectionMarkers.every((value) => section.includes(value))
+          && formatMarkers.every((value) => format.includes(value));
+      }))
+    .map(({ name, formatRef }) => ({ name, ...(formatRef === undefined ? {} : { formatRef }) }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+  expect(matchingContracts.length, `${path} must persist existing-family matches in a primary output contract`)
+    .toBeGreaterThan(0);
+  return matchingContracts;
 }
 
 function rolesIn(instruction: string | undefined): string[] {
@@ -73,11 +148,23 @@ function coreCount(instruction: string): number {
   return instruction.match(/\*\*Contract family core\*\*/gu)?.length ?? 0;
 }
 
-function expandedWrapper(wrapper: string, lang: 'en' | 'ja'): string {
+function expandedInstructionPartial(
+  name: string,
+  lang: 'en' | 'ja',
+  ancestors: ReadonlySet<string> = new Set(),
+): string {
+  if (ancestors.has(name)) throw new Error(`Circular instruction partial include: ${name}`);
   const partialsDir = join(getLanguageResourcesDir(lang), 'facets', 'partials', 'instructions');
-  const wrapperContent = readFileSync(join(partialsDir, `${wrapper}.md`), 'utf8').trim();
-  const coreContent = readFileSync(join(partialsDir, 'contract-family-core.md'), 'utf8').trim();
-  return wrapperContent.replace('{{include:instructions/contract-family-core}}', coreContent);
+  const content = readFileSync(join(partialsDir, `${name}.md`), 'utf8').trim();
+  const nextAncestors = new Set(ancestors).add(name);
+  return content.replace(
+    /\{\{include:instructions\/([^}]+)\}\}/gu,
+    (_include: string, childName: string) => expandedInstructionPartial(childName, lang, nextAncestors),
+  );
+}
+
+function expandedWrapper(wrapper: string, lang: 'en' | 'ja'): string {
+  return expandedInstructionPartial(wrapper, lang);
 }
 
 function normalizePromptWhitespace(value: string): string {
@@ -159,6 +246,9 @@ function classifyAgentStep(step: WorkflowStep, path: string, lang: 'en' | 'ja'):
     : DECLARED_INSTRUCTION_MANIFEST[declaredInstruction];
   if (pathExpectation !== undefined) {
     const callerDeclaration = assertCallerInstruction(path, declaredInstruction, step.instruction, lang);
+    const familyRecordingContracts = EXISTING_FAMILY_LOOKUP_WRAPPERS.has(`${callerDeclaration.wrapper}.md`)
+      ? assertExistingFamilyRecordingContracts(step, path, lang)
+      : undefined;
     return {
       path,
       classification: 'target',
@@ -171,6 +261,7 @@ function classifyAgentStep(step: WorkflowStep, path: string, lang: 'en' | 'ja'):
       requiredPermissionMode: step.requiredPermissionMode ?? 'unspecified',
       toolClass: toolClass(step),
       executionKind: step.teamLeader === undefined ? 'agent' : 'team-leader',
+      ...(familyRecordingContracts === undefined ? {} : { familyRecordingContracts }),
     };
   }
   expect(declaration, `Target declaration lacks an independent caller-path expectation: ${path}`).toBeUndefined();
@@ -309,6 +400,41 @@ describe('contract-family active composition', () => {
     expect(manifests.ja.some(({ path }) => path.includes('/call:'))).toBe(true);
   });
 
+  it('resolves every existing-family lookup caller through a writable output contract in both locales', () => {
+    const manifests = Object.fromEntries(LANGUAGES.map((lang) => [lang, workflowManifest(projectDirs[lang], lang)])) as Record<'en' | 'ja', ManifestEntry[]>;
+    expect(manifests.ja).toEqual(manifests.en);
+    const lookupEntries = manifests.ja.filter(({ wrapper }) => (
+      wrapper !== undefined && EXISTING_FAMILY_LOOKUP_WRAPPERS.has(`${wrapper}.md`)
+    ));
+    expect(lookupEntries.length).toBeGreaterThan(0);
+    for (const entry of lookupEntries) {
+      expect(entry.familyRecordingContracts, entry.path).toBeDefined();
+      expect(entry.familyRecordingContracts!.length, entry.path).toBeGreaterThan(0);
+    }
+    const resolvedFormats = new Set(lookupEntries.flatMap(({ familyRecordingContracts }) => (
+      familyRecordingContracts?.map(({ formatRef }) => formatRef) ?? []
+    )));
+    expect(resolvedFormats).toContain('merge-readiness-review');
+    expect(resolvedFormats).toContain('supervisor-validation');
+    expect(resolvedFormats).toContain('merge-readiness-supervision');
+  });
+
+  it.each(LANGUAGES)('persists every family identity field in adjudication output for %s', (lang) => {
+    const content = readFileSync(join(
+      getLanguageResourcesDir(lang),
+      'facets',
+      'output-contracts',
+      'review-decision.md',
+    ), 'utf8');
+    const heading = lang === 'ja' ? '## 修正対象 family' : '## Actionable Families';
+    const markers = lang === 'ja'
+      ? ['担当箇所', '観測可能な不変条件', '同じ原因で変更される理由']
+      : ['Responsible source', 'Observable invariant', 'Reason to change from the same cause'];
+    const section = markdownSection(content, heading);
+    expect(section, heading).toBeDefined();
+    for (const value of markers) expect(section, `${heading}:${value}`).toContain(value);
+  });
+
   it('classifies every real-loader companion without hard-coded role projection', () => {
     const ja = companionManifest(projectDirs.ja, 'ja');
     const en = companionManifest(projectDirs.en, 'en');
@@ -325,6 +451,8 @@ describe('contract-family active composition', () => {
       const content = readFileSync(join(partialsDir, fileName), 'utf8');
       const includes = [...content.matchAll(/\{\{include:instructions\/(contract-family-[^}]+)\}\}/gu)].map((match) => match[1]!);
       expect(includes, fileName).toEqual(fileName === coreName ? [] : ['contract-family-core']);
+      expect(content.includes('{{include:instructions/existing-family-lookup}}'), fileName)
+        .toBe(EXISTING_FAMILY_LOOKUP_WRAPPERS.has(fileName));
     }
     for (const alias of OLD_ALIASES) expect(wrapperFiles, alias).not.toContain(`${alias}.md`);
   });

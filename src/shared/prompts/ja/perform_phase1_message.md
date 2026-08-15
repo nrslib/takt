@@ -7,6 +7,8 @@
         hasReport, reportInfo, phaseNote, hasTaskSection, userRequest, hasPreviousResponse,
         previousResponse, hasUserInputs, userInputs, hasRetryNote, retryNote, hasPrContext, prContext, hasPolicy,
         policyContent, hasKnowledge, knowledgeContent, hasQualityGates, qualityGatesContent,
+        hasWorkflowRulesAfterExecution, workflowRulesNoticeAfterExecution, workflowRulesAfterExecution,
+        hasWorkflowRulesBeforeInstruction, workflowRulesNoticeBeforeInstruction, workflowRulesBeforeInstruction,
         instructions
   builder: InstructionBuilder
 -->
@@ -22,6 +24,9 @@
 {{/if}}
 - **Bashコマンドで `cd` を使用しないでください。** 作業ディレクトリは既に正しく設定されています。ディレクトリを変更せずにコマンドを実行してください。
 {{#if editRule}}- {{editRule}}
+{{/if}}{{#if hasWorkflowRulesAfterExecution}}
+{{workflowRulesNoticeAfterExecution}}
+{{workflowRulesAfterExecution}}
 {{/if}}
 
 ## 判断ルール
@@ -84,7 +89,10 @@ Knowledge はトリミングされる場合があります。Source Path に従�
 {{/if}}
 
 ## Instructions
-{{instructions}}
+{{#if hasWorkflowRulesBeforeInstruction}}{{workflowRulesNoticeBeforeInstruction}}
+{{workflowRulesBeforeInstruction}}
+
+{{/if}}{{instructions}}
 {{#if hasQualityGates}}
 
 ## Quality Gates

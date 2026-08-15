@@ -211,6 +211,18 @@ const WorkflowRuleConditionRawSchema = z.string().trim().min(1).superRefine((con
   }
 });
 
+const WorkflowWideRuleReferenceSchema = z.string().trim().min(1);
+const WorkflowWideRuleEntrySchema = z.union([
+  WorkflowWideRuleReferenceSchema,
+  z.object({
+    ref: WorkflowWideRuleReferenceSchema,
+    position: z.literal('before_instruction').optional(),
+  }).strict(),
+]);
+const WorkflowAllStepsRawSchema = z.object({
+  rules: z.array(WorkflowWideRuleEntrySchema).optional(),
+}).strict().optional();
+
 const WorkflowResultLabelSchema = z.string().trim().min(1);
 
 /** Rule-based transition schema (new unified format) */
@@ -1163,6 +1175,7 @@ export const WorkflowConfigRawSchema = z.object({
   knowledge: z.record(z.string(), z.string()).optional(),
   instructions: z.record(z.string(), z.string()).optional(),
   report_formats: z.record(z.string(), z.string()).optional(),
+  all_steps: WorkflowAllStepsRawSchema,
   facet_pools: z.record(z.string().min(1), FacetPoolRawSchema).optional(),
   steps: z.array(WorkflowConfigStepRawSchema).min(1),
   initial_step: z.string().optional(),

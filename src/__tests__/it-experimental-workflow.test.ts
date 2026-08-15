@@ -746,6 +746,7 @@ describe('experimental builtin workflow', () => {
       const engine = new WorkflowEngine(workflow, projectDir, 'Implement and review a TAKT local execution security change', {
         projectCwd: projectDir,
         provider: 'mock',
+        companionEnabled: true,
         selectorProvider: SELECTOR_PROVIDER,
         selectorGitCommandRunner: SELECTOR_GIT_COMMAND_RUNNER,
         companionProviders: {
@@ -980,6 +981,7 @@ describe('experimental builtin workflow', () => {
       const engine = new WorkflowEngine(wrapper, projectDir, 'Implement a change that cannot be remediated', {
         projectCwd: projectDir,
         provider: 'mock',
+        companionEnabled: true,
         selectorProvider: SELECTOR_PROVIDER,
         selectorGitCommandRunner: SELECTOR_GIT_COMMAND_RUNNER,
         companionProviders: {

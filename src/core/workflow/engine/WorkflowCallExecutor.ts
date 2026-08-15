@@ -635,6 +635,10 @@ export class WorkflowCallExecutor {
         ...options.workflowCallVars,
         ...request.step.vars,
       },
+      inheritedWorkflowRules: [
+        ...(options.inheritedWorkflowRules ?? []),
+        ...(parentConfig.allStepsRules ?? []),
+      ],
       sharedRuntime: this.deps.sharedRuntime,
       resumeStackPrefix: [
         ...resumeStackPrefix,

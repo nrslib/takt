@@ -573,17 +573,19 @@ steps:
 1. `~/.takt/runtime.yaml`
 2. `<project>/.takt/runtime.yaml`
 
-Companion reviewers are enabled by default. Disable them with the top-level
+Companion reviewers are disabled by default. Enable them with the top-level
 `companion.enabled` policy:
 
 ```yaml
 version: 1
 companion:
-  enabled: false
+  enabled: true
 ```
 
-The global and project values are combined with logical AND; a project value
-of `true` cannot re-enable a globally disabled companion.
+When both global and project policies are specified, their values are combined
+with logical AND; a project value of `true` cannot re-enable a globally disabled
+companion. An omitted policy is neutral during layer merging, and Companion
+remains disabled when neither layer specifies one.
 
 Companion provider targets (`targets.companions`) and provider capability
 requirements apply only while companions are enabled. When disabled, companion

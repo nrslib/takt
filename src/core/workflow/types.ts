@@ -6,6 +6,7 @@ import type {
   Language,
   LoopMonitorConfig,
   WorkflowConfig,
+  WorkflowWideRule,
   WorkflowCallStep,
   WorkflowMaxSteps,
   WorkflowRestartPoint,
@@ -697,6 +698,8 @@ export interface WorkflowEngineOptions {
   sharedRuntime?: WorkflowSharedRuntimeState;
   resumeStackPrefix?: WorkflowResumePointEntry[];
   workflowCallResolver?: WorkflowCallResolver;
+  /** Workflow-wide rules inherited from the caller workflow. */
+  inheritedWorkflowRules?: readonly WorkflowWideRule[];
   /** Scalar execution context inherited through nested workflow_call boundaries. */
   workflowCallVars?: Readonly<Record<string, string | number | boolean>>;
   /** Exact verified resource root for the run's workflow execution bundle. */

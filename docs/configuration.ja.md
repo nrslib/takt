@@ -568,17 +568,19 @@ steps:
 1. `~/.takt/runtime.yaml`
 2. `<project>/.takt/runtime.yaml`
 
-companion reviewer は既定で有効です。無効化する場合は、トップレベルの
+companion reviewer は既定で無効です。有効化する場合は、トップレベルの
 `companion.enabled` を設定します。
 
 ```yaml
 version: 1
 companion:
-  enabled: false
+  enabled: true
 ```
 
-global と project の値は論理積で合成されるため、global 側で無効化した companion を
-project 側の `true` で再有効化することはできません。
+global と project の両方にポリシーがある場合、その値は論理積で合成されるため、global
+側で無効化した companion を project 側の `true` で再有効化することはできません。
+レイヤー合成時に未指定のポリシーは中立として扱い、両方とも未指定なら companion は
+無効のままです。
 
 companion の provider target（`targets.companions`）とプロバイダ能力要件が適用されるのは
 companion が有効な間だけです。無効時も companion 宣言と `targets.companions` の構造検証は
