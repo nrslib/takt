@@ -122,7 +122,7 @@ assistant:
 #   assistant:
 #     provider: claude
 #     model: opus
-#   selector:              # optional dynamic-parallel selector override
+#   selector:              # optional selector override for dynamic parallel, dynamic_facets, and companion pools
 #     provider: codex
 #     model: gpt-5
 #     provider_options:
@@ -130,7 +130,7 @@ assistant:
 #         reasoning_effort: medium
 ```
 
-`takt_providers.selector` is optional. Provider/model precedence is explicit CLI or environment override, project selector, global selector, project top-level, then global top-level. A model is accepted only when its candidate belongs to the resolved provider. Only selector entries contribute `provider_options`, merged by option leaf from global then project; top-level, persona, and pool sub-step options are not inherited by the selector. An empty selector entry or an empty `provider_options` entry is rejected during configuration loading. Dynamic selectors use the provider-neutral fresh-session transport and always pass the fixed read-only tool allowlist `Read`, `Glob`, `Grep` together with `permission_mode: readonly`; selector profile options cannot add Bash, edit, write, or other tools. Selector settings remain unused and do not affect workflows without dynamic parallel.
+`takt_providers.selector` is optional. Provider/model precedence is explicit CLI or environment override, project selector, global selector, project top-level, then global top-level. A model is accepted only when its candidate belongs to the resolved provider. Only selector entries contribute `provider_options`, merged by option leaf from global then project; top-level, persona, and pool sub-step options are not inherited by the selector. An empty selector entry or an empty `provider_options` entry is rejected during configuration loading. Dynamic parallel and `dynamic_facets` selectors use the provider-neutral fresh-session transport and pass the fixed read-only tool allowlist `Read`, `Glob`, `Grep` together with `permission_mode: readonly`. Companion selectors do not receive a fixed `allowedTools` list, so `allowed_tools` from the selector profile may be used. The tool allowlist is effective only for providers that honor it. Selector settings remain unused and do not affect workflows without dynamic parallel, dynamic facets, or an enabled companion pool.
 
 ```yaml
 # ~/.takt/config.yaml (continued)

@@ -596,8 +596,8 @@ describe('experimental builtin workflow', () => {
         );
         expect(selectorInstruction).toContain(
           language === 'en'
-            ? 'If no candidate applies, return an empty array'
-            : 'どの候補にも該当しなければ空配列を返し',
+            ? 'If no candidate applies, set selected_ids to an empty array'
+            : 'どの候補にも該当しなければ selected_ids を空配列にし',
         );
         expect(selectorInstruction).toContain(
           language === 'en'

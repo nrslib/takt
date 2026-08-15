@@ -170,4 +170,21 @@ describe('resolveSelectorReportNames', () => {
       'review-resolution.md',
     )]);
   });
+
+  it('should exclude unresolved report references', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-selector-unresolved-report-'));
+    temporaryDirectories.push(cwd);
+    const reportsRootDirectory = buildRunPaths(cwd, 'run-1').reportsRootAbs;
+    const reportDirectory = join(reportsRootDirectory, 'subworkflows', 'child');
+    mkdirSync(reportDirectory, { recursive: true });
+
+    expect(resolveSelectorReportNames({
+      reportDirectory,
+      reportsRootDirectory,
+      reportNames: ['review-resolution.md'],
+      stepName: 'child-review',
+      workflowReference: 'child-workflow',
+      workflowCallPath: [],
+    })).toEqual([]);
+  });
 });

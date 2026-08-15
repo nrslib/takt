@@ -23,13 +23,14 @@ export function resolveSelectorReportNames(input: SelectorReportNamesInput): rea
     input.stepName,
     input.workflowCallPath,
   );
-  return [...new Set(input.reportNames.map((reference) => (
-    resolveReportReferencePath(input.reportDirectory, reference, {
+  return [...new Set(input.reportNames.flatMap((reference) => {
+    const resolved = resolveReportReferencePath(input.reportDirectory, reference, {
       stepName: input.stepName,
       reportsRootDir: input.reportsRootDirectory,
       resumeReportConsumerKey,
-    })?.path ?? reference
-  )))];
+    });
+    return resolved === undefined ? [] : [resolved.path];
+  }))];
 }
 
 export interface DynamicSelectorInput {

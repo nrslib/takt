@@ -70,6 +70,8 @@ describe('DynamicFacetContextBuilder (C-SELECTOR-INPUT, C-SELECTOR-INVOKE)', () 
     expect(instruction).toContain('re-entry');
     expect(instruction).not.toContain('initial entry');
     expect(instruction).toContain('2');
+    expect(instruction).toContain('Reports to inspect:\n(none)');
+    expect(instruction).toContain('Changed file paths:\n(none)');
   });
 
   it('must NOT include facet body content in the selector instruction (C-SELECTOR-INPUT: facet 本文は渡さない)', () => {

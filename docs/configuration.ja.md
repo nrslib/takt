@@ -122,7 +122,7 @@ assistant:
 #   assistant:
 #     provider: claude
 #     model: opus
-#   selector:              # dynamic parallel selector 専用の任意設定
+#   selector:              # dynamic parallel・dynamic_facets・companion pool の選択に使う任意の selector 設定
 #     provider: codex
 #     model: gpt-5
 #     provider_options:
@@ -130,7 +130,7 @@ assistant:
 #         reasoning_effort: medium
 ```
 
-`takt_providers.selector` は任意です。provider/model の優先順位は、明示的な CLI または環境 override、project selector、global selector、project top-level、global top-level の順です。model は解決済み provider と一致する候補だけを採用します。`provider_options` は selector entry だけを global → project の leaf 単位でマージし、top-level・persona・pool sub-step の options は selector に継承されません。空の selector entry と空の `provider_options` entry は設定読み込み時に拒否されます。dynamic selector は provider-neutral な fresh-session transport を使い、`permission_mode: readonly` と固定の read-only tool allowlist `Read`・`Glob`・`Grep` を常に渡します。selector profile の options から Bash、編集・書き込み、その他の tool が追加されることはありません。dynamic parallel を使わない workflow では selector 設定を解決せず、既存実行へ影響しません。
+`takt_providers.selector` は任意です。provider/model の優先順位は、明示的な CLI または環境 override、project selector、global selector、project top-level、global top-level の順です。model は解決済み provider と一致する候補だけを採用します。`provider_options` は selector entry だけを global → project の leaf 単位でマージし、top-level・persona・pool sub-step の options は selector に継承されません。空の selector entry と空の `provider_options` entry は設定読み込み時に拒否されます。dynamic parallel と `dynamic_facets` の selector は provider-neutral な fresh-session transport を使い、固定の read-only tool allowlist `Read`・`Glob`・`Grep` と `permission_mode: readonly` を渡します。companion selector には固定の `allowedTools` を渡さないため、selector profile の `allowed_tools` が採用されることがあります。tool allowlist が実効性を持つのは、それを尊重する provider に限られます。dynamic parallel、dynamic facets、または有効な companion pool のいずれも使わない workflow では selector 設定は未使用で、既存実行へ影響しません。
 
 ```yaml
 # ~/.takt/config.yaml（続き）
