@@ -207,6 +207,9 @@ describe('facet include expansion', () => {
       join(getLanguageResourcesDir(lang), 'facets', 'partials', 'instructions', 'fix-plan-validity.md'),
       'utf-8',
     ).trim();
+    const evidenceChecks = lang === 'ja'
+      ? ['最小の読み取り専用実行', '確認した入力だけ', 'テストを簡単にすることや命名を整えることだけを理由に']
+      : ['minimal read-only execution', 'inputs that were actually checked', 'solely to simplify tests or improve naming'];
     for (const instruction of [
       'fix-plan',
       'apply-fix-plan',
@@ -222,6 +225,9 @@ describe('facet include expansion', () => {
 
       expect(content).toContain(partial);
       expect(content).not.toContain('{{include:instructions/fix-plan-validity}}');
+      for (const phrase of evidenceChecks) {
+        expect(content).toContain(phrase);
+      }
     }
   });
 
