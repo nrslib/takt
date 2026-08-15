@@ -37,13 +37,22 @@ function expectExpandedMarkdownTable(
   const sectionIndex = lines.indexOf(sectionHeading);
   expect(sectionIndex).toBeGreaterThanOrEqual(0);
 
-  const rows = lines
-    .slice(sectionIndex + 1)
-    .filter((line) => line.trim().startsWith('|'))
-    .slice(0, 3)
+  const linesAfterHeading = lines.slice(sectionIndex + 1);
+  const nextSectionOffset = linesAfterHeading.findIndex((line) => /^#{1,6}\s/u.test(line));
+  const sectionLines = nextSectionOffset === -1
+    ? linesAfterHeading
+    : linesAfterHeading.slice(0, nextSectionOffset);
+  const tableStart = sectionLines.findIndex((line) => line.trim().startsWith('|'));
+  expect(tableStart).toBeGreaterThanOrEqual(0);
+
+  const linesFromTable = sectionLines.slice(tableStart);
+  const tableEnd = linesFromTable.findIndex((line) => !line.trim().startsWith('|'));
+  const tableLines = tableEnd === -1 ? linesFromTable : linesFromTable.slice(0, tableEnd);
+  expect(tableLines).toHaveLength(3);
+
+  const rows = tableLines
     .map((line) => line.split('|').slice(1, -1).map((cell) => cell.trim()));
 
-  expect(rows).toHaveLength(3);
   expect(rows[0]).toEqual(expectedColumns);
   expect(rows[1]).toHaveLength(expectedColumns.length);
   expect(rows[1].every((cell) => /^-+$/u.test(cell))).toBe(true);
