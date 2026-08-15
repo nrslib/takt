@@ -65,6 +65,15 @@ workflow-local cache contract alone. It needs both CLI logins and is excluded
 from the default suite run; invoke it with
 `npm run eval:prompts:initial-review-external-identity-wiring`.
 
+The `review-adjudication-binding` suite runs the actual follow-up
+`security-review` composition from `peer-review` on Claude Opus 5, Codex Luna
+Max, and Codex Sol High. It checks that the reviewer obeys the latest finding
+dispositions, requires a valid reason to reopen a finding, and applies the
+security-specific evidence threshold without suppressing a reproduced OSC
+terminal effect. It needs both CLI logins and is excluded from the default
+suite run; invoke it with
+`npm run eval:prompts:review-adjudication-binding`.
+
 ## Suites
 
 | Suite | Workflow / step | Fixture | Measures |
@@ -103,6 +112,7 @@ from the default suite run; invoke it with
 | `follow-up-review-repair-regression` | peer-review / follow-up coding-review | follow-up-review-repair-regression | whether follow-up review independently falsifies completion claims and distinguishes repair-induced defects from adjacent omissions |
 | `follow-up-testing-review-repair-regression` | peer-review / follow-up testing-review | follow-up-review-repair-regression | whether test findings stay limited to missing regression detection in an authorized family and reject adjacent or structure-freezing test expansion |
 | `review-adjudication` | peer-review / review-adjudication | review-adjudication | whether adjudication separates technical validity from remediation authority, keeps accepted-family closure and diff-induced regressions actionable, and excludes even severe horizontal improvements from the fix plan |
+| `review-adjudication-binding` | peer-review / follow-up security-review | review-adjudication-binding | whether Opus 5, Luna Max, and Sol High keep three out-of-scope findings non-blocking, reopen only with an allowed basis, and distinguish bare ESC or unconstrained repository-owned rules from a reproduced OSC terminal effect |
 | `task-instruction-gherkin` | interactive task summarization | direct English and Japanese conversations | whether implementation details and abstraction intent remain in Markdown while focused Gherkin captures only externally observable behavior |
 | `final-readiness-supervision` | review-fix-default / merge-readiness-review + supervise Phase 1 | final-readiness-supervision | whether both public final-gate producers independently authorize a newly discovered required consumer, explain its initial-round omission, and avoid horizontal exploration |
 | `final-readiness-preservation` | review-fix-default / merge-readiness-review + supervise Phase 2 | final-readiness-supervision | whether both public final-gate reports preserve the new finding and keep adjudicated noise non-actionable |

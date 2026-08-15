@@ -15,6 +15,7 @@
  *         testing-review-observable-evidence,
  *         follow-up-review-repair-regression,
  *         follow-up-testing-review-repair-regression,
+ *         review-adjudication-binding,
  *         initial-plan-contract-closure, replan-contract-closure,
  *         issue-plan-samples, plan-report-source-authority,
  *         write-tests-contract-traceability,
@@ -69,6 +70,7 @@ const SUITES = {
   'implementation-report-contract-traceability': 'promptfooconfig.implementation-report-contract-traceability.yaml',
   'follow-up-review-repair-regression': 'promptfooconfig.follow-up-review-repair-regression.yaml',
   'follow-up-testing-review-repair-regression': 'promptfooconfig.follow-up-testing-review-repair-regression.yaml',
+  'review-adjudication-binding': 'promptfooconfig.review-adjudication-binding.yaml',
   'review-mode-authority': 'promptfooconfig.review-mode-authority.yaml',
   'fix-verifier-family-boundary': 'promptfooconfig.fix-verifier-family-boundary.yaml',
   'companion-early-scan': 'promptfooconfig.companion-early-scan.yaml',
@@ -101,6 +103,8 @@ for (const name of names) {
 // 両ログインが必要な3モデル測定スイートのため、明示的に呼び出す。
 // initial-review-external-identity-wiring も同じ2つの外部 CLI で3モデルを使うため、
 // デフォルト実行から除外して明示的に呼び出す。
+// review-adjudication-binding も同じ2つの外部 CLI で3モデルを使うため、
+// デフォルト実行から除外して明示的に呼び出す。
 // fix-plan-cause-check も claude（opus）と codex（gpt-5.6-luna）の
 // 両ログインが必要な二重測定スイートのため、明示的に呼び出す。
 const DEFAULT_EXCLUDED = new Set([
@@ -110,6 +114,7 @@ const DEFAULT_EXCLUDED = new Set([
   'fix-loop-convergence',
   'fix-plan-cause-check',
   'initial-review-external-identity-wiring',
+  'review-adjudication-binding',
   'write-tests-default-priority',
   'write-tests-default-priority-codex',
 ]);

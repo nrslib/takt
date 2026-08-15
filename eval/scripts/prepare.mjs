@@ -200,6 +200,14 @@ const TARGETS = [
     fixture: 'eval/fixtures/follow-up-review-repair-regression',
   },
   {
+    id: 'review-adjudication-binding',
+    workflow: 'peer-review',
+    via: 'reviewers',
+    step: 'security-review',
+    fixture: 'eval/fixtures/review-adjudication-binding',
+    includeOutputContract: true,
+  },
+  {
     id: 'review-mode-authority',
     workflow: 'review-default',
     step: 'coding-review',
@@ -373,6 +381,7 @@ for (const {
   artifacts,
   phase: requestedPhase,
   targetFile,
+  includeOutputContract,
 } of targets) {
   if (requestedPhase !== undefined && monitorCycle !== undefined) {
     throw new Error(`Target "${id}" cannot define both phase and monitorCycle`);
@@ -457,6 +466,30 @@ for (const {
         .map((substep) => substep.name),
     ]);
     throw new Error(`Step "${stepName}" not found in ${workflowName}. Available: ${names.join(', ')}`);
+  }
+
+  if (includeOutputContract === true) {
+    if (target.outputContracts?.length !== 1) {
+      throw new Error(`Target "${id}" requires exactly one output contract`);
+    }
+    const [outputContract] = target.outputContracts;
+    if (
+      outputContract === undefined
+      || outputContract === null
+      || typeof outputContract !== 'object'
+      || typeof outputContract.format !== 'string'
+    ) {
+      throw new Error(`Target "${id}" requires a formatted output contract`);
+    }
+    target = {
+      ...target,
+      instruction: [
+        target.instruction,
+        '',
+        '## Phase 1 evaluation output contract',
+        outputContract.format.trimEnd(),
+      ].join('\n'),
+    };
   }
 
   if (facetMode === 'none') {
