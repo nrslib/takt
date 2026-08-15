@@ -389,12 +389,24 @@ export class CodexClient {
       return errorResponse;
     }
 
+    const codexEnvironment = buildEnvWithNestedObservabilitySnapshot(
+      process.env,
+      options.childProcessEnv,
+    ) as Record<string, string>;
+    const shellPath = codexEnvironment.PATH;
     const codexConfig: CodexOptions['config'] = {
       ...(skillConfig ?? {}),
       ...(options.reasoningEffort === undefined
         ? {}
         : { model_reasoning_effort: options.reasoningEffort }),
       model_reasoning_summary: 'auto',
+      ...(shellPath === undefined
+        ? {}
+        : {
+            shell_environment_policy: {
+              set: { PATH: shellPath },
+            },
+          }),
     };
 
     while (true) {
@@ -402,10 +414,7 @@ export class CodexClient {
       options.onActivity?.({ kind: 'attempt_started' });
       let currentThreadId = threadId;
       const codexClientOptions: CodexOptions = {
-        env: buildEnvWithNestedObservabilitySnapshot(
-          process.env,
-          options.childProcessEnv,
-        ) as Record<string, string>,
+        env: codexEnvironment,
         ...(options.openaiApiKey ? { apiKey: options.openaiApiKey } : {}),
         ...(options.baseUrl !== undefined ? { baseUrl: options.baseUrl } : {}),
         ...(options.codexPathOverride ? { codexPathOverride: options.codexPathOverride } : {}),

@@ -155,6 +155,7 @@ describe('CodexClient retry', () => {
   afterEach(() => {
     vi.clearAllTimers();
     vi.useRealTimers();
+    vi.unstubAllEnvs();
     for (const root of tempRoots) {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -325,6 +326,9 @@ describe('CodexClient retry', () => {
         config: [{ path: fs.realpathSync(skillPath), enabled: false }],
       },
       model_reasoning_summary: 'auto',
+      shell_environment_policy: {
+        set: { PATH: process.env.PATH },
+      },
     };
 
     expect(result.status).toBe('done');
@@ -334,6 +338,33 @@ describe('CodexClient retry', () => {
       expectedConfig,
       expectedConfig,
     ]);
+  });
+
+  it('Codex の tool shell に CLI process と同じ PATH を渡す', async () => {
+    const shellPath = '/opt/takt/bin:/usr/bin:/bin';
+    vi.stubEnv('PATH', shellPath);
+    runPlans = [
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-1' },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+        ],
+      },
+    ];
+
+    const result = await new CodexClient().call('coder', 'prompt', { cwd: '/tmp' });
+
+    expect(result.status).toBe('done');
+    expect(codexConstructorCalls).toHaveLength(1);
+    expect(codexConstructorCalls[0]).toMatchObject({
+      env: { PATH: shellPath },
+      config: {
+        shell_environment_policy: {
+          set: { PATH: shellPath },
+        },
+      },
+    });
   });
 
   it('例外経路の at capacity を 1 秒、2 秒の指数バックオフで retry する', async () => {

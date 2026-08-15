@@ -180,7 +180,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
   - 手順（ユーザー行動/コマンド）:
     - E2E用 `config.yaml` に `runtime.prepare: [gradle, node]` を設定する。
     - mock providerの呼び出しログで、`TMPDIR`、`TAKT_RUNTIME_TMP`、`GRADLE_USER_HOME`、`npm_config_cache` がprovider呼び出し前に注入されたことを確認する。未設定時は注入されないことを確認する。
-    - `takt --task '<gradle/npm を実行する指示>' --workflow e2e/fixtures/workflows/simple.yaml` を実行する。
+    - 正例では `takt --task '<./gradlew test && npm test を1回のコマンドとして実行する指示>' --workflow e2e/fixtures/workflows/simple.yaml` を実行し、Gradle 成功後に npm が同じ provider 実行環境で続けて起動することを確認する。
     - 正例では、作業リポジトリに `.takt/.runtime/env.sh` と `.takt/.runtime/{cache,config,state,gradle,npm}` が作成されていることを確認する。`TMPDIR` はworktree固有の短い外部パスであり、NodeとGradleに同じ値が伝播することを確認する。
     - 負例（`runtime.prepare` 未設定）では、隔離環境から `GRADLE_USER_HOME` と `npm_config_cache` を除外し、Gradle の欠落環境変数および npm のruntimeキャッシュ未注入を示す専用証跡ファイルと両コマンドの実行markerを確認する。`.takt/.runtime/env.sh` は生成されないことを確認する。
 - Runtime.yaml provider section（runtime-v1）（`e2e/specs/runtime-provider.e2e.ts`）
