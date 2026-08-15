@@ -669,3 +669,5 @@ for (const {
     );
   }
 }
+
+export { composeConfiguredDynamicFacets };
