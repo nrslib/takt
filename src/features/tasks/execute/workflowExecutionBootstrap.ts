@@ -23,6 +23,7 @@ import {
   RESUME_ARTIFACTS_FILE_NAME,
   ResumeReportSnapshotSourceError,
 } from '../../../core/workflow/run/resume-report-snapshot.js';
+import { buildResumeReportSnapshotConsumerEntry } from '../../../core/workflow/run/resume-report-reference-snapshot.js';
 import { resolveRuntimeConfig } from '../../../core/runtime/runtime-environment.js';
 import {
   loadGlobalConfig,
@@ -415,10 +416,23 @@ export async function createWorkflowExecutionBootstrap(
   let resumeArtifactsManifest: ReturnType<typeof inheritResumeReportSnapshot> | undefined;
   if (sourceRunSlug && sourceRunSlug !== runSlug) {
     try {
+      const resumeReportConsumer = options.resumePoint === undefined
+        ? undefined
+        : buildResumeReportSnapshotConsumerEntry({
+          cwd,
+          projectCwd,
+          sourceRunSlug,
+          workflow: workflowConfig,
+          resumePoint: options.resumePoint,
+          workflowCallResolver: options.workflowCallResolver,
+        });
       resumeArtifactsManifest = inheritResumeReportSnapshot({
         cwd,
         sourceRunSlug,
         targetRunSlug: runSlug,
+        ...(resumeReportConsumer === undefined
+          ? {}
+          : { resumeReportConsumers: [resumeReportConsumer] }),
       });
     } catch (error) {
       if (!(error instanceof ResumeReportSnapshotSourceError)) {

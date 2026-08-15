@@ -367,6 +367,7 @@ describe('DynamicFacetSelectorCoordinator', () => {
       '/tmp/project',
       undefined,
       expect.stringContaining('Instruction:\nFix'),
+      '{"workflow":"test-workflow","step":"fix","calls":[]}',
     );
     expect(instructionSpy).toHaveBeenCalledOnce();
     const instructionInput = instructionSpy.mock.calls[0]![0] as {

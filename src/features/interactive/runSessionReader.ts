@@ -160,10 +160,10 @@ function assertLogsDirectory(rootDir: string, stats: Stats): void {
   }
 }
 
-function readReportFile(rootDir: string, fullPath: string, filename: string): ReportEntry {
+function readReportFile(rootDir: string, fullPath: string, filename: string): ReportEntry | null {
   const stats = assertReportPathSegmentsAreSafe(rootDir, fullPath, filename);
   if (stats === null) {
-    throw new Error(`Expected report does not exist: ${filename}`);
+    return null;
   }
   if (!stats.isFile()) {
     throw new Error(`Expected report is not a file: ${filename}`);
@@ -172,10 +172,18 @@ function readReportFile(rootDir: string, fullPath: string, filename: string): Re
     throw new Error(`Report file is too large: ${filename} exceeds the ${MAX_RUN_REPORT_BYTES} byte limit.`);
   }
 
-  return {
-    filename,
-    content: readFileSync(fullPath, 'utf-8'),
-  };
+  try {
+    return {
+      filename,
+      content: readFileSync(fullPath, 'utf-8'),
+    };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
+      return null;
+    }
+    throw error;
+  }
 }
 
 function collectReportFiles(rootDir: string, currentDir: string): ReportEntry[] {
@@ -194,7 +202,10 @@ function collectReportFiles(rootDir: string, currentDir: string): ReportEntry[] 
       continue;
     }
 
-    reports.push(readReportFile(rootDir, fullPath, relative(rootDir, fullPath)));
+    const report = readReportFile(rootDir, fullPath, relative(rootDir, fullPath));
+    if (report !== null) {
+      reports.push(report);
+    }
   }
 
   return reports;

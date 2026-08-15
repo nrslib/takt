@@ -12,6 +12,8 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { scanReportEntries } from '../report-file-index.js';
 import { workflowCallReportRequestPathsMatch } from '../workflow-call-namespace.js';
 import { assertPathSegmentsAreSafe, isPathInside, isRealPathInside } from '../../../shared/utils/index.js';
+import { readResumeReportSnapshotManifest } from '../run/resume-report-snapshot.js';
+import { buildRunPaths } from '../run/run-paths.js';
 import {
   type SelectorGitCommandRunner,
 } from './selector-git-command-runner.js';
@@ -32,15 +34,15 @@ interface SelectorFileRead {
   readonly truncated: boolean;
 }
 
-interface SelectorReportFile {
-  readonly directory: string;
-  readonly relativePath: string;
-}
-
 export interface SelectorInputs {
   readonly reports: string;
   readonly workingTreeDiff: string;
   readonly targetAgentPrompt?: string;
+}
+
+interface SelectorReportCandidate {
+  readonly absolutePath: string;
+  readonly displayPath: string;
 }
 
 class SelectorInputBudget {
@@ -64,7 +66,8 @@ export class SelectorInputReader {
     cwd: string,
     signal: AbortSignal | undefined,
     targetAgentPrompt?: string,
-    reportsRootDirectory?: string,
+    resumeReportConsumerKeyOrReportsRoot?: string,
+    reportsRootDirectoryOrParentReportNames?: string | readonly string[],
     parentReportNames?: readonly string[],
   ): Promise<SelectorInputs> {
     signal?.throwIfAborted();
@@ -72,14 +75,35 @@ export class SelectorInputReader {
     const boundedTargetAgentPrompt = targetAgentPrompt === undefined
       ? undefined
       : this.readTargetAgentPrompt(targetAgentPrompt, budget);
+    const legacyParentReportNames = Array.isArray(reportsRootDirectoryOrParentReportNames)
+      ? reportsRootDirectoryOrParentReportNames as readonly string[]
+      : undefined;
+    const reportOptions: {
+      readonly reportsRootDirectory: string | undefined;
+      readonly parentReportNames: readonly string[] | undefined;
+      readonly resumeReportConsumerKey: string | undefined;
+    } = legacyParentReportNames !== undefined
+      ? {
+          reportsRootDirectory: resumeReportConsumerKeyOrReportsRoot,
+          parentReportNames: legacyParentReportNames,
+          resumeReportConsumerKey: undefined,
+        }
+      : {
+          reportsRootDirectory: typeof reportsRootDirectoryOrParentReportNames === 'string'
+            ? reportsRootDirectoryOrParentReportNames
+            : undefined,
+          parentReportNames,
+          resumeReportConsumerKey: resumeReportConsumerKeyOrReportsRoot,
+        };
     const reports = this.readReports(
       reportDirectory,
       requestedNames,
       cwd,
       budget,
       signal,
-      reportsRootDirectory,
-      parentReportNames,
+      reportOptions.resumeReportConsumerKey,
+      reportOptions.reportsRootDirectory,
+      reportOptions.parentReportNames,
     );
     signal?.throwIfAborted();
     const workingTreeDiff = await this.readWorkingTreeDiff(cwd, budget, signal);
@@ -157,65 +181,114 @@ export class SelectorInputReader {
     cwd: string,
     budget: SelectorInputBudget,
     signal: AbortSignal | undefined,
+    resumeReportConsumerKey: string | undefined,
     reportsRootDirectory: string | undefined,
     parentReportNames: readonly string[] | undefined,
   ): string {
     signal?.throwIfAborted();
-    const reportDirectories = this.resolveReportDirectories(reportDirectory, reportsRootDirectory, cwd)
-      .filter((directory) => existsSync(directory));
-    if (reportDirectories.length === 0) {
-      return this.consumeEmptyValue('(no reports available)', budget);
-    }
     if (requestedNames.length === 0) {
       return this.consumeEmptyValue('(no reports available)', budget);
     }
-    const seenPaths = new Set<string>();
-    const reportFiles: SelectorReportFile[] = [];
-    const explicitlyParentScoped = new Set(parentReportNames ?? []);
-    const currentReportDirectories = reportDirectories.filter(
-      (directory) => directory === resolve(reportDirectory),
+    const candidates = this.resolveReportCandidates(
+      reportDirectory,
+      requestedNames,
+      cwd,
+      reportsRootDirectory,
+      parentReportNames,
+      resumeReportConsumerKey,
     );
-    for (const requestedName of [...new Set(requestedNames)]) {
-      const directories = explicitlyParentScoped.has(requestedName)
-        ? reportDirectories
-        : currentReportDirectories;
-      for (const directory of directories) {
-        const relativePath = this.resolveExistingReportNames(directory, [requestedName])[0];
-        if (relativePath === undefined) continue;
-        const key = `${directory}\0${relativePath}`;
-        if (!seenPaths.has(key)) {
-          seenPaths.add(key);
-          reportFiles.push({ directory, relativePath });
-        }
-        break;
-      }
-    }
-    const reports = reportFiles.map(({ directory, relativePath }, index) => {
+    const reports = candidates.flatMap((candidate, index) => {
       signal?.throwIfAborted();
-      const scopedReportPath = join(directory, relativePath);
-      const stat = lstatSync(scopedReportPath);
+      const reportPath = candidate.absolutePath;
+      this.assertSafeReportPath(cwd, reportPath, candidate.displayPath);
+      let stat: ReturnType<typeof lstatSync>;
+      try {
+        stat = lstatSync(reportPath);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'ENOENT' || code === 'ENOTDIR') {
+          return [];
+        }
+        throw error;
+      }
       if (!stat.isFile() || stat.isSymbolicLink()) {
-        throw new Error(`Selector report is not a regular file: ${relativePath}`);
+        throw new Error(`Selector report is not a regular file: ${candidate.displayPath}`);
       }
       const file = this.readTextFile(
-        scopedReportPath,
+        reportPath,
         MAX_SELECTOR_ENTRY_BYTES,
-        `Selector report "${relativePath}"`,
+        `Selector report "${candidate.displayPath}"`,
         'complete',
       );
       const report = this.renderEntry(
-        relativePath,
+        candidate.displayPath,
         file.bytes,
         file.content,
         'complete',
       );
       budget.consume(index === 0 ? report : `\n\n${report}`);
-      return report;
+      return [report];
     });
     if (reports.length === 0) {
       return this.consumeEmptyValue('(no reports available)', budget);
     }
     return reports.join('\n\n');
+  }
+
+  private resolveReportCandidates(
+    reportDirectory: string,
+    requestedNames: readonly string[],
+    cwd: string,
+    reportsRootDirectory: string | undefined,
+    parentReportNames: readonly string[] | undefined,
+    resumeReportConsumerKey: string | undefined,
+  ): readonly SelectorReportCandidate[] {
+    const uniqueNames = [...new Set(requestedNames)];
+    const currentDirectory = resolve(reportDirectory);
+    const reportDirectories = this.resolveReportDirectories(reportDirectory, reportsRootDirectory, cwd);
+    const existingDirectories = reportDirectories.filter((directory) => existsSync(directory));
+    const directoryCandidates = new Map<string, readonly (SelectorReportCandidate | undefined)[]>();
+    const resolveDirectoryCandidates = (
+      directory: string,
+    ): readonly (SelectorReportCandidate | undefined)[] => {
+      const cached = directoryCandidates.get(directory);
+      if (cached !== undefined) {
+        return cached;
+      }
+      const candidates = this.resolveExistingReportCandidates(directory, uniqueNames);
+      directoryCandidates.set(directory, candidates);
+      return candidates;
+    };
+
+    const currentCandidates = resolveDirectoryCandidates(currentDirectory);
+    const resolvedCandidates = this.resolveResumeReportCandidates(
+      reportDirectory,
+      uniqueNames,
+      currentCandidates,
+      cwd,
+      reportsRootDirectory,
+      resumeReportConsumerKey,
+    );
+    const explicitlyParentScoped = new Set(parentReportNames ?? []);
+    const candidates: SelectorReportCandidate[] = [];
+    for (const [index, requestedName] of uniqueNames.entries()) {
+      let candidate = resolvedCandidates[index];
+      if (candidate === undefined && explicitlyParentScoped.has(requestedName)) {
+        for (const directory of existingDirectories) {
+          if (directory === currentDirectory) {
+            continue;
+          }
+          candidate = resolveDirectoryCandidates(directory)[index];
+          if (candidate !== undefined) {
+            break;
+          }
+        }
+      }
+      if (candidate !== undefined) {
+        candidates.push(candidate);
+      }
+    }
+    return [...new Map(candidates.map((candidate) => [candidate.absolutePath, candidate])).values()];
   }
 
   private resolveReportDirectories(
@@ -263,6 +336,19 @@ export class SelectorInputReader {
     );
     if (!isRealPathInside(cwd, directory)) {
       throw new Error(`Selector report directory resolves outside the working directory: ${directory}`);
+    }
+  }
+
+  private assertSafeReportPath(cwd: string, path: string, displayPath: string): void {
+    assertPathSegmentsAreSafe(
+      cwd,
+      path,
+      (_violation, segmentPath) => new Error(
+        `Selector report "${displayPath}" must stay inside the working directory and must not contain symlinks: ${segmentPath}`,
+      ),
+    );
+    if (!isRealPathInside(cwd, path)) {
+      throw new Error(`Selector report "${displayPath}" resolves outside the working directory: ${path}`);
     }
   }
 
@@ -431,28 +517,102 @@ export class SelectorInputReader {
     return results;
   }
 
-  private resolveExistingReportNames(
+  private resolveExistingReportCandidates(
     reportDirectory: string,
     requestedNames: readonly string[],
-  ): readonly string[] {
+  ): readonly (SelectorReportCandidate | undefined)[] {
     const requestedPaths = [...new Set(requestedNames)].map((name) => name.split('/'));
-    const scan = scanReportEntries(reportDirectory);
+    const scan = existsSync(reportDirectory)
+      ? scanReportEntries(reportDirectory)
+      : { entries: [] };
     if (scan.failure !== undefined) {
-      throw new Error(`Unable to scan selector reports: ${scan.failure}`);
+      if (existsSync(reportDirectory)) {
+        throw new Error(`Unable to scan selector reports: ${scan.failure}`);
+      }
     }
-    const entries = scan.entries.map((path) => ({
+    const entries = (scan.failure === undefined ? scan.entries : []).map((path) => ({
       relativePath: relative(reportDirectory, path).split(sep).join('/'),
       mtimeMs: lstatSync(path).mtimeMs,
     }));
-    return [...new Set(requestedPaths.flatMap((requestedPath) => {
+    return requestedPaths.map((requestedPath): SelectorReportCandidate | undefined => {
       const candidate = entries
         .filter(({ relativePath }) =>
           workflowCallReportRequestPathsMatch(relativePath.split('/'), requestedPath))
         .sort((left, right) =>
           right.mtimeMs - left.mtimeMs
           || left.relativePath.localeCompare(right.relativePath))[0];
-      return candidate === undefined ? [] : [candidate.relativePath];
-    }))];
+      return candidate === undefined ? undefined : {
+        absolutePath: join(reportDirectory, candidate.relativePath),
+        displayPath: candidate.relativePath,
+      };
+    });
+  }
+
+  private resolveResumeReportCandidates(
+    reportDirectory: string,
+    requestedNames: readonly string[],
+    currentCandidates: readonly (SelectorReportCandidate | undefined)[],
+    cwd: string,
+    reportsRootDirectory: string | undefined,
+    resumeReportConsumerKey: string | undefined,
+  ): readonly (SelectorReportCandidate | undefined)[] {
+    if (resumeReportConsumerKey === undefined) {
+      return currentCandidates;
+    }
+    const requestedPaths = [...new Set(requestedNames)].map((name) => name.split('/'));
+    const runInfo = this.deriveRunInfoFromReportDir(reportDirectory);
+    const manifest = runInfo === undefined || resumeReportConsumerKey === undefined
+      ? undefined
+      : readResumeReportSnapshotManifest(runInfo.cwd, runInfo.runSlug);
+    const consumer = manifest?.resumeReportConsumers
+      ?.find((entry) => entry.consumerKey === resumeReportConsumerKey);
+    const reportsRoot = runInfo === undefined
+      ? undefined
+      : reportsRootDirectory === undefined
+        ? buildRunPaths(runInfo.cwd, runInfo.runSlug).reportsRootAbs
+        : resolve(reportsRootDirectory);
+    if (reportsRoot !== undefined) {
+      this.assertSafeReportDirectory(cwd, reportsRoot);
+    }
+    const resolved = currentCandidates.map((candidate, index): SelectorReportCandidate | undefined => {
+      if (candidate !== undefined || consumer === undefined || reportsRoot === undefined) {
+        return candidate;
+      }
+      const requestedPath = requestedPaths[index]!;
+      for (const directory of consumer.reportDirectories) {
+        const prefix = directory.length === 0 ? '' : `${directory}/`;
+        const snapshotPath = manifest?.files
+          .map((file) => file.path)
+          .filter((path) => path.startsWith(prefix))
+          .map((path) => ({ path, relativePath: path.slice(prefix.length) }))
+          .filter(({ relativePath }) =>
+            workflowCallReportRequestPathsMatch(relativePath.split('/'), requestedPath))
+          .sort((left, right) => left.path.localeCompare(right.path))[0];
+        if (snapshotPath !== undefined) {
+          const absolutePath = resolve(reportsRoot, snapshotPath.path);
+          if (!isPathInside(reportsRoot, absolutePath) || !isRealPathInside(reportsRoot, absolutePath)) {
+            throw new Error(`Selector report snapshot path is outside the report root: ${snapshotPath.path}`);
+          }
+          this.assertSafeReportPath(cwd, absolutePath, snapshotPath.path);
+          return {
+            absolutePath,
+            displayPath: snapshotPath.path,
+          };
+        }
+      }
+      return undefined;
+    });
+    return resolved;
+  }
+
+  private deriveRunInfoFromReportDir(reportDir: string): { cwd: string; runSlug: string } | undefined {
+    const absoluteReportDir = resolve(reportDir);
+    const marker = `${sep}.takt${sep}runs${sep}`;
+    const markerIndex = absoluteReportDir.lastIndexOf(marker);
+    if (markerIndex < 0) return undefined;
+    const cwd = absoluteReportDir.slice(0, markerIndex);
+    const runSlug = absoluteReportDir.slice(markerIndex + marker.length).split(sep)[0];
+    return runSlug ? { cwd, runSlug } : undefined;
   }
 
   private readTextFile(

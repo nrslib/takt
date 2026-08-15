@@ -47,6 +47,7 @@ vi.mock('node:fs', async () => {
   };
 });
 import { resolveReportReferenceDetailed } from '../core/workflow/instruction/report-reference.js';
+import { inheritResumeReportSnapshot } from '../core/workflow/run/resume-report-snapshot.js';
 
 describe('resolveReportReferenceDetailed', () => {
   const temporaryDirectories: string[] = [];
@@ -72,9 +73,12 @@ describe('resolveReportReferenceDetailed', () => {
       injectedFsError.path = join(reports, 'review.md');
       injectedFsError.error = Object.assign(new Error(`injected ${code}`), { code });
 
-      expect(() => resolveReportReferenceDetailed(reports, 'review.md', {
+      expect(resolveReportReferenceDetailed(reports, 'review.md', {
         stepName: 'consumer',
-      })).toThrow(/has not been produced/);
+      })).toEqual({
+        content: '（参照先の報告 review.md はこの run に存在しない）',
+        scope: 'missing',
+      });
     },
   );
 
@@ -90,9 +94,12 @@ describe('resolveReportReferenceDetailed', () => {
       injectedFsError.path = report;
       injectedFsError.error = Object.assign(new Error(`injected ${code}`), { code });
 
-      expect(() => resolveReportReferenceDetailed(reports, 'review.md', {
+      expect(resolveReportReferenceDetailed(reports, 'review.md', {
         stepName: 'consumer',
-      })).toThrow(/has not been produced/);
+      })).toEqual({
+        content: '（参照先の報告 review.md はこの run に存在しない）',
+        scope: 'missing',
+      });
     },
   );
 
@@ -269,7 +276,7 @@ describe('resolveReportReferenceDetailed', () => {
     })).toThrow(/not a regular file/);
   });
 
-  it('resume manifest の ENOTDIR は元の report 欠落エラーを維持する', () => {
+  it('resume manifest の ENOTDIR は report 欠落として続行する', () => {
     const root = makeTemporaryDirectory();
     const reports = join(root, '.takt', 'runs', 'run-1', 'reports');
     mkdirSync(reports, { recursive: true });
@@ -277,9 +284,46 @@ describe('resolveReportReferenceDetailed', () => {
     injectedFsError.path = join(reports, 'resume-artifacts.json');
     injectedFsError.error = Object.assign(new Error('injected ENOTDIR'), { code: 'ENOTDIR' });
 
-    expect(() => resolveReportReferenceDetailed(reports, 'review.md', {
+    expect(resolveReportReferenceDetailed(reports, 'review.md', {
       stepName: 'consumer',
-    })).toThrow(/has not been produced/);
+      reportsRootDir: reports,
+      resumeReportConsumerKey: '{"workflow":"root","step":"consumer","calls":[]}',
+    })).toEqual({
+      content: '（参照先の報告 review.md はこの run に存在しない）',
+      scope: 'missing',
+    });
+  });
+
+  it('current step に同名 report が無い場合は root の同名 report より snapshot exact mapping を優先する', () => {
+    const root = makeTemporaryDirectory();
+    const sourceReports = join(root, '.takt', 'runs', 'source-run', 'reports');
+    const exactPath = 'subworkflows/old-peer/review-resolution.md';
+    const consumerKey = '{"workflow":"review-gate","step":"final-gate","calls":[]}';
+    mkdirSync(join(sourceReports, 'subworkflows', 'old-peer'), { recursive: true });
+    writeFileSync(join(sourceReports, 'review-resolution.md'), 'WRONG ROOT');
+    writeFileSync(join(sourceReports, ...exactPath.split('/')), 'EXACT SOURCE');
+    inheritResumeReportSnapshot({
+      cwd: root,
+      sourceRunSlug: 'source-run',
+      targetRunSlug: 'run-1',
+      resumeReportConsumers: [{
+        consumerKey,
+        reportDirectories: ['subworkflows/old-peer'],
+        references: [{ reference: 'review-resolution.md', path: exactPath }],
+      }],
+    });
+    const reports = join(root, '.takt', 'runs', 'run-1', 'reports');
+    const currentReports = join(reports, 'subworkflows', 'new-peer');
+    mkdirSync(currentReports, { recursive: true });
+
+    expect(resolveReportReferenceDetailed(currentReports, 'review-resolution.md', {
+      stepName: 'final-gate',
+      reportsRootDir: reports,
+      resumeReportConsumerKey: consumerKey,
+    })).toEqual({
+      content: 'EXACT SOURCE',
+      scope: 'resume-snapshot-readonly',
+    });
   });
 
   it.each(['EACCES', 'EPERM', 'EIO'])(
@@ -295,7 +339,11 @@ describe('resolveReportReferenceDetailed', () => {
 
       let thrown: unknown;
       try {
-        resolveReportReferenceDetailed(reports, 'review.md', { stepName: 'consumer' });
+        resolveReportReferenceDetailed(reports, 'review.md', {
+          stepName: 'consumer',
+          reportsRootDir: reports,
+          resumeReportConsumerKey: '{"workflow":"root","step":"consumer","calls":[]}',
+        });
       } catch (caught) {
         thrown = caught;
       }
@@ -304,7 +352,7 @@ describe('resolveReportReferenceDetailed', () => {
   );
 
   it.each(['ENOENT', 'ENOTDIR'])(
-    'resume manifest 読み込みの %s は元の report 欠落エラーを維持する',
+    'resume manifest 読み込みの %s は report 欠落として続行する',
     (code) => {
       const root = makeTemporaryDirectory();
       const reports = join(root, '.takt', 'runs', 'run-1', 'reports');
@@ -313,9 +361,14 @@ describe('resolveReportReferenceDetailed', () => {
       injectedFsError.operation = 'readFile';
       injectedFsError.error = Object.assign(new Error(`injected ${code}`), { code });
 
-      expect(() => resolveReportReferenceDetailed(reports, 'review.md', {
+      expect(resolveReportReferenceDetailed(reports, 'review.md', {
         stepName: 'consumer',
-      })).toThrow(/has not been produced/);
+        reportsRootDir: reports,
+        resumeReportConsumerKey: '{"workflow":"root","step":"consumer","calls":[]}',
+      })).toEqual({
+        content: '（参照先の報告 review.md はこの run に存在しない）',
+        scope: 'missing',
+      });
     },
   );
 
@@ -332,7 +385,11 @@ describe('resolveReportReferenceDetailed', () => {
 
       let thrown: unknown;
       try {
-        resolveReportReferenceDetailed(reports, 'review.md', { stepName: 'consumer' });
+        resolveReportReferenceDetailed(reports, 'review.md', {
+          stepName: 'consumer',
+          reportsRootDir: reports,
+          resumeReportConsumerKey: '{"workflow":"root","step":"consumer","calls":[]}',
+        });
       } catch (caught) {
         thrown = caught;
       }

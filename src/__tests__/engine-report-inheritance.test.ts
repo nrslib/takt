@@ -211,25 +211,15 @@ describe('WorkflowEngine report inheritance', () => {
   });
 
   async function expectMissingReportBeforeAgent(reportName: string): Promise<void> {
-    const abort = vi.fn();
-    engine!.on('workflow:abort', abort);
+    mockRunAgentSequence([makeResponse({ persona: 'fix', content: 'fix complete' })]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     const state = await engine!.run();
-    const expectedError = `Report reference "${reportName}" is unavailable for step "fix"`;
-
-    expect(state.status).toBe('aborted');
-    expect(abort).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'aborted' }),
-      expect.stringContaining(expectedError),
-      'runtime_error',
-      {
-        kind: 'runtime_error',
-        step: 'fix',
-        reason: expect.stringContaining(expectedError),
-        error: expect.stringContaining(expectedError),
-      },
+    expect(state.status).toBe('completed');
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(runAgent).mock.calls[0]?.[1]).toContain(
+      `（参照先の報告 ${reportName} はこの run に存在しない）`,
     );
-    expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
   }
 
   it('does not inherit a stale report for an unexecuted step from exact empty evidence', async () => {
