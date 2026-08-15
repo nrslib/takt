@@ -232,6 +232,9 @@ describe('facet include expansion', () => {
     const expectedColumns = lang === 'ja'
       ? ['修正単位', '軸の正本・根拠', '具体的な入力・状態', '入口・経路', '実装上の制約', 'consumer / terminal', '期待結果', '反証方法・テスト ID']
       : ['Fix Unit', 'Dimension Source and Evidence', 'Concrete Input or State', 'Entry and Path', 'Implementation Constraint', 'Consumer / Terminal', 'Expected Result', 'Disproof Method and Test ID'];
+    const expectedPathContract = lang === 'ja'
+      ? ['現行:', '修正後:', '現行の失敗', '変更なし・検証のみ']
+      : ['Current:', 'After the fix:', 'current failure', 'unchanged and verify-only'];
 
     for (const outputContract of [
       'fix-plan',
@@ -251,6 +254,9 @@ describe('facet include expansion', () => {
         expectedColumns,
         '{{include:output-contracts/base-fix-plan}}',
       );
+      for (const phrase of expectedPathContract) {
+        expect(content).toContain(phrase);
+      }
     }
   });
 
