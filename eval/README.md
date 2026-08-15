@@ -82,7 +82,7 @@ Run it through `npm run eval:prompts:security-review-method`.
 
 | Suite | Workflow / step | Fixture | Measures |
 |-------|-----------------|---------|----------|
-| `coding` | peer-review / coding-review | sample-project | recall on 5 planted coding-policy violations + precision on a clean diff |
+| `coding` | peer-review / coding-review | sample-project | Claude Opus 5, Codex Luna Max, and Codex Sol High: recall on 5 planted coding-policy violations, precision on a minimal clean diff, and recall when the same completeness is explicitly required |
 | `arch` | peer-review / arch-review | sample-project | recall on 3 planted architecture violations |
 | `arch-failure-aggregation` | peer-review / arch-review | arch-failure-aggregation | recall on inconsistent primary-failure aggregation and precision on a required fail-fast boundary |
 | `antipattern` | peer-review / ai-antipattern-review-2nd | sample-project | recall on 3 planted AI antipatterns |
@@ -122,6 +122,10 @@ Run it through `npm run eval:prompts:security-review-method`.
 | `final-readiness-supervision` | review-fix-default / supervise Phase 1 | final-readiness-supervision | whether the supervisor authorizes a newly discovered required consumer, explains its initial-round omission, and avoids horizontal exploration |
 | `final-readiness-preservation` | review-fix-default / supervise Phase 2 | final-readiness-supervision | whether the supervisor preserves the new finding and keeps adjudicated noise non-actionable |
 | `final-readiness-precision` | review-fix-default / supervise | final-readiness-precision | two cases: APPROVE when every requirement is fulfilled even though no mock E2E execution record exists, and REJECT when the project-configuration source requirement is unmet without substituting the absent mock E2E record as the reason |
+
+The `coding` suite requires both Claude and Codex CLI logins and is excluded
+from the default suite run. Invoke it explicitly with
+`npm run eval:prompts:coding`.
 
 Reviewer suites run read-only against `eval/fixtures/*`. Coder suites run
 with `sandbox_mode: workspace-write` in a disposable copy under `eval/.work/`

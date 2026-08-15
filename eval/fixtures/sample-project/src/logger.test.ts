@@ -19,11 +19,14 @@ describe('Logger', () => {
     expect(written).toEqual(['[warn] disk almost full\n']);
   });
 
-  it('filters messages below the minimum level', () => {
+  it.each<[LogLevel, LogLevel]>([
+    ['debug', 'info'],
+    ['info', 'warn'],
+    ['warn', 'error'],
+  ])('filters %s messages below the %s minimum level', (level, minLevel) => {
     const { written, restore } = captureStderr();
-    const logger = new Logger('warn');
-    logger.log('info', 'started');
-    logger.debug('noise');
+    const logger = new Logger(minLevel);
+    logger.log(level, 'noise');
     restore();
     expect(written).toEqual([]);
   });
