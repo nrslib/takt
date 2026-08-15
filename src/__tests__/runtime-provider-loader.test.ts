@@ -338,6 +338,15 @@ describe('runtime-provider loader', () => {
     expect(resolved?.companion?.enabled).toBe(true);
   });
 
+  it('Given both files omit companion, When resolving, Then companion remains undefined', () => {
+    writeRuntimeYaml(globalDir, ['version: 1']);
+    writeRuntimeYaml(projectDir, ['version: 1']);
+
+    const resolved = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
+
+    expect(resolved?.companion).toBeUndefined();
+  });
+
   it('Given neither file present, When resolving, Then it returns undefined (C1)', () => {
     expect(resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir })).toBeUndefined();
   });
