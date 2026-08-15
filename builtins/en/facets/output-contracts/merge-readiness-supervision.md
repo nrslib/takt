@@ -17,13 +17,15 @@ Carry-forward source: {Copy the value recorded in the current review-resolution.
 
 When the source statement is No prior remediation or Carry-forward source missing, copy it and its reason on the `Carry-forward source` line and do not create an invariant row for it.
 
+Do not change a row in this table when a new merge blocker is merged into an existing family. Record the merger by adding the finding ID and affected contract path to the existing row in Actionable Families, and record the target family and rationale in Prior Finding Dispositions.
+
 ### Mapping When a Name or Responsible Source Changed
 - {None, or old family ID, invariant name, and responsible source (the single responsibility and source that defines the invariant and guarantees it holds) -> the three new values and the reason, copied unchanged from the current review-resolution.md; do not treat only moving or splitting files as a change}
 
 ## Actionable Families
-| family | Finding ID | Evidence | Problem -> root cause | Affected contract paths | Acceptance criteria | Remediation boundary |
-|--------|------------|----------|-----------------------|-------------------------|---------------------|----------------------|
-| {Stable family name} | {FINAL-NEW-* / FINAL-PERSIST-*} | {file:line or execution evidence} | {Verified causal chain} | {Entry, production, validation, consumption, and side effects} | {Observable completion conditions} | {Required minimal change; explicitly excluded adjacent work or mechanism} |
+| family | Responsible source | Observable invariant | Finding ID | Evidence | Problem -> root cause | Added path | Affected contract paths | Acceptance criteria | Remediation boundary |
+|--------|--------------------|----------------------|------------|----------|-----------------------|------------|-------------------------|---------------------|----------------------|
+| {Stable family name} | {Single responsibility and source that defines the invariant and guarantees it holds} | {Condition to preserve} | {FINAL-NEW-* / FINAL-PERSIST-*} | {file:line or execution evidence} | {Verified causal chain} | {New path checked in this review, or none} | {Entry, production, validation, consumption, and side effects} | {Observable completion conditions} | {Required minimal change; explicitly excluded adjacent work or mechanism} |
 
 ## Prior Finding Dispositions
 | Finding ID | State | Evidence |

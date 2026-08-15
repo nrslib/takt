@@ -1,6 +1,6 @@
 ## 探索権限と finding・修正権限
 
-contract family は、同じ観測可能な不変条件、authoritative owner または source of truth、根本原因に由来する変更理由、外部または terminal consequence を共有する経路に限定する。名前、型、近接性だけが同じ経路は別 family とする。
+contract family の同一性は、有効な role instruction に記載された定義を使い、この権限ポリシーでは定義し直さない。名前、型、近接性だけを、family をまとめる根拠にも分ける根拠にもしない。
 
 active contract family の共通所有者、同じ意味を別名で再構築する重複実装、未確認・未移行 consumer を特定する bounded horizontal comparison は、その family を閉じるための証拠収集として許可する。比較中に隣接する別 family の問題を観察しても、それ自体は finding 化、Companion の修正要求、修正計画への追加を許可しない。
 

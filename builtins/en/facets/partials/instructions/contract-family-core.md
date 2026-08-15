@@ -3,9 +3,10 @@
 A contract family is the set of paths that share this identity:
 
 - observable invariant
-- authoritative owner or source of truth
+- responsible source: the single responsibility and source that defines the invariant and guarantees it holds
 - reason to change from the same cause
-- consequence visible to a user, external boundary, or terminal state
+
+When the responsible source and observable invariant are the same, and one issue is the same invariant failing through a different path, keep one family and add that path and its consequence even when the physical code location, file path, symptom path, or consequence visible to a user, external boundary, or terminal state differs. Create a separate family only when the responsible source, invariant content, or reason to change from the same cause differs.
 
 Describe paths that actually exist as `owner / definition -> producer -> transform / normalize / validate -> persist / transfer / restore -> consumer -> exception / retry / fallback / parallel -> terminal / API / observability`. Do not invent stages that do not apply.
 

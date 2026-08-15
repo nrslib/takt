@@ -15,13 +15,15 @@ Carry-forward source: {Relative path of the selected fix-verification / No prior
 
 When the source statement is No prior remediation or Carry-forward source missing, keep it and its reason on the `Carry-forward source` line and do not create an invariant row for it.
 
+Do not change a row in this table when a new finding is merged into an existing family. Record the merger by adding the finding ID, source, and affected contract path to the existing row in Actionable Families, and record the target family and rationale in Finding Dispositions.
+
 ### Mapping When a Name or Responsible Source Changed
 - {None, or old family ID, invariant name, and responsible source (the single responsibility and source that defines the invariant and guarantees it holds) -> the three new values, with the reason; do not treat only moving or splitting files as a change}
 
 ## Actionable Families
-| family | Finding ID / source | Authorization basis | Evidence | Problem -> root cause | Affected contract paths | Acceptance criteria | Remediation boundary |
-|--------|---------------------|---------------------|----------|-----------------------|-------------------------|---------------------|----------------------|
-| {Stable family name} | {All IDs and report names} | {Direct acceptance-criterion violation / regression introduced by this diff / required consumer migration / accepted-family closure} | {file:line or reproduction evidence} | {Verified causal chain} | {Actual paths across definition, production, normalization, validation, every consumer, retry, fallback, parallel execution, persistence, restoration, and terminal or API output} | {Observable completion conditions} | {Required minimal change; explicitly excluded neighboring contracts, adjacent work, or mechanisms} |
+| family | Responsible source | Finding ID / source | Authorization basis | Evidence | Problem -> root cause | Affected contract paths | Acceptance criteria | Remediation boundary |
+|--------|--------------------|---------------------|---------------------|----------|-----------------------|-------------------------|---------------------|----------------------|
+| {Stable family name} | {Single responsibility and source that defines the invariant and guarantees it holds} | {All IDs and report names} | {Direct acceptance-criterion violation / regression introduced by this diff / required consumer migration / accepted-family closure} | {file:line or reproduction evidence} | {Verified causal chain} | {Actual paths across definition, production, normalization, validation, every consumer, retry, fallback, parallel execution, persistence, restoration, and terminal or API output} | {Observable completion conditions} | {Required minimal change; explicitly excluded neighboring contracts, adjacent work, or mechanisms} |
 
 ## Finding Dispositions
 | Finding ID / source | Technical validity | Disposition | Target family | Authorization basis | Reason absent from initial round | Evidence |

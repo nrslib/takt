@@ -13,7 +13,7 @@ const MECHANISM = /(?:atomic|transaction|rollback|アトミック|トランザ�
 const MECHANISM_REJECTION = /(?:含めない|不要|根拠がない|対象外|過剰|不採用|採用しない|要求しない|追加しない|実装しない|導入しない|必要(?:性)?[^\n。.!?]*(?:ない|なく)|(?:not|never|without)[^\n。.!?]{0,80}(?:add|use|implement|introduce|require|promote|atomic|transaction|rollback)|(?:atomic|transaction|rollback|アトミック|トランザクション|ロールバック)[^\n。.!?]{0,80}(?:not\b|unnecessary|out\s+of\s+scope|overreach|not\s+part|not\s+warranted|not\s+justified|not\s+needed|not\s+necessary)|unnecessary|out\s+of\s+scope|overreach|not\s+part\s+of\s+the\s+task|no\s+(?:evidence|requirement|authority|need))/i;
 const MECHANISM_REQUIREMENT = /(?:(?<!\bnot\s)(?<!\bnever\s)(?:implement|add|use|introduce|enforce|create|construct|require|make|build|adopt|provide|ensure|establish|wrap|surround|enclose)\b[^\n。.!?]{0,80}(?:atomic|transaction|rollback)|(?:atomic|transaction|rollback|アトミック|トランザクション|ロールバック)[^\n。.!?]{0,80}(?:\b(?:is required|must|should|needs? to be)\b|(?:を|が)(?:実装|追加|使用|導入|採用|構築)(?:する|せよ|してください|すべき)|(?:実装|追加|使用|導入|採用|構築)(?:が)?(?:必要|必須)))/i;
 const CONTRASTED_REQUIREMENT = /(?:\b(?:but|however|yet)\b|それでも|ただし|一方|ものの|にもかかわらず)/i;
-const QUALITY_DUPLICATION = /(?:\bDRY\b|\bduplicat(?:e|ed|es|ion)\b|重複|複製)/i;
+const QUALITY_DUPLICATION = /(?:\bDRY\b|\bduplicat(?:e|ed|es|ion)\b|重複|複製|独自(?:に)?[^\n。.!?]{0,40}(?:検証|判定|正規化)|(?:independently|separately|own)[^\n。.!?]{0,40}(?:validat|normaliz))/i;
 const QUALITY_BOUNDARY = /(?:responsibility(?:[-\s]+boundary)?|boundary|責務|境界)/i;
 const INTERNAL_REPAIR = /(?:normalizeChannel|normalize(?:d|s)?[^\n。.!?]{0,40}(?:once|一度|単一)|shared\s+(?:boundary|normalizer)|remove\s+(?:the\s+)?duplication|deduplicat|delegate[^\n。.!?]{0,40}(?:validation|normaliz)|local(?:\s+internal)?\s+fix|共有(?:の)?(?:境界|正規化)|重複(?:を|の)?(?:除去|解消)|単一(?:の)?正規化|局所(?:的)?(?:な)?修正|入口[^\n。.!?]{0,50}normalizeChannel|独自判定[^\n。.!?]{0,40}残さない)/i;
 const ACCEPTED_CHANNELS = /\blocal\b[^\n]{0,100}\bcloud\b|\bcloud\b[^\n]{0,100}\blocal\b/i;
@@ -21,7 +21,7 @@ const NORMALIZATION_BEHAVIOR = /(?:case[-\s]?insensitiv|ignore[^\n。.!?]{0,50}(
 const NORMALIZATION_EXAMPLE = /["'`]\s+[A-Z][A-Za-z]*\s+["'`][^\n]{0,160}["'`][a-z]+["'`]/;
 const NORMALIZATION_CASE_VARIANTS = /(?:`local`[^\n]{0,80}`LOCAL`|`LOCAL`[^\n]{0,80}`local`|`cloud`[^\n]{0,80}`CLOUD`|`CLOUD`[^\n]{0,80}`cloud`)/;
 const NORMALIZATION_WHITESPACE_VARIANT = /["'`]\s+(?:local|cloud)\s+["'`]/i;
-const INVALID_FAIL_FAST = /(?:invalid|unsupported|reject(?:ed)?|fail\s+fast|throw|error|不正|無効|拒否|即時|早期[^\n。.!?]{0,20}失敗|例外|(?:以外|other\s+than|outside)[^\n。.!?]{0,60}(?:fail|reject|error|失敗|拒否|例外))/i;
+const INVALID_FAIL_FAST = /(?:invalid|unsupported|reject(?:ed)?|fail\s+fast|throw|error|不正|無効|拒否|即時|早期[^\n。.!?]{0,20}失敗|例外|(?:その他|以外|other\s+than|outside)[^\n。.!?]{0,60}(?:fail|reject|error|失敗|拒否|例外))/i;
 const NO_LEGACY_ALIAS = /(?:(?:no|without|do\s+not|must\s+not|not\s+add|reject)[^\n。.!?]{0,80}(?:legacy|compatibility)?\s*aliases?|(?:legacy|compatibility)\s+aliases?[^\n。.!?]{0,80}(?:not|required|forbidden)|(?:旧|レガシー|互換)[^\n。.!?]{0,60}(?:alias|エイリアス|別名)[^\n。.!?]{0,40}(?:追加しない|禁止|不要|なし)|(?:alias|エイリアス|別名)[^\n。.!?]{0,60}(?:追加しない|禁止|不要|なし))/i;
 
 function extractSection(output, startPattern, endPattern) {
@@ -142,6 +142,14 @@ function sameActionableFamily(actionableSection, dispositionTable, codeRow, arch
 
   if (sameTarget) return true;
 
+  const actionableFamilies = [...new Set(familyRefs(actionableSection))];
+  if (actionableFamilies.length === 1) {
+    const [actionableFamily] = actionableFamilies;
+    const codeUsesActionableFamily = codeTarget === actionableFamily
+      || (codeTarget === null && /(?:上記|this|above)\s*family/i.test(codeRow.join(' ')));
+    if (codeUsesActionableFamily && architectureTarget === actionableFamily) return true;
+  }
+
   const actionableTable = parseTable(actionableSection);
   const sameTableFamily = actionableTable.rows.some((row) =>
     row.some((cell) => cell.includes(FINDINGS.code))
@@ -248,7 +256,7 @@ export default function assertReviewAdjudication(output) {
   const acceptanceEvidence = acceptanceContexts(actionableSection).join('\n');
 
   const checks = [
-    ['actionable-result', /(結果\s*[:：]\s*修正対象あり|Result\s*[:：]\s*ACTIONABLE FINDINGS|(?:修正対象は\s*[1-9]\d*|[1-9]\d*つの修正対象)\s*family)/i.test(output)],
+    ['actionable-result', /((?:裁定)?結果(?:\s*[:：]\s*|は\s*[「『"']?\s*)修正対象あり|Result\s*[:：]\s*ACTIONABLE FINDINGS|(?:修正対象は\s*[1-9]\d*|[1-9]\d*つの修正対象)\s*family)/i.test(output)],
     ['disposition-schema', hasDispositionSchema(dispositionTable)],
     ['one-disposition-per-finding', [codeRows, architectureRows, horizontalRows, testingRows, securityRows, antipatternRows]
       .every((rows) => rows.length === 1)],

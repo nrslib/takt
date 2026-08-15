@@ -1,6 +1,6 @@
 ## Exploration Authority and Finding / Remediation Authority
 
-A contract family is limited to paths that share the observable invariant, authoritative owner or source of truth, reason to change from the root cause, and external or terminal consequence. Similar names, types, or proximity alone do not establish one family.
+Use the contract-family identity defined by the active role instruction; this authority policy does not redefine it. Names, types, or proximity alone are grounds neither for merging nor for splitting a family.
 
 A bounded horizontal comparison is allowed as evidence gathering needed to close an active contract family: use it to identify the common owner, duplicate implementations that reconstruct the same meaning under another name, and unvisited or unmigrated consumers. Observing an adjacent, separate family during that comparison does not itself authorize a finding, a Companion repair request, or expansion of remediation scope.
 

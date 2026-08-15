@@ -71,6 +71,37 @@ function compactJapaneseAdjudicationOutput(): string {
   ].join('\n');
 }
 
+function currentFamilyMergeOutput(): string {
+  return [
+    '裁定結果は「修正対象あり」です。次工程へ渡す正本は1 familyです。',
+    '',
+    '## 修正対象 family',
+    '',
+    '- Family ID: `FAM-channel-normalization`',
+    '- 不変条件: accepted `local` / `cloud` strings are normalized once and retained by every execution path.',
+    '- 担当箇所: `normalizeChannel` in `src/channel.js`',
+    '- 権限根拠: `direct_acceptance_criterion_violation`',
+    '- 現在の違反: execution.js が独自に raw 値を検証・保持するため、" LOCAL " など要求上有効な入力を拒否する。',
+    '- 受入条件:',
+    '  - 大小文字と周辺空白を無視して `local` / `cloud` を受理する。',
+    '  - execution object には必ず正規化済みの小文字値を保持する。',
+    '  - その他の値は execution 作成前に失敗する。',
+    '  - legacy alias は追加しない。',
+    '- 修正境界: buildExecution を既存の normalizeChannel へ配線し、返された値を保持する。transaction、rollback は含めない。',
+    '',
+    '## 指摘ごとの裁定',
+    '',
+    '| Finding | Disposition | 根拠 |',
+    '|---|---|---|',
+    `| ${findings.code} | actionable | 上記 family。" LOCAL " が現在の execution 経路で拒否される直接違反。 |`,
+    `| ${findings.architecture} | duplicate | 同じ担当箇所・不変条件・根本原因。FAM-channel-normalization へ統合。transaction 提案は過剰方式として不採用。 |`,
+    `| ${findings.horizontal} | out_of_scope | 重複実装は確認できるが、channel 契約とは owner・不変条件・変更理由が異なり、修正権限がない。 |`,
+    `| ${findings.testing} | out_of_scope | 全表記の文書列挙は受入条件でも必須 consumer migration でもない。 |`,
+    `| ${findings.security} | false_positive | エラーは固定文字列で、raw 値を含まない。 |`,
+    `| ${findings.antipattern} | overreach | Windows 実行を要求する契約も実装欠陥の証拠もない。 |`,
+  ].join('\n');
+}
+
 function withSourceFindingsTable(output: string, sourceFindings: string): string {
   return output.replace(
     '### FAM-channel-normalization',
@@ -175,5 +206,22 @@ describe('review adjudication assertion', () => {
     const result = assertReviewAdjudication(output);
 
     expect(result.pass, result.reason).toBe(true);
+  });
+
+  it('accepts a compact family merger expressed through the actionable family and disposition rationale', () => {
+    const result = assertReviewAdjudication(currentFamilyMergeOutput());
+
+    expect(result.pass, result.reason).toBe(true);
+  });
+
+  it('rejects a compact merger when the duplicate targets a different family', () => {
+    const output = currentFamilyMergeOutput().replace(
+      'FAM-channel-normalization へ統合',
+      'FAM-other-channel-contract へ統合',
+    );
+    const result = assertReviewAdjudication(output);
+
+    expect(result.pass).toBe(false);
+    expect(result.reason).toContain('same-actionable-family');
   });
 });
