@@ -379,11 +379,22 @@ function composeConfiguredDynamicFacets(target, selection, targetId, stepName) {
 
   const sourceWorkflow = loadWorkflowByIdentifier(selection.sourceWorkflow, repoRoot);
   if (!sourceWorkflow) {
-    throw new Error(`Dynamic facet source workflow not found: ${selection.sourceWorkflow}`);
+    throw new Error(
+      `Dynamic facet source workflow not found for eval target "${targetId}": ${selection.sourceWorkflow}`,
+    );
   }
   const source = findStepTarget(sourceWorkflow, stepName);
-  if (!source || source.target.dynamicFacets === undefined) {
-    throw new Error(`Dynamic facet source step not found: ${selection.sourceWorkflow}/${stepName}`);
+  if (!source) {
+    throw new Error(
+      `Dynamic facet source step not found for eval target "${targetId}": `
+      + `${selection.sourceWorkflow}/${stepName}`,
+    );
+  }
+  if (source.target.dynamicFacets === undefined) {
+    throw new Error(
+      `Dynamic facet source step has no dynamicFacets configuration for eval target "${targetId}": `
+      + `${selection.sourceWorkflow}/${stepName}`,
+    );
   }
   if (source.target.dynamicFacets.pool !== selection.pool) {
     throw new Error(
@@ -394,13 +405,17 @@ function composeConfiguredDynamicFacets(target, selection, targetId, stepName) {
 
   const pool = source.workflow.facetPools?.[selection.pool];
   if (pool === undefined) {
-    throw new Error(`Dynamic facet pool not found: ${selection.sourceWorkflow}/${selection.pool}`);
+    throw new Error(
+      `Dynamic facet pool not found for eval target "${targetId}": `
+      + `${selection.sourceWorkflow}/${selection.pool}`,
+    );
   }
   const knownCandidateIds = new Set(pool.candidates.map(({ id }) => id));
   const unknownCandidateId = selection.candidateIds.find((id) => !knownCandidateIds.has(id));
   if (unknownCandidateId !== undefined) {
     throw new Error(
-      `Unknown dynamic facet candidate "${unknownCandidateId}" for eval target "${targetId}"`,
+      `Dynamic facet candidate mismatch for eval target "${targetId}": `
+      + `candidate "${unknownCandidateId}" is not in pool "${selection.pool}"`,
     );
   }
 
