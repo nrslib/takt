@@ -47,9 +47,10 @@ steps:
       architecture_review_instruction: { $param: architecture_review_instruction }
       security_review_instruction: { $param: security_review_instruction }
       testing_review_instruction: { $param: testing_review_instruction }
-      coding_review_instruction: { $param: coding_review_instruction }
+      backend_review_instruction: { $param: coding_review_instruction }
       ai_antipattern_review_instruction: { $param: ai_antipattern_review_instruction }
       frontend_review_instruction: { $param: frontend_review_instruction }
+      cqrs_es_review_instruction: { $param: cqrs_es_review_instruction }
     rules:
       - condition: COMPLETE
         next: COMPLETE

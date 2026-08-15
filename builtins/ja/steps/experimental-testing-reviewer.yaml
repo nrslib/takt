@@ -1,0 +1,30 @@
+params:
+  review_policy_additions:
+    type: facet_ref[]
+    facet_kind: policy
+  review_knowledge_additions:
+    type: facet_ref[]
+    facet_kind: knowledge
+  testing_review_instruction: { type: facet_ref, facet_kind: instruction }
+name: testing-review
+description: テストカバレッジ、テスト設計、統合境界、E2E境界をレビューする
+capabilities: readonly
+tags: [review]
+edit: false
+persona: testing-reviewer
+policy:
+  - contract-change
+  - review
+  - testing
+  - $param: review_policy_additions
+knowledge:
+  - unit-testing
+  - e2e-testing
+  - $param: review_knowledge_additions
+instruction:
+  $param: testing_review_instruction
+pass_previous_response: false
+output_contracts:
+  report:
+    - name: testing-review.md
+      format: testing-review

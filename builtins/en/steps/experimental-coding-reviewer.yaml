@@ -1,0 +1,31 @@
+params:
+  review_policy_additions:
+    type: facet_ref[]
+    facet_kind: policy
+  review_knowledge_additions:
+    type: facet_ref[]
+    facet_kind: knowledge
+  coding_review_instruction: { type: facet_ref, facet_kind: instruction }
+name: coding-review
+capabilities: readonly
+tags: [review]
+edit: false
+persona: coding-reviewer
+policy:
+  - contract-change
+  - review
+  - coding
+  - testing
+  - $param: review_policy_additions
+knowledge:
+  - architecture
+  - unit-testing
+  - e2e-testing
+  - $param: review_knowledge_additions
+instruction:
+  $param: coding_review_instruction
+pass_previous_response: false
+output_contracts:
+  report:
+    - name: coding-review.md
+      format: coding-review
