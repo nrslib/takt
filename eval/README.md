@@ -205,7 +205,8 @@ The flow is: prepare (place latest facets) -> run on codex -> assert.
 
 ```bash
 npm run build                    # prepare script imports from dist/
-npm run eval:prompts             # prepare + ALL suites
+npm run eval:prompts             # prepare + default suites (coding is excluded)
+npm run eval:prompts:coding      # coding suite (requires Claude and Codex CLI logins)
 npm run eval:prompts -- arch cqrs        # only selected suites
 npm run eval:prompts -- arch --repeat 3  # extra flags pass through to promptfoo
 npm run eval:prompts:prepare     # prepare only (inspect eval/prompts/)

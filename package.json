@@ -24,7 +24,7 @@
     "analyze:usage": "node dist/commands/analyze-usage.js",
     "eval:prompts:prepare": "node eval/scripts/prepare.mjs",
     "eval:prompts": "npm run eval:prompts:prepare && node eval/scripts/run-evals.mjs",
-    "eval:prompts:coding": "node eval/scripts/prepare.mjs coding-review && node eval/scripts/run-evals.mjs coding",
+    "eval:prompts:coding": "node --test eval/asserts/coding-review-metrics.test.mjs && node eval/scripts/prepare.mjs coding-review && node eval/scripts/run-evals.mjs coding",
     "eval:prompts:fix-closure": "node eval/scripts/prepare.mjs fix-closure && node eval/scripts/run-evals.mjs fix-closure",
     "eval:prompts:fix-self-scan": "node eval/scripts/prepare.mjs fix-self-scan && node eval/scripts/run-evals.mjs fix-self-scan",
     "eval:prompts:fix-loop-convergence": "node --test eval/asserts/fix-loop-convergence.test.mjs && node eval/scripts/run-evals.mjs fix-loop-convergence",
