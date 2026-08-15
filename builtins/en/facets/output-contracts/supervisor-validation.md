@@ -68,9 +68,9 @@ Extract requirements from the task spec and verify each one individually against
 | {Check} | `{command}` | {Actual error} | {Required runtime and version} | {Available runtime and version} | {Configuration and result or why unavailable} | {Evidence that the blocker is outside task scope} |
 
 ## Problem-Family Completion Sweep
-| family_tag / changed contract | Responsible source | Observable invariant | Added path | Unchecked paths | Result |
-|-------------------------------|--------------------|----------------------|------------|-----------------|--------|
-| {problem family or contract reviewed} | {single responsibility and source that defines the invariant and guarantees it holds} | {condition to preserve} | {new path checked in this review, or none} | {none or reason unchecked} | {no issue / finding number} |
+| family_tag / changed contract | Responsible source | Observable invariant | Reason to change from the same cause | Added path | Unchecked paths | Result |
+|-------------------------------|--------------------|----------------------|--------------------------------------|------------|-----------------|--------|
+| {problem family or contract reviewed} | {single responsibility and source that defines the invariant and guarantees it holds} | {condition to preserve} | {why the paths need to change for the same cause} | {new path checked in this review, or none} | {none or reason unchecked} | {no issue / finding number} |
 
 ## Current Iteration Findings (new)
 | # | finding_id | family_tag | Item | Evidence | Reason | Authorization Basis | Reason Absent from Initial Round | Required Action |

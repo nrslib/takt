@@ -21,6 +21,7 @@ defaultTest:
     provider:
       id: openai:codex-sdk
       config:
+        working_dir: fixtures/review-adjudication
         sandbox_mode: read-only
         approval_policy: never
         skip_git_repo_check: true

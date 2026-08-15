@@ -75,24 +75,24 @@ const FAMILY_RECORDING_SHAPES = {
   ja: [
     {
       heading: '## 問題系列の完了走査',
-      sectionMarkers: ['family_tag / 変更契約', '担当箇所', '観測可能な不変条件', '追加した経路'],
+      sectionMarkers: ['family_tag / 変更契約', '担当箇所', '観測可能な不変条件', '同じ原因で変更される理由', '追加した経路'],
       formatMarkers: ['| # | finding_id | family_tag |'],
     },
     {
       heading: '## 修正対象 family',
-      sectionMarkers: ['| family |', '担当箇所', '観測可能な不変条件', '追加した経路'],
+      sectionMarkers: ['| family |', '担当箇所', '観測可能な不変条件', '同じ原因で変更される理由', '追加した経路'],
       formatMarkers: [],
     },
   ],
   en: [
     {
       heading: '## Problem-Family Completion Sweep',
-      sectionMarkers: ['family_tag / changed contract', 'Responsible source', 'Observable invariant', 'Added path'],
+      sectionMarkers: ['family_tag / changed contract', 'Responsible source', 'Observable invariant', 'Reason to change from the same cause', 'Added path'],
       formatMarkers: ['| # | finding_id | family_tag |'],
     },
     {
       heading: '## Actionable Families',
-      sectionMarkers: ['| family |', 'Responsible source', 'Observable invariant', 'Added path'],
+      sectionMarkers: ['| family |', 'Responsible source', 'Observable invariant', 'Reason to change from the same cause', 'Added path'],
       formatMarkers: [],
     },
   ],
@@ -112,8 +112,19 @@ function assertExistingFamilyRecordingContracts(
 ): Array<{ name: string; formatRef?: string }> {
   const marker = lang === 'ja' ? '**既出 family の照合:**' : '**Existing-family lookup:**';
   expect(step.instruction, path).toContain(marker);
-  const matchingContracts = (step.outputContracts ?? [])
-    .filter(({ useJudge }) => useJudge !== false)
+  const writableContracts = (step.outputContracts ?? [])
+    .filter(({ useJudge }) => useJudge !== false);
+  for (const { format, formatRef } of writableContracts) {
+    if (formatRef !== 'merge-readiness-supervision') continue;
+    const heading = lang === 'ja' ? '## 前段 finding の扱い' : '## Prior Finding Dispositions';
+    const markers = lang === 'ja'
+      ? ['対象 family', '同じ原因で変更される理由', '合流根拠']
+      : ['Target family', 'Reason to change from the same cause', 'Rationale'];
+    const section = markdownSection(format, heading);
+    expect(section, `${path}:${formatRef}`).toBeDefined();
+    for (const value of markers) expect(section, `${path}:${formatRef}:${value}`).toContain(value);
+  }
+  const matchingContracts = writableContracts
     .filter(({ format }) => FAMILY_RECORDING_SHAPES[lang]
       .some(({ heading, sectionMarkers, formatMarkers }) => {
         const section = markdownSection(format, heading);
@@ -406,6 +417,22 @@ describe('contract-family active composition', () => {
     expect(resolvedFormats).toContain('merge-readiness-review');
     expect(resolvedFormats).toContain('supervisor-validation');
     expect(resolvedFormats).toContain('merge-readiness-supervision');
+  });
+
+  it.each(LANGUAGES)('persists every family identity field in adjudication output for %s', (lang) => {
+    const content = readFileSync(join(
+      getLanguageResourcesDir(lang),
+      'facets',
+      'output-contracts',
+      'review-decision.md',
+    ), 'utf8');
+    const heading = lang === 'ja' ? '## 修正対象 family' : '## Actionable Families';
+    const markers = lang === 'ja'
+      ? ['担当箇所', '観測可能な不変条件', '同じ原因で変更される理由']
+      : ['Responsible source', 'Observable invariant', 'Reason to change from the same cause'];
+    const section = markdownSection(content, heading);
+    expect(section, heading).toBeDefined();
+    for (const value of markers) expect(section, `${heading}:${value}`).toContain(value);
   });
 
   it('classifies every real-loader companion without hard-coded role projection', () => {
