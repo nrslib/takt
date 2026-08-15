@@ -1,6 +1,7 @@
 **Contract family role: `follow-up-review`**
 
 {{include:instructions/contract-family-core}}
+{{include:instructions/existing-family-lookup}}
 
 open finding、その修正、accepted family の全 `participates` 経路を再構築し、未移行、旧経路、片側更新、修正退行を確認してください。一般探索を再開せず、`outside` の問題を新しい family にしないでください。
 

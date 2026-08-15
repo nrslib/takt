@@ -388,7 +388,7 @@ describe('workflow_call schema', () => {
     });
   });
 
-  it.each(['companion.escalated', 'companion.escalated == true'])
+  it.each(['companion.completionSettled', 'companion.completionSettled == true'])
     ('should retain a semantic companion label when companions are empty: %s', (condition) => {
       const workflow = createCallableCompanionWorkflow();
       (workflow.steps as Array<Record<string, unknown>>)[0]!.rules = [
@@ -405,7 +405,7 @@ describe('workflow_call schema', () => {
     });
 
   it('should recurse through aggregate targets and ignore semantic or quoted companion text', () => {
-    const aggregateRule = 'all("when(companion.openMustFixCount == 0)")';
+    const aggregateRule = 'all("when(companion.followUpRounds == 0)")';
     const schemaResult = WorkflowStepRawSchema.safeParse({
       name: 'parallel-review',
       parallel: [{
@@ -420,15 +420,15 @@ describe('workflow_call schema', () => {
     expect(schemaResult.error?.issues[0]?.message)
       .toContain('Workflow transition rules cannot reference advisory companion state');
     expect(hasCompanionReference(parseWorkflowRuleCondition(aggregateRule))).toBe(true);
-    expect(hasCompanionReference(parseWorkflowRuleCondition('companion.openMustFixCount'))).toBe(false);
-    expect(hasCompanionReference(parseWorkflowRuleCondition('when(context.status == "companion.openMustFixCount")'))).toBe(false);
+    expect(hasCompanionReference(parseWorkflowRuleCondition('companion.followUpRounds'))).toBe(false);
+    expect(hasCompanionReference(parseWorkflowRuleCondition('when(context.status == "companion.followUpRounds")'))).toBe(false);
   });
 
   it('should reject companion state rules even when companions are non-empty', () => {
     const workflow = createCallableCompanionWorkflow();
     (workflow.steps as Array<Record<string, unknown>>)[0]!.rules = [
-      { condition: 'when(companion.escalated)', next: 'fix' },
-      { condition: 'when(companion.openMustFixCount == 0)', next: 'fix' },
+      { condition: 'when(companion.completionSettled)', next: 'fix' },
+      { condition: 'when(companion.followUpRounds == 0)', next: 'fix' },
       { condition: 'done', next: 'COMPLETE' },
     ];
 
@@ -449,7 +449,7 @@ describe('workflow_call schema', () => {
     const workflow = createCallableCompanionWorkflow();
     (workflow.steps as Array<Record<string, unknown>>)[0]!.rules = [
       { condition: 'when(true)', next: 'fix' },
-      { condition: 'when(context.status == "companion.openMustFixCount")', next: 'fix' },
+      { condition: 'when(context.status == "companion.followUpRounds")', next: 'fix' },
       { condition: 'done', next: 'COMPLETE' },
     ];
 
@@ -460,7 +460,7 @@ describe('workflow_call schema', () => {
     expect(implement?.rules).toHaveLength(3);
     expect(implement?.rules?.[1]?.condition).toMatchObject({
       kind: 'when',
-      expression: 'context.status == "companion.openMustFixCount"',
+      expression: 'context.status == "companion.followUpRounds"',
     });
   });
 

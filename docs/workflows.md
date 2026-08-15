@@ -39,6 +39,12 @@ description: Optional description
 max_steps: 10
 initial_step: first-step          # Optional, defaults to the first step
 
+all_steps:
+  rules:
+    - findings-handling
+    - ref: careful-findings
+      position: before_instruction
+
 # Section maps (key → file path relative to workflow YAML directory)
 personas:
   planner: ../facets/personas/planner.md
@@ -98,6 +104,14 @@ steps:
 Steps reference section maps by key name (e.g., `persona: coder`), not by file path. Paths in section maps are resolved relative to the workflow YAML file's directory.
 
 Section maps are optional. Facets can be referenced directly by bare name (e.g., `persona: coder` without a `personas` map entry); bare names are resolved through the facet layers in priority order — project `.takt/facets/<type>/`, then global `~/.takt/facets/<type>/`, then bundled `builtins/{lang}/facets/<type>/`. Use a section map only when you need a custom alias or an explicit file path.
+
+### Workflow-wide rules (`all_steps.rules`)
+
+Declare rules that apply to every agent step in the workflow under `all_steps.rules`. Each entry is either a rule reference or an object with `ref` and the optional `position: before_instruction`. An omitted position places the rule after the automatic execution rules; `before_instruction` places it immediately before the step's `Instructions` section.
+
+Rule files are Markdown files named `<ref>.md` under `workflows/rules/`. They resolve in project `.takt/workflows/rules/`, then global `~/.takt/workflows/rules/`, then the bundled builtin directory. The applicability notice and rule heading are rendered once per prompt. These rules apply only to Phase 1 agent instructions, not output reports, status routing, or companion reviewers. A called workflow inherits its parent's rules additively before its own `all_steps.rules`.
+
+Rule files must not contain the required-output heading or `{report:...}` references; invalid content fails workflow loading and identifies the referenced file. Omitting `all_steps` preserves the existing prompt. Future workflow-wide declarations belong under `all_steps`; unknown root-level keys remain invalid.
 
 ### Reusable step fragments
 
@@ -1199,6 +1213,9 @@ steps:
 
 Add `companion` to a normal agent step to run stateless, read-only reviewers while the agent edits. A shorthand list selects fixed reviewers. Use the object form to combine fixed reviewers with a pool selected once at step startup and an optional moderator. At most three reviewers run together.
 
+Companion reviewers are disabled by default. Set `companion.enabled: true` in
+`runtime.yaml` to run reviewers declared by a workflow.
+
 ```yaml
 - name: implement
   persona: coder
@@ -1215,7 +1232,9 @@ Workflow transition rules cannot reference `companion.*` state. Companion findin
 
 Definitions are YAML files resolved from `.takt/companions/`, `~/.takt/companions/`, then `builtins/{language}/companions/`. They may contain `name`, `description`, facet references (`persona`, `policy`, `knowledge`, `instruction`), and `interval_ms`; provider and tool settings are not allowed. `interval_ms` must be a positive integer no greater than `2,147,483,647`.
 
-TAKT observes mutating tool events and reviews a cumulative diff after a quiet period or forced interval. At implementer completion it checks for unreviewed changes and reviews only when some remain; running and pending reviews are still stopped or awaited before completion can finish. Findings are appended to `.takt/runs/{run}/companion/{step}/{companion}.jsonl`. Each companion JSONL file is a read-only projection for the implementer and an independent transaction boundary: its cache, finding sequence, and finding events are committed only after that file is appended successfully. When a round updates multiple companions, a later mailbox failure does not roll back an earlier mailbox that was already committed; retry resumes only the unfinished mailbox updates. External changes to the projection are rejected and do not change engine-owned finding state. Before post-execution conditions are evaluated, the engine runs the same-session fix loop for open `must_fix` findings while the loop continues to make progress. Loop escalation stops only this internal fix loop. Unresolved findings, completion-review failures, and internal escalation remain recorded as Companion diagnostics but do not block the main workflow or alter the response passed to post-execution judgment. After Companion handling, only the latest successful main-agent response is passed onward. Companion calls use their bounded retry policy before failing soft; workflow or step cancellation still stops Companion work.
+TAKT observes mutating tool events and reviews the current cumulative diff after a quiet period or forced interval. Each review round creates a fresh finding list, and an optional moderator accepts or rejects every submitted finding by its round-local index; findings are not carried between rounds. Accepted findings are appended as one NDJSON record per line to `.takt/runs/{run}/companion/{step}/{companion}.jsonl`. This mailbox is an audit log and reference view that the implementer may read at any time. The engine writes it but does not read, interpret, protect, or use it to decide delivery or completion.
+
+At each implementer turn boundary, TAKT embeds all undelivered accepted findings directly in the follow-up prompt and then clears the in-memory delivery buffer. The implementer decides whether to address each finding and explains any decision not to act. On completion, TAKT stops new triggers, drains running and queued review rounds, reads the current diff digest, and runs a completion review only for an unreviewed digest. If that produces findings, it delivers another follow-up turn and repeats completion processing. The step finishes only when no findings remain undelivered and the digest has not changed since the latest finding delivery. There is no Companion follow-up loop limit; cancellation through the workflow or step abort signal is the termination mechanism. If a follow-up returns `error`, `rate_limited`, or `blocked`, or throws an error, TAKT stops the Companion follow-up loop without retrying that follow-up and continues the step with the latest successful implementer response and session ID. The Companion diagnostics record `completionSettled: false`, the attempted `followUpRounds`, and a sanitized failure reason. AbortSignal cancellation still propagates. Companion calls retain their bounded provider retry policy before failing soft.
 
 ## Best Practices
 

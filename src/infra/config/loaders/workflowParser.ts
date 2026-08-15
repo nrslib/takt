@@ -46,6 +46,7 @@ import {
 import type { WorkflowTrustInfo } from './workflowTrustSource.js';
 import { withWorkflowConfigErrorPath as withWorkflowStepErrorPath } from '../../../core/workflow/workflow-config-error.js';
 import { validateDynamicParallelContracts } from '../../../core/workflow/dynamic-parallel/validator.js';
+import { resolveWorkflowWideRules } from './workflowAllStepsRuleResolver.js';
 
 type RawSubworkflowParams = NonNullable<ReturnType<typeof WorkflowConfigRawSchema.parse>['subworkflow']>['params'];
 
@@ -141,6 +142,11 @@ export function normalizeWorkflowConfig(
       context,
     },
   );
+  const workflowWideRules = resolveWorkflowWideRules(
+    parsed.all_steps?.rules,
+    context?.projectDir ?? workflowDir,
+    context?.lang ?? 'en',
+  );
   const selectorInstructionRefs = collectSelectorInstructionRefs(parsed.steps);
   const resolvedPoliciesWithSource = resolveSectionMapWithSource(parsed.policies, workflowDir, 'policies', context);
   const resolvedKnowledgeWithSource = resolveSectionMapWithSource(parsed.knowledge, workflowDir, 'knowledge', context);
@@ -225,6 +231,7 @@ export function normalizeWorkflowConfig(
     knowledge: sections.resolvedKnowledge,
     instructions: sections.resolvedInstructions,
     reportFormats: sections.resolvedReportFormats,
+    ...(workflowWideRules === undefined ? {} : { allStepsRules: workflowWideRules }),
     steps,
     initialStep: parsed.initial_step ?? steps[0]!.name,
     maxSteps: parsed.max_steps,

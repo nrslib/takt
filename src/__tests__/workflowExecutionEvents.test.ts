@@ -225,9 +225,7 @@ describe('bindWorkflowExecutionEvents', () => {
         changedLines: 1,
         findingCount: 0,
         reviewerFindings: [],
-        reviewerUpdates: [],
         acceptedFindings: [],
-        acceptedUpdates: [],
       });
       engine.emit('companion:review_skipped', {
         step: 'review',
@@ -332,9 +330,7 @@ describe('bindWorkflowExecutionEvents', () => {
         changedLines: 12,
         findingCount: 0,
         reviewerFindings: [],
-        reviewerUpdates: [],
         acceptedFindings: [],
-        acceptedUpdates: [],
         runPathNamespace: childScope,
       };
       const queueCoalescedPayload = {
@@ -2083,11 +2079,15 @@ describe('bindWorkflowExecutionEvents', () => {
       ['companion:finding', {
         step: 'implement',
         companion: 'security-reviewer',
-        findingId: 'security-reviewer-1',
         severity: 'must_fix',
       }],
-      ['companion:fix_round', { step: 'implement', sequence: 2, openMustFixCount: 1 }],
-      ['companion:complete', { step: 'implement', openMustFixCount: 0, escalated: false }],
+      ['companion:fix_round', { step: 'implement', sequence: 2, findingCount: 1 }],
+      ['companion:complete', {
+        step: 'implement',
+        completionSettled: true,
+        completionFailure: false,
+        followUpRounds: 1,
+      }],
       ['companion:review_round', {
         step: 'implement',
         companion: 'security-reviewer',
@@ -2101,7 +2101,6 @@ describe('bindWorkflowExecutionEvents', () => {
           line: 7,
           finding: 'candidate-private-detail',
         }],
-        reviewerUpdates: [],
         moderator: {
           name: 'moderator',
           invoked: true,
@@ -2113,7 +2112,6 @@ describe('bindWorkflowExecutionEvents', () => {
           line: 7,
           finding: 'candidate-private-detail',
         }],
-        acceptedUpdates: [],
       }],
       ['companion:queue_coalesced', {
         step: 'implement',
@@ -2152,7 +2150,6 @@ describe('bindWorkflowExecutionEvents', () => {
         action: 'finding',
         step: 'implement',
         companion: 'security-reviewer',
-        findingId: 'security-reviewer-1',
         severity: 'must_fix',
       },
       {
@@ -2160,14 +2157,15 @@ describe('bindWorkflowExecutionEvents', () => {
         action: 'fix_round',
         step: 'implement',
         sequence: 2,
-        openMustFixCount: 1,
+        findingCount: 1,
       },
       {
         type: 'companion',
         action: 'complete',
         step: 'implement',
-        openMustFixCount: 0,
-        escalated: false,
+        completionSettled: true,
+        completionFailure: false,
+        followUpRounds: 1,
       },
       {
         type: 'companion',

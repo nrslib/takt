@@ -16,6 +16,8 @@ Carry-forward source: {Latest fix-verification in the same remediation / relativ
 |----------|-----------|---------------------|---------------------|-----------------------------|--------------------------------|---------------|--------------|--------------------------------------|-------------------------------|---------|-----------------------------|------------------|
 | {Copy every invariant row from the carry-forward source stated above unchanged, one row at a time; do not make No prior remediation or Carry-forward source missing into rows, and preserve their distinction in the source statement above} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} | {Unchanged} |
 
+When review-resolution.md merges a new finding into an existing family, preserve the carry-forward row unchanged. Record that finding under the same fix unit in Finding Coverage and its added path under the same family in Defect-Family Final State; do not add a separate family in New and Current Planning Rows.
+
 ### New and Current Planning Rows
 | Fix Unit | Family ID | Invariant Name | Observable Invariant | Responsible Source | Classification | Recurrence on a Different Path Confirmed? | Enforcement Point |
 |----------|-----------|----------------|----------------------|--------------------|----------------|-------------------------------------------|-------------------|

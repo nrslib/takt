@@ -756,15 +756,40 @@ describe('requeueFailedTask', () => {
     );
   });
 
-  it('should reject requeue when failure step name cannot be resolved', async () => {
+  it('should requeue a pre-step failure without fabricating a step from the saved restart point', async () => {
     const task = makeFailedTask({
-      failure: { error: 'Boom' },
+      failure: { error: 'Invalid runtime config' },
+      data: {
+        task: 'Do something',
+        workflow: 'default',
+        restart_point: nestedReviewRestartPoint,
+      },
     });
 
-    await expect(requeueFailedTask(task, '/project')).rejects.toThrow(
-      'step name could not be resolved',
+    await requeueFailedTask(task, '/project');
+
+    expectRequeueTaskCalledWith(
+      'my-task',
+      ['failed'],
+      {
+        startStep: undefined,
+        retryNote: expect.any(String),
+        resumePoint: undefined,
+        workflow: undefined,
+        taskDir: undefined,
+        sourceRunSlug: undefined,
+        restartPoint: defaultPlanRestartPoint,
+      },
     );
-    expect(mockRequeueTask).not.toHaveBeenCalled();
+    const requeueOptions = mockRequeueTask.mock.calls.at(-1)?.[2] as { retryNote?: string };
+    const diagnosticLine = requeueOptions.retryNote
+      ?.split('\n')
+      .find((line) => line.startsWith('diagnostic='));
+
+    expect(diagnosticLine).toBeDefined();
+    const diagnostic = JSON.parse(diagnosticLine!.slice('diagnostic='.length)) as Record<string, unknown>;
+    expect(diagnostic.error).toBe('Invalid runtime config');
+    expect(diagnostic).not.toHaveProperty('failedStep');
   });
 
   it('should append auto-generated note to existing retry note', async () => {

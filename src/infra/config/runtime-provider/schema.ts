@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { PROVIDER_TYPES } from '../../../shared/types/provider.js';
 import { PermissionModeSchema } from '../../../core/models/schema-base.js';
 import { RUNTIME_PROVIDER_VERSION } from './constants.js';
+import { DEFAULT_COMPANION_ENABLED } from '../../../shared/constants.js';
 
 const ProviderNameSchema = z.enum(PROVIDER_TYPES);
 
@@ -222,7 +223,7 @@ function getEffectiveProviderSection(
 /** Determine whether a provider section has active runtime configuration. */
 export function hasActiveProviderContent(
   section: RuntimeProviderSectionShape | undefined,
-  companionEnabled = true,
+  companionEnabled = DEFAULT_COMPANION_ENABLED,
 ): boolean {
   const effectiveSection = getEffectiveProviderSection(section, companionEnabled);
   if (effectiveSection === undefined) {
@@ -248,7 +249,7 @@ export const RuntimeProviderFileSchema = z
   })
   .strict()
   .superRefine((value, ctx) => {
-    const companionEnabled = value.companion?.enabled ?? true;
+    const companionEnabled = value.companion?.enabled ?? DEFAULT_COMPANION_ENABLED;
     if (hasActiveProviderContent(value.provider, companionEnabled) && value.provider?.defaults === undefined) {
       ctx.addIssue({
         code: 'custom',
@@ -274,7 +275,7 @@ export function getEffectiveRuntimeProviderFile(
   }
   const provider = getEffectiveProviderSection(
     file.provider,
-    file.companion?.enabled ?? true,
+    file.companion?.enabled ?? DEFAULT_COMPANION_ENABLED,
   );
   return {
     ...file,

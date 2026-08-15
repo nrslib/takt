@@ -81,39 +81,26 @@ function judge(): ReturnType<typeof vi.fn> {
 describe('companion advisory isolation', () => {
   it.each([
     {
-      label: 'unresolved must_fix',
+      label: 'pending follow-up',
       companion: {
-        escalated: false,
-        completionVerified: true,
-        openMustFixCount: 1,
-        openMustFix: [{
-          id: 'ai-antipattern-review-companion-1',
-          severity: 'must_fix' as const,
-          file: 'src/implementation.ts',
-          line: 1,
-          finding: 'The implementation still contains a must-fix finding',
-        }],
+        completionSettled: false,
+        followUpRounds: 1,
       },
     },
     {
       label: 'completion failure',
       companion: {
-        escalated: true,
-        completionVerified: false,
+        completionSettled: false,
         completionFailure: true,
-        openMustFixCount: 1,
-        openMustFix: [],
+        followUpRounds: 1,
         reason: 'completion review could not verify the final diff',
       },
     },
     {
-      label: 'internal escalation',
+      label: 'settled follow-up',
       companion: {
-        escalated: true,
-        completionVerified: true,
-        openMustFixCount: 1,
-        openMustFix: [],
-        reason: 'the same finding repeated without a diff change',
+        completionSettled: true,
+        followUpRounds: 2,
       },
     },
   ])('should evaluate ordinary conditions after $label', async ({ companion }) => {
@@ -154,14 +141,14 @@ describe('companion advisory isolation', () => {
   it.each([
     {
       label: 'directly',
-      condition: { kind: 'when', expression: 'companion.escalated' } as const,
+      condition: { kind: 'when', expression: 'companion.completionSettled' } as const,
     },
     {
       label: 'inside a composed condition',
       condition: {
         kind: 'and',
         left: { kind: 'semantic', label: 'Implementation is complete' },
-        right: { kind: 'when', expression: 'companion.escalated' },
+        right: { kind: 'when', expression: 'companion.completionSettled' },
       } as const,
     },
     {
@@ -169,7 +156,7 @@ describe('companion advisory isolation', () => {
       condition: {
         kind: 'aggregate',
         aggregate: 'all',
-        targetConditions: [{ kind: 'when', expression: 'companion.escalated' }],
+        targetConditions: [{ kind: 'when', expression: 'companion.completionSettled' }],
       } as const,
     },
   ])('should reject a programmatic workflow rule that reads advisory state $label', async ({ condition }) => {
@@ -189,10 +176,8 @@ describe('companion advisory isolation', () => {
     await expect(executor(judgeStatus).applyPostExecutionRulesOnly(
       step,
       state({
-        escalated: true,
-        completionVerified: true,
-        openMustFixCount: 0,
-        openMustFix: [],
+        completionSettled: true,
+        followUpRounds: 0,
       }),
       response(),
       vi.fn(),

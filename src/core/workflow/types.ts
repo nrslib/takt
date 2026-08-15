@@ -6,6 +6,7 @@ import type {
   Language,
   LoopMonitorConfig,
   WorkflowConfig,
+  WorkflowWideRule,
   WorkflowCallStep,
   WorkflowMaxSteps,
   WorkflowRestartPoint,
@@ -46,7 +47,6 @@ import type { WorkflowCallInvocationEvidence } from './workflow-call-invocation-
 import type { WorkflowStepParticipationIndex } from './workflow-step-participation-index.js';
 import type { SelectorGitCommandRunner } from './dynamic-parallel/selector-git-command-runner.js';
 import type { CompanionDiffReader } from './companion/diff-reader.js';
-import type { CompanionReviewAuthority } from './companion/review-state-store.js';
 
 import type { ProviderType, StreamCallback, StreamEvent } from '../../shared/types/provider.js';
 import type { AgentFailureCategory } from '../../shared/types/agent-failure.js';
@@ -205,7 +205,6 @@ export interface WorkflowSharedRuntimeState {
   dynamicFacetSelectionStore?: import('./dynamic-facets/dynamicFacetSelectionStore.js').DynamicFacetSelectionStore;
   workflowCallInvocationEvidence?: WorkflowCallInvocationEvidence;
   workflowStepParticipationIndex?: WorkflowStepParticipationIndex;
-  companionReviewAuthority?: CompanionReviewAuthority;
   resumeArtifactOccurrenceIndex?: import('./run/resume-artifact-occurrence-index.js').ResumeArtifactOccurrenceIndex;
 }
 
@@ -315,7 +314,7 @@ export interface CompanionQueueAuditEntry {
   readonly observedGeneration: number;
 }
 
-export type CompanionCallPurpose = 'selector' | 'reviewer' | 'moderator' | 'judge';
+export type CompanionCallPurpose = 'selector' | 'reviewer' | 'moderator';
 export type CompanionCallStatus = 'completed' | 'failed';
 export type CompanionReviewPhase = 'initial' | 'live' | 'fix' | 'completion';
 export type CompanionReviewSkipReason =
@@ -328,16 +327,11 @@ export type CompanionReviewSkipReason =
   | 'below_minimum_changed_lines';
 export type CompanionReviewZeroReason =
   | 'reviewer_returned_no_findings'
-  | 'moderator_not_invoked_for_empty_reviewer_result'
-  | 'moderator_rejected_or_merged_all_findings'
-  | 'no_new_finding_records';
+  | 'moderator_rejected_all_findings';
 
 export interface CompanionModeratorDecisionAudit {
-  readonly action: 'accept' | 'reject' | 'merge' | 'downgrade';
+  readonly action: 'accept' | 'reject';
   readonly sourceIndex: number;
-  readonly severity?: 'must_fix' | 'should_fix' | 'nit';
-  readonly finding?: string;
-  readonly targetId?: string;
 }
 
 export interface CompanionAcceptedFindingAudit {
@@ -345,11 +339,6 @@ export interface CompanionAcceptedFindingAudit {
   readonly file: string;
   readonly line: number;
   readonly finding: string;
-}
-
-export interface CompanionAcceptedUpdateAudit {
-  readonly id: string;
-  readonly status: 'resolved' | 'unresolved' | 'wontfix_accepted';
 }
 
 export interface CompanionModeratorAudit {
@@ -407,18 +396,19 @@ export interface WorkflowEvents {
   'companion:finding': (payload: {
     step: string;
     companion: string;
-    findingId: string;
     severity: 'must_fix' | 'should_fix' | 'nit';
   }) => void;
   'companion:fix_round': (payload: {
     step: string;
     sequence: number;
-    openMustFixCount: number;
+    findingCount: number;
   }) => void;
   'companion:complete': (payload: {
     step: string;
-    openMustFixCount: number;
-    escalated: boolean;
+    completionSettled: boolean;
+    completionFailure: boolean;
+    followUpRounds: number;
+    reason?: string;
   }) => void;
   'companion:review_round': (payload: {
     step: string;
@@ -428,10 +418,8 @@ export interface WorkflowEvents {
     changedLines: number;
     findingCount: number;
     reviewerFindings: readonly CompanionAcceptedFindingAudit[];
-    reviewerUpdates: readonly CompanionAcceptedUpdateAudit[];
     moderator?: CompanionModeratorAudit;
     acceptedFindings: readonly CompanionAcceptedFindingAudit[];
-    acceptedUpdates: readonly CompanionAcceptedUpdateAudit[];
     zeroReason?: CompanionReviewZeroReason;
     runPathNamespace?: string[];
   }) => void;
@@ -710,6 +698,8 @@ export interface WorkflowEngineOptions {
   sharedRuntime?: WorkflowSharedRuntimeState;
   resumeStackPrefix?: WorkflowResumePointEntry[];
   workflowCallResolver?: WorkflowCallResolver;
+  /** Workflow-wide rules inherited from the caller workflow. */
+  inheritedWorkflowRules?: readonly WorkflowWideRule[];
   /** Scalar execution context inherited through nested workflow_call boundaries. */
   workflowCallVars?: Readonly<Record<string, string | number | boolean>>;
   /** Exact verified resource root for the run's workflow execution bundle. */

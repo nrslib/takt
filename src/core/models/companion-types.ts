@@ -22,28 +22,20 @@ export interface ResolvedCompanionDefinition {
 }
 
 export type CompanionFindingSeverity = 'must_fix' | 'should_fix' | 'nit';
-export type CompanionFindingStatus = 'open' | 'resolved' | 'unresolved' | 'wontfix_accepted';
-export type CompanionFindingUpdateStatus = Exclude<CompanionFindingStatus, 'open'>;
 
 export interface CompanionFinding {
-  readonly id: string;
+  readonly companion: string;
+  readonly reviewedAt: string;
+  readonly reviewedDigest: string;
   readonly severity: CompanionFindingSeverity;
   readonly file: string;
   readonly line: number;
   readonly finding: string;
-  readonly status: CompanionFindingStatus;
 }
 
-export type CompanionFindingEvidence = Pick<
-  CompanionFinding,
-  'id' | 'severity' | 'file' | 'line' | 'finding'
->;
-
 export interface CompanionWorkflowState {
-  escalated: boolean;
-  completionVerified: boolean;
+  completionSettled: boolean;
   completionFailure?: boolean;
-  openMustFixCount: number;
-  openMustFix: CompanionFindingEvidence[];
+  followUpRounds: number;
   reason?: string;
 }

@@ -36,6 +36,7 @@ export type {
 // Workflow configuration and runtime state
 export type {
   WorkflowRule,
+  WorkflowWideRule,
   WorkflowMaxSteps,
   WorkflowStructuredOutput,
   WorkflowPrListWhere,
@@ -119,10 +120,7 @@ export type {
   CompanionSelection,
   ResolvedCompanionDefinition,
   CompanionFindingSeverity,
-  CompanionFindingStatus,
-  CompanionFindingUpdateStatus,
   CompanionFinding,
-  CompanionFindingEvidence,
   CompanionWorkflowState,
 } from './companion-types.js';
 

@@ -17,6 +17,8 @@ Carry-forward source: {Copy the fix plan's statement unchanged}
 
 Apply the initial values of no verification number, cumulative `incomplete` count `0`, and recurrence on a different path `not confirmed` only when the carry-forward information is complete and the invariant has no carried row in the fix plan. An absent source permits initial values only when No prior remediation is recorded and no earlier fix-verification exists in the same remediation. Copy Carry-forward source missing and its reason unchanged, also record it under Carry-forward Deficiencies, and never convert it to initial values. Copy all 13 fields of a carried row unchanged.
 
+When the plan adds a finding path that was merged into an existing family, do not change the register row. Record the repair and evidence for that path under Completion Obligations for the same fix unit.
+
 ## Carry-forward Deficiencies
 - {None, or invariant name, missing or inconsistent field, reason, and conservative handling. Do not modify an existing recurrence row to record this}
 

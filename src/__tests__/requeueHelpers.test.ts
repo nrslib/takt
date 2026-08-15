@@ -94,12 +94,18 @@ describe('buildAutoRequeueNote', () => {
     expect(resolutionLine).not.toContain('ユーザーがリキューしたため');
   });
 
-  it('step が未記録なら step 名なしの note を生成しない', () => {
+  it('step 開始前の失敗は failedStep を捏造せず note に記録する', () => {
     const failure: TaskFailure = {
       error: 'Boom',
     };
 
-    expect(() => buildAutoRequeueNote(failure)).toThrow('failure.step is required');
+    const note = buildAutoRequeueNote(failure);
+    const diagnosticLine = note.split('\n').find((line) => line.startsWith('diagnostic='));
+
+    expect(diagnosticLine).toBeDefined();
+    const diagnostic = JSON.parse(diagnosticLine!.slice('diagnostic='.length)) as Record<string, unknown>;
+    expect(diagnostic.error).toBe('Boom');
+    expect(diagnostic).not.toHaveProperty('failedStep');
   });
 
   it('error 内の Markdown 構造を retry_note の構造として混ぜない', () => {

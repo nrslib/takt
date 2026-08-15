@@ -10,6 +10,7 @@ import { getWorkflowReference } from '../../core/workflow/workflow-reference.js'
 import type { ProviderType } from '../../shared/types/provider.js';
 import type { StepProviderOptions } from '../../core/models/workflow-types.js';
 import type { WorkflowCallResolver } from '../../core/workflow/types.js';
+import { DEFAULT_COMPANION_ENABLED } from '../../shared/constants.js';
 import { resolveWorkflowCallTarget } from './loaders/workflowCallResolver.js';
 import { collectReachableWorkflowCallSteps } from './loaders/workflowParallelTraversal.js';
 import {
@@ -75,7 +76,8 @@ function workflowGraphHasDynamicFacets(
   activeReferences: ReadonlySet<string>,
   depth: number,
 ): boolean {
-  if (hasDynamicFacets(workflow) || (options.companionEnabled !== false && hasCompanionPool(workflow))) {
+  const companionEnabled = options.companionEnabled ?? DEFAULT_COMPANION_ENABLED;
+  if (hasDynamicFacets(workflow) || (companionEnabled && hasCompanionPool(workflow))) {
     return true;
   }
 

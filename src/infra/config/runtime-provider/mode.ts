@@ -9,6 +9,7 @@
  */
 
 import { hasActiveProviderContent, type RuntimeProviderFile } from './schema.js';
+import { DEFAULT_COMPANION_ENABLED } from '../../../shared/constants.js';
 
 export type ProviderConfigMode = 'legacy' | 'runtime-v1';
 
@@ -28,7 +29,10 @@ export interface DetermineProviderConfigModeInput {
 
 /** True only when the runtime.yaml carries a provider section with meaningful content. */
 export function hasActiveProviderSection(file: RuntimeProviderFile | undefined): boolean {
-  return hasActiveProviderContent(file?.provider, file?.companion?.enabled ?? true);
+  return hasActiveProviderContent(
+    file?.provider,
+    file?.companion?.enabled ?? DEFAULT_COMPANION_ENABLED,
+  );
 }
 
 export function determineProviderConfigMode(

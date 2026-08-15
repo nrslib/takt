@@ -83,6 +83,12 @@ export interface WorkflowRule {
   interactiveOnly?: boolean;
 }
 
+export interface WorkflowWideRule {
+  readonly ref: string;
+  readonly position: 'after_execution_rules' | 'before_instruction';
+  readonly content: string;
+}
+
 export type WorkflowMaxSteps = number | 'infinite';
 
 export interface WorkflowStructuredOutput {
@@ -559,6 +565,7 @@ export interface WorkflowConfig {
   knowledge?: Record<string, string>;
   instructions?: Record<string, string>;
   reportFormats?: Record<string, string>;
+  allStepsRules?: readonly WorkflowWideRule[];
   steps: WorkflowStep[];
   initialStep: string;
   maxSteps: WorkflowMaxSteps;

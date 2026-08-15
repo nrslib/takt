@@ -11,6 +11,7 @@ import type {
   WorkflowMaxSteps,
   WorkflowState,
   ResolvedFacetContent,
+  WorkflowWideRule,
 } from '../../models/types.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import type { PullRequestContext } from '../pr-context.js';
@@ -85,6 +86,8 @@ export interface InstructionContext {
   knowledgeSourcePath?: string;
   /** Workflow state for context/structured/effect interpolation */
   workflowState?: WorkflowState;
+  /** Resolved workflow-wide rules for Phase 1 only. */
+  workflowRules?: readonly WorkflowWideRule[];
   /** Scalar context inherited through workflow_call boundaries. */
   workflowCallVars?: Readonly<Record<string, string | number | boolean>>;
   companion?: {
