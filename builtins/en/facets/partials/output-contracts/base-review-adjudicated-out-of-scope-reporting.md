@@ -1,0 +1,1 @@
+- Include findings adjudicated out of scope whenever the latest resolution contains findings with any of the listed dispositions; when any exist, do not omit this section even on APPROVE

@@ -1,0 +1,2 @@
+- 有効な `Authorization basis` 付きの `new`、裁定に拘束された上記定義の `persists`、または有効な再開根拠（a-d）付きの `reopened` が1件以上ある場合のみ REJECT
+- 裁定済みの対象外指摘は REJECT 判定に算入しない

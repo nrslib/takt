@@ -1,0 +1,1 @@
+`persists` is limited to an unresolved finding that the latest `review-resolution.md` adjudicates as `actionable`, or that has not yet been adjudicated. A finding adjudicated as `out_of_scope`, `overreach`, `false_positive`, `no_issue_after_verification`, `environment_unverified`, or `duplicate` with its canonical finding consolidated must not appear in `persists`.

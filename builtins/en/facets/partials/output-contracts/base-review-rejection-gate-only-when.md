@@ -1,0 +1,2 @@
+- REJECT only when at least one finding exists in `new` with a valid `Authorization Basis`, `persists` under its adjudication-bound definition, or `reopened` with a valid basis (a-d)
+- Findings adjudicated out of scope do not count toward REJECT
