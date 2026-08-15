@@ -61,6 +61,7 @@ import { createLogger, getErrorMessage, slugify } from '../../../shared/utils/in
 import { safeExternalErrorMessage } from '../../../shared/utils/safeExternalErrorMessage.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { RunPaths } from '../run/run-paths.js';
+import { buildResumeReportConsumerKeyFromStack } from '../run/resume-report-consumer.js';
 import { waitForStepDelay } from './step-delay.js';
 import { parseStructuredOutputObject } from '../../../agents/structured-caller/shared.js';
 import {
@@ -1086,6 +1087,9 @@ export class StepExecutor {
     // read-only フォールバックするための reports ルート。engine の runPaths から
     // 明示的に渡す（リゾルバ側でパス文字列から推測しない）。
     const reportsRootDir = this.deps.getRunPaths().reportsRootAbs;
+    const resumeReportConsumerKey = buildResumeReportConsumerKeyFromStack(
+      this.deps.getCurrentWorkflowStack?.() ?? [],
+    );
     const instruction = new InstructionBuilder(step, {
       task,
       iteration: state.iteration,
@@ -1097,6 +1101,7 @@ export class StepExecutor {
       previousOutput: getPreviousOutput(state),
       reportDir,
       reportsRootDir,
+      resumeReportConsumerKey,
       language: this.deps.getLanguage(),
       interactive: this.deps.getInteractive(),
       workflowSteps,

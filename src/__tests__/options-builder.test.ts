@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
-import type { WorkflowStep } from '../core/models/types.js';
+import type { WorkflowResumePointEntry, WorkflowStep } from '../core/models/types.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 
 function createStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
@@ -18,6 +18,11 @@ type BuilderEngineOverrides = Partial<WorkflowEngineOptions> & {
   failureDir?: string;
 };
 
+interface PhaseContextSources {
+  readonly currentWorkflowStack?: readonly WorkflowResumePointEntry[];
+  readonly reportsRootDir?: string;
+}
+
 function createProcessSafetyByStep(parentRunPid: number): WorkflowEngineOptions['phase1ProcessSafetyByStep'] {
   return {
     implement: { protectedParentRunPid: parentRunPid },
@@ -28,7 +33,10 @@ function createBuilder(
   step: WorkflowStep,
   engineOverrides: BuilderEngineOverrides = {},
   recordActivity: NonNullable<ConstructorParameters<typeof OptionsBuilder>[14]> = () => {},
+  phaseContextSources: PhaseContextSources = {},
 ): OptionsBuilder {
+  const currentWorkflowStack = phaseContextSources.currentWorkflowStack;
+  const reportsRootDir = phaseContextSources.reportsRootDir;
   const engineOptions: WorkflowEngineOptions = {
     projectCwd: '/project',
     provider: 'codex',
@@ -50,12 +58,17 @@ function createBuilder(
     () => [{ name: step.name }],
     () => engineOverrides.workflowName ?? 'default',
     () => 'test workflow',
-    undefined,
+    currentWorkflowStack === undefined
+      ? undefined
+      : () => [...currentWorkflowStack],
     () => 'Original workflow task',
     undefined,
     engineOverrides.failureDir === undefined ? undefined : () => engineOverrides.failureDir,
     () => engineOptions.abortSignal,
     recordActivity,
+    reportsRootDir === undefined
+      ? undefined
+      : () => reportsRootDir,
   );
 }
 
@@ -1180,6 +1193,36 @@ describe('OptionsBuilder.buildFallbackReportOptions', () => {
       maxTurns: 3,
       sessionId: undefined,
     });
+  });
+
+  it('should expose report resolution coordinates through status judgment context', () => {
+    const step = createStep({ name: 'final-gate' });
+    const currentWorkflowStack: WorkflowResumePointEntry[] = [{
+      workflow: 'review-gate',
+      workflow_ref: 'review-gate',
+      step: 'final-gate',
+      kind: 'agent',
+      occurrence: 1,
+    }];
+    const builder = createBuilder(step, {
+      structuredCaller: { judgeStatus: vi.fn() },
+    }, undefined, {
+      currentWorkflowStack,
+      reportsRootDir: '/project/.takt/runs/target-run/reports',
+    });
+    const state = {
+      currentStep: step.name,
+      stepCount: 1,
+      history: [],
+      personaSessions: new Map<string, string>(),
+    };
+
+    const ctx = builder.buildPhaseRunnerContext(step, state, 'Phase 1 response', vi.fn());
+
+    expect(ctx.reportsRootDir).toBe('/project/.takt/runs/target-run/reports');
+    expect(ctx.resumeReportConsumerKey).toBe(
+      '{"workflow":"review-gate","step":"final-gate","calls":[]}',
+    );
   });
 });
 

@@ -20,6 +20,8 @@ import {
   type SelectorGitOutput,
 } from '../core/workflow/dynamic-parallel/selector-git-command-runner.js';
 import { GitSelectorCommandRunner } from '../infra/task/selector-git-command-runner.js';
+import { inheritResumeReportSnapshot } from '../core/workflow/run/resume-report-snapshot.js';
+import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 
 const temporaryDirectories: string[] = [];
 const itWithGitMagicFileNames = process.platform === 'win32' ? it.skip : it;
@@ -489,6 +491,45 @@ describe('SelectorInputReader', () => {
       cwd,
       undefined,
     )).rejects.toThrow('Selector report "review.md" exceeds 65536 bytes');
+  });
+
+  it('should read conventional selector reports from the recorded source namespace', async () => {
+    const cwd = createGitDirectory();
+    const sourceReports = buildRunPaths(cwd, 'selector-source').reportsAbs;
+    const sourceNamespace = 'subworkflows/iteration-1--step-review--workflow-gate--site-old';
+    mkdirSync(join(sourceReports, sourceNamespace), { recursive: true });
+    writeFileSync(join(sourceReports, sourceNamespace, 'review-resolution.md'), 'SOURCE SELECTOR REPORT');
+    const consumerKey = '{"workflow":"gate","step":"final-gate","calls":[]}';
+    inheritResumeReportSnapshot({
+      cwd,
+      sourceRunSlug: 'selector-source',
+      targetRunSlug: 'selector-target',
+      resumeReportConsumers: [{
+        consumerKey,
+        reportDirectories: [sourceNamespace],
+        references: [],
+      }],
+    });
+    const targetReports = buildRunPaths(cwd, 'selector-target').reportsAbs;
+    const currentNamespace = join(
+      targetReports,
+      'subworkflows',
+      'iteration-2--step-review--workflow-gate--site-new',
+    );
+    mkdirSync(currentNamespace, { recursive: true });
+    const reader = new SelectorInputReader(new FakeGitCommandRunner([], 0, () => Buffer.alloc(0)));
+
+    const result = await reader.readInputs(
+      currentNamespace,
+      ['review-resolution.md'],
+      cwd,
+      undefined,
+      undefined,
+      consumerKey,
+    );
+
+    expect(result.reports).toContain('SOURCE SELECTOR REPORT');
+    expect(result.reports).toContain(`${sourceNamespace}/review-resolution.md`);
   });
 
   it('should limit per-path Git commands to eight while preserving path order', async () => {

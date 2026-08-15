@@ -25,6 +25,7 @@ import type {
   ProviderActivityCallback,
   StreamCallback,
 } from '../../../shared/types/provider.js';
+import { buildResumeReportConsumerKey } from '../run/resume-report-consumer.js';
 
 const log = createLogger('dynamic-parallel-selector');
 const SELECTOR_RATIONALE_LOG_MAX_BYTES = 1024;
@@ -84,6 +85,12 @@ export class DynamicParallelSelectorCoordinator {
       this.deps.getReportNames(step, state),
       this.deps.getCwd(),
       signal,
+      undefined,
+      buildResumeReportConsumerKey(
+        this.deps.getWorkflowReference(),
+        step.name,
+        this.deps.workflowCallPath,
+      ),
     );
     signal?.throwIfAborted();
     const instruction = buildDynamicSelectorInstruction({

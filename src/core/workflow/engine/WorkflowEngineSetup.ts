@@ -212,6 +212,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     () => failureDir,
     stepAbortSignalContext.getAbortSignal,
     stepAbortSignalContext.recordActivity,
+    () => params.runPaths.reportsRootAbs,
   );
 
   const dynamicFacetSelector = new DynamicFacetSelectorCoordinator({

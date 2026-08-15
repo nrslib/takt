@@ -50,6 +50,8 @@ export interface InstructionContext {
    * 親成果物へ read-only フォールバックするために engine から明示的に渡す。
    */
   reportsRootDir?: string;
+  /** Resume snapshot 上の元 run 座標を引くための論理 consumer key。 */
+  resumeReportConsumerKey?: string;
   /**
    * {report:X} の存在検証を無効化する（`takt prompt` プレビューなど実 run が
    * 存在しない文脈のみ）。既定は検証あり。

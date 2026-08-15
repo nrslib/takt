@@ -222,17 +222,13 @@ describe('replaceTemplatePlaceholders', () => {
       expect(instruction).not.toContain('｛"finding"');
     });
 
-    // v3-r4 resume 境界バグの再発防止: {report:X} は存在チェックなしの
-    // 単純パス置換だったため、レポートが無いままエージェントが起動して
-    // 実在しないパスを探して詰んでいた。欠落はエージェント起動前に
-    // 明確なエラーで落とす。
-    it('should fail before agent launch when the referenced report is missing', () => {
+    it('should replace a missing report with a plain sentence', () => {
       const step = makeStep({ name: 'arbitrate' });
       const ctx = makeInstructionContext({ reportDir });
       const template = 'Read {report:missing-review.md}';
 
-      expect(() => replaceTemplatePlaceholders(template, step, ctx)).toThrow(
-        /Report reference "missing-review\.md" is unavailable for step "arbitrate"/,
+      expect(replaceTemplatePlaceholders(template, step, ctx)).toBe(
+        'Read （参照先の報告 missing-review.md はこの run に存在しない）',
       );
     });
 
@@ -262,9 +258,8 @@ describe('replaceTemplatePlaceholders', () => {
       const result = replaceTemplatePlaceholders('Read {report:plan.md}', step, ctx);
       expect(result).toBe('Read parent plan');
 
-      // ルートにも無い場合は明確なエラー。
-      expect(() => replaceTemplatePlaceholders('Read {report:ghost.md}', step, ctx)).toThrow(
-        /Report reference "ghost\.md" is unavailable for step "implement"/,
+      expect(replaceTemplatePlaceholders('Read {report:ghost.md}', step, ctx)).toBe(
+        'Read （参照先の報告 ghost.md はこの run に存在しない）',
       );
     });
 
@@ -317,8 +312,8 @@ describe('replaceTemplatePlaceholders', () => {
 
       const step = makeStep({ name: 'implement' });
       const ctx = makeInstructionContext({ reportDir: nestedDir, reportsRootDir: reportsRoot });
-      expect(() => replaceTemplatePlaceholders('Read {report:plan.md}', step, ctx)).toThrow(
-        /Report reference "plan\.md" is unavailable for step "implement"/,
+      expect(replaceTemplatePlaceholders('Read {report:plan.md}', step, ctx)).toBe(
+        'Read （参照先の報告 plan.md はこの run に存在しない）',
       );
     });
 
@@ -330,8 +325,8 @@ describe('replaceTemplatePlaceholders', () => {
 
       const step = makeStep({ name: 'implement' });
       const ctx = makeInstructionContext({ reportDir: childReportDir });
-      expect(() => replaceTemplatePlaceholders('Read {report:plan.md}', step, ctx)).toThrow(
-        /Report reference "plan\.md" is unavailable for step "implement"/,
+      expect(replaceTemplatePlaceholders('Read {report:plan.md}', step, ctx)).toBe(
+        'Read （参照先の報告 plan.md はこの run に存在しない）',
       );
     });
 

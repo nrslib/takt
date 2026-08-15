@@ -11,6 +11,8 @@ import {
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { scanReportEntries } from '../report-file-index.js';
 import { workflowCallReportRequestPathsMatch } from '../workflow-call-namespace.js';
+import { readResumeReportSnapshotManifest } from '../run/resume-report-snapshot.js';
+import { buildRunPaths } from '../run/run-paths.js';
 import {
   type SelectorGitCommandRunner,
 } from './selector-git-command-runner.js';
@@ -36,6 +38,11 @@ export interface SelectorInputs {
   readonly targetAgentPrompt?: string;
 }
 
+interface SelectorReportCandidate {
+  readonly absolutePath: string;
+  readonly displayPath: string;
+}
+
 class SelectorInputBudget {
   private bytes = 0;
 
@@ -57,13 +64,14 @@ export class SelectorInputReader {
     cwd: string,
     signal: AbortSignal | undefined,
     targetAgentPrompt?: string,
+    resumeReportConsumerKey?: string,
   ): Promise<SelectorInputs> {
     signal?.throwIfAborted();
     const budget = new SelectorInputBudget();
     const boundedTargetAgentPrompt = targetAgentPrompt === undefined
       ? undefined
       : this.readTargetAgentPrompt(targetAgentPrompt, budget);
-    const reports = this.readReports(reportDirectory, requestedNames, budget, signal);
+    const reports = this.readReports(reportDirectory, requestedNames, budget, signal, resumeReportConsumerKey);
     signal?.throwIfAborted();
     const workingTreeDiff = await this.readWorkingTreeDiff(cwd, budget, signal);
     signal?.throwIfAborted();
@@ -139,32 +147,46 @@ export class SelectorInputReader {
     requestedNames: readonly string[],
     budget: SelectorInputBudget,
     signal: AbortSignal | undefined,
+    resumeReportConsumerKey: string | undefined,
   ): string {
     signal?.throwIfAborted();
-    if (!existsSync(reportDirectory)) {
+    if (!existsSync(reportDirectory) && resumeReportConsumerKey === undefined) {
       return this.consumeEmptyValue('(no reports available)', budget);
     }
-    const reports = this.resolveExistingReportNames(reportDirectory, requestedNames).map((relativePath, index) => {
+    const reports = this.resolveExistingReportNames(
+      reportDirectory,
+      requestedNames,
+      resumeReportConsumerKey,
+    ).flatMap((candidate, index) => {
       signal?.throwIfAborted();
-      const reportPath = join(reportDirectory, relativePath);
-      const stat = lstatSync(reportPath);
+      const reportPath = candidate.absolutePath;
+      let stat: ReturnType<typeof lstatSync>;
+      try {
+        stat = lstatSync(reportPath);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'ENOENT' || code === 'ENOTDIR') {
+          return [];
+        }
+        throw error;
+      }
       if (!stat.isFile() || stat.isSymbolicLink()) {
-        throw new Error(`Selector report is not a regular file: ${relativePath}`);
+        throw new Error(`Selector report is not a regular file: ${candidate.displayPath}`);
       }
       const file = this.readTextFile(
         reportPath,
         MAX_SELECTOR_ENTRY_BYTES,
-        `Selector report "${relativePath}"`,
+        `Selector report "${candidate.displayPath}"`,
         'complete',
       );
       const report = this.renderEntry(
-        relativePath,
+        candidate.displayPath,
         file.bytes,
         file.content,
         'complete',
       );
       budget.consume(index === 0 ? report : `\n\n${report}`);
-      return report;
+      return [report];
     });
     if (reports.length === 0) {
       return this.consumeEmptyValue('(no reports available)', budget);
@@ -340,25 +362,75 @@ export class SelectorInputReader {
   private resolveExistingReportNames(
     reportDirectory: string,
     requestedNames: readonly string[],
-  ): readonly string[] {
+    resumeReportConsumerKey: string | undefined,
+  ): readonly SelectorReportCandidate[] {
     const requestedPaths = [...new Set(requestedNames)].map((name) => name.split('/'));
-    const scan = scanReportEntries(reportDirectory);
+    const scan = existsSync(reportDirectory)
+      ? scanReportEntries(reportDirectory)
+      : { entries: [] };
     if (scan.failure !== undefined) {
-      throw new Error(`Unable to scan selector reports: ${scan.failure}`);
+      if (existsSync(reportDirectory)) {
+        throw new Error(`Unable to scan selector reports: ${scan.failure}`);
+      }
     }
-    const entries = scan.entries.map((path) => ({
+    const entries = (scan.failure === undefined ? scan.entries : []).map((path) => ({
       relativePath: relative(reportDirectory, path).split(sep).join('/'),
       mtimeMs: lstatSync(path).mtimeMs,
     }));
-    return [...new Set(requestedPaths.flatMap((requestedPath) => {
+    const currentCandidates = requestedPaths.map((requestedPath): SelectorReportCandidate | undefined => {
       const candidate = entries
         .filter(({ relativePath }) =>
           workflowCallReportRequestPathsMatch(relativePath.split('/'), requestedPath))
         .sort((left, right) =>
           right.mtimeMs - left.mtimeMs
           || left.relativePath.localeCompare(right.relativePath))[0];
-      return candidate === undefined ? [] : [candidate.relativePath];
-    }))];
+      return candidate === undefined ? undefined : {
+        absolutePath: join(reportDirectory, candidate.relativePath),
+        displayPath: candidate.relativePath,
+      };
+    });
+    const runInfo = this.deriveRunInfoFromReportDir(reportDirectory);
+    const manifest = runInfo === undefined || resumeReportConsumerKey === undefined
+      ? undefined
+      : readResumeReportSnapshotManifest(runInfo.cwd, runInfo.runSlug);
+    const consumer = manifest?.resumeReportConsumers
+      ?.find((entry) => entry.consumerKey === resumeReportConsumerKey);
+    const reportsRoot = runInfo === undefined
+      ? undefined
+      : buildRunPaths(runInfo.cwd, runInfo.runSlug).reportsRootAbs;
+    const resolved = currentCandidates.map((candidate, index): SelectorReportCandidate | undefined => {
+      if (candidate !== undefined || consumer === undefined || reportsRoot === undefined) {
+        return candidate;
+      }
+      const requestedPath = requestedPaths[index]!;
+      for (const directory of consumer.reportDirectories) {
+        const prefix = directory.length === 0 ? '' : `${directory}/`;
+        const snapshotPath = manifest?.files
+          .map((file) => file.path)
+          .filter((path) => path.startsWith(prefix))
+          .map((path) => ({ path, relativePath: path.slice(prefix.length) }))
+          .filter(({ relativePath }) =>
+            workflowCallReportRequestPathsMatch(relativePath.split('/'), requestedPath))
+          .sort((left, right) => left.path.localeCompare(right.path))[0];
+        if (snapshotPath !== undefined) {
+          return {
+            absolutePath: join(reportsRoot, snapshotPath.path),
+            displayPath: snapshotPath.path,
+          };
+        }
+      }
+      return undefined;
+    }).filter((candidate): candidate is SelectorReportCandidate => candidate !== undefined);
+    return [...new Map(resolved.map((candidate) => [candidate.absolutePath, candidate])).values()];
+  }
+
+  private deriveRunInfoFromReportDir(reportDir: string): { cwd: string; runSlug: string } | undefined {
+    const marker = `${sep}.takt${sep}runs${sep}`;
+    const markerIndex = reportDir.lastIndexOf(marker);
+    if (markerIndex < 0) return undefined;
+    const cwd = reportDir.slice(0, markerIndex);
+    const runSlug = reportDir.slice(markerIndex + marker.length).split(sep)[0];
+    return runSlug ? { cwd, runSlug } : undefined;
   }
 
   private readTextFile(

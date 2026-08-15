@@ -270,7 +270,7 @@ function warnOnUnproducibleReportReferences(
     report.diagnostics.push({
       level: 'warning',
       message: `${location} references {report:${reportName}} but ${detail} `
-        + '{report:} is substituted without an existence check, so the agent will look for a file that does not exist yet. '
+        + 'At runtime, a missing {report:} reference is replaced with an explicit missing-report sentence. '
         + 'Point the reference at a report produced by an earlier step, or move/rename the output contract.',
     });
   };
