@@ -1,6 +1,9 @@
 name: review-default
 description: Multi-perspective Code Review - reviews changes with specialist parallel reviewers, then has a supervisor synthesize the results.
 max_steps: 10
+facet_pools:
+  security-review-facets:
+    uses: security-review-facets
 initial_step: gather
 
 steps:
@@ -20,6 +23,7 @@ steps:
     tags:
       - review
     parallel:
+      fixed:
       - name: arch-review
         capabilities: readonly
         tags:
@@ -35,25 +39,6 @@ steps:
           report:
             - name: architecture-review.md
               format: architecture-review
-        rules:
-          - condition: approved
-          - condition: needs_fix
-
-      - name: security-review
-        capabilities: readonly
-        tags:
-          - review
-        edit: false
-        persona: security-reviewer
-        policy:
-          - contract-change
-          - security-review
-        knowledge: [security, security-web, security-api, security-local, security-data, security-dependencies]
-        instruction: review-security
-        output_contracts:
-          report:
-            - name: security-review.md
-              format: security-review
         rules:
           - condition: approved
           - condition: needs_fix
@@ -99,6 +84,37 @@ steps:
           - condition: approved
           - condition: needs_fix
 
+      pool:
+      - name: security-review
+        description: Do not select by default. Select only when (a) the change may affect secret or credential handling, external-input handling, process execution, filesystem operations, network or terminal boundaries, sandboxing, or permissions, or (b) the change is large enough that security impact cannot be confidently ruled out. Do not select for documentation-only, comment-only, or test-only changes, or small localized fixes.
+        capabilities: readonly
+        tags:
+          - review
+        edit: false
+        persona: security-reviewer
+        policy:
+          - contract-change
+          - security-review
+        knowledge:
+          - security
+          - security-data
+          - security-dependencies
+        dynamic_facets:
+          pool: security-review-facets
+          selector:
+            instruction: select-applicable-candidates
+        instruction: review-security
+        output_contracts:
+          report:
+            - name: security-review.md
+              format: security-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+      selection:
+        selector:
+          instruction: select-applicable-candidates
+
     rules:
       - condition: any("error")
         next: reviewers
@@ -132,13 +148,8 @@ steps:
       Your role is to synthesize the review results and produce a final summary.
 
       **Tasks:**
-      1. Read all review reports in the Report Directory
-         - `review-target.md` (Review target information)
-         - `architecture-review.md` (Architecture review)
-         - `security-review.md` (Security review)
-         - `testing-review.md` (Testing review)
-         - `coding-review.md` (Coding review)
-      2. Synthesize the 4 review results
+      1. Read `review-target.md` and every reviewer report present in the Report Directory. Do not assume an optional reviewer report exists.
+      2. Synthesize all available review results
       3. Produce a consolidated review summary with overall verdict
 
       **Review Summary output contract:**
@@ -153,10 +164,7 @@ steps:
       ## Review Results
       | Review | Result | Key Findings |
       |--------|--------|--------------|
-      | Architecture | APPROVE/REJECT | {Brief finding} |
-      | Security | APPROVE/REJECT | {Brief finding} |
-      | Testing | APPROVE/REJECT | {Brief finding} |
-      | Coding | APPROVE/REJECT | {Brief finding} |
+      | Each available review | APPROVE/REJECT | {Brief finding} |
 
       ## Issues Requiring Attention
       | # | Severity | Source | Location | Issue |
@@ -181,10 +189,7 @@ steps:
             ## Review Results
             | Review | Result | Key Findings |
             |--------|--------|--------------|
-            | Architecture | APPROVE/REJECT | {Overview} |
-            | Security | APPROVE/REJECT | {Overview} |
-            | Testing | APPROVE/REJECT | {Overview} |
-            | Coding | APPROVE/REJECT | {Overview} |
+            | Each available review | APPROVE/REJECT | {Overview} |
 
             ## Current Iteration Findings (new)
             | # | finding_id | Severity | Source | Location | Issue | Fix Suggestion |

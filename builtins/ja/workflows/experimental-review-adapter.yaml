@@ -1,5 +1,8 @@
 name: experimental-review-adapter
 description: experimental ラッパーが選択した汎用セキュリティレビュー用 facet pool をレビュースイートへ束縛する。
+facet_pools:
+  security-review-facets:
+    uses: security-review-facets
 subworkflow:
   callable: true
   visibility: internal
@@ -13,6 +16,13 @@ subworkflow:
       type: facet_ref[]
       facet_kind: knowledge
       default: []
+    security_review_knowledge_additions:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: []
+    security_review_pool:
+      type: facet_pool_ref
+      default: security-review-facets
     architecture_review_instruction: { type: facet_ref, facet_kind: instruction, default: architecture-review }
     security_review_instruction: { type: facet_ref, facet_kind: instruction, default: security-review }
     testing_review_instruction: { type: facet_ref, facet_kind: instruction, default: testing-review }
@@ -26,7 +36,10 @@ steps:
     kind: workflow_call
     call: experimental-review
     args:
-      security_review_pool: security-review-facets
+      security_review_knowledge_additions:
+        $param: security_review_knowledge_additions
+      security_review_pool:
+        $param: security_review_pool
       review_policy_additions:
         $param: review_policy_additions
       review_knowledge_additions:

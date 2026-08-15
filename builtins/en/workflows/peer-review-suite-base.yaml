@@ -1,5 +1,10 @@
 name: peer-review-suite-base
 description: Shared specialist reviewer suite with injectable domain review context.
+facet_pools:
+  security-review-facets:
+    uses: security-review-facets
+  takt-security-review-facets:
+    uses: takt-security-review-facets
 subworkflow:
   callable: true
   visibility: internal
@@ -14,6 +19,13 @@ subworkflow:
       type: facet_ref[]
       facet_kind: knowledge
       default: []
+    security_review_knowledge_additions:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: []
+    security_review_pool:
+      type: facet_pool_ref
+      default: security-review-facets
     architecture_review_instruction:
       type: facet_ref
       facet_kind: instruction
@@ -51,6 +63,10 @@ steps:
         $param: review_policy_additions
       review_knowledge_additions:
         $param: review_knowledge_additions
+      security_review_knowledge_additions:
+        $param: security_review_knowledge_additions
+      security_review_pool:
+        $param: security_review_pool
       architecture_review_instruction:
         $param: architecture_review_instruction
       security_review_instruction:

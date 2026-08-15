@@ -1,5 +1,8 @@
 name: takt-experimental-review-adapter
 description: Bind the TAKT-specific security review facet pool selected by the takt-experimental wrapper to its reviewer suite.
+facet_pools:
+  takt-security-review-facets:
+    uses: takt-security-review-facets
 subworkflow:
   callable: true
   visibility: internal
@@ -13,6 +16,13 @@ subworkflow:
       type: facet_ref[]
       facet_kind: knowledge
       default: []
+    security_review_knowledge_additions:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: [takt]
+    security_review_pool:
+      type: facet_pool_ref
+      default: takt-security-review-facets
     architecture_review_instruction: { type: facet_ref, facet_kind: instruction, default: architecture-review }
     security_review_instruction: { type: facet_ref, facet_kind: instruction, default: security-review }
     testing_review_instruction: { type: facet_ref, facet_kind: instruction, default: testing-review }
@@ -26,7 +36,10 @@ steps:
     kind: workflow_call
     call: takt-experimental-review
     args:
-      security_review_pool: takt-security-review-facets
+      security_review_knowledge_additions:
+        $param: security_review_knowledge_additions
+      security_review_pool:
+        $param: security_review_pool
       review_policy_additions:
         $param: review_policy_additions
       review_knowledge_additions:
