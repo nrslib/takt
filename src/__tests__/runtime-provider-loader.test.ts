@@ -344,7 +344,8 @@ describe('runtime-provider loader', () => {
 
     const resolved = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
 
-    expect(resolved?.companion).toBeUndefined();
+    expect(resolved).toBeDefined();
+    expect(resolved!.companion).toBeUndefined();
   });
 
   it('Given neither file present, When resolving, Then it returns undefined (C1)', () => {
