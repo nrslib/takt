@@ -2301,11 +2301,13 @@ describe('exec command setup', () => {
     await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
   });
 
-  it('should display error and continue loop when completed review reports are missing', async () => {
+  it('should summarize a completed workflow when review reports are missing', async () => {
     mockReadInteractiveInput
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
-    mockCallAIWithRetry.mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-1' });
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-1' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'Execution completed' }, sessionId: 'session-1' });
     mockLoadRunSessionContext.mockReturnValueOnce({
       task: 'Executable task',
       workflow: 'exec-test',
@@ -2313,10 +2315,17 @@ describe('exec command setup', () => {
       stepLogs: [],
       reports: [],
     });
+    mockFormatRunSessionForPrompt.mockReturnValueOnce({
+      runStatus: 'completed',
+      runReports: '',
+      runStepLogs: '',
+    });
 
     await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
 
     expect(existsSync(join(globalConfigDir, 'exec.yaml'))).toBe(false);
+    expect(mockFormatRunSessionForPrompt).toHaveBeenCalledWith(expect.objectContaining({ reports: [] }));
+    expect(mockCallAIWithRetry).toHaveBeenCalledTimes(2);
   });
 
   it('should not create workflow or last-used config for empty /go with no conversation', async () => {
@@ -2409,7 +2418,7 @@ describe('exec command setup', () => {
     expect(workflow).toContain('name: review-2-review-result.md');
   });
 
-  it('should display error and continue loop when expected review report is missing from /go', async () => {
+  it('should summarize available review reports when an expected report is missing from /go', async () => {
     mockReadInteractiveInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/go Implement a small task')
@@ -2421,7 +2430,8 @@ describe('exec command setup', () => {
       'back',
     );
     mockCallAIWithRetry
-      .mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-1' });
+      .mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-1' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'Execution completed' }, sessionId: 'session-1' });
     mockLoadRunSessionContext.mockReturnValueOnce({
       reports: [
         { filename: 'review-1-review-result.md', content: '# Review 1\n\napproved' },
@@ -2432,7 +2442,10 @@ describe('exec command setup', () => {
 
     const saved = parseYaml(readFileSync(join(globalConfigDir, 'exec.yaml'), 'utf-8'));
     expect(saved.reviews).toHaveLength(2);
-    expect(mockCallAIWithRetry).toHaveBeenCalledOnce();
+    expect(mockFormatRunSessionForPrompt).toHaveBeenCalledWith(expect.objectContaining({
+      reports: [{ filename: 'review-1-review-result.md', content: '# Review 1\n\napproved' }],
+    }));
+    expect(mockCallAIWithRetry).toHaveBeenCalledTimes(2);
   });
 
   it('should include all review reports in the final exec assistant prompt', async () => {
