@@ -2,14 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-const originalArgv = process.argv;
-let composeConfiguredDynamicFacets;
-try {
-  process.argv = [originalArgv[0], 'prepare.mjs', 'review-adjudication'];
-  ({ composeConfiguredDynamicFacets } = await import('../scripts/prepare.mjs'));
-} finally {
-  process.argv = originalArgv;
-}
+const { composeConfiguredDynamicFacets } = await import('../scripts/prepare.mjs');
 
 const TARGET_ID = 'prepare-dynamic-facet-composition-contract';
 const SOURCE_WORKFLOW = 'experimental-review';
@@ -52,6 +45,7 @@ test('composes knowledge from the selected dynamic facet candidate', () => {
   );
 
   assert.ok(result.knowledgeContents.some(({ content }) => content.trim() === CANDIDATE_KNOWLEDGE));
+  assert.ok(result.policyContents.some(({ content }) => content === 'fixed policy'));
 });
 
 test('keeps the target unchanged when dynamic facet selection is not configured', () => {
