@@ -96,6 +96,8 @@ for (const name of names) {
     throw new Error(`Unknown suite "${name}". Available: ${Object.keys(SUITES).join(', ')}`);
   }
 }
+// coding は Claude Opus / Codex Luna Max / Codex Sol High の3モデル測定で、
+// Claude と Codex の両 CLI ログインが必要なため、明示的に呼び出す。
 // rescan 系はローカルモデル（要 opencode 認証）を含む測定用スイートで、
 // 弱いモデルの行は常に部分失敗するため、デフォルトのゲート実行からは除外する。
 // fix-self-scan は claude ヘッドレス CLI（要 claude ログイン）で走るため、
@@ -111,6 +113,7 @@ for (const name of names) {
 // fix-plan-cause-check も claude（opus）と codex（gpt-5.6-luna）の
 // 両ログインが必要な二重測定スイートのため、明示的に呼び出す。
 const DEFAULT_EXCLUDED = new Set([
+  'coding',
   'rescan',
   'rescan-coding',
   'fix-self-scan',

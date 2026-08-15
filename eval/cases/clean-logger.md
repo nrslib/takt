@@ -39,7 +39,7 @@ diff --git a/src/logger.test.ts b/src/logger.test.ts
 new file mode 100644
 --- /dev/null
 +++ b/src/logger.test.ts
-@@ -0,0 +1,50 @@
+@@ -0,0 +1,53 @@
 +import { describe, expect, it, vi } from 'vitest';
 +import { Logger, type LogLevel } from './logger.js';
 +
@@ -61,11 +61,14 @@ new file mode 100644
 +    expect(written).toEqual(['[warn] disk almost full\n']);
 +  });
 +
-+  it('filters messages below the minimum level', () => {
++  it.each<[LogLevel, LogLevel]>([
++    ['debug', 'info'],
++    ['info', 'warn'],
++    ['warn', 'error'],
++  ])('filters %s messages below the %s minimum level', (level, minLevel) => {
 +    const { written, restore } = captureStderr();
-+    const logger = new Logger('warn');
-+    logger.log('info', 'started');
-+    logger.debug('noise');
++    const logger = new Logger(minLevel);
++    logger.log(level, 'noise');
 +    restore();
 +    expect(written).toEqual([]);
 +  });
