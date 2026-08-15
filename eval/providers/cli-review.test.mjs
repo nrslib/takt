@@ -4,7 +4,11 @@ import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
-import { prepareWorkingDirectory, runProcess } from './cli-review.mjs';
+import {
+  prepareWorkingDirectory,
+  rewriteWorkingDirectoryPaths,
+  runProcess,
+} from './cli-review.mjs';
 
 const PROCESS_TREE_SCRIPT = [
   'const { spawn } = require("node:child_process");',
@@ -90,6 +94,13 @@ test('isolated working directory copies only the provider fixture', () => {
   try {
     assert.equal(readFileSync(join(isolated.cwd, 'source.txt'), 'utf8'), 'fixture');
     assert.equal(existsSync(join(isolated.cwd, '..', 'answer-key.txt')), false);
+    assert.equal(
+      rewriteWorkingDirectoryPaths(
+        `Read ${isolated.sourceDirectory}/source.txt`,
+        isolated,
+      ),
+      `Read ${isolated.cwd}/source.txt`,
+    );
   } finally {
     isolated.cleanup();
     rmSync(outerDirectory, { recursive: true, force: true });
