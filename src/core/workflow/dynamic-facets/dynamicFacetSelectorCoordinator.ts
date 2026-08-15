@@ -31,6 +31,7 @@ import type {
   ProviderActivityCallback,
   StreamCallback,
 } from '../../../shared/types/provider.js';
+import { buildResumeReportConsumerKey } from '../run/resume-report-consumer.js';
 
 const log = createLogger('dynamic-facet-selector');
 const SELECTOR_RATIONALE_LOG_MAX_BYTES = 1024;
@@ -111,6 +112,11 @@ export class DynamicFacetSelectorCoordinator {
       this.deps.getCwd(),
       signal,
       targetAgentPrompt,
+      buildResumeReportConsumerKey(
+        this.deps.getWorkflowReference(),
+        step.name,
+        identityPath,
+      ),
     );
     signal?.throwIfAborted();
     if (inputs.targetAgentPrompt === undefined) {

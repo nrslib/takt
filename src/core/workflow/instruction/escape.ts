@@ -99,15 +99,15 @@ export function replaceTemplatePlaceholders(
 
   // Replace {report:filename} with the verified report content.
   // 単純な文字列連結ではなく専用リゾルバを通す: containment / 存在 /
-  // 通常ファイルを検証し、欠落時はエージェント起動前に明確なエラーを投げる
-  // （v3-r4 の resume 境界バグ — 旧 run のレポートを参照する consumer が
-  // 実在しないパスを黙って受け取り詰む — の再発防止）。
+  // 通常ファイルを検証する。現 run で見つからない場合は resume snapshot の
+  // 元 run 座標を引き、それでも無ければ平易な欠落文へ置換して実行を続ける。
   if (context.reportDir) {
     const reportDir = context.reportDir;
     result = result.replace(REPORT_REFERENCE_PATTERN, (_match, filename: string) => {
       return resolveReportReference(reportDir, filename.trim(), {
         stepName: step.name,
         reportsRootDir: context.reportsRootDir,
+        resumeReportConsumerKey: context.resumeReportConsumerKey,
         validateExistence: context.validateReportReferences !== false,
       });
     });

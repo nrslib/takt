@@ -206,7 +206,7 @@ describe('inheritResumeReportSnapshot', () => {
     expect(readFileSync(join(targetReports, 'ai-antipattern-review-1st.md.20260701T010101Z'), 'utf-8')).toBe('older review');
     expect(readFileSync(join(targetReports, 'nested/sub-report.md'), 'utf-8')).toBe('nested report');
 
-    expect(manifest.version).toBe(1);
+    expect(manifest.version).toBe(2);
     expect(manifest.sourceRunSlug).toBe('source-run');
     expect(manifest.targetRunSlug).toBe('target-run');
     expect(manifest.files.map((f) => f.path)).toEqual([

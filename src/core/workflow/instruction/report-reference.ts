@@ -5,8 +5,8 @@
  * resume 境界（producer 実行後に resume を挟むと旧 run の reports/ が
  * 引き継がれない）で consumer の参照が黙って壊れ、エージェントが実在しない
  * パスを探して詰んでいた（v3-r4）。ここでは path containment / 存在 /
- * 通常ファイル（symlink 拒否）を検証し、欠落時はエージェント起動前に明確な
- * エラーを投げる。
+ * 通常ファイル（symlink 拒否）を検証する。欠落は実行を止めず、明示的な
+ * 欠落文に置換する。
  *
  * doctor の静的解析（{report:X} 抽出）もこの parser を共用し、静的解析と
  * 実行時の構文解釈を揃える。
@@ -43,6 +43,8 @@ export interface ResolveReportReferenceContext {
    * 解決に使う。
    */
   readonly reportsRootDir?: string;
+  /** 元 run 座標で解決済みの resume snapshot 対応を引く論理 consumer key。 */
+  readonly resumeReportConsumerKey?: string;
   /**
    * 存在検証を無効化する（`takt prompt` のプレビューなど、実 run が存在しない
    * 文脈のみ）。containment 検証は常に行う。
@@ -56,7 +58,11 @@ export interface ResolveReportReferenceContext {
  * （phase 2 / writeReportFile）はこのリゾルバを通らず、常に自分の名前空間付き
  * reportDir へ書くため、親レポートが書き込み対象になることはない。
  */
-export type ResolvedReportReferenceScope = 'step' | 'parent-run-readonly';
+export type ResolvedReportReferenceScope =
+  | 'step'
+  | 'parent-run-readonly'
+  | 'resume-snapshot-readonly'
+  | 'missing';
 
 export interface ResolvedReportReference {
   readonly content: string;
@@ -66,7 +72,7 @@ export interface ResolvedReportReference {
 /** サブワークフロー名前空間のディレクトリ名（run-paths.ts の構造と対）。 */
 const SUBWORKFLOWS_NAMESPACE_DIR = 'subworkflows';
 
-/** reportDir の絶対パスから run slug を導出する（エラーメッセージ用のみ）。 */
+/** reportDir の絶対パスから run slug を導出する。 */
 function deriveRunInfoFromReportDir(reportDir: string): { cwd: string; runSlug: string } | undefined {
   const marker = `${sep}.takt${sep}runs${sep}`;
   const markerIndex = reportDir.lastIndexOf(marker);
@@ -82,27 +88,8 @@ function deriveRunInfoFromReportDir(reportDir: string): { cwd: string; runSlug: 
   return { cwd, runSlug };
 }
 
-function buildMissingReportError(
-  reference: string,
-  reportDir: string,
-  context: ResolveReportReferenceContext,
-): Error {
-  const runInfo = deriveRunInfoFromReportDir(reportDir);
-  const runLabel = runInfo ? `run "${runInfo.runSlug}"` : `report directory "${reportDir}"`;
-  let resumeNote = '';
-  if (runInfo) {
-    const manifest = readPathValueOrUndefined(
-      () => readResumeReportSnapshotManifest(runInfo.cwd, runInfo.runSlug),
-    );
-    if (manifest) {
-      resumeNote = ` Resumed from "${manifest.sourceRunSlug}", but the source report snapshot does not contain it.`;
-    }
-  }
-  return new Error(
-    `Report reference "${reference}" is unavailable for step "${context.stepName}" in ${runLabel}.${resumeNote}`
-    + ' The referenced report has not been produced in this run;'
-    + ' check that a step producing it runs before this step (takt workflow doctor can diagnose this).',
-  );
+export function formatMissingReportReference(reference: string): string {
+  return `（参照先の報告 ${reference} はこの run に存在しない）`;
 }
 
 /**
@@ -210,7 +197,7 @@ function getParentWorkflowReportDirs(reportDir: string, reportsRootDir: string):
 
 /**
  * {report:X} を実パスへ解決する。containment / 存在 / 通常ファイル
- * （symlink 拒否）を検証し、問題があればエージェント起動前に throw する。
+ * （symlink 拒否）を検証する。無いファイルだけは欠落文に置換する。
  * `path` は従来と同じ `${dir}/${reference}` 形式（プロンプト本文の互換性維持）。
  *
  * workflow_call の子（subworkflows 名前空間）で見つからない場合のみ、直近の
@@ -256,7 +243,28 @@ export function resolveReportReferenceDetailed(
       }
     }
   }
-  throw buildMissingReportError(reference, reportDir, context);
+  const runInfo = deriveRunInfoFromReportDir(reportDir);
+  if (runInfo !== undefined && reportsRoot !== undefined && context.resumeReportConsumerKey !== undefined) {
+    const manifest = readPathValueOrUndefined(
+      () => readResumeReportSnapshotManifest(runInfo.cwd, runInfo.runSlug),
+    );
+    const snapshotReference = manifest?.resumeReportConsumers
+      ?.find((consumer) => consumer.consumerKey === context.resumeReportConsumerKey)
+      ?.references.find((entry) => entry.reference === normalizedReference);
+    if (snapshotReference !== undefined) {
+      const snapshotTargetAbs = assertContained(reportsRoot, snapshotReference.path, context.stepName);
+      const snapshotContent = readRegularReportFile(
+        reportsRoot,
+        snapshotTargetAbs,
+        reference,
+        context.stepName,
+      );
+      if (snapshotContent !== undefined) {
+        return { content: snapshotContent, scope: 'resume-snapshot-readonly' };
+      }
+    }
+  }
+  return { content: formatMissingReportReference(normalizedReference), scope: 'missing' };
 }
 
 export function resolveReportReference(

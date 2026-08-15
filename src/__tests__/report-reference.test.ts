@@ -72,9 +72,12 @@ describe('resolveReportReferenceDetailed', () => {
       injectedFsError.path = join(reports, 'review.md');
       injectedFsError.error = Object.assign(new Error(`injected ${code}`), { code });
 
-      expect(() => resolveReportReferenceDetailed(reports, 'review.md', {
+      expect(resolveReportReferenceDetailed(reports, 'review.md', {
         stepName: 'consumer',
-      })).toThrow(/has not been produced/);
+      })).toEqual({
+        content: '（参照先の報告 review.md はこの run に存在しない）',
+        scope: 'missing',
+      });
     },
   );
 
@@ -90,9 +93,12 @@ describe('resolveReportReferenceDetailed', () => {
       injectedFsError.path = report;
       injectedFsError.error = Object.assign(new Error(`injected ${code}`), { code });
 
-      expect(() => resolveReportReferenceDetailed(reports, 'review.md', {
+      expect(resolveReportReferenceDetailed(reports, 'review.md', {
         stepName: 'consumer',
-      })).toThrow(/has not been produced/);
+      })).toEqual({
+        content: '（参照先の報告 review.md はこの run に存在しない）',
+        scope: 'missing',
+      });
     },
   );
 
@@ -269,7 +275,7 @@ describe('resolveReportReferenceDetailed', () => {
     })).toThrow(/not a regular file/);
   });
 
-  it('resume manifest の ENOTDIR は元の report 欠落エラーを維持する', () => {
+  it('resume manifest の ENOTDIR は report 欠落として続行する', () => {
     const root = makeTemporaryDirectory();
     const reports = join(root, '.takt', 'runs', 'run-1', 'reports');
     mkdirSync(reports, { recursive: true });
@@ -277,9 +283,14 @@ describe('resolveReportReferenceDetailed', () => {
     injectedFsError.path = join(reports, 'resume-artifacts.json');
     injectedFsError.error = Object.assign(new Error('injected ENOTDIR'), { code: 'ENOTDIR' });
 
-    expect(() => resolveReportReferenceDetailed(reports, 'review.md', {
+    expect(resolveReportReferenceDetailed(reports, 'review.md', {
       stepName: 'consumer',
-    })).toThrow(/has not been produced/);
+      reportsRootDir: reports,
+      resumeReportConsumerKey: '{"workflow":"root","step":"consumer","calls":[]}',
+    })).toEqual({
+      content: '（参照先の報告 review.md はこの run に存在しない）',
+      scope: 'missing',
+    });
   });
 
   it.each(['EACCES', 'EPERM', 'EIO'])(
@@ -295,7 +306,11 @@ describe('resolveReportReferenceDetailed', () => {
 
       let thrown: unknown;
       try {
-        resolveReportReferenceDetailed(reports, 'review.md', { stepName: 'consumer' });
+        resolveReportReferenceDetailed(reports, 'review.md', {
+          stepName: 'consumer',
+          reportsRootDir: reports,
+          resumeReportConsumerKey: '{"workflow":"root","step":"consumer","calls":[]}',
+        });
       } catch (caught) {
         thrown = caught;
       }
@@ -304,7 +319,7 @@ describe('resolveReportReferenceDetailed', () => {
   );
 
   it.each(['ENOENT', 'ENOTDIR'])(
-    'resume manifest 読み込みの %s は元の report 欠落エラーを維持する',
+    'resume manifest 読み込みの %s は report 欠落として続行する',
     (code) => {
       const root = makeTemporaryDirectory();
       const reports = join(root, '.takt', 'runs', 'run-1', 'reports');
@@ -313,9 +328,14 @@ describe('resolveReportReferenceDetailed', () => {
       injectedFsError.operation = 'readFile';
       injectedFsError.error = Object.assign(new Error(`injected ${code}`), { code });
 
-      expect(() => resolveReportReferenceDetailed(reports, 'review.md', {
+      expect(resolveReportReferenceDetailed(reports, 'review.md', {
         stepName: 'consumer',
-      })).toThrow(/has not been produced/);
+        reportsRootDir: reports,
+        resumeReportConsumerKey: '{"workflow":"root","step":"consumer","calls":[]}',
+      })).toEqual({
+        content: '（参照先の報告 review.md はこの run に存在しない）',
+        scope: 'missing',
+      });
     },
   );
 
@@ -332,7 +352,11 @@ describe('resolveReportReferenceDetailed', () => {
 
       let thrown: unknown;
       try {
-        resolveReportReferenceDetailed(reports, 'review.md', { stepName: 'consumer' });
+        resolveReportReferenceDetailed(reports, 'review.md', {
+          stepName: 'consumer',
+          reportsRootDir: reports,
+          resumeReportConsumerKey: '{"workflow":"root","step":"consumer","calls":[]}',
+        });
       } catch (caught) {
         thrown = caught;
       }

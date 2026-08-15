@@ -2,9 +2,25 @@ import { describe, it, expect } from 'vitest';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { renderTraceReportMarkdown, renderTraceReportFromLogs } from '../features/tasks/execute/traceReport.js';
+import {
+  renderTraceReportFromLogs,
+  renderTraceReportFromRecords,
+  renderTraceReportMarkdown,
+} from '../features/tasks/execute/traceReport.js';
 
 describe('traceReport', () => {
+  it('returns no optional trace report when session records are absent', () => {
+    expect(renderTraceReportFromRecords({
+      tracePath: '/tmp/trace.md',
+      workflowName: 'workflow',
+      task: 'task',
+      runSlug: 'run-empty',
+      status: 'completed',
+      iterations: 0,
+      endTime: '2026-03-04T12:00:00.000Z',
+    }, [], [], 'full')).toBeUndefined();
+  });
+
   it('should render judge stage details and tolerate aborted incomplete step', () => {
     const markdown = renderTraceReportMarkdown(
       {

@@ -365,7 +365,7 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
     expect(readFileSync(inheritedReportPath, 'utf-8')).toBe('previous architecture review');
     expect(readFileSync(join(source.sourceReportDir, '05-arch-review.md'), 'utf-8')).toBe('previous architecture review');
     expect(readResumeArtifacts(environment.projectDir, resumedRunSlug)).toEqual(expect.objectContaining({
-      version: 1,
+      version: 2,
       sourceRunSlug,
       targetRunSlug: resumedRunSlug,
       files: [
@@ -409,7 +409,7 @@ describe('IT: missing report source through task resume', () => {
     }
   });
 
-  it('should fail before the resumed fix agent runs and publish an empty source snapshot when source reports are missing', async () => {
+  it('should continue the resumed fix with a missing-report sentence when source reports are missing', async () => {
     environment = createEnvironment();
     process.env.TAKT_CONFIG_DIR = environment.globalDir;
     invalidateGlobalConfigCache();
@@ -466,10 +466,13 @@ describe('IT: missing report source through task resume', () => {
       skipped?: Array<{ reason?: string }>;
     };
 
-    expect(success).toBe(false);
-    expect(instructions).toHaveLength(0);
+    expect(success).toBe(true);
+    expect(instructions).toHaveLength(1);
+    expect(instructions[0]).toContain(
+      '（参照先の報告 05-arch-review.md はこの run に存在しない）',
+    );
     expect(readResumeArtifacts(environment.projectDir, resumedRunSlug)).toEqual(expect.objectContaining({
-      version: 1,
+      version: 2,
       sourceRunSlug,
       targetRunSlug: resumedRunSlug,
       files: [],
@@ -483,6 +486,6 @@ describe('IT: missing report source through task resume', () => {
         reason: 'not_found',
       })],
     }));
-    expect(resumedMeta.reason).toBe('rule_no_match');
+    expect(resumedMeta.reason).toBeUndefined();
   });
 });

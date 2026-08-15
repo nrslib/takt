@@ -9,8 +9,21 @@ import { buildPhaseExecutionId } from '../../shared/utils/phaseExecutionId.js';
 import { recordJudgeStageSpan, runWithPhaseSpan } from './observability/workflowSpans.js';
 import { semanticRuleCandidatesOf } from '../models/workflow-rule-condition.js';
 import { RuleDetectionExhaustedError } from './evaluation/RuleDetectionExhaustedError.js';
+import { formatMissingReportReference } from './instruction/report-reference.js';
 
 const log = createLogger('phase-runner');
+
+function readJudgmentReport(filePath: string, fileName: string): string {
+  try {
+    return readFileSync(filePath, 'utf-8');
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
+      return formatMissingReportReference(fileName);
+    }
+    throw error;
+  }
+}
 
 /** Result of Phase 3 status judgment, including the detection method. */
 export interface StatusJudgmentPhaseResult {
@@ -28,22 +41,19 @@ function buildBaseContext(
   const reportFiles = getJudgmentReportFiles(step.outputContracts);
 
   if (reportFiles.length > 0) {
-    const reports: string[] = [];
-    for (const fileName of reportFiles) {
+    const reports = reportFiles.map((fileName) => {
       const filePath = resolve(ctx.reportDir, fileName);
-      if (!existsSync(filePath)) continue;
-      const content = readFileSync(filePath, 'utf-8');
-      reports.push(`# ${fileName}\n\n${content}`);
-    }
-    if (reports.length > 0) {
-      return {
-        language: ctx.language,
-        interactive: ctx.interactive,
-        reportContent: reports.join('\n\n---\n\n'),
-        inputSource: 'report',
-      };
-    }
-    throw new Error(`Status judgment requires existing use_judge reports for step "${step.name}"`);
+      const content = existsSync(filePath)
+        ? readJudgmentReport(filePath, fileName)
+        : formatMissingReportReference(fileName);
+      return `# ${fileName}\n\n${content}`;
+    });
+    return {
+      language: ctx.language,
+      interactive: ctx.interactive,
+      reportContent: reports.join('\n\n---\n\n'),
+      inputSource: 'report',
+    };
   }
 
   if (!ctx.lastResponse) return undefined;
