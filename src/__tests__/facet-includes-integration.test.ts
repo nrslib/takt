@@ -239,8 +239,8 @@ describe('facet include expansion', () => {
       ? ['修正単位', '軸の正本・根拠', '具体的な入力・状態', '入口・経路', '実装上の制約', 'consumer / terminal', '期待結果', '反証方法・テスト ID']
       : ['Fix Unit', 'Dimension Source and Evidence', 'Concrete Input or State', 'Entry and Path', 'Implementation Constraint', 'Consumer / Terminal', 'Expected Result', 'Disproof Method and Test ID'];
     const expectedPathContract = lang === 'ja'
-      ? ['現行:', '修正後:', '現行の失敗', '変更なし・検証のみ']
-      : ['Current:', 'After the fix:', 'current failure', 'unchanged and verify-only'];
+      ? ['現行:', '修正後:', '現行の失敗', '一覧と共通経路へ分けない', '実際に編集する共有箇所だけを変更']
+      : ['Current:', 'After the fix:', 'current failure', 'rather than separating a member list from a common path', 'only the shared location actually edited as edit'];
 
     for (const outputContract of [
       'fix-plan',
