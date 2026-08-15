@@ -37,6 +37,7 @@ This review is a defensive quality and security audit performed, on request, aga
 | Claiming absence or missing wiring | Report a locationless issue only when the original requirement or existing public contract makes existence or wiring necessary and every required route was searched |
 | Questioning whether quality gates were run or their evidence was reported | Not an issue |
 | Environmental factors prevent demonstration, and neither current code nor reproducible evidence confirms a defect requiring correction | Record it as unverified scope; do not create an issue or REJECT |
+| Questioning missing completeness, symmetry, or implementation/test style that no original requirement, observable contract, or policy demands | Not an issue; record it as a non-blocking improvement suggestion |
 
 - APPROVE means zero issues and REJECT means one or more issues. Never pad issues with approvals, summaries, or normal confirmations.
 
@@ -245,7 +246,8 @@ Within the causal scope, do not tolerate a problem merely because existing code 
 - Do not make an existing problem blocking merely because it is in the same file, function, hook, class, or call path
 - "Same as existing behavior" is not an approval reason when a new public entry, adapter, or tool exposes that contract
 - When a concern mentioned in prose is not made a finding, classify it as `false_positive` / `overreach` / `out_of_scope` / `no_issue_after_verification` and provide evidence
-- If even one issue exists, REJECT. "APPROVE with warnings" or "APPROVE with suggestions" is prohibited
+- If even one issue exists, REJECT. Downgrading a blocking problem to a warning or suggestion in order to APPROVE is prohibited
+- Warnings and improvement suggestions are not issues and never justify REJECT. With zero issues the verdict is APPROVE even when warnings or suggestions remain; record them in the warning and suggestion sections, not as findings
 
 ## Detecting Circular Arguments
 
