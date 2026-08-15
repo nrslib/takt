@@ -23,6 +23,7 @@ import {
 import { renderPullRequestContext } from '../pr-context.js';
 import { isNormalAgentWorkflowStep } from '../../models/workflow-types.js';
 import { getCompanionInstructionCopy } from '../companion/evidence.js';
+import { renderWorkflowWideRules } from './workflow-wide-rules.js';
 
 const CONTEXT_MAX_CHARS = 2000;
 
@@ -85,6 +86,7 @@ export class InstructionBuilder {
     const editRule = buildEditRule(this.step.edit, language);
     const gitRules = buildGitRules(this.step.allowGitCommit, language, 'phase1');
     const hasGitRules = gitRules.length > 0;
+    const workflowRules = renderWorkflowWideRules(this.context.workflowRules, language);
     const fallbackNotice = this.context.fallbackContext
       ? renderFallbackNotice(this.context.fallbackContext, language)
       : '';
@@ -218,6 +220,12 @@ export class InstructionBuilder {
       knowledgeContent,
       hasQualityGates,
       qualityGatesContent,
+      hasWorkflowRulesAfterExecution: workflowRules.hasAfterExecutionRules,
+      workflowRulesNoticeAfterExecution: workflowRules.noticeAfterExecutionRules,
+      workflowRulesAfterExecution: workflowRules.afterExecutionRules,
+      hasWorkflowRulesBeforeInstruction: workflowRules.hasBeforeInstructionRules,
+      workflowRulesNoticeBeforeInstruction: workflowRules.noticeBeforeInstructionRules,
+      workflowRulesBeforeInstruction: workflowRules.beforeInstructionRules,
       instructions,
     });
   }

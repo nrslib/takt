@@ -11,6 +11,7 @@ import type {
   WorkflowResumePointEntry,
   WorkflowState,
   WorkflowStep,
+  WorkflowWideRule,
 } from '../../models/types.js';
 import { prepareRuntimeEnvironment } from '../../runtime/runtime-environment.js';
 import type { RunPaths } from '../run/run-paths.js';
@@ -249,6 +250,10 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       : { inputReader: new SelectorInputReader(params.options.selectorGitCommandRunner) }),
   });
   const companionEnabled = params.options.companionEnabled ?? DEFAULT_COMPANION_ENABLED;
+  const workflowRules: readonly WorkflowWideRule[] = [
+    ...(params.options.inheritedWorkflowRules ?? []),
+    ...(params.config.allStepsRules ?? []),
+  ];
 
   const stepExecutor = new StepExecutor({
     optionsBuilder,
@@ -263,6 +268,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getWorkflowName: () => params.config.name,
     getTask: () => params.task,
     getWorkflowDescription: () => params.config.description,
+    getWorkflowRules: () => workflowRules,
     getWorkflowCallVars: () => params.options.workflowCallVars,
     getRetryNote: () => params.options.retryNote,
     getPrContext: () => params.options.prContext,
@@ -382,6 +388,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     stepExecutor,
     getCwd: params.getCwd,
     getWorkflowName: () => params.config.name,
+    getWorkflowRules: () => workflowRules,
     getInteractive: () => params.options.interactive === true,
     childProcessEnv: params.options.childProcessEnv,
     observabilityEnabled: params.options.observability?.enabled === true,

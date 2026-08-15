@@ -39,6 +39,12 @@ description: 任意の説明
 max_steps: 10
 initial_step: first-step          # 省略可、デフォルトは最初の step
 
+all_steps:
+  rules:
+    - findings-handling
+    - ref: careful-findings
+      position: before_instruction
+
 # セクションマップ（キー → workflow YAML からの相対パス）
 personas:
   planner: ../facets/personas/planner.md
@@ -98,6 +104,14 @@ steps:
 step はキー名で section map を参照します (例: `persona: coder`)。ファイルパスではありません。section map の中のパスは workflow YAML ファイルのディレクトリからの相対で解決されます。
 
 section map は任意です。facet は bare name で直接参照できます（`personas` マップの項目がなくても `persona: coder` と書けます）。bare name は project `.takt/facets/<type>/` → global `~/.takt/facets/<type>/` → 同梱の `builtins/{lang}/facets/<type>/` の優先順で解決されます。section map が必要になるのは、カスタムエイリアスや明示的なファイルパスを使いたい場合だけです。
+
+### ワークフロー横断ルール（`all_steps.rules`）
+
+すべての agent step に適用するルールは `all_steps.rules` に宣言します。各要素はルール参照文字列、または `ref` と任意の `position: before_instruction` を持つ object です。`position` を省略すると自動実行ルールの後に配置され、`before_instruction` は step の `Instructions` セクション直前に配置されます。
+
+ルールファイルは `workflows/rules/<ref>.md` です。project `.takt/workflows/rules/` → global `~/.takt/workflows/rules/` → 同梱 builtin ディレクトリの順で解決します。適用通知とルール見出しは prompt ごとに1回だけ出力されます。対象は Phase 1 の agent 指示だけで、レポート出力、ステータスルーティング、companion reviewer には適用されません。`workflow_call` 先は親のルールを先に継承し、自身の `all_steps.rules` を後ろに加算します。
+
+ルールファイルに必須出力見出しまたは `{report:...}` 参照を含めることはできません。違反時は参照されたファイルを示して workflow の読み込みに失敗します。`all_steps` を省略した場合、既存の prompt は維持されます。将来の workflow 横断宣言は `all_steps` 配下に追加し、未知のトップレベルキーは引き続き拒否されます。
 
 ### 再利用可能な step fragment
 

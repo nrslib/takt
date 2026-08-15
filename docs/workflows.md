@@ -39,6 +39,12 @@ description: Optional description
 max_steps: 10
 initial_step: first-step          # Optional, defaults to the first step
 
+all_steps:
+  rules:
+    - findings-handling
+    - ref: careful-findings
+      position: before_instruction
+
 # Section maps (key → file path relative to workflow YAML directory)
 personas:
   planner: ../facets/personas/planner.md
@@ -98,6 +104,14 @@ steps:
 Steps reference section maps by key name (e.g., `persona: coder`), not by file path. Paths in section maps are resolved relative to the workflow YAML file's directory.
 
 Section maps are optional. Facets can be referenced directly by bare name (e.g., `persona: coder` without a `personas` map entry); bare names are resolved through the facet layers in priority order — project `.takt/facets/<type>/`, then global `~/.takt/facets/<type>/`, then bundled `builtins/{lang}/facets/<type>/`. Use a section map only when you need a custom alias or an explicit file path.
+
+### Workflow-wide rules (`all_steps.rules`)
+
+Declare rules that apply to every agent step in the workflow under `all_steps.rules`. Each entry is either a rule reference or an object with `ref` and the optional `position: before_instruction`. An omitted position places the rule after the automatic execution rules; `before_instruction` places it immediately before the step's `Instructions` section.
+
+Rule files are Markdown files named `<ref>.md` under `workflows/rules/`. They resolve in project `.takt/workflows/rules/`, then global `~/.takt/workflows/rules/`, then the bundled builtin directory. The applicability notice and rule heading are rendered once per prompt. These rules apply only to Phase 1 agent instructions, not output reports, status routing, or companion reviewers. A called workflow inherits its parent's rules additively before its own `all_steps.rules`.
+
+Rule files must not contain the required-output heading or `{report:...}` references; invalid content fails workflow loading and identifies the referenced file. Omitting `all_steps` preserves the existing prompt. Future workflow-wide declarations belong under `all_steps`; unknown root-level keys remain invalid.
 
 ### Reusable step fragments
 

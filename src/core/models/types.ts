@@ -36,6 +36,7 @@ export type {
 // Workflow configuration and runtime state
 export type {
   WorkflowRule,
+  WorkflowWideRule,
   WorkflowMaxSteps,
   WorkflowStructuredOutput,
   WorkflowPrListWhere,

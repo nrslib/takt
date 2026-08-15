@@ -10,6 +10,12 @@ description: 説明テキスト      # 任意
 max_steps: 10                 # 最大イテレーション数（省略時デフォルトあり）
 initial_step: plan            # 最初に実行する step 名（省略時は steps の先頭）
 
+all_steps:                    # workflow 全体に適用する宣言（任意）
+  rules:
+    - findings-handling       # workflows/rules/findings-handling.md
+    - ref: careful-findings
+      position: before_instruction
+
 # ワークフロー全体の provider / runtime 等
 workflow_config:
   provider_options:
@@ -35,6 +41,8 @@ knowledge:                    # ナレッジ定義（任意）
 steps: [...]                  # step 定義の配列（推奨キー名）
 loop_monitors: [...]          # ループ監視設定（任意）。cycle には step 名を並べる
 ```
+
+`all_steps.rules` はすべての agent step の Phase 1 指示へ適用するルール参照です。参照は project `.takt/workflows/rules/`、global `~/.takt/workflows/rules/`、builtin の順に `<ref>.md` を解決します。文字列は自動実行ルールの後、object の `position: before_instruction` は `Instructions` の直前に挿入されます。ルールは `workflow_call` の子へ親から子の順で加算継承されます。レポート出力・ステータス判定・companion には適用されず、必須出力見出しと `{report:...}` を含むルールファイルはロード時に拒否されます。`all_steps` を省略した場合は従来の prompt を維持します。
 
 ### セクションマップの解決
 

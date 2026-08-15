@@ -11,6 +11,7 @@ import type {
   WorkflowState,
   AgentResponse,
   WorkflowResumePointEntry,
+  WorkflowWideRule,
 } from '../../models/types.js';
 import type { ArpeggioStepConfig, BatchResult, DataBatch } from '../arpeggio/types.js';
 import { createDataSource } from '../arpeggio/data-source-factory.js';
@@ -26,6 +27,7 @@ import type { StepExecutor } from './StepExecutor.js';
 import type { PhaseName, PhasePromptParts, RuntimeStepResolution, StepProviderInfo, StepRunResult } from '../types.js';
 import { buildGitRules } from '../instruction/instruction-context.js';
 import { renderFallbackNotice } from '../instruction/fallback-notice.js';
+import { renderWorkflowWideRules } from '../instruction/workflow-wide-rules.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 import { USAGE_MISSING_REASONS } from '../../logging/contracts.js';
 import {
@@ -41,6 +43,7 @@ export interface ArpeggioRunnerDeps {
   readonly stepExecutor: StepExecutor;
   readonly getCwd: () => string;
   readonly getWorkflowName: () => string;
+  readonly getWorkflowRules: () => readonly WorkflowWideRule[] | undefined;
   readonly getInteractive: () => boolean;
   readonly childProcessEnv?: RunAgentOptions['childProcessEnv'];
   readonly observabilityEnabled: boolean;
@@ -122,6 +125,7 @@ async function executeBatchWithRetry(
   retryDelayMs: number,
   observability: ArpeggioBatchObservability,
   runtime?: RuntimeStepResolution,
+  workflowRules?: readonly WorkflowWideRule[],
 ): Promise<BatchResult> {
   const prompt = buildArpeggioPrompt(
     template,
@@ -129,6 +133,7 @@ async function executeBatchWithRetry(
     allowGitCommit,
     agentOptions.language ?? 'en',
     runtime,
+    workflowRules,
   );
   let lastError: string | undefined;
 
@@ -238,13 +243,23 @@ function buildArpeggioPrompt(
   allowGitCommit: boolean | undefined,
   language: NonNullable<RunAgentOptions['language']>,
   runtime?: RuntimeStepResolution,
+  workflowRules?: readonly WorkflowWideRule[],
 ): string {
   const prompt = expandTemplate(template, batch);
   const gitRules = buildGitRules(allowGitCommit, language, 'phase1');
   const fallbackNotice = runtime?.fallback
     ? renderFallbackNotice(runtime.fallback, language)
     : '';
-  return [gitRules, fallbackNotice, prompt]
+  const renderedRules = renderWorkflowWideRules(workflowRules, language);
+  return [
+    gitRules,
+    renderedRules.noticeAfterExecutionRules,
+    renderedRules.afterExecutionRules,
+    fallbackNotice,
+    renderedRules.noticeBeforeInstructionRules,
+    renderedRules.beforeInstructionRules,
+    prompt,
+  ]
     .filter((part): part is string => typeof part === 'string' && part.length > 0)
     .join('\n\n');
 }
@@ -430,6 +445,7 @@ export class ArpeggioRunner {
             getPromptParts: () => resolvedPromptParts,
           },
           runtime,
+          this.deps.getWorkflowRules(),
         );
         if (!didEmitPhaseStart) {
           throw new Error(`Missing prompt parts for phase start: ${step.name}:1`);

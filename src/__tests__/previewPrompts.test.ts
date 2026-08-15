@@ -20,6 +20,7 @@ const {
   mockInfo,
   mockError,
   mockBlankLine,
+  mockInstructionBuilder,
   mockInstructionBuild,
   mockReportBuild,
   mockJudgmentBuild,
@@ -36,6 +37,7 @@ const {
   mockInfo: vi.fn(),
   mockError: vi.fn(),
   mockBlankLine: vi.fn(),
+  mockInstructionBuilder: vi.fn(),
   mockInstructionBuild: vi.fn(() => 'phase1'),
   mockReportBuild: vi.fn(() => 'phase2'),
   mockJudgmentBuild: vi.fn(() => 'phase3'),
@@ -86,7 +88,7 @@ function compiledEnvironment(
 }
 
 vi.mock('../core/workflow/instruction/InstructionBuilder.js', () => ({
-  InstructionBuilder: vi.fn().mockImplementation(() => ({
+  InstructionBuilder: mockInstructionBuilder.mockImplementation(() => ({
     build: mockInstructionBuild,
   })),
 }));
@@ -217,6 +219,74 @@ describe('previewPrompts', () => {
     await previewPrompts('/project', undefined, undefined);
 
     expect(console.log).toHaveBeenCalledWith('Step 1: implement (persona: coder)');
+  });
+
+  it('workflow-wide ruleのref・正規化位置・本文を表示する', async () => {
+    mockLoadWorkflowByIdentifier.mockReturnValueOnce({
+      name: 'rules-preview',
+      maxSteps: 1,
+      allStepsRules: [{
+        ref: 'review-boundary',
+        position: 'after_execution_rules',
+        content: 'PREVIEW_RULE_BODY',
+      }],
+      steps: [
+        {
+          name: 'implement',
+          personaDisplayName: 'coder',
+          outputContracts: [],
+        },
+      ],
+    });
+
+    await previewPrompts('/project');
+    const output = JSON.stringify([
+      ...consoleLogSpy.mock.calls,
+      ...mockInfo.mock.calls,
+    ]);
+
+    expect(output).toContain('review-boundary');
+    expect(output).toContain('after_execution_rules');
+    expect(output).toContain('PREVIEW_RULE_BODY');
+  });
+
+  it('合成ステップのPhase 1プレビューにはworkflow-wide ruleを渡さない', async () => {
+    const workflowRules = [{
+      ref: 'review-boundary',
+      position: 'after_execution_rules',
+      content: 'PREVIEW_RULE_BODY',
+    }];
+    mockLoadWorkflowByIdentifier.mockReturnValueOnce({
+      name: 'rules-preview',
+      maxSteps: 2,
+      allStepsRules: workflowRules,
+      steps: [
+        {
+          name: 'implement',
+          personaDisplayName: 'coder',
+          outputContracts: [],
+        },
+        {
+          name: 'synthesized-judge',
+          personaDisplayName: 'judge',
+          outputContracts: [],
+          engineSynthesized: true,
+        },
+      ],
+    });
+
+    await previewPrompts('/project');
+
+    expect(mockInstructionBuilder).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ name: 'implement' }),
+      expect.objectContaining({ workflowRules }),
+    );
+    expect(mockInstructionBuilder).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ name: 'synthesized-judge', engineSynthesized: true }),
+      expect.objectContaining({ workflowRules: undefined }),
+    );
   });
 
   it('dynamic parallel の mode と fixed/pool role を表示する', async () => {
