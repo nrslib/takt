@@ -369,7 +369,6 @@ async function executeWorkflowInternal(
       );
       engine = new WorkflowEngine(bootstrap.effectiveWorkflowConfig, cwd, task, {
         abortSignal: executionControl.signal,
-        onWarning: bootstrap.out.warn,
         onStream: handleProviderStream,
         onProviderStream: (context, event) => {
           bootstrap.providerEventLogger.logEvent(context, event);

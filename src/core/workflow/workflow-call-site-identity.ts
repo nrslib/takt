@@ -20,6 +20,7 @@ function frameIdentity(entry: WorkflowResumePointEntry) {
       : { workflowRef: entry.workflow_ref }),
     step: entry.step,
     kind: entry.kind,
+    occurrence: entry.occurrence,
   };
 }
 

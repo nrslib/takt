@@ -53,12 +53,10 @@ export class ResumeArtifactOccurrenceIndex {
   constructor(
     manifest: ResumeReportSnapshotManifest | undefined,
     sourceResumePoint: WorkflowResumePoint | undefined,
-    onWarning: (message: string) => void,
   ) {
     const callSitesByNamespace = new Map<string, string>();
     const callSitesBySignature = new Map<string, Set<string>>();
     const callSitesByLegacySignature = new Map<string, Set<string>>();
-    const warnedAmbiguousLegacyNamespaces = new Set<string>();
     for (const [identity, record] of Object.entries(
       sourceResumePoint?.workflow_call_invocations ?? {},
     )) {
@@ -105,13 +103,6 @@ export class ResumeArtifactOccurrenceIndex {
           );
           if (legacyCandidates?.size === 1) {
             callSite = [...legacyCandidates][0];
-          } else if (legacyCandidates !== undefined && legacyCandidates.size > 1) {
-            if (!warnedAmbiguousLegacyNamespaces.has(namespaceSegment)) {
-              onWarning(
-                `Excluded legacy workflow-call artifact namespace "${namespaceSegment}" from resume occurrence restoration because its logical call-site is ambiguous`,
-              );
-              warnedAmbiguousLegacyNamespaces.add(namespaceSegment);
-            }
           }
         }
         if (callSite === undefined) continue;

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import type {
   WorkflowConfig,
@@ -11,11 +11,9 @@ import { buildWorkflowResumePointEntry } from '../core/workflow/workflow-referen
 import { ResumeArtifactOccurrenceIndex } from '../core/workflow/run/resume-artifact-occurrence-index.js';
 import { buildWorkflowCallInvocationIdentity } from '../core/workflow/workflow-call-invocation-index.js';
 import { buildWorkflowCallSiteIdentity } from '../core/workflow/workflow-call-site-identity.js';
-import { createOutputFns } from '../features/tasks/execute/outputFns.js';
 
 const ARTIFACT_HASH = '0'.repeat(64);
 const LEGACY_ACCIDENT_NAMESPACE = 'iteration-1--step-review--workflow-takt-experimental-review--site-128059303b1d3ce4bbe910a170a9f459001651ddaa51082a36b7b1494f81e8cb';
-const ignoreWarning = (): void => {};
 
 function invocationRecord(
   workflow: WorkflowConfig,
@@ -70,12 +68,8 @@ function sourceResumePoint(records: readonly ReturnType<typeof invocationRecord>
   };
 }
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
-
 describe('WorkflowResumeContinuation', () => {
-  it('現行形式の site digest は同じ論理 call-site の occurrence に依存しない', () => {
+  it('通常実行の nested workflow_call namespace を祖先 invocation ごとに分離する', () => {
     const parent = { name: 'parent', steps: [] } as unknown as WorkflowConfig;
     const child = { name: 'child', steps: [] } as unknown as WorkflowConfig;
     const grandchild = { name: 'grandchild', steps: [] } as unknown as WorkflowConfig;
@@ -99,9 +93,7 @@ describe('WorkflowResumeContinuation', () => {
     const first = invocationRecord(child, 'nested', grandchild, [firstParentCall], 1);
     const second = invocationRecord(child, 'nested', grandchild, [secondParentCall], 1);
 
-    expect(first.namespace.replace(/^iteration-\d+--/, '')).toBe(
-      second.namespace.replace(/^iteration-\d+--/, ''),
-    );
+    expect(first.namespace).not.toBe(second.namespace);
   });
 
   it('requeue で継承した workflow_call 成果物の最大 occurrence の続きから採番する', () => {
@@ -146,7 +138,6 @@ describe('WorkflowResumeContinuation', () => {
     const index = new ResumeArtifactOccurrenceIndex(
       artifactManifest(records.map((record) => record.namespace)),
       sourceResumePoint([records.at(-1)!]),
-      ignoreWarning,
     );
     const continuation = new WorkflowResumeContinuation(workflow, undefined, index);
 
@@ -177,7 +168,6 @@ describe('WorkflowResumeContinuation', () => {
     const index = new ResumeArtifactOccurrenceIndex(
       artifactManifest([top.namespace, nested.namespace]),
       sourceResumePoint([top, nested]),
-      ignoreWarning,
     );
 
     expect(index.getMaxOccurrence(workflow, 'delegate', [])).toBe(5);
@@ -194,7 +184,6 @@ describe('WorkflowResumeContinuation', () => {
     const index = new ResumeArtifactOccurrenceIndex(
       artifactManifest([siteA.namespace, siteB.namespace]),
       sourceResumePoint([siteA, siteB]),
-      ignoreWarning,
     );
 
     expect(index.getMaxOccurrence(workflow, 'delegate', [siteAFrame])).toBe(6);
@@ -212,7 +201,6 @@ describe('WorkflowResumeContinuation', () => {
     const index = new ResumeArtifactOccurrenceIndex(
       artifactManifest([nestedA.namespace, nestedB.namespace]),
       sourceResumePoint([nestedA, nestedB]),
-      ignoreWarning,
     );
 
     expect(index.getMaxOccurrence(child, 'delegate', [outerA])).toBe(4);
@@ -229,7 +217,6 @@ describe('WorkflowResumeContinuation', () => {
     const index = new ResumeArtifactOccurrenceIndex(
       artifactManifest([siteA.namespace]),
       sourceResumePoint([siteA, siteB]),
-      ignoreWarning,
     );
 
     expect(index.getMaxOccurrence(workflow, 'delegate', [siteAFrame])).toBe(6);
@@ -244,7 +231,6 @@ describe('WorkflowResumeContinuation', () => {
     const index = new ResumeArtifactOccurrenceIndex(
       artifactManifest([LEGACY_ACCIDENT_NAMESPACE]),
       sourceResumePoint([currentLatest]),
-      ignoreWarning,
     );
 
     expect(index.getMaxOccurrence(workflow, 'review', [])).toBe(1);
@@ -264,7 +250,6 @@ describe('WorkflowResumeContinuation', () => {
     const siteAArtifact = invocationRecord(workflow, 'review', child, [siteAFrame], 1);
     const siteBLatest = invocationRecord(workflow, 'review', child, [siteBFrame], 2);
     const siteCLatest = invocationRecord(workflow, 'review', child, [siteCFrame], 2);
-    const onWarning = vi.fn();
     const state: WorkflowState = {
       workflowName: workflow.name,
       currentStep: 'review',
@@ -282,7 +267,6 @@ describe('WorkflowResumeContinuation', () => {
     const index = new ResumeArtifactOccurrenceIndex(
       artifactManifest([siteAArtifact.namespace]),
       sourceResumePoint([siteBLatest, siteCLatest]),
-      onWarning,
     );
     const continuation = new WorkflowResumeContinuation(workflow, undefined, index);
     const occurrence = continuation.claimStepOccurrence({
@@ -302,14 +286,13 @@ describe('WorkflowResumeContinuation', () => {
       occurrence,
     ).namespace;
 
-    expect(onWarning).toHaveBeenCalledOnce();
     expect(index.getMaxOccurrence(workflow, 'review', [siteAFrame])).toBeUndefined();
     expect(index.getMaxOccurrence(workflow, 'review', [siteBFrame])).toBeUndefined();
     expect(occurrence).toBe(2);
     expect(newNamespace).not.toBe(siteAArtifact.namespace);
   });
 
-  it('実事故の旧形式 artifact が曖昧ならユーザー可視警告を出して除外する', () => {
+  it('実事故の旧形式 artifact が曖昧なら黙って除外して新規採番する', () => {
     const child = { name: 'takt-experimental-review', steps: [] } as unknown as WorkflowConfig;
     const workflow = {
       name: 'takt-experimental-core',
@@ -334,12 +317,9 @@ describe('WorkflowResumeContinuation', () => {
       stepIterations: new Map(),
       status: 'running',
     };
-    const consoleLog = vi.spyOn(console, 'log').mockImplementation(() => {});
-
     const index = new ResumeArtifactOccurrenceIndex(
       artifactManifest([LEGACY_ACCIDENT_NAMESPACE]),
       sourceResumePoint([siteALatest, siteBLatest]),
-      createOutputFns(undefined).warn,
     );
     const continuation = new WorkflowResumeContinuation(workflow, undefined, index);
     const occurrence = continuation.claimStepOccurrence({
@@ -358,10 +338,6 @@ describe('WorkflowResumeContinuation', () => {
       [siteAFrame],
       occurrence,
     ).namespace;
-    const visibleOutput = consoleLog.mock.calls.flat().join(' ');
-
-    expect(visibleOutput).toContain('[WARN]');
-    expect(visibleOutput).toContain(LEGACY_ACCIDENT_NAMESPACE);
     expect(index.getMaxOccurrence(workflow, 'review', [siteAFrame])).toBeUndefined();
     expect(index.getMaxOccurrence(workflow, 'review', [siteBFrame])).toBeUndefined();
     expect(occurrence).toBe(1);

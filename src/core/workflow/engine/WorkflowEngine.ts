@@ -265,7 +265,6 @@ export class WorkflowEngine extends EventEmitter {
       this.sharedRuntime.resumeArtifactOccurrenceIndex = new ResumeArtifactOccurrenceIndex(
         manifest,
         sourceResumePoint,
-        this.options.onWarning ?? ((message) => log.warn(message)),
       );
     }
     restoreActiveResumePoint(
