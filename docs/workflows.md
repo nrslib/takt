@@ -1199,6 +1199,9 @@ steps:
 
 Add `companion` to a normal agent step to run stateless, read-only reviewers while the agent edits. A shorthand list selects fixed reviewers. Use the object form to combine fixed reviewers with a pool selected once at step startup and an optional moderator. At most three reviewers run together.
 
+Companion reviewers are disabled by default. Set `companion.enabled: true` in
+`runtime.yaml` to run reviewers declared by a workflow.
+
 ```yaml
 - name: implement
   persona: coder

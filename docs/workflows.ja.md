@@ -1198,6 +1198,9 @@ steps:
 
 通常の agent step に `companion` を指定すると、実装エージェントの編集と並行して、ステートレスかつ read-only のレビュアーが動きます。名前配列は固定レビュアーの短縮形です。object 形式では固定レビュアー、step 開始時に1回だけ選抜する pool、任意の moderator を組み合わせられます。同時実行は最大3名です。
 
+companion reviewer は既定で無効です。workflow に宣言した reviewer を実行するには、
+`runtime.yaml` で `companion.enabled: true` を設定します。
+
 ```yaml
 - name: implement
   persona: coder

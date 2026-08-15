@@ -152,7 +152,7 @@ describe('RuntimeProviderFileSchema', () => {
     }
   });
 
-  it('Given companion-only targets without a companion policy or defaults, When parsed, Then it is rejected for missing defaults', () => {
+  it('Given companion-only targets without a companion policy or defaults, When parsed, Then it remains inactive by default', () => {
     const result = RuntimeProviderFileSchema.safeParse({
       version: 1,
       provider: {
@@ -160,10 +160,7 @@ describe('RuntimeProviderFileSchema', () => {
       },
     });
 
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues.some((issue) => issue.message.includes('provider.defaults'))).toBe(true);
-    }
+    expect(result.success).toBe(true);
   });
 
   it('Given defaults.pool with a defined pool and fallback profile, When parsed, Then it is rejected with a pool-specific error', () => {

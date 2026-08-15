@@ -63,6 +63,8 @@ describe('E2E: companion review', () => {
     ].join('\n'), 'utf8');
     writeFileSync(join(repo.path, '.takt', 'runtime.yaml'), [
       'version: 1',
+      'companion:',
+      '  enabled: true',
       'provider:',
       '  profiles:',
       '    mock:',

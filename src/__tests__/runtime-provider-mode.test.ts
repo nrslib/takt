@@ -52,6 +52,13 @@ describe('hasActiveProviderSection (C11/C25)', () => {
     }))).toBe(false);
   });
 
+  it('Given a companion-only target without a companion policy, Then it is inactive by default', () => {
+    expect(hasActiveProviderSection(runtimeFile({
+      version: 1,
+      provider: { targets: { companions: { security: { profile: 'security' } } } },
+    }))).toBe(false);
+  });
+
   it('Given an enabled companion-only target, Then it is active', () => {
     expect(hasActiveProviderSection(runtimeFile({
       version: 1,

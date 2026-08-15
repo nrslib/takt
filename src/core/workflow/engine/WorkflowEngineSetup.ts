@@ -2,6 +2,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { StructuredCaller } from '../../../agents/structured-caller.js';
 import { createLogger } from '../../../shared/utils/index.js';
+import { DEFAULT_COMPANION_ENABLED } from '../../../shared/constants.js';
 import type {
   AgentResponse,
   WorkflowConfig,
@@ -247,7 +248,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       ? {}
       : { inputReader: new SelectorInputReader(params.options.selectorGitCommandRunner) }),
   });
-  const companionEnabled = params.options.companionEnabled ?? true;
+  const companionEnabled = params.options.companionEnabled ?? DEFAULT_COMPANION_ENABLED;
 
   const stepExecutor = new StepExecutor({
     optionsBuilder,

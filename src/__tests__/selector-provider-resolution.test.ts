@@ -354,7 +354,9 @@ describe('workflow selector resolution', () => {
       }],
     };
 
-    expect(resolveWorkflowSelectorForProject(workflow, projectDir)).toMatchObject({
+    expect(resolveWorkflowSelectorForProject(workflow, projectDir, {
+      companionEnabled: true,
+    })).toMatchObject({
       applies: true,
       selectorProvider: { provider: 'codex', model: 'gpt-selector' },
     });
