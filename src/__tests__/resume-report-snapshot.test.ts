@@ -462,12 +462,33 @@ describe('inheritResumeReportSnapshot', () => {
     expect(() => readResumeReportSnapshotManifest(cwd, 'source-run')).toThrow(SyntaxError);
   });
 
+  it('accepts a version 2 manifest without resume report consumers', () => {
+    const reports = buildRunPaths(cwd, 'target-run').reportsAbs;
+    mkdirSync(reports, { recursive: true });
+    writeFileSync(join(reports, RESUME_ARTIFACTS_FILE_NAME), JSON.stringify({
+      version: 2,
+      sourceRunSlug: 'source-run',
+      targetRunSlug: 'target-run',
+      createdAt: '2026-07-17T00:00:00.000Z',
+      files: [],
+    }));
+
+    expect(readResumeReportSnapshotManifest(cwd, 'target-run')).toEqual({
+      version: 2,
+      sourceRunSlug: 'source-run',
+      targetRunSlug: 'target-run',
+      createdAt: '2026-07-17T00:00:00.000Z',
+      files: [],
+      resumeReportConsumers: [],
+    });
+  });
+
   it.each([
     ['empty object', {}],
     ['null root', null],
     ['array root', []],
     ['missing fields', { version: 1 }],
-    ['wrong version', { version: 2, sourceRunSlug: 'source-run', targetRunSlug: 'target-run', createdAt: '2026-07-17T00:00:00.000Z', files: [] }],
+    ['wrong version', { version: 3, sourceRunSlug: 'source-run', targetRunSlug: 'target-run', createdAt: '2026-07-17T00:00:00.000Z', files: [] }],
     ['target slug mismatch', { version: 1, sourceRunSlug: 'source-run', targetRunSlug: 'other-run', createdAt: '2026-07-17T00:00:00.000Z', files: [] }],
     ['same source and target slug', { version: 1, sourceRunSlug: 'target-run', targetRunSlug: 'target-run', createdAt: '2026-07-17T00:00:00.000Z', files: [] }],
     ['non-canonical ISO timestamp', { version: 1, sourceRunSlug: 'source-run', targetRunSlug: 'target-run', createdAt: '2026-07-17 00:00:00Z', files: [] }],

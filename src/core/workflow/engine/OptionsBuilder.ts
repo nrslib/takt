@@ -41,6 +41,7 @@ import type {
 } from '../types.js';
 import type { ProviderResolutionSource } from '../provider-options-trace.js';
 import { buildSessionKey } from '../session-key.js';
+import { buildResumeReportConsumerKeyFromStack } from '../run/resume-report-consumer.js';
 import { getWorkflowStepKind } from '../step-kind.js';
 import { resolveStepProviderModel } from '../provider-resolution.js';
 import { resolveDeterministicAutoRoutingProviderInfo, toAutoRoutingStepMetadata } from '../auto-routing/resolver.js';
@@ -91,6 +92,7 @@ export class OptionsBuilder {
     private readonly getFailureDir?: () => string,
     private readonly getAbortSignal: () => AbortSignal | undefined = () => this.engineOptions.abortSignal,
     private readonly recordActivity: ProviderActivityCallback = () => {},
+    private readonly getReportsRootDir?: () => string,
   ) {}
 
   private resolveAbortSignal(): AbortSignal | undefined {
@@ -736,11 +738,16 @@ export class OptionsBuilder {
     onProviderAttempt?: ReportPhaseRunnerContext['onProviderAttempt'],
   ): ReportPhaseRunnerContext & StatusJudgmentPhaseContext {
     const stepProvider = this.resolveStepProviderModel(step, runtime);
+    const resumeReportConsumerKey = buildResumeReportConsumerKeyFromStack(
+      this.getCurrentWorkflowStack() ?? [],
+    );
     return {
       cwd: this.getCwd(),
       task: this.getTask?.(),
       reviewScope: this.getReviewScope?.(),
       reportDir: join(this.getCwd(), this.getReportDir()),
+      ...(this.getReportsRootDir === undefined ? {} : { reportsRootDir: this.getReportsRootDir() }),
+      ...(resumeReportConsumerKey === undefined ? {} : { resumeReportConsumerKey }),
       language: this.getLanguage(),
       interactive: this.engineOptions.interactive,
       lastResponse,

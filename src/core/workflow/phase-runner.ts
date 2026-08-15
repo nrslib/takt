@@ -117,6 +117,10 @@ export interface ReportPhaseRunnerContext extends BasePhaseRunnerContext {
 export interface StatusJudgmentPhaseContext extends BasePhaseRunnerContext {
   /** Structured caller for phase 3 status judgment */
   structuredCaller: StructuredCaller;
+  /** Run reports root used by the shared report resolver. */
+  reportsRootDir?: string;
+  /** Exact resume snapshot consumer mapping used by the shared report resolver. */
+  resumeReportConsumerKey?: string;
   resolveStepProviderModel: (step: WorkflowStep) => StepProviderInfo;
   /** Callback for Phase 3 internal stage logging */
   onJudgeStage?: (

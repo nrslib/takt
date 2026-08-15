@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import type { WorkflowStep, RuleMatchMethod } from '../models/types.js';
 import { StatusJudgmentBuilder, type StatusJudgmentContext } from './instruction/StatusJudgmentBuilder.js';
 import { getJudgmentReportFiles } from './output-contract-files.js';
@@ -9,21 +7,9 @@ import { buildPhaseExecutionId } from '../../shared/utils/phaseExecutionId.js';
 import { recordJudgeStageSpan, runWithPhaseSpan } from './observability/workflowSpans.js';
 import { semanticRuleCandidatesOf } from '../models/workflow-rule-condition.js';
 import { RuleDetectionExhaustedError } from './evaluation/RuleDetectionExhaustedError.js';
-import { formatMissingReportReference } from './instruction/report-reference.js';
+import { resolveReportReferenceDetailed } from './instruction/report-reference.js';
 
 const log = createLogger('phase-runner');
-
-function readJudgmentReport(filePath: string): string | undefined {
-  try {
-    return readFileSync(filePath, 'utf-8');
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT' || code === 'ENOTDIR') {
-      return undefined;
-    }
-    throw error;
-  }
-}
 
 /** Result of Phase 3 status judgment, including the detection method. */
 export interface StatusJudgmentPhaseResult {
@@ -43,13 +29,15 @@ function buildBaseContext(
   if (reportFiles.length > 0) {
     let availableReportCount = 0;
     const reports = reportFiles.map((fileName) => {
-      const filePath = resolve(ctx.reportDir, fileName);
-      const reportContent = readJudgmentReport(filePath);
-      if (reportContent !== undefined) {
+      const resolvedReport = resolveReportReferenceDetailed(ctx.reportDir, fileName, {
+        stepName: step.name,
+        reportsRootDir: ctx.reportsRootDir,
+        resumeReportConsumerKey: ctx.resumeReportConsumerKey,
+      });
+      if (resolvedReport.scope !== 'missing') {
         availableReportCount += 1;
       }
-      const content = reportContent ?? formatMissingReportReference(fileName);
-      return `# ${fileName}\n\n${content}`;
+      return `# ${fileName}\n\n${resolvedReport.content}`;
     });
     if (availableReportCount === 0 && ctx.lastResponse) {
       return {

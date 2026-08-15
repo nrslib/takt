@@ -251,7 +251,9 @@ function parseResumeReportSnapshotManifest(value: unknown, targetRunSlug: string
     return { path: entry.path, size: entry.size, sha256: entry.sha256 };
   });
   const resumeReportConsumers = value.version === 2
-    ? parseResumeReportConsumers(value.resumeReportConsumers, seenPaths)
+    ? value.resumeReportConsumers === undefined
+      ? []
+      : parseResumeReportConsumers(value.resumeReportConsumers, seenPaths)
     : undefined;
   return {
     version: value.version,
