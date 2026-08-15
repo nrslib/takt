@@ -16,7 +16,7 @@ TAKT (TAKT Agent Koordination Topology) is a multi-agent orchestration CLI. It r
 | `npm run watch` | TypeScript incremental build (no asset copy). |
 | `npm run lint` | ESLint on `src/`. `no-explicit-any` is error; unused vars must be prefixed `_`. |
 | `npm test` | Fast unit gate: type-contracts tsc, then 4 shards launched **concurrently** (`Promise.all` in `scripts/run-npm-test.mjs`, each shard `--maxWorkers=1`). Excludes integration tests; the output names the follow-up command. |
-| `npm run test:it` | Light integration gate for real filesystem, SQLite, bounded storage, and multi-component contracts. Run after implementation. |
+| `npm run test:it` | Light integration gate for real filesystem, bounded storage, and multi-component contracts. Run after implementation. |
 | `npm run test:it:heavy` | Full heavy integration gate for real child processes, Git, complete engines, integration/regression/performance suites, and serial groups. Local execution uses one worker; PR CI shards across isolated runners. |
 | `npm test -- src/__tests__/<file>.test.ts` | Route a single file to the correct unit, light-IT, heavy-parallel-IT, or heavy-serial-IT runner. For an added or changed IT, also run `releaseVerificationWiring.test.ts` by itself. Always target-run an added or changed heavy IT before handoff. |
 | `npm test -- -t "<pattern>"` | Run unit tests whose name matches `<pattern>`. |

@@ -77,7 +77,7 @@ describe('persistExceededTaskResult', () => {
       task,
       runResult: {
         success: false,
-        reason: 'NEEDS_ADJUDICATION: finding invariant failed',
+        reason: 'REVIEW_FAILED: report validation failed',
         lastStep: 'reviewers',
         lastMessage: 'Provider failed with api_key=task-result-secret',
       },
@@ -92,7 +92,7 @@ describe('persistExceededTaskResult', () => {
       status: 'failed',
       failure: {
         step: 'reviewers',
-        error: 'NEEDS_ADJUDICATION: finding invariant failed',
+        error: 'REVIEW_FAILED: report validation failed',
         last_message: 'Provider failed with api_key=[REDACTED]',
       },
     });

@@ -337,114 +337,7 @@ describe('compileRuntimeProviderEnvironment fail-fast on structural inconsistenc
   });
 });
 
-describe('compileRuntimeProviderEnvironment (profile escalate)', () => {
-  const section = (escalate: string): RuntimeProviderSection => ({
-    defaults: { profile: 'weak' },
-    profiles: {
-      weak: { provider: 'opencode', model: 'ollama-cloud/gemma4:31b', escalate },
-      strong: {
-        provider: 'codex',
-        model: 'gpt-5.6-terra',
-        options: { reasoning_effort: 'high' },
-      },
-    },
-    targets: {
-      steps: { 'wf/review': { profile: 'weak' } },
-    },
-  });
-
-  it('resolves one escalate hop into a provider/model on every layer that names the profile', () => {
-    const env = compileRuntimeProviderEnvironment(section('strong'));
-
-    expect(env.escalation).toEqual({
-      profile: 'strong',
-      provider: 'codex',
-      model: 'gpt-5.6-terra',
-      providerOptions: { codex: { reasoningEffort: 'high' } },
-    });
-    expect(env.providerRouting?.steps?.['wf/review']?.escalation).toEqual(env.escalation);
-  });
-
-  it('leaves escalation unset for profiles without escalate', () => {
-    const env = compileRuntimeProviderEnvironment({
-      defaults: { profile: 'strong' },
-      profiles: { strong: { provider: 'codex', model: 'gpt-5.6-terra' } },
-    });
-
-    expect(env.escalation).toBeUndefined();
-  });
-
-  it('rejects an unknown escalate target', () => {
-    expect(() => compileRuntimeProviderEnvironment(section('missing')))
-      .toThrow(/Unknown profile "missing" referenced by profiles\.weak\.escalate/);
-  });
-
-  it('rejects a self-referencing escalate', () => {
-    expect(() => compileRuntimeProviderEnvironment(section('weak')))
-      .toThrow(/Profile "weak" cannot `escalate` to itself/);
-  });
-
-  it('rejects a cyclic escalate chain', () => {
-    expect(() => compileRuntimeProviderEnvironment({
-      defaults: { profile: 'weak' },
-      profiles: {
-        weak: { provider: 'opencode', model: 'weak-model', escalate: 'medium' },
-        medium: { provider: 'opencode', model: 'medium-model', escalate: 'strong' },
-        strong: { provider: 'opencode', model: 'strong-model', escalate: 'weak' },
-      },
-    })).toThrow(/Cyclic `escalate` chain detected/);
-  });
-
-  it('rejects an escalate target that resolves without provider/model', () => {
-    expect(() => compileRuntimeProviderEnvironment({
-      defaults: { profile: 'weak' },
-      profiles: {
-        weak: { provider: 'opencode', model: 'weak-model', escalate: 'partial' },
-        partial: { model: 'no-provider' },
-      },
-    })).toThrow(/must define both `provider` and `model`/);
-  });
-
-  it('rejects an empty-string escalate target at the configuration boundary', () => {
-    expect(() => compileRuntimeProviderEnvironment({
-      defaults: { profile: 'weak' },
-      profiles: {
-        weak: { provider: 'opencode', model: 'weak-model', escalate: '' },
-      },
-    })).toThrow();
-  });
-
-  it('does not carry an escalation target onto auto-routing pool candidates', () => {
-    const env = compileRuntimeProviderEnvironment({
-      defaults: { profile: 'weak' },
-      profiles: {
-        weak: { provider: 'codex', model: 'weak-model', escalate: 'strong' },
-        strong: { provider: 'codex', model: 'strong-model' },
-        router: { provider: 'codex', model: 'router-model' },
-      },
-      auto_routing: {
-        router_profile: 'router',
-        pools: {
-          'review-pool': {
-            candidates: [
-              { profile: 'weak', tier: 'low' },
-              { profile: 'strong', tier: 'high' },
-            ],
-            fallback_profile: 'strong',
-          },
-        },
-      },
-    });
-
-    // defaults は固定 profile として解決されるため、その profile の escalation は保持する。
-    expect(env.escalation?.profile).toBe('strong');
-    // 件数を先に固定する。空配列だとループ本体が一度も走らず無検証で通る。
-    expect(env.autoRouting!.candidates).toHaveLength(2);
-    for (const candidate of env.autoRouting!.candidates) {
-      expect(candidate).not.toHaveProperty('escalation');
-    }
-  });
-
+describe('compileRuntimeProviderEnvironment (internal agent seats)', () => {
   it('compiles the loop-judge seat', () => {
     const env = compileRuntimeProviderEnvironment({
       defaults: { profile: 'weak' },
@@ -482,32 +375,6 @@ describe('compileRuntimeProviderEnvironment (profile escalate)', () => {
     })).toThrow(/supports only .*loop-judge.*got "reviewer"/);
   });
 
-  it('does not hand internal agents an escalation target they never consume', () => {
-    const env = compileRuntimeProviderEnvironment({
-      defaults: { profile: 'weak' },
-      profiles: {
-        weak: { provider: 'codex', model: 'weak-model', escalate: 'strong' },
-        strong: { provider: 'codex', model: 'strong-model' },
-      },
-      targets: { internal_agents: { selector: { profile: 'weak' } } },
-    });
-
-    expect(env.internalAgents?.selector).toEqual({ provider: 'codex', model: 'weak-model' });
-  });
-
-  it('inherits escalate through the extends chain', () => {
-    const env = compileRuntimeProviderEnvironment({
-      defaults: { profile: 'derived' },
-      profiles: {
-        base: { provider: 'opencode', model: 'weak-model', escalate: 'strong' },
-        derived: { extends: 'base', model: 'derived-model' },
-        strong: { provider: 'opencode', model: 'strong-model' },
-      },
-    });
-
-    expect(env.model).toBe('derived-model');
-    expect(env.escalation).toMatchObject({ profile: 'strong', model: 'strong-model' });
-  });
 });
 
 describe('collectLegacyProviderSignals', () => {

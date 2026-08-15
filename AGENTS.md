@@ -15,7 +15,7 @@
 - `npm run watch`: run the TypeScript compiler in incremental watch mode.
 - `npm run lint`: run ESLint on `src/`.
 - `npm test`: run the fast unit gate in four concurrent shards during development. Integration tests are excluded; targeted source tests are routed to their classified runner.
-- `npm run test:it`: run the light integration gate after implementation. It covers real filesystem, SQLite, bounded storage, and multi-component contracts.
+- `npm run test:it`: run the light integration gate after implementation. It covers real filesystem, bounded storage, and multi-component contracts.
 - `npm run test:it:heavy`: run all child-process, Git, full-engine, and measured resource-heavy integration tests locally with one worker. Pull-request CI splits it across isolated runners; do not run it routinely during development.
 - `npm test -- <test-file>`: run a classified test through its unit, light-IT, or heavy-IT runner. When adding or changing an IT, also run `npm test -- src/__tests__/releaseVerificationWiring.test.ts` by itself. Always run an added or changed heavy IT before handoff; the PR-wide heavy gate is not its first execution.
 - `npm run test:e2e:mock`: run E2E tests against the mock provider.

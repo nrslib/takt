@@ -146,8 +146,7 @@ export function inferSeverity(findingId: string): FindingSeverity {
   return 'warning';
 }
 
-const FINDING_ID_PATTERN = /\b(?:F-\d{4}|[A-Z]{2,}-(?:NEW-)?[\w-]+)\b/g;
-const REMOVED_ENGINE_FINDING_ID_PATTERN = /^F-\d{4}$/;
+const FINDING_ID_PATTERN = /\b[A-Z]{2,}-(?:NEW-)?[\w-]+\b/g;
 
 export function emitFixActionEvents(
   responseContent: string,
@@ -199,8 +198,7 @@ function emitActionEvents(
   const matches = responseContent.match(FINDING_ID_PATTERN);
   if (!matches) return;
 
-  const uniqueIds = [...new Set(matches)]
-    .filter((findingId) => !REMOVED_ENGINE_FINDING_ID_PATTERN.test(findingId));
+  const uniqueIds = [...new Set(matches)];
   for (const findingId of uniqueIds) {
     const event: FixActionEvent = {
       type: 'fix_action',

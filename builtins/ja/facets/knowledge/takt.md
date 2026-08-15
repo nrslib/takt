@@ -127,8 +127,8 @@ TAKT は、テスト名や所要時間ではなく実際にまたぐ境界で un
 
 | レイヤー | 境界 | 標準ゲート |
 |---------|------|-----------|
-| unit | 個別関数・クラス。直接依存を test double に置き換え、実 process・Git・filesystem・SQLite・workflow engine を使わない | `npm test` |
-| 軽い IT | 実 filesystem・SQLite・bounded storage、または複数の本番コンポーネントを結合するが、高負荷な process / engine 実行を伴わない | `npm run test:it` |
+| unit | 個別関数・クラス。直接依存を test double に置き換え、実 process・Git・filesystem・workflow engine を使わない | `npm test` |
+| 軽い IT | 実 filesystem・bounded storage、または複数の本番コンポーネントを結合するが、高負荷な process / engine 実行を伴わない | `npm run test:it` |
 | 重い IT | 実 child process・Git・完全な WorkflowEngine / TeamLeader、または計測上 serial 実行が必要な高負荷ケース | `npm run test:it:heavy` |
 | E2E | 利用者が使う CLI などの公開入口からアプリケーション全体を実行し、利用者から見える結果を観測する | provider 別 E2E gate |
 

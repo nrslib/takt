@@ -19,7 +19,7 @@
     "takt-mcp": "./dist/app/mcp/index.js"
   },
   "scripts": {
-    "build": "tsc && tsc -p tsconfig.opencode-probe.json && node scripts/copy-build-assets.mjs",
+    "build": "node scripts/clean-build-output.mjs && tsc && tsc -p tsconfig.opencode-probe.json && node scripts/copy-build-assets.mjs",
     "watch": "tsc --watch",
     "analyze:usage": "node dist/commands/analyze-usage.js",
     "eval:prompts:prepare": "node eval/scripts/prepare.mjs",

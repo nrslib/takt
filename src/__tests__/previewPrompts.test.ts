@@ -6,10 +6,6 @@ import type {
 } from '../infra/config/runtime-provider/provider-environment.js';
 import { getProviderValidationErrorSource } from '../core/workflow/provider-validation-error.js';
 
-const VALID_ADJUDICATOR = {
-  persona: 'supervisor',
-};
-
 const {
   mockLoadWorkflowByIdentifier,
   mockResolveWorkflowConfigValue,
@@ -76,7 +72,6 @@ function compiledEnvironment(
       providerRouting: undefined,
       autoRouting: undefined,
       providerOptions: undefined,
-      escalation: undefined,
       tagConflictPolicy: 'last-wins',
       internalAgents: undefined,
       providerLadders: undefined,

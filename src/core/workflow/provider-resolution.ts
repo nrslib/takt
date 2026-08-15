@@ -1,5 +1,5 @@
 import type { LoopMonitorJudge, WorkflowConfig, WorkflowStep } from '../models/types.js';
-import type { AutoRoutingConfig, PersonaProviderEntry, ProviderEscalationTarget, ProviderRoutingConfig, ProviderRoutingEntry, TagRoutingConflictPolicy } from '../models/config-types.js';
+import type { AutoRoutingConfig, PersonaProviderEntry, ProviderRoutingConfig, ProviderRoutingEntry, TagRoutingConflictPolicy } from '../models/config-types.js';
 import {
   resolveProviderModelCandidates,
   resolveModelFromCandidates,
@@ -15,8 +15,6 @@ export interface ProviderModelResolutionContext {
   autoRouting?: AutoRoutingConfig;
   providerRouting?: ProviderRoutingConfig;
   personaProviders?: Record<string, PersonaProviderEntry>;
-  /** `escalate` target of the profile behind the engine-level `provider`/`model` defaults. */
-  escalation?: ProviderEscalationTarget;
   /** Permission mode tied to the engine-level runtime defaults profile. */
   permissionMode?: import('../models/types.js').PermissionMode;
 }
@@ -48,12 +46,6 @@ export interface StepProviderModelOutput {
   modelSource?: ProviderResolutionSource;
   permissionMode?: import('../models/types.js').PermissionMode;
   providerOptions?: import('../models/workflow-types.js').StepProviderOptions;
-  /**
-   * `escalate` target declared by the runtime.yaml profile that supplied the provider.
-   * A profile always carries provider and model together, so the provider-winning layer is
-   * the layer that identifies the profile.
-   */
-  escalation?: ProviderEscalationTarget;
 }
 
 export interface WorkflowCallProviderModelInput {
@@ -212,12 +204,10 @@ function stableSerialize(value: unknown): string {
 }
 
 export function tagRoutingEntryIdentity(
-  entry: Pick<ProviderRoutingEntry, 'provider' | 'model' | 'providerOptions' | 'permissionMode' | 'escalation'>,
+  entry: Pick<ProviderRoutingEntry, 'provider' | 'model' | 'providerOptions' | 'permissionMode'>,
 ): string {
   const options = entry.providerOptions !== undefined ? stableSerialize(entry.providerOptions) : '';
-  // escalate 先が違えば別の割り当てである。identity から外すと、格上げ先だけが
-  // 異なる2つの tag 割り当てが「同じ」と判定され、fail-fast を素通りする。
-  return `${entry.provider ?? ''}::${entry.model ?? ''}::${options}::${entry.permissionMode ?? ''}::${entry.escalation?.profile ?? ''}`;
+  return `${entry.provider ?? ''}::${entry.model ?? ''}::${options}::${entry.permissionMode ?? ''}`;
 }
 
 /**
@@ -244,7 +234,7 @@ function resolveTagProviderRoutingEntry(
   providerRouting: ProviderRoutingConfig | undefined,
   tags: readonly string[] | undefined,
   tagConflictPolicy: TagRoutingConflictPolicy | undefined,
-): Pick<ProviderRoutingEntry, 'provider' | 'model' | 'permissionMode' | 'escalation'> | undefined {
+): Pick<ProviderRoutingEntry, 'provider' | 'model' | 'permissionMode'> | undefined {
   if (!providerRouting?.tags || !tags || tags.length === 0) {
     return undefined;
   }
@@ -267,12 +257,6 @@ function resolveTagProviderRoutingEntry(
   let resolved: ProviderRoutingEntry | undefined;
   for (const tag of matchedTags) {
     const entry = routingTags[tag] as ProviderRoutingEntry;
-    // escalation は provider を供給した profile のものなので provider と一緒に動く。
-    // provider を上書きするブランチでは、上書き元が escalate を持たない場合でも
-    // 前の entry の escalation を必ず捨てる（残すと別 profile の格上げ先が付く）。
-    const escalationOverride = entry.provider !== undefined
-      ? entry.escalation
-      : resolved?.escalation;
     const permissionModeOverride = entry.provider !== undefined
       ? entry.permissionMode
       : resolved?.permissionMode;
@@ -282,7 +266,6 @@ function resolveTagProviderRoutingEntry(
       ...(entry.provider !== undefined ? { provider: entry.provider } : {}),
       ...(entry.model !== undefined ? { model: entry.model } : {}),
       ...(permissionModeOverride !== undefined ? { permissionMode: permissionModeOverride } : {}),
-      ...(escalationOverride !== undefined ? { escalation: escalationOverride } : {}),
     };
   }
   return resolved;
@@ -414,13 +397,6 @@ export function resolveStepProviderModel(input: StepProviderModelInput): StepPro
     modelSource = lowerModel.source;
   }
 
-  const escalation = resolveEscalationForProviderSource(providerSource, {
-    'provider_routing.steps': routingStepEntry?.escalation,
-    'provider_routing.tags': routingTagEntry?.escalation,
-    'provider_routing.personas': routingPersonaEntry?.escalation,
-    persona_providers: personaEntry?.escalation,
-    'runtime-v1': input.escalation,
-  });
   const permissionMode = resolveValueForProviderSource(providerSource, {
     'provider_routing.steps': routingStepEntry?.permissionMode,
     'provider_routing.tags': routingTagEntry?.permissionMode,
@@ -435,7 +411,6 @@ export function resolveStepProviderModel(input: StepProviderModelInput): StepPro
     providerSource,
     modelSource,
     ...(permissionMode !== undefined ? { permissionMode } : {}),
-    ...(escalation !== undefined ? { escalation } : {}),
   };
 }
 
@@ -444,17 +419,6 @@ function resolveValueForProviderSource<T>(
   bySource: Partial<Record<ProviderResolutionSource, T | undefined>>,
 ): T | undefined {
   return providerSource === undefined ? undefined : bySource[providerSource];
-}
-
-/**
- * Only layers that resolve to a runtime.yaml profile carry an escalation target. An explicit
- * CLI/step/workflow_call provider deliberately overrides the profile, so it escalates nowhere.
- */
-function resolveEscalationForProviderSource(
-  providerSource: ProviderResolutionSource | undefined,
-  bySource: Partial<Record<ProviderResolutionSource, ProviderEscalationTarget | undefined>>,
-): ProviderEscalationTarget | undefined {
-  return resolveValueForProviderSource(providerSource, bySource);
 }
 
 export function resolveWorkflowCallProviderModel(

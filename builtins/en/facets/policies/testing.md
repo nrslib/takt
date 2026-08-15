@@ -286,5 +286,5 @@ writeConfig({ backend: 'postgres', connectionPool: 10 })
 
 // ✅ Parameter-driven
 const backend = process.env.TEST_BACKEND ?? 'postgres'
-writeConfig({ backend, connectionPool: backend === 'sqlite' ? 1 : 10 })
+writeConfig({ backend, connectionPool: backend === 'embedded' ? 1 : 10 })
 ```

@@ -14,7 +14,7 @@ import {
 } from './completion-retry-reference-discovery.js';
 
 export const COMPLETION_RETRY_EVIDENCE_MAX_PATHS = 64;
-const COMPLETION_RETRY_EVIDENCE_MAX_CLAIMED_PATHS = 16;
+const COMPLETION_RETRY_EVIDENCE_MAX_PRIOR_GAP_PATHS = 16;
 export const COMPLETION_RETRY_EVIDENCE_MAX_PATH_BYTES = 1024;
 export const COMPLETION_RETRY_EVIDENCE_MAX_FILE_BYTES = 32 * 1024;
 export const COMPLETION_RETRY_EVIDENCE_MAX_DIFF_BYTES = 256 * 1024;
@@ -28,7 +28,7 @@ type CompletionRetryEvidenceOmissionReason = CompletionRetryReferenceOmissionRea
   | 'file_unavailable'
   | 'path_limit'
   | 'path_size_limit'
-  | 'claimed_path_unverified'
+  | 'prior_gap_path_unverified'
   | 'sensitive_path'
   | 'total_size_limit'
   | 'unsupported_scope';
@@ -49,7 +49,6 @@ export interface CompletionRetryEvidence {
   readonly files: readonly CompletionRetryEvidenceFile[];
   readonly diff?: string;
   readonly references: readonly CompletionRetryReferenceEvidence[];
-  readonly claimedPaths: readonly string[];
   readonly priorGapPaths: readonly string[];
   readonly omissions: readonly CompletionRetryEvidenceOmission[];
 }
@@ -82,7 +81,7 @@ function decodeNulPaths(content: Buffer): string[] {
   return decoded.slice(0, -1).split('\0');
 }
 
-function trackedClaimedPaths(cwd: string, paths: readonly string[]): Set<string> {
+function trackedPriorGapPaths(cwd: string, paths: readonly string[]): Set<string> {
   if (paths.length === 0) return new Set();
   const output = execFileSync('git', ['ls-files', '--cached', '-z', '--', ...paths], {
     cwd,
@@ -100,44 +99,6 @@ function isCanonicalRepositoryPath(path: string): boolean {
     && path !== '..'
     && !path.startsWith('../')
     && posix.normalize(path) === path;
-}
-
-function stringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
-}
-
-/**
- * Extract repository paths only from the reviewer's structured finding contract.
- * Free-form prose is deliberately ignored: every returned path still has to pass
- * the tracked-file and filesystem safety checks in collectCompletionRetryEvidence.
- */
-export function completionRetryClaimedPaths(structuredOutput: Record<string, unknown> | undefined): string[] {
-  const rawFindings = structuredOutput?.rawFindings;
-  if (!Array.isArray(rawFindings)) return [];
-  const paths = new Set<string>();
-  for (const entry of rawFindings.slice(0, COMPLETION_RETRY_EVIDENCE_MAX_CLAIMED_PATHS)) {
-    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue;
-    const raw = entry as Record<string, unknown>;
-    const candidate = typeof raw.candidate === 'object' && raw.candidate !== null
-      && !Array.isArray(raw.candidate)
-      ? raw.candidate as Record<string, unknown>
-      : raw;
-    const target = typeof candidate.target === 'object' && candidate.target !== null
-      && !Array.isArray(candidate.target)
-      ? candidate.target as Record<string, unknown>
-      : undefined;
-    stringArray(target?.paths).forEach((path) => paths.add(path));
-    stringArray(target?.manifestTargets).forEach((path) => paths.add(path));
-    const evidence = Array.isArray(candidate.evidenceRequests)
-      ? candidate.evidenceRequests
-      : Array.isArray(raw.evidence) ? raw.evidence : [];
-    for (const item of evidence) {
-      if (typeof item !== 'object' || item === null || Array.isArray(item)) continue;
-      const record = item as Record<string, unknown>;
-      if (record.kind === 'file_quote' && typeof record.path === 'string') paths.add(record.path);
-    }
-  }
-  return [...paths];
 }
 
 function collectWorkingTreeDiff(
@@ -207,7 +168,6 @@ function buildEvidence(
   files: readonly CompletionRetryEvidenceFile[],
   diff: string | undefined,
   references: readonly CompletionRetryReferenceEvidence[],
-  claimedPaths: readonly string[],
   priorGapPaths: readonly string[],
   omissionCounts: ReadonlyMap<CompletionRetryEvidenceOmissionReason, number>,
 ): CompletionRetryEvidence {
@@ -215,14 +175,12 @@ function buildEvidence(
     status: files.length === 0
       && diff === undefined
       && references.length === 0
-      && claimedPaths.length === 0
       && priorGapPaths.length === 0
       ? 'omitted'
       : 'collected',
     files,
     ...(diff === undefined ? {} : { diff }),
     references,
-    claimedPaths,
     priorGapPaths,
     omissions: omissionsFrom(omissionCounts),
   };
@@ -232,7 +190,6 @@ function enforceSerializedLimit(
   files: CompletionRetryEvidenceFile[],
   diff: string | undefined,
   references: CompletionRetryReferenceEvidence[],
-  claimedPaths: string[],
   priorGapPaths: string[],
   omissionCounts: Map<CompletionRetryEvidenceOmissionReason, number>,
 ): CompletionRetryEvidence {
@@ -241,7 +198,6 @@ function enforceSerializedLimit(
     files,
     currentDiff,
     references,
-    claimedPaths,
     priorGapPaths,
     omissionCounts,
   );
@@ -255,7 +211,6 @@ function enforceSerializedLimit(
       files,
       currentDiff,
       references,
-      claimedPaths,
       priorGapPaths,
       omissionCounts,
     );
@@ -295,7 +250,6 @@ function enforceSerializedLimit(
       files,
       currentDiff,
       references,
-      claimedPaths,
       priorGapPaths,
       omissionCounts,
     );
@@ -304,7 +258,6 @@ function enforceSerializedLimit(
     retained,
     currentDiff,
     references,
-    claimedPaths,
     priorGapPaths,
     omissions,
   ));
@@ -312,7 +265,6 @@ function enforceSerializedLimit(
     files,
     currentDiff,
     retained,
-    claimedPaths,
     priorGapPaths,
     omissions,
   ));
@@ -320,22 +272,13 @@ function enforceSerializedLimit(
     files,
     currentDiff,
     references,
-    claimedPaths,
     retained,
-    omissions,
-  ));
-  trimTrailingItems(claimedPaths, 'total_size_limit', (retained, omissions) => buildEvidence(
-    files,
-    currentDiff,
-    references,
-    retained,
-    priorGapPaths,
     omissions,
   ));
   return evidence;
 }
 
-function collectSupplementalPaths(input: {
+function collectPriorGapPaths(input: {
   readonly cwd: string;
   readonly paths: readonly string[];
   readonly excludedPaths: ReadonlySet<string>;
@@ -343,13 +286,13 @@ function collectSupplementalPaths(input: {
 }): string[] {
   const novelPaths = [...new Set(input.paths)]
     .filter((path) => !input.excludedPaths.has(path));
-  const boundedPaths = novelPaths.slice(0, COMPLETION_RETRY_EVIDENCE_MAX_CLAIMED_PATHS);
+  const boundedPaths = novelPaths.slice(0, COMPLETION_RETRY_EVIDENCE_MAX_PRIOR_GAP_PATHS);
   if (novelPaths.length > boundedPaths.length) {
     addOmission(input.omissionCounts, 'path_limit', novelPaths.length - boundedPaths.length);
   }
   const candidates = boundedPaths.filter((path) => {
     if (!isCanonicalRepositoryPath(path)) {
-      addOmission(input.omissionCounts, 'claimed_path_unverified');
+      addOmission(input.omissionCounts, 'prior_gap_path_unverified');
       return false;
     }
     if (Buffer.byteLength(path, 'utf8') > COMPLETION_RETRY_EVIDENCE_MAX_PATH_BYTES) {
@@ -364,15 +307,15 @@ function collectSupplementalPaths(input: {
   });
   let trackedPaths: Set<string> | undefined;
   try {
-    trackedPaths = trackedClaimedPaths(input.cwd, candidates);
+    trackedPaths = trackedPriorGapPaths(input.cwd, candidates);
   } catch {
-    addOmission(input.omissionCounts, 'claimed_path_unverified', candidates.length);
+    addOmission(input.omissionCounts, 'prior_gap_path_unverified', candidates.length);
   }
   const admittedPaths: string[] = [];
   if (trackedPaths === undefined) return admittedPaths;
   for (const path of candidates) {
     if (!trackedPaths.has(path)) {
-      addOmission(input.omissionCounts, 'claimed_path_unverified');
+      addOmission(input.omissionCounts, 'prior_gap_path_unverified');
       continue;
     }
     try {
@@ -382,11 +325,11 @@ function collectSupplementalPaths(input: {
         (_violation, segmentPath) => new Error(`Unsafe completion retry reference path: ${segmentPath}`),
       );
       if (inspected === null || !inspected.isFile()) {
-        addOmission(input.omissionCounts, 'claimed_path_unverified');
+        addOmission(input.omissionCounts, 'prior_gap_path_unverified');
         continue;
       }
     } catch {
-      addOmission(input.omissionCounts, 'claimed_path_unverified');
+      addOmission(input.omissionCounts, 'prior_gap_path_unverified');
       continue;
     }
     admittedPaths.push(path);
@@ -397,13 +340,12 @@ function collectSupplementalPaths(input: {
 export function collectCompletionRetryEvidence(input: {
   readonly cwd: string;
   readonly reviewScope: TaskReviewScope | undefined;
-  readonly claimedPaths?: readonly string[];
   readonly priorGapPaths?: readonly string[];
 }): CompletionRetryEvidence {
   const omissionCounts = new Map<CompletionRetryEvidenceOmissionReason, number>();
   if (input.reviewScope === undefined || input.reviewScope.kind !== 'collected') {
     addOmission(omissionCounts, 'unsupported_scope');
-    return buildEvidence([], undefined, [], [], [], omissionCounts);
+    return buildEvidence([], undefined, [], [], omissionCounts);
   }
   const reviewScope = input.reviewScope;
 
@@ -495,23 +437,17 @@ export function collectCompletionRetryEvidence(input: {
   }
 
   const selectedPathSet = new Set(selectedPaths);
-  const claimedPaths = collectSupplementalPaths({
-    cwd: input.cwd,
-    paths: input.claimedPaths ?? [],
-    excludedPaths: selectedPathSet,
-    omissionCounts,
-  });
-  const priorGapPaths = collectSupplementalPaths({
+  const priorGapPaths = collectPriorGapPaths({
     cwd: input.cwd,
     paths: input.priorGapPaths ?? [],
-    excludedPaths: new Set([...selectedPathSet, ...claimedPaths]),
+    excludedPaths: selectedPathSet,
     omissionCounts,
   });
   const discovered = discoverCompletionRetryReferences({
     cwd: input.cwd,
     changedFiles: files.map(({ path, content }) => ({ path, content })),
     diff,
-    excludedPaths: new Set([...selectedPathSet, ...claimedPaths, ...priorGapPaths]),
+    excludedPaths: new Set([...selectedPathSet, ...priorGapPaths]),
     limits: {
       maxPathBytes: COMPLETION_RETRY_EVIDENCE_MAX_PATH_BYTES,
       maxFileBytes: COMPLETION_RETRY_EVIDENCE_MAX_FILE_BYTES,
@@ -525,7 +461,6 @@ export function collectCompletionRetryEvidence(input: {
     files,
     diff,
     [...discovered.references],
-    claimedPaths,
     priorGapPaths,
     omissionCounts,
   );

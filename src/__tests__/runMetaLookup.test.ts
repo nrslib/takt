@@ -97,7 +97,7 @@ describe('run-meta lookup', () => {
       startTime: '2026-08-02T15:26:51.000Z',
       failure: {
         step: 'reviewers',
-        error: 'NEEDS_ADJUDICATION: finding invariant failed',
+        error: 'REVIEW_FAILED: report validation failed',
         failureCategory: 'provider_stream_parse_error',
       },
     });
@@ -108,7 +108,7 @@ describe('run-meta lookup', () => {
 
     expect(meta?.failure).toEqual({
       step: 'reviewers',
-      error: 'NEEDS_ADJUDICATION: finding invariant failed',
+      error: 'REVIEW_FAILED: report validation failed',
       failureCategory: 'provider_stream_parse_error',
     });
   });

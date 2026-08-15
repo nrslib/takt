@@ -569,14 +569,6 @@ describe('npm test entrypoint routing', () => {
     ]);
   });
 
-  it('should route the removed workflow syntax compatibility test to the light runner', () => {
-    const args = ['src/__tests__/workflow-removed-syntax.test.ts'];
-
-    expect(selectNpmTestRuns(args)).toEqual([
-      { npmArgs: ['run', 'test:it:light', '--', ...args] },
-    ]);
-  });
-
   it('should keep targeted unit tests on the unit runner', () => {
     const args = ['src/__tests__/option-resolution-order.test.ts'];
 

@@ -19,7 +19,6 @@ export type WorkflowCallProviderContext = Pick<
   | 'model'
   | 'modelSource'
   | 'providerPermissionMode'
-  | 'providerEscalation'
   | 'autoRouting'
   | 'personaProviders'
   | 'providerRouting'
@@ -32,7 +31,6 @@ export type WorkflowCallProviderModel = {
   model: WorkflowEngineOptions['model'];
   modelSource: WorkflowEngineOptions['modelSource'];
   permissionMode?: WorkflowEngineOptions['providerPermissionMode'];
-  providerEscalation: WorkflowEngineOptions['providerEscalation'];
 };
 
 export function getWorkflowCallOverrideErrorPath(
@@ -86,12 +84,6 @@ function applyWorkflowCallOverridesToProviderEntries<T extends PersonaProviderEn
       if ((!profileScoped || overrideProvider === undefined) && entry.providerOptions !== undefined) {
         nextEntry.providerOptions = entry.providerOptions;
       }
-      // escalate 先は provider を供給した profile のもの。provider を上書きしたら
-      // その entry はもう元の profile ではないので落とし、model だけの上書きなら
-      // provider は profile 由来のままなので維持する。
-      if (overrideProvider === undefined && entry.escalation !== undefined) {
-        nextEntry.escalation = entry.escalation;
-      }
       if (overrideProvider === undefined && entry.permissionMode !== undefined) {
         nextEntry.permissionMode = entry.permissionMode;
       }
@@ -138,7 +130,6 @@ export function resolveWorkflowCallChildProviderModel(
     | 'model'
     | 'modelSource'
     | 'providerPermissionMode'
-    | 'providerEscalation'
   >,
 ): WorkflowCallProviderModel {
   const childProviderInfo = resolveWorkflowCallProviderModel({
@@ -156,13 +147,6 @@ export function resolveWorkflowCallChildProviderModel(
     modelSpecified: overrides?.model !== undefined,
     source: 'workflow_call',
   });
-  // 親の escalate 先は「親の provider を供給した profile」のもの。子の
-  // workflow provider 宣言や overrides.provider で provider の出所が変われば
-  // その profile ではなくなるので落とす。model だけの上書きは provider の出所を
-  // 変えないので維持する。
-  const providerEscalation = resolved.providerSource === parentContext.providerSource
-    ? parentContext.providerEscalation
-    : undefined;
   const permissionMode = resolved.providerSource === childProviderInfo.providerSource
     ? childProviderInfo.permissionMode
     : undefined;
@@ -172,7 +156,6 @@ export function resolveWorkflowCallChildProviderModel(
     model: resolved.model,
     modelSource: resolved.modelSource,
     permissionMode,
-    providerEscalation,
   };
 }
 

@@ -33,49 +33,6 @@ function generateMockSessionId(): string {
   return `mock-session-${randomUUID()}`;
 }
 
-function managerTaskResponse(prompt: string): Record<string, unknown> {
-  const match = /## Task manifest\n(`{3,})json\n([\s\S]*?)\n\1/u.exec(prompt);
-  if (match?.[2] === undefined) {
-    throw new Error('Mock manager task response requires an engine task manifest');
-  }
-  const manifest = JSON.parse(match[2]) as {
-    taskId?: unknown;
-    rawFindings?: unknown;
-  };
-  if (typeof manifest.taskId !== 'string' || !Array.isArray(manifest.rawFindings)) {
-    throw new Error('Mock manager task response received an invalid raw task manifest');
-  }
-  return {
-    taskId: manifest.taskId,
-    decisions: manifest.rawFindings.map((raw) => {
-      if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-        throw new Error('Mock manager task response received an invalid raw finding');
-      }
-      const rawFinding = raw as { rawFindingId?: unknown; componentId?: unknown };
-      if (typeof rawFinding.rawFindingId !== 'string' || typeof rawFinding.componentId !== 'string') {
-        throw new Error('Mock manager task response received an invalid raw finding identity');
-      }
-      return {
-        componentId: rawFinding.componentId,
-        rawFindingId: rawFinding.rawFindingId,
-        decision: 'new',
-        findingId: '',
-        evidence: 'Mock manager accepted the new finding.',
-      };
-    }),
-  };
-}
-
-function scenarioStructuredOutput(
-  entry: ScenarioEntry | undefined,
-  prompt: string,
-): Record<string, unknown> | undefined {
-  if (entry?.mockTaskResponse === 'main_manager_raw_decisions') {
-    return managerTaskResponse(prompt);
-  }
-  return entry?.structuredOutput;
-}
-
 function structuredTextOutput(
   schema: Record<string, unknown> | undefined,
   content: string,
@@ -284,7 +241,7 @@ export async function callMock(
     content,
     timestamp: new Date(),
     sessionId,
-    structuredOutput: scenarioStructuredOutput(scenarioEntry, prompt)
+    structuredOutput: scenarioEntry?.structuredOutput
       ?? options.structuredOutput
       ?? structuredTextOutput(options.outputSchema, content),
     error: scenarioEntry?.error ?? options.error,

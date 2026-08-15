@@ -17,7 +17,6 @@
 
 ### Changed
 
-- **BREAKING:** Finding Contract の設定・実行・永続化機構を削除しました。旧構文を含む workflow は移行先を示す load error になり、既存の `finding-contract.sqlite` は削除・移行・読み込みを行わずそのまま保持します。レビュー構成は `review-adjudication`、要求シナリオ、`final-gate` を使用してください。
 - **BREAKING:** ビルトインの TAKT 開発系・Finding Contract 系ワークフロー変種を統廃合しました (#1296)。`takt-default-fc`、`takt-default-high`、`takt-default-team-high`、`takt-default-localllm`、`review-fix-takt-default-high`、および Finding Contract のビルトインサブワークフロー（`finding-contract-boundary-review`、`finding-contract-local-review`、`finding-contract-remediation`、`merge-readiness-finding-contract-final-gate`、`peer-review-finding-contract`、`peer-review-finding-contract-localllm`、`peer-review-suite-finding-contract-base`）を削除しました。TAKT 開発は `takt-default` と新設の `takt-experimental` に集約され、共有の `development-core` は差し替え可能な `development-implement` / `development-remediation` サブワークフロー（および `-dynamic` 変種）を裁定・検証付き修正・フォローアップレビュー・merge-readiness とともに合成し、実装 facet pool と companion をパラメータ化します。
 - `experimental` ワークフローを共有 development core の上に再構成しました (#1263, #1296, #1299)。`development-core` への薄い wrapper となり、動的な実装・修復サブワークフローを使い、レビュアースイートは `experimental-review-adapter` 経由で束縛され、同梱の AI アンチパターンレビュー companion とモデレーターがデフォルトで有効です — `experimental` の実行には実装中の companion レビューが含まれるようになりました。
 - `assistant.gherkin` がグローバル設定になりました (#1260)。従来はプロジェクト専用でしたが `~/.takt/config.yaml` にも書けるようになり、プロジェクトの明示値がグローバル値を上書きします。

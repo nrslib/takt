@@ -128,7 +128,7 @@ describe('workflowExecutionReporting', () => {
         endTime: '2026-04-14T00:00:01.000Z',
       },
       1,
-      'SQLite setup failed',
+      'Runtime setup failed',
       'failed',
       '/tmp/project/.takt/runs/run-843/logs/session.jsonl',
       true,
@@ -142,7 +142,7 @@ describe('workflowExecutionReporting', () => {
     );
     expect(mockNotifyError).toHaveBeenCalledWith(
       'TAKT',
-      expect.stringContaining('Failed: SQLite setup failed'),
+      expect.stringContaining('Failed: Runtime setup failed'),
     );
   });
 

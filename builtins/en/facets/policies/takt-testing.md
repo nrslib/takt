@@ -22,7 +22,7 @@ Use the unit, light integration, heavy integration, and E2E boundary definitions
 | Criteria | Judgment |
 |----------|----------|
 | Individual logic with direct dependencies replaced by test doubles | Unit |
-| Real filesystem, SQLite, bounded storage, or multi-component composition | Light integration |
+| Real filesystem, bounded storage, or multi-component composition | Light integration |
 | Real child process, Git, complete workflow engine, or measured resource-heavy execution | Heavy integration |
 | Full execution from a user-facing entry point with user-visible observations | E2E |
 | Real process used by an internal client to call a fake CLI | Heavy integration, not E2E |

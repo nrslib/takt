@@ -128,7 +128,6 @@ export class WorkflowCallRunner {
     model: string | undefined;
     modelSource: WorkflowEngineOptions['modelSource'];
     providerPermissionMode: WorkflowEngineOptions['providerPermissionMode'];
-    providerEscalation: WorkflowEngineOptions['providerEscalation'];
     providerOptions: WorkflowEngineOptions['providerOptions'];
   } {
     const options = this.deps.getOptions();
@@ -154,11 +153,6 @@ export class WorkflowCallRunner {
       model: providerInfo.model,
       modelSource: providerInfo.modelSource,
       providerPermissionMode: providerInfo.permissionMode,
-      // 親 workflow 自身の provider 宣言が勝った場合、engine 既定 profile の
-      // 格上げ先はもうその provider のものではないので引き継がない。
-      providerEscalation: providerInfo.providerSource === options.providerSource
-        ? options.providerEscalation
-        : undefined,
       providerOptions,
     };
   }
@@ -685,7 +679,6 @@ export class WorkflowCallRunner {
           model: runtimeProviderInfo.model,
           modelSource: runtimeProviderInfo.modelSource,
           permissionMode: runtimeProviderInfo.permissionMode,
-          providerEscalation: undefined,
         }
       : this.resolveChildProviderModel(step, childWorkflow);
     const parentProviderContext = this.resolveParentWorkflowProviderContext();
@@ -703,7 +696,6 @@ export class WorkflowCallRunner {
       personaProviders: this.buildChildPersonaProviders(step),
       providerRouting: this.buildChildProviderRouting(step),
       providerLadders: this.buildChildProviderLadders(),
-      providerEscalation: childProviderModel.providerEscalation,
     }, {
       syncParentState,
     });

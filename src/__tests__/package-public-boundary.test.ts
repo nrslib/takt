@@ -156,7 +156,6 @@ describe('package public boundary', () => {
       'utf-8',
     );
     expect(declarations).toContain('WorkflowEngine');
-    expect(declarations).not.toContain('FindingResumeCapability');
     expect(declarations).not.toContain('PrivateFileExclusiveAccess');
   });
 });

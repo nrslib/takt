@@ -55,28 +55,12 @@ export interface AutoRoutingConfig {
   };
 }
 
-/**
- * The resolved `escalate` target of the runtime.yaml profile an agent was resolved to.
- * Carried on the resolution result so consumers act on a resolved provider/model instead of
- * re-reading configuration or matching model names.
- */
-export interface ProviderEscalationTarget {
-  profile: string;
-  provider: ProviderType;
-  model: string;
-  providerOptions?: StepProviderOptions;
-  /** Exact permission mode declared by the escalation profile. */
-  permissionMode?: PermissionMode;
-}
-
 export interface PersonaProviderEntry {
   provider?: ProviderType;
   model?: string;
   providerOptions?: StepProviderOptions;
   /** Exact permission mode declared by the resolved runtime profile. */
   permissionMode?: PermissionMode;
-  /** Set only by the runtime.yaml compiler, from the referenced profile's `escalate`. */
-  escalation?: ProviderEscalationTarget;
 }
 
 export type ProviderRoutingEntry = PersonaProviderEntry;
@@ -89,8 +73,8 @@ export type ProviderRoutingEntry = PersonaProviderEntry;
  * 人間定義 persona の表示名照合であるのに対し、ここは固定のロールキーで引く。
  *
  * すべて **オプショナル**。未指定の seat は従来どおりの既定解決
- * （persona routing → workflow → project → global → provider 既定、および profile の
- * `escalate` 連鎖）に落ちる。指定された seat だけが合成ステップへ焼き込まれ、
+ * （persona routing → workflow → project → global → provider 既定）に落ちる。
+ * 指定された seat だけが合成ステップへ焼き込まれ、
  * step 直指定と同じ層（CLI/環境変数の明示 override より下、`provider_routing` より上）
  * で効く。
  */
@@ -99,12 +83,8 @@ export interface InternalAgentSeats {
   selector?: ProviderRoutingEntry;
   /** `assistant`: 対話モードのアシスタント。 */
   assistant?: ProviderRoutingEntry;
-  intakeNormalizer?: ProviderRoutingEntry;
-  findingsManager?: ProviderRoutingEntry;
-  terminalAdjudicator?: ProviderRoutingEntry;
   /** `loop-judge`: loop_monitors の判定役。 */
   loopJudge?: ProviderRoutingEntry;
-  escalationReviewer?: ProviderRoutingEntry;
   /** `review-completion-judge`: completion-retry episode の網羅性判定役。 */
   completionRetryJudge?: ProviderRoutingEntry;
 }

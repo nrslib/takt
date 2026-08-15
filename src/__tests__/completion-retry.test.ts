@@ -28,7 +28,6 @@ describe('completion retry episode', () => {
         status: 'collected',
         files: [],
         references: [],
-        claimedPaths: [],
         priorGapPaths: [],
         omissions: [],
       },

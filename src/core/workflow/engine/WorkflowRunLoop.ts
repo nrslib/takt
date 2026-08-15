@@ -434,10 +434,6 @@ function settleFallbackAttempt(
 
 function advanceActiveStep(deps: WorkflowRunLoopDeps, nextStep: string, iteration: number): void {
   const resolvedStep = deps.getStep(nextStep);
-  // The engine-synthesized finding-conflict-adjudication step resolves its
-  // return-to-origin transition from this record (see
-  // WorkflowEngineStepCoordinator.resolveTransitionFromDone).
-  deps.state.previousStep = deps.state.currentStep;
   deps.state.currentStep = nextStep;
   const nextOccurrence = (deps.state.stepIterations.get(nextStep) ?? 0) + 1;
   deps.setActiveStep(resolvedStep, iteration, nextOccurrence);

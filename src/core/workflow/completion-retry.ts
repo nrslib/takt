@@ -136,7 +136,7 @@ export function buildCompletionRetryJudgePrompt(input: {
     return {
       systemPrompt: 'あなたは読み取り専用のレビュー網羅性判定者です。reviewer instructionを唯一のスコープと権限の正本とし、そこで要求された調査経路が実コードと報告根拠により閉じたかだけを判定します。',
       instruction: [
-        'reviewer_instructionの明示的な要求だけをrepository_evidenceとreviewer_reportに照合してください。同instructionが要求するcontract familyに限りdefinition、producer、normalizer/validator、consumer、retry/fallback/parallel、persistence/restoration、terminal/APIの実接続を確認します。instructionが禁止する横方向探索や新規familyの発見を不足として返してはいけません。referencesはpath/line/relationKind/seedのmetadataでありsource本文の証拠ではありません。claimedPathsとpriorGapPathsは本文未確認の補助path、omissionsは未確認範囲です。証拠や要求を補作してはいけません。',
+        'reviewer_instructionの明示的な要求だけをrepository_evidenceとreviewer_reportに照合してください。同instructionが要求するcontract familyに限りdefinition、producer、normalizer/validator、consumer、retry/fallback/parallel、persistence/restoration、terminal/APIの実接続を確認します。instructionが禁止する横方向探索や新規familyの発見を不足として返してはいけません。referencesはpath/line/relationKind/seedのmetadataでありsource本文の証拠ではありません。priorGapPathsは本文未確認の補助path、omissionsは未確認範囲です。証拠や要求を補作してはいけません。',
         'completeならmissing_obligationsは空、不足なら具体的な未確認pathを返してください。',
         payload,
       ].join('\n\n'),
@@ -145,7 +145,7 @@ export function buildCompletionRetryJudgePrompt(input: {
   return {
     systemPrompt: 'You are a read-only review-completeness judge. Treat the reviewer instruction as the sole source of scope and authority. Decide only whether its required investigation paths are closed by repository evidence and the report.',
     instruction: [
-      'Compare only the explicit requirements in reviewer_instruction with repository_evidence and reviewer_report. Within contract families required by that instruction, verify the applicable real connections through definition, producer, normalizer/validator, consumers, retry/fallback/parallel, persistence/restoration, and terminal/API. Never return general horizontal exploration or discovery of a new family as a gap when the instruction forbids it. references are path/line/relationKind/seed metadata, not source-body proof. claimedPaths and priorGapPaths are auxiliary unverified paths; omissions are unverified coverage. Do not invent evidence or requirements.',
+      'Compare only the explicit requirements in reviewer_instruction with repository_evidence and reviewer_report. Within contract families required by that instruction, verify the applicable real connections through definition, producer, normalizer/validator, consumers, retry/fallback/parallel, persistence/restoration, and terminal/API. Never return general horizontal exploration or discovery of a new family as a gap when the instruction forbids it. references are path/line/relationKind/seed metadata, not source-body proof. priorGapPaths are auxiliary unverified paths; omissions are unverified coverage. Do not invent evidence or requirements.',
       'When complete, missing_obligations must be empty. Otherwise return concrete unverified paths.',
       payload,
     ].join('\n\n'),

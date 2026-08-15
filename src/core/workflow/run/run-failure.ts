@@ -7,7 +7,6 @@ import {
 import type {
   WorkflowAbortKind,
   WorkflowStepFailureSummary,
-  ReviewIntegrityFailureDetails,
 } from '../types.js';
 
 interface RunFailureInput {
@@ -16,9 +15,6 @@ interface RunFailureInput {
   readonly reason: string;
   readonly error: string;
   readonly failureCategory?: AgentFailureCategory;
-  readonly details?: {
-    reviewIntegrity?: ReviewIntegrityFailureDetails;
-  };
 }
 
 export function createRunFailure(input: RunFailureInput): WorkflowStepFailureSummary {
@@ -33,6 +29,5 @@ export function createRunFailure(input: RunFailureInput): WorkflowStepFailureSum
     reason: sanitizeAndBound(input.reason),
     error: sanitizeAndBound(input.error),
     ...(input.failureCategory === undefined ? {} : { failureCategory: input.failureCategory }),
-    ...(input.details === undefined ? {} : { details: input.details }),
   };
 }

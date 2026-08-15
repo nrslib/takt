@@ -414,7 +414,6 @@ async function executeWorkflowInternal(
         personaProviders: bootstrap.personaProviders,
         providerRouting: bootstrap.providerRouting,
         providerLadders: bootstrap.providerLadders,
-        providerEscalation: bootstrap.providerEscalation,
         internalAgentSeats: bootstrap.internalAgentSeats,
         companionEnabled: bootstrap.companionEnabled,
         companionProviders: bootstrap.companionProviders,

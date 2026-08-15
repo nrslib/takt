@@ -163,7 +163,7 @@ describe('CT-COMP-01 workflow companion schema', () => {
     expect(result.success).toBe(false);
   });
 
-  it('should accept a companion step without a declarative escalation route', () => {
+  it('should accept a companion step without extra routing metadata', () => {
     expect(() => validateWorkflowConfig(workflowWithCompanion(), {
       projectCwd: process.cwd(),
     })).not.toThrow();

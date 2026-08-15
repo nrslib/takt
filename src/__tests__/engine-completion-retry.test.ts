@@ -300,49 +300,6 @@ describe('WorkflowEngine completion retry wiring', () => {
     expect(judgePayload.repository_evidence.diff).toMatch(/-export const version = 1;[\s\S]*\+export const version = 2;/);
   });
 
-  it('adds a tracked consumer claimed by the structured reviewer output to judge evidence', async () => {
-    execFileSync('git', ['init'], { cwd });
-    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd });
-    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd });
-    writeFileSync(`${cwd}/review-target.ts`, 'export const version = 1;\n');
-    writeFileSync(`${cwd}/consumer.ts`, 'export const consumer = true;\n');
-    execFileSync('git', ['add', '.'], { cwd });
-    execFileSync('git', ['commit', '-m', 'base'], { cwd });
-    writeFileSync(`${cwd}/review-target.ts`, 'export const version = 2;\n');
-    const step = reviewStep('reviewer', { completionRetry: { ...completion, maxRetry: 0 } });
-    engine = new WorkflowEngine(normalConfig(step), cwd, 'task', { projectCwd: cwd, provider: 'mock' });
-    let judgeInstruction = '';
-    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
-      if (options.internalAgentName === 'review-completion-judge') {
-        judgeInstruction = instruction;
-        return judgeResponse(true);
-      }
-      options.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: instruction });
-      return makeResponse({
-        persona: String(persona),
-        content: 'consumer.ts is an affected consumer',
-        sessionId: 'review-session',
-        structuredOutput: {
-          rawFindings: [{
-            candidate: {
-              target: { kind: 'code', paths: ['consumer.ts'] },
-              evidenceRequests: [],
-            },
-          }],
-        },
-      });
-    });
-
-    await engine.run();
-
-    const judgePayload = JSON.parse(judgeInstruction.slice(judgeInstruction.indexOf('{')));
-    expect(judgePayload.repository_evidence.files).toEqual([
-      expect.objectContaining({ path: 'review-target.ts' }),
-    ]);
-    expect(judgePayload.repository_evidence.claimedPaths).toEqual(['consumer.ts']);
-    expect(judgeInstruction).not.toContain('export const consumer = true');
-  });
-
   it('validates and adds a prior judge gap path to the next attempt evidence', async () => {
     execFileSync('git', ['init'], { cwd });
     execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd });
@@ -434,7 +391,7 @@ describe('WorkflowEngine completion retry wiring', () => {
         persona: String(persona),
         content: reviewerCalls === 1 ? 'changed target reviewed' : 'consumer.ts reviewed',
         sessionId: `review-session-${reviewerCalls}`,
-        structuredOutput: { rawFindings: [] },
+        structuredOutput: { records: [] },
       });
     });
 

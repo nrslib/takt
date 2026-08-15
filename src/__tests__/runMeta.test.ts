@@ -186,10 +186,10 @@ describe('RunMetaManager', () => {
     manager.projectTerminal({
       status: 'failed',
       iterations: 4,
-      reason: 'NEEDS_ADJUDICATION: finding invariant failed',
+      reason: 'REVIEW_FAILED: report validation failed',
       failure: {
         step: 'reviewers',
-        error: 'NEEDS_ADJUDICATION: finding invariant failed',
+        error: 'REVIEW_FAILED: report validation failed',
       },
       endTime: '2026-08-02T15:26:51.000Z',
     });
@@ -199,7 +199,7 @@ describe('RunMetaManager', () => {
     };
     expect(terminalMeta.failure).toEqual({
       step: 'reviewers',
-      error: 'NEEDS_ADJUDICATION: finding invariant failed',
+      error: 'REVIEW_FAILED: report validation failed',
     });
   });
 

@@ -164,7 +164,6 @@ interface ExecuteWorkflowCallRequest {
   personaProviders: WorkflowEngineOptions['personaProviders'];
   providerRouting: WorkflowEngineOptions['providerRouting'];
   providerLadders: WorkflowEngineOptions['providerLadders'];
-  providerEscalation: WorkflowEngineOptions['providerEscalation'];
 }
 
 interface ExecuteWorkflowCallOptions {
@@ -612,10 +611,6 @@ export class WorkflowCallExecutor {
       providerLadders: request.providerLadders === undefined
         ? undefined
         : structuredClone(request.providerLadders),
-      // provider/model と同じく子の解決結果をそのまま渡す。値は不変な解決済み
-      // ターゲットなので clone しない（providerRouting は entry を書き換える
-      // 経路があるため clone している）。
-      providerEscalation: request.providerEscalation,
       startStep: this.deps.sharedRuntime.restartNavigator === undefined
         ? this.resolveChildResumeStartStep(
             childWorkflow,

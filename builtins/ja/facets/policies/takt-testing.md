@@ -22,7 +22,7 @@ TAKT ナレッジの unit、軽い IT、重い IT、E2E の境界定義を正本
 | 基準 | 判定 |
 |------|------|
 | 直接依存を test double に置き換えた個別ロジック | unit |
-| 実 filesystem、SQLite、bounded storage、複数コンポーネント結合 | 軽い IT |
+| 実 filesystem、bounded storage、複数コンポーネント結合 | 軽い IT |
 | 実 child process、Git、完全な workflow engine、計測済み高負荷処理 | 重い IT |
 | 利用者の公開入口から全体を実行し、利用者可視の結果を観測 | E2E |
 | 実 process を使うが内部 client から偽 CLI を呼ぶ | 重い IT。E2E ではない |

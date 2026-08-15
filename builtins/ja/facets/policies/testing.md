@@ -290,5 +290,5 @@ writeConfig({ backend: 'postgres', connectionPool: 10 })
 
 // ✅ パラメータに連動
 const backend = process.env.TEST_BACKEND ?? 'postgres'
-writeConfig({ backend, connectionPool: backend === 'sqlite' ? 1 : 10 })
+writeConfig({ backend, connectionPool: backend === 'embedded' ? 1 : 10 })
 ```

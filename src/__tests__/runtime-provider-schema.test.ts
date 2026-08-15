@@ -334,16 +334,4 @@ describe('RuntimeProviderFileSchema', () => {
     doc.provider.profiles['sol-high']!.extends = '';
     expect(RuntimeProviderFileSchema.safeParse(doc).success).toBe(false);
   });
-
-  it('Given a profile escalate reference, When parsed, Then it is accepted as an optional string', () => {
-    const doc = fullExample();
-    doc.provider.profiles['sol-high']!.escalate = 'sol-low';
-    expect(RuntimeProviderFileSchema.safeParse(doc).success).toBe(true);
-  });
-
-  it('Given an empty escalate string, When parsed, Then it is rejected (missing value)', () => {
-    const doc = fullExample();
-    doc.provider.profiles['sol-high']!.escalate = '';
-    expect(RuntimeProviderFileSchema.safeParse(doc).success).toBe(false);
-  });
 });

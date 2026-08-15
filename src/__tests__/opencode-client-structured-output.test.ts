@@ -107,7 +107,7 @@ describe('OpenCodeClient structured output', () => {
 
   it('should request native structured output and capture info.structured', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
-    const schema = { type: 'object', required: ['rawFindings'], properties: { rawFindings: { type: 'array' } } };
+    const schema = { type: 'object', required: ['records'], properties: { records: { type: 'array' } } };
     const stream = new MockEventStream([
       {
         type: 'message.updated',
@@ -115,7 +115,7 @@ describe('OpenCodeClient structured output', () => {
           info: {
             sessionID: 'session-structured',
             role: 'assistant',
-            structured: { rawFindings: [] },
+            structured: { records: [] },
           },
         },
       },
@@ -144,7 +144,7 @@ describe('OpenCodeClient structured output', () => {
     });
 
     expect(result.status).toBe('done');
-    expect(result.structuredOutput).toEqual({ rawFindings: [] });
+    expect(result.structuredOutput).toEqual({ records: [] });
     expect(promptAsync).toHaveBeenCalledWith(
       expect.objectContaining({
         format: { type: 'json_schema', schema, retryCount: 2 },
@@ -155,7 +155,7 @@ describe('OpenCodeClient structured output', () => {
 
   it('should fall back to the trailing JSON block when structured is not emitted', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
-    const schema = { type: 'object', required: ['rawFindings'], properties: { rawFindings: { type: 'array' } } };
+    const schema = { type: 'object', required: ['records'], properties: { records: { type: 'array' } } };
     const stream = new MockEventStream([
       {
         type: 'message.part.updated',
@@ -164,9 +164,9 @@ describe('OpenCodeClient structured output', () => {
             id: 'part-1',
             sessionID: 'session-fallback',
             type: 'text',
-            text: 'report text\n```json\n{"rawFindings": []}\n```',
+            text: 'report text\n```json\n{"records": []}\n```',
           },
-          delta: 'report text\n```json\n{"rawFindings": []}\n```',
+          delta: 'report text\n```json\n{"records": []}\n```',
         },
       },
       { type: 'session.idle', properties: { sessionID: 'session-fallback' } },
@@ -193,13 +193,13 @@ describe('OpenCodeClient structured output', () => {
     });
 
     expect(result.status).toBe('done');
-    expect(result.structuredOutput).toEqual({ rawFindings: [] });
+    expect(result.structuredOutput).toEqual({ records: [] });
   });
 
   it.each([
     {
       name: 'broken JSON inside the fence',
-      text: 'report\n```json\n{"rawFindings": [}\n```',
+      text: 'report\n```json\n{"records": [}\n```',
       expected: undefined,
     },
     {
@@ -209,28 +209,28 @@ describe('OpenCodeClient structured output', () => {
     },
     {
       name: 'multiple fenced blocks (last one wins)',
-      text: '```json\n{"first": true}\n```\nmore text\n```json\n{"rawFindings": []}\n```',
-      expected: { rawFindings: [] },
+      text: '```json\n{"first": true}\n```\nmore text\n```json\n{"records": []}\n```',
+      expected: { records: [] },
     },
     {
       name: 'explanation followed by bare JSON',
-      text: 'report text\n{"rawFindings": []}',
+      text: 'report text\n{"records": []}',
       expected: undefined,
     },
     {
       name: 'formatless object accepted before downstream validation',
-      text: '{"rawFindings": [], "extra": true}',
-      expected: { rawFindings: [], extra: true },
+      text: '{"records": [], "extra": true}',
+      expected: { records: [], extra: true },
       schema: {
         type: 'object',
-        required: ['rawFindings'],
-        properties: { rawFindings: { type: 'array' } },
+        required: ['records'],
+        properties: { records: { type: 'array' } },
         additionalProperties: false,
       },
     },
   ])('structured fallback edge case: $name', async ({ text, expected, schema: testSchema }) => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
-    const schema = testSchema ?? { type: 'object', required: ['rawFindings'], properties: { rawFindings: { type: 'array' } } };
+    const schema = testSchema ?? { type: 'object', required: ['records'], properties: { records: { type: 'array' } } };
     const stream = new MockEventStream([
       {
         type: 'message.part.updated',
@@ -273,7 +273,7 @@ describe('OpenCodeClient structured output', () => {
 
   it('should fall back to formatless retry when the model does not produce structured output', async () => {
     const { OpenCodeProvider } = await import('../infra/providers/opencode.js');
-    const schema = { type: 'object', required: ['rawFindings'], properties: { rawFindings: { type: 'array' } } };
+    const schema = { type: 'object', required: ['records'], properties: { records: { type: 'array' } } };
     const subscribe = vi.fn()
       .mockResolvedValueOnce({
         stream: new MockEventStream([
@@ -297,8 +297,8 @@ describe('OpenCodeClient structured output', () => {
           {
             type: 'message.part.updated',
             properties: {
-              part: { id: 'p-1', sessionID: 'session-fmt', type: 'text', text: '{"rawFindings": []}' },
-              delta: '{"rawFindings": []}'
+              part: { id: 'p-1', sessionID: 'session-fmt', type: 'text', text: '{"records": []}' },
+              delta: '{"records": []}'
             },
           },
           { type: 'session.idle', properties: { sessionID: 'session-fmt' } },
@@ -330,7 +330,7 @@ describe('OpenCodeClient structured output', () => {
     });
 
     expect(result.status).toBe('done');
-    expect(result.structuredOutput).toEqual({ rawFindings: [] });
+    expect(result.structuredOutput).toEqual({ records: [] });
     // 1回目は format 付き、2回目（フォールバック）は format なし。追加の再試行はしない
     expect(promptAsync).toHaveBeenCalledTimes(2);
     expect(promptAsync.mock.calls[0]?.[0]).toHaveProperty('format');
@@ -343,7 +343,7 @@ describe('OpenCodeClient structured output', () => {
 
   it('should still fall back when the format failure lands on the last transient-budget attempt', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
-    const schema = { type: 'object', required: ['rawFindings'], properties: { rawFindings: { type: 'array' } } };
+    const schema = { type: 'object', required: ['records'], properties: { records: { type: 'array' } } };
     // transient は promptAsync 例外経路（abortCause: prompt）でのみリトライされる
     const emptyStream = () => new MockEventStream([], 'session-budget');
     const formatFailureStream = new MockEventStream([
@@ -358,8 +358,8 @@ describe('OpenCodeClient structured output', () => {
       {
         type: 'message.part.updated',
         properties: {
-          part: { id: 'p-1', sessionID: 'session-budget', type: 'text', text: 'report\n```json\n{"rawFindings": []}\n```' },
-          delta: 'report\n```json\n{"rawFindings": []}\n```',
+          part: { id: 'p-1', sessionID: 'session-budget', type: 'text', text: 'report\n```json\n{"records": []}\n```' },
+          delta: 'report\n```json\n{"records": []}\n```',
         },
       },
       { type: 'session.idle', properties: { sessionID: 'session-budget' } },
@@ -396,7 +396,7 @@ describe('OpenCodeClient structured output', () => {
 
     // transient 2回で基礎予算(3)の最終試行に format 失敗が来ても、別枠でフォールバックできる
     expect(result.status).toBe('done');
-    expect(result.structuredOutput).toEqual({ rawFindings: [] });
+    expect(result.structuredOutput).toEqual({ records: [] });
     expect(promptAsync).toHaveBeenCalledTimes(4);
     expect(promptAsync.mock.calls[3]?.[0]).not.toHaveProperty('format');
   });
@@ -633,18 +633,18 @@ describe('OpenCodeClient structured output', () => {
 
   it('should build a formatless prompt with the schema, fence contract, and a StructuredOutput ban', async () => {
     const { buildFormatlessStructuredPrompt } = await import('../infra/opencode/structured-output-recovery.js');
-    const schema = { type: 'object', required: ['rawFindings'], properties: { rawFindings: { type: 'array' } } };
+    const schema = { type: 'object', required: ['records'], properties: { records: { type: 'array' } } };
     const prompt = buildFormatlessStructuredPrompt('do the review', schema);
 
     expect(prompt).toContain('do the review');
-    expect(prompt).toContain('"rawFindings"');
+    expect(prompt).toContain('"records"');
     expect(prompt).toContain('```json');
     expect(prompt.toLowerCase()).toContain('do not call structuredoutput');
   });
 
   it('should fail fast when the formatless fresh attempt also loops on StructuredOutput', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
-    const schema = { type: 'object', required: ['rawFindings'], properties: { rawFindings: { type: 'array' } } };
+    const schema = { type: 'object', required: ['records'], properties: { records: { type: 'array' } } };
     const subscribe = vi.fn()
       .mockResolvedValueOnce({
         stream: new MockEventStream([
@@ -693,7 +693,7 @@ describe('OpenCodeClient structured output', () => {
 
   it('should degrade to formatless on an upstream request failure message too', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
-    const schema = { type: 'object', required: ['rawFindings'], properties: { rawFindings: { type: 'array' } } };
+    const schema = { type: 'object', required: ['records'], properties: { records: { type: 'array' } } };
     const subscribe = vi.fn()
       .mockResolvedValueOnce({
         stream: new MockEventStream([
@@ -714,8 +714,8 @@ describe('OpenCodeClient structured output', () => {
           {
             type: 'message.part.updated',
             properties: {
-              part: { id: 'p-1', sessionID: 'session-fresh-upstream', type: 'text', text: 'report\n```json\n{"rawFindings": []}\n```' },
-              delta: 'report\n```json\n{"rawFindings": []}\n```',
+              part: { id: 'p-1', sessionID: 'session-fresh-upstream', type: 'text', text: 'report\n```json\n{"records": []}\n```' },
+              delta: 'report\n```json\n{"records": []}\n```',
             },
           },
           { type: 'session.idle', properties: { sessionID: 'session-fresh-upstream' } },

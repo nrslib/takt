@@ -8,8 +8,8 @@ import type { Language } from '../core/models/types.js';
 /**
  * テンプレートエンジン（faceted-prompting）が解釈できるのは `{{#if}}` /
  * `{{else}}` / `{{/if}}` と `{{var}}` だけで、`{{#unless}}` のような構文は
- * **黙ってリテラルのまま出力される**。実際に `{{#unless restatementOnly}}` が
- * 複数のプロンプトへ漏れていた。
+ * **黙ってリテラルのまま出力される**。未対応の `{{#unless enabled}}` も同様に
+ * 描画結果へ漏れる。
  *
  * 全テンプレート × 代表的な変数集合（全 truthy / 全 falsy）で描画し、`{{` が
  * 1つでも残ったら失敗させる。未対応構文とタイポの両方をここで止める。

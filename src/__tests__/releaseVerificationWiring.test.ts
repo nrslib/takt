@@ -97,7 +97,6 @@ const integrationBuiltinModules = new Set([
   'node:fs',
   'node:fs/promises',
   'node:net',
-  'node:sqlite',
 ]);
 
 function listTestFiles(directory: string): string[] {

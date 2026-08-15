@@ -127,8 +127,8 @@ TAKT classifies unit, light integration, heavy integration, and E2E tests by the
 
 | Layer | Boundary | Standard Gate |
 |-------|----------|---------------|
-| Unit | Individual function or class; direct dependencies are test doubles, with no real process, Git, filesystem, SQLite, or workflow engine | `npm test` |
-| Light integration | Real filesystem, SQLite, bounded storage, or multiple production components, without resource-heavy process or engine execution | `npm run test:it` |
+| Unit | Individual function or class; direct dependencies are test doubles, with no real process, Git, filesystem, or workflow engine | `npm test` |
+| Light integration | Real filesystem, bounded storage, or multiple production components, without resource-heavy process or engine execution | `npm run test:it` |
 | Heavy integration | Real child process, Git, complete WorkflowEngine or TeamLeader execution, or a measured resource-heavy case requiring serial execution | `npm run test:it:heavy` |
 | E2E | Runs the application from a user-facing entry point such as the CLI and observes user-visible results | Provider-specific E2E gate |
 

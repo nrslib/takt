@@ -1027,7 +1027,7 @@ describe('TaskRunner (tasks.yaml)', () => {
     writeTasksFile(testDir, [createFailedRecord({
       failure: {
         step: 'review',
-        error: 'Finding adjudication is required',
+        error: 'Review processing failed',
         retryable: false,
       },
     })]);

@@ -539,47 +539,4 @@ describe('executeWorkflow claude-terminal integration', () => {
     });
   });
 
-  it('normal workflow requeue leaves a residual SQLite file unchanged', async () => {
-    const { executeWorkflow } = await import('../features/tasks/execute/workflowExecution.js');
-    const sourceRunSlug = '20260801-non-finding-source';
-    const targetRunSlug = '20260801-non-finding-target';
-
-    const sourceResult = await executeWorkflow(makeConfig(), 'source task', projectDir, {
-      projectCwd: projectDir,
-      provider: 'claude-terminal',
-      reportDirName: sourceRunSlug,
-    });
-    expect(sourceResult.success).toBe(true);
-    const residualDatabasePath = join(
-      projectDir,
-      '.takt',
-      'runs',
-      sourceRunSlug,
-      ['finding', 'contract.sqlite'].join('-'),
-    );
-    await writeFile(residualDatabasePath, 'not sqlite');
-
-    const resumedResult = await executeWorkflow(makeConfig(), 'resumed task', projectDir, {
-      projectCwd: projectDir,
-      provider: 'claude-terminal',
-      reportDirName: targetRunSlug,
-      resumeSource: {
-        sourceRunSlug,
-        resumeMode: 'requeue',
-      },
-    });
-
-    expect(resumedResult.success).toBe(true);
-    expect(await readFile(residualDatabasePath, 'utf-8')).toBe('not sqlite');
-    expect(existsSync(
-      join(
-        projectDir,
-        '.takt',
-        'runs',
-        targetRunSlug,
-        ['finding', 'contract.sqlite'].join('-'),
-      ),
-    )).toBe(false);
-  });
-
 });

@@ -263,7 +263,7 @@ describe('workflow step fragment runtime contract', () => {
       return makeResponse({
         persona: 'done',
         content: 'done',
-        structuredOutput: { rawFindings: [] },
+        structuredOutput: { records: [] },
       });
     });
     const firstState = await engine.run();

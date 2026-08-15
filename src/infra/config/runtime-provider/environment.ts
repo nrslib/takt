@@ -25,7 +25,6 @@ import type {
   AutoRoutingStrategy,
   InternalAgentSeats,
   PersonaProviderEntry,
-  ProviderEscalationTarget,
   ProviderLadderConfig,
   ProviderRoutingConfig,
   ProviderRoutingEntry,
@@ -68,11 +67,6 @@ export interface CompiledProviderEnvironment {
   autoRouting: AutoRoutingConfig | undefined;
   providerOptions: StepProviderOptions | undefined;
   permissionMode: PermissionMode | undefined;
-  /**
-   * `escalate` target of the profile behind `defaults`. Steps that resolve their provider from
-   * this layer inherit it; steps resolved by a target entry carry the entry's own escalation.
-   */
-  escalation: ProviderEscalationTarget | undefined;
   /**
    * How the engine resolves same-priority tag routing conflicts. Carried on the bundle (not
    * derived from the format at the seam) so executor/runner/SDK act on a policy, never on
@@ -144,7 +138,6 @@ export function compileLegacyProviderEnvironment(
     autoRouting: legacy.autoRouting,
     providerOptions: legacy.providerOptions,
     permissionMode: undefined,
-    escalation: undefined,
     tagConflictPolicy: 'last-wins',
     internalAgents: undefined,
     providerLadders: undefined,
@@ -188,7 +181,6 @@ export function compileRuntimeProviderEnvironment(
     autoRouting,
     providerOptions: defaults?.providerOptions,
     permissionMode: defaults?.permissionMode,
-    escalation: defaults?.escalation,
     tagConflictPolicy: 'fail-fast',
     internalAgents,
     ...(companions === undefined ? {} : { companions }),
@@ -352,8 +344,6 @@ function buildInternalAgents(
     if (initialProfile === undefined) {
       continue;
     }
-    // internal agents は `escalate` を消費しない（格上げは FC のレビュー枠だけの
-    // 概念）。解決結果に残すと使われないデータになるので落とす。
     const resolved = resolveProfileEntry(initialProfile, flatProfiles, resolutionContext);
     result[seat] = {
       ...(resolved.provider !== undefined ? { provider: resolved.provider } : {}),
@@ -540,41 +530,11 @@ function resolveProfileEntry(
     );
   }
   const options = resolveProfileProviderOptions(profile, resolutionContext);
-  const escalation = resolveProfileEscalation(profile, flatProfiles, resolutionContext);
   return {
     provider: profile.provider as ProviderType,
     model: profile.model,
     ...(options !== undefined ? { providerOptions: options } : {}),
     ...(profile.permissionMode !== undefined ? { permissionMode: profile.permissionMode } : {}),
-    ...(escalation !== undefined ? { escalation } : {}),
-  };
-}
-
-/**
- * Resolve one `escalate` hop into a concrete provider/model. Deeper hops are declared and
- * validated but never consumed: escalation is "this worker's last move", not a ladder.
- */
-function resolveProfileEscalation(
-  profile: FlatProfile,
-  flatProfiles: Map<string, FlatProfile>,
-  resolutionContext?: FacetResolutionContext,
-): ProviderEscalationTarget | undefined {
-  if (profile.escalate === undefined) {
-    return undefined;
-  }
-  const target = flatProfiles.get(profile.escalate);
-  if (target?.provider === undefined || target.model === undefined) {
-    throw new Error(
-      `runtime.yaml \`provider.profiles."${profile.escalate}"\` referenced by \`escalate\` is not defined or is missing \`provider\`/\`model\``,
-    );
-  }
-  const options = resolveProfileProviderOptions(target, resolutionContext);
-  return {
-    profile: profile.escalate,
-    provider: target.provider as ProviderType,
-    model: target.model,
-    ...(options !== undefined ? { providerOptions: options } : {}),
-    ...(target.permissionMode !== undefined ? { permissionMode: target.permissionMode } : {}),
   };
 }
 

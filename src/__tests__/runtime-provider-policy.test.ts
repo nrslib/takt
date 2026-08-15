@@ -196,48 +196,4 @@ describe('flattenProfiles', () => {
       options: { reasoning_effort: 'low' },
     });
   });
-
-  it('inherits escalate through extends', () => {
-    const flat = flattenProfiles({
-      base: { provider: 'codex', model: 'gpt', escalate: 'strong' },
-      child: { extends: 'base' },
-      strong: { provider: 'codex', model: 'gpt-strong' },
-    });
-    expect(flat.get('child')?.escalate).toBe('strong');
-  });
-});
-
-describe('validateRuntimeProviderSection escalate references', () => {
-  const escalateSection = (escalate: string) => ({
-    defaults: { profile: 'weak' },
-    profiles: {
-      weak: { provider: 'codex' as const, model: 'weak', escalate },
-      strong: { provider: 'codex' as const, model: 'strong' },
-    },
-  });
-
-  it('accepts an escalate reference to a fully defined profile', () => {
-    expect(() => validateRuntimeProviderSection(escalateSection('strong'))).not.toThrow();
-  });
-
-  it('fails fast on an unknown escalate reference', () => {
-    expect(() => validateRuntimeProviderSection(escalateSection('ghost')))
-      .toThrow(/Unknown profile "ghost" referenced by profiles\.weak\.escalate/);
-  });
-
-  it('fails fast on a self-referencing escalate', () => {
-    expect(() => validateRuntimeProviderSection(escalateSection('weak')))
-      .toThrow(/cannot `escalate` to itself/);
-  });
-
-  it('fails fast on a cyclic escalate chain', () => {
-    expect(() => validateRuntimeProviderSection({
-      defaults: { profile: 'weak' },
-      profiles: {
-        weak: { provider: 'codex', model: 'weak', escalate: 'medium' },
-        medium: { provider: 'codex', model: 'medium', escalate: 'strong' },
-        strong: { provider: 'codex', model: 'strong', escalate: 'weak' },
-      },
-    })).toThrow(/Cyclic `escalate` chain detected/);
-  });
 });

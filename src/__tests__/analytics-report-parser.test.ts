@@ -128,7 +128,7 @@ describe('parseFindingsFromReport', () => {
       '## Current Iteration Findings (new)',
       '| # | finding_id | Category | Location | Issue | Fix |',
       '|---|------------|---------|------|------|-----|',
-      '| 1 | F-001 | Bug | `src/a.ts` | Bad | Fix |',
+      '| 1 | QA-001 | Bug | `src/a.ts` | Bad | Fix |',
       '',
       '## REJECT判定条件',
       '| Condition | Result |',
@@ -140,7 +140,7 @@ describe('parseFindingsFromReport', () => {
     const findings = parseFindingsFromReport(report);
 
     expect(findings).toHaveLength(1);
-    expect(findings[0].findingId).toBe('F-001');
+    expect(findings[0].findingId).toBe('QA-001');
   });
 
   it('should skip header rows in tables', () => {
@@ -148,14 +148,14 @@ describe('parseFindingsFromReport', () => {
       '## Current Iteration Findings (new)',
       '| # | finding_id | Category | Location | Issue | Fix |',
       '|---|------------|---------|------|------|-----|',
-      '| 1 | X-001 | Cat | `file.ts:5` | Problem | Solution |',
+      '| 1 | QA-001 | Cat | `file.ts:5` | Problem | Solution |',
       '',
     ].join('\n');
 
     const findings = parseFindingsFromReport(report);
 
     expect(findings).toHaveLength(1);
-    expect(findings[0].findingId).toBe('X-001');
+    expect(findings[0].findingId).toBe('QA-001');
   });
 
   it('should parse location with line number from backtick-wrapped paths', () => {
@@ -163,7 +163,7 @@ describe('parseFindingsFromReport', () => {
       '## Current Iteration Findings (new)',
       '| # | finding_id | Category | Location | Issue | Fix |',
       '|---|------------|---------|------|------|-----|',
-      '| 1 | F-001 | Bug | `src/features/analytics/writer.ts:27` | Comment | Remove |',
+      '| 1 | QA-001 | Bug | `src/features/analytics/writer.ts:27` | Comment | Remove |',
       '',
     ].join('\n');
 
@@ -178,7 +178,7 @@ describe('parseFindingsFromReport', () => {
       '## Current Iteration Findings (new)',
       '| # | finding_id | Category | Location | Issue | Fix |',
       '|---|------------|---------|------|------|-----|',
-      '| 1 | F-001 | Bug | `src/a.ts:10, src/b.ts:20` | Multiple | Fix |',
+      '| 1 | QA-001 | Bug | `src/a.ts:10, src/b.ts:20` | Multiple | Fix |',
       '',
     ].join('\n');
 
@@ -302,11 +302,10 @@ describe('emitFixActionEvents', () => {
     expect(event.findingId).toBe('QA-001');
   });
 
-  it('should match legacy finding ID formats and ignore engine-owned ids without ledger confirmation', () => {
+  it('should match current finding ID formats', () => {
     const timestamp = new Date('2026-02-18T12:00:00.000Z');
     const response = [
       'Resolved AA-001 simple ID',
-      'Fixed F-0001 engine-owned ID',
       'Fixed ARCH-NEW-dry with NEW segment',
       'Addressed SEC-002-xss with suffix',
     ].join('\n');
@@ -326,7 +325,6 @@ describe('emitFixActionEvents', () => {
 
     const ids = lines.map((line) => (JSON.parse(line) as FixActionEvent).findingId);
     expect(ids).toContain('AA-001');
-    expect(ids).not.toContain('F-0001');
     expect(ids).toContain('ARCH-NEW-dry');
     expect(ids).toContain('SEC-002-xss');
   });
@@ -353,7 +351,7 @@ describe('emitRebuttalEvents', () => {
     const timestamp = new Date('2026-02-18T12:00:00.000Z');
 
     emitRebuttalEvents(
-      'Rebutting AA-001, F-0001 and ARCH-002-barrel',
+      'Rebutting AA-001 and ARCH-002-barrel',
       3,
       'run-xyz',
       timestamp,

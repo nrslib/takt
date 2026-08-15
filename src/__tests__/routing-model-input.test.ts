@@ -80,19 +80,17 @@ describe('normalizeRoutingWorkSnapshot', () => {
     expect(input.remainingWork[0]?.description).toContain('[PATH]');
   });
 
-  it('Given credentials and finding identifiers in routing text, When normalizing, Then they are redacted before the model input is created', () => {
+  it('Given credentials in routing text, When normalizing, Then they are redacted before the model input is created', () => {
     const input = normalizeRoutingWorkSnapshot({
-      goal: 'Resolve Finding F-0128 with password=example-test-value',
-      step: { name: 'implement', tags: [], instruction: 'Conflict C-0007 has token=example-token-value', stepType: 'normal' },
-      remainingWork: [{ source: 'task', description: 'Finding F-0128 conflicts with C-0007.' }],
+      goal: 'Resolve the setup issue with password=example-test-value',
+      step: { name: 'implement', tags: [], instruction: 'Inspect the request with token=example-token-value', stepType: 'normal' },
+      remainingWork: [{ source: 'task', description: 'Confirm the setup issue is resolved.' }],
       progress: { previousAttemptFailed: false, noProgress: false, retryingSameWork: false },
     });
     const serialized = JSON.stringify(input);
 
-    expect(serialized).toContain('[FINDING_ID]');
-    expect(serialized).toContain('[CONFLICT_ID]');
     expect(serialized).toContain('[REDACTED]');
-    expect(serialized).not.toMatch(/F-0128|C-0007|example-test-value|example-token-value/);
+    expect(serialized).not.toMatch(/example-test-value|example-token-value/);
   });
 
   it('Given a secret crossing each remaining-work field budget, When building a snapshot, Then redaction happens before truncation', () => {
@@ -127,14 +125,14 @@ describe('normalizeRoutingWorkSnapshot', () => {
     expect(serialized).toContain('[REPOSITORY]');
   });
 
-  it('Given sensitive step metadata, alphanumeric conflict IDs, and platform paths, When normalizing, Then every free-text field is redacted without changing ordinary slash-separated terms', () => {
+  it('Given sensitive step metadata and platform paths, When normalizing, Then every free-text field is redacted without changing ordinary slash-separated terms', () => {
     const input = normalizeRoutingWorkSnapshot({
       goal: 'Keep input/evidence while fixing src/private/config.ts:42 and lib/service.ts line 82.',
       step: {
         name: 'leader.password=secret-value',
         tags: ['credential=topsecret', 'input/evidence'],
         personaKey: 'token=persona-secret',
-        instruction: 'Resolve C-2E12A3C28C63 at C:\\Users\\alice\\private-repo and \\server\\share\\private.txt.',
+        instruction: 'Inspect C:\\Users\\alice\\private-repo and \\server\\share\\private.txt.',
         stepType: 'agent',
       },
       remainingWork: [{ source: 'task', description: 'See src/core/router.ts:417.' }],
@@ -143,9 +141,8 @@ describe('normalizeRoutingWorkSnapshot', () => {
     const serialized = JSON.stringify(input);
 
     expect(input.step.tags).toContain('input/evidence');
-    expect(serialized).toContain('[CONFLICT_ID]');
     expect(serialized).toContain('[PATH]');
-    expect(serialized).not.toMatch(/secret-value|topsecret|persona-secret|C-2E12A3C28C63|src\/private\/config\.ts|lib\/service\.ts|router\.ts:417|C:\\Users|server\\share/);
+    expect(serialized).not.toMatch(/secret-value|topsecret|persona-secret|src\/private\/config\.ts|lib\/service\.ts|router\.ts:417|C:\\Users|server\\share/);
   });
 
   it('Given file locations and scheme URLs in supported platform forms, When normalizing, Then each location is fully redacted while ordinary slash-separated work terms remain', () => {
@@ -184,17 +181,19 @@ describe('normalizeRoutingWorkSnapshot', () => {
     expect(input.remainingWork[0]?.description).toBe('Update [PATH], [PATH], [PATH], and [PATH]; retain v1.2.3 and v1.2.3:4.');
   });
 
-  it('Given a replaced task identity, When fingerprinting, Then it is treated as new local work without exposing the ID to the model', () => {
-    const createSnapshot = (id: string) => buildRoutingWorkSnapshot({
+  it('Given a replaced sensitive task identity, When fingerprinting, Then it is treated as new local work without exposing the secret to the model', () => {
+    const createSnapshot = (secret: string) => buildRoutingWorkSnapshot({
       goal: 'Resolve the validation failure',
-      userInputs: [`${id}: The same validation failure remains.`],
+      userInputs: [`${secret}: The same validation failure remains.`],
       step: { name: 'fix', tags: [], stepType: 'normal', passPreviousResponse: false },
     });
-    const first = createSnapshot('F-1000');
-    const replacement = createSnapshot('F-1001');
+    const first = createSnapshot('sk-abcdefghijklmnopqrstuvwxyz012345');
+    const replacement = createSnapshot('sk-bbcdefghijklmnopqrstuvwxyz012345');
 
     expect(createRoutingWorkFingerprint(replacement)).not.toBe(createRoutingWorkFingerprint(first));
-    expect(JSON.stringify(normalizeRoutingWorkSnapshot(replacement))).not.toMatch(/F-1001/);
+    expect(JSON.stringify(normalizeRoutingWorkSnapshot(replacement))).not.toContain(
+      'sk-bbcdefghijklmnopqrstuvwxyz012345',
+    );
   });
 
   it('Given more remaining work than the aggregate budget allows, When normalizing, Then a deterministic prefix and only the omitted count are retained', () => {

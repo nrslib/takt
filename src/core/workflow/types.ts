@@ -24,7 +24,6 @@ import type {
   InternalAgentSeats,
   PersonaProviderEntry,
   ProviderRoutingEntry,
-  ProviderEscalationTarget,
   ProviderLadderConfig,
   ProviderRoutingConfig,
   ResolvedObservabilityConfig,
@@ -123,11 +122,6 @@ export interface StepProviderInfo {
   providerOptionsSources?: Readonly<Record<string, ProviderResolutionSource>>;
   /** Permission mode from the same winning runtime profile as provider/model/options. */
   permissionMode?: PermissionMode;
-  /**
-   * `escalate` target of the runtime.yaml profile this step resolved to. Present only when a
-   * profile-backed layer supplied the provider; consumers treat its presence as the opt-in.
-   */
-  escalation?: ProviderEscalationTarget;
   autoRoutingDecision?: {
     candidateName: string;
     routingTier: 'high' | 'medium' | 'low';
@@ -219,27 +213,7 @@ export type WorkflowAbortKind =
   | 'user_input_cancelled'
   | 'step_transition'
   | 'runtime_error'
-  | 'rule_no_match'
-  /**
-   * COMPLETE への遷移時に open な provisional finding（意味を確定できなかった
-   * 観測）が残っていた。エンジン最終不変条件のバックストップ発火 = workflow の
-   * rules が findings.provisional.count を処理する記述を欠いている設定不備で、
-   * 「ルールはあるが何もマッチしない」と同じクラスの fail-fast。
-   */
-  | 'provisional_findings'
-  | 'review_integrity_unresolved';
-
-export type ReviewIntegrityFailureCode =
-  | 'restatement_exhausted_claim_bearing'
-  | 'review_integrity_unresolved_unpresented';
-
-export interface ReviewIntegrityFailureDetails {
-  code: ReviewIntegrityFailureCode;
-  anomalyIds: string[];
-  unpresentedIds: string[];
-  classificationAuthorityIds: string[];
-  publicationIds: string[];
-}
+  | 'rule_no_match';
 
 export interface WorkflowStepFailureSummary {
   kind: WorkflowAbortKind;
@@ -247,9 +221,6 @@ export interface WorkflowStepFailureSummary {
   reason: string;
   error: string;
   failureCategory?: AgentFailureCategory;
-  details?: {
-    reviewIntegrity?: ReviewIntegrityFailureDetails;
-  };
 }
 
 export interface WorkflowAbortResult {
@@ -635,8 +606,6 @@ export interface WorkflowEngineOptions {
   personaProviders?: Record<string, PersonaProviderEntry>;
   /** Provider routing by raw persona key, workflow step tag, and workflow step name */
   providerRouting?: ProviderRoutingConfig;
-  /** `escalate` target of the runtime.yaml profile behind the engine-level provider/model. */
-  providerEscalation?: ProviderEscalationTarget;
   /** runtime.yaml `provider.targets.internal_agents` の解決済み seat。 */
   internalAgentSeats?: InternalAgentSeats;
   /** runtime.yaml から解決済みの companion ごとの実行環境。 */

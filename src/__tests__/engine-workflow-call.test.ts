@@ -354,28 +354,6 @@ steps:
     });
   });
 
-  it('workflow_call keeps the escalate target while the provider stays profile-derived', () => {
-    const escalation = { profile: 'strong', provider: 'codex' as const, model: 'gpt-strong' };
-
-    // model だけの上書きでは provider の出所は profile のままなので格上げ先を保つ。
-    expect(applyWorkflowCallOverridesToProviderRouting({
-      steps: { review: { provider: 'mock', model: 'child-step-model', escalation } },
-    }, { model: 'call-model' })).toEqual({
-      personas: undefined,
-      tags: undefined,
-      steps: { review: { provider: 'mock', model: 'call-model', escalation } },
-    });
-
-    // provider を上書きした entry はもうその profile ではないので格上げ先を落とす。
-    expect(applyWorkflowCallOverridesToProviderRouting({
-      steps: { review: { provider: 'mock', model: 'child-step-model', escalation } },
-    }, { provider: 'claude' })).toEqual({
-      personas: undefined,
-      tags: undefined,
-      steps: { review: { provider: 'claude' } },
-    });
-  });
-
   it('workflow_call keeps profile permission for model-only entry overrides and drops it for provider overrides', () => {
     expect(applyWorkflowCallOverridesToProviderRouting({
       steps: { review: { provider: 'codex', model: 'runtime-model', permissionMode: 'full' } },
@@ -394,33 +372,20 @@ steps:
     });
   });
 
-  it('workflow_call child defaults keep the escalate target unless the provider source changes', () => {
-    const escalation = { profile: 'strong', provider: 'codex' as const, model: 'gpt-strong' };
+  it('workflow_call child defaults keep profile permission unless the provider source changes', () => {
     const parentContext = {
       provider: 'mock' as const,
       providerSource: 'runtime-v1' as const,
       model: 'weak-model',
       modelSource: 'runtime-v1' as const,
       providerPermissionMode: 'full' as const,
-      providerEscalation: escalation,
     };
     const childWorkflow = { name: 'child' } as WorkflowConfig;
 
-    expect(resolveWorkflowCallChildProviderModel(childWorkflow, undefined, parentContext)
-      .providerEscalation).toEqual(escalation);
     expect(resolveWorkflowCallChildProviderModel(childWorkflow, { model: 'call-model' }, parentContext)
       .permissionMode).toBe('full');
-    expect(resolveWorkflowCallChildProviderModel(childWorkflow, { model: 'call-model' }, parentContext)
-      .providerEscalation).toEqual(escalation);
-    expect(resolveWorkflowCallChildProviderModel(childWorkflow, { provider: 'claude' }, parentContext)
-      .providerEscalation).toBeUndefined();
     expect(resolveWorkflowCallChildProviderModel(childWorkflow, { provider: 'claude' }, parentContext)
       .permissionMode).toBeUndefined();
-    expect(resolveWorkflowCallChildProviderModel(
-      { name: 'child', provider: 'claude' } as WorkflowConfig,
-      undefined,
-      parentContext,
-    ).providerEscalation).toBeUndefined();
     expect(resolveWorkflowCallChildProviderModel(
       { name: 'child', provider: 'claude' } as WorkflowConfig,
       undefined,

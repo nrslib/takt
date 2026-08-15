@@ -159,7 +159,6 @@ export class OptionsBuilder {
       providerRouting: this.engineOptions.providerRouting,
       tagConflictPolicy: this.engineOptions.providerRoutingTagConflictPolicy,
       personaProviders: this.engineOptions.personaProviders,
-      escalation: this.engineOptions.providerEscalation,
       permissionMode: this.engineOptions.providerPermissionMode,
     });
     const providerOptions = this.resolveMergedProviderOptions(step, resolved, runtime);
@@ -174,7 +173,6 @@ export class OptionsBuilder {
       modelSource: resolved.modelSource,
       providerOptions,
       providerOptionsSources,
-      ...(resolved.escalation !== undefined ? { escalation: resolved.escalation } : {}),
       ...(permissionMode !== undefined ? { permissionMode } : {}),
     };
   }

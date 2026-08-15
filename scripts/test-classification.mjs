@@ -63,7 +63,7 @@ const legacyParallelIntegrationTestFiles = Object.freeze([
 ]);
 
 // These tests were audited against their actual runtime behavior rather than
-// their filename or duration. They cross a real process, Git, SQLite, OS,
+// their filename or duration. They cross a real process, Git, OS,
 // storage, or multi-component contract boundary and therefore do not belong in
 // the fast unit gate even when the external provider itself is replaced by a
 // local test double.
@@ -150,7 +150,6 @@ export const auditedIntegrationBoundaryTestFiles = Object.freeze([
   'src/__tests__/workflow-preview.test.ts',
   'src/__tests__/workflow-reference.test.ts',
   'src/__tests__/workflow-run-lifecycle-boundary.test.ts',
-  'src/__tests__/workflow-run-lifecycle.test.ts',
   'src/__tests__/workflow-run-loop-command-gates.test.ts',
   'src/__tests__/workflow-step-fragment-params.test.ts',
   'src/__tests__/workflowCallResolver.test.ts',
@@ -177,6 +176,7 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/analytics-writer.test.ts',
   'src/__tests__/analyze-usage-command.test.ts',
   'src/__tests__/arpeggio-csv.test.ts',
+  'src/__tests__/build-output-clean.test.ts',
   'src/__tests__/builtin-workflow-categories-path.test.ts',
   'src/__tests__/claude-headless-client.test.ts',
   'src/__tests__/claude-mcp-config.test.ts',
@@ -274,7 +274,6 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/usageEventLogger.test.ts',
   'src/__tests__/watcher.test.ts',
   'src/__tests__/workflow-init.test.ts',
-  'src/__tests__/workflow-removed-syntax.test.ts',
   'src/__tests__/workflowExecution-ask-user-question.test.ts',
   'src/__tests__/workflowExecution-session-loading.test.ts',
   'src/__tests__/workflowExecution-structured-caller.test.ts',
@@ -296,7 +295,7 @@ export const lightContractIntegrationTestFiles = Object.freeze([
 ]);
 
 // Some integration-oriented filenames exercise only bounded filesystem,
-// SQLite, or in-process composition boundaries. Explicit membership takes
+// storage, or in-process composition boundaries. Explicit membership takes
 // precedence over the broad filename globs so these stay in the normal light
 // IT gate instead of being promoted solely because of their names.
 export const lightNamedIntegrationTestFiles = Object.freeze([
@@ -348,8 +347,8 @@ export const parallelIntegrationTestFiles = Object.freeze([
 // Add a file here only with a measured interference reason.
 export const serialGitTestFiles = Object.freeze([
   'src/__tests__/companion-diff-runtime.integration.test.ts',
-  // 2026-08-09: ラウンド9で遷移表→実 WorkflowEngine シナリオへ置換した結果、Git fixture+SQLite I/O の重量級になった(#1264 shard 飽和の主因)。
-  // 2026-08-09: heavy 並列スライスで birpc onTaskUpdate 期限超過が CI 2コアランナーで2連続再現(#1264)。SQLite+fsync 負荷の実測干渉のため serial へ。
+  // 2026-08-09: ラウンド9で遷移表→実 WorkflowEngine シナリオへ置換した結果、Git fixture+filesystem I/O の重量級になった(#1264 shard 飽和の主因)。
+  // 2026-08-09: heavy 並列スライスで birpc onTaskUpdate 期限超過が CI 2コアランナーで2連続再現(#1264)。filesystem+fsync 負荷の実測干渉のため serial へ。
   'src/__tests__/it-operation-journal-store.test.ts',
   // Spawns full runAllTasks engine runs (real child processes); on 2-core CI
   // runners it blocked a parallel worker past the 60s RPC deadline in two

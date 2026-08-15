@@ -28,8 +28,6 @@ export function resolveWorkflowRunTerminalStatus(input: {
     case 'step_transition':
     case 'runtime_error':
     case 'rule_no_match':
-    case 'provisional_findings':
-    case 'review_integrity_unresolved':
       return 'failed';
     default:
       return assertNever(input.abortKind);

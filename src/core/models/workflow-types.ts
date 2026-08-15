@@ -293,12 +293,9 @@ interface WorkflowStepBase {
   /** Internal-only marker for Team Leader planning steps that need lossless state output. */
   preserveFullPreviousResponse?: true;
   /**
-   * Set only by the engine when it synthesizes a step (e.g. the
-   * finding-conflict-adjudication step injected into config.steps). Never
-   * settable from workflow YAML (the raw schema has no such field), which is
-   * how WorkflowValidator distinguishes a user-authored step that squats on a
-   * reserved synthetic name (configuration error) from the engine's own
-   * injection (allowed).
+   * Set only by the engine when it synthesizes an internal step, such as a
+   * loop-monitor judge. Never settable from workflow YAML because the raw
+   * schema has no such field.
    */
   engineSynthesized?: true;
   /** Engine-owned agent whose Phase 1 must use the shared fresh-session transport. */
@@ -614,14 +611,6 @@ export interface RateLimitFallbackState {
 export interface WorkflowState {
   workflowName: string;
   currentStep: string;
-  /**
-   * Name of the step the state machine advanced FROM into currentStep
-   * (updated in WorkflowRunLoop's advanceActiveStep). Used by the
-   * finding-conflict-adjudication synthetic step to resolve its dynamic
-   * return-to-origin transition; undefined at workflow start and after a
-   * resume that begins directly at a step.
-   */
-  previousStep?: string;
   iteration: number;
   companion?: CompanionWorkflowState;
   stepOutputs: Map<string, AgentResponse>;

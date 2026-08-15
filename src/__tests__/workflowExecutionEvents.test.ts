@@ -408,7 +408,6 @@ describe('bindWorkflowExecutionEvents', () => {
         personaProviders: undefined,
         providerRouting: undefined,
         providerLadders: undefined,
-        providerEscalation: undefined,
       } as never, { syncParentState: true });
 
       const records = readFileSync(ndjsonPath, 'utf8')
@@ -701,7 +700,7 @@ describe('bindWorkflowExecutionEvents', () => {
     {
       kind: 'step_error',
       expectedStatus: 'failed',
-      failureError: 'NEEDS_ADJUDICATION: finding invariant failed',
+      failureError: 'REVIEW_FAILED: report validation failed',
       failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
     },
   ] as const)('publishes $kind as $expectedStatus', ({

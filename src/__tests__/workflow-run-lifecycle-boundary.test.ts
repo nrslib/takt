@@ -9,7 +9,6 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import * as runMeta from '../features/tasks/execute/runMeta.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import {
   createWorkflowRunLifecycle,
@@ -104,7 +103,7 @@ async function failRun(
 
 describe('workflow run lifecycle boundary', () => {
   it(
-    'Finding storage設定に依存せずrun lifecycleは単一storage portだけを公開する',
+    'run lifecycleは単一storage portだけを公開する',
     () => {
       const provider = createWorkflowRunLifecycle({
         cwd: '/nonexistent/workflow-run-lifecycle-boundary',
@@ -122,10 +121,6 @@ describe('workflow run lifecycle boundary', () => {
       expect(Object.keys(provider)).toEqual(['lifecycle']);
     },
   );
-
-  it('keeps SQLite meta projection validation out of the shared run meta module', () => {
-    expect(runMeta).not.toHaveProperty('finalizeStoredRunMeta');
-  });
 
   it(
     'beginRunはfile lifecycleの共通handleを返す',
@@ -218,7 +213,7 @@ describe('workflow run lifecycle boundary', () => {
   });
 
   it(
-    'SQLite Finding設定でも同一秒の2開始をfile directoryで別slugへ予約する',
+    '同一秒の2開始をfile directoryで別slugへ予約する',
     async () => {
       const cwd = createRoot();
       const composition = createWorkflowRunLifecycle({ cwd });

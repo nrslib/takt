@@ -65,7 +65,6 @@ function defaultResolution(environment: CompiledProviderEnvironment): ProviderRo
     ...(environment.model === undefined ? {} : { model: environment.model }),
     ...(environment.providerOptions === undefined ? {} : { providerOptions: environment.providerOptions }),
     ...(environment.permissionMode === undefined ? {} : { permissionMode: environment.permissionMode }),
-    ...(environment.escalation === undefined ? {} : { escalation: environment.escalation }),
   };
 }
 

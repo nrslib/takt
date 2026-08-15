@@ -284,8 +284,8 @@ describe('WorkflowRunLoop failure metadata', () => {
   it.each([
     {
       kind: 'step_error',
-      reason: 'Step "reviewers" failed: NEEDS_ADJUDICATION: finding invariant failed',
-      error: 'NEEDS_ADJUDICATION: finding invariant failed',
+      reason: 'Step "reviewers" failed: REVIEW_FAILED: report validation failed',
+      error: 'REVIEW_FAILED: report validation failed',
     },
     {
       kind: 'rule_no_match',

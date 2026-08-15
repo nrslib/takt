@@ -1311,14 +1311,14 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     );
   });
 
-  it('rejects a SQLite resume whose explicit target slug equals the source slug', async () => {
+  it('rejects a direct resume whose explicit target slug equals the source slug', async () => {
     const projectDir = createTempProject();
-    const sharedRunSlug = '20260524-shared-sqlite-run';
+    const sharedRunSlug = '20260524-shared-direct-run';
 
     await expect(async () => {
       await createWorkflowExecutionBootstrapImpl(
         workflowConfig,
-        'Resume same SQLite run',
+        'Resume same direct run',
         projectDir,
         {
           projectCwd: projectDir,
@@ -1331,7 +1331,7 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
         },
         createRunBootstrap({
           cwd: projectDir,
-          task: 'Resume same SQLite run',
+          task: 'Resume same direct run',
           requestedRunSlug: sharedRunSlug,
           resumeSource: {
             sourceRunSlug: sharedRunSlug,

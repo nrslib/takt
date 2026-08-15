@@ -243,26 +243,6 @@ describe('validateWorkflowConfig', () => {
     expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow('missing-step');
   });
 
-  it('treats removed terminal aliases as unknown step targets', () => {
-    const workflow = createWorkflow({
-      steps: [
-        {
-          name: 'plan',
-          persona: 'planner',
-          personaDisplayName: 'planner',
-          edit: false,
-          instruction: '{task}',
-          passPreviousResponse: true,
-          rules: [normalizeRule({ condition: 'stalled', next: 'REMOVED_TERMINAL' })],
-        },
-      ],
-    });
-
-    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
-      'Invalid rule in step "plan": target step "REMOVED_TERMINAL" does not exist',
-    );
-  });
-
   it('fails fast when workflow_call is configured without workflowCallResolver', () => {
     const workflow = createWorkflow({
       initialStep: 'delegate',

@@ -5,7 +5,6 @@ import type { WorkflowConfig } from '../../../core/models/index.js';
 import type {
   InternalAgentSeats,
   ProviderRoutingEntry,
-  ProviderEscalationTarget,
   ProviderLadderConfig,
   ResolvedObservabilityConfig,
   TagRoutingConflictPolicy,
@@ -123,7 +122,6 @@ export interface WorkflowExecutionBootstrap {
   personaProviders: WorkflowExecutionOptions['personaProviders'];
   providerRouting: WorkflowExecutionOptions['providerRouting'];
   providerLadders: ProviderLadderConfig | undefined;
-  providerEscalation: ProviderEscalationTarget | undefined;
   internalAgentSeats: InternalAgentSeats | undefined;
   selectorProvider: WorkflowExecutionOptions['selectorProvider'];
   companionEnabled: boolean;
@@ -748,7 +746,6 @@ export async function createWorkflowExecutionBootstrap(
     personaProviders: effectivePersonaProviders,
     providerRouting: effectiveProviderRouting,
     providerLadders: effectiveProviderLadders,
-    providerEscalation: providerEnvironment.escalation,
     internalAgentSeats: providerEnvironment.internalAgents,
     selectorProvider,
     companionEnabled,

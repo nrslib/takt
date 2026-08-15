@@ -7,7 +7,6 @@ import type { TaskReviewScope } from '../core/workflow/review-scope.js';
 import { isSensitiveProjectFilePath } from '../shared/utils/sensitive-file-path.js';
 import {
   collectCompletionRetryEvidence,
-  completionRetryClaimedPaths,
   COMPLETION_RETRY_EVIDENCE_MAX_FILE_BYTES,
   COMPLETION_RETRY_EVIDENCE_MAX_TOTAL_BYTES,
 } from '../core/workflow/completion-retry-evidence.js';
@@ -173,8 +172,8 @@ describe('completion retry evidence', () => {
     expect(evidence.omissions).toContainEqual({ reason: 'file_unavailable', count: 1 });
   });
 
-  it('admits structured claimed consumers as path-only metadata after validation', () => {
-    const cwd = createDirectory('takt-review-completion-claimed-evidence-');
+  it('admits prior judge gap paths as path-only metadata after validation', () => {
+    const cwd = createDirectory('takt-review-completion-prior-gap-evidence-');
     execFileSync('git', ['init'], { cwd });
     execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd });
     execFileSync('git', ['config', 'user.name', 'Test User'], { cwd });
@@ -185,15 +184,6 @@ describe('completion retry evidence', () => {
     execFileSync('git', ['commit', '-m', 'base'], { cwd });
     const baseCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).trim();
     writeFileSync(join(cwd, 'changed.ts'), 'export const changed = 2;\n');
-    const claimedPaths = completionRetryClaimedPaths({
-      rawFindings: [{
-        candidate: {
-          target: { kind: 'code', paths: ['consumer.ts', 'secrets.txt', '../outside.ts'] },
-          evidenceRequests: [{ kind: 'file_quote', path: 'consumer.ts' }],
-        },
-      }],
-    });
-
     const evidence = collectCompletionRetryEvidence({
       cwd,
       reviewScope: {
@@ -201,14 +191,14 @@ describe('completion retry evidence', () => {
         paths: ['changed.ts'],
         source: { kind: 'working_tree', baseRange: { kind: 'branch_base', baseCommit } },
       },
-      claimedPaths,
+      priorGapPaths: ['consumer.ts', 'secrets.txt', '../outside.ts', 'consumer.ts'],
     });
 
     expect(evidence.files.map(({ path }) => path)).toEqual(['changed.ts']);
-    expect(evidence.claimedPaths).toEqual(['consumer.ts']);
+    expect(evidence.priorGapPaths).toEqual(['consumer.ts']);
     expect(JSON.stringify(evidence)).not.toContain('opaque-secret-marker');
     expect(evidence.omissions).toEqual(expect.arrayContaining([
-      { reason: 'claimed_path_unverified', count: 1 },
+      { reason: 'prior_gap_path_unverified', count: 1 },
       { reason: 'sensitive_path', count: 1 },
     ]));
   });

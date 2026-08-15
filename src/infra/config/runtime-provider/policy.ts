@@ -26,7 +26,6 @@ export interface FlatProfile {
   capabilities?: string | string[];
   capabilitiesOriginProfile?: string;
   permissionMode?: 'readonly' | 'edit' | 'full';
-  escalate?: string;
 }
 
 /**
@@ -45,7 +44,6 @@ export function validateRuntimeProviderSection(section: RuntimeProviderSection):
   const flatProfiles = flattenProfiles(section.profiles ?? {});
   const poolNames = new Set(Object.keys(section.auto_routing?.pools ?? {}));
   validateReferences(section, flatProfiles, poolNames);
-  validateEscalateChains(flatProfiles);
 }
 
 /** Resolve every `extends` chain into flat profiles; throw on cycles and unknown parents. */
@@ -87,9 +85,6 @@ export function flattenProfiles(
     if (profile.permission_mode !== undefined) {
       flat.permissionMode = profile.permission_mode;
     }
-    if (profile.escalate !== undefined) {
-      flat.escalate = profile.escalate;
-    }
     resolving.delete(name);
     cache.set(name, flat);
     return flat;
@@ -99,40 +94,6 @@ export function flattenProfiles(
     resolve(name);
   }
   return cache;
-}
-
-/**
- * Validate every `escalate` reference. The engine only ever consumes one hop, but a cyclic
- * declaration means the author expressed "stronger than itself", which is a configuration
- * mistake rather than a reachable state, so the whole chain is walked here.
- */
-function validateEscalateChains(flatProfiles: Map<string, FlatProfile>): void {
-  for (const [name, profile] of flatProfiles) {
-    if (profile.escalate === undefined) {
-      continue;
-    }
-    if (profile.escalate === name) {
-      throw new Error(`Profile "${name}" cannot \`escalate\` to itself`);
-    }
-    const visited = new Set<string>([name]);
-    let current: string | undefined = profile.escalate;
-    while (current !== undefined) {
-      const target = flatProfiles.get(current);
-      if (!target) {
-        throw new Error(`Unknown profile "${current}" referenced by profiles.${name}.escalate`);
-      }
-      if (!target.provider || !target.model) {
-        throw new Error(
-          `Profile "${current}" referenced by profiles.${name}.escalate must define both \`provider\` and \`model\``,
-        );
-      }
-      if (visited.has(current)) {
-        throw new Error(`Cyclic \`escalate\` chain detected at profile "${name}"`);
-      }
-      visited.add(current);
-      current = target.escalate;
-    }
-  }
 }
 
 function validateReferences(

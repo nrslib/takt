@@ -113,10 +113,7 @@ import {
   type CompletionRetryDiagnostic,
 } from '../completion-retry.js';
 import { buildCompletionRetryJudgeStep } from '../completion-retry-judge-step.js';
-import {
-  collectCompletionRetryEvidence,
-  completionRetryClaimedPaths,
-} from '../completion-retry-evidence.js';
+import { collectCompletionRetryEvidence } from '../completion-retry-evidence.js';
 import { runWithCompletionRetryJudgeSpan } from '../observability/workflowSpans.js';
 import {
   fallbackContextForOperation,
@@ -356,7 +353,6 @@ export class StepExecutor {
           evidence: collectCompletionRetryEvidence({
             cwd: this.deps.getCwd(),
             reviewScope,
-            claimedPaths: completionRetryClaimedPaths(reviewResponse.structuredOutput),
             priorGapPaths: [...priorJudgeGapPaths],
           }),
           reviewResponse: reviewResponse.content,
