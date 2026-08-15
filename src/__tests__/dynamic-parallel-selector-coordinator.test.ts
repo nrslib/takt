@@ -22,6 +22,18 @@ vi.mock('../agents/structured-caller/transport.js', async (importOriginal) => {
   };
 });
 
+vi.mock('../core/workflow/instruction/report-reference.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/instruction/report-reference.js')>();
+  return {
+    ...actual,
+    resolveReportReferencePath: vi.fn((reportDirectory: string, reference: string) => (
+      reference === 'review-resolution.md'
+        ? { path: `${reportDirectory}/review-resolution.md`, scope: 'step' as const }
+        : undefined
+    )),
+  };
+});
+
 import { executeStructuredAgent } from '../agents/structured-caller/transport.js';
 
 const mockedExecuteAgent = vi.mocked(executeStructuredAgent);
@@ -135,21 +147,27 @@ describe('DynamicParallelSelectorCoordinator', () => {
       timestamp: new Date(),
       structuredOutput: { selected_ids: ['frontend'], rationale: 'frontend is relevant' },
     });
-    const deps = dependencies();
+    const reportDirectory = '/project/.takt/reports';
+    const reportPath = `${reportDirectory}/review-resolution.md`;
+    const deps = {
+      ...dependencies(),
+      getReportDirectory: () => reportDirectory,
+      getReportsRootDirectory: () => reportDirectory,
+    };
     const coordinator = new DynamicParallelSelectorCoordinator(deps);
 
     await coordinator.selectParticipants(
       dynamicParallelStep({
         mode: 'replace',
-        reports: ['review-resolution.md'],
+        reports: ['review-resolution.md', 'missing-report.md'],
       }),
       workflowState(),
       'review frontend changes',
     );
 
     expect(deps.inputReader?.readInputs).toHaveBeenCalledWith(
-      '.takt/reports',
-      ['review-resolution.md'],
+      reportDirectory,
+      [reportPath],
       '/project',
       undefined,
     );
