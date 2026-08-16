@@ -24,4 +24,6 @@ Review the latest review and fix reports in the Report Directory and determine w
 - When a post-fix review conflicts with the current code, do not repeat the same fix; choose among the available verification, recovery, or stop options.
 - Treat counts as supporting information and judge fix progress separately from report-content convergence.
 
-Choose a stop outcome only when implementation is incomplete or the report has not converged and no available action can break the deadlock.
+**Temporal input inconsistency:** If the latest reviewer reports show the findings resolved (all `APPROVE`, with no `new`, `persists`, or `reopened`), but the prior `review-resolution.md` alone repeats the same actionable family and a verified fix has already been rerun for it, classify this as a temporal-input inconsistency. This condition takes precedence over the progress criteria above: it is not a normal stall that another review or fix can resolve. Choose the existing `No feasible action can satisfy the requirements` / `ABORT` outcome; do not route back to reviewers or fixes because of the stale resolution.
+
+Choose a stop outcome only when implementation is incomplete or the report has not converged and no available action can break the deadlock, or when the temporal input inconsistency above is present. Do not choose a reviewer or fix route for that inconsistency.
