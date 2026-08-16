@@ -10,7 +10,11 @@
 import { execFileSync } from 'node:child_process';
 import { resolveConfigValue } from '../config/index.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
-import { materializeCloneHeadToRootBranch, stageAndCommit } from './git.js';
+import {
+  materializeCloneHeadToRootBranch,
+  stageAndCommit,
+  type StageAndCommitOptions,
+} from './git.js';
 
 const log = createLogger('autoCommit');
 const AUTO_COMMIT_PUSH_FAILURE_MESSAGE = 'Push to main repo failed after commit creation.';
@@ -25,6 +29,13 @@ export interface AutoCommitResult {
   localPushFailed?: boolean;
   /** Human-readable message */
   message: string;
+}
+
+export function resolveAutoCommitOptions(projectDir: string): StageAndCommitOptions {
+  return {
+    allowGitHooks: resolveConfigValue(projectDir, 'allowGitHooks') ?? false,
+    allowGitFilters: resolveConfigValue(projectDir, 'allowGitFilters') ?? false,
+  };
 }
 
 /**
@@ -50,10 +61,11 @@ export class AutoCommitter {
 
     try {
       const commitMessage = `takt: ${taskName}`;
-      const commitHash = await stageAndCommit(cloneCwd, commitMessage, {
-        allowGitHooks: resolveConfigValue(projectDir, 'allowGitHooks') ?? false,
-        allowGitFilters: resolveConfigValue(projectDir, 'allowGitFilters') ?? false,
-      });
+      const commitHash = await stageAndCommit(
+        cloneCwd,
+        commitMessage,
+        resolveAutoCommitOptions(projectDir),
+      );
 
       if (!commitHash) {
         log.info('No changes to commit');

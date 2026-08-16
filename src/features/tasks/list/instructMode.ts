@@ -21,6 +21,7 @@ import {
 import {
   prependSourceContext,
   prependSourceContextGuardToSystemPrompt,
+  formatLiteralBlock,
 } from '../../interactive/promptSections.js';
 import { createSelectActionWithoutExecute, buildReplayHint } from '../../interactive/interactive-summary.js';
 import { attachImageAttachmentCleanup } from '../../interactive/imageAttachments.js';
@@ -46,6 +47,12 @@ export interface InstructModeOptions {
   readonly runSessionContext?: RunSessionContext;
   readonly previousOrderContent?: string | null;
   readonly prContext?: PullRequestContext;
+  readonly failedContext?: FailedInstructContext;
+}
+
+export interface FailedInstructContext {
+  readonly reportSummary: string;
+  readonly worktreeSummary: string;
 }
 
 function toInstructModeResult(result: InteractiveModeResult): InstructModeResult {
@@ -78,6 +85,7 @@ function buildInstructTemplateVars(
     runSessionContext,
     previousOrderContent,
     prContext,
+    failedContext,
   } = options;
   const hasWorkflowPreview = !!workflowContext?.stepPreviews?.length;
   const stepDetails = hasWorkflowPreview
@@ -93,7 +101,7 @@ function buildInstructTemplateVars(
     taskName,
     taskContent,
     branchName,
-    branchContext,
+    branchContext: branchContext.length > 0 ? formatLiteralBlock(branchContext) : '',
     retryNote,
     hasWorkflowPreview,
     workflowStructure: workflowContext?.workflowStructure ?? '',
@@ -104,6 +112,17 @@ function buildInstructTemplateVars(
     orderContent: previousOrderContent ?? '',
     hasPrContext: prContext !== undefined,
     prContextText: prContext ? renderPullRequestContext(prContext, lang) : '',
+    hasFailedContext: failedContext !== undefined,
+    failedContextText: failedContext
+      ? [
+        failedContext.reportSummary.length > 0
+          ? `### Final adjudication evidence\n\n${formatLiteralBlock(failedContext.reportSummary)}`
+          : '',
+        failedContext.worktreeSummary.length > 0
+          ? `### Worktree evidence\n\n${formatLiteralBlock(failedContext.worktreeSummary)}`
+          : '',
+      ].filter((section) => section.length > 0).join('\n\n')
+      : '',
   };
 }
 

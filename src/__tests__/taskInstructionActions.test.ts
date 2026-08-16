@@ -914,6 +914,213 @@ describe('instructBranch direct execution flow', () => {
     );
   });
 
+  it('should start failed instruct from the saved run in the same worktree', async () => {
+    const runSessionContext = {
+      task: 'failed task\n追加条件を確認する',
+      workflow: 'default',
+      status: 'failed',
+      stepLogs: [],
+      reports: [{
+        filename: 'review-resolution.md',
+        content: [
+          '## Requirement Decision Grounds',
+          '| Subject | Status | Grounds |',
+          '|---|---|---|',
+          '| failed instruct | Fulfilled | review: APPROVE |',
+          '## Finding Dispositions',
+          '| Finding ID / Source | Disposition | Basis |',
+          '|---|---|---|',
+          '## Re-evaluation of Prior Findings',
+          '- review: APPROVE',
+          '## Reason the Decision Cannot Be Made (when BLOCKED)',
+          '- npm run test:e2e:mock',
+        ].join('\n'),
+      }],
+    };
+    mockLoadRunSessionContext.mockReturnValue(runSessionContext);
+    mockFindRunForTask.mockReturnValue('different-run');
+    mockExecFileSync.mockImplementation((_command, args) => {
+      const gitArgs = args as string[];
+      if (gitArgs[0] === 'status') {
+        return 'A  src/staged-marker.ts\n M src/unstaged-marker.ts\n?? untracked-marker.md\n';
+      }
+      if (gitArgs[0] === 'diff' && gitArgs.includes('main...takt/failed-task')) {
+        return ' src/committed-marker.ts | 1 +\n';
+      }
+      if (gitArgs[0] === 'diff' && gitArgs.includes('--cached')) {
+        return ' src/staged-marker.ts | 1 +\n';
+      }
+      if (gitArgs[0] === 'diff') {
+        return ' src/unstaged-marker.ts | 1 +\n';
+      }
+      if (gitArgs[0] === 'log') {
+        return 'abc123 failed run\n';
+      }
+      return '';
+    });
+
+    const failedTask = {
+      kind: 'failed' as const,
+      name: 'failed-task',
+      createdAt: '2026-02-14T00:00:00.000Z',
+      filePath: '/project/.takt/tasks.yaml',
+      content: 'failed task',
+      branch: 'takt/failed-task',
+      worktreePath: '/project/.takt/worktrees/failed-task',
+      runSlug: 'failed-run',
+      data: { task: 'failed task\n追加条件を確認する' },
+    };
+
+    const result = await instructBranch('/project', failedTask);
+
+    expect(result).toBe(true);
+    expect(mockFindRunForTask).not.toHaveBeenCalled();
+    expect(mockLoadRunSessionContext).toHaveBeenCalledWith(
+      '/project/.takt/worktrees/failed-task',
+      'failed-run',
+    );
+    expect(mockRunInstructMode).toHaveBeenCalledWith(expect.objectContaining({
+      cwd: '/project/.takt/worktrees/failed-task',
+      branchName: 'takt/failed-task',
+      runSessionContext,
+      failedContext: expect.objectContaining({
+        reportSummary: expect.stringContaining('failed instruct'),
+        worktreeSummary: expect.any(String),
+      }),
+    }));
+    const failedContext = mockRunInstructMode.mock.calls[0]?.[0]?.failedContext as {
+      reportSummary: string;
+      worktreeSummary: string;
+    };
+    expect(failedContext.reportSummary).toContain('未解決 finding: 0件');
+    expect(failedContext.reportSummary).toContain('npm run test:e2e:mock');
+    expect(failedContext.worktreeSummary).toContain('## ステージ済み変更');
+    expect(failedContext.worktreeSummary).toContain('src/staged-marker.ts');
+    expect(failedContext.worktreeSummary).toContain('## 未ステージ変更');
+    expect(failedContext.worktreeSummary).toContain('src/unstaged-marker.ts');
+    expect(failedContext.worktreeSummary).toContain('## 作業ツリーの状態');
+    expect(failedContext.worktreeSummary).toContain('untracked-marker.md');
+    expect(mockStartReExecution).toHaveBeenCalledWith(
+      'failed-task',
+      ['completed', 'failed'],
+      'instruct',
+      expect.objectContaining({
+        sourceRunSlug: 'failed-run',
+      }),
+    );
+    expect(mockExecuteAndCompleteTask).toHaveBeenCalled();
+  });
+
+  it('should resolve a missing failed run slug from the task in the same worktree', async () => {
+    const fullTask = 'failed task\n追加条件を確認する';
+    const runSessionContext = {
+      task: fullTask,
+      workflow: 'default',
+      status: 'failed',
+      stepLogs: [],
+      reports: [],
+    };
+    mockFindRunForTask.mockReturnValue('discovered-failed-run');
+    mockLoadRunSessionContext.mockReturnValue(runSessionContext);
+
+    await instructBranch('/project', {
+      kind: 'failed',
+      name: 'failed-task',
+      createdAt: '2026-08-15T00:00:00.000Z',
+      filePath: '/project/.takt/tasks.yaml',
+      content: 'failed task',
+      branch: 'takt/failed-task',
+      worktreePath: '/project/.takt/worktrees/failed-task',
+      data: { task: fullTask },
+    });
+
+    expect(mockFindRunForTask).toHaveBeenCalledWith(
+      '/project/.takt/worktrees/failed-task',
+      fullTask,
+    );
+    expect(mockLoadRunSessionContext).toHaveBeenCalledWith(
+      '/project/.takt/worktrees/failed-task',
+      'discovered-failed-run',
+    );
+    expect(mockFindPreviousOrderContent).toHaveBeenCalledWith(
+      '/project/.takt/worktrees/failed-task',
+      'discovered-failed-run',
+    );
+    expect(mockRunInstructMode).toHaveBeenCalledWith(expect.objectContaining({
+      cwd: '/project/.takt/worktrees/failed-task',
+      runSessionContext,
+      previousOrderContent: null,
+    }));
+    expect(mockStartReExecution).toHaveBeenCalledWith(
+      'failed-task',
+      ['completed', 'failed'],
+      'instruct',
+      expect.objectContaining({ sourceRunSlug: 'discovered-failed-run' }),
+    );
+  });
+
+  it('should not select a run when only the displayed task prefix matches', async () => {
+    const fullTask = 'x'.repeat(81);
+    mockFindRunForTask.mockReturnValue(null);
+    mockFindPreviousOrderContent.mockReturnValue('unrelated latest order');
+
+    await instructBranch('/project', {
+      kind: 'failed',
+      name: 'failed-task',
+      createdAt: '2026-08-15T00:00:00.000Z',
+      filePath: '/project/.takt/tasks.yaml',
+      content: 'x'.repeat(80),
+      branch: 'takt/failed-task',
+      worktreePath: '/project/.takt/worktrees/failed-task',
+      data: { task: fullTask },
+    });
+
+    expect(mockFindRunForTask).toHaveBeenCalledWith(
+      '/project/.takt/worktrees/failed-task',
+      fullTask,
+    );
+    expect(mockLoadRunSessionContext).not.toHaveBeenCalled();
+    expect(mockFindPreviousOrderContent).not.toHaveBeenCalled();
+    expect(mockRunInstructMode).toHaveBeenCalledWith(expect.objectContaining({
+      runSessionContext: undefined,
+      previousOrderContent: null,
+      failedContext: expect.objectContaining({ reportSummary: '' }),
+    }));
+    expect(mockStartReExecution).toHaveBeenCalledWith(
+      'failed-task',
+      ['completed', 'failed'],
+      'instruct',
+      expect.objectContaining({ sourceRunSlug: undefined }),
+    );
+  });
+
+  it('should not read an unrelated order when a failed run cannot be resolved', async () => {
+    mockFindRunForTask.mockReturnValue(null);
+    mockFindPreviousOrderContent.mockReturnValue('unrelated latest order');
+
+    await instructBranch('/project', {
+      kind: 'failed',
+      name: 'failed-task',
+      createdAt: '2026-08-15T00:00:00.000Z',
+      filePath: '/project/.takt/tasks.yaml',
+      content: 'failed task',
+      branch: 'takt/failed-task',
+      worktreePath: '/project/.takt/worktrees/failed-task',
+      data: { task: 'failed task' },
+    });
+
+    expect(mockFindPreviousOrderContent).not.toHaveBeenCalled();
+    expect(mockRunInstructMode).toHaveBeenCalledWith(expect.objectContaining({
+      previousOrderContent: null,
+    }));
+    expect(mockStartReExecution).toHaveBeenCalledWith(
+      'failed-task',
+      ['completed', 'failed'],
+      'instruct',
+      expect.objectContaining({ sourceRunSlug: undefined }),
+    );
+  });
+
   it('should search runs in worktree for run session context', async () => {
     mockListRecentRuns.mockReturnValue([
       { slug: 'run-1', task: 'fix', workflow: 'default', status: 'completed', startTime: '2026-02-18T00:00:00Z' },

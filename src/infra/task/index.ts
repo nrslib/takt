@@ -80,13 +80,18 @@ export {
   stageAndCommit,
   getCurrentBranch,
   pushBranch,
+  publishTaskBranch,
   checkoutBranch,
   materializePullRequestBase,
   relayPushCloneToOrigin,
   materializeCloneHeadToRootBranch,
 } from './git.js';
 export { buildTaskInstruction } from './instruction.js';
-export { autoCommitAndPush, type AutoCommitResult } from './autoCommit.js';
+export {
+  autoCommitAndPush,
+  resolveAutoCommitOptions,
+  type AutoCommitResult,
+} from './autoCommit.js';
 export { summarizeTaskName } from './summarize.js';
 export { TaskWatcher, type TaskWatcherOptions } from './watcher.js';
 export { isStaleRunningTask } from './process.js';
