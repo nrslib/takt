@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { WorkflowConfigRawSchema } from '../core/models/workflow-schemas.js';
 import { InstructionBuilder } from '../core/workflow/instruction/InstructionBuilder.js';
-import type { InstructionContext } from '../core/workflow/instruction/instruction-context.js';
+import {
+  buildGitRules,
+  type InstructionContext,
+} from '../core/workflow/instruction/instruction-context.js';
 import { renderWorkflowWideRules } from '../core/workflow/instruction/workflow-wide-rules.js';
 import { ReportInstructionBuilder } from '../core/workflow/instruction/ReportInstructionBuilder.js';
 import type { ReportInstructionContext } from '../core/workflow/instruction/ReportInstructionBuilder.js';
@@ -175,7 +178,10 @@ describe('workflow-wide Phase 1 rule rendering', () => {
     expect(prompt.indexOf('RULE_EXECUTION_FIRST')).toBeLessThan(prompt.indexOf('RULE_EXECUTION_SECOND'));
     expect(prompt.indexOf('RULE_EXECUTION_SECOND')).toBeLessThan(prompt.indexOf('RULE_INSTRUCTION_FIRST'));
     expect(prompt.indexOf('RULE_INSTRUCTION_FIRST')).toBeLessThan(prompt.indexOf(instructionMarker));
-    expect(prompt.indexOf('Do NOT run git commit')).toBeLessThan(prompt.indexOf('RULE_EXECUTION_FIRST'));
+    const gitRules = buildGitRules(false, 'en', 'phase1');
+    expect(gitRules).not.toBe('');
+    expect(prompt).toContain(gitRules);
+    expect(prompt.indexOf(gitRules)).toBeLessThan(prompt.indexOf('RULE_EXECUTION_FIRST'));
     const { noticeAfterExecutionRules } = renderWorkflowWideRules(rules, 'en');
     expect(prompt.split(noticeAfterExecutionRules)).toHaveLength(2);
     for (const rule of rules) {
