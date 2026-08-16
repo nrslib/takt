@@ -40,6 +40,8 @@ steps:
         policy:
           - contract-change
           - review
+          - architecture
+          - backend
         knowledge:
           - architecture
           - backend
@@ -59,8 +61,10 @@ steps:
         edit: false
         persona: cqrs-es-reviewer
         policy:
+          - cqrs-es
           - contract-change
           - review
+          - backend
         knowledge:
           - cqrs-es
           - backend

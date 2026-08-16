@@ -61,17 +61,24 @@ tests:
       - type: javascript
         metric: recall/in-place-mutation
         value: |
-          const target = '(?:sortByName|\\.sort\\b|ソート|並べ替え|並び替え)';
-          const mutation = '(?:破壊|変更|書き換え|mutat|in[ -]?place|元の(?:配列|入力|値|参照)(?:を|が|の)?(?:破壊|変更|書き換え|ソート))';
-          return new RegExp(
-            `${target}[^\\n。.!?]{0,160}${mutation}|${mutation}[^\\n。.!?]{0,160}${target}`,
-            'i',
-          ).test(output);
+          const target = /(?:sortByName|\.sort\b|ソート|並べ替え|並び替え)/i;
+          const mutation = /(?:破壊|変更|書き換え|mutat|in[ -]?place|元の(?:配列|入力|値|参照)(?:を|が|の)?(?:破壊|変更|書き換え|ソート))/i;
+          const inputEffect = /(?:入力|元の|呼び出し元|同一参照|配列)/i;
+          const text = String(output);
+          const findingBlocks = text.split(/\n(?=###\s)/);
+
+          // A reviewer may separate the missing target behavior and its mutation
+          // evidence into different findings. Keep mutation and input ownership
+          // in one finding, while allowing the target evidence in another.
+          const scopedMutation = findingBlocks.some(
+            (block) => mutation.test(block) && inputEffect.test(block),
+          );
+          return target.test(text) && scopedMutation;
       - type: javascript
         metric: recall/deferred-validation
         value: |
           const marker = /\b(?:TODO|FIXME)\b/gi;
-          const incomplete = /(?:先送り|未実装|未完成|実装待ち|未完了|保留|実装されて(?:いない|おらず|いません)|無検証|未検証|検証不足|検証されて(?:いない|おらず|いません)|欠落|不足|missing|absent|incomplete|pending|unresolved|(?:not|(?:is|was|are|were|has|have)n['’]t)\s+(?:yet\s+)?(?:been\s+)?(?:present|implemented|validated|verified|completed|complete|resolved|finished)|残すべき処理では(?:ない|ありません)|(?:実装|検証|解消)(?:済み|完了)(?:ではない|ではありません|でない|じゃない|ではなく|でなく)|実装されていない|defer(?:red|ring)?|unfinished|unimplemented|unvalidated|unverified)/i;
+          const incomplete = /(?:先送り|未実装|未完成|実装待ち|未完了|未解消|保留|実装されて(?:いない|おらず|いません)|無検証|未検証|検証不足|検証されて(?:いない|おらず|いません)|欠落|不足|missing|absent|incomplete|pending|unresolved|(?:not|(?:is|was|are|were|has|have)n['’]t)\s+(?:yet\s+)?(?:been\s+)?(?:present|implemented|validated|verified|completed|complete|resolved|finished)|残すべき処理では(?:ない|ありません)|(?:実装|検証|解消)(?:済み|完了)(?:ではない|ではありません|でない|じゃない|ではなく|でなく)|実装されていない|defer(?:red|ring)?|unfinished|unimplemented|unvalidated|unverified)/i;
           const incompleteGlobal = new RegExp(incomplete.source, 'gi');
           const complete = /(?:\b(?:present|implemented|validated|verified|resolved|completed|complete|finished)\b|(?<!未)完了|実装(?:済み|完了)|検証(?:済み|完了)|解消(?:済み|完了))/gi;
           const targetBoundary = /(?:[,，、;():：]|\b(?:and|but|or|while|although|even\s+though|however|though|whereas|with|plus|this|that|it)\b|ただし|しかし|一方で|でしたが|ですが|だが)/i;

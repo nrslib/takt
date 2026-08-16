@@ -12,6 +12,7 @@ tags: [review]
 edit: false
 persona: coding-reviewer
 policy:
+  - architecture
   - contract-change
   - review
   - coding

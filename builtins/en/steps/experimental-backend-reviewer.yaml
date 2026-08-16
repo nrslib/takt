@@ -13,6 +13,8 @@ tags: [review]
 edit: false
 persona: coding-reviewer
 policy:
+  - backend
+  - architecture
   - contract-change
   - review
   - coding

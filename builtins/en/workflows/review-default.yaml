@@ -44,6 +44,7 @@ steps:
         policy:
           - contract-change
           - review
+          - architecture
         knowledge: architecture
         instruction: review-arch
         output_contracts:

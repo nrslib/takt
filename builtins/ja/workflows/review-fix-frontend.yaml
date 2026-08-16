@@ -56,6 +56,8 @@ steps:
         policy:
           - contract-change
           - review
+          - architecture
+          - frontend
         knowledge:
           - architecture
           - frontend
@@ -78,6 +80,7 @@ steps:
           - contract-change
           - review
           - design-fidelity
+          - frontend
         knowledge: frontend
         instruction: review-frontend
         output_contracts:
@@ -154,6 +157,10 @@ steps:
         - frontend
         - security
         - architecture
+      supervise_policy:
+        - contract-change
+        - frontend
+        - architecture
     rules:
       - condition: COMPLETE
         next: COMPLETE
@@ -175,6 +182,8 @@ steps:
         - coding
         - testing
         - design-fidelity
+        - architecture
+        - frontend
       verification_policy:
         - coding
         - testing

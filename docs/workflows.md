@@ -97,6 +97,8 @@ Steps reference section maps by key name (e.g., `persona: coder`), not by file p
 
 Section maps are optional. Facets can be referenced directly by bare name (e.g., `persona: coder` without a `personas` map entry); bare names are resolved through the facet layers in priority order — project `.takt/facets/<type>/`, then global `~/.takt/facets/<type>/`, then bundled `builtins/{lang}/facets/<type>/`. Use a section map only when you need a custom alias or an explicit file path.
 
+`instruction` accepts either one scalar value or a non-empty ordered array. Each array item may be a facet key/path or inline text; items are resolved in place and joined with `\n\n---\n\n`, preserving an explicit boundary between elements. In a callable workflow, an array item may also be `{ $param: name }` for an `instruction` `facet_ref` or `facet_ref[]` parameter. A `facet_ref[]` value is spliced at that position without changing the surrounding order. The scalar form keeps its existing behavior.
+
 ### Workflow-wide rules (`all_steps.rules`)
 
 Declare rules that apply to every agent step in the workflow under `all_steps.rules`. Each entry is either a rule reference or an object with `ref` and the optional `position: before_instruction`. An omitted position places the rule after the automatic execution rules; `before_instruction` places it immediately before the step's `Instructions` section.
@@ -1006,6 +1008,8 @@ subworkflow:
 Builtin callable workflows should omit `max_steps` because the root workflow owns the budget for the complete call tree. Keep `max_steps` on the standalone root wrapper when the shared implementation also needs a direct entry point; the callable child is intended to be entered through `workflow_call`.
 
 Callable workflow facet parameters use `facet_ref` or `facet_ref[]` and one of the five `facet_kind` values: `policy`, `knowledge`, `instruction`, `persona`, or `report_format`. A `workflow_ref` parameter identifies a callable workflow and omits `facet_kind`; it may be used as `call: { $param: reviewer_suite }`. A `facet_pool_ref` parameter also omits `facet_kind` and identifies a scalar key in the callable child's top-level `facet_pools` map; it may be used as `dynamic_facets.pool: { $param: implementation_pool }`. A `companion_ref[]` parameter likewise omits `facet_kind` and supplies fixed companions through `companion: { $param: implementation_companions }` on a normal agent step. An empty array omits `companion` and rejects any remaining unquoted `companion.*` state reference; literal empty companion selections remain invalid. Defaults are optional. A `facet_ref[]` argument or default may be empty, which is useful for optional additions. In `policy` and `knowledge`, scalar or list parameters can be mixed with fixed references; list values are flattened at their position while preserving the field's written order. Parameters can also be forwarded through `workflow_call.args`. For `facet_pool_ref`, a missing required argument, a list value, an unknown child-local pool, or an unexpanded `$param` fails before execution; there is no implicit pool fallback. For `companion_ref[]`, a non-array argument, an undeclared parameter, or an unknown companion definition fails before execution.
+
+For `instruction`, a non-empty ordered array may mix facet refs and inline text; `facet_ref` / `facet_ref[]` parameters can be array items, and `facet_ref[]` values are flattened at their position before the resolved elements are joined with `\n\n---\n\n`.
 
 ## Examples
 

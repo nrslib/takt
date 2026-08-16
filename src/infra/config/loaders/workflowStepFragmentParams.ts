@@ -71,6 +71,10 @@ const KNOWLEDGE_CONTRACT: FieldContract = {
 };
 const INSTRUCTION_CONTRACT: FieldContract = {
   kinds: ['instruction'],
+  types: ['facet_ref', 'facet_ref[]'],
+};
+const COMPLETION_RETRY_INSTRUCTION_CONTRACT: FieldContract = {
+  kinds: ['instruction'],
   types: ['facet_ref'],
 };
 const PERSONA_CONTRACT: FieldContract = {
@@ -514,7 +518,7 @@ function bindStepFields(
         expanded[key] = substituteFacetList(value, KNOWLEDGE_CONTRACT, declarations, bindings, options, fieldPath);
         break;
       case 'instruction':
-        expanded[key] = substituteParam(value, INSTRUCTION_CONTRACT, declarations, bindings, options, fieldPath);
+        expanded[key] = substituteFacetList(value, INSTRUCTION_CONTRACT, declarations, bindings, options, fieldPath);
         break;
       case 'completion_retry': {
         if (!isPlainObject(value)) {
@@ -528,7 +532,7 @@ function bindStepFields(
           if (option === 'retry_instruction') {
             completionRetry[option] = substituteParam(
               optionValue,
-              INSTRUCTION_CONTRACT,
+              COMPLETION_RETRY_INSTRUCTION_CONTRACT,
               declarations,
               bindings,
               options,

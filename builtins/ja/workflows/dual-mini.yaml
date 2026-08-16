@@ -9,6 +9,9 @@ steps:
     args:
       plan_policy:
         - design-planning
+        - architecture
+        - backend
+        - frontend
       plan_knowledge:
         - frontend
         - backend
@@ -20,6 +23,9 @@ steps:
         - testing
         - design-fidelity
         - screen-api
+        - architecture
+        - backend
+        - frontend
       development_knowledge:
         - frontend
         - backend

@@ -13,9 +13,9 @@ tags: [review]
 edit: false
 persona: testing-reviewer
 policy:
+  - testing
   - contract-change
   - review
-  - testing
   - $param: review_policy_additions
 knowledge:
   - unit-testing

@@ -37,6 +37,7 @@ parallel:
       edit: false
       persona: architecture-reviewer
       policy:
+        - architecture
         - contract-change
         - review
         - $param: review_policy_additions
@@ -56,9 +57,10 @@ parallel:
       edit: false
       persona: testing-reviewer
       policy:
+        - testing
+        - takt
         - contract-change
         - review
-        - testing
         - $param: review_policy_additions
       knowledge:
         - unit-testing
@@ -78,6 +80,7 @@ parallel:
       edit: false
       persona: coding-reviewer
       policy:
+        - takt
         - contract-change
         - review
         - coding
@@ -99,9 +102,10 @@ parallel:
       edit: false
       persona: ai-antipattern-reviewer
       policy:
+        - ai-antipattern
+        - takt
         - contract-change
         - review
-        - ai-antipattern
         - $param: review_policy_additions
       knowledge:
         - takt

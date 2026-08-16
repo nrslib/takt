@@ -23,6 +23,12 @@ subworkflow:
       facet_kind: knowledge
       default:
         - architecture
+    supervise_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default:
+        - contract-change
+        - architecture
     supervisor_persona:
       type: facet_ref
       facet_kind: persona
@@ -39,7 +45,7 @@ steps:
     persona:
       $param: supervisor_persona
     policy:
-      - contract-change
+      $param: supervise_policy
     knowledge:
       $param: supervise_knowledge
     pass_previous_response: false

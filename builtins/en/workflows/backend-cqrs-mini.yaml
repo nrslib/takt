@@ -9,6 +9,9 @@ steps:
     args:
       plan_policy:
         - design-planning
+        - cqrs-es
+        - architecture
+        - backend
       plan_knowledge:
         - backend
         - cqrs-es
@@ -18,6 +21,9 @@ steps:
       development_policy:
         - coding
         - testing
+        - cqrs-es
+        - architecture
+        - backend
       development_knowledge:
         - backend
         - cqrs-es

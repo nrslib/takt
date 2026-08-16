@@ -7,18 +7,18 @@ steps:
     kind: workflow_call
     call: development-core
     args:
-      plan_policy: [design-planning, existing-system-respect]
+      plan_policy: [design-planning, existing-system-respect, architecture, frontend, react]
       plan_knowledge: [frontend, react, architecture, existing-system]
       plan_instruction: plan-maintenance
-      testing_policy: [coding, testing, existing-system-respect]
+      testing_policy: [coding, testing, existing-system-respect, architecture, frontend, react]
       testing_knowledge: [frontend, react, architecture, unit-testing, e2e-testing, existing-system]
       testing_instruction: write-tests-first
-      development_policy: [coding, testing, design-fidelity, existing-system-respect]
+      development_policy: [coding, testing, design-fidelity, existing-system-respect, architecture, frontend, react]
       development_knowledge: [frontend, react, security, architecture, existing-system]
       implementation_instruction: implement-maintenance
       reviewer_suite: peer-review-suite-frontend
       review_policy_additions: [existing-system-respect]
-      review_policy: [coding, testing, design-fidelity, existing-system-respect, review]
+      review_policy: [coding, testing, design-fidelity, existing-system-respect, review, architecture, frontend, react]
       review_knowledge: [frontend, react, security, architecture, unit-testing, e2e-testing, existing-system]
     rules:
       - condition: COMPLETE

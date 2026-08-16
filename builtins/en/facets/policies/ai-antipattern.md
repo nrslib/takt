@@ -15,6 +15,14 @@ Avoid assumptions, over-implementation, and superficial fixes during implementat
 | Reachability | Confirm that added or retained code is used by current call paths |
 | Verifiability | Check code paths, usage sites, and execution results instead of explanations |
 
+## Justifying Extension Points
+
+| Judgment | Criteria |
+|----------|----------|
+| REJECT | Add options, a Strategy, or an extension point for a value or behavior fixed by the requirement when current callers do not use it |
+| REJECT | A Strategy or interface has only one implementation and the current requirement has no replacement axis |
+| OK | The current requirement has multiple implementations or change axes and the abstraction represents that boundary |
+
 ## Assumption Verification
 
 AI often makes assumptions. Verify them.

@@ -26,7 +26,9 @@ steps:
     tags:
       - plan
     persona: planner
-    policy: contract-change
+    policy:
+      - contract-change
+      - architecture
     knowledge: architecture
     instruction: architecture-audit-plan
     edit: false
@@ -47,6 +49,7 @@ steps:
     policy:
       - contract-change
       - review
+      - architecture
     knowledge: architecture
     instruction: architecture-audit-team-leader
     edit: false
@@ -70,6 +73,7 @@ steps:
     policy:
       - contract-change
       - review
+      - architecture
     knowledge: architecture
     instruction: architecture-audit-supervise
     edit: false
@@ -87,6 +91,7 @@ steps:
     policy:
       - contract-change
       - review
+      - architecture
     knowledge: architecture
     instruction: architecture-audit-review
     edit: false

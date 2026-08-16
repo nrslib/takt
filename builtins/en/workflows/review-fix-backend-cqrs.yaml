@@ -56,6 +56,8 @@ steps:
         policy:
           - contract-change
           - review
+          - architecture
+          - backend
         knowledge:
           - architecture
           - backend
@@ -75,8 +77,10 @@ steps:
         edit: false
         persona: cqrs-es-reviewer
         policy:
+          - cqrs-es
           - contract-change
           - review
+          - backend
         knowledge:
           - cqrs-es
           - backend
@@ -156,6 +160,11 @@ steps:
         - cqrs-es
         - security
         - architecture
+      supervise_policy:
+        - contract-change
+        - cqrs-es
+        - backend
+        - architecture
     rules:
       - condition: COMPLETE
         next: COMPLETE
@@ -172,13 +181,18 @@ steps:
         - coding
         - testing
         - review
+        - cqrs-es
       fix_policy:
         - coding
         - testing
+        - cqrs-es
+        - architecture
+        - backend
       verification_policy:
         - coding
         - testing
         - review
+        - cqrs-es
       fix_knowledge:
         - backend
         - cqrs-es

@@ -102,6 +102,8 @@ fragment root の `params` は必須の型付き parameter を宣言し、`uses`
 
 **`instruction`**: セクションマップ → パス → 3-layer facet → インラインの順で解決する正式フィールド。`instruction_template` は受理されない。
 
+`instruction` は scalar または空でない順序付き配列を指定できます。配列の各要素は facet 参照またはインライン文字列で、記述順に解決して `\n\n---\n\n` で結合します。callable workflow では `facet_ref` / `facet_ref[]` parameter を配列要素の `{ $param: name }` で参照でき、`facet_ref[]` はその位置へ平坦化されます。
+
 ### Parallel step（親 + `parallel`）
 
 ```yaml

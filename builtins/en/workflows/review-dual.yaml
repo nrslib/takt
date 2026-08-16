@@ -40,6 +40,9 @@ steps:
         policy:
           - contract-change
           - review
+          - architecture
+          - backend
+          - frontend
         knowledge:
           - architecture
           - frontend
@@ -63,6 +66,7 @@ steps:
           - contract-change
           - review
           - design-fidelity
+          - frontend
         knowledge: frontend
         instruction: review-frontend
         output_contracts:

@@ -20,7 +20,9 @@ steps:
       - plan
     edit: false
     persona: planner
-    policy: contract-change
+    policy:
+      - contract-change
+      - terraform
     knowledge: terraform-aws
     rules:
       - condition: Requirements are clear and implementable
@@ -138,7 +140,7 @@ steps:
       - review
     edit: false
     persona: supervisor
-    policy: [contract-change]
+    policy: [contract-change, terraform]
     knowledge: terraform-aws
     instruction: supervise
     rules:
@@ -163,7 +165,7 @@ steps:
       - supervise
     edit: &terraform_supervise_edit false
     persona: &terraform_supervise_persona supervisor
-    policy: &terraform_supervise_policy [contract-change, review]
+    policy: &terraform_supervise_policy [contract-change, review, terraform]
     knowledge: &terraform_supervise_knowledge terraform-aws
     instruction: &terraform_supervise_instruction supervise
     rules:

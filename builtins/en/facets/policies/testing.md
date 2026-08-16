@@ -288,3 +288,43 @@ writeConfig({ backend: 'postgres', connectionPool: 10 })
 const backend = process.env.TEST_BACKEND ?? 'postgres'
 writeConfig({ backend, connectionPool: backend === 'embedded' ? 1 : 10 })
 ```
+
+## e2e-testing Criteria
+
+### E2E Test Scope
+
+| Criteria | Judgment |
+|----------|----------|
+| Writing E2E tests for logic that unit tests can cover | Warning. Consider moving to unit tests |
+| Verifying user operation flows | E2E test is appropriate |
+| Scenarios spanning multiple commands/pages | E2E test is appropriate |
+| Error message display verification | E2E test is appropriate |
+
+### Behavior Observation
+
+| Criteria | Judgment |
+|----------|----------|
+| Results from user actions or external inputs are observed | OK |
+| Rejection, error, and recovery paths verify the expected result | OK |
+| Only configuration or internal state is checked, with no user-visible result | REJECT |
+| Only real external-environment verification exists, with no deterministic test for the main boundary | Warning or REJECT |
+
+### Observing Negative Contracts
+
+| Criteria | Judgment |
+|----------|----------|
+| Treating rejection, non-inheritance, or isolation as verified only because one exact sentence is absent | REJECT |
+| Checking only the displayed allowed value without proving forbidden values do not reach final processing | REJECT |
+| Extracting observable units and checking forbidden, rejected, or non-inherited values per value | OK |
+| Comparing allowed vs rejected and inherited vs non-inherited cases in the same scenario family | OK |
+
+## unit-testing Criteria
+
+### Behavior Guarantees
+
+| Criteria | Judgment |
+|----------|----------|
+| Expected return values, exceptions, or side effects are directly verified | OK |
+| Both sides of a boundary change, such as success/failure or allow/deny, are verified | OK |
+| Only configuration values or the last internal state are checked | REJECT |
+| Main boundary conditions require an external environment to reproduce | Consider a deterministic test with a fake or stub |

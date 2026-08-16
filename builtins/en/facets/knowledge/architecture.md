@@ -4,18 +4,11 @@
 
 When a process combines multiple results, it selects one result using the rule defined for that process. Every control decision and external representation comes from that same result. Other results may remain recorded, but they do not replace the selected result through a priority rule that was not defined.
 
-| Criterion | Decision |
-|-----------|----------|
-| Status, category, displayed reason, and abort reason come from different results | REJECT |
-| A classified result is replaced with a generic error before a result is selected | REJECT |
-| Priority rules for a parallel operation or batch are embedded in the shared classification step | REJECT |
-| Classification, selection of one result, and output are handled separately | OK |
-| The rule for the operation selects one result once, and every decision and representation comes from it | OK |
 
 A shared classification step converts each response or exception exactly once into a result with its classification, cause, and recovery method. Each parallel operation, parent-child operation, or batch selects one result using its own rule. The output step derives status, category, reason, retry, fallback, stop decisions, abort reasons, and external representations from the selected result. Do not replace these three steps with one universal priority rule.
 
 ```typescript
-// NG - select different parent fields from different siblings
+// Avoid: select different parent fields from different siblings
 const retryable = outcomes.find((outcome) => outcome.recovery === 'retry');
 const categorized = outcomes.find((outcome) => outcome.category !== undefined);
 return {
@@ -24,7 +17,7 @@ return {
   abortReason: retryable?.detail,
 };
 
-// OK - select once through the boundary policy and project one primary
+// Example: select once through the boundary policy and project one primary
 const outcomes = responses.map(classifyOutcome);
 const primary = selectPrimaryOutcome(outcomes, boundaryPolicy);
 return {
@@ -56,11 +49,6 @@ Domain operations and external side effects are easier to understand when their 
 
 Public APIs should expose only domain-level functions and types. Do not export infrastructure internals (provider-specific functions, internal parsers, etc.).
 
-| Judgment | Criteria |
-|----------|----------|
-| REJECT | Infrastructure-layer functions exported from public API |
-| REJECT | Internal implementation functions callable from outside |
-| OK | External consumers interact only through domain-level abstractions |
 
 **Function Design:**
 
@@ -112,14 +100,7 @@ Vertical Slice selection factors:
 | Multiple features share the same business rules and reason to change | Consider layered or hybrid structure that preserves a common owner |
 | Feature-specific responsibilities and cross-cutting infrastructure change for different reasons | Candidate for a hybrid of feature slices and shared infrastructure |
 
-Prohibited patterns:
-
-| Pattern | Problem |
-|---------|---------|
-| Bloated `utils/` | Becomes graveyard of unclear responsibilities |
-| Lazy placement in `common/` | Dependencies become unclear |
-| Nesting does not express a responsibility or owner | Makes navigation and change impact difficult to understand |
-| Mixed features and layers | `features/services/` prohibited |
+`utils/` and `common/` tend to grow without expressing a responsibility or owner. When features and layers are represented in the same hierarchy, verify the dependency direction and change impact.
 
 **Separation of Concerns:**
 
@@ -132,27 +113,14 @@ Prohibited patterns:
 
 Adapters such as HTTP, CLI, GraphQL, and message consumers are boundaries that translate internal exceptions into external protocol representations. Scattering the same try-catch / response translation across endpoints or handlers easily makes status codes, error shapes, logs, and authorization failures inconsistent. Centralize exception translation in a dedicated layer at the adapter boundary, and keep only truly cross-cutting translations in a global handler.
 
-| Criteria | Judgment |
-|----------|----------|
-| Each endpoint / handler implements the same translation from the same exception to the same protocol representation | REJECT |
-| Translation to protocol representation lives in the application or domain layer | REJECT |
-| API-specific exception translation is placed in a global handler shared by all APIs | REJECT |
-| Translation to external representation is centralized in an exception translation layer at the adapter boundary | OK |
 
 ## Resolve at the Boundary
 
 Values such as config, options, providers, permissions, and paths should be resolved at the boundary before entering the core flow. Main processing should assume values are already resolved and should not keep asking config sources.
 
-| Criteria | Judgment |
-|----------|----------|
-| Create a resolved object such as `ExecutionContext` or `ResolvedOptions` at the entry point | OK |
-| Orchestration layers handle only resolved values | OK |
-| Lower layers reload global/project/env and resolve the same value again | REJECT |
-| Separate resolution functions exist for display and execution | REJECT |
-| Unresolved options are passed deep and later fixed with `??` | REJECT |
 
 ```typescript
-// REJECT - Execution layer knows config sources directly
+// Avoid: Execution layer knows config sources directly
 async function executeWorkflow(options) {
   const engine = new WorkflowEngine({
     provider: options.provider ?? globalConfig.provider,
@@ -166,7 +134,7 @@ class AgentRunner {
   }
 }
 
-// OK - Resolve at the boundary, use resolved values internally
+// Example: Resolve at the boundary, use resolved values internally
 async function executeWorkflow(options) {
   const context = resolveExecutionContext(options);
   const engine = new WorkflowEngine(context);
@@ -183,40 +151,22 @@ class AgentRunner {
 
 Do not make lower layers inspect config sources and decide for themselves. Upper layers should tell them what to use by passing resolved values. Separate value selection from execution.
 
-| Pattern | Judgment |
-|---------|----------|
-| Upper layer passes a value such as `resolvedProvider` | OK |
-| Lower layer inspects `options` and resolves on its own | REJECT |
-| Execution object exposes only `run()` after `setup(config)` | OK |
-| Runtime branches call `getGlobalConfig()` during execution | REJECT |
 
 ### Anti-Corruption Layer
 
 Precedence resolution and external config formats belong in a dedicated boundary layer. Pass only normalized internal values into the core model.
 
-| Pattern | Judgment |
-|---------|----------|
-| Encapsulate YAML/env/CLI differences in a resolver/adapter | OK |
-| Domain layer directly handles env var names or config key strings | REJECT |
-| Conversion from external form to internal form is centralized in one place | OK |
-| Same normalization logic is copied in multiple places | REJECT |
 
 ### Separating Candidate Resolution from Value Composition
 
 Selecting a referenced target from multiple candidates and composing the selected value are separate contracts. Mixing lookup order, override rules, and reference kinds makes display, validation, and execution drift.
 
-| Criteria | Judgment |
-|----------|----------|
-| Candidate lookup is first-match, but multiple candidates are implicitly composed because it is confused with value deep-merge | REJECT |
-| Nearer-scope candidates are searched after farther-scope candidates | REJECT |
-| Reference strings are classified only by the presence of a separator, confusing special references with explicit paths | REJECT |
-| Candidate lookup, reference-kind classification, and value composition are readable as separate responsibilities | OK |
 
 ```typescript
-// REJECT - Reference kind and lookup basis are mixed into one condition
+// Avoid: Reference kind and lookup basis are mixed into one condition
 const root = ref.includes('/') ? currentRoot : ownerRoot
 
-// OK - Classify first, then resolve according to that kind's contract
+// Example: Classify first, then resolve according to that kind's contract
 const kind = classifyReference(ref)
 const root = resolveRootForReference(kind, resolvedPath)
 ```
@@ -225,34 +175,21 @@ const root = resolveRootForReference(kind, resolvedPath)
 
 Values read from external files or configuration may be syntactically valid while not matching the expected shape. Treat them as unknown at the boundary, normalize into arrays, records, or scalars, and only then pass them into internal processing.
 
-| Criteria | Judgment |
-|----------|----------|
-| Calling array methods or accessing properties directly on parsed unknown values | REJECT |
-| Treating existence alone as satisfying file type or directory requirements | REJECT |
-| Boundary code normalizes unknown values into internal types and pins contract-invalid shapes to ignore, normalize, or explicit-error behavior | OK |
-| File and directory requirements are verified down to the actual entry kind | OK |
 
 ### Phase Separation
 
 Separate input, interpretation, execution, and output into distinct stages. Iterative processing should, as much as possible, receive already interpreted input in bulk and then repeat only execution.
 
-| Criteria | Judgment |
-|----------|----------|
-| Convert raw input into a `Resolved*` type at the boundary before entering the core flow | OK |
-| Loop body handles only execution on resolved data | OK |
-| Config/env/options are interpreted inside every iteration | REJECT |
-| Each iteration packs `input -> interpret -> execute -> output` into one function | REJECT |
-| Even when optimization requires incremental handling, interpretation is isolated in a dedicated method | OK |
 
 ```typescript
-// REJECT - Each iteration also interprets input
+// Avoid: Each iteration also interprets input
 for (const item of items) {
   const resolved = resolveItem(item, rawOptions, config);
   const result = execute(resolved);
   output(result);
 }
 
-// OK - Interpret first, iterations only execute
+// Example: Interpret first, iterations only execute
 const resolvedItems = items.map((item) => resolveItem(item, rawOptions, config));
 
 for (const item of resolvedItems) {
@@ -269,42 +206,33 @@ Even when interpretation must happen incrementally, keep `nextRawInput()`, `reso
 
 Detect comments that simply restate code behavior in natural language.
 
-| Judgment | Criteria |
-|----------|----------|
-| REJECT | Restates code behavior in natural language |
-| REJECT | Repeats what is already obvious from function/variable names |
-| REJECT | JSDoc that only paraphrases the function name without adding information |
-| OK | Explains why a particular implementation was chosen |
-| OK | Explains the reason behind seemingly unusual behavior |
-| OK | Explains the calculation basis or components of a constant or magic number |
-| Best | No comment needed — the code itself communicates intent |
 
 ```typescript
-// REJECT - Restates code (What)
+// Avoid: Restates code (What)
 // If interrupted, abort immediately
 if (status === 'interrupted') {
   return ABORT_STEP;
 }
 
-// REJECT - Restates the loop
+// Avoid: Restates the loop
 // Check transitions in order
 for (const transition of step.transitions) {
 
-// REJECT - Repeats the function name
+// Avoid: Repeats the function name
 /** Check if status matches transition condition. */
 export function matchesCondition(status: Status, condition: TransitionCondition): boolean {
 
-// OK - Design decision (Why)
+// Example: Design decision (Why)
 // User interruption takes priority over workflow-defined transitions
 if (status === 'interrupted') {
   return ABORT_STEP;
 }
 
-// OK - Reason behind seemingly odd behavior
+// Example: Reason behind seemingly odd behavior
 // stay can cause loops, but is only used when explicitly specified by the user
 return step.name;
 
-// OK - Calculation basis for a constant
+// Example: Calculation basis for a constant
 // paddingTop + paddingBottom + button height
 const footerHeight = 24 + 12 + 48;
 ```
@@ -314,27 +242,27 @@ const footerHeight = 24 + 12 + 48;
 Detect direct mutation of arrays or objects.
 
 ```typescript
-// REJECT - Direct array mutation
+// Avoid: Direct array mutation
 const steps: Step[] = getSteps();
 steps.push(newStep);           // Mutates original array
 steps.splice(index, 1);       // Mutates original array
 steps[0].status = 'done';     // Nested object also mutated directly
 
-// OK - Immutable operations
+// Example: Immutable operations
 const withNew = [...steps, newStep];
 const without = steps.filter((_, i) => i !== index);
 const updated = steps.map((s, i) =>
   i === 0 ? { ...s, status: 'done' } : s
 );
 
-// REJECT - Direct object mutation
+// Avoid: Direct object mutation
 function updateConfig(config: Config) {
   config.logLevel = 'debug';   // Mutates argument directly
   config.steps.push(newStep);  // Nested mutation too
   return config;
 }
 
-// OK - Returns new object
+// Example: Returns new object
 function updateConfig(config: Config): Config {
   return {
     ...config,
@@ -355,19 +283,6 @@ function updateConfig(config: Config): Config {
 - Dependency injection enabled
 - Mockable design
 - Tests are written
-
-## Anti-Pattern Detection
-
-REJECT when these patterns are found:
-
-| Anti-Pattern | Problem |
-|--------------|---------|
-| God Class/Component | Single class with too many responsibilities |
-| Feature Envy | Frequently accessing other modules' data |
-| Shotgun Surgery | Single change ripples across multiple files |
-| Over-generalization | Variants and extension points not currently needed |
-| Hidden Dependencies | Child components implicitly calling APIs etc. |
-| Non-idiomatic | Custom implementation ignoring language/FW conventions |
 
 ## Abstraction Level Evaluation
 
@@ -461,14 +376,6 @@ Conditions that require consistency:
 | Added or changed types or schemas | Producers, consumers, user-facing documentation, and valid configuration outside the changed contract |
 | Changes involving design constraints | The primary specification that owns the constraint and its implementation boundary |
 
-REJECT when these patterns are found:
-
-| Pattern | Problem |
-|---------|---------|
-| Fields not in the spec | Ignored or unexpected behavior |
-| Invalid values per spec | Runtime error or silently ignored |
-| Violation of documented constraints | Against design intent |
-
 ## Call Chain Verification
 
 Missing wiring after contract changes follows the coding policy. In architecture review, check whether new parameters or fields actually reach callers, producers, and readers instead of staying local to the changed file.
@@ -512,7 +419,7 @@ The need for a defensive condition depends on preconditions guaranteed by reacha
 For shared state published by a module (initial state, singletons, configuration objects), consumer mutations must not leak to other consumers. The required property is observable isolation. Factories, defensive copies, persistent data structures, and freezing are implementation choices; do not require recursive freezing or reference identity unless the public contract specifies the mechanism.
 
 ```typescript
-// REJECT - mutable published initial state; one consumer write poisons every replay
+// Avoid: mutable published initial state; one consumer write poisons every replay
 export const initialState: State = { count: 0, entries: {} };
 
 // Option - frozen, including nested objects

@@ -54,12 +54,6 @@ Provider.setup(AgentSetup) → ProviderAgent
 ProviderAgent.call(prompt, options) → AgentResponse
 ```
 
-| 基準 | 判定 |
-|------|------|
-| SDK 固有のエラーハンドリングが Provider 外に漏れている | REJECT |
-| AgentResponse.error にエラーを伝播していない | REJECT |
-| プロバイダー間でセッションキーが衝突する | REJECT |
-| セッションキー形式 `{persona}:{provider}` | OK |
 
 ### モデル解決
 
@@ -78,24 +72,11 @@ provider と model はフィールドごとに独立して解決される。上�
 
 TAKT では workflow 実行経路だけでなく、preview、doctor、workflow summary、validation、report も利用者に見える契約入口である。設定値、provider、model、tool、権限、出力契約を表示・検証する補助入口は、runtime と同じ正規化済み入力、resolver、override 順を使う。
 
-| 基準 | 判定 |
-|------|------|
-| runtime と preview が別々の入力で provider、model、tool、権限を解決している | REJECT |
-| preview に値が表示されるだけで、runtime と同じ override 条件を検証していない | REJECT |
-| doctor や validation が正常とする設定が runtime では別条件により失敗する | 警告 |
-| runtime と補助入口が同じ正規化済み入力または同じ resolver を共有している | OK |
 
 ## 実行資産の消費境界
 
 TAKT の実行資産は、配置場所や名前だけではなく、それを消費する入口で意味が決まる。同じ文字列でも、資産参照、セッション識別子、表示名、直接渡される本文は別契約として扱う。
 
-| 基準 | 判定 |
-|------|------|
-| 資産参照を解決する入口と、識別子だけを使う入口を同一視している | REJECT |
-| 同名の facet を追加しただけで、直接本文を渡す入口にも反映されると扱っている | REJECT |
-| workflow 由来の実行資産と機能固有の実行資産が同じ責務名で混在している | 警告 |
-| 入口ごとに、どの resolver / loader がどの資産種別を消費するかを確認して配置している | OK |
-| 共有すべき本文を、既存の実行資産 loader から読む形に集約している | OK |
 
 ### 参照名と識別名
 
@@ -109,11 +90,6 @@ faceted-prompting モジュールは TAKT 本体に依存しない独立モジ�
 compose(facets, options) → ComposedPrompt { systemPrompt, userMessage }
 ```
 
-| 基準 | 判定 |
-|------|------|
-| faceted-prompting から TAKT コアへの import | REJECT |
-| TAKT コアから faceted-prompting への依存 | OK |
-| ファセットパス解決のロジックが faceted-prompting 外にある | 警告 |
 
 ### ファセット解決の3層優先順位
 
@@ -149,10 +125,10 @@ TAKT は、テスト名や所要時間ではなく実際にまたぐ境界で un
 `--provider mock` でテスト用の決定論的レスポンスを返す。シナリオキューで複数ターンのテストを構成する。
 
 ```typescript
-// NG - テストでリアル API を呼ぶ
+// 避ける例: テストでリアル API を呼ぶ
 const response = await callClaude(prompt)
 
-// OK - Mock プロバイダーでシナリオを設定
+// 例: Mock プロバイダーでシナリオを設定
 setMockScenario([
   { persona: 'coder', status: 'done', content: '[STEP:1]\nDone.' },
   { persona: 'reviewer', status: 'done', content: '[STEP:1]\napproved' },
@@ -161,11 +137,6 @@ setMockScenario([
 
 ### テストの分離
 
-| 基準 | 判定 |
-|------|------|
-| テスト間でグローバル状態を共有 | REJECT |
-| 環境変数をテストセットアップでクリアしていない | 警告 |
-| E2E テストで実 API を前提としている | `provider` 指定の config で分離 |
 
 ## プラットフォーム優先度
 
@@ -175,11 +146,6 @@ TAKT では Windows を副次プラットフォームとして扱う。
 
 プロバイダーエラーは `AgentResponse.error` → セッションログ → コンソール出力の経路で伝播する。
 
-| 基準 | 判定 |
-|------|------|
-| SDK エラーが空の `blocked` ステータスになる | REJECT |
-| エラー詳細がセッションログに記録されない | REJECT |
-| エラー時に ABORT 遷移が定義されていない | 警告 |
 
 ## セッション管理
 
@@ -191,13 +157,6 @@ TAKT では Windows を副次プラットフォームとして扱う。
 
 Report Phase は Phase 1 の成果物を読む Phase 2 であり、readonly かつ tool-free の実行契約を持つ。report retry/fallback でも `permissionMode: readonly`、空の tool 許可、provider 能力 override（例: turn 上限）を落としてはならない。
 
-| 基準 | 判定 |
-|------|------|
-| `cwd !== projectCwd` でセッション再開している | REJECT |
-| セッションキーにプロバイダーが含まれない | REJECT（クロスプロバイダー汚染） |
-| 継続すべき Phase 間でセッションが切れている | REJECT（コンテキスト喪失） |
-| 新規セッション retry 成功後に、古い resumed session を残している | REJECT（意図しない resume） |
-| report retry/fallback で readonly、tool-free、能力 override が落ちている | REJECT |
 
 ## 終了経路の完全性
 

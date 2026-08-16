@@ -44,6 +44,8 @@ steps:
         policy:
           - contract-change
           - review
+          - architecture
+          - takt
         knowledge:
           - architecture
           - takt
@@ -127,6 +129,7 @@ steps:
         policy:
           - contract-change
           - security-review
+          - takt
         knowledge:
           - security
           - security-data

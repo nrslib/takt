@@ -248,6 +248,8 @@ steps:
         $param: review_knowledge
       verification_policy:
         $param: review_policy
+      final_gate_policy:
+        $param: review_policy
       fix_plan_instruction:
         $param: fix_plan_instruction
       fix_plan_report_format:

@@ -40,6 +40,8 @@ steps:
         policy:
           - contract-change
           - review
+          - architecture
+          - backend
         knowledge:
           - architecture
           - backend

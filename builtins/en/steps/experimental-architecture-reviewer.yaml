@@ -13,6 +13,7 @@ tags: [review]
 edit: false
 persona: architecture-reviewer
 policy:
+  - architecture
   - contract-change
   - review
   - $param: review_policy_additions

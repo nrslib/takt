@@ -12,9 +12,10 @@ tags: [review]
 edit: false
 persona: ai-antipattern-reviewer
 policy:
+  - ai-antipattern
+  - architecture
   - contract-change
   - review
-  - ai-antipattern
   - $param: review_policy_additions
 knowledge:
   - architecture

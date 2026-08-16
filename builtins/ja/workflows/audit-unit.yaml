@@ -31,6 +31,7 @@ steps:
     policy:
       - contract-change
       - testing
+      - architecture
     knowledge:
       - architecture
       - unit-testing
@@ -56,6 +57,7 @@ steps:
       - contract-change
       - review
       - testing
+      - architecture
     knowledge:
       - architecture
       - unit-testing
@@ -81,6 +83,7 @@ steps:
     policy:
       - contract-change
       - review
+      - testing
     knowledge:
       - unit-testing
     instruction: unit-audit-supervise
