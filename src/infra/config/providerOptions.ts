@@ -623,17 +623,7 @@ export function resolvePersonaProviderOptions(
 }
 
 export function resolveDirectStepProviderOptions(step: WorkflowStep): StepProviderOptions | undefined {
-  if ('directProviderOptions' in step) {
-    return step.directProviderOptions;
-  }
-  return step.providerOptions;
-}
-
-export function resolveStepWorkflowProviderOptions(step: WorkflowStep): StepProviderOptions | undefined {
-  if ('workflowProviderOptions' in step) {
-    return step.workflowProviderOptions;
-  }
-  return undefined;
+  return step.engineSynthesized === true ? step.providerOptions : undefined;
 }
 
 export function resolveStepCapabilityProviderOptions(step: WorkflowStep): StepProviderOptions | undefined {
@@ -651,10 +641,6 @@ export function resolveStepProviderOptionsLayers(
     {
       source: 'capabilities',
       options: resolveStepCapabilityProviderOptions(step),
-    },
-    {
-      source: 'workflow',
-      options: resolveStepWorkflowProviderOptions(step),
     },
     {
       source: 'persona_providers',
@@ -710,7 +696,7 @@ export function resolveProfileScopedProviderOptionsLayers(
     return layers;
   }
   const nonProfileLayers = layers.filter((layer) => (
-    layer.source === 'capabilities' || layer.source === 'workflow'
+    layer.source === 'capabilities'
   ));
   if (resolvedProviderSource === 'provider_routing.tags') {
     const winningTag = [...(step.tags ?? [])].reverse().find((tag) => (

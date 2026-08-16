@@ -91,7 +91,7 @@ vi.mock('../../shared/utils/index.js', async (importOriginal) => ({
 import { repertoireAddCommand } from '../../commands/repertoire/add.js';
 import { captureError } from '../helpers/repertoire-test-helpers.js';
 
-let workflowProviderOptionsExtends = 'edit';
+let workflowCapabilitySet = 'edit';
 let workflowUsesExcludedFragment = false;
 let stepFragmentFileName = '';
 
@@ -99,7 +99,7 @@ describe('repertoireAddCommand install summary integration', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockPaths.root = '';
-    workflowProviderOptionsExtends = 'edit';
+    workflowCapabilitySet = 'edit';
     workflowUsesExcludedFragment = false;
     stepFragmentFileName = '';
     mockFsFailure.lstatPathSuffix = '';
@@ -115,27 +115,27 @@ describe('repertoireAddCommand install summary integration', () => {
     }
   });
 
-  it('should report provider_options tools discovered through real package collection and summary detection', async () => {
+  it('should report capability tools discovered through real package collection and summary detection', async () => {
     mockPaths.root = mkdirTempRoot();
     mockExecFileSync.mockImplementation(createPackageCommandHandler);
 
     await repertoireAddCommand('github:owner/repo@main');
 
     const messages = mockInfo.mock.calls.map((call) => String(call[0]));
-    expect(messages).toContain('\n   ⚠ workflow.yaml: provider_options.allowed_tools: [Bash]');
+    expect(messages).toContain('\n   ⚠ workflow.yaml: capabilities.allowed_tools: [Bash]');
   });
 
-  it('should report provider_options tools from self scoped package refs before installation', async () => {
+  it('should report capability tools from self scoped package refs before installation', async () => {
     mockPaths.root = mkdirTempRoot();
-    workflowProviderOptionsExtends = '@owner/repo/edit';
+    workflowCapabilitySet = '@owner/repo/edit';
     writeInstalledProviderOptions('claude:\n  allowed_tools: [Read]\n');
     mockExecFileSync.mockImplementation(createPackageCommandHandler);
 
     await repertoireAddCommand('github:owner/repo@main');
 
     const messages = mockInfo.mock.calls.map((call) => String(call[0]));
-    expect(messages).toContain('\n   ⚠ workflow.yaml: provider_options.allowed_tools: [Bash]');
-    expect(messages).not.toContain('\n   ⚠ workflow.yaml: provider_options.allowed_tools: [Read]');
+    expect(messages).toContain('\n   ⚠ workflow.yaml: capabilities.allowed_tools: [Bash]');
+    expect(messages).not.toContain('\n   ⚠ workflow.yaml: capabilities.allowed_tools: [Read]');
   });
 
   it('should reject before confirmation when the real collector excludes a referenced step fragment', async () => {
@@ -236,8 +236,7 @@ function extractPackage(args: string[]): void {
     : [
         'steps:',
         '  - name: run',
-        '    provider_options:',
-        `      extends: "${workflowProviderOptionsExtends}"`,
+        `    capabilities: "${workflowCapabilitySet}"`,
         '',
       ].join('\n');
   writeFileSync(join(targetDir, 'workflows', 'workflow.yaml'), workflowYaml);

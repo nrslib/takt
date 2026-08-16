@@ -56,7 +56,6 @@ import {
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
 import { listBuiltinWorkflowNames } from '../infra/config/loaders/workflowResolver.js';
 import { loadGlobalConfig } from '../infra/config/global/globalConfig.js';
-import { validateWorkflowConfig } from '../core/workflow/engine/WorkflowValidator.js';
 import { getLanguageResourcesDir } from '../infra/resources/index.js';
 import {
   PARALLEL_TERMINAL_ERROR_LABEL,
@@ -434,7 +433,7 @@ loop_monitors:
     expect(judge.instruction).toBe('Judge instruction');
   });
 
-  it('should load loop monitor judge provider and model overrides', () => {
+  it('should reject loop monitor judge provider and model overrides', () => {
     const workflowsDir = join(testDir, '.takt', 'workflows');
     mkdirSync(workflowsDir, { recursive: true });
 
@@ -468,19 +467,11 @@ loop_monitors:
           next: step2
 `);
 
-    const config = loadWorkflow('loop-monitor-judge-provider-model', testDir);
-
-    expect(config).not.toBeNull();
-    expect(config!.loopMonitors).toHaveLength(1);
-    expect(config!.loopMonitors?.[0]?.judge).toMatchObject({
-      persona: 'supervisor',
-      provider: 'opencode',
-      model: 'opencode/big-pickle',
-      instruction: 'Judge instruction',
-    });
+    expect(() => loadWorkflow('loop-monitor-judge-provider-model', testDir))
+      .toThrow('configure provider/model/options in runtime.yaml');
   });
 
-  it('should load loop monitor judge provider block overrides', () => {
+  it('should reject loop monitor judge provider block overrides', () => {
     const workflowsDir = join(testDir, '.takt', 'workflows');
     mkdirSync(workflowsDir, { recursive: true });
 
@@ -515,23 +506,11 @@ loop_monitors:
           next: step2
 `);
 
-    const config = loadWorkflow('loop-monitor-judge-provider-block', testDir);
-
-    expect(config).not.toBeNull();
-    expect(config!.loopMonitors).toHaveLength(1);
-    expect(config!.loopMonitors?.[0]?.judge).toMatchObject({
-      provider: 'codex',
-      model: 'gpt-5.2-codex',
-      providerOptions: {
-        codex: {
-          networkAccess: true,
-        },
-      },
-      instruction: 'Judge instruction',
-    });
+    expect(() => loadWorkflow('loop-monitor-judge-provider-block', testDir))
+      .toThrow('configure provider/model/options in runtime.yaml');
   });
 
-  it('should load loop monitor judge model-only override without changing provider', () => {
+  it('should reject loop monitor judge model-only overrides', () => {
     const workflowsDir = join(testDir, '.takt', 'workflows');
     mkdirSync(workflowsDir, { recursive: true });
 
@@ -565,16 +544,11 @@ loop_monitors:
           next: step2
 `);
 
-    const config = loadWorkflow('loop-monitor-judge-model-only', testDir);
-
-    expect(config).not.toBeNull();
-    expect(config!.loopMonitors?.[0]?.judge).toMatchObject({
-      model: 'opencode/model-b',
-      instruction: 'Judge instruction',
-    });
+    expect(() => loadWorkflow('loop-monitor-judge-model-only', testDir))
+      .toThrow('configure provider/model/options in runtime.yaml');
   });
 
-  it('should defer bare OpenCode loop judge model rejection to effective config validation', () => {
+  it('should reject bare OpenCode loop judge model at the workflow boundary', () => {
     const workflowsDir = join(testDir, '.takt', 'workflows');
     mkdirSync(workflowsDir, { recursive: true });
 
@@ -607,14 +581,11 @@ loop_monitors:
           next: step2
 `);
 
-    const config = loadWorkflow('loop-monitor-judge-opencode-bare-model', testDir);
-
-    expect(config).not.toBeNull();
-    expect(() => validateWorkflowConfig(config!, { projectCwd: testDir }))
-      .toThrow("Configuration error: loop_monitors.judge.model");
+    expect(() => loadWorkflow('loop-monitor-judge-opencode-bare-model', testDir))
+      .toThrow('configure provider/model/options in runtime.yaml');
   });
 
-  it('should defer inherited bare OpenCode loop judge model rejection to effective config validation', () => {
+  it('should reject inherited bare OpenCode loop judge model at the workflow boundary', () => {
     const workflowsDir = join(testDir, '.takt', 'workflows');
     mkdirSync(workflowsDir, { recursive: true });
 
@@ -648,11 +619,8 @@ loop_monitors:
           next: step2
 `);
 
-    const config = loadWorkflow('loop-monitor-judge-inherited-opencode-bare-model', testDir);
-
-    expect(config).not.toBeNull();
-    expect(() => validateWorkflowConfig(config!, { projectCwd: testDir }))
-      .toThrow("Configuration error: loop_monitors.judge.model");
+    expect(() => loadWorkflow('loop-monitor-judge-inherited-opencode-bare-model', testDir))
+      .toThrow('configure provider/model/options in runtime.yaml');
   });
 });
 

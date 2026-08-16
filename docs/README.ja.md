@@ -286,7 +286,7 @@ workflow ファイルの正式ディレクトリ名は `workflows/` です。
 
 `takt exec` は TAKT の対話型タスク入力モードを開始します。Assistant エージェントがリクエストを明確化し、`/go` で会話をワークフローに変換、Worker エージェントがタスクを実装、Review エージェントがレビュー、Replanning エージェントが必要に応じてユーザーに方針確認を行い、ループ検出が非生産的な繰り返しを防止します。
 
-exec は前回の設定から開始するか、初回実行時はデフォルト設定を使用します。プリセット名を渡すとそのプリセットから開始します。会話中に `/setup` でエージェント、ループ検出閾値、プリセット、参照する instruction / knowledge / policy ファセットを編集できます。ビルトイン/デフォルトプリセットはエージェントの役割、ファセット、ループ閾値のみを定義します。プロバイダとモデルは exec モード開始時に通常の TAKT 設定から解決され、同じ値が Assistant ダイアログ、`/setup` 表示、ワークフロー生成に使用されます。exec 設定がプロバイダ/モデルを上書きするのは、明示的に設定された場合のみです。`effort` は明示的に設定された場合のみ出力されます。Codex の repository Skill と user Skill は未指定時に継承され、明示設定があればその値を使用します。解決した値は生成ワークフローへ書き込まれます。
+exec は前回の設定から開始するか、初回実行時はデフォルト設定を使用します。プリセット名を渡すとそのプリセットから開始します。会話中に `/setup` でエージェント、ループ検出閾値、プリセット、参照する instruction / knowledge / policy ファセットを編集できます。ビルトイン/デフォルトプリセットはエージェントの役割、ファセット、ループ閾値のみを定義します。プロバイダとモデルは exec モード開始時に通常の TAKT 設定から解決され、Assistant ダイアログと `/setup` 表示で使われます。生成 workflow は tool / skill の要求に capabilities を使い、provider/model/options は runtime 設定に残します。`effort` は明示的に設定された場合のみ出力されます。Codex の repository Skill と user Skill は capability または runtime profile で制御します。
 
 exec プリセットの解決順序はプロジェクト `.takt/exec/presets/` → グローバル `$TAKT_CONFIG_DIR/exec/presets/`（デフォルト `~/.takt/exec/presets/`）→ ビルトイン `builtins/exec/presets/` です。`/setup` での変更は `$TAKT_CONFIG_DIR/exec.yaml`（デフォルト `~/.takt/exec.yaml`）に保存されます。`/setup` ではプロジェクト/グローバルプリセットの保存・削除も可能で、作成されたファセットは `.takt/facets/` または `$TAKT_CONFIG_DIR/facets/`（デフォルト `~/.takt/facets/`）に保存されます。
 
@@ -308,7 +308,7 @@ language: ja        # en or ja
 
 run metadata、session、trace、report などの run artifact は `.takt/runs/<run>/` 配下の通常ファイルとして保存されます。resume / requeue では、該当する run state と report を引き継ぎます。
 
-TAKT に workflow step ごとの provider/model 選択を任せる場合は、top-level に具体 provider を設定したまま `auto_routing` の candidates を定義します。effective `auto_routing` の存在によって auto routing が有効になります。
+以下の `config.yaml` 例は、引き続き利用できる legacy モードです。runtime モードでは provider/model/options と routing を `runtime.yaml` に置き、workflow YAML からは設定できません。runtime 側では `provider.targets` と `provider.auto_routing` を使用します。
 
 ```yaml
 provider: codex          # workflow step 外と auto_routing がない場合に使用する
@@ -354,7 +354,7 @@ auto_routing:
       implementation: implementation
 ```
 
-AI による task slug 生成など workflow step context を持たない処理は、具体的な top-level provider/model を使用します。`auto_routing.router` と candidates は workflow routing 専用であり、default として暗黙に使用されません。assistant 会話（インタラクティブモードの計画会話、instruct、retry）は auto routing を通らず、設定済みなら `takt_providers.assistant`、未設定なら top-level provider/model を使用します。CLI の provider/model override が適用されるのはインタラクティブモードの計画会話だけで、instruct / retry には適用されません。
+legacy モードでは AI による task slug 生成など workflow step context を持たない処理に具体的な top-level provider/model を使用します。runtime モードでは runtime default を使用します。`auto_routing.router` と candidates は暗黙の default ではありません。assistant 会話は legacy では `takt_providers.assistant`、runtime では internal-agent seat を使用します。CLI の provider/model override は対応するコマンドでのみ適用されます。
 
 オートルーティングの決定は `.takt/events/` に NDJSON としてローカル書き込みされます。TAKT がルーティング決定をアップロードすることはありません。ローカル記録はデフォルトで有効で、`telemetry.routing_decisions` で設定でき、`takt telemetry status|enable|disable` で確認・変更できます。
 
@@ -372,7 +372,7 @@ export TAKT_KIRO_API_KEY=...               # Kiro CLI
 
 ### プロバイダー設定専用レイヤー（`runtime.yaml`）
 
-プロバイダー・モデル・プロバイダーオプション・自動ルーティング・内部エージェント割り当ては、`config.yaml` ではなく専用レイヤーに置けます。`~/.takt/runtime.yaml` と `<project>/.takt/runtime.yaml` があり、プロジェクト側が優先されます。`runtime.yaml` が置き換えるのは `config.yaml` の旧プロバイダーキーが担っていた設定レイヤーの既定値で、それより上位の解決はこれまでどおり適用されます。CLI・環境変数の上書きが最優先で、次に `promotion`、step 直接指定、`workflow_call`、`provider_routing`、auto routing の順です。provider と model はフィールド単位で独立に解決されます。旧プロバイダーキーとの混在は、問題のファイルと移行先キーを示す診断つきで拒否されます。`runtime.yaml` がなければ `config.yaml` は従来どおり動作します。
+プロバイダー・モデル・プロバイダーオプション・自動ルーティング・内部エージェント割り当ては、`config.yaml` ではなく専用レイヤーに置けます。`~/.takt/runtime.yaml` と `<project>/.takt/runtime.yaml` があり、プロジェクト側が優先されます。workflow YAML には provider/model/options/routing の設定面がなく、削除された field、workflow-call override、target 付き promotion はロード時に移行案内つきで拒否されます。promotion は runtime target ladder だけを進めます。CLI・環境変数の上書きは引き続き利用でき、provider と model は runtime target 内で独立に解決されます。旧プロバイダーキーとの混在は、問題のファイルと移行先キーを示す診断つきで拒否されます。`runtime.yaml` がなければ `config.yaml` の legacy mode は従来どおり動作します。
 
 companion reviewer は既定で無効です。有効化する場合は、`runtime.yaml` のトップレベルに次を設定します。
 

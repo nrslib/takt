@@ -252,7 +252,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
 - Provider error handling（`e2e/specs/provider-error.e2e.ts`）
   - 目的: provider上書き、mockシナリオ不足時の挙動、シナリオ不在時エラーを確認。
 - Provider base_url options（`e2e/specs/provider-override.e2e.ts`）
-  - 目的: `provider_options.codex.base_url` / `provider_options.claude.base_url` が workflow / step から解決され、セッションログに設定済み marker と source attribution が出ること、および空文字が拒否されることを確認。
+  - 目的: `runtime.yaml` の provider profile options（および legacy config の互換経路）から `provider_options.codex.base_url` / `provider_options.claude.base_url` が解決され、セッションログに設定済み marker と source attribution が出ること、および workflow / step の削除済み inline options が移行案内付きで拒否されることを確認。
 - Model override（`e2e/specs/model-override.e2e.ts`）
   - 目的: `--model` オプションが通常実行/`--pipeline --skip-git` で反映されることを確認。
 - Error handling edge cases（`e2e/specs/error-handling.e2e.ts`）

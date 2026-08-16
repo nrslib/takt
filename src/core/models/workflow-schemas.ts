@@ -8,15 +8,10 @@ import { isReviewMode, REVIEW_MODE_VALUES } from './review-mode.js';
 import { getWorkflowStepKind } from './workflow-step-kind.js';
 import {
   McpServersSchema,
-  AutoRoutingSchema,
-  StepProviderOptionsObjectSchema,
   OutputContractsFieldSchema,
   PermissionModeSchema,
-  ProviderReferenceSchema,
   ReportRelativePathSchema,
-  RateLimitFallbackSchema,
   QualityGatesSchema,
-  hasProviderOptionsLeaf,
   RuntimeConfigSchema,
 } from './schema-base.js';
 import {
@@ -25,7 +20,6 @@ import {
   validateSystemStepFields,
   WorkflowEffectRawSchema,
 } from './workflow-system-schemas.js';
-import { isAiConditionExpression } from './workflow-condition-expression.js';
 import {
   findSemanticAppendixConflicts,
   hasAggregateCondition,
@@ -133,23 +127,13 @@ const WorkflowCallVarsRawSchema = z.record(
   }
 });
 
-const WorkflowStepProviderOptionsSchema = StepProviderOptionsObjectSchema.extend({
-  extends: z.string().min(1).optional(),
-}).strict().optional();
+const WORKFLOW_RUNTIME_PROVIDER_MESSAGE = 'workflow YAML no longer accepts provider execution settings; configure provider/model/options in runtime.yaml';
+const WORKFLOW_RUNTIME_ROUTING_MESSAGE = 'workflow YAML no longer accepts provider routing settings; configure routing in runtime.yaml';
+const WORKFLOW_RUNTIME_LADDER_MESSAGE = 'workflow promotion only accepts {at: N}; configure the target ladder in runtime.yaml';
 
-function hasProviderOptionsTarget(
-  providerOptions: NonNullable<z.output<typeof WorkflowStepProviderOptionsSchema>>,
-): boolean {
-  const { extends: providerOptionsExtends, ...providerOptionsWithoutExtends } = providerOptions;
-  return providerOptionsExtends !== undefined || hasProviderOptionsLeaf(providerOptionsWithoutExtends);
+function removedWorkflowRuntimeField(message: string): z.ZodOptional<z.ZodNever> {
+  return z.never({ message }).optional();
 }
-
-const WorkflowProviderOptionsWithExtendsSchema = z.object({
-  provider: ProviderReferenceSchema.optional(),
-  model: z.string().optional(),
-  provider_options: WorkflowStepProviderOptionsSchema,
-  runtime: RuntimeConfigSchema,
-}).optional();
 
 const WorkflowFacetParamDeclarationRawSchema = z.object({
   type: z.enum(['facet_ref', 'facet_ref[]']),
@@ -326,56 +310,15 @@ function validateAggregateRulePlacement(
 
 const WorkflowPromotionRawSchema = z.object({
   at: z.number().int().positive().optional(),
-  condition: z.string().min(1).optional(),
-  provider: ProviderReferenceSchema.optional(),
-  model: z.string().optional(),
-  provider_options: WorkflowStepProviderOptionsSchema,
+  condition: removedWorkflowRuntimeField(WORKFLOW_RUNTIME_LADDER_MESSAGE),
+  provider: removedWorkflowRuntimeField(WORKFLOW_RUNTIME_LADDER_MESSAGE),
+  model: removedWorkflowRuntimeField(WORKFLOW_RUNTIME_LADDER_MESSAGE),
+  provider_options: removedWorkflowRuntimeField(WORKFLOW_RUNTIME_LADDER_MESSAGE),
 }).strict().superRefine((data, ctx) => {
-  const hasProviderOptionsTargetValue = data.provider_options !== undefined
-    && hasProviderOptionsTarget(data.provider_options);
-  const isTargetLess = data.provider === undefined
-    && data.model === undefined
-    && !hasProviderOptionsTargetValue;
-
-  if (isTargetLess) {
-    // Issue #1208 Stage 1 (order.md:99): a target-less promotion delegates "what to promote to" to
-    // the runtime.yaml ladder, which is indexed purely by the count of reached `{at:N}` entries
-    // (countMatchedLadderStages excludes condition entries). The only target-less shape with a
-    // runtime effect is `{at:N}` with no condition; a condition-only or `{at, condition}`
-    // target-less entry would be accepted yet silently dropped at runtime, so reject it at load
-    // time (fail fast) — the accepted shape must equal the shape that has a runtime effect.
-    if (data.at === undefined) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'target-less promotion entry requires "at"; only {at:N} advances the runtime.yaml ladder',
-      });
-    }
-    if (data.condition !== undefined) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'target-less promotion entry must not set "condition"; only {at:N} advances the runtime.yaml ladder',
-      });
-    }
-  } else if (data.at === undefined && data.condition === undefined) {
+  if (data.at === undefined) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: 'promotion entry requires at least one of "at" or "condition"',
-    });
-  }
-
-  if (data.condition !== undefined && !isAiConditionExpression(data.condition)) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['condition'],
-      message: 'promotion condition must be an ai("...") expression',
-    });
-  }
-
-  if (data.provider_options !== undefined && !hasProviderOptionsTargetValue) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['provider_options'],
-      message: 'promotion entry provider_options must include at least one provider-specific option',
+      message: 'workflow promotion entry requires "at"; only {at:N} advances the runtime.yaml ladder',
     });
   }
 });
@@ -530,30 +473,6 @@ function validateCompletionRetryOptIn(
   }
 }
 
-const WorkflowCallOverridesRawSchema = z.object({
-  provider: ProviderReferenceSchema.optional(),
-  model: z.string().optional(),
-  provider_options: WorkflowStepProviderOptionsSchema,
-}).strict().superRefine((data, ctx) => {
-  const hasProviderOptionsTargetValue = data.provider_options !== undefined
-    && hasProviderOptionsTarget(data.provider_options);
-
-  if (data.provider === undefined && data.model === undefined && !hasProviderOptionsTargetValue) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "workflow_call overrides require at least one of 'provider', 'model', or 'provider_options'",
-    });
-  }
-
-  if (data.provider_options !== undefined && !hasProviderOptionsTargetValue) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['provider_options'],
-      message: 'workflow_call overrides provider_options must include at least one provider-specific option',
-    });
-  }
-});
-
 const AgentParallelSubStepRawObjectSchema = z.object({
   name: WorkflowStepNameSchema,
   description: z.never().optional(),
@@ -575,13 +494,13 @@ const AgentParallelSubStepRawObjectSchema = z.object({
   capabilities: WorkflowCapabilitiesRefSchema,
   mcp: WorkflowMcpRefListSchema,
   mcp_servers: McpServersSchema,
-  provider: ProviderReferenceSchema.optional(),
-  model: z.string().nullable().optional(),
+  provider: removedWorkflowRuntimeField(WORKFLOW_RUNTIME_PROVIDER_MESSAGE),
+  model: removedWorkflowRuntimeField(WORKFLOW_RUNTIME_PROVIDER_MESSAGE),
   promotion: z.never().optional(),
   companion: z.never().optional(),
   permission_mode: z.never().optional(),
   required_permission_mode: PermissionModeSchema.optional(),
-  provider_options: WorkflowStepProviderOptionsSchema,
+  provider_options: removedWorkflowRuntimeField(WORKFLOW_RUNTIME_PROVIDER_MESSAGE),
   edit: z.boolean().optional(),
   requires_user_input: z.never().optional(),
   instruction: WorkflowFacetRefOrParamSchema.optional(),
@@ -628,7 +547,7 @@ const WorkflowCallParallelSubStepRawSchema = z.object({
   kind: z.literal('workflow_call').optional(),
   mode: z.never().optional(),
   call: WorkflowReferenceOrParamSchema,
-  overrides: WorkflowCallOverridesRawSchema.optional(),
+  overrides: removedWorkflowRuntimeField(WORKFLOW_RUNTIME_PROVIDER_MESSAGE),
   args: WorkflowCallArgsRawSchema.optional(),
   vars: WorkflowCallVarsRawSchema.optional(),
   description: z.string().optional(),
@@ -643,13 +562,13 @@ const WorkflowCallParallelSubStepRawSchema = z.object({
   allow_git_commit: z.never().optional(),
   allowed_tools: z.never().optional(),
   mcp_servers: z.never().optional(),
-  provider: z.never().optional(),
-  model: z.never().optional(),
+  provider: removedWorkflowRuntimeField(WORKFLOW_RUNTIME_PROVIDER_MESSAGE),
+  model: removedWorkflowRuntimeField(WORKFLOW_RUNTIME_PROVIDER_MESSAGE),
   promotion: z.never().optional(),
   companion: z.never().optional(),
   permission_mode: z.never().optional(),
   required_permission_mode: z.never().optional(),
-  provider_options: z.never().optional(),
+  provider_options: removedWorkflowRuntimeField(WORKFLOW_RUNTIME_PROVIDER_MESSAGE),
   edit: z.never().optional(),
   requires_user_input: z.never().optional(),
   instruction: z.never().optional(),
@@ -744,7 +663,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     kind: WorkflowStepKindSchema.optional(),
     mode: z.literal('system').optional(),
     call: WorkflowReferenceOrParamSchema.optional(),
-    overrides: WorkflowCallOverridesRawSchema.optional(),
+    overrides: removedWorkflowRuntimeField(WORKFLOW_RUNTIME_PROVIDER_MESSAGE),
     args: WorkflowCallArgsRawSchema.optional(),
     vars: WorkflowCallVarsRawSchema.optional(),
     session: z.enum(WORKFLOW_SESSION_MODES).optional(),
@@ -759,13 +678,13 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     capabilities: WorkflowCapabilitiesRefSchema,
     mcp: WorkflowMcpRefListSchema,
     mcp_servers: McpServersSchema,
-    provider: ProviderReferenceSchema.optional(),
-    model: z.string().nullable().optional(),
+    provider: removedWorkflowRuntimeField(WORKFLOW_RUNTIME_PROVIDER_MESSAGE),
+    model: removedWorkflowRuntimeField(WORKFLOW_RUNTIME_PROVIDER_MESSAGE),
     promotion: z.array(WorkflowPromotionRawSchema).optional(),
     companion: CompanionSelectionRawSchema.optional(),
     permission_mode: z.never().optional(),
     required_permission_mode: PermissionModeSchema.optional(),
-    provider_options: WorkflowStepProviderOptionsSchema,
+    provider_options: removedWorkflowRuntimeField(WORKFLOW_RUNTIME_PROVIDER_MESSAGE),
     edit: z.boolean().optional(),
     requires_user_input: z.boolean().optional(),
     instruction: WorkflowFacetRefOrParamSchema.optional(),
@@ -1040,9 +959,9 @@ export const LoopMonitorRuleSchema = z.object({
 export const LoopMonitorJudgeSchema = z.object({
   session_key: z.never({ message: 'session_key is not supported on loop_monitors.judge; judges always use a fresh session' }).optional(),
   persona: z.string().optional(),
-  provider: ProviderReferenceSchema.optional(),
-  model: z.string().min(1).nullable().optional(),
-  provider_options: WorkflowStepProviderOptionsSchema,
+  provider: removedWorkflowRuntimeField(WORKFLOW_RUNTIME_PROVIDER_MESSAGE),
+  model: removedWorkflowRuntimeField(WORKFLOW_RUNTIME_PROVIDER_MESSAGE),
+  provider_options: removedWorkflowRuntimeField(WORKFLOW_RUNTIME_PROVIDER_MESSAGE),
   instruction: z.string().optional(),
   instruction_template: z.never().optional(),
   rules: z.array(LoopMonitorRuleSchema).min(1),
@@ -1163,13 +1082,18 @@ export const WorkflowConfigRawSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
   subworkflow: WorkflowSubworkflowRawSchema.optional(),
-  workflow_config: WorkflowProviderOptionsWithExtendsSchema,
+  workflow_config: z.object({
+    provider: removedWorkflowRuntimeField(WORKFLOW_RUNTIME_PROVIDER_MESSAGE),
+    model: removedWorkflowRuntimeField(WORKFLOW_RUNTIME_PROVIDER_MESSAGE),
+    provider_options: removedWorkflowRuntimeField(WORKFLOW_RUNTIME_PROVIDER_MESSAGE),
+    runtime: RuntimeConfigSchema,
+  }).strict().optional(),
   // Issue #1208: workflow-level capability-set reference (the default for every step) and the
   // portable, bundled MCP server definitions that step/sub-step `mcp:` references resolve against.
   capabilities: WorkflowCapabilitiesRefSchema,
   mcp_servers: McpServersSchema,
-  auto_routing: AutoRoutingSchema.optional(),
-  rate_limit_fallback: RateLimitFallbackSchema.optional(),
+  auto_routing: removedWorkflowRuntimeField(WORKFLOW_RUNTIME_ROUTING_MESSAGE),
+  rate_limit_fallback: removedWorkflowRuntimeField(WORKFLOW_RUNTIME_ROUTING_MESSAGE),
   permission_mode: z.never().optional(),
   schemas: z.record(z.string(), z.string()).optional(),
   personas: z.record(z.string(), z.string()).optional(),

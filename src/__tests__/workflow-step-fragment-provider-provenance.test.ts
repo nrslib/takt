@@ -41,7 +41,6 @@ describe('workflow step fragment provider provenance', () => {
     'auto.rules',
     'auto.dynamic',
     'auto.fallback',
-    'workflow',
     'project',
     'global',
     'default',
@@ -172,7 +171,7 @@ describe('workflow step fragment provider provenance', () => {
       },
     ));
 
-    expect(message).toContain("provider 'opencode' requires model");
+    expect(message).toContain('workflow promotion only accepts {at: N}');
     expect(message).toContain('step fragment "outer"');
     expect(message).toContain(outerPath);
     expect(message).not.toContain('step fragment "inner"');
@@ -211,33 +210,19 @@ describe('workflow step fragment provider provenance', () => {
       },
     ));
 
-    expect(message).toContain("provider 'opencode' requires model");
+    expect(message).toContain('workflow promotion only accepts {at: N}');
     expect(message).toContain(workflowPath);
     expect(message).toContain('step uses fragment "review"');
     expect(message).toContain(fragmentPath);
     expect(message).toContain('defined by the workflow');
   });
 
-  it('attributes a missing OpenCode workflow call override model to the fragment override', async () => {
+  it('attributes a removed workflow-call provider override to the fragment', () => {
     const fragmentPath = write(projectDir, '.takt/steps/delegate.yaml', [
       'kind: workflow_call',
       'call: child',
       'overrides:',
       '  provider: opencode',
-      '',
-    ].join('\n'));
-    const childPath = write(projectDir, '.takt/workflows/child.yaml', [
-      'name: child',
-      'subworkflow:',
-      '  callable: true',
-      'initial_step: review',
-      'max_steps: 1',
-      'steps:',
-      '  - name: review',
-      '    instruction: review',
-      '    rules:',
-      '      - condition: done',
-      '        next: COMPLETE',
       '',
     ].join('\n'));
     const workflowPath = write(projectDir, '.takt/workflows/parent.yaml', [
@@ -252,44 +237,24 @@ describe('workflow step fragment provider provenance', () => {
       '        next: COMPLETE',
       '',
     ].join('\n'));
-    const engine = new WorkflowEngine(loadWorkflowFromFile(workflowPath, projectDir), projectDir, 'test task', {
-      projectCwd: projectDir,
-      provider: 'mock',
-      model: 'mock-model',
-      workflowCallResolver: () => loadWorkflowFromFile(childPath, projectDir),
-    });
-    const abortReasons: string[] = [];
-    engine.on('workflow:abort', (_state, reason) => abortReasons.push(reason));
+    const message = engineError(() => new WorkflowEngine(
+      loadWorkflowFromFile(workflowPath, projectDir),
+      projectDir,
+      'test task',
+      { projectCwd: projectDir },
+    ));
 
-    const state = await engine.run();
-
-    expect(state.status).toBe('aborted');
-    expect(abortReasons).toHaveLength(1);
-    expect(abortReasons[0]).toContain("provider 'opencode' requires model");
-    expect(abortReasons[0]).toContain('step fragment "delegate"');
-    expect(abortReasons[0]).toContain(fragmentPath);
+    expect(message).toContain('workflow YAML no longer accepts provider execution settings');
+    expect(message).toContain('step fragment "delegate"');
+    expect(message).toContain(fragmentPath);
   });
 
-  it('retains fragment context while identifying a caller workflow call override as workflow-defined', async () => {
+  it('retains fragment context for a removed caller workflow-call override', () => {
     const fragmentPath = write(projectDir, '.takt/steps/delegate.yaml', [
       'kind: workflow_call',
       'call: child',
       'overrides:',
       '  provider: claude',
-      '',
-    ].join('\n'));
-    const childPath = write(projectDir, '.takt/workflows/child.yaml', [
-      'name: child',
-      'subworkflow:',
-      '  callable: true',
-      'initial_step: review',
-      'max_steps: 1',
-      'steps:',
-      '  - name: review',
-      '    instruction: review',
-      '    rules:',
-      '      - condition: done',
-      '        next: COMPLETE',
       '',
     ].join('\n'));
     const workflowPath = write(projectDir, '.takt/workflows/parent.yaml', [
@@ -306,23 +271,17 @@ describe('workflow step fragment provider provenance', () => {
       '        next: COMPLETE',
       '',
     ].join('\n'));
-    const engine = new WorkflowEngine(loadWorkflowFromFile(workflowPath, projectDir), projectDir, 'test task', {
-      projectCwd: projectDir,
-      provider: 'mock',
-      model: 'mock-model',
-      workflowCallResolver: () => loadWorkflowFromFile(childPath, projectDir),
-    });
-    const abortReasons: string[] = [];
-    engine.on('workflow:abort', (_state, reason) => abortReasons.push(reason));
+    const message = engineError(() => new WorkflowEngine(
+      loadWorkflowFromFile(workflowPath, projectDir),
+      projectDir,
+      'test task',
+      { projectCwd: projectDir },
+    ));
 
-    const state = await engine.run();
-
-    expect(state.status).toBe('aborted');
-    expect(abortReasons).toHaveLength(1);
-    expect(abortReasons[0]).toContain("provider 'opencode' requires model");
-    expect(abortReasons[0]).toContain(workflowPath);
-    expect(abortReasons[0]).toContain('step uses fragment "delegate"');
-    expect(abortReasons[0]).toContain(fragmentPath);
-    expect(abortReasons[0]).toContain('defined by the workflow');
+    expect(message).toContain('workflow YAML no longer accepts provider execution settings');
+    expect(message).toContain(workflowPath);
+    expect(message).toContain('step uses fragment "delegate"');
+    expect(message).toContain(fragmentPath);
+    expect(message).toContain('defined by the workflow');
   });
 });

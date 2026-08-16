@@ -444,36 +444,15 @@ describe('Schemas accept opencode provider', () => {
     expect(result.provider).toBe('cursor');
   });
 
-  it('should accept opencode in WorkflowStepRawSchema', () => {
-    const result = WorkflowStepRawSchema.parse({
-      name: 'test-step',
-      provider: 'opencode',
-    });
-    expect(result.provider).toBe('opencode');
-  });
-
-  it('should accept cursor in WorkflowStepRawSchema', () => {
-    const result = WorkflowStepRawSchema.parse({
-      name: 'test-step',
-      provider: 'cursor',
-    });
-    expect(result.provider).toBe('cursor');
-  });
-
-  it('should accept opencode in ParallelSubStepRawSchema', () => {
-    const result = ParallelSubStepRawSchema.parse({
-      name: 'sub-1',
-      provider: 'opencode',
-    });
-    expect(result.provider).toBe('opencode');
-  });
-
-  it('should accept cursor in ParallelSubStepRawSchema', () => {
-    const result = ParallelSubStepRawSchema.parse({
-      name: 'sub-1',
-      provider: 'cursor',
-    });
-    expect(result.provider).toBe('cursor');
+  it.each([
+    { schema: WorkflowStepRawSchema, input: { name: 'test-step', provider: 'opencode' } },
+    { schema: WorkflowStepRawSchema, input: { name: 'test-step', provider: 'cursor' } },
+    { schema: ParallelSubStepRawSchema, input: { name: 'sub-1', provider: 'opencode' } },
+    { schema: ParallelSubStepRawSchema, input: { name: 'sub-1', provider: 'cursor' } },
+  ])('should reject provider execution settings in workflow YAML', ({ schema, input }) => {
+    expect(() => schema.parse(input)).toThrow(
+      /workflow YAML no longer accepts provider execution settings.*runtime\.yaml/i,
+    );
   });
 
   it('should still accept existing providers (claude, codex, opencode, cursor, pi, mock)', () => {

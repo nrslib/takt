@@ -275,7 +275,7 @@ describe('exec command setup', () => {
     const workflow = parseYaml(
       readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'),
     );
-    expect(workflow.workflow_config.provider_options).toEqual(configuredSkillOptions);
+    expect(workflow).not.toHaveProperty('workflow_config');
   });
 
   it('should pass explicit assistant effort as provider options for exec assistant calls', async () => {
@@ -757,9 +757,12 @@ describe('exec command setup', () => {
     const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
     const judge = workflow.steps.find((step: { name: string }) => step.name === 'review');
     const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
-    expect(execute.parallel[0]).toMatchObject({ provider: 'mock', model: 'worker-model' });
-    expect(judge.parallel[0]).toMatchObject({ provider: 'mock', model: 'review-model' });
-    expect(replan).toMatchObject({ provider: 'mock', model: 'session-model' });
+    expect(execute.parallel[0]).not.toHaveProperty('provider');
+    expect(execute.parallel[0]).not.toHaveProperty('model');
+    expect(judge.parallel[0]).not.toHaveProperty('provider');
+    expect(judge.parallel[0]).not.toHaveProperty('model');
+    expect(replan).not.toHaveProperty('provider');
+    expect(replan).not.toHaveProperty('model');
   });
 
   it('should generate workflows with the provider and model resolved when exec mode starts', async () => {
@@ -804,8 +807,10 @@ describe('exec command setup', () => {
     const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
     const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
     const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
-    expect(execute.parallel[0]).toMatchObject({ provider: 'claude', model: 'opus' });
-    expect(replan).toMatchObject({ provider: 'claude', model: 'opus' });
+    expect(execute.parallel[0]).not.toHaveProperty('provider');
+    expect(execute.parallel[0]).not.toHaveProperty('model');
+    expect(replan).not.toHaveProperty('provider');
+    expect(replan).not.toHaveProperty('model');
   });
 
   it('should start with inherited Claude xhigh effort for the configured default model', async () => {
@@ -903,13 +908,16 @@ describe('exec command setup', () => {
     const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
     const judge = workflow.steps.find((step: { name: string }) => step.name === 'review');
     const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
-    expect(execute.parallel[0]).toMatchObject({ provider: 'mock', model: 'override-model' });
-    expect(judge.parallel[0]).toMatchObject({ provider: 'mock', model: 'override-model' });
-    expect(replan).toMatchObject({ provider: 'mock', model: 'override-model' });
+    expect(execute.parallel[0]).not.toHaveProperty('provider');
+    expect(execute.parallel[0]).not.toHaveProperty('model');
+    expect(judge.parallel[0]).not.toHaveProperty('provider');
+    expect(judge.parallel[0]).not.toHaveProperty('model');
+    expect(replan).not.toHaveProperty('provider');
+    expect(replan).not.toHaveProperty('model');
     expect(execute.parallel[0]).not.toHaveProperty('provider_options');
     expect(judge.parallel[0]).not.toHaveProperty('provider_options');
     expect(replan).not.toHaveProperty('provider_options');
-    expect(workflow.workflow_config.provider_options).toEqual(defaultExecSkillProviderOptions);
+    expect(workflow).not.toHaveProperty('workflow_config');
 
     expect(existsSync(join(globalConfigDir, 'exec.yaml'))).toBe(false);
 
@@ -940,12 +948,12 @@ describe('exec command setup', () => {
       const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
       const judge = workflow.steps.find((step: { name: string }) => step.name === 'review');
       const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
-      expect(execute.parallel[0]).toMatchObject({ provider });
-      expect(judge.parallel[0]).toMatchObject({ provider });
-      expect(replan).toMatchObject({ provider });
-      expect(execute.parallel[0].model).toBeNull();
-      expect(judge.parallel[0].model).toBeNull();
-      expect(replan.model).toBeNull();
+      expect(execute.parallel[0]).not.toHaveProperty('provider');
+      expect(execute.parallel[0]).not.toHaveProperty('model');
+      expect(judge.parallel[0]).not.toHaveProperty('provider');
+      expect(judge.parallel[0]).not.toHaveProperty('model');
+      expect(replan).not.toHaveProperty('provider');
+      expect(replan).not.toHaveProperty('model');
 
       expect(existsSync(join(globalConfigDir, 'exec.yaml'))).toBe(false);
 
@@ -1332,9 +1340,9 @@ describe('exec command setup', () => {
     const judge = workflow.steps.find((step: { name: string }) => step.name === 'review');
     const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
     expect(mockCallAIWithRetry.mock.calls[0]?.[4].providerOptions).toEqual(defaultExecSkillProviderOptions);
-    expect(execute.parallel[0].provider_options.claude).not.toHaveProperty('effort');
-    expect(judge.parallel[0].provider_options.claude).not.toHaveProperty('effort');
-    expect(replan.provider_options.claude).not.toHaveProperty('effort');
+    expect(execute.parallel[0]).not.toHaveProperty('provider_options');
+    expect(judge.parallel[0]).not.toHaveProperty('provider_options');
+    expect(replan).not.toHaveProperty('provider_options');
   });
 
   it('should hide effort settings for providers without exec effort support', async () => {
@@ -1452,15 +1460,9 @@ describe('exec command setup', () => {
     });
     const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
     const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
-    expect(replan).toMatchObject({
-      provider: 'claude',
-      model: 'opus',
-      provider_options: {
-        claude: {
-          effort: 'medium',
-        },
-      },
-    });
+    expect(replan).not.toHaveProperty('provider');
+    expect(replan).not.toHaveProperty('model');
+    expect(replan).not.toHaveProperty('provider_options');
   });
 
   it('should keep effort when setup changes Claude models', async () => {
@@ -1512,10 +1514,12 @@ describe('exec command setup', () => {
     const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
     const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
     const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
-    expect(execute.parallel[0]).toMatchObject({ model: 'claude-sonnet-4-5-20250929' });
-    expect(execute.parallel[0].provider_options?.claude).toMatchObject({ effort: 'xhigh' });
-    expect(replan).toMatchObject({ model: 'claude-sonnet-4-5-20250929' });
-    expect(replan.provider_options?.claude).toMatchObject({ effort: 'xhigh' });
+    expect(execute.parallel[0]).not.toHaveProperty('provider');
+    expect(execute.parallel[0]).not.toHaveProperty('model');
+    expect(execute.parallel[0]).not.toHaveProperty('provider_options');
+    expect(replan).not.toHaveProperty('provider');
+    expect(replan).not.toHaveProperty('model');
+    expect(replan).not.toHaveProperty('provider_options');
     const saved = parseYaml(readFileSync(join(globalConfigDir, 'exec.yaml'), 'utf-8'));
     expect(saved.session).toMatchObject({ model: 'claude-sonnet-4-5-20250929' });
     expect(saved.session).toMatchObject({ effort: 'xhigh' });
@@ -1615,10 +1619,8 @@ describe('exec command setup', () => {
 
     const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
     const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
-    expect(replan).toMatchObject({
-      provider: 'codex',
-      model: 'gpt-5',
-    });
+    expect(replan).not.toHaveProperty('provider');
+    expect(replan).not.toHaveProperty('model');
     expect(replan).not.toHaveProperty('provider_options');
   });
 
@@ -1646,7 +1648,7 @@ describe('exec command setup', () => {
       providerType: 'codex',
       model: undefined,
     }));
-    expect(replan).toMatchObject({ provider: 'codex' });
+    expect(replan).not.toHaveProperty('provider');
     expect(replan).not.toHaveProperty('model');
   });
 
@@ -1676,8 +1678,8 @@ describe('exec command setup', () => {
         providerType: provider,
         model: undefined,
       }));
-      expect(replan).toMatchObject({ provider });
-      expect(replan.model).toBeNull();
+      expect(replan).not.toHaveProperty('provider');
+      expect(replan).not.toHaveProperty('model');
     },
   );
 
@@ -1708,24 +1710,24 @@ describe('exec command setup', () => {
           providerType: 'cursor',
           model: undefined,
         }));
-        expect(replan).toMatchObject({ provider: 'cursor' });
-        expect(replan.model).toBeNull();
+        expect(replan).not.toHaveProperty('provider');
+        expect(replan).not.toHaveProperty('model');
       }
       if (target === 'worker') {
         expect(mockCallAIWithRetry.mock.calls[0]?.[4]).toEqual(expect.objectContaining({
           providerType: 'claude',
           model: 'opus',
         }));
-        expect(execute.parallel[0]).toMatchObject({ provider: 'cursor' });
-        expect(execute.parallel[0].model).toBeNull();
+        expect(execute.parallel[0]).not.toHaveProperty('provider');
+        expect(execute.parallel[0]).not.toHaveProperty('model');
       }
       if (target === 'review') {
         expect(mockCallAIWithRetry.mock.calls[0]?.[4]).toEqual(expect.objectContaining({
           providerType: 'claude',
           model: 'opus',
         }));
-        expect(judge.parallel[0]).toMatchObject({ provider: 'cursor' });
-        expect(judge.parallel[0].model).toBeNull();
+        expect(judge.parallel[0]).not.toHaveProperty('provider');
+        expect(judge.parallel[0]).not.toHaveProperty('model');
       }
     },
   );
@@ -1757,7 +1759,8 @@ describe('exec command setup', () => {
       providerType: 'claude',
       model: 'opus',
     }));
-    expect(replan).toMatchObject({ provider: 'claude', model: 'opus' });
+    expect(replan).not.toHaveProperty('provider');
+    expect(replan).not.toHaveProperty('model');
   });
 
   it.each([
@@ -1795,7 +1798,8 @@ describe('exec command setup', () => {
         providerType: 'claude',
         model: 'opus',
       }));
-      expect(replan).toMatchObject({ provider: 'claude', model: 'opus' });
+      expect(replan).not.toHaveProperty('provider');
+      expect(replan).not.toHaveProperty('model');
     },
   );
 
@@ -1843,10 +1847,8 @@ describe('exec command setup', () => {
         providerType: 'claude',
         model: 'opus',
       }));
-      expect(actor).toMatchObject({
-        provider: 'claude',
-        model: 'opus',
-      });
+      expect(actor).not.toHaveProperty('provider');
+      expect(actor).not.toHaveProperty('model');
     },
   );
 
@@ -1886,7 +1888,8 @@ describe('exec command setup', () => {
       const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
       const judge = workflow.steps.find((step: { name: string }) => step.name === 'review');
       const actor = target === 'worker' ? execute.parallel[0] : judge.parallel[0];
-      expect(actor).toMatchObject({ provider, model });
+      expect(actor).not.toHaveProperty('provider');
+      expect(actor).not.toHaveProperty('model');
     },
   );
 
@@ -1917,8 +1920,8 @@ describe('exec command setup', () => {
     const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
     const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
     const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
-    expect(replan).toMatchObject({ provider: 'codex' });
-    expect(execute.parallel[0].model).toBe('haiku');
+    expect(replan).not.toHaveProperty('provider');
+    expect(execute.parallel[0]).not.toHaveProperty('model');
     expect(mockReadInteractiveInput.mock.calls.map((call) => call[0])).toEqual([
       'Assistant> ',
       'Assistant> ',
@@ -1964,8 +1967,8 @@ describe('exec command setup', () => {
     const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
     const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
     const judge = workflow.steps.find((step: { name: string }) => step.name === 'review');
-    expect(execute.parallel[0].model).toBe('haiku');
-    expect(judge.parallel[0].model).toBe('custom-review-model');
+    expect(execute.parallel[0]).not.toHaveProperty('model');
+    expect(judge.parallel[0]).not.toHaveProperty('model');
 
     const saved = parseYaml(readFileSync(join(globalConfigDir, 'exec.yaml'), 'utf-8'));
     expect(saved.workers[0]).toMatchObject({ model: 'haiku' });
@@ -2075,12 +2078,15 @@ describe('exec command setup', () => {
     const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
     const judge = workflow.steps.find((step: { name: string }) => step.name === 'review');
     const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
-    expect(execute.parallel[0].model).toBe('opus');
-    expect(judge.parallel[0].model).toBe('opus');
-    expect(replan.model).toBe('opus');
-    expect(execute.parallel[0].provider_options.claude).not.toHaveProperty('effort');
-    expect(judge.parallel[0].provider_options.claude).not.toHaveProperty('effort');
-    expect(replan.provider_options.claude).not.toHaveProperty('effort');
+    expect(execute.parallel[0]).not.toHaveProperty('provider');
+    expect(execute.parallel[0]).not.toHaveProperty('model');
+    expect(judge.parallel[0]).not.toHaveProperty('provider');
+    expect(judge.parallel[0]).not.toHaveProperty('model');
+    expect(replan).not.toHaveProperty('provider');
+    expect(replan).not.toHaveProperty('model');
+    expect(execute.parallel[0]).not.toHaveProperty('provider_options');
+    expect(judge.parallel[0]).not.toHaveProperty('provider_options');
+    expect(replan).not.toHaveProperty('provider_options');
     expect(mockCallAIWithRetry.mock.calls[0]?.[4].providerOptions).toEqual(defaultExecSkillProviderOptions);
 
     const saved = parseYaml(readFileSync(join(globalConfigDir, 'exec.yaml'), 'utf-8'));
@@ -2121,8 +2127,8 @@ describe('exec command setup', () => {
     const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
     const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
     const judge = workflow.steps.find((step: { name: string }) => step.name === 'review');
-    expect(execute.parallel[0].provider_options.claude.effort).toBe('low');
-    expect(judge.parallel[0].provider_options.claude.effort).toBe('medium');
+    expect(execute.parallel[0]).not.toHaveProperty('provider_options');
+    expect(judge.parallel[0]).not.toHaveProperty('provider_options');
 
     const saved = parseYaml(readFileSync(join(globalConfigDir, 'exec.yaml'), 'utf-8'));
     expect(saved.workers[0]).toMatchObject({ effort: 'low' });
@@ -2794,9 +2800,9 @@ describe('exec command setup', () => {
     const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
     const judge = workflow.steps.find((step: { name: string }) => step.name === 'review');
     const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
-    expect(execute.parallel[0].provider_options?.claude).toMatchObject({ effort: 'xhigh' });
-    expect(judge.parallel[0].provider_options?.claude).toMatchObject({ effort: 'xhigh' });
-    expect(replan.provider_options?.claude).toMatchObject({ effort: 'xhigh' });
+    expect(execute.parallel[0]).not.toHaveProperty('provider_options');
+    expect(judge.parallel[0]).not.toHaveProperty('provider_options');
+    expect(replan).not.toHaveProperty('provider_options');
     const saved = parseYaml(readFileSync(join(globalConfigDir, 'exec.yaml'), 'utf-8'));
     expect(saved.session).toMatchObject({ effort: 'xhigh' });
     expect(saved.workers[0]).toMatchObject({ effort: 'xhigh' });

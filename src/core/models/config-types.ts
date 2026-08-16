@@ -73,7 +73,7 @@ export type ProviderRoutingEntry = PersonaProviderEntry;
  * 人間定義 persona の表示名照合であるのに対し、ここは固定のロールキーで引く。
  *
  * すべて **オプショナル**。未指定の seat は従来どおりの既定解決
- * （persona routing → workflow → project → global → provider 既定）に落ちる。
+ * （persona routing → project → global → provider 既定）に落ちる。
  * 指定された seat だけが合成ステップへ焼き込まれ、
  * step 直指定と同じ層（CLI/環境変数の明示 override より下、`provider_routing` より上）
  * で効く。

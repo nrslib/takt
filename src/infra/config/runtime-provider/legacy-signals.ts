@@ -2,7 +2,7 @@
  * Shared legacy-provider signal collection (issue #1136).
  *
  * A "legacy provider signal" is a provider setting explicitly written to project/global
- * `config.yaml` (or a workflow) that must not coexist with an active runtime.yaml provider
+ * `config.yaml` settings that must not coexist with an active runtime.yaml provider
  * section. `determineProviderConfigMode` turns a non-empty signal list into a mixed-config
  * fail-fast. This module owns the single signal-generation mapping so every entry point — the
  * workflow-execution bootstrap, the auxiliary preview/doctor entry, and the selector/assistant
@@ -13,50 +13,17 @@ import type { TaktProvidersConfig } from '../../../core/models/config-types.js';
 import type { ProviderOptionsSource } from '../../../core/workflow/provider-options-trace.js';
 import { loadGlobalConfig } from '../global/globalConfig.js';
 import { loadProjectConfig } from '../project/projectConfig.js';
-import { resolveConfigValueWithSource, resolveProviderOptionsWithTrace } from '../resolveConfigValue.js';
+import {
+  resolveConfigValueWithSource,
+  resolveProviderOptionsWithTrace,
+  toProviderResolutionSource,
+} from '../resolveConfigValue.js';
 import { resolveWorkflowConfigValues } from '../resolveWorkflowConfigValue.js';
 import type { LegacyProviderEnvironmentInput } from './environment.js';
 import type { LegacyProviderSignal } from './mode.js';
 
 function isNonEmptyRecord(value: Record<string, unknown> | undefined): boolean {
   return value !== undefined && Object.keys(value).length > 0;
-}
-
-/**
- * A promotion entry carries a concrete provider target when any of provider/model/providerOptions
- * is set. A target-less `{at:N}` promotion (issue #1208) is NOT a legacy signal — its target lives
- * in the runtime.yaml ladder, so it is exactly what Stage 1 introduces. Detection runs on the
- * normalized `WorkflowConfig` steps (both production callers pass normalized config), so only the
- * camelCase `providerOptions` shape exists here.
- */
-interface LegacyPromotionEntryView {
-  provider?: unknown;
-  model?: unknown;
-  providerOptions?: unknown;
-}
-
-function hasTargetedPromotion(
-  promotion: ReadonlyArray<LegacyPromotionEntryView> | undefined,
-): boolean {
-  return promotion?.some((entry) =>
-    entry.provider !== undefined
-    || entry.model !== undefined
-    || entry.providerOptions !== undefined,
-  ) ?? false;
-}
-
-/** Flatten every step's `promotion` list into a single view for mixed-config signal detection. */
-export function collectStepPromotionEntries(
-  steps: readonly unknown[] | undefined,
-): LegacyPromotionEntryView[] {
-  const entries: LegacyPromotionEntryView[] = [];
-  for (const step of steps ?? []) {
-    const promotion = (step as { promotion?: ReadonlyArray<LegacyPromotionEntryView> }).promotion;
-    if (promotion) {
-      entries.push(...promotion);
-    }
-  }
-  return entries;
 }
 
 /**
@@ -84,17 +51,10 @@ export function selectConfigTaktProviders(
  * Detect legacy provider settings that must not coexist with an active runtime.yaml provider
  * section. CLI/env overrides and built-in defaults are runtime overrides / defaults (allowed in
  * both modes), so they are not reported as legacy configuration — only settings explicitly
- * written to project/global `config.yaml` (or the workflow) count.
+ * written to project/global `config.yaml` count.
  */
 export function collectLegacyProviderSignals(
   legacy: LegacyProviderEnvironmentInput,
-  workflow: {
-    name: string;
-    provider?: unknown;
-    model?: unknown;
-    autoRouting?: unknown;
-    promotion?: ReadonlyArray<LegacyPromotionEntryView>;
-  },
   providerOptionsSource: ProviderOptionsSource | undefined,
 ): LegacyProviderSignal[] {
   const signals: LegacyProviderSignal[] = [];
@@ -111,30 +71,6 @@ export function collectLegacyProviderSignals(
       setting: 'model',
       location: `config.yaml:model (${legacy.modelSource})`,
       migrateTo: 'provider.defaults + provider.profiles',
-    });
-  }
-  if (legacy.providerSource === 'workflow' || workflow.provider !== undefined) {
-    signals.push({
-      setting: 'provider',
-      location: `workflow "${workflow.name}":provider`,
-      migrateTo: 'provider.targets.steps',
-    });
-  }
-  if (legacy.modelSource === 'workflow' || workflow.model !== undefined) {
-    signals.push({
-      setting: 'model',
-      location: `workflow "${workflow.name}":model`,
-      migrateTo: 'provider.targets.steps',
-    });
-  }
-  // A workflow step that still names a concrete promotion target (provider/model/provider_options)
-  // is legacy under runtime-v1: the target belongs in the runtime.yaml ladder (issue #1208). A
-  // target-less `{at:N}` promotion is intentionally NOT reported — it is the Stage 1 primitive.
-  if (hasTargetedPromotion(workflow.promotion)) {
-    signals.push({
-      setting: 'promotion',
-      location: `workflow "${workflow.name}":promotion`,
-      migrateTo: 'provider.targets.steps ladder',
     });
   }
   // Only takt_providers with an explicit provider (config.yaml only; never CLI/env/default) count.
@@ -175,16 +111,10 @@ export function collectLegacyProviderSignals(
       migrateTo: 'provider.targets',
     });
   }
-  // auto_routing is inherited as `workflowConfig.autoRouting ?? globalConfig.autoRouting`, so the
-  // effective value can originate from the workflow. Report the location that actually holds it —
-  // consistent with the provider/model workflow-vs-config.yaml split above — so the mixed-config
-  // error points at a real migration target rather than a config.yaml entry that does not exist.
   if (legacy.autoRouting !== undefined) {
     signals.push({
       setting: 'auto_routing',
-      location: workflow.autoRouting !== undefined
-        ? `workflow "${workflow.name}":auto_routing`
-        : 'config.yaml:auto_routing',
+      location: 'config.yaml:auto_routing',
       migrateTo: 'provider.auto_routing',
     });
   }
@@ -209,9 +139,9 @@ export function collectProjectLegacyProviderSignals(projectCwd: string): LegacyP
   ]);
   const legacy: LegacyProviderEnvironmentInput = {
     provider: provider.value,
-    providerSource: provider.source,
+    providerSource: toProviderResolutionSource(provider.source),
     model: model.value,
-    modelSource: model.source,
+    modelSource: toProviderResolutionSource(model.source),
     personaProviders: resolved.personaProviders,
     providerRouting: resolved.providerRouting,
     autoRouting: resolved.autoRouting,
@@ -221,5 +151,5 @@ export function collectProjectLegacyProviderSignals(projectCwd: string): LegacyP
       loadGlobalConfig().taktProviders,
     ),
   };
-  return collectLegacyProviderSignals(legacy, { name: 'internal-agent' }, providerOptions.source);
+  return collectLegacyProviderSignals(legacy, providerOptions.source);
 }

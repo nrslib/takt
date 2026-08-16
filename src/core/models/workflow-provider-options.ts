@@ -1,4 +1,3 @@
-import type { ProviderType } from '../../shared/types/provider.js';
 
 export interface McpStdioServerConfig {
   type?: 'stdio';
@@ -151,9 +150,3 @@ export interface StepProviderOptions {
 }
 
 export type WorkflowStepKind = 'agent' | 'system' | 'workflow_call';
-
-export interface WorkflowCallOverrides {
-  provider?: ProviderType;
-  model?: string;
-  providerOptions?: StepProviderOptions;
-}

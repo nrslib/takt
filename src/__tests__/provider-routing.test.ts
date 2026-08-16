@@ -25,7 +25,7 @@ import { loadGlobalConfig } from '../infra/config/global/globalConfigCore.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowLoader.js';
 
 function createStep(overrides: Record<string, unknown> = {}): WorkflowStep {
-  return {
+  const step = {
     name: 'implement',
     kind: 'agent',
     personaDisplayName: 'implement-coder',
@@ -33,6 +33,10 @@ function createStep(overrides: Record<string, unknown> = {}): WorkflowStep {
     passPreviousResponse: true,
     ...overrides,
   } as WorkflowStep;
+  if ('provider' in overrides || 'model' in overrides || 'providerOptions' in overrides) {
+    step.engineSynthesized = true;
+  }
+  return step;
 }
 
 function createBuilder(
@@ -622,7 +626,7 @@ describe('provider_routing provider_options resolution', () => {
     });
   });
 
-  it('Given team_leader part with workflow fallback and tags, When building part options, Then routing overrides workflow fallback', () => {
+  it('Given team_leader part with runtime options and tags, When building part options, Then routing overrides runtime options', () => {
     const parentStep = createStep({
       name: 'implement',
       persona: 'leader',
@@ -633,9 +637,6 @@ describe('provider_routing provider_options resolution', () => {
       modelSpecified: false,
       tags: ['implementation', 'edit'],
       providerOptions: {
-        codex: { networkAccess: false },
-      },
-      workflowProviderOptions: {
         codex: { networkAccess: false },
       },
       teamLeader: {
@@ -683,9 +684,6 @@ describe('provider_routing provider_options resolution', () => {
       tags: ['implementation', 'edit'],
       providerSpecified: false,
       modelSpecified: false,
-      workflowProviderOptions: {
-        codex: { networkAccess: false },
-      },
     });
     expect(builder.resolveStepProviderModel(partStep)).toMatchObject({
       provider: 'codex',
@@ -695,7 +693,7 @@ describe('provider_routing provider_options resolution', () => {
     });
     expect(builder.buildBaseOptions(partStep).providerOptions).toEqual({
       codex: {
-        networkAccess: true,
+        networkAccess: false,
         reasoningEffort: 'high',
       },
     });
@@ -1215,288 +1213,63 @@ describe('workflow step tags', () => {
     expect(() => loadWorkflowFromFile(workflowPath, tempDir)).toThrow(error);
   });
 
-  it('Given workflow_config and provider_routing both define provider, When loading workflow and resolving step, Then routing is above workflow fallback', () => {
-    const workflowPath = join(tempDir, 'provider-routing-workflow-config.yaml');
+  it.each([
+    {
+      name: 'workflow_config.provider',
+      workflowLines: ['workflow_config:', '  provider: mock'],
+      stepLines: [],
+    },
+    {
+      name: 'workflow_config.model',
+      workflowLines: ['workflow_config:', '  model: workflow-model'],
+      stepLines: [],
+    },
+    {
+      name: 'workflow_config.provider_options',
+      workflowLines: ['workflow_config:', '  provider_options:', '    codex:', '      network_access: true'],
+      stepLines: [],
+    },
+    {
+      name: 'step provider',
+      workflowLines: [],
+      stepLines: ['    provider: mock'],
+    },
+    {
+      name: 'step model',
+      workflowLines: [],
+      stepLines: ['    model: workflow-model'],
+    },
+    {
+      name: 'step provider_options',
+      workflowLines: [],
+      stepLines: ['    provider_options:', '      codex:', '        network_access: true'],
+    },
+    {
+      name: 'parallel sub-step provider',
+      workflowLines: [],
+      stepLines: [
+        '    parallel:',
+        '      - name: implement-api',
+        '        persona: coder',
+        '        provider: mock',
+        '        instruction: "{task}"',
+      ],
+    },
+  ])('Given $name is present in workflow YAML, When loading workflow, Then it fails fast with the runtime migration target', ({ name, workflowLines, stepLines }) => {
+    const workflowPath = join(tempDir, `provider-routing-removed-${name.replace(/[^a-z0-9]+/gi, '-')}.yaml`);
     writeFileSync(workflowPath, [
-      'name: provider-routing-workflow-config',
+      'name: provider-routing-removed',
       'initial_step: implement',
       'max_steps: 1',
-      'workflow_config:',
-      '  provider: claude',
-      '  model: workflow-model',
+      ...workflowLines,
       'steps:',
       '  - name: implement',
       '    persona: coder',
-      '    tags:',
-      '      - implementation',
-      '    instruction: "{task}"',
+      ...stepLines,
+      ...(stepLines.some((line) => line.includes('parallel:')) ? [] : ['    instruction: "{task}"']),
     ].join('\n'));
 
-    const workflow = loadWorkflowFromFile(workflowPath, tempDir);
-    const result = resolveStepProviderModel({
-      step: workflow.steps[0],
-      provider: 'claude',
-      providerSource: 'project',
-      model: 'workflow-model',
-      modelSource: 'project',
-      providerRouting: {
-        tags: {
-          implementation: { provider: 'codex', model: 'gpt-5' },
-        },
-      },
-    });
-
-    expect(result).toMatchObject({
-      provider: 'codex',
-      model: 'gpt-5',
-      providerSource: 'provider_routing.tags',
-      modelSource: 'provider_routing.tags',
-    });
-  });
-
-  it('Given workflow_config has a concrete fallback and provider_routing defines provider, When resolving step, Then routing is above the fallback', () => {
-    const workflowPath = join(tempDir, 'provider-routing-workflow-config-auto.yaml');
-    writeFileSync(workflowPath, [
-      'name: provider-routing-workflow-config-auto',
-      'initial_step: implement',
-      'max_steps: 1',
-      'workflow_config:',
-      '  provider: mock',
-      '  model: workflow-model',
-      'steps:',
-      '  - name: implement',
-      '    persona: coder',
-      '    tags:',
-      '      - implementation',
-      '    instruction: "{task}"',
-    ].join('\n'));
-
-    const workflow = loadWorkflowFromFile(workflowPath, tempDir);
-    const step = workflow.steps[0];
-
-    expect(step).toMatchObject({
-      provider: 'mock',
-      providerSpecified: false,
-    });
-    expect(resolveStepProviderModel({
-      step,
-      provider: 'mock',
-      providerSource: 'project',
-      model: 'workflow-model',
-      modelSource: 'project',
-      providerRouting: {
-        tags: {
-          implementation: { provider: 'codex', model: 'gpt-5' },
-        },
-      },
-    })).toMatchObject({
-      provider: 'codex',
-      model: 'gpt-5',
-      providerSource: 'provider_routing.tags',
-      modelSource: 'provider_routing.tags',
-    });
-  });
-
-  it('Given parallel sub-step inherits workflow_config fallback, When resolving sub-step, Then routing remains above workflow fallback', () => {
-    const workflowPath = join(tempDir, 'provider-routing-parallel-workflow-config.yaml');
-    writeFileSync(workflowPath, [
-      'name: provider-routing-parallel-workflow-config',
-      'initial_step: implement',
-      'max_steps: 1',
-      'workflow_config:',
-      '  provider: claude',
-      '  model: workflow-model',
-      '  provider_options:',
-      '    codex:',
-      '      network_access: false',
-      'steps:',
-      '  - name: implement',
-      '    persona: coder',
-      '    parallel:',
-      '      - name: implement-api',
-      '        persona: coder',
-      '        tags:',
-      '          - implementation',
-      '        instruction: "{task}"',
-    ].join('\n'));
-
-    const workflow = loadWorkflowFromFile(workflowPath, tempDir);
-    const subStep = workflow.steps[0].parallel?.[0];
-    if (!subStep) {
-      throw new Error('parallel sub-step must be normalized');
-    }
-
-    expect(subStep).toMatchObject({
-      provider: 'claude',
-      providerSpecified: false,
-      model: 'workflow-model',
-      modelSpecified: false,
-      workflowProviderOptions: {
-        codex: { networkAccess: false },
-      },
-    });
-    expect(resolveStepProviderModel({
-      step: subStep,
-      providerRouting: {
-        tags: {
-          implementation: { provider: 'codex', model: 'gpt-5' },
-        },
-      },
-    })).toMatchObject({
-      provider: 'codex',
-      model: 'gpt-5',
-      providerSource: 'provider_routing.tags',
-      modelSource: 'provider_routing.tags',
-    });
-    expect(createBuilder({
-      providerRouting: {
-        tags: {
-          implementation: {
-            providerOptions: {
-              codex: { networkAccess: true },
-            },
-          },
-        },
-      },
-    }).buildBaseOptions(subStep).providerOptions).toEqual({
-      codex: { networkAccess: true },
-    });
-  });
-
-  it('Given parallel sub-step inherits a concrete workflow fallback, When resolving sub-step, Then routing remains above the fallback', () => {
-    const workflowPath = join(tempDir, 'provider-routing-parallel-workflow-config-auto.yaml');
-    writeFileSync(workflowPath, [
-      'name: provider-routing-parallel-workflow-config-auto',
-      'initial_step: implement',
-      'max_steps: 1',
-      'workflow_config:',
-      '  provider: mock',
-      '  model: workflow-model',
-      'steps:',
-      '  - name: implement',
-      '    persona: coder',
-      '    parallel:',
-      '      - name: implement-api',
-      '        persona: coder',
-      '        tags:',
-      '          - implementation',
-      '        instruction: "{task}"',
-    ].join('\n'));
-
-    const workflow = loadWorkflowFromFile(workflowPath, tempDir);
-    const subStep = workflow.steps[0].parallel?.[0];
-    if (!subStep) {
-      throw new Error('parallel sub-step must be normalized');
-    }
-
-    expect(subStep).toMatchObject({
-      provider: 'mock',
-      providerSpecified: false,
-      model: 'workflow-model',
-      modelSpecified: false,
-    });
-    expect(resolveStepProviderModel({
-      step: subStep,
-      providerRouting: {
-        tags: {
-          implementation: { provider: 'codex', model: 'gpt-5' },
-        },
-      },
-    })).toMatchObject({
-      provider: 'codex',
-      model: 'gpt-5',
-      providerSource: 'provider_routing.tags',
-      modelSource: 'provider_routing.tags',
-    });
-  });
-
-  it('Given parallel sub-step omits model explicitly while inheriting provider, When resolving sub-step, Then parent model is not inherited', () => {
-    const workflowPath = join(tempDir, 'provider-inherited-model-null.yaml');
-    writeFileSync(workflowPath, [
-      'name: provider-inherited-model-null',
-      'initial_step: implement',
-      'max_steps: 1',
-      'steps:',
-      '  - name: implement',
-      '    persona: coder',
-      '    provider: claude',
-      '    model: parent-model',
-      '    instruction: "{task}"',
-      '    parallel:',
-      '      - name: implement-api',
-      '        persona: coder',
-      '        model: null',
-      '        instruction: "{task}"',
-    ].join('\n'));
-
-    const workflow = loadWorkflowFromFile(workflowPath, tempDir);
-    const subStep = workflow.steps[0].parallel?.[0];
-    if (!subStep) {
-      throw new Error('parallel sub-step must be normalized');
-    }
-
-    expect(subStep).toMatchObject({
-      provider: 'claude',
-      providerSpecified: true,
-      model: undefined,
-      modelSpecified: true,
-    });
-    expect(resolveStepProviderModel({
-      step: subStep,
-      provider: 'claude',
-      providerSource: 'project',
-      model: 'project-model',
-      modelSource: 'project',
-    })).toMatchObject({
-      provider: 'claude',
-      model: undefined,
-      providerSource: 'step',
-      modelSource: 'step',
-    });
-  });
-
-  it('Given parallel parent omits model explicitly, When sub-step omits model, Then engine model is not inherited', () => {
-    const workflowPath = join(tempDir, 'provider-parent-model-null.yaml');
-    writeFileSync(workflowPath, [
-      'name: provider-parent-model-null',
-      'initial_step: implement',
-      'max_steps: 1',
-      'steps:',
-      '  - name: implement',
-      '    persona: coder',
-      '    provider: cursor',
-      '    model: null',
-      '    instruction: "{task}"',
-      '    parallel:',
-      '      - name: implement-api',
-      '        persona: coder',
-      '        instruction: "{task}"',
-    ].join('\n'));
-
-    const workflow = loadWorkflowFromFile(workflowPath, tempDir);
-    const subStep = workflow.steps[0].parallel?.[0];
-    if (!subStep) {
-      throw new Error('parallel sub-step must be normalized');
-    }
-
-    expect(subStep).toMatchObject({
-      provider: 'cursor',
-      providerSpecified: true,
-      model: undefined,
-      modelSpecified: true,
-    });
-    expect(resolveStepProviderModel({
-      step: subStep,
-      provider: 'cursor',
-      providerSource: 'project',
-      model: 'project-model',
-      modelSource: 'project',
-    })).toMatchObject({
-      provider: 'cursor',
-      model: undefined,
-      providerSource: 'step',
-      modelSource: 'step',
-    });
+    expect(() => loadWorkflowFromFile(workflowPath, tempDir)).toThrow(/runtime\.yaml/);
   });
 });
 
@@ -1584,7 +1357,7 @@ describe('provider_routing provider/model validation', () => {
     } as WorkflowEngineOptions)).toThrow(/provider\/model/);
   });
 
-  it('Given promotion switches to opencode without a model, When validating workflow, Then it fails fast', () => {
+  it('Given promotion contains removed provider settings, When validating normalized workflow, Then the engine ignores them', () => {
     expect(() => validateWorkflowConfig({
       name: 'promotion-opencode-missing-model-validation',
       initialStep: 'review',
@@ -1605,10 +1378,10 @@ describe('provider_routing provider/model validation', () => {
       ],
     }, {
       projectCwd: '/project',
-    } as WorkflowEngineOptions)).toThrow(/provider 'opencode' requires model/);
+    } as WorkflowEngineOptions)).not.toThrow();
   });
 
-  it('Given promotion switches to opencode with a bare model, When validating workflow, Then it fails fast', () => {
+  it('Given promotion contains a removed model setting, When validating normalized workflow, Then the engine ignores it', () => {
     expect(() => validateWorkflowConfig({
       name: 'promotion-opencode-bare-model-validation',
       initialStep: 'review',
@@ -1630,10 +1403,10 @@ describe('provider_routing provider/model validation', () => {
       ],
     }, {
       projectCwd: '/project',
-    } as WorkflowEngineOptions)).toThrow(/provider\/model/);
+    } as WorkflowEngineOptions)).not.toThrow();
   });
 
-  it('Given promotion model inherits an opencode provider, When the promotion model is bare, Then validation fails fast', () => {
+  it('Given a ladder promotion is normalized, When validating workflow, Then runtime owns provider/model', () => {
     expect(() => validateWorkflowConfig({
       name: 'promotion-opencode-inherited-provider-validation',
       initialStep: 'review',
@@ -1653,7 +1426,7 @@ describe('provider_routing provider/model validation', () => {
       ],
     }, {
       projectCwd: '/project',
-    } as WorkflowEngineOptions)).toThrow(/provider\/model/);
+    } as WorkflowEngineOptions)).not.toThrow();
   });
 
   it('Given persona_providers resolves opencode with a bare model, When validating workflow, Then it fails fast', () => {

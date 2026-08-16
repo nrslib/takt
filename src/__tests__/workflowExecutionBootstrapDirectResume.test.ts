@@ -11,6 +11,7 @@ const {
   mockWriteFileAtomic,
   mockResolveWorkflowConfigValues,
   mockResolveConfigValueWithSource,
+  mockToProviderResolutionSource,
   mockCreateOutputFns,
   mockInitializeOtelFoundation,
   mockEnsureWorktreeTaktRuntimeProtection,
@@ -21,6 +22,7 @@ const {
   mockWriteFileAtomic: vi.fn(),
   mockResolveWorkflowConfigValues: vi.fn(),
   mockResolveConfigValueWithSource: vi.fn(),
+  mockToProviderResolutionSource: vi.fn((source: string | undefined) => source),
   mockCreateOutputFns: vi.fn(),
   mockInitializeOtelFoundation: vi.fn(),
   mockEnsureWorktreeTaktRuntimeProtection: vi.fn(),
@@ -43,6 +45,7 @@ vi.mock('../infra/config/index.js', () => ({
 
 vi.mock('../infra/config/resolveConfigValue.js', () => ({
   resolveConfigValueWithSource: mockResolveConfigValueWithSource,
+  toProviderResolutionSource: mockToProviderResolutionSource,
   resolveProviderOptionsWithTrace: vi.fn(() => ({
     value: undefined,
     source: 'default',
@@ -633,7 +636,7 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     expect(bootstrap.autoStrategyOverride).toBe('performance');
   });
 
-  it('Given a workflow-level concrete provider and no config provider, When bootstrap resolves provider, Then workflow provider is used', async () => {
+  it('Given a workflow has no provider field, When bootstrap resolves provider, Then legacy config provider is used', async () => {
     mockResolveWorkflowConfigValues.mockReturnValueOnce({
       provider: undefined,
       model: undefined,
@@ -652,14 +655,12 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
 
     const bootstrap = await createWorkflowExecutionBootstrap({
       ...workflowConfig,
-      provider: 'claude',
-      autoRouting: createAutoRoutingConfig(),
     }, 'Run workflow-level auto provider', '/project', {
       projectCwd: '/project',
     });
 
-    expect(bootstrap.currentProvider).toBe('claude');
-    expect(bootstrap.currentProviderSource).toBe('workflow');
+    expect(bootstrap.currentProvider).toBe('mock');
+    expect(bootstrap.currentProviderSource).toBe('global');
   });
 
   it('provider と model の value/source を同じ traced resolution から保持する', async () => {
@@ -736,7 +737,7 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     });
 
     expect(bootstrap.currentProvider).toBe('mock');
-    expect(bootstrap.effectiveWorkflowConfig.autoRouting?.strategy).toBe('cost');
+    expect(bootstrap.autoRouting?.strategy).toBe('cost');
     expect(bootstrap.autoStrategyOverride).toBe('performance');
     expect(mockLogWarn).not.toHaveBeenCalled();
   });

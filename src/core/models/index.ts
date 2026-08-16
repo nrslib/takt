@@ -23,7 +23,6 @@ export type {
   WorkflowRuntimeConfig,
   WorkflowStepKind,
   WorkflowResumeFrameKind,
-  WorkflowCallOverrides,
   WorkflowSessionMode,
   WorkflowParamType,
   WorkflowParamFacetKind,

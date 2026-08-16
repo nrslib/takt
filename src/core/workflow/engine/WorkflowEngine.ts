@@ -173,7 +173,7 @@ export class WorkflowEngine extends EventEmitter {
       ...options.traceTaskMetadata,
       runDir: runPaths.runRootAbs,
     };
-    const inheritedAutoRouting = resolveEffectiveAutoRouting(config, options.autoRouting);
+    const inheritedAutoRouting = resolveEffectiveAutoRouting(options.autoRouting);
     if (options.autoStrategyOverride !== undefined && inheritedAutoRouting !== undefined) {
       options.onEffectiveAutoRoutingReached?.();
     }
@@ -213,7 +213,7 @@ export class WorkflowEngine extends EventEmitter {
       ...(resumePoint === undefined ? {} : { resumePoint }),
       ...(restartPoint === undefined ? {} : { restartPoint }),
       ...(restartStartStep === undefined ? {} : { startStep: restartStartStep }),
-      rateLimitFallback: config.rateLimitFallback ?? options.rateLimitFallback,
+      rateLimitFallback: options.rateLimitFallback,
       structuredCaller: this.structuredCaller,
       structuredOutputNormalizers: options.structuredOutputNormalizers ?? createStructuredOutputNormalizerRegistry([]),
       autoRouting: effectiveAutoRouting,

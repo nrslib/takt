@@ -38,7 +38,6 @@ function writeDynamicParallelFixture(
     ...poolIds.flatMap((poolId) => [
       `        - name: ${poolId}`,
       `          persona: ./agents/${poolId}.md`,
-      ...(poolId === 'backend' ? ['          model: mock-backend'] : []),
       `          description: Review ${poolId} changes`,
       `          instruction: Review ${poolId}`,
       '          rules:',

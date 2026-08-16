@@ -1,11 +1,5 @@
 name: e2e-team-leader-batch-barrier
 description: E2E test for team_leader batch barrier behavior
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
 personas:
   test-team-leader-batch-barrier: |
     You are the E2E team leader batch-barrier coordinator.

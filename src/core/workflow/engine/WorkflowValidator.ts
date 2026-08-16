@@ -11,7 +11,6 @@ import {
 import { ABORT_STEP, COMPLETE_STEP, ERROR_MESSAGES } from '../constants.js';
 import type { WorkflowEngineOptions } from '../types.js';
 import {
-  applyProviderModelOverride,
   resolveLoopMonitorJudgeProviderModel,
   resolveStepProviderModel,
 } from '../provider-resolution.js';
@@ -190,13 +189,6 @@ function validateAgentStepProviderModel(
         field,
       ]);
     }
-    validatePromotionProviderModels(
-      agentStep,
-      validationInfo.providerInfo,
-      source,
-      validationInfo.autoRouted,
-      stepPath,
-    );
   }
 }
 
@@ -218,37 +210,6 @@ function validateSessionEntrypoint(step: WorkflowStep, source: string): void {
 
   if (candidate.parallel !== undefined || candidate.arpeggio !== undefined || candidate.teamLeader !== undefined) {
     throw new Error(`${source}: ${SESSION_NORMAL_AGENT_STEP_REQUIRED_MESSAGE}`);
-  }
-}
-
-function validatePromotionProviderModels(
-  step: AgentWorkflowStep,
-  baseProviderInfo: ResolvedProviderInfo,
-  source: string,
-  autoRouted: boolean,
-  stepPath: readonly PropertyKey[],
-): void {
-  for (const [index, promotion] of (step.promotion ?? []).entries()) {
-    const promotedProviderInfo = applyProviderModelOverride(baseProviderInfo, {
-      provider: promotion.provider,
-      providerSpecified: promotion.providerSpecified === true || promotion.provider !== undefined,
-      model: promotion.model,
-      modelSpecified: promotion.model !== undefined,
-      source: 'promotion',
-    });
-    try {
-      validateResolvedProviderInfo(
-        promotedProviderInfo,
-        `${source}.promotion[${index}].model`,
-        autoRouted,
-      );
-    } catch (error) {
-      const field = providerValidationField(error, promotion.model !== undefined ? 'model' : 'provider');
-      throw withWorkflowConfigErrorPath(error, [
-        ...stepPath,
-        'promotion', index, field,
-      ]);
-    }
   }
 }
 
@@ -436,7 +397,8 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
     const judgeStepProviderInfo = resolveStepProviderModel({
       step: {
         name: loopJudgeStepName(monitor.cycle),
-        ...loopJudgeProviderFields(monitor.judge, options.internalAgentSeats),
+        engineSynthesized: true,
+        ...loopJudgeProviderFields(options.internalAgentSeats),
         personaDisplayName: LOOP_JUDGE_ROUTING_KEY,
         providerRoutingPersonaKey: LOOP_JUDGE_ROUTING_KEY,
       },
@@ -454,7 +416,6 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
       options.autoRouting,
     )) {
       const judgeProviderInfo = resolveLoopMonitorJudgeProviderModel({
-        judge: monitor.judge,
         judgeProviderInfo: judgeStepProviderInfo,
         triggeringProviderInfo: validationInfo.providerInfo,
       });

@@ -94,7 +94,12 @@ Organized by category.
 | | `magi` | Deliberation system inspired by Evangelion. Three AI personas (MELCHIOR, BALTHASAR, CASPER) analyze and vote. |
 | | `compound-eye` | Multi-eye review: send the same instruction to two independently assigned eyes, then synthesize both responses. Assign providers per eye via runtime.yaml (`provider.targets.steps` -> `eye1` / `eye2`). |
 
-To run an existing workflow entirely with local models, configure its provider and model normally. For a custom hybrid setup, route ordinary `review` steps to the local provider and apply a later `final-gate` tag to the steps that must return to a high-assurance provider. Later tags override earlier tags for the same provider, model, and provider-options fields.
+To run an existing workflow entirely with local models, assign the provider
+and model in `runtime.yaml` (`provider.defaults` or `provider.targets`). For a
+custom hybrid setup, route ordinary `review` steps to the local provider and
+apply a later `final-gate` tag to the steps that must return to a high-assurance
+provider. Later runtime targets override earlier matching targets; workflow
+YAML itself does not contain provider/model/provider-options fields.
 
 Run `takt` to choose a workflow interactively.
 
@@ -160,11 +165,13 @@ steps:
     # ...
 ```
 
-## Per-persona Provider Overrides
+## Legacy Per-persona Provider Overrides
 
 > **Deprecated**: `persona_providers` is a legacy setting. Prefer `provider_routing.personas` (see the [Configuration Guide](./configuration.md)) for new settings; it routes by raw persona key and also supports step-tag and step-name routing. `provider_routing` takes priority over `persona_providers` when both are set.
 
-Use `persona_providers` in `~/.takt/config.yaml` to route specific personas to different providers without duplicating workflows. This allows you to run, for example, coding on Codex while keeping reviewers on Claude.
+In legacy mode, use `persona_providers` in `~/.takt/config.yaml` to route
+specific personas to different providers without duplicating workflows. In
+runtime mode, use `provider.targets.personas` in `runtime.yaml` instead.
 
 ```yaml
 # ~/.takt/config.yaml

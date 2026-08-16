@@ -1,12 +1,10 @@
-import type { StructuredCaller } from '../../../agents/structured-caller.js';
-import type { RunAgentOptions } from '../../../agents/runner.js';
 import type { AgentWorkflowStep, WorkflowStep } from '../../models/types.js';
 import type { ProviderLadderConfig, ProviderRoutingEntry, TagRoutingConflictPolicy } from '../../models/config-types.js';
 import type { ProviderResolutionSource } from '../provider-options-trace.js';
 import type { RuntimeStepResolution, StepProviderInfo } from '../types.js';
 import { isDelegatedWorkflowStep } from '../step-kind.js';
 import { applyProviderModelOverride, assertTagMatchesAgree, tagRoutingEntryIdentity } from '../provider-resolution.js';
-import { countMatchedLadderStages, evaluatePromotion, isTargetedPromotionEntry } from './PromotionEvaluator.js';
+import { countMatchedLadderStages, evaluatePromotion } from './PromotionEvaluator.js';
 import {
   isFilePreferredProviderOptionPath,
   mergeProviderOptions,
@@ -19,12 +17,6 @@ const log = createLogger('workflow-promotion');
 
 export interface PromotionRuntimeContext {
   cwd: string;
-  previousResponseContent: string;
-  structuredCaller?: StructuredCaller;
-  childProcessEnv?: RunAgentOptions['childProcessEnv'];
-  abortSignal?: RunAgentOptions['abortSignal'];
-  onStream?: RunAgentOptions['onStream'];
-  onActivity?: RunAgentOptions['onActivity'];
   resolveStepProviderModel: (step: WorkflowStep, runtime?: RuntimeStepResolution) => StepProviderInfo;
   /**
    * Fully-resolved runtime.yaml `ladder` stages (issue #1208). A matched target-less `{at:N}`
@@ -136,33 +128,14 @@ export async function resolvePromotionRuntime(
 
   const baseProviderInfo = context.resolveStepProviderModel(step, runtime);
   const promotion = await evaluatePromotion(step, {
-    cwd: context.cwd,
     stepIteration,
-    previousResponseContent: context.previousResponseContent,
-    structuredCaller: context.structuredCaller,
-    resolvedProvider: baseProviderInfo.provider,
-    resolvedModel: baseProviderInfo.model,
-    resolvedProviderOptions: baseProviderInfo.providerOptions,
-    permissionMode: baseProviderInfo.permissionMode,
-    childProcessEnv: context.childProcessEnv,
-    abortSignal: context.abortSignal,
-    onStream: context.onStream,
-    onActivity: context.onActivity,
   });
 
-  if (promotion !== undefined && isTargetedPromotionEntry(promotion)) {
-    return applyPromotionTarget(runtime, baseProviderInfo, {
-      provider: promotion.provider,
-      providerSpecified: promotion.providerSpecified === true || promotion.provider !== undefined,
-      model: promotion.model,
-      modelSpecified: promotion.model !== undefined,
-      providerOptions: promotion.providerOptions,
-      permissionMode: undefined,
-    });
+  // `{at:N}` promotion advances the governing runtime.yaml `ladder` (issue #1208). The matched
+  // entry count is the stage index; stage 0 is already the current assignment.
+  if (promotion === undefined) {
+    return runtime;
   }
-
-  // Target-less `{at:N}` promotion: advance the governing runtime.yaml `ladder` (issue #1208). The
-  // matched `{at}` count is the stage index; stage 0 is already the current assignment.
   const stageIndex = countMatchedLadderStages(step, stepIteration);
   if (stageIndex === 0) {
     return runtime;

@@ -1,4 +1,4 @@
-import type { LoopMonitorJudge, WorkflowConfig, WorkflowStep } from '../models/types.js';
+import type { WorkflowStep } from '../models/types.js';
 import type { AutoRoutingConfig, PersonaProviderEntry, ProviderRoutingConfig, ProviderRoutingEntry, TagRoutingConflictPolicy } from '../models/config-types.js';
 import {
   resolveProviderModelCandidates,
@@ -20,7 +20,7 @@ export interface ProviderModelResolutionContext {
 }
 
 export interface StepProviderModelInput extends ProviderModelResolutionContext {
-  step: Pick<WorkflowStep, 'provider' | 'model' | 'personaDisplayName'> & {
+  step: Pick<WorkflowStep, 'provider' | 'model' | 'personaDisplayName' | 'engineSynthesized'> & {
     name?: string;
     providerSpecified?: boolean;
     modelSpecified?: boolean;
@@ -49,7 +49,6 @@ export interface StepProviderModelOutput {
 }
 
 export interface WorkflowCallProviderModelInput {
-  workflow: Pick<WorkflowConfig, 'provider' | 'model'>;
   provider?: ProviderType;
   providerSource?: ProviderResolutionSource;
   model?: string;
@@ -67,8 +66,7 @@ export interface WorkflowCallProviderModelOutput {
 }
 
 export interface LoopMonitorJudgeProviderModelInput {
-  judge: Pick<LoopMonitorJudge, 'provider' | 'model' | 'modelSpecified'>;
-  judgeProviderInfo?: StepProviderModelOutput;
+  judgeProviderInfo: StepProviderModelOutput;
   triggeringProviderInfo: StepProviderModelOutput;
 }
 
@@ -110,21 +108,19 @@ const PROVIDER_MODEL_SOURCE_PRIORITY: Record<ProviderResolutionSource, number> =
   env: 0,
   promotion: 1,
   step: 2,
-  workflow_call: 3,
-  'provider_routing.steps': 4,
-  'provider_routing.tags': 5,
-  'provider_routing.personas': 6,
-  persona_providers: 7,
-  'auto.rules': 8,
-  'auto.dynamic': 8,
-  'auto.fallback': 8,
-  workflow: 9,
+  'provider_routing.steps': 3,
+  'provider_routing.tags': 4,
+  'provider_routing.personas': 5,
+  persona_providers: 6,
+  'auto.rules': 7,
+  'auto.dynamic': 7,
+  'auto.fallback': 7,
   // Listed only to satisfy the shared source union; a capability set never carries provider/model.
-  capabilities: 9,
-  project: 10,
-  global: 11,
-  'runtime-v1': 11,
-  default: 12,
+  capabilities: 8,
+  project: 9,
+  global: 10,
+  'runtime-v1': 10,
+  default: 11,
 };
 
 function hasHigherProviderModelPriority(
@@ -144,11 +140,7 @@ function isExplicitProviderModelSource(
 function resolveLowerPriorityValue<T>(
   projectOrGlobalValue: T | undefined,
   projectOrGlobalSource: ProviderResolutionSource | undefined,
-  workflowValue: T | undefined,
 ): { value: T; source: ProviderResolutionSource | undefined } | undefined {
-  if (workflowValue !== undefined) {
-    return { value: workflowValue, source: 'workflow' };
-  }
   if (projectOrGlobalValue !== undefined) {
     return { value: projectOrGlobalValue, source: projectOrGlobalSource };
   }
@@ -307,14 +299,13 @@ export function resolveStepProviderModel(input: StepProviderModelInput): StepPro
     ? input.providerRouting?.personas?.[input.step.providerRoutingPersonaKey]
     : undefined;
   const personaEntry = input.personaProviders?.[input.step.personaDisplayName];
-  const stepProviderIsDirect = input.step.provider !== undefined
+  const stepProviderIsDirect = input.step.engineSynthesized === true
+    && input.step.provider !== undefined
     && input.step.providerSpecified !== false;
-  const stepModelIsDirect = input.step.modelSpecified === true
-    || (input.step.model !== undefined && input.step.modelSpecified !== false);
-  const workflowProvider = input.step.providerSpecified === false
-    ? input.step.provider
-    : undefined;
-  const workflowModel = input.step.modelSpecified === false ? input.step.model : undefined;
+  const stepModelIsDirect = input.step.engineSynthesized === true && (
+    input.step.modelSpecified === true
+    || (input.step.model !== undefined && input.step.modelSpecified !== false)
+  );
   const explicitProviderSource = isExplicitProviderModelSource(input.providerSource)
     ? input.providerSource
     : undefined;
@@ -322,8 +313,6 @@ export function resolveStepProviderModel(input: StepProviderModelInput): StepPro
   const explicitModelSource = isExplicitProviderModelSource(input.modelSource)
     ? input.modelSource
     : undefined;
-  const workflowCallProvider = input.providerSource === 'workflow_call' ? input.provider : undefined;
-  const workflowCallModelIsResolved = input.modelSource === 'workflow_call';
   const autoRoutingApplies = input.autoRouting !== undefined
     && hasAutoRoutingPoolAssignment(input.autoRouting, {
       name: input.step.name,
@@ -333,12 +322,10 @@ export function resolveStepProviderModel(input: StepProviderModelInput): StepPro
   const lowerProvider = resolveLowerPriorityValue(
     input.provider,
     input.providerSource,
-    workflowProvider,
   );
   const lowerModel = resolveLowerPriorityValue(
     input.model,
     input.modelSource,
-    workflowModel,
   );
 
   let provider: ProviderType | undefined;
@@ -349,9 +336,6 @@ export function resolveStepProviderModel(input: StepProviderModelInput): StepPro
   } else if (stepProviderIsDirect) {
     provider = input.step.provider;
     providerSource = 'step';
-  } else if (workflowCallProvider !== undefined) {
-    provider = workflowCallProvider;
-    providerSource = 'workflow_call';
   } else if (routingStepEntry?.provider !== undefined) {
     provider = routingStepEntry.provider;
     providerSource = 'provider_routing.steps';
@@ -377,9 +361,6 @@ export function resolveStepProviderModel(input: StepProviderModelInput): StepPro
   } else if (stepModelIsDirect) {
     model = input.step.model;
     modelSource = 'step';
-  } else if (workflowCallModelIsResolved) {
-    model = input.model;
-    modelSource = 'workflow_call';
   } else if (routingStepEntry?.model !== undefined) {
     model = routingStepEntry.model;
     modelSource = 'provider_routing.steps';
@@ -430,30 +411,18 @@ export function resolveWorkflowCallProviderModel(
   const explicitModelSource = isExplicitProviderModelSource(input.modelSource)
     ? input.modelSource
     : undefined;
-  const lowerProvider = resolveLowerPriorityValue(
-    input.provider,
-    input.providerSource,
-    input.workflow.provider,
-  );
-  const lowerModel = resolveLowerPriorityValue(
-    input.model,
-    input.modelSource,
-    input.workflow.model,
-  );
   const provider = explicitProviderSource !== undefined
     ? input.provider
-    : lowerProvider?.value;
+    : input.provider;
   const providerSource = explicitProviderSource !== undefined
     ? explicitProviderSource
-    : lowerProvider?.source;
+    : input.providerSource;
   const model = explicitModelSource !== undefined
     ? input.model
-    : lowerModel?.value;
+    : input.model;
   const modelSource = explicitModelSource !== undefined
     ? explicitModelSource
-    : lowerModel?.source;
-  // Permission is part of the profile that supplied the provider. A child workflow
-  // provider declaration replaces that profile, while a model-only declaration does not.
+    : input.modelSource;
   const permissionMode = providerSource === input.providerSource
     ? input.permissionMode
     : undefined;
@@ -469,15 +438,7 @@ export function resolveWorkflowCallProviderModel(
 export function resolveLoopMonitorJudgeProviderModel(
   input: LoopMonitorJudgeProviderModelInput,
 ): LoopMonitorJudgeProviderModelOutput {
-  const judgeInfo = input.judgeProviderInfo ?? {
-    provider: input.judge.provider,
-    model: input.judge.model,
-    providerSource: input.judge.provider !== undefined ? 'step' as const : undefined,
-    modelSource: (input.judge.modelSpecified === true
-      || (input.judge.model !== undefined && input.judge.modelSpecified !== false))
-      ? 'step' as const
-      : undefined,
-  };
+  const judgeInfo = input.judgeProviderInfo;
   const explicitSources: ReadonlySet<ProviderResolutionSource> = new Set([
     'cli',
     'env',

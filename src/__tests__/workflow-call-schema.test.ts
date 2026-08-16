@@ -1080,15 +1080,6 @@ describe('workflow_call schema', () => {
           name: 'delegate',
           kind: 'workflow_call',
           call: 'takt/review-loop',
-          overrides: {
-            provider: 'codex',
-            model: 'gpt-5-codex',
-            provider_options: {
-              codex: {
-                network_access: true,
-              },
-            },
-          },
           rules: [
             {
               condition: 'COMPLETE',
@@ -1111,16 +1102,8 @@ describe('workflow_call schema', () => {
     expect(steps[0]).toMatchObject({
       kind: 'workflow_call',
       call: 'takt/review-loop',
-      overrides: {
-        provider: 'codex',
-        model: 'gpt-5-codex',
-        provider_options: {
-          codex: {
-            network_access: true,
-          },
-        },
-      },
     });
+    expect('overrides' in steps[0]).toBe(false);
   });
 
   it.each(['COMPLETE', 'ABORT'])('subworkflow.returns で予約語 %s を reject する', (reservedResult) => {
@@ -1669,15 +1652,6 @@ describe('workflow_call schema', () => {
         name: 'parent',
         initial_step: 'delegate',
         max_steps: 3,
-        workflow_config: {
-          provider: 'codex',
-          model: 'gpt-5-codex',
-          provider_options: {
-            codex: {
-              network_access: true,
-            },
-          },
-        },
         steps: [
           {
             name: 'delegate',
@@ -1743,7 +1717,8 @@ describe('workflow_call schema', () => {
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.error.issues.some((issue) =>
-        issue.message.includes('workflow_call overrides require at least one of'),
+        issue.message.includes('workflow YAML no longer accepts provider execution settings')
+        && issue.message.includes('runtime.yaml'),
       )).toBe(true);
     }
   });
@@ -1768,8 +1743,8 @@ describe('workflow_call schema', () => {
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.error.issues.some((issue) =>
-        issue.code === 'unrecognized_keys'
-        && issue.path[0] === 'overrides',
+        issue.path[0] === 'overrides'
+        && issue.message.includes('runtime.yaml'),
       )).toBe(true);
     }
   });
@@ -1871,46 +1846,25 @@ describe('workflow_call schema', () => {
     }
   });
 
-  it('callable subworkflow で workflow-level provider 設定を保持する', () => {
-    const workflow = normalizeWorkflowConfig(
+  it('callable subworkflow で workflow-level provider 設定を拒否する', () => {
+    expect(() => normalizeWorkflowConfig(
       {
         name: 'takt/coding',
-        subworkflow: {
-          callable: true,
-        },
+        subworkflow: { callable: true },
         workflow_config: {
           provider: 'codex',
           model: 'gpt-5-codex',
-          provider_options: {
-            codex: {
-              network_access: true,
-            },
-          },
+          provider_options: { codex: { network_access: true } },
         },
-        steps: [
-          {
-            name: 'review',
-            persona: 'reviewer',
-            instruction: 'Review the task',
-            rules: [
-              {
-                condition: 'COMPLETE',
-                next: 'COMPLETE',
-              },
-            ],
-          },
-        ],
+        steps: [{
+          name: 'review',
+          persona: 'reviewer',
+          instruction: 'Review the task',
+          rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+        }],
       },
       process.cwd(),
-    );
-
-    expect(workflow.provider).toBe('codex');
-    expect(workflow.model).toBe('gpt-5-codex');
-    expect(workflow.providerOptions).toEqual({
-      codex: {
-        networkAccess: true,
-      },
-    });
+    )).toThrow(/runtime\.yaml/);
   });
 
   it('callable subworkflow で workflow-level runtime を保持する', () => {
@@ -1947,8 +1901,8 @@ describe('workflow_call schema', () => {
     });
   });
 
-  it('callable subworkflow で step-level provider 設定と overrides を保持する', () => {
-    const workflow = normalizeWorkflowConfig(
+  it('callable subworkflow で step-level provider 設定と overrides を拒否する', () => {
+    expect(() => normalizeWorkflowConfig(
       {
         name: 'takt/coding',
         subworkflow: {
@@ -1996,30 +1950,7 @@ describe('workflow_call schema', () => {
         ],
       },
       process.cwd(),
-    );
-
-    expect(workflow.steps[0]).toMatchObject({
-      name: 'review',
-      provider: 'codex',
-      model: 'gpt-5-codex',
-      providerOptions: {
-        codex: {
-          networkAccess: true,
-        },
-      },
-    });
-    expect(workflow.steps[1]).toMatchObject({
-      name: 'delegate',
-      overrides: {
-        provider: 'codex',
-        model: 'gpt-5-codex',
-        providerOptions: {
-          codex: {
-            networkAccess: true,
-          },
-        },
-      },
-    });
+    )).toThrow(/runtime\.yaml/);
   });
 
   it('callable subworkflow で parallel substep の return を reject する', () => {
@@ -2061,8 +1992,8 @@ describe('workflow_call schema', () => {
     )).toThrow(/parallel sub-step rules do not allow/);
   });
 
-  it('callable subworkflow で parallel substep と loop monitor judge の provider 設定を保持する', () => {
-    const workflow = normalizeWorkflowConfig(
+  it('callable subworkflow で parallel substep と loop monitor judge の provider 設定を拒否する', () => {
+    expect(() => normalizeWorkflowConfig(
       {
         name: 'takt/coding',
         subworkflow: {
@@ -2115,26 +2046,6 @@ describe('workflow_call schema', () => {
         ],
       },
       process.cwd(),
-    );
-
-    expect(workflow.steps[0]?.parallel?.[0]).toMatchObject({
-      name: 'security',
-      provider: 'codex',
-      model: 'gpt-5-codex',
-      providerOptions: {
-        codex: {
-          networkAccess: true,
-        },
-      },
-    });
-    expect(workflow.loopMonitors?.[0]?.judge).toMatchObject({
-      provider: 'codex',
-      model: 'gpt-5-codex',
-      providerOptions: {
-        codex: {
-          networkAccess: true,
-        },
-      },
-    });
+    )).toThrow(/runtime\.yaml/);
   });
 });

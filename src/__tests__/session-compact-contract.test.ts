@@ -14,6 +14,7 @@ function makeCompactStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
     name: 'review',
     persona: 'reviewer',
     personaDisplayName: 'reviewer',
+    engineSynthesized: true,
     provider: 'opencode',
     model: 'opencode/big-pickle',
     session: 'compact' as unknown as WorkflowStep['session'],
@@ -49,8 +50,6 @@ describe('session: compact contract', () => {
     const result = WorkflowStepRawSchema.parse({
       name: 'review',
       persona: 'reviewer',
-      provider: 'opencode',
-      model: 'opencode/big-pickle',
       session: 'compact',
       instruction: 'Review',
     });
@@ -62,8 +61,6 @@ describe('session: compact contract', () => {
     const result = ParallelSubStepRawSchema.parse({
       name: 'api-review',
       persona: 'reviewer',
-      provider: 'opencode',
-      model: 'opencode/big-pickle',
       session: 'compact',
       instruction: 'Review API',
     });

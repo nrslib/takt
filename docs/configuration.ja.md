@@ -262,7 +262,7 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 #     - docs/assistant-context.md
 #     - .takt/assistant-notes.md
 
-# provider 固有オプション（プロジェクト既定値。env 起源の leaf が最優先で、それ以外は step > provider_routing > deprecated persona_providers > workflow > project > global の順）
+# provider 固有オプション（legacy のプロジェクト既定値。runtime モードでは runtime.yaml の profile が所有）
 # codex / claude / claude_terminal / cursor / copilot / kiro / pi も
 #   guards.call_timeout_ms（未指定時 60 分）を利用できます。
 # provider_options:
@@ -522,9 +522,9 @@ kiro_cli_path: /usr/local/bin/kiro-cli
 
 ## モデル解決
 
-provider と model の選択には、[Provider Routing](#provider-routing) に記載した単一のフィールド別優先順位を使用します。通常 step、parallel sub-step、合成 step、workflow call は、各種類で利用可能なレイヤーについて同じ契約に従います。parallel sub-step は promotion をサポートしません。
+provider と model の選択は、runtime モードでは `runtime.yaml` が所有し、CLI と環境変数の override も引き続き利用できます。legacy モードでは、以下に記載する `config.yaml` の provider、model、routing 設定が引き続きサポートされます。workflow YAML は provider や model を選択できず、`provider`、`model`、inline provider options を書くとロード境界で移行先を示すエラーになります。
 
-workflow YAML では、通常 step、parallel sub-step、`loop_monitors.judge` の `model: null` は model の明示的な省略を表します。`model` 未指定とは異なります。未指定の場合は routing、workflow、loop monitor judge のトリガー元 step、入力由来の値など、適用可能な下位優先度のソースへフォールバックしますが、`model: null` はその entry で model 解決を止め、実効 model を未定義のままにします。解決済み provider に CLI または provider 側のデフォルトを使わせたい場合に指定します。明示 model が必須の provider では、model が供給されないため検証エラーになります。
+workflow の `promotion` entry は `runtime.yaml` で選択された target ladder だけを進めます。provider、model、provider options、condition は指定できません。provider を選ばず tool、network、sandbox、skill の能力だけを要求する workflow の面として `capabilities` を使用します。
 
 ### Provider 固有のモデルに関する注意
 
@@ -548,17 +548,6 @@ workflow YAML では、通常 step、parallel sub-step、`loop_monitors.judge` �
 # ~/.takt/config.yaml
 provider: claude
 model: opus     # すべての step のデフォルトモデル（上書きされない限り）
-```
-
-```yaml
-# workflow.yaml - step レベルの model 選択
-steps:
-  - name: plan
-    model: opus       # この step はグローバル設定に関係なく opus を使用
-    ...
-  - name: implement
-    # model 未指定 - グローバル設定（opus）にフォールバック
-    ...
 ```
 
 ## Runtime Provider 設定（runtime.yaml）
@@ -765,9 +754,9 @@ step の `required_permission_mode` は最低限の下限を設定します。pr
 
 すべての provider には組み込みの `default_permission_mode: edit` があり、この解決に常に参加します。project と global のどちらの `provider_profiles` も未設定の場合、実効モードは `edit` です（step の `required_permission_mode` がより高いモードを要求する場合は引き上げられます）。
 
-### Provider Routing
+### Legacy `config.yaml` Provider Routing
 
-`provider_routing` を使うと、workflow を複製せずに step を別の provider、model、provider 固有オプションへルーティングできます。`~/.takt/config.yaml` と `.takt/config.yaml` のどちらでも定義できます。
+runtime モードが無効な場合、`provider_routing` を使うと workflow を複製せずに step を別の provider、model、provider 固有オプションへルーティングできます。`~/.takt/config.yaml` と `.takt/config.yaml` のどちらでも定義できます。runtime モードでは [Runtime Provider 設定](#runtime-provider-設定runtimeyaml) の `provider.targets` を使用し、legacy routing との混在は拒否されます。
 
 ```yaml
 # ~/.takt/config.yaml
@@ -811,23 +800,19 @@ steps:
     tags: [implementation, edit]
 ```
 
-`provider_routing.personas` は workflow step の raw `persona` キーを使います。`persona_name` は表示専用で、routing には影響しません。`provider_routing.tags` は step の `tags` に一致する entry を適用します。複数 tag が一致した場合は step に書かれた順に適用され、後ろの tag が同じ provider / model / provider_options leaf を上書きします。たとえば builtin の最終ゲートは `review` の後に `final-gate` を持つため、通常レビューを OpenCode にしつつ supervisor の要件充足の最終確認だけ Codex の高推論モデルへ上書きできます。より細かく分ける場合は `final-gate` と `supervise` タグを個別に指定できます。`provider_routing.steps` は workflow step の `name` を使います。
+`provider_routing.personas` は workflow step の raw `persona` キーを使います。`persona_name` は表示専用で、routing には影響しません。`provider_routing.tags` は step の `tags` に一致する entry を適用します。複数 tag が一致した場合は step に書かれた順に適用され、後ろの tag が同じ provider / model / provider_options leaf を上書きします。`provider_routing.steps` は workflow step の `name` を使います。有効な runtime 設定ではこれらの legacy 設定は混在エラーになり、`provider.targets` へ移行します。
 
 各 routing entry では `provider`、`model`、`provider_options` を指定できます。これらは個別に省略できますが、各 entry には少なくとも 1 つ必要です。空の `provider_options` オブジェクトは受理されません。
 
-workflow step での `provider` / `model` の完全な優先順位は次のとおりです。
+legacy モードの workflow step では、provider / model の優先順位は次のとおりです。
 
 ```text
 CLI / 環境変数の明示 override
-> 有効な promotion（通常の agent step のみ。parallel sub-step では非対応）
-> step または parallel sub-step YAML provider/model
-> workflow_call override
 > provider_routing.steps.<step.name>
 > provider_routing.tags.<tag>
 > provider_routing.personas.<raw persona key>
 > persona_providers.<persona display name>  # deprecated legacy
 > effective auto_routing（auto.rules / auto.dynamic / auto.fallback）
-> workflow_config.provider/model
 > project .takt/config.yaml
 > global ~/.takt/config.yaml
 > provider default
@@ -835,13 +820,11 @@ CLI / 環境変数の明示 override
 
 provider と model は各レイヤーで個別に解決されます。provider だけの override によって、より高い優先順位の model override が失われることはありません。
 
-「有効な promotion」とは、通常の agent step の `promotion` エントリのうち、実行回数条件（`at: <N>`）または `ai()` 条件が現在の実行にマッチしたものを指します。parallel sub-step では promotion を指定できないため、CLI/環境変数の明示 override の次に sub-step YAML の provider/model が優先されます。[Step レベルのプロバイダープロモーション](./workflows.ja.md#step-レベルのプロバイダープロモーション)を参照してください。
-
-指定された `internal_agents` seat は、そのロールの合成 step の `step YAML provider/model` 位置に入ります。seat の指定はすべて任意で、未指定なら以降のレイヤーへそのまま落ちます。
+workflow YAML には provider/model のレイヤーがありません。`internal_agents` seat は合成された engine step を runtime 側で解決し、workflow の promotion は runtime target ladder だけを進めます。
 
 ### Auto Routing
 
-TAKT に provider と model の両方を candidate list から選ばせる場合は、`auto_routing` を定義します。global、project、workflow の設定解決後にこの設定が存在すると auto routing が有効になります。workflow step 外の処理と effective `auto_routing` がない場合の fallback 用に、top-level には具体 provider/model を設定します。次の例は project `.takt/config.yaml` または global `~/.takt/config.yaml` 用です。
+legacy モードで TAKT に provider と model の両方を candidate list から選ばせる場合は、project `.takt/config.yaml` または global `~/.takt/config.yaml` に `auto_routing` を定義します。runtime モードでは `runtime.yaml` の `provider.auto_routing` と profile target を使用し、workflow YAML から auto routing を有効化・上書きすることはできません。workflow step 外の処理には legacy config の具体 provider/model、または runtime の default を使用します。
 
 ```yaml
 provider: codex
@@ -884,45 +867,19 @@ auto_routing:
       implementation: implementation
 ```
 
-自己完結した workflow では workflow-level block で routing を上書きできます。workflow-level の `auto_routing` block 自体が、その workflow の auto routing を有効にします。
-
-```yaml
-workflow_config:
-  provider: codex
-  model: gpt-5.6-luna
-auto_routing:
-  strategy: balanced
-  router:
-    provider: codex
-    model: gpt-5.6-luna
-  candidates:
-    - name: coding
-      provider: codex
-      model: gpt-5.6-terra
-      routing_tier: medium
-      description: Implementation, testing, debugging, and refactoring
-  default_pool: general
-  candidate_pools:
-    general:
-      candidates: [coding]
-      fallback: coding
-```
-
-auto routing の candidate 選択が適用されるのは workflow の step 実行だけです。AI による task slug 生成や sync conflict resolver など workflow step context を持たない内部処理は、解決済みの具体的な top-level provider/model を使用します。`auto_routing.router` と candidates は default として暗黙に使用されません。
+auto routing の candidate 選択が適用されるのは workflow の step 実行だけです。AI による task slug 生成や sync conflict resolver など workflow step context を持たない内部処理は、解決済みの runtime default を使用します。`auto_routing.router` と candidates は default として暗黙に使用されません。
 
 assistant 会話（インタラクティブモードの計画会話、既存タスクへの追加指示 (instruct)、リトライ対話）は auto routing を通りません。設定済みなら `takt_providers.assistant`、未設定なら top-level provider/model を解決し、この assistant 設定はその他の内部処理の default にはなりません。CLI の `--provider` / `--model` override が適用されるのはインタラクティブモードの計画会話だけで、instruct / retry には適用されません。解決可能な assistant または top-level provider がない場合、assistant は起動時に `Provider is not configured.` で失敗します。
 
-auto routing の位置は、前述の provider/model の完全な優先順位に従います。hard rule は `tags`、`steps`、`personas` の順に確認します。それ以外は `pool_rules` が candidate pool を選び、router は必要な tier だけを推定し、TAKT が candidate を決定的に選びます。推定成功後、`cost` と `balanced` は選択された pool 内で必要 tier を満たす最小の `routing_tier` を選びます。同じ tier の candidate が複数ある場合は、どちらもその pool の `candidates` リストに記載された順序を使います。`performance` は選択された pool 内で最も高い `routing_tier` を選びます。推定失敗時は当該 pool の明示 `fallback` を使用し、推定成功後に必要 tier を満たす candidate がなければ実行エラーになります。
+auto routing は runtime target と pool rule を default の後に使います。hard rule は `tags`、`steps`、`personas` の順に確認し、それ以外は `pool_rules` が candidate pool を選び、router は必要な tier だけを推定して TAKT が candidate を決定的に選びます。
 
-candidate の `routing_tier` は `high`、`medium`、`low` のいずれかです。すべての設定には `strategy`、`router`（`provider` と `model`）、最低 1 つの `candidates` エントリ、`default_pool`、空でない `candidate_pools`、pool 内の `fallback` が必要です。`router.model` と各 candidate の `model` は、数字か `/` を含む full model id である必要があります。`sonnet` などのエイリアスは validation で拒否されます。candidate の `provider_options` は step 優先度で merge されるため、env / CLI 由来の option leaf は引き続き優先されます。`model: auto` はサポートされません。複数 candidate を使ってください。CLI は `--auto-strategy cost|balanced|performance` で strategy を上書きできます。この上書きは、実行が effective `auto_routing` を持つ workflow に到達するまで伝播します。到達しないまま実行が完了した場合は、strategy flag が warning を出して無視されます。router には正規化済みの task、raw step instruction、現在の残作業が送信されます。識別子の置換は識別リスクを下げますが、匿名性を保証しません。routing event は local-only であり、routing 本文を保存しません。
+candidate の `routing_tier` は `high`、`medium`、`low` のいずれかです。runtime profile が provider/model/options を保持するため、candidate はこれらを重複記述せず profile を参照します。CLI は `--auto-strategy cost|balanced|performance` で strategy を上書きでき、runtime の auto-routing target に到達するまで伝播します。
 
 Routing decision は local-only telemetry で、デフォルトでは記録されません。`telemetry.routing_decisions` を有効化した場合（`takt telemetry enable` または `routing_decisions: true`）、TAKT は project `.takt/events/` ディレクトリ配下に NDJSON として書き込みます。TAKT は routing decision をアップロードしません。この local recording 設定の確認・変更には `takt telemetry status`、`takt telemetry enable`、`takt telemetry disable` を使います。
 
-workflow YAML の `model: null` は、明示的な entry レベル値として扱われます。step、parallel sub-step、`loop_monitors.judge` で model 解決を止めるため、下位優先度のソースやトリガー元 step 継承は `model` には使われません。`model` フィールドを省略した場合は通常どおりフォールバックします。
+provider options は runtime profile、capability preset、既存の config/env override 経路から解決されます。workflow YAML には inline provider options のレイヤーがないため、runtime 設定を上書きする step/workflow option 優先順位は存在しません。preview、doctor、validation、summary、report などの補助入口も workflow 実行と同じ runtime 解決契約を使います。
 
-`provider_options` の優先順位は leaf ごとに解決されます。多くの leaf では env または CLI 起源の config leaf が他のすべてのソースより優先されます。例外は `base_url` です。workflow が特定の provider だけを明示的に proxy へ向けられるよう、`base_url` は step / workflow routing の設定を TAKT env override より優先します。`base_url` の順序は step `provider_options` > `provider_routing.steps` > `provider_routing.tags` > `provider_routing.personas` > deprecated の `persona_providers` > `workflow_config.provider_options` > project `.takt/config.yaml` > global `~/.takt/config.yaml` > TAKT env override です。preview、doctor、validation、summary、report などの補助入口も、workflow 実行と同じ `base_url` 優先順位を使います。他の leaf は env / CLI config override の後に同じ step-to-global 順序で解決されます。
-
-安全のため、workflow YAML と project `.takt/config.yaml` で指定できる `base_url` は `127.0.0.1`、`127.x.x.x`、`localhost`、`*.localhost`、`::1` などの loopback host に限られます。非 loopback の provider base URL は、ユーザー管理の global config または `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL` / `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL` に設定してください。
+安全のため、project `.takt/config.yaml` で指定できる `base_url` は `127.0.0.1`、`127.x.x.x`、`localhost`、`*.localhost`、`::1` などの loopback host に限られます。非 loopback の provider base URL は、ユーザー管理の global config または `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL` / `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL` に設定してください。
 
 `persona_providers` は既存 config のため引き続き使用できますが、新規設定では deprecated です。これは step の persona display name を使うため、raw `persona` キーではなく `persona_name` 由来の名前に一致することがあります。
 
@@ -936,13 +893,15 @@ persona_providers:
         reasoning_effort: high
 ```
 
-workflow の `provider_options.extends` は、共有 YAML プリセットを名前で読み込めます。名前は `.takt/provider-options`、`~/.takt/provider-options`、`builtins/{lang}/provider-options` の順に first-match で解決されます。repertoire package からインストールされた workflow では、それらより先に package-local の `provider-options/` が参照されます。`@owner/repo/name` 形式の scoped ref は、別の repertoire package の `provider-options/` から `name` を解決します。解決済み YAML は参照された workflow または step レイヤーの base として扱われ、同じ workflow または step の inline `provider_options` が一致する leaf を上書きします。
+capability の参照は、共有 YAML provider-options preset を名前で読み込めます。名前は `.takt/provider-options`、`~/.takt/provider-options`、`builtins/{lang}/provider-options` の順に first-match で解決されます。repertoire package からインストールされた workflow では、それらより先に package-local の `provider-options/` が参照されます。`@owner/repo/name` 形式の scoped ref は、別の repertoire package の `provider-options/` から `name` を解決します。workflow YAML で参照できるのは capability preset だけで、provider/model/options の定義は runtime profile（または既存の legacy config layer）に置きます。
 
-`provider_options.extends` は、preset または path を解決できない場合、scoped ref が利用可能な repertoire package を指していない場合、参照先 YAML が不正または provider-options object でない場合、extends チェーンが循環している場合、削除済みの `$ref` キーが使われた場合に、設定エラーとして fail fast します。相対 path は workflow file 基準で解決され、symlink 解決後も workflow directory 内に留まる必要があります。絶対 path と、実体が workflow directory 外へ出る path は拒否されます。
+capability preset の解決は、preset または path を解決できない場合、scoped ref が利用可能な repertoire package を指していない場合、参照先 YAML が不正または provider-options object でない場合、extends チェーンが循環している場合、削除済みの `$ref` キーが使われた場合に、設定エラーとして fail fast します。相対 path は workflow file 基準で解決され、symlink 解決後も workflow directory 内に留まる必要があります。絶対 path と、実体が workflow directory 外へ出る path は拒否されます。
 
-provider option の leaf は環境変数でも上書きできます。OpenCode の model variant は `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high` で `provider_options.opencode.variant` を設定できます。provider base URL は `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL=http://127.0.0.1:8787/v1` または `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL=http://127.0.0.1:8787` を使用できます。これらは config layer を設定するもので、step や workflow routing の `base_url` leaf は上書きしません。Codex Skill の継承は `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_REPO=true` または `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_USER=true` で設定できます。Claude Skill の継承は `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED=true` で設定できます。Claude terminal は `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_BACKEND=tmux`、`TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TIMEOUT_MS=900000`、`TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_KEEP_SESSION=false`、`TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TRANSCRIPT_POLL_INTERVAL_MS=500` を使用できます。Kiro の custom agent は `TAKT_PROVIDER_OPTIONS_KIRO_AGENT=planner-agent` で `provider_options.kiro.agent` を設定できます。Pi の resource loading は `TAKT_PROVIDER_OPTIONS_PI_EXTENSIONS='["npm:pi-fff"]'`、`TAKT_PROVIDER_OPTIONS_PI_NO_EXTENSIONS=true`、`TAKT_PROVIDER_OPTIONS_PI_NO_SKILLS=true`、`TAKT_PROVIDER_OPTIONS_PI_NO_PROMPT_TEMPLATES=true`、`TAKT_PROVIDER_OPTIONS_PI_NO_THEMES=true`、`TAKT_PROVIDER_OPTIONS_PI_NO_CONTEXT_FILES=true` を使用できます。
+provider option の leaf は環境変数でも上書きできます。OpenCode の model variant は `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high` で runtime profile option を設定できます。provider base URL は `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL=http://127.0.0.1:8787/v1` または `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL=http://127.0.0.1:8787` を使用できます。これらは config layer を設定するもので、runtime target の選択を上書きしません。Codex Skill の継承は `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_REPO=true` または `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_USER=true` で設定できます。Claude Skill の継承は `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED=true` で設定できます。Claude terminal は `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_BACKEND=tmux`、`TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TIMEOUT_MS=900000`、`TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_KEEP_SESSION=false`、`TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TRANSCRIPT_POLL_INTERVAL_MS=500` を使用できます。Kiro の custom agent は `TAKT_PROVIDER_OPTIONS_KIRO_AGENT=planner-agent` で runtime profile option を設定できます。Pi の resource loading は `TAKT_PROVIDER_OPTIONS_PI_EXTENSIONS='["npm:pi-fff"]'`、`TAKT_PROVIDER_OPTIONS_PI_NO_EXTENSIONS=true`、`TAKT_PROVIDER_OPTIONS_PI_NO_SKILLS=true`、`TAKT_PROVIDER_OPTIONS_PI_NO_PROMPT_TEMPLATES=true`、`TAKT_PROVIDER_OPTIONS_PI_NO_THEMES=true`、`TAKT_PROVIDER_OPTIONS_PI_NO_CONTEXT_FILES=true` を使用できます。
 
-これにより、表示名と provider 選択を分離したまま、単一の workflow 内で provider や model を混在させることができます。
+これにより、表示名と provider 選択を分離したまま、runtime target が単一の workflow 内で provider や model を混在させることができます。
+
+以下の provider 固有オプション例は、互換性のために残る legacy `config.yaml` の option bag を示します。runtime モードでは `runtime.yaml` の `provider.profiles.<name>.options` に置き、workflow では対応する capability leaf だけを指定してください。
 
 ### プロバイダー固有オプションの実用例
 
@@ -994,11 +953,11 @@ provider_options:
     allowed_tools: [read, glob, grep, bash, websearch, webfetch]
 ```
 
-step / `provider_routing` / deprecated の `persona_providers` / `workflow_config` / project / global の各レイヤーで設定でき、step が最優先です。環境変数 `TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS=true` でも上書きできます。
+runtime profile または capability preset で設定できます。legacy モードでは `provider_routing`、deprecated の `persona_providers`、project、global config からも設定できます。環境変数 `TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS=true` でも上書きできます。
 
 #### Codex Skill の継承 (`skills`)
 
-TAKT workflow は repository scope と user scope の Codex Skill をデフォルトでは継承しません。workflow が環境依存の指示を利用すべき場合だけ、対象 scope を明示的に有効化します。例外として `takt exec` は、各 scope が明示設定されていない場合、その scope を継承し、解決結果を生成する `.takt/exec/workflow.yaml` に書き込みます。これにより、Assistant 対話と生成 workflow は同じスナップショットを使い、生成パスを指定した直接の再実行でもその値を維持します。後の実行で指定した `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_*` 環境変数は引き続き最優先で、保存値を意図的に上書きします。
+TAKT workflow は repository scope と user scope の Codex Skill をデフォルトでは継承しません。workflow が環境依存の指示を利用すべき場合は、runtime profile または `enable-skills` capability で対象 scope を明示的に有効化します。`takt exec` は解決した capability を生成 workflow に保持しますが、provider/model/options は runtime 設定に残ります。後の実行で指定した `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_*` 環境変数は引き続き最優先です。
 
 ```yaml
 provider_options:

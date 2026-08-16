@@ -262,7 +262,7 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 #     - docs/assistant-context.md
 #     - .takt/assistant-notes.md
 
-# Provider-specific options (project defaults; env-resolved leaf overrides win, otherwise step > provider_routing > deprecated persona_providers > workflow > project > global)
+# Provider-specific options (legacy project defaults; runtime profiles own these options in runtime.yaml)
 # codex / claude / claude_terminal / cursor / copilot / kiro / pi also support
 #   guards.call_timeout_ms (60 minutes when omitted).
 # provider_options:
@@ -527,9 +527,7 @@ Paths must be absolute paths to executable files. Environment variables take pre
 
 ## Model Resolution
 
-Provider and model selection uses the single, field-by-field precedence contract documented under [Provider Routing](#provider-routing). Normal steps, parallel sub-steps, synthetic steps, and workflow calls follow that contract for the layers available to each kind. Parallel sub-steps do not support promotion.
-
-In workflow YAML, `model: null` is an explicit model omission for a normal step, parallel sub-step, or `loop_monitors.judge`. It differs from leaving `model` unspecified: an unspecified model continues to applicable lower-priority sources such as routing, workflow, the triggering step for loop monitor judges, and input sources, while `model: null` stops model resolution at that entry and leaves the effective model undefined. Use it when the resolved provider should use its own CLI or provider default instead of inheriting another model source. Providers that require an explicit model still fail validation when no model is supplied.
+Provider and model selection is owned by `runtime.yaml` when runtime mode is active, with CLI and environment overrides still available. In legacy mode, the `config.yaml` provider, model, and routing settings described below remain supported. Workflow YAML cannot select a provider or model; `provider`, `model`, and inline provider options fail at the load boundary with a migration hint.
 
 ### Provider-specific Model Notes
 
@@ -555,16 +553,10 @@ provider: claude
 model: opus     # Default model for all steps (unless overridden)
 ```
 
-```yaml
-# workflow.yaml - step-level model selection
-steps:
-  - name: plan
-    model: opus       # This step uses opus regardless of global config
-    ...
-  - name: implement
-    # No model specified - falls back to global config (opus)
-    ...
-```
+Workflow `promotion` entries only advance the target ladder selected in
+`runtime.yaml`; they cannot contain provider, model, provider-options, or
+condition fields. `capabilities` remains the workflow-level way to request
+tool, network, sandbox, or skill abilities without choosing the runtime.
 
 ## Runtime Provider Configuration (runtime.yaml)
 
@@ -771,9 +763,13 @@ The `required_permission_mode` on a step sets the minimum floor. If the resolved
 
 Every provider also has a builtin `default_permission_mode: edit` that always participates in this resolution. When neither project nor global `provider_profiles` set a value, the effective mode is therefore `edit` (raised when the step's `required_permission_mode` demands more).
 
-### Provider Routing
+### Legacy `config.yaml` Provider Routing
 
-Use `provider_routing` to route workflow steps to different providers, models, and provider-specific options without duplicating workflows. You can define this in either `~/.takt/config.yaml` or `.takt/config.yaml`:
+When runtime mode is inactive, `provider_routing` can route workflow steps to
+different providers, models, and provider-specific options without duplicating
+workflows. This existing legacy path can be defined in either
+`~/.takt/config.yaml` or `.takt/config.yaml`; runtime mode uses
+`provider.targets` instead (see [Runtime Provider Configuration](#runtime-provider-configuration-runtimeyaml)).
 
 ```yaml
 # ~/.takt/config.yaml
@@ -817,23 +813,19 @@ steps:
     tags: [implementation, edit]
 ```
 
-`provider_routing.personas` uses the raw `persona` key from the workflow step, so `persona_name` is display-only and does not affect routing. `provider_routing.tags` applies entries matching the step's `tags`; when multiple tags match, TAKT applies them in the order written on the step, and later tags override the same provider/model/provider_options leaf. For example, builtin final-gate steps put `final-gate` after `review`, so you can route ordinary reviewers to OpenCode while overriding only the supervisor's final requirement check to a high-reasoning Codex model. For finer routing, target `final-gate` and `supervise`. `provider_routing.steps` uses the workflow step `name`.
+`provider_routing.personas` uses the raw `persona` key from the workflow step, so `persona_name` is display-only and does not affect routing. `provider_routing.tags` applies entries matching the step's `tags`; when multiple tags match, TAKT applies them in the order written on the step, and later tags override the same provider/model/provider_options leaf. `provider_routing.steps` uses the workflow step `name`. In an active runtime configuration, these routing keys are rejected as mixed legacy settings; move them to `provider.targets`.
 
 Each routing entry can include `provider`, `model`, and/or `provider_options`. Those fields are individually optional, but each entry must include at least one of them. Empty `provider_options` objects are rejected.
 
-For `provider` / `model`, the complete workflow-step resolution priority is:
+In legacy mode, the workflow-step resolution priority is:
 
 ```text
 explicit CLI / environment override
-> active promotion (normal agent steps only; unsupported on parallel sub-steps)
-> step or parallel sub-step YAML provider/model
-> workflow_call override
 > provider_routing.steps.<step.name>
 > provider_routing.tags.<tag>
 > provider_routing.personas.<raw persona key>
 > persona_providers.<persona display name>  # deprecated legacy
 > effective auto_routing (auto.rules / auto.dynamic / auto.fallback)
-> workflow_config.provider/model
 > project .takt/config.yaml
 > global ~/.takt/config.yaml
 > provider default
@@ -841,13 +833,18 @@ explicit CLI / environment override
 
 Provider and model are resolved independently at each layer. A provider-only override does not displace a higher-priority model override.
 
-`active promotion` means a normal agent step `promotion` entry whose execution-count (`at: <N>`) or `ai()` condition matched for the current execution. Parallel sub-steps cannot specify promotion, so their YAML provider/model follows an explicit CLI/environment override directly; see [Step-level Provider Promotion](./workflows.md#step-level-provider-promotion).
-
-An assigned `internal_agents` seat occupies the `step YAML provider/model` position for the role's synthetic step. Every seat is optional; an unassigned seat leaves the role on the layers below.
+Workflow YAML has no provider/model layer. An assigned runtime `internal_agents`
+seat resolves synthetic engine steps independently, and workflow promotion only
+advances its runtime target ladder.
 
 ### Auto Routing
 
-Define `auto_routing` when TAKT should choose both provider and model from a candidate list. Its presence after global, project, and workflow config resolution enables automatic routing. Keep a concrete top-level provider/model for operations outside workflow steps and as the fallback when no effective `auto_routing` exists. The following example is for project `.takt/config.yaml` or global `~/.takt/config.yaml`:
+In legacy mode, define `auto_routing` in project `.takt/config.yaml` or
+global `~/.takt/config.yaml` when TAKT should choose both provider and model
+from a candidate list. In runtime mode, use `provider.auto_routing` and target
+profiles in `runtime.yaml`; workflow YAML cannot enable or override auto
+routing. Keep a concrete top-level provider/model in legacy config for
+operations outside workflow steps.
 
 ```yaml
 provider: codex
@@ -890,45 +887,37 @@ auto_routing:
       implementation: implementation
 ```
 
-A self-contained workflow may override routing with a workflow-level block. The workflow-level `auto_routing` block itself enables automatic routing for that workflow:
-
-```yaml
-workflow_config:
-  provider: codex
-  model: gpt-5.6-luna
-auto_routing:
-  strategy: balanced
-  router:
-    provider: codex
-    model: gpt-5.6-luna
-  candidates:
-    - name: coding
-      provider: codex
-      model: gpt-5.6-terra
-      routing_tier: medium
-      description: Implementation, testing, debugging, and refactoring
-  default_pool: general
-  candidate_pools:
-    general:
-      candidates: [coding]
-      fallback: coding
-```
-
-Auto-routing candidate selection applies only to workflow step execution. Internal operations without workflow-step context, such as AI task-slug generation and sync conflict resolution, use the resolved concrete top-level provider/model. `auto_routing.router` and candidates are never implicit defaults.
+Auto-routing candidate selection applies only to workflow step execution.
+Internal operations without workflow-step context, such as AI task-slug
+generation and sync conflict resolution, use the resolved concrete runtime
+default. `auto_routing.router` and candidates are never implicit defaults.
 
 Assistant conversations (interactive planning, instruct on existing tasks, and retry dialogue) do not go through auto routing. They resolve `takt_providers.assistant`, then fall back to the top-level provider/model when the assistant setting is unset; the assistant setting is not a default for other internal operations. CLI `--provider` / `--model` overrides apply to interactive planning only, while instruct and retry do not accept those overrides. Without a resolvable assistant or top-level provider, assistant startup fails with `Provider is not configured.`
 
-Auto routing occupies the position shown in the complete provider/model priority above. Hard rules are checked in `tags`, `steps`, `personas` order. Otherwise `pool_rules` selects a candidate pool and the router estimates only the required tier; TAKT deterministically selects the candidate. After a successful estimate, both `cost` and `balanced` select the lowest `routing_tier` in the selected pool that meets the required tier. When multiple candidates have that tier, both strategies use their order in the pool's `candidates` list. `performance` selects the highest `routing_tier` in the selected pool. Estimator failures use that pool's explicit `fallback`. A successful estimate with no candidate at or above its required tier is an execution error.
+Auto routing uses the runtime target and pool rules after the runtime default.
+Hard rules are checked in `tags`, `steps`, `personas` order. Otherwise
+`pool_rules` selects a candidate pool and the router estimates only the
+required tier; TAKT deterministically selects the candidate.
 
-Candidate `routing_tier` is limited to `high`, `medium`, or `low`. Every configuration requires `strategy`, `router` (with `provider` and `model`), at least one entry in `candidates`, `default_pool`, non-empty `candidate_pools`, and a pool-local `fallback`. The `router.model` and every candidate `model` must be a full model id containing a digit or a `/`; aliases such as `sonnet` are rejected by validation. Candidate `provider_options` are merged at step priority, so env/CLI-resolved option leaves still win. `model: auto` is not supported; use multiple candidates instead. CLI can override the strategy with `--auto-strategy cost|balanced|performance`; the override is propagated until execution reaches a workflow with effective `auto_routing`. If execution completes without reaching one, the strategy flag is ignored with a warning. The router receives normalized task, raw step instruction, and current remaining work; identifier redaction reduces identification risk but does not guarantee anonymity. Routing events remain local-only and do not contain routing text.
+Candidate `routing_tier` is limited to `high`, `medium`, or `low`. Runtime
+profiles carry provider/model/options, so candidates reference profiles rather
+than repeating those fields. CLI can override the strategy with
+`--auto-strategy cost|balanced|performance`; the override is propagated until
+execution reaches a runtime auto-routing target.
 
 Routing decisions are local-only telemetry and are not recorded by default. When `telemetry.routing_decisions` is enabled (`takt telemetry enable` or `routing_decisions: true`), TAKT writes them as NDJSON under the project `.takt/events/` directory. TAKT does not upload routing decisions. Use `takt telemetry status`, `takt telemetry enable`, and `takt telemetry disable` to inspect or change only this local recording setting.
 
-In workflow YAML, `model: null` is treated as an explicit entry-level value. It stops model resolution at the step, parallel sub-step, or `loop_monitors.judge`, so lower-priority sources and triggering-step inheritance are not consulted for `model`. Omitting the `model` field keeps normal fallback behavior.
+Provider options are resolved from runtime profiles, capability presets, and
+the retained config/env override paths. Workflow YAML cannot define inline
+provider options, so there is no step or workflow option layer to outrank
+runtime settings. Preview, doctor, validation, summary, and report use the
+same runtime resolution contract as execution.
 
-`provider_options` priority is resolved per leaf. For most leaves, an env- or CLI-resolved config leaf overrides all other sources. `base_url` is the exception: step and workflow routing configuration stays above TAKT env overrides so a workflow can explicitly route only selected providers through a proxy. For `base_url`, the order is step `provider_options` > `provider_routing.steps` > `provider_routing.tags` > `provider_routing.personas` > deprecated `persona_providers` > `workflow_config.provider_options` > project `.takt/config.yaml` > global `~/.takt/config.yaml` > TAKT env override. Preview, doctor, validation, summary, report, and other auxiliary entry points use the same `base_url` priority order as workflow execution. For other leaves, after env/CLI config overrides, the same step-to-global order applies.
-
-For safety, workflow YAML and project `.takt/config.yaml` may only set `base_url` to loopback hosts such as `127.0.0.1`, `127.x.x.x`, `localhost`, `*.localhost`, or `::1`. Put non-loopback provider base URLs in global config or `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL` / `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL`, where the setting is user-controlled.
+For safety, project `.takt/config.yaml` may only set `base_url` to loopback
+hosts such as `127.0.0.1`, `127.x.x.x`, `localhost`, `*.localhost`, or `::1`.
+Put non-loopback provider base URLs in global config or
+`TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL` /
+`TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL`, where the setting is user-controlled.
 
 `persona_providers` is still supported for existing configs, but it is deprecated for new settings. It uses the step's persona display name, which may come from `persona_name`, not necessarily the raw `persona` key:
 
@@ -942,13 +931,18 @@ persona_providers:
         reasoning_effort: high
 ```
 
-Workflow `provider_options.extends` can load shared YAML presets by name. Names are resolved first-match from `.takt/provider-options`, then `~/.takt/provider-options`, then `builtins/{lang}/provider-options`. For workflows installed from a repertoire package, the package-local `provider-options/` directory is checked before those locations. A scoped ref such as `@owner/repo/name` resolves `name` from another repertoire package's `provider-options/` directory. The resolved YAML is used as the base for the workflow or step layer where it is referenced, and inline `provider_options` in that same workflow or step override matching leaves.
+Capability references can load shared provider-options presets by name. Names are resolved first-match from `.takt/provider-options`, then `~/.takt/provider-options`, then `builtins/{lang}/provider-options`. For workflows installed from a repertoire package, the package-local `provider-options/` directory is checked before those locations. A scoped ref such as `@owner/repo/name` resolves `name` from another repertoire package's `provider-options/` directory. Workflow YAML may reference only capability presets; provider/model/options definitions belong in runtime profiles (or the retained legacy config layers).
 
-`provider_options.extends` fails fast as a configuration error when a preset or path cannot be resolved, a scoped ref points to an unavailable repertoire package, the target YAML is invalid or is not a provider-options object, the extends chain is circular, or the removed `$ref` key is used. Relative paths are resolved from the workflow file and must stay inside the workflow directory after symlink resolution; absolute paths and paths whose real target escapes that directory are rejected.
+Capability preset resolution fails fast as a configuration error when a preset or path cannot be resolved, a scoped ref points to an unavailable repertoire package, the target YAML is invalid or is not a provider-options object, the extends chain is circular, or the removed `$ref` key is used. Relative paths are resolved from the workflow file and must stay inside the workflow directory after symlink resolution; absolute paths and paths whose real target escapes that directory are rejected.
 
-Provider option leaves can also be overridden from env. For OpenCode model variants, use `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high` to set `provider_options.opencode.variant`. For provider base URLs, use `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL=http://127.0.0.1:8787/v1` or `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL=http://127.0.0.1:8787`; these populate the config layer and do not override step or workflow routing `base_url` leaves. For Codex Skill inheritance, use `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_REPO=true` or `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_USER=true`. For Claude Skill inheritance, use `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED=true`. For Claude terminal, use `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_BACKEND=tmux`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TIMEOUT_MS=900000`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_KEEP_SESSION=false`, or `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TRANSCRIPT_POLL_INTERVAL_MS=500`. For Kiro custom agents, use `TAKT_PROVIDER_OPTIONS_KIRO_AGENT=planner-agent` to set `provider_options.kiro.agent`. For Pi resource loading, use `TAKT_PROVIDER_OPTIONS_PI_EXTENSIONS='["npm:pi-fff"]'`, `TAKT_PROVIDER_OPTIONS_PI_NO_EXTENSIONS=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_SKILLS=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_PROMPT_TEMPLATES=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_THEMES=true`, or `TAKT_PROVIDER_OPTIONS_PI_NO_CONTEXT_FILES=true`.
+Provider option leaves can also be overridden from env. For OpenCode model variants, use `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high` to set the runtime profile option. For provider base URLs, use `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL=http://127.0.0.1:8787/v1` or `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL=http://127.0.0.1:8787`; these populate the config layer and do not override runtime target selection. For Codex Skill inheritance, use `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_REPO=true` or `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_USER=true`. For Claude Skill inheritance, use `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED=true`. For Claude terminal, use `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_BACKEND=tmux`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TIMEOUT_MS=900000`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_KEEP_SESSION=false`, or `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TRANSCRIPT_POLL_INTERVAL_MS=500`. For Kiro custom agents, use `TAKT_PROVIDER_OPTIONS_KIRO_AGENT=planner-agent` to set the runtime profile option. For Pi resource loading, use `TAKT_PROVIDER_OPTIONS_PI_EXTENSIONS='["npm:pi-fff"]'`, `TAKT_PROVIDER_OPTIONS_PI_NO_EXTENSIONS=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_SKILLS=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_PROMPT_TEMPLATES=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_THEMES=true`, or `TAKT_PROVIDER_OPTIONS_PI_NO_CONTEXT_FILES=true`.
 
-This allows mixing providers and models within a single workflow while keeping display names independent from provider selection.
+This allows runtime targets to mix providers and models within a single workflow while keeping display names independent from provider selection.
+
+The provider-specific examples below use the legacy `config.yaml` option bag
+for compatibility. In runtime mode, put execution options under
+`provider.profiles.<name>.options` in `runtime.yaml`; use workflow
+`capabilities` only for the supported ability leaves.
 
 ### Provider-specific options in practice
 
@@ -1000,11 +994,14 @@ provider_options:
     allowed_tools: [read, glob, grep, bash, websearch, webfetch]
 ```
 
-`network_access` can be set at step / `provider_routing` / deprecated `persona_providers` / `workflow_config` / project / global levels, with step having the highest priority. The environment variable `TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS=true` also works as an override.
+`network_access` can be set by a runtime profile or capability preset. In
+legacy mode it can also be set through `provider_routing`, deprecated
+`persona_providers`, project, or global config. The environment variable
+`TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS=true` also works as an override.
 
 #### Codex Skill inheritance (`skills`)
 
-TAKT workflows do not inherit repository or user Codex Skills by default. Enable either scope explicitly when a workflow should use those environment-dependent instructions. `takt exec` is the exception: each scope defaults to inheritance when that scope is not explicitly configured, and the resolved values are written into the generated `.takt/exec/workflow.yaml`. The Assistant dialogue and generated workflow therefore use the same snapshot, and direct reruns using that generated path retain it. A `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_*` environment override supplied to a later invocation remains higher priority and intentionally replaces the stored value.
+TAKT workflows do not inherit repository or user Codex Skills by default. Enable either scope explicitly with a runtime profile or the `enable-skills` capability when a workflow should use those environment-dependent instructions. `takt exec` keeps the resolved capability in its generated workflow, while provider/model/options remain in runtime configuration. A `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_*` environment override supplied to a later invocation remains higher priority.
 
 ```yaml
 provider_options:

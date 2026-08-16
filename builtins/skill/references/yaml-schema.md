@@ -10,11 +10,8 @@ description: 説明テキスト      # 任意
 max_steps: 10                 # 最大イテレーション数（省略時デフォルトあり）
 initial_step: plan            # 最初に実行する step 名（省略時は steps の先頭）
 
-# ワークフロー全体の provider / runtime 等
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
+# ワークフロー実行設定は runtime.yaml が所有する。workflow YAML では
+# capabilities で能力プリセットだけを参照し、provider / model / options は指定しない。
 
 # 能力プリセット参照（任意）。全 step の既定。step / parallel サブステップにも書け、
 # step 側は既定を置換する。リストは左から右へマージし後勝ち。

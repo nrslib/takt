@@ -94,7 +94,11 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 | | `magi` | エヴァンゲリオンにインスパイアされた合議システム。3つの AI persona (MELCHIOR, BALTHASAR, CASPER) が分析・投票。 |
 | | `compound-eye` | 複眼レビュー。同じ指示を2つの eye に同時に投げ、両者の回答を統合する。eye ごとのプロバイダーは runtime.yaml（`provider.targets.steps` -> `eye1` / `eye2`）で割り当てる。 |
 
-ローカルモデルだけで既存workflowを動かす場合は、各workflowへ provider/model を設定してください。カスタムのハイブリッド構成では、通常の `review` step をローカル provider へ振り分け、高信頼 provider へ戻す step に後ろの `final-gate` タグを付けます。後ろのタグは、同じ provider、model、provider-options field に対して先のタグを上書きします。
+ローカルモデルだけで既存 workflow を動かす場合は、`runtime.yaml` の
+`provider.defaults` または `provider.targets` で provider/model を割り当てます。
+カスタムのハイブリッド構成では、通常の `review` step をローカル provider へ
+振り分け、高信頼 provider へ戻す step に後ろの `final-gate` タグを付けます。
+workflow YAML 自体には provider/model/provider-options field はありません。
 
 `takt` を実行すると workflow をインタラクティブに選択できます。
 
@@ -160,11 +164,11 @@ steps:
     # ...
 ```
 
-## Persona 別 Provider オーバーライド
+## Legacy Persona 別 Provider オーバーライド
 
 > **Deprecated**: `persona_providers` はレガシー設定です。新しい設定には `provider_routing.personas`（[Configuration Guide](./configuration.ja.md) 参照）を推奨します。raw persona キーでのルーティングに加え、step tag / step 名によるルーティングもサポートします。両方を設定した場合は `provider_routing` が優先されます。
 
-`~/.takt/config.yaml` の `persona_providers` を使用して、workflow を複製せずに特定の persona を異なる provider にルーティングできます。これにより、例えばコーディングは Codex で実行し、レビューアーは Claude に維持するといった構成が可能になります。
+legacy モードでは `~/.takt/config.yaml` の `persona_providers` を使用して、workflow を複製せずに特定の persona を異なる provider にルーティングできます。runtime モードでは `runtime.yaml` の `provider.targets.personas` を使用してください。
 
 ```yaml
 # ~/.takt/config.yaml

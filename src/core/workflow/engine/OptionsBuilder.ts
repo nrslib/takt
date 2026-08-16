@@ -271,12 +271,7 @@ export class OptionsBuilder {
     const resolvedProviderSource = resolvedProviderInfo.providerSource;
     const baseProviderOptions = this.resolveProfileScopedBaseProviderOptions(resolvedProviderSource);
     const profileLayers = this.resolveProfileScopedProviderOptionLayers(step, resolvedProviderSource);
-    const tracedLayers = [
-      ...profileLayers,
-      ...(this.engineOptions.workflowCallProviderOptions === undefined
-        ? []
-        : [{ source: 'workflow_call' as const, options: this.engineOptions.workflowCallProviderOptions }]),
-    ];
+    const tracedLayers = profileLayers;
     const providerOptionsSources = resolveProviderOptionsSources(
       this.resolveIdentityAwareDirectStepProviderOptions(step, resolvedProviderInfo),
       tracedLayers,
@@ -304,9 +299,6 @@ export class OptionsBuilder {
       [
         { source: runtimeSource, options: runtime.providerInfo.providerOptions } satisfies ProviderOptionsLayer,
         ...profileLayers,
-        ...(this.engineOptions.workflowCallProviderOptions === undefined
-          ? []
-          : [{ source: 'workflow_call' as const, options: this.engineOptions.workflowCallProviderOptions }]),
       ],
       baseProviderOptions,
       this.engineOptions.providerOptionsOriginResolver,
@@ -330,7 +322,6 @@ export class OptionsBuilder {
         step,
         resolvedProviderInfo.providerSource,
       ).map((layer) => layer.options),
-      this.engineOptions.workflowCallProviderOptions,
     );
     const directStepProviderOptions = this.resolveIdentityAwareDirectStepProviderOptions(
       step,

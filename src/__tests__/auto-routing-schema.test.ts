@@ -225,27 +225,25 @@ describe('auto_routing config schema', () => {
   });
 });
 
-describe('auto_routing workflow schema', () => {
-  it('Given a concrete workflow provider and complete routing pools, When parsing workflow YAML, Then the workflow contract is accepted', () => {
+describe('removed workflow routing schema', () => {
+  it('Given workflow provider and auto_routing fields, When parsing workflow YAML, Then runtime.yaml migration is required', () => {
     const result = WorkflowConfigRawSchema.safeParse(createWorkflow({
       workflow_config: { provider: 'mock', model: 'workflow-model' },
       auto_routing: createAutoRoutingConfig({ strategy: 'performance' }),
     }));
 
-    expect(result.success).toBe(true);
-    if (!result.success) return;
-    expect(result.data.auto_routing?.strategy).toBe('performance');
+    expect(result.success).toBe(false);
+    if (!result.success) expectParseFailureMessage(result, /runtime\.yaml/);
   });
 
-  it('Given default_provider in workflow auto_routing, When parsing workflow YAML, Then strict validation rejects the removed key', () => {
+  it('Given default_provider in workflow auto_routing, When parsing workflow YAML, Then the removed routing surface fails fast', () => {
     const result = WorkflowConfigRawSchema.safeParse(createWorkflow({
-      workflow_config: { provider: 'mock' },
       auto_routing: createAutoRoutingConfig({
         default_provider: { provider: 'mock', model: 'unused-model' },
       }),
     }));
 
     expect(result.success).toBe(false);
-    if (!result.success) expectParseFailureMessage(result, /default_provider|unrecognized/i);
+    if (!result.success) expectParseFailureMessage(result, /runtime\.yaml/);
   });
 });
