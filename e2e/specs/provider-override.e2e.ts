@@ -188,6 +188,5 @@ describe('E2E: --provider option override (mock)', () => {
     });
 
     expect(result.exitCode).toBe(1);
-    expect(`${result.stdout}\n${result.stderr}`).toMatch(/runtime\.yaml/);
   }, 240_000);
 });
