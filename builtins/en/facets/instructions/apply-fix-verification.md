@@ -11,7 +11,7 @@ Correct every gap found by the latest completion verification and finish the fin
 
 **Procedure after a verifier return:**
 1. Map every verified gap to a completion obligation in the plan
-2. Carry recurrence records forward according to the shared workflow rules, and do not split a problem governed by the same invariant based only on physical code locations or file paths
+2. Carry recurrence records forward without splitting a problem governed by the same invariant based only on physical code locations or file paths
 3. Determine why the previous evidence missed each gap: an unscanned path, weak observation, false assumption, incomplete migration, unexecuted counterexample, or overstated completion report
 4. When the observation or detection method itself failed, recheck every obligation closed with the same assumption, search method, or evidence
 5. When the same invariant repeatedly breaks through different paths, do not repair only the reported path; implement the planned enforcement point across the bounded graph or make violation impossible by type or structure
