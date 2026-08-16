@@ -1,5 +1,7 @@
-import type { Language, WorkflowWideRule } from '../../models/types.js';
+import type { Language, WorkflowStep, WorkflowWideRule } from '../../models/types.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
+import { replaceTemplatePlaceholders } from './escape.js';
+import type { InstructionContext } from './instruction-context.js';
 
 export interface RenderedWorkflowWideRules {
   readonly hasAfterExecutionRules: boolean;
@@ -10,10 +12,15 @@ export interface RenderedWorkflowWideRules {
   readonly noticeBeforeInstructionRules: string;
 }
 
-function renderRule(rule: WorkflowWideRule, language: Language): string {
+function renderRule(
+  rule: WorkflowWideRule,
+  language: Language,
+  step: WorkflowStep,
+  context: InstructionContext,
+): string {
   return loadTemplate('parts/workflow_wide_rule', language, {
     ref: rule.ref,
-    content: rule.content.trimEnd(),
+    content: replaceTemplatePlaceholders(rule.content.trimEnd(), step, context),
   }).trimEnd();
 }
 
@@ -24,6 +31,8 @@ function applicabilityNotice(language: Language): string {
 export function renderWorkflowWideRules(
   rules: readonly WorkflowWideRule[] | undefined,
   language: Language,
+  step: WorkflowStep,
+  context: InstructionContext,
 ): RenderedWorkflowWideRules {
   const afterExecutionRules = rules?.filter((rule) => rule.position === 'after_execution_rules') ?? [];
   const beforeInstructionRules = rules?.filter((rule) => rule.position === 'before_instruction') ?? [];
@@ -31,10 +40,10 @@ export function renderWorkflowWideRules(
 
   return {
     hasAfterExecutionRules: afterExecutionRules.length > 0,
-    afterExecutionRules: afterExecutionRules.map((rule) => renderRule(rule, language)).join('\n\n'),
+    afterExecutionRules: afterExecutionRules.map((rule) => renderRule(rule, language, step, context)).join('\n\n'),
     noticeAfterExecutionRules: afterExecutionRules.length > 0 ? notice : '',
     hasBeforeInstructionRules: beforeInstructionRules.length > 0,
-    beforeInstructionRules: beforeInstructionRules.map((rule) => renderRule(rule, language)).join('\n\n'),
+    beforeInstructionRules: beforeInstructionRules.map((rule) => renderRule(rule, language, step, context)).join('\n\n'),
     noticeBeforeInstructionRules: afterExecutionRules.length === 0 && beforeInstructionRules.length > 0
       ? notice
       : '',

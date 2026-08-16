@@ -1,17 +1,13 @@
-Create an executable plan for every actionable family recorded in the current review-resolution.md, and for no other reviewer issue.
+Turn only the repairs authorized by the current review decision into one coherent execution plan.
 
-**Important:** Do not edit source files in this step. Inspect the Report Directory recursively and use it with the current code as primary evidence, not the Previous Response.
+Do not edit source in this step. Use the current decision in the Report Directory and the actual code as primary evidence, not Previous Response. Consult individual reviewer reports only to understand the cause, reproduction conditions, and acceptance criteria of concerns accepted by that decision.
 
-Treat the following current review resolution as the sole authoritative remediation target. Use individual reviewer reports only as evidence for the cause, reproduction conditions, and acceptance criteria of findings accepted by the resolution. Do not compare report timestamps or add targets from reviewer reports or old history.
+Do not reintroduce an excluded concern as optional work, adjacent cleanup, or an alternative repair mechanism. For each fix unit, preserve the recorded authority basis, acceptance criteria, and repair boundary, and select the smallest change that closes the real paths governed by the same invariant.
 
-Plan only the actionable families recorded in that resolution, including findings consolidated into them as `duplicate`. Treat `false_positive`, `overreach`, `out_of_scope`, `no_issue_after_verification`, and `environment_unverified` as explicit non-implementation constraints, not optional work or opportunities for cleanup. Do not reopen or re-adjudicate them.
-
-For each fix unit, preserve the recorded family IDs, authorization basis, acceptance criteria, and remediation boundary. Select the smallest change that closes every actual path carrying the same invariant without adding a technically valid but unauthorized improvement to another contract, adjacent refactoring, compatibility paths, new guarantees, or reviewer-suggested mechanisms that the resolution excluded. If a suggested mechanism was rejected while its underlying defect remained actionable, plan the accepted minimal correction rather than the rejected mechanism.
-
-**Current review resolution:**
+**Current review decision:**
 {report:review-resolution.md}
 
-**History condition:** Only for an accepted `persists` / `reopened` issue or a new structural issue reported after a fix, inspect report history to identify the assumption missing from the earlier remediation. Do not use past reports to add or reopen remediation targets.
+Consult history only to identify an assumption missing from an earlier remediation of a problem accepted in the current decision. Do not add or reopen repair targets from old reports.
 {{include:instructions/review-report-history}}
 
 {{include:instructions/fix-plan-common}}

@@ -1,5 +1,3 @@
-**This is AI Review iteration #{step_iteration}.**
-
 Use reports in the Report Directory as the primary source of truth. If additional context is needed, you may consult Previous Response and conversation history as secondary sources (Previous Response may be unavailable). If information conflicts, prioritize reports in the Report Directory and actual file contents.
 
 **Required actions:**
@@ -11,27 +9,10 @@ Use reports in the Report Directory as the primary source of truth. If additiona
 
 {{include:instructions/fix-root-cause-analysis}}
 
-{{include:instructions/contract-family-fix}}
+{{include:instructions/repair-path-check}}
 
 {{include:instructions/post-edit-self-scan}}
 
-**Report format:**
-- NG: "It has already been fixed"
-- OK: "After checking file X at L123, I found issue Y and fixed it to Z"
+Do not conclude that no change is needed without showing the verification result for each target file. For generated output or specification synchronization, verify the source or specification before reaching a conclusion; otherwise state what could not be verified and why.
 
-**Handling "no fix needed" (required)**
-- Do not judge "no fix needed" unless you can show verification results for the target file for each AI Review finding
-- If the finding relates to "generated output" or "spec synchronization", output the tag corresponding to "unable to determine" unless you can verify the source/spec
-- If no fix is needed, output the tag corresponding to "unable to determine" and clearly state the reason and scope of verification
-
-**Required output (include headings)**
-## Files checked
-- {filepath:line_number}
-## Searches performed
-- {command and summary}
-## Changes made
-- {change details}
-## Test results
-- {command executed and results}
-## Quality gates
-- {Quality gates run after the final change and their results}
+Record the inspected files, searches, changes, tests, and other verification according to the supplied output contract.

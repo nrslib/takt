@@ -10,7 +10,7 @@ Revise the plan taking that feedback into account.
 
 For small tasks, skip the design section.
 
-{{include:instructions/contract-family-plan-replan}}
+{{include:instructions/planning-path-check}}
 {{include:instructions/change-contract-traceability}}
 
 {{include:instructions/requirement-source-discipline}}
@@ -33,7 +33,7 @@ For small tasks, skip the design section.
 5. Identify the impact area
    - Identify implementation and verification locations for every contract ID. Only for contracts with impact paths, enumerate the relevant path from production to the final consumer
    - Identify the feature's role in the system and the owners of its entry points, trust boundaries, state, authority, and side effects
-   - Only when user or external input, authorization, sensitive information, external execution, persistence, retries, or concurrency actually participates, include the relevant validation, rejection, and failure handling. Do not add unrelated concerns mechanically
+   - Only when user or external input, authorization, sensitive information, external execution, persistence, retries, or concurrency is actually involved, include the relevant validation, rejection, and failure handling. Do not add unrelated concerns mechanically
 6. Determine file structure and design patterns (if needed)
 7. Decide on the implementation approach
    - When judgment criteria or supporting material are provided, compare only those classified as `applicable` by the shared procedure

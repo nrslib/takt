@@ -21,4 +21,3 @@ Re-audit the routes or scenarios that were judged insufficient in the previous E
 - Modifying E2E tests or production code
 - Claiming a scenario is covered without citing the actual test evidence
 - Skipping a flagged route because it "looks fine"
-{{include:instructions/review-pr-context}}

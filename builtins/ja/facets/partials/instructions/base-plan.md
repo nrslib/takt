@@ -10,7 +10,7 @@
 
 小規模タスクの場合は設計セクションを省略してください。
 
-{{include:instructions/contract-family-plan-replan}}
+{{include:instructions/planning-path-check}}
 {{include:instructions/change-contract-traceability}}
 
 {{include:instructions/requirement-source-discipline}}

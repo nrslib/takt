@@ -70,16 +70,105 @@ tests:
       - type: javascript
         metric: recall/deferred-validation
         value: |
-          const target = '(?:TODO|FIXME)';
-          const problem = '(?:先送り|未実装|未完成|無検証|未検証|残すべき処理では(?:ない|ありません)|defer(?:red|ring)?|unfinished|unimplemented|unvalidated)';
-          return /(validat|バリデーション|検証)/i.test(output) && new RegExp(
-            `${target}[^\\n。.!?]{0,160}${problem}|${problem}[^\\n。.!?]{0,160}${target}`,
-            'i',
-          ).test(output);
+          const marker = /\b(?:TODO|FIXME)\b/gi;
+          const incomplete = /(?:先送り|未実装|未完成|実装待ち|未完了|保留|実装されて(?:いない|おらず|いません)|無検証|未検証|検証不足|検証されて(?:いない|おらず|いません)|欠落|不足|missing|absent|incomplete|pending|unresolved|(?:not|(?:is|was|are|were|has|have)n['’]t)\s+(?:yet\s+)?(?:been\s+)?(?:present|implemented|validated|verified|completed|complete|resolved|finished)|残すべき処理では(?:ない|ありません)|(?:実装|検証|解消)(?:済み|完了)(?:ではない|ではありません|でない|じゃない|ではなく|でなく)|実装されていない|defer(?:red|ring)?|unfinished|unimplemented|unvalidated|unverified)/i;
+          const incompleteGlobal = new RegExp(incomplete.source, 'gi');
+          const complete = /(?:\b(?:present|implemented|validated|verified|resolved|completed|complete|finished)\b|(?<!未)完了|実装(?:済み|完了)|検証(?:済み|完了)|解消(?:済み|完了))/gi;
+          const targetBoundary = /(?:[,，、;():：]|\b(?:and|but|or|while|although|even\s+though|however|though|whereas|with|plus|this|that|it)\b|ただし|しかし|一方で|でしたが|ですが|だが)/i;
+          const targetTokens = (clause) => new Set(
+            clause
+              .toLowerCase()
+              .replace(/検証|バリデーション/g, ' validation ')
+              .replace(/認証|認可/g, ' authorization ')
+              .replace(/キャッシュ/g, ' cache ')
+              .replace(/入力/g, ' input ')
+              .replace(/出力/g, ' output ')
+              .replace(/\bauth(?:orization)?\b/gi, ' authorization ')
+              .replace(/\b(?:todo|fixme|is|was|are|were|has|have|been|being|now|already|still|later|currently|finally|subsequently|eventually|since|fully|successfully|correctly|properly|not|yet|the|a|an|and|but|or|while|although|even|though|however|whereas|with|plus|this|that|it|check|checks|handler|handling|logic|rules?|fields?|paths?|code|implementation|work|feature|task|item|missing|absent|incomplete|pending|unresolved|unfinished|unimplemented|unvalidated|unverified|defer(?:red|ring)?|present|implemented|validated|verified|resolved|completed|complete|finished)\b/gi, ' ')
+              .split(/[^a-z0-9_]+/)
+              .filter((token) => token.length > 2),
+          );
+          const targetContext = (clause, match) => {
+            const before = clause.slice(0, match.index ?? 0);
+            const after = clause.slice((match.index ?? 0) + match[0].length);
+            const previousBoundaries = [...before.matchAll(new RegExp(targetBoundary.source, 'gi'))];
+            const previousBoundary = previousBoundaries.at(-1);
+            const nextBoundary = after.search(targetBoundary);
+            const contextStart = previousBoundary
+              ? previousBoundary.index + previousBoundary[0].length
+              : 0;
+            return targetTokens(
+              before.slice(contextStart) +
+              ' ' +
+              match[0] +
+              ' ' +
+              after.slice(0, nextBoundary < 0 ? after.length : nextBoundary),
+            );
+          };
+          const sameTarget = (previousTargets, nextTargets) => {
+            if (previousTargets.size === 0 || nextTargets.size === 0) return false;
+            const sharedTokens = [...previousTargets].filter((token) => nextTargets.has(token));
+            return sharedTokens.length === previousTargets.size && sharedTokens.length === nextTargets.size;
+          };
+          const isPositiveCompletion = (clause, match) =>
+            !/\b(?:not|(?:is|was|are|were|has|have)n['’]t)(?:\s+yet)?(?:\s+been)?\s*$/i.test(
+              clause.slice(0, match.index ?? 0),
+            ) &&
+            !/^\s*(?:ではない|ではありません|でない|じゃない|ではなく|でなく|していない|しておらず|していません)/i.test(
+              clause.slice((match.index ?? 0) + match[0].length),
+            );
+          const isNegatedIncomplete = (clause, match) =>
+            /\b(?:not|(?:is|was|are|were|has|have)n['’]t)\s*$/i.test(clause.slice(0, match.index ?? 0)) ||
+            /^\s*(?:ではない|ではありません|でない|じゃない|ではなく|でなく)/i.test(
+              clause.slice((match.index ?? 0) + match[0].length),
+            );
+          const incompleteMatches = (clause) =>
+            [...clause.matchAll(incompleteGlobal)].filter((match) => !isNegatedIncomplete(clause, match));
+          const positiveCompletions = (clause) =>
+            [...clause.matchAll(complete)].filter((match) => isPositiveCompletion(clause, match));
+          const isDirectContinuation = /^(?:(?:is|was|are|were|has|have)\b|(?:implemented|validated|verified|resolved|completed|complete|finished)\b|(?:it|this|that)\s+(?:is|was|are|were|has|have)\b|(?:now|already|still)\s+(?:(?:is|was|are|were|has|have)\b|(?:it|this|that)\s+(?:is|was|are|were|has|have)\b|(?:implemented|validated|verified|resolved|completed|complete|finished)\b)|(?<!未)完了|(?:実装|検証|解消)(?:済み|完了))/i;
+          const completionCancels = (incompleteClause, completionClause) => {
+            const completions = positiveCompletions(completionClause);
+            return incompleteMatches(incompleteClause).some((incompleteMatch) =>
+              completions.some((completionMatch) => {
+                if (incompleteClause === completionClause &&
+                  (completionMatch.index ?? 0) <= (incompleteMatch.index ?? 0)) return false;
+                const incompleteTargets = targetContext(incompleteClause, incompleteMatch);
+                const completionTargets = targetContext(completionClause, completionMatch);
+                return sameTarget(incompleteTargets, completionTargets) ||
+                  (completionTargets.size === 0 && isDirectContinuation.test(completionClause));
+              }),
+            );
+          };
+          const hasViolation = (segment) => {
+            const clauses = segment
+              .split(/(?:[,，、;():：]|\b(?:and|but|or|while|although|even\s+though|however|though|whereas|with|plus|this|that|it)\b|ただし|しかし|一方で|でしたが|ですが|だが)/i)
+              .map((clause) => clause.trim())
+              .filter(Boolean);
+            return clauses.some((clause, clauseIndex) => {
+              if (incompleteMatches(clause).length === 0) return false;
+              if (completionCancels(clause, clause)) return false;
+              return !clauses
+                .slice(clauseIndex + 1)
+                .some((nextClause) => completionCancels(clause, nextClause));
+            });
+          };
+          return String(output).split(/[\n。.!?！？]+/).some((unit) => {
+            const markers = [...unit.matchAll(marker)];
+            return markers.some((markerMatch, index) => {
+              const start = markerMatch.index ?? 0;
+              const end = markers[index + 1]?.index ?? unit.length;
+              const leadingContext = index === 0 ? unit.slice(0, start) : '';
+              return (
+                hasViolation(leadingContext) ||
+                hasViolation(unit.slice(start, end))
+              );
+            });
+          });
       - type: javascript
         metric: recall/blocking-verdict
         value: |
-          return /(?:^|\n)(?:#{1,6}\s*)?(?:(?:レビュー)?結果|判定|Result|Verdict)\s*[:：]\s*(?:\*\*)?(?:REJECT|REQUEST\s+CHANGES)\b/im.test(output) ||
+          return /(?:^|\n)(?:#{1,6}[ \t]*)?(?:(?:レビュー)?結果|判定|Result|Verdict)(?:[ \t]*[:：][ \t]*|[ \t]+|\n[ \t]*\n?[ \t]*)(?:\*\*)?(?:REJECT|REQUEST\s+CHANGES)\b/im.test(output) ||
             /(?:^|\n)#{1,6}\s*(?:\*\*)?(?:REJECT|REQUEST\s+CHANGES)\b/im.test(output);
 
   - description: 'precision: clean diff must not produce fabricated findings'

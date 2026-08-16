@@ -1,31 +1,11 @@
-レビューレポートの指摘を証拠で裁定し、修正してよい対象を確定してください。
+直前のレビューラウンドで提出された指摘を証拠で裁定し、今回修正してよい対象を確定してください。
 
-{{include:instructions/contract-family-review-adjudication}}
-{{include:instructions/invariant-recurrence}}
+{{include:instructions/review-adjudication-check}}
 
-**重要:** 新しい網羅レビューは行わず、Report Directory 配下の最新レビューレポートが提出した指摘だけを対象にしてください。必要な範囲で現在のコード、要求、計画、実行証跡を確認してください。
+新しい網羅レビューは行わず、Report Directory 配下にある直前の最新レビューレポートだけを提出元として扱ってください。必要な範囲で現在のコード、要求、計画、実行証跡を確認してください。
 
-**入力と出力の時系列境界:** この step の開始時点で既に存在する `review-resolution.md` は既存の裁定履歴であり、同じファイルがこの step の出力先でもあります。今回の finding の提出元ではありません。今回裁定するのは、この step の直前に完了した review ラウンドの最新 reviewer reports が提出した finding だけです。
-- 既存の `review-resolution.md` は、family 同一性、記録済み disposition、および「再発台帳の引き継ぎ」の照合だけに使ってください。新しい finding の提出元として扱わず、そこに記録されていることだけを根拠に actionable finding を再生成しないでください。
-- 最新 reviewer reports が全件 `APPROVE` で、`new`、`persists`、`reopened` が1件もない場合は、この裁定には actionable finding の提出がないものとして扱ってください。現在のコードやその review ラウンド外のレポートが支持しているように見えても、既存の `review-resolution.md` に記録された actionable family を再生成しないでください。
-- 既存の `review-resolution.md` に記録された family または finding を今回の actionable set に入れられるのは、その最新 reviewer reports のいずれかが、現在の証拠付きで `new`、`persists`、`reopened` の finding として提出した場合だけです。
+各指摘について、技術的な主張、具体的な失敗条件、証拠、今回の修正を許可する根拠を分けて確認し、現在の policy に従って裁定してください。採用する修正対象には、権限根拠、破られている不変条件、関係する契約経路、観測可能な受入条件、修正境界を記録してください。
 
-review-resolution.md の「再発台帳の引き継ぎ」を記載してください。同じ peer-review の Report Directory 直下にある `subworkflows/iteration-N--step-remediation--*/fix-verification.md` だけを候補とし、`.takt-report-internal` 配下を除外して数値 `N` が最大の1件から全行・全13項目を無変更で記載します。候補がなければ「先行 remediation なし」、最大の `N` を一意に選べない、ファイルを読めない・欠落している、再発記録が欠落している、または現在の全13項目を特定できない場合は「引き継ぎ元の欠落」と理由を記載し、古い候補から補わず、初期値へ変換しないでください。いずれの引き継ぎ元の記載と理由も不変条件行の外に置き、そのための合成行を作らないでください。
+既存の裁定結果と履歴は、同じ不変条件と担当箇所を持つ問題の照合と必要な記録の引き継ぎにだけ使い、今回の提出元にはしないでください。直前の最新レビューレポートが現在の問題を提出していない場合は、過去の記録だけから修正対象を再生成しないでください。
 
-**やること:**
-1. 各指摘について、技術的な主張、実際に壊れるシナリオまたは実装品質問題の具体的証拠、file:line または再現証拠を確認する
-2. 技術的妥当性とは別に、受入条件の直接違反、今回差分が導入した退行、必須 consumer migration、採用済み contract family の閉鎖のいずれが今回の修正を許可するか確認する。重大度、REJECT、修正案だけを権限根拠にしない
-3. 各指摘を現在のコード、要求、観測可能な契約へ照合し、正式な disposition である `actionable`、`duplicate`、`false_positive`、`overreach`、`out_of_scope`、`no_issue_after_verification`、`environment_unverified` のいずれか1つへ分類する。現在のプロンプトに裁定・契約変更の判断基準が提供されている場合は適用する
-4. 新規 finding を修正対象 family にする前に、review-resolution.md とその履歴の「再発台帳の引き継ぎ」「修正対象 family」「指摘ごとの裁定」または「前段 finding の扱い」、および最新レビュー報告の「問題系列の完了走査」「今回の指摘（new）」「継続指摘（persists）」「解消済み（resolved）」「再開指摘（reopened）」に記録済みの family を照合する。上の identity が一致する別経路の症状なら新しい family を作らず、「修正対象 family」の既存行へ経路と元の finding ID・出典を追加し、「指摘ごとの裁定」に既存 family への合流先と根拠を記録する。「再発台帳の引き継ぎ」は変更しない。定義から terminal・API 出力まで同じ family を縦に閉じ、隣接する別契約を混ぜない。許可済み family を閉じるために必要な未訪問 consumer は、同じ family である場合だけ `accepted_family_unvisited_consumer` または `required_consumer_migration` として追加できる。この例外を隣接契約の探索に広げない
-5. 過剰な修正方式を退ける場合も、証拠で確認でき修正権限を持つ元の欠陥と、それを解消する最小の内部修正を失わない。技術的に妥当でも権限のない水平改善は `out_of_scope` として修正対象へ入れない
-6. follow-up の新規 finding には、`accepted_family_unvisited_consumer`、`remediation_regression`、`direct_acceptance_criterion_violation`、`required_consumer_migration` のいずれかと、初回に含まれなかった理由を記録する
-7. `environment_unverified` は、現在のプロンプトに環境要因の判断基準が提供され全条件を満たす場合だけ使い、実装欠陥の証拠がある指摘を環境要因で退けない
-8. 指摘同士または要求・計画が競合し、現行の前提のまま修正対象を確定できない場合だけ、再計画が必要と判定する
-9. 修正対象ごとに、権限根拠、破られている不変条件、関係する契約経路、完了を判定できる受入条件を記録する
-10. 提出された各 finding ID をちょうど1つの裁定行へ対応付ける。`actionable` は修正対象 family を指定し、`duplicate` は同じ修正対象 family への統合先を指定する。それ以外の disposition の指摘を修正対象 family に混入させない
-11. 各修正対象 family について、タスクを満たすために変更すべき範囲と、不要なスコープ拡大として明示的に除外する周辺整理・リファクタリング・互換挙動・運用保証・reviewer 提案方式を、修正境界として記録する
-12. この裁定だけを次工程の正本とする。reviewer の生の判定だけでは修正を許可せず、`actionable` family とそこへ統合した `duplicate` だけを修正計画へ渡す。それ以外の指摘は、後続のコードまたは要求変更による新しい証拠がない限り除外したままにする
-
-結果は reviewer の票数ではなく裁定後の集合で決めてください。actionable family が1件以上残る場合は、重大度、発見時期、発見率、記録済みであることにかかわらず「修正対象あり」として修正計画へ渡してください。1件もなく再計画が必要な未解決前提もない場合だけ「修正対象なし」として要件充足の最終確認へ送ってください。
-
-裁定不能な懸念を非修正対象へ推測で落とさず、未解決の前提として明示してください。
+各指摘の裁定と、同じ原因を持つ問題の統合先は、出力契約に従って漏れなく記録してください。結果はレビュアーの票数ではなく、現在の証拠と policy に基づいて決めてください。裁定できない懸念は推測で除外せず、未解決の前提として明示してください。

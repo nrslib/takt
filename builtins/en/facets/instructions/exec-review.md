@@ -8,4 +8,3 @@ Check the task requirement, worker reports, and actual code changes. Return one 
 - needs_replan: the approach needs user-level replanning.
 
 Include concise evidence and concrete next steps.
-{{include:instructions/review-pr-context}}

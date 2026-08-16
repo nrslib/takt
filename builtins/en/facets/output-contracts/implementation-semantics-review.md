@@ -1,15 +1,12 @@
 ```markdown
 # Implementation Semantics Review
 
-## Verdict: APPROVE / REJECT
+{{include:output-contracts/base-review-result}}
 
 ## Summary
 {1-2 sentence summary of the review result}
 
-## Non-Finding Concerns
-| Item | Location | Category | Reason not raised as a finding |
-|------|----------|----------|--------------------------------|
-| {concern, or "none"} | `src/file.ts:42` | false_positive / overreach / outside_contract_jurisdiction / no_issue_after_verification | {reason} |
+{{include:output-contracts/base-review-non-finding-concerns}}
 
 {{include:output-contracts/base-review-problem-family-completion-sweep}}
 
@@ -21,9 +18,7 @@
 {{include:output-contracts/base-review-follow-up-authorization}}
 
 {{include:output-contracts/base-review-persists}}
-## Persisting Findings (persists)
-| # | finding_id | family_tag | Previous evidence | Current evidence | Problem | Fix |
-|---|------------|------------|-------------------|------------------|---------|-----|
+{{include:output-contracts/base-review-carry-over-findings}}
 | 1 | SEM-PERSIST-src-file-L77 | derived-state | `src/file.ts:77` | `src/file.ts:77` | {unresolved problem} | {fix} |
 
 ## Resolved (resolved)
@@ -32,7 +27,7 @@
 | SEM-RESOLVED-src-file-L10 | {acceptance condition of the original finding} | resolved at `src/file.ts:10` |
 
 {{include:output-contracts/base-review-adjudicated-out-of-scope}}
-## Reopened Findings (reopened)
+{{include:output-contracts/base-review-reopened-findings}}
 | # | finding_id | family_tag | Immediately Preceding Adjudication | Reopening Basis (a-d) | New Evidence | Problem | Fix |
 |---|------------|------------|------------------------------------|-----------------------|--------------|---------|-----|
 | 1 | SEM-REOPENED-src-file-L55 | fail-fast | `review-resolution.md`: previously resolved | d | `src/file.ts:55` | {recurred problem} | {fix} |

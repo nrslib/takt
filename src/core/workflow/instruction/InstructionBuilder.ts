@@ -35,7 +35,7 @@ function preparePolicyContent(content: string, sourcePath?: string): string {
   return preparePolicyContentGeneric(content, CONTEXT_MAX_CHARS, sourcePath);
 }
 
-function preparePreviousResponseContent(
+export function preparePreviousResponseContent(
   content: string,
   sourcePath: string | undefined,
   preserveFullContent: boolean,
@@ -86,7 +86,6 @@ export class InstructionBuilder {
     const editRule = buildEditRule(this.step.edit, language);
     const gitRules = buildGitRules(this.step.allowGitCommit, language, 'phase1');
     const hasGitRules = gitRules.length > 0;
-    const workflowRules = renderWorkflowWideRules(this.context.workflowRules, language);
     const fallbackNotice = this.context.fallbackContext
       ? renderFallbackNotice(this.context.fallbackContext, language)
       : '';
@@ -129,6 +128,15 @@ export class InstructionBuilder {
           this.step.preserveFullPreviousResponse === true,
         )
       : '';
+    const workflowRules = renderWorkflowWideRules(
+      this.context.workflowRules,
+      language,
+      this.step,
+      {
+        ...this.context,
+        previousResponseText: previousResponsePrepared || undefined,
+      },
+    );
     const previousResponse = hasPreviousResponse
       ? escapeTemplateChars(previousResponsePrepared)
       : '';

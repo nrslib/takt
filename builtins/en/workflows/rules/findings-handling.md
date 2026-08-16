@@ -9,3 +9,12 @@ When reporting a finding, follow these rules.
 - Keep the original ID for `persists`, and cite concrete verification evidence for `resolved`.
 - For raw findings whose output contract or policy prohibits assigning final IDs or lifecycle states, follow that prohibition.
 - Do not invent a finding when the evidence does not establish a problem.
+
+When performing a review, also follow these scope rules. These scope rules apply only to review work; implementation, planning, and repair steps should keep their own task boundary.
+
+- Treat the following changed-target scope as authoritative and inspect every file listed there, even when your own `git diff` is empty:
+{review_scope}
+- Add targets through your own investigation only when the scope section explicitly says the range is limited, incomplete, or unavailable.
+- When `{var:review_mode}` is `initial`, inspect every presented target and complete the applicable criteria and same problem family in the same round. When it is `follow_up`, inspect unresolved concerns, their repairs, and directly affected paths without restarting general discovery in untouched areas. Only for `unspecified`, treat a directly executed reviewer step at `{step_iteration}` 1 as `initial` and later iterations as `follow_up`.
+- Immediately before approving a follow-up review, regression-check the presented changed targets and confirm that the repairs did not break changed contracts. Record the checked scope and evidence in the fields defined by the output contract.
+- When PR Context is present, use the cumulative base-to-head diff as primary evidence and treat `review-target.md` and earlier reports as snapshots. Base resolution on the original requirement, acceptance criteria, and current diff, and evaluate schema changes introduced in the PR by their final form.

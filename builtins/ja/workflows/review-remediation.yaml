@@ -1,5 +1,16 @@
 name: review-remediation
 description: レビュー指摘を横断的に計画し、修正し、完了を検証する共通の収束ループ。
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 subworkflow:
   callable: true
   visibility: internal

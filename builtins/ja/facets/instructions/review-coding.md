@@ -7,7 +7,5 @@
 4. 変更した値、状態、型、schema、resolver、normalizer、adapter、共有 helper は、実在する入口から消費先まで追う
 5. 副作用や状態変更では、変更契約に実在する正常・失敗・中断・後片付けの経路を確認する
 
-{{include:instructions/review-round-scope}}
 {{include:instructions/review-investigation-discipline}}
-{{include:instructions/contract-family-review-by-mode}}
-{{include:instructions/review-pr-context}}
+{{include:instructions/review-path-check}}

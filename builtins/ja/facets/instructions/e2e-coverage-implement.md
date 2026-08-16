@@ -1,4 +1,4 @@
-{{include:instructions/contract-family-test-authoring}}
+{{include:instructions/test-obligation-mapping}}
 
 テストケースリストに基づき、不足しているE2Eテストを実装してください。
 

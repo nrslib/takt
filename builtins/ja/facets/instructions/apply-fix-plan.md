@@ -13,16 +13,9 @@
 - タスク全体の要求または設計の変更が必要な場合は編集せず、「タスク全体の再計画が必要」と根拠を報告する
 
 {{include:instructions/fix-plan-validity}}
-{{include:instructions/invariant-recurrence}}
-{{include:instructions/contract-family-fix}}
+{{include:instructions/repair-path-check}}
 
 {{include:instructions/established-invariants-scan}}
 {{include:instructions/post-edit-self-scan}}
 
-**必須出力（見出しを含める）**
-## 作業結果
-- {修正完了 / 修正計画の見直しが必要 / タスク全体の再計画が必要}
-## 変更内容と受入条件
-- {修正単位ごとの変更と、finding・全完了義務の反証方法・証拠・状態}
-## 検証結果と証拠
-- {実行コマンドと結果、確認したコード・差分・レポート・ログ}
+結果、変更内容、受入根拠、検証結果は、提供された出力契約に従って記録してください。

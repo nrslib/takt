@@ -162,8 +162,8 @@ describe('WorkflowEngine workflow_call integration', () => {
   });
 
   it('workflow-wide rules are inherited additively by a workflow_call child', async () => {
-    writeWorkflow(tmpDir, 'rules/parent-rule.md', 'PARENT_WORKFLOW_RULE');
-    writeWorkflow(tmpDir, 'rules/child-rule.md', 'CHILD_WORKFLOW_RULE');
+    writeWorkflow(tmpDir, 'rules/parent-rule.md', 'PARENT_WORKFLOW_RULE mode={var:review_mode} iteration={step_iteration}');
+    writeWorkflow(tmpDir, 'rules/child-rule.md', 'CHILD_WORKFLOW_RULE mode={var:review_mode} iteration={step_iteration}');
     writeWorkflow(tmpDir, 'child.yaml', `name: child
 subworkflow:
   callable: true
@@ -206,7 +206,9 @@ steps:
       config,
       tmpDir,
       'test task',
-      createWorkflowCallOptions(tmpDir),
+      createWorkflowCallOptions(tmpDir, {
+        workflowCallVars: { review_mode: 'follow_up' },
+      }),
     );
     const state = await engine.run();
 
@@ -215,6 +217,10 @@ steps:
     expect(childPrompt).toEqual(expect.any(String));
     expect(childPrompt).toContain('PARENT_WORKFLOW_RULE');
     expect(childPrompt).toContain('CHILD_WORKFLOW_RULE');
+    expect(childPrompt).toContain('PARENT_WORKFLOW_RULE mode=follow_up iteration=1');
+    expect(childPrompt).toContain('CHILD_WORKFLOW_RULE mode=follow_up iteration=1');
+    expect(childPrompt).not.toContain('{var:review_mode}');
+    expect(childPrompt).not.toContain('{step_iteration}');
     expect(childPrompt!.split('PARENT_WORKFLOW_RULE')).toHaveLength(2);
     expect(childPrompt!.indexOf('PARENT_WORKFLOW_RULE')).toBeLessThan(
       childPrompt!.indexOf('CHILD_WORKFLOW_RULE'),

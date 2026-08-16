@@ -4,6 +4,10 @@ all_steps:
   rules:
     - ref: findings-handling
       position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
     - ref: plain-terminology
       position: before_instruction
 
@@ -273,9 +277,9 @@ loop_monitors:
         The review → fix cycle has repeated {cycle_count} times.
         Check the review report history in the Report Directory and assess convergence.
 
-        - Fix progress: whether existing findings satisfy their acceptance criteria
-        - Report convergence: whether valid structural or contract findings keep being added across review rounds
-        - A different finding is not progress by itself; treat counts as supporting information
+        - Fix progress: whether reported problems satisfy their acceptance criteria
+        - Report convergence: whether valid structural or contract problems keep being added across review rounds
+        - A different problem is not progress by itself; treat counts as supporting information
       rules:
         - condition: Healthy (fixes progressing and report content converging)
           next: fix_both
@@ -291,9 +295,9 @@ loop_monitors:
         The AI fix → review cycle has repeated {cycle_count} times.
         Check the review report history in the Report Directory and assess convergence.
 
-        - Fix progress: whether existing findings satisfy their acceptance criteria
-        - Report convergence: whether valid structural or contract findings keep being added across review rounds
-        - A different finding is not progress by itself; treat counts as supporting information
+        - Fix progress: whether reported problems satisfy their acceptance criteria
+        - Report convergence: whether valid structural or contract problems keep being added across review rounds
+        - A different problem is not progress by itself; treat counts as supporting information
       rules:
         - condition: Healthy (fixes progressing and report content converging)
           next: ai-antipattern-fix
@@ -309,9 +313,9 @@ loop_monitors:
         The supervisor fix → review cycle has repeated {cycle_count} times.
         Check the review report history in the Report Directory and assess convergence.
 
-        - Fix progress: whether existing findings satisfy their acceptance criteria
-        - Report convergence: whether valid structural or contract findings keep being added across review rounds
-        - A different finding is not progress by itself; treat counts as supporting information
+        - Fix progress: whether reported problems satisfy their acceptance criteria
+        - Report convergence: whether valid structural or contract problems keep being added across review rounds
+        - A different problem is not progress by itself; treat counts as supporting information
       rules:
         - condition: Healthy (fixes progressing and report content converging)
           next: supervise_fix

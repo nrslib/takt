@@ -7,7 +7,5 @@ Procedure:
 4. trace changed values, state, types, schemas, resolvers, normalizers, adapters, and shared helpers through their real entries and consumers
 5. for side effects and state changes, inspect the normal, failure, interruption, and cleanup paths that exist in the changed contract
 
-{{include:instructions/review-round-scope}}
 {{include:instructions/review-investigation-discipline}}
-{{include:instructions/contract-family-review-by-mode}}
-{{include:instructions/review-pr-context}}
+{{include:instructions/review-path-check}}

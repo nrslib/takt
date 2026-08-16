@@ -5,7 +5,5 @@ Steps:
 2. Trace changed definitions and consumers, then apply the applicable supporting material to the diff and surrounding code
 3. Do not raise unfounded speculation or preference-only rewrites
 
-{{include:instructions/review-round-scope}}
 {{include:instructions/review-investigation-discipline}}
-{{include:instructions/contract-family-review-by-mode}}
-{{include:instructions/review-pr-context}}
+{{include:instructions/review-path-check}}

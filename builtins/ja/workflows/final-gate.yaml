@@ -1,5 +1,16 @@
 name: final-gate
 description: 現在のコードと前段の報告から、supervisor が要件の充足状態と必要な次の対応を判断する。
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 subworkflow:
   callable: true
   visibility: internal

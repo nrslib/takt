@@ -9,7 +9,7 @@ Analyze the task as maintenance work for an existing feature and produce a causa
 
 For small tasks, omit the design section. In maintenance work, do not omit existing-contract and unnecessary-change checks even for small tasks.
 
-{{include:instructions/contract-family-plan-replan}}
+{{include:instructions/planning-path-check}}
 {{include:instructions/change-contract-traceability}}
 
 {{include:instructions/requirement-source-discipline}}
@@ -26,7 +26,7 @@ For small tasks, omit the design section. In maintenance work, do not omit exist
    - Compare reference materials with the current implementation to identify the delta
    - **For each requirement, decide whether a change is needed. If no change is needed, cite the current code location (file:line). Do not say "already correct" without evidence**
 4. Inspect code to resolve unknowns
-5. Identify existing contracts outside the requested change scope that must be preserved
+5. Identify existing contracts outside the requested change scope that must remain unchanged
    - Check existing structure, type names, hook return values, UI copy, accessible names, comments, and test expectations
    - For a contract targeted for replacement, document the reason and impact scope, and trace current-consumer migration separately from each support target explicitly required by the requirement source
 6. Classify candidate changes as required, related, or unnecessary

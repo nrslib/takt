@@ -79,6 +79,216 @@ test('deferred-validation detects the violation without requiring issue-number w
     true,
   );
   assert.equal(
+    evaluateMetric('recall/deferred-validation', 'FIXME: unimplemented authorization check'),
+    true,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: 未実装の入力検証を追加する'),
+    true,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO validation was missing, but is now implemented'),
+    false,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO の検証不足でしたが、実装済みです'),
+    false,
+  );
+  assert.equal(
+    evaluateMetric(
+      'recall/deferred-validation',
+      'TODO: missing validation is now implemented; FIXME: authorization is absent',
+    ),
+    true,
+  );
+  assert.equal(
+    evaluateMetric(
+      'recall/deferred-validation',
+      'TODO: validation is implemented FIXME: authorization is absent',
+    ),
+    true,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO implementation has been completed and validated'),
+    false,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: missing validation is now implemented and verified'),
+    false,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO の検証不足は解消済みです'),
+    false,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: 検証不足ですが、別の処理は実装済みです'),
+    true,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: input validation is missing'),
+    true,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: validation is not implemented'),
+    true,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: validation is not missing'),
+    false,
+  );
+  assert.equal(
+    evaluateMetric("recall/deferred-validation", "TODO: validation isn't missing"),
+    false,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: validation is not yet implemented'),
+    true,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: validation is incomplete and cache is implemented'),
+    true,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: validation is incomplete, but now cache is implemented'),
+    true,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: validation is incomplete even though this cache is implemented'),
+    true,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: validation is incomplete however cache is implemented'),
+    true,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: validation is incomplete though cache is implemented'),
+    true,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: validation was missing; validation is now implemented'),
+    false,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: validation was missing, but a note was added, and validation is now implemented'),
+    false,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: validation was missing, but a note was added, and cache is now implemented'),
+    true,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: validation is implemented then validation is incomplete'),
+    true,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: validation was missing, but it was later implemented'),
+    false,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: validation was missing, but it is fully implemented'),
+    false,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: validation was missing, but cache is successfully implemented'),
+    true,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: validation was missing, but it is currently implemented'),
+    false,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: validation is incomplete, but this cache is implemented'),
+    true,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: validation is incomplete, but this is implemented'),
+    false,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: input validation is incomplete, but output validation is implemented'),
+    true,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: validation is incomplete, but input validation is implemented'),
+    true,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: input validation is incomplete, but validation is implemented'),
+    true,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: input validation is incomplete, but input validation is implemented'),
+    false,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: authorization check is incomplete, but authorization is implemented'),
+    false,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: validation is incomplete: cache is implemented'),
+    true,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: validation is incomplete (this cache is implemented)'),
+    true,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'validation is incomplete even though this cache is implemented TODO'),
+    true,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: validation is incomplete; unrelated cache is verified'),
+    true,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: validation is not complete'),
+    true,
+  );
+  assert.equal(
+    evaluateMetric("recall/deferred-validation", "TODO: validation isn't implemented"),
+    true,
+  );
+  assert.equal(
+    evaluateMetric("recall/deferred-validation", "TODO: validation hasn't been implemented"),
+    true,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: unresolved validation is still pending'),
+    true,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: 実装済みではない入力検証'),
+    true,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: 未実装ですが、実装済みです'),
+    false,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: 未実装でしたが、実装済みです'),
+    false,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: 未実装ですが、別の処理は実装済みです'),
+    true,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: 検証不足ではありません'),
+    false,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: 検証不足ですが、検証は完了しています'),
+    false,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: 未完了の入力検証'),
+    true,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO: 未実装ではない入力検証'),
+    false,
+  );
+  assert.equal(
     evaluateMetric('recall/deferred-validation', '変更には `TODO: validate the patch fields` があります。'),
     false,
   );
@@ -92,5 +302,17 @@ test('blocking-verdict accepts both reject vocabularies', () => {
   assert.equal(evaluateMetric('recall/blocking-verdict', 'Result: REJECT'), true);
   assert.equal(evaluateMetric('recall/blocking-verdict', '判定: REQUEST CHANGES'), true);
   assert.equal(evaluateMetric('recall/blocking-verdict', '## REQUEST   CHANGES'), true);
+  assert.equal(
+    evaluateMetric('recall/blocking-verdict', '## 判定\n\n**REJECT** — blocking issue remains'),
+    true,
+  );
+  assert.equal(
+    evaluateMetric('recall/blocking-verdict', '## Result\nREQUEST CHANGES — blocking issue remains'),
+    true,
+  );
   assert.equal(evaluateMetric('recall/blocking-verdict', 'Result: APPROVE'), false);
+  assert.equal(
+    evaluateMetric('recall/blocking-verdict', '## 判定\n\n**APPROVE** — no blocking issue'),
+    false,
+  );
 });

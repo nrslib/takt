@@ -11,6 +11,7 @@ import type { ReportInstructionContext } from '../core/workflow/instruction/Repo
 import { StatusJudgmentBuilder } from '../core/workflow/instruction/StatusJudgmentBuilder.js';
 import type { StatusJudgmentContext } from '../core/workflow/instruction/StatusJudgmentBuilder.js';
 import { mergeWorkflowWideRules } from '../core/workflow/engine/workflow-wide-rule-merge.js';
+import { renderTaskReviewScope } from '../core/workflow/review-scope.js';
 import { makeInstructionContext, makeRule, makeStep } from './test-helpers.js';
 
 type ResolvedWorkflowRule = {
@@ -182,7 +183,12 @@ describe('workflow-wide Phase 1 rule rendering', () => {
     expect(gitRules).not.toBe('');
     expect(prompt).toContain(gitRules);
     expect(prompt.indexOf(gitRules)).toBeLessThan(prompt.indexOf('RULE_EXECUTION_FIRST'));
-    const { noticeAfterExecutionRules } = renderWorkflowWideRules(rules, 'en');
+    const { noticeAfterExecutionRules } = renderWorkflowWideRules(
+      rules,
+      'en',
+      makeStep({ name: 'work', instruction: instructionMarker }),
+      workflowRuleContext(rules),
+    );
     expect(prompt.split(noticeAfterExecutionRules)).toHaveLength(2);
     for (const rule of rules) {
       expect(prompt.split(rule.content).length - 1).toBe(1);
@@ -212,6 +218,62 @@ describe('workflow-wide Phase 1 rule rendering', () => {
       expect(withoutRules).toContain(instructionMarker);
       expect(withEmptyRules).toBe(withoutRules);
     }
+  });
+
+  it.each(['en', 'ja'] as const)('resolves workflow-wide rule placeholders in %s', (language) => {
+    const rules: readonly ResolvedWorkflowRule[] = [{
+      ref: 'contextual-rule',
+      position: 'before_instruction',
+      content: 'mode={var:review_mode}; iteration={step_iteration}; scope={review_scope}',
+    }];
+    const context = workflowRuleContext(rules, language);
+    context.stepIteration = 3;
+    context.workflowCallVars = { review_mode: 'follow_up' };
+    context.reviewScope = {
+      kind: 'collected',
+      paths: ['src/changed.ts'],
+      source: { kind: 'working_tree', baseRange: { kind: 'base_branch_head' } },
+    };
+
+    const prompt = new InstructionBuilder(
+      makeStep({ name: 'review', instruction: 'STEP_INSTRUCTION' }),
+      context,
+    ).build();
+
+    expect(prompt).toContain('mode=follow_up');
+    expect(prompt).toContain('iteration=3');
+    expect(prompt).toContain('src/changed.ts');
+    expect(prompt).not.toContain('{var:review_mode}');
+    expect(prompt).not.toContain('{step_iteration}');
+    expect(prompt).not.toContain('{review_scope}');
+  });
+
+  it.each(['en', 'ja'] as const)('renders the review scope block once in %s', (language) => {
+    const reviewScope = {
+      kind: 'collected' as const,
+      paths: ['src/changed.ts'],
+      source: { kind: 'working_tree' as const, baseRange: { kind: 'base_branch_head' as const } },
+    };
+    const scopeControl = language === 'ja'
+      ? 'レビュー作業だけに適用する範囲制御:'
+      : 'Scope control for review work only:';
+    const rules: readonly ResolvedWorkflowRule[] = [{
+      ref: 'scope-owner',
+      position: 'before_instruction',
+      content: `${scopeControl}\n{review_scope}`,
+    }];
+    const context = workflowRuleContext(rules, language);
+    context.reviewScope = reviewScope;
+
+    const prompt = new InstructionBuilder(
+      makeStep({ name: 'review', instruction: 'STEP_INSTRUCTION' }),
+      context,
+    ).build();
+    const renderedScope = renderTaskReviewScope(reviewScope, language);
+
+    expect(prompt.split(renderedScope)).toHaveLength(2);
+    expect(prompt.split(scopeControl)).toHaveLength(2);
+    expect(prompt).not.toContain('{review_scope}');
   });
 });
 

@@ -3,7 +3,7 @@ Refer only to reports in the Report Directory shown in Workflow Context. Do not 
 
 **Important: Do NOT create or modify production code. Only test files may be created.**
 
-{{include:instructions/contract-family-test-authoring}}
+{{include:instructions/test-obligation-mapping}}
 {{include:instructions/change-contract-traceability}}
 {{include:instructions/test-contract-discrimination}}
 
