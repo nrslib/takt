@@ -895,8 +895,6 @@ describe('WorkflowEngine rate limit fallback', () => {
         makeStep('reviewers', {
           parallel: [
             makeStep('arch-review', {
-              provider: 'codex',
-              model: 'gpt-5',
               rules: [makeRule('done', 'COMPLETE')],
             }),
             makeStep('security-review', {
@@ -910,6 +908,11 @@ describe('WorkflowEngine rate limit fallback', () => {
       ],
     });
     const engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir, {
+      providerRouting: {
+        steps: {
+          'arch-review': { provider: 'codex', model: 'gpt-5' },
+        },
+      },
       rateLimitFallback: {
         switchChain: [
           { provider: 'codex', model: 'gpt-5' },

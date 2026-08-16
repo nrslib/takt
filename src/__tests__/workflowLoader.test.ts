@@ -188,7 +188,7 @@ describe('loadWorkflowByIdentifier', () => {
     expect(workflow!.name).toBe('test-workflow');
   });
 
-  it('should preserve explicit model omission from model null', () => {
+  it('should reject workflow provider/model settings and point to runtime.yaml', () => {
     const filePath = join(tempDir, 'model-null.yaml');
     writeFileSync(filePath, `name: model-null
 initial_step: step1
@@ -202,14 +202,7 @@ steps:
     instruction: "{task}"
 `);
 
-    const workflow = loadWorkflowByIdentifier(filePath, tempDir);
-
-    expect(workflow).not.toBeNull();
-    expect(workflow!.steps[0]).toMatchObject({
-      provider: 'cursor',
-      model: undefined,
-      modelSpecified: true,
-    });
+    expect(() => loadWorkflowByIdentifier(filePath, tempDir)).toThrow(/runtime\.yaml/);
   });
 
   it('should reject callable section map project facet symlinks before expanding workflow_call defaults', () => {
@@ -395,7 +388,7 @@ steps:
     expect(workflow!.name).toBe('test-workflow');
   });
 
-  it('should preserve callable subworkflow provider settings during load', () => {
+  it('should reject callable subworkflow provider settings and point to runtime.yaml', () => {
     const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
     mkdirSync(projectWorkflowsDir, { recursive: true });
     writeFileSync(join(projectWorkflowsDir, 'callable-provider.yaml'), `name: callable-provider
@@ -443,55 +436,7 @@ steps:
         next: COMPLETE
 `);
 
-    const workflow = loadWorkflowByIdentifier('callable-provider', tempDir);
-
-    expect(workflow).not.toBeNull();
-    expect(workflow).toMatchObject({
-      provider: 'codex',
-      model: 'gpt-5-codex',
-      providerOptions: {
-        codex: {
-          networkAccess: true,
-        },
-      },
-      loopMonitors: [
-        {
-          judge: {
-            provider: 'codex',
-            model: 'gpt-5-codex',
-            providerOptions: {
-              codex: {
-                networkAccess: true,
-              },
-            },
-          },
-        },
-      ],
-      steps: [
-        {
-          name: 'review',
-          provider: 'codex',
-          model: 'gpt-5-codex',
-          providerOptions: {
-            codex: {
-              networkAccess: true,
-            },
-          },
-          parallel: [
-            {
-              name: 'security',
-              provider: 'codex',
-              model: 'gpt-5-codex',
-              providerOptions: {
-                codex: {
-                  networkAccess: true,
-                },
-              },
-            },
-          ],
-        },
-      ],
-    });
+    expect(() => loadWorkflowByIdentifier('callable-provider', tempDir)).toThrow(/runtime\.yaml/);
   });
 
   it('should reject unsupported workflow_call child return conditions during load', () => {

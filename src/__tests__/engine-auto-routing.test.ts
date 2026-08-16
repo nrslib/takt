@@ -481,26 +481,27 @@ describe('WorkflowEngine auto routing integration', () => {
     expect(routerPrompt).not.toContain('Report Directory');
   });
 
-  it('Given workflow-level and config-level autoRouting, When a normal step runs, Then the workflow-level config wins', async () => {
+  it('Given runtime autoRouting, When a normal step runs, Then the runtime configuration is used', async () => {
     const step = makeStep('implement', {
       tags: ['implementation'],
       providerRoutingPersonaKey: 'coder',
       rules: [makeRule('done', 'COMPLETE')],
     });
     const config: WorkflowConfig = {
-      name: 'auto-routing-workflow-level',
-      provider: 'mock',
-      autoRouting: {
-        ...createAutoRoutingConfig(),
-        rules: { tags: { implementation: 'lightweight' } },
-      },
+      name: 'auto-routing-runtime-level',
       initialStep: 'implement',
       maxSteps: 1,
       steps: [step],
     };
+    const runtimeAutoRouting = {
+        ...createAutoRoutingConfig(),
+        rules: { tags: { implementation: 'lightweight' } },
+    };
     const stepStarts: StepProviderInfo[] = [];
 
-    engine = new WorkflowEngine(config, tmpDir, 'implement feature', createEngineOptions(tmpDir));
+    engine = new WorkflowEngine(config, tmpDir, 'implement feature', createEngineOptions(tmpDir, {
+      autoRouting: runtimeAutoRouting,
+    }));
     engine.on('step:start', (_step, _iteration, _instruction, providerInfo) => {
       stepStarts.push(providerInfo);
     });
@@ -563,7 +564,6 @@ describe('WorkflowEngine auto routing integration', () => {
       initialStep: 'implement',
       maxSteps: 1,
       steps: [makeStep('implement', { rules: [makeRule('done', 'COMPLETE')] })],
-      autoRouting: createAutoRoutingConfig(),
     };
 
     engine = new WorkflowEngine(config, tmpDir, 'implement feature', createEngineOptions(tmpDir, {
@@ -576,7 +576,6 @@ describe('WorkflowEngine auto routing integration', () => {
 
   it('Given auto routing selects a provider incompatible with a step model, When constructing the engine, Then validation fails fast', () => {
     const step = makeStep('implement', {
-      model: 'sonnet',
       tags: ['implementation'],
       rules: [makeRule('done', 'COMPLETE')],
     });
@@ -591,14 +590,18 @@ describe('WorkflowEngine auto routing integration', () => {
       config,
       tmpDir,
       'implement feature',
-      createEngineOptions(tmpDir),
+      createEngineOptions(tmpDir, {
+        providerRouting: {
+          tags: {
+            implementation: { model: 'sonnet' },
+          },
+        },
+      }),
     )).toThrow(/model 'sonnet'|provider is 'codex'|auto_routing resolved model/i);
   });
 
-  it('Given a step explicitly sets provider, When effective auto_routing exists, Then explicit step provider still wins', async () => {
+  it('Given runtime provider routing sets a provider, When effective auto_routing exists, Then runtime routing wins', async () => {
     const step = makeStep('security-audit', {
-      provider: 'claude-sdk',
-      model: 'claude-opus-4-20250514',
       tags: ['implementation'],
       rules: [makeRule('done', 'COMPLETE')],
     });
@@ -609,7 +612,13 @@ describe('WorkflowEngine auto routing integration', () => {
       steps: [step],
     };
 
-    engine = new WorkflowEngine(config, tmpDir, 'audit security', createEngineOptions(tmpDir));
+    engine = new WorkflowEngine(config, tmpDir, 'audit security', createEngineOptions(tmpDir, {
+      providerRouting: {
+        tags: {
+          implementation: { provider: 'claude-sdk', model: 'claude-opus-4-20250514' },
+        },
+      },
+    }));
 
     mockRunAgentSequence([
       makeResponse({ persona: step.persona, content: 'done' }),
@@ -627,9 +636,8 @@ describe('WorkflowEngine auto routing integration', () => {
     });
   });
 
-  it('Given a step sets only model, When effective auto_routing exists, Then auto routing selects provider and keeps the step model', async () => {
+  it('Given runtime provider routing sets only a model, When effective auto_routing exists, Then auto routing selects provider and keeps the routed model', async () => {
     const step = makeStep('implement', {
-      model: 'gpt-5-step-override',
       tags: ['implementation'],
       rules: [makeRule('done', 'COMPLETE')],
     });
@@ -641,7 +649,13 @@ describe('WorkflowEngine auto routing integration', () => {
     };
     const stepStarts: StepProviderInfo[] = [];
 
-    engine = new WorkflowEngine(config, tmpDir, 'implement feature', createEngineOptions(tmpDir));
+    engine = new WorkflowEngine(config, tmpDir, 'implement feature', createEngineOptions(tmpDir, {
+      providerRouting: {
+        tags: {
+          implementation: { model: 'gpt-5-step-override' },
+        },
+      },
+    }));
     engine.on('step:start', (_step, _iteration, _instruction, providerInfo) => {
       stepStarts.push(providerInfo);
     });
@@ -660,7 +674,7 @@ describe('WorkflowEngine auto routing integration', () => {
       provider: 'codex',
       model: 'gpt-5-step-override',
       providerSource: 'auto.rules',
-      modelSource: 'step',
+      modelSource: 'provider_routing.tags',
       autoRoutingDecision: { candidateName: 'coding' },
     });
     expect(vi.mocked(runAgent).mock.calls[0]?.[2]).toMatchObject({
@@ -916,8 +930,6 @@ describe('WorkflowEngine auto routing integration', () => {
         makeStep('reviewers', {
           parallel: [
             makeStep('explicit-review', {
-              provider: 'mock',
-              model: 'explicit-parallel-model',
               tags: ['implementation'],
               rules: [makeRule('approved', 'COMPLETE')],
             }),
@@ -934,7 +946,13 @@ describe('WorkflowEngine auto routing integration', () => {
     };
     const routingDecision = vi.fn();
 
-    engine = new WorkflowEngine(config, tmpDir, 'review feature', createEngineOptions(tmpDir));
+    engine = new WorkflowEngine(config, tmpDir, 'review feature', createEngineOptions(tmpDir, {
+      providerRouting: {
+        steps: {
+          'explicit-review': { provider: 'mock', model: 'explicit-parallel-model' },
+        },
+      },
+    }));
     engine.on('routing:decision', routingDecision);
     mockRunAgentSequence([
       makeResponse({ persona: 'explicit-review', content: 'approved' }),
@@ -970,7 +988,6 @@ describe('WorkflowEngine auto routing integration', () => {
         makeStep('reviewers', {
           parallel: [
             makeStep('api-review', {
-              model: 'sonnet',
               tags: ['implementation'],
               rules: [makeRule('approved', 'COMPLETE')],
             }),
@@ -986,7 +1003,13 @@ describe('WorkflowEngine auto routing integration', () => {
       config,
       tmpDir,
       'review feature',
-      createEngineOptions(tmpDir),
+      createEngineOptions(tmpDir, {
+        providerRouting: {
+          tags: {
+            implementation: { model: 'sonnet' },
+          },
+        },
+      }),
     )).toThrow(/model 'sonnet'|provider is 'codex'|auto_routing resolved model/i);
     expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
   });

@@ -72,12 +72,6 @@ function createEnv(): TestEnv {
       '  - name: plan',
       '    persona: ./personas/planner.md',
       '    instruction: "{task}"',
-      '    provider_options:',
-      '      codex:',
-      '        network_access: true',
-      '      claude:',
-      '        sandbox:',
-      '          allow_unsandboxed_commands: false',
       '    rules:',
       '      - condition: when(true)',
       '        next: COMPLETE',
@@ -97,22 +91,12 @@ function createEnv(): TestEnv {
       '      fixed:',
       '        - name: architecture',
       '          persona: architecture',
-      '          provider: claude',
-      '          model: claude/fixed-model',
-      '          provider_options:',
-      '            claude:',
-      '              effort: high',
       '          instruction: Review architecture',
       '          rules:',
       '            - condition: approved',
       '      pool:',
       '        - name: frontend',
       '          persona: frontend',
-      '          provider: opencode',
-      '          model: opencode/pool-model',
-      '          provider_options:',
-      '            opencode:',
-      '              variant: pool-variant',
       '          description: Review frontend changes',
       '          instruction: Review frontend',
       '          rules:',
@@ -225,9 +209,7 @@ describe('IT: config provider_options reflection', () => {
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
     expect(options?.providerOptions).toMatchObject({
       codex: { networkAccess: true },
-      claude: {
-        sandbox: { allowUnsandboxedCommands: false },
-      },
+      claude: { skills: defaultClaudeSkills },
     });
   });
 
@@ -260,9 +242,7 @@ describe('IT: config provider_options reflection', () => {
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
     expect(options?.providerOptions).toMatchObject({
       opencode: { networkAccess: false },
-      claude: {
-        sandbox: { allowUnsandboxedCommands: false },
-      },
+      claude: { skills: defaultClaudeSkills },
     });
   });
 
@@ -289,9 +269,7 @@ describe('IT: config provider_options reflection', () => {
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
     expect(options?.providerOptions).toMatchObject({
       codex: { networkAccess: false },
-      claude: {
-        sandbox: { allowUnsandboxedCommands: false },
-      },
+      claude: { skills: defaultClaudeSkills },
     });
   });
 
@@ -322,7 +300,8 @@ describe('IT: config provider_options reflection', () => {
     expect(options?.providerOptions).toMatchObject({
       codex: { networkAccess: true },
       claude: {
-        sandbox: { allowUnsandboxedCommands: false },
+        sandbox: { allowUnsandboxedCommands: true },
+        skills: defaultClaudeSkills,
       },
     });
   });
@@ -370,6 +349,19 @@ describe('IT: config provider_options reflection', () => {
     setGlobalConfig(env.globalDir, [
       'provider: claude',
       'model: global-model',
+      'persona_providers:',
+      '  architecture:',
+      '    provider: claude',
+      '    model: claude/fixed-model',
+      '    provider_options:',
+      '      claude:',
+      '        effort: high',
+      '  frontend:',
+      '    provider: opencode',
+      '    model: opencode/pool-model',
+      '    provider_options:',
+      '      opencode:',
+      '        variant: pool-variant',
       'takt_providers:',
       '  selector:',
       '    provider_options:',
@@ -546,7 +538,13 @@ describe('IT: runAllTasks provider_options reflection', () => {
     process.env.TAKT_CONFIG_DIR = globalDir;
     invalidateGlobalConfigCache();
 
-    vi.mocked(runAgent).mockResolvedValue(makeDoneResponse());
+    vi.mocked(runAgent).mockImplementation(async (persona, task, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: task,
+      });
+      return makeDoneResponse();
+    });
 
     const runner = new TaskRunner(projectDir);
     runner.addTask('test task', { workflow: 'run-config-it' });
@@ -688,20 +686,16 @@ describe('IT: provider block reflection', () => {
     }
   });
 
-  it('step provider block should override global/project provider options when origin is local', async () => {
+  it('project provider block should override global provider options', async () => {
     // Given
     createProviderBlockEnv([
       'name: provider-block-it',
-      'description: step provider block integration test',
+      'description: project provider block integration test',
       'max_steps: 3',
       'initial_step: plan',
       'steps:',
       '  - name: plan',
       '    persona: ./personas/planner.md',
-      '    provider:',
-      '      type: codex',
-      '      model: gpt-5.3',
-      '      network_access: false',
       '    instruction: "{task}"',
       '    rules:',
       '      - condition: when(true)',
@@ -733,14 +727,14 @@ describe('IT: provider block reflection', () => {
     expect(ok).toBe(true);
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
     expect(options?.resolvedProvider).toBe('codex');
-    expect(options?.resolvedModel).toBe('gpt-5.3');
+    expect(options?.resolvedModel).toBe('project-model');
     expect(options?.providerOptions).toEqual({
-      codex: { networkAccess: false, skills: defaultCodexSkills },
+      codex: { networkAccess: true, skills: defaultCodexSkills },
       claude: { skills: defaultClaudeSkills },
     });
   });
 
-  it('workflow_config provider block should be inherited by step without provider', async () => {
+  it('workflow_config provider block should fail at the workflow boundary', async () => {
     // Given
     createProviderBlockEnv([
       'name: provider-block-it',
@@ -763,23 +757,13 @@ describe('IT: provider block reflection', () => {
     setGlobalConfig(globalDir, 'provider: claude');
     invalidateGlobalConfigCache();
 
-    // When
-    const ok = await executeTask({
+    // When / Then
+    await expect(executeTask({
       task: 'test task',
       cwd: projectDir,
       projectCwd: projectDir,
       workflowIdentifier: 'provider-block-it',
-    });
-
-    // Then
-    expect(ok).toBe(true);
-    const options = vi.mocked(runAgent).mock.calls[0]?.[2];
-    expect(options?.resolvedProvider).toBe('codex');
-    expect(options?.resolvedModel).toBe('workflow-model');
-    expect(options?.providerOptions).toEqual({
-      codex: { networkAccess: true, skills: defaultCodexSkills },
-      claude: { skills: defaultClaudeSkills },
-    });
+    })).rejects.toThrow(/runtime\.yaml/);
   });
 
   it('project provider block should provide providerOptions when step and workflow_config do not specify provider', async () => {
@@ -874,7 +858,7 @@ describe('IT: provider block reflection', () => {
     });
   });
 
-  it('workflow step claude_terminal provider_options should reach runAgent from YAML', async () => {
+  it('project claude_terminal provider_options should reach runAgent from config.yaml', async () => {
     createProviderBlockEnv([
       'name: provider-block-it',
       'description: claude terminal provider options integration test',
@@ -883,24 +867,27 @@ describe('IT: provider block reflection', () => {
       'steps:',
       '  - name: plan',
       '    persona: ./personas/planner.md',
-      '    provider: claude-terminal',
-      '    provider_options:',
-      '      claude:',
-      '        effort: high',
-      '        allowed_tools:',
-      '          - Read',
-      '          - Edit',
-      '      claude_terminal:',
-      '        backend: tmux',
-      '        timeout_ms: 900000',
-      '        keep_session: false',
-      '        transcript_poll_interval_ms: 500',
       '    instruction: "{task}"',
       '    rules:',
       '      - condition: when(true)',
       '        next: COMPLETE',
     ].join('\n'));
     setGlobalConfig(globalDir, 'provider: claude');
+    setProjectConfig(projectDir, [
+      'provider: claude-terminal',
+      'model: terminal-model',
+      'provider_options:',
+      '  claude:',
+      '    effort: high',
+      '    allowed_tools:',
+      '      - Read',
+      '      - Edit',
+      '  claude_terminal:',
+      '    backend: tmux',
+      '    timeout_ms: 900000',
+      '    keep_session: false',
+      '    transcript_poll_interval_ms: 500',
+    ].join('\n'));
     invalidateGlobalConfigCache();
 
     const ok = await executeTask({
@@ -913,6 +900,7 @@ describe('IT: provider block reflection', () => {
     expect(ok).toBe(true);
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
     expect(options?.resolvedProvider).toBe('claude-terminal');
+    expect(options?.resolvedModel).toBe('terminal-model');
     expect(options?.allowedTools).toEqual(['Read', 'Edit']);
     expect(options?.providerOptions).toEqual({
       codex: { skills: defaultCodexSkills },
