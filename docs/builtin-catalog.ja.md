@@ -86,6 +86,7 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 | | `audit-architecture-dual` | フルスタックアーキテクチャ監査。フロントエンド/バックエンドの境界とクロスレイヤー配線を列挙。 |
 | 🎵 TAKT開発 | `takt-default` | 計画、テスト、実装、レビュー、修正へ TAKT 固有知識を注入して共通開発コアを実行する workflow です。 |
 | | `takt-experimental` | 共通開発コアの裁定・修正検証・follow-up review・要件充足の最終確認へ、TAKT固有 reviewer と実装 companion を追加する実験的 TAKT 開発 workflow です。 |
+| | `takt-experimental-team` | `takt-experimental` の計画・テスト・レビュー・最終ゲートを維持し、schema 制約に合わせて dynamic facets と companion を使わない静的な Team Leader coder execution で実装・修正・再修正を行う実験的 TAKT 開発 workflow です。 |
 | | `auto-improvement-loop` | PR・Issue・新規改善を巡回しながら次の task を積み続ける orchestration loop workflow。 |
 | | `review-takt-default` | TAKT開発向け多角レビュー（AIアンチパターン・コーディングレビュー含む5観点レビュー）。 |
 | | `review-fix-takt-default` | レビュー対象を収集してから、TAKT固有ファセットを共通開発フローへ注入するワークフロー。 |

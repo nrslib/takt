@@ -81,6 +81,7 @@ workflow_categories:
     workflows:
       - takt-default
       - takt-experimental
+      - takt-experimental-team
       - auto-improvement-loop
       - review-takt-default
       - review-fix-takt-default
