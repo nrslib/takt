@@ -6,7 +6,7 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createIsolatedEnv, type IsolatedEnv, updateIsolatedConfig } from '../helpers/isolated-env';
-import { runTakt } from '../helpers/takt-runner';
+import { formatTaktRunResult, runTakt } from '../helpers/takt-runner';
 import { createLocalRepo, type LocalRepo } from '../helpers/test-repo';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -466,8 +466,8 @@ describe('E2E: runtime.prepare with provider', () => {
       args: [
         '--task',
         [
-          'Run `./gradlew test` and `npm test` in the repository root.',
-          'If both commands succeed, respond exactly with: Task completed',
+          'In the repository root, run exactly this command once: `./gradlew test && npm test`.',
+          'Only if the entire command succeeds, respond exactly with: Task completed',
         ].join(' '),
         '--workflow', workflowPath,
       ],
@@ -477,8 +477,9 @@ describe('E2E: runtime.prepare with provider', () => {
     });
 
     registerRuntimeTmpDirectory(repo.path, envFile, runtimeTempRoot);
+    const runDiagnostics = formatTaktRunResult(result);
 
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode, runDiagnostics).toBe(0);
 
     expect(existsSync(runtimeRoot)).toBe(true);
     expect(existsSync(join(runtimeRoot, 'cache'))).toBe(true);
@@ -486,8 +487,14 @@ describe('E2E: runtime.prepare with provider', () => {
     expect(existsSync(join(runtimeRoot, 'state'))).toBe(true);
     expect(existsSync(join(runtimeRoot, 'gradle'))).toBe(true);
     expect(existsSync(join(runtimeRoot, 'npm'))).toBe(true);
-    expect(existsSync(join(runtimeRoot, 'gradle', 'gradle-ok.txt'))).toBe(true);
-    expect(existsSync(join(runtimeRoot, 'npm', 'npm-ok.txt'))).toBe(true);
+    expect(
+      existsSync(join(runtimeRoot, 'gradle', 'gradle-ok.txt')),
+      runDiagnostics,
+    ).toBe(true);
+    expect(
+      existsSync(join(runtimeRoot, 'npm', 'npm-ok.txt')),
+      runDiagnostics,
+    ).toBe(true);
     expect(existsSync(envFile)).toBe(true);
 
     const envContent = readFileSync(envFile, 'utf-8');

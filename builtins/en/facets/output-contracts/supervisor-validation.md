@@ -34,3 +34,4 @@
 - Select REJECT only when an unfulfilled requirement or unresolved finding is recorded as an actionable family
 - Select BLOCKED only when current code and preceding reports cannot decide a requirement and task-scope code changes cannot provide the required external decision or information
 - Do not request or inspect machine-gate execution status, results, or logs, including tests and builds, and do not use their absence as a reason for REJECT or BLOCKED
+- `Actionable Families` is the only selector-facing source of the current unresolved actionable set. Include only families that support the current `REJECT`; never copy a row there solely from carry-forward, requirements fulfillment, prior-finding re-evaluation, finding dispositions, or history

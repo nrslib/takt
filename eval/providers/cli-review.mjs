@@ -1,10 +1,43 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { cpSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnManagedProcess } from '../../dist/shared/utils/spawn.js';
 
 const evalDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+export function createIsolatedWorkingDirectory(sourceDirectory, copyDirectory = cpSync) {
+  const isolatedRoot = mkdtempSync(join(tmpdir(), 'takt-prompt-eval-fixture-'));
+  const cwd = join(isolatedRoot, 'project');
+  try {
+    copyDirectory(sourceDirectory, cwd, { recursive: true });
+  } catch (error) {
+    rmSync(isolatedRoot, { recursive: true, force: true });
+    throw error;
+  }
+  return {
+    cwd,
+    cleanup: () => rmSync(isolatedRoot, { recursive: true, force: true }),
+  };
+}
+
+export function prepareWorkingDirectory(config) {
+  const sourceDirectory = resolve(evalDirectory, config.working_dir);
+  if (!config.isolate_working_dir) {
+    return { sourceDirectory, cwd: sourceDirectory, cleanup: () => undefined };
+  }
+
+  const isolated = createIsolatedWorkingDirectory(sourceDirectory);
+  return {
+    sourceDirectory,
+    ...isolated,
+  };
+}
+
+export function rewriteWorkingDirectoryPaths(prompt, workingDirectory) {
+  if (workingDirectory.sourceDirectory === workingDirectory.cwd) return prompt;
+  return prompt.replaceAll(workingDirectory.sourceDirectory, workingDirectory.cwd);
+}
 
 export async function runProcess(command, args, { cwd, input, timeoutMs, abortSignal }) {
   if (abortSignal?.aborted) {
@@ -83,7 +116,9 @@ export default class CliReviewProvider {
   }
 
   async callApi(prompt, _context, options = {}) {
-    const cwd = resolve(evalDirectory, this.config.working_dir);
+    const workingDirectory = prepareWorkingDirectory(this.config);
+    const { cwd } = workingDirectory;
+    const isolatedPrompt = rewriteWorkingDirectoryPaths(prompt, workingDirectory);
     const timeoutMs = this.config.timeout_ms ?? 900_000;
 
     try {
@@ -95,7 +130,7 @@ export default class CliReviewProvider {
           '--permission-mode', 'dontAsk',
           '--setting-sources=project',
           '--no-session-persistence',
-        ], { cwd, input: prompt, timeoutMs, abortSignal: options.abortSignal });
+        ], { cwd, input: isolatedPrompt, timeoutMs, abortSignal: options.abortSignal });
         return { output };
       }
 
@@ -111,7 +146,7 @@ export default class CliReviewProvider {
             '-c', `model_reasoning_effort=${this.config.reasoning_effort}`,
             '-o', outputPath,
             '-',
-          ], { cwd, input: prompt, timeoutMs, abortSignal: options.abortSignal });
+          ], { cwd, input: isolatedPrompt, timeoutMs, abortSignal: options.abortSignal });
           return { output: readFileSync(outputPath, 'utf8') };
         } finally {
           rmSync(tempDirectory, { recursive: true, force: true });
@@ -121,6 +156,8 @@ export default class CliReviewProvider {
       return { error: `Unsupported CLI provider: ${this.config.cli}` };
     } catch (error) {
       return { error: error instanceof Error ? error.message : String(error) };
+    } finally {
+      workingDirectory.cleanup();
     }
   }
 }

@@ -224,6 +224,7 @@ const REVIEW_INSTRUCTION_PARAM_BY_PERSONA: Readonly<Record<string, string>> = {
   'coding-reviewer': 'coding_review_instruction',
   'ai-antipattern-reviewer': 'ai_antipattern_review_instruction',
   'frontend-reviewer': 'frontend_review_instruction',
+  'cqrs-es-reviewer': 'cqrs_es_review_instruction',
 };
 
 function expectResolvedReviewerInstructions(
@@ -565,17 +566,27 @@ describe('experimental builtin workflow', () => {
         if (reviewRoot.parallel === undefined || Array.isArray(reviewRoot.parallel)) {
           throw new Error(`Review workflow "${reviewerSuite.name}" has no dynamic parallel reviewers`);
         }
-        expect(reviewRoot.parallel.fixed.map(({ name }) => name)).toEqual([
-          'coding-review',
-          'ai-antipattern-review',
-        ]);
-        expect(reviewRoot.parallel.pool.map(({ name }) => name)).toEqual([
-          'architecture-review',
-          'frontend-review',
-          'backend-review',
-          'security-review',
-          'testing-review',
-        ]);
+        expect(reviewRoot.parallel.fixed.map(({ name }) => name)).toEqual(
+          workflowName === 'experimental'
+            ? ['ai-antipattern-review']
+            : ['coding-review', 'ai-antipattern-review'],
+        );
+        expect(reviewRoot.parallel.pool.map(({ name }) => name)).toEqual(
+          workflowName === 'experimental'
+            ? [
+                'architecture-review',
+                'frontend-review',
+                'backend-review',
+                'cqrs-es-review',
+                'security-review',
+                'testing-review',
+              ]
+            : [
+                'architecture-review',
+                'security-review',
+                'testing-review',
+              ],
+        );
         const securityDescription = reviewRoot.parallel.pool
           .find(({ name }) => name === 'security-review')?.description;
         expect(securityDescription).toContain(
@@ -664,8 +675,6 @@ describe('experimental builtin workflow', () => {
         'coding-review',
         'ai-antipattern-review',
         'architecture-review',
-        'frontend-review',
-        'backend-review',
         'security-review',
         'testing-review',
       ]);
@@ -850,7 +859,6 @@ describe('experimental builtin workflow', () => {
         selection(['testing'], 'The replanned implementation still changes test boundaries.'),
         responseForNext(implementation, 'implement', 'COMPLETE'),
         parallelSelection([], 'The fixed TAKT reviewers cover the changed path.'),
-        response(reviewerSuite, 'coding-review', 'coding-reviewer', 'needs_fix'),
         response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'needs_fix'),
         responseForNext(peerReview, 'review-adjudication', 'remediation'),
         responseForNext(remediation, 'fix-plan', 'fix'),
@@ -860,7 +868,6 @@ describe('experimental builtin workflow', () => {
         selection(['testing'], 'The second replanned implementation changes test boundaries.'),
         responseForNext(implementation, 'implement', 'COMPLETE'),
         parallelSelection([], 'The fixed TAKT reviewers cover the replanned path.'),
-        response(reviewerSuite, 'coding-review', 'coding-reviewer', 'approved'),
         response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
         responseForNext(peerReview, 'review-adjudication', 'final-gate'),
         responseForReturn(peerReview, 'final-gate', 'need_replan'),
@@ -868,7 +875,6 @@ describe('experimental builtin workflow', () => {
         selection(['testing'], 'The final-gate replan still changes test boundaries.'),
         responseForNext(implementation, 'implement', 'COMPLETE'),
         parallelSelection([], 'The fixed reviewers cover the final-gate replan.'),
-        response(reviewerSuite, 'coding-review', 'coding-reviewer', 'approved'),
         response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
         responseForNext(peerReview, 'review-adjudication', 'final-gate'),
         responseForNext(peerReview, 'final-gate', 'COMPLETE'),
@@ -994,7 +1000,6 @@ describe('experimental builtin workflow', () => {
         responseForNext(implementation, 'implement', 'COMPLETE'),
         ...acceptedCompanionFinding(responseForNext(implementation, 'implement', 'COMPLETE')),
         parallelSelection(['testing-review'], 'Testing review is required.'),
-        response(reviewerSuite, 'coding-review', 'coding-reviewer', 'approved'),
         response(reviewerSuite, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
         response(reviewerSuite, 'testing-review', 'testing-reviewer', 'approved'),
         responseForNext(peerReview, 'review-adjudication', 'final-gate'),

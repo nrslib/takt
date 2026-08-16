@@ -6,6 +6,49 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
+## [0.59.1] - 2026-08-16
+
+### Fixed
+
+- ビルトインの review-fix ループが `review-resolution.md` の過去 finding を再裁定しなくなりました (#1393)。裁定開始時に存在する `review-resolution.md` は裁定履歴および当該ステップの出力先として扱い、finding の提出元にはしません。actionable 集合に入れるのは、直前に完了したレビューラウンドのレビュアーレポートが提出した finding だけです。セレクターによるレビュアー継続は現在の `Actionable Families` セクションのみを根拠とし、履歴・disposition・carry-forward の行では継続されません。また、最新ラウンドが finding なしで承認しているのに検証済みの修正が resolution ファイル上で繰り返されるだけの場合、ループモニターはレビュアーや同じ修正の再実行ではなく、宣言済みの非再試行の結果を選びます。
+
+## [0.59.0] - 2026-08-16
+
+### Added
+
+- ワークフロー全体ルール（`all_steps.rules`）を追加しました (#1366)。ワークフローが Markdown のルールファイルを宣言でき、全エージェントステップの Phase 1 プロンプトへ自動実行ルールの後、または `position: before_instruction` で instruction の直前に注入されます。ルールファイルは `workflows/rules/` 配下の `<ref>.md` で、プロジェクト → グローバル → ビルトインの順に解決されます。呼び出されたワークフローは親のルールを自分のルールより先に加算継承します。ルールは出力レポート・ステータスルーティング・companion レビュアーには適用されません。
+- レビュアーの completion retry（`completion_retry`）を追加しました (#1312, #1337, #1341, #1353)。ステップが `completion_retry: { retry_instruction: <facet>, min_retry?, max_retry? }` で有界の完了性チェックにオプトインできます。レビュアーの成功応答のたびに新規の completion judge がレポートを元の instruction・タスク・スコープ・証拠と突き合わせ、不完全な結果は同一レビュアーセッションで retry 上限（既定 4）まで再試行されます。judge は `runtime.yaml` の新設シート `internal_agents.review-completion-judge` で割り当てられます。
+- セレクターガイダンスを追加しました (#1205, #1338)。動的 parallel と `dynamic_facets` のセレクターに、ワークフロー既存の persona / instruction facet を参照する `selector` ブロック（`persona` は任意、`instruction` は必須）を指定できます。ガイダンスは候補 ID の選び方だけを記述し、証拠参照・読み取り専用の structured 実行・候補検証・出力契約は TAKT 側が保持します。
+- 全プロバイダに無応答 deadline を導入しました (#1351, #1358)。`guards.call_timeout_ms` が `codex`、`opencode`、`claude` / `claude-sdk`、`claude_terminal`、`cursor`、`copilot`、`kiro`、`pi` に適用されます。タイマーは観測可能なプロバイダイベントごとにリセットされ（既定 60 分、60,000〜86,400,000 ms）、累積実行時間には上限を設けません。OpenCode では呼び出し単位の wall-clock 上限と別建ての 10 分ストリーム idle タイムアウトを置き換えます — イベントが流れ続ける限り長時間の健全な呼び出しは走り続け、in-flight のツール呼び出しは deadline の 6 倍経過で stale になります。`claude_terminal.timeout_ms` は `guards.call_timeout_ms` 未設定時のみ使われます。
+- 要求シナリオ（experimental）を追加しました (#1309, #1310, #1313, #1314, #1364)。`experimental` / `takt-experimental` ワークフローが、変種列挙・数値境界カバレッジを持つ要求シナリオから計画・テスト作成・fix-plan・final gate を実行できます。シナリオとテストの紐付けはコードへのシナリオ ID 記載ではなくレポートの対応表で行います。
+
+### Changed
+
+- **BREAKING:** Finding Contract の設定・実行・永続化機構を削除しました (#1321)。旧構文を含む workflow は移行先を示す load error になり、既存の `finding-contract.sqlite` は削除・移行・読み込みを行わずそのまま保持します。レビュー構成は `review-adjudication`、要求シナリオ、`final-gate` を使用してください。Finding Contract 専用のランタイムシート（`intake-normalizer`、`findings-manager`、`terminal-adjudicator`、`escalation-reviewer`）と profile の `escalate` 宣言も併せて削除され、`internal_agents` は `selector`、`assistant`、`loop-judge`、`review-completion-judge` になりました。
+- **BREAKING:** `runtime.yaml` の auto routing は明示的な pool 割り当てを必須にしました (#1266, #1336)。`provider.defaults` は固定 `profile` または順序付き `ladder` のいずれかで、`pool` を指定できなくなりました。auto-routing されるのは `pool` を明示宣言した `personas` / `tags` / `steps` ターゲットだけです。pool のないターゲット、ワークフロー外の処理、その他の補助処理は `provider.defaults` を使い、暗黙のデフォルト pool はありません。`workflow_call` の子は親の auto-routing コンテキストを保持し、`takt workflow preview` は実行時と同じ割り当てを表示します。
+- Companion レビュアーをオプトイン化し、ラウンド単位の指摘配達へ再設計しました (#1307, #1311, #1323, #1344, #1354, #1362, #1367)。Companion はデフォルト無効になり、`runtime.yaml` のトップレベル `companion.enabled: true` で有効化します（グローバルとプロジェクトの値は論理 AND で合成）。厳密分離のプロバイダ制限は撤廃され、companion の structured 呼び出しはプロバイダ中立の新規セッション transport を使い（OpenCode も対象）、companion のレビュアー・モデレーター・セレクター呼び出しは常に読み取り専用で実行されます。finding のライフサイクル管理はラウンド単位の配達に置き換わりました。各レビューラウンドは新規の finding リストを作り、任意のモデレーターが個別に受理・棄却し、受理された finding は実装エージェントの次のフォローアッププロンプトへ直接埋め込まれ、JSONL メールボックスは監査ログ専用になります。companion の finding と失敗は助言的診断であり、ワークフローの遷移は通常の条件と Phase 3 判定だけで決まります。5 分固定の companion 呼び出しタイマーは削除され、プロバイダ deadline に一本化されました。
+- ビルトインの開発・レビュー系ワークフローは、独立した merge-readiness レビューに代えて supervisor の最終要件チェックで締めるようになりました (#1370, #1372)。`merge-readiness-reviewer` / `merge-readiness-supervisor` の persona とステップは削除され、final gate の責務は要件充足・finding 解消・再発台帳引き継ぎの判定に限定され、プロバイダルーティングは `final-gate` タグまたは `supervise` ステップを対象にします。
+- ビルトインのセキュリティレビューは全系統で脅威モデルに基づいてレビュアーを選択するようになりました (#1380)。セキュリティレビュアーは peer-review 系・単体レビュー系の固定メンバーではなくなり、既定では選択しない基準を持つ外側 pool に置かれ、境界別のセキュリティナレッジが対象ごとに動的選択されます。
+- ビルトインのレビュー・修正プロンプトが堂々巡りせず収束するようになりました (#1308, #1329, #1330, #1332, #1343, #1346, #1350, #1368, #1369, #1379, #1382)。裁定結果が後続のレビュー・修正ラウンドへ届くようになり、不変条件台帳は裁定経由で remediation インスタンス間を継承され、同じ担当箇所・同じ不変条件の finding は新規 family を開かず既存 family へ合流します。fix plan は有界状態の主張に具体的証拠を必須とし、原因未確認のまま修正計画を確定できません。レビュースコープ契約の強制、デフォルトの明示的優先度、主要実行パスの優先、文書化済み・未実装の設定キーの検出に加え、review-fix のセレクターは未解消 finding の提出者を解消まで選び続けます。
+- ビルトインのレビュアーがテスト追加を要求するのは観測可能な未検出 failure に限られるようになりました (#1318)。実装の言い換えにすぎないテストをレビュアーが要求しないよう testing ポリシーを見直しました。
+
+### Fixed
+
+- report 参照を「在るなら見つかる・無いなら進む」へ修正しました (#1377)。requeue でコピーされた report は resume report snapshot に記録され、連鎖 requeue を含む新しい run から確実に参照できます。欠落した report・成果物は読み出し経路（instruction の `{report:...}`、judge report、動的セレクター、exec / interactive の読み出し、trace 生成）で throw せず欠落を示す一文へ置換されます。破損・整合性・安全境界の fail-fast は維持しています。
+- requeue を堅牢化しました (#1359, #1363, #1365, #1374)。pre-step 失敗後もタスクを requeue でき、ステップのレポート採番は継承成果物の続きから振られ、restart path の突合は `call_instance` に依存せず、一意に解決できない旧形式成果物は run 全体を起動不能にせず index から除外されます（無いものとして扱い、namespace は衝突防止のため予約）。
+- parallel ステップの terminal error を明示的に集約し、ビルトインのレビュー系ワークフローはレビュアーのプロバイダエラー時に有界の再試行を行うようになりました (#1360)。
+- Codex: 深い推論中に無応答 watchdog が誤発火しないよう `model_reasoning_summary: auto` を常時有効化し、推論中もストリームイベントが流れるようにしました (#1344)。パース失敗は parallel 集約・ワークフロー中断を通じて failure カテゴリを保持したまま表面化し、空出力に見えなくなりました (#1272, #1316)。ツールシェルは呼び出し元の `PATH` を保持します (#1386)。
+- Kiro: compaction のみの応答を空の成功出力として扱わず、エラーとして拒否するようになりました (#1297, #1298)。
+- 動的セレクターへ渡す過大な diff は、セレクター入力を溢れさせず切り詰めるようになりました (#1328)。
+
+### Internal
+
+- prompt-eval ハーネスを `tools/opencode-probe` へ移設し (#1361)、Finding Contract 時代の eval スイートと評価資産を削除しました (#1320, #1334)。
+- Mock E2E シャードにもユニットシャードと同じ birpc ノイズの一回限り再計測を適用しました (#1333)。
+- `@openai/codex-sdk` を 0.147.0 へ更新しました (#1371)。
+- レビュアー評価の合成・動的 facet 選択・CLI 実行境界の eval を拡充し、非挙動・冗長なテストを削減しました (#1315, #1317, #1372, #1375, #1378, #1381, #1383)。
+- Pi プロバイダのグローバル設定境界とリソース読み込み例を文書化し (#1340, #1348, #1349)、Finding Contract 削除で機械的に壊れた文書を修復しました (#1322)。
+
 ## [0.58.0] - 2026-08-11
 
 ### Added

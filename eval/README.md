@@ -54,6 +54,15 @@ execution. It checks that a planner does not treat failure during parallel
 execution as proof that serial execution is the fix. Invoke it explicitly with
 `npm run eval:prompts:fix-plan-cause-check`.
 
+The `fix-plan-bounded-proof` suite runs Claude Opus 5, Codex Luna Max, and
+Codex Sol High against a regression extracted from a real remediation run. It
+checks that a planner replaces umbrella coverage with concrete report-format,
+run-history, branch-state, and locale-consumer rows, including delegated helper
+limits and absence behavior. The provider receives an isolated fixture copy so
+it cannot read the rubric, and the command disables generation caching so all
+nine repeated rows are independent CLI invocations. Invoke it with
+`npm run eval:prompts:fix-plan-bounded-proof`.
+
 The `initial-review-external-identity-wiring` suite runs the actual initial
 `coding-review` composition from `takt-experimental-review` on Claude Opus 5,
 Codex Luna Max (`gpt-5.6-luna`, reasoning effort `max`), and Codex Sol High
@@ -95,6 +104,7 @@ Run it through `npm run eval:prompts:security-review-method`.
 | `fix-self-scan` | peer-review / fix | fix-self-scan (work copy) | whether the coder's post-edit self-scan removes change-induced dead code, keeps the declared layer direction, and consolidates duplicated override semantics instead of shipping a plan-complete but messy fix |
 | `fix-loop-convergence` | development-remediation / fix-retry, fix-verifier, fix, loop-monitor | inline scenario fixtures (`cases/fix-loop-convergence/`) | whether repeated failures switch from local patches to a structural fix, history is preserved across retries, new regressions are found, and the monitor chooses the correct next step, measured on Claude Opus, Codex Luna Max, and Codex Sol High |
 | `fix-plan-cause-check` | peer-review / fix-plan | fix-plan-cause-check | whether fix-plan distinguishes a duplicate review update from possible causes and declines to serialize parallel execution until the cause is confirmed, measured on both Claude Opus and Codex Luna Max |
+| `fix-plan-bounded-proof` | peer-review / fix-plan | fix-plan-bounded-proof | whether Opus 5, Luna Max, and Sol High turn broad format, consumer, and boundary claims into source-backed concrete rows for report variants, helper limits, absence states, branch identity, and locale consumers |
 | `fix-plan-fresh-findings` | peer-review / fix-plan | fix-plan-fresh-findings | whether fix-plan uses the accepted group of findings, covers every affected use of the same rule, and does not revive findings that were excluded |
 | `fix-plan-boundary-preflight` | peer-review / fix-plan | fix-plan-boundary-preflight | whether fix-plan rejects a locally valid method that violates its representation and persistence boundary |
 | `review-family-closure` | peer-review-suite-base / coding-review | review-family-closure | whether one review reports every path affected by the same contract defect instead of stopping at a representative example |
@@ -213,6 +223,7 @@ npm run eval:prompts:prepare     # prepare only (inspect eval/prompts/)
 npm run eval:prompts:fix-closure
 npm run eval:prompts:fix-plan-fresh-findings
 npm run eval:prompts:fix-plan-boundary-preflight
+npm run eval:prompts:fix-plan-bounded-proof
 npm run eval:prompts:review-family-closure
 npm run eval:prompts:initial-review-contract-discovery
 npm run eval:prompts:initial-review-external-identity-wiring
@@ -253,6 +264,8 @@ relative to the config file's directory (`eval/`), not the process cwd.
   `fix-loop-convergence` and `initial-review-external-identity-wiring` suites
   are explicit production-condition exceptions: their Codex CLI rows use
   Luna with reasoning effort `max` and Sol with reasoning effort `high`.
+  `fix-plan-bounded-proof` uses the same production-condition model settings,
+  serial execution, and uncached generation for its red/green comparison.
 - Iterating on **assertions only** is free: promptfoo caches provider
   responses, so unchanged prompts re-score against cached outputs without
   calling codex. Facet changes alter the prompt and trigger real calls

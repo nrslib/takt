@@ -26,6 +26,7 @@ subworkflow:
     coding_review_instruction: { type: facet_ref, facet_kind: instruction, default: coding-review }
     ai_antipattern_review_instruction: { type: facet_ref, facet_kind: instruction, default: ai-antipattern-review }
     frontend_review_instruction: { type: facet_ref, facet_kind: instruction, default: frontend-review }
+    cqrs_es_review_instruction: { type: facet_ref, facet_kind: instruction, default: cqrs-es-review }
 facet_pools:
   takt-security-review-facets:
     uses: takt-security-review-facets
@@ -33,21 +34,40 @@ initial_step: review
 steps:
   - name: review
     uses: experimental-review
-    with:
-      review_policy_additions:
-        $param: review_policy_additions
-      review_knowledge_additions:
-        $param: review_knowledge_additions
-      security_review_knowledge_additions:
-        $param: security_review_knowledge_additions
-      security_review_pool:
-        $param: security_review_pool
-      architecture_review_instruction: { $param: architecture_review_instruction }
-      security_review_instruction: { $param: security_review_instruction }
-      testing_review_instruction: { $param: testing_review_instruction }
-      coding_review_instruction: { $param: coding_review_instruction }
-      ai_antipattern_review_instruction: { $param: ai_antipattern_review_instruction }
-      frontend_review_instruction: { $param: frontend_review_instruction }
+    parallel:
+      fixed:
+        - uses: experimental-coding-reviewer
+          with:
+            review_policy_additions: { $param: review_policy_additions }
+            review_knowledge_additions: { $param: review_knowledge_additions }
+            coding_review_instruction: { $param: coding_review_instruction }
+          rules: &reviewer_rules [{ condition: approved }, { condition: needs_fix }]
+        - uses: experimental-ai-antipattern-reviewer
+          with:
+            review_policy_additions: { $param: review_policy_additions }
+            review_knowledge_additions: { $param: review_knowledge_additions }
+            ai_antipattern_review_instruction: { $param: ai_antipattern_review_instruction }
+          rules: *reviewer_rules
+      pool:
+        - uses: experimental-architecture-reviewer
+          with:
+            review_policy_additions: { $param: review_policy_additions }
+            review_knowledge_additions: { $param: review_knowledge_additions }
+            architecture_review_instruction: { $param: architecture_review_instruction }
+          rules: *reviewer_rules
+        - uses: experimental-security-reviewer
+          with:
+            review_policy_additions: { $param: review_policy_additions }
+            security_review_knowledge_additions: { $param: security_review_knowledge_additions }
+            security_review_pool: { $param: security_review_pool }
+            security_review_instruction: { $param: security_review_instruction }
+          rules: *reviewer_rules
+        - uses: experimental-testing-reviewer
+          with:
+            review_policy_additions: { $param: review_policy_additions }
+            review_knowledge_additions: { $param: review_knowledge_additions }
+            testing_review_instruction: { $param: testing_review_instruction }
+          rules: *reviewer_rules
     rules:
       self:
         - condition: any("error")
@@ -60,7 +80,5 @@ steps:
         coding-review: [{ condition: approved }, { condition: needs_fix }]
         ai-antipattern-review: [{ condition: approved }, { condition: needs_fix }]
         architecture-review: [{ condition: approved }, { condition: needs_fix }]
-        frontend-review: [{ condition: approved }, { condition: needs_fix }]
-        backend-review: [{ condition: approved }, { condition: needs_fix }]
         security-review: [{ condition: approved }, { condition: needs_fix }]
         testing-review: [{ condition: approved }, { condition: needs_fix }]

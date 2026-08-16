@@ -24,4 +24,6 @@ Review the latest review and fix reports in the Report Directory and determine w
 - When a post-fix review conflicts with the current code, do not repeat the same fix; choose among the available verification, recovery, or stop options.
 - Treat counts as supporting information and judge fix progress separately from report-content convergence.
 
-Choose a stop outcome only when implementation is incomplete or the report has not converged and no available action can break the deadlock.
+If the latest reviewer reports from the immediately preceding completed review round all say `APPROVE` and contain no `new`, `persists`, or `reopened` finding, but the same actionable family appears only in the `review-resolution.md` currently present in the Report Directory, and the `fix-verification.md` for the repeated fix includes that family and records the result as `verified`, do not treat the repetition as a normal stall that another review or fix can resolve. Choose the current loop monitor's declared outcome for a loop that another review or fix cannot resolve; do not choose an outcome that directly retries reviewers or the same fix work.
+
+Choose an outcome that does not retry the same review/fix work only when either implementation is incomplete or the report has not converged, and no available action can break the deadlock, or when the resolution-only repetition described above is present. Do not directly retry reviewers or the same fix work for that repetition.

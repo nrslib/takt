@@ -1,0 +1,68 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'TAKT facet eval: fix-plan concretizes bounded inputs, states, helpers, and consumers'
+
+prompts:
+  - file://prompts/fix-plan-bounded-proof.phase1.md
+
+providers:
+  - id: file://providers/cli-review.mjs
+    label: claude-opus
+    config:
+      cli: claude
+      model: claude-opus-5
+      working_dir: fixtures/fix-plan-bounded-proof
+      isolate_working_dir: true
+  - id: file://providers/cli-review.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-5.6-luna
+      reasoning_effort: max
+      working_dir: fixtures/fix-plan-bounded-proof
+      isolate_working_dir: true
+  - id: file://providers/cli-review.mjs
+    label: codex-sol-high
+    config:
+      cli: codex
+      model: gpt-5.6-sol
+      reasoning_effort: high
+      working_dir: fixtures/fix-plan-bounded-proof
+      isolate_working_dir: true
+
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+
+evaluateOptions:
+  maxConcurrency: 1
+  repeat: 3
+
+tests:
+  - description: 'fix-plan: replace umbrella coverage with source-backed concrete state rows'
+    vars:
+      task: file://cases/fix-plan-bounded-proof-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: fix-plan/bounded-proof
+        value: |
+          Judge the plan's source-backed behavioral coverage, not headings, table shape, row order, or exact wording. Bullets or prose pass when every required state remains independently traceable.
+
+          Pass only if all eight requirements below are satisfied conjunctively:
+
+          1. Evidence: for every group, identify the actual source path and function or artifact that supports the claim, and trace caller/data flow rather than merely listing case names.
+          2. Report contracts: identify `supervisor-validation.md`, `review-decision.md`, and `summary.md` from the recorded artifacts; cover their supported English and Japanese headings; require a header-only findings table to produce zero findings; apply validation > decision > summary primary priority; route the same structured primary summary to failed-instruct context and PR body; and ignore rather than combine an unknown report.
+          3. Run resolution: distinguish saved slug, matching run within displayed positions 1 through 10, matching run at position 11 or later, and no matching run. State that `findRunForTask` incorrectly delegates to the 10-item `listRecentRuns`, and that no-match must leave slug, report, and order empty instead of reading the latest unrelated run.
+          4. PR branch identity: distinguish missing branch, matching non-detached branch, mismatched branch, and detached `HEAD`; state the expected return/result for each and require zero confirm/commit/push/PR side effects for every invalid state.
+          5. Prompt consumers: trace both `prompts/en/failed-instruct.md` and `prompts/ja/failed-instruct.md` from a real command entry through `buildProviderPrompt` to the provider call; preserve hostile evidence as literal data in both; and treat the already-covered English path as verify-only unless evidence requires a code edit.
+          6. Actionability: turn the discoveries into bounded edit or verify-only targets, implementation constraints, observable expected results, and a regression or disproof that fails for the current bug. A source inventory without these plan details fails.
+          7. Precision: do not add a locale, report type, unreachable archive preview, legacy/future state, or mechanical cross-product that the fixture does not support. Do not edit a correct consumer merely for symmetry.
+          8. Completeness: every state above must be independently checkable as source -> input/state -> path/constraint -> consumer/terminal -> expected result -> disproof. Umbrella wording cannot substitute for a member or state.
+
+          Any factual invention or omission makes the overall result fail. The rubric is semantic: do not require a literal Markdown table when the same independently testable coverage is present in another form.

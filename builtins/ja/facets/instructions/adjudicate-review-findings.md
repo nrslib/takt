@@ -5,6 +5,11 @@
 
 **重要:** 新しい網羅レビューは行わず、Report Directory 配下の最新レビューレポートが提出した指摘だけを対象にしてください。必要な範囲で現在のコード、要求、計画、実行証跡を確認してください。
 
+**入力と出力の時系列境界:** この step の開始時点で既に存在する `review-resolution.md` は既存の裁定履歴であり、同じファイルがこの step の出力先でもあります。今回の finding の提出元ではありません。今回裁定するのは、この step の直前に完了した review ラウンドの最新 reviewer reports が提出した finding だけです。
+- 既存の `review-resolution.md` は、family 同一性、記録済み disposition、および「再発台帳の引き継ぎ」の照合だけに使ってください。新しい finding の提出元として扱わず、そこに記録されていることだけを根拠に actionable finding を再生成しないでください。
+- 最新 reviewer reports が全件 `APPROVE` で、`new`、`persists`、`reopened` が1件もない場合は、この裁定には actionable finding の提出がないものとして扱ってください。現在のコードやその review ラウンド外のレポートが支持しているように見えても、既存の `review-resolution.md` に記録された actionable family を再生成しないでください。
+- 既存の `review-resolution.md` に記録された family または finding を今回の actionable set に入れられるのは、その最新 reviewer reports のいずれかが、現在の証拠付きで `new`、`persists`、`reopened` の finding として提出した場合だけです。
+
 review-resolution.md の「再発台帳の引き継ぎ」を記載してください。同じ peer-review の Report Directory 直下にある `subworkflows/iteration-N--step-remediation--*/fix-verification.md` だけを候補とし、`.takt-report-internal` 配下を除外して数値 `N` が最大の1件から全行・全13項目を無変更で記載します。候補がなければ「先行 remediation なし」、最大の `N` を一意に選べない、ファイルを読めない・欠落している、再発記録が欠落している、または現在の全13項目を特定できない場合は「引き継ぎ元の欠落」と理由を記載し、古い候補から補わず、初期値へ変換しないでください。いずれの引き継ぎ元の記載と理由も不変条件行の外に置き、そのための合成行を作らないでください。
 
 **やること:**

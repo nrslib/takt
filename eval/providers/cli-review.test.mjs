@@ -1,10 +1,15 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
-import { runProcess } from './cli-review.mjs';
+import {
+  createIsolatedWorkingDirectory,
+  prepareWorkingDirectory,
+  rewriteWorkingDirectoryPaths,
+  runProcess,
+} from './cli-review.mjs';
 
 const PROCESS_TREE_SCRIPT = [
   'const { spawn } = require("node:child_process");',
@@ -73,4 +78,44 @@ test('abort terminates the entire CLI process tree', {
   skip: process.platform === 'win32',
 }, async () => {
   await verifyTreeTermination('abort');
+});
+
+test('isolated working directory copies only the provider fixture', () => {
+  const outerDirectory = mkdtempSync(join(tmpdir(), 'takt-cli-review-source-'));
+  const source = join(outerDirectory, 'fixture');
+  const answerKey = join(outerDirectory, 'answer-key.txt');
+  mkdirSync(source);
+  writeFileSync(join(source, 'source.txt'), 'fixture');
+  writeFileSync(answerKey, 'hidden');
+
+  const isolated = prepareWorkingDirectory({
+    working_dir: source,
+    isolate_working_dir: true,
+  });
+  try {
+    assert.equal(readFileSync(join(isolated.cwd, 'source.txt'), 'utf8'), 'fixture');
+    assert.equal(existsSync(join(isolated.cwd, '..', 'answer-key.txt')), false);
+    assert.equal(
+      rewriteWorkingDirectoryPaths(
+        `Read ${isolated.sourceDirectory}/source.txt`,
+        isolated,
+      ),
+      `Read ${isolated.cwd}/source.txt`,
+    );
+  } finally {
+    isolated.cleanup();
+    rmSync(outerDirectory, { recursive: true, force: true });
+  }
+});
+
+test('isolated working directory is removed when copying fails', () => {
+  let copiedDestination;
+  assert.throws(
+    () => createIsolatedWorkingDirectory('/missing', (_source, destination) => {
+      copiedDestination = destination;
+      throw new Error('copy failed');
+    }),
+    /copy failed/,
+  );
+  assert.equal(existsSync(join(copiedDestination, '..')), false);
 });

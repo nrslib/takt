@@ -33,3 +33,4 @@
 - 修正対象なし → サマリー、再発台帳の引き継ぎ、指摘ごとの裁定、未解決の前提のみ
 - 修正対象あり → 同じ原因の指摘を family に集約し、`actionable` と `duplicate` の全 finding ID を対応する family に含める
 - それ以外の disposition の指摘は修正対象から除外し、修正対象 family に含めない
+- 「修正対象 family」は、selector が現在の未解消 actionable set を読む唯一の箇所とする。再発台帳の引き継ぎ、要件の判定根拠、指摘ごとの裁定、履歴だけを根拠に行を転記しない

@@ -26,6 +26,40 @@ import {
 } from '../infra/config/loaders/resource-resolver.js';
 import { getLanguageResourcesDir } from '../infra/resources/index.js';
 
+function expectExpandedMarkdownTable(
+  content: string,
+  sectionHeading: string,
+  expectedColumns: readonly string[],
+  includeMarker: string,
+): void {
+  expect(content).not.toContain(includeMarker);
+  const lines = content.split('\n');
+  const sectionIndex = lines.indexOf(sectionHeading);
+  expect(sectionIndex).toBeGreaterThanOrEqual(0);
+
+  const linesAfterHeading = lines.slice(sectionIndex + 1);
+  const nextSectionOffset = linesAfterHeading.findIndex((line) => /^#{1,6}\s/u.test(line));
+  const sectionLines = nextSectionOffset === -1
+    ? linesAfterHeading
+    : linesAfterHeading.slice(0, nextSectionOffset);
+  const tableStart = sectionLines.findIndex((line) => line.trim().startsWith('|'));
+  expect(tableStart).toBeGreaterThanOrEqual(0);
+
+  const linesFromTable = sectionLines.slice(tableStart);
+  const tableEnd = linesFromTable.findIndex((line) => !line.trim().startsWith('|'));
+  const tableLines = tableEnd === -1 ? linesFromTable : linesFromTable.slice(0, tableEnd);
+  expect(tableLines).toHaveLength(3);
+
+  const rows = tableLines
+    .map((line) => line.split('|').slice(1, -1).map((cell) => cell.trim()));
+
+  expect(rows[0]).toEqual(expectedColumns);
+  expect(rows[1]).toHaveLength(expectedColumns.length);
+  expect(rows[1].every((cell) => /^-+$/u.test(cell))).toBe(true);
+  expect(rows[2]).toHaveLength(expectedColumns.length);
+  expect(rows[2].every((cell) => cell.length > 0)).toBe(true);
+}
+
 describe('facet include expansion', () => {
   let tempDir: string;
   let context: FacetResolutionContext;
@@ -148,7 +182,6 @@ describe('facet include expansion', () => {
       join(getLanguageResourcesDir(lang), 'facets', 'partials', 'instructions', 'fix-root-cause-analysis.md'),
       'utf-8',
     ).trim();
-
     for (const instruction of [
       'fix-plan',
       'fix',
@@ -174,7 +207,9 @@ describe('facet include expansion', () => {
       join(getLanguageResourcesDir(lang), 'facets', 'partials', 'instructions', 'fix-plan-validity.md'),
       'utf-8',
     ).trim();
-
+    const evidenceChecks = lang === 'ja'
+      ? ['最小の読み取り専用実行', '確認した入力だけ', 'テストを簡単にすることや命名を整えることだけを理由に']
+      : ['minimal read-only execution', 'inputs that were actually checked', 'solely to simplify tests or improve naming'];
     for (const instruction of [
       'fix-plan',
       'apply-fix-plan',
@@ -190,6 +225,44 @@ describe('facet include expansion', () => {
 
       expect(content).toContain(partial);
       expect(content).not.toContain('{{include:instructions/fix-plan-validity}}');
+      for (const phrase of evidenceChecks) {
+        expect(content).toContain(phrase);
+      }
+    }
+  });
+
+  it.each(['en', 'ja'] as const)('should require concrete input, state, and path rows in fix-plan output contracts in %s', (lang) => {
+    const sectionHeading = lang === 'ja'
+      ? '## 入力・状態・経路の確認表'
+      : '## Input, State, and Path Check';
+    const expectedColumns = lang === 'ja'
+      ? ['修正単位', '軸の正本・根拠', '具体的な入力・状態', '入口・経路', '実装上の制約', 'consumer / terminal', '期待結果', '反証方法・テスト ID']
+      : ['Fix Unit', 'Dimension Source and Evidence', 'Concrete Input or State', 'Entry and Path', 'Implementation Constraint', 'Consumer / Terminal', 'Expected Result', 'Disproof Method and Test ID'];
+    const expectedPathContract = lang === 'ja'
+      ? ['現行:', '修正後:', '現行の失敗', '挙動が異なる根拠のない全組合せを作らない', 'helper だけを変更']
+      : ['Current:', 'After the fix:', 'current failure', 'without unsupported member-by-entry combinations', 'only that helper as edit'];
+
+    for (const outputContract of [
+      'fix-plan',
+      'scenario-based-fix-plan',
+    ]) {
+      const content = resolveRefToContent(
+        outputContract,
+        undefined,
+        tempDir,
+        'output-contracts',
+        { projectDir: tempDir, lang },
+      );
+
+      expectExpandedMarkdownTable(
+        content,
+        sectionHeading,
+        expectedColumns,
+        '{{include:output-contracts/base-fix-plan}}',
+      );
+      for (const phrase of expectedPathContract) {
+        expect(content).toContain(phrase);
+      }
     }
   });
 

@@ -1,6 +1,6 @@
 {
   "name": "takt",
-  "version": "0.58.0",
+  "version": "0.59.1",
   "description": "Workflow control for AI coding agents",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -31,6 +31,7 @@
     "eval:prompts:fix-plan-fresh-findings": "node eval/scripts/prepare.mjs fix-plan-fresh-findings && node eval/scripts/run-evals.mjs fix-plan-fresh-findings",
     "eval:prompts:fix-plan-boundary-preflight": "node eval/scripts/prepare.mjs fix-plan-boundary-preflight && node eval/scripts/run-evals.mjs fix-plan-boundary-preflight",
     "eval:prompts:fix-plan-cause-check": "node --test eval/providers/cli-review.test.mjs && node eval/scripts/prepare.mjs fix-plan-cause-check && node eval/scripts/run-evals.mjs fix-plan-cause-check",
+    "eval:prompts:fix-plan-bounded-proof": "node --test eval/providers/cli-review.test.mjs && node eval/scripts/prepare.mjs fix-plan-bounded-proof && node eval/scripts/run-evals.mjs fix-plan-bounded-proof --no-cache",
     "eval:prompts:review-family-closure": "node eval/scripts/prepare.mjs review-family-closure && node eval/scripts/run-evals.mjs review-family-closure",
     "eval:prompts:initial-review-contract-discovery": "node eval/scripts/prepare.mjs initial-review-contract-discovery && node eval/scripts/run-evals.mjs initial-review-contract-discovery",
     "eval:prompts:testing-review-observable-evidence": "node eval/scripts/prepare.mjs testing-review-observable-evidence && node eval/scripts/run-evals.mjs testing-review-observable-evidence",

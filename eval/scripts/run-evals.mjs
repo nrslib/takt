@@ -8,7 +8,7 @@
  *         rescan, rescan-coding,
  *         frontend-coder,
  *         cqrs-coder, fix-closure, fix-plan-fresh-findings,
- *         fix-plan-boundary-preflight, fix-plan-cause-check,
+ *         fix-plan-boundary-preflight, fix-plan-cause-check, fix-plan-bounded-proof,
  *         review-family-closure,
  *         initial-review-contract-discovery,
  *         initial-review-external-identity-wiring,
@@ -49,6 +49,7 @@ const SUITES = {
   'fix-plan-fresh-findings': 'promptfooconfig.fix-plan-fresh-findings.yaml',
   'fix-plan-boundary-preflight': 'promptfooconfig.fix-plan-boundary-preflight.yaml',
   'fix-plan-cause-check': 'promptfooconfig.fix-plan-cause-check.yaml',
+  'fix-plan-bounded-proof': 'promptfooconfig.fix-plan-bounded-proof.yaml',
   'review-family-closure': 'promptfooconfig.review-family-closure.yaml',
   'initial-review-contract-discovery': 'promptfooconfig.initial-review-contract-discovery.yaml',
   'initial-review-external-identity-wiring': 'promptfooconfig.initial-review-external-identity-wiring.yaml',
@@ -112,6 +113,8 @@ for (const name of names) {
 // デフォルト実行から除外して明示的に呼び出す。
 // fix-plan-cause-check も claude（opus）と codex（gpt-5.6-luna）の
 // 両ログインが必要な二重測定スイートのため、明示的に呼び出す。
+// fix-plan-bounded-proof も claude（opus）と codex（Luna Max / Sol High）の
+// 両ログインが必要な3モデル測定スイートのため、明示的に呼び出す。
 const DEFAULT_EXCLUDED = new Set([
   'coding',
   'rescan',
@@ -119,6 +122,7 @@ const DEFAULT_EXCLUDED = new Set([
   'fix-self-scan',
   'fix-loop-convergence',
   'fix-plan-cause-check',
+  'fix-plan-bounded-proof',
   'initial-review-external-identity-wiring',
   'review-adjudication-binding',
   'security-review-method',

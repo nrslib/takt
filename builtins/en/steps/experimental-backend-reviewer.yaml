@@ -1,0 +1,30 @@
+params:
+  review_policy_additions:
+    type: facet_ref[]
+    facet_kind: policy
+  review_knowledge_additions:
+    type: facet_ref[]
+    facet_kind: knowledge
+  coding_review_instruction: { type: facet_ref, facet_kind: instruction }
+name: backend-review
+description: Review APIs, domain logic, server-side processing, and persistence.
+capabilities: readonly
+tags: [review]
+edit: false
+persona: coding-reviewer
+policy:
+  - contract-change
+  - review
+  - coding
+  - $param: review_policy_additions
+knowledge:
+  - backend
+  - architecture
+  - $param: review_knowledge_additions
+instruction:
+  $param: coding_review_instruction
+pass_previous_response: false
+output_contracts:
+  report:
+    - name: backend-review.md
+      format: coding-review

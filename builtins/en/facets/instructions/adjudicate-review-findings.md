@@ -5,6 +5,11 @@ Adjudicate the review findings from evidence and determine which findings may be
 
 **Important:** Do not perform a new broad review. Consider only findings submitted by the latest review reports under the Report Directory. Inspect the current code, requirements, plan, and execution evidence only as needed.
 
+**Temporal input/output boundary:** A `review-resolution.md` that already exists when this step starts is existing adjudication history, and that same file is this step's output destination. It is not a finding submission source for this adjudication. Adjudicate only findings submitted by the latest reviewer reports from the review round completed immediately before this step.
+- Use the existing `review-resolution.md` only to compare family identity, recorded dispositions, and Invariant Register Carry-forward. Do not treat it as a new finding source or recreate an actionable finding solely because it is recorded there.
+- If the latest reviewer reports all say `APPROVE` and contain no `new`, `persists`, or `reopened` finding, treat this adjudication as having no actionable finding submission. Do not recreate any actionable family recorded in the existing `review-resolution.md`, even when the current code or a report outside that review round appears to support it.
+- A family or finding recorded in the existing `review-resolution.md` may enter the current actionable set only if one of those latest reviewer reports submits a current `new`, `persists`, or `reopened` finding with current evidence.
+
 Populate the Invariant Register Carry-forward in review-resolution.md. Consider only `subworkflows/iteration-N--step-remediation--*/fix-verification.md` directly under the same peer review's Report Directory, exclude `.takt-report-internal`, and copy every row and all 13 fields unchanged from the single candidate with the greatest numeric `N`. Record No prior remediation when there is no candidate; record Carry-forward source missing with the reason when the greatest `N` is not unique, the file is unreadable or missing, its recurrence record is missing, or all 13 current fields cannot be identified, and do not fill the gap from an older candidate or convert it to initial values. Keep either source statement and its reason outside the invariant rows; do not create a synthetic row for it.
 
 **Tasks:**
