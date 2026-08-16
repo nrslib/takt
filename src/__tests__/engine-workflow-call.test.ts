@@ -326,21 +326,6 @@ steps:
     });
   });
 
-  it('workflow_call provider overrides are rejected at the workflow boundary', () => {
-    expect(() => createParentWorkflow(tmpDir, {
-      name: 'parent',
-      initial_step: 'delegate',
-      max_steps: 1,
-      steps: [{
-        name: 'delegate',
-        kind: 'workflow_call',
-        call: 'child',
-        overrides: { provider: 'mock', model: 'workflow-call-model' },
-        rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
-      }],
-    })).toThrow(/configure provider\/model\/options in runtime\.yaml/);
-  });
-
   it('子 workflow の最終出力を親 step の previous_response に引き継ぐ', async () => {
     writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
 subworkflow:

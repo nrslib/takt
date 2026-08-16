@@ -867,11 +867,11 @@ auto_routing:
       implementation: implementation
 ```
 
-auto routing の candidate 選択が適用されるのは workflow の step 実行だけです。AI による task slug 生成や sync conflict resolver など workflow step context を持たない内部処理は、解決済みの runtime default を使用します。`auto_routing.router` と candidates は default として暗黙に使用されません。
+legacy モードでは、top-level の具体的な `provider` と `model` が default です。各 `auto_routing.candidates` は `provider` と `model` を直接保持します。candidate 選択が適用されるのは workflow の step 実行だけで、AI による task slug 生成や sync conflict resolver など workflow step context を持たない内部処理は top-level の具体値を使用します。legacy の `auto_routing.router` と candidates は default として暗黙に使用されません。
 
 assistant 会話（インタラクティブモードの計画会話、既存タスクへの追加指示 (instruct)、リトライ対話）は auto routing を通りません。設定済みなら `takt_providers.assistant`、未設定なら top-level provider/model を解決し、この assistant 設定はその他の内部処理の default にはなりません。CLI の `--provider` / `--model` override が適用されるのはインタラクティブモードの計画会話だけで、instruct / retry には適用されません。解決可能な assistant または top-level provider がない場合、assistant は起動時に `Provider is not configured.` で失敗します。
 
-auto routing は runtime target と pool rule を default の後に使います。hard rule は `tags`、`steps`、`personas` の順に確認し、それ以外は `pool_rules` が candidate pool を選び、router は必要な tier だけを推定して TAKT が candidate を決定的に選びます。
+runtime モードでは、`provider.defaults` が runtime default の profile または ladder を選択します。auto routing は persona、tag、step の target が pool を明示的に選択した場合だけ適用されます。pool の candidate は `provider.profiles` を参照し、provider/model を直接保持しません。hard rule は `tags`、`steps`、`personas` の順に確認し、それ以外は `pool_rules` が candidate pool を選び、router は必要な tier だけを推定して TAKT が candidate を決定的に選びます。
 
 candidate の `routing_tier` は `high`、`medium`、`low` のいずれかです。runtime profile が provider/model/options を保持するため、candidate はこれらを重複記述せず profile を参照します。CLI は `--auto-strategy cost|balanced|performance` で strategy を上書きでき、runtime の auto-routing target に到達するまで伝播します。
 

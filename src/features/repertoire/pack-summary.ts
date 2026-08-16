@@ -203,18 +203,27 @@ function resolveCapabilityOptions(
       ? rawCapabilities
       : undefined;
   if (names === undefined) {
-    throw new Error('Configuration error: capabilities must be a name or list of names');
+    throw new Error(
+      `Configuration error: capabilities must be a name or list of names (${workflowPath})`,
+    );
   }
-  return mergeProviderOptions(
-    ...names.map((name) => resolveProviderOptionsRecord(
-      { extends: name },
-      workflowPath,
-      fileAccess,
-      candidateDirs,
-      scopedCandidateDirs,
-      context,
-    ) ?? {}),
-  );
+  try {
+    return mergeProviderOptions(
+      ...names.map((name) => resolveProviderOptionsRecord(
+        { extends: name },
+        workflowPath,
+        fileAccess,
+        candidateDirs,
+        scopedCandidateDirs,
+        context,
+      ) ?? {}),
+    );
+  } catch (error) {
+    throw new Error(
+      `Failed to resolve capabilities for workflow ${workflowPath}: ${getErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
 }
 
 function getAllowedTools(providerOptions: StepProviderOptions | undefined): string[] {
@@ -232,10 +241,9 @@ function collectPermissionSteps(
   resolveStepCapabilities: (rawCapabilities: unknown) => StepProviderOptions | undefined,
 ): PermissionStep[] {
   return steps.flatMap((step) => {
-    const capabilityOptions = mergeProviderOptions(
-      inheritedCapabilityOptions,
-      resolveStepCapabilities(step.capabilities),
-    );
+    const capabilityOptions = step.capabilities === undefined
+      ? inheritedCapabilityOptions
+      : resolveStepCapabilities(step.capabilities);
     return [
       { step, providerOptions: capabilityOptions },
       ...collectPermissionSteps(normalizeParallelSummarySteps(step.parallel), capabilityOptions, resolveStepCapabilities),
@@ -301,14 +309,6 @@ export function detectEditWorkflows(
       workflowPath,
     }).raw as { steps?: unknown };
     const steps = normalizeSummarySteps(expanded.steps);
-    const workflowCapabilityOptions = resolveCapabilityOptions(
-      raw?.capabilities,
-      workflowPath,
-      providerOptionsFileAccess,
-      providerOptionsCandidateDirs,
-      options?.providerOptionsScopedCandidateDirs,
-      options?.context,
-    );
     const resolveStepCapabilities = (capabilities: unknown): StepProviderOptions | undefined =>
       resolveCapabilityOptions(
         capabilities,
@@ -318,11 +318,25 @@ export function detectEditWorkflows(
         options?.providerOptionsScopedCandidateDirs,
         options?.context,
       );
-    const permissionSteps = collectPermissionSteps(
-      steps,
-      workflowCapabilityOptions,
-      resolveStepCapabilities,
-    );
+    let permissionSteps: PermissionStep[];
+    try {
+      const workflowCapabilityOptions = resolveCapabilityOptions(
+        raw?.capabilities,
+        workflowPath,
+        providerOptionsFileAccess,
+        providerOptionsCandidateDirs,
+        options?.providerOptionsScopedCandidateDirs,
+        options?.context,
+      );
+      permissionSteps = collectPermissionSteps(
+        steps,
+        workflowCapabilityOptions,
+        resolveStepCapabilities,
+      );
+    } catch (error) {
+      log.debug(`Capabilities resolution failed for workflow ${name}: ${getErrorMessage(error)}`);
+      continue;
+    }
     const resolveAllowedTools = (entry: PermissionStep): string[] =>
       getAllowedTools(entry.providerOptions);
 

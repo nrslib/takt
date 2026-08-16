@@ -166,7 +166,7 @@ steps:
 
 ## Legacy Persona 別 Provider オーバーライド
 
-> **Deprecated**: `persona_providers` はレガシー設定です。新しい設定には `provider_routing.personas`（[Configuration Guide](./configuration.ja.md) 参照）を推奨します。raw persona キーでのルーティングに加え、step tag / step 名によるルーティングもサポートします。両方を設定した場合は `provider_routing` が優先されます。
+> **Deprecated**: `persona_providers` はレガシー設定です。新しい設定には `runtime.yaml` の `provider.targets.personas`（[Configuration Guide](./configuration.ja.md) 参照）を使用してください。legacy モードでは `provider_routing.personas` が raw persona キーでのルーティングに加え、step tag / step 名によるルーティングもサポートし、`persona_providers` より優先されます。
 
 legacy モードでは `~/.takt/config.yaml` の `persona_providers` を使用して、workflow を複製せずに特定の persona を異なる provider にルーティングできます。runtime モードでは `runtime.yaml` の `provider.targets.personas` を使用してください。
 

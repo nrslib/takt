@@ -71,6 +71,26 @@ function createTestDir(): string {
   return dir;
 }
 
+function expectWorkflowLoadIssue(
+  workflowName: string,
+  projectDir: string,
+  expectedPath: readonly PropertyKey[],
+): void {
+  try {
+    loadWorkflow(workflowName, projectDir);
+    expect.fail(`Expected ${workflowName} to fail workflow validation`);
+  } catch (error) {
+    expect(error).toMatchObject({
+      issues: expect.arrayContaining([
+        expect.objectContaining({
+          path: expectedPath,
+          message: expect.stringContaining('runtime.yaml'),
+        }),
+      ]),
+    });
+  }
+}
+
 describe('Workflow Loader IT: builtin workflow loading', () => {
   let testDir: string;
   const builtinNames = listBuiltinWorkflowLabels(process.cwd(), { includeDisabled: true });
@@ -467,8 +487,11 @@ loop_monitors:
           next: step2
 `);
 
-    expect(() => loadWorkflow('loop-monitor-judge-provider-model', testDir))
-      .toThrow('configure provider/model/options in runtime.yaml');
+    expectWorkflowLoadIssue(
+      'loop-monitor-judge-provider-model',
+      testDir,
+      ['loop_monitors', 0, 'judge', 'provider'],
+    );
   });
 
   it('should reject loop monitor judge provider block overrides', () => {
@@ -506,8 +529,11 @@ loop_monitors:
           next: step2
 `);
 
-    expect(() => loadWorkflow('loop-monitor-judge-provider-block', testDir))
-      .toThrow('configure provider/model/options in runtime.yaml');
+    expectWorkflowLoadIssue(
+      'loop-monitor-judge-provider-block',
+      testDir,
+      ['loop_monitors', 0, 'judge', 'provider'],
+    );
   });
 
   it('should reject loop monitor judge model-only overrides', () => {
@@ -521,8 +547,6 @@ initial_step: step1
 
 steps:
   - name: step1
-    provider: opencode
-    model: opencode/big-pickle
     instruction: "Step 1 instruction"
     rules:
       - condition: next
@@ -544,8 +568,11 @@ loop_monitors:
           next: step2
 `);
 
-    expect(() => loadWorkflow('loop-monitor-judge-model-only', testDir))
-      .toThrow('configure provider/model/options in runtime.yaml');
+    expectWorkflowLoadIssue(
+      'loop-monitor-judge-model-only',
+      testDir,
+      ['loop_monitors', 0, 'judge', 'model'],
+    );
   });
 
   it('should reject bare OpenCode loop judge model at the workflow boundary', () => {
@@ -581,8 +608,11 @@ loop_monitors:
           next: step2
 `);
 
-    expect(() => loadWorkflow('loop-monitor-judge-opencode-bare-model', testDir))
-      .toThrow('configure provider/model/options in runtime.yaml');
+    expectWorkflowLoadIssue(
+      'loop-monitor-judge-opencode-bare-model',
+      testDir,
+      ['loop_monitors', 0, 'judge', 'provider'],
+    );
   });
 
   it('should reject inherited bare OpenCode loop judge model at the workflow boundary', () => {
@@ -601,8 +631,6 @@ steps:
       - condition: next
         next: step2
   - name: step2
-    provider: opencode
-    model: opencode/big-pickle
     instruction: "Step 2 instruction"
     rules:
       - condition: done
@@ -619,8 +647,11 @@ loop_monitors:
           next: step2
 `);
 
-    expect(() => loadWorkflow('loop-monitor-judge-inherited-opencode-bare-model', testDir))
-      .toThrow('configure provider/model/options in runtime.yaml');
+    expectWorkflowLoadIssue(
+      'loop-monitor-judge-inherited-opencode-bare-model',
+      testDir,
+      ['loop_monitors', 0, 'judge', 'model'],
+    );
   });
 });
 

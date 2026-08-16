@@ -445,11 +445,11 @@ describe('Schemas accept opencode provider', () => {
   });
 
   it.each([
-    { schema: WorkflowStepRawSchema, input: { name: 'test-step', provider: 'opencode' } },
-    { schema: WorkflowStepRawSchema, input: { name: 'test-step', provider: 'cursor' } },
-    { schema: ParallelSubStepRawSchema, input: { name: 'sub-1', provider: 'opencode' } },
-    { schema: ParallelSubStepRawSchema, input: { name: 'sub-1', provider: 'cursor' } },
-  ])('should reject provider execution settings in workflow YAML', ({ schema, input }) => {
+    { label: 'workflow step with opencode', schema: WorkflowStepRawSchema, input: { name: 'test-step', provider: 'opencode' } },
+    { label: 'workflow step with cursor', schema: WorkflowStepRawSchema, input: { name: 'test-step', provider: 'cursor' } },
+    { label: 'parallel sub-step with opencode', schema: ParallelSubStepRawSchema, input: { name: 'sub-1', provider: 'opencode' } },
+    { label: 'parallel sub-step with cursor', schema: ParallelSubStepRawSchema, input: { name: 'sub-1', provider: 'cursor' } },
+  ])('should reject provider execution settings in workflow YAML: $label', ({ schema, input }) => {
     expect(() => schema.parse(input)).toThrow(
       /workflow YAML no longer accepts provider execution settings.*runtime\.yaml/i,
     );

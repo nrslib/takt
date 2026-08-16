@@ -887,17 +887,21 @@ auto_routing:
       implementation: implementation
 ```
 
-Auto-routing candidate selection applies only to workflow step execution.
-Internal operations without workflow-step context, such as AI task-slug
-generation and sync conflict resolution, use the resolved concrete runtime
-default. `auto_routing.router` and candidates are never implicit defaults.
+In legacy mode, the concrete top-level `provider` and `model` are the defaults.
+Each `auto_routing.candidates` entry carries its own `provider` and `model`.
+Candidate selection applies only to workflow step execution; internal operations
+without workflow-step context, such as AI task-slug generation and sync conflict
+resolution, use the concrete top-level defaults. The legacy
+`auto_routing.router` and candidates are never implicit defaults.
 
 Assistant conversations (interactive planning, instruct on existing tasks, and retry dialogue) do not go through auto routing. They resolve `takt_providers.assistant`, then fall back to the top-level provider/model when the assistant setting is unset; the assistant setting is not a default for other internal operations. CLI `--provider` / `--model` overrides apply to interactive planning only, while instruct and retry do not accept those overrides. Without a resolvable assistant or top-level provider, assistant startup fails with `Provider is not configured.`
 
-Auto routing uses the runtime target and pool rules after the runtime default.
-Hard rules are checked in `tags`, `steps`, `personas` order. Otherwise
-`pool_rules` selects a candidate pool and the router estimates only the
-required tier; TAKT deterministically selects the candidate.
+In runtime mode, `provider.defaults` selects a profile or ladder for the runtime
+default. Auto routing applies only when a persona, tag, or step target explicitly
+selects a pool. Pool candidates reference `provider.profiles`; they do not carry
+direct provider/model fields. Hard rules are checked in `tags`, `steps`,
+`personas` order. Otherwise `pool_rules` selects a candidate pool and the router
+estimates only the required tier; TAKT deterministically selects the candidate.
 
 Candidate `routing_tier` is limited to `high`, `medium`, or `low`. Runtime
 profiles carry provider/model/options, so candidates reference profiles rather

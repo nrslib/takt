@@ -55,15 +55,14 @@ export function translateWorkflowStepFragmentError(workflow: WorkflowConfig, err
   if (!path) {
     return normalized;
   }
-  if (!shouldTranslateWorkflowStepFragmentError(error, path)) {
+  if (!shouldTranslateWorkflowStepFragmentError(error)) {
     return normalized;
   }
   if (context.rulePathMappings.some((mapping) => pathStartsWith(path, mapping.normalizedPath))) {
     return normalized;
   }
-  const rawPath = toRawStepFieldPath(path);
-  const exact = findFragmentProvenanceAtExactPath(context.provenance, rawPath);
-  const source = exact ?? findFragmentProvenanceForStep(context.provenance, rawPath);
+  const exact = findFragmentProvenanceAtExactPath(context.provenance, path);
+  const source = exact ?? findFragmentProvenanceForStep(context.provenance, path);
   if (!source) {
     return normalized;
   }
@@ -78,21 +77,11 @@ function pathStartsWith(path: readonly PropertyKey[], prefix: readonly PropertyK
     && prefix.every((entry, index) => entry === path[index]);
 }
 
-function shouldTranslateWorkflowStepFragmentError(
-  error: unknown,
-  _path: readonly PropertyKey[],
-): boolean {
+function shouldTranslateWorkflowStepFragmentError(error: unknown): boolean {
   const providerValidationSource = getProviderValidationErrorSource(error);
   if (!providerValidationSource) {
     return true;
   }
-  const { source } = providerValidationSource;
-  if (source === 'step' || source === 'promotion') {
-    return true;
-  }
-  return false;
-}
-
-function toRawStepFieldPath(path: readonly PropertyKey[]): readonly PropertyKey[] {
-  return path;
+  return providerValidationSource.source === 'step'
+    || providerValidationSource.source === 'promotion';
 }

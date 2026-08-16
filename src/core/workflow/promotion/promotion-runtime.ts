@@ -4,7 +4,7 @@ import type { ProviderResolutionSource } from '../provider-options-trace.js';
 import type { RuntimeStepResolution, StepProviderInfo } from '../types.js';
 import { isDelegatedWorkflowStep } from '../step-kind.js';
 import { applyProviderModelOverride, assertTagMatchesAgree, tagRoutingEntryIdentity } from '../provider-resolution.js';
-import { countMatchedLadderStages, evaluatePromotion } from './PromotionEvaluator.js';
+import { countMatchedLadderStages } from './PromotionEvaluator.js';
 import {
   isFilePreferredProviderOptionPath,
   mergeProviderOptions,
@@ -127,15 +127,8 @@ export async function resolvePromotionRuntime(
   }
 
   const baseProviderInfo = context.resolveStepProviderModel(step, runtime);
-  const promotion = await evaluatePromotion(step, {
-    stepIteration,
-  });
-
   // `{at:N}` promotion advances the governing runtime.yaml `ladder` (issue #1208). The matched
   // entry count is the stage index; stage 0 is already the current assignment.
-  if (promotion === undefined) {
-    return runtime;
-  }
   const stageIndex = countMatchedLadderStages(step, stepIteration);
   if (stageIndex === 0) {
     return runtime;

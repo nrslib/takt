@@ -288,10 +288,11 @@ describe('applyExecOverrides', () => {
       expect(findRawStep(rawWorkflow, 'review').parallel?.[0]).not.toHaveProperty('model');
       expect(findRawStep(rawWorkflow, 'replan')).not.toHaveProperty('provider');
       expect(findRawStep(rawWorkflow, 'replan')).not.toHaveProperty('model');
-      expect(rawWorkflow.loop_monitors?.map((monitor) => monitor.judge)).toEqual([
-        expect.not.objectContaining({ provider: expect.anything() }),
-        expect.not.objectContaining({ model: expect.anything() }),
-      ]);
+      expect(rawWorkflow.loop_monitors).toHaveLength(2);
+      for (const monitor of rawWorkflow.loop_monitors ?? []) {
+        expect(monitor.judge).not.toHaveProperty('provider');
+        expect(monitor.judge).not.toHaveProperty('model');
+      }
     },
   );
 

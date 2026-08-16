@@ -27,25 +27,35 @@ describe('workflow promotion runtime.yaml boundary', () => {
     }
   });
 
-  it('rejects provider/model/options targets and conditions', () => {
+  it('rejects a model target in a promotion entry', () => {
     const result = WorkflowStepRawSchema.safeParse({
       name: 'fix',
       instruction: '{task}',
-      promotion: [{ at: 3, model: 'gpt-5.5' }, { condition: 'ai("escalate")' }],
+      promotion: [{ at: 3, model: 'gpt-5.5' }],
     });
 
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error.issues).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          path: ['promotion', 0, 'model'],
-          message: expect.stringContaining('runtime.yaml'),
-        }),
-        expect.objectContaining({
-          path: ['promotion', 1, 'condition'],
-          message: expect.stringContaining('runtime.yaml'),
-        }),
-      ]));
+      expect(result.error.issues).toContainEqual(expect.objectContaining({
+        path: ['promotion', 0, 'model'],
+        message: expect.stringContaining('runtime.yaml'),
+      }));
+    }
+  });
+
+  it('rejects an AI condition in a promotion entry', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'fix',
+      instruction: '{task}',
+      promotion: [{ condition: 'ai("escalate")' }],
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toContainEqual(expect.objectContaining({
+        path: ['promotion', 0, 'condition'],
+        message: expect.stringContaining('runtime.yaml'),
+      }));
     }
   });
 });

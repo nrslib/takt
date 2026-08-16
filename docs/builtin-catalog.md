@@ -167,7 +167,7 @@ steps:
 
 ## Legacy Per-persona Provider Overrides
 
-> **Deprecated**: `persona_providers` is a legacy setting. Prefer `provider_routing.personas` (see the [Configuration Guide](./configuration.md)) for new settings; it routes by raw persona key and also supports step-tag and step-name routing. `provider_routing` takes priority over `persona_providers` when both are set.
+> **Deprecated**: `persona_providers` is a legacy setting. For new settings, use `provider.targets.personas` in `runtime.yaml` (see the [Configuration Guide](./configuration.md)). In legacy mode, `provider_routing.personas` routes by raw persona key and also supports step-tag and step-name routing; it takes priority over `persona_providers` when both are set.
 
 In legacy mode, use `persona_providers` in `~/.takt/config.yaml` to route
 specific personas to different providers without duplicating workflows. In

@@ -1846,15 +1846,17 @@ describe('workflow_call schema', () => {
     }
   });
 
-  it('callable subworkflow で workflow-level provider 設定を拒否する', () => {
+  it.each([
+    ['provider', 'codex'],
+    ['model', 'gpt-5-codex'],
+    ['provider_options', { codex: { network_access: true } }],
+  ] as const)('callable subworkflow で workflow_config.%s を拒否する', (field, value) => {
     expect(() => normalizeWorkflowConfig(
       {
         name: 'takt/coding',
         subworkflow: { callable: true },
         workflow_config: {
-          provider: 'codex',
-          model: 'gpt-5-codex',
-          provider_options: { codex: { network_access: true } },
+          [field]: value,
         },
         steps: [{
           name: 'review',
@@ -1901,53 +1903,38 @@ describe('workflow_call schema', () => {
     });
   });
 
-  it('callable subworkflow で step-level provider 設定と overrides を拒否する', () => {
+  it.each([
+    ['step', 'provider', 'codex'],
+    ['step', 'model', 'gpt-5-codex'],
+    ['step', 'provider_options', { codex: { network_access: true } }],
+    ['workflow_call override', 'provider', 'codex'],
+    ['workflow_call override', 'model', 'gpt-5-codex'],
+    ['workflow_call override', 'provider_options', { codex: { network_access: true } }],
+  ] as const)('callable subworkflow で %s の %s を拒否する', (location, field, value) => {
+    const review = {
+      name: 'review',
+      persona: 'reviewer',
+      instruction: 'Review the task',
+      rules: [{ condition: 'COMPLETE', next: 'delegate' }],
+      ...(location === 'step' ? { [field]: value } : {}),
+    };
+    const delegate = {
+      name: 'delegate',
+      kind: 'workflow_call',
+      call: 'takt/review-loop',
+      ...(location === 'workflow_call override'
+        ? { overrides: { [field]: value } }
+        : {}),
+      rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+    };
+
     expect(() => normalizeWorkflowConfig(
       {
         name: 'takt/coding',
         subworkflow: {
           callable: true,
         },
-        steps: [
-          {
-            name: 'review',
-            persona: 'reviewer',
-            provider: 'codex',
-            model: 'gpt-5-codex',
-            provider_options: {
-              codex: {
-                network_access: true,
-              },
-            },
-            instruction: 'Review the task',
-            rules: [
-              {
-                condition: 'COMPLETE',
-                next: 'delegate',
-              },
-            ],
-          },
-          {
-            name: 'delegate',
-            kind: 'workflow_call',
-            call: 'takt/review-loop',
-            overrides: {
-              provider: 'codex',
-              model: 'gpt-5-codex',
-              provider_options: {
-                codex: {
-                  network_access: true,
-                },
-              },
-            },
-            rules: [
-              {
-                condition: 'COMPLETE',
-                next: 'COMPLETE',
-              },
-            ],
-          },
-        ],
+        steps: [review, delegate],
       },
       process.cwd(),
     )).toThrow(/runtime\.yaml/);
@@ -1992,7 +1979,32 @@ describe('workflow_call schema', () => {
     )).toThrow(/parallel sub-step rules do not allow/);
   });
 
-  it('callable subworkflow で parallel substep と loop monitor judge の provider 設定を拒否する', () => {
+  it.each([
+    ['parallel substep', 'provider', 'codex'],
+    ['parallel substep', 'model', 'gpt-5-codex'],
+    ['parallel substep', 'provider_options', { codex: { network_access: true } }],
+    ['loop monitor judge', 'provider', 'codex'],
+    ['loop monitor judge', 'model', 'gpt-5-codex'],
+    ['loop monitor judge', 'provider_options', { codex: { network_access: true } }],
+  ] as const)('callable subworkflow で %s の %s を拒否する', (location, field, value) => {
+    const parallel = location === 'parallel substep'
+      ? [{
+          name: 'security',
+          persona: 'security-reviewer',
+          instruction: 'Security review',
+          [field]: value,
+        }]
+      : undefined;
+    const loopMonitors = location === 'loop monitor judge'
+      ? [{
+          cycle: ['review', 'review'],
+          judge: {
+            [field]: value,
+            rules: [{ condition: 'stop', next: 'ABORT' }],
+          },
+        }]
+      : undefined;
+
     expect(() => normalizeWorkflowConfig(
       {
         name: 'takt/coding',
@@ -2004,20 +2016,7 @@ describe('workflow_call schema', () => {
             name: 'review',
             persona: 'reviewer',
             instruction: 'Review the task',
-            parallel: [
-              {
-                name: 'security',
-                persona: 'security-reviewer',
-                provider: 'codex',
-                model: 'gpt-5-codex',
-                provider_options: {
-                  codex: {
-                    network_access: true,
-                  },
-                },
-                instruction: 'Security review',
-              },
-            ],
+            ...(parallel === undefined ? {} : { parallel }),
             rules: [
               {
                 condition: 'done',
@@ -2026,24 +2025,7 @@ describe('workflow_call schema', () => {
             ],
           },
         ],
-        loop_monitors: [
-          {
-            cycle: ['review', 'review'],
-            judge: {
-              provider: {
-                type: 'codex',
-                network_access: true,
-              },
-              model: 'gpt-5-codex',
-              rules: [
-                {
-                  condition: 'stop',
-                  next: 'ABORT',
-                },
-              ],
-            },
-          },
-        ],
+        ...(loopMonitors === undefined ? {} : { loop_monitors: loopMonitors }),
       },
       process.cwd(),
     )).toThrow(/runtime\.yaml/);

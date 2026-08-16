@@ -134,7 +134,7 @@ describe('workflow step fragment provider provenance', () => {
     expect(message).not.toContain('step fragment "review"');
   });
 
-  it('attributes a missing OpenCode promotion model to the outer fragment that provides the provider', () => {
+  it('attributes a removed promotion provider field to the outer fragment that defines it', () => {
     write(projectDir, '.takt/steps/inner.yaml', [
       'instruction: review',
       'promotion:',
@@ -237,12 +237,7 @@ describe('workflow step fragment provider provenance', () => {
       '        next: COMPLETE',
       '',
     ].join('\n'));
-    const message = engineError(() => new WorkflowEngine(
-      loadWorkflowFromFile(workflowPath, projectDir),
-      projectDir,
-      'test task',
-      { projectCwd: projectDir },
-    ));
+    const message = engineError(() => loadWorkflowFromFile(workflowPath, projectDir));
 
     expect(message).toContain('workflow YAML no longer accepts provider execution settings');
     expect(message).toContain('step fragment "delegate"');
@@ -271,12 +266,7 @@ describe('workflow step fragment provider provenance', () => {
       '        next: COMPLETE',
       '',
     ].join('\n'));
-    const message = engineError(() => new WorkflowEngine(
-      loadWorkflowFromFile(workflowPath, projectDir),
-      projectDir,
-      'test task',
-      { projectCwd: projectDir },
-    ));
+    const message = engineError(() => loadWorkflowFromFile(workflowPath, projectDir));
 
     expect(message).toContain('workflow YAML no longer accepts provider execution settings');
     expect(message).toContain(workflowPath);

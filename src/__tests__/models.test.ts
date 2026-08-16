@@ -144,7 +144,9 @@ describe('Rate limit fallback config schema', () => {
     expect(GlobalConfigSchema.parse({
       rate_limit_fallback: { switch_chain: [] },
     }).rate_limit_fallback).toEqual({ switch_chain: [] });
+  });
 
+  it('should reject empty rate_limit_fallback.switch_chain at the workflow boundary', () => {
     expect(() => WorkflowConfigRawSchema.parse({
       name: 'rate-limit-disabled-workflow',
       rate_limit_fallback: { switch_chain: [] },
@@ -167,7 +169,9 @@ describe('Rate limit fallback config schema', () => {
     expect(GlobalConfigSchema.parse({
       rate_limit_fallback: {},
     }).rate_limit_fallback).toEqual({});
+  });
 
+  it('should reject rate_limit_fallback without switch_chain at the workflow boundary', () => {
     expect(() => WorkflowConfigRawSchema.parse({
       name: 'rate-limit-disabled-workflow',
       rate_limit_fallback: {},

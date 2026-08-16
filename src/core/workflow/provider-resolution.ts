@@ -405,33 +405,12 @@ function resolveValueForProviderSource<T>(
 export function resolveWorkflowCallProviderModel(
   input: WorkflowCallProviderModelInput,
 ): WorkflowCallProviderModelOutput {
-  const explicitProviderSource = isExplicitProviderModelSource(input.providerSource)
-    ? input.providerSource
-    : undefined;
-  const explicitModelSource = isExplicitProviderModelSource(input.modelSource)
-    ? input.modelSource
-    : undefined;
-  const provider = explicitProviderSource !== undefined
-    ? input.provider
-    : input.provider;
-  const providerSource = explicitProviderSource !== undefined
-    ? explicitProviderSource
-    : input.providerSource;
-  const model = explicitModelSource !== undefined
-    ? input.model
-    : input.model;
-  const modelSource = explicitModelSource !== undefined
-    ? explicitModelSource
-    : input.modelSource;
-  const permissionMode = providerSource === input.providerSource
-    ? input.permissionMode
-    : undefined;
   return {
-    provider,
-    providerSource,
-    model,
-    modelSource,
-    ...(permissionMode !== undefined ? { permissionMode } : {}),
+    provider: input.provider,
+    providerSource: input.providerSource,
+    model: input.model,
+    modelSource: input.modelSource,
+    ...(input.permissionMode !== undefined ? { permissionMode: input.permissionMode } : {}),
   };
 }
 

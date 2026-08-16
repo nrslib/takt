@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { AutoRoutingConfig, WorkflowCallStep, WorkflowConfig } from '../core/models/index.js';
+import type { ProviderType } from '../shared/types/provider.js';
 import {
   ProviderNeutralStructuredCaller,
   type StructuredCaller,
@@ -79,6 +80,24 @@ const {
     mockResolveConfigValueWithSource: vi.fn(),
   };
 });
+
+function resolvedWorkflowConfigValues(
+  provider: ProviderType,
+  autoRouting: AutoRoutingConfig | undefined,
+) {
+  return {
+    notificationSound: true,
+    notificationSoundEvents: {},
+    provider,
+    runtime: undefined,
+    preventSleep: false,
+    model: undefined,
+    logging: undefined,
+    analytics: undefined,
+    observability: disabledObservability,
+    autoRouting,
+  };
+}
 
 vi.mock('../core/workflow/index.js', async () => {
   const errorModule = await import('../core/workflow/ask-user-question-error.js');
@@ -1031,18 +1050,9 @@ steps:
     } satisfies AutoRoutingConfig;
     const config = makeConfig();
     const { resolveWorkflowConfigValues } = await import('../infra/config/index.js');
-    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
-      notificationSound: true,
-      notificationSoundEvents: {},
-      provider: 'cursor',
-      runtime: undefined,
-      preventSleep: false,
-      model: undefined,
-      logging: undefined,
-      analytics: undefined,
-      observability: disabledObservability,
-      autoRouting,
-    });
+    vi.mocked(resolveWorkflowConfigValues).mockReturnValue(
+      resolvedWorkflowConfigValues('cursor', autoRouting),
+    );
 
     await executeWorkflow(config, 'task', projectCwd, {
       projectCwd,
@@ -1078,18 +1088,9 @@ steps:
         candidatePools: { general: { candidates: ['reasoning', 'coding'], fallback: 'reasoning' } },
       } satisfies AutoRoutingConfig;
     const { resolveWorkflowConfigValues } = await import('../infra/config/index.js');
-    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
-      notificationSound: true,
-      notificationSoundEvents: {},
-      provider: 'mock',
-      runtime: undefined,
-      preventSleep: false,
-      model: undefined,
-      logging: undefined,
-      analytics: undefined,
-      observability: disabledObservability,
-      autoRouting,
-    });
+    vi.mocked(resolveWorkflowConfigValues).mockReturnValue(
+      resolvedWorkflowConfigValues('mock', autoRouting),
+    );
 
     await executeWorkflow(config, 'task', projectCwd, {
       projectCwd,

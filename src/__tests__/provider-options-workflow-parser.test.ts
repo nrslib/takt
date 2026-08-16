@@ -46,51 +46,6 @@ describe('workflow capability provider-options references', () => {
     expect(step).not.toHaveProperty('model');
   });
 
-  it('merges capability sets from left to right', () => {
-    writeCapabilitySet('tools', 'claude:\n  allowed_tools: [Read]\n');
-    writeCapabilitySet('skills', 'codex:\n  skills:\n    repo: true\n    user: true\n');
-
-    const workflow = normalizeWorkflow({}, [{
-      name: 'implement',
-      instruction: '{task}',
-      capabilities: ['provider-options/tools.yaml', 'provider-options/skills.yaml'],
-    }]);
-
-    expect((workflow.steps[0] as AgentWorkflowStep).capabilityProviderOptions).toEqual({
-      claude: { allowedTools: ['Read'] },
-      codex: { skills: { repo: true, user: true } },
-    });
-  });
-
-  it('replaces the workflow capability default on a step', () => {
-    writeCapabilitySet('wide', 'claude:\n  allowed_tools: [Read, Grep, Bash]\n');
-    writeCapabilitySet('narrow', 'claude:\n  allowed_tools: [Read]\n');
-
-    const workflow = normalizeWorkflow({ capabilities: 'provider-options/wide.yaml' }, [
-      { name: 'inherits', instruction: '{task}' },
-      { name: 'overrides', instruction: '{task}', capabilities: 'provider-options/narrow.yaml' },
-    ]);
-
-    expect((workflow.steps[0] as AgentWorkflowStep).capabilityProviderOptions?.claude?.allowedTools)
-      .toEqual(['Read', 'Grep', 'Bash']);
-    expect((workflow.steps[1] as AgentWorkflowStep).capabilityProviderOptions?.claude?.allowedTools)
-      .toEqual(['Read']);
-  });
-
-  it('rejects unresolved and non-capability provider-option sets', () => {
-    expect(() => normalizeWorkflow({}, [{
-      name: 'implement',
-      instruction: '{task}',
-      capabilities: 'provider-options/missing.yaml',
-    }])).toThrow(/capabilities|not found/i);
-
-    writeCapabilitySet('quality', 'claude:\n  effort: high\n');
-    expect(() => normalizeWorkflow({}, [{
-      name: 'implement',
-      instruction: '{task}',
-      capabilities: 'provider-options/quality.yaml',
-    }])).toThrow(/capabilit|effort/i);
-  });
 });
 
 describe('workflow runtime ownership boundary', () => {

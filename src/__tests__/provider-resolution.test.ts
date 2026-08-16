@@ -432,40 +432,6 @@ describe('resolveStepProviderModel', () => {
     });
   });
 
-  it('keeps the inherited runtime provider/model and permission for a workflow call', () => {
-    const result = resolveWorkflowCallProviderModel({
-      provider: 'codex',
-      providerSource: 'runtime-v1',
-      model: 'runtime-model',
-      modelSource: 'runtime-v1',
-      permissionMode: 'full',
-    });
-
-    expect(result).toEqual({
-      provider: 'codex',
-      providerSource: 'runtime-v1',
-      model: 'runtime-model',
-      modelSource: 'runtime-v1',
-      permissionMode: 'full',
-    });
-  });
-
-  it('keeps inherited permission because workflow-call provider overrides are removed', () => {
-    const result = resolveWorkflowCallProviderModel({
-      provider: 'codex',
-      providerSource: 'runtime-v1',
-      permissionMode: 'full',
-    });
-
-    expect(result).toEqual({
-      provider: 'codex',
-      providerSource: 'runtime-v1',
-      model: undefined,
-      modelSource: undefined,
-      permissionMode: 'full',
-    });
-  });
-
 });
 
 describe('resolveStepProviderModel — tag routing conflict policy', () => {
@@ -637,6 +603,22 @@ describe('resolveWorkflowCallProviderModel', () => {
       providerSource: 'env',
       model: 'env-model',
       modelSource: 'env',
+    });
+  });
+
+  it('keeps inherited permission when the runtime model is absent', () => {
+    const result = resolveWorkflowCallProviderModel({
+      provider: 'codex',
+      providerSource: 'runtime-v1',
+      permissionMode: 'full',
+    });
+
+    expect(result).toEqual({
+      provider: 'codex',
+      providerSource: 'runtime-v1',
+      model: undefined,
+      modelSource: undefined,
+      permissionMode: 'full',
     });
   });
 });

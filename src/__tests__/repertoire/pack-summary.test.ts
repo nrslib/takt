@@ -75,13 +75,11 @@ describe('detectEditWorkflows', () => {
     }]);
   });
 
-  it('should merge workflow and step capability sets', () => {
+  it('should replace workflow capabilities when a step declares its own set', () => {
     const result = detectEditWorkflows([{
       name: 'workflow.yaml',
       content: `capabilities: readonly
 steps:
-  - name: plan
-    edit: false
   - name: implement
     edit: true
     capabilities: edit
@@ -90,7 +88,7 @@ steps:
 
     expect(result).toHaveLength(1);
     expect(result[0]!.hasEdit).toBe(true);
-    expect(result[0]!.allowedTools).toEqual(['Read', 'Bash', 'Write', 'Edit']);
+    expect(result[0]!.allowedTools).toEqual(['Bash', 'Write', 'Edit']);
   });
 
   it('should collect capabilities from fixed and pool parallel sub-steps', () => {
@@ -225,12 +223,40 @@ required_permission_mode: bypassPermissions
     }
   });
 
-  it('should reject an unresolved capability reference', () => {
-    expect(() => detectEditWorkflows([{
-      name: 'workflow.yaml',
-      content: 'steps:\n  - name: review\n    capabilities: missing\n',
-      relativePath: 'workflows/workflow.yaml',
-    }], [])).toThrow(/provider_options\.extends not found: missing/);
+  it('should skip an unresolved capability reference and keep scanning workflows', () => {
+    const result = detectEditWorkflows([
+      {
+        name: 'invalid-capability.yaml',
+        content: 'steps:\n  - name: review\n    capabilities: missing\n',
+        relativePath: 'workflows/invalid-capability.yaml',
+      },
+      {
+        name: 'valid.yaml',
+        content: 'steps:\n  - name: implement\n    edit: true\n',
+      },
+    ], []);
+
+    expect(result).toEqual([{
+      name: 'valid.yaml',
+      allowedTools: [],
+      hasEdit: true,
+      requiredPermissionModes: [],
+    }]);
+  });
+
+  it('should skip a workflow whose capabilities field has an invalid type', () => {
+    const result = detectEditWorkflows([
+      {
+        name: 'invalid-type.yaml',
+        content: 'capabilities: 42\nsteps:\n  - name: review\n    edit: true\n',
+      },
+      {
+        name: 'valid.yaml',
+        content: 'steps:\n  - name: implement\n    edit: true\n',
+      },
+    ]);
+
+    expect(result.map(({ name }) => name)).toEqual(['valid.yaml']);
   });
 
   it('should skip invalid YAML and keep valid workflows', () => {

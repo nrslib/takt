@@ -226,14 +226,18 @@ describe('auto_routing config schema', () => {
 });
 
 describe('removed workflow routing schema', () => {
-  it('Given workflow provider and auto_routing fields, When parsing workflow YAML, Then runtime.yaml migration is required', () => {
+  it('Given workflow auto_routing, When parsing workflow YAML, Then the auto_routing boundary requires runtime.yaml', () => {
     const result = WorkflowConfigRawSchema.safeParse(createWorkflow({
-      workflow_config: { provider: 'mock', model: 'workflow-model' },
       auto_routing: createAutoRoutingConfig({ strategy: 'performance' }),
     }));
 
     expect(result.success).toBe(false);
-    if (!result.success) expectParseFailureMessage(result, /runtime\.yaml/);
+    if (!result.success) {
+      expect(result.error.issues).toContainEqual(expect.objectContaining({
+        path: ['auto_routing'],
+        message: expect.stringContaining('runtime.yaml'),
+      }));
+    }
   });
 
   it('Given default_provider in workflow auto_routing, When parsing workflow YAML, Then the removed routing surface fails fast', () => {
