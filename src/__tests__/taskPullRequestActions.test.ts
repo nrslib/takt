@@ -403,6 +403,24 @@ describe('createPullRequestForTask', () => {
     expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
   });
 
+  it('PR作成準備の失敗を報告し、確認や副作用を開始しない', async () => {
+    mockCollectTaskWorktreeSummary.mockImplementation(() => {
+      throw new Error('summary failed\x1b]0;injected\x07');
+    });
+
+    const result = await createPullRequestForTask('/project', failedTask);
+
+    expect(result).toBe(false);
+    expect(mockError).toHaveBeenCalledWith(
+      'PR 作成を中止しました: 準備に失敗しました: summary failed',
+    );
+    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(mockStageAndCommit).not.toHaveBeenCalled();
+    expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
+    const commands = mockExecFileSync.mock.calls.map(([, args]) => args as string[]);
+    expect(commands.every((args) => !['fetch', 'push', 'commit'].includes(args[0]!))).toBe(true);
+  });
+
   it('commit失敗の表示から端末制御文字を除去し、PR APIを呼ばない', async () => {
     mockStageAndCommit.mockRejectedValue(new Error('commit failed\x1b]0;injected\x07'));
 

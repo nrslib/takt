@@ -48,11 +48,13 @@ The following summary is evidence from the failed run and its worktree. Use it t
 
 {{/if}}
 {{#if hasReportSummary}}
+
 ### Final adjudication evidence
 
 {{reportSummary}}
 {{/if}}
 {{#if hasWorktreeSummary}}
+
 ### Worktree evidence
 
 {{worktreeSummary}}

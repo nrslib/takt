@@ -48,11 +48,13 @@
 
 {{/if}}
 {{#if hasReportSummary}}
+
 ### 最終裁定の証跡
 
 {{reportSummary}}
 {{/if}}
 {{#if hasWorktreeSummary}}
+
 ### 作業ツリーの証跡
 
 {{worktreeSummary}}

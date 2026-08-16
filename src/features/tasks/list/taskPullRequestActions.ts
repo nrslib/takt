@@ -81,19 +81,28 @@ export async function createPullRequestForTask(
   }
   const worktreePath = task.worktreePath;
   const branch = task.branch;
-  const currentBranch = getCurrentBranch(worktreePath);
-  if (currentBranch === 'HEAD' || currentBranch !== branch) {
-    error(`PR 作成を中止しました: worktree の現在ブランチ (${currentBranch}) と対象ブランチ (${branch}) が一致しません。`);
+  let baseBranch: string;
+  let worktreeSummary: TaskWorktreeSummary;
+  let body: string;
+
+  try {
+    const currentBranch = getCurrentBranch(worktreePath);
+    if (currentBranch === 'HEAD' || currentBranch !== branch) {
+      error(`PR 作成を中止しました: worktree の現在ブランチ (${currentBranch}) と対象ブランチ (${branch}) が一致しません。`);
+      return false;
+    }
+    baseBranch = task.data?.base_branch ?? detectDefaultBranch(projectDir);
+    worktreeSummary = collectTaskWorktreeSummary(worktreePath, baseBranch, branch);
+    const reportSummary = resolveReportSummary(task);
+    body = buildTaskPullRequestBody({
+      taskKind: task.kind,
+      reportSummary,
+      worktreeSummary: worktreeSummary.text,
+    });
+  } catch (err) {
+    error(`PR 作成を中止しました: 準備に失敗しました: ${sanitizeTerminalText(getErrorMessage(err))}`);
     return false;
   }
-  const baseBranch = task.data?.base_branch ?? detectDefaultBranch(projectDir);
-  const worktreeSummary = collectTaskWorktreeSummary(worktreePath, baseBranch, branch);
-  const reportSummary = resolveReportSummary(task);
-  const body = buildTaskPullRequestBody({
-    taskKind: task.kind,
-    reportSummary,
-    worktreeSummary: worktreeSummary.text,
-  });
 
   displayPreview(branch, worktreeSummary, body);
   if (!await confirm(`PR を作成しますか: ${task.name}?`, false)) {
