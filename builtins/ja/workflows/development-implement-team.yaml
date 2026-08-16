@@ -1,0 +1,61 @@
+name: development-implement-team
+description: Team Leader を使う experimental 開発 workflow の実装実行。
+subworkflow:
+  callable: true
+  visibility: internal
+  returns: [need_replan]
+  params:
+    implementation_pool:
+      type: facet_pool_ref
+      default: coding-facets
+    implementation_companions:
+      type: companion_ref[]
+      default: []
+    development_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default: [coding, testing, ai-antipattern]
+    development_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: [architecture, implementation-semantics]
+    implementation_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: implement
+facet_pools:
+  coding-facets:
+    uses: coding-facets
+  takt-coding-facets:
+    uses: takt-coding-facets
+initial_step: implement
+steps:
+  - name: implement
+    capabilities: [edit, enable-skills]
+    tags: [coding, coding-leader]
+    uses: development-core-implement
+    with:
+      development_policy:
+        $param: development_policy
+      development_knowledge:
+        $param: development_knowledge
+      implementation_instruction: team-leader-implement
+    team_leader:
+      max_concurrency: 2
+      initial_max_parts: 2
+      fail_on_part_error: false
+      part_tags: [coding, coding-part]
+      part_persona: coder
+      part_edit: true
+      part_permission_mode: edit
+    rules:
+      - condition: 実装が完了した
+        next: COMPLETE
+      - condition: 実装未着手（レポートのみ）
+        next: COMPLETE
+      - condition: 実装を進行できない
+        return: need_replan
+      - condition: ユーザー入力が必要
+        next: implement
+        requires_user_input: true
+        interactive_only: true

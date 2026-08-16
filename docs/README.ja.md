@@ -241,7 +241,7 @@ steps:
 
 繰り返し使う step 定義は `.takt/steps/` に置き、workflow から `uses` で参照できます。探索順と上書き規則は [Workflow Guide](./workflows.ja.md) を参照してください。
 
-`experimental` / `takt-experimental` wrapper は、汎用または TAKT 固有の外部 security-review facet pool を束縛する reviewer-suite adapter をトップで選びます。pool 参照は実際に消費する suite だけへ渡され、共有の development / peer-review workflow 契約は変更しません。`dynamic_facets` は通常の agent step と `parallel` の agent sub-step の両方で使え、dynamic parallel では participant selector の後に選択された子だけが facet selector を実行します。各子の固定 facet は維持され、`max_selected` まで pool 候補が追加され、空選択なら追加されません。対象の facet selector をすべて完了してから parallel の子を起動し、1件でも不正な選択があれば同じ parallel 親配下の子は起動しません。プロセスの resume では participant selector と facet selector を現在の pool に対して再実行します。
+`experimental` / `takt-experimental` wrapper は、汎用または TAKT 固有の外部 security-review facet pool を束縛する reviewer-suite adapter をトップで選びます。`takt-experimental-team` は同じ計画・テスト・レビュー・最終ゲート契約を使い、現行 schema 制約に合わせて実装・修正・再修正を dynamic facets と companion を使わない静的な Team Leader coder execution で行います。pool 参照は実際に消費する suite だけへ渡され、共有の development / peer-review workflow 契約は変更しません。`dynamic_facets` は通常の agent step と `parallel` の agent sub-step の両方で使え、dynamic parallel では participant selector の後に選択された子だけが facet selector を実行します。各子の固定 facet は維持され、`max_selected` まで pool 候補が追加され、空選択なら追加されません。対象の facet selector をすべて完了してから parallel の子を起動し、1件でも不正な選択があれば同じ parallel 親配下の子は起動しません。プロセスの resume では participant selector と facet selector を現在の pool に対して再実行します。
 
 workflow ファイルの正式ディレクトリ名は `workflows/` です。
 
@@ -256,6 +256,7 @@ workflow ファイルの正式ディレクトリ名は `workflows/` です。
 | `backend` | バックエンド開発向けの workflow。 |
 | `dual` | フロントエンド＋バックエンドを同時に進める workflow。 |
 | `takt-default` | TAKT 自体の開発で実際に使われている workflow。CLI ツールの開発にそのまま活用できます。 |
+| `takt-experimental-team` | TAKT 固有のレビュー契約を維持し、schema 制約に合わせて dynamic facets と companion を使わない静的な Team Leader coder execution で実装・修正・再修正を行う実験的 workflow。 |
 | `frontend-maintenance` | フロントエンド本番保守向け。ループモニター付き厳密マルチフェーズレビュー。 |
 | `backend-maintenance` | バックエンド本番保守向け。デュアルスーパーバイザー最終承認付き厳密マルチフェーズレビュー。 |
 | `*-mini` シリーズ | 各 workflow の軽量版（`default-mini` / `frontend-mini` / `backend-mini` / `dual-mini`）。`write_tests` を省いた構成。 |
