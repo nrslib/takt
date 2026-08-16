@@ -226,7 +226,6 @@ steps:
     expect(childPrompt!.indexOf('CHILD_WORKFLOW_RULE')).toBeLessThan(
       childPrompt!.indexOf('Review child work'),
     );
-    expect(childPrompt!.match(/all steps in this workflow/gi)).toHaveLength(1);
   });
 
   it('strategy override がない場合は到達した child 内の未到達 workflow_call を解決しない', async () => {

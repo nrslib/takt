@@ -1,4 +1,4 @@
-{{include:instructions/contract-family-decomposition-boundary}}
+{{include:instructions/task-decomposition-boundary}}
 {{include:instructions/team-leader-part-error-completion}}
 
 Assign every remediation obligation present in the input to exactly one non-conflicting fix part.
