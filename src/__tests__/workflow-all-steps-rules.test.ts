@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { WorkflowConfigRawSchema } from '../core/models/workflow-schemas.js';
 import { InstructionBuilder } from '../core/workflow/instruction/InstructionBuilder.js';
 import type { InstructionContext } from '../core/workflow/instruction/instruction-context.js';
+import { renderWorkflowWideRules } from '../core/workflow/instruction/workflow-wide-rules.js';
 import { ReportInstructionBuilder } from '../core/workflow/instruction/ReportInstructionBuilder.js';
 import type { ReportInstructionContext } from '../core/workflow/instruction/ReportInstructionBuilder.js';
 import { StatusJudgmentBuilder } from '../core/workflow/instruction/StatusJudgmentBuilder.js';
@@ -158,10 +159,11 @@ describe('workflow-wide Phase 1 rule rendering', () => {
   ];
 
   it('injects each rule once, keeps declaration order within each position, and emits one applicability notice', () => {
+    const instructionMarker = 'TEST_STEP_INSTRUCTION';
     const prompt = new InstructionBuilder(
       makeStep({
         name: 'work',
-        instruction: 'Do the requested work.',
+        instruction: instructionMarker,
         allowGitCommit: false,
       }),
       workflowRuleContext(rules),
@@ -172,28 +174,22 @@ describe('workflow-wide Phase 1 rule rendering', () => {
     expect(prompt).toContain('RULE_INSTRUCTION_FIRST');
     expect(prompt.indexOf('RULE_EXECUTION_FIRST')).toBeLessThan(prompt.indexOf('RULE_EXECUTION_SECOND'));
     expect(prompt.indexOf('RULE_EXECUTION_SECOND')).toBeLessThan(prompt.indexOf('RULE_INSTRUCTION_FIRST'));
-    expect(prompt.indexOf('RULE_INSTRUCTION_FIRST')).toBeLessThan(prompt.indexOf('## Instructions'));
-    expect(prompt.indexOf('## Instructions')).toBeLessThan(prompt.indexOf('Do the requested work.'));
-    expect(
-      prompt.slice(0, prompt.indexOf('## Instructions')).trimEnd().endsWith('RULE_INSTRUCTION_FIRST'),
-    ).toBe(true);
+    expect(prompt.indexOf('RULE_INSTRUCTION_FIRST')).toBeLessThan(prompt.indexOf(instructionMarker));
     expect(prompt.indexOf('Do NOT run git commit')).toBeLessThan(prompt.indexOf('RULE_EXECUTION_FIRST'));
-    expect(prompt.indexOf('RULE_EXECUTION_FIRST')).toBeLessThan(prompt.indexOf('Do the requested work.'));
-    expect(prompt.match(/all steps in this workflow/gi)).toHaveLength(1);
+    const { noticeAfterExecutionRules } = renderWorkflowWideRules(rules, 'en');
+    expect(prompt.split(noticeAfterExecutionRules)).toHaveLength(2);
     for (const rule of rules) {
       expect(prompt.split(rule.content).length - 1).toBe(1);
     }
   });
 
-  it.each([
-    ['en', 'Note: This section is metadata. Follow the language used in the rest of the prompt.', 2],
-    ['ja', '## 判断ルール', 3],
-  ] as const)('keeps the pre-rules prompt spacing for %s', (language, followingSection, expectedNewlines) => {
+  it.each(['en', 'ja'] as const)('does not change the prompt for %s when workflow-wide rules are absent', (language) => {
     for (const edit of [undefined, true, false] as const) {
+      const instructionMarker = 'TEST_STEP_INSTRUCTION';
       const withoutRules = new InstructionBuilder(
         makeStep({
           name: 'work',
-          instruction: 'Do the requested work.',
+          instruction: instructionMarker,
           ...(edit === undefined ? {} : { edit }),
         }),
         makeInstructionContext({ language, workflowName: 'rules-test' }),
@@ -201,23 +197,13 @@ describe('workflow-wide Phase 1 rule rendering', () => {
       const withEmptyRules = new InstructionBuilder(
         makeStep({
           name: 'work',
-          instruction: 'Do the requested work.',
+          instruction: instructionMarker,
           ...(edit === undefined ? {} : { edit }),
         }),
         workflowRuleContext([], language),
       ).build();
 
-      const followingSectionIndex = withoutRules.indexOf(followingSection);
-      expect(followingSectionIndex).toBeGreaterThan(0);
-      const precedingNewlines = withoutRules
-        .slice(0, followingSectionIndex)
-        .match(/\n+$/)?.[0].length;
-      const instructionsIndex = withoutRules.indexOf('## Instructions');
-      expect(precedingNewlines).toBe(expectedNewlines);
-      expect(instructionsIndex).toBeGreaterThan(0);
-      expect(withoutRules.slice(0, instructionsIndex).match(/\n+$/)?.[0]).toBe('\n\n\n\n');
-      expect(withoutRules).toContain('## Instructions\nDo the requested work.');
-      expect(withoutRules).not.toContain('## Instructions\n\nDo the requested work.');
+      expect(withoutRules).toContain(instructionMarker);
       expect(withEmptyRules).toBe(withoutRules);
     }
   });

@@ -300,6 +300,9 @@ const { getAllParallelSubSteps } = await import(
 const { MAX_WORKFLOW_CALL_DEPTH } = await import(
   pathToFileURL(join(repoRoot, 'dist/core/workflow/workflow-call-depth.js')).href
 );
+const { mergeWorkflowWideRules } = await import(
+  pathToFileURL(join(repoRoot, 'dist/core/workflow/engine/workflow-wide-rule-merge.js')).href
+);
 const { loadCompanionDefinition } = await import(
   pathToFileURL(join(repoRoot, 'dist/infra/config/loaders/companionDefinitionLoader.js')).href
 );
@@ -307,21 +310,23 @@ const { getBuiltinCompanionsDir } = await import(
   pathToFileURL(join(repoRoot, 'dist/infra/config/paths.js')).href
 );
 
-function findStepTarget(workflow, stepName, depth = 0) {
+function findStepTarget(workflow, stepName, depth = 0, inheritedWorkflowRules) {
   if (depth > MAX_WORKFLOW_CALL_DEPTH) {
     throw new Error(`Workflow-call nesting exceeded while resolving step "${stepName}"`);
   }
 
+  const workflowRules = mergeWorkflowWideRules(inheritedWorkflowRules, workflow.allStepsRules);
+
   for (const [stepIndex, step] of workflow.steps.entries()) {
     if (step.name === stepName && step.kind !== 'workflow_call') {
-      return { workflow, target: step, stepIndex };
+      return { workflow, target: step, stepIndex, workflowRules };
     }
   }
 
   for (const [stepIndex, step] of workflow.steps.entries()) {
     const substep = (step.parallel === undefined ? [] : getAllParallelSubSteps(step.parallel))
       .find((candidate) => candidate.name === stepName && candidate.kind !== 'workflow_call');
-    if (substep) return { workflow, target: substep, stepIndex };
+    if (substep) return { workflow, target: substep, stepIndex, workflowRules };
   }
 
   for (const step of workflow.steps) {
@@ -333,7 +338,7 @@ function findStepTarget(workflow, stepName, depth = 0) {
       if (candidate.kind !== 'workflow_call') continue;
       const child = resolveWorkflowCallTarget(workflow, candidate, repoRoot);
       if (!child) continue;
-      const found = findStepTarget(child, stepName, depth + 1);
+      const found = findStepTarget(child, stepName, depth + 1, workflowRules);
       if (found) return found;
     }
   }
@@ -346,6 +351,7 @@ function findStepTarget(workflow, stepName, depth = 0) {
       workflow,
       target: directWorkflowCall,
       stepIndex: workflow.steps.indexOf(directWorkflowCall),
+      workflowRules,
     };
   }
 
@@ -361,7 +367,8 @@ function findStepThroughCall(workflow, callStepName, stepName) {
   if (!child) {
     throw new Error(`Workflow call "${callStepName}" could not be resolved`);
   }
-  return findStepTarget(child, stepName, 1);
+  const inheritedWorkflowRules = mergeWorkflowWideRules(undefined, workflow.allStepsRules);
+  return findStepTarget(child, stepName, 1, inheritedWorkflowRules);
 }
 
 function composeConfiguredDynamicFacets(target, selection, targetId, stepName) {
@@ -487,6 +494,7 @@ async function main() {
         throw new Error(`Workflow not found: ${workflowName}`);
       }
     }
+    let workflowRules = mergeWorkflowWideRules(undefined, config.allStepsRules);
 
     let target = null;
     let stepIndex = -1;
@@ -523,6 +531,7 @@ async function main() {
         config = found.workflow;
         target = found.target;
         stepIndex = found.stepIndex;
+        workflowRules = found.workflowRules;
       }
     }
     if (!target) {
@@ -622,7 +631,7 @@ async function main() {
       policySourcePath,
       knowledgeSourcePath,
       workflowCallVars,
-      workflowRules: config.allStepsRules,
+      workflowRules,
       language,
     };
 

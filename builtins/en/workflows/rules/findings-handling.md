@@ -1,7 +1,7 @@
 When reporting a finding, follow these rules.
 
 - Report each problem separately; do not combine different causes or contracts into one finding.
-- Include severity, evidence, the violated requirement, contract, or invariant, the concrete impact and failure condition, and a proposed fix for each finding; identify the location as `file:line` in principle.
+- Include the fields required by the output contract or policy for the finding's state. For `new`, include severity, evidence, the violated requirement, contract, or invariant, the concrete impact and failure condition, and a proposed fix, and identify the location as `file:line` in principle. For `persists`, keep the same `finding_id` and include previous evidence, current evidence, the issue, and a proposed fix. For `resolved`, keep the same `finding_id` and include resolution evidence. Do not impose fields that are specific to `new` on other states.
 - When a policy permits a locationless issue because required implementation or wiring is missing after all paths have been searched, follow that policy and do not supply an invented or inferred location.
 - When the output contract or policy defines `finding_id`, give every finding an ID in that format.
 - When reporting an existing finding again, reuse the same `finding_id`; do not assign a different ID.
