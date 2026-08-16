@@ -74,6 +74,15 @@ function instruction(name: string, language: Language, projectDir: string): stri
   return content;
 }
 
+function outputContract(name: string, language: Language, projectDir: string): string {
+  const content = resolveRefToContent(name, undefined, projectDir, 'output-contracts', {
+    projectDir,
+    lang: language,
+  });
+  if (content === undefined) throw new Error(`Builtin output contract not found: ${language}/${name}`);
+  return content;
+}
+
 function sectionBetween(content: string, start: string, end: string): string {
   const startIndex = content.indexOf(start);
   const endIndex = content.indexOf(end, startIndex + start.length);
@@ -121,7 +130,28 @@ describe('review-resolution temporal instruction contract', () => {
     assertOrderedClauses(section, markers.loopClauses);
     for (const forbidden of markers.loopForbidden) expect(section).not.toMatch(forbidden);
     expect(content).toContain(language === 'en'
-      ? 'Choose an outcome that does not retry the same review/fix work only when'
-      : '同じレビュー・修正を再実行しない選択肢を選んでください');
+      ? 'only when either implementation is incomplete or the report has not converged, and no available action can break the deadlock'
+      : '実装未完了または報告未収束のいずれかで、かつ利用可能な打開手段がない場合');
+  });
+
+  it.each(LANGUAGES)('uses only the current actionable-family section for reviewer continuation in %s', (language) => {
+    const selector = instruction('select-applicable-candidates', language, projectDirs[language]);
+    const adjudicationContract = outputContract('review-decision', language, projectDirs[language]);
+    const finalGateContract = outputContract('supervisor-validation', language, projectDirs[language]);
+
+    if (language === 'en') {
+      expect(selector).toMatch(/current `Actionable Families` section[\s\S]*Only that current section can establish an unresolved actionable finding for continuation/u);
+      expect(selector).toMatch(/do not infer one from Invariant Register Carry-forward, Requirement Decision Grounds, Finding Dispositions, Re-evaluation of Prior Findings, or any history row/u);
+      expect(selector).toMatch(/current `Actionable Families` section is absent or empty[\s\S]*no candidate selection/u);
+      expect(adjudicationContract).toMatch(/`Actionable Families` is the only selector-facing source of the current unresolved actionable set[\s\S]*Never copy a row there solely from carry-forward, requirement grounds, finding dispositions, or history/u);
+      expect(finalGateContract).toMatch(/`Actionable Families` is the only selector-facing source of the current unresolved actionable set[\s\S]*Include only families that support the current `REJECT`[\s\S]*never copy a row there solely from carry-forward, requirements fulfillment, prior-finding re-evaluation, finding dispositions, or history/u);
+      return;
+    }
+
+    expect(selector).toMatch(/現在の「修正対象 family」セクション[\s\S]*継続選択の根拠にできる未解消の actionable finding は、現在の「修正対象 family」セクションだけ/u);
+    expect(selector).toMatch(/「再発台帳の引き継ぎ」「要件の判定根拠」「指摘ごとの裁定」「前段 finding の再評価」または履歴行から推測しない/u);
+    expect(selector).toMatch(/現在の「修正対象 family」セクションが存在しないか空なら[\s\S]*候補を選択しない/u);
+    expect(adjudicationContract).toMatch(/「修正対象 family」は、selector が現在の未解消 actionable set を読む唯一の箇所[\s\S]*再発台帳の引き継ぎ、要件の判定根拠、指摘ごとの裁定、履歴だけを根拠に行を転記しない/u);
+    expect(finalGateContract).toMatch(/「修正対象 family」は、selector が現在の未解消 actionable set を読む唯一の箇所[\s\S]*現在の `REJECT` を根拠付ける family だけを含め[\s\S]*再発台帳の引き継ぎ、要件充足チェック、前段 finding の再評価、指摘ごとの裁定、履歴だけを根拠に行を転記しない/u);
   });
 });

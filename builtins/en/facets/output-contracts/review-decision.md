@@ -33,3 +33,4 @@
 - No actionable findings -> include only the summary, invariant-register carry-forward, finding dispositions, and unresolved premises
 - Actionable findings -> consolidate findings with the same cause into one family and include every `actionable` and `duplicate` finding ID in its target family
 - Findings with any other disposition are excluded from remediation and must not appear in an actionable family
+- `Actionable Families` is the only selector-facing source of the current unresolved actionable set. Never copy a row there solely from carry-forward, requirement grounds, finding dispositions, or history

@@ -26,4 +26,4 @@ Report Directory 内の最新レビュー報告と修正報告を調べ、この
 
 直前に完了した review ラウンドの最新 reviewer reports が全件 `APPROVE` で、`new`、`persists`、`reopened` がない一方、同じ actionable family がその reviewer reports にはなく、Report Directory に現在存在する `review-resolution.md` にだけ記録され、修正の再実行に対する `fix-verification.md` がその family を対象に含み、結果を `verified` と記録している場合は、次のレビュー・修正で解消できる通常の停滞として扱わないでください。別のレビューまたは同じ修正の再実行では解消できない場合に対応する、現在の loop monitor に宣言済みの選択肢を選んでください。reviewers または同じ fix を直接再実行する選択肢は選ばないでください。
 
-実装未完了または報告未収束で利用可能な打開手段がない場合、または上記の resolution だけによる反復がある場合に限り、同じレビュー・修正を再実行しない選択肢を選んでください。この反復について reviewers または同じ fix を直接再実行してはいけません。
+実装未完了または報告未収束のいずれかで、かつ利用可能な打開手段がない場合、または上記の resolution だけによる反復がある場合に限り、同じレビュー・修正を再実行しない選択肢を選んでください。この反復について reviewers または同じ fix を直接再実行してはいけません。
