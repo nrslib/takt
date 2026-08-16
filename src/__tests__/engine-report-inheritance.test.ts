@@ -217,9 +217,6 @@ describe('WorkflowEngine report inheritance', () => {
     const state = await engine!.run();
     expect(state.status).toBe('completed');
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(runAgent).mock.calls[0]?.[1]).toContain(
-      `（参照先の報告 ${reportName} はこの run に存在しない）`,
-    );
   }
 
   it('does not inherit a stale report for an unexecuted step from exact empty evidence', async () => {
@@ -299,7 +296,8 @@ describe('WorkflowEngine report inheritance', () => {
     };
     const sourceReportPath = join(cwd, '.takt', 'runs', sourceRunSlug, 'reports', ...reportName.split('/'));
     mkdirSync(join(sourceReportPath, '..'), { recursive: true });
-    writeFileSync(sourceReportPath, 'nested inherited review', 'utf-8');
+    const inheritedContent = 'nested inherited review';
+    writeFileSync(sourceReportPath, inheritedContent, 'utf-8');
     const finalGateEntry = buildWorkflowResumePointEntry(
       workflow,
       'final-gate',
@@ -366,8 +364,8 @@ describe('WorkflowEngine report inheritance', () => {
     const instruction = vi.mocked(runAgent).mock.calls[0]?.[1] ?? '';
 
     expect(state.status).toBe('completed');
-    expect(readFileSync(inheritedReportPath, 'utf-8')).toBe('nested inherited review');
-    expect(instruction).toContain('Inherited report: nested inherited review');
+    expect(readFileSync(inheritedReportPath, 'utf-8')).toBe(inheritedContent);
+    expect(instruction).toContain(inheritedContent);
     expect(instruction).not.toContain(inheritedReportPath);
     expect(instruction).not.toContain(sourceReportPath);
   });
@@ -410,6 +408,9 @@ describe('WorkflowEngine report inheritance', () => {
     const architectureReport = [...reportPrefix, 'architecture.md'].join('/');
     const frontendReport = [...reportPrefix, 'frontend.md'].join('/');
     const backendReport = [...reportPrefix, 'backend.md'].join('/');
+    const architectureContent = 'architecture finding';
+    const frontendContent = 'frontend finding';
+    const backendContent = 'backend finding';
     const workflow: WorkflowConfig = {
       name: 'parent',
       maxSteps: 2,
@@ -437,9 +438,9 @@ describe('WorkflowEngine report inheritance', () => {
     stepParticipationIndex.record(child, 'frontend', [delegateEntry], ['frontend.md'], 'reviewers');
     const sourceReportDir = join(cwd, '.takt', 'runs', sourceRunSlug, 'reports');
     for (const [reportName, content] of [
-      [architectureReport, 'architecture finding'],
-      [frontendReport, 'frontend finding'],
-      [backendReport, 'backend finding'],
+      [architectureReport, architectureContent],
+      [frontendReport, frontendContent],
+      [backendReport, backendContent],
     ]) {
       const sourcePath = join(sourceReportDir, ...reportName.split('/'));
       mkdirSync(join(sourcePath, '..'), { recursive: true });
@@ -479,11 +480,11 @@ describe('WorkflowEngine report inheritance', () => {
     const instruction = vi.mocked(runAgent).mock.calls[0]?.[1] ?? '';
 
     expect(state.status).toBe('completed');
-    expect(readFileSync(join(reportDir, ...architectureReport.split('/')), 'utf-8')).toBe('architecture finding');
-    expect(readFileSync(join(reportDir, ...frontendReport.split('/')), 'utf-8')).toBe('frontend finding');
+    expect(readFileSync(join(reportDir, ...architectureReport.split('/')), 'utf-8')).toBe(architectureContent);
+    expect(readFileSync(join(reportDir, ...frontendReport.split('/')), 'utf-8')).toBe(frontendContent);
     expect(existsSync(join(reportDir, ...backendReport.split('/')))).toBe(false);
-    expect(instruction).toContain('Architecture: architecture finding');
-    expect(instruction).toContain('Frontend: frontend finding');
+    expect(instruction).toContain(architectureContent);
+    expect(instruction).toContain(frontendContent);
   });
 
   it('rejects missing workflow-call invocation state before a resumed fix agent starts', async () => {
@@ -555,7 +556,8 @@ describe('WorkflowEngine report inheritance', () => {
     };
     const sourceReportDir = join(cwd, '.takt', 'runs', sourceRunSlug, 'reports');
     mkdirSync(sourceReportDir, { recursive: true });
-    writeFileSync(join(sourceReportDir, 'available-review.md'), 'available review', 'utf-8');
+    const availableContent = 'available review';
+    writeFileSync(join(sourceReportDir, 'available-review.md'), availableContent, 'utf-8');
     const stepParticipationIndex = new WorkflowStepParticipationIndex(new Map());
     stepParticipationIndex.record(
       workflow,
@@ -625,7 +627,7 @@ describe('WorkflowEngine report inheritance', () => {
         { reportName: '*', reason: 'workflow_call_report_cycle:parent' },
       ]),
     }));
-    expect(instruction).toContain('Report: available review');
+    expect(instruction).toContain(availableContent);
     expect(instruction).not.toContain(sourceReportPath);
     expect(instruction).not.toContain(inheritedReportPath);
   });

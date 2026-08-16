@@ -13,7 +13,7 @@ import type {
 import {
   enumerateRawParallelSubSteps,
 } from './workflowParallelTraversal.js';
-import { normalizeAutoRoutingConfig, normalizeRateLimitFallback, normalizeRuntime } from '../configNormalizers.js';
+import { normalizeRuntime } from '../configNormalizers.js';
 import type {
   FacetResolutionContext,
   WorkflowSections,
@@ -27,7 +27,7 @@ import {
   validateWorkflowCommandGates,
 } from './workflowNormalizationPolicies.js';
 import { normalizeLoopMonitors } from './workflowLoopMonitorNormalizer.js';
-import { normalizeProviderReference, normalizeStepFromRaw, type WorkflowLevelDefinitions } from './workflowStepNormalizer.js';
+import { normalizeStepFromRaw, type WorkflowLevelDefinitions } from './workflowStepNormalizer.js';
 import { resolveCapabilitySets } from './capabilitySetResolver.js';
 import { compileFacetPool, type FacetPoolCompilationInput } from './facetPoolCompiler.js';
 import { hasOwnFacetPool } from './workflowFacetPoolLookup.js';
@@ -174,13 +174,6 @@ export function normalizeWorkflowConfig(
   const workflowRuntime = normalizeRuntime(parsed.workflow_config?.runtime);
   validateWorkflowRuntimePrepare(workflowRuntime, workflowRuntimePreparePolicy);
   validateWorkflowCommandGates(parsed.steps, workflowCommandGatesPolicy);
-  const normalizedWorkflowProvider = normalizeProviderReference(
-    parsed.workflow_config?.provider,
-    parsed.workflow_config?.model,
-    parsed.workflow_config?.provider_options,
-    workflowDir,
-    context,
-  );
   const workflowDefinitions: WorkflowLevelDefinitions = {
     ...(parsed.capabilities !== undefined
       ? { capabilityOptions: resolveCapabilitySets(parsed.capabilities, workflowDir, context) }
@@ -194,14 +187,7 @@ export function normalizeWorkflowConfig(
       sections,
       parsed.schemas,
       ['steps', index],
-      normalizedWorkflowProvider.provider,
-      normalizedWorkflowProvider.model,
-      normalizedWorkflowProvider.modelSpecified,
       undefined,
-      normalizedWorkflowProvider.providerOptions,
-      undefined,
-      true,
-      true,
       context,
       projectOverrides,
       globalOverrides,
@@ -220,11 +206,6 @@ export function normalizeWorkflowConfig(
     description: parsed.description,
     subworkflow: normalizeSubworkflowConfig(parsed.subworkflow),
     schemas: parsed.schemas,
-    provider: normalizedWorkflowProvider.provider,
-    model: normalizedWorkflowProvider.model,
-    providerOptions: normalizedWorkflowProvider.providerOptions,
-    autoRouting: normalizeAutoRoutingConfig(parsed.auto_routing, { baseUrlTrust: 'loopback-only' }),
-    rateLimitFallback: normalizeRateLimitFallback(parsed.rate_limit_fallback),
     runtime: workflowRuntime,
     personas: parsed.personas,
     policies: sections.resolvedPolicies,

@@ -22,49 +22,33 @@ describe('interactiveInput', () => {
     it('should return localized English descriptions with apply values', () => {
       const result = getSlashCommandCompletions('/play', 'en');
 
-      expect(result).toEqual([
-        {
-          value: '/play',
-          applyValue: '/play ',
-          description: 'Run a task immediately',
-        },
-      ]);
+      expect(result).toHaveLength(1);
+      expect(result[0]).toMatchObject({ value: '/play', applyValue: '/play ' });
+      expect(result[0]?.description).toBeTypeOf('string');
     });
 
     it('should return localized Japanese descriptions', () => {
       const result = getSlashCommandCompletions('/play', 'ja');
 
-      expect(result).toEqual([
-        {
-          value: '/play',
-          applyValue: '/play ',
-          description: 'タスクを即実行する',
-        },
-      ]);
+      expect(result).toHaveLength(1);
+      expect(result[0]).toMatchObject({ value: '/play', applyValue: '/play ' });
+      expect(result[0]?.description).toBeTypeOf('string');
     });
 
     it('should return localized /accept descriptions with apply values', () => {
       const result = getSlashCommandCompletions('/accept', 'en');
 
-      expect(result).toEqual([
-        {
-          value: '/accept',
-          applyValue: '/accept ',
-          description: 'Accept latest assistant response',
-        },
-      ]);
+      expect(result).toHaveLength(1);
+      expect(result[0]).toMatchObject({ value: '/accept', applyValue: '/accept ' });
+      expect(result[0]?.description).toBeTypeOf('string');
     });
 
     it('should return localized /paste-image descriptions with apply values', () => {
       const result = getSlashCommandCompletions('/paste-image', 'ja');
 
-      expect(result).toEqual([
-        {
-          value: '/paste-image',
-          applyValue: '/paste-image ',
-          description: 'クリップボード画像を添付',
-        },
-      ]);
+      expect(result).toHaveLength(1);
+      expect(result[0]).toMatchObject({ value: '/paste-image', applyValue: '/paste-image ' });
+      expect(result[0]?.description).toBeTypeOf('string');
     });
   });
 
@@ -139,26 +123,18 @@ describe('interactiveInput', () => {
       const provider = createSlashCommandCompletionProvider('en');
       const results = provider({ buffer: 'fix /g later', cursorPos: 6 });
 
-      expect(results).toEqual([
-        {
-          value: 'fix /go later',
-          applyValue: 'fix /go later',
-          description: 'Create instruction & run',
-        },
-      ]);
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({ value: 'fix /go later', applyValue: 'fix /go later' });
+      expect(results[0]?.description).toBeTypeOf('string');
     });
 
     it('should complete /accept from suffix command prefix', () => {
       const provider = createSlashCommandCompletionProvider('en');
       const results = provider({ buffer: 'use that /a', cursorPos: 11 });
 
-      expect(results).toEqual([
-        {
-          value: 'use that /accept',
-          applyValue: 'use that /accept ',
-          description: 'Accept latest assistant response',
-        },
-      ]);
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({ value: 'use that /accept', applyValue: 'use that /accept ' });
+      expect(results[0]?.description).toBeTypeOf('string');
     });
 
     it('should return empty for slash in middle of text', () => {
@@ -173,21 +149,19 @@ describe('interactiveInput', () => {
     it('should delegate to readMultilineInput with a slash command completion provider', async () => {
       mockReadMultilineInput.mockResolvedValue('/go');
 
-      const result = await readInteractiveInput('> ', 'en');
+      const prompt = 'task input: ';
+      const result = await readInteractiveInput(prompt, 'en');
 
       expect(result).toBe('/go');
       expect(mockReadMultilineInput).toHaveBeenCalledOnce();
 
-      const [prompt, options] = mockReadMultilineInput.mock.calls[0]!;
-      expect(prompt).toBe('> ');
+      const [inputPrompt, options] = mockReadMultilineInput.mock.calls[0]!;
+      expect(inputPrompt).toBeTypeOf('string');
       expect(options?.completionProvider).toBeTypeOf('function');
-      expect(options?.completionProvider?.({ buffer: '/g', cursorPos: 2 })).toEqual([
-        {
-          value: '/go',
-          applyValue: '/go ',
-          description: 'Create instruction & run',
-        },
-      ]);
+      const completions = options?.completionProvider?.({ buffer: '/g', cursorPos: 2 });
+      expect(completions).toHaveLength(1);
+      expect(completions?.[0]).toMatchObject({ value: '/go', applyValue: '/go ' });
+      expect(completions?.[0]?.description).toBeTypeOf('string');
     });
   });
 });

@@ -407,6 +407,33 @@ describe('CodexProvider — structured output', () => {
     });
   });
 
+  it('permission_control=codex を通常経路と strict isolated structured 経路へ渡す', async () => {
+    mockCallCodex.mockResolvedValue(doneResponse('coder'));
+
+    const provider = new CodexProvider();
+    await provider.setup({ name: 'coder' }).call('prompt', {
+      cwd: '/tmp',
+      permissionMode: 'edit',
+      providerOptions: { codex: { permissionControl: 'codex' } },
+    });
+    expect(mockCallCodex.mock.calls[0]?.[2]).toMatchObject({
+      permissionMode: 'edit',
+      permissionControl: 'codex',
+    });
+
+    await provider.setupIsolatedStructured({ name: 'selector' }).call('prompt', {
+      cwd: '/tmp',
+      permissionMode: 'full',
+      providerOptions: { codex: { permissionControl: 'codex' } },
+      outputSchema: SCHEMA,
+    });
+    expect(mockCallCodex.mock.calls[1]?.[2]).toMatchObject({
+      permissionMode: 'readonly',
+      permissionControl: 'codex',
+    });
+    expect(mockCallCodex.mock.calls[1]?.[2].networkAccess).toBeUndefined();
+  });
+
   it('childProcessEnv を callCodex に渡す', async () => {
     mockCallCodex.mockResolvedValue(doneResponse('coder'));
     const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
@@ -564,13 +591,6 @@ describe('OpenCodeProvider — structured output', () => {
 
     const opts = mockCallOpenCode.mock.calls[0]?.[2] as Record<string, unknown>;
     expect(opts.imageAttachments).toBeUndefined();
-    expect(mockLogger.info).toHaveBeenCalledWith('OpenCode provider does not support imageAttachments; ignoring');
-
-    mockLogger.info.mockClear();
-    await agent.call('prompt', { cwd: '/tmp', model: 'openai/gpt-4', imageAttachments: [] });
-    await agent.call('prompt', { cwd: '/tmp', model: 'openai/gpt-4' });
-
-    expect(mockLogger.info).not.toHaveBeenCalledWith('OpenCode provider does not support imageAttachments; ignoring');
   });
 });
 
@@ -614,13 +634,6 @@ describe('MockProvider — structured output', () => {
 
     const opts = mockCallMock.mock.calls[0]?.[2] as Record<string, unknown>;
     expect(opts.imageAttachments).toBeUndefined();
-    expect(mockLogger.info).toHaveBeenCalledWith('Mock provider does not support imageAttachments; ignoring');
-
-    mockLogger.info.mockClear();
-    await agent.call('prompt', { cwd: '/tmp', imageAttachments: [] });
-    await agent.call('prompt', { cwd: '/tmp' });
-
-    expect(mockLogger.info).not.toHaveBeenCalledWith('Mock provider does not support imageAttachments; ignoring');
   });
 });
 

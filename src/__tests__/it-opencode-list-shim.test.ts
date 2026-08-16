@@ -70,14 +70,12 @@ function startProbeRecorder(): Promise<ProbeRecorder> {
     request.on('data', (chunk) => { body += chunk; });
     request.on('end', () => {
       const parsed = body ? JSON.parse(body) as Record<string, unknown> : {};
-      const messages = (parsed.messages ?? []) as Array<{ role: string; content: unknown }>;
-      const systemText = messages.filter((m) => m.role === 'system').map((m) => String(m.content)).join('');
-      const isTitle = systemText.startsWith('You are a title generator');
-      if (request.url?.includes('chat/completions') && !isTitle) {
+      const hasToolDefinitions = Array.isArray(parsed.tools);
+      if (request.url?.includes('chat/completions') && hasToolDefinitions) {
         recorder.captured.push(parsed);
       }
       const chunks: Array<Record<string, unknown>> = [];
-      if (!isTitle && recorder.scriptToolCall !== undefined) {
+      if (hasToolDefinitions && recorder.scriptToolCall !== undefined) {
         const toolCall = recorder.scriptToolCall;
         recorder.scriptToolCall = undefined;
         chunks.push(

@@ -219,6 +219,7 @@ describe('companion StepExecutor lifecycle', () => {
   });
 
   it('delivers moderator-accepted findings in a follow-up prompt after draining reviews', async () => {
+    const finding = 'Remove the unsafe assignment.';
     setMockScenario([
       { persona: 'coder', status: 'done', content: 'implemented' },
       {
@@ -230,7 +231,7 @@ describe('companion StepExecutor lifecycle', () => {
             severity: 'must_fix',
             file: 'src/a.ts',
             line: 1,
-            finding: 'Remove the unsafe assignment.',
+            finding,
           }],
           notes: null,
         },
@@ -325,8 +326,7 @@ describe('companion StepExecutor lifecycle', () => {
     expect(drain.mock.invocationCallOrder[0]).toBeLessThan(
       executeAgentMock.mock.invocationCallOrder[coderCallIndices[1]!]!,
     );
-    expect(coderPrompts[1]).toContain('BEGIN COMPANION EVIDENCE');
-    expect(coderPrompts[1]).toContain('Remove the unsafe assignment.');
+    expect(coderPrompts[1]).toContain(finding);
     expect(result.response).toMatchObject({ status: 'done', content: 'fixed' });
     expect(workflowState.companion).toEqual({
       completionSettled: true,

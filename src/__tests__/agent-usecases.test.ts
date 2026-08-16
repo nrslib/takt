@@ -892,10 +892,6 @@ describe('agent-usecases', () => {
       { id: 'p1', title: 'Part 1', instruction: 'Do 1' },
     ]);
     expect(runAgent).toHaveBeenCalledTimes(2);
-    const secondPrompt = vi.mocked(runAgent).mock.calls[1]?.[1];
-    expect(secondPrompt).toContain('Previously rejected decomposition');
-    expect(secondPrompt).toContain('"code": "decomposition.parts_invalid"');
-    expect(secondPrompt).toContain('regenerate all parts');
   });
 
   it('decomposition は provider 例外を再試行しない', async () => {

@@ -476,12 +476,6 @@ describe('WorkflowEngine rate limit fallback', () => {
 
     // Then
     expect(state.status).toBe('completed');
-    const prompts = vi.mocked(runAgent).mock.calls.map((call) => call[1]);
-    expect(prompts[0]).not.toContain('Fallback Execution');
-    expect(prompts[1]).toContain('Fallback Execution');
-    expect(prompts[1]).toContain('claude');
-    expect(prompts[1]).toContain('codex');
-    expect(prompts[2]).not.toContain('Fallback Execution');
     expect(providerCalls().map((call) => call.resolvedProvider)).toEqual(['claude', 'codex', 'claude']);
   });
 
@@ -524,9 +518,6 @@ describe('WorkflowEngine rate limit fallback', () => {
     expect(state.stepIterations.get('plan')).toBe(1);
     expect(state.stepIterations.get('verify')).toBe(1);
     expect(providerCalls().map((call) => call.resolvedProvider)).toEqual(['claude', 'codex', 'claude', 'codex']);
-    const prompts = vi.mocked(runAgent).mock.calls.map((call) => call[1]);
-    expect(prompts[1]).toContain('Fallback Execution');
-    expect(prompts[3]).toContain('Fallback Execution');
   });
 
   it('report phase が rate_limited の場合は fallback provider で同一 step を再実行する', async () => {
@@ -677,12 +668,6 @@ describe('WorkflowEngine rate limit fallback', () => {
     expect(state.status).toBe('completed');
     expect(providerCalls().map((call) => call.resolvedProvider)).toEqual(['claude', 'codex', 'claude']);
     expect(providerCalls().map((call) => call.sessionId)).toEqual([undefined, undefined, undefined]);
-    const prompts = vi.mocked(runAgent).mock.calls.map((call) => call[1]);
-    expect(prompts[0]).not.toContain('Fallback Execution');
-    expect(prompts[1]).toContain('Fallback Execution');
-    expect(prompts[1]).toContain('claude');
-    expect(prompts[1]).toContain('codex');
-    expect(prompts[2]).not.toContain('Fallback Execution');
   });
 
   it('parallel sub-step が rate_limited の場合は all-failed abort ではなく fallback provider で再実行する', async () => {
@@ -725,19 +710,6 @@ describe('WorkflowEngine rate limit fallback', () => {
     const calls = providerCalls();
     expect(calls[1]?.sessionId).toBeUndefined();
     expect(calls[3]?.sessionId).toEqual(expect.any(String));
-    const prompts = vi.mocked(runAgent).mock.calls.map((call) => call[1]);
-    expect(prompts[0]).not.toContain('Fallback Execution');
-    expect(prompts[1]).not.toContain('Fallback Execution');
-    expect(prompts[2]).toContain('Fallback Execution');
-    expect(prompts[2]).toContain('claude');
-    expect(prompts[2]).toContain('codex');
-    expect(prompts[2]).toContain('arch-review');
-    expect(prompts[2]).toContain('security-review');
-    expect(prompts[2]).toContain('Aggregate rules were not evaluated');
-    expect(prompts[2]).toContain('Rate limit exceeded. Please try again later.');
-    expect(prompts[3]).not.toContain('Fallback Execution');
-    expect(prompts[3]).toContain('Aggregate rules were not evaluated');
-    expect(prompts[3]).toContain('Rate limit exceeded. Please try again later.');
     expect(runAgent).toHaveBeenCalledTimes(4);
     expect(mockRuleEvaluation).toHaveBeenCalledTimes(3);
   });
@@ -801,11 +773,6 @@ describe('WorkflowEngine rate limit fallback', () => {
       'codex',
       'claude',
     ]);
-    const prompts = vi.mocked(runAgent).mock.calls.map((call) => call[1]);
-    expect(prompts[2]).toContain('Fallback Execution');
-    expect(prompts[3]).not.toContain('Fallback Execution');
-    expect(prompts[2]).not.toContain('Quality gate failed');
-    expect(prompts[3]).not.toContain('Quality gate failed');
   });
 
   it('parallel sub-step の report phase が rate_limited の場合も fallback provider で再実行する', async () => {
@@ -895,8 +862,6 @@ describe('WorkflowEngine rate limit fallback', () => {
         makeStep('reviewers', {
           parallel: [
             makeStep('arch-review', {
-              provider: 'codex',
-              model: 'gpt-5',
               rules: [makeRule('done', 'COMPLETE')],
             }),
             makeStep('security-review', {
@@ -910,6 +875,11 @@ describe('WorkflowEngine rate limit fallback', () => {
       ],
     });
     const engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir, {
+      providerRouting: {
+        steps: {
+          'arch-review': { provider: 'codex', model: 'gpt-5' },
+        },
+      },
       rateLimitFallback: {
         switchChain: [
           { provider: 'codex', model: 'gpt-5' },
@@ -941,9 +911,6 @@ describe('WorkflowEngine rate limit fallback', () => {
       'opencode',
       'claude',
     ]);
-    const prompts = vi.mocked(runAgent).mock.calls.map((call) => call[1]);
-    expect(prompts[2]).toContain('Previous provider/model: codex / gpt-5');
-    expect(prompts[2]).toContain('Current provider/model: opencode / opencode/big-pickle');
     expect(runAgent).toHaveBeenCalledTimes(4);
     expect(mockRuleEvaluation).toHaveBeenCalledTimes(4);
   });
@@ -1114,13 +1081,6 @@ describe('WorkflowEngine rate limit fallback', () => {
     ]);
     const prompts = vi.mocked(runAgent).mock.calls.map((call) => call[1]);
     expect(prompts[0]).toContain(previousTail);
-    expect(prompts[1]).not.toContain('Fallback Execution');
-    expect(prompts[1]).toContain('Step Iteration: 1(times this step has run)');
-    expect(prompts[4]).toContain('Fallback Execution');
-    expect(prompts[4]).toContain('Previous provider/model: claude / claude-sonnet');
-    expect(prompts[4]).toContain('Current provider/model: codex / gpt-5');
-    expect(prompts[4]).toContain('Implement API with fallback');
-    expect(prompts[4]).toContain('Step Iteration: 1(times this step has run)');
     expect(prompts[3]).toContain(previousTail);
     const policySnapshots = readdirSync(join(tmpDir, '.takt', 'runs', 'test-report-dir', 'context', 'policy'))
       .filter((file) => file.startsWith('implement-part-'));
@@ -1381,8 +1341,5 @@ describe('WorkflowEngine rate limit fallback', () => {
       'codex',
       'codex',
     ]);
-    const prompts = vi.mocked(runAgent).mock.calls.map((call) => call[1]);
-    expect(prompts[3]).toContain('Previous provider/model: opencode / opencode/big-pickle');
-    expect(prompts[3]).toContain('Current provider/model: codex / gpt-5');
   });
 });

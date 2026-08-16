@@ -1,11 +1,5 @@
 name: e2e-mock-two-step
 description: Two-step sequential workflow for E2E testing
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
 personas:
   test-coder: |
     You are the E2E test coder.

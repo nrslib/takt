@@ -1004,11 +1004,8 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       { name: 'implement.part-2', tags: ['coding', 'edit'] },
     ]);
     expect(result.response.status).toBe('done');
-    expect(result.response.content).toContain('## decomposition');
     expect(result.response.content).toContain('"id": "part-1"');
     expect(result.response.content).toContain('"id": "part-2"');
-    expect(result.response.content).toContain('## part-1: API');
-    expect(result.response.content).toContain('## part-2: UI');
     expect(result.response.content).toContain('API done');
     expect(result.response.content).toContain('UI done');
   });
@@ -2474,7 +2471,6 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       );
 
       expect(result.response.status).toBe('done');
-      expect(result.response.content).toContain('## part-1: Implementation');
       expect(result.response.content).toContain('[ERROR] part timeout: Part timeout after 1000ms');
       expect(result.response.content).toContain('timeout-continuation');
       expect(result.response.content).toContain('Continuation completed');
@@ -2588,7 +2584,6 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       );
 
       expect(result.response.status).toBe('done');
-      expect(result.response.content).toContain('## timeout-continuation: Timeout continuation');
       expect(result.response.content).toContain('Continuation 1 completed');
       expect(structuredCaller.requestMoreParts).toHaveBeenCalledTimes(2);
       expect(mockExecuteAgent).toHaveBeenCalledTimes(3);

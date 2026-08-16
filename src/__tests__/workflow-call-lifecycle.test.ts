@@ -306,7 +306,6 @@ function createProviderResolutionFailureWorkflows(parallel: boolean): {
     name: parallel ? 'parallel-parent' : 'serial-parent',
     initialStep: parallel ? 'reviewers' : 'delegate',
     maxSteps: 3,
-    providerOptions: { codex: { networkAccess: false } },
     steps: parallel
       ? [{
           name: 'reviewers',
@@ -341,9 +340,9 @@ async function runProviderResolutionFailureThroughEngine(parallel: boolean): Pro
   const { parent, child } = createProviderResolutionFailureWorkflows(parallel);
   const emit = vi.fn();
   let runStarted = false;
-  let parallelStepStarted = false;
+  let workflowCallStarted = false;
   let providerOriginCalls = 0;
-  const parentParallelProviderResolutionCalls = parallel ? 2 : 0;
+  const parentParallelProviderResolutionCalls = 0;
   let resumePointAtStart: ReturnType<WorkflowEngine['getResumePoint']>;
   try {
     const engine = new WorkflowEngine(parent, projectDir, 'Resolve provider context', {
@@ -354,7 +353,7 @@ async function runProviderResolutionFailureThroughEngine(parallel: boolean): Pro
       providerOptionsOriginResolver: (path) => {
         if (
           runStarted
-          && (!parallel || parallelStepStarted)
+          && (!parallel || workflowCallStarted)
           && path === 'codex.networkAccess'
         ) {
           providerOriginCalls++;
@@ -366,12 +365,8 @@ async function runProviderResolutionFailureThroughEngine(parallel: boolean): Pro
       },
       workflowCallResolver: () => child,
     });
-    engine.on('step:start', (step) => {
-      if (step.name === 'reviewers') {
-        parallelStepStarted = true;
-      }
-    });
     engine.on('workflow_call:start', (lifecycle) => {
+      workflowCallStarted = true;
       resumePointAtStart = engine.getResumePoint();
       emit('workflow_call:start', lifecycle);
     });
@@ -575,9 +570,11 @@ describe('WorkflowCallRunner lifecycle events', () => {
   it.each([
     { name: 'serial RunLoop', parallel: false },
     { name: 'ParallelRunner', parallel: true },
-  ])('records the original provider failure through the real $name wiring', async ({ parallel }) => {
+  ])('records provider resolution failure through the real $name wiring', async ({ parallel }) => {
     const result = await runProviderResolutionFailureThroughEngine(parallel);
-    const reason = `${parallel ? 'parallel' : 'serial'} provider resolution failed`;
+    const reason = parallel
+      ? 'Status not found for step "delegate": no rule matched after all detection phases'
+      : 'serial provider resolution failed';
 
     expect(result.state.status).toBe('aborted');
     const complete = expectFailedLifecycle(result.emit, reason);
@@ -668,7 +665,6 @@ describe('WorkflowCallExecutor routing runtime', () => {
   });
 
   function createRoutingHarness(options: {
-    childAutoRouting?: AutoRoutingConfig;
     estimatorSource: 'injected' | 'engine-default';
     initialUserInputs?: string[];
   }) {
@@ -676,10 +672,8 @@ describe('WorkflowCallExecutor routing runtime', () => {
     const childWorkflow = {
       name: 'child',
       steps: [],
-      ...(options.childAutoRouting === undefined
-        ? {}
-        : { autoRouting: options.childAutoRouting }),
     } as never;
+    const parentAutoRouting = createAutoRoutingConfig('parent-router-model');
     const parentEstimator: WorkRequirementEstimator = { estimate: vi.fn() };
     const state = createInitialState(parentWorkflow, {
       projectCwd: '/project',
@@ -695,7 +689,7 @@ describe('WorkflowCallExecutor routing runtime', () => {
       getOptions: () => ({
         projectCwd: '/project',
         provider: 'mock',
-        autoRouting: createAutoRoutingConfig('parent-router-model'),
+        autoRouting: parentAutoRouting,
         autoRoutingEstimator: parentEstimator,
         autoRoutingEstimatorSource: options.estimatorSource,
       }),
@@ -742,7 +736,7 @@ describe('WorkflowCallExecutor routing runtime', () => {
       } as never, { syncParentState: true });
     };
 
-    return { createdOptions, execute, parentEstimator };
+    return { createdOptions, execute, parentEstimator, parentAutoRouting };
   }
 
   it('reuses an injected estimator while isolating inherited routing runtime by call site', async () => {
@@ -763,32 +757,27 @@ describe('WorkflowCallExecutor routing runtime', () => {
     expect(createWorkRequirementEstimatorMock).not.toHaveBeenCalled();
   });
 
-  it('reuses an injected estimator when the child defines its own routing config', async () => {
-    const childAutoRouting = createAutoRoutingConfig('child-router-model');
+  it('inherits runtime routing when the child has no workflow-owned routing config', async () => {
     const harness = createRoutingHarness({
-      childAutoRouting,
       estimatorSource: 'injected',
     });
 
     await harness.execute('delegate');
 
-    expect(harness.createdOptions[0]?.autoRouting).toBe(childAutoRouting);
+    expect(harness.createdOptions[0]?.autoRouting).toBe(harness.parentAutoRouting);
     expect(harness.createdOptions[0]?.autoRoutingEstimator).toBe(harness.parentEstimator);
     expect(createWorkRequirementEstimatorMock).not.toHaveBeenCalled();
   });
 
-  it('creates a child-specific estimator for engine-default routing', async () => {
+  it('reuses the inherited estimator for engine-default child routing runtime', async () => {
     const harness = createRoutingHarness({
-      childAutoRouting: createAutoRoutingConfig('child-router-model'),
       estimatorSource: 'engine-default',
     });
 
     await harness.execute('delegate');
 
-    expect(harness.createdOptions[0]?.autoRoutingEstimator).not.toBe(harness.parentEstimator);
-    expect(createWorkRequirementEstimatorMock).toHaveBeenCalledWith(expect.objectContaining({
-      provider: 'mock',
-      model: 'child-router-model',
-    }));
+    expect(harness.createdOptions[0]?.autoRouting).toBe(harness.parentAutoRouting);
+    expect(harness.createdOptions[0]?.autoRoutingEstimator).toBe(harness.parentEstimator);
+    expect(createWorkRequirementEstimatorMock).not.toHaveBeenCalled();
   });
 });

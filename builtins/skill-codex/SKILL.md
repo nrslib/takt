@@ -81,7 +81,7 @@ $takt {workflow} [permission] {task...}
 
 YAML から以下を抽出する（→ references/yaml-schema.md 参照）:
 - `name`, `max_steps`, `initial_step`, `steps` 配列
-- `workflow_config`（ワークフロー全体の provider / runtime 等）
+- `workflow_config`（`runtime.prepare` などの process 準備。provider / model / options は runtime.yaml）
 - セクションマップ: `personas`, `policies`, `instructions`, `output_contracts`, `knowledge`
 
 ### 手順 2: セクションリソースの事前読み込み

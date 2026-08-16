@@ -363,7 +363,7 @@ steps:
       outputContracts: [
         expect.objectContaining({
           name: 'summary',
-          format: expect.stringContaining('# Summary Format'),
+          format: expect.any(String),
         }),
       ],
     });

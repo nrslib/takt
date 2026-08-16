@@ -71,27 +71,4 @@ describe('PiProvider', () => {
     });
   });
 
-  it('warns when unsupported options are ignored', async () => {
-    mockCallPi.mockResolvedValue({
-      persona: 'worker',
-      status: 'done',
-      content: 'ok',
-      timestamp: new Date(),
-    });
-    mockLogger.warn.mockClear();
-
-    const agent = new PiProvider().setup({ name: 'worker' });
-    await agent.call('implement', {
-      cwd: '/tmp/work',
-      mcpServers: { docs: { command: 'node', args: ['server.js'] } },
-      maxTurns: 3,
-      outputSchema: { type: 'object' },
-    });
-
-    expect(mockLogger.warn).toHaveBeenCalledWith(
-      'Pi provider does not support mcpServers; configure integrations through Pi extensions when supported',
-    );
-    expect(mockLogger.warn).toHaveBeenCalledWith('Pi provider does not support maxTurns; ignoring');
-    expect(mockLogger.warn).toHaveBeenCalledWith('Pi provider does not support outputSchema; ignoring');
-  });
 });

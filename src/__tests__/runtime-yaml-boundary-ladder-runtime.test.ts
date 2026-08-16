@@ -265,26 +265,6 @@ describe('ladder end clamps to the terminal stage — monotonic escalation (INV-
   });
 });
 
-describe('targeted promotion still wins over the ladder (CT-PROMO-2 preserved)', () => {
-  it('should drive provider/model directly and ignore ladders when a targeted {at} entry matches', async () => {
-    const result = await resolvePromotionRuntime(
-      makeContext({
-        baseSource: 'provider_routing.steps',
-        providerLadders: { steps: { 'development-core/fix': [MAIN, STRONG] } },
-      }),
-      makeStep({ promotion: [{ at: 3, provider: 'codex', model: 'gpt-5.5' }] }),
-      3,
-      undefined,
-    );
-    expect(result?.providerInfo).toMatchObject({
-      provider: 'codex',
-      model: 'gpt-5.5',
-      providerSource: 'promotion',
-    });
-    expect(warnSpy).not.toHaveBeenCalled();
-  });
-});
-
 describe('tag ladder selection applies the same conflict policy as the base resolution', () => {
   const CONFLICTING_TAGS: ProviderLadderConfig = {
     tags: { heavy: [MAIN, STRONG], slow: [MAIN, STRONGER] },

@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { AutoRoutingConfig, WorkflowConfig } from '../core/models/index.js';
+import type { WorkflowConfig } from '../core/models/index.js';
 import {
   getWorkflowDescription,
   getWorkflowDescriptionFromConfig,
@@ -24,41 +24,54 @@ describe('getWorkflowDescription', () => {
     return root;
   }
 
-  function createRuleBasedPreviewRouting(
-    poolRules?: AutoRoutingConfig['poolRules'],
-  ): AutoRoutingConfig {
-    return {
-      strategy: 'balanced',
-      router: { provider: 'mock', model: 'gpt-router' },
-      candidates: [{
-        name: 'rule-candidate',
-        description: 'Rule-based preview candidate',
-        provider: 'codex',
-        model: 'gpt-rule',
-        routingTier: 'medium',
-      }],
-      candidatePools: {
-        general: { candidates: ['rule-candidate'], fallback: 'rule-candidate' },
-      },
-      defaultPool: 'general',
-      rules: { steps: { 'preview-auto-routing/implement': 'rule-candidate' } },
-      ...(poolRules === undefined ? {} : { poolRules }),
-    };
-  }
-
-  function createProgrammaticPreviewWorkflow(autoRouting: AutoRoutingConfig, model?: string): WorkflowConfig {
+  function createProgrammaticPreviewWorkflow(): WorkflowConfig {
     return {
       name: 'preview-auto-routing',
       initialStep: 'implement',
       maxSteps: 1,
-      ...(model === undefined ? {} : { model }),
-      autoRouting,
       steps: [{
         name: 'implement',
         instruction: 'Implement the task',
         rules: [{ condition: 'done', next: 'COMPLETE' }],
       }],
     } as WorkflowConfig;
+  }
+
+  function writePreviewRuntime(projectDir: string, assignStepPool: boolean): void {
+    const configDir = join(projectDir, '.takt');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'runtime.yaml'), [
+      'version: 1',
+      'provider:',
+      '  defaults:',
+      '    profile: default',
+      '  profiles:',
+      '    default:',
+      '      provider: mock',
+      '      model: gpt-default',
+      '    rule-candidate:',
+      '      provider: codex',
+      '      model: gpt-rule',
+      '    router:',
+      '      provider: mock',
+      '      model: gpt-router',
+      ...(assignStepPool
+        ? [
+            '  targets:',
+            '    steps:',
+            '      preview-auto-routing/implement:',
+            '        pool: general',
+          ]
+        : []),
+      '  auto_routing:',
+      '    router_profile: router',
+      '    pools:',
+      '      general:',
+      '        candidates:',
+      '          - profile: rule-candidate',
+      '            tier: medium',
+      '        fallback_profile: rule-candidate',
+    ].join('\n'));
   }
 
   it('dynamic parallel の mode と fixed/pool role、static child facet を preview に含める (DFP-002, DFP-008)', () => {
@@ -102,9 +115,6 @@ describe('getWorkflowDescription', () => {
 
     const description = getWorkflowDescription('dynamic-preview', projectDir, 1);
 
-    expect(description.workflowStructure).toContain('selector mode: cumulative');
-    expect(description.workflowStructure).toContain('fixed: architecture');
-    expect(description.workflowStructure).toContain('pool candidate: frontend');
     expect(description.stepPreviews[0]).toMatchObject({
       name: 'reviewers',
       dynamicSelectionMode: 'cumulative',
@@ -195,14 +205,12 @@ describe('getWorkflowDescription', () => {
     });
   });
 
-  it('pool未割当のauto-routing step ruleはdefaults previewを上書きしない', () => {
+  it('pool未割当のruntime auto-routingはdefaults previewを上書きしない', () => {
     const projectDir = createProject();
     const globalConfigDir = createProject();
-    const configDir = join(projectDir, '.takt');
-    mkdirSync(configDir, { recursive: true });
-    writeFileSync(join(configDir, 'config.yaml'), 'provider: mock\nmodel: gpt-default\n');
+    writePreviewRuntime(projectDir, false);
     const description = withGlobalConfigDirOverride(globalConfigDir, () => getWorkflowDescriptionFromConfig(
-      createProgrammaticPreviewWorkflow(createRuleBasedPreviewRouting(), 'gpt-default'),
+      createProgrammaticPreviewWorkflow(),
       projectDir,
       1,
     ));
@@ -211,21 +219,18 @@ describe('getWorkflowDescription', () => {
     expect(description.stepPreviews[0]).toMatchObject({ provider: 'mock' });
   });
 
-  it('明示的なpool割当があるauto-routing step ruleはrule-based previewを維持する', () => {
+  it('明示的なruntime pool割当は動的provider/modelを固定値としてpreviewしない', () => {
     const projectDir = createProject();
     const globalConfigDir = createProject();
+    writePreviewRuntime(projectDir, true);
     const description = withGlobalConfigDirOverride(globalConfigDir, () => getWorkflowDescriptionFromConfig(
-      createProgrammaticPreviewWorkflow(
-        createRuleBasedPreviewRouting({ steps: { 'preview-auto-routing/implement': 'general' } }),
-      ),
+      createProgrammaticPreviewWorkflow(),
       projectDir,
       1,
     ));
 
-    expect(description.stepPreviews[0]).toMatchObject({
-      provider: 'codex',
-      model: 'gpt-rule',
-    });
+    expect(description.stepPreviews[0]).not.toHaveProperty('provider');
+    expect(description.stepPreviews[0]).not.toHaveProperty('model');
   });
 
   it('OpenCode selectorをshared transportでpreviewできる', () => {

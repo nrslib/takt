@@ -1,11 +1,5 @@
 name: e2e-mock-single
 description: Minimal mock-only workflow for CLI E2E
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
 personas:
   test-coder: |
     You are the E2E test coder.
@@ -14,12 +8,7 @@ steps:
   - name: execute
     edit: true
     persona: test-coder
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Write
-          - Edit
+    capabilities: edit
     required_permission_mode: edit
     instruction: |
       {task}

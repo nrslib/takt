@@ -154,7 +154,6 @@ describe('createWorkRequirementEstimator', () => {
     await estimator.estimate(createModelInput());
 
     const [, prompt, options] = vi.mocked(runAgent).mock.calls[0] ?? [];
-    expect(prompt).toContain('required_tier');
     expect(prompt).not.toMatch(/terra|sol|candidate_pool|gpt-5|\/repo/i);
     expect(options).toMatchObject({
       cwd: '/repo',

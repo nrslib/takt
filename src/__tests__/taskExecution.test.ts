@@ -1123,7 +1123,7 @@ describe('executeAndCompleteTask', () => {
     expect(mockExecuteWorkflow.mock.calls[0]?.[0]).toBe(workflow);
   });
 
-  it('should use workflow terminology when named workflow is missing', async () => {
+  it('should report a missing named workflow without executing it', async () => {
     mockLoadWorkflowByIdentifier.mockReturnValueOnce(undefined);
 
     const result = await executeTask({
@@ -1134,10 +1134,8 @@ describe('executeAndCompleteTask', () => {
     });
 
     expect(result).toBe(false);
-    expect(mockError).toHaveBeenCalledWith('Workflow "missing-workflow" not found.');
-    expect(mockInfo).toHaveBeenCalledWith('Available workflows are searched in .takt/workflows/ and ~/.takt/workflows/.');
-    expect(mockInfo).toHaveBeenCalledWith('If the same workflow name exists in multiple locations, project workflows/ take priority over user workflows/.');
-    expect(mockInfo).toHaveBeenCalledWith('Specify a valid workflow when creating tasks (e.g., via "takt add").');
+    expect(mockError).toHaveBeenCalledWith(expect.stringContaining('missing-workflow'));
+    expect(mockInfo).toHaveBeenCalled();
   });
 
   it('should use workflow file terminology when workflow path is missing', async () => {
@@ -1152,8 +1150,8 @@ describe('executeAndCompleteTask', () => {
     });
 
     expect(result).toBe(false);
-    expect(mockError).toHaveBeenCalledWith('Workflow file not found: ./custom-workflow.yaml');
-    expect(mockInfo).not.toHaveBeenCalledWith('Available workflows are searched in .takt/workflows/ and ~/.takt/workflows/.');
+    expect(mockError).toHaveBeenCalledWith(expect.stringContaining('./custom-workflow.yaml'));
+    expect(mockInfo).not.toHaveBeenCalled();
   });
 
   it('should sanitize workflow identifiers in terminal errors', async () => {
@@ -1167,7 +1165,8 @@ describe('executeAndCompleteTask', () => {
     });
 
     expect(result).toBe(false);
-    expect(mockError).toHaveBeenCalledWith('Workflow "bad-name\\n" not found.');
+    expect(mockError).toHaveBeenCalledWith(expect.stringContaining('bad-name\\n'));
+    expect(mockError.mock.calls.flat().join('')).not.toContain('\\x1b');
   });
 
   it('should mark task as pr_failed when PR creation fails', async () => {

@@ -131,7 +131,6 @@ describe('buildSessionKey', () => {
         '    session_key: shared-agent',
         '    persona: coder',
         '    instruction: Do work',
-        '    provider: claude',
         '    rules:',
         '      - condition: done',
         '        next: system-step',
@@ -152,7 +151,6 @@ describe('buildSessionKey', () => {
         '        session_key: worker-session',
         '        persona: coder',
         '        instruction: Do worker work',
-        '        provider: codex',
         '        rules:',
         '          - condition: done',
         '    rules:',
@@ -167,8 +165,8 @@ describe('buildSessionKey', () => {
 
       expect(agentStep?.sessionKey).toBe('shared-agent');
       expect(workerStep?.sessionKey).toBe('worker-session');
-      expect(agentStep ? buildSessionKey(agentStep) : undefined).toBe(JSON.stringify(['shared-agent', 'claude']));
-      expect(workerStep ? buildSessionKey(workerStep) : undefined).toBe(JSON.stringify(['worker-session', 'codex']));
+      expect(agentStep ? buildSessionKey(agentStep) : undefined).toBe(JSON.stringify(['shared-agent']));
+      expect(workerStep ? buildSessionKey(workerStep) : undefined).toBe(JSON.stringify(['worker-session']));
     } finally {
       if (originalConfigDir === undefined) {
         delete process.env.TAKT_CONFIG_DIR;

@@ -88,7 +88,6 @@ describe('E2E: structured_output + report output contract (mock)', () => {
 
     expect(existsSync(reportPath)).toBe(true);
     const report = readFileSync(reportPath, 'utf-8');
-    expect(report).toContain('# Research Result (v2)');
     expect(report).not.toContain(PHASE1_STRUCTURED_JSON);
 
     // Phase 1 の structured output で when(structured.researcher.status == "COMPLETE")

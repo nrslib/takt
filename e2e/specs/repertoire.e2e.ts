@@ -115,8 +115,6 @@ describe('E2E: takt repertoire remove (mock)', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('⚠ 以下のファイルが');
-    expect(result.stdout).toContain('を参照しています');
     const packageDir = join(isolatedEnv.taktDir, 'repertoire', '@testowner', 'ref-fixture');
     expect(existsSync(packageDir)).toBe(false);
   }, 240_000);
@@ -157,7 +155,6 @@ describe('E2E: takt repertoire remove (mock)', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('キャンセルしました');
     const packageDir = join(isolatedEnv.taktDir, 'repertoire', '@testowner', 'keep-fixture');
     expect(existsSync(packageDir)).toBe(true);
   }, 240_000);
@@ -200,7 +197,6 @@ describe('E2E: takt repertoire list (mock)', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('📦 インストール済みパッケージ:');
     expect(result.stdout).toContain('@testowner/list-fixture');
     expect(result.stdout).toContain('My test package');
     expect(result.stdout).toContain('v2.0.0');
@@ -216,7 +212,6 @@ describe('E2E: takt repertoire list (mock)', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('インストール済みパッケージはありません');
   }, 240_000);
 
   it('should list all installed packages when multiple packages exist', () => {

@@ -13,6 +13,11 @@ const COMPLETE_CALLER_RULES = `
       - condition: done
         next: COMPLETE`;
 
+const BACKEND_KNOWLEDGE_CONTENT = '# backend-api knowledge\n';
+const TRANSACTION_POLICY_CONTENT = '# transaction-correctness policy\n';
+const SIBLING_POLICY_CONTENT = '# sibling policy\n';
+const POOL_TRANSACTION_POLICY_CONTENT = '# POOL transaction-correctness\n';
+
 function writeFile(root: string, relativePath: string, content: string): string {
   const filePath = join(root, relativePath);
   mkdirSync(dirname(filePath), { recursive: true });
@@ -203,10 +208,10 @@ describe('facet_pools loader (C-INLINE-POOL, C-EXTERNAL-POOL, C-POOL-NORMALIZE, 
     invalidateGlobalConfigCache();
     invalidateAllResolvedConfigCache();
     writeFacet(projectDir, 'facets/policies/coding.md', '# coding policy\n');
-    writeFacet(projectDir, 'facets/policies/transaction-correctness.md', '# transaction-correctness policy\n');
+    writeFacet(projectDir, 'facets/policies/transaction-correctness.md', TRANSACTION_POLICY_CONTENT);
     writeFacet(projectDir, 'facets/policies/backward-compatibility.md', '# backward-compatibility policy\n');
     writeFacet(projectDir, 'facets/knowledge/architecture.md', '# architecture knowledge\n');
-    writeFacet(projectDir, 'facets/knowledge/backend-api.md', '# backend-api knowledge\n');
+    writeFacet(projectDir, 'facets/knowledge/backend-api.md', BACKEND_KNOWLEDGE_CONTENT);
     writeFacet(projectDir, 'facets/knowledge/database-transaction.md', '# database-transaction knowledge\n');
   });
 
@@ -236,7 +241,7 @@ describe('facet_pools loader (C-INLINE-POOL, C-EXTERNAL-POOL, C-POOL-NORMALIZE, 
       const backend = pool?.candidates.find((c) => c.id === 'backend');
       expect(backend?.knowledgeRefs).toEqual(['backend-api']);
       // S1: the alias resolves to the workflow section's facet file body, not the ref name.
-      expect(backend?.resolvedKnowledgeContents?.[0]?.content).toContain('# backend-api knowledge');
+      expect(backend?.resolvedKnowledgeContents?.[0]?.content).toBe(BACKEND_KNOWLEDGE_CONTENT);
       expect(backend?.resolvedKnowledgeContents?.[0]?.sourcePath).toBeDefined();
     });
 
@@ -246,7 +251,7 @@ describe('facet_pools loader (C-INLINE-POOL, C-EXTERNAL-POOL, C-POOL-NORMALIZE, 
       // transaction candidate's policy:transaction-correctness is aliased via workflow policies section
       const transaction = workflow.facetPools?.fix?.candidates.find((c) => c.id === 'transaction');
       expect(transaction?.policyRefs).toEqual(['transaction-correctness']);
-      expect(transaction?.resolvedPolicyContents?.[0]?.content).toContain('# transaction-correctness policy');
+      expect(transaction?.resolvedPolicyContents?.[0]?.content).toBe(TRANSACTION_POLICY_CONTENT);
     });
   });
 
@@ -272,7 +277,7 @@ describe('facet_pools loader (C-INLINE-POOL, C-EXTERNAL-POOL, C-POOL-NORMALIZE, 
       // External pool defines its own "transaction-correctness" pointing to its own file.
       // The resolved candidate facet content must come from the pool's file, not the caller's.
       writeProjectPool(projectDir, 'implementation-fix', EXTERNAL_POOL_BODY);
-      writeFacet(projectDir, '.takt/facet-pools/facets/policies/transaction-correctness.md', '# POOL transaction-correctness\n');
+      writeFacet(projectDir, '.takt/facet-pools/facets/policies/transaction-correctness.md', POOL_TRANSACTION_POLICY_CONTENT);
       writeFacet(projectDir, '.takt/facet-pools/facets/policies/backward-compatibility.md', '# POOL backward-compatibility\n');
       writeFacet(projectDir, '.takt/facet-pools/facets/knowledge/backend-api.md', '# POOL backend-api\n');
       writeFacet(projectDir, '.takt/facet-pools/facets/knowledge/database-transaction.md', '# POOL database-transaction\n');
@@ -303,7 +308,7 @@ steps:
       const transaction = workflow.facetPools?.fix?.candidates.find((c) => c.id === 'transaction');
       // The candidate's resolved policy content must reference the POOL's transaction-correctness file,
       // proving the caller's same-named alias was not captured.
-      expect(transaction?.resolvedPolicyContents?.[0]?.content).toContain('POOL transaction-correctness');
+      expect(transaction?.resolvedPolicyContents?.[0]?.content).toBe(POOL_TRANSACTION_POLICY_CONTENT);
     });
 
     it('should reject nested uses/params/$param in an external pool (C-EXTERNAL-NESTED)', () => {
@@ -634,7 +639,7 @@ candidates:
 `;
       writeProjectPool(projectDir, 'implementation-fix', siblingPoolBody);
       writeFacet(projectDir, '.takt/facet-pools/facets/knowledge/backend-api.md', '# ext backend-api\n');
-      writeFacet(projectDir, '.takt/facets/policies/sibling-policy.md', '# sibling policy\n');
+      writeFacet(projectDir, '.takt/facets/policies/sibling-policy.md', SIBLING_POLICY_CONTENT);
 
       const siblingWorkflow = `
 facet_pools:
@@ -652,7 +657,7 @@ steps:
       const workflowPath = writeWorkflow(projectDir, 'ext-sibling-ok', siblingWorkflow, 'fix');
       const workflow = loadWorkflowFromFile(workflowPath, projectDir);
       const candidate = workflow.facetPools?.fix?.candidates.find((c) => c.id === 'backend');
-      expect(candidate?.resolvedPolicyContents?.[0]?.content).toContain('# sibling policy');
+      expect(candidate?.resolvedPolicyContents?.[0]?.content).toBe(SIBLING_POLICY_CONTENT);
     });
 
     it('should reject an external pool map value with an absolute path (C-POOL-LOOKUP: 絶対パス 拒否)', () => {

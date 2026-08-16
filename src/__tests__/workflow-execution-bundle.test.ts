@@ -243,6 +243,7 @@ steps:
   it('rebinds a team leader part persona to the verified bundle resource', () => {
     const root = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-team-leader-'));
     roots.push(root);
+    const partPersonaContent = 'part persona content';
     const config = workflow('root', [{
       name: 'implement',
       kind: 'agent',
@@ -251,7 +252,7 @@ steps:
       instruction: '{task}',
       teamLeader: {
         persona: 'planning prompt',
-        partPersona: 'part execution prompt',
+        partPersona: partPersonaContent,
       },
     }]);
     const paths = buildRunPaths(root, 'team-leader-run');
@@ -267,7 +268,7 @@ steps:
     const partPersonaPath = loadedStep.teamLeader?.partPersonaPath;
     expect(dirname(partPersonaPath!)).toBe(loaded.resourceRoot);
     expect(basename(partPersonaPath!)).toMatch(/^[0-9a-f]{64}$/);
-    expect(readFileSync(partPersonaPath!, 'utf-8')).toBe('part execution prompt');
+    expect(readFileSync(partPersonaPath!, 'utf-8')).toBe(partPersonaContent);
 
     const partStep = createPartStep(loadedStep, {
       id: 'part-1',

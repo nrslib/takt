@@ -283,7 +283,7 @@ TAKT also ships two client-integration entrypoints: `takt-acp` runs TAKT as an [
 
 `takt exec` starts TAKT's interactive task-entry mode. The Assistant agent clarifies the request, `/go` turns the conversation into a generated workflow, Worker agent(s) implement the task, Review agent(s) review the result, the Replanning agent asks the user for direction when needed, and loop detection prevents repeated unproductive cycles.
 
-Exec starts from the previous exec configuration, or the default configuration on first run. Pass a preset name to start from that preset. Use `/setup` during the conversation to edit agents, loop detection thresholds, presets, and referenced instruction/knowledge/policy facets. Builtin/default presets define the agent roles, facets, and loop thresholds only. Provider and model are resolved from normal TAKT configuration when exec mode starts, and the same resolved values are used for the Assistant dialogue, `/setup` display, and workflow generation. An exec config overrides provider/model only when it sets them explicitly. `effort` is emitted only when it is explicitly configured.
+Exec starts from the previous exec configuration, or the default configuration on first run. Pass a preset name to start from that preset. Use `/setup` during the conversation to edit agents, loop detection thresholds, presets, and referenced instruction/knowledge/policy facets. Builtin/default presets define the agent roles, facets, and loop thresholds only. Provider and model are resolved from normal TAKT configuration when exec mode starts, and the same resolved values are used for the Assistant dialogue and `/setup` display. The generated workflow uses capabilities for tool/skill needs; provider/model/options remain in runtime configuration. `effort` is emitted only when it is explicitly configured.
 
 Exec presets resolve in this order: project `.takt/exec/presets/` → global `$TAKT_CONFIG_DIR/exec/presets/` (default `~/.takt/exec/presets/`) → builtin `builtins/exec/presets/`. Changes made in `/setup` are saved to `$TAKT_CONFIG_DIR/exec.yaml` (default `~/.takt/exec.yaml`) for the next exec session. `/setup` can also save or delete project/global presets, and created facets are stored under `.takt/facets/` or `$TAKT_CONFIG_DIR/facets/` (default `~/.takt/facets/`).
 
@@ -307,7 +307,9 @@ Run metadata, sessions, traces, reports, and other run artifacts remain ordinary
 files under `.takt/runs/<run>/`. Resume and requeue preserve the applicable run
 state and reports.
 
-To let TAKT choose provider/model per workflow step, keep a concrete top-level provider and define `auto_routing` candidates. The presence of effective `auto_routing` enables automatic routing:
+The following `config.yaml` example is the retained legacy mode. In runtime mode,
+put provider/model/options and routing in `runtime.yaml`; workflow YAML cannot
+set them. Use `provider.targets` and `provider.auto_routing` there:
 
 ```yaml
 provider: codex          # used outside workflow steps and when auto_routing is absent
@@ -353,7 +355,12 @@ auto_routing:
       implementation: implementation
 ```
 
-Operations without workflow-step context, such as AI task-slug generation, use the concrete top-level provider/model. `auto_routing.router` and candidates are only for workflow routing and are never implicit defaults. Assistant conversations (interactive planning, instruct, and retry) are not auto-routed: they use `takt_providers.assistant` when set and otherwise fall back to the top-level provider/model. CLI provider/model overrides apply only to interactive planning, not instruct or retry.
+In legacy mode, operations without workflow-step context use the concrete
+top-level provider/model. In runtime mode they use the runtime default.
+`auto_routing.router` and candidates are never implicit defaults. Assistant
+conversations (interactive planning, instruct, and retry) are not auto-routed:
+they use `takt_providers.assistant` in legacy mode or the runtime internal-agent
+seat. CLI provider/model overrides apply only where the command supports them.
 
 Auto-routing decisions are written locally to `.takt/events/` as NDJSON. TAKT does not upload routing decisions. Local recording is enabled by default, can be configured with `telemetry.routing_decisions`, and can be inspected or changed with `takt telemetry status|enable|disable`.
 
@@ -402,10 +409,11 @@ Provider, model, provider options, auto routing, and internal-agent assignment
 can live in a dedicated layer instead of `config.yaml`: `~/.takt/runtime.yaml`
 and `<project>/.takt/runtime.yaml`, with the project layer winning.
 `runtime.yaml` replaces the `config.yaml` provider keys as the
-configuration-layer default; everything above that layer still applies in the
-usual order — CLI and environment overrides first, then `promotion`, step
-`provider` / `model`, `workflow_call` overrides, `provider_routing`, and auto
-routing — and provider and model resolve independently per field. Mixing
+configuration-layer default; CLI and environment overrides remain available.
+Workflow YAML has no provider/model/options/routing layer: removed fields,
+workflow-call overrides, and target-specific promotion settings fail at load
+time with a migration hint. Promotion only advances the runtime target ladder,
+while provider and model resolve independently per runtime target. Mixing
 `runtime.yaml` with the legacy provider keys is rejected with a diagnostic
 naming the file and the key to migrate to. Without a `runtime.yaml`,
 `config.yaml` behaves exactly as before. See

@@ -1,4 +1,3 @@
-import { resolveEffectiveProviderOptions } from '../../../infra/config/providerOptions.js';
 import type {
   AgentResponse,
   WorkflowConfig,
@@ -9,12 +8,9 @@ import type {
 } from '../../models/types.js';
 import type { RunPaths } from '../run/run-paths.js';
 import {
-  applyProviderModelOverride,
   resolveWorkflowCallProviderModel,
 } from '../provider-resolution.js';
 import {
-  applyWorkflowCallOverridesToPersonaProviders,
-  applyWorkflowCallOverridesToProviderRouting,
   resolveWorkflowCallChildProviderModel,
   type WorkflowCallProviderModel,
 } from '../workflow-call-provider-context.js';
@@ -131,21 +127,14 @@ export class WorkflowCallRunner {
     providerOptions: WorkflowEngineOptions['providerOptions'];
   } {
     const options = this.deps.getOptions();
-    const parentConfig = this.deps.getConfig();
     const providerInfo = resolveWorkflowCallProviderModel({
-      workflow: parentConfig,
       provider: options.provider,
       providerSource: options.providerSource,
       model: options.model,
       modelSource: options.modelSource,
       permissionMode: options.providerPermissionMode,
     });
-    const providerOptions = resolveEffectiveProviderOptions(
-      options.providerOptionsSource,
-      options.providerOptionsOriginResolver,
-      options.providerOptions,
-      parentConfig.providerOptions,
-    );
+    const providerOptions = options.providerOptions;
 
     return {
       provider: providerInfo.provider,
@@ -158,25 +147,15 @@ export class WorkflowCallRunner {
   }
 
   private resolveChildProviderModel(
-    step: WorkflowCallStep,
-    childWorkflow: WorkflowConfig,
+    _step: WorkflowCallStep,
+    _childWorkflow: WorkflowConfig,
   ): WorkflowCallProviderModel {
-    return resolveWorkflowCallChildProviderModel(
-      childWorkflow,
-      step.overrides,
-      this.resolveParentWorkflowProviderContext(),
-    );
+    return resolveWorkflowCallChildProviderModel(this.resolveParentWorkflowProviderContext());
   }
 
-  resolveRuntime(step: WorkflowCallStep): RuntimeStepResolution {
+  resolveRuntime(_step: WorkflowCallStep): RuntimeStepResolution {
     const parentProviderInfo = this.resolveParentWorkflowProviderContext();
-    const workflowCallProviderModel = applyProviderModelOverride(parentProviderInfo, {
-      provider: step.overrides?.provider,
-      providerSpecified: step.overrides?.provider !== undefined,
-      model: step.overrides?.model,
-      modelSpecified: step.overrides?.model !== undefined,
-      source: 'workflow_call',
-    });
+    const workflowCallProviderModel = parentProviderInfo;
     return {
       providerInfo: {
         provider: workflowCallProviderModel.provider,
@@ -222,24 +201,12 @@ export class WorkflowCallRunner {
     ]);
   }
 
-  private buildChildPersonaProviders(
-    step: WorkflowCallStep,
-  ): WorkflowEngineOptions['personaProviders'] {
-    return applyWorkflowCallOverridesToPersonaProviders(
-      this.deps.getOptions().personaProviders,
-      step.overrides,
-      this.deps.getOptions().providerOptionsProviderSource !== undefined,
-    );
+  private buildChildPersonaProviders(): WorkflowEngineOptions['personaProviders'] {
+    return this.deps.getOptions().personaProviders;
   }
 
-  private buildChildProviderRouting(
-    step: WorkflowCallStep,
-  ): WorkflowEngineOptions['providerRouting'] {
-    return applyWorkflowCallOverridesToProviderRouting(
-      this.deps.getOptions().providerRouting,
-      step.overrides,
-      this.deps.getOptions().providerOptionsProviderSource !== undefined,
-    );
+  private buildChildProviderRouting(): WorkflowEngineOptions['providerRouting'] {
+    return this.deps.getOptions().providerRouting;
   }
 
   private buildChildProviderLadders(): WorkflowEngineOptions['providerLadders'] {
@@ -667,7 +634,7 @@ export class WorkflowCallRunner {
         parentConfig,
         step,
         new Error(`workflow_call step "${step.name}" could not resolve provider context`),
-        step.overrides === undefined ? ['call'] : ['overrides'],
+        ['call'],
       );
     }
     // rate-limit fallback で provider が差し替わった場合、その provider は
@@ -693,8 +660,8 @@ export class WorkflowCallRunner {
       preparedExecution,
       childProviderInfo: childProviderModel,
       parentProviderOptions: inheritedProviderOptions,
-      personaProviders: this.buildChildPersonaProviders(step),
-      providerRouting: this.buildChildProviderRouting(step),
+      personaProviders: this.buildChildPersonaProviders(),
+      providerRouting: this.buildChildProviderRouting(),
       providerLadders: this.buildChildProviderLadders(),
     }, {
       syncParentState,

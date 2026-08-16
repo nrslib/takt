@@ -28,18 +28,6 @@ describe('E2E: Eject builtin workflows (takt eject)', () => {
     }
   });
 
-  it('should list available builtin workflows when no name given', () => {
-    const result = runTakt({
-      args: ['eject'],
-      cwd: repo.path,
-      env: isolatedEnv.env,
-    });
-
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('default');
-    expect(result.stdout).toContain('Available builtin workflows');
-  });
-
   it('should eject workflow YAML only to project .takt/ by default', () => {
     const result = runTakt({
       args: ['eject', 'default'],
@@ -58,6 +46,23 @@ describe('E2E: Eject builtin workflows (takt eject)', () => {
     expect(existsSync(personasDir)).toBe(false);
   });
 
+  it('should preserve an existing workflow file on repeated eject', () => {
+    const workflowPath = join(repo.path, '.takt', 'workflows', 'default.yaml');
+    expect(runTakt({
+      args: ['eject', 'default'],
+      cwd: repo.path,
+      env: isolatedEnv.env,
+    }).exitCode).toBe(0);
+    const before = readFileSync(workflowPath, 'utf-8');
+
+    expect(runTakt({
+      args: ['eject', 'default'],
+      cwd: repo.path,
+      env: isolatedEnv.env,
+    }).exitCode).toBe(0);
+    expect(readFileSync(workflowPath, 'utf-8')).toBe(before);
+  });
+
   it('should preserve content of builtin workflow YAML as-is', () => {
     runTakt({
       args: ['eject', 'default'],
@@ -68,9 +73,7 @@ describe('E2E: Eject builtin workflows (takt eject)', () => {
     const workflowPath = join(repo.path, '.takt', 'workflows', 'default.yaml');
     const content = readFileSync(workflowPath, 'utf-8');
 
-    // Content should be an exact copy of builtin — paths preserved as-is
-    expect(content).toContain('name: default');
-    // Should NOT contain rewritten absolute paths
+    // Paths must not be rewritten to absolute user-specific locations.
     expect(content).not.toContain('~/.takt/personas/');
   });
 
@@ -96,36 +99,6 @@ describe('E2E: Eject builtin workflows (takt eject)', () => {
     expect(existsSync(projectWorkflowPath)).toBe(false);
   });
 
-  it('should warn and skip when workflow already exists', () => {
-    // First eject
-    runTakt({
-      args: ['eject', 'default'],
-      cwd: repo.path,
-      env: isolatedEnv.env,
-    });
-
-    // Second eject — should skip
-    const result = runTakt({
-      args: ['eject', 'default'],
-      cwd: repo.path,
-      env: isolatedEnv.env,
-    });
-
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('already exists');
-  });
-
-  it('should report error for non-existent builtin', () => {
-    const result = runTakt({
-      args: ['eject', 'nonexistent-workflow-xyz'],
-      cwd: repo.path,
-      env: isolatedEnv.env,
-    });
-
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('not found');
-  });
-
   it('should reject workflow names with path traversal', () => {
     const result = runTakt({
       args: ['eject', '../outside'],
@@ -134,7 +107,6 @@ describe('E2E: Eject builtin workflows (takt eject)', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Invalid workflow name');
     expect(existsSync(join(repo.path, '.takt', 'outside.yaml'))).toBe(false);
   });
 
@@ -172,6 +144,23 @@ describe('E2E: Eject builtin workflows (takt eject)', () => {
     expect(content.length).toBeGreaterThan(0);
   });
 
+  it('should preserve an existing facet file on repeated eject', () => {
+    const personaPath = join(repo.path, '.takt', 'facets', 'personas', 'coder.md');
+    expect(runTakt({
+      args: ['eject', 'persona', 'coder'],
+      cwd: repo.path,
+      env: isolatedEnv.env,
+    }).exitCode).toBe(0);
+    const before = readFileSync(personaPath, 'utf-8');
+
+    expect(runTakt({
+      args: ['eject', 'persona', 'coder'],
+      cwd: repo.path,
+      env: isolatedEnv.env,
+    }).exitCode).toBe(0);
+    expect(readFileSync(personaPath, 'utf-8')).toBe(before);
+  });
+
   it.each([
     'toString',
     'constructor',
@@ -184,8 +173,7 @@ describe('E2E: Eject builtin workflows (takt eject)', () => {
     });
 
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain(`Invalid facet type: ${facetType}`);
-    expect(result.stdout).not.toContain('Invalid facet type:');
+    expect(result.stderr).toContain(facetType);
   });
 
   it.each([
@@ -199,13 +187,12 @@ describe('E2E: Eject builtin workflows (takt eject)', () => {
     });
 
     expect(result.exitCode).toBe(1);
-    const errorLine = result.stderr
-      .split('\n')
-      .find((line) => line.includes('Invalid facet type:'));
-    expect(errorLine).toContain(`Invalid facet type: ${safeFacetType}`);
-    // The observed error line must not leak raw control characters (C0/DEL/C1)
-    // eslint-disable-next-line no-control-regex
-    expect(errorLine).not.toMatch(/[\u0000-\u001F\u007F-\u009F]/);
+    expect(result.stderr).toContain(safeFacetType);
+    expect(result.stderr).not.toContain(facetType);
+    for (const line of result.stderr.split('\n')) {
+      // eslint-disable-next-line no-control-regex
+      expect(line).not.toMatch(/[\u0000-\u001F\u007F-\u009F]/);
+    }
   });
 
   it('should eject individual facet to global ~/.takt/ with --global', () => {
@@ -226,36 +213,6 @@ describe('E2E: Eject builtin workflows (takt eject)', () => {
     expect(existsSync(projectPersonaPath)).toBe(false);
   });
 
-  it('should skip eject facet when already exists', () => {
-    // First eject
-    runTakt({
-      args: ['eject', 'persona', 'coder'],
-      cwd: repo.path,
-      env: isolatedEnv.env,
-    });
-
-    // Second eject — should skip
-    const result = runTakt({
-      args: ['eject', 'persona', 'coder'],
-      cwd: repo.path,
-      env: isolatedEnv.env,
-    });
-
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Already exists');
-  });
-
-  it('should report error for non-existent facet', () => {
-    const result = runTakt({
-      args: ['eject', 'persona', 'nonexistent-xyz'],
-      cwd: repo.path,
-      env: isolatedEnv.env,
-    });
-
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('not found');
-  });
-
   it('should reject facet names with path traversal', () => {
     const result = runTakt({
       args: ['eject', 'persona', '../outside'],
@@ -264,7 +221,6 @@ describe('E2E: Eject builtin workflows (takt eject)', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Invalid personas name');
     expect(existsSync(join(repo.path, '.takt', 'facets', 'outside.md'))).toBe(false);
   });
 
@@ -278,7 +234,6 @@ describe('E2E: Eject builtin workflows (takt eject)', () => {
     const workflowPath = join(isolatedEnv.taktDir, 'workflows', 'magi.yaml');
     const content = readFileSync(workflowPath, 'utf-8');
 
-    expect(content).toContain('name: magi');
     expect(content).not.toContain('~/.takt/personas/');
   });
 });

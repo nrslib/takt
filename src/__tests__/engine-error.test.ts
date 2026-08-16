@@ -440,13 +440,15 @@ describe('WorkflowEngine Integration: Error Handling', () => {
         initialStep: 'plan',
         steps: [
           makeStep('plan', {
-            provider: 'claude',
             outputContracts: [{ name: '01-plan.md', format: '# Plan' }],
             rules: [makeRule('continue', 'COMPLETE')],
           }),
         ],
       });
-      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        provider: 'claude',
+      });
 
       mockRunAgentSequence([
         makeResponse({

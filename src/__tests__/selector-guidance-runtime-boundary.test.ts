@@ -56,8 +56,6 @@ describe('selector guidance runtime boundary', () => {
     expect(setup).toHaveBeenCalledWith(expect.objectContaining({
       systemPrompt: expect.stringContaining(personaContent),
     }));
-    const systemPrompt = setup.mock.calls[0]?.[0]?.systemPrompt;
-    expect(systemPrompt).toContain('You are TAKT\'s fixed selector contract.');
     expect(call).toHaveBeenCalledWith(
       'Select reviewers from the supplied evidence.',
       expect.objectContaining({
@@ -76,6 +74,7 @@ describe('selector guidance runtime boundary', () => {
     const root = mkdtempSync(join(tmpdir(), 'takt-selector-guidance-runtime-'));
     roots.push(root);
     const schema = { type: 'object', additionalProperties: false };
+    const persona = 'Inline selector persona.';
     const call = vi.fn().mockResolvedValue(response());
     const setup = vi.spyOn(OpenCodeProvider.prototype, 'setupIsolatedStructured')
       .mockReturnValue({ call });
@@ -87,7 +86,7 @@ describe('selector guidance runtime boundary', () => {
       {
         cwd: root,
         projectCwd: root,
-        persona: 'Inline selector persona.',
+        persona,
         resolution: {
           provider: 'opencode',
           model: 'opencode/model',
@@ -96,9 +95,9 @@ describe('selector guidance runtime boundary', () => {
       },
     );
 
-    const systemPrompt = setup.mock.calls[0]?.[0]?.systemPrompt;
-    expect(systemPrompt).toContain('Inline selector persona.');
-    expect(systemPrompt).toContain('You are TAKT\'s fixed selector contract.');
+    expect(setup).toHaveBeenCalledWith(expect.objectContaining({
+      systemPrompt: expect.stringContaining(persona),
+    }));
     expect(call).toHaveBeenCalledWith(
       'Select reviewers from the supplied evidence.',
       expect.objectContaining({

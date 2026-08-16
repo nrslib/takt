@@ -186,8 +186,8 @@ export interface StepExecutorDeps {
   readonly structuredOutputNormalizers: StructuredOutputNormalizerRegistry;
   readonly abortSignal?: AbortSignal;
   readonly getAbortSignal?: () => AbortSignal | undefined;
-  readonly executionProvider: WorkflowConfig['provider'];
-  readonly executionModel: WorkflowConfig['model'];
+  readonly executionProvider: WorkflowEngineOptions['provider'];
+  readonly executionModel: WorkflowEngineOptions['model'];
   readonly internalAgentSeats?: import('../../models/config-types.js').InternalAgentSeats;
   readonly emitEvent: (event: string, ...args: unknown[]) => void;
   /** 実行ループ外の合成ステップの LLM 呼び出しを usage-events へ記録する。 */
@@ -340,8 +340,6 @@ export class StepExecutor {
       judge: async (reviewResponse, attemptIndex) => {
         const judgeStep = buildCompletionRetryJudgeStep({
           reviewerStepName: input.step.name,
-          workflowProvider: this.deps.executionProvider,
-          workflowModel: this.deps.executionModel,
           internalAgentSeats: this.deps.internalAgentSeats,
         });
         const reviewScope = this.deps.getReviewScope();

@@ -193,14 +193,9 @@ async function resolveStepPromotionRuntime(
 ): Promise<RuntimeStepResolution | undefined> {
   return resolvePromotionRuntime({
     cwd: deps.getCwd(),
-    previousResponseContent: deps.state.lastOutput?.content ?? '',
-    structuredCaller: deps.options.structuredCaller,
-    childProcessEnv: deps.options.childProcessEnv,
     resolveStepProviderModel: deps.resolveStepProviderModelBeforeAutoRouting,
     providerLadders: deps.options.providerLadders,
     providerRoutingTagConflictPolicy: deps.options.providerRoutingTagConflictPolicy,
-    abortSignal: resolveStepAbortSignal(deps),
-    ...buildDeadlineActivityCallbacks(deps, `promotion:${step.name}`),
   }, step, stepIteration, runtime);
 }
 

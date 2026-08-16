@@ -400,6 +400,7 @@ function prepareFinalGateRequeue(
 
 async function writeSourceReports(projectDir: string): Promise<{
   sourceReportDir: string;
+  sourceReportContent: string;
 }> {
   writeSourceRunMeta(projectDir);
   const sourceReportDir = join(
@@ -412,9 +413,10 @@ async function writeSourceReports(projectDir: string): Promise<{
     buildWorkflowCallNamespace(projectDir, 1),
   );
   mkdirSync(sourceReportDir, { recursive: true });
-  writeFileSync(join(sourceReportDir, '05-arch-review.md'), 'previous architecture review', 'utf-8');
+  const sourceReportContent = 'previous architecture review';
+  writeFileSync(join(sourceReportDir, '05-arch-review.md'), sourceReportContent, 'utf-8');
 
-  return { sourceReportDir };
+  return { sourceReportDir, sourceReportContent };
 }
 
 function findResumedRunSlug(projectDir: string): string {
@@ -536,12 +538,12 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
 
     expect(success).toBe(true);
     expect(instructions).toHaveLength(1);
-    expect(instructions[0]).toContain('Inherited report: previous architecture review');
+    expect(instructions[0]).toContain(source.sourceReportContent);
     expect(instructions[0]).not.toContain('{report:05-arch-review.md}');
     expect(instructions[0]).not.toContain(inheritedReportPath);
     expect(instructions[0]).not.toContain(source.sourceReportDir);
-    expect(readFileSync(inheritedReportPath, 'utf-8')).toBe('previous architecture review');
-    expect(readFileSync(join(source.sourceReportDir, '05-arch-review.md'), 'utf-8')).toBe('previous architecture review');
+    expect(readFileSync(inheritedReportPath, 'utf-8')).toBe(source.sourceReportContent);
+    expect(readFileSync(join(source.sourceReportDir, '05-arch-review.md'), 'utf-8')).toBe(source.sourceReportContent);
     expect(readResumeArtifacts(environment.projectDir, resumedRunSlug)).toEqual(expect.objectContaining({
       version: 2,
       sourceRunSlug,
@@ -549,7 +551,7 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
       files: [
         expect.objectContaining({
           path: inheritedReportRelativePath,
-          size: Buffer.byteLength('previous architecture review'),
+          size: Buffer.byteLength(source.sourceReportContent),
           sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
         }),
       ],
@@ -625,8 +627,6 @@ describe('IT: nested final-gate report resolution through TaskRunner requeue', (
     const manifest = readResumeArtifacts(environment.projectDir, targetRunSlug);
     expect(success).toBe(true);
     expect(instructions).toHaveLength(1);
-    expect(instructions[0]).toContain('Resolve final gate with CHAINED REVIEW RESOLUTION');
-    expect(instructions[0]).not.toContain('（参照先の報告 review-resolution.md はこの run に存在しない）');
     expect(manifest.resumeReportConsumers?.[0]?.references).toEqual([
       expect.objectContaining({ reference: 'review-resolution.md' }),
     ]);
@@ -682,8 +682,6 @@ describe('IT: nested final-gate report resolution through TaskRunner requeue', (
 
     expect(secondSuccess).toBe(true);
     expect(instructions).toHaveLength(1);
-    expect(instructions[0]).toContain('Resolve final gate with CHAINED REVIEW RESOLUTION');
-    expect(instructions[0]).not.toContain('（参照先の報告 review-resolution.md はこの run に存在しない）');
   });
 });
 

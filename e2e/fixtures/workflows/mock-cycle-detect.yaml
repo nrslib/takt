@@ -1,11 +1,5 @@
 name: e2e-cycle-detect
 description: Workflow with loop_monitors for cycle detection E2E testing
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
 personas:
   test-coder: |
     You are the E2E test coder.

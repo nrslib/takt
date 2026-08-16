@@ -43,11 +43,6 @@ describe('E2E: Watch tasks (takt watch)', () => {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
-    let stdout = '';
-    child.stdout?.on('data', (chunk) => {
-      stdout += chunk.toString();
-    });
-
     const taktDir = join(testRepo.path, '.takt');
     mkdirSync(taktDir, { recursive: true });
     const tasksFile = join(taktDir, 'tasks.yaml');
@@ -67,10 +62,18 @@ describe('E2E: Watch tasks (takt watch)', () => {
     const completed = await new Promise<boolean>((resolvePromise) => {
       const timeout = setTimeout(() => resolvePromise(false), 240_000);
       const interval = setInterval(() => {
-        if (stdout.includes('Task "watch-task" completed')) {
-          clearTimeout(timeout);
-          clearInterval(interval);
-          resolvePromise(true);
+        try {
+          const parsed = parseYaml(readFileSync(tasksFile, 'utf-8')) as {
+            tasks?: Array<{ name?: string; status?: string }>;
+          };
+          const watchTask = parsed.tasks?.find((task) => task.name === 'watch-task');
+          if (watchTask?.status === 'completed') {
+            clearTimeout(timeout);
+            clearInterval(interval);
+            resolvePromise(true);
+          }
+        } catch {
+          // The watch process may be rewriting the task file between reads.
         }
       }, 250);
     });

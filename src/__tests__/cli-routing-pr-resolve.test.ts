@@ -315,7 +315,7 @@ describe('PR resolution in routing', () => {
       expect(mockInteractiveMode).toHaveBeenCalledWith(
         '/test/cwd',
         {
-          sourceContext: expect.stringContaining('## PR #456 Review Comments:'),
+          sourceContext: expect.stringContaining('Fix auth bug'),
         },
         expect.anything(),
         undefined,
@@ -477,7 +477,7 @@ describe('PR resolution in routing', () => {
       expect(mockInteractiveMode).toHaveBeenCalledWith(
         '/test/cwd',
         {
-          sourceContext: expect.stringContaining('## PR #456 Review Comments:'),
+          sourceContext: expect.stringContaining('Fix auth bug'),
         },
         expect.anything(),
         undefined,
@@ -498,7 +498,7 @@ describe('PR resolution in routing', () => {
       expect(mockQuietMode).toHaveBeenCalledWith(
         '/test/cwd',
         {
-          sourceContext: expect.stringContaining('## PR #456 Review Comments:'),
+          sourceContext: expect.stringContaining('Fix auth bug'),
         },
         expect.anything(),
       );
@@ -529,7 +529,7 @@ describe('PR resolution in routing', () => {
         '/test/cwd',
         expect.anything(),
         {
-          sourceContext: expect.stringContaining('## PR #456 Review Comments:'),
+          sourceContext: expect.stringContaining('Fix auth bug'),
         },
         expect.anything(),
       );
@@ -552,7 +552,7 @@ describe('PR resolution in routing', () => {
       expect(mockInteractiveMode).toHaveBeenCalledWith(
         '/test/cwd',
         {
-          sourceContext: expect.stringContaining('## PR #456 Review Comments:'),
+          sourceContext: expect.stringContaining('Fix auth bug'),
         },
         expect.anything(),
         undefined,

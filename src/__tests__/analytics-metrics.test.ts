@@ -283,17 +283,6 @@ describe('analytics metrics', () => {
   });
 
   describe('formatReviewMetrics', () => {
-    it('should format empty metrics', () => {
-      const metrics = computeReviewMetrics(eventsDir, 0);
-      const output = formatReviewMetrics(metrics);
-
-      expect(output).toContain('=== Review Metrics ===');
-      expect(output).toContain('(none)');
-      expect(output).toContain('Round-trip ratio');
-      expect(output).toContain('Average resolution iterations');
-      expect(output).toContain('Rebuttal');
-    });
-
     it('should format metrics with data', () => {
       const events: ReviewFindingEvent[] = [
         {

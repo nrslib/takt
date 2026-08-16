@@ -72,15 +72,7 @@ steps:
     instruction: implement           # instruction キー（instructions マップを参照）
     edit: true                       # step がファイルを編集できるか
     required_permission_mode: edit   # 最低限の権限: readonly, edit, full
-    provider_options:
-      claude:
-        allowed_tools:               # 任意の Claude ツール許可リスト
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Write
-          - Bash
+    capabilities: edit               # runtime.yaml の capability preset
     rules:
       - condition: "Implementation complete"
         next: next-step
@@ -731,19 +723,7 @@ step が別の workflow を名前で呼び出します。子 workflow は同じ 
 
 `workflow_call` の rules に書けるのは `COMPLETE`、`ABORT`、または子が宣言する semantic return label だけです。子 workflow は `subworkflow.returns` にラベルを列挙し（例: `returns: [approved, needs_fix]`、予約結果の `COMPLETE` / `ABORT` は列挙できません）、子 step の rule は `next:` の代わりに `return:` でラベルを返してサブワークフローを終了します。親の rules は上の例の `approved` / `needs_fix` のように、そのラベルでルーティングします。
 
-`workflow_call` step は `overrides` を宣言して、子 workflow の step に適用する provider 設定を変更できます。`provider` / `model` / `provider_options` の少なくとも 1 つが必須で、`provider_options` には provider 固有の option を 1 つ以上含める必要があります。
-
-```yaml
-  - name: peer-review
-    kind: workflow_call
-    call: peer-review
-    overrides:
-      provider: codex
-      model: gpt-5.5
-    rules:
-      - condition: COMPLETE
-        next: COMPLETE
-```
+`workflow_call` step では provider、model、provider options、routing の override は指定できません。子 workflow は親で解決済みの runtime コンテキストを継承します。provider target、profile、options、routing は `runtime.yaml` で設定してください。
 
 `max_steps` はルート workflow が所有し、すべての子孫で共有する予算です。`workflow_call` は制御ノードなので予算を消費せず、自身の provider / model も選択しません。iteration を消費するのは子 workflow 内の実行可能な step だけです。たとえば `plan → workflow_call(implement → review) → supervise` は4 iterationを消費するため、`implement` と `review` を callable workflow へ抽出しても `max_steps` を増やす必要はありません。nested call でも同じです。call lifecycle は invocation 番号と完全な call stack を伴って session log と trace から引き続き確認できます。
 
@@ -838,7 +818,7 @@ output_contracts:
 
 ## Step レベルのプロバイダープロモーション
 
-step は、その step の実行回数や AI 判定に応じて `provider` / `model` / `provider_options` を昇格させられます。`promotion` の各エントリは `at: <N>`（この step の N 回目の実行以降にマッチ）か `condition: ai("...")` の少なくとも 1 つを持ち、加えて 1 つ以上の override 先を指定します。
+workflow の promotion は `runtime.yaml` で選択された target ladder だけを進めます。各エントリは厳密に `{at: N}` でなければならず、provider、model、provider options、condition はロード時に拒否されます。各段階の実行設定は `runtime.yaml` に記述してください。
 
 ```yaml
 steps:
@@ -846,18 +826,10 @@ steps:
     persona: reviewer
     promotion:
       - at: 3
-        model: opus
-      - condition: ai("レビュアーが reject を続けて進捗が止まっている")
-        provider: claude
-        model: opus
-      - at: 5
-        provider:
-          type: codex
-          model: gpt-5.5
-          network_access: true
+      - at: 6
 ```
 
-エントリは宣言順に評価され、**最後にマッチしたものが採用**されます。promotion は step レベルの `provider` / `model` / `provider_options` より優先されますが、明示的な CLI・環境変数による provider / model override の方が上位です。
+一致した回数に応じて runtime target の ladder の次の段階が選択されます。
 
 promotion は並列サブ step ではサポートされません。
 
@@ -879,31 +851,7 @@ promotion は並列サブ step ではサポートされません。
 | `companion` | - | 解決済み runtime profile を使う Companion reviewer を通常 agent step と並行実行（[Companion レビュアー](#companion-レビュアー)参照） |
 | `completion_retry` | - | 必須の `retry_instruction` facet と任意の再試行上限を持つ object でレビュー網羅性確認を有効化 |
 | `pass_previous_response` | `true` | 前の step の出力を `{previous_response}` に渡す |
-| `provider_options.claude.allowed_tools` | - | step または workflow に対する Claude ツール許可リスト |
-| `provider_options.claude.base_url` | - | `claude` / `claude-sdk` 用の Anthropic 互換 base URL（[configuration ガイド](./configuration.ja.md#provider-base-url-base_url) 参照） |
-| `provider_options.claude.effort` | - | Claude の provider 固有 reasoning effort 文字列。TAKT は値を provider へそのまま渡す（例: `low`、`high`、将来 provider が定義する値） |
-| `provider_options.claude.skills.enabled` | `false` | `claude-sdk`、`claude`、`claude-terminal` の Claude filesystem Skill 探索を有効化する（[configuration ガイド](./configuration.ja.md#claude-skill-の継承-skills) 参照） |
-| `provider_options.opencode.allowed_tools` | - | OpenCode のツール許可リスト。ツール名は `read`, `glob`, `grep`, `bash`, `websearch`, `webfetch` のように lowercase |
-| `provider_options.opencode.variant` | - | OpenCode の model variant。プロバイダー / model 固有の文字列としてパススルー |
-| `provider_options.opencode.guards` | `standard` / 60分 | OpenCode の guard profile、先勝ちの `model_profiles`、call-wide wall-clock deadline、text/reasoning byte 上限（[configuration ガイド](./configuration.ja.md#プロバイダ-call-deadline-と-opencode-実行ガード)参照） |
-| `provider_options.*.guards.call_timeout_ms` | 60分 | 全 provider profile（`codex`、`opencode`、`claude`、`claude_terminal`、`cursor`、`copilot`、`kiro`、`pi`）の call-wide wall-clock deadline（[configuration ガイド](./configuration.ja.md#プロバイダ-call-deadline-と-opencode-実行ガード)参照） |
-| `provider_options.codex.base_url` | - | Codex SDK constructor option 用の OpenAI 互換 base URL（[configuration ガイド](./configuration.ja.md#provider-base-url-base_url) 参照） |
-| `provider_options.codex.network_access` | - | Codex サンドボックスからのネットワークアクセスを許可（[configuration ガイド](./configuration.ja.md#ネットワークアクセス-network_access) 参照） |
-| `provider_options.codex.reasoning_effort` | - | Codex の provider 固有 reasoning effort 文字列。TAKT は値を provider へそのまま渡す |
-| `provider_options.codex.skills.repo` | `false` | 実行 CWD から repository root までの `.agents/skills` にある Codex Skill を継承（[configuration ガイド](./configuration.ja.md#codex-skill-の継承-skills) 参照） |
-| `provider_options.codex.skills.user` | `false` | user scope の Codex Skill を継承（[configuration ガイド](./configuration.ja.md#codex-skill-の継承-skills) 参照） |
-| `provider_options.copilot.effort` | - | Copilot の provider 固有 reasoning effort 文字列。TAKT は値を provider へそのまま渡す |
-| `provider_options.claude.sandbox.allow_unsandboxed_commands` | - | Claude の Bash を macOS Seatbelt サンドボックス外で実行（[configuration ガイド](./configuration.ja.md#claude-code-の-sandbox-制御-allow_unsandboxed_commands) 参照） |
-| `provider_options.kiro.agent` | - | Kiro CLI の custom agent 名。`kiro-cli chat --agent` として渡される。未指定の step は Kiro CLI 側の default agent を使用 |
-| `provider_options.pi.extensions` | - | Pi SDK の extension/package source（`path`、`npm:...`、`git:...`）。call ごとに一時解決 |
-| `provider_options.pi.no_extensions` | - | Pi の extension 探索を無効化。明示した `extensions` source は読み込む |
-| `provider_options.pi.no_skills` | - | Pi の Skill 探索を無効化 |
-| `provider_options.pi.no_prompt_templates` | - | Pi の prompt template 探索を無効化 |
-| `provider_options.pi.no_themes` | - | Pi の theme 探索を無効化 |
-| `provider_options.pi.no_context_files` | - | Pi の context file 探索を無効化 |
-| `provider` | - | この step の provider を上書き (`claude`, `claude-sdk`, `claude-terminal`, `codex`, `opencode`, `cursor`, `copilot`, `kiro`, `pi`, `mock`) |
-| `model` | - | この step の model を上書き |
-| `promotion` | - | 実行回数ごとの provider / model / options 昇格（[Step レベルのプロバイダープロモーション](#step-レベルのプロバイダープロモーション) 参照） |
+| `capabilities` | - | provider option preset の名前またはリスト。tool、network、sandbox、skills などの能力だけを指定し、provider / model は選択しない |
 | `mcp_servers` | - | step ごとの MCP サーバー設定 (stdio / HTTP / SSE) |
 | `allow_git_commit` | `false` | step 指示内での `git add` / `commit` / `push` を許可。デフォルトは禁止（1 PR = 1 タスクを保つため） |
 | `required_permission_mode` | - | 最低限の権限モード: `readonly`, `edit`, `full` |
@@ -914,7 +862,7 @@ promotion は並列サブ step ではサポートされません。
 
 `review_completion` は deprecated alias として引き続き受理されます。`completion_retry` と同時には指定できません。
 
-通常の agent step、parallel sub-step、`loop_monitors.judge` では、`model: null` は model の明示的な省略を表します。`model` 未指定とは異なります。未指定は routing、workflow、loop monitor judge のトリガー元 step、入力由来の model など、適用可能な下位優先度のソースへフォールバックしますが、`null` はその entry で model 解決を止めます。明示 model が必須の provider では検証エラーになります。
+workflow YAML では provider と model を指定できません。runtime profile と routing は `runtime.yaml` から解決され、CLI/env override も引き続き利用できます。削除されたフィールドを workflow に書くと、ロード境界で `runtime.yaml` への移行先を示す設定エラーになります。
 
 実効ツール一覧は、設定値より狭くなる場合があります。`edit: false` の場合、または step に `output_contracts` があり `edit: true` ではない場合、TAKT は provider 呼び出し前に `provider_options.*.allowed_tools` からコマンド・編集系 tool を除去します。Claude 系 provider では、カンマ区切り entry を atomic な tool spec に正規化し、`Bash(...)` は `(` より前の canonical tool 名で判定してから、`Bash`、`Edit`、`Write`、`Apply_Patch`、`Patch` を除去します。OpenCode では `bash`、`edit`、`write` など lowercase の tool を除去します。同じ read-only フィルタは、`part_edit: false` または継承された `edit: false` などにより part の実効 edit 設定が false の場合の `team_leader.part_allowed_tools` にも適用されます。
 
@@ -942,9 +890,9 @@ schemas:
   pr-followup-task: pr-followup-task
 ```
 
-### `auto_routing`
+### provider routing と自動 routing
 
-workflow レベルの自動 provider ルーティングです。AI の `router`（provider + model）が step ごとに provider/model の `candidate` を選択します。`candidates` に選択可能な provider/model エントリを宣言し、`candidate_pools` で pool ごとの `fallback` 付きにグループ化し、`default_pool` でより特異的な一致がない場合の pool を指定し、`pool_rules` / `rules` で step の `tags`、`steps`（step 名）、`personas` ごとに pool や candidate を固定できます。rule は宣言済みの candidate / pool を参照する必要があり、未知の名前は検証エラーになります。
+`auto_routing`、provider/model の既定値、provider options、routing は workflow YAML のフィールドではありません。provider/model/options と routing は、既存の `config.yaml` legacy mode と CLI/env override を維持したまま `runtime.yaml` が所有します。`rate_limit_fallback` は legacy の `config.yaml` 設定として残り、workflow YAML のフィールドではありません。workflow YAML で provider に関係する能力を指定する唯一の面は `capabilities` です。
 
 ### `interactive_mode`
 
@@ -954,57 +902,9 @@ workflow レベルの自動 provider ルーティングです。AI の `router`�
 interactive_mode: assistant
 ```
 
-### `workflow_config.provider` / `workflow_config.model`
+### 削除された workflow 実行設定
 
-workflow 全体のデフォルト provider と model です。解決順では step レベルの `provider` / `model`、routing、CLI・環境変数 override より下位で、project / global config のデフォルトより上位です。
-
-```yaml
-workflow_config:
-  provider: claude-sdk
-  model: opus
-```
-
-### `workflow_config.provider_options`
-
-workflow 全体のプロバイダーオプション。多くの provider option leaf では、env または CLI 起源の config 値が最優先されます。それ以外は step `provider_options` > `provider_routing.steps` > `provider_routing.tags` > `provider_routing.personas` > deprecated の `persona_providers` > `workflow_config.provider_options` > project `.takt/config.yaml` > global `~/.takt/config.yaml` の順です。`base_url` は例外で、step と workflow routing の leaf が TAKT env override より優先され、同じ step-to-global 順序の後に `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL` または `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL` が使われます。workflow YAML と project `.takt/config.yaml` の `base_url` は loopback host のみ指定できます。非 loopback endpoint は global config または TAKT env を使ってください。
-
-```yaml
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    claude:
-      sandbox:
-        allow_unsandboxed_commands: true
-```
-
-`provider_options` は名前で共通 YAML プリセットを参照できます。名前は `.takt/provider-options`、`~/.takt/provider-options`、`builtins/{lang}/provider-options` の順に first-match で解決されます。repertoire package 内の workflow では package-local の `provider-options` が最優先され、`@owner/repo/name` でその package のプリセットも参照できます。参照先が base になり、inline の値が同じ leaf を上書きします。
-
-`provider_options.extends` は、preset または path を解決できない場合、scoped ref が利用可能な repertoire package を指していない場合、参照先 YAML が不正または provider-options object でない場合、extends チェーンが循環している場合、削除済みの `$ref` キーが使われた場合に、設定エラーとして fail fast します。相対 path は workflow file 基準で解決され、symlink 解決後も workflow directory 内に留まる必要があります。絶対 path と、実体が workflow directory 外へ出る path は拒否されます。
-
-```yaml
-workflow_config:
-  provider_options:
-    extends: readonly
-
-steps:
-  - name: implement
-    provider_options:
-      extends: edit
-      opencode:
-        allowed_tools: [read, grep, bash]
-```
-
-workflow ファイルからの相対パスも、workflow-local な共通ファイル用に引き続き使用できます。
-
-共通ファイルの例:
-
-```yaml
-claude:
-  allowed_tools: [Read, Glob, Grep, Bash, WebSearch, WebFetch]
-opencode:
-  allowed_tools: [read, glob, grep, bash, websearch, webfetch]
-```
+`workflow_config.provider`、`workflow_config.model`、`workflow_config.provider_options`、step の `provider` / `model` / `provider_options`、`loop_monitors.judge` の provider 設定、`workflow_call.overrides` は拒否されます。実行設定は `runtime.yaml` へ移してください。`workflow_config.runtime.prepare` の process 準備ブロックは引き続き利用できます。
 
 ### `capabilities`
 
@@ -1058,24 +958,11 @@ loop_monitors:
 
 `ignore_steps` はサイクル照合から中間 step を除外します。任意回数の検証・再修正 step を含む論理サイクルを監視するときに使用します。`cycle` に含む step と同じ step は指定できません。
 
-`loop_monitors.judge` は agent step と同じ provider/model 検証で `provider`、`model`、`provider_options` を指定できます。`provider` を省略した場合、judge はトリガー元 step の provider と model を継承します。`provider` を指定して `model` を省略した場合、継承 model はクリアされます。トリガー元 step に解決済み model があっても provider または CLI のデフォルトを使わせたい場合は、`model: null` を指定してください。
+`loop_monitors.judge` では provider、model、provider options を指定できません。設定済みの場合は runtime target `provider.targets.internal_agents.loop-judge` を使用し、未設定なら通常の runtime routing とトリガー元 step の fallback を使用します。
 
 loop-monitor judge は常に新しい provider session で実行されます。そのため `loop_monitors.judge` では `session_key` を指定できません。
 
-### `rate_limit_fallback`
-
-step 実行中に Claude / Codex / OpenCode の rate limit に遭遇した場合、中断された step をチェーン上の次の provider で再実行することで run を継続できます。新しいセッションには「なぜ前のセッションが中断されたか」を伝える fallback notice 指示が挿入され、AI はディスク上の既存レポートからコンテキストを再構築できます。
-
-```yaml
-rate_limit_fallback:
-  switch_chain:
-    - provider: claude-sdk
-      model: opus
-    - provider: codex
-      model: gpt-5.5
-```
-
-1 つのチェーン内の試行履歴は workflow state に記録され、step 成功時にリセットされます。同じフィールドは `~/.takt/config.yaml` および `.takt/config.yaml` でも受け入れられ、プロジェクト全体 / ユーザー全体のデフォルトとして機能します。
+rate-limit fallback も `runtime.yaml`（または既存の global/project `config.yaml` legacy mode）で設定します。workflow YAML には記述できません。
 
 ### `subworkflow`
 
@@ -1119,9 +1006,7 @@ steps:
     persona: coder
     edit: true
     required_permission_mode: edit
-    provider_options:
-      claude:
-        allowed_tools: [Read, Glob, Grep, Edit, Write, Bash, WebSearch, WebFetch]
+    capabilities: edit
     rules:
       - condition: Implementation complete
         next: COMPLETE
@@ -1146,9 +1031,7 @@ steps:
     persona: coder
     edit: true
     required_permission_mode: edit
-    provider_options:
-      claude:
-        allowed_tools: [Read, Glob, Grep, Edit, Write, Bash, WebSearch, WebFetch]
+    capabilities: edit
     rules:
       - condition: Implementation complete
         next: review
@@ -1160,9 +1043,7 @@ steps:
   - name: review
     persona: reviewer
     edit: false
-    provider_options:
-      claude:
-        allowed_tools: [Read, Glob, Grep, WebSearch, WebFetch]
+    capabilities: readonly
     rules:
       - condition: Approved
         next: COMPLETE
@@ -1183,9 +1064,7 @@ steps:
   - name: analyze
     persona: planner
     edit: false
-    provider_options:
-      claude:
-        allowed_tools: [Read, Glob, Grep, WebSearch, WebFetch]
+    capabilities: readonly
     rules:
       - condition: Analysis complete
         next: implement
@@ -1197,9 +1076,7 @@ steps:
     edit: true
     pass_previous_response: true
     required_permission_mode: edit
-    provider_options:
-      claude:
-        allowed_tools: [Read, Glob, Grep, Edit, Write, Bash, WebSearch, WebFetch]
+    capabilities: edit
     rules:
       - condition: Implementation complete
         next: COMPLETE

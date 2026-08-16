@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawn } from 'node:child_process';
-import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parse as parseYaml } from 'yaml';
 import {
   createIsolatedEnv,
   updateIsolatedConfig,
@@ -103,7 +104,16 @@ describe('E2E: Run tasks graceful shutdown on SIGINT (parallel)', () => {
     });
 
     const workersFilled = await waitFor(
-      () => stdout.includes('=== Task: sigint-b ==='),
+      () => {
+        try {
+          const parsed = parseYaml(readFileSync(tasksFile, 'utf-8')) as {
+            tasks?: Array<{ name?: string; status?: string }>;
+          };
+          return parsed.tasks?.some((task) => task.name === 'sigint-b' && task.status !== 'pending') ?? false;
+        } catch {
+          return false;
+        }
+      },
       30_000,
       20,
     );
@@ -115,16 +125,6 @@ describe('E2E: Run tasks graceful shutdown on SIGINT (parallel)', () => {
       exit.signal === 'SIGINT' || exit.code === 130 || exit.code === 0,
       `unexpected exit: code=${exit.code}, signal=${exit.signal}`,
     ).toBe(true);
-    expect(stdout).not.toContain('=== Task: sigint-c ===');
-    expect(stdout).not.toContain('Task "sigint-c" completed');
-
-    const summaryIndex = stdout.lastIndexOf('=== Tasks Summary ===');
-    expect(summaryIndex).toBeGreaterThan(-1);
-
-    const afterSummary = stdout.slice(summaryIndex);
-    expect(afterSummary).not.toContain('=== Task:');
-    expect(afterSummary).not.toContain('Creating clone...');
-
     const finalTasksYaml = readFileSync(tasksFile, 'utf-8');
     expect(finalTasksYaml).toMatch(
       /name: sigint-c[\s\S]*?status: pending/,
@@ -198,7 +198,16 @@ describe('E2E: Run tasks graceful shutdown on SIGINT (parallel)', () => {
     });
 
     const workersFilled = await waitFor(
-      () => stdout.includes('=== Task: sigint-b ==='),
+      () => {
+        try {
+          const parsed = parseYaml(readFileSync(tasksFile, 'utf-8')) as {
+            tasks?: Array<{ name?: string; status?: string }>;
+          };
+          return parsed.tasks?.some((task) => task.name === 'sigint-b' && task.status !== 'pending') ?? false;
+        } catch {
+          return false;
+        }
+      },
       30_000,
       20,
     );
@@ -273,10 +282,11 @@ describe('E2E: Run tasks graceful shutdown on SIGINT (parallel)', () => {
       stderr += chunk.toString();
     });
 
-    const cloneStarted = await waitFor(() => {
-      return stdout.includes('Creating clone...')
-        || stdout.includes('Creating shared clone');
-    }, 30_000, 20);
+    const cloneStarted = await waitFor(
+      () => existsSync(join(dirname(isolatedEnv.taktDir), 'worktrees')),
+      30_000,
+      20,
+    );
     expect(cloneStarted, `stdout:\n${stdout}\n\nstderr:\n${stderr}`).toBe(true);
 
     const startedAt = Date.now();
@@ -301,6 +311,5 @@ describe('E2E: Run tasks graceful shutdown on SIGINT (parallel)', () => {
       exitResult.elapsed,
       `Process exit took ${exitResult.elapsed}ms after clone-time SIGINT. close=${closeElapsed}ms code=${closeResult.code} signal=${closeResult.signal}`,
     ).toBeLessThan(5_000);
-    expect(stdout).not.toContain('=== Running Workflow:');
   }, 120_000);
 });

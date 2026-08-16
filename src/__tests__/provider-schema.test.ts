@@ -213,6 +213,23 @@ describe('provider effort values', () => {
   });
 });
 
+describe('Codex permission control provider option', () => {
+  it('accepts takt and codex values', () => {
+    expect(StepProviderOptionsSchema.parse({
+      codex: { permission_control: 'takt' },
+    })).toEqual({ codex: { permission_control: 'takt' } });
+    expect(StepProviderOptionsSchema.parse({
+      codex: { permission_control: 'codex' },
+    })).toEqual({ codex: { permission_control: 'codex' } });
+  });
+
+  it('rejects unknown permission control values', () => {
+    expect(() => StepProviderOptionsSchema.parse({
+      codex: { permission_control: 'workspace' },
+    })).toThrow(/permission_control|Invalid option/i);
+  });
+});
+
 describe('Claude terminal provider contract', () => {
   beforeEach(() => {
     ProviderRegistry.resetInstance();
@@ -444,36 +461,15 @@ describe('Schemas accept opencode provider', () => {
     expect(result.provider).toBe('cursor');
   });
 
-  it('should accept opencode in WorkflowStepRawSchema', () => {
-    const result = WorkflowStepRawSchema.parse({
-      name: 'test-step',
-      provider: 'opencode',
-    });
-    expect(result.provider).toBe('opencode');
-  });
-
-  it('should accept cursor in WorkflowStepRawSchema', () => {
-    const result = WorkflowStepRawSchema.parse({
-      name: 'test-step',
-      provider: 'cursor',
-    });
-    expect(result.provider).toBe('cursor');
-  });
-
-  it('should accept opencode in ParallelSubStepRawSchema', () => {
-    const result = ParallelSubStepRawSchema.parse({
-      name: 'sub-1',
-      provider: 'opencode',
-    });
-    expect(result.provider).toBe('opencode');
-  });
-
-  it('should accept cursor in ParallelSubStepRawSchema', () => {
-    const result = ParallelSubStepRawSchema.parse({
-      name: 'sub-1',
-      provider: 'cursor',
-    });
-    expect(result.provider).toBe('cursor');
+  it.each([
+    { label: 'workflow step with opencode', schema: WorkflowStepRawSchema, input: { name: 'test-step', provider: 'opencode' } },
+    { label: 'workflow step with cursor', schema: WorkflowStepRawSchema, input: { name: 'test-step', provider: 'cursor' } },
+    { label: 'parallel sub-step with opencode', schema: ParallelSubStepRawSchema, input: { name: 'sub-1', provider: 'opencode' } },
+    { label: 'parallel sub-step with cursor', schema: ParallelSubStepRawSchema, input: { name: 'sub-1', provider: 'cursor' } },
+  ])('should reject provider execution settings in workflow YAML: $label', ({ schema, input }) => {
+    expect(() => schema.parse(input)).toThrow(
+      /workflow YAML no longer accepts provider execution settings.*runtime\.yaml/i,
+    );
   });
 
   it('should still accept existing providers (claude, codex, opencode, cursor, pi, mock)', () => {

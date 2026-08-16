@@ -5,16 +5,15 @@ import {
 } from '../core/workflow/companion/contracts.js';
 
 describe('companion structured output contracts', () => {
-  it('accepts a fresh finding list without lifecycle state', () => {
-    expect(parseCompanionReviewOutput({
-      findings: [{ severity: 'must_fix', file: 'src/a.ts', line: 4, finding: 'unsafe write' }],
-      notes: null,
-    })).toEqual({
-      findings: [{ severity: 'must_fix', file: 'src/a.ts', line: 4, finding: 'unsafe write' }],
+  it('accepts a valid finding list and normalizes an omitted notes value', () => {
+    const finding = { severity: 'must_fix' as const, file: 'src/a.ts', line: 4, finding: 'unsafe write' };
+
+    expect(parseCompanionReviewOutput({ findings: [finding], notes: null })).toEqual({
+      findings: [finding],
     });
   });
 
-  it('rejects removed finding updates', () => {
+  it('rejects unknown review fields', () => {
     expect(() => parseCompanionReviewOutput({
       findings: [],
       updates: [{ id: 'reviewer-1', status: 'resolved' }],
@@ -22,7 +21,7 @@ describe('companion structured output contracts', () => {
     })).toThrow();
   });
 
-  it('accepts round-local accept and reject moderator decisions', () => {
+  it('accepts only the supported moderator decisions', () => {
     expect(parseModeratorOutput({
       findings: [
         { action: 'accept', sourceIndex: 0 },
@@ -34,18 +33,15 @@ describe('companion structured output contracts', () => {
         { action: 'reject', sourceIndex: 1 },
       ],
     });
+
+    expect(() => parseModeratorOutput({
+      findings: [{ action: 'downgrade', sourceIndex: 0 }],
+    })).toThrow();
   });
 
-  it.each([
-    {
-      caseName: 'an unsupported action',
-      output: { findings: [{ action: 'downgrade', sourceIndex: 0 }] },
-    },
-    {
-      caseName: 'an additional decision field',
-      output: { findings: [{ action: 'accept', sourceIndex: 0, reason: 'extra field' }] },
-    },
-  ])('rejects $caseName', ({ output }) => {
-    expect(() => parseModeratorOutput(output)).toThrow();
+  it('rejects additional moderator decision fields', () => {
+    expect(() => parseModeratorOutput({
+      findings: [{ action: 'accept', sourceIndex: 0, reason: 'extra field' }],
+    })).toThrow();
   });
 });

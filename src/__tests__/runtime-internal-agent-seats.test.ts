@@ -37,7 +37,7 @@ describe('loop-judge seat', () => {
   };
 
   it('propagates an explicitly configured permission mode', () => {
-    expect(loopJudgeProviderFields({}, {
+    expect(loopJudgeProviderFields({
       loopJudge: { provider: 'opencode', model: 'seat-judge', permissionMode: 'readonly' },
     })).toEqual({
       provider: 'opencode',
@@ -48,8 +48,8 @@ describe('loop-judge seat', () => {
     });
   });
 
-  it('replaces the workflow judge provider/model when assigned', () => {
-    expect(loopJudgeProviderFields({ provider: 'codex', model: 'judge-model' }, seats)).toEqual({
+  it('uses the runtime seat provider/model when assigned', () => {
+    expect(loopJudgeProviderFields(seats)).toEqual({
       provider: 'opencode',
       providerSpecified: true,
       model: 'seat-judge',
@@ -57,11 +57,8 @@ describe('loop-judge seat', () => {
     });
   });
 
-  it('keeps the workflow judge fields without a seat', () => {
-    expect(loopJudgeProviderFields({ provider: 'codex', model: 'judge-model' }, undefined)).toEqual({
-      provider: 'codex',
-      model: 'judge-model',
-    });
-    expect(loopJudgeProviderFields({}, {})).toEqual({});
+  it('leaves provider/model unset without a runtime seat', () => {
+    expect(loopJudgeProviderFields(undefined)).toEqual({});
+    expect(loopJudgeProviderFields({})).toEqual({});
   });
 });

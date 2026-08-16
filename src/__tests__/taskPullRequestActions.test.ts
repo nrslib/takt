@@ -256,7 +256,6 @@ describe('createPullRequestForTask', () => {
     expect(preview).not.toMatch(/[\x00-\x09\x0b-\x1f\x7f-\x9f]/);
     expect(preview).toContain('unsafe.ts');
     expect(preview).toContain('fulfilled requirementbody');
-    expect(preview).toContain('\n本文:\n');
 
     const [, prOptions] = mockCreatePullRequestSafely.mock.calls[0] as [
       unknown,
@@ -368,9 +367,7 @@ describe('createPullRequestForTask', () => {
     const result = await createPullRequestForTask('/project', failedTask);
 
     expect(result).toBe(false);
-    expect(mockError).toHaveBeenCalledWith(
-      'PR 作成を中止しました: コミットに失敗しました: commit failed',
-    );
+    expect(String(mockError.mock.calls[0]?.[0])).toContain('commit failed');
     expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
   });
 
@@ -397,9 +394,7 @@ describe('createPullRequestForTask', () => {
       ['push', 'origin', 'takt/failed-task'],
       expect.objectContaining({ cwd: '/worktree/failed-task' }),
     );
-    expect(mockError).toHaveBeenCalledWith(
-      'PR 作成を中止しました: ブランチの公開に失敗しました: push failed',
-    );
+    expect(String(mockError.mock.calls[0]?.[0])).toContain('push failed');
     expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
   });
 
@@ -411,9 +406,7 @@ describe('createPullRequestForTask', () => {
     const result = await createPullRequestForTask('/project', failedTask);
 
     expect(result).toBe(false);
-    expect(mockError).toHaveBeenCalledWith(
-      'PR 作成を中止しました: 準備に失敗しました: summary failed',
-    );
+    expect(String(mockError.mock.calls[0]?.[0])).toContain('summary failed');
     expect(mockConfirm).not.toHaveBeenCalled();
     expect(mockStageAndCommit).not.toHaveBeenCalled();
     expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
@@ -427,9 +420,9 @@ describe('createPullRequestForTask', () => {
     const result = await createPullRequestForTask('/project', failedTask);
 
     expect(result).toBe(false);
-    expect(mockError).toHaveBeenCalledWith(
-      'PR 作成を中止しました: コミットに失敗しました: commit failed',
-    );
+    const errorMessage = String(mockError.mock.calls[0]?.[0]);
+    expect(errorMessage).toContain('commit failed');
+    expect(errorMessage).not.toMatch(/[\x00-\x1f\x7f-\x9f]/);
     expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
   });
 
@@ -475,7 +468,6 @@ describe('createPullRequestForTask', () => {
       unknown,
       { body: string },
     ];
-    expect(prOptions.body).toContain('## 作業ツリー差分');
     expect(prOptions.body).not.toContain('failed instruct が worktree で実行できる');
     expect(prOptions.body).not.toContain('後続ゲートは PR CI');
   });

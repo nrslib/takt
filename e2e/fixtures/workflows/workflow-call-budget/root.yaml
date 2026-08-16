@@ -1,6 +1,4 @@
 name: workflow-call-budget-root
-workflow_config:
-  provider: mock
 max_steps: 4
 initial_step: plan
 steps:

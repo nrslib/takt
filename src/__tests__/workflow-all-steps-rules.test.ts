@@ -29,57 +29,33 @@ function workflowRuleContext(
   language: 'en' | 'ja' = 'en',
 ): WorkflowRuleInstructionContext {
   return {
-    ...makeInstructionContext({
-      language,
-      workflowName: 'rules-test',
-    }),
+    ...makeInstructionContext({ language, workflowName: 'rules-test' }),
     workflowRules: rules,
   };
 }
 
 describe('all_steps.rules schema', () => {
-  it('accepts string refs and before_instruction entries in declaration order', () => {
+  it('accepts supported rule references and rejects unsupported shapes', () => {
     const result = WorkflowConfigRawSchema.safeParse({
       name: 'rules-schema',
       all_steps: {
-        rules: [
-          'first-rule',
-          { ref: 'second-rule', position: 'before_instruction' },
-        ],
+        rules: ['first-rule', { ref: 'second-rule', position: 'before_instruction' }],
       },
-      steps: [{ name: 'step', instruction: 'Work' }],
+      steps: [{ name: 'step', instruction: 'work' }],
     });
 
     expect(result.success).toBe(true);
-    if (!result.success) return;
-    const parsed = result.data as {
-      readonly all_steps?: {
-        readonly rules?: unknown;
-      };
-    };
-    expect(parsed.all_steps?.rules).toEqual([
-      'first-rule',
-      { ref: 'second-rule', position: 'before_instruction' },
-    ]);
-  });
+    if (result.success) {
+      expect(result.data.all_steps?.rules).toEqual([
+        'first-rule',
+        { ref: 'second-rule', position: 'before_instruction' },
+      ]);
+    }
 
-  it('rejects unsupported positions, unknown all_steps keys, and a top-level rules key', () => {
     expect(WorkflowConfigRawSchema.safeParse({
       name: 'invalid-position',
       all_steps: { rules: [{ ref: 'rule', position: 'after_task' }] },
-      steps: [{ name: 'step', instruction: 'Work' }],
-    }).success).toBe(false);
-
-    expect(WorkflowConfigRawSchema.safeParse({
-      name: 'unknown-all-steps-key',
-      all_steps: { rules: [], other: true },
-      steps: [{ name: 'step', instruction: 'Work' }],
-    }).success).toBe(false);
-
-    expect(WorkflowConfigRawSchema.safeParse({
-      name: 'top-level-rules',
-      rules: ['rule'],
-      steps: [{ name: 'step', instruction: 'Work' }],
+      steps: [{ name: 'step', instruction: 'work' }],
     }).success).toBe(false);
   });
 });
@@ -278,28 +254,31 @@ describe('workflow-wide Phase 1 rule rendering', () => {
 });
 
 describe('workflow-wide rule phase boundaries', () => {
-  it('keeps workflow-wide rules out of Phase 2 and Phase 3 builders', () => {
+  it('does not pass Phase 1 rules into report or status-judgment instructions', () => {
+    const marker = 'dynamic-phase-one-rule';
     const step = makeStep({
       name: 'review',
       rules: [makeRule('approved', 'COMPLETE')],
-      outputContracts: [{ name: 'report.md', format: 'Report' }],
+      outputContracts: [{ name: 'report.md', format: 'report' }],
     });
-    const marker = 'RULE_MUST_STAY_IN_PHASE_1';
-    const workflowRule = {
-      ref: 'phase-1-only',
-      position: 'after_execution_rules' as const,
-      content: marker,
+    const context = {
+      ...makeInstructionContext({ workflowName: 'rules-boundary' }),
+      workflowRules: [{
+        ref: 'phase-1-only',
+        position: 'after_execution_rules' as const,
+        content: marker,
+      }],
     };
 
     const phase2 = new ReportInstructionBuilder(step, {
-      ...workflowRuleContext([workflowRule]),
-      reportDir: '/tmp/test/reports',
+      ...context,
+      reportDir: '/tmp/reports',
       stepIteration: 1,
-      task: 'Write the report.',
+      task: 'dynamic task',
     } as unknown as ReportInstructionContext).build();
     const phase3 = new StatusJudgmentBuilder(step, {
-      ...workflowRuleContext([workflowRule]),
-      reportContent: 'The report is complete.',
+      ...context,
+      reportContent: 'dynamic report',
       inputSource: 'report',
     } as unknown as StatusJudgmentContext).build();
 

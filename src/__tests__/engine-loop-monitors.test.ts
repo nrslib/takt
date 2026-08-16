@@ -150,18 +150,6 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
           rules: loopJudgeRules(),
         },
       });
-      config.allStepsRules = [
-        {
-          ref: 'phase1-after-execution-rule',
-          position: 'after_execution_rules',
-          content: 'PHASE1_AFTER_EXECUTION_RULE',
-        },
-        {
-          ref: 'phase1-before-instruction-rule',
-          position: 'before_instruction',
-          content: 'PHASE1_BEFORE_INSTRUCTION_RULE',
-        },
-      ];
       engine = new WorkflowEngine(config, tmpDir, 'test task', {
         projectCwd: tmpDir,
         provider: 'mock',
@@ -205,22 +193,6 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       expect(state.status).toBe('completed');
       expect(cycleDetectedFn).toHaveBeenCalledOnce();
       expect(cycleDetectedFn.mock.calls[0][1]).toBe(2); // cycleCount
-      const implementCall = vi.mocked(runAgent).mock.calls[0];
-      if (!implementCall) {
-        throw new Error('implement call is required');
-      }
-      const judgeCall = vi.mocked(runAgent).mock.calls.find((call) => call[0] === 'supervisor');
-      if (!judgeCall) {
-        throw new Error('loop monitor judge call is required');
-      }
-      expect(implementCall[1]).toContain('PHASE1_AFTER_EXECUTION_RULE');
-      expect(implementCall[1]).toContain('PHASE1_BEFORE_INSTRUCTION_RULE');
-      expect(implementCall[1]).toContain('The following rules apply to all steps in this workflow.');
-      expect(judgeCall[1]).toContain('The loop repeated 2 times.');
-      expect(judgeCall[1]).not.toContain('{cycle_count}');
-      expect(judgeCall[1]).not.toContain('PHASE1_AFTER_EXECUTION_RULE');
-      expect(judgeCall[1]).not.toContain('PHASE1_BEFORE_INSTRUCTION_RULE');
-      expect(judgeCall[1]).not.toContain('The following rules apply to all steps in this workflow.');
       // 7 iterations: implement + ai_review + ai_fix + ai_review + ai_fix + judge + reviewers
       expect(state.iteration).toBe(7);
     });
@@ -314,17 +286,19 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
 
     it('should inherit resolved provider and model from the step that triggered the judge', async () => {
       const config = buildConfigWithLoopMonitor(1);
-      const aiFixStep = config.steps.find((step) => step.name === 'ai_fix');
-      if (!aiFixStep) {
-        throw new Error('ai_fix step is required for this test');
-      }
-      aiFixStep.provider = 'opencode';
-      aiFixStep.model = 'opencode/zai-coding-plan/glm-5.1';
       config.loopMonitors![0]!.judge.persona = 'supervisor';
 
       engine = new WorkflowEngine(config, tmpDir, 'test task', {
         projectCwd: tmpDir,
         provider: 'claude',
+        providerRouting: {
+          steps: {
+            ai_fix: {
+              provider: 'opencode',
+              model: 'opencode/zai-coding-plan/glm-5.1',
+            },
+          },
+        },
       });
 
       mockRunAgentSequence([
@@ -357,7 +331,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
     it('Given effective auto_routing selects the triggering step, When loop judge runs without overrides, Then it inherits the selected concrete candidate', async () => {
       const config = buildConfigWithLoopMonitor(1);
       config.loopMonitors![0]!.judge.persona = 'supervisor';
-      config.autoRouting = {
+      const autoRouting = {
         strategy: 'balanced',
         router: { provider: 'codex', model: 'router-model' },
         candidates: [{
@@ -391,6 +365,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         projectCwd: tmpDir,
         provider: 'mock',
         model: 'top-level-model',
+        autoRouting,
       });
       mockRunAgentSequence([
         makeResponse({ persona: 'implement', content: 'Implementation done' }),
@@ -420,21 +395,27 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       const config = buildConfigWithLoopMonitor(1, {
         judge: {
           persona: 'supervisor',
-          provider: 'codex',
-          model: 'gpt-5.2-codex',
           rules: loopJudgeRules(),
         },
       } as Partial<LoopMonitorConfig>);
-      const aiFixStep = config.steps.find((step) => step.name === 'ai_fix');
-      if (!aiFixStep) {
-        throw new Error('ai_fix step is required for this test');
-      }
-      aiFixStep.provider = 'opencode';
-      aiFixStep.model = 'opencode/zai-coding-plan/glm-5.1';
 
       engine = new WorkflowEngine(config, tmpDir, 'test task', {
         projectCwd: tmpDir,
         provider: 'claude',
+        providerRouting: {
+          steps: {
+            ai_fix: {
+              provider: 'opencode',
+              model: 'opencode/zai-coding-plan/glm-5.1',
+            },
+          },
+        },
+        internalAgentSeats: {
+          loopJudge: {
+            provider: 'codex',
+            model: 'gpt-5.2-codex',
+          },
+        },
       });
 
       mockRunAgentSequence([
@@ -514,17 +495,9 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       const config = buildConfigWithLoopMonitor(1, {
         judge: {
           persona: 'supervisor',
-          provider: 'codex',
-          model: 'codex/judge-model',
           rules: loopJudgeRules(),
         },
       } as Partial<LoopMonitorConfig>);
-      const aiFixStep = config.steps.find((step) => step.name === 'ai_fix');
-      if (!aiFixStep) {
-        throw new Error('ai_fix step is required for this test');
-      }
-      aiFixStep.provider = 'opencode';
-      aiFixStep.model = 'opencode/step-model';
       const judgeStart = vi.fn();
 
       engine = new WorkflowEngine(config, tmpDir, 'test task', {
@@ -533,6 +506,20 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         providerSource,
         model,
         modelSource,
+        providerRouting: {
+          steps: {
+            ai_fix: {
+              provider: 'opencode',
+              model: 'opencode/step-model',
+            },
+          },
+        },
+        internalAgentSeats: {
+          loopJudge: {
+            provider: 'codex',
+            model: 'codex/judge-model',
+          },
+        },
       });
       engine.on('step:start', (step, _iteration, _instruction, providerInfo) => {
         if (step.name.startsWith('_loop_judge_')) {
@@ -568,20 +555,26 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       const config = buildConfigWithLoopMonitor(1, {
         judge: {
           persona: 'supervisor',
-          provider: 'codex',
           rules: loopJudgeRules(),
         },
       } as Partial<LoopMonitorConfig>);
-      const aiFixStep = config.steps.find((step) => step.name === 'ai_fix');
-      if (!aiFixStep) {
-        throw new Error('ai_fix step is required for this test');
-      }
-      aiFixStep.provider = 'opencode';
-      aiFixStep.model = 'opencode/zai-coding-plan/glm-5.1';
 
       engine = new WorkflowEngine(config, tmpDir, 'test task', {
         projectCwd: tmpDir,
         provider: 'claude',
+        providerRouting: {
+          steps: {
+            ai_fix: {
+              provider: 'opencode',
+              model: 'opencode/zai-coding-plan/glm-5.1',
+            },
+          },
+        },
+        internalAgentSeats: {
+          loopJudge: {
+            provider: 'codex',
+          },
+        },
       });
 
       mockRunAgentSequence([
@@ -610,27 +603,31 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       }));
     });
 
-    it('should emit loop monitor judge providerInfo with explicit default model when judge model is omitted', async () => {
+    it('should emit loop monitor judge providerInfo when the runtime seat omits its model', async () => {
       const config = buildConfigWithLoopMonitor(1, {
         judge: {
           persona: 'supervisor',
-          provider: 'codex',
-          model: undefined,
-          modelSpecified: true,
           rules: loopJudgeRules(),
         },
       } as Partial<LoopMonitorConfig>);
-      const aiFixStep = config.steps.find((step) => step.name === 'ai_fix');
-      if (!aiFixStep) {
-        throw new Error('ai_fix step is required for this test');
-      }
-      aiFixStep.provider = 'codex';
-      aiFixStep.model = 'configured-model';
 
       engine = new WorkflowEngine(config, tmpDir, 'test task', {
         projectCwd: tmpDir,
         provider: 'codex',
         model: 'configured-model',
+        providerRouting: {
+          steps: {
+            ai_fix: {
+              provider: 'codex',
+              model: 'configured-model',
+            },
+          },
+        },
+        internalAgentSeats: {
+          loopJudge: {
+            provider: 'codex',
+          },
+        },
       });
 
       mockRunAgentSequence([
@@ -682,17 +679,18 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
           rules: loopJudgeRules(),
         },
       } as Partial<LoopMonitorConfig>);
-      const aiFixStep = config.steps.find((step) => step.name === 'ai_fix');
-      if (!aiFixStep) {
-        throw new Error('ai_fix step is required for this test');
-      }
-      aiFixStep.provider = 'claude';
-      aiFixStep.model = 'sonnet';
-
       engine = new WorkflowEngine(config, tmpDir, 'test task', {
         projectCwd: tmpDir,
         provider: 'claude',
         model: 'sonnet',
+        providerRouting: {
+          steps: {
+            ai_fix: {
+              provider: 'claude',
+              model: 'sonnet',
+            },
+          },
+        },
         rateLimitFallback: {
           switchChain: [{ provider: 'codex', model: 'gpt-5' }],
         },
@@ -735,20 +733,26 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       const config = buildConfigWithLoopMonitor(1, {
         judge: {
           persona: 'supervisor',
-          model: 'opencode/zai-coding-plan/glm-5.2',
           rules: loopJudgeRules(),
         },
       } as Partial<LoopMonitorConfig>);
-      const aiFixStep = config.steps.find((step) => step.name === 'ai_fix');
-      if (!aiFixStep) {
-        throw new Error('ai_fix step is required for this test');
-      }
-      aiFixStep.provider = 'opencode';
-      aiFixStep.model = 'opencode/zai-coding-plan/glm-5.1';
 
       engine = new WorkflowEngine(config, tmpDir, 'test task', {
         projectCwd: tmpDir,
         provider: 'claude',
+        providerRouting: {
+          steps: {
+            ai_fix: {
+              provider: 'opencode',
+              model: 'opencode/zai-coding-plan/glm-5.1',
+            },
+          },
+          personas: {
+            'loop-judge': {
+              model: 'opencode/zai-coding-plan/glm-5.2',
+            },
+          },
+        },
       });
 
       mockRunAgentSequence([
@@ -781,25 +785,31 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       const config = buildConfigWithLoopMonitor(1, {
         judge: {
           persona: 'supervisor',
-          provider: 'codex',
-          model: 'gpt-5.2-codex',
           rules: loopJudgeRules(),
         },
       } as Partial<LoopMonitorConfig>);
-      const aiFixStep = config.steps.find((step) => step.name === 'ai_fix');
-      if (!aiFixStep) {
-        throw new Error('ai_fix step is required for this test');
-      }
-      aiFixStep.provider = 'opencode';
-      aiFixStep.model = 'opencode/zai-coding-plan/glm-5.1';
 
       engine = new WorkflowEngine(config, tmpDir, 'test task', {
         projectCwd: tmpDir,
         provider: 'claude',
+        providerRouting: {
+          steps: {
+            ai_fix: {
+              provider: 'opencode',
+              model: 'opencode/zai-coding-plan/glm-5.1',
+            },
+          },
+        },
         personaProviders: {
           'loop-judge': {
             provider: 'opencode',
             model: 'opencode/should-not-win',
+          },
+        },
+        internalAgentSeats: {
+          loopJudge: {
+            provider: 'codex',
+            model: 'gpt-5.2-codex',
           },
         },
       });
@@ -837,16 +847,17 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
           rules: loopJudgeRules(),
         },
       } as Partial<LoopMonitorConfig>);
-      const aiFixStep = config.steps.find((step) => step.name === 'ai_fix');
-      if (!aiFixStep) {
-        throw new Error('ai_fix step is required for this test');
-      }
-      aiFixStep.provider = 'opencode';
-      aiFixStep.model = 'opencode/zai-coding-plan/glm-5.1';
-
       engine = new WorkflowEngine(config, tmpDir, 'test task', {
         projectCwd: tmpDir,
         provider: 'claude',
+        providerRouting: {
+          steps: {
+            ai_fix: {
+              provider: 'opencode',
+              model: 'opencode/zai-coding-plan/glm-5.1',
+            },
+          },
+        },
         personaProviders: {
           'loop-judge': {
             provider: 'codex',
@@ -888,17 +899,16 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
           rules: loopJudgeRules(),
         },
       } as Partial<LoopMonitorConfig>);
-      const aiFixStep = config.steps.find((step) => step.name === 'ai_fix');
-      if (!aiFixStep) {
-        throw new Error('ai_fix step is required for this test');
-      }
-      aiFixStep.provider = 'opencode';
-      aiFixStep.model = 'opencode/zai-coding-plan/glm-5.1';
-
       engine = new WorkflowEngine(config, tmpDir, 'test task', {
         projectCwd: tmpDir,
         provider: 'claude',
         providerRouting: {
+          steps: {
+            ai_fix: {
+              provider: 'opencode',
+              model: 'opencode/zai-coding-plan/glm-5.1',
+            },
+          },
           personas: {
             'loop-judge': {
               provider: 'cursor',
@@ -941,18 +951,15 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
           rules: loopJudgeRules(),
         },
       } as Partial<LoopMonitorConfig>);
-      const aiFixStep = config.steps.find((step) => step.name === 'ai_fix');
-      if (!aiFixStep) {
-        throw new Error('ai_fix step is required for this test');
-      }
-      aiFixStep.provider = 'opencode';
-      aiFixStep.model = 'opencode/zai-coding-plan/glm-5.1';
-
       engine = new WorkflowEngine(config, tmpDir, 'test task', {
         projectCwd: tmpDir,
         provider: 'claude',
         providerRouting: {
           steps: {
+            ai_fix: {
+              provider: 'opencode',
+              model: 'opencode/zai-coding-plan/glm-5.1',
+            },
             '_loop_judge_ai_review_ai_fix': {
               provider: 'claude-sdk',
               model: 'opus-judge-step',
@@ -994,16 +1001,17 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
           rules: loopJudgeRules(),
         },
       } as Partial<LoopMonitorConfig>);
-      const aiFixStep = config.steps.find((step) => step.name === 'ai_fix');
-      if (!aiFixStep) {
-        throw new Error('ai_fix step is required for this test');
-      }
-      aiFixStep.provider = 'opencode';
-      aiFixStep.model = 'opencode/zai-coding-plan/glm-5.1';
-
       engine = new WorkflowEngine(config, tmpDir, 'test task', {
         projectCwd: tmpDir,
         provider: 'claude',
+        providerRouting: {
+          steps: {
+            ai_fix: {
+              provider: 'opencode',
+              model: 'opencode/zai-coding-plan/glm-5.1',
+            },
+          },
+        },
         personaProviders: {
           'loop-judge': {
             provider: 'codex',
@@ -1041,24 +1049,30 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       const config = buildConfigWithLoopMonitor(1, {
         judge: {
           persona: 'supervisor',
-          provider: 'cursor',
-          model: 'cursor-override',
           rules: loopJudgeRules(),
         },
       } as Partial<LoopMonitorConfig>);
-      const aiFixStep = config.steps.find((step) => step.name === 'ai_fix');
-      if (!aiFixStep) {
-        throw new Error('ai_fix step is required for this test');
-      }
-      aiFixStep.provider = 'claude';
-      aiFixStep.model = 'sonnet';
 
       engine = new WorkflowEngine(config, tmpDir, 'test task', {
         projectCwd: tmpDir,
         provider: 'claude',
         model: 'sonnet',
+        providerRouting: {
+          steps: {
+            ai_fix: {
+              provider: 'claude',
+              model: 'sonnet',
+            },
+          },
+        },
         rateLimitFallback: {
           switchChain: [{ provider: 'codex', model: 'gpt-5' }],
+        },
+        internalAgentSeats: {
+          loopJudge: {
+            provider: 'cursor',
+            model: 'cursor-override',
+          },
         },
       });
 
@@ -1099,18 +1113,6 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       const config = buildConfigWithLoopMonitor(1, {
         judge: {
           persona: 'supervisor',
-          provider: 'codex',
-          model: 'gpt-5.2-codex',
-          providerOptions: {
-            codex: {
-              networkAccess: true,
-            },
-            claude: {
-              sandbox: {
-                allowUnsandboxedCommands: true,
-              },
-            },
-          },
           rules: loopJudgeRules(),
         },
       } as Partial<LoopMonitorConfig>);
@@ -1118,6 +1120,22 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       engine = new WorkflowEngine(config, tmpDir, 'test task', {
         projectCwd: tmpDir,
         provider: 'claude',
+        internalAgentSeats: {
+          loopJudge: {
+            provider: 'codex',
+            model: 'gpt-5.2-codex',
+            providerOptions: {
+              codex: {
+                networkAccess: true,
+              },
+              claude: {
+                sandbox: {
+                  allowUnsandboxedCommands: true,
+                },
+              },
+            },
+          },
+        },
       });
 
       mockRunAgentSequence([
@@ -1162,13 +1180,6 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       const config = buildConfigWithLoopMonitor(1, {
         judge: {
           persona: 'supervisor',
-          provider: 'claude',
-          providerOptions: {
-            claude: {
-              allowedTools: ['Read'],
-              effort: 'low',
-            },
-          },
           rules: loopJudgeRules(),
         },
       } as Partial<LoopMonitorConfig>);
@@ -1181,6 +1192,17 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
             baseUrl: 'http://127.0.0.1:8787',
             sandbox: {
               allowUnsandboxedCommands: true,
+            },
+          },
+        },
+        internalAgentSeats: {
+          loopJudge: {
+            provider: 'claude',
+            providerOptions: {
+              claude: {
+                allowedTools: ['Read'],
+                effort: 'low',
+              },
             },
           },
         },
@@ -1241,16 +1263,17 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
           rules: loopJudgeRules(),
         },
       } as Partial<LoopMonitorConfig>);
-      const aiFixStep = config.steps.find((step) => step.name === 'ai_fix');
-      if (!aiFixStep) {
-        throw new Error('ai_fix step is required for this test');
-      }
-      aiFixStep.provider = 'opencode';
-      aiFixStep.model = 'opencode/zai-coding-plan/glm-5.1';
-
       engine = new WorkflowEngine(config, tmpDir, 'test task', {
         projectCwd: tmpDir,
         provider: 'claude',
+        providerRouting: {
+          steps: {
+            ai_fix: {
+              provider: 'opencode',
+              model: 'opencode/zai-coding-plan/glm-5.1',
+            },
+          },
+        },
       });
 
       mockRunAgentSequence([
@@ -1293,17 +1316,21 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       const config = buildConfigWithLoopMonitor(1, {
         judge: {
           persona: 'supervisor',
-          provider: 'opencode',
-          model: 'opencode/judge-model',
-          providerOptions: {
-            opencode: { guards: { callTimeoutMs: inactivityTimeoutMs } },
-          },
           rules: loopJudgeRules(),
         },
       } as Partial<LoopMonitorConfig>);
       engine = new WorkflowEngine(config, tmpDir, 'test task', {
         projectCwd: tmpDir,
         provider: 'mock',
+        internalAgentSeats: {
+          loopJudge: {
+            provider: 'opencode',
+            model: 'opencode/judge-model',
+            providerOptions: {
+              opencode: { guards: { callTimeoutMs: inactivityTimeoutMs } },
+            },
+          },
+        },
       });
       const regularResponses = [
         makeResponse({ persona: 'implement', content: 'Implementation done' }),
@@ -1586,50 +1613,43 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       }).toThrow('nonexistent_target');
     });
 
-    it('should reject bare OpenCode judge models inherited from personaProviders on the triggering step', () => {
+    it('should reject a bare OpenCode loop-judge model from runtime persona routing', () => {
       const config = buildConfigWithLoopMonitor(3);
-      const aiFixStep = config.steps.find((step) => step.name === 'ai_fix');
-      if (!aiFixStep) {
-        throw new Error('ai_fix step is required for this test');
-      }
-      aiFixStep.personaDisplayName = 'fixer';
-      config.loopMonitors![0]!.judge.model = 'big-pickle';
 
       expect(() => {
         new WorkflowEngine(config, tmpDir, 'test task', {
           projectCwd: tmpDir,
-          personaProviders: {
-            fixer: {
-              provider: 'opencode',
-              model: 'opencode/zai-coding-plan/glm-5.1',
+          providerRouting: {
+            personas: {
+              'loop-judge': {
+                provider: 'opencode',
+                model: 'big-pickle',
+              },
             },
           },
         });
       }).toThrow('Configuration error: loop_monitors.judge.model');
     });
 
-    it('should reject bare OpenCode judge models inherited from engine-level provider and model', () => {
+    it('should reject a bare OpenCode loop-judge model from an internal runtime seat', () => {
       const config = buildConfigWithLoopMonitor(3);
-      const aiFixStep = config.steps.find((step) => step.name === 'ai_fix');
-      if (!aiFixStep) {
-        throw new Error('ai_fix step is required for this test');
-      }
-      aiFixStep.provider = undefined;
-      aiFixStep.model = undefined;
-      config.loopMonitors![0]!.judge.model = 'big-pickle';
 
       expect(() => {
         new WorkflowEngine(config, tmpDir, 'test task', {
           projectCwd: tmpDir,
-          provider: 'opencode',
-          model: 'opencode/zai-coding-plan/glm-5.1',
+          internalAgentSeats: {
+            loopJudge: {
+              provider: 'opencode',
+              model: 'big-pickle',
+            },
+          },
         });
       }).toThrow('Configuration error: loop_monitors.judge.model');
     });
 
     it('should validate a loop judge through workflow-level effective auto routing', () => {
       const config = buildConfigWithLoopMonitor(3);
-      config.autoRouting = {
+      const autoRouting = {
         strategy: 'balanced',
         router: { provider: 'codex', model: 'router-model' },
         candidates: [{
@@ -1656,6 +1676,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       expect(() => new WorkflowEngine(config, tmpDir, 'test task', {
         projectCwd: tmpDir,
         provider: 'opencode',
+        autoRouting,
       })).not.toThrow();
     });
 

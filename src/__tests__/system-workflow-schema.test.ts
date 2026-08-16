@@ -1404,11 +1404,6 @@ describe('system workflow schema', () => {
           url: 'https://example.test/mcp',
         },
       },
-      provider_options: {
-        codex: {
-          network_access: true,
-        },
-      },
       required_permission_mode: 'edit',
       instruction: 'should not be allowed',
       structured_output: {
@@ -1429,7 +1424,6 @@ describe('system workflow schema', () => {
         expect.objectContaining({ path: ['persona'], message: 'System step does not allow "persona"' }),
         expect.objectContaining({ path: ['tags'], message: 'System step does not allow "tags"' }),
         expect.objectContaining({ path: ['mcp_servers'], message: 'System step does not allow "mcp_servers"' }),
-        expect.objectContaining({ path: ['provider_options'], message: 'System step does not allow "provider_options"' }),
         expect.objectContaining({
           path: ['required_permission_mode'],
           message: 'System step does not allow "required_permission_mode"',

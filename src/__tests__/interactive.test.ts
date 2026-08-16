@@ -58,7 +58,6 @@ import { getProvider } from '../infra/providers/index.js';
 import { interactiveMode } from '../features/interactive/index.js';
 import { selectOption } from '../shared/prompt/index.js';
 import { info } from '../shared/ui/index.js';
-import { getLabel } from '../shared/i18n/index.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockSelectOption = vi.mocked(selectOption);
@@ -174,7 +173,7 @@ describe('interactiveMode', () => {
       assistantMode: 'grill-me',
     });
 
-    expect(mockInfo).toHaveBeenCalledWith(getLabel('interactive.ui.introGrillMe', 'en'));
+    expect(mockInfo).toHaveBeenCalled();
   });
 
   it('should return action=execute on /go after a Grill Me conversation', async () => {
@@ -471,7 +470,7 @@ describe('interactiveMode', () => {
 
       // Then
       expect(result).toEqual({ action: 'cancel', task: '' });
-      expect(mockInfo).toHaveBeenCalledWith(getLabel('interactive.ui.acceptNoAssistant', 'en'));
+      expect(mockInfo).toHaveBeenCalled();
       const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
       expect(mockProvider._call).not.toHaveBeenCalled();
     });

@@ -8,9 +8,10 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawn } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parse as parseYaml } from 'yaml';
 import {
   createIsolatedEnv,
   updateIsolatedConfig,
@@ -85,9 +86,18 @@ describe('E2E: SIGINT while waiting for AI output (mock with delay)', () => {
     child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
     child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
 
-    // Wait for the task to start executing (=== Task: ai-wait-task ===)
+    // Wait for the task record to leave its pending state.
     const taskStarted = await waitFor(
-      () => stdout.includes('=== Task: ai-wait-task ==='),
+      () => {
+        try {
+          const parsed = parseYaml(readFileSync(tasksFile, 'utf-8')) as {
+            tasks?: Array<{ name?: string; status?: string }>;
+          };
+          return parsed.tasks?.some((task) => task.name === 'ai-wait-task' && task.status !== 'pending') ?? false;
+        } catch {
+          return false;
+        }
+      },
       15_000,
     );
     expect(taskStarted, `Task did not start.\nstdout:\n${stdout}\nstderr:\n${stderr}`).toBe(true);

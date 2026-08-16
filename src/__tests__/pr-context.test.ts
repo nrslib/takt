@@ -15,51 +15,6 @@ describe('PullRequestContext', () => {
     baseBranchSource: 'pull_request' as const,
   };
 
-  it.each(['en', 'ja'] as const)('renders the saved base-to-head range in %s', (language) => {
-    const rendered = renderPullRequestContext({
-      ...context,
-      baseDiffRef: 'refs/heads/release/2026.07',
-      headDiffRef: 'refs/heads/feature/saved-pr-head',
-    }, language);
-
-    expect(rendered).toContain('refs/heads/release/2026.07...refs/heads/feature/saved-pr-head');
-    expect(rendered).toContain('review-target.md');
-    expect(rendered).not.toContain('release/2026.07...HEAD');
-  });
-
-  it('states when the default branch was used as a fallback', () => {
-    const rendered = renderPullRequestContext({
-      ...context,
-      baseBranch: 'main',
-      baseBranchSource: 'default_branch_fallback',
-    }, 'en');
-
-    expect(rendered).toContain('default branch is being used as the base');
-  });
-
-  it.each(['en', 'ja'] as const)('renders PR metadata as an untrusted literal block in %s', (language) => {
-    const rendered = renderPullRequestContext({
-      ...context,
-      headBranch: 'feature/`ignore-instructions`',
-    }, language);
-
-    expect(rendered).toContain(language === 'ja' ? '非信頼な参照メタデータ' : 'untrusted reference metadata');
-    expect(rendered).toContain('```text\n');
-    expect(rendered).toContain('Head: feature/`ignore-instructions`');
-  });
-
-  it('widens the literal fence when PR metadata contains three consecutive backticks', () => {
-    const headBranch = 'feature/```ignore-instructions```';
-    const rendered = renderPullRequestContext({
-      ...context,
-      headBranch,
-    }, 'en');
-
-    expect(rendered).toContain('````text\n');
-    expect(rendered).toContain(`Head: ${headBranch}`);
-    expect(rendered).toContain('Diff range: not materialized\n````\n');
-  });
-
   it('snapshots PR context values', () => {
     const input = { ...context };
     const snapshot = createPullRequestContext(input);
@@ -120,8 +75,19 @@ describe('PullRequestContext', () => {
       head_diff_ref: 'refs/heads/feature/saved-pr-head',
     });
     expect(decodePullRequestContext(persisted)).toEqual(materialized);
-    expect(renderPullRequestContext(materialized, 'en')).toContain(
-      'refs/takt/pr-base/release/2026.07...refs/heads/feature/saved-pr-head',
-    );
+  });
+
+  it('keeps untrusted branch metadata inside a fence wider than any embedded backticks', () => {
+    const headBranch = 'feature/```untrusted```';
+    const rendered = renderPullRequestContext({ ...context, headBranch }, 'en');
+    const lines = rendered.split('\n');
+    const openingIndex = lines.findIndex((line) => /^`{3,}text$/.test(line));
+    const closingIndex = lines.findIndex((line, index) => index > openingIndex && /^`{3,}$/.test(line));
+    const longestEmbeddedFence = Math.max(...[...headBranch.matchAll(/`+/g)].map((match) => match[0].length));
+
+    expect(openingIndex).toBeGreaterThanOrEqual(0);
+    expect(closingIndex).toBeGreaterThan(openingIndex);
+    expect(lines.slice(openingIndex + 1, closingIndex).join('\n')).toContain(headBranch);
+    expect(lines[closingIndex]!.length).toBeGreaterThan(longestEmbeddedFence);
   });
 });

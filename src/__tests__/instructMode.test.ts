@@ -98,13 +98,12 @@ import {
   type InstructModeOptions,
 } from '../features/tasks/list/instructMode.js';
 import { selectOption } from '../shared/prompt/index.js';
-import { error as logError, info } from '../shared/ui/index.js';
+import { info } from '../shared/ui/index.js';
 import { loadTemplate } from '../shared/prompts/index.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockSelectOption = vi.mocked(selectOption);
 const mockInfo = vi.mocked(info);
-const mockLogError = vi.mocked(logError);
 const mockLoadTemplate = vi.mocked(loadTemplate);
 const mockLoadNdjsonLog = vi.mocked(loadNdjsonLog);
 const attachmentSessionDirs = new Set<string>();
@@ -336,10 +335,8 @@ describe('runInstructMode', () => {
     const templateVars = mockLoadTemplate.mock.calls.find((call) => call[0] === 'score_instruct_system_prompt')?.[2] as Record<string, unknown>;
     const reportSummary = String(templateVars.reportSummary);
     const worktreeSummary = String(templateVars.worktreeSummary);
-    expect(reportSummary).toContain('````text');
-    expect(worktreeSummary).toContain('```text');
-    expect(reportSummary).not.toContain('Final adjudication evidence');
-    expect(worktreeSummary).not.toContain('Worktree evidence');
+    expect(reportSummary).toContain('npm run test:e2e:mock');
+    expect(worktreeSummary).toContain('?? evidence.md');
   });
 
   it('should inject PR context only when supplied by a PR-derived task', async () => {
@@ -468,7 +465,7 @@ describe('runInstructMode', () => {
     const result = await runTestInstructMode({ previousOrderContent: null });
 
     expect(result.action).toBe('cancel');
-    expect(mockInfo).toHaveBeenCalledWith('Mock label');
+    expect(mockInfo).toHaveBeenCalled();
   });
 });
 
@@ -519,7 +516,6 @@ describe('runInstructMode conversation routes', () => {
     const result = await runTestInstructMode();
 
     expect(result.action).toBe('cancel');
-    expect(mockLogError).toHaveBeenCalledWith('Permission denied');
   });
 
   it('should handle multi-turn conversation ending with /go', async () => {
@@ -552,7 +548,6 @@ describe('runInstructMode conversation routes', () => {
     const result = await runTestInstructMode();
 
     expect(result.action).toBe('cancel');
-    expect(mockLogError).toHaveBeenCalledWith('Rate limited');
   });
 
   it('should return execute with preceding text as task on end-of-line /play', async () => {

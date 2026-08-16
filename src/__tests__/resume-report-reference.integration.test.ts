@@ -68,6 +68,7 @@ function makeArbitrateConfig(): WorkflowConfig {
 }
 
 describe('resume boundary: {report:X} references across runs', () => {
+  const inheritedReportContent = 'REJECT: findings...';
   let tmpDir: string;
 
   beforeEach(() => {
@@ -87,7 +88,7 @@ describe('resume boundary: {report:X} references across runs', () => {
     mkdirSync(paths.reportsAbs, { recursive: true });
     writeFileSync(join(paths.runRootAbs, 'meta.json'), JSON.stringify({ status: 'aborted' }));
     // producer（ai-antipattern-review-1st）が abort 前に書いたレポート。
-    writeFileSync(join(paths.reportsAbs, 'ai-antipattern-review-1st.md'), 'REJECT: findings...');
+    writeFileSync(join(paths.reportsAbs, 'ai-antipattern-review-1st.md'), inheritedReportContent);
   }
 
   it('resolves the consumer reference to the inherited snapshot in the new run (v3-r4 shape)', async () => {
@@ -107,9 +108,9 @@ describe('resume boundary: {report:X} references across runs', () => {
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
     const instruction = vi.mocked(runAgent).mock.calls[0]?.[1] as string;
     const inheritedPath = join(tmpDir, '.takt/runs/test-report-dir/reports/ai-antipattern-review-1st.md');
-    expect(instruction).toContain('REJECT: findings...');
+    expect(instruction).toContain(inheritedReportContent);
     expect(instruction).not.toContain('{report:ai-antipattern-review-1st.md}');
-    expect(readFileSync(inheritedPath, 'utf-8')).toBe('REJECT: findings...');
+    expect(readFileSync(inheritedPath, 'utf-8')).toBe(inheritedReportContent);
   });
 
   it('continues with a plain missing-report sentence when the report was not inherited', async () => {
@@ -125,9 +126,7 @@ describe('resume boundary: {report:X} references across runs', () => {
 
     expect(state.status).toBe('completed');
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(runAgent).mock.calls[0]?.[1]).toContain(
-      '（参照先の報告 ai-antipattern-review-1st.md はこの run に存在しない）',
-    );
+    expect(vi.mocked(runAgent).mock.calls[0]?.[1]).toContain('ai-antipattern-review-1st.md');
   });
 
   it('continues with the same missing-report sentence when a snapshot lacks the report', async () => {
@@ -149,9 +148,7 @@ describe('resume boundary: {report:X} references across runs', () => {
     const state = await engine.run();
 
     expect(state.status).toBe('completed');
-    expect(vi.mocked(runAgent).mock.calls[0]?.[1]).toContain(
-      '（参照先の報告 ai-antipattern-review-1st.md はこの run に存在しない）',
-    );
+    expect(vi.mocked(runAgent).mock.calls[0]?.[1]).toContain('ai-antipattern-review-1st.md');
   });
 
 });

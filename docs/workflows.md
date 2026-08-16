@@ -72,15 +72,7 @@ steps:
     instruction: implement           # Instruction key (references instructions map)
     edit: true                       # Whether the step can edit files
     required_permission_mode: edit   # Minimum permission: readonly, edit, or full
-    provider_options:
-      claude:
-        allowed_tools:               # Optional Claude tool allowlist
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Write
-          - Bash
+    capabilities: edit               # Optional capability preset
     rules:
       - condition: "Implementation complete"
         next: next-step
@@ -732,19 +724,9 @@ The called workflow can declare `subworkflow.params` so the parent passes values
 
 `workflow_call` rules only accept `COMPLETE`, `ABORT`, or a semantic return label the child declares. A child workflow lists its labels in `subworkflow.returns` (e.g. `returns: [approved, needs_fix]`; the reserved results `COMPLETE` / `ABORT` cannot be listed), and a child step's rule ends the subworkflow with a label via `return:` instead of `next:`. The parent's rules then route on that label, as `approved` / `needs_fix` do above.
 
-A `workflow_call` step may declare `overrides` to change the provider settings applied to the child workflow's steps. At least one of `provider`, `model`, or `provider_options` is required, and `provider_options` must include at least one provider-specific option:
-
-```yaml
-  - name: peer-review
-    kind: workflow_call
-    call: peer-review
-    overrides:
-      provider: codex
-      model: gpt-5.5
-    rules:
-      - condition: COMPLETE
-        next: COMPLETE
-```
+A `workflow_call` step does not accept provider, model, provider-options, or routing
+overrides. The child inherits the already-resolved runtime context from its parent; configure
+provider targets, profiles, options, and routing in `runtime.yaml`.
 
 `max_steps` is a budget owned by the root workflow and shared by every descendant. A `workflow_call` is a control node and does not consume that budget or select a provider/model of its own; only executable steps in the child consume iterations. For example, `plan → workflow_call(implement → review) → supervise` consumes four iterations, so extracting `implement` and `review` into a callable workflow does not require increasing `max_steps`. Nested calls follow the same rule. The call lifecycle remains visible in session logs and traces with a call invocation number and the complete call stack.
 
@@ -837,9 +819,11 @@ Every report entry requires `name` and `format`. Two optional fields refine beha
 - `use_judge` (default `true`) — whether the report is fed into the Phase 3 status judgment. Set `use_judge: false` for reports that should be written but not used as judgment evidence. A step whose rules need judgment must keep at least one `use_judge` report.
 - `order` — a report-format facet reference (resolved like `format`) whose content replaces the default report-writing instruction in Phase 2. Use it when the agent needs custom directions for producing the report beyond the format template itself.
 
-## Step-level Provider Promotion
+## Runtime provider promotion
 
-A step can escalate its `provider`, `model`, or `provider_options` based on per-step execution count or AI judgment. Each entry in `promotion` requires at least one of `at: <count>` (matches from the Nth execution of this step onward) or `condition: ai("...")`, plus one or more override targets:
+Workflow promotion only advances the ladder selected by `runtime.yaml`. Each entry must be the
+strict `{at: N}` shape; provider, model, provider-options, and condition fields are rejected at
+load time. The matching count selects the next stage from the runtime target's `ladder`.
 
 ```yaml
 steps:
@@ -847,18 +831,10 @@ steps:
     persona: reviewer
     promotion:
       - at: 3
-        model: opus
-      - condition: ai("The reviewer keeps rejecting and progress has stalled")
-        provider: claude
-        model: opus
-      - at: 5
-        provider:
-          type: codex
-          model: gpt-5.5
-          network_access: true
+      - at: 6
 ```
 
-Entries are evaluated in declaration order; the **last matching entry wins**. Promotion overrides step-level `provider` / `model` / `provider_options`, but explicit CLI and environment-variable provider / model overrides remain higher priority.
+Define the provider/model/options for each stage in `runtime.yaml`, not in the workflow.
 
 Promotion is not supported on parallel sub-steps.
 
@@ -880,31 +856,7 @@ Promotion is not supported on parallel sub-steps.
 | `companion` | - | Run companion reviewers alongside a normal agent step using their resolved runtime profiles (see [Companion reviewers](#companion-reviewers)) |
 | `completion_retry` | - | Opt into bounded review completeness checks with an object containing the required `retry_instruction` facet and optional retry bounds |
 | `pass_previous_response` | `true` | Pass previous step's output to `{previous_response}` |
-| `provider_options.claude.allowed_tools` | - | Claude tool allowlist for the step or workflow |
-| `provider_options.claude.base_url` | - | Anthropic-compatible base URL for `claude` / `claude-sdk` (see [configuration guide](./configuration.md#provider-base-url-base_url)) |
-| `provider_options.claude.effort` | - | Provider-specific Claude reasoning effort string, passed through to the provider (for example `low`, `high`, or a newer provider-defined value) |
-| `provider_options.claude.skills.enabled` | `false` | Enable Claude filesystem Skill discovery for `claude-sdk`, `claude`, and `claude-terminal` (see [configuration guide](./configuration.md#claude-skill-inheritance-skills)) |
-| `provider_options.opencode.allowed_tools` | - | OpenCode tool allowlist. Tool names are lowercase, for example `read`, `glob`, `grep`, `bash`, `websearch`, `webfetch` |
-| `provider_options.opencode.variant` | - | OpenCode model variant, passed through as a provider/model-specific string |
-| `provider_options.opencode.guards` | `standard` / 60 minutes | OpenCode guard profile, first-match `model_profiles`, call-wide wall-clock deadline, and text/reasoning byte limits (see [configuration guide](./configuration.md#provider-call-deadline-and-opencode-execution-guards)) |
-| `provider_options.*.guards.call_timeout_ms` | 60 minutes | Call-wide wall-clock deadline for every provider profile (`codex`, `opencode`, `claude`, `claude_terminal`, `cursor`, `copilot`, `kiro`, and `pi`; see [configuration guide](./configuration.md#provider-call-deadline-and-opencode-execution-guards)) |
-| `provider_options.codex.base_url` | - | OpenAI-compatible base URL for Codex SDK constructor options (see [configuration guide](./configuration.md#provider-base-url-base_url)) |
-| `provider_options.codex.network_access` | - | Allow Codex sandbox to access the network (see [configuration guide](./configuration.md#network-access-network_access)) |
-| `provider_options.codex.reasoning_effort` | - | Provider-specific Codex reasoning effort string, passed through to the provider |
-| `provider_options.codex.skills.repo` | `false` | Inherit Codex Skills from `.agents/skills` between the execution CWD and repository root (see [configuration guide](./configuration.md#codex-skill-inheritance-skills)) |
-| `provider_options.codex.skills.user` | `false` | Inherit Codex Skills from user scope (see [configuration guide](./configuration.md#codex-skill-inheritance-skills)) |
-| `provider_options.copilot.effort` | - | Provider-specific Copilot reasoning effort string, passed through to the provider |
-| `provider_options.claude.sandbox.allow_unsandboxed_commands` | - | Run Claude Bash outside the macOS Seatbelt sandbox (see [configuration guide](./configuration.md#claude-code-sandbox-control-allow_unsandboxed_commands)) |
-| `provider_options.kiro.agent` | - | Kiro CLI custom agent name passed as `kiro-cli chat --agent`. Steps without it use the Kiro CLI default agent |
-| `provider_options.pi.extensions` | - | Pi SDK extension/package sources (`path`, `npm:...`, or `git:...`), resolved temporarily for the call |
-| `provider_options.pi.no_extensions` | - | Disable Pi extension discovery; explicit `extensions` sources still load |
-| `provider_options.pi.no_skills` | - | Disable Pi Skill discovery |
-| `provider_options.pi.no_prompt_templates` | - | Disable Pi prompt-template discovery |
-| `provider_options.pi.no_themes` | - | Disable Pi theme discovery |
-| `provider_options.pi.no_context_files` | - | Disable Pi context-file discovery |
-| `provider` | - | Override provider for this step (`claude`, `claude-sdk`, `claude-terminal`, `codex`, `opencode`, `pi`, `cursor`, `copilot`, `kiro`, or `mock`) |
-| `model` | - | Override model for this step |
-| `promotion` | - | Per-execution provider/model/options escalation (see [Step-level Provider Promotion](#step-level-provider-promotion)) |
+| `capabilities` | - | Capability preset name or list. Resolves allowed tools, network access, sandbox, and skills; it does not select a provider or model |
 | `mcp_servers` | - | Per-step MCP server configuration (stdio / HTTP / SSE) |
 | `allow_git_commit` | `false` | Allow `git add` / `commit` / `push` in step instructions. Default prohibits these so each PR represents one task |
 | `required_permission_mode` | - | Required minimum permission mode: `readonly`, `edit`, or `full` |
@@ -915,7 +867,9 @@ Promotion is not supported on parallel sub-steps.
 
 `review_completion` remains accepted as a deprecated alias. Do not specify it together with `completion_retry`.
 
-For normal agent steps, parallel sub-steps, and `loop_monitors.judge`, `model: null` explicitly omits the model. This is different from leaving `model` out: absence continues fallback to applicable lower-priority sources such as routing, workflow, the triggering step for loop monitor judges, and input models, while `null` stops model resolution at that entry. Providers that require an explicit model still fail validation.
+Provider and model are not workflow fields. Runtime profiles and routing in `runtime.yaml` supply
+them; CLI/env overrides remain available. A workflow that writes these removed fields fails at the
+load boundary with a migration hint.
 
 The effective tool list may be narrower than configured. When `edit: false`, or when a step has `output_contracts` and does not set `edit: true`, TAKT removes command/edit tools from `provider_options.*.allowed_tools` before calling the provider. For Claude-family providers, comma-separated entries are normalized into atomic tool specs first, `Bash(...)` is judged by the canonical tool name before `(`, and `Bash`, `Edit`, `Write`, `Apply_Patch`, and `Patch` are removed. For OpenCode, lowercase tools such as `bash`, `edit`, and `write` are removed. The same read-only filtering applies to `team_leader.part_allowed_tools` when the part's effective edit setting is false, such as `part_edit: false` or inherited `edit: false`.
 
@@ -943,9 +897,13 @@ schemas:
   pr-followup-task: pr-followup-task
 ```
 
-### `auto_routing`
+### Provider routing and automatic routing
 
-Workflow-level automatic provider routing: an AI `router` (provider + model) picks a provider/model `candidate` per step. `candidates` names the selectable provider/model entries, `candidate_pools` groups them with a per-pool `fallback`, `default_pool` selects the pool used when nothing more specific matches, and `pool_rules` / `rules` pin pools or candidates by step `tags`, `steps` (names), or `personas`. Rules must reference declared candidates and pools; unknown names fail validation.
+`auto_routing`, provider/model defaults, provider options, and routing are not workflow YAML
+fields. Provider/model/options and routing are owned by `runtime.yaml` (with the existing
+`config.yaml` legacy mode and CLI/env overrides preserved). `rate_limit_fallback` remains a
+legacy `config.yaml` setting and is not a workflow YAML field. Workflow `capabilities` remains
+the only provider option surface in workflow YAML.
 
 ### `interactive_mode`
 
@@ -955,57 +913,12 @@ Default interactive mode used when `takt` is invoked without arguments. One of `
 interactive_mode: assistant
 ```
 
-### `workflow_config.provider` / `workflow_config.model`
+### Removed workflow execution settings
 
-Workflow-wide default provider and model. They sit below step-level `provider` / `model`, routing, and CLI/env overrides in the resolution order, and above project/global config defaults.
-
-```yaml
-workflow_config:
-  provider: claude-sdk
-  model: opus
-```
-
-### `workflow_config.provider_options`
-
-Workflow-wide provider options. For most provider option leaves, env- or CLI-resolved config values win first; otherwise priority is step `provider_options` > `provider_routing.steps` > `provider_routing.tags` > `provider_routing.personas` > deprecated `persona_providers` > `workflow_config.provider_options` > project `.takt/config.yaml` > global `~/.takt/config.yaml`. For `base_url`, step and workflow routing leaves stay above TAKT env overrides, and the same step-to-global order is followed before `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL` or `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL`. Workflow YAML and project `.takt/config.yaml` may only set `base_url` to loopback hosts; use global config or TAKT env for non-loopback endpoints.
-
-```yaml
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    claude:
-      sandbox:
-        allow_unsandboxed_commands: true
-```
-
-`provider_options` can reference a shared YAML preset by name. Names are resolved first-match from `.takt/provider-options`, `~/.takt/provider-options`, then `builtins/{lang}/provider-options`. For repertoire packages, package-local `provider-options` is checked first, and `@owner/repo/name` resolves a preset from that package. The referenced file is the base, and inline values override matching leaves.
-
-`provider_options.extends` fails fast as a configuration error when a preset or path cannot be resolved, a scoped ref points to an unavailable repertoire package, the target YAML is invalid or is not a provider-options object, the extends chain is circular, or the removed `$ref` key is used. Relative paths are resolved from the workflow file and must stay inside the workflow directory after symlink resolution; absolute paths and paths whose real target escapes that directory are rejected.
-
-```yaml
-workflow_config:
-  provider_options:
-    extends: readonly
-
-steps:
-  - name: implement
-    provider_options:
-      extends: edit
-      opencode:
-        allowed_tools: [read, grep, bash]
-```
-
-Relative file paths from the workflow file are still supported for workflow-local shared files.
-
-Example shared file:
-
-```yaml
-claude:
-  allowed_tools: [Read, Glob, Grep, Bash, WebSearch, WebFetch]
-opencode:
-  allowed_tools: [read, glob, grep, bash, websearch, webfetch]
-```
+`workflow_config.provider`, `workflow_config.model`, `workflow_config.provider_options`, step
+`provider`, `model`, `provider_options`, `loop_monitors.judge` provider settings, and
+`workflow_call.overrides` are rejected. Move execution settings to `runtime.yaml`. The
+`workflow_config.runtime.prepare` process-preparation block remains supported.
 
 ### `capabilities`
 
@@ -1059,24 +972,14 @@ loop_monitors:
 
 `ignore_steps` excludes intermediate steps from cycle matching. Use it when a logical cycle has optional verification or retry steps; an ignored step cannot also appear in `cycle`.
 
-`loop_monitors.judge` supports `provider`, `model`, and `provider_options` with the same provider/model validation as agent steps. When `provider` is omitted, the judge inherits the triggering step provider and model. When `provider` is set without `model`, the inherited model is cleared. Use `model: null` to explicitly use a provider or CLI default even when the triggering step has a resolved model.
+`loop_monitors.judge` does not accept provider, model, or provider-options settings. It uses the
+runtime target `provider.targets.internal_agents.loop-judge` when configured, otherwise the normal
+runtime routing and triggering-step fallback.
 
 Loop-monitor judges always use a fresh provider session. `session_key` is therefore not accepted on `loop_monitors.judge`.
 
-### `rate_limit_fallback`
-
-When a Claude / Codex / OpenCode rate limit is observed during a step, continue the run by re-executing the interrupted step on the next provider in the chain. The new session receives a fallback notice instruction so the AI can rebuild context from existing reports on disk.
-
-```yaml
-rate_limit_fallback:
-  switch_chain:
-    - provider: claude-sdk
-      model: opus
-    - provider: codex
-      model: gpt-5.5
-```
-
-Attempts within a single fallback chain are tracked on workflow state and reset on a successful step completion. The same field is also accepted in `~/.takt/config.yaml` and `.takt/config.yaml` for project-wide / user-wide defaults.
+Rate-limit fallback is also configured in `runtime.yaml` (or the existing global/project
+`config.yaml` legacy mode), never in workflow YAML.
 
 ### `subworkflow`
 
@@ -1120,9 +1023,7 @@ steps:
     persona: coder
     edit: true
     required_permission_mode: edit
-    provider_options:
-      claude:
-        allowed_tools: [Read, Glob, Grep, Edit, Write, Bash, WebSearch, WebFetch]
+    capabilities: edit
     rules:
       - condition: Implementation complete
         next: COMPLETE
@@ -1147,9 +1048,7 @@ steps:
     persona: coder
     edit: true
     required_permission_mode: edit
-    provider_options:
-      claude:
-        allowed_tools: [Read, Glob, Grep, Edit, Write, Bash, WebSearch, WebFetch]
+    capabilities: edit
     rules:
       - condition: Implementation complete
         next: review
@@ -1161,9 +1060,7 @@ steps:
   - name: review
     persona: reviewer
     edit: false
-    provider_options:
-      claude:
-        allowed_tools: [Read, Glob, Grep, WebSearch, WebFetch]
+    capabilities: readonly
     rules:
       - condition: Approved
         next: COMPLETE
@@ -1184,9 +1081,7 @@ steps:
   - name: analyze
     persona: planner
     edit: false
-    provider_options:
-      claude:
-        allowed_tools: [Read, Glob, Grep, WebSearch, WebFetch]
+    capabilities: readonly
     rules:
       - condition: Analysis complete
         next: implement
@@ -1198,9 +1093,7 @@ steps:
     edit: true
     pass_previous_response: true
     required_permission_mode: edit
-    provider_options:
-      claude:
-        allowed_tools: [Read, Glob, Grep, Edit, Write, Bash, WebSearch, WebFetch]
+    capabilities: edit
     rules:
       - condition: Implementation complete
         next: COMPLETE

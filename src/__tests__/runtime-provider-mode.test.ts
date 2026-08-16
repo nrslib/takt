@@ -175,7 +175,6 @@ describe('determineProviderConfigMode (C11/C12/C13)', () => {
     ['persona_providers', 'persona_providers', 'provider.targets.personas'],
     ['legacy auto_routing', 'auto_routing', 'provider.auto_routing'],
     ['takt_providers', 'takt_providers', 'provider.targets.internal_agents'],
-    ['workflow provider', 'workflow.provider', 'provider.targets.steps'],
   ])('Given active runtime and a %s legacy signal, When determining mode, Then it fails fast (C13)', (_name, setting, migrateTo) => {
     const location = `config.yaml:${setting}`;
     let thrown: unknown;

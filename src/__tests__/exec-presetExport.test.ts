@@ -128,8 +128,6 @@ function writeProjectPreset(
 type RawWorkflowStep = {
   name: string;
   parallel?: Array<Record<string, unknown>>;
-  provider?: string;
-  model?: string;
   [key: string]: unknown;
 };
 
@@ -138,11 +136,6 @@ type RawWorkflow = {
   description: string;
   initial_step: string;
   max_steps: number;
-  workflow_config?: {
-    provider_options?: {
-      codex?: { skills?: { repo?: boolean; user?: boolean } };
-    };
-  };
   steps: RawWorkflowStep[];
   loop_monitors?: Array<{
     cycle: string[];
@@ -188,13 +181,14 @@ describe('exec preset export', () => {
       expect(parsed.description).toBe('my-workflow');
       expect(parsed.initial_step).toBe('execute');
       expect(parsed.max_steps).toBe(20);
-      expect(parsed.workflow_config?.provider_options?.codex?.skills).toEqual(
-        TEST_SKILL_INHERITANCE,
-      );
+      expect(parsed).not.toHaveProperty('workflow_config');
+      expect(parsed.steps.find((step) => step.name === 'execute')?.parallel?.[0]).toMatchObject({
+        capabilities: ['edit', 'enable-skills'],
+      });
       expect(parsed.steps.map((s) => s.name)).toEqual(['execute', 'review', 'replan']);
     });
 
-    it('should resolve provider and model from defaults into all workflow actors', async () => {
+    it('should keep provider and model out of the exported workflow', async () => {
       // Given: default preset (no explicit provider/model) with specific defaults
       const defaults: ExecProviderModelDefaults = { provider: 'claude', model: 'sonnet' };
       mockSelectExecOption.mockResolvedValueOnce('default');
@@ -203,16 +197,18 @@ describe('exec preset export', () => {
       // When
       await exportPresetAsWorkflow(projectDir, 'en', defaults);
 
-      // Then: all actors have the resolved provider and model
+      // Then: runtime.yaml remains the only provider/model owner
       const parsed = readExportedWorkflow(projectDir, 'resolved-test');
       const executeStep = parsed.steps.find((s) => s.name === 'execute');
       const judgeStep = parsed.steps.find((s) => s.name === 'review');
       const replanStep = parsed.steps.find((s) => s.name === 'replan');
 
-      expect(executeStep?.parallel?.[0]).toMatchObject({ provider: 'claude', model: 'sonnet' });
-      expect(judgeStep?.parallel?.[0]).toMatchObject({ provider: 'claude', model: 'sonnet' });
-      expect(replanStep?.provider).toBe('claude');
-      expect(replanStep?.model).toBe('sonnet');
+      expect(executeStep?.parallel?.[0]).not.toHaveProperty('provider');
+      expect(executeStep?.parallel?.[0]).not.toHaveProperty('model');
+      expect(judgeStep?.parallel?.[0]).not.toHaveProperty('provider');
+      expect(judgeStep?.parallel?.[0]).not.toHaveProperty('model');
+      expect(replanStep).not.toHaveProperty('provider');
+      expect(replanStep).not.toHaveProperty('model');
     });
 
     it('should include loop monitors matching the preset loop config', async () => {
@@ -312,7 +308,7 @@ describe('exec preset export', () => {
       expect(existsSync(join(projectDir, '.takt', 'workflows'))).toBe(false);
     });
 
-    it('should export a project preset with the preset provider and model resolved', async () => {
+    it('should export a project preset without provider and model fields', async () => {
       // Given: a project preset with explicit provider/model on actors
       const presetConfig = createExecConfig();
       writeProjectPreset(projectDir, 'custom-team', presetConfig, 'Custom team');
@@ -325,7 +321,7 @@ describe('exec preset export', () => {
       // When
       await exportPresetAsWorkflow(projectDir, 'en', PROVIDER_MODEL_DEFAULTS);
 
-      // Then: exported YAML reflects the preset's actor config
+      // Then: exported YAML keeps execution settings in runtime.yaml
       const workflowPath = join(projectDir, '.takt', 'workflows', 'custom-workflow.yaml');
       expect(existsSync(workflowPath)).toBe(true);
 
@@ -336,9 +332,9 @@ describe('exec preset export', () => {
       const executeStep = parsed.steps.find((s) => s.name === 'execute');
       expect(executeStep?.parallel?.[0]).toMatchObject({
         name: 'worker-1',
-        provider: 'claude',
-        model: 'sonnet',
       });
+      expect(executeStep?.parallel?.[0]).not.toHaveProperty('provider');
+      expect(executeStep?.parallel?.[0]).not.toHaveProperty('model');
     });
   });
 

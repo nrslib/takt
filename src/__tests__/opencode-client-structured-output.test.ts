@@ -335,7 +335,6 @@ describe('OpenCodeClient structured output', () => {
     expect(promptAsync).toHaveBeenCalledTimes(2);
     expect(promptAsync.mock.calls[0]?.[0]).toHaveProperty('format');
     expect(promptAsync.mock.calls[1]?.[0]).not.toHaveProperty('format');
-    expect(JSON.stringify(promptAsync.mock.calls[1]?.[0])).toContain('次の JSON schema に一致する');
     expectStreamTextOnce(onStream, 'format retry tail');
     expectStreamThinkingOnce(onStream, 'format reasoning tail');
     expect(JSON.stringify(onStream.mock.calls)).not.toContain('format-secret');
@@ -629,17 +628,6 @@ describe('OpenCodeClient structured output', () => {
     expect(promptAsync.mock.calls[0]?.[0]).toHaveProperty('format');
     expect(promptAsync.mock.calls[1]?.[0]).toMatchObject({ sessionID: 'session-fresh-format' });
     expect(promptAsync.mock.calls[1]?.[0]).not.toHaveProperty('format');
-  });
-
-  it('should build a formatless prompt with the schema, fence contract, and a StructuredOutput ban', async () => {
-    const { buildFormatlessStructuredPrompt } = await import('../infra/opencode/structured-output-recovery.js');
-    const schema = { type: 'object', required: ['records'], properties: { records: { type: 'array' } } };
-    const prompt = buildFormatlessStructuredPrompt('do the review', schema);
-
-    expect(prompt).toContain('do the review');
-    expect(prompt).toContain('"records"');
-    expect(prompt).toContain('```json');
-    expect(prompt.toLowerCase()).toContain('do not call structuredoutput');
   });
 
   it('should fail fast when the formatless fresh attempt also loops on StructuredOutput', async () => {

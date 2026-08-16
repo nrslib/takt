@@ -1,6 +1,5 @@
 import { resolveNonWorkflowProviderOptions } from '../../infra/config/index.js';
 import { resolveAuxiliaryProviderEnvironment } from '../../infra/config/runtime-provider/provider-environment.js';
-import type { WorkflowConfig } from '../../core/models/index.js';
 import type { ProviderType } from '../../infra/providers/index.js';
 import { assertResolvedExecConfig, resolveExecProviderEffort } from './configValidation.js';
 import type {
@@ -32,7 +31,7 @@ export function resolveExecCodexSkillInheritance(cwd: string): ExecCodexSkillInh
 }
 
 /** `exec` carries no workflow, so provider/model resolve purely from config / runtime.yaml. */
-const EXEC_WORKFLOW_CONTEXT: Pick<WorkflowConfig, 'name' | 'provider' | 'model' | 'autoRouting'> = {
+const EXEC_WORKFLOW_CONTEXT = {
   name: 'exec',
 };
 

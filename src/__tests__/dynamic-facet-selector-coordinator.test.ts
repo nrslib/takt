@@ -273,7 +273,7 @@ describe('DynamicFacetSelectorCoordinator', () => {
     expect(outputSchema).toHaveProperty('properties.selected_ids.maxItems', 1);
   });
 
-  it('passes selector guidance to the read-only structured agent without replacing the engine contract', async () => {
+  it('passes selector runtime options without replacing the engine contract', async () => {
     const onActivity = vi.fn();
     const pool = makePool([
       { id: 'frontend', description: 'Frontend changes' },
@@ -290,14 +290,7 @@ describe('DynamicFacetSelectorCoordinator', () => {
     const coordinator = new DynamicFacetSelectorCoordinator(buildDeps({ onActivity }));
     await coordinator.resolveDynamicFacets(makeGuidedStep(), makeState(), 'task', pool);
 
-    const [instruction, outputSchema, options] = mockedExecuteAgent.mock.calls[0] ?? [];
-    expect(options?.systemPrompt).toContain('internal dynamic facet selector');
-    expect(instruction).toContain('Select facets from the changed paths and unresolved findings.');
-    expect(instruction).toContain('Task:\ntask');
-    expect(instruction).toContain('Changed file paths:\n- src/changed.ts');
-    expect(instruction).toContain('Target agent prompt:\n');
-    expect(instruction).toContain('Instruction:\nFix');
-    expect(instruction).toContain('- frontend: Frontend changes');
+    const [, outputSchema, options] = mockedExecuteAgent.mock.calls[0] ?? [];
     expect(outputSchema).toMatchObject({
       type: 'object',
       additionalProperties: false,

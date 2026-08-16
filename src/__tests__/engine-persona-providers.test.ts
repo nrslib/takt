@@ -115,7 +115,7 @@ describe('WorkflowEngine persona_providers override', () => {
     expect(options.resolvedProvider).toBe('claude');
   });
 
-  it('should prioritize step provider over persona_providers provider', async () => {
+  it('should ignore workflow step provider and use persona_providers provider', async () => {
     const step = makeStep('implement', {
       personaDisplayName: 'coder',
       provider: 'claude',
@@ -143,7 +143,7 @@ describe('WorkflowEngine persona_providers override', () => {
 
     const options = vi.mocked(runAgent).mock.calls[0][2];
     expect(options.provider).toBeUndefined();
-    expect(options.resolvedProvider).toBe('claude');
+    expect(options.resolvedProvider).toBe('codex');
   });
 
   it('should work without persona_providers (undefined)', async () => {
@@ -279,7 +279,7 @@ describe('WorkflowEngine persona_providers override', () => {
     expect(options.resolvedModel).toBe('global-model');
   });
 
-  it('should prioritize step model over persona_providers.model', async () => {
+  it('should ignore workflow step model and use persona_providers.model', async () => {
     const step = makeStep('implement', {
       personaDisplayName: 'coder',
       model: 'step-model',
@@ -308,7 +308,7 @@ describe('WorkflowEngine persona_providers override', () => {
 
     const options = vi.mocked(runAgent).mock.calls[0][2];
     expect(options.resolvedProvider).toBe('codex');
-    expect(options.resolvedModel).toBe('step-model');
+    expect(options.resolvedModel).toBe('persona-model');
   });
 
   it('should emit providerInfo in step:start matching resolved provider/model', async () => {
@@ -385,7 +385,7 @@ describe('WorkflowEngine agent overrides', () => {
     applyDefaultMocks();
   });
 
-  it('passes resolved step provider/model to AgentRunner without reusing CLI override fields', async () => {
+  it('ignores workflow step provider/model and passes engine-level values to AgentRunner', async () => {
     const step = makeStep('plan', {
       provider: 'claude',
       model: 'claude-step',
@@ -414,8 +414,8 @@ describe('WorkflowEngine agent overrides', () => {
     const options = vi.mocked(runAgent).mock.calls[0][2];
     expect(options.provider).toBeUndefined();
     expect(options.model).toBeUndefined();
-    expect(options.resolvedProvider).toBe('claude');
-    expect(options.resolvedModel).toBe('claude-step');
+    expect(options.resolvedProvider).toBe('codex');
+    expect(options.resolvedModel).toBe('cli-model');
   });
 
   it('uses engine-level provider/model as resolved values when step provider/model is undefined', async () => {
