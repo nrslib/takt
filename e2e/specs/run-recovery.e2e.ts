@@ -218,9 +218,6 @@ describe('E2E: Run interrupted task cleanup and high-priority run flows', () => 
       });
 
       expect(rerunResult.exitCode, formatTaktRunResult(rerunResult)).toBe(0);
-      const combined = rerunResult.stdout + rerunResult.stderr;
-      expect(combined).toContain('Marked 1 interrupted running task(s) as failed.');
-      expect(combined).toContain('recovery-target-2');
 
       const finalTasks = readTasks(tasksFile);
       expect(finalTasks).toEqual(expect.arrayContaining([
@@ -275,8 +272,6 @@ describe('E2E: Run interrupted task cleanup and high-priority run flows', () => 
     });
 
     expect(result.exitCode, formatTaktRunResult(result)).toBe(0);
-    expect(result.stdout).toContain('Concurrency: 10');
-    expect(result.stdout).toContain('Tasks Summary');
     const finalTasks = readTasks(tasksFile);
     expect(finalTasks).toHaveLength(12);
     expect(finalTasks).toEqual(

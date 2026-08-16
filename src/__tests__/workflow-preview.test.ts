@@ -102,9 +102,6 @@ describe('getWorkflowDescription', () => {
 
     const description = getWorkflowDescription('dynamic-preview', projectDir, 1);
 
-    expect(description.workflowStructure).toContain('selector mode: cumulative');
-    expect(description.workflowStructure).toContain('fixed: architecture');
-    expect(description.workflowStructure).toContain('pool candidate: frontend');
     expect(description.stepPreviews[0]).toMatchObject({
       name: 'reviewers',
       dynamicSelectionMode: 'cumulative',

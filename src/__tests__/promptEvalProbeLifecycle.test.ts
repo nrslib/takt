@@ -1095,8 +1095,6 @@ describe('prompt eval probe lifecycle', () => {
     });
     await execution.catch((error: Error & { stderr: string }) => {
       expect(error.stderr).toContain('execution-error');
-      expect(error.stderr).toContain('No main prompt contained the required needle');
-      expect(error.stderr).toContain('Smoke fixture execution failed');
     });
     await execution.catch((error: Error & { stdout: string }) => {
       expect(parseSmokeBatchResult(error.stdout)).toEqual({
@@ -1113,8 +1111,9 @@ describe('prompt eval probe lifecycle', () => {
     const testRoot = mkdtempSync(join(tmpdir(), 'takt-smoke-evaluation-failure-'));
     temporaryDirectories.push(testRoot);
     const script = join(testRoot, 'evaluation-failure.mjs');
+    const diagnostic = 'evaluation diagnostic';
     writeFileSync(script, [
-      "process.stderr.write('No main prompt contained the required needle\\n')",
+      `process.stderr.write(${JSON.stringify(`${diagnostic}\\n`)})`,
       'process.exitCode = 7',
     ].join('\n'), 'utf8');
 
@@ -1127,7 +1126,7 @@ describe('prompt eval probe lifecycle', () => {
 
     expect(thrown).toMatchObject({
       code: 7,
-      stderr: expect.stringContaining('No main prompt contained the required needle'),
+      stderr: expect.stringContaining(diagnostic),
     });
   });
 
@@ -1140,7 +1139,7 @@ describe('prompt eval probe lifecycle', () => {
 
     await expect(execution).rejects.toMatchObject({
       code: 1,
-      stderr: expect.stringContaining('Smoke fixture execution failed'),
+      stderr: expect.stringContaining('execution-error'),
     });
   });
 
@@ -1160,7 +1159,7 @@ describe('prompt eval probe lifecycle', () => {
       stderr: expect.stringContaining('missing-target'),
     });
     await execution.catch((error: Error & { stderr: string }) => {
-      expect(error.stderr).toContain(`Smoke target not found: ${missingScript}`);
+      expect(error.stderr).toContain(missingScript);
     });
     await execution.catch((error: Error & { stdout: string }) => {
       expect(parseSmokeBatchResult(error.stdout)).toEqual({

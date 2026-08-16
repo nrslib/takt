@@ -431,8 +431,9 @@ describe('WorkflowEngine auto routing integration', () => {
   });
 
   it('Given a normal step needs AI routing, When the estimator prompt is built, Then it receives the normalized work snapshot', async () => {
+    const instruction = 'Route using workflow instruction with {task} and {previous_response}';
     const step = makeStep('implement', {
-      instruction: 'Route using workflow instruction with {task} and {previous_response}',
+      instruction,
       providerRoutingPersonaKey: 'coder',
       rules: [makeRule('done', 'COMPLETE')],
     });
@@ -475,7 +476,7 @@ describe('WorkflowEngine auto routing integration', () => {
     const routerPrompt = vi.mocked(runAgent).mock.calls.find(([persona]) => persona === 'auto-router')?.[1];
 
     expect(state.status).toBe('completed');
-    expect(routerPrompt).toContain('"instruction":"Route using workflow instruction with {task} and {previous_response}"');
+    expect(routerPrompt).toContain(JSON.stringify({ instruction }));
     expect(routerPrompt).not.toContain('SECRET_TASK_SHOULD_NOT_REACH_ROUTER');
     expect(routerPrompt).not.toContain('Previous Response');
     expect(routerPrompt).not.toContain('Report Directory');

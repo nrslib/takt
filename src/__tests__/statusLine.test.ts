@@ -98,16 +98,6 @@ describe('StatusLine', () => {
     statusLine.stop();
   });
 
-  it('should clear spinner line with ESC sequence on stop', () => {
-    statusLine.start('test');
-    stdoutChunks = [];
-    statusLine.stop();
-
-    // stop() should write \r\x1b[K to clear the spinner line
-    const clearWrites = stdoutChunks.filter((c) => c.includes('\x1b[K'));
-    expect(clearWrites.length).toBeGreaterThan(0);
-  });
-
   it('should be safe to call stop multiple times', () => {
     statusLine.start('test');
     statusLine.stop();

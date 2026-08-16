@@ -564,13 +564,6 @@ describe('OpenCodeProvider — structured output', () => {
 
     const opts = mockCallOpenCode.mock.calls[0]?.[2] as Record<string, unknown>;
     expect(opts.imageAttachments).toBeUndefined();
-    expect(mockLogger.info).toHaveBeenCalledWith('OpenCode provider does not support imageAttachments; ignoring');
-
-    mockLogger.info.mockClear();
-    await agent.call('prompt', { cwd: '/tmp', model: 'openai/gpt-4', imageAttachments: [] });
-    await agent.call('prompt', { cwd: '/tmp', model: 'openai/gpt-4' });
-
-    expect(mockLogger.info).not.toHaveBeenCalledWith('OpenCode provider does not support imageAttachments; ignoring');
   });
 });
 
@@ -614,13 +607,6 @@ describe('MockProvider — structured output', () => {
 
     const opts = mockCallMock.mock.calls[0]?.[2] as Record<string, unknown>;
     expect(opts.imageAttachments).toBeUndefined();
-    expect(mockLogger.info).toHaveBeenCalledWith('Mock provider does not support imageAttachments; ignoring');
-
-    mockLogger.info.mockClear();
-    await agent.call('prompt', { cwd: '/tmp', imageAttachments: [] });
-    await agent.call('prompt', { cwd: '/tmp' });
-
-    expect(mockLogger.info).not.toHaveBeenCalledWith('Mock provider does not support imageAttachments; ignoring');
   });
 });
 

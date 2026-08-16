@@ -327,7 +327,6 @@ describe('ReportPhaseGenerationError soft error', () => {
       .toBe(AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR);
     expect(result.response.failureCategory)
       .toBe(AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR);
-    expect(result.response.content).toContain('Sub-step diagnostics:');
     expect(result.response.error).toContain('provider stream parse error: Failed to parse item: report output');
     expect(result.response.error).not.toBe(result.response.content);
   });

@@ -1,1 +1,0 @@
-Normalize the `channel` option once at the public boundary. The accepted values are `local` and `cloud`, case-insensitively and with surrounding whitespace ignored. Every execution path must use and retain the normalized value. Invalid values must fail fast. Do not add legacy aliases.

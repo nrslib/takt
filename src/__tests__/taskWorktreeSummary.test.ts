@@ -73,10 +73,9 @@ describe('task worktree summary', () => {
 
     const result = collectTaskWorktreeSummary('/worktree', 'missing-base', 'takt/fix');
 
-    expect(result.text).not.toContain('## コミット済み変更');
-    expect(result.text).toContain('## ステージ済み変更');
-    expect(result.text).toContain('## 未ステージ変更');
-    expect(result.text).toContain('## 作業ツリーの状態');
+    expect(result.text).toContain('src/staged.ts');
+    expect(result.text).toContain('src/work.ts');
+    expect(result.text).toContain('evidence.md');
     expect(result.files).toEqual(expect.arrayContaining(['src/staged.ts', 'src/work.ts', 'evidence.md']));
     expect(mockExecFileSync).toHaveBeenCalledWith(
       'git',

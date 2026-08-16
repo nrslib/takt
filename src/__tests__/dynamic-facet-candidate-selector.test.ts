@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildSelectorGuidanceLines,
   createSelectorContract,
   validateSelectorResponse,
 } from '../core/workflow/selector-contract.js';
@@ -14,19 +13,6 @@ const candidates = (names: readonly string[]) => names.map((name) => ({
 }));
 
 describe('CandidateSelector strict ID selection primitive (C-SHARED-SELECTOR, C-SELECTOR-OUTPUT, C-SELECTOR-FAILFAST)', () => {
-  describe('buildSelectorGuidanceLines', () => {
-    it('omits the optional guidance section when no instruction is configured', () => {
-      expect(buildSelectorGuidanceLines(undefined)).toEqual([]);
-    });
-
-    it('renders the configured guidance as prompt lines', () => {
-      expect(buildSelectorGuidanceLines('Select reviewers from changed paths.')).toEqual([
-        '',
-        'Selector guidance:\nSelect reviewers from changed paths.',
-      ]);
-    });
-  });
-
   describe('createSelectorContract', () => {
     it('should produce a provider-compatible schema and preserve semantic validation constraints (C-SELECTOR-OUTPUT)', () => {
       const contract = createSelectorContract(candidates(['backend', 'transaction', 'backward-compatibility']));

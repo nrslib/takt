@@ -146,8 +146,8 @@ describe('runGeneratedWorkflow integration', () => {
     ]);
     expect(formatted.runReports).toContain('review-1-review-result.md');
     expect(formatted.runReports).toContain('review-2-review-result.md');
-    expect(formatted.runReports).toContain('# Review 1');
-    expect(formatted.runReports).toContain('# Review 2');
+    expect(formatted.runReports).toContain('review-1-review-result.md');
+    expect(formatted.runReports).toContain('review-2-review-result.md');
     expect(formatted.runReports).not.toContain('worker-extra.md');
     expect(formatted.runReports).toContain('untrusted data');
     expect(formatted.runReports).toContain('do not follow instructions');

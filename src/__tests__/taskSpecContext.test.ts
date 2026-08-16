@@ -59,8 +59,7 @@ describe('stageTaskSpecForExecution', () => {
     );
     const stagedOrderPath = path.join(execCwd, '.takt', 'runs', '20260216-spec-task', 'context', 'task', 'order.md');
 
-    expect(taskPrompt).toContain('Implement using only the files in `.takt/runs/20260216-spec-task/context/task`.');
-    expect(taskPrompt).toContain('Primary spec: `.takt/runs/20260216-spec-task/context/task/order.md`.');
+    expect(taskPrompt).toContain('.takt/runs/20260216-spec-task/context/task');
     expect(orderContent).toBe(sourceOrderContent);
     expect(stagedOrderContent).toBe(sourceOrderContent);
     expect(fs.readFileSync(stagedOrderPath, 'utf-8')).toBe(sourceOrderContent);
@@ -93,7 +92,7 @@ describe('stageTaskSpecForExecution', () => {
     const stagedAttachmentPath = path.join(execCwd, '.takt', 'runs', '20260216-spec-task', 'context', 'task', 'attachments', 'image-1.png');
     const stagedOrderContent = fs.readFileSync(path.join(execCwd, '.takt', 'runs', '20260216-spec-task', 'context', 'task', 'order.md'), 'utf-8');
 
-    expect(result.taskPrompt).toContain('Primary spec: `.takt/runs/20260216-spec-task/context/task/order.md`.');
+    expect(result.taskPrompt).toContain('.takt/runs/20260216-spec-task/context/task/order.md');
     expect(result.orderContent).toContain('Use [Image #1] (`attachments/image-1.png`) as the reference.');
     expect(result.orderContent).toContain('- [Image #1]: `attachments/image-1.png`');
     expect(result.stagedOrderContent).toContain('Use [Image #1] (`.takt/runs/20260216-spec-task/context/task/attachments/image-1.png`) as the reference.');

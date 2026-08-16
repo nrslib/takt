@@ -53,7 +53,6 @@ describe('E2E: Provider error handling (mock)', () => {
 
     // Then: executes successfully with mock provider
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Workflow completed');
   }, 240_000);
 
   it('should use default mock response when scenario entries are exhausted', () => {

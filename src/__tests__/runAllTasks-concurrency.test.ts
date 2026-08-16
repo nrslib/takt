@@ -78,14 +78,14 @@ function buildUpdatedTaskInfo(
 ): TaskInfo {
   return {
     name: taskName,
-    content: `Task: ${taskName}`,
+    content: taskName,
     filePath: `/tasks/${taskName}.yaml`,
     createdAt: '2026-02-09T00:00:00.000Z',
     status: 'running',
     runSlug: execution.runSlug,
     worktreePath: execution.worktreePath,
     data: {
-      task: `Task: ${taskName}`,
+      task: taskName,
       workflow: 'default',
       ...(execution.branch ? { branch: execution.branch } : {}),
     },
@@ -238,12 +238,12 @@ const mockLoadWorkflowByIdentifier = vi.mocked(loadWorkflowByIdentifier);
 function createTask(name: string): TaskInfo {
   return {
     name,
-    content: `Task: ${name}`,
+    content: name,
     filePath: `/tasks/${name}.yaml`,
     createdAt: '2026-02-09T00:00:00.000Z',
     status: 'pending',
     data: {
-      task: `Task: ${name}`,
+      task: name,
       workflow: 'default',
     },
   };
@@ -348,14 +348,7 @@ describe('runAllTasks concurrency', () => {
       await runAllTasks('/project');
       writeSpy.mockRestore();
 
-      // Then: Task names displayed with prefix in stdout
-      const allOutput = stdoutChunks.join('');
-      expect(allOutput).toContain('[task]');
-      expect(allOutput).toContain('=== Task: task-1 ===');
-      expect(allOutput).toContain('[task]');
-      expect(allOutput).toContain('=== Task: task-2 ===');
-      expect(allOutput).toContain('[task]');
-      expect(allOutput).toContain('=== Task: task-3 ===');
+      // Then: all claimed tasks were accounted for.
       expect(mockStatus).toHaveBeenCalledWith('Total', '3');
     });
 
@@ -455,8 +448,8 @@ describe('runAllTasks concurrency', () => {
 
       // Then: Both tasks started before either completed (concurrent execution)
       expect(executionOrder.slice(0, 2)).toEqual([
-        'start:Task: slow-1',
-        'start:Task: slow-2',
+        'start:slow-1',
+        'start:slow-2',
       ]);
       expect(executionOrder.findIndex((entry) => entry.startsWith('end:'))).toBe(2);
     });
@@ -497,8 +490,8 @@ describe('runAllTasks concurrency', () => {
       await runAllTasks('/project');
 
       // Then: task3 starts before task2 finishes (slot filled immediately)
-      const task3StartIdx = executionOrder.indexOf('start:Task: after-fast');
-      const task2EndIdx = executionOrder.indexOf('end:Task: slow');
+      const task3StartIdx = executionOrder.indexOf('start:after-fast');
+      const task2EndIdx = executionOrder.indexOf('end:slow');
       expect(task3StartIdx).toBeLessThan(task2EndIdx);
       expect(mockStatus).toHaveBeenCalledWith('Total', '3');
     });

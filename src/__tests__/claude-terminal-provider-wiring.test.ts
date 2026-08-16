@@ -132,9 +132,10 @@ describe('ClaudeTerminalProvider wiring', () => {
   });
 
   it('Given explicit runtime permissions, When call is invoked, Then they reach the terminal client', async () => {
+    const systemPrompt = 'selector guidance';
     const agent = new ClaudeTerminalProvider().setup({
       name: 'selector',
-      systemPrompt: 'Select reviewers.',
+      systemPrompt,
     });
 
     await agent.call('prompt', {
@@ -265,9 +266,10 @@ describe('ClaudeTerminalProvider wiring', () => {
   });
 
   it('Given isolated structured execution, When the provider calls the terminal client, Then it forwards the strict marker and cleared ambient inputs', async () => {
+    const systemPrompt = 'selector guidance';
     const agent = new ClaudeTerminalProvider().setupIsolatedStructured({
       name: 'selector',
-      systemPrompt: 'Select reviewers.',
+      systemPrompt,
     });
     await agent.call('prompt', {
       cwd: '/tmp/worktree',
@@ -277,7 +279,7 @@ describe('ClaudeTerminalProvider wiring', () => {
       outputSchema: SCHEMA,
     });
 
-    expect(mockCallClaudeTerminal).toHaveBeenCalledWith('selector', 'Select reviewers.\n\nprompt', expect.objectContaining({
+    expect(mockCallClaudeTerminal).toHaveBeenCalledWith('selector', `${systemPrompt}\n\nprompt`, expect.objectContaining({
       internalAgentIsolation: 'strict-readonly',
       sessionId: undefined,
       skillsEnabled: false,

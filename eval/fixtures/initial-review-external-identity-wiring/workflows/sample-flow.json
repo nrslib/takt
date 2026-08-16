@@ -1,9 +1,0 @@
-{
-  "name": "sample-flow",
-  "steps": [
-    {
-      "name": "execute",
-      "kind": "external"
-    }
-  ]
-}

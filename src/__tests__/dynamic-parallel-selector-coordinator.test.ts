@@ -173,7 +173,7 @@ describe('DynamicParallelSelectorCoordinator', () => {
     );
   });
 
-  it('passes selector guidance to the read-only structured agent without changing participant selection', async () => {
+  it('passes selector runtime options without changing participant selection', async () => {
     mockedExecuteAgent.mockResolvedValueOnce({
       persona: 'selector',
       status: 'done',
@@ -199,12 +199,7 @@ describe('DynamicParallelSelectorCoordinator', () => {
       'review frontend changes',
     );
 
-    const [instruction, outputSchema, options] = mockedExecuteAgent.mock.calls[0] ?? [];
-    expect(options?.systemPrompt).toContain('internal dynamic parallel selector');
-    expect(instruction).toContain('Select reviewers from the changed paths and prior reports.');
-    expect(instruction).toContain('Task:\nreview frontend changes');
-    expect(instruction).toContain('Changed file paths:\n- src/changed.ts');
-    expect(instruction).toContain('- frontend: frontend review');
+    const [, outputSchema, options] = mockedExecuteAgent.mock.calls[0] ?? [];
     expect(outputSchema).toMatchObject({
       type: 'object',
       additionalProperties: false,

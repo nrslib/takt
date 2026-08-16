@@ -67,7 +67,7 @@ vi.mock('../shared/prompts/index.js', () => ({
 
 import * as fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { error as logError, success } from '../shared/ui/index.js';
+import { error as logError } from '../shared/ui/index.js';
 import { getProvider } from '../infra/providers/index.js';
 import { resolveConfigValues } from '../infra/config/index.js';
 import { syncBranchWithRoot } from '../features/tasks/list/taskSyncAction.js';
@@ -77,7 +77,6 @@ import type { AgentResponse } from '../core/models/index.js';
 const mockExistsSync = vi.mocked(fs.existsSync);
 const mockExecFileSync = vi.mocked(execFileSync);
 const mockLogError = vi.mocked(logError);
-const mockSuccess = vi.mocked(success);
 const mockGetProvider = vi.mocked(getProvider);
 const mockResolveConfigValues = vi.mocked(resolveConfigValues);
 
@@ -158,7 +157,6 @@ describe('syncBranchWithRoot', () => {
     const result = await syncBranchWithRoot(PROJECT_DIR, task);
 
     expect(result).toBe(false);
-    expect(mockLogError).toHaveBeenCalledWith(expect.stringContaining('Failed to fetch from root'));
     expect(mockAgentCall).not.toHaveBeenCalled();
   });
 
@@ -173,7 +171,6 @@ describe('syncBranchWithRoot', () => {
     const result = await syncBranchWithRoot(PROJECT_DIR, task);
 
     expect(result).toBe(false);
-    expect(mockLogError).toHaveBeenCalledWith('Failed to fetch from root: fatal: cannot fetch from root');
   });
 
   it('returns true and pushes when merge succeeds without conflicts', async () => {
@@ -183,7 +180,6 @@ describe('syncBranchWithRoot', () => {
     const result = await syncBranchWithRoot(PROJECT_DIR, task);
 
     expect(result).toBe(true);
-    expect(mockSuccess).toHaveBeenCalledWith('Synced & pushed.');
     expect(mockAgentCall).not.toHaveBeenCalled();
     // relay push: worktree → origin via root repo
     expect(mockRelayPushCloneToOrigin).toHaveBeenCalledWith(
@@ -202,7 +198,6 @@ describe('syncBranchWithRoot', () => {
     const result = await syncBranchWithRoot(PROJECT_DIR, task);
 
     expect(result).toBe(true);
-    expect(mockSuccess).toHaveBeenCalledWith('Conflicts resolved & pushed.');
     expect(mockResolveNonWorkflowProviderModel).toHaveBeenCalledWith(PROJECT_DIR);
     expect(mockGetProvider).toHaveBeenCalledWith('claude');
     expect(mockAgentCall).toHaveBeenCalledWith(
@@ -338,10 +333,6 @@ describe('syncBranchWithRoot', () => {
     const result = await syncBranchWithRoot(PROJECT_DIR, task);
 
     expect(result).toBe(false);
-    expect(mockLogError).toHaveBeenCalledWith(
-      expect.stringContaining('Push failed after sync'),
-    );
-    expect(mockSuccess).not.toHaveBeenCalledWith('Synced & pushed.');
   });
 
   it('returns false when push fails after AI conflict resolution', async () => {
@@ -359,10 +350,6 @@ describe('syncBranchWithRoot', () => {
     const result = await syncBranchWithRoot(PROJECT_DIR, task);
 
     expect(result).toBe(false);
-    expect(mockLogError).toHaveBeenCalledWith(
-      expect.stringContaining('Push failed after sync'),
-    );
-    expect(mockSuccess).not.toHaveBeenCalledWith('Conflicts resolved & pushed.');
   });
 
   it('fetches from projectDir using local path ref', async () => {

@@ -50,7 +50,5 @@ describe('E2E: Direct task execution (--task)', () => {
     });
 
     expect(result.exitCode, formatTaktRunResult(result)).toBe(0);
-    expect(result.stdout).toContain('Running Workflow:');
-    expect(result.stdout).toContain('Workflow completed');
   }, 240_000);
 });

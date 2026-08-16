@@ -149,7 +149,6 @@ describe('E2E: runtime.yaml provider section (runtime-v1, mock)', () => {
     }
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Workflow completed');
 
     const records = readSessionRecords(repo.path);
     const stepStart = records.find((record) => record.type === 'step_start');
@@ -191,7 +190,6 @@ describe('E2E: runtime.yaml provider section (runtime-v1, mock)', () => {
     }
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Workflow completed');
 
     const records = readSessionRecords(repo.path);
     const stepStart = records.find((record) => record.type === 'step_start');

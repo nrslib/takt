@@ -130,6 +130,7 @@ describe('ClaudeHeadlessProvider', () => {
   });
 
   it('should pass explicitly configured runtime permissions to the headless client', async () => {
+    const systemPrompt = 'selector guidance';
     callClaudeHeadlessMock.mockResolvedValue({
       persona: 'selector',
       status: 'done',
@@ -138,7 +139,7 @@ describe('ClaudeHeadlessProvider', () => {
     });
     const agent = new ClaudeHeadlessProvider().setup({
       name: 'selector',
-      systemPrompt: 'Select reviewers.',
+      systemPrompt,
     });
 
     await agent.call('prompt', {
@@ -241,6 +242,7 @@ describe('ClaudeHeadlessProvider', () => {
   });
 
   it('Given isolated structured execution, When the provider calls the headless client, Then it forwards the strict marker and cleared ambient inputs', async () => {
+    const systemPrompt = 'selector guidance';
     callClaudeHeadlessMock.mockResolvedValue({
       persona: 'selector',
       status: 'done',
@@ -249,7 +251,7 @@ describe('ClaudeHeadlessProvider', () => {
     });
     const agent = new ClaudeHeadlessProvider().setupIsolatedStructured({
       name: 'selector',
-      systemPrompt: 'Select reviewers.',
+      systemPrompt,
     });
 
     await agent.call('prompt', {
@@ -263,7 +265,7 @@ describe('ClaudeHeadlessProvider', () => {
       },
     });
 
-    expect(callClaudeHeadlessMock).toHaveBeenCalledWith('selector', 'Select reviewers.\n\nprompt', expect.objectContaining({
+    expect(callClaudeHeadlessMock).toHaveBeenCalledWith('selector', `${systemPrompt}\n\nprompt`, expect.objectContaining({
       internalAgentIsolation: 'strict-readonly',
       sessionId: undefined,
       skillsEnabled: false,

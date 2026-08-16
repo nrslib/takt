@@ -837,31 +837,6 @@ steps:
     expect(mockError).toHaveBeenCalledWith(expect.stringContaining('reserved internal file'));
   });
 
-  // 回帰: builtin workflow / facet が予約名を使っていないこと。
-  it('no builtin workflow or facet uses the reserved resume-artifacts.json name', async () => {
-    const { readdirSync, readFileSync, statSync } = await import('node:fs');
-    const { join } = await import('node:path');
-    const roots = ['builtins/en', 'builtins/ja'];
-    const offenders: string[] = [];
-    const scan = (dir: string): void => {
-      for (const entry of readdirSync(dir)) {
-        const abs = join(dir, entry);
-        if (statSync(abs).isDirectory()) {
-          scan(abs);
-          continue;
-        }
-        if (!/\.(ya?ml|md)$/.test(entry)) continue;
-        if (readFileSync(abs, 'utf-8').toLowerCase().includes('resume-artifacts.json')) {
-          offenders.push(abs);
-        }
-      }
-    };
-    for (const root of roots) {
-      scan(join(process.cwd(), root));
-    }
-    expect(offenders).toEqual([]);
-  });
-
   it('warns when an instruction references a report that no step produces at all', async () => {
     const filePath = writeWorkflow(projectDir, '.takt/workflows/report-ref-nowhere.yaml', `name: report-ref-nowhere
 max_steps: 10

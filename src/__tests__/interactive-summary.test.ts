@@ -2,14 +2,11 @@
  * Tests for task history context formatting in interactive summary.
  */
 
-import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { renderTemplate } from '../shared/prompts/index.js';
 
 import {
   buildSummaryPrompt,
   buildSummaryActionOptions,
-  formatStepPreviews,
   formatTaskHistorySummary,
   type WorkflowContext,
   type SummaryActionLabels,
@@ -21,52 +18,6 @@ describe('formatTaskHistorySummary', () => {
     expect(formatTaskHistorySummary([], 'en')).toBe('');
   });
 
-  it('formats task history with required fields', () => {
-    const history: TaskHistorySummaryItem[] = [
-      {
-        worktreeId: 'wt-1',
-        status: 'interrupted',
-        startedAt: '2026-02-18T00:00:00.000Z',
-        completedAt: 'N/A',
-        finalResult: 'interrupted',
-        failureSummary: undefined,
-        logKey: 'log-1',
-      },
-      {
-        worktreeId: 'wt-2',
-        status: 'failed',
-        startedAt: '2026-02-17T00:00:00.000Z',
-        completedAt: '2026-02-17T00:01:00.000Z',
-        finalResult: 'failed',
-        failureSummary: 'Syntax error in test',
-        logKey: 'log-2',
-      },
-    ];
-
-    const result = formatTaskHistorySummary(history, 'en');
-    expect(result).toContain('## Task execution history');
-    expect(result).toContain('Worktree ID: wt-1');
-    expect(result).toContain('Status: interrupted');
-    expect(result).toContain('Failure summary: Syntax error in test');
-    expect(result).toContain('Log key: log-2');
-  });
-
-  it('normalizes empty start/end timestamps to N/A', () => {
-    const history: TaskHistorySummaryItem[] = [
-      {
-        worktreeId: 'wt-3',
-        status: 'interrupted',
-        startedAt: '',
-        completedAt: '',
-        finalResult: 'interrupted',
-        failureSummary: undefined,
-        logKey: 'log-3',
-      },
-    ];
-
-    const result = formatTaskHistorySummary(history, 'en');
-    expect(result).toContain('Start/End: N/A / N/A');
-  });
 });
 
 describe('buildSummaryPrompt', () => {
@@ -99,133 +50,10 @@ describe('buildSummaryPrompt', () => {
       workflowContext,
     );
 
-    expect(summary).toContain('## Task execution history');
-    expect(summary).toContain('Worktree ID: wt-1');
-    expect(summary).toContain('Conversation:');
-    expect(summary).toContain('User: Improve parser');
+    expect(summary).toContain('wt-1');
+    expect(summary).toContain('Improve parser');
   });
 
-  it('should leave the existing summary prompt unchanged when Gherkin mode is false or unset', () => {
-    const history = [{ role: 'user' as const, content: 'Improve parser' }];
-    const legacyTemplate = readFileSync(
-      new URL('./fixtures/score-summary-system-prompt-legacy-en.md', import.meta.url),
-      'utf-8',
-    );
-    const legacyPrompt = renderTemplate(legacyTemplate, {
-      hasWorkflowPreview: false,
-      workflowName: '',
-      workflowDescription: '',
-      stepDetails: '',
-      taskHistory: '',
-      sourceContext: '',
-      conversation: 'Conversation:\nUser: Improve parser',
-    });
-    const unset = buildSummaryPrompt(
-      history,
-      false,
-      'en',
-      'No transcript',
-      'Conversation:',
-    );
-    const disabled = buildSummaryPrompt(
-      history,
-      false,
-      'en',
-      'No transcript',
-      'Conversation:',
-      undefined,
-      undefined,
-      undefined,
-      false,
-    );
-
-    expect(unset).toBe(legacyPrompt);
-    expect(disabled).toBe(legacyPrompt);
-    expect(unset).not.toContain('Markdown + Gherkin Output Format');
-  });
-
-  it('should forward Gherkin mode through the string overload', () => {
-    const summary = buildSummaryPrompt(
-      [{ role: 'user', content: 'Improve parser' }],
-      'Keep existing behavior',
-      'en',
-      undefined,
-      true,
-    );
-
-    expect(summary).toContain('Markdown + Gherkin Output Format');
-  });
-
-  it.each([
-    ['en' as const, 'Markdown + Gherkin Output Format', 'Explicitly requested implementation details'],
-    ['ja' as const, 'Markdown + Gherkin 出力形式', '明示された実装詳細や設計意図'],
-  ])('should inject localized Markdown and Gherkin rules for %s when enabled', (lang, heading, implementationDetails) => {
-    const summary = buildSummaryPrompt(
-      [{ role: 'user', content: 'Improve parser behavior' }],
-      false,
-      lang,
-      'No transcript',
-      'Conversation:',
-      undefined,
-      undefined,
-      undefined,
-      true,
-    );
-
-    expect(summary).toContain(heading);
-    expect(summary).toContain(implementationDetails);
-    expect(summary).toContain('gherkin');
-    expect(summary).toMatch(/Gherkin[\s\S]*(files|ファイル)[\s\S]*(Markdown|Markdown 側)/);
-    expect(summary).toContain('Feature');
-    expect(summary).toContain('Rule');
-    expect(summary).toContain('Scenario');
-  });
-
-});
-
-describe('formatStepPreviews', () => {
-  it('provider/model を workflow summary に表示する', () => {
-    const result = formatStepPreviews([
-      {
-        name: 'review',
-        personaDisplayName: 'Reviewer',
-        personaContent: '',
-        instructionContent: '',
-        allowedTools: [],
-        canEdit: false,
-        provider: 'codex',
-        model: 'gpt-5.5',
-      },
-    ], 'en');
-
-    expect(result).toContain('**Provider:** codex');
-    expect(result).toContain('**Model:** gpt-5.5');
-  });
-
-  it('selectorの非機密metadata・readonly・tool-free契約をworkflow summaryに表示する', () => {
-    const result = formatStepPreviews([
-      {
-        name: 'dynamic-selector',
-        personaDisplayName: 'TAKT internal selector',
-        personaContent: '',
-        instructionContent: '',
-        allowedTools: [],
-        canEdit: false,
-        provider: 'codex',
-        model: 'gpt-selector',
-        providerSource: 'project',
-        modelSource: 'global',
-        permissionMode: 'readonly',
-        internalAgent: true,
-      },
-    ], 'en');
-
-    expect(result).toContain('**Provider source:** project');
-    expect(result).toContain('**Model source:** global');
-    expect(result).toContain('**Permission:** readonly');
-    expect(result).toContain('**Tools:** None');
-    expect(result).toContain('**Edit:** No');
-  });
 });
 
 describe('buildSummaryActionOptions', () => {

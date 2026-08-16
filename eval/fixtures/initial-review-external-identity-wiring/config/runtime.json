@@ -1,6 +1,0 @@
-{
-  "defaultTarget": "default-runner",
-  "stepTargets": {
-    "execute": "external-runner"
-  }
-}

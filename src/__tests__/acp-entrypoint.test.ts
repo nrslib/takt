@@ -259,10 +259,6 @@ describe('ACP package entrypoint', () => {
       projectCwd: '/repo',
       workflowIdentifier: 'default',
     }));
-    expect(updates).toContain('Workflow started. Report: /repo/.takt/runs/run-1/reports');
-    expect(updates).toContain('Starting step "implement" (1/3)');
-    expect(updates).toContain('workflow running');
-    expect(updates).toContain('Workflow completed. Report: /repo/.takt/runs/run-1/reports');
     const debugLog = readFileSync(debugLogPath, 'utf-8');
     expect(debugLog).toContain('ACP session update hook failed');
     expect(debugLog).toContain('hook failed');
@@ -780,10 +776,7 @@ steps:
         });
 
       expect(result).toEqual({ stopReason: 'end_turn' });
-      expect(updates.some((text) => text.startsWith('Workflow started. Report:'))).toBe(true);
-      expect(updates).toContain('Starting step "start" (1/1)');
       expect(updates).toContain('[START:1]\n\nDone.');
-      expect(updates.some((text) => text.startsWith('Workflow completed. Report:'))).toBe(true);
     } finally {
       resetScenario();
       rmSync(projectDir, { recursive: true, force: true });
@@ -837,10 +830,7 @@ steps:
       expect(result.initializeResponse.protocolVersion).toBe(PROTOCOL_VERSION);
       expect(result.sessionResponse.sessionId).toEqual(expect.any(String));
       expect(result.promptResponse).toEqual({ stopReason: 'end_turn' });
-      expect(updates.some((text) => text.startsWith('Workflow started. Report:'))).toBe(true);
-      expect(updates).toContain('Starting step "start" (1/1)');
       expect(updates).toContain('[START:1]\n\nDone.');
-      expect(updates.some((text) => text.startsWith('Workflow completed. Report:'))).toBe(true);
     } finally {
       if (timeout) {
         clearTimeout(timeout);

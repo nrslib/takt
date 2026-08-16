@@ -245,15 +245,17 @@ describe('callCopilot', () => {
       code: 0,
     });
 
-    await callCopilot('reviewer', 'review this code', {
+    const systemPrompt = 'custom system prompt';
+    const userPrompt = 'custom user prompt';
+    await callCopilot('reviewer', userPrompt, {
       cwd: '/repo',
-      systemPrompt: 'You are a strict reviewer.',
+      systemPrompt,
     });
 
     const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
     const promptIndex = args.indexOf('-p');
     expect(promptIndex).toBeGreaterThan(-1);
-    expect(args[promptIndex + 1]).toBe('You are a strict reviewer.\n\nreview this code');
+    expect(args[promptIndex + 1]).toBe(`${systemPrompt}\n\n${userPrompt}`);
   });
 
   it('should return structured error when copilot binary is not found', async () => {

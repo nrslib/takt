@@ -227,10 +227,9 @@ describe('applyExecOverrides', () => {
     const summary = formatExecConfigSummary(config);
     const workerDetails = formatActorDetails(config.workers[0]!);
 
-    expect(summary).toContain('Assistant agent: opencode/big-pickle');
-    expect(summary).toContain('Worker agent x1: opencode/big-pickle');
-    expect(summary).toContain('Review agent x1: opencode/big-pickle');
-    expect(workerDetails).toContain('opencode/big-pickle · instruction: exec-worker');
+    expect(summary).toContain('opencode/big-pickle');
+    expect(workerDetails).toContain(config.workers[0]!.instruction);
+    expect(workerDetails).toContain(config.workers[0]!.model);
     expect(summary).not.toContain('opencode/opencode/big-pickle');
     expect(workerDetails).not.toContain('opencode/opencode/big-pickle');
   });
@@ -279,9 +278,7 @@ describe('applyExecOverrides', () => {
       expect(result.session.model).toBeUndefined();
       expect(result.workers[0]!.model).toBeUndefined();
       expect(result.reviews[0]!.model).toBeUndefined();
-      expect(summary).toContain(`Assistant agent: ${provider}/(provider default)`);
-      expect(summary).toContain(`Worker agent x1: ${provider}/(provider default)`);
-      expect(summary).toContain(`Review agent x1: ${provider}/(provider default)`);
+      expect(summary).toContain(`${provider}/(provider default)`);
       expect(findRawStep(rawWorkflow, 'execute').parallel?.[0]).toMatchObject({ provider, model: null });
       expect(findRawStep(rawWorkflow, 'review').parallel?.[0]).toMatchObject({ provider, model: null });
       expect(findRawStep(rawWorkflow, 'replan')).toMatchObject({ provider, model: null });

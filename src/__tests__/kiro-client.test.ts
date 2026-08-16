@@ -290,13 +290,15 @@ describe('callKiro', () => {
       code: 0,
     });
 
-    await callKiro('reviewer', 'review this code', {
+    const systemPrompt = 'custom system prompt';
+    const userPrompt = 'custom user prompt';
+    await callKiro('reviewer', userPrompt, {
       cwd: '/repo',
-      systemPrompt: 'You are a strict reviewer.',
+      systemPrompt,
     });
 
     const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
-    expect(args.at(-1)).toBe('You are a strict reviewer.\n\nreview this code');
+    expect(args.at(-1)).toBe(`${systemPrompt}\n\n${userPrompt}`);
   });
 
   it('Given Kiro home, network env, and run-local child process env, When called, Then passes only the Kiro child env allowlist', async () => {

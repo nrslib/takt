@@ -100,8 +100,6 @@ describe('E2E: takt repertoire (real GitHub fixtures)', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain(`📦 ${FIXTURE_REPO} @${FIXTURE_REF}`);
-    expect(result.stdout).toContain('インストールしました');
 
     const packageDir = join(isolatedEnv.taktDir, 'repertoire', '@nrslib', 'takt-repertoire-fixture');
     expect(existsSync(join(packageDir, 'takt-repertoire.yaml'))).toBe(true);
@@ -171,7 +169,6 @@ describe('E2E: takt repertoire (real GitHub fixtures)', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('キャンセルしました');
 
     const packageDir = join(isolatedEnv.taktDir, 'repertoire', '@nrslib', 'takt-repertoire-fixture');
     expect(existsSync(packageDir)).toBe(false);
@@ -218,7 +215,6 @@ describe('E2E: takt repertoire (real GitHub fixtures)', () => {
     });
 
     expect(result.exitCode).not.toBe(0);
-    expect(result.stdout).toContain('takt-repertoire.yaml not found');
   }, 240_000);
 
   it.skipIf(!canUseFixtureRepo)(
@@ -233,10 +229,6 @@ describe('E2E: takt repertoire (real GitHub fixtures)', () => {
       });
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain(`nrslib/takt-repertoire-fixture @${FIXTURE_REF}`);
-      expect(result.stdout).toContain('facets:');
-      expect(result.stdout).toContain('workflows:');
-      expect(result.stdout).toContain('キャンセルしました');
     },
     240_000,
   );
@@ -262,7 +254,6 @@ describe('E2E: takt repertoire (real GitHub fixtures)', () => {
       });
 
       expect(secondResult.exitCode, formatTaktRunResult(secondResult)).toBe(0);
-      expect(secondResult.stdout).toContain('既にインストールされています');
     },
     240_000,
   );

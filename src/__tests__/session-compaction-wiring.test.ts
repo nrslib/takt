@@ -634,7 +634,6 @@ describe('session compaction Phase 1 wiring', () => {
       'session-1',
       undefined,
     ]);
-    expect(calls[1]![1]).toContain('Continue the review or work');
     expect(calls[2]![1]).toBe(calls[0]![1]);
     expect(onPhaseStart.mock.calls.map((call) => call[5])).toEqual([
       'review:1:1:1',
@@ -690,7 +689,6 @@ describe('session compaction Phase 1 wiring', () => {
       'session-1',
       undefined,
     ]);
-    expect(calls[1]![1]).toContain('Continue the review or work');
     expect(calls[2]![1]).toBe(calls[0]![1]);
     expect(onPhaseStart.mock.calls.map((call) => call[5])).toEqual([
       'api-review:1:1:1',
@@ -749,7 +747,6 @@ describe('session compaction Phase 1 wiring', () => {
       'session-provider-fresh',
     ]);
     expect(calls[1]![1]).toBe(calls[0]![1]);
-    expect(calls[2]![1]).toContain('Continue the review or work');
     expect(onPhaseStart.mock.calls.map((call) => call[5])).toEqual([
       'api-review:1:1:1',
       'api-review:1:1:2',

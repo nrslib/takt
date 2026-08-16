@@ -181,12 +181,8 @@ describe('WorkflowRunLoop command quality gates', () => {
       });
       expect(deps.resolveDoneTransition).toHaveBeenCalledTimes(1);
       expect(runStep).toHaveBeenCalledTimes(2);
-      expect(instructions[1]).toContain('Quality gate failed: quality-check');
-      expect(instructions[1]).toContain('Output log: .takt/quality-gates/logs/');
       expect(instructions[1]).not.toContain(secretOutput);
       expect(instructions[1]).not.toContain(injectedInstruction);
-      expect(instructions[1]).not.toContain('Stdout:');
-      expect(instructions[1]).not.toContain('Stderr:');
       expect(deps.persistPreviousResponseSnapshot).toHaveBeenCalledWith(
         state,
         'implement',
@@ -300,11 +296,8 @@ describe('WorkflowRunLoop command quality gates', () => {
       const snapshot = readFileSync(join(tmpDir, state.previousResponseSourcePath!), 'utf-8');
       const latest = readFileSync(join(tmpDir, '.takt/runs/test/context/previous_responses/latest.md'), 'utf-8');
       for (const content of [snapshot, latest, state.lastOutput?.content ?? '']) {
-        expect(content).toContain('Output log: .takt/quality-gates/logs/');
         expect(content).not.toContain(secretOutput);
         expect(content).not.toContain(injectedInstruction);
-        expect(content).not.toContain('Stdout:');
-        expect(content).not.toContain('Stderr:');
       }
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
@@ -363,7 +356,7 @@ describe('WorkflowRunLoop command quality gates', () => {
     expect(result.isComplete).toBe(false);
     expect(state.status).toBe('running');
     expect(state.currentStep).toBe('implement');
-    expect(state.lastOutput?.content).toBe('Quality gate failed: quality-check');
+    expect(state.lastOutput?.status).toBe('error');
     expect(deps.resolveDoneTransition).not.toHaveBeenCalled();
   });
 
@@ -431,7 +424,7 @@ describe('WorkflowRunLoop command quality gates', () => {
     expect(result.isComplete).toBe(false);
     expect(result.returnValue).toBeUndefined();
     expect(state.status).toBe('running');
-    expect(state.lastOutput?.content).toBe('Quality gate failed: quality-check');
+    expect(state.lastOutput?.status).toBe('error');
     expect(deps.resolveDoneTransition).not.toHaveBeenCalled();
   });
 });

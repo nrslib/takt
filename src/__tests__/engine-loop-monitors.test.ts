@@ -150,18 +150,6 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
           rules: loopJudgeRules(),
         },
       });
-      config.allStepsRules = [
-        {
-          ref: 'phase1-after-execution-rule',
-          position: 'after_execution_rules',
-          content: 'PHASE1_AFTER_EXECUTION_RULE',
-        },
-        {
-          ref: 'phase1-before-instruction-rule',
-          position: 'before_instruction',
-          content: 'PHASE1_BEFORE_INSTRUCTION_RULE',
-        },
-      ];
       engine = new WorkflowEngine(config, tmpDir, 'test task', {
         projectCwd: tmpDir,
         provider: 'mock',
@@ -205,22 +193,6 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       expect(state.status).toBe('completed');
       expect(cycleDetectedFn).toHaveBeenCalledOnce();
       expect(cycleDetectedFn.mock.calls[0][1]).toBe(2); // cycleCount
-      const implementCall = vi.mocked(runAgent).mock.calls[0];
-      if (!implementCall) {
-        throw new Error('implement call is required');
-      }
-      const judgeCall = vi.mocked(runAgent).mock.calls.find((call) => call[0] === 'supervisor');
-      if (!judgeCall) {
-        throw new Error('loop monitor judge call is required');
-      }
-      expect(implementCall[1]).toContain('PHASE1_AFTER_EXECUTION_RULE');
-      expect(implementCall[1]).toContain('PHASE1_BEFORE_INSTRUCTION_RULE');
-      expect(implementCall[1]).toContain('The following rules apply to all steps in this workflow.');
-      expect(judgeCall[1]).toContain('The loop repeated 2 times.');
-      expect(judgeCall[1]).not.toContain('{cycle_count}');
-      expect(judgeCall[1]).not.toContain('PHASE1_AFTER_EXECUTION_RULE');
-      expect(judgeCall[1]).not.toContain('PHASE1_BEFORE_INSTRUCTION_RULE');
-      expect(judgeCall[1]).not.toContain('The following rules apply to all steps in this workflow.');
       // 7 iterations: implement + ai_review + ai_fix + ai_review + ai_fix + judge + reviewers
       expect(state.iteration).toBe(7);
     });

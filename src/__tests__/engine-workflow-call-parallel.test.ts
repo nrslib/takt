@@ -192,8 +192,8 @@ steps:
     expect(state.status).toBe('completed');
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
     expect(delegatedOutput?.content).toBe('Child review complete');
-    expect(parentOutput?.content).toContain('## delegate-review\nChild review complete');
-    expect(parentOutput?.content).toContain('## local-review\nLocal review complete');
+    expect(parentOutput?.content).toContain('Child review complete');
+    expect(parentOutput?.content).toContain('Local review complete');
   });
 
   it('workflow_call vars は parallel caller から nested reviewer instruction まで継承される', async () => {

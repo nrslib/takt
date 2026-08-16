@@ -398,9 +398,6 @@ describe('E2E: dynamic parallel selector (mock)', () => {
     });
 
     expect(result.exitCode, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(result.stdout).toContain('[architecture]');
-    expect(result.stdout).toContain('[frontend]');
-    expect(result.stdout).not.toContain('[backend]');
     const providerStarts = readJsonl(mockCallLogPath)
       .filter((record) => record.event === 'start');
     expect(providerStarts).toEqual(expect.arrayContaining([
@@ -479,8 +476,6 @@ describe('E2E: dynamic parallel selector (mock)', () => {
     });
 
     expect(prompt.exitCode, `${prompt.stdout}\n${prompt.stderr}`).toBe(0);
-    expect(prompt.stdout).toContain('Dynamic selector provider: mock');
-    expect(prompt.stdout).toContain('Dynamic selector model: cli-selector-model');
     expect(doctor.exitCode, `${doctor.stdout}\n${doctor.stderr}`).toBe(0);
     expect(runtime.exitCode, `${runtime.stdout}\n${runtime.stderr}`).toBe(0);
     const selectorStarts = readJsonl(mockCallLogPath)

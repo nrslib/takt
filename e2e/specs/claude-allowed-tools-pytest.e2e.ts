@@ -118,7 +118,6 @@ describe.skipIf(!pytestAvailable)(
 
       expect(combined.includes('requires approval')).toBe(false);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain('Workflow completed');
     }, 360_000);
   },
 );

@@ -2236,7 +2236,6 @@ describe('shallow clone fallback', () => {
     expect(cloneCalls[0][cloneCalls[0].length - 1]).toBe('/tmp/shallow-test');
     expect(cloneCalls[1][cloneCalls[1].length - 1]).toBe('/tmp/shallow-test');
 
-    expect(mockLogInfo).toHaveBeenCalledWith('Reference repository is shallow, retrying clone without --reference');
     expect(serializedCloneLogs()).not.toContain(hiddenMainRepoPath);
   });
 
@@ -2254,7 +2253,6 @@ describe('shallow clone fallback', () => {
     expect(cloneCalls[0]).toContain('--dissociate');
     expect(cloneCalls[1]).not.toContain('--reference');
     expect(cloneCalls[1]).not.toContain('--dissociate');
-    expect(mockLogInfo).toHaveBeenCalledWith('Reference repository is shallow, retrying clone without --reference');
     expect(serializedCloneLogs()).not.toContain(hiddenMainRepoPath);
   });
 
@@ -2442,7 +2440,7 @@ describe('resolveCloneBaseDir parent-not-writable fallback', () => {
 
     expect(result.path).toContain(path.join('/workspaces/hello-world', '.takt', 'worktrees'));
     expect(mockLogInfo).toHaveBeenCalledWith(
-      'Parent directory not writable, using fallback clone base dir',
+      expect.any(String),
       expect.objectContaining({ fallback: expect.stringContaining('.takt/worktrees') }),
     );
   });

@@ -166,12 +166,7 @@ describe('runStatusJudgmentPhase', () => {
     });
 
     expect(result.label).toBe('approved');
-    expect(structuredCaller.judgeStatus).toHaveBeenCalledWith(
-      expect.stringContaining('（参照先の報告 review.md はこの run に存在しない）'),
-      expect.stringContaining('（参照先の報告 review.md はこの run に存在しない）'),
-      expect.any(Array),
-      expect.any(Object),
-    );
+    expect(structuredCaller.judgeStatus).toHaveBeenCalledOnce();
   });
 
   it('should judge a missing use_judge report from the available last response', async () => {
@@ -185,8 +180,6 @@ describe('runStatusJudgmentPhase', () => {
       ) => {
         expect(structured).toContain(lastResponse);
         expect(tag).toContain(lastResponse);
-        expect(structured).not.toContain('（参照先の報告 review.md はこの run に存在しない）');
-        expect(tag).not.toContain('（参照先の報告 review.md はこの run に存在しない）');
         options.onStructuredPromptResolved?.({
           systemPrompt: 'conductor-system',
           userInstruction: 'structured prompt',

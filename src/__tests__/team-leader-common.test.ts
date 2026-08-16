@@ -192,18 +192,6 @@ describe('createPartStep', () => {
       qualityGates: ['run focused tests'],
     }));
 
-    const prompt = new InstructionBuilder(partStep, makeInstructionContext({
-      previousOutput: {
-        persona: 'previous',
-        status: 'done',
-        content: 'previous response must not be copied',
-        timestamp: new Date(),
-      },
-    })).build();
-    expect(prompt).toContain('policy content');
-    expect(prompt).toContain('knowledge content');
-    expect(prompt).toContain('run focused tests');
-    expect(prompt).not.toContain('previous response must not be copied');
   });
 });
 

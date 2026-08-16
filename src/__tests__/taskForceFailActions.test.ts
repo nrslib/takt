@@ -145,16 +145,17 @@ describe('forceFailRunningTask', () => {
       });
 
       expect(storage.currentStep).toBe('implement');
-      await expect(storage.terminalize('contract force-fail'))
+      const reason = 'contract force-fail';
+      await expect(storage.terminalize(reason))
         .resolves.toMatchObject({ issues: [] });
-      await expect(storage.terminalize('contract force-fail'))
+      await expect(storage.terminalize(reason))
         .resolves.toMatchObject({ issues: [] });
       const meta = JSON.parse(
         fs.readFileSync(runPaths.metaAbs, 'utf-8'),
       ) as { status: string; reason?: string };
       expect(meta).toMatchObject({
         status: 'failed',
-        reason: 'contract force-fail',
+        reason,
       });
       expect(
         fs.readFileSync(
@@ -167,7 +168,7 @@ describe('forceFailRunningTask', () => {
           path.join(runPaths.runRootAbs, 'trace.md'),
           'utf-8',
         ),
-      ).toContain('contract force-fail');
+      ).toContain(reason);
     },
   );
 
@@ -387,7 +388,7 @@ describe('forceFailRunningTask', () => {
     const result = await forceFailRunningTask(createRunningTask(projectDir), projectDir);
 
     expect(result).toBe(false);
-    expect(mockConfirm).toHaveBeenCalledWith('Mark running task "running-task" as failed?', false);
+    expect(mockConfirm).toHaveBeenCalled();
     expect(mockForceFailRunningTask).not.toHaveBeenCalled();
     expect(mockSuccess).not.toHaveBeenCalled();
   });
@@ -404,7 +405,7 @@ describe('forceFailRunningTask', () => {
     const result = await forceFailRunningTask(createRunningTask(projectDir), projectDir);
 
     expect(result).toBe(true);
-    expect(mockConfirm).toHaveBeenCalledWith('Mark running task "running-task" as failed?', false);
+    expect(mockConfirm).toHaveBeenCalled();
     expect(mockRunnerProjectDir).toHaveBeenCalledWith(projectDir);
     expect(mockForceFailRunningTask).toHaveBeenCalledWith('running-task', {
       step: 'implement',

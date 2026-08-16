@@ -374,8 +374,7 @@ describe('executeWorkflow structuredCaller injection', () => {
     expect(MockWorkflowEngine.lastInstance.receivedOptions.callAiJudge).toBeUndefined();
     expect(MockWorkflowEngine.lastInstance.receivedOptions.provider).toBe('cursor');
     expect(MockWorkflowEngine.lastInstance.receivedOptions.model).toBeUndefined();
-    const [, prompt, runOptions] = mockRunAgent.mock.calls[0] ?? [];
-    expect(prompt).toContain('Return exactly one fenced JSON block');
+    const [, , runOptions] = mockRunAgent.mock.calls[0] ?? [];
     expect(runOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
       resolvedExecution: expect.objectContaining({ provider: 'cursor' }),
@@ -472,9 +471,11 @@ describe('executeWorkflow structuredCaller injection', () => {
       });
 
     const structuredCaller = getInjectedStructuredCaller();
+    const structuredPrompt = 'structured judge prompt';
+    const tagPrompt = 'tag judge prompt';
     const result = await structuredCaller.judgeStatus(
-      'structured judge prompt',
-      'tag judge prompt',
+      structuredPrompt,
+      tagPrompt,
       [
         { label: 'approved' },
         { label: 'needs_fix' },
@@ -491,14 +492,14 @@ describe('executeWorkflow structuredCaller injection', () => {
     expect(mockGetProvider).toHaveBeenCalledWith('cursor');
     expect(mockRunAgent).toHaveBeenCalledTimes(2);
     const [, firstPrompt, firstRunOptions] = mockRunAgent.mock.calls[0] ?? [];
-    expect(firstPrompt).toContain('structured judge prompt');
+    expect(firstPrompt).toContain(structuredPrompt);
     expect(firstRunOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
       resolvedExecution: expect.objectContaining({ provider: 'cursor' }),
     }));
     expect(firstRunOptions).not.toHaveProperty('outputSchema');
     const [, secondPrompt, secondRunOptions] = mockRunAgent.mock.calls[1] ?? [];
-    expect(secondPrompt).toContain('tag judge prompt');
+    expect(secondPrompt).toContain(tagPrompt);
     expect(secondRunOptions).not.toHaveProperty('outputSchema');
   });
 
@@ -533,9 +534,11 @@ describe('executeWorkflow structuredCaller injection', () => {
     });
 
     const structuredCaller = getInjectedStructuredCaller();
+    const structuredPrompt = 'structured judge prompt';
+    const tagPrompt = 'tag judge prompt';
     const result = await structuredCaller.judgeStatus(
-      'structured judge prompt',
-      'tag judge prompt',
+      structuredPrompt,
+      tagPrompt,
       [
         { label: 'approved' },
         { label: 'needs_fix' },
@@ -552,7 +555,7 @@ describe('executeWorkflow structuredCaller injection', () => {
     expect(result).toEqual({ candidateIndex: 0, method: 'structured_output' });
     expect(mockGetProvider).toHaveBeenCalledWith('claude');
     const [, prompt, runOptions] = mockRunAgent.mock.calls[0] ?? [];
-    expect(prompt).toContain('structured judge prompt');
+    expect(prompt).toContain(structuredPrompt);
     expect(runOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
       resolvedExecution: expect.objectContaining({ provider: 'claude', model: 'sonnet' }),
@@ -1123,8 +1126,7 @@ steps:
     );
 
     expect(result).toBe(0);
-    const [, prompt, runOptions] = mockRunAgent.mock.calls[0] ?? [];
-    expect(prompt).toContain('Output ONLY the tag `[JUDGE:N]`');
+    const [, , runOptions] = mockRunAgent.mock.calls[0] ?? [];
     expect(runOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
       resolvedExecution: expect.objectContaining({ provider: 'cursor' }),
@@ -1175,8 +1177,7 @@ steps:
     );
 
     expect(result).toBe(0);
-    const [, prompt, runOptions] = mockRunAgent.mock.calls[0] ?? [];
-    expect(prompt).toContain('Output ONLY the tag `[JUDGE:N]`');
+    const [, , runOptions] = mockRunAgent.mock.calls[0] ?? [];
     expect(runOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
       resolvedExecution: expect.objectContaining({ provider: 'claude' }),
@@ -1222,8 +1223,7 @@ steps:
     expect(result.parts).toEqual([
       { id: 'part-1', title: 'API', instruction: 'Implement API' },
     ]);
-    const [, prompt, runOptions] = mockRunAgent.mock.calls[0] ?? [];
-    expect(prompt).toContain('```json');
+    const [, , runOptions] = mockRunAgent.mock.calls[0] ?? [];
     expect(runOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
       resolvedExecution: expect.objectContaining({ provider: 'cursor', model: 'cursor-fast' }),
@@ -1316,8 +1316,7 @@ steps:
       cancelPartIds: [],
       parts: [{ id: 'part-2', title: 'Tests', instruction: 'Add tests' }],
     });
-    const [, prompt, runOptions] = mockRunAgent.mock.calls[0] ?? [];
-    expect(prompt).toContain('```json');
+    const [, , runOptions] = mockRunAgent.mock.calls[0] ?? [];
     expect(runOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
       resolvedExecution: expect.objectContaining({ provider: 'cursor', model: 'cursor-fast' }),

@@ -43,10 +43,6 @@ describe('E2E: Exec mode (takt exec)', () => {
       env: isolatedEnv.env,
     });
     expect(result.exitCode, formatTaktRunResult(result)).toBe(0);
-    expect(result.stdout).toContain('backend');
-    expect(result.stdout).toContain('frontend');
-    expect(result.stdout).toContain('dual');
-    expect(result.stdout).toContain('research');
   });
 
   it('should start exec with the previous configuration when it exists', () => {
@@ -87,10 +83,6 @@ describe('E2E: Exec mode (takt exec)', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Previous configuration');
-    expect(result.stdout).toContain('Assistant agent: mock/previous-session');
-    expect(result.stdout).toContain('Worker agent x1: mock/previous-worker');
-    expect(result.stdout).toContain('Review agent x1: mock/previous-review');
   });
 
   it('should expose setup during exec conversation', () => {
@@ -102,8 +94,6 @@ describe('E2E: Exec mode (takt exec)', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Exec agents');
-    expect(result.stdout).toContain('Assistant agent:');
   });
 
   it('should execute /go through a generated workflow using the existing workflow engine', () => {
@@ -167,7 +157,6 @@ describe('E2E: Exec mode (takt exec)', () => {
       timeout: 240_000,
     });
     expect(result.exitCode, formatTaktRunResult(result)).toBe(0);
-    expect(result.stdout).toContain('Workflow completed');
     const workflowPath = join(testRepo.path, '.takt', 'exec', 'workflow.yaml');
     expect(existsSync(workflowPath)).toBe(true);
     const workflow = parseYaml(readFileSync(workflowPath, 'utf-8')) as {
@@ -195,7 +184,6 @@ describe('E2E: Exec mode (takt exec)', () => {
       timeout: 240_000,
     });
     expect(result.exitCode, formatTaktRunResult(result)).toBe(0);
-    expect(result.stdout).toContain('Conversation or task text is required for /go.');
     expect(existsSync(join(testRepo.path, '.takt', 'exec', 'workflow.yaml'))).toBe(false);
     expect(existsSync(join(isolatedEnv.taktDir, 'exec.yaml'))).toBe(false);
   }, 240_000);

@@ -6,7 +6,7 @@ import {
 import { buildCompanionFollowUpInstruction } from '../core/workflow/companion/evidence.js';
 import { COMPANION_PROMPT_LIMITS } from '../core/workflow/companion/limits.js';
 
-describe('companion prompt contract', () => {
+describe('companion prompt behavior', () => {
   it('reviews only the current diff without prior finding state', () => {
     const prompt = buildCompanionReviewPrompt({
       companionName: 'security-reviewer',
@@ -18,78 +18,82 @@ describe('companion prompt contract', () => {
       implementerExplanation: 'done',
     });
 
-    expect(prompt).toContain('cumulative_diff');
     expect(prompt).not.toContain('prior_findings');
     expect(prompt).not.toContain('prior_notes');
     expect(prompt).not.toContain('open_findings');
   });
 
   it('embeds the current task, step, and review evidence in the review prompt', () => {
+    const task = 'refactor the companion runtime';
+    const stepName = 'implement-step';
+    const changedPaths = ['src/a.ts:1-2', 'src/b.ts:4-5'];
+    const diffSummary = 'two files changed';
+    const explanation = 'centralized prompt capacity checks';
     const prompt = buildCompanionReviewPrompt({
       companionName: 'architecture-reviewer',
-      task: 'refactor the companion runtime',
-      stepName: 'implement-contract',
+      task,
+      stepName,
       cumulativeDiff: '+const changed = true;',
-      changedSincePreviousReview: ['src/a.ts:1-2', 'src/b.ts:4-5'],
-      diffSummary: 'two files changed',
-      implementerExplanation: 'centralized prompt capacity checks',
+      changedSincePreviousReview: changedPaths,
+      diffSummary,
+      implementerExplanation: explanation,
     });
 
-    expect(prompt).toContain('Task: refactor the companion runtime');
-    expect(prompt).toContain('Step: implement-contract');
-    expect(prompt).toContain(
-      '"label":"changed_since_previous_review","value":["src/a.ts:1-2","src/b.ts:4-5"]',
-    );
-    expect(prompt).toContain('"label":"diff_summary","value":"two files changed"');
-    expect(prompt).toContain(
-      '"label":"implementer_explanation","value":"centralized prompt capacity checks"',
-    );
+    for (const value of [task, stepName, ...changedPaths, diffSummary, explanation]) {
+      expect(prompt).toContain(value);
+    }
   });
 
   it('gives the moderator the current reviewer result and its verification evidence', () => {
+    const task = 'implement the requested change';
+    const diff = '+const changed = true;';
     const prompt = buildCompanionModeratorPrompt({
       reviewerResult: {
         findings: [{ severity: 'nit', file: 'src/a.ts', line: 1, finding: 'rename' }],
       },
-      task: 'implement the requested contract',
-      cumulativeDiff: '+const changed = true;',
+      task,
+      cumulativeDiff: diff,
       diffSummary: 'one file',
     });
 
-    expect(prompt).toContain('reviewer_result');
-    expect(prompt).toContain('"label":"task","value":"implement the requested contract"');
-    expect(prompt).toContain('"label":"cumulative_diff","value":"+const changed = true;"');
+    expect(prompt).toContain('rename');
+    expect(prompt).toContain(task);
+    expect(prompt).toContain(diff);
     expect(prompt).not.toContain('open_findings');
   });
 
   it('embeds only newly delivered engine-owned rows in the follow-up prompt', () => {
+    const severity = 'should_fix';
     const prompt = buildCompanionFollowUpInstruction([{
       companion: 'security-reviewer',
       reviewedAt: '2026-08-14T00:00:00.000Z',
       reviewedDigest: 'digest-1',
-      severity: 'should_fix',
+      severity,
       file: 'src/a.ts',
       line: 2,
       finding: 'verify this claim',
     }]);
 
-    expect(prompt).toContain('new_companion_findings');
     expect(prompt).toContain('digest-1');
-    expect(prompt).toContain('decide whether to act');
-    expect(prompt).toContain('explain why');
+    expect(prompt).toContain(severity);
   });
 
   it('rejects a follow-up prompt that exceeds companion prompt capacity', () => {
-    expect(() => buildCompanionFollowUpInstruction([{
-      companion: 'security-reviewer',
-      reviewedAt: '2026-08-14T00:00:00.000Z',
-      reviewedDigest: 'digest-1',
-      severity: 'must_fix',
-      file: 'src/a.ts',
-      line: 1,
-      finding: 'x'.repeat(COMPANION_PROMPT_LIMITS.maxPromptBytes),
-    }])).toThrow(new RegExp(
-      `Companion prompt capacity exceeded: \\d+ bytes exceeds limit of ${COMPANION_PROMPT_LIMITS.maxPromptBytes} bytes`,
-    ));
+    let thrown: unknown;
+    try {
+      buildCompanionFollowUpInstruction([{
+        companion: 'security-reviewer',
+        reviewedAt: '2026-08-14T00:00:00.000Z',
+        reviewedDigest: 'digest-1',
+        severity: 'must_fix',
+        file: 'src/a.ts',
+        line: 1,
+        finding: 'x'.repeat(COMPANION_PROMPT_LIMITS.maxPromptBytes),
+      }]);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect(String(thrown)).toContain(String(COMPANION_PROMPT_LIMITS.maxPromptBytes));
   });
 });

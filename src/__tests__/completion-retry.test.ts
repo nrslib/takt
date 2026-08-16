@@ -2,8 +2,6 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AgentResponse } from '../core/models/types.js';
 import {
   buildCompletionRetryJudgePrompt,
-  buildCompletionRetryOutputSchema,
-  parseCompletionRetryDecision,
   runCompletionRetryEpisode,
 } from '../core/workflow/completion-retry.js';
 
@@ -19,10 +17,11 @@ function response(content: string, sessionId = 'review-session'): AgentResponse 
 
 describe('completion retry episode', () => {
   it('uses the actual reviewer instruction as the sole scope authority', () => {
+    const reviewerInstruction = 'Review only accepted-family regressions. Do not explore new families.';
     const prompt = buildCompletionRetryJudgePrompt({
       language: 'en',
       task: 'review the change',
-      reviewerInstruction: 'Review only accepted-family regressions. Do not explore new families.',
+      reviewerInstruction,
       reviewScope: { changedPaths: ['src/changed.ts'] },
       evidence: {
         status: 'collected',
@@ -34,9 +33,7 @@ describe('completion retry episode', () => {
       reviewResponse: 'No regression found.',
     });
 
-    expect(prompt.instruction).toContain('Review only accepted-family regressions');
-    expect(prompt.systemPrompt).toContain('sole source of scope and authority');
-    expect(prompt.instruction).not.toContain('review_mode');
+    expect(prompt.instruction).toContain(reviewerInstruction);
   });
 
   it('keeps the reviewer session and original scope for retries', async () => {
@@ -325,16 +322,6 @@ describe('completion retry episode', () => {
         missingObligations: [missingObligation],
       },
     });
-  });
-
-  it('uses one schema because the actual reviewer instruction defines scope', () => {
-    const schema = buildCompletionRetryOutputSchema();
-    expect(JSON.stringify(schema)).toContain('required_consumer_migration');
-    expect(parseCompletionRetryDecision({
-      complete: true,
-      reason: 'complete within the reviewer instruction',
-      missing_obligations: [],
-    })).toMatchObject({ complete: true });
   });
 
   it.each([

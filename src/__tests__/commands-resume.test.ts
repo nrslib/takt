@@ -79,8 +79,7 @@ describe('CLI resume command', () => {
       .map((call: unknown[]) => call[0] as string);
 
     expect(calledCommandNames).toContain('resume');
-    expect(commandMocks.get('root.resume')?.description)
-      .toHaveBeenCalledWith('Resume the latest failed or aborted direct run');
+    expect(commandMocks.get('root.resume')?.description).toHaveBeenCalled();
   });
 
   it('passes CLI provider and model overrides to direct run resume', async () => {

@@ -1,8 +1,0 @@
-{
-  "name": "initial-review-external-identity-wiring-fixture",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "test": "node --test"
-  }
-}

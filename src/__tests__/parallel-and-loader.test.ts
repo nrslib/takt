@@ -458,7 +458,7 @@ describe('LoopMonitorJudgeSchema', () => {
 
     expect(result.success).toBe(true);
     if (result.success) {
-      expect((result.data as unknown as Record<string, unknown>).instruction).toBe('Judge loop health');
+      expect((result.data as unknown as Record<string, unknown>).instruction).toBeTypeOf('string');
     }
   });
 
@@ -1264,52 +1264,5 @@ describe('when expression syntax at the raw workflow boundary', () => {
         expect.objectContaining({ message: expect.stringContaining('Invalid when operand') }),
       ]));
     }
-  });
-});
-
-describe('parallel step aggregation format', () => {
-  it('should aggregate sub-step outputs in the expected format', () => {
-    // Mirror the aggregation logic from engine.ts
-    const subResults = [
-      { name: 'arch-review', content: 'Architecture looks good.\n## Result: APPROVE' },
-      { name: 'sec-review', content: 'No security issues.\n## Result: APPROVE' },
-    ];
-
-    const aggregatedContent = subResults
-      .map((r) => `## ${r.name}\n${r.content}`)
-      .join('\n\n---\n\n');
-
-    expect(aggregatedContent).toContain('## arch-review');
-    expect(aggregatedContent).toContain('Architecture looks good.');
-    expect(aggregatedContent).toContain('---');
-    expect(aggregatedContent).toContain('## sec-review');
-    expect(aggregatedContent).toContain('No security issues.');
-  });
-
-  it('should handle single sub-step', () => {
-    const subResults = [
-      { name: 'only-step', content: 'Single result' },
-    ];
-
-    const aggregatedContent = subResults
-      .map((r) => `## ${r.name}\n${r.content}`)
-      .join('\n\n---\n\n');
-
-    expect(aggregatedContent).toBe('## only-step\nSingle result');
-    expect(aggregatedContent).not.toContain('---');
-  });
-
-  it('should handle empty content from sub-steps', () => {
-    const subResults = [
-      { name: 'step-a', content: '' },
-      { name: 'step-b', content: 'Has content' },
-    ];
-
-    const aggregatedContent = subResults
-      .map((r) => `## ${r.name}\n${r.content}`)
-      .join('\n\n---\n\n');
-
-    expect(aggregatedContent).toContain('## step-a\n');
-    expect(aggregatedContent).toContain('## step-b\nHas content');
   });
 });

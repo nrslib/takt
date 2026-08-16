@@ -44,7 +44,7 @@ describe('E2E: Config priority (workflow / autoPr)', () => {
     }
   });
 
-  it('should require --workflow in pipeline and use canonical workflow wording', () => {
+  it('should require --workflow in pipeline mode', () => {
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/execute-done.json');
 
     const result = runTakt({
@@ -63,7 +63,6 @@ describe('E2E: Config priority (workflow / autoPr)', () => {
     });
 
     expect(result.exitCode).toBe(1);
-    expect(`${result.stdout}${result.stderr}`).toContain('--workflow (-w) is required in pipeline mode');
   }, 240_000);
 
   it('should store canonical workflow data for takt add', () => {

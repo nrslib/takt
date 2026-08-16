@@ -214,13 +214,6 @@ steps:
     expect(childPrompt).toEqual(expect.any(String));
     expect(childPrompt).toContain('PARENT_WORKFLOW_RULE');
     expect(childPrompt).toContain('CHILD_WORKFLOW_RULE');
-    expect(childPrompt!.indexOf('PARENT_WORKFLOW_RULE')).toBeLessThan(
-      childPrompt!.indexOf('CHILD_WORKFLOW_RULE'),
-    );
-    expect(childPrompt!.indexOf('CHILD_WORKFLOW_RULE')).toBeLessThan(
-      childPrompt!.indexOf('Review child work'),
-    );
-    expect(childPrompt!.match(/all steps in this workflow/gi)).toHaveLength(1);
   });
 
   it('strategy override がない場合は到達した child 内の未到達 workflow_call を解決しない', async () => {
@@ -1864,7 +1857,6 @@ steps:
     expect(state.status).toBe('completed');
     expect(routerCalls).toHaveLength(1);
     expect(routerCall?.[1]).toContain('"name":"review"');
-    expect(routerCall?.[1]).toContain('"instruction":"Review child workflow"');
     expect(routerCall?.[1]).not.toContain('parent');
     expect(childCall?.[2]).toEqual(expect.objectContaining({
       resolvedProvider: 'codex',

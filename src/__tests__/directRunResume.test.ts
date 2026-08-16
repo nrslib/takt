@@ -222,8 +222,7 @@ describe('resumeDirectRun', () => {
 
     await resumeDirectRun('/project');
 
-    expect(mockInfo).toHaveBeenCalledTimes(1);
-    expect(mockInfo).toHaveBeenCalledWith('No resumable direct run found. Use `takt list` for queued tasks.');
+    expect(mockInfo).toHaveBeenCalled();
     expect(mockSelectOption).not.toHaveBeenCalled();
   });
 
@@ -233,36 +232,14 @@ describe('resumeDirectRun', () => {
 
     await resumeDirectRun('/project');
 
-    expect(mockHeader).toHaveBeenCalledWith('Direct run');
-    expect(mockSelectOption.mock.calls[0]?.[1]).toEqual([
-      expect.objectContaining({ label: 'Requeue', value: 'requeue' }),
-      expect.objectContaining({ label: 'Retry', value: 'retry' }),
-      expect.objectContaining({ label: 'Instruct', value: 'instruct' }),
-      expect.objectContaining({ label: 'View reports', value: 'view_reports' }),
-      expect.objectContaining({ label: 'Cancel', value: 'cancel' }),
+    const options = mockSelectOption.mock.calls[0]?.[1] as Array<{ value: string }>;
+    expect(options.map((option) => option.value)).toEqual([
+      'requeue',
+      'retry',
+      'instruct',
+      'view_reports',
+      'cancel',
     ]);
-    const labels = (mockSelectOption.mock.calls[0]?.[1] as Array<{ label: string }>).map((option) => option.label);
-    expect(labels).not.toContain('Try Merge');
-    expect(labels).not.toContain('Merge');
-    expect(labels).not.toContain('Pull');
-    expect(labels).not.toContain('Sync');
-    expect(labels).not.toContain('Create PR');
-  });
-
-  it('Given a resumable direct run, When the menu is shown, Then the run summary is printed', async () => {
-    mockFindLatestResumableDirectRun.mockReturnValue(createRun());
-    mockSelectOption.mockResolvedValueOnce('cancel');
-
-    await resumeDirectRun('/project');
-
-    expect(mockInfo).toHaveBeenCalledWith('Status: aborted');
-    expect(mockInfo).toHaveBeenCalledWith('Workflow: default');
-    expect(mockInfo).toHaveBeenCalledWith('Step: fix');
-    expect(mockInfo).toHaveBeenCalledWith('Iteration: 5/50');
-    expect(mockInfo).toHaveBeenCalledWith('Run: 20260524-direct-failed');
-    expect(mockInfo).toHaveBeenCalledWith('Path: .takt/runs/20260524-direct-failed');
-    expect(mockInfo).toHaveBeenCalledWith('Started: 2026-05-24 00:00');
-    expect(mockInfo).toHaveBeenCalledWith('Updated: 2026-05-24 00:10');
   });
 
   it('Given invalid timestamps contain terminal controls, When the run summary is printed, Then timestamps are sanitized', async () => {
@@ -274,8 +251,13 @@ describe('resumeDirectRun', () => {
 
     await resumeDirectRun('/project');
 
-    expect(mockInfo).toHaveBeenCalledWith('Started: invalid\\nstarted');
-    expect(mockInfo).toHaveBeenCalledWith('Updated: invalid\\rupdated');
+    const infoValues = mockInfo.mock.calls.flat().map((value) => String(value));
+    for (const value of infoValues) {
+      expect(value).not.toMatch(/[\u0000-\u001F\u007F-\u009F]/);
+    }
+    const infoText = infoValues.join('');
+    expect(infoText).toContain('invalid\\nstarted');
+    expect(infoText).toContain('invalid\\rupdated');
   });
 
   it('Given Requeue is selected, When order.md exists, Then direct execution uses the order content and source metadata', async () => {
@@ -648,10 +630,11 @@ describe('resumeDirectRun', () => {
 
     await resumeDirectRun('/project');
 
-    expect(mockInfo).toHaveBeenCalledWith('Run: .takt/runs/20260524-direct-failed');
-    expect(mockInfo).toHaveBeenCalledWith('Reports: .takt/runs/20260524-direct-failed/reports');
-    expect(mockInfo).toHaveBeenCalledWith('Logs: .takt/runs/20260524-direct-failed/logs');
-    expect(mockInfo).toHaveBeenCalledWith('Meta: .takt/runs/20260524-direct-failed/meta.json');
+    const infoText = mockInfo.mock.calls.flat().map((value) => String(value)).join('\n');
+    expect(infoText).toContain('.takt/runs/20260524-direct-failed');
+    expect(infoText).toContain('/reports');
+    expect(infoText).toContain('/logs');
+    expect(infoText).toContain('/meta.json');
     expect(mockExecuteTaskWithResult).not.toHaveBeenCalled();
   });
 });

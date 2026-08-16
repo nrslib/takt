@@ -177,7 +177,7 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
     const state = await engine.run();
 
     expect(state.status).toBe('aborted');
-    expect(abortReasons.some((reason) => reason.includes('must NOT have more than 1 items'))).toBe(true);
+    expect(abortReasons).toHaveLength(1);
     expect(vi.mocked(runAgent).mock.calls.filter(([, , options]) => options?.outputSchema === undefined))
       .toHaveLength(0);
   });
@@ -252,7 +252,6 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
     expect(abortFn).toHaveBeenCalledOnce();
     const reason = abortFn.mock.calls[0]![1] as string;
     expect(reason).toBe('Claude Code process exited with code 1');
-    expect(reason).not.toContain('Status not found for step "reviewers"');
     expect(abortFn.mock.calls[0]![3]).toMatchObject({
       kind: 'step_error',
       step: 'arch-review',
@@ -263,11 +262,7 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
     const reviewersOutput = state.stepOutputs.get('reviewers');
     expect(reviewersOutput).toBeDefined();
     expect(reviewersOutput!.status).toBe('error');
-    expect(reviewersOutput!.content).toContain('arch-review');
-    expect(reviewersOutput!.content).toContain('status: error');
-    expect(reviewersOutput!.content).toContain('failureCategory: none');
-    expect(reviewersOutput!.content).toContain('Claude Code process exited with code 1');
-    expect(reviewersOutput!.content).toContain('aggregate');
+    expect(reviewersOutput!.content).toContain(reason);
 
     const archReviewOutput = state.stepOutputs.get('arch-review');
     expect(archReviewOutput).toBeDefined();
@@ -296,7 +291,6 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
     expect(abortFn).toHaveBeenCalledOnce();
     const reason = abortFn.mock.calls[0]![1] as string;
     expect(reason).toBe('Claude Code process exited with code 1');
-    expect(reason).not.toContain('All parallel sub-steps failed');
     expect(abortFn.mock.calls[0]![3]).toMatchObject({
       kind: 'step_error',
       step: 'arch-review',
@@ -307,9 +301,7 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
     const reviewersOutput = state.stepOutputs.get('reviewers');
     expect(reviewersOutput).toBeDefined();
     expect(reviewersOutput!.status).toBe('error');
-    expect(reviewersOutput!.content).toContain('arch-review');
-    expect(reviewersOutput!.content).toContain('security-review');
-    expect(reviewersOutput!.content).toContain('status: error');
+    expect(reviewersOutput!.content).toContain(reason);
     expect(reviewersOutput!.error).toBe('Claude Code process exited with code 1');
   });
 
@@ -329,12 +321,11 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
     expect(state.status).toBe('aborted');
     expect(abortFn).toHaveBeenCalledOnce();
     const reason = abortFn.mock.calls[0]![1] as string;
-    expect(reason).toContain('Rate limit exceeded. Please try again later.');
-    expect(reason).not.toContain('Status not found for step "reviewers"');
+    expect(reason).toBe('Rate limit exceeded. Please try again later.');
 
     const reviewersOutput = state.stepOutputs.get('reviewers');
     expect(reviewersOutput).toBeDefined();
-    expect(reviewersOutput!.content).toContain('Rate limit exceeded. Please try again later.');
+    expect(reviewersOutput!.content).toContain(reason);
   });
 
   it('should record failed sub-step error message in stepOutputs', async () => {

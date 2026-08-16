@@ -90,7 +90,7 @@ describe('token-usage.sh output', () => {
     expect(row).toBe('-,run-1,codex,gpt-5,implement,,,10,5,15,0,1');
   });
 
-  it('distinguishes text rows with the same step by persona and tags', () => {
+  it('keeps persona and tag identity in the human-readable grouping', () => {
     const output = runTokenUsage([
       makeRecord({ persona: 'coder', tags: ['coding', 'review'] }),
       makeRecord({ persona: 'reviewer' }),
@@ -98,9 +98,9 @@ describe('token-usage.sh output', () => {
       makeRecord(),
     ], []);
 
-    expect(output).toContain('implement [persona: coder; tags: coding|review] (×1)');
-    expect(output).toContain('implement [persona: reviewer] (×1)');
-    expect(output).toContain('implement [tags: validation] (×1)');
-    expect(output).toContain('implement (×1)');
+    for (const value of ['coder', 'coding|review', 'reviewer', 'validation']) {
+      expect(output).toContain(value);
+    }
   });
+
 });

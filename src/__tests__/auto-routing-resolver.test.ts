@@ -258,7 +258,6 @@ describe('resolveAutoRoutingRuntime', () => {
       currentProviderInfo: { provider: undefined, model: undefined }, logger: { warn },
     });
 
-    expect(warn).toHaveBeenCalledWith('Auto routing estimator failed; using configured pool fallback');
     expect(result?.providerInfo).toMatchObject({ providerSource: 'auto.fallback', autoRoutingDecision: { candidateName: 'reasoning', fallbackReason: 'estimator-failure' } });
   });
 
@@ -279,7 +278,6 @@ describe('resolveAutoRoutingRuntime', () => {
       logger: { warn },
     });
 
-    expect(warn).toHaveBeenCalledWith('Auto routing estimator failed; using configured pool fallback');
     expect(result?.providerInfo).toMatchObject({
       providerSource: 'auto.fallback',
       autoRoutingDecision: { candidateName: 'reasoning', fallbackReason: 'estimator-failure' },

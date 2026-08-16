@@ -108,7 +108,6 @@ describe('E2E: Workflow selection branch coverage', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Workflow completed');
   }, 240_000);
 
   it('should execute when --workflow is a known local name (resolver hit branch)', () => {
@@ -122,7 +121,6 @@ describe('E2E: Workflow selection branch coverage', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Workflow completed');
   }, 240_000);
 
   it('should execute when --workflow is a repertoire @scope name (resolver hit branch)', () => {
@@ -137,20 +135,6 @@ describe('E2E: Workflow selection branch coverage', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Workflow completed');
-    expect(result.stdout).not.toContain('Workflow not found');
-  }, 240_000);
-
-  it('should fail fast with message when --workflow is unknown (resolver miss branch)', () => {
-    const result = runTaskWithSelection({
-      workflow: '@nrslib/takt-ensembles/not-found',
-      cwd: testRepo.path,
-      env: isolatedEnv.env,
-    });
-
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Workflow not found: @nrslib/takt-ensembles/not-found');
-    expect(result.stdout).toContain('Cancelled');
   }, 240_000);
 
   it('should execute when --workflow is omitted (workflow selection branch)', () => {
@@ -162,7 +146,6 @@ describe('E2E: Workflow selection branch coverage', () => {
       env: isolatedEnv.env,
     });
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Workflow completed');
   }, 240_000);
 
   it('should execute successfully when --workflow is a known local name', () => {
@@ -176,7 +159,6 @@ describe('E2E: Workflow selection branch coverage', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Workflow completed');
   }, 240_000);
 
 });

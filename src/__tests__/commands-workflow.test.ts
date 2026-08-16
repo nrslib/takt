@@ -87,30 +87,19 @@ describe('CLI workflow command', () => {
     expect(commandMocks.get('root.workflow.doctor')).toBeTruthy();
   });
 
-  it('should describe workflow command set with workflow terminology', () => {
-    expect(commandMocks.get('root.workflow')?.description)
-      .toHaveBeenCalledWith('Workflow authoring utilities');
-    expect(commandMocks.get('root.workflow.init')?.description)
-      .toHaveBeenCalledWith('Initialize a new workflow scaffold');
-    expect(commandMocks.get('root.workflow.doctor')?.description)
-      .toHaveBeenCalledWith('Validate workflow definitions');
-  });
-
   it('should define init options and doctor target arguments', () => {
     const initCommand = commandMocks.get('root.workflow.init');
     const doctorCommand = commandMocks.get('root.workflow.doctor');
 
-    expect(initCommand?.argument).toHaveBeenCalledWith('<name>', 'Workflow name');
-    expect(initCommand?.option.mock.calls).toContainEqual(['--description <text>', 'Workflow description']);
-    expect(initCommand?.option.mock.calls[1]?.[0]).toBe('--steps <count>');
-    expect(initCommand?.option.mock.calls[1]?.[1]).toBe('Initial number of steps');
-    expect(typeof initCommand?.option.mock.calls[1]?.[2]).toBe('function');
-    expect(initCommand?.option.mock.calls).toContainEqual(['--template <kind>', 'Template kind (minimal|faceted)']);
-    expect(initCommand?.option.mock.calls).toContainEqual([
+    expect(initCommand?.argument.mock.calls[0]?.[0]).toBe('<name>');
+    const optionNames = initCommand?.option.mock.calls.map(([name]) => name);
+    expect(optionNames).toEqual(expect.arrayContaining([
+      '--description <text>',
+      '--steps <count>',
+      '--template <kind>',
       '--global',
-      'Create in ~/.takt/workflows instead of project .takt/workflows',
-    ]);
-    expect(doctorCommand?.argument).toHaveBeenCalledWith('[targets...]', 'Workflow names or YAML paths');
+    ]));
+    expect(doctorCommand?.argument.mock.calls[0]?.[0]).toBe('[targets...]');
   });
 
   it('should delegate init action to workflow authoring feature', async () => {

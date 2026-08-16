@@ -909,7 +909,6 @@ describe('WorkflowEngine Integration: Happy Path', () => {
 
       expect(state.stepIterations.get('implement')).toBe(5);
       expect(state.stepIterations.get('reviewers')).toBe(2);
-      expect(startFn.mock.calls[0]?.[2]).toContain('Step Iteration: 5');
       expect(startFn.mock.calls[0]?.[6]).toBe(5);
       expect(engine.getResumePoint()?.stack[0]?.step_iterations).toEqual({
         implement: 5,

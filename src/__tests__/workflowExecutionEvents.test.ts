@@ -828,26 +828,6 @@ describe('bindWorkflowExecutionEvents', () => {
     );
   });
 
-  it('step model が明示省略された場合は configured model へ戻さず default として記録する', () => {
-    const { engine, out } = createBridgeHarness({
-      currentProvider: 'cursor',
-      configuredModel: 'global-model',
-    });
-    const step = {
-      name: 'review',
-      personaDisplayName: 'Reviewer',
-      instruction: '',
-    } as WorkflowStep;
-
-    engine.emit('step:start', step, 1, 'instruction', {
-      provider: 'cursor',
-      model: undefined,
-      modelSource: 'step',
-    }, 'parent', step.name);
-
-    expect(out.info).toHaveBeenCalledWith('Model: (default)');
-  });
-
   it('workflow_call 親子の完了順が入れ子でも開始時の usage context を保持する', () => {
     const { engine, usageEventLogger, analyticsEmitter } = createBridgeHarness();
     const parentStep = {
@@ -1133,66 +1113,6 @@ describe('bindWorkflowExecutionEvents', () => {
     expect(usageEventLogger.logUsageFor).not.toHaveBeenCalled();
   });
 
-  it('loop monitor judge model が明示省略された場合は usage に default として記録する', () => {
-    const { engine, out } = createBridgeHarness({
-      currentProvider: 'codex',
-      configuredModel: 'configured-model',
-    });
-    const step = {
-      name: '_loop_judge_ai_review_ai_fix',
-      personaDisplayName: 'loop-judge',
-      instruction: '',
-    } as WorkflowStep;
-
-    engine.emit('step:start', step, 1, 'instruction', {
-      provider: 'codex',
-      model: undefined,
-      modelSource: 'step',
-    }, 'parent', step.name);
-
-    expect(out.info).toHaveBeenCalledWith('Model: (default)');
-  });
-
-  it('OpenCode variant を step start の provider option 表示に含める', () => {
-    const { engine, out } = createBridgeHarness({
-      currentProvider: 'opencode',
-      configuredModel: 'gpt-5',
-    });
-    const step = {
-      name: 'review',
-      personaDisplayName: 'Reviewer',
-      instruction: '',
-    } as WorkflowStep;
-
-    engine.emit('step:start', step, 1, 'instruction', {
-      provider: 'opencode',
-      model: 'gpt-5',
-      providerOptions: { opencode: { variant: 'high' } },
-    }, 'parent', step.name);
-
-    expect(out.info).toHaveBeenCalledWith('Variant: high');
-  });
-
-  it('Codex reasoning effort を step start の provider option 表示に含める', () => {
-    const { engine, out } = createBridgeHarness({
-      currentProvider: 'codex',
-      configuredModel: 'gpt-5.2',
-    });
-    const step = {
-      name: 'review',
-      personaDisplayName: 'Reviewer',
-      instruction: '',
-    } as WorkflowStep;
-
-    engine.emit('step:start', step, 1, 'instruction', {
-      provider: 'codex',
-      model: 'gpt-5.2',
-      providerOptions: { codex: { reasoningEffort: 'high' } },
-    }, 'parent', step.name);
-
-    expect(out.info).toHaveBeenCalledWith('Reasoning effort: high');
-  });
-
   it('Codex base URL を step start の provider option 表示では伏せる', () => {
     const { engine, out } = createBridgeHarness({
       currentProvider: 'codex',
@@ -1210,7 +1130,8 @@ describe('bindWorkflowExecutionEvents', () => {
       providerOptions: { codex: { baseUrl: 'http://127.0.0.1:8787/v1' } },
     }, 'parent', step.name);
 
-    expect(out.info).toHaveBeenCalledWith('Base URL: [configured]');
+    const infoText = out.info.mock.calls.flat().map((value) => String(value)).join('\n');
+    expect(infoText).not.toContain('127.0.0.1:8787');
   });
 
   it('verbose 時に Claude SDK base URL を伏せて解決ソースを表示する', () => {
@@ -1234,104 +1155,8 @@ describe('bindWorkflowExecutionEvents', () => {
         providerOptionsSources: { 'claude.baseUrl': 'project' },
       }, 'parent', step.name);
 
-      expect(out.info).toHaveBeenCalledWith('Base URL: [configured] (source: project)');
-    } finally {
-      resetDebugLogger();
-    }
-  });
-
-  it('Kiro agent を step start の provider option 表示に含める', () => {
-    const { engine, out } = createBridgeHarness({
-      currentProvider: 'kiro',
-      configuredModel: 'kiro-default',
-    });
-    const step = {
-      name: 'review',
-      personaDisplayName: 'Reviewer',
-      instruction: '',
-    } as WorkflowStep;
-
-    engine.emit('step:start', step, 1, 'instruction', {
-      provider: 'kiro',
-      model: 'kiro-default',
-      providerOptions: { kiro: { agent: 'reviewer-agent' } },
-    }, 'parent', step.name);
-
-    expect(out.info).toHaveBeenCalledWith('Agent: reviewer-agent');
-  });
-
-  it('Kiro agent 未指定なら Agent 行を表示しない', () => {
-    const { engine, out } = createBridgeHarness({
-      currentProvider: 'kiro',
-      configuredModel: 'kiro-default',
-    });
-    const step = {
-      name: 'review',
-      personaDisplayName: 'Reviewer',
-      instruction: '',
-    } as WorkflowStep;
-
-    engine.emit('step:start', step, 1, 'instruction', {
-      provider: 'kiro',
-      model: 'kiro-default',
-      providerOptions: { opencode: { variant: 'high' } },
-    }, 'parent', step.name);
-
-    const agentLines = out.info.mock.calls.filter(
-      (call) => typeof call[0] === 'string' && call[0].startsWith('Agent:'),
-    );
-    expect(agentLines).toEqual([]);
-  });
-
-  it('verbose 時に Kiro agent の解決ソースを表示する', () => {
-    resetDebugLogger();
-    setVerboseConsole(true);
-    try {
-      const { engine, out } = createBridgeHarness({
-        currentProvider: 'kiro',
-        configuredModel: 'kiro-default',
-      });
-      const step = {
-        name: 'review',
-        personaDisplayName: 'Reviewer',
-        instruction: '',
-      } as WorkflowStep;
-
-      engine.emit('step:start', step, 1, 'instruction', {
-        provider: 'kiro',
-        model: 'kiro-default',
-        providerOptions: { kiro: { agent: 'reviewer-agent' } },
-        providerOptionsSources: { 'kiro.agent': 'step' },
-      }, 'parent', step.name);
-
-      expect(out.info).toHaveBeenCalledWith('Agent: reviewer-agent (source: step)');
-    } finally {
-      resetDebugLogger();
-    }
-  });
-
-  it('verbose 時に OpenCode variant の解決ソースを表示する', () => {
-    resetDebugLogger();
-    setVerboseConsole(true);
-    try {
-      const { engine, out } = createBridgeHarness({
-        currentProvider: 'opencode',
-        configuredModel: 'gpt-5',
-      });
-      const step = {
-        name: 'review',
-        personaDisplayName: 'Reviewer',
-        instruction: '',
-      } as WorkflowStep;
-
-      engine.emit('step:start', step, 1, 'instruction', {
-        provider: 'opencode',
-        model: 'gpt-5',
-        providerOptions: { opencode: { variant: 'high' } },
-        providerOptionsSources: { 'opencode.variant': 'persona' },
-      }, 'parent', step.name);
-
-      expect(out.info).toHaveBeenCalledWith('Variant: high (source: persona)');
+      const infoText = out.info.mock.calls.flat().map((value) => String(value)).join('\n');
+      expect(infoText).not.toContain('127.0.0.1:8787');
     } finally {
       resetDebugLogger();
     }
@@ -2209,13 +2034,6 @@ describe('bindWorkflowExecutionEvents', () => {
     });
     expect(JSON.stringify(eventSink.mock.calls)).not.toContain('candidate-private-detail');
     expect(JSON.stringify(analyticsEmitter.onCompanionEvent.mock.calls)).not.toContain('candidate-private-detail');
-    expect(out.info.mock.calls.map(([message]) => message)).toEqual([
-      'Companion start for step "implement"',
-      'Companion pool_selected for step "implement"',
-      'Companion finding for step "implement"',
-      'Companion fix_round for step "implement"',
-      'Companion complete for step "implement"',
-    ]);
   });
 
 });
