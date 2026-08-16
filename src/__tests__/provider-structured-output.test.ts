@@ -407,6 +407,33 @@ describe('CodexProvider — structured output', () => {
     });
   });
 
+  it('permission_control=codex を通常経路と strict isolated structured 経路へ渡す', async () => {
+    mockCallCodex.mockResolvedValue(doneResponse('coder'));
+
+    const provider = new CodexProvider();
+    await provider.setup({ name: 'coder' }).call('prompt', {
+      cwd: '/tmp',
+      permissionMode: 'edit',
+      providerOptions: { codex: { permissionControl: 'codex' } },
+    });
+    expect(mockCallCodex.mock.calls[0]?.[2]).toMatchObject({
+      permissionMode: 'edit',
+      permissionControl: 'codex',
+    });
+
+    await provider.setupIsolatedStructured({ name: 'selector' }).call('prompt', {
+      cwd: '/tmp',
+      permissionMode: 'full',
+      providerOptions: { codex: { permissionControl: 'codex' } },
+      outputSchema: SCHEMA,
+    });
+    expect(mockCallCodex.mock.calls[1]?.[2]).toMatchObject({
+      permissionMode: 'readonly',
+      permissionControl: 'codex',
+    });
+    expect(mockCallCodex.mock.calls[1]?.[2].networkAccess).toBeUndefined();
+  });
+
   it('childProcessEnv を callCodex に渡す', async () => {
     mockCallCodex.mockResolvedValue(doneResponse('coder'));
     const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };

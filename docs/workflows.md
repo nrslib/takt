@@ -890,6 +890,7 @@ Promotion is not supported on parallel sub-steps.
 | `provider_options.*.guards.call_timeout_ms` | 60 minutes | Call-wide wall-clock deadline for every provider profile (`codex`, `opencode`, `claude`, `claude_terminal`, `cursor`, `copilot`, `kiro`, and `pi`; see [configuration guide](./configuration.md#provider-call-deadline-and-opencode-execution-guards)) |
 | `provider_options.codex.base_url` | - | OpenAI-compatible base URL for Codex SDK constructor options (see [configuration guide](./configuration.md#provider-base-url-base_url)) |
 | `provider_options.codex.network_access` | - | Allow Codex sandbox to access the network (see [configuration guide](./configuration.md#network-access-network_access)) |
+| `provider_options.codex.permission_control` | `takt` behavior when omitted | `takt` maps TAKT permission modes to Codex sandbox options; `codex` delegates sandbox and network permission control to Codex config (see [configuration guide](./configuration.md#codex-permission-control-permission_control)) |
 | `provider_options.codex.reasoning_effort` | - | Provider-specific Codex reasoning effort string, passed through to the provider |
 | `provider_options.codex.skills.repo` | `false` | Inherit Codex Skills from `.agents/skills` between the execution CWD and repository root (see [configuration guide](./configuration.md#codex-skill-inheritance-skills)) |
 | `provider_options.codex.skills.user` | `false` | Inherit Codex Skills from user scope (see [configuration guide](./configuration.md#codex-skill-inheritance-skills)) |

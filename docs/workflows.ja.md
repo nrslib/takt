@@ -889,6 +889,7 @@ promotion は並列サブ step ではサポートされません。
 | `provider_options.*.guards.call_timeout_ms` | 60分 | 全 provider profile（`codex`、`opencode`、`claude`、`claude_terminal`、`cursor`、`copilot`、`kiro`、`pi`）の call-wide wall-clock deadline（[configuration ガイド](./configuration.ja.md#プロバイダ-call-deadline-と-opencode-実行ガード)参照） |
 | `provider_options.codex.base_url` | - | Codex SDK constructor option 用の OpenAI 互換 base URL（[configuration ガイド](./configuration.ja.md#provider-base-url-base_url) 参照） |
 | `provider_options.codex.network_access` | - | Codex サンドボックスからのネットワークアクセスを許可（[configuration ガイド](./configuration.ja.md#ネットワークアクセス-network_access) 参照） |
+| `provider_options.codex.permission_control` | 省略時は `takt` 相当 | `takt` は TAKT の permission mode を Codex sandbox option へ変換し、`codex` は sandbox と network の権限制御を Codex config へ委譲（[configuration ガイド](./configuration.ja.md#codex-の-permission-control-permission_control) 参照） |
 | `provider_options.codex.reasoning_effort` | - | Codex の provider 固有 reasoning effort 文字列。TAKT は値を provider へそのまま渡す |
 | `provider_options.codex.skills.repo` | `false` | 実行 CWD から repository root までの `.agents/skills` にある Codex Skill を継承（[configuration ガイド](./configuration.ja.md#codex-skill-の継承-skills) 参照） |
 | `provider_options.codex.skills.user` | `false` | user scope の Codex Skill を継承（[configuration ガイド](./configuration.ja.md#codex-skill-の継承-skills) 参照） |

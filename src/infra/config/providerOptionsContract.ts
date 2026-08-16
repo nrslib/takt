@@ -5,6 +5,7 @@ const PROVIDER_OPTIONS_ENV_SPEC_ENTRIES = [
   { path: 'provider_options', type: 'json' },
   { path: 'provider_options.codex.base_url', type: 'string' },
   { path: 'provider_options.codex.network_access', type: 'boolean' },
+  { path: 'provider_options.codex.permission_control', type: 'string' },
   { path: 'provider_options.codex.reasoning_effort', type: 'string' },
   { path: 'provider_options.codex.guards.call_timeout_ms', type: 'number' },
   { path: 'provider_options.codex.skills.repo', type: 'boolean' },
@@ -48,6 +49,7 @@ const PROVIDER_OPTIONS_TRACE_PATH_ENTRIES = [
   'provider_options.codex',
   'provider_options.codex.base_url',
   'provider_options.codex.network_access',
+  'provider_options.codex.permission_control',
   'provider_options.codex.reasoning_effort',
   'provider_options.codex.guards',
   'provider_options.codex.guards.call_timeout_ms',
@@ -113,6 +115,7 @@ const PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATH_ENTRIES = [
 const PROVIDER_OPTIONS_INTERNAL_PATH_ENTRIES = [
   'codex.baseUrl',
   'codex.networkAccess',
+  'codex.permissionControl',
   'codex.reasoningEffort',
   'codex.guards.callTimeoutMs',
   'codex.skills.repo',

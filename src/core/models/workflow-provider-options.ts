@@ -29,6 +29,7 @@ export interface ProviderGuardOptions {
 export interface CodexProviderOptions {
   baseUrl?: string;
   networkAccess?: boolean;
+  permissionControl?: CodexPermissionControl;
   reasoningEffort?: CodexReasoningEffort;
   guards?: ProviderGuardOptions;
   skills?: {
@@ -36,6 +37,8 @@ export interface CodexProviderOptions {
     user?: boolean;
   };
 }
+
+export type CodexPermissionControl = 'takt' | 'codex';
 
 export const OPENCODE_GUARD_PROFILES = ['standard', 'minimal'] as const;
 export type OpenCodeGuardProfile = (typeof OPENCODE_GUARD_PROFILES)[number];

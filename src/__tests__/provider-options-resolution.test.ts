@@ -79,6 +79,37 @@ describe('resolveEffectiveProviderOptions', () => {
     });
   });
 
+  it('permissionControl is resolved with normal provider-option precedence', () => {
+    const result = resolveEffectiveProviderOptions(
+      'project',
+      (path: string) => (path === 'codex.permissionControl' ? 'env' : 'local'),
+      {
+        codex: { permissionControl: 'takt' },
+      },
+      {
+        codex: { permissionControl: 'codex' },
+      },
+    );
+
+    expect(result).toEqual({
+      codex: { permissionControl: 'takt' },
+    });
+  });
+
+  it('rejects permissionControl codex when network access survives merge', () => {
+    expect(() => mergeProviderOptions(
+      { codex: { networkAccess: true } },
+      { codex: { permissionControl: 'codex' } },
+    )).toThrow(/permission_control=codex.*network_access/);
+
+    expect(() => resolveEffectiveProviderOptions(
+      'project',
+      undefined,
+      { codex: { networkAccess: true } },
+      { codex: { permissionControl: 'codex' } },
+    )).toThrow(/permission_control=codex.*network_access/);
+  });
+
   it('Claude Skill enabled resolves false from config even when other Claude leaves come from the step', () => {
     const result = resolveEffectiveProviderOptions(
       'project',
@@ -598,13 +629,16 @@ describe('resolveProviderOptionsSources (all paths)', () => {
   it('returns only paths with a defined source', () => {
     const result = resolveProviderOptionsSources(
       { claude: { effort: 'xhigh' } },
-      [{ source: 'persona_providers', options: { codex: { reasoningEffort: 'high' } } }],
+      [{ source: 'persona_providers', options: {
+        codex: { permissionControl: 'codex', reasoningEffort: 'high' },
+      } }],
       { copilot: { effort: 'medium' } },
       undefined,
       'global',
     );
     expect(result).toEqual({
       'claude.effort': 'step',
+      'codex.permissionControl': 'persona_providers',
       'codex.reasoningEffort': 'persona_providers',
       'copilot.effort': 'global',
     });
@@ -731,6 +765,7 @@ describe('providerOptionsContract', () => {
       'provider_options',
       'provider_options.codex.base_url',
       'provider_options.codex.network_access',
+      'provider_options.codex.permission_control',
       'provider_options.codex.reasoning_effort',
       'provider_options.codex.guards.call_timeout_ms',
       'provider_options.codex.skills.repo',
@@ -773,6 +808,7 @@ describe('providerOptionsContract', () => {
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude.allowed_tools');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude.skills.enabled');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.reasoning_effort');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.permission_control');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.guards.call_timeout_ms');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.skills.repo');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.skills.user');
@@ -821,6 +857,8 @@ describe('providerOptionsContract', () => {
       .toBe('provider_options.claude.skills.enabled');
     expect(toProviderOptionsTracePath('codex.reasoningEffort'))
       .toBe('provider_options.codex.reasoning_effort');
+    expect(toProviderOptionsTracePath('codex.permissionControl'))
+      .toBe('provider_options.codex.permission_control');
     expect(toProviderOptionsTracePath('codex.guards.callTimeoutMs'))
       .toBe('provider_options.codex.guards.call_timeout_ms');
     expect(toProviderOptionsTracePath('codex.skills.repo'))
@@ -858,6 +896,7 @@ describe('providerOptionsContract', () => {
       codex: {
         baseUrl: 'http://127.0.0.1:8787/v1',
         networkAccess: true,
+        permissionControl: 'takt',
         reasoningEffort: 'high',
         guards: { callTimeoutMs: 120_000 },
         skills: { repo: false, user: true },
@@ -880,6 +919,7 @@ describe('providerOptionsContract', () => {
     } as Parameters<typeof getPresentProviderOptionPaths>[0])).toEqual([
       'codex.baseUrl',
       'codex.networkAccess',
+      'codex.permissionControl',
       'codex.reasoningEffort',
       'codex.guards.callTimeoutMs',
       'codex.skills.repo',

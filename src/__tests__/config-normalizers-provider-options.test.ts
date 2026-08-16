@@ -132,6 +132,38 @@ describe('denormalizeProviderOptions', () => {
     expect(denormalizedProviderOptions).toEqual(rawProviderOptions);
   });
 
+  it('should round-trip Codex permission control', () => {
+    const rawProviderOptions = {
+      codex: {
+        permission_control: 'codex',
+      },
+    };
+
+    const normalizedProviderOptions = normalizeProviderOptions(rawProviderOptions);
+
+    expect(normalizedProviderOptions).toEqual({
+      codex: {
+        permissionControl: 'codex',
+      },
+    });
+    expect(denormalizeProviderOptions(normalizedProviderOptions)).toEqual(rawProviderOptions);
+  });
+
+  it('should reject Codex permission control with network access', () => {
+    expect(() => normalizeProviderOptions({
+      codex: {
+        permission_control: 'codex',
+        network_access: false,
+      },
+    })).toThrow(/permission_control=codex.*network_access/);
+    expect(() => denormalizeProviderOptions({
+      codex: {
+        permissionControl: 'codex',
+        networkAccess: false,
+      },
+    })).toThrow(/permission_control=codex.*network_access/);
+  });
+
   it('should round-trip OpenCode guard leaves and model_profiles', () => {
     const rawProviderOptions = {
       opencode: {

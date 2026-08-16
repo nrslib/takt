@@ -213,6 +213,23 @@ describe('provider effort values', () => {
   });
 });
 
+describe('Codex permission control provider option', () => {
+  it('accepts takt and codex values', () => {
+    expect(StepProviderOptionsSchema.parse({
+      codex: { permission_control: 'takt' },
+    })).toEqual({ codex: { permission_control: 'takt' } });
+    expect(StepProviderOptionsSchema.parse({
+      codex: { permission_control: 'codex' },
+    })).toEqual({ codex: { permission_control: 'codex' } });
+  });
+
+  it('rejects unknown permission control values', () => {
+    expect(() => StepProviderOptionsSchema.parse({
+      codex: { permission_control: 'workspace' },
+    })).toThrow(/permission_control|Invalid option/i);
+  });
+});
+
 describe('Claude terminal provider contract', () => {
   beforeEach(() => {
     ProviderRegistry.resetInstance();

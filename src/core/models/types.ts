@@ -52,6 +52,8 @@ export type {
   CommandQualityGate,
   QualityGate,
   McpServerConfig,
+  CodexProviderOptions,
+  CodexPermissionControl,
   RuntimePreparePreset,
   RuntimePrepareEntry,
   WorkflowRuntimeConfig,

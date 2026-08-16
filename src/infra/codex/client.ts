@@ -334,19 +334,27 @@ export class CodexClient {
     prompt: string,
     options: CodexCallOptions,
   ): Promise<AgentResponse> {
-    const sandboxMode = options.permissionMode
-      ? mapToCodexSandboxMode(options.permissionMode)
-      : 'workspace-write';
+    if (options.permissionControl === 'codex' && options.networkAccess !== undefined) {
+      throw new Error(
+        'Configuration error: provider_options.codex.permission_control=codex cannot be combined with provider_options.codex.network_access.',
+      );
+    }
     const threadOptions = {
       ...(options.model ? { model: options.model } : {}),
       workingDirectory: options.cwd,
-      sandboxMode,
+      ...(options.permissionControl === 'codex'
+        ? {}
+        : {
+            sandboxMode: options.permissionMode
+              ? mapToCodexSandboxMode(options.permissionMode)
+              : 'workspace-write' as const,
+            ...(options.networkAccess === undefined
+              ? {}
+              : { networkAccessEnabled: options.networkAccess }),
+          }),
       // TAKT runs Codex non-interactively — there is no human to approve escalations.
-      // Force `never` so the sandbox mode is the sole authority: without it, Codex falls
-      // back to its configured approval policy (e.g. on-request + approvals_reviewer=auto_review),
-      // which auto-approves escalation past a read-only sandbox and lets writes through.
+      // Force `never` so Codex cannot wait for an approval that no caller can provide.
       approvalPolicy: 'never' as const,
-      ...(options.networkAccess === undefined ? {} : { networkAccessEnabled: options.networkAccess }),
     };
     let threadId = options.sessionId;
 
