@@ -1392,113 +1392,69 @@ describe('provider_routing provider/model validation', () => {
     } as WorkflowEngineOptions)).toThrow(/provider\/model/);
   });
 
-  it('Given promotion contains removed provider settings, When validating normalized workflow, Then the engine ignores them', () => {
-    const step = createStep({
-      name: 'review',
-      provider: 'codex',
-      model: 'gpt-5',
-      engineSynthesized: false,
-      promotion: [
-        {
-          at: 1,
-          provider: 'opencode',
-          providerSpecified: true,
-        },
-      ],
-    });
-    expect(() => validateWorkflowConfig({
-      name: 'promotion-opencode-missing-model-validation',
-      initialStep: 'review',
-      maxSteps: 1,
-      steps: [step],
-    }, {
-      projectCwd: '/project',
-    } as WorkflowEngineOptions)).not.toThrow();
-    expect(resolveStepProviderModel({
-      step,
-      provider: 'mock',
-      providerSource: 'runtime-v1',
-      model: 'runtime-model',
-      modelSource: 'runtime-v1',
-    })).toMatchObject({
-      provider: 'mock',
-      providerSource: 'runtime-v1',
-      model: 'runtime-model',
-      modelSource: 'runtime-v1',
-    });
-  });
+  it.each([
+    {
+      name: 'removed provider setting',
+      workflowName: 'promotion-opencode-missing-model-validation',
+      stepProvider: 'codex',
+      stepModel: 'gpt-5',
+      promotion: { at: 1, provider: 'opencode', providerSpecified: true },
+      runtimeProvider: 'mock',
+    },
+    {
+      name: 'removed provider and model settings',
+      workflowName: 'promotion-opencode-bare-model-validation',
+      stepProvider: 'codex',
+      stepModel: 'gpt-5',
+      promotion: {
+        at: 1,
+        provider: 'opencode',
+        providerSpecified: true,
+        model: 'big-pickle',
+      },
+      runtimeProvider: 'mock',
+    },
+    {
+      name: 'normalized ladder promotion',
+      workflowName: 'promotion-opencode-inherited-provider-validation',
+      stepProvider: 'opencode',
+      stepModel: 'opencode/base-model',
+      promotion: { at: 1, model: 'big-pickle' },
+      runtimeProvider: 'codex',
+    },
+  ] as const)(
+    'Given $name, When validating and resolving, Then runtime owns provider/model',
+    ({ workflowName, stepProvider, stepModel, promotion, runtimeProvider }) => {
+      const step = createStep({
+        name: 'review',
+        provider: stepProvider,
+        model: stepModel,
+        engineSynthesized: false,
+        promotion: [promotion],
+      });
 
-  it('Given promotion contains a removed model setting, When validating normalized workflow, Then the engine ignores it', () => {
-    const step = createStep({
-      name: 'review',
-      provider: 'codex',
-      model: 'gpt-5',
-      engineSynthesized: false,
-      promotion: [
-        {
-          at: 1,
-          provider: 'opencode',
-          providerSpecified: true,
-          model: 'big-pickle',
-        },
-      ],
-    });
-    expect(() => validateWorkflowConfig({
-      name: 'promotion-opencode-bare-model-validation',
-      initialStep: 'review',
-      maxSteps: 1,
-      steps: [step],
-    }, {
-      projectCwd: '/project',
-    } as WorkflowEngineOptions)).not.toThrow();
-    expect(resolveStepProviderModel({
-      step,
-      provider: 'mock',
-      providerSource: 'runtime-v1',
-      model: 'runtime-model',
-      modelSource: 'runtime-v1',
-    })).toMatchObject({
-      provider: 'mock',
-      providerSource: 'runtime-v1',
-      model: 'runtime-model',
-      modelSource: 'runtime-v1',
-    });
-  });
-
-  it('Given a ladder promotion is normalized, When validating workflow, Then runtime owns provider/model', () => {
-    const step = createStep({
-      name: 'review',
-      provider: 'opencode',
-      model: 'opencode/base-model',
-      engineSynthesized: false,
-      promotion: [
-        {
-          at: 1,
-          model: 'big-pickle',
-        },
-      ],
-    });
-    expect(() => validateWorkflowConfig({
-      name: 'promotion-opencode-inherited-provider-validation',
-      initialStep: 'review',
-      maxSteps: 1,
-      steps: [step],
-    }, {
-      projectCwd: '/project',
-    } as WorkflowEngineOptions)).not.toThrow();
-    expect(resolveStepProviderModel({
-      step,
-      provider: 'codex',
-      providerSource: 'runtime-v1',
-      model: 'runtime-model',
-      modelSource: 'runtime-v1',
-    })).toMatchObject({
-      provider: 'codex',
-      providerSource: 'runtime-v1',
-      model: 'runtime-model',
-      modelSource: 'runtime-v1',
-    });
-  });
+      expect(() => validateWorkflowConfig({
+        name: workflowName,
+        initialStep: 'review',
+        maxSteps: 1,
+        steps: [step],
+      }, {
+        projectCwd: '/project',
+      } as WorkflowEngineOptions)).not.toThrow();
+      expect(resolveStepProviderModel({
+        step,
+        provider: runtimeProvider,
+        providerSource: 'runtime-v1',
+        model: 'runtime-model',
+        modelSource: 'runtime-v1',
+      })).toMatchObject({
+        provider: runtimeProvider,
+        providerSource: 'runtime-v1',
+        model: 'runtime-model',
+        modelSource: 'runtime-v1',
+      });
+    },
+  );
 
   it('Given persona_providers resolves opencode with a bare model, When validating workflow, Then it fails fast', () => {
     expect(() => validateWorkflowConfig({

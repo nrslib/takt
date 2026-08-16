@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { AutoRoutingConfig, WorkflowCallStep, WorkflowConfig } from '../core/models/index.js';
 import type { ProviderType } from '../shared/types/provider.js';
+import type { resolveWorkflowConfigValues } from '../infra/config/index.js';
 import {
   ProviderNeutralStructuredCaller,
   type StructuredCaller,
@@ -84,7 +85,7 @@ const {
 function resolvedWorkflowConfigValues(
   provider: ProviderType,
   autoRouting: AutoRoutingConfig | undefined,
-) {
+): ReturnType<typeof resolveWorkflowConfigValues> {
   return {
     notificationSound: true,
     notificationSoundEvents: {},

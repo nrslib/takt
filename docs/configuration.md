@@ -899,9 +899,11 @@ Assistant conversations (interactive planning, instruct on existing tasks, and r
 In runtime mode, `provider.defaults` selects a profile or ladder for the runtime
 default. Auto routing applies only when a persona, tag, or step target explicitly
 selects a pool. Pool candidates reference `provider.profiles`; they do not carry
-direct provider/model fields. Hard rules are checked in `tags`, `steps`,
-`personas` order. Otherwise `pool_rules` selects a candidate pool and the router
-estimates only the required tier; TAKT deterministically selects the candidate.
+direct provider/model fields. Auto-routing hard rules are evaluated in `tags`,
+`steps`, `personas` order when selecting a pool. Separately, the final provider
+target override precedence is `defaults < personas < tags < steps`. Otherwise
+`pool_rules` selects a candidate pool and the router estimates only the required
+tier; TAKT deterministically selects the candidate.
 
 Candidate `routing_tier` is limited to `high`, `medium`, or `low`. Runtime
 profiles carry provider/model/options, so candidates reference profiles rather
