@@ -9,6 +9,7 @@ import type {
   ResolvedObservabilityConfig,
   TagRoutingConflictPolicy,
 } from '../../../core/models/config-types.js';
+import type { RateLimitFallbackConfig } from '../../../core/models/workflow-types.js';
 import type { PermissionMode } from '../../../core/models/types.js';
 import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
 import { readRunMetaBySlug } from '../../../core/workflow/run/run-meta.js';
@@ -35,6 +36,7 @@ import {
 } from '../../../infra/config/index.js';
 import {
   resolveConfigValueWithSource,
+  toProviderResolutionSource,
 } from '../../../infra/config/resolveConfigValue.js';
 import type { ProviderResolutionSource } from '../../../core/workflow/provider-options-trace.js';
 import {
@@ -79,7 +81,6 @@ import {
 } from '../../../infra/config/runtime-provider/provider-environment.js';
 import {
   collectLegacyProviderSignals,
-  collectStepPromotionEntries,
   selectConfigTaktProviders,
 } from '../../../infra/config/runtime-provider/legacy-signals.js';
 import type { LegacyProviderEnvironmentInput } from '../../../infra/config/runtime-provider/environment.js';
@@ -130,6 +131,8 @@ export interface WorkflowExecutionBootstrap {
   providerOptions: WorkflowExecutionOptions['providerOptions'];
   providerOptionsProviderSource: ProviderResolutionSource | undefined;
   providerPermissionMode: PermissionMode | undefined;
+  autoRouting: WorkflowExecutionOptions['autoRouting'];
+  rateLimitFallback: RateLimitFallbackConfig | undefined;
   effectiveWorkflowConfig: WorkflowConfig;
   autoStrategyOverride: WorkflowExecutionOptions['autoStrategy'];
   onEffectiveAutoRoutingReached: () => void;
@@ -528,18 +531,20 @@ export async function createWorkflowExecutionBootstrap(
         value: options.provider,
         source: options.providerSource ?? 'cli' as ProviderResolutionSource,
       }
-    : resolveConfigValueWithSource(projectCwd, 'provider', {
-        workflowContext: { provider: workflowConfig.provider },
-      });
+    : (() => {
+        const resolved = resolveConfigValueWithSource(projectCwd, 'provider');
+        return { ...resolved, source: toProviderResolutionSource(resolved.source) };
+      })();
   const resolvedModel = options.model !== undefined
     ? {
         value: options.model,
         source: options.modelSource ?? 'cli' as ProviderResolutionSource,
       }
-    : resolveConfigValueWithSource(projectCwd, 'model', {
-        workflowContext: { model: workflowConfig.model },
-      });
-  const inheritedAutoRouting = resolveEffectiveAutoRouting(workflowConfig, globalConfig.autoRouting);
+    : (() => {
+        const resolved = resolveConfigValueWithSource(projectCwd, 'model');
+        return { ...resolved, source: toProviderResolutionSource(resolved.source) };
+      })();
+  const inheritedAutoRouting = resolveEffectiveAutoRouting(globalConfig.autoRouting);
 
   // Configuration-format anti-corruption boundary (issue #1136): compile either legacy
   // config or an active runtime.yaml provider section into the shared engine-options bundle.
@@ -563,13 +568,6 @@ export async function createWorkflowExecutionBootstrap(
     legacy: legacyProviderEnvironment,
     legacySignals: collectLegacyProviderSignals(
       legacyProviderEnvironment,
-      {
-        name: workflowConfig.name,
-        provider: workflowConfig.provider,
-        model: workflowConfig.model,
-        autoRouting: workflowConfig.autoRouting,
-        promotion: collectStepPromotionEntries(workflowConfig.steps),
-      },
       options.providerOptionsSource,
     ),
   });
@@ -606,8 +604,6 @@ export async function createWorkflowExecutionBootstrap(
   const autoStrategyOverride = options.autoStrategy;
   const effectiveWorkflowConfig: WorkflowConfig = {
     ...workflowConfig,
-    autoRouting: providerEnvironment.autoRouting,
-    rateLimitFallback: workflowConfig.rateLimitFallback ?? globalConfig.rateLimitFallback,
     runtime: resolveRuntimeConfig(globalConfig.runtime, workflowConfig.runtime),
     maxSteps: effectiveMaxSteps,
   };
@@ -743,6 +739,8 @@ export async function createWorkflowExecutionBootstrap(
     currentProviderSource,
     configuredModel,
     configuredModelSource,
+    autoRouting: providerEnvironment.autoRouting,
+    rateLimitFallback: globalConfig.rateLimitFallback,
     personaProviders: effectivePersonaProviders,
     providerRouting: effectiveProviderRouting,
     providerLadders: effectiveProviderLadders,

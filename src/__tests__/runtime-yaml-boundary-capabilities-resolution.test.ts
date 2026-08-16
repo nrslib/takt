@@ -15,9 +15,8 @@ import type { AgentWorkflowStep } from '../core/models/index.js';
  *   sandbox / skills) are permitted; a quality/machine leaf fails fast (order.md:61).
  * - CT-CAP-4 a step's `capabilities` REPLACES the workflow-level default — it does not merge
  *   (order.md:54).
- * - CT-CAP-5 when a step carries BOTH `capabilities` and a direct `provider_options`, the
- *   capabilities sit at the lowest layer and the direct `provider_options` wins; allowedTools is
- *   replaced by the winning layer, not unioned (workflowStepNormalizer.ts:385-393).
+ * - CT-CAP-5 direct `provider_options` is rejected at the workflow load boundary; capabilities
+ *   remain the workflow YAML surface and runtime.yaml owns provider options.
  *
  * Path-like references resolve relative to the workflow directory (the resolver's existing path
  * form), which lets these load-time contracts be exercised without a full 4-layer lookup context.
@@ -49,7 +48,7 @@ describe('CT-CAP-2 capabilities reference resolution', () => {
       { name: 'implement', instruction: '{task}', capabilities: 'provider-options/backend.yaml' },
     ]);
     const step = config.steps[0] as AgentWorkflowStep;
-    expect(step.providerOptions?.claude?.allowedTools).toEqual(['Read', 'Grep']);
+    expect(step.capabilityProviderOptions?.claude?.allowedTools).toEqual(['Read', 'Grep']);
   });
 
   it('should fail fast when the capability-set name does not resolve', () => {
@@ -86,30 +85,23 @@ describe('CT-CAP-4 step capabilities replace the workflow default', () => {
     const inherits = config.steps[0] as AgentWorkflowStep;
     const overrides = config.steps[1] as AgentWorkflowStep;
     // The step without its own capabilities inherits the workflow default.
-    expect(inherits.providerOptions?.claude?.allowedTools).toEqual(['Read', 'Grep', 'Bash']);
+    expect(inherits.capabilityProviderOptions?.claude?.allowedTools).toEqual(['Read', 'Grep', 'Bash']);
     // The overriding step replaces it entirely — Grep/Bash from the default must NOT leak in.
-    expect(overrides.providerOptions?.claude?.allowedTools).toEqual(['Read']);
+    expect(overrides.capabilityProviderOptions?.claude?.allowedTools).toEqual(['Read']);
   });
 });
 
-describe('CT-CAP-5 capabilities and direct provider_options coexist on the same step', () => {
-  it('should let provider_options win by replacement when a step declares both `capabilities` and `provider_options`', () => {
+describe('CT-CAP-5 removed workflow provider options', () => {
+  it('should reject direct provider_options even when a step declares capabilities', () => {
     writeCapabilitySet('caps-read-grep', 'claude:\n  allowed_tools:\n    - Read\n    - Grep\n');
-    const config = normalize({}, [
+    expect(() => normalize({}, [
       {
         name: 'coexist',
         instruction: '{task}',
         capabilities: 'provider-options/caps-read-grep.yaml',
         provider_options: { claude: { allowed_tools: ['Read', 'Bash'] } },
       },
-    ]);
-    const step = config.steps[0] as AgentWorkflowStep;
-    // Capabilities [Read, Grep] are the lowest layer; the direct provider_options [Read, Bash]
-    // replaces allowedTools wholesale. The capability-only `Grep` discriminates all three outcomes:
-    //   provider_options wins (replace) → [Read, Bash]  ← contract
-    //   union                            → [Read, Grep, Bash]
-    //   capabilities win (reverse order) → [Read, Grep]
-    expect(step.providerOptions?.claude?.allowedTools).toEqual(['Read', 'Bash']);
+    ])).toThrow(/runtime\.yaml/);
   });
 });
 
@@ -133,16 +125,12 @@ describe('capabilities reach the engine provider-options layers', () => {
       .toEqual({ claude: { allowedTools: ['Read'] }, opencode: { networkAccess: true } });
   });
 
-  it('should let the workflow provider_options layer override the capabilities layer when both declare the same leaf', async () => {
-    const { mergeStepProviderOptionsLayers } = await import('../infra/config/providerOptions.js');
+  it('should reject the workflow provider_options layer instead of merging it', () => {
     writeCapabilitySet('base-tools', 'claude:\n  allowed_tools:\n    - Read\n');
-    const config = normalize(
+    expect(() => normalize(
       { workflow_config: { provider_options: { claude: { allowed_tools: ['Read', 'Edit'] } } } },
       [{ name: 'implement', instruction: '{task}', capabilities: 'provider-options/base-tools.yaml' }],
-    );
-    const step = config.steps[0] as AgentWorkflowStep;
-    expect(mergeStepProviderOptionsLayers(step, { providerRouting: undefined, personaProviders: undefined }))
-      .toEqual({ claude: { allowedTools: ['Read', 'Edit'] } });
+    )).toThrow(/runtime\.yaml/);
   });
 });
 
@@ -158,7 +146,7 @@ describe('capabilities accepts a list of set names', () => {
       },
     ]);
     const step = config.steps[0] as AgentWorkflowStep;
-    expect(step.providerOptions).toEqual({
+    expect(step.capabilityProviderOptions).toEqual({
       claude: { allowedTools: ['Read'] },
       codex: { skills: { repo: true, user: true } },
     });
@@ -175,7 +163,7 @@ describe('capabilities accepts a list of set names', () => {
       },
     ]);
     const step = config.steps[0] as AgentWorkflowStep;
-    expect(step.providerOptions?.claude?.allowedTools).toEqual(['Read', 'Edit']);
+    expect(step.capabilityProviderOptions?.claude?.allowedTools).toEqual(['Read', 'Edit']);
   });
 
   it('should fail fast when any listed set does not resolve', () => {

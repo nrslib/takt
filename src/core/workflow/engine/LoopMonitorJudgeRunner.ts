@@ -12,7 +12,6 @@ import type { InternalAgentSeats } from '../../models/config-types.js';
 import {
   LOOP_JUDGE_ROUTING_KEY,
   loopJudgeProviderFields,
-  loopJudgeProviderOptions,
   loopJudgeStepName,
 } from '../loop-judge-step.js';
 import type { RuntimeStepResolution, StepProviderInfo } from '../types.js';
@@ -166,11 +165,8 @@ export class LoopMonitorJudgeRunner {
       personaPath: monitor.judge.personaPath,
       personaDisplayName: LOOP_JUDGE_ROUTING_KEY,
       providerRoutingPersonaKey: LOOP_JUDGE_ROUTING_KEY,
-      ...loopJudgeProviderFields(monitor.judge, this.deps.internalAgentSeats),
+      ...loopJudgeProviderFields(this.deps.internalAgentSeats),
       edit: false,
-      providerOptions: loopJudgeProviderOptions({
-        judge: monitor.judge,
-      }),
       instruction,
       rules: monitor.judge.rules,
       passPreviousResponse: true,
@@ -180,8 +176,8 @@ export class LoopMonitorJudgeRunner {
   /**
    * 判定役（judge）の provider/model を決める。
    *
-   * 優先順位は (1) judge.provider / judge.model の直接指定、(2) judge ステップの通常解決で
-   * 得られる provider_routing.* や persona_providers.loop-judge、(3) どちらも無い場合だけ
+   * 優先順位は (1) judge ステップの通常解決で得られる provider_routing.* や
+   * persona_providers.loop-judge、(2) どちらも無い場合だけ
    * トリガー元（ループを踏んだステップ）の解決済み provider/model（rate-limit フォールバック
    * 後の値を含む）。
    *
@@ -206,7 +202,6 @@ export class LoopMonitorJudgeRunner {
       triggeringRuntime,
     );
     const providerInfo = resolveLoopMonitorJudgeProviderModel({
-      judge: monitor.judge,
       judgeProviderInfo,
       triggeringProviderInfo,
     });

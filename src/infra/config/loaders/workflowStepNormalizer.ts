@@ -33,16 +33,11 @@ import {
   resolveRefToContent,
   resolveSelectorInstruction,
 } from './resource-resolver.js';
-import { mergeProviderOptions } from '../providerOptions.js';
-import { normalizeProviderBlockOptions } from '../providerBlockOptions.js';
-import type { ConfigProviderReference } from '../providerReference.js';
 import { validateWorkflowArpeggio, validateWorkflowMcpServers } from './workflowNormalizationPolicies.js';
 import { normalizeRule } from './workflowRuleNormalizer.js';
 import { normalizeArpeggio, normalizeOutputContract, normalizeTeamLeader } from './workflowStepFeaturesNormalizer.js';
 import { resolveStructuredOutput } from './workflowStructuredOutputResolver.js';
 import { normalizeWorkflowEffects } from './workflowSystemStepNormalizer.js';
-import { parseAiConditionExpression } from '../../../core/models/workflow-condition-expression.js';
-import { resolveWorkflowProviderOptions } from './workflowProviderOptionsResolver.js';
 import { resolveCapabilitySets } from './capabilitySetResolver.js';
 import { resolveWorkflowMcpReferences } from './workflowMcpReferenceResolver.js';
 import type { McpServerConfig } from '../../../core/models/index.js';
@@ -94,15 +89,12 @@ function normalizeCompletionRetry(
 
 type RawStep = z.output<typeof WorkflowStepRawSchema>;
 type RawSelectorGuidance = NonNullable<NonNullable<RawStep['dynamic_facets']>['selector']>;
-type RawProviderReference = RawStep['provider'];
 
 /** Workflow-level inputs threaded down to every step so `capabilities:` / `mcp:` references resolve. */
 export interface WorkflowLevelDefinitions {
   capabilityOptions?: StepProviderOptions;
   mcpServers?: Record<string, McpServerConfig>;
 }
-type RawPromotionEntry = NonNullable<RawStep['promotion']>[number];
-type NormalizedProviderReference = ReturnType<typeof normalizeProviderReference>;
 
 function normalizeWorkflowCallArgs(
   stepName: string,
@@ -120,49 +112,6 @@ function normalizeWorkflowCallArgs(
     normalized[argName] = value;
   }
   return normalized;
-}
-
-export function normalizeProviderReference(
-  provider: RawProviderReference,
-  model: RawStep['model'],
-  providerOptions: RawStep['provider_options'],
-  workflowDir: string,
-  context?: FacetResolutionContext,
-): {
-  provider: WorkflowStep['provider'];
-  model: WorkflowStep['model'];
-  providerOptions: StepProviderOptions | undefined;
-  providerSpecified: boolean;
-  modelSpecified: boolean;
-} {
-  const modelSpecified = model !== undefined;
-  const normalizedModel = model ?? undefined;
-  const normalizedProviderOptions = resolveWorkflowProviderOptions(
-    providerOptions as (Record<string, unknown> & { extends?: string }) | undefined,
-    workflowDir,
-    context,
-  );
-  const providerReference = provider as ConfigProviderReference<NonNullable<WorkflowStep['provider']>>;
-  if (typeof providerReference === 'string' || providerReference === undefined) {
-    return {
-      provider: providerReference,
-      model: normalizedModel,
-      providerOptions: normalizedProviderOptions,
-      providerSpecified: providerReference !== undefined,
-      modelSpecified,
-    };
-  }
-
-  return {
-    provider: providerReference.type,
-    model: providerReference.model ?? normalizedModel,
-    providerOptions: mergeProviderOptions(
-      normalizeProviderBlockOptions(providerReference),
-      normalizedProviderOptions,
-    ),
-    providerSpecified: true,
-    modelSpecified: providerReference.model !== undefined || modelSpecified,
-  };
 }
 
 function normalizeDynamicFacets(
@@ -243,46 +192,12 @@ function normalizeSelectorGuidance(
 }
 
 function normalizePromotionEntry(
-  entry: RawPromotionEntry,
-  normalizedProvider: NormalizedProviderReference,
+  entry: NonNullable<RawStep['promotion']>[number],
 ): NonNullable<AgentWorkflowStep['promotion']>[number] {
-  const aiExpression = entry.condition !== undefined
-    ? parseAiConditionExpression(entry.condition)
-    : undefined;
-  // Issue #1208 Stage 1 (CT-PROMO-1): a target-less `{at:N}` promotion is valid — the ladder in
-  // runtime.yaml supplies the target. Only reject when `provider_options` was explicitly written
-  // but resolved (e.g. via `extends`) to nothing, and no provider/model completes the target — a
-  // targeted promotion whose sole target evaporated is a configuration error, not a ladder request.
-  const providerOptionsSpecifiedButEmpty = entry.provider_options !== undefined
-    && normalizedProvider.providerOptions === undefined;
-  if (
-    entry.provider === undefined
-    && entry.model === undefined
-    && providerOptionsSpecifiedButEmpty
-  ) {
-    throw new Error('Configuration error: promotion entry requires at least one of "provider", "model", or "provider_options"');
+  if (entry.at === undefined) {
+    throw new Error('Configuration error: workflow promotion entry requires "at"');
   }
-  return {
-    at: entry.at,
-    condition: entry.condition,
-    aiConditionText: aiExpression?.text,
-    provider: normalizedProvider.provider,
-    providerSpecified: normalizedProvider.providerSpecified,
-    model: normalizedProvider.model,
-    providerOptions: normalizedProvider.providerOptions,
-  };
-}
-
-function validateWorkflowCallOverrides(
-  normalizedOverrides: NormalizedProviderReference,
-): void {
-  if (
-    normalizedOverrides.provider === undefined
-    && normalizedOverrides.model === undefined
-    && normalizedOverrides.providerOptions === undefined
-  ) {
-    throw new Error("Configuration error: workflow_call overrides require at least one of 'provider', 'model', or 'provider_options'");
-  }
+  return { at: entry.at };
 }
 
 function normalizeStepField<T>(
@@ -303,14 +218,7 @@ export function normalizeStepFromRaw(
   sections: WorkflowSections,
   workflowSchemas: Record<string, string> | undefined,
   stepPath: readonly PropertyKey[],
-  inheritedProvider?: WorkflowStep['provider'],
-  inheritedModel?: WorkflowStep['model'],
-  inheritedModelSpecified = inheritedModel !== undefined,
-  inheritedDirectProviderOptions?: WorkflowStep['providerOptions'],
-  inheritedWorkflowProviderOptions?: WorkflowStep['providerOptions'],
   inheritedAllowGitCommit?: boolean,
-  inheritedProviderIsWorkflowFallback = false,
-  inheritedModelIsWorkflowFallback = inheritedProviderIsWorkflowFallback,
   context?: FacetResolutionContext,
   projectOverrides?: WorkflowOverrides,
   globalOverrides?: WorkflowOverrides,
@@ -381,33 +289,11 @@ export function normalizeStepFromRaw(
       'knowledge',
       context,
   ));
-  const normalizedProvider = normalizeStepField(
-    stepPath,
-    ['provider_options', 'extends'],
-    () => normalizeProviderReference(step.provider, step.model, step.provider_options, workflowDir, context),
-  );
   const promotion = step.promotion?.map((entry, index) => normalizeStepField(
     stepPath,
     ['promotion', index],
-    () => normalizePromotionEntry(
-      entry,
-      normalizeStepField(
-        stepPath,
-        ['promotion', index, 'provider_options', 'extends'],
-        () => normalizeProviderReference(entry.provider, entry.model, entry.provider_options, workflowDir, context),
-      ),
-    ),
+    () => normalizePromotionEntry(entry),
   ));
-  const normalizedOverrides = step.overrides
-    ? normalizeStepField(
-      stepPath,
-      ['overrides', 'provider_options', 'extends'],
-      () => normalizeProviderReference(step.overrides!.provider, step.overrides!.model, step.overrides!.provider_options, workflowDir, context),
-    )
-    : undefined;
-  if (normalizedOverrides !== undefined) {
-    normalizeStepField(stepPath, ['overrides'], () => validateWorkflowCallOverrides(normalizedOverrides));
-  }
   const instruction = isSystemStep || isWorkflowCallStep
     ? undefined
     : step.instruction
@@ -453,13 +339,6 @@ export function normalizeStepFromRaw(
       kind: 'workflow_call',
       call: step.call!,
       vars: step.vars,
-      overrides: normalizedOverrides
-        ? {
-            provider: normalizedOverrides.provider,
-            model: normalizedOverrides.model,
-            providerOptions: normalizedOverrides.providerOptions,
-          }
-        : undefined,
       args: normalizeStepField(stepPath, ['args'], () => normalizeWorkflowCallArgs(step.name, step.args)),
       personaDisplayName: resolvedPersonaDisplayName,
       instruction: '',
@@ -493,23 +372,13 @@ export function normalizeStepFromRaw(
     globalOverrides,
   ));
 
-  // A step's own `capabilities:` replaces the workflow default rather than merging, and sits below
-  // `provider_options` so an explicit option on the same step still wins.
+  // A step's own `capabilities:` replaces the workflow default rather than merging. Capability
+  // options remain a separate layer from runtime profile options and never become a direct
+  // provider assignment.
   const stepCapabilityOptions = step.capabilities !== undefined
     ? normalizeStepField(stepPath, ['capabilities'], () => resolveCapabilitySets(step.capabilities!, workflowDir, context))
     : undefined;
   const effectiveCapabilityOptions = stepCapabilityOptions ?? workflowDefinitions?.capabilityOptions;
-  const directProviderOptions = mergeProviderOptions(inheritedDirectProviderOptions, normalizedProvider.providerOptions);
-  const providerOptions = mergeProviderOptions(
-    effectiveCapabilityOptions,
-    mergeProviderOptions(inheritedWorkflowProviderOptions, directProviderOptions),
-  );
-  const resolvedModel = normalizedProvider.modelSpecified
-    ? normalizedProvider.model
-    : (normalizedProvider.providerSpecified ? undefined : inheritedModel);
-  const inheritsDirectModel = inheritedModelSpecified
-    && !inheritedModelIsWorkflowFallback
-    && !normalizedProvider.providerSpecified;
 
   const normalizedAgentFields: Omit<
     NormalAgentWorkflowStep,
@@ -526,17 +395,8 @@ export function normalizeStepFromRaw(
     personaDisplayName: resolvedPersonaDisplayName,
     personaPath,
     mcpServers: resolvedMcpServers,
-    provider: normalizedProvider.provider ?? inheritedProvider,
-    providerSpecified: normalizedProvider.providerSpecified
-      || (inheritedProvider !== undefined && !inheritedProviderIsWorkflowFallback),
-    model: resolvedModel,
-    modelSpecified: normalizedProvider.modelSpecified
-      || inheritsDirectModel,
     promotion,
     requiredPermissionMode: step.required_permission_mode,
-    providerOptions,
-    directProviderOptions,
-    workflowProviderOptions: inheritedWorkflowProviderOptions,
     capabilityProviderOptions: effectiveCapabilityOptions,
     edit: step.edit,
     allowGitCommit: step.allow_git_commit ?? inheritedAllowGitCommit ?? false,
@@ -597,14 +457,7 @@ export function normalizeStepFromRaw(
           sections,
           workflowSchemas,
           [...stepPath, 'parallel', index],
-          normalizedAgentFields.provider,
-          normalizedAgentFields.model,
-          normalizedAgentFields.modelSpecified,
-          normalizedAgentFields.directProviderOptions,
-          normalizedAgentFields.workflowProviderOptions,
           normalizedAgentFields.allowGitCommit,
-          normalizedAgentFields.providerSpecified === false,
-          normalizedAgentFields.modelSpecified === false,
           context,
           projectOverrides,
           globalOverrides,
@@ -630,14 +483,7 @@ export function normalizeStepFromRaw(
       sections,
       workflowSchemas,
       [...stepPath, 'parallel', branch, index],
-      normalizedAgentFields.provider,
-      normalizedAgentFields.model,
-      normalizedAgentFields.modelSpecified,
-      normalizedAgentFields.directProviderOptions,
-      normalizedAgentFields.workflowProviderOptions,
       normalizedAgentFields.allowGitCommit,
-      normalizedAgentFields.providerSpecified === false,
-      normalizedAgentFields.modelSpecified === false,
       context,
       projectOverrides,
       globalOverrides,

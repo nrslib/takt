@@ -105,6 +105,34 @@ describe('config traced env overrides', () => {
     });
   });
 
+  it('project config は Codex permission control の env override を反映する', () => {
+    const projectDir = join(testRoot, 'project-codex-permission-control-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL = 'codex';
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.providerOptions).toEqual({
+      codex: { permissionControl: 'codex' },
+    });
+  });
+
+  it('project config と env の解決後に競合する Codex options を拒否する', () => {
+    const projectDir = join(testRoot, 'project-codex-permission-control-conflict-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      ['provider_options:', '  codex:', '    network_access: true'].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL = 'codex';
+
+    expect(() => loadProjectConfig(projectDir)).toThrow();
+  });
+
   it('project config は Codex Skill scope ごとの env override を反映する', () => {
     const projectDir = join(testRoot, 'project-codex-skills-env');
     const configDir = getProjectConfigDir(projectDir);

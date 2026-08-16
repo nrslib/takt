@@ -6,15 +6,16 @@ export type ProviderOptionsOriginResolver = (path: string) => ProviderOptionsTra
  * Source layer of a resolved provider/model value.
  *
  * Resolution priority (highest first):
- *   cli/env > promotion > step > workflow_call > provider_routing.steps >
+ *   cli/env > promotion > step > provider_routing.steps >
  *   provider_routing.tags > provider_routing.personas > persona_providers >
- *   auto.rules/auto.dynamic/auto.fallback > workflow > project > global > default
+ *   auto.rules/auto.dynamic/auto.fallback > capabilities > project >
+ *   global/runtime-v1 > default
  *
  * - `promotion`: step promotion override selected for the current execution
  * - `cli`: --provider / --model CLI flag
- * - `persona_providers`: workflow YAML's `persona_providers` map
- * - `step`: workflow YAML step's `provider` / `model` field
- * - `workflow`: workflow YAML's `workflow_config.provider` / `workflow_config.model`
+ * - `persona_providers`: legacy config's `persona_providers` map
+ * - `step`: engine-synthesized step provider/model fields
+ * - `capabilities`: enumeration-only source; never supplies provider/model values
  * - `project`: project `.takt/config.yaml`
  * - `global`: `~/.takt/config.yaml`
  * - `runtime-v1`: runtime.yaml `provider.defaults` (issue #1136 runtime-v1 mode)
@@ -32,8 +33,6 @@ export type ProviderResolutionSource =
   | 'provider_routing.tags'
   | 'provider_routing.steps'
   | 'step'
-  | 'workflow_call'
-  | 'workflow'
   | 'capabilities'
   | 'project'
   | 'global'

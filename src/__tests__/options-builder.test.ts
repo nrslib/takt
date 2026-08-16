@@ -4,11 +4,17 @@ import type { WorkflowResumePointEntry, WorkflowStep } from '../core/models/type
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 
 function createStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
+  const hasEngineProviderFields = overrides.provider !== undefined
+    || overrides.model !== undefined
+    || overrides.providerOptions !== undefined
+    || overrides.providerSpecified !== undefined
+    || overrides.modelSpecified !== undefined;
   return {
     name: 'reviewers',
     personaDisplayName: 'Reviewers',
     instruction: 'review',
     passPreviousResponse: false,
+    ...(hasEngineProviderFields ? { engineSynthesized: true } : {}),
     ...overrides,
   };
 }

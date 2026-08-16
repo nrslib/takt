@@ -119,7 +119,7 @@ describe('validateWorkflowConfig', () => {
 
   it('fails fast when a static auto-routing rule combines a codex provider with an explicit Claude model', () => {
     const workflow = createWorkflow({
-      steps: [createPlanAgent({ model: 'sonnet' })],
+      steps: [createPlanAgent({ model: 'sonnet', engineSynthesized: true })],
     });
 
     expect(() => validateWorkflowConfig(workflow, {
@@ -141,7 +141,7 @@ describe('validateWorkflowConfig', () => {
 
   it('fails fast when a selected dynamic pool candidate is incompatible with an explicit model', () => {
     const workflow = createWorkflow({
-      steps: [createPlanAgent({ model: 'sonnet', tags: ['codex-only'] })],
+      steps: [createPlanAgent({ model: 'sonnet', engineSynthesized: true, tags: ['codex-only'] })],
     });
 
     expect(() => validateWorkflowConfig(workflow, {
@@ -180,7 +180,7 @@ describe('validateWorkflowConfig', () => {
         instruction: '{task}',
         passPreviousResponse: true,
         rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
-        parallel: [createPlanAgent({ name: 'review', model: 'sonnet' })],
+        parallel: [createPlanAgent({ name: 'review', model: 'sonnet', engineSynthesized: true })],
       }],
     });
 
@@ -190,13 +190,12 @@ describe('validateWorkflowConfig', () => {
     })).toThrow(/auto_routing resolved model 'sonnet'.*provider is 'codex'/i);
   });
 
-  it('fails fast when a loop judge overrides an auto-routed codex step with a Claude model', () => {
+  it('fails fast when a runtime loop-judge seat has an incompatible model', () => {
     const workflow = createWorkflow({
       loopMonitors: [{
         cycle: ['plan'],
         threshold: 1,
         judge: {
-          model: 'sonnet',
           rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
         },
       }],
@@ -205,6 +204,9 @@ describe('validateWorkflowConfig', () => {
     expect(() => validateWorkflowConfig(workflow, {
       projectCwd: process.cwd(),
       autoRouting: createValidatorAutoRouting({ steps: { plan: 'codex' } }),
+      internalAgentSeats: {
+        loopJudge: { provider: 'codex', model: 'sonnet' },
+      },
     })).toThrow(/auto_routing resolved model 'sonnet'.*provider is 'codex'/i);
   });
 
@@ -215,7 +217,6 @@ describe('validateWorkflowConfig', () => {
         cycle: ['plan'],
         threshold: 1,
         judge: {
-          model: 'sonnet',
           rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
         },
       }],

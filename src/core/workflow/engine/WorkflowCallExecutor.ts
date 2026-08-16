@@ -1,5 +1,4 @@
 import { join } from 'node:path';
-import { mergeProviderOptions } from '../../../infra/config/providerOptions.js';
 import { createWorkRequirementEstimator } from '../../../agents/auto-routing-usecase.js';
 import type {
   WorkflowConfig,
@@ -12,7 +11,6 @@ import type {
 import type { RunPaths } from '../run/run-paths.js';
 import { trimResumePointStackForWorkflow } from '../run/resume-point.js';
 import {
-  getWorkflowCallOverrideErrorPath,
   resolveWorkflowCallChildAutoRouting,
 } from '../workflow-call-provider-context.js';
 import type { WorkRequirementEstimator } from '../auto-routing/contracts.js';
@@ -41,9 +39,6 @@ import type {
   WorkflowSharedRuntimeState,
   WorkflowStepFailureSummary,
 } from '../types.js';
-import { withWorkflowConfigErrorPath } from '../workflow-config-error.js';
-import { findWorkflowStepLocation } from '../workflow-step-location.js';
-import { translateWorkflowConfigError } from '../../../shared/workflowConfigMetadata.js';
 import { restoreWorkflowCallInvocationEvidence } from '../workflow-call-invocation-index.js';
 
 const PENDING_WORKFLOW_CALL_SITE_DIGEST = '0'.repeat(64);
@@ -207,7 +202,9 @@ export class WorkflowCallExecutor {
     const configuredEstimatorSource = options.autoRoutingEstimatorSource;
     const estimatorSource = configuredEstimatorSource
       ?? (options.autoRoutingEstimator === undefined ? 'engine-default' : 'injected');
-    const inheritsParentAutoRouting = childWorkflow.autoRouting === undefined;
+    // workflow YAML cannot define auto_routing. Child calls always inherit the
+    // runtime routing context supplied by the parent engine.
+    const inheritsParentAutoRouting = true;
     const estimator = estimatorSource === 'injected' || inheritsParentAutoRouting
       ? options.autoRoutingEstimator
       : createWorkRequirementEstimator({
@@ -554,7 +551,7 @@ export class WorkflowCallExecutor {
     });
     const inheritedSessions = new Map(this.deps.state.personaSessions);
     const sessionUpdates = new Map<string, WorkflowCallSessionUpdate>();
-    const childAutoRouting = resolveWorkflowCallChildAutoRouting(childWorkflow, options.autoRouting);
+    const childAutoRouting = resolveWorkflowCallChildAutoRouting(options.autoRouting);
     const childRuntimeAutoRouting = childAutoRouting === undefined
       ? undefined
       : withWorkflowTargetContext(
@@ -582,10 +579,6 @@ export class WorkflowCallExecutor {
       providerOptionsProviderSource: options.providerOptionsProviderSource === undefined
         ? undefined
         : request.childProviderInfo.providerSource,
-      workflowCallProviderOptions: mergeProviderOptions(
-        options.workflowCallProviderOptions,
-        request.step.overrides?.providerOptions,
-      ),
       autoRouting: childAutoRouting,
       autoStrategyOverride: options.autoStrategyOverride,
       autoRoutingEstimator: childRoutingRuntime?.estimator,
@@ -640,18 +633,7 @@ export class WorkflowCallExecutor {
         workflowCallFrame,
       ],
     };
-    let childEngine: WorkflowCallChildEngine;
-    try {
-      childEngine = this.deps.createEngine(childWorkflow, this.deps.getCwd(), this.deps.task, childOptions);
-    } catch (error) {
-      const overridePath = getWorkflowCallOverrideErrorPath(request.step, error);
-      const parentStepPath = findWorkflowStepLocation(parentConfig, request.step);
-      if (!overridePath || !parentStepPath) {
-        throw error;
-      }
-      const located = withWorkflowConfigErrorPath(error, [...parentStepPath, ...overridePath]);
-      throw translateWorkflowConfigError(parentConfig, located);
-    }
+    const childEngine = this.deps.createEngine(childWorkflow, this.deps.getCwd(), this.deps.task, childOptions);
 
     this.relayChildEvents(childEngine, request.step.name);
     const childResult = await childEngine.runWithResult();

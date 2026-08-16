@@ -1,5 +1,5 @@
 import type { InternalAgentSeats } from '../models/config-types.js';
-import type { AgentWorkflowStep, WorkflowConfig } from '../models/types.js';
+import type { AgentWorkflowStep } from '../models/types.js';
 import { internalAgentSeatOverride } from './internal-agent-seat.js';
 import {
   COMPLETION_RETRY_JUDGE_NAME,
@@ -9,8 +9,6 @@ import {
 
 export function buildCompletionRetryJudgeStep(input: {
   readonly reviewerStepName: string;
-  readonly workflowProvider?: WorkflowConfig['provider'];
-  readonly workflowModel?: WorkflowConfig['model'];
   readonly internalAgentSeats?: InternalAgentSeats;
 }): AgentWorkflowStep {
   const seat = internalAgentSeatOverride(input.internalAgentSeats?.completionRetryJudge);
@@ -19,12 +17,7 @@ export function buildCompletionRetryJudgeStep(input: {
     name: `_completion_retry_judge_${input.reviewerStepName}`,
     personaDisplayName: COMPLETION_RETRY_JUDGE_NAME,
     providerRoutingPersonaKey: COMPLETION_RETRY_JUDGE_NAME,
-    ...(seat ?? {
-      provider: input.workflowProvider,
-      providerSpecified: false,
-      model: input.workflowModel,
-      modelSpecified: false,
-    }),
+    ...seat,
     instruction: '',
     session: 'refresh',
     edit: false,

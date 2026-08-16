@@ -116,8 +116,8 @@ describe('Rate limit fallback config schema', () => {
     });
   });
 
-  it('should parse workflow config rate_limit_fallback.switch_chain at the workflow root', () => {
-    const result = WorkflowConfigRawSchema.parse({
+  it('should reject workflow config rate_limit_fallback at the workflow root', () => {
+    expect(() => WorkflowConfigRawSchema.parse({
       name: 'rate-limit-fallback-workflow',
       rate_limit_fallback: {
         switch_chain: [
@@ -133,14 +133,7 @@ describe('Rate limit fallback config schema', () => {
           rules: [{ condition: 'Done', next: 'COMPLETE' }],
         },
       ],
-    });
-
-    expect((result as Record<string, unknown>).rate_limit_fallback).toEqual({
-      switch_chain: [
-        { provider: 'codex', model: 'gpt-5' },
-        { provider: 'opencode' },
-      ],
-    });
+    })).toThrow(/runtime\.yaml/);
   });
 
   it('should preserve empty rate_limit_fallback.switch_chain in config schemas', () => {
@@ -151,8 +144,10 @@ describe('Rate limit fallback config schema', () => {
     expect(GlobalConfigSchema.parse({
       rate_limit_fallback: { switch_chain: [] },
     }).rate_limit_fallback).toEqual({ switch_chain: [] });
+  });
 
-    expect(WorkflowConfigRawSchema.parse({
+  it('should reject empty rate_limit_fallback.switch_chain at the workflow boundary', () => {
+    expect(() => WorkflowConfigRawSchema.parse({
       name: 'rate-limit-disabled-workflow',
       rate_limit_fallback: { switch_chain: [] },
       steps: [
@@ -163,7 +158,7 @@ describe('Rate limit fallback config schema', () => {
           rules: [{ condition: 'Done', next: 'COMPLETE' }],
         },
       ],
-    }).rate_limit_fallback).toEqual({ switch_chain: [] });
+    })).toThrow(/runtime\.yaml/);
   });
 
   it('should accept rate_limit_fallback without switch_chain in config schemas', () => {
@@ -174,8 +169,10 @@ describe('Rate limit fallback config schema', () => {
     expect(GlobalConfigSchema.parse({
       rate_limit_fallback: {},
     }).rate_limit_fallback).toEqual({});
+  });
 
-    expect(WorkflowConfigRawSchema.parse({
+  it('should reject rate_limit_fallback without switch_chain at the workflow boundary', () => {
+    expect(() => WorkflowConfigRawSchema.parse({
       name: 'rate-limit-disabled-workflow',
       rate_limit_fallback: {},
       steps: [
@@ -186,7 +183,7 @@ describe('Rate limit fallback config schema', () => {
           rules: [{ condition: 'Done', next: 'COMPLETE' }],
         },
       ],
-    }).rate_limit_fallback).toEqual({});
+    })).toThrow(/runtime\.yaml/);
   });
 
   it('should reject a switch_chain entry without provider', () => {
@@ -199,7 +196,7 @@ describe('Rate limit fallback config schema', () => {
     })).toThrow(/provider/);
   });
 
-  it('should reject workflow config rate_limit_fallback opencode entry without model during normalization', () => {
+  it('should reject workflow config rate_limit_fallback during normalization', () => {
     expect(() => normalizeWorkflowConfig({
       name: 'rate-limit-invalid-workflow',
       rate_limit_fallback: {
@@ -215,7 +212,7 @@ describe('Rate limit fallback config schema', () => {
           rules: [{ condition: 'Done', next: 'COMPLETE' }],
         },
       ],
-    }, process.cwd())).toThrow(/provider 'opencode' requires model/);
+    }, process.cwd())).toThrow(/runtime\.yaml/);
   });
 });
 
@@ -236,11 +233,6 @@ describe('WorkflowConfigRawSchema', () => {
         {
           name: 'step1',
           persona: 'coder',
-          provider_options: {
-            claude: {
-              allowed_tools: ['Read', 'Grep'],
-            },
-          },
           instruction: '{task}',
           rules: [
             { condition: 'Task completed', next: 'COMPLETE' },
@@ -252,11 +244,6 @@ describe('WorkflowConfigRawSchema', () => {
     const result = WorkflowConfigRawSchema.parse(config);
     expect(result.name).toBe('test-workflow');
     expect(result.steps).toHaveLength(1);
-    expect(result.steps[0]?.provider_options).toEqual({
-      claude: {
-        allowed_tools: ['Read', 'Grep'],
-      },
-    });
     expect(result.max_steps).toBe(10);
   });
 
@@ -347,11 +334,6 @@ describe('WorkflowConfigRawSchema', () => {
         {
           name: 'implement',
           persona: 'coder',
-          provider_options: {
-            claude: {
-              allowed_tools: ['Read', 'Edit', 'Write', 'Bash'],
-            },
-          },
           required_permission_mode: 'edit',
           instruction: '{task}',
           rules: [
@@ -365,112 +347,24 @@ describe('WorkflowConfigRawSchema', () => {
     expect(result.steps[0]?.required_permission_mode).toBe('edit');
   });
 
-  it('should parse step with provider_options', () => {
+  it('should reject provider/model/provider_options on steps with runtime.yaml guidance', () => {
     const config = {
       name: 'test-workflow',
       steps: [
         {
           name: 'implement',
           provider: 'codex',
-          provider_options: {
-            codex: { network_access: true },
-            opencode: { network_access: false },
-          },
+          model: 'gpt-5.3',
+          provider_options: { codex: { network_access: true } },
           instruction: '{task}',
         },
       ],
     };
 
-    const result = WorkflowConfigRawSchema.parse(config);
-    expect(result.steps[0]?.provider_options).toEqual({
-      codex: { network_access: true },
-      opencode: { network_access: false },
-    });
+    expect(() => WorkflowConfigRawSchema.parse(config as unknown)).toThrow(/runtime\.yaml/);
   });
 
-  it('should parse step with provider object block', () => {
-    const config = {
-      name: 'test-workflow',
-      steps: [
-        {
-          name: 'implement',
-          provider: {
-            type: 'codex',
-            model: 'gpt-5.3',
-            network_access: true,
-          },
-          instruction: '{task}',
-        },
-      ],
-    };
-
-    const result = WorkflowConfigRawSchema.parse(config as unknown);
-    const step = result.steps?.[0] as Record<string, unknown> | undefined;
-    const provider = step?.provider as Record<string, unknown> | undefined;
-    expect(provider?.type).toBe('codex');
-    expect(provider?.model).toBe('gpt-5.3');
-    expect(provider?.network_access).toBe(true);
-  });
-
-  it('should reject provider block when claude sets network_access', () => {
-    const config = {
-      name: 'test-workflow',
-      steps: [
-        {
-          name: 'implement',
-          provider: {
-            type: 'claude',
-            network_access: true,
-          },
-          instruction: '{task}',
-        },
-      ],
-    };
-
-    expect(() => WorkflowConfigRawSchema.parse(config as unknown)).toThrow(/network_access/);
-  });
-
-  it('should reject provider block when codex sets sandbox', () => {
-    const config = {
-      name: 'test-workflow',
-      steps: [
-        {
-          name: 'implement',
-          provider: {
-            type: 'codex',
-            sandbox: {
-              allow_unsandboxed_commands: true,
-            },
-          },
-          instruction: '{task}',
-        },
-      ],
-    };
-
-    expect(() => WorkflowConfigRawSchema.parse(config as unknown)).toThrow(/sandbox/);
-  });
-
-  it('should reject provider block with unknown fields', () => {
-    const config = {
-      name: 'test-workflow',
-      steps: [
-        {
-          name: 'implement',
-          provider: {
-            type: 'codex',
-            model: 'gpt-5.3',
-            network_access: true,
-            unknown_option: true,
-          },
-          instruction: '{task}',
-        },
-      ],
-    };
-
-    expect(() => WorkflowConfigRawSchema.parse(config as unknown)).toThrow();
-  });
-
-  it('should parse workflow-level workflow_config.provider block', () => {
+  it('should reject workflow-level provider settings with runtime.yaml guidance', () => {
     const config = {
       name: 'test-workflow',
       workflow_config: {
@@ -488,15 +382,10 @@ describe('WorkflowConfigRawSchema', () => {
       ],
     };
 
-    const result = WorkflowConfigRawSchema.parse(config as unknown);
-    const workflowConfig = result.workflow_config as Record<string, unknown> | undefined;
-    const provider = workflowConfig?.provider as Record<string, unknown> | undefined;
-    expect(provider?.type).toBe('codex');
-    expect(provider?.model).toBe('gpt-5.3');
-    expect(provider?.network_access).toBe(true);
+    expect(() => WorkflowConfigRawSchema.parse(config as unknown)).toThrow(/runtime\.yaml/);
   });
 
-  it('should parse workflow-level workflow_config.provider_options', () => {
+  it('should reject workflow-level provider_options with runtime.yaml guidance', () => {
     const config = {
       name: 'test-workflow',
       workflow_config: {
@@ -507,18 +396,12 @@ describe('WorkflowConfigRawSchema', () => {
       steps: [
         {
           name: 'implement',
-          provider: 'codex',
           instruction: '{task}',
         },
       ],
     };
 
-    const result = WorkflowConfigRawSchema.parse(config);
-    expect(result.workflow_config).toEqual({
-      provider_options: {
-        codex: { network_access: true },
-      },
-    });
+    expect(() => WorkflowConfigRawSchema.parse(config)).toThrow(/runtime\.yaml/);
   });
 
   it('should parse workflow-level workflow_config.runtime.prepare', () => {
@@ -545,29 +428,21 @@ describe('WorkflowConfigRawSchema', () => {
     });
   });
 
-  it('should parse workflow-level workflow_config', () => {
+  it('should parse workflow_config without provider settings', () => {
     const config = {
       name: 'test-workflow',
       workflow_config: {
-        provider_options: {
-          codex: { network_access: true },
-        },
       },
       steps: [
         {
           name: 'implement',
-          provider: 'codex',
           instruction: '{task}',
         },
       ],
     };
 
     const result = WorkflowConfigRawSchema.parse(config);
-    expect(result.workflow_config).toEqual({
-      provider_options: {
-        codex: { network_access: true },
-      },
-    });
+    expect(result.workflow_config).toEqual({});
   });
 
 
@@ -681,11 +556,6 @@ describe('WorkflowConfigRawSchema', () => {
             playwright: {
               command: 'npx',
               args: ['-y', '@anthropic-ai/mcp-server-playwright'],
-            },
-          },
-          provider_options: {
-            claude: {
-              allowed_tools: ['mcp__playwright__*'],
             },
           },
           instruction: '{task}',

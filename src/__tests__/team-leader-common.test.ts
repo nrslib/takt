@@ -4,7 +4,6 @@ import { createPartStep, createTeamLeaderPlanningStep } from '../core/workflow/e
 import {
   resolveDirectStepProviderOptions,
   resolveStepCapabilityProviderOptions,
-  resolveStepWorkflowProviderOptions,
 } from '../infra/config/providerOptions.js';
 import { InstructionBuilder } from '../core/workflow/instruction/InstructionBuilder.js';
 import { makeInstructionContext } from './test-helpers.js';
@@ -61,7 +60,7 @@ describe('createPartStep', () => {
     expect(partStep.tags).toEqual(['leader']);
   });
 
-  it('keeps parent providerOptions intact so part option resolution stays in OptionsBuilder', () => {
+  it('keeps engine-owned providerOptions intact so part option resolution stays in OptionsBuilder', () => {
     // Given
     const step: WorkflowStep = {
       name: 'implement',
@@ -69,6 +68,7 @@ describe('createPartStep', () => {
       personaDisplayName: 'Coder',
       instruction: 'do work',
       passPreviousResponse: false,
+      engineSynthesized: true,
       providerOptions: {
         codex: {
           networkAccess: false,
@@ -104,19 +104,17 @@ describe('createPartStep', () => {
     expect(partStep.providerOptions).toEqual(step.providerOptions);
   });
 
-  it('should carry every provider-options field the runtime layer merge reads when creating a part step', () => {
-    // resolveDirectStepProviderOptions / resolveStepWorkflowProviderOptions /
-    // resolveStepCapabilityProviderOptions は step 上のフィールド有無で読む対象を切り替える。
-    // part step がどれかを落とすと、親では効いていたオプションが part だけ黙って消える。
+  it('should carry engine and capability provider options when creating a part step', () => {
+    // 通常 workflow step に provider execution options は存在しない。
+    // ただし engine が合成した part step と capabilities の options は保持する。
     const step: WorkflowStep = {
       name: 'implement',
       persona: 'coder',
       personaDisplayName: 'Coder',
       instruction: 'do work',
       passPreviousResponse: false,
+      engineSynthesized: true,
       providerOptions: { codex: { networkAccess: true } },
-      directProviderOptions: { codex: { networkAccess: true } },
-      workflowProviderOptions: { opencode: { networkAccess: true } },
       capabilityProviderOptions: { claude: { allowedTools: ['Read'] } },
       teamLeader: {
         persona: 'leader',
@@ -128,7 +126,6 @@ describe('createPartStep', () => {
     const partStep = createPartStep(step, { id: 'part-1', title: 'API', instruction: 'implement api' });
 
     expect(resolveDirectStepProviderOptions(partStep)).toEqual({ codex: { networkAccess: true } });
-    expect(resolveStepWorkflowProviderOptions(partStep)).toEqual({ opencode: { networkAccess: true } });
     expect(resolveStepCapabilityProviderOptions(partStep)).toEqual({ claude: { allowedTools: ['Read'] } });
   });
 

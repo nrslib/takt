@@ -40,6 +40,14 @@ export interface ResolveConfigOptions {
 
 export type ConfigValueSource = 'env' | 'project' | 'workflow' | 'global' | 'default';
 
+/** Provider resolution never accepts workflow YAML as a source. */
+export function toProviderResolutionSource(source: ConfigValueSource): Exclude<ConfigValueSource, 'workflow'> {
+  if (source === 'workflow') {
+    throw new Error('Workflow provider settings are not supported; configure provider/model in runtime.yaml');
+  }
+  return source;
+}
+
 export interface ResolvedConfigValue<K extends ConfigParameterKey> {
   value: LoadedConfig[K];
   source: ConfigValueSource;

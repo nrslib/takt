@@ -1,11 +1,5 @@
 name: e2e-mock-slow-multi-step
 description: Multi-step mock workflow to keep tasks in-flight long enough for SIGINT E2E
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
 personas:
   test-coder: |
     You are the E2E test coder.

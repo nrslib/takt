@@ -169,9 +169,15 @@ describe('E2E: Exec mode (takt exec)', () => {
     const execute = workflow.steps.find((step) => step.name === 'execute');
     const review = workflow.steps.find((step) => step.name === 'review');
     const replan = workflow.steps.find((step) => step.name === 'replan');
-    expect(execute?.parallel?.[0]?.provider).toBe('mock');
-    expect(review?.parallel?.[0]?.provider).toBe('mock');
-    expect(replan?.provider).toBe('mock');
+    expect(execute?.parallel?.[0]).not.toHaveProperty('provider');
+    expect(execute?.parallel?.[0]).not.toHaveProperty('model');
+    expect(execute?.parallel?.[0]).not.toHaveProperty('provider_options');
+    expect(review?.parallel?.[0]).not.toHaveProperty('provider');
+    expect(review?.parallel?.[0]).not.toHaveProperty('model');
+    expect(review?.parallel?.[0]).not.toHaveProperty('provider_options');
+    expect(replan).not.toHaveProperty('provider');
+    expect(replan).not.toHaveProperty('model');
+    expect(replan).not.toHaveProperty('provider_options');
     expect(existsSync(join(isolatedEnv.taktDir, 'exec.yaml'))).toBe(false);
   }, 240_000);
 

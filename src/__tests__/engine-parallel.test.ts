@@ -468,8 +468,6 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
             makeStep('architecture-review', {
               persona: 'architecture-reviewer',
               personaDisplayName: 'Architecture Reviewer',
-              provider: 'codex',
-              model: 'gpt-5',
               outputContracts: [{ name: reportName }],
               rules: [makeRule('approved', 'COMPLETE')],
             }),
@@ -481,6 +479,11 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     const engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
       provider: 'claude',
+      providerRouting: {
+        steps: {
+          'architecture-review': { provider: 'codex', model: 'gpt-5' },
+        },
+      },
     });
     const startedSteps: string[] = [];
     const reportEvents: unknown[][] = [];
@@ -976,13 +979,6 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       persona: 'architecture-reviewer',
       policy: ['architecture-policy'],
       knowledge: ['architecture-domain'],
-      provider: 'codex',
-      model: 'gpt-architecture',
-      provider_options: {
-        codex: {
-          reasoning_effort: 'medium',
-        },
-      },
       output_contracts: {
         report: [{ name: 'architecture-review.md', format: 'review' }],
       },
@@ -991,13 +987,6 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       persona: 'frontend-reviewer',
       policy: ['frontend-policy'],
       knowledge: ['frontend-domain'],
-      provider: 'codex',
-      model: 'gpt-frontend',
-      provider_options: {
-        codex: {
-          reasoning_effort: 'high',
-        },
-      },
       output_contracts: {
         report: [{ name: 'frontend-review.md', format: 'review' }],
       },
@@ -1073,15 +1062,15 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     expect(participantCalls).toEqual([
       {
         persona: 'architecture-reviewer',
-        provider: 'codex',
-        model: 'gpt-architecture',
-        providerOptions: { codex: { reasoningEffort: 'medium' } },
+        provider: 'mock',
+        model: undefined,
+        providerOptions: undefined,
       },
       {
         persona: 'frontend-reviewer',
-        provider: 'codex',
-        model: 'gpt-frontend',
-        providerOptions: { codex: { reasoningEffort: 'high' } },
+        provider: 'mock',
+        model: undefined,
+        providerOptions: undefined,
       },
     ]);
     const reportedSteps = vi.mocked(runReportPhase).mock.calls.map(([step]) => step);
@@ -1183,11 +1172,6 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     if (parallel === undefined || !isDynamicParallelSubSteps(parallel)) {
       throw new Error('Expected normalized dynamic parallel step');
     }
-    const selectedBackend = parallel.pool.find((step) => step.name === 'backend')!;
-    selectedBackend.provider = 'opencode';
-    selectedBackend.providerSpecified = true;
-    selectedBackend.model = undefined;
-    selectedBackend.modelSpecified = true;
     const calls: Array<{ persona: string | undefined; selector: boolean }> = [];
     vi.mocked(runAgent).mockImplementation(async (persona, _instruction, options) => {
       calls.push({ persona, selector: options?.outputSchema !== undefined });
@@ -1204,6 +1188,11 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       projectCwd: tmpDir,
       provider: 'mock',
       selectorProvider: MOCK_SELECTOR_PROVIDER,
+      providerRouting: {
+        steps: {
+          backend: { provider: 'opencode' },
+        },
+      },
     }).run();
 
     expect(state.status).toBe('aborted');

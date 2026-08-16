@@ -497,7 +497,8 @@ steps:
     await expect(doctorWorkflowCommand([filePath], projectDir)).rejects.toThrow('Workflow validation failed');
 
     const output = mockError.mock.calls.flat().join('\n');
-    expect(output).toContain("provider 'opencode' requires model");
+    expect(output).toContain('workflow YAML no longer accepts provider execution settings');
+    expect(output).toContain('configure provider/model/options in runtime.yaml');
     expect(output).toContain(filePath);
     expect(output).toContain('from step fragment "opencode-review"');
     expect(output).toContain(fragmentPath);

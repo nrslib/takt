@@ -584,7 +584,6 @@ describe('WorkflowEngine Integration: Happy Path', () => {
         initialStep: 'plan',
         steps: [
           makeStep('plan', {
-            provider: 'cursor',
             structuredOutput: {
               schema: {
                 type: 'object',
@@ -599,7 +598,11 @@ describe('WorkflowEngine Integration: Happy Path', () => {
           }),
         ],
       };
-      engine = new WorkflowEngine(simpleConfig, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'claude' });
+      engine = new WorkflowEngine(simpleConfig, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        provider: 'cursor',
+        model: 'cursor-fast',
+      });
 
       mockRunAgentSequence([
         makeResponse({

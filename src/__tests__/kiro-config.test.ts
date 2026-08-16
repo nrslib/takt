@@ -104,8 +104,8 @@ describe('Kiro provider schema', () => {
     ).toThrow(/default_permission_mode/i);
   });
 
-  it('Given workflow and step provider kiro, When normalized, Then Kiro provider is preserved', () => {
-    const config = normalizeWorkflowConfig({
+  it('Given workflow and step provider kiro, When normalized, Then runtime.yaml migration is required', () => {
+    expect(() => normalizeWorkflowConfig({
       name: 'kiro-workflow',
       workflow_config: {
         provider: 'kiro',
@@ -118,10 +118,7 @@ describe('Kiro provider schema', () => {
           rules: [{ condition: 'done', next: 'COMPLETE' }],
         },
       ],
-    }, process.cwd());
-
-    expect(config.provider).toBe('kiro');
-    expect(config.steps[0]?.provider).toBe('kiro');
+    }, process.cwd())).toThrow(/runtime\.yaml/);
   });
 
   it('Given project config contains Kiro global-only fields, When parsed, Then it fails fast', () => {

@@ -25,7 +25,6 @@ import {
 } from './mode.js';
 import {
   collectLegacyProviderSignals,
-  collectStepPromotionEntries,
   selectConfigTaktProviders,
 } from './legacy-signals.js';
 import {
@@ -34,6 +33,7 @@ import {
   resolveConfigValueWithSource,
   resolveProviderOptionsWithTrace,
   resolveWorkflowConfigValues,
+  toProviderResolutionSource,
 } from '../index.js';
 import { resolveEffectiveAutoRouting } from '../../../core/workflow/auto-routing/effective-auto-routing.js';
 import type { WorkflowConfig } from '../../../core/models/index.js';
@@ -122,7 +122,7 @@ export function resolveRuntimeEnvironment(
  */
 export function resolveAuxiliaryProviderEnvironment(
   projectCwd: string,
-  workflow: Pick<WorkflowConfig, 'name' | 'provider' | 'model' | 'autoRouting'>
+  workflow: Pick<WorkflowConfig, 'name'>
     & Partial<Pick<WorkflowConfig, 'steps'>>,
 ): CompiledProviderEnvironment {
   return resolveAuxiliaryRuntimeEnvironment(projectCwd, workflow).providerEnvironment;
@@ -130,7 +130,7 @@ export function resolveAuxiliaryProviderEnvironment(
 
 export function resolveAuxiliaryRuntimeEnvironment(
   projectCwd: string,
-  workflow: Pick<WorkflowConfig, 'name' | 'provider' | 'model' | 'autoRouting'>
+  _workflow: Pick<WorkflowConfig, 'name'>
     & Partial<Pick<WorkflowConfig, 'steps'>>,
 ): ResolvedRuntimeEnvironment {
   const resolved = resolveWorkflowConfigValues(projectCwd, [
@@ -138,21 +138,17 @@ export function resolveAuxiliaryRuntimeEnvironment(
     'providerRouting',
     'autoRouting',
   ]);
-  const provider = resolveConfigValueWithSource(projectCwd, 'provider', {
-    workflowContext: { provider: workflow.provider },
-  });
-  const model = resolveConfigValueWithSource(projectCwd, 'model', {
-    workflowContext: { model: workflow.model },
-  });
+  const provider = resolveConfigValueWithSource(projectCwd, 'provider');
+  const model = resolveConfigValueWithSource(projectCwd, 'model');
   const providerOptions = resolveProviderOptionsWithTrace(projectCwd);
   const legacy: LegacyProviderEnvironmentInput = {
     provider: provider.value,
-    providerSource: provider.source,
+    providerSource: toProviderResolutionSource(provider.source),
     model: model.value,
-    modelSource: model.source,
+    modelSource: toProviderResolutionSource(model.source),
     personaProviders: resolved.personaProviders,
     providerRouting: resolved.providerRouting,
-    autoRouting: resolveEffectiveAutoRouting(workflow, resolved.autoRouting),
+    autoRouting: resolveEffectiveAutoRouting(resolved.autoRouting),
     providerOptions: providerOptions.value,
     taktProviders: selectConfigTaktProviders(
       loadProjectConfig(projectCwd).taktProviders,
@@ -164,13 +160,6 @@ export function resolveAuxiliaryRuntimeEnvironment(
     legacy,
     legacySignals: collectLegacyProviderSignals(
       legacy,
-      {
-        name: workflow.name,
-        provider: workflow.provider,
-        model: workflow.model,
-        autoRouting: workflow.autoRouting,
-        promotion: collectStepPromotionEntries(workflow.steps),
-      },
       providerOptions.source,
     ),
   });

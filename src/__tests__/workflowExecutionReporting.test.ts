@@ -89,7 +89,7 @@ describe('workflowExecutionReporting', () => {
     const infoMessages = out.info.mock.calls.map(([message]) => String(message));
     expect(infoMessages.some((message) => message.includes('run-843'))).toBe(true);
     expect(infoMessages.join('')).toContain('\\n\\tbad\\x1f');
-    expect(infoMessages.join('')).not.toMatch(/[\\u0000-\\u001f\\u007f-\\u009f]/);
+    expect(infoMessages.join('')).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
   });
 
   it('Given trace discovery metadata, When reporting workflow abort, Then it prints the same TraceQL query hints', () => {

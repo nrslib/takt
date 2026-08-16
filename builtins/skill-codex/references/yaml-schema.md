@@ -16,11 +16,8 @@ all_steps:                    # workflow 全体に適用する宣言（任意）
     - ref: careful-findings
       position: before_instruction
 
-# ワークフロー全体の provider / runtime 等
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
+# ワークフロー実行設定は runtime.yaml が所有する。workflow YAML では
+# capabilities で能力プリセットだけを参照し、provider / model / options は指定しない。
 
 # セクションマップ（キー → ファイルパスの対応表）
 policies:                     # ポリシー定義（任意）

@@ -72,7 +72,6 @@ describe('workflow structured_output fallback integration', () => {
           {
             name: 'plan_followup',
             persona: 'planner',
-            provider: 'cursor',
             instruction: 'Plan the next follow-up action.',
             structured_output: {
               schema_ref: 'followup-task',
@@ -91,7 +90,8 @@ describe('workflow structured_output fallback integration', () => {
 
     const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
       projectCwd: projectDir,
-      provider: 'claude',
+      provider: 'cursor',
+      providerSource: 'runtime-v1',
       structuredCaller: {
         judgeStatus: vi.fn(),
         evaluateCondition: vi.fn().mockResolvedValue(-1),
@@ -138,7 +138,6 @@ describe('workflow structured_output fallback integration', () => {
           {
             name: 'plan_fresh_improvement',
             persona: 'planner',
-            provider: 'cursor',
             instruction: 'Plan the next follow-up action.',
             structured_output: {
               schema_ref: 'followup-task',
@@ -152,7 +151,8 @@ describe('workflow structured_output fallback integration', () => {
     let abortFailure: WorkflowStepFailureSummary | undefined;
     const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
       projectCwd: projectDir,
-      provider: 'claude',
+      provider: 'cursor',
+      providerSource: 'runtime-v1',
       structuredCaller: {
         judgeStatus: vi.fn(),
         evaluateCondition: vi.fn(),
@@ -229,7 +229,6 @@ describe('workflow structured_output fallback integration', () => {
           {
             name: 'plan_fresh_improvement',
             persona: 'planner',
-            provider: 'cursor',
             instruction: 'Plan the next follow-up action.',
             structured_output: {
               schema_ref: 'followup-task',
@@ -249,7 +248,8 @@ describe('workflow structured_output fallback integration', () => {
     let abortReason = '';
     const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
       projectCwd: projectDir,
-      provider: 'claude',
+      provider: 'cursor',
+      providerSource: 'runtime-v1',
       structuredCaller: {
         judgeStatus: vi.fn(),
         evaluateCondition: vi.fn().mockResolvedValue(-1),
@@ -308,7 +308,6 @@ describe('workflow structured_output fallback integration', () => {
           {
             name: 'plan_fresh_improvement',
             persona: 'planner',
-            provider: 'cursor',
             instruction: 'Plan the next follow-up action.',
             structured_output: {
               schema_ref: 'followup-task',
@@ -327,7 +326,8 @@ describe('workflow structured_output fallback integration', () => {
 
     const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
       projectCwd: projectDir,
-      provider: 'claude',
+      provider: 'cursor',
+      providerSource: 'runtime-v1',
       structuredCaller: {
         judgeStatus: vi.fn(),
         evaluateCondition: vi.fn().mockResolvedValue(-1),
@@ -383,7 +383,6 @@ describe('workflow structured_output fallback integration', () => {
           {
             name: 'plan_followup',
             persona: 'planner',
-            provider: 'cursor',
             instruction: 'Plan the next follow-up action.',
             structured_output: {
               schema_ref: 'followup-contact',
@@ -402,7 +401,8 @@ describe('workflow structured_output fallback integration', () => {
 
     const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
       projectCwd: projectDir,
-      provider: 'claude',
+      provider: 'cursor',
+      providerSource: 'runtime-v1',
       structuredCaller: {
         judgeStatus: vi.fn(),
         evaluateCondition: vi.fn().mockResolvedValue(-1),

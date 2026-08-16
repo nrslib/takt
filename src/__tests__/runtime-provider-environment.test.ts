@@ -396,7 +396,6 @@ describe('collectLegacyProviderSignals', () => {
         },
         providerOptions: undefined,
       },
-      { name: 'wf' },
       'global',
     );
     const settings = signals.map((s) => s.setting);
@@ -422,7 +421,6 @@ describe('collectLegacyProviderSignals', () => {
         autoRouting: undefined,
         providerOptions: undefined,
       },
-      { name: 'wf' },
       'default',
     );
     expect(signals).toEqual([]);
@@ -439,8 +437,8 @@ describe('collectLegacyProviderSignals', () => {
       autoRouting: undefined,
       providerOptions: { codex: { skills: { repo: false } } },
     };
-    expect(collectLegacyProviderSignals(legacy, { name: 'wf' }, 'default')).toEqual([]);
-    expect(collectLegacyProviderSignals(legacy, { name: 'wf' }, 'env')).toEqual([]);
+    expect(collectLegacyProviderSignals(legacy, 'default')).toEqual([]);
+    expect(collectLegacyProviderSignals(legacy, 'env')).toEqual([]);
   });
 
   it('reports provider_options only when explicitly configured in project/global config.yaml', () => {
@@ -454,31 +452,27 @@ describe('collectLegacyProviderSignals', () => {
       autoRouting: undefined,
       providerOptions: { codex: { network_access: true } },
     };
-    expect(collectLegacyProviderSignals(legacy, { name: 'wf' }, 'global').map((s) => s.setting))
+    expect(collectLegacyProviderSignals(legacy, 'global').map((s) => s.setting))
       .toContain('provider_options');
-    expect(collectLegacyProviderSignals(legacy, { name: 'wf' }, 'project').map((s) => s.setting))
+    expect(collectLegacyProviderSignals(legacy, 'project').map((s) => s.setting))
       .toContain('provider_options');
   });
 
-  it('reports workflow-level provider/model as legacy settings', () => {
-    const signals = collectLegacyProviderSignals(
-      {
-        provider: 'codex',
-        providerSource: 'workflow',
-        model: 'm',
-        modelSource: 'workflow',
-        personaProviders: undefined,
-        providerRouting: undefined,
-        autoRouting: undefined,
-        providerOptions: undefined,
-      },
-      { name: 'wf', provider: 'codex', model: 'm' },
-      'default',
-    );
-    expect(signals.map((s) => s.location).some((l) => l.includes('workflow'))).toBe(true);
+  it('does not report removed workflow provider settings as legacy signals', () => {
+    const signals = collectLegacyProviderSignals({
+      provider: 'codex',
+      providerSource: 'workflow' as never,
+      model: 'm',
+      modelSource: 'workflow' as never,
+      personaProviders: undefined,
+      providerRouting: undefined,
+      autoRouting: undefined,
+      providerOptions: undefined,
+    }, 'default');
+    expect(signals).toEqual([]);
   });
 
-  it('locates workflow-derived auto_routing at the workflow, not config.yaml', () => {
+  it('locates the remaining config.yaml auto_routing signal at config.yaml', () => {
     const autoRouting = { strategy: 'balanced' } as unknown as LegacyProviderEnvironmentInput['autoRouting'];
     const signals = collectLegacyProviderSignals(
       {
@@ -491,28 +485,6 @@ describe('collectLegacyProviderSignals', () => {
         autoRouting,
         providerOptions: undefined,
       },
-      { name: 'wf', autoRouting },
-      'default',
-    );
-    const autoRoutingSignal = signals.find((s) => s.setting === 'auto_routing');
-    expect(autoRoutingSignal?.location).toBe('workflow "wf":auto_routing');
-    expect(autoRoutingSignal?.location).not.toContain('config.yaml');
-  });
-
-  it('locates config.yaml-derived auto_routing at config.yaml when the workflow does not set it', () => {
-    const autoRouting = { strategy: 'balanced' } as unknown as LegacyProviderEnvironmentInput['autoRouting'];
-    const signals = collectLegacyProviderSignals(
-      {
-        provider: undefined,
-        providerSource: 'default',
-        model: undefined,
-        modelSource: 'default',
-        personaProviders: undefined,
-        providerRouting: undefined,
-        autoRouting,
-        providerOptions: undefined,
-      },
-      { name: 'wf' },
       'default',
     );
     const autoRoutingSignal = signals.find((s) => s.setting === 'auto_routing');
@@ -533,7 +505,6 @@ describe('collectLegacyProviderSignals', () => {
     // Selector provider set → signal with the internal_agents migration target.
     const selectorSignals = collectLegacyProviderSignals(
       { ...base, taktProviders: { selector: { provider: 'opencode' } } },
-      { name: 'wf' },
       'default',
     );
     const selectorSignal = selectorSignals.find((s) => s.setting === 'takt_providers');
@@ -546,7 +517,6 @@ describe('collectLegacyProviderSignals', () => {
     expect(
       collectLegacyProviderSignals(
         { ...base, taktProviders: { assistant: { provider: 'claude' } } },
-        { name: 'wf' },
         'default',
       ).map((s) => s.setting),
     ).toContain('takt_providers');
@@ -554,11 +524,10 @@ describe('collectLegacyProviderSignals', () => {
     expect(
       collectLegacyProviderSignals(
         { ...base, taktProviders: { selector: { model: 'gpt-x' } } },
-        { name: 'wf' },
         'default',
       ),
     ).toEqual([]);
     // No takt_providers at all → no signal.
-    expect(collectLegacyProviderSignals(base, { name: 'wf' }, 'default')).toEqual([]);
+    expect(collectLegacyProviderSignals(base, 'default')).toEqual([]);
   });
 });

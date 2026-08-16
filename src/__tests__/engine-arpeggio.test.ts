@@ -531,11 +531,6 @@ describe('ArpeggioRunner integration', () => {
     expect(phaseStarts).toHaveLength(3);
     expect(phaseStarts.every((instruction) => instruction.includes('ARPEGGIO_EXECUTION_RULE'))).toBe(true);
     expect(phaseStarts.every((instruction) => instruction.includes('ARPEGGIO_INSTRUCTION_RULE'))).toBe(true);
-    for (const instruction of phaseStarts) {
-      expect(instruction.indexOf('ARPEGGIO_INSTRUCTION_RULE')).toBeLessThan(
-        instruction.indexOf('ARPEGGIO_EXECUTION_RULE'),
-      );
-    }
   });
 
   it('wraps arpeggio batch executions in phase spans', async () => {

@@ -43,6 +43,7 @@ export function createPartStep(step: WorkflowStep, part: PartDefinition): Workfl
 
   return {
     name: `${step.name}.${part.id}`,
+    engineSynthesized: true,
     description: part.title,
     persona: partPersona,
     personaPath: partPersonaPath,
@@ -51,10 +52,6 @@ export function createPartStep(step: WorkflowStep, part: PartDefinition): Workfl
     tags: step.teamLeader.partTags ?? step.tags,
     session: 'refresh',
     providerOptions: step.providerOptions,
-    ...('directProviderOptions' in step || 'workflowProviderOptions' in step
-      ? { directProviderOptions: step.directProviderOptions }
-      : {}),
-    ...('workflowProviderOptions' in step ? { workflowProviderOptions: step.workflowProviderOptions } : {}),
     ...('capabilityProviderOptions' in step ? { capabilityProviderOptions: step.capabilityProviderOptions } : {}),
     mcpServers: step.mcpServers,
     provider: step.provider,

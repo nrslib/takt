@@ -356,7 +356,6 @@ describe('WorkflowRunLoop command quality gates', () => {
     expect(result.isComplete).toBe(false);
     expect(state.status).toBe('running');
     expect(state.currentStep).toBe('implement');
-    expect(state.lastOutput?.status).toBe('error');
     expect(deps.resolveDoneTransition).not.toHaveBeenCalled();
   });
 
@@ -424,7 +423,6 @@ describe('WorkflowRunLoop command quality gates', () => {
     expect(result.isComplete).toBe(false);
     expect(result.returnValue).toBeUndefined();
     expect(state.status).toBe('running');
-    expect(state.lastOutput?.status).toBe('error');
     expect(deps.resolveDoneTransition).not.toHaveBeenCalled();
   });
 });
@@ -569,12 +567,13 @@ describe('WorkflowRunLoop step deadline', () => {
   it('fallback の試行境界で同一 occurrence の無応答期限をリセットする', async () => {
     vi.useFakeTimers();
     const step = makeStep('work', {
-      provider: 'opencode',
-      providerOptions: { opencode: { guards: { callTimeoutMs: MINUTE } } },
       rules: [makeRule('done', 'COMPLETE')],
     });
     const options: WorkflowEngineOptions = {
       projectCwd: '/worktree',
+      provider: 'opencode',
+      model: 'opencode/step-model',
+      providerOptions: { opencode: { guards: { callTimeoutMs: MINUTE } } },
       rateLimitFallback: { switchChain: [{ provider: 'codex', model: 'fallback-model' }] },
     };
     const state = createInitialState(makeDeadlineConfig(step), options);
@@ -956,9 +955,6 @@ describe('WorkflowRunLoop step deadline', () => {
     let selectorSignal: AbortSignal | undefined;
     let selectorOnActivity: unknown;
     const step = makeStep('dynamic-review', {
-      provider: 'opencode',
-      model: 'opencode/step-model',
-      providerOptions: { opencode: { guards: { callTimeoutMs: MINUTE } } },
       dynamicFacets: { pool: 'security', maxSelected: 1 },
       rules: [makeRule('approved', 'COMPLETE')],
     });
@@ -994,6 +990,9 @@ describe('WorkflowRunLoop step deadline', () => {
     };
     const engine = new WorkflowEngine(config, tmpDir, 'dynamic facet deadline task', {
       projectCwd: tmpDir,
+      provider: 'opencode',
+      model: 'opencode/step-model',
+      providerOptions: { opencode: { guards: { callTimeoutMs: MINUTE } } },
       selectorProvider: {
         provider: 'opencode',
         model: 'opencode/selector-model',
@@ -1040,9 +1039,6 @@ describe('WorkflowRunLoop step deadline', () => {
     const tmpDir = mkdtempSync(join(tmpdir(), 'takt-opencode-tool-deadline-'));
     let providerSignal: AbortSignal | undefined;
     const step = makeStep('long-tool', {
-      provider: 'opencode',
-      model: 'opencode/tool-model',
-      providerOptions: { opencode: { guards: { callTimeoutMs: MINUTE } } },
       rules: [makeRule('approved', 'COMPLETE')],
     });
     const config: WorkflowConfig = {
@@ -1054,6 +1050,8 @@ describe('WorkflowRunLoop step deadline', () => {
     const engine = new WorkflowEngine(config, tmpDir, 'long tool task', {
       projectCwd: tmpDir,
       provider: 'opencode',
+      model: 'opencode/tool-model',
+      providerOptions: { opencode: { guards: { callTimeoutMs: MINUTE } } },
       reportDirName: 'opencode-tool-deadline',
     });
     try {

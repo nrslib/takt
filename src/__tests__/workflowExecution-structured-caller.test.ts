@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import type { WorkflowCallStep, WorkflowConfig } from '../core/models/index.js';
+import type { AutoRoutingConfig, WorkflowCallStep, WorkflowConfig } from '../core/models/index.js';
+import type { ProviderType } from '../shared/types/provider.js';
+import type { resolveWorkflowConfigValues } from '../infra/config/index.js';
 import {
   ProviderNeutralStructuredCaller,
   type StructuredCaller,
@@ -79,6 +81,24 @@ const {
     mockResolveConfigValueWithSource: vi.fn(),
   };
 });
+
+function resolvedWorkflowConfigValues(
+  provider: ProviderType,
+  autoRouting: AutoRoutingConfig | undefined,
+): ReturnType<typeof resolveWorkflowConfigValues> {
+  return {
+    notificationSound: true,
+    notificationSoundEvents: {},
+    provider,
+    runtime: undefined,
+    preventSleep: false,
+    model: undefined,
+    logging: undefined,
+    analytics: undefined,
+    observability: disabledObservability,
+    autoRouting,
+  };
+}
 
 vi.mock('../core/workflow/index.js', async () => {
   const errorModule = await import('../core/workflow/ask-user-question-error.js');
@@ -319,6 +339,7 @@ describe('executeWorkflow structuredCaller injection', () => {
     cleanupDirs = [];
     projectCwd = mkdtempSync(join(tmpdir(), 'takt-structured-caller-project-'));
     cleanupDirs.push(projectCwd);
+    process.env.TAKT_CONFIG_DIR = join(projectCwd, 'global-config');
   });
 
   afterEach(() => {
@@ -1030,11 +1051,12 @@ steps:
       ],
       defaultPool: 'general',
       candidatePools: { general: { candidates: ['reasoning', 'coding'], fallback: 'reasoning' } },
-    } satisfies NonNullable<WorkflowConfig['autoRouting']>;
-    const config = {
-      ...makeConfig(),
-      autoRouting,
-    };
+    } satisfies AutoRoutingConfig;
+    const config = makeConfig();
+    const { resolveWorkflowConfigValues } = await import('../infra/config/index.js');
+    vi.mocked(resolveWorkflowConfigValues).mockReturnValue(
+      resolvedWorkflowConfigValues('cursor', autoRouting),
+    );
 
     await executeWorkflow(config, 'task', projectCwd, {
       projectCwd,
@@ -1046,10 +1068,8 @@ steps:
   });
 
   it('should delegate autoStrategy override application to WorkflowEngine', async () => {
-    const config = {
-      ...makeConfig(),
-      provider: 'mock',
-      autoRouting: {
+    const config = makeConfig();
+    const autoRouting = {
         strategy: 'cost',
         router: { provider: 'claude-sdk', model: 'claude-haiku-4-5-20251001' },
         candidates: [
@@ -1070,11 +1090,15 @@ steps:
         ],
         defaultPool: 'general',
         candidatePools: { general: { candidates: ['reasoning', 'coding'], fallback: 'reasoning' } },
-      },
-    } satisfies WorkflowConfig;
+      } satisfies AutoRoutingConfig;
+    const { resolveWorkflowConfigValues } = await import('../infra/config/index.js');
+    vi.mocked(resolveWorkflowConfigValues).mockReturnValue(
+      resolvedWorkflowConfigValues('mock', autoRouting),
+    );
 
     await executeWorkflow(config, 'task', projectCwd, {
       projectCwd,
+      provider: 'mock',
       autoStrategy: 'performance',
     });
 

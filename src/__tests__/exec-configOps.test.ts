@@ -278,14 +278,20 @@ describe('applyExecOverrides', () => {
       expect(result.session.model).toBeUndefined();
       expect(result.workers[0]!.model).toBeUndefined();
       expect(result.reviews[0]!.model).toBeUndefined();
-      expect(summary).toContain(`${provider}/(provider default)`);
-      expect(findRawStep(rawWorkflow, 'execute').parallel?.[0]).toMatchObject({ provider, model: null });
-      expect(findRawStep(rawWorkflow, 'review').parallel?.[0]).toMatchObject({ provider, model: null });
-      expect(findRawStep(rawWorkflow, 'replan')).toMatchObject({ provider, model: null });
-      expect(rawWorkflow.loop_monitors?.map((monitor) => monitor.judge)).toEqual([
-        expect.objectContaining({ provider, model: null }),
-        expect.objectContaining({ provider, model: null }),
-      ]);
+      expect(summary).toContain(`Assistant agent: ${provider}/(provider default)`);
+      expect(summary).toContain(`Worker agent x1: ${provider}/(provider default)`);
+      expect(summary).toContain(`Review agent x1: ${provider}/(provider default)`);
+      expect(findRawStep(rawWorkflow, 'execute').parallel?.[0]).not.toHaveProperty('provider');
+      expect(findRawStep(rawWorkflow, 'execute').parallel?.[0]).not.toHaveProperty('model');
+      expect(findRawStep(rawWorkflow, 'review').parallel?.[0]).not.toHaveProperty('provider');
+      expect(findRawStep(rawWorkflow, 'review').parallel?.[0]).not.toHaveProperty('model');
+      expect(findRawStep(rawWorkflow, 'replan')).not.toHaveProperty('provider');
+      expect(findRawStep(rawWorkflow, 'replan')).not.toHaveProperty('model');
+      expect(rawWorkflow.loop_monitors).toHaveLength(2);
+      for (const monitor of rawWorkflow.loop_monitors ?? []) {
+        expect(monitor.judge).not.toHaveProperty('provider');
+        expect(monitor.judge).not.toHaveProperty('model');
+      }
     },
   );
 

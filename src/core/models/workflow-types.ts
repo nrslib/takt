@@ -2,7 +2,6 @@ import type { ProviderType } from '../../shared/types/provider.js';
 import type {
   CanonicalWorkflowResumeFrame,
 } from '../../shared/types/workflow-resume.js';
-import type { AutoRoutingConfig } from './config-types.js';
 import type { PermissionMode } from './status.js';
 import type { AgentResponse } from './response.js';
 import type { InteractiveMode } from './interactive-mode.js';
@@ -10,7 +9,6 @@ import type { TeamLeaderConfig } from './part.js';
 import type {
   McpServerConfig,
   StepProviderOptions,
-  WorkflowCallOverrides,
   WorkflowRuntimeConfig,
   WorkflowStepKind,
 } from './workflow-provider-options.js';
@@ -55,6 +53,7 @@ export type {
   ClaudeSandboxSettings,
   ProviderGuardOptions,
   CodexProviderOptions,
+  CodexPermissionControl,
   OpenCodeGuardOptions,
   OpenCodeGuardProfile,
   OpenCodeProviderOptions,
@@ -66,7 +65,6 @@ export type {
   PiProviderOptions,
   StepProviderOptions,
   WorkflowStepKind,
-  WorkflowCallOverrides,
 } from './workflow-provider-options.js';
 export {
   RUNTIME_PREPARE_PRESETS,
@@ -269,13 +267,7 @@ export interface DynamicFacetSelectionSnapshot {
 }
 
 export interface WorkflowPromotionEntry {
-  at?: number;
-  condition?: string;
-  aiConditionText?: string;
-  provider?: ProviderType;
-  providerSpecified?: boolean;
-  model?: string;
-  providerOptions?: StepProviderOptions;
+  at: number;
 }
 
 interface WorkflowStepBase {
@@ -298,6 +290,12 @@ interface WorkflowStepBase {
    * schema has no such field.
    */
   engineSynthesized?: true;
+  /** Engine-owned provider identity. Workflow YAML cannot set these fields. */
+  provider?: ProviderType;
+  providerSpecified?: boolean;
+  model?: string;
+  modelSpecified?: boolean;
+  providerOptions?: StepProviderOptions;
   /** Engine-owned agent whose Phase 1 must use the shared fresh-session transport. */
   internalFreshSession?: true;
   /** Runtime-profile options tied to this synthesized step's direct provider identity. */
@@ -318,15 +316,8 @@ interface AgentWorkflowStepBase extends WorkflowStepBase {
   allowGitCommit?: boolean;
   mcpServers?: Record<string, McpServerConfig>;
   personaPath?: string;
-  provider?: ProviderType;
-  providerSpecified?: boolean;
-  model?: string;
-  modelSpecified?: boolean;
   promotion?: WorkflowPromotionEntry[];
   requiredPermissionMode?: PermissionMode;
-  providerOptions?: StepProviderOptions;
-  directProviderOptions?: StepProviderOptions;
-  workflowProviderOptions?: StepProviderOptions;
   capabilityProviderOptions?: StepProviderOptions;
   edit?: boolean;
   qualityGates?: QualityGate[];
@@ -459,7 +450,6 @@ export interface WorkflowCallStep extends WorkflowStepBase {
   mode?: never;
   call: string;
   vars?: Record<string, WorkflowCallVariableValue>;
-  overrides?: WorkflowCallOverrides;
   args?: Record<string, WorkflowCallArgValue>;
   sessionKey?: never;
   requiresUserInput?: never;
@@ -532,10 +522,6 @@ export interface LoopMonitorRule {
 export interface LoopMonitorJudge {
   persona?: string;
   personaPath?: string;
-  provider?: ProviderType;
-  model?: string;
-  modelSpecified?: boolean;
-  providerOptions?: StepProviderOptions;
   instruction?: string;
   rules: LoopMonitorRule[];
 }
@@ -552,11 +538,6 @@ export interface WorkflowConfig {
   description?: string;
   subworkflow?: WorkflowSubworkflowConfig;
   schemas?: Record<string, string>;
-  provider?: ProviderType;
-  model?: string;
-  providerOptions?: StepProviderOptions;
-  autoRouting?: AutoRoutingConfig;
-  rateLimitFallback?: RateLimitFallbackConfig;
   runtime?: WorkflowRuntimeConfig;
   personas?: Record<string, string>;
   policies?: Record<string, string>;
