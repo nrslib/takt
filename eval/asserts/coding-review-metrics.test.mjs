@@ -63,6 +63,31 @@ test('in-place-mutation requires the target and mutation wording in one context'
   );
 });
 
+test('deferred-validation detects the violation without requiring issue-number wording', () => {
+  assert.equal(
+    evaluateMetric(
+      'recall/deferred-validation',
+      '`any` の patch を無検証で展開しています。TODO のまま残すべき処理ではありません。',
+    ),
+    true,
+  );
+  assert.equal(
+    evaluateMetric(
+      'recall/deferred-validation',
+      'バリデーションを先送りした TODO も明示的な REJECT 条件です。',
+    ),
+    true,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', '変更には `TODO: validate the patch fields` があります。'),
+    false,
+  );
+  assert.equal(
+    evaluateMetric('recall/deferred-validation', 'TODO の記載はありますが、検証は実装済みです。'),
+    false,
+  );
+});
+
 test('blocking-verdict accepts both reject vocabularies', () => {
   assert.equal(evaluateMetric('recall/blocking-verdict', 'Result: REJECT'), true);
   assert.equal(evaluateMetric('recall/blocking-verdict', '判定: REQUEST CHANGES'), true);

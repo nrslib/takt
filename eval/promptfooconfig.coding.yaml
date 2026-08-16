@@ -68,10 +68,14 @@ tests:
             'i',
           ).test(output);
       - type: javascript
-        metric: recall/todo-without-issue
+        metric: recall/deferred-validation
         value: |
-          return /TODO/i.test(output) &&
-            /(issue|ticket|チケット|課題|根拠|番号|未追跡|管理されていない|未実装|無実装|未完了|未解決|先送り|未完成|放置|解消|除去|削除)/i.test(output);
+          const target = '(?:TODO|FIXME)';
+          const problem = '(?:先送り|未実装|未完成|無検証|未検証|残すべき処理では(?:ない|ありません)|defer(?:red|ring)?|unfinished|unimplemented|unvalidated)';
+          return /(validat|バリデーション|検証)/i.test(output) && new RegExp(
+            `${target}[^\\n。.!?]{0,160}${problem}|${problem}[^\\n。.!?]{0,160}${target}`,
+            'i',
+          ).test(output);
       - type: javascript
         metric: recall/blocking-verdict
         value: |

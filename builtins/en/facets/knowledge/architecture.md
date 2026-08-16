@@ -441,40 +441,6 @@ Don't overlook compromises made to "just make it work."
 
 Unfinished-code judgment follows the coding policy. In architecture review, check whether TODO/FIXME comments, empty implementations, or stubs are being used as substitutes for required boundaries, authorization, validation, or contract updates.
 
-TODO/FIXME without an issue number, external blocker, and removal condition is REJECT.
-
-```kotlin
-// REJECT - Authorization check deferred with TODO
-// TODO: Add authorization check by facility ID
-fun deleteCustomHoliday(@PathVariable id: String) {
-    deleteCustomHolidayInputPort.execute(input)
-}
-
-// APPROVE - Implement now
-fun deleteCustomHoliday(@PathVariable id: String) {
-    val currentUserFacilityId = getCurrentUserFacilityId()
-    val holiday = findHolidayById(id)
-    require(holiday.facilityId == currentUserFacilityId) {
-        "Cannot delete holiday from another facility"
-    }
-    deleteCustomHolidayInputPort.execute(input)
-}
-```
-
-Acceptable TODO/FIXME cases:
-
-| Condition | Example | Judgment |
-|-----------|---------|----------|
-| External dependency prevents implementation + issue exists + removal condition documented | `// TODO(#123): Implement after API key obtained` | Acceptable |
-| Technical constraint prevents implementation + issue exists + removal condition documented | `// TODO(#456): Waiting for library bug fix` | Acceptable |
-| "Future implementation", "add later" | `// TODO: Add validation` | REJECT |
-| "No time for now" | `// TODO: Refactor` | REJECT |
-
-Correct handling:
-- Needed now → Implement now
-- Not needed now → Delete the code
-- External blocker → Create issue and include ticket number in comment
-
 ## DRY Violation Detection
 
 DRY reduces duplicated knowledge, not merely similar code shapes. Once two implementations with the same meaning, contract, and reason to change are observed, decide whether they belong under a common owner. Choose the form that naturally owns the responsibility: a function, value object, component, policy, or another local abstraction.

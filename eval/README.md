@@ -259,7 +259,7 @@ relative to the config file's directory (`eval/`), not the process cwd.
   the grader to
   save subscription quota. This trades fidelity vs production runs — only
   compare scores between runs with the same effort setting. Known effect:
-  minor findings (e.g. the TODO-without-issue plant) become flaky at low
+  minor planted findings can become flaky at low
   effort; quantify with `--repeat` before judging a facet change. The
   `fix-loop-convergence` and `initial-review-external-identity-wiring` suites
   are explicit production-condition exceptions: their Codex CLI rows use

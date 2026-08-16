@@ -441,40 +441,6 @@ function createUser(data: UserData) {
 
 未完成コードの判定基準はコーディングポリシーに従う。アーキテクチャレビューでは、TODO/FIXME、空実装、スタブが設計上必要な境界・認可・バリデーション・契約更新の代替になっていないかを見る。
 
-Issue番号・外部制約・除去条件のない TODO/FIXME は REJECT。
-
-```kotlin
-// REJECT - 認可チェックをTODOで先送り
-// TODO: 施設IDによる認可チェックを追加
-fun deleteCustomHoliday(@PathVariable id: String) {
-    deleteCustomHolidayInputPort.execute(input)
-}
-
-// APPROVE - 今実装する
-fun deleteCustomHoliday(@PathVariable id: String) {
-    val currentUserFacilityId = getCurrentUserFacilityId()
-    val holiday = findHolidayById(id)
-    require(holiday.facilityId == currentUserFacilityId) {
-        "Cannot delete holiday from another facility"
-    }
-    deleteCustomHolidayInputPort.execute(input)
-}
-```
-
-TODO/FIXMEが許容されるケース:
-
-| 条件 | 例 | 判定 |
-|------|-----|------|
-| 外部依存で今は実装不可 + Issue化済み + 除去条件あり | `// TODO(#123): APIキー取得後に実装` | 許容 |
-| 技術的制約で回避不可 + Issue化済み + 除去条件あり | `// TODO(#456): ライブラリバグ修正待ち` | 許容 |
-| 「将来実装」「後で追加」 | `// TODO: バリデーション追加` | REJECT |
-| 「時間がないので」 | `// TODO: リファクタリング` | REJECT |
-
-正しい対処:
-- 今必要 → 今実装する
-- 今不要 → コードを削除する
-- 外部要因で不可 → Issue化してチケット番号をコメントに入れる
-
 ## DRY違反の検出
 
 DRY はコード形状ではなく知識の重複を減らす原則である。同じ意味・契約・変更理由を持つ実装が2つ確認できたら、共通の所有者へ集約するか判断する。集約方法は関数、値オブジェクト、コンポーネント、ポリシーなど、その責務に最も自然な形を選ぶ。

@@ -92,7 +92,6 @@ Apply the next three test-related REJECT conditions only when all four facts are
 - Unused code ("just in case" code)
 - Direct mutation of caller-owned, shared, or externally exposed objects/arrays
 - Swallowed errors (empty catch blocks)
-- TODO/FIXME without an issue number, external blocker, and removal condition
 - Method proliferation doing the same thing (should be absorbed by configuration differences)
 - Specific implementation leaking into generic layers (imports and branching for specific implementations in generic layers)
 - Internal implementation exported from public API (infrastructure functions or internal classes exposed publicly)
@@ -123,7 +122,6 @@ Not blocking, but improvement is recommended.
 - Tests coupled to implementation details
 - Overly complex functions/files
 - Naming diverges from reality
-- TODO/FIXME with issue number, external blocker, and removal condition
 - `@ts-ignore` or `eslint-disable` without justification
 
 ### APPROVE
