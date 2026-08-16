@@ -1,5 +1,12 @@
 name: review-fix-frontend
 description: フロントエンド特化レビュー＋修正ループ（構造・モジュール化・コンポーネント設計・セキュリティ・コーディング）
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 max_steps: 30
 facet_pools:
   security-review-facets:

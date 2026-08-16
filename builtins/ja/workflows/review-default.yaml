@@ -1,5 +1,12 @@
 name: review-default
 description: 多角レビュー - 専門レビュアーで並列レビューした後、supervisor がレビュー結果を統合する
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 max_steps: 10
 facet_pools:
   security-review-facets:

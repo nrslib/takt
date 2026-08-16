@@ -1,5 +1,12 @@
 name: peer-review
 description: 専門並列ピアレビュー（+ ai-antipattern-review-2nd）→ 指摘裁定 → 共通修正ループ後、supervisor が要件充足を最終裁定する。
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 subworkflow:
   callable: true
   visibility: internal

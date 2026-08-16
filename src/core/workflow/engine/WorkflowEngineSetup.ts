@@ -57,6 +57,7 @@ import {
   recordWorkflowStepProviderEventActivity,
   type WorkflowStepAbortSignalContext,
 } from './step-deadline.js';
+import { mergeWorkflowWideRules } from './workflow-wide-rule-merge.js';
 
 const log = createLogger('workflow-engine');
 
@@ -254,10 +255,10 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       : { inputReader: new SelectorInputReader(params.options.selectorGitCommandRunner) }),
   });
   const companionEnabled = params.options.companionEnabled ?? DEFAULT_COMPANION_ENABLED;
-  const workflowRules: readonly WorkflowWideRule[] = [
-    ...(params.options.inheritedWorkflowRules ?? []),
-    ...(params.config.allStepsRules ?? []),
-  ];
+  const workflowRules: readonly WorkflowWideRule[] = mergeWorkflowWideRules(
+    params.options.inheritedWorkflowRules,
+    params.config.allStepsRules,
+  );
 
   const stepExecutor = new StepExecutor({
     optionsBuilder,

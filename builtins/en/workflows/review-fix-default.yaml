@@ -1,5 +1,12 @@
 name: review-fix-default
 description: Multi-perspective review + fix loop (architecture, security, testing, and coding in parallel, followed by a supervisor checking whether requirements are met)
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 max_steps: 30
 facet_pools:
   security-review-facets:

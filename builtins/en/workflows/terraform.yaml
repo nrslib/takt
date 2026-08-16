@@ -1,5 +1,12 @@
 name: terraform
 description: Terraform IaC development workflow (plan → implement → parallel review → final gate → fix → complete)
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 max_steps: 15
 initial_step: plan
 steps:

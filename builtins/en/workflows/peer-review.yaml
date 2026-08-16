@@ -1,5 +1,12 @@
 name: peer-review
 description: Specialist parallel peer reviewers (+ ai-antipattern-review-2nd) -> finding adjudication -> shared remediation loop, followed by one supervisor that makes the final requirement-fulfillment decision.
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 subworkflow:
   callable: true
   visibility: internal

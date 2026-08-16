@@ -42,7 +42,7 @@ steps: [...]                  # step 定義の配列（推奨キー名）
 loop_monitors: [...]          # ループ監視設定（任意）。cycle には step 名を並べる
 ```
 
-`all_steps.rules` はすべての agent step の Phase 1 指示へ適用するルール参照です。参照は project `.takt/workflows/rules/`、global `~/.takt/workflows/rules/`、builtin の順に `<ref>.md` を解決します。文字列は自動実行ルールの後、object の `position: before_instruction` は `Instructions` の直前に挿入されます。ルールは `workflow_call` の子へ親から子の順で加算継承されます。レポート出力・ステータス判定・companion には適用されず、必須出力見出しと `{report:...}` を含むルールファイルはロード時に拒否されます。`all_steps` を省略した場合は従来の prompt を維持します。
+`all_steps.rules` はすべての agent step の Phase 1 指示へ適用するルール参照です。参照は project `.takt/workflows/rules/`、global `~/.takt/workflows/rules/`、builtin の順に `<ref>.md` を解決します。文字列は自動実行ルールの後、object の `position: before_instruction` は `Instructions` の直前に挿入されます。ルールは `workflow_call` の子へ親から子の順で加算継承されます。親子で `ref`・`position`・解決済み内容がすべて一致する場合は親側を残して1回だけ適用し、同じ `ref` でも位置または内容が異なる場合は両方を維持します。レポート出力・ステータス判定・companion には適用されず、必須出力見出しと `{report:...}` を含むルールファイルはロード時に拒否されます。`all_steps` を省略した場合は従来の prompt を維持します。
 
 ### セクションマップの解決
 

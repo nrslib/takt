@@ -45,6 +45,7 @@ import { withWorkflowConfigErrorPath } from '../workflow-config-error.js';
 import { findWorkflowStepLocation } from '../workflow-step-location.js';
 import { translateWorkflowConfigError } from '../../../shared/workflowConfigMetadata.js';
 import { restoreWorkflowCallInvocationEvidence } from '../workflow-call-invocation-index.js';
+import { mergeWorkflowWideRules } from './workflow-wide-rule-merge.js';
 
 const PENDING_WORKFLOW_CALL_SITE_DIGEST = '0'.repeat(64);
 
@@ -630,10 +631,10 @@ export class WorkflowCallExecutor {
         ...options.workflowCallVars,
         ...request.step.vars,
       },
-      inheritedWorkflowRules: [
-        ...(options.inheritedWorkflowRules ?? []),
-        ...(parentConfig.allStepsRules ?? []),
-      ],
+      inheritedWorkflowRules: mergeWorkflowWideRules(
+        options.inheritedWorkflowRules,
+        parentConfig.allStepsRules,
+      ),
       sharedRuntime: this.deps.sharedRuntime,
       resumeStackPrefix: [
         ...resumeStackPrefix,

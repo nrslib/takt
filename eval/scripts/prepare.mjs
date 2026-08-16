@@ -622,6 +622,7 @@ async function main() {
       policySourcePath,
       knowledgeSourcePath,
       workflowCallVars,
+      workflowRules: config.allStepsRules,
       language,
     };
 

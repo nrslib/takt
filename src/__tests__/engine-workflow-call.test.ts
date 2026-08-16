@@ -172,6 +172,7 @@ initial_step: review
 max_steps: 3
 all_steps:
   rules:
+    - ref: parent-rule
     - ref: child-rule
       position: before_instruction
 steps:
@@ -214,6 +215,7 @@ steps:
     expect(childPrompt).toEqual(expect.any(String));
     expect(childPrompt).toContain('PARENT_WORKFLOW_RULE');
     expect(childPrompt).toContain('CHILD_WORKFLOW_RULE');
+    expect(childPrompt!.split('PARENT_WORKFLOW_RULE')).toHaveLength(2);
     expect(childPrompt!.indexOf('PARENT_WORKFLOW_RULE')).toBeLessThan(
       childPrompt!.indexOf('CHILD_WORKFLOW_RULE'),
     );

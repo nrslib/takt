@@ -1,5 +1,12 @@
 name: review-dual-cqrs
 description: フロントエンド＋CQRS+ES特化レビュー（構造・モジュール化・ドメインモデル・コンポーネント設計・セキュリティ・コーディング）
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 max_steps: 10
 facet_pools:
   security-review-facets:

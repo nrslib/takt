@@ -6,6 +6,7 @@ import { ReportInstructionBuilder } from '../core/workflow/instruction/ReportIns
 import type { ReportInstructionContext } from '../core/workflow/instruction/ReportInstructionBuilder.js';
 import { StatusJudgmentBuilder } from '../core/workflow/instruction/StatusJudgmentBuilder.js';
 import type { StatusJudgmentContext } from '../core/workflow/instruction/StatusJudgmentBuilder.js';
+import { mergeWorkflowWideRules } from '../core/workflow/engine/workflow-wide-rule-merge.js';
 import { makeInstructionContext, makeRule, makeStep } from './test-helpers.js';
 
 type ResolvedWorkflowRule = {
@@ -78,6 +79,65 @@ describe('all_steps.rules schema', () => {
   });
 });
 
+describe('workflow-wide rule inheritance merging', () => {
+  const sharedRule: ResolvedWorkflowRule = {
+    ref: 'shared-rule',
+    position: 'before_instruction',
+    content: 'SHARED_RULE_CONTENT',
+  };
+
+  it('keeps one parent occurrence when a child declares the same rule', () => {
+    const merged = mergeWorkflowWideRules([sharedRule], [{ ...sharedRule }]);
+
+    expect(merged).toEqual([sharedRule]);
+    expect(merged[0]).toBe(sharedRule);
+  });
+
+  it('keeps one occurrence through a three-level workflow_call chain', () => {
+    const childRules = mergeWorkflowWideRules([sharedRule], [{ ...sharedRule }]);
+    const grandchildRules = mergeWorkflowWideRules(childRules, [{ ...sharedRule }]);
+
+    expect(grandchildRules).toEqual([sharedRule]);
+  });
+
+  it('keeps rules with the same ref when their content differs', () => {
+    const childRule = {
+      ...sharedRule,
+      content: 'CHILD_SPECIFIC_CONTENT',
+    };
+
+    expect(mergeWorkflowWideRules([sharedRule], [childRule])).toEqual([
+      sharedRule,
+      childRule,
+    ]);
+  });
+
+  it('keeps rules with the same ref when their positions differ', () => {
+    const childRule = {
+      ...sharedRule,
+      position: 'after_execution_rules' as const,
+    };
+
+    expect(mergeWorkflowWideRules([sharedRule], [childRule])).toEqual([
+      sharedRule,
+      childRule,
+    ]);
+  });
+
+  it('preserves duplicate declarations within one workflow', () => {
+    const duplicate = { ...sharedRule };
+
+    expect(mergeWorkflowWideRules(undefined, [sharedRule, duplicate])).toEqual([
+      sharedRule,
+      duplicate,
+    ]);
+    expect(mergeWorkflowWideRules([sharedRule, duplicate], undefined)).toEqual([
+      sharedRule,
+      duplicate,
+    ]);
+  });
+});
+
 describe('workflow-wide Phase 1 rule rendering', () => {
   const rules: readonly ResolvedWorkflowRule[] = [
     {
@@ -112,7 +172,11 @@ describe('workflow-wide Phase 1 rule rendering', () => {
     expect(prompt).toContain('RULE_INSTRUCTION_FIRST');
     expect(prompt.indexOf('RULE_EXECUTION_FIRST')).toBeLessThan(prompt.indexOf('RULE_EXECUTION_SECOND'));
     expect(prompt.indexOf('RULE_EXECUTION_SECOND')).toBeLessThan(prompt.indexOf('RULE_INSTRUCTION_FIRST'));
-    expect(prompt.indexOf('RULE_INSTRUCTION_FIRST')).toBeLessThan(prompt.indexOf('Do the requested work.'));
+    expect(prompt.indexOf('RULE_INSTRUCTION_FIRST')).toBeLessThan(prompt.indexOf('## Instructions'));
+    expect(prompt.indexOf('## Instructions')).toBeLessThan(prompt.indexOf('Do the requested work.'));
+    expect(
+      prompt.slice(0, prompt.indexOf('## Instructions')).trimEnd().endsWith('RULE_INSTRUCTION_FIRST'),
+    ).toBe(true);
     expect(prompt.indexOf('Do NOT run git commit')).toBeLessThan(prompt.indexOf('RULE_EXECUTION_FIRST'));
     expect(prompt.indexOf('RULE_EXECUTION_FIRST')).toBeLessThan(prompt.indexOf('Do the requested work.'));
     expect(prompt.match(/all steps in this workflow/gi)).toHaveLength(1);
@@ -148,7 +212,10 @@ describe('workflow-wide Phase 1 rule rendering', () => {
       const precedingNewlines = withoutRules
         .slice(0, followingSectionIndex)
         .match(/\n+$/)?.[0].length;
+      const instructionsIndex = withoutRules.indexOf('## Instructions');
       expect(precedingNewlines).toBe(expectedNewlines);
+      expect(instructionsIndex).toBeGreaterThan(0);
+      expect(withoutRules.slice(0, instructionsIndex).match(/\n+$/)?.[0]).toBe('\n\n\n\n');
       expect(withoutRules).toContain('## Instructions\nDo the requested work.');
       expect(withoutRules).not.toContain('## Instructions\n\nDo the requested work.');
       expect(withEmptyRules).toBe(withoutRules);

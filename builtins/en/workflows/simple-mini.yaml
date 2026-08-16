@@ -1,5 +1,12 @@
 name: simple-mini
 description: A lightweight development workflow that trusts a capable model's judgment (plan → implement → review ⇄ fix → COMPLETE). It omits dedicated test writing and the final requirement check while letting the model select relevant available skills.
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 capabilities: [readonly, enable-skills]
 max_steps: 20
 initial_step: plan

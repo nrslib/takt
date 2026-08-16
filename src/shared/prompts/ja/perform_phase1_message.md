@@ -87,12 +87,12 @@ Knowledge はトリミングされる場合があります。Source Path に従�
 ## Additional User Inputs
 {{userInputs}}
 {{/if}}
-
-## Instructions
 {{#if hasWorkflowRulesBeforeInstruction}}{{workflowRulesNoticeBeforeInstruction}}
 {{workflowRulesBeforeInstruction}}
 
-{{/if}}{{instructions}}
+{{else}}
+{{/if}}## Instructions
+{{instructions}}
 {{#if hasQualityGates}}
 
 ## Quality Gates

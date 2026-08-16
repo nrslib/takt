@@ -3,8 +3,7 @@ Review the implementation semantics. Judge whether the meaning of the code is co
 Steps:
 1. Review supporting material classified as `applicable` by the shared procedure
 2. Trace changed definitions and consumers, then apply the applicable supporting material to the diff and surrounding code
-3. Include the location, the concrete conditions under which it breaks, and the fix direction in every finding
-4. Do not raise unfounded speculation or preference-only rewrites
+3. Do not raise unfounded speculation or preference-only rewrites
 
 {{include:instructions/review-round-scope}}
 {{include:instructions/review-investigation-discipline}}
