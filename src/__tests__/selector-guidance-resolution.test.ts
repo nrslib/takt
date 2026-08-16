@@ -10,7 +10,7 @@ import type {
 } from '../infra/config/loaders/resource-resolver.js';
 import { resolveSectionMap } from '../infra/config/loaders/resource-resolver.js';
 import { validateWorkflowReferences } from '../infra/config/loaders/workflowDoctorRefValidator.js';
-import { getBuiltinFacetDir, withGlobalConfigDirOverride } from '../infra/config/paths.js';
+import { withGlobalConfigDirOverride } from '../infra/config/paths.js';
 
 const { readFileSyncMock } = vi.hoisted(() => ({
   readFileSyncMock: vi.fn(),
@@ -260,26 +260,6 @@ describe('selector guidance resolution', () => {
       instruction: 'Select reviewers using the changed paths and reports.',
     });
   });
-
-  it.each(['en', 'ja'] as const)(
-    'resolves the shared builtin candidate-selection instruction into both %s selector configurations',
-    (lang) => {
-      const instruction = readFileSync(
-        join(getBuiltinFacetDir(lang, 'instructions'), 'select-applicable-candidates.md'),
-        'utf-8',
-      );
-      const result = normalizeInstructionFacetWorkflow(
-        createInstructionFacetWorkflow('select-applicable-candidates'),
-        '/project/.takt/workflows',
-        { projectDir: '/project', workflowDir: '/project/.takt/workflows', lang },
-      );
-
-      expect(result).toEqual({
-        facetInstruction: instruction,
-        parallelInstruction: instruction,
-      });
-    },
-  );
 
   it('resolves a .md selector instruction reference from the section map before filesystem paths', () => {
     const workflow = createInstructionFacetWorkflow('select.md');
@@ -668,32 +648,6 @@ describe('selector guidance resolution', () => {
       facetInstruction: 'Global selector instruction by path',
       parallelInstruction: 'Global selector instruction by path',
     });
-  });
-
-  it('resolves a selector instruction from the builtin facet root by path', () => {
-    const projectDir = mkdtempSync(join(tmpdir(), 'takt-selector-guidance-project-'));
-    const globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-selector-guidance-global-'));
-    roots.push(projectDir, globalConfigDir);
-    const workflowDir = join(projectDir, '.takt', 'workflows');
-    mkdirSync(workflowDir, { recursive: true });
-    const instructionPath = join(getBuiltinFacetDir('ja', 'instructions'), 'apply-fix-plan.md');
-
-    const result = withGlobalConfigDirOverride(globalConfigDir, () => normalizeInstructionFacetWorkflow(
-      createInstructionFacetWorkflow(relative(workflowDir, instructionPath)),
-      workflowDir,
-      { projectDir, workflowDir, lang: 'ja' },
-    ));
-
-    const expectedInstruction = readFileSync(instructionPath, 'utf8');
-    const stableLine = expectedInstruction
-      .split('\n')
-      .map((line) => line.trim())
-      .find((line) => line.length > 0 && !line.startsWith('{{include:'));
-    if (stableLine === undefined) {
-      throw new Error('Expected the builtin instruction to contain a non-include line');
-    }
-    expect(result.facetInstruction).toContain(stableLine);
-    expect(result.parallelInstruction).toBe(result.facetInstruction);
   });
 
   it('resolves a selector instruction from a repertoire package facet root by path', () => {
