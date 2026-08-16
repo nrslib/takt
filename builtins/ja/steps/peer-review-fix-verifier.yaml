@@ -8,7 +8,7 @@ params:
 name: fix-verifier
 capabilities: readonly
 tags:
-  - review
+  - verification
 edit: false
 persona: coding-reviewer
 policy:

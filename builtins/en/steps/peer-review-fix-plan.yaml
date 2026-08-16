@@ -15,7 +15,6 @@ name: fix-plan
 capabilities: readonly
 tags:
   - plan
-  - review
 edit: false
 persona: planner
 policy:

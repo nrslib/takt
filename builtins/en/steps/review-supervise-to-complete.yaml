@@ -1,7 +1,6 @@
 name: supervise
 capabilities: readonly
 tags:
-  - review
   - supervise
 edit: false
 persona: supervisor

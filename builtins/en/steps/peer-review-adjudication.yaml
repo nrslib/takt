@@ -8,7 +8,7 @@ params:
 name: review-adjudication
 capabilities: readonly
 tags:
-  - review
+  - adjudication
 edit: false
 persona: review-adjudicator
 policy:

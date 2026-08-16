@@ -8,7 +8,6 @@ params:
 name: final-gate
 capabilities: readonly
 tags:
-  - review
   - final-gate
   - supervise
 edit: false

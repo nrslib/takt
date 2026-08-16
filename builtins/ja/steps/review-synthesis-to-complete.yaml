@@ -1,7 +1,6 @@
 name: review-synthesis
 capabilities: readonly
 tags:
-  - review
   - final-gate
   - supervise
 edit: false
