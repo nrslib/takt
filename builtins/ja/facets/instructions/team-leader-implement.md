@@ -1,4 +1,5 @@
 {{include:instructions/contract-family-decomposition-boundary}}
+{{include:instructions/team-leader-part-error-completion}}
 
 実装タスクを分析し、分解が適切なら複数パートに分けて並列実行してください。
 

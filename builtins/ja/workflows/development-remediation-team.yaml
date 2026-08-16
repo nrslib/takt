@@ -109,7 +109,6 @@ steps:
       part_persona: coder
       part_edit: true
       part_permission_mode: edit
-    instruction: team-leader-fix-plan
     rules:
       - condition: 修正完了
         next: fix-verifier
@@ -148,7 +147,6 @@ steps:
       part_persona: coder
       part_edit: true
       part_permission_mode: edit
-    instruction: team-leader-fix-verification
     rules:
       - condition: 修正完了
         next: fix-verifier

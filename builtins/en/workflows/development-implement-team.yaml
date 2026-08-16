@@ -38,8 +38,7 @@ steps:
         $param: development_policy
       development_knowledge:
         $param: development_knowledge
-      implementation_instruction:
-        $param: implementation_instruction
+      implementation_instruction: team-leader-implement
     team_leader:
       max_concurrency: 2
       initial_max_parts: 2
@@ -48,7 +47,6 @@ steps:
       part_persona: coder
       part_edit: true
       part_permission_mode: edit
-    instruction: team-leader-implement
     rules:
       - condition: Implementation is complete
         next: COMPLETE
