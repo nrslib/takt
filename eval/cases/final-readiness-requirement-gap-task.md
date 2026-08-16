@@ -1,0 +1,1 @@
+Add case-insensitive `local` and `cloud` mode handling to both the CLI options entry and the project configuration entry. Both entries must store the normalized value, and existing invalid-value rejection must remain unchanged. The project configuration entry must also return `source: 'project'`.

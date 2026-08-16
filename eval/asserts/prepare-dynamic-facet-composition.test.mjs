@@ -17,8 +17,6 @@ const SMOKE_RUNTIME_DIR = fileURLToPath(
 );
 const SOURCE_WORKFLOW = 'experimental-review';
 const SECURITY_REVIEW_POOL = 'security-review-facets';
-const FIXED_POLICY = 'fixed policy';
-const FIXED_KNOWLEDGE = 'fixed knowledge';
 const CANDIDATE_KNOWLEDGE = readFileSync(
   new URL('../../builtins/ja/facets/knowledge/security-local.md', import.meta.url),
   'utf8',
@@ -35,8 +33,8 @@ function selection(overrides = {}) {
 
 function target() {
   return {
-    policyContents: [{ content: FIXED_POLICY }],
-    knowledgeContents: [{ content: FIXED_KNOWLEDGE }],
+    policyContents: [{ content: 'fixed policy' }],
+    knowledgeContents: [{ content: 'fixed knowledge' }],
   };
 }
 
@@ -50,13 +48,10 @@ function snapshotFile(path) {
   };
 }
 
-function assertCompositionError(run, ...identifiers) {
+function assertCompositionError(run, cause) {
   assert.throws(run, (error) => {
-    assert.ok(error instanceof Error);
-    assert.ok(error.message.includes(TARGET_ID));
-    for (const identifier of identifiers) {
-      assert.ok(error.message.includes(identifier));
-    }
+    assert.match(error.message, new RegExp(`eval target "${TARGET_ID}"`));
+    assert.match(error.message, cause);
     return true;
   });
 }
@@ -70,7 +65,7 @@ test('composes knowledge from the selected dynamic facet candidate', () => {
   );
 
   assert.ok(result.knowledgeContents.some(({ content }) => content.trim() === CANDIDATE_KNOWLEDGE));
-  assert.ok(result.policyContents.some(({ content }) => content === FIXED_POLICY));
+  assert.ok(result.policyContents.some(({ content }) => content === 'fixed policy'));
 });
 
 test('keeps the target unchanged when dynamic facet selection is not configured', () => {
@@ -85,44 +80,38 @@ test('keeps the target unchanged when dynamic facet selection is not configured'
 test('reports a missing source step with the target ID', () => {
   assertCompositionError(
     () => composeConfiguredDynamicFacets(target(), selection(), TARGET_ID, 'missing-step'),
-    SOURCE_WORKFLOW,
-    'missing-step',
+    /Dynamic facet source step not found.*experimental-review\/missing-step/,
   );
 });
 
 test('reports a source step without dynamic facets with the target ID', () => {
   assertCompositionError(
     () => composeConfiguredDynamicFacets(target(), selection(), TARGET_ID, 'review'),
-    SOURCE_WORKFLOW,
-    'review',
+    /has no dynamicFacets configuration.*experimental-review\/review/,
   );
 });
 
 test('reports a dynamic facet pool mismatch with the target ID', () => {
-  const requestedPool = 'other-security-review-facets';
   assertCompositionError(
     () => composeConfiguredDynamicFacets(
       target(),
-      selection({ pool: requestedPool }),
+      selection({ pool: 'other-security-review-facets' }),
       TARGET_ID,
       'security-review',
     ),
-    requestedPool,
-    SECURITY_REVIEW_POOL,
+    /Dynamic facet pool mismatch.*expected "other-security-review-facets".*source uses "security-review-facets"/,
   );
 });
 
 test('reports an unknown candidate ID with the target ID', () => {
-  const unknownCandidate = 'unknown-candidate';
   assertCompositionError(
     () => composeConfiguredDynamicFacets(
       target(),
-      selection({ candidateIds: [unknownCandidate] }),
+      selection({ candidateIds: ['unknown-candidate'] }),
       TARGET_ID,
       'security-review',
     ),
-    unknownCandidate,
-    SECURITY_REVIEW_POOL,
+    /Dynamic facet candidate mismatch.*candidate "unknown-candidate".*pool "security-review-facets"/,
   );
 });
 

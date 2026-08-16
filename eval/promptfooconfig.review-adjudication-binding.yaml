@@ -1,0 +1,95 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+# TAKT facet eval: follow-up security review の裁定拘束と blocking 証拠基準。
+# claude / codex 両 CLI のログインが必要。デフォルトスイートからは除外。
+
+description: 'TAKT facet eval: follow-up security review adjudication binding'
+
+prompts:
+  - file://prompts/review-adjudication-binding.phase1.md
+
+providers:
+  - id: 'exec: bash providers/claude-review.sh claude-opus-5 fixtures/review-adjudication-binding'
+    label: claude-opus-5
+  - id: 'exec: bash providers/codex-review.sh gpt-5.6-luna max fixtures/review-adjudication-binding'
+    label: codex-luna-max
+  - id: 'exec: bash providers/codex-review.sh gpt-5.6-sol high fixtures/review-adjudication-binding'
+    label: codex-sol-high
+
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+
+evaluateOptions:
+  maxConcurrency: 3
+
+tests:
+  - description: 'A: latest out_of_scope dispositions bind the follow-up verdict'
+    vars:
+      task: file://cases/review-adjudication-binding-a.md
+      previous_response: ''
+    assert:
+      - type: regex
+        metric: A/approve
+        value: '(結果|Result)\s*[:：]\s*APPROVE'
+      - type: llm-rubric
+        metric: A/disposition-binding
+        value: |
+          Judge the security-review decision semantics and classification, not exact headings or table shape. Pass only if the response returns APPROVE, lists all three prior findings SEC-NEW-rule-size-L14, SEC-NEW-terminal-output-L28, and SEC-NEW-symlink-target-L41 in the dedicated adjudicated non-actionable findings area with the exact latest disposition out_of_scope, does not place any of them in persists or reopened, and does not count them toward REJECT. Fail if any of the three is omitted, reconstructed as open, or used as a blocking finding.
+
+  - description: 'B: remeasurement of the same event does not reopen the finding'
+    vars:
+      task: file://cases/review-adjudication-binding-b-remeasurement.md
+      previous_response: ''
+    assert:
+      - type: regex
+        metric: B-remeasurement/approve
+        value: '(結果|Result)\s*[:：]\s*APPROVE'
+      - type: llm-rubric
+        metric: B-remeasurement/reopen-discipline
+        value: |
+          Judge the security-review decision semantics, not exact wording. Pass only if the response returns APPROVE, keeps SEC-NEW-terminal-output-L28 under the dedicated adjudicated non-actionable findings area with out_of_scope, and treats the repeated observation of the same lone ESC byte as insufficient to use reopened. It must not put that finding in persists, reopened, or a blocking new finding. Warning-level advice is allowed.
+
+  - description: 'B control: remediation reintroduction permits reopened and REJECT'
+    vars:
+      task: file://cases/review-adjudication-binding-b-remediation.md
+      previous_response: ''
+    assert:
+      - type: regex
+        metric: B-remediation/reject
+        value: '(結果|Result)\s*[:：]\s*REJECT'
+      - type: llm-rubric
+        metric: B-remediation/reopen-discipline
+        value: |
+          Judge the security-review decision semantics, not exact wording. Pass only if the response returns REJECT and classifies the terminal-control problem as reopened, states the immediately preceding out_of_scope disposition, and uses allowed reopening basis d because the remediation reintroduced the same problem. It must connect the new OSC sequence to the reproduced terminal-title spoofing effect. Fail if it calls the finding persists, treats mere remeasurement as the reason, omits the prior disposition or basis d, or approves the change.
+
+  - description: 'C: rule size and a lone ESC byte are not blocking evidence'
+    vars:
+      task: file://cases/review-adjudication-binding-c-threshold.md
+      previous_response: ''
+    assert:
+      - type: regex
+        metric: C-threshold/approve
+        value: '(結果|Result)\s*[:：]\s*APPROVE'
+      - type: llm-rubric
+        metric: C-threshold/security-evidence
+        value: |
+          Judge only whether the supplied security evidence crosses the blocking threshold. Pass only if the response returns APPROVE and does not create a blocking finding from either the absence of a size limit on repository-author-controlled rule files or the observation that one ESC byte reaches terminal output. It may record either concern as a warning. It must keep the three prior findings, including SEC-NEW-rule-size-L14 and SEC-NEW-terminal-output-L28, in the dedicated adjudicated non-actionable findings area with out_of_scope rather than persists or reopened.
+
+  - description: 'C control: a reproduced OSC display effect is blocking evidence'
+    vars:
+      task: file://cases/review-adjudication-binding-c-osc.md
+      previous_response: ''
+    assert:
+      - type: regex
+        metric: C-OSC/reject
+        value: '(結果|Result)\s*[:：]\s*REJECT'
+      - type: llm-rubric
+        metric: C-OSC/security-evidence
+        value: |
+          Judge the security-review decision semantics, not exact wording. Pass only if the response returns REJECT and treats the reproduced OSC terminal-title spoofing effect as sufficient concrete blocking evidence. Because SEC-NEW-terminal-output-L28 was previously out_of_scope specifically for lack of a concrete terminal effect, the response must classify it as reopened, state that prior disposition, and use allowed reopening basis b for the newly supplied blocking evidence. Fail if it suppresses the finding merely because the previous evidence was insufficient, calls it persists, omits the concrete display effect, or approves the change.

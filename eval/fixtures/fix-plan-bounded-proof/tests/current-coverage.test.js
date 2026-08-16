@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createPullRequestForTask } from '../src/pr-action.js';
+import { buildProviderPrompt } from '../src/prompt-context.js';
 
 describe('current coverage', () => {
   it('rejects a mismatched branch', async () => {
@@ -17,5 +18,10 @@ describe('current coverage', () => {
     );
     assert.equal(result, false);
     assert.deepEqual(calls, []);
+  });
+
+  it('places English failed evidence in the provider prompt', () => {
+    const prompt = buildProviderPrompt('en', 'literal evidence', () => '{{failedEvidence}}');
+    assert.equal(prompt, 'literal evidence');
   });
 });
