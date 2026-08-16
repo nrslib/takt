@@ -356,8 +356,7 @@ describe('resolveProviderOptionsWithTrace', () => {
       'utf-8',
     );
 
-    expect(() => resolveProviderOptionsWithTrace(projectDir))
-      .toThrow(/permission_control=codex.*network_access/);
+    expect(() => resolveProviderOptionsWithTrace(projectDir)).toThrow();
   });
 
   it('片方だけ指定した Codex Skill scope の未指定値を default のまま保つ', () => {

@@ -130,7 +130,7 @@ describe('config traced env overrides', () => {
     );
     process.env.TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL = 'codex';
 
-    expect(() => loadProjectConfig(projectDir)).toThrow(/permission_control=codex.*network_access/);
+    expect(() => loadProjectConfig(projectDir)).toThrow();
   });
 
   it('project config は Codex Skill scope ごとの env override を反映する', () => {

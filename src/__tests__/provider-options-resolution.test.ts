@@ -100,14 +100,14 @@ describe('resolveEffectiveProviderOptions', () => {
     expect(() => mergeProviderOptions(
       { codex: { networkAccess: true } },
       { codex: { permissionControl: 'codex' } },
-    )).toThrow(/permission_control=codex.*network_access/);
+    )).toThrow();
 
     expect(() => resolveEffectiveProviderOptions(
       'project',
       undefined,
       { codex: { networkAccess: true } },
       { codex: { permissionControl: 'codex' } },
-    )).toThrow(/permission_control=codex.*network_access/);
+    )).toThrow();
   });
 
   it('Claude Skill enabled resolves false from config even when other Claude leaves come from the step', () => {

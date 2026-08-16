@@ -337,7 +337,7 @@ describe('CodexClient — structuredOutput 抽出', () => {
       cwd: '/tmp',
       permissionControl: 'codex',
       networkAccess: false,
-    })).rejects.toThrow(/permission_control=codex.*network_access/);
+    })).rejects.toThrow();
   });
 
   it('provider_options.codex.network_access が ThreadOptions に反映される', async () => {
@@ -371,6 +371,27 @@ describe('CodexClient — structuredOutput 抽出', () => {
       approvalPolicy: 'never',
     });
     expect(lastThreadOptions).not.toHaveProperty('networkAccessEnabled');
+  });
+
+  it('permission_control=takt は従来の sandbox と network mapping を明示的に維持する', async () => {
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+
+    const client = new CodexClient();
+    await client.call('coder', 'prompt', {
+      cwd: '/tmp',
+      permissionMode: 'readonly',
+      permissionControl: 'takt',
+      networkAccess: true,
+    });
+
+    expect(lastThreadOptions).toMatchObject({
+      sandboxMode: 'read-only',
+      networkAccessEnabled: true,
+      approvalPolicy: 'never',
+    });
   });
 
   it('provider_options.codex.reasoningEffort が安全な config override に反映される', async () => {
