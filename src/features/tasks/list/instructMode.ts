@@ -21,6 +21,7 @@ import {
 import {
   prependSourceContext,
   prependSourceContextGuardToSystemPrompt,
+  formatLiteralBlock,
 } from '../../interactive/promptSections.js';
 import { createSelectActionWithoutExecute, buildReplayHint } from '../../interactive/interactive-summary.js';
 import { attachImageAttachmentCleanup } from '../../interactive/imageAttachments.js';
@@ -46,6 +47,12 @@ export interface InstructModeOptions {
   readonly runSessionContext?: RunSessionContext;
   readonly previousOrderContent?: string | null;
   readonly prContext?: PullRequestContext;
+  readonly failedContext?: FailedInstructContext;
+}
+
+export interface FailedInstructContext {
+  readonly reportSummary: string;
+  readonly worktreeSummary: string;
 }
 
 function toInstructModeResult(result: InteractiveModeResult): InstructModeResult {
@@ -78,6 +85,7 @@ function buildInstructTemplateVars(
     runSessionContext,
     previousOrderContent,
     prContext,
+    failedContext,
   } = options;
   const hasWorkflowPreview = !!workflowContext?.stepPreviews?.length;
   const stepDetails = hasWorkflowPreview
@@ -88,12 +96,18 @@ function buildInstructTemplateVars(
   const runPromptVars = hasRunSession
     ? formatRunSessionForPrompt(runSessionContext)
     : { runTask: '', runWorkflow: '', runStatus: '', runStepLogs: '', runReports: '' };
+  const reportSummary = failedContext?.reportSummary.length
+    ? formatLiteralBlock(failedContext.reportSummary)
+    : '';
+  const worktreeSummary = failedContext?.worktreeSummary.length
+    ? formatLiteralBlock(failedContext.worktreeSummary)
+    : '';
 
   return {
     taskName,
     taskContent,
     branchName,
-    branchContext,
+    branchContext: branchContext.length > 0 ? formatLiteralBlock(branchContext) : '',
     retryNote,
     hasWorkflowPreview,
     workflowStructure: workflowContext?.workflowStructure ?? '',
@@ -104,6 +118,11 @@ function buildInstructTemplateVars(
     orderContent: previousOrderContent ?? '',
     hasPrContext: prContext !== undefined,
     prContextText: prContext ? renderPullRequestContext(prContext, lang) : '',
+    hasFailedContext: reportSummary.length > 0 || worktreeSummary.length > 0,
+    hasReportSummary: reportSummary.length > 0,
+    hasWorktreeSummary: worktreeSummary.length > 0,
+    reportSummary,
+    worktreeSummary,
   };
 }
 

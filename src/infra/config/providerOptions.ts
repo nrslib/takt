@@ -1,6 +1,7 @@
 import type {
   ClaudeEffort,
   ClaudeTerminalProviderOptions,
+  CodexPermissionControl,
   CodexReasoningEffort,
   CopilotEffort,
   OpenCodeGuardProfile,
@@ -28,6 +29,7 @@ type RawProviderOptions = {
   codex?: {
     base_url?: string;
     network_access?: boolean;
+    permission_control?: CodexPermissionControl;
     reasoning_effort?: CodexReasoningEffort;
     guards?: RawProviderGuardOptions;
     skills?: {
@@ -101,6 +103,19 @@ export interface NormalizeProviderOptionsOptions {
 export interface ProviderOptionsLayer {
   source: ProviderResolutionSource;
   options: StepProviderOptions | undefined;
+}
+
+export function assertValidCodexProviderOptions(
+  providerOptions: StepProviderOptions | undefined,
+): void {
+  if (
+    providerOptions?.codex?.permissionControl === 'codex'
+    && providerOptions.codex.networkAccess !== undefined
+  ) {
+    throw new Error(
+      'Configuration error: provider_options.codex.permission_control=codex cannot be combined with provider_options.codex.network_access.',
+    );
+  }
 }
 
 interface StepProviderOptionsLayerContext {
@@ -207,6 +222,7 @@ export function normalizeProviderOptions(
   if (
     options.codex?.base_url !== undefined
     || options.codex?.network_access !== undefined
+    || options.codex?.permission_control !== undefined
     || options.codex?.reasoning_effort !== undefined
     || options.codex?.guards !== undefined
     || options.codex?.skills?.repo !== undefined
@@ -220,6 +236,9 @@ export function normalizeProviderOptions(
         : {}),
       ...(options.codex.network_access !== undefined
         ? { networkAccess: options.codex.network_access }
+        : {}),
+      ...(options.codex.permission_control !== undefined
+        ? { permissionControl: options.codex.permission_control }
         : {}),
       ...(options.codex.reasoning_effort !== undefined
         ? { reasoningEffort: options.codex.reasoning_effort }
@@ -388,7 +407,9 @@ export function normalizeProviderOptions(
         : {}),
     };
   }
-  return Object.keys(result).length > 0 ? result : undefined;
+  const normalized = Object.keys(result).length > 0 ? result : undefined;
+  assertValidCodexProviderOptions(normalized);
+  return normalized;
 }
 
 /** Deep merge provider options. Later sources override earlier ones. */
@@ -407,6 +428,9 @@ export function mergeProviderOptions(
           : {}),
         ...(layer.codex.networkAccess !== undefined
           ? { networkAccess: layer.codex.networkAccess }
+          : {}),
+        ...(layer.codex.permissionControl !== undefined
+          ? { permissionControl: layer.codex.permissionControl }
           : {}),
         ...(layer.codex.reasoningEffort !== undefined
           ? { reasoningEffort: layer.codex.reasoningEffort }
@@ -543,7 +567,9 @@ export function mergeProviderOptions(
     }
   }
 
-  return Object.keys(result).length > 0 ? result : undefined;
+  const merged = Object.keys(result).length > 0 ? result : undefined;
+  assertValidCodexProviderOptions(merged);
+  return merged;
 }
 
 function resolveFallbackOrigin(
@@ -726,6 +752,7 @@ export function resolveEffectiveProviderOptions(
     return mergeProviderOptions(personaOptions, stepOptions);
   }
   if (!personaOptions && !stepOptions) {
+    assertValidCodexProviderOptions(resolvedConfigOptions);
     return resolvedConfigOptions;
   }
 
@@ -784,6 +811,12 @@ export function resolveEffectiveProviderOptions(
     personaOptions?.codex?.networkAccess,
     stepOptions?.codex?.networkAccess,
     resolveProviderOptionOrigin(originResolver, 'codex.networkAccess', source),
+  );
+  const codexPermissionControl = selectProviderValue(
+    resolvedConfigOptions.codex?.permissionControl,
+    personaOptions?.codex?.permissionControl,
+    stepOptions?.codex?.permissionControl,
+    resolveProviderOptionOrigin(originResolver, 'codex.permissionControl', source),
   );
   const codexReasoningEffort = selectProviderValue(
     resolvedConfigOptions.codex?.reasoningEffort,
@@ -974,6 +1007,7 @@ export function resolveEffectiveProviderOptions(
   const result: StepProviderOptions = {
     ...(codexBaseUrl !== undefined
       || codexNetworkAccess !== undefined
+      || codexPermissionControl !== undefined
       || codexReasoningEffort !== undefined
       || codexCallTimeoutMs !== undefined
       || codexRepoSkills !== undefined
@@ -982,6 +1016,7 @@ export function resolveEffectiveProviderOptions(
           codex: {
             ...(codexBaseUrl !== undefined ? { baseUrl: codexBaseUrl } : {}),
             ...(codexNetworkAccess !== undefined ? { networkAccess: codexNetworkAccess } : {}),
+            ...(codexPermissionControl !== undefined ? { permissionControl: codexPermissionControl } : {}),
             ...(codexReasoningEffort !== undefined ? { reasoningEffort: codexReasoningEffort } : {}),
             ...(codexCallTimeoutMs !== undefined
               ? { guards: { callTimeoutMs: codexCallTimeoutMs } }
@@ -1125,7 +1160,9 @@ export function resolveEffectiveProviderOptions(
       : {}),
   };
 
-  return Object.keys(result).length > 0 ? result : undefined;
+  const effective = Object.keys(result).length > 0 ? result : undefined;
+  assertValidCodexProviderOptions(effective);
+  return effective;
 }
 
 function stripClaudeAllowedTools(
@@ -1246,6 +1283,7 @@ export const PROVIDER_OPTION_PATHS = [
   'claude.guards.callTimeoutMs',
   'codex.baseUrl',
   'codex.networkAccess',
+  'codex.permissionControl',
   'codex.reasoningEffort',
   'codex.guards.callTimeoutMs',
   'codex.skills.repo',

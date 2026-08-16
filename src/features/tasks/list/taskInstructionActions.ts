@@ -18,7 +18,12 @@ import { runInstructMode } from './instructMode.js';
 import { dispatchConversationAction } from '../../interactive/actionDispatcher.js';
 import type { WorkflowContext } from '../../interactive/interactive.js';
 import { cleanupInteractiveResultAttachments } from '../../interactive/imageAttachments.js';
-import { resolveLanguage, findRunForTask, findPreviousOrderContent } from '../../interactive/index.js';
+import {
+  resolveLanguage,
+  findRunForTask,
+  findPreviousOrderContent,
+  loadRunSessionContext,
+} from '../../interactive/index.js';
 import { type BranchActionTarget, resolveTargetBranch } from './taskActionTarget.js';
 import {
   appendRetryNote,
@@ -36,6 +41,8 @@ import {
 } from '../retryTaskSpecAttachments.js';
 import { resolveTaskPullRequestWorktreeContext } from '../pullRequestWorktreeContext.js';
 import type { TaskExecutionOptions } from '../execute/types.js';
+import { collectTaskWorktreeSummary } from './taskWorktreeSummary.js';
+import { formatRunReportSummary, summarizeRunReports } from './runReportSummary.js';
 
 const log = createLogger('list-tasks');
 
@@ -128,7 +135,11 @@ export async function instructBranch(
 
   const globalConfig = resolveWorkflowConfigValues(projectDir, ['interactivePreviewSteps', 'language']);
   const lang = resolveLanguage(globalConfig.language);
-  const matchedSlug = findRunForTask(worktreePath, target.content);
+  const isFailedTask = target.kind === 'failed';
+  const matchedSlug = isFailedTask
+    ? target.runSlug
+      ?? (target.data?.task === undefined ? null : findRunForTask(worktreePath, target.data.task))
+    : findRunForTask(worktreePath, target.content);
   const selectedWorkflow = await selectWorkflowWithOptionalReuse(projectDir, target.data?.workflow, worktreePath, lang);
   if (!selectedWorkflow) {
     info('Cancelled');
@@ -150,8 +161,12 @@ export async function instructBranch(
   };
 
   // Runs data lives in the worktree (written during previous execution)
-  const runSessionContext = await selectRunSessionContext(worktreePath, lang);
-  const previousOrderContent = findPreviousOrderContent(worktreePath, matchedSlug);
+  const runSessionContext = isFailedTask
+    ? (matchedSlug ? loadRunSessionContext(worktreePath, matchedSlug) : undefined)
+    : await selectRunSessionContext(worktreePath, lang);
+  const previousOrderContent = isFailedTask && matchedSlug === null
+    ? null
+    : findPreviousOrderContent(worktreePath, matchedSlug);
   if (hasDeprecatedProviderConfig(previousOrderContent)) {
     warn(DEPRECATED_PROVIDER_CONFIG_WARNING);
   }
@@ -179,6 +194,18 @@ export async function instructBranch(
     baseBranch,
   );
 
+  const failedContext = isFailedTask
+    ? {
+      reportSummary: runSessionContext
+        ? (() => {
+          const summary = summarizeRunReports(runSessionContext.reports);
+          return summary ? formatRunReportSummary(summary) : '';
+        })()
+        : '',
+      worktreeSummary: collectTaskWorktreeSummary(worktreePath, baseBranch, branch).text,
+    }
+    : undefined;
+
   const result = await runInstructMode({
     cwd: worktreePath,
     branchContext,
@@ -189,6 +216,7 @@ export async function instructBranch(
     workflowContext,
     runSessionContext,
     previousOrderContent,
+    ...(failedContext === undefined ? {} : { failedContext }),
     ...(prContext === undefined ? {} : { prContext }),
   });
 

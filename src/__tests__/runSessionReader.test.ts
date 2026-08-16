@@ -210,6 +210,24 @@ describe('findRunForTask', () => {
     const result = findRunForTask(tmpDir, 'Build login page');
     expect(result).toBe('run-new');
   });
+
+  it('should find a matching run beyond the recent display limit', () => {
+    for (let i = 0; i < 12; i++) {
+      const slug = `run-${String(i).padStart(2, '0')}`;
+      createRunDir(tmpDir, slug, {
+        task: i === 1 ? 'Target task' : `Other task ${i}`,
+        workflow: 'default',
+        status: 'failed',
+        startTime: `2026-01-${String(i + 1).padStart(2, '0')}T00:00:00.000Z`,
+        logsDirectory: `.takt/runs/${slug}/logs`,
+        reportDirectory: `.takt/runs/${slug}/reports`,
+        runSlug: slug,
+      });
+    }
+
+    expect(listRecentRuns(tmpDir)).toHaveLength(10);
+    expect(findRunForTask(tmpDir, 'Target task')).toBe('run-01');
+  });
 });
 
 describe('loadRunSessionContext', () => {

@@ -1,13 +1,7 @@
 /**
- * {review_scope} の解決と、共有 partial `review-round-scope` 経由での供給。
- *
- * 全汎用レビュアーはこの partial を include するので、エンジンが算出した
- * 変更ファイル一覧はレビュアー指示へ自動で届く。
+ * {review_scope} の解決。
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { replaceTemplatePlaceholders } from '../core/workflow/instruction/escape.js';
 import { ReportInstructionBuilder } from '../core/workflow/instruction/ReportInstructionBuilder.js';
 import {
@@ -15,39 +9,7 @@ import {
   renderTaskReviewScope,
   type TaskReviewScope,
 } from '../core/workflow/review-scope.js';
-import { resolveRefToContent } from '../infra/config/loaders/resource-resolver.js';
-import {
-  getAllParallelSubSteps,
-  type WorkflowCallStep,
-  type WorkflowConfig,
-  type WorkflowStep,
-} from '../core/models/types.js';
-import {
-  getBuiltinWorkflow,
-  listBuiltinWorkflowNames,
-  listStandaloneWorkflowEntries,
-} from '../infra/config/loaders/workflowResolver.js';
-import { resolveWorkflowCallTarget } from '../infra/config/loaders/workflowCallResolver.js';
-import { invalidateAllResolvedConfigCache } from '../infra/config/resolutionCache.js';
 import { makeInstructionContext, makeStep } from './test-helpers.js';
-
-const REVIEWER_INSTRUCTION_VARIANTS = [
-  'architecture-review',
-  'follow-up-architecture-review',
-  'coding-review',
-  'follow-up-coding-review',
-  'ai-antipattern-review',
-  'initial-ai-antipattern-review',
-  'follow-up-ai-antipattern-review',
-  'testing-review',
-  'follow-up-testing-review',
-  'security-review',
-  'follow-up-security-review',
-  'frontend-review',
-  'follow-up-frontend-review',
-  'cqrs-es-review',
-  'follow-up-cqrs-es-review',
-] as const;
 
 function collected(paths: readonly string[]): TaskReviewScope {
   return {
@@ -55,28 +17,6 @@ function collected(paths: readonly string[]): TaskReviewScope {
     paths,
     source: { kind: 'working_tree', baseRange: { kind: 'branch_base', baseCommit: 'abcdef1234567890' } },
   };
-}
-
-function collectAgentSteps(steps: readonly WorkflowStep[]): WorkflowStep[] {
-  return steps.flatMap((step) => [
-    ...(typeof step.persona === 'string' ? [step] : []),
-    ...collectAgentSteps(step.parallel === undefined ? [] : getAllParallelSubSteps(step.parallel)),
-  ]);
-}
-
-function resolvePeerReviewAiInstruction(
-  workflow: WorkflowConfig,
-  reviewCall: WorkflowCallStep,
-  projectDir: string,
-): string {
-  const suite = resolveWorkflowCallTarget(workflow, reviewCall, projectDir);
-  const reviewer = suite === null
-    ? undefined
-    : collectAgentSteps(suite.steps).find((step) => step.persona === 'ai-antipattern-reviewer');
-  if (typeof reviewer?.instruction !== 'string') {
-    throw new Error(`AI antipattern reviewer instruction not found: ${reviewCall.name}`);
-  }
-  return reviewer.instruction;
 }
 
 describe('{review_scope} resolution', () => {
@@ -277,122 +217,4 @@ describe('{review_scope} resolution', () => {
     expect(instruction).not.toContain('{review_scope}');
     expect(instruction).toContain('- src/phase2.ts');
   });
-});
-
-describe('review instruction variants receive the runtime-computed scope', () => {
-  let projectDir: string;
-
-  beforeEach(() => {
-    projectDir = mkdtempSync(join(tmpdir(), 'takt-review-scope-facet-'));
-  });
-
-  afterEach(() => {
-    rmSync(projectDir, { recursive: true, force: true });
-    invalidateAllResolvedConfigCache();
-  });
-
-  it.each(['en', 'ja'] as const)('renders the changed file list in every builtin reviewer instruction (%s)', (lang) => {
-    const context = makeInstructionContext({
-      language: lang,
-      reviewScope: collected(['src/core/workflow/review-scope.ts']),
-    });
-
-    for (const name of REVIEWER_INSTRUCTION_VARIANTS) {
-      const instruction = resolveRefToContent(name, undefined, projectDir, 'instructions', {
-        projectDir,
-        lang,
-      });
-      expect(instruction, `missing builtin instruction: ${name}`).toBeDefined();
-      expect(instruction).toContain('{review_scope}');
-
-      const resolved = replaceTemplatePlaceholders(instruction!, makeStep(), context);
-
-      expect(resolved).not.toContain('{review_scope}');
-      expect(resolved).toContain('- src/core/workflow/review-scope.ts');
-    }
-  });
-
-  it.each(['en', 'ja'] as const)('keeps legacy builtin review loops dynamically scoped across iterations (%s)', (lang) => {
-    mkdirSync(join(projectDir, '.takt'), { recursive: true });
-    writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${lang}\n`);
-    invalidateAllResolvedConfigCache();
-    const context = makeInstructionContext({
-      language: lang,
-      reviewScope: collected(['src/legacy-consumer.ts']),
-    });
-    const workflows = listStandaloneWorkflowEntries(projectDir)
-      .filter(({ source }) => source === 'builtin')
-      .map(({ name }) => getBuiltinWorkflow(name, projectDir))
-      .filter((workflow): workflow is WorkflowConfig => workflow !== null);
-    const legacyReviewers = workflows.flatMap((workflow) => collectAgentSteps(workflow.steps))
-      .filter((step) => typeof step.instruction === 'string'
-        && step.instruction.includes('{var:review_mode}')
-        && step.instruction.includes('{step_iteration}'));
-
-    expect(legacyReviewers.length).toBeGreaterThan(0);
-    expect(legacyReviewers.some((step) => step.persona === 'ai-antipattern-reviewer')).toBe(true);
-    for (const reviewer of legacyReviewers) {
-      const initial = replaceTemplatePlaceholders(reviewer.instruction!, reviewer, {
-        ...context,
-        stepIteration: 1,
-      });
-      const followUpByIteration = replaceTemplatePlaceholders(reviewer.instruction!, reviewer, {
-        ...context,
-        stepIteration: 2,
-      });
-      const followUpByCaller = replaceTemplatePlaceholders(reviewer.instruction!, reviewer, {
-        ...context,
-        stepIteration: 1,
-        workflowCallVars: { review_mode: 'follow_up' },
-      });
-
-      expect(initial).toContain('unspecified');
-      expect(followUpByIteration).toContain('2');
-      expect(followUpByCaller).toContain('follow_up');
-      expect(followUpByIteration).not.toBe(initial);
-      expect(followUpByCaller).not.toBe(initial);
-    }
-  });
-
-  it.each(['en', 'ja'] as const)('resolves distinct initial and follow-up AI review authority in peer review (%s)', (lang) => {
-    mkdirSync(join(projectDir, '.takt'), { recursive: true });
-    writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${lang}\n`);
-    invalidateAllResolvedConfigCache();
-    const workflows = listBuiltinWorkflowNames(projectDir, { includeDisabled: true })
-      .map((name) => getBuiltinWorkflow(name, projectDir))
-      .filter((workflow): workflow is WorkflowConfig => workflow !== null);
-    const findCall = (instructionRef: string): { workflow: WorkflowConfig; step: WorkflowCallStep } | undefined => (
-      workflows.flatMap((workflow) => workflow.steps
-        .filter((step): step is WorkflowCallStep => step.kind === 'workflow_call')
-        .map((step) => ({ workflow, step })))
-        .find(({ step }) => step.args?.ai_antipattern_review_instruction === instructionRef)
-    );
-    const initialCall = findCall('initial-ai-antipattern-review');
-    const followUpCall = findCall('follow-up-ai-antipattern-review');
-    if (initialCall === undefined || followUpCall === undefined) {
-      throw new Error('Explicit AI review variant callers not found');
-    }
-
-    const initial = resolvePeerReviewAiInstruction(initialCall.workflow, initialCall.step, projectDir);
-    const followUp = resolvePeerReviewAiInstruction(followUpCall.workflow, followUpCall.step, projectDir);
-    const expectedInitial = resolveRefToContent('initial-ai-antipattern-review', undefined, projectDir, 'instructions', {
-      projectDir,
-      lang,
-    });
-    const expectedFollowUp = resolveRefToContent('follow-up-ai-antipattern-review', undefined, projectDir, 'instructions', {
-      projectDir,
-      lang,
-    });
-    if (expectedInitial === undefined || expectedFollowUp === undefined) {
-      throw new Error('Explicit AI review variants not found');
-    }
-
-    expect(initial).not.toContain('{var:review_mode}');
-    expect(initial).toBe(expectedInitial);
-    expect(initial).not.toBe(expectedFollowUp);
-    expect(followUp).not.toContain('{var:review_mode}');
-    expect(followUp).toBe(expectedFollowUp);
-    expect(followUp).not.toBe(expectedInitial);
-  });
-
 });

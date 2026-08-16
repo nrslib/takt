@@ -3,7 +3,10 @@
  */
 
 import type { PermissionMode } from '../../core/models/index.js';
-import type { CodexReasoningEffort } from '../../core/models/workflow-types.js';
+import type {
+  CodexPermissionControl,
+  CodexReasoningEffort,
+} from '../../core/models/workflow-types.js';
 import type { ProviderImageAttachment } from '../providers/types.js';
 import type { ProviderActivityCallback, StreamCallback } from '../../shared/types/provider.js';
 
@@ -28,9 +31,11 @@ export interface CodexCallOptions {
   model?: string;
   reasoningEffort?: CodexReasoningEffort;
   systemPrompt?: string;
-  /** Permission mode for sandbox configuration */
+  /** Permission mode for the TAKT-controlled sandbox */
   permissionMode?: PermissionMode;
-  /** Enable network access for workspace-write sandbox */
+  /** Select whether TAKT or Codex controls permissions. */
+  permissionControl?: CodexPermissionControl;
+  /** Enable network access for the TAKT-controlled sandbox */
   networkAccess?: boolean;
   /** Enable streaming mode with callback (best-effort) */
   onStream?: StreamCallback;

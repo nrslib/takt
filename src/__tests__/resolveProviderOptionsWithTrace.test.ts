@@ -335,6 +335,30 @@ describe('resolveProviderOptionsWithTrace', () => {
     expect(result.originResolver('codex.networkAccess')).toBe('env');
   });
 
+  it('global/project provider_options の解決後に Codex permission control の競合を拒否する', () => {
+    writeFileSync(
+      globalConfigPath,
+      [
+        'language: en',
+        'provider_options:',
+        '  codex:',
+        '    permission_control: codex',
+      ].join('\n'),
+      'utf-8',
+    );
+    invalidateGlobalConfigCache();
+
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      ['provider_options:', '  codex:', '    network_access: true'].join('\n'),
+      'utf-8',
+    );
+
+    expect(() => resolveProviderOptionsWithTrace(projectDir)).toThrow();
+  });
+
   it('片方だけ指定した Codex Skill scope の未指定値を default のまま保つ', () => {
     process.env.TAKT_PROVIDER_OPTIONS = JSON.stringify({
       codex: { skills: { repo: true } },

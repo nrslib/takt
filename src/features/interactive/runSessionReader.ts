@@ -277,6 +277,10 @@ function findSessionLogFile(cwd: string, logsDir: string): string | null {
 }
 
 export function listRecentRuns(cwd: string): RunSummary[] {
+  return readRunSummaries(cwd).slice(0, MAX_RUNS);
+}
+
+function readRunSummaries(cwd: string): RunSummary[] {
   const runsDir = join(cwd, '.takt', 'runs');
   if (!existsSync(runsDir)) {
     return [];
@@ -301,11 +305,11 @@ export function listRecentRuns(cwd: string): RunSummary[] {
   }
 
   summaries.sort((a, b) => b.startTime.localeCompare(a.startTime));
-  return summaries.slice(0, MAX_RUNS);
+  return summaries;
 }
 
 export function findRunForTask(cwd: string, taskContent: string): string | null {
-  const runs = listRecentRuns(cwd);
+  const runs = readRunSummaries(cwd);
   const match = runs.find((r) => r.task === taskContent);
   return match?.slug ?? null;
 }

@@ -312,6 +312,34 @@ describe('CodexClient — structuredOutput 抽出', () => {
     expect(lastTurnOptions).toMatchObject({ outputSchema: schema });
   });
 
+  it('permission_control=codex は sandbox と network の指定を省略し approval policy は維持する', async () => {
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+
+    const client = new CodexClient();
+    await client.call('selector', 'prompt', {
+      cwd: '/tmp',
+      permissionMode: 'readonly',
+      permissionControl: 'codex',
+    });
+
+    expect(lastThreadOptions).toMatchObject({ approvalPolicy: 'never' });
+    expect(lastThreadOptions).not.toHaveProperty('sandboxMode');
+    expect(lastThreadOptions).not.toHaveProperty('networkAccessEnabled');
+  });
+
+  it('permission_control=codex と network_access の直接指定も fail fast する', async () => {
+    const client = new CodexClient();
+
+    await expect(client.call('coder', 'prompt', {
+      cwd: '/tmp',
+      permissionControl: 'codex',
+      networkAccess: false,
+    })).rejects.toThrow();
+  });
+
   it('provider_options.codex.network_access が ThreadOptions に反映される', async () => {
     mockEvents = [
       { type: 'thread.started', thread_id: 'thread-1' },
@@ -326,6 +354,43 @@ describe('CodexClient — structuredOutput 抽出', () => {
 
     expect(lastThreadOptions).toMatchObject({
       networkAccessEnabled: true,
+    });
+  });
+
+  it('permission_control 省略時は従来どおり TAKT sandbox mapping を使う', async () => {
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+
+    const client = new CodexClient();
+    await client.call('coder', 'prompt', { cwd: '/tmp', permissionMode: 'edit' });
+
+    expect(lastThreadOptions).toMatchObject({
+      sandboxMode: 'workspace-write',
+      approvalPolicy: 'never',
+    });
+    expect(lastThreadOptions).not.toHaveProperty('networkAccessEnabled');
+  });
+
+  it('permission_control=takt は従来の sandbox と network mapping を明示的に維持する', async () => {
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+
+    const client = new CodexClient();
+    await client.call('coder', 'prompt', {
+      cwd: '/tmp',
+      permissionMode: 'readonly',
+      permissionControl: 'takt',
+      networkAccess: true,
+    });
+
+    expect(lastThreadOptions).toMatchObject({
+      sandboxMode: 'read-only',
+      networkAccessEnabled: true,
+      approvalPolicy: 'never',
     });
   });
 

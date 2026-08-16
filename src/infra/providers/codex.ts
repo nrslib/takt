@@ -25,6 +25,7 @@ function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
     model: options.model,
     reasoningEffort: options.providerOptions?.codex?.reasoningEffort,
     permissionMode: options.permissionMode,
+    permissionControl: options.providerOptions?.codex?.permissionControl,
     networkAccess: options.providerOptions?.codex?.networkAccess,
     onStream: options.onStream,
     onActivity: options.onActivity,

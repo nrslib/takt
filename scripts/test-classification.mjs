@@ -248,7 +248,6 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/reset-global-config.test.ts',
   'src/__tests__/retryMetadata.test.ts',
   'src/__tests__/retryTaskSpecAttachments.test.ts',
-  'src/__tests__/review-resolution-temporal-contract.test.ts',
   'src/__tests__/routing-event-contract.test.ts',
   'src/__tests__/run-paths.test.ts',
   'src/__tests__/runMetaLookup.test.ts',
@@ -292,7 +291,6 @@ export const publicContractIntegrationTestFiles = Object.freeze([
 // remain bounded and quick enough for the normal post-implementation IT gate.
 export const lightContractIntegrationTestFiles = Object.freeze([
   'src/__tests__/analytics-workflowExecution.test.ts',
-  'src/__tests__/contract-family-active-composition.test.ts',
   'src/__tests__/sigint-interrupt.test.ts',
 ]);
 

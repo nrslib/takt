@@ -12,6 +12,7 @@ import {
   tryMergeBranch,
   mergeBranch,
   instructBranch,
+  createPullRequestForTask,
   syncBranchWithRoot,
   pullFromRemote,
 } from './taskActions.js';
@@ -31,6 +32,7 @@ export {
   mergeBranch,
   deleteBranch,
   instructBranch,
+  createPullRequestForTask,
 } from './taskActions.js';
 
 export {
@@ -42,8 +44,8 @@ export {
 type PendingTaskAction = 'delete';
 type ExceededTaskAction = 'requeue' | 'delete';
 type RunningTaskAction = 'force_fail';
-type FailedTaskAction = 'requeue' | 'retry' | 'delete';
-type PrFailedTaskAction = ListAction;
+type FailedTaskAction = 'requeue' | 'retry' | 'instruct' | 'create_pr' | 'delete';
+type PrFailedTaskAction = Exclude<ListAction, 'create_pr'>;
 type CompletedTaskAction = ListAction;
 
 async function showExceededTaskAndPromptAction(task: TaskListItem): Promise<ExceededTaskAction | null> {
@@ -107,6 +109,8 @@ async function showFailedTaskAndPromptAction(task: TaskListItem): Promise<Failed
     [
       { label: 'Requeue', value: 'requeue', description: 'Requeue without conversation' },
       { label: 'Retry', value: 'retry', description: 'Analyze failure in conversation, then re-run' },
+      { label: 'Instruct', value: 'instruct', description: 'Craft additional instructions and requeue this task' },
+      { label: 'Create PR', value: 'create_pr', description: 'Commit, push, and create a pull request' },
       { label: 'Delete', value: 'delete', description: 'Remove this task permanently' },
     ],
   );
@@ -123,7 +127,7 @@ async function showPrFailedTaskAndPromptAction(cwd: string, task: TaskListItem):
   }
   blankLine();
 
-  return await showDiffAndPromptActionForTask(cwd, task);
+  return await showDiffAndPromptActionForTask(cwd, task, false);
 }
 
 async function showCompletedTaskAndPromptAction(cwd: string, task: TaskListItem): Promise<CompletedTaskAction | null> {
@@ -217,6 +221,9 @@ export async function listTasks(
         case 'instruct':
           await instructBranch(cwd, task, options);
           break;
+        case 'create_pr':
+          await createPullRequestForTask(cwd, task);
+          break;
         case 'sync':
           await syncBranchWithRoot(cwd, task);
           break;
@@ -243,6 +250,14 @@ export async function listTasks(
         await taskRetryActions.requeueFailedTask(task, cwd);
       } else if (taskAction === 'retry') {
         await taskRetryActions.retryFailedTask(task, cwd, options);
+      } else if (taskAction === 'instruct') {
+        if (!task.branch) {
+          info(`Branch is missing for failed task: ${task.name}`);
+          continue;
+        }
+        await instructBranch(cwd, task, options);
+      } else if (taskAction === 'create_pr') {
+        await createPullRequestForTask(cwd, task);
       } else if (taskAction === 'delete') {
         await deleteTaskByKind(task);
       }

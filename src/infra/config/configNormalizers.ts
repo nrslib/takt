@@ -32,6 +32,7 @@ import {
   type ConfigProviderReference,
 } from './providerReference.js';
 import {
+  assertValidCodexProviderOptions,
   assertAllowedNormalizedProviderBaseUrls,
   normalizeProviderOptions,
   type NormalizeProviderOptionsOptions,
@@ -658,11 +659,13 @@ export function denormalizeProviderOptions(
   if (!providerOptions) {
     return undefined;
   }
+  assertValidCodexProviderOptions(providerOptions);
 
   const raw: Record<string, unknown> = {};
   if (
     providerOptions.codex?.baseUrl !== undefined
     || providerOptions.codex?.networkAccess !== undefined
+    || providerOptions.codex?.permissionControl !== undefined
     || providerOptions.codex?.reasoningEffort !== undefined
     || providerOptions.codex?.guards?.callTimeoutMs !== undefined
     || providerOptions.codex?.skills?.repo !== undefined
@@ -674,6 +677,9 @@ export function denormalizeProviderOptions(
         : {}),
       ...(providerOptions.codex.networkAccess !== undefined
         ? { network_access: providerOptions.codex.networkAccess }
+        : {}),
+      ...(providerOptions.codex.permissionControl !== undefined
+        ? { permission_control: providerOptions.codex.permissionControl }
         : {}),
       ...(providerOptions.codex.reasoningEffort !== undefined
         ? { reasoning_effort: providerOptions.codex.reasoningEffort }

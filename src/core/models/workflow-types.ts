@@ -53,6 +53,7 @@ export type {
   ClaudeSandboxSettings,
   ProviderGuardOptions,
   CodexProviderOptions,
+  CodexPermissionControl,
   OpenCodeGuardOptions,
   OpenCodeGuardProfile,
   OpenCodeProviderOptions,

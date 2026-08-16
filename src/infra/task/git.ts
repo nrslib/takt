@@ -130,14 +130,53 @@ function throwPushFailureWithStderr(err: unknown, extraHint: string): never {
  */
 export function pushBranch(cwd: string, branch: string): void {
   log.info('Pushing branch to origin', { branch });
+  pushBranchToRemote(cwd, 'origin', branch);
+}
+
+function pushBranchToRemote(cwd: string, remote: string, branch: string): void {
+  log.info('Pushing branch', { branch, remote });
   try {
-    execFileSync('git', ['push', 'origin', branch], {
+    execFileSync('git', ['push', remote, branch], {
       cwd,
       stdio: 'pipe',
     });
   } catch (err) {
     throwPushFailureWithStderr(err, NON_FAST_FORWARD_PUSH_HINT);
   }
+}
+
+function resolvePublicationRemote(cwd: string): string | undefined {
+  const output = execFileSync('git', ['remote'], {
+    cwd,
+    encoding: 'utf-8',
+    stdio: 'pipe',
+  }).trim();
+  const remotes = output.length > 0 ? output.split(/\r?\n/).filter((remote) => remote.length > 0) : [];
+
+  if (remotes.length === 0) {
+    return undefined;
+  }
+  if (remotes.includes('origin')) {
+    return 'origin';
+  }
+  if (remotes.length === 1) {
+    return remotes[0];
+  }
+  throw new Error(`Cannot determine publication remote: multiple remotes configured (${remotes.join(', ')}).`);
+}
+
+export function publishTaskBranch(cloneCwd: string, projectCwd: string, branch: string): void {
+  const remote = resolvePublicationRemote(cloneCwd);
+  if (remote !== undefined) {
+    pushBranchToRemote(cloneCwd, remote, branch);
+    return;
+  }
+
+  execFileSync('git', ['fetch', cloneCwd, `${branch}:${branch}`], {
+    cwd: projectCwd,
+    stdio: 'pipe',
+  });
+  pushBranch(projectCwd, branch);
 }
 
 export function materializeCloneHeadToRootBranch(cloneCwd: string, rootCwd: string, branch: string): void {

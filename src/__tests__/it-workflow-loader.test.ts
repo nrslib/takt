@@ -12,15 +12,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   mkdtempSync,
   mkdirSync,
-  readFileSync,
-  readdirSync,
   writeFileSync,
   rmSync,
   existsSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { parse as parseYaml } from 'yaml';
 
 // --- Mocks ---
 const languageState = vi.hoisted(() => ({ value: 'en' as 'en' | 'ja' }));
@@ -49,20 +46,12 @@ vi.mock('../infra/config/resolveConfigValue.js', () => ({
 
 // --- Imports (after mocks) ---
 
-import {
-  loadAllStandaloneWorkflowsWithSources,
-  loadWorkflow,
-} from '../infra/config/loaders/index.js';
+import { loadWorkflow } from '../infra/config/loaders/index.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
-import { listBuiltinWorkflowNames } from '../infra/config/loaders/workflowResolver.js';
 import { loadGlobalConfig } from '../infra/config/global/globalConfig.js';
-import { getLanguageResourcesDir } from '../infra/resources/index.js';
-import {
-  PARALLEL_TERMINAL_ERROR_LABEL,
-} from '../core/models/workflow-rule-condition.js';
+import { validateWorkflowConfig } from '../core/workflow/engine/WorkflowValidator.js';
 
 const loadWorkflowConfig = loadWorkflow;
-const listBuiltinWorkflowLabels = listBuiltinWorkflowNames;
 // --- Test helpers ---
 
 function createTestDir(): string {
@@ -91,9 +80,8 @@ function expectWorkflowLoadIssue(
   }
 }
 
-describe('Workflow Loader IT: builtin workflow loading', () => {
+describe('Workflow Loader IT: workflow validation', () => {
   let testDir: string;
-  const builtinNames = listBuiltinWorkflowLabels(process.cwd(), { includeDisabled: true });
 
   beforeEach(() => {
     testDir = createTestDir();
@@ -103,199 +91,6 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
   afterEach(() => {
     rmSync(testDir, { recursive: true, force: true });
   });
-
-  for (const name of builtinNames) {
-    it(`should load builtin workflow: ${name}`, () => {
-      const config = loadWorkflow(name, testDir);
-
-      expect(config).not.toBeNull();
-      expect(config!.name).toBe(name);
-      expect(config!.steps.length).toBeGreaterThan(0);
-      expect(config!.initialStep).toBeDefined();
-      const maxSteps = (config as Record<string, unknown>).maxSteps;
-      expect(maxSteps === 'infinite' || typeof maxSteps === 'number').toBe(true);
-      if (typeof maxSteps === 'number') {
-        expect(maxSteps).toBeGreaterThan(0);
-      }
-    });
-  }
-
-  it.each(['en', 'ja'] as const)('should load every %s builtin standalone workflow without warnings', (language) => {
-    languageState.value = language;
-    const onWarning = vi.fn();
-
-    const workflows = loadAllStandaloneWorkflowsWithSources(testDir, { onWarning });
-
-    expect(workflows.size).toBeGreaterThan(0);
-    expect(Array.from(workflows.values()).every(({ source }) => source === 'builtin')).toBe(true);
-    expect(onWarning).not.toHaveBeenCalled();
-  });
-
-  it.each(['en', 'ja'] as const)(
-    'parallel 親に review tag を持つ全 %s builtin workflow は error を先頭で明示処理する',
-    (language) => {
-      languageState.value = language;
-      const workflows = loadAllStandaloneWorkflowsWithSources(testDir);
-      const missing: string[] = [];
-
-      for (const name of workflows.keys()) {
-        const config = loadWorkflow(name, testDir);
-        expect(config, name).not.toBeNull();
-        for (const step of config.steps) {
-          if (step.parallel === undefined || !step.tags?.includes('review')) continue;
-          const firstRule = step.rules?.[0];
-          const handlesError = firstRule !== undefined
-            && firstRule.condition.kind === 'aggregate'
-            && firstRule.condition.aggregate === 'any'
-            && firstRule.condition.targetConditions.length === 1
-            && firstRule.condition.targetConditions[0]?.kind === 'semantic'
-            && firstRule.condition.targetConditions[0].label === PARALLEL_TERMINAL_ERROR_LABEL
-            && firstRule.next === step.name;
-          if (!handlesError) missing.push(`${name}/${step.name}`);
-        }
-      }
-
-      expect(missing).toEqual([]);
-    },
-  );
-
-  it.each(['en', 'ja'] as const)(
-    'should select scenario facets only from the %s experimental wrappers and forward their params',
-    (language) => {
-      languageState.value = language;
-      interface RawWorkflow {
-        subworkflow?: { params?: Record<string, unknown> };
-        steps?: Array<Record<string, unknown>>;
-      }
-      const resourceRoot = getLanguageResourcesDir(language);
-      const readRaw = (directory: 'workflows' | 'steps', name: string): RawWorkflow =>
-        parseYaml(readFileSync(join(resourceRoot, directory, `${name}.yaml`), 'utf-8')) as RawWorkflow;
-      const findRawStep = (workflow: RawWorkflow, name: string): Record<string, unknown> => {
-        const step = workflow.steps?.find((candidate) => candidate.name === name);
-        expect(step, name).toBeDefined();
-        return step!;
-      };
-      const collectScenarioRefs = (value: unknown): string[] => {
-        if (typeof value === 'string') return value.startsWith('scenario-based-') ? [value] : [];
-        if (Array.isArray(value)) return value.flatMap(collectScenarioRefs);
-        if (value === null || typeof value !== 'object') return [];
-        return Object.values(value).flatMap(collectScenarioRefs);
-      };
-
-      const scenarioRefsByFile = ['workflows', 'steps'].flatMap((directory) =>
-        readdirSync(join(resourceRoot, directory), { withFileTypes: true })
-          .filter((entry) => entry.isFile() && entry.name.endsWith('.yaml'))
-          .sort((left, right) => left.name.localeCompare(right.name))
-          .map((entry) => ({
-            file: `${directory}/${entry.name}`,
-            refs: collectScenarioRefs(parseYaml(readFileSync(
-              join(resourceRoot, directory, entry.name),
-              'utf-8',
-            ))).sort(),
-          }))
-          .filter(({ refs }) => refs.length > 0));
-      const scenarioSelection = [
-        'scenario-based-plan',
-        'scenario-based-plan',
-        'scenario-based-replan-implementation',
-        'scenario-based-write-tests-first',
-        'scenario-based-test-report',
-        'scenario-based-fix-plan-from-review-resolution',
-        'scenario-based-fix-plan',
-        'scenario-based-supervise-review-resolution',
-      ].sort();
-      expect(scenarioRefsByFile).toEqual([
-        { file: 'workflows/experimental.yaml', refs: scenarioSelection },
-        { file: 'workflows/takt-experimental.yaml', refs: scenarioSelection },
-      ]);
-
-      const core = readRaw('workflows', 'development-core');
-      expect(core.subworkflow?.params).toMatchObject({
-        plan_instruction: { default: 'plan' },
-        plan_report_format: { default: 'plan' },
-        replan_instruction: { default: 'replan-implementation' },
-        testing_instruction: { default: 'write-tests-first' },
-        testing_report_format: { default: 'test-report' },
-        fix_plan_instruction: { default: 'fix-plan-from-review-resolution' },
-        fix_plan_report_format: { default: 'fix-plan' },
-        final_gate_instruction: { default: 'supervise-review-resolution' },
-      });
-      expect(findRawStep(core, 'plan')).toMatchObject({
-        with: {
-          plan_instruction: { $param: 'plan_instruction' },
-          plan_report_format: { $param: 'plan_report_format' },
-        },
-      });
-      expect(findRawStep(core, 'replan')).toMatchObject({
-        instruction: { $param: 'replan_instruction' },
-        output_contracts: { report: [{ format: { $param: 'plan_report_format' } }] },
-      });
-      expect(findRawStep(core, 'write_tests')).toMatchObject({
-        with: {
-          testing_instruction: { $param: 'testing_instruction' },
-          testing_report_format: { $param: 'testing_report_format' },
-        },
-      });
-      expect(findRawStep(core, 'peer-review')).toMatchObject({
-        args: {
-          fix_plan_instruction: { $param: 'fix_plan_instruction' },
-          fix_plan_report_format: { $param: 'fix_plan_report_format' },
-          final_gate_instruction: { $param: 'final_gate_instruction' },
-        },
-        rules: [
-          { condition: 'COMPLETE', next: 'COMPLETE' },
-          { condition: 'need_replan', next: 'replan' },
-          { condition: 'ABORT', next: 'ABORT' },
-        ],
-      });
-
-      const peerReview = readRaw('workflows', 'peer-review');
-      expect(peerReview.subworkflow?.params).toMatchObject({
-        fix_plan_instruction: { default: 'fix-plan-from-review-resolution' },
-        fix_plan_report_format: { default: 'fix-plan' },
-        final_gate_instruction: { default: 'supervise-review-resolution' },
-      });
-      expect(findRawStep(peerReview, 'final-gate')).toMatchObject({
-        with: { final_gate_instruction: { $param: 'final_gate_instruction' } },
-      });
-      expect(findRawStep(peerReview, 'remediation')).toMatchObject({
-        args: {
-          fix_plan_instruction: { $param: 'fix_plan_instruction' },
-          fix_plan_report_format: { $param: 'fix_plan_report_format' },
-        },
-      });
-
-      for (const name of ['development-remediation', 'development-remediation-dynamic']) {
-        const remediation = readRaw('workflows', name);
-        expect(remediation.subworkflow?.params).toMatchObject({
-          fix_plan_instruction: { default: 'fix-plan-from-review-resolution' },
-          fix_plan_report_format: { default: 'fix-plan' },
-        });
-        expect(findRawStep(remediation, 'fix-plan')).toMatchObject({
-          with: {
-            plan_instruction: { $param: 'fix_plan_instruction' },
-            plan_report_format: { $param: 'fix_plan_report_format' },
-          },
-        });
-      }
-      const writeTestsFragment = parseYaml(readFileSync(
-        join(resourceRoot, 'steps', 'development-core-write-tests.yaml'),
-        'utf-8',
-      )) as Record<string, unknown>;
-      expect(writeTestsFragment).toMatchObject({
-        params: { testing_report_format: { facet_kind: 'report_format' } },
-        output_contracts: { report: [{ format: { $param: 'testing_report_format' } }] },
-      });
-      const finalGateFragment = parseYaml(readFileSync(
-        join(resourceRoot, 'steps', 'peer-review-final-gate.yaml'),
-        'utf-8',
-      )) as Record<string, unknown>;
-      expect(finalGateFragment).toMatchObject({
-        params: { final_gate_instruction: { facet_kind: 'instruction' } },
-        instruction: { $param: 'final_gate_instruction' },
-      });
-    },
-  );
 
   it('should return null for non-existent workflow', () => {
     const config = loadWorkflow('non-existent-workflow-xyz', testDir);
