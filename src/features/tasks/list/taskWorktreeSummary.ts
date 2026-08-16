@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { toLocalBranchRef } from '../../../shared/utils/gitBranchValidation.js';
 
 export interface TaskWorktreeSummary {
   readonly files: readonly string[];
@@ -11,6 +12,21 @@ function runGit(cwd: string, args: readonly string[]): string {
     encoding: 'utf-8',
     stdio: 'pipe',
   });
+}
+
+function gitRefExists(cwd: string, ref: string): boolean {
+  try {
+    runGit(cwd, ['show-ref', '--verify', '--quiet', ref]);
+    return true;
+  } catch (err) {
+    const status = typeof err === 'object' && err !== null && 'status' in err
+      ? err.status
+      : undefined;
+    if (status === 1) {
+      return false;
+    }
+    throw err;
+  }
 }
 
 function resolveStatusPath(pathText: string): string {
@@ -41,7 +57,11 @@ export function collectTaskWorktreeSummary(
   branch: string,
 ): TaskWorktreeSummary {
   const status = runGit(worktreePath, ['status', '--short']);
-  const committedDiff = runGit(worktreePath, ['diff', '--stat', `${baseBranch}...${branch}`]);
+  const baseRef = toLocalBranchRef(baseBranch);
+  const branchRef = toLocalBranchRef(branch);
+  const committedDiff = gitRefExists(worktreePath, baseRef) && gitRefExists(worktreePath, branchRef)
+    ? runGit(worktreePath, ['diff', '--stat', `${baseRef}...${branchRef}`])
+    : '';
   const stagedDiff = runGit(worktreePath, ['diff', '--cached', '--stat']);
   const unstagedDiff = runGit(worktreePath, ['diff', '--stat']);
   const files = [...new Set(collectStatusFiles(status))];

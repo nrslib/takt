@@ -9,7 +9,7 @@ import {
 } from '../../../infra/task/index.js';
 import { createPullRequestSafely, getGitProvider } from '../../../infra/git/index.js';
 import { findRunForTask, loadRunSessionContext } from '../../interactive/index.js';
-import { sanitizeTerminalText } from '../../../shared/utils/index.js';
+import { getErrorMessage, sanitizeTerminalText } from '../../../shared/utils/index.js';
 import type { TaskListItem } from '../../../infra/task/index.js';
 import { summarizeRunReports, formatRunReportSummary, type RunReportSummary } from './runReportSummary.js';
 import { collectTaskWorktreeSummary, type TaskWorktreeSummary } from './taskWorktreeSummary.js';
@@ -51,7 +51,8 @@ export function buildTaskPullRequestBody(options: TaskPullRequestBodyOptions): s
 }
 
 function buildPullRequestTitle(task: TaskListItem): string {
-  const title = task.summary?.trim() || task.content.trim();
+  const firstContentLine = task.content.split(/\r?\n/u, 1)[0]?.trim() ?? '';
+  const title = task.summary?.trim() || firstContentLine;
   return title.length > 100 ? `${title.slice(0, 97)}...` : title;
 }
 
@@ -99,12 +100,23 @@ export async function createPullRequestForTask(
     return false;
   }
 
-  await stageAndCommit(
-    worktreePath,
-    `takt: ${task.name}`,
-    resolveAutoCommitOptions(projectDir),
-  );
-  publishTaskBranch(worktreePath, projectDir, branch);
+  try {
+    await stageAndCommit(
+      worktreePath,
+      `takt: ${task.name}`,
+      resolveAutoCommitOptions(projectDir),
+    );
+  } catch (err) {
+    error(`PR 作成を中止しました: コミットに失敗しました: ${sanitizeTerminalText(getErrorMessage(err))}`);
+    return false;
+  }
+
+  try {
+    publishTaskBranch(worktreePath, projectDir, branch);
+  } catch (err) {
+    error(`PR 作成を中止しました: ブランチの公開に失敗しました: ${sanitizeTerminalText(getErrorMessage(err))}`);
+    return false;
+  }
 
   const result = createPullRequestSafely(getGitProvider(), {
     branch,

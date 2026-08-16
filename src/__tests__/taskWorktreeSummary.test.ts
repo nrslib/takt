@@ -16,10 +16,13 @@ beforeEach(() => {
     if (gitArgs[0] === 'status') {
       return ' M src/work.ts\nA  src/staged.ts\n?? evidence.md\n';
     }
+    if (gitArgs[0] === 'show-ref') {
+      return 'refs/heads/verified\n';
+    }
     if (gitArgs[0] === 'diff' && gitArgs.includes('--cached')) {
       return ' src/staged.ts | 1 +\n';
     }
-    if (gitArgs[0] === 'diff' && gitArgs.includes('main...takt/fix')) {
+    if (gitArgs[0] === 'diff' && gitArgs.includes('refs/heads/main...refs/heads/takt/fix')) {
       return ' src/committed.ts | 2 +-\n';
     }
     if (gitArgs[0] === 'diff') {
@@ -46,5 +49,61 @@ describe('task worktree summary', () => {
 
     const commands = mockExecFileSync.mock.calls.map(([, args]) => args as string[]);
     expect(commands.every((args) => !['add', 'commit', 'fetch', 'push'].includes(args[0]!))).toBe(true);
+  });
+
+  it('base ref が無い場合は committed diff だけを省略し、作業ツリーの概要を維持する', () => {
+    mockExecFileSync.mockImplementation((_command, args) => {
+      const gitArgs = args as string[];
+      if (gitArgs[0] === 'status') {
+        return ' M src/work.ts\nA  src/staged.ts\n?? evidence.md\n';
+      }
+      if (gitArgs[0] === 'show-ref') {
+        const error = new Error('missing base ref') as Error & { status: number };
+        error.status = 1;
+        throw error;
+      }
+      if (gitArgs[0] === 'diff' && gitArgs.includes('--cached')) {
+        return ' src/staged.ts | 1 +\n';
+      }
+      if (gitArgs[0] === 'diff') {
+        return ' src/work.ts | 1 +\n';
+      }
+      return '';
+    });
+
+    const result = collectTaskWorktreeSummary('/worktree', 'missing-base', 'takt/fix');
+
+    expect(result.text).not.toContain('## コミット済み変更');
+    expect(result.text).toContain('## ステージ済み変更');
+    expect(result.text).toContain('## 未ステージ変更');
+    expect(result.text).toContain('## 作業ツリーの状態');
+    expect(result.files).toEqual(expect.arrayContaining(['src/staged.ts', 'src/work.ts', 'evidence.md']));
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'git',
+      ['show-ref', '--verify', '--quiet', 'refs/heads/missing-base'],
+      expect.objectContaining({ cwd: '/worktree' }),
+    );
+  });
+
+  it('refspec や Git option を branch ref として受け付けない', () => {
+    expect(() => collectTaskWorktreeSummary('/worktree', 'main', '--output=/tmp/summary')).toThrow();
+  });
+
+  it('ref検証自体のGit失敗は committed diff の省略として握りつぶさない', () => {
+    mockExecFileSync.mockImplementation((_command, args) => {
+      const gitArgs = args as string[];
+      if (gitArgs[0] === 'status') {
+        return '';
+      }
+      if (gitArgs[0] === 'show-ref') {
+        const error = new Error('git repository unavailable') as Error & { status: number };
+        error.status = 128;
+        throw error;
+      }
+      return '';
+    });
+
+    expect(() => collectTaskWorktreeSummary('/worktree', 'main', 'takt/fix'))
+      .toThrow('git repository unavailable');
   });
 });

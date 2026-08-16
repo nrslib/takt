@@ -96,6 +96,12 @@ function buildInstructTemplateVars(
   const runPromptVars = hasRunSession
     ? formatRunSessionForPrompt(runSessionContext)
     : { runTask: '', runWorkflow: '', runStatus: '', runStepLogs: '', runReports: '' };
+  const reportSummary = failedContext?.reportSummary.length
+    ? formatLiteralBlock(failedContext.reportSummary)
+    : '';
+  const worktreeSummary = failedContext?.worktreeSummary.length
+    ? formatLiteralBlock(failedContext.worktreeSummary)
+    : '';
 
   return {
     taskName,
@@ -112,17 +118,11 @@ function buildInstructTemplateVars(
     orderContent: previousOrderContent ?? '',
     hasPrContext: prContext !== undefined,
     prContextText: prContext ? renderPullRequestContext(prContext, lang) : '',
-    hasFailedContext: failedContext !== undefined,
-    failedContextText: failedContext
-      ? [
-        failedContext.reportSummary.length > 0
-          ? `### Final adjudication evidence\n\n${formatLiteralBlock(failedContext.reportSummary)}`
-          : '',
-        failedContext.worktreeSummary.length > 0
-          ? `### Worktree evidence\n\n${formatLiteralBlock(failedContext.worktreeSummary)}`
-          : '',
-      ].filter((section) => section.length > 0).join('\n\n')
-      : '',
+    hasFailedContext: reportSummary.length > 0 || worktreeSummary.length > 0,
+    hasReportSummary: reportSummary.length > 0,
+    hasWorktreeSummary: worktreeSummary.length > 0,
+    reportSummary,
+    worktreeSummary,
   };
 }
 

@@ -13,6 +13,7 @@ const {
   mockLoadRunSessionContext,
   mockExecFileSync,
   mockInfo,
+  mockError,
 } = vi.hoisted(() => ({
   mockExistsSync: vi.fn(() => true),
   mockConfirm: vi.fn(),
@@ -25,6 +26,7 @@ const {
   mockLoadRunSessionContext: vi.fn(),
   mockExecFileSync: vi.fn(),
   mockInfo: vi.fn(),
+  mockError: vi.fn(),
 }));
 
 vi.mock('node:fs', async (importOriginal) => ({
@@ -72,6 +74,7 @@ vi.mock('../shared/prompt/index.js', async (importOriginal) => ({
 vi.mock('../shared/ui/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   info: (...args: unknown[]) => mockInfo(...args),
+  error: (...args: unknown[]) => mockError(...args),
 }));
 
 import { createPullRequestForTask } from '../features/tasks/list/taskPullRequestActions.js';
@@ -139,6 +142,9 @@ describe('createPullRequestForTask', () => {
       if (gitArgs[0] === 'branch' && gitArgs[1] === '--show-current') {
         return cwd.includes('completed') ? 'takt/completed-task\n' : 'takt/failed-task\n';
       }
+      if (gitArgs[0] === 'remote') {
+        return 'origin\n';
+      }
       return '';
     });
   });
@@ -149,9 +155,22 @@ describe('createPullRequestForTask', () => {
       events.push('commit');
       return 'commit-123';
     });
-    mockExecFileSync.mockImplementation(() => {
+    mockExecFileSync.mockImplementation((_command, args, _options) => {
       events.push('git');
-      return 'takt/failed-task\n';
+      const gitArgs = args as string[];
+      if (gitArgs[0] === 'remote') {
+        return 'origin\n';
+      }
+      if (gitArgs[0] === 'rev-parse' && gitArgs.includes('--abbrev-ref')) {
+        return 'takt/failed-task\n';
+      }
+      if (gitArgs[0] === 'branch' && gitArgs[1] === '--show-current') {
+        return 'takt/failed-task\n';
+      }
+      if (gitArgs[0] === 'push') {
+        return '';
+      }
+      return '';
     });
     mockCreatePullRequestSafely.mockImplementation(() => {
       events.push('pr');
@@ -172,7 +191,16 @@ describe('createPullRequestForTask', () => {
     expect(lastGitIndex).toBeGreaterThan(commitIndex);
     expect(prIndex).toBeGreaterThan(lastGitIndex);
 
-    expect(mockExecFileSync.mock.calls.some(([, args]) => (args as string[])[0] === 'push')).toBe(true);
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'git',
+      ['remote'],
+      expect.objectContaining({ cwd: '/worktree/failed-task' }),
+    );
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'git',
+      ['push', 'origin', 'takt/failed-task'],
+      expect.objectContaining({ cwd: '/worktree/failed-task' }),
+    );
 
     const [, prOptions, prCwd] = mockCreatePullRequestSafely.mock.calls[0] as [
       unknown,
@@ -216,6 +244,9 @@ describe('createPullRequestForTask', () => {
       if (gitArgs[0] === 'rev-parse' || gitArgs[0] === 'branch') {
         return `${hostileBranch}\n`;
       }
+      if (gitArgs[0] === 'remote') {
+        return 'origin\n';
+      }
       return '';
     });
 
@@ -252,7 +283,11 @@ describe('createPullRequestForTask', () => {
       'takt: completed-task',
       { allowGitHooks: false, allowGitFilters: false },
     );
-    expect(mockExecFileSync.mock.calls.some(([, args]) => (args as string[])[0] === 'push')).toBe(true);
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'git',
+      ['push', 'origin', 'takt/completed-task'],
+      expect.objectContaining({ cwd: '/worktree/completed-task' }),
+    );
     expect(mockCreatePullRequestSafely).toHaveBeenCalled();
     const [, prOptions] = mockCreatePullRequestSafely.mock.calls[0] as [
       unknown,
@@ -291,6 +326,93 @@ describe('createPullRequestForTask', () => {
       'takt: failed-task',
       { allowGitHooks: true, allowGitFilters: true },
     );
+  });
+
+  it.each([
+    ['LF', 'first line  \nsecond line'],
+    ['CRLF', 'first line  \r\nsecond line'],
+  ])('summaryがない場合は task.content の%s先頭行をPRタイトルにする', async (_label, content) => {
+    await createPullRequestForTask('/project', {
+      ...failedTask,
+      summary: undefined,
+      content,
+    });
+
+    const [, prOptions] = mockCreatePullRequestSafely.mock.calls[0] as [
+      unknown,
+      { title: string },
+    ];
+    expect(prOptions.title).toBe('first line');
+  });
+
+  it('summaryがない場合もPRタイトルの100文字制限を維持する', async () => {
+    const firstLine = 'x'.repeat(120);
+
+    await createPullRequestForTask('/project', {
+      ...failedTask,
+      summary: undefined,
+      content: `${firstLine}\nsecond line`,
+    });
+
+    const [, prOptions] = mockCreatePullRequestSafely.mock.calls[0] as [
+      unknown,
+      { title: string },
+    ];
+    expect(prOptions.title).toBe(`${'x'.repeat(97)}...`);
+    expect(prOptions.title).toHaveLength(100);
+  });
+
+  it('stageAndCommit の失敗をPR作成境界で報告し、PR APIを呼ばない', async () => {
+    mockStageAndCommit.mockRejectedValue(new Error('commit failed'));
+
+    const result = await createPullRequestForTask('/project', failedTask);
+
+    expect(result).toBe(false);
+    expect(mockError).toHaveBeenCalledWith(
+      'PR 作成を中止しました: コミットに失敗しました: commit failed',
+    );
+    expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
+  });
+
+  it('publishTaskBranch の失敗をPR作成境界で報告し、PR APIを呼ばない', async () => {
+    mockExecFileSync.mockImplementation((_command, args, _options) => {
+      const gitArgs = args as string[];
+      if (gitArgs[0] === 'rev-parse' && gitArgs.includes('--abbrev-ref')) {
+        return 'takt/failed-task\n';
+      }
+      if (gitArgs[0] === 'remote') {
+        return 'origin\n';
+      }
+      if (gitArgs[0] === 'push') {
+        throw new Error('push failed');
+      }
+      return '';
+    });
+
+    const result = await createPullRequestForTask('/project', failedTask);
+
+    expect(result).toBe(false);
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'git',
+      ['push', 'origin', 'takt/failed-task'],
+      expect.objectContaining({ cwd: '/worktree/failed-task' }),
+    );
+    expect(mockError).toHaveBeenCalledWith(
+      'PR 作成を中止しました: ブランチの公開に失敗しました: push failed',
+    );
+    expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
+  });
+
+  it('commit失敗の表示から端末制御文字を除去し、PR APIを呼ばない', async () => {
+    mockStageAndCommit.mockRejectedValue(new Error('commit failed\x1b]0;injected\x07'));
+
+    const result = await createPullRequestForTask('/project', failedTask);
+
+    expect(result).toBe(false);
+    expect(mockError).toHaveBeenCalledWith(
+      'PR 作成を中止しました: コミットに失敗しました: commit failed',
+    );
+    expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
   });
 
   it('run_slugがない場合も全文task一致runを検索して本文のreportを解決する', async () => {

@@ -130,6 +130,12 @@ const failedTask: TaskListItem = {
   failure: { step: 'review', error: 'Boom' },
 };
 
+const failedTaskWithoutBranch: TaskListItem = {
+  ...failedTask,
+  name: 'failed-without-branch',
+  branch: undefined,
+};
+
 describe('listTasks interactive status actions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -328,6 +334,20 @@ describe('listTasks interactive status actions', () => {
       await listTasks('/project');
 
       expect(mockInstructBranch).toHaveBeenCalledWith('/project', failedTask, undefined);
+      expect(mockCreatePullRequestForTask).not.toHaveBeenCalled();
+    });
+
+    it('failed instruct 選択時に branch が無ければ表示して一覧へ戻る', async () => {
+      mockListAllTaskItems.mockReturnValue([failedTaskWithoutBranch]);
+      mockSelectOption
+        .mockResolvedValueOnce('failed:0')
+        .mockResolvedValueOnce('instruct')
+        .mockResolvedValueOnce(null);
+
+      await listTasks('/project');
+
+      expect(mockInfo).toHaveBeenCalledWith('Branch is missing for failed task: failed-without-branch');
+      expect(mockInstructBranch).not.toHaveBeenCalled();
       expect(mockCreatePullRequestForTask).not.toHaveBeenCalled();
     });
 

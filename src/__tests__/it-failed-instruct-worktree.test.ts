@@ -32,17 +32,18 @@ function createProject(): {
   root: string;
   projectDir: string;
   worktreePath: string;
-  globalDir: string;
 } {
   const root = join(tmpdir(), `takt-failed-instruct-${randomUUID()}`);
   const projectDir = join(root, 'project');
   const worktreePath = join(projectDir, '.takt', 'worktrees', 'failed-task');
-  const globalDir = join(root, 'global');
+  const configDir = process.env.TAKT_CONFIG_DIR;
+  if (configDir === undefined) {
+    throw new Error('TAKT_CONFIG_DIR must be provided by the shared test setup');
+  }
   mkdirSync(projectDir, { recursive: true });
-  mkdirSync(globalDir, { recursive: true });
   mkdirSync(join(projectDir, '.takt'), { recursive: true });
   mkdirSync(join(projectDir, '.takt', 'worktrees'), { recursive: true });
-  writeFileSync(join(globalDir, 'config.yaml'), 'language: en\nprovider: mock\n', 'utf-8');
+  writeFileSync(join(configDir, 'config.yaml'), 'language: en\nprovider: mock\n', 'utf-8');
   writeFileSync(join(projectDir, '.takt', 'config.yaml'), 'provider: mock\n', 'utf-8');
   mkdirSync(join(projectDir, '.takt', 'workflows', 'personas'), { recursive: true });
   writeFileSync(join(projectDir, '.gitignore'), [
@@ -78,17 +79,14 @@ function createProject(): {
   configureGit(worktreePath);
   git(worktreePath, ['checkout', '-b', 'takt/failed-task', 'main']);
 
-  return { root, projectDir, worktreePath, globalDir };
+  return { root, projectDir, worktreePath };
 }
 
 describe('IT: failed instruct re-execution terminal worktree', () => {
   let environment: ReturnType<typeof createProject>;
-  let originalConfigDir: string | undefined;
 
   beforeEach(() => {
     environment = createProject();
-    originalConfigDir = process.env.TAKT_CONFIG_DIR;
-    process.env.TAKT_CONFIG_DIR = environment.globalDir;
     invalidateGlobalConfigCache();
     resetScenario();
   });
@@ -96,11 +94,6 @@ describe('IT: failed instruct re-execution terminal worktree', () => {
   afterEach(() => {
     restoreStdin();
     resetScenario();
-    if (originalConfigDir === undefined) {
-      delete process.env.TAKT_CONFIG_DIR;
-    } else {
-      process.env.TAKT_CONFIG_DIR = originalConfigDir;
-    }
     invalidateGlobalConfigCache();
     if (environment && existsSync(environment.root)) {
       rmSync(environment.root, { recursive: true, force: true });

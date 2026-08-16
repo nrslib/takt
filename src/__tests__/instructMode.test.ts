@@ -327,15 +327,19 @@ describe('runInstructMode', () => {
       'en',
       expect.objectContaining({
         hasFailedContext: true,
-        failedContextText: expect.stringContaining('npm run test:e2e:mock'),
+        hasReportSummary: true,
+        hasWorktreeSummary: true,
+        reportSummary: expect.stringContaining('npm run test:e2e:mock'),
+        worktreeSummary: expect.stringContaining('?? evidence.md'),
       }),
     );
     const templateVars = mockLoadTemplate.mock.calls.find((call) => call[0] === 'score_instruct_system_prompt')?.[2] as Record<string, unknown>;
-    const failedContextText = String(templateVars.failedContextText);
-    expect(failedContextText).toContain('?? evidence.md');
-    expect(failedContextText).toContain('````text');
-    expect(failedContextText).toContain('### Final adjudication evidence');
-    expect(failedContextText).toContain('### Worktree evidence');
+    const reportSummary = String(templateVars.reportSummary);
+    const worktreeSummary = String(templateVars.worktreeSummary);
+    expect(reportSummary).toContain('````text');
+    expect(worktreeSummary).toContain('```text');
+    expect(reportSummary).not.toContain('Final adjudication evidence');
+    expect(worktreeSummary).not.toContain('Worktree evidence');
   });
 
   it('should inject PR context only when supplied by a PR-derived task', async () => {

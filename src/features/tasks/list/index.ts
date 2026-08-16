@@ -251,6 +251,10 @@ export async function listTasks(
       } else if (taskAction === 'retry') {
         await taskRetryActions.retryFailedTask(task, cwd, options);
       } else if (taskAction === 'instruct') {
+        if (!task.branch) {
+          info(`Branch is missing for failed task: ${task.name}`);
+          continue;
+        }
         await instructBranch(cwd, task, options);
       } else if (taskAction === 'create_pr') {
         await createPullRequestForTask(cwd, task);
