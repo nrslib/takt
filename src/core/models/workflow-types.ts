@@ -401,7 +401,8 @@ export interface TeamLeaderWorkflowStep extends AgentWorkflowStepBase {
   concurrency?: never;
   arpeggio?: never;
   teamLeader: TeamLeaderConfig;
-  dynamicFacets?: never;
+  dynamicFacets?: DynamicFacetsConfig;
+  companion?: CompanionSelection;
 }
 
 export type AgentWorkflowStep =

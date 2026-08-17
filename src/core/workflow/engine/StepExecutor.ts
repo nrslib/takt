@@ -19,6 +19,7 @@ import type {
   WorkflowWideRule,
   WorkflowResumePointEntry,
   NormalAgentWorkflowStep,
+  TeamLeaderWorkflowStep,
   ResolvedFacetPool,
   ResolvedFacetContent,
 } from '../../models/types.js';
@@ -121,6 +122,8 @@ import {
 } from './fallback-operation.js';
 
 const log = createLogger('step-executor');
+
+type NormalOrTeamLeaderWorkflowStep = NormalAgentWorkflowStep | TeamLeaderWorkflowStep;
 
 function emitCompanionReviewSkippedSafely(
   emitEvent: StepExecutorDeps['emitEvent'],
@@ -694,7 +697,7 @@ export class StepExecutor {
     return fixLoop.phaseResponse;
   }
 
-  private resolveDynamicFacetPool(step: NormalAgentWorkflowStep): ResolvedFacetPool | undefined {
+  private resolveDynamicFacetPool(step: NormalOrTeamLeaderWorkflowStep): ResolvedFacetPool | undefined {
     if (step.dynamicFacets === undefined) return undefined;
     return this.deps.getFacetPool?.(step.dynamicFacets.pool);
   }
@@ -706,7 +709,12 @@ export class StepExecutor {
     stepIteration: number,
     context?: DynamicFacetSelectionContext,
   ): Promise<AgentWorkflowStep> {
-    if (!isNormalAgentWorkflowStep(step) || step.dynamicFacets === undefined) {
+    const dynamicFacetStep = isNormalAgentWorkflowStep(step)
+      ? step
+      : step.teamLeader === undefined
+        ? undefined
+        : step;
+    if (dynamicFacetStep === undefined || dynamicFacetStep.dynamicFacets === undefined) {
       return step;
     }
     if (this.deps.dynamicFacetSelectorCoordinator === undefined) {
@@ -714,14 +722,14 @@ export class StepExecutor {
         `Configuration error: step "${step.name}" has dynamic_facets but no dynamic facet selector coordinator is configured`,
       );
     }
-    const pool = this.resolveDynamicFacetPool(step);
+    const pool = this.resolveDynamicFacetPool(dynamicFacetStep);
     if (pool === undefined) {
       throw new Error(
-        `Configuration error: step "${step.name}" references unknown facet pool "${step.dynamicFacets.pool}"`,
+        `Configuration error: step "${step.name}" references unknown facet pool "${dynamicFacetStep.dynamicFacets.pool}"`,
       );
     }
     const result = await this.deps.dynamicFacetSelectorCoordinator.resolveDynamicFacets(
-      step,
+      dynamicFacetStep,
       state,
       task,
       pool,
@@ -732,6 +740,112 @@ export class StepExecutor {
       policyContents: result.effectivePolicyContents.map((content) => ({ content })),
       knowledgeContents: result.effectiveKnowledgeContents.map((content) => ({ content })),
     } as AgentWorkflowStep;
+  }
+
+  async createCompanionRuntime(
+    step: NormalOrTeamLeaderWorkflowStep,
+    task: string,
+    state: WorkflowState,
+  ): Promise<CompanionStepRuntime | undefined> {
+    if (!this.deps.companionEnabled) {
+      if (step.companion !== undefined) {
+        emitCompanionReviewSkippedSafely(this.deps.emitEvent, {
+          step: step.name,
+          phase: 'initial',
+          reason: 'companion_disabled',
+          runPathNamespace: [...this.deps.getRunPathNamespace()],
+        });
+      }
+      return undefined;
+    }
+    if (step.companion === undefined) {
+      emitCompanionReviewSkippedSafely(this.deps.emitEvent, {
+        step: step.name,
+        phase: 'initial',
+        reason: 'companion_not_configured',
+        runPathNamespace: [...this.deps.getRunPathNamespace()],
+      });
+      return undefined;
+    }
+
+    const companionDefinitions = this.deps.companionDefinitions;
+    const companionProviders = this.deps.companionProviders;
+    const companionDiffReader = this.deps.companionDiffReader;
+    state.companion = {
+      completionSettled: false,
+      followUpRounds: 0,
+    };
+    try {
+      if (
+        companionDefinitions === undefined
+        || companionProviders === undefined
+        || companionDiffReader === undefined
+      ) {
+        throw new Error(`Companion runtime configuration is missing for step "${step.name}"`);
+      }
+      return await CompanionStepRuntime.create({
+        cwd: this.deps.getCwd(),
+        projectCwd: this.deps.getProjectCwd(),
+        failureDir: this.deps.getFailureDir(),
+        runSlug: this.deps.getRunId(),
+        runPathNamespace: this.deps.getRunPathNamespace(),
+        language: this.deps.getLanguage() ?? 'en',
+        task,
+        step,
+        definitions: companionDefinitions,
+        providers: companionProviders,
+        selectorProvider: this.deps.companionSelectorProvider,
+        diffReader: companionDiffReader,
+        abortSignal: this.resolveAbortSignal(),
+        buildProviderCallCallbacks: ({
+          agentName,
+          purpose,
+          callSequence,
+          provider,
+        }) => this.deps.optionsBuilder.buildProviderCallCallbacks(
+          step,
+          provider.provider,
+          provider.model,
+          buildCompanionExecutionUnitKey({
+            stepName: step.name,
+            agentName,
+            purpose,
+            callSequence,
+          }),
+        ),
+        emitEvent: this.deps.emitEvent,
+        recordUsage: (name, companionProvider, success, usage) => {
+          this.deps.recordSynthesizedAgentUsage(
+            `companion:${name}`,
+            {
+              provider: companionProvider.provider,
+              model: companionProvider.model,
+              providerOptions: companionProvider.providerOptions,
+            },
+            success,
+            usage,
+          );
+        },
+      });
+    } catch (error) {
+      this.resolveAbortSignal()?.throwIfAborted();
+      const reason = safeExternalErrorMessage(error);
+      state.companion = {
+        ...requireActiveCompanionState(state, step.name),
+        completionFailure: true,
+        reason,
+      };
+      emitCompanionReviewSkippedSafely(this.deps.emitEvent, {
+        step: step.name,
+        phase: 'initial',
+        reason: 'companion_runtime_unavailable',
+        runPathNamespace: [...this.deps.getRunPathNamespace()],
+      });
+      log.warn(
+        `Companion startup failed for "${step.name}"; main step will continue without completion review: ${reason}`,
+      );
+      return undefined;
+    }
   }
 
   private writeSnapshot(
@@ -1119,7 +1233,7 @@ export class StepExecutor {
       workflowState: state,
       ...(step.engineSynthesized === true ? {} : { workflowRules: this.deps.getWorkflowRules() }),
       ...(!this.deps.companionEnabled
-        || !isNormalAgentWorkflowStep(step)
+        || (!isNormalAgentWorkflowStep(step) && step.teamLeader === undefined)
         || step.companion === undefined
         ? {}
         : {
@@ -1349,107 +1463,14 @@ export class StepExecutor {
     );
 
     // Phase 1: main execution (Write excluded if step has report)
-    let companionRuntime: CompanionStepRuntime | undefined;
-    if (isNormalAgentWorkflowStep(executableStep)) {
-      if (!this.deps.companionEnabled && executableStep.companion !== undefined) {
-        emitCompanionReviewSkippedSafely(this.deps.emitEvent, {
-          step: step.name,
-          phase: 'initial',
-          reason: 'companion_disabled',
-          runPathNamespace: [...this.deps.getRunPathNamespace()],
-        });
-      } else if (this.deps.companionEnabled && executableStep.companion === undefined) {
-        emitCompanionReviewSkippedSafely(this.deps.emitEvent, {
-          step: step.name,
-          phase: 'initial',
-          reason: 'companion_not_configured',
-          runPathNamespace: [...this.deps.getRunPathNamespace()],
-        });
-      }
-    }
-    if (
-      this.deps.companionEnabled
-      && isNormalAgentWorkflowStep(executableStep)
-      && executableStep.companion !== undefined
-    ) {
-      const companionDefinitions = this.deps.companionDefinitions;
-      const companionProviders = this.deps.companionProviders;
-      const companionDiffReader = this.deps.companionDiffReader;
-      state.companion = {
-        completionSettled: false,
-        followUpRounds: 0,
-      };
-      try {
-        if (
-          companionDefinitions === undefined
-          || companionProviders === undefined
-          || companionDiffReader === undefined
-        ) {
-          throw new Error(`Companion runtime configuration is missing for step "${step.name}"`);
-        }
-        companionRuntime = await CompanionStepRuntime.create({
-          cwd: this.deps.getCwd(),
-          projectCwd: this.deps.getProjectCwd(),
-          failureDir: this.deps.getFailureDir(),
-          runSlug: this.deps.getRunId(),
-          runPathNamespace: this.deps.getRunPathNamespace(),
-          language: this.deps.getLanguage() ?? 'en',
-          task,
-          step: executableStep,
-          definitions: companionDefinitions,
-          providers: companionProviders,
-          selectorProvider: this.deps.companionSelectorProvider,
-          diffReader: companionDiffReader,
-          abortSignal: this.resolveAbortSignal(),
-          buildProviderCallCallbacks: ({
-            agentName,
-            purpose,
-            callSequence,
-            provider,
-          }) => this.deps.optionsBuilder.buildProviderCallCallbacks(
-            executableStep,
-            provider.provider,
-            provider.model,
-            buildCompanionExecutionUnitKey({
-              stepName: step.name,
-              agentName,
-              purpose,
-              callSequence,
-            }),
-          ),
-          emitEvent: this.deps.emitEvent,
-          recordUsage: (name, companionProvider, success, usage) => {
-            this.deps.recordSynthesizedAgentUsage(
-              `companion:${name}`,
-              {
-                provider: companionProvider.provider,
-                model: companionProvider.model,
-                providerOptions: companionProvider.providerOptions,
-              },
-              success,
-              usage,
-            );
-          },
-        });
-      } catch (error) {
-        this.resolveAbortSignal()?.throwIfAborted();
-        const reason = safeExternalErrorMessage(error);
-        state.companion = {
-          ...requireActiveCompanionState(state, step.name),
-          completionFailure: true,
-          reason,
-        };
-        emitCompanionReviewSkippedSafely(this.deps.emitEvent, {
-          step: step.name,
-          phase: 'initial',
-          reason: 'companion_runtime_unavailable',
-          runPathNamespace: [...this.deps.getRunPathNamespace()],
-        });
-        log.warn(
-          `Companion startup failed for "${step.name}"; main step will continue without completion review: ${reason}`,
-        );
-      }
-    }
+    const companionStep = isNormalAgentWorkflowStep(executableStep)
+      ? executableStep
+      : executableStep.teamLeader === undefined
+        ? undefined
+        : executableStep;
+    const companionRuntime = companionStep === undefined
+      ? undefined
+      : await this.createCompanionRuntime(companionStep, task, state);
     using activeCompanionRuntime = companionRuntime;
     const baseAgentOptions = activeCompanionRuntime?.composeOptions(builtAgentOptions)
       ?? builtAgentOptions;

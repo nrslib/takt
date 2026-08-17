@@ -1,4 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RuntimeStepResolution } from '../core/workflow/types.js';
 import {
   createWorkflowStepAbortSignalContext,
@@ -9,6 +12,8 @@ import {
   requestValidTeamLeaderDecomposition,
   TeamLeaderDecompositionValidationError,
 } from '../agents/team-leader-decomposition-regeneration.js';
+import { requestMoreParts } from '../agents/decompose-task-usecase.js';
+import { appendCompanionMailboxFindings } from '../core/workflow/companion/mailbox.js';
 import { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
 import { TeamLeaderRunner } from '../core/workflow/engine/TeamLeaderRunner.js';
 import {
@@ -221,6 +226,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         persona: 'team-leader',
         maxConcurrency: 2,
         timeoutMs: 1000,
+        inspectTools: ['read', 'glob'],
         partPersona: 'coder',
         partAllowedTools: ['Read', 'Edit'],
         partEdit: true,
@@ -269,6 +275,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         resolvedModel: 'opencode/zai-coding-plan/glm-5.1',
         resolvedProvider: 'opencode',
         failureDir: '/tmp/project/.takt/runs/sample/failures',
+        inspectTools: ['read', 'glob'],
         abortSignal: leaderAbortController.signal,
         onStream: leaderProviderStream,
         onActivity: leaderOnActivity,
@@ -433,6 +440,201 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       ['implement', 1],
       ['implement.part-1', 1],
     ]));
+  });
+
+  it('re-enters feedback after a terminal response when completion review accepts a finding', async () => {
+    const mailboxRoot = mkdtempSync(join(tmpdir(), 'takt-team-leader-mailbox-'));
+    const mailboxPath = join(mailboxRoot, 'security-reviewer.jsonl');
+    const findingSentinel = 'MAILBOX_SENTINEL_FINDING';
+    const finding = {
+      severity: 'must_fix' as const,
+      file: 'src/value.ts',
+      line: 1,
+      finding: findingSentinel,
+    };
+    const events: string[] = [];
+    const feedbackPrompts: string[] = [];
+    const feedbackRequests: Array<{
+      instruction: string;
+      inspectTools: string[] | undefined;
+    }> = [];
+    const mailboxPulls: string[] = [];
+    let feedbackCallCount = 0;
+    const structuredResponse = (structuredOutput: Record<string, unknown>): AgentResponse => ({
+      persona: 'coder',
+      status: 'done',
+      content: '',
+      timestamp: new Date(),
+      structuredOutput,
+    });
+
+    try {
+      mockExecuteAgent.mockImplementation(async (
+        _persona: string | undefined,
+        prompt: string,
+        options: { allowedTools?: string[]; outputSchema?: Record<string, unknown> } = {},
+      ): Promise<AgentResponse> => {
+        if (options.outputSchema === undefined) {
+          return {
+            persona: 'coder',
+            status: 'done',
+            content: 'part completed',
+            timestamp: new Date(),
+          };
+        }
+
+        feedbackCallCount += 1;
+        feedbackPrompts.push(prompt);
+        expect(options.allowedTools).toEqual(['Read', 'Glob', 'Grep']);
+        expect(prompt).not.toContain(findingSentinel);
+        if (feedbackCallCount === 1) {
+          return structuredResponse({
+            done: true,
+            reasoning: 'initially complete',
+            cancelPartIds: [],
+            parts: [],
+          });
+        }
+        if (feedbackCallCount === 2) {
+          expect(prompt).toContain(mailboxPath);
+          const mailbox = readFileSync(mailboxPath, 'utf8');
+          mailboxPulls.push(mailbox);
+          events.push('mailbox-read');
+          expect(mailbox).toContain(findingSentinel);
+          events.push('correction-response');
+          return structuredResponse({
+            done: false,
+            reasoning: 'apply the mailbox finding',
+            cancelPartIds: [],
+            parts: [{ id: 'part-2', title: 'Correction', instruction: 'Fix the finding' }],
+          });
+        }
+        return structuredResponse({
+          done: true,
+          reasoning: 'complete after correction',
+          cancelPartIds: [],
+          parts: [],
+        });
+      });
+
+      const companionRuntime = {
+        beginReviewAttempt: vi.fn(),
+        beginFollowUpRound: vi.fn(),
+        composeOptions: vi.fn((options: Record<string, unknown>) => options),
+        complete: vi.fn()
+          .mockImplementationOnce(async () => {
+            appendCompanionMailboxFindings({
+              path: mailboxPath,
+              companionName: 'reviewer',
+              reviewedAt: '2026-08-17T00:00:00.000Z',
+              reviewedDigest: 'digest-1',
+              findings: [finding],
+            });
+            events.push('mailbox-append');
+            return { findings: [finding] };
+          })
+          .mockResolvedValueOnce({ findings: [] }),
+        [Symbol.dispose]: vi.fn(),
+      };
+      const observedRequestMoreParts = async (...args: Parameters<typeof requestMoreParts>) => {
+        const [instruction, _results, _existingIds, options] = args;
+        feedbackRequests.push({ instruction, inspectTools: options.inspectTools });
+        return requestMoreParts(...args);
+      };
+      const structuredCaller = {
+        decomposeTask: vi.fn().mockImplementation(async (
+          _instruction: string,
+          _maxInitialParts: number | undefined,
+          options: { onPromptResolved?: (parts: { systemPrompt: string; userInstruction: string }) => void },
+        ) => {
+          options.onPromptResolved?.({ systemPrompt: 'leader', userInstruction: 'leader instruction' });
+          return { parts: [{ id: 'part-1', title: 'Implementation', instruction: 'Implement the change' }] };
+        }),
+        requestMoreParts: vi.fn(observedRequestMoreParts),
+      };
+      const applyPostExecutionPhases = vi.fn(async (
+        _step: WorkflowStep,
+        _state: WorkflowState,
+        _iteration: number,
+        response: AgentResponse,
+      ) => response);
+      const runner = new TeamLeaderRunner({
+        optionsBuilder: {
+          buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
+          buildBaseOptions: vi.fn().mockReturnValue({}),
+          buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+          resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
+          resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'mock', model: 'mock-model' }),
+        },
+        stepExecutor: {
+          buildInstruction: vi.fn((candidate: WorkflowStep) => new InstructionBuilder(
+            candidate,
+            makeInstructionContext({
+              task: 'implement feature',
+              companion: { mailboxDirectory: mailboxPath },
+            }),
+          ).build()),
+          createCompanionRuntime: vi.fn().mockResolvedValue(companionRuntime),
+          applyPostExecutionPhases,
+          persistPreviousResponseSnapshot: vi.fn(),
+          emitStepReports: vi.fn(),
+        },
+        engineOptions: { projectCwd: '/tmp/project', structuredCaller },
+        getCwd: () => '/tmp/project',
+        getWorkflowName: () => 'workflow',
+        getInteractive: () => false,
+        observabilityEnabled: false,
+      } as ConstructorParameters<typeof TeamLeaderRunner>[0]);
+      const state: WorkflowState = {
+        workflowName: 'workflow',
+        currentStep: 'implement',
+        iteration: 1,
+        stepOutputs: new Map(),
+        structuredOutputs: new Map(),
+        systemContexts: new Map(),
+        effectResults: new Map(),
+        lastOutput: undefined,
+        previousResponseSourcePath: undefined,
+        userInputs: [],
+        personaSessions: new Map(),
+        stepIterations: new Map(),
+        status: 'running',
+      };
+      const step: WorkflowStep = {
+        name: 'implement',
+        persona: 'coder',
+        personaDisplayName: 'coder',
+        instruction: 'leader instruction',
+        passPreviousResponse: false,
+        teamLeader: {
+          maxConcurrency: 1,
+          timeoutMs: 1_000,
+          inspectTools: ['read', 'glob', 'grep'],
+        },
+        companion: { fixed: ['reviewer'], pool: [] },
+      };
+
+      await runner.runTeamLeaderStep(step, state, 'implement feature', 5, vi.fn());
+
+      expect(feedbackCallCount).toBe(3);
+      expect(feedbackRequests).toHaveLength(3);
+      for (const { instruction, inspectTools } of feedbackRequests) {
+        expect(inspectTools).toEqual(['Read', 'Glob', 'Grep']);
+        expect(instruction).toContain(mailboxPath);
+        expect(instruction).not.toContain(findingSentinel);
+      }
+      expect(feedbackPrompts).toHaveLength(3);
+      expect(feedbackPrompts.every((prompt) => !prompt.includes(findingSentinel))).toBe(true);
+      expect(mailboxPulls).toHaveLength(1);
+      expect(mailboxPulls[0]).toContain(findingSentinel);
+      expect(events).toEqual(['mailbox-append', 'mailbox-read', 'correction-response']);
+      expect(companionRuntime.complete).toHaveBeenCalledTimes(2);
+      expect(companionRuntime.beginReviewAttempt).toHaveBeenCalledOnce();
+      expect(applyPostExecutionPhases).toHaveBeenCalledOnce();
+      expect(mockExecuteAgent).toHaveBeenCalledTimes(5);
+    } finally {
+      rmSync(mailboxRoot, { recursive: true, force: true });
+    }
   });
 
   it.each([
@@ -1501,7 +1703,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       language: 'ja',
       inspectTools: ['Read', 'Glob', 'Grep'],
     }));
-    expect(requestOptions).not.toHaveProperty('inspectTools');
+    expect(requestOptions).toEqual(expect.objectContaining({
+      inspectTools: ['Read', 'Glob', 'Grep'],
+    }));
     const [, , partOptions] = mockExecuteAgent.mock.calls[0] ?? [];
     expect(partOptions).toEqual(expect.objectContaining({
       allowedTools: ['Read', 'Edit'],
@@ -1613,7 +1817,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     expect(decomposeOptions).toEqual(expect.objectContaining({
       inspectTools: ['read', 'glob', 'grep'],
     }));
-    expect(requestOptions).not.toHaveProperty('inspectTools');
+    expect(requestOptions).toEqual(expect.objectContaining({
+      inspectTools: ['read', 'glob', 'grep'],
+    }));
     expect(partOptions).toEqual(expect.objectContaining({
       allowedTools: ['read', 'edit'],
     }));
@@ -1722,7 +1928,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     expect(decomposeOptions).toEqual(expect.objectContaining({
       inspectTools: ['Read', 'Glob', 'Grep'],
     }));
-    expect(requestOptions).not.toHaveProperty('inspectTools');
+    expect(requestOptions).toEqual(expect.objectContaining({
+      inspectTools: ['Read', 'Glob', 'Grep'],
+    }));
     expect(partOptions.allowedTools).toBeUndefined();
   });
 

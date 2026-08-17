@@ -254,7 +254,7 @@ export class InstructionBuilder {
 
   private appendCompanionInstruction(instructions: string): string {
     if (
-      !isNormalAgentWorkflowStep(this.step)
+      (!isNormalAgentWorkflowStep(this.step) && this.step.teamLeader === undefined)
       || this.step.companion === undefined
       || this.context.companion === undefined
     ) return instructions;

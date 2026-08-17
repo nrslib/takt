@@ -6,7 +6,7 @@ import type {
   WorkflowState,
   WorkflowStep,
 } from '../../models/types.js';
-import { getAllParallelSubSteps, isNormalAgentWorkflowStep } from '../../models/types.js';
+import { getAllParallelSubSteps } from '../../models/types.js';
 import { isDelegatedWorkflowStep, isSystemWorkflowStep, isWorkflowCallStep } from '../step-kind.js';
 import type {
   RuntimeStepResolution,
@@ -301,7 +301,7 @@ export class WorkflowEngineStepCoordinator {
   ): WorkflowStepDeadlineProviderInfo[] {
     const providerInfos = [this.deps.optionsBuilder.resolveStepProviderModel(step, runtime)];
 
-    if (isNormalAgentWorkflowStep(step) && step.dynamicFacets !== undefined) {
+    if ('dynamicFacets' in step && step.dynamicFacets !== undefined) {
       const selectorProvider = this.deps.getOptions().selectorProvider;
       if (selectorProvider !== undefined) {
         providerInfos.push(selectorProvider);

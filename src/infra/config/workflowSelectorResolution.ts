@@ -1,6 +1,5 @@
 import {
   getAllParallelSubSteps,
-  isNormalAgentWorkflowStep,
   isDynamicParallelSubSteps,
   type WorkflowConfig,
   type WorkflowStep,
@@ -57,7 +56,7 @@ function hasDynamicFacets(workflow: WorkflowConfig): boolean {
 }
 
 function hasDynamicFacetsInStep(step: WorkflowStep): boolean {
-  if (isNormalAgentWorkflowStep(step) && step.dynamicFacets !== undefined) {
+  if ('dynamicFacets' in step && step.dynamicFacets !== undefined) {
     return true;
   }
   return step.parallel !== undefined
@@ -66,7 +65,7 @@ function hasDynamicFacetsInStep(step: WorkflowStep): boolean {
 
 function hasCompanionPool(workflow: WorkflowConfig): boolean {
   return workflow.steps.some((step) => (
-    isNormalAgentWorkflowStep(step) && (step.companion?.pool.length ?? 0) > 0
+    ('companion' in step ? step.companion?.pool.length ?? 0 : 0) > 0
   ));
 }
 

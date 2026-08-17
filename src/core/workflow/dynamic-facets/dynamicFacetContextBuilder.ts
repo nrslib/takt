@@ -1,5 +1,6 @@
 import type {
-  NormalAgentWorkflowStep,
+  AgentWorkflowStep,
+  DynamicFacetSelectionSnapshot,
   ResolvedFacetContent,
   ResolvedFacetPool,
 } from '../../models/workflow-types.js';
@@ -10,7 +11,7 @@ export interface DynamicFacetSelectorInstructionInput {
   readonly workflowName: string;
   readonly stepName: string;
   readonly workflowCallPath: readonly { readonly step: string }[];
-  readonly isReentry: boolean;
+  readonly previousSnapshot?: DynamicFacetSelectionSnapshot;
   readonly stepIteration: number;
   readonly reportDirectory: string;
   readonly reportNames: readonly string[];
@@ -30,7 +31,7 @@ function renderList(values: readonly string[]): string {
   return values.length === 0 ? '(none)' : values.map((value) => `- ${value}`).join('\n');
 }
 
-export function buildDynamicFacetTargetAgentPrompt(step: NormalAgentWorkflowStep): string {
+export function buildDynamicFacetTargetAgentPrompt(step: AgentWorkflowStep): string {
   return [
     ...(step.persona === undefined ? [] : [`Persona:\n${step.persona}`]),
     `Policy:\n${joinFacetContents(step.policyContents)}`,
@@ -40,7 +41,7 @@ export function buildDynamicFacetTargetAgentPrompt(step: NormalAgentWorkflowStep
 }
 
 export function buildDynamicFacetSelectorInstruction(input: DynamicFacetSelectorInstructionInput): string {
-  const entryType = input.isReentry ? 're-entry' : 'initial entry';
+  const entryType = input.previousSnapshot === undefined ? 'initial entry' : 're-entry';
   const callPath = input.workflowCallPath.length === 0
     ? '(root)'
     : input.workflowCallPath.map((entry) => entry.step).join(' > ');
@@ -58,6 +59,17 @@ export function buildDynamicFacetSelectorInstruction(input: DynamicFacetSelector
     `Step:\n${input.stepName}`,
     `Workflow call path:\n${callPath}`,
     `Entry type:\n${entryType}`,
+    ...(input.previousSnapshot === undefined
+      ? []
+      : [
+          '',
+          'Previous selection snapshot:',
+          `round: ${input.previousSnapshot.round}`,
+          `selected_ids:\n${renderList(input.previousSnapshot.selected_ids)}`,
+          `selected_policy_refs:\n${renderList(input.previousSnapshot.selected_policy_refs)}`,
+          `selected_knowledge_refs:\n${renderList(input.previousSnapshot.selected_knowledge_refs)}`,
+          `rationale:\n${input.previousSnapshot.rationale}`,
+        ]),
     `Step iteration:\n${input.stepIteration}`,
     '',
     `Report Directory:\n${input.reportDirectory}`,

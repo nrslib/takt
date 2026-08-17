@@ -204,6 +204,7 @@ function buildMorePartsBasePrompt(
   allResults: TeamLeaderPartFeedbackResult[],
   existingIds: string[],
   language?: Language,
+  inspectTools?: readonly string[],
   cancellablePartIds: readonly string[] = [],
 ): string {
   const resultBlock = allResults.map((result) => [
@@ -214,7 +215,7 @@ function buildMorePartsBasePrompt(
   if (language === 'ja') {
     return [
       '以下の実行結果を見て、追加のサブタスクが必要か判断してください。',
-      ...buildInspectToolGuidance(language, undefined, { requireAtLeastOnePart: false }),
+      ...buildInspectToolGuidance(language, inspectTools, { requireAtLeastOnePart: false }),
       '',
       '## 元タスク',
       originalInstruction,
@@ -239,7 +240,7 @@ function buildMorePartsBasePrompt(
 
   return [
     'Review completed part results and decide whether additional parts are needed.',
-    ...buildInspectToolGuidance(language, undefined, { requireAtLeastOnePart: false }),
+    ...buildInspectToolGuidance(language, inspectTools, { requireAtLeastOnePart: false }),
     '',
     '## Original Task',
     originalInstruction,
@@ -298,6 +299,7 @@ export function buildMorePartsPrompt(
   allResults: TeamLeaderPartFeedbackResult[],
   existingIds: string[],
   language?: Language,
+  inspectTools?: readonly string[],
   cancellablePartIds: readonly string[] = [],
 ): string {
   return buildMorePartsBasePrompt(
@@ -305,6 +307,7 @@ export function buildMorePartsPrompt(
     allResults,
     existingIds,
     language,
+    inspectTools,
     cancellablePartIds,
   );
 }
@@ -314,6 +317,7 @@ export function buildPromptBasedMorePartsPrompt(
   allResults: TeamLeaderPartFeedbackResult[],
   existingIds: string[],
   language?: Language,
+  inspectTools?: readonly string[],
   cancellablePartIds: readonly string[] = [],
 ): string {
   const outputInstruction = language === 'ja'
@@ -335,6 +339,7 @@ export function buildPromptBasedMorePartsPrompt(
     allResults,
     existingIds,
     language,
+    inspectTools,
     cancellablePartIds,
   )}\n${outputInstruction.join('\n')}`;
 }

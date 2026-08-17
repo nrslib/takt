@@ -69,7 +69,7 @@ export interface DecomposeTaskOptions {
 
 export type MorePartsOptions = Omit<
   DecomposeTaskOptions,
-  'inspectTools' | 'onPromptResolved'
+  'onPromptResolved'
 > & {
   cancellablePartIds: readonly string[];
 };
@@ -198,6 +198,7 @@ export async function requestMorePartsRawResponse(
     allResults,
     existingIds,
     options.language,
+    options.inspectTools,
     options.cancellablePartIds,
   );
 
@@ -217,6 +218,7 @@ export async function requestMorePartsRawResponse(
         providerOptions: options.resolvedProviderOptions,
         permissionMode: options.permissionMode,
       },
+      ...(options.inspectTools === undefined ? {} : { allowedTools: options.inspectTools }),
       mcpServers: options.mcpServers,
       onStream: createPublicationGuardedStreamCallback(options.onStream, options.abortSignal),
       onActivity: options.onActivity,

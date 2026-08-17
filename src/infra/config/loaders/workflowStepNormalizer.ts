@@ -537,17 +537,19 @@ export function normalizeStepFromRaw(
   }
 
   const teamLeader = normalizeTeamLeader(step.team_leader, workflowDir, sections, stepPath, context);
+  const dynamicFacets = normalizeDynamicFacets(step.dynamic_facets, stepPath, workflowDir, sections, context);
   if (teamLeader) {
     return {
       ...normalizedAgentFields,
       teamLeader,
+      dynamicFacets,
     };
   }
 
   return {
     ...normalizedAgentFields,
     session: step.session,
-    dynamicFacets: normalizeDynamicFacets(step.dynamic_facets, stepPath, workflowDir, sections, context),
+    dynamicFacets,
   };
   } catch (error) {
     throw withWorkflowStepErrorPath(error, stepPath);

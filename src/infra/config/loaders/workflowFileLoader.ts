@@ -25,7 +25,6 @@ import type { WorkflowCallArgResolutionPolicy } from './workflowCallableArgResol
 import { resolveWorkflowTrustInfo, type WorkflowTrustInfo } from './workflowTrustSource.js';
 import { buildConfiguredCompanionLookupDirs } from './companionLookupDirectories.js';
 import { loadCompanionDefinition } from './companionDefinitionLoader.js';
-import { isNormalAgentWorkflowStep } from '../../../core/models/types.js';
 
 interface LoadWorkflowFromFileOptions {
   trustInfo?: WorkflowTrustInfo;
@@ -104,7 +103,7 @@ function loadWorkflowFromFileInternal(
   );
   const companionNames = new Set<string>();
   for (const step of config.steps) {
-    if (!isNormalAgentWorkflowStep(step) || step.companion === undefined) continue;
+    if (!('companion' in step) || step.companion === undefined) continue;
     for (const name of step.companion.fixed) companionNames.add(name);
     for (const name of step.companion.pool) companionNames.add(name);
     if (step.companion.moderator !== undefined) companionNames.add(step.companion.moderator);

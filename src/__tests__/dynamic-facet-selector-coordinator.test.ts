@@ -371,10 +371,10 @@ describe('DynamicFacetSelectorCoordinator', () => {
     );
     expect(instructionSpy).toHaveBeenCalledOnce();
     const instructionInput = instructionSpy.mock.calls[0]![0] as {
-      isReentry: boolean;
+      previousSnapshot?: DynamicFacetSelectionSnapshot;
       reportNames: readonly string[];
     };
-    expect(instructionInput.isReentry).toBe(false);
+    expect(instructionInput.previousSnapshot).toBeUndefined();
     expect(instructionInput.reportNames).toEqual([]);
   });
 
@@ -404,8 +404,8 @@ describe('DynamicFacetSelectorCoordinator', () => {
     expect(mockedExecuteAgent).not.toHaveBeenCalled();
   });
 
-  // L2: round increment + isReentry propagation through coordinator chain.
-  it('increments round and propagates isReentry when selector runs with a previous selection (L2)', async () => {
+  // L2: round increment + previous snapshot propagation through coordinator chain.
+  it('increments round and propagates the previous snapshot when selector runs with a previous selection (L2)', async () => {
     const pool = makePool([
       { id: 'a', description: 'A' },
       { id: 'b', description: 'B' },
@@ -431,7 +431,7 @@ describe('DynamicFacetSelectorCoordinator', () => {
       structuredOutput: { selected_ids: ['b'], rationale: 'now needs b' },
     };
     mockedExecuteAgent.mockResolvedValueOnce(response);
-    // Capture isReentry propagation into the selector instruction (order.md:374-375).
+    // Capture the previous selection snapshot passed into the selector instruction.
     const instructionSpy = vi.spyOn(contextBuilder, 'buildDynamicFacetSelectorInstruction');
 
     const coordinator = new DynamicFacetSelectorCoordinator(deps);
@@ -444,10 +444,11 @@ describe('DynamicFacetSelectorCoordinator', () => {
     const committed = commit.mock.calls[0]![1] as DynamicFacetSelectionSnapshot;
     expect(committed.round).toBe(2);
     expect(committed.selected_ids).toEqual(['b']);
-    // isReentry is true when previous selection exists (coordinator L117).
     expect(instructionSpy).toHaveBeenCalledOnce();
-    const instructionInput = instructionSpy.mock.calls[0]![0] as { isReentry: boolean };
-    expect(instructionInput.isReentry).toBe(true);
+    const instructionInput = instructionSpy.mock.calls[0]![0] as {
+      previousSnapshot?: DynamicFacetSelectionSnapshot;
+    };
+    expect(instructionInput.previousSnapshot).toEqual(previous);
   });
 
   it('uses the captured parallel child iteration and parent frame in the run-local identity', async () => {

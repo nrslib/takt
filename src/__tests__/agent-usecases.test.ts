@@ -1196,7 +1196,7 @@ describe('agent-usecases', () => {
     expect(callOptions).not.toHaveProperty('permissionMode');
   });
 
-  it('requestMoreParts は inspect tools を feedback planning call に渡さない', async () => {
+  it('requestMoreParts は inspect tools を feedback planning call に渡す', async () => {
     vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
       done: true,
       reasoning: 'Enough',
@@ -1217,8 +1217,13 @@ describe('agent-usecases', () => {
     );
 
     expect(runAgent).toHaveBeenCalledWith('team-leader', expect.any(String), expect.any(Object));
-    expect(vi.mocked(runAgent).mock.calls[0]?.[2]).not.toHaveProperty('allowedTools');
+    expect(vi.mocked(runAgent).mock.calls[0]?.[2]).toEqual(expect.objectContaining({
+      allowedTools: ['Read', 'Glob', 'Grep'],
+    }));
     expect(vi.mocked(runAgent).mock.calls[0]?.[2]).not.toHaveProperty('permissionMode');
+    expect(vi.mocked(runAgent).mock.calls[0]?.[1]).toContain(
+      'You may use read-only inspection tools only',
+    );
   });
 
   it('requestMoreParts は done 以外をエラーにする', async () => {
