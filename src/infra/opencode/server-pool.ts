@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { createServer } from 'node:net';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createOpencode } from '@opencode-ai/sdk/v2';
+import type { OpencodeClient as SdkOpencodeClient } from '@opencode-ai/sdk/v2';
 import { loadTemplate } from '../../shared/prompts/index.js';
 import {
   getNestedObservabilityEnvFingerprint,
@@ -11,6 +11,7 @@ import {
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { versionAllowsListToolShim } from './list-tool-shim-guard.js';
+import { startOpenCodeServer } from './server-process.js';
 
 const OPENCODE_STREAM_ABORTED_MESSAGE = 'OpenCode execution aborted';
 const OPENCODE_SERVER_START_TIMEOUT_MS = 60_000;
@@ -19,7 +20,7 @@ const TAKT_AGENT_REVIEW = 'takt-review';
 const TAKT_AGENT_REPORT = 'takt-report';
 const log = createLogger('opencode-sdk');
 
-export type OpencodeClient = Awaited<ReturnType<typeof createOpencode>>['client'];
+export type OpencodeClient = SdkOpencodeClient;
 
 interface SharedServer {
   key: string;
@@ -132,9 +133,10 @@ async function createSharedServer(
 ): Promise<SharedServer> {
   const port = await getFreePort();
   const registerListToolShim = await shouldRegisterListToolShim();
-  const { client, server } = await runWithNestedObservabilityProcessEnv(childProcessEnv, () =>
-    createOpencode({
+  const openCodeServer = await runWithNestedObservabilityProcessEnv(childProcessEnv, () =>
+    startOpenCodeServer({
       port,
+      timeoutMs: OPENCODE_SERVER_START_TIMEOUT_MS,
       config: {
         model,
         small_model: model,
@@ -162,26 +164,27 @@ async function createSharedServer(
           },
         },
       },
-      timeout: OPENCODE_SERVER_START_TIMEOUT_MS,
-    })
+    }),
   );
   const close = (): void => {
     try {
-      server.close();
+      openCodeServer.close();
     } catch (error) {
       log.debug(`Failed to close OpenCode server: ${sanitizeSensitiveText(getErrorMessage(error))}`, { model });
     }
   };
   log.debug('OpenCode server started', { model, port });
-  return {
+  const sharedServer: SharedServer = {
     key,
-    client,
+    client: openCodeServer.client,
     close,
     invalidated: false,
     invalidationController: new AbortController(),
     sessionBusy: new Set(),
     sessionQueues: new Map(),
   };
+  openCodeServer.onError((error) => invalidateSharedServer(sharedServer, error));
+  return sharedServer;
 }
 
 export async function acquireOpenCodeClient(

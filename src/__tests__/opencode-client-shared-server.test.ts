@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { resetDebugLogger, setVerboseConsole } from '../shared/utils/index.js';
+import { createOpenCodeServerStartMock } from './helpers/opencode-server-process-test-helpers.js';
 import {
   MockEventStream,
   deferred,
@@ -35,6 +36,10 @@ vi.mock('node:net', () => ({
 
 vi.mock('@opencode-ai/sdk/v2', () => ({
   createOpencode: createOpencodeMock,
+}));
+
+vi.mock('../infra/opencode/server-process.js', () => ({
+  startOpenCodeServer: createOpenCodeServerStartMock(createOpencodeMock),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => {

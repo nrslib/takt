@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { createOpenCodeServerStartMock } from './helpers/opencode-server-process-test-helpers.js';
 import {
   MockEventStream,
   textPartUpdated,
@@ -36,6 +37,10 @@ vi.mock('node:net', () => ({
 
 vi.mock('@opencode-ai/sdk/v2', () => ({
   createOpencode: createOpencodeMock,
+}));
+
+vi.mock('../infra/opencode/server-process.js', () => ({
+  startOpenCodeServer: createOpenCodeServerStartMock(createOpencodeMock),
 }));
 
 describe('OpenCodeClient tool loop recovery', () => {

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createOpenCodeServerStartMock } from './helpers/opencode-server-process-test-helpers.js';
 
 const { createOpencodeMock } = vi.hoisted(() => ({
   createOpencodeMock: vi.fn(),
@@ -23,6 +24,10 @@ vi.mock('node:net', () => ({
 
 vi.mock('@opencode-ai/sdk/v2', () => ({
   createOpencode: createOpencodeMock,
+}));
+
+vi.mock('../infra/opencode/server-process.js', () => ({
+  startOpenCodeServer: createOpenCodeServerStartMock(createOpencodeMock),
 }));
 
 const { OpenCodeClient, resetSharedServer } = await import('../infra/opencode/client.js');

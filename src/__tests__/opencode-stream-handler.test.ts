@@ -3,6 +3,7 @@
  */
 
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
+import { createOpenCodeServerStartMock } from './helpers/opencode-server-process-test-helpers.js';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -1020,6 +1021,10 @@ vi.mock('node:net', () => ({
 
 vi.mock('@opencode-ai/sdk/v2', () => ({
   createOpencode: createOpencodeMock,
+}));
+
+vi.mock('../infra/opencode/server-process.js', () => ({
+  startOpenCodeServer: createOpenCodeServerStartMock(createOpencodeMock),
 }));
 
 // createLogger 以外の実エクスポートはそのまま使う。debug だけをスパイに
