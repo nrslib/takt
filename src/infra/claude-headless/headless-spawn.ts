@@ -1,4 +1,4 @@
-import { crossSpawn } from '../../shared/utils/index.js';
+import { crossSpawn, guardChildProcessStreams } from '../../shared/utils/index.js';
 import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/index.js';
 import { containsRateLimitMarker } from '../rate-limit/detection.js';
 import {
@@ -104,6 +104,7 @@ export function runHeadlessCli(
       if (options.abortSignal) {
         options.abortSignal.removeEventListener('abort', abortHandler);
       }
+      guardTeardown();
     };
 
     const resolveOnce = (result: { stdout: string; stderr: string }): void => {
@@ -115,11 +116,14 @@ export function runHeadlessCli(
       resolve(result);
     };
 
-    const rejectOnce = (error: ExecError): void => {
+    const rejectOnce = (error: ExecError, terminateChild = false): void => {
       if (settled) {
         return;
       }
       settled = true;
+      if (terminateChild) {
+        child.kill('SIGTERM');
+      }
       cleanup();
       reject(error);
     };
@@ -210,13 +214,23 @@ export function runHeadlessCli(
 
     child.stderr?.on('data', (chunk: Buffer | string) => appendChunk('stderr', chunk));
 
-    child.on('error', (error: NodeJS.ErrnoException) => {
+    const guardTeardown = guardChildProcessStreams(child, (error, source) => {
+      if (source === 'process') {
+        rejectOnce(
+          createExecError(error.message, {
+            code: (error as NodeJS.ErrnoException).code,
+            stdout,
+            stderr,
+          }),
+        );
+        return;
+      }
       rejectOnce(
-        createExecError(error.message, {
-          code: error.code,
+        createExecError(`Claude CLI ${source} stream error: ${error.message}`, {
           stdout,
           stderr,
         }),
+        true,
       );
     });
 

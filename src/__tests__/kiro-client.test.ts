@@ -28,13 +28,14 @@ import { callKiro } from '../infra/kiro/client.js';
 type SpawnScenario = {
   stdout?: string;
   stderr?: string;
+  stdinError?: Partial<NodeJS.ErrnoException> & { message: string };
   code?: number | null;
   signal?: NodeJS.Signals | null;
   error?: Partial<NodeJS.ErrnoException> & { message: string };
 };
 
 type MockChildProcess = EventEmitter & {
-  stdin: { end: ReturnType<typeof vi.fn> };
+  stdin: EventEmitter & { end: ReturnType<typeof vi.fn> };
   stdout: EventEmitter;
   stderr: EventEmitter;
   kill: ReturnType<typeof vi.fn>;
@@ -108,7 +109,8 @@ function restoreEnv(): void {
 
 function createMockChildProcess(): MockChildProcess {
   const child = new EventEmitter() as MockChildProcess;
-  child.stdin = { end: vi.fn() };
+  child.stdin = new EventEmitter() as EventEmitter & { end: ReturnType<typeof vi.fn> };
+  child.stdin.end = vi.fn();
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
   child.kill = vi.fn(() => true);
@@ -118,6 +120,11 @@ function createMockChildProcess(): MockChildProcess {
 function mockSpawnWithScenario(scenario: SpawnScenario): void {
   mockSpawn.mockImplementation((_cmd: string, _args: string[], _options: object) => {
     const child = createMockChildProcess();
+    child.stdin.end.mockImplementation(() => {
+      if (scenario.stdinError) {
+        child.stdin.emit('error', Object.assign(new Error(scenario.stdinError.message), scenario.stdinError));
+      }
+    });
 
     queueMicrotask(() => {
       if (scenario.stdout) {
@@ -733,6 +740,17 @@ describe('callKiro', () => {
     expect(result.content).toContain('kiro-cli binary not found');
     expect(result.error).toContain('kiro-cli binary not found');
     expect(result.content).toContain('TAKT_KIRO_CLI_PATH');
+  });
+
+  it('Given stdin emits an error while closing input, When called, Then returns the stream failure', async () => {
+    mockSpawnWithScenario({
+      stdinError: { message: 'stdin pipe closed' },
+    });
+
+    const result = await callKiro('coder', 'implement feature', { cwd: '/repo' });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('kiro-cli stdin stream error: stdin pipe closed');
   });
 
   it('Given authentication stderr, When command fails, Then returns an authentication error without exposing the key', async () => {

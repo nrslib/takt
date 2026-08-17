@@ -1,4 +1,4 @@
-import { crossSpawn } from '../../shared/utils/index.js';
+import { crossSpawn, guardChildProcessStreams } from '../../shared/utils/index.js';
 import { pickNestedObservabilityEnv } from '../../shared/telemetry/index.js';
 import type { KiroCallOptions } from './types.js';
 
@@ -112,8 +112,6 @@ export function execKiro(
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
-    child.stdin?.end();
-
     let stdout = '';
     let stderr = '';
     let stdoutBytes = 0;
@@ -158,6 +156,7 @@ export function execKiro(
       if (options.abortSignal) {
         options.abortSignal.removeEventListener('abort', abortHandler);
       }
+      guardTeardown();
     };
 
     const rejectOnce = (error: KiroExecError): void => {
@@ -169,8 +168,8 @@ export function execKiro(
 
     const rejectAfterTermination = (error: KiroExecError): void => {
       if (settled) return;
-      terminateChild();
       settled = true;
+      terminateChild();
       cleanup();
       reject(error);
     };
@@ -215,9 +214,16 @@ export function execKiro(
     child.stdout?.on('data', (chunk: Buffer | string) => appendChunk('stdout', chunk));
     child.stderr?.on('data', (chunk: Buffer | string) => appendChunk('stderr', chunk));
 
-    child.on('error', (error: NodeJS.ErrnoException) => {
-      rejectOnce(createExecError(error.message, {
-        code: error.code,
+    const guardTeardown = guardChildProcessStreams(child, (error, source) => {
+      if (source === 'process') {
+        rejectOnce(createExecError(error.message, {
+          code: (error as NodeJS.ErrnoException).code,
+          stdout,
+          stderr,
+        }));
+        return;
+      }
+      rejectAfterTermination(createExecError(`kiro-cli ${source} stream error: ${error.message}`, {
         stdout,
         stderr,
       }));
@@ -261,5 +267,7 @@ export function execKiro(
         options.abortSignal.addEventListener('abort', abortHandler, { once: true });
       }
     }
+
+    child.stdin?.end();
   });
 }
