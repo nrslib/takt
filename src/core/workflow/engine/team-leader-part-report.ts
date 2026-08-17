@@ -77,7 +77,9 @@ export function summarizePartResultForFeedback(fullContent: string): string {
   if (fullContent.length <= maxChars) {
     return fullContent;
   }
-  const truncated = fullContent.slice(0, maxChars);
-  const omitted = fullContent.length - maxChars;
-  return `${truncated}\n\n[truncated: ${omitted} chars; see report file for full content]`;
+  const notice = (omittedChars: number): string =>
+    `\n\n[truncated: ${omittedChars} chars; see report file for full content]`;
+  const bodyBudget = maxChars - notice(fullContent.length).length;
+  const truncated = fullContent.slice(0, bodyBudget);
+  return `${truncated}${notice(fullContent.length - truncated.length)}`;
 }

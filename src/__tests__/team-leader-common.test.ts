@@ -284,11 +284,11 @@ describe('summarizePartResultForFeedback', () => {
     expect(summarizePartResultForFeedback(content)).toBe(content);
   });
 
-  it('truncates to the max chars and appends a truncation notice when content exceeds the limit', () => {
+  it('keeps the whole summary, including the truncation notice, within the max chars', () => {
     const content = 'y'.repeat(TEAM_LEADER_FEEDBACK_SUMMARY_MAX_CHARS + 1234);
     const result = summarizePartResultForFeedback(content);
-    expect(result.length).toBeLessThan(content.length);
-    expect(result.startsWith('y'.repeat(TEAM_LEADER_FEEDBACK_SUMMARY_MAX_CHARS))).toBe(true);
-    expect(result).toContain('[truncated: 1234 chars; see report file for full content]');
+    expect(result.length).toBeLessThanOrEqual(TEAM_LEADER_FEEDBACK_SUMMARY_MAX_CHARS);
+    expect(result.startsWith('yyyy')).toBe(true);
+    expect(result).toMatch(/\[truncated: \d+ chars; see report file for full content\]$/);
   });
 });

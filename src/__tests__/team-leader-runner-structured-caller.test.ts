@@ -81,6 +81,7 @@ afterEach(() => {
     rmSync(directory, { recursive: true, force: true });
   }
   trackedTeamLeaderTestDirectories.clear();
+  rmSync(defaultTeamLeaderRunPaths.reportsAbs, { recursive: true, force: true });
 });
 
 afterAll(() => {
@@ -1786,9 +1787,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
   });
 
   it('Given teamLeader.inspectTools and a large part result, When building feedback, Then content is bounded and the report path is included', async () => {
-    const projectDir = mkdtempSync(join(tmpdir(), 'takt-leader-feedback-project-'));
-    const worktreeDir = mkdtempSync(join(tmpdir(), 'takt-leader-feedback-worktree-'));
-    try {
+    const projectDir = createTrackedTeamLeaderTestDirectory('takt-leader-feedback-project-');
+    const worktreeDir = createTrackedTeamLeaderTestDirectory('takt-leader-feedback-worktree-');
+    {
       const fullContent = 'x'.repeat(TEAM_LEADER_FEEDBACK_SUMMARY_MAX_CHARS + 5000);
       mockExecuteAgent.mockResolvedValue({
         persona: 'coder',
@@ -1898,9 +1899,6 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       const writtenContent = readFileSync(reportPath.absolutePath, 'utf-8');
       expect(writtenContent).toContain('## content');
       expect(writtenContent).toContain(fullContent);
-    } finally {
-      rmSync(projectDir, { recursive: true, force: true });
-      rmSync(worktreeDir, { recursive: true, force: true });
     }
   });
 
