@@ -124,7 +124,10 @@ export function resolveInspectToolsForProvider(
   provider: ProviderType | undefined,
 ): string[] | undefined {
   if (inspectTools !== undefined && inspectTools.length === 0) {
-    return undefined;
+    const supportsAllowlist = provider !== undefined
+      && (providerSupportsOpenCodeAllowedTools(provider) === true
+        || providerSupportsClaudeAllowedTools(provider) === true);
+    return supportsAllowlist ? [] : undefined;
   }
 
   const normalizedInspectTools = inspectTools === undefined
