@@ -143,6 +143,28 @@ describe('OpenCode server process', () => {
     server.close();
   });
 
+  it('should keep only the bounded tail of post-startup output in an exit error', async () => {
+    const testChild = createTestChildProcess();
+    crossSpawnMock.mockReturnValue(testChild.child);
+    createClientMock.mockReturnValue({});
+
+    const startOpenCodeServer = await getStartOpenCodeServer();
+    const startPromise = startOpenCodeServer(startOptions());
+    testChild.stdout.emit('data', 'opencode server listening on http://127.0.0.1:62000\n');
+    const server = await startPromise;
+    const errors: Error[] = [];
+    server.onError((error) => errors.push(error));
+
+    testChild.stderr.emit('data', `OLD-HEAD ${'x'.repeat(2100)}`);
+    testChild.stderr.emit('data', 'RECENT-TAIL\n');
+    testChild.child.emit('exit', 1, null);
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.message).not.toContain('OLD-HEAD');
+    expect(errors[0]?.message).toContain('RECENT-TAIL');
+    server.close();
+  });
+
   it('should wait for a complete stdout line before parsing a server URL', async () => {
     const testChild = createTestChildProcess();
     crossSpawnMock.mockReturnValue(testChild.child);
