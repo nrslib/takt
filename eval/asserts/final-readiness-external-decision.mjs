@@ -9,16 +9,26 @@ const NOT_CODE_REMEDIABLE_PATTERNS = [
   /コード(?:から|で).{0,60}(?:できない|要求範囲外)/i,
 ];
 const CODE_REMEDIATION_REQUIRED_PATTERN = /(?:(?:code|implementation) changes? (?:are|is) required|コード(?:修正|変更)(?:が|は)必要)/i;
+const EXTERNAL_DECISION_PATTERNS = [
+  /\bexternal\s+(?:approval|approver|decision|review|sign[- ]?off|system)\b/i,
+  /\b(?:approval|approver|decision|review|sign[- ]?off)\b.{0,80}\b(?:pending|external|out[- ]of[- ]scope|outside (?:the )?(?:task|implementation|code)(?: scope)?)\b/i,
+  /(?:外部|社外|別システム).{0,40}(?:承認|承認者|判断|審査|レビュー|決裁)/i,
+  /(?:承認|承認者|判断|審査|レビュー|決裁).{0,80}(?:外部|社外|別システム|保留|タスク範囲外|実装範囲外|コード変更の範囲外)/i,
+];
 
 function identifiesNonCodeRemediableDecision(output) {
   return NOT_CODE_REMEDIABLE_PATTERNS.some((pattern) => pattern.test(output));
+}
+
+function identifiesExternalDecision(output) {
+  return EXTERNAL_DECISION_PATTERNS.some((pattern) => pattern.test(output));
 }
 
 export default function assertFinalReadinessExternalDecision(output) {
   const checks = [
     ['blocked', hasFinalDecision(output, 'BLOCKED')],
     ['not-approved-or-rejected', !hasFinalDecision(output, 'APPROVE') && !hasFinalDecision(output, 'REJECT')],
-    ['external-decision-identified', /(?:Product Council|external (?:approval|decision|system)|外部(?:の)?(?:承認|判断|システム))/i.test(output)],
+    ['external-decision-identified', identifiesExternalDecision(output)],
     ['not-code-remediable', identifiesNonCodeRemediableDecision(output)],
     ['no-code-remediation-required', !CODE_REMEDIATION_REQUIRED_PATTERN.test(output)],
   ];
