@@ -96,12 +96,16 @@ function buildInspectToolGuidance(
   const guidance = language === 'ja'
     ? [
         '- 読み取り専用 inspection tools は、タスク仕様・過去レポート・ファイル構成の確認にのみ使用してよい',
+        '- part 結果の要約は先頭部分だけの抜粋である。判断の根拠にする part は、`[full report: ...]` の絶対パスをツールで読み、全文を確認してから判断する',
+        '- 完了の宣言や追加 part の要否は、レポートの主張ではなく、変更されたファイルの現物をツールで確認してから決める',
         '- ファイルを編集しない',
         '- コマンドを実行しない',
         '- 実装しない',
       ]
     : [
         '- You may use read-only inspection tools only to inspect the task spec, prior reports, and file layout',
+        '- Part result summaries are head-only excerpts. Before basing a decision on a part, read the full report at its `[full report: ...]` absolute path with a tool',
+        '- Decide completion and the need for additional parts from the actual changed files inspected with tools, not from report claims',
         '- Do not edit files',
         '- Do not run commands',
         '- Do not execute the implementation',
