@@ -8,7 +8,7 @@ Determine requirement fulfillment, resolution of preceding findings, and recurre
 
 **Depth of fulfillment judgment:**
 
-The only valid basis for judging a requirement fulfilled is having confirmed the path by which the required result actually holds in the code. The existence of a call to a function that validates, saves, or propagates is not a basis. For every location cited as evidence of fulfillment, open the callee implementation and confirm with file:line that the path connects from the required input to the observable result (the save destination path, the output format, the propagation to consumers). Never cite a file you have not opened. Treat any requirement you could not confirm as unfulfilled.
+Judge a requirement fulfilled only after confirming the path by which the required result actually holds in the code. The mere existence of a call to a function that validates, saves, or propagates is not a basis. When using a call site as evidence of fulfillment, open the callees relevant to the required result and confirm with file:line that the necessary path connects the required input to the observable result (the save destination path, the output format, or propagation to consumers). Never cite a file you have not opened. Do not mark an inspectable code path fulfilled while it remains unverified. For requirements that current code and the current review resolution cannot decide, apply the REJECT / BLOCKED conditions below.
 
 1. Split the original requirements into the smallest independently decidable units and map them to current code
 2. Recheck each preceding finding against its original acceptance criteria and determine whether it is resolved
