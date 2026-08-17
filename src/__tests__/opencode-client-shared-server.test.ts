@@ -64,6 +64,46 @@ describe('OpenCodeClient shared server', () => {
     resetSharedServer();
   });
 
+  it('should discard a server invalidated while its error listener is registered', async () => {
+    const {
+      acquireOpenCodeClient,
+      OpenCodeSharedServerInvalidationError,
+      resetSharedServerPool,
+    } = await import('../infra/opencode/server-pool.js');
+    const startupRuntimeError = new Error('server failed before listener registration');
+    const firstServerClose = vi.fn();
+    const secondServerClose = vi.fn();
+    const secondClient = {};
+
+    createOpencodeMock
+      .mockResolvedValueOnce({
+        client: {},
+        server: {
+          close: firstServerClose,
+          onError: (listener: (error: Error) => void) => {
+            listener(startupRuntimeError);
+            return () => {};
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        client: secondClient,
+        server: { close: secondServerClose },
+      });
+
+    await expect(acquireOpenCodeClient('opencode/model', undefined, undefined))
+      .rejects.toBeInstanceOf(OpenCodeSharedServerInvalidationError);
+
+    const acquired = await acquireOpenCodeClient('opencode/model', undefined, undefined);
+
+    expect(acquired.client).toBe(secondClient);
+    expect(createOpencodeMock).toHaveBeenCalledTimes(2);
+    acquired.release();
+    resetSharedServerPool();
+    expect(firstServerClose).toHaveBeenCalledOnce();
+    expect(secondServerClose).toHaveBeenCalledOnce();
+  });
+
   it('should release the shared OpenCode client once when session.create returns no id', async () => {
     const { OpenCodeClient, resetSharedServer } = await import('../infra/opencode/client.js');
     resetSharedServer();

@@ -1,9 +1,11 @@
 import type { ChildProcess } from 'node:child_process';
 import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk/v2';
 import { getErrorMessage } from '../../shared/utils/error.js';
+import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { crossSpawn } from '../../shared/utils/spawn.js';
 
 const OPENCODE_SERVER_HOSTNAME = '127.0.0.1';
+const CHILD_TERMINATION_GRACE_MS = 500;
 
 export interface OpenCodeServerStartOptions {
   port: number;
@@ -22,20 +24,30 @@ type ServerErrorListener = (error: Error) => void;
 function stopChild(child: ChildProcess): void {
   if (child.exitCode !== null || child.signalCode !== null) return;
   try {
-    child.kill();
+    if (!child.kill('SIGTERM')) return;
   } catch {
     // The child can exit between the state check and kill call.
+    return;
   }
+  const killTimer = setTimeout(() => {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    try {
+      child.kill('SIGKILL');
+    } catch {
+      // The child can exit between the state check and kill call.
+    }
+  }, CHILD_TERMINATION_GRACE_MS);
+  killTimer.unref();
 }
 
 function formatServerExitError(output: string, code: number | null, signal: NodeJS.Signals | null): Error {
   const cause = code === null ? String(signal) : String(code);
-  const detail = output.trim() === '' ? '' : `\nServer output: ${output}`;
+  const detail = output.trim() === '' ? '' : `\nServer output: ${sanitizeSensitiveText(output)}`;
   return new Error(`OpenCode server exited with code ${cause}${detail}`);
 }
 
 function formatStreamError(stream: string, error: unknown): Error {
-  return new Error(`OpenCode server ${stream} stream failed: ${getErrorMessage(error)}`);
+  return new Error(`OpenCode server ${stream} stream failed: ${sanitizeSensitiveText(getErrorMessage(error))}`);
 }
 
 export async function startOpenCodeServer(
@@ -57,7 +69,7 @@ export async function startOpenCodeServer(
   let closing = false;
   let runtimeError: Error | undefined;
   const errorListeners = new Set<ServerErrorListener>();
-  let failStartup: ((error: Error) => void) | undefined;
+  let removeProcessListeners: () => void = () => {};
 
   const notifyRuntimeError = (error: Error): void => {
     if (runtimeError !== undefined || closing) return;
@@ -65,73 +77,114 @@ export async function startOpenCodeServer(
     for (const listener of errorListeners) listener(error);
   };
 
-  const onChildStreamError = (stream: string) => (error: unknown): void => {
-    const streamError = formatStreamError(stream, error);
-    if (started) notifyRuntimeError(streamError);
-    else failStartup?.(streamError);
-  };
-
-  child.stdin?.on('error', onChildStreamError('stdin'));
-  child.stdout?.on('error', onChildStreamError('stdout'));
-  child.stderr?.on('error', onChildStreamError('stderr'));
-
   const url = await new Promise<string>((resolve, reject) => {
     let settled = false;
-    const timeoutId = setTimeout(() => {
-      const error = new Error(`Timeout waiting for OpenCode server to start after ${options.timeoutMs}ms`);
-      fail(error);
-    }, options.timeoutMs);
+    let stdoutLineBuffer = '';
+    let stderrLineBuffer = '';
+    let removeStartupDataListeners: () => void = () => {};
 
     const fail = (error: Error): void => {
       if (settled) return;
       settled = true;
-      clearTimeout(timeoutId);
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
       closing = true;
+      removeProcessListeners();
       stopChild(child);
       reject(error);
     };
-    failStartup = fail;
 
-    child.on('error', (error) => {
-      if (started) notifyRuntimeError(formatStreamError('process', error));
-      else fail(error instanceof Error ? error : new Error(String(error)));
-    });
-    child.on('exit', (code, signal) => {
-      if (started) {
-        if (!closing) notifyRuntimeError(formatServerExitError(output, code, signal));
+    const onChildStreamError = (stream: string) => (error: unknown): void => {
+      const streamError = formatStreamError(stream, error);
+      if (started) notifyRuntimeError(streamError);
+      else fail(streamError);
+    };
+
+    const onStdinError = onChildStreamError('stdin');
+    const onStdoutError = onChildStreamError('stdout');
+    const onStderrError = onChildStreamError('stderr');
+
+    const processOutputLine = (line: string): void => {
+      if (started || settled || !line.startsWith('opencode server listening')) return;
+      const match = line.match(/on\s+(https?:\/\/[^\s]+)/);
+      if (!match) {
+        fail(new Error(`Failed to parse server url from output: ${line}`));
         return;
       }
-      fail(formatServerExitError(output, code, signal));
-    });
-
-    const onOutput = (chunk: Buffer | string): void => {
-      if (started || settled) return;
-      output += chunk.toString();
-      for (const line of output.split('\n')) {
-        if (!line.startsWith('opencode server listening')) continue;
-        const match = line.match(/on\s+(https?:\/\/[^\s]+)/);
-        if (!match) {
-          fail(new Error(`Failed to parse server url from output: ${line}`));
-          return;
-        }
-        const serverUrl = match[1];
-        if (serverUrl === undefined) {
-          fail(new Error(`Failed to parse server url from output: ${line}`));
-          return;
-        }
-        started = true;
-        settled = true;
-        clearTimeout(timeoutId);
-        resolve(serverUrl);
+      const serverUrl = match[1];
+      if (serverUrl === undefined) {
+        fail(new Error(`Failed to parse server url from output: ${line}`));
         return;
+      }
+      started = true;
+      settled = true;
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+      removeStartupDataListeners();
+      resolve(serverUrl);
+    };
+
+    const onOutput = (stream: 'stdout' | 'stderr') => (chunk: Buffer | string): void => {
+      if (started || settled) return;
+      const text = chunk.toString();
+      output += text;
+      const buffered = stream === 'stdout' ? stdoutLineBuffer + text : stderrLineBuffer + text;
+      const lines = buffered.split('\n');
+      const incompleteLine = lines.pop() ?? '';
+      if (stream === 'stdout') stdoutLineBuffer = incompleteLine;
+      else stderrLineBuffer = incompleteLine;
+      for (const line of lines) {
+        processOutputLine(line);
+        if (started || settled) return;
       }
     };
 
-    child.stdout?.on('data', onOutput);
-    child.stderr?.on('data', onOutput);
-  });
+    const onStdoutData = onOutput('stdout');
+    const onStderrData = onOutput('stderr');
+    const onChildError = (error: unknown): void => {
+      if (started) {
+        notifyRuntimeError(formatStreamError('process', error));
+        closing = true;
+        removeProcessListeners();
+        return;
+      }
+      fail(error instanceof Error ? error : new Error(String(error)));
+    };
+    const onChildExit = (code: number | null, signal: NodeJS.Signals | null): void => {
+      if (started) {
+        if (!closing) {
+          notifyRuntimeError(formatServerExitError(output, code, signal));
+          closing = true;
+        }
+        removeProcessListeners();
+        return;
+      }
+      fail(formatServerExitError(output, code, signal));
+    };
 
-  failStartup = undefined;
+    removeStartupDataListeners = (): void => {
+      child.stdout?.removeListener('data', onStdoutData);
+      child.stderr?.removeListener('data', onStderrData);
+    };
+    removeProcessListeners = (): void => {
+      removeStartupDataListeners();
+      child.stdin?.removeListener('error', onStdinError);
+      child.stdout?.removeListener('error', onStdoutError);
+      child.stderr?.removeListener('error', onStderrError);
+      child.removeListener('error', onChildError);
+      child.removeListener('exit', onChildExit);
+    };
+
+    const timeoutId = setTimeout(() => {
+      fail(new Error(`Timeout waiting for OpenCode server to start after ${options.timeoutMs}ms`));
+    }, options.timeoutMs);
+
+    child.stdin?.on('error', onStdinError);
+    child.stdout?.on('error', onStdoutError);
+    child.stderr?.on('error', onStderrError);
+    child.on('error', onChildError);
+    child.on('exit', onChildExit);
+    child.stdout?.on('data', onStdoutData);
+    child.stderr?.on('data', onStderrData);
+  });
 
   try {
     const client = createOpencodeClient({ baseUrl: url });
@@ -141,6 +194,7 @@ export async function startOpenCodeServer(
         if (closing) return;
         closing = true;
         errorListeners.clear();
+        removeProcessListeners();
         stopChild(child);
       },
       onError: (listener) => {
@@ -154,6 +208,8 @@ export async function startOpenCodeServer(
     };
   } catch (error) {
     closing = true;
+    errorListeners.clear();
+    removeProcessListeners();
     stopChild(child);
     throw error;
   }

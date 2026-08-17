@@ -26,6 +26,7 @@ interface SharedServer {
   key: string;
   client: OpencodeClient;
   close: () => void;
+  onError: (listener: (error: Error) => void) => () => void;
   invalidated: boolean;
   invalidationController: AbortController;
   sessionBusy: Set<string>;
@@ -178,12 +179,12 @@ async function createSharedServer(
     key,
     client: openCodeServer.client,
     close,
+    onError: openCodeServer.onError,
     invalidated: false,
     invalidationController: new AbortController(),
     sessionBusy: new Set(),
     sessionQueues: new Map(),
   };
-  openCodeServer.onError((error) => invalidateSharedServer(sharedServer, error));
   return sharedServer;
 }
 
@@ -208,6 +209,7 @@ export async function acquireOpenCodeClient(
   entry.initPromise = createSharedServer(key, model, apiKey, childProcessEnv)
     .then((server) => {
       entry.server = server;
+      server.onError((error) => invalidateSharedServer(server, error));
       return server;
     })
     .finally(() => {
