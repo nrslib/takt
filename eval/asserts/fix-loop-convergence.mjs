@@ -9,6 +9,21 @@ const E12_CARRIED_ROW = {
 const E12_ACTIONABLE_FINDING = 'ARCH-NEW-picker-L520';
 const E12_NON_ACTIONABLE_INVARIANT = 'INV-EMPTY-TERM';
 const INVARIANT_NAME_HEADERS = [/^不変条件の名前$/, /^invariant name$/i];
+const E13_COLUMN_HEADERS = [
+  [/^修正単位$/, /^fix unit$/i],
+  [/^family id$/i],
+  INVARIANT_NAME_HEADERS,
+  [/^担当箇所$/, /^responsible source$/i],
+  [/^今回の検証回数$/, /^current verification number$/i],
+  [/^前回の検証回数$/, /^previous verification number$/i],
+  [/^前回経路$/, /^previous path$/i],
+  [/^今回経路$/, /^current path$/i],
+  [/^同一不変条件・再発判定$/, /^same invariant recurrence judgement$/i],
+  [/^累積 incomplete 回数$/, /^cumulative incomplete count$/i],
+  [/^別経路での再発が確認済みか$/, /^recurrence on a different path confirmed\??$/i],
+  [/^強制点候補$/, /^enforcement point candidate$/i],
+  [/^記録の完全性$/, /^record integrity$/i],
+];
 const WORK_ITEM_KEY_HEADERS = [
   /^finding id(?: \/ (?:出典|source))?$/i,
   /^family id$/i,
@@ -314,10 +329,79 @@ function assertE12(report) {
   );
 }
 
+function assertE13(report, scenario) {
+  const recurrenceRows = report.sections
+    .filter(({ heading }) =>
+      /^(?:不変条件の再発記録|invariant recurrence record)$/i.test(heading))
+    .flatMap(extractRowsWithinSection)
+    .filter((row) => valueForHeader(row, INVARIANT_NAME_HEADERS) === 'BW-2');
+  const expectedResult = scenario === 'E13a' ? 'verified' : 'incomplete';
+  const expectedSemanticResult = scenario === 'E13a' ? '維持' : '不一致';
+  const checks = [
+    ['one-bw2-recurrence-row', recurrenceRows.length === 1],
+    ['result-reflects-semantic-contract', new RegExp(
+      `(?:^|\\n)##\\s+(?:結果|Result):\\s*${expectedResult}(?:\\s|$)`,
+      'i',
+    ).test(report.report)],
+    ['judgement-reflects-semantic-contract', new RegExp(
+      `JUDGEMENT: result=${expectedResult}; semantic_carry_forward=${expectedSemanticResult}\\s*$`,
+    ).test(report.report)],
+  ];
+  if (recurrenceRows.length === 1) {
+    const [row] = recurrenceRows;
+    const expectedPreviousPath = scenario === 'E13a'
+      ? /^なし（引(?:き|え)継ぎ行なし）$/
+      : /^P2: 親 window 置換$/;
+    checks.push(
+      ['all-thirteen-columns-present', row.headers.length === 13
+        && E13_COLUMN_HEADERS.every((patterns) => headerIndex(row, patterns) >= 0)],
+      ['fix-unit-preserved', valueForHeader(row, E13_COLUMN_HEADERS[0]) === 'FP-PICKER-STATE'],
+      ['family-id-preserved', valueForHeader(row, [/^family id$/i]) === 'FAM-RETRY-PICKER'],
+      ['invariant-name-preserved', valueForHeader(row, INVARIANT_NAME_HEADERS) === 'BW-2'],
+      ['responsible-source-present', (valueForHeader(row, E13_COLUMN_HEADERS[3]) ?? '') !== ''],
+      ['verification-number-preserved', valueForHeader(row, [
+        /^今回の検証回数$/,
+        /^current verification number$/i,
+      ]) === '2'],
+      ['previous-verification-number-preserved', valueForHeader(row, E13_COLUMN_HEADERS[5]) === '1'],
+      ['previous-path-preserved', expectedPreviousPath.test(
+        valueForHeader(row, E13_COLUMN_HEADERS[6]) ?? '',
+      )],
+      ['path-set-preserved', valueForHeader(row, [
+        /^今回経路$/,
+        /^current path$/i,
+      ]) === 'P3: prune 復帰漏れ'],
+      ['recurrence-enum-preserved', valueForHeader(row, E13_COLUMN_HEADERS[8]) === '同一・再発'],
+      ['cumulative-count-preserved', valueForHeader(row, [
+        /^累積 incomplete 回数$/,
+        /^cumulative incomplete count$/i,
+      ]) === '2'],
+      ['confirmed-enum-preserved', valueForHeader(row, [
+        /^別経路での再発が確認済みか$/,
+        /^recurrence on a different path confirmed\??$/i,
+      ]) === '確認済み'],
+      ['enforcement-point-present', (valueForHeader(row, E13_COLUMN_HEADERS[11]) ?? '') !== ''],
+      ['record-integrity-preserved', scenario === 'E13a'
+        ? valueForHeader(row, E13_COLUMN_HEADERS[12]) === '完全'
+        : /成果物不足/.test(valueForHeader(row, E13_COLUMN_HEADERS[12]) ?? '')],
+    );
+  }
+  if (scenario === 'E13b') {
+    checks.push(
+      ['path-change-recognized', /P3[\s\S]*P4|P4[\s\S]*P3/.test(report.report)],
+      ['artifact-deficiency-recognized', /成果物不足/.test(report.report)],
+    );
+  }
+  return gradingResult(checks, 'semantic descriptions are tolerant while mechanical state is preserved');
+}
+
 export default function assertFixLoopConvergence(output, context) {
   const report = extractReport(output);
   if (context?.vars?.scenario === 'E06') return assertE06(report);
   if (context?.vars?.scenario === 'E12') return assertE12(report);
+  if (context?.vars?.scenario === 'E13a' || context?.vars?.scenario === 'E13b') {
+    return assertE13(report, context.vars.scenario);
+  }
   return {
     pass: false,
     score: 0,

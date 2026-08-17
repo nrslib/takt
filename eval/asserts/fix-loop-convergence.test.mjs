@@ -48,6 +48,42 @@ const FIX_PLAN_OUTPUT_CONTRACT = readFileSync(
   new URL('../../builtins/ja/facets/partials/output-contracts/base-fix-plan.md', import.meta.url),
   'utf8',
 );
+const INVARIANT_RECURRENCE_RULE = readFileSync(
+  new URL('../../builtins/ja/workflows/rules/invariant-recurrence.md', import.meta.url),
+  'utf8',
+);
+const FIX_LOOP_CONFIG = readFileSync(
+  new URL('../promptfooconfig.fix-loop-convergence.yaml', import.meta.url),
+  'utf8',
+);
+
+const E13A_OUTPUT = `
+## 結果: verified
+
+## 不変条件の再発記録
+
+| 修正単位 | family ID | 不変条件の名前 | 担当箇所 | 今回の検証回数 | 前回の検証回数 | 前回経路 | 今回経路 | 同一不変条件・再発判定 | 累積 \`incomplete\` 回数 | 別経路での再発が確認済みか | 強制点候補 | 記録の完全性 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| FP-PICKER-STATE | FAM-RETRY-PICKER | BW-2 | TaskRetryRestartTree の target 解決と visible projection | 2 | 1 | なし（引え継ぎ行なし） | P3: prune 復帰漏れ | 同一・再発 | 2 | 確認済み | 単一 window setter への集約 | 完全 |
+
+JUDGEMENT: result=verified; semantic_carry_forward=維持
+`;
+
+const E13B_OUTPUT = `
+## 結果: incomplete
+
+## 不変条件の再発記録
+
+| 修正単位 | family ID | 不変条件の名前 | 担当箇所 | 今回の検証回数 | 前回の検証回数 | 前回経路 | 今回経路 | 同一不変条件・再発判定 | 累積 \`incomplete\` 回数 | 別経路での再発が確認済みか | 強制点候補 | 記録の完全性 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| FP-PICKER-STATE | FAM-RETRY-PICKER | BW-2 | TaskRetryRestartTree の target 解決・visible projection | 2 | 1 | P2: 親 window 置換 | P3: prune 復帰漏れ | 同一・再発 | 2 | 確認済み | 単一 window setter への集約 | 理由付き成果物不足: fix-report が P3 を P4 に無断変更 |
+
+## 不成立・未確認事項
+
+- fix-report の今回経路は正本 P3 から P4 に無断変更され、裏付ける検証成果物が不足している。
+
+JUDGEMENT: result=incomplete; semantic_carry_forward=不一致
+`;
 
 function run(output, scenario) {
   return assertFixLoopConvergence(output, { vars: { scenario } });
@@ -61,6 +97,23 @@ test('fix-plan prompt includes the expanded output contract', async () => {
   assert.match(prompt, /--- OUTPUT CONTRACT（全文） ---/);
   assert.ok(prompt.includes(FIX_PLAN_OUTPUT_CONTRACT));
   assert.doesNotMatch(prompt, /\{\{include:output-contracts\/base-fix-plan\}\}/);
+});
+
+test('fix-loop prompt orders scenario, isolated workflow rule, instruction, and output contract', async () => {
+  const prompt = await buildFixLoopConvergencePrompt({
+    vars: { role: 'verifier', scenario: 'E13a' },
+  });
+
+  const scenarioIndex = prompt.indexOf('### fix-plan.md（抜粋）');
+  const ruleIndex = prompt.indexOf('--- EVALUATION WORKFLOW RULE（invariant-recurrence のみ） ---');
+  const instructionIndex = prompt.indexOf('--- INSTRUCTION（全文） ---');
+  const outputContractIndex = prompt.indexOf('--- OUTPUT CONTRACT（全文） ---');
+
+  assert.ok(scenarioIndex >= 0);
+  assert.ok(scenarioIndex < ruleIndex);
+  assert.ok(ruleIndex < instructionIndex);
+  assert.ok(instructionIndex < outputContractIndex);
+  assert.ok(prompt.includes(INVARIANT_RECURRENCE_RULE));
 });
 
 test('E06 accepts each planned invariant exactly once in recurrence-record rows', () => {
@@ -207,4 +260,64 @@ test('E12 recognizes ATX headings with up to three leading spaces but not four',
 test('E12 rejects BW-2 and the actionable finding outside their allowed sections', () => {
   assert.equal(run(E12_OUTPUT.replace('### 引き継ぎ元からの行', '### サマリー'), 'E12').pass, false);
   assert.equal(run(E12_OUTPUT.replace('## 指摘カバレッジ', '## サマリー'), 'E12').pass, false);
+});
+
+test('E13a accepts semantic-equivalent prose while preserving mechanical recurrence state', () => {
+  assert.equal(run(E13A_OUTPUT, 'E13a').pass, true);
+  const mutations = [
+    ['| 2 | 1 | なし（引え継ぎ行なし） |', '| 2 | 9 | なし（引え継ぎ行なし） |'],
+    ['なし（引え継ぎ行なし）', 'P2: 親 window 置換'],
+    ['| 同一・再発 | 2 |', '| 維持 | 2 |'],
+  ];
+  for (const [before, after] of mutations) {
+    assert.equal(run(E13A_OUTPUT.replace(before, after), 'E13a').pass, false);
+  }
+});
+
+test('E13 JavaScript assertion leaves human-cell semantics to the rubric', () => {
+  const japaneseParaphrases = [
+    E13A_OUTPUT
+      .replace(
+        'TaskRetryRestartTree の target 解決と visible projection',
+        'TaskRetryRestartTree における target の解決および表示投影',
+      )
+      .replace('単一 window setter への集約', '一つの window setter に処理を集約する'),
+    E13A_OUTPUT
+      .replace(
+        'TaskRetryRestartTree の target 解決と visible projection',
+        '対象解決と画面に見える投影は TaskRetryRestartTree が受け持つ',
+      )
+      .replace('単一 window setter への集約', 'window の更新入口を一か所へまとめる'),
+  ];
+  const semanticContradiction = E13A_OUTPUT
+    .replace(
+      'TaskRetryRestartTree の target 解決と visible projection',
+      'TaskRetryRestartTree は target 解決と visible projection を担当せず UI 層へ移譲する',
+    )
+    .replace('単一 window setter への集約', 'window setter は強制点ではない');
+
+  for (const output of japaneseParaphrases) {
+    assert.equal(run(output, 'E13a').pass, true);
+  }
+  assert.equal(run(semanticContradiction, 'E13a').pass, true);
+  assert.match(FIX_LOOP_CONFIG, /キーワードを残していても責務を否定/);
+  assert.match(FIX_LOOP_CONFIG, /UI 層へ移譲/);
+  assert.match(FIX_LOOP_CONFIG, /強制点を否定/);
+});
+
+test('E13b requires incomplete and reconstructs the canonical P3 row', () => {
+  assert.equal(run(E13B_OUTPUT, 'E13b').pass, true);
+  const shortRow = E13B_OUTPUT.replace(
+    /\| 修正単位 \| family ID[\s\S]*?理由付き成果物不足: fix-report が P3 を P4 に無断変更 \|/,
+    '| 修正単位 | family ID |\n|---|---|\n| FP-PICKER-STATE | FAM-RETRY-PICKER |',
+  );
+  assert.equal(run(shortRow, 'E13b').pass, false);
+  assert.equal(
+    run(E13B_OUTPUT.replace('P3: prune 復帰漏れ', 'P4: restore 復帰漏れ'), 'E13b').pass,
+    false,
+  );
+  assert.equal(
+    run(E13B_OUTPUT.replaceAll('incomplete', 'verified').replace('不一致', '維持'), 'E13b').pass,
+    false,
+  );
 });

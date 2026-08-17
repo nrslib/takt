@@ -5,9 +5,10 @@ E2E suite (which verifies engine mechanics), this measures whether the
 *content* of personas/policies/instructions actually produces good agent
 output — so that "the prompt got better" is a measured fact, not a feeling.
 
-All promptfoo suites run on the **codex** provider (local Codex CLI login /
-ChatGPT plan), so runs consume subscription quota, not API billing. The
-`llm-rubric` grader is also pinned to codex for the same reason.
+Most promptfoo suites run on the **codex** provider (local Codex CLI login /
+ChatGPT plan), so runs consume subscription quota, not API billing. Provider
+requirements and high-cost exceptions are recorded separately from suite tier
+in `eval/suite-registry.mjs`.
 
 The `rescan` suite additionally runs local/open models through the opencode
 CLI (`eval/providers/opencode-review.sh`) to track how far facet design can
@@ -38,13 +39,15 @@ uses a disposable work copy, so rerun the complete command for each trial.
 Run `npm run eval:prompts:default-priority:codex` to cross-check it with Codex.
 
 The `fix-loop-convergence` suite probes the remediation-loop convergence
-rules with 11 decision scenarios, each run on **three providers** — the
+rules with decision scenarios, each run on **three providers** — the
 claude headless CLI (`eval/providers/claude-judge.sh`, model
 `claude-opus-5`) and the codex CLI (`eval/providers/codex-judge.sh`, model
 `gpt-5.6-luna`, reasoning effort `max`, and `gpt-5.6-sol`, reasoning effort
-`high`). Prompts are assembled at run time from the live
-`builtins/ja/facets` content (`eval/fix-loop-convergence-prompt.mjs`), so
-the suite always measures the current facet text. It needs both CLI
+`high`). Prompts are assembled at run time from the live facets and isolate the
+actual `builtins/ja/workflows/rules/invariant-recurrence.md` workflow-wide rule
+(`eval/fix-loop-convergence-prompt.mjs`). The scenario, isolated rule,
+instruction, and output contract preserve their runtime-relative order, but
+this focused eval does not reproduce every workflow-wide runtime rule. It needs both CLI
 logins, is excluded from the default suite run, and asserts on a fixed
 machine-readable `JUDGEMENT:` line — invoke it explicitly
 (`npm run eval:prompts:fix-loop-convergence`).
@@ -87,51 +90,21 @@ The `security-review-method` suite measures the initial security-review method
 against seven boundary and evidence cases on Opus 5, Luna Max, and Sol High.
 Run it through `npm run eval:prompts:security-review-method`.
 
-## Suites
+## Suite registry
 
-| Suite | Workflow / step | Fixture | Measures |
-|-------|-----------------|---------|----------|
-| `coding` | peer-review / coding-review | sample-project | Claude Opus 5, Codex Luna Max, and Codex Sol High: recall on 5 planted coding-policy violations, precision on a minimal clean diff, and recall when the same completeness is explicitly required |
-| `arch` | peer-review / arch-review | sample-project | recall on 3 planted architecture violations |
-| `arch-failure-aggregation` | peer-review / arch-review | arch-failure-aggregation | recall on inconsistent primary-failure aggregation and precision on a required fail-fast boundary |
-| `antipattern` | peer-review / ai-antipattern-review-2nd | sample-project | recall on 3 planted AI antipatterns |
-| `frontend` | review-frontend / frontend-review | frontend-app | recall on 3 planted layering violations |
-| `cqrs` | review-backend-cqrs / cqrs-es-review | backend-cqrs | recall on 3 planted CQRS+ES violations |
-| `rescan` | peer-review / arch-review (round 2) | inventory-es | re-scan evidence + recall on 4 planted defects after previous findings were resolved |
-| `frontend-coder` | frontend / implement | frontend-app (work copy) | artifact checks on the implemented change |
-| `cqrs-coder` | backend-cqrs / implement | backend-cqrs (work copy) | artifact checks on the implemented change |
-| `fix-closure` | review-remediation / fix-retry | fix-closure (work copy) | whether verifier-return remediation closes every falsifiable obligation across multiple fix units and hierarchical projections instead of patching only the latest verifier example or relying on broad test success |
-| `fix-self-scan` | peer-review / fix | fix-self-scan (work copy) | whether the coder's post-edit self-scan removes change-induced dead code, keeps the declared layer direction, and consolidates duplicated override semantics instead of shipping a plan-complete but messy fix |
-| `fix-loop-convergence` | development-remediation / fix-retry, fix-verifier, fix, loop-monitor | inline scenario fixtures (`cases/fix-loop-convergence/`) | whether repeated failures switch from local patches to a structural fix, history is preserved across retries, new regressions are found, and the monitor chooses the correct next step, measured on Claude Opus, Codex Luna Max, and Codex Sol High |
-| `fix-plan-cause-check` | peer-review / fix-plan | fix-plan-cause-check | whether fix-plan distinguishes a duplicate review update from possible causes and declines to serialize parallel execution until the cause is confirmed, measured on both Claude Opus and Codex Luna Max |
-| `fix-plan-bounded-proof` | peer-review / fix-plan | fix-plan-bounded-proof | whether Opus 5, Luna Max, and Sol High turn broad format, consumer, and boundary claims into source-backed concrete rows for report variants, helper limits, absence states, branch identity, and locale consumers |
-| `fix-plan-fresh-findings` | peer-review / fix-plan | fix-plan-fresh-findings | whether fix-plan uses the accepted group of findings, covers every affected use of the same rule, and does not revive findings that were excluded |
-| `fix-plan-boundary-preflight` | peer-review / fix-plan | fix-plan-boundary-preflight | whether fix-plan rejects a locally valid method that violates its representation and persistence boundary |
-| `review-family-closure` | peer-review-suite-base / coding-review | review-family-closure | whether one review reports every path affected by the same contract defect instead of stopping at a representative example |
-| `initial-review-contract-discovery` | peer-review / initial coding-review | initial-review-contract-discovery | whether the initial review independently discovers multiple blocking families and completes each family sweep |
-| `initial-review-external-identity-wiring` | takt-experimental-review / initial coding-review | initial-review-external-identity-wiring | whether Opus 5, Luna Max, and Sol High reject an external target value that is shortened in the same way across config, two consumers, and a green E2E, require a test using the documented value, and preserve an adjacent local-cache contract |
-| `testing-review-observable-evidence` | peer-review / initial testing-review | testing-review-observable-evidence | whether testing review requires one missing behavior-level integration check while rejecting module-count, per-hop, and already-covered test expansion |
-| `initial-plan-contract-closure` | default / plan | initial-review-contract-discovery | whether the initial plan discovers same-responsibility paths even under different names, closes real multi-boundary impact paths, and keeps local changes local |
-| `replan-contract-closure` | default / replan | initial-review-contract-discovery | whether replanning preserves the original task while adding required production boundaries and rejecting unrelated reviewer proposals |
-| `issue-plan-samples` | default / plan | nrslib/takt repository (read-only) | whether planning preserves explicit breadth, allowed design choices, and explicitly required architecture across Issues #1127, #1155, and #1136 |
-| `plan-report-source-authority` | default / plan report phase | synthetic Phase 1 draft (tool-less) | whether the final `plan.md` keeps the original task authoritative and demotes unsupported design details from requirements |
-| `write-tests-contract-traceability` | default / write_tests | write-tests-contract-traceability | whether generated tests accept the intended local contract, reject plausible mutations, and avoid inventing irrelevant impact paths |
-| `write-tests-default-priority` | default / write_tests | write-tests-default-priority | whether tests trace manual Requeue from failed-leaf selection and initial cursor through pending persistence to a normal-runner fresh start, while retaining an explicit checkpoint action |
-| `scope-default-write-tests` | default / write_tests | scope-discipline-tests | whether tests observe behavior and remove an invalid internal-structure test instead of replacing it with another proxy |
-| `scope-maintenance-write-tests` | backend-maintenance / write_tests | scope-discipline-tests | whether the shared maintenance path applies the same behavioral test discipline |
-| `scope-architecture-search{,-none,-unrelated}` | peer-review / arch-review | scope-architecture-search | whether the same shared instruction discovers an unhinted second implementation and avoids an unrelated defect with relevant, absent, or unrelated Policy/Knowledge composition |
-| `scope-architecture-boundary` | peer-review / arch-review | scope-architecture-boundary | whether review recognizes an existing domain/I/O boundary on its first implementation without speculative extension points |
-| `implement-contract-traceability` | default / implement | implement-contract-traceability | whether implementation preserves named contract identities from plan and tests |
-| `implementation-report-contract-traceability` | default / implementation report | implement-contract-traceability | whether the report preserves the same contract identities and evidence |
-| `follow-up-review-repair-regression` | peer-review / follow-up coding-review | follow-up-review-repair-regression | whether follow-up review independently falsifies completion claims and distinguishes repair-induced defects from adjacent omissions |
-| `follow-up-testing-review-repair-regression` | peer-review / follow-up testing-review | follow-up-review-repair-regression | whether test findings stay limited to missing regression detection in an authorized family and reject adjacent or structure-freezing test expansion |
-| `review-adjudication` | peer-review / review-adjudication | review-adjudication | whether adjudication separates technical validity from remediation authority, keeps accepted-family closure and diff-induced regressions actionable, and excludes even severe horizontal improvements from the fix plan |
-| `review-adjudication-binding` | peer-review / follow-up security-review | review-adjudication-binding | whether Opus 5, Luna Max, and Sol High keep three out-of-scope findings non-blocking, reopen only with an allowed basis, and distinguish bare ESC or unconstrained repository-owned rules from a reproduced OSC terminal effect |
-| `security-review-method` | peer-review / initial security-review | security-review-method | whether Opus 5, Luna Max, and Sol High approve unchanged boundaries and bound SQL, reject verified SQL injection, authorization bypass, credential exposure, and helper-mediated command injection, and keep repository-author-controlled size alone non-blocking |
-| `task-instruction-gherkin` | interactive task summarization | direct English and Japanese conversations | whether implementation details and abstraction intent remain in Markdown while focused Gherkin captures only externally observable behavior |
-| `final-readiness-supervision` | review-fix-default / supervise Phase 1 | final-readiness-supervision | whether the supervisor authorizes a newly discovered required consumer, explains its initial-round omission, and avoids horizontal exploration |
-| `final-readiness-preservation` | review-fix-default / supervise Phase 2 | final-readiness-supervision | whether the supervisor preserves the new finding and keeps adjudicated noise non-actionable |
-| `final-readiness-precision` | review-fix-default / supervise | final-readiness-precision | three cases: APPROVE when every code requirement is fulfilled despite an absent mock E2E record, REJECT for an unmet code requirement, and BLOCKED for an external decision that task-scope code changes cannot provide |
+`eval/suite-registry.mjs` is the single source of truth for suite membership.
+Each suite has an `active` or `retained` tier, a reviewable classification
+reason, and separate execution metadata for credentials, cost, and default-run
+eligibility. List the resolved registry without calling a model:
+
+```bash
+node eval/scripts/run-evals.mjs --list
+```
+
+The default command runs default-eligible `active` regressions. Retained suites
+remain available as incident knowledge assets and run only when requested by
+the retained tier command or by individual suite name. Explicit suite names
+always work regardless of tier or execution metadata.
 
 The `coding` suite requires both Claude and Codex CLI logins and is excluded
 from the default suite run. Invoke it explicitly with
@@ -215,7 +188,9 @@ The flow is: prepare (place latest facets) -> run on codex -> assert.
 
 ```bash
 npm run build                    # prepare script imports from dist/
-npm run eval:prompts             # prepare + default suites (coding is excluded)
+npm run eval:prompts             # prepare + default-eligible active suites
+npm run eval:prompts:retained    # prepare + all retained/reference suites (explicit)
+node eval/scripts/run-evals.mjs --list  # tier/reason/auth/cost; no model call
 npm run eval:prompts:coding      # coding suite (requires Claude and Codex CLI logins)
 npm run eval:prompts -- arch cqrs        # only selected suites
 npm run eval:prompts -- arch --repeat 3  # extra flags pass through to promptfoo
@@ -279,6 +254,7 @@ relative to the config file's directory (`eval/`), not the process cwd.
 ```text
 eval/
   promptfooconfig.<suite>.yaml   provider + tests + assertions per suite
+  suite-registry.mjs             tier, reason, execution metadata, prepare targets
   scripts/prepare.mjs            facet placement + prompt rendering
   scripts/run-evals.mjs          suite runner (failures don't stop the batch)
   baselines/                     recorded experiment decisions and metrics
@@ -292,9 +268,9 @@ eval/
 
 ## Extending
 
-- New target: add an entry to `TARGETS` in `scripts/prepare.mjs`, a
-  `promptfooconfig.<suite>.yaml`, and the suite name in
-  `scripts/run-evals.mjs`.
+- New target: add an entry to `TARGETS` in `scripts/prepare.mjs`, add a
+  `promptfooconfig.<suite>.yaml`, and classify the suite once in
+  `suite-registry.mjs`. Registry validation rejects unclassified configs.
 - More planted bugs: each fixture bug should map to a specific policy line,
   and get one `metric:`-labelled assertion (recall). Clean cases guard
   precision.
