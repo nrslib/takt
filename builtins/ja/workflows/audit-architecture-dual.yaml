@@ -26,7 +26,11 @@ steps:
     tags:
       - plan
     persona: planner
-    policy: contract-change
+    policy:
+      - contract-change
+      - architecture
+      - backend
+      - frontend
     knowledge:
       - frontend
       - backend
@@ -50,6 +54,9 @@ steps:
     policy:
       - contract-change
       - review
+      - architecture
+      - backend
+      - frontend
     knowledge:
       - frontend
       - backend
@@ -76,6 +83,9 @@ steps:
     policy:
       - contract-change
       - review
+      - architecture
+      - backend
+      - frontend
     knowledge:
       - frontend
       - backend
@@ -96,6 +106,9 @@ steps:
     policy:
       - contract-change
       - review
+      - architecture
+      - backend
+      - frontend
     knowledge:
       - frontend
       - backend

@@ -175,11 +175,13 @@ export class DynamicFacetSelectorCoordinator {
           failureDir: this.deps.failureDir,
           personaPath: step.dynamicFacets.selector?.personaPath,
           allowedTools: [...SELECTOR_READ_ONLY_TOOLS],
+          allowedToolsSource: 'synthetic',
           resolution: {
             provider: selectorProvider.provider,
             model: selectorProvider.model,
             providerOptions: selectorProvider.providerOptions ?? {},
-            permissionMode: 'readonly',
+            permissionMode: selectorProvider.permissionMode ?? 'readonly',
+            permissionModeSource: selectorProvider.permissionMode === undefined ? 'synthetic' : 'explicit',
           },
         },
       );

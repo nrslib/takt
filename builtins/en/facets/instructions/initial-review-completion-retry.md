@@ -1,3 +1,3 @@
 {{include:instructions/review-completion-retry-common}}
 
-Recheck coverage explicitly required by the original reviewer instruction. You may deepen vertical lifecycle tracing within a contract family that the original instruction required or the preceding report already discovered, but do not introduce unrelated review criteria.
+Recheck coverage explicitly required by the original reviewer instruction. You may trace actual paths further for an invariant required by the original instruction or already identified by the preceding report, but do not introduce unrelated review criteria.

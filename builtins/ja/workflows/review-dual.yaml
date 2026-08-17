@@ -1,5 +1,16 @@
 name: review-dual
 description: フロントエンド＋バックエンド特化レビュー（構造・モジュール化・コンポーネント設計・セキュリティ・コーディング）
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 max_steps: 10
 facet_pools:
   security-review-facets:
@@ -29,6 +40,9 @@ steps:
         policy:
           - contract-change
           - review
+          - architecture
+          - backend
+          - frontend
         knowledge:
           - architecture
           - frontend
@@ -52,6 +66,7 @@ steps:
           - contract-change
           - review
           - design-fidelity
+          - frontend
         knowledge: frontend
         instruction: review-frontend
         output_contracts:

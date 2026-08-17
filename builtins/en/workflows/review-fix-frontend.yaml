@@ -1,5 +1,16 @@
 name: review-fix-frontend
 description: Frontend-focused review + fix loop (structure, modularization, component design, security, coding)
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 max_steps: 30
 facet_pools:
   security-review-facets:
@@ -45,6 +56,8 @@ steps:
         policy:
           - contract-change
           - review
+          - architecture
+          - frontend
         knowledge:
           - architecture
           - frontend
@@ -67,6 +80,7 @@ steps:
           - contract-change
           - review
           - design-fidelity
+          - frontend
         knowledge: frontend
         instruction: review-frontend
         output_contracts:
@@ -143,6 +157,10 @@ steps:
         - frontend
         - security
         - architecture
+      supervise_policy:
+        - contract-change
+        - frontend
+        - architecture
     rules:
       - condition: COMPLETE
         next: COMPLETE
@@ -164,6 +182,8 @@ steps:
         - coding
         - testing
         - design-fidelity
+        - architecture
+        - frontend
       verification_policy:
         - coding
         - testing

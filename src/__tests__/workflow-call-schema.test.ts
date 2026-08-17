@@ -231,6 +231,89 @@ const workflowCallForbiddenFieldCases = [
 ] as const;
 
 describe('workflow_call schema', () => {
+  it('accepts ordered instruction arrays and rejects an empty instruction array', () => {
+    const accepted = WorkflowStepRawSchema.safeParse({
+      name: 'implement',
+      instruction: ['first instruction', 'second instruction'],
+    });
+    const rejected = WorkflowStepRawSchema.safeParse({
+      name: 'implement',
+      instruction: [],
+    });
+
+    expect(accepted.success).toBe(true);
+    expect(rejected.success).toBe(false);
+  });
+
+  it('composes instruction array elements in order and preserves instructionRef', () => {
+    const workflow = normalizeWorkflowConfig({
+      name: 'composed-instruction',
+      instructions: {
+        first: 'First facet',
+        last: 'Last facet',
+      },
+      steps: [{
+        name: 'implement',
+        instruction: ['first', 'Inline instruction', 'last'],
+      }],
+    }, '/tmp');
+
+    expect(workflow.steps[0]?.instruction).toBe(
+      'First facet\n\n---\n\nInline instruction\n\n---\n\nLast facet',
+    );
+    expect(workflow.steps[0]?.instructionRef).toEqual(['first', 'Inline instruction', 'last']);
+  });
+
+  it('flattens callable instruction facet_ref and facet_ref[] params at their positions', () => {
+    const workflow = normalizeWorkflowConfig({
+      name: 'callable-composed-instruction',
+      subworkflow: {
+        callable: true,
+        params: {
+          lead_instruction: {
+            type: 'facet_ref',
+            facet_kind: 'instruction',
+          },
+          extra_instructions: {
+            type: 'facet_ref[]',
+            facet_kind: 'instruction',
+          },
+        },
+      },
+      instructions: {
+        lead: 'Lead facet',
+        extra_a: 'Extra facet A',
+        extra_b: 'Extra facet B',
+        tail: 'Tail facet',
+      },
+      steps: [{
+        name: 'implement',
+        instruction: [
+          { $param: 'lead_instruction' },
+          'Inline instruction',
+          { $param: 'extra_instructions' },
+          'tail',
+        ],
+      }],
+    }, '/tmp', undefined, undefined, undefined, undefined, undefined, undefined, {
+      callableArgs: {
+        lead_instruction: 'lead',
+        extra_instructions: ['extra_a', 'extra_b'],
+      },
+    });
+
+    expect(workflow.steps[0]?.instruction).toBe(
+      'Lead facet\n\n---\n\nInline instruction\n\n---\n\nExtra facet A\n\n---\n\nExtra facet B\n\n---\n\nTail facet',
+    );
+    expect(workflow.steps[0]?.instructionRef).toEqual([
+      'lead',
+      'Inline instruction',
+      'extra_a',
+      'extra_b',
+      'tail',
+    ]);
+  });
+
   it('should accept dynamic parallel selection reports as report-relative paths', () => {
     const result = WorkflowStepRawSchema.safeParse({
       name: 'reviewers',
@@ -417,6 +500,7 @@ describe('workflow_call schema', () => {
     expect(review.policyContents?.map((facet) => facet.content)).toEqual(['Strict review policy content']);
     expect(review.knowledgeContents?.map((facet) => facet.content)).toEqual(['Architecture knowledge content']);
     expect(review.instruction).toContain('Review instruction content');
+    expect(review.instructionRef).toBe('review-instruction');
     expect(review.outputContracts?.[0]?.format).toContain('Summary format content');
   });
 

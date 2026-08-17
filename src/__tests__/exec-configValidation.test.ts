@@ -166,7 +166,7 @@ describe('assertExecProviderModel', () => {
     expect(() => assertExecProviderModel('opencode', 'opencode/big-pickle', 'exec.session.model')).not.toThrow();
   });
 
-  it.each(['claude', 'codex', 'mock', 'cursor', 'copilot', 'kiro', 'pi'] as const)(
+  it.each(['claude', 'codex', 'mock', 'cursor', 'copilot', 'kiro', 'pi', 'deepseek-harness'] as const)(
     'should allow omitted model for %s',
     (provider) => {
       expect(() => assertExecProviderModel(provider, undefined, 'exec.session.model')).not.toThrow();

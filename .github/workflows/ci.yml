@@ -28,6 +28,12 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run lint
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.10'
+      - name: Validate Python 3.10 compatibility
+        run: python -c "import sys; version = tuple(sys.version_info[:2]); assert version >= (3, 10), f'Python 3.10+ required, found {sys.version_info[:3]}'; print(sys.version_info[:3])"
+      - run: python -m py_compile src/infra/deepseek-harness/bridge.py
 
   test-shard:
     name: test shard (${{ matrix.shard }}/4)

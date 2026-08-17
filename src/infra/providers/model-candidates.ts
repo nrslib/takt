@@ -1,3 +1,4 @@
+import { DEEPSEEK_HARNESS_DEFAULT_MODEL } from '../deepseek-harness/constants.js';
 import type { ProviderType } from './types.js';
 
 /**
@@ -16,6 +17,7 @@ const EXEC_MODEL_CANDIDATES: Partial<Record<ProviderType, readonly string[]>> = 
   // Pi resolves its default model from ~/.pi/agent/models.json or auth-backed builtins.
   // There is no provider-independent model name that is safe to suggest here.
   pi: [],
+  'deepseek-harness': [DEEPSEEK_HARNESS_DEFAULT_MODEL],
   mock: ['mock-model'],
 };
 

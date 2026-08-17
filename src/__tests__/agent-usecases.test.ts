@@ -846,7 +846,7 @@ describe('agent-usecases', () => {
     expect(callOptions).not.toHaveProperty('permissionMode');
   });
 
-  it('Given inspectTools, When decomposeTask runs, Then it passes them to the parent decomposition call only', async () => {
+  it('Given inspectTools, When decomposeTask runs, Then it passes them to the parent decomposition call', async () => {
     vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
       parts: [
         { id: 'p1', title: 'Part 1', instruction: 'Do 1' },
@@ -863,6 +863,25 @@ describe('agent-usecases', () => {
       allowedTools: ['Read', 'Glob', 'Grep'],
     }));
     expect(vi.mocked(runAgent).mock.calls[0]?.[2]).not.toHaveProperty('permissionMode');
+  });
+
+  it('Given inspectGuidance without inspectTools, When decomposeTask runs, Then it reaches the decomposition prompt', async () => {
+    vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
+      parts: [
+        { id: 'p1', title: 'Part 1', instruction: 'Do 1' },
+      ],
+    }));
+
+    await decomposeTask('instruction', 3, {
+      cwd: '/repo',
+      persona: 'team-leader',
+      inspectGuidance: true,
+    });
+
+    const [, prompt, callOptions] = vi.mocked(runAgent).mock.calls[0] ?? [];
+    expect(prompt).toContain('You may use read-only inspection tools only');
+    expect(prompt).not.toContain('Do not use any tool');
+    expect(callOptions).not.toHaveProperty('allowedTools');
   });
 
   it('decomposeTask は構造化出力がない場合 parseParts にフォールバックする', async () => {
@@ -1224,6 +1243,32 @@ describe('agent-usecases', () => {
     expect(vi.mocked(runAgent).mock.calls[0]?.[1]).toContain(
       'You may use read-only inspection tools only',
     );
+  });
+
+  it('requestMoreParts は inspectGuidance を feedback prompt へ伝搬する', async () => {
+    vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
+      done: true,
+      reasoning: 'Enough',
+      cancelPartIds: [],
+      parts: [],
+    }));
+
+    await requestMoreParts(
+      'original instruction',
+      [{ id: 'p1', title: 'Part 1', status: 'done', content: 'done' }],
+      ['p1'],
+      {
+        cwd: '/repo',
+        persona: 'team-leader',
+        cancellablePartIds: [],
+        inspectGuidance: true,
+      },
+    );
+
+    const [, prompt, callOptions] = vi.mocked(runAgent).mock.calls[0] ?? [];
+    expect(prompt).toContain('You may use read-only inspection tools only');
+    expect(prompt).not.toContain('Do not use any tool');
+    expect(callOptions).not.toHaveProperty('allowedTools');
   });
 
   it('requestMoreParts は done 以外をエラーにする', async () => {

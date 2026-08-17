@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildDecomposePrompt,
   buildMorePartsPrompt,
   toMorePartsResponse,
   toPartDefinitions,
 } from '../agents/team-leader-structured-output.js';
 import { loadMorePartsSchema } from '../infra/resources/schema-loader.js';
+import { summarizePartResultForFeedback } from '../core/workflow/engine/team-leader-part-report.js';
 
 function makeRawPart(id: string): Record<string, string> {
   return {
@@ -39,9 +41,9 @@ describe('toPartDefinitions', () => {
 });
 
 describe('Team Leader feedback prompt', () => {
-  it('includes complete part content beyond 2,000 characters', () => {
+  it('includes bounded part feedback and read-only inspection guidance', () => {
     const tailMarker = 'TAIL_MARKER: completed result remains available';
-    const content = `${'x'.repeat(2500)}\n${tailMarker}`;
+    const content = summarizePartResultForFeedback(`${'x'.repeat(2500)}\n${tailMarker}`);
 
     const prompt = buildMorePartsPrompt(
       'Complete the implementation.',
@@ -49,11 +51,54 @@ describe('Team Leader feedback prompt', () => {
       ['part-1'],
       'en',
       undefined,
-      [],
+      ['Read'],
     );
 
-    expect(prompt).toContain('x'.repeat(2500));
-    expect(prompt).toContain(tailMarker);
+    expect(prompt).toContain('x'.repeat(1900));
+    expect(prompt).toContain('[truncated:');
+    expect(prompt).not.toContain(tailMarker);
+    expect(prompt).toContain('You may use read-only inspection tools only');
+  });
+});
+
+describe('buildInspectToolGuidance default behavior', () => {
+  it('emits read-only guidance when inspectGuidance is true even without inspectTools', () => {
+    const prompt = buildDecomposePrompt('task', {
+      maxInitialParts: undefined,
+      language: 'en',
+      inspectTools: undefined,
+      inspectGuidance: true,
+      rejectedDecomposition: undefined,
+    });
+
+    expect(prompt).toContain('You may use read-only inspection tools only');
+    expect(prompt).not.toContain('Do not use any tool');
+  });
+
+  it('emits the no-tool guidance when inspectGuidance is false and inspectTools is unset', () => {
+    const prompt = buildDecomposePrompt('task', {
+      maxInitialParts: undefined,
+      language: 'en',
+      inspectTools: undefined,
+      inspectGuidance: false,
+      rejectedDecomposition: undefined,
+    });
+
+    expect(prompt).toContain('Do not use any tool');
+  });
+
+  it('emits read-only guidance for the more-parts prompt when inspectGuidance is true', () => {
+    const prompt = buildMorePartsPrompt(
+      'task',
+      [{ id: 'p1', title: 't', status: 'done', content: 'done' }],
+      ['p1'],
+      'en',
+      undefined,
+      undefined,
+      true,
+    );
+
+    expect(prompt).toContain('You may use read-only inspection tools only');
   });
 
   it('passes resolved read-only inspection tools into feedback guidance', () => {
@@ -62,8 +107,8 @@ describe('Team Leader feedback prompt', () => {
       [{ id: 'part-1', title: 'Implementation', status: 'done', content: 'done' }],
       ['part-1'],
       'en',
-      ['Read', 'Glob', 'Grep'],
       [],
+      ['Read', 'Glob', 'Grep'],
     );
 
     expect(prompt).toContain('You may use read-only inspection tools only');

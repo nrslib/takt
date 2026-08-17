@@ -795,6 +795,14 @@ describe('providerOptionsContract', () => {
       'provider_options.kiro.agent',
       'provider_options.kiro.guards.call_timeout_ms',
       'provider_options.cursor.guards.call_timeout_ms',
+      'provider_options.deepseek_harness.python_path',
+      'provider_options.deepseek_harness.base_url',
+      'provider_options.deepseek_harness.session_root',
+      'provider_options.deepseek_harness.cordis',
+      'provider_options.deepseek_harness.max_tokens',
+      'provider_options.deepseek_harness.request_timeout_ms',
+      'provider_options.deepseek_harness.shutdown_timeout_ms',
+      'provider_options.deepseek_harness.runtime_mode',
       'provider_options.pi.extensions',
       'provider_options.pi.guards.call_timeout_ms',
       'provider_options.pi.no_extensions',
@@ -826,6 +834,8 @@ describe('providerOptionsContract', () => {
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.kiro.agent');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.kiro.guards.call_timeout_ms');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.cursor.guards.call_timeout_ms');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.deepseek_harness');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.deepseek_harness.base_url');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.pi');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.pi.guards.call_timeout_ms');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.pi.extensions');
@@ -837,6 +847,7 @@ describe('providerOptionsContract', () => {
     expect(PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATHS).toEqual([
       'provider_options.codex.base_url',
       'provider_options.claude.base_url',
+      'provider_options.deepseek_harness.base_url',
     ]);
   });
 
@@ -877,6 +888,8 @@ describe('providerOptionsContract', () => {
       .toBe('provider_options.claude_terminal.transcript_poll_interval_ms');
     expect(toProviderOptionsTracePath('kiro.agent'))
       .toBe('provider_options.kiro.agent');
+    expect(toProviderOptionsTracePath('deepseekHarness.requestTimeoutMs'))
+      .toBe('provider_options.deepseek_harness.request_timeout_ms');
     expect(toProviderOptionsTracePath('pi.extensions'))
       .toBe('provider_options.pi.extensions');
     expect(toProviderOptionsTracePath('pi.noExtensions'))

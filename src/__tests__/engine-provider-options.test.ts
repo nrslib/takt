@@ -337,6 +337,29 @@ describe('WorkflowEngine provider_options resolution', () => {
     expect(result).toBeUndefined();
   });
 
+  it('Given empty inspect tools and an allowlist-capable provider, When resolving tools, Then it keeps an empty allowlist instead of the default', () => {
+    expect(resolveInspectToolsForProvider([], 'opencode')).toEqual([]);
+    expect(resolveInspectToolsForProvider([], 'claude')).toEqual([]);
+  });
+
+  it('Given no inspect tools and OpenCode provider, When resolving tools, Then it applies the read/glob/grep default', () => {
+    const result = resolveInspectToolsForProvider(undefined, 'opencode');
+
+    expect(result).toEqual(['read', 'glob', 'grep']);
+  });
+
+  it('Given no inspect tools and Claude-compatible provider, When resolving tools, Then it applies the default with Claude tool names', () => {
+    const result = resolveInspectToolsForProvider(undefined, 'claude');
+
+    expect(result).toEqual(['Read', 'Glob', 'Grep']);
+  });
+
+  it('Given no inspect tools and a provider without allowedTools support, When resolving tools, Then it returns undefined without throwing', () => {
+    const result = resolveInspectToolsForProvider(undefined, 'codex');
+
+    expect(result).toBeUndefined();
+  });
+
   it('should remove opencode edit and command permissions from phase 1 allowedTools when outputContracts exist and edit is not true', async () => {
     const step = makeStep('review', {
       outputContracts: [{ name: 'review.md', format: 'markdown' }],

@@ -1,5 +1,16 @@
 name: development-remediation
 description: 裁定済み finding を固定ファセットで計画・修正・検証する収束ループ。
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 subworkflow:
   callable: true
   visibility: internal

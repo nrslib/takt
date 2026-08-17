@@ -14,11 +14,11 @@ Use reports in the Report Directory as the primary source of truth. If additiona
 - After implementation, inspect the full diff and revert unnecessary changes
 
 **Output contracts:**
-- At implementation start, organize required changes, related changes, and preserved existing contracts in the shape expected by the `maintenance-scope` output contract.
+- At implementation start, organize required changes, related changes, and existing contracts that must remain unchanged in the shape expected by the `maintenance-scope` output contract.
 - After implementation, only when a non-obvious decision exists, create a decision log following the `coder-decisions` output contract.
 
 **Additional pre-completion checks:**
-1. Inspect the full diff and check that no out-of-scope rename, move, comment deletion, UI copy change, accessible-name change, or test expectation change remains
+1. Inspect the full diff and check that no unauthorized rename, move, comment deletion, UI copy change, accessible-name change, or test expectation change remains
 2. If a specification change replaced an old design, check that no code or test remains that only verifies absence of the old design
 
 **Required output (include headings)**

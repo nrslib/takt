@@ -270,6 +270,7 @@ function getSelectorProviderOptionKeys(provider: ProviderType): readonly (keyof 
     || provider === 'copilot'
     || provider === 'kiro'
     || provider === 'pi'
-    ? [provider]
+    || provider === 'deepseek-harness'
+    ? [provider === 'deepseek-harness' ? 'deepseekHarness' : provider]
     : [];
 }

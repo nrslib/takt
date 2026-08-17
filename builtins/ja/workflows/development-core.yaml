@@ -1,5 +1,16 @@
 name: development-core
 description: 計画・テスト・実装・ピアレビュー・裁定・検証付き修正・要件確認のコンテキストを注入できる共有開発フロー。
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 subworkflow:
   callable: true
   visibility: internal
@@ -236,6 +247,8 @@ steps:
       verification_knowledge:
         $param: review_knowledge
       verification_policy:
+        $param: review_policy
+      final_gate_policy:
         $param: review_policy
       fix_plan_instruction:
         $param: fix_plan_instruction

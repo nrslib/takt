@@ -37,11 +37,11 @@ Instead of asking one agent to remember the whole process, TAKT gives each step 
 - Run plan → implement → review → fix loops as explicit workflow steps
 - Keep context focused with step-specific personas, policies, knowledge, instructions, and output contracts
 - Execute queued tasks in isolated worktrees and inspect logs and reports afterward
-- Use Claude Code, Claude SDK, Codex SDK, OpenCode SDK, Pi SDK, Cursor, GitHub Copilot CLI, or Kiro as providers
+- Use Claude Code, Claude SDK, Codex SDK, OpenCode SDK, Pi SDK, the official DeepSeek Harness SDK, Cursor, GitHub Copilot CLI, or Kiro as providers
 
 **T**AKT **A**gent **K**oordination **T**opology orchestrates multiple AI agents with structured review loops, managed prompts, and guardrails.
 
-Talk to AI to define what you want, queue it as a task, and run it with `takt run`. Planning, implementation, review, and fix loops are defined in YAML workflow files, so the process is not left to the agent's discretion. TAKT coordinates Claude Code, Codex, OpenCode, Pi, Cursor, GitHub Copilot CLI, and Kiro CLI as agents with different roles, permissions, and context.
+Talk to AI to define what you want, queue it as a task, and run it with `takt run`. Planning, implementation, review, and fix loops are defined in YAML workflow files, so the process is not left to the agent's discretion. TAKT coordinates Claude Code, Codex, OpenCode, Pi, the official DeepSeek Harness SDK, Cursor, GitHub Copilot CLI, and Kiro CLI as agents with different roles, permissions, and context.
 
 TAKT is built primarily for AI coding workflows, but the same model applies beyond coding: any task where multiple AI agents need to coordinate, or where review, judgment, and feedback loops can improve task quality.
 
@@ -80,7 +80,7 @@ takt run
 takt list
 ```
 
-If this is your first run, configure a provider in `~/.takt/config.yaml` or use the API key environment variables listed in [Configuration](#configuration). SDK-based providers such as `claude-sdk`, `codex`, `opencode`, and `pi` can run with Node.js; CLI-based providers require their external CLIs.
+If this is your first run, configure a provider in `~/.takt/config.yaml` or use the API key environment variables listed in [Configuration](#configuration). SDK-based providers such as `claude-sdk`, `codex`, `opencode`, and `pi` can run with Node.js; `deepseek-harness` additionally requires Python 3.10+ and its official runtime wheel; CLI-based providers require their external CLIs.
 
 ### Video Tutorial
 
@@ -114,6 +114,14 @@ These providers run via SDK (no CLI required, Node.js only):
 - `codex` — `@openai/codex-sdk`
 - `opencode` — `@opencode-ai/sdk`
 - `pi` — `@earendil-works/pi-coding-agent`
+
+The `deepseek-harness` provider uses the official Python SDK through a private JSON-RPC bridge. Install the matching SDK/runtime packages with Python 3.10+:
+
+```bash
+python3 -m pip install deepseek-harness-sdk deepseek-harness-runtime-bin
+```
+
+The official runtime currently supports Linux x64/arm64 and macOS arm64 only. Windows and macOS x64 fail fast; TAKT does not silently fall back to another provider. Set `DEEPSEEK_API_KEY` and optionally `DEEPSEEK_BASE_URL` in the environment. The Python SDK and bundled `deepseek-harness-runtime-bin` must come from matching releases. This provider is a developer-preview compatibility surface: upstream API/event vocabulary may change between matching releases, so use the opt-in live smoke procedure in the configuration guide before relying on a new SDK/runtime pair.
 
 These providers require an external CLI:
 
@@ -298,7 +306,7 @@ Normal agent steps, parallel sub-steps, and loop detection judges may set `sessi
 Minimal `~/.takt/config.yaml`:
 
 ```yaml
-provider: claude    # claude, claude-sdk, claude-terminal, codex, opencode, cursor, copilot, kiro, pi, or mock
+provider: claude    # claude, claude-sdk, claude-terminal, codex, opencode, deepseek-harness, cursor, copilot, kiro, pi, or mock
 model: sonnet       # passed directly to provider
 language: en        # en or ja
 ```
@@ -364,7 +372,7 @@ seat. CLI provider/model overrides apply only where the command supports them.
 
 Auto-routing decisions are written locally to `.takt/events/` as NDJSON. TAKT does not upload routing decisions. Local recording is enabled by default, can be configured with `telemetry.routing_decisions`, and can be inspected or changed with `takt telemetry status|enable|disable`.
 
-Or use provider credentials directly (no CLI installation required for claude-sdk, Codex, OpenCode, or Pi):
+Or use provider credentials directly (no CLI installation required for claude-sdk, Codex, OpenCode, Pi, or DeepSeek Harness when its Python SDK/runtime is installed):
 
 ```bash
 export TAKT_ANTHROPIC_API_KEY=sk-ant-...   # Anthropic (Claude)
@@ -373,6 +381,8 @@ export TAKT_OPENCODE_API_KEY=...           # OpenCode
 export TAKT_CURSOR_API_KEY=...             # Cursor Agent (optional if logged in)
 export TAKT_COPILOT_GITHUB_TOKEN=ghp_...   # GitHub Copilot CLI
 export TAKT_KIRO_API_KEY=...               # Kiro CLI
+export DEEPSEEK_API_KEY=...                 # Official DeepSeek Harness SDK
+# Optional: export DEEPSEEK_BASE_URL=https://...
 # Pi uses its SDK credential store or provider-native environment variables.
 ```
 

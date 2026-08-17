@@ -317,6 +317,60 @@ describe('callAIWithRetry', () => {
     expect(capture.sessionIds).toEqual(['stale-session', undefined]);
   });
 
+  it('omits synthetic permissions and selector tools for DeepSeek Harness', async () => {
+    const { provider, capture } = createScenarioProvider([
+      { content: 'done', sessionId: 'deepseek-session' },
+    ]);
+    const deepseekProvider = provider as SessionContext['provider'] & {
+      supportsPermissionControls: () => boolean;
+    };
+    deepseekProvider.supportsPermissionControls = () => false;
+    mockGetProvider.mockReturnValue(deepseekProvider);
+    const ctx: SessionContext = {
+      provider: deepseekProvider,
+      providerType: 'deepseek-harness' as SessionContext['providerType'],
+      model: undefined,
+      lang: 'en',
+      personaName: 'interactive',
+      sessionId: undefined,
+    };
+
+    await callAIWithRetry('hello', 'base system prompt', ['Read'], '/repo', ctx, {
+      permissionMode: 'readonly',
+      outputMode: 'silent',
+    });
+
+    expect(capture.allowedTools).toEqual([undefined]);
+    expect(capture.permissionModes).toEqual([undefined]);
+  });
+
+  it('retains an explicit session permission mode for an unsupported provider', async () => {
+    const { provider, capture } = createScenarioProvider([
+      { content: 'done', sessionId: 'deepseek-session' },
+    ]);
+    const deepseekProvider = provider as SessionContext['provider'] & {
+      supportsPermissionControls: () => boolean;
+    };
+    deepseekProvider.supportsPermissionControls = () => false;
+    mockGetProvider.mockReturnValue(deepseekProvider);
+    const ctx: SessionContext = {
+      provider: deepseekProvider,
+      providerType: 'deepseek-harness' as SessionContext['providerType'],
+      model: undefined,
+      lang: 'en',
+      personaName: 'interactive',
+      sessionId: undefined,
+      permissionMode: 'readonly',
+    };
+
+    await callAIWithRetry('hello', 'base system prompt', ['Read'], '/repo', ctx, {
+      outputMode: 'silent',
+    });
+
+    expect(capture.allowedTools).toEqual([undefined]);
+    expect(capture.permissionModes).toEqual(['readonly']);
+  });
+
   it('expands image placeholders and omits native attachments for non-native providers', async () => {
     const { provider, capture } = createScenarioProvider([
       { content: 'stale', status: 'error' },

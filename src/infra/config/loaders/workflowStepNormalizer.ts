@@ -212,6 +212,65 @@ function normalizeStepField<T>(
   }
 }
 
+const INSTRUCTION_COMPOSITION_SEPARATOR = '\n\n---\n\n';
+
+function normalizeInstruction(
+  rawInstruction: z.input<typeof WorkflowStepRawSchema>['instruction'],
+  stepName: string,
+  stepPath: readonly PropertyKey[],
+  sections: WorkflowSections,
+  workflowDir: string,
+  context: FacetResolutionContext | undefined,
+): string | undefined {
+  if (rawInstruction === undefined) {
+    return undefined;
+  }
+  const refs = Array.isArray(rawInstruction) ? rawInstruction : [rawInstruction];
+  const contents = refs.map((ref, index) => normalizeStepField(
+    stepPath,
+    ['instruction', ...(Array.isArray(rawInstruction) ? [index] : [])],
+    () => {
+      if (isWorkflowParamReference(ref)) {
+        throw new Error(`Step "${stepName}" has unresolved $param in instruction`);
+      }
+      const resolved = resolveRefToContent(
+        ref,
+        sections.resolvedInstructionsWithSource ?? sections.resolvedInstructions,
+        workflowDir,
+        'instructions',
+        context,
+      );
+      if (resolved === undefined) {
+        throw new Error(`Failed to resolve instruction "${ref}"`);
+      }
+      return resolved;
+    },
+  ));
+  return Array.isArray(rawInstruction)
+    ? contents.join(INSTRUCTION_COMPOSITION_SEPARATOR)
+    : contents[0];
+}
+
+function preserveInstructionRef(
+  rawInstruction: z.output<typeof WorkflowStepRawSchema>['instruction'],
+  stepName: string,
+  stepPath: readonly PropertyKey[],
+): string | string[] | undefined {
+  return normalizeStepField(stepPath, ['instruction'], () => {
+    if (rawInstruction === undefined) {
+      return undefined;
+    }
+    const refs = Array.isArray(rawInstruction) ? rawInstruction : [rawInstruction];
+    const stringRefs = refs.map((ref) => {
+      if (isWorkflowParamReference(ref)) {
+        throw new Error(`Step "${stepName}" has unresolved $param in instruction`);
+      }
+      return ref;
+    });
+    return Array.isArray(rawInstruction) ? stringRefs : stringRefs[0];
+  });
+}
+
 export function normalizeStepFromRaw(
   step: RawStep,
   workflowDir: string,
@@ -296,15 +355,14 @@ export function normalizeStepFromRaw(
   ));
   const instruction = isSystemStep || isWorkflowCallStep
     ? undefined
-    : step.instruction
-    ? normalizeStepField(stepPath, ['instruction'], () => resolveRefToContent(
-        step.instruction as string,
-        sections.resolvedInstructionsWithSource ?? sections.resolvedInstructions,
-        workflowDir,
-        'instructions',
-        context,
-      ))
-    : undefined;
+    : normalizeInstruction(
+      step.instruction,
+      step.name,
+      stepPath,
+      sections,
+      workflowDir,
+      context,
+    );
   const completionRetry = normalizeCompletionRetry(
     step,
     stepPath,
@@ -312,6 +370,9 @@ export function normalizeStepFromRaw(
     sections,
     context,
   );
+  const instructionRef = isSystemStep || isWorkflowCallStep
+    ? undefined
+    : preserveInstructionRef(step.instruction, step.name, stepPath);
 
   validateWorkflowArpeggio(step.name, step.arpeggio, stepPath, workflowArpeggioPolicy);
   // Resolve `mcp:` references against the workflow's top-level definitions, then enforce the
@@ -379,6 +440,12 @@ export function normalizeStepFromRaw(
     ? normalizeStepField(stepPath, ['capabilities'], () => resolveCapabilitySets(step.capabilities!, workflowDir, context))
     : undefined;
   const effectiveCapabilityOptions = stepCapabilityOptions ?? workflowDefinitions?.capabilityOptions;
+  const companion = normalizeStepField(stepPath, ['companion'], () => {
+    if (isWorkflowParamReference(step.companion)) {
+      throw new Error(`Step "${step.name}" has unresolved $param in companion`);
+    }
+    return step.companion as CompanionSelection | undefined;
+  });
 
   const normalizedAgentFields: Omit<
     NormalAgentWorkflowStep,
@@ -401,7 +468,7 @@ export function normalizeStepFromRaw(
     edit: step.edit,
     allowGitCommit: step.allow_git_commit ?? inheritedAllowGitCommit ?? false,
     instruction: instruction || '{task}',
-    instructionRef: step.instruction as string | undefined,
+    instructionRef,
     delayBeforeMs: step.delay_before_ms,
     structuredOutput: normalizeStepField(stepPath, ['structured_output', 'schema_ref'], () => resolveStructuredOutput(step, workflowSchemas, {
       projectDir: context?.projectDir ?? workflowDir,
@@ -437,7 +504,7 @@ export function normalizeStepFromRaw(
     passPreviousResponse: step.pass_previous_response ?? true,
     policyContents,
     knowledgeContents,
-    companion: step.companion as CompanionSelection | undefined,
+    companion,
     completionRetry,
   };
 

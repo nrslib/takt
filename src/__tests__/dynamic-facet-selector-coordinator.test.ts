@@ -314,6 +314,38 @@ describe('DynamicFacetSelectorCoordinator', () => {
     }));
   });
 
+  it('preserves an explicitly configured selector permission mode', async () => {
+    mockedExecuteAgent.mockResolvedValueOnce({
+      persona: 'selector',
+      status: 'done',
+      content: '',
+      timestamp: new Date(),
+      structuredOutput: { selected_ids: ['frontend'], rationale: 'explicit policy applies' },
+    });
+    const coordinator = new DynamicFacetSelectorCoordinator(buildDeps({
+      engineOptions: makeOptions({
+        selectorProvider: {
+          provider: 'deepseek-harness',
+          providerSource: 'step',
+          model: 'deepseek-v4-flash',
+          modelSource: 'step',
+          providerOptions: {},
+          permissionMode: 'full',
+        },
+      }),
+    }));
+
+    await coordinator.resolveDynamicFacets(makeGuidedStep(), makeState(), 'task', makePool([
+      { id: 'frontend', description: 'Frontend changes' },
+    ]));
+
+    const options = mockedExecuteAgent.mock.calls[0]?.[2];
+    expect(options?.resolution).toEqual(expect.objectContaining({
+      permissionMode: 'full',
+      permissionModeSource: 'explicit',
+    }));
+  });
+
   it('should run the selector instead of restoring a run-local selection as a resume snapshot', async () => {
     const pool = makePool([
       { id: 'frontend', description: 'frontend' },

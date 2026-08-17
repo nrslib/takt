@@ -34,6 +34,7 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
 - `npm run test:e2e:provider:codex`: `TAKT_E2E_PROVIDER=codex` で実行。
 - `npm run test:e2e:provider:cursor`: `TAKT_AUTO_PR=false TAKT_E2E_PROVIDER=cursor` で実行（Cursor専用スイート: `add-and-run` / `worktree`）。
 - `npm run test:e2e:provider:opencode`: `TAKT_E2E_PROVIDER=opencode` で実行（`TAKT_E2E_MODEL` 未指定時の既定は `ollama-cloud/qwen3.5:397b`）。
+- `TAKT_DEEPSEEK_HARNESS_LIVE=1 npm run test:deepseek-harness:live`: DeepSeek Harness の実 API を使う opt-in smoke（`DEEPSEEK_API_KEY` と対応 runtime が必要。CI では実行しない）。
 - `npm run test:e2e:all`: `mock` + `provider` を通しで実行。
 - `npm run test:e2e:claude`: `test:e2e:provider:claude` の別名。
 - `npm run test:e2e:codex`: `test:e2e:provider:codex` の別名。
@@ -43,7 +44,7 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
 - `TAKT_E2E_PROVIDER=opencode TAKT_E2E_MODEL=ollama-cloud/qwen3.5:397b npx vitest run --config vitest.config.e2e.opencode-parallel.ts`: OpenCode 並列セッション専用スペック（`opencode-parallel-sessions.e2e.ts`）を長めのタイムアウト設定で単独実行する専用 config（直接実行時は provider と model の指定が必要）。
 - `npx vitest run --config vitest.config.e2e.structured-output.ts`: `structured-output.e2e.ts` を単独実行する専用 config。
 
-provider E2E スクリプトの対象は `claude` / `claude-sdk` / `codex` / `cursor` / `opencode`。`copilot`、`kiro`、`pi` には provider E2E 経路がなく、単体テスト（`src/__tests__/copilot-*.test.ts` / `kiro-*.test.ts`）または Pi SDK tests（`src/__tests__/pi-client.test.ts` / `src/__tests__/pi-provider.test.ts`）で検証している。
+provider E2E スクリプトの対象は `claude` / `claude-sdk` / `codex` / `cursor` / `opencode`。`copilot`、`kiro`、`pi` には provider E2E 経路がない。`deepseek-harness` は supported runtime と API の性質上、通常の provider E2E suite には含めず、credential-free の単体/統合テストで検証している。`src/__tests__/deepseek-harness-client.test.ts` はローカル Python bridge を起動する heavy integration test なので、classified runner で個別に実行する場合は `npm test -- src/__tests__/deepseek-harness-client.test.ts` を使う。`src/__tests__/deepseek-harness-provider.test.ts` は bridge を mock する unit test である。実際の supported 環境で確認する場合は `DEEPSEEK_API_KEY` と `TAKT_DEEPSEEK_HARNESS_LIVE=1` を設定し、configuration guide に記載した `npm run test:deepseek-harness:live` を実行する。この live smoke は opt-in であり、CI では実行しない。
 
 GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` のみ。provider E2E は API 課金を伴うため CI には含めず、メンテナーが PR コメントコマンド `/ci`（OWNER 限定）で必要時にのみ実行する。
 

@@ -5,6 +5,7 @@ export {
   StructuredAgentContractError,
   executeStructuredAgent,
   type StructuredAgentCallOptions,
+  type StructuredAgentControlSource,
   type StructuredAgentResolution,
   type StructuredAgentResponse,
 } from './structured-caller/transport.js';

@@ -57,6 +57,15 @@ const WorkflowFacetRefScalarSchema = z.string().min(1);
 const WorkflowFacetRefArrayValueSchema = z.array(z.string().min(1));
 const WorkflowFacetRefValueSchema = z.union([WorkflowFacetRefScalarSchema, WorkflowFacetRefArrayValueSchema]);
 const WorkflowFacetRefOrParamSchema = z.union([WorkflowFacetRefScalarSchema, WorkflowParamReferenceRawSchema]);
+const WorkflowInstructionRefItemSchema = z.union([
+  WorkflowFacetRefScalarSchema,
+  WorkflowParamReferenceRawSchema,
+]);
+const WorkflowInstructionRefOrParamSchema = z.union([
+  WorkflowFacetRefScalarSchema,
+  z.array(WorkflowInstructionRefItemSchema).min(1),
+  WorkflowParamReferenceRawSchema,
+]);
 // Preserve the normalizer's contextual empty-persona error and fragment provenance.
 const WorkflowPersonaRefOrParamSchema = z.union([z.string(), WorkflowParamReferenceRawSchema]);
 const WorkflowFacetRefListItemSchema = z.union([WorkflowFacetRefScalarSchema, WorkflowParamReferenceRawSchema]);
@@ -503,7 +512,7 @@ const AgentParallelSubStepRawObjectSchema = z.object({
   provider_options: removedWorkflowRuntimeField(WORKFLOW_RUNTIME_PROVIDER_MESSAGE),
   edit: z.boolean().optional(),
   requires_user_input: z.never().optional(),
-  instruction: WorkflowFacetRefOrParamSchema.optional(),
+  instruction: WorkflowInstructionRefOrParamSchema.optional(),
   instruction_template: z.never().optional(),
   delay_before_ms: z.never().optional(),
   structured_output: z.never().optional(),
@@ -687,7 +696,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     provider_options: removedWorkflowRuntimeField(WORKFLOW_RUNTIME_PROVIDER_MESSAGE),
     edit: z.boolean().optional(),
     requires_user_input: z.boolean().optional(),
-    instruction: WorkflowFacetRefOrParamSchema.optional(),
+    instruction: WorkflowInstructionRefOrParamSchema.optional(),
     instruction_template: z.never().optional(),
     delay_before_ms: z.number().int().min(0).optional(),
     structured_output: StructuredOutputRawSchema.optional(),

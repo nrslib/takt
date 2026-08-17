@@ -90,6 +90,79 @@ describe('executeStructuredAgent', () => {
     }));
   });
 
+  it('omits synthetic permission and selector-tool controls for DeepSeek Harness', async () => {
+    vi.mocked(executeAgent).mockResolvedValue({
+      persona: 'selector',
+      status: 'done',
+      content: '',
+      timestamp: new Date(),
+      structuredOutput: { complete: true },
+    });
+
+    await executeStructuredAgent('select', schema, {
+      name: 'selector',
+      cwd: '/repo',
+      resolution: {
+        provider: 'deepseek-harness',
+        permissionMode: 'readonly',
+        permissionModeSource: 'synthetic',
+        providerOptions: { claude: { allowedTools: ['Read'] } },
+      },
+      allowedTools: ['Grep'],
+      allowedToolsSource: 'synthetic',
+    });
+
+    const options = vi.mocked(executeAgent).mock.calls[0]?.[2];
+    expect(options?.resolvedExecution?.permissionMode).toBeUndefined();
+    expect(options).not.toHaveProperty('allowedTools');
+  });
+
+  it('preserves explicit unsupported permission constraints for provider rejection', async () => {
+    vi.mocked(executeAgent).mockResolvedValue({
+      persona: 'selector',
+      status: 'error',
+      content: 'unsupported permission controls',
+      error: 'unsupported permission controls',
+      failureCategory: 'provider_error',
+      timestamp: new Date(),
+    });
+
+    await expect(executeStructuredAgent('select', schema, {
+      name: 'selector',
+      cwd: '/repo',
+      resolution: {
+        provider: 'deepseek-harness',
+        permissionMode: 'readonly',
+      },
+    })).rejects.toMatchObject({
+      failureCategory: 'provider_error',
+    });
+
+    const options = vi.mocked(executeAgent).mock.calls[0]?.[2];
+    expect(options?.resolvedExecution?.permissionMode).toBe('readonly');
+  });
+
+  it('preserves explicit unsupported tool constraints for provider rejection', async () => {
+    vi.mocked(executeAgent).mockResolvedValue({
+      persona: 'selector',
+      status: 'error',
+      content: 'unsupported allowed tools',
+      error: 'unsupported allowed tools',
+      failureCategory: 'provider_error',
+      timestamp: new Date(),
+    });
+
+    await expect(executeStructuredAgent('select', schema, {
+      name: 'selector',
+      cwd: '/repo',
+      resolution: { provider: 'deepseek-harness' },
+      allowedTools: ['Read'],
+    })).rejects.toMatchObject({ failureCategory: 'provider_error' });
+
+    const options = vi.mocked(executeAgent).mock.calls[0]?.[2];
+    expect(options?.allowedTools).toEqual(['Read']);
+  });
+
   it('preserves omitted provider options as explicit undefined in resolved execution', async () => {
     vi.mocked(executeAgent).mockResolvedValue({
       persona: 'selector',

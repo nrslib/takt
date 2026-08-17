@@ -55,6 +55,9 @@ function resolveProviderCapabilities(
   }
 
   const providerImpl = getProvider(provider);
+  if (providerImpl === undefined) {
+    return undefined;
+  }
 
   return {
     supportsStructuredOutput: providerImpl.supportsStructuredOutput,
@@ -86,6 +89,21 @@ export function providerSupportsStructuredOutput(
   provider: ProviderType | undefined,
 ): boolean | undefined {
   return resolveProviderCapabilities(provider)?.supportsStructuredOutput;
+}
+
+export function providerSupportsPermissionControls(
+  provider: ProviderType | undefined,
+): boolean | undefined {
+  if (provider === undefined) {
+    return undefined;
+  }
+  const providerImpl = getProvider(provider);
+  if (providerImpl === undefined) {
+    return undefined;
+  }
+  return providerImpl.supportsPermissionControls === undefined
+    ? undefined
+    : providerImpl.supportsPermissionControls();
 }
 
 export function providerSupportsNativeImageInput(

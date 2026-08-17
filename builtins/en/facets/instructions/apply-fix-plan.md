@@ -13,16 +13,9 @@ Success means completing every fix unit and every completion obligation derived 
 - If task-level requirements or design must change, do not edit; provide evidence and report "Task-level replanning required"
 
 {{include:instructions/fix-plan-validity}}
-{{include:instructions/invariant-recurrence}}
-{{include:instructions/contract-family-fix}}
+{{include:instructions/repair-path-check}}
 
 {{include:instructions/established-invariants-scan}}
 {{include:instructions/post-edit-self-scan}}
 
-**Required output (include headings)**
-## Work result
-- {Fix complete / Fix plan requires revision / Task-level replanning required}
-## Changes and acceptance criteria
-- {Changes by fix unit and falsification method, evidence, and status for findings and every completion obligation}
-## Verification and evidence
-- {Commands and results plus code, diffs, reports, and logs inspected}
+Record the result, changes, acceptance evidence, and verification according to the supplied output contract.

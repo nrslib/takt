@@ -8,6 +8,6 @@ Explore in this order:
 4. Use the applicable Knowledge to verify the path and concrete impact.
 5. Stop when all changed definitions and references have been traced, inputs, stored data, configuration, outputs, and permission changes have been classified, every path where trust or authority changes has been checked, and no concrete evidence remains of an unchecked caller, consumer, or sink.
 
-Do not decide that there is no boundary from filenames or diff lines alone. If no issue meets the Security policy after the stopping conditions are satisfied, return APPROVE.
+Do not decide that there is no boundary from filenames or diff lines alone. After satisfying the stopping conditions, report the result according to the supplied output contract.
 
 {{include:instructions/security-knowledge-routing}}

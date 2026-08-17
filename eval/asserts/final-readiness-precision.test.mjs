@@ -53,6 +53,26 @@ OLD-REVIEW-readme-L1 は、全表記を README に列挙する要求が元要件
   assert.equal(assertFinalReadinessPrecision(output).pass, true);
 });
 
+test('accepts compact non-actionable wording observed from the supervisor', () => {
+  const output = `
+# 最終判定: APPROVE
+
+OLD-REVIEW-readme-L1 は前段裁定どおり非actionableで、未解消 finding には該当しません。
+`;
+
+  assert.equal(assertFinalReadinessPrecision(output).pass, true);
+});
+
+test('accepts an explicit statement that no actionable finding exists', () => {
+  const output = `
+# 最終判定: APPROVE
+
+OLD-REVIEW-readme-L1 は元要件外です。actionable finding はありません。
+`;
+
+  assert.equal(assertFinalReadinessPrecision(output).pass, true);
+});
+
 test('rejects APPROVE when the prior finding is omitted', () => {
   assert.equal(assertFinalReadinessPrecision('## Result: APPROVE').pass, false);
 });
@@ -64,6 +84,16 @@ test('rejects reopening the prior finding', () => {
 
 test('rejects explicitly making the prior finding actionable', () => {
   const output = approvedOutput('OLD-REVIEW-readme-L1 is actionable.');
+  assert.equal(assertFinalReadinessPrecision(output).pass, false);
+});
+
+test('rejects negating the non-actionable disposition', () => {
+  const output = `
+# 最終判定: APPROVE
+
+OLD-REVIEW-readme-L1 は非actionableではない。
+`;
+
   assert.equal(assertFinalReadinessPrecision(output).pass, false);
 });
 

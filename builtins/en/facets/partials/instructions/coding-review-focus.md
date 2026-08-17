@@ -6,4 +6,3 @@ Procedure:
 3. check for implementation bugs, regressions, security risks at changed trust boundaries, and missing tests for observable contracts
 4. trace changed values, state, types, schemas, resolvers, normalizers, adapters, and shared helpers through their real entries and consumers
 5. for side effects and state changes, inspect the normal, failure, interruption, and cleanup paths that exist in the changed contract
-6. confirm the causal relationship from the original requirement, observable contracts, and current code, then give a concrete location, impact, and fix direction; apply any provided relevant judgment criteria to classification

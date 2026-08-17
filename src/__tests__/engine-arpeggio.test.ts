@@ -115,11 +115,15 @@ function buildArpeggioWorkflowConfig(arpeggioConfig: ArpeggioStepConfig, tmpDir:
   };
 }
 
-function createEngineOptions(tmpDir: string): WorkflowEngineOptions {
+function createEngineOptions(
+  tmpDir: string,
+  overrides: Partial<WorkflowEngineOptions> = {},
+): WorkflowEngineOptions {
   return {
     projectCwd: tmpDir,
     reportDirName: 'test-report-dir',
     structuredCaller: new ProviderNeutralStructuredCaller(),
+    ...overrides,
   };
 }
 
@@ -492,21 +496,23 @@ describe('ArpeggioRunner integration', () => {
 
   it('injects workflow-wide rules into every arpeggio Phase 1 batch prompt', async () => {
     const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
+    const baseConfig = buildArpeggioWorkflowConfig(
+      createArpeggioConfig(csvPath, templatePath),
+      tmpDir,
+    );
     const config = {
-      ...buildArpeggioWorkflowConfig(
-        createArpeggioConfig(csvPath, templatePath),
-        tmpDir,
-      ),
+      ...baseConfig,
+      steps: baseConfig.steps.map((step) => ({ ...step, passPreviousResponse: true })),
       allStepsRules: [
         {
           ref: 'arpeggio-execution-rule',
           position: 'after_execution_rules' as const,
-          content: 'ARPEGGIO_EXECUTION_RULE',
+          content: 'ARPEGGIO_EXECUTION_RULE mode={var:review_mode} iteration={step_iteration} scope={review_scope} report={report_dir} previous={previous_response}',
         },
         {
           ref: 'arpeggio-instruction-rule',
           position: 'before_instruction' as const,
-          content: 'ARPEGGIO_INSTRUCTION_RULE',
+          content: 'ARPEGGIO_INSTRUCTION_RULE mode={var:review_mode} iteration={step_iteration} scope={review_scope} report={report_dir} previous={previous_response}',
         },
       ],
     };
@@ -519,7 +525,9 @@ describe('ArpeggioRunner integration', () => {
     );
     vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
 
-    engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
+    engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir, {
+      workflowCallVars: { review_mode: 'follow_up' },
+    }));
     engine.on('phase:start', (step, phase, phaseName, instruction) => {
       if (step.name !== 'process' || phase !== 1 || phaseName !== 'execute') return;
       phaseStarts.push(instruction);
@@ -531,6 +539,78 @@ describe('ArpeggioRunner integration', () => {
     expect(phaseStarts).toHaveLength(3);
     expect(phaseStarts.every((instruction) => instruction.includes('ARPEGGIO_EXECUTION_RULE'))).toBe(true);
     expect(phaseStarts.every((instruction) => instruction.includes('ARPEGGIO_INSTRUCTION_RULE'))).toBe(true);
+    expect(phaseStarts.every((instruction) => instruction.includes('mode=follow_up iteration=1'))).toBe(true);
+    expect(phaseStarts.every((instruction) => instruction.includes('scope='))).toBe(true);
+    expect(phaseStarts.every((instruction) => instruction.includes(
+      `report=${join(tmpDir, '.takt/runs/test-report-dir/reports')}`,
+    ))).toBe(true);
+    expect(phaseStarts.every((instruction) => !instruction.includes('{var:review_mode}'))).toBe(true);
+    expect(phaseStarts.every((instruction) => !instruction.includes('{step_iteration}'))).toBe(true);
+    expect(phaseStarts.every((instruction) => !instruction.includes('{review_scope}'))).toBe(true);
+    expect(phaseStarts.every((instruction) => !instruction.includes('{report_dir}'))).toBe(true);
+    expect(phaseStarts.every((instruction) => !instruction.includes('{previous_response}'))).toBe(true);
+    expect(phaseStarts.every((instruction) => (
+      instruction.match(/Apply the following constraints to the current task\./g) ?? []
+    ).length === 1)).toBe(true);
+    expect(phaseStarts.every((instruction) => !/workflow(?:-wide)? rules?/i.test(instruction))).toBe(true);
+    expect(phaseStarts.every((instruction) => !instruction.includes('arpeggio-execution-rule'))).toBe(true);
+    expect(phaseStarts.every((instruction) => !instruction.includes('arpeggio-instruction-rule'))).toBe(true);
+    for (const instruction of phaseStarts) {
+      expect(instruction.indexOf('ARPEGGIO_EXECUTION_RULE')).toBeGreaterThan(
+        instruction.indexOf('Do NOT use `cd` in Bash commands.'),
+      );
+      expect(instruction.indexOf('ARPEGGIO_INSTRUCTION_RULE')).toBeLessThan(
+        instruction.indexOf('Process '),
+      );
+    }
+  });
+
+  it('uses the prepared previous response in arpeggio workflow-wide rules', async () => {
+    const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
+    const baseConfig = buildArpeggioWorkflowConfig(
+      createArpeggioConfig(csvPath, templatePath),
+      tmpDir,
+    );
+    const processStep = { ...baseConfig.steps[0]!, passPreviousResponse: true };
+    const config: WorkflowConfig = {
+      ...baseConfig,
+      initialStep: 'previous',
+      steps: [
+        makeStep('previous', {
+          instruction: 'PREVIOUS_STEP',
+          rules: [makeRule('done', 'process')],
+        }),
+        processStep,
+      ],
+      allStepsRules: [{
+        ref: 'arpeggio-previous-response-rule',
+        position: 'before_instruction',
+        content: 'ARPEGGIO_PREVIOUS_RESPONSE previous={previous_response}',
+      }],
+    };
+    const phaseStarts: string[] = [];
+
+    mockRunAgentWithPrompt(
+      makeResponse({ content: 'Prior batch result' }),
+      makeResponse({ content: 'A' }),
+      makeResponse({ content: 'B' }),
+      makeResponse({ content: 'C' }),
+    );
+    vi.mocked(mockRuleEvaluation).mockReturnValue({ index: 0, method: 'phase3_tag' });
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir));
+    engine.on('phase:start', (step, phase, phaseName, instruction) => {
+      if (step.name !== 'process' || phase !== 1 || phaseName !== 'execute') return;
+      phaseStarts.push(instruction);
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(phaseStarts).toHaveLength(3);
+    expect(phaseStarts.every((instruction) => instruction.includes('previous=Prior batch result'))).toBe(true);
+    expect(phaseStarts.every((instruction) => instruction.includes('Source:'))).toBe(true);
+    expect(phaseStarts.every((instruction) => !instruction.includes('{previous_response}'))).toBe(true);
   });
 
   it('wraps arpeggio batch executions in phase spans', async () => {

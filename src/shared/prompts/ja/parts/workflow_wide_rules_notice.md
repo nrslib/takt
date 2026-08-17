@@ -1,4 +1,4 @@
 <!--
   template: parts/workflow_wide_rules_notice
 -->
-次の約束はこのワークフローの全ステップに適用されます。
+以下の制約を現在の作業に適用してください。

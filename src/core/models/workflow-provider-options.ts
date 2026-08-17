@@ -130,6 +130,18 @@ export interface CursorProviderOptions {
   guards?: ProviderGuardOptions;
 }
 
+/** Configuration for the DeepSeek Harness Python SDK bridge. */
+export interface DeepSeekHarnessProviderOptions {
+  pythonPath?: string;
+  baseUrl?: string;
+  sessionRoot?: string;
+  cordis?: string;
+  maxTokens?: number;
+  requestTimeoutMs?: number;
+  shutdownTimeoutMs?: number;
+  runtimeMode?: 'exe' | 'node';
+}
+
 /** Pi SDK resource-loading options. Extension sources are resolved temporarily. */
 export interface PiProviderOptions {
   guards?: ProviderGuardOptions;
@@ -150,6 +162,7 @@ export interface StepProviderOptions {
   copilot?: CopilotProviderOptions;
   kiro?: KiroProviderOptions;
   pi?: PiProviderOptions;
+  deepseekHarness?: DeepSeekHarnessProviderOptions;
 }
 
 export type WorkflowStepKind = 'agent' | 'system' | 'workflow_call';

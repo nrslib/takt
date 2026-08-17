@@ -9,6 +9,8 @@ steps:
     args:
       plan_policy:
         - design-planning
+        - architecture
+        - frontend
       plan_knowledge:
         - frontend
         - security
@@ -18,6 +20,8 @@ steps:
         - coding
         - testing
         - design-fidelity
+        - architecture
+        - frontend
       development_knowledge:
         - frontend
         - security

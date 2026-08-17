@@ -259,7 +259,7 @@ describe('applyExecOverrides', () => {
     },
   );
 
-  it.each(['cursor', 'copilot', 'kiro', 'pi'] as const)(
+  it.each(['cursor', 'copilot', 'kiro', 'pi', 'deepseek-harness'] as const)(
     'should display and emit provider defaults when overriding provider to %s without an explicit model',
     (provider) => {
       const config = createTestConfig();

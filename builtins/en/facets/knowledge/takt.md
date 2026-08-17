@@ -54,19 +54,13 @@ Provider.setup(AgentSetup) → ProviderAgent
 ProviderAgent.call(prompt, options) → AgentResponse
 ```
 
-| Criteria | Judgment |
-|----------|----------|
-| SDK-specific error handling leaking outside Provider | REJECT |
-| Errors not propagated to AgentResponse.error | REJECT |
-| Session key collision between providers | REJECT |
-| Session key format `{persona}:{provider}` | OK |
 
 ### Model Resolution
 
 Provider and model resolve independently per field. Higher takes precedence.
 
 1. CLI / environment explicit override
-2. Matching promotion (normal agent steps only; parallel sub-steps reject `promotion` at the schema level)
+2. Matching promotion (normal agent steps only; parallel sub-steps disallow `promotion` at the schema level)
 3. Step / parallel sub-step direct provider / model
 4. workflow_call override
 5. provider_routing (steps → tags → personas)
@@ -78,24 +72,11 @@ Provider and model resolve independently per field. Higher takes precedence.
 
 In TAKT, workflow runtime is not the only user-visible contract entry. Preview, doctor, workflow summary, validation, and report paths are also contract entries. Auxiliary entries that display or validate config values, providers, models, tools, permissions, or output contracts should use the same normalized input, resolver, and override order as runtime.
 
-| Criteria | Judgment |
-|----------|----------|
-| Runtime and preview resolve provider, model, tool, or permission from different inputs | REJECT |
-| Preview only displays a value without verifying the same override conditions as runtime | REJECT |
-| Doctor or validation accepts config that fails at runtime due to different conditions | Warning |
-| Runtime and auxiliary entries share the same normalized input or resolver | OK |
 
 ## Runtime Asset Consumption Boundaries
 
 TAKT runtime assets get their meaning from the entry point that consumes them, not only from their location or name. The same string can be an asset reference, session identifier, display name, or directly supplied body, and each is a separate contract.
 
-| Criteria | Judgment |
-|----------|----------|
-| Treating an entry that resolves asset references and an entry that only uses identifiers as equivalent | REJECT |
-| Adding a same-named facet and assuming it affects an entry that receives body content directly | REJECT |
-| Workflow-derived runtime assets and feature-local runtime assets share the same responsibility name | Warning |
-| Each entry point confirms which resolver or loader consumes which asset type before placing the asset | OK |
-| Shared body content is centralized behind the existing runtime asset loader | OK |
 
 ### Reference Names and Identity Names
 
@@ -109,11 +90,6 @@ The faceted-prompting module is independent from TAKT core.
 compose(facets, options) → ComposedPrompt { systemPrompt, userMessage }
 ```
 
-| Criteria | Judgment |
-|----------|----------|
-| Import from faceted-prompting to TAKT core | REJECT |
-| TAKT core depending on faceted-prompting | OK |
-| Facet path resolution logic outside faceted-prompting | Warning |
 
 ### 3-Layer Facet Resolution Priority
 
@@ -149,10 +125,10 @@ Heavy integration runners use one worker to avoid process, Git, and synchronous 
 `--provider mock` returns deterministic responses. Scenario queues compose multi-turn tests.
 
 ```typescript
-// NG - Calling real API in tests
+// Avoid: Calling real API in tests
 const response = await callClaude(prompt)
 
-// OK - Set up scenario with mock provider
+// Example: Set up scenario with mock provider
 setMockScenario([
   { persona: 'coder', status: 'done', content: '[STEP:1]\nDone.' },
   { persona: 'reviewer', status: 'done', content: '[STEP:1]\napproved' },
@@ -161,11 +137,6 @@ setMockScenario([
 
 ### Test Isolation
 
-| Criteria | Judgment |
-|----------|----------|
-| Tests sharing global state | REJECT |
-| Environment variables not cleared in test setup | Warning |
-| E2E tests assuming real API | Isolate via `provider` config |
 
 ## Platform Priority
 
@@ -175,11 +146,6 @@ TAKT treats Windows as a secondary platform.
 
 Provider errors propagate through: `AgentResponse.error` → session log → console output.
 
-| Criteria | Judgment |
-|----------|----------|
-| SDK error results in empty `blocked` status | REJECT |
-| Error details not recorded in session log | REJECT |
-| No ABORT transition defined for error cases | Warning |
 
 ## Session Management
 
@@ -191,13 +157,6 @@ However, when a retry or fallback explicitly runs as a new session and succeeds,
 
 The Report Phase is Phase 2 and reads Phase 1 outputs. Its execution contract is readonly and tool-free. Report retry/fallback must preserve `permissionMode: readonly`, empty tool permission, and provider capability overrides such as turn limits.
 
-| Criteria | Judgment |
-|----------|----------|
-| Session resuming when `cwd !== projectCwd` | REJECT (cross-project contamination) |
-| Session key missing provider identifier | REJECT (cross-provider contamination) |
-| Session broken between phases that should continue context | REJECT (context loss) |
-| Old resumed session remains after successful new-session retry | REJECT (unintended resume) |
-| Report retry/fallback drops readonly mode, tool-free execution, or capability overrides | REJECT |
 
 ## Termination-Path Completeness
 

@@ -26,8 +26,12 @@ tests:
       - type: javascript
         metric: recall/event-not-past-tense
         value: |
-          return /(OpenAccount)/.test(output) &&
-            /(過去形|past|AccountOpened|Opened|命名|name)/i.test(output);
+          const text = String(output);
+          return [...text.matchAll(/OpenAccount/g)].some(({ index = 0 }) => {
+            const context = text.slice(Math.max(0, index - 240), index + 280);
+            return /OpenAccount[\s\S]{0,160}(?:過去形\s*(?:で|に)?(?:は)?(?:ない|なっていない)|現在形|命令形|動詞(?:の)?原形|past[- ]tense|present[- ]tense|verb[- ]base|imperative|AccountOpened)/i.test(context)
+              || /(?:過去形\s*(?:で|に)?(?:は)?(?:ない|なっていない)|現在形|命令形|動詞(?:の)?原形|past[- ]tense|present[- ]tense|verb[- ]base|imperative|AccountOpened)[\s\S]{0,160}OpenAccount/i.test(context);
+          });
       - type: javascript
         metric: recall/logic-in-apply
         value: |

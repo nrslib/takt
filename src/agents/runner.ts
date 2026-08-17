@@ -12,8 +12,11 @@ import {
 import {
   resolveEffectiveProviderOptions,
   resolvePersonaProviderOptions,
+  resolveProviderOptionsSources,
+  resolveTrustedDeepSeekHarnessPaths,
 } from '../infra/config/providerOptions.js';
 import { getProvider, type ProviderType, type ProviderCallOptions } from '../infra/providers/index.js';
+import { providerSupportsPermissionControls } from '../infra/providers/provider-capabilities.js';
 import type { AgentResponse, CustomAgentConfig } from '../core/models/index.js';
 import { resolveAgentProviderModel } from '../core/workflow/provider-resolution.js';
 import { mergeGlobalPermissionProfiles, resolveStepPermissionMode } from '../core/workflow/permission-profile-resolution.js';
@@ -32,6 +35,23 @@ type AgentExecutionResolution = {
   readonly providerOptions: ProviderCallOptions['providerOptions'];
   readonly permissionMode: RunAgentOptions['permissionMode'];
 };
+
+function hasExplicitPermissionConstraint(
+  provider: ProviderType,
+  resolution: NonNullable<RunAgentOptions['permissionResolution']>,
+  localConfig: ReturnType<typeof loadProjectConfig>,
+  globalConfig: ReturnType<typeof loadGlobalConfig>,
+): boolean {
+  if (resolution.requiredPermissionMode !== undefined) {
+    return true;
+  }
+  return [
+    resolution.providerProfiles?.[provider],
+    localConfig.providerProfiles?.[provider],
+    globalConfig.providerProfiles?.[provider],
+  ].some((profile) => profile?.defaultPermissionMode !== undefined
+    || profile?.stepPermissionOverrides?.[resolution.stepName] !== undefined);
+}
 
 export class AgentRunner {
   private static resolvePersonaProviders(cwd: string) {
@@ -104,12 +124,26 @@ export class AgentRunner {
       originResolver: providerOptionsOriginResolver,
     } = resolveProviderOptionsWithTrace(cwd);
 
-    return resolveEffectiveProviderOptions(
+    const resolvedProviderOptions = resolveEffectiveProviderOptions(
       providerOptionsSource,
       providerOptionsOriginResolver,
       resolvedConfigProviderOptions,
       options.providerOptions,
       personaProviderOptions,
+    );
+    const providerOptionsSources = resolveProviderOptionsSources(
+      options.providerOptions,
+      personaProviderOptions === undefined
+        ? []
+        : [{ source: 'persona_providers' as const, options: personaProviderOptions }],
+      resolvedConfigProviderOptions,
+      providerOptionsOriginResolver,
+      providerOptionsSource,
+    );
+    return resolveTrustedDeepSeekHarnessPaths(
+      resolvedProviderOptions,
+      cwd,
+      providerOptionsSources,
     );
   }
 
@@ -195,8 +229,11 @@ export class AgentRunner {
     localConfig: ReturnType<typeof loadProjectConfig>,
     globalConfig: ReturnType<typeof loadGlobalConfig>,
   ): RunAgentOptions['permissionMode'] {
+    if (options.permissionResolution !== undefined && options.permissionMode !== undefined) {
+      throw new Error('permissionMode cannot be combined with permissionResolution');
+    }
     if (options.permissionResolution) {
-      return resolveStepPermissionMode({
+      const permissionMode = resolveStepPermissionMode({
         stepName: options.permissionResolution.stepName,
         requiredPermissionMode: options.permissionResolution.requiredPermissionMode,
         provider: resolvedProvider,
@@ -204,6 +241,19 @@ export class AgentRunner {
           ?? localConfig.providerProfiles,
         globalProviderProfiles: mergeGlobalPermissionProfiles(globalConfig.providerProfiles),
       });
+      if (
+        permissionMode !== undefined
+        && !hasExplicitPermissionConstraint(
+          resolvedProvider,
+          options.permissionResolution,
+          localConfig,
+          globalConfig,
+        )
+        && providerSupportsPermissionControls(resolvedProvider) === false
+      ) {
+        return undefined;
+      }
+      return permissionMode;
     }
     return options.permissionMode;
   }

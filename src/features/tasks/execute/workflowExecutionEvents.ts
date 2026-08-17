@@ -364,6 +364,11 @@ function emitProviderOptionLines(
     if (agent !== undefined) {
       out.info(`Agent: ${agent}${sourceSuffix('kiro.agent', sources, showSource)}`);
     }
+  } else if (stepProvider === 'deepseek-harness') {
+    const baseUrl = options.deepseekHarness?.baseUrl;
+    if (baseUrl !== undefined) {
+      out.info(`Base URL: ${CONFIGURED_PROVIDER_OPTION_VALUE}${sourceSuffix('deepseekHarness.baseUrl', sources, showSource)}`);
+    }
   } else if (stepProvider === 'pi') {
     const pi = options.pi;
     if (pi?.extensions !== undefined) {

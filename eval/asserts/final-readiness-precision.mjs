@@ -1,10 +1,6 @@
-const NON_ACTIONABLE_FINDING = 'OLD-REVIEW-readme-L1';
-const FINAL_DECISION_HEADING = /(?:^|\n)\s*#{1,6}\s*(?:Result|Final Decision|結果|最終判定)\s*[:：]\s*(APPROVE|REJECT|BLOCKED)\b/gim;
+import { hasFinalDecision } from './final-readiness-decision.mjs';
 
-function hasFinalDecision(output, decision) {
-  return [...output.matchAll(FINAL_DECISION_HEADING)]
-    .some((match) => match[1].toUpperCase() === decision);
-}
+const NON_ACTIONABLE_FINDING = 'OLD-REVIEW-readme-L1';
 
 function hasNearbyEvidence(output, anchor, evidence) {
   let index = output.indexOf(anchor);
@@ -30,7 +26,7 @@ export default function assertFinalReadinessPrecision(output) {
     ['non-actionable-preserved', hasNearbyEvidence(
       output,
       NON_ACTIONABLE_FINDING,
-      /(false_positive|overreach|out_of_scope|no_issue_after_verification|environment_unverified|非修正対象(?:として)?(?:維持|扱)|非\s*actionable\s*(?:です|である|として(?:維持|扱))|再開[^。\n]*(?:しない|せず|ない|なし)|(?:not|without)\s+reopen|(?:is|remains?)\s+non-actionable)/i,
+      /(false_positive|overreach|out_of_scope|no_issue_after_verification|environment_unverified|非修正対象(?:として)?(?:維持|扱)|非\s*actionable\s*(?:です|である|であり|で(?=[、。\s]|$)|として(?:維持|扱))|actionable\s+findings?\s*(?:は|が)?\s*(?:ありません|ない|なし)|再開[^。\n]*(?:しない|せず|ない|なし)|(?:not|without)\s+reopen|(?:is|remains?)\s+non-actionable)/i,
     )],
     ['old-finding-not-reopened', !hasNearbyReopening(output, NON_ACTIONABLE_FINDING)],
     ['not-rejected', !hasFinalDecision(output, 'REJECT') && !hasFinalDecision(output, 'BLOCKED')],

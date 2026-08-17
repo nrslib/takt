@@ -97,11 +97,13 @@ step はキー名で section map を参照します (例: `persona: coder`)。�
 
 section map は任意です。facet は bare name で直接参照できます（`personas` マップの項目がなくても `persona: coder` と書けます）。bare name は project `.takt/facets/<type>/` → global `~/.takt/facets/<type>/` → 同梱の `builtins/{lang}/facets/<type>/` の優先順で解決されます。section map が必要になるのは、カスタムエイリアスや明示的なファイルパスを使いたい場合だけです。
 
+`instruction` は従来の scalar 形式に加えて、空でない順序付き配列を受け付けます。各要素には facet のキー・パスまたはインライン文字列を指定でき、記述順に解決したうえで `\n\n---\n\n` で結合します。これにより要素ごとの境界を保持できます。callable workflow では、`instruction` の `facet_ref` / `facet_ref[]` parameter を配列要素の `{ $param: name }` で参照できます。`facet_ref[]` の値はその位置へ平坦化され、前後の順序は変わりません。scalar 形式の挙動は変わりません。
+
 ### ワークフロー横断ルール（`all_steps.rules`）
 
 すべての agent step に適用するルールは `all_steps.rules` に宣言します。各要素はルール参照文字列、または `ref` と任意の `position: before_instruction` を持つ object です。`position` を省略すると自動実行ルールの後に配置され、`before_instruction` は step の `Instructions` セクション直前に配置されます。
 
-ルールファイルは `workflows/rules/<ref>.md` です。project `.takt/workflows/rules/` → global `~/.takt/workflows/rules/` → 同梱 builtin ディレクトリの順で解決します。適用通知とルール見出しは prompt ごとに1回だけ出力されます。対象は Phase 1 の agent 指示だけで、レポート出力、ステータスルーティング、companion reviewer には適用されません。`workflow_call` 先は親のルールを先に継承し、自身の `all_steps.rules` を後ろに加算します。
+ルールファイルは `workflows/rules/<ref>.md` です。project `.takt/workflows/rules/` → global `~/.takt/workflows/rules/` → 同梱 builtin ディレクトリの順で解決します。適用通知とルール見出しは prompt ごとに1回だけ出力されます。対象は Phase 1 の agent 指示だけで、レポート出力、ステータスルーティング、companion reviewer には適用されません。`workflow_call` 先は親のルールを先に継承し、自身の `all_steps.rules` を後ろに加算します。親子で `ref`・`position`・解決済み内容がすべて一致するルールは、親側を残して1回だけ適用します。同じ `ref` でも位置または内容が異なるルールは重複除去しません。
 
 ルールファイルに必須出力見出しまたは `{report:...}` 参照を含めることはできません。違反時は参照されたファイルを示して workflow の読み込みに失敗します。`all_steps` を省略した場合、既存の prompt は維持されます。将来の workflow 横断宣言は `all_steps` 配下に追加し、未知のトップレベルキーは引き続き拒否されます。
 
@@ -207,7 +209,7 @@ steps:
 - 作業ツリー計算（常に行われます）: base コミット以降のコミット済み変更、未コミット変更、未追跡ファイル（ignored を除く）の和集合。タスクの変更が既にブランチへコミット済みで working tree 差分が空になる構成でも一覧に出ます
 - PR 由来の実行（`takt --pr N` 等で PR context を持つ実行）: 上の作業ツリー計算に PR の diff range `base...head` を**加えた**和集合になります。`--pr` は PR のレビューコメントを取り込んで修正するフローで、同じ実行の中で作業ツリーが変わるため、両方を対象にします。diff range がローカルに用意されていない場合はその旨を述べ、ローカル変更だけを一覧にします
 
-作業ディレクトリが Git リポジトリでない場合や変更が検出されない場合も、その事実を述べる文言に解決されます（空文字にはなりません）。ファイル数が 200 件を超える場合は残件数を明示して打ち切ります。組み込みの汎用レビュアーは partial `instructions/review-round-scope` 経由でこの変数を自動的に受け取ります。
+作業ディレクトリが Git リポジトリでない場合や変更が検出されない場合も、その事実を述べる文言に解決されます（空文字にはなりません）。ファイル数が 200 件を超える場合は残件数を明示して打ち切ります。組み込みの汎用レビュアーは共通 workflow rule `findings-handling` 経由でこの変数を自動的に受け取ります。
 
 base コミットは `refs/takt/pr-base/<branch>` → `refs/takt/base/<branch>` → 検出した default branch の順で最初に存在する ref との merge-base、およびブランチ reflog の分岐点から、より新しい方を採ります。既存ブランチをそのまま clone した resume 実行のように、どの base ref も残らず reflog も分岐点を持たない環境では base を特定できず、コミット済み変更が一覧から外れます。その場合はその旨が文言に明示されます。
 
@@ -681,7 +683,6 @@ CSV / JSON などのデータソースを反復し、同じ step テンプレー
       max_concurrency: 2
       initial_max_parts: 2
       timeout_ms: 600000
-      inspect_tools: [read, glob, grep]
       part_tags: [coding]
       part_persona: coder
       part_edit: true
@@ -700,7 +701,7 @@ CSV / JSON などのデータソースを反復し、同じ step テンプレー
 
 `max_concurrency` は同時に実行する独立した part 数を制御します。`max_concurrency` と互換キーの `max_parts` はどちらも上限 `3` で、超える値は workflow ロード時にエラーになります。どちらも未指定の場合のデフォルトは `3` です。`initial_max_parts` は指定した場合に限り、最初の分解バッチの part 数を制限します。step 全体の part 総数に上限はなく、Team Leader が追加作業不要と判断するか、新しい一意な part を返さなくなるまで batch を追加します。scheduler は現在のバッチの part がすべて完了してから次のバッチを要求するため、同じバッチ内の part は相互に依存してはいけません。実装結果が必要な検証は後続 batch に置きます。`fail_on_part_error: true` の場合、生成された part が失敗した後でも Team Leader は新たな回復 part を計画・実行し得ます。その後、この step は error で終了します。未指定時は通常の回復フローに従います。旧名の `max_parts` は互換性のため `max_concurrency` として扱われます。`refill_threshold` は互換キーであり、省略または `0` のみ指定できます。batch 障壁と両立しないため、非0は workflow ロード時にエラーになります。`part_tags` は生成される part step の provider routing tag です。未指定時は親 step の `tags` を継承します。空文字や空白のみの tag は無効です。`part_tags` は通常の `provider_routing.tags` として解決されるため、`part_persona` による persona routing より優先されます。
 
-`inspect_tools` は親 Team Leader のタスク分解フェーズだけで read-only inspection tools (`read`, `glob`, `grep`) を許可します。不正な tool 名は workflow ロード時にエラーになります。生成される子 part には影響せず、子 part の tool は引き続き `part_allowed_tools` で別に制御されます。inspection tools は Claude 系 provider や OpenCode など、`allowedTools` に対応する provider で利用できます。Team Leader inspection tools に対応しない provider では、実行時に明確なエラーになります。
+`inspect_tools` は親 Team Leader のタスク分解と追加 part 判断のフェーズで read-only inspection tools (`read`, `glob`, `grep`) に制限します。不正な tool 名は workflow ロード時にエラーになります。生成される子 part には影響せず、子 part の tool は引き続き `part_allowed_tools` で別に制御されます。省略時はエンジン既定で `read`, `glob`, `grep` が付与され、明示指定で上書きします。`allowedTools` に対応する provider (Claude 系, OpenCode) では既定または指定値をツール制限として適用します。ツール制限に対応しない provider (Codex 等) では `allowedTools` を未設定のままにし、実行環境が読み取り可能であることを前提として read-only ガイダンスを出します。非対応 provider に空でない `inspect_tools` を明示指定した場合は、実行時に明確なエラーになります。
 
 ### Workflow Call Step（サブワークフロー）
 
@@ -989,6 +990,8 @@ subworkflow:
 builtin callable workflow では、call tree 全体の予算を root workflow が所有するため `max_steps` を省略します。同じ実装に直接実行の入口も必要な場合は standalone の root wrapper に `max_steps` を指定し、callable child は `workflow_call` から呼び出す設計にします。
 
 callable workflow の facet parameter は `facet_ref` / `facet_ref[]` と、`policy` / `knowledge` / `instruction` / `persona` / `report_format` の5種の `facet_kind` を使います。呼び出す callable workflow を表す `workflow_ref` parameter には `facet_kind` を指定せず、`call: { $param: reviewer_suite }` の形で利用できます。`facet_pool_ref` parameter も `facet_kind` を指定せず、callable child のトップレベル `facet_pools` map にある pool 名の scalar を表します。`dynamic_facets.pool: { $param: implementation_pool }` の形で使用できます。`companion_ref[]` parameter も `facet_kind` を指定せず、`companion: { $param: implementation_companions }` の形で通常の agent step の固定 companion 配列を表します。空配列は `companion` を省略し、残存する未引用の `companion.*` state 参照を拒否します。literal な空 companion は許可しません。default は省略可能です。`facet_ref[]` の引数と default には空配列を指定でき、任意の追加 facet を表現できます。`policy` / `knowledge` では固定参照と scalar/list parameter を混在でき、list parameter は field の記載順を保ってその位置へ平坦化されます。`facet_pool_ref` の必須引数未設定、配列などの型不一致、child-local でない pool、未展開 `$param` は実行前に fail-fast し、暗黙の pool fallback はありません。`companion_ref[]` の配列以外の引数、未宣言参照、未知の companion 定義も実行前に fail-fast します。parameter は `workflow_call.args` を通じてさらに下位へ渡すこともできます。
+
+`instruction` も空でない順序付き配列を受け付け、facet 参照とインライン文字列を混在できます。`facet_ref` / `facet_ref[]` parameter は配列要素に指定でき、`facet_ref[]` はその位置へ平坦化した後、解決済み要素を `\n\n---\n\n` で結合します。
 
 ## 例
 

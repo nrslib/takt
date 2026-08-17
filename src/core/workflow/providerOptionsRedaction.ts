@@ -43,10 +43,17 @@ export function redactProviderOptions(
         extensions: providerOptions.pi.extensions.map(redactExtensionSource),
       }
     : providerOptions.pi;
+  const deepseekHarness = providerOptions.deepseekHarness?.baseUrl !== undefined
+    ? {
+        ...providerOptions.deepseekHarness,
+        baseUrl: CONFIGURED_PROVIDER_OPTION_VALUE,
+      }
+    : providerOptions.deepseekHarness;
   return {
     ...providerOptions,
     ...(codex !== undefined ? { codex } : {}),
     ...(claude !== undefined ? { claude } : {}),
     ...(pi !== undefined ? { pi } : {}),
+    ...(deepseekHarness !== undefined ? { deepseekHarness } : {}),
   };
 }

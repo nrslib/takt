@@ -1,5 +1,16 @@
 name: review-fix-default
 description: 多角レビュー＋修正ループ（アーキテクチャ・セキュリティ・テスト・コーディングを並列レビューした後、supervisor が要件の充足を確認する）
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 max_steps: 30
 facet_pools:
   security-review-facets:
@@ -49,6 +60,7 @@ steps:
         policy:
           - contract-change
           - review
+          - architecture
         knowledge: architecture
         instruction: review-arch
         output_contracts:
@@ -161,6 +173,7 @@ steps:
       fix_policy:
         - coding
         - testing
+        - architecture
       verification_policy:
         - coding
         - testing

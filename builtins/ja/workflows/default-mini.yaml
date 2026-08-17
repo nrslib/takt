@@ -7,10 +7,10 @@ steps:
     kind: workflow_call
     call: mini-core
     args:
-      plan_policy: [design-planning]
+      plan_policy: [design-planning, architecture]
       plan_knowledge: [architecture]
       plan_report_format: plan
-      development_policy: [coding, testing]
+      development_policy: [coding, testing, architecture]
       development_knowledge: [architecture]
       supervisor_persona: supervisor
     rules:

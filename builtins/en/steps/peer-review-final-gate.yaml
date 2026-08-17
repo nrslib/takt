@@ -2,6 +2,9 @@ params:
   review_knowledge:
     type: facet_ref[]
     facet_kind: knowledge
+  final_gate_policy:
+    type: facet_ref[]
+    facet_kind: policy
   final_gate_instruction:
     type: facet_ref
     facet_kind: instruction
@@ -14,6 +17,7 @@ edit: false
 persona: supervisor
 policy:
   - contract-change
+  - $param: final_gate_policy
 knowledge:
   $param: review_knowledge
 pass_previous_response: false

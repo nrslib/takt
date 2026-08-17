@@ -1,5 +1,16 @@
 name: simple-mini
 description: 強いモデルの判断力を信頼する軽量な開発ワークフロー（plan → implement → review ⇄ fix → COMPLETE）。独立したテスト作成と要件充足の最終確認を省き、利用可能な関連SKILLをモデル自身が選ぶ。
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 capabilities: [readonly, enable-skills]
 max_steps: 20
 initial_step: plan
@@ -8,7 +19,7 @@ steps:
     capabilities: [readonly, enable-skills]
     uses: development-core-plan
     with:
-      plan_policy: [design-planning]
+      plan_policy: [design-planning, architecture]
       plan_knowledge: [architecture]
       plan_instruction: simple-plan
       plan_report_format: plan
@@ -28,7 +39,7 @@ steps:
     capabilities: [edit, enable-skills]
     uses: development-core-implement
     with:
-      development_policy: [coding, testing]
+      development_policy: [coding, testing, architecture]
       development_knowledge: [architecture]
       implementation_instruction: simple-implement
     rules:
@@ -53,6 +64,7 @@ steps:
       - review
       - coding
       - testing
+      - architecture
     knowledge:
       - architecture
       - unit-testing
@@ -79,6 +91,7 @@ steps:
       fix_policy:
         - coding
         - testing
+        - architecture
       verification_policy:
         - coding
         - testing

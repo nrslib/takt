@@ -18,12 +18,11 @@ import type {
   WorkflowConfig,
   WorkflowWideRule,
   WorkflowResumePointEntry,
-  NormalAgentWorkflowStep,
-  TeamLeaderWorkflowStep,
+  NormalOrTeamLeaderWorkflowStep,
   ResolvedFacetPool,
   ResolvedFacetContent,
 } from '../../models/types.js';
-import { isNormalAgentWorkflowStep } from '../../models/types.js';
+import { isNormalOrTeamLeaderWorkflowStep } from '../../models/types.js';
 import type {
   PhaseName,
   PhasePromptParts,
@@ -122,8 +121,6 @@ import {
 } from './fallback-operation.js';
 
 const log = createLogger('step-executor');
-
-type NormalOrTeamLeaderWorkflowStep = NormalAgentWorkflowStep | TeamLeaderWorkflowStep;
 
 function emitCompanionReviewSkippedSafely(
   emitEvent: StepExecutorDeps['emitEvent'],
@@ -401,6 +398,7 @@ export class StepExecutor {
                   model: judgeProviderInfo.model,
                   providerOptions: judgeOptions.providerOptions,
                   permissionMode: judgeOptions.permissionMode,
+                  permissionModeSource: judgeOptions.permissionMode === undefined ? 'synthetic' : 'explicit',
                 },
               },
             ),
@@ -709,11 +707,7 @@ export class StepExecutor {
     stepIteration: number,
     context?: DynamicFacetSelectionContext,
   ): Promise<AgentWorkflowStep> {
-    const dynamicFacetStep = isNormalAgentWorkflowStep(step)
-      ? step
-      : step.teamLeader === undefined
-        ? undefined
-        : step;
+    const dynamicFacetStep = isNormalOrTeamLeaderWorkflowStep(step) ? step : undefined;
     if (dynamicFacetStep === undefined || dynamicFacetStep.dynamicFacets === undefined) {
       return step;
     }
@@ -1233,7 +1227,7 @@ export class StepExecutor {
       workflowState: state,
       ...(step.engineSynthesized === true ? {} : { workflowRules: this.deps.getWorkflowRules() }),
       ...(!this.deps.companionEnabled
-        || (!isNormalAgentWorkflowStep(step) && step.teamLeader === undefined)
+        || !isNormalOrTeamLeaderWorkflowStep(step)
         || step.companion === undefined
         ? {}
         : {
@@ -1463,11 +1457,9 @@ export class StepExecutor {
     );
 
     // Phase 1: main execution (Write excluded if step has report)
-    const companionStep = isNormalAgentWorkflowStep(executableStep)
+    const companionStep = isNormalOrTeamLeaderWorkflowStep(executableStep)
       ? executableStep
-      : executableStep.teamLeader === undefined
-        ? undefined
-        : executableStep;
+      : undefined;
     const companionRuntime = companionStep === undefined
       ? undefined
       : await this.createCompanionRuntime(companionStep, task, state);
@@ -1523,6 +1515,7 @@ export class StepExecutor {
                     model: providerInfo.model,
                     providerOptions: providerInfo.providerOptions,
                     permissionMode: agentOptions.permissionMode,
+                    permissionModeSource: agentOptions.permissionMode === undefined ? 'synthetic' : 'explicit',
                   },
                   language: agentOptions.language,
                   abortSignal: agentOptions.abortSignal,

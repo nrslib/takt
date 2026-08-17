@@ -6,6 +6,7 @@ import type { RuntimeProviderProfileOrigin } from './loader.js';
 export interface RuntimeProviderResolutionContext extends FacetResolutionContext {
   readonly globalConfigDir: string;
   readonly projectConfigDir: string;
+  readonly executionDir?: string;
   readonly profileOrigins?: ReadonlyMap<string, RuntimeProviderProfileOrigin>;
 }
 
@@ -13,6 +14,7 @@ export interface RuntimeProviderResolutionContext extends FacetResolutionContext
 export function createRuntimeProviderResolutionContext(
   projectCwd: string,
   profileOrigins?: ReadonlyMap<string, RuntimeProviderProfileOrigin>,
+  executionDir?: string,
 ): RuntimeProviderResolutionContext {
   return {
     lang: resolveWorkflowConfigValue(projectCwd, 'language'),
@@ -21,6 +23,7 @@ export function createRuntimeProviderResolutionContext(
     repertoireDir: getRepertoireDir(),
     globalConfigDir: getGlobalConfigDir(),
     projectConfigDir: getProjectConfigDir(projectCwd),
+    ...(executionDir === undefined ? {} : { executionDir }),
     ...(profileOrigins === undefined ? {} : { profileOrigins }),
   };
 }

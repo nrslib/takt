@@ -1,5 +1,16 @@
 name: experimental-review
 description: 実験的ワークフローの共通レビュー実行部。レビュー知識とポリシーを注入して結果を返す。
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 subworkflow:
   callable: true
   visibility: internal

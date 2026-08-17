@@ -1,5 +1,16 @@
 name: review-remediation
 description: Shared convergence loop that plans review findings across their full scope, fixes them, and verifies completion.
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 subworkflow:
   callable: true
   visibility: internal

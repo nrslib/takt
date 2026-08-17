@@ -65,6 +65,7 @@ export interface Provider {
   supportsIsolatedStructuredExecution?: boolean;
   supportsNativeImageInput: boolean;
   getRuntimeInstructions(allowedTools?: string[], permissionMode?: import('../../core/models/index.js').PermissionMode, networkAccess?: boolean): string | null;
+  supportsPermissionControls?(): boolean;
   keepsAllowedToolWithoutEdit(tool: string): boolean;
   getDefaultAllowedToolsWithoutEdit?(): readonly string[];
   setup(config: AgentSetup): ProviderAgent;

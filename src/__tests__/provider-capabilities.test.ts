@@ -36,6 +36,8 @@ describe('provider capabilities module boundary', () => {
     expect(providerSupportsMcpServers('cursor')).toBe(false);
     expect(providerSupportsAllowedTools('codex')).toBe(false);
     expect(providerSupportsMcpServers('codex')).toBe(false);
+    expect(providerSupportsAllowedTools('deepseek-harness')).toBe(false);
+    expect(providerSupportsMcpServers('deepseek-harness')).toBe(false);
   });
 
   it('maxTurns capability は SDK payload 非対応 provider を明示的に拒否する', () => {
@@ -43,6 +45,7 @@ describe('provider capabilities module boundary', () => {
     expect(providerSupportsMaxTurns('claude-terminal')).toBe(false);
     expect(providerSupportsMaxTurns('opencode')).toBe(false);
     expect(providerSupportsMaxTurns('pi')).toBe(false);
+    expect(providerSupportsMaxTurns('deepseek-harness')).toBe(false);
   });
 
   it('native image input capability は SDK に実画像を渡せる provider だけを許可する', () => {
@@ -52,10 +55,12 @@ describe('provider capabilities module boundary', () => {
     expect(providerSupportsNativeImageInput('claude-terminal')).toBe(false);
     expect(providerSupportsNativeImageInput('opencode')).toBe(false);
     expect(providerSupportsNativeImageInput('pi')).toBe(true);
+    expect(providerSupportsNativeImageInput('deepseek-harness')).toBe(false);
   });
 
-  it('Pi は structured output をサポートしない', () => {
+  it('Pi と DeepSeek Harness は structured output をサポートしない', () => {
     expect(providerSupportsStructuredOutput('pi')).toBe(false);
+    expect(providerSupportsStructuredOutput('deepseek-harness')).toBe(false);
   });
 
   it('非編集 step の allowedTools 判定は provider capability 境界に閉じる', () => {

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { createOpenCodeServerStartMock } from './helpers/opencode-server-process-test-helpers.js';
 import {
   OPENCODE_STREAM_EVENT_LIMIT,
   OPENCODE_STREAM_ID_LIMIT,
@@ -39,6 +40,10 @@ vi.mock('node:net', () => ({
 
 vi.mock('@opencode-ai/sdk/v2', () => ({
   createOpencode: createOpencodeMock,
+}));
+
+vi.mock('../infra/opencode/server-process.js', () => ({
+  startOpenCodeServer: createOpenCodeServerStartMock(createOpencodeMock),
 }));
 
 describe('OpenCodeClient stream cleanup', () => {
@@ -1230,5 +1235,61 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(sessionCreate).toHaveBeenCalledTimes(2);
     expect(promptAsync).toHaveBeenCalledTimes(2);
     expect(subscribe).toHaveBeenCalledTimes(2);
+  });
+
+  it('should propagate an EPIPE from the OpenCode server stdio to AgentResponse.error', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const sessionId = 'session-epipe-on-stream-error';
+    let serverErrorListener: ((error: Error) => void) | undefined;
+    let stream: StallingEventStream | undefined;
+    const sessionAbort = successfulSessionAbort();
+    const serverOnError = vi.fn((listener: (error: Error) => void) => {
+      serverErrorListener = listener;
+      return () => {
+        if (serverErrorListener === listener) serverErrorListener = undefined;
+      };
+    });
+    const promptAsync = vi.fn().mockImplementation(() => {
+      queueMicrotask(() => {
+        serverErrorListener?.(Object.assign(new Error('OpenCode server stderr stream failed: write EPIPE'), { code: 'EPIPE' }));
+      });
+      return Promise.resolve(undefined);
+    });
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: {
+          create: vi.fn().mockResolvedValue({ data: { id: sessionId } }),
+          promptAsync,
+          abort: sessionAbort,
+        },
+        event: {
+          subscribe: vi.fn().mockImplementation((_input: unknown, options: { signal: AbortSignal }) => {
+            stream = new StallingEventStream({
+              type: 'message.part.updated',
+              properties: {
+                part: { id: 'part-epipe', sessionID: sessionId, type: 'text', text: 'partial' },
+                delta: 'partial',
+              },
+            }, options.signal);
+            return Promise.resolve({ stream });
+          }),
+        },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn(), onError: serverOnError },
+    });
+
+    const client = new OpenCodeClient();
+    const result = await Promise.race([
+      client.call('coder', 'hello', { cwd: '/tmp', model: 'opencode/big-pickle' }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timed out')), 500)),
+    ]);
+
+    expect(serverOnError).toHaveBeenCalledOnce();
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('OpenCode server stderr stream failed: write EPIPE');
+    expect(stream?.returnSpy).toHaveBeenCalled();
   });
 });

@@ -10,6 +10,7 @@ import type {
   CompanionDiffReader,
 } from '../../core/workflow/companion/diff-reader.js';
 import { buildSafeGitEnvironment } from './git-environment.js';
+import { guardChildProcessStreams } from '../../shared/utils/index.js';
 
 const MAX_COMPANION_DIFF_BYTES = 512 * 1024;
 const MAX_GITLINK_PATHS_PER_COMMAND = 64;
@@ -196,10 +197,16 @@ class BoundedGitRunner {
         }
         stderr.push(chunk);
       });
-      child.on('error', (error) => fail(new CompanionDiffResourceError('git_failure', error.message)));
+      const guardTeardown = guardChildProcessStreams(child, (error, source) => {
+        fail(new CompanionDiffResourceError(
+          'git_failure',
+          source === 'process' ? error.message : `git ${source} stream error: ${error.message}`,
+        ));
+      });
       child.on('close', (code) => {
         clearTimeout(timer);
         this.signal?.removeEventListener('abort', onAbort);
+        guardTeardown();
         if (failure !== undefined) reject(failure);
         else if (code === 0) resolvePromise();
         else reject(new CompanionDiffResourceError('git_failure', gitErrorMessage(args, stderr)));

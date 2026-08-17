@@ -1,5 +1,16 @@
 name: review-fix-backend
 description: バックエンド特化レビュー＋修正ループ（構造・モジュール化・ヘキサゴナルアーキテクチャ・セキュリティ・コーディング）
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 max_steps: 30
 facet_pools:
   security-review-facets:
@@ -45,6 +56,8 @@ steps:
         policy:
           - contract-change
           - review
+          - architecture
+          - backend
         knowledge:
           - architecture
           - backend
@@ -123,6 +136,10 @@ steps:
         - backend
         - security
         - architecture
+      supervise_policy:
+        - contract-change
+        - backend
+        - architecture
     rules:
       - condition: COMPLETE
         next: COMPLETE
@@ -142,6 +159,8 @@ steps:
       fix_policy:
         - coding
         - testing
+        - architecture
+        - backend
       verification_policy:
         - coding
         - testing

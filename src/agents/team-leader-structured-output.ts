@@ -12,6 +12,7 @@ export interface DecomposePromptOptions {
   readonly maxInitialParts: number | undefined;
   readonly language: Language | undefined;
   readonly inspectTools: readonly string[] | undefined;
+  readonly inspectGuidance: boolean;
   readonly rejectedDecomposition: RejectedTeamLeaderDecomposition | undefined;
 }
 
@@ -83,11 +84,11 @@ export function toMorePartsResponse(
 function buildInspectToolGuidance(
   language: Language | undefined,
   inspectTools: readonly string[] | undefined,
-  options: { requireAtLeastOnePart: boolean },
+  options: { requireAtLeastOnePart: boolean; inspectGuidance: boolean },
 ): string[] {
   const hasInspectTools = inspectTools !== undefined && inspectTools.length > 0;
 
-  if (!hasInspectTools) {
+  if (!hasInspectTools && !options.inspectGuidance) {
     return language === 'ja'
       ? ['- ツールは使用しない']
       : ['- Do not use any tool'];
@@ -96,12 +97,16 @@ function buildInspectToolGuidance(
   const guidance = language === 'ja'
     ? [
         '- 読み取り専用 inspection tools は、タスク仕様・過去レポート・ファイル構成の確認にのみ使用してよい',
+        '- part 結果の要約は先頭部分だけの抜粋である。判断の根拠にする part は、`[full report: ...]` の絶対パスをツールで読み、全文を確認してから判断する',
+        '- 完了の宣言や追加 part の要否は、レポートの主張ではなく、変更されたファイルの現物をツールで確認してから決める',
         '- ファイルを編集しない',
         '- コマンドを実行しない',
         '- 実装しない',
       ]
     : [
         '- You may use read-only inspection tools only to inspect the task spec, prior reports, and file layout',
+        '- Part result summaries are head-only excerpts. Before basing a decision on a part, read the full report at its `[full report: ...]` absolute path with a tool',
+        '- Decide completion and the need for additional parts from the actual changed files inspected with tools, not from report claims',
         '- Do not edit files',
         '- Do not run commands',
         '- Do not execute the implementation',
@@ -130,13 +135,14 @@ function buildDecomposeBasePrompt(
     maxInitialParts,
     language,
     inspectTools,
+    inspectGuidance,
     rejectedDecomposition,
   } = options;
   const regenerationSections = buildRejectedDecompositionPromptSections(language, rejectedDecomposition);
   if (language === 'ja') {
     return [
       '以下はタスク分解専用の指示です。タスクを実行せず、分解だけを行ってください。',
-      ...buildInspectToolGuidance(language, inspectTools, { requireAtLeastOnePart: true }),
+      ...buildInspectToolGuidance(language, inspectTools, { requireAtLeastOnePart: true, inspectGuidance }),
       ...(maxInitialParts === undefined
         ? []
         : [`- 返してよい初回 parts 数は 1 以上 ${maxInitialParts} 以下`]),
@@ -156,7 +162,7 @@ function buildDecomposeBasePrompt(
 
   return [
     'This is decomposition-only planning. Do not execute the task.',
-    ...buildInspectToolGuidance(language, inspectTools, { requireAtLeastOnePart: true }),
+    ...buildInspectToolGuidance(language, inspectTools, { requireAtLeastOnePart: true, inspectGuidance }),
     ...(maxInitialParts === undefined
       ? []
       : [`- Produce between 1 and ${maxInitialParts} parts in the initial batch`]),
@@ -204,8 +210,9 @@ function buildMorePartsBasePrompt(
   allResults: TeamLeaderPartFeedbackResult[],
   existingIds: string[],
   language?: Language,
-  inspectTools?: readonly string[],
   cancellablePartIds: readonly string[] = [],
+  inspectTools?: readonly string[],
+  inspectGuidance = false,
 ): string {
   const resultBlock = allResults.map((result) => [
     `### ${result.id}: ${result.title} (${result.status})`,
@@ -215,7 +222,7 @@ function buildMorePartsBasePrompt(
   if (language === 'ja') {
     return [
       '以下の実行結果を見て、追加のサブタスクが必要か判断してください。',
-      ...buildInspectToolGuidance(language, inspectTools, { requireAtLeastOnePart: false }),
+      ...buildInspectToolGuidance(language, inspectTools, { requireAtLeastOnePart: false, inspectGuidance }),
       '',
       '## 元タスク',
       originalInstruction,
@@ -240,7 +247,7 @@ function buildMorePartsBasePrompt(
 
   return [
     'Review completed part results and decide whether additional parts are needed.',
-    ...buildInspectToolGuidance(language, inspectTools, { requireAtLeastOnePart: false }),
+    ...buildInspectToolGuidance(language, inspectTools, { requireAtLeastOnePart: false, inspectGuidance }),
     '',
     '## Original Task',
     originalInstruction,
@@ -299,16 +306,18 @@ export function buildMorePartsPrompt(
   allResults: TeamLeaderPartFeedbackResult[],
   existingIds: string[],
   language?: Language,
-  inspectTools?: readonly string[],
   cancellablePartIds: readonly string[] = [],
+  inspectTools?: readonly string[],
+  inspectGuidance = false,
 ): string {
   return buildMorePartsBasePrompt(
     originalInstruction,
     allResults,
     existingIds,
     language,
-    inspectTools,
     cancellablePartIds,
+    inspectTools,
+    inspectGuidance,
   );
 }
 
@@ -317,8 +326,9 @@ export function buildPromptBasedMorePartsPrompt(
   allResults: TeamLeaderPartFeedbackResult[],
   existingIds: string[],
   language?: Language,
-  inspectTools?: readonly string[],
   cancellablePartIds: readonly string[] = [],
+  inspectTools?: readonly string[],
+  inspectGuidance = false,
 ): string {
   const outputInstruction = language === 'ja'
     ? [
@@ -339,7 +349,8 @@ export function buildPromptBasedMorePartsPrompt(
     allResults,
     existingIds,
     language,
-    inspectTools,
     cancellablePartIds,
+    inspectTools,
+    inspectGuidance,
   )}\n${outputInstruction.join('\n')}`;
 }

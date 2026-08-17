@@ -449,10 +449,9 @@ Do not leave TODO/FIXME comments, empty implementations, stubs, or commented-out
 
 | Criteria | Judgment |
 |----------|----------|
-| TODO/FIXME without an issue number, external blocker, and removal condition | REJECT |
 | Authorization, validation, persistence, or error handling is deferred with TODO | REJECT |
 | Empty implementations, `return null`, `pass`, or commented-out old implementations remain | REJECT |
-| An external dependency or known blocker makes implementation impossible now, with issue number and removal condition documented | Acceptable |
+| An external constraint makes implementation impossible now, and the constraint and condition for removing the TODO/FIXME are documented | Acceptable |
 | TODO only for future extension | REJECT |
 
 ## Sensitive Information Handling
@@ -641,7 +640,7 @@ Verification approach:
 - **Fallbacks are prohibited by default** - Do not write fallbacks using `?? 'unknown'`, `|| 'default'`, or swallowing via `try-catch`. Propagate errors upward. If absolutely necessary, add a comment explaining why
 - **Explanatory comments** - Express intent through code. Do not write What/How comments
 - **Unused code** - Do not write "just in case" code
-- **Unfinished code** - Do not leave TODO/FIXME without an issue number, external blocker, and removal condition; do not leave stubs or commented-out old code
+- **Unfinished code** - Do not defer required work with TODO/FIXME or leave stubs or commented-out old code
 - **any type** - Do not break type safety
 - **Direct mutation of objects/arrays outside local ownership** - Do not mutate caller-owned, shared, or externally exposed values; create new values instead
 - **console.log** - Do not leave in production code

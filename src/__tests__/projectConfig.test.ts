@@ -267,6 +267,16 @@ describe('projectConfig', () => {
     });
   });
 
+  it('rejects a project DeepSeek Cordis override because it selects executable tools', () => {
+    writeFileSync(join(testDir, '.takt', 'config.yaml'), [
+      'provider_options:',
+      '  deepseek_harness:',
+      '    cordis: .takt/cordis.yml',
+    ].join('\n'), 'utf-8');
+
+    expect(() => loadProjectConfig(testDir)).toThrow(/cordis.*trusted user configuration/i);
+  });
+
   describe('workflow_overrides empty array round-trip', () => {
     it('should preserve empty rate_limit_fallback switch_chain in save/load cycle', () => {
       const configPath = join(testDir, '.takt', 'config.yaml');

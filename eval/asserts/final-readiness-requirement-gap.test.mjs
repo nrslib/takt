@@ -25,6 +25,16 @@ test('accepts the observed Japanese decision and unmet project-source row', () =
   assert.equal(assertFinalReadinessRequirementGap(output).pass, true);
 });
 
+test('accepts the compact Japanese decision and unmet project-source bullet', () => {
+  const output = `
+## 判定: REJECT
+
+- project設定の \`source: 'project'\` 返却: **未充足**
+`;
+
+  assert.equal(assertFinalReadinessRequirementGap(output).pass, true);
+});
+
 test('accepts an explicit statement that test logs are not required', () => {
   const output = `
 ## Result: REJECT

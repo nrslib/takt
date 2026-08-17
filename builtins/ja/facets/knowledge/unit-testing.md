@@ -18,12 +18,12 @@
 - 純粋関数は依存がないのでモック不要
 
 ```typescript
-// NG - 内部実装をモック（振る舞いではなく実装を検証している）
+// 避ける例: 内部実装をモック（振る舞いではなく実装を検証している）
 vi.spyOn(service, 'privateMethod')
 service.execute()
 expect(service.privateMethod).toHaveBeenCalled()
 
-// OK - 外部依存をモックし、振る舞いを検証
+// 例: 外部依存をモックし、振る舞いを検証
 const repository = { findById: vi.fn().mockResolvedValue(user) }
 const service = new UserService(repository)
 const result = await service.getUser('id')
@@ -54,12 +54,12 @@ builder、runner、adapter、provider などをテストダブルに置き換え
 | 境界値分析 | 同値クラスの境界でテスト（境界、境界±1） |
 
 ```typescript
-// NG - 正常系のみ
+// 避ける例: 正常系のみ
 test('validates age', () => {
   expect(validateAge(25)).toBe(true)
 })
 
-// OK - 境界値を含む
+// 例: 境界値を含む
 test('validates age at boundaries', () => {
   expect(validateAge(0)).toBe(true)    // 下限
   expect(validateAge(-1)).toBe(false)  // 下限-1
@@ -72,12 +72,6 @@ test('validates age at boundaries', () => {
 
 ユニットテストは設定値や内部状態のスナップショットだけでなく、公開された契約が期待どおりに振る舞うことを検証する。拒否、許可、隔離、解放のような境界変更は、主要な成功/失敗ケースを deterministic に確認する。
 
-| 基準 | 判定 |
-|------|------|
-| 期待する戻り値・例外・副作用が直接検証されている | OK |
-| 境界変更の成功/失敗、許可/拒否の両側が検証されている | OK |
-| 設定値や最後の内部状態だけを確認している | REJECT |
-| 外部環境がないと主要な境界条件を再現できない | Fake や Stub による deterministic test を検討 |
 
 ## 自然言語・宣言的資産の検証レイヤー
 
@@ -93,10 +87,10 @@ test('validates age at boundaries', () => {
 | 決定的に定義できる判定 | 自然言語からコードへ分離したユニットテスト |
 
 ```typescript
-// NG - 配布定義を期待値へ複製し、定義差分だけを検出する
+// 避ける例: 配布定義を期待値へ複製し、定義差分だけを検出する
 expect(shippedWorkflow.steps.map((step) => step.name)).toEqual(['plan', 'review', 'fix'])
 
-// OK - 最小 fixture で parser の構造契約を検証する
+// 例: 最小 fixture で parser の構造契約を検証する
 expect(parsedFixture.rules[0]?.next).toBe('fix')
 ```
 
@@ -111,10 +105,10 @@ expect(parsedFixture.rules[0]?.next).toBe('fix')
 - 共有フィクスチャを変更して使い回さない（テスト間の独立性を保つ）
 
 ```typescript
-// NG - 全フィールドを毎回定義
+// 避ける例: 全フィールドを毎回定義
 const user = { id: '1', name: 'test', email: 'test@example.com', role: 'admin', createdAt: new Date() }
 
-// OK - ファクトリ関数で必要最小限
+// 例: ファクトリ関数で必要最小限
 const createUser = (overrides: Partial<User> = {}): User => ({
   id: 'test-id',
   name: 'test-user',
@@ -142,13 +136,13 @@ test('admin can delete', () => {
 | モジュール差し替え | テスト時にモジュール全体を差し替える |
 
 ```typescript
-// NG - 直接依存を生成（テストでモック不可）
+// 避ける例: 直接依存を生成（テストでモック不可）
 class OrderService {
   private repo = new OrderRepository()
   async create(order: Order) { return this.repo.save(order) }
 }
 
-// OK - コンストラクタ注入（テストでモック可能）
+// 例: コンストラクタ注入（テストでモック可能）
 class OrderService {
   constructor(private readonly repo: OrderRepository) {}
   async create(order: Order) { return this.repo.save(order) }

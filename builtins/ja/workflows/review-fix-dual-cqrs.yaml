@@ -1,5 +1,16 @@
 name: review-fix-dual-cqrs
 description: フロントエンド＋CQRS+ES特化レビュー＋修正ループ（構造・モジュール化・ドメインモデル・コンポーネント設計・セキュリティ・コーディング）
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 max_steps: 30
 facet_pools:
   security-review-facets:
@@ -45,6 +56,9 @@ steps:
         policy:
           - contract-change
           - review
+          - architecture
+          - backend
+          - frontend
         knowledge:
           - architecture
           - frontend
@@ -65,8 +79,10 @@ steps:
         edit: false
         persona: cqrs-es-reviewer
         policy:
+          - cqrs-es
           - contract-change
           - review
+          - backend
         knowledge:
           - cqrs-es
           - backend
@@ -89,6 +105,7 @@ steps:
           - contract-change
           - review
           - design-fidelity
+          - frontend
         knowledge: frontend
         instruction: review-frontend
         output_contracts:
@@ -167,6 +184,12 @@ steps:
         - cqrs-es
         - security
         - architecture
+      supervise_policy:
+        - contract-change
+        - frontend
+        - backend
+        - cqrs-es
+        - architecture
     rules:
       - condition: COMPLETE
         next: COMPLETE
@@ -185,17 +208,23 @@ steps:
         - design-fidelity
         - screen-api
         - review
+        - cqrs-es
       fix_policy:
         - coding
         - testing
         - design-fidelity
         - screen-api
+        - cqrs-es
+        - architecture
+        - backend
+        - frontend
       verification_policy:
         - coding
         - testing
         - design-fidelity
         - screen-api
         - review
+        - cqrs-es
       fix_knowledge:
         - frontend
         - backend

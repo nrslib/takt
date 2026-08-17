@@ -135,6 +135,25 @@ function collectNamedRefsFromField(
   });
 }
 
+function collectNamedRefsWithPathsFromField(
+  raw: RawWorkflow,
+  value: unknown,
+  expectedTypes: readonly RawFacetParamType[],
+  expectedKind: RawFacetParamDefinition['facet_kind'],
+): Array<{ ref: string; path: readonly PropertyKey[] }> {
+  const entries = Array.isArray(value) ? value : [value];
+  return entries.flatMap((entry, index) => {
+    const entryPath = Array.isArray(value) ? [index] : [];
+    if (typeof entry === 'string') {
+      return isNamedRef(entry) ? [{ ref: entry, path: entryPath }] : [];
+    }
+    const definition = getParamDefinition(raw, entry, expectedTypes, expectedKind);
+    return definition?.default === undefined
+      ? []
+      : collectNamedRefs(definition.default).map((ref) => ({ ref, path: entryPath }));
+  });
+}
+
 function validateScalarRefs(
   diagnostics: WorkflowDiagnostic[],
   label: string,
@@ -185,7 +204,7 @@ function collectUsedLocalKeys(raw: RawWorkflow): Record<'personas' | 'policies' 
       used.personas.add(step.team_leader.part_persona);
     }
 
-    for (const ref of collectNamedRefsFromField(raw, step.instruction, ['facet_ref'], 'instruction')) {
+    for (const ref of collectNamedRefsFromField(raw, step.instruction, ['facet_ref', 'facet_ref[]'], 'instruction')) {
       used.instructions.add(ref);
     }
     for (const ref of collectNamedRefsFromField(raw, step.policy, ['facet_ref', 'facet_ref[]'], 'policy')) {
@@ -335,13 +354,18 @@ function validateStepRefs(
     (ref) => canResolveNamedFacetRef(ref, sections.resolvedKnowledge, 'knowledge', context),
     [...stepPath, 'knowledge'],
   );
-  for (const ref of collectNamedRefsFromField(raw, step.instruction, ['facet_ref'], 'instruction')) {
+  for (const { ref, path: refPath } of collectNamedRefsWithPathsFromField(
+    raw,
+    step.instruction,
+    ['facet_ref', 'facet_ref[]'],
+    'instruction',
+  )) {
     appendMissingRef(
       diagnostics,
       `${label} instruction`,
       ref,
       () => canResolveNamedFacetRef(ref, sections.resolvedInstructions, 'instructions', context),
-      [...stepPath, 'instruction'],
+      [...stepPath, 'instruction', ...refPath],
     );
   }
   for (const [reportIndex, report] of (step.output_contracts?.report ?? []).entries()) {

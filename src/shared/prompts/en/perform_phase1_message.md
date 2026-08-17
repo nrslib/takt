@@ -88,12 +88,12 @@ Knowledge may be truncated. Always follow Source paths and read original files b
 ## Additional User Inputs
 {{userInputs}}
 {{/if}}
-
-## Instructions
 {{#if hasWorkflowRulesBeforeInstruction}}{{workflowRulesNoticeBeforeInstruction}}
 {{workflowRulesBeforeInstruction}}
 
-{{/if}}{{instructions}}
+{{else}}
+{{/if}}## Instructions
+{{instructions}}
 {{#if hasQualityGates}}
 
 ## Quality Gates

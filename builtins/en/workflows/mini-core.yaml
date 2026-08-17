@@ -1,5 +1,16 @@
 name: mini-core
 description: Internal core development workflow for the mini family. Uses injected policies, knowledge, and supervisor to run plan -> implement -> parallel review -> direct fixes.
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 subworkflow:
   callable: true
   visibility: internal

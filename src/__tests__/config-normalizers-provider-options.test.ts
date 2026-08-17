@@ -395,6 +395,32 @@ describe('buildRawTaktProvidersOrThrow', () => {
     });
   });
 
+  it('should preserve DeepSeek Harness selector options through the strict normalized schema', () => {
+    const result = buildRawTaktProvidersOrThrow({
+      selector: {
+        provider: 'deepseek-harness',
+        providerOptions: {
+          deepseekHarness: {
+            pythonPath: '/usr/bin/python3',
+            maxTokens: 4096,
+          },
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      selector: {
+        provider: 'deepseek-harness',
+        provider_options: {
+          deepseek_harness: {
+            python_path: '/usr/bin/python3',
+            max_tokens: 4096,
+          },
+        },
+      },
+    });
+  });
+
   it('should throw when assistant is empty object', () => {
     expect(() =>
       buildRawTaktProvidersOrThrow({

@@ -1,4 +1,4 @@
-{{include:instructions/contract-family-implement}}
+{{include:instructions/implementation-path-check}}
 {{include:instructions/change-contract-traceability}}
 
 **実装と確認:**

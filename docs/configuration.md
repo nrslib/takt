@@ -14,7 +14,7 @@ Configure TAKT defaults in `~/.takt/config.yaml`. This file is created automatic
 language: en                  # UI language: 'en' or 'ja'
 logging:
   level: info                 # Log level: debug, info, warn, error
-provider: claude              # Default provider: claude, claude-sdk, claude-terminal, codex, opencode, cursor, copilot, kiro, pi, or mock
+provider: claude              # Default provider: claude, claude-sdk, claude-terminal, codex, opencode, deepseek-harness, cursor, copilot, kiro, pi, or mock
 model: sonnet                 # Default model (optional, passed to provider as-is)
 branch_name_strategy: romaji  # Branch name generation: 'romaji' (fast) or 'ai' (slow)
 prevent_sleep: false          # Prevent macOS idle sleep during execution (caffeinate)
@@ -90,7 +90,7 @@ assistant:
 #     default_permission_mode: edit
 
 # API Key configuration (optional)
-# Can be overridden by environment variables TAKT_ANTHROPIC_API_KEY / TAKT_OPENAI_API_KEY / TAKT_OPENCODE_API_KEY / TAKT_CURSOR_API_KEY / TAKT_COPILOT_GITHUB_TOKEN / TAKT_KIRO_API_KEY
+# Can be overridden by environment variables TAKT_ANTHROPIC_API_KEY / TAKT_OPENAI_API_KEY / TAKT_OPENCODE_API_KEY / TAKT_CURSOR_API_KEY / TAKT_COPILOT_GITHUB_TOKEN / TAKT_KIRO_API_KEY. DeepSeek Harness uses the official DEEPSEEK_API_KEY / DEEPSEEK_BASE_URL environment variables (not YAML API-key fields).
 # anthropic_api_key: sk-ant-...  # For Claude (Anthropic)
 # openai_api_key: sk-...         # For Codex (OpenAI)
 # opencode_api_key: ...          # For OpenCode
@@ -181,7 +181,7 @@ assistant:
 | `logging.debug` | boolean | `false` | Enable debug logging (`debug.log` + `prompts.jsonl`) |
 | `logging.provider_events` | boolean | `false` | Persist provider stream events |
 | `logging.usage_events` | boolean | `false` | Persist usage event logs |
-| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude"` | Default concrete AI provider (`claude` = headless CLI mode, `claude-sdk` = SDK/API mode, `claude-terminal` = experimental interactive terminal mode, `pi` = Pi SDK mode) |
+| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"deepseek-harness"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude"` | Default concrete AI provider (`claude` = headless CLI mode, `claude-sdk` = SDK/API mode, `claude-terminal` = experimental interactive terminal mode, `pi` = Pi SDK mode, `deepseek-harness` = official DeepSeek Harness Python SDK) |
 | `model` | string | - | Default model name (passed to provider as-is) |
 | `branch_name_strategy` | `"romaji"` \| `"ai"` | `"romaji"` | Branch name generation strategy |
 | `prevent_sleep` | boolean | `false` | Prevent macOS idle sleep (caffeinate) |
@@ -285,6 +285,15 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 #   pi:
 #     extensions: [npm:pi-fff]
 #     no_skills: true
+#   deepseek_harness:
+#     # python_path and cordis are trusted-global/env-only; project config
+#     # uses the default python3 and cannot select a Cordis executable config.
+#     base_url: http://127.0.0.1:8787/v1
+#     session_root: .takt/deepseek-sessions
+#     max_tokens: 4096
+#     request_timeout_ms: 3600000
+#     shutdown_timeout_ms: 1000
+#     runtime_mode: exe
 #   claude_terminal:
 #     backend: tmux
 #     timeout_ms: 900000
@@ -380,7 +389,7 @@ Project config accepts most global keys and overrides their global values (e.g. 
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | - | Override concrete provider |
+| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"deepseek-harness"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | - | Override concrete provider |
 | `model` | string | - | Override model name (passed to provider as-is) |
 | `submodules` | `"all"` \| string[] | - | Project-only. Submodules to initialize in shared clones: `"all"` or an explicit path list (wildcards not supported) |
 | `with_submodules` | boolean | - | Project-only. Legacy boolean equivalent of `submodules: "all"`; prefer `submodules` |
@@ -431,7 +440,7 @@ Separately from config-key overrides, `TAKT_NOTIFY_WEBHOOK` sets a Slack Incomin
 
 ## API Key Configuration
 
-TAKT supports Claude, Codex, OpenCode, Pi, Cursor, Copilot, and Kiro providers. Claude/Codex/OpenCode use their SDK credentials, Pi uses the Pi SDK credential store or provider environment variables, Kiro uses an API key, Cursor can use either API key or existing `cursor-agent login` session, and Copilot uses a GitHub token.
+TAKT supports Claude, Codex, OpenCode, Pi, the official DeepSeek Harness SDK, Cursor, Copilot, and Kiro providers. Claude/Codex/OpenCode use their SDK credentials, Pi uses the Pi SDK credential store or provider environment variables, DeepSeek Harness uses the official `DEEPSEEK_API_KEY` environment variable, Kiro uses an API key, Cursor can use either API key or existing `cursor-agent login` session, and Copilot uses a GitHub token.
 
 ### Environment Variables (Recommended)
 
@@ -447,6 +456,10 @@ export TAKT_OPENCODE_API_KEY=...
 
 # For Pi
 # Use the Pi SDK credential store or provider-native environment variables
+
+# For the official DeepSeek Harness SDK (Python 3.10+ runtime)
+export DEEPSEEK_API_KEY=...
+# Optional: export DEEPSEEK_BASE_URL=https://...
 
 # For Cursor Agent (optional if cursor-agent login session exists)
 export TAKT_CURSOR_API_KEY=...
@@ -480,6 +493,7 @@ Environment variables take precedence over `config.yaml` settings.
 | Codex (OpenAI) | `TAKT_OPENAI_API_KEY` | `openai_api_key` |
 | OpenCode | `TAKT_OPENCODE_API_KEY` | `opencode_api_key` |
 | Pi | Pi SDK credential store or provider-native environment variables | - |
+| DeepSeek Harness | `DEEPSEEK_API_KEY` (optional `DEEPSEEK_BASE_URL`) | - |
 | Cursor Agent | `TAKT_CURSOR_API_KEY` | `cursor_api_key` |
 | GitHub Copilot CLI | `TAKT_COPILOT_GITHUB_TOKEN` | `copilot_github_token` |
 | Kiro CLI | `TAKT_KIRO_API_KEY` (`KIRO_API_KEY` fallback) | `kiro_api_key` |
@@ -490,7 +504,8 @@ Environment variables take precedence over `config.yaml` settings.
 - Consider using environment variables instead.
 - Add `~/.takt/config.yaml` to your global `.gitignore` if needed.
 - Cursor provider can run without API key when `cursor-agent login` is already configured.
-- If you set credentials, installing the corresponding CLI tool (Claude Code, Codex, OpenCode, Pi) is not necessary. TAKT directly calls the respective API.
+- If you set credentials, installing the corresponding CLI tool (Claude Code, Codex, OpenCode, Pi) is not necessary. TAKT directly calls the respective API. DeepSeek Harness additionally requires Python 3.10+, matching `deepseek-harness-sdk`/`deepseek-harness-runtime-bin` packages, and Linux x64/arm64 or macOS arm64; Windows and macOS x64 are unsupported.
+- The DeepSeek API key is passed only to the Python bridge environment, never to command arguments or workflow-generated config.
 - Copilot provider requires the `copilot` CLI to be installed. The GitHub token is used for authentication.
 - Kiro provider requires the `kiro-cli` CLI to be installed. `TAKT_KIRO_API_KEY` / `kiro_api_key` is passed to the child process as `KIRO_API_KEY`; if neither is set, TAKT uses the official `KIRO_API_KEY` environment variable.
 
@@ -724,11 +739,11 @@ Provider profiles allow you to set default permission modes and per-step permiss
 
 TAKT uses three provider-independent permission modes:
 
-| Mode | Description | Claude | Codex | OpenCode | Pi | Cursor Agent | Copilot | Kiro CLI |
-|------|-------------|--------|-------|----------|----|--------------|---------|----------|
-| `readonly` | Read-only access, no file modifications | `default` | `read-only` | `read-only` | `read`, `grep`, `find`, `ls` | default flags (no `--force`) | no permission flags | `--trust-tools=read,grep` |
-| `edit` | Allow file edits with confirmation | `acceptEdits` | `workspace-write` | `workspace-write` | `read`, `grep`, `find`, `ls`, `edit`, `write`, `bash` | default flags (no `--force`) | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` |
-| `full` | Bypass all permission checks | `bypassPermissions` | `danger-full-access` | `danger-full-access` | all registered Pi tools | `--force` | `--yolo` | `--trust-all-tools` |
+| Mode | Description | Claude | Codex | OpenCode | Pi | DeepSeek Harness | Cursor Agent | Copilot | Kiro CLI |
+|------|-------------|--------|-------|----------|----|-----------------|--------------|---------|----------|
+| `readonly` | Read-only access, no file modifications | `default` | `read-only` | `read-only` | `read`, `grep`, `find`, `ls` | Cordis configuration | default flags (no `--force`) | no permission flags | `--trust-tools=read,grep` |
+| `edit` | Allow file edits with confirmation | `acceptEdits` | `workspace-write` | `workspace-write` | `read`, `grep`, `find`, `ls`, `edit`, `write`, `bash` | Cordis configuration | default flags (no `--force`) | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` |
+| `full` | Bypass all permission checks | `bypassPermissions` | `danger-full-access` | `danger-full-access` | all registered Pi tools | Cordis configuration | `--force` | `--yolo` | `--trust-all-tools` |
 
 Pi permission modes are SDK active-tool allowlists, not an operating-system sandbox, and TAKT does not add per-tool confirmation prompts for Pi. In particular, Pi `edit` enables `bash`, and Pi's file tools can accept absolute paths. Run Pi with trusted workflow input and extensions. If an internal-agent role needs narrower authority, configure capabilities and a permission mode on its Pi profile.
 
@@ -919,11 +934,9 @@ provider options, so there is no step or workflow option layer to outrank
 runtime settings. Preview, doctor, validation, summary, and report use the
 same runtime resolution contract as execution.
 
-For safety, project `.takt/config.yaml` may only set `base_url` to loopback
-hosts such as `127.0.0.1`, `127.x.x.x`, `localhost`, `*.localhost`, or `::1`.
-Put non-loopback provider base URLs in global config or
-`TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL` /
-`TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL`, where the setting is user-controlled.
+`provider_options` priority is resolved per leaf. For most leaves, an env- or CLI-resolved config leaf overrides all other sources. `base_url` is the exception: step and workflow routing configuration stays above TAKT env overrides so a workflow can explicitly route only selected providers through a proxy. For `base_url`, the order is step `provider_options` > `provider_routing.steps` > `provider_routing.tags` > `provider_routing.personas` > deprecated `persona_providers` > `workflow_config.provider_options` > project `.takt/config.yaml` > global `~/.takt/config.yaml` > TAKT env override. Preview, doctor, validation, summary, report, and other auxiliary entry points use the same `base_url` priority order as workflow execution. For other leaves, after env/CLI config overrides, the same step-to-global order applies.
+
+For safety, workflow YAML and project `.takt/config.yaml` may only set `base_url` to loopback hosts such as `127.0.0.1`, `127.x.x.x`, `localhost`, `*.localhost`, or `::1`. Put non-loopback provider base URLs in global config or `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL` / `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL` / `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_BASE_URL`, where the setting is user-controlled.
 
 `persona_providers` is still supported for existing configs, but it is deprecated for new settings. It uses the step's persona display name, which may come from `persona_name`, not necessarily the raw `persona` key:
 
@@ -941,7 +954,7 @@ Capability references can load shared provider-options presets by name. Names ar
 
 Capability preset resolution fails fast as a configuration error when a preset or path cannot be resolved, a scoped ref points to an unavailable repertoire package, the target YAML is invalid or is not a provider-options object, the extends chain is circular, or the removed `$ref` key is used. Relative paths are resolved from the workflow file and must stay inside the workflow directory after symlink resolution; absolute paths and paths whose real target escapes that directory are rejected.
 
-Provider option leaves can also be overridden from env. For OpenCode model variants, use `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high` to set the config-layer `provider_options.opencode.variant`. For provider base URLs, use `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL=http://127.0.0.1:8787/v1` or `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL=http://127.0.0.1:8787`; these populate the config layer and do not override runtime target selection. For Codex permission control, use `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL=takt` or `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL=codex`. For Codex Skill inheritance, use `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_REPO=true` or `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_USER=true`. For Claude Skill inheritance, use `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED=true`. For Claude terminal, use `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_BACKEND=tmux`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TIMEOUT_MS=900000`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_KEEP_SESSION=false`, or `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TRANSCRIPT_POLL_INTERVAL_MS=500`. For Kiro custom agents, use `TAKT_PROVIDER_OPTIONS_KIRO_AGENT=planner-agent` to set the config-layer `provider_options.kiro.agent`. For Pi resource loading, use `TAKT_PROVIDER_OPTIONS_PI_EXTENSIONS='["npm:pi-fff"]'`, `TAKT_PROVIDER_OPTIONS_PI_NO_EXTENSIONS=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_SKILLS=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_PROMPT_TEMPLATES=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_THEMES=true`, or `TAKT_PROVIDER_OPTIONS_PI_NO_CONTEXT_FILES=true`.
+Provider option leaves can also be overridden from env. For OpenCode model variants, use `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high` to set `provider_options.opencode.variant`. For provider base URLs, use `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL=http://127.0.0.1:8787/v1` or `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL=http://127.0.0.1:8787`; these populate the config layer and do not override step or workflow routing `base_url` leaves. For DeepSeek Harness, use `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_BASE_URL=http://127.0.0.1:8787/v1` for a user-controlled endpoint. The official SDK reads `DEEPSEEK_API_KEY` and optional `DEEPSEEK_BASE_URL`; TAKT passes those values only to the private Python bridge. For Codex permission control, use `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL=takt` or `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL=codex`. For Codex Skill inheritance, use `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_REPO=true` or `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_USER=true`. For Claude Skill inheritance, use `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED=true`. For Claude terminal, use `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_BACKEND=tmux`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TIMEOUT_MS=900000`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_KEEP_SESSION=false`, or `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TRANSCRIPT_POLL_INTERVAL_MS=500`. For Kiro custom agents, use `TAKT_PROVIDER_OPTIONS_KIRO_AGENT=planner-agent` to set `provider_options.kiro.agent`. For Pi resource loading, use `TAKT_PROVIDER_OPTIONS_PI_EXTENSIONS='["npm:pi-fff"]'`, `TAKT_PROVIDER_OPTIONS_PI_NO_EXTENSIONS=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_SKILLS=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_PROMPT_TEMPLATES=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_THEMES=true`, or `TAKT_PROVIDER_OPTIONS_PI_NO_CONTEXT_FILES=true`.
 
 This allows runtime targets to mix providers and models within a single workflow while keeping display names independent from provider selection.
 
@@ -964,13 +977,52 @@ provider_options:
     base_url: http://127.0.0.1:8787/v1
 ```
 
-TAKT passes `provider_options.claude.base_url` to `claude` and `claude-sdk` as `ANTHROPIC_BASE_URL`. TAKT passes `provider_options.codex.base_url` to the Codex SDK constructor as `baseUrl`. `claude-terminal`, `opencode`, `cursor`, `copilot`, `kiro`, and `pi` are not included in this base URL support unless documented separately.
+TAKT passes `provider_options.claude.base_url` to `claude` and `claude-sdk` as `ANTHROPIC_BASE_URL`. TAKT passes `provider_options.codex.base_url` to the Codex SDK constructor as `baseUrl`. For `deepseek-harness`, `provider_options.deepseek_harness.base_url` is passed to the official Python SDK through `DEEPSEEK_BASE_URL`. `claude-terminal`, `opencode`, `cursor`, `copilot`, `kiro`, and `pi` are not included in this base URL support unless documented separately.
 
 Provider-native environment variables such as `ANTHROPIC_BASE_URL` or `OPENAI_BASE_URL` are provider fallback settings. A TAKT `provider_options.*.base_url` value is explicit TAKT configuration and takes priority over those provider-native settings for the providers above.
 
 This also works for routing through an external proxy or gateway service — any endpoint that speaks the OpenAI- or Anthropic-compatible API — as long as the URL is set at a layer allowed to use non-loopback hosts (global config or the `TAKT_PROVIDER_OPTIONS_*_BASE_URL` environment variables). The workflow and project layers accept loopback addresses only.
 
 Workflow and project config can use `base_url` for local proxies only. Non-loopback proxy endpoints must be configured from global config or TAKT env so untrusted workflow files cannot redirect API keys and prompts to an arbitrary host.
+
+#### DeepSeek Harness (`deepseek-harness`)
+
+`deepseek-harness` starts the official `deepseek-harness-sdk` in a Python 3.10+ child process and communicates with it over a line-oriented JSON-RPC bridge. Install the SDK and its matching `deepseek-harness-runtime-bin` wheel separately:
+
+```bash
+python3 -m pip install deepseek-harness-sdk deepseek-harness-runtime-bin
+```
+
+The verified official runtime wheels support Linux x64/arm64 and macOS arm64. Windows and macOS x64 are unsupported and fail fast; TAKT never falls back to another provider. Authentication is intentionally environment-based: set `DEEPSEEK_API_KEY`, and optionally `DEEPSEEK_BASE_URL`. The API key is not written to workflow/config files or command arguments.
+
+This provider is a developer-preview compatibility surface: the SDK and runtime wheel must be matching releases, and the upstream event/API vocabulary can change between releases. Run the live smoke only when you intentionally want to spend DeepSeek API quota; normal unit, integration, and mock E2E suites never call DeepSeek.
+
+Opt-in live smoke (supported Linux/macOS only):
+
+```bash
+export DEEPSEEK_API_KEY=your-key
+export TAKT_DEEPSEEK_HARNESS_LIVE=1
+npm run test:deepseek-harness:live
+```
+
+```yaml
+provider: deepseek-harness
+model: deepseek-v4-flash
+provider_options:
+  deepseek_harness:
+    base_url: http://127.0.0.1:8787/v1  # optional; loopback in project/workflow config
+    session_root: .takt/deepseek-sessions
+    max_tokens: 4096
+    request_timeout_ms: 3600000
+    shutdown_timeout_ms: 1000
+    runtime_mode: exe                  # exe or node; node is for explicit SDK development mode
+```
+
+For credential safety, `python_path` is accepted only from trusted global configuration or `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PYTHON_PATH`; workflow and project-local provider options must use the default `python3` executable. `cordis` is also accepted only from trusted global configuration or `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_CORDIS`, because it selects executable tool composition. The example above intentionally omits both fields. The same restrictions apply to project `runtime.yaml` profiles; global runtime profiles may select trusted values. Project runtime profiles may use only loopback `base_url` values.
+
+`session_root` and `cordis` are resolved relative to the configured working directory. Sessions are reused when a workflow supplies `session_key`; one-shot calls close the bridge immediately. `request_timeout_ms` terminates the complete Python bridge request, and aborting a TAKT call terminates the bridge process tree. Stream events are converted from official `session.event` notifications into TAKT text, thinking, tool-use, tool-result, error, and result events. System prompts, TAKT `allowed_tools`, MCP server maps, image attachments, structured output, permission modes, and `maxTurns` are not part of the official SDK call and are ignored with a warning; configure system/tool composition through Cordis instead.
+
+The corresponding environment overrides are `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PYTHON_PATH`, `_BASE_URL`, `_SESSION_ROOT`, `_CORDIS`, `_MAX_TOKENS`, `_REQUEST_TIMEOUT_MS`, `_SHUTDOWN_TIMEOUT_MS`, and `_RUNTIME_MODE`. The `base_url` environment override is user-controlled and may be non-loopback. `runtime_mode: node` requires the official SDK's development Node carrier and is never selected implicitly.
 
 #### Network access (`network_access`)
 

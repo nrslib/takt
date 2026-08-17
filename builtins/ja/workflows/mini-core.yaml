@@ -1,5 +1,16 @@
 name: mini-core
 description: miniシリーズの中核となる内部開発ワークフロー。注入されたポリシー、ナレッジ、監督者を使い、plan → implement → 並列レビュー → 直接修正を実行する。
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 subworkflow:
   callable: true
   visibility: internal

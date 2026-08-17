@@ -12,13 +12,19 @@ steps:
       testing_policy:
         - coding
         - testing
+        - architecture
+        - backend
       development_policy:
         - coding
         - testing
+        - architecture
+        - backend
       review_policy:
         - review
         - coding
         - testing
+        - architecture
+        - backend
       development_knowledge:
         - backend
         - security

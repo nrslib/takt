@@ -1,4 +1,4 @@
-{{include:instructions/contract-family-test-authoring}}
+{{include:instructions/test-obligation-mapping}}
 
 Implement unit tests according to the test plan.
 Refer only to files within the Report Directory shown in the Workflow Context. Do not search or reference other report directories.

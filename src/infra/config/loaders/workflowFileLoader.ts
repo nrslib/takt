@@ -2,6 +2,7 @@ import { dirname } from 'node:path';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { parse as parseYaml } from 'yaml';
 import type { WorkflowCallArgValue, WorkflowConfig } from '../../../core/models/index.js';
+import { isNormalOrTeamLeaderWorkflowStep } from '../../../core/models/types.js';
 import { getRepertoireDir } from '../paths.js';
 import { resolveWorkflowConfigValue } from '../resolveWorkflowConfigValue.js';
 import { loadGlobalConfig } from '../global/globalConfig.js';
@@ -103,7 +104,7 @@ function loadWorkflowFromFileInternal(
   );
   const companionNames = new Set<string>();
   for (const step of config.steps) {
-    if (!('companion' in step) || step.companion === undefined) continue;
+    if (!isNormalOrTeamLeaderWorkflowStep(step) || step.companion === undefined) continue;
     for (const name of step.companion.fixed) companionNames.add(name);
     for (const name of step.companion.pool) companionNames.add(name);
     if (step.companion.moderator !== undefined) companionNames.add(step.companion.moderator);

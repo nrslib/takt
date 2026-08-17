@@ -1,5 +1,16 @@
 name: review-fix-backend-cqrs
 description: CQRS+ES特化レビュー＋修正ループ（構造・モジュール化・ドメインモデル・セキュリティ・コーディング）
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 max_steps: 30
 facet_pools:
   security-review-facets:
@@ -45,6 +56,8 @@ steps:
         policy:
           - contract-change
           - review
+          - architecture
+          - backend
         knowledge:
           - architecture
           - backend
@@ -64,8 +77,10 @@ steps:
         edit: false
         persona: cqrs-es-reviewer
         policy:
+          - cqrs-es
           - contract-change
           - review
+          - backend
         knowledge:
           - cqrs-es
           - backend
@@ -145,6 +160,11 @@ steps:
         - cqrs-es
         - security
         - architecture
+      supervise_policy:
+        - contract-change
+        - cqrs-es
+        - backend
+        - architecture
     rules:
       - condition: COMPLETE
         next: COMPLETE
@@ -161,13 +181,18 @@ steps:
         - coding
         - testing
         - review
+        - cqrs-es
       fix_policy:
         - coding
         - testing
+        - cqrs-es
+        - architecture
+        - backend
       verification_policy:
         - coding
         - testing
         - review
+        - cqrs-es
       fix_knowledge:
         - backend
         - cqrs-es

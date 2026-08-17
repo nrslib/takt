@@ -565,6 +565,7 @@ export async function createWorkflowExecutionBootstrap(
   };
   const resolvedRuntimeEnvironment = resolveRuntimeEnvironment({
     projectCwd,
+    executionCwd: cwd,
     legacy: legacyProviderEnvironment,
     legacySignals: collectLegacyProviderSignals(
       legacyProviderEnvironment,

@@ -882,7 +882,7 @@ describe('exec command setup', () => {
     }
   });
 
-  it.each(['cursor', 'copilot', 'kiro', 'pi'] as const)(
+  it.each(['cursor', 'copilot', 'kiro', 'pi', 'deepseek-harness'] as const)(
     'should allow CLI provider override to %s without explicit model',
     async (provider) => {
       mockReadInteractiveInput
@@ -1604,7 +1604,7 @@ describe('exec command setup', () => {
     expect(replan).not.toHaveProperty('model');
   });
 
-  it.each(['cursor', 'copilot', 'kiro', 'pi'] as const)(
+  it.each(['cursor', 'copilot', 'kiro', 'pi', 'deepseek-harness'] as const)(
     'should allow setup assistant provider change to %s without model input',
     async (provider) => {
       mockReadInteractiveInput

@@ -34,9 +34,14 @@ import type {
 } from '../../../core/models/config-types.js';
 import type { StepProviderOptions } from '../../../core/models/workflow-types.js';
 import type { PermissionMode } from '../../../core/models/types.js';
+import { StepProviderOptionsObjectSchema } from '../../../core/models/schema-base.js';
 import type { ProviderResolutionSource } from '../../../core/workflow/provider-options-trace.js';
-import { normalizeProviderOptions } from '../providerOptions.js';
-import { mergeProviderOptions } from '../providerOptions.js';
+import {
+  mergeProviderOptions,
+  normalizeProviderOptions,
+  resolveTrustedDeepSeekHarnessPaths,
+  type NormalizeProviderOptionsOptions,
+} from '../providerOptions.js';
 import { resolveCapabilitySets } from '../loaders/capabilitySetResolver.js';
 import type { FacetResolutionContext } from '../loaders/workflowPackageScope.js';
 import {
@@ -529,7 +534,7 @@ function resolveProfileEntry(
       `runtime.yaml \`provider.profiles."${profileName}"\` is not defined or is missing \`provider\`/\`model\``,
     );
   }
-  const options = resolveProfileProviderOptions(profile, resolutionContext);
+  const options = resolveProfileProviderOptions(profileName, profile, resolutionContext);
   return {
     provider: profile.provider as ProviderType,
     model: profile.model,
@@ -548,9 +553,11 @@ const PROVIDER_OPTIONS_RAW_KEY: Partial<Record<ProviderType, string>> = {
   copilot: 'copilot',
   kiro: 'kiro',
   pi: 'pi',
+  'deepseek-harness': 'deepseek_harness',
 };
 
 function resolveProfileProviderOptions(
+  profileName: string,
   profile: FlatProfile | undefined,
   resolutionContext?: FacetResolutionContext | RuntimeProviderResolutionContext,
 ): StepProviderOptions | undefined {
@@ -578,8 +585,41 @@ function resolveProfileProviderOptions(
       `runtime.yaml profile \`options\` are not supported for provider "${profile.provider}"`,
     );
   }
-  return mergeProviderOptions(
-    capabilityOptions,
-    normalizeProviderOptions({ [rawKey]: profile.options }),
+  const runtimeResolutionContext = resolutionContext !== undefined
+    && 'profileOrigins' in resolutionContext
+    ? resolutionContext
+    : undefined;
+  const isTrustedGlobalProfile = runtimeResolutionContext?.profileOrigins?.get(profileName) === 'global';
+  const pythonPathTrust: NormalizeProviderOptionsOptions['pythonPathTrust'] = isTrustedGlobalProfile
+    ? 'trusted'
+    : 'untrusted';
+  const normalizationOptions: NormalizeProviderOptionsOptions = !isTrustedGlobalProfile
+    ? {
+        pythonPathTrust,
+        baseUrlTrust: 'loopback-only',
+        ...(profile.provider === 'deepseek-harness'
+          ? {
+              pathTrust: 'untrusted' as const,
+              cordisTrust: 'untrusted' as const,
+            }
+          : {}),
+      }
+    : { pythonPathTrust };
+  const validatedProfileOptions = StepProviderOptionsObjectSchema.parse({ [rawKey]: profile.options });
+  const profileOptions = normalizeProviderOptions(validatedProfileOptions, normalizationOptions);
+  const mergedOptions = mergeProviderOptions(capabilityOptions, profileOptions);
+  const globalPathBaseDir = isTrustedGlobalProfile
+    ? (runtimeResolutionContext?.executionDir ?? runtimeResolutionContext?.projectDir)
+    : undefined;
+  if (globalPathBaseDir === undefined) {
+    return mergedOptions;
+  }
+  return resolveTrustedDeepSeekHarnessPaths(
+    mergedOptions,
+    globalPathBaseDir,
+    {
+      'deepseekHarness.sessionRoot': 'global',
+      'deepseekHarness.cordis': 'global',
+    },
   );
 }

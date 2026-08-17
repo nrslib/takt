@@ -472,8 +472,8 @@ describe('Schemas accept opencode provider', () => {
     );
   });
 
-  it('should still accept existing providers (claude, codex, opencode, cursor, pi, mock)', () => {
-    for (const provider of ['claude', 'codex', 'opencode', 'cursor', 'pi', 'mock']) {
+  it('should still accept existing providers (claude, codex, opencode, cursor, pi, deepseek-harness, mock)', () => {
+    for (const provider of ['claude', 'codex', 'opencode', 'cursor', 'pi', 'deepseek-harness', 'mock']) {
       const result = GlobalConfigSchema.parse({ provider });
       expect(result.provider).toBe(provider);
     }

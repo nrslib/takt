@@ -12,15 +12,24 @@ steps:
       testing_policy:
         - coding
         - testing
+        - architecture
+        - frontend
+        - react
       development_policy:
         - coding
         - testing
         - design-fidelity
+        - architecture
+        - frontend
+        - react
       review_policy:
         - review
         - coding
         - testing
         - design-fidelity
+        - architecture
+        - frontend
+        - react
       development_knowledge:
         - frontend
         - react

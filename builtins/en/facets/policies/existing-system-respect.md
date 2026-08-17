@@ -86,3 +86,33 @@ Before completion, classify the full diff as required changes, related changes, 
 | Required change | The request fails without it |
 | Related change | Needed to connect, verify, or keep a required change consistent |
 | Unnecessary change | Not causally related to the request; justified only by readability, style, cleanup, or future extensibility |
+
+## existing-system Criteria
+
+### Existing System Contracts
+
+| Criteria | Judgment |
+|----------|----------|
+| User-visible copy or state changes | Contract change |
+| A value asserted by tests changes | Contract change |
+| Hook or component call shape changes | Contract change |
+| Only file placement or type names change | May still be a maintenance contract change |
+| Closed internal duplication is removed | Internal change if impact is contained |
+
+### Diff Classification
+
+| Classification | Decision criteria |
+|----------------|-------------------|
+| Required change | Directly required to satisfy the request |
+| Related change | Required to wire, verify, or keep a required change consistent |
+| Unnecessary change | The request still succeeds without it |
+| Dangerous unnecessary change | The request still succeeds without it and it changes an existing contract |
+
+### Conflicts With General Quality Criteria
+
+| Situation | Judgment |
+|-----------|----------|
+| Component extraction would look cleaner but is not causally related to the request | Do not change |
+| Renaming or relocating Props types only to match common style | Do not change |
+| The existing structure cannot satisfy the request | Change within the causally related scope |
+| The existing structure is the cause of the bug | Change it with reason and impact scope documented |

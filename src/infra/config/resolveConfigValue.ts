@@ -1,6 +1,11 @@
 import * as globalConfigModule from './global/globalConfig.js';
 import { loadGlobalConfigTraceState } from './global/globalConfigCore.js';
-import { mergeProviderOptions, resolveEffectiveProviderOptions } from './providerOptions.js';
+import {
+  mergeProviderOptions,
+  resolveEffectiveProviderOptions,
+  resolveProviderOptionsSources,
+  resolveTrustedDeepSeekHarnessPaths,
+} from './providerOptions.js';
 import { loadProjectConfig, loadProjectConfigTraceState } from './project/projectConfig.js';
 import { expandOptionalHomePath } from './pathExpansion.js';
 import { resolveObservabilityConfig } from './observabilityConfig.js';
@@ -366,11 +371,12 @@ type TracedConfigState = {
   getOrigin(path: string): ProviderOptionsTraceOrigin;
 };
 
-type ConfigBaseUrlPath = 'codex.baseUrl' | 'claude.baseUrl';
+type ConfigBaseUrlPath = 'codex.baseUrl' | 'claude.baseUrl' | 'deepseekHarness.baseUrl';
 
 const CONFIG_BASE_URL_PATHS = [
   'codex.baseUrl',
   'claude.baseUrl',
+  'deepseekHarness.baseUrl',
 ] as const satisfies readonly ConfigBaseUrlPath[];
 
 function getConfigBaseUrl(
@@ -380,7 +386,10 @@ function getConfigBaseUrl(
   if (path === 'codex.baseUrl') {
     return providerOptions?.codex?.baseUrl;
   }
-  return providerOptions?.claude?.baseUrl;
+  if (path === 'claude.baseUrl') {
+    return providerOptions?.claude?.baseUrl;
+  }
+  return providerOptions?.deepseekHarness?.baseUrl;
 }
 
 function setConfigBaseUrl(
@@ -397,10 +406,19 @@ function setConfigBaseUrl(
       },
     };
   }
+  if (path === 'claude.baseUrl') {
+    return {
+      ...providerOptions,
+      claude: {
+        ...providerOptions?.claude,
+        baseUrl: value,
+      },
+    };
+  }
   return {
     ...providerOptions,
-    claude: {
-      ...providerOptions?.claude,
+    deepseekHarness: {
+      ...providerOptions?.deepseekHarness,
       baseUrl: value,
     },
   };
@@ -551,7 +569,11 @@ export function resolveProviderOptionsWithTrace(
   );
 
   const originResolver: ProviderOptionsOriginResolver = (path: string) => {
-    if (path === 'codex.baseUrl' || path === 'claude.baseUrl') {
+    if (
+      path === 'codex.baseUrl'
+      || path === 'claude.baseUrl'
+      || path === 'deepseekHarness.baseUrl'
+    ) {
       const origin = baseUrlOrigins[path];
       if (origin !== undefined) {
         return origin;
@@ -592,10 +614,18 @@ export function resolveNonWorkflowProviderOptions(
   codexSkillDefaults?: CodexSkillDefaults,
 ): StepProviderOptions | undefined {
   const resolved = resolveProviderOptionsWithTrace(projectDir, codexSkillDefaults);
-  return resolveEffectiveProviderOptions(
+  const providerOptions = resolveEffectiveProviderOptions(
     resolved.source,
     resolved.originResolver,
     resolved.value,
     callOptions,
   );
+  const providerOptionsSources = resolveProviderOptionsSources(
+    callOptions,
+    [],
+    resolved.value,
+    resolved.originResolver,
+    resolved.source,
+  );
+  return resolveTrustedDeepSeekHarnessPaths(providerOptions, projectDir, providerOptionsSources);
 }

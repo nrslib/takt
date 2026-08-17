@@ -50,6 +50,8 @@ export interface ResolvedRuntimeEnvironment {
 export interface ResolveProviderEnvironmentInput {
   /** Project root; its `.takt/runtime.yaml` overrides the global one. */
   projectCwd: string;
+  /** Execution directory used for trusted relative paths from global runtime profiles. */
+  executionCwd?: string;
   /** Provider engine-options the legacy path already resolved (used verbatim in legacy mode). */
   legacy: LegacyProviderEnvironmentInput;
   /** Legacy provider settings detected in the current run (for mixed-config fail-fast). */
@@ -99,6 +101,7 @@ export function resolveRuntimeEnvironment(
         resolutionContext: createRuntimeProviderResolutionContext(
           input.projectCwd,
           resolvedRuntimeFile.profileOrigins,
+          input.executionCwd,
         ),
       }),
       {

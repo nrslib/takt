@@ -2,5 +2,5 @@
 
 Report Directory 内の最新レポートを現在の指摘と実行結果の正本として扱ってください。
 
-{{include:instructions/contract-family-plan-replan}}
+{{include:instructions/planning-path-check}}
 {{include:instructions/replan-implementation-common}}

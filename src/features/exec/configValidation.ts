@@ -12,11 +12,12 @@ export const EXEC_PROVIDERS: readonly ProviderType[] = [
   'copilot',
   'kiro',
   'pi',
+  'deepseek-harness',
   'mock',
 ];
 
 export const EXEC_EFFORTS: readonly ExecEffort[] = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
-const EXEC_OPTIONAL_MODEL_PROVIDERS: ReadonlySet<ProviderType> = new Set(['cursor', 'copilot', 'kiro', 'pi']);
+const EXEC_OPTIONAL_MODEL_PROVIDERS: ReadonlySet<ProviderType> = new Set(['cursor', 'copilot', 'kiro', 'pi', 'deepseek-harness']);
 
 export const CLAUDE_TOOL_PROVIDERS: ReadonlySet<ProviderType> = new Set(['claude', 'claude-sdk', 'claude-terminal']);
 const EXEC_EFFORT_PROVIDERS: ReadonlySet<ProviderType> = new Set([

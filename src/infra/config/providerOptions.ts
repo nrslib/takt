@@ -1,9 +1,11 @@
+import { resolve as resolvePath } from 'node:path';
 import type {
   ClaudeEffort,
   ClaudeTerminalProviderOptions,
   CodexPermissionControl,
   CodexReasoningEffort,
   CopilotEffort,
+  DeepSeekHarnessProviderOptions,
   OpenCodeGuardProfile,
   PiProviderOptions,
   WorkflowStep,
@@ -18,6 +20,7 @@ import type {
 } from '../../core/workflow/provider-options-trace.js';
 import { resolveWorkflowStepTarget } from '../../core/workflow/provider-target-resolution.js';
 import type { ProviderType } from '../../shared/types/provider.js';
+import { isAbsolutePathLike } from '../../shared/utils/pathBoundary.js';
 import { providerSupportsClaudeAllowedTools } from '../providers/provider-capabilities.js';
 
 type RawProviderGuardOptions = {
@@ -81,6 +84,16 @@ type RawProviderOptions = {
   cursor?: {
     guards?: RawProviderGuardOptions;
   };
+  deepseek_harness?: {
+    python_path?: string;
+    base_url?: string;
+    session_root?: string;
+    cordis?: string;
+    max_tokens?: number;
+    request_timeout_ms?: number;
+    shutdown_timeout_ms?: number;
+    runtime_mode?: 'exe' | 'node';
+  };
   pi?: {
     guards?: RawProviderGuardOptions;
     extensions?: string[];
@@ -93,9 +106,15 @@ type RawProviderOptions = {
 };
 
 type ProviderBaseUrlTrust = 'trusted' | 'loopback-only' | 'local-loopback-only';
+type ProviderPythonPathTrust = 'trusted' | 'untrusted' | 'local-untrusted';
+type ProviderPathTrust = 'trusted' | 'untrusted' | 'local-untrusted';
+type ProviderCordisTrust = 'trusted' | 'untrusted' | 'local-untrusted';
 
 export interface NormalizeProviderOptionsOptions {
   baseUrlTrust?: ProviderBaseUrlTrust;
+  pythonPathTrust?: ProviderPythonPathTrust;
+  pathTrust?: ProviderPathTrust;
+  cordisTrust?: ProviderCordisTrust;
   pathPrefix?: string;
   getOrigin?: (path: string) => ProviderOptionsTraceOrigin;
 }
@@ -187,6 +206,95 @@ function assertAllowedProviderBaseUrl(
   );
 }
 
+function assertAllowedProviderPythonPath(
+  path: string,
+  value: string | undefined,
+  options: NormalizeProviderOptionsOptions,
+): void {
+  if (value === undefined) {
+    return;
+  }
+  const trust = options.pythonPathTrust ?? 'trusted';
+  if (trust === 'trusted') {
+    return;
+  }
+  if (trust === 'local-untrusted') {
+    const origin = options.getOrigin?.(path) ?? 'default';
+    if (origin !== 'local' && origin !== 'default') {
+      return;
+    }
+  }
+
+  throw new Error(
+    `Configuration error: ${path} may only be set by trusted user configuration. `
+    + 'Use global config or TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PYTHON_PATH.',
+  );
+}
+
+function hasParentPathSegment(value: string): boolean {
+  return value.split(/[\\\\/]/u).some((segment) => segment === '..');
+}
+
+function assertTrustedProjectPath(
+  path: string,
+  value: string | undefined,
+  options: NormalizeProviderOptionsOptions,
+): void {
+  if (value === undefined) {
+    return;
+  }
+  const trust = options.pathTrust ?? 'trusted';
+  if (trust === 'trusted') {
+    return;
+  }
+  if (trust === 'local-untrusted') {
+    const origin = options.getOrigin?.(path) ?? 'default';
+    if (origin !== 'local' && origin !== 'default') {
+      return;
+    }
+  }
+  const trimmed = value.trim();
+  if (!isAbsolutePathLike(trimmed) && !hasParentPathSegment(trimmed)) {
+    return;
+  }
+  throw new Error(
+    `Configuration error: ${path} must be a relative path without '..' traversal inside the project/session boundary.`,
+  );
+}
+
+function assertAllowedProviderCordis(
+  path: string,
+  value: string | undefined,
+  options: NormalizeProviderOptionsOptions,
+): void {
+  if (value === undefined) {
+    return;
+  }
+  const trust = options.cordisTrust ?? options.pathTrust ?? 'trusted';
+  if (trust === 'trusted') {
+    return;
+  }
+  if (trust === 'untrusted') {
+    const origin = options.getOrigin?.(path) ?? 'default';
+    // Environment overrides are user-controlled even when the surrounding
+    // project/config layer is untrusted. Repository and workflow values keep
+    // the default origin and remain rejected.
+    if (origin === 'env' || origin === 'global') {
+      return;
+    }
+  }
+  if (trust === 'local-untrusted') {
+    const origin = options.getOrigin?.(path) ?? 'default';
+    if (origin !== 'local' && origin !== 'default') {
+      return;
+    }
+  }
+  throw new Error(
+    `Configuration error: ${path} may only be set by trusted user configuration. `
+    + 'Use global config or TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_CORDIS.',
+  );
+}
+
 export function assertAllowedNormalizedProviderBaseUrls(
   providerOptions: StepProviderOptions | undefined,
   options: NormalizeProviderOptionsOptions = {},
@@ -200,6 +308,11 @@ export function assertAllowedNormalizedProviderBaseUrls(
   assertAllowedProviderBaseUrl(
     `${prefix}.claude.base_url`,
     providerOptions?.claude?.baseUrl,
+    options,
+  );
+  assertAllowedProviderBaseUrl(
+    `${prefix}.deepseek_harness.base_url`,
+    providerOptions?.deepseekHarness?.baseUrl,
     options,
   );
 }
@@ -364,6 +477,59 @@ export function normalizeProviderOptions(
         : {}),
     };
   }
+  if (options.deepseek_harness !== undefined) {
+    const deepseekOptionsPath = `${normalizationOptions.pathPrefix ?? 'provider_options'}.deepseek_harness`;
+    const deepseekBaseUrlPath = `${deepseekOptionsPath}.base_url`;
+    assertAllowedProviderBaseUrl(
+      deepseekBaseUrlPath,
+      options.deepseek_harness.base_url,
+      normalizationOptions,
+    );
+    assertAllowedProviderPythonPath(
+      `${deepseekOptionsPath}.python_path`,
+      options.deepseek_harness.python_path,
+      normalizationOptions,
+    );
+    assertTrustedProjectPath(
+      `${deepseekOptionsPath}.session_root`,
+      options.deepseek_harness.session_root,
+      normalizationOptions,
+    );
+    assertAllowedProviderCordis(
+      `${deepseekOptionsPath}.cordis`,
+      options.deepseek_harness.cordis,
+      normalizationOptions,
+    );
+    const deepseekHarness: DeepSeekHarnessProviderOptions = {
+      ...(options.deepseek_harness.python_path !== undefined
+        ? { pythonPath: options.deepseek_harness.python_path }
+        : {}),
+      ...(options.deepseek_harness.base_url !== undefined
+        ? { baseUrl: options.deepseek_harness.base_url }
+        : {}),
+      ...(options.deepseek_harness.session_root !== undefined
+        ? { sessionRoot: options.deepseek_harness.session_root }
+        : {}),
+      ...(options.deepseek_harness.cordis !== undefined
+        ? { cordis: options.deepseek_harness.cordis }
+        : {}),
+      ...(options.deepseek_harness.max_tokens !== undefined
+        ? { maxTokens: options.deepseek_harness.max_tokens }
+        : {}),
+      ...(options.deepseek_harness.request_timeout_ms !== undefined
+        ? { requestTimeoutMs: options.deepseek_harness.request_timeout_ms }
+        : {}),
+      ...(options.deepseek_harness.shutdown_timeout_ms !== undefined
+        ? { shutdownTimeoutMs: options.deepseek_harness.shutdown_timeout_ms }
+        : {}),
+      ...(options.deepseek_harness.runtime_mode !== undefined
+        ? { runtimeMode: options.deepseek_harness.runtime_mode }
+        : {}),
+    };
+    if (Object.keys(deepseekHarness).length > 0) {
+      result.deepseekHarness = deepseekHarness;
+    }
+  }
   if (options.pi !== undefined) {
     const pi: PiProviderOptions = {
       ...(options.pi.extensions !== undefined ? { extensions: [...options.pi.extensions] } : {}),
@@ -410,6 +576,59 @@ export function normalizeProviderOptions(
   const normalized = Object.keys(result).length > 0 ? result : undefined;
   assertValidCodexProviderOptions(normalized);
   return normalized;
+}
+
+const TRUSTED_DEEPSEEK_PATH_SOURCES = new Set<ProviderResolutionSource>([
+  'env',
+  'global',
+]);
+
+function resolveTrustedDeepSeekPath(
+  value: string,
+  cwd: string,
+  source: ProviderResolutionSource | undefined,
+): string {
+  if (source === undefined || !TRUSTED_DEEPSEEK_PATH_SOURCES.has(source)) {
+    return value;
+  }
+  const trimmed = value.trim();
+  return trimmed.length === 0 ? value : resolvePath(cwd, trimmed);
+}
+
+export function resolveTrustedDeepSeekHarnessPaths(
+  providerOptions: StepProviderOptions | undefined,
+  cwd: string,
+  providerOptionsSources: Readonly<Record<string, ProviderResolutionSource>> | undefined,
+): StepProviderOptions | undefined {
+  const deepseekHarness = providerOptions?.deepseekHarness;
+  if (deepseekHarness === undefined) {
+    return providerOptions;
+  }
+  const sessionRoot = deepseekHarness.sessionRoot === undefined
+    ? undefined
+    : resolveTrustedDeepSeekPath(
+        deepseekHarness.sessionRoot,
+        cwd,
+        providerOptionsSources?.['deepseekHarness.sessionRoot'],
+      );
+  const cordis = deepseekHarness.cordis === undefined
+    ? undefined
+    : resolveTrustedDeepSeekPath(
+        deepseekHarness.cordis,
+        cwd,
+        providerOptionsSources?.['deepseekHarness.cordis'],
+      );
+  if (sessionRoot === deepseekHarness.sessionRoot && cordis === deepseekHarness.cordis) {
+    return providerOptions;
+  }
+  return {
+    ...providerOptions,
+    deepseekHarness: {
+      ...deepseekHarness,
+      ...(sessionRoot === undefined ? {} : { sessionRoot }),
+      ...(cordis === undefined ? {} : { cordis }),
+    },
+  };
 }
 
 /** Deep merge provider options. Later sources override earlier ones. */
@@ -538,6 +757,12 @@ export function mergeProviderOptions(
         ...(layer.cursor.guards !== undefined
           ? { guards: { ...result.cursor?.guards, ...layer.cursor.guards } }
           : {}),
+      };
+    }
+    if (layer.deepseekHarness) {
+      result.deepseekHarness = {
+        ...result.deepseekHarness,
+        ...layer.deepseekHarness,
       };
     }
     if (layer.pi) {
@@ -913,6 +1138,53 @@ export function resolveEffectiveProviderOptions(
     stepOptions?.kiro?.agent,
     resolveProviderOptionOrigin(originResolver, 'kiro.agent', source),
   );
+  const deepseekHarnessPythonPath = selectProviderValue(
+    resolvedConfigOptions.deepseekHarness?.pythonPath,
+    personaOptions?.deepseekHarness?.pythonPath,
+    stepOptions?.deepseekHarness?.pythonPath,
+    resolveProviderOptionOrigin(originResolver, 'deepseekHarness.pythonPath', source),
+  );
+  const deepseekHarnessBaseUrl = selectProviderValueByScope(
+    resolvedConfigOptions.deepseekHarness?.baseUrl,
+    personaOptions?.deepseekHarness?.baseUrl,
+    stepOptions?.deepseekHarness?.baseUrl,
+  );
+  const deepseekHarnessSessionRoot = selectProviderValue(
+    resolvedConfigOptions.deepseekHarness?.sessionRoot,
+    personaOptions?.deepseekHarness?.sessionRoot,
+    stepOptions?.deepseekHarness?.sessionRoot,
+    resolveProviderOptionOrigin(originResolver, 'deepseekHarness.sessionRoot', source),
+  );
+  const deepseekHarnessCordis = selectProviderValue(
+    resolvedConfigOptions.deepseekHarness?.cordis,
+    personaOptions?.deepseekHarness?.cordis,
+    stepOptions?.deepseekHarness?.cordis,
+    resolveProviderOptionOrigin(originResolver, 'deepseekHarness.cordis', source),
+  );
+  const deepseekHarnessMaxTokens = selectProviderValue(
+    resolvedConfigOptions.deepseekHarness?.maxTokens,
+    personaOptions?.deepseekHarness?.maxTokens,
+    stepOptions?.deepseekHarness?.maxTokens,
+    resolveProviderOptionOrigin(originResolver, 'deepseekHarness.maxTokens', source),
+  );
+  const deepseekHarnessRequestTimeoutMs = selectProviderValue(
+    resolvedConfigOptions.deepseekHarness?.requestTimeoutMs,
+    personaOptions?.deepseekHarness?.requestTimeoutMs,
+    stepOptions?.deepseekHarness?.requestTimeoutMs,
+    resolveProviderOptionOrigin(originResolver, 'deepseekHarness.requestTimeoutMs', source),
+  );
+  const deepseekHarnessShutdownTimeoutMs = selectProviderValue(
+    resolvedConfigOptions.deepseekHarness?.shutdownTimeoutMs,
+    personaOptions?.deepseekHarness?.shutdownTimeoutMs,
+    stepOptions?.deepseekHarness?.shutdownTimeoutMs,
+    resolveProviderOptionOrigin(originResolver, 'deepseekHarness.shutdownTimeoutMs', source),
+  );
+  const deepseekHarnessRuntimeMode = selectProviderValue(
+    resolvedConfigOptions.deepseekHarness?.runtimeMode,
+    personaOptions?.deepseekHarness?.runtimeMode,
+    stepOptions?.deepseekHarness?.runtimeMode,
+    resolveProviderOptionOrigin(originResolver, 'deepseekHarness.runtimeMode', source),
+  );
   const piExtensions = selectProviderValue(
     resolvedConfigOptions.pi?.extensions,
     personaOptions?.pi?.extensions,
@@ -1118,6 +1390,31 @@ export function resolveEffectiveProviderOptions(
     ...(cursorCallTimeoutMs !== undefined
       ? { cursor: { guards: { callTimeoutMs: cursorCallTimeoutMs } } }
       : {}),
+    ...(deepseekHarnessPythonPath !== undefined
+      || deepseekHarnessBaseUrl !== undefined
+      || deepseekHarnessSessionRoot !== undefined
+      || deepseekHarnessCordis !== undefined
+      || deepseekHarnessMaxTokens !== undefined
+      || deepseekHarnessRequestTimeoutMs !== undefined
+      || deepseekHarnessShutdownTimeoutMs !== undefined
+      || deepseekHarnessRuntimeMode !== undefined
+      ? {
+          deepseekHarness: {
+            ...(deepseekHarnessPythonPath !== undefined ? { pythonPath: deepseekHarnessPythonPath } : {}),
+            ...(deepseekHarnessBaseUrl !== undefined ? { baseUrl: deepseekHarnessBaseUrl } : {}),
+            ...(deepseekHarnessSessionRoot !== undefined ? { sessionRoot: deepseekHarnessSessionRoot } : {}),
+            ...(deepseekHarnessCordis !== undefined ? { cordis: deepseekHarnessCordis } : {}),
+            ...(deepseekHarnessMaxTokens !== undefined ? { maxTokens: deepseekHarnessMaxTokens } : {}),
+            ...(deepseekHarnessRequestTimeoutMs !== undefined
+              ? { requestTimeoutMs: deepseekHarnessRequestTimeoutMs }
+              : {}),
+            ...(deepseekHarnessShutdownTimeoutMs !== undefined
+              ? { shutdownTimeoutMs: deepseekHarnessShutdownTimeoutMs }
+              : {}),
+            ...(deepseekHarnessRuntimeMode !== undefined ? { runtimeMode: deepseekHarnessRuntimeMode } : {}),
+          },
+        }
+      : {}),
     ...(piExtensions !== undefined
       || piCallTimeoutMs !== undefined
       || piNoExtensions !== undefined
@@ -1211,6 +1508,9 @@ function stripClaudeAllowedTools(
     ...(providerOptions.kiro !== undefined
       ? { kiro: { ...providerOptions.kiro } }
       : {}),
+    ...(providerOptions.deepseekHarness !== undefined
+      ? { deepseekHarness: { ...providerOptions.deepseekHarness } }
+      : {}),
     ...(providerOptions.pi !== undefined
       ? {
           pi: {
@@ -1302,6 +1602,14 @@ export const PROVIDER_OPTION_PATHS = [
   'kiro.agent',
   'kiro.guards.callTimeoutMs',
   'cursor.guards.callTimeoutMs',
+  'deepseekHarness.pythonPath',
+  'deepseekHarness.baseUrl',
+  'deepseekHarness.sessionRoot',
+  'deepseekHarness.cordis',
+  'deepseekHarness.maxTokens',
+  'deepseekHarness.requestTimeoutMs',
+  'deepseekHarness.shutdownTimeoutMs',
+  'deepseekHarness.runtimeMode',
   'pi.extensions',
   'pi.guards.callTimeoutMs',
   'pi.noExtensions',
@@ -1321,6 +1629,7 @@ export type ProviderOptionPath = (typeof PROVIDER_OPTION_PATHS)[number];
 const FILE_PREFERRED_PROVIDER_OPTION_PATHS: ReadonlySet<string> = new Set([
   'claude.baseUrl',
   'codex.baseUrl',
+  'deepseekHarness.baseUrl',
 ]);
 
 export function isFilePreferredProviderOptionPath(path: string): boolean {
@@ -1368,6 +1677,7 @@ export function resolveProviderOptionSource(
   if (
     path !== 'claude.baseUrl'
     && path !== 'codex.baseUrl'
+    && path !== 'deepseekHarness.baseUrl'
     && (origin === 'env' || origin === 'cli')
     && configValue !== undefined
   ) {

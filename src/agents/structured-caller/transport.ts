@@ -2,7 +2,11 @@ import type { AgentResponse, Language, PermissionMode } from '../../core/models/
 import type { StepProviderOptions } from '../../core/models/workflow-types.js';
 import { validateStructuredOutputAgainstSchema } from '../../core/workflow/engine/structured-output-schema-validator.js';
 import { resolveAllowedToolsForProvider } from '../../core/workflow/engine/engine-provider-options.js';
-import { providerSupportsStructuredOutput } from '../../infra/providers/provider-capabilities.js';
+import {
+  providerSupportsAllowedTools,
+  providerSupportsPermissionControls,
+  providerSupportsStructuredOutput,
+} from '../../infra/providers/provider-capabilities.js';
 import { buildStructuredJsonSchemaInstruction } from '../../shared/prompts/index.js';
 import { createAgentResponseFailureError } from '../../shared/types/agent-failure.js';
 import type { ProviderType } from '../../shared/types/provider.js';
@@ -10,11 +14,15 @@ import type { RunAgentOptions } from '../runner.js';
 import { executeAgent } from '../agent-usecases.js';
 import { parseStructuredOutputObject } from './shared.js';
 
+export type StructuredAgentControlSource = 'explicit' | 'synthetic';
+
 export interface StructuredAgentResolution {
   readonly provider: ProviderType;
   readonly model?: string;
   readonly providerOptions?: StepProviderOptions;
   readonly permissionMode?: PermissionMode;
+  /** Omitted means an explicit caller constraint; synthetic defaults are marked explicitly. */
+  readonly permissionModeSource?: StructuredAgentControlSource;
 }
 
 export interface StructuredAgentCallOptions {
@@ -37,6 +45,8 @@ export interface StructuredAgentCallOptions {
   readonly onDispatch?: RunAgentOptions['onDispatch'];
   readonly workflowMeta?: RunAgentOptions['workflowMeta'];
   readonly allowedTools?: RunAgentOptions['allowedTools'];
+  /** Omitted means explicit caller tools; synthetic defaults are marked explicitly. */
+  readonly allowedToolsSource?: StructuredAgentControlSource;
   readonly mcpServers?: RunAgentOptions['mcpServers'];
   readonly outputSchema?: RunAgentOptions['outputSchema'];
 }
@@ -82,12 +92,22 @@ async function executeFreshAgent(
   instruction: string,
   options: StructuredAgentCallOptions,
 ): Promise<AgentResponse> {
-  const profileAllowedTools = resolveAllowedToolsForProvider(
-    options.resolution.providerOptions,
-    false,
-    undefined,
-    options.resolution.provider,
-  );
+  const supportsPermissionControls = providerSupportsPermissionControls(options.resolution.provider) !== false;
+  const supportsAllowedTools = providerSupportsAllowedTools(options.resolution.provider) !== false;
+  const profileAllowedTools = supportsAllowedTools
+    ? resolveAllowedToolsForProvider(
+      options.resolution.providerOptions,
+      false,
+      undefined,
+      options.resolution.provider,
+    )
+    : undefined;
+  const allowedTools = supportsAllowedTools || options.allowedToolsSource !== 'synthetic'
+    ? options.allowedTools ?? profileAllowedTools
+    : undefined;
+  const permissionMode = supportsPermissionControls || options.resolution.permissionModeSource !== 'synthetic'
+    ? options.resolution.permissionMode
+    : undefined;
   return executeAgent(options.persona, instruction, {
     cwd: options.cwd,
     projectCwd: options.projectCwd,
@@ -100,11 +120,9 @@ async function executeFreshAgent(
       provider: options.resolution.provider,
       model: options.resolution.model,
       providerOptions: options.resolution.providerOptions,
-      permissionMode: options.resolution.permissionMode,
+      permissionMode,
     },
-    ...(options.allowedTools !== undefined
-      ? { allowedTools: options.allowedTools }
-      : profileAllowedTools === undefined ? {} : { allowedTools: profileAllowedTools }),
+    ...(allowedTools === undefined ? {} : { allowedTools }),
     ...(options.mcpServers === undefined ? {} : { mcpServers: options.mcpServers }),
     ...(options.maxTurns === undefined ? {} : { maxTurns: options.maxTurns }),
     ...(options.language === undefined ? {} : { language: options.language }),
@@ -145,9 +163,10 @@ export async function executeStructuredTextAgent(
 /**
  * Provider-neutral transport for TAKT-owned structured agents.
  *
- * The transport owns only fresh-session execution and the structured response contract. Runtime
- * permissions, tools, MCP, network, sandbox, skills, and bypass policy are passed through only
- * when their caller's resolved profile supplied them.
+ * The transport owns only fresh-session execution and the structured response contract. Explicit
+ * permission and allowed-tool constraints remain visible to providers so unsupported controls can
+ * fail at the provider boundary. Only controls marked as synthetic are omitted for unsupported
+ * providers.
  */
 export async function executeStructuredAgent<T extends Record<string, unknown>>(
   instruction: string,

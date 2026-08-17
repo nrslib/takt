@@ -30,6 +30,7 @@ steps:
     policy:
       - contract-change
       - testing
+      - architecture
     knowledge:
       - architecture
       - e2e-testing
@@ -54,6 +55,7 @@ steps:
       - contract-change
       - review
       - testing
+      - architecture
     knowledge:
       - architecture
       - e2e-testing
@@ -79,6 +81,7 @@ steps:
     policy:
       - contract-change
       - review
+      - testing
     knowledge:
       - e2e-testing
     instruction: e2e-audit-supervise

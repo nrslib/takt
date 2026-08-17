@@ -826,7 +826,7 @@ args:
     writeProjectFragment(projectDir, 'valid-step', 'instruction: valid\n');
     const workflowPath = writeWorkflow(projectDir, 'override-schema-error', `  - uses: valid-step
     instruction:
-      - invalid${COMPLETE_CALLER_RULES}`, 'valid-step');
+      - 123${COMPLETE_CALLER_RULES}`, 'valid-step');
 
     let error: unknown;
     try {

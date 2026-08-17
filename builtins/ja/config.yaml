@@ -7,7 +7,7 @@
 language: ja         # 表示言語: ja | en
 
 # デフォルトプロバイダー・モデル
-# provider: claude                    # デフォルトプロバイダー: claude | claude-sdk | claude-terminal | codex | opencode | pi | cursor | copilot | kiro | mock
+# provider: claude                    # デフォルトプロバイダー: claude | claude-sdk | claude-terminal | codex | opencode | deepseek-harness | pi | cursor | copilot | kiro | mock
 # model: sonnet                       # デフォルトモデル（プロバイダーにそのまま渡される）
 
 # 実行制御

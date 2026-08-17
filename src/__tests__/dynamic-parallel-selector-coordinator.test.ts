@@ -71,15 +71,17 @@ function workflowState(): WorkflowState {
   };
 }
 
-function dependencies(): DynamicParallelSelectorCoordinatorDeps {
+function dependencies(
+  selectorProvider: WorkflowEngineOptions['selectorProvider'] = {
+    provider: 'mock',
+    model: undefined,
+    providerOptions: {},
+  },
+): DynamicParallelSelectorCoordinatorDeps {
   const engineOptions: WorkflowEngineOptions = {
     projectCwd: '/project',
     workflowBundleResourceRoot: '/project/.takt/runs/bundle/resources',
-    selectorProvider: {
-      provider: 'mock',
-      model: undefined,
-      providerOptions: {},
-    },
+    selectorProvider,
   };
   return {
     engineOptions,
@@ -221,6 +223,30 @@ describe('DynamicParallelSelectorCoordinator', () => {
       resolution: expect.objectContaining({ permissionMode: 'readonly' }),
     }));
     expect(participants.map(({ name }) => name)).toEqual(['architecture', 'frontend']);
+  });
+
+  it('preserves an explicitly configured selector permission mode', async () => {
+    mockedExecuteAgent.mockResolvedValueOnce({
+      persona: 'selector',
+      status: 'done',
+      content: '',
+      timestamp: new Date(),
+      structuredOutput: { selected_ids: ['frontend'], rationale: 'explicit policy applies' },
+    });
+    const coordinator = new DynamicParallelSelectorCoordinator(dependencies({
+      provider: 'deepseek-harness',
+      model: 'deepseek-v4-flash',
+      providerOptions: {},
+      permissionMode: 'full',
+    }));
+
+    await coordinator.selectParticipants(dynamicParallelStep(), workflowState(), 'review changes');
+
+    const options = mockedExecuteAgent.mock.calls[0]?.[2];
+    expect(options?.resolution).toEqual(expect.objectContaining({
+      permissionMode: 'full',
+      permissionModeSource: 'explicit',
+    }));
   });
 
   it('should run the selector when run-local state has no resume selection', async () => {

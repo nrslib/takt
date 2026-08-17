@@ -25,7 +25,7 @@ steps:
         moderator: review-companion-moderator
       reviewer_suite: experimental-review
       review_policy_additions: []
-      review_policy: [coding, testing, review]
+      review_policy: [coding, testing, review, architecture]
       review_knowledge: [architecture, unit-testing, e2e-testing]
     rules:
       - condition: COMPLETE

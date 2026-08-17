@@ -10,6 +10,7 @@ export const PROVIDER_TYPES = [
   'copilot',
   'kiro',
   'pi',
+  'deepseek-harness',
   'mock',
 ] as const;
 

@@ -1,5 +1,16 @@
 name: peer-review
 description: 専門並列ピアレビュー（+ ai-antipattern-review-2nd）→ 指摘裁定 → 共通修正ループ後、supervisor が要件充足を最終裁定する。
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 subworkflow:
   callable: true
   visibility: internal
@@ -67,6 +78,15 @@ subworkflow:
         - coding
         - testing
         - review
+    final_gate_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default:
+        - coding
+        - testing
+        - review
+        - architecture
+        - takt
     fix_plan_instruction:
       type: facet_ref
       facet_kind: instruction
@@ -195,6 +215,8 @@ steps:
     with:
       review_knowledge:
         $param: review_knowledge_additions
+      final_gate_policy:
+        $param: final_gate_policy
       final_gate_instruction:
         $param: final_gate_instruction
     rules:

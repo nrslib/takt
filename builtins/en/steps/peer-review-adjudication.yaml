@@ -12,6 +12,8 @@ tags:
 edit: false
 persona: review-adjudicator
 policy:
+  - architecture
+  - takt
   - review-adjudication
   - contract-change
   - $param: review_policy_additions

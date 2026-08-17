@@ -19,6 +19,10 @@ import type { ImageAttachmentReference } from '../../shared/types/image-attachme
 import type { PermissionMode, StepProviderOptions } from '../../core/models/index.js';
 import { expandImageAttachmentPlaceholders } from '../../infra/providers/imageAttachmentPrompt.js';
 import { buildProviderRuntimeSystemPrompt } from '../../infra/providers/runtimeSystemPrompt.js';
+import {
+  providerSupportsAllowedTools,
+  providerSupportsPermissionControls,
+} from '../../infra/providers/provider-capabilities.js';
 
 const log = createLogger('ai-caller');
 
@@ -109,6 +113,14 @@ export async function callAIWithRetry(
     const promptForProvider = ctx.provider.supportsNativeImageInput
       ? prompt
       : expandImageAttachmentPlaceholders(prompt, options.imageAttachments);
+    const allowedToolsForProvider = providerSupportsAllowedTools(ctx.providerType) === false
+      ? undefined
+      : allowedTools;
+    // Per-call permissionMode is synthesized by the assistant strategy; a session-level mode is
+    // resolved user configuration and must still reach the provider for explicit-constraint errors.
+    const permissionModeForProvider = providerSupportsPermissionControls(ctx.providerType) === false
+      ? ctx.permissionMode
+      : options.permissionMode ?? ctx.permissionMode;
     if (hasImageAttachments && nativeImageAttachments === undefined) {
       info(`Provider "${ctx.providerType}" does not support native image input; image paths were added to the prompt.`);
     }
@@ -116,8 +128,8 @@ export async function callAIWithRetry(
       cwd,
       model: ctx.model,
       sessionId,
-      allowedTools,
-      permissionMode: options.permissionMode ?? ctx.permissionMode,
+      ...(allowedToolsForProvider === undefined ? {} : { allowedTools: allowedToolsForProvider }),
+      ...(permissionModeForProvider === undefined ? {} : { permissionMode: permissionModeForProvider }),
       providerOptions: ctx.providerOptions,
       abortSignal: abortController.signal,
       onStream: display?.createHandler(),
@@ -137,8 +149,8 @@ export async function callAIWithRetry(
         cwd,
         model: ctx.model,
         sessionId: undefined,
-        allowedTools,
-        permissionMode: options.permissionMode ?? ctx.permissionMode,
+        ...(allowedToolsForProvider === undefined ? {} : { allowedTools: allowedToolsForProvider }),
+        ...(permissionModeForProvider === undefined ? {} : { permissionMode: permissionModeForProvider }),
         providerOptions: ctx.providerOptions,
         abortSignal: abortController.signal,
         onStream: retryDisplay?.createHandler(),

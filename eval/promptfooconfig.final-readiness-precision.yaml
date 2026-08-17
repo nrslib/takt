@@ -43,3 +43,11 @@ tests:
       - type: javascript
         metric: final-supervisor/requirement-gap
         value: file://asserts/final-readiness-requirement-gap.mjs
+  - description: 'final supervisor: block on an external decision that task-scope code cannot provide'
+    vars:
+      task: file://cases/final-readiness-external-decision-task.md
+      previous_response: ''
+    assert:
+      - type: javascript
+        metric: final-supervisor/external-decision
+        value: file://asserts/final-readiness-external-decision.mjs

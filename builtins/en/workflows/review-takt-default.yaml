@@ -1,5 +1,16 @@
 name: review-takt-default
 description: "TAKT-focused multi-perspective review with AI antipattern and coding review"
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 max_steps: 10
 facet_pools:
   takt-security-review-facets:
@@ -33,6 +44,8 @@ steps:
         policy:
           - contract-change
           - review
+          - architecture
+          - takt
         knowledge:
           - architecture
           - takt
@@ -116,6 +129,7 @@ steps:
         policy:
           - contract-change
           - security-review
+          - takt
         knowledge:
           - security
           - security-data

@@ -1,4 +1,4 @@
 <!--
   template: parts/workflow_wide_rules_notice
 -->
-The following rules apply to all steps in this workflow.
+Apply the following constraints to the current task.

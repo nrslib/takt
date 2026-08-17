@@ -3,7 +3,7 @@
  */
 
 import type { AgentResponse } from '../../core/models/index.js';
-import { crossSpawn, getErrorMessage } from '../../shared/utils/index.js';
+import { crossSpawn, getErrorMessage, guardChildProcessStreams } from '../../shared/utils/index.js';
 import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/index.js';
 import { AGENT_FAILURE_CATEGORIES, type AgentFailureCategory } from '../../shared/types/agent-failure.js';
 import type { CursorCallOptions } from './types.js';
@@ -135,6 +135,7 @@ function execCursor(args: string[], options: CursorCallOptions): Promise<CursorE
       if (options.abortSignal) {
         options.abortSignal.removeEventListener('abort', abortHandler);
       }
+      guardTeardown();
     };
 
     const resolveOnce = (result: CursorExecResult): void => {
@@ -144,9 +145,12 @@ function execCursor(args: string[], options: CursorCallOptions): Promise<CursorE
       resolve(result);
     };
 
-    const rejectOnce = (error: CursorExecError): void => {
+    const rejectOnce = (error: CursorExecError, terminateChild = false): void => {
       if (settled) return;
       settled = true;
+      if (terminateChild) {
+        child.kill('SIGTERM');
+      }
       cleanup();
       reject(error);
     };
@@ -186,12 +190,19 @@ function execCursor(args: string[], options: CursorCallOptions): Promise<CursorE
     child.stdout?.on('data', (chunk: Buffer | string) => appendChunk('stdout', chunk));
     child.stderr?.on('data', (chunk: Buffer | string) => appendChunk('stderr', chunk));
 
-    child.on('error', (error: NodeJS.ErrnoException) => {
-      rejectOnce(createExecError(error.message, {
-        code: error.code,
+    const guardTeardown = guardChildProcessStreams(child, (error, source) => {
+      if (source === 'process') {
+        rejectOnce(createExecError(error.message, {
+          code: (error as NodeJS.ErrnoException).code,
+          stdout,
+          stderr,
+        }));
+        return;
+      }
+      rejectOnce(createExecError(`cursor-agent ${source} stream error: ${error.message}`, {
         stdout,
         stderr,
-      }));
+      }), true);
     });
 
     child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {

@@ -62,6 +62,7 @@ export type {
   CursorProviderOptions,
   CopilotProviderOptions,
   KiroProviderOptions,
+  DeepSeekHarnessProviderOptions,
   PiProviderOptions,
   StepProviderOptions,
   WorkflowStepKind,
@@ -278,7 +279,7 @@ interface WorkflowStepBase {
   tags?: string[];
   instruction: string;
   /** Loader-preserved instruction reference or inline declaration before facet resolution. */
-  instructionRef?: string;
+  instructionRef?: string | string[];
   delayBeforeMs?: number;
   rules?: WorkflowRule[];
   passPreviousResponse?: boolean;
@@ -411,6 +412,8 @@ export type AgentWorkflowStep =
   | ArpeggioWorkflowStep
   | TeamLeaderWorkflowStep;
 
+export type NormalOrTeamLeaderWorkflowStep = NormalAgentWorkflowStep | TeamLeaderWorkflowStep;
+
 export interface SystemWorkflowStep extends WorkflowStepBase {
   kind: 'system';
   mode?: never;
@@ -489,6 +492,12 @@ export function isNormalAgentWorkflowStep(step: WorkflowStep): step is NormalAge
     && step.arpeggio === undefined
     && step.teamLeader === undefined
   );
+}
+
+export function isNormalOrTeamLeaderWorkflowStep(
+  step: WorkflowStep,
+): step is NormalOrTeamLeaderWorkflowStep {
+  return isNormalAgentWorkflowStep(step) || step.teamLeader !== undefined;
 }
 
 export interface ArpeggioMergeStepConfig {

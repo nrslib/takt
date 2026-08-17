@@ -12,16 +12,19 @@ const {
   providerSetupMock,
   providerCallMock,
   getRuntimeInstructionsMock,
+  supportsPermissionControlsMock,
 } = vi.hoisted(() => {
   const providerCall = vi.fn();
   const providerSetup = vi.fn(() => ({ call: providerCall }));
   const getRuntimeInstructions = vi.fn(() => null);
+  const supportsPermissionControls = vi.fn(() => true);
 
   return {
     getProviderMock: vi.fn(() => ({
       supportsStructuredOutput: true,
       supportsNativeImageInput: false,
       getRuntimeInstructions,
+      supportsPermissionControls,
       setup: providerSetup,
     })),
     loadCustomAgentsMock: vi.fn(),
@@ -34,6 +37,7 @@ const {
     providerSetupMock: providerSetup,
     providerCallMock: providerCall,
     getRuntimeInstructionsMock: getRuntimeInstructions,
+    supportsPermissionControlsMock: supportsPermissionControls,
   };
 });
 
@@ -78,6 +82,7 @@ describe('option resolution order', () => {
     loadAgentPromptMock.mockReturnValue('prompt');
     loadPersonaPromptFromPathMock.mockReturnValue('persona prompt from path');
     getRuntimeInstructionsMock.mockReturnValue(null);
+    supportsPermissionControlsMock.mockReturnValue(true);
   });
 
   it('records an attempt-boundary activity before provider dispatch', async () => {
@@ -879,6 +884,68 @@ describe('option resolution order', () => {
               'judge-1': 'readonly',
             },
           },
+        },
+      },
+    });
+
+    expect(providerCallMock).toHaveBeenLastCalledWith(
+      'task',
+      expect.objectContaining({ permissionMode: 'readonly' }),
+    );
+  });
+
+  it('should reject mixed explicit permission mode and permission resolution inputs', async () => {
+    loadProjectConfigMock.mockReturnValue({});
+    loadGlobalConfigMock.mockReturnValue({
+      provider: 'deepseek-harness',
+      language: 'en',
+      concurrency: 1,
+      taskPollIntervalMs: 500,
+    });
+
+    await expect(runAgent(undefined, 'task', {
+      cwd: '/repo',
+      permissionMode: 'readonly',
+      permissionResolution: { stepName: 'implement' },
+    })).rejects.toThrow('permissionMode cannot be combined with permissionResolution');
+    expect(providerCallMock).not.toHaveBeenCalled();
+  });
+
+  it('should omit synthesized permission modes from a provider that does not support them', async () => {
+    supportsPermissionControlsMock.mockReturnValue(false);
+    loadProjectConfigMock.mockReturnValue({});
+    loadGlobalConfigMock.mockReturnValue({
+      provider: 'deepseek-harness',
+      language: 'en',
+      concurrency: 1,
+      taskPollIntervalMs: 500,
+    });
+
+    await runAgent(undefined, 'task', {
+      cwd: '/repo',
+      permissionResolution: { stepName: 'implement' },
+    });
+
+    const callOptions = providerCallMock.mock.calls.at(-1)?.[1];
+    expect(callOptions?.permissionMode).toBeUndefined();
+  });
+
+  it('should preserve an explicit permission constraint for a provider without permission-control support', async () => {
+    supportsPermissionControlsMock.mockReturnValue(false);
+    loadProjectConfigMock.mockReturnValue({});
+    loadGlobalConfigMock.mockReturnValue({
+      provider: 'deepseek-harness',
+      language: 'en',
+      concurrency: 1,
+      taskPollIntervalMs: 500,
+    });
+
+    await runAgent(undefined, 'task', {
+      cwd: '/repo',
+      permissionResolution: {
+        stepName: 'implement',
+        providerProfiles: {
+          'deepseek-harness': { defaultPermissionMode: 'readonly' },
         },
       },
     });

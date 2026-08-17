@@ -540,6 +540,49 @@ function expandFacetListField(
   });
 }
 
+function expandInstructionField(
+  stepName: string,
+  value: RawWorkflowStep['instruction'],
+  params: NonNullable<RawWorkflowConfig['subworkflow']>['params'] | undefined,
+  resolvedArgs: Record<string, WorkflowCallArgValue>,
+  fieldPath: readonly PropertyKey[],
+): RawWorkflowStep['instruction'] {
+  if (value === undefined || isWorkflowParamReference(value)) {
+    return value === undefined
+      ? undefined
+      : resolveExpandedParamValue(
+        stepName,
+        'instruction',
+        value,
+        ['facet_ref', 'facet_ref[]'],
+        'instruction',
+        params,
+        resolvedArgs,
+        fieldPath,
+      ) as RawWorkflowStep['instruction'];
+  }
+  if (!Array.isArray(value)) {
+    return value;
+  }
+
+  return value.flatMap((entry, index) => {
+    if (!isWorkflowParamReference(entry)) {
+      return [entry];
+    }
+    const expanded = resolveExpandedParamValue(
+      stepName,
+      'instruction',
+      entry,
+      ['facet_ref', 'facet_ref[]'],
+      'instruction',
+      params,
+      resolvedArgs,
+      [...fieldPath, index],
+    ) as string | string[];
+    return Array.isArray(expanded) ? expanded : [expanded];
+  });
+}
+
 function expandWorkflowCallReference(
   step: RawWorkflowStep,
   params: NonNullable<RawWorkflowConfig['subworkflow']>['params'] | undefined,
@@ -687,18 +730,13 @@ function expandStepFields(
     }
   }
 
-  if (isWorkflowParamReference(step.instruction)) {
-    expandedStep.instruction = resolveExpandedParamValue(
-      step.name,
-      'instruction',
-      step.instruction,
-      ['facet_ref'],
-      'instruction',
-      params,
-      resolvedArgs,
-      [...stepPath, 'instruction'],
-    ) as RawWorkflowStep['instruction'];
-  }
+  expandedStep.instruction = expandInstructionField(
+    step.name,
+    step.instruction,
+    params,
+    resolvedArgs,
+    [...stepPath, 'instruction'],
+  );
 
   if (
     expandedStep.completion_retry !== null

@@ -4,18 +4,11 @@
 
 複数の結果をまとめる処理では、その処理に定められた規則で基準となる結果を一つ選ぶ。制御判断と外部向けの表現は、すべて同じ結果から作る。ほかの結果を記録に残してもよいが、規則にない優先順位で基準の結果を置き換えない。
 
-| 基準 | 判定 |
-|------|------|
-| status、分類、表示理由、abort 理由を別々の結果から作る | REJECT |
-| 分類した結果を選ぶ前に汎用エラーへ置き換える | REJECT |
-| 並列処理や batch ごとの優先順位を、共通の分類処理に埋め込む | REJECT |
-| 分類、基準となる結果の選択、出力を別々の処理が担当する | OK |
-| 対象の処理に定められた規則で結果を一度選び、すべての判断と表現をそこから作る | OK |
 
 各 response や exception は、共通の分類処理で、分類、原因、回復方法を持つ結果へ一度だけ変換する。並列処理、親子処理、batch などは、それぞれに定められた規則で基準となる結果を選ぶ。出力処理は、選ばれた結果から status、category、reason、retry・fallback・停止判断、abort 理由、外部向けの表現を作る。この3つの処理を、一つの汎用的な優先順位へまとめない。
 
 ```typescript
-// NG - sibling ごとに別々の親フィールドを選ぶ
+// 避ける例: sibling ごとに別々の親フィールドを選ぶ
 const retryable = outcomes.find((outcome) => outcome.recovery === 'retry');
 const categorized = outcomes.find((outcome) => outcome.category !== undefined);
 return {
@@ -24,7 +17,7 @@ return {
   abortReason: retryable?.detail,
 };
 
-// OK - boundary policy で一度選び、同じ primary を投影する
+// 例: boundary policy で一度選び、同じ primary を投影する
 const outcomes = responses.map(classifyOutcome);
 const primary = selectPrimaryOutcome(outcomes, boundaryPolicy);
 return {
@@ -56,11 +49,6 @@ return {
 
 パブリック API が公開するのは、ドメインの操作に対応する関数・型のみ。インフラの実装詳細（特定プロバイダーの関数、内部パーサー等）を公開しない。
 
-| 判定 | 基準 |
-|------|------|
-| REJECT | インフラ層の関数がパブリック API からエクスポートされている |
-| REJECT | 内部実装の関数が外部から直接呼び出し可能になっている |
-| OK | 外部消費者がドメインレベルの抽象のみを通じて対話する |
 
 **関数設計**
 
@@ -112,14 +100,7 @@ Vertical Slice の選択材料:
 | 複数機能が同じ業務規則と変更理由を共有する | 共通所有者を保つレイヤードまたはハイブリッドを検討 |
 | 機能固有の責務と横断基盤が別々の理由で変わる | 機能Sliceと共通基盤を分けるハイブリッドの候補 |
 
-禁止パターン:
-
-| パターン | 問題 |
-|---------|------|
-| `utils/` の肥大化 | 責務不明の墓場になる |
-| `common/` への安易な配置 | 依存関係が不明確になる |
-| 責務や所有者を表さないネスト | ナビゲーションと変更影響の把握が困難になる |
-| 機能とレイヤーの混在 | `features/services/` は禁止 |
+`utils/` や `common/` は、責務や所有者を表さないまま肥大化しやすい。機能とレイヤーを同じ階層で表す構造では、依存方向と変更影響を確認する。
 
 **責務の分離**
 
@@ -132,27 +113,14 @@ Vertical Slice の選択材料:
 
 HTTP、CLI、GraphQL、message consumer などの adapter は、内部例外を外部プロトコルの表現へ変換する境界である。endpoint や handler ごとに同じ try-catch / response 変換を散在させると、ステータス、エラー形状、ログ、認可失敗の扱いが不整合になりやすい。例外変換は adapter 境界の専用レイヤに集約し、真に横断的な変換だけを global handler に置く。
 
-| 基準 | 判定 |
-|------|------|
-| endpoint / handler ごとに同じ例外から同じプロトコル表現への変換を実装している | REJECT |
-| プロトコル表現への変換が application/domain 層に入っている | REJECT |
-| 特定 API 固有の例外変換を全 API 共通の global handler に置いている | REJECT |
-| adapter 境界の例外変換レイヤで、外部表現への変換を一元化している | OK |
 
 ## 境界での解決
 
 設定、Option、provider、権限、パスのような値は、境界で解決してから内部へ渡す。メイン処理は「何が解決済みか」を前提に組み立て、各所で設定ソースを問い合わせない。
 
-| 基準 | 判定 |
-|------|------|
-| 入口で `ExecutionContext` や `ResolvedOptions` のような解決済みオブジェクトを作る | OK |
-| オーケストレーション層が解決済みの値だけを扱う | OK |
-| 下位層が global/project/env を再読込して同じ値を再解決する | REJECT |
-| 表示用と実行用で別々の解決関数を持つ | REJECT |
-| 未解決の options を深い層まで運び、先で `??` 解決する | REJECT |
 
 ```typescript
-// REJECT - 実行層が設定ソースを直接知っている
+// 避ける例: 実行層が設定ソースを直接知っている
 async function executeWorkflow(options) {
   const engine = new WorkflowEngine({
     provider: options.provider ?? globalConfig.provider,
@@ -166,7 +134,7 @@ class AgentRunner {
   }
 }
 
-// OK - 境界で解決し、内部は解決済み値を使う
+// 例: 境界で解決し、内部は解決済み値を使う
 async function executeWorkflow(options) {
   const context = resolveExecutionContext(options);
   const engine = new WorkflowEngine(context);
@@ -183,40 +151,22 @@ class AgentRunner {
 
 下位層に設定ソースを問い合わせさせるのではなく、上位層が「これを使え」と解決済みの値を渡す。値の選択責務と実行責務を分離する。
 
-| パターン | 判定 |
-|---------|------|
-| 上位層が `resolvedProvider` のような値を渡す | OK |
-| 下位層が `options` を覗いて自前で解決する | REJECT |
-| 実行オブジェクトが `setup(config)` 後は `run()` だけ公開する | OK |
-| 実行中に `getGlobalConfig()` を呼んで分岐する | REJECT |
 
 ### 腐敗防止層
 
 優先順位解決や外部設定形式の吸収は、境界の専用層に閉じ込める。内部モデルへは正規化済みの値だけを渡す。
 
-| パターン | 判定 |
-|---------|------|
-| YAML/env/CLI 差分を resolver/adapter に閉じ込める | OK |
-| ドメイン層が env 名や設定キー文字列を直接扱う | REJECT |
-| 外部形式から内部形式への変換が1箇所に集約されている | OK |
-| 同じ正規化ロジックが複数箇所にコピーされている | REJECT |
 
 ### 候補解決と値合成の分離
 
 複数の候補から参照先を選ぶ処理と、選ばれた値を合成する処理は別の契約として扱う。探索順、上書き規則、参照種別を混ぜると、表示・検証・実行で別の結果になりやすい。
 
-| 基準 | 判定 |
-|------|------|
-| 候補探索が first-match なのに、値合成の deep merge と混同して複数候補を暗黙に合成する | REJECT |
-| 近いスコープの候補が遠いスコープの候補より後に探索される | REJECT |
-| 参照文字列を「区切り文字を含むか」だけで分類し、特殊参照と明示パスを混同する | REJECT |
-| 候補探索、参照種別の分類、値合成の責務が別関数として読める | OK |
 
 ```typescript
-// REJECT - 参照種別と探索基準が1つの条件に混ざっている
+// 避ける例: 参照種別と探索基準が1つの条件に混ざっている
 const root = ref.includes('/') ? currentRoot : ownerRoot
 
-// OK - 種別を先に分類し、種別ごとの探索契約を分ける
+// 例: 種別を先に分類し、種別ごとの探索契約を分ける
 const kind = classifyReference(ref)
 const root = resolveRootForReference(kind, resolvedPath)
 ```
@@ -225,34 +175,21 @@ const root = resolveRootForReference(kind, resolvedPath)
 
 外部ファイルや設定から読む値は、構文上 valid でも期待する shape とは限らない。境界で unknown として受け、配列・record・scalar へ正規化してから内部処理へ渡す。
 
-| 基準 | 判定 |
-|------|------|
-| parse 直後の unknown 値に配列メソッドやプロパティアクセスを直接行う | REJECT |
-| 「存在する」だけでファイル種別やディレクトリ要件を満たしたと扱う | REJECT |
-| unknown を境界で内部型へ正規化し、契約外shapeを無視・正規化・明示エラーのいずれかに固定する | OK |
-| ファイルとディレクトリの要件を実体種別まで確認する | OK |
 
 ### フェーズ分離
 
 入力、解釈、実行、出力を段階で分ける。反復処理は、できる限り「解釈済みの入力をまとめて受け取り、実行だけを繰り返す」構造にする。
 
-| 基準 | 判定 |
-|------|------|
-| 入口で raw input を `Resolved*` 型へ変換してから本処理に渡す | OK |
-| ループ本体が解決済みデータに対する実行だけを担う | OK |
-| ループ内で毎回 config/env/option を解釈する | REJECT |
-| 反復ごとに「入力取得→解釈→実行→出力」を1関数に詰め込む | REJECT |
-| 最適化で逐次処理が必要でも、解釈フェーズを専用メソッドに隔離している | OK |
 
 ```typescript
-// REJECT - 各反復が入力解釈まで担う
+// 避ける例: 各反復が入力解釈まで担う
 for (const item of items) {
   const resolved = resolveItem(item, rawOptions, config);
   const result = execute(resolved);
   output(result);
 }
 
-// OK - 先に解釈し、反復は実行だけ
+// 例: 先に解釈し、反復は実行だけ
 const resolvedItems = items.map((item) => resolveItem(item, rawOptions, config));
 
 for (const item of resolvedItems) {
@@ -269,42 +206,33 @@ for (const item of resolvedItems) {
 
 コードの動作をそのまま言い換えているコメントを検出する。
 
-| 判定 | 基準 |
-|------|------|
-| REJECT | コードの動作をそのまま自然言語で言い換えている |
-| REJECT | 関数名・変数名から明らかなことを繰り返している |
-| REJECT | JSDocが関数名の言い換えだけで情報を追加していない |
-| OK | なぜその実装を選んだかの設計判断を説明している |
-| OK | 一見不自然に見える挙動の理由を説明している |
-| OK | 定数・マジックナンバーの算出根拠や内訳を説明している |
-| 最良 | コメントなしでコード自体が意図を語っている |
 
 ```typescript
-// REJECT - コードの言い換え（What）
+// 避ける例: コードの言い換え（What）
 // If interrupted, abort immediately
 if (status === 'interrupted') {
   return ABORT_STEP;
 }
 
-// REJECT - ループの存在を言い換えただけ
+// 避ける例: ループの存在を言い換えただけ
 // Check transitions in order
 for (const transition of step.transitions) {
 
-// REJECT - 関数名の繰り返し
+// 避ける例: 関数名の繰り返し
 /** Check if status matches transition condition. */
 export function matchesCondition(status: Status, condition: TransitionCondition): boolean {
 
-// OK - 設計判断の理由（Why）
+// 例: 設計判断の理由（Why）
 // ユーザー中断はワークフロー定義のトランジションより優先する
 if (status === 'interrupted') {
   return ABORT_STEP;
 }
 
-// OK - 一見不自然な挙動の理由
+// 例: 一見不自然な挙動の理由
 // stay はループを引き起こす可能性があるが、ユーザーが明示的に指定した場合のみ使われる
 return step.name;
 
-// OK - 定数の算出根拠
+// 例: 定数の算出根拠
 // paddingTop + paddingBottom + button height
 const footerHeight = 24 + 12 + 48;
 ```
@@ -314,27 +242,27 @@ const footerHeight = 24 + 12 + 48;
 配列やオブジェクトの直接変更（ミューテーション）を検出する。
 
 ```typescript
-// REJECT - 配列の直接変更
+// 避ける例: 配列の直接変更
 const steps: Step[] = getSteps();
 steps.push(newStep);           // 元の配列を破壊
 steps.splice(index, 1);       // 元の配列を破壊
 steps[0].status = 'done';     // ネストされたオブジェクトも直接変更
 
-// OK - イミュータブルな操作
+// 例: イミュータブルな操作
 const withNew = [...steps, newStep];
 const without = steps.filter((_, i) => i !== index);
 const updated = steps.map((s, i) =>
   i === 0 ? { ...s, status: 'done' } : s
 );
 
-// REJECT - オブジェクトの直接変更
+// 避ける例: オブジェクトの直接変更
 function updateConfig(config: Config) {
   config.logLevel = 'debug';   // 引数を直接変更
   config.steps.push(newStep);  // ネストも直接変更
   return config;
 }
 
-// OK - 新しいオブジェクトを返す
+// 例: 新しいオブジェクトを返す
 function updateConfig(config: Config): Config {
   return {
     ...config,
@@ -355,19 +283,6 @@ function updateConfig(config: Config): Config {
 - 依存性注入が可能な設計か
 - モック可能か
 - テストが書かれているか
-
-## アンチパターン検出
-
-以下のパターンを見つけたら REJECT:
-
-| アンチパターン | 問題 |
-|---------------|------|
-| God Class/Component | 1つのクラスが多くの責務を持っている |
-| Feature Envy | 他モジュールのデータを頻繁に参照している |
-| Shotgun Surgery | 1つの変更が複数ファイルに波及する構造 |
-| 過度な汎用化 | 今使わないバリアントや拡張ポイント |
-| 隠れた依存 | 子コンポーネントが暗黙的にAPIを呼ぶ等 |
-| 非イディオマティック | 言語・FWの作法を無視した独自実装 |
 
 ## 抽象化レベルの評価
 
@@ -441,40 +356,6 @@ function createUser(data: UserData) {
 
 未完成コードの判定基準はコーディングポリシーに従う。アーキテクチャレビューでは、TODO/FIXME、空実装、スタブが設計上必要な境界・認可・バリデーション・契約更新の代替になっていないかを見る。
 
-Issue番号・外部制約・除去条件のない TODO/FIXME は REJECT。
-
-```kotlin
-// REJECT - 認可チェックをTODOで先送り
-// TODO: 施設IDによる認可チェックを追加
-fun deleteCustomHoliday(@PathVariable id: String) {
-    deleteCustomHolidayInputPort.execute(input)
-}
-
-// APPROVE - 今実装する
-fun deleteCustomHoliday(@PathVariable id: String) {
-    val currentUserFacilityId = getCurrentUserFacilityId()
-    val holiday = findHolidayById(id)
-    require(holiday.facilityId == currentUserFacilityId) {
-        "Cannot delete holiday from another facility"
-    }
-    deleteCustomHolidayInputPort.execute(input)
-}
-```
-
-TODO/FIXMEが許容されるケース:
-
-| 条件 | 例 | 判定 |
-|------|-----|------|
-| 外部依存で今は実装不可 + Issue化済み + 除去条件あり | `// TODO(#123): APIキー取得後に実装` | 許容 |
-| 技術的制約で回避不可 + Issue化済み + 除去条件あり | `// TODO(#456): ライブラリバグ修正待ち` | 許容 |
-| 「将来実装」「後で追加」 | `// TODO: バリデーション追加` | REJECT |
-| 「時間がないので」 | `// TODO: リファクタリング` | REJECT |
-
-正しい対処:
-- 今必要 → 今実装する
-- 今不要 → コードを削除する
-- 外部要因で不可 → Issue化してチケット番号をコメントに入れる
-
 ## DRY違反の検出
 
 DRY はコード形状ではなく知識の重複を減らす原則である。同じ意味・契約・変更理由を持つ実装が2つ確認できたら、共通の所有者へ集約するか判断する。集約方法は関数、値オブジェクト、コンポーネント、ポリシーなど、その責務に最も自然な形を選ぶ。
@@ -494,14 +375,6 @@ DRY にしないケース:
 | 設定ファイルの追加・変更 | 文書化された schema、必須フィールド、有効値 |
 | 型・schema の追加・変更 | producer、consumer、利用者向け説明、変更対象外の有効な設定 |
 | 設計制約に関わる変更 | その制約を定める一次仕様と実装境界 |
-
-このパターンを見つけたら REJECT:
-
-| パターン | 問題 |
-|---------|------|
-| 仕様に存在しないフィールドの使用 | 無視されるか予期しない動作 |
-| 仕様上無効な値の設定 | 実行時エラーまたは無視される |
-| 文書化された制約への違反 | 設計意図に反する |
 
 ## 呼び出しチェーン検証
 
@@ -546,7 +419,7 @@ export async function executeWorkflow(config, cwd, task, options?) {
 モジュールが公開する共有状態（初期状態、シングルトン、設定オブジェクト）では、利用側の変更が別の利用者へ漏れないことが重要である。必要な保証は観測可能な分離であり、ファクトリ、防御的コピー、永続データ構造、freeze などは実装上の選択肢である。公開契約が方式まで定めない限り、再帰的 freeze や参照同一性そのものを必須にしない。
 
 ```typescript
-// REJECT - 可変の公開初期状態。利用側が書き換えると全 replay の起点が汚染される
+// 避ける例: 可変の公開初期状態。利用側が書き換えると全 replay の起点が汚染される
 export const initialState: State = { count: 0, entries: {} };
 
 // 選択肢 - freeze で保護（ネストも含めて）

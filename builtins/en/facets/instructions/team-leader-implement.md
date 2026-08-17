@@ -1,4 +1,4 @@
-{{include:instructions/contract-family-decomposition-boundary}}
+{{include:instructions/task-decomposition-boundary}}
 {{include:instructions/team-leader-part-error-completion}}
 
 Analyze the implementation task and, if decomposition is appropriate, split into multiple parts for parallel execution.

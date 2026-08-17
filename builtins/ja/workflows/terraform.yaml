@@ -1,5 +1,16 @@
 name: terraform
 description: Terraform IaC 開発ワークフロー（plan → implement → 並列レビュー → 最終ゲート → 修正 → 完了）
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 max_steps: 15
 initial_step: plan
 steps:
@@ -9,7 +20,9 @@ steps:
       - plan
     edit: false
     persona: planner
-    policy: contract-change
+    policy:
+      - contract-change
+      - terraform
     knowledge: terraform-aws
     rules:
       - condition: 要件が明確で実装可能
@@ -127,7 +140,7 @@ steps:
       - review
     edit: false
     persona: supervisor
-    policy: [contract-change]
+    policy: [contract-change, terraform]
     knowledge: terraform-aws
     instruction: supervise
     rules:
@@ -152,7 +165,7 @@ steps:
       - supervise
     edit: &terraform_supervise_edit false
     persona: &terraform_supervise_persona supervisor
-    policy: &terraform_supervise_policy [contract-change, review]
+    policy: &terraform_supervise_policy [contract-change, review, terraform]
     knowledge: &terraform_supervise_knowledge terraform-aws
     instruction: &terraform_supervise_instruction supervise
     rules:
@@ -266,9 +279,9 @@ loop_monitors:
         レビュー → 修正のサイクルが {cycle_count} 回繰り返されました。
         Report Directory 内のレビューレポート履歴を確認し、収束状況を判断してください。
 
-        - 修正進捗: 既存 finding の受入条件が満たされたか
-        - 報告の収束: 正しい構造・契約上の new findings がレビュー回ごとに追加され続けていないか
-        - 異なる finding であること自体は進捗の根拠にせず、件数は補助情報に留める
+        - 修正進捗: 報告された問題の受入条件が満たされたか
+        - 報告の収束: 正しい構造・契約上の問題がレビュー回ごとに追加され続けていないか
+        - 異なる問題であること自体は進捗の根拠にせず、件数は補助情報に留める
       rules:
         - condition: 健全（修正進捗があり、報告内容も収束している）
           next: fix_both
@@ -284,9 +297,9 @@ loop_monitors:
         AI修正 → レビューのサイクルが {cycle_count} 回繰り返されました。
         Report Directory 内のレビューレポート履歴を確認し、収束状況を判断してください。
 
-        - 修正進捗: 既存 finding の受入条件が満たされたか
-        - 報告の収束: 正しい構造・契約上の new findings がレビュー回ごとに追加され続けていないか
-        - 異なる finding であること自体は進捗の根拠にせず、件数は補助情報に留める
+        - 修正進捗: 報告された問題の受入条件が満たされたか
+        - 報告の収束: 正しい構造・契約上の問題がレビュー回ごとに追加され続けていないか
+        - 異なる問題であること自体は進捗の根拠にせず、件数は補助情報に留める
       rules:
         - condition: 健全（修正進捗があり、報告内容も収束している）
           next: ai-antipattern-fix
@@ -302,9 +315,9 @@ loop_monitors:
         監督修正 → レビューのサイクルが {cycle_count} 回繰り返されました。
         Report Directory 内のレビューレポート履歴を確認し、収束状況を判断してください。
 
-        - 修正進捗: 既存 finding の受入条件が満たされたか
-        - 報告の収束: 正しい構造・契約上の new findings がレビュー回ごとに追加され続けていないか
-        - 異なる finding であること自体は進捗の根拠にせず、件数は補助情報に留める
+        - 修正進捗: 報告された問題の受入条件が満たされたか
+        - 報告の収束: 正しい構造・契約上の問題がレビュー回ごとに追加され続けていないか
+        - 異なる問題であること自体は進捗の根拠にせず、件数は補助情報に留める
       rules:
         - condition: 健全（修正進捗があり、報告内容も収束している）
           next: supervise_fix

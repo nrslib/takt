@@ -1,4 +1,4 @@
-{{include:instructions/contract-family-test-authoring}}
+{{include:instructions/test-obligation-mapping}}
 
 Implement missing E2E tests based on the test case list.
 

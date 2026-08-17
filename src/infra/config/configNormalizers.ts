@@ -802,6 +802,37 @@ export function denormalizeProviderOptions(
       },
     };
   }
+  if (providerOptions.deepseekHarness !== undefined) {
+    const deepseekHarness = {
+      ...(providerOptions.deepseekHarness.pythonPath !== undefined
+        ? { python_path: providerOptions.deepseekHarness.pythonPath }
+        : {}),
+      ...(providerOptions.deepseekHarness.baseUrl !== undefined
+        ? { base_url: providerOptions.deepseekHarness.baseUrl }
+        : {}),
+      ...(providerOptions.deepseekHarness.sessionRoot !== undefined
+        ? { session_root: providerOptions.deepseekHarness.sessionRoot }
+        : {}),
+      ...(providerOptions.deepseekHarness.cordis !== undefined
+        ? { cordis: providerOptions.deepseekHarness.cordis }
+        : {}),
+      ...(providerOptions.deepseekHarness.maxTokens !== undefined
+        ? { max_tokens: providerOptions.deepseekHarness.maxTokens }
+        : {}),
+      ...(providerOptions.deepseekHarness.requestTimeoutMs !== undefined
+        ? { request_timeout_ms: providerOptions.deepseekHarness.requestTimeoutMs }
+        : {}),
+      ...(providerOptions.deepseekHarness.shutdownTimeoutMs !== undefined
+        ? { shutdown_timeout_ms: providerOptions.deepseekHarness.shutdownTimeoutMs }
+        : {}),
+      ...(providerOptions.deepseekHarness.runtimeMode !== undefined
+        ? { runtime_mode: providerOptions.deepseekHarness.runtimeMode }
+        : {}),
+    };
+    if (Object.keys(deepseekHarness).length > 0) {
+      raw.deepseek_harness = deepseekHarness;
+    }
+  }
   if (providerOptions.pi !== undefined) {
     const pi = {
       ...(providerOptions.pi.guards?.callTimeoutMs !== undefined

@@ -39,7 +39,7 @@ steps: [...]                  # step 定義の配列（推奨キー名）
 loop_monitors: [...]          # ループ監視設定（任意）。cycle には step 名を並べる
 ```
 
-`all_steps.rules` はすべての agent step の Phase 1 指示へ適用するルール参照です。参照は project `.takt/workflows/rules/`、global `~/.takt/workflows/rules/`、builtin の順に `<ref>.md` を解決します。文字列は自動実行ルールの後、object の `position: before_instruction` は `Instructions` の直前に挿入されます。ルールは `workflow_call` の子へ親から子の順で加算継承されます。レポート出力・ステータス判定・companion には適用されず、必須出力見出しと `{report:...}` を含むルールファイルはロード時に拒否されます。`all_steps` を省略した場合は従来の prompt を維持します。
+`all_steps.rules` はすべての agent step の Phase 1 指示へ適用するルール参照です。参照は project `.takt/workflows/rules/`、global `~/.takt/workflows/rules/`、builtin の順に `<ref>.md` を解決します。文字列は自動実行ルールの後、object の `position: before_instruction` は `Instructions` の直前に挿入されます。ルールは `workflow_call` の子へ親から子の順で加算継承されます。親子で `ref`・`position`・解決済み内容がすべて一致する場合は親側を残して1回だけ適用し、同じ `ref` でも位置または内容が異なる場合は両方を維持します。レポート出力・ステータス判定・companion には適用されず、必須出力見出しと `{report:...}` を含むルールファイルはロード時に拒否されます。`all_steps` を省略した場合は従来の prompt を維持します。
 
 ### セクションマップの解決
 
@@ -101,6 +101,8 @@ fragment root の `params` は必須の型付き parameter を宣言し、`uses`
 ```
 
 **`instruction`**: セクションマップ → パス → 3-layer facet → インラインの順で解決する正式フィールド。`instruction_template` は受理されない。
+
+`instruction` は scalar または空でない順序付き配列を指定できます。配列の各要素は facet 参照またはインライン文字列で、記述順に解決して `\n\n---\n\n` で結合します。callable workflow では `facet_ref` / `facet_ref[]` parameter を配列要素の `{ $param: name }` で参照でき、`facet_ref[]` はその位置へ平坦化されます。
 
 ### Parallel step（親 + `parallel`）
 

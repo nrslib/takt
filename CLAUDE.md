@@ -75,7 +75,7 @@ Each normal step runs up to three phases on the same provider session: Phase 1 m
 
 ### Provider integration
 
-`src/infra/providers/` exposes a unified `Provider` interface. Registered: `claude-sdk`, `claude` (headless CLI), `codex`, `opencode` (shared server pool), `pi` (Pi SDK), `cursor`, `copilot`, `kiro`, `mock`. **Provider errors must surface through `AgentResponse.error`** — otherwise SDK failures appear as empty `blocked` output and are nearly impossible to debug. Use `--provider mock` to exercise the engine without a real API.
+`src/infra/providers/` exposes a unified `Provider` interface. Registered: `claude-sdk`, `claude` (headless CLI), `codex`, `opencode` (shared server pool), `pi` (Pi SDK), `deepseek-harness` (official Python SDK bridge), `cursor`, `copilot`, `kiro`, `mock`. **Provider errors must surface through `AgentResponse.error`** — otherwise SDK failures appear as empty `blocked` output and are nearly impossible to debug. Use `--provider mock` to exercise the engine without a real API.
 
 ### Provider/model resolution priority
 

@@ -13,6 +13,7 @@ import {
   resolveProfileScopedProviderOptionsLayers,
   mergeProviderOptions,
   resolveProviderOptionsSources,
+  resolveTrustedDeepSeekHarnessPaths,
   type ProviderOptionsLayer,
 } from '../../../infra/config/providerOptions.js';
 import {
@@ -24,6 +25,7 @@ import {
 } from './engine-provider-options.js';
 import {
   providerSupportsMaxTurns,
+  providerSupportsPermissionControls,
   providerSupportsStructuredOutput,
 } from '../../../infra/providers/provider-capabilities.js';
 import type {
@@ -439,8 +441,15 @@ export class OptionsBuilder {
     const providerInfo = this.resolveStepProviderModel(step, runtime);
     const { provider: resolvedProvider, model: resolvedModel } = providerInfo;
 
-    const providerOptions = mergedProviderOptions
-      ?? this.resolveMergedProviderOptions(step, providerInfo, runtime);
+    const providerOptionsSources = {
+      ...this.resolveProviderOptionsSourcesForStep(step, providerInfo),
+      ...providerInfo.providerOptionsSources,
+    };
+    const providerOptions = resolveTrustedDeepSeekHarnessPaths(
+      mergedProviderOptions ?? this.resolveMergedProviderOptions(step, providerInfo, runtime),
+      this.getCwd(),
+      providerOptionsSources,
+    );
     const workflowMeta: WorkflowMeta = {
       workflowName: this.getWorkflowName(),
       workflowDescription: this.getWorkflowDescription(),
@@ -505,6 +514,8 @@ export class OptionsBuilder {
       workflowBundleResourceRoot: baseOptions.workflowBundleResourceRoot,
       resolvedProvider: baseOptions.resolvedProvider,
       resolvedModel: baseOptions.resolvedModel,
+      permissionMode: baseOptions.permissionMode,
+      permissionResolution: baseOptions.permissionResolution,
       providerOptions: baseOptions.providerOptions,
       resolvedProviderOptions: baseOptions.resolvedProviderOptions,
       language: baseOptions.language,
@@ -613,6 +624,28 @@ export class OptionsBuilder {
     };
   }
 
+  private resolveReadonlyPhaseConstraints(
+    step: WorkflowStep,
+    allowedTools: string[] | undefined,
+    runtime?: RuntimeStepResolution,
+  ): Pick<RunAgentOptions, 'permissionMode' | 'permissionResolution' | 'allowedTools'> {
+    const { provider: resolvedProvider } = this.resolveStepProviderModel(step, runtime);
+    const supportsPermissionControls = providerSupportsPermissionControls(resolvedProvider);
+    if (supportsPermissionControls === false) {
+      // Empty tools are the synthetic report-phase default. Preserve a
+      // non-empty caller constraint so unsupported providers can reject it at
+      // their boundary instead of silently running without the constraint.
+      return allowedTools !== undefined && allowedTools.length > 0
+        ? { allowedTools }
+        : {};
+    }
+    return {
+      permissionMode: 'readonly' as const,
+      permissionResolution: undefined,
+      allowedTools,
+    };
+  }
+
   /**
    * Build RunAgentOptions for session-resume phases (Phase 2, Phase 3).
    *
@@ -629,10 +662,8 @@ export class OptionsBuilder {
     const maxTurns = this.resolveSupportedMaxTurns(step, overrides.maxTurns, runtime);
     return {
       ...this.buildReadonlyPhaseBaseOptions(step, undefined, runtime),
-      // Report/status phases are read-only regardless of step settings.
-      permissionMode: 'readonly',
+      ...this.resolveReadonlyPhaseConstraints(step, [], runtime),
       sessionId,
-      allowedTools: [],
       ...(maxTurns !== undefined ? { maxTurns } : {}),
     };
   }
@@ -646,8 +677,7 @@ export class OptionsBuilder {
     const maxTurns = this.resolveSupportedMaxTurns(step, overrides.maxTurns, runtime);
     return {
       ...this.buildReadonlyPhaseBaseOptions(step, undefined, runtime),
-      permissionMode: 'readonly',
-      allowedTools: overrides.allowedTools,
+      ...this.resolveReadonlyPhaseConstraints(step, overrides.allowedTools, runtime),
       ...(maxTurns !== undefined ? { maxTurns } : {}),
     };
   }
@@ -667,9 +697,8 @@ export class OptionsBuilder {
     const maxTurns = this.resolveSupportedMaxTurns(step, overrides.maxTurns, fallbackRuntime);
     const options: RunAgentOptions = {
       ...this.buildReadonlyPhaseBaseOptions(step, undefined, fallbackRuntime),
-      permissionMode: 'readonly',
+      ...this.resolveReadonlyPhaseConstraints(step, overrides.allowedTools, fallbackRuntime),
       sessionId: undefined,
-      allowedTools: overrides.allowedTools,
       ...(maxTurns !== undefined ? { maxTurns } : {}),
     };
 

@@ -131,7 +131,7 @@ Run it through `npm run eval:prompts:security-review-method`.
 | `task-instruction-gherkin` | interactive task summarization | direct English and Japanese conversations | whether implementation details and abstraction intent remain in Markdown while focused Gherkin captures only externally observable behavior |
 | `final-readiness-supervision` | review-fix-default / supervise Phase 1 | final-readiness-supervision | whether the supervisor authorizes a newly discovered required consumer, explains its initial-round omission, and avoids horizontal exploration |
 | `final-readiness-preservation` | review-fix-default / supervise Phase 2 | final-readiness-supervision | whether the supervisor preserves the new finding and keeps adjudicated noise non-actionable |
-| `final-readiness-precision` | review-fix-default / supervise | final-readiness-precision | two cases: APPROVE when every requirement is fulfilled even though no mock E2E execution record exists, and REJECT when the project-configuration source requirement is unmet without substituting the absent mock E2E record as the reason |
+| `final-readiness-precision` | review-fix-default / supervise | final-readiness-precision | three cases: APPROVE when every code requirement is fulfilled despite an absent mock E2E record, REJECT for an unmet code requirement, and BLOCKED for an external decision that task-scope code changes cannot provide |
 
 The `coding` suite requires both Claude and Codex CLI logins and is excluded
 from the default suite run. Invoke it explicitly with
@@ -259,7 +259,7 @@ relative to the config file's directory (`eval/`), not the process cwd.
   the grader to
   save subscription quota. This trades fidelity vs production runs — only
   compare scores between runs with the same effort setting. Known effect:
-  minor findings (e.g. the TODO-without-issue plant) become flaky at low
+  minor planted findings can become flaky at low
   effort; quantify with `--repeat` before judging a facet change. The
   `fix-loop-convergence` and `initial-review-external-identity-wiring` suites
   are explicit production-condition exceptions: their Codex CLI rows use

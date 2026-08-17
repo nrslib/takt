@@ -1,5 +1,16 @@
 name: terraform
 description: Terraform IaC development workflow (plan → implement → parallel review → final gate → fix → complete)
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 max_steps: 15
 initial_step: plan
 steps:
@@ -9,7 +20,9 @@ steps:
       - plan
     edit: false
     persona: planner
-    policy: contract-change
+    policy:
+      - contract-change
+      - terraform
     knowledge: terraform-aws
     rules:
       - condition: Requirements are clear and implementable
@@ -127,7 +140,7 @@ steps:
       - review
     edit: false
     persona: supervisor
-    policy: [contract-change]
+    policy: [contract-change, terraform]
     knowledge: terraform-aws
     instruction: supervise
     rules:
@@ -152,7 +165,7 @@ steps:
       - supervise
     edit: &terraform_supervise_edit false
     persona: &terraform_supervise_persona supervisor
-    policy: &terraform_supervise_policy [contract-change, review]
+    policy: &terraform_supervise_policy [contract-change, review, terraform]
     knowledge: &terraform_supervise_knowledge terraform-aws
     instruction: &terraform_supervise_instruction supervise
     rules:
@@ -266,9 +279,9 @@ loop_monitors:
         The review → fix cycle has repeated {cycle_count} times.
         Check the review report history in the Report Directory and assess convergence.
 
-        - Fix progress: whether existing findings satisfy their acceptance criteria
-        - Report convergence: whether valid structural or contract findings keep being added across review rounds
-        - A different finding is not progress by itself; treat counts as supporting information
+        - Fix progress: whether reported problems satisfy their acceptance criteria
+        - Report convergence: whether valid structural or contract problems keep being added across review rounds
+        - A different problem is not progress by itself; treat counts as supporting information
       rules:
         - condition: Healthy (fixes progressing and report content converging)
           next: fix_both
@@ -284,9 +297,9 @@ loop_monitors:
         The AI fix → review cycle has repeated {cycle_count} times.
         Check the review report history in the Report Directory and assess convergence.
 
-        - Fix progress: whether existing findings satisfy their acceptance criteria
-        - Report convergence: whether valid structural or contract findings keep being added across review rounds
-        - A different finding is not progress by itself; treat counts as supporting information
+        - Fix progress: whether reported problems satisfy their acceptance criteria
+        - Report convergence: whether valid structural or contract problems keep being added across review rounds
+        - A different problem is not progress by itself; treat counts as supporting information
       rules:
         - condition: Healthy (fixes progressing and report content converging)
           next: ai-antipattern-fix
@@ -302,9 +315,9 @@ loop_monitors:
         The supervisor fix → review cycle has repeated {cycle_count} times.
         Check the review report history in the Report Directory and assess convergence.
 
-        - Fix progress: whether existing findings satisfy their acceptance criteria
-        - Report convergence: whether valid structural or contract findings keep being added across review rounds
-        - A different finding is not progress by itself; treat counts as supporting information
+        - Fix progress: whether reported problems satisfy their acceptance criteria
+        - Report convergence: whether valid structural or contract problems keep being added across review rounds
+        - A different problem is not progress by itself; treat counts as supporting information
       rules:
         - condition: Healthy (fixes progressing and report content converging)
           next: supervise_fix

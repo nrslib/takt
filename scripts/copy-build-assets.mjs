@@ -31,3 +31,4 @@ copyMatchingFiles('src/shared/prompts/ja/parts', 'dist/shared/prompts/ja/parts',
 copyFile('src/shared/i18n/labels_en.yaml', 'dist/shared/i18n/labels_en.yaml');
 copyFile('src/shared/i18n/labels_ja.yaml', 'dist/shared/i18n/labels_ja.yaml');
 copyMatchingFiles('src/core/runtime/presets', 'dist/core/runtime/presets', '.sh');
+copyFile('src/infra/deepseek-harness/bridge.py', 'dist/infra/deepseek-harness/bridge.py');
