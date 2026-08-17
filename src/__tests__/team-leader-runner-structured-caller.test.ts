@@ -1993,6 +1993,16 @@ describe('TeamLeaderRunner with structuredCaller', () => {
 
     await runner.runTeamLeaderStep(step, state, 'implement feature', 5, vi.fn());
 
+    const [, , decomposeOptions] = structuredCaller.decomposeTask.mock.calls[0] ?? [];
+    const [, , , requestOptions] = structuredCaller.requestMoreParts.mock.calls[0] ?? [];
+    expect(decomposeOptions).toEqual(expect.objectContaining({
+      inspectTools: ['read', 'glob', 'grep'],
+      inspectGuidance: true,
+    }));
+    expect(requestOptions).toEqual(expect.objectContaining({
+      inspectTools: ['read', 'glob', 'grep'],
+      inspectGuidance: true,
+    }));
     const [, feedbackResults] = structuredCaller.requestMoreParts.mock.calls[0] ?? [];
     const feedbackEntry = (feedbackResults as Array<{ id: string; content: string }>)[0];
     expect(feedbackEntry.content).not.toContain(fullContent);
@@ -2004,6 +2014,108 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     });
     expect(feedbackEntry.content).toContain(`[full report: ${reportPath.absolutePath}]`);
     expect(readFileSync(reportPath.absolutePath, 'utf-8')).toContain(fullContent);
+  });
+
+  it('Given no teamLeader.inspectTools and a Codex leader, When running, Then inspectTools stays undefined but inspectGuidance is true', async () => {
+    const projectDir = createTrackedTeamLeaderTestDirectory('takt-leader-default-codex-');
+    mockExecuteAgent.mockResolvedValue({
+      persona: 'coder',
+      status: 'done',
+      content: 'API done',
+      timestamp: new Date('2026-04-01T00:00:00.000Z'),
+    });
+    const resolveStepProviderModel = vi.fn().mockReturnValue({
+      provider: 'codex',
+      model: 'gpt-5.5',
+    });
+
+    const structuredCaller = {
+      decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxInitialParts, options) => {
+        options.onPromptResolved?.({
+          systemPrompt: 'team-leader-system',
+          userInstruction: 'leader instruction',
+        });
+        return { parts: [
+          { id: 'part-1', title: 'API', instruction: 'Implement API' },
+        ] };
+      }),
+      requestMoreParts: vi.fn().mockResolvedValue({
+        done: true,
+        reasoning: 'enough',
+        cancelPartIds: [],
+        parts: [],
+      }),
+    };
+
+    const runner = new TeamLeaderRunner({
+      optionsBuilder: {
+        buildAgentOptions: vi.fn().mockReturnValue({ cwd: projectDir }),
+        buildBaseOptions: vi.fn().mockReturnValue({}),
+        buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+        resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
+        resolveStepProviderModel,
+      },
+      stepExecutor: {
+        buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
+        persistPreviousResponseSnapshot: vi.fn(),
+        emitStepReports: vi.fn(),
+      },
+      engineOptions: {
+        projectCwd: projectDir,
+        structuredCaller,
+        language: 'ja',
+      },
+      getCwd: () => projectDir,
+      getWorkflowName: () => 'workflow',
+      getInteractive: () => false,
+      getRunPaths: () => buildRunPaths(projectDir, 'run'),
+    } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+      engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller; language: 'ja' };
+    });
+
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      instruction: 'Task: {task}',
+      passPreviousResponse: true,
+      teamLeader: {
+        persona: 'team-leader',
+        maxConcurrency: 1,
+        timeoutMs: 1000,
+        partPersona: 'coder',
+      },
+      rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
+    };
+    const state: WorkflowState = {
+      workflowName: 'workflow',
+      currentStep: 'implement',
+      iteration: 1,
+      stepOutputs: new Map(),
+      structuredOutputs: new Map(),
+      systemContexts: new Map(),
+      effectResults: new Map(),
+      lastOutput: undefined,
+      previousResponseSourcePath: undefined,
+      userInputs: [],
+      personaSessions: new Map(),
+      stepIterations: new Map(),
+      status: 'running',
+    };
+
+    await runner.runTeamLeaderStep(step, state, 'implement feature', 5, vi.fn());
+
+    const [, , decomposeOptions] = structuredCaller.decomposeTask.mock.calls[0] ?? [];
+    const [, , , requestOptions] = structuredCaller.requestMoreParts.mock.calls[0] ?? [];
+    expect(decomposeOptions).toEqual(expect.objectContaining({
+      inspectTools: undefined,
+      inspectGuidance: true,
+    }));
+    expect(requestOptions).toEqual(expect.objectContaining({
+      inspectTools: undefined,
+      inspectGuidance: true,
+    }));
   });
 
   it('refresh member session を通常 coder session と分離して保存する', async () => {

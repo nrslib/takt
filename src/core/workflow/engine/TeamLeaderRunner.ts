@@ -51,7 +51,7 @@ import {
 } from './team-leader-part-runner.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 import { buildPhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js';
-import { resolveInspectToolsForProvider } from './engine-provider-options.js';
+import { resolveInspectToolsForProvider, isTeamLeaderInspectGuidanceApplicable } from './engine-provider-options.js';
 import {
   createRoutingScope,
   resolveAutoRoutingBatch,
@@ -236,6 +236,7 @@ export class TeamLeaderRunner {
       leaderDeadline?.signal,
     ]);
     const inspectTools = resolveInspectToolsForProvider(teamLeaderConfig.inspectTools, leaderProvider);
+    const inspectGuidance = isTeamLeaderInspectGuidanceApplicable(teamLeaderConfig.inspectTools);
     const leaderMcpServers = this.deps.optionsBuilder.resolveMcpServersForStep(leaderStep, leaderProvider);
 
     emitTeamLeaderProgressHint(this.deps.engineOptions, 'decompose');
@@ -266,6 +267,7 @@ export class TeamLeaderRunner {
       projectCwd: this.deps.engineOptions.projectCwd,
       language: this.deps.engineOptions.language,
       inspectTools,
+      inspectGuidance,
       mcpServers: leaderMcpServers,
       workflowMeta: leaderWorkflowMeta,
       childProcessEnv: this.deps.engineOptions.childProcessEnv,
@@ -498,6 +500,7 @@ export class TeamLeaderRunner {
             failureDir: leaderBaseOptions.failureDir,
             cancellablePartIds: cancellablePartIdsCopy,
             inspectTools,
+            inspectGuidance,
             abortSignal,
             onStream: leaderBaseOptions.onStream,
             onActivity: leaderBaseOptions.onActivity,

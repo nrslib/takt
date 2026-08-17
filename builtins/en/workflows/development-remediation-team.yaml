@@ -103,7 +103,6 @@ steps:
         $param: fix_knowledge
       fix_instruction: team-leader-fix-plan
     team_leader:
-      inspect_tools: [read, glob, grep]
       max_concurrency: 2
       initial_max_parts: 2
       fail_on_part_error: false
@@ -143,7 +142,6 @@ steps:
         $param: fix_knowledge
       fix_instruction: team-leader-fix-verification
     team_leader:
-      inspect_tools: [read, glob, grep]
       max_concurrency: 2
       initial_max_parts: 2
       fail_on_part_error: false

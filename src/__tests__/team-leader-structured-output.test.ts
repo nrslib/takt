@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildDecomposePrompt,
   buildMorePartsPrompt,
   toMorePartsResponse,
   toPartDefinitions,
@@ -56,6 +57,47 @@ describe('Team Leader feedback prompt', () => {
     expect(prompt).toContain('x'.repeat(1900));
     expect(prompt).toContain('[truncated:');
     expect(prompt).not.toContain(tailMarker);
+    expect(prompt).toContain('You may use read-only inspection tools only');
+  });
+});
+
+describe('buildInspectToolGuidance default behavior', () => {
+  it('emits read-only guidance when inspectGuidance is true even without inspectTools', () => {
+    const prompt = buildDecomposePrompt('task', {
+      maxInitialParts: undefined,
+      language: 'en',
+      inspectTools: undefined,
+      inspectGuidance: true,
+      rejectedDecomposition: undefined,
+    });
+
+    expect(prompt).toContain('You may use read-only inspection tools only');
+    expect(prompt).not.toContain('Do not use any tool');
+  });
+
+  it('emits the no-tool guidance when inspectGuidance is false and inspectTools is unset', () => {
+    const prompt = buildDecomposePrompt('task', {
+      maxInitialParts: undefined,
+      language: 'en',
+      inspectTools: undefined,
+      inspectGuidance: false,
+      rejectedDecomposition: undefined,
+    });
+
+    expect(prompt).toContain('Do not use any tool');
+  });
+
+  it('emits read-only guidance for the more-parts prompt when inspectGuidance is true', () => {
+    const prompt = buildMorePartsPrompt(
+      'task',
+      [{ id: 'p1', title: 't', status: 'done', content: 'done' }],
+      ['p1'],
+      'en',
+      undefined,
+      undefined,
+      true,
+    );
+
     expect(prompt).toContain('You may use read-only inspection tools only');
   });
 });

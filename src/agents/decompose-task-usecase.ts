@@ -59,6 +59,7 @@ export interface DecomposeTaskOptions {
   failureDir?: RunAgentOptions['failureDir'];
   mcpServers?: RunAgentOptions['mcpServers'];
   inspectTools?: string[];
+  inspectGuidance?: boolean;
   onPromptResolved?: (promptParts: {
     systemPrompt: string;
     userInstruction: string;
@@ -101,6 +102,7 @@ export async function requestDecompositionRawResponse(
         maxInitialParts,
         language: options.language,
         inspectTools: options.inspectTools,
+        inspectGuidance: options.inspectGuidance === true,
         rejectedDecomposition,
       },
     ), loadDecompositionSchema(maxInitialParts), {
@@ -200,6 +202,7 @@ export async function requestMorePartsRawResponse(
     options.language,
     options.cancellablePartIds,
     options.inspectTools,
+    options.inspectGuidance === true,
   );
 
   let response: AgentResponse;

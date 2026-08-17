@@ -681,7 +681,6 @@ CSV / JSON などのデータソースを反復し、同じ step テンプレー
       max_concurrency: 2
       initial_max_parts: 2
       timeout_ms: 600000
-      inspect_tools: [read, glob, grep]
       part_tags: [coding]
       part_persona: coder
       part_edit: true
@@ -700,7 +699,7 @@ CSV / JSON などのデータソースを反復し、同じ step テンプレー
 
 `max_concurrency` は同時に実行する独立した part 数を制御します。`max_concurrency` と互換キーの `max_parts` はどちらも上限 `3` で、超える値は workflow ロード時にエラーになります。どちらも未指定の場合のデフォルトは `3` です。`initial_max_parts` は指定した場合に限り、最初の分解バッチの part 数を制限します。step 全体の part 総数に上限はなく、Team Leader が追加作業不要と判断するか、新しい一意な part を返さなくなるまで batch を追加します。scheduler は現在のバッチの part がすべて完了してから次のバッチを要求するため、同じバッチ内の part は相互に依存してはいけません。実装結果が必要な検証は後続 batch に置きます。`fail_on_part_error: true` の場合、生成された part が失敗した後でも Team Leader は新たな回復 part を計画・実行し得ます。その後、この step は error で終了します。未指定時は通常の回復フローに従います。旧名の `max_parts` は互換性のため `max_concurrency` として扱われます。`refill_threshold` は互換キーであり、省略または `0` のみ指定できます。batch 障壁と両立しないため、非0は workflow ロード時にエラーになります。`part_tags` は生成される part step の provider routing tag です。未指定時は親 step の `tags` を継承します。空文字や空白のみの tag は無効です。`part_tags` は通常の `provider_routing.tags` として解決されるため、`part_persona` による persona routing より優先されます。
 
-`inspect_tools` は親 Team Leader のタスク分解と追加 part 判断のフェーズで read-only inspection tools (`read`, `glob`, `grep`) を許可します。不正な tool 名は workflow ロード時にエラーになります。生成される子 part には影響せず、子 part の tool は引き続き `part_allowed_tools` で別に制御されます。inspection tools は Claude 系 provider や OpenCode など、`allowedTools` に対応する provider で利用できます。Team Leader inspection tools に対応しない provider では、実行時に明確なエラーになります。
+`inspect_tools` は親 Team Leader のタスク分解と追加 part 判断のフェーズで read-only inspection tools (`read`, `glob`, `grep`) に制限します。不正な tool 名は workflow ロード時にエラーになります。生成される子 part には影響せず、子 part の tool は引き続き `part_allowed_tools` で別に制御されます。省略時はエンジン既定で `read`, `glob`, `grep` が付与され、明示指定で上書きします。`allowedTools` に対応する provider (Claude 系, OpenCode) では既定または指定値をツール制限として適用します。ツール制限に対応しない provider (Codex 等) では `allowedTools` を未設定のままにし、実行環境が読み取り可能であることを前提として read-only ガイダンスを出します。非対応 provider に空でない `inspect_tools` を明示指定した場合は、実行時に明確なエラーになります。
 
 ### Workflow Call Step（サブワークフロー）
 

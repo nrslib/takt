@@ -602,7 +602,7 @@ steps:
     expect(result.stepPreviews[0]?.personaContent).toBe('You are the direct path lead.');
   });
 
-  it('should keep team leader preview tools empty when inspect_tools is unset', () => {
+  it('should default team leader preview tools to read/glob/grep when inspect_tools is unset', () => {
     writeProjectRuntime(tempDir, `version: 1
 provider:
   defaults:
@@ -632,8 +632,8 @@ steps:
 
     const result = getWorkflowSummary(workflowPath, tempDir, 1);
 
-    expect(result.firstStep?.allowedTools).toEqual([]);
-    expect(result.stepPreviews[0]?.allowedTools).toEqual([]);
+    expect(result.firstStep?.allowedTools).toEqual(['Read', 'Glob', 'Grep']);
+    expect(result.stepPreviews[0]?.allowedTools).toEqual(['Read', 'Glob', 'Grep']);
   });
 
   it('should silently drop preview tools when configured for a non-Claude provider', () => {

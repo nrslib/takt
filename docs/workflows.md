@@ -682,7 +682,6 @@ The agent acts as a leader: it decomposes the task into independent sub-parts at
       max_concurrency: 2
       initial_max_parts: 2
       timeout_ms: 600000
-      inspect_tools: [read, glob, grep]
       part_tags: [coding]
       part_persona: coder
       part_edit: true
@@ -701,7 +700,7 @@ Useful for breaking one large task into independent units that can run in parall
 
 `max_concurrency` controls how many independent parts run at the same time. Both `max_concurrency` and the compatibility key `max_parts` accept at most `3`; a larger value fails workflow loading. When neither is set, the default is `3`. When specified, `initial_max_parts` limits only the first decomposition batch. There is no total-part limit for the workflow step; the Team Leader adds batches until it decides no additional work is required or stops returning new unique parts. The scheduler requests a new batch only after every part in the current batch completes, so parts in one batch must never depend on each other; verification that needs implementation results belongs in a later batch. With `fail_on_part_error: true`, a generated-part failure can still lead the Team Leader to plan and run new recovery parts; it then ends the step with an error. When omitted, the leader can continue according to its normal recovery flow. The older `max_parts` key is still accepted as the compatibility name for `max_concurrency`. `refill_threshold` is a compatibility key and may only be omitted or set to `0`; non-zero values fail workflow loading because incremental refill conflicts with the batch barrier. `part_tags` sets provider routing tags on generated part steps. When omitted, parts inherit the parent step's `tags`. Empty and whitespace-only tags are invalid. `part_tags` is resolved through normal `provider_routing.tags`, so tag routing takes priority over persona routing from `part_persona`.
 
-`inspect_tools` allows only read-only inspection tools (`read`, `glob`, `grep`) during the parent Team Leader task decomposition and additional-part decision phases. Invalid tool names fail workflow loading. It does not affect generated child parts; child part tools remain controlled separately by `part_allowed_tools`. Inspection tools are supported by providers that expose `allowedTools`, including Claude-family providers and OpenCode. Providers that do not support Team Leader inspection tools fail at runtime with a clear error.
+`inspect_tools` restricts the parent Team Leader task decomposition and additional-part decision phases to read-only inspection tools (`read`, `glob`, `grep`). Invalid tool names fail workflow loading. It does not affect generated child parts; child part tools remain controlled separately by `part_allowed_tools`. When omitted, the engine defaults to `read`, `glob`, and `grep` for providers that support `allowedTools` (Claude-family providers and OpenCode); an explicit value overrides the default. Providers that cannot restrict tools (such as Codex) leave the leader's `allowedTools` unset and the leader still gets read-only guidance because its execution environment is read-capable. An explicit non-empty `inspect_tools` value on a provider that does not support Team Leader inspection tools fails at runtime with a clear error.
 
 ### Workflow Call Step (subworkflow)
 

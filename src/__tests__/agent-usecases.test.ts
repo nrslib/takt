@@ -865,6 +865,25 @@ describe('agent-usecases', () => {
     expect(vi.mocked(runAgent).mock.calls[0]?.[2]).not.toHaveProperty('permissionMode');
   });
 
+  it('Given inspectGuidance without inspectTools, When decomposeTask runs, Then it reaches the decomposition prompt', async () => {
+    vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
+      parts: [
+        { id: 'p1', title: 'Part 1', instruction: 'Do 1' },
+      ],
+    }));
+
+    await decomposeTask('instruction', 3, {
+      cwd: '/repo',
+      persona: 'team-leader',
+      inspectGuidance: true,
+    });
+
+    const [, prompt, callOptions] = vi.mocked(runAgent).mock.calls[0] ?? [];
+    expect(prompt).toContain('You may use read-only inspection tools only');
+    expect(prompt).not.toContain('Do not use any tool');
+    expect(callOptions).not.toHaveProperty('allowedTools');
+  });
+
   it('decomposeTask は構造化出力がない場合 parseParts にフォールバックする', async () => {
     vi.mocked(runAgent).mockResolvedValue(doneResponse('```json [] ```'));
     vi.mocked(parseParts).mockReturnValue([
@@ -1219,6 +1238,32 @@ describe('agent-usecases', () => {
     expect(runAgent).toHaveBeenCalledWith('team-leader', expect.any(String), expect.any(Object));
     expect(vi.mocked(runAgent).mock.calls[0]?.[2]).toHaveProperty('allowedTools', ['Read', 'Glob', 'Grep']);
     expect(vi.mocked(runAgent).mock.calls[0]?.[2]).not.toHaveProperty('permissionMode');
+  });
+
+  it('requestMoreParts は inspectGuidance を feedback prompt へ伝搬する', async () => {
+    vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
+      done: true,
+      reasoning: 'Enough',
+      cancelPartIds: [],
+      parts: [],
+    }));
+
+    await requestMoreParts(
+      'original instruction',
+      [{ id: 'p1', title: 'Part 1', status: 'done', content: 'done' }],
+      ['p1'],
+      {
+        cwd: '/repo',
+        persona: 'team-leader',
+        cancellablePartIds: [],
+        inspectGuidance: true,
+      },
+    );
+
+    const [, prompt, callOptions] = vi.mocked(runAgent).mock.calls[0] ?? [];
+    expect(prompt).toContain('You may use read-only inspection tools only');
+    expect(prompt).not.toContain('Do not use any tool');
+    expect(callOptions).not.toHaveProperty('allowedTools');
   });
 
   it('requestMoreParts は done 以外をエラーにする', async () => {

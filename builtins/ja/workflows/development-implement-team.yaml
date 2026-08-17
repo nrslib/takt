@@ -41,7 +41,6 @@ steps:
         $param: development_knowledge
       implementation_instruction: team-leader-implement
     team_leader:
-      inspect_tools: [read, glob, grep]
       max_concurrency: 2
       initial_max_parts: 2
       fail_on_part_error: false

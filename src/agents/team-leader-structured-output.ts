@@ -12,6 +12,7 @@ export interface DecomposePromptOptions {
   readonly maxInitialParts: number | undefined;
   readonly language: Language | undefined;
   readonly inspectTools: readonly string[] | undefined;
+  readonly inspectGuidance: boolean;
   readonly rejectedDecomposition: RejectedTeamLeaderDecomposition | undefined;
 }
 
@@ -83,11 +84,11 @@ export function toMorePartsResponse(
 function buildInspectToolGuidance(
   language: Language | undefined,
   inspectTools: readonly string[] | undefined,
-  options: { requireAtLeastOnePart: boolean },
+  options: { requireAtLeastOnePart: boolean; inspectGuidance: boolean },
 ): string[] {
   const hasInspectTools = inspectTools !== undefined && inspectTools.length > 0;
 
-  if (!hasInspectTools) {
+  if (!hasInspectTools && !options.inspectGuidance) {
     return language === 'ja'
       ? ['- ツールは使用しない']
       : ['- Do not use any tool'];
@@ -134,13 +135,14 @@ function buildDecomposeBasePrompt(
     maxInitialParts,
     language,
     inspectTools,
+    inspectGuidance,
     rejectedDecomposition,
   } = options;
   const regenerationSections = buildRejectedDecompositionPromptSections(language, rejectedDecomposition);
   if (language === 'ja') {
     return [
       '以下はタスク分解専用の指示です。タスクを実行せず、分解だけを行ってください。',
-      ...buildInspectToolGuidance(language, inspectTools, { requireAtLeastOnePart: true }),
+      ...buildInspectToolGuidance(language, inspectTools, { requireAtLeastOnePart: true, inspectGuidance }),
       ...(maxInitialParts === undefined
         ? []
         : [`- 返してよい初回 parts 数は 1 以上 ${maxInitialParts} 以下`]),
@@ -160,7 +162,7 @@ function buildDecomposeBasePrompt(
 
   return [
     'This is decomposition-only planning. Do not execute the task.',
-    ...buildInspectToolGuidance(language, inspectTools, { requireAtLeastOnePart: true }),
+    ...buildInspectToolGuidance(language, inspectTools, { requireAtLeastOnePart: true, inspectGuidance }),
     ...(maxInitialParts === undefined
       ? []
       : [`- Produce between 1 and ${maxInitialParts} parts in the initial batch`]),
@@ -210,6 +212,7 @@ function buildMorePartsBasePrompt(
   language?: Language,
   cancellablePartIds: readonly string[] = [],
   inspectTools?: readonly string[],
+  inspectGuidance = false,
 ): string {
   const resultBlock = allResults.map((result) => [
     `### ${result.id}: ${result.title} (${result.status})`,
@@ -219,7 +222,7 @@ function buildMorePartsBasePrompt(
   if (language === 'ja') {
     return [
       '以下の実行結果を見て、追加のサブタスクが必要か判断してください。',
-      ...buildInspectToolGuidance(language, inspectTools, { requireAtLeastOnePart: false }),
+      ...buildInspectToolGuidance(language, inspectTools, { requireAtLeastOnePart: false, inspectGuidance }),
       '',
       '## 元タスク',
       originalInstruction,
@@ -244,7 +247,7 @@ function buildMorePartsBasePrompt(
 
   return [
     'Review completed part results and decide whether additional parts are needed.',
-    ...buildInspectToolGuidance(language, inspectTools, { requireAtLeastOnePart: false }),
+    ...buildInspectToolGuidance(language, inspectTools, { requireAtLeastOnePart: false, inspectGuidance }),
     '',
     '## Original Task',
     originalInstruction,
@@ -305,6 +308,7 @@ export function buildMorePartsPrompt(
   language?: Language,
   cancellablePartIds: readonly string[] = [],
   inspectTools?: readonly string[],
+  inspectGuidance = false,
 ): string {
   return buildMorePartsBasePrompt(
     originalInstruction,
@@ -313,6 +317,7 @@ export function buildMorePartsPrompt(
     language,
     cancellablePartIds,
     inspectTools,
+    inspectGuidance,
   );
 }
 
@@ -323,6 +328,7 @@ export function buildPromptBasedMorePartsPrompt(
   language?: Language,
   cancellablePartIds: readonly string[] = [],
   inspectTools?: readonly string[],
+  inspectGuidance = false,
 ): string {
   const outputInstruction = language === 'ja'
     ? [
@@ -345,5 +351,6 @@ export function buildPromptBasedMorePartsPrompt(
     language,
     cancellablePartIds,
     inspectTools,
+    inspectGuidance,
   )}\n${outputInstruction.join('\n')}`;
 }
