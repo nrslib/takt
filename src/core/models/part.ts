@@ -41,7 +41,7 @@ export interface TeamLeaderConfig {
   failOnPartError?: boolean;
   /** Default timeout for parts in milliseconds */
   timeoutMs: number;
-  /** Read-only inspection tools for the parent decomposition call */
+  /** Read-only inspection tools for the parent decomposition and feedback calls */
   inspectTools?: string[];
   /** Persona reference for part agents */
   partPersona?: string;

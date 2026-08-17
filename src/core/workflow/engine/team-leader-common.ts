@@ -76,7 +76,6 @@ export function createTeamLeaderPlanningStep(step: WorkflowStep): WorkflowStep {
 
   return {
     ...step,
-    preserveFullPreviousResponse: true,
     persona: step.teamLeader.persona ?? step.persona,
     personaPath: step.teamLeader.personaPath ?? step.personaPath,
     personaDisplayName: step.teamLeader.personaDisplayName ?? step.personaDisplayName,

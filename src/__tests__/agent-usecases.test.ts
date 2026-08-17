@@ -846,7 +846,7 @@ describe('agent-usecases', () => {
     expect(callOptions).not.toHaveProperty('permissionMode');
   });
 
-  it('Given inspectTools, When decomposeTask runs, Then it passes them to the parent decomposition call only', async () => {
+  it('Given inspectTools, When decomposeTask runs, Then it passes them to the parent decomposition call', async () => {
     vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
       parts: [
         { id: 'p1', title: 'Part 1', instruction: 'Do 1' },
@@ -1196,7 +1196,7 @@ describe('agent-usecases', () => {
     expect(callOptions).not.toHaveProperty('permissionMode');
   });
 
-  it('requestMoreParts は inspect tools を feedback planning call に渡さない', async () => {
+  it('requestMoreParts は inspect tools を feedback planning call に渡す', async () => {
     vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
       done: true,
       reasoning: 'Enough',
@@ -1217,7 +1217,7 @@ describe('agent-usecases', () => {
     );
 
     expect(runAgent).toHaveBeenCalledWith('team-leader', expect.any(String), expect.any(Object));
-    expect(vi.mocked(runAgent).mock.calls[0]?.[2]).not.toHaveProperty('allowedTools');
+    expect(vi.mocked(runAgent).mock.calls[0]?.[2]).toHaveProperty('allowedTools', ['Read', 'Glob', 'Grep']);
     expect(vi.mocked(runAgent).mock.calls[0]?.[2]).not.toHaveProperty('permissionMode');
   });
 

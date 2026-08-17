@@ -21,6 +21,11 @@ import {
 import { runTeamLeaderExecution } from './team-leader-execution.js';
 import { buildTeamLeaderAggregatedContent } from './team-leader-aggregation.js';
 import { createPartStep, createTeamLeaderPlanningStep, resolvePartErrorDetail, summarizeParts } from './team-leader-common.js';
+import {
+  buildTeamLeaderPartReportPath,
+  summarizePartResultForFeedback,
+  writeTeamLeaderPartResultReport,
+} from './team-leader-part-report.js';
 import { buildTeamLeaderParallelLoggerOptions, emitTeamLeaderProgressHint } from './team-leader-streaming.js';
 import {
   collectUncoveredPartTimeoutIds,
@@ -403,6 +408,11 @@ export class TeamLeaderRunner {
       onPartCompleted: (result) => {
         const acceptedResult = structuredClone(result) as PartResult;
         state.stepOutputs.set(acceptedResult.response.persona, acceptedResult.response);
+        writeTeamLeaderPartResultReport({
+          runPaths: this.deps.getRunPaths(),
+          stepName: step.name,
+          result: acceptedResult,
+        });
       },
       onPlanningDone: ({ reason, plannedParts: plannedCount, completedParts }) => {
         log.info('Team leader marked planning as done', {
@@ -448,14 +458,23 @@ export class TeamLeaderRunner {
         const scheduledIdsCopy = [...scheduledIds];
         const cancellablePartIdsCopy = [...cancellablePartIds];
         emitTeamLeaderProgressHint(this.deps.engineOptions, 'feedback');
-        const feedbackResults = currentResultsCopy.map((result) => ({
-          id: result.part.id,
-          title: result.part.title,
-          status: result.response.status,
-          content: result.response.status === 'error'
+        const feedbackResults = currentResultsCopy.map((result) => {
+          const fullContent = result.response.status === 'error'
             ? `[ERROR] ${resolvePartErrorDetail(result)}`
-            : result.response.content,
-        }));
+            : result.response.content;
+          const reportPath = buildTeamLeaderPartReportPath({
+            runPaths: this.deps.getRunPaths(),
+            stepName: step.name,
+            partId: result.part.id,
+          });
+          const summary = summarizePartResultForFeedback(fullContent);
+          return {
+            id: result.part.id,
+            title: result.part.title,
+            status: result.response.status,
+            content: `${summary}\n\n[full report: ${reportPath.absolutePath}]`,
+          };
+        });
         const feedbackSignal = leaderDeadline?.signal === undefined
           ? feedbackAbortSignal
           : AbortSignal.any([feedbackAbortSignal, leaderDeadline.signal]);
@@ -478,6 +497,7 @@ export class TeamLeaderRunner {
             childProcessEnv: this.deps.engineOptions.childProcessEnv,
             failureDir: leaderBaseOptions.failureDir,
             cancellablePartIds: cancellablePartIdsCopy,
+            inspectTools,
             abortSignal,
             onStream: leaderBaseOptions.onStream,
             onActivity: leaderBaseOptions.onActivity,

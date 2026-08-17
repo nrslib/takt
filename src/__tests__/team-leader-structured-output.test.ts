@@ -5,6 +5,7 @@ import {
   toPartDefinitions,
 } from '../agents/team-leader-structured-output.js';
 import { loadMorePartsSchema } from '../infra/resources/schema-loader.js';
+import { summarizePartResultForFeedback } from '../core/workflow/engine/team-leader-part-report.js';
 
 function makeRawPart(id: string): Record<string, string> {
   return {
@@ -39,9 +40,9 @@ describe('toPartDefinitions', () => {
 });
 
 describe('Team Leader feedback prompt', () => {
-  it('includes complete part content beyond 2,000 characters', () => {
+  it('includes bounded part feedback and read-only inspection guidance', () => {
     const tailMarker = 'TAIL_MARKER: completed result remains available';
-    const content = `${'x'.repeat(2500)}\n${tailMarker}`;
+    const content = summarizePartResultForFeedback(`${'x'.repeat(2500)}\n${tailMarker}`);
 
     const prompt = buildMorePartsPrompt(
       'Complete the implementation.',
@@ -49,11 +50,13 @@ describe('Team Leader feedback prompt', () => {
       ['part-1'],
       'en',
       undefined,
-      [],
+      ['Read'],
     );
 
-    expect(prompt).toContain('x'.repeat(2500));
-    expect(prompt).toContain(tailMarker);
+    expect(prompt).toContain('x'.repeat(2000));
+    expect(prompt).toContain('[truncated:');
+    expect(prompt).not.toContain(tailMarker);
+    expect(prompt).toContain('You may use read-only inspection tools only');
   });
 });
 

@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type { PartDefinition, WorkflowStep } from '../core/models/types.js';
 import { createPartStep, createTeamLeaderPlanningStep } from '../core/workflow/engine/team-leader-common.js';
 import {
+  summarizePartResultForFeedback,
+  TEAM_LEADER_FEEDBACK_SUMMARY_MAX_CHARS,
+} from '../core/workflow/engine/team-leader-part-report.js';
+import {
   resolveDirectStepProviderOptions,
   resolveStepCapabilityProviderOptions,
 } from '../infra/config/providerOptions.js';
@@ -216,7 +220,6 @@ describe('createTeamLeaderPlanningStep', () => {
       persona: 'lead',
       personaDisplayName: 'lead',
       providerRoutingPersonaKey: 'lead',
-      preserveFullPreviousResponse: true,
     }));
   });
 
@@ -239,7 +242,7 @@ describe('createTeamLeaderPlanningStep', () => {
     expect(planningStep.providerRoutingPersonaKey).toBe('coder');
   });
 
-  it('preserves the complete previous state output for the parent planning prompt only', () => {
+  it('bounds the previous state output for the parent planning prompt', () => {
     const step: WorkflowStep = {
       name: 'implement',
       persona: 'coder',
@@ -268,8 +271,23 @@ describe('createTeamLeaderPlanningStep', () => {
       instruction: 'Implement the change',
     }), context).build();
 
-    expect(parentPrompt).toContain('TAIL_FINDING: preserve this');
-    expect(parentPrompt).toContain('a'.repeat(2500));
+    expect(parentPrompt).not.toContain('TAIL_FINDING: preserve this');
+    expect(parentPrompt).not.toContain('a'.repeat(2500));
     expect(memberPrompt).not.toContain('TAIL_FINDING: preserve this');
+  });
+});
+
+describe('summarizePartResultForFeedback', () => {
+  it('returns the full content when it does not exceed the max chars', () => {
+    const content = 'x'.repeat(TEAM_LEADER_FEEDBACK_SUMMARY_MAX_CHARS);
+    expect(summarizePartResultForFeedback(content)).toBe(content);
+  });
+
+  it('truncates to the max chars and appends a truncation notice when content exceeds the limit', () => {
+    const content = 'y'.repeat(TEAM_LEADER_FEEDBACK_SUMMARY_MAX_CHARS + 1234);
+    const result = summarizePartResultForFeedback(content);
+    expect(result.length).toBeLessThan(content.length);
+    expect(result.startsWith('y'.repeat(TEAM_LEADER_FEEDBACK_SUMMARY_MAX_CHARS))).toBe(true);
+    expect(result).toContain('[truncated: 1234 chars; see report file for full content]');
   });
 });
