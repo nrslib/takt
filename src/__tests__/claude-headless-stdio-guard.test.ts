@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import type { ChildProcess } from 'node:child_process';
 
 vi.mock('node:child_process', () => ({
@@ -13,22 +14,18 @@ import type { ClaudeHeadlessCallOptions } from '../infra/claude-headless/types.j
 function stubSpawn(opts: {
   stdoutError?: Error;
   stderrError?: Error;
-  stdinError?: Error;
   closeCode?: number | null;
 }): void {
   vi.mocked(spawn).mockImplementation(() => {
-    const stdout = new EventEmitter();
-    const stderr = new EventEmitter();
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
     const proc = new EventEmitter() as EventEmitter & Partial<ChildProcess>;
-    proc.stdout = stdout as NodeJS.ReadableStream;
-    proc.stderr = stderr as NodeJS.ReadableStream;
-    proc.stdin = new EventEmitter() as NodeJS.WritableStream;
+    proc.stdout = stdout;
+    proc.stderr = stderr;
+    proc.stdin = null;
     proc.kill = vi.fn() as unknown as ChildProcess['kill'];
 
     queueMicrotask(() => {
-      if (opts.stdinError) {
-        (proc.stdin as EventEmitter).emit('error', opts.stdinError);
-      }
       if (opts.stdoutError) {
         stdout.emit('error', opts.stdoutError);
       }
@@ -73,16 +70,16 @@ describe('runHeadlessCli stdio guard', () => {
     );
   });
 
-  it('rejects with a failure when stdin emits a stream error', async () => {
+  it('guards stdout and stderr even though the headless spawn has no stdin', async () => {
     stubSpawn({
-      stdinError: new Error('stdin pipe closed'),
+      stdoutError: new Error('stdout pipe closed'),
       closeCode: 1,
     });
 
     const options: ClaudeHeadlessCallOptions = { cwd: '/tmp' };
 
     await expect(runHeadlessCli(['-p', '--', 'prompt'], options)).rejects.toThrow(
-      /stdin stream error: stdin pipe closed/u,
+      /stdout stream error: stdout pipe closed/u,
     );
   });
 });

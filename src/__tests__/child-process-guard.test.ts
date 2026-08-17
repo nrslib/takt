@@ -1,13 +1,14 @@
 import { describe, it, expect, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import type { ChildProcess } from 'node:child_process';
 import { guardChildProcessStreams } from '../shared/utils/child-process-guard.js';
 
 function makeFakeChild(): ChildProcess {
   const proc = new EventEmitter() as EventEmitter & Partial<ChildProcess>;
-  proc.stdin = new EventEmitter() as NodeJS.ReadableStream;
-  proc.stdout = new EventEmitter() as NodeJS.ReadableStream;
-  proc.stderr = new EventEmitter() as NodeJS.ReadableStream;
+  proc.stdin = new PassThrough();
+  proc.stdout = new PassThrough();
+  proc.stderr = new PassThrough();
   return proc as ChildProcess;
 }
 
