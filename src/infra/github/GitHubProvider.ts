@@ -6,9 +6,9 @@
  * the GitProvider contract to the GitHub/gh-CLI implementation.
  */
 
-import { checkGhCli, fetchIssue, listOpenIssues, createIssue, closeIssue } from './issue.js';
+import { checkGhCli, fetchIssue, listOpenIssues, createIssue, closeIssue, commentOnIssue } from './issue.js';
 import { findExistingPr, commentOnPr, closePr, createPullRequest, fetchPrReviewComments, listOpenPrs, mergePr } from './pr.js';
-import type { GitProvider, CliStatus, Issue, ExistingPr, IssueListItem, PrListItem, CreateIssueOptions, CreateIssueResult, CloseIssueResult, CreatePrOptions, CreatePrResult, CommentResult, MergeResult, PrReviewData } from '../git/types.js';
+import type { GitProvider, CliStatus, Issue, ExistingPr, IssueListItem, PrListItem, CreateIssueOptions, CreateIssueResult, CloseIssueResult, CreatePrOptions, CreatePrResult, CommentResult, IssueCommentResult, MergeResult, PrReviewData } from '../git/types.js';
 
 export class GitHubProvider implements GitProvider {
   checkCliStatus(cwd?: string): CliStatus {
@@ -49,6 +49,10 @@ export class GitHubProvider implements GitProvider {
 
   commentOnPr(prNumber: number, body: string, cwd?: string): CommentResult {
     return commentOnPr(prNumber, body, cwd ?? process.cwd());
+  }
+
+  commentOnIssue(issueNumber: number, body: string, cwd?: string): IssueCommentResult {
+    return commentOnIssue(issueNumber, body, cwd ?? process.cwd());
   }
 
   closePr(prNumber: number, cwd?: string): MergeResult {

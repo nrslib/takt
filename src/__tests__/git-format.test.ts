@@ -30,7 +30,11 @@ describe('formatIssueAsTask', () => {
       title: 'dynamic issue title',
       body: 'dynamic issue body',
       labels: ['dynamic-label'],
-      comments: [{ author: 'dynamic-author', body: 'dynamic comment' }],
+      comments: [
+        { author: 'dynamic-author', body: 'dynamic comment' },
+        { author: 'task-author', body: 'past task instructions' },
+        { author: 'latest-author', body: 'latest comment' },
+      ],
     };
 
     const result = formatIssueAsTask(issue);
@@ -38,8 +42,10 @@ describe('formatIssueAsTask', () => {
     expect(result).toContain(issue.title);
     expect(result).toContain(issue.body);
     expect(result).toContain(issue.labels[0]!);
-    expect(result).toContain(issue.comments[0]!.body);
-    expect(result).toContain(issue.comments[0]!.author);
+    for (const comment of issue.comments) {
+      expect(result).toContain(comment.body);
+      expect(result).toContain(comment.author);
+    }
   });
 
   it('omits optional sections when issue data is empty', () => {

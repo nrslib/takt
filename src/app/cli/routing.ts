@@ -1,4 +1,5 @@
-import { info, success, error as logError } from '../../shared/ui/index.js';
+import { info, success, warn, error as logError } from '../../shared/ui/index.js';
+import { confirm } from '../../shared/prompt/index.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import {
@@ -36,6 +37,7 @@ import { resolveIssueInput, resolvePrInput } from './routing-inputs.js';
 import { createPullRequestContext } from '../../core/workflow/pr-context.js';
 import { toLocalBranchRef } from '../../shared/utils/gitBranchValidation.js';
 import { getAssistantSessionPersona } from '../../features/interactive/assistantMode.js';
+import { getGitProvider } from '../../infra/git/index.js';
 
 export async function executeDefaultAction(task?: string): Promise<void> {
   const { cwd: resolvedCwd, pipelineMode } = getCliExecutionContext();
@@ -326,10 +328,36 @@ export async function executeDefaultAction(task?: string): Promise<void> {
           });
           return;
         }
-        await saveTaskFromInteractive(resolvedCwd, confirmedTask, workflowId, {
+        const savedTask = await saveTaskFromInteractive(resolvedCwd, confirmedTask, workflowId, {
           ...(sourceIssueNumber !== undefined ? { issue: sourceIssueNumber } : {}),
           ...(result.attachments ? { attachments: result.attachments } : {}),
         });
+        if (savedTask?.sourceIssueNumber === undefined) {
+          return;
+        }
+
+        const shouldComment = await confirm(
+          `Issue #${savedTask.sourceIssueNumber} にタスク指示書をコメントしますか？`,
+          true,
+        );
+        if (!shouldComment) {
+          return;
+        }
+
+        try {
+          const commentResult = getGitProvider().commentOnIssue(
+            savedTask.sourceIssueNumber,
+            savedTask.taskContent,
+            resolvedCwd,
+          );
+          if (!commentResult.success) {
+            warn(`Issue #${savedTask.sourceIssueNumber} へのコメント投稿に失敗しました: ${commentResult.error}`);
+          }
+        } catch (commentError) {
+          warn(
+            `Issue #${savedTask.sourceIssueNumber} へのコメント投稿に失敗しました: ${getErrorMessage(commentError)}`,
+          );
+        }
       },
       cancel: () => undefined,
     });

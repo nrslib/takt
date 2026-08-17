@@ -292,6 +292,27 @@ describe('interactiveMode', () => {
     expect(result.task).toBe('Clarify task for "a".');
   });
 
+  it('should pass the issue body and every comment to the Grill Me prompt', async () => {
+    const sourceContext = [
+      'Issue body for the current task',
+      '**first-author**: first comment',
+      '**task-author**: past task instructions',
+      '**latest-author**: latest comment',
+    ].join('\n');
+    setupRawStdin(toRawInputs(['/go']));
+    const { provider, capture } = createMockProvider(['Clarify the complete issue context.']);
+    mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
+
+    await interactiveMode('/project', { sourceContext }, undefined, undefined, undefined, {
+      assistantMode: 'grill-me',
+    });
+
+    expect(capture.prompts[0]).toEqual(expect.stringContaining('Issue body for the current task'));
+    expect(capture.prompts[0]).toEqual(expect.stringContaining('first comment'));
+    expect(capture.prompts[0]).toEqual(expect.stringContaining('past task instructions'));
+    expect(capture.prompts[0]).toEqual(expect.stringContaining('latest comment'));
+  });
+
   it('should keep inline /go text as user note when source context exists before conversation', async () => {
     setupRawStdin(toRawInputs(['/go add auth feature', '/cancel']));
     setupMockProvider(['Clarify task for source context plus note.']);

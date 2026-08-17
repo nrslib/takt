@@ -6,11 +6,13 @@
 
 import { execFileSync } from 'node:child_process';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
+import { getIssueCommentFailureReason } from '../git/issue-comment-error.js';
 import type {
   CloseIssueResult,
   CreateIssueOptions,
   CreateIssueResult,
   Issue,
+  IssueCommentResult,
   IssueListItem,
 } from '../git/types.js';
 import { normalizePublicIssueUrl } from '../git/types.js';
@@ -69,6 +71,38 @@ export function fetchIssue(issueNumber: number, cwd: string): Issue {
         body: n.body,
       })),
   };
+}
+
+export function commentOnIssue(issueNumber: number, body: string, cwd: string): IssueCommentResult {
+  const glabStatus = checkGlabCli(cwd);
+  if (!glabStatus.available) {
+    return { success: false, error: glabStatus.error };
+  }
+
+  try {
+    execFileSync(
+      'glab',
+      [
+        'api',
+        `projects/:id/issues/${issueNumber}/notes`,
+        '--method',
+        'POST',
+        '--field',
+        'body=@-',
+      ],
+      {
+        cwd,
+        encoding: 'utf-8',
+        input: body,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      },
+    );
+    return { success: true };
+  } catch (err) {
+    const errorMessage = getIssueCommentFailureReason(err, body);
+    log.error('Issue comment failed', { issueNumber, error: errorMessage });
+    return { success: false, error: errorMessage };
+  }
 }
 
 interface GlabOpenIssueItem {

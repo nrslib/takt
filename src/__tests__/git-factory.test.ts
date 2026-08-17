@@ -21,6 +21,7 @@ const { mockDetectVcsProvider, mockResolveConfigValue, MockGitHubProvider, MockG
     findExistingPr: vi.fn(),
     createPullRequest: vi.fn(),
     commentOnPr: vi.fn(),
+    commentOnIssue: vi.fn(),
   })),
   MockGitLabProvider: vi.fn().mockImplementation(() => ({
     _type: 'gitlab',
@@ -31,6 +32,7 @@ const { mockDetectVcsProvider, mockResolveConfigValue, MockGitHubProvider, MockG
     findExistingPr: vi.fn(),
     createPullRequest: vi.fn(),
     commentOnPr: vi.fn(),
+    commentOnIssue: vi.fn(),
   })),
 }));
 
@@ -129,6 +131,7 @@ describe('getGitProvider', () => {
     expect(typeof provider.findExistingPr).toBe('function');
     expect(typeof provider.createPullRequest).toBe('function');
     expect(typeof provider.commentOnPr).toBe('function');
+    expect(typeof provider.commentOnIssue).toBe('function');
   });
 });
 

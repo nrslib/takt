@@ -7,15 +7,25 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { parse as parseYaml } from 'yaml';
 import { resolveAssistantProviderModelFromConfig as realResolveAssistantProviderModelFromConfig } from '../core/config/provider-resolution.js';
 
 vi.mock('../shared/ui/index.js', () => ({
   info: vi.fn(),
+  warn: vi.fn(),
   error: vi.fn(),
   withProgress: vi.fn(async (_start, _done, operation) => operation()),
 }));
 
+const { mockConfirm } = vi.hoisted(() => ({
+  mockConfirm: vi.fn(),
+}));
+
 vi.mock('../shared/prompt/index.js', () => ({
+  confirm: mockConfirm,
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -30,12 +40,14 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 const {
   mockCheckCliStatus,
   mockFetchIssue,
+  mockCommentOnIssue,
   mockGetWorkflowDescription,
   mockResolveAgentOverrides,
   mockResolveAssistantConfigLayers,
 } = vi.hoisted(() => ({
   mockCheckCliStatus: vi.fn(),
   mockFetchIssue: vi.fn(),
+  mockCommentOnIssue: vi.fn(),
   mockGetWorkflowDescription: vi.fn(() => ({ name: 'default', description: 'test workflow', workflowStructure: '', stepPreviews: [] })),
   mockResolveAgentOverrides: vi.fn(),
   mockResolveAssistantConfigLayers: vi.fn(() => ({ local: {}, global: {} })),
@@ -45,6 +57,7 @@ vi.mock('../infra/git/index.js', () => ({
   getGitProvider: () => ({
     checkCliStatus: (...args: unknown[]) => mockCheckCliStatus(...args),
     fetchIssue: (...args: unknown[]) => mockFetchIssue(...args),
+    commentOnIssue: (...args: unknown[]) => mockCommentOnIssue(...args),
   }),
   parseIssueNumbers: vi.fn(() => []),
   formatIssueAsTask: vi.fn(),
@@ -83,12 +96,18 @@ vi.mock('../features/interactive/index.js', () => ({
 
 const mockListAllTaskItems = vi.fn();
 const mockIsStaleRunningTask = vi.fn();
-vi.mock('../infra/task/index.js', () => ({
-  TaskRunner: vi.fn(() => ({
-    listAllTaskItems: mockListAllTaskItems,
-  })),
-  isStaleRunningTask: (...args: unknown[]) => mockIsStaleRunningTask(...args),
-}));
+vi.mock('../infra/task/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../infra/task/index.js')>();
+  return {
+    ...actual,
+    TaskRunner: vi.fn((projectDir: string) => {
+      const runner = new actual.TaskRunner(projectDir);
+      runner.listAllTaskItems = mockListAllTaskItems;
+      return runner;
+    }),
+    isStaleRunningTask: (...args: unknown[]) => mockIsStaleRunningTask(...args),
+  };
+});
 
 vi.mock('../infra/config/index.js', () => ({
   getWorkflowDescription: (...args: unknown[]) => mockGetWorkflowDescription(...args),
@@ -146,7 +165,9 @@ import {
 import { resolveConfigValues, loadPersonaSessions } from '../infra/config/index.js';
 import { isDirectTask } from '../app/cli/helpers.js';
 import { executeDefaultAction } from '../app/cli/routing.js';
-import { info, error } from '../shared/ui/index.js';
+import { saveTaskFile } from '../features/tasks/add/index.js';
+import { info, warn, error } from '../shared/ui/index.js';
+import { confirm } from '../shared/prompt/index.js';
 import type { Issue } from '../infra/git/index.js';
 
 const mockFormatIssueAsTask = vi.mocked(formatIssueAsTask);
@@ -164,7 +185,9 @@ const mockLoadPersonaSessions = vi.mocked(loadPersonaSessions);
 const mockResolveConfigValues = vi.mocked(resolveConfigValues);
 const mockIsDirectTask = vi.mocked(isDirectTask);
 const mockInfo = vi.mocked(info);
+const mockWarn = vi.mocked(warn);
 const mockError = vi.mocked(error);
+const mockConfirmFn = vi.mocked(confirm);
 const mockTaskRunnerListAllTaskItems = vi.mocked(mockListAllTaskItems);
 
 function createMockIssue(number: number): Issue {
@@ -174,6 +197,19 @@ function createMockIssue(number: number): Issue {
     body: `Body of issue #${number}`,
     labels: [],
     comments: [],
+  };
+}
+
+type SavedTaskResult = NonNullable<Awaited<ReturnType<typeof saveTaskFromInteractive>>>;
+
+function createSavedTaskResult(overrides: {
+  taskContent: string;
+  sourceIssueNumber?: number;
+}): SavedTaskResult {
+  return {
+    taskName: 'saved-task',
+    tasksFile: '/test/cwd/.takt/tasks.yaml',
+    ...overrides,
   };
 }
 
@@ -197,6 +233,9 @@ beforeEach(() => {
   mockTaskRunnerListAllTaskItems.mockReturnValue([]);
   mockIsStaleRunningTask.mockReturnValue(false);
   mockResolveAssistantConfigLayers.mockReturnValue({ local: {}, global: {} });
+  mockCheckCliStatus.mockReturnValue({ available: true });
+  mockConfirmFn.mockResolvedValue(true);
+  mockCommentOnIssue.mockReturnValue({ success: true });
 });
 
 describe('Issue resolution in routing', () => {
@@ -346,6 +385,145 @@ describe('Issue resolution in routing', () => {
         }),
       );
     });
+
+    it('should ask after saving and post the confirmed task content to the source issue', async () => {
+      mockOpts.issue = 131;
+      const issue131 = createMockIssue(131);
+      const taskContent = 'Confirmed task instructions\nwith full details';
+      const savedTaskContent = 'Saved task instructions\nwith persisted details';
+      const order: string[] = [];
+      mockCheckCliStatus.mockReturnValue({ available: true });
+      mockFetchIssue.mockReturnValue(issue131);
+      mockFormatIssueAsTask.mockReturnValue('## Issue #131: Issue #131');
+      mockInteractiveMode.mockResolvedValue({ action: 'save_task', task: taskContent });
+      mockSaveTaskFromInteractive.mockImplementation(async (_cwd, _task, _workflow, options) => {
+        expect(options).toEqual(expect.objectContaining({ issue: 131 }));
+        order.push('save');
+        return createSavedTaskResult({
+          taskContent: savedTaskContent,
+          ...(options?.issue !== undefined ? { sourceIssueNumber: options.issue } : {}),
+        });
+      });
+      mockConfirmFn.mockImplementation(async (message: string, defaultYes: boolean) => {
+        order.push('confirm');
+        expect(message).toBe('Issue #131 にタスク指示書をコメントしますか？');
+        expect(defaultYes).toBe(true);
+        return true;
+      });
+      mockCommentOnIssue.mockImplementation(() => {
+        order.push('comment');
+        return { success: true };
+      });
+
+      await executeDefaultAction();
+
+      expect(mockCommentOnIssue).toHaveBeenCalledWith(131, savedTaskContent, '/test/cwd');
+      expect(order).toEqual(['save', 'confirm', 'comment']);
+    });
+
+    it('should keep the saved task and skip the comment when confirmation is declined', async () => {
+      mockOpts.issue = 131;
+      mockCheckCliStatus.mockReturnValue({ available: true });
+      mockFetchIssue.mockReturnValue(createMockIssue(131));
+      mockFormatIssueAsTask.mockReturnValue('## Issue #131: Issue #131');
+      mockInteractiveMode.mockResolvedValue({ action: 'save_task', task: 'Saved issue task' });
+      mockSaveTaskFromInteractive.mockImplementation(async (_cwd, _task, _workflow, options) => {
+        expect(options).toEqual(expect.objectContaining({ issue: 131 }));
+        return createSavedTaskResult({
+          taskContent: 'Saved issue task',
+          ...(options?.issue !== undefined ? { sourceIssueNumber: options.issue } : {}),
+        });
+      });
+      mockConfirmFn.mockResolvedValue(false);
+
+      await executeDefaultAction();
+
+      expect(mockSaveTaskFromInteractive).toHaveBeenCalledTimes(1);
+      expect(mockCommentOnIssue).not.toHaveBeenCalled();
+    });
+
+    it('should preserve the saved task and warn once when comment posting fails', async () => {
+      mockOpts.issue = 131;
+      const saveRoot = mkdtempSync(join(tmpdir(), 'takt-routing-comment-failure-'));
+      let savedTasksFile: string | undefined;
+      mockCheckCliStatus.mockReturnValue({ available: true });
+      mockFetchIssue.mockReturnValue(createMockIssue(131));
+      mockFormatIssueAsTask.mockReturnValue('## Issue #131: Issue #131');
+      mockInteractiveMode.mockResolvedValue({ action: 'save_task', task: 'Saved issue task' });
+      mockSaveTaskFromInteractive.mockImplementation(async (_cwd, _task, _workflow, options) => {
+        expect(options).toEqual(expect.objectContaining({ issue: 131 }));
+        const created = await saveTaskFile(saveRoot, _task, {
+          workflow: _workflow,
+          issue: options?.issue,
+        });
+        savedTasksFile = created.tasksFile;
+        const savedData = parseYaml(readFileSync(created.tasksFile, 'utf-8')) as {
+          tasks: Array<{ task_dir?: string }>;
+        };
+        const savedRecord = savedData.tasks[0];
+        if (savedRecord?.task_dir === undefined) {
+          throw new Error('Saved task directory is missing');
+        }
+        return {
+          ...created,
+          taskContent: readFileSync(join(saveRoot, savedRecord.task_dir, 'order.md'), 'utf-8'),
+          ...(options?.issue !== undefined ? { sourceIssueNumber: options.issue } : {}),
+        };
+      });
+      mockCommentOnIssue.mockReturnValue({ success: false, error: 'Permission denied' });
+
+      try {
+        await executeDefaultAction();
+
+        expect(savedTasksFile).toBeDefined();
+        if (savedTasksFile === undefined) {
+          throw new Error('Task file was not saved');
+        }
+        const savedData = parseYaml(readFileSync(savedTasksFile, 'utf-8')) as {
+          tasks: Array<{ issue?: number; task_dir?: string }>;
+        };
+        const savedRecord = savedData.tasks[0];
+        expect(savedRecord?.issue).toBe(131);
+        expect(savedRecord?.task_dir).toBeTypeOf('string');
+        if (savedRecord?.task_dir === undefined) {
+          throw new Error('Saved task directory is missing');
+        }
+        expect(readFileSync(join(saveRoot, savedRecord.task_dir, 'order.md'), 'utf-8')).toBe('Saved issue task');
+        expect(mockSaveTaskFromInteractive).toHaveBeenCalledTimes(1);
+        expect(mockCommentOnIssue).toHaveBeenCalledTimes(1);
+        expect(mockWarn).toHaveBeenCalledTimes(1);
+        expect(mockWarn.mock.calls[0]?.[0]).toEqual(expect.stringContaining('#131'));
+        expect(mockWarn.mock.calls[0]?.[0]).toEqual(expect.stringContaining('Permission denied'));
+      } finally {
+        rmSync(saveRoot, { recursive: true, force: true });
+      }
+    });
+
+    it('should convert an unexpected comment error into one warning without retrying', async () => {
+      mockOpts.issue = 131;
+      mockCheckCliStatus.mockReturnValue({ available: true });
+      mockFetchIssue.mockReturnValue(createMockIssue(131));
+      mockFormatIssueAsTask.mockReturnValue('## Issue #131: Issue #131');
+      mockInteractiveMode.mockResolvedValue({ action: 'save_task', task: 'Saved issue task' });
+      mockSaveTaskFromInteractive.mockImplementation(async (_cwd, _task, _workflow, options) => {
+        expect(options).toEqual(expect.objectContaining({ issue: 131 }));
+        return createSavedTaskResult({
+          taskContent: 'Saved issue task',
+          ...(options?.issue !== undefined ? { sourceIssueNumber: options.issue } : {}),
+        });
+      });
+      mockCommentOnIssue.mockImplementation(() => {
+        throw new Error('network unavailable');
+      });
+
+      await expect(executeDefaultAction()).resolves.toBeUndefined();
+
+      expect(mockSaveTaskFromInteractive).toHaveBeenCalledTimes(1);
+      expect(mockCommentOnIssue).toHaveBeenCalledTimes(1);
+      expect(mockWarn).toHaveBeenCalledTimes(1);
+      expect(mockWarn.mock.calls[0]?.[0]).toEqual(expect.stringContaining('#131'));
+      expect(mockWarn.mock.calls[0]?.[0]).toEqual(expect.stringContaining('network unavailable'));
+    });
   });
 
   describe('#N positional argument', () => {
@@ -385,14 +563,22 @@ describe('Issue resolution in routing', () => {
       );
     });
 
-    it('should save parsed issue number when interactive save_task is selected', async () => {
+    it('should save and comment the saved task for a single parsed issue reference', async () => {
       const issue131 = createMockIssue(131);
+      const savedTaskContent = 'Saved task instructions from positional issue';
       mockIsDirectTask.mockReturnValue(true);
       mockCheckCliStatus.mockReturnValue({ available: true });
       mockFetchIssue.mockReturnValue(issue131);
       mockFormatIssueAsTask.mockReturnValue('## Issue #131: Issue #131');
       mockParseIssueNumbers.mockReturnValue([131]);
       mockInteractiveMode.mockResolvedValue({ action: 'save_task', task: 'Saved issue task' });
+      mockSaveTaskFromInteractive.mockImplementation(async (_cwd, _task, _workflow, options) => {
+        expect(options).toEqual(expect.objectContaining({ issue: 131 }));
+        return createSavedTaskResult({
+          taskContent: savedTaskContent,
+          ...(options?.issue !== undefined ? { sourceIssueNumber: options.issue } : {}),
+        });
+      });
 
       await executeDefaultAction('#131');
 
@@ -404,6 +590,28 @@ describe('Issue resolution in routing', () => {
           issue: 131,
         }),
       );
+      expect(mockConfirmFn).toHaveBeenCalledWith('Issue #131 にタスク指示書をコメントしますか？', true);
+      expect(mockCommentOnIssue).toHaveBeenCalledWith(131, savedTaskContent, '/test/cwd');
+    });
+
+    it('should not post a comment when multiple issue references are provided', async () => {
+      mockIsDirectTask.mockReturnValue(true);
+      mockParseIssueNumbers.mockReturnValue([131, 132]);
+      mockFetchIssue.mockImplementation((issueNumber: number) => createMockIssue(issueNumber));
+      mockFormatIssueAsTask.mockImplementation((issue: Issue) => `## Issue #${issue.number}`);
+      mockInteractiveMode.mockResolvedValue({ action: 'save_task', task: 'Saved multi-issue task' });
+      mockSaveTaskFromInteractive.mockImplementation(async (_cwd, _task, _workflow, options) => {
+        expect(options?.issue).toBeUndefined();
+        return createSavedTaskResult({
+          taskContent: 'Saved multi-issue task',
+          ...(options?.issue !== undefined ? { sourceIssueNumber: options.issue } : {}),
+        });
+      });
+
+      await executeDefaultAction('#131 #132');
+
+      expect(mockConfirm).not.toHaveBeenCalled();
+      expect(mockCommentOnIssue).not.toHaveBeenCalled();
     });
   });
 
@@ -493,6 +701,37 @@ describe('Issue resolution in routing', () => {
       // Then: no issue fetching should occur
       expect(mockFetchIssue).not.toHaveBeenCalled();
     });
+
+    it('should save a non-issue task without asking for an issue comment', async () => {
+      mockInteractiveMode.mockResolvedValue({ action: 'save_task', task: 'Standalone task' });
+      mockSaveTaskFromInteractive.mockImplementation(async (_cwd, _task, _workflow, options) => {
+        expect(options?.issue).toBeUndefined();
+        return createSavedTaskResult({
+          taskContent: 'Standalone task',
+          ...(options?.issue !== undefined ? { sourceIssueNumber: options.issue } : {}),
+        });
+      });
+
+      await executeDefaultAction('standalone input');
+
+      expect(mockSaveTaskFromInteractive).toHaveBeenCalledTimes(1);
+      expect(mockConfirm).not.toHaveBeenCalled();
+      expect(mockCommentOnIssue).not.toHaveBeenCalled();
+    });
+
+    it('should not ask for or post an issue comment for execute', async () => {
+      mockOpts.issue = 131;
+      mockFetchIssue.mockReturnValue(createMockIssue(131));
+      mockFormatIssueAsTask.mockReturnValue('## Issue #131: Issue #131');
+      mockInteractiveMode.mockResolvedValue({ action: 'execute', task: 'Execute task' });
+
+      await executeDefaultAction();
+
+      expect(mockSelectAndExecuteTask).toHaveBeenCalledTimes(1);
+      expect(mockSaveTaskFromInteractive).not.toHaveBeenCalled();
+      expect(mockConfirm).not.toHaveBeenCalled();
+      expect(mockCommentOnIssue).not.toHaveBeenCalled();
+    });
   });
 
   describe('issue source context routing by mode', () => {
@@ -542,6 +781,39 @@ describe('Issue resolution in routing', () => {
         expect.anything(),
       );
       expect(mockInteractiveMode).not.toHaveBeenCalled();
+    });
+
+    it('should pass complete issue context and grill-me mode to interactive mode', async () => {
+      mockOpts.issue = 131;
+      mockSelectInteractiveMode.mockResolvedValueOnce('grill-me');
+      const sourceContext = [
+        'Issue body',
+        '**first-author**: first comment',
+        '**task-author**: past task instructions',
+        '**latest-author**: latest comment',
+      ].join('\n');
+      const issue131 = {
+        ...createMockIssue(131),
+        body: 'Issue body',
+        comments: [
+          { author: 'first-author', body: 'first comment' },
+          { author: 'task-author', body: 'past task instructions' },
+          { author: 'latest-author', body: 'latest comment' },
+        ],
+      };
+      mockFetchIssue.mockReturnValue(issue131);
+      mockFormatIssueAsTask.mockReturnValue(sourceContext);
+
+      await executeDefaultAction();
+
+      expect(mockInteractiveMode).toHaveBeenCalledWith(
+        '/test/cwd',
+        { sourceContext },
+        expect.anything(),
+        undefined,
+        undefined,
+        { assistantMode: 'grill-me' },
+      );
     });
 
     it('should not offer passthrough mode when only issue source context is available', async () => {
@@ -747,6 +1019,8 @@ describe('Issue resolution in routing', () => {
         'default',
         { confirmAtEndMessage: 'Add this issue to tasks?', labels: [] },
       );
+      expect(mockConfirm).not.toHaveBeenCalled();
+      expect(mockCommentOnIssue).not.toHaveBeenCalled();
     });
 
     it('should not call selectAndExecuteTask when create_issue action is chosen', async () => {
