@@ -6,6 +6,10 @@ Determine requirement fulfillment, resolution of preceding findings, and recurre
 **Current review resolution:**
 {report:review-resolution.md}
 
+**Depth of fulfillment judgment:**
+
+The only valid basis for judging a requirement fulfilled is having confirmed the path by which the required result actually holds in the code. The existence of a call to a function that validates, saves, or propagates is not a basis. For every location cited as evidence of fulfillment, open the callee implementation and confirm with file:line that the path connects from the required input to the observable result (the save destination path, the output format, the propagation to consumers). Never cite a file you have not opened. Treat any requirement you could not confirm as unfulfilled.
+
 1. Split the original requirements into the smallest independently decidable units and map them to current code
 2. Recheck each preceding finding against its original acceptance criteria and determine whether it is resolved
 3. Copy the carry-forward source and every row from Invariant Register Carry-forward in the current review-resolution.md unchanged into the section with the same name in the final review-resolution.md
