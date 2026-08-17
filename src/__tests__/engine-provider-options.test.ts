@@ -337,6 +337,11 @@ describe('WorkflowEngine provider_options resolution', () => {
     expect(result).toBeUndefined();
   });
 
+  it('Given empty inspect tools and an allowlist-capable provider, When resolving tools, Then it keeps an empty allowlist instead of the default', () => {
+    expect(resolveInspectToolsForProvider([], 'opencode')).toEqual([]);
+    expect(resolveInspectToolsForProvider([], 'claude')).toEqual([]);
+  });
+
   it('Given no inspect tools and OpenCode provider, When resolving tools, Then it applies the read/glob/grep default', () => {
     const result = resolveInspectToolsForProvider(undefined, 'opencode');
 
