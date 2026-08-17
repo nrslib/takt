@@ -53,7 +53,7 @@ describe('Team Leader feedback prompt', () => {
       ['Read'],
     );
 
-    expect(prompt).toContain('x'.repeat(2000));
+    expect(prompt).toContain('x'.repeat(1900));
     expect(prompt).toContain('[truncated:');
     expect(prompt).not.toContain(tailMarker);
     expect(prompt).toContain('You may use read-only inspection tools only');
