@@ -29,4 +29,23 @@ describe('parseStructuredOutputObject', () => {
   ])('rejects unsafe non-whole response: %s', (content) => {
     expect(() => parseStructuredOutputObject(content)).toThrow();
   });
+
+  // kiro-cli renders markdown before printing: fence chars are consumed and only `json\n{...}` survives.
+  it.each([
+    ['bare rendered fence', 'json\n{"step":1,"reason":"ok"}', { step: 1, reason: 'ok' }],
+    ['rendered fence after prose', 'explanation\njson\n{"step":1,"reason":"ok"}', { step: 1, reason: 'ok' }],
+    ['rendered fence with trailing prose', 'json\n{"step":1}\ntrailing note', { step: 1 }],
+    ['last rendered fence', 'json\n{"step":1}\nmore\njson\n{"step":2}', { step: 2 }],
+    ['nested braces and quoted braces', 'json\n{"step":1,"reason":"has { and } and \\"quotes\\"","inner":{"a":1}}', { step: 1, reason: 'has { and } and "quotes"', inner: { a: 1 } }],
+  ])('accepts markdown-rendered fence: $0', (_name, content, expected) => {
+    expect(parseStructuredOutputObject(content)).toEqual(expected);
+  });
+
+  it.each([
+    ['broken JSON after marker', 'json\n{broken'],
+    ['unterminated object after marker', 'json\n{"step":1'],
+    ['marker without object', 'json\nnot an object'],
+  ])('still rejects rendered-fence candidates that are not valid JSON: $0', (_name, content) => {
+    expect(() => parseStructuredOutputObject(content)).toThrow('Response must include a ```json ... ``` block');
+  });
 });
