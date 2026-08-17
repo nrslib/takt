@@ -206,24 +206,67 @@ export class TeamLeaderRunner {
 
     const stepIteration = activeStepIteration ?? incrementStepIteration(state, step.name);
     const agentStep = step as AgentWorkflowStep;
+    const selectorProvider = this.deps.engineOptions.selectorProvider;
+    const dynamicFacetDeadline = agentStep.dynamicFacets !== undefined && selectorProvider !== undefined
+      ? executionDeadlineContext?.begin('team-leader:dynamic-facet-selector', selectorProvider)
+      : undefined;
     const executableStep = agentStep.dynamicFacets === undefined
       ? agentStep
-      : await this.deps.stepExecutor.prepareDynamicFacetStep(
-        agentStep,
-        state,
-        task,
-        stepIteration,
+      : await runWithExecutionDeadline(
+        executionDeadlineContext,
+        dynamicFacetDeadline,
+        () => this.deps.stepExecutor.prepareDynamicFacetStep(
+          agentStep,
+          state,
+          task,
+          stepIteration,
+        ),
       );
     if (!executableStep.teamLeader) {
       throw new Error(`Step "${step.name}" lost its teamLeader configuration during preparation`);
     }
     const teamLeaderConfig = executableStep.teamLeader;
+    const leaderStep = createTeamLeaderPlanningStep(executableStep);
+    const instruction = this.deps.stepExecutor.buildInstruction(
+      leaderStep,
+      stepIteration,
+      state,
+      task,
+      maxSteps,
+      runtime?.fallback,
+      instructionTransaction,
+    );
+    const leaderRuntime = await this.resolveLeaderAutoRouting(
+      leaderStep,
+      runtime,
+      executionDeadlineContext,
+    );
+    const leaderProviderInfo = this.deps.optionsBuilder.resolveStepProviderModel(leaderStep, leaderRuntime);
+    const { provider: leaderProvider, model: leaderModel } = leaderProviderInfo;
+    const leaderDeadline = executionDeadlineContext?.begin('team-leader:leader', leaderProviderInfo);
+    const leaderBaseOptions = this.deps.optionsBuilder.buildBaseOptions(
+      leaderStep,
+      undefined,
+      leaderRuntime,
+    );
+    const leaderWorkflowMeta = this.deps.optionsBuilder.buildPhase1WorkflowMeta(
+      leaderBaseOptions.workflowMeta,
+    );
+    const leaderAbortSignal = combineAbortSignals([
+      leaderBaseOptions.abortSignal,
+      leaderDeadline?.signal,
+    ]);
     const companionRuntime = executableStep.companion === undefined
       ? undefined
-      : await this.deps.stepExecutor.createCompanionRuntime(
-        executableStep,
-        task,
-        state,
+      : await runWithExecutionDeadline(
+        executionDeadlineContext,
+        leaderDeadline,
+        () => this.deps.stepExecutor.createCompanionRuntime(
+          executableStep,
+          task,
+          state,
+          leaderAbortSignal,
+        ),
       );
     using activeCompanionRuntime = companionRuntime;
     activeCompanionRuntime?.beginReviewAttempt();
@@ -250,38 +293,8 @@ export class TeamLeaderRunner {
       companionReviewCompleted = true;
       companionFindingCountForNextRound = review.findings.length;
     };
-    const leaderStep = createTeamLeaderPlanningStep(executableStep);
-    const instruction = this.deps.stepExecutor.buildInstruction(
-      leaderStep,
-      stepIteration,
-      state,
-      task,
-      maxSteps,
-      runtime?.fallback,
-      instructionTransaction,
-    );
-    const leaderRuntime = await this.resolveLeaderAutoRouting(
-      leaderStep,
-      runtime,
-      executionDeadlineContext,
-    );
-    const leaderProviderInfo = this.deps.optionsBuilder.resolveStepProviderModel(leaderStep, leaderRuntime);
-    const { provider: leaderProvider, model: leaderModel } = leaderProviderInfo;
-    const leaderDeadline = executionDeadlineContext?.begin('team-leader:leader', leaderProviderInfo);
-    const leaderBaseOptions = this.deps.optionsBuilder.buildBaseOptions(
-      leaderStep,
-      undefined,
-      leaderRuntime,
-    );
     const leaderStream = activeCompanionRuntime?.composeOptions(leaderBaseOptions).onStream
       ?? leaderBaseOptions.onStream;
-    const leaderWorkflowMeta = this.deps.optionsBuilder.buildPhase1WorkflowMeta(
-      leaderBaseOptions.workflowMeta,
-    );
-    const leaderAbortSignal = combineAbortSignals([
-      leaderBaseOptions.abortSignal,
-      leaderDeadline?.signal,
-    ]);
     const inspectTools = resolveInspectToolsForProvider(teamLeaderConfig.inspectTools, leaderProvider);
     const inspectGuidance = isTeamLeaderInspectGuidanceApplicable(teamLeaderConfig.inspectTools);
     const leaderMcpServers = this.deps.optionsBuilder.resolveMcpServersForStep(leaderStep, leaderProvider);
@@ -717,7 +730,11 @@ export class TeamLeaderRunner {
 
     const aggregatedContent = buildTeamLeaderAggregatedContent(plannedParts, partResults);
     if (activeCompanionRuntime !== undefined && !companionReviewCompleted) {
-      await completeCompanionReview(aggregatedContent);
+      await runWithExecutionDeadline(
+        executionDeadlineContext,
+        leaderDeadline,
+        () => completeCompanionReview(aggregatedContent),
+      );
     }
 
     if (parallelLogger) {

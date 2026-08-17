@@ -20,7 +20,7 @@ import {
   buildPartScopedSessionKey,
   runTeamLeaderPart,
 } from '../core/workflow/engine/team-leader-part-runner.js';
-import type { AgentResponse, WorkflowStep, WorkflowState } from '../core/models/types.js';
+import type { AgentResponse, AgentWorkflowStep, WorkflowStep, WorkflowState } from '../core/models/types.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import {
   AGENT_FAILURE_CATEGORIES,
@@ -66,6 +66,24 @@ vi.mock('../core/workflow/observability/workflowSpans.js', async () => {
 
 function buildLeaderOrMemberInstruction(step: WorkflowStep): string {
   return step.name.includes('.') ? step.instruction : 'leader instruction';
+}
+
+function buildMinimalTeamLeaderState(): WorkflowState {
+  return {
+    workflowName: 'workflow',
+    currentStep: 'implement',
+    iteration: 1,
+    stepOutputs: new Map(),
+    structuredOutputs: new Map(),
+    systemContexts: new Map(),
+    effectResults: new Map(),
+    lastOutput: undefined,
+    previousResponseSourcePath: undefined,
+    userInputs: [],
+    personaSessions: new Map(),
+    stepIterations: new Map(),
+    status: 'running',
+  };
 }
 
 const defaultTeamLeaderRunDirectory = mkdtempSync(join(tmpdir(), 'takt-team-leader-runner-'));
@@ -384,6 +402,163 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       expect.any(Function),
       expect.any(Function),
     );
+  });
+
+  it('runs Team Leader dynamic facet preparation inside the selector deadline and propagates abort', async () => {
+    const selectorProvider = { provider: 'opencode' as const, model: 'selector-model' };
+    const selectorAbortController = new AbortController();
+    const selectorDeadline: WorkflowStepInactivityDeadline = {
+      signal: selectorAbortController.signal,
+      recordActivity: vi.fn(),
+      dispose: vi.fn(),
+      inactivityTimeoutMs: 1,
+    };
+    const deadlineContext = createWorkflowStepAbortSignalContext(undefined);
+    const executionDeadlineContext: WorkflowStepExecutionDeadlineContext = {
+      begin: vi.fn(() => selectorDeadline),
+      runWith: vi.fn((deadline, operation) => deadlineContext.runWith(deadline, operation)),
+    };
+    const prepareDynamicFacetStep = vi.fn(async (candidate: AgentWorkflowStep) => {
+      expect(deadlineContext.getAbortSignal()).toBe(selectorDeadline.signal);
+      selectorAbortController.abort(new Error('selector timed out'));
+      deadlineContext.getAbortSignal()?.throwIfAborted();
+      return candidate;
+    });
+    const runner = new TeamLeaderRunner({
+      stepExecutor: { prepareDynamicFacetStep },
+      engineOptions: { selectorProvider },
+      getCwd: () => '/tmp/project',
+      getWorkflowName: () => 'workflow',
+      getInteractive: () => false,
+      getRunPaths: () => defaultTeamLeaderRunPaths,
+    } as ConstructorParameters<typeof TeamLeaderRunner>[0]);
+
+    await expect(runner.runTeamLeaderStep(
+      {
+        name: 'implement',
+        persona: 'coder',
+        instruction: 'leader instruction',
+        teamLeader: { maxConcurrency: 1, timeoutMs: 1_000 },
+        dynamicFacets: { pool: 'implementation', maxSelected: 1 },
+      },
+      buildMinimalTeamLeaderState(),
+      'implement feature',
+      5,
+      vi.fn(),
+      undefined,
+      undefined,
+      executionDeadlineContext,
+    )).rejects.toThrow('selector timed out');
+    expect(executionDeadlineContext.begin).toHaveBeenCalledWith(
+      'team-leader:dynamic-facet-selector',
+      selectorProvider,
+    );
+    expect(executionDeadlineContext.runWith).toHaveBeenCalledOnce();
+    expect(prepareDynamicFacetStep).toHaveBeenCalledOnce();
+  });
+
+  it('binds the Companion runtime lifetime and completion to the Team Leader deadline', async () => {
+    mockExecuteAgent.mockResolvedValue({
+      persona: 'coder',
+      status: 'done',
+      content: 'part complete',
+      timestamp: new Date('2026-04-01T00:00:00.000Z'),
+    });
+    const leaderAbortController = new AbortController();
+    const leaderDeadline: WorkflowStepInactivityDeadline = {
+      signal: leaderAbortController.signal,
+      recordActivity: vi.fn(),
+      dispose: vi.fn(),
+      inactivityTimeoutMs: 60_000,
+    };
+    const deadlineContext = createWorkflowStepAbortSignalContext(undefined);
+    const events: string[] = [];
+    const completionSignals: Array<AbortSignal | undefined> = [];
+    const companionRuntime = {
+      beginReviewAttempt: vi.fn(),
+      composeOptions: vi.fn((options: Record<string, unknown>) => options),
+      complete: vi.fn(async () => {
+        completionSignals.push(deadlineContext.getAbortSignal());
+        return { findings: [] };
+      }),
+      [Symbol.dispose]: vi.fn(),
+    };
+    const createCompanionRuntime = vi.fn(async (
+      _step: WorkflowStep,
+      _task: string,
+      _state: WorkflowState,
+      abortSignal: AbortSignal | undefined,
+    ) => {
+      events.push('create-companion-runtime');
+      expect(deadlineContext.getAbortSignal()).toBe(leaderDeadline.signal);
+      expect(abortSignal).toBe(leaderDeadline.signal);
+      return companionRuntime;
+    });
+    const executionDeadlineContext: WorkflowStepExecutionDeadlineContext = {
+      begin: vi.fn((executionUnitKey) => {
+        events.push(`begin:${executionUnitKey}`);
+        return leaderDeadline;
+      }),
+      runWith: vi.fn((deadline, operation) => deadlineContext.runWith(deadline, operation)),
+    };
+    const structuredCaller = {
+      decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxParts, options) => {
+        options.onPromptResolved?.({ systemPrompt: 'leader', userInstruction: 'leader instruction' });
+        return { parts: [{ id: 'part-1', title: 'Implementation', instruction: 'Implement the change' }] };
+      }),
+      requestMoreParts: vi.fn().mockResolvedValue({ done: true, reasoning: 'complete', parts: [] }),
+    };
+    const runner = new TeamLeaderRunner({
+      optionsBuilder: {
+        buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
+        buildBaseOptions: vi.fn().mockReturnValue({ failureDir: '/tmp/project/failures' }),
+        buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+        resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
+        resolveStepProviderModel: vi.fn().mockReturnValue({
+          provider: 'opencode',
+          model: 'leader-model',
+        }),
+      },
+      stepExecutor: {
+        buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
+        createCompanionRuntime,
+        applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
+        persistPreviousResponseSnapshot: vi.fn(),
+        emitStepReports: vi.fn(),
+      },
+      engineOptions: { projectCwd: '/tmp/project', structuredCaller },
+      getCwd: () => '/tmp/project',
+      getWorkflowName: () => 'workflow',
+      getInteractive: () => false,
+      getRunPaths: () => defaultTeamLeaderRunPaths,
+      observabilityEnabled: false,
+    } as ConstructorParameters<typeof TeamLeaderRunner>[0]);
+
+    await runner.runTeamLeaderStep(
+      {
+        name: 'implement',
+        persona: 'coder',
+        instruction: 'leader instruction',
+        teamLeader: { maxConcurrency: 1, timeoutMs: 1_000 },
+        companion: { fixed: ['reviewer'], pool: [] },
+      },
+      buildMinimalTeamLeaderState(),
+      'implement feature',
+      5,
+      vi.fn(),
+      undefined,
+      undefined,
+      executionDeadlineContext,
+    );
+
+    expect(events.indexOf('begin:team-leader:leader')).toBeGreaterThanOrEqual(0);
+    expect(events.indexOf('begin:team-leader:leader')).toBeLessThan(
+      events.indexOf('create-companion-runtime'),
+    );
+    expect(completionSignals).toEqual([leaderDeadline.signal]);
+    expect(companionRuntime[Symbol.dispose]).toHaveBeenCalledOnce();
+    leaderAbortController.abort(new Error('leader deadline reached'));
+    expect(leaderDeadline.signal.aborted).toBe(true);
   });
 
   it('passes the complete previous state output, including a trailing finding, to structured decomposition', async () => {

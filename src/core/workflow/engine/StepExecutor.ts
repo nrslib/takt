@@ -740,6 +740,7 @@ export class StepExecutor {
     step: NormalOrTeamLeaderWorkflowStep,
     task: string,
     state: WorkflowState,
+    abortSignal?: AbortSignal,
   ): Promise<CompanionStepRuntime | undefined> {
     if (!this.deps.companionEnabled) {
       if (step.companion !== undefined) {
@@ -765,6 +766,7 @@ export class StepExecutor {
     const companionDefinitions = this.deps.companionDefinitions;
     const companionProviders = this.deps.companionProviders;
     const companionDiffReader = this.deps.companionDiffReader;
+    const runtimeAbortSignal = abortSignal ?? this.resolveAbortSignal();
     state.companion = {
       completionSettled: false,
       followUpRounds: 0,
@@ -790,7 +792,7 @@ export class StepExecutor {
         providers: companionProviders,
         selectorProvider: this.deps.companionSelectorProvider,
         diffReader: companionDiffReader,
-        abortSignal: this.resolveAbortSignal(),
+        abortSignal: runtimeAbortSignal,
         buildProviderCallCallbacks: ({
           agentName,
           purpose,
@@ -822,7 +824,7 @@ export class StepExecutor {
         },
       });
     } catch (error) {
-      this.resolveAbortSignal()?.throwIfAborted();
+      runtimeAbortSignal?.throwIfAborted();
       const reason = safeExternalErrorMessage(error);
       state.companion = {
         ...requireActiveCompanionState(state, step.name),
