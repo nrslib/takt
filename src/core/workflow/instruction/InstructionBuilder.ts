@@ -38,8 +38,11 @@ function preparePolicyContent(content: string, sourcePath?: string): string {
 function preparePreviousResponseContent(
   content: string,
   sourcePath: string | undefined,
+  preserveFullContent: boolean,
 ): string {
-  const prepared = trimContextContent(content, CONTEXT_MAX_CHARS);
+  const prepared = preserveFullContent
+    ? { content, truncated: false }
+    : trimContextContent(content, CONTEXT_MAX_CHARS);
   const lines: string[] = [prepared.content];
   if (prepared.truncated && sourcePath) {
     lines.push('', `Previous Response is truncated. Source: ${sourcePath}`);
@@ -123,6 +126,7 @@ export class InstructionBuilder {
       ? preparePreviousResponseContent(
           this.context.previousOutput.content,
           this.context.previousResponseSourcePath,
+          this.step.preserveFullPreviousResponse === true,
         )
       : '';
     const previousResponse = hasPreviousResponse
