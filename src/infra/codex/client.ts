@@ -4,6 +4,7 @@
  * Uses @openai/codex-sdk for native TypeScript integration.
  */
 
+import './codex-spawn-guard.js';
 import {
   Codex,
   type CodexOptions,

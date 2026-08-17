@@ -186,6 +186,7 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/clipboardImage.test.ts',
   'src/__tests__/codex-client-retry.test.ts',
   'src/__tests__/codex-skill-config.test.ts',
+  'src/__tests__/codex-spawn-guard.test.ts',
   'src/__tests__/conversationLoop-resume.test.ts',
   'src/__tests__/conversationSession.test.ts',
   'src/__tests__/copilot-client.test.ts',
