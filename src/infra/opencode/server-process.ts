@@ -65,6 +65,10 @@ export async function startOpenCodeServer(
   );
 
   let output = '';
+  const OUTPUT_TAIL_MAX_CHARS = 2000;
+  const appendOutput = (text: string): void => {
+    output = (output + text).slice(-OUTPUT_TAIL_MAX_CHARS);
+  };
   let started = false;
   let closing = false;
   let runtimeError: Error | undefined;
@@ -118,14 +122,13 @@ export async function startOpenCodeServer(
       started = true;
       settled = true;
       if (timeoutId !== undefined) clearTimeout(timeoutId);
-      removeStartupDataListeners();
       resolve(serverUrl);
     };
 
     const onOutput = (stream: 'stdout' | 'stderr') => (chunk: Buffer | string): void => {
-      if (started || settled) return;
       const text = chunk.toString();
-      output += text;
+      appendOutput(text);
+      if (started || settled) return;
       const buffered = stream === 'stdout' ? stdoutLineBuffer + text : stderrLineBuffer + text;
       const lines = buffered.split('\n');
       const incompleteLine = lines.pop() ?? '';

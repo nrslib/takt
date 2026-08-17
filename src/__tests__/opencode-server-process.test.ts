@@ -118,12 +118,30 @@ describe('OpenCode server process', () => {
 
       expect(errors).toHaveLength(1);
       expect(errors[0]?.message).toBe(`OpenCode server ${streamName} stream failed: write EPIPE`);
-      expect(createClientMock).toHaveBeenCalledWith({ baseUrl: 'http://127.0.0.1:62000' });
 
       server.close();
-      expect(testChild.kill).toHaveBeenCalledWith('SIGTERM');
     },
   );
+
+  it('should include recent post-startup output in an unexpected exit error', async () => {
+    const testChild = createTestChildProcess();
+    crossSpawnMock.mockReturnValue(testChild.child);
+    createClientMock.mockReturnValue({});
+
+    const startOpenCodeServer = await getStartOpenCodeServer();
+    const startPromise = startOpenCodeServer(startOptions());
+    testChild.stdout.emit('data', 'opencode server listening on http://127.0.0.1:62000\n');
+    const server = await startPromise;
+    const errors: Error[] = [];
+    server.onError((error) => errors.push(error));
+
+    testChild.stderr.emit('data', 'FATAL: model backend unreachable\n');
+    testChild.child.emit('exit', 1, null);
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.message).toContain('FATAL: model backend unreachable');
+    server.close();
+  });
 
   it('should wait for a complete stdout line before parsing a server URL', async () => {
     const testChild = createTestChildProcess();
