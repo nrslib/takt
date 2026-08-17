@@ -381,7 +381,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     );
   });
 
-  it('bounds the previous state output before structured decomposition', async () => {
+  it('passes the complete previous state output, including a trailing finding, to structured decomposition', async () => {
     const trailingFinding = 'TAIL_FINDING: unresolved review issue';
     const previousOutput: AgentResponse = {
       persona: 'review',
@@ -454,7 +454,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     await runner.runTeamLeaderStep(step, state, 'implement feature', 5, vi.fn());
 
     expect(decomposeTask).toHaveBeenCalledWith(
-      expect.not.stringContaining(trailingFinding),
+      expect.stringContaining(trailingFinding),
       undefined,
       expect.any(Object),
     );

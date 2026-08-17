@@ -220,6 +220,7 @@ describe('createTeamLeaderPlanningStep', () => {
       persona: 'lead',
       personaDisplayName: 'lead',
       providerRoutingPersonaKey: 'lead',
+      preserveFullPreviousResponse: true,
     }));
   });
 
@@ -242,7 +243,7 @@ describe('createTeamLeaderPlanningStep', () => {
     expect(planningStep.providerRoutingPersonaKey).toBe('coder');
   });
 
-  it('bounds the previous state output for the parent planning prompt', () => {
+  it('preserves the complete previous state output for the parent planning prompt only', () => {
     const step: WorkflowStep = {
       name: 'implement',
       persona: 'coder',
@@ -271,8 +272,8 @@ describe('createTeamLeaderPlanningStep', () => {
       instruction: 'Implement the change',
     }), context).build();
 
-    expect(parentPrompt).not.toContain('TAIL_FINDING: preserve this');
-    expect(parentPrompt).not.toContain('a'.repeat(2500));
+    expect(parentPrompt).toContain('TAIL_FINDING: preserve this');
+    expect(parentPrompt).toContain('a'.repeat(2500));
     expect(memberPrompt).not.toContain('TAIL_FINDING: preserve this');
   });
 });
