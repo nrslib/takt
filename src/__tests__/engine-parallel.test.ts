@@ -237,6 +237,34 @@ function facetKnowledge(config: WorkflowConfig, poolName: string, candidateId: s
   return content;
 }
 
+function selectorStepName(instruction: string): string {
+  const stepName = instruction.match(/(?:^|\n)Step:\n([^\n]+)(?:\n|$)/)?.[1];
+  if (stepName === undefined) {
+    throw new Error('Missing selector step name');
+  }
+  return stepName;
+}
+
+function parallelFacetSelection(instruction: string, internalAgentName: string | undefined): string[] {
+  if (internalAgentName === 'dynamic-parallel-selector') {
+    return ['pool-security'];
+  }
+  if (internalAgentName !== 'dynamic-facet-selector') {
+    throw new Error(`Unexpected selector agent name: ${internalAgentName}`);
+  }
+  const stepName = selectorStepName(instruction);
+  switch (stepName) {
+    case 'security':
+    case 'fixed-security':
+      return ['web'];
+    case 'frontend':
+    case 'pool-security':
+      return ['cli'];
+    default:
+      throw new Error(`Unexpected selector step name: ${stepName}`);
+  }
+}
+
 function makeDynamicParallelFacetWorkflow(): WorkflowConfig {
   const security = {
     name: 'security',
@@ -751,15 +779,12 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
   it('should execute dynamic parallel fixed children with independent facet selection (DFP-016)', async () => {
     const config = makeDynamicParallelFixedFacetWorkflow();
     const selectorKinds: string[] = [];
-    let facetSelectionCount = 0;
     const reviewerInstructions: Array<{ persona: string | undefined; instruction: string }> = [];
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       if (options?.outputSchema !== undefined) {
-        const kind = selectorKinds.length === 0 ? 'participant' : 'facet';
+        const kind = options.internalAgentName === 'dynamic-parallel-selector' ? 'participant' : 'facet';
         selectorKinds.push(kind);
-        const selectedIds = kind === 'participant'
-          ? ['pool-security']
-          : facetSelectionCount++ === 0 ? ['web'] : ['cli'];
+        const selectedIds = parallelFacetSelection(instruction, options.internalAgentName);
         return makeResponse({
           persona: 'selector',
           structuredOutput: { selected_ids: selectedIds, rationale: `${kind} selection` },
@@ -833,12 +858,11 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
   it('should select facets independently for each static parallel child and compose each child base (DFP-004, DFP-005)', async () => {
     const config = makeStaticParallelFacetWorkflow();
     const facetSelectorInstructions: string[] = [];
-    let facetSelectionCount = 0;
     const reviewerInstructions: Array<{ persona: string | undefined; instruction: string }> = [];
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       if (options?.outputSchema !== undefined) {
         facetSelectorInstructions.push(instruction);
-        const selectedIds = facetSelectionCount++ === 0 ? ['web'] : ['cli'];
+        const selectedIds = parallelFacetSelection(instruction, options.internalAgentName);
         return makeResponse({
           persona: 'selector',
           structuredOutput: { selected_ids: selectedIds, rationale: 'child-specific selection' },
@@ -917,15 +941,12 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       occurrence: 1,
     };
     const selectorKinds: string[] = [];
-    let facetSelectionCount = 0;
     const reviewerInstructions: Array<{ persona: string | undefined; instruction: string }> = [];
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       if (options?.outputSchema !== undefined) {
-        const isFacetSelector = selectorKinds.length > 0;
+        const isFacetSelector = options.internalAgentName === 'dynamic-facet-selector';
         selectorKinds.push(isFacetSelector ? 'facet' : 'participant');
-        const selectedIds = !isFacetSelector
-          ? ['pool-security']
-          : facetSelectionCount++ === 0 ? ['web'] : ['cli'];
+        const selectedIds = parallelFacetSelection(instruction, options.internalAgentName);
         return makeResponse({
           persona: 'selector',
           structuredOutput: { selected_ids: selectedIds, rationale: 'current run selection' },
