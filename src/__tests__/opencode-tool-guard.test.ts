@@ -11,6 +11,7 @@ import {
   createToolGuardRecoveryState,
   markToolGuardCorrectionPending,
   markToolGuardFreshSessionUsed,
+  resolveToolGuardRecoveryAction,
   shouldIssueToolGuardCorrection,
 } from '../infra/opencode/tool-guard.js';
 import {
@@ -315,8 +316,9 @@ describe('OpenCode guard suite', () => {
       undefined,
     );
     expect(prompt).toContain('"todowrite"');
-    expect(prompt.toLowerCase()).toContain('stop calling');
+    expect(prompt.toLowerCase()).toContain('do not call');
     expect(prompt.toLowerCase()).toContain('final response');
+    expect(prompt.toLowerCase()).not.toContain('already done');
   });
 
   it('exact_repeat_loop は fresh session の前置理由でも専用メッセージを出す', () => {
@@ -739,26 +741,21 @@ describe('ToolGuardRecoveryState', () => {
   });
 
   it('exact_repeat_loop は 矯正1回 → fresh session 1回 → 本失敗 の順に消費される', () => {
-    // attempt-runner の分岐条件と同じ合成式で回復経路を検証する
-    const canCorrect = (state: ReturnType<typeof createToolGuardRecoveryState>, fp: string) =>
-      !state.freshSessionUsed && shouldIssueToolGuardCorrection(state, fp);
-    const canFreshSession = (state: ReturnType<typeof createToolGuardRecoveryState>) =>
-      !state.freshSessionUsed;
+    // attempt-runner と同じ resolveToolGuardRecoveryAction で回復経路を検証する
     const correctionLimit = 2;
     let state = createToolGuardRecoveryState(correctionLimit);
 
     // 1) 同一ループ fingerprint を矯正対象として受理する
     const fingerprintA = 'exact_repeat:abc123';
-    expect(canCorrect(state, fingerprintA)).toBe(true);
+    expect(resolveToolGuardRecoveryAction(state, fingerprintA)).toBe('correction');
     expect(state.freshSessionUsed).toBe(false);
     state = markToolGuardCorrectionPending(state, 'session-1', fingerprintA, 'Stop repeating.');
     expect(state.correctionsUsed).toBe(1);
     expect(state.correctedFingerprints).toContain(fingerprintA);
     expect(state.freshSessionUsed).toBe(false);
 
-    // 2) 同一 fingerprint は再矯正しない（shouldIssue=false）。fresh session は未使用なので通せる
-    expect(canCorrect(state, fingerprintA)).toBe(false);
-    expect(canFreshSession(state)).toBe(true);
+    // 2) 同一 fingerprint は再矯正しない。fresh session は未使用なので通せる
+    expect(resolveToolGuardRecoveryAction(state, fingerprintA)).toBe('fresh_session');
 
     // 3) fresh session を1回消費する。fresh session 使用後はもう矯正も fresh session も不可
     state = markToolGuardFreshSessionUsed(state, 'exact_repeat_loop');
@@ -766,10 +763,10 @@ describe('ToolGuardRecoveryState', () => {
     expect(state.freshReason).toBe('exact_repeat_loop');
     expect(state.pendingCorrection).toBeUndefined();
 
-    // 4) fresh session 後の再発はもう回復枠がない → attempt-runner は本失敗に落ちる
-    expect(canCorrect(state, fingerprintA)).toBe(false);
-    expect(canCorrect(state, 'exact_repeat:other')).toBe(false);
-    expect(canFreshSession(state)).toBe(false);
+    // 4) fresh session 後の再発はもう回復枠がない → attempt-runner は本失敗に落ちる。
+    //    別 fingerprint でも fail になることを確認する。
+    expect(resolveToolGuardRecoveryAction(state, fingerprintA)).toBe('fail');
+    expect(resolveToolGuardRecoveryAction(state, 'exact_repeat:other')).toBe('fail');
   });
 
   it('exact_repeat_loop の fingerprint は outcome.key ベースで別入力ループは別 fingerprint になる', () => {

@@ -44,7 +44,7 @@ import {
   createToolGuardRecoveryState,
   markToolGuardCorrectionPending,
   markToolGuardFreshSessionUsed,
-  shouldIssueToolGuardCorrection,
+  resolveToolGuardRecoveryAction,
   type ToolGuardRecoverableFailure,
 } from './tool-guard.js';
 import {
@@ -1860,53 +1860,52 @@ export class OpenCodeAttemptRunner {
         && toolGuardFailure.tool === STRUCTURED_OUTPUT_TOOL_NAME
         ? undefined
         : toolGuardFailure;
-      if (
-        recoverableToolFailure !== undefined
-        && !callState.toolGuardRecovery.freshSessionUsed
-        && shouldIssueToolGuardCorrection(
+      if (recoverableToolFailure !== undefined) {
+        const toolGuardRecoveryAction = resolveToolGuardRecoveryAction(
           callState.toolGuardRecovery,
           getToolGuardFailureFingerprint(recoverableToolFailure),
-        )
-      ) {
-        throwIfCallAborted();
-        callState.toolGuardRecovery = markToolGuardCorrectionPending(
-          callState.toolGuardRecovery,
-          activeSessionId,
-          getToolGuardFailureFingerprint(recoverableToolFailure),
-          buildToolGuardCorrectionPrompt(recoverableToolFailure, unavailableLoopServerTools),
         );
-        guardSuite.noteRecovery();
-        callState.maxAttempts = Math.max(callState.maxAttempts, attempt + 1);
-        log.debug('OpenCode tool loop detected; sending one in-session correction', {
-          agentType,
-          previousAttempt: attempt,
-          sessionId: activeSessionId,
-          kind: recoverableToolFailure.kind,
-          fingerprint: getToolGuardFailureFingerprint(recoverableToolFailure).slice(0, 12),
-          toolHealth: guardSuite.stats(),
-        });
-        await this.waitForRetryDelay(attempt, options.abortSignal);
-        throwIfCallAborted();
-        throwIfServerInvalidated();
-        return RETRY_ATTEMPT;
-      }
+        if (toolGuardRecoveryAction === 'correction') {
+          throwIfCallAborted();
+          callState.toolGuardRecovery = markToolGuardCorrectionPending(
+            callState.toolGuardRecovery,
+            activeSessionId,
+            getToolGuardFailureFingerprint(recoverableToolFailure),
+            buildToolGuardCorrectionPrompt(recoverableToolFailure, unavailableLoopServerTools),
+          );
+          guardSuite.noteRecovery();
+          callState.maxAttempts = Math.max(callState.maxAttempts, attempt + 1);
+          log.debug('OpenCode tool loop detected; sending one in-session correction', {
+            agentType,
+            previousAttempt: attempt,
+            sessionId: activeSessionId,
+            kind: recoverableToolFailure.kind,
+            fingerprint: getToolGuardFailureFingerprint(recoverableToolFailure).slice(0, 12),
+            toolHealth: guardSuite.stats(),
+          });
+          await this.waitForRetryDelay(attempt, options.abortSignal);
+          throwIfCallAborted();
+          throwIfServerInvalidated();
+          return RETRY_ATTEMPT;
+        }
 
-      if (recoverableToolFailure !== undefined && !callState.toolGuardRecovery.freshSessionUsed) {
-        throwIfCallAborted();
-        callState.toolGuardRecovery = markToolGuardFreshSessionUsed(callState.toolGuardRecovery, recoverableToolFailure.kind);
-        guardSuite.noteRecovery();
-        callState.maxAttempts = Math.max(callState.maxAttempts, attempt + 1);
-        log.debug('OpenCode tool guard failure; retrying prompt once in a fresh session with a continuation preamble', {
-          agentType,
-          previousAttempt: attempt,
-          previousSessionId: activeSessionId,
-          reason: recoverableToolFailure.kind,
-          toolHealth: guardSuite.stats(),
-        });
-        await this.waitForRetryDelay(attempt, options.abortSignal);
-        throwIfCallAborted();
-        throwIfServerInvalidated();
-        return RETRY_ATTEMPT;
+        if (toolGuardRecoveryAction === 'fresh_session') {
+          throwIfCallAborted();
+          callState.toolGuardRecovery = markToolGuardFreshSessionUsed(callState.toolGuardRecovery, recoverableToolFailure.kind);
+          guardSuite.noteRecovery();
+          callState.maxAttempts = Math.max(callState.maxAttempts, attempt + 1);
+          log.debug('OpenCode tool guard failure; retrying prompt once in a fresh session with a continuation preamble', {
+            agentType,
+            previousAttempt: attempt,
+            previousSessionId: activeSessionId,
+            reason: recoverableToolFailure.kind,
+            toolHealth: guardSuite.stats(),
+          });
+          await this.waitForRetryDelay(attempt, options.abortSignal);
+          throwIfCallAborted();
+          throwIfServerInvalidated();
+          return RETRY_ATTEMPT;
+        }
       }
 
       // ガード発火（absolute_cost_limit / recovery 消費後の再発）は決定的な

@@ -55,6 +55,21 @@ export function shouldIssueToolGuardCorrection(
     && state.correctionsUsed < state.correctionLimit;
 }
 
+export type ToolGuardRecoveryAction = 'correction' | 'fresh_session' | 'fail';
+
+export function resolveToolGuardRecoveryAction(
+  state: ToolGuardRecoveryState,
+  fingerprint: string,
+): ToolGuardRecoveryAction {
+  if (!state.freshSessionUsed && shouldIssueToolGuardCorrection(state, fingerprint)) {
+    return 'correction';
+  }
+  if (!state.freshSessionUsed) {
+    return 'fresh_session';
+  }
+  return 'fail';
+}
+
 export function markToolGuardCorrectionPending(
   state: ToolGuardRecoveryState,
   sessionId: string,
@@ -120,8 +135,9 @@ export function buildToolGuardCorrectionPrompt(
   if (failure.kind === 'exact_repeat_loop') {
     return [
       `Your recent calls to ${JSON.stringify(failure.tool)} repeated the same input and received the same result consecutively.`,
-      'Stop calling that tool again. The work it was performing is already done.',
-      'Output your final response as text now, summarizing what you have completed, and end the turn without making any further tool calls.',
+      'Do not call that tool again.',
+      'Judge the actual progress from the latest tool result and the current task state.',
+      'State honestly what has been completed and what remains, then output your final response as text and end the turn without making any further tool calls.',
     ].join('\n');
   }
   return [
