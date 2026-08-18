@@ -10,6 +10,7 @@ import {
 import {
   createToolGuardRecoveryState,
   markToolGuardCorrectionPending,
+  markToolGuardFreshSessionUsed,
   shouldIssueToolGuardCorrection,
 } from '../infra/opencode/tool-guard.js';
 import {
@@ -25,6 +26,7 @@ import { ExactLoopGuard } from '../infra/opencode/guards/integrity-guards.js';
 import { SensitiveBudgetGuard } from '../infra/opencode/guards/resource-guards.js';
 import { STALE_IN_FLIGHT_TOOL_FACTOR } from '../infra/opencode/guards/time-guards.js';
 import { createBoundedSensitiveValues } from '../shared/utils/sensitiveText.js';
+import { buildToolGuardCorrectionPrompt, buildToolGuardRetryPrompt } from '../infra/opencode/tool-guard.js';
 
 const DEPRECATED_ENV_KEYS = [
   'TAKT_OPENCODE_TOOL_ERROR_BUDGET',
@@ -283,6 +285,43 @@ describe('OpenCode guard suite', () => {
     expect(suite.onEvent(completedTool('call-12', { filePath: 'a.ts' }, 'same')).failure).toMatchObject({
       guardId: 'exact-repeat-streak',
     });
+  });
+
+  it('exact repeat streak 発火時は recoveryFailure として exact_repeat_loop を表出する', () => {
+    const suite = resolveOpenCodeGuardSuite(undefined, 'opencode/big-pickle');
+    for (let index = 1; index < 12; index += 1) {
+      expect(suite.onEvent(completedTool(`call-${index}`, { filePath: 'a.ts' }, 'same')).failure).toBeUndefined();
+    }
+    const failure = suite.onEvent(completedTool('call-12', { filePath: 'a.ts' }, 'same')).failure;
+    expect(failure).toMatchObject({
+      guardId: 'exact-repeat-streak',
+      recoveryFailure: {
+        kind: 'exact_repeat_loop',
+        tool: 'read',
+      },
+    });
+    expect(failure?.recoveryFailure?.fingerprint).toMatch(/^exact_repeat:[0-9a-f]{64}$/);
+    expect(failure?.recoveryFailure?.message).toContain('exact tool outcome repeated 12');
+  });
+
+  it('exact_repeat_loop は同一セッション矯正プロンプトを生成する', () => {
+    const prompt = buildToolGuardCorrectionPrompt(
+      {
+        kind: 'exact_repeat_loop',
+        tool: 'todowrite',
+        fingerprint: 'exact_repeat:todowrite',
+        message: 'streak',
+      },
+      undefined,
+    );
+    expect(prompt).toContain('"todowrite"');
+    expect(prompt.toLowerCase()).toContain('stop calling');
+    expect(prompt.toLowerCase()).toContain('final response');
+  });
+
+  it('exact_repeat_loop は fresh session の前置理由でも専用メッセージを出す', () => {
+    const prompt = buildToolGuardRetryPrompt('do the task', 'exact_repeat_loop');
+    expect(prompt.toLowerCase()).toContain('same tool call with identical input and result');
   });
 
   it('exact tool outcome streak は attempt 境界を越えて持ち越さない', () => {
@@ -697,5 +736,67 @@ describe('ToolGuardRecoveryState', () => {
     expect(shouldIssueToolGuardCorrection(state, 'invalid:read')).toBe(true);
     state = markToolGuardCorrectionPending(state, 'session-1', 'invalid:read', 'Use valid arguments.');
     expect(shouldIssueToolGuardCorrection(state, 'edit:signature')).toBe(false);
+  });
+
+  it('exact_repeat_loop は 矯正1回 → fresh session 1回 → 本失敗 の順に消費される', () => {
+    // attempt-runner の分岐条件と同じ合成式で回復経路を検証する
+    const canCorrect = (state: ReturnType<typeof createToolGuardRecoveryState>, fp: string) =>
+      !state.freshSessionUsed && shouldIssueToolGuardCorrection(state, fp);
+    const canFreshSession = (state: ReturnType<typeof createToolGuardRecoveryState>) =>
+      !state.freshSessionUsed;
+    const correctionLimit = 2;
+    let state = createToolGuardRecoveryState(correctionLimit);
+
+    // 1) 同一ループ fingerprint を矯正対象として受理する
+    const fingerprintA = 'exact_repeat:abc123';
+    expect(canCorrect(state, fingerprintA)).toBe(true);
+    expect(state.freshSessionUsed).toBe(false);
+    state = markToolGuardCorrectionPending(state, 'session-1', fingerprintA, 'Stop repeating.');
+    expect(state.correctionsUsed).toBe(1);
+    expect(state.correctedFingerprints).toContain(fingerprintA);
+    expect(state.freshSessionUsed).toBe(false);
+
+    // 2) 同一 fingerprint は再矯正しない（shouldIssue=false）。fresh session は未使用なので通せる
+    expect(canCorrect(state, fingerprintA)).toBe(false);
+    expect(canFreshSession(state)).toBe(true);
+
+    // 3) fresh session を1回消費する。fresh session 使用後はもう矯正も fresh session も不可
+    state = markToolGuardFreshSessionUsed(state, 'exact_repeat_loop');
+    expect(state.freshSessionUsed).toBe(true);
+    expect(state.freshReason).toBe('exact_repeat_loop');
+    expect(state.pendingCorrection).toBeUndefined();
+
+    // 4) fresh session 後の再発はもう回復枠がない → attempt-runner は本失敗に落ちる
+    expect(canCorrect(state, fingerprintA)).toBe(false);
+    expect(canCorrect(state, 'exact_repeat:other')).toBe(false);
+    expect(canFreshSession(state)).toBe(false);
+  });
+
+  it('exact_repeat_loop の fingerprint は outcome.key ベースで別入力ループは別 fingerprint になる', () => {
+    const suite = resolveOpenCodeGuardSuite(undefined, 'opencode/big-pickle');
+
+    // 入力Aで streak 12 に達して発火 → recoveryFailure を取り出す
+    for (let index = 1; index < 12; index += 1) {
+      expect(suite.onEvent(completedTool(`a-${index}`, { filePath: 'a.ts' }, 'same')).failure).toBeUndefined();
+    }
+    const failureA = suite.onEvent(completedTool('a-12', { filePath: 'a.ts' }, 'same')).failure;
+    expect(failureA?.recoveryFailure?.kind).toBe('exact_repeat_loop');
+    const fingerprintA = failureA?.recoveryFailure?.fingerprint;
+    expect(typeof fingerprintA).toBe('string');
+    expect(fingerprintA).toMatch(/^exact_repeat:[0-9a-f]{64}$/);
+
+    // 同一入力で再度発火しても fingerprint は同一（矯正済み扱いで再矯正しない）
+    const failureA2 = suite.onEvent(completedTool('a-13', { filePath: 'a.ts' }, 'same')).failure;
+    expect(failureA2?.recoveryFailure?.fingerprint).toBe(fingerprintA);
+
+    // 入力B(別入力)のループは別 fingerprint になる → 別ループとして再度矯正される
+    for (let index = 1; index < 12; index += 1) {
+      expect(suite.onEvent(completedTool(`b-${index}`, { filePath: 'b.ts' }, 'same')).failure).toBeUndefined();
+    }
+    const failureB = suite.onEvent(completedTool('b-12', { filePath: 'b.ts' }, 'same')).failure;
+    expect(failureB?.recoveryFailure?.kind).toBe('exact_repeat_loop');
+    const fingerprintB = failureB?.recoveryFailure?.fingerprint;
+    expect(fingerprintB).toMatch(/^exact_repeat:[0-9a-f]{64}$/);
+    expect(fingerprintB).not.toBe(fingerprintA);
   });
 });
