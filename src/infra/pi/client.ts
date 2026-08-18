@@ -248,11 +248,11 @@ function enabledResourcePaths(paths: ResolvedPaths, key: keyof ResolvedPaths): s
     .map((resource) => resource.path);
 }
 
-function countResolvedResources(paths: ResolvedPaths): number {
-  return paths.extensions.length
-    + paths.skills.length
-    + paths.prompts.length
-    + paths.themes.length;
+function countEnabledResolvedResources(paths: ResolvedPaths): number {
+  return enabledResourcePaths(paths, 'extensions').length
+    + enabledResourcePaths(paths, 'skills').length
+    + enabledResourcePaths(paths, 'prompts').length
+    + enabledResourcePaths(paths, 'themes').length;
 }
 
 function isNpmExtensionSource(source: string): boolean {
@@ -282,7 +282,7 @@ async function resolveExtensionSourcePaths(
     if (isAbortRequested(abortSignal)) {
       throw new Error('Pi session aborted');
     }
-    if (countResolvedResources(sourcePaths) > 0) {
+    if (countEnabledResolvedResources(sourcePaths) > 0) {
       return sourcePaths;
     }
   }
@@ -309,7 +309,7 @@ async function resolvePiResources(
       source,
       options.abortSignal,
     );
-    if (countResolvedResources(sourcePaths) === 0) {
+    if (countEnabledResolvedResources(sourcePaths) === 0) {
       throw new Error('Pi extension source could not be resolved');
     }
     resolved.extensions.push(...sourcePaths.extensions);

@@ -329,6 +329,117 @@ describe('Pi SDK client', () => {
     });
   });
 
+  it('falls through when a higher npm scope resolves only disabled resources', async () => {
+    mocks.resetTransient();
+    const disabledOnly = {
+      extensions: [{ enabled: false, path: path.join(tmpdir(), 'disabled-extension.ts') }],
+      skills: [],
+      prompts: [],
+      themes: [],
+    };
+    const temporary = {
+      extensions: [{ enabled: true, path: path.join(tmpdir(), 'temporary-extension.ts') }],
+      skills: [],
+      prompts: [],
+      themes: [],
+    };
+    mocks.packageManager.resolveExtensionSources
+      .mockResolvedValueOnce(disabledOnly)
+      .mockResolvedValueOnce(disabledOnly)
+      .mockResolvedValueOnce(temporary);
+
+    const response = await callPi('worker', 'use the extension', {
+      ...sessionOptions('pi-sdk-disabled-only-fallback'),
+      providerOptions: {
+        extensions: ['npm:example-extension'],
+      },
+    });
+
+    expect(response.status).toBe('done');
+    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenNthCalledWith(
+      1,
+      ['npm:example-extension'],
+      { local: true },
+    );
+    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenNthCalledWith(
+      2,
+      ['npm:example-extension'],
+    );
+    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenNthCalledWith(
+      3,
+      ['npm:example-extension'],
+      { temporary: true },
+    );
+    expect(mocks.getLoaderOptions()).toMatchObject({
+      additionalExtensionPaths: [path.join(tmpdir(), 'temporary-extension.ts')],
+    });
+  });
+
+  it.each([
+    { label: 'git', source: 'git:https://example.invalid/extension.git' },
+    { label: 'local path', source: './local-extension.ts' },
+  ])('resolves non-npm $label sources via temporary scope only', async ({ source }) => {
+    mocks.resetTransient();
+    const temporary = {
+      extensions: [{ enabled: true, path: path.join(tmpdir(), 'temporary-extension.ts') }],
+      skills: [],
+      prompts: [],
+      themes: [],
+    };
+    mocks.packageManager.resolveExtensionSources.mockResolvedValueOnce(temporary);
+
+    const response = await callPi('worker', 'use the extension', {
+      ...sessionOptions(`pi-sdk-temporary-${source}`),
+      providerOptions: {
+        extensions: [source],
+      },
+    });
+
+    expect(response.status).toBe('done');
+    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenCalledOnce();
+    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenCalledWith(
+      [source],
+      { temporary: true },
+    );
+    expect(mocks.packageManager.resolveExtensionSources).not.toHaveBeenCalledWith(
+      [source],
+      { local: true },
+    );
+    expect(mocks.packageManager.resolveExtensionSources).not.toHaveBeenCalledWith([source]);
+    expect(mocks.getLoaderOptions()).toMatchObject({
+      additionalExtensionPaths: [path.join(tmpdir(), 'temporary-extension.ts')],
+    });
+  });
+
+  it.each([
+    { label: 'git', source: 'git:https://example.invalid/missing-extension.git' },
+    { label: 'local path', source: './missing-extension.ts' },
+  ])('fails closed when a non-npm $label source resolves to no resources', async ({ source }) => {
+    mocks.resetTransient();
+    mocks.packageManager.resolveExtensionSources.mockResolvedValueOnce({
+      extensions: [],
+      skills: [],
+      prompts: [],
+      themes: [],
+    });
+
+    const response = await callPi('worker', 'load extension', {
+      ...sessionOptions(`pi-sdk-temporary-missing-${source}`),
+      providerOptions: {
+        extensions: [source],
+      },
+    });
+
+    expect(response.status).toBe('error');
+    expect(response.error).toContain('Pi extension source could not be resolved');
+    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenCalledOnce();
+    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenCalledWith(
+      [source],
+      { temporary: true },
+    );
+    expect(mocks.resourceLoader).not.toHaveBeenCalled();
+  });
+
   it('maps read-only permissions and native image attachments to SDK options', async () => {
     mocks.resetTransient();
     const imageDir = mkdtempSync(path.join(tmpdir(), 'pi-client-image-'));
