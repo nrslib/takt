@@ -1867,7 +1867,12 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       onDelegatedAgentUsage: usage,
     });
     const run = engine.run();
-    await providerStarted.promise;
+    await Promise.race([
+      providerStarted.promise,
+      run.then((state) => {
+        throw new Error(`Engine completed before selector provider started: ${state.status}`);
+      }),
+    ]);
 
     controller.abort(new Error('selector provider aborted'));
     const state = await run;
@@ -1875,7 +1880,8 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     expect(state.status).toBe('aborted');
     expect(runAgent).toHaveBeenCalledTimes(1);
     expect(providerSignal?.aborted).toBe(true);
-    expect(providerSignal?.reason).toBe(controller.signal.reason);
+    expect(providerSignal?.reason).toBeInstanceOf(Error);
+    expect(providerSignal?.reason).toMatchObject({ message: 'selector provider aborted' });
     expect(usage).toHaveBeenCalledTimes(1);
     expect(usage.mock.calls[0]?.[1]).toMatchObject({ success: false });
     expect(state.dynamicParallelSelections).toEqual(new Map());
