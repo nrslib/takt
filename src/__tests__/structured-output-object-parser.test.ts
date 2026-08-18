@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseStructuredOutputObject } from '../agents/structured-caller/shared.js';
+import { parseLastJsonBlock, parseStructuredOutputObject } from '../agents/structured-caller/shared.js';
 
 describe('parseStructuredOutputObject', () => {
   it.each([
@@ -47,5 +47,19 @@ describe('parseStructuredOutputObject', () => {
     ['marker without object', 'json\nnot an object'],
   ])('still rejects rendered-fence candidates that are not valid JSON: $0', (_name, content) => {
     expect(() => parseStructuredOutputObject(content)).toThrow('Response must include a ```json ... ``` block');
+  });
+
+  it('keeps object-only enforcement for rendered fences, matching fenced arrays', () => {
+    expect(() => parseStructuredOutputObject('json\n[{"id":1}]')).toThrow('Structured output JSON must be an object');
+    expect(() => parseStructuredOutputObject('```json\n[{"id":1}]\n```')).toThrow('Structured output JSON must be an object');
+  });
+});
+
+describe('parseLastJsonBlock rendered fences', () => {
+  it.each([
+    ['array', 'json\n[{"id":1},{"id":2}]', [{ id: 1 }, { id: 2 }]],
+    ['object with nested arrays and bracket in string', 'json\n{"a":[1,{"b":"]"}]}', { a: [1, { b: ']' }] }],
+  ])('accepts markdown-rendered %s', (_name, content, expected) => {
+    expect(parseLastJsonBlock(content)).toEqual(expected);
   });
 });

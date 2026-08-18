@@ -22,13 +22,17 @@ export function parseLastJsonBlock(content: string): unknown {
 }
 
 function extractRenderedFenceJson(content: string): string | undefined {
-  const markerRegex = /(?:^|\n)\s*json\s*\n\s*\{/g;
+  const markerRegex = /(?:^|\n)\s*json\s*\n\s*[[{]/g;
   let result: string | undefined;
   let match: RegExpExecArray | null;
 
   while ((match = markerRegex.exec(content)) !== null) {
-    const start = content.indexOf('{', match.index);
-    const candidate = readBalancedJsonObject(content, start);
+    const objectStart = content.indexOf('{', match.index);
+    const arrayStart = content.indexOf('[', match.index);
+    const start = objectStart === -1 || (arrayStart !== -1 && arrayStart < objectStart)
+      ? arrayStart
+      : objectStart;
+    const candidate = readBalancedJson(content, start);
     if (candidate !== undefined) {
       result = candidate;
     }
@@ -37,7 +41,7 @@ function extractRenderedFenceJson(content: string): string | undefined {
   return result;
 }
 
-function readBalancedJsonObject(content: string, start: number): string | undefined {
+function readBalancedJson(content: string, start: number): string | undefined {
   let depth = 0;
   let inString = false;
   let escaped = false;
@@ -59,9 +63,9 @@ function readBalancedJsonObject(content: string, start: number): string | undefi
     if (inString) {
       continue;
     }
-    if (ch === '{') {
+    if (ch === '{' || ch === '[') {
       depth++;
-    } else if (ch === '}') {
+    } else if (ch === '}' || ch === ']') {
       depth--;
       if (depth === 0) {
         const candidate = content.slice(start, i + 1);
