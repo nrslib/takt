@@ -1819,12 +1819,17 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     const config = normalizeWorkflowConfig(dynamicParallelWorkflowRaw(), tmpDir);
     const controller = new AbortController();
     const usage = vi.fn();
+    const providerStarted = createDeferred();
+    let providerSignal: AbortSignal | undefined;
     vi.mocked(runAgent).mockImplementation(async (_persona, _instruction, options) => {
-      if (options?.abortSignal !== controller.signal) {
-        throw new Error('Engine abort signal did not reach selector provider');
+      const abortSignal = options?.abortSignal;
+      if (abortSignal === undefined) {
+        throw new Error('Engine did not provide an abort signal to the selector provider');
       }
+      providerSignal = abortSignal;
       await new Promise<void>((resolve) => {
-        options.abortSignal.addEventListener('abort', () => resolve(), { once: true });
+        abortSignal.addEventListener('abort', () => resolve(), { once: true });
+        providerStarted.resolve();
       });
       return makeResponse({
         persona: 'selector',
@@ -1841,13 +1846,15 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       onDelegatedAgentUsage: usage,
     });
     const run = engine.run();
-    await vi.waitFor(() => expect(runAgent).toHaveBeenCalledTimes(1));
+    await providerStarted.promise;
 
     controller.abort(new Error('selector provider aborted'));
     const state = await run;
 
     expect(state.status).toBe('aborted');
     expect(runAgent).toHaveBeenCalledTimes(1);
+    expect(providerSignal?.aborted).toBe(true);
+    expect(providerSignal?.reason).toBe(controller.signal.reason);
     expect(usage).toHaveBeenCalledTimes(1);
     expect(usage.mock.calls[0]?.[1]).toMatchObject({ success: false });
     expect(state.dynamicParallelSelections).toEqual(new Map());
