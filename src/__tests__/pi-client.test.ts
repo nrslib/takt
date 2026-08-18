@@ -261,6 +261,85 @@ describe('Pi SDK client', () => {
     });
   });
 
+  it('falls back to temporary npm extension sources when project and user scopes reject', async () => {
+    mocks.resetTransient();
+    const temporary = {
+      extensions: [{ enabled: true, path: path.join(tmpdir(), 'temporary-extension.ts') }],
+      skills: [],
+      prompts: [],
+      themes: [],
+    };
+    mocks.packageManager.resolveExtensionSources
+      .mockRejectedValueOnce(new Error('project scope failed'))
+      .mockRejectedValueOnce(new Error('user scope failed'))
+      .mockResolvedValueOnce(temporary);
+
+    const response = await callPi('worker', 'use the extension', {
+      ...sessionOptions('pi-sdk-reject-fallback'),
+      providerOptions: {
+        extensions: ['npm:example-extension'],
+      },
+    });
+
+    expect(response.status).toBe('done');
+    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenNthCalledWith(
+      1,
+      ['npm:example-extension'],
+      { local: true },
+    );
+    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenNthCalledWith(
+      2,
+      ['npm:example-extension'],
+    );
+    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenNthCalledWith(
+      3,
+      ['npm:example-extension'],
+      { temporary: true },
+    );
+    expect(mocks.getLoaderOptions()).toMatchObject({
+      additionalExtensionPaths: [path.join(tmpdir(), 'temporary-extension.ts')],
+    });
+  });
+
+  it('uses user-scope npm extension when project scope rejects', async () => {
+    mocks.resetTransient();
+    const userScope = {
+      extensions: [{ enabled: true, path: path.join(tmpdir(), 'user-extension.ts') }],
+      skills: [],
+      prompts: [],
+      themes: [],
+    };
+    mocks.packageManager.resolveExtensionSources
+      .mockRejectedValueOnce(new Error('project scope failed'))
+      .mockResolvedValueOnce(userScope);
+
+    const response = await callPi('worker', 'use the extension', {
+      ...sessionOptions('pi-sdk-project-reject-user-scope'),
+      providerOptions: {
+        extensions: ['npm:pi-cursor-sdk'],
+      },
+    });
+
+    expect(response.status).toBe('done');
+    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenCalledTimes(2);
+    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenNthCalledWith(
+      1,
+      ['npm:pi-cursor-sdk'],
+      { local: true },
+    );
+    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenNthCalledWith(
+      2,
+      ['npm:pi-cursor-sdk'],
+    );
+    expect(mocks.packageManager.resolveExtensionSources).not.toHaveBeenCalledWith(
+      ['npm:pi-cursor-sdk'],
+      { temporary: true },
+    );
+    expect(mocks.getLoaderOptions()).toMatchObject({
+      additionalExtensionPaths: [path.join(tmpdir(), 'user-extension.ts')],
+    });
+  });
+
   it('prefers a loadable user-scope npm extension over temporary install', async () => {
     mocks.resetTransient();
     const empty = { extensions: [], skills: [], prompts: [], themes: [] };

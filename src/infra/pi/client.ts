@@ -277,8 +277,22 @@ async function resolveExtensionSourcePaths(
     () => packageManager.resolveExtensionSources([source]),
     () => packageManager.resolveExtensionSources([source], { temporary: true }),
   ];
-  for (const attempt of scopeAttempts) {
-    const sourcePaths = await attempt();
+  for (let scopeIndex = 0; scopeIndex < scopeAttempts.length; scopeIndex++) {
+    const attempt = scopeAttempts[scopeIndex]!;
+    const isTemporaryScope = scopeIndex === scopeAttempts.length - 1;
+    let sourcePaths: ResolvedPaths;
+    if (isTemporaryScope) {
+      sourcePaths = await attempt();
+    } else {
+      try {
+        sourcePaths = await attempt();
+      } catch {
+        if (isAbortRequested(abortSignal)) {
+          throw new Error('Pi session aborted');
+        }
+        continue;
+      }
+    }
     if (isAbortRequested(abortSignal)) {
       throw new Error('Pi session aborted');
     }
