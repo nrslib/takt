@@ -248,6 +248,47 @@ function enabledResourcePaths(paths: ResolvedPaths, key: keyof ResolvedPaths): s
     .map((resource) => resource.path);
 }
 
+function countResolvedResources(paths: ResolvedPaths): number {
+  return paths.extensions.length
+    + paths.skills.length
+    + paths.prompts.length
+    + paths.themes.length;
+}
+
+function isNpmExtensionSource(source: string): boolean {
+  return source.trim().startsWith('npm:');
+}
+
+async function resolveExtensionSourcePaths(
+  packageManager: DefaultPackageManager,
+  source: string,
+  abortSignal: AbortSignal | undefined,
+): Promise<ResolvedPaths> {
+  if (!isNpmExtensionSource(source)) {
+    const sourcePaths = await packageManager.resolveExtensionSources([source], { temporary: true });
+    if (isAbortRequested(abortSignal)) {
+      throw new Error('Pi session aborted');
+    }
+    return sourcePaths;
+  }
+
+  const scopeAttempts: Array<() => Promise<ResolvedPaths>> = [
+    () => packageManager.resolveExtensionSources([source], { local: true }),
+    () => packageManager.resolveExtensionSources([source]),
+    () => packageManager.resolveExtensionSources([source], { temporary: true }),
+  ];
+  for (const attempt of scopeAttempts) {
+    const sourcePaths = await attempt();
+    if (isAbortRequested(abortSignal)) {
+      throw new Error('Pi session aborted');
+    }
+    if (countResolvedResources(sourcePaths) > 0) {
+      return sourcePaths;
+    }
+  }
+  return { extensions: [], skills: [], prompts: [], themes: [] };
+}
+
 async function resolvePiResources(
   cwd: string,
   agentDir: string,
@@ -263,15 +304,12 @@ async function resolvePiResources(
   const packageManager = new DefaultPackageManager({ cwd, agentDir, settingsManager });
   const resolved: ResolvedPaths = { extensions: [], skills: [], prompts: [], themes: [] };
   for (const source of sources) {
-    const sourcePaths = await packageManager.resolveExtensionSources([source], { temporary: true });
-    if (isAbortRequested(options.abortSignal)) {
-      throw new Error('Pi session aborted');
-    }
-    const resolvedCount = sourcePaths.extensions.length
-      + sourcePaths.skills.length
-      + sourcePaths.prompts.length
-      + sourcePaths.themes.length;
-    if (resolvedCount === 0) {
+    const sourcePaths = await resolveExtensionSourcePaths(
+      packageManager,
+      source,
+      options.abortSignal,
+    );
+    if (countResolvedResources(sourcePaths) === 0) {
       throw new Error('Pi extension source could not be resolved');
     }
     resolved.extensions.push(...sourcePaths.extensions);

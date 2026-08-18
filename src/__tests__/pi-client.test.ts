@@ -210,14 +210,19 @@ describe('Pi SDK client', () => {
     expect(mocks.createAgentSession.mock.calls.at(-1)?.[0]).not.toHaveProperty('tools');
   });
 
-  it('resolves temporary extension sources into the SDK resource loader', async () => {
+  it('falls back to temporary npm extension sources when user and project scopes are empty', async () => {
     mocks.resetTransient();
-    mocks.packageManager.resolveExtensionSources.mockResolvedValueOnce({
+    const empty = { extensions: [], skills: [], prompts: [], themes: [] };
+    const temporary = {
       extensions: [{ enabled: true, path: path.join(tmpdir(), 'extension.ts') }],
       skills: [{ enabled: true, path: path.join(tmpdir(), 'SKILL.md') }],
       prompts: [],
       themes: [],
-    });
+    };
+    mocks.packageManager.resolveExtensionSources
+      .mockResolvedValueOnce(empty)
+      .mockResolvedValueOnce(empty)
+      .mockResolvedValueOnce(temporary);
 
     await callPi('worker', 'use the extension', {
       ...sessionOptions('pi-sdk-extension'),
@@ -231,7 +236,17 @@ describe('Pi SDK client', () => {
       },
     });
 
-    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenCalledWith(
+    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenNthCalledWith(
+      1,
+      ['npm:example-extension'],
+      { local: true },
+    );
+    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenNthCalledWith(
+      2,
+      ['npm:example-extension'],
+    );
+    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenNthCalledWith(
+      3,
       ['npm:example-extension'],
       { temporary: true },
     );
@@ -243,6 +258,74 @@ describe('Pi SDK client', () => {
       noPromptTemplates: true,
       noThemes: true,
       noContextFiles: true,
+    });
+  });
+
+  it('prefers a loadable user-scope npm extension over temporary install', async () => {
+    mocks.resetTransient();
+    const empty = { extensions: [], skills: [], prompts: [], themes: [] };
+    const userScope = {
+      extensions: [{ enabled: true, path: path.join(tmpdir(), 'user-extension.ts') }],
+      skills: [],
+      prompts: [],
+      themes: [],
+    };
+    mocks.packageManager.resolveExtensionSources
+      .mockResolvedValueOnce(empty)
+      .mockResolvedValueOnce(userScope);
+
+    const response = await callPi('worker', 'use the extension', {
+      ...sessionOptions('pi-sdk-user-scope-extension'),
+      providerOptions: {
+        extensions: ['npm:pi-cursor-sdk'],
+      },
+    });
+
+    expect(response.status).toBe('done');
+    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenCalledTimes(2);
+    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenNthCalledWith(
+      1,
+      ['npm:pi-cursor-sdk'],
+      { local: true },
+    );
+    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenNthCalledWith(
+      2,
+      ['npm:pi-cursor-sdk'],
+    );
+    expect(mocks.packageManager.resolveExtensionSources).not.toHaveBeenCalledWith(
+      ['npm:pi-cursor-sdk'],
+      { temporary: true },
+    );
+    expect(mocks.getLoaderOptions()).toMatchObject({
+      additionalExtensionPaths: [path.join(tmpdir(), 'user-extension.ts')],
+    });
+  });
+
+  it('prefers a loadable project-scope npm extension before user and temporary scopes', async () => {
+    mocks.resetTransient();
+    const projectScope = {
+      extensions: [{ enabled: true, path: path.join(tmpdir(), 'project-extension.ts') }],
+      skills: [],
+      prompts: [],
+      themes: [],
+    };
+    mocks.packageManager.resolveExtensionSources.mockResolvedValueOnce(projectScope);
+
+    const response = await callPi('worker', 'use the extension', {
+      ...sessionOptions('pi-sdk-project-scope-extension'),
+      providerOptions: {
+        extensions: ['npm:pi-cursor-sdk'],
+      },
+    });
+
+    expect(response.status).toBe('done');
+    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenCalledOnce();
+    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenCalledWith(
+      ['npm:pi-cursor-sdk'],
+      { local: true },
+    );
+    expect(mocks.getLoaderOptions()).toMatchObject({
+      additionalExtensionPaths: [path.join(tmpdir(), 'project-extension.ts')],
     });
   });
 
