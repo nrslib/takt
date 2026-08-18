@@ -301,6 +301,41 @@ describe('Pi SDK client', () => {
     });
   });
 
+  it('stops extension resolution after project scope rejects when abort is requested', async () => {
+    mocks.resetTransient();
+    const abortController = new AbortController();
+    mocks.packageManager.resolveExtensionSources.mockImplementationOnce(async () => {
+      abortController.abort('cancelled during project scope rejection');
+      throw new Error('project scope failed');
+    });
+
+    const response = await callPi('worker', 'use the extension', {
+      ...sessionOptions('pi-sdk-project-reject-abort'),
+      abortSignal: abortController.signal,
+      providerOptions: {
+        extensions: ['npm:example-extension'],
+      },
+    });
+
+    expect(response.status).toBe('error');
+    expect(response.failureCategory).toBe('external_abort');
+    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenCalledTimes(1);
+    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenNthCalledWith(
+      1,
+      ['npm:example-extension'],
+      { local: true },
+    );
+    expect(mocks.packageManager.resolveExtensionSources).not.toHaveBeenCalledWith(
+      ['npm:example-extension'],
+    );
+    expect(mocks.packageManager.resolveExtensionSources).not.toHaveBeenCalledWith(
+      ['npm:example-extension'],
+      { temporary: true },
+    );
+    expect(mocks.resourceLoader).not.toHaveBeenCalled();
+    expect(mocks.createAgentSession).not.toHaveBeenCalled();
+  });
+
   it('uses user-scope npm extension when project scope rejects', async () => {
     mocks.resetTransient();
     const userScope = {
