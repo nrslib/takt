@@ -261,6 +261,8 @@ workflow ファイルの正式ディレクトリ名は `workflows/` です。
 | Workflow | 用途 |
 |-------|------|
 | `default` | 標準の開発 workflow。シナリオベースの計画とテスト先行開発に、動的実装 companion、多観点並列ピアレビュー、裁定、収束型 fix ループを組み合わせた構成。 |
+| `simple` | `pure` と同じ最小構造に、変更内容に応じて TAKT がドメインファセットを自動選択して注入する軽量 workflow。AI アンチパターンとアーキテクチャの指針は常に含む。 |
+| `pure` | ドメインファセットを注入しない最小 workflow。モデル自身の判断と SKILL 選択を信頼する。 |
 | `takt-default` | TAKT 自体の開発で実際に使われている workflow。CLI ツールの開発にそのまま活用できます。 |
 | `takt-default-team` | 実装・修正を Team Leader のタスク分解で実行する `takt-default` の派生。 |
 | `review` / `review-fix-default` | 多観点レビュー（fix ループなし / あり）。 |

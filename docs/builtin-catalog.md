@@ -9,6 +9,8 @@ A comprehensive catalog of all builtin workflows and personas included with TAKT
 | Workflow | Recommended Use |
 |----------|-----------------|
 | `default` | Default coding workflow using dynamic implementation companions with the shared core's adjudicated, verified peer-review remediation loop and a final check that requirements are met. |
+| `simple` | A lightweight development workflow with the same structure as pure, where TAKT selects applicable domain facets per change. AI antipattern and architecture guidance are always included. |
+| `pure` | A pure development workflow that trusts a capable model's judgment with no injected domain facets. The model selects relevant available skills and performs test-first implementation, review, fixes, and a final requirement check with minimal orchestration. |
 | `takt-default` | Inject TAKT-specific facets and implementation companions into the shared core's adjudicated, verified peer-review remediation loop and final check that requirements are met. |
 | `takt-default-team` | TAKT development workflow that preserves takt-default's planning, testing, review, and final-gate contracts while switching implementation, remediation, and retry remediation to static Team Leader coder execution without implementation dynamic facets or companions, as required by the current schema constraints. |
 | `review` | Multi-perspective Code Review - selects the applicable specialist reviewers for the change, runs them in parallel, then has a supervisor synthesize the results. |
@@ -21,9 +23,11 @@ Organized by category.
 | Category | Workflow | Description |
 |----------|----------|-------------|
 | 🚀 Quick Start | `default` | Default coding workflow using dynamic implementation companions with the shared core's adjudicated, verified peer-review remediation loop and a final check that requirements are met. |
-|  | `simple` | A simple development workflow that trusts a capable model's judgment. The model selects relevant available skills and performs test-first implementation, review, fixes, and a final requirement check with minimal orchestration. |
+|  | `simple` | A lightweight development workflow with the same structure as pure, where TAKT selects applicable domain facets per change. AI antipattern and architecture guidance are always included. |
+|  | `pure` | A pure development workflow that trusts a capable model's judgment with no injected domain facets. The model selects relevant available skills and performs test-first implementation, review, fixes, and a final requirement check with minimal orchestration. |
 | 🛠️ Development | `default` | Default coding workflow using dynamic implementation companions with the shared core's adjudicated, verified peer-review remediation loop and a final check that requirements are met. |
-|  | `simple` | A simple development workflow that trusts a capable model's judgment. The model selects relevant available skills and performs test-first implementation, review, fixes, and a final requirement check with minimal orchestration. |
+|  | `simple` | A lightweight development workflow with the same structure as pure, where TAKT selects applicable domain facets per change. AI antipattern and architecture guidance are always included. |
+|  | `pure` | A pure development workflow that trusts a capable model's judgment with no injected domain facets. The model selects relevant available skills and performs test-first implementation, review, fixes, and a final requirement check with minimal orchestration. |
 | 🔍 Review | `review` | Multi-perspective Code Review - selects the applicable specialist reviewers for the change, runs them in parallel, then has a supervisor synthesize the results. |
 |  | `review-fix-default` | Multi-perspective review + fix loop (architecture, security, testing, and coding in parallel, followed by a supervisor checking whether requirements are met) |
 |  | `audit-unit` | Comprehensive unit test audit. Enumerate behaviors and coverage gaps, then produce an issue-ready report without modifying code |
@@ -37,8 +41,7 @@ Organized by category.
 |  | `review-takt-default` | TAKT-focused multi-perspective review with AI antipattern and coding review |
 |  | `review-fix-takt-default` | Workflow that gathers the review target, then injects TAKT-specific facets into the shared development flow. |
 | 📦 Legacy | `cli` | CLI development workflow that injects CLI-oriented facets into the shared development flow. |
-| 📦 Legacy > ✨ Simple | `simple` | A simple development workflow that trusts a capable model's judgment. The model selects relevant available skills and performs test-first implementation, review, fixes, and a final requirement check with minimal orchestration. |
-|  | `simple-mini` | A lightweight development workflow that trusts a capable model's judgment (plan → implement → review ⇄ fix → COMPLETE). It omits dedicated test writing and the final requirement check while letting the model select relevant available skills. |
+| 📦 Legacy > ✨ Simple | `simple-mini` | A lightweight development workflow that trusts a capable model's judgment (plan → implement → review ⇄ fix → COMPLETE). It omits dedicated test writing and the final requirement check while letting the model select relevant available skills. |
 |  | `simple-frontend` | A simple development workflow that trusts a capable model's judgment and injects frontend knowledge and policies into simple-core. |
 |  | `simple-backend` | A simple development workflow that trusts a capable model's judgment and injects backend knowledge and policies into simple-core. |
 |  | `simple-dual` | A simple development workflow that trusts a capable model's judgment and injects frontend and backend knowledge and policies into simple-core. |

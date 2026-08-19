@@ -258,6 +258,8 @@ When the same workflow name exists in multiple locations, TAKT resolves in this 
 | Workflow | Use Case |
 |-------|----------|
 | `default` | Standard development workflow. Scenario-based planning and test-first development with dynamic implementation companions, multi-perspective parallel peer review, adjudication, and a convergent fix loop. |
+| `simple` | Lightweight workflow with the same minimal structure as `pure`; TAKT selects applicable domain facets per change, always including AI antipattern and architecture guidance. |
+| `pure` | Minimal workflow with no injected domain facets — trusts the model's own judgment and skill selection. |
 | `takt-default` | The workflow used to develop TAKT itself. Directly applicable to other CLI tool development. |
 | `takt-default-team` | A `takt-default` variant that runs implementation and remediation through Team Leader task decomposition. |
 | `review` / `review-fix-default` | Multi-perspective review, without or with a convergent fix loop. |

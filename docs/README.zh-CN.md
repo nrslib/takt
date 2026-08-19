@@ -252,6 +252,8 @@ steps:
 | Workflow | 用途 |
 |----------|------|
 | `default` | 标准开发流程。基于场景的规划与测试优先开发，配合动态实现 companion、多视角并行审查、裁定和收敛式修复循环 |
+| `simple` | 与 `pure` 相同的最小结构，TAKT 按变更内容自动选择并注入领域 facet 的轻量流程；始终包含 AI 反模式与架构指导 |
+| `pure` | 不注入领域 facet 的最小流程，信任模型自身的判断与 skill 选择 |
 | `takt-default` | TAKT 自身使用的开发流程，也适用于其他 CLI 工具 |
 | `takt-default-team` | 通过 Team Leader 任务分解执行实现与修复的 `takt-default` 变体 |
 | `review` / `review-fix-default` | 多视角审查（不带 / 带收敛式修复循环） |

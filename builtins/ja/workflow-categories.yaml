@@ -3,10 +3,12 @@ workflow_categories:
     workflows:
       - default
       - simple
+      - pure
   🛠️ 開発:
     workflows:
       - default
       - simple
+      - pure
   🔍 レビュー:
     workflows:
       - review
@@ -30,7 +32,6 @@ workflow_categories:
       - cli
     ✨ Simple:
       workflows:
-        - simple
         - simple-mini
         - simple-frontend
         - simple-backend
