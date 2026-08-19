@@ -267,7 +267,7 @@ workflow ファイルの正式ディレクトリ名は `workflows/` です。
 | `takt-default-team` | 実装・修正を Team Leader のタスク分解で実行する `takt-default` の派生。 |
 | `review` / `review-fix-default` | 多観点レビュー（fix ループなし / あり）。 |
 
-ドメイン特化ファミリー（`simple` / `frontend` / `backend` / `dual` / CQRS / `*-mini` 系）は 📦 レガシーカテゴリで引き続き利用できます。
+ドメイン特化ファミリー（`simple-*` / `frontend` / `backend` / `dual` / CQRS / `*-mini` 系）は 📦 レガシーカテゴリで引き続き利用できます。
 
 全ワークフロー・ペルソナの一覧は [Builtin Catalog](./builtin-catalog.ja.md) を参照してください。
 

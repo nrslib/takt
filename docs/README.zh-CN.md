@@ -258,7 +258,7 @@ steps:
 | `takt-default-team` | 通过 Team Leader 任务分解执行实现与修复的 `takt-default` 变体 |
 | `review` / `review-fix-default` | 多视角审查（不带 / 带收敛式修复循环） |
 
-领域特化系列（`simple` / `frontend` / `backend` / `dual` / CQRS / `*-mini` 变体）仍可在 📦 Legacy 分类中使用。
+领域特化系列（`simple-*` / `frontend` / `backend` / `dual` / CQRS / `*-mini` 变体）仍可在 📦 Legacy 分类中使用。
 
 所有 builtin workflow 和 persona 请参阅 [Builtin Catalog](./builtin-catalog.md)。
 

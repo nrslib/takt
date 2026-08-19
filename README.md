@@ -264,7 +264,7 @@ When the same workflow name exists in multiple locations, TAKT resolves in this 
 | `takt-default-team` | A `takt-default` variant that runs implementation and remediation through Team Leader task decomposition. |
 | `review` / `review-fix-default` | Multi-perspective review, without or with a convergent fix loop. |
 
-Domain-specific families (`simple` / `frontend` / `backend` / `dual` / CQRS / `*-mini` variants) remain available under the 📦 Legacy category.
+Domain-specific families (`simple-*` / `frontend` / `backend` / `dual` / CQRS / `*-mini` variants) remain available under the 📦 Legacy category.
 
 See the [Builtin Catalog](./docs/builtin-catalog.md) for all workflows and personas.
 
