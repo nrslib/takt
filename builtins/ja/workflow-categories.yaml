@@ -1,12 +1,12 @@
 workflow_categories:
   🚀 クイックスタート:
     workflows:
-      - simple
       - default
+      - simple
   🛠️ 開発:
     workflows:
-      - simple
       - default
+      - simple
   🔍 レビュー:
     workflows:
       - review-default
