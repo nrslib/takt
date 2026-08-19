@@ -12,6 +12,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CodexCallOptions } from '../infra/codex/types.js';
 
+const { mockBuildCodexSkillConfig } = vi.hoisted(() => ({
+  mockBuildCodexSkillConfig: vi.fn(),
+}));
+
 // ===== Codex SDK mock =====
 
 let mockEvents: Array<Record<string, unknown>> = [];
@@ -48,12 +52,17 @@ vi.mock('@openai/codex-sdk', () => {
   };
 });
 
+vi.mock('../infra/codex/skill-config.js', () => ({
+  buildCodexSkillConfig: mockBuildCodexSkillConfig,
+}));
+
 // CodexClient は @openai/codex-sdk をインポートするため、mock 後にインポート
 const { CodexClient } = await import('../infra/codex/client.js');
 
 describe('CodexClient — structuredOutput 抽出', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockBuildCodexSkillConfig.mockReset();
     mockEvents = [];
     lastThreadOptions = undefined;
     lastTurnOptions = undefined;
@@ -436,10 +445,16 @@ describe('CodexClient — structuredOutput 抽出', () => {
       { type: 'thread.started', thread_id: 'thread-1' },
       { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
     ];
+    mockBuildCodexSkillConfig.mockReturnValue({
+      skills: {
+        config: [{ path: '/tmp/example/SKILL.md', enabled: false }],
+      },
+    });
     const callOptions: CodexCallOptions = {
       cwd: '/tmp',
       fastMode,
       reasoningEffort: 'high',
+      skills: { repo: false, user: false },
     };
 
     const client = new CodexClient();
@@ -447,6 +462,9 @@ describe('CodexClient — structuredOutput 抽出', () => {
 
     expect(lastCodexConstructorOptions).toMatchObject({
       config: {
+        skills: {
+          config: [{ path: '/tmp/example/SKILL.md', enabled: false }],
+        },
         features: { fast_mode: fastMode },
         model_reasoning_effort: 'high',
         model_reasoning_summary: 'auto',
@@ -459,12 +477,24 @@ describe('CodexClient — structuredOutput 抽出', () => {
       { type: 'thread.started', thread_id: 'thread-1' },
       { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
     ];
+    mockBuildCodexSkillConfig.mockReturnValue({
+      skills: {
+        config: [{ path: '/tmp/example/SKILL.md', enabled: false }],
+      },
+    });
 
     const client = new CodexClient();
-    await client.call('coder', 'prompt', { cwd: '/tmp', reasoningEffort: 'high' });
+    await client.call('coder', 'prompt', {
+      cwd: '/tmp',
+      reasoningEffort: 'high',
+      skills: { repo: false, user: false },
+    });
 
     expect(lastCodexConstructorOptions).toMatchObject({
       config: {
+        skills: {
+          config: [{ path: '/tmp/example/SKILL.md', enabled: false }],
+        },
         model_reasoning_effort: 'high',
         model_reasoning_summary: 'auto',
       },
