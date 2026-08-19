@@ -10,9 +10,9 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 |----------|-----------------|
 | `default` | 動的実装 companion と、共通コアの裁定・修正検証付きピアレビュー収束ループ、要件の最終確認を使う標準コーディングワークフロー。 |
 | `takt-default` | TAKT固有ファセットと実装 companion を、共通コアの裁定・修正検証付きピアレビュー収束ループ、要件の最終確認へ注入する。 |
-| `takt-default-team` | 実装・修正を Team Leader のタスク分解で実行する `takt-default` の派生。 |
-| `review-default` | 専門レビュアーの並列レビューと supervisor の統合による多角コードレビュー。 |
-| `review-fix-default` | 多角レビュー＋修正ループの後、supervisor が要件の充足を確認する。 |
+| `takt-default-team` | takt-default の計画・テスト・レビュー契約を維持し、現行 schema 制約に合わせて実装系の dynamic facets と companion を使わない静的な Team Leader coder execution へ切り替える TAKT 開発 workflow です。 |
+| `review-default` | 多角レビュー - 専門レビュアーで並列レビューした後、supervisor がレビュー結果を統合する |
+| `review-fix-default` | 多角レビュー＋修正ループ（アーキテクチャ・セキュリティ・テスト・コーディングを並列レビューした後、supervisor が要件の充足を確認する） |
 
 ## 全ビルトイン Workflow 一覧
 

@@ -10,9 +10,9 @@ A comprehensive catalog of all builtin workflows and personas included with TAKT
 |----------|-----------------|
 | `default` | Default coding workflow using dynamic implementation companions with the shared core's adjudicated, verified peer-review remediation loop and a final check that requirements are met. |
 | `takt-default` | Inject TAKT-specific facets and implementation companions into the shared core's adjudicated, verified peer-review remediation loop and final check that requirements are met. |
-| `takt-default-team` | A `takt-default` variant that runs implementation and remediation through Team Leader task decomposition. |
-| `review-default` | Multi-perspective code review with specialist parallel reviewers and a supervisor synthesis. |
-| `review-fix-default` | Multi-perspective review + fix loop followed by the supervisor's final requirement check. |
+| `takt-default-team` | TAKT development workflow that preserves takt-default's planning, testing, review, and final-gate contracts while switching implementation, remediation, and retry remediation to static Team Leader coder execution without implementation dynamic facets or companions, as required by the current schema constraints. |
+| `review-default` | Multi-perspective Code Review - reviews changes with specialist parallel reviewers, then has a supervisor synthesize the results. |
+| `review-fix-default` | Multi-perspective review + fix loop (architecture, security, testing, and coding in parallel, followed by a supervisor checking whether requirements are met) |
 
 ## All Builtin Workflows
 
