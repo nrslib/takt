@@ -9,7 +9,7 @@ workflow_categories:
       - simple
   🔍 Review:
     workflows:
-      - review-default
+      - review
       - review-fix-default
       - audit-unit
       - audit-e2e

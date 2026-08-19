@@ -228,8 +228,8 @@ const TARGETS = [
   },
   {
     id: 'review-mode-authority',
-    workflow: 'review-default',
-    step: 'coding-review',
+    workflow: 'review',
+    step: 'backend-review',
     fixture: 'eval/fixtures/review-mode-authority',
   },
   {

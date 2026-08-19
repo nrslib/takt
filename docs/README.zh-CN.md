@@ -254,7 +254,7 @@ steps:
 | `default` | 标准开发流程。基于场景的规划与测试优先开发，配合动态实现 companion、多视角并行审查、裁定和收敛式修复循环 |
 | `takt-default` | TAKT 自身使用的开发流程，也适用于其他 CLI 工具 |
 | `takt-default-team` | 通过 Team Leader 任务分解执行实现与修复的 `takt-default` 变体 |
-| `review-default` / `review-fix-default` | 多视角审查（不带 / 带收敛式修复循环） |
+| `review` / `review-fix-default` | 多视角审查（不带 / 带收敛式修复循环） |
 
 领域特化系列（`simple` / `frontend` / `backend` / `dual` / CQRS / `*-mini` 变体）仍可在 📦 Legacy 分类中使用。
 

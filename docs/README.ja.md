@@ -263,7 +263,7 @@ workflow ファイルの正式ディレクトリ名は `workflows/` です。
 | `default` | 標準の開発 workflow。シナリオベースの計画とテスト先行開発に、動的実装 companion、多観点並列ピアレビュー、裁定、収束型 fix ループを組み合わせた構成。 |
 | `takt-default` | TAKT 自体の開発で実際に使われている workflow。CLI ツールの開発にそのまま活用できます。 |
 | `takt-default-team` | 実装・修正を Team Leader のタスク分解で実行する `takt-default` の派生。 |
-| `review-default` / `review-fix-default` | 多観点レビュー（fix ループなし / あり）。 |
+| `review` / `review-fix-default` | 多観点レビュー（fix ループなし / あり）。 |
 
 ドメイン特化ファミリー（`simple` / `frontend` / `backend` / `dual` / CQRS / `*-mini` 系）は 📦 レガシーカテゴリで引き続き利用できます。
 
