@@ -535,6 +535,80 @@ describe('OptionsBuilder.buildBaseOptions', () => {
     });
   });
 
+  it.each([
+    { profileFastMode: false, configFastMode: true },
+    { profileFastMode: true, configFastMode: false },
+  ])('uses the config/env winner for runtime profile options and its source', ({
+    profileFastMode,
+    configFastMode,
+  }) => {
+    const step = createStep();
+    const builder = createBuilder(step, {
+      providerSource: 'runtime-v1',
+      providerOptionsProviderSource: 'runtime-v1',
+      providerOptions: { codex: { fastMode: profileFastMode } },
+      configProviderOptions: { codex: { fastMode: configFastMode } },
+      providerOptionsSource: 'env',
+      providerOptionsOriginResolver: (path: string) => (
+        path === 'codex.fastMode' ? 'env' : 'default'
+      ),
+    });
+
+    const providerInfo = builder.resolveStepProviderModel(step);
+
+    expect(providerInfo.providerOptions).toEqual({ codex: { fastMode: configFastMode } });
+    expect(providerInfo.providerOptionsSources).toEqual({
+      'codex.fastMode': 'env',
+    });
+  });
+
+  it('attributes an explicit runtime profile option to runtime-v1', () => {
+    const step = createStep();
+    const builder = createBuilder(step, {
+      providerSource: 'runtime-v1',
+      providerOptionsProviderSource: 'runtime-v1',
+      providerOptions: { codex: { fastMode: false } },
+    });
+
+    const providerInfo = builder.resolveStepProviderModel(step);
+
+    expect(providerInfo.providerOptions).toEqual({ codex: { fastMode: false } });
+    expect(providerInfo.providerOptionsSources).toEqual({
+      'codex.fastMode': 'runtime-v1',
+    });
+  });
+
+  it('attributes profile options included by a runtime-resolved provider layer', () => {
+    const step = createStep();
+    const builder = createBuilder(step, {
+      providerSource: 'auto.fallback',
+      providerOptionsProviderSource: 'auto.fallback',
+      providerOptions: { codex: { fastMode: false } },
+    });
+
+    const providerInfo = builder.resolveStepProviderModel(step, {
+      providerInfo: {
+        provider: 'codex',
+        model: 'gpt-auto',
+        providerSource: 'auto.fallback',
+        modelSource: 'auto.fallback',
+        providerOptions: { codex: { networkAccess: true } },
+      },
+      teamLeaderPart: { partAllowedTools: [] },
+    });
+
+    expect(providerInfo.providerOptions).toEqual({
+      codex: {
+        fastMode: false,
+        networkAccess: true,
+      },
+    });
+    expect(providerInfo.providerOptionsSources).toEqual({
+      'codex.fastMode': 'auto.fallback',
+      'codex.networkAccess': 'auto.fallback',
+    });
+  });
+
   it('buildBaseOptions は takt-default の implement でも process safety を workflowMeta に含めない', () => {
     const step = createStep({ name: 'implement' });
     const builder = createBuilder(step, {

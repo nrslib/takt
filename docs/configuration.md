@@ -1059,6 +1059,25 @@ legacy mode it can also be set through `provider_routing`, deprecated
 `persona_providers`, project, or global config. The environment variable
 `TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS=true` also works as an override.
 
+#### Codex fast mode (`fast_mode`)
+
+Set the optional Codex fast-mode feature explicitly with `provider_options.codex.fast_mode`:
+
+```yaml
+provider_options:
+  codex:
+    fast_mode: true
+```
+
+Both `true` and `false` are explicit values. If the setting is omitted, TAKT does not send
+`features.fast_mode` to Codex and Codex keeps its own default. The environment override is
+`TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE=true` or `TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE=false`.
+
+The setting follows the existing provider-option leaf resolution and source attribution. It can
+come from a runtime profile, `provider_routing.personas`, `provider_routing.tags`,
+`provider_routing.steps`, project or global `provider_options`, or the environment override.
+`takt exec` uses the resolved runtime default provider options for its assistant session as well.
+
 #### Codex permission control (`permission_control`)
 
 Codex uses TAKT's permission mode mapping by default. This is equivalent to `permission_control: takt` and passes the resolved TAKT `permission_mode` to the Codex SDK as `sandboxMode`. `network_access`, when set, is also passed as `networkAccessEnabled`; when omitted, Codex keeps its default (`false`).

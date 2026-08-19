@@ -431,6 +431,47 @@ describe('CodexClient — structuredOutput 抽出', () => {
     });
   });
 
+  it.each([true, false])('fastMode=%s は Codex config の features.fast_mode に反映される', async (fastMode) => {
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+    const callOptions: CodexCallOptions = {
+      cwd: '/tmp',
+      fastMode,
+      reasoningEffort: 'high',
+    };
+
+    const client = new CodexClient();
+    await client.call('coder', 'prompt', callOptions);
+
+    expect(lastCodexConstructorOptions).toMatchObject({
+      config: {
+        features: { fast_mode: fastMode },
+        model_reasoning_effort: 'high',
+        model_reasoning_summary: 'auto',
+      },
+    });
+  });
+
+  it('fastMode 未指定時は Codex config に features.fast_mode を追加しない', async () => {
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+
+    const client = new CodexClient();
+    await client.call('coder', 'prompt', { cwd: '/tmp', reasoningEffort: 'high' });
+
+    expect(lastCodexConstructorOptions).toMatchObject({
+      config: {
+        model_reasoning_effort: 'high',
+        model_reasoning_summary: 'auto',
+      },
+    });
+    expect(lastCodexConstructorOptions?.config).not.toHaveProperty('features.fast_mode');
+  });
+
   it('codexPathOverride が Codex constructor options に反映される', async () => {
     mockEvents = [
       { type: 'thread.started', thread_id: 'thread-1' },

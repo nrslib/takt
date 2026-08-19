@@ -49,6 +49,8 @@ describe('config traced env overrides', () => {
   it('dotted path から traced-config 用の env 名を生成する', () => {
     expect(envVarNameFromPath('provider_options.claude.sandbox.allow_unsandboxed_commands'))
       .toBe('TAKT_PROVIDER_OPTIONS_CLAUDE_SANDBOX_ALLOW_UNSANDBOXED_COMMANDS');
+    expect(envVarNameFromPath('provider_options.codex.fast_mode'))
+      .toBe('TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE');
   });
 
   it('global config はホワイトリストされた env のみを反映する', () => {
@@ -102,6 +104,40 @@ describe('config traced env overrides', () => {
 
     expect(config.providerOptions).toEqual({
       codex: { networkAccess: true },
+    });
+  });
+
+  it.each([
+    { configValue: true, envValue: 'false', expectedValue: false },
+    { configValue: false, envValue: 'true', expectedValue: true },
+  ])('project config は Codex fast_mode の boolean env override を反映する', ({ configValue, envValue, expectedValue }) => {
+    const projectDir = join(testRoot, `project-codex-fast-mode-${envValue}`);
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      ['provider_options:', '  codex:', `    fast_mode: ${configValue}`].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE = envValue;
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.providerOptions).toEqual({
+      codex: { fastMode: expectedValue },
+    });
+  });
+
+  it('global config は Codex fast_mode の明示値を読み込む', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(
+      globalConfigPath,
+      ['provider_options:', '  codex:', '    fast_mode: false'].join('\n'),
+      'utf-8',
+    );
+
+    expect(loadGlobalConfig().providerOptions).toEqual({
+      codex: { fastMode: false },
     });
   });
 

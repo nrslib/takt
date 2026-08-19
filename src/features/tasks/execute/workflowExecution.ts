@@ -401,6 +401,7 @@ async function executeWorkflowInternal(
         reportFallbackProvider: options.reportFallbackProvider,
         rateLimitFallback: bootstrap.rateLimitFallback,
         providerOptions: bootstrap.providerOptions,
+        configProviderOptions: bootstrap.configProviderOptions,
         providerOptionsProviderSource: bootstrap.providerOptionsProviderSource,
         providerPermissionMode: bootstrap.providerPermissionMode,
         selectorProvider: bootstrap.selectorProvider,

@@ -30,6 +30,7 @@ export interface CodexCallOptions {
   sessionId?: string;
   model?: string;
   reasoningEffort?: CodexReasoningEffort;
+  fastMode?: boolean;
   systemPrompt?: string;
   /** Permission mode for the TAKT-controlled sandbox */
   permissionMode?: PermissionMode;
