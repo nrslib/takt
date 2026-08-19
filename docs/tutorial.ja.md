@@ -42,14 +42,16 @@ takt
 
 初回起動時は、workflow 選択の前に、デフォルトのエージェントとワークフローの言語、続いて使用する provider の選択を確認されます。
 
-workflow 選択では、`frontend-mini` を選びます。初期状態ではカテゴリだけが並びます。表示順は環境によって多少変わりますが、`frontend-mini` は `Mini` や `Frontend` のカテゴリにあります。
+workflow 選択では、`frontend-mini` を選びます。初期状態ではカテゴリだけが並びます。表示順は環境によって多少変わりますが、`frontend-mini` は `レガシー` カテゴリ配下の `フロントエンド` サブカテゴリにあります。
 
 ```text
 Select workflow:
-    📁 🚀 Quick Start/
-    📁 ✨ Simple/
-  ❯ 📁 ⚡ Mini/
-    📁 🎨 Frontend/
+    📁 🚀 クイックスタート/
+    📁 🛠️ 開発/
+    📁 🔍 レビュー/
+    📁 🏗️ インフラストラクチャ/
+    📁 🎵 TAKT開発/
+  ❯ 📁 📦 レガシー/
 ```
 
 workflow の上で `b` キーを押すとブックマークでき、ブックマークした workflow はこの画面の先頭に `🎼 {name} [*]` として表示されます。
@@ -57,14 +59,22 @@ workflow の上で `b` キーを押すとブックマークでき、ブックマ
 カテゴリを開いたら、`frontend-mini` を選びます。
 
 ```text
-Select workflow in ⚡ Mini:
-    🎼 simple-mini
-    🎼 default-mini
+Select workflow in 📦 レガシー:
+    📁 ✨ Simple/
+    📁 ⚡ Mini/
+  ❯ 📁 🎨 フロントエンド/
+    📁 ⚙️ バックエンド/
+    📁 🔧 デュアル/
+    📁 🔍 レビュー/
+    🎼 cli
+```
+
+```text
+Select workflow in 🎨 フロントエンド:
+    🎼 simple-frontend
+    🎼 frontend
   ❯ 🎼 frontend-mini
-    🎼 backend-mini
-    🎼 backend-cqrs-mini
-    🎼 dual-mini
-    🎼 dual-cqrs-mini
+    🎼 frontend-maintenance
 ```
 
 続いてインタラクティブモードの選択が表示されます。まずは **アシスタント** を選びます。

@@ -1,5 +1,5 @@
-name: takt-experimental
-description: TAKT固有ファセットと実装 companion を、共通コアの裁定・修正検証付きピアレビュー収束ループ、要件の最終確認へ注入する。
+name: takt-default-team
+description: takt-default の計画・テスト・レビュー契約を維持し、現行 schema 制約に合わせて実装系の dynamic facets と companion を使わない静的な Team Leader coder execution へ切り替える TAKT 開発 workflow です。
 max_steps: 51
 initial_step: develop
 
@@ -8,9 +8,8 @@ steps:
     kind: workflow_call
     call: development-core
     args:
-      implementation_pool: takt-coding-facets
-      implementation_workflow: development-implement-dynamic
-      remediation_workflow: development-remediation-dynamic
+      implementation_workflow: development-implement-team
+      remediation_workflow: development-remediation-team
       plan_instruction: scenario-based-plan
       plan_report_format: scenario-based-plan
       replan_instruction: scenario-based-replan-implementation
@@ -19,21 +18,16 @@ steps:
       fix_plan_instruction: scenario-based-fix-plan-from-review-resolution
       fix_plan_report_format: scenario-based-fix-plan
       final_gate_instruction: scenario-based-supervise-review-resolution
-      implementation_companions:
-        fixed: [ai-antipattern-review-companion, testing-review-companion]
-        pool: []
-        moderator: review-companion-moderator
-      reviewer_suite: takt-experimental-review
+      reviewer_suite: takt-development-review
       review_policy_additions: [takt-testing]
-      review_policy: [coding, testing, takt-testing, review, architecture, takt]
+      review_policy: [coding, testing, takt-testing, review]
       review_knowledge: [takt, architecture, unit-testing, e2e-testing]
       security_review_pool: takt-security-review-facets
       security_review_knowledge_additions: [takt]
-      plan_policy: [design-planning, architecture, takt, task-decomposition]
       plan_knowledge: [takt, architecture, task-decomposition]
-      testing_policy: [coding, testing, takt-testing, architecture, takt]
+      testing_policy: [coding, testing, takt-testing]
       testing_knowledge: [takt, architecture, unit-testing, e2e-testing]
-      development_policy: [coding, testing, takt-testing, ai-antipattern, architecture, implementation-semantics, takt]
+      development_policy: [coding, testing, takt-testing, ai-antipattern]
       development_knowledge: [takt, architecture, implementation-semantics]
     rules:
       - condition: COMPLETE

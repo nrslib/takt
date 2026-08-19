@@ -162,8 +162,8 @@ $ takt
 Select workflow:
   ❯ 🎼 default (current)
     📁 🚀 Quick Start/
-    📁 🎨 Frontend/
-    📁 ⚙️ Backend/
+    📁 🛠️ Development/
+    📁 🔍 Review/
 
 > Add user authentication with JWT
 
@@ -251,14 +251,12 @@ steps:
 
 | Workflow | 用途 |
 |----------|------|
-| `default` | 标准开发流程，包含测试优先、多视角并行审查和修复循环 |
-| `frontend` | 前端开发流程 |
-| `backend` | 后端开发流程 |
-| `dual` | 前端与后端组合流程 |
+| `default` | 标准开发流程。基于场景的规划与测试优先开发，配合动态实现 companion、多视角并行审查、裁定和收敛式修复循环 |
 | `takt-default` | TAKT 自身使用的开发流程，也适用于其他 CLI 工具 |
-| `frontend-maintenance` | 前端生产维护流程 |
-| `backend-maintenance` | 后端生产维护流程 |
-| `*-mini` 系列 | 各 workflow 的轻量版本，省略 `write_tests` |
+| `takt-default-team` | 通过 Team Leader 任务分解执行实现与修复的 `takt-default` 变体 |
+| `review-default` / `review-fix-default` | 多视角审查（不带 / 带收敛式修复循环） |
+
+领域特化系列（`simple` / `frontend` / `backend` / `dual` / CQRS / `*-mini` 变体）仍可在 📦 Legacy 分类中使用。
 
 所有 builtin workflow 和 persona 请参阅 [Builtin Catalog](./builtin-catalog.md)。
 

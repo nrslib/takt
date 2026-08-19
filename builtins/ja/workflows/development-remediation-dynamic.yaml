@@ -1,5 +1,5 @@
 name: development-remediation-dynamic
-description: 裁定済み experimental finding を動的ファセットで計画・修正・検証する収束ループ。
+description: 裁定済みレビュー finding を動的ファセットで計画・修正・検証する収束ループ。
 all_steps:
   rules:
     - ref: findings-handling

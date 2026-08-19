@@ -1,5 +1,5 @@
 name: development-remediation-dynamic
-description: Dynamic-facet remediation loop for adjudicated experimental findings, including planning, fixing, and verification.
+description: Dynamic-facet remediation loop for adjudicated review findings, including planning, fixing, and verification.
 all_steps:
   rules:
     - ref: findings-handling

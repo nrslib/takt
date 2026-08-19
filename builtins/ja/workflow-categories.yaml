@@ -3,88 +3,86 @@ workflow_categories:
     workflows:
       - simple
       - default
-      - experimental
-      - default-mini
-      - default-high
-      - cli
-      - frontend
-      - backend
-      - dual
-  ✨ Simple:
+  🛠️ 開発:
     workflows:
       - simple
-      - simple-mini
-      - simple-frontend
-      - simple-backend
-      - simple-dual
-      - simple-cqrs
-      - simple-dual-cqrs
-  ⚡ Mini:
-    workflows:
-      - simple-mini
-      - default-mini
-      - frontend-mini
-      - backend-mini
-      - backend-cqrs-mini
-      - dual-mini
-      - dual-cqrs-mini
-  🎨 フロントエンド:
-    workflows:
-      - simple-frontend
-      - frontend
-      - frontend-mini
-      - frontend-maintenance
-  ⚙️ バックエンド:
-    workflows:
-      - simple-backend
-      - simple-cqrs
-      - backend
-      - backend-mini
-      - backend-maintenance
-      - backend-cqrs
-      - backend-cqrs-mini
-  🔧 デュアル:
-    workflows:
-      - simple-dual
-      - simple-dual-cqrs
-      - dual
-      - dual-mini
-      - dual-cqrs
-      - dual-cqrs-mini
-  🏗️ インフラストラクチャ:
-    workflows:
-      - terraform
+      - default
   🔍 レビュー:
     workflows:
       - review-default
       - review-fix-default
-      - review-frontend
-      - review-fix-frontend
-      - review-backend
-      - review-fix-backend
-      - review-dual
-      - review-fix-dual
-      - review-dual-cqrs
-      - review-fix-dual-cqrs
-      - review-backend-cqrs
-      - review-fix-backend-cqrs
-      - review-takt-default
-      - review-fix-takt-default
       - audit-unit
       - audit-e2e
       - audit-security
       - audit-architecture
-      - audit-architecture-frontend
-      - audit-architecture-backend
-      - audit-architecture-dual
+  🏗️ インフラストラクチャ:
+    workflows:
+      - terraform
   🎵 TAKT開発:
     workflows:
       - takt-default
-      - takt-experimental
-      - takt-experimental-team
+      - takt-default-team
       - auto-improvement-loop
       - review-takt-default
       - review-fix-takt-default
+  📦 レガシー:
+    workflows:
+      - cli
+    ✨ Simple:
+      workflows:
+        - simple
+        - simple-mini
+        - simple-frontend
+        - simple-backend
+        - simple-dual
+        - simple-cqrs
+        - simple-dual-cqrs
+    ⚡ Mini:
+      workflows:
+        - simple-mini
+        - frontend-mini
+        - backend-mini
+        - backend-cqrs-mini
+        - dual-mini
+        - dual-cqrs-mini
+    🎨 フロントエンド:
+      workflows:
+        - simple-frontend
+        - frontend
+        - frontend-mini
+        - frontend-maintenance
+    ⚙️ バックエンド:
+      workflows:
+        - simple-backend
+        - simple-cqrs
+        - backend
+        - backend-mini
+        - backend-maintenance
+        - backend-cqrs
+        - backend-cqrs-mini
+    🔧 デュアル:
+      workflows:
+        - simple-dual
+        - simple-dual-cqrs
+        - dual
+        - dual-mini
+        - dual-cqrs
+        - dual-cqrs-mini
+    🔍 レビュー:
+      workflows:
+        - review-frontend
+        - review-fix-frontend
+        - review-backend
+        - review-fix-backend
+        - review-dual
+        - review-fix-dual
+        - review-dual-cqrs
+        - review-fix-dual-cqrs
+        - review-backend-cqrs
+        - review-fix-backend-cqrs
+        - audit-architecture-frontend
+        - audit-architecture-backend
+        - audit-architecture-dual
   その他:
     workflows:
       - research

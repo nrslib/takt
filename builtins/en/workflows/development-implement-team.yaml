@@ -1,5 +1,5 @@
 name: development-implement-team
-description: Team Leader implementation execution for experimental development workflows.
+description: Team Leader implementation execution for the shared development workflows.
 subworkflow:
   callable: true
   visibility: internal

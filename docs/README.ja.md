@@ -164,8 +164,8 @@ $ takt
 Select workflow:
   > 🎼 default (current)
     📁 🚀 クイックスタート/
-    📁 🎨 フロントエンド/
-    📁 ⚙️ バックエンド/
+    📁 🛠️ 開発/
+    📁 🔍 レビュー/
 
 対話モード - タスク内容を入力してください。
 コマンド: /go（実行）, /cancel（終了）
@@ -250,7 +250,7 @@ steps:
 
 繰り返し使う step 定義は `.takt/steps/` に置き、workflow から `uses` で参照できます。探索順と上書き規則は [Workflow Guide](./workflows.ja.md) を参照してください。
 
-`experimental` / `takt-experimental` wrapper は、汎用または TAKT 固有の外部 security-review facet pool を束縛する reviewer-suite adapter をトップで選びます。`takt-experimental-team` は同じ計画・テスト・レビュー・最終ゲート契約を使い、現行 schema 制約に合わせて実装・修正・再修正を dynamic facets と companion を使わない静的な Team Leader coder execution で行います。pool 参照は実際に消費する suite だけへ渡され、共有の development / peer-review workflow 契約は変更しません。`dynamic_facets` は通常の agent step と `parallel` の agent sub-step の両方で使え、dynamic parallel では participant selector の後に選択された子だけが facet selector を実行します。各子の固定 facet は維持され、`max_selected` まで pool 候補が追加され、空選択なら追加されません。対象の facet selector をすべて完了してから parallel の子を起動し、1件でも不正な選択があれば同じ parallel 親配下の子は起動しません。プロセスの resume では participant selector と facet selector を現在の pool に対して再実行します。
+`default` / `takt-default` wrapper は、汎用または TAKT 固有の外部 security-review facet pool を、それを消費する reviewer suite だけへ束縛します。`takt-default-team` は同じ計画・テスト・レビュー・最終ゲート契約を使い、現行 schema 制約に合わせて実装・修正・再修正を dynamic facets と companion を使わない静的な Team Leader coder execution で行います。pool 参照は実際に消費する suite だけへ渡され、共有の development / peer-review workflow 契約は変更しません。`dynamic_facets` は通常の agent step と `parallel` の agent sub-step の両方で使え、dynamic parallel では participant selector の後に選択された子だけが facet selector を実行します。各子の固定 facet は維持され、`max_selected` まで pool 候補が追加され、空選択なら追加されません。対象の facet selector をすべて完了してから parallel の子を起動し、1件でも不正な選択があれば同じ parallel 親配下の子は起動しません。プロセスの resume では participant selector と facet selector を現在の pool に対して再実行します。
 
 workflow ファイルの正式ディレクトリ名は `workflows/` です。
 
@@ -260,15 +260,12 @@ workflow ファイルの正式ディレクトリ名は `workflows/` です。
 
 | Workflow | 用途 |
 |-------|------|
-| `default` | 標準の開発 workflow。テスト先行＋多観点並列ピアレビュー（アーキテクチャ / AI アンチパターン / コーディング / セマンティクス / 契約ライフサイクル / 堅牢性）＋裁定＋収束型 fix ループの構成。 |
-| `frontend` | フロントエンド開発向けの workflow。 |
-| `backend` | バックエンド開発向けの workflow。 |
-| `dual` | フロントエンド＋バックエンドを同時に進める workflow。 |
+| `default` | 標準の開発 workflow。シナリオベースの計画とテスト先行開発に、動的実装 companion、多観点並列ピアレビュー、裁定、収束型 fix ループを組み合わせた構成。 |
 | `takt-default` | TAKT 自体の開発で実際に使われている workflow。CLI ツールの開発にそのまま活用できます。 |
-| `takt-experimental-team` | TAKT 固有のレビュー契約を維持し、schema 制約に合わせて dynamic facets と companion を使わない静的な Team Leader coder execution で実装・修正・再修正を行う実験的 workflow。 |
-| `frontend-maintenance` | フロントエンド本番保守向け。ループモニター付き厳密マルチフェーズレビュー。 |
-| `backend-maintenance` | バックエンド本番保守向け。デュアルスーパーバイザー最終承認付き厳密マルチフェーズレビュー。 |
-| `*-mini` シリーズ | 各 workflow の軽量版（`default-mini` / `frontend-mini` / `backend-mini` / `dual-mini`）。`write_tests` を省いた構成。 |
+| `takt-default-team` | 実装・修正を Team Leader のタスク分解で実行する `takt-default` の派生。 |
+| `review-default` / `review-fix-default` | 多観点レビュー（fix ループなし / あり）。 |
+
+ドメイン特化ファミリー（`simple` / `frontend` / `backend` / `dual` / CQRS / `*-mini` 系）は 📦 レガシーカテゴリで引き続き利用できます。
 
 全ワークフロー・ペルソナの一覧は [Builtin Catalog](./builtin-catalog.ja.md) を参照してください。
 

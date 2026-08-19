@@ -70,7 +70,7 @@ const TARGETS = [
   },
   {
     id: 'initial-review-external-identity-wiring',
-    workflow: 'takt-experimental-review',
+    workflow: 'takt-development-review',
     step: 'coding-review',
     fixture: 'eval/fixtures/initial-review-external-identity-wiring',
   },
@@ -208,7 +208,7 @@ const TARGETS = [
     fixture: 'eval/fixtures/review-adjudication-binding',
     includeOutputContract: true,
     dynamicFacetSelection: {
-      sourceWorkflow: 'experimental-review',
+      sourceWorkflow: 'development-review',
       pool: 'security-review-facets',
       candidateIds: ['cli'],
     },
@@ -221,7 +221,7 @@ const TARGETS = [
     fixture: 'eval/fixtures/security-review-method',
     includeOutputContract: true,
     dynamicFacetSelection: {
-      sourceWorkflow: 'experimental-review',
+      sourceWorkflow: 'development-review',
       pool: 'security-review-facets',
       candidateIds: ['cli'],
     },

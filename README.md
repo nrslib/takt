@@ -164,8 +164,8 @@ $ takt
 Select workflow:
   ❯ 🎼 default (current)
     📁 🚀 Quick Start/
-    📁 🎨 Frontend/
-    📁 ⚙️ Backend/
+    📁 🛠️ Development/
+    📁 🔍 Review/
 
 > Add user authentication with JWT
 
@@ -247,7 +247,7 @@ Rules determine the next step. `COMPLETE` ends the workflow successfully, `ABORT
 
 Reusable step definitions can be stored in `.takt/steps/` and expanded with `uses` before validation. See the Workflow Guide for fragment lookup and override rules.
 
-The `experimental` and `takt-experimental` wrappers select reviewer-suite adapters that bind the generic or TAKT-specific external security-review facet pool only at the suite that consumes it. `takt-experimental-team` preserves the same planning, testing, review, and final-gate contracts while switching implementation, remediation, and retry remediation to static Team Leader coder execution; current schema constraints mean that implementation dynamic facets and companions are not used by this variant. Shared development and peer-review workflow contracts remain unchanged. `dynamic_facets` works on normal agent steps and `parallel` agent sub-steps: dynamic parallel participants are selected first, each selected child keeps its fixed facets and receives up to `max_selected` pool candidates, and an empty selection adds nothing. All applicable facet selectors complete before any parallel child starts; if one selection is invalid, no child under that parallel parent starts. A process resume re-runs participant and facet selectors against their current pools.
+The `default` and `takt-default` wrappers bind the generic or TAKT-specific external security-review facet pool only at the reviewer suite that consumes it. `takt-default-team` preserves the same planning, testing, review, and final-gate contracts while switching implementation, remediation, and retry remediation to static Team Leader coder execution; current schema constraints mean that implementation dynamic facets and companions are not used by this variant. Shared development and peer-review workflow contracts remain unchanged. `dynamic_facets` works on normal agent steps and `parallel` agent sub-steps: dynamic parallel participants are selected first, each selected child keeps its fixed facets and receives up to `max_selected` pool candidates, and an empty selection adds nothing. All applicable facet selectors complete before any parallel child starts; if one selection is invalid, no child under that parallel parent starts. A process resume re-runs participant and facet selectors against their current pools.
 
 Workflow files live in `workflows/` as the official directory name.
 
@@ -257,14 +257,12 @@ When the same workflow name exists in multiple locations, TAKT resolves in this 
 
 | Workflow | Use Case |
 |-------|----------|
-| `default` | Standard development workflow. Test-first with multi-perspective parallel peer review (architecture, AI antipattern, coding, semantics, contract lifecycle, robustness), adjudication, and a convergent fix loop. |
-| `frontend` | Frontend development workflow. |
-| `backend` | Backend development workflow. |
-| `dual` | Combined frontend + backend workflow. |
+| `default` | Standard development workflow. Scenario-based planning and test-first development with dynamic implementation companions, multi-perspective parallel peer review, adjudication, and a convergent fix loop. |
 | `takt-default` | The workflow used to develop TAKT itself. Directly applicable to other CLI tool development. |
-| `frontend-maintenance` | Frontend production maintenance. Strict multi-phase review with loop monitors. |
-| `backend-maintenance` | Backend production maintenance. Strict multi-phase review with dual-supervisor sign-off. |
-| `*-mini` series | Lightweight variants of each workflow (`default-mini` / `frontend-mini` / `backend-mini` / `dual-mini`). Omits `write_tests`. |
+| `takt-default-team` | A `takt-default` variant that runs implementation and remediation through Team Leader task decomposition. |
+| `review-default` / `review-fix-default` | Multi-perspective review, without or with a convergent fix loop. |
+
+Domain-specific families (`simple` / `frontend` / `backend` / `dual` / CQRS / `*-mini` variants) remain available under the 📦 Legacy category.
 
 See the [Builtin Catalog](./docs/builtin-catalog.md) for all workflows and personas.
 

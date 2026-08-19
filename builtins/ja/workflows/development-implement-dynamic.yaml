@@ -1,5 +1,5 @@
 name: development-implement-dynamic
-description: experimental 開発 workflow で動的ファセットを使う実装実行。
+description: 共通開発 workflow で動的ファセットを使う実装実行。
 subworkflow:
   callable: true
   visibility: internal

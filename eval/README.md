@@ -64,7 +64,7 @@ nine repeated rows are independent CLI invocations. Invoke it with
 `npm run eval:prompts:fix-plan-bounded-proof`.
 
 The `initial-review-external-identity-wiring` suite runs the actual initial
-`coding-review` composition from `takt-experimental-review` on Claude Opus 5,
+`coding-review` composition from `takt-development-review` on Claude Opus 5,
 Codex Luna Max (`gpt-5.6-luna`, reasoning effort `max`), and Codex Sol High
 (`gpt-5.6-sol`, reasoning effort `high`). It checks that a reviewer builds the
 documented external step value, traces config and both consumers to terminal
@@ -109,7 +109,7 @@ Run it through `npm run eval:prompts:security-review-method`.
 | `fix-plan-boundary-preflight` | peer-review / fix-plan | fix-plan-boundary-preflight | whether fix-plan rejects a locally valid method that violates its representation and persistence boundary |
 | `review-family-closure` | peer-review-suite-base / coding-review | review-family-closure | whether one review reports every path affected by the same contract defect instead of stopping at a representative example |
 | `initial-review-contract-discovery` | peer-review / initial coding-review | initial-review-contract-discovery | whether the initial review independently discovers multiple blocking families and completes each family sweep |
-| `initial-review-external-identity-wiring` | takt-experimental-review / initial coding-review | initial-review-external-identity-wiring | whether Opus 5, Luna Max, and Sol High reject an external target value that is shortened in the same way across config, two consumers, and a green E2E, require a test using the documented value, and preserve an adjacent local-cache contract |
+| `initial-review-external-identity-wiring` | takt-development-review / initial coding-review | initial-review-external-identity-wiring | whether Opus 5, Luna Max, and Sol High reject an external target value that is shortened in the same way across config, two consumers, and a green E2E, require a test using the documented value, and preserve an adjacent local-cache contract |
 | `testing-review-observable-evidence` | peer-review / initial testing-review | testing-review-observable-evidence | whether testing review requires one missing behavior-level integration check while rejecting module-count, per-hop, and already-covered test expansion |
 | `initial-plan-contract-closure` | default / plan | initial-review-contract-discovery | whether the initial plan discovers same-responsibility paths even under different names, closes real multi-boundary impact paths, and keeps local changes local |
 | `replan-contract-closure` | default / replan | initial-review-contract-discovery | whether replanning preserves the original task while adding required production boundaries and rejecting unrelated reviewer proposals |

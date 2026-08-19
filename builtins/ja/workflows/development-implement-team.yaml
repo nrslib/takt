@@ -1,5 +1,5 @@
 name: development-implement-team
-description: Team Leader を使う experimental 開発 workflow の実装実行。
+description: Team Leader を使う共通開発 workflow の実装実行。
 subworkflow:
   callable: true
   visibility: internal

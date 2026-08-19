@@ -1,5 +1,5 @@
 name: development-implement-dynamic
-description: Dynamic-facet implementation execution for experimental development workflows.
+description: Dynamic-facet implementation execution for the shared development workflows.
 subworkflow:
   callable: true
   visibility: internal

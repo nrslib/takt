@@ -1,5 +1,5 @@
-name: takt-experimental-team
-description: Experimental TAKT development workflow that preserves takt-experimental's planning, testing, review, and final-gate contracts while switching implementation, remediation, and retry remediation to static Team Leader coder execution without implementation dynamic facets or companions, as required by the current schema constraints.
+name: takt-default-team
+description: TAKT development workflow that preserves takt-default's planning, testing, review, and final-gate contracts while switching implementation, remediation, and retry remediation to static Team Leader coder execution without implementation dynamic facets or companions, as required by the current schema constraints.
 max_steps: 51
 initial_step: develop
 
@@ -18,7 +18,7 @@ steps:
       fix_plan_instruction: scenario-based-fix-plan-from-review-resolution
       fix_plan_report_format: scenario-based-fix-plan
       final_gate_instruction: scenario-based-supervise-review-resolution
-      reviewer_suite: takt-experimental-review
+      reviewer_suite: takt-development-review
       review_policy_additions: [takt-testing]
       review_policy: [coding, testing, takt-testing, review]
       review_knowledge: [takt, architecture, unit-testing, e2e-testing]
