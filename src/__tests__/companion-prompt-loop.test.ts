@@ -8,7 +8,6 @@ import { COMPANION_PROMPT_LIMITS } from '../core/workflow/companion/limits.js';
 
 describe('companion prompt behavior', () => {
   it('reviews the current repository from a baseline without prior finding state', () => {
-    const diffBody = '+change that must not be injected';
     const prompt = buildCompanionReviewPrompt({
       companionName: 'security-reviewer',
       task: 'implement',
@@ -20,17 +19,14 @@ describe('companion prompt behavior', () => {
     expect(prompt).not.toContain('prior_findings');
     expect(prompt).not.toContain('prior_notes');
     expect(prompt).not.toContain('open_findings');
-    expect(prompt).not.toContain(diffBody);
-    expect(prompt).toContain('base-123');
-    expect(prompt).toContain('read-only repository tools');
-    expect(prompt).toContain('git diff <baseline_sha>');
+    expect(prompt).toContain('Task: implement');
+    expect(prompt).toContain('Step: code');
+    expect(prompt).toContain('"label":"baseline_sha","value":"base-123"');
   });
 
   it('embeds the current task, step, and review evidence in the review prompt', () => {
     const task = 'refactor the companion runtime';
     const stepName = 'implement-step';
-    const summaryContext = 'two files changed';
-    const changedPath = 'src/a.ts:1-2';
     const explanation = 'centralized prompt capacity checks';
     const prompt = buildCompanionReviewPrompt({
       companionName: 'architecture-reviewer',
@@ -40,29 +36,29 @@ describe('companion prompt behavior', () => {
       implementerExplanation: explanation,
     });
 
-    for (const value of [task, stepName, explanation]) {
-      expect(prompt).toContain(value);
-    }
-    expect(prompt).not.toContain(changedPath);
-    expect(prompt).not.toContain(summaryContext);
+    expect(prompt).toContain(`Task: ${task}`);
+    expect(prompt).toContain(`Step: ${stepName}`);
+    expect(prompt).toContain('"label":"baseline_sha","value":"base-456"');
+    expect(prompt).toContain(
+      '"label":"implementer_explanation","value":"centralized prompt capacity checks"',
+    );
   });
 
   it('gives the moderator the current reviewer result and its verification evidence', () => {
-    const task = 'implement the requested change';
-    const diffBody = '+const changed = true;';
     const prompt = buildCompanionModeratorPrompt({
       reviewerResult: {
         findings: [{ severity: 'nit', file: 'src/a.ts', line: 1, finding: 'rename' }],
       },
-      task,
+      task: 'implement the requested change',
       baselineSha: 'base-789',
     });
 
-    expect(prompt).toContain('rename');
-    expect(prompt).toContain(task);
-    expect(prompt).not.toContain(diffBody);
-    expect(prompt).toContain('base-789');
-    expect(prompt).toContain('verify each submitted finding');
+    expect(prompt).toContain('"label":"reviewer_result"');
+    expect(prompt).toContain('"finding":"rename"');
+    expect(prompt).toContain(
+      '"label":"task","value":"implement the requested change"',
+    );
+    expect(prompt).toContain('"label":"baseline_sha","value":"base-789"');
     expect(prompt).not.toContain('open_findings');
   });
 

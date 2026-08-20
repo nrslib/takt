@@ -1,6 +1,6 @@
 # Companion 指摘の裁定
 
-実装 companion が現在のレビューラウンドで提出した指摘を、現在の repository と提出された finding に基づいて裁定してください。
+companion が現在のレビューラウンドで提出した指摘を、現在の repository と提出された finding に基づいて裁定してください。
 
 - 新しい網羅レビューやコード編集は行わず、渡された reviewer の指摘を1件ずつ必ず裁定する。
 - read-only repository tool だけで、渡された baseline SHA と現在の worktree から各 finding を検証する。累積 diff 本文は渡されないため、それに依存しない。

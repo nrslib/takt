@@ -1,6 +1,6 @@
 # Companion finding repository verification
 
-Adjudicate the implementation companion's findings from the current review round using the current repository and the submitted findings.
+Adjudicate the submitted companion findings from the current review round using the current repository and the submitted findings.
 
 - Do not perform a new broad review or edit code. Decide every submitted reviewer finding exactly once.
 - Use only read-only repository tools to verify each submitted finding from the supplied baseline SHA and current worktree. Do not rely on a cumulative diff body because none is supplied.

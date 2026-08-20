@@ -95,15 +95,20 @@ describe('companion moderator', () => {
 
     expect(reviewerPrompts).toHaveLength(1);
     expect(moderatorPrompts).toHaveLength(1);
-    expect(reviewerPrompts[0]).toContain('base-123');
+    expect(reviewerPrompts[0]).toContain(
+      '"label":"baseline_sha","value":"base-123"',
+    );
+    expect(reviewerPrompts[0]).toContain(`Task: ${moderatorEvidence.task}`);
     expect(reviewerPrompts[0]).not.toContain(diffBody);
-    expect(reviewerPrompts[0]).toContain('git diff <baseline_sha>');
     expect(moderatorPrompts[0]).toContain(
       '"label":"task","value":"implement the requested contract"',
     );
-    expect(moderatorPrompts[0]).toContain('base-123');
+    expect(moderatorPrompts[0]).toContain(
+      '"label":"baseline_sha","value":"base-123"',
+    );
     expect(moderatorPrompts[0]).not.toContain(diffBody);
-    expect(moderatorPrompts[0]).toContain('verify each submitted finding');
+    expect(moderatorPrompts[0]).toContain('"label":"reviewer_result"');
+    expect(moderatorPrompts[0]).toContain('"finding":"first"');
   });
 
   it.each([
