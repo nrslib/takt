@@ -135,6 +135,8 @@ describe('quietMode: summary AI session isolation', () => {
         expect(prompt).toContain('## Markdown + Gherkin Output Format');
       } else {
         expect(prompt).not.toContain('## Markdown + Gherkin Output Format');
+        expect(prompt).not.toContain('Write these in a fenced `gherkin` block:');
+        expect(prompt).not.toContain('Do not duplicate the same requirement in Markdown and Gherkin');
       }
     } finally {
       fs.rmSync(projectDir, { recursive: true, force: true });

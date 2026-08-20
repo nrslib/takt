@@ -84,6 +84,8 @@ describe('buildSummaryPrompt', () => {
     );
 
     expect(summary).not.toContain('## Markdown + Gherkin Output Format');
+    expect(summary).not.toContain('Write these in a fenced `gherkin` block:');
+    expect(summary).not.toContain('Do not duplicate the same requirement in Markdown and Gherkin');
   });
 
 });

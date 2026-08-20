@@ -627,6 +627,8 @@ describe('/go command', () => {
         expect(capture.prompts[0]).toContain('## Markdown + Gherkin Output Format');
       } else {
         expect(capture.prompts[0]).not.toContain('## Markdown + Gherkin Output Format');
+        expect(capture.prompts[0]).not.toContain('Write these in a fenced `gherkin` block:');
+        expect(capture.prompts[0]).not.toContain('Do not duplicate the same requirement in Markdown and Gherkin');
       }
     } finally {
       fs.rmSync(projectDir, { recursive: true, force: true });
