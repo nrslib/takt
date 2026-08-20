@@ -14,4 +14,4 @@ export function runProbeProcess(
     cleanupTimeout: number;
     env: NodeJS.ProcessEnv;
   },
-): Promise<{ stdout: string; stderr: string }>;
+): Promise<{ stdout: string; stderr: string; cleanup: Promise<void> }>;
