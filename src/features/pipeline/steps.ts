@@ -337,7 +337,7 @@ export async function runWorkflow(
   workflow: string,
   task: string,
   execCwd: string,
-  options: Pick<PipelineExecutionOptions, 'provider' | 'model' | 'autoStrategy' | 'issueNumber' | 'prNumber' | 'autoPr' | 'skipGit'>,
+  options: Pick<PipelineExecutionOptions, 'provider' | 'model' | 'autoStrategy' | 'issueNumber' | 'prNumber'>,
   context: ExecutionContext,
   loopAnalysisPublication?: LoopAnalysisPublicationCoordinator,
 ): Promise<boolean> {

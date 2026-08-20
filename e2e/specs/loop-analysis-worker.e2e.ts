@@ -80,15 +80,21 @@ describe('E2E: detached loop analysis worker (mock)', () => {
     expect(sourceResult.exitCode, formatTaktRunResult(sourceResult)).toBe(0);
 
     const runsDirectory = join(repo.path, '.takt', 'runs');
+    let reports: string[] = [];
     const reportWasSaved = await waitFor(
-      () => findLoopAnalysisReports(runsDirectory).length === 1,
+      () => {
+        reports = findLoopAnalysisReports(runsDirectory);
+        return reports.length === 1;
+      },
       30_000,
     );
     expect(reportWasSaved).toBe(true);
-
-    const [reportPath] = findLoopAnalysisReports(runsDirectory);
-    expect(reportPath).toBeDefined();
-    expect(readFileSync(reportPath as string, 'utf-8')).toContain(
+    expect(reports).toHaveLength(1);
+    const reportPath = reports[0];
+    if (reportPath === undefined) {
+      throw new Error('Loop analysis report was not found');
+    }
+    expect(readFileSync(reportPath, 'utf-8')).toContain(
       '# Loop Analysis Report',
     );
   }, 240_000);

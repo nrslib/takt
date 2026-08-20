@@ -54,31 +54,109 @@ function transitionIndex(
 
 describe('loop analysis builtin workflow integration', () => {
   let projectCwd: string;
-  let previousConfigDir: string | undefined;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    previousConfigDir = process.env.TAKT_CONFIG_DIR;
     projectCwd = mkdtempSync(join(tmpdir(), 'takt-loop-analysis-it-'));
-    const configDir = join(projectCwd, 'global-takt');
+    const configDir = process.env.TAKT_CONFIG_DIR;
+    if (configDir === undefined) {
+      throw new Error('TAKT_CONFIG_DIR must be configured by the test environment');
+    }
     mkdirSync(configDir, { recursive: true });
     writeFileSync(
       join(configDir, 'config.yaml'),
       'language: en\nenable_builtin_workflows: true\n',
       'utf-8',
     );
-    process.env.TAKT_CONFIG_DIR = configDir;
     invalidateGlobalConfigCache();
   });
 
   afterEach(() => {
     invalidateGlobalConfigCache();
-    if (previousConfigDir === undefined) {
-      delete process.env.TAKT_CONFIG_DIR;
-    } else {
-      process.env.TAKT_CONFIG_DIR = previousConfigDir;
-    }
     rmSync(projectCwd, { recursive: true, force: true });
+  });
+
+  it('Given every review rejects, When the bounded loop reaches its third review, Then it aborts at the iteration limit and preserves the last report', async () => {
+    const workflow = requireLoopAnalysisWorkflow(projectCwd);
+    const analyzerName = workflow.initialStep;
+    const reviewerName = workflow.steps.find((step) => step.name !== analyzerName)?.name;
+    if (reviewerName === undefined) {
+      throw new Error('loop-analysis reviewer step is missing');
+    }
+    const analyzeTransition = transitionIndex(workflow, analyzerName, reviewerName);
+    const rejectTransition = transitionIndex(workflow, reviewerName, analyzerName);
+    const finalReport = '# Loop analysis\n\nThird rejection remains available.';
+    const structuredCaller: StructuredCaller = {
+      judgeStatus: vi.fn(async (_structured, _tag, _candidates, options) => {
+        options.onStructuredPromptResolved?.({
+          systemPrompt: 'loop analysis judge',
+          userInstruction: 'select transition',
+        });
+        return {
+          candidateIndex: options.stepName === analyzerName
+            ? analyzeTransition
+            : rejectTransition,
+          method: 'structured_output',
+        };
+      }),
+      evaluateCondition: vi.fn(),
+      decomposeTask: vi.fn(),
+      requestMoreParts: vi.fn(),
+    };
+    let reportCount = 0;
+    vi.mocked(runAgent).mockImplementation(async (persona, task, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: task,
+      });
+      const isReportPhase = options?.allowedTools?.length === 0;
+      if (isReportPhase) {
+        reportCount += 1;
+      }
+      return agentResponse(
+        isReportPhase && reportCount === 3
+          ? finalReport
+          : isReportPhase
+            ? `# Loop analysis\n\nReport ${reportCount}`
+            : 'Analysis step result',
+        isReportPhase ? undefined : `session-${vi.mocked(runAgent).mock.calls.length}`,
+      );
+    });
+    const visitedSteps: string[] = [];
+    const iterationLimits: Array<[number, number]> = [];
+    const engine = new WorkflowEngine(workflow, projectCwd, 'Inspect the source run', {
+      projectCwd,
+      provider: 'mock',
+      reportDirName: 'loop-analysis-limit-it',
+      structuredCaller,
+    });
+    engine.on('step:start', (step) => visitedSteps.push(step.name));
+    engine.on('iteration:limit', (iteration, maxSteps) => {
+      iterationLimits.push([iteration, maxSteps]);
+    });
+
+    const state = await engine.run();
+
+    expect(state.status, JSON.stringify(state)).toBe('aborted');
+    expect(state.iteration).toBe(6);
+    expect(iterationLimits).toEqual([[6, 6]]);
+    expect(visitedSteps).toEqual([
+      analyzerName,
+      reviewerName,
+      analyzerName,
+      reviewerName,
+      analyzerName,
+      reviewerName,
+    ]);
+    expect(reportCount).toBe(3);
+    expect(readFileSync(join(
+      projectCwd,
+      '.takt',
+      'runs',
+      'loop-analysis-limit-it',
+      'reports',
+      'loop-analysis.md',
+    ), 'utf-8')).toBe(finalReport);
   });
 
   it('Given two reviewer rejections, When the builtin runs, Then it executes three analyzer-reviewer pairs and completes on the third approval', async () => {

@@ -26,7 +26,8 @@ vi.mock('node:fs', async (importOriginal) => ({
   lstatSync: (...args: unknown[]) => mockLstatSync(...args),
 }));
 
-vi.mock('../features/tasks/execute/loopAnalysisJob.js', () => ({
+vi.mock('../features/tasks/execute/loopAnalysisJob.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../features/tasks/execute/loopAnalysisJob.js')>()),
   appendLoopAnalysisWorkerFailure: (...args: unknown[]) =>
     mockAppendLoopAnalysisWorkerFailure(...args),
   readLoopAnalysisJob: (...args: unknown[]) => mockReadLoopAnalysisJob(...args),
@@ -48,6 +49,9 @@ vi.mock('../infra/git/index.js', () => ({
   initGitProvider: (...args: unknown[]) => mockInitGitProvider(...args),
 }));
 
+import {
+  PrivateArtifactPublicationConflictError,
+} from '../shared/utils/private-file.js';
 import {
   executeLoopAnalysisJob,
   runLoopAnalysisWorker,
@@ -189,6 +193,75 @@ describe('loop analysis worker', () => {
     expect(mockCommentLoopAnalysisReportOnPr).toHaveBeenCalledTimes(1);
   });
 
+  it('Given publication marker reads conflict transiently, When the marker settles within the retry bound, Then the worker comments once', async () => {
+    vi.useFakeTimers();
+    mockReadLoopAnalysisJob.mockReturnValue({
+      ...baseJob,
+      output: 'pr-comment',
+      branch: 'takt/source-run',
+      publicationMarkerPath: '/project/source.publication.json',
+    });
+    mockReadLoopAnalysisPublicationMarker
+      .mockImplementationOnce(() => {
+        throw new PrivateArtifactPublicationConflictError('publication changed');
+      })
+      .mockImplementationOnce(() => {
+        throw new PrivateArtifactPublicationConflictError('publication changed');
+      })
+      .mockReturnValueOnce('settled');
+
+    const execution = executeLoopAnalysisJob('/project/source.job.json');
+    await vi.advanceTimersByTimeAsync(20);
+    await execution;
+
+    expect(mockReadLoopAnalysisPublicationMarker).toHaveBeenCalledTimes(3);
+    expect(mockCommentLoopAnalysisReportOnPr).toHaveBeenCalledTimes(1);
+  });
+
+  it('Given publication marker reads keep conflicting, When the retry bound is reached, Then the worker records the failure and stops', async () => {
+    vi.useFakeTimers();
+    mockReadLoopAnalysisJob.mockReturnValue({
+      ...baseJob,
+      output: 'pr-comment',
+      branch: 'takt/source-run',
+      publicationMarkerPath: '/project/source.publication.json',
+    });
+    mockReadLoopAnalysisPublicationMarker.mockImplementation(() => {
+      throw new PrivateArtifactPublicationConflictError('publication changed');
+    });
+
+    const execution = runLoopAnalysisWorker('/project/source.job.json');
+    const rejection = expect(execution).rejects.toThrow('publication changed');
+    await vi.advanceTimersByTimeAsync(20);
+    await rejection;
+
+    expect(mockReadLoopAnalysisPublicationMarker).toHaveBeenCalledTimes(3);
+    expect(mockAppendLoopAnalysisWorkerFailure).toHaveBeenCalledTimes(1);
+    expect(mockCommentLoopAnalysisReportOnPr).not.toHaveBeenCalled();
+  });
+
+  it('Given publication remains pending while the parent stays alive, When the wait bound is reached, Then the worker records a timeout and stops', async () => {
+    vi.useFakeTimers();
+    mockReadLoopAnalysisJob.mockReturnValue({
+      ...baseJob,
+      output: 'pr-comment',
+      branch: 'takt/source-run',
+      publicationMarkerPath: '/project/source.publication.json',
+    });
+    mockReadLoopAnalysisPublicationMarker.mockReturnValue('pending');
+    vi.spyOn(process, 'kill').mockImplementation((() => true) as typeof process.kill);
+
+    const execution = runLoopAnalysisWorker('/project/source.job.json');
+    const rejection = expect(execution).rejects.toThrow(
+      'publication settlement timed out',
+    );
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    await rejection;
+
+    expect(mockAppendLoopAnalysisWorkerFailure).toHaveBeenCalledTimes(1);
+    expect(mockCommentLoopAnalysisReportOnPr).not.toHaveBeenCalled();
+  });
+
   it('Given analysis execution fails, When the worker terminates, Then the failure is persisted beside the private job', async () => {
     mockRunLoopAnalysisWorkflowExecution.mockResolvedValue({
       success: false,
@@ -223,15 +296,17 @@ describe('loop analysis worker', () => {
     },
   ])('Given $label completes without a report directory, When the worker checks its required output, Then it persists the failure before PR operations', async ({ job }) => {
     mockReadLoopAnalysisJob.mockReturnValue(job);
-    mockExistsSync.mockReturnValueOnce(false);
+    mockRunLoopAnalysisWorkflowExecution.mockResolvedValue({
+      success: true,
+      runDirectory: '/project/.takt/runs/analysis-run',
+      ndjsonLogPath: '/project/.takt/runs/analysis-run/logs/session.ndjson',
+    });
 
     await expect(runLoopAnalysisWorker('/project/source.job.json')).rejects.toThrow(
       'without a report directory',
     );
 
-    expect(mockExistsSync).toHaveBeenCalledWith(
-      '/project/.takt/runs/analysis-run/reports',
-    );
+    expect(mockExistsSync).not.toHaveBeenCalled();
     expect(mockAppendLoopAnalysisWorkerFailure).toHaveBeenCalledTimes(1);
     expect(mockReadLoopAnalysisPublicationMarker).not.toHaveBeenCalled();
     expect(mockInitGitProvider).not.toHaveBeenCalled();

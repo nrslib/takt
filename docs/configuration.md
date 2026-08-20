@@ -619,6 +619,16 @@ When enabled, every successful, failed, or interrupted source run starts the
 builtin `loop-analysis` workflow asynchronously. The source run does not wait
 for analysis, and an analysis startup or execution failure does not change the
 source result. Analysis runs do not schedule another analysis run.
+Runs terminalized through manual force-fail are also scheduled immediately after
+their terminal artifacts are committed. Each source run creates at most one
+analysis job.
+
+If the process receives an OS-level forced termination (`SIGKILL`) after the
+terminal artifacts are committed but before the analysis job is persisted, that
+process cannot start the analysis itself. The dispatch claim is intentionally
+at-most-once, so force-failing the run from the task list is not an automatic
+recovery guarantee for a claim that was persisted immediately before the
+process was killed.
 
 The analyzer reads the source run's available JSONL logs, trace, monitor data,
 and reports. Its reviewer can return over-specialized proposals for revision up

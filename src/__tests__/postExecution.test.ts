@@ -787,4 +787,22 @@ describe('commentLoopAnalysisReportOnPr', () => {
     expect(mockCommentOnPr).not.toHaveBeenCalled();
     expect(mockCreatePullRequest).not.toHaveBeenCalled();
   });
+
+  it('Given posting the report comment fails, When the analysis result is published, Then the provider error is surfaced', async () => {
+    mockFindExistingPr.mockReturnValue({
+      number: 41,
+      url: 'https://github.com/org/repo/pull/41',
+    });
+    mockReadFileSync.mockReturnValue('# Loop analysis');
+    mockCommentOnPr.mockReturnValue({
+      success: false,
+      error: 'comment rejected',
+    });
+
+    await expect(commentLoopAnalysisReportOnPr({
+      projectCwd: '/project',
+      branch: 'takt/source-run',
+      reportPath: '/project/.takt/runs/analysis/reports/loop-analysis.md',
+    })).rejects.toThrow('comment rejected');
+  });
 });

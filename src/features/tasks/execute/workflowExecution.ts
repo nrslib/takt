@@ -25,7 +25,6 @@ import {
   type WorkflowExecutionEventBridge,
 } from './workflowExecutionEvents.js';
 import { getErrorMessage } from '../../../shared/utils/error.js';
-import { createLogger } from '../../../shared/utils/index.js';
 import type { StreamEvent } from '../../../shared/types/provider.js';
 import {
   OTEL_EXPORTER_OTLP_ENDPOINT,
@@ -75,8 +74,7 @@ import {
   prepareWorkflowExecutionBundle,
   publishWorkflowExecutionBundle,
 } from './workflowExecutionBundle.js';
-
-const log = createLogger('workflowExecution');
+import { scheduleLoopAnalysis } from './loopAnalysis.js';
 
 export type { WorkflowExecutionResult, WorkflowExecutionOptions };
 
@@ -261,21 +259,15 @@ async function executeWorkflowInternal(
       resumeLineage,
     );
   } catch (bootstrapError) {
-    try {
-      return await terminalizeBootstrapFailure({
-        activeRun,
-        workflowConfig,
-        task,
-        projectCwd: options.projectCwd,
-        primaryError: bootstrapError,
-        resumeLineage,
-      });
-    } finally {
-      scheduleLoopAnalysis(
-        options.loopAnalysisScheduler,
-        activeRun.runPaths.runRootAbs,
-      );
-    }
+    return terminalizeBootstrapFailure({
+      activeRun,
+      workflowConfig,
+      task,
+      projectCwd: options.projectCwd,
+      primaryError: bootstrapError,
+      resumeLineage,
+      loopAnalysisScheduler: options.loopAnalysisScheduler,
+    });
   }
   const executionBundle = loadWorkflowExecutionBundle(activeRun.runPaths);
   const workflowCallResolver = executionBundle.workflowCallResolver;
@@ -565,6 +557,10 @@ async function executeWorkflowInternal(
         );
         finalizationIssues.push(...finalization.issues);
         committedPublication = terminalPublication;
+        scheduleLoopAnalysis(
+          options.loopAnalysisScheduler,
+          activeRun.runPaths.runRootAbs,
+        );
       } catch (error) {
         terminalizationErrors.push(error);
       }
@@ -588,10 +584,6 @@ async function executeWorkflowInternal(
     await captureAsyncError(
       cleanupErrors,
       () => bootstrap.observabilityHandle.shutdown(),
-    );
-    scheduleLoopAnalysis(
-      options.loopAnalysisScheduler,
-      activeRun.runPaths.runRootAbs,
     );
   }
 
@@ -621,23 +613,6 @@ async function executeWorkflowInternal(
       };
 }
 
-function scheduleLoopAnalysis(
-  scheduler: WorkflowExecutionOptions['loopAnalysisScheduler'],
-  runDirectory: string,
-): void {
-  if (scheduler === undefined) {
-    return;
-  }
-  try {
-    scheduler(runDirectory);
-  } catch (error) {
-    log.error('Loop analysis scheduling failed', {
-      runDirectory,
-      error: getErrorMessage(error),
-    });
-  }
-}
-
 function resolveAvailableSourceLineage(
   cwd: string,
   resumeSource: WorkflowExecutionOptions['resumeSource'],
@@ -662,6 +637,7 @@ async function terminalizeBootstrapFailure(input: {
   readonly projectCwd: string;
   readonly primaryError: unknown;
   readonly resumeLineage?: WorkflowExecutionResumeLineage;
+  readonly loopAnalysisScheduler?: WorkflowExecutionOptions['loopAnalysisScheduler'];
 }): Promise<never> {
   const reason = getErrorMessage(input.primaryError);
   const finalizationErrors: unknown[] = [];
@@ -735,6 +711,10 @@ async function terminalizeBootstrapFailure(input: {
       reason,
     }, payload);
     finalizationErrors.push(...finalization.issues);
+    scheduleLoopAnalysis(
+      input.loopAnalysisScheduler,
+      input.activeRun.runPaths.runRootAbs,
+    );
   } catch (error) {
     finalizationErrors.push(error);
   }

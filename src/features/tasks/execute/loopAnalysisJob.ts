@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { closeSync, openSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
 import {
   appendPrivateFile,
@@ -12,6 +13,7 @@ import { getErrorMessage } from '../../../shared/utils/index.js';
 const LOOP_ANALYSIS_JOB_VERSION = 1;
 const LOOP_ANALYSIS_JOB_DIRECTORY = 'loop-analysis';
 const LOOP_ANALYSIS_WORKER_FAILURE_LOG = 'worker-errors.jsonl';
+const LOOP_ANALYSIS_DISPATCH_CLAIM = 'dispatch.claim';
 const PRIVATE_FILE_MODE = 0o600;
 
 export type LoopAnalysisOutput = 'file' | 'pr-comment';
@@ -36,6 +38,29 @@ export type LoopAnalysisPublicationState = 'pending' | 'settled';
 interface LoopAnalysisPublicationMarker {
   readonly version: 1;
   readonly state: LoopAnalysisPublicationState;
+}
+
+export function claimLoopAnalysisDispatch(sourceRunDirectory: string): boolean {
+  requireAbsolutePath(sourceRunDirectory, 'sourceRunDirectory');
+  const directory = join(
+    sourceRunDirectory,
+    '.takt-report-internal',
+    LOOP_ANALYSIS_JOB_DIRECTORY,
+  );
+  ensurePrivateDirectory(directory);
+  try {
+    closeSync(openSync(
+      join(directory, LOOP_ANALYSIS_DISPATCH_CLAIM),
+      'wx',
+      PRIVATE_FILE_MODE,
+    ));
+    return true;
+  } catch (error) {
+    if (isNodeError(error) && error.code === 'EEXIST') {
+      return false;
+    }
+    throw error;
+  }
 }
 
 export function createLoopAnalysisJobPaths(
@@ -229,4 +254,8 @@ function requireAbsolutePath(value: string, fieldName: string): void {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && typeof (error as NodeJS.ErrnoException).code === 'string';
 }

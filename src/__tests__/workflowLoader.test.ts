@@ -182,21 +182,27 @@ describe('loadWorkflowByIdentifier', () => {
   it('Given the loop analysis builtin assets, When loading by identifier, Then they provide a schema-valid two-stage finite review loop and the standard report contract', () => {
     const workflow = loadWorkflowByIdentifier('loop-analysis', process.cwd());
 
-    expect(workflow).not.toBeNull();
-    expect(workflow?.maxSteps).toBe(6);
-    expect(workflow?.steps).toHaveLength(2);
-    const analyzer = workflow?.steps.find((step) => step.name === workflow.initialStep);
-    const reviewer = workflow?.steps.find((step) => step.name !== workflow.initialStep);
+    if (workflow === null) {
+      throw new Error('loop-analysis builtin workflow was not loaded');
+    }
+    const initialStep = workflow.initialStep;
+    expect(workflow.maxSteps).toBe(6);
+    expect(workflow.steps).toHaveLength(2);
+    const analyzer = workflow.steps.find((step) => step.name === initialStep);
+    const reviewer = workflow.steps.find((step) => step.name !== initialStep);
     expect(analyzer).toBeDefined();
     expect(reviewer).toBeDefined();
-    expect(analyzer?.rules).toEqual(expect.arrayContaining([
+    expect(analyzer?.rules).toHaveLength(1);
+    expect(analyzer?.rules?.[0]).toEqual(
       expect.objectContaining({ next: reviewer?.name }),
-    ]));
-    expect(reviewer?.rules).toEqual(expect.arrayContaining([
-      expect.objectContaining({ next: workflow?.initialStep }),
+    );
+    expect(reviewer?.rules).toHaveLength(2);
+    expect(reviewer?.rules).toEqual([
       expect.objectContaining({ next: 'COMPLETE' }),
-    ]));
+      expect.objectContaining({ next: initialStep }),
+    ]);
     expect(analyzer?.outputContracts).toBeUndefined();
+    expect(reviewer?.outputContracts).toHaveLength(1);
     expect(reviewer?.outputContracts).toEqual([
       expect.objectContaining({
         name: 'loop-analysis.md',
@@ -205,7 +211,7 @@ describe('loadWorkflowByIdentifier', () => {
     ]);
 
     const providerKeys = ['provider', 'model', 'providerOptions', 'provider_options'];
-    for (const owner of [workflow, ...(workflow?.steps ?? [])]) {
+    for (const owner of [workflow, ...workflow.steps]) {
       for (const key of providerKeys) {
         expect(owner).not.toHaveProperty(key);
       }

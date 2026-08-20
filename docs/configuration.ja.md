@@ -608,7 +608,13 @@ loop_analysis:
 
 有効時は、成功・失敗・中断したすべての元 run から builtin の `loop-analysis` workflow を
 非同期で起動します。元 run は分析の完了を待たず、分析の起動・実行失敗も元 run の結果を
-変更しません。分析 run から別の分析 run は起動しません。
+変更しません。手動で force-fail した run も、終端成果物の確定直後に分析対象になります。
+分析 run から別の分析 run は起動しません。同一 run の解析ジョブは1回だけ作成されます。
+
+終端成果物の確定直後にプロセスが OS の強制終了（`SIGKILL`）を受け、解析ジョブの永続化まで
+到達しなかった場合、そのプロセス自身から解析を起動することはできません。dispatch claim は意図的に
+at-most-once であるため、claim がプロセス終了直前に永続化されていた場合、task 一覧から run を
+force-fail しても、この状態を自動復旧できる保証はありません。
 
 分析 agent は元 run に存在する JSONL ログ、trace、monitor data、report を読みます。reviewer は
 過剰に特化した提案を最大2回まで差し戻します。最終 report は常に分析 workflow の output

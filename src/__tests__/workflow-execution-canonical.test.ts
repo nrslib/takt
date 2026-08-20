@@ -399,7 +399,7 @@ describe('workflow execution canonical entrypoints', () => {
     );
   });
 
-  it('Given a completed run, When terminal artifacts and observability are finalized, Then analysis is scheduled once with the run directory', async () => {
+  it('Given a completed run, When terminal artifacts are committed, Then analysis is scheduled before observability shutdown', async () => {
     const order: string[] = [];
     mockObservabilityShutdown.mockImplementationOnce(async () => {
       order.push('observability-shutdown');
@@ -435,7 +435,7 @@ describe('workflow execution canonical entrypoints', () => {
     expect(result.success).toBe(true);
     expect(loopAnalysisScheduler).toHaveBeenCalledOnce();
     expect(loopAnalysisScheduler).toHaveBeenCalledWith('/tmp/run');
-    expect(order).toEqual(['observability-shutdown', 'analysis-scheduled']);
+    expect(order).toEqual(['analysis-scheduled', 'observability-shutdown']);
   });
 
   it('Given workflow execution fails, When terminal artifacts are finalized, Then analysis is scheduled once without replacing the failure', async () => {

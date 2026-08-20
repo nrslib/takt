@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { setTimeout as wait } from 'node:timers/promises';
 import { initGitProvider } from '../../../infra/git/index.js';
 import { isDirectEntrypoint } from '../../../shared/utils/entrypoint.js';
+import { PrivateArtifactPublicationConflictError } from '../../../shared/utils/private-file.js';
 import { commentLoopAnalysisReportOnPr } from './postExecution.js';
 import {
   appendLoopAnalysisWorkerFailure,
@@ -17,6 +18,9 @@ import {
 import { runLoopAnalysisWorkflowExecution } from './workflowExecutionApi.js';
 
 const PUBLICATION_MARKER_POLL_INTERVAL_MS = 100;
+const PUBLICATION_MARKER_CONFLICT_RETRY_MS = 10;
+const PUBLICATION_MARKER_CONFLICT_RETRIES = 3;
+const PUBLICATION_SETTLEMENT_TIMEOUT_MS = 10 * 60_000;
 
 export async function executeLoopAnalysisJob(jobPath: string): Promise<void> {
   const job = readLoopAnalysisJob(jobPath);
@@ -73,11 +77,33 @@ async function waitForPublicationSettlement(job: LoopAnalysisJob): Promise<void>
   if (markerPath === undefined) {
     return;
   }
-  while (readLoopAnalysisPublicationMarker(markerPath) !== 'settled') {
+  const deadline = Date.now() + PUBLICATION_SETTLEMENT_TIMEOUT_MS;
+  while (await readPublicationMarkerWithRetry(markerPath) !== 'settled') {
     if (!isProcessRunning(job.parentPid)) {
       return;
     }
+    if (Date.now() >= deadline) {
+      throw new Error('Loop analysis publication settlement timed out');
+    }
     await wait(PUBLICATION_MARKER_POLL_INTERVAL_MS);
+  }
+}
+
+async function readPublicationMarkerWithRetry(
+  markerPath: string,
+): Promise<ReturnType<typeof readLoopAnalysisPublicationMarker>> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return readLoopAnalysisPublicationMarker(markerPath);
+    } catch (error) {
+      if (
+        !(error instanceof PrivateArtifactPublicationConflictError)
+        || attempt >= PUBLICATION_MARKER_CONFLICT_RETRIES
+      ) {
+        throw error;
+      }
+      await wait(PUBLICATION_MARKER_CONFLICT_RETRY_MS);
+    }
   }
 }
 
@@ -97,7 +123,8 @@ function isProcessRunning(pid: number): boolean {
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
-  return error instanceof Error;
+  return error instanceof Error
+    && typeof (error as NodeJS.ErrnoException).code === 'string';
 }
 
 async function main(): Promise<void> {

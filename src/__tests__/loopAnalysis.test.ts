@@ -87,8 +87,10 @@ describe('createLoopAnalysisScheduler', () => {
       'loop-analysis',
     );
     const jobFile = readdirSync(directory).find((file) => file.endsWith('.job.json'));
-    expect(jobFile).toBeDefined();
-    return join(directory, jobFile as string);
+    if (jobFile === undefined) {
+      throw new Error('Loop analysis job was not created');
+    }
+    return join(directory, jobFile);
   }
 
   it.each([
@@ -123,7 +125,12 @@ describe('createLoopAnalysisScheduler', () => {
     });
     expect(mockSpawn).toHaveBeenCalledWith(
       process.execPath,
-      [expect.stringMatching(/loopAnalysisWorker\.js$/), jobPath],
+      [
+        '--import',
+        expect.stringMatching(/tsx[\\/]dist[\\/]esm[\\/]index\.mjs$/),
+        expect.stringMatching(/loopAnalysisWorker\.ts$/),
+        jobPath,
+      ],
       {
         cwd: projectCwd,
         detached: true,
@@ -136,6 +143,26 @@ describe('createLoopAnalysisScheduler', () => {
       globalConfigDir: '/global/.takt',
       projectConfigDir: `${projectCwd}/.takt`,
     });
+  });
+
+  it('Given terminal dispatch is requested more than once, When schedulers target the same source run, Then only one job and worker are created', () => {
+    const { projectCwd, sourceRunDirectory } = createRunDirectories();
+    mockResolveRuntimeProviderFile.mockReturnValue({
+      version: 1,
+      loop_analysis: { enabled: true, output: 'file' },
+    });
+
+    createLoopAnalysisScheduler({ projectCwd })?.(sourceRunDirectory);
+    createLoopAnalysisScheduler({ projectCwd })?.(sourceRunDirectory);
+
+    const files = readdirSync(join(
+      sourceRunDirectory,
+      '.takt-report-internal',
+      'loop-analysis',
+    ));
+    expect(files.filter((file) => file.endsWith('.job.json'))).toHaveLength(1);
+    expect(files).toContain('dispatch.claim');
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
   });
 
   it('Given PR comment output and an auto-PR branch, When a source run terminates, Then the job and pending publication marker share one coordinator', () => {
@@ -199,6 +226,31 @@ describe('createLoopAnalysisScheduler', () => {
       {
         sourceRunDirectory,
         error: 'spawn failed',
+      },
+    );
+  });
+
+  it('Given the detached worker exits unsuccessfully, When the source run has already continued, Then the exit is logged without replacing the source result', () => {
+    const { projectCwd, sourceRunDirectory } = createRunDirectories();
+    mockResolveRuntimeProviderFile.mockReturnValue({
+      version: 1,
+      loop_analysis: { enabled: true, output: 'file' },
+    });
+
+    createLoopAnalysisScheduler({ projectCwd })?.(sourceRunDirectory);
+    const exitListener = mockWorkerOnce.mock.calls.find(
+      ([event]) => event === 'exit',
+    )?.[1] as ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
+    expect(exitListener).toBeTypeOf('function');
+
+    exitListener?.(1, null);
+
+    expect(mockLogError).toHaveBeenCalledWith(
+      'Loop analysis worker exited unsuccessfully',
+      {
+        sourceRunDirectory,
+        code: 1,
+        signal: null,
       },
     );
   });

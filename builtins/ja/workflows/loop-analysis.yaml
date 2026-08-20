@@ -1,0 +1,32 @@
+name: loop-analysis
+description: 完了した実行を分析し、回避可能なループを減らすための根拠に基づくファセット改善案をレビューする。
+max_steps: 6
+initial_step: analyze
+
+steps:
+  - name: analyze
+    tags: [analysis]
+    capabilities: readonly
+    edit: false
+    persona: loop-analyzer
+    instruction: loop-analysis
+    rules:
+      - condition: 分析結果と改善案が独立レビューに進める状態になっている
+        next: review
+
+  - name: review
+    tags: [review]
+    capabilities: readonly
+    edit: false
+    persona: loop-analysis-reviewer
+    instruction: review-loop-analysis
+    output_contracts:
+      report:
+        - name: loop-analysis.md
+          format: loop-analysis
+          use_judge: false
+    rules:
+      - condition: 改善案が汎用的で根拠に基づいており、人間が検討できる状態になっている
+        next: COMPLETE
+      - condition: 改善案が過度に個別最適化されている、根拠が不足している、不完全である、または修正が必要である
+        next: analyze
