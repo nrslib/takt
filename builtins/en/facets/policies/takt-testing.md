@@ -67,6 +67,19 @@ Keep heavy integration at one worker per runner. Full local execution is serial;
 | Pull-request CI shards across isolated runners | OK |
 | More workers within one runner for acceleration | REJECT; reintroduces process, Git, and synchronous I/O contention |
 
+## Process and Asynchronous Verification
+
+When child-process launch or completion, or a lifetime independent of the parent process, changes, do not treat mocked launch confirmation as completion. Verify the lifetime and observable result on which the user depends with a real process. Do not require a real process for every wait that has no process-lifetime contract.
+
+| Change | Required Verification |
+|--------|-----------------------|
+| Worker target or launch method | The target module loads from every supported execution mode, including source/development execution when it is supported |
+| Work independent of the parent CLI | An artifact or persisted failure remains observable when the parent exits before the worker |
+| Polling or marker wait | Success, transient read contention during publication, and the wait bound all finish in finite time |
+| Child-process failure | Distinguish launch failure from nonzero exit or module-load failure after launch |
+
+Classify verification that crosses a real child-process boundary as heavy integration. Avoid a Cartesian product: select the smallest cases that distinguish supported execution modes, normal completion, wait-bound completion, and post-launch failure.
+
 ## Completion Evidence
 
 Reports distinguish completed unit and light integration results, targeted changed-heavy results, and full heavy integration deferred to the pull-request gate.

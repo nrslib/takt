@@ -1,0 +1,1 @@
+Verify whether the accepted terminal-summary fix plan and implementation are complete against the current source and reports. Keep the verification within the accepted family and return the required verification result.

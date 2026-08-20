@@ -239,6 +239,12 @@ const TARGETS = [
     fixture: 'eval/fixtures/fix-verifier-family-boundary',
   },
   {
+    id: 'fix-verifier-state-closure',
+    workflow: 'review-remediation',
+    step: 'fix-verifier',
+    fixture: 'eval/fixtures/fix-verifier-state-closure',
+  },
+  {
     id: 'companion-early-scan',
     companion: 'ai-antipattern-review-companion',
     fixture: 'eval/fixtures/companion-family-boundary',
