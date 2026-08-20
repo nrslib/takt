@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { prepareTaskSpecDirectory, cleanupTaskSpecDirectory } from '../../infra/task/enqueueService.js';
 import { getLabel } from '../../shared/i18n/index.js';
+import { warn } from '../../shared/ui/index.js';
 import { debugLog } from '../../shared/utils/index.js';
 import { isValidTaskDir } from '../../shared/utils/taskPaths.js';
 import type { InteractiveImageAttachment } from '../interactive/imageAttachments.js';
@@ -106,7 +107,7 @@ function hasAttachmentPlaceholderMapping(
 export function ensureOrderAttachmentContent(
   content: string,
   attachments: readonly InteractiveImageAttachment[],
-  lang: 'en' | 'ja' = 'ja',
+  lang: 'en' | 'ja',
 ): string {
   if (attachments.length === 0) {
     return content;
@@ -292,6 +293,7 @@ function replaceCanonicalOrder(
     try {
       fs.renameSync(committedArchivePath, orderPath);
     } catch (error) {
+      warn(`Failed to rollback task order revision: ${error instanceof Error ? error.message : String(error)}`);
       debugLog('tasks', 'Failed to rollback task order revision', {
         path: orderPath,
         archivePath: committedArchivePath,
@@ -313,9 +315,10 @@ export function persistTaskOrderRevision(
   projectDir: string,
   taskDir: string | undefined,
   approvedOrderContent: string,
-  attachments?: readonly InteractiveImageAttachment[],
+  lang: 'en' | 'ja',
+  attachments: readonly InteractiveImageAttachment[] = [],
 ): PersistedTaskOrderRevision {
-  const normalizedContent = ensureOrderAttachmentContent(approvedOrderContent, attachments ?? []);
+  const normalizedContent = ensureOrderAttachmentContent(approvedOrderContent, attachments, lang);
   if (normalizedContent.trim().length === 0) {
     throw new Error('Approved task order must not be empty.');
   }
@@ -326,7 +329,7 @@ export function persistTaskOrderRevision(
     if (!taskDirStats.isDirectory()) {
       throw new Error(`Task directory must be a regular directory: ${absoluteTaskDir}`);
     }
-    const rollback = replaceCanonicalOrder(absoluteTaskDir, normalizedContent, attachments ?? []);
+    const rollback = replaceCanonicalOrder(absoluteTaskDir, normalizedContent, attachments);
     return {
       taskDirRelative: taskDir,
       taskDir: absoluteTaskDir,
@@ -337,7 +340,7 @@ export function persistTaskOrderRevision(
 
   const prepared = prepareTaskSpecDirectory(projectDir, normalizedContent);
   try {
-    promoteRevisionAttachments(prepared.taskDir, attachments ?? []);
+    promoteRevisionAttachments(prepared.taskDir, attachments);
   } catch (error) {
     cleanupTaskSpecDirectory(prepared.taskDir);
     throw error;

@@ -22,6 +22,7 @@ import {
   getRunPaths,
   formatRunSessionForPrompt,
   runTaskRetryMode,
+  resolveLanguage,
   type RetryContext,
   type RetryFailureInfo,
   type RetryRunInfo,
@@ -410,6 +411,7 @@ export async function retryFailedTask(
     ? buildRetryRunInfo(selection.worktreePath, selection.matchedSlug)
     : null;
   const previewCount = resolveWorkflowConfigValue(projectDir, 'interactivePreviewSteps');
+  const lang = resolveLanguage(resolveWorkflowConfigValue(selection.worktreePath, 'language'));
   const workflowDesc = getWorkflowDescription(
     selection.selectedWorkflow,
     projectDir,
@@ -459,6 +461,7 @@ export async function retryFailedTask(
           projectDir,
           task.taskDir,
           retryResult.task,
+          lang,
           retryResult.attachments,
         );
       }

@@ -2,6 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { attachWorkflowSourcePath, attachWorkflowTrustInfo } from '../infra/config/loaders/workflowSourceMetadata.js';
 import type { PersistedTaskOrderRevision } from '../features/tasks/orderRevision.js';
 import { withAttachmentCleanup } from './testUtils/attachmentTestHelpers.js';
+import {
+  createPersistedTaskOrderRevisionMock,
+  MOCK_CREATED_TASK_DIR,
+} from './testUtils/orderRevisionTestHelpers.js';
 
 const {
   mockSelectWorkflow,
@@ -75,11 +79,8 @@ const {
   mockPrepareTaskSpecDirectory: vi.fn(),
   mockCleanupPreparedTaskSpec: vi.fn(),
   mockResolveTaskOrderContent: vi.fn(() => 'Do something'),
-  mockPersistTaskOrderRevision: vi.fn(
-    (projectDir: string, taskDir?: string): PersistedTaskOrderRevision => taskDir
-      ? { taskDirRelative: taskDir, taskDir: `${projectDir}/${taskDir}`, created: false, rollback: vi.fn() }
-      : { created: false, rollback: vi.fn() },
-  ),
+  mockPersistTaskOrderRevision: vi.fn((projectDir: string, taskDir?: string): PersistedTaskOrderRevision =>
+    createPersistedTaskOrderRevisionMock(projectDir, taskDir)),
   mockCleanupPersistedTaskOrderRevision: vi.fn(),
   mockAssertReusableWorktreePath: vi.fn(),
   mockDetectDefaultBranch: vi.fn(() => 'main'),
@@ -124,6 +125,7 @@ vi.mock('../infra/config/index.js', () => ({
 }));
 
 vi.mock('../features/interactive/index.js', () => ({
+  resolveLanguage: (lang?: string) => lang === 'ja' ? 'ja' : 'en',
   findRunForTask: (...args: unknown[]) => mockFindRunForTask(...args),
   loadRunSessionContext: (...args: unknown[]) => mockLoadRunSessionContext(...args),
   getRunPaths: vi.fn(() => ({ logsDir: '/tmp/logs', reportsDir: '/tmp/reports' })),
@@ -379,7 +381,11 @@ function expectRequeueTaskCalledWith(
   allowedStatuses: string[],
   options: Record<string, unknown>,
 ): void {
-  expect(mockRequeueTask).toHaveBeenCalledWith(taskRef, allowedStatuses, options);
+  expect(mockRequeueTask).toHaveBeenCalledWith(
+    taskRef,
+    allowedStatuses,
+    normalizePersistedTaskDirExpectation(options),
+  );
 }
 
 function expectStartReExecutionCalledWith(
@@ -392,8 +398,14 @@ function expectStartReExecutionCalledWith(
     taskRef,
     allowedStatuses,
     resumeMode,
-    options,
+    normalizePersistedTaskDirExpectation(options),
   );
+}
+
+function normalizePersistedTaskDirExpectation(options: Record<string, unknown>): Record<string, unknown> {
+  return options.taskDir === undefined && mockPersistTaskOrderRevision.mock.calls.length > 0
+    ? { ...options, taskDir: MOCK_CREATED_TASK_DIR }
+    : options;
 }
 
 function expectResumeCandidateIsDefault(): void {
@@ -1213,6 +1225,7 @@ describe('retryFailedTask', () => {
       '/project',
       undefined,
       'Use [Image #1].',
+      'en',
       [testAttachment],
     );
     expectStartReExecutionCalledWith(
@@ -1248,7 +1261,11 @@ describe('retryFailedTask', () => {
     await expect(retryFailedTask(task, '/project')).rejects.toThrow('start failed');
 
     expect(cleanupAttachments).toHaveBeenCalledTimes(1);
-    expect(mockCleanupPersistedTaskOrderRevision).toHaveBeenCalledTimes(1);
+    expect(mockCleanupPersistedTaskOrderRevision).toHaveBeenCalledWith(expect.objectContaining({
+      created: true,
+      taskDirRelative: MOCK_CREATED_TASK_DIR,
+      taskDir: `/project/${MOCK_CREATED_TASK_DIR}`,
+    }));
   });
 
   it('should preserve task_dir order content when retry task has image attachments', async () => {
@@ -1276,6 +1293,7 @@ describe('retryFailedTask', () => {
       '/project',
       '.takt/tasks/my-task',
       'Use [Image #1].',
+      'en',
       [testAttachment],
     );
   });
@@ -1319,6 +1337,7 @@ describe('retryFailedTask', () => {
       '/project',
       '.takt/tasks/my-task',
       'Use [Image #1].',
+      'en',
       [testAttachment],
     );
   });
@@ -2164,6 +2183,7 @@ describe('retryFailedTask', () => {
       '/project',
       undefined,
       'Use [Image #1].',
+      'en',
       [testAttachment],
     );
   });

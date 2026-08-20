@@ -8,10 +8,11 @@ import {
   resolveTaskOrderContent,
 } from '../features/tasks/orderRevision.js';
 
-const { renameFailure, archiveCleanupFailure, archiveCopyFailure } = vi.hoisted(() => ({
+const { renameFailure, archiveCleanupFailure, archiveCopyFailure, mockWarn } = vi.hoisted(() => ({
   renameFailure: { enabled: false },
   archiveCleanupFailure: { enabled: false },
   archiveCopyFailure: { mode: null as 'conflict' | 'failure' | null },
+  mockWarn: vi.fn(),
 }));
 
 vi.mock('node:fs', async (importOriginal) => {
@@ -50,6 +51,10 @@ vi.mock('node:fs', async (importOriginal) => {
   };
 });
 
+vi.mock('../shared/ui/index.js', () => ({
+  warn: (...args: unknown[]) => mockWarn(...args),
+}));
+
 const temporaryProjects: string[] = [];
 
 function makeProject(): string {
@@ -62,6 +67,7 @@ afterEach(() => {
   renameFailure.enabled = false;
   archiveCleanupFailure.enabled = false;
   archiveCopyFailure.mode = null;
+  mockWarn.mockReset();
   for (const projectDir of temporaryProjects.splice(0)) {
     fs.rmSync(projectDir, { recursive: true, force: true });
   }
@@ -92,6 +98,7 @@ describe('task order revision contract', () => {
       projectDir,
       '.takt/tasks/example-task',
       '# New order\n\nComplete replacement.',
+      'ja',
     );
 
     expect(persisted.created).toBe(false);
@@ -114,12 +121,13 @@ describe('task order revision contract', () => {
     const proposal = ensureOrderAttachmentContent(
       'Use [Image #1].\n\n## 添付画像\n\n- [Image #1]: `attachments/wrong.png`',
       [attachment],
+      'ja',
     );
     expect(proposal).toContain('[Image #1]');
     expect(proposal).toContain('attachments/image-1.png');
     expect(proposal).not.toContain('attachments/wrong.png');
 
-    const persisted = persistTaskOrderRevision(projectDir, undefined, proposal, [attachment]);
+    const persisted = persistTaskOrderRevision(projectDir, undefined, proposal, 'ja', [attachment]);
     expect(persisted.created).toBe(true);
     expect(fs.readFileSync(path.join(persisted.taskDir!, 'order.md'), 'utf-8')).toBe(proposal);
     expect(fs.existsSync(path.join(persisted.taskDir!, 'attachments/image-1.png'))).toBe(true);
@@ -141,6 +149,25 @@ describe('task order revision contract', () => {
     expect(proposal).not.toContain('## 添付画像');
   });
 
+  it('persists the English attachment heading exactly as approved', () => {
+    const projectDir = makeProject();
+    const sourcePath = path.join(projectDir, 'image.png');
+    fs.writeFileSync(sourcePath, Buffer.from([1, 2, 3]));
+    const attachment = {
+      placeholder: '[Image #1]',
+      tempPath: sourcePath,
+      fileName: 'image-1.png',
+    };
+    const proposal = ensureOrderAttachmentContent('Use [Image #1].', [attachment], 'en');
+
+    const persisted = persistTaskOrderRevision(projectDir, undefined, proposal, 'en', [attachment]);
+    const saved = fs.readFileSync(path.join(persisted.taskDir!, 'order.md'), 'utf-8');
+
+    expect(saved).toBe(proposal);
+    expect(saved.match(/^## Attachments$/gm)).toHaveLength(1);
+    expect(saved).not.toContain('## 添付画像');
+  });
+
   it('keeps the current order and removes newly promoted attachments when replacement fails', () => {
     const projectDir = makeProject();
     const taskDir = path.join(projectDir, '.takt/tasks/example-task');
@@ -160,6 +187,7 @@ describe('task order revision contract', () => {
       projectDir,
       '.takt/tasks/example-task',
       '# New order',
+      'ja',
       [attachment],
     )).toThrow('replacement failed');
 
@@ -187,6 +215,7 @@ describe('task order revision contract', () => {
       projectDir,
       '.takt/tasks/example-task',
       '# New order',
+      'ja',
       [attachment],
     )).toThrow('archive candidate conflict');
 
@@ -218,6 +247,7 @@ describe('task order revision contract', () => {
       projectDir,
       '.takt/tasks/example-task',
       '# New order',
+      'ja',
       [attachment],
     )).toThrow('archive copy failed');
 
@@ -246,6 +276,7 @@ describe('task order revision contract', () => {
       projectDir,
       '.takt/tasks/example-task',
       '# New order',
+      'ja',
       [attachment],
     )).toThrow('replacement failed');
 
@@ -272,6 +303,7 @@ describe('task order revision contract', () => {
       projectDir,
       '.takt/tasks/example-task',
       '# New order\n\nUse [Image #1].',
+      'ja',
       [attachment],
     );
     revision.rollback();
@@ -299,6 +331,7 @@ describe('task order revision contract', () => {
       projectDir,
       '.takt/tasks/example-task',
       '# New order',
+      'ja',
       [attachment],
     );
     renameFailure.enabled = true;
@@ -306,5 +339,6 @@ describe('task order revision contract', () => {
     expect(() => revision.rollback()).not.toThrow();
     expect(fs.readFileSync(orderPath, 'utf-8')).toContain('# New order');
     expect(fs.existsSync(path.join(taskDir, 'attachments/image-1.png'))).toBe(false);
+    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('Failed to rollback task order revision'));
   });
 });

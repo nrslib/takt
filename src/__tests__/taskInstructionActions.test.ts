@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PersistedTaskOrderRevision } from '../features/tasks/orderRevision.js';
 import { withAttachmentCleanup } from './testUtils/attachmentTestHelpers.js';
+import {
+  createPersistedTaskOrderRevisionMock,
+  MOCK_CREATED_TASK_DIR,
+} from './testUtils/orderRevisionTestHelpers.js';
 
 const {
   mockStartReExecution,
@@ -58,11 +62,8 @@ const {
     ['selected-workflow', {}],
   ])),
   mockResolveTaskOrderContent: vi.fn(() => 'done'),
-  mockPersistTaskOrderRevision: vi.fn(
-    (projectDir: string, taskDir?: string): PersistedTaskOrderRevision => taskDir
-      ? { taskDirRelative: taskDir, taskDir: `${projectDir}/${taskDir}`, created: false, rollback: vi.fn() }
-      : { created: false, rollback: vi.fn() },
-  ),
+  mockPersistTaskOrderRevision: vi.fn((projectDir: string, taskDir?: string): PersistedTaskOrderRevision =>
+    createPersistedTaskOrderRevisionMock(projectDir, taskDir)),
   mockCleanupPersistedTaskOrderRevision: vi.fn(),
   mockAssertReusableWorktreePath: vi.fn(),
   mockResolveBaseBranch: vi.fn(() => ({ branch: 'main' })),
@@ -229,7 +230,7 @@ describe('instructBranch direct execution flow', () => {
         retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: undefined,
         restartPoint: undefined,
       },
@@ -261,7 +262,7 @@ describe('instructBranch direct execution flow', () => {
         retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: '20260717-source-run',
         restartPoint: undefined,
       },
@@ -324,6 +325,7 @@ describe('instructBranch direct execution flow', () => {
       '/project',
       undefined,
       'Use [Image #1].',
+      'en',
       [testAttachment],
     );
     expect(mockStartReExecution).toHaveBeenCalledWith(
@@ -335,7 +337,7 @@ describe('instructBranch direct execution flow', () => {
         retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: undefined,
         restartPoint: undefined,
       },
@@ -364,6 +366,29 @@ describe('instructBranch direct execution flow', () => {
     })).rejects.toThrow('dispatch failed');
 
     expect(cleanupAttachments).toHaveBeenCalledTimes(1);
+  });
+
+  it('should cleanup a created order revision when instructed execution setup fails', async () => {
+    mockStartReExecution.mockImplementationOnce(() => {
+      throw new Error('start failed');
+    });
+
+    await expect(instructBranch('/project', {
+      kind: 'completed',
+      name: 'done-task',
+      createdAt: '2026-02-14T00:00:00.000Z',
+      filePath: '/project/.takt/tasks.yaml',
+      content: 'done',
+      branch: 'takt/done-task',
+      worktreePath: '/project/.takt/worktrees/done-task',
+      data: { task: 'done' },
+    })).rejects.toThrow('start failed');
+
+    expect(mockCleanupPersistedTaskOrderRevision).toHaveBeenCalledWith(expect.objectContaining({
+      created: true,
+      taskDirRelative: MOCK_CREATED_TASK_DIR,
+      taskDir: `/project/${MOCK_CREATED_TASK_DIR}`,
+    }));
   });
 
   it('should promote image attachments for instructed save_task requeue', async () => {
@@ -395,7 +420,7 @@ describe('instructBranch direct execution flow', () => {
         retryNote: undefined,
         resumePoint: undefined,
         workflow: 'default',
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: undefined,
         restartPoint: undefined,
       },
@@ -404,6 +429,7 @@ describe('instructBranch direct execution flow', () => {
       '/project',
       undefined,
       'Use [Image #1].',
+      'en',
       [testAttachment],
     );
   });
@@ -440,6 +466,7 @@ describe('instructBranch direct execution flow', () => {
       '/project',
       '.takt/tasks/done-task',
       'Use [Image #1].',
+      'en',
       [testAttachment],
     );
   });
@@ -490,6 +517,7 @@ describe('instructBranch direct execution flow', () => {
       '/project',
       '.takt/tasks/done-task',
       'Use [Image #1].',
+      'en',
       [testAttachment],
     );
   });
@@ -885,7 +913,7 @@ describe('instructBranch direct execution flow', () => {
         retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: undefined,
         restartPoint: undefined,
       },
@@ -1103,7 +1131,7 @@ describe('instructBranch direct execution flow', () => {
         retryNote: undefined,
         resumePoint: undefined,
         workflow: 'default',
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: undefined,
         restartPoint: undefined,
       },
@@ -1138,7 +1166,7 @@ describe('instructBranch direct execution flow', () => {
         retryNote: undefined,
         resumePoint: undefined,
         workflow: 'selected-workflow',
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: undefined,
         restartPoint: undefined,
       },
@@ -1171,7 +1199,7 @@ describe('instructBranch direct execution flow', () => {
         retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: undefined,
         restartPoint: undefined,
       },
@@ -1201,7 +1229,7 @@ describe('instructBranch direct execution flow', () => {
         retryNote: undefined,
         resumePoint: undefined,
         workflow: 'default',
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: undefined,
         restartPoint: undefined,
       },

@@ -214,6 +214,7 @@ export async function instructBranch(
           projectDir,
           target.taskDir,
           result.task,
+          lang,
           result.attachments,
         );
       }
@@ -269,6 +270,7 @@ export async function instructBranch(
               projectDir,
               target.taskDir,
               result.task,
+              lang,
               result.attachments,
             );
           }
