@@ -631,9 +631,12 @@ recovery guarantee for a claim that was persisted immediately before the
 process was killed.
 
 The analyzer reads the source run's available JSONL logs, trace, monitor data,
-and reports. Its reviewer can return over-specialized proposals for revision up
-to two times. The final report is always written through the analysis workflow's
-output contract to the analysis run's `reports/loop-analysis.md`.
+reports, and saved workflow definition. It proposes reusable changes to the
+workflow steps or transitions rather than changes tied to internal prompt
+components. The reviewer can request explicit reanalysis up to two times when a
+proposal is unsupported, over-specialized, or targets the wrong workflow
+behavior. The final report is always written to the analysis run's
+`reports/loop-analysis.md`.
 
 With `output: pr-comment`, the same persisted report content is also posted when
 the source run has auto-PR enabled and its branch already has a pull request. If

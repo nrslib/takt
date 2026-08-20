@@ -79,12 +79,11 @@ describe('loop analysis builtin workflow integration', () => {
   it('Given every review rejects, When the bounded loop reaches its third review, Then it aborts at the iteration limit and preserves the last report', async () => {
     const workflow = requireLoopAnalysisWorkflow(projectCwd);
     const analyzerName = workflow.initialStep;
-    const reviewerName = workflow.steps.find((step) => step.name !== analyzerName)?.name;
-    if (reviewerName === undefined) {
-      throw new Error('loop-analysis reviewer step is missing');
-    }
+    const reviewerName = 'review';
+    const reanalyzerName = 'reanalyze';
     const analyzeTransition = transitionIndex(workflow, analyzerName, reviewerName);
-    const rejectTransition = transitionIndex(workflow, reviewerName, analyzerName);
+    const reanalyzeTransition = transitionIndex(workflow, reanalyzerName, reviewerName);
+    const rejectTransition = transitionIndex(workflow, reviewerName, reanalyzerName);
     const finalReport = '# Loop analysis\n\nThird rejection remains available.';
     const structuredCaller: StructuredCaller = {
       judgeStatus: vi.fn(async (_structured, _tag, _candidates, options) => {
@@ -93,9 +92,11 @@ describe('loop analysis builtin workflow integration', () => {
           userInstruction: 'select transition',
         });
         return {
-          candidateIndex: options.stepName === analyzerName
-            ? analyzeTransition
-            : rejectTransition,
+          candidateIndex: options.stepName === reviewerName
+            ? rejectTransition
+            : options.stepName === analyzerName
+              ? analyzeTransition
+              : reanalyzeTransition,
           method: 'structured_output',
         };
       }),
@@ -143,9 +144,9 @@ describe('loop analysis builtin workflow integration', () => {
     expect(visitedSteps).toEqual([
       analyzerName,
       reviewerName,
-      analyzerName,
+      reanalyzerName,
       reviewerName,
-      analyzerName,
+      reanalyzerName,
       reviewerName,
     ]);
     expect(reportCount).toBe(3);
@@ -159,15 +160,14 @@ describe('loop analysis builtin workflow integration', () => {
     ), 'utf-8')).toBe(finalReport);
   });
 
-  it('Given two reviewer rejections, When the builtin runs, Then it executes three analyzer-reviewer pairs and completes on the third approval', async () => {
+  it('Given two reviewer rejections, When the builtin runs, Then each rejection is followed by explicit reanalysis before the next review', async () => {
     const workflow = requireLoopAnalysisWorkflow(projectCwd);
     const analyzerName = workflow.initialStep;
-    const reviewerName = workflow.steps.find((step) => step.name !== analyzerName)?.name;
-    if (reviewerName === undefined) {
-      throw new Error('loop-analysis reviewer step is missing');
-    }
+    const reviewerName = 'review';
+    const reanalyzerName = 'reanalyze';
     const analyzeTransition = transitionIndex(workflow, analyzerName, reviewerName);
-    const rejectTransition = transitionIndex(workflow, reviewerName, analyzerName);
+    const reanalyzeTransition = transitionIndex(workflow, reanalyzerName, reviewerName);
+    const rejectTransition = transitionIndex(workflow, reviewerName, reanalyzerName);
     const approveTransition = transitionIndex(workflow, reviewerName, 'COMPLETE');
     let reviewerDecisions = 0;
     const structuredCaller: StructuredCaller = {
@@ -176,8 +176,13 @@ describe('loop analysis builtin workflow integration', () => {
           systemPrompt: 'loop analysis judge',
           userInstruction: 'select transition',
         });
-        if (options.stepName === analyzerName) {
-          return { candidateIndex: analyzeTransition, method: 'structured_output' };
+        if (options.stepName !== reviewerName) {
+          return {
+            candidateIndex: options.stepName === analyzerName
+              ? analyzeTransition
+              : reanalyzeTransition,
+            method: 'structured_output',
+          };
         }
         reviewerDecisions += 1;
         return {
@@ -189,12 +194,16 @@ describe('loop analysis builtin workflow integration', () => {
       decomposeTask: vi.fn(),
       requestMoreParts: vi.fn(),
     };
+    const reanalysisPrompts: string[] = [];
     vi.mocked(runAgent).mockImplementation(async (persona, task, options) => {
       options?.onPromptResolved?.({
         systemPrompt: typeof persona === 'string' ? persona : '',
         userInstruction: task,
       });
       const isReportPhase = options?.allowedTools?.length === 0;
+      if (!isReportPhase && task.includes('Revise the preceding proposal set')) {
+        reanalysisPrompts.push(task);
+      }
       return agentResponse(
         isReportPhase ? '# Loop analysis\n\nReview report' : 'Analysis step result',
         isReportPhase ? undefined : `session-${vi.mocked(runAgent).mock.calls.length}`,
@@ -216,20 +225,21 @@ describe('loop analysis builtin workflow integration', () => {
     expect(visitedSteps).toEqual([
       analyzerName,
       reviewerName,
-      analyzerName,
+      reanalyzerName,
       reviewerName,
-      analyzerName,
+      reanalyzerName,
       reviewerName,
     ]);
+    expect(reanalysisPrompts).toHaveLength(2);
+    for (const prompt of reanalysisPrompts) {
+      expect(prompt).toContain('# Loop analysis\n\nReview report');
+    }
   });
 
   it('Given the reviewer approves, When its output contract runs, Then the exact final report is saved under the analysis run reports directory', async () => {
     const workflow = requireLoopAnalysisWorkflow(projectCwd);
     const analyzerName = workflow.initialStep;
-    const reviewerName = workflow.steps.find((step) => step.name !== analyzerName)?.name;
-    if (reviewerName === undefined) {
-      throw new Error('loop-analysis reviewer step is missing');
-    }
+    const reviewerName = 'review';
     const analyzeTransition = transitionIndex(workflow, analyzerName, reviewerName);
     const approveTransition = transitionIndex(workflow, reviewerName, 'COMPLETE');
     const finalReport = '# Loop analysis\n\nAccepted and rejected proposals with reasons.';

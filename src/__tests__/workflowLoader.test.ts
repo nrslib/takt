@@ -179,7 +179,7 @@ describe('loadWorkflowByIdentifier', () => {
     expect(workflow!.name).toBe('default');
   });
 
-  it('Given the loop analysis builtin assets, When loading by identifier, Then they provide a schema-valid two-stage finite review loop and the standard report contract', () => {
+  it('Given the loop analysis builtin assets, When loading by identifier, Then they provide a schema-valid finite review and reanalysis loop with workflow-wide criteria', () => {
     const workflow = loadWorkflowByIdentifier('loop-analysis', process.cwd());
 
     if (workflow === null) {
@@ -187,11 +187,13 @@ describe('loadWorkflowByIdentifier', () => {
     }
     const initialStep = workflow.initialStep;
     expect(workflow.maxSteps).toBe(6);
-    expect(workflow.steps).toHaveLength(2);
+    expect(workflow.steps).toHaveLength(3);
     const analyzer = workflow.steps.find((step) => step.name === initialStep);
-    const reviewer = workflow.steps.find((step) => step.name !== initialStep);
+    const reviewer = workflow.steps.find((step) => step.name === 'review');
+    const reanalyzer = workflow.steps.find((step) => step.name === 'reanalyze');
     expect(analyzer).toBeDefined();
     expect(reviewer).toBeDefined();
+    expect(reanalyzer).toBeDefined();
     expect(analyzer?.rules).toHaveLength(1);
     expect(analyzer?.rules?.[0]).toEqual(
       expect.objectContaining({ next: reviewer?.name }),
@@ -199,14 +201,24 @@ describe('loadWorkflowByIdentifier', () => {
     expect(reviewer?.rules).toHaveLength(2);
     expect(reviewer?.rules).toEqual([
       expect.objectContaining({ next: 'COMPLETE' }),
-      expect.objectContaining({ next: initialStep }),
+      expect.objectContaining({ next: reanalyzer?.name }),
+    ]);
+    expect(reanalyzer?.rules).toEqual([
+      expect.objectContaining({ next: reviewer?.name }),
     ]);
     expect(analyzer?.outputContracts).toBeUndefined();
+    expect(reanalyzer?.outputContracts).toBeUndefined();
     expect(reviewer?.outputContracts).toHaveLength(1);
     expect(reviewer?.outputContracts).toEqual([
       expect.objectContaining({
         name: 'loop-analysis.md',
         formatRef: 'loop-analysis',
+      }),
+    ]);
+    expect(workflow.allStepsRules).toEqual([
+      expect.objectContaining({
+        ref: 'loop-analysis',
+        position: 'before_instruction',
       }),
     ]);
 
@@ -216,6 +228,37 @@ describe('loadWorkflowByIdentifier', () => {
         expect(owner).not.toHaveProperty(key);
       }
     }
+  });
+
+  it.each(['en', 'ja'])('Given the %s loop analysis assets, When composing their prompt content, Then internal prompt-component terminology is absent', (language) => {
+    const configDir = process.env.TAKT_CONFIG_DIR;
+    if (configDir === undefined) {
+      throw new Error('TAKT_CONFIG_DIR is required for workflow loader tests');
+    }
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      `language: ${language}\nenable_builtin_workflows: true\n`,
+      'utf-8',
+    );
+    invalidateGlobalConfigCache();
+
+    const workflow = loadWorkflowByIdentifier('loop-analysis', process.cwd());
+    if (workflow === null) {
+      throw new Error(`loop-analysis builtin workflow was not loaded for ${language}`);
+    }
+    const promptAssets = [
+      workflow.description,
+      ...(workflow.allStepsRules?.map((rule) => rule.content) ?? []),
+      ...workflow.steps.flatMap((step) => [step.persona, step.instruction]),
+      ...workflow.steps.flatMap((step) => (
+        step.outputContracts?.map((contract) => contract.format) ?? []
+      )),
+    ].filter((content): content is string => content !== undefined).join('\n');
+
+    expect(promptAssets).not.toMatch(
+      /\bfacets?\b|\bpersona\b|\bpolicy\b|\bknowledge\b|\binstruction\b|\boutput[- ]contract\b|ファセット|ペルソナ|ポリシー|ナレッジ|出力契約/i,
+    );
   });
 
   it('should load workflow by absolute path', () => {

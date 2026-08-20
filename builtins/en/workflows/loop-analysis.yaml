@@ -1,5 +1,9 @@
 name: loop-analysis
-description: Analyze a completed run and review evidence-backed facet improvements that reduce avoidable loops.
+description: Analyze a completed run and review evidence-backed workflow improvements that reduce avoidable loops.
+all_steps:
+  rules:
+    - ref: loop-analysis
+      position: before_instruction
 max_steps: 6
 initial_step: analyze
 
@@ -29,4 +33,14 @@ steps:
       - condition: The proposal set is general, evidence-based, and ready for human consideration
         next: COMPLETE
       - condition: The proposal set is over-specialized, unsupported, incomplete, or otherwise needs revision
-        next: analyze
+        next: reanalyze
+
+  - name: reanalyze
+    tags: [analysis]
+    capabilities: readonly
+    edit: false
+    persona: loop-analyzer
+    instruction: reanalyze-loop-analysis
+    rules:
+      - condition: Revised analysis proposals address the recorded review findings
+        next: review
