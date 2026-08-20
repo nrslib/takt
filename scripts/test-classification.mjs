@@ -211,6 +211,8 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/listTasks.test.ts',
   'src/__tests__/loadPreviousOrderContent.test.ts',
   'src/__tests__/logging-contracts.test.ts',
+  'src/__tests__/loopAnalysis.test.ts',
+  'src/__tests__/loopAnalysisJob.test.ts',
   'src/__tests__/lstatIfExists.test.ts',
   'src/__tests__/mcp-entrypoint.test.ts',
   'src/__tests__/mock-scenario.test.ts',

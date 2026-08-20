@@ -19,6 +19,10 @@ import {
 } from './steps.js';
 import { submitPullRequest } from './prSubmission.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
+import {
+  createLoopAnalysisPublicationCoordinator,
+  settleLoopAnalysisPublication,
+} from '../tasks/execute/loopAnalysisPublication.js';
 
 export type { PipelineExecutionOptions };
 
@@ -55,37 +59,52 @@ async function runPipeline(options: PipelineExecutionOptions): Promise<PipelineO
     return { exitCode: EXIT_GIT_OPERATION_FAILED, result: buildResult() };
   }
 
-  log.info('Pipeline workflow execution starting', { workflow, branch: context.branch, skipGit, issueNumber: options.issueNumber });
-  const workflowOk = await runWorkflow(cwd, workflow, taskContent.task, context.execCwd, options, context);
-  if (!workflowOk) return { exitCode: EXIT_WORKFLOW_FAILED, result: buildResult({ branch: context.branch }) };
+  const loopAnalysisPublication = autoPr && !skipGit && context.branch
+    ? createLoopAnalysisPublicationCoordinator(context.branch)
+    : undefined;
+  try {
+    log.info('Pipeline workflow execution starting', { workflow, branch: context.branch, skipGit, issueNumber: options.issueNumber });
+    const workflowOk = await runWorkflow(
+      cwd,
+      workflow,
+      taskContent.task,
+      context.execCwd,
+      options,
+      context,
+      loopAnalysisPublication,
+    );
+    if (!workflowOk) return { exitCode: EXIT_WORKFLOW_FAILED, result: buildResult({ branch: context.branch }) };
 
-  if (!skipGit && context.branch) {
-    const commitMessage = buildCommitMessage(pipelineConfig, taskContent.issue, options.task);
-    if (!await commitAndPush(context.execCwd, cwd, context.branch, commitMessage, context.isWorktree)) {
-      return { exitCode: EXIT_GIT_OPERATION_FAILED, result: buildResult({ branch: context.branch }) };
+    if (!skipGit && context.branch) {
+      const commitMessage = buildCommitMessage(pipelineConfig, taskContent.issue, options.task);
+      if (!await commitAndPush(context.execCwd, cwd, context.branch, commitMessage, context.isWorktree)) {
+        return { exitCode: EXIT_GIT_OPERATION_FAILED, result: buildResult({ branch: context.branch }) };
+      }
     }
+
+    let prUrl: string | undefined;
+    if (autoPr && !skipGit && context.branch) {
+      prUrl = submitPullRequest(cwd, context.branch, context.baseBranch, taskContent, workflow, pipelineConfig, options);
+      if (!prUrl) return { exitCode: EXIT_PR_CREATION_FAILED, result: buildResult({ branch: context.branch }) };
+    } else if (autoPr && skipGit) {
+      info('--auto-pr is ignored when --skip-git is specified (no push was performed)');
+    }
+
+    blankLine();
+    const safeWorkflow = sanitizeTerminalText(workflow);
+    const issueStatus = taskContent.issue
+      ? `#${taskContent.issue.number} "${sanitizeTerminalText(taskContent.issue.title)}"`
+      : 'N/A';
+    const branchStatus = context.branch ? sanitizeTerminalText(context.branch) : '(current)';
+    status('Issue', issueStatus);
+    status('Branch', branchStatus);
+    status('Workflow', safeWorkflow);
+    status('Result', 'Success', 'green');
+
+    return { exitCode: 0, result: buildResult({ success: true, branch: context.branch, prUrl }) };
+  } finally {
+    settleLoopAnalysisPublication(loopAnalysisPublication);
   }
-
-  let prUrl: string | undefined;
-  if (autoPr && !skipGit && context.branch) {
-    prUrl = submitPullRequest(cwd, context.branch, context.baseBranch, taskContent, workflow, pipelineConfig, options);
-    if (!prUrl) return { exitCode: EXIT_PR_CREATION_FAILED, result: buildResult({ branch: context.branch }) };
-  } else if (autoPr && skipGit) {
-    info('--auto-pr is ignored when --skip-git is specified (no push was performed)');
-  }
-
-  blankLine();
-  const safeWorkflow = sanitizeTerminalText(workflow);
-  const issueStatus = taskContent.issue
-    ? `#${taskContent.issue.number} "${sanitizeTerminalText(taskContent.issue.title)}"`
-    : 'N/A';
-  const branchStatus = context.branch ? sanitizeTerminalText(context.branch) : '(current)';
-  status('Issue', issueStatus);
-  status('Branch', branchStatus);
-  status('Workflow', safeWorkflow);
-  status('Result', 'Success', 'green');
-
-  return { exitCode: 0, result: buildResult({ success: true, branch: context.branch, prUrl }) };
 }
 export async function executePipeline(options: PipelineExecutionOptions): Promise<number> {
   const startTime = Date.now();

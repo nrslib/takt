@@ -423,6 +423,25 @@ describe('executeWorkflow: SIGINT handler integration', () => {
 
     await resultPromise;
   });
+
+  it('Given a run is cancelled by SIGINT, When abort artifacts are finalized, Then analysis is scheduled once', async () => {
+    const config = makeConfig();
+    const loopAnalysisScheduler = vi.fn();
+    const resultPromise = executeWorkflow(config, 'test task', tmpDir, {
+      projectCwd: tmpDir,
+      loopAnalysisScheduler,
+    });
+
+    const newListener = await waitForSigintListener(savedSigintListeners);
+    newListener();
+    const result = await resultPromise;
+
+    expect(result.success).toBe(false);
+    expect(loopAnalysisScheduler).toHaveBeenCalledOnce();
+    expect(loopAnalysisScheduler).toHaveBeenCalledWith(
+      join(tmpDir, '.takt', 'runs', 'test-report-dir'),
+    );
+  });
 });
 
 describe('QueryRegistry: interruptAllQueries', () => {

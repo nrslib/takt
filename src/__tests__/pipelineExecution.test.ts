@@ -20,6 +20,20 @@ const mockFetchPrReviewComments = vi.fn();
 const mockFormatPrReviewAsTask = vi.fn((pr: { number: number; title: string }) =>
   `## PR #${pr.number} Review Comments: ${pr.title}`
 );
+const mockPublicationCoordinator = {
+  branch: 'takt/pipeline-publication',
+  register: vi.fn(),
+  settle: vi.fn(),
+};
+const mockCreateLoopAnalysisPublicationCoordinator = vi.fn();
+const mockSettleLoopAnalysisPublication = vi.fn();
+
+vi.mock('../features/tasks/execute/loopAnalysisPublication.js', () => ({
+  createLoopAnalysisPublicationCoordinator: (...args: unknown[]) =>
+    mockCreateLoopAnalysisPublicationCoordinator(...args),
+  settleLoopAnalysisPublication: (...args: unknown[]) =>
+    mockSettleLoopAnalysisPublication(...args),
+}));
 
 vi.mock('../infra/git/index.js', () => ({
   getGitProvider: () => ({
@@ -127,6 +141,7 @@ describe('executePipeline', () => {
     mockGetCurrentBranch.mockReturnValue('current/branch');
     mockResolveConfigValues.mockReturnValue({ pipeline: undefined });
     mockResolveConfigValue.mockReturnValue(undefined);
+    mockCreateLoopAnalysisPublicationCoordinator.mockReturnValue(mockPublicationCoordinator);
   });
 
   it('should return exit code 2 when neither --issue nor --task is specified', async () => {
@@ -180,7 +195,7 @@ describe('executePipeline', () => {
     const exitCode = await executePipeline({
       issueNumber: 99,
       workflow: 'default',
-      autoPr: false,
+      autoPr: true,
       cwd: '/tmp/test',
     });
 
@@ -188,6 +203,8 @@ describe('executePipeline', () => {
     expect(mockInfo).toHaveBeenCalled();
     expect(mockError).toHaveBeenCalled();
     expect(mockError.mock.calls[0]?.[0]).toEqual(expect.stringContaining('default'));
+    expect(mockCreateLoopAnalysisPublicationCoordinator).toHaveBeenCalledTimes(1);
+    expect(mockSettleLoopAnalysisPublication).toHaveBeenCalledWith(mockPublicationCoordinator);
   });
 
   it('should return exit code 0 on successful task-only execution', async () => {
@@ -363,6 +380,7 @@ describe('executePipeline', () => {
     });
 
     expect(exitCode).toBe(5);
+    expect(mockSettleLoopAnalysisPublication).toHaveBeenCalledWith(mockPublicationCoordinator);
   });
 
   it('should return exit code 5 when createPullRequest throws', async () => {
@@ -395,12 +413,34 @@ describe('executePipeline', () => {
     });
 
     expect(exitCode).toBe(0);
+    expect(mockSettleLoopAnalysisPublication).toHaveBeenCalledWith(mockPublicationCoordinator);
     expect(mockCreatePullRequest).toHaveBeenCalledWith(
       expect.objectContaining({
         branch: 'fix/my-branch',
         repo: 'owner/repo',
       }),
       '/tmp/test',
+    );
+  });
+
+  it('should settle loop analysis publication after successful PR creation', async () => {
+    mockExecuteTask.mockResolvedValueOnce(true);
+    mockCreatePullRequest.mockReturnValueOnce({
+      success: true,
+      url: 'https://github.com/test/pr/1',
+    });
+
+    const exitCode = await executePipeline({
+      task: 'Fix the bug',
+      workflow: 'default',
+      branch: 'fix/my-branch',
+      autoPr: true,
+      cwd: '/tmp/test',
+    });
+
+    expect(exitCode).toBe(0);
+    expect(mockCreatePullRequest.mock.invocationCallOrder[0]).toBeLessThan(
+      mockSettleLoopAnalysisPublication.mock.invocationCallOrder[0]!,
     );
   });
 
@@ -1216,11 +1256,12 @@ describe('executePipeline', () => {
       task: 'Fix the bug',
       workflow: 'default',
       branch: 'fix/my-branch',
-      autoPr: false,
+      autoPr: true,
       cwd: '/tmp/test',
     });
 
     expect(exitCode).toBe(4);
+    expect(mockSettleLoopAnalysisPublication).toHaveBeenCalledWith(mockPublicationCoordinator);
   });
 
   describe('Slack notification', () => {

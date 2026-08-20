@@ -25,6 +25,7 @@ import {
   type WorkflowExecutionEventBridge,
 } from './workflowExecutionEvents.js';
 import { getErrorMessage } from '../../../shared/utils/error.js';
+import { createLogger } from '../../../shared/utils/index.js';
 import type { StreamEvent } from '../../../shared/types/provider.js';
 import {
   OTEL_EXPORTER_OTLP_ENDPOINT,
@@ -74,6 +75,8 @@ import {
   prepareWorkflowExecutionBundle,
   publishWorkflowExecutionBundle,
 } from './workflowExecutionBundle.js';
+
+const log = createLogger('workflowExecution');
 
 export type { WorkflowExecutionResult, WorkflowExecutionOptions };
 
@@ -258,14 +261,21 @@ async function executeWorkflowInternal(
       resumeLineage,
     );
   } catch (bootstrapError) {
-    return await terminalizeBootstrapFailure({
-      activeRun,
-      workflowConfig,
-      task,
-      projectCwd: options.projectCwd,
-      primaryError: bootstrapError,
-      resumeLineage,
-    });
+    try {
+      return await terminalizeBootstrapFailure({
+        activeRun,
+        workflowConfig,
+        task,
+        projectCwd: options.projectCwd,
+        primaryError: bootstrapError,
+        resumeLineage,
+      });
+    } finally {
+      scheduleLoopAnalysis(
+        options.loopAnalysisScheduler,
+        activeRun.runPaths.runRootAbs,
+      );
+    }
   }
   const executionBundle = loadWorkflowExecutionBundle(activeRun.runPaths);
   const workflowCallResolver = executionBundle.workflowCallResolver;
@@ -579,6 +589,10 @@ async function executeWorkflowInternal(
       cleanupErrors,
       () => bootstrap.observabilityHandle.shutdown(),
     );
+    scheduleLoopAnalysis(
+      options.loopAnalysisScheduler,
+      activeRun.runPaths.runRootAbs,
+    );
   }
 
   const additionalErrors = [
@@ -605,6 +619,23 @@ async function executeWorkflowInternal(
         ...executionResult,
         finalizationIssues: Object.freeze([...finalizationIssues]),
       };
+}
+
+function scheduleLoopAnalysis(
+  scheduler: WorkflowExecutionOptions['loopAnalysisScheduler'],
+  runDirectory: string,
+): void {
+  if (scheduler === undefined) {
+    return;
+  }
+  try {
+    scheduler(runDirectory);
+  } catch (error) {
+    log.error('Loop analysis scheduling failed', {
+      runDirectory,
+      error: getErrorMessage(error),
+    });
+  }
 }
 
 function resolveAvailableSourceLineage(

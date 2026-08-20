@@ -603,6 +603,35 @@ declarations and the structural validation of `targets.companions` remain in
 place, but no companion provider is resolved or executed — a workflow that
 declares companions runs without any companion provider configuration.
 
+### Post-run loop analysis
+
+Loop analysis is opt-in. Add the top-level `loop_analysis` section to analyze
+completed runs after their terminal artifacts have been finalized:
+
+```yaml
+version: 1
+loop_analysis:
+  enabled: true
+  output: file # file | pr-comment; defaults to file
+```
+
+When enabled, every successful, failed, or interrupted source run starts the
+builtin `loop-analysis` workflow asynchronously. The source run does not wait
+for analysis, and an analysis startup or execution failure does not change the
+source result. Analysis runs do not schedule another analysis run.
+
+The analyzer reads the source run's available JSONL logs, trace, monitor data,
+and reports. Its reviewer can return over-specialized proposals for revision up
+to two times. The final report is always written through the analysis workflow's
+output contract to the analysis run's `reports/loop-analysis.md`.
+
+With `output: pr-comment`, the same persisted report content is also posted when
+the source run has auto-PR enabled and its branch already has a pull request. If
+no pull request exists, only the report file is retained. Provider, model, and
+provider options are not valid inside `loop_analysis`; configure the analysis
+steps through normal runtime provider targets. When both runtime files define
+`loop_analysis`, the project section replaces the global section as a unit.
+
 Runtime mode is enabled by the presence of an active `provider` section, not by the file existing. A file that only contains `version: 1` is inactive and leaves the legacy `config.yaml` provider resolution in place.
 
 ### Configuration example

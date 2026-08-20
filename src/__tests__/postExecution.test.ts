@@ -18,6 +18,7 @@ const {
   mockBuildTaktManagedPrOptions,
   mockCreatePullRequestSafely,
   mockStripTaktManagedPrMarker,
+  mockReadFileSync,
 } =
   vi.hoisted(() => ({
     mockAutoCommitAndPush: vi.fn(),
@@ -30,12 +31,18 @@ const {
       body: `${body}\n\n<!-- takt:managed -->`,
     })),
     mockCreatePullRequestSafely: vi.fn(),
+    mockReadFileSync: vi.fn(),
     mockStripTaktManagedPrMarker: vi.fn((body: string) => body
       .split('<!-- takt:managed -->')
       .join('')
       .replace(/\n{3,}/g, '\n\n')
       .trimEnd()),
   }));
+
+vi.mock('node:fs', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:fs')>()),
+  readFileSync: (...args: unknown[]) => mockReadFileSync(...args),
+}));
 
 vi.mock('../infra/task/index.js', () => ({
   autoCommitAndPush: (...args: unknown[]) => mockAutoCommitAndPush(...args),
@@ -76,6 +83,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 }));
 
 import {
+  commentLoopAnalysisReportOnPr,
   postExecutionFlow,
   type PostExecutionOptions,
 } from '../features/tasks/execute/postExecution.js';
@@ -734,5 +742,49 @@ describe('postExecutionFlow', () => {
       expect.objectContaining({ title: expectedTitle }),
       '/project',
     );
+  });
+});
+
+describe('commentLoopAnalysisReportOnPr', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockCommentOnPr.mockReturnValue({ success: true });
+  });
+
+  it('Given the source branch has an existing PR, When the analysis report is published, Then the persisted UTF-8 content is posted unchanged', async () => {
+    const reportContent = '# Loop analysis\n\n  Preserve spacing exactly.  \n';
+    mockFindExistingPr.mockReturnValue({
+      number: 41,
+      url: 'https://github.com/org/repo/pull/41',
+    });
+    mockReadFileSync.mockReturnValue(reportContent);
+
+    await commentLoopAnalysisReportOnPr({
+      projectCwd: '/project',
+      branch: 'takt/source-run',
+      reportPath: '/project/.takt/runs/analysis/reports/loop-analysis.md',
+    });
+
+    expect(mockFindExistingPr).toHaveBeenCalledWith('takt/source-run', '/project');
+    expect(mockReadFileSync).toHaveBeenCalledWith(
+      '/project/.takt/runs/analysis/reports/loop-analysis.md',
+      'utf-8',
+    );
+    expect(mockCommentOnPr).toHaveBeenCalledWith(41, reportContent, '/project');
+    expect(mockCreatePullRequest).not.toHaveBeenCalled();
+  });
+
+  it('Given the source branch has no existing PR, When the analysis report is available, Then no comment or PR creation is attempted', async () => {
+    mockFindExistingPr.mockReturnValue(undefined);
+
+    await commentLoopAnalysisReportOnPr({
+      projectCwd: '/project',
+      branch: 'takt/source-run',
+      reportPath: '/project/.takt/runs/analysis/reports/loop-analysis.md',
+    });
+
+    expect(mockFindExistingPr).toHaveBeenCalledWith('takt/source-run', '/project');
+    expect(mockCommentOnPr).not.toHaveBeenCalled();
+    expect(mockCreatePullRequest).not.toHaveBeenCalled();
   });
 });

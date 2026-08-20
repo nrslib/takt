@@ -179,6 +179,39 @@ describe('loadWorkflowByIdentifier', () => {
     expect(workflow!.name).toBe('default');
   });
 
+  it('Given the loop analysis builtin assets, When loading by identifier, Then they provide a schema-valid two-stage finite review loop and the standard report contract', () => {
+    const workflow = loadWorkflowByIdentifier('loop-analysis', process.cwd());
+
+    expect(workflow).not.toBeNull();
+    expect(workflow?.maxSteps).toBe(6);
+    expect(workflow?.steps).toHaveLength(2);
+    const analyzer = workflow?.steps.find((step) => step.name === workflow.initialStep);
+    const reviewer = workflow?.steps.find((step) => step.name !== workflow.initialStep);
+    expect(analyzer).toBeDefined();
+    expect(reviewer).toBeDefined();
+    expect(analyzer?.rules).toEqual(expect.arrayContaining([
+      expect.objectContaining({ next: reviewer?.name }),
+    ]));
+    expect(reviewer?.rules).toEqual(expect.arrayContaining([
+      expect.objectContaining({ next: workflow?.initialStep }),
+      expect.objectContaining({ next: 'COMPLETE' }),
+    ]));
+    expect(analyzer?.outputContracts).toBeUndefined();
+    expect(reviewer?.outputContracts).toEqual([
+      expect.objectContaining({
+        name: 'loop-analysis.md',
+        formatRef: 'loop-analysis',
+      }),
+    ]);
+
+    const providerKeys = ['provider', 'model', 'providerOptions', 'provider_options'];
+    for (const owner of [workflow, ...(workflow?.steps ?? [])]) {
+      for (const key of providerKeys) {
+        expect(owner).not.toHaveProperty(key);
+      }
+    }
+  });
+
   it('should load workflow by absolute path', () => {
     const filePath = join(tempDir, 'test.yaml');
     writeFileSync(filePath, SAMPLE_WORKFLOW);

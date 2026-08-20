@@ -594,6 +594,32 @@ companion が有効な間だけです。無効時も companion 宣言と `target
 維持されますが、companion の provider 解決と実行は行われません — companion を宣言した
 ワークフローは、companion 用の provider 設定なしで実行できます。
 
+### run 完了後のループ分析
+
+ループ分析は opt-in 機能です。run の終端成果物が確定した後に分析するには、トップレベルの
+`loop_analysis` を追加します。
+
+```yaml
+version: 1
+loop_analysis:
+  enabled: true
+  output: file # file | pr-comment。既定値は file
+```
+
+有効時は、成功・失敗・中断したすべての元 run から builtin の `loop-analysis` workflow を
+非同期で起動します。元 run は分析の完了を待たず、分析の起動・実行失敗も元 run の結果を
+変更しません。分析 run から別の分析 run は起動しません。
+
+分析 agent は元 run に存在する JSONL ログ、trace、monitor data、report を読みます。reviewer は
+過剰に特化した提案を最大2回まで差し戻します。最終 report は常に分析 workflow の output
+contract により、分析 run の `reports/loop-analysis.md` へ保存されます。
+
+`output: pr-comment` の場合、元 run で auto-PR が有効で、その branch の PR が既に存在するときだけ、
+保存済み report と同一内容をコメントします。PR が存在しない場合は report ファイルだけを残します。
+`loop_analysis` 内に provider、model、provider options は指定できません。通常の runtime provider
+target で分析 step を割り当ててください。global と project の両方が `loop_analysis` を定義した場合、
+project のセクションが global のセクション全体を置き換えます。
+
 runtime モードはファイルの存在ではなく、有効な `provider` セクションの有無で有効化されます。`version: 1` だけのファイルは inactive で、従来の `config.yaml` による provider 解決がそのまま使われます。
 
 ### 設定例

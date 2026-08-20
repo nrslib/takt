@@ -5,6 +5,7 @@
  * instructBranch (takt list).
  */
 
+import { readFileSync } from 'node:fs';
 import { autoCommitAndPush } from '../../../infra/task/index.js';
 import { pushBranch } from '../../../infra/task/git.js';
 import { info, error, success } from '../../../shared/ui/index.js';
@@ -52,6 +53,29 @@ export interface PostExecutionResult {
   prError?: string;
   taskFailed?: boolean;
   taskError?: string;
+}
+
+export interface CommentLoopAnalysisReportOptions {
+  projectCwd: string;
+  branch: string;
+  reportPath: string;
+  gitProvider?: GitProvider;
+}
+
+export async function commentLoopAnalysisReportOnPr(
+  options: CommentLoopAnalysisReportOptions,
+): Promise<void> {
+  const gitProvider = options.gitProvider ?? getGitProvider();
+  const existingPr = gitProvider.findExistingPr(options.branch, options.projectCwd);
+  if (existingPr === undefined) {
+    return;
+  }
+
+  const report = readFileSync(options.reportPath, 'utf-8');
+  const result = gitProvider.commentOnPr(existingPr.number, report, options.projectCwd);
+  if (!result.success) {
+    throw new Error(result.error ?? PR_COMMENT_FAILURE_MESSAGE);
+  }
 }
 
 /**

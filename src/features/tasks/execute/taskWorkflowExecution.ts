@@ -142,6 +142,7 @@ export async function executeTaskWorkflow(
     initialIterationOverride,
     currentTaskIssueNumber,
     prContext,
+    loopAnalysisPublication,
   } = options;
   const traceTaskMetadata = resolveTraceTaskMetadata(options);
   const workflowConfig = loadWorkflowByIdentifier(
@@ -218,6 +219,9 @@ export async function executeTaskWorkflow(
     currentTaskIssueNumber,
     traceTaskMetadata,
     ...(prContext ? { prContext } : {}),
+    ...(loopAnalysisPublication === undefined
+      ? {}
+      : { loopAnalysisPublication }),
   });
 }
 

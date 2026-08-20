@@ -1,0 +1,225 @@
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const {
+  mockResolveRuntimeProviderFile,
+  mockSpawn,
+  mockWorkerOnce,
+  mockWorkerUnref,
+  mockLogError,
+} = vi.hoisted(() => ({
+  mockResolveRuntimeProviderFile: vi.fn(),
+  mockSpawn: vi.fn(),
+  mockWorkerOnce: vi.fn(),
+  mockWorkerUnref: vi.fn(),
+  mockLogError: vi.fn(),
+}));
+
+vi.mock('node:child_process', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  spawn: (...args: unknown[]) => mockSpawn(...args),
+}));
+
+vi.mock('../infra/config/runtime-provider/loader.js', () => ({
+  resolveRuntimeProviderFile: (...args: unknown[]) => mockResolveRuntimeProviderFile(...args),
+}));
+
+vi.mock('../infra/config/paths.js', () => ({
+  getGlobalConfigDir: () => '/global/.takt',
+  getProjectConfigDir: (projectCwd: string) => `${projectCwd}/.takt`,
+}));
+
+vi.mock('../shared/utils/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  createLogger: () => ({
+    debug: vi.fn(),
+    info: vi.fn(),
+    error: mockLogError,
+  }),
+}));
+
+import { createLoopAnalysisScheduler } from '../features/tasks/execute/loopAnalysis.js';
+import {
+  readLoopAnalysisJob,
+  readLoopAnalysisPublicationMarker,
+} from '../features/tasks/execute/loopAnalysisJob.js';
+import {
+  createLoopAnalysisPublicationCoordinator,
+  settleLoopAnalysisPublication,
+} from '../features/tasks/execute/loopAnalysisPublication.js';
+
+describe('createLoopAnalysisScheduler', () => {
+  const tempDirectories: string[] = [];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSpawn.mockReturnValue({
+      once: mockWorkerOnce,
+      unref: mockWorkerUnref,
+    });
+  });
+
+  afterEach(() => {
+    for (const directory of tempDirectories.splice(0)) {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  function createRunDirectories(): { projectCwd: string; sourceRunDirectory: string } {
+    const projectCwd = mkdtempSync(join(tmpdir(), 'takt-loop-analysis-'));
+    tempDirectories.push(projectCwd);
+    const sourceRunDirectory = join(projectCwd, '.takt', 'runs', 'source-run');
+    mkdirSync(sourceRunDirectory, { recursive: true });
+    return { projectCwd, sourceRunDirectory };
+  }
+
+  function findJobPath(sourceRunDirectory: string): string {
+    const directory = join(
+      sourceRunDirectory,
+      '.takt-report-internal',
+      'loop-analysis',
+    );
+    const jobFile = readdirSync(directory).find((file) => file.endsWith('.job.json'));
+    expect(jobFile).toBeDefined();
+    return join(directory, jobFile as string);
+  }
+
+  it.each([
+    ['an absent section', undefined],
+    ['a disabled section', { version: 1, loop_analysis: { enabled: false, output: 'file' } }],
+  ])('Given %s, When the scheduler is configured, Then no analysis job is started', (_label, runtimeFile) => {
+    mockResolveRuntimeProviderFile.mockReturnValue(runtimeFile);
+
+    const scheduler = createLoopAnalysisScheduler({ projectCwd: '/project' });
+
+    expect(scheduler).toBeUndefined();
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it('Given file output is enabled, When a source run terminates, Then a private job is handed to a detached worker without waiting', () => {
+    const { projectCwd, sourceRunDirectory } = createRunDirectories();
+    mockResolveRuntimeProviderFile.mockReturnValue({
+      version: 1,
+      loop_analysis: { enabled: true, output: 'file' },
+    });
+    const scheduler = createLoopAnalysisScheduler({ projectCwd });
+
+    const schedulingResult = scheduler?.(sourceRunDirectory);
+
+    const jobPath = findJobPath(sourceRunDirectory);
+    expect(readLoopAnalysisJob(jobPath)).toEqual({
+      version: 1,
+      projectCwd,
+      sourceRunDirectory,
+      output: 'file',
+      parentPid: process.pid,
+    });
+    expect(mockSpawn).toHaveBeenCalledWith(
+      process.execPath,
+      [expect.stringMatching(/loopAnalysisWorker\.js$/), jobPath],
+      {
+        cwd: projectCwd,
+        detached: true,
+        stdio: 'ignore',
+      },
+    );
+    expect(mockWorkerUnref).toHaveBeenCalledTimes(1);
+    expect(schedulingResult).toBeUndefined();
+    expect(mockResolveRuntimeProviderFile).toHaveBeenCalledWith({
+      globalConfigDir: '/global/.takt',
+      projectConfigDir: `${projectCwd}/.takt`,
+    });
+  });
+
+  it('Given PR comment output and an auto-PR branch, When a source run terminates, Then the job and pending publication marker share one coordinator', () => {
+    const { projectCwd, sourceRunDirectory } = createRunDirectories();
+    mockResolveRuntimeProviderFile.mockReturnValue({
+      version: 1,
+      loop_analysis: { enabled: true, output: 'pr-comment' },
+    });
+    const publication = createLoopAnalysisPublicationCoordinator('takt/source-run');
+    const scheduler = createLoopAnalysisScheduler({ projectCwd, publication });
+
+    scheduler?.(sourceRunDirectory);
+
+    const job = readLoopAnalysisJob(findJobPath(sourceRunDirectory));
+    expect(job).toEqual(expect.objectContaining({
+      output: 'pr-comment',
+      branch: 'takt/source-run',
+      publicationMarkerPath: expect.any(String),
+    }));
+    expect(readLoopAnalysisPublicationMarker(job.publicationMarkerPath as string)).toBe('pending');
+
+    publication.settle();
+
+    expect(readLoopAnalysisPublicationMarker(job.publicationMarkerPath as string)).toBe('settled');
+  });
+
+  it('Given PR comment output without an auto-PR publication, When a source run terminates, Then no publication wait is recorded', () => {
+    const { projectCwd, sourceRunDirectory } = createRunDirectories();
+    mockResolveRuntimeProviderFile.mockReturnValue({
+      version: 1,
+      loop_analysis: { enabled: true, output: 'pr-comment' },
+    });
+
+    createLoopAnalysisScheduler({ projectCwd })?.(sourceRunDirectory);
+
+    const job = readLoopAnalysisJob(findJobPath(sourceRunDirectory));
+    expect(job.output).toBe('pr-comment');
+    expect(job.branch).toBeUndefined();
+    expect(job.publicationMarkerPath).toBeUndefined();
+  });
+
+  it('Given the detached worker emits a spawn error, When the source run has already continued, Then the failure is logged without throwing into the source result', () => {
+    const { projectCwd, sourceRunDirectory } = createRunDirectories();
+    mockResolveRuntimeProviderFile.mockReturnValue({
+      version: 1,
+      loop_analysis: { enabled: true, output: 'file' },
+    });
+
+    expect(() => {
+      createLoopAnalysisScheduler({ projectCwd })?.(sourceRunDirectory);
+    }).not.toThrow();
+    const errorListener = mockWorkerOnce.mock.calls.find(
+      ([event]) => event === 'error',
+    )?.[1] as ((error: Error) => void) | undefined;
+    expect(errorListener).toBeTypeOf('function');
+
+    errorListener?.(new Error('spawn failed'));
+
+    expect(mockLogError).toHaveBeenCalledWith(
+      'Loop analysis worker failed to start',
+      {
+        sourceRunDirectory,
+        error: 'spawn failed',
+      },
+    );
+  });
+
+  it('Given publication settlement fails, When the source operation finalizes, Then the failure is logged without replacing the source result', () => {
+    const coordinator = {
+      branch: 'takt/source-run',
+      register: vi.fn(),
+      settle: vi.fn(() => {
+        throw new Error('marker write failed');
+      }),
+    };
+
+    expect(() => settleLoopAnalysisPublication(coordinator)).not.toThrow();
+
+    expect(mockLogError).toHaveBeenCalledWith(
+      'Loop analysis publication settlement failed',
+      {
+        branch: 'takt/source-run',
+        error: 'marker write failed',
+      },
+    );
+  });
+});
