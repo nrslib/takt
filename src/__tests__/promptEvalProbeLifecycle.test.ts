@@ -19,8 +19,13 @@ import {
   parseProbeResult,
   runProbeProcess,
 } from '../../tools/opencode-probe/probe-process.mjs';
-import { terminateWindowsProcessTree } from '../../tools/opencode-probe/process-tree.mjs';
 import {
+  PROCESS_TREE_CLEANUP_GRACE_MS,
+  startProcessTreeCleanup,
+  terminateWindowsProcessTree,
+} from '../../tools/opencode-probe/process-tree.mjs';
+import {
+  runSmokeBatch,
   runSmokeScript,
   type SmokeBatchResult,
 } from '../../tools/opencode-probe/smoke-process.mjs';
@@ -36,12 +41,111 @@ interface SmokeFixtureCase {
   args: string[];
 }
 
+function expectWindowsCommandTimeoutsWithinGrace(executeFile: { mock: { calls: unknown[][] } }) {
+  const timeouts = executeFile.mock.calls.flatMap((call) => {
+    const options = call[2];
+    if (typeof options !== 'object' || options === null || !('timeout' in options)) {
+      return [];
+    }
+    return typeof options.timeout === 'number' ? [options.timeout] : [];
+  });
+  expect(timeouts.length).toBeGreaterThan(0);
+  expect(timeouts.every((timeout) => timeout > 0 && timeout <= PROCESS_TREE_CLEANUP_GRACE_MS)).toBe(true);
+}
+
+function captureCleanupWarning() {
+  const writes: string[] = [];
+  let flushed = false;
+  let resolveWriteStarted: (() => void) | undefined;
+  const writeStarted = new Promise<void>((resolve) => {
+    resolveWriteStarted = resolve;
+  });
+  let flushCallback: ((error?: Error | null) => void) | undefined;
+  const stderrWrite = vi.spyOn(process.stderr, 'write').mockImplementation((
+    ((
+      chunk: string | Uint8Array,
+      encodingOrCallback?: BufferEncoding | ((error?: Error | null) => void),
+      callback?: (error?: Error | null) => void,
+    ) => {
+      writes.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+      flushCallback = typeof encodingOrCallback === 'function' ? encodingOrCallback : callback;
+      resolveWriteStarted?.();
+      return true;
+    }) as typeof process.stderr.write
+  ));
+
+  return {
+    writes,
+    writeStarted,
+    flush: () => {
+      if (flushCallback === undefined) {
+        throw new Error('Cleanup warning write callback was not registered');
+      }
+      flushed = true;
+      flushCallback();
+    },
+    wasFlushed: () => flushed,
+    restore: () => stderrWrite.mockRestore(),
+  };
+}
+
+async function expectCleanupFailureAfterWarningFlush(
+  cleanup: Promise<void>,
+  warning: ReturnType<typeof captureCleanupWarning>,
+  expectedError: string | RegExp,
+  expectedWarning: string | RegExp,
+) {
+  let settled = false;
+  const observed = cleanup.finally(() => {
+    settled = true;
+  });
+  await warning.writeStarted;
+  await Promise.resolve();
+  expect(settled).toBe(false);
+  warning.flush();
+  await expect(observed).rejects.toThrow(expectedError);
+  expect(warning.wasFlushed()).toBe(true);
+  expect(warning.writes.join('')).toMatch(expectedWarning);
+}
+
 // Windows CI boots node children slowly enough that a 500ms phase budget can
 // expire before the probe finishes starting (it then never spawns its
 // grandchild or prints its PIDs), so give each phase extra headroom there.
 const PROBE_PHASE_BUDGET_MS = process.platform === 'win32' ? 2_000 : 500;
-// The owned entrypoint adds a second Node process hop before worker cleanup.
-const OWNED_ENTRYPOINT_TIMEOUT_MS = process.platform === 'win32' ? 10_000 : 2_000;
+const INNER_PROBE_STARTUP_TIMEOUT_MS = 2_000;
+const INNER_PROBE_EXECUTION_TIMEOUT_MS = 2_000;
+const INNER_PROBE_CLEANUP_TIMEOUT_MS = 150;
+const INNER_PROBE_TIMEOUT_BUDGET_MS = INNER_PROBE_STARTUP_TIMEOUT_MS
+  + INNER_PROBE_EXECUTION_TIMEOUT_MS
+  + INNER_PROBE_CLEANUP_TIMEOUT_MS;
+const OWNED_ENTRYPOINT_STARTUP_MARGIN_MS = process.platform === 'win32' ? 5_000 : 1_000;
+const OWNED_ENTRYPOINT_REPORT_FLUSH_MARGIN_MS = process.platform === 'win32' ? 5_000 : 2_000;
+const OWNED_ENTRYPOINT_TIMEOUT_MS = INNER_PROBE_TIMEOUT_BUDGET_MS
+  + OWNED_ENTRYPOINT_STARTUP_MARGIN_MS
+  + OWNED_ENTRYPOINT_REPORT_FLUSH_MARGIN_MS
+  + PROCESS_TREE_CLEANUP_GRACE_MS;
+const OUTER_PROBE_TIMEOUT_MS = INNER_PROBE_TIMEOUT_BUDGET_MS
+  + OWNED_ENTRYPOINT_STARTUP_MARGIN_MS
+  + PROCESS_TREE_CLEANUP_GRACE_MS;
+const SMOKE_BATCH_CASE_TIMEOUT_MS = 5_000;
+const SMOKE_BATCH_FIXTURE_STARTUP_MARGIN_MS = process.platform === 'win32' ? 5_000 : 1_000;
+const SMOKE_BATCH_CASE_SPAWN_MARGIN_MS = process.platform === 'win32' ? 2_000 : 1_000;
+const SMOKE_BATCH_DISPATCH_MARGIN_MS = 250;
+
+function smokeBatchTimeoutMs(caseCount: number) {
+  const dispatchedCaseCount = Math.max(1, caseCount);
+  const caseBudget = caseCount * (
+    SMOKE_BATCH_CASE_TIMEOUT_MS
+    + SMOKE_BATCH_CASE_SPAWN_MARGIN_MS
+    + PROCESS_TREE_CLEANUP_GRACE_MS
+  );
+  return Math.max(
+    SMOKE_BATCH_FIXTURE_STARTUP_MARGIN_MS + SMOKE_BATCH_DISPATCH_MARGIN_MS,
+    SMOKE_BATCH_FIXTURE_STARTUP_MARGIN_MS
+      + caseBudget
+      + dispatchedCaseCount * SMOKE_BATCH_DISPATCH_MARGIN_MS,
+  );
+}
 
 const smokeBatchFixture = fileURLToPath(
   new URL('../../tools/opencode-probe/fixtures/run-smoke-batch.mjs', import.meta.url),
@@ -58,8 +162,10 @@ describe('prompt eval probe lifecycle', () => {
     const testRoot = mkdtempSync(join(tmpdir(), 'takt-smoke-batch-fixture-'));
     temporaryDirectories.push(testRoot);
     const configPath = join(testRoot, 'smoke-cases.json');
-    writeFileSync(configPath, JSON.stringify({ cases }), 'utf8');
-    return runSmokeScript(smokeBatchFixture, [configPath], process.env, { timeoutMs: 10_000 });
+    writeFileSync(configPath, JSON.stringify({ cases, caseTimeoutMs: SMOKE_BATCH_CASE_TIMEOUT_MS }), 'utf8');
+    return runSmokeScript(smokeBatchFixture, [configPath], process.env, {
+      timeoutMs: smokeBatchTimeoutMs(cases.length),
+    });
   }
 
   function parseSmokeBatchResult(output: string): SmokeBatchResult {
@@ -450,29 +556,85 @@ describe('prompt eval probe lifecycle', () => {
     expect(executeFile).toHaveBeenCalledWith(
       'taskkill',
       ['/PID', '4321', '/T', '/F'],
-      { timeout: 5_000 },
+      expect.objectContaining({ timeout: expect.any(Number) }),
     );
+    expectWindowsCommandTimeoutsWithinGrace(executeFile);
+  });
+
+  it('should reject process-tree cleanup failures after flushing the warning', async () => {
+    const warning = captureCleanupWarning();
+
+    try {
+      await expectCleanupFailureAfterWarningFlush(
+        startProcessTreeCleanup(undefined),
+        warning,
+        /Child process did not expose a PID/,
+        /Warning: Process tree cleanup warning: Child process did not expose a PID/,
+      );
+    } finally {
+      warning.restore();
+    }
   });
 
   it.each([
     ['PowerShell fails', () => { throw new Error('PowerShell failed'); }],
     ['PowerShell returns malformed JSON', () => ({ stdout: '{invalid' })],
-  ])('should still taskkill the root when %s during the initial snapshot', async (_scenario, query) => {
+  ])('should warn after still taskkilling the root when %s during the initial snapshot', async (_scenario, query) => {
     const executeFile = vi.fn(async (file: string) => (
       file === 'powershell.exe' ? query() : undefined
     ));
+    const warning = captureCleanupWarning();
 
-    await expect(terminateWindowsProcessTree(4321, executeFile)).resolves.toBeUndefined();
+    try {
+      await expectCleanupFailureAfterWarningFlush(
+        terminateWindowsProcessTree(4321, executeFile),
+        warning,
+        /WMI process snapshot unavailable/,
+        /Warning: Process tree cleanup warning: .*WMI process snapshot unavailable/,
+      );
+    } finally {
+      warning.restore();
+    }
 
     expect(executeFile).toHaveBeenCalledWith(
       'taskkill',
       ['/PID', '4321', '/T', '/F'],
-      { timeout: 5_000 },
+      expect.objectContaining({ timeout: expect.any(Number) }),
+    );
+    expectWindowsCommandTimeoutsWithinGrace(executeFile);
+  });
+
+  it('should invoke taskkill after the initial WMI deadline is exhausted', async () => {
+    const now = vi.spyOn(Date, 'now')
+      .mockReturnValueOnce(0)
+      .mockReturnValue(10_000);
+    const executeFile = vi.fn(async (file: string) => {
+      if (file === 'taskkill') return undefined;
+      throw new Error('WMI query should not start after the deadline');
+    });
+    const warning = captureCleanupWarning();
+
+    try {
+      await expectCleanupFailureAfterWarningFlush(
+        terminateWindowsProcessTree(4321, executeFile),
+        warning,
+        /WMI process snapshot deadline exceeded/,
+        /Warning: Process tree cleanup warning: .*WMI process snapshot deadline exceeded/,
+      );
+    } finally {
+      warning.restore();
+      now.mockRestore();
+    }
+
+    expect(executeFile).toHaveBeenCalledWith(
+      'taskkill',
+      ['/PID', '4321', '/T', '/F'],
+      expect.objectContaining({ timeout: expect.any(Number) }),
     );
   });
 
   it.each(['descendant identity', 'final remaining-process'])(
-    'should keep taskkill best-effort when the %s query returns malformed JSON',
+    'should warn after taskkill when the %s query returns malformed JSON',
     async (failureStage) => {
       let fullSnapshot = 0;
       const executeFile = vi.fn(async (file: string, args: readonly string[]) => {
@@ -498,18 +660,29 @@ describe('prompt eval probe lifecycle', () => {
           ? { stdout: '{invalid' }
           : { stdout: '[]' };
       });
+      const warning = captureCleanupWarning();
 
-      await expect(terminateWindowsProcessTree(4321, executeFile)).resolves.toBeUndefined();
+      try {
+        await expectCleanupFailureAfterWarningFlush(
+          terminateWindowsProcessTree(4321, executeFile),
+          warning,
+          /WMI (?:identity query.*|final process query) unavailable/,
+          /Warning: Process tree cleanup warning: .*WMI (?:identity query.*|final process query) unavailable/,
+        );
+      } finally {
+        warning.restore();
+      }
 
       expect(executeFile).toHaveBeenCalledWith(
         'taskkill',
         ['/PID', '5001', '/T', '/F'],
-        { timeout: 5_000 },
+        expect.objectContaining({ timeout: expect.any(Number) }),
       );
+      expectWindowsCommandTimeoutsWithinGrace(executeFile);
     },
   );
 
-  it('should terminate recorded Windows descendants after the parent has already exited', async () => {
+  it('should warn after terminating recorded Windows descendants when the parent has already exited', async () => {
     let fullSnapshot = 0;
     const executeFile = vi.fn(async (file: string, args: readonly string[]) => {
       if (file === 'powershell.exe') {
@@ -534,22 +707,33 @@ describe('prompt eval probe lifecycle', () => {
       }
       return undefined;
     });
+    const warning = captureCleanupWarning();
 
-    await terminateWindowsProcessTree(4321, executeFile);
+    try {
+      await expectCleanupFailureAfterWarningFlush(
+        terminateWindowsProcessTree(4321, executeFile),
+        warning,
+        /taskkill root failed/,
+        /Warning: Process tree cleanup warning: .*taskkill root failed/,
+      );
+    } finally {
+      warning.restore();
+    }
 
     expect(executeFile).toHaveBeenCalledWith(
       'taskkill',
       ['/PID', '5002', '/T', '/F'],
-      { timeout: 5_000 },
+      expect.objectContaining({ timeout: expect.any(Number) }),
     );
     expect(executeFile).toHaveBeenCalledWith(
       'taskkill',
       ['/PID', '5001', '/T', '/F'],
-      { timeout: 5_000 },
+      expect.objectContaining({ timeout: expect.any(Number) }),
     );
+    expectWindowsCommandTimeoutsWithinGrace(executeFile);
   });
 
-  it('should ignore taskkill failure when a descendant PID is later reused', async () => {
+  it('should warn about taskkill failure even when a descendant PID is later reused', async () => {
     let fullSnapshot = 0;
     const executeFile = vi.fn(async (file: string, args: readonly string[]) => {
       if (file === 'taskkill' && args[1] === '5001') {
@@ -575,14 +759,25 @@ describe('prompt eval probe lifecycle', () => {
           CreationDate: 'created-reused',
         }) };
     });
+    const warning = captureCleanupWarning();
 
-    await expect(terminateWindowsProcessTree(4321, executeFile)).resolves.toBeUndefined();
+    try {
+      await expectCleanupFailureAfterWarningFlush(
+        terminateWindowsProcessTree(4321, executeFile),
+        warning,
+        /taskkill descendant 5001 failed/,
+        /Warning: Process tree cleanup warning: .*taskkill descendant 5001 failed/,
+      );
+    } finally {
+      warning.restore();
+    }
 
     expect(executeFile).toHaveBeenCalledWith(
       'taskkill',
       ['/PID', '5001', '/T', '/F'],
-      { timeout: 5_000 },
+      expect.objectContaining({ timeout: expect.any(Number) }),
     );
+    expectWindowsCommandTimeoutsWithinGrace(executeFile);
   });
 
   it('should throw when a snapshotted Windows process remains alive', async () => {
@@ -597,10 +792,35 @@ describe('prompt eval probe lifecycle', () => {
       }
       return { stdout: processSnapshot };
     });
+    const warning = captureCleanupWarning();
 
-    await expect(terminateWindowsProcessTree(4321, executeFile)).rejects.toThrow(
-      'Windows process tree 4321 retained processes: 4321',
-    );
+    try {
+      await expectCleanupFailureAfterWarningFlush(
+        terminateWindowsProcessTree(4321, executeFile),
+        warning,
+        'Windows process tree 4321 retained processes: 4321',
+        /Warning: Process tree cleanup warning: .*Windows process tree 4321 retained processes: 4321/,
+      );
+    } finally {
+      warning.restore();
+    }
+  });
+
+  it('should wait for a Windows process tree to disappear after taskkill', async () => {
+    let fullSnapshot = 0;
+    const processSnapshot = JSON.stringify({
+      ProcessId: 4321,
+      ParentProcessId: 1000,
+      CreationDate: 'created-root',
+    });
+    const executeFile = vi.fn(async (file: string) => {
+      if (file === 'taskkill') return undefined;
+      fullSnapshot += 1;
+      return { stdout: fullSnapshot <= 2 ? processSnapshot : '[]' };
+    });
+
+    await expect(terminateWindowsProcessTree(4321, executeFile)).resolves.toBeUndefined();
+    expect(fullSnapshot).toBeGreaterThanOrEqual(3);
   });
 
   it('should stop the timed-out child and grandchild before removing the parent-owned workspace', async () => {
@@ -627,7 +847,11 @@ describe('prompt eval probe lifecycle', () => {
           env: process.env,
         });
       } catch (error) {
-        const timeoutError = error as Error & { killed?: boolean; stdout?: string };
+        const timeoutError = error as Error & {
+          killed?: boolean;
+          stdout?: string;
+          cleanup: Promise<void>;
+        };
         const pids = JSON.parse(timeoutError.stdout?.trim() ?? '{}') as {
           childPid?: number;
           grandchildPid?: number;
@@ -637,6 +861,7 @@ describe('prompt eval probe lifecycle', () => {
         if (childPid > 0) probeProcessIds.push(childPid);
         if (grandchildPid > 0) probeProcessIds.push(grandchildPid);
         expect(timeoutError.killed).toBe(true);
+        await timeoutError.cleanup;
         throw error;
       }
     });
@@ -650,9 +875,11 @@ describe('prompt eval probe lifecycle', () => {
     expect(() => process.kill(grandchildPid, 0)).toThrow();
   });
 
-  it('should reject a probe that reports a result but does not exit during cleanup', async () => {
+  it('should return a probe report before intentionally delayed cleanup finishes', async () => {
+    const startedAt = Date.now();
     const execution = runProbeProcess('-e', [
       [
+        "process.on('SIGTERM', () => {})",
         "console.log('PROBE_READY')",
         "console.log('PROBE_CLEANUP_START')",
         "console.log('PROBE_RESULT {}')",
@@ -665,11 +892,19 @@ describe('prompt eval probe lifecycle', () => {
       env: process.env,
     });
 
-    await expect(execution).rejects.toMatchObject({
-      code: 'ETIMEDOUT',
-      phase: 'cleanup',
-      killed: true,
+    const result = await execution;
+    let cleanupFinished = false;
+    result.cleanup.then(() => {
+      cleanupFinished = true;
     });
+    await Promise.resolve();
+    if (process.platform !== 'win32') {
+      expect(cleanupFinished).toBe(false);
+    }
+    expect(Date.now() - startedAt).toBeLessThan(PROCESS_TREE_CLEANUP_GRACE_MS);
+    expect(result.stdout).toContain('PROBE_RESULT {}');
+    await result.cleanup;
+    expect(cleanupFinished).toBe(true);
   });
 
   it('should terminate child descendants after the probe exits successfully', async () => {
@@ -689,6 +924,7 @@ describe('prompt eval probe lifecycle', () => {
       cleanupTimeout: 10_000,
       env: process.env,
     });
+    await result.cleanup;
     const firstLine = result.stdout.split('\n')[0] ?? '{}';
     const pids = JSON.parse(firstLine) as { childPid: number; grandchildPid: number };
 
@@ -713,6 +949,26 @@ describe('prompt eval probe lifecycle', () => {
     });
 
     expect(result.stdout).toContain('PROBE_RESULT {}\n');
+  });
+
+  it('should keep a complete result when it arrives just before the cleanup deadline', async () => {
+    const result = await runProbeProcess('-e', [
+      [
+        "console.log('PROBE_READY')",
+        "console.log('PROBE_CLEANUP_START')",
+        "process.stdout.write('PROBE_RESULT ')",
+        "setTimeout(() => process.stdout.write('{}\\n'), 175)",
+        'setInterval(() => {}, 1000)',
+      ].join(';'),
+    ], {
+      startupTimeout: 2_000,
+      executionTimeout: 2_000,
+      cleanupTimeout: 200,
+      env: process.env,
+    });
+
+    expect(result.stdout).toContain('PROBE_RESULT {}\n');
+    await result.cleanup;
   });
 
   it('should reject a complete result emitted before cleanup starts', async () => {
@@ -951,8 +1207,9 @@ describe('prompt eval probe lifecycle', () => {
     });
 
     await expect(execution).rejects.toMatchObject({ code: 'ETIMEDOUT', phase: 'cleanup' });
-    await execution.catch((error: Error & { stdout: string }) => {
+    await execution.catch((error: Error & { stdout: string; cleanup: Promise<void> }) => {
       grandchildPid = (JSON.parse(error.stdout.split('\n')[0]!) as { grandchildPid: number }).grandchildPid;
+      return error.cleanup;
     });
     expect(grandchildPid).toBeGreaterThan(0);
     expect(() => process.kill(grandchildPid, 0)).toThrow();
@@ -974,17 +1231,18 @@ describe('prompt eval probe lifecycle', () => {
     writeFileSync(script, [
       `import { runProbeProcess } from ${JSON.stringify(probeProcessUrl)}`,
       'try {',
-      `  await runProbeProcess('-e', [${JSON.stringify(workerSource)}], { startupTimeout: 2000, executionTimeout: 2000, cleanupTimeout: 150, env: process.env })`,
+      `  await runProbeProcess('-e', [${JSON.stringify(workerSource)}], { startupTimeout: ${INNER_PROBE_STARTUP_TIMEOUT_MS}, executionTimeout: ${INNER_PROBE_EXECUTION_TIMEOUT_MS}, cleanupTimeout: ${INNER_PROBE_CLEANUP_TIMEOUT_MS}, env: process.env })`,
       '} catch (error) {',
-      "  process.stdout.write(error.stdout ?? '')",
-      "  process.stderr.write(`phase=${error.phase}\\n`)",
+      "  await new Promise((resolve, reject) => process.stdout.write(error.stdout ?? '', writeError => writeError ? reject(writeError) : resolve()))",
+      "  await new Promise((resolve, reject) => process.stderr.write(`phase=${error.phase}\\n`, writeError => writeError ? reject(writeError) : resolve()))",
+      '  await error.cleanup',
       '  throw error',
       '}',
     ].join('\n'), 'utf8');
 
     let launchError: (Error & { stdout?: string; stderr?: string }) | undefined;
     try {
-      await runSmokeScript(script, [], process.env, { timeoutMs: 2_000 });
+      await runSmokeScript(script, [], process.env, { timeoutMs: OUTER_PROBE_TIMEOUT_MS });
     } catch (error) {
       launchError = error as Error & { stdout?: string; stderr?: string };
     }
@@ -1015,10 +1273,156 @@ describe('prompt eval probe lifecycle', () => {
       code: 'ETIMEDOUT',
       killed: true,
     });
-    await execution.catch((error: Error & { stdout: string }) => {
-      const pids = JSON.parse(error.stdout.trim()) as { childPid: number; grandchildPid: number };
-      expect(() => process.kill(pids.childPid, 0)).toThrow();
-      expect(() => process.kill(pids.grandchildPid, 0)).toThrow();
+    await execution.catch((error: Error & { stdout: string; cleanup: Promise<void> }) => {
+      return error.cleanup.then(() => {
+        const pids = JSON.parse(error.stdout.trim()) as { childPid: number; grandchildPid: number };
+        expect(() => process.kill(pids.childPid, 0)).toThrow();
+        expect(() => process.kill(pids.grandchildPid, 0)).toThrow();
+      });
+    });
+  });
+
+  it('should resolve the smoke launcher at the report before post-report cleanup', async () => {
+    const testRoot = mkdtempSync(join(tmpdir(), 'takt-smoke-report-first-'));
+    temporaryDirectories.push(testRoot);
+    const script = join(testRoot, 'report-first.mjs');
+    writeFileSync(script, [
+      "process.stdout.write('SMOKE_REPORT {}\\n')",
+      'setInterval(() => {}, 1000)',
+    ].join('\n'), 'utf8');
+
+    const startedAt = Date.now();
+    const execution = runSmokeScript(script, [], process.env, {
+      timeoutMs: 2_000,
+      reportMarker: 'SMOKE_REPORT ',
+    });
+    const result = await execution;
+
+    expect(Date.now() - startedAt).toBeLessThan(300);
+    expect(result.stdout).toContain('SMOKE_REPORT {}');
+    await result.cleanup;
+  });
+
+  it('should preserve a workspace report and warn when attached cleanup fails', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'takt-probe-workspace-cleanup-'));
+    temporaryDirectories.push(parent);
+    const cleanupError = new Error('workspace cleanup failed');
+    const cleanup = Promise.reject(cleanupError);
+    let workspace = '';
+    const warning = captureCleanupWarning();
+
+    try {
+      const execution = withProbeWorkspace(parent, 'reported-', async (createdWorkspace) => {
+        workspace = createdWorkspace;
+        return { reported: true, cleanup };
+      });
+
+      await warning.writeStarted;
+      expect(existsSync(workspace)).toBe(false);
+      warning.flush();
+
+      await expect(execution).resolves.toMatchObject({ reported: true });
+      expect(warning.wasFlushed()).toBe(true);
+      expect(warning.writes.join('')).toContain(
+        'Warning: Probe workspace cleanup failed: workspace cleanup failed',
+      );
+    } finally {
+      warning.restore();
+    }
+  });
+
+  it('should preserve a reported smoke result and warn when cleanup closes non-zero', async () => {
+    const testRoot = mkdtempSync(join(tmpdir(), 'takt-smoke-report-close-'));
+    temporaryDirectories.push(testRoot);
+    const script = join(testRoot, 'report-close-non-zero.mjs');
+    writeFileSync(script, [
+      "process.stdout.write('SMOKE_REPORT {}\\n')",
+      'process.on(\'SIGTERM\', () => process.exit(7))',
+      'setInterval(() => {}, 1000)',
+    ].join('\n'), 'utf8');
+    const warning = captureCleanupWarning();
+
+    try {
+      const result = await runSmokeScript(script, [], process.env, {
+        timeoutMs: 2_000,
+        reportMarker: 'SMOKE_REPORT ',
+      });
+
+      expect(result.stdout).toContain('SMOKE_REPORT {}');
+      await warning.writeStarted;
+      expect(warning.wasFlushed()).toBe(false);
+      warning.flush();
+      await expect(result.cleanup).rejects.toMatchObject({ code: 7 });
+      expect(warning.wasFlushed()).toBe(true);
+      expect(warning.writes.join('')).toContain(
+        'Warning: Smoke process exited after report with code 7',
+      );
+    } finally {
+      warning.restore();
+    }
+  });
+
+  it('should reject a smoke process that closes successfully without its report marker', async () => {
+    const testRoot = mkdtempSync(join(tmpdir(), 'takt-smoke-report-missing-'));
+    temporaryDirectories.push(testRoot);
+    const script = join(testRoot, 'report-missing.mjs');
+    writeFileSync(script, "process.stdout.write('completed without report\\n')\n", 'utf8');
+
+    const execution = runSmokeScript(script, [], process.env, {
+      timeoutMs: 2_000,
+      reportMarker: 'SMOKE_REPORT ',
+    });
+
+    await expect(execution).rejects.toMatchObject({
+      code: 'EPROBEPROTOCOL',
+      exitCode: 0,
+    });
+    await execution.catch((error: Error & { cleanup: Promise<void> }) => error.cleanup);
+  });
+
+  it('should forward a post-report cleanup warning without changing the smoke result', async () => {
+    const testRoot = mkdtempSync(join(tmpdir(), 'takt-smoke-report-warning-'));
+    temporaryDirectories.push(testRoot);
+    const script = join(testRoot, 'report-cleanup-warning.mjs');
+    writeFileSync(script, [
+      "process.stdout.write('SMOKE_REPORT {}\\n')",
+      "process.on('SIGTERM', () => process.stderr.write('Warning: Process tree cleanup warning: delayed cleanup\\n', () => process.exit(0)))",
+      'setInterval(() => {}, 1000)',
+    ].join('\n'), 'utf8');
+    const warning = captureCleanupWarning();
+
+    try {
+      const result = await runSmokeScript(script, [], process.env, {
+        timeoutMs: 2_000,
+        reportMarker: 'SMOKE_REPORT ',
+      });
+
+      expect(result.stdout).toContain('SMOKE_REPORT {}');
+      await warning.writeStarted;
+      warning.flush();
+      await expect(result.cleanup).rejects.toMatchObject({ code: 'ECLEANUPWARNING' });
+      expect(warning.wasFlushed()).toBe(true);
+      expect(warning.writes.join('')).toContain(
+        'Warning: Process tree cleanup warning: delayed cleanup',
+      );
+    } finally {
+      warning.restore();
+    }
+  });
+
+  it('should surface smoke cleanup failure without changing the evaluation result', async () => {
+    const cleanupError = new Error('smoke cleanup failed');
+    const execution = runSmokeBatch([{
+      name: 'cleanup-failure',
+      run: async () => ({ cleanup: Promise.reject(cleanupError) }),
+    }]);
+
+    await expect(execution).rejects.toMatchObject({
+      errors: [expect.objectContaining({ errors: [cleanupError] })],
+      smokeResult: {
+        status: 'passed',
+        cases: [{ name: 'cleanup-failure', status: 'passed' }],
+      },
     });
   });
 
@@ -1216,7 +1620,10 @@ describe('prompt eval probe lifecycle', () => {
       "console.log('PROBE_RESULT {\"flushed\":true}')",
     ].join('\n'), 'utf8');
 
-    const { stdout, stderr } = await runSmokeScript(script, [], process.env, { timeoutMs: 2_000 });
+    const { stdout, stderr } = await runSmokeScript(script, [], process.env, {
+      timeoutMs: OWNED_ENTRYPOINT_TIMEOUT_MS,
+      reportMarker: 'PROBE_RESULT ',
+    });
     const expectedStdout = [
       'x'.repeat(stdoutPayloadBytes),
       'PROBE_READY',
