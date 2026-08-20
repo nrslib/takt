@@ -1,9 +1,10 @@
 # Companion finding repository verification
 
-Adjudicate the submitted companion findings from the current review round using the current repository and the submitted findings.
+Adjudicate the submitted companion findings from the current review round using the local repository already present in the current working directory.
 
 - Do not perform a new broad review or edit code. Decide every submitted reviewer finding exactly once.
-- Use only read-only repository tools to verify each submitted finding from the supplied baseline SHA and current worktree. Do not rely on a cumulative diff body because none is supplied.
+- Use the available tools only for non-mutating inspection of that repository. Verify each submitted finding from the supplied baseline SHA and current local state. Do not rely on a cumulative diff body because none is supplied.
+- Use only that repository. Do not create another working copy or change branches.
 - Adopt only defects confirmed by the supplied task and the repository evidence for that finding.
 - Do not adopt unsupported concerns, unrelated changes, preferences, or ordinary implementation incompleteness.
 - Decide every submitted concern exactly once and preserve the correspondence required by the output contract.

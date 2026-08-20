@@ -12,8 +12,8 @@ active contract family の担当箇所、同じ意味を別名で再構築する
 | Follow-up review | accepted family の未確認 consumer、必須 migration、修正退行を確認 | 一般探索の再開、新しい隣接 family |
 | Review adjudication | 提出済み candidate の妥当性と同一 family の境界を確認 | 一般初回探索、candidate のない新規 finding |
 | Final preservation | 宣言済み actionable family の未移行、旧経路、片側更新、修正退行を merge blocker として確認 | 新しい family の発見・追加 |
-| Companion | 渡された baseline SHA から read-only repository tool で現在の changed family、caller、contract、architecture/配線、test を確認し、根拠のある候補を報告 | 編集・副作用、確認していない経路の確認済み主張、別 family の修正要求 |
-| Companion Moderator | read-only repository tool で現在の worktree を確認し、提出済み Companion finding を検証して accept または reject | 広範な新規レビュー、提出一覧にない finding、編集・副作用、family 完了保証 |
+| Companion | 渡された baseline SHA から、利用可能な tool を現在の作業ディレクトリにあるローカルリポジトリの非変更調査にだけ使い、changed family、caller、contract、architecture/配線、test を確認して根拠のある候補を報告 | 別の作業コピーの作成や branch の変更、編集・副作用、確認していない経路の確認済み主張、別 family の修正要求 |
+| Companion Moderator | 利用可能な tool を現在の作業ディレクトリにあるローカルリポジトリの非変更調査にだけ使い、提出済み Companion finding を検証して accept または reject | 別の作業コピーの作成や branch の変更、広範な新規レビュー、提出一覧にない finding、編集・副作用、family 完了保証 |
 
 follow-up で新しい finding を許可する Authorization Basis は次の4つだけとする。すべての新しい finding に Authorization Basis と Reason Absent（初回レビューに含まれなかった理由）を記録する。
 

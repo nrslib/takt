@@ -1,5 +1,5 @@
 name: testing-review-companion
-description: baseline から現在の repository を継続的に確認し、受入条件と観測可能な契約に対する test、回帰、module mock、test double、分類済み suite の不足だけをレビューするcompanion。
+description: baseline からのローカル変更を継続的に確認し、受入条件と観測可能な契約に対する test、回帰、module mock、test double、分類済み suite の不足だけをレビューするcompanion。
 persona: testing-reviewer
 policy: [contract-change, review, testing]
 knowledge: [unit-testing, e2e-testing]
