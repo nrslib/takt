@@ -33,6 +33,7 @@ import {
   hasMatchingIdentity,
   inspectPrivateArtifactPath,
   lstatOrUndefined,
+  PrivateArtifactAncestorIdentityMismatchError,
   type DirectoryIdentity,
 } from './private-path-identity.js';
 
@@ -595,6 +596,9 @@ export function readPrivateFileState(filePath: string): PrivateFileReadSnapshot 
   try {
     assertAncestorIdentities(inspection.ancestorIdentities);
   } catch (error) {
+    if (!(error instanceof PrivateArtifactAncestorIdentityMismatchError)) {
+      throw error;
+    }
     throw new PrivateArtifactPublicationConflictError(
       `Private artifact ancestor identity changed while reading: ${absolute}`,
       { cause: error },

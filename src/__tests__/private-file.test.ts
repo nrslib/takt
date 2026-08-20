@@ -23,7 +23,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const TEST_TMPDIR = realpathSync(tmpdir());
 
 const injectedFileFailure = vi.hoisted(() => ({
-  operation: '' as '' | 'open' | 'fstat' | 'fchmod' | 'ftruncate' | 'read' | 'write' | 'partialWrite' | 'append' | 'close' | 'rename',
+  operation: '' as '' | 'open' | 'lstat' | 'fstat' | 'fchmod' | 'ftruncate' | 'read' | 'write' | 'partialWrite' | 'append' | 'close' | 'rename',
   cleanupOperation: '' as '' | 'unlink',
   skipMatchingCalls: 0,
   descriptor: undefined as number | undefined,
@@ -92,6 +92,17 @@ vi.mock('node:fs', async () => {
   };
   return {
     ...actual,
+    lstatSync(...args: Parameters<typeof actual.lstatSync>) {
+      const path = String(args[0]);
+      if (
+        injectedFileFailure.operation === 'lstat'
+        && (injectedFileFailure.pathPredicate === undefined || injectedFileFailure.pathPredicate(path))
+      ) {
+        injectedFileFailure.operation = '';
+        throw Object.assign(new Error('injected lstat failure'), { code: 'EIO' });
+      }
+      return actual.lstatSync(...args);
+    },
     openSync(...args: Parameters<typeof actual.openSync>) {
       const path = String(args[0]);
       if (
@@ -575,6 +586,29 @@ describe('private file artifacts', () => {
 
     expect(() => readPrivateFileState(file))
       .toThrow(PrivateArtifactPublicationConflictError);
+  });
+
+  it('should preserve an ancestor I/O error during a private read', () => {
+    const root = mkdtempSync(join(TEST_TMPDIR, 'takt-private-read-ancestor-io-'));
+    roots.push(root);
+    const logs = join(root, '.takt', 'runs', 'run-1', 'logs');
+    mkdirSync(logs, { recursive: true });
+    const file = join(logs, 'events.jsonl');
+    writeFileSync(file, 'original\n');
+    injectedFileFailure.beforeOpen = () => {
+      injectedFileFailure.operation = 'lstat';
+      injectedFileFailure.pathPredicate = (path) => path === logs;
+    };
+
+    let thrown: unknown;
+    try {
+      readPrivateFileState(file);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toMatchObject({ code: 'EIO', message: 'injected lstat failure' });
+    expect(thrown).not.toBeInstanceOf(PrivateArtifactPublicationConflictError);
   });
 
   it.each([

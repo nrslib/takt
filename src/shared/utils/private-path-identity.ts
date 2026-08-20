@@ -12,6 +12,13 @@ export interface PrivateFileInspection {
   expectedStat: Stats | undefined;
 }
 
+export class PrivateArtifactAncestorIdentityMismatchError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PrivateArtifactAncestorIdentityMismatchError';
+  }
+}
+
 export function lstatOrUndefined(path: string): Stats | undefined {
   try {
     return lstatSync(path) as Stats;
@@ -152,7 +159,9 @@ export function assertAncestorIdentities(identities: readonly DirectoryIdentity[
       ? statSync(identity.path) as Stats
       : lstatSync(identity.path) as Stats;
     if (!current.isDirectory() || !hasMatchingDirectoryIdentity(identity.stat, current)) {
-      throw new Error(`Private artifact ancestor identity changed while opening: ${identity.path}`);
+      throw new PrivateArtifactAncestorIdentityMismatchError(
+        `Private artifact ancestor identity changed while opening: ${identity.path}`,
+      );
     }
   }
 }
