@@ -1,5 +1,5 @@
 name: ai-antipattern-review-companion
-description: 実装中の変更を継続的に監視し、AI生成コード特有の誤った仮定、過剰実装、フォールバック、配線漏れ、デッドコードをレビューするcompanion。
+description: baseline から現在の repository を継続的に確認し、AI生成コード特有の誤った仮定、architecture・contract・配線の欠陥、過剰実装、フォールバック、デッドコードをレビューするcompanion。
 persona: ai-antipattern-reviewer
 policy: [contract-change, review, ai-antipattern]
 knowledge: architecture

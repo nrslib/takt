@@ -12,8 +12,8 @@ A bounded horizontal comparison is allowed as evidence gathering needed to close
 | Follow-up review | Check accepted-family unvisited consumers, required migrations, and remediation regressions | Restart general discovery or add an adjacent family |
 | Review adjudication | Validate a submitted candidate and its same-family boundary | General initial discovery or a new finding without a candidate |
 | Final preservation | Treat unmigrated paths, obsolete paths, one-sided updates, and remediation regressions in declared actionable families as merge blockers | Discover or add a new family |
-| Companion | Report early active-family candidates within the supplied cumulative diff and context | Claim hidden repository paths were verified or request repair of another family |
-| Companion Moderator | Accept, merge, downgrade, or reject submitted Companion evidence | Early scan, repository search, new findings, or a family-completion guarantee |
+| Companion | Starting from the supplied baseline SHA, use read-only repository tools to inspect the current changed family, its callers, contracts, architecture/wiring, and tests, then report confirmed candidates | Edit or create side effects; claim paths were verified without inspecting them; or request repair of another family |
+| Companion Moderator | Use read-only repository tools to verify each submitted Companion finding against the current worktree and accept or reject it | Broad new review, a finding not in the submitted list, edits or side effects, or a family-completion guarantee |
 
 Only the following four Authorization Bases permit a new finding during follow-up. Every new finding must record its Authorization Basis and Reason Absent (why it was absent from the initial review).
 

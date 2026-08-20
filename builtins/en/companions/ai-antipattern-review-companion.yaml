@@ -1,5 +1,5 @@
 name: ai-antipattern-review-companion
-description: Continuously review in-progress changes for incorrect AI assumptions, overengineering, fallback misuse, wiring gaps, and dead code.
+description: Continuously inspect the current repository from the baseline for incorrect AI assumptions, architecture or contract gaps, wiring mistakes, overengineering, fallback misuse, and dead code.
 persona: ai-antipattern-reviewer
 policy: [contract-change, review, ai-antipattern]
 knowledge: architecture
