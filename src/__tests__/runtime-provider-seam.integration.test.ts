@@ -702,8 +702,6 @@ describe('providerLadders end-to-end from runtime.yaml (issue #1208)', () => {
 
 describe('runtime provider options through workflow execution', () => {
   let workflowProjectCwd: string;
-  let runtimeConfigDir: string;
-  let originalConfigDir: string | undefined;
   let originalFastMode: string | undefined;
   let originalProvider: string | undefined;
   let originalModel: string | undefined;
@@ -712,7 +710,6 @@ describe('runtime provider options through workflow execution', () => {
     vi.resetAllMocks();
     applyDefaultMocks();
     workflowProjectCwd = mkdtempSync(join(tmpdir(), 'takt-seam-workflow-'));
-    runtimeConfigDir = mkdtempSync(join(tmpdir(), 'takt-seam-config-'));
     mkdirSync(join(workflowProjectCwd, '.takt', 'workflows', 'personas'), { recursive: true });
     writeFileSync(
       join(workflowProjectCwd, '.takt', 'workflows', 'runtime-provider-handoff.yaml'),
@@ -737,11 +734,9 @@ describe('runtime provider options through workflow execution', () => {
       'utf-8',
     );
 
-    originalConfigDir = process.env.TAKT_CONFIG_DIR;
     originalFastMode = process.env.TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE;
     originalProvider = process.env.TAKT_PROVIDER;
     originalModel = process.env.TAKT_MODEL;
-    process.env.TAKT_CONFIG_DIR = runtimeConfigDir;
     delete process.env.TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE;
     delete process.env.TAKT_PROVIDER;
     delete process.env.TAKT_MODEL;
@@ -750,11 +745,6 @@ describe('runtime provider options through workflow execution', () => {
   });
 
   afterEach(() => {
-    if (originalConfigDir === undefined) {
-      delete process.env.TAKT_CONFIG_DIR;
-    } else {
-      process.env.TAKT_CONFIG_DIR = originalConfigDir;
-    }
     if (originalFastMode === undefined) {
       delete process.env.TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE;
     } else {
@@ -773,7 +763,6 @@ describe('runtime provider options through workflow execution', () => {
     invalidateGlobalConfigCache();
     invalidateAllResolvedConfigCache();
     rmSync(workflowProjectCwd, { recursive: true, force: true });
-    rmSync(runtimeConfigDir, { recursive: true, force: true });
   });
 
   it.each([
