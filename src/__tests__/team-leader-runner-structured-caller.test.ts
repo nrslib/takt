@@ -297,6 +297,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       userInputs: [],
       personaSessions: new Map(),
       stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'running',
     };
 
@@ -585,6 +588,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       userInputs: [],
       personaSessions: new Map(),
       stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'running',
     };
     const decomposeTask = vi.fn().mockImplementation(async (instruction, _maxParts, options) => {
@@ -1039,6 +1045,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       userInputs: [],
       personaSessions: new Map(),
       stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'running',
     };
 
@@ -1127,6 +1136,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       userInputs: [],
       personaSessions: new Map(),
       stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'running',
     };
 
@@ -1399,6 +1411,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       userInputs: [],
       personaSessions: new Map(),
       stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'running',
     };
 
@@ -1530,6 +1545,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       userInputs: [],
       personaSessions: new Map(),
       stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'running',
     };
 
@@ -1652,6 +1670,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       userInputs: [],
       personaSessions: new Map(),
       stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'running',
     };
 
@@ -1777,6 +1798,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       userInputs: [],
       personaSessions: new Map(),
       stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'running',
     };
 
@@ -1911,6 +1935,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       userInputs: [],
       personaSessions: new Map(),
       stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'running',
     };
 
@@ -2027,6 +2054,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       userInputs: [],
       personaSessions: new Map(),
       stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'running',
     };
 
@@ -2140,6 +2170,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       userInputs: [],
       personaSessions: new Map(),
       stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'running',
     };
 
@@ -2252,6 +2285,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         userInputs: [],
         personaSessions: new Map(),
         stepIterations: new Map(),
+        restoredStepIterationNames: new Set(),
+        dynamicParallelSelections: new Map(),
+        dynamicFacetSelections: new Map(),
         status: 'running',
       };
 
@@ -2365,6 +2401,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       userInputs: [],
       personaSessions: new Map(),
       stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'running',
     };
 
@@ -2478,6 +2517,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       userInputs: [],
       personaSessions: new Map(),
       stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'running',
     };
 
@@ -2587,6 +2629,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       userInputs: [],
       personaSessions: new Map(),
       stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'running',
     };
 
@@ -2713,6 +2758,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       userInputs: [],
       personaSessions: new Map(),
       stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'running',
     };
 
@@ -2829,6 +2877,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       userInputs: [],
       personaSessions: new Map(),
       stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'running',
     };
 
@@ -2923,6 +2974,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         userInputs: [],
         personaSessions: new Map(),
         stepIterations: new Map(),
+        restoredStepIterationNames: new Set(),
+        dynamicParallelSelections: new Map(),
+        dynamicFacetSelections: new Map(),
         status: 'running',
       };
     }
@@ -3023,6 +3077,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         userInputs: [],
         personaSessions: new Map(),
         stepIterations: new Map(),
+        restoredStepIterationNames: new Set(),
+        dynamicParallelSelections: new Map(),
+        dynamicFacetSelections: new Map(),
         status: 'running',
       };
     }
