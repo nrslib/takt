@@ -2,11 +2,13 @@ workflow_categories:
   🚀 Quick Start:
     workflows:
       - default
+      - maintenance
       - simple
       - pure
   🛠️ Development:
     workflows:
       - default
+      - maintenance
       - simple
       - pure
   🔍 Review:

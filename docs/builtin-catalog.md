@@ -9,6 +9,7 @@ A comprehensive catalog of all builtin workflows and personas included with TAKT
 | Workflow | Recommended Use |
 |----------|-----------------|
 | `default` | Default coding workflow using dynamic implementation companions with the shared core's adjudicated, verified peer-review remediation loop and a final check that requirements are met. |
+| `maintenance` | Maintenance development workflow that respects existing code and contracts outside the change scope and limits work to causally related changes. |
 | `simple` | A lightweight development workflow with the same structure as pure, where TAKT selects applicable domain facets per change. AI antipattern and architecture guidance are always included. |
 | `pure` | A pure development workflow that trusts a capable model's judgment with no injected domain facets. The model selects relevant available skills and performs test-first implementation, review, fixes, and a final requirement check with minimal orchestration. |
 | `takt-default` | Inject TAKT-specific facets and implementation companions into the shared core's adjudicated, verified peer-review remediation loop and final check that requirements are met. |
@@ -23,9 +24,11 @@ Organized by category.
 | Category | Workflow | Description |
 |----------|----------|-------------|
 | 🚀 Quick Start | `default` | Default coding workflow using dynamic implementation companions with the shared core's adjudicated, verified peer-review remediation loop and a final check that requirements are met. |
+|  | `maintenance` | Maintenance development workflow that respects existing code and contracts outside the change scope and limits work to causally related changes. |
 |  | `simple` | A lightweight development workflow with the same structure as pure, where TAKT selects applicable domain facets per change. AI antipattern and architecture guidance are always included. |
 |  | `pure` | A pure development workflow that trusts a capable model's judgment with no injected domain facets. The model selects relevant available skills and performs test-first implementation, review, fixes, and a final requirement check with minimal orchestration. |
 | 🛠️ Development | `default` | Default coding workflow using dynamic implementation companions with the shared core's adjudicated, verified peer-review remediation loop and a final check that requirements are met. |
+|  | `maintenance` | Maintenance development workflow that respects existing code and contracts outside the change scope and limits work to causally related changes. |
 |  | `simple` | A lightweight development workflow with the same structure as pure, where TAKT selects applicable domain facets per change. AI antipattern and architecture guidance are always included. |
 |  | `pure` | A pure development workflow that trusts a capable model's judgment with no injected domain facets. The model selects relevant available skills and performs test-first implementation, review, fixes, and a final requirement check with minimal orchestration. |
 | 🔍 Review | `review` | Multi-perspective Code Review - selects the applicable specialist reviewers for the change, runs them in parallel, then has a supervisor synthesize the results. |

@@ -65,6 +65,7 @@ steps:
       development_policy: [coding, testing, ai-antipattern]
       development_knowledge: [architecture]
       implementation_instruction: simple-implement-after-tests
+      scope_report_format: coder-scope
     dynamic_facets:
       pool: coding-facets
     rules:

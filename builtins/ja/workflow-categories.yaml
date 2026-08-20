@@ -2,11 +2,13 @@ workflow_categories:
   🚀 クイックスタート:
     workflows:
       - default
+      - maintenance
       - simple
       - pure
   🛠️ 開発:
     workflows:
       - default
+      - maintenance
       - simple
       - pure
   🔍 レビュー:
