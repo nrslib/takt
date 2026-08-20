@@ -1291,7 +1291,7 @@ describe('prompt eval probe lifecycle', () => {
     const script = join(testRoot, 'report-first.mjs');
     writeFileSync(script, [
       "process.stdout.write('SMOKE_REPORT {}\\n')",
-      'setInterval(() => {}, 1000)',
+      'process.exitCode = 0',
     ].join('\n'), 'utf8');
 
     const execution = runSmokeScript(script, [], process.env, {
