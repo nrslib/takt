@@ -7,7 +7,7 @@ import { WorkflowEngine } from '../core/workflow/engine/WorkflowEngine.js';
 import { makeStep, makeRule, makeResponse, createTestTmpDir, applyDefaultMocks } from './engine-test-helpers.js';
 import { runReportPhase, runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
 import type { StructuredCaller } from '../agents/structured-caller.js';
-import type { AgentResponse, WorkflowConfig, WorkflowStep } from '../core/models/index.js';
+import type { AgentResponse, TeamLeaderWorkflowStep, WorkflowConfig } from '../core/models/index.js';
 import type { AutoRoutingConfig } from '../core/models/config-types.js';
 import { initNdjsonLog } from '../infra/fs/session.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
@@ -20,6 +20,7 @@ import type { ProviderEventLogRecord } from '../core/logging/providerEvent.js';
 import type { UsageEventLogRecord } from '../core/logging/usageEvent.js';
 import { DebugLogger } from '../shared/utils/debug.js';
 import { MAX_AGENT_FAILURE_MESSAGE_BYTES } from '../shared/types/agent-failure.js';
+import { COMPANION_CHANGE_DEBOUNCE_MS } from '../core/workflow/companion/change-detector.js';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -67,14 +68,25 @@ function buildTeamLeaderConfig(): WorkflowConfig {
   };
 }
 
+function updateTeamLeaderStep(
+  config: WorkflowConfig,
+  update: (step: TeamLeaderWorkflowStep) => TeamLeaderWorkflowStep,
+): void {
+  const step = config.steps[0];
+  if (step === undefined || step.teamLeader === undefined) {
+    throw new Error('teamLeader configuration is required');
+  }
+  config.steps[0] = update(step);
+}
+
 function buildDynamicFacetTeamLeaderConfig(): WorkflowConfig {
   const config = buildTeamLeaderConfig();
-  config.steps = [{
-    ...config.steps[0],
+  updateTeamLeaderStep(config, (step) => ({
+    ...step,
     policyContents: [{ content: 'BASE TEAM POLICY' }],
     knowledgeContents: [{ content: 'BASE TEAM KNOWLEDGE' }],
     dynamicFacets: { pool: 'team-facets', maxSelected: 1 },
-  } as unknown as WorkflowStep];
+  }));
   config.facetPools = {
     'team-facets': {
       name: 'team-facets',
@@ -346,10 +358,10 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
 
   it('Team Leader は一つの companion runtime で全 worker part の完了レビューを行う', async () => {
     const config = buildTeamLeaderConfig();
-    config.steps = [{
-      ...config.steps[0],
+    updateTeamLeaderStep(config, (step) => ({
+      ...step,
       companion: { fixed: ['reviewer'], pool: [] },
-    } as unknown as WorkflowStep];
+    }));
     config.companions = {
       reviewer: {
         name: 'reviewer',
@@ -461,15 +473,14 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       })),
     };
     const config = buildTeamLeaderConfig();
-    const baseStep = config.steps[0]!;
-    config.steps = [{
-      ...baseStep,
+    updateTeamLeaderStep(config, (step) => ({
+      ...step,
       teamLeader: {
-        ...baseStep.teamLeader,
+        ...step.teamLeader,
         maxConcurrency: 1,
       },
       companion: { fixed: ['reviewer'], pool: [] },
-    } as unknown as WorkflowStep];
+    }));
     config.companions = {
       reviewer: {
         name: 'reviewer',
@@ -549,7 +560,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       const workflowPromise = engine.run();
       runPromise = workflowPromise;
       await vi.waitFor(() => expect(workerStreamed).toBe(true), { timeout: 1_000 });
-      await vi.advanceTimersByTimeAsync(250);
+      await vi.advanceTimersByTimeAsync(COMPANION_CHANGE_DEBOUNCE_MS);
       await vi.waitFor(() => expect(reviewOrder).toContain('review-start'), { timeout: 1_000 });
       releaseWorker?.();
 
@@ -567,11 +578,11 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
   it('WorkflowEngineのTeam Leader再入でcompanion poolを実行ごとに再選択する', async () => {
     const config = buildTeamLeaderConfig();
     config.maxSteps = 2;
-    config.steps[0] = {
-      ...config.steps[0],
+    updateTeamLeaderStep(config, (step) => ({
+      ...step,
       companion: { fixed: [], pool: ['reviewer'] },
       rules: [makeRule('repeat', 'implement'), makeRule('done', 'COMPLETE')],
-    } as unknown as WorkflowStep;
+    }));
     config.companions = {
       reviewer: {
         name: 'reviewer',

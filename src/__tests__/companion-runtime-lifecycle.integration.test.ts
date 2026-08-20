@@ -2,7 +2,11 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { NormalAgentWorkflowStep, WorkflowState } from '../core/models/index.js';
+import type {
+  NormalAgentWorkflowStep,
+  TeamLeaderWorkflowStep,
+  WorkflowState,
+} from '../core/models/index.js';
 import type { CompanionDiffReader } from '../core/workflow/companion/diff-reader.js';
 import { buildCompanionMailboxPath } from '../core/workflow/companion/mailbox.js';
 import { CompanionStepRuntime } from '../core/workflow/companion/step-runtime.js';
@@ -59,7 +63,7 @@ function state(): WorkflowState {
 
 function dependencies(
   cwd: string,
-  workflowStep: NormalAgentWorkflowStep,
+  workflowStep: NormalAgentWorkflowStep | TeamLeaderWorkflowStep,
   diffReader: CompanionDiffReader,
   selectorProvider?: { provider: 'mock' },
 ) {
@@ -86,6 +90,20 @@ function dependencies(
     buildProviderCallCallbacks: () => ({ finish: vi.fn() }),
     emitEvent: vi.fn(),
     recordUsage: vi.fn(),
+  };
+}
+
+function teamLeaderStep(): TeamLeaderWorkflowStep {
+  return {
+    name: 'implement',
+    persona: 'coder',
+    personaDisplayName: 'coder',
+    instruction: 'implement',
+    edit: true,
+    passPreviousResponse: true,
+    teamLeader: { maxConcurrency: 1, timeoutMs: 900000 },
+    companion: { fixed: [], pool: ['reviewer'] },
+    rules: [],
   };
 }
 
@@ -190,11 +208,7 @@ describe('companion runtime lifecycle', () => {
     const call = vi.spyOn(CompanionStructuredCaller.prototype, 'call')
       .mockResolvedValueOnce(selectorResponse)
       .mockResolvedValueOnce({ ...selectorResponse, content: 'selected again' });
-    const workflowStep = {
-      ...step([]),
-      teamLeader: { maxConcurrency: 1, timeoutMs: 900000 },
-      companion: { fixed: [], pool: ['reviewer'] },
-    } as unknown as NormalAgentWorkflowStep;
+    const workflowStep = teamLeaderStep();
 
     const firstRuntime = await CompanionStepRuntime.create(
       dependencies(cwd, workflowStep, diffReader, { provider: 'mock' }),
@@ -234,11 +248,7 @@ describe('companion runtime lifecycle', () => {
         structuredOutput: { findings: [], notes: null },
         timestamp: new Date(),
       });
-    const workflowStep = {
-      ...step([]),
-      teamLeader: { maxConcurrency: 1, timeoutMs: 900000 },
-      companion: { fixed: [], pool: ['reviewer'] },
-    } as unknown as NormalAgentWorkflowStep;
+    const workflowStep = teamLeaderStep();
     const runtime = await CompanionStepRuntime.create(
       dependencies(cwd, workflowStep, diffReader, { provider: 'mock' }),
     );

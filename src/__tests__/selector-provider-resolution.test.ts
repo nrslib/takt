@@ -370,13 +370,14 @@ describe('workflow selector resolution', () => {
       maxSteps: 1,
       steps: [{
         name: 'implement',
+        personaDisplayName: 'implement',
         instruction: 'Implement',
         teamLeader: { maxConcurrency: 1, timeoutMs: 900000 },
         dynamicFacets: { pool: 'review', maxSelected: 1 },
         companion: { fixed: [], pool: ['security-reviewer'] },
         rules: [{ condition: 'done', next: 'COMPLETE' }],
       }],
-    } as unknown as WorkflowConfig;
+    };
 
     expect(resolveWorkflowSelectorForProject(workflow, projectDir, {
       companionEnabled: true,

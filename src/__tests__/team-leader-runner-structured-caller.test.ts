@@ -82,6 +82,9 @@ function buildMinimalTeamLeaderState(): WorkflowState {
     userInputs: [],
     personaSessions: new Map(),
     stepIterations: new Map(),
+    restoredStepIterationNames: new Set(),
+    dynamicParallelSelections: new Map(),
+    dynamicFacetSelections: new Map(),
     status: 'running',
   };
 }
@@ -791,21 +794,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         getRunPaths: () => defaultTeamLeaderRunPaths,
         observabilityEnabled: false,
       } as ConstructorParameters<typeof TeamLeaderRunner>[0]);
-      const state: WorkflowState = {
-        workflowName: 'workflow',
-        currentStep: 'implement',
-        iteration: 1,
-        stepOutputs: new Map(),
-        structuredOutputs: new Map(),
-        systemContexts: new Map(),
-        effectResults: new Map(),
-        lastOutput: undefined,
-        previousResponseSourcePath: undefined,
-        userInputs: [],
-        personaSessions: new Map(),
-        stepIterations: new Map(),
-        status: 'running',
-      };
+      const state = buildMinimalTeamLeaderState();
       const step: WorkflowStep = {
         name: 'implement',
         persona: 'coder',
