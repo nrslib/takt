@@ -195,13 +195,14 @@ describe('loop analysis builtin workflow integration', () => {
       requestMoreParts: vi.fn(),
     };
     const reanalysisPrompts: string[] = [];
+    let activeStepName: string | undefined;
     vi.mocked(runAgent).mockImplementation(async (persona, task, options) => {
       options?.onPromptResolved?.({
         systemPrompt: typeof persona === 'string' ? persona : '',
         userInstruction: task,
       });
       const isReportPhase = options?.allowedTools?.length === 0;
-      if (!isReportPhase && task.includes('Revise the preceding proposal set')) {
+      if (!isReportPhase && activeStepName === reanalyzerName) {
         reanalysisPrompts.push(task);
       }
       return agentResponse(
@@ -216,7 +217,10 @@ describe('loop analysis builtin workflow integration', () => {
       reportDirName: 'loop-analysis-feedback-it',
       structuredCaller,
     });
-    engine.on('step:start', (step) => visitedSteps.push(step.name));
+    engine.on('step:start', (step) => {
+      activeStepName = step.name;
+      visitedSteps.push(step.name);
+    });
 
     const state = await engine.run();
 

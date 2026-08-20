@@ -561,11 +561,23 @@ function writePrivateFileAtomically(
 
 export function readRegularFileNoFollow(filePath: string, expectedStat: Stats): Buffer {
   const absolute = resolve(filePath);
-  const descriptor = openSync(absolute, constants.O_RDONLY | NO_FOLLOW_FLAG);
+  let descriptor: number;
+  try {
+    descriptor = openSync(absolute, constants.O_RDONLY | NO_FOLLOW_FLAG);
+  } catch (error) {
+    const currentStat = lstatOrUndefined(absolute);
+    if (currentStat === undefined || !hasMatchingIdentity(expectedStat, currentStat)) {
+      throw new PrivateArtifactPublicationConflictError(
+        `Private artifact file identity changed while opening: ${absolute}`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
   try {
     const openedStat = fstatSync(descriptor);
     if (!openedStat.isFile() || !hasMatchingIdentity(expectedStat, openedStat)) {
-      throw new Error(`File identity changed while opening: ${absolute}`);
+      throw publicationConflict(`Private artifact file identity changed while opening: ${absolute}`);
     }
     return readFileSync(descriptor);
   } finally {
@@ -580,7 +592,14 @@ export function readPrivateFileState(filePath: string): PrivateFileReadSnapshot 
     return { state: { path: absolute, exists: false } };
   }
   const content = readRegularFileNoFollow(absolute, inspection.expectedStat);
-  assertAncestorIdentities(inspection.ancestorIdentities);
+  try {
+    assertAncestorIdentities(inspection.ancestorIdentities);
+  } catch (error) {
+    throw new PrivateArtifactPublicationConflictError(
+      `Private artifact ancestor identity changed while reading: ${absolute}`,
+      { cause: error },
+    );
+  }
   const verifiedStat = lstatOrUndefined(absolute);
   if (verifiedStat === undefined || !hasMatchingIdentity(inspection.expectedStat, verifiedStat)) {
     throw publicationConflict(`Private artifact file identity changed while reading: ${absolute}`);

@@ -240,6 +240,26 @@ describe('loop analysis worker', () => {
     expect(mockCommentLoopAnalysisReportOnPr).not.toHaveBeenCalled();
   });
 
+  it('Given a publication marker is invalid, When it is read, Then the worker fails without retrying it as a publication conflict', async () => {
+    mockReadLoopAnalysisJob.mockReturnValue({
+      ...baseJob,
+      output: 'pr-comment',
+      branch: 'takt/source-run',
+      publicationMarkerPath: '/project/source.publication.json',
+    });
+    mockReadLoopAnalysisPublicationMarker.mockImplementation(() => {
+      throw new Error('Invalid loop analysis publication marker state');
+    });
+
+    await expect(runLoopAnalysisWorker('/project/source.job.json')).rejects.toThrow(
+      'Invalid loop analysis publication marker state',
+    );
+
+    expect(mockReadLoopAnalysisPublicationMarker).toHaveBeenCalledTimes(1);
+    expect(mockAppendLoopAnalysisWorkerFailure).toHaveBeenCalledTimes(1);
+    expect(mockCommentLoopAnalysisReportOnPr).not.toHaveBeenCalled();
+  });
+
   it('Given publication remains pending while the parent stays alive, When the wait bound is reached, Then the worker records a timeout and stops', async () => {
     vi.useFakeTimers();
     mockReadLoopAnalysisJob.mockReturnValue({

@@ -5,8 +5,8 @@
 - Result: `{APPROVE or REVISE}`
 
 ## Source Run
-- Run directory: {absolute source run directory}
-- Artifacts examined: {concrete paths}
+- Run: {run ID or project-relative location}
+- Artifacts examined: {paths relative to the source run directory}
 
 ## Accepted Workflow Improvements
 
@@ -33,4 +33,4 @@
 - Rejection reason: {why it was unsupported, over-specialized, unsafe, redundant, or targeted incorrectly}
 ```
 
-Include every accepted proposal, every required correction, and every proposal rejected during analysis or evaluation. Do not omit rejected proposals when the final accepted set is empty. Use `None` for Required Reanalysis when the result is `APPROVE`.
+Include every accepted proposal, every required correction, and every proposal rejected during analysis or evaluation. Do not omit rejected proposals when the final accepted set is empty. Use `None` for Required Reanalysis when the result is `APPROVE`. Do not include absolute filesystem paths or runner-identifying path components.

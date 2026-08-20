@@ -228,6 +228,8 @@ vi.mock('node:fs', async () => {
 import {
   appendPrivateFile,
   ensurePrivateDirectory,
+  PrivateArtifactPublicationConflictError,
+  readPrivateFileState,
   readRegularFileNoFollow,
   repairPrivateDirectory,
   writeNewPrivateFileWithMode,
@@ -537,6 +539,42 @@ describe('private file artifacts', () => {
     expect(readFileSync(file, 'utf-8')).toBe('original\n');
     expect(injectedFileFailure.descriptor).toBeDefined();
     expect(() => fstatSync(injectedFileFailure.descriptor!)).toThrow();
+  });
+
+  it('should classify a file replacement during a private read as a publication conflict', () => {
+    const root = mkdtempSync(join(TEST_TMPDIR, 'takt-private-read-file-swap-'));
+    roots.push(root);
+    const file = join(root, 'artifact.log');
+    const original = join(root, 'original.log');
+    writeFileSync(file, 'original\n');
+    injectedFileFailure.beforeOpen = () => {
+      renameSync(file, original);
+      writeFileSync(file, 'replacement\n');
+    };
+
+    expect(() => readPrivateFileState(file))
+      .toThrow(PrivateArtifactPublicationConflictError);
+  });
+
+  it('should classify an ancestor replacement during a private read as a publication conflict', () => {
+    const root = mkdtempSync(join(TEST_TMPDIR, 'takt-private-read-ancestor-swap-'));
+    roots.push(root);
+    const logs = join(root, '.takt', 'runs', 'run-1', 'logs');
+    const movedLogs = join(root, 'original-logs');
+    const outsideLogs = join(root, 'outside-logs');
+    mkdirSync(logs, { recursive: true });
+    mkdirSync(outsideLogs);
+    const file = join(logs, 'events.jsonl');
+    const outsideFile = join(outsideLogs, 'events.jsonl');
+    writeFileSync(file, 'original\n');
+    linkSync(file, outsideFile);
+    injectedFileFailure.beforeOpen = () => {
+      renameSync(logs, movedLogs);
+      symlinkSync(outsideLogs, logs, 'dir');
+    };
+
+    expect(() => readPrivateFileState(file))
+      .toThrow(PrivateArtifactPublicationConflictError);
   });
 
   it.each([
