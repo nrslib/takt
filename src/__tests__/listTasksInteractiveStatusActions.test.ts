@@ -261,7 +261,7 @@ describe('listTasks interactive status actions', () => {
   });
 
   describe('failed status action handling', () => {
-    it('failed タスクのアクションに Instruct と PR 作成を表示する', async () => {
+    it('failed タスクのアクションに Instruct を表示しない', async () => {
       mockListAllTaskItems.mockReturnValue([failedTask]);
       mockSelectOption
         .mockResolvedValueOnce('failed:0')
@@ -280,10 +280,6 @@ describe('listTasks interactive status actions', () => {
           label: 'Retry',
           value: 'retry',
           description: expect.stringContaining('conversation'),
-        }),
-        expect.objectContaining({
-          label: 'Instruct',
-          value: 'instruct',
         }),
         expect.objectContaining({
           label: 'Create PR',
@@ -324,7 +320,7 @@ describe('listTasks interactive status actions', () => {
       expect(mockRequeueFailedTask).not.toHaveBeenCalled();
     });
 
-    it('failed instruct 選択時は run の worktree を使う instructBranch を呼ぶ', async () => {
+    it('failed action に Instruct が返っても instructBranch を呼ばない', async () => {
       mockListAllTaskItems.mockReturnValue([failedTask]);
       mockSelectOption
         .mockResolvedValueOnce('failed:0')
@@ -333,11 +329,11 @@ describe('listTasks interactive status actions', () => {
 
       await listTasks('/project');
 
-      expect(mockInstructBranch).toHaveBeenCalledWith('/project', failedTask, undefined);
+      expect(mockInstructBranch).not.toHaveBeenCalled();
       expect(mockCreatePullRequestForTask).not.toHaveBeenCalled();
     });
 
-    it('failed instruct 選択時に branch が無ければ表示して一覧へ戻る', async () => {
+    it('failed action に Instruct が返っても branch 検証をしない', async () => {
       mockListAllTaskItems.mockReturnValue([failedTaskWithoutBranch]);
       mockSelectOption
         .mockResolvedValueOnce('failed:0')
@@ -346,7 +342,6 @@ describe('listTasks interactive status actions', () => {
 
       await listTasks('/project');
 
-      expect(mockInfo).toHaveBeenCalledWith('Branch is missing for failed task: failed-without-branch');
       expect(mockInstructBranch).not.toHaveBeenCalled();
       expect(mockCreatePullRequestForTask).not.toHaveBeenCalled();
     });

@@ -31,9 +31,16 @@ import { resolveConfigValues } from '../../infra/config/index.js';
 import type { InstructModeResult, InstructUIText } from './instructModeTypes.js';
 import { attachImageAttachmentCleanup } from './imageAttachments.js';
 import {
+  buildOrderRevisionPrompt,
+  createOrderRevisionSelector,
+  normalizeOrderRevisionSummary,
+} from './orderRevisionMode.js';
+import { resolveMaxImageIndex } from '../tasks/orderRevision.js';
+import {
   renderPullRequestContext,
   type PullRequestContext,
 } from '../../core/workflow/pr-context.js';
+import { SlashCommand } from '../../shared/constants.js';
 
 /** Failure information for a retry task */
 export interface RetryFailureInfo {
@@ -147,6 +154,7 @@ async function runRetryConversation(
   cwd: string,
   retryContext: RetryContext,
   createSelectAction: RetrySelectActionFactory,
+  reviseOrder: boolean,
 ): Promise<InstructModeResult> {
   const globalConfig = resolveConfigValues(cwd, ['language']);
   const lang = resolveLanguage(globalConfig.language);
@@ -177,8 +185,29 @@ async function runRetryConversation(
       prependSourceContext(ctx.lang, userMessage, sourceContext),
     introMessage: introLabel,
     selectAction: createSelectAction(ui),
+    ...(reviseOrder
+      ? {
+        selectGoAction: createOrderRevisionSelector(),
+        selectRetryAction: async (): Promise<PostSummaryAction> => 'execute',
+        summaryPromptBuilder: (summaryOptions: Parameters<typeof buildOrderRevisionPrompt>[0]) =>
+          buildOrderRevisionPrompt(summaryOptions, retryContext.previousOrderContent ?? retryContext.failure.taskContent),
+        normalizeSummaryTask: (task: string, attachments) => normalizeOrderRevisionSummary(task, attachments),
+        initialImageAttachmentIndex: resolveMaxImageIndex(
+          retryContext.previousOrderContent ?? retryContext.failure.taskContent,
+        ),
+        enabledCommands: [
+          SlashCommand.Go,
+          SlashCommand.Retry,
+          SlashCommand.Replay,
+          SlashCommand.Cancel,
+          SlashCommand.Resume,
+          SlashCommand.PasteImage,
+        ],
+      }
+      : {}),
     previousOrderContent: retryContext.previousOrderContent ?? undefined,
     enableRetryCommand: true,
+    ...(reviseOrder ? { trackResultSource: true } : {}),
   };
 
   const result = await runConversationLoop(cwd, ctx, strategy, retryContext.workflowContext, undefined);
@@ -187,6 +216,7 @@ async function runRetryConversation(
     return attachImageAttachmentCleanup({
       action: 'cancel',
       task: '',
+      ...(result.source ? { source: result.source } : {}),
       ...(result.attachments ? { attachments: result.attachments } : {}),
     }, result.cleanupAttachments);
   }
@@ -194,6 +224,7 @@ async function runRetryConversation(
   return attachImageAttachmentCleanup({
     action: result.action as InstructModeResult['action'],
     task: result.task,
+    ...(result.source ? { source: result.source } : {}),
     ...(result.attachments ? { attachments: result.attachments } : {}),
   }, result.cleanupAttachments);
 }
@@ -202,12 +233,12 @@ export async function runTaskRetryMode(
   cwd: string,
   retryContext: RetryContext,
 ): Promise<InstructModeResult> {
-  return runRetryConversation(cwd, retryContext, createSelectActionWithoutExecute);
+  return runRetryConversation(cwd, retryContext, createSelectActionWithoutExecute, true);
 }
 
 export async function runDirectRetryMode(
   cwd: string,
   retryContext: RetryContext,
 ): Promise<InstructModeResult> {
-  return runRetryConversation(cwd, retryContext, createDirectRetrySelectAction);
+  return runRetryConversation(cwd, retryContext, createDirectRetrySelectAction, false);
 }

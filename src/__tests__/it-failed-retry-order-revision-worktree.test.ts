@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { setMockScenario, resetScenario } from '../infra/mock/index.js';
-import { instructBranch } from '../features/tasks/list/taskInstructionActions.js';
+import { retryFailedTask } from '../features/tasks/list/taskRetryActions.js';
 import { restoreStdin, setupRawStdin, toRawInputs } from './helpers/stdinSimulator.js';
 import {
   invalidateGlobalConfigCache,
@@ -16,7 +16,7 @@ import { TaskRunner } from '../infra/task/index.js';
 vi.mock('../shared/prompt/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   confirm: vi.fn(async () => true),
-  selectOption: vi.fn(async () => 'execute'),
+  selectOption: vi.fn(async (_message: string, options: Array<{ value: string }>) => options[0]?.value ?? null),
 }));
 
 function git(cwd: string, args: string[]): string {
@@ -33,7 +33,7 @@ function createProject(): {
   projectDir: string;
   worktreePath: string;
 } {
-  const root = join(tmpdir(), `takt-failed-instruct-${randomUUID()}`);
+  const root = join(tmpdir(), `takt-failed-retry-${randomUUID()}`);
   const projectDir = join(root, 'project');
   const worktreePath = join(projectDir, '.takt', 'worktrees', 'failed-task');
   const configDir = process.env.TAKT_CONFIG_DIR;
@@ -52,8 +52,8 @@ function createProject(): {
     '!.takt/workflows/',
     '!.takt/workflows/**',
   ].join('\n') + '\n', 'utf-8');
-  writeFileSync(join(projectDir, '.takt', 'workflows', 'failed-instruct-it.yaml'), [
-    'name: failed-instruct-it',
+  writeFileSync(join(projectDir, '.takt', 'workflows', 'failed-retry-it.yaml'), [
+    'name: failed-retry-it',
     'initial_step: fix',
     'max_steps: 2',
     'steps:',
@@ -82,7 +82,7 @@ function createProject(): {
   return { root, projectDir, worktreePath };
 }
 
-describe('IT: failed instruct re-execution terminal worktree', () => {
+describe('IT: failed retry order revision re-execution terminal worktree', () => {
   let environment: ReturnType<typeof createProject>;
 
   beforeEach(() => {
@@ -100,11 +100,11 @@ describe('IT: failed instruct re-execution terminal worktree', () => {
     }
   });
 
-  it('provider実行後の新run reportをfailed taskと同じworktreeへ保存する', async () => {
-    expect(loadWorkflowByIdentifier('failed-instruct-it', environment.projectDir)).not.toBeNull();
+  it('failed Retryの/go→Yes後に新run reportを同じworktreeへ保存する', async () => {
+    expect(loadWorkflowByIdentifier('failed-retry-it', environment.projectDir)).not.toBeNull();
     const runner = new TaskRunner(environment.projectDir);
-    runner.addTask('failed instruct terminal task', {
-      workflow: 'failed-instruct-it',
+    runner.addTask('failed retry terminal task', {
+      workflow: 'failed-retry-it',
       worktree: true,
       branch: 'takt/failed-task',
       worktree_path: environment.worktreePath,
@@ -131,8 +131,8 @@ describe('IT: failed instruct re-execution terminal worktree', () => {
     mkdirSync(join(sourceRunDir, 'reports'), { recursive: true });
     mkdirSync(join(sourceRunDir, 'context'), { recursive: true });
     writeFileSync(join(sourceRunDir, 'meta.json'), JSON.stringify({
-      task: 'failed instruct terminal task',
-      workflow: 'failed-instruct-it',
+      task: 'failed retry terminal task',
+      workflow: 'failed-retry-it',
       status: 'failed',
       runSlug: failedRunSlug,
       runRoot: `.takt/runs/${failedRunSlug}`,
@@ -145,12 +145,12 @@ describe('IT: failed instruct re-execution terminal worktree', () => {
 
     setupRawStdin(toRawInputs(['apply the repair', '/go']));
     setMockScenario([
-      { persona: 'instruct', content: 'I will apply the repair.' },
-      { persona: 'instruct', content: 'Apply the proposed repair.' },
+      { persona: 'retry', content: 'I will apply the repair.' },
+      { persona: 'retry', content: 'Apply the proposed repair.' },
       { persona: 'fixer', status: 'done', content: '[FIX:1]\nre-execution complete' },
     ]);
     const failedTask = runner.listAllTaskItems()[0]!;
-    const success = await instructBranch(environment.projectDir, failedTask);
+    const success = await retryFailedTask(failedTask, environment.projectDir);
 
     const finalTask = runner.listAllTaskItems()[0]!;
     expect(success).toBe(true);

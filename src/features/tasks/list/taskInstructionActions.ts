@@ -1,18 +1,17 @@
 /**
- * Instruction actions for completed/failed tasks.
+ * Instruction actions for completed and PR-failed tasks.
  *
  * Uses the existing worktree (clone) for conversation and direct re-execution.
  * The worktree is preserved after initial execution, so no clone creation is needed.
  */
 
-import * as fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import {
   TaskRunner,
   detectDefaultBranch,
 } from '../../../infra/task/index.js';
 import { resolveWorkflowConfigValues, getWorkflowDescription } from '../../../infra/config/index.js';
-import { info, warn, error as logError } from '../../../shared/ui/index.js';
+import { info, warn } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { runInstructMode } from './instructMode.js';
 import { dispatchConversationAction } from '../../interactive/actionDispatcher.js';
@@ -21,12 +20,9 @@ import { cleanupInteractiveResultAttachments } from '../../interactive/imageAtta
 import {
   resolveLanguage,
   findRunForTask,
-  findPreviousOrderContent,
-  loadRunSessionContext,
 } from '../../interactive/index.js';
 import { type BranchActionTarget, resolveTargetBranch } from './taskActionTarget.js';
 import {
-  appendRetryNote,
   DEPRECATED_PROVIDER_CONFIG_WARNING,
   hasDeprecatedProviderConfig,
   resolveSelectedWorkflowOverride,
@@ -36,13 +32,14 @@ import {
 import { executeAndCompleteTask } from '../execute/taskExecution.js';
 import { prepareTaskForExecution } from './prepareTaskForExecution.js';
 import {
-  cleanupPreparedRetryTaskSpec,
-  prepareRetryTaskSpecWithAttachments,
-} from '../retryTaskSpecAttachments.js';
+  cleanupPersistedTaskOrderRevision,
+  persistTaskOrderRevision,
+  resolveTaskOrderContent,
+  type PersistedTaskOrderRevision,
+} from '../orderRevision.js';
 import { resolveTaskPullRequestWorktreeContext } from '../pullRequestWorktreeContext.js';
 import type { TaskExecutionOptions } from '../execute/types.js';
-import { collectTaskWorktreeSummary } from './taskWorktreeSummary.js';
-import { formatRunReportSummary, summarizeRunReports } from './runReportSummary.js';
+import { assertReusableWorktreePath } from '../execute/reusedWorktree.js';
 
 const log = createLogger('list-tasks');
 
@@ -124,22 +121,26 @@ export async function instructBranch(
   if (!('kind' in target)) {
     throw new Error('Instruct requeue requires a task target.');
   }
-
-  if (!target.worktreePath || !fs.existsSync(target.worktreePath)) {
-    logError(`Worktree directory does not exist for task: ${target.name}`);
-    return false;
+  if (target.kind === 'failed') {
+    throw new Error('Failed tasks do not support Instruct; use Retry instead.');
   }
+
+  if (!target.worktreePath) {
+    throw new Error(`Worktree path is not set for task: ${target.name}`);
+  }
+  assertReusableWorktreePath(projectDir, target.worktreePath);
   const worktreePath = target.worktreePath;
+  const previousOrderContent = resolveTaskOrderContent(
+    projectDir,
+    target.taskDir,
+    target.data?.task ?? target.content,
+  );
 
   const branch = resolveTargetBranch(target);
 
   const globalConfig = resolveWorkflowConfigValues(projectDir, ['interactivePreviewSteps', 'language']);
   const lang = resolveLanguage(globalConfig.language);
-  const isFailedTask = target.kind === 'failed';
-  const matchedSlug = isFailedTask
-    ? target.runSlug
-      ?? (target.data?.task === undefined ? null : findRunForTask(worktreePath, target.data.task))
-    : findRunForTask(worktreePath, target.content);
+  const matchedSlug = target.runSlug ?? findRunForTask(worktreePath, target.content);
   const selectedWorkflow = await selectWorkflowWithOptionalReuse(projectDir, target.data?.workflow, worktreePath, lang);
   if (!selectedWorkflow) {
     info('Cancelled');
@@ -161,12 +162,7 @@ export async function instructBranch(
   };
 
   // Runs data lives in the worktree (written during previous execution)
-  const runSessionContext = isFailedTask
-    ? (matchedSlug ? loadRunSessionContext(worktreePath, matchedSlug) : undefined)
-    : await selectRunSessionContext(worktreePath, lang);
-  const previousOrderContent = isFailedTask && matchedSlug === null
-    ? null
-    : findPreviousOrderContent(worktreePath, matchedSlug);
+  const runSessionContext = await selectRunSessionContext(worktreePath, lang);
   if (hasDeprecatedProviderConfig(previousOrderContent)) {
     warn(DEPRECATED_PROVIDER_CONFIG_WARNING);
   }
@@ -194,18 +190,6 @@ export async function instructBranch(
     baseBranch,
   );
 
-  const failedContext = isFailedTask
-    ? {
-      reportSummary: runSessionContext
-        ? (() => {
-          const summary = summarizeRunReports(runSessionContext.reports);
-          return summary ? formatRunReportSummary(summary) : '';
-        })()
-        : '',
-      worktreeSummary: collectTaskWorktreeSummary(worktreePath, baseBranch, branch).text,
-    }
-    : undefined;
-
   const result = await runInstructMode({
     cwd: worktreePath,
     branchContext,
@@ -216,21 +200,31 @@ export async function instructBranch(
     workflowContext,
     runSessionContext,
     previousOrderContent,
-    ...(failedContext === undefined ? {} : { failedContext }),
     ...(prContext === undefined ? {} : { prContext }),
   });
 
-  const executeWithInstruction = async (instruction: string): Promise<boolean> => {
-    const retryNote = appendRetryNote(target.data?.retry_note, instruction);
-    const preparedSpec = prepareRetryTaskSpecWithAttachments(projectDir, target.content, retryNote, result.attachments, target.taskDir);
-    const executionRetryNote = preparedSpec ? preparedSpec.retryNote : retryNote;
-    const taskDir = preparedSpec?.taskDirRelative;
-    const runner = new TaskRunner(projectDir);
+  const executeWithInstruction = async (): Promise<boolean> => {
+    let revision: PersistedTaskOrderRevision | undefined;
     let taskInfo: ReturnType<TaskRunner['startReExecution']>;
+    const runner = new TaskRunner(projectDir);
     try {
+      assertReusableWorktreePath(projectDir, worktreePath);
+      if (result.source === 'go') {
+        revision = persistTaskOrderRevision(
+          projectDir,
+          target.taskDir,
+          result.task,
+          result.attachments,
+        );
+      }
+      const taskDir = revision?.taskDirRelative ?? target.taskDir;
+      const executionRetryNote = result.source === 'go'
+        ? undefined
+        : target.data?.retry_note;
+      assertReusableWorktreePath(projectDir, worktreePath);
       taskInfo = runner.startReExecution(
         target.name,
-        ['completed', 'failed'],
+        ['completed', 'pr_failed'],
         'instruct',
         {
           startStep: undefined,
@@ -243,7 +237,7 @@ export async function instructBranch(
         },
       );
     } catch (error) {
-      cleanupPreparedRetryTaskSpec(preparedSpec);
+      cleanupPersistedTaskOrderRevision(revision);
       throw error;
     }
     const taskForExecution = prepareTaskForExecution(taskInfo, selectedWorkflow);
@@ -264,17 +258,28 @@ export async function instructBranch(
         info('Cancelled');
         return false;
       },
-      execute: async ({ task }) => executeWithInstruction(task),
-      save_task: async ({ task }) => {
-        const retryNote = appendRetryNote(target.data?.retry_note, task);
-        const preparedSpec = prepareRetryTaskSpecWithAttachments(projectDir, target.content, retryNote, result.attachments, target.taskDir);
-        const executionRetryNote = preparedSpec ? preparedSpec.retryNote : retryNote;
-        const taskDir = preparedSpec?.taskDirRelative;
+      execute: async () => executeWithInstruction(),
+      save_task: async () => {
+        let revision: PersistedTaskOrderRevision | undefined;
         const runner = new TaskRunner(projectDir);
         try {
+          assertReusableWorktreePath(projectDir, worktreePath);
+          if (result.source === 'go') {
+            revision = persistTaskOrderRevision(
+              projectDir,
+              target.taskDir,
+              result.task,
+              result.attachments,
+            );
+          }
+          const taskDir = revision?.taskDirRelative ?? target.taskDir;
+          const executionRetryNote = result.source === 'go'
+            ? undefined
+            : target.data?.retry_note;
+          assertReusableWorktreePath(projectDir, worktreePath);
           runner.requeueTask(
             target.name,
-            ['completed', 'failed'],
+            ['completed', 'pr_failed'],
             {
               startStep: undefined,
               retryNote: executionRetryNote,
@@ -286,7 +291,7 @@ export async function instructBranch(
             },
           );
         } catch (error) {
-          cleanupPreparedRetryTaskSpec(preparedSpec);
+          cleanupPersistedTaskOrderRevision(revision);
           throw error;
         }
         info(`Task "${target.name}" has been requeued.`);

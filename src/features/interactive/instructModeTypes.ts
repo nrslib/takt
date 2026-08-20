@@ -6,6 +6,7 @@ export interface InstructModeResult extends ImageAttachmentCleanupOwner {
   action: InstructModeAction;
   task: string;
   attachments?: InteractiveImageAttachment[];
+  source?: 'go' | 'retry' | 'replay' | 'accept' | 'play';
 }
 
 export interface InstructUIText {

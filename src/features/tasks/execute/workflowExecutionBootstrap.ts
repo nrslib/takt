@@ -382,7 +382,13 @@ export async function createWorkflowExecutionBootstrap(
         handlerRef.current(event);
       };
 
-  const isRetry = Boolean(options.startStep || options.retryNote || options.resumePoint || options.restartPoint);
+  const isRetry = Boolean(
+    options.resumeSource?.resumeMode
+      || options.startStep
+      || options.retryNote
+      || options.resumePoint
+      || options.restartPoint,
+  );
   const shouldLoadSavedSessions = isRetry && options.restartPoint === undefined;
   const isWorktree = cwd !== projectCwd;
   log.debug('Session mode', { isRetry, isWorktree });

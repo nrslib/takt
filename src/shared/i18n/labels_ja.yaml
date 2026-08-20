@@ -237,6 +237,14 @@ retry:
     intro: "リトライモード - 追加指示を入力してください。コマンド: /go（指示書作成・実行）, /retry（前回の指示書で再実行）, /cancel（終了）"
   usePreviousWorkflowConfirm: "前回のワークフロー \"{workflow}\" を使用しますか？"
 
+orderRevision:
+  ui:
+    proposed: "新しい order.md 案:"
+    actionPrompt: "この指示書で置き換えますか？"
+    actions:
+      approve: "Yes（保存して実行）"
+      reject: "No（会話に戻る）"
+
 run:
   notifyComplete: "run完了 ({total} tasks)"
   notifyAbort: "runはエラー終了 ({failed})"
