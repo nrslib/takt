@@ -8,7 +8,7 @@
 import chalk from 'chalk';
 import type { StreamEvent, StreamCallback } from '../types/provider.js';
 import { truncate } from './LogManager.js';
-import { stripAnsi } from '../utils/text.js';
+import { sanitizeTerminalText, stripAnsi } from '../utils/text.js';
 
 /** Progress information for stream display */
 type ProgressMaxSteps = number | 'infinite';
@@ -238,7 +238,7 @@ export class StreamDisplay {
     } else {
       console.log(chalk.red('✗ Failed'));
       if (error) {
-        console.log(chalk.red(`  ${stripAnsi(error)}`));
+        console.log(chalk.red(`  ${sanitizeTerminalText(error)}`));
       }
     }
   }

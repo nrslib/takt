@@ -11,6 +11,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  buildRateLimitInfo,
   containsRateLimitError,
   containsRateLimitMarker,
   resolveRateLimitTextSource,
@@ -28,6 +29,9 @@ describe('containsRateLimitError', () => {
     'The report says too many requests should trigger fallback only on provider errors.',
     "You're out of extra usage. Please retry later.",
     'usage_limit_exceeded',
+    "You've hit your weekly limit · resets Aug 16 at 1am (Asia/Tokyo)",
+    "You've hit your 5-hour limit · resets Aug 16 at 1am (Asia/Tokyo)",
+    "You've hit your session limit · resets Aug 16 at 1am (Asia/Tokyo)",
   ])('error text %j is detected as a rate limit error', (text) => {
     expect(containsRateLimitError(text)).toBe(true);
   });
@@ -40,6 +44,7 @@ describe('containsRateLimitError', () => {
     'Fixed 429 handling in tests',
     'The cache resets 5:00 after the scheduled maintenance window.',
     'rate limit',
+    'The documentation mentions a weekly limit.',
   ])('ordinary text %j is not detected as a rate limit error', (text) => {
     expect(containsRateLimitError(text)).toBe(false);
   });
@@ -47,6 +52,14 @@ describe('containsRateLimitError', () => {
   it('returns false for undefined and empty text', () => {
     expect(containsRateLimitError(undefined)).toBe(false);
     expect(containsRateLimitError('')).toBe(false);
+  });
+
+  it('preserves the reset expression from a subscription limit message', () => {
+    const text = "You've hit your weekly limit · resets Aug 16 at 1am (Asia/Tokyo)";
+
+    const info = buildRateLimitInfo('claude', 'error_text', text);
+
+    expect(info.resetAtRaw).toBe('Aug 16 at 1am (Asia/Tokyo)');
   });
 });
 

@@ -1061,7 +1061,12 @@ export class StepExecutor {
     fallbackContext?: FallbackContext,
     transaction?: InstructionBuildTransaction,
   ): string {
-    this.ensurePreviousResponseSnapshot(state, step.name, stepIteration, transaction);
+    const suppressPreviousResponse = state.pendingFallback !== undefined
+      && (state.lastOutput?.status === 'error' || state.lastOutput?.status === 'rate_limited');
+    const includePreviousResponse = !suppressPreviousResponse;
+    if (includePreviousResponse) {
+      this.ensurePreviousResponseSnapshot(state, step.name, stepIteration, transaction);
+    }
     const policySnapshot = this.writeFacetSnapshot(
       'policy',
       step.name,
@@ -1093,7 +1098,7 @@ export class StepExecutor {
       cwd: this.deps.getCwd(),
       projectCwd: this.deps.getProjectCwd(),
       userInputs: state.userInputs,
-      previousOutput: getPreviousOutput(state),
+      previousOutput: includePreviousResponse ? getPreviousOutput(state) : undefined,
       reportDir,
       reportsRootDir,
       resumeReportConsumerKey,
@@ -1115,7 +1120,9 @@ export class StepExecutor {
         ? knowledgeSnapshot.content.map((content) => ({ content, sourcePath: knowledgeSnapshot.sourcePath }))
         : step.knowledgeContents,
       knowledgeSourcePath: knowledgeSnapshot?.sourcePath,
-      previousResponseSourcePath: state.previousResponseSourcePath,
+      previousResponseSourcePath: includePreviousResponse
+        ? state.previousResponseSourcePath
+        : undefined,
       fallbackContext,
       workflowState: state,
       ...(step.engineSynthesized === true ? {} : { workflowRules: this.deps.getWorkflowRules() }),
