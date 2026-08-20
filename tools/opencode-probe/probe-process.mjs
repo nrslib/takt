@@ -149,6 +149,7 @@ export function runProbeProcess(script, args, options) {
       reportSettlementScheduled = true;
       reportSettlementId = setTimeout(() => {
         if (settled || protocolFailure !== undefined) return;
+        if (exitObserved && typeof exitCode === 'number' && exitCode !== 0) return;
         terminate();
         settleSuccess();
       }, PROBE_REPORT_FLUSH_GRACE_MS);
@@ -234,6 +235,8 @@ export function runProbeProcess(script, args, options) {
     });
 
     let spawnError;
+    let exitObserved = false;
+    let exitCode;
     child.once('error', (error) => {
       spawnError = error;
       if (child.pid === undefined) {
@@ -241,6 +244,10 @@ export function runProbeProcess(script, args, options) {
         error.stderr = stderr;
         settleFailure(error);
       }
+    });
+    child.once('exit', (code) => {
+      exitObserved = true;
+      exitCode = code;
     });
     schedulePhaseTimeout();
     child.once('close', async (code, signal) => {

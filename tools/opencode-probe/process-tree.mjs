@@ -92,13 +92,13 @@ async function terminateWindowsProcessTreeInternal(pid, executeFile) {
   const failures = [];
   const snapshot = await listWindowsProcesses(executeFile, deadline);
   if (snapshot.status === 'deadline') {
-    failures.push('WMI process snapshot deadline exceeded');
+    recordFailure(failures, 'WMI process snapshot deadline exceeded');
     const taskkill = await taskkillBestEffort(pid, executeFile, deadline, true);
     recordCommandFailure(failures, 'taskkill root', taskkill);
     throw createWindowsProcessTreeError(pid, [], true, failures);
   }
   if (snapshot.status === 'unavailable') {
-    failures.push(formatUnavailable('WMI process snapshot', snapshot.error));
+    recordFailure(failures, formatUnavailable('WMI process snapshot', snapshot.error));
     const taskkill = await taskkillBestEffort(pid, executeFile, deadline, true);
     recordCommandFailure(failures, 'taskkill root', taskkill);
     throw createWindowsProcessTreeError(pid, [], false, failures);
@@ -111,16 +111,16 @@ async function terminateWindowsProcessTreeInternal(pid, executeFile) {
   const descendants = processTree.filter((processInfo) => processInfo.pid !== pid).reverse();
   for (const descendant of descendants) {
     if (Date.now() >= deadline) {
-      failures.push('descendant cleanup deadline exceeded');
+      recordFailure(failures, 'descendant cleanup deadline exceeded');
       break;
     }
     const identity = await hasMatchingCreationDate(descendant, executeFile, deadline);
     if (identity.status === 'deadline') {
-      failures.push(`WMI identity query for ${descendant.pid} deadline exceeded`);
+      recordFailure(failures, `WMI identity query for ${descendant.pid} deadline exceeded`);
       break;
     }
     if (identity.status === 'unavailable') {
-      failures.push(formatUnavailable(`WMI identity query for ${descendant.pid}`, identity.error));
+      recordFailure(failures, formatUnavailable(`WMI identity query for ${descendant.pid}`, identity.error));
     }
     if (identity.status === 'available' && !identity.matches) {
       continue;
@@ -131,16 +131,20 @@ async function terminateWindowsProcessTreeInternal(pid, executeFile) {
 
   const remaining = await waitForWindowsProcessTreeExit(processTree, executeFile, deadline);
   if (remaining.status === 'unavailable') {
-    failures.push(formatUnavailable('WMI final process query', remaining.error));
+    recordFailure(failures, formatUnavailable('WMI final process query', remaining.error));
   } else if (remaining.status === 'deadline') {
-    failures.push('WMI final process query deadline exceeded');
+    recordFailure(failures, 'WMI final process query deadline exceeded');
   }
-  if (remaining.status === 'deadline' || failures.length > 0 || remaining.processes.length > 0) {
+  const processTreeGone = remaining.status === 'complete' && remaining.processes.length === 0;
+  const effectiveFailures = processTreeGone
+    ? failures.filter(({ ignoreWhenProcessAbsent }) => !ignoreWhenProcessAbsent)
+    : failures;
+  if (remaining.status === 'deadline' || effectiveFailures.length > 0 || remaining.processes.length > 0) {
     throw createWindowsProcessTreeError(
       pid,
       remaining.status === 'complete' ? [] : remaining.processes,
       remaining.status === 'deadline',
-      failures,
+      effectiveFailures,
     );
   }
 }
@@ -287,10 +291,26 @@ async function executeWindowsCommand(executeFile, file, args, deadline, forceAft
 
 function recordCommandFailure(failures, label, result) {
   if (result.status === 'failed') {
-    failures.push(`${label} failed: ${formatError(result.error)}`);
+    recordFailure(
+      failures,
+      `${label} failed: ${formatError(result.error)}`,
+      label.startsWith('taskkill ') && isWindowsProcessNotFoundError(result.error),
+    );
   } else if (result.status === 'deadline') {
-    failures.push(`${label} deadline exceeded`);
+    recordFailure(failures, `${label} deadline exceeded`);
   }
+}
+
+function recordFailure(failures, detail, ignoreWhenProcessAbsent = false) {
+  failures.push({ detail, ignoreWhenProcessAbsent });
+}
+
+function isWindowsProcessNotFoundError(error) {
+  const details = [
+    formatError(error),
+    typeof error?.stderr === 'string' ? error.stderr : '',
+  ].join('\n');
+  return /\bnot found\b/i.test(details) || /\bno running instance\b/i.test(details);
 }
 
 function formatUnavailable(label, error) {
@@ -303,7 +323,7 @@ function formatError(error) {
 
 function createWindowsProcessTreeError(pid, processes, deadlineExceeded, failures) {
   const retained = processes.map(({ pid: processId }) => processId).join(', ');
-  const details = failures.join('; ');
+  const details = failures.map(({ detail }) => detail).join('; ');
   if (retained.length > 0) {
     const suffix = deadlineExceeded ? ' (cleanup deadline exceeded)' : '';
     return new Error(

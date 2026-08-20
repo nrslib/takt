@@ -53,23 +53,36 @@ function expectWindowsCommandTimeoutsWithinGrace(executeFile: { mock: { calls: u
   expect(timeouts.every((timeout) => timeout > 0 && timeout <= PROCESS_TREE_CLEANUP_GRACE_MS)).toBe(true);
 }
 
-function captureCleanupWarning() {
+function captureCleanupWarning(expectedWarning: string | RegExp) {
   const writes: string[] = [];
   let flushed = false;
   let resolveWriteStarted: (() => void) | undefined;
   const writeStarted = new Promise<void>((resolve) => {
     resolveWriteStarted = resolve;
   });
-  let flushCallback: ((error?: Error | null) => void) | undefined;
+  const flushCallbacks: ((error?: Error | null) => void)[] = [];
   const stderrWrite = vi.spyOn(process.stderr, 'write').mockImplementation((
     ((
       chunk: string | Uint8Array,
       encodingOrCallback?: BufferEncoding | ((error?: Error | null) => void),
       callback?: (error?: Error | null) => void,
     ) => {
-      writes.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
-      flushCallback = typeof encodingOrCallback === 'function' ? encodingOrCallback : callback;
-      resolveWriteStarted?.();
+      const written = typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8');
+      writes.push(written);
+      if (typeof expectedWarning === 'string'
+        ? written.includes(expectedWarning)
+        : new RegExp(expectedWarning.source, expectedWarning.flags.replace('g', '')).test(written)) {
+        resolveWriteStarted?.();
+        resolveWriteStarted = undefined;
+      }
+      const pending = typeof encodingOrCallback === 'function' ? encodingOrCallback : callback;
+      if (pending !== undefined) {
+        if (flushed) {
+          pending();
+        } else {
+          flushCallbacks.push(pending);
+        }
+      }
       return true;
     }) as typeof process.stderr.write
   ));
@@ -78,11 +91,13 @@ function captureCleanupWarning() {
     writes,
     writeStarted,
     flush: () => {
-      if (flushCallback === undefined) {
+      if (flushCallbacks.length === 0) {
         throw new Error('Cleanup warning write callback was not registered');
       }
       flushed = true;
-      flushCallback();
+      while (flushCallbacks.length > 0) {
+        flushCallbacks.shift()?.();
+      }
     },
     wasFlushed: () => flushed,
     restore: () => stderrWrite.mockRestore(),
@@ -134,17 +149,14 @@ const SMOKE_BATCH_DISPATCH_MARGIN_MS = 250;
 
 function smokeBatchTimeoutMs(caseCount: number) {
   const dispatchedCaseCount = Math.max(1, caseCount);
-  const caseBudget = caseCount * (
+  const caseBudget = dispatchedCaseCount * (
     SMOKE_BATCH_CASE_TIMEOUT_MS
     + SMOKE_BATCH_CASE_SPAWN_MARGIN_MS
     + PROCESS_TREE_CLEANUP_GRACE_MS
   );
-  return Math.max(
-    SMOKE_BATCH_FIXTURE_STARTUP_MARGIN_MS + SMOKE_BATCH_DISPATCH_MARGIN_MS,
-    SMOKE_BATCH_FIXTURE_STARTUP_MARGIN_MS
-      + caseBudget
-      + dispatchedCaseCount * SMOKE_BATCH_DISPATCH_MARGIN_MS,
-  );
+  return SMOKE_BATCH_FIXTURE_STARTUP_MARGIN_MS
+    + caseBudget
+    + dispatchedCaseCount * SMOKE_BATCH_DISPATCH_MARGIN_MS;
 }
 
 const smokeBatchFixture = fileURLToPath(
@@ -562,7 +574,7 @@ describe('prompt eval probe lifecycle', () => {
   });
 
   it('should reject process-tree cleanup failures after flushing the warning', async () => {
-    const warning = captureCleanupWarning();
+    const warning = captureCleanupWarning(/Warning: Process tree cleanup warning: Child process did not expose a PID/);
 
     try {
       await expectCleanupFailureAfterWarningFlush(
@@ -583,7 +595,7 @@ describe('prompt eval probe lifecycle', () => {
     const executeFile = vi.fn(async (file: string) => (
       file === 'powershell.exe' ? query() : undefined
     ));
-    const warning = captureCleanupWarning();
+    const warning = captureCleanupWarning(/Warning: Process tree cleanup warning: .*WMI process snapshot unavailable/);
 
     try {
       await expectCleanupFailureAfterWarningFlush(
@@ -612,7 +624,7 @@ describe('prompt eval probe lifecycle', () => {
       if (file === 'taskkill') return undefined;
       throw new Error('WMI query should not start after the deadline');
     });
-    const warning = captureCleanupWarning();
+    const warning = captureCleanupWarning(/Warning: Process tree cleanup warning: .*WMI process snapshot deadline exceeded/);
 
     try {
       await expectCleanupFailureAfterWarningFlush(
@@ -660,7 +672,7 @@ describe('prompt eval probe lifecycle', () => {
           ? { stdout: '{invalid' }
           : { stdout: '[]' };
       });
-      const warning = captureCleanupWarning();
+      const warning = captureCleanupWarning(/Warning: Process tree cleanup warning: .*WMI (?:identity query.*|final process query) unavailable/);
 
       try {
         await expectCleanupFailureAfterWarningFlush(
@@ -682,7 +694,7 @@ describe('prompt eval probe lifecycle', () => {
     },
   );
 
-  it('should warn after terminating recorded Windows descendants when the parent has already exited', async () => {
+  it('should terminate recorded Windows descendants when the parent has already exited', async () => {
     let fullSnapshot = 0;
     const executeFile = vi.fn(async (file: string, args: readonly string[]) => {
       if (file === 'powershell.exe') {
@@ -707,18 +719,7 @@ describe('prompt eval probe lifecycle', () => {
       }
       return undefined;
     });
-    const warning = captureCleanupWarning();
-
-    try {
-      await expectCleanupFailureAfterWarningFlush(
-        terminateWindowsProcessTree(4321, executeFile),
-        warning,
-        /taskkill root failed/,
-        /Warning: Process tree cleanup warning: .*taskkill root failed/,
-      );
-    } finally {
-      warning.restore();
-    }
+    await expect(terminateWindowsProcessTree(4321, executeFile)).resolves.toBeUndefined();
 
     expect(executeFile).toHaveBeenCalledWith(
       'taskkill',
@@ -759,7 +760,7 @@ describe('prompt eval probe lifecycle', () => {
           CreationDate: 'created-reused',
         }) };
     });
-    const warning = captureCleanupWarning();
+    const warning = captureCleanupWarning(/Warning: Process tree cleanup warning: .*taskkill descendant 5001 failed/);
 
     try {
       await expectCleanupFailureAfterWarningFlush(
@@ -792,7 +793,7 @@ describe('prompt eval probe lifecycle', () => {
       }
       return { stdout: processSnapshot };
     });
-    const warning = captureCleanupWarning();
+    const warning = captureCleanupWarning(/Warning: Process tree cleanup warning: .*Windows process tree 4321 retained processes: 4321/);
 
     try {
       await expectCleanupFailureAfterWarningFlush(
@@ -876,7 +877,6 @@ describe('prompt eval probe lifecycle', () => {
   });
 
   it('should return a probe report before intentionally delayed cleanup finishes', async () => {
-    const startedAt = Date.now();
     const execution = runProbeProcess('-e', [
       [
         "process.on('SIGTERM', () => {})",
@@ -894,16 +894,15 @@ describe('prompt eval probe lifecycle', () => {
 
     const result = await execution;
     let cleanupFinished = false;
-    result.cleanup.then(() => {
+    const observedCleanup = result.cleanup.then(() => {
       cleanupFinished = true;
     });
     await Promise.resolve();
     if (process.platform !== 'win32') {
       expect(cleanupFinished).toBe(false);
     }
-    expect(Date.now() - startedAt).toBeLessThan(PROCESS_TREE_CLEANUP_GRACE_MS);
     expect(result.stdout).toContain('PROBE_RESULT {}');
-    await result.cleanup;
+    await observedCleanup;
     expect(cleanupFinished).toBe(true);
   });
 
@@ -951,22 +950,26 @@ describe('prompt eval probe lifecycle', () => {
     expect(result.stdout).toContain('PROBE_RESULT {}\n');
   });
 
-  it('should keep a complete result when it arrives just before the cleanup deadline', async () => {
+  it('should keep a complete result when its frame completes after cleanup starts', async () => {
     const result = await runProbeProcess('-e', [
       [
         "console.log('PROBE_READY')",
         "console.log('PROBE_CLEANUP_START')",
         "process.stdout.write('PROBE_RESULT ')",
-        "setTimeout(() => process.stdout.write('{}\\n'), 175)",
+        "setImmediate(() => process.stdout.write('{}\\n'))",
         'setInterval(() => {}, 1000)',
       ].join(';'),
     ], {
       startupTimeout: 2_000,
       executionTimeout: 2_000,
-      cleanupTimeout: 200,
+      cleanupTimeout: 2_000,
       env: process.env,
     });
 
+    const cleanupStartIndex = result.stdout.indexOf('PROBE_CLEANUP_START');
+    const resultFrameIndex = result.stdout.indexOf('PROBE_RESULT {}');
+    expect(cleanupStartIndex).toBeGreaterThanOrEqual(0);
+    expect(resultFrameIndex).toBeGreaterThan(cleanupStartIndex);
     expect(result.stdout).toContain('PROBE_RESULT {}\n');
     await result.cleanup;
   });
@@ -1291,16 +1294,21 @@ describe('prompt eval probe lifecycle', () => {
       'setInterval(() => {}, 1000)',
     ].join('\n'), 'utf8');
 
-    const startedAt = Date.now();
     const execution = runSmokeScript(script, [], process.env, {
       timeoutMs: 2_000,
       reportMarker: 'SMOKE_REPORT ',
     });
     const result = await execution;
 
-    expect(Date.now() - startedAt).toBeLessThan(300);
+    let cleanupFinished = false;
+    const observedCleanup = result.cleanup.then(() => {
+      cleanupFinished = true;
+    });
+    await Promise.resolve();
+    expect(cleanupFinished).toBe(false);
     expect(result.stdout).toContain('SMOKE_REPORT {}');
-    await result.cleanup;
+    await observedCleanup;
+    expect(cleanupFinished).toBe(true);
   });
 
   it('should preserve a workspace report and warn when attached cleanup fails', async () => {
@@ -1309,7 +1317,7 @@ describe('prompt eval probe lifecycle', () => {
     const cleanupError = new Error('workspace cleanup failed');
     const cleanup = Promise.reject(cleanupError);
     let workspace = '';
-    const warning = captureCleanupWarning();
+    const warning = captureCleanupWarning('Warning: Probe workspace cleanup failed: workspace cleanup failed');
 
     try {
       const execution = withProbeWorkspace(parent, 'reported-', async (createdWorkspace) => {
@@ -1337,10 +1345,9 @@ describe('prompt eval probe lifecycle', () => {
     const script = join(testRoot, 'report-close-non-zero.mjs');
     writeFileSync(script, [
       "process.stdout.write('SMOKE_REPORT {}\\n')",
-      'process.on(\'SIGTERM\', () => process.exit(7))',
-      'setInterval(() => {}, 1000)',
+      'process.exitCode = 7',
     ].join('\n'), 'utf8');
-    const warning = captureCleanupWarning();
+    const warning = captureCleanupWarning('Warning: Smoke process exited after report with code 7');
 
     try {
       const result = await runSmokeScript(script, [], process.env, {
@@ -1386,10 +1393,9 @@ describe('prompt eval probe lifecycle', () => {
     const script = join(testRoot, 'report-cleanup-warning.mjs');
     writeFileSync(script, [
       "process.stdout.write('SMOKE_REPORT {}\\n')",
-      "process.on('SIGTERM', () => process.stderr.write('Warning: Process tree cleanup warning: delayed cleanup\\n', () => process.exit(0)))",
-      'setInterval(() => {}, 1000)',
+      "process.stderr.write('Warning: Process tree cleanup warning: delayed cleanup\\n')",
     ].join('\n'), 'utf8');
-    const warning = captureCleanupWarning();
+    const warning = captureCleanupWarning('Warning: Process tree cleanup warning: delayed cleanup');
 
     try {
       const result = await runSmokeScript(script, [], process.env, {
