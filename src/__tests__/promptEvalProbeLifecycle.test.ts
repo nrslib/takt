@@ -53,6 +53,17 @@ function expectWindowsCommandTimeoutsWithinGrace(executeFile: { mock: { calls: u
   expect(timeouts.every((timeout) => timeout > 0 && timeout <= PROCESS_TREE_CLEANUP_GRACE_MS)).toBe(true);
 }
 
+const PROCESS_EXIT_POLL_INTERVAL_MS = 100;
+
+async function expectProcessToBeStopped(pid: number) {
+  await vi.waitFor(() => {
+    expect(() => process.kill(pid, 0)).toThrow();
+  }, {
+    timeout: PROCESS_TREE_CLEANUP_GRACE_MS,
+    interval: PROCESS_EXIT_POLL_INTERVAL_MS,
+  });
+}
+
 function captureCleanupWarning(expectedWarning: string | RegExp) {
   const writes: string[] = [];
   let flushed = false;
@@ -872,8 +883,10 @@ describe('prompt eval probe lifecycle', () => {
     expect(existsSync(workspace)).toBe(false);
     expect(childPid).toBeGreaterThan(0);
     expect(grandchildPid).toBeGreaterThan(0);
-    expect(() => process.kill(childPid, 0)).toThrow();
-    expect(() => process.kill(grandchildPid, 0)).toThrow();
+    await Promise.all([
+      expectProcessToBeStopped(childPid),
+      expectProcessToBeStopped(grandchildPid),
+    ]);
   });
 
   it('should return a probe report before intentionally delayed cleanup finishes', async () => {
