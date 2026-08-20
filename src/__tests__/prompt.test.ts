@@ -231,7 +231,11 @@ describe('prompt', () => {
         { label: 'plan', value: 'la' },
       ];
 
-      expect(renderMenu(optionsWithDetails, 1, false)).toHaveLength(3);
+      const renderedLines = renderMenu(optionsWithDetails, 1, false);
+      expect(renderedLines).toHaveLength(3);
+      const renderedText = renderedLines.join('\n');
+      expect(renderedText).toContain('heading note');
+      expect(renderedText).not.toContain('not rendered for headings');
       expect(countRenderedLines(optionsWithDetails, false)).toBe(3);
     });
 
