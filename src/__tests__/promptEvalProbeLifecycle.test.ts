@@ -1007,6 +1007,7 @@ describe('prompt eval probe lifecycle', () => {
       (error: Error & { code?: string; phase?: string; cleanup?: Promise<void> }) => error,
     );
     expect(protocolError).toMatchObject({ code: 'EPROBEPROTOCOL', phase: 'execution' });
+    expect(protocolError.cleanup).toBeInstanceOf(Promise);
     await protocolError.cleanup;
   });
 
