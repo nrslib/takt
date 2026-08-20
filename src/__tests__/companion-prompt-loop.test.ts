@@ -19,9 +19,11 @@ describe('companion prompt behavior', () => {
     expect(prompt).not.toContain('prior_findings');
     expect(prompt).not.toContain('prior_notes');
     expect(prompt).not.toContain('open_findings');
-    expect(prompt).toContain('Task: implement');
-    expect(prompt).toContain('Step: code');
+    expect(prompt).toContain('"label":"companion_name","value":"security-reviewer"');
+    expect(prompt).toContain('"label":"task","value":"implement"');
+    expect(prompt).toContain('"label":"step_name","value":"code"');
     expect(prompt).toContain('"label":"baseline_sha","value":"base-123"');
+    expect(prompt).toContain('`git diff base-123 --`');
   });
 
   it('embeds the current task, step, and review evidence in the review prompt', () => {
@@ -36,8 +38,8 @@ describe('companion prompt behavior', () => {
       implementerExplanation: explanation,
     });
 
-    expect(prompt).toContain(`Task: ${task}`);
-    expect(prompt).toContain(`Step: ${stepName}`);
+    expect(prompt).toContain(`"label":"task","value":"${task}"`);
+    expect(prompt).toContain(`"label":"step_name","value":"${stepName}"`);
     expect(prompt).toContain('"label":"baseline_sha","value":"base-456"');
     expect(prompt).toContain(
       '"label":"implementer_explanation","value":"centralized prompt capacity checks"',
@@ -59,6 +61,7 @@ describe('companion prompt behavior', () => {
       '"label":"task","value":"implement the requested change"',
     );
     expect(prompt).toContain('"label":"baseline_sha","value":"base-789"');
+    expect(prompt).toContain('`git diff base-789 --`');
     expect(prompt).not.toContain('open_findings');
   });
 

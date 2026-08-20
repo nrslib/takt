@@ -178,6 +178,9 @@ describe('companion runtime lifecycle', () => {
         .resolves.toEqual({ findings: [] });
 
       expect(diffReader.readDiff).toHaveBeenCalledTimes(3);
+      for (const [, baselineSha] of diffReader.readDiff.mock.calls) {
+        expect(baselineSha).toBe('baseline');
+      }
       expect(reviewPrompts).toHaveLength(2);
       for (const prompt of reviewPrompts) {
         expect(prompt).toContain('"label":"baseline_sha","value":"baseline"');

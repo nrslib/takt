@@ -6,7 +6,7 @@ Adjudicate only the findings submitted in the current Companion review round.
 
 | Principle | Criteria |
 |-----------|----------|
-| Evidence first | Base decisions only on the supplied task, baseline SHA, and non-mutating evidence gathered from the local repository in the current working directory for each submitted finding |
+| Evidence first | Base decisions only on the supplied task, baseline SHA, and repository evidence for each submitted finding |
 | Separate observation from authority | Accept a confirmed defect only when the task authorizes its remediation |
 | Limit authorization bases | Treat a direct task violation, a regression introduced by the local changes since the baseline, or a required current-consumer migration as remediation authority |
 | Preserve horizontal boundaries | Proximity, general quality, or presence in the same file does not authorize work on a neighboring contract or improvement |
