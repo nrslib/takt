@@ -281,19 +281,6 @@ function configureNestedReviewRestart(): TaskListItem {
   });
 }
 
-function configureRootCallRestart(): TaskListItem {
-  mockFindRunForTask.mockImplementationOnce(() => null);
-  mockLoadWorkflowByIdentifier.mockReturnValue(nestedRootWorkflowConfig);
-  selectStartCandidate('Restart from: default > delegate');
-  return makeFailedTask({
-    data: {
-      task: 'Do something',
-      workflow: 'default',
-      resume_point: makeNestedCheckpoint(),
-    },
-  });
-}
-
 const nestedReviewRestartPoint = {
   stack: [
     {
@@ -310,16 +297,6 @@ const nestedReviewRestartPoint = {
       kind: 'agent' as const,
     },
   ],
-};
-
-const rootCallRestartPoint = {
-  stack: [{
-    workflow: 'default',
-    workflow_ref: 'default',
-    step: 'delegate',
-    kind: 'workflow_call' as const,
-    call_instance: 1 as const,
-  }],
 };
 
 const defaultPlanRestartPoint = {
@@ -355,33 +332,28 @@ function makeFailedTask(overrides?: Partial<TaskListItem>): TaskListItem {
   };
 }
 
+// The tree picker resolves a start position in a single prompt. A leaf row's
+// label is its authored step name (serialized) indented by depth; the Resume
+// row is a single top entry. The legacy `Restart from: a > b > leaf` /
+// `Resume failed position: ...` strings still encode which position a test
+// intends, so this helper drives the new prompt from the terminal step name.
 function selectStartCandidate(label: string): void {
-  const normalizeLabel = (candidateLabel: string): string => candidateLabel.replace(
-    /^(Restart from: |Resume failed position: )(.*?)( \[default\])?$/,
-    (_match, prefix: string, path: string, suffix: string | undefined) => (
-      `${prefix}${path.split(' > ').map((segment) => JSON.stringify(segment)).join(' > ')}${suffix ?? ''}`
-    ),
-  );
-  const normalizedLabel = normalizeLabel(label);
-  const path = label.replace(/^(Restart from: |Resume failed position: )/, '').replace(/ \[default\]$/, '');
-  const segments = path.split(' > ');
-  if (label.startsWith('Restart from: ') && segments.length > 2) {
-    for (let stepIndex = 1; stepIndex < segments.length - 1; stepIndex += 2) {
-      const browsePath = segments.slice(0, stepIndex + 1)
-        .map((segment) => JSON.stringify(segment))
-        .join(' > ');
-      const browseLabel = `Browse child workflow from: ${browsePath}`;
-      mockSelectOptionWithDefault.mockImplementationOnce(
-        (_message: string, options: Array<{ label: string; value: string }>) => (
-          options.find((option) => option.label === browseLabel)?.value ?? null
-        ),
-      );
-    }
-  }
+  const isResume = label.startsWith('Resume failed position: ');
+  const path = label
+    .replace(/^(Restart from: |Resume failed position: )/, '')
+    .replace(/ \[default\]$/, '');
+  const terminalStep = path.split(' > ').at(-1)!;
   mockSelectOptionWithDefault.mockImplementationOnce(
-    (_message: string, options: Array<{ label: string; value: string }>) => (
-      options.find((option) => option.label === normalizedLabel)?.value ?? null
-    ),
+    (_message: string, options: Array<{ label: string; value: string; selectable?: boolean }>) => {
+      if (isResume) {
+        return options.find((option) => option.label.startsWith('Resume failed position:'))?.value
+          ?? null;
+      }
+      return options.find(
+        (option) => option.selectable !== false
+          && option.label.trim() === JSON.stringify(terminalStep),
+      )?.value ?? null;
+    },
   );
 }
 
@@ -416,22 +388,25 @@ function expectResumeCandidateIsDefault(): void {
   expect(defaultValue).toBe(resumeCandidate?.value);
 }
 
-function expectRestartCandidateIsDefault(path: string): void {
+function expectRestartCandidateIsDefault(leafStep: string): void {
   const call = mockSelectOptionWithDefault.mock.calls.at(-1);
-  const options = call?.[1] as Array<{ label: string; value: string }>;
+  const options = call?.[1] as Array<{ label: string; value: string; selectable?: boolean }>;
   const defaultValue = call?.[2];
-  const formattedPath = path.split(' > ').map((segment) => JSON.stringify(segment)).join(' > ');
-  const restartCandidate = options.find((option) => option.label === `Restart from: ${formattedPath}`);
+  const restartCandidate = options.find(
+    (option) => option.selectable !== false && option.label.trim() === JSON.stringify(leafStep),
+  );
   expect(restartCandidate).toBeDefined();
   expect(defaultValue).toBe(restartCandidate?.value);
 }
 
 function expectEffectRestartCandidateIsHidden(): void {
   const call = mockSelectOptionWithDefault.mock.calls.at(-1);
-  const options = call?.[1] as Array<{ label: string; value: string }>;
-  expect(options.map((option) => option.label)).toEqual([
-    'Restart from: "default" > "plan"',
-  ]);
+  const options = call?.[1] as Array<{ label: string; value: string; selectable?: boolean }>;
+  // Only the authored "plan" leaf survives; the effect-backed system step is
+  // never presented as a selectable restart position.
+  expect(
+    options.filter((option) => option.selectable !== false).map((option) => option.label.trim()),
+  ).toEqual([JSON.stringify('plan')]);
 }
 
 const autoRequeueNote = [
@@ -471,9 +446,11 @@ beforeEach(() => {
   mockIsWorkflowPath.mockImplementation((workflow: string) => workflow.startsWith('/') || workflow.startsWith('~') || workflow.startsWith('./') || workflow.startsWith('../') || workflow.endsWith('.yaml') || workflow.endsWith('.yml'));
   mockLoadAllStandaloneWorkflowsWithSources.mockReturnValue(new Map<string, unknown>([['default', {}], ['selected-workflow', {}]]));
   mockSelectOptionWithDefault.mockImplementation(
-    (_message: string, options: Array<{ label: string; value: string }>) => (
-      options.find((option) => option.label === 'Restart from: "default" > "plan"')?.value
-      ?? options[0]?.value
+    (_message: string, options: Array<{ label: string; value: string; selectable?: boolean }>) => (
+      options.find(
+        (option) => option.selectable !== false && option.label.trim() === JSON.stringify('plan'),
+      )?.value
+      ?? options.find((option) => option.selectable !== false)?.value
       ?? null
     ),
   );
@@ -938,10 +915,28 @@ describe('requeueFailedTask', () => {
         restartPoint: nestedReviewRestartPoint,
       },
     );
+    expect(mockInfo).toHaveBeenCalledWith(
+      'Selected start position: "review"',
+    );
   });
 
-  it('should preserve a terminal root workflow_call restart path for Requeue', async () => {
-    const task = configureRootCallRestart();
+  it('should not expose a terminal root workflow_call as a restart target for Requeue', async () => {
+    mockFindRunForTask.mockImplementationOnce(() => null);
+    mockLoadWorkflowByIdentifier.mockReturnValue(nestedRootWorkflowConfig);
+    mockSelectOptionWithDefault.mockImplementationOnce(
+      (_message: string, options: Array<{ label: string; value: string; selectable?: boolean }>) => {
+        expect(options.find((option) => option.label.trim().startsWith('"delegate"'))?.selectable)
+          .toBe(false);
+        return options.find((option) => option.label.trim() === '"review"')?.value ?? null;
+      },
+    );
+    const task = makeFailedTask({
+      data: {
+        task: 'Do something',
+        workflow: 'default',
+        resume_point: makeNestedCheckpoint(),
+      },
+    });
 
     await requeueFailedTask(task, '/project');
 
@@ -955,7 +950,7 @@ describe('requeueFailedTask', () => {
         workflow: undefined,
         taskDir: undefined,
         sourceRunSlug: undefined,
-        restartPoint: rootCallRestartPoint,
+        restartPoint: nestedReviewRestartPoint,
       },
     );
   });
@@ -983,8 +978,11 @@ describe('requeueFailedTask', () => {
     );
   });
 
-  it('should confirm the same collision-safe path label shown in the start selection', async () => {
-    const selectedLabel = 'Restart from: "default" > "line\\\\n"';
+  it('should confirm the same collision-safe leaf label shown in the start selection', async () => {
+    // Two authored step names collide once control characters are escaped for
+    // the terminal; the serialized leaf labels must stay distinct so the user
+    // can tell them apart, and the confirmed label echoes the selected one.
+    const selectedLabel = '"line\\\\n"';
     mockFindRunForTask.mockImplementationOnce(() => null);
     mockLoadWorkflowByIdentifier.mockReturnValue({
       ...defaultWorkflowConfig,
@@ -997,7 +995,7 @@ describe('requeueFailedTask', () => {
     mockSelectOptionWithDefault.mockImplementationOnce(
       (_message: string, options: Array<{ label: string; value: string }>) => {
         expect(options.map((option) => option.label)).toEqual([
-          'Restart from: "default" > "line\\n"',
+          '"line\\n"',
           selectedLabel,
         ]);
         return options.find((option) => option.label === selectedLabel)?.value ?? null;
@@ -1392,13 +1390,13 @@ describe('retryFailedTask', () => {
     await retryFailedTask(task, '/project');
 
     const call = mockSelectOptionWithDefault.mock.calls.at(-1);
-    expect(call?.[0]).toBe('Start position — "default" (page 1/1):');
+    expect(call?.[0]).toBe('Start position — "default":');
     expect(call?.[1]).toEqual(expect.arrayContaining([
-      expect.objectContaining({ label: 'Restart from: "default" > "plan"', description: 'Initial step' }),
-      expect.objectContaining({ label: 'Restart from: "default" > "implement"' }),
-      expect.objectContaining({ label: 'Restart from: "default" > "review"' }),
+      expect.objectContaining({ label: '"plan"' }),
+      expect.objectContaining({ label: '"implement"' }),
+      expect.objectContaining({ label: '"review"' }),
     ]));
-    expectRestartCandidateIsDefault('default > review');
+    expectRestartCandidateIsDefault('review');
   });
 
   it('should prefer run meta resume_point root step as retry default', async () => {
@@ -1506,7 +1504,7 @@ describe('retryFailedTask', () => {
     );
   });
 
-  it('should keep root workflow_call step as retry default when child step was renamed', async () => {
+  it('should default to the first authored leaf inside the failed root workflow_call', async () => {
     mockFindRunForTask.mockReturnValue('run-1');
     mockLoadWorkflowByIdentifier.mockReturnValue({
       ...defaultWorkflowConfig,
@@ -1559,7 +1557,7 @@ describe('retryFailedTask', () => {
 
     await retryFailedTask(makeFailedTask(), '/project');
 
-    expectRestartCandidateIsDefault('default > delegate');
+    expectRestartCandidateIsDefault('fix');
   });
 
   it('should reject retry selection when a workflow_call target no longer resolves', async () => {
@@ -1724,27 +1722,6 @@ describe('retryFailedTask', () => {
         taskDir: undefined,
         sourceRunSlug: undefined,
         restartPoint: nestedReviewRestartPoint,
-      },
-    );
-  });
-
-  it('should preserve a terminal root workflow_call restart path for immediate Retry execution', async () => {
-    const task = configureRootCallRestart();
-
-    await retryFailedTask(task, '/project');
-
-    expectStartReExecutionCalledWith(
-      'my-task',
-      ['failed'],
-      'retry',
-      {
-        startStep: undefined,
-        retryNote: '追加指示A',
-        resumePoint: undefined,
-        workflow: undefined,
-        taskDir: undefined,
-        sourceRunSlug: undefined,
-        restartPoint: rootCallRestartPoint,
       },
     );
   });
@@ -1966,6 +1943,15 @@ describe('retryFailedTask', () => {
     await expect(retryFailedTask(makeFailedTask(), '/project')).resolves.toBe(true);
     const firstOptions = mockSelectOptionWithDefault.mock.calls[0]?.[1] as unknown[] | undefined;
     expect(firstOptions).toHaveLength(3);
+    expect(mockSelectOptionWithDefault).toHaveBeenCalledWith(
+      'Start position — "selected-workflow":',
+      expect.arrayContaining([
+        expect.objectContaining({ label: '"plan"' }),
+        expect.objectContaining({ label: '"implement"' }),
+        expect.objectContaining({ label: '"review"' }),
+      ]),
+      expect.any(String),
+    );
   });
 
   it('should allow allow_git_commit worktree workflows during retry and continue to step selection', async () => {
@@ -1995,6 +1981,48 @@ describe('retryFailedTask', () => {
     await expect(retryFailedTask(makeFailedTask(), '/project')).resolves.toBe(true);
     const firstOptions = mockSelectOptionWithDefault.mock.calls[0]?.[1] as unknown[] | undefined;
     expect(firstOptions).toHaveLength(3);
+    expect(mockSelectOptionWithDefault).toHaveBeenCalledWith(
+      'Start position — "selected-workflow":',
+      expect.arrayContaining([
+        expect.objectContaining({ label: '"plan"' }),
+        expect.objectContaining({ label: '"implement"' }),
+        expect.objectContaining({ label: '"review"' }),
+      ]),
+      expect.any(String),
+    );
+  });
+
+  it('should show deprecated config warning when selected run order uses legacy provider fields', async () => {
+    const task = makeFailedTask();
+    mockFindPreviousOrderContent.mockReturnValue([
+      'steps:',
+      '  - name: review',
+      '    provider: codex',
+      '    model: gpt-5.3',
+      '    provider_options:',
+      '      codex:',
+      '        network_access: true',
+    ].join('\n'));
+
+    await retryFailedTask(task, '/project');
+
+    expect(mockWarn).toHaveBeenCalledTimes(1);
+    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('deprecated'));
+  });
+
+  it('should warn when run meta parsing fails during retry resume resolution', async () => {
+    const task = makeFailedTask();
+    mockFindRunForTask.mockReturnValue('run-1');
+    mockReadRunMetaBySlug.mockImplementation((_cwd: string, _slug: string, onWarning?: (warning: string) => void) => {
+      onWarning?.('Failed to parse run metadata at /tmp/meta.json: broken json');
+      return null;
+    });
+
+    await retryFailedTask(task, '/project');
+
+    expect(mockWarn).toHaveBeenCalledWith(
+      'Failed to parse run metadata at /tmp/meta.json: broken json',
+    );
   });
 
   it('should sanitize failure details before printing to terminal', async () => {
@@ -2208,27 +2236,6 @@ describe('retryFailedTask', () => {
         taskDir: undefined,
         sourceRunSlug: undefined,
         restartPoint: nestedReviewRestartPoint,
-      },
-    );
-  });
-
-  it('should preserve a terminal root workflow_call restart path for Retry save_task', async () => {
-    const task = configureRootCallRestart();
-    mockRunTaskRetryMode.mockResolvedValue({ action: 'save_task', task: '追加指示A' });
-
-    await retryFailedTask(task, '/project');
-
-    expectRequeueTaskCalledWith(
-      'my-task',
-      ['failed'],
-      {
-        startStep: undefined,
-        retryNote: '追加指示A',
-        resumePoint: undefined,
-        workflow: undefined,
-        taskDir: undefined,
-        sourceRunSlug: undefined,
-        restartPoint: rootCallRestartPoint,
       },
     );
   });
