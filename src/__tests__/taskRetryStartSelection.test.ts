@@ -102,12 +102,8 @@ function rootResumePoint(step: string, kind: 'agent' | 'system'): WorkflowResume
   };
 }
 
-// The tree picker marks non-leaf rows (workflow_call headings) with `selectable: false`
-// so that only authored leaf steps can be confirmed (order.md L84). The field is read
-// through a cast so this test compiles against the current SelectOptionItem type and keeps
-// observing the same contract once the field is authored.
 function isHeading(option: SelectOptionItem<string>): boolean {
-  return (option as { selectable?: boolean }).selectable === false;
+  return option.selectable === false;
 }
 
 function firstSelectable(options: SelectOptionItem<string>[]): SelectOptionItem<string> {

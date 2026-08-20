@@ -139,7 +139,10 @@ export async function selectTaskRetryStart(
   const flattened = flattenRestartTree(tree, options.preferredRootStep);
   const resumeOption = createResumeOption(rootWorkflow, options);
 
-  if (flattened.firstLeafValue === undefined && resumeOption === undefined) {
+  const defaultValue = resumeOption?.value
+    ?? flattened.preferredLeafValue
+    ?? flattened.firstLeafValue;
+  if (defaultValue === undefined) {
     throw new Error(`Workflow "${rootWorkflow.name}" has no authored steps to restart from`);
   }
 
@@ -152,13 +155,6 @@ export async function selectTaskRetryStart(
     resultLabels.set(resumeOption.value, resumeOption.label);
   }
   promptOptions.push(...flattened.promptOptions);
-
-  const defaultValue = resumeOption?.value
-    ?? flattened.preferredLeafValue
-    ?? flattened.firstLeafValue;
-  if (defaultValue === undefined) {
-    throw new Error(`Workflow "${rootWorkflow.name}" has no selectable retry positions`);
-  }
 
   const selectedValue = await selectOption(
     `Start position — ${formatTaskRetryPath([rootWorkflow.name])}:`,

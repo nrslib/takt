@@ -2,7 +2,7 @@
  * Tests for prompt module (cursor-based interactive menu)
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { Readable } from 'node:stream';
 import chalk from 'chalk';
 import { setupRawStdin, restoreStdin } from './helpers/stdinSimulator.js';
@@ -16,7 +16,11 @@ import {
 } from '../shared/prompt/index.js';
 
 // Disable chalk colors for predictable test output
+const originalChalkLevel = chalk.level;
 chalk.level = 0;
+afterAll(() => {
+  chalk.level = originalChalkLevel;
+});
 
 describe('prompt', () => {
   describe('renderMenu', () => {
@@ -214,6 +218,22 @@ describe('prompt', () => {
     ];
     const totalItems = options.length + 1; // includes Cancel
     const optionCount = options.length;
+
+    it('should keep line counting aligned when a heading has details', () => {
+      const optionsWithDetails: SelectOptionItem<string>[] = [
+        {
+          label: 'group-a',
+          value: 'ha',
+          selectable: false,
+          description: 'heading note',
+          details: ['not rendered for headings'],
+        },
+        { label: 'plan', value: 'la' },
+      ];
+
+      expect(renderMenu(optionsWithDetails, 1, false)).toHaveLength(3);
+      expect(countRenderedLines(optionsWithDetails, false)).toBe(3);
+    });
 
     it('should skip a heading when moving down', () => {
       // From leaf index 1, down should skip heading index 2 and land on leaf 3.

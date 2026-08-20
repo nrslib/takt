@@ -263,7 +263,7 @@ When you select **Retry** on a failed task, TAKT:
 4. Opens a retry conversation pre-loaded with failure context, run session data, and workflow structure
 5. Lets you refine instructions with AI assistance
 
-**Requeue** uses the same workflow and start-position selection, but saves the task as `pending` without opening a conversation. The start-position prompt presents the workflow as a tree: the top row is **Resume failed position** (continue from the failure point, preserving execution state), and every authored step is listed below as a selectable leaf. `workflow_call` sub-workflows appear as non-selectable headings that indent their child steps, so you always confirm a leaf step — a sub-workflow itself cannot be chosen. The failed step is marked `(default)` and pre-selected. Choosing any leaf restarts a new execution from that step.
+**Requeue** uses the same workflow and start-position selection, but saves the task as `pending` without opening a conversation. The start-position prompt presents the workflow as a tree: the top row is **Resume failed position** (continue from the failure point, preserving execution state), and every authored step is listed below as a selectable leaf. `workflow_call` sub-workflows appear as non-selectable headings that indent their child steps, so you always confirm a leaf step — a sub-workflow itself cannot be chosen. When a valid Resume position is available, the Resume row is initially selected; otherwise the preferred selectable leaf for the failed root step is initially selected. Choosing any leaf restarts a new execution from that step.
 
 After a requeue, execution uses a new namespace, so its ledger is not inherited and starts empty.
 

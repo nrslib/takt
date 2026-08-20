@@ -346,13 +346,20 @@ function selectStartCandidate(label: string): void {
   mockSelectOptionWithDefault.mockImplementationOnce(
     (_message: string, options: Array<{ label: string; value: string; selectable?: boolean }>) => {
       if (isResume) {
-        return options.find((option) => option.label.startsWith('Resume failed position:'))?.value
-          ?? null;
+        const resume = options.find((option) => option.label.startsWith('Resume failed position:'));
+        if (resume === undefined) {
+          throw new Error('Expected a Resume row in the start-position prompt');
+        }
+        return resume.value;
       }
-      return options.find(
+      const leaf = options.find(
         (option) => option.selectable !== false
           && option.label.trim() === JSON.stringify(terminalStep),
-      )?.value ?? null;
+      );
+      if (leaf === undefined) {
+        throw new Error(`Expected a selectable leaf "${terminalStep}" in the start-position prompt`);
+      }
+      return leaf.value;
     },
   );
 }

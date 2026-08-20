@@ -89,7 +89,7 @@ export function renderCancelOption(isSelected: boolean, cancelLabel: string): st
 export function countItemLines<T extends string>(opt: SelectOptionItem<T>): number {
   let lines = 1;
   if (opt.description) lines++;
-  if (opt.details) lines += opt.details.length;
+  if (opt.selectable !== false && opt.details) lines += opt.details.length;
   return lines;
 }
 
