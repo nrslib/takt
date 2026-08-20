@@ -8,10 +8,17 @@ import {
   resolveTaskOrderContent,
 } from '../features/tasks/orderRevision.js';
 
-const { renameFailure, archiveCleanupFailure, archiveCopyFailure, mockWarn } = vi.hoisted(() => ({
+const {
+  renameFailure,
+  archiveCleanupFailure,
+  archiveCopyFailure,
+  attachmentCopyFailure,
+  mockWarn,
+} = vi.hoisted(() => ({
   renameFailure: { enabled: false },
   archiveCleanupFailure: { enabled: false },
   archiveCopyFailure: { mode: null as 'conflict' | 'failure' | null },
+  attachmentCopyFailure: { enabled: false },
   mockWarn: vi.fn(),
 }));
 
@@ -36,6 +43,12 @@ vi.mock('node:fs', async (importOriginal) => {
         throw new Error(archiveCopyFailure.mode === 'conflict'
           ? 'archive candidate conflict'
           : 'archive copy failed');
+      }
+      if (attachmentCopyFailure.enabled
+        && typeof destination === 'string'
+        && path.basename(destination) === 'image-1.png') {
+        original.writeFileSync(destination, 'concurrent attachment');
+        throw new Error('attachment destination conflict');
       }
       return original.copyFileSync(...args);
     },
@@ -67,6 +80,7 @@ afterEach(() => {
   renameFailure.enabled = false;
   archiveCleanupFailure.enabled = false;
   archiveCopyFailure.mode = null;
+  attachmentCopyFailure.enabled = false;
   mockWarn.mockReset();
   for (const projectDir of temporaryProjects.splice(0)) {
     fs.rmSync(projectDir, { recursive: true, force: true });
@@ -195,6 +209,62 @@ describe('task order revision contract', () => {
 
     expect(fs.readFileSync(existingAttachmentPath, 'utf-8')).toBe('existing attachment');
     expect(fs.readFileSync(path.join(taskDir, 'order.md'), 'utf-8')).toBe('# Old order');
+  });
+
+  it('keeps a competing attachment when it is created before the exclusive copy', () => {
+    const projectDir = makeProject();
+    const taskDir = path.join(projectDir, '.takt/tasks/example-task');
+    const sourcePath = path.join(projectDir, 'image.png');
+    const attachmentPath = path.join(taskDir, 'attachments/image-1.png');
+    fs.mkdirSync(taskDir, { recursive: true });
+    fs.writeFileSync(path.join(taskDir, 'order.md'), '# Old order');
+    fs.writeFileSync(sourcePath, 'new attachment');
+    attachmentCopyFailure.enabled = true;
+
+    expect(() => persistTaskOrderRevision(
+      projectDir,
+      '.takt/tasks/example-task',
+      '# New order\n\nUse [Image #1].',
+      'en',
+      [{
+        placeholder: '[Image #1]',
+        tempPath: sourcePath,
+        fileName: 'image-1.png',
+      }],
+    )).toThrow('attachment destination conflict');
+
+    expect(fs.readFileSync(attachmentPath, 'utf-8')).toBe('concurrent attachment');
+    expect(fs.readFileSync(path.join(taskDir, 'order.md'), 'utf-8')).toBe('# Old order');
+    expect(fs.readdirSync(taskDir).filter((entry) => entry.startsWith('order.md.'))).toHaveLength(0);
+  });
+
+  it('keeps a competing attachment when a new task directory copy loses the race', () => {
+    const projectDir = makeProject();
+    const sourcePath = path.join(projectDir, 'image.png');
+    fs.writeFileSync(sourcePath, 'new attachment');
+    attachmentCopyFailure.enabled = true;
+
+    expect(() => persistTaskOrderRevision(
+      projectDir,
+      undefined,
+      '# New order\n\nUse [Image #1].',
+      'en',
+      [{
+        placeholder: '[Image #1]',
+        tempPath: sourcePath,
+        fileName: 'image-1.png',
+      }],
+    )).toThrow('attachment destination conflict');
+
+    const tasksDir = path.join(projectDir, '.takt/tasks');
+    const [taskSlug] = fs.readdirSync(tasksDir);
+    if (!taskSlug) {
+      throw new Error('Expected the reserved task directory to remain for the competing attachment.');
+    }
+    const taskDir = path.join(tasksDir, taskSlug);
+    expect(fs.readFileSync(path.join(taskDir, 'attachments/image-1.png'), 'utf-8'))
+      .toBe('concurrent attachment');
+    expect(fs.existsSync(path.join(taskDir, 'order.md'))).toBe(false);
   });
 
   it('uses the language-specific attachments heading in the proposal', () => {
@@ -395,6 +465,34 @@ describe('task order revision contract', () => {
 
     expect(fs.readFileSync(orderPath, 'utf-8')).toBe('# Old order');
     expect(fs.readdirSync(taskDir).filter((entry) => entry.startsWith('order.md.'))).toHaveLength(0);
+    expect(fs.existsSync(path.join(taskDir, 'attachments/image-1.png'))).toBe(false);
+  });
+
+  it('preserves concurrent files when a newly created revision is rolled back', () => {
+    const projectDir = makeProject();
+    const sourcePath = path.join(projectDir, 'image.png');
+    fs.writeFileSync(sourcePath, Buffer.from([1, 2, 3]));
+    const attachment = {
+      placeholder: '[Image #1]',
+      tempPath: sourcePath,
+      fileName: 'image-1.png',
+    };
+
+    const revision = persistTaskOrderRevision(
+      projectDir,
+      undefined,
+      '# New order\n\nUse [Image #1].',
+      'ja',
+      [attachment],
+    );
+    const taskDir = revision.taskDir!;
+    const concurrentPath = path.join(taskDir, 'attachments/concurrent.txt');
+    fs.writeFileSync(concurrentPath, 'concurrent attachment');
+
+    revision.rollback();
+
+    expect(fs.readFileSync(concurrentPath, 'utf-8')).toBe('concurrent attachment');
+    expect(fs.existsSync(path.join(taskDir, 'order.md'))).toBe(false);
     expect(fs.existsSync(path.join(taskDir, 'attachments/image-1.png'))).toBe(false);
   });
 

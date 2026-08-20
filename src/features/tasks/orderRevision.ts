@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { prepareTaskSpecDirectory, cleanupTaskSpecDirectory } from '../../infra/task/enqueueService.js';
+import { prepareTaskSpecDirectory } from '../../infra/task/enqueueService.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { warn } from '../../shared/ui/index.js';
 import { debugLog } from '../../shared/utils/index.js';
@@ -207,6 +207,36 @@ function removePromotedRevisionAttachments(
   }
 }
 
+function removeEmptyDirectory(directoryPath: string): void {
+  try {
+    if (fs.readdirSync(directoryPath).length === 0) {
+      fs.rmdirSync(directoryPath);
+    }
+  } catch (error) {
+    debugLog('tasks', 'Failed to cleanup empty order revision directory', {
+      path: directoryPath,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+function removeCreatedTaskSpecRevision(
+  taskDir: string,
+  promoted: PromotedRevisionAttachments,
+): void {
+  try {
+    fs.rmSync(path.join(taskDir, 'order.md'), { force: true });
+  } catch (error) {
+    debugLog('tasks', 'Failed to cleanup created order revision', {
+      path: path.join(taskDir, 'order.md'),
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  removePromotedRevisionAttachments(taskDir, promoted);
+  removeEmptyDirectory(taskDir);
+  removeEmptyDirectory(path.dirname(taskDir));
+}
+
 function promoteRevisionAttachments(
   taskDir: string,
   attachments: readonly InteractiveImageAttachment[],
@@ -217,20 +247,22 @@ function promoteRevisionAttachments(
 
   const attachmentsDir = path.join(taskDir, 'attachments');
   const createdDirectory = !fs.existsSync(attachmentsDir);
-  const destinationPaths = attachments.map((attachment) => path.join(taskDir, getAttachmentRelativePath(attachment)));
-  const existing = new Set(destinationPaths.filter((destinationPath) => fs.existsSync(destinationPath)));
+  const promotedPaths: string[] = [];
   try {
-    promoteTaskAttachments(taskDir, attachments);
+    for (const attachment of attachments) {
+      promoteTaskAttachments(taskDir, [attachment]);
+      promotedPaths.push(path.join(taskDir, getAttachmentRelativePath(attachment)));
+    }
   } catch (error) {
     removePromotedRevisionAttachments(taskDir, {
-      paths: destinationPaths.filter((destinationPath) => !existing.has(destinationPath)),
+      paths: promotedPaths,
       createdDirectory,
     });
     throw error;
   }
 
   return {
-    paths: destinationPaths.filter((destinationPath) => !existing.has(destinationPath)),
+    paths: promotedPaths,
     createdDirectory,
   };
 }
@@ -339,16 +371,20 @@ export function persistTaskOrderRevision(
   }
 
   const prepared = prepareTaskSpecDirectory(projectDir, normalizedContent);
+  let promoted: PromotedRevisionAttachments;
   try {
-    promoteRevisionAttachments(prepared.taskDir, attachments);
+    promoted = promoteRevisionAttachments(prepared.taskDir, attachments);
   } catch (error) {
-    cleanupTaskSpecDirectory(prepared.taskDir);
+    removeCreatedTaskSpecRevision(prepared.taskDir, {
+      paths: [],
+      createdDirectory: false,
+    });
     throw error;
   }
   return {
     ...prepared,
     created: true,
-    rollback: () => cleanupTaskSpecDirectory(prepared.taskDir),
+    rollback: () => removeCreatedTaskSpecRevision(prepared.taskDir, promoted),
   };
 }
 

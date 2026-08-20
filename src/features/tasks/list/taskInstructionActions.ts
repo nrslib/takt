@@ -145,6 +145,7 @@ function applyInstructionTaskState<T>(
     const executionRetryNote = result.source === 'go'
       ? undefined
       : legacyRetryNote;
+    assertReusableWorktreePath(projectDir, worktreePath);
     const stateResult = updateTaskState(runner, taskDir, executionRetryNote);
     return { runner, result: stateResult };
   } catch (error) {

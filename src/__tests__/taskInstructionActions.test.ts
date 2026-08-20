@@ -391,6 +391,33 @@ describe('instructBranch direct execution flow', () => {
     }));
   });
 
+  it('should rollback the revision when the worktree disappears before instruct state mutation', async () => {
+    mockAssertReusableWorktreePath.mockImplementation((_projectDir: string, candidatePath: string) => {
+      if (mockPersistTaskOrderRevision.mock.calls.length > 0) {
+        throw new Error(`Worktree was replaced before instruct state mutation: ${candidatePath}`);
+      }
+    });
+
+    await expect(instructBranch('/project', {
+      kind: 'completed',
+      name: 'done-task',
+      createdAt: '2026-02-14T00:00:00.000Z',
+      filePath: '/project/.takt/tasks.yaml',
+      content: 'done',
+      branch: 'takt/done-task',
+      worktreePath: '/project/.takt/worktrees/done-task',
+      data: { task: 'done' },
+    })).rejects.toThrow('Worktree was replaced before instruct state mutation');
+
+    expect(mockCleanupPersistedTaskOrderRevision).toHaveBeenCalledWith(expect.objectContaining({
+      created: true,
+      taskDirRelative: MOCK_CREATED_TASK_DIR,
+      taskDir: `/project/${MOCK_CREATED_TASK_DIR}`,
+    }));
+    expect(mockStartReExecution).not.toHaveBeenCalled();
+    expect(mockRequeueTask).not.toHaveBeenCalled();
+  });
+
   it('should promote image attachments for instructed save_task requeue', async () => {
     mockRunInstructMode.mockResolvedValue({
       action: 'save_task',

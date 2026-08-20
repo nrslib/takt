@@ -466,6 +466,7 @@ export async function retryFailedTask(
         );
       }
       const taskDir = revision?.taskDirRelative ?? task.taskDir;
+      assertReusableWorktreePath(projectDir, selection.worktreePath);
       if (retryResult.action === 'save_task') {
         runner.requeueTask(
           task.name,

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { getLabelObject } from '../../shared/i18n/index.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
 import { prependInitialPromptContext, formatSourceContextSection } from './promptSections.js';
@@ -29,6 +30,26 @@ function formatConversation(options: SummaryPromptOptions): string {
   return '';
 }
 
+function canonicalOrderMarker(kind: 'BEGIN' | 'END', nonce: string): string {
+  return `--- ${kind} CANONICAL ORDER.MD ${nonce} ---`;
+}
+
+function formatCanonicalOrderContent(canonicalOrderContent: string): string {
+  let nonce = randomUUID();
+  while (
+    canonicalOrderContent.includes(canonicalOrderMarker('BEGIN', nonce))
+    || canonicalOrderContent.includes(canonicalOrderMarker('END', nonce))
+  ) {
+    nonce = randomUUID();
+  }
+
+  return [
+    canonicalOrderMarker('BEGIN', nonce),
+    canonicalOrderContent,
+    canonicalOrderMarker('END', nonce),
+  ].join('\n');
+}
+
 export function buildOrderRevisionPrompt(
   options: SummaryPromptOptions,
   canonicalOrderContent: string,
@@ -41,7 +62,7 @@ export function buildOrderRevisionPrompt(
 
   const hasWorkflowPreview = !!options.workflowContext?.stepPreviews?.length;
   const prompt = loadTemplate('score_order_revision_system_prompt', options.lang, {
-    canonicalOrderContent,
+    canonicalOrderContent: formatCanonicalOrderContent(canonicalOrderContent),
     conversation,
     sourceContext,
     userNote: options.userNote,

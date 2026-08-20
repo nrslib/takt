@@ -1253,6 +1253,27 @@ describe('retryFailedTask', () => {
     }));
   });
 
+  it('should rollback the revision when the worktree disappears before retry state mutation', async () => {
+    const task = makeFailedTask();
+    mockAssertReusableWorktreePath.mockImplementation((_projectDir: string, candidatePath: string) => {
+      if (mockPersistTaskOrderRevision.mock.calls.length > 0) {
+        throw new Error(`Worktree was replaced before retry state mutation: ${candidatePath}`);
+      }
+    });
+
+    await expect(retryFailedTask(task, '/project')).rejects.toThrow(
+      'Worktree was replaced before retry state mutation',
+    );
+
+    expect(mockCleanupPersistedTaskOrderRevision).toHaveBeenCalledWith(expect.objectContaining({
+      created: true,
+      taskDirRelative: MOCK_CREATED_TASK_DIR,
+      taskDir: `/project/${MOCK_CREATED_TASK_DIR}`,
+    }));
+    expect(mockStartReExecution).not.toHaveBeenCalled();
+    expect(mockRequeueTask).not.toHaveBeenCalled();
+  });
+
   it('should preserve task_dir order content when retry task has image attachments', async () => {
     const task = makeFailedTask({
       content: 'Implement using only the files in `.takt/tasks/my-task`.',

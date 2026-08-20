@@ -15,9 +15,7 @@ Revise the existing `order.md` into a complete new order that incorporates the n
 
 ## Current canonical order.md
 
---- BEGIN CANONICAL ORDER.MD ---
 {{canonicalOrderContent}}
---- END CANONICAL ORDER.MD ---
 
 ## Conversation
 
