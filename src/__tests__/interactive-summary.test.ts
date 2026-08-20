@@ -54,6 +54,38 @@ describe('buildSummaryPrompt', () => {
     expect(summary).toContain('Improve parser');
   });
 
+  it('includes the existing Gherkin output rules when enabled', () => {
+    const summary = buildSummaryPrompt(
+      [{ role: 'user', content: 'Improve parser' }],
+      false,
+      'en',
+      'No transcript',
+      'Conversation:',
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+
+    expect(summary).toContain('## Markdown + Gherkin Output Format');
+  });
+
+  it('keeps the existing Markdown-only output contract when disabled', () => {
+    const summary = buildSummaryPrompt(
+      [{ role: 'user', content: 'Improve parser' }],
+      false,
+      'en',
+      'No transcript',
+      'Conversation:',
+      undefined,
+      undefined,
+      undefined,
+      false,
+    );
+
+    expect(summary).not.toContain('## Markdown + Gherkin Output Format');
+  });
+
 });
 
 describe('buildSummaryActionOptions', () => {

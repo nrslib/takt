@@ -99,17 +99,21 @@ describe('assistantConfig', () => {
   });
 
   it.each([
-    ['global value', true, undefined, true],
+    ['no config', undefined, undefined, true],
+    ['global false', false, undefined, false],
+    ['global true', true, undefined, true],
     ['project false override', true, false, false],
     ['project true override', false, true, true],
   ] as const)(
     'should resolve Gherkin task instructions from %s',
     (_label, globalGherkin, projectGherkin, expected) => {
-      writeFileSync(
-        globalConfigPath,
-        ['language: en', 'assistant:', `  gherkin: ${globalGherkin}`].join('\n'),
-        'utf-8',
-      );
+      if (globalGherkin !== undefined) {
+        writeFileSync(
+          globalConfigPath,
+          ['language: en', 'assistant:', `  gherkin: ${globalGherkin}`].join('\n'),
+          'utf-8',
+        );
+      }
 
       if (projectGherkin !== undefined) {
         const configDir = getProjectConfigDir(projectDir);

@@ -18,6 +18,10 @@ vi.mock('../features/interactive/conversationLoop.js', () => ({
   callAIWithRetry: vi.fn(),
 }));
 
+vi.mock('../infra/config/global/globalConfig.js', () => ({
+  loadGlobalConfig: vi.fn(() => ({ provider: 'mock', language: 'en' })),
+}));
+
 vi.mock('../features/interactive/sessionInitialization.js', () => ({
   initializeSession: vi.fn(),
 }));
@@ -98,6 +102,45 @@ beforeEach(() => {
 // =================================================================
 
 describe('quietMode: summary AI session isolation', () => {
+  it.each([
+    ['unset', undefined, true],
+    ['project false', false, false],
+  ] as const)('should apply %s to the actual quiet summary prompt', async (_label, configured, expectedEnabled) => {
+    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-quiet-gherkin-prompt-'));
+    if (configured !== undefined) {
+      fs.mkdirSync(path.join(projectDir, '.takt'), { recursive: true });
+      fs.writeFileSync(
+        path.join(projectDir, '.takt', 'config.yaml'),
+        ['assistant:', `  gherkin: ${configured}`].join('\n'),
+        'utf-8',
+      );
+    }
+    const actualInteractive = await vi.importActual<typeof import('../features/interactive/interactive.js')>(
+      '../features/interactive/interactive.js',
+    );
+    mockBuildSummaryPrompt.mockImplementation(actualInteractive.buildSummaryPrompt);
+    mockInitializeSession.mockReturnValue(createMockSessionContext(undefined));
+    mockCallAIWithRetry.mockResolvedValue({
+      result: { content: 'Generated task instruction.', success: true },
+      sessionId: undefined,
+    });
+    mockSelectPostSummaryAction.mockResolvedValue('execute');
+
+    try {
+      const result = await quietMode(projectDir, { userMessage: 'fix the bug' });
+
+      expect(result.action).toBe('execute');
+      const prompt = mockCallAIWithRetry.mock.calls[0]?.[0];
+      if (expectedEnabled) {
+        expect(prompt).toContain('## Markdown + Gherkin Output Format');
+      } else {
+        expect(prompt).not.toContain('## Markdown + Gherkin Output Format');
+      }
+    } finally {
+      fs.rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
   it('should pass sessionId as undefined to callAIWithRetry even when ctx carries an active sessionId', async () => {
     // Given: initializeSession returns a ctx with an active session
     const ctxWithSession = createMockSessionContext('active-session-123');

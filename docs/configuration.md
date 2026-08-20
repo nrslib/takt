@@ -31,7 +31,7 @@ interactive_preview_steps: 3  # Step previews in interactive mode (0-10, default
 auto_requeue_max_attempts: 0  # Auto-requeue failed workflow tasks during takt run (non-negative integer, default: 0 = disabled)
 ignore_exceed: false          # Applies to takt run and takt watch like --ignore-exceed (default: false)
 assistant:
-  gherkin: false              # Generate final task instructions as Markdown + focused Gherkin
+  gherkin: true               # Generate final task instructions as Markdown + focused Gherkin (default: true; set false to disable)
 # auto_fetch: false           # Fetch remote before cloning (default: false)
 # base_branch: main           # Base branch for clone creation (default: remote default branch)
 
@@ -190,7 +190,7 @@ assistant:
 | `concurrency` | number (1-10) | `1` | Parallel task count for `takt run` |
 | `task_poll_interval_ms` | number (100-5000) | `500` | Polling interval for new tasks |
 | `interactive_preview_steps` | number (0-10) | `3` | Step previews in interactive mode |
-| `assistant.gherkin` | boolean | `false` | Organize important observable behavior, state transitions, boundaries, failures, and invariants in a minimal number of Gherkin scenarios in final task instructions generated from assistant conversations. An explicit project value overrides the global value. |
+| `assistant.gherkin` | boolean | `true` | Organize important observable behavior, state transitions, boundaries, failures, and invariants in a minimal number of Gherkin scenarios in final task instructions generated from assistant conversations. Gherkin is enabled when unset; an explicit project value overrides the global value. |
 | `auto_requeue_max_attempts` | non-negative integer | `0` | Maximum automatic requeue attempts for failed workflow tasks during `takt run`; `0` disables automatic requeue |
 | `ignore_exceed` | boolean | `false` | Configures iteration-limit bypass for `takt run` and `takt watch`; a CLI `--ignore-exceed` flag takes precedence when specified |
 | `sync_project_local_takt_on_retry` | boolean | `true` | Sync the root project-local `.takt` into the worktree before retry / re-execution; set `false` to keep the worktree copy |
@@ -255,10 +255,11 @@ auto_requeue_max_attempts: 1  # Auto-requeue failed workflow tasks during takt r
 ignore_exceed: false          # Applies to takt run and takt watch like --ignore-exceed
 # base_branch: main           # Base branch for clone creation (overrides global, default: remote default branch)
 
-# Explicit initial context files for interactive assistant mode only (project config only)
+# Project-specific assistant settings
 # assistant:
-#   gherkin: true              # Generate final task instructions as Markdown + focused Gherkin
+#   gherkin: true              # Override the global setting; set false to disable
 #   init_files:
+#     # Project config only; initial context files for interactive assistant mode
 #     - docs/assistant-context.md
 #     - .takt/assistant-notes.md
 
@@ -402,7 +403,7 @@ Project config accepts most global keys and overrides their global values (e.g. 
 | `ignore_exceed` | boolean | `false` (from global/default) | Configures iteration-limit bypass for `takt run` and `takt watch`; a CLI `--ignore-exceed` flag takes precedence when specified |
 | `base_branch` | string | - | Base branch for clone creation (overrides global, default: remote default branch) |
 | `assistant.init_files` | string[] | - | Project-only interactive assistant initial context files. Paths must be relative to the project root; absolute paths, paths resolving outside the project root, and sensitive file patterns such as `.env*`, `.npmrc`, `.pypirc`, `.netrc`, `*.pem`, `*.key`, and `.git/**` are rejected. Missing paths, directories, and unreadable files fail with a clear error. At most 16 files are allowed; each file is limited to 256 KiB and the combined content is limited to 1 MiB. When unset or empty, TAKT does not auto-discover `CLAUDE.md`, `AGENT.md`, `AGENTS.md`, `TAKT.md`, or other files. This is separate from `takt_providers.assistant`, which only controls the assistant provider/model. |
-| `assistant.gherkin` | boolean | `false` | Project override for final task instructions generated from assistant conversations, including quiet mode. When enabled, TAKT keeps background, scope, implementation details, design intent, constraints, and verification in Markdown, and asks the summarizer to use a minimal number of Gherkin scenarios only for important observable behavior, state transitions, boundaries, failures, and invariants. When unset, TAKT uses the global value; when both are unset, it defaults to `false`. |
+| `assistant.gherkin` | boolean | `true` (from global/default) | Project override for final task instructions generated from assistant conversations, including quiet mode. When enabled, TAKT keeps background, scope, implementation details, design intent, constraints, and verification in Markdown, and asks the summarizer to use a minimal number of Gherkin scenarios only for important observable behavior, state transitions, boundaries, failures, and invariants. When unset, TAKT uses the global value; when both are unset, it defaults to `true`. |
 | `provider_options` | object | - | Provider-specific options |
 | `provider_profiles` | object | - | Provider-specific permission profiles |
 | `vcs_provider` | `"github"` \| `"gitlab"` | auto-detect | VCS provider (overrides global) |

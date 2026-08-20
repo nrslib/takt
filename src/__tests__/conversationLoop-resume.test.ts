@@ -598,6 +598,41 @@ describe('/resume command', () => {
 // /go command: summary AI session isolation
 // =================================================================
 describe('/go command', () => {
+  it.each([
+    ['unset', undefined, true],
+    ['project false', false, false],
+  ] as const)('should apply %s to the real summary prompt', async (_label, projectGherkin, expectedEnabled) => {
+    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-gherkin-real-summary-'));
+    if (projectGherkin !== undefined) {
+      fs.mkdirSync(path.join(projectDir, '.takt'), { recursive: true });
+      fs.writeFileSync(
+        path.join(projectDir, '.takt', 'config.yaml'),
+        ['assistant:', `  gherkin: ${projectGherkin}`].join('\n'),
+        'utf-8',
+      );
+    }
+    setupRawStdin(toRawInputs(['/go improve parser behavior']));
+    const { provider, capture } = createScenarioProvider([
+      { content: 'Generated task instruction.' },
+    ]);
+    const ctx = createSessionContext({
+      provider: provider as SessionContext['provider'],
+    });
+
+    try {
+      const result = await runConversationLoop(projectDir, ctx, defaultStrategy, undefined, undefined);
+
+      expect(result.action).toBe('execute');
+      if (expectedEnabled) {
+        expect(capture.prompts[0]).toContain('## Markdown + Gherkin Output Format');
+      } else {
+        expect(capture.prompts[0]).not.toContain('## Markdown + Gherkin Output Format');
+      }
+    } finally {
+      fs.rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
   it('should include Markdown and Gherkin rules in assistant summaries when project config enables them', async () => {
     const buildSummaryPromptSpy = vi.spyOn(interactiveModule, 'buildSummaryPrompt');
     const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-gherkin-assistant-'));

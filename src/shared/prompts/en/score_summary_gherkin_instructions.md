@@ -1,7 +1,7 @@
 <!-- markdownlint-disable MD041 -->
 <!--
   template: score_summary_gherkin_instructions
-  role: opt-in Markdown and Gherkin rules for conversation-to-task summarization
+  role: conditional Markdown and Gherkin rules for conversation-to-task summarization
   vars: none
   caller: features/interactive
 -->
