@@ -1002,7 +1002,12 @@ describe('prompt eval probe lifecycle', () => {
       env: process.env,
     });
 
-    await expect(execution).rejects.toMatchObject({ code: 'EPROBEPROTOCOL', phase: 'execution' });
+    const protocolError = await execution.then(
+      () => { throw new Error('expected rejection'); },
+      (error: Error & { code?: string; phase?: string; cleanup?: Promise<void> }) => error,
+    );
+    expect(protocolError).toMatchObject({ code: 'EPROBEPROTOCOL', phase: 'execution' });
+    await protocolError.cleanup;
   });
 
   it('should reject multiple complete results when parsing probe output', () => {
