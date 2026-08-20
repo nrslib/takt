@@ -1,6 +1,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { prepareTaskSpecDirectory, cleanupTaskSpecDirectory } from '../../infra/task/enqueueService.js';
+import { getLabel } from '../../shared/i18n/index.js';
+import { debugLog } from '../../shared/utils/index.js';
 import { isValidTaskDir } from '../../shared/utils/taskPaths.js';
 import type { InteractiveImageAttachment } from '../interactive/imageAttachments.js';
 import { promoteTaskAttachments } from './attachments.js';
@@ -104,6 +106,7 @@ function hasAttachmentPlaceholderMapping(
 export function ensureOrderAttachmentContent(
   content: string,
   attachments: readonly InteractiveImageAttachment[],
+  lang: 'en' | 'ja' = 'ja',
 ): string {
   if (attachments.length === 0) {
     return content;
@@ -124,10 +127,11 @@ export function ensureOrderAttachmentContent(
   }
 
   const trimmed = normalized.trimEnd();
-  if (trimmed.includes('## 添付画像')) {
+  const attachmentHeading = `## ${getLabel('orderRevision.attachmentsHeading', lang)}`;
+  if (trimmed.includes(attachmentHeading)) {
     return `${trimmed}\n${missingLines.join('\n')}`;
   }
-  return [trimmed, '', '## 添付画像', '', ...missingLines].join('\n');
+  return [trimmed, '', attachmentHeading, '', ...missingLines].join('\n');
 }
 
 export function resolveMaxImageIndex(content: string): number {
@@ -178,7 +182,14 @@ function removePromotedRevisionAttachments(
   promoted: PromotedRevisionAttachments,
 ): void {
   for (const destinationPath of promoted.paths) {
-    fs.rmSync(destinationPath, { force: true });
+    try {
+      fs.rmSync(destinationPath, { force: true });
+    } catch (error) {
+      debugLog('tasks', 'Failed to cleanup promoted order revision attachment', {
+        path: destinationPath,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
   if (promoted.createdDirectory) {
     const attachmentsDir = path.join(taskDir, 'attachments');
@@ -186,8 +197,11 @@ function removePromotedRevisionAttachments(
       if (fs.readdirSync(attachmentsDir).length === 0) {
         fs.rmdirSync(attachmentsDir);
       }
-    } catch {
-      // Cleanup is best-effort; the canonical order itself remains untouched.
+    } catch (error) {
+      debugLog('tasks', 'Failed to cleanup promoted order revision attachment directory', {
+        path: attachmentsDir,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 }
@@ -207,20 +221,10 @@ function promoteRevisionAttachments(
   try {
     promoteTaskAttachments(taskDir, attachments);
   } catch (error) {
-    for (const destinationPath of destinationPaths) {
-      if (!existing.has(destinationPath)) {
-        fs.rmSync(destinationPath, { force: true });
-      }
-    }
-    if (createdDirectory) {
-      try {
-        if (fs.readdirSync(attachmentsDir).length === 0) {
-          fs.rmdirSync(attachmentsDir);
-        }
-      } catch {
-        // Cleanup is best-effort; the caller still receives the promotion error.
-      }
-    }
+    removePromotedRevisionAttachments(taskDir, {
+      paths: destinationPaths.filter((destinationPath) => !existing.has(destinationPath)),
+      createdDirectory,
+    });
     throw error;
   }
 
@@ -228,6 +232,17 @@ function promoteRevisionAttachments(
     paths: destinationPaths.filter((destinationPath) => !existing.has(destinationPath)),
     createdDirectory,
   };
+}
+
+function removeOrderRevisionArchive(archivePath: string): void {
+  try {
+    fs.rmSync(archivePath, { force: true });
+  } catch (error) {
+    debugLog('tasks', 'Failed to cleanup order revision archive', {
+      path: archivePath,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 function replaceCanonicalOrder(
@@ -241,25 +256,25 @@ function replaceCanonicalOrder(
     throw new Error(`Task order must be a regular file: ${orderPath}`);
   }
 
+  const archivePath = nextArchivePath(orderPath);
   const temporaryPath = makeTemporaryOrderPath(taskDir);
-  let archivePath: string | undefined;
-  let archiveCreated = false;
   let promoted: PromotedRevisionAttachments | undefined;
   try {
     fs.writeFileSync(temporaryPath, approvedOrderContent, { encoding: 'utf-8', flag: 'wx' });
     promoted = promoteRevisionAttachments(taskDir, attachments);
-    archivePath = nextArchivePath(orderPath);
     fs.copyFileSync(orderPath, archivePath, fs.constants.COPYFILE_EXCL);
-    archiveCreated = true;
     // The old file remains in place until this atomic replacement succeeds.
-    fs.renameSync(temporaryPath, orderPath);
+    try {
+      fs.renameSync(temporaryPath, orderPath);
+    } catch (error) {
+      // The archive is owned by this revision only after copyFileSync succeeds.
+      removeOrderRevisionArchive(archivePath);
+      throw error;
+    }
   } catch (error) {
     fs.rmSync(temporaryPath, { force: true });
     if (promoted) {
       removePromotedRevisionAttachments(taskDir, promoted);
-    }
-    if (archiveCreated && archivePath) {
-      fs.rmSync(archivePath, { force: true });
     }
     throw error;
   }
@@ -274,9 +289,18 @@ function replaceCanonicalOrder(
     rolledBack = true;
     // The archive is the old canonical file. Renaming it back restores the
     // exact previous file while removing the approved replacement.
-    fs.renameSync(committedArchivePath!, orderPath);
-    if (committedAttachments) {
-      removePromotedRevisionAttachments(taskDir, committedAttachments);
+    try {
+      fs.renameSync(committedArchivePath, orderPath);
+    } catch (error) {
+      debugLog('tasks', 'Failed to rollback task order revision', {
+        path: orderPath,
+        archivePath: committedArchivePath,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      if (committedAttachments) {
+        removePromotedRevisionAttachments(taskDir, committedAttachments);
+      }
     }
   };
 }

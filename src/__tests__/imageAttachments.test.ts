@@ -68,6 +68,25 @@ describe('createImageAttachmentStore', () => {
     expect(store.listAttachments()).toEqual([first, second]);
   });
 
+  it('should start after the highest existing placeholder or file name index', async () => {
+    const tmpRoot = createTempRoot();
+    const store = createImageAttachmentStore({
+      tmpRoot,
+      sessionId: 'session-existing-index',
+      initialAttachmentIndex: 2,
+      initialAttachments: [{
+        placeholder: '[Image #3]',
+        tempPath: path.join(tmpRoot, 'existing-image.png'),
+        fileName: 'image-10.png',
+      }],
+    });
+
+    const attachment = await store.saveImage(Buffer.from('new'), 'image/png');
+
+    expect(attachment.placeholder).toBe('[Image #11]');
+    expect(attachment.fileName).toBe('image-11.png');
+  });
+
   it('should create session attachment directories and pasted files with private permissions', async () => {
     const tmpRoot = createTempRoot();
     const store = createImageAttachmentStore({

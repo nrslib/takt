@@ -65,7 +65,12 @@ vi.mock('../shared/prompt/index.js', () => ({
 }));
 
 vi.mock('../shared/i18n/index.js', () => ({
-  getLabel: vi.fn((_key: string, _lang: string) => 'Mock label'),
+  getLabel: vi.fn((key: string, lang: string) => {
+    if (key === 'orderRevision.attachmentsHeading') {
+      return lang === 'ja' ? '添付画像' : 'Attachments';
+    }
+    return 'Mock label';
+  }),
   getLabelObject: vi.fn(() => ({
     intro: 'Instruct mode intro',
     resume: 'Resuming',
@@ -211,6 +216,7 @@ describe('runInstructMode', () => {
     const result = await runTestInstructMode();
 
     expect(result.action).toBe('execute');
+    expect(result.source).toBe('go');
     expect(result.task).toBe('Summarized task.');
   });
 
@@ -227,7 +233,7 @@ describe('runInstructMode', () => {
     expect(result.task).toBe([
       'Use [Image #1].',
       '',
-      '## 添付画像',
+      '## Attachments',
       '',
       '- [Image #1]: `attachments/image-1.png`',
     ].join('\n'));

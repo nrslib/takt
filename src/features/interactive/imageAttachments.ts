@@ -62,6 +62,14 @@ function validateImageAttachmentSessionId(sessionId: string): void {
   }
 }
 
+function resolveInitialAttachmentIndex(attachments: readonly InteractiveImageAttachment[]): number {
+  return attachments.reduce((maxIndex, attachment) => {
+    const placeholderIndex = /\[Image #(\d+)\]/.exec(attachment.placeholder)?.[1];
+    const fileNameIndex = /^image-(\d+)\.[A-Za-z0-9]+$/.exec(attachment.fileName)?.[1];
+    return Math.max(maxIndex, Number(placeholderIndex ?? 0), Number(fileNameIndex ?? 0));
+  }, 0);
+}
+
 export function cleanupImageAttachmentStore(attachmentStore: ImageAttachmentStore): void {
   try {
     attachmentStore.cleanup();
@@ -134,7 +142,10 @@ export function createImageAttachmentStore(
   let attachments: InteractiveImageAttachment[] = options.initialAttachments
     ? [...options.initialAttachments]
     : [];
-  let nextAttachmentIndex = options.initialAttachmentIndex ?? attachments.length;
+  let nextAttachmentIndex = Math.max(
+    options.initialAttachmentIndex ?? 0,
+    resolveInitialAttachmentIndex(attachments),
+  );
   const sessionDir = path.join(options.tmpRoot, 'takt', options.sessionId);
   const taktTmpDir = path.dirname(sessionDir);
   const attachmentDir = path.join(sessionDir, 'attachments');

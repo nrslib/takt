@@ -165,6 +165,7 @@ async function runRetryConversation(
   displayAndClearSessionState(cwd, ctx.lang);
 
   const ui = getLabelObject<InstructUIText>('instruct.ui', ctx.lang);
+  const canonicalOrderContent = (retryContext.previousOrderContent ?? retryContext.failure.taskContent).trim();
 
   const templateVars = buildRetryTemplateVars(retryContext, lang);
   const systemPrompt = prependSourceContextGuardToSystemPrompt(
@@ -190,11 +191,9 @@ async function runRetryConversation(
         selectGoAction: createOrderRevisionSelector(),
         selectRetryAction: async (): Promise<PostSummaryAction> => 'execute',
         summaryPromptBuilder: (summaryOptions: Parameters<typeof buildOrderRevisionPrompt>[0]) =>
-          buildOrderRevisionPrompt(summaryOptions, retryContext.previousOrderContent ?? retryContext.failure.taskContent),
-        normalizeSummaryTask: (task: string, attachments) => normalizeOrderRevisionSummary(task, attachments),
-        initialImageAttachmentIndex: resolveMaxImageIndex(
-          retryContext.previousOrderContent ?? retryContext.failure.taskContent,
-        ),
+          buildOrderRevisionPrompt(summaryOptions, canonicalOrderContent),
+        normalizeSummaryTask: (task: string, attachments) => normalizeOrderRevisionSummary(task, attachments, ctx.lang),
+        initialImageAttachmentIndex: resolveMaxImageIndex(canonicalOrderContent),
         enabledCommands: [
           SlashCommand.Go,
           SlashCommand.Retry,

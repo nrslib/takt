@@ -172,7 +172,7 @@ export async function runInstructMode(
     selectGoAction: createOrderRevisionSelector(),
     summaryPromptBuilder: (summaryOptions) =>
       buildOrderRevisionPrompt(summaryOptions, canonicalOrderContent),
-    normalizeSummaryTask: (task, attachments) => normalizeOrderRevisionSummary(task, attachments),
+    normalizeSummaryTask: (task, attachments) => normalizeOrderRevisionSummary(task, attachments, ctx.lang),
     initialImageAttachmentIndex: resolveMaxImageIndex(canonicalOrderContent),
     enabledCommands: [
       SlashCommand.Go,

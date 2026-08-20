@@ -24,18 +24,21 @@ Revise the existing `order.md` into a complete new order that incorporates the n
 {{conversation}}
 
 {{#if sourceContext}}
+
 ## Reference context
 
 {{sourceContext}}
 {{/if}}
 
 {{#if userNote}}
+
 ## New instruction supplied with /go
 
 {{userNote}}
 {{/if}}
 
 {{#if hasWorkflowPreview}}
+
 ## Workflow structure
 
 {{workflowStructure}}

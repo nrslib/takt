@@ -24,18 +24,21 @@
 {{conversation}}
 
 {{#if sourceContext}}
+
 ## 参照コンテキスト
 
 {{sourceContext}}
 {{/if}}
 
 {{#if userNote}}
+
 ## /go に添えられた新しい指示
 
 {{userNote}}
 {{/if}}
 
 {{#if hasWorkflowPreview}}
+
 ## ワークフロー構成
 
 {{workflowStructure}}

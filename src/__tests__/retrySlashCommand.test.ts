@@ -71,7 +71,12 @@ vi.mock('../shared/prompt/index.js', () => ({
 }));
 
 vi.mock('../shared/i18n/index.js', () => ({
-  getLabel: vi.fn((_key: string, _lang: string) => 'Mock label'),
+  getLabel: vi.fn((key: string, lang: string) => {
+    if (key === 'orderRevision.attachmentsHeading') {
+      return lang === 'ja' ? '添付画像' : 'Attachments';
+    }
+    return 'Mock label';
+  }),
   getLabelObject: vi.fn(() => ({
     intro: 'Retry intro',
     resume: 'Resume',
@@ -198,6 +203,7 @@ describe('/retry slash command', () => {
 
     expect(result.action).toBe('execute');
     expect(result.source).toBe('retry');
+    expect(vi.mocked(selectOption)).not.toHaveBeenCalled();
   });
 
   it('should not execute /accept or /play directly in order revision retry mode', async () => {
@@ -250,7 +256,7 @@ describe('/retry slash command', () => {
     expect(result.task).toBe([
       'Retry using [Image #1].',
       '',
-      '## 添付画像',
+      '## Attachments',
       '',
       '- [Image #1]: `attachments/image-1.png`',
     ].join('\n'));

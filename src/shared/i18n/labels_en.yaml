@@ -238,6 +238,7 @@ retry:
   usePreviousWorkflowConfirm: "Use previous workflow \"{workflow}\"?"
 
 orderRevision:
+  attachmentsHeading: "Attachments"
   ui:
     proposed: "Proposed new order.md:"
     actionPrompt: "Replace the current order with this instruction?"

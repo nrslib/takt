@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { attachWorkflowSourcePath, attachWorkflowTrustInfo } from '../infra/config/loaders/workflowSourceMetadata.js';
+import type { PersistedTaskOrderRevision } from '../features/tasks/orderRevision.js';
 import { withAttachmentCleanup } from './testUtils/attachmentTestHelpers.js';
 
 const {
-  mockReadFileSync,
   mockSelectWorkflow,
   mockSelectOptionWithDefault,
   mockConfirm,
@@ -38,7 +38,6 @@ const {
   mockGetCurrentBranch,
   mockLocalBranchExists,
 } = vi.hoisted(() => ({
-  mockReadFileSync: vi.fn(),
   mockSelectWorkflow: vi.fn(),
   mockSelectOptionWithDefault: vi.fn(),
   mockConfirm: vi.fn(),
@@ -75,26 +74,18 @@ const {
   mockLoadAllStandaloneWorkflowsWithSources: vi.fn(() => new Map<string, unknown>([['default', {}]])),
   mockPrepareTaskSpecDirectory: vi.fn(),
   mockCleanupPreparedTaskSpec: vi.fn(),
-  mockResolveTaskOrderContent: vi.fn((projectDir: string, taskDir: string | undefined, legacyContent: string) => {
-    if (taskDir) {
-      return mockReadFileSync(`${projectDir}/${taskDir}/order.md`, 'utf-8');
-    }
-    return legacyContent;
-  }),
-  mockPersistTaskOrderRevision: vi.fn((projectDir: string, taskDir?: string) => taskDir
-    ? { taskDirRelative: taskDir, taskDir: `${projectDir}/${taskDir}`, created: false }
-    : { created: false }),
+  mockResolveTaskOrderContent: vi.fn(() => 'Do something'),
+  mockPersistTaskOrderRevision: vi.fn(
+    (projectDir: string, taskDir?: string): PersistedTaskOrderRevision => taskDir
+      ? { taskDirRelative: taskDir, taskDir: `${projectDir}/${taskDir}`, created: false, rollback: vi.fn() }
+      : { created: false, rollback: vi.fn() },
+  ),
   mockCleanupPersistedTaskOrderRevision: vi.fn(),
   mockAssertReusableWorktreePath: vi.fn(),
   mockDetectDefaultBranch: vi.fn(() => 'main'),
   mockResolveBaseBranch: vi.fn(() => ({ branch: 'main' })),
   mockGetCurrentBranch: vi.fn(() => 'feature/retry-context'),
   mockLocalBranchExists: vi.fn(() => true),
-}));
-
-vi.mock('node:fs', async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  readFileSync: (...args: unknown[]) => mockReadFileSync(...args),
 }));
 
 vi.mock('../features/workflowSelection/index.js', () => ({
@@ -180,10 +171,6 @@ vi.mock('../features/tasks/execute/taskExecution.js', () => ({
 vi.mock('../features/tasks/attachments.js', () => ({
   prepareTaskSpecDirectory: (...args: unknown[]) => mockPrepareTaskSpecDirectory(...args),
   cleanupPreparedTaskSpec: (...args: unknown[]) => mockCleanupPreparedTaskSpec(...args),
-}));
-
-vi.mock('../features/tasks/taskSpecFile.js', () => ({
-  readTaskSpecFile: (sourceOrderPath: string) => mockReadFileSync(sourceOrderPath, 'utf-8'),
 }));
 
 vi.mock('../features/tasks/orderRevision.js', () => ({
@@ -453,11 +440,8 @@ const testAttachment = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockResolveTaskOrderContent.mockImplementation(() => 'Do something');
   mockAssertReusableWorktreePath.mockImplementation(() => undefined);
-  mockReadFileSync.mockImplementation(() => {
-    throw new Error('readFileSync should not be called by default');
-  });
-
   mockConfirm.mockResolvedValue(true);
   mockSelectWorkflow.mockResolvedValue('default');
   mockResolveWorkflowConfigValue.mockReturnValue(3);
@@ -1273,7 +1257,7 @@ describe('retryFailedTask', () => {
       taskDir: '.takt/tasks/my-task',
       data: { task: 'Implement using only the files in `.takt/tasks/my-task`.', workflow: 'default' },
     });
-    mockReadFileSync.mockReturnValue(['Original order', 'Second line'].join('\n'));
+    mockResolveTaskOrderContent.mockReturnValue(['Original order', 'Second line'].join('\n'));
     mockRunTaskRetryMode.mockResolvedValue({
       action: 'save_task',
       task: 'Use [Image #1].',
@@ -1283,7 +1267,11 @@ describe('retryFailedTask', () => {
 
     await retryFailedTask(task, '/project');
 
-    expect(mockReadFileSync).toHaveBeenCalledWith('/project/.takt/tasks/my-task/order.md', 'utf-8');
+    expect(mockResolveTaskOrderContent).toHaveBeenCalledWith(
+      '/project',
+      '.takt/tasks/my-task',
+      'Implement using only the files in `.takt/tasks/my-task`.',
+    );
     expect(mockPersistTaskOrderRevision).toHaveBeenCalledWith(
       '/project',
       '.takt/tasks/my-task',
@@ -1298,7 +1286,7 @@ describe('retryFailedTask', () => {
       taskDir: '.takt/tasks/my-task',
       data: { task: 'Implement using only the files in `.takt/tasks/my-task`.', workflow: 'default' },
     });
-    mockReadFileSync.mockReturnValue([
+    mockResolveTaskOrderContent.mockReturnValue([
       'Original order with [Image #1].',
       '',
       '## 添付画像',
@@ -1341,7 +1329,7 @@ describe('retryFailedTask', () => {
       taskDir: '.takt/tasks/my-task',
       data: { task: 'Implement using only the files in `.takt/tasks/my-task`.', workflow: 'default' },
     });
-    mockReadFileSync.mockReturnValue([
+    mockResolveTaskOrderContent.mockReturnValue([
       'Original order with [Image #1].',
       '',
       '## 添付画像',
@@ -2127,7 +2115,7 @@ describe('retryFailedTask', () => {
       content: 'Legacy task text',
       data: { task: 'Legacy task text', workflow: 'default' },
     });
-    mockReadFileSync.mockReturnValue('# Canonical order');
+    mockResolveTaskOrderContent.mockReturnValue('# Canonical order');
     mockRunTaskRetryMode.mockResolvedValue({
       action: 'execute',
       task: '# Canonical order',

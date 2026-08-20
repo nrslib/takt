@@ -238,6 +238,7 @@ retry:
   usePreviousWorkflowConfirm: "前回のワークフロー \"{workflow}\" を使用しますか？"
 
 orderRevision:
+  attachmentsHeading: "添付画像"
   ui:
     proposed: "新しい order.md 案:"
     actionPrompt: "この指示書で置き換えますか？"

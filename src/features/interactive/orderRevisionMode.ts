@@ -73,9 +73,10 @@ export function createOrderRevisionSelector(
 export function normalizeOrderRevisionSummary(
   task: string,
   attachments: readonly InteractiveImageAttachment[],
+  lang: 'en' | 'ja',
 ): { task: string; attachments: readonly InteractiveImageAttachment[] } {
   return {
-    task: ensureOrderAttachmentContent(task, attachments),
+    task: ensureOrderAttachmentContent(task, attachments, lang),
     attachments,
   };
 }

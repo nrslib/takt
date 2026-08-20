@@ -26,7 +26,7 @@ function makeRetryTask(worktreePath: string): TaskInfo {
     worktreePath,
     resumeMode: 'retry',
     data: { worktree: true, task: 'Retry task', workflow: 'default' },
-  } as TaskInfo;
+  };
 }
 
 afterEach(() => {
@@ -36,6 +36,25 @@ afterEach(() => {
 });
 
 describe('reused worktree execution', () => {
+  it('returns the existing in-bound worktree without creating a replacement clone', () => {
+    const projectDir = makeProject();
+    const worktreePath = path.join(projectDir, '.takt', 'worktrees', 'safe');
+    fs.mkdirSync(worktreePath, { recursive: true });
+
+    expect(resolveReusedWorktreeExecution(
+      projectDir,
+      makeRetryTask(worktreePath),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    )).toEqual({
+      execCwd: worktreePath,
+      worktreePath,
+      isWorktree: true,
+    });
+  });
+
   it('rejects an existing directory outside the clone boundary', () => {
     const projectDir = makeProject();
     const outsideWorktree = path.join(projectDir, 'outside-worktree');
