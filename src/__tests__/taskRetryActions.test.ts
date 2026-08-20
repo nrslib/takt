@@ -381,11 +381,7 @@ function expectRequeueTaskCalledWith(
   allowedStatuses: string[],
   options: Record<string, unknown>,
 ): void {
-  expect(mockRequeueTask).toHaveBeenCalledWith(
-    taskRef,
-    allowedStatuses,
-    normalizePersistedTaskDirExpectation(options),
-  );
+  expect(mockRequeueTask).toHaveBeenCalledWith(taskRef, allowedStatuses, options);
 }
 
 function expectStartReExecutionCalledWith(
@@ -394,18 +390,7 @@ function expectStartReExecutionCalledWith(
   resumeMode: string,
   options: Record<string, unknown>,
 ): void {
-  expect(mockStartReExecution).toHaveBeenCalledWith(
-    taskRef,
-    allowedStatuses,
-    resumeMode,
-    normalizePersistedTaskDirExpectation(options),
-  );
-}
-
-function normalizePersistedTaskDirExpectation(options: Record<string, unknown>): Record<string, unknown> {
-  return options.taskDir === undefined && mockPersistTaskOrderRevision.mock.calls.length > 0
-    ? { ...options, taskDir: MOCK_CREATED_TASK_DIR }
-    : options;
+  expect(mockStartReExecution).toHaveBeenCalledWith(taskRef, allowedStatuses, resumeMode, options);
 }
 
 function expectResumeCandidateIsDefault(): void {
@@ -1106,7 +1091,7 @@ describe('retryFailedTask', () => {
         retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: undefined,
         restartPoint: defaultPlanRestartPoint,
       },
@@ -1237,7 +1222,7 @@ describe('retryFailedTask', () => {
         retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: undefined,
         restartPoint: defaultPlanRestartPoint,
       },
@@ -1402,7 +1387,7 @@ describe('retryFailedTask', () => {
         retryNote: undefined,
         resumePoint: undefined,
         workflow: 'selected-workflow',
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: undefined,
         restartPoint: defaultPlanRestartPoint,
       },
@@ -1653,7 +1638,7 @@ describe('retryFailedTask', () => {
         retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: 'run-1',
         restartPoint: {
         stack: [{ workflow: 'default', workflow_ref: 'default', step: 'implement', kind: 'agent' }],
@@ -1722,7 +1707,7 @@ describe('retryFailedTask', () => {
         retryNote: undefined,
         resumePoint: resumePoint,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: 'run-1',
         restartPoint: undefined,
       },
@@ -1743,7 +1728,7 @@ describe('retryFailedTask', () => {
         retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: undefined,
         restartPoint: nestedReviewRestartPoint,
       },
@@ -1765,7 +1750,7 @@ describe('retryFailedTask', () => {
         retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: 'run-1',
         restartPoint: {
         stack: [{ workflow: 'default', workflow_ref: 'default', step: 'plan', kind: 'agent' }],
@@ -1826,7 +1811,7 @@ describe('retryFailedTask', () => {
         retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: 'run-1',
         restartPoint: {
         stack: [{ workflow: 'default', workflow_ref: 'default', step: 'review', kind: 'agent' }],
@@ -1849,7 +1834,7 @@ describe('retryFailedTask', () => {
         retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: 'run-1',
         restartPoint: {
         stack: [{ workflow: 'default', workflow_ref: 'default', step: 'plan', kind: 'agent' }],
@@ -1872,7 +1857,7 @@ describe('retryFailedTask', () => {
         retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: 'run-1',
         restartPoint: defaultPlanRestartPoint,
       },
@@ -2117,7 +2102,7 @@ describe('retryFailedTask', () => {
         retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: 'run-1',
         restartPoint: {
         stack: [{ workflow: 'default', workflow_ref: 'default', step: 'plan', kind: 'agent' }],
@@ -2174,7 +2159,7 @@ describe('retryFailedTask', () => {
         retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: 'run-1',
         restartPoint: defaultPlanRestartPoint,
       },
@@ -2204,7 +2189,7 @@ describe('retryFailedTask', () => {
         retryNote: undefined,
         resumePoint: undefined,
         workflow: 'selected-workflow',
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: 'run-1',
         restartPoint: defaultPlanRestartPoint,
       },
@@ -2267,7 +2252,7 @@ describe('retryFailedTask', () => {
         retryNote: undefined,
         resumePoint: resumePoint,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: 'run-1',
         restartPoint: undefined,
       },
@@ -2289,7 +2274,7 @@ describe('retryFailedTask', () => {
         retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: undefined,
         restartPoint: nestedReviewRestartPoint,
       },
@@ -2311,7 +2296,7 @@ describe('retryFailedTask', () => {
         retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: 'run-1',
         restartPoint: {
         stack: [{ workflow: 'default', workflow_ref: 'default', step: 'plan', kind: 'agent' }],
@@ -2345,7 +2330,7 @@ describe('retryFailedTask', () => {
         retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: 'run-1',
         restartPoint: defaultPlanRestartPoint,
       },

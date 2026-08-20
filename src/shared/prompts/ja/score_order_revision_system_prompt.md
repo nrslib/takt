@@ -15,9 +15,9 @@
 
 ## 現在の canonical order.md
 
-```markdown
+--- BEGIN CANONICAL ORDER.MD ---
 {{canonicalOrderContent}}
-```
+--- END CANONICAL ORDER.MD ---
 
 ## 会話
 

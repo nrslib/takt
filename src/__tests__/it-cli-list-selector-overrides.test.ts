@@ -113,6 +113,7 @@ const DYNAMIC_PARALLEL_SELECTOR_PERSONA = 'dynamic-parallel-selector';
 interface TestEnvironment {
   readonly projectDir: string;
   readonly mockCallLogPath: string;
+  readonly globalConfigDir: string;
 }
 
 function initializeGitRepository(projectDir: string): void {
@@ -169,12 +170,15 @@ function writeWorkflowFixture(projectDir: string): void {
 
 function createEnvironment(): TestEnvironment {
   const projectDir = mkdtempSync(join(tmpdir(), 'takt-cli-list-selector-'));
+  const globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-cli-list-selector-global-'));
   mkdirSync(join(projectDir, '.takt'), { recursive: true });
   writeWorkflowFixture(projectDir);
   initializeGitRepository(projectDir);
+  writeFileSync(join(globalConfigDir, 'config.yaml'), `worktree_dir: ${join(projectDir, 'worktrees')}\n`);
   return {
     projectDir,
     mockCallLogPath: join(projectDir, '.takt-mock-calls.ndjson'),
+    globalConfigDir,
   };
 }
 
@@ -273,10 +277,13 @@ async function runListCommand(): Promise<void> {
 
 describe('IT: CLI list selector overrides', () => {
   let environment: TestEnvironment;
+  let previousConfigDir: string | undefined;
 
   beforeEach(() => {
     vi.clearAllMocks();
     environment = createEnvironment();
+    previousConfigDir = process.env.TAKT_CONFIG_DIR;
+    process.env.TAKT_CONFIG_DIR = environment.globalConfigDir;
     cliState.cwd = environment.projectDir;
     vi.mocked(rootCommand.opts as () => Record<string, unknown>).mockReturnValue({
       provider: 'mock',
@@ -305,6 +312,12 @@ describe('IT: CLI list selector overrides', () => {
       force: true,
     });
     rmSync(environment.projectDir, { recursive: true, force: true });
+    rmSync(environment.globalConfigDir, { recursive: true, force: true });
+    if (previousConfigDir === undefined) {
+      delete process.env.TAKT_CONFIG_DIR;
+    } else {
+      process.env.TAKT_CONFIG_DIR = previousConfigDir;
+    }
   });
 
   it('should use one CLI override for retry preview, selector, and participants from the list command', async () => {

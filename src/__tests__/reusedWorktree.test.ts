@@ -91,7 +91,8 @@ describe('reused worktree execution', () => {
 
   it('fails fast when the retry worktree path is a file', () => {
     const projectDir = makeProject();
-    const invalidWorktree = path.join(projectDir, 'worktree-file');
+    const invalidWorktree = path.join(projectDir, '.takt', 'worktrees', 'worktree-file');
+    fs.mkdirSync(path.dirname(invalidWorktree), { recursive: true });
     fs.writeFileSync(invalidWorktree, 'not a directory');
 
     expect(() => resolveReusedWorktreeExecution(

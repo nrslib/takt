@@ -87,6 +87,44 @@ describe('task order revision contract', () => {
     )).toBe('# Canonical\n\nKeep this.');
   });
 
+  it('rejects an empty canonical order', () => {
+    const projectDir = makeProject();
+    const taskDir = path.join(projectDir, '.takt/tasks/empty-task');
+    fs.mkdirSync(taskDir, { recursive: true });
+    fs.writeFileSync(path.join(taskDir, 'order.md'), '  \n');
+
+    expect(() => resolveTaskOrderContent(
+      projectDir,
+      '.takt/tasks/empty-task',
+      'legacy fallback',
+    )).toThrow('Task order is empty');
+  });
+
+  it('rejects an invalid task_dir before resolving an order path', () => {
+    const projectDir = makeProject();
+
+    expect(() => resolveTaskOrderContent(
+      projectDir,
+      '.takt/tasks/../outside',
+      'legacy fallback',
+    )).toThrow('Invalid task_dir format');
+  });
+
+  it('rejects a task_dir that is not a directory when persisting', () => {
+    const projectDir = makeProject();
+    const taskPath = path.join(projectDir, '.takt/tasks/not-a-directory');
+    fs.mkdirSync(path.dirname(taskPath), { recursive: true });
+    fs.writeFileSync(taskPath, 'not a directory');
+
+    expect(() => persistTaskOrderRevision(
+      projectDir,
+      '.takt/tasks/not-a-directory',
+      '# New order',
+      'en',
+    )).toThrow('Task directory must be a regular directory');
+    expect(fs.readFileSync(taskPath, 'utf-8')).toBe('not a directory');
+  });
+
   it('archives and atomically replaces the canonical order on approval', () => {
     const projectDir = makeProject();
     const taskDir = path.join(projectDir, '.takt/tasks/example-task');
@@ -131,6 +169,32 @@ describe('task order revision contract', () => {
     expect(persisted.created).toBe(true);
     expect(fs.readFileSync(path.join(persisted.taskDir!, 'order.md'), 'utf-8')).toBe(proposal);
     expect(fs.existsSync(path.join(persisted.taskDir!, 'attachments/image-1.png'))).toBe(true);
+  });
+
+  it('preserves an existing task attachment when a revision uses the same file name', () => {
+    const projectDir = makeProject();
+    const taskDir = path.join(projectDir, '.takt/tasks/example-task');
+    const existingAttachmentPath = path.join(taskDir, 'attachments/image-1.png');
+    const sourcePath = path.join(projectDir, 'image.png');
+    fs.mkdirSync(path.dirname(existingAttachmentPath), { recursive: true });
+    fs.writeFileSync(path.join(taskDir, 'order.md'), '# Old order');
+    fs.writeFileSync(existingAttachmentPath, 'existing attachment');
+    fs.writeFileSync(sourcePath, 'new attachment');
+
+    expect(() => persistTaskOrderRevision(
+      projectDir,
+      '.takt/tasks/example-task',
+      '# New order\n\nUse [Image #1].',
+      'en',
+      [{
+        placeholder: '[Image #1]',
+        tempPath: sourcePath,
+        fileName: 'image-1.png',
+      }],
+    )).toThrow('Task attachment destination already exists');
+
+    expect(fs.readFileSync(existingAttachmentPath, 'utf-8')).toBe('existing attachment');
+    expect(fs.readFileSync(path.join(taskDir, 'order.md'), 'utf-8')).toBe('# Old order');
   });
 
   it('uses the language-specific attachments heading in the proposal', () => {
@@ -194,6 +258,27 @@ describe('task order revision contract', () => {
     expect(fs.readFileSync(orderPath, 'utf-8')).toBe('# Old order');
     expect(fs.readdirSync(taskDir).filter((entry) => entry.startsWith('order.md.'))).toHaveLength(0);
     expect(fs.existsSync(path.join(taskDir, 'attachments/image-1.png'))).toBe(false);
+  });
+
+  it('rejects a symlinked canonical order without changing the target or task directory', () => {
+    const projectDir = makeProject();
+    const taskDir = path.join(projectDir, '.takt/tasks/symlinked-order');
+    const targetOrderPath = path.join(projectDir, 'target-order.md');
+    const orderPath = path.join(taskDir, 'order.md');
+    fs.mkdirSync(taskDir, { recursive: true });
+    fs.writeFileSync(targetOrderPath, '# Old order');
+    fs.symlinkSync(targetOrderPath, orderPath);
+
+    expect(() => persistTaskOrderRevision(
+      projectDir,
+      '.takt/tasks/symlinked-order',
+      '# New order',
+      'en',
+    )).toThrow('Task order must be a regular file');
+
+    expect(fs.readFileSync(targetOrderPath, 'utf-8')).toBe('# Old order');
+    expect(fs.lstatSync(orderPath).isSymbolicLink()).toBe(true);
+    expect(fs.readdirSync(taskDir)).toEqual(['order.md']);
   });
 
   it('keeps a competing archive when its candidate is claimed before copy completes', () => {

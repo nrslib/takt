@@ -148,7 +148,7 @@ export function resolveMaxImageIndex(content: string): number {
 }
 
 function makeTimestamp(): string {
-  return String(Date.now());
+  return `${Date.now()}-${process.pid}`;
 }
 
 function nextArchivePath(orderPath: string): string {

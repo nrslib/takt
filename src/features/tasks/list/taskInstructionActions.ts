@@ -13,7 +13,7 @@ import {
 import { resolveWorkflowConfigValues, getWorkflowDescription } from '../../../infra/config/index.js';
 import { info, warn } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
-import { runInstructMode } from './instructMode.js';
+import { runInstructMode, type InstructModeResult } from './instructMode.js';
 import { dispatchConversationAction } from '../../interactive/actionDispatcher.js';
 import type { WorkflowContext } from '../../interactive/interactive.js';
 import { cleanupInteractiveResultAttachments } from '../../interactive/imageAttachments.js';
@@ -113,6 +113,46 @@ function getBranchContext(
   return lines.length > 0 ? `${lines.join('\n')}\n\n` : '';
 }
 
+type InstructionTaskStateUpdater<T> = (
+  runner: TaskRunner,
+  taskDir: string | undefined,
+  retryNote: string | undefined,
+) => T;
+
+function applyInstructionTaskState<T>(
+  projectDir: string,
+  worktreePath: string,
+  targetTaskDir: string | undefined,
+  legacyRetryNote: string | undefined,
+  result: InstructModeResult,
+  lang: 'en' | 'ja',
+  updateTaskState: InstructionTaskStateUpdater<T>,
+): { runner: TaskRunner; result: T } {
+  const runner = new TaskRunner(projectDir);
+  let revision: PersistedTaskOrderRevision | undefined;
+  try {
+    assertReusableWorktreePath(projectDir, worktreePath);
+    if (result.source === 'go') {
+      revision = persistTaskOrderRevision(
+        projectDir,
+        targetTaskDir,
+        result.task,
+        lang,
+        result.attachments,
+      );
+    }
+    const taskDir = revision?.taskDirRelative ?? targetTaskDir;
+    const executionRetryNote = result.source === 'go'
+      ? undefined
+      : legacyRetryNote;
+    const stateResult = updateTaskState(runner, taskDir, executionRetryNote);
+    return { runner, result: stateResult };
+  } catch (error) {
+    cleanupPersistedTaskOrderRevision(revision);
+    throw error;
+  }
+}
+
 export async function instructBranch(
   projectDir: string,
   target: BranchActionTarget,
@@ -204,26 +244,14 @@ export async function instructBranch(
   });
 
   const executeWithInstruction = async (): Promise<boolean> => {
-    let revision: PersistedTaskOrderRevision | undefined;
-    let taskInfo: ReturnType<TaskRunner['startReExecution']>;
-    const runner = new TaskRunner(projectDir);
-    try {
-      assertReusableWorktreePath(projectDir, worktreePath);
-      if (result.source === 'go') {
-        revision = persistTaskOrderRevision(
-          projectDir,
-          target.taskDir,
-          result.task,
-          lang,
-          result.attachments,
-        );
-      }
-      const taskDir = revision?.taskDirRelative ?? target.taskDir;
-      const executionRetryNote = result.source === 'go'
-        ? undefined
-        : target.data?.retry_note;
-      assertReusableWorktreePath(projectDir, worktreePath);
-      taskInfo = runner.startReExecution(
+    const { runner, result: taskInfo } = applyInstructionTaskState(
+      projectDir,
+      worktreePath,
+      target.taskDir,
+      target.data?.retry_note,
+      result,
+      lang,
+      (taskRunner, taskDir, executionRetryNote) => taskRunner.startReExecution(
         target.name,
         ['completed', 'pr_failed'],
         'instruct',
@@ -236,11 +264,8 @@ export async function instructBranch(
           sourceRunSlug: matchedSlug ?? undefined,
           restartPoint: undefined,
         },
-      );
-    } catch (error) {
-      cleanupPersistedTaskOrderRevision(revision);
-      throw error;
-    }
+      ),
+    );
     const taskForExecution = prepareTaskForExecution(taskInfo, selectedWorkflow);
 
     log.info('Starting re-execution of instructed task', {
@@ -261,41 +286,29 @@ export async function instructBranch(
       },
       execute: async () => executeWithInstruction(),
       save_task: async () => {
-        let revision: PersistedTaskOrderRevision | undefined;
-        const runner = new TaskRunner(projectDir);
-        try {
-          assertReusableWorktreePath(projectDir, worktreePath);
-          if (result.source === 'go') {
-            revision = persistTaskOrderRevision(
-              projectDir,
-              target.taskDir,
-              result.task,
-              lang,
-              result.attachments,
+        applyInstructionTaskState(
+          projectDir,
+          worktreePath,
+          target.taskDir,
+          target.data?.retry_note,
+          result,
+          lang,
+          (taskRunner, taskDir, executionRetryNote) => {
+            taskRunner.requeueTask(
+              target.name,
+              ['completed', 'pr_failed'],
+              {
+                startStep: undefined,
+                retryNote: executionRetryNote,
+                resumePoint: undefined,
+                workflow: resolveSelectedWorkflowOverride(target.data?.workflow, selectedWorkflow),
+                taskDir,
+                sourceRunSlug: matchedSlug ?? undefined,
+                restartPoint: undefined,
+              },
             );
-          }
-          const taskDir = revision?.taskDirRelative ?? target.taskDir;
-          const executionRetryNote = result.source === 'go'
-            ? undefined
-            : target.data?.retry_note;
-          assertReusableWorktreePath(projectDir, worktreePath);
-          runner.requeueTask(
-            target.name,
-            ['completed', 'pr_failed'],
-            {
-              startStep: undefined,
-              retryNote: executionRetryNote,
-              resumePoint: undefined,
-              workflow: resolveSelectedWorkflowOverride(target.data?.workflow, selectedWorkflow),
-              taskDir,
-              sourceRunSlug: matchedSlug ?? undefined,
-              restartPoint: undefined,
-            },
-          );
-        } catch (error) {
-          cleanupPersistedTaskOrderRevision(revision);
-          throw error;
-        }
+          },
+        );
         info(`Task "${target.name}" has been requeued.`);
         return true;
       },
