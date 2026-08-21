@@ -4,9 +4,9 @@
 ## Result: Fix plan finalized / Task-level replanning required
 
 ## Finding Coverage
-| Finding ID / Source | Authorization Basis | Evidence | Fix Unit / Follow-up | Problem → Direct Cause → Root Cause | Evidence for the Cause / Other Causes Checked | Classification | Acceptance Criteria and Remediation Boundary |
-|---------------------|---------------------|----------|----------------------|-------------------------------------|--------------------------------------------------|----------------|----------------------------------------------|
-| {ID or report name; do not combine findings with different bases in one row} | {Copy the exact single machine Authorization Basis adjudicated for this finding unchanged; do not replace it with another finding's family value, translate it, or combine it} | {Report or file:line} | {Fix-unit name, which must not change once chosen} | {Confirmed facts, possible causes, and confirmed cause and effect} | {Evidence for the cause and other causes checked; if unconfirmed, the investigation required} | {Local / Structural / Undemonstrable due to environmental factors} | {Completion condition and excluded neighboring contract or adjacent work} |
+| Finding ID / Source | Evidence | Fix Unit / Follow-up | Problem → Direct Cause → Root Cause | Evidence for the Cause / Other Causes Checked | Classification | Acceptance Criteria and Remediation Boundary |
+|---------------------|----------|----------------------|-------------------------------------|--------------------------------------------------|----------------|----------------------------------------------|
+| {ID or report name} | {Report or file:line} | {Fix-unit name, which must not change once chosen} | {Confirmed facts, possible causes, and confirmed cause and effect} | {Evidence for the cause and other causes checked; if unconfirmed, the investigation required} | {Local / Structural / Undemonstrable due to environmental factors} | {Completion condition and excluded neighboring contract or adjacent work} |
 
 ## Invariant Register
 Carry-forward source: {Latest fix-verification in the same remediation / relative path recorded by the review resolution / No prior remediation / Carry-forward source missing: reason}
@@ -41,7 +41,7 @@ When review-resolution.md merges a new finding into an existing family, preserve
 ## Constraint Compatibility
 | Fix Unit | Constraint References | Implementation Method and Candidate Decision | Verification Method, Observation Point, and Execution Conditions | Compatibility Rationale |
 |----------|-----------------------|----------------------------------------------|----------------------------------------------------------------|-------------------------|
-| {Fix unit} | {Requirements, Policy / Knowledge, and public contracts} | {Selected method and rationale for accepting or rejecting candidates} | {Deterministic evidence available now. If environmental factors prevent demonstration, include the factor, alternative evidence, and follow-up} | {Why the constraints are satisfied} |
+| {Fix unit} | {Requirements, design and quality constraints, and public contracts} | {Selected method and rationale for accepting or rejecting candidates} | {Deterministic evidence available now. If environmental factors prevent demonstration, include the factor, alternative evidence, and follow-up} | {Why the constraints are satisfied} |
 
 ## Replanning Requirements
 - {None, or evidence preventing a sound fix plan, the cause that remains unconfirmed, and the investigation or decision required}

@@ -18,4 +18,4 @@ Success means completing every fix unit and every completion obligation derived 
 {{include:instructions/established-invariants-scan}}
 {{include:instructions/post-edit-self-scan}}
 
-Record the result, changes, acceptance evidence, and verification according to the supplied output contract.
+Record the result, changes, acceptance evidence, and verification in the requested format.

@@ -17,7 +17,6 @@ edit: false
 persona: supervisor
 policy:
   - contract-change
-  - review
   - $param: final_gate_policy
 knowledge:
   $param: review_knowledge

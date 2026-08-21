@@ -4,34 +4,21 @@ import type { CompletionRetryEvidence } from './completion-retry-evidence.js';
 export const COMPLETION_RETRY_JUDGE_NAME = 'review-completion-judge';
 export const COMPLETION_RETRY_SCHEMA_REF = 'takt.review-completion.decision';
 
-export const COMPLETION_RETRY_GAP_KINDS = [
-  'changed_target_gap',
-  'family_lifecycle_gap',
-  'accepted_family_unvisited_consumer',
-  'remediation_regression',
-  'direct_acceptance_criterion_violation',
-  'required_consumer_migration',
-] as const;
-
-export type CompletionRetryGapKind = typeof COMPLETION_RETRY_GAP_KINDS[number];
-
 export function buildCompletionRetryOutputSchema(): Record<string, unknown> {
   return {
     type: 'object',
     additionalProperties: false,
-    required: ['complete', 'reason', 'missing_obligations'],
+    required: ['complete', 'reason', 'missing_paths'],
     properties: {
       complete: { type: 'boolean' },
       reason: { type: 'string', minLength: 1 },
-      missing_obligations: {
+      missing_paths: {
         type: 'array',
         items: {
           type: 'object',
           additionalProperties: false,
-          required: ['kind', 'contract_family', 'path', 'reason'],
+          required: ['path', 'reason'],
           properties: {
-            kind: { type: 'string', enum: [...COMPLETION_RETRY_GAP_KINDS] },
-            contract_family: { type: 'string', minLength: 1 },
             path: { type: 'string', minLength: 1 },
             reason: { type: 'string', minLength: 1 },
           },
@@ -42,8 +29,6 @@ export function buildCompletionRetryOutputSchema(): Record<string, unknown> {
 }
 
 export interface CompletionRetryGap {
-  readonly kind: CompletionRetryGapKind;
-  readonly contractFamily: string;
   readonly path: string;
   readonly reason: string;
 }
@@ -89,22 +74,17 @@ export function parseCompletionRetryDecision(
     throw new Error('Completion retry judge returned no structured decision');
   }
   const raw = value as Record<string, unknown>;
-  if (typeof raw.complete !== 'boolean' || !Array.isArray(raw.missing_obligations)) {
+  if (typeof raw.complete !== 'boolean' || !Array.isArray(raw.missing_paths)) {
     throw new Error('Completion retry judge returned an invalid structured decision');
   }
-  const missingObligations = raw.missing_obligations.map((entry, index) => {
+  const missingObligations = raw.missing_paths.map((entry, index) => {
     if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
-      throw new Error(`Completion retry judge returned invalid missing_obligations[${index}]`);
+      throw new Error(`Completion retry judge returned invalid missing_paths[${index}]`);
     }
     const gap = entry as Record<string, unknown>;
-    if (!COMPLETION_RETRY_GAP_KINDS.includes(gap.kind as CompletionRetryGapKind)) {
-      throw new Error(`Completion retry judge returned invalid missing_obligations[${index}].kind`);
-    }
     return {
-      kind: gap.kind as CompletionRetryGapKind,
-      contractFamily: requiredString(gap.contract_family, `missing_obligations[${index}].contract_family`),
-      path: requiredString(gap.path, `missing_obligations[${index}].path`),
-      reason: requiredString(gap.reason, `missing_obligations[${index}].reason`),
+      path: requiredString(gap.path, `missing_paths[${index}].path`),
+      reason: requiredString(gap.reason, `missing_paths[${index}].reason`),
     };
   });
   if (raw.complete === (missingObligations.length > 0)) {
@@ -126,27 +106,27 @@ export function buildCompletionRetryJudgePrompt(input: {
   readonly reviewResponse: string;
 }): { systemPrompt: string; instruction: string } {
   const payload = JSON.stringify({
-    task: input.task,
-    reviewer_instruction: input.reviewerInstruction,
+    change_request: input.task,
+    review_requirements: input.reviewerInstruction,
     changed_targets: input.reviewScope,
-    repository_evidence: input.evidence,
-    reviewer_report: input.reviewResponse,
+    code_evidence: input.evidence,
+    review_result: input.reviewResponse,
   }, null, 2);
   if (input.language === 'ja') {
     return {
-      systemPrompt: 'あなたは読み取り専用のレビュー網羅性判定者です。reviewer instructionを唯一のスコープと権限の正本とし、そこで要求された調査経路が実コードと報告根拠により閉じたかだけを判定します。',
+      systemPrompt: 'あなたはレビューの確認範囲を判定する読み取り専用の判定者です。変更要求とレビューで求められた確認を、コード上の証拠とレビュー結果が満たしているかだけを判定します。',
       instruction: [
-        'reviewer_instructionの明示的な要求だけをrepository_evidenceとreviewer_reportに照合してください。同instructionが要求するcontract familyに限りdefinition、producer、normalizer/validator、consumer、retry/fallback/parallel、persistence/restoration、terminal/APIの実接続を確認します。instructionが禁止する横方向探索や新規familyの発見を不足として返してはいけません。referencesはpath/line/relationKind/seedのmetadataでありsource本文の証拠ではありません。priorGapPathsは本文未確認の補助path、omissionsは未確認範囲です。証拠や要求を補作してはいけません。',
-        'completeならmissing_obligationsは空、不足なら具体的な未確認pathを返してください。',
+        'change_request と review_requirements で確認を求められた対象だけを、code_evidence と review_result に照合してください。同じ原因と観測可能な条件に関係する定義、生成、変換、検証、利用、再試行、永続化、復元、最終出力のうち、実在する経路を確認します。要求されていない別問題の探索を不足として返してはいけません。code_evidence.references は関連する場所を示す情報であり、ファイル本文の証拠ではありません。priorGapPaths は本文未確認の補助経路、omissions は収集できなかった範囲です。証拠や要求を補作してはいけません。',
+        'complete が true なら missing_paths は空にしてください。不足がある場合は、未確認の実在経路と理由を missing_paths に返してください。',
         payload,
       ].join('\n\n'),
     };
   }
   return {
-    systemPrompt: 'You are a read-only review-completeness judge. Treat the reviewer instruction as the sole source of scope and authority. Decide only whether its required investigation paths are closed by repository evidence and the report.',
+    systemPrompt: 'You are a read-only judge of review coverage. Decide only whether the code evidence and review result satisfy the checks required by the change request and review requirements.',
     instruction: [
-      'Compare only the explicit requirements in reviewer_instruction with repository_evidence and reviewer_report. Within contract families required by that instruction, verify the applicable real connections through definition, producer, normalizer/validator, consumers, retry/fallback/parallel, persistence/restoration, and terminal/API. Never return general horizontal exploration or discovery of a new family as a gap when the instruction forbids it. references are path/line/relationKind/seed metadata, not source-body proof. priorGapPaths are auxiliary unverified paths; omissions are unverified coverage. Do not invent evidence or requirements.',
-      'When complete, missing_obligations must be empty. Otherwise return concrete unverified paths.',
+      'Compare only the checks requested by change_request and review_requirements with code_evidence and review_result. Inspect actual paths related to the same cause and observable condition through definition, production, transformation, validation, consumption, retries, persistence, restoration, and final output. Do not return exploration of an unrelated problem as missing work. code_evidence.references identify related locations but are not evidence of file contents. priorGapPaths are auxiliary paths whose contents were not checked, and omissions describe ranges that could not be collected. Do not invent evidence or requirements.',
+      'When complete is true, missing_paths must be empty. Otherwise return each unverified actual path and its reason in missing_paths.',
       payload,
     ].join('\n\n'),
   };
@@ -158,7 +138,7 @@ export function buildCompletionRetryInstruction(input: {
   readonly missingObligations: readonly CompletionRetryGap[];
 }): string {
   const typedGaps = input.missingObligations.map((gap) =>
-    `- [${gap.kind}] ${gap.contractFamily}: ${gap.path} — ${gap.reason}`,
+    `- ${gap.path} — ${gap.reason}`,
   );
   return [
     input.originalInstruction,
@@ -173,17 +153,15 @@ export function formatCompletionRetryDiagnostic(
   language: Language | undefined,
 ): string {
   const heading = language === 'ja'
-    ? 'レビュー網羅性の未完了診断（Phase 2限定）'
-    : 'Incomplete review-completeness diagnostic (Phase 2 only)';
+    ? 'レビュー確認範囲の未完了診断'
+    : 'Incomplete review-coverage diagnostic';
   return [
     `## ${heading}`,
     `- kind: ${diagnostic.kind}`,
     `- attempts: ${diagnostic.attempts}`,
     `- retries_used: ${diagnostic.retriesUsed}`,
     `- reason: ${diagnostic.reason}`,
-    ...diagnostic.missingObligations.map((gap) =>
-      `- [${gap.kind}] ${gap.contractFamily}: ${gap.path} — ${gap.reason}`,
-    ),
+    ...diagnostic.missingObligations.map((gap) => `- ${gap.path} — ${gap.reason}`),
   ].join('\n');
 }
 

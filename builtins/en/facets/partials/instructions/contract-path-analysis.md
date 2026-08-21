@@ -6,4 +6,4 @@ Describe real paths as `owner / definition -> producer -> transform / normalize 
 
 For every inspected path, state in plain language whether it helps establish the invariant and needs change, connects to the invariant but must retain its established contract, or belongs to a different invariant or responsible source.
 
-This analysis does not itself authorize discovery, reporting, editing, adjudication, or completion. Follow the current instruction and policy for scope and authority.
+Do not expand the review scope merely because this analysis exposes another path. Limit exploration, findings, and edits to work whose necessity follows from the current request and presented review scope.

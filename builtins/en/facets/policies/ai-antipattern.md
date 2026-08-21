@@ -208,7 +208,7 @@ AI tends to over-deliver. Check for unnecessary additions.
 | Gold-plating | "Nice-to-have" additions not asked for |
 | Extra changes disguised as related work | Cleanup, renames, or moves justified only because they are near the edited code |
 | Incidental observable contract changes | Changing values observed by users or tests without being asked |
-| Contract-replacement violation | Adding or retaining an old path contrary to the contract replacement policy |
+| Contract-replacement violation | Adding or retaining an old path contrary to an explicit replacement requirement |
 
 The best code is the minimum code that solves the problem.
 
@@ -242,7 +242,7 @@ AI often changes existing contracts under the banner of "improvement", "standard
 | Tests are updated only to follow the new contract | REJECT |
 | New contract required by new functionality | OK |
 | Missing information is added while preserving the existing contract | OK |
-| The requirement source calls for the contract change, and its reason and impact scope are clear | OK. Apply the contract replacement policy |
+| The requirement source calls for the contract change, and its reason and impact scope are clear | OK. Migrate the affected paths consistently to the new contract |
 | Fixing display, accessibility, or test contract breakage newly caused by the requested change | OK. This is change-induced reconciliation, not scope creep |
 
 Verification approach:

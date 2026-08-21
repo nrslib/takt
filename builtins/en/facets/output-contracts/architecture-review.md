@@ -13,12 +13,8 @@
 - [x] Dead code
 - [x] Call chain verification
 
-{{include:output-contracts/base-review-problem-family-completion-sweep}}
-
 {{include:output-contracts/base-review-new-findings-scope}}
-| 1 | ARCH-NEW-src-file-L42 | design-violation | In-scope | `src/file.ts:42` | Issue description | {For follow-up, the exact single machine value selected by the applicable policy; not applicable for initial review} | {Independent causal evidence for the follow-up omission; not applicable for initial review} | Fix approach |
-
-{{include:output-contracts/base-review-follow-up-authorization}}
+| 1 | ARCH-NEW-src-file-L42 | design-violation | In-scope | `src/file.ts:42` | Issue description | `src/file.ts:42` | Fix approach |
 
 {{include:output-contracts/base-review-scope}}
 
@@ -31,7 +27,7 @@
 
 {{include:output-contracts/base-review-adjudicated-out-of-scope}}
 {{include:output-contracts/base-review-reopened-findings}}
-| 1 | ARCH-REOPENED-src-file-L55 | design-violation | `review-resolution.md`: previously resolved | d | `Recurred at src/file.ts:55` | Issue description | Fix approach |
+| 1 | ARCH-REOPENED-src-file-L55 | design-violation | Immediately preceding disposition: resolved | Reintroduced by the repair | `Recurred at src/file.ts:55` | Issue description | Fix approach |
 
 {{include:output-contracts/base-review-reopened}}
 {{include:output-contracts/base-review-verification-evidence}}
@@ -45,6 +41,6 @@
 ```
 
 **Cognitive load reduction rules:**
-- APPROVE → Summary + Verification Evidence + Re-scan Evidence (from the second iteration onward). Omit everything else
+- APPROVE → Summary + Verification Evidence + Impact-Path Evidence. Omit everything else
 - REJECT → Include every verified finding row and aggregate locations with the same cause
 {{include:output-contracts/base-review-adjudicated-out-of-scope-reporting}}

@@ -18,12 +18,8 @@ For every finding that requests a test, record the observable contract to preser
 | Test strategy (unit/integration/E2E) | ✅ | - |
 | Contract input location (body/query/path) | ✅ | - |
 
-{{include:output-contracts/base-review-problem-family-completion-sweep}}
-
 {{include:output-contracts/base-review-new-findings-category}}
-| 1 | TEST-NEW-src-test-L42 | test-structure | Coverage | `src/test.ts:42` | Issue description | {For follow-up, the exact single machine value selected by the applicable policy; not applicable for initial review} | {Independent causal evidence for the follow-up omission; not applicable for initial review} | Fix suggestion |
-
-{{include:output-contracts/base-review-follow-up-authorization}}
+| 1 | TEST-NEW-src-test-L42 | test-structure | Coverage | `src/test.ts:42` | Issue description | `src/test.ts:42` | Fix suggestion |
 
 {{include:output-contracts/base-review-persists}}
 {{include:output-contracts/base-review-carry-over-findings}}
@@ -34,7 +30,7 @@ For every finding that requests a test, record the observable contract to preser
 
 {{include:output-contracts/base-review-adjudicated-out-of-scope}}
 {{include:output-contracts/base-review-reopened-findings}}
-| 1 | TEST-REOPENED-src-test-L55 | test-structure | `review-resolution.md`: previously resolved | d | `Recurred at src/test.ts:55` | Issue description | Fix approach |
+| 1 | TEST-REOPENED-src-test-L55 | test-structure | Immediately preceding disposition: resolved | Reintroduced by the repair | `Recurred at src/test.ts:55` | Issue description | Fix approach |
 
 {{include:output-contracts/base-review-reopened}}
 {{include:output-contracts/base-review-verification-evidence}}
@@ -50,7 +46,7 @@ For every finding that requests a test, record the observable contract to preser
 ```
 
 **Cognitive load reduction rules:**
-- APPROVE with no resolved findings: Summary, unverified scope, and only the checked criteria and verification evidence required for a follow-up review (concisely aggregated)
-- APPROVE with resolved findings: Summary, Resolved Findings, unverified scope, and only the checked criteria and verification evidence required for a follow-up review (concisely aggregated)
+- APPROVE with no resolved findings: Summary, unverified scope, and only the checked criteria and verification evidence supporting the judgment (concisely aggregated)
+- APPROVE with resolved findings: Summary, Resolved Findings, unverified scope, and only the checked criteria and verification evidence supporting the judgment (concisely aggregated)
 - REJECT: Include every verified finding in tables and aggregate locations with the same cause
 {{include:output-contracts/base-review-adjudicated-out-of-scope-reporting}}

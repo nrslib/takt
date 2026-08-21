@@ -1,3 +1,5 @@
-**既出 family の照合:**
+**既存の修正単位との照合:**
 
-新しい finding または修正対象 family を記録する前に、Report Directory に存在する review-resolution.md とその履歴の「再発台帳の引き継ぎ」「修正対象 family」「指摘ごとの裁定」または「前段 finding の扱い」、および最新レビュー報告の「問題系列の完了走査」「今回の指摘（new）」「継続指摘（persists）」「解消済み（resolved）」「再開指摘（reopened）」に記録済みの family を確認してください。上の identity が一致する場合は既存の family を使ってください。レビュー報告では、「問題系列の完了走査」に既存 family の identity を維持して担当箇所、不変条件、同じ原因で変更される理由、新しい経路を記録し、「今回の指摘（new）」では既存の `family_tag` を使ってください。review-resolution.md または supervisor-validation.md では、finding 自身の Authorization Basis と一致する「修正対象 family」の既存行へ finding ID・出典と関係する契約経路を追加し、その basis の行がなければ同じ family 名を繰り返した別行を作成してください。異なる basis の finding を同じ行へまとめたり、既存行の basis を上書きしたりしてはなりません。「指摘ごとの裁定」または「前段 finding の扱い」には合流先 family、finding 自身の basis、合流根拠を記録してください。一致する既存 family がなく、この role に新しい family の作成権限がある場合だけ新しい `family_tag` または family を使ってください。
+review-resolution.md または supervisor-validation.md を作成する前に、Report Directory にある最新のレビュー報告、review-resolution.md、および引き継がれた再発記録を確認してください。
+
+原因、破られる観測可能な条件、受入条件が既存の「修正対象 family」と同じ指摘は、その行へ統合してください。元の finding ID は変更せず、今回確認した経路と、同じ修正単位へ統合できる根拠を追加してください。これらのいずれかが異なる問題は別の修正単位にしてください。

@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-# TAKT facet eval: peer-review / review-adjudication production Phase 2 report.
+# TAKT ファセット評価: ピアレビュー裁定の最終レポート。
 
-description: 'TAKT facet eval: レビュー裁定 Phase 2 レポート契約'
+description: 'TAKT ファセット評価: レビュー裁定の最終レポート'
 
 prompts:
   - file://prompts/review-adjudication-phase2.phase2.md
@@ -35,35 +35,32 @@ evaluateOptions:
   maxConcurrency: 3
 
 tests:
-  - description: '裁定レポート: 全裁定と finding 固有 basis を保持する'
+  - description: '裁定レポート: 全裁定と判断理由を保持する'
     vars:
       task: file://cases/review-adjudication-task.md
       previous_response: file://cases/review-adjudication-phase1.md
     assert:
-      - type: javascript
+      - type: llm-rubric
         metric: review/adjudication-report-quality
-        value: file://asserts/review-adjudication.mjs
+        value: |
+          レポートの見出し、表形式、英語ラベル、分類値の表記ではなく内容を評価する。前段の裁定から、channel 正規化の修正対象、重複するコーディングとアーキテクチャの指摘、修正が導入した worker 経路の退行を保持し、transaction、rollback、atomicity を新しい要件へ昇格させない場合だけ合格とする。type-error、build-label、README、secret、Windows の各指摘も漏れなく記録し、それぞれ前段どおり非修正対象に保つこと。修正対象と非修正対象を混ぜず、実行可能な修正境界を記録すること。
 
   - description: '裁定レポート: 要求にない強い type-error 契約を非修正対象に保つ'
     vars:
       task: file://cases/review-adjudication-family-merge-task.md
       previous_response: file://cases/review-adjudication-family-merge-phase1.md
     assert:
-      - type: javascript
+      - type: llm-rubric
         metric: review/merge-case-type-error-report
-        value: file://asserts/review-adjudication-type-error-overreach.mjs
-      - type: regex
-        metric: review/existing-family-merge-report
-        value: '`?JUDGEMENT: candidate=ARCH-NEW-channel-normalization-L2; decision=merge; target_family=FAM-channel-normalization`?\s*$'
+        value: |
+          前段の判断をレポートへ保持できているかを評価する。channel 正規化に関するコーディングとアーキテクチャの指摘を同じ原因の重複として1つの修正対象へまとめ、ARCH-NEW-channel-type-error-L2 は要求にない強いエラー形式の保証なので修正対象にしない場合だけ合格とする。末尾の固定文言、特定の修正単位名、英語ラベルは要求しない。
 
-  - description: '裁定レポート: direct basis を持つ別の type-error family を保持する'
+  - description: '裁定レポート: 元要求へ直接違反する type-error を別の修正単位にする'
     vars:
       task: file://cases/review-adjudication-family-separation-task.md
       previous_response: file://cases/review-adjudication-family-separation-phase1.md
     assert:
-      - type: javascript
-        metric: review/different-invariant-report-basis
-        value: file://asserts/review-adjudication-family-separation.mjs
-      - type: regex
-        metric: review/different-invariant-separation-report
-        value: '`?JUDGEMENT: candidate=ARCH-NEW-channel-type-error-L2; decision=separate; target_family=(?!FAM-channel-normalization(?:\s|$))\S+`?\s*$'
+      - type: llm-rubric
+        metric: review/different-invariant-report
+        value: |
+          前段の判断をレポートへ保持できているかを評価する。ARCH-NEW-channel-type-error-L2 を修正対象とし、受理値の正規化とは異なるエラー形式の要件として別の修正単位に分けること。担当箇所が共通することだけを統合根拠にせず、末尾の固定文言、特定の修正単位名、英語ラベルは要求しない。

@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -16,7 +16,7 @@ const SMOKE_RUNTIME_DIR = fileURLToPath(
   new URL('../../eval/fixtures/sample-project/.takt', import.meta.url),
 );
 const REVIEW_MODE_TARGETS = new Map([
-  ['review-family-closure', 'initial'],
+  ['review-impact-path-coverage', 'initial'],
   ['initial-review-contract-discovery', 'initial'],
   ['testing-review-observable-evidence', 'initial'],
   ['security-review-method', 'initial'],
@@ -28,9 +28,21 @@ const PHASE1_WITHOUT_OUTPUT_CONTRACT_TARGET_IDS = [
   'security-review-method',
   'review-adjudication-binding',
 ];
-const FOLLOW_UP_PHASE2_TARGET_ID = 'follow-up-review-repair-regression-phase2';
-const REVIEW_ADJUDICATION_PHASE1_TARGET_ID = 'review-adjudication';
 const REVIEW_ADJUDICATION_PHASE2_TARGET_ID = 'review-adjudication-phase2';
+const PRODUCTION_REVIEWER_SUITES = [
+  'development-review',
+  'takt-development-review',
+  'peer-review-suite-base',
+  'peer-review-suite-cqrs',
+  'peer-review-suite-frontend',
+  'peer-review-suite-frontend-cqrs',
+];
+const REPAIR_LEDGER_WORKFLOWS = new Set([
+  'development-remediation-dynamic.yaml',
+  'development-remediation.yaml',
+  'final-gate.yaml',
+  'review-remediation.yaml',
+]);
 const SOURCE_WORKFLOW = 'development-review';
 const SECURITY_REVIEW_POOL = 'security-review-facets';
 const CANDIDATE_KNOWLEDGE = readFileSync(
@@ -189,11 +201,116 @@ test('renders eval targets with the production caller review mode', () => {
       new URL(`../../eval/prompts/${targetId}.phase1.md`, import.meta.url),
     );
     const prompt = readFileSync(promptPath, 'utf8');
-    assert.equal(
-      prompt.includes(`レビュー区分 \`${reviewMode}\``)
-        || prompt.includes(`Review mode \`${reviewMode}\``),
-      true,
-      `${targetId} must render review mode ${reviewMode}`,
+    assert.doesNotMatch(prompt, /\{var:review_mode\}/);
+    assert.match(
+      prompt,
+      new RegExp('レビュー区分は\\s+`' + reviewMode + '`'),
+    );
+    assert.doesNotMatch(prompt, /The review mode is/i);
+  }
+});
+
+test('composes only reviewer-scoped workflow rules into every production reviewer suite', () => {
+  for (const language of ['ja', 'en']) {
+    for (const workflow of PRODUCTION_REVIEWER_SUITES) {
+      const workflowPath = new URL(
+        `../../builtins/${language}/workflows/${workflow}.yaml`,
+        import.meta.url,
+      );
+      const source = readFileSync(workflowPath, 'utf8');
+      assert.equal(
+        [...source.matchAll(/^\s+- ref: peer-review-scope$/gm)].length,
+        1,
+        `${language}/${workflow} must compose peer-review-scope exactly once`,
+      );
+      assert.equal(
+        [...source.matchAll(/^\s+- ref: existing-finding-lookup$/gm)].length,
+        1,
+        `${language}/${workflow} must compose existing-finding-lookup exactly once`,
+      );
+      assert.doesNotMatch(
+        source,
+        /^\s+- ref: (?:existing-family-lookup|invariant-recurrence)$/m,
+        `${language}/${workflow} must not compose repair-ledger rules into ordinary reviewers`,
+      );
+    }
+  }
+});
+
+test('limits repair-ledger workflow rules to workflows that read or write the ledger', () => {
+  for (const language of ['ja', 'en']) {
+    const workflowDirectory = fileURLToPath(
+      new URL(`../../builtins/${language}/workflows/`, import.meta.url),
+    );
+    const actual = new Set();
+
+    for (const fileName of readdirSync(workflowDirectory)) {
+      if (!fileName.endsWith('.yaml')) continue;
+      const source = readFileSync(`${workflowDirectory}/${fileName}`, 'utf8');
+      const hasExistingFamilyLookup = /^\s+- ref: existing-family-lookup$/m.test(source);
+      const hasInvariantRecurrence = /^\s+- ref: invariant-recurrence$/m.test(source);
+      assert.equal(
+        hasExistingFamilyLookup,
+        hasInvariantRecurrence,
+        `${language}/${fileName} must compose the repair-ledger rules together`,
+      );
+      if (hasExistingFamilyLookup) actual.add(fileName);
+    }
+
+    assert.deepEqual(actual, REPAIR_LEDGER_WORKFLOWS);
+  }
+});
+
+test('keeps repair-ledger vocabulary out of ordinary reviewer prompts', () => {
+  const targetIds = [
+    'review-impact-path-coverage',
+    'follow-up-review-repair-regression',
+    'follow-up-testing-review-repair-regression',
+  ];
+  const result = spawnSync(
+    process.execPath,
+    ['eval/scripts/prepare.mjs', ...targetIds],
+    { cwd: REPO_ROOT, encoding: 'utf8' },
+  );
+
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 0, result.stderr);
+
+  for (const targetId of targetIds) {
+    const promptPath = fileURLToPath(
+      new URL(`../../eval/prompts/${targetId}.phase1.md`, import.meta.url),
+    );
+    const prompt = readFileSync(promptPath, 'utf8');
+    assert.doesNotMatch(prompt, /\bfamily\b|actionable|fix-verifier|全13項目/i);
+  }
+});
+
+test('keeps finding identity stable across newly checked paths', () => {
+  const policies = [
+    {
+      language: 'ja',
+      path: '../../builtins/ja/facets/partials/policies/review-common.md',
+      sameProblem: /原因、破られる観測可能な条件、受入条件が同じなら同じ問題/,
+      pathEvidence: /根拠ファイル、確認した場所、利用経路、再現入力の違いだけでは別問題にしない/,
+      contradictorySplit: /根拠ファイル・再現条件が変わる場合は新規/,
+    },
+    {
+      language: 'en',
+      path: '../../builtins/en/facets/partials/policies/review-common.md',
+      sameProblem: /cause, violated observable condition, and acceptance criteria remain the same/,
+      pathEvidence: /Differences in evidence files, checked locations, consumer paths, or reproduction inputs alone do not create a different problem/,
+      contradictorySplit: /problem meaning, evidence files, or reproduction conditions change, issue a new/,
+    },
+  ];
+
+  for (const policy of policies) {
+    const source = readFileSync(new URL(policy.path, import.meta.url), 'utf8');
+    assert.match(source, policy.sameProblem, `${policy.language} must define finding identity by behavior`);
+    assert.match(source, policy.pathEvidence, `${policy.language} must allow evidence paths to accumulate`);
+    assert.doesNotMatch(
+      source,
+      policy.contradictorySplit,
+      `${policy.language} must not split a finding merely because its evidence path changed`,
     );
   }
 });
@@ -214,30 +331,7 @@ test('does not inject report output contracts into Phase 1 eval prompts', () => 
     );
     const prompt = readFileSync(promptPath, 'utf8');
     assert.doesNotMatch(prompt, /## Phase 1 evaluation output contract/);
-    assert.doesNotMatch(prompt, /(?:入力・状態・経路別の終端結果|Terminal Results by Input, State, and Path)/);
   }
-});
-
-test('renders the production Phase 2 terminal-result report contract', () => {
-  const result = spawnSync(
-    process.execPath,
-    ['eval/scripts/prepare.mjs', FOLLOW_UP_PHASE2_TARGET_ID],
-    { cwd: REPO_ROOT, encoding: 'utf8' },
-  );
-
-  assert.equal(result.error, undefined);
-  assert.equal(result.status, 0, result.stderr);
-
-  const promptPath = fileURLToPath(
-    new URL(`../../eval/prompts/${FOLLOW_UP_PHASE2_TARGET_ID}.phase2.md`, import.meta.url),
-  );
-  const prompt = readFileSync(promptPath, 'utf8');
-  assert.match(prompt, /(?:問題系列の完了走査|Problem-Family Completion Sweep)/);
-  assert.match(prompt, /(?:契約根拠|Contract authority)/);
-  assert.match(prompt, /(?:入力・状態・経路別の終端結果|Terminal Results by Input, State, and Path)/);
-  assert.match(prompt, /(?:期待する終端結果|Expected terminal result)/);
-  assert.match(prompt, /(?:実際の終端結果と証拠|Actual terminal result and evidence)/);
-
 });
 
 test('renders the production review-adjudication Phase 2 report contract', () => {
@@ -257,9 +351,7 @@ test('renders the production review-adjudication Phase 2 report contract', () =>
   const prompt = readFileSync(promptPath, 'utf8');
   assert.match(prompt, /review-resolution\.md/);
   assert.match(prompt, /\{\{previous_response\}\}/);
-  assert.match(prompt, /(?:修正対象 family|Actionable Families)/);
-  assert.match(prompt, /(?:指摘ごとの裁定|Finding Dispositions)/);
-  assert.match(prompt, /(?:適用 policy が選定した正確な機械値1つ|exact single machine value selected by the applicable policy)/);
+  assert.doesNotMatch(prompt, /(?:適用 policy|include 済み|applicable policy|included policy)/i);
 });
 
 test('does not hard-code workflow-specific report paths in Japanese adjudication instructions', () => {
@@ -272,7 +364,7 @@ test('does not hard-code workflow-specific report paths in Japanese adjudication
   assert.doesNotMatch(instruction, /(?:reviewer suite|reviewer-suite|同じ peer-review)/i);
 });
 
-test('composes finding authority policy into the production final gate', () => {
+test('keeps peer-review round scope out of the production final gate', () => {
   const targetId = 'final-readiness-supervision-phase2';
   const result = spawnSync(
     process.execPath,
@@ -293,26 +385,12 @@ test('composes finding authority policy into the production final gate', () => {
     import.meta.url,
   ));
   const prompt = readFileSync(promptPath, 'utf8');
-  assert.match(policySnapshot, /(?:探索権限と finding・修正権限|Exploration Authority and Finding \/ Remediation Authority)/);
-  assert.match(policySnapshot, /follow-up または Final preservation/);
-  assert.match(policySnapshot, /元要件が定義した accepted family/);
-  const phase2PromptPath = fileURLToPath(new URL(
-    `../../eval/prompts/${targetId}.phase2.md`,
-    import.meta.url,
-  ));
-  const phase2Prompt = readFileSync(phase2PromptPath, 'utf8');
-  assert.match(phase2Prompt, /follow-up または Final preservation/);
+  assert.doesNotMatch(policySnapshot, /(?:peer-review process|ピアレビュー工程)/i);
   assert.equal(
     [...policySnapshot.matchAll(/^# (?:レビューポリシー|Review Policy)$/gm)].length,
     1,
     'the final gate must receive the canonical review policy exactly once',
   );
-  assert.match(
-    prompt,
-    /(?:review-resolution\.md または supervisor-validation\.md|review-resolution\.md or supervisor-validation\.md)[^\n]*(?:「修正対象 family」|Actionable Families)/i,
-  );
-  assert.doesNotMatch(
-    prompt,
-    /(?:レビュー報告または supervisor-validation\.md|review report or supervisor-validation\.md)[^\n]*(?:問題系列の完了走査|Problem-Family Completion Sweep)/i,
-  );
+  assert.doesNotMatch(prompt, /(?:レビュー区分は|The review mode is)/i);
+  assert.match(prompt, /(?:現在の裁定または修正計画が対象とした問題|problems covered by the current decision or repair plan)/i);
 });

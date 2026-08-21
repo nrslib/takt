@@ -1,6 +1,6 @@
 # Contract Replacement Policy
 
-Separate preservation of unaffected contracts, migration of current consumers, and compatibility or migration support for superseded contracts, and implement only the scope authorized by the requirement source.
+Separate preservation of unaffected contracts, migration of current consumers, and compatibility or migration support for superseded contracts, and implement only the scope stated by the requirement source.
 
 ## Principles
 
@@ -9,21 +9,21 @@ Separate preservation of unaffected contracts, migration of current consumers, a
 | Preserve unaffected contracts | Preserve observable existing contracts outside the requested change scope |
 | Migrate current consumers | Move current consumers of a replaced contract to the new contract |
 | Remove superseded paths | Remove replaced paths except those explicitly retained as a support target |
-| Require explicit authority | Allow backward compatibility, legacy support, migration support, or coexistence only for the target and scope explicitly required by the requirement source |
+| Require an explicit requirement | Allow backward compatibility, legacy support, migration support, or coexistence only for the target and scope explicitly required by the requirement source |
 | Use only necessary mechanisms | Add or retain only mechanisms necessary to satisfy the explicitly required target |
 | Resolve collisions at one decision boundary | When an explicit change and a preservation candidate compete to determine the same observable value, state transition, or side effect, apply the explicit change exactly in the overlapping state |
 | Carry the primary operation to its terminal consumer | Trace the primary operation's input and decision through production, persistence, state transition, and later execution, display, or API consumers before evaluating secondary paths |
 
 ## Legacy Forms Being Replaced
 
-When a replacement request does not mention reading the legacy form, remove its regular expression, conversion branch, and fallback. Existing persisted data, isolation at a read boundary, and low risk are not authority to retain compatibility. The review must treat the legacy path as a problem and include its removal in the fix.
+When a replacement request does not mention reading the legacy form, remove its regular expression, conversion branch, and fallback. Existing persisted data, isolation at a read boundary, and low risk do not establish a requirement to retain compatibility. The review must treat the legacy path as a problem and include its removal in the fix.
 
 When coexistence with the legacy form is explicit, verify separately that (1) new writes produce only the new form, (2) the new form is read and restored, and (3) the required legacy form is read and restored. Do not infer write support, migration, backfill, or compatibility for another contract from permission to read the legacy form.
 
 | Judgment | Criteria |
 |----------|----------|
 | REJECT | A replacement request does not explicitly require legacy reading, conversion, fallback, or compatibility, but the old form remains |
-| REJECT | Existing persisted data, isolation at a read boundary, or low risk is used as authority to support the old form |
+| REJECT | Existing persisted data, isolation at a read boundary, or low risk is used as the sole reason to support the old form |
 | OK | Only the legacy reading explicitly required by the request coexists with the new form |
 
 ## Judgment Criteria
@@ -32,9 +32,9 @@ When coexistence with the legacy form is explicit, verify separately that (1) ne
 |----------|----------|
 | Preserve an observable existing contract outside the requested change scope | OK |
 | Migrate a current consumer of the replaced contract to the new contract | OK |
-| Add or retain superseded-contract production, reading, aliases, fallback, conversion, upcasters, backfill, data migration, or rebuilds without explicit authority for that target | REJECT |
+| Add or retain superseded-contract production, reading, aliases, fallback, conversion, upcasters, backfill, data migration, or rebuilds without an explicit requirement for that target | REJECT |
 | Exceed the explicitly required support scope or add a mechanism unnecessary for it | REJECT |
-| Extend authority for API compatibility to a different support target such as event upcasting, data migration or backfill, or Read Model rebuild | REJECT |
+| Extend a requirement for API compatibility to a different support target such as event upcasting, data migration or backfill, or Read Model rebuild | REJECT |
 | Require or invent a deadline, deprecation date, end condition, or migration schedule absent from the requirement source | REJECT |
 
 ## Overlap Between Explicit Changes and Preserved Contracts
@@ -67,11 +67,11 @@ Treat a changed primary operation as incomplete until the downstream terminal co
 
 ## Evidence Boundary
 
-Treat current code, existing tests and usage sites, mocks, fixtures, test doubles, remediation completion reports, stored or persisted data, published or released status, and placement or isolation at a read boundary as evidence for impact paths and current consumers. They do not by themselves authorize support for a superseded contract.
+Treat current code, existing tests and usage sites, mocks, fixtures, test doubles, remediation completion reports, stored or persisted data, published or released status, and placement or isolation at a read boundary as evidence for impact paths and current consumers. By themselves, they do not establish a requirement to preserve a superseded contract.
 
-To classify behavior as an established contract that must be preserved, identify the original requirement, acceptance criterion, public specification, or real consumer dependency that requires it. Behavior without such authority is evidence only of how the system currently behaves.
+To classify behavior as an established contract that must be preserved, identify the original requirement, acceptance criterion, public specification, or real consumer dependency that requires it. Otherwise, the behavior is evidence only of how the system currently behaves.
 
-When support is explicitly required, record its target and scope and verify that behavior directly. Judge each support target independently; authority for one target does not authorize another.
+When support is explicitly required, record its target and scope and verify that behavior directly. Judge each support target independently; a requirement for one target does not extend to another.
 
 ## contract-lifecycle Criteria
 

@@ -15,7 +15,6 @@ steps:
       development_knowledge: [backend, cqrs-es, security, architecture]
       reviewer_suite: peer-review-suite-cqrs
       review_policy: [coding, testing, review, architecture, backend]
-      final_gate_policy: [coding, testing, architecture, backend]
       review_knowledge: [backend, cqrs-es, security, architecture, unit-testing, e2e-testing]
     rules:
       - condition: COMPLETE

@@ -354,7 +354,7 @@ Don't overlook compromises made to "just make it work."
 
 ## Unfinished Code Detection
 
-Unfinished-code judgment follows the coding policy. In architecture review, check whether TODO/FIXME comments, empty implementations, or stubs are being used as substitutes for required boundaries, authorization, validation, or contract updates.
+In architecture review, check whether TODO/FIXME comments, empty implementations, or stubs are being used as substitutes for required boundaries, authorization, validation, or contract updates.
 
 ## DRY Violation Detection
 
@@ -366,7 +366,7 @@ When NOT to apply DRY:
 
 ## Spec Compliance Verification
 
-Contract-change consistency follows the active contract replacement policy. In architecture review, check whether changes contradict documented specifications, types, schemas, or config formats.
+In architecture review, check whether contract changes contradict documented specifications, types, schemas, or config formats.
 
 Conditions that require consistency:
 
@@ -378,7 +378,7 @@ Conditions that require consistency:
 
 ## Call Chain Verification
 
-Missing wiring after contract changes follows the coding policy. In architecture review, check whether new parameters or fields actually reach callers, producers, and readers instead of staying local to the changed file.
+In architecture review, check whether new parameters or fields actually reach callers, producers, and readers instead of staying local to the changed file.
 
 When a contract crosses a call chain, its definition alone is insufficient. The entry point that produces a value, callers that propagate it, and consumers that read it must share the same meaning; fallbacks must also match whether the contract truly permits omission.
 

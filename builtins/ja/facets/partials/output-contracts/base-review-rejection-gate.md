@@ -1,3 +1,3 @@
-- 有効な `Authorization basis` 付きの `new`、裁定に拘束された上記定義の `persists`、または有効な再開根拠（a-d）付きの `reopened` が1件以上ある場合のみ REJECT 可
+- 根拠を確認できる `new`、裁定に拘束された上記定義の `persists`、または有効な再開理由を示した `reopened` が1件以上ある場合のみ REJECT 可
 - 裁定済みの対象外指摘は、有効な `reopened` の条件を満たさない限り REJECT 判定に算入しない
 - 有効な `reopened` は、直前の裁定が対象外でも REJECT 判定に算入する。`reopened` は再審の経路であり、最新の判定は `reopened` の有効性で決まる

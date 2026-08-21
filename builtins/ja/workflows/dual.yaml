@@ -15,7 +15,6 @@ steps:
       development_knowledge: [frontend, react, backend, security, architecture, task-decomposition]
       reviewer_suite: peer-review-suite-frontend
       review_policy: [coding, testing, design-fidelity, screen-api, review, architecture, backend, frontend, react]
-      final_gate_policy: [coding, testing, design-fidelity, screen-api, architecture, backend, frontend, react]
       review_knowledge: [frontend, react, backend, security, architecture, unit-testing, e2e-testing]
     rules:
       - condition: COMPLETE

@@ -8,9 +8,8 @@
  * Mirrors what the codex provider receives at runtime:
  *   - persona (system prompt) is prepended to the instruction
  *     (see src/infra/codex/client.ts: `${systemPrompt}\n\n${prompt}`)
- *   - policy/knowledge are truncated inline by InstructionBuilder (via
- *     faceted-prompting's preparePolicyContent/prepareKnowledgeContent) with
- *     the full content written to snapshot files referenced as Source Paths
+ *   - policy/knowledge are truncated inline by InstructionBuilder, with
+ *     the full content written to snapshot files that the notice can reference
  *     (same contract as StepExecutor.writeFacetSnapshot)
  *   - a seeded report directory (fixture reports-seed/ -> .takt/runs/eval/reports/)
  *   - `{task}` / `{previous_response}` exported as promptfoo template
@@ -33,6 +32,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const TASK_MARKER = '@@PROMPTFOO_TASK@@';
 const PREV_MARKER = '@@PROMPTFOO_PREVIOUS_RESPONSE@@';
 const SCENARIO_MARKER = '@@PROMPTFOO_SCENARIO@@';
+const EVAL_LANGUAGE = 'ja';
 
 // id doubles as the prompt basename (normal targets use phase1; loop monitors use phase3).
 // mutable targets run in a disposable copy under eval/.work/<id>.
@@ -49,7 +49,7 @@ const TARGETS = [
   { id: 'frontend-review', workflow: 'review-frontend', step: 'frontend-review', fixture: 'eval/fixtures/frontend-app' },
   { id: 'cqrs-review', workflow: 'review-backend-cqrs', step: 'cqrs-es-review', fixture: 'eval/fixtures/backend-cqrs' },
   // rescan は arch-review と同じ facet 構成だが fixture が異なるため、
-  // スナップショット（Source Path）を inventory-es 側に生成する専用エントリが必要
+  // 省略時に全文を確認できるスナップショットを inventory-es 側に生成する専用エントリが必要
   { id: 'rescan', workflow: 'peer-review', step: 'arch-review', fixture: 'eval/fixtures/inventory-es' },
   { id: 'rescan-coding', workflow: 'peer-review', step: 'coding-review', fixture: 'eval/fixtures/inventory-es' },
   { id: 'frontend-implement', workflow: 'frontend', step: 'implement', fixture: 'eval/fixtures/frontend-app', mutable: true },
@@ -61,10 +61,10 @@ const TARGETS = [
   { id: 'fix-plan-cause-check', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-cause-check' },
   { id: 'fix-plan-bounded-proof', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-bounded-proof' },
   {
-    id: 'review-family-closure',
-    workflow: 'peer-review-suite-base',
-    step: 'coding-review',
-    fixture: 'eval/fixtures/review-family-closure',
+    id: 'review-impact-path-coverage',
+    workflow: 'development-review',
+    step: 'backend-review',
+    fixture: 'eval/fixtures/review-impact-path-coverage',
     workflowCallVars: { review_mode: 'initial' },
   },
   {
@@ -298,7 +298,6 @@ const repoRoot = resolve(scriptDir, '../..');
 const {
   loadWorkflowByIdentifier,
   resolveWorkflowCallTarget,
-  resolveWorkflowConfigValue,
   loadPersonaPromptFromPath,
 } = await import(
   pathToFileURL(join(repoRoot, 'dist/infra/config/index.js')).href
@@ -484,7 +483,7 @@ async function main() {
   }
   const targets = requested.length > 0 ? TARGETS.filter((t) => requested.includes(t.id)) : TARGETS;
 
-  const language = resolveWorkflowConfigValue(repoRoot, 'language');
+  const language = EVAL_LANGUAGE;
   const preparedDirs = new Set();
 
   for (const {

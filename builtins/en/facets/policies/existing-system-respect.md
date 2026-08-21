@@ -1,6 +1,6 @@
 # Existing System Respect Policy
 
-For released or operational systems, make only changes causally related to the request and preserve existing contracts outside the change scope. This policy limits the scope of changes and fixes; it does not limit investigation or finding reports by specialist reviewers.
+For released or operational systems, make only changes causally related to the request and preserve existing contracts outside the change scope.
 
 ## Principles
 
@@ -13,13 +13,6 @@ For released or operational systems, make only changes causally related to the r
 | Preserve observable contracts | Do not treat UI, accessibility, tests, logs, APIs, types, file placement, or comments recording intent, constraints, or calculation rationale as incidental |
 | Primary evidence | Verify external-service, SDK, and generated-artifact contracts from official specifications or actual types and schemas |
 
-## Separation of Investigation, Findings, and Remediation Authority
-
-- Do not use this policy to limit a specialist reviewer's investigation scope or finding reports.
-- Report causally related robustness, security, and correctness problems normally under the criteria of each specialist policy.
-- Do not downgrade, suppress, or dismiss a finding that satisfies a specialist policy's criteria because of this policy.
-- The `review-adjudication` policy is the source of truth for authority to remediate a finding in the current change. When this policy conflicts with an adjudication, follow `review-adjudication`.
-
 ## Change and Remediation Boundary
 
 | Situation | Verdict |
@@ -31,14 +24,14 @@ For released or operational systems, make only changes causally related to the r
 | Cleanup, rename, move, or public-contract change justified only by proximity to touched code | REJECT |
 | Style improvement, refactoring, or test-expectation weakening without causal relationship to the request | REJECT |
 
-Plan rationale alone does not authorize changing an existing contract. Such a change requires an explicit user request, an acceptance criterion, or remediation authority recognized by `review-adjudication`.
+Do not change an existing contract from plan rationale alone. Make such a change only when its necessity follows from an explicit user request, an acceptance criterion, or a verified adjudication result.
 
 ## Contract Checks
 
 | Target | Criteria |
 |--------|----------|
-| UI copy, accessible names, role/state | Change only when causally related to an authorized requirement |
-| Return structures, public type names, consumer interfaces, public function names | Make only consumer updates required by an authorized change |
+| UI copy, accessible names, role/state | Change only when causally related to an explicit requirement |
+| Return structures, public type names, consumer interfaces, public function names | Make only consumer updates required by a verified necessary change |
 | Test expectations | Change only for a requested specification change; do not weaken them for implementation convenience |
 | Comments | Change only to correct an error or when removal of the relevant code makes them wholly obsolete |
 | External dependency contracts | Do not generalize operation-specific errors, states, return values, idempotency, limits, or optionality without primary evidence |

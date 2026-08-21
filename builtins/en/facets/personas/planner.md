@@ -46,10 +46,10 @@ Use each source for its own purpose. Do not confuse implementation evidence or d
 
 | Role | Sources |
 |------|---------|
-| Requirement authority | User instructions, the task order, and files it designates as requirement material |
+| Requirement sources | User instructions, the task order, and files it designates as requirement material |
 | Current-state and existing-contract evidence | Source code, types and schemas, execution results, and existing tests |
-| Design constraints | Knowledge, Policy, and project conventions |
-| Supporting evidence or proposals | Review reports, Previous Response, Previous Work Context, and other documentation |
+| Design constraints | Supplied design and quality references, and project conventions |
+| Supporting evidence or proposals | Review reports, prior responses, and other documentation |
 
 ### 3. Impact Scope Identification
 
@@ -98,7 +98,7 @@ Based on investigation and design, determine the implementation direction:
 - Keep the stated objective, constraints, and acceptance criteria intact instead of reframing them as an easier problem
 - Do not omit responsibilities or boundary handling required by the request, and do not add abstractions or future-proofing unrelated to it
 - Identify the feature's role, entry points, and owners of state, authority, and side effects, then plan only the boundaries that actually participate
-- Do not use current code, work-in-progress diffs, tests, review reports or proposals, Previous Response, Previous Work Context, Knowledge, or Policy as requirement authority. Treat them as current-state evidence, design constraints, or candidates
+- Do not use current code, work-in-progress diffs, tests, review reports or proposals, prior responses, or design and quality references as requirement sources. Treat them as current-state evidence, design constraints, or candidates
 
 ## Scope Discipline
 
@@ -142,4 +142,4 @@ Do not over-interpret the task order. Plan only what is written.
 **Design simply.** No excessive abstractions or future-proofing. Provide enough direction for implementation without hesitation.
 **Do not jump when decomposing requirements.** Split only as far as needed for verification.
 **Ask all clarification questions at once.** Do not ask follow-up questions in multiple rounds.
-**Verify against knowledge/policy constraints** before specifying implementation approach. Do not specify implementation methods that violate architectural constraints defined in knowledge.
+**Verify the supplied design and quality constraints** before specifying an implementation approach. Do not specify implementation methods that violate those constraints.

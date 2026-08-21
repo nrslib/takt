@@ -18,15 +18,15 @@
 |----------|-----------|----------------|--------------------|-----------------------------|------------------------------|---------------|--------------|--------------------------------------|-------------------------------|-------------------------------------------|-----------------------------|------------------|
 
 ## 修正対象 family
-| family | Finding ID / 出典 | Authorization basis | 根拠 | 問題 -> 根本原因 | 関係する契約経路 | 受入条件 | 修正境界 |
-|--------|---------------------|---------------------|----------|-----------------------|-------------------------|---------------------|----------------------|
-| artifact-identity | MERGE-NEW-artifact-identity-L8 / coding-review.md | direct_acceptance_criterion_violation | `src/artifact-store.js:8` | 異なる2つのサポート対象 logical ID が1つの保存 record に解決される | candidate 選択、write、read、snapshot、reload | reload 後に各サポート対象 ID が自身の値を読み、異なる ID が alias にならず、不正 input は storage の変更前に失敗する | この family が必要とする identity encoding と persistence compatibility だけを変更する |
+| family | Finding ID / 出典 | 根拠 | 問題 -> 根本原因 | 関係する契約経路 | 受入条件 | 修正境界 |
+|--------|---------------------|------|-----------------------|-------------------------|---------------------|----------------------|
+| artifact-identity | MERGE-NEW-artifact-identity-L8 / coding-review.md | 元要求への違反を `src/artifact-store.js:8` で確認 | 異なる2つのサポート対象 logical ID が1つの保存 record に解決される | candidate 選択、write、read、snapshot、reload | reload 後に各サポート対象 ID が自身の値を読み、異なる ID が alias にならず、不正 input は storage の変更前に失敗する | この family が必要とする identity encoding と persistence compatibility だけを変更する |
 
 ## 指摘ごとの裁定
-| Finding ID / 出典 | 技術的妥当性 | 裁定 | 対象 family | Authorization basis | 初回に含まれなかった理由 | 根拠 |
-|---------------------|--------------------|-------------|---------------|---------------------|----------------------------------|----------|
-| MERGE-NEW-artifact-identity-L8 / coding-review.md | 確認済み | actionable | artifact-identity | direct_acceptance_criterion_violation | 初回レビューで storage collision を発見済み | `src/artifact-store.js:8` |
-| OLD-REVIEW-doc-example-L1 / coding-review.md | 確認済み | out_of_scope | なし | なし | 該当なし | ドキュメント formatting は identity 保持と無関係。 |
+| Finding ID / 出典 | 技術的妥当性 | 裁定 | 対象 family | 根拠 |
+|---------------------|--------------------|-------------|---------------|------|
+| MERGE-NEW-artifact-identity-L8 / coding-review.md | 確認済み | actionable | artifact-identity | 元要求への違反を `src/artifact-store.js:8` で確認。 |
+| OLD-REVIEW-doc-example-L1 / coding-review.md | 確認済み | out_of_scope | なし | ドキュメント formatting は identity 保持と無関係。 |
 
 ## 未解決の前提
 - なし。

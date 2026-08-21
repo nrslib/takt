@@ -19,17 +19,17 @@
 | OLD-REVIEW-readme-L1 | ドキュメント例 | overreach | 網羅的な README 例は要求された cache の振る舞いと無関係 |
 
 ## 修正対象 family
-| family | Finding ID / 出典 | Authorization basis | 根拠 | 問題 -> 根本原因 | 関係する契約経路 | 受入条件 | 修正境界 |
-|--------|---------------------|---------------------|----------|-----------------------|-------------------------|---------------------|----------------------|
-| cache-key-normalization | MERGE-NEW-cache-key-L2 | accepted_family_unvisited_consumer | `src/cache.js:13` | read-side operation が write で使う正規化境界を迂回する | 正規化境界と application entry から到達するすべての本番経路 | サポート対象 key で書いた値を、到達可能なすべての consumer で大文字小文字と空白が等価な任意の key から取得、検出、削除でき、不正値の振る舞いは変わらない | cache-key 正規化契約だけを変更し、ドキュメント作業を再開せず、無関係な consumer を変更しない |
-| cache-key-normalization | REGRESSION-NEW-cache-delete-L21 | remediation_regression | `src/cache.js:21`。現在の remediation が公開 delete 経路を追加した | remediation が作成した delete operation が同じ正規化境界を迂回する | 同じ正規化境界と application entry から到達する delete の終端結果 | 大文字小文字と空白が等価な key で削除すると、不正 key の振る舞いを変えずに正規化済み entry を削除する | 同じ cache-key 正規化契約だけを変更し、2つ目の family を作らず、authorization 値を結合しない |
+| family | Finding ID / 出典 | 根拠 | 問題 -> 根本原因 | 関係する契約経路 | 受入条件 | 修正境界 |
+|--------|---------------------|------|-----------------------|-------------------------|---------------------|----------------------|
+| cache-key-normalization | MERGE-NEW-cache-key-L2 | 既に修正対象となった問題と同じ条件への違反を `src/cache.js:13` で確認 | read-side operation が write で使う正規化境界を迂回する | 正規化境界と application entry から到達するすべての本番経路 | サポート対象 key で書いた値を、到達可能なすべての consumer で大文字小文字と空白が等価な任意の key から取得、検出、削除でき、不正値の振る舞いは変わらない | cache-key 正規化契約だけを変更し、ドキュメント作業を再開せず、無関係な consumer を変更しない |
+| cache-key-normalization | REGRESSION-NEW-cache-delete-L21 | 修正が追加した公開 delete 経路の `src/cache.js:21` で退行を確認 | remediation が作成した delete operation が同じ正規化境界を迂回する | 同じ正規化境界と application entry から到達する delete の終端結果 | 大文字小文字と空白が等価な key で削除すると、不正 key の振る舞いを変えずに正規化済み entry を削除する | 同じ cache-key 正規化契約だけを変更し、2つ目の family を作らず、修正理由を結合しない |
 
 ## 指摘ごとの裁定
-| Finding ID / 出典 | 技術的妥当性 | 裁定 | 対象 family | Authorization basis | 初回に含まれなかった理由 | 根拠 |
-|---------------------|--------------------|-------------|---------------|---------------------|----------------------------------|----------|
-| MERGE-NEW-cache-key-L2 | 確認済み | actionable | cache-key-normalization | accepted_family_unvisited_consumer | 初回レビューと remediation 記録は write 経路を対象にしたが、変更されていない read 経路は対象外だった | `src/cache.js:13` が正規化を迂回する |
-| REGRESSION-NEW-cache-delete-L21 | 確認済み | duplicate | cache-key-normalization | remediation_regression | 初回レビュー後に現在の remediation が delete 経路を追加した | remediation が作成した経路の `src/cache.js:21` が正規化を迂回する |
-| OLD-REVIEW-readme-L1 | 確認済み | overreach | なし | なし | 該当なし | 網羅的な README 例は要求された cache の振る舞いと無関係 |
+| Finding ID / 出典 | 技術的妥当性 | 裁定 | 対象 family | 根拠 |
+|---------------------|--------------------|-------------|---------------|------|
+| MERGE-NEW-cache-key-L2 | 確認済み | actionable | cache-key-normalization | 初回レビューと修正記録は write 経路を対象にしていた。`src/cache.js:13` が同じ正規化条件を破っている。 |
+| REGRESSION-NEW-cache-delete-L21 | 確認済み | duplicate | cache-key-normalization | 初回レビュー後に修正が追加した `src/cache.js:21` が同じ正規化条件を破っている。 |
+| OLD-REVIEW-readme-L1 | 確認済み | overreach | なし | 網羅的な README 例は要求された cache の振る舞いと無関係。 |
 
 ## 判定不能の理由（BLOCKED の場合）
 - 該当なし。

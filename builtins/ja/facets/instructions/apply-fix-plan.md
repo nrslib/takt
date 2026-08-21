@@ -18,4 +18,4 @@
 {{include:instructions/established-invariants-scan}}
 {{include:instructions/post-edit-self-scan}}
 
-結果、変更内容、受入根拠、検証結果は、提供された出力契約に従って記録してください。
+結果、変更内容、受入根拠、検証結果を指定された形式で記録してください。

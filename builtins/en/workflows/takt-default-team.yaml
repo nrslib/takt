@@ -21,7 +21,6 @@ steps:
       reviewer_suite: takt-development-review
       review_policy_additions: [takt-testing]
       review_policy: [coding, testing, takt-testing, review]
-      final_gate_policy: [coding, testing, takt-testing]
       review_knowledge: [takt, architecture, unit-testing, e2e-testing]
       security_review_pool: takt-security-review-facets
       security_review_knowledge_additions: [takt]

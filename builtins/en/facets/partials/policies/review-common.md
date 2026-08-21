@@ -37,7 +37,7 @@ This review is a defensive quality and security audit performed, on request, aga
 | Claiming absence or missing wiring | Report a locationless issue only when the original requirement or existing public contract makes existence or wiring necessary and every required route was searched |
 | Questioning whether quality gates were run or their evidence was reported | Not an issue |
 | Environmental factors prevent demonstration, and neither current code nor reproducible evidence confirms a defect requiring correction | Record it as unverified scope; do not create an issue or REJECT |
-| Requesting additional completeness, symmetry, or implementation/test-style guarantees whose necessity cannot be derived after checking the original requirement, observable contract, and applicable policy | Not an issue; if mentioned, provide the non-finding classification and evidence |
+| Requesting additional completeness, symmetry, or implementation/test-style guarantees whose necessity cannot be derived from the original requirement or observable contract | Not an issue; if mentioned, provide the non-finding classification and evidence |
 
 - The existence of values in a public enum or union, or of some convenience methods, does not by itself establish a public contract for a corresponding convenience method for every value. Report missing methods only when the original requirement, existing public specification, or a real usage path requires them
 - APPROVE means zero issues and REJECT means one or more issues. Never pad issues with approvals, summaries, or normal confirmations.
@@ -181,14 +181,15 @@ Reopening a resolved finding requires reproducible evidence.
   2. Expected result vs. actual result
   3. Failing file/line evidence
 - If any of the three is missing, the reopen attempt is invalid (cannot be used as REJECT grounds)
-- If reproduction conditions changed, treat it as a different problem and issue a new `finding_id`
+- When only the reproduced location or reachable path changes, keep the original `finding_id` if the cause, violated observable condition, and acceptance criteria remain the same. Issue a new `finding_id` when any of those differs
 
 ### Immutable Meaning of `finding_id`
 
 Do not mix different problems under the same ID.
 
 - A `finding_id` must refer to one and only one problem
-- If problem meaning, evidence files, or reproduction conditions change, issue a new `finding_id`
+- Issue a new `finding_id` when the cause, violated observable condition, or acceptance criteria differ
+- Differences in evidence files, checked locations, consumer paths, or reproduction inputs alone do not create a different problem. Add them to the original ID as newly checked paths and evidence
 - Rewriting an existing `finding_id` to represent a different problem is prohibited
 
 ## Handling Changelog and History Files
@@ -246,12 +247,8 @@ Within the causal scope, do not tolerate a problem merely because existing code 
 - "Same as existing behavior" is not an approval reason when a new public entry, adapter, or tool exposes that contract
 - When a concern mentioned in prose is not made a finding, classify it as `false_positive` / `overreach` / `out_of_scope` / `no_issue_after_verification` and provide evidence
 - If even one issue exists, REJECT. Downgrading a blocking problem to a warning or suggestion in order to APPROVE is prohibited
-- Warnings and improvement suggestions are not issues and never justify REJECT. With zero issues the verdict is APPROVE even when warnings or suggestions remain. If mentioned, record them in the non-finding concerns or warning section defined by that reviewer's output contract, never in a findings section
+- Warnings and improvement suggestions are not issues and never justify REJECT. With zero issues the verdict is APPROVE even when warnings or suggestions remain. If mentioned, record them in the non-finding concerns or warning section, never in a findings section
 
 ## Detecting Circular Arguments
 
 When the same kind of issue keeps recurring, reconsider the approach itself rather than repeating granular fix instructions.
-
-If a finding is resolved and another finding with the same family appears at a different location in the next review, treat that as a failure to exhaust the family in the prior review, not as evidence that the unverified scope is shrinking.
-
-{{include:policies/review-scope-authority}}

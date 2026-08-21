@@ -19,7 +19,6 @@ steps:
       reviewer_suite: peer-review-suite-frontend
       review_policy_additions: [existing-system-respect]
       review_policy: [coding, testing, design-fidelity, existing-system-respect, review, architecture, frontend, react]
-      final_gate_policy: [coding, testing, design-fidelity, existing-system-respect, architecture, frontend, react]
       review_knowledge: [frontend, react, security, architecture, unit-testing, e2e-testing, existing-system]
     rules:
       - condition: COMPLETE

@@ -13,4 +13,4 @@ Previous work that remains on disk as files or reports is available, but chat co
 
 1. Inspect existing reports under {{report_dir}}
 2. Inspect the latest commit or working tree diff
-3. If context is still missing, execute from the step instruction
+3. If context is still missing, execute from the supplied task description

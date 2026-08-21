@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-description: 'TAKT facet eval: follow-up review が remediation の主張を独立に反証する'
+description: 'TAKT ファセット評価: 修正後レビューが修正済みという主張を独立に反証する'
 
 prompts:
   - file://prompts/follow-up-review-repair-regression.phase1.md
@@ -43,7 +43,7 @@ evaluateOptions:
   maxConcurrency: 3
 
 tests:
-  - description: 'follow-up review: 不完全な修正を repair 起因および隣接契約の欠陥と区別する'
+  - description: '修正後レビュー: 不完全な修正を、修正起因の退行および隣接契約の欠陥と区別する'
     vars:
       task: file://cases/follow-up-review-repair-regression-task.md
       previous_response: ''
@@ -51,17 +51,17 @@ tests:
       - type: llm-rubric
         metric: review/remediation-falsification
         value: |
-          見出し、表形式、label、文言ではなく、因果分類と code evidence を判定する。レビューが REJECT し、次をすべて満たす場合だけ合格とする。
+          見出し、表形式、ラベル、文言ではなく、因果関係の区別とコード上の証拠を判定する。レビューが REJECT し、次をすべて満たす場合だけ合格とする。
 
-          - src/public-key.js を repair が導入した collision defect として特定し、この新しい finding を repair が導入したことを明示する。
-          - src/retry-token.js と src/checkpoint.js に対する元 finding を、別に未解消として維持する。
-          - src/application.js の publishResource() から開始し、その call と returned-record data flow を使って、src/resource-record.js を accepted compound-resource-identity family に属する既存だが未確認だった consumer として特定する。pre-existing または carryover issue として退けず、初回ラウンドがこの consumer を漏らしたことを説明する。
-          - seeded adjudication を accepted compound-resource-identity family の権限根拠として特定する。review-resolution.md の明示で十分であり、裁定済み acceptance criteria と remediation boundary への曖昧でない参照も許容する。各 new finding に primary Authorization Basis を正確に1つ記録する。src/public-key.js には `remediation_regression`、src/resource-record.js には `accepted_family_unvisited_consumer` を使い、accepted remediation boundary がその consumer の migration を要求することを説明する。prose alias と結合値は不合格とする。
-          - publishResource() を通して resolved identity-card condition を追跡し、note なしの完全な tenant/job card を返すことを確認する。この正常 condition は欠陥 condition と分けて証拠を示す。
-          - 新しく公開された public identity-card 経路を repair 起因と特定し、src/identity-card.js の2つの具体的な resolver outcome を報告する。タスクは card result を返さず failure propagation することを要求するが、null result と throw された exception はそれぞれ success-shaped note result に変換される。2つの outcome を1つの finding にまとめてもよいが、両方を明示的に証明する。generic error handling への参照だけでは不十分とする。
-          - 明示された「fully resolved identity」precondition も評価する。tenant ID または job ID を欠く resolver success object が `undefined` を含む success-shaped card に到達することを報告するか、その input が到達不能である具体的な権限根拠を示して除外する。input が完全だと仮定するだけでは不合格とする。
-          - fix report と既存の public identity-card assertion を note behavior の権限根拠として退ける。以前から存在することや assertion が合格することは、保持すべき契約を成立させない。src/application.js は明示的なタスク要件に従う public projection でこの behavior を新たに公開している。missing-result assertion が要件の禁止する result を固定しており、exception state を対象にする assertion がないことを記載する。
-          - 具体的な path と branch を示す static source evidence は、これらの outcome の証明として十分である。振る舞いが静的に確定する場合、read-only review は実行再現を要求しない。
-          - 同じ entry-point data flow から、src/primary-key.js と src/structured-key.js が正常である理由、および src/resource-text.js が正常または非修正対象である理由を説明する。厳密な分類 label は要求しない。
+          - src/public-key.js を修正が導入した衝突の欠陥として特定し、この新しい指摘を修正が導入したことを明示する。
+          - src/retry-token.js と src/checkpoint.js に対する元の指摘を、別に未解消として維持する。
+          - src/application.js の publishResource() から開始し、その呼び出しと返却データの流れを使って、src/resource-record.js を既に修正対象となった identity の問題に属する、既存だが未確認だった利用箇所として特定する。以前から存在したという理由で退けず、同じ修正範囲に含まれる理由をコードと受入条件から説明する。
+          - review-resolution.md に記録された受入条件と修正境界を根拠に、src/public-key.js は修正が導入した退行、src/resource-record.js は既に修正対象となった問題で未確認だった利用箇所として区別する。特定の列名、英語ラベル、分類値の表記は合否に使わない。
+          - publishResource() を通して解決済みの identity-card 条件を追跡し、note なしの完全な tenant/job card を返すことを確認する。この正常条件は欠陥条件と分けて証拠を示す。
+          - 新しく公開された identity-card 経路を修正起因と特定し、src/identity-card.js の resolver が生む2つの具体的な結果を報告する。タスクは card 形式の結果を返さず失敗を伝播することを要求するが、結果がない場合と例外が投げられた場合は、それぞれ成功に見える note 付き結果へ変換される。2つの結果を1つの指摘にまとめてもよいが、両方を明示的に証明する。一般的なエラー処理への参照だけでは不十分とする。
+          - 明示された「識別情報を完全に解決できた場合だけ」という前提条件も評価する。tenant ID または job ID を欠く resolver の成功結果が `undefined` を含む成功に見える card に到達することを報告するか、その入力が到達不能である具体的な根拠を示して除外する。入力が完全だと仮定するだけでは不合格とする。
+          - 修正報告と既存の公開 identity-card テストを、note の振る舞いを保持する契約根拠として採用しない。以前から存在することやテストが合格することは、保持すべき契約を成立させない。src/application.js は明示的なタスク要件に従う公開用の表現でこの振る舞いを新たに公開している。結果がない場合のテストが要件の禁止する結果を固定しており、例外状態を対象にするテストがないことを記載する。
+          - 具体的な経路と分岐を示す静的なコード上の証拠は、これらの結果の証明として十分である。振る舞いが静的に確定する場合、読み取り専用レビューは実行再現を要求しない。
+          - 同じ入口からのデータフローに基づき、src/primary-key.js と src/structured-key.js が正常である理由、および src/resource-text.js が正常または非修正対象である理由を説明する。厳密な分類ラベルは要求しない。
 
-          path を列挙するだけ、またはすべての欠陥を元の persistent finding にまとめるだけでは、repair 起因の regression と初回に漏れた accepted-family consumer を区別する接続証拠と因果分類証拠がないため不合格とする。隣接する text 契約への拡張も不合格とする。
+          経路を列挙するだけ、またはすべての欠陥を元の未解消指摘にまとめるだけでは、修正起因の退行と同じ問題に属する既存の利用箇所を区別する接続証拠と因果関係がないため不合格とする。隣接するテキスト契約への拡張も不合格とする。

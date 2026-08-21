@@ -21,4 +21,4 @@ Use reports in the Report Directory and fix reviewer findings within the causall
 - Every reported problem that requires a change has been resolved
 - After fixing, the full diff has been inspected and changes unrelated to the findings or request have been reverted
 
-Record the decisions, changes, reverted unrelated edits, and verification evidence according to the supplied output contract.
+Record the decisions, changes, reverted unrelated edits, and verification evidence in the requested format.

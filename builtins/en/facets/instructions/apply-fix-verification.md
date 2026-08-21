@@ -25,4 +25,4 @@ Do not treat the locations listed by verification as the upper bound of the repa
 {{include:instructions/established-invariants-scan}}
 {{include:instructions/post-edit-self-scan}}
 
-Follow the current output contract and record the work result, changes and acceptance criteria, and verification evidence.
+Record the work result, changes and acceptance criteria, and verification evidence in the requested format.

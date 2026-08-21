@@ -9,7 +9,7 @@
  *         frontend-coder,
  *         cqrs-coder, fix-closure, fix-plan-fresh-findings,
  *         fix-plan-boundary-preflight, fix-plan-cause-check, fix-plan-bounded-proof,
- *         review-family-closure,
+ *         review-impact-path-coverage,
  *         initial-review-contract-discovery,
  *         initial-review-external-identity-wiring,
  *         testing-review-observable-evidence,
@@ -50,7 +50,7 @@ const SUITES = {
   'fix-plan-boundary-preflight': 'promptfooconfig.fix-plan-boundary-preflight.yaml',
   'fix-plan-cause-check': 'promptfooconfig.fix-plan-cause-check.yaml',
   'fix-plan-bounded-proof': 'promptfooconfig.fix-plan-bounded-proof.yaml',
-  'review-family-closure': 'promptfooconfig.review-family-closure.yaml',
+  'review-impact-path-coverage': 'promptfooconfig.review-impact-path-coverage.yaml',
   'initial-review-contract-discovery': 'promptfooconfig.initial-review-contract-discovery.yaml',
   'initial-review-external-identity-wiring': 'promptfooconfig.initial-review-external-identity-wiring.yaml',
   'testing-review-observable-evidence': 'promptfooconfig.testing-review-observable-evidence.yaml',
@@ -116,7 +116,7 @@ for (const name of names) {
 // 両ログインが必要な二重測定スイートのため、明示的に呼び出す。
 // fix-plan-bounded-proof、fix-plan-fresh-findings、review-adjudication も claude（opus）と
 // codex（Luna Max / Sol High）の両ログインが必要な3モデル測定スイートのため、明示的に呼び出す。
-// review-family-closure と follow-up-review-repair-regression、follow-up-testing-review-repair-regression も claude（opus）と
+// review-impact-path-coverage と follow-up-review-repair-regression、follow-up-testing-review-repair-regression も claude（opus）と
 // codex（Luna Max / Sol High）の両ログインが必要な3モデル測定スイートのため、明示的に呼び出す。
 const DEFAULT_EXCLUDED = new Set([
   'coding',
@@ -127,7 +127,7 @@ const DEFAULT_EXCLUDED = new Set([
   'fix-plan-cause-check',
   'fix-plan-bounded-proof',
   'fix-plan-fresh-findings',
-  'review-family-closure',
+  'review-impact-path-coverage',
   'follow-up-review-repair-regression',
   'follow-up-testing-review-repair-regression',
   'review-adjudication',

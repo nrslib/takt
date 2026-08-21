@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-# TAKT facet eval: 公開 final-gate Phase 2 の finding 保持。
+# TAKT ファセット評価: 公開される最終報告で指摘を保持する。
 
-description: 'TAKT facet eval: 公開 final-gate Phase 2 の finding 保持'
+description: 'TAKT ファセット評価: 公開される最終報告で指摘を保持する'
 
 prompts:
   - file://prompts/final-readiness-supervision-phase2.phase2.md
@@ -35,11 +35,12 @@ evaluateOptions:
   maxConcurrency: 3
 
 tests:
-  - description: '公開 final gate report: 裁定済みのノイズを復活させず新規 finding を保持する'
+  - description: '公開される最終報告: 裁定済みのノイズを復活させず新規指摘を保持する'
     vars:
       task: file://cases/final-readiness-supervision-task.md
       previous_response: file://cases/final-readiness-new-finding-phase1.md
     assert:
-      - type: javascript
+      - type: llm-rubric
         metric: review-fix-final-gate/phase2-finding-preservation
-        value: file://asserts/final-readiness-supervision.mjs
+        value: |
+          見出し、表形式、識別子、英語ラベル、分類値の表記ではなく、前段の判断が最終レポートに保持されているかを評価する。設定値の正規化が必要な利用箇所を未解消として保持し、同じ修正範囲に含まれる理由と必要な変更を説明して REJECT すること。以前に非修正対象と裁定された README の指摘は復活させず、修正対象にも含めないこと。

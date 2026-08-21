@@ -17,14 +17,14 @@ compound resource identity の finding は actionable です。直接影響を�
 |----------|-----------|----------------|--------------------|-----------------------------|------------------------------|---------------|--------------|--------------------------------------|-------------------------------|-------------------------------------------|-----------------------------|------------------|
 
 ## 修正対象 family
-| family | Finding ID / 出典 | Authorization basis | 根拠 | 問題 -> 根本原因 | 関係する契約経路 | 受入条件 | 修正境界 |
-|--------|---------------------|---------------------|----------|-----------------------|-------------------------|---------------------|----------------------|
-| compound-resource-identity | CODE-NEW-resource-identity-L1 / coding-review.md | direct_acceptance_criterion_violation | `src/retry-token.js:1`, `src/checkpoint.js:1` | retry projection と checkpoint projection が compound identity の一部を破棄する | retry token、checkpoint の永続化と再読込、直接影響を受ける公開および永続化 identity consumer | 直接影響を受けるすべての identity projection が tenant ID と job ID の両方を保持する | この accepted family のすべての consumer を移行し、remediation が導入する regression を防ぐ |
+| family | Finding ID / 出典 | 根拠 | 問題 -> 根本原因 | 関係する契約経路 | 受入条件 | 修正境界 |
+|--------|---------------------|------|-----------------------|-------------------------|---------------------|----------------------|
+| compound-resource-identity | CODE-NEW-resource-identity-L1 / coding-review.md | 元要求への違反を `src/retry-token.js:1`, `src/checkpoint.js:1` で確認 | retry projection と checkpoint projection が compound identity の一部を破棄する | retry token、checkpoint の永続化と再読込、直接影響を受ける公開および永続化 identity consumer | 直接影響を受けるすべての identity projection が tenant ID と job ID の両方を保持する | この accepted family のすべての consumer を移行し、remediation が導入する regression を防ぐ |
 
 ## 指摘ごとの裁定
-| Finding ID / 出典 | 技術的妥当性 | 裁定 | 対象 family | Authorization basis | 初回に含まれなかった理由 | 根拠 |
-|---------------------|--------------------|-------------|---------------|---------------------|----------------------------------|----------|
-| CODE-NEW-resource-identity-L1 / coding-review.md | 確認済み | actionable | compound-resource-identity | direct_acceptance_criterion_violation | 初回レビューで retry 経路と checkpoint 経路を特定済み | `src/retry-token.js:1`, `src/checkpoint.js:1` |
+| Finding ID / 出典 | 技術的妥当性 | 裁定 | 対象 family | 根拠 |
+|---------------------|--------------------|-------------|---------------|------|
+| CODE-NEW-resource-identity-L1 / coding-review.md | 確認済み | actionable | compound-resource-identity | 元要求への違反を `src/retry-token.js:1`, `src/checkpoint.js:1` で確認。 |
 
 ## 未解決の前提
 - なし。

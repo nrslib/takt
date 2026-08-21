@@ -25,4 +25,4 @@
 {{include:instructions/established-invariants-scan}}
 {{include:instructions/post-edit-self-scan}}
 
-必須出力は現在の出力契約に従い、作業結果、変更と受入条件、検証結果と証拠を記録してください。
+作業結果、変更と受入条件、検証結果と証拠を指定された形式で記録してください。

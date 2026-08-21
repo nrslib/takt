@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-description: 'TAKT facet eval: follow-up testing review が regression coverage を許可済み family 内に保つ'
+description: 'TAKT ファセット評価: 修正後のテストレビューが修正範囲に必要な回帰検出へ集中する'
 
 prompts:
   - file://prompts/follow-up-testing-review-repair-regression.phase1.md
@@ -43,22 +43,22 @@ evaluateOptions:
   maxConcurrency: 3
 
 tests:
-  - description: 'follow-up testing review: accepted identity family 内の不足した regression 検出だけを要求する'
+  - description: '修正後のテストレビュー: 修正対象に必要な回帰検出だけを要求する'
     vars:
       task: file://cases/follow-up-review-repair-regression-task.md
       previous_response: ''
     assert:
       - type: llm-rubric
-        metric: review/testing-scope-authority
+        metric: review/testing-scope
         value: |
-          見出し、表形式、label、文言ではなく、振る舞いの scope を判定する。testing review が次をすべて満たす場合だけ合格とする。
+          見出し、表形式、ラベル、文言ではなく、振る舞いの範囲を判定する。テストレビューが次をすべて満たす場合だけ合格とする。
 
-          - seeded review-resolution.md を accepted compound-resource-identity family の権限根拠として使う。src/resource-record.js の永続化 consumer は同じ family に属し、現在の test が実行していないため、不足した regression 検出を要求してよい。その finding には Authorization Basis として正確に `accepted_family_unvisited_consumer` を使い、初回ラウンドで見落とした理由を説明する。
-          - repair が導入した src/public-key.js の collision 検出を、Authorization Basis として正確に `remediation_regression` を使って要求してよい。
-          - repair が公開した src/identity-card.js の resolver outcome に対する behavior regression 検出を、Authorization Basis として正確に `remediation_regression` を使って要求してよい。その場合、missing-result state と exception state を generic error handling としてまとめず区別し、公開 publishResource() result を通じた検証を要求する。
-          - 既存の公開 identity-card assertion を要求動作の coverage と数えてはならない。resolved-case assertion は sibling state を対象にせず、missing-result assertion はタスクが禁止する card-shaped note result を固定している。その assertion の修正要求は scope 内であり、禁止された test 削減には当たらない。
-          - bounded comparison で発見したというだけで、src/resource-text.js の別 presentation 契約を finding や test 追加要求にしない。
-          - duplicate test、workflow 名や prose を固定する assertion、raw YAML 構造、helper や内部実装 detail、恒久的な migration inventory、loader・gate・上位 behavior test がすでに対象にする assertion を要求しない。
-          - この変更が導入した regression の検出に因果的に必要な場合を除き、既存 test の削減や統合を要求しない。
+          - review-resolution.md に記録された受入条件と修正境界を根拠にする。src/resource-record.js は既に修正対象となった識別情報の問題に属する永続化利用箇所で、現在のテストが実行していないため、回帰検出を要求してよい。同じ修正範囲に含まれる理由をコードと受入条件から説明する。
+          - 修正が導入した src/public-key.js の collision を検出するテストを要求してよい。
+          - 修正によって公開された src/identity-card.js の resolver 結果に対する回帰検出を要求してよい。その場合、結果がない状態と例外状態を一般的な error handling としてまとめず区別し、公開された publishResource() の結果を通じた検証を要求する。
+          - 既存の公開 identity-card テストを要求動作の網羅と数えてはならない。解決済みの場合のテストは他の状態を対象にせず、結果がない場合のテストはタスクが禁止する card 形式の note 付き結果を固定している。そのテストの修正要求は範囲内であり、禁止されたテスト削減には当たらない。
+          - 限定した比較で発見したというだけで、src/resource-text.js の別の表示契約を指摘やテスト追加要求にしない。
+          - 重複テスト、ワークフロー名や文章を固定する検証、YAML の生構造、補助関数や内部実装の詳細、恒久的な移行一覧、読み込み処理・ゲート・上位の振る舞いテストがすでに対象にする検証を要求しない。
+          - この変更が導入した退行の検出に因果的に必要な場合を除き、既存テストの削減や統合を要求しない。
 
-          prose alias または結合した Authorization Basis を使う、4つの follow-up authorization basis のいずれも持たない別 test family を開く、または一般的な test cleanliness を repair scope と扱った場合は不合格とする。
+          特定の列名、英語ラベル、分類値の表記は合否に使わない。隣接する別契約のテスト追加や、一般的なテスト整理を今回の修正範囲として要求した場合は不合格とする。

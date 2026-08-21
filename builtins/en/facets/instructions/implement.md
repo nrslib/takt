@@ -9,7 +9,7 @@ Use reports in the Report Directory as the primary source of truth. If additiona
 
 {{include:instructions/implement-common}}
 
-**Scope output contract (create at the start of implementation):**
+**Change-scope record (create at the start of implementation):**
 ```markdown
 # Change Scope Declaration
 
@@ -29,7 +29,7 @@ Small / Medium / Large
 - {Affected modules or features}
 ```
 
-**Decisions output contract (at implementation completion, only if decisions were made):**
+**Decision record (at implementation completion, only if decisions were made):**
 ```markdown
 # Decision Log
 

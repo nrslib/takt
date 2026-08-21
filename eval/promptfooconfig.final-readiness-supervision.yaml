@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-# TAKT facet eval: 公開 final-gate Phase 1 のスコープ権限。
+# TAKT ファセット評価: 公開される最終確認の判断範囲。
 
-description: 'TAKT facet eval: 公開 final-gate Phase 1 のスコープ権限'
+description: 'TAKT ファセット評価: 公開される最終確認の判断範囲'
 
 prompts:
   - file://prompts/final-readiness-supervision.phase1.md
@@ -45,19 +45,19 @@ evaluateOptions:
   maxConcurrency: 3
 
 tests:
-  - description: '公開 final gate: 新たに判明した consumer の欠落を独立に境界付ける'
+  - description: '公開される最終確認: 新たに判明した利用箇所の欠落を独立に境界付ける'
     vars:
       task: file://cases/final-readiness-supervision-task.md
       previous_response: ''
     assert:
       - type: llm-rubric
-        metric: review-fix-final-gate/phase1-scope-authority
+        metric: review-fix-final-gate/phase1-scope
         value: |
-          見出し、表形式、ID、厳密な文言ではなく、タスク要件と現在の実装に照らして final-gate の判断を評価する。final-gate review が REJECT し、次をすべて満たす場合だけ合格とする。
+          見出し、表形式、ID、厳密な文言ではなく、タスク要件と現在の実装に照らして最終確認の判断を評価する。最終確認が REJECT し、次をすべて満たす場合だけ合格とする。
 
-          - fixture を独立に調査し、project-configuration entry が、CLI entry で使われる共通の正規化を適用せず、サポート対象の大文字小文字混在 mode を保存してしまうことを特定する。
+          - 評価用コードを独立に調査し、プロジェクト設定の入口が、CLI の入口で使われる共通の正規化を適用せず、サポート対象の大文字小文字が混在した mode を保存してしまうことを特定する。
           - その実装欠陥を、両 entry における一貫した正規化、正規化済みの保存、不正値の拒否という未達の受入条件へ結び付ける。
-          - 現在のコードと要件に新しい反証がないため、裁定済みの documentation 要求を非修正対象のまま維持する。
-          - 未変更領域の一般的なレビューを再開せず、別の水平問題 family を作り出さない。
+          - 現在のコードと要件に新しい反証がないため、裁定済みのドキュメント要求を非修正対象のまま維持する。
+          - 未変更領域の一般的なレビューを再開せず、隣接する別問題を新しい修正対象にしない。
 
-          タスクには一般的な要件だけがあり prior answer はないため、fixture の現在の実装から欠陥を特定した場合に限り評価する。
+          タスクには一般的な要件だけがあり前段の回答はないため、評価用コードの現在の実装から欠陥を特定した場合に限り評価する。

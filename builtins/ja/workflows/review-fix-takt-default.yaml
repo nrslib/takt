@@ -26,7 +26,6 @@ steps:
       development_knowledge: [takt, architecture, task-decomposition, implementation-semantics]
       implementation_instruction: implement
       review_policy: [coding, testing, takt-testing, review, architecture, takt]
-      final_gate_policy: [coding, testing, takt-testing, architecture, takt]
       review_knowledge: [takt, architecture, unit-testing, e2e-testing]
       security_review_pool: takt-security-review-facets
       security_review_knowledge_additions: [takt]

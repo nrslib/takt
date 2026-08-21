@@ -43,7 +43,7 @@ A test may be required only when all of the following can be shown: an acceptanc
 | Medium | Edge cases, error handling |
 | Low | Simple CRUD |
 
-**Note:** When a design reference is provided, UI appearance verification is elevated to medium priority. Refer to the Design Fidelity Policy.
+**Note:** When a design reference is provided, UI appearance verification is elevated to medium priority.
 
 ## Non-Executable Asset Tests
 
