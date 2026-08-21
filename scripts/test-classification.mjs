@@ -301,7 +301,6 @@ export const lightContractIntegrationTestFiles = Object.freeze([
 export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/exec-workflowRunner.integration.test.ts',
   'src/__tests__/facet-includes-integration.test.ts',
-  'src/__tests__/fix-verifier-routing-contract.integration.test.ts',
   'src/__tests__/it-acp-workflow-bridge.test.ts',
   'src/__tests__/it-cli-dynamic-import-error.test.ts',
   'src/__tests__/it-cli-entrypoint-lazy-loading.test.ts',
