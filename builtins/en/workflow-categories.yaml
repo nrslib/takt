@@ -14,6 +14,7 @@ workflow_categories:
   🔍 Review:
     workflows:
       - review
+      - review-fix
       - review-fix-default
       - audit-unit
       - audit-e2e
