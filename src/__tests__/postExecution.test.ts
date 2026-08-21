@@ -18,7 +18,8 @@ const {
   mockBuildTaktManagedPrOptions,
   mockCreatePullRequestSafely,
   mockStripTaktManagedPrMarker,
-  mockReadFileSync,
+  mockReadPrivateFileState,
+  mockWritePrivateFile,
 } =
   vi.hoisted(() => ({
     mockAutoCommitAndPush: vi.fn(),
@@ -31,7 +32,8 @@ const {
       body: `${body}\n\n<!-- takt:managed -->`,
     })),
     mockCreatePullRequestSafely: vi.fn(),
-    mockReadFileSync: vi.fn(),
+    mockReadPrivateFileState: vi.fn(),
+    mockWritePrivateFile: vi.fn(),
     mockStripTaktManagedPrMarker: vi.fn((body: string) => body
       .split('<!-- takt:managed -->')
       .join('')
@@ -39,9 +41,9 @@ const {
       .trimEnd()),
   }));
 
-vi.mock('node:fs', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('node:fs')>()),
-  readFileSync: (...args: unknown[]) => mockReadFileSync(...args),
+vi.mock('../shared/utils/private-file.js', () => ({
+  readPrivateFileState: (...args: unknown[]) => mockReadPrivateFileState(...args),
+  writePrivateFile: (...args: unknown[]) => mockWritePrivateFile(...args),
 }));
 
 vi.mock('../infra/task/index.js', () => ({
@@ -749,6 +751,10 @@ describe('commentLoopAnalysisReportOnPr', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockCommentOnPr.mockReturnValue({ success: true });
+    mockReadPrivateFileState.mockReturnValue({
+      state: { path: '/report.md', exists: true },
+      content: Buffer.from('# Loop analysis'),
+    });
   });
 
   it('Given the source branch has an existing PR, When the analysis report is published, Then the persisted UTF-8 content is posted unchanged', async () => {
@@ -757,7 +763,10 @@ describe('commentLoopAnalysisReportOnPr', () => {
       number: 41,
       url: 'https://github.com/org/repo/pull/41',
     });
-    mockReadFileSync.mockReturnValue(reportContent);
+    mockReadPrivateFileState.mockReturnValue({
+      state: { path: '/report.md', exists: true },
+      content: Buffer.from(reportContent),
+    });
 
     await commentLoopAnalysisReportOnPr({
       projectCwd: '/project',
@@ -766,12 +775,50 @@ describe('commentLoopAnalysisReportOnPr', () => {
     });
 
     expect(mockFindExistingPr).toHaveBeenCalledWith('takt/source-run', '/project');
-    expect(mockReadFileSync).toHaveBeenCalledWith(
+    expect(mockReadPrivateFileState).toHaveBeenCalledWith(
       '/project/.takt/runs/analysis/reports/loop-analysis.md',
-      'utf-8',
     );
+    expect(mockWritePrivateFile).not.toHaveBeenCalled();
     expect(mockCommentOnPr).toHaveBeenCalledWith(41, reportContent, '/project');
     expect(mockCreatePullRequest).not.toHaveBeenCalled();
+  });
+
+  it('Given a report contains sensitive or identifying data, When it is published, Then the persisted and posted content is sanitized', async () => {
+    const reportContent = [
+      '# Loop analysis',
+      'api_key=plain-secret',
+      'Contact: jane@example.com',
+      'Runner name: private-runner-7',
+      'Evidence: /Users/jane/project/.takt/runs/run-1/logs/session.jsonl',
+      'Host: 192.168.10.4',
+    ].join('\n');
+    mockFindExistingPr.mockReturnValue({
+      number: 41,
+      url: 'https://github.com/org/repo/pull/41',
+    });
+    mockReadPrivateFileState.mockReturnValue({
+      state: { path: '/report.md', exists: true },
+      content: Buffer.from(reportContent),
+    });
+
+    await commentLoopAnalysisReportOnPr({
+      projectCwd: '/project',
+      branch: 'takt/source-run',
+      reportPath: '/project/.takt/runs/analysis/reports/loop-analysis.md',
+    });
+
+    const published = mockCommentOnPr.mock.calls[0]?.[1];
+    if (typeof published !== 'string') {
+      throw new Error('Expected the sanitized report to be published');
+    }
+    expect(published).not.toMatch(/plain-secret|jane@example\.com|private-runner-7|\/Users\/jane|192\.168\.10\.4/);
+    expect(published).toContain('[REDACTED]');
+    expect(published).toContain('[PII]');
+    expect(published).toContain('[path]');
+    expect(mockWritePrivateFile).toHaveBeenCalledWith(
+      '/project/.takt/runs/analysis/reports/loop-analysis.md',
+      published,
+    );
   });
 
   it('Given the source branch has no existing PR, When the analysis report is available, Then no comment or PR creation is attempted', async () => {
@@ -793,7 +840,10 @@ describe('commentLoopAnalysisReportOnPr', () => {
       number: 41,
       url: 'https://github.com/org/repo/pull/41',
     });
-    mockReadFileSync.mockReturnValue('# Loop analysis');
+    mockReadPrivateFileState.mockReturnValue({
+      state: { path: '/report.md', exists: true },
+      content: Buffer.from('# Loop analysis'),
+    });
     mockCommentOnPr.mockReturnValue({
       success: false,
       error: 'comment rejected',

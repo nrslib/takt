@@ -5,7 +5,6 @@
  * instructBranch (takt list).
  */
 
-import { readFileSync } from 'node:fs';
 import { autoCommitAndPush } from '../../../infra/task/index.js';
 import { pushBranch } from '../../../infra/task/git.js';
 import { info, error, success } from '../../../shared/ui/index.js';
@@ -19,6 +18,8 @@ import {
 } from '../../../infra/git/index.js';
 import type { Issue, CreatePrResult, GitProvider } from '../../../infra/git/index.js';
 import type { ExecuteTaskOptions } from './types.js';
+import { readPrivateFileState, writePrivateFile } from '../../../shared/utils/private-file.js';
+import { sanitizeLoopAnalysisReportForPublication } from './loopAnalysisReportPublication.js';
 
 const log = createLogger('postExecution');
 
@@ -71,8 +72,16 @@ export async function commentLoopAnalysisReportOnPr(
     return;
   }
 
-  const report = readFileSync(options.reportPath, 'utf-8');
-  const result = gitProvider.commentOnPr(existingPr.number, report, options.projectCwd);
+  const snapshot = readPrivateFileState(options.reportPath);
+  if (!('content' in snapshot)) {
+    throw new Error('Loop analysis report is no longer available');
+  }
+  const report = snapshot.content.toString('utf8');
+  const sanitizedReport = sanitizeLoopAnalysisReportForPublication(report);
+  if (sanitizedReport !== report) {
+    writePrivateFile(options.reportPath, sanitizedReport);
+  }
+  const result = gitProvider.commentOnPr(existingPr.number, sanitizedReport, options.projectCwd);
   if (!result.success) {
     throw new Error(result.error ?? PR_COMMENT_FAILURE_MESSAGE);
   }

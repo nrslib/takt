@@ -629,6 +629,10 @@ force-fail しても、この状態を自動復旧できる保証はありませ
 target で分析 step を割り当ててください。global と project の両方が `loop_analysis` を定義した場合、
 project のセクションが global のセクション全体を置き換えます。
 
+公開前に、TAKTは認識できたsecret、credential、token、個人識別情報、絶対ローカルパス、runnerを
+特定できるmetadataを除去します。除去によって内容が変わる場合は保存済みreportも安全化後の内容で
+置き換え、ファイルとPRコメントを同一に保ちます。
+
 runtime モードはファイルの存在ではなく、有効な `provider` セクションの有無で有効化されます。`version: 1` だけのファイルは inactive で、従来の `config.yaml` による provider 解決がそのまま使われます。
 
 ### 設定例

@@ -30,7 +30,9 @@ const injectedFileFailure = vi.hoisted(() => ({
   descriptorPaths: new Map<number, string>(),
   pathPredicate: undefined as ((path: string) => boolean) | undefined,
   skipBeforeOpenCalls: 0,
+  skipBeforeLstatCalls: 0,
   beforeOpen: undefined as (() => void) | undefined,
+  beforeLstat: undefined as (() => void) | undefined,
   beforeArtifactCreation: undefined as (() => void) | undefined,
   beforePublication: undefined as (() => void) | undefined,
 }));
@@ -94,6 +96,18 @@ vi.mock('node:fs', async () => {
     ...actual,
     lstatSync(...args: Parameters<typeof actual.lstatSync>) {
       const path = String(args[0]);
+      if (
+        injectedFileFailure.beforeLstat !== undefined
+        && (injectedFileFailure.pathPredicate === undefined || injectedFileFailure.pathPredicate(path))
+      ) {
+        if (injectedFileFailure.skipBeforeLstatCalls > 0) {
+          injectedFileFailure.skipBeforeLstatCalls -= 1;
+        } else {
+          const beforeLstat = injectedFileFailure.beforeLstat;
+          injectedFileFailure.beforeLstat = undefined;
+          beforeLstat();
+        }
+      }
       if (
         injectedFileFailure.operation === 'lstat'
         && (injectedFileFailure.pathPredicate === undefined || injectedFileFailure.pathPredicate(path))
@@ -276,7 +290,9 @@ describe('private file artifacts', () => {
     injectedFileFailure.descriptorPaths.clear();
     injectedFileFailure.pathPredicate = undefined;
     injectedFileFailure.skipBeforeOpenCalls = 0;
+    injectedFileFailure.skipBeforeLstatCalls = 0;
     injectedFileFailure.beforeOpen = undefined;
+    injectedFileFailure.beforeLstat = undefined;
     injectedFileFailure.beforeArtifactCreation = undefined;
     injectedFileFailure.beforePublication = undefined;
     for (const root of roots.splice(0)) {
@@ -583,6 +599,21 @@ describe('private file artifacts', () => {
       renameSync(logs, movedLogs);
       symlinkSync(outsideLogs, logs, 'dir');
     };
+
+    expect(() => readPrivateFileState(file))
+      .toThrow(PrivateArtifactPublicationConflictError);
+  });
+
+  it('should classify an ancestor deletion during a private read as a publication conflict', () => {
+    const root = mkdtempSync(join(TEST_TMPDIR, 'takt-private-read-ancestor-delete-'));
+    roots.push(root);
+    const logs = join(root, '.takt', 'runs', 'run-1', 'logs');
+    mkdirSync(logs, { recursive: true });
+    const file = join(logs, 'events.jsonl');
+    writeFileSync(file, 'original\n');
+    injectedFileFailure.pathPredicate = (path) => path === logs;
+    injectedFileFailure.skipBeforeLstatCalls = 1;
+    injectedFileFailure.beforeLstat = () => rmSync(logs, { recursive: true });
 
     expect(() => readPrivateFileState(file))
       .toThrow(PrivateArtifactPublicationConflictError);

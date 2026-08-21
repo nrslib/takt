@@ -647,6 +647,11 @@ provider options are not valid inside `loop_analysis`; configure the analysis
 steps through normal runtime provider targets. When both runtime files define
 `loop_analysis`, the project section replaces the global section as a unit.
 
+Before publication, TAKT removes recognized secrets, credentials, tokens,
+personally identifiable data, absolute local paths, and runner-identifying
+metadata. If redaction changes the report, the sanitized content replaces the
+persisted report so the file and pull-request comment remain identical.
+
 Runtime mode is enabled by the presence of an active `provider` section, not by the file existing. A file that only contains `version: 1` is inactive and leaves the legacy `config.yaml` provider resolution in place.
 
 ### Configuration example
