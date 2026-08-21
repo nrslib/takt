@@ -955,7 +955,7 @@ provider_options:
     no_context_files: true    # 禁用 Pi context-file discovery
 ```
 
-显式资源只在 TAKT run 中临时解析，不会写入 Pi 设置；隐式项目本地 extension 不会被信任或加载。带有内嵌凭据或包含 secret 的 query 参数的 extension URL 会被拒绝。
+没有版本限定的显式 npm source 会依次复用已有的 project scope、user scope 安装；两者都无法解析为启用的资源时，才使用 temporary resolution，并且不会向持久 scope 安装。带版本限定的 npm source 始终使用 temporary resolution。显式资源不会写入 Pi 设置；隐式 project-local Pi 资源不会被信任或加载，只有为显式 npm source 检测到的绝对路径可以从 project package storage 复用。带有内嵌凭据或包含 secret 的 query 参数的 extension URL 会被拒绝。
 
 <a id="workflow-categories"></a>
 

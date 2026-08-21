@@ -1156,12 +1156,12 @@ provider_options:
 ```
 
 - `extensions` には npm package、Git source、local path を指定できます。
-- 明示した npm source は既存の user scope install を再利用し、利用できない、または読み込めない場合だけ temporary resolution に fallback します。user scope への新規 install は行いません。
+- version 指定のない明示 npm source は既存の project scope install、user scope install の順に再利用します。どちらも有効な resource に解決できない場合だけ temporary resolution に fallback し、永続 scope への新規 install は行いません。version 指定付き npm source は常に temporary resolution されます。
 - npm 以外の明示した source は TAKT 実行時に temporary resolution されます。
 - 明示した source は Pi settings には永続化されません。
 - `no_extensions` は extension 探索を無効にしますが、`extensions` に列挙した source は読み込みます。
-- その他の `no_*` オプションはそれぞれ対応するリソース種別の探索を無効にします。
-- 暗黙の project-local Pi extension は信頼せず、読み込みません。
+- その他の `no_*` オプションは、それぞれ対応するリソース種別の探索を無効にします。
+- 暗黙の project-local Pi resource は信頼せず、読み込みません。project package storage から再利用するのは、明示した npm source に対して検出した絶対 path だけです。
 - 明示した extension は TAKT process 内で実行されるため、信頼できる local path と package source だけを設定してください。
 - 認証情報を埋め込んだ URL や secret 系 query parameter を含む extension URL は拒否します。
 
