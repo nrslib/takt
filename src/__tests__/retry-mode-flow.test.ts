@@ -388,6 +388,42 @@ describe('E2E: Retry mode with failure context injection', () => {
     expect(result.task).toBe('');
   });
 
+  it('should refuse /replay and /retry when the previous order is empty', async () => {
+    setupRawStdin(toRawInputs(['/replay', '/retry', '/cancel']));
+    const capture = setupProvider([]);
+
+    const retryContext: RetryContext = {
+      failure: {
+        taskName: 'some-task',
+        taskContent: 'Complete some task',
+        createdAt: '2026-02-15T12:00:00Z',
+        failedStep: 'plan',
+        error: 'Unknown error',
+        lastMessage: '',
+        retryNote: '',
+      },
+      subject: {
+        kind: 'branch',
+        value: 'takt/some-task',
+      },
+      workflowContext: {
+        name: 'default',
+        description: '',
+        workflowStructure: '',
+        stepPreviews: [],
+      },
+      run: null,
+      // An order file that exists but holds nothing is no order to resubmit.
+      previousOrderContent: '',
+    };
+
+    const result = await runTaskRetryMode(tmpDir, retryContext);
+
+    expect(result.action).toBe('cancel');
+    expect(result.task).toBe('');
+    expect(capture.callCount).toBe(0);
+  });
+
   it('should handle conversation before /go with failure context', async () => {
     setupRawStdin(toRawInputs([
       'what was the error?',

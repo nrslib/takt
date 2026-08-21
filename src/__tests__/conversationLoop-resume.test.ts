@@ -559,21 +559,6 @@ describe('/resume command', () => {
     expect(result.action).toBe('cancel');
   });
 
-  it('should complete /r to /resume when retry and replay are unavailable', async () => {
-    // Given: /r → Tab → Enter completes to /resume, then /cancel exits
-    setupRawStdin(toRawInputs(['/r\t', '/cancel']));
-    setupProvider([]);
-
-    const ctx = createSessionContext();
-
-    // When
-    const result = await runConversationLoop('/test', ctx, defaultStrategy, undefined, undefined);
-
-    // Then
-    expect(mockSelectRecentSession).toHaveBeenCalledWith('/test', 'en');
-    expect(result.action).toBe('cancel');
-  });
-
   it('should complete /r to /retry when retry is available', async () => {
     // Given: /r → Tab → Enter completes to /retry, then /cancel exits
     setupRawStdin(toRawInputs(['/r\t', '/cancel']));
@@ -677,95 +662,6 @@ describe('/go command', () => {
     expect(result.action).toBe('execute');
   });
 
-  it('should return pasted image attachments after image input and /go', async () => {
-    setupRawStdin([
-      `use ${createOscImagePaste()} please\r`,
-      '/go\r',
-    ]);
-
-    const { provider, capture } = createScenarioProvider([
-      { content: 'AI response using [Image #1].' },
-      { content: 'Generated task using [Image #1].' },
-    ]);
-
-    const ctx: SessionContext = {
-      provider: provider as SessionContext['provider'],
-      providerType: 'mock' as SessionContext['providerType'],
-      model: undefined,
-      lang: 'en',
-      personaName: 'interactive',
-      sessionId: undefined,
-    };
-
-    const result = await runConversationLoop('/test', ctx, defaultStrategy, undefined, undefined);
-
-    expect(capture.callCount).toBe(2);
-    expect(capture.imageAttachments[0]).toBeUndefined();
-    expect(capture.imageAttachments[1]).toBeUndefined();
-    expect(result.action).toBe('execute');
-    expect(result.task).toBe('Generated task using [Image #1].');
-    expect(result.attachments?.[0]?.fileName).toBe('image-1.png');
-    expect(result.attachments?.[0]).not.toHaveProperty('relativePath');
-    expect(result.attachments?.[0]?.tempPath).toBeDefined();
-    trackAttachmentSession(result.attachments![0]!.tempPath);
-    expect(fs.existsSync(result.attachments![0]!.tempPath)).toBe(true);
-  });
-
-  it('should cleanup pasted image session directory when input processing throws after image paste', async () => {
-    const tmpRoot = createIsolatedTmpRoot('takt-conversation-cleanup-');
-    const originalTmpDir = process.env.TMPDIR;
-    process.env.TMPDIR = tmpRoot;
-    const previousSessionDirs = listTaktTempSessionDirs();
-    setupRawStdin([
-      `use ${createOscImagePaste()} ${createInvalidSizeOscImagePaste()}\r`,
-    ]);
-    const ctx = createSessionContext();
-
-    try {
-      await expect(
-        runConversationLoop('/test', ctx, defaultStrategy, undefined, undefined),
-      ).rejects.toThrow('Pasted inline image data does not match its declared size.');
-
-      expectNoNewTaktTempSessionDirs(previousSessionDirs);
-    } finally {
-      if (originalTmpDir === undefined) {
-        delete process.env.TMPDIR;
-      } else {
-        process.env.TMPDIR = originalTmpDir;
-      }
-    }
-  });
-
-  it('should pass image attachment bodies only to native image providers', async () => {
-    setupRawStdin([
-      `use ${createOscImagePaste()} please\r`,
-      '/go\r',
-    ]);
-
-    const { provider, capture } = createScenarioProvider([
-      { content: 'AI response using [Image #1].' },
-      { content: 'Generated task using [Image #1].' },
-    ], { supportsNativeImageInput: true });
-
-    const ctx: SessionContext = {
-      provider: provider as SessionContext['provider'],
-      providerType: 'codex' as SessionContext['providerType'],
-      model: undefined,
-      lang: 'en',
-      personaName: 'interactive',
-      sessionId: undefined,
-    };
-
-    const result = await runConversationLoop('/test', ctx, defaultStrategy, undefined, undefined);
-
-    expect(capture.callCount).toBe(2);
-    expect(capture.imageAttachments[0]?.[0]?.placeholder).toBe('[Image #1]');
-    expect(capture.imageAttachments[0]?.[0]?.path).toBeDefined();
-    expect(capture.imageAttachments[1]?.[0]?.placeholder).toBe('[Image #1]');
-    expect(result.action).toBe('execute');
-    trackAttachmentSession(result.attachments![0]!.tempPath);
-  });
-
   it('should report missing stored images in regular input and continue without calling AI', async () => {
     setupRawStdin(toRawInputs(['inspect [Image #1]', '/cancel']));
     const missingAttachment = createMissingImageAttachment();
@@ -808,30 +704,6 @@ describe('/go command', () => {
     expect(capture.callCount).toBe(0);
     expect(mockLogError).toHaveBeenCalledWith(expect.stringContaining('missing-image.png'));
     expect(result.action).toBe('cancel');
-  });
-
-  it('should not create formal task assets when image input is cancelled', async () => {
-    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-cancel-image-test-'));
-    try {
-      setupRawStdin([
-        `use ${createOscImagePaste()} please\r`,
-        '/cancel\r',
-      ]);
-
-      setupProvider(['AI response using [Image #1].']);
-      const ctx = createSessionContext();
-
-      const result = await runConversationLoop(projectRoot, ctx, defaultStrategy, undefined, undefined);
-
-      expect(result.action).toBe('cancel');
-      expect(result.attachments?.[0]?.fileName).toBe('image-1.png');
-      expect(result.attachments?.[0]?.tempPath).toBeDefined();
-      trackAttachmentSession(result.attachments![0]!.tempPath);
-      expect(fs.existsSync(path.join(projectRoot, '.takt', 'tasks'))).toBe(false);
-      expect(fs.existsSync(path.join(projectRoot, '.takt', 'runs'))).toBe(false);
-    } finally {
-      fs.rmSync(projectRoot, { recursive: true, force: true });
-    }
   });
 
   it('should include assistant init context only in the first regular AI prompt', async () => {

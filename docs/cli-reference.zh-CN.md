@@ -23,8 +23,7 @@
 | `--auto-strategy <strategy>` | 覆盖自动路由策略（`cost`\|`balanced`\|`performance`）。只有执行进入当前 workflow 或具有有效 `auto_routing` 的 workflow-call 子流程时才应用；否则 TAKT 会警告并忽略。 |
 | `--model <name>` | 覆盖 agent model |
 | `-c, --continue` | 从当前项目目录和 provider 的上一次 assistant session 继续 |
-| `--tui` | 强制使用基于 Ink 的 TUI 进行任务对话（需要 TTY）。工作流选择、模式选择和总结后的操作选择仍使用原有选择器，TUI 只负责对话本身。Enter 发送，Shift+Enter / Option+Enter 换行，Ctrl+K 删除到行尾 |
-| `--no-tui` | 使用传统 readline 对话而非 TUI。两者都不指定时，终端上默认使用 TUI，非 TTY 时使用传统路径 |
+| `--tui` | 强制使用基于 Ink 的 TUI 进行任务对话（需要 TTY）。工作流选择、模式选择和总结后的操作选择仍使用原有选择器，TUI 只负责对话本身。Enter 发送，Shift+Enter / Option+Enter 换行，Ctrl+K 删除到行尾，Esc 中断正在生成的回答，队列中的内容会作为下一轮立即发送。回答期间提交的行会进入队列并在完成后发送（队列开始发送前可用 ↑ 取回编辑）。任务执行后会话继续保持，直到 /cancel |
 
 `--workflow` 是规范选项。
 

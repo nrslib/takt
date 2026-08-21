@@ -15,6 +15,7 @@ import type {
   TuiSubmitInput,
 } from '../features/tui/tuiConversation.js';
 import { getLabel } from '../shared/i18n/index.js';
+import { matchSlashCommand } from '../features/interactive/commandMatcher.js';
 import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -29,6 +30,7 @@ const ENTER = '\r';
 const ALT_ENTER = '\x1b\r';
 const CTRL_C = '\x03';
 const CTRL_D = '\x04';
+const ESC = '\x1b';
 /** Ink delivers Ctrl+J as a bare line feed with no key flags. */
 const CTRL_J = '\n';
 const BACKSPACE = '\x7f';
@@ -51,6 +53,9 @@ const INLINE_IMAGE_DATA = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
 const INLINE_IMAGE_PASTE = `\x1b]1337;File=inline=1;name=shot.png;size=${INLINE_IMAGE_DATA.length}:${INLINE_IMAGE_DATA.toString('base64')}\x07`;
 
 const UI: ConversationUiText = {
+  interruptHint: getLabel('tui.ui.interruptHint', 'en'),
+  responseInterrupted: getLabel('tui.ui.responseInterrupted', 'en'),
+  instructionInterrupted: getLabel('tui.ui.instructionInterrupted', 'en'),
   queuedHint: getLabel('tui.ui.queuedHint', 'en'),
   queuedMore: getLabel('tui.ui.queuedMore', 'en'),
   thinking: getLabel('tui.ui.thinking', 'en'),
@@ -121,6 +126,12 @@ function createScriptedConversation(
   return {
     lang: 'en',
     commandAvailability,
+
+    // The real conversation asks the registry; the double answers for the
+    // commands this test gave it, so a `/path`-looking line stays text.
+    isCommandLine(text: string): boolean {
+      return matchSlashCommand(text.trim(), commandAvailability) !== null;
+    },
     submitCalls,
     instructionCalls,
     resumedSessions,
@@ -170,7 +181,9 @@ function createScriptedConversation(
 interface RenderOverrides {
   readonly autoSubmit?: boolean;
   readonly initialHistory?: readonly string[];
+  readonly initialQueue?: readonly string[];
   readonly modelLabel?: string;
+  readonly residentSession?: boolean;
 }
 
 function renderConversation(
@@ -188,6 +201,8 @@ function renderConversation(
       submitMode={submitMode}
       autoSubmit={overrides.autoSubmit ?? false}
       initialHistory={overrides.initialHistory ?? []}
+      initialQueue={overrides.initialQueue ?? []}
+      residentSession={overrides.residentSession ?? false}
       modelLabel={overrides.modelLabel ?? MODEL_LABEL}
       onExit={onExit}
     />,
@@ -211,7 +226,10 @@ describe('ConversationView', () => {
 
     // The command is consumed here, so the history the next mount starts from
     // carries it and the draft it starts with is empty.
-    expect(onExit).toHaveBeenCalledExactlyOnceWith({ kind: 'resume_session' }, ['/resume']);
+    expect(onExit).toHaveBeenCalledExactlyOnceWith(
+      { kind: 'resume_session' },
+      { history: ['/resume'], queue: [] },
+    );
     app.unmount();
 
     const resumed = renderConversation(conversation, 'chat', vi.fn(), {
@@ -394,6 +412,761 @@ describe('ConversationView', () => {
     expect(frame).not.toContain('\u001b[31m');
 
     app.unmount();
+  });
+
+  describe('queueing while the assistant answers', () => {
+    /** Submits `text` and leaves the view busy on an unsettled submission. */
+    async function startBusyTurn(app: ReturnType<typeof renderConversation>): Promise<void> {
+      app.stdin.write('first question');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+    }
+
+    it('should keep the draft editable and queue what is submitted while busy', async () => {
+      const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+      const app = renderConversation(conversation, 'chat', vi.fn());
+      await flushFrames();
+      await startBusyTurn(app);
+
+      // Typing during the answer edits the draft as usual.
+      app.stdin.write('queued one');
+      await flushFrames();
+      expect(app.lastFrame() ?? '').toContain('❯ queued one');
+
+      app.stdin.write(ENTER);
+      await flushFrames();
+
+      // Nothing was sent: the line waits above the prompt, with its hint.
+      expect(conversation.submitCalls).toHaveLength(1);
+      const frame = app.lastFrame() ?? '';
+      expect(frame).toContain('queued one');
+      expect(frame).toContain(UI.queuedHint);
+      expect(frame).toContain(UI.placeholder);
+
+      app.unmount();
+    });
+
+    it('should send the queued lines as one turn when the answer lands', async () => {
+      const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+      const app = renderConversation(conversation, 'chat', vi.fn());
+      await flushFrames();
+      await startBusyTurn(app);
+
+      app.stdin.write('queued one');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+      app.stdin.write('queued two');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+
+      conversation.resolveWith({ kind: 'assistant_response', content: 'first answer' });
+      await flushFrames();
+
+      // The two plain lines were written as one thought, so they go out as one.
+      expect(conversation.submitCalls).toHaveLength(2);
+      expect(conversation.submitCalls[1]?.text).toBe('queued one\nqueued two');
+      const frame = app.lastFrame() ?? '';
+      expect(frame).toContain('❯ queued one');
+      expect(frame).not.toContain(UI.queuedHint);
+
+      app.unmount();
+    });
+
+    it('should keep a line that only looks like a command with the text', async () => {
+      const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+      const app = renderConversation(conversation, 'chat', vi.fn());
+      await flushFrames();
+      await startBusyTurn(app);
+
+      for (const line of ['/usr/bin/env is missing', 'and so is /opt/homebrew']) {
+        app.stdin.write(line);
+        await flushFrames();
+        app.stdin.write(ENTER);
+        await flushFrames();
+      }
+
+      conversation.resolveWith({ kind: 'assistant_response', content: 'first answer' });
+      await flushFrames();
+
+      // Neither line names a command, so both belong to the same message.
+      expect(conversation.submitCalls).toHaveLength(2);
+      expect(conversation.submitCalls[1]?.text)
+        .toBe('/usr/bin/env is missing\nand so is /opt/homebrew');
+
+      app.unmount();
+    });
+
+    it('should carry on with the queue after a queued local command', async () => {
+      let releasePaste!: () => void;
+      const conversation = {
+        ...createScriptedConversation(
+          new Map<string, TuiLocalCommand>([['/paste-image', { kind: 'paste_image' }]]),
+          NO_ORDER_COMMANDS,
+        ),
+        pasteClipboardImage: () => new Promise<string>((resolve) => {
+          releasePaste = () => resolve('[Image #1]');
+        }),
+      };
+      const app = renderConversation(conversation, 'chat', vi.fn());
+      await flushFrames();
+      await startBusyTurn(app);
+
+      for (const line of ['/paste-image', 'after the paste']) {
+        app.stdin.write(line);
+        await flushFrames();
+        app.stdin.write(ENTER);
+        await flushFrames();
+      }
+
+      conversation.resolveWith({ kind: 'assistant_response', content: 'first answer' });
+      await flushFrames();
+
+      // The command ran and the line behind it went out rather than waiting
+      // for a keystroke that never comes.
+      expect(conversation.submitCalls[1]?.text).toBe('after the paste');
+      expect(app.lastFrame() ?? '').not.toContain(UI.queuedHint);
+
+      releasePaste();
+      await flushFrames();
+      app.unmount();
+    });
+
+    it('should queue the second of two Enters that arrive before a re-render', async () => {
+      const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+      const app = renderConversation(conversation, 'chat', vi.fn());
+      await flushFrames();
+
+      app.stdin.write('first question');
+      await flushFrames();
+      // Two submissions with no frame in between: the second must see the call
+      // the first one started, not the flag React has yet to re-render.
+      app.stdin.write(ENTER);
+      app.stdin.write('second question');
+      app.stdin.write(ENTER);
+      await flushFrames();
+
+      expect(conversation.submitCalls).toHaveLength(1);
+      expect(conversation.submitCalls[0]?.text).toBe('first question');
+      expect(app.lastFrame() ?? '').toContain(UI.queuedHint);
+
+      conversation.resolveWith({ kind: 'assistant_response', content: 'first answer' });
+      await flushFrames();
+      expect(conversation.submitCalls[1]?.text).toBe('second question');
+
+      app.unmount();
+    });
+
+    it('should send three queued lines as one message', async () => {
+      const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+      const app = renderConversation(conversation, 'chat', vi.fn());
+      await flushFrames();
+      await startBusyTurn(app);
+
+      for (const line of ['first thought', 'second thought', 'third thought']) {
+        app.stdin.write(line);
+        await flushFrames();
+        app.stdin.write(ENTER);
+        await flushFrames();
+      }
+      expect(conversation.submitCalls).toHaveLength(1);
+
+      conversation.resolveWith({ kind: 'assistant_response', content: 'first answer' });
+      await flushFrames();
+
+      // One turn, not three: the lines were written as one thought.
+      expect(conversation.submitCalls).toHaveLength(2);
+      expect(conversation.submitCalls[1]?.text)
+        .toBe('first thought\nsecond thought\nthird thought');
+
+      conversation.resolveWith({ kind: 'assistant_response', content: 'second answer' });
+      await flushFrames();
+      // Nothing was left behind to send afterwards.
+      expect(conversation.submitCalls).toHaveLength(2);
+
+      app.unmount();
+    });
+
+    it('should send a queued command on its own, after the lines before it', async () => {
+      const conversation = createScriptedConversation(
+        new Map<string, TuiLocalCommand>([['/play run it', { kind: 'execute', task: 'run it' }]]),
+        NO_ORDER_COMMANDS,
+      );
+      const onExit = vi.fn();
+      const app = renderConversation(conversation, 'chat', onExit);
+      await flushFrames();
+      await startBusyTurn(app);
+
+      app.stdin.write('queued text');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+      app.stdin.write('/play run it');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+
+      conversation.resolveWith({ kind: 'assistant_response', content: 'first answer' });
+      await flushFrames();
+
+      // The plain line goes first, on its own turn; the command still waits.
+      expect(conversation.submitCalls[1]?.text).toBe('queued text');
+      expect(onExit).not.toHaveBeenCalled();
+
+      conversation.resolveWith({ kind: 'assistant_response', content: 'second answer' });
+      await flushFrames();
+
+      expect(onExit).toHaveBeenCalledExactlyOnceWith(
+        { kind: 'result', result: { action: 'execute', task: 'run it' } },
+        expect.objectContaining({ history: expect.any(Array) }),
+      );
+
+      app.unmount();
+    });
+
+    it('should run /cancel immediately instead of queueing it', async () => {
+      const conversation = createScriptedConversation(
+        new Map<string, TuiLocalCommand>([['/cancel', { kind: 'cancel' }]]),
+        NO_ORDER_COMMANDS,
+      );
+      const onExit = vi.fn();
+      const app = renderConversation(conversation, 'chat', onExit);
+      await flushFrames();
+      await startBusyTurn(app);
+
+      app.stdin.write('queued one');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+      app.stdin.write('/cancel');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+      // The exit drains the turn that was still running.
+      conversation.resolveWith({ kind: 'assistant_response', content: 'ignored' });
+      await flushFrames();
+
+      expect(onExit).toHaveBeenCalledExactlyOnceWith(
+        { kind: 'result', result: { action: 'cancel', task: '' } },
+        expect.objectContaining({ history: expect.any(Array) }),
+      );
+      // The run ended, so the queued line is gone with it.
+      expect(conversation.submitCalls).toHaveLength(1);
+
+      app.unmount();
+    });
+
+    it('should drop the queue when Ctrl+C ends the run', async () => {
+      const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+      const onExit = vi.fn();
+      const app = renderConversation(conversation, 'chat', onExit);
+      await flushFrames();
+      await startBusyTurn(app);
+
+      app.stdin.write('queued one');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+      app.stdin.write(CTRL_C);
+      await flushFrames();
+      conversation.resolveWith({ kind: 'assistant_response', content: 'ignored' });
+      await flushFrames();
+
+      expect(onExit).toHaveBeenCalledExactlyOnceWith(
+        { kind: 'result', result: { action: 'cancel', task: '' } },
+        expect.objectContaining({ history: expect.any(Array) }),
+      );
+      expect(conversation.submitCalls).toHaveLength(1);
+
+      app.unmount();
+    });
+
+    it('should take the last queued line back into the draft on Up', async () => {
+      const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+      const app = renderConversation(conversation, 'chat', vi.fn());
+      await flushFrames();
+      await startBusyTurn(app);
+
+      app.stdin.write('queued one');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+      app.stdin.write('queued two');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+
+      app.stdin.write(ARROW_UP);
+      await flushFrames();
+      expect(app.lastFrame() ?? '').toContain('❯ queued two');
+
+      app.stdin.write(' amended');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+      conversation.resolveWith({ kind: 'assistant_response', content: 'first answer' });
+      await flushFrames();
+
+      // The edited line went back to the end of the queue, so it lands last.
+      expect(conversation.submitCalls[1]?.text).toBe('queued one\nqueued two amended');
+
+      app.unmount();
+    });
+
+    it('should recall the history with Up once the queue is empty', async () => {
+      const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+      const app = renderConversation(conversation, 'chat', vi.fn(), {
+        initialHistory: ['remembered'],
+      });
+      await flushFrames();
+      // Submitting puts the line in the history, so it is the newest entry.
+      await startBusyTurn(app);
+
+      app.stdin.write(ARROW_UP);
+      await flushFrames();
+      expect(app.lastFrame() ?? '').toContain('❯ first question');
+
+      app.stdin.write(ARROW_UP);
+      await flushFrames();
+      expect(app.lastFrame() ?? '').toContain('❯ remembered');
+
+      app.unmount();
+    });
+  });
+
+  describe('interrupting with Esc', () => {
+    it('should abort the call, note it and leave the session usable', async () => {
+      const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+      const onExit = vi.fn();
+      const app = renderConversation(conversation, 'chat', onExit);
+      await flushFrames();
+
+      app.stdin.write('a question');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+      conversation.submitCalls[0]?.onAssistantChunk('half an answer');
+      await flushFrames();
+      expect(app.lastFrame() ?? '').toContain('half an answer');
+
+      app.stdin.write(ESC);
+      await flushFrames();
+
+      // The call was aborted, the partial answer dropped, and the note left.
+      expect(conversation.submitCalls[0]?.abortSignal.aborted).toBe(true);
+      const frame = app.lastFrame() ?? '';
+      expect(frame).toContain(UI.responseInterrupted);
+      expect(frame).not.toContain('half an answer');
+      expect(frame).not.toContain(UI.thinking);
+      expect(onExit).not.toHaveBeenCalled();
+
+      // The session is still there: the next line is sent as usual.
+      app.stdin.write('another question');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+      expect(conversation.submitCalls).toHaveLength(2);
+
+      app.unmount();
+    });
+
+    it('should ignore the answer that lands after an interrupt', async () => {
+      const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+      const app = renderConversation(conversation, 'chat', vi.fn());
+      await flushFrames();
+
+      app.stdin.write('a question');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+      app.stdin.write(ESC);
+      await flushFrames();
+
+      // The provider ignored the abort and answered anyway.
+      conversation.resolveWith({ kind: 'assistant_response', content: 'too late' });
+      await flushFrames();
+
+      expect(app.lastFrame() ?? '').not.toContain('too late');
+
+      app.unmount();
+    });
+
+    it('should not commit the answer that lands after an interrupt', async () => {
+      const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+      const app = renderConversation(conversation, 'chat', vi.fn());
+      await flushFrames();
+
+      app.stdin.write('a question');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+      app.stdin.write(ESC);
+      await flushFrames();
+
+      // An adapter that keeps its own transcript is told to record a turn only
+      // when the view accepts it; this one the user stopped.
+      const commit = vi.fn();
+      conversation.resolveWith({ kind: 'assistant_response', content: 'too late', commit });
+      await flushFrames();
+
+      expect(commit).not.toHaveBeenCalled();
+
+      app.unmount();
+    });
+
+    it('should commit an answer the view accepts', async () => {
+      const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+      const app = renderConversation(conversation, 'chat', vi.fn());
+      await flushFrames();
+
+      app.stdin.write('a question');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+
+      const commit = vi.fn();
+      conversation.resolveWith({ kind: 'assistant_response', content: 'an answer', commit });
+      await flushFrames();
+
+      expect(commit).toHaveBeenCalledTimes(1);
+      expect(app.lastFrame() ?? '').toContain('an answer');
+
+      app.unmount();
+    });
+
+    it('should name the interrupted work when /go was running', async () => {
+      const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+      const app = renderConversation(conversation, 'chat', vi.fn());
+      await flushFrames();
+
+      app.stdin.write('/go');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+      app.stdin.write(ESC);
+      await flushFrames();
+
+      const frame = app.lastFrame() ?? '';
+      expect(frame).toContain(UI.instructionInterrupted);
+      expect(frame).not.toContain(UI.responseInterrupted);
+
+      app.unmount();
+    });
+
+    it('should send what was queued as soon as the answer is interrupted', async () => {
+      const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+      const app = renderConversation(conversation, 'chat', vi.fn());
+      await flushFrames();
+
+      app.stdin.write('a question');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+      app.stdin.write('queued line');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+
+      app.stdin.write(ESC);
+      await flushFrames();
+
+      // Stopping the answer does not hold back what the user already sent.
+      expect(conversation.submitCalls).toHaveLength(2);
+      expect(conversation.submitCalls[1]?.text).toBe('queued line');
+      const frame = app.lastFrame() ?? '';
+      expect(frame).toContain(UI.responseInterrupted);
+      expect(frame).toContain('❯ queued line');
+      expect(frame).not.toContain(UI.queuedHint);
+
+      app.unmount();
+    });
+
+    it('should return to an idle prompt when nothing was queued', async () => {
+      const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+      const app = renderConversation(conversation, 'chat', vi.fn());
+      await flushFrames();
+
+      app.stdin.write('a question');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+      app.stdin.write(ESC);
+      await flushFrames();
+
+      expect(conversation.submitCalls).toHaveLength(1);
+      const frame = app.lastFrame() ?? '';
+      expect(frame).toContain(UI.responseInterrupted);
+      expect(frame).not.toContain(UI.thinking);
+      expect(frame).toContain(UI.placeholder);
+
+      app.unmount();
+    });
+
+    it('should let the turn a drain started be interrupted in its turn', async () => {
+      const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+      const app = renderConversation(conversation, 'chat', vi.fn());
+      await flushFrames();
+
+      app.stdin.write('a question');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+      app.stdin.write('queued line');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+
+      app.stdin.write(ESC);
+      await flushFrames();
+      expect(conversation.submitCalls).toHaveLength(2);
+
+      // The queued line is now the running turn, and Esc stops that one too.
+      app.stdin.write(ESC);
+      await flushFrames();
+      expect(conversation.submitCalls[1]?.abortSignal.aborted).toBe(true);
+      const frame = app.lastFrame() ?? '';
+      expect((frame.match(new RegExp(UI.responseInterrupted, 'g')) ?? [])).toHaveLength(2);
+      expect(frame).not.toContain(UI.thinking);
+
+      app.unmount();
+    });
+
+    it('should close the completion list before it interrupts anything', async () => {
+      const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+      const app = renderConversation(conversation, 'chat', vi.fn());
+      await flushFrames();
+
+      app.stdin.write('a question');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+      // A slash draft opens the list while the answer is still running.
+      app.stdin.write('/');
+      await flushFrames();
+      expect(app.lastFrame() ?? '').toContain('/cancel');
+
+      app.stdin.write(ESC);
+      await flushFrames();
+
+      // The list is gone and the call is untouched.
+      const frame = app.lastFrame() ?? '';
+      expect(frame).not.toContain('/cancel');
+      expect(frame).toContain(UI.thinking);
+      expect(conversation.submitCalls[0]?.abortSignal.aborted).toBe(false);
+
+      // A second Esc reaches the call.
+      app.stdin.write(ESC);
+      await flushFrames();
+      expect(conversation.submitCalls[0]?.abortSignal.aborted).toBe(true);
+
+      app.unmount();
+    });
+
+    it('should do nothing on Esc while the prompt is idle', async () => {
+      const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+      const onExit = vi.fn();
+      const app = renderConversation(conversation, 'chat', onExit);
+      await flushFrames();
+
+      app.stdin.write('draft text');
+      await flushFrames();
+      app.stdin.write(ESC);
+      await flushFrames();
+
+      const frame = app.lastFrame() ?? '';
+      expect(frame).toContain('❯ draft text');
+      expect(frame).not.toContain(UI.responseInterrupted);
+      expect(onExit).not.toHaveBeenCalled();
+
+      app.unmount();
+    });
+
+    it('should stop taking keys once it hands the terminal to a selector', async () => {
+      let releasePaste!: () => void;
+      const conversation = {
+        ...createScriptedConversation(
+          new Map<string, TuiLocalCommand>([['/paste-image', { kind: 'paste_image' }]]),
+          NO_ORDER_COMMANDS,
+        ),
+        pasteClipboardImage: () => new Promise<string>((resolve) => {
+          releasePaste = () => resolve('{{image:1}}');
+        }),
+      };
+      const onExit = vi.fn();
+      const app = renderConversation(conversation, 'chat', onExit);
+      await flushFrames();
+
+      // A capture keeps the hand-off waiting, which is the window under test.
+      app.stdin.write('/paste-image');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+      app.stdin.write('summarize this');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+      conversation.resolveWith({ kind: 'task_instruction', task: 'run it' });
+      await flushFrames();
+
+      // The decision is made: keystrokes are dropped from here on.
+      app.stdin.write('ignored while leaving');
+      await flushFrames();
+      app.stdin.write(ESC);
+      await flushFrames();
+      expect(app.lastFrame() ?? '').not.toContain('ignored while leaving');
+
+      releasePaste();
+      await flushFrames();
+      expect(onExit).toHaveBeenCalledExactlyOnceWith(
+        { kind: 'choose_action', task: 'run it' },
+        expect.objectContaining({ history: expect.any(Array) }),
+      );
+
+      app.unmount();
+    });
+  });
+
+  it('should put what the call reported alongside the answer into the transcript', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    await flushFrames();
+
+    app.stdin.write('look at the screenshot');
+    await flushFrames();
+    app.stdin.write(ENTER);
+    await flushFrames();
+    conversation.resolveWith({
+      kind: 'assistant_response',
+      content: 'an answer',
+      notices: ['Provider "opencode" does not support native image input; image paths were added to the prompt.'],
+    });
+    await flushFrames();
+
+    const frame = app.lastFrame() ?? '';
+    // The note stands above the answer it came with.
+    expect(frame).toContain('does not support native image input');
+    expect(frame).toContain('● an answer');
+    expect(frame.indexOf('native image input')).toBeLessThan(frame.indexOf('● an answer'));
+
+    app.unmount();
+  });
+
+  it('should keep the image store open when the caller carries the decision out', async () => {
+    // A resident session runs the decision and mounts this view again, so the
+    // store it pastes into has to survive the exit.
+    const conversation = createScriptedConversation(
+      new Map<string, TuiLocalCommand>([['/play run it', { kind: 'execute', task: 'run it' }]]),
+      NO_ORDER_COMMANDS,
+    );
+    const onExit = vi.fn();
+    const app = renderConversation(conversation, 'chat', onExit, { residentSession: true });
+    await flushFrames();
+
+    app.stdin.write('/play run it');
+    await flushFrames();
+    app.stdin.write(ENTER);
+    await flushFrames();
+
+    expect(onExit).toHaveBeenCalledExactlyOnceWith(
+      { kind: 'result', result: { action: 'execute', task: 'run it' } },
+      expect.objectContaining({ history: expect.any(Array) }),
+    );
+    expect(conversation.sealCalls, 'the next mount pastes into this store').toEqual([]);
+    app.unmount();
+    expect(conversation.sealCalls).toEqual([]);
+
+    // The mount that follows can still paste.
+    const resumed = renderConversation(conversation, 'chat', vi.fn(), { residentSession: true });
+    await flushFrames();
+    resumed.stdin.write(INLINE_IMAGE_PASTE);
+    await flushFrames();
+    expect(conversation.savedImages).toHaveLength(1);
+
+    resumed.unmount();
+  });
+
+  it('should seal on a finished decision when nothing follows it', async () => {
+    const conversation = createScriptedConversation(
+      new Map<string, TuiLocalCommand>([['/play run it', { kind: 'execute', task: 'run it' }]]),
+      NO_ORDER_COMMANDS,
+    );
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    await flushFrames();
+
+    app.stdin.write('/play run it');
+    await flushFrames();
+    app.stdin.write(ENTER);
+    await flushFrames();
+
+    expect(conversation.sealCalls.length).toBeGreaterThan(0);
+
+    app.unmount();
+  });
+
+  it('should keep a provider failure in the transcript when the queue moves on', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    await flushFrames();
+
+    app.stdin.write('a question');
+    await flushFrames();
+    app.stdin.write(ENTER);
+    await flushFrames();
+    app.stdin.write('queued line');
+    await flushFrames();
+    app.stdin.write(ENTER);
+    await flushFrames();
+
+    conversation.resolveWith({ kind: 'error', message: 'opencode: model is not available' });
+    await flushFrames();
+
+    // The queue started the next turn, and the reason is still readable.
+    expect(conversation.submitCalls).toHaveLength(2);
+    expect(app.lastFrame() ?? '').toContain('opencode: model is not available');
+
+    app.unmount();
+  });
+
+  it('should carry lines a hand-off cut short into the next mount', async () => {
+    const conversation = createScriptedConversation(
+      new Map<string, TuiLocalCommand>([['/go', { kind: 'choose_action', task: 'do it' }]]),
+      NO_ORDER_COMMANDS,
+    );
+    const onExit = vi.fn();
+    const app = renderConversation(conversation, 'chat', onExit);
+    await flushFrames();
+
+    app.stdin.write('a question');
+    await flushFrames();
+    app.stdin.write(ENTER);
+    await flushFrames();
+    for (const line of ['/go', 'after the go']) {
+      app.stdin.write(line);
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+    }
+
+    conversation.resolveWith({ kind: 'assistant_response', content: 'first answer' });
+    await flushFrames();
+
+    // `/go` drained first and hands the terminal over; the line behind it waits.
+    expect(onExit).toHaveBeenCalledExactlyOnceWith(
+      { kind: 'choose_action', task: 'do it' },
+      expect.objectContaining({ queue: ['after the go'] }),
+    );
+    app.unmount();
+
+    // The next mount sends it without another keystroke.
+    const continued = renderConversation(conversation, 'chat', vi.fn(), {
+      initialQueue: ['after the go'],
+    });
+    await flushFrames();
+    expect(conversation.submitCalls[1]?.text).toBe('after the go');
+
+    continued.unmount();
   });
 
   it('should show the session model under the prompt', async () => {
@@ -697,7 +1470,7 @@ describe('ConversationView', () => {
     conversation.rejectWith(failure);
     await flushFrames();
 
-    expect(onExit).toHaveBeenCalledExactlyOnceWith({ kind: 'failed', error: failure }, expect.any(Array));
+    expect(onExit).toHaveBeenCalledExactlyOnceWith({ kind: 'failed', error: failure }, expect.objectContaining({ history: expect.any(Array) }));
 
     app.unmount();
   });
@@ -715,7 +1488,7 @@ describe('ConversationView', () => {
 
     expect(onExit).toHaveBeenCalledExactlyOnceWith(
       { kind: 'result', result: { action: 'cancel', task: '' } },
-      expect.any(Array),
+      expect.objectContaining({ history: expect.any(Array) }),
     );
     expect(conversation.submitCalls).toHaveLength(0);
 
@@ -733,7 +1506,7 @@ describe('ConversationView', () => {
 
     expect(onExit).toHaveBeenCalledExactlyOnceWith(
       { kind: 'result', result: { action: 'cancel', task: '' } },
-      expect.any(Array),
+      expect.objectContaining({ history: expect.any(Array) }),
     );
     expect(conversation.submitCalls).toHaveLength(0);
 
@@ -762,7 +1535,7 @@ describe('ConversationView', () => {
 
     expect(onExit).toHaveBeenCalledExactlyOnceWith(
       { kind: 'result', result: { action: 'cancel', task: '' } },
-      expect.any(Array),
+      expect.objectContaining({ history: expect.any(Array) }),
     );
     expect(app.lastFrame() ?? '').not.toContain('aborted');
 
@@ -790,7 +1563,7 @@ describe('ConversationView', () => {
 
     expect(onExit).toHaveBeenCalledExactlyOnceWith(
       { kind: 'result', result: { action: 'cancel', task: '' } },
-      expect.any(Array),
+      expect.objectContaining({ history: expect.any(Array) }),
     );
 
     app.unmount();
@@ -868,7 +1641,7 @@ describe('ConversationView', () => {
       app.stdin.write(ENTER);
       await flushFrames();
 
-      expect(onExit).toHaveBeenCalledExactlyOnceWith(expected, expect.any(Array));
+      expect(onExit).toHaveBeenCalledExactlyOnceWith(expected, expect.objectContaining({ history: expect.any(Array) }));
       expect(conversation.submitCalls).toHaveLength(0);
       // Resuming is the surrounding TUI's job; this view only reports the intent.
       expect(conversation.resumedSessions).toHaveLength(0);
@@ -1018,7 +1791,7 @@ describe('ConversationView', () => {
 
     expect(onExit).toHaveBeenCalledWith(
       { kind: 'result', result: { action: 'cancel', task: '' } },
-      expect.any(Array),
+      expect.objectContaining({ history: expect.any(Array) }),
     );
 
     app.unmount();
@@ -1048,7 +1821,7 @@ describe('ConversationView', () => {
 
     expect(onExit).toHaveBeenCalledWith(
       { kind: 'result', result: { action: 'cancel', task: '' } },
-      expect.any(Array),
+      expect.objectContaining({ history: expect.any(Array) }),
     );
 
     app.unmount();
@@ -1074,7 +1847,7 @@ describe('ConversationView', () => {
 
     expect(onExit).toHaveBeenCalledExactlyOnceWith(
       { kind: 'choose_action', task: 'Add a cache layer' },
-      expect.any(Array),
+      expect.objectContaining({ history: expect.any(Array) }),
     );
 
     app.unmount();
@@ -1120,7 +1893,7 @@ describe('ConversationView', () => {
 
     conversation.resolveWith({ kind: 'task_instruction', task: 'seeded instruction' });
     await flushFrames();
-    expect(onExit).toHaveBeenCalledWith({ kind: 'choose_action', task: 'seeded instruction' }, expect.any(Array));
+    expect(onExit).toHaveBeenCalledWith({ kind: 'choose_action', task: 'seeded instruction' }, expect.objectContaining({ history: expect.any(Array) }));
 
     app.unmount();
   });
@@ -1185,7 +1958,7 @@ describe('ConversationView', () => {
     await flushFrames();
 
     expect(store.listAttachments()).toEqual([]);
-    expect(existsSync(join(tmpRoot, 'takt', 'session-1'))).toBe(false);
+    expect(existsSync(join(tmpRoot, 'session-1'))).toBe(false);
     expect(readdirSync(tmpRoot)).toEqual([]);
 
     rmSync(tmpRoot, { recursive: true, force: true });
@@ -1220,7 +1993,7 @@ describe('ConversationView', () => {
     await flushFrames();
     expect(onExit).toHaveBeenCalledExactlyOnceWith(
       { kind: 'result', result: { action: 'cancel', task: '' } },
-      expect.any(Array),
+      expect.objectContaining({ history: expect.any(Array) }),
     );
     expect(conversation.sealCalls.length).toBeGreaterThan(0);
 
@@ -1267,7 +2040,7 @@ describe('ConversationView', () => {
 
     expect(onExit).toHaveBeenCalledExactlyOnceWith(
       { kind: 'choose_action', task: 'run it' },
-      ['/paste-image', 'summarize this'],
+      { history: ['/paste-image', 'summarize this'], queue: [] },
     );
 
     app.unmount();
@@ -1308,7 +2081,7 @@ describe('ConversationView', () => {
     expect(pasteSettled).toHaveBeenCalled();
     expect(onExit).toHaveBeenCalledWith(
       { kind: 'result', result: { action: 'cancel', task: '' } },
-      expect.any(Array),
+      expect.objectContaining({ history: expect.any(Array) }),
     );
     // The late placeholder must not land in the buffer after the exit.
     expect(app.lastFrame() ?? '').not.toContain('{{image:1}}');
@@ -1396,7 +2169,7 @@ describe('ConversationView', () => {
     expect(pasteSettled).toHaveBeenCalled();
     expect(onExit).toHaveBeenCalledExactlyOnceWith(
       { kind: 'result', result: { action: 'cancel', task: '' } },
-      expect.any(Array),
+      expect.objectContaining({ history: expect.any(Array) }),
     );
 
     app.unmount();
@@ -1415,7 +2188,10 @@ describe('ConversationView', () => {
     conversation.resolveWith({ kind: 'task_instruction', task: 'do it' });
     await flushFrames();
 
-    expect(onExit).toHaveBeenCalledWith({ kind: 'choose_action', task: 'do it' }, ['first turn']);
+    expect(onExit).toHaveBeenCalledWith(
+      { kind: 'choose_action', task: 'do it' },
+      { history: ['first turn'], queue: [] },
+    );
     app.unmount();
 
     // Continuing means a new mount, seeded with what was typed before.

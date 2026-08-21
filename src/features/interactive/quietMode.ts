@@ -28,12 +28,9 @@ import { initializeSession } from './sessionInitialization.js';
 import {
   buildInteractiveResultWithAttachments,
   cleanupImageAttachmentStore,
-  createClipboardImagePasteHandler,
-  createImagePasteHandler,
   createSessionImageAttachmentStore,
   resolvePromptImageAttachments,
 } from './imageAttachments.js';
-import { reportClipboardImagePasteError } from './clipboardImageFeedback.js';
 import { shouldUseGherkinTaskInstructions } from './taskInstructionFormat.js';
 
 const log = createLogger('quiet-mode');
@@ -59,7 +56,7 @@ export async function quietMode(
 ): Promise<InteractiveModeResult> {
   const ctx = initializeSession(cwd, 'interactive');
   const sourceContext = initialInput?.sourceContext;
-  const attachmentStore = createSessionImageAttachmentStore(initialInput?.attachments);
+  const attachmentStore = createSessionImageAttachmentStore(cwd, initialInput?.attachments);
   const history: ConversationMessage[] = initialInput?.userMessage
     ? [{ role: 'user', content: initialInput.userMessage }]
     : [];
@@ -69,11 +66,8 @@ export async function quietMode(
     info(getLabel('interactive.ui.introQuiet', ctx.lang));
     blankLine();
 
-    const input = await readMultilineInput(chalk.green('> '), {
-      onImagePaste: createImagePasteHandler(attachmentStore),
-      onClipboardImagePaste: createClipboardImagePasteHandler(attachmentStore),
-      onClipboardImagePasteError: reportClipboardImagePasteError,
-    });
+    // Piped input carries no paste gestures; a terminal takes the TUI instead.
+    const input = await readMultilineInput(chalk.green('> '));
     if (input === null) {
       blankLine();
       info(getLabel('interactive.ui.cancelled', ctx.lang));

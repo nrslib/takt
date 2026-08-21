@@ -27,6 +27,18 @@ import {
 import { formatRunSessionForPrompt, type RunSessionContext } from './runSessionReader.js';
 import { initializeSession } from './sessionInitialization.js';
 
+/**
+ * The order `/replay` resubmits and `/retry` offers, or nothing when there is
+ * none. An order file that exists but is empty is nothing to resend, and both
+ * front-ends have to read it the same way — the readline loop and the TUI used
+ * to disagree about the empty string.
+ */
+export function resolvePreviousOrder(previousOrderContent: string | undefined): string | undefined {
+  return previousOrderContent === undefined || previousOrderContent === ''
+    ? undefined
+    : previousOrderContent;
+}
+
 /** Grill Me withholds Bash so the assistant interrogates instead of acting. */
 const GRILL_ME_INTERACTIVE_TOOLS = ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch'];
 

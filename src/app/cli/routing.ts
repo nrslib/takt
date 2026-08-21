@@ -110,19 +110,18 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     return;
   }
 
-  // Decided before the PR/Issue fetch so the run can be refused on the spot.
-  // `--tui` demands a terminal; without an explicit flag the TUI is simply the
-  // TTY default.
-  const tuiPreference = opts.tui as boolean | undefined;
+  // Decided before the PR/Issue fetch so the run can be refused on the spot. A
+  // terminal always gets the TUI; without one the conversation falls back to the
+  // readline flow that piped input relies on, and `--tui` refuses to pretend.
   const hasTerminal = process.stdin.isTTY === true && process.stdout.isTTY === true;
-  if (tuiPreference === true && !hasTerminal) {
+  if (opts.tui === true && !hasTerminal) {
     logError(getLabel(
       'tui.errors.requiresTty',
       resolveLanguage(resolveConfigValues(resolvedCwd, ['language']).language),
     ));
     process.exit(1);
   }
-  const useTui = tuiPreference !== false && hasTerminal;
+  const useTui = hasTerminal;
 
   let directTask: string | undefined = task;
   let sourceContext: string | undefined;
@@ -205,11 +204,16 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       ...(sourceContext ? { sourceContext } : {}),
       ...(prBranch ? { excludeActions: ['create_issue'] as const } : {}),
       ...(opts.continue === true ? { continueSession: true } : {}),
+      // The session stays open: each decision runs here and the conversation
+      // takes the next one, until the user leaves it.
+      dispatch: dispatchConversation,
     });
     if (run.kind === 'cancelled') {
       info(getLabel('interactive.ui.cancelled', lang));
       return;
     }
+    // Only a cancelled conversation reaches this point, so the attachments are
+    // released without anything left to dispatch.
     await finishConversation(run.workflowId, run.result);
     return;
   }
@@ -305,7 +309,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       }
 
       case 'passthrough':
-        result = await passthroughMode(lang, directTask);
+        result = await passthroughMode(resolvedCwd, lang, directTask);
         break;
 
       case 'quiet':
@@ -330,7 +334,22 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     chosenWorkflowId: string,
     conversationResult: InteractiveModeResult,
   ): Promise<void> {
-  try {
+    try {
+      await dispatchConversation(chosenWorkflowId, conversationResult);
+    } finally {
+      cleanupInteractiveResultAttachments(conversationResult);
+    }
+  }
+
+  /**
+   * Runs what the conversation decided on. The attachments are left alone: a
+   * resident TUI session pastes into the same store after this returns, and the
+   * caller that owns the store cleans it up when the session ends.
+   */
+  async function dispatchConversation(
+    chosenWorkflowId: string,
+    conversationResult: InteractiveModeResult,
+  ): Promise<void> {
     await dispatchConversationAction(conversationResult, {
       execute: async ({ task: confirmedTask }) => {
         if (prBranch) {
@@ -391,8 +410,5 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       },
       cancel: () => undefined,
     });
-  } finally {
-    cleanupInteractiveResultAttachments(conversationResult);
-  }
   }
 }

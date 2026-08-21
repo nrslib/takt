@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import type { ImageAttachmentReference, StoredImageAttachment } from '../../shared/types/image-attachments.js';
 import { debugLog } from '../../shared/utils/index.js';
@@ -162,8 +161,7 @@ export function createImageAttachmentStore(
   let attachments: InteractiveImageAttachment[] = options.initialAttachments
     ? [...options.initialAttachments]
     : [];
-  const sessionDir = path.join(options.tmpRoot, 'takt', options.sessionId);
-  const taktTmpDir = path.dirname(sessionDir);
+  const sessionDir = path.join(options.tmpRoot, options.sessionId);
   const attachmentDir = path.join(sessionDir, 'attachments');
 
   let sealed = false;
@@ -182,7 +180,6 @@ export function createImageAttachmentStore(
         fileName,
       };
 
-      ensurePrivateDirectory(taktTmpDir);
       ensurePrivateDirectory(sessionDir);
       ensurePrivateDirectory(attachmentDir);
       writeNewPrivateFileWithMode(tempPath, data, PRIVATE_FILE_MODE);
@@ -204,11 +201,19 @@ export function createImageAttachmentStore(
   };
 }
 
+/**
+ * A pasted image has to be readable by the provider that is asked to look at
+ * it, and a provider that sandboxes its file access can only reach the project
+ * it was pointed at — the OS temp directory is outside every such sandbox. The
+ * files therefore live under the project's own `.takt/`, which `.takt/.gitignore`
+ * already keeps out of version control, and are deleted when the run ends.
+ */
 export function createSessionImageAttachmentStore(
+  cwd: string,
   initialAttachments?: readonly InteractiveImageAttachment[],
 ): ImageAttachmentStore {
   return createImageAttachmentStore({
-    tmpRoot: os.tmpdir(),
+    tmpRoot: path.join(cwd, '.takt', 'tmp', 'images'),
     sessionId: randomUUID(),
     ...(initialAttachments ? { initialAttachments } : {}),
   });

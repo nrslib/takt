@@ -97,7 +97,7 @@ function createConversation(overrides?: Partial<TuiConversationOptions>): TuiCon
     cwd: '/repo',
     plan: createPlan(),
     workflowContext: WORKFLOW_CONTEXT,
-    attachmentStore: createSessionImageAttachmentStore(),
+    attachmentStore: createSessionImageAttachmentStore('/repo'),
     ...overrides,
   });
 }
@@ -144,7 +144,7 @@ describe('TUI conversation layer', () => {
 
     const outcome = await submit('hello', chunks);
 
-    expect(outcome).toEqual({ kind: 'assistant_response', content: 'Assistant answer' });
+    expect(outcome).toMatchObject({ kind: 'assistant_response', content: 'Assistant answer' });
     expect(chunks).toEqual(['chunk-1', 'chunk-2']);
     expect(lastCallOptions().outputMode).toBe('silent');
   });
@@ -177,7 +177,7 @@ describe('TUI conversation layer', () => {
 
     const outcome = await send(conversation, '/go', chunks);
 
-    expect(outcome).toEqual({ kind: 'task_instruction', task: 'Task instruction' });
+    expect(outcome).toMatchObject({ kind: 'task_instruction', task: 'Task instruction' });
   });
 
   it('should report /go without any conversation as a localized error', async () => {
@@ -185,7 +185,7 @@ describe('TUI conversation layer', () => {
 
     const outcome = await submit('/go', chunks);
 
-    expect(outcome).toEqual({
+    expect(outcome).toMatchObject({
       kind: 'error',
       message: 'No conversation yet. Describe your task first.',
     });
@@ -201,7 +201,7 @@ describe('TUI conversation layer', () => {
 
     const outcome = await submit('/go', chunks, { userMessage: 'ship the login page' });
 
-    expect(outcome).toEqual({ kind: 'task_instruction', task: 'Task instruction' });
+    expect(outcome).toMatchObject({ kind: 'task_instruction', task: 'Task instruction' });
     expect(summaryTemplateVars().conversation).toContain('ship the login page');
   });
 
@@ -214,7 +214,7 @@ describe('TUI conversation layer', () => {
 
     const outcome = await submit('/go', chunks, { sourceContext: 'Issue #12 body' });
 
-    expect(outcome).toEqual({ kind: 'task_instruction', task: 'Task instruction' });
+    expect(outcome).toMatchObject({ kind: 'task_instruction', task: 'Task instruction' });
     expect(summaryTemplateVars().sourceContext).toContain('Issue #12 body');
   });
 
@@ -248,7 +248,7 @@ describe('TUI conversation layer', () => {
       onAssistantChunk: (chunk) => chunks.push(chunk),
     });
 
-    expect(outcome).toEqual({ kind: 'task_instruction', task: 'Task instruction' });
+    expect(outcome).toMatchObject({ kind: 'task_instruction', task: 'Task instruction' });
     expect(summaryTemplateVars().conversation).toContain('keep it small');
   });
 
@@ -258,7 +258,7 @@ describe('TUI conversation layer', () => {
 
     const outcome = await submit('hello', chunks);
 
-    expect(outcome).toEqual({
+    expect(outcome).toMatchObject({
       kind: 'error',
       message: 'The assistant returned no response.',
     });
@@ -273,7 +273,7 @@ describe('TUI conversation layer', () => {
 
     const outcome = await submit('hello', chunks);
 
-    expect(outcome).toEqual({ kind: 'error', message: 'rate limit reached' });
+    expect(outcome).toMatchObject({ kind: 'error', message: 'rate limit reached' });
   });
 
   it('should carry the Grill Me read-only permission mode into the provider call', async () => {
@@ -289,6 +289,93 @@ describe('TUI conversation layer', () => {
 
     expect(lastCallOptions().permissionMode).toBeUndefined();
     expect(lastCallAllowedTools()).toContain('Bash');
+  });
+});
+
+describe('chunks from a turn the user left behind', () => {
+  it('should not draw them into the turn that followed', async () => {
+    let releaseFirst!: (content: string) => void;
+    let firstStream: ((event: { type: string; data: { text: string } }) => void) | undefined;
+    mockCallAIWithRetry.mockImplementationOnce((...args: unknown[]) => {
+      const options = args[5] as { onStream?: (event: unknown) => void };
+      firstStream = options.onStream as never;
+      return new Promise((resolve) => {
+        releaseFirst = (content: string) => resolve({
+          result: { content, sessionId: 'session-1', success: true },
+          sessionId: 'session-1',
+        });
+      });
+    });
+    const conversation = createConversation();
+
+    const firstChunks: string[] = [];
+    const first = conversation.submit({
+      text: 'first question',
+      abortSignal: new AbortController().signal,
+      onAssistantChunk: (chunk) => firstChunks.push(chunk),
+    });
+    firstStream?.({ type: 'text', data: { text: 'from the first turn' } });
+    expect(firstChunks).toEqual(['from the first turn']);
+
+    // The user interrupts and asks something else; the old call answers anyway.
+    mockCallAIWithRetry.mockResolvedValueOnce({
+      result: { content: 'second answer', sessionId: 'session-1', success: true },
+      sessionId: 'session-1',
+    });
+    const secondChunks: string[] = [];
+    const second = conversation.submit({
+      text: 'second question',
+      abortSignal: new AbortController().signal,
+      onAssistantChunk: (chunk) => secondChunks.push(chunk),
+    });
+    firstStream?.({ type: 'text', data: { text: 'late chunk' } });
+
+    expect(secondChunks, 'a chunk from the abandoned turn must not be drawn').toEqual([]);
+
+    releaseFirst('first answer');
+    await first;
+    await second;
+  });
+});
+
+describe('notices from a turn the user left behind', () => {
+  it('should not attach them to the turn that followed', async () => {
+    let releaseFirst!: (content: string) => void;
+    let firstNotice: ((message: string) => void) | undefined;
+    mockCallAIWithRetry.mockImplementationOnce((...args: unknown[]) => {
+      const options = args[5] as { onNotice?: (message: string) => void };
+      firstNotice = options.onNotice;
+      return new Promise((resolve) => {
+        releaseFirst = (content: string) => resolve({
+          result: { content, sessionId: undefined, success: true },
+          sessionId: undefined,
+        });
+      });
+    });
+    const conversation = createConversation();
+
+    const first = conversation.submit({
+      text: 'first question',
+      abortSignal: new AbortController().signal,
+      onAssistantChunk: vi.fn(),
+    });
+
+    mockCallAIWithRetry.mockResolvedValueOnce({
+      result: { content: 'second answer', sessionId: undefined, success: true },
+      sessionId: undefined,
+    });
+    const second = conversation.submit({
+      text: 'second question',
+      abortSignal: new AbortController().signal,
+      onAssistantChunk: vi.fn(),
+    });
+    // The abandoned call reports something after the next turn already started.
+    firstNotice?.('images went as paths');
+
+    expect(await second).toMatchObject({ kind: 'assistant_response', notices: [] });
+
+    releaseFirst('first answer');
+    await first;
   });
 });
 
@@ -334,7 +421,7 @@ describe('TUI local commands', () => {
 
     const outcome = await submit('/go', chunks);
 
-    expect(outcome).toEqual({ kind: 'task_instruction', task: 'Task instruction' });
+    expect(outcome).toMatchObject({ kind: 'task_instruction', task: 'Task instruction' });
     expect(summaryTemplateVars().conversation).toContain('No local transcript');
   });
 
@@ -352,6 +439,56 @@ describe('TUI local commands', () => {
     expect(conversation.commandAvailability).toEqual({
       enableRetryCommand: false,
       hasPreviousOrder: false,
+    });
+  });
+
+  it('should treat an empty previous order as no order, like the readline loop', () => {
+    const plan = createPlan();
+    const conversation = createTuiConversation({
+      cwd: '/repo',
+      plan: {
+        ...plan,
+        strategy: { ...plan.strategy, previousOrderContent: '', enableRetryCommand: true },
+      },
+      attachmentStore: createSessionImageAttachmentStore('/repo'),
+    });
+
+    expect(conversation.resolveLocalCommand('/replay')).toEqual({
+      kind: 'notice',
+      message: 'Previous order (order.md) not found',
+    });
+    expect(conversation.resolveLocalCommand('/retry')).toEqual({
+      kind: 'notice',
+      message: 'No previous order (order.md) found. /retry is only available during retry.',
+    });
+    expect(conversation.commandAvailability).toEqual({
+      enableRetryCommand: true,
+      hasPreviousOrder: false,
+    });
+  });
+
+  it('should resubmit a previous order that has content', () => {
+    const plan = createPlan();
+    const conversation = createTuiConversation({
+      cwd: '/repo',
+      plan: {
+        ...plan,
+        strategy: {
+          ...plan.strategy,
+          previousOrderContent: '# Previous order',
+          enableRetryCommand: true,
+        },
+      },
+      attachmentStore: createSessionImageAttachmentStore('/repo'),
+    });
+
+    expect(conversation.resolveLocalCommand('/replay'))
+      .toEqual({ kind: 'execute', task: '# Previous order' });
+    expect(conversation.resolveLocalCommand('/retry'))
+      .toEqual({ kind: 'choose_action', task: '# Previous order' });
+    expect(conversation.commandAvailability).toEqual({
+      enableRetryCommand: true,
+      hasPreviousOrder: true,
     });
   });
 

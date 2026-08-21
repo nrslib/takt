@@ -23,8 +23,7 @@ This document provides a complete reference for all TAKT CLI commands and option
 | `--auto-strategy <strategy>` | Override the auto-routing strategy (`cost`\|`balanced`\|`performance`). Applied when execution reaches the current workflow or a workflow-call child with effective `auto_routing`; otherwise, TAKT warns and ignores the option. |
 | `--model <name>` | Override agent model |
 | `-c, --continue` | Continue from the last assistant session for the current project directory and provider |
-| `--tui` | Force the Ink-based TUI for the task conversation (requires a TTY). Workflow, mode and post-summary selection stay on the usual selectors; only the conversation is drawn by the TUI. Enter sends, Shift+Enter or Option+Enter inserts a newline, Ctrl+K cuts to the end of the line |
-| `--no-tui` | Use the classic readline conversation instead of the TUI. Without either flag the TUI is the default on a terminal, and the classic path runs when stdin/stdout are not a TTY |
+| `--tui` | Force the Ink-based TUI for the task conversation (requires a TTY). Workflow, mode and post-summary selection stay on the usual selectors; only the conversation is drawn by the TUI. Enter sends, Shift+Enter or Option+Enter inserts a newline, Ctrl+K cuts to the end of the line, Esc interrupts the answer in progress, and anything queued behind it is sent as the next turn. Lines submitted while the assistant is answering are queued and sent when it finishes; ↑ takes the last one back until the queue starts moving. The session stays open after a task runs, until /cancel |
 
 `--workflow` is the canonical option.
 

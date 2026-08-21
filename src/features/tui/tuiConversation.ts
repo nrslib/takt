@@ -10,7 +10,7 @@
 import { SlashCommand } from '../../shared/constants.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { matchSlashCommand } from '../interactive/commandMatcher.js';
-import type { ConversationPlan } from '../interactive/conversationPlan.js';
+import { resolvePreviousOrder, type ConversationPlan } from '../interactive/conversationPlan.js';
 import {
   createConversationSession,
   type ConversationSessionErrorCode,
@@ -29,7 +29,8 @@ export interface TuiConversationOptions {
   cwd: string;
   /** Mode-specific system prompt, tools and permission mode. */
   plan: ConversationPlan;
-  workflowContext: WorkflowContext;
+  /** Left out by a mode that has no workflow to describe to the summary prompt. */
+  workflowContext?: WorkflowContext;
   /** Images pasted during this run; referenced from prompts by placeholder. */
   attachmentStore: ImageAttachmentStore;
   /** Task text supplied on the command line; seeds the conversation history. */
@@ -66,10 +67,16 @@ export interface TuiSubmitInput {
   onAssistantChunk: (chunk: string) => void;
 }
 
+/**
+ * `commit` applies whatever the turn leaves behind outside the view — the
+ * transcript the caller summarizes from, the session to resume. The view calls
+ * it only for a turn that is still the current one and was not interrupted, so
+ * an adapter must do nothing on its own until then.
+ */
 export type TuiSubmission =
-  | { kind: 'assistant_response'; content: string }
-  | { kind: 'task_instruction'; task: string }
-  | { kind: 'error'; message: string };
+  | { kind: 'assistant_response'; content: string; notices?: readonly string[]; commit?: () => void }
+  | { kind: 'task_instruction'; task: string; notices?: readonly string[]; commit?: () => void }
+  | { kind: 'error'; message: string; notices?: readonly string[]; commit?: () => void };
 
 /** Commands the TUI settles itself, without contacting the provider. */
 export type TuiLocalCommand =
@@ -77,10 +84,23 @@ export type TuiLocalCommand =
   | { kind: 'execute'; task: string }
   | { kind: 'choose_action'; task: string }
   | { kind: 'resume_session' }
+  /**
+   * Something the caller has to run with the terminal to itself — a settings
+   * menu, a workflow — after which the conversation picks up again. The id is
+   * the caller's own name for it.
+   */
+  | { kind: 'handoff'; id: string }
   | { kind: 'paste_image' }
   | { kind: 'notice'; message: string };
 
 export interface TuiConversation {
+  /**
+   * True when the line means an operation on the conversation rather than
+   * something to say. A queue may merge what the user typed into one message,
+   * and a command must never be merged into one — but a line that merely starts
+   * with a slash (`/usr/bin/env is missing`) is text like any other.
+   */
+  isCommandLine(text: string): boolean;
   readonly lang: 'en' | 'ja';
   /** Which order-dependent commands this run can offer. */
   readonly commandAvailability: {
@@ -108,13 +128,13 @@ export interface TuiConversation {
 export function createTuiConversation(options: TuiConversationOptions): TuiConversation {
   const { ctx, strategy } = options.plan;
 
-  let activeChunkSink: ((chunk: string) => void) | null = null;
+
   const session = createConversationSession({
     cwd: options.cwd,
     outputMode: 'silent',
     ctx,
     strategy,
-    workflowContext: options.workflowContext,
+    ...(options.workflowContext ? { workflowContext: options.workflowContext } : {}),
     // `--continue` and `/resume` hand the TUI a live session with no local
     // transcript; summarizing it straight away has to work.
     summarizeResumedSession: true,
@@ -122,16 +142,25 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
     ...(options.sourceContext ? { sourceContext: options.sourceContext } : {}),
     resolveImageAttachments: (prompt) =>
       resolvePromptImageAttachments(prompt, options.attachmentStore.listAttachments()),
-    onStream: (event) => {
-      if (event.type === 'text') {
-        activeChunkSink?.(event.data.text);
-      }
-    },
   });
+
+  const previousOrder = resolvePreviousOrder(strategy.previousOrderContent);
 
   return {
     lang: ctx.lang,
-    commandAvailability: { enableRetryCommand: false, hasPreviousOrder: false },
+    // Taken from the strategy, exactly like the readline loop builds it
+    // (conversationLoop.ts): the retry mode is the only one that enables
+    // `/retry`, and `/replay` needs an order to resubmit.
+    commandAvailability: {
+      enableRetryCommand: strategy.enableRetryCommand === true,
+      hasPreviousOrder: previousOrder !== undefined,
+    },
+
+    isCommandLine(text: string): boolean {
+      // The registry decides, not the leading character: `/go` is a command,
+      // `/usr/bin/env is missing` is a sentence.
+      return matchSlashCommand(text.trim()) !== null;
+    },
 
     resolveLocalCommand(text: string): TuiLocalCommand | null {
       const match = matchSlashCommand(text.trim());
@@ -151,12 +180,21 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
           return match.text
             ? { kind: 'execute', task: match.text }
             : { kind: 'notice', message: getLabel('interactive.ui.playNoTask', ctx.lang) };
-        // The default conversation never carries a previous order — the readline
-        // loop gates both commands the same way (conversationLoop.ts:264-279).
+        // Both commands are gated exactly as the readline loop gates them
+        // (conversationLoop.ts): `/replay` resubmits the previous order without
+        // asking, `/retry` puts it through the action selector first.
         case SlashCommand.Replay:
-          return { kind: 'notice', message: getLabel('instruct.ui.replayNoOrder', ctx.lang) };
-        case SlashCommand.Retry:
-          return { kind: 'notice', message: getLabel('interactive.ui.retryUnavailable', ctx.lang) };
+          return previousOrder === undefined
+            ? { kind: 'notice', message: getLabel('instruct.ui.replayNoOrder', ctx.lang) }
+            : { kind: 'execute', task: previousOrder };
+        case SlashCommand.Retry: {
+          if (strategy.enableRetryCommand !== true) {
+            return { kind: 'notice', message: getLabel('interactive.ui.retryUnavailable', ctx.lang) };
+          }
+          return previousOrder === undefined
+            ? { kind: 'notice', message: getLabel('interactive.ui.retryNoOrder', ctx.lang) }
+            : { kind: 'choose_action', task: previousOrder };
+        }
         case SlashCommand.Resume:
           return { kind: 'resume_session' };
         case SlashCommand.PasteImage:
@@ -169,45 +207,75 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
 
     async submit(input: TuiSubmitInput): Promise<TuiSubmission> {
       const text = input.text.trim();
-      activeChunkSink = input.onAssistantChunk;
+      // This turn's own sinks, closed when the turn ends: a provider that keeps
+      // streaming or reporting past its abort reaches a sink nobody is drawing
+      // any more, never the turn that took its place.
+      const notices: string[] = [];
+      let turnEnded = false;
       let result: ConversationSessionResult;
       try {
-        result = await session.handleUserMessage({ text, abortSignal: input.abortSignal });
+        result = await session.handleUserMessage({
+          text,
+          abortSignal: input.abortSignal,
+          onStream: (event) => {
+            if (!turnEnded && event.type === 'text') {
+              input.onAssistantChunk(event.data.text);
+            }
+          },
+          onNotice: (message) => {
+            if (!turnEnded) {
+              notices.push(message);
+            }
+          },
+        });
       } finally {
-        activeChunkSink = null;
+        turnEnded = true;
       }
 
       switch (result.kind) {
         case 'assistant_response':
-          return { kind: 'assistant_response', content: result.content };
+          return { kind: 'assistant_response', content: result.content, notices };
         case 'workflow_execution_requested':
-          return { kind: 'task_instruction', task: result.task };
+          return { kind: 'task_instruction', task: result.task, notices };
         case 'error':
           return {
             kind: 'error',
             message: describeSessionError(result.code, result.message, ctx.lang),
+            notices,
           };
       }
     },
 
     async createInstruction(input: TuiSubmitInput): Promise<TuiSubmission> {
-      activeChunkSink = input.onAssistantChunk;
+      const notices: string[] = [];
+      let turnEnded = false;
       let result: ConversationSessionResult;
       try {
         result = await session.createTaskInstruction({
           userNote: input.text.trim(),
           abortSignal: input.abortSignal,
+          onStream: (event) => {
+            if (!turnEnded && event.type === 'text') {
+              input.onAssistantChunk(event.data.text);
+            }
+          },
+          onNotice: (message) => {
+            if (!turnEnded) {
+              notices.push(message);
+            }
+          },
         });
       } finally {
-        activeChunkSink = null;
+        turnEnded = true;
       }
       return result.kind === 'workflow_execution_requested'
-        ? { kind: 'task_instruction', task: result.task }
+        ? { kind: 'task_instruction', task: result.task, notices }
         : {
           kind: 'error',
           message: result.kind === 'error'
             ? describeSessionError(result.code, result.message, ctx.lang)
             : result.content,
+          notices,
         };
     },
 

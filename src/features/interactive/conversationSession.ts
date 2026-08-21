@@ -45,6 +45,24 @@ export interface ConversationSessionOptions {
   resolveImageAttachments?: (prompt: string) => ImageAttachmentReference[];
 }
 
+/** What one turn is given: how to stop it, and where its own stream goes. */
+export interface ConversationTurnInput {
+  abortSignal?: AbortSignal;
+  /**
+   * Receives this turn's chunks. A provider that ignores its abort can still
+   * emit after the user moved on, and those chunks belong to the turn that asked
+   * for them — never to the one on screen now.
+   */
+  onStream?: StreamCallback;
+  /**
+   * Receives this turn's notices — for example that the provider took the images
+   * as paths rather than as images. Same reason as `onStream`: a notice about a
+   * turn's images belongs to the turn that sent them, never to the one on screen
+   * now.
+   */
+  onNotice?: (message: string) => void;
+}
+
 /**
  * Machine-readable cause so front-ends can localize the failure.
  * `provider_error` carries the provider's own text in `message`.
@@ -79,8 +97,8 @@ export type ConversationSessionResult =
     };
 
 export interface ConversationSession {
-  handleUserMessage(input: { text: string; abortSignal?: AbortSignal }): Promise<ConversationSessionResult>;
-  createTaskInstruction(input: { userNote: string; abortSignal?: AbortSignal }): Promise<ConversationSessionResult>;
+  handleUserMessage(input: ConversationTurnInput & { text: string }): Promise<ConversationSessionResult>;
+  createTaskInstruction(input: ConversationTurnInput & { userNote: string }): Promise<ConversationSessionResult>;
 }
 
 /**
@@ -136,15 +154,34 @@ export function createConversationSession(options: ConversationSessionOptions): 
     : [];
   let sessionId = options.ctx.sessionId;
   let shouldSendInitialPromptContext = !!options.strategy.initialPromptContext;
+  /**
+   * The turn whose result the session still belongs to.
+   *
+   * A caller may start the next turn before the previous one has finished — an
+   * interrupted answer whose provider keeps going, for instance. That older call
+   * settles eventually, and what it settles with describes a conversation that
+   * has already moved on: writing its history, its session id or its rollback
+   * over the current one would undo a turn the user has already seen answered.
+   */
+  let currentTurn = 0;
+  /** Opens a turn and hands back the test for "is this still the turn in play". */
+  function beginTurn(): () => boolean {
+    const turn = ++currentTurn;
+    return (): boolean => turn === currentTurn;
+  }
 
-  async function handleRegularMessage(message: string, abortSignal: AbortSignal | undefined): Promise<ConversationSessionResult> {
+  async function handleRegularMessage(
+    message: string,
+    input: ConversationTurnInput,
+  ): Promise<ConversationSessionResult> {
+    const isCurrentTurn = beginTurn();
     const previousHistory = history;
     history = [...history, { role: 'user', content: message }];
     const prompt = prependInitialPromptContext(
       options.strategy.transformPrompt(message, options.sourceContext),
       shouldSendInitialPromptContext ? options.strategy.initialPromptContext : undefined,
     );
-    const { result, sessionId: newSessionId } = await callAIWithRetry(
+    const { result, sessionId: newSessionId, error: callError } = await callAIWithRetry(
       prompt,
       options.strategy.systemPrompt,
       options.strategy.allowedTools,
@@ -152,23 +189,46 @@ export function createConversationSession(options: ConversationSessionOptions): 
       { ...options.ctx, sessionId },
       {
         outputMode: options.outputMode,
-        abortSignal,
-        onStream: options.onStream,
+        abortSignal: input.abortSignal,
+        onStream: input.onStream ?? options.onStream,
+        // Evaluated after the provider answers: a superseded turn must not write
+        // its session id over the one the current turn is using.
+        persistSession: isCurrentTurn,
         permissionMode: options.strategy.permissionMode,
         imageAttachments: options.resolveImageAttachments?.(prompt),
+        ...(input.onNotice ? { onNotice: input.onNotice } : {}),
       },
     );
-    sessionId = newSessionId;
+    if (isCurrentTurn()) {
+      sessionId = newSessionId;
+    }
 
     if (!result) {
-      history = previousHistory;
-      return { kind: 'error', code: 'empty_ai_response', message: 'AI response was empty' };
+      if (isCurrentTurn()) {
+        history = previousHistory;
+      }
+      // The call threw: that reason is the answer to "why is there nothing", and
+      // only a caller with a terminal would otherwise have seen it.
+      return callError === undefined
+        ? { kind: 'error', code: 'empty_ai_response', message: 'AI response was empty' }
+        : { kind: 'error', code: 'provider_error', message: callError };
     }
     if (!result.success) {
-      history = previousHistory;
+      if (isCurrentTurn()) {
+        history = previousHistory;
+      }
       return { kind: 'error', code: 'provider_error', message: result.content };
     }
 
+    if (!isCurrentTurn()) {
+      // A turn the caller has moved past: it still reports its answer, but the
+      // session it describes is no longer the one in play.
+      return {
+        kind: 'assistant_response',
+        content: result.content,
+        sessionId: result.sessionId,
+      };
+    }
     shouldSendInitialPromptContext = false;
     history = [...history, { role: 'assistant', content: result.content }];
     return {
@@ -178,7 +238,14 @@ export function createConversationSession(options: ConversationSessionOptions): 
     };
   }
 
-  async function handleGoCommand(userNote: string, abortSignal: AbortSignal | undefined): Promise<ConversationSessionResult> {
+  async function handleGoCommand(
+    userNote: string,
+    input: ConversationTurnInput,
+  ): Promise<ConversationSessionResult> {
+    // `/go` is a turn like any other: opening it supersedes a chat turn that is
+    // still running, so that one no longer writes history or session id when it
+    // finally settles.
+    const isCurrentTurn = beginTurn();
     const summaryPrompt = buildConversationSummaryPrompt(
       history,
       userNote,
@@ -197,7 +264,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
       return { kind: 'error', code: 'no_conversation', message: 'No conversation to summarize' };
     }
 
-    const { result, sessionId: newSessionId } = await callAIWithRetry(
+    const { result, sessionId: newSessionId, error: callError } = await callAIWithRetry(
       summaryPrompt,
       summaryPrompt,
       options.strategy.allowedTools,
@@ -205,16 +272,21 @@ export function createConversationSession(options: ConversationSessionOptions): 
       { ...options.ctx, sessionId: undefined },
       {
         outputMode: options.outputMode,
-        abortSignal,
+        abortSignal: input.abortSignal,
         persistSession: false,
-        onStream: options.onStream,
+        onStream: input.onStream ?? options.onStream,
         permissionMode: options.strategy.permissionMode,
         imageAttachments: options.resolveImageAttachments?.(summaryPrompt),
+        ...(input.onNotice ? { onNotice: input.onNotice } : {}),
       },
     );
 
     if (!result) {
-      return { kind: 'error', code: 'instruction_failed', message: 'Failed to create workflow instruction' };
+      // The call threw: that reason is the answer to "why is there no
+      // instruction", and a silent caller has no terminal to have seen it on.
+      return callError === undefined
+        ? { kind: 'error', code: 'instruction_failed', message: 'Failed to create workflow instruction' }
+        : { kind: 'error', code: 'provider_error', message: callError };
     }
     if (!result.success) {
       return { kind: 'error', code: 'provider_error', message: result.content };
@@ -233,7 +305,9 @@ export function createConversationSession(options: ConversationSessionOptions): 
         confirmed: true,
         task,
       },
-      ...(newSessionId ? { sessionId: newSessionId } : {}),
+      // The caller records this session to resume from; a superseded summary
+      // describes a conversation that has already moved on.
+      ...(newSessionId && isCurrentTurn() ? { sessionId: newSessionId } : {}),
     };
   }
 
@@ -252,11 +326,11 @@ export function createConversationSession(options: ConversationSessionOptions): 
       sessionId = nextSessionId;
     },
 
-    createTaskInstruction(input: { userNote: string; abortSignal?: AbortSignal }): Promise<ConversationSessionResult> {
-      return handleGoCommand(input.userNote, input.abortSignal);
+    createTaskInstruction(input: ConversationTurnInput & { userNote: string }): Promise<ConversationSessionResult> {
+      return handleGoCommand(input.userNote, input);
     },
 
-    async handleUserMessage(input: { text: string; abortSignal?: AbortSignal }): Promise<ConversationSessionResult> {
+    async handleUserMessage(input: ConversationTurnInput & { text: string }): Promise<ConversationSessionResult> {
       const message = input.text.trim();
       if (!message) {
         return { kind: 'error', code: 'message_required', message: 'Message text is required' };
@@ -264,7 +338,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
 
       const match = matchSlashCommand(message);
       if (!match) {
-        return handleRegularMessage(message, input.abortSignal);
+        return handleRegularMessage(message, input);
       }
 
       switch (match.command) {
@@ -283,7 +357,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
           };
         }
         case SlashCommand.Go:
-          return handleGoCommand(match.text, input.abortSignal);
+          return handleGoCommand(match.text, input);
         default:
           return { kind: 'error', code: 'unsupported_command', message: `Unsupported command: ${match.command}` };
       }

@@ -15,11 +15,6 @@ vi.mock('../features/interactive/aiCaller.js', () => ({
   callAIWithRetry: (...args: unknown[]) => mockCallAIWithRetry(...args),
 }));
 
-vi.mock('../infra/config/global/globalConfig.js', async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  loadGlobalConfig: vi.fn(() => ({ provider: 'mock', language: 'en' })),
-}));
-
 vi.mock('../features/interactive/interactiveApplication.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   buildConversationSummaryPrompt: (...args: unknown[]) => mockBuildSummaryPrompt(...args),
@@ -150,7 +145,7 @@ describe('conversation session application API', () => {
       'include progress updates',
       'en',
       'summary context',
-      true,
+      false,
       // The adapter never opts into resumed-session summaries, so no note is added.
       {},
     );
@@ -166,7 +161,7 @@ describe('conversation session application API', () => {
   });
 
   it.each([
-    ['unset', undefined, true],
+    ['unset', undefined, false],
     ['enabled', true, true],
     ['disabled', false, false],
   ] as const)('should pass %s project Gherkin mode to ACP task instruction generation', async (_label, configured, expected) => {
@@ -185,39 +180,6 @@ describe('conversation session application API', () => {
       await session.createTaskInstruction({ userNote: 'implement ACP support' });
 
       expect(mockBuildSummaryPrompt.mock.calls[0]?.[4]).toBe(expected);
-    } finally {
-      rmSync(projectDir, { recursive: true, force: true });
-    }
-  });
-
-  it.each([
-    ['unset', undefined, true],
-    ['project false', false, false],
-  ] as const)('should apply %s to the actual ACP summary prompt', async (_label, configured, expectedEnabled) => {
-    const projectDir = mkdtempSync(join(tmpdir(), 'takt-gherkin-acp-prompt-'));
-    if (configured !== undefined) {
-      mkdirSync(join(projectDir, '.takt'), { recursive: true });
-      writeFileSync(
-        join(projectDir, '.takt', 'config.yaml'),
-        ['assistant:', `  gherkin: ${configured}`].join('\n'),
-        'utf-8',
-      );
-    }
-    const actualInteractiveApplication = await vi.importActual<typeof import('../features/interactive/interactiveApplication.js')>(
-      '../features/interactive/interactiveApplication.js',
-    );
-    mockBuildSummaryPrompt.mockImplementation(actualInteractiveApplication.buildConversationSummaryPrompt);
-
-    try {
-      const session = createSession(projectDir);
-      await session.createTaskInstruction({ userNote: 'implement ACP support' });
-
-      const prompt = mockCallAIWithRetry.mock.calls[0]?.[0];
-      if (expectedEnabled) {
-        expect(prompt).toContain('## Markdown + Gherkin Output Format');
-      } else {
-        expect(prompt).not.toContain('## Markdown + Gherkin Output Format');
-      }
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
     }
@@ -246,7 +208,7 @@ describe('conversation session application API', () => {
       'worktree で実行できるように積んで',
       'en',
       'summary context',
-      true,
+      false,
       // The adapter never opts into resumed-session summaries, so no note is added.
       {},
     );
@@ -451,7 +413,7 @@ describe('conversation session application API', () => {
       'summarize',
       'en',
       'summary context',
-      true,
+      false,
       // The adapter never opts into resumed-session summaries, so no note is added.
       {},
     );
@@ -475,7 +437,7 @@ describe('conversation session application API', () => {
       code: 'no_conversation',
       message: 'No conversation to summarize',
     });
-    expect(mockBuildSummaryPrompt).toHaveBeenLastCalledWith([], '', 'en', 'summary context', true, {});
+    expect(mockBuildSummaryPrompt).toHaveBeenLastCalledWith([], '', 'en', 'summary context', false, {});
   });
 
   it('should describe a resumed session only when the caller opted in', async () => {
@@ -500,7 +462,7 @@ describe('conversation session application API', () => {
     await session.handleUserMessage({ text: '/go' });
 
     expect(mockBuildSummaryPrompt).toHaveBeenLastCalledWith(
-      [], '', 'en', undefined, true, { resumedSessionNote: expect.any(String) },
+      [], '', 'en', undefined, false, { resumedSessionNote: expect.any(String) },
     );
   });
 
@@ -530,7 +492,7 @@ describe('conversation session application API', () => {
       '',
       'en',
       undefined,
-      true,
+      false,
       {},
     );
   });
@@ -563,7 +525,7 @@ describe('conversation session application API', () => {
       '',
       'en',
       undefined,
-      true,
+      false,
       { workflowContext, sourceContext: 'Issue #12 body' },
     );
   });

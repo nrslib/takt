@@ -215,6 +215,7 @@ export function PassthroughView({
         hint={hint}
         completions={[]}
         completionIndex={0}
+        disabled={false}
       />
     </Box>
   );

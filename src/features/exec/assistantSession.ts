@@ -6,6 +6,7 @@ import {
 } from '../../infra/config/index.js';
 import type { PermissionMode, StepProviderOptions } from '../../core/models/index.js';
 import type { ImageAttachmentReference } from '../../shared/types/image-attachments.js';
+import type { StreamCallback } from '../../shared/types/provider.js';
 import { callAIWithRetry, type SessionContext } from '../interactive/aiCaller.js';
 import type { FacetLookupConfig } from '../catalog/catalogFacets.js';
 import type {
@@ -19,6 +20,17 @@ import { assertExecProviderEffort, CLAUDE_TOOL_PROVIDERS } from './configValidat
 interface AskExecAssistantOptions {
   readonly permissionMode?: PermissionMode;
   readonly imageAttachments?: ImageAttachmentReference[];
+  /** Lets the caller stop a turn that is still running. */
+  readonly abortSignal?: AbortSignal;
+  /**
+   * `silent` when the caller draws its own frames: a stray write from the
+   * stream display would land in the middle of them.
+   */
+  readonly outputMode?: 'terminal' | 'silent';
+  /** Where the answer streams to when the caller renders it itself. */
+  readonly onStream?: StreamCallback;
+  /** Receives what a terminal caller would have printed next to the answer. */
+  readonly onNotice?: (message: string) => void;
 }
 
 export interface ExecSessionContext extends SessionContext {
@@ -94,9 +106,11 @@ export async function askExecAssistant(
   systemPrompt: string,
   options: AskExecAssistantOptions = {},
 ): Promise<{ content: string; sessionId: string | undefined }> {
-  const { result, sessionId } = await callAIWithRetry(prompt, systemPrompt, [], cwd, ctx, options);
+  const { result, sessionId, error } = await callAIWithRetry(prompt, systemPrompt, [], cwd, ctx, options);
   if (!result) {
-    throw new Error('Exec assistant call failed.');
+    // The call threw, and its reason is the only account of what happened —
+    // replacing it with a generic sentence is how a failure becomes a mystery.
+    throw new Error(error ?? 'Exec assistant call failed.');
   }
   if (!result.success) {
     throw new Error(result.content);

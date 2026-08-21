@@ -230,7 +230,7 @@ if (command === process.env.TAKT_FAIL_COMMAND) {
 describe('release verification wiring', () => {
   it('should connect each public test entrypoint to its intended runner', () => {
     expect(manifest.scripts).toMatchObject({
-      test: 'npm run test:type-contracts && node scripts/run-npm-test.mjs',
+      test: 'npm run test:type-contracts && npm run test:types && node scripts/run-npm-test.mjs',
       'test:unit': 'vitest run --config vitest.config.unit.parallel.ts',
       'test:unit:parallel': 'vitest run --config vitest.config.unit.parallel.ts',
       'test:it': 'npm run test:it:light',
@@ -440,6 +440,29 @@ describe('release verification wiring', () => {
       ...parallelIntegrationTestFiles,
       ...serialFiles,
     ]);
+  });
+
+  it('should type-check every test on the whitelist, and only tests that exist', () => {
+    const testsConfigPath = new URL('../../tsconfig.tests.json', import.meta.url);
+    // The file carries the rule as comments, which JSON.parse does not take.
+    const raw = readFileSync(testsConfigPath, 'utf-8')
+      .split('\n')
+      .filter((line) => !line.trim().startsWith('//'))
+      .join('\n');
+    const listed = (JSON.parse(raw) as { include: string[] }).include;
+
+    expect(listed.length).toBeGreaterThan(0);
+    expect(listed, 'the list is read by people; keep it sorted').toEqual([...listed].sort());
+    for (const entry of listed) {
+      expect(existsSync(new URL(`../../${entry}`, import.meta.url)), entry).toBe(true);
+    }
+
+    // The gate has to run it, or the list is decoration.
+    const packageJson = JSON.parse(
+      readFileSync(new URL('../../package.json', import.meta.url), 'utf-8'),
+    ) as { scripts: Record<string, string> };
+    expect(packageJson.scripts['test:types']).toContain('tsconfig.tests.json');
+    expect(packageJson.scripts.test).toContain('test:types');
   });
 
   it('should keep process, Git, storage, and workflow-engine boundaries out of unit tests', () => {

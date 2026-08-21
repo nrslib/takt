@@ -13,11 +13,8 @@ import type { InteractiveModeResult } from './interactive.js';
 import {
   buildInteractiveResultWithAttachments,
   cleanupImageAttachmentStore,
-  createClipboardImagePasteHandler,
-  createImagePasteHandler,
   createSessionImageAttachmentStore,
 } from './imageAttachments.js';
-import { reportClipboardImagePasteError } from './clipboardImageFeedback.js';
 
 /**
  * Run passthrough mode: collect user input and return it as-is.
@@ -30,6 +27,7 @@ import { reportClipboardImagePasteError } from './clipboardImageFeedback.js';
  * @returns Result with the raw user input as task
  */
 export async function passthroughMode(
+  cwd: string,
   lang: 'en' | 'ja',
   initialInput?: string,
 ): Promise<InteractiveModeResult> {
@@ -37,17 +35,14 @@ export async function passthroughMode(
     return { action: 'execute', task: initialInput };
   }
 
-  const attachmentStore = createSessionImageAttachmentStore();
+  const attachmentStore = createSessionImageAttachmentStore(cwd);
 
   try {
   info(getLabel('interactive.ui.introPassthrough', lang));
   blankLine();
 
-  const input = await readMultilineInput(chalk.green('> '), {
-    onImagePaste: createImagePasteHandler(attachmentStore),
-    onClipboardImagePaste: createClipboardImagePasteHandler(attachmentStore),
-    onClipboardImagePasteError: reportClipboardImagePasteError,
-  });
+  // Piped input carries no paste gestures; a terminal takes the TUI instead.
+  const input = await readMultilineInput(chalk.green('> '));
 
   if (input === null) {
     blankLine();

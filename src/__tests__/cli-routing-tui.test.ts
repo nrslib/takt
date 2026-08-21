@@ -2,7 +2,7 @@
  * Tests for how the default CLI action chooses between the Ink TUI and the
  * classic readline conversation.
  *
- * Contract: on a TTY the TUI is the default, `--no-tui` opts out, `--tui`
+ * Contract: a TTY always gets the TUI, `--tui`
  * demands a terminal, and without a terminal the classic path always runs so
  * piped input keeps working.
  */
@@ -182,15 +182,6 @@ describe('TUI / classic selection', () => {
     expect(mockSelectInteractiveMode).toHaveBeenCalled();
   });
 
-  it('should use the classic conversation when --no-tui is given on a terminal', async () => {
-    mockOpts.tui = false;
-
-    await executeDefaultAction();
-
-    expect(mockRunTui).not.toHaveBeenCalled();
-    expect(mockSelectInteractiveMode).toHaveBeenCalled();
-  });
-
   it('should fail fast when --tui is forced without a terminal', async () => {
     mockOpts.tui = true;
     setTerminal(false);
@@ -225,6 +216,8 @@ describe('TUI routing', () => {
       previewCount: 3,
       taskHistory: [],
       userMessage: 'draft task',
+      // The session runs each decision through the CLI and stays open.
+      dispatch: expect.any(Function),
     });
   });
 
@@ -323,8 +316,34 @@ describe('TUI routing', () => {
     expect(mockCleanupAttachments).toHaveBeenCalledWith(result);
   });
 
+  it('should keep the pasted images alive for a session that stays open', async () => {
+    const result = {
+      action: 'execute',
+      task: 'run it',
+      attachments: [{ placeholder: '[Image #1]', tempPath: '/tmp/i.png', fileName: 'i.png' }],
+    };
+    let dispatchOutcome: unknown;
+    mockRunTui.mockImplementation(async (options: { dispatch: (id: string, r: unknown) => Promise<void> }) => {
+      // The session dispatches mid-run and then keeps going.
+      dispatchOutcome = await options.dispatch('default', result);
+      return { kind: 'selected', workflowId: 'default', result: { action: 'cancel', task: '' } };
+    });
+
+    await executeDefaultAction();
+
+    expect(dispatchOutcome).toBeUndefined();
+    expect(mockSelectAndExecuteTask).toHaveBeenCalledWith(
+      '/test/cwd',
+      'run it',
+      expect.objectContaining({ attachments: result.attachments }),
+      undefined,
+    );
+    // The store belongs to the open session, so the dispatch leaves it alone.
+    expect(mockCleanupAttachments).not.toHaveBeenCalledWith(result);
+  });
+
   it('should still read the task history only after the mode selector on the classic path', async () => {
-    mockOpts.tui = false;
+    setTerminal(false);
 
     await executeDefaultAction();
 

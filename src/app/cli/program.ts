@@ -60,8 +60,7 @@ program
   .option('-c, --continue', 'Continue from the last assistant session')
   // Declared in this order so the default stays undefined: neither flag means
   // "TUI when a terminal is attached", which routing decides.
-  .option('--tui', 'Force the Ink-based TUI for the task conversation (requires a TTY)')
-  .option('--no-tui', 'Use the classic readline conversation instead of the TUI');
+  .option('--tui', 'Require the Ink-based TUI for the task conversation (fails without a TTY)');
 
 program
   .argument('[task]', 'Task to execute (or issue reference like "#6")')

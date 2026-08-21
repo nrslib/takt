@@ -25,6 +25,7 @@ import {
 } from '../../interactive/promptSections.js';
 import { createSelectActionWithoutExecute, buildReplayHint } from '../../interactive/interactive-summary.js';
 import { attachImageAttachmentCleanup } from '../../interactive/imageAttachments.js';
+import { runTuiTaskConversation } from '../../tui/runTuiTask.js';
 import { type RunSessionContext, formatRunSessionForPrompt } from '../../interactive/runSessionReader.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import { getLabelObject } from '../../../shared/i18n/index.js';
@@ -126,6 +127,14 @@ function buildInstructTemplateVars(
   };
 }
 
+/**
+ * A terminal gets the Ink conversation; piped input keeps the readline loop that
+ * the non-interactive callers and the E2E suite depend on.
+ */
+function hasInteractiveTerminal(): boolean {
+  return process.stdin.isTTY === true && process.stdout.isTTY === true;
+}
+
 export async function runInstructMode(
   options: InstructModeOptions,
 ): Promise<InstructModeResult> {
@@ -162,7 +171,9 @@ export async function runInstructMode(
     previousOrderContent: previousOrderContent ?? undefined,
   };
 
-  const result = await runConversationLoop(cwd, ctx, strategy, workflowContext, undefined);
+  const result = hasInteractiveTerminal()
+    ? await runTuiTaskConversation({ cwd, plan: { ctx, strategy }, workflowContext })
+    : await runConversationLoop(cwd, ctx, strategy, workflowContext, undefined);
 
   return toInstructModeResult(result);
 }

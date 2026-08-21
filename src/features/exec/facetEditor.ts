@@ -10,14 +10,12 @@ import {
 } from '../../infra/config/loaders/resource-resolver.js';
 import { isScopeRef } from 'faceted-prompting';
 import { getFacetDirs, scanFacets, type FacetLookupConfig, type FacetType } from '../catalog/catalogFacets.js';
-import { readInteractiveInput } from '../interactive/interactiveInput.js';
 import { info } from '../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/index.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
 import { askExecAssistant, type ExecSessionContext } from './assistantSession.js';
-import { EXEC_TEXT_INPUT_COMMAND_AVAILABILITY } from './commandAvailability.js';
 import { execFacetKindLabel, execLabel, execScopeLabel, execSourceLabel, type ExecLanguage } from './labels.js';
-import { promptText, selectExecOption, selectMultipleExecOptions } from './promptUtils.js';
+import { askExecQuestion, promptText, selectExecOption, selectMultipleExecOptions } from './promptUtils.js';
 import {
   projectLocalFileExists,
   readProjectLocalTextFile,
@@ -181,13 +179,14 @@ async function confirmGeneratedFacet(kind: FacetType, name: string, content: str
 }
 
 async function promptFacetConsultation(kind: FacetType, name: string, ctx: ExecSessionContext): Promise<string | null> {
-  const input = await readInteractiveInput(
+  const input = await askExecQuestion(
     execLabel(ctx.lang, 'facets.consultationPrompt', {
       kind: execFacetKindLabel(ctx.lang, kind),
       name: sanitizeTerminalText(name),
     }),
     ctx.lang,
-    EXEC_TEXT_INPUT_COMMAND_AVAILABILITY,
+    // An empty answer means "nothing to consult about", not "keep as is".
+    false,
   );
   if (input === null) {
     return null;

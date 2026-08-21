@@ -21,7 +21,7 @@ let tmpRoot: string;
 let store: ImageAttachmentStore;
 
 function sessionDir(): string {
-  return join(tmpRoot, 'takt', 'session-1');
+  return join(tmpRoot, 'session-1');
 }
 
 beforeEach(() => {

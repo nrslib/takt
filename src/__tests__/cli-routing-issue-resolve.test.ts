@@ -472,7 +472,8 @@ describe('Issue resolution in routing', () => {
 
       await executeDefaultAction('refactor the code');
 
-      expect(mockPassthroughMode).toHaveBeenCalledWith('en', 'refactor the code');
+      // The store for pasted images lives in the project, so the mode takes the cwd.
+    expect(mockPassthroughMode).toHaveBeenCalledWith('/test/cwd', 'en', 'refactor the code');
       expect(mockInteractiveMode).not.toHaveBeenCalled();
     });
 

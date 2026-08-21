@@ -25,6 +25,12 @@ export interface ConversationUiText {
   queuedHint: string;
   /** `{count}` stands for the queued lines that did not fit on screen. */
   queuedMore: string;
+  /** Appended to the status row while a call can still be interrupted. */
+  interruptHint: string;
+  /** System line left behind when Esc stops an answer. */
+  responseInterrupted: string;
+  /** System line left behind when Esc stops `/go`. */
+  instructionInterrupted: string;
 }
 
 /** What the conversation phase asks the surrounding TUI to do next. */
@@ -32,7 +38,15 @@ export type ConversationExit =
   | { kind: 'result'; result: InteractiveModeResult }
   | { kind: 'choose_action'; task: string }
   | { kind: 'resume_session' }
+  /** The caller runs `id` with Ink unmounted, then this view is mounted again. */
+  | { kind: 'handoff'; id: string }
   | { kind: 'failed'; error: unknown };
+
+/** What survives a mount: the recall history and the lines still waiting. */
+export interface ConversationCarryOver {
+  readonly history: readonly string[];
+  readonly queue: readonly string[];
+}
 
 export interface ConversationViewProps {
   readonly ui: ConversationUiText;
@@ -51,8 +65,16 @@ export interface ConversationViewProps {
   readonly initialHistory: readonly string[];
   /** Provider and model this session calls, shown under the prompt. */
   readonly modelLabel: string;
-  /** Called once, with the history to carry into the next mount. */
-  readonly onExit: (exit: ConversationExit, history: readonly string[]) => void;
+  /**
+   * True when the caller carries a decision out and mounts this view again. The
+   * image store then outlives the decision, and sealing it here would refuse
+   * every paste that follows.
+   */
+  readonly residentSession: boolean;
+  /** Lines still waiting from the mount before this one. */
+  readonly initialQueue: readonly string[];
+  /** Called once, with what the next mount has to carry on from. */
+  readonly onExit: (exit: ConversationExit, carried: ConversationCarryOver) => void;
 }
 
 const CANCELLED: InteractiveModeResult = { action: 'cancel', task: '' };
@@ -60,13 +82,10 @@ const CANCELLED: InteractiveModeResult = { action: 'cancel', task: '' };
 /** Queued lines shown above the prompt; the rest are counted in one row. */
 const MAX_QUEUE_ROWS = 3;
 
-/**
- * A line that starts with a slash is a command, and a command is never merged
- * with anything else: `/go` means "summarize what came before", not "and also
- * this text".
- */
-function isCommandLine(text: string): boolean {
-  return text.trimStart().startsWith('/');
+/** `/go` asks the session for a task instruction rather than for a reply. */
+function isInstructionRequest(text: string): boolean {
+  const trimmed = text.trimStart();
+  return trimmed === '/go' || trimmed.startsWith('/go ');
 }
 
 function transcriptEntry(role: TranscriptEntry['role'], content: string): TranscriptEntry {
@@ -82,6 +101,8 @@ export function ConversationView({
   autoSubmit,
   initialHistory,
   modelLabel,
+  residentSession,
+  initialQueue,
   onExit,
 }: ConversationViewProps): ReactElement {
   const [transcript, setTranscript] = useState<TranscriptEntry[]>(
@@ -99,8 +120,24 @@ export function ConversationView({
    * key handlers and the drain read, the state is its render mirror — the same
    * split the editor buffer uses, for the same reason.
    */
-  const queueRef = useRef<readonly string[]>([]);
-  const [queue, setQueueView] = useState<readonly string[]>([]);
+  const queueRef = useRef<readonly string[]>(initialQueue);
+  const [queue, setQueueView] = useState<readonly string[]>(initialQueue);
+  /**
+   * The call Esc would stop, and the id that says whose outcome may still be
+   * applied: an interrupted call settles later, and by then its answer belongs
+   * to a turn the user already walked away from.
+   */
+  const inFlightRef = useRef<{
+    readonly id: number;
+    readonly controller: AbortController;
+    /** True while the call is building a task instruction rather than a reply. */
+    readonly isInstruction: boolean;
+  } | null>(null);
+  const submissionCountRef = useRef(0);
+  /** True from the moment this view decides to hand the terminal to a selector. */
+  const [isFinishing, setIsFinishing] = useState(false);
+  /** Set by Esc so the completion list closes without touching the draft. */
+  const [completionsHidden, setCompletionsHidden] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const pendingRef = useRef<Set<PendingWork>>(new Set());
   /** Set late, because the drain is built out of callbacks defined below it. */
@@ -115,22 +152,25 @@ export function ConversationView({
   const { stdout } = useStdout();
   // Resolved once per render: the keys and the box must agree on the row width.
   const contentWidth = resolvePromptContentWidth(stdout?.columns);
-  const completions = useMemo(
+  const allCompletions = useMemo(
     () => resolveSlashCompletions(editor.text, lang, conversation.commandAvailability),
     [conversation.commandAvailability, editor.text, lang],
   );
+  const completions = completionsHidden ? [] : allCompletions;
   const streamingPreview = useMemo(() => toDisplayText(streamingRaw), [streamingRaw]);
   // The model name comes from config or `--model`, so it crosses the display
   // boundary like any other outside text before it reaches a fixed-height row.
   const modelRow = useMemo(() => toSingleLineText(modelLabel), [modelLabel]);
 
   /**
-   * Every exit ends this mount, but not always the run: `choose_action` and
-   * `resume_session` hand the terminal to a selector and this view is mounted
-   * again afterwards, on the same conversation and the same image store.
+   * Every exit ends this mount, but not always the run: a hand-off gives the
+   * terminal to a selector, and in a resident session even a finished decision
+   * comes back here once it has been carried out. Only an exit that nothing
+   * follows may seal the image store — the mount after it pastes into that very
+   * store.
    */
   const isFinalExit = (next: ConversationExit): boolean =>
-    next.kind === 'result' || next.kind === 'failed';
+    next.kind === 'failed' || (next.kind === 'result' && !residentSession);
 
   const exit = useCallback((next: ConversationExit) => {
     if (exitedRef.current) {
@@ -145,7 +185,7 @@ export function ConversationView({
       conversation.sealImages();
       finalExitRef.current = true;
     }
-    onExit(next, editorRef.current.history);
+    onExit(next, { history: editorRef.current.history, queue: queueRef.current });
   }, [conversation, onExit]);
 
   // A teardown started outside this view must stop an in-flight submission from
@@ -172,6 +212,8 @@ export function ConversationView({
   const updateEditor = useCallback((next: EditorState) => {
     writeEditor(next);
     setCompletionIndex(0);
+    // Editing the draft is what brings a dismissed list back.
+    setCompletionsHidden(false);
   }, [writeEditor]);
 
   const writeQueue = useCallback((next: readonly string[]) => {
@@ -187,13 +229,19 @@ export function ConversationView({
   const runSubmission = useCallback(async (
     text: string,
     controller: AbortController,
+    submissionId: number,
   ): Promise<void> => {
+    /** False once this call was interrupted or the view moved on. */
+    const isCurrent = (): boolean =>
+      !exitedRef.current
+      && !cancellingRef.current
+      && inFlightRef.current?.id === submissionId;
     try {
       const submitInput = {
         text,
         abortSignal: controller.signal,
         onAssistantChunk: (chunk: string) => {
-          if (exitedRef.current || cancellingRef.current) {
+          if (!isCurrent()) {
             return;
           }
           setStreamingRaw((streamed) => streamed + chunk);
@@ -202,18 +250,35 @@ export function ConversationView({
       const outcome = submitMode === 'summarize'
         ? await conversation.createInstruction(submitInput)
         : await conversation.submit(submitInput);
-      if (exitedRef.current || cancellingRef.current) {
+      if (!isCurrent()) {
+        // Interrupted: the user is back at the prompt, and this answer is theirs
+        // to ask for again.
         return;
       }
+      inFlightRef.current = null;
+      // Past the interruption check, so an adapter that keeps a transcript of its
+      // own records exactly the turns the view accepted.
+      outcome.commit?.();
       setStreamingRaw('');
       setIsBusy(false);
+      // What the call would have told a terminal it does not own — the provider
+      // taking images as paths, for one — belongs above the answer it came with.
+      const notices = outcome.notices ?? [];
+      if (notices.length > 0) {
+        setTranscript((entries) => [
+          ...entries,
+          ...notices.map((note) => transcriptEntry('system', note)),
+        ]);
+      }
       switch (outcome.kind) {
         case 'assistant_response':
           setTranscript((entries) => [...entries, transcriptEntry('assistant', outcome.content)]);
           drainQueueRef.current();
           return;
         case 'error':
-          setNotice(toSingleLineText(outcome.message));
+          // Into the transcript, not the one-line notice: the next send clears
+          // that row, and the queue may start the next send immediately.
+          setTranscript((entries) => [...entries, transcriptEntry('system', outcome.message)]);
           drainQueueRef.current();
           return;
         case 'task_instruction':
@@ -221,9 +286,10 @@ export function ConversationView({
           return;
       }
     } catch (error) {
-      if (cancellingRef.current) {
+      if (!isCurrent()) {
         return;
       }
+      inFlightRef.current = null;
       exit({ kind: 'failed', error });
     }
   }, [conversation, exit, submitMode]);
@@ -239,8 +305,48 @@ export function ConversationView({
     setStreamingRaw('');
     setIsBusy(true);
     const controller = new AbortController();
-    trackPendingWork({ controller, completion: runSubmission(text, controller) });
-  }, [runSubmission, trackPendingWork, updateEditor]);
+    submissionCountRef.current += 1;
+    const submissionId = submissionCountRef.current;
+    inFlightRef.current = {
+      id: submissionId,
+      controller,
+      isInstruction: submitMode === 'summarize' || isInstructionRequest(text),
+    };
+    trackPendingWork({ controller, completion: runSubmission(text, controller, submissionId) });
+  }, [runSubmission, submitMode, trackPendingWork, updateEditor]);
+
+  /**
+   * Esc while a call is running. The call is aborted, and whatever was typed
+   * while it ran goes out as the next turn — stopping an answer is not a reason
+   * to hold back the messages the user already sent. With an empty queue the
+   * view simply returns to an idle prompt.
+   *
+   * The partial answer is dropped rather than committed: what is on screen is a
+   * one-line tail of a stream, and writing that into the transcript would leave
+   * a torn message standing next to the finished ones. The system line below it
+   * is what records that the turn was stopped.
+   */
+  const interruptSubmission = useCallback((): boolean => {
+    const inFlight = inFlightRef.current;
+    if (inFlight === null) {
+      return false;
+    }
+    inFlightRef.current = null;
+    inFlight.controller.abort();
+    setStreamingRaw('');
+    setIsBusy(false);
+    setNotice(null);
+    setTranscript((entries) => [
+      ...entries,
+      transcriptEntry('system', inFlight.isInstruction
+        ? ui.instructionInterrupted
+        : ui.responseInterrupted),
+    ]);
+    // Read after the note is recorded, so the transcript reads: interrupted,
+    // then the queued line, then the answer to it.
+    drainQueueRef.current();
+    return true;
+  }, [ui.instructionInterrupted, ui.responseInterrupted]);
 
   /**
    * Every exit drains the in-flight work first. A clipboard capture writes a
@@ -250,6 +356,9 @@ export function ConversationView({
    */
   const finishRun = useCallback(async (next: ConversationExit): Promise<void> => {
     cancellingRef.current = true;
+    // The terminal is about to belong to a selector, so the prompt stops taking
+    // keys at the moment the decision is made rather than when the tree goes.
+    setIsFinishing(true);
     // Drain everything: a submission and a clipboard capture can be in flight at
     // the same time, and each one still owns state the caller cleans up after.
     while (pendingRef.current.size > 0) {
@@ -297,14 +406,24 @@ export function ConversationView({
         setNotice(null);
         void finishRun({ kind: 'resume_session' });
         return;
+      case 'handoff':
+        setTranscript((entries) => [...entries, transcriptEntry('user', text)]);
+        updateEditor(commitEditorInput(editorRef.current, text));
+        setNotice(null);
+        void finishRun({ kind: 'handoff', id: command.id });
+        return;
+      // Neither of these ends the mount, so whatever was queued behind them
+      // still has to go out.
       case 'paste_image':
         updateEditor(commitEditorInput(editorRef.current, text));
         captureClipboardImage();
+        drainQueueRef.current();
         return;
       case 'notice':
         setTranscript((entries) => [...entries, transcriptEntry('user', text)]);
         updateEditor(commitEditorInput(editorRef.current, text));
         setNotice(toSingleLineText(command.message));
+        drainQueueRef.current();
         return;
     }
   }, [captureClipboardImage, exit, finishRun, updateEditor]);
@@ -337,7 +456,7 @@ export function ConversationView({
     if (head === undefined) {
       return;
     }
-    if (isCommandLine(head)) {
+    if (conversation.isCommandLine(head)) {
       writeQueue(queued.slice(1));
       submitLine(head);
       return;
@@ -345,14 +464,14 @@ export function ConversationView({
     let end = 0;
     while (end < queued.length) {
       const line = queued[end];
-      if (line === undefined || isCommandLine(line)) {
+      if (line === undefined || conversation.isCommandLine(line)) {
         break;
       }
       end += 1;
     }
     writeQueue(queued.slice(end));
     submitLine(queued.slice(0, end).join('\n'));
-  }, [submitLine, writeQueue]);
+  }, [conversation, submitLine, writeQueue]);
   drainQueueRef.current = drainQueue;
 
   const autoSubmittedRef = useRef(false);
@@ -362,6 +481,17 @@ export function ConversationView({
       startSubmission('');
     }
   }, [autoSubmit, startSubmission]);
+
+  // Lines carried over from the mount before this one were already submitted by
+  // the user, so this mount sends them rather than waiting for another key.
+  const carriedQueueRef = useRef(false);
+  useEffect(() => {
+    if (carriedQueueRef.current || autoSubmit || queueRef.current.length === 0) {
+      return;
+    }
+    carriedQueueRef.current = true;
+    drainQueueRef.current();
+  }, [autoSubmit]);
 
   useInput((input, key) => {
     if (exitedRef.current) {
@@ -387,6 +517,17 @@ export function ConversationView({
     // A terminal pastes a screenshot as raw OSC 1337 bytes, which must be
     // recognized before any key handling or display sanitization sees them.
     if (routeImagePasteInput(input, key)) {
+      return;
+    }
+
+    if (key.escape) {
+      // An open completion list is what Esc closes first; only then does Esc
+      // reach the call that is running.
+      if (completions.length > 0) {
+        setCompletionsHidden(true);
+        return;
+      }
+      interruptSubmission();
       return;
     }
 
@@ -420,7 +561,10 @@ export function ConversationView({
       if (!text) {
         return;
       }
-      if (isBusy) {
+      // Read from the ref, not the rendered flag: two Enters can arrive before
+      // React re-renders, and the second must still see the call the first one
+      // started.
+      if (inFlightRef.current !== null) {
         // Leaving the conversation must not wait behind the queue.
         const command = conversation.resolveLocalCommand(text);
         if (command?.kind === 'cancel') {
@@ -518,7 +662,11 @@ export function ConversationView({
           </Box>
         )}
         {/* Both rows always render, so the frame height never changes underneath Ink. */}
-        <StatusLine busy={isBusy} label={ui.thinking} streamed={streamingPreview} />
+        <StatusLine
+          busy={isBusy}
+          label={`${ui.thinking} ${ui.interruptHint}`}
+          streamed={streamingPreview}
+        />
         <Text color="red" wrap="truncate-end">{notice === null ? ' ' : notice}</Text>
         <PromptInput
           text={editor.text}
@@ -528,6 +676,7 @@ export function ConversationView({
           hint={ui.hint}
           completions={completions}
           completionIndex={completionIndex}
+          disabled={isFinishing}
         />
         {/* One row, always drawn, so the frame height stays constant. */}
         <Text dimColor wrap="truncate-end">{modelRow}</Text>

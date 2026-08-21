@@ -14,8 +14,7 @@ import {
 import { createLogger, sanitizeTerminalText } from '../../shared/utils/index.js';
 import { info, error, blankLine } from '../../shared/ui/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
-import { readInteractiveInput } from './interactiveInput.js';
-import type { CommandAvailability } from './slashCommandRegistry.js';
+import { readMultilineInput } from './lineEditor.js';
 import { selectRecentSession } from './sessionSelector.js';
 import { matchSlashCommand } from './commandMatcher.js';
 import { SlashCommand } from '../../shared/constants.js';
@@ -36,6 +35,7 @@ import {
   createPlayCommandLogMeta,
   createSessionLogMeta,
 } from './conversationLogMeta.js';
+import { resolvePreviousOrder } from './conversationPlan.js';
 import { prependInitialPromptContext } from './promptSections.js';
 import { shouldUseGherkinTaskInstructions } from './taskInstructionFormat.js';
 import type { PermissionMode } from '../../core/models/index.js';
@@ -140,7 +140,7 @@ export async function runConversationLoop(
   const ui = getLabelObject<InteractiveUIText>('interactive.ui', ctx.lang);
   const conversationLabel = getLabel('interactive.conversationLabel', ctx.lang);
   const noTranscript = getLabel('interactive.noTranscript', ctx.lang);
-  const attachmentStore = createSessionImageAttachmentStore(initialInput?.attachments);
+  const attachmentStore = createSessionImageAttachmentStore(cwd, initialInput?.attachments);
 
   try {
     info(strategy.introMessage);
@@ -189,13 +189,8 @@ export async function runConversationLoop(
       return buildInteractiveResultWithAttachments({ action: selectedAction, task }, attachmentStore);
     }
 
-    const commandAvailability: CommandAvailability = {
-      enableRetryCommand: strategy.enableRetryCommand,
-      hasPreviousOrder: !!strategy.previousOrderContent,
-    };
-
     while (true) {
-      const input = await readInteractiveInput(chalk.green('> '), ctx.lang, commandAvailability, attachmentStore);
+      const input = await readMultilineInput(chalk.green('> '));
 
       if (input === null) {
         blankLine();
@@ -266,12 +261,13 @@ export async function runConversationLoop(
             info(ui.retryUnavailable);
             continue;
           }
-          if (!strategy.previousOrderContent) {
+          const retryOrder = resolvePreviousOrder(strategy.previousOrderContent);
+          if (retryOrder === undefined) {
             info(ui.retryNoOrder);
             continue;
           }
           log.info('Retry command — using previous order.md');
-          const selectedAction = await handleSummaryAction(strategy.previousOrderContent);
+          const selectedAction = await handleSummaryAction(retryOrder);
           if (selectedAction === null) {
             continue;
           }
@@ -341,13 +337,14 @@ export async function runConversationLoop(
         }
 
         case SlashCommand.Replay: {
-          if (!strategy.previousOrderContent) {
+          const replayOrder = resolvePreviousOrder(strategy.previousOrderContent);
+          if (replayOrder === undefined) {
             const replayNoOrder = getLabel('instruct.ui.replayNoOrder', ctx.lang);
             info(replayNoOrder);
             continue;
           }
           log.info('Replay command');
-          return buildInteractiveResultWithAttachments({ action: 'execute', task: strategy.previousOrderContent }, attachmentStore);
+          return buildInteractiveResultWithAttachments({ action: 'execute', task: replayOrder }, attachmentStore);
         }
 
         case SlashCommand.Cancel: {

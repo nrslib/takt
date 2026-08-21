@@ -8,18 +8,20 @@ import {
   resolveWorkflowConfigValues,
 } from '../infra/config/index.js';
 import { getProvider } from '../infra/providers/index.js';
-import { readInteractiveInput } from '../features/interactive/interactiveInput.js';
+import { readMultilineInput } from '../features/interactive/lineEditor.js';
 import type { ImageAttachmentStore, InteractiveImageAttachment } from '../features/interactive/imageAttachments.js';
 import { callAIWithRetry } from '../features/interactive/aiCaller.js';
 import { formatRunSessionForPrompt, loadRunSessionContext } from '../features/interactive/runSessionReader.js';
 import { selectAndExecuteTask } from '../features/tasks/index.js';
 import { runExecCommand } from '../features/exec/index.js';
-import { createExecSessionContext } from '../features/exec/assistantSession.js';
+import { createExecSessionContext, type ExecSessionContext } from '../features/exec/assistantSession.js';
 import { DEFAULT_EXEC_CONFIG } from '../features/exec/defaults.js';
 import { saveExecPreset, saveLastUsedExecConfig } from '../features/exec/presetStore.js';
-import type { ExecConfig } from '../features/exec/types.js';
+import type { ExecActorConfig, ExecConfig, ResolvedExecConfig } from '../features/exec/types.js';
 import { selectMultipleOptions, selectOption, type SelectOptionItem } from '../shared/prompt/index.js';
 import { stripAnsi } from '../shared/utils/text.js';
+
+const execAttachmentStores = vi.hoisted(() => ({ stores: [] as ImageAttachmentStore[] }));
 
 vi.mock('../infra/providers/index.js', () => ({
   getProvider: vi.fn(() => ({ setup: vi.fn() })),
@@ -47,9 +49,25 @@ vi.mock('../infra/config/runtime-provider/provider-environment.js', () => ({
   }),
 }));
 
-vi.mock('../features/interactive/interactiveInput.js', () => ({
-  readInteractiveInput: vi.fn(),
+vi.mock('../features/interactive/lineEditor.js', () => ({
+  readMultilineInput: vi.fn(),
 }));
+
+// The exec run owns its image attachment store now that the input line no
+// longer carries one, so the tests reach it the same way the run does.
+vi.mock('../features/interactive/imageAttachments.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../features/interactive/imageAttachments.js')>();
+  return {
+    ...actual,
+    createSessionImageAttachmentStore: (
+      ...args: Parameters<typeof actual.createSessionImageAttachmentStore>
+    ) => {
+      const store = actual.createSessionImageAttachmentStore(...args);
+      execAttachmentStores.stores.push(store);
+      return store;
+    },
+  };
+});
 
 vi.mock('../features/interactive/aiCaller.js', () => ({
   callAIWithRetry: vi.fn(),
@@ -81,7 +99,7 @@ vi.mock('../shared/prompt/index.js', () => ({
   selectMultipleOptions: vi.fn(),
 }));
 
-const mockReadInteractiveInput = vi.mocked(readInteractiveInput);
+const mockReadMultilineInput = vi.mocked(readMultilineInput);
 const mockSelectOption = vi.mocked(selectOption);
 const mockSelectMultipleOptions = vi.mocked(selectMultipleOptions);
 const mockResolveWorkflowConfigValues = vi.mocked(resolveWorkflowConfigValues);
@@ -96,15 +114,77 @@ const defaultExecSkillProviderOptions = {
   codex: { skills: { repo: true, user: true } },
 } as const;
 
-function requireImageAttachmentStore(store: ImageAttachmentStore | undefined): ImageAttachmentStore {
+/** The store the running exec session created for this run's pasted images. */
+function requireExecAttachmentStore(): ImageAttachmentStore {
+  const store = execAttachmentStores.stores.at(-1);
   if (store === undefined) {
-    throw new Error('Expected exec interactive input to receive an image attachment store.');
+    throw new Error('Expected the exec run to create an image attachment store.');
   }
   return store;
 }
 
 function trackAttachmentTempDir(attachment: InteractiveImageAttachment): void {
   execAttachmentTempDirs.add(dirname(dirname(attachment.tempPath)));
+}
+
+/**
+ * The suite controls a handful of config values; exec reads no others, so the
+ * stubs stay small rather than reproducing a whole loaded config.
+ */
+type LoadedConfigValues = ReturnType<typeof resolveWorkflowConfigValues>;
+type RunSessionContextStub = ReturnType<typeof loadRunSessionContext>;
+type RunSessionPromptStub = ReturnType<typeof formatRunSessionForPrompt>;
+
+function setWorkflowConfigValues(values: unknown): void {
+  mockResolveWorkflowConfigValues.mockReturnValue(values as LoadedConfigValues);
+}
+
+function setWorkflowConfigValuesImplementation(
+  implementation: (cwd: string, keys: readonly string[]) => unknown,
+): void {
+  mockResolveWorkflowConfigValues.mockImplementation(
+    ((cwd: string, keys: readonly string[]) =>
+      implementation(cwd, keys) as LoadedConfigValues) as typeof resolveWorkflowConfigValues,
+  );
+}
+
+/** Only the fields exec reads; the rest of a run session is not consulted. */
+function runSessionContext(context: unknown): RunSessionContextStub {
+  return context as RunSessionContextStub;
+}
+
+function runSessionPrompt(prompt: unknown): RunSessionPromptStub {
+  return prompt as RunSessionPromptStub;
+}
+
+function setRunSessionContext(context: unknown): void {
+  mockLoadRunSessionContext.mockReturnValue(runSessionContext(context));
+}
+
+function setRunSessionPrompt(prompt: unknown): void {
+  mockFormatRunSessionForPrompt.mockReturnValue(runSessionPrompt(prompt));
+}
+
+/** Exec only calls `setup` on the provider in these tests. */
+function stubProvider(): ReturnType<typeof getProvider> {
+  return { setup: vi.fn() } as unknown as ReturnType<typeof getProvider>;
+}
+
+/** The default config as the run resolves it, with provider and model filled in. */
+function resolvedDefaultExecConfig(): ResolvedExecConfig {
+  return {
+    ...DEFAULT_EXEC_CONFIG,
+    session: { ...DEFAULT_EXEC_CONFIG.session, provider: 'claude', model: 'opus' },
+  } as ResolvedExecConfig;
+}
+
+/** `noUncheckedIndexedAccess` makes a bare index optional; the defaults are not. */
+function defaultActor(actors: readonly ExecActorConfig[], index: number): ExecActorConfig {
+  const actor = actors[index];
+  if (actor === undefined) {
+    throw new Error(`Expected a default exec actor at index ${index}.`);
+  }
+  return actor;
 }
 
 function mockSelectOptionQueue(...values: Array<string | null>): void {
@@ -161,18 +241,26 @@ describe('exec command setup', () => {
   const originalTaktNoTty = process.env.TAKT_NO_TTY;
   const originalTaktNotifyWebhook = process.env.TAKT_NOTIFY_WEBHOOK;
   const originalStdinIsTTY = process.stdin.isTTY;
+  const originalStdoutIsTTY = process.stdout.isTTY;
 
   beforeEach(() => {
     Object.defineProperty(process.stdin, 'isTTY', {
       configurable: true,
       value: true,
     });
+    // The line-reading loop is what this suite drives; with both streams on a
+    // terminal exec would mount the TUI instead.
+    Object.defineProperty(process.stdout, 'isTTY', {
+      configurable: true,
+      value: false,
+    });
     delete process.env.TAKT_NO_TTY;
     delete process.env.TAKT_NOTIFY_WEBHOOK;
     projectDir = mkdtempSync(join(tmpdir(), 'takt-exec-command-'));
     globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-exec-command-global-'));
     process.env.TAKT_CONFIG_DIR = globalConfigDir;
-    mockReadInteractiveInput.mockReset();
+    execAttachmentStores.stores.length = 0;
+    mockReadMultilineInput.mockReset();
     mockSelectOption.mockReset();
     mockSelectMultipleOptions.mockReset();
     mockResolveWorkflowConfigValues.mockReset();
@@ -182,16 +270,16 @@ describe('exec command setup', () => {
     mockSelectAndExecuteTask.mockReset();
     mockLoadRunSessionContext.mockReset();
     mockFormatRunSessionForPrompt.mockReset();
-    mockResolveWorkflowConfigValues.mockReturnValue({
+    setWorkflowConfigValues({
       enableBuiltinWorkflows: true,
       language: 'en',
       provider: 'claude',
       model: 'opus',
     });
     mockResolveNonWorkflowProviderOptions.mockImplementation((_cwd, options) => options);
-    mockGetProvider.mockReturnValue({ setup: vi.fn() });
+    mockGetProvider.mockReturnValue(stubProvider());
     mockSelectAndExecuteTask.mockResolvedValue(undefined);
-    mockLoadRunSessionContext.mockReturnValue({
+    setRunSessionContext({
       reports: [
         {
           filename: 'review-1-review-result.md',
@@ -199,7 +287,7 @@ describe('exec command setup', () => {
         },
       ],
     });
-    mockFormatRunSessionForPrompt.mockReturnValue({
+    setRunSessionPrompt({
       runStatus: 'completed',
       runReports: '# Review Result\n\napproved',
       runStepLogs: 'execute/review logs',
@@ -226,6 +314,10 @@ describe('exec command setup', () => {
       configurable: true,
       value: originalStdinIsTTY,
     });
+    Object.defineProperty(process.stdout, 'isTTY', {
+      configurable: true,
+      value: originalStdoutIsTTY,
+    });
     rmSync(projectDir, { recursive: true, force: true });
     rmSync(globalConfigDir, { recursive: true, force: true });
     for (const tempDir of execAttachmentTempDirs) {
@@ -239,7 +331,7 @@ describe('exec command setup', () => {
       codex: { skills: { repo: true, user: false } },
     });
 
-    const ctx = createExecSessionContext(projectDir, DEFAULT_EXEC_CONFIG);
+    const ctx = createExecSessionContext(projectDir, resolvedDefaultExecConfig());
 
     expect(ctx.providerOptions).toEqual({
       codex: { skills: { repo: true, user: false } },
@@ -259,7 +351,7 @@ describe('exec command setup', () => {
     mockResolveNonWorkflowProviderOptions.mockImplementation((_cwd, options, defaults) => (
       defaults === undefined ? options : configuredSkillOptions
     ));
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
     mockCallAIWithRetry
@@ -270,7 +362,7 @@ describe('exec command setup', () => {
 
     for (const call of mockCallAIWithRetry.mock.calls) {
       expect(call[4].providerOptions).toEqual(configuredSkillOptions);
-      expect(call[4].codexSkillInheritance).toEqual({ repo: false, user: true });
+      expect((call[4] as ExecSessionContext).codexSkillInheritance).toEqual({ repo: false, user: true });
     }
     const workflow = parseYaml(
       readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'),
@@ -285,7 +377,7 @@ describe('exec command setup', () => {
         effort: 'high',
       },
     }, { projectDir, scope: 'project' });
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
     mockCallAIWithRetry
@@ -309,30 +401,18 @@ describe('exec command setup', () => {
   });
 
   it('should start with the default config without prompting when only builtin presets exist', async () => {
-    mockReadInteractiveInput.mockResolvedValueOnce('/cancel');
+    mockReadMultilineInput.mockResolvedValueOnce('/cancel');
 
     await expect(runExecCommand(projectDir, {})).resolves.toBeUndefined();
 
     expect(mockSelectOption).not.toHaveBeenCalled();
-    expect(mockReadInteractiveInput).toHaveBeenCalledWith(
-      'Assistant> ',
-      expect.any(String),
-      {
-        enableSetupCommand: true,
-        enabledCommands: ['/setup', '/go', '/cancel', '/paste-image'],
-      },
-      expect.objectContaining({
-        saveImage: expect.any(Function),
-        listAttachments: expect.any(Function),
-        cleanup: expect.any(Function),
-      }),
-    );
+    expect(mockReadMultilineInput).toHaveBeenCalledWith('Assistant> ');
   });
 
   it('should cleanup pasted image session directory when exec is cancelled', async () => {
     let sessionDir: string | undefined;
-    mockReadInteractiveInput.mockImplementationOnce(async (_prompt, _lang, _availability, imageAttachmentStore) => {
-      const store = requireImageAttachmentStore(imageAttachmentStore);
+    mockReadMultilineInput.mockImplementationOnce(async () => {
+      const store = requireExecAttachmentStore();
       const attachment = await store.saveImage(Buffer.from('cancel-image'), 'image/png');
       sessionDir = dirname(dirname(attachment.tempPath));
       expect(existsSync(sessionDir)).toBe(true);
@@ -349,8 +429,8 @@ describe('exec command setup', () => {
 
   it('should cleanup pasted image session directory when interactive input returns null', async () => {
     let sessionDir: string | undefined;
-    mockReadInteractiveInput.mockImplementationOnce(async (_prompt, _lang, _availability, imageAttachmentStore) => {
-      const store = requireImageAttachmentStore(imageAttachmentStore);
+    mockReadMultilineInput.mockImplementationOnce(async () => {
+      const store = requireExecAttachmentStore();
       const attachment = await store.saveImage(Buffer.from('null-image'), 'image/png');
       sessionDir = dirname(dirname(attachment.tempPath));
       expect(existsSync(sessionDir)).toBe(true);
@@ -367,8 +447,8 @@ describe('exec command setup', () => {
 
   it('should cleanup pasted image session directory when interactive input throws', async () => {
     let sessionDir: string | undefined;
-    mockReadInteractiveInput.mockImplementationOnce(async (_prompt, _lang, _availability, imageAttachmentStore) => {
-      const store = requireImageAttachmentStore(imageAttachmentStore);
+    mockReadMultilineInput.mockImplementationOnce(async () => {
+      const store = requireExecAttachmentStore();
       const attachment = await store.saveImage(Buffer.from('throw-image'), 'image/png');
       sessionDir = dirname(dirname(attachment.tempPath));
       expect(existsSync(sessionDir)).toBe(true);
@@ -388,8 +468,8 @@ describe('exec command setup', () => {
     // finishes, so the save runs once the store is already gone.
     let store: ImageAttachmentStore | undefined;
     let sessionDir: string | undefined;
-    mockReadInteractiveInput.mockImplementationOnce(async (_prompt, _lang, _availability, imageAttachmentStore) => {
-      store = requireImageAttachmentStore(imageAttachmentStore);
+    mockReadMultilineInput.mockImplementationOnce(async () => {
+      store = requireExecAttachmentStore();
       const attachment = await store.saveImage(Buffer.from('late-image'), 'image/png');
       sessionDir = dirname(dirname(attachment.tempPath));
       return '/cancel';
@@ -412,8 +492,8 @@ describe('exec command setup', () => {
 
   it('should keep exec cancellation flow when image attachment cleanup fails', async () => {
     let sessionDir: string | undefined;
-    mockReadInteractiveInput.mockImplementationOnce(async (_prompt, _lang, _availability, imageAttachmentStore) => {
-      const store = requireImageAttachmentStore(imageAttachmentStore);
+    mockReadMultilineInput.mockImplementationOnce(async () => {
+      const store = requireExecAttachmentStore();
       const attachment = await store.saveImage(Buffer.from('cleanup-failure-image'), 'image/png');
       sessionDir = dirname(dirname(attachment.tempPath));
       const cleanup = store.cleanup.bind(store);
@@ -434,9 +514,9 @@ describe('exec command setup', () => {
 
   it('should pass referenced pasted images to exec assistant provider calls', async () => {
     let pastedAttachment: InteractiveImageAttachment | undefined;
-    mockReadInteractiveInput
-      .mockImplementationOnce(async (_prompt, _lang, _availability, imageAttachmentStore) => {
-        const store = requireImageAttachmentStore(imageAttachmentStore);
+    mockReadMultilineInput
+      .mockImplementationOnce(async () => {
+        const store = requireExecAttachmentStore();
         pastedAttachment = await store.saveImage(Buffer.from('exec-image'), 'image/png');
         trackAttachmentTempDir(pastedAttachment);
         return `Please inspect ${pastedAttachment.placeholder}`;
@@ -465,7 +545,7 @@ describe('exec command setup', () => {
 
   it('should keep unstored image placeholders as text-only exec input', async () => {
     const plainText = 'literal image marker';
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce(plainText)
       .mockResolvedValueOnce('/cancel');
     mockCallAIWithRetry.mockResolvedValueOnce({
@@ -481,9 +561,9 @@ describe('exec command setup', () => {
 
   it('should report unreadable pasted images without calling providers and keep the exec prompt open', async () => {
     let pastedAttachment: InteractiveImageAttachment | undefined;
-    mockReadInteractiveInput
-      .mockImplementationOnce(async (_prompt, _lang, _availability, imageAttachmentStore) => {
-        const store = requireImageAttachmentStore(imageAttachmentStore);
+    mockReadMultilineInput
+      .mockImplementationOnce(async () => {
+        const store = requireExecAttachmentStore();
         pastedAttachment = await store.saveImage(Buffer.from('missing-image'), 'image/png');
         trackAttachmentTempDir(pastedAttachment);
         unlinkSync(pastedAttachment.tempPath);
@@ -503,7 +583,7 @@ describe('exec command setup', () => {
     if (pastedAttachment === undefined) {
       throw new Error('Expected the test to save a pasted image attachment.');
     }
-    expect(mockReadInteractiveInput).toHaveBeenCalledTimes(2);
+    expect(mockReadMultilineInput).toHaveBeenCalledTimes(2);
     expect(mockCallAIWithRetry).not.toHaveBeenCalled();
     expect(mockSelectAndExecuteTask).not.toHaveBeenCalled();
     expect(output).toContain('ENOENT');
@@ -512,9 +592,9 @@ describe('exec command setup', () => {
 
   it('should pass /go referenced pasted images to workflow but not completion when only run artifacts mention placeholders', async () => {
     let pastedAttachment: InteractiveImageAttachment | undefined;
-    mockReadInteractiveInput
-      .mockImplementationOnce(async (_prompt, _lang, _availability, imageAttachmentStore) => {
-        const store = requireImageAttachmentStore(imageAttachmentStore);
+    mockReadMultilineInput
+      .mockImplementationOnce(async () => {
+        const store = requireExecAttachmentStore();
         pastedAttachment = await store.saveImage(Buffer.from('go-image'), 'image/png');
         trackAttachmentTempDir(pastedAttachment);
         return `/go Implement this using ${pastedAttachment.placeholder}`;
@@ -529,7 +609,7 @@ describe('exec command setup', () => {
         result: { success: true, content: 'Execution completed' },
         sessionId: 'session-1',
       });
-    mockFormatRunSessionForPrompt.mockReturnValue({
+    setRunSessionPrompt({
       runStatus: 'completed',
       runReports: '# Review Result\n\nuntrusted report mentions [Image #1]',
       runStepLogs: 'untrusted step log mentions [Image #1]',
@@ -562,9 +642,9 @@ describe('exec command setup', () => {
   it('should not pass unreferenced pasted images to the generated workflow or completion summary', async () => {
     let referencedAttachment: InteractiveImageAttachment | undefined;
     let unreferencedAttachment: InteractiveImageAttachment | undefined;
-    mockReadInteractiveInput
-      .mockImplementationOnce(async (_prompt, _lang, _availability, imageAttachmentStore) => {
-        const store = requireImageAttachmentStore(imageAttachmentStore);
+    mockReadMultilineInput
+      .mockImplementationOnce(async () => {
+        const store = requireExecAttachmentStore();
         referencedAttachment = await store.saveImage(Buffer.from('referenced-go-image'), 'image/png');
         unreferencedAttachment = await store.saveImage(Buffer.from('deleted-go-image'), 'image/png');
         trackAttachmentTempDir(referencedAttachment);
@@ -581,7 +661,7 @@ describe('exec command setup', () => {
         result: { success: true, content: 'Execution completed' },
         sessionId: 'session-1',
       });
-    mockFormatRunSessionForPrompt.mockReturnValue({
+    setRunSessionPrompt({
       runStatus: 'completed',
       runReports: '# Review Result\n\napproved with leaked [Image #2]',
       runStepLogs: 'execute/review logs with leaked [Image #2]',
@@ -611,9 +691,9 @@ describe('exec command setup', () => {
   it('should ignore assistant-authored image placeholders when selecting /go and completion attachments', async () => {
     let referencedAttachment: InteractiveImageAttachment | undefined;
     let unreferencedAttachment: InteractiveImageAttachment | undefined;
-    mockReadInteractiveInput
-      .mockImplementationOnce(async (_prompt, _lang, _availability, imageAttachmentStore) => {
-        const store = requireImageAttachmentStore(imageAttachmentStore);
+    mockReadMultilineInput
+      .mockImplementationOnce(async () => {
+        const store = requireExecAttachmentStore();
         referencedAttachment = await store.saveImage(Buffer.from('referenced-user-image'), 'image/png');
         unreferencedAttachment = await store.saveImage(Buffer.from('assistant-authored-image'), 'image/png');
         trackAttachmentTempDir(referencedAttachment);
@@ -661,9 +741,9 @@ describe('exec command setup', () => {
 
   it('should report unreadable /go pasted images without calling providers and keep the exec prompt open', async () => {
     let pastedAttachment: InteractiveImageAttachment | undefined;
-    mockReadInteractiveInput
-      .mockImplementationOnce(async (_prompt, _lang, _availability, imageAttachmentStore) => {
-        const store = requireImageAttachmentStore(imageAttachmentStore);
+    mockReadMultilineInput
+      .mockImplementationOnce(async () => {
+        const store = requireExecAttachmentStore();
         pastedAttachment = await store.saveImage(Buffer.from('missing-go-image'), 'image/png');
         trackAttachmentTempDir(pastedAttachment);
         unlinkSync(pastedAttachment.tempPath);
@@ -683,7 +763,7 @@ describe('exec command setup', () => {
     if (pastedAttachment === undefined) {
       throw new Error('Expected the test to save a pasted image attachment.');
     }
-    expect(mockReadInteractiveInput).toHaveBeenCalledTimes(2);
+    expect(mockReadMultilineInput).toHaveBeenCalledTimes(2);
     expect(mockCallAIWithRetry).not.toHaveBeenCalled();
     expect(mockSelectAndExecuteTask).not.toHaveBeenCalled();
     expect(output).toContain('ENOENT');
@@ -705,7 +785,7 @@ describe('exec command setup', () => {
         smallThreshold: 9,
       },
     }, { projectDir, scope: 'global' });
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
     mockCallAIWithRetry
@@ -727,7 +807,7 @@ describe('exec command setup', () => {
         smallThreshold: 7,
       },
     }, { globalConfigDir });
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
     mockCallAIWithRetry
@@ -742,7 +822,7 @@ describe('exec command setup', () => {
   });
 
   it('should run an explicit exec provider config without a configured TAKT provider', async () => {
-    mockResolveWorkflowConfigValues.mockReturnValue({
+    setWorkflowConfigValues({
       enableBuiltinWorkflows: true,
       language: 'en',
     });
@@ -767,7 +847,7 @@ describe('exec command setup', () => {
         },
       ],
     }, { projectDir, scope: 'project' });
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
     mockCallAIWithRetry
@@ -795,7 +875,7 @@ describe('exec command setup', () => {
 
   it('should generate workflows with the provider and model resolved when exec mode starts', async () => {
     let providerModelResolutions = 0;
-    mockResolveWorkflowConfigValues.mockImplementation((_cwd, keys) => {
+    setWorkflowConfigValuesImplementation((_cwd, keys) => {
       const requestedKeys = keys ?? [];
       if (requestedKeys.includes('provider') || requestedKeys.includes('model')) {
         providerModelResolutions += 1;
@@ -818,7 +898,7 @@ describe('exec command setup', () => {
         language: 'en',
       };
     });
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
     mockCallAIWithRetry
@@ -842,7 +922,7 @@ describe('exec command setup', () => {
   });
 
   it('should start with inherited Claude xhigh effort for the configured default model', async () => {
-    mockResolveWorkflowConfigValues.mockReturnValue({
+    setWorkflowConfigValues({
       enableBuiltinWorkflows: true,
       language: 'en',
       provider: 'claude',
@@ -864,15 +944,15 @@ describe('exec command setup', () => {
         },
       ],
     }, { projectDir, scope: 'project' });
-    mockReadInteractiveInput.mockResolvedValueOnce('/cancel');
+    mockReadMultilineInput.mockResolvedValueOnce('/cancel');
 
     await expect(runExecCommand(projectDir, { preset: 'stale-inherited-effort-team' })).resolves.toBeUndefined();
 
-    expect(mockReadInteractiveInput).toHaveBeenCalled();
+    expect(mockReadMultilineInput).toHaveBeenCalled();
   });
 
   it('should apply CLI provider and model overrides to generated workflow and assistant calls', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
     mockCallAIWithRetry
@@ -912,7 +992,7 @@ describe('exec command setup', () => {
   it.each(['cursor', 'copilot', 'kiro', 'pi', 'deepseek-harness'] as const)(
     'should allow CLI provider override to %s without explicit model',
     async (provider) => {
-      mockReadInteractiveInput
+      mockReadMultilineInput
         .mockResolvedValueOnce('/go Implement a small task')
         .mockResolvedValueOnce('/cancel');
       mockCallAIWithRetry
@@ -956,7 +1036,7 @@ describe('exec command setup', () => {
   });
 
   it('should call the codex exec assistant completion summary with readonly permission mode', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
     mockCallAIWithRetry
@@ -1010,7 +1090,7 @@ describe('exec command setup', () => {
 
   it('should sanitize setup preset menu metadata before terminal output', async () => {
     saveExecPreset('unsafe', 'team \x1b]52;c;secret\x07description', DEFAULT_EXEC_CONFIG, { projectDir, scope: 'project' });
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/cancel');
     mockSelectOptionQueue(
@@ -1058,7 +1138,7 @@ describe('exec command setup', () => {
       },
       workers: [
         {
-          ...DEFAULT_EXEC_CONFIG.workers[0],
+          ...defaultActor(DEFAULT_EXEC_CONFIG.workers, 0),
           provider: 'mock',
           model: 'worker\x1b[2J-model',
           effort: undefined,
@@ -1067,7 +1147,7 @@ describe('exec command setup', () => {
       ],
       reviews: [
         {
-          ...DEFAULT_EXEC_CONFIG.reviews[0],
+          ...defaultActor(DEFAULT_EXEC_CONFIG.reviews, 0),
           provider: 'mock',
           model: 'review\x1b[2J-model',
           effort: undefined,
@@ -1079,7 +1159,7 @@ describe('exec command setup', () => {
         max_steps: DEFAULT_EXEC_CONFIG.loop.maxSteps,
       },
     }));
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/cancel');
     mockSelectOptionQueue(
@@ -1113,7 +1193,7 @@ describe('exec command setup', () => {
       },
       workers: [
         {
-          ...DEFAULT_EXEC_CONFIG.workers[0],
+          ...defaultActor(DEFAULT_EXEC_CONFIG.workers, 0),
           provider: 'mock',
           model: 'worker\x1b[2J-model',
           effort: undefined,
@@ -1122,7 +1202,7 @@ describe('exec command setup', () => {
       ],
       reviews: [
         {
-          ...DEFAULT_EXEC_CONFIG.reviews[0],
+          ...defaultActor(DEFAULT_EXEC_CONFIG.reviews, 0),
           provider: 'mock',
           model: 'review\x1b[2J-model',
           effort: undefined,
@@ -1130,7 +1210,7 @@ describe('exec command setup', () => {
       ],
     };
     saveExecPreset('unsafe-details', 'Unsafe details', unsafeConfig, { projectDir, scope: 'project' });
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/cancel');
     mockSelectOptionQueue(
@@ -1163,7 +1243,7 @@ describe('exec command setup', () => {
     const knowledgeDir = join(projectDir, '.takt', 'facets', 'knowledge');
     mkdirSync(knowledgeDir, { recursive: true });
     writeFileSync(join(knowledgeDir, 'unsafe.md'), '# Unsafe \x1b]52;c;secret\x07Knowledge\n\nBody');
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/cancel');
     mockSelectOptionQueue(
@@ -1190,7 +1270,7 @@ describe('exec command setup', () => {
   });
 
   it('should sanitize exec assistant responses before terminal output', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('Clarify this task')
       .mockResolvedValueOnce('/cancel');
     mockCallAIWithRetry
@@ -1212,7 +1292,7 @@ describe('exec command setup', () => {
   });
 
   it('should sanitize generated facet content before terminal output', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('generated-knowledge')
       .mockResolvedValueOnce('Generate sanitized knowledge')
@@ -1246,7 +1326,7 @@ describe('exec command setup', () => {
   });
 
   it('should apply session provider change for provider-default model providers', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/cancel');
     mockSelectOptionQueue(
@@ -1270,7 +1350,7 @@ describe('exec command setup', () => {
       },
       workers: [
         {
-          ...DEFAULT_EXEC_CONFIG.workers[0],
+          ...defaultActor(DEFAULT_EXEC_CONFIG.workers, 0),
           provider: 'opencode',
           model: 'opencode/worker',
           effort: undefined,
@@ -1278,14 +1358,14 @@ describe('exec command setup', () => {
       ],
       reviews: [
         {
-          ...DEFAULT_EXEC_CONFIG.reviews[0],
+          ...defaultActor(DEFAULT_EXEC_CONFIG.reviews, 0),
           provider: 'opencode',
           model: 'opencode/review',
           effort: undefined,
         },
       ],
     }, { projectDir, scope: 'project' });
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
@@ -1333,7 +1413,7 @@ describe('exec command setup', () => {
       },
       workers: [
         {
-          ...DEFAULT_EXEC_CONFIG.workers[0],
+          ...defaultActor(DEFAULT_EXEC_CONFIG.workers, 0),
           provider: 'opencode',
           model: 'opencode/worker',
           effort: undefined,
@@ -1341,14 +1421,14 @@ describe('exec command setup', () => {
       ],
       reviews: [
         {
-          ...DEFAULT_EXEC_CONFIG.reviews[0],
+          ...defaultActor(DEFAULT_EXEC_CONFIG.reviews, 0),
           provider: 'opencode',
           model: 'opencode/review',
           effort: undefined,
         },
       ],
     }, { projectDir, scope: 'project' });
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/cancel');
     mockSelectOptionQueue(
@@ -1377,7 +1457,7 @@ describe('exec command setup', () => {
   });
 
   it('should offer default when selecting effort for providers with exec effort support', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/cancel');
     mockSelectOptionQueue(
@@ -1412,7 +1492,7 @@ describe('exec command setup', () => {
   });
 
   it('should apply assistant effort changes from setup to exec assistant runtime calls', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
@@ -1461,7 +1541,7 @@ describe('exec command setup', () => {
         },
       ],
     }, { projectDir, scope: 'project' });
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('claude-sonnet-4-5-20250929')
       .mockResolvedValueOnce('claude-sonnet-4-5-20250929')
@@ -1507,7 +1587,7 @@ describe('exec command setup', () => {
   });
 
   it('should keep effort when setup changes a Claude model back to provider default', async () => {
-    mockResolveWorkflowConfigValues.mockReturnValue({
+    setWorkflowConfigValues({
       enableBuiltinWorkflows: true,
       language: 'en',
       provider: 'claude',
@@ -1521,7 +1601,7 @@ describe('exec command setup', () => {
         effort: 'xhigh',
       },
     }, { projectDir, scope: 'project' });
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/cancel');
     mockSelectOptionQueue(
@@ -1540,7 +1620,7 @@ describe('exec command setup', () => {
   });
 
   it('should apply assistant effort changes from setup to AI facet calls in the same setup session', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('generated-knowledge')
       .mockResolvedValueOnce('Create knowledge after effort update')
@@ -1577,7 +1657,7 @@ describe('exec command setup', () => {
   });
 
   it('should apply assistant provider and model changes from setup to the replan workflow step', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
@@ -1604,7 +1684,7 @@ describe('exec command setup', () => {
   });
 
   it('should omit assistant model when setup changes provider without selecting a model', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
@@ -1634,7 +1714,7 @@ describe('exec command setup', () => {
   it.each(['cursor', 'copilot', 'kiro', 'pi', 'deepseek-harness'] as const)(
     'should allow setup assistant provider change to %s without model input',
     async (provider) => {
-      mockReadInteractiveInput
+      mockReadMultilineInput
         .mockResolvedValueOnce('/setup')
         .mockResolvedValueOnce('/go Implement a small task')
         .mockResolvedValueOnce('/cancel');
@@ -1669,7 +1749,7 @@ describe('exec command setup', () => {
   ] as const)(
     'should omit model when $target provider changes without model input',
     async ({ target, selectQueue }) => {
-      mockReadInteractiveInput
+      mockReadMultilineInput
         .mockResolvedValueOnce('/setup')
         .mockResolvedValueOnce('/go Implement a small task')
         .mockResolvedValueOnce('/cancel');
@@ -1712,7 +1792,7 @@ describe('exec command setup', () => {
   );
 
   it('should reject setup opencode custom model without provider qualifier and keep the existing config', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('big-pickle')
       .mockResolvedValueOnce('/go Implement a small task')
@@ -1752,7 +1832,7 @@ describe('exec command setup', () => {
   ] as const)(
     'should reject blank setup assistant custom model for %s and keep the existing config',
     async (provider, modelInput) => {
-      mockReadInteractiveInput
+      mockReadMultilineInput
         .mockResolvedValueOnce('/setup')
         .mockResolvedValueOnce(modelInput)
         .mockResolvedValueOnce('/go Implement a small task')
@@ -1798,7 +1878,7 @@ describe('exec command setup', () => {
   ] as const)(
     'should reject blank setup $target custom model for $provider and keep the existing config',
     async ({ target, section, provider, modelInput }) => {
-      mockReadInteractiveInput
+      mockReadMultilineInput
         .mockResolvedValueOnce('/setup')
         .mockResolvedValueOnce(modelInput)
         .mockResolvedValueOnce('/go Implement a small task')
@@ -1841,7 +1921,7 @@ describe('exec command setup', () => {
   ] as const)(
     'should use explicit setup model input when $target provider changes to $provider',
     async ({ target, section, provider, model }) => {
-      mockReadInteractiveInput
+      mockReadMultilineInput
         .mockResolvedValueOnce('/setup')
         .mockResolvedValueOnce(model)
         .mockResolvedValueOnce('/go Implement a small task')
@@ -1873,7 +1953,7 @@ describe('exec command setup', () => {
   );
 
   it('should keep setup open across submenus until the main menu returns', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
@@ -1901,7 +1981,7 @@ describe('exec command setup', () => {
     const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
     expect(replan).not.toHaveProperty('provider');
     expect(execute.parallel[0]).not.toHaveProperty('model');
-    expect(mockReadInteractiveInput.mock.calls.map((call) => call[0])).toEqual([
+    expect(mockReadMultilineInput.mock.calls.map((call) => call[0])).toEqual([
       'Assistant> ',
       'Assistant> ',
       'Assistant> ',
@@ -1909,7 +1989,7 @@ describe('exec command setup', () => {
   });
 
   it('should use provider model menu candidates and custom model input from setup', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('custom-review-model')
       .mockResolvedValueOnce('/go Implement a small task')
@@ -1942,7 +2022,7 @@ describe('exec command setup', () => {
       ['__default_model__', 'opus', 'sonnet', 'haiku', '__custom_model__'],
       ['__default_model__', 'opus', 'sonnet', 'haiku', '__custom_model__'],
     ]);
-    expect(mockReadInteractiveInput.mock.calls[1]?.[0]).toBeTypeOf('string');
+    expect(mockReadMultilineInput.mock.calls[1]?.[0]).toBeTypeOf('string');
     const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
     const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
     const judge = workflow.steps.find((step: { name: string }) => step.name === 'review');
@@ -1957,7 +2037,7 @@ describe('exec command setup', () => {
   });
 
   it('should not save inherited models when model selection is canceled from setup', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/cancel');
     mockSelectOptionQueue(
@@ -2018,7 +2098,7 @@ describe('exec command setup', () => {
         },
       ],
     }, { projectDir, scope: 'project' });
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
@@ -2078,7 +2158,7 @@ describe('exec command setup', () => {
   });
 
   it('should apply worker and review effort changes from setup to generated workflow', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
@@ -2119,7 +2199,7 @@ describe('exec command setup', () => {
   });
 
   it('should route suffix setup commands through the exec slash command matcher', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('configure team /setup')
       .mockResolvedValueOnce('/cancel');
     mockSelectOptionQueue(
@@ -2137,7 +2217,7 @@ describe('exec command setup', () => {
   });
 
   it('should clear unsupported worker effort when setup changes provider', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/cancel');
     mockSelectOptionQueue(
@@ -2154,7 +2234,7 @@ describe('exec command setup', () => {
   });
 
   it('should keep exec assistant session when setup changes only worker settings', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('Clarify this task')
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/go')
@@ -2181,7 +2261,7 @@ describe('exec command setup', () => {
   });
 
   it('should reset exec assistant session when setup changes assistant provider', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('Clarify this task')
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/go')
@@ -2207,7 +2287,7 @@ describe('exec command setup', () => {
   });
 
   it('should not save last-used config after /go when setup was not changed', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
     mockCallAIWithRetry
@@ -2221,7 +2301,7 @@ describe('exec command setup', () => {
   });
 
   it('should display error and continue loop when workflow execution fails', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
     mockCallAIWithRetry.mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-1' });
@@ -2233,7 +2313,7 @@ describe('exec command setup', () => {
   });
 
   it('should display error and continue loop when assistant call fails during conversation', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('Clarify this task')
       .mockResolvedValueOnce('/cancel');
     mockCallAIWithRetry.mockResolvedValueOnce({ result: null, sessionId: undefined });
@@ -2242,7 +2322,7 @@ describe('exec command setup', () => {
   });
 
   it('should preserve exec assistant session and history when assistant call fails', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('Seed message')
       .mockResolvedValueOnce('Broken message')
       .mockResolvedValueOnce('Working message')
@@ -2275,7 +2355,7 @@ describe('exec command setup', () => {
   });
 
   it('should display error and continue loop when assistant call returns blocked status', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('Clarify this task')
       .mockResolvedValueOnce('/cancel');
     mockCallAIWithRetry.mockResolvedValueOnce({
@@ -2287,24 +2367,24 @@ describe('exec command setup', () => {
   });
 
   it('should summarize a completed workflow when review reports are missing', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
     mockCallAIWithRetry
       .mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-1' })
       .mockResolvedValueOnce({ result: { success: true, content: 'Execution completed' }, sessionId: 'session-1' });
-    mockLoadRunSessionContext.mockReturnValueOnce({
+    mockLoadRunSessionContext.mockReturnValueOnce(runSessionContext({
       task: 'Executable task',
       workflow: 'exec-test',
       status: 'completed',
       stepLogs: [],
       reports: [],
-    });
-    mockFormatRunSessionForPrompt.mockReturnValueOnce({
+    }));
+    mockFormatRunSessionForPrompt.mockReturnValueOnce(runSessionPrompt({
       runStatus: 'completed',
       runReports: '',
       runStepLogs: '',
-    });
+    }));
 
     await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
 
@@ -2314,7 +2394,7 @@ describe('exec command setup', () => {
   });
 
   it('should not create workflow or last-used config for empty /go with no conversation', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/go')
       .mockResolvedValueOnce('/cancel');
 
@@ -2326,7 +2406,7 @@ describe('exec command setup', () => {
   });
 
   it('should display error and continue menu when unsafe actor name is entered from setup', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('../worker')
       .mockResolvedValueOnce('/cancel');
@@ -2341,7 +2421,7 @@ describe('exec command setup', () => {
   });
 
   it('should display error and continue menu when reserved name is entered from setup', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('replan')
       .mockResolvedValueOnce('/cancel');
@@ -2356,7 +2436,7 @@ describe('exec command setup', () => {
   });
 
   it('should display error and continue menu when exec-assistant reserved name is entered from setup', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('exec-assistant')
       .mockResolvedValueOnce('/cancel');
@@ -2371,7 +2451,7 @@ describe('exec command setup', () => {
   });
 
   it('should apply review add and loop threshold setup branches to the generated workflow', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('5')
       .mockResolvedValueOnce('/go Implement a small task')
@@ -2388,12 +2468,12 @@ describe('exec command setup', () => {
     mockCallAIWithRetry
       .mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-1' })
       .mockResolvedValueOnce({ result: { success: true, content: 'Execution completed' }, sessionId: 'session-1' });
-    mockLoadRunSessionContext.mockReturnValueOnce({
+    mockLoadRunSessionContext.mockReturnValueOnce(runSessionContext({
       reports: [
         { filename: 'review-1-review-result.md', content: '# Review 1\n\napproved' },
         { filename: 'review-2-review-result.md', content: '# Review 2\n\napproved' },
       ],
-    });
+    }));
 
     await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
 
@@ -2404,7 +2484,7 @@ describe('exec command setup', () => {
   });
 
   it('should summarize available review reports when an expected report is missing from /go', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
@@ -2417,11 +2497,11 @@ describe('exec command setup', () => {
     mockCallAIWithRetry
       .mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-1' })
       .mockResolvedValueOnce({ result: { success: true, content: 'Execution completed' }, sessionId: 'session-1' });
-    mockLoadRunSessionContext.mockReturnValueOnce({
+    mockLoadRunSessionContext.mockReturnValueOnce(runSessionContext({
       reports: [
         { filename: 'review-1-review-result.md', content: '# Review 1\n\napproved' },
       ],
-    });
+    }));
 
     await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
 
@@ -2434,7 +2514,7 @@ describe('exec command setup', () => {
   });
 
   it('should include all review reports in the final exec assistant prompt', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
@@ -2453,12 +2533,12 @@ describe('exec command setup', () => {
         { filename: 'review-2-review-result.md', content: '# Review 2\n\napproved' },
       ],
     };
-    mockLoadRunSessionContext.mockReturnValueOnce(runContext);
-    mockFormatRunSessionForPrompt.mockReturnValueOnce({
+    mockLoadRunSessionContext.mockReturnValueOnce(runSessionContext(runContext));
+    mockFormatRunSessionForPrompt.mockReturnValueOnce(runSessionPrompt({
       runStatus: 'completed',
       runReports: '# Review 1\n\napproved\n\n# Review 2\n\napproved',
       runStepLogs: 'execute/review logs',
-    });
+    }));
 
     await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
 
@@ -2468,7 +2548,7 @@ describe('exec command setup', () => {
   });
 
   it('should reuse the lowest available actor name after deletion', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
@@ -2495,7 +2575,7 @@ describe('exec command setup', () => {
   });
 
   it('should keep actor list unchanged when delete selection returns null', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
@@ -2520,7 +2600,7 @@ describe('exec command setup', () => {
   });
 
   it('should apply replan clear and worker facet toggle branches to the generated workflow', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
@@ -2552,7 +2632,7 @@ describe('exec command setup', () => {
   });
 
   it('should apply worker review and replan policy setup branches to the generated workflow', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
@@ -2600,7 +2680,7 @@ describe('exec command setup', () => {
   });
 
   it('should apply multiple knowledge and policy selections to separate worker workflow fields', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
@@ -2651,7 +2731,7 @@ describe('exec command setup', () => {
       reviews: [{ ...DEFAULT_EXEC_CONFIG.reviews[0]!, knowledge: [knowledgeRef, knowledgeResourcePath, missingKnowledgeResourcePath], policy: [policyRef, policyResourcePath, missingPolicyResourcePath] }],
       replan: { ...DEFAULT_EXEC_CONFIG.replan, knowledge: [knowledgeRef, knowledgeResourcePath, missingKnowledgeResourcePath], policy: [policyRef, policyResourcePath, missingPolicyResourcePath] },
     }, { projectDir, scope: 'project' });
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
@@ -2711,7 +2791,7 @@ describe('exec command setup', () => {
         smallThreshold: 9,
       },
     }, { projectDir, scope: 'global' });
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
@@ -2733,7 +2813,7 @@ describe('exec command setup', () => {
   });
 
   it('should keep inherited effort from presets loaded in setup before generating workflow', async () => {
-    mockResolveWorkflowConfigValues.mockReturnValue({
+    setWorkflowConfigValues({
       enableBuiltinWorkflows: true,
       language: 'en',
       provider: 'claude',
@@ -2755,7 +2835,7 @@ describe('exec command setup', () => {
         },
       ],
     }, { projectDir, scope: 'project' });
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
@@ -2793,7 +2873,7 @@ describe('exec command setup', () => {
         smallThreshold: 8,
       },
     }, { projectDir, scope: 'project' });
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
@@ -2814,7 +2894,7 @@ describe('exec command setup', () => {
   });
 
   it('should save setup-loaded default config before canceling the exec session', async () => {
-    mockResolveWorkflowConfigValues.mockReturnValue({
+    setWorkflowConfigValues({
       enableBuiltinWorkflows: true,
       language: 'en',
       provider: 'codex',
@@ -2844,7 +2924,7 @@ describe('exec command setup', () => {
         },
       ],
     }, { globalConfigDir });
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/cancel');
     mockSelectOptionQueue(
@@ -2869,7 +2949,7 @@ describe('exec command setup', () => {
 
   it('should save approved AI edits for existing instruction facets', async () => {
     const editedContent = 'edited worker instruction';
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('Make the worker require tests')
       .mockResolvedValueOnce('/go Implement a small task')
@@ -2898,13 +2978,13 @@ describe('exec command setup', () => {
 
   it('should save Japanese AI edits for existing instruction facets', async () => {
     const editedContent = 'localized worker instruction';
-    mockResolveWorkflowConfigValues.mockReturnValue({
+    setWorkflowConfigValues({
       enableBuiltinWorkflows: true,
       language: 'ja',
       provider: 'claude',
       model: 'opus',
     });
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('ワーカーにテストを要求して')
       .mockResolvedValueOnce('/cancel');
@@ -2928,7 +3008,7 @@ describe('exec command setup', () => {
   });
 
   it('should exclude builtin instruction facets from select existing when builtin facets are disabled', async () => {
-    mockResolveWorkflowConfigValues.mockReturnValue({
+    setWorkflowConfigValues({
       enableBuiltinWorkflows: false,
       language: 'en',
       provider: 'claude',
@@ -2938,7 +3018,7 @@ describe('exec command setup', () => {
     mkdirSync(join(globalConfigDir, 'facets', 'instructions'), { recursive: true });
     writeFileSync(join(projectDir, '.takt', 'facets', 'instructions', 'project-instruction.md'), '# Project Instruction\n');
     writeFileSync(join(globalConfigDir, 'facets', 'instructions', 'user-instruction.md'), '# User Instruction\n');
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/cancel');
     mockSelectOptionQueue(
@@ -2961,7 +3041,7 @@ describe('exec command setup', () => {
   });
 
   it('should exclude builtin knowledge facets from toggle existing when builtin facets are disabled', async () => {
-    mockResolveWorkflowConfigValues.mockReturnValue({
+    setWorkflowConfigValues({
       enableBuiltinWorkflows: false,
       language: 'en',
       provider: 'claude',
@@ -2971,7 +3051,7 @@ describe('exec command setup', () => {
     mkdirSync(join(globalConfigDir, 'facets', 'knowledge'), { recursive: true });
     writeFileSync(join(projectDir, '.takt', 'facets', 'knowledge', 'project-knowledge.md'), '# Project Knowledge\n');
     writeFileSync(join(globalConfigDir, 'facets', 'knowledge', 'user-knowledge.md'), '# User Knowledge\n');
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/cancel');
     mockSelectOptionQueue(
@@ -2996,13 +3076,13 @@ describe('exec command setup', () => {
   });
 
   it('should preserve current knowledge when no facets can be selected', async () => {
-    mockResolveWorkflowConfigValues.mockReturnValue({
+    setWorkflowConfigValues({
       enableBuiltinWorkflows: false,
       language: 'en',
       provider: 'claude',
       model: 'opus',
     });
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
@@ -3028,13 +3108,13 @@ describe('exec command setup', () => {
   });
 
   it('should not read builtin facet content from setup when builtin facets are disabled', async () => {
-    mockResolveWorkflowConfigValues.mockReturnValue({
+    setWorkflowConfigValues({
       enableBuiltinWorkflows: false,
       language: 'en',
       provider: 'claude',
       model: 'opus',
     });
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/cancel');
     mockSelectOptionQueue(
@@ -3059,7 +3139,7 @@ describe('exec command setup', () => {
       mkdirSync(instructionDir, { recursive: true });
       writeFileSync(secretPath, '# Secret\n\nprivate content', 'utf-8');
       symlinkSync(secretPath, join(instructionDir, 'exec-worker.md'));
-      mockReadInteractiveInput
+      mockReadMultilineInput
         .mockResolvedValueOnce('/setup')
         .mockResolvedValueOnce('/cancel');
       mockSelectOptionQueue(
@@ -3084,7 +3164,7 @@ describe('exec command setup', () => {
     try {
       mkdirSync(join(projectDir, '.takt', 'facets'), { recursive: true });
       symlinkSync(externalDir, join(projectDir, '.takt', 'facets', 'instructions'));
-      mockReadInteractiveInput
+      mockReadMultilineInput
         .mockResolvedValueOnce('/setup')
         .mockResolvedValueOnce('/cancel');
       mockSelectOptionQueue(
@@ -3110,7 +3190,7 @@ describe('exec command setup', () => {
     try {
       mkdirSync(join(projectDir, '.takt'), { recursive: true });
       symlinkSync(externalDir, join(projectDir, '.takt', 'facets'));
-      mockReadInteractiveInput
+      mockReadMultilineInput
         .mockResolvedValueOnce('/setup')
         .mockResolvedValueOnce('Make the worker require tests')
         .mockResolvedValueOnce('/cancel');
@@ -3136,7 +3216,7 @@ describe('exec command setup', () => {
   });
 
   it('should save and delete project presets from setup', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('saved-team')
       .mockResolvedValueOnce('Saved team')
@@ -3163,12 +3243,12 @@ describe('exec command setup', () => {
   ] as const)(
     'should not save a project preset when the %s is cancelled',
     async (_caseName, promptInputs, presetName) => {
-      mockReadInteractiveInput
+      mockReadMultilineInput
         .mockResolvedValueOnce('/setup');
       for (const input of promptInputs) {
-        mockReadInteractiveInput.mockResolvedValueOnce(input);
+        mockReadMultilineInput.mockResolvedValueOnce(input);
       }
-      mockReadInteractiveInput.mockResolvedValueOnce('/cancel');
+      mockReadMultilineInput.mockResolvedValueOnce('/cancel');
       mockSelectOptionQueue(
         'preset',
         'save',
@@ -3185,7 +3265,7 @@ describe('exec command setup', () => {
   it('should delete a global preset from setup when a project preset has the same name', async () => {
     saveExecPreset('shared-team', 'Project shared team', DEFAULT_EXEC_CONFIG, { projectDir, scope: 'project' });
     saveExecPreset('shared-team', 'Global shared team', DEFAULT_EXEC_CONFIG, { projectDir, scope: 'global' });
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/cancel');
     mockSelectOptionQueue(
@@ -3203,7 +3283,7 @@ describe('exec command setup', () => {
   });
 
   it('should not persist or attach AI-generated facets when the user rejects them', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('generated-knowledge')
       .mockResolvedValueOnce('Create knowledge for local context')
@@ -3240,7 +3320,7 @@ describe('exec command setup', () => {
       mkdirSync(projectKnowledgeDir, { recursive: true });
       writeFileSync(externalPath, '# External\n\nunchanged', 'utf-8');
       symlinkSync(externalPath, join(projectKnowledgeDir, 'generated-knowledge.md'));
-      mockReadInteractiveInput
+      mockReadMultilineInput
         .mockResolvedValueOnce('/setup')
         .mockResolvedValueOnce('generated-knowledge')
         .mockResolvedValueOnce('Create knowledge for local context')
@@ -3268,7 +3348,7 @@ describe('exec command setup', () => {
   });
 
   it('should cancel AI facet generation before assistant call when consultation input is canceled', async () => {
-    mockReadInteractiveInput
+    mockReadMultilineInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('generated-knowledge')
       .mockResolvedValueOnce(null)

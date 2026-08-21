@@ -184,6 +184,22 @@ async function streamTextChunks(
   return isAborted(signal) ? 'aborted' : 'completed';
 }
 
+/**
+ * Writes the prompt a call received, for a test that needs to assert on what
+ * reached the provider.
+ *
+ * Deliberately separate from the call log, which is contractually free of
+ * prompt content: this one is written only when its own variable names a file,
+ * and nothing but a test sets it.
+ */
+function recordMockPrompt(personaName: string, prompt: string): void {
+  const logPath = process.env.TAKT_MOCK_PROMPT_LOG;
+  if (!logPath) {
+    return;
+  }
+  appendPrivateFile(logPath, `${JSON.stringify({ personaName, prompt })}\n`);
+}
+
 function applyScenarioFileWrites(entry: ScenarioEntry | undefined, cwd: string): void {
   for (const write of entry?.fileWrites ?? []) {
     const target = resolve(cwd, write.path);
@@ -215,6 +231,7 @@ export async function callMock(
     model: options.model,
     inputSessionId: options.sessionId,
   });
+  recordMockPrompt(personaName, prompt);
 
   // Apply deterministic abort gating or an artificial delay when requested.
   if (scenarioEntry?.waitForAbort === true || scenarioEntry?.delayMs) {

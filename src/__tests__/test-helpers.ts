@@ -24,13 +24,15 @@ export function makeRule(condition: string, next: string, extra: Partial<Workflo
 }
 
 export function makeStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
+  // `WorkflowStep` is a union of step shapes; spreading a partial over the base
+  // widens past every member, so the factory names the result it builds.
   return {
     name: 'test-step',
     personaDisplayName: 'tester',
     instruction: '',
     passPreviousResponse: false,
     ...overrides,
-  };
+  } as WorkflowStep;
 }
 
 export function makeInstructionContext(overrides: Partial<InstructionContext> = {}): InstructionContext {

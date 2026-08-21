@@ -23,8 +23,7 @@
 | `--auto-strategy <strategy>` | auto routing の strategy を上書き（`cost`\|`balanced`\|`performance`）。実行時に effective `auto_routing` を持つ現在の workflow または workflow_call child へ到達した場合に適用し、それ以外では warning を出して無視します。 |
 | `--model <name>` | エージェントモデルを上書き |
 | `-c, --continue` | 現在のプロジェクトディレクトリ・プロバイダの直近アシスタントセッションから継続 |
-| `--tui` | タスク会話を Ink ベースの TUI で行う（TTY が必要）。ワークフロー選択・モード選択・要約後のアクション選択は従来のセレクタのままで、会話だけを TUI が描画する。Enter で送信、Shift+Enter / Option+Enter で改行、Ctrl+K で行末まで削除 |
-| `--no-tui` | TUI ではなく従来の readline 会話を使う。どちらも指定しない場合、端末上では TUI が既定、非 TTY では従来経路 |
+| `--tui` | タスク会話を Ink ベースの TUI で行う（TTY が必要）。ワークフロー選択・モード選択・要約後のアクション選択は従来のセレクタのままで、会話だけを TUI が描画する。Enter で送信、Shift+Enter / Option+Enter で改行、Ctrl+K で行末まで削除、Esc で応答を中断（キューに残っている行はそのまま次のターンとして送信される）。応答中の Enter はキューに積まれ、完了後に送信される（中断前なら ↑ で取り消して編集）。タスク実行後もセッションは続き、/cancel で終了する |
 
 正式オプションは `--workflow` です。
 

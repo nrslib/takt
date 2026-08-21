@@ -21,6 +21,8 @@ export interface PromptInputProps {
   readonly hint: string;
   readonly completions: readonly SlashCompletion[];
   readonly completionIndex: number;
+  /** True once the terminal is handed to a selector: the box takes no more keys. */
+  readonly disabled: boolean;
 }
 
 function renderCaretRow(text: string, column: number): ReactElement {
@@ -47,6 +49,7 @@ export function PromptInput({
   hint,
   completions,
   completionIndex,
+  disabled,
 }: PromptInputProps): ReactElement {
   const layout = layoutPromptRows(text, cursor, contentWidth);
   const { start, end } = selectVisibleRowRange(
@@ -57,12 +60,17 @@ export function PromptInput({
 
   return (
     <Box flexDirection="column">
-      <Box borderStyle="round" borderColor="gray" paddingX={1} flexDirection="column">
+      <Box
+        borderStyle="round"
+        borderColor={disabled ? 'blackBright' : 'gray'}
+        paddingX={1}
+        flexDirection="column"
+      >
         {text === ''
           ? (
             <Box>
-              <Text color="cyan">{'❯ '}</Text>
-              <Text inverse>{' '}</Text>
+              <Text color={disabled ? 'gray' : 'cyan'}>{'❯ '}</Text>
+              {disabled ? null : <Text inverse>{' '}</Text>}
               <Text dimColor wrap="truncate-end">{placeholder}</Text>
             </Box>
           )
@@ -72,7 +80,7 @@ export function PromptInput({
               <Box key={index}>
                 {/* Only the very first row is marked; the rest align under it. */}
                 <Text color="cyan">{index === 0 ? '❯ ' : '  '}</Text>
-                {index === layout.cursorRow
+                {index === layout.cursorRow && !disabled
                   ? renderCaretRow(rowText, layout.cursorColumn)
                   : <Text wrap="truncate-end">{rowText}</Text>}
               </Box>

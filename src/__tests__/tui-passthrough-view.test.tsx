@@ -291,7 +291,7 @@ describe('PassthroughView', () => {
     await flushFrames();
 
     expect(store.listAttachments()).toEqual([]);
-    expect(existsSync(join(tmpRoot, 'takt', 'session-1'))).toBe(false);
+    expect(existsSync(join(tmpRoot, 'session-1'))).toBe(false);
     expect(readdirSync(tmpRoot)).toEqual([]);
 
     rmSync(tmpRoot, { recursive: true, force: true });

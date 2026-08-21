@@ -8,8 +8,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { mkdirSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   setupRawStdin,
@@ -95,7 +95,6 @@ import { info } from '../shared/ui/index.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockInfo = vi.mocked(info);
-const attachmentSessionDirs = new Set<string>();
 
 function createTmpDir(): string {
   const dir = join(tmpdir(), `takt-retry-cmd-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -107,15 +106,6 @@ function setupProvider(responses: string[]): MockProviderCapture {
   const { provider, capture } = createMockProvider(responses);
   mockGetProvider.mockReturnValue(provider);
   return capture;
-}
-
-function createOscImagePaste(): string {
-  const imageData = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
-  return `\x1B]1337;File=inline=1;name=reference.png;size=${imageData.length}:${imageData.toString('base64')}\x07`;
-}
-
-function trackAttachmentSession(tempPath: string): void {
-  attachmentSessionDirs.add(dirname(dirname(tempPath)));
 }
 
 function buildRetryContext(overrides?: Partial<RetryContext>): RetryContext {
@@ -158,10 +148,6 @@ describe('/retry slash command', () => {
   afterEach(() => {
     restoreStdin();
     rmSync(tmpDir, { recursive: true, force: true });
-    for (const sessionDir of attachmentSessionDirs) {
-      rmSync(sessionDir, { recursive: true, force: true });
-    }
-    attachmentSessionDirs.clear();
   });
 
   it('should route previous order content through action selection when /retry is used', async () => {
@@ -219,24 +205,6 @@ describe('/retry slash command', () => {
     expect(result.task).toBe(orderContent);
     const options = vi.mocked(selectOption).mock.calls[0]?.[1] as Array<{ value: string }>;
     expect(options.map((option) => option.value)).toEqual(['execute', 'continue']);
-  });
-
-  it('should preserve pasted image attachments from the retry conversation loop', async () => {
-    setupRawStdin([
-      `use ${createOscImagePaste()}\r`,
-      '/go\r',
-    ]);
-    setupProvider(['response', 'Retry using [Image #1].']);
-
-    const retryContext = buildRetryContext();
-    const result = await runTaskRetryMode(tmpDir, retryContext);
-
-    expect(result.action).toBe('execute');
-    expect(result.task).toBe('Retry using [Image #1].');
-    expect(result.attachments?.[0]?.fileName).toBe('image-1.png');
-    expect(result.attachments?.[0]?.tempPath).toBeDefined();
-    trackAttachmentSession(result.attachments![0]!.tempPath);
-    expect(existsSync(result.attachments![0]!.tempPath)).toBe(true);
   });
 
 });

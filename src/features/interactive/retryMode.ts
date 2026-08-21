@@ -30,6 +30,7 @@ import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
 import { resolveConfigValues } from '../../infra/config/index.js';
 import type { InstructModeResult, InstructUIText } from './instructModeTypes.js';
 import { attachImageAttachmentCleanup } from './imageAttachments.js';
+import { runTuiTaskConversation } from '../tui/runTuiTask.js';
 import {
   renderPullRequestContext,
   type PullRequestContext,
@@ -143,6 +144,14 @@ function createDirectRetrySelectAction(
     );
 }
 
+/**
+ * A terminal gets the Ink conversation; piped input keeps the readline loop that
+ * the non-interactive callers and the E2E suite depend on.
+ */
+function hasInteractiveTerminal(): boolean {
+  return process.stdin.isTTY === true && process.stdout.isTTY === true;
+}
+
 async function runRetryConversation(
   cwd: string,
   retryContext: RetryContext,
@@ -181,7 +190,13 @@ async function runRetryConversation(
     enableRetryCommand: true,
   };
 
-  const result = await runConversationLoop(cwd, ctx, strategy, retryContext.workflowContext, undefined);
+  const result = hasInteractiveTerminal()
+    ? await runTuiTaskConversation({
+      cwd,
+      plan: { ctx, strategy },
+      workflowContext: retryContext.workflowContext,
+    })
+    : await runConversationLoop(cwd, ctx, strategy, retryContext.workflowContext, undefined);
 
   if (result.action === 'cancel') {
     return attachImageAttachmentCleanup({

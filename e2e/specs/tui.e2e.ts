@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { resolve, dirname } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createIsolatedEnv, type IsolatedEnv } from '../helpers/isolated-env';
 import { createTestRepo, type TestRepo } from '../helpers/test-repo';
@@ -13,6 +14,7 @@ const WORKFLOW_PATH = resolve(__dirname, '../fixtures/workflows/mock-single-step
 const CTRL_C = '\x03';
 const ENTER = '\r';
 const ARROW_DOWN = '\x1b[B';
+const ARROW_UP = '\x1b[A';
 // CSI-u reports the kitty keyboard protocol turns on.
 const SHIFT_ENTER = '\x1b[13;2u';
 const OPTION_ENTER = '\x1b[13;3u';
@@ -25,10 +27,17 @@ const WORKFLOW_PROMPT = 'Select workflow';
 // which mark the default row; only the Ink conversation advertises these keys.
 const TUI_HINT = 'Shift+Enter: newline';
 const CLASSIC_SELECTOR_MARKER = '(default)';
-/** The readline conversation prompt, which the Ink one replaces with a box. */
-const CLASSIC_CONVERSATION_PROMPT = 'Interactive mode - describe your task';
 const ACTION_PROMPT = 'What would you like to do?';
 const THINKING_MARKER = 'Thinking';
+/** Only shown while lines are waiting for the current answer to finish. */
+const QUEUE_HINT = 'to edit the queued line';
+const ESC = '\x1b';
+const INTERRUPTED = 'Response interrupted.';
+/**
+ * What the finished run recorded about itself, which the session prints when it
+ * takes over again (the same banner the readline flow greets a session with).
+ */
+const RUN_FINISHED_NOTICE = 'Previous task completed successfully';
 
 // E2E更新時は docs/testing/e2e.md も更新すること
 describe('E2E: Ink TUI', () => {
@@ -36,13 +45,18 @@ describe('E2E: Ink TUI', () => {
   let testRepo: TestRepo;
   let session: TaktPtySession | undefined;
 
-  function start(scenario: string, args: string[]): TaktPtySession {
+  function start(
+    scenario: string,
+    args: string[],
+    env: Record<string, string> = {},
+  ): TaktPtySession {
     const started = startTaktPty({
       args,
       cwd: testRepo.path,
       env: {
         ...isolatedEnv.env,
         TAKT_MOCK_SCENARIO: resolve(__dirname, `../fixtures/scenarios/${scenario}`),
+        ...env,
       },
     });
     session = started;
@@ -107,23 +121,6 @@ describe('E2E: Ink TUI', () => {
     await expect(tui.waitForExit()).resolves.toBe(0);
   }, 180_000);
 
-  it('should fall back to the classic conversation with --no-tui and run it to completion', async () => {
-    const tui = start('tui-conversation.json', ['--no-tui', '--workflow', WORKFLOW_PATH]);
-
-    await tui.waitForOutput(CLASSIC_SELECTOR_MARKER);
-    expect(tui.output()).not.toContain(TUI_HINT);
-    expect(tui.output()).not.toContain('╭');
-
-    // Accept the highlighted mode, hold a turn, then leave through /cancel.
-    tui.write(ENTER);
-    await tui.waitForOutput(CLASSIC_CONVERSATION_PROMPT);
-    tui.write(`add a health check endpoint${ENTER}`);
-    await tui.waitForOutput('TUI-ASSISTANT-REPLY-OK');
-    tui.write(`/cancel${ENTER}`);
-
-    await expect(tui.waitForExit()).resolves.toBe(0);
-  }, 180_000);
-
   it('should offer every interactive mode and cancel out of the selector', async () => {
     const tui = start('tui-conversation.json', ['--workflow', WORKFLOW_PATH]);
 
@@ -173,7 +170,7 @@ describe('E2E: Ink TUI', () => {
     await expect(tui.waitForExit()).resolves.toBe(0);
   }, 180_000);
 
-  it('should hand the /go instruction to the action picker and then to the workflow run', async () => {
+  it('should run the /go instruction and come back to the same session', async () => {
     const tui = start('tui-go-handoff.json', ['--workflow', WORKFLOW_PATH]);
 
     await chooseHighlighted(tui, MODE_PROMPT);
@@ -183,9 +180,19 @@ describe('E2E: Ink TUI', () => {
 
     await submitLine(tui, '/go');
     await chooseHighlighted(tui, ACTION_PROMPT);
-
     await tui.waitForOutput('TUI-WORKFLOW-STEP-DONE', 180_000);
-    await expect(tui.waitForExit(180_000)).resolves.toBe(0);
+
+    // The run is over and the conversation is back, with what it did on record.
+    await tui.waitForOutput(RUN_FINISHED_NOTICE, 60_000);
+    const screen = (await tui.visibleScreen()).join('\n');
+    expect(screen).toContain('╰');
+    // The earlier turn stays in the scrollback exactly once.
+    const transcript = (await tui.visibleTranscript()).join('\n');
+    expect((transcript.match(/create noop\.txt/g) ?? []).length).toBe(1);
+
+    // Only leaving ends the process.
+    await submitLine(tui, '/cancel');
+    await expect(tui.waitForExit(60_000)).resolves.toBe(0);
   }, 240_000);
 
   it('should close Ink for the action selector and reopen it to continue editing', async () => {
@@ -216,6 +223,103 @@ describe('E2E: Ink TUI', () => {
     // The earlier turn stays in the scrollback exactly once.
     const transcript = (await tui.visibleTranscript()).join('\n');
     expect((transcript.match(/create noop\.txt/g) ?? []).length).toBe(1);
+
+    await submitLine(tui, '/cancel');
+    await expect(tui.waitForExit()).resolves.toBe(0);
+  }, 240_000);
+
+  it('should queue what is typed while the assistant answers and send it after', async () => {
+    const promptLog = join(testRepo.path, 'mock-prompts.jsonl');
+    const tui = start('tui-queue.json', ['--workflow', WORKFLOW_PATH], {
+      TAKT_MOCK_PROMPT_LOG: promptLog,
+    });
+
+    await chooseHighlighted(tui, MODE_PROMPT);
+    await tui.waitForOutput(TUI_HINT);
+    await submitLine(tui, 'first question');
+    await tui.waitForOutput(THINKING_MARKER);
+
+    // The box still takes input while the answer streams.
+    for (const line of ['queued one', 'queued two']) {
+      tui.write(line);
+      await tui.waitForOutput(`❯ ${line}`);
+      tui.write(ENTER);
+    }
+    // Waiting for the hint proves the lines were queued rather than sent.
+    await tui.waitForOutput(QUEUE_HINT);
+    const queuedScreen = await tui.visibleScreen();
+    expect(queuedScreen.join('\n'), 'the queued lines should sit above the prompt')
+      .toContain('queued two');
+
+    // Once the answer lands the queue drains on its own.
+    await tui.waitForOutput('QUEUE-SECOND-REPLY', 120_000);
+    const transcript = (await tui.visibleTranscript()).join('\n');
+    expect(transcript).toContain('❯ queued one');
+    expect(transcript).not.toContain(QUEUE_HINT);
+
+    // What the provider received: one turn per send, with the queued lines
+    // joined into a single message.
+    const prompts = readFileSync(promptLog, 'utf-8')
+      .split('\n')
+      .filter((line) => line.length > 0)
+      .map((line) => (JSON.parse(line) as { prompt: string }).prompt);
+    expect(prompts).toHaveLength(2);
+    expect(prompts[0]).toContain('first question');
+    expect(prompts[1]).toContain('queued one\nqueued two');
+
+    await submitLine(tui, '/cancel');
+    await expect(tui.waitForExit()).resolves.toBe(0);
+  }, 240_000);
+
+  it('should take a queued line back into the draft with the up arrow', async () => {
+    const tui = start('tui-queue.json', ['--workflow', WORKFLOW_PATH]);
+
+    await chooseHighlighted(tui, MODE_PROMPT);
+    await tui.waitForOutput(TUI_HINT);
+    await submitLine(tui, 'first question');
+    await tui.waitForOutput(THINKING_MARKER);
+
+    tui.write('queued line');
+    await tui.waitForOutput('❯ queued line');
+    tui.write(ENTER);
+    await tui.waitForOutput(QUEUE_HINT);
+
+    // Up with an empty draft takes the queued line back for editing.
+    tui.write(ARROW_UP);
+    await tui.waitForOutput('❯ queued line');
+    tui.write(' amended');
+    await tui.waitForOutput('queued line amended');
+
+    tui.write(CTRL_C);
+    await expect(tui.waitForExit()).resolves.toBe(0);
+  }, 240_000);
+
+  it('should interrupt a streaming answer with Esc and keep the session', async () => {
+    const tui = start('tui-queue.json', ['--workflow', WORKFLOW_PATH]);
+
+    await chooseHighlighted(tui, MODE_PROMPT);
+    await tui.waitForOutput(TUI_HINT);
+    await submitLine(tui, 'first question');
+    await tui.waitForOutput('QUEUE-FIRST-REPLY line 1');
+
+    // A line typed while the answer streams is queued, and interrupting sends
+    // it: stopping an answer does not hold back what was already submitted.
+    tui.write('after the interrupt');
+    await tui.waitForOutput('❯ after the interrupt');
+    tui.write(ENTER);
+    await tui.waitForOutput(QUEUE_HINT);
+
+    tui.write(ESC);
+    await tui.waitForOutput(INTERRUPTED);
+    await tui.waitForOutput('QUEUE-SECOND-REPLY', 60_000);
+
+    // The queued line was sent and answered, and the queue is empty again.
+    const transcript = (await tui.visibleTranscript()).join('\n');
+    expect(transcript).toContain('❯ after the interrupt');
+    expect(transcript).not.toContain(QUEUE_HINT);
+    const screen = (await tui.visibleScreen()).join('\n');
+    expect(screen).not.toContain(THINKING_MARKER);
+    expect(screen).toContain('╭');
 
     await submitLine(tui, '/cancel');
     await expect(tui.waitForExit()).resolves.toBe(0);
@@ -332,6 +436,87 @@ describe('E2E: Ink TUI', () => {
     tui.write(CTRL_C);
     await expect(tui.waitForExit()).resolves.toBe(0);
   }, 180_000);
+
+  it('should open the instruct conversation from takt list and replay the previous order', async () => {
+    // A finished task whose worktree still holds the order its run wrote. That
+    // order is what `/replay` resubmits, so the conversation must offer it.
+    const orderDir = join(testRepo.path, '.takt', 'runs', 'e2e-instruct-run', 'context', 'task');
+    mkdirSync(orderDir, { recursive: true });
+    writeFileSync(join(orderDir, 'order.md'), 'Add a line to README.md\n', 'utf-8');
+    const now = new Date().toISOString();
+    writeFileSync(
+      join(testRepo.path, '.takt', 'tasks.yaml'),
+      [
+        'tasks:',
+        '  - name: e2e-instruct',
+        '    status: completed',
+        '    content: "E2E instruct task"',
+        `    workflow: "${WORKFLOW_PATH}"`,
+        '    branch: "takt/e2e-instruct"',
+        `    worktree_path: "${testRepo.path}"`,
+        `    created_at: "${now}"`,
+        `    started_at: "${now}"`,
+        `    completed_at: "${now}"`,
+        '',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const tui = start('tui-instruct.json', ['list']);
+
+    // The list and the action menu are the ordinary selectors.
+    await chooseHighlighted(tui, 'List Tasks');
+    await tui.waitForOutput('Action for takt/e2e-instruct', 60_000);
+    tui.write(ARROW_DOWN);
+    await tui.waitForOutput('❯ Instruct');
+    tui.write(ENTER);
+    // Reusing the workflow the task already names keeps the run selector away.
+    await chooseHighlighted(tui, 'Use previous workflow');
+
+    // The conversation itself is the Ink one, and it knows about the order.
+    await tui.waitForOutput(TUI_HINT, 60_000);
+    await tui.waitForOutput('Instruct mode - describe');
+    const screen = (await tui.visibleScreen()).join('\n');
+    expect(screen).toContain('╰');
+    expect(screen, 'the intro should advertise /replay').toContain('/replay');
+
+    // `/replay` resubmits the order without asking anything, which starts the run.
+    await submitLine(tui, '/replay');
+    await tui.waitForOutput('E2E-REPLAY-STEP-DONE', 180_000);
+    await tui.waitForOutput('Task "e2e-instruct" completed', 60_000);
+
+    // `takt list` comes back to its own menu, which Esc leaves.
+    await tui.waitForOutput('List Tasks', 60_000);
+    tui.write(ESC);
+    await expect(tui.waitForExit(60_000)).resolves.toBe(0);
+  }, 300_000);
+
+  it('should hold the exec conversation in the TUI and open setup on the bare terminal', async () => {
+    const tui = startTaktPty({
+      args: ['exec', 'backend'],
+      cwd: testRepo.path,
+      env: {
+        ...isolatedEnv.env,
+        TAKT_MOCK_SCENARIO: resolve(__dirname, '../fixtures/scenarios/exec-tui.json'),
+      },
+    });
+    session = tui;
+
+    // The conversation itself is the Ink one.
+    await tui.waitForOutput(TUI_HINT);
+    await submitLine(tui, 'describe the task');
+    await tui.waitForOutput('EXEC-TUI-REPLY', 60_000);
+
+    // `/setup` hands the terminal to the readline menu, with Ink gone.
+    await submitLine(tui, '/setup');
+    await tui.waitForOutput('(↑↓ to move, Enter to select)', 60_000);
+    const duringMenu = (await tui.visibleScreen()).join('\n');
+    expect(duringMenu).not.toContain('╰');
+
+    // Leaving the menu brings the conversation back.
+    tui.write(CTRL_C);
+    await expect(tui.waitForExit(60_000)).resolves.toBe(130);
+  }, 240_000);
 
   it('should fail fast when --tui is forced without a TTY', () => {
     const result = runTakt({

@@ -12,6 +12,7 @@ import type { TaskHistorySummaryItem } from '../features/interactive/interactive
 import type { ConversationViewProps } from '../features/tui/ConversationView.js';
 import type { PassthroughViewProps } from '../features/tui/PassthroughView.js';
 import type { RunTuiOptions } from '../features/tui/runTui.js';
+import type { SessionState } from '../infra/config/project/sessionState.js';
 import type { ImageAttachmentStore } from '../features/interactive/imageAttachments.js';
 
 const {
@@ -24,6 +25,7 @@ const {
   mockDisplayAndClearSessionState,
   mockGetWorkflowDescription,
   mockLoadPersonaSessions,
+  mockTakeSessionState,
   mockWatchProcessExit,
   mockReleaseProcessExit,
   storeOverride,
@@ -37,13 +39,14 @@ const {
   mockDisplayAndClearSessionState: vi.fn(),
   mockGetWorkflowDescription: vi.fn(),
   mockLoadPersonaSessions: vi.fn(),
+  mockTakeSessionState: vi.fn(),
   mockWatchProcessExit: vi.fn(),
   mockReleaseProcessExit: vi.fn(),
   /** Lets one test hand runTui a real store in a temp directory. */
-  storeOverride: { current: undefined as (() => unknown) | undefined },
+  storeOverride: { current: undefined as ((cwd: string) => unknown) | undefined },
 }));
 
-const mockCreateStore = (...args: unknown[]): unknown => storeOverride.current?.(...args);
+const mockCreateStore = (cwd: string): unknown => storeOverride.current?.(cwd);
 
 vi.mock('ink', () => ({
   render: (...args: unknown[]) => mockRender(...args),
@@ -93,8 +96,8 @@ vi.mock('../features/interactive/imageAttachments.js', async (importOriginal) =>
         release();
       };
     },
-    createSessionImageAttachmentStore: (...args: unknown[]) =>
-      mockCreateStore?.(...args) ?? actual.createSessionImageAttachmentStore(),
+    createSessionImageAttachmentStore: (cwd: string) =>
+      mockCreateStore(cwd) ?? actual.createSessionImageAttachmentStore(cwd),
   };
 });
 
@@ -102,6 +105,7 @@ vi.mock('../infra/config/index.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../infra/config/index.js')>()),
   getWorkflowDescription: (...args: unknown[]) => mockGetWorkflowDescription(...args),
   loadPersonaSessions: (...args: unknown[]) => mockLoadPersonaSessions(...args),
+  takeSessionState: (...args: unknown[]) => mockTakeSessionState(...args),
 }));
 
 import { runTui } from '../features/tui/runTui.js';
@@ -214,6 +218,7 @@ beforeEach(() => {
   mockSelectRecentSession.mockResolvedValue(null);
   mockSelectAction.mockResolvedValue('execute');
   mockLoadPersonaSessions.mockReturnValue({});
+  mockTakeSessionState.mockReturnValue(null);
   mockGetWorkflowDescription.mockReturnValue({
     name: 'default',
     description: 'default workflow',
@@ -238,7 +243,7 @@ describe('runTui', () => {
     expect(mockDisplayAndClearSessionState).toHaveBeenCalledWith('/repo', 'en');
     expect(tree.mounts.count).toBe(1);
 
-    tree.conversationProps().onExit({ kind: 'result', result: { action: 'execute', task: 'do it' } }, []);
+    tree.conversationProps().onExit({ kind: 'result', result: { action: 'execute', task: 'do it' } }, { history: [], queue: [] });
     await expect(run).resolves.toEqual({
       kind: 'selected',
       workflowId: 'default',
@@ -254,7 +259,7 @@ describe('runTui', () => {
     await waitForMount(tree, 1);
 
     expect(mockDetermineWorkflow).toHaveBeenCalledWith('/repo', 'review');
-    tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, []);
+    tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
     await expect(run).resolves.toMatchObject({ workflowId: 'review' });
   });
 
@@ -287,7 +292,7 @@ describe('runTui', () => {
       ['assistant', 'grill-me', 'persona', 'quiet'],
     );
 
-    tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, []);
+    tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
     await run;
   });
 
@@ -321,7 +326,7 @@ describe('runTui', () => {
       const run = startRun();
       await waitForMount(tree, 1);
 
-      tree.conversationProps().onExit({ kind: 'choose_action', task: 'ship it' }, ['ship it']);
+      tree.conversationProps().onExit({ kind: 'choose_action', task: 'ship it' }, { history: ['ship it'], queue: [] });
 
       await expect(run).resolves.toEqual({
         kind: 'selected',
@@ -339,11 +344,11 @@ describe('runTui', () => {
       const run = startRun();
       await waitForMount(tree, 1);
 
-      tree.conversationProps().onExit({ kind: 'choose_action', task: 'ship it' }, ['ship it']);
+      tree.conversationProps().onExit({ kind: 'choose_action', task: 'ship it' }, { history: ['ship it'], queue: [] });
       await waitForMount(tree, 2);
 
       expect(tree.mounts.count).toBe(2);
-      tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, []);
+      tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
       await run;
     });
 
@@ -355,7 +360,7 @@ describe('runTui', () => {
 
       const first = tree.conversationProps();
       expect(first.initialEntries.length).toBeGreaterThan(0);
-      first.onExit({ kind: 'choose_action', task: 'ship it' }, ['ship it']);
+      first.onExit({ kind: 'choose_action', task: 'ship it' }, { history: ['ship it'], queue: [] });
       await waitForMount(tree, 2);
 
       expect(tree.mounts.count).toBe(2);
@@ -367,7 +372,7 @@ describe('runTui', () => {
       // The same session object carries the conversation across the remount.
       expect(second.conversation).toBe(first.conversation);
 
-      second.onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, []);
+      second.onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
       await run;
     });
 
@@ -379,7 +384,7 @@ describe('runTui', () => {
       const run = startRun();
       await waitForMount(tree, 1);
 
-      tree.conversationProps().onExit({ kind: 'resume_session' }, ['/resume']);
+      tree.conversationProps().onExit({ kind: 'resume_session' }, { history: ['/resume'], queue: [] });
       await waitForMount(tree, 2);
 
       expect(mockSelectRecentSession).toHaveBeenCalledWith('/repo', 'en');
@@ -387,7 +392,7 @@ describe('runTui', () => {
       expect(tree.mounts.count).toBe(2);
       expect(tree.conversationProps().initialHistory).toEqual(['/resume']);
 
-      tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, []);
+      tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
       await run;
     });
 
@@ -399,13 +404,13 @@ describe('runTui', () => {
       const run = startRun();
       await waitForMount(tree, 1);
 
-      tree.conversationProps().onExit({ kind: 'resume_session' }, []);
+      tree.conversationProps().onExit({ kind: 'resume_session' }, { history: [], queue: [] });
       await waitForMount(tree, 2);
 
       expect(conversation.resumeSession).not.toHaveBeenCalled();
       expect(tree.mounts.count).toBe(2);
 
-      tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, []);
+      tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
       await run;
     });
   });
@@ -421,7 +426,7 @@ describe('runTui', () => {
       expect(mockWatchProcessExit).toHaveBeenCalledTimes(1);
       expect(mockReleaseProcessExit).not.toHaveBeenCalled();
 
-      tree.conversationProps().onExit({ kind: 'result', result: { action: 'execute', task: 'go' } }, []);
+      tree.conversationProps().onExit({ kind: 'result', result: { action: 'execute', task: 'go' } }, { history: [], queue: [] });
       await run;
 
       // The caller owns the files now and cleans them up after the task ran.
@@ -446,7 +451,7 @@ describe('runTui', () => {
       await waitForMount(tree, 1);
       tree.conversationProps().onExit(
         { kind: 'result', result: { action: 'execute', task: 'go' } },
-        [],
+        { history: [], queue: [] },
       );
       const finished = await run;
 
@@ -463,6 +468,10 @@ describe('runTui', () => {
       if (finished.kind !== 'selected') {
         throw new Error('expected the run to hand a result back');
       }
+      // The pasted image travels with the result: the caller passes it to the
+      // task it starts, so losing it here would silently drop the attachment.
+      expect(finished.result.attachments).toEqual([attachment]);
+
       finished.result.cleanupAttachments?.();
       finished.result.cleanupAttachments?.();
       expect(mockReleaseProcessExit).toHaveBeenCalledTimes(1);
@@ -483,6 +492,90 @@ describe('runTui', () => {
     });
   });
 
+  describe('resident session', () => {
+    it('should run the decision and come back to the same conversation', async () => {
+      const tree = scriptRender();
+      const dispatch = vi.fn().mockResolvedValue(undefined);
+      const conversation = { resumeSession: vi.fn(), commandAvailability: {} };
+      mockCreateTuiConversation.mockReturnValue(conversation);
+      const run = startRun({ dispatch });
+      await waitForMount(tree, 1);
+
+      const first = tree.conversationProps();
+      first.onExit({ kind: 'result', result: { action: 'execute', task: 'ship it' } }, { history: ['ship it'], queue: [] });
+      await waitForMount(tree, 2);
+
+      expect(dispatch).toHaveBeenCalledExactlyOnceWith(
+        'default',
+        expect.objectContaining({ action: 'execute', task: 'ship it' }),
+      );
+      const second = tree.conversationProps();
+      // The same session, and the run's own result written into the transcript.
+      expect(second.conversation).toBe(first.conversation);
+      expect(second.initialEntries.map((entry) => entry.content))
+        .toContain('The workflow run finished. Describe the next task, or /cancel to leave.');
+      expect(second.initialHistory).toEqual(['ship it']);
+
+      second.onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
+      await expect(run).resolves.toMatchObject({ result: { action: 'cancel' } });
+    });
+
+    it('should report what the finished run recorded about itself', async () => {
+      const tree = scriptRender();
+      // The shape the run actually writes (SessionState), so the greeting is
+      // built from the same fields a real run leaves behind.
+      const sessionState: SessionState = {
+        status: 'success',
+        workflowName: 'review',
+        taskContent: 'ship it',
+        timestamp: '2026-01-02T03:04:05.000Z',
+      };
+      mockTakeSessionState.mockReturnValue(sessionState);
+      const run = startRun({ dispatch: vi.fn().mockResolvedValue(undefined) });
+      await waitForMount(tree, 1);
+
+      tree.conversationProps()
+        .onExit({ kind: 'result', result: { action: 'save_task', task: 'ship it' } }, { history: [], queue: [] });
+      await waitForMount(tree, 2);
+
+      const notice = tree.conversationProps().initialEntries.map((entry) => entry.content).join('\n');
+      expect(notice).toContain('review');
+      // The status and the time it finished are what the banner reports.
+      expect(notice).toContain('completed successfully');
+      expect(notice).toContain(new Date(sessionState.timestamp).toLocaleString('en-US'));
+
+      tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
+      await run;
+    });
+
+    it('should end the run on cancel without dispatching anything', async () => {
+      const tree = scriptRender();
+      const dispatch = vi.fn().mockResolvedValue(undefined);
+      const run = startRun({ dispatch });
+      await waitForMount(tree, 1);
+
+      tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
+
+      await expect(run).resolves.toMatchObject({
+        kind: 'selected',
+        result: { action: 'cancel', task: '' },
+      });
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(tree.mounts.count).toBe(1);
+    });
+
+    it('should hand the result straight back when no dispatcher was given', async () => {
+      const tree = scriptRender();
+      const run = startRun();
+      await waitForMount(tree, 1);
+
+      tree.conversationProps().onExit({ kind: 'result', result: { action: 'execute', task: 'go' } }, { history: [], queue: [] });
+
+      await expect(run).resolves.toMatchObject({ result: { action: 'execute', task: 'go' } });
+      expect(tree.mounts.count).toBe(1);
+    });
+  });
+
   describe('mode setup', () => {
     it('should mark quiet mode for auto-submit only when the run was seeded', async () => {
       const tree = scriptRender();
@@ -491,13 +584,13 @@ describe('runTui', () => {
       const seeded = startRun({ userMessage: 'ship the login page' });
       await waitForMount(tree, 1);
       expect(tree.conversationProps().autoSubmit).toBe(true);
-      tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, []);
+      tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
       await seeded;
 
       const bare = startRun();
       await waitForMount(tree, 2);
       expect(tree.conversationProps().autoSubmit).toBe(false);
-      tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, []);
+      tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
       await bare;
     });
 
@@ -508,7 +601,7 @@ describe('runTui', () => {
       await waitForMount(tree, 1);
       expect(tree.conversationProps().initialEntries.map((entry) => entry.content))
         .toContain('Resuming previous session');
-      tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, []);
+      tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
       await resumed;
 
       mockLoadPersonaSessions.mockReturnValue({});
@@ -516,7 +609,7 @@ describe('runTui', () => {
       await waitForMount(tree, 2);
       expect(tree.conversationProps().initialEntries.map((entry) => entry.content))
         .toContain('No previous assistant session found. Starting a new session.');
-      tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, []);
+      tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
       await fresh;
     });
 
@@ -529,7 +622,7 @@ describe('runTui', () => {
       expect(contents).not.toContain('Resuming previous session');
       expect(contents).not.toContain('No previous assistant session found. Starting a new session.');
 
-      tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, []);
+      tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
       await run;
     });
 
@@ -562,7 +655,12 @@ describe('runTui', () => {
       readonly render?: Error;
       readonly unmount?: Error;
       readonly waitUntilExit?: Error;
-    }): { exit(): void; readonly unmount: ReturnType<typeof vi.fn> } {
+    }): {
+      waitForMount(): Promise<void>;
+      exit(): void;
+      fail(error: Error): void;
+      readonly unmount: ReturnType<typeof vi.fn>;
+    } {
       let rendered: ConversationViewProps | undefined;
       let resolveExit!: () => void;
       // Stays pending until the tree is unmounted, so the mount does not read as
@@ -611,8 +709,8 @@ describe('runTui', () => {
           throw new Error('the run never mounted');
         },
         exit: () => requireRendered()
-          .onExit({ kind: 'result', result: { action: 'execute', task: 'go' } }, []),
-        fail: (error: Error) => requireRendered().onExit({ kind: 'failed', error }, []),
+          .onExit({ kind: 'result', result: { action: 'execute', task: 'go' } }, { history: [], queue: [] }),
+        fail: (error: Error) => requireRendered().onExit({ kind: 'failed', error }, { history: [], queue: [] }),
       };
     }
 
@@ -662,7 +760,7 @@ describe('runTui', () => {
       const run = startRun();
       await waitForMount(tree, 1);
 
-      tree.conversationProps().onExit({ kind: 'failed', error: failure }, []);
+      tree.conversationProps().onExit({ kind: 'failed', error: failure }, { history: [], queue: [] });
 
       await expect(run).rejects.toBe(failure);
       expect(tree.unmount).toHaveBeenCalled();
