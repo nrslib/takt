@@ -95,6 +95,25 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - `takt --task 'Create a file called noop.txt' --workflow e2e/fixtures/workflows/mock-single-step.yaml --provider mock` を実行する。
     - `TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/execute-done.json` を設定する。
     - 出力に `Workflow completed` が含まれることを確認する。
+- Ink TUI（`e2e/specs/tui.e2e.ts`）
+  - 目的: 実 PTY 上で TUI が既定起動し、既存 readline セレクタ（ワークフロー選択・モード選択・`/go` 後のアクション選択）と Ink 会話の往復、Ctrl+C、前提条件違反が期待どおり動作することを確認。
+  - LLM: 呼び出さない（`--provider mock` 固定）
+  - 備考: PTY が必要なため `e2e/helpers/takt-pty-runner.ts`（node-pty）を使う。固定 sleep は使わず、出力ポーリングで同期する。
+  - 備考: 生の出力は消去済みフレームも含むため、画面に実際に残る内容は `@xterm/headless` に食わせた `visibleTranscript()` / `visibleScreen()` で検証する。
+  - 手順（ユーザー行動/コマンド）:
+    - PTY 上でフラグなしに `takt --workflow e2e/fixtures/workflows/mock-single-step.yaml` を起動し、モード選択が従来の readline セレクタ（`(default)` 表記）で出たあと、会話だけが Ink（枠付き入力ボックス）になることを確認する。
+    - `--no-tui` を付けて起動し、会話も従来の readline のままになる（Ink の枠が出ない）ことを確認する。
+    - モード選択に Assistant / Grill Me / Persona / Quiet / Passthrough が表示され、Cancel 行を選ぶと Ink を起動せず exit 0 になることを確認する。
+    - `--workflow` を省略して起動し、従来のカテゴリ付きワークフローセレクタでカテゴリ → ワークフローと選べること、セレクタ上の Ctrl+C は従来どおり exit 130 になることを確認する。
+    - `TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/tui-conversation.json` でメッセージ送信 → 応答表示、ストリーミング中はマーカー `●` が出ず確定後に1回だけ出ること、`/cancel` で exit 0 を確認する。
+    - `TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/tui-go-handoff.json` で `/go` → アクション選択（Execute now）→ ワークフロー実行 → exit 0 を確認する。
+    - 同シナリオで `/go` の後にアクション選択で「Continue editing」を選び、Ink がいったん閉じて（画面に入力ボックスの枠が残らない）選択後に再マウントされること、過去の会話がスクロールバックに二重表示されないことを確認する。
+    - `TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/tui-abort.json`（`wait_for_abort`）で送信中の Ctrl+C により応答を待たず exit 0 になることを確認する。
+    - `TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/tui-slow-stream.json`（`text_chunks` で遅延ストリーミング）で、visible transcript の確定会話より上にスピナー行・プロンプト残骸が 0 行であること、`●` マーカー行と入力ボックスが各1つで、ボックスが最下部にあることを確認する。
+    - 会話1往復後、visible screen の最下部に入力ボックスが張り付いていることを確認する。
+    - Shift+Enter（`ESC[13;2u`）と Option+Enter（`ESC[13;3u`）が改行になり送信されないことを確認する。
+    - 端末幅を超える長文を入力し、末尾が画面に残る（折り返される）こと・入力ボックスが縦に伸びて最下部に張り付いたままであることを確認する。
+    - PTY なし（`runTakt`）で `--tui` を実行し、exit 1 と `--tui requires an interactive terminal` を確認する。
 - Exec mode（`e2e/specs/exec.e2e.ts`）
   - 目的: `takt exec` がプリセット一覧、前回設定の自動利用、`/setup`、`/go` から生成 workflow 実行まで動作することを確認。
   - LLM: 呼び出さない（mock provider / `TAKT_MOCK_SCENARIO` 固定）

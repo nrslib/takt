@@ -248,3 +248,26 @@ issue:
     none: "なし"
     custom: "入力（カスタム）"
     customPrompt: "ラベル名を入力"
+
+# ===== Ink TUI =====
+tui:
+  ui:
+    thinking: "考え中..."
+    hint: "Enter: 送信  Shift+Enter: 改行  Tab: 補完  ↑↓: 行移動/履歴  Ctrl+C: 中止"
+    placeholder: "タスクを入力、/ でコマンド"
+    queuedHint: "↑ でキューを編集"
+    queuedMore: "他 {count} 件をキュー中"
+    model: "モデル: {value}"
+    passthroughHint: "Enter: そのまま実行  Shift+Enter: 改行  Ctrl+C: 中止"
+  errors:
+    requiresTty: "--tui は対話端末 (TTY) が必要です。TTY 上で takt を実行するか --tui を外してください。"
+    exitedEarly: "タスク会話が完了する前に TUI が終了しました。"
+    providerNotConfigured: "プロバイダが設定されていません。~/.takt/config.yaml で設定するか --provider を指定してください。"
+    workflowNotFound: "ワークフローが見つかりません: {workflow}"
+    messageRequired: "メッセージを入力してください。"
+    taskTextRequired: "タスク本文が必要です。"
+    emptyAiResponse: "アシスタントからの応答がありませんでした。"
+    noConversation: "まだ会話がありません。先にタスクを説明してください。"
+    instructionFailed: "タスク指示書の作成に失敗しました。"
+    unsupportedCommand: "このコマンドは TUI では利用できません。"
+    imagePasteFailed: "画像を貼り付けられませんでした。"

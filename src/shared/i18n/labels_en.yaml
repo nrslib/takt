@@ -248,3 +248,26 @@ issue:
     none: "None"
     custom: "Custom input"
     customPrompt: "Enter label name"
+
+# ===== Ink TUI =====
+tui:
+  ui:
+    thinking: "Thinking..."
+    hint: "Enter: send  Shift+Enter: newline  Tab: complete  ↑↓: move/history  Ctrl+C: cancel"
+    placeholder: "Type a task, / for commands"
+    queuedHint: "↑ to edit the queued line"
+    queuedMore: "+{count} more queued"
+    model: "Model: {value}"
+    passthroughHint: "Enter: run as-is  Shift+Enter: newline  Ctrl+C: cancel"
+  errors:
+    requiresTty: "--tui requires an interactive terminal. Run takt from a TTY or drop --tui."
+    exitedEarly: "The TUI exited before the task conversation finished."
+    providerNotConfigured: "No provider is configured. Set one in ~/.takt/config.yaml or pass --provider."
+    workflowNotFound: "Workflow not found: {workflow}"
+    messageRequired: "Type a message first."
+    taskTextRequired: "Task text is required."
+    emptyAiResponse: "The assistant returned no response."
+    noConversation: "No conversation yet. Describe your task first."
+    instructionFailed: "Failed to create the task instruction."
+    unsupportedCommand: "That command is not available in the TUI."
+    imagePasteFailed: "The image could not be pasted."

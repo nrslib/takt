@@ -383,6 +383,33 @@ describe('exec command setup', () => {
     expect(existsSync(sessionDir)).toBe(false);
   });
 
+  it('should leave nothing behind when a paste lands after exec ended', async () => {
+    // The line editor can resolve the input before a capture it started
+    // finishes, so the save runs once the store is already gone.
+    let store: ImageAttachmentStore | undefined;
+    let sessionDir: string | undefined;
+    mockReadInteractiveInput.mockImplementationOnce(async (_prompt, _lang, _availability, imageAttachmentStore) => {
+      store = requireImageAttachmentStore(imageAttachmentStore);
+      const attachment = await store.saveImage(Buffer.from('late-image'), 'image/png');
+      sessionDir = dirname(dirname(attachment.tempPath));
+      return '/cancel';
+    });
+
+    await expect(runExecCommand(projectDir, {})).resolves.toBeUndefined();
+
+    if (store === undefined || sessionDir === undefined) {
+      throw new Error('Expected the test to create an exec image attachment session directory.');
+    }
+    expect(existsSync(sessionDir)).toBe(false);
+
+    // The late save is refused, so the deleted directory is not recreated and
+    // no new attachment joins the list the run already closed over.
+    const savedBefore = store.listAttachments().length;
+    await expect(store.saveImage(Buffer.from('after-exit'), 'image/png')).rejects.toThrow();
+    expect(existsSync(sessionDir)).toBe(false);
+    expect(store.listAttachments()).toHaveLength(savedBefore);
+  });
+
   it('should keep exec cancellation flow when image attachment cleanup fails', async () => {
     let sessionDir: string | undefined;
     mockReadInteractiveInput.mockImplementationOnce(async (_prompt, _lang, _availability, imageAttachmentStore) => {

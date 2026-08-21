@@ -1,4 +1,5 @@
 import { SlashCommand } from '../../shared/constants.js';
+import { getLabel } from '../../shared/i18n/index.js';
 import { matchSlashCommand } from './commandMatcher.js';
 import { prependInitialPromptContext } from './promptSections.js';
 import {
@@ -8,11 +9,16 @@ import {
 import { callAIWithRetry, type SessionContext } from './aiCaller.js';
 import type { WorkflowContext } from './interactive-summary-types.js';
 import type { InteractiveMetadata } from '../tasks/execute/types.js';
+import type { PermissionMode } from '../../core/models/index.js';
+import type { ImageAttachmentReference } from '../../shared/types/image-attachments.js';
+import type { StreamCallback } from '../../shared/types/provider.js';
 import { shouldUseGherkinTaskInstructions } from './taskInstructionFormat.js';
 
 export interface ConversationSessionStrategy {
   systemPrompt: string;
   allowedTools: string[];
+  /** Constraint the provider must enforce for this mode (Grill Me is read-only). */
+  permissionMode?: PermissionMode;
   transformPrompt: (message: string, sourceContext?: string) => string;
   summaryPromptContext?: string;
   initialPromptContext?: string;
@@ -25,7 +31,32 @@ export interface ConversationSessionOptions {
   strategy: ConversationSessionStrategy;
   workflowContext?: WorkflowContext;
   sourceContext?: string;
+  /** Task text seeded from outside the conversation; enters the history without an AI call. */
+  initialUserMessage?: string;
+  /**
+   * Summarize a continued provider session that has no local transcript yet.
+   * Off by default: without it a `/go` with nothing to summarize reports that
+   * there is no conversation, which is what the ACP adapter relies on.
+   */
+  summarizeResumedSession?: boolean;
+  /** Stream observer for front-ends that render the response themselves (`outputMode: 'silent'`). */
+  onStream?: StreamCallback;
+  /** Resolves the image placeholders a prompt references into provider attachments. */
+  resolveImageAttachments?: (prompt: string) => ImageAttachmentReference[];
 }
+
+/**
+ * Machine-readable cause so front-ends can localize the failure.
+ * `provider_error` carries the provider's own text in `message`.
+ */
+export type ConversationSessionErrorCode =
+  | 'message_required'
+  | 'task_text_required'
+  | 'empty_ai_response'
+  | 'no_conversation'
+  | 'instruction_failed'
+  | 'unsupported_command'
+  | 'provider_error';
 
 export type ConversationSessionResult =
   | {
@@ -42,12 +73,25 @@ export type ConversationSessionResult =
     }
   | {
       kind: 'error';
+      /** Absent when a producer only has human-readable text to offer. */
+      code?: ConversationSessionErrorCode;
       message: string;
     };
 
 export interface ConversationSession {
   handleUserMessage(input: { text: string; abortSignal?: AbortSignal }): Promise<ConversationSessionResult>;
   createTaskInstruction(input: { userNote: string; abortSignal?: AbortSignal }): Promise<ConversationSessionResult>;
+}
+
+/**
+ * Controls only the interactive front-ends need. Kept off `ConversationSession`
+ * so the ACP adapter's dependency contract stays exactly as it was.
+ */
+export interface InteractiveConversationSession extends ConversationSession {
+  /** Latest assistant reply, for front-ends that offer /accept. */
+  getLatestAssistantMessage(): string | null;
+  /** Continue from a previously recorded provider session (/resume). */
+  setSessionId(nextSessionId: string): void;
 }
 
 const WORKFLOW_IDENTIFIER_PATTERNS = [
@@ -85,9 +129,11 @@ function resolveWorkflowIdentifierFromUserInputs(history: ConversationMessage[],
   return undefined;
 }
 
-export function createConversationSession(options: ConversationSessionOptions): ConversationSession {
+export function createConversationSession(options: ConversationSessionOptions): InteractiveConversationSession {
   const gherkin = shouldUseGherkinTaskInstructions(options.cwd);
-  let history: ConversationMessage[] = [];
+  let history: ConversationMessage[] = options.initialUserMessage
+    ? [{ role: 'user', content: options.initialUserMessage }]
+    : [];
   let sessionId = options.ctx.sessionId;
   let shouldSendInitialPromptContext = !!options.strategy.initialPromptContext;
 
@@ -107,17 +153,20 @@ export function createConversationSession(options: ConversationSessionOptions): 
       {
         outputMode: options.outputMode,
         abortSignal,
+        onStream: options.onStream,
+        permissionMode: options.strategy.permissionMode,
+        imageAttachments: options.resolveImageAttachments?.(prompt),
       },
     );
     sessionId = newSessionId;
 
     if (!result) {
       history = previousHistory;
-      return { kind: 'error', message: 'AI response was empty' };
+      return { kind: 'error', code: 'empty_ai_response', message: 'AI response was empty' };
     }
     if (!result.success) {
       history = previousHistory;
-      return { kind: 'error', message: result.content };
+      return { kind: 'error', code: 'provider_error', message: result.content };
     }
 
     shouldSendInitialPromptContext = false;
@@ -136,9 +185,16 @@ export function createConversationSession(options: ConversationSessionOptions): 
       options.ctx.lang,
       options.strategy.summaryPromptContext,
       gherkin,
+      {
+        ...(options.workflowContext ? { workflowContext: options.workflowContext } : {}),
+        ...(options.sourceContext ? { sourceContext: options.sourceContext } : {}),
+        ...(options.summarizeResumedSession === true && sessionId
+          ? { resumedSessionNote: getLabel('interactive.noTranscript', options.ctx.lang) }
+          : {}),
+      },
     );
     if (!summaryPrompt) {
-      return { kind: 'error', message: 'No conversation to summarize' };
+      return { kind: 'error', code: 'no_conversation', message: 'No conversation to summarize' };
     }
 
     const { result, sessionId: newSessionId } = await callAIWithRetry(
@@ -151,19 +207,22 @@ export function createConversationSession(options: ConversationSessionOptions): 
         outputMode: options.outputMode,
         abortSignal,
         persistSession: false,
+        onStream: options.onStream,
+        permissionMode: options.strategy.permissionMode,
+        imageAttachments: options.resolveImageAttachments?.(summaryPrompt),
       },
     );
 
     if (!result) {
-      return { kind: 'error', message: 'Failed to create workflow instruction' };
+      return { kind: 'error', code: 'instruction_failed', message: 'Failed to create workflow instruction' };
     }
     if (!result.success) {
-      return { kind: 'error', message: result.content };
+      return { kind: 'error', code: 'provider_error', message: result.content };
     }
 
     const task = result.content.trim();
     if (!task) {
-      return { kind: 'error', message: 'Task text is required' };
+      return { kind: 'error', code: 'task_text_required', message: 'Task text is required' };
     }
     const workflowIdentifier = resolveWorkflowIdentifierFromUserInputs(history, userNote);
     return {
@@ -179,6 +238,20 @@ export function createConversationSession(options: ConversationSessionOptions): 
   }
 
   return {
+    getLatestAssistantMessage(): string | null {
+      for (let index = history.length - 1; index >= 0; index -= 1) {
+        const message = history[index];
+        if (message?.role === 'assistant') {
+          return message.content;
+        }
+      }
+      return null;
+    },
+
+    setSessionId(nextSessionId: string): void {
+      sessionId = nextSessionId;
+    },
+
     createTaskInstruction(input: { userNote: string; abortSignal?: AbortSignal }): Promise<ConversationSessionResult> {
       return handleGoCommand(input.userNote, input.abortSignal);
     },
@@ -186,7 +259,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
     async handleUserMessage(input: { text: string; abortSignal?: AbortSignal }): Promise<ConversationSessionResult> {
       const message = input.text.trim();
       if (!message) {
-        return { kind: 'error', message: 'Message text is required' };
+        return { kind: 'error', code: 'message_required', message: 'Message text is required' };
       }
 
       const match = matchSlashCommand(message);
@@ -198,7 +271,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
         case SlashCommand.Play: {
           const task = match.text.trim();
           if (!task) {
-            return { kind: 'error', message: 'Task text is required' };
+            return { kind: 'error', code: 'task_text_required', message: 'Task text is required' };
           }
           return {
             kind: 'workflow_execution_requested',
@@ -212,7 +285,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
         case SlashCommand.Go:
           return handleGoCommand(match.text, input.abortSignal);
         default:
-          return { kind: 'error', message: `Unsupported command: ${match.command}` };
+          return { kind: 'error', code: 'unsupported_command', message: `Unsupported command: ${match.command}` };
       }
     },
   };

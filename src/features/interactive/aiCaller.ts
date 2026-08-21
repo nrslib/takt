@@ -16,6 +16,7 @@ import { EXIT_SIGINT } from '../../shared/exitCodes.js';
 import type { ProviderType } from '../../infra/providers/index.js';
 import { getProvider } from '../../infra/providers/index.js';
 import type { ImageAttachmentReference } from '../../shared/types/image-attachments.js';
+import type { StreamCallback } from '../../shared/types/provider.js';
 import type { PermissionMode, StepProviderOptions } from '../../core/models/index.js';
 import { expandImageAttachmentPlaceholders } from '../../infra/providers/imageAttachmentPrompt.js';
 import { buildProviderRuntimeSystemPrompt } from '../../infra/providers/runtimeSystemPrompt.js';
@@ -52,6 +53,8 @@ interface CallAIWithRetryOptions {
   abortSignal?: AbortSignal;
   /** Persist a returned session ID for later resume. Defaults to true. */
   persistSession?: boolean;
+  /** Stream observer for callers that render the response themselves (`outputMode: 'silent'`). */
+  onStream?: StreamCallback;
 }
 
 /**
@@ -72,6 +75,8 @@ export async function callAIWithRetry(
   const display = outputMode === 'terminal'
     ? new StreamDisplay('assistant', isQuietMode())
     : undefined;
+  const resolveStreamHandler = (activeDisplay: StreamDisplay | undefined): StreamCallback | undefined =>
+    activeDisplay === undefined ? options.onStream : activeDisplay.createHandler();
   const abortController = new AbortController();
   const onExternalAbort = (): void => {
     abortController.abort(options.abortSignal?.reason);
@@ -121,7 +126,9 @@ export async function callAIWithRetry(
     const permissionModeForProvider = providerSupportsPermissionControls(ctx.providerType) === false
       ? ctx.permissionMode
       : options.permissionMode ?? ctx.permissionMode;
-    if (hasImageAttachments && nativeImageAttachments === undefined) {
+    // Only the terminal caller owns stdout; a silent caller (the Ink TUI) renders
+    // its own frames and a stray write would corrupt them.
+    if (hasImageAttachments && nativeImageAttachments === undefined && outputMode === 'terminal') {
       info(`Provider "${ctx.providerType}" does not support native image input; image paths were added to the prompt.`);
     }
     const response = await agent.call(promptForProvider, {
@@ -132,7 +139,7 @@ export async function callAIWithRetry(
       ...(permissionModeForProvider === undefined ? {} : { permissionMode: permissionModeForProvider }),
       providerOptions: ctx.providerOptions,
       abortSignal: abortController.signal,
-      onStream: display?.createHandler(),
+      onStream: resolveStreamHandler(display),
       imageAttachments: nativeImageAttachments,
     });
     display?.flush();
@@ -153,7 +160,7 @@ export async function callAIWithRetry(
         ...(permissionModeForProvider === undefined ? {} : { permissionMode: permissionModeForProvider }),
         providerOptions: ctx.providerOptions,
         abortSignal: abortController.signal,
-        onStream: retryDisplay?.createHandler(),
+        onStream: resolveStreamHandler(retryDisplay),
         imageAttachments: nativeImageAttachments,
       });
       retryDisplay?.flush();

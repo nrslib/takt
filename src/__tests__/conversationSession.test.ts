@@ -15,6 +15,11 @@ vi.mock('../features/interactive/aiCaller.js', () => ({
   callAIWithRetry: (...args: unknown[]) => mockCallAIWithRetry(...args),
 }));
 
+vi.mock('../infra/config/global/globalConfig.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  loadGlobalConfig: vi.fn(() => ({ provider: 'mock', language: 'en' })),
+}));
+
 vi.mock('../features/interactive/interactiveApplication.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   buildConversationSummaryPrompt: (...args: unknown[]) => mockBuildSummaryPrompt(...args),
@@ -145,7 +150,9 @@ describe('conversation session application API', () => {
       'include progress updates',
       'en',
       'summary context',
-      false,
+      true,
+      // The adapter never opts into resumed-session summaries, so no note is added.
+      {},
     );
     expect(result).toEqual({
       kind: 'workflow_execution_requested',
@@ -159,7 +166,7 @@ describe('conversation session application API', () => {
   });
 
   it.each([
-    ['unset', undefined, false],
+    ['unset', undefined, true],
     ['enabled', true, true],
     ['disabled', false, false],
   ] as const)('should pass %s project Gherkin mode to ACP task instruction generation', async (_label, configured, expected) => {
@@ -178,6 +185,39 @@ describe('conversation session application API', () => {
       await session.createTaskInstruction({ userNote: 'implement ACP support' });
 
       expect(mockBuildSummaryPrompt.mock.calls[0]?.[4]).toBe(expected);
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['unset', undefined, true],
+    ['project false', false, false],
+  ] as const)('should apply %s to the actual ACP summary prompt', async (_label, configured, expectedEnabled) => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-gherkin-acp-prompt-'));
+    if (configured !== undefined) {
+      mkdirSync(join(projectDir, '.takt'), { recursive: true });
+      writeFileSync(
+        join(projectDir, '.takt', 'config.yaml'),
+        ['assistant:', `  gherkin: ${configured}`].join('\n'),
+        'utf-8',
+      );
+    }
+    const actualInteractiveApplication = await vi.importActual<typeof import('../features/interactive/interactiveApplication.js')>(
+      '../features/interactive/interactiveApplication.js',
+    );
+    mockBuildSummaryPrompt.mockImplementation(actualInteractiveApplication.buildConversationSummaryPrompt);
+
+    try {
+      const session = createSession(projectDir);
+      await session.createTaskInstruction({ userNote: 'implement ACP support' });
+
+      const prompt = mockCallAIWithRetry.mock.calls[0]?.[0];
+      if (expectedEnabled) {
+        expect(prompt).toContain('## Markdown + Gherkin Output Format');
+      } else {
+        expect(prompt).not.toContain('## Markdown + Gherkin Output Format');
+      }
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
     }
@@ -206,7 +246,9 @@ describe('conversation session application API', () => {
       'worktree で実行できるように積んで',
       'en',
       'summary context',
-      false,
+      true,
+      // The adapter never opts into resumed-session summaries, so no note is added.
+      {},
     );
     expect(mockCallAIWithRetry).toHaveBeenCalledWith(
       'summary prompt',
@@ -328,6 +370,7 @@ describe('conversation session application API', () => {
 
     expect(result).toEqual({
       kind: 'error',
+      code: 'task_text_required',
       message: 'Task text is required',
     });
   });
@@ -376,6 +419,7 @@ describe('conversation session application API', () => {
 
     expect(result).toEqual({
       kind: 'error',
+      code: 'provider_error',
       message: 'provider failed',
     });
   });
@@ -407,7 +451,120 @@ describe('conversation session application API', () => {
       'summarize',
       'en',
       'summary context',
-      false,
+      true,
+      // The adapter never opts into resumed-session summaries, so no note is added.
+      {},
+    );
+  });
+
+  it('should report no conversation for /go after a failed turn established a session', async () => {
+    const session = createSession();
+    mockCallAIWithRetry.mockResolvedValueOnce({
+      result: { content: 'provider failed', success: false, sessionId: 'session-1' },
+      sessionId: 'session-1',
+    });
+    await session.handleUserMessage({ text: 'first attempt' });
+    mockBuildSummaryPrompt.mockReturnValue('');
+
+    const result = await session.handleUserMessage({ text: '/go' });
+
+    // The failure rolled the history back; without an opt-in the live session id
+    // must not make the summary look like there is something to summarize.
+    expect(result).toEqual({
+      kind: 'error',
+      code: 'no_conversation',
+      message: 'No conversation to summarize',
+    });
+    expect(mockBuildSummaryPrompt).toHaveBeenLastCalledWith([], '', 'en', 'summary context', true, {});
+  });
+
+  it('should describe a resumed session only when the caller opted in', async () => {
+    const session = createConversationSession({
+      cwd: '/repo',
+      summarizeResumedSession: true,
+      ctx: {
+        provider: { setup: vi.fn(), getRuntimeInstructions: vi.fn(() => null) },
+        providerType: 'mock',
+        model: 'mock-model',
+        lang: 'en',
+        personaName: 'interactive',
+        sessionId: 'resumed-session',
+      },
+      strategy: {
+        systemPrompt: 'system prompt',
+        allowedTools: ['Read'],
+        transformPrompt: (message: string) => `transformed: ${message}`,
+      },
+    });
+
+    await session.handleUserMessage({ text: '/go' });
+
+    expect(mockBuildSummaryPrompt).toHaveBeenLastCalledWith(
+      [], '', 'en', undefined, true, { resumedSessionNote: expect.any(String) },
+    );
+  });
+
+  it('should seed the history with the initial user message so /go can summarize it', async () => {
+    const session = createConversationSession({
+      cwd: '/repo',
+      initialUserMessage: 'implement ACP support',
+      ctx: {
+        provider: { setup: vi.fn(), getRuntimeInstructions: vi.fn(() => null) },
+        providerType: 'mock',
+        model: 'mock-model',
+        lang: 'en',
+        personaName: 'interactive',
+        sessionId: undefined,
+      },
+      strategy: {
+        systemPrompt: 'system prompt',
+        allowedTools: ['Read'],
+        transformPrompt: (message: string) => `transformed: ${message}`,
+      },
+    });
+
+    await session.handleUserMessage({ text: '/go' });
+
+    expect(mockBuildSummaryPrompt).toHaveBeenCalledWith(
+      [{ role: 'user', content: 'implement ACP support' }],
+      '',
+      'en',
+      undefined,
+      true,
+      {},
+    );
+  });
+
+  it('should pass the resolved workflow and source context to the summary prompt', async () => {
+    const workflowContext = { name: 'default', description: 'd', workflowStructure: '1. plan' };
+    const session = createConversationSession({
+      cwd: '/repo',
+      workflowContext,
+      sourceContext: 'Issue #12 body',
+      ctx: {
+        provider: { setup: vi.fn(), getRuntimeInstructions: vi.fn(() => null) },
+        providerType: 'mock',
+        model: 'mock-model',
+        lang: 'en',
+        personaName: 'interactive',
+        sessionId: undefined,
+      },
+      strategy: {
+        systemPrompt: 'system prompt',
+        allowedTools: ['Read'],
+        transformPrompt: (message: string) => `transformed: ${message}`,
+      },
+    });
+
+    await session.handleUserMessage({ text: '/go' });
+
+    expect(mockBuildSummaryPrompt).toHaveBeenCalledWith(
+      [],
+      '',
+      'en',
+      undefined,
+      true,
+      { workflowContext, sourceContext: 'Issue #12 body' },
     );
   });
 });

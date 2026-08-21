@@ -21,7 +21,7 @@ TAKT (TAKT Agent Koordination Topology) is a multi-agent orchestration CLI. It r
 | `npm test -- src/__tests__/<file>.test.ts` | Route a single file to the correct unit, light-IT, heavy-parallel-IT, or heavy-serial-IT runner. For an added or changed IT, also run `releaseVerificationWiring.test.ts` by itself. Always target-run an added or changed heavy IT before handoff. |
 | `npm test -- -t "<pattern>"` | Run unit tests whose name matches `<pattern>`. |
 | `npm run test:opencode-probe` | Deterministic OpenCode probe smoke gate (11 cases, no API cost). Standalone; not part of routine gates or `check:release`. |
-| `npm run test:e2e:mock` | Full mock-provider E2E suite (parallel shards). Single spec: `npx vitest run --config vitest.config.e2e.mock.ts e2e/specs/<file>.e2e.ts`. |
+| `npm run test:e2e:mock` | Full mock-provider E2E suite (parallel shards). Single spec: `TAKT_E2E_PROVIDER=mock npx vitest run --config vitest.config.e2e.mock.ts e2e/specs/<file>.e2e.ts` — **without that env var the specs run against the real provider** (`provider: claude` in `e2e/fixtures/config.e2e.yaml`) and cost API credits. |
 | `npm run test:e2e:provider:{claude,claude-sdk,codex,opencode,cursor}` | E2E against a real provider (slow, costs API credits). |
 | `npm run check:release` | Full pre-release gate: build + lint + fast 4-shard unit + light IT + heavy IT + e2e. |
 

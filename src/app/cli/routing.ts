@@ -1,5 +1,5 @@
 import { info, success, error as logError } from '../../shared/ui/index.js';
-import { getErrorMessage } from '../../shared/utils/index.js';
+import { getErrorMessage, sanitizeTerminalText } from '../../shared/utils/index.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import {
   checkoutBranch,
@@ -22,6 +22,7 @@ import { cleanupInteractiveResultAttachments } from '../../features/interactive/
 import { INTERACTIVE_MODES } from '../../core/models/index.js';
 import {
   getWorkflowDescription,
+  loadWorkflowByIdentifier,
   resolveConfigValue,
   resolveConfigValues,
   loadPersonaSessions,
@@ -109,6 +110,20 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     return;
   }
 
+  // Decided before the PR/Issue fetch so the run can be refused on the spot.
+  // `--tui` demands a terminal; without an explicit flag the TUI is simply the
+  // TTY default.
+  const tuiPreference = opts.tui as boolean | undefined;
+  const hasTerminal = process.stdin.isTTY === true && process.stdout.isTTY === true;
+  if (tuiPreference === true && !hasTerminal) {
+    logError(getLabel(
+      'tui.errors.requiresTty',
+      resolveLanguage(resolveConfigValues(resolvedCwd, ['language']).language),
+    ));
+    process.exit(1);
+  }
+  const useTui = tuiPreference !== false && hasTerminal;
+
   let directTask: string | undefined = task;
   let sourceContext: string | undefined;
   let prBranch: string | undefined;
@@ -166,6 +181,39 @@ export async function executeDefaultAction(task?: string): Promise<void> {
   );
   const lang = resolveLanguage(globalConfig.language);
 
+  if (useTui) {
+    // An explicit --workflow is loaded up front so a typo fails the command
+    // instead of the run: it covers names and paths alike, and a blank or
+    // missing value falls through to the selector the TUI run opens itself.
+    if (resolvedWorkflow) {
+      if (loadWorkflowByIdentifier(resolvedWorkflow, resolvedCwd) === null) {
+        logError(getLabel('tui.errors.workflowNotFound', lang, {
+          workflow: sanitizeTerminalText(resolvedWorkflow),
+        }));
+        process.exit(1);
+      }
+    }
+    const { runTui } = await import('../../features/tui/index.js');
+    const run = await runTui({
+      cwd: resolvedCwd,
+      lang,
+      previewCount: globalConfig.interactivePreviewSteps,
+      taskHistory: loadTaskHistory(resolvedCwd, lang),
+      ...(resolvedWorkflow ? { workflowId: resolvedWorkflow } : {}),
+      ...(agentOverrides ? { agentOverrides } : {}),
+      ...(directTask ? { userMessage: directTask } : {}),
+      ...(sourceContext ? { sourceContext } : {}),
+      ...(prBranch ? { excludeActions: ['create_issue'] as const } : {}),
+      ...(opts.continue === true ? { continueSession: true } : {}),
+    });
+    if (run.kind === 'cancelled') {
+      info(getLabel('interactive.ui.cancelled', lang));
+      return;
+    }
+    await finishConversation(run.workflowId, run.result);
+    return;
+  }
+
   const workflowId = await determineWorkflow(resolvedCwd, selectOptions.workflow);
   if (workflowId === null) {
     info(getLabel('interactive.ui.cancelled', lang));
@@ -181,99 +229,109 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     agentOverrides,
   );
 
-  const availableInteractiveModes = sourceContext && !directTask
-    ? INTERACTIVE_MODES.filter((mode) => mode !== 'passthrough')
-    : INTERACTIVE_MODES;
-  const selectedMode = await selectInteractiveMode(
-    lang,
-    workflowDesc.interactiveMode,
-    availableInteractiveModes,
-  );
-  if (selectedMode === null) {
-    info(getLabel('interactive.ui.cancelled', lang));
-    return;
-  }
-
-  const workflowContext = {
+  const loadWorkflowContext = () => ({
     name: workflowDesc.name,
     description: workflowDesc.description,
     workflowStructure: workflowDesc.workflowStructure,
     stepPreviews: workflowDesc.stepPreviews,
     taskHistory: loadTaskHistory(resolvedCwd, lang),
-  };
-  const interactiveSeed = directTask || sourceContext
-    ? {
-      ...(directTask ? { userMessage: directTask } : {}),
-      ...(sourceContext ? { sourceContext } : {}),
-    }
-    : undefined;
+  });
   let result: InteractiveModeResult;
   const assistantOverrideProvider = agentOverrides?.provider;
 
-  switch (selectedMode) {
-    case 'assistant':
-    case 'grill-me': {
-      const assistantMode = selectedMode;
-      let selectedSessionId: string | undefined;
-      if (opts.continue === true) {
-        const { provider } = resolveAssistantProviderModel(resolvedCwd, {
-          provider: assistantOverrideProvider,
-          model: agentOverrides?.model,
-        });
-        if (!provider) {
-          throw new Error('Provider is not configured.');
-        }
-        const savedSessions = loadPersonaSessions(resolvedCwd, provider);
-        const savedSessionId = resolvePersonaSessionId(
-          savedSessions,
-          getAssistantSessionPersona(assistantMode),
-          provider,
-        );
-        if (savedSessionId) {
-          selectedSessionId = savedSessionId;
-        } else {
-          info(getLabel('interactive.continueNoSession', lang));
-        }
-      }
-      const interactiveOpts = prBranch ? { excludeActions: ['create_issue'] as const } : undefined;
-      const assistantModeOptions = {
-        ...interactiveOpts,
-        ...(assistantOverrideProvider ? { provider: assistantOverrideProvider } : {}),
-        ...(agentOverrides?.model ? { model: agentOverrides.model } : {}),
-        ...(assistantMode === 'grill-me' ? { assistantMode } : {}),
-      };
-      result = await interactiveMode(
-        resolvedCwd,
-        interactiveSeed,
-        workflowContext,
-        selectedSessionId,
-        undefined,
-        Object.keys(assistantModeOptions).length > 0 ? assistantModeOptions : undefined,
-      );
-      break;
+  {
+    const availableInteractiveModes = sourceContext && !directTask
+      ? INTERACTIVE_MODES.filter((mode) => mode !== 'passthrough')
+      : INTERACTIVE_MODES;
+    const selectedMode = await selectInteractiveMode(
+      lang,
+      workflowDesc.interactiveMode,
+      availableInteractiveModes,
+    );
+    if (selectedMode === null) {
+      info(getLabel('interactive.ui.cancelled', lang));
+      return;
     }
 
-    case 'passthrough':
-      result = await passthroughMode(lang, directTask);
-      break;
-
-    case 'quiet':
-      result = await quietMode(resolvedCwd, interactiveSeed, workflowContext);
-      break;
-
-    case 'persona': {
-      if (!workflowDesc.firstStep) {
-        info(getLabel('interactive.ui.personaFallback', lang));
-        result = await interactiveMode(resolvedCwd, interactiveSeed, workflowContext);
-      } else {
-        result = await personaMode(resolvedCwd, workflowDesc.firstStep, interactiveSeed, workflowContext);
+    const workflowContext = loadWorkflowContext();
+    const interactiveSeed = directTask || sourceContext
+      ? {
+        ...(directTask ? { userMessage: directTask } : {}),
+        ...(sourceContext ? { sourceContext } : {}),
       }
-      break;
+      : undefined;
+
+    switch (selectedMode) {
+      case 'assistant':
+      case 'grill-me': {
+        const assistantMode = selectedMode;
+        let selectedSessionId: string | undefined;
+        if (opts.continue === true) {
+          const { provider } = resolveAssistantProviderModel(resolvedCwd, {
+            provider: assistantOverrideProvider,
+            model: agentOverrides?.model,
+          });
+          if (!provider) {
+            throw new Error('Provider is not configured.');
+          }
+          const savedSessions = loadPersonaSessions(resolvedCwd, provider);
+          const savedSessionId = resolvePersonaSessionId(
+            savedSessions,
+            getAssistantSessionPersona(assistantMode),
+            provider,
+          );
+          if (savedSessionId) {
+            selectedSessionId = savedSessionId;
+          } else {
+            info(getLabel('interactive.continueNoSession', lang));
+          }
+        }
+        const interactiveOpts = prBranch ? { excludeActions: ['create_issue'] as const } : undefined;
+        const assistantModeOptions = {
+          ...interactiveOpts,
+          ...(assistantOverrideProvider ? { provider: assistantOverrideProvider } : {}),
+          ...(agentOverrides?.model ? { model: agentOverrides.model } : {}),
+          ...(assistantMode === 'grill-me' ? { assistantMode } : {}),
+        };
+        result = await interactiveMode(
+          resolvedCwd,
+          interactiveSeed,
+          workflowContext,
+          selectedSessionId,
+          undefined,
+          Object.keys(assistantModeOptions).length > 0 ? assistantModeOptions : undefined,
+        );
+        break;
+      }
+
+      case 'passthrough':
+        result = await passthroughMode(lang, directTask);
+        break;
+
+      case 'quiet':
+        result = await quietMode(resolvedCwd, interactiveSeed, workflowContext);
+        break;
+
+      case 'persona': {
+        if (!workflowDesc.firstStep) {
+          info(getLabel('interactive.ui.personaFallback', lang));
+          result = await interactiveMode(resolvedCwd, interactiveSeed, workflowContext);
+        } else {
+          result = await personaMode(resolvedCwd, workflowDesc.firstStep, interactiveSeed, workflowContext);
+        }
+        break;
+      }
     }
   }
 
+  await finishConversation(workflowId, result);
+
+  async function finishConversation(
+    chosenWorkflowId: string,
+    conversationResult: InteractiveModeResult,
+  ): Promise<void> {
   try {
-    await dispatchConversationAction(result, {
+    await dispatchConversationAction(conversationResult, {
       execute: async ({ task: confirmedTask }) => {
         if (prBranch) {
           info(`Fetching and checking out PR branch: ${prBranch}`);
@@ -292,20 +350,20 @@ export async function executeDefaultAction(task?: string): Promise<void> {
           success(`Checked out PR branch: ${prBranch}`);
         }
         selectOptions.interactiveUserInput = true;
-        selectOptions.workflow = workflowId;
+        selectOptions.workflow = chosenWorkflowId;
         selectOptions.interactiveMetadata = { confirmed: true, task: confirmedTask };
         selectOptions.skipTaskList = true;
-        if (result.attachments) {
-          selectOptions.attachments = result.attachments;
+        if (conversationResult.attachments) {
+          selectOptions.attachments = conversationResult.attachments;
         }
         await selectAndExecuteTask(resolvedCwd, confirmedTask, selectOptions, agentOverrides);
       },
       create_issue: async ({ task: confirmedTask }) => {
         const labels = await promptLabelSelection(lang);
-        await createIssueAndSaveTask(resolvedCwd, confirmedTask, workflowId, {
+        await createIssueAndSaveTask(resolvedCwd, confirmedTask, chosenWorkflowId, {
           confirmAtEndMessage: 'Add this issue to tasks?',
           labels,
-          ...(result.attachments ? { attachments: result.attachments } : {}),
+          ...(conversationResult.attachments ? { attachments: conversationResult.attachments } : {}),
         });
       },
       save_task: async ({ task: confirmedTask }) => {
@@ -314,7 +372,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
             logError('Fetched PR head branch is required when saving a PR review task.');
             process.exit(1);
           }
-          await saveTaskFromInteractive(resolvedCwd, confirmedTask, workflowId, {
+          await saveTaskFromInteractive(resolvedCwd, confirmedTask, chosenWorkflowId, {
             prNumber,
             presetSettings: {
               worktree: true,
@@ -322,18 +380,19 @@ export async function executeDefaultAction(task?: string): Promise<void> {
               autoPr: true,
               ...(prBaseBranch ? { baseBranch: prBaseBranch } : {}),
             },
-            ...(result.attachments ? { attachments: result.attachments } : {}),
+            ...(conversationResult.attachments ? { attachments: conversationResult.attachments } : {}),
           });
           return;
         }
-        await saveTaskFromInteractive(resolvedCwd, confirmedTask, workflowId, {
+        await saveTaskFromInteractive(resolvedCwd, confirmedTask, chosenWorkflowId, {
           ...(sourceIssueNumber !== undefined ? { issue: sourceIssueNumber } : {}),
-          ...(result.attachments ? { attachments: result.attachments } : {}),
+          ...(conversationResult.attachments ? { attachments: conversationResult.attachments } : {}),
         });
       },
       cancel: () => undefined,
     });
   } finally {
-    cleanupInteractiveResultAttachments(result);
+    cleanupInteractiveResultAttachments(conversationResult);
+  }
   }
 }

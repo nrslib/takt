@@ -8,7 +8,10 @@ import {
   serialWorkflowTestFiles,
 } from './scripts/test-classification.mjs';
 
-export const srcTestInclude = ['src/__tests__/**/*.test.ts'];
+export const srcTestInclude = [
+  'src/__tests__/**/*.test.ts',
+  'src/__tests__/**/*.test.tsx',
+];
 
 export const itTestGlobs = [
   ...parallelIntegrationTestGlobs,

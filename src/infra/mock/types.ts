@@ -53,5 +53,10 @@ export interface ScenarioEntry {
     id: string;
     input: Record<string, unknown>;
   }>;
+  /**
+   * Stream the response text as several `text` events instead of one.
+   * Reproduces gradual provider output; the chunks do not change `content`.
+   */
+  textChunks?: Array<{ text: string; delayMs?: number }>;
   fileWrites?: Array<{ path: string; content: string }>;
 }

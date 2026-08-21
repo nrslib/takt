@@ -2,6 +2,7 @@ import { matchSlashCommand } from '../interactive/commandMatcher.js';
 import { readInteractiveInput } from '../interactive/interactiveInput.js';
 import type { ConversationMessage } from '../interactive/interactive.js';
 import {
+  cleanupImageAttachmentStore,
   createSessionImageAttachmentStore,
   resolvePromptImageAttachments,
   type InteractiveImageAttachment,
@@ -68,14 +69,6 @@ function buildUserControlledAttachmentPrompt(history: ConversationMessage[], inl
     ...userMessages,
     ...(normalizedInlineText.length > 0 ? [normalizedInlineText] : []),
   ].join('\n');
-}
-
-function cleanupExecImageAttachmentStore(attachmentStore: ImageAttachmentStore): void {
-  try {
-    attachmentStore.cleanup();
-  } catch (error) {
-    debugLog('exec', 'Failed to cleanup exec image attachment store', error instanceof Error ? error.message : String(error));
-  }
 }
 
 async function runGoCommand(
@@ -232,7 +225,10 @@ async function runExecConversation(
       }
     }
   } finally {
-    cleanupExecImageAttachmentStore(attachmentStore);
+    // The shared teardown, which seals before it deletes: a paste that the line
+    // editor did not wait for would otherwise recreate the session directory
+    // right after it was removed.
+    cleanupImageAttachmentStore(attachmentStore);
   }
 }
 
