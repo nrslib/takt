@@ -83,8 +83,8 @@ node -e '
     if (Date.now() - lastActivity < idleMs) return;
 
     clearInterval(poll);
-    writeFileSync(idleMarker, "");
     try { process.kill(-pid, "SIGTERM"); } catch { process.exit(0); }
+    writeFileSync(idleMarker, "");
     setTimeout(() => {
       try { process.kill(-pid, "SIGKILL"); } catch {}
       process.exit(0);

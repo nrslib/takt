@@ -172,7 +172,7 @@ Work that must complete after the calling CLI exits cannot be owned only by an u
 | Polling | A time or attempt bound and the result at that bound are defined |
 | Marker or artifact publication | Transient absence or read races during replacement follow the publication contract through bounded retry or explicit failure |
 
-A launch API returning without an error does not prove that the worker loaded its target module or completed its work. Use an artifact, exit status, or persisted failure as an observation point whose lifetime does not depend on the parent process.
+A launch API returning without an error does not prove that the worker loaded its target module or completed its work. Use an artifact or persisted failure whose lifetime does not depend on the parent process. An exit status is independent evidence only when an independent worker or supervisor that survives the parent records it durably.
 
 
 ## Termination-Path Completeness
