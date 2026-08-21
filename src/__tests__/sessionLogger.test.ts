@@ -1,4 +1,12 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -9,9 +17,9 @@ import { buildWorkflowStepScopeKey } from '../features/tasks/execute/workflowSte
 import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
 import { buildPhaseExecutionId } from '../shared/utils/phaseExecutionId.js';
 import {
-  initDebugLogger,
-  resetDebugLogger,
-} from '../shared/utils/debug.js';
+  writePromptLog,
+  type PromptLogRecord,
+} from '../features/tasks/execute/promptLog.js';
 
 const tempDirs = new Set<string>();
 
@@ -21,8 +29,22 @@ function createTempLogsDir(): string {
   return dir;
 }
 
+function createPromptLogRecord(): PromptLogRecord {
+  return {
+    step: 'plan',
+    phase: 1,
+    iteration: 2,
+    scope: '{"step":"plan","stack":[]}',
+    phaseExecutionId: 'plan:2:1:1',
+    systemPrompt: 'system prompt',
+    userInstruction: 'prompt text',
+    prompt: 'prompt text',
+    response: 'response text',
+    timestamp: '2026-02-07T00:00:00.000Z',
+  };
+}
+
 afterEach(() => {
-  resetDebugLogger();
   for (const dir of tempDirs) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -30,6 +52,31 @@ afterEach(() => {
 });
 
 describe('SessionLogger', () => {
+  it('explicit run path へ private prompt record を追記する', () => {
+    const logsDir = createTempLogsDir();
+    const promptLogPath = join(logsDir, 'run-one', 'logs', 'session-one-prompts.jsonl');
+    mkdirSync(join(logsDir, 'run-one', 'logs'), { recursive: true });
+
+    writePromptLog(promptLogPath, createPromptLogRecord());
+
+    expect(JSON.parse(readFileSync(promptLogPath, 'utf-8').trim()))
+      .toEqual(createPromptLogRecord());
+    if (process.platform !== 'win32') {
+      expect(statSync(promptLogPath).mode & 0o777).toBe(0o600);
+    }
+  });
+
+  it('prompt record の永続化失敗で workflow を中断しない', () => {
+    const logsDir = createTempLogsDir();
+    const blockingPath = join(logsDir, 'not-a-directory');
+    const promptLogPath = join(blockingPath, 'session-one-prompts.jsonl');
+    writeFileSync(blockingPath, 'blocking file');
+
+    expect(() => writePromptLog(promptLogPath, createPromptLogRecord()))
+      .not.toThrow();
+    expect(existsSync(promptLogPath)).toBe(false);
+  });
+
   it('companion review round と queue coalescing を run NDJSON に永続化する', () => {
     const logsDir = createTempLogsDir();
     const ndjsonPath = initNdjsonLog('session-companion', 'task', 'workflow', { logsDir });
@@ -410,14 +457,14 @@ describe('SessionLogger', () => {
 
   it('debug prompt と trace parser は同名 parallel child を scope で相関する', () => {
     const logsDir = createTempLogsDir();
-    initDebugLogger({ enabled: true }, logsDir);
     const ndjsonPath = initNdjsonLog(
       'session-parallel-prompts',
       'task',
       'parent',
       { logsDir },
     );
-    const logger = new SessionLogger(ndjsonPath, true);
+    const promptLogPath = join(logsDir, 'session-parallel-prompts-prompts.jsonl');
+    const logger = new SessionLogger(ndjsonPath, true, promptLogPath);
     const step = {
       name: 'review',
       kind: 'agent' as const,
@@ -522,7 +569,11 @@ describe('SessionLogger', () => {
       timestamp: new Date('2026-04-13T00:00:02.000Z'),
     }, 'slow', slowStack);
 
-    const promptRecords = logger.getPromptRecords();
+    const promptRecords = readFileSync(promptLogPath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line)) as ReturnType<SessionLogger['getPromptRecords']>;
+    expect(promptRecords).toEqual(logger.getPromptRecords());
     expect(promptRecords.map((record) => ({
       scope: record.scope,
       systemPrompt: record.systemPrompt,

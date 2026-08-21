@@ -1268,7 +1268,7 @@ logging:
   debug: true
 ```
 
-Debug logs are written to `.takt/runs/debug-{timestamp}/logs/debug-{timestamp}.log` in NDJSON format, and prompt/response logs to `debug-{timestamp}-prompts.jsonl` in the same directory.
+General debug logs are process-scoped and written to `.takt/runs/debug-{timestamp}/logs/debug-{timestamp}.log` in NDJSON format. Prompt/response logs are workflow-run-scoped and written to `.takt/runs/<run>/logs/<sessionId>-prompts.jsonl`.
 
 ### Detailed Console Output
 
@@ -1280,7 +1280,7 @@ logging:
   level: debug
 ```
 
-This also enables the internal verbose console mode used by the CLI. `logging.level: debug` alone additionally enables the debug logger, so the `debug-{timestamp}.log` and `debug-{timestamp}-prompts.jsonl` artifacts above are produced without setting `logging.debug` separately. Any of `logging.debug: true`, `logging.trace: true`, or `logging.level: debug` enables them.
+This also enables the internal verbose console mode used by the CLI. `logging.level: debug` alone additionally enables both the process-scoped general debug log and workflow-run-scoped prompt/response logs described above without setting `logging.debug` separately. Any of `logging.debug: true`, `logging.trace: true`, or `logging.level: debug` enables them.
 
 ## Companion provider targets
 

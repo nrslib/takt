@@ -1047,7 +1047,7 @@ logging:
   debug: true
 ```
 
-debug 日志以 NDJSON 写入 `.takt/runs/debug-{timestamp}/logs/debug-{timestamp}.log`，prompt/response 日志写入同目录的 `debug-{timestamp}-prompts.jsonl`。
+常规 debug 日志按进程写入 `.takt/runs/debug-{timestamp}/logs/debug-{timestamp}.log`，格式为 NDJSON。prompt/response 日志按 workflow run 写入 `.takt/runs/<run>/logs/<sessionId>-prompts.jsonl`。
 
 ### 详细控制台输出
 
@@ -1057,7 +1057,7 @@ logging:
   level: debug
 ```
 
-`logging.level: debug` 会启用 CLI 的详细输出和上面的 debug logger；`logging.debug: true`、`logging.trace: true` 或 `logging.level: debug` 任一设置都可以生成 debug 产物。
+`logging.level: debug` 会启用 CLI 的详细输出，以及上面按进程保存的常规 debug 日志和按 workflow run 保存的 prompt/response 日志；`logging.debug: true`、`logging.trace: true` 或 `logging.level: debug` 任一设置都可以生成这些产物。
 
 ## Companion Provider Target
 

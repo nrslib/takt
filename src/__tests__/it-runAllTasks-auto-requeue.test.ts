@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -8,6 +8,7 @@ import { setMockScenario, resetScenario } from '../infra/mock/index.js';
 import { runAllTasks } from '../features/tasks/index.js';
 import { TaskRunner } from '../infra/task/index.js';
 import { invalidateGlobalConfigCache } from '../infra/config/index.js';
+import { initDebugLogger, resetDebugLogger } from '../shared/utils/debug.js';
 
 vi.mock('../core/workflow/phase-runner.js', () => ({
   runReportPhase: vi.fn().mockResolvedValue(undefined),
@@ -77,6 +78,137 @@ function loadTasks(projectDir: string): Array<Record<string, unknown>> {
   return (parseYaml(raw) as { tasks: Array<Record<string, unknown>> }).tasks;
 }
 
+interface PromptArtifactRecord {
+  phase: number;
+  phaseExecutionId?: string;
+  systemPrompt: string;
+  userInstruction: string;
+  prompt: string;
+  response: string;
+}
+
+interface TaskRunArtifacts {
+  task: string;
+  runSlug: string;
+  promptPath: string;
+  promptRecords: PromptArtifactRecord[];
+  trace: string;
+}
+
+function configurePromptTraceScenario(env: TestEnv, concurrency: 1 | 2): void {
+  writeFileSync(
+    join(env.projectDir, '.takt', 'config.yaml'),
+    [
+      'provider: mock',
+      `concurrency: ${concurrency}`,
+      'auto_requeue_max_attempts: 0',
+      'task_poll_interval_ms: 100',
+    ].join('\n'),
+    'utf-8',
+  );
+  writeFileSync(
+    join(env.globalDir, 'config.yaml'),
+    [
+      'logging:',
+      '  debug: true',
+      '  trace: true',
+    ].join('\n'),
+    'utf-8',
+  );
+  invalidateGlobalConfigCache();
+  initDebugLogger({ enabled: true, trace: true }, env.projectDir);
+}
+
+function loadTaskRunArtifacts(projectDir: string): TaskRunArtifacts[] {
+  return loadTasks(projectDir).map((task) => {
+    const taskContent = task.content;
+    const runSlug = task.run_slug;
+    if (typeof taskContent !== 'string' || typeof runSlug !== 'string') {
+      throw new Error('completed task must retain content and run_slug');
+    }
+    const runRoot = join(projectDir, '.takt', 'runs', runSlug);
+    const logsDir = join(runRoot, 'logs');
+    const promptFiles = readdirSync(logsDir)
+      .filter((file) => file.endsWith('-prompts.jsonl'));
+    if (promptFiles.length !== 1) {
+      throw new Error(`expected one run prompt file for ${runSlug}, found ${promptFiles.length}`);
+    }
+    const promptPath = join(logsDir, promptFiles[0]!);
+    const promptRecords = readFileSync(promptPath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as PromptArtifactRecord);
+    return {
+      task: taskContent,
+      runSlug,
+      promptPath,
+      promptRecords,
+      trace: readFileSync(join(runRoot, 'trace.md'), 'utf-8'),
+    };
+  });
+}
+
+function expectPromptTraceIsolation(projectDir: string, taskBodies: string[]): void {
+  const tasks = loadTasks(projectDir);
+  expect(tasks).toHaveLength(2);
+  expect(tasks.map((task) => task.status)).toEqual(['completed', 'completed']);
+
+  const artifacts = loadTaskRunArtifacts(projectDir);
+  expect(artifacts).toHaveLength(2);
+  const phaseOneRecords = artifacts.map((artifact) => {
+    expect(artifact.promptPath).toContain(join('.takt', 'runs', artifact.runSlug, 'logs'));
+    const record = artifact.promptRecords.find((entry) => entry.phase === 1);
+    expect(record).toBeDefined();
+    if (record === undefined) {
+      throw new Error(`phase 1 prompt record is missing for ${artifact.runSlug}`);
+    }
+    expect(record.userInstruction).toContain(artifact.task);
+    expect(artifact.trace).toContain(artifact.task);
+    expect(artifact.trace).toContain(record.response);
+
+    const otherTask = taskBodies.find((taskBody) => taskBody !== artifact.task);
+    if (otherTask === undefined) {
+      throw new Error(`other task body is missing for ${artifact.task}`);
+    }
+    for (const field of [
+      record.systemPrompt,
+      record.userInstruction,
+      record.prompt,
+      record.response,
+    ]) {
+      expect(field).not.toContain(otherTask);
+    }
+    expect(artifact.trace).not.toContain(otherTask);
+    return record;
+  });
+
+  expect(phaseOneRecords[0]?.phaseExecutionId).toBe('plan:1:1:1');
+  expect(phaseOneRecords[1]?.phaseExecutionId).toBe('plan:1:1:1');
+  expect(phaseOneRecords[0]?.response).not.toBe(phaseOneRecords[1]?.response);
+  expect(artifacts[0]?.trace).not.toContain(phaseOneRecords[1]!.response);
+  expect(artifacts[1]?.trace).not.toContain(phaseOneRecords[0]!.response);
+}
+
+async function runPromptTraceIsolationScenario(env: TestEnv, concurrency: 1 | 2): Promise<void> {
+  const taskBodies = [
+    `prompt isolation task A concurrency ${concurrency}`,
+    `prompt isolation task B concurrency ${concurrency}`,
+  ];
+  configurePromptTraceScenario(env, concurrency);
+  const runner = new TaskRunner(env.projectDir);
+  for (const taskBody of taskBodies) {
+    runner.addTask(taskBody, { workflow: 'auto-requeue-it' });
+  }
+  setMockScenario([
+    { persona: 'planner', status: 'done', content: `response A concurrency ${concurrency}` },
+    { persona: 'planner', status: 'done', content: `response B concurrency ${concurrency}` },
+  ]);
+
+  await runAllTasks(env.projectDir);
+
+  expectPromptTraceIsolation(env.projectDir, taskBodies);
+}
+
 describe('IT: runAllTasks auto requeue', () => {
   let env: TestEnv;
   let originalConfigDir: string | undefined;
@@ -87,10 +219,12 @@ describe('IT: runAllTasks auto requeue', () => {
     process.env.TAKT_CONFIG_DIR = env.globalDir;
     invalidateGlobalConfigCache();
     resetScenario();
+    resetDebugLogger();
   });
 
   afterEach(() => {
     resetScenario();
+    resetDebugLogger();
     if (originalConfigDir === undefined) {
       delete process.env.TAKT_CONFIG_DIR;
     } else {
@@ -161,5 +295,13 @@ describe('IT: runAllTasks auto requeue', () => {
     expect(tasks[0]?.failure).toEqual(expect.objectContaining({
       step: 'plan',
     }));
+  });
+
+  it('isolates terminal prompt traces for two parallel tasks in one CLI process', async () => {
+    await runPromptTraceIsolationScenario(env, 2);
+  });
+
+  it('isolates the later terminal prompt trace for two sequential tasks in one CLI process', async () => {
+    await runPromptTraceIsolationScenario(env, 1);
   });
 });

@@ -1224,7 +1224,7 @@ logging:
   debug: true
 ```
 
-デバッグログは `.takt/runs/debug-{timestamp}/logs/debug-{timestamp}.log` に NDJSON 形式で出力され、プロンプト/レスポンスログは同じディレクトリの `debug-{timestamp}-prompts.jsonl` に出力されます。
+一般デバッグログはプロセス単位で `.takt/runs/debug-{timestamp}/logs/debug-{timestamp}.log` に NDJSON 形式で出力されます。プロンプト/レスポンスログは workflow run 単位で `.takt/runs/<run>/logs/<sessionId>-prompts.jsonl` に出力されます。
 
 ### 詳細コンソール出力
 
@@ -1236,7 +1236,7 @@ logging:
   level: debug
 ```
 
-これは CLI 内部の verbose console mode も有効にします。さらに `logging.level: debug` だけでデバッグロガーも有効になるため、上記の `debug-{timestamp}.log` と `debug-{timestamp}-prompts.jsonl` は `logging.debug` を別途設定しなくても出力されます。`logging.debug: true`、`logging.trace: true`、`logging.level: debug` のいずれかで有効になります。
+これは CLI 内部の verbose console mode も有効にします。さらに `logging.level: debug` だけで、上記のプロセス単位の一般デバッグログと workflow run 単位のプロンプト/レスポンスログが、`logging.debug` を別途設定しなくても出力されます。`logging.debug: true`、`logging.trace: true`、`logging.level: debug` のいずれかで有効になります。
 
 ## Companion の provider target
 

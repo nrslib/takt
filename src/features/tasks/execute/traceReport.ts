@@ -1,4 +1,4 @@
-import type { NdjsonRecord, PromptLogRecord } from '../../../shared/utils/index.js';
+import type { NdjsonRecord } from '../../../shared/utils/index.js';
 import type {
   TraceReportMode,
   TraceReportParams,
@@ -8,6 +8,7 @@ import type {
 import { parseJsonl, buildTraceFromRecords, type PromptRecord } from './traceReportParser.js';
 import { cloneStepsForMode, sanitizeTraceParamsForMode } from './traceReportRedaction.js';
 import { assertTraceParams, renderTraceReportMarkdown } from './traceReportRenderer.js';
+import type { PromptLogRecord } from './promptLog.js';
 
 export type {
   TraceReportMode,

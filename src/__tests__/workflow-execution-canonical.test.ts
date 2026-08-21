@@ -106,9 +106,9 @@ vi.mock('../shared/utils/index.js', () => ({
   notifySuccess: vi.fn(),
   notifyError: vi.fn(),
   preventSleep: vi.fn(),
+  isDebugEnabled: vi.fn(() => false),
   generateReportDir: vi.fn(() => 'test-report-dir'),
   isValidReportDirName: vi.fn(() => true),
-  getDebugPromptsLogFile: vi.fn(() => undefined),
 }));
 
 vi.mock('../core/logging/providerEventLogger.js', () => ({

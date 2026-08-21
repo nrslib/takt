@@ -51,7 +51,7 @@ import { TaskPrefixWriter } from '../../../shared/ui/TaskPrefixWriter.js';
 import { getErrorMessage } from '../../../shared/utils/error.js';
 import {
   createLogger,
-  getDebugPromptsLogFile,
+  isDebugEnabled,
   isValidReportDirName,
   preventSleep,
 } from '../../../shared/utils/index.js';
@@ -517,7 +517,14 @@ export async function createWorkflowExecutionBootstrap(
       startTime: runBootstrap.startedAt,
     },
   );
-  const sessionLogger = new SessionLogger(ndjsonLogPath, allowSensitiveData);
+  const promptLogPath = isDebugEnabled()
+    ? join(runPaths.logsAbs, `${workflowSessionId}-prompts.jsonl`)
+    : undefined;
+  const sessionLogger = new SessionLogger(
+    ndjsonLogPath,
+    allowSensitiveData,
+    promptLogPath,
+  );
   if (options.interactiveMetadata) {
     sessionLogger.writeInteractiveMetadata(options.interactiveMetadata);
   }
@@ -676,7 +683,6 @@ export async function createWorkflowExecutionBootstrap(
         updateWorktreeSession(projectCwd, cwd, personaName, personaSessionId, currentProvider)
     : (persona: string, personaSessionId: string | undefined) =>
         updatePersonaSession(projectCwd, persona, personaSessionId, currentProvider);
-  const promptLogPath = getDebugPromptsLogFile() ?? undefined;
   const observabilityOptions = globalConfig.observability.enabled
     && (
       globalConfig.observability.sessionLogExporter

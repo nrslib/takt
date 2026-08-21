@@ -16,7 +16,7 @@ import type {
   NdjsonCompanionReviewSkipped,
   NdjsonCompanionReviewTrigger,
 } from '../../../infra/fs/index.js';
-import type { PromptLogRecord } from '../../../shared/utils/index.js';
+import type { PromptLogRecord } from './promptLog.js';
 import type {
   AgentResponse,
   WorkflowResumePointEntry,
