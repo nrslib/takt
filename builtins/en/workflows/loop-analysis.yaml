@@ -16,7 +16,7 @@ steps:
     knowledge: loop-analysis
     instruction: loop-analysis
     rules:
-      - condition: Analysis proposals are ready for independent review
+      - condition: when(true)
         next: review
 
   - name: review
@@ -44,5 +44,5 @@ steps:
     knowledge: loop-analysis
     instruction: reanalyze-loop-analysis
     rules:
-      - condition: Every recorded review finding is either resolved or classified with evidence as unable to be addressed with its affected proposal withdrawn or rejected
+      - condition: when(true)
         next: review

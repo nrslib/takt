@@ -76,6 +76,20 @@ describe('loop analysis builtin workflow integration', () => {
     rmSync(projectCwd, { recursive: true, force: true });
   });
 
+  it('declares analysis handoffs to review as deterministic transitions', () => {
+    const workflow = requireLoopAnalysisWorkflow(projectCwd);
+
+    for (const stepName of [workflow.initialStep, 'reanalyze']) {
+      const step = workflow.steps.find((candidate) => candidate.name === stepName);
+      expect(step?.rules).toEqual([
+        expect.objectContaining({
+          condition: { kind: 'when', expression: 'true' },
+          next: 'review',
+        }),
+      ]);
+    }
+  });
+
   it('Given every review rejects, When the bounded loop reaches its third review, Then it aborts at the iteration limit and preserves the last report', async () => {
     const workflow = requireLoopAnalysisWorkflow(projectCwd);
     const analyzerName = workflow.initialStep;

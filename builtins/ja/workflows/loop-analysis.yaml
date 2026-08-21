@@ -16,7 +16,7 @@ steps:
     knowledge: loop-analysis
     instruction: loop-analysis
     rules:
-      - condition: 分析結果と改善案が独立レビューに進める状態になっている
+      - condition: when(true)
         next: review
 
   - name: review
@@ -44,5 +44,5 @@ steps:
     knowledge: loop-analysis
     instruction: reanalyze-loop-analysis
     rules:
-      - condition: 記録された各レビュー指摘が、修正済みまたは根拠付きで対応不能として影響する提案を撤回または却下済みに整理されている
+      - condition: when(true)
         next: review
