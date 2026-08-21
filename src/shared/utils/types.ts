@@ -186,9 +186,12 @@ export interface NdjsonInteractiveEnd {
 
 export type NdjsonCompanionReviewTrigger = 'quiet' | 'forced' | 'completion' | 'commit';
 
+export type NdjsonCompanionReviewMode = 'completion' | 'live';
+
 export interface NdjsonCompanionReviewRound {
   type: 'companion_review_round';
   step: string;
+  reviewMode: NdjsonCompanionReviewMode;
   companion: string;
   trigger: NdjsonCompanionReviewTrigger;
   digest: string;

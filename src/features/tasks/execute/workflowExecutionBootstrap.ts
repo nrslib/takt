@@ -79,6 +79,7 @@ import type { WorkflowExecutionOptions } from './types.js';
 import {
   resolveRuntimeEnvironment,
 } from '../../../infra/config/runtime-provider/provider-environment.js';
+import type { CompanionReviewMode } from '../../../core/models/companion-types.js';
 import {
   collectLegacyProviderSignals,
   selectConfigTaktProviders,
@@ -126,6 +127,7 @@ export interface WorkflowExecutionBootstrap {
   internalAgentSeats: InternalAgentSeats | undefined;
   selectorProvider: WorkflowExecutionOptions['selectorProvider'];
   companionEnabled: boolean;
+  companionReviewMode: CompanionReviewMode;
   companionProviders: Readonly<Record<string, ProviderRoutingEntry>>;
   providerRoutingTagConflictPolicy: TagRoutingConflictPolicy;
   providerOptions: WorkflowExecutionOptions['providerOptions'];
@@ -748,6 +750,7 @@ export async function createWorkflowExecutionBootstrap(
     internalAgentSeats: providerEnvironment.internalAgents,
     selectorProvider,
     companionEnabled,
+    companionReviewMode: resolvedRuntimeEnvironment.companionReviewMode,
     companionProviders,
     providerRoutingTagConflictPolicy,
     providerOptions: effectiveProviderOptions,

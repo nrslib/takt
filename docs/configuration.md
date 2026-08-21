@@ -590,12 +590,25 @@ Companion reviewers are disabled by default. Enable them with the top-level
 version: 1
 companion:
   enabled: true
+  review_mode: completion # completion | live
 ```
+
+The `companion` policy must specify at least one of `enabled` or `review_mode`.
+A mode-only policy such as `companion: { review_mode: live }` is accepted and
+resolves to `enabled: false`; an empty `companion: {}` policy is rejected.
 
 When both global and project policies are specified, their values are combined
 with logical AND; a project value of `true` cannot re-enable a globally disabled
 companion. An omitted policy is neutral during layer merging, and Companion
 remains disabled when neither layer specifies one.
+
+`companion.review_mode` defaults to `completion`. The project value overrides the
+global value, and a project omission inherits the global value. `completion`
+reviews the cumulative diff after a successful implementer response; `live`
+preserves quiet, forced, and commit-triggered reviews during the response. Only
+`completion` and `live` are accepted, and invalid values fail while loading
+`runtime.yaml`. The mode is validated even when `companion.enabled` is `false`,
+but no Companion provider is resolved or executed in that case.
 
 Companion provider targets (`targets.companions`) and provider capability
 requirements apply only while companions are enabled. When disabled, companion

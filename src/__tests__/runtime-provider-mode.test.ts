@@ -52,6 +52,18 @@ describe('hasActiveProviderSection (C11/C25)', () => {
     }))).toBe(false);
   });
 
+  it('Given only companion.review_mode, When determining mode with legacy settings, Then legacy mode remains selected', () => {
+    const result = determineProviderConfigMode({
+      runtimeFile: runtimeFile({
+        version: 1,
+        companion: { review_mode: 'live' },
+      }),
+      legacyProviderSignals: [{ setting: 'provider', location: 'config.yaml', migrateTo: 'provider.defaults' }],
+    });
+
+    expect(result.mode).toBe('legacy');
+  });
+
   it('Given a companion-only target without a companion policy, Then it is inactive by default', () => {
     expect(hasActiveProviderSection(runtimeFile({
       version: 1,

@@ -15,6 +15,7 @@ import { validateWorkflowCallContracts } from '../../infra/config/loaders/workfl
 import { resolveAuxiliaryRuntimeEnvironment } from '../../infra/config/runtime-provider/provider-environment.js';
 import type { CompiledProviderEnvironment } from '../../infra/config/runtime-provider/environment.js';
 import { resolveWorkflowCompanions } from '../../infra/config/workflowCompanionResolution.js';
+import { buildCompanionMailboxDirectory } from '../../core/workflow/companion/mailbox.js';
 import { InstructionBuilder } from '../../core/workflow/instruction/InstructionBuilder.js';
 import { ReportInstructionBuilder } from '../../core/workflow/instruction/ReportInstructionBuilder.js';
 import { StatusJudgmentBuilder } from '../../core/workflow/instruction/StatusJudgmentBuilder.js';
@@ -30,7 +31,11 @@ import {
 import type { InstructionContext } from '../../core/workflow/instruction/instruction-context.js';
 import type { WorkflowConfig, WorkflowStep } from '../../core/models/index.js';
 import type { TagRoutingConflictPolicy } from '../../core/models/config-types.js';
-import { getAllParallelSubSteps, isDynamicParallelSubSteps } from '../../core/models/types.js';
+import {
+  getAllParallelSubSteps,
+  isDynamicParallelSubSteps,
+  isNormalAgentWorkflowStep,
+} from '../../core/models/types.js';
 import type { Language } from '../../core/models/types.js';
 import type { ProviderResolutionSource } from '../../core/workflow/provider-options-trace.js';
 import type { SelectorProviderInfo } from '../../core/workflow/types.js';
@@ -92,6 +97,7 @@ type PreviewProviderResolution = CompiledProviderEnvironment & ProviderModelReso
   modelSource: ProviderResolutionSource;
   tagConflictPolicy: TagRoutingConflictPolicy;
   companionEnabled: boolean;
+  companionReviewMode: ReturnType<typeof resolveAuxiliaryRuntimeEnvironment>['companionReviewMode'];
   providerEnvironment: CompiledProviderEnvironment;
   providerConfigMode: ReturnType<typeof resolveAuxiliaryRuntimeEnvironment>['providerConfigMode'];
 };
@@ -104,6 +110,7 @@ function resolvePreviewProviderResolution(
   return {
     ...runtimeEnvironment.providerEnvironment,
     companionEnabled: runtimeEnvironment.companionEnabled,
+    companionReviewMode: runtimeEnvironment.companionReviewMode,
     providerEnvironment: runtimeEnvironment.providerEnvironment,
     providerConfigMode: runtimeEnvironment.providerConfigMode,
   };
@@ -129,6 +136,29 @@ function resolvePreviewReviewScope(cwd: string): TaskReviewScope | undefined {
   }
 }
 
+function buildPreviewCompanionContext(
+  cwd: string,
+  step: WorkflowStep,
+  providerResolution: PreviewProviderResolution,
+): InstructionContext['companion'] | undefined {
+  if (
+    !providerResolution.companionEnabled
+    || !isNormalAgentWorkflowStep(step)
+    || step.companion === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    mailboxDirectory: buildCompanionMailboxDirectory({
+      cwd,
+      runSlug: 'preview',
+      runPathNamespace: [],
+      stepName: step.name,
+    }),
+    reviewMode: providerResolution.companionReviewMode,
+  };
+}
+
 function buildInstructionContext(
   cwd: string,
   config: WorkflowConfig,
@@ -136,6 +166,7 @@ function buildInstructionContext(
   step: WorkflowStep,
   language: Language,
   reviewScope: TaskReviewScope | undefined,
+  providerResolution: PreviewProviderResolution,
 ): InstructionContext {
   return {
     task: '<task content>',
@@ -154,6 +185,7 @@ function buildInstructionContext(
     language,
     reviewScope,
     workflowRules: step.engineSynthesized === true ? undefined : config.allStepsRules,
+    companion: buildPreviewCompanionContext(cwd, step, providerResolution),
   };
 }
 
@@ -164,10 +196,19 @@ function previewAgentStep(
   step: WorkflowStep,
   language: Language,
   reviewScope: TaskReviewScope | undefined,
+  providerResolution: PreviewProviderResolution,
 ): void {
   printStepExecutionMetadata(step);
 
-  const context = buildInstructionContext(cwd, config, stepIndex, step, language, reviewScope);
+  const context = buildInstructionContext(
+    cwd,
+    config,
+    stepIndex,
+    step,
+    language,
+    reviewScope,
+    providerResolution,
+  );
   const phase1Builder = new InstructionBuilder(step, context);
   console.log('\n--- Phase 1 (Main Execution) ---\n');
   console.log(phase1Builder.build());
@@ -237,6 +278,7 @@ export async function previewPrompts(
   header(`Workflow Prompt Preview: ${safeWorkflowName}`);
   info(`Steps: ${config.steps.length}`);
   info(`Language: ${language}`);
+  info(`Companion review mode: ${providerResolution.companionReviewMode}`);
   if (config.allStepsRules && config.allStepsRules.length > 0) {
     info('Workflow-wide rules:');
     for (const rule of config.allStepsRules) {
@@ -268,10 +310,10 @@ export async function previewPrompts(
           ? step.parallel.fixed.some((fixed) => fixed === substep) ? 'fixed' : 'pool candidate'
           : 'parallel';
         console.log(`\n--- ${role} substep ${subIndex + 1}: ${safeSubstepName} (persona: ${safeSubstepPersonaDisplayName}) ---\n`);
-        previewAgentStep(cwd, config, i, substep, language, reviewScope);
+        previewAgentStep(cwd, config, i, substep, language, reviewScope, providerResolution);
       }
     } else {
-      previewAgentStep(cwd, config, i, step, language, reviewScope);
+      previewAgentStep(cwd, config, i, step, language, reviewScope, providerResolution);
     }
 
     blankLine();

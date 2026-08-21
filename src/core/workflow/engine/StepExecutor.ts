@@ -19,6 +19,7 @@ import type {
   WorkflowWideRule,
   WorkflowResumePointEntry,
   NormalAgentWorkflowStep,
+  CompanionReviewMode,
   ResolvedFacetPool,
   ResolvedFacetContent,
 } from '../../models/types.js';
@@ -200,6 +201,7 @@ export interface StepExecutorDeps {
   readonly getRunId: () => string;
   readonly getRunPathNamespace: () => readonly string[];
   readonly companionEnabled: boolean;
+  readonly companionReviewMode: CompanionReviewMode;
   readonly companionDefinitions?: WorkflowConfig['companions'];
   readonly companionProviders?: WorkflowEngineOptions['companionProviders'];
   readonly companionSelectorProvider?: WorkflowEngineOptions['selectorProvider'];
@@ -1131,6 +1133,7 @@ export class StepExecutor {
                 runPathNamespace: this.deps.getRunPathNamespace(),
                 stepName: step.name,
               }),
+              reviewMode: this.deps.companionReviewMode,
             },
           }),
     }).build();
@@ -1401,6 +1404,7 @@ export class StepExecutor {
           providers: companionProviders,
           selectorProvider: this.deps.companionSelectorProvider,
           diffReader: companionDiffReader,
+          reviewMode: this.deps.companionReviewMode,
           abortSignal: this.resolveAbortSignal(),
           buildProviderCallCallbacks: ({
             agentName,

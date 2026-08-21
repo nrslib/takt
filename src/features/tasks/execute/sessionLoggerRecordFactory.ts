@@ -14,6 +14,7 @@ import type {
   NdjsonCompanionQueueCoalesced,
   NdjsonCompanionCall,
   NdjsonCompanionReviewSkipped,
+  NdjsonCompanionReviewMode,
   NdjsonCompanionReviewTrigger,
 } from '../../../infra/fs/index.js';
 import type { PromptLogRecord } from '../../../shared/utils/index.js';
@@ -319,6 +320,7 @@ export function buildWorkflowAbortRecord(
 
 export function buildCompanionReviewRoundRecord(input: {
   readonly step: string;
+  readonly reviewMode: NdjsonCompanionReviewMode;
   readonly companion: string;
   readonly trigger: NdjsonCompanionReviewTrigger;
   readonly digest: string;
@@ -333,6 +335,7 @@ export function buildCompanionReviewRoundRecord(input: {
   return {
     type: 'companion_review_round',
     step: input.step,
+    reviewMode: input.reviewMode,
     companion: input.companion,
     trigger: input.trigger,
     digest: input.digest,

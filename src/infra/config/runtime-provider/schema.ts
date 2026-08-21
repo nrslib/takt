@@ -11,6 +11,7 @@
 import { z } from 'zod';
 import { PROVIDER_TYPES } from '../../../shared/types/provider.js';
 import { PermissionModeSchema } from '../../../core/models/schema-base.js';
+import { COMPANION_REVIEW_MODE_VALUES } from '../../../core/models/companion-types.js';
 import { RUNTIME_PROVIDER_VERSION } from './constants.js';
 import { DEFAULT_COMPANION_ENABLED } from '../../../shared/constants.js';
 
@@ -80,9 +81,18 @@ const CompanionAssignmentSchema = z
 
 const RuntimeCompanionPolicySchema = z
   .object({
-    enabled: z.boolean(),
+    enabled: z.boolean().optional(),
+    review_mode: z.enum(COMPANION_REVIEW_MODE_VALUES).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.enabled === undefined && value.review_mode === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'companion policy must specify at least one of `enabled` or `review_mode`',
+      });
+    }
+  });
 
 /** An auto-routing pool candidate references a profile; it must not inline provider/model. */
 const CandidateSchema = z

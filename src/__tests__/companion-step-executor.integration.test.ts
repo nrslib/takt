@@ -1,8 +1,8 @@
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { WorkflowState } from '../core/models/types.js';
+import type { CompanionReviewMode, WorkflowState } from '../core/models/types.js';
 import type { CompanionDiffReader } from '../core/workflow/companion/diff-reader.js';
 import { CompanionReviewQueue } from '../core/workflow/companion/review-queue.js';
 import { CompanionStepRuntime } from '../core/workflow/companion/step-runtime.js';
@@ -16,6 +16,12 @@ import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engin
 import type { RunPaths } from '../core/workflow/run/run-paths.js';
 import { executeAgent } from '../agents/agent-usecases.js';
 import { callMock, resetScenario, setMockScenario } from '../infra/mock/index.js';
+import { invalidateGlobalConfigCache, loadWorkflowByIdentifier } from '../infra/config/index.js';
+import type { LegacyProviderEnvironmentInput } from '../infra/config/runtime-provider/environment.js';
+import { resolveRuntimeEnvironment } from '../infra/config/runtime-provider/provider-environment.js';
+import { executeTaskWithResult } from '../features/tasks/execute/taskExecution.js';
+import type { WorkflowExecutionEvent } from '../features/tasks/execute/types.js';
+import { initializeGitFixture } from './helpers/git-fixture.js';
 import { makeStep } from './test-helpers.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({ executeAgent: vi.fn() }));
@@ -104,6 +110,7 @@ function deps(input: {
   cwd: string;
   paths: RunPaths;
   companionEnabled: boolean;
+  companionReviewMode?: CompanionReviewMode;
   companionDiffReader: CompanionDiffReader;
   emitEvent: StepExecutorDeps['emitEvent'];
 }): StepExecutorDeps {
@@ -143,6 +150,7 @@ function deps(input: {
     getRunId: () => 'test-run',
     getRunPathNamespace: () => [],
     companionEnabled: input.companionEnabled,
+    companionReviewMode: input.companionReviewMode ?? 'completion',
     companionDefinitions: {
       reviewer: {
         name: 'reviewer',
@@ -218,6 +226,165 @@ describe('companion StepExecutor lifecycle', () => {
     }));
   });
 
+  it('propagates runtime.yaml live mode from the task entry to a live commit review', async () => {
+    mkdirSync(join(cwd, 'src'), { recursive: true });
+    writeFileSync(join(cwd, 'src', 'value.ts'), 'export const value = 1;\n', 'utf8');
+    initializeGitFixture(cwd, ['src/value.ts']);
+    mkdirSync(join(cwd, '.takt', 'workflows'), { recursive: true });
+    mkdirSync(join(cwd, '.takt', 'companions'), { recursive: true });
+    writeFileSync(join(cwd, '.takt', 'companions', 'reviewer.yaml'), [
+      'name: reviewer',
+      'description: Review implementation changes',
+      'interval_ms: 60000',
+    ].join('\n'), 'utf8');
+    writeFileSync(join(cwd, '.takt', 'runtime.yaml'), [
+      'version: 1',
+      'companion:',
+      '  enabled: true',
+      '  review_mode: live',
+      'provider:',
+      '  defaults:',
+      '    profile: default',
+      '  profiles:',
+      '    default:',
+      '      provider: mock',
+      '      model: mock-model',
+      '    reviewer:',
+      '      provider: mock',
+      '      model: mock-model',
+      '  targets:',
+      '    companions:',
+      '      reviewer:',
+      '        profile: reviewer',
+    ].join('\n'), 'utf8');
+    writeFileSync(join(cwd, '.takt', 'workflows', 'task-live.yaml'), [
+      'name: task-live',
+      'initial_step: implement',
+      'max_steps: 1',
+      'steps:',
+      '  - name: implement',
+      '    persona: coder',
+      '    instruction: Implement the requested change.',
+      '    edit: true',
+      '    allow_git_commit: true',
+      '    companion: [reviewer]',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
+    ].join('\n'), 'utf8');
+
+    const originalConfigDir = process.env.TAKT_CONFIG_DIR;
+    const globalConfigDir = mkdtempSync(join(tmpdir(), 'companion-task-global-'));
+    process.env.TAKT_CONFIG_DIR = globalConfigDir;
+    invalidateGlobalConfigCache();
+    expect(loadWorkflowByIdentifier('task-live', cwd)?.steps[0]).toMatchObject({
+      companion: { fixed: ['reviewer'] },
+      allowGitCommit: true,
+    });
+    const resolvedEnvironment = resolveRuntimeEnvironment({
+      projectCwd: cwd,
+      executionCwd: cwd,
+      legacy: {
+        provider: undefined,
+        providerSource: 'default',
+        model: undefined,
+        modelSource: 'default',
+        personaProviders: undefined,
+        providerRouting: undefined,
+        autoRouting: undefined,
+        providerOptions: undefined,
+      } satisfies LegacyProviderEnvironmentInput,
+      legacySignals: [],
+    });
+    expect(resolvedEnvironment.companionEnabled).toBe(true);
+    expect(resolvedEnvironment.companionReviewMode).toBe('live');
+    setMockScenario([{
+      persona: 'reviewer',
+      status: 'done',
+      content: 'reviewed',
+      structuredOutput: { findings: [], notes: null },
+    }]);
+    let coderReleased!: () => void;
+    const coderGate = new Promise<void>((resolve) => { coderReleased = resolve; });
+    let coderReturned = false;
+    vi.mocked(executeAgent).mockImplementation(async (persona, prompt, options) => {
+      options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: prompt });
+      if (persona === 'coder') {
+        writeFileSync(join(cwd, 'src', 'value.ts'), 'export const value = 2;\n', 'utf8');
+        options?.onStream?.({
+          type: 'tool_use',
+          data: {
+            tool: 'Bash',
+            input: { command: 'git commit -am "change"' },
+            id: 'commit-1',
+          },
+        });
+        await coderGate;
+        coderReturned = true;
+        return {
+          persona: 'coder',
+          status: 'done',
+          content: 'implemented',
+          timestamp: new Date(),
+        };
+      }
+      return callMock(options?.internalAgentName ?? persona ?? 'default', prompt, options);
+    });
+    const events: WorkflowExecutionEvent[] = [];
+    let taskPromise: ReturnType<typeof executeTaskWithResult> | undefined;
+
+    try {
+      taskPromise = executeTaskWithResult({
+        task: 'Implement the requested change.',
+        cwd,
+        projectCwd: cwd,
+        workflowIdentifier: 'task-live',
+        outputMode: 'silent',
+        eventSink: (event) => { events.push(event); },
+      });
+      let taskError: unknown;
+      const taskOutcome = taskPromise.then(
+        (result) => ({ result }),
+        (error: unknown) => {
+          taskError = error;
+          return { error };
+        },
+      );
+
+      await vi.waitFor(async () => {
+        if (taskError !== undefined) throw taskError;
+        expect(events).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            type: 'companion',
+            action: 'review_round',
+            reviewMode: 'live',
+            trigger: 'commit',
+          }),
+        ]));
+      }, { timeout: 30_000 });
+      expect(coderReturned).toBe(false);
+      coderReleased();
+      const outcome = await taskOutcome;
+      if ('error' in outcome) throw outcome.error;
+      const result = outcome.result;
+
+      expect(result.success).toBe(true);
+      expect(events.filter((event) => (
+        event.type === 'companion' && event.action === 'review_round'
+      ))).toHaveLength(1);
+    } finally {
+      coderReleased();
+      await taskPromise?.catch(() => undefined);
+      if (originalConfigDir === undefined) {
+        delete process.env.TAKT_CONFIG_DIR;
+      } else {
+        process.env.TAKT_CONFIG_DIR = originalConfigDir;
+      }
+      invalidateGlobalConfigCache();
+      rmSync(globalConfigDir, { recursive: true, force: true });
+    }
+  });
+
   it('delivers moderator-accepted findings in a follow-up prompt after draining reviews', async () => {
     const finding = 'Remove the unsafe assignment.';
     setMockScenario([
@@ -260,6 +427,7 @@ describe('companion StepExecutor lifecycle', () => {
       cwd,
       paths,
       companionEnabled: true,
+      companionReviewMode: 'completion',
       companionDiffReader: reviewableDiffReader(),
       emitEvent: vi.fn(),
     });
@@ -297,6 +465,7 @@ describe('companion StepExecutor lifecycle', () => {
     expect(vi.mocked(executorDeps.optionsBuilder.buildAgentOptions).mock.invocationCallOrder[0])
       .toBeLessThan(createRuntime.mock.invocationCallOrder[0]!);
     const runtimeInput = createRuntime.mock.calls[0]?.[0];
+    expect(runtimeInput).toMatchObject({ reviewMode: 'completion' });
     expect(runtimeInput).not.toHaveProperty('onStream');
     expect(runtimeInput).not.toHaveProperty('onActivity');
     const executionUnitKeys = vi.mocked(executorDeps.optionsBuilder.buildProviderCallCallbacks)

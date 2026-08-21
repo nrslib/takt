@@ -517,9 +517,16 @@ Companion reviewer 默认禁用。使用顶层 `companion.enabled` 策略启用�
 version: 1
 companion:
   enabled: true
+  review_mode: completion # completion | live
 ```
 
+`companion` 策略至少要指定 `enabled` 或 `review_mode` 之一。像
+`companion: { review_mode: live }` 这样的仅指定 mode 的策略会被接受，并解析为
+`enabled: false`；空的 `companion: {}` 会被拒绝。
+
 全局与项目策略同时设置时使用逻辑 AND；项目的 `true` 不能重新启用全局禁用的 companion。省略的策略在层合并时是 neutral；两层都没有设置时 Companion 仍禁用。Companion target 和 provider capability 只在启用时解析/执行；禁用时仍会校验 companion 声明和 `targets.companions` 的结构，但不会解析或运行 companion provider。只有存在有效 `provider` section 时才启用 runtime 模式；只有 `version: 1` 的文件不会改变旧版 `config.yaml` provider 解析。
+
+`companion.review_mode` 默认是 `completion`。project 值优先于 global 值；project 未指定时继承 global 值。`completion` 在 implementer 成功响应后审查累计 diff，`live` 保留响应期间的 quiet、forced 和 commit 触发。只接受 `completion` 和 `live`；无效值会在加载 `runtime.yaml` 时失败。即使 `companion.enabled` 为 `false`，仍会验证 mode 的结构，但不会解析或执行 Companion provider。
 
 ### 配置示例
 

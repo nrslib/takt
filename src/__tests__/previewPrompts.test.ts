@@ -11,6 +11,7 @@ const {
   mockResolveWorkflowConfigValue,
   mockResolveWorkflowSelector,
   mockResolveAuxiliaryRuntimeEnvironment,
+  mockResolveWorkflowCompanions,
   mockValidateWorkflowCallContracts,
   mockHeader,
   mockInfo,
@@ -28,6 +29,7 @@ const {
   mockResolveWorkflowConfigValue: vi.fn(),
   mockResolveWorkflowSelector: vi.fn(),
   mockResolveAuxiliaryRuntimeEnvironment: vi.fn(),
+  mockResolveWorkflowCompanions: vi.fn(),
   mockValidateWorkflowCallContracts: vi.fn(),
   mockHeader: vi.fn(),
   mockInfo: vi.fn(),
@@ -59,6 +61,10 @@ vi.mock('../infra/config/loaders/workflowResolver.js', () => ({
   validateWorkflowCallContracts: mockValidateWorkflowCallContracts,
 }));
 
+vi.mock('../infra/config/workflowCompanionResolution.js', () => ({
+  resolveWorkflowCompanions: mockResolveWorkflowCompanions,
+}));
+
 function compiledEnvironment(
   overrides: Partial<CompiledProviderEnvironment> = {},
 ): ResolvedRuntimeEnvironment {
@@ -78,15 +84,27 @@ function compiledEnvironment(
       ...overrides,
     },
     companionEnabled: true,
+    companionReviewMode: 'completion',
     providerConfigMode: 'legacy',
   };
 }
 
-vi.mock('../core/workflow/instruction/InstructionBuilder.js', () => ({
-  InstructionBuilder: mockInstructionBuilder.mockImplementation(() => ({
-    build: mockInstructionBuild,
-  })),
-}));
+vi.mock('../core/workflow/instruction/InstructionBuilder.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/instruction/InstructionBuilder.js')>();
+  return {
+    ...actual,
+    InstructionBuilder: mockInstructionBuilder.mockImplementation((step, context) => {
+      const builder = new actual.InstructionBuilder(step, context);
+      return {
+        build: () => {
+          const output = builder.build();
+          mockInstructionBuild(output);
+          return output;
+        },
+      };
+    }),
+  };
+});
 
 vi.mock('../core/workflow/instruction/ReportInstructionBuilder.js', () => ({
   ReportInstructionBuilder: vi.fn().mockImplementation(() => ({
@@ -160,6 +178,7 @@ describe('previewPrompts', () => {
         {
           name: 'implement',
           personaDisplayName: 'coder',
+          instruction: 'Implement the requested change.',
           outputContracts: [],
         },
       ],
@@ -179,6 +198,43 @@ describe('previewPrompts', () => {
       '/project',
       expect.objectContaining({ name: 'default' }),
     );
+    expect(mockInfo).toHaveBeenCalledWith('Companion review mode: completion');
+  });
+
+  it('resolved live modeを補助入口の表示へ渡す', async () => {
+    const runtimeEnvironment = compiledEnvironment();
+    runtimeEnvironment.companionReviewMode = 'live';
+    mockResolveAuxiliaryRuntimeEnvironment.mockReturnValueOnce(runtimeEnvironment);
+
+    await previewPrompts('/project');
+
+    expect(mockInfo).toHaveBeenCalledWith('Companion review mode: live');
+  });
+
+  it.each([
+    ['completion', 'Findings are delivered in a follow-up prompt'],
+    ['live', 'Read new records after finishing each file, before running tests, and before declaring completion.'],
+  ] as const)('実際のInstructionBuilderへresolved Companion contextを渡す (%s)', async (reviewMode, expectedText) => {
+    const runtimeEnvironment = compiledEnvironment();
+    runtimeEnvironment.companionReviewMode = reviewMode;
+    mockResolveAuxiliaryRuntimeEnvironment.mockReturnValueOnce(runtimeEnvironment);
+    mockLoadWorkflowByIdentifier.mockReturnValueOnce({
+      name: 'companion-preview',
+      maxSteps: 1,
+      steps: [{
+        name: 'implement',
+        personaDisplayName: 'coder',
+        instruction: 'Implement the requested change.',
+        edit: true,
+        companion: { fixed: ['reviewer'], pool: [] },
+        outputContracts: [],
+      }],
+    });
+
+    await previewPrompts('/project');
+
+    const calls = mockInstructionBuild.mock.calls;
+    expect(calls[calls.length - 1]?.[0]).toContain(expectedText);
   });
 
   // takt prompt は診断ツール。レビュー範囲を解決できなくてもプロンプト本体の
@@ -216,11 +272,13 @@ describe('previewPrompts', () => {
         {
           name: 'implement',
           personaDisplayName: 'coder',
+          instruction: 'Implement the requested change.',
           outputContracts: [],
         },
         {
           name: 'synthesized-judge',
           personaDisplayName: 'judge',
+          instruction: 'Judge the result.',
           outputContracts: [],
           engineSynthesized: true,
         },

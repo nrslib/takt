@@ -210,7 +210,7 @@ describe('RuntimeProviderFileSchema', () => {
     if (result.success) expect(result.data.provider).toBeUndefined();
   });
 
-  it('Given a companion policy, When parsed, Then enabled is required and strict', () => {
+  it('Given a companion policy, When parsed, Then at least one policy field is required and keys stay strict', () => {
     expect(RuntimeProviderFileSchema.safeParse({
       version: 1,
       companion: { enabled: false },
@@ -223,6 +223,49 @@ describe('RuntimeProviderFileSchema', () => {
       version: 1,
       companion: { enabled: false, extra: true },
     }).success).toBe(false);
+  });
+
+  it.each(['completion', 'live'] as const)('accepts companion.review_mode %s without enabled', (reviewMode) => {
+    const result = RuntimeProviderFileSchema.safeParse({
+      version: 1,
+      companion: { review_mode: reviewMode },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.companion?.enabled).toBeUndefined();
+      expect(result.data.companion?.review_mode).toBe(reviewMode);
+    }
+  });
+
+  it.each(['completion', 'live'] as const)('accepts companion.review_mode %s and preserves the value', (reviewMode) => {
+    const result = RuntimeProviderFileSchema.safeParse({
+      version: 1,
+      companion: { enabled: false, review_mode: reviewMode },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect((result.data.companion as unknown as { review_mode?: string } | undefined)?.review_mode)
+        .toBe(reviewMode);
+    }
+  });
+
+  it.each([
+    ['automatic', 'unknown string'],
+    [true, 'boolean'],
+  ])('rejects companion.review_mode %j (%s) at the field boundary', (reviewMode, _label) => {
+    const result = RuntimeProviderFileSchema.safeParse({
+      version: 1,
+      companion: { enabled: false, review_mode: reviewMode },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: ['companion', 'review_mode'] }),
+      ]));
+    }
   });
 
   it('Given a missing version, When parsed, Then it is rejected (C1)', () => {

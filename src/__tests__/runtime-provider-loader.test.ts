@@ -29,6 +29,10 @@ function writeRuntimeYaml(dir: string, lines: string[]): void {
   writeFileSync(join(dir, RUNTIME_PROVIDER_FILENAME), lines.join('\n'), 'utf-8');
 }
 
+function companionReviewMode(value: unknown): string | undefined {
+  return (value as { review_mode?: string } | undefined)?.review_mode;
+}
+
 describe('runtime-provider loader', () => {
   beforeEach(() => {
     // Unique per-run directory: a fixed tmpdir path would let two concurrent runs of this
@@ -336,6 +340,74 @@ describe('runtime-provider loader', () => {
     const resolved = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
 
     expect(resolved?.companion?.enabled).toBe(true);
+  });
+
+  it('Given global live and project completion policies, When resolving, Then project mode wins and enabled remains an AND', () => {
+    writeRuntimeYaml(globalDir, [
+      'version: 1',
+      'companion:',
+      '  enabled: false',
+      '  review_mode: live',
+    ]);
+    writeRuntimeYaml(projectDir, [
+      'version: 1',
+      'companion:',
+      '  enabled: true',
+      '  review_mode: completion',
+    ]);
+
+    const resolved = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
+
+    expect(resolved?.companion?.enabled).toBe(false);
+    expect(companionReviewMode(resolved?.companion)).toBe('completion');
+  });
+
+  it('Given a global mode and a project policy without review_mode, When resolving, Then the global mode is inherited', () => {
+    writeRuntimeYaml(globalDir, [
+      'version: 1',
+      'companion:',
+      '  enabled: true',
+      '  review_mode: live',
+    ]);
+    writeRuntimeYaml(projectDir, [
+      'version: 1',
+      'companion:',
+      '  enabled: true',
+    ]);
+
+    const resolved = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
+
+    expect(companionReviewMode(resolved?.companion)).toBe('live');
+  });
+
+  it('Given mode-only companion policies in both layers, When resolving, Then mode is inherited without synthesizing enabled', () => {
+    writeRuntimeYaml(globalDir, [
+      'version: 1',
+      'companion:',
+      '  review_mode: live',
+    ]);
+    writeRuntimeYaml(projectDir, [
+      'version: 1',
+      'companion:',
+      '  review_mode: completion',
+    ]);
+
+    const resolved = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
+
+    expect(resolved?.companion?.enabled).toBeUndefined();
+    expect(companionReviewMode(resolved?.companion)).toBe('completion');
+  });
+
+  it('Given an invalid companion.review_mode, When loading, Then the file and field are named in the error', () => {
+    writeRuntimeYaml(globalDir, [
+      'version: 1',
+      'companion:',
+      '  enabled: false',
+      '  review_mode: automatic',
+    ]);
+    const filePath = join(globalDir, RUNTIME_PROVIDER_FILENAME);
+
+    expect(() => loadRuntimeProviderFileAt(filePath)).toThrow(new RegExp(`${filePath}.*review_mode`, 's'));
   });
 
   it('Given both files omit companion, When resolving, Then companion remains undefined', () => {

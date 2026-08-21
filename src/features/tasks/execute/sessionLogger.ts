@@ -45,13 +45,14 @@ import {
 import type {
   NdjsonCompanionReviewSkipped,
   NdjsonCompanionQueueCoalesced,
-  NdjsonCompanionReviewRound,
 } from '../../../shared/utils/types.js';
 import {
   PrivateArtifactPublicationConflictError,
   readPrivateFileState,
   writePrivateFileWithModeExpected,
 } from '../../../shared/utils/private-file.js';
+
+type CompanionReviewRoundInput = Parameters<typeof buildCompanionReviewRoundRecord>[0];
 
 const SESSION_LOG_MODE = 0o600;
 const log = createLogger('session-logger');
@@ -398,7 +399,7 @@ export class SessionLogger {
   }
 
   onCompanionReviewRound(
-    input: Omit<NdjsonCompanionReviewRound, 'type' | 'timestamp'>,
+    input: CompanionReviewRoundInput,
   ): void {
     this.appendCompanionAuditRecord('companion_review_round', () => buildCompanionReviewRoundRecord(
       input,
