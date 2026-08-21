@@ -265,7 +265,6 @@ When the same workflow name exists in multiple locations, TAKT resolves in this 
 | `takt-default-team` | A `takt-default` variant that runs implementation and remediation through Team Leader task decomposition. |
 | `review` | Multi-perspective review with dynamic reviewer selection and supervisor synthesis, without modifying code. |
 | `review-fix` | Multi-perspective review with dynamic reviewer selection, followed by the default workflow's adjudicated, verified remediation loop and final requirement check. |
-| `review-fix-default` | Legacy multi-perspective review + fix loop with fixed architecture, security, testing, and coding reviewers. |
 
 Domain-specific families (`simple-*` / `frontend` / `backend` / `dual` / CQRS / `*-mini` variants) remain available under the 📦 Legacy category.
 
