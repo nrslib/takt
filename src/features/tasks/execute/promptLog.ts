@@ -1,4 +1,8 @@
 import { appendPrivateFile } from '../../../shared/utils/private-file.js';
+import { safeExternalErrorMessage } from '../../../shared/utils/safeExternalErrorMessage.js';
+import { createLogger } from '../../../shared/utils/index.js';
+
+const log = createLogger('prompt-log');
 
 export interface PromptLogRecord {
   step: string;
@@ -19,7 +23,9 @@ export function writePromptLog(
 ): void {
   try {
     appendPrivateFile(promptLogPath, JSON.stringify(record) + '\n');
-  } catch {
-    // Logging errors must not interrupt the workflow.
+  } catch (error) {
+    log.warn('Prompt log could not be persisted; continuing workflow', {
+      error: safeExternalErrorMessage(error),
+    });
   }
 }

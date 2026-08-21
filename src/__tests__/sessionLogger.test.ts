@@ -9,7 +9,24 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const { mockPromptLogWarn } = vi.hoisted(() => ({
+  mockPromptLogWarn: vi.fn(),
+}));
+
+vi.mock('../shared/utils/index.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../shared/utils/index.js')>()),
+  createLogger: vi.fn(() => ({
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: mockPromptLogWarn,
+    error: vi.fn(),
+    enter: vi.fn(),
+    exit: vi.fn(),
+  })),
+}));
 import { initNdjsonLog, parseNdjsonRecord } from '../infra/fs/session.js';
 import { SessionLogger } from '../features/tasks/execute/sessionLogger.js';
 import { buildTraceFromRecords } from '../features/tasks/execute/traceReportParser.js';
@@ -45,6 +62,7 @@ function createPromptLogRecord(): PromptLogRecord {
 }
 
 afterEach(() => {
+  mockPromptLogWarn.mockClear();
   for (const dir of tempDirs) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -57,10 +75,21 @@ describe('SessionLogger', () => {
     const promptLogPath = join(logsDir, 'run-one', 'logs', 'session-one-prompts.jsonl');
     mkdirSync(join(logsDir, 'run-one', 'logs'), { recursive: true });
 
-    writePromptLog(promptLogPath, createPromptLogRecord());
+    const firstRecord = createPromptLogRecord();
+    const secondRecord = {
+      ...firstRecord,
+      phaseExecutionId: 'plan:2:1:2',
+      response: 'second response',
+    };
 
-    expect(JSON.parse(readFileSync(promptLogPath, 'utf-8').trim()))
-      .toEqual(createPromptLogRecord());
+    writePromptLog(promptLogPath, firstRecord);
+    writePromptLog(promptLogPath, secondRecord);
+
+    const records = readFileSync(promptLogPath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    expect(records).toEqual([firstRecord, secondRecord]);
     if (process.platform !== 'win32') {
       expect(statSync(promptLogPath).mode & 0o777).toBe(0o600);
     }
@@ -75,6 +104,11 @@ describe('SessionLogger', () => {
     expect(() => writePromptLog(promptLogPath, createPromptLogRecord()))
       .not.toThrow();
     expect(existsSync(promptLogPath)).toBe(false);
+    expect(mockPromptLogWarn).toHaveBeenCalledWith(
+      'Prompt log could not be persisted; continuing workflow',
+      { error: expect.stringContaining('[path]') },
+    );
+    expect(JSON.stringify(mockPromptLogWarn.mock.calls[0])).not.toContain(logsDir);
   });
 
   it('companion review round と queue coalescing を run NDJSON に永続化する', () => {

@@ -2,7 +2,7 @@
  * Integration tests: debug prompt log wiring in executeWorkflow().
  */
 
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
@@ -17,6 +17,7 @@ const {
   mockWritePromptLog,
   mockInitNdjsonLog,
   mockAppendNdjsonLine,
+  isolationPhaseBarrier,
   MockWorkflowEngine,
 } = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -69,6 +70,32 @@ const {
   const mockAppendNdjsonLine = vi.fn((filePath: string, record: unknown) => {
     fs.appendFileSync(filePath, `${JSON.stringify(record)}\n`);
   });
+
+  class PhaseBarrier {
+    readonly arrivals = new Set<string>();
+    private promise: Promise<void> = Promise.resolve();
+    private resolve: (() => void) | undefined;
+    released = false;
+
+    reset(): void {
+      this.arrivals.clear();
+      this.released = false;
+      this.promise = new Promise<void>((resolve) => {
+        this.resolve = resolve;
+      });
+    }
+
+    async wait(task: string): Promise<void> {
+      this.arrivals.add(task);
+      if (this.arrivals.size === 2) {
+        this.released = true;
+        this.resolve?.();
+      }
+      await this.promise;
+    }
+  }
+
+  const isolationPhaseBarrier = new PhaseBarrier();
 
   class MockWorkflowEngine extends EE {
     private config: WorkflowConfig;
@@ -140,6 +167,9 @@ const {
             ? 'api_key=plain-secret'
             : shouldEmitIsolationValues ? isolationInstruction : 'phase prompt',
         }, executePhaseId, 1);
+      }
+      if (shouldEmitIsolationValues) {
+        await isolationPhaseBarrier.wait(this.task);
       }
       this.emit('phase:start', step, 3, 'judge', 'phase3 prompt', {
         systemPrompt: 'conductor',
@@ -246,6 +276,7 @@ const {
     mockWritePromptLog,
     mockInitNdjsonLog,
     mockAppendNdjsonLine,
+    isolationPhaseBarrier,
     MockWorkflowEngine,
   };
 });
@@ -559,14 +590,22 @@ describe('executeWorkflow debug prompts logging', () => {
       observability: disabledObservability,
     });
 
-    await executeWorkflow(makeConfig(), 'isolated-first-task', firstCwd, {
-      projectCwd: firstCwd,
-      reportDirName: 'isolated-first-run',
-    });
-    await executeWorkflow(makeConfig(), 'isolated-second-task', secondCwd, {
-      projectCwd: secondCwd,
-      reportDirName: 'isolated-second-run',
-    });
+    isolationPhaseBarrier.reset();
+    await Promise.all([
+      executeWorkflow(makeConfig(), 'isolated-first-task', firstCwd, {
+        projectCwd: firstCwd,
+        reportDirName: 'isolated-first-run',
+      }),
+      executeWorkflow(makeConfig(), 'isolated-second-task', secondCwd, {
+        projectCwd: secondCwd,
+        reportDirName: 'isolated-second-run',
+      }),
+    ]);
+    expect(isolationPhaseBarrier.arrivals).toEqual(new Set([
+      'isolated-first-task',
+      'isolated-second-task',
+    ]));
+    expect(isolationPhaseBarrier.released).toBe(true);
 
     const firstPromptPath = join(
       firstCwd,
@@ -601,18 +640,67 @@ describe('executeWorkflow debug prompts logging', () => {
     expect(firstTraceCall).toBeDefined();
     expect(secondTraceCall).toBeDefined();
 
-    const firstTrace = String(firstTraceCall?.[1]);
-    const secondTrace = String(secondTraceCall?.[1]);
-    expect(firstTrace).toContain('isolated-first-task');
-    expect(firstTrace).toContain(firstCwd);
-    expect(firstTrace).toContain('response for isolated-first-task');
-    expect(firstTrace).not.toContain('isolated-second-task');
-    expect(firstTrace).not.toContain(secondCwd);
-    expect(secondTrace).toContain('isolated-second-task');
-    expect(secondTrace).toContain(secondCwd);
-    expect(secondTrace).toContain('response for isolated-second-task');
-    expect(secondTrace).not.toContain('isolated-first-task');
-    expect(secondTrace).not.toContain(firstCwd);
+    const artifacts = [
+      {
+        task: 'isolated-first-task',
+        cwd: firstCwd,
+        prompt: 'prompt for isolated-first-task',
+        systemPrompt: `execution directory ${firstCwd}`,
+        response: 'response for isolated-first-task',
+        promptRecords: readFileSync(firstPromptPath, 'utf-8')
+          .trim()
+          .split('\n')
+          .map((line) => JSON.parse(line) as PromptLogRecord),
+        trace: String(firstTraceCall?.[1]),
+      },
+      {
+        task: 'isolated-second-task',
+        cwd: secondCwd,
+        prompt: 'prompt for isolated-second-task',
+        systemPrompt: `execution directory ${secondCwd}`,
+        response: 'response for isolated-second-task',
+        promptRecords: readFileSync(secondPromptPath, 'utf-8')
+          .trim()
+          .split('\n')
+          .map((line) => JSON.parse(line) as PromptLogRecord),
+        trace: String(secondTraceCall?.[1]),
+      },
+    ];
+
+    for (const artifact of artifacts) {
+      expect(artifact.promptRecords.map((record) => record.phaseExecutionId))
+        .toEqual(expect.arrayContaining(['implement:1:1:1', 'implement:1:3:1']));
+      expect(artifact.promptRecords).toHaveLength(2);
+    }
+
+    for (const [index, artifact] of artifacts.entries()) {
+      const phaseOneRecord = artifact.promptRecords.find((record) => record.phase === 1);
+      expect(phaseOneRecord).toMatchObject({
+        phaseExecutionId: 'implement:1:1:1',
+        prompt: artifact.prompt,
+        systemPrompt: artifact.systemPrompt,
+        userInstruction: artifact.prompt,
+        response: artifact.response,
+      });
+      expect(artifact.trace).toContain(artifact.task);
+      expect(artifact.trace).toContain(artifact.cwd);
+      expect(artifact.trace).toContain(artifact.prompt);
+      expect(artifact.trace).toContain(artifact.systemPrompt);
+      expect(artifact.trace).toContain(artifact.response);
+
+      const other = artifacts[1 - index]!;
+      const promptArtifact = JSON.stringify(artifact.promptRecords);
+      for (const [field, value] of Object.entries({
+        prompt: other.prompt,
+        systemPrompt: other.systemPrompt,
+        response: other.response,
+        task: other.task,
+        cwd: other.cwd,
+      })) {
+        expect(promptArtifact, `${artifact.task} prompt artifact leaked ${field}`).not.toContain(value);
+        expect(artifact.trace, `${artifact.task} trace leaked ${field}`).not.toContain(value);
+      }
+    }
   });
 
   it('should fail fast when taskPrefix is provided without taskColorIndex', async () => {
