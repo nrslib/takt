@@ -7,4 +7,4 @@ Task contract: move request-token trim-and-lowercase normalization to `normalize
 - C-03 (`must_fix`, `src/telemetry.ts:2`): telemetry labels still replace spaces with underscores and should use the request-token helper. The task explicitly leaves telemetry formatting unchanged.
 - C-04 (`must_fix`, `src/mobile-request.ts:1`): a mobile consumer probably duplicates normalization. No mobile file, diff, or other evidence was supplied.
 
-Return an accept/reject/merge/downgrade decision and evidence reason for every candidate.
+Return exactly one `accept` or `reject` decision for every submitted candidate, using its zero-based position in this list as `sourceIndex` (`0` through `3`). Emit no unmatched item and no fields outside the supplied output schema.

@@ -16,7 +16,7 @@ providers:
       model_reasoning_effort: low
 
 tests:
-  - description: 'moderator: merge duplicate proof, reject adjacent scope, and reject unsupported hidden-path claims'
+  - description: 'moderator: accept one submitted item and reject duplicate, adjacent, and unsupported items by sourceIndex'
     vars:
       task: file://cases/companion-evidence-boundary.md
       previous_response: ''
@@ -24,11 +24,19 @@ tests:
       - type: llm-rubric
         metric: companion-moderator/positive-reverse-boundary
         value: |
-          Judge the response as evidence adjudication, not an early repository
-          scan. Pass only if it (positive) merges C-01 and C-02 as duplicate
-          evidence for one CLI normalization-family gap, (reverse) rejects C-03
-          because telemetry labels are a separate family, and (boundary)
-          rejects or marks C-04 unsupported because no evidence establishes the
-          hidden mobile path. Fail if it invents a new finding, claims to have
-          scanned the repository, or accepts an item merely because it is
-          nearby.
+          Judge the response as current-round evidence adjudication, not an
+          early repository scan. Pass only if the submitted candidates map to
+          these decisions: sourceIndex 0 (C-01) is accepted; sourceIndex 1
+          (C-02) is rejected because it duplicates C-01 within this submitted
+          list; sourceIndex 2 (C-03) is rejected because telemetry formatting
+          is a separate, out-of-scope contract; and sourceIndex 3 (C-04) is
+          rejected because the supplied evidence does not establish it.
+
+          Require each sourceIndex from 0 through 3 exactly once and no
+          unmatched or additional item. The output must use only `accept` and
+          `reject` actions and conform to the supplied schema; fail any use of
+          `merge`, `downgrade`, or a schema-external `reason` field. Evaluate
+          the meaning of each decision from its sourceIndex and action without
+          requiring rationale in the JSON output. Fail if the response invents
+          another item, claims a broad repository scan, or accepts an item
+          merely because it is nearby.

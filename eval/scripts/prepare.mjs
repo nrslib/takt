@@ -244,6 +244,11 @@ const TARGETS = [
     fixture: 'eval/fixtures/companion-family-boundary',
   },
   {
+    id: 'companion-testing-later-scan',
+    companion: 'testing-review-companion',
+    fixture: 'eval/fixtures/testing-review-observable-evidence',
+  },
+  {
     id: 'companion-evidence-boundary',
     companion: 'review-companion-moderator',
     fixture: 'eval/fixtures/companion-family-boundary',

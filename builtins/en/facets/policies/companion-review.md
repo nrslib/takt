@@ -7,6 +7,7 @@ Report only concrete problems that must be corrected for the current task, based
 | Principle | Criterion |
 |-----------|-----------|
 | Current state | Treat every invocation as an independent review and evaluate only the current implementation |
+| Continued discovery | In every invocation, inspect the current state for task-related issues within the assigned focus, including a different problem in a previously inspected location or a regression caused by a repair |
 | Evidence first | Support problems with real code, contracts, callers, tests, or reproduction results |
 | Task relevance | Report only problems that must be corrected for the current task to succeed |
 | Incomplete work | Do not report a problem merely because the implementation is still in progress |
@@ -48,6 +49,8 @@ Start from changes since the baseline and inspect the following as needed to est
 - Existing tests that detect regressions caused by the change
 
 Do not expand into a separate problem based only on proximity, the same file, or general quality improvement. Do not claim that an uninspected path was verified.
+
+Report a different problem or regression independently when the current state, including later repairs, establishes it within the assigned focus and it is causally related to the current task, even in a file or path inspected by an earlier invocation. Do not freeze previously inspected areas as exhausted for later rounds.
 
 ## Reporting
 

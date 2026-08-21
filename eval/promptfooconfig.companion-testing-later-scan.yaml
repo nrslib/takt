@@ -1,0 +1,47 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+
+description: 'TAKT facet eval: testing Companion later-call observable regression detection'
+
+prompts:
+  - file://prompts/companion-testing-later-scan.phase1.md
+
+providers:
+  - id: openai:codex-sdk
+    label: codex
+    config:
+      working_dir: fixtures/testing-review-observable-evidence
+      sandbox_mode: read-only
+      approval_policy: never
+      skip_git_repo_check: true
+      model_reasoning_effort: low
+
+tests:
+  - description: 'testing companion: later call finds a different public-behavior coverage gap without importing workflow lifecycle'
+    vars:
+      task: file://cases/testing-review-observable-evidence-task.md
+      previous_response: file://cases/prev-companion-testing-later-scan.md
+    assert:
+      - type: llm-rubric
+        metric: companion/testing-later-round-regression-detection
+        value: |
+          Judge the response as a later in-progress testing Companion review
+          over the current repository state. Pass only if it reports that the
+          current suite cannot detect the public behavior failure where
+          `execute({ timeoutMs: 2500 }).timeoutMs` returns the provider default
+          instead of `2500`: option-resolution and provider tests pass in
+          isolation, but `buildRequest` drops `timeoutMs`, and no test exercises
+          that propagation through `execute()`. It must request one minimal
+          behavior-level regression test through the public `execute()` entry
+          point, even though `tests/application.test.js` was previously
+          inspected for the separate `traceLabel` contract. It may mention the
+          production wiring defect only as evidence for the missing regression
+          detection; the testing gap must remain the review subject.
+
+          The response must not request duplicate per-module or per-hop tests,
+          additional tests for the already-covered `traceLabel` contract, or
+          assertions that freeze natural-language text, raw YAML, helper/import
+          names, file layout, or other internal structure. It must not classify
+          review items with the outer workflow's `finding_id`, `family_tag`,
+          `new`, `persists`, `reopened`, or `resolved` lifecycle, and must not
+          perform accept/reject adjudication. A statement that those lifecycle
+          labels are inapplicable is allowed.

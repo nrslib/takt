@@ -18,4 +18,4 @@ Adjudicate only the findings submitted in the current Companion review round.
 
 Return `accept` only when the supplied evidence confirms a defect and its remediation is authorized by the task. Return `reject` for unsupported, duplicate-within-the-current-list, out-of-scope, preference-only, ordinary-incompleteness, or overreaching findings. When the supplied evidence is insufficient, reject rather than guess.
 
-Reviewer severity is evidence for the implementation agent, not an adjudication gate. Do not change severity, create replacement findings, combine findings, perform a broad new review, or preserve cross-round state.
+Reviewer severity is evidence for the implementation agent, not an adjudication gate. Do not change severity, replace or combine submitted items, perform repository review unrelated to verifying those items, or preserve cross-round state.
