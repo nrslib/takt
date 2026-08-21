@@ -20,7 +20,7 @@
 ## Current Iteration Findings (new)
 | # | finding_id | family_tag | Location | Issue | Authorization Basis | Reason Absent from Initial Round | Fix Suggestion |
 |---|------------|------------|----------|-------|---------------------|----------------------------------|----------------|
-| 1 | FE-NEW-src-file-L42 | component-design | `src/file.tsx:42` | Issue description | required_consumer_migration | The initial review evidence did not inspect this consumer | Fix approach |
+| 1 | FE-NEW-src-file-L42 | component-design | `src/file.tsx:42` | Issue description | {For follow-up, the exact single machine value selected by the applicable policy; not applicable for initial review} | {Independent causal evidence for the follow-up omission; not applicable for initial review} | Fix approach |
 
 {{include:output-contracts/base-review-follow-up-authorization}}
 

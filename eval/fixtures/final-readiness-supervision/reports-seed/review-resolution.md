@@ -1,29 +1,29 @@
-# Review Finding Adjudication
+# レビュー指摘の裁定
 
-## Result: NO ACTIONABLE FINDINGS
+## 結果: NO ACTIONABLE FINDINGS
 
-## Decision Summary
-No submitted finding is authorized for remediation.
+## 裁定サマリー
+提出された finding に修正権限はありません。
 
-## Requirement Decision Grounds
-| Subject | Status | Grounds |
-|---------|--------|---------|
-| Mode behavior | Fulfilled | `src/mode.js` implements the reviewed CLI entry |
+## 要件判定の根拠
+| 対象 | 状態 | 根拠 |
+|------|------|------|
+| mode の挙動 | 充足 | `src/mode.js` がレビュー対象の CLI entry を実装している |
 
-## Invariant Register Carry-forward
-Carry-forward source: No prior remediation
+## 不変条件の再発記録
+引継元: 前回の remediation なし
 
-| Fix Unit | Family ID | Invariant Name | Responsible Source | Current Verification Number | Previous Verification Number | Previous Path | Current Path | Same-Invariant / Recurrence Judgment | Cumulative `incomplete` Count | Recurrence on a Different Path Confirmed? | Enforcement-Point Candidate | Record Integrity |
-|----------|-----------|----------------|--------------------|-----------------------------|------------------------------|---------------|--------------|--------------------------------------|-------------------------------|-------------------------------------------|-----------------------------|------------------|
+| 修正単位 | Family ID | 不変条件名 | 担当箇所 | 今回の検証回数 | 前回の検証回数 | 前回経路 | 今回経路 | 同一不変条件・再発判定 | 累積 `incomplete` 回数 | 別経路での再発確認 | 強制点候補 | 記録の完全性 |
+|----------|-----------|------------|----------|------------------|------------------|----------|----------|------------------------|-------------------------|--------------------|------------|--------------|
 
-## Actionable Families
-| family | Finding ID / source | Authorization basis | Evidence | Problem -> root cause | Affected contract paths | Acceptance criteria | Remediation boundary |
-|--------|---------------------|---------------------|----------|-----------------------|-------------------------|---------------------|----------------------|
+## 修正対象 family
+| family | finding ID / 出典 | Authorization basis | 根拠 | 問題 -> 根本原因 | 関係する契約経路 | 受入条件 | 修正境界 |
+|--------|---------------------|---------------------|------|-------------------|------------------|----------|----------|
 
-## Finding Dispositions
-| Finding ID / source | Technical validity | Disposition | Target family | Authorization basis | Reason absent from initial round | Evidence |
-|---------------------|--------------------|-------------|---------------|---------------------|----------------------------------|----------|
-| OLD-REVIEW-readme-L1 / testing-review.md | Confirmed | out_of_scope | none | none | not applicable | Exhaustive README examples are unrelated to the requested mode behavior. |
+## 指摘ごとの裁定
+| finding ID / 出典 | 技術的妥当性 | 裁定 | 対象 family | Authorization basis | 初回に含まれなかった理由 | 根拠 |
+|-------------------|--------------|------|-------------|---------------------|--------------------------|------|
+| OLD-REVIEW-readme-L1 / testing-review.md | 確認済み | out_of_scope | なし | なし | 該当なし | 網羅的な README 例は要求された mode の挙動と無関係である。 |
 
-## Unresolved Premises
-- None.
+## 未解決の前提
+- なし。

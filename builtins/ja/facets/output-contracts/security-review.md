@@ -12,7 +12,7 @@
 ## 今回の指摘（new）
 | # | finding_id | family_tag | 重大度 | 種類 | 場所 | 問題 | Authorization basis | 初回に含まれなかった理由 | 修正案 |
 |---|------------|------------|--------|------|------|------|---------------------|------------------------------|--------|
-| 1 | SEC-NEW-src-db-L42 | injection-risk | High | SQLi | `src/db.ts:42` | 生SQL文字列 | direct_acceptance_criterion_violation | 初回レビュー証跡は別のquery入口だけを確認していた | パラメータ化クエリを使用 |
+| 1 | SEC-NEW-src-db-L42 | injection-risk | High | SQLi | `src/db.ts:42` | 生SQL文字列 | {follow-upでは適用 policy が選定した正確な機械値1つ。初回は該当なし} | {follow-upで初回に含まれなかったことを示す独立した因果証拠。初回は該当なし} | パラメータ化クエリを使用 |
 
 {{include:output-contracts/base-review-follow-up-authorization}}
 

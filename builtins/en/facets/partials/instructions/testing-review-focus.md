@@ -12,5 +12,6 @@ Focus on reviewing **test quality**.
 8. For prohibition, rejection, non-inheritance, unsupported targets, and isolation, verify that tests extract observable units and check each forbidden value instead of relying on exact-string absence alone
 9. For new configuration boundaries, check normalization inputs such as empty strings, whitespace-only strings, empty arrays, and case variants when relevant
 10. Verify that E2E timeout, cleanup, and forced-termination handling follows existing same-kind test conventions
+11. When forming findings from uncovered conditions, preserve the applicable authority policy's decisions and do not aggregate conditions that the policy requires to remain separate
 
 Report a test-addition concern only when you can identify an acceptance criterion or observable contract that this change can break and a concrete failure path that existing tests cannot detect. Do not request duplicate tests; assertions that freeze workflow names, full natural-language text, raw YAML structure, helpers, or internal implementation details; assertions already covered by loader, gate, or higher-level behavior tests; permanent migration-inventory assertions; or assertions without concrete regression-detection value. Do not report test reduction or consolidation as a separate problem unless it is causally required by this change.

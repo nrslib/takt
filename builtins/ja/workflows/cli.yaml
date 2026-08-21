@@ -15,6 +15,7 @@ steps:
       development_knowledge: [architecture, task-decomposition]
       implementation_instruction: implement
       review_policy: [coding, testing, review, architecture]
+      final_gate_policy: [coding, testing, architecture]
       review_knowledge: [architecture, unit-testing, e2e-testing]
     rules:
       - condition: COMPLETE

@@ -87,6 +87,20 @@ The `security-review-method` suite measures the initial security-review method
 against seven boundary and evidence cases on Opus 5, Luna Max, and Sol High.
 Run it through `npm run eval:prompts:security-review-method`.
 
+The `review-family-closure` suite measures first-round path breadth for one
+contract family on Claude Opus 5, Codex Luna Max, and Codex Sol High. It needs
+both CLI logins and is excluded from the default suite run; invoke it with
+`npm run eval:prompts:review-family-closure`.
+
+The `follow-up-review-repair-regression` suite measures the follow-up round on
+the same three models: falsifying a completion claim, separating a
+repair-induced regression from an initially missed consumer, and enumerating
+the distinct reachable terminal results of one newly exposed projection. It
+needs both CLI logins and is excluded from the default suite run; invoke it with
+`npm run eval:prompts:follow-up-review-repair-regression`. It shares its fixture
+with `follow-up-testing-review-repair-regression`, which measures test-scope
+authority over the same repair.
+
 ## Suites
 
 | Suite | Workflow / step | Fixture | Measures |
@@ -107,7 +121,7 @@ Run it through `npm run eval:prompts:security-review-method`.
 | `fix-plan-bounded-proof` | peer-review / fix-plan | fix-plan-bounded-proof | whether Opus 5, Luna Max, and Sol High turn broad format, consumer, and boundary claims into source-backed concrete rows for report variants, helper limits, absence states, branch identity, and locale consumers |
 | `fix-plan-fresh-findings` | peer-review / fix-plan | fix-plan-fresh-findings | whether fix-plan uses the accepted group of findings, covers every affected use of the same rule, and does not revive findings that were excluded |
 | `fix-plan-boundary-preflight` | peer-review / fix-plan | fix-plan-boundary-preflight | whether fix-plan rejects a locally valid method that violates its representation and persistence boundary |
-| `review-family-closure` | peer-review-suite-base / coding-review | review-family-closure | whether one review reports every path affected by the same contract defect instead of stopping at a representative example |
+| `review-family-closure` | peer-review-suite-base / coding-review | review-family-closure | whether one review reports every path affected by the same contract defect instead of stopping at a representative example; measured on Opus, Luna Max, and Sol High |
 | `initial-review-contract-discovery` | peer-review / initial coding-review | initial-review-contract-discovery | whether the initial review independently discovers multiple blocking families and completes each family sweep |
 | `initial-review-external-identity-wiring` | takt-development-review / initial coding-review | initial-review-external-identity-wiring | whether Opus 5, Luna Max, and Sol High reject an external target value that is shortened in the same way across config, two consumers, and a green E2E, require a test using the documented value, and preserve an adjacent local-cache contract |
 | `testing-review-observable-evidence` | peer-review / initial testing-review | testing-review-observable-evidence | whether testing review requires one missing behavior-level integration check while rejecting module-count, per-hop, and already-covered test expansion |
@@ -123,8 +137,8 @@ Run it through `npm run eval:prompts:security-review-method`.
 | `scope-architecture-boundary` | peer-review / arch-review | scope-architecture-boundary | whether review recognizes an existing domain/I/O boundary on its first implementation without speculative extension points |
 | `implement-contract-traceability` | default / implement | implement-contract-traceability | whether implementation preserves named contract identities from plan and tests |
 | `implementation-report-contract-traceability` | default / implementation report | implement-contract-traceability | whether the report preserves the same contract identities and evidence |
-| `follow-up-review-repair-regression` | peer-review / follow-up coding-review | follow-up-review-repair-regression | whether follow-up review independently falsifies completion claims and distinguishes repair-induced defects from adjacent omissions |
-| `follow-up-testing-review-repair-regression` | peer-review / follow-up testing-review | follow-up-review-repair-regression | whether test findings stay limited to missing regression detection in an authorized family and reject adjacent or structure-freezing test expansion |
+| `follow-up-review-repair-regression` | peer-review / follow-up coding-review | follow-up-review-repair-regression | whether follow-up review independently falsifies completion claims, distinguishes repair-induced defects from adjacent omissions, and enumerates distinct reachable terminal outcomes; measured on Opus, Luna Max, and Sol High |
+| `follow-up-testing-review-repair-regression` | peer-review / follow-up testing-review | follow-up-review-repair-regression | whether test findings stay limited to missing regression detection in an authorized family, refuse to count an assertion that pins the forbidden result as coverage, and reject adjacent or structure-freezing test expansion |
 | `review-adjudication` | peer-review / review-adjudication | review-adjudication | whether adjudication separates technical validity from remediation authority, keeps accepted-family closure and diff-induced regressions actionable, and excludes even severe horizontal improvements from the fix plan |
 | `review-adjudication-binding` | peer-review / follow-up security-review | review-adjudication-binding | whether Opus 5, Luna Max, and Sol High keep three out-of-scope findings non-blocking, reopen only with an allowed basis, and distinguish bare ESC or unconstrained repository-owned rules from a reproduced OSC terminal effect |
 | `security-review-method` | peer-review / initial security-review | security-review-method | whether Opus 5, Luna Max, and Sol High approve unchanged boundaries and bound SQL, reject verified SQL injection, authorization bypass, credential exposure, and helper-mediated command injection, and keep repository-author-controlled size alone non-blocking |
@@ -253,6 +267,12 @@ Run from the repo root. Note: `working_dir` in the configs is resolved
 relative to the config file's directory (`eval/`), not the process cwd.
 `run-evals.mjs` keeps going when a suite fails and prints a summary
 (promptfoo exits non-zero on test failures, which would break `&&` chains).
+
+Coder, review, and judge CLI providers do not use an elapsed-time timeout by default.
+Set the corresponding `*_TIMEOUT_SECONDS` variable to a positive integer only
+when an explicit watchdog is required; `0` keeps it disabled. Promptfoo's
+JavaScript CLI review provider follows the same rule with `timeout_ms`.
+
 ### Token budget rules
 
 - `model_reasoning_effort: low` is set on the regular Codex SDK providers and

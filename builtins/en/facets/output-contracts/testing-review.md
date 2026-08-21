@@ -21,7 +21,7 @@ For every finding that requests a test, record the observable contract to preser
 {{include:output-contracts/base-review-problem-family-completion-sweep}}
 
 {{include:output-contracts/base-review-new-findings-category}}
-| 1 | TEST-NEW-src-test-L42 | test-structure | Coverage | `src/test.ts:42` | Issue description | remediation_regression | The repair changed this behavior after the initial test review | Fix suggestion |
+| 1 | TEST-NEW-src-test-L42 | test-structure | Coverage | `src/test.ts:42` | Issue description | {For follow-up, the exact single machine value selected by the applicable policy; not applicable for initial review} | {Independent causal evidence for the follow-up omission; not applicable for initial review} | Fix suggestion |
 
 {{include:output-contracts/base-review-follow-up-authorization}}
 

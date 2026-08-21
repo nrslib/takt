@@ -20,9 +20,9 @@ Fill this when the diff adds or changes IDs, names, metadata, config, environmen
 ## Current Iteration Findings (new)
 | # | finding_id | family_tag | Severity | Location | Issue | Impact | Authorization Basis | Reason Absent from Initial Round | Fix Suggestion |
 |---|------------|------------|----------|----------|-------|--------|---------------------|----------------------------------|----------------|
-| 1 | CODE-NEW-src-file-L42 | bug | High / Medium / Low | `src/file.ts:42` | {Issue} | {Impact} | {accepted_family_unvisited_consumer / remediation_regression / direct_acceptance_criterion_violation / required_consumer_migration for follow-up; not applicable for initial review; reject every other value} | {Independent evidence explaining why the initial review omitted this follow-up finding; not applicable for initial review} | {Fix suggestion} |
+| 1 | CODE-NEW-src-file-L42 | bug | High / Medium / Low | `src/file.ts:42` | {Issue} | {Impact} | {For follow-up, the exact single machine value selected by the applicable policy; not applicable for initial review} | {Independent evidence explaining why the initial review omitted this follow-up finding; not applicable for initial review} | {Fix suggestion} |
 
-For a follow-up finding, `Authorization Basis` must be exactly one of the four listed values; reject every other value. `Reason Absent from Initial Round` is an independent factual explanation, never another authorization value.
+For a follow-up finding, `Authorization Basis` must be exactly the single machine value selected by the applicable policy; reject combined values and every other value. `Reason Absent from Initial Round` is an independent factual explanation, never another authorization value.
 
 {{include:output-contracts/base-review-persists}}
 {{include:output-contracts/base-review-carry-over-findings}}

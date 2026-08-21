@@ -1,18 +1,33 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-description: 'TAKT facet eval: follow-up review independently falsifies remediation claims'
+description: 'TAKT facet eval: follow-up review が remediation の主張を独立に反証する'
 
 prompts:
   - file://prompts/follow-up-review-repair-regression.phase1.md
 
 providers:
-  - id: openai:codex-sdk
-    label: codex
+  - id: file://providers/cli-review.mjs
+    label: claude-opus-5
     config:
+      cli: claude
+      model: claude-opus-5
       working_dir: fixtures/follow-up-review-repair-regression
-      sandbox_mode: read-only
-      approval_policy: never
-      skip_git_repo_check: true
-      model_reasoning_effort: low
+      isolate_working_dir: true
+  - id: file://providers/cli-review.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-5.6-luna
+      reasoning_effort: max
+      working_dir: fixtures/follow-up-review-repair-regression
+      isolate_working_dir: true
+  - id: file://providers/cli-review.mjs
+    label: codex-sol-high
+    config:
+      cli: codex
+      model: gpt-5.6-sol
+      reasoning_effort: high
+      working_dir: fixtures/follow-up-review-repair-regression
+      isolate_working_dir: true
 
 defaultTest:
   options:
@@ -24,8 +39,11 @@ defaultTest:
         skip_git_repo_check: true
         model_reasoning_effort: low
 
+evaluateOptions:
+  maxConcurrency: 3
+
 tests:
-  - description: 'follow-up review: distinguish an incomplete repair from repair-induced and adjacent contract defects'
+  - description: 'follow-up review: 不完全な修正を repair 起因および隣接契約の欠陥と区別する'
     vars:
       task: file://cases/follow-up-review-repair-regression-task.md
       previous_response: ''
@@ -33,12 +51,17 @@ tests:
       - type: llm-rubric
         metric: review/remediation-falsification
         value: |
-          Judge causal classification and code evidence, not headings, table shape, labels, or exact wording. Pass only if the review rejects and does all of the following:
+          見出し、表形式、label、文言ではなく、因果分類と code evidence を判定する。レビューが REJECT し、次をすべて満たす場合だけ合格とする。
 
-          - It identifies src/public-key.js as a collision defect introduced by the repair, and makes clear that the repair introduced this new finding.
-          - It separately keeps the original finding unresolved for src/retry-token.js and src/checkpoint.js.
-          - It starts from publishResource() in src/application.js and uses its call and returned-record data flow to identify src/resource-record.js as an existing but previously unvisited consumer of the accepted compound-resource-identity family. It must explain that the initial round omitted this consumer rather than dismissing it as a pre-existing or carryover issue.
-          - It records an authorization basis for each new finding: repair-induced regression for src/public-key.js, and accepted-family unvisited consumer plus required consumer migration for src/resource-record.js. Equivalent phrasing is acceptable.
-          - It explains from the same entry-point data flow why src/primary-key.js and src/structured-key.js are clean and why the separate presentation contract in src/resource-text.js is not actionable.
+          - src/public-key.js を repair が導入した collision defect として特定し、この新しい finding を repair が導入したことを明示する。
+          - src/retry-token.js と src/checkpoint.js に対する元 finding を、別に未解消として維持する。
+          - src/application.js の publishResource() から開始し、その call と returned-record data flow を使って、src/resource-record.js を accepted compound-resource-identity family に属する既存だが未確認だった consumer として特定する。pre-existing または carryover issue として退けず、初回ラウンドがこの consumer を漏らしたことを説明する。
+          - seeded adjudication を accepted compound-resource-identity family の権限根拠として特定する。review-resolution.md の明示で十分であり、裁定済み acceptance criteria と remediation boundary への曖昧でない参照も許容する。各 new finding に primary Authorization Basis を正確に1つ記録する。src/public-key.js には `remediation_regression`、src/resource-record.js には `accepted_family_unvisited_consumer` を使い、accepted remediation boundary がその consumer の migration を要求することを説明する。prose alias と結合値は不合格とする。
+          - publishResource() を通して resolved identity-card condition を追跡し、note なしの完全な tenant/job card を返すことを確認する。この正常 condition は欠陥 condition と分けて証拠を示す。
+          - 新しく公開された public identity-card 経路を repair 起因と特定し、src/identity-card.js の2つの具体的な resolver outcome を報告する。タスクは card result を返さず failure propagation することを要求するが、null result と throw された exception はそれぞれ success-shaped note result に変換される。2つの outcome を1つの finding にまとめてもよいが、両方を明示的に証明する。generic error handling への参照だけでは不十分とする。
+          - 明示された「fully resolved identity」precondition も評価する。tenant ID または job ID を欠く resolver success object が `undefined` を含む success-shaped card に到達することを報告するか、その input が到達不能である具体的な権限根拠を示して除外する。input が完全だと仮定するだけでは不合格とする。
+          - fix report と既存の public identity-card assertion を note behavior の権限根拠として退ける。以前から存在することや assertion が合格することは、保持すべき契約を成立させない。src/application.js は明示的なタスク要件に従う public projection でこの behavior を新たに公開している。missing-result assertion が要件の禁止する result を固定しており、exception state を対象にする assertion がないことを記載する。
+          - 具体的な path と branch を示す static source evidence は、これらの outcome の証明として十分である。振る舞いが静的に確定する場合、read-only review は実行再現を要求しない。
+          - 同じ entry-point data flow から、src/primary-key.js と src/structured-key.js が正常である理由、および src/resource-text.js が正常または非修正対象である理由を説明する。厳密な分類 label は要求しない。
 
-          Merely listing paths or grouping all defects under the original persistent finding fails because it does not provide the connection and causal-classification evidence that distinguishes the repair-induced regression from the initially missed accepted-family consumer. Expanding into the neighboring text contract also fails.
+          path を列挙するだけ、またはすべての欠陥を元の persistent finding にまとめるだけでは、repair 起因の regression と初回に漏れた accepted-family consumer を区別する接続証拠と因果分類証拠がないため不合格とする。隣接する text 契約への拡張も不合格とする。

@@ -93,6 +93,10 @@ subworkflow:
       type: facet_ref[]
       facet_kind: policy
       default: [coding, testing, review]
+    final_gate_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default: [coding, testing]
     review_knowledge:
       type: facet_ref[]
       facet_kind: knowledge
@@ -255,7 +259,7 @@ steps:
       verification_policy:
         $param: review_policy
       final_gate_policy:
-        $param: review_policy
+        $param: final_gate_policy
       fix_plan_instruction:
         $param: fix_plan_instruction
       fix_plan_report_format:

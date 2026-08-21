@@ -1,0 +1,69 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+# TAKT facet eval: peer-review / review-adjudication production Phase 2 report.
+
+description: 'TAKT facet eval: レビュー裁定 Phase 2 レポート契約'
+
+prompts:
+  - file://prompts/review-adjudication-phase2.phase2.md
+
+providers:
+  - id: file://providers/cli-review.mjs
+    label: claude-opus-5
+    config:
+      cli: claude
+      model: claude-opus-5
+      working_dir: fixtures/review-adjudication
+      isolate_working_dir: true
+  - id: file://providers/cli-review.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-5.6-luna
+      reasoning_effort: max
+      working_dir: fixtures/review-adjudication
+      isolate_working_dir: true
+  - id: file://providers/cli-review.mjs
+    label: codex-sol-high
+    config:
+      cli: codex
+      model: gpt-5.6-sol
+      reasoning_effort: high
+      working_dir: fixtures/review-adjudication
+      isolate_working_dir: true
+
+evaluateOptions:
+  maxConcurrency: 3
+
+tests:
+  - description: '裁定レポート: 全裁定と finding 固有 basis を保持する'
+    vars:
+      task: file://cases/review-adjudication-task.md
+      previous_response: file://cases/review-adjudication-phase1.md
+    assert:
+      - type: javascript
+        metric: review/adjudication-report-quality
+        value: file://asserts/review-adjudication.mjs
+
+  - description: '裁定レポート: 要求にない強い type-error 契約を非修正対象に保つ'
+    vars:
+      task: file://cases/review-adjudication-family-merge-task.md
+      previous_response: file://cases/review-adjudication-family-merge-phase1.md
+    assert:
+      - type: javascript
+        metric: review/merge-case-type-error-report
+        value: file://asserts/review-adjudication-type-error-overreach.mjs
+      - type: regex
+        metric: review/existing-family-merge-report
+        value: '`?JUDGEMENT: candidate=ARCH-NEW-channel-normalization-L2; decision=merge; target_family=FAM-channel-normalization`?\s*$'
+
+  - description: '裁定レポート: direct basis を持つ別の type-error family を保持する'
+    vars:
+      task: file://cases/review-adjudication-family-separation-task.md
+      previous_response: file://cases/review-adjudication-family-separation-phase1.md
+    assert:
+      - type: javascript
+        metric: review/different-invariant-report-basis
+        value: file://asserts/review-adjudication-family-separation.mjs
+      - type: regex
+        metric: review/different-invariant-separation-report
+        value: '`?JUDGEMENT: candidate=ARCH-NEW-channel-type-error-L2; decision=separate; target_family=(?!FAM-channel-normalization(?:\s|$))\S+`?\s*$'

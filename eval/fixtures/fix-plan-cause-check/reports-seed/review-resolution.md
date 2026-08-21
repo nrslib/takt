@@ -20,12 +20,12 @@
 
 | family | finding ID / 出典 | 修正権限の根拠 | 根拠 | 問題 → 根本原因 | 関係する契約経路 | 受入条件 | 修正境界 |
 |---|---|---|---|---|---|---|---|
-| `review-update-once` | `REVIEW-UPDATE-001 / coding-review.md` | 受入条件の直接違反 | 同じ review ID の完了通知が、完了状態の保存後にも更新処理へ2回渡っている。 | 同じレビュー完了に対するタスク更新が重複する → 更新処理が保存済みの review ID を確認せず、到着した完了通知ごとに更新を生成する | レビュー完了の受付、完了状態の保存、タスク更新の生成と通知 | 同じ review ID の完了通知が複数回到着しても、タスク更新が1回だけ通知され、完了状態が1回だけ保存される | 完了状態とタスク更新を所有する経路だけを変更する。並列処理、timeout、retry、テスト選択は変更しない |
+| `review-update-once` | `REVIEW-UPDATE-001 / coding-review.md` | direct_acceptance_criterion_violation | 同じ review ID の完了通知が、完了状態の保存後にも更新処理へ2回渡っている。 | 同じレビュー完了に対するタスク更新が重複する → 更新処理が保存済みの review ID を確認せず、到着した完了通知ごとに更新を生成する | レビュー完了の受付、完了状態の保存、タスク更新の生成と通知 | 同じ review ID の完了通知が複数回到着しても、タスク更新が1回だけ通知され、完了状態が1回だけ保存される | 完了状態とタスク更新を所有する経路だけを変更する。並列処理、timeout、retry、テスト選択は変更しない |
 
 ## 指摘ごとの裁定
 | finding ID / 出典 | 技術的妥当性 | 裁定 | 対象 family | authorization basis | 初回に含まれなかった理由 | 根拠 |
 |---|---|---|---|---|---|---|
-| `REVIEW-UPDATE-001 / coding-review.md` | 確認済み | actionable | `review-update-once` | 受入条件の直接違反 | 該当なし | 同じ review ID の通知が保存後にも2回更新処理へ渡った。単独成功は資源競合の証拠にしない。 |
+| `REVIEW-UPDATE-001 / coding-review.md` | 確認済み | actionable | `review-update-once` | direct_acceptance_criterion_violation | 該当なし | 同じ review ID の通知が保存後にも2回更新処理へ渡った。単独成功は資源競合の証拠にしない。 |
 
 ## 未解決の前提
 - なし。

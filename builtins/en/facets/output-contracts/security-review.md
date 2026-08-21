@@ -12,7 +12,7 @@
 ## Current Iteration Findings (new)
 | # | finding_id | family_tag | Severity | Type | Location | Issue | Authorization Basis | Reason Absent from Initial Round | Fix Suggestion |
 |---|------------|------------|----------|------|----------|-------|---------------------|----------------------------------|----------------|
-| 1 | SEC-NEW-src-db-L42 | injection-risk | High | SQLi | `src/db.ts:42` | Raw query string | direct_acceptance_criterion_violation | The initial review evidence covered only the other query entry point | Use parameterized queries |
+| 1 | SEC-NEW-src-db-L42 | injection-risk | High | SQLi | `src/db.ts:42` | Raw query string | {For follow-up, the exact single machine value selected by the applicable policy; not applicable for initial review} | {Independent causal evidence for the follow-up omission; not applicable for initial review} | Use parameterized queries |
 
 {{include:output-contracts/base-review-follow-up-authorization}}
 

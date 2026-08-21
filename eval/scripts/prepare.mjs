@@ -60,7 +60,13 @@ const TARGETS = [
   { id: 'fix-plan-boundary-preflight', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-boundary-preflight' },
   { id: 'fix-plan-cause-check', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-cause-check' },
   { id: 'fix-plan-bounded-proof', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-bounded-proof' },
-  { id: 'review-family-closure', workflow: 'peer-review-suite-base', step: 'coding-review', fixture: 'eval/fixtures/review-family-closure' },
+  {
+    id: 'review-family-closure',
+    workflow: 'peer-review-suite-base',
+    step: 'coding-review',
+    fixture: 'eval/fixtures/review-family-closure',
+    workflowCallVars: { review_mode: 'initial' },
+  },
   {
     id: 'initial-review-contract-discovery',
     workflow: 'peer-review',
@@ -194,6 +200,15 @@ const TARGETS = [
     fixture: 'eval/fixtures/follow-up-review-repair-regression',
   },
   {
+    id: 'follow-up-review-repair-regression-phase2',
+    workflow: 'peer-review',
+    via: 'reviewers',
+    step: 'coding-review',
+    fixture: 'eval/fixtures/follow-up-review-repair-regression',
+    phase: 'phase2',
+    targetFile: 'coding-review.md',
+  },
+  {
     id: 'follow-up-testing-review-repair-regression',
     workflow: 'peer-review',
     via: 'reviewers',
@@ -206,7 +221,6 @@ const TARGETS = [
     via: 'reviewers',
     step: 'security-review',
     fixture: 'eval/fixtures/review-adjudication-binding',
-    includeOutputContract: true,
     dynamicFacetSelection: {
       sourceWorkflow: 'development-review',
       pool: 'security-review-facets',
@@ -219,7 +233,6 @@ const TARGETS = [
     via: 'initial-reviewers',
     step: 'security-review',
     fixture: 'eval/fixtures/security-review-method',
-    includeOutputContract: true,
     dynamicFacetSelection: {
       sourceWorkflow: 'development-review',
       pool: 'security-review-facets',
@@ -249,6 +262,14 @@ const TARGETS = [
     fixture: 'eval/fixtures/companion-family-boundary',
   },
   { id: 'review-adjudication', workflow: 'peer-review', step: 'review-adjudication', fixture: 'eval/fixtures/review-adjudication' },
+  {
+    id: 'review-adjudication-phase2',
+    workflow: 'peer-review',
+    step: 'review-adjudication',
+    fixture: 'eval/fixtures/review-adjudication',
+    phase: 'phase2',
+    targetFile: 'review-resolution.md',
+  },
   {
     id: 'final-readiness-supervision',
     workflow: 'final-gate',
@@ -310,7 +331,13 @@ const { getBuiltinCompanionsDir } = await import(
   pathToFileURL(join(repoRoot, 'dist/infra/config/paths.js')).href
 );
 
-function findStepTarget(workflow, stepName, depth = 0, inheritedWorkflowRules) {
+function findStepTarget(
+  workflow,
+  stepName,
+  depth = 0,
+  inheritedWorkflowRules,
+  inheritedWorkflowCallVars = {},
+) {
   if (depth > MAX_WORKFLOW_CALL_DEPTH) {
     throw new Error(`Workflow-call nesting exceeded while resolving step "${stepName}"`);
   }
@@ -319,14 +346,28 @@ function findStepTarget(workflow, stepName, depth = 0, inheritedWorkflowRules) {
 
   for (const [stepIndex, step] of workflow.steps.entries()) {
     if (step.name === stepName && step.kind !== 'workflow_call') {
-      return { workflow, target: step, stepIndex, workflowRules };
+      return {
+        workflow,
+        target: step,
+        stepIndex,
+        workflowRules,
+        workflowCallVars: inheritedWorkflowCallVars,
+      };
     }
   }
 
   for (const [stepIndex, step] of workflow.steps.entries()) {
     const substep = (step.parallel === undefined ? [] : getAllParallelSubSteps(step.parallel))
       .find((candidate) => candidate.name === stepName && candidate.kind !== 'workflow_call');
-    if (substep) return { workflow, target: substep, stepIndex, workflowRules };
+    if (substep) {
+      return {
+        workflow,
+        target: substep,
+        stepIndex,
+        workflowRules,
+        workflowCallVars: inheritedWorkflowCallVars,
+      };
+    }
   }
 
   for (const step of workflow.steps) {
@@ -338,7 +379,13 @@ function findStepTarget(workflow, stepName, depth = 0, inheritedWorkflowRules) {
       if (candidate.kind !== 'workflow_call') continue;
       const child = resolveWorkflowCallTarget(workflow, candidate, repoRoot);
       if (!child) continue;
-      const found = findStepTarget(child, stepName, depth + 1, workflowRules);
+      const found = findStepTarget(
+        child,
+        stepName,
+        depth + 1,
+        workflowRules,
+        { ...inheritedWorkflowCallVars, ...candidate.vars },
+      );
       if (found) return found;
     }
   }
@@ -352,6 +399,7 @@ function findStepTarget(workflow, stepName, depth = 0, inheritedWorkflowRules) {
       target: directWorkflowCall,
       stepIndex: workflow.steps.indexOf(directWorkflowCall),
       workflowRules,
+      workflowCallVars: inheritedWorkflowCallVars,
     };
   }
 
@@ -368,7 +416,7 @@ function findStepThroughCall(workflow, callStepName, stepName) {
     throw new Error(`Workflow call "${callStepName}" could not be resolved`);
   }
   const inheritedWorkflowRules = mergeWorkflowWideRules(undefined, workflow.allStepsRules);
-  return findStepTarget(child, stepName, 1, inheritedWorkflowRules);
+  return findStepTarget(child, stepName, 1, inheritedWorkflowRules, callStep.vars);
 }
 
 function composeConfiguredDynamicFacets(target, selection, targetId, stepName) {
@@ -453,7 +501,6 @@ async function main() {
     artifacts,
     phase: requestedPhase,
     targetFile,
-    includeOutputContract,
     dynamicFacetSelection,
   } of targets) {
     if (requestedPhase !== undefined && monitorCycle !== undefined) {
@@ -498,6 +545,7 @@ async function main() {
 
     let target = null;
     let stepIndex = -1;
+    let effectiveWorkflowCallVars = workflowCallVars;
     if (companionSystemPrompt !== undefined) {
       target = {
         name: companionName,
@@ -532,6 +580,10 @@ async function main() {
         target = found.target;
         stepIndex = found.stepIndex;
         workflowRules = found.workflowRules;
+        effectiveWorkflowCallVars = {
+          ...found.workflowCallVars,
+          ...workflowCallVars,
+        };
       }
     }
     if (!target) {
@@ -541,30 +593,6 @@ async function main() {
           .map((substep) => substep.name),
       ]);
       throw new Error(`Step "${stepName}" not found in ${workflowName}. Available: ${names.join(', ')}`);
-    }
-
-    if (includeOutputContract === true) {
-      if (target.outputContracts?.length !== 1) {
-        throw new Error(`Target "${id}" requires exactly one output contract`);
-      }
-      const [outputContract] = target.outputContracts;
-      if (
-        outputContract === undefined
-        || outputContract === null
-        || typeof outputContract !== 'object'
-        || typeof outputContract.format !== 'string'
-      ) {
-        throw new Error(`Target "${id}" requires a formatted output contract`);
-      }
-      target = {
-        ...target,
-        instruction: [
-          target.instruction,
-          '',
-          '## Phase 1 evaluation output contract',
-          outputContract.format.trimEnd(),
-        ].join('\n'),
-      };
     }
 
     target = composeConfiguredDynamicFacets(target, dynamicFacetSelection, id, stepName);
@@ -630,7 +658,7 @@ async function main() {
       reportDir,
       policySourcePath,
       knowledgeSourcePath,
-      workflowCallVars,
+      workflowCallVars: effectiveWorkflowCallVars,
       workflowRules,
       language,
     };

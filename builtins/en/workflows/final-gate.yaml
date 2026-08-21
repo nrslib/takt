@@ -45,7 +45,8 @@ steps:
     persona:
       $param: supervisor_persona
     policy:
-      $param: supervise_policy
+      - review
+      - $param: supervise_policy
     knowledge:
       $param: supervise_knowledge
     pass_previous_response: false

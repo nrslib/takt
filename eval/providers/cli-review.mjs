@@ -39,6 +39,20 @@ export function rewriteWorkingDirectoryPaths(prompt, workingDirectory) {
   return prompt.replaceAll(workingDirectory.sourceDirectory, workingDirectory.cwd);
 }
 
+export function resolveTimeoutMs(config) {
+  const timeoutMs = config.timeout_ms;
+  if (timeoutMs === undefined || timeoutMs === 0) return 0;
+  if (
+    typeof timeoutMs !== 'number'
+    || !Number.isInteger(timeoutMs)
+    || timeoutMs < 1
+    || timeoutMs > 2_147_483_647
+  ) {
+    throw new Error('timeout_ms must be 0 (disabled) or an integer from 1 through 2147483647');
+  }
+  return timeoutMs;
+}
+
 export async function runProcess(command, args, { cwd, input, timeoutMs, abortSignal }) {
   if (abortSignal?.aborted) {
     throw new Error(`${command} was aborted before it started`);
@@ -65,10 +79,12 @@ export async function runProcess(command, args, { cwd, input, timeoutMs, abortSi
     aborted = true;
     stop(new Error(`${command} was aborted`));
   };
-  const timer = setTimeout(() => {
-    timedOut = true;
-    stop(new Error(`${command} timed out after ${timeoutMs}ms`));
-  }, timeoutMs);
+  const timer = timeoutMs > 0
+    ? setTimeout(() => {
+      timedOut = true;
+      stop(new Error(`${command} timed out after ${timeoutMs}ms`));
+    }, timeoutMs)
+    : undefined;
   abortSignal?.addEventListener('abort', abort, { once: true });
 
   child.stdout.on('data', (chunk) => stdout.push(chunk));
@@ -101,7 +117,7 @@ export async function runProcess(command, args, { cwd, input, timeoutMs, abortSi
     }
     throw error;
   } finally {
-    clearTimeout(timer);
+    if (timer !== undefined) clearTimeout(timer);
     abortSignal?.removeEventListener('abort', abort);
   }
 }
@@ -116,12 +132,13 @@ export default class CliReviewProvider {
   }
 
   async callApi(prompt, _context, options = {}) {
-    const workingDirectory = prepareWorkingDirectory(this.config);
-    const { cwd } = workingDirectory;
-    const isolatedPrompt = rewriteWorkingDirectoryPaths(prompt, workingDirectory);
-    const timeoutMs = this.config.timeout_ms ?? 900_000;
+    let workingDirectory;
 
     try {
+      const timeoutMs = resolveTimeoutMs(this.config);
+      workingDirectory = prepareWorkingDirectory(this.config);
+      const { cwd } = workingDirectory;
+      const isolatedPrompt = rewriteWorkingDirectoryPaths(prompt, workingDirectory);
       if (this.config.cli === 'claude') {
         const output = await runProcess('claude', [
           '-p',
@@ -157,7 +174,7 @@ export default class CliReviewProvider {
     } catch (error) {
       return { error: error instanceof Error ? error.message : String(error) };
     } finally {
-      workingDirectory.cleanup();
+      workingDirectory?.cleanup();
     }
   }
 }

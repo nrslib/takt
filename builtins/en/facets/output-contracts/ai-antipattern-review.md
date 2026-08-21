@@ -19,7 +19,7 @@
 {{include:output-contracts/base-review-problem-family-completion-sweep}}
 
 {{include:output-contracts/base-review-new-findings-category}}
-| 1 | AI-NEW-src-file-L23 | hallucination | Hallucinated API | `src/file.ts:23` | Non-existent method | direct_acceptance_criterion_violation | The initial review evidence did not inspect this acceptance criterion | Replace with existing API |
+| 1 | AI-NEW-src-file-L23 | hallucination | Hallucinated API | `src/file.ts:23` | Non-existent method | {For follow-up, the exact single machine value selected by the applicable policy; not applicable for initial review} | {Independent causal evidence for the follow-up omission; not applicable for initial review} | Replace with existing API |
 
 {{include:output-contracts/base-review-follow-up-authorization}}
 

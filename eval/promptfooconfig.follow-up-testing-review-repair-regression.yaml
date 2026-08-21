@@ -1,21 +1,49 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-description: 'TAKT facet eval: follow-up testing review keeps regression coverage inside authorized families'
+description: 'TAKT facet eval: follow-up testing review が regression coverage を許可済み family 内に保つ'
 
 prompts:
   - file://prompts/follow-up-testing-review-repair-regression.phase1.md
 
 providers:
-  - id: openai:codex-sdk
-    label: codex
+  - id: file://providers/cli-review.mjs
+    label: claude-opus-5
     config:
+      cli: claude
+      model: claude-opus-5
       working_dir: fixtures/follow-up-review-repair-regression
-      sandbox_mode: read-only
-      approval_policy: never
-      skip_git_repo_check: true
-      model_reasoning_effort: low
+      isolate_working_dir: true
+  - id: file://providers/cli-review.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-5.6-luna
+      reasoning_effort: max
+      working_dir: fixtures/follow-up-review-repair-regression
+      isolate_working_dir: true
+  - id: file://providers/cli-review.mjs
+    label: codex-sol-high
+    config:
+      cli: codex
+      model: gpt-5.6-sol
+      reasoning_effort: high
+      working_dir: fixtures/follow-up-review-repair-regression
+      isolate_working_dir: true
+
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+
+evaluateOptions:
+  maxConcurrency: 3
 
 tests:
-  - description: 'follow-up testing review: request only missing regression detection inside the accepted identity family'
+  - description: 'follow-up testing review: accepted identity family 内の不足した regression 検出だけを要求する'
     vars:
       task: file://cases/follow-up-review-repair-regression-task.md
       previous_response: ''
@@ -23,12 +51,14 @@ tests:
       - type: llm-rubric
         metric: review/testing-scope-authority
         value: |
-          Judge behavioral scope, not headings, table shape, labels, or exact wording. Pass only if the testing review does all of the following:
+          見出し、表形式、label、文言ではなく、振る舞いの scope を判定する。testing review が次をすべて満たす場合だけ合格とする。
 
-          - It may request missing regression detection for src/resource-record.js because that persisted consumer belongs to the active compound-resource-identity family and the current tests do not exercise it. Any such finding states an accepted-family unvisited-consumer or required-consumer-migration authorization basis and why the initial round missed it.
-          - It may request detection of the repair-induced collision in src/public-key.js with a remediation-regression authorization basis.
-          - It does not turn the separate presentation contract in src/resource-text.js into a finding or test-addition request merely because bounded comparison exposed it.
-          - It does not request duplicate tests, assertions that freeze workflow names or prose, raw YAML structure, helpers or internal implementation details, permanent migration inventories, or assertions already covered by a loader, gate, or higher-level behavior test.
-          - It does not ask to reduce or consolidate existing tests unless that is causally required to detect a regression introduced by this change.
+          - seeded review-resolution.md を accepted compound-resource-identity family の権限根拠として使う。src/resource-record.js の永続化 consumer は同じ family に属し、現在の test が実行していないため、不足した regression 検出を要求してよい。その finding には Authorization Basis として正確に `accepted_family_unvisited_consumer` を使い、初回ラウンドで見落とした理由を説明する。
+          - repair が導入した src/public-key.js の collision 検出を、Authorization Basis として正確に `remediation_regression` を使って要求してよい。
+          - repair が公開した src/identity-card.js の resolver outcome に対する behavior regression 検出を、Authorization Basis として正確に `remediation_regression` を使って要求してよい。その場合、missing-result state と exception state を generic error handling としてまとめず区別し、公開 publishResource() result を通じた検証を要求する。
+          - 既存の公開 identity-card assertion を要求動作の coverage と数えてはならない。resolved-case assertion は sibling state を対象にせず、missing-result assertion はタスクが禁止する card-shaped note result を固定している。その assertion の修正要求は scope 内であり、禁止された test 削減には当たらない。
+          - bounded comparison で発見したというだけで、src/resource-text.js の別 presentation 契約を finding や test 追加要求にしない。
+          - duplicate test、workflow 名や prose を固定する assertion、raw YAML 構造、helper や内部実装 detail、恒久的な migration inventory、loader・gate・上位 behavior test がすでに対象にする assertion を要求しない。
+          - この変更が導入した regression の検出に因果的に必要な場合を除き、既存 test の削減や統合を要求しない。
 
-          A response fails if it opens a separate test family without one of the four follow-up authorization bases, or treats general test cleanliness as repair scope.
+          prose alias または結合した Authorization Basis を使う、4つの follow-up authorization basis のいずれも持たない別 test family を開く、または一般的な test cleanliness を repair scope と扱った場合は不合格とする。

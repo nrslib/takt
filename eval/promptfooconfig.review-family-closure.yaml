@@ -2,20 +2,35 @@
 # TAKT facet eval: peer-review / coding-review defect-family discovery closure.
 # Run via npm run eval:prompts:review-family-closure
 
-description: 'TAKT facet eval: peer-review problem-family completion sweep'
+description: 'TAKT facet eval: peer-review の問題 family 完了走査'
 
 prompts:
   - file://prompts/review-family-closure.phase1.md
 
 providers:
-  - id: openai:codex-sdk
-    label: codex
+  - id: file://providers/cli-review.mjs
+    label: claude-opus-5
     config:
+      cli: claude
+      model: claude-opus-5
       working_dir: fixtures/review-family-closure
-      sandbox_mode: read-only
-      approval_policy: never
-      skip_git_repo_check: true
-      model_reasoning_effort: low
+      isolate_working_dir: true
+  - id: file://providers/cli-review.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-5.6-luna
+      reasoning_effort: max
+      working_dir: fixtures/review-family-closure
+      isolate_working_dir: true
+  - id: file://providers/cli-review.mjs
+    label: codex-sol-high
+    config:
+      cli: codex
+      model: gpt-5.6-sol
+      reasoning_effort: high
+      working_dir: fixtures/review-family-closure
+      isolate_working_dir: true
 
 defaultTest:
   options:
@@ -27,8 +42,11 @@ defaultTest:
         skip_git_repo_check: true
         model_reasoning_effort: low
 
+evaluateOptions:
+  maxConcurrency: 3
+
 tests:
-  - description: 'review: report every affected path in one attribution-contract family'
+  - description: 'レビュー: attribution 契約 family の影響経路をすべて報告する'
     vars:
       task: file://cases/review-family-closure-task.md
       previous_response: ''
@@ -36,4 +54,4 @@ tests:
       - type: llm-rubric
         metric: review/problem-family-closure
         value: |
-          Judge substantive defect-family coverage, not headings, table shape, or exact wording. Pass only if the review rejects and reports the complete report-attribution problem family across src/runtime-state.js, src/batch.js, src/parallel.js, src/relay.js, src/resume.js, src/analytics.js, and tests/reporting.test.js, tying them to the same explicit producing-context invariant or root cause. Fail if it stops at representative locations, treats an unchecked path as verified, or reports the correct direct/emitter paths as defective.
+          見出し、表形式、文言ではなく、欠陥 family の実質的な網羅性を判定する。レビューが REJECT し、src/runtime-state.js、src/batch.js、src/parallel.js、src/relay.js、src/resume.js、src/analytics.js、tests/reporting.test.js にまたがる report-attribution 問題 family を漏れなく報告し、同じ明示的な producing-context 不変条件または根本原因へ結び付けた場合だけ合格とする。代表箇所だけで止まる、未確認経路を確認済みと扱う、または正しい direct/emitter 経路を欠陥として報告した場合は不合格とする。

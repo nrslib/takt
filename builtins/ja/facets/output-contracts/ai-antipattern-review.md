@@ -19,7 +19,7 @@
 {{include:output-contracts/base-review-problem-family-completion-sweep}}
 
 {{include:output-contracts/base-review-new-findings-category}}
-| 1 | AI-NEW-src-file-L23 | hallucination | 幻覚API | `src/file.ts:23` | 存在しないメソッド | direct_acceptance_criterion_violation | 初回レビュー証跡ではこの受入条件を確認していなかった | 実在APIへ置換 |
+| 1 | AI-NEW-src-file-L23 | hallucination | 幻覚API | `src/file.ts:23` | 存在しないメソッド | {follow-upでは適用 policy が選定した正確な機械値1つ。初回は該当なし} | {follow-upで初回に含まれなかったことを示す独立した因果証拠。初回は該当なし} | 実在APIへ置換 |
 
 {{include:output-contracts/base-review-follow-up-authorization}}
 

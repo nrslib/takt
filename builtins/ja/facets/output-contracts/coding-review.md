@@ -20,9 +20,9 @@ ID、名前、メタデータ、設定、環境変数、出力契約の追加・
 ## 今回の指摘（new）
 | # | finding_id | family_tag | 重大度 | 場所 | 問題 | 影響 | Authorization basis | 初回に含まれなかった理由 | 修正案 |
 |---|------------|------------|--------|------|------|------|---------------------|------------------------------|--------|
-| 1 | CODE-NEW-src-file-L42 | bug | High / Medium / Low | `src/file.ts:42` | {問題} | {影響} | {follow-upでは accepted_family_unvisited_consumer / remediation_regression / direct_acceptance_criterion_violation / required_consumer_migration のいずれか。初回は該当なし。その他の値は無効} | {follow-up findingが初回レビューに含まれなかった独立した証拠。初回は該当なし} | {修正案} |
+| 1 | CODE-NEW-src-file-L42 | bug | High / Medium / Low | `src/file.ts:42` | {問題} | {影響} | {follow-upでは適用 policy が選定した正確な機械値1つ。初回は該当なし} | {follow-up findingが初回レビューに含まれなかった独立した証拠。初回は該当なし} | {修正案} |
 
-follow-up finding の `Authorization basis` は列挙した4つの正確な値だけを許可し、その他の値を拒否する。「初回に含まれなかった理由」はauthorization値ではなく、独立した事実説明にする。
+follow-up finding の `Authorization basis` は適用 policy が選定した正確な機械値1つだけを許可し、複数値とその他の値を拒否する。「初回に含まれなかった理由」はauthorization値ではなく、独立した事実説明にする。
 
 {{include:output-contracts/base-review-persists}}
 {{include:output-contracts/base-review-carry-over-findings}}

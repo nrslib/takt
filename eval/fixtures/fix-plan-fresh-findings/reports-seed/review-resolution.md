@@ -1,33 +1,35 @@
-# Final Validation Results
+# 最終検証結果
 
-## Result: REJECT
+## 結果: REJECT
 
-## Requirements Fulfillment Check
-| # | Decomposed Requirement | Original Requirement Source | Status | Basis |
+## 要件充足チェック
+| # | 分解した要件 | 元要件の出典 | 充足 | 根拠 |
 |---|------------------------|-----------------------------|--------|-------|
-| 1 | Case-insensitive cache keys | Task acceptance criteria | Unfulfilled | `src/cache.js:13` reads the raw key although `set` normalizes it |
+| 1 | cache key は大文字小文字を区別しない | タスクの受入条件 | 未充足 | `set` は正規化するが `src/cache.js:13` は raw key を読む |
 
-## Invariant Register Carry-forward
-Carry-forward source: Carry-forward source missing: no preceding fix-verification.md exists
+## 不変条件の再発記録
+引継元: 引継元なし。前段の fix-verification.md は存在しない
 
-| Fix Unit | Family ID | Invariant Name | Responsible Source | Current Verification Number | Previous Verification Number | Previous Path | Current Path | Same-Invariant / Recurrence Judgment | Cumulative `incomplete` Count | Recurrence on a Different Path Confirmed? | Enforcement-Point Candidate | Record Integrity |
+| 修正単位 | Family ID | 不変条件名 | 担当箇所 | 今回の検証回数 | 前回の検証回数 | 前回経路 | 今回経路 | 同一不変条件・再発判定 | 累積 `incomplete` 回数 | 別経路での再発確認 | 強制点候補 | 記録の完全性 |
 |----------|-----------|----------------|--------------------|-----------------------------|------------------------------|---------------|--------------|--------------------------------------|-------------------------------|-------------------------------------------|-----------------------------|------------------|
 
-## Re-evaluation of Prior Findings
-| Finding ID / Source | Original Acceptance Criteria | Resolution Status | Basis |
+## 前段 finding の再評価
+| Finding ID / 出典 | 元の受入条件 | 解消状態 | 根拠 |
 |---------------------|------------------------------|-------------------|-------|
-| OLD-REVIEW-readme-L1 | Documentation examples | overreach | Exhaustive README examples are unrelated to the requested cache behavior |
+| OLD-REVIEW-readme-L1 | ドキュメント例 | overreach | 網羅的な README 例は要求された cache の振る舞いと無関係 |
 
-## Actionable Families
-| family | Finding ID / source | Authorization basis | Evidence | Problem -> root cause | Affected contract paths | Acceptance criteria | Remediation boundary |
+## 修正対象 family
+| family | Finding ID / 出典 | Authorization basis | 根拠 | 問題 -> 根本原因 | 関係する契約経路 | 受入条件 | 修正境界 |
 |--------|---------------------|---------------------|----------|-----------------------|-------------------------|---------------------|----------------------|
-| cache-key-normalization | MERGE-NEW-cache-key-L2 | Direct acceptance-criterion violation and required consumer migration | `src/cache.js:13` | Read-side operations bypass the normalization boundary used by writes | the normalization boundary and every production path reached from the application entry | Values written with a supported key are retrievable, detectable, and deletable through every case-and-whitespace-equivalent key across every reachable consumer, while invalid-value behavior is unchanged | Change only the cache-key normalization contract; do not revive documentation work or alter unrelated consumers |
+| cache-key-normalization | MERGE-NEW-cache-key-L2 | accepted_family_unvisited_consumer | `src/cache.js:13` | read-side operation が write で使う正規化境界を迂回する | 正規化境界と application entry から到達するすべての本番経路 | サポート対象 key で書いた値を、到達可能なすべての consumer で大文字小文字と空白が等価な任意の key から取得、検出、削除でき、不正値の振る舞いは変わらない | cache-key 正規化契約だけを変更し、ドキュメント作業を再開せず、無関係な consumer を変更しない |
+| cache-key-normalization | REGRESSION-NEW-cache-delete-L21 | remediation_regression | `src/cache.js:21`。現在の remediation が公開 delete 経路を追加した | remediation が作成した delete operation が同じ正規化境界を迂回する | 同じ正規化境界と application entry から到達する delete の終端結果 | 大文字小文字と空白が等価な key で削除すると、不正 key の振る舞いを変えずに正規化済み entry を削除する | 同じ cache-key 正規化契約だけを変更し、2つ目の family を作らず、authorization 値を結合しない |
 
-## Finding Dispositions
-| Finding ID / source | Technical validity | Disposition | Target family | Authorization basis | Reason absent from initial round | Evidence |
+## 指摘ごとの裁定
+| Finding ID / 出典 | 技術的妥当性 | 裁定 | 対象 family | Authorization basis | 初回に含まれなかった理由 | 根拠 |
 |---------------------|--------------------|-------------|---------------|---------------------|----------------------------------|----------|
-| MERGE-NEW-cache-key-L2 | Confirmed | actionable | cache-key-normalization | Direct acceptance-criterion violation and required consumer migration | Initial review covered the write path but not the read path | `src/cache.js:13` bypasses normalization |
-| OLD-REVIEW-readme-L1 | Confirmed | overreach | none | none | not applicable | Exhaustive README examples are unrelated to the requested cache behavior |
+| MERGE-NEW-cache-key-L2 | 確認済み | actionable | cache-key-normalization | accepted_family_unvisited_consumer | 初回レビューと remediation 記録は write 経路を対象にしたが、変更されていない read 経路は対象外だった | `src/cache.js:13` が正規化を迂回する |
+| REGRESSION-NEW-cache-delete-L21 | 確認済み | duplicate | cache-key-normalization | remediation_regression | 初回レビュー後に現在の remediation が delete 経路を追加した | remediation が作成した経路の `src/cache.js:21` が正規化を迂回する |
+| OLD-REVIEW-readme-L1 | 確認済み | overreach | なし | なし | 該当なし | 網羅的な README 例は要求された cache の振る舞いと無関係 |
 
-## Reason the Decision Cannot Be Made (when BLOCKED)
-- Not applicable.
+## 判定不能の理由（BLOCKED の場合）
+- 該当なし。

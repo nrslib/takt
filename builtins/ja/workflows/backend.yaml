@@ -14,6 +14,7 @@ steps:
       development_policy: [coding, testing, architecture, backend]
       development_knowledge: [backend, security, architecture]
       review_policy: [coding, testing, review, architecture, backend]
+      final_gate_policy: [coding, testing, architecture, backend]
       review_knowledge: [backend, security, architecture, unit-testing, e2e-testing]
     rules:
       - condition: COMPLETE

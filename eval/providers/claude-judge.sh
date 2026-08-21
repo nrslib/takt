@@ -6,7 +6,19 @@
 set -euo pipefail
 model="$1"
 prompt="$2"
-timeout_seconds="${CLAUDE_JUDGE_TIMEOUT_SECONDS:-600}"
+raw_timeout_seconds="${CLAUDE_JUDGE_TIMEOUT_SECONDS:-0}"
+if [[ "$raw_timeout_seconds" =~ ^0+$ ]]; then
+  timeout_seconds=0
+elif [[ "$raw_timeout_seconds" =~ ^0*([1-9][0-9]{0,6})$ ]]; then
+  timeout_seconds="${BASH_REMATCH[1]}"
+else
+  echo "CLAUDE_JUDGE_TIMEOUT_SECONDS must be 0 (disabled) or an integer from 1 through 2147483" >&2
+  exit 2
+fi
+if [ "$timeout_seconds" -gt 2147483 ]; then
+  echo "CLAUDE_JUDGE_TIMEOUT_SECONDS must be 0 (disabled) or an integer from 1 through 2147483" >&2
+  exit 2
+fi
 cd "$(dirname "$0")/.."
 tmp_dir=$(mktemp -d)
 prompt_file="$tmp_dir/prompt"
@@ -21,23 +33,30 @@ claude -p \
   --setting-sources=project < "$prompt_file" 2>/dev/null &
 claude_pid=$!
 set +m
-(
-  sleep "$timeout_seconds"
-  : > "$timeout_marker"
-  kill -TERM -- "-$claude_pid" 2>/dev/null || exit 0
-  sleep 15
-  kill -KILL -- "-$claude_pid" 2>/dev/null || true
-) >/dev/null 2>&1 &
-watchdog_pid=$!
+watchdog_pid=''
+if [ "$timeout_seconds" -gt 0 ]; then
+  (
+    sleep "$timeout_seconds"
+    : > "$timeout_marker"
+    kill -TERM -- "-$claude_pid" 2>/dev/null || exit 0
+    sleep 15
+    kill -KILL -- "-$claude_pid" 2>/dev/null || true
+  ) >/dev/null 2>&1 &
+  watchdog_pid=$!
+fi
 status=0
 wait "$claude_pid" || status=$?
-if [ -f "$timeout_marker" ]; then
+if [ -n "$watchdog_pid" ] && [ -f "$timeout_marker" ]; then
   wait "$watchdog_pid" 2>/dev/null || true
-else
+elif [ -n "$watchdog_pid" ]; then
   kill "$watchdog_pid" 2>/dev/null || true
   wait "$watchdog_pid" 2>/dev/null || true
 fi
 if [ "$status" -ne 0 ]; then
-  echo "claude judge run failed or was killed after ${timeout_seconds}s (exit ${status})" >&2
+  if [ "$timeout_seconds" -eq 0 ]; then
+    echo "claude judge run failed (exit ${status})" >&2
+  else
+    echo "claude judge run failed or was killed after ${timeout_seconds}s (exit ${status})" >&2
+  fi
 fi
 exit "$status"

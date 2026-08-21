@@ -47,10 +47,11 @@ When the requirement source explicitly changes a default, priority, selected res
 | Extending preservation of an existing option's availability to preservation of its old default or priority | REJECT |
 | Weakening an explicit default or priority to best effort, optional, or “when possible” based on the current implementation or a safety preference | REJECT |
 | Treating operations as equivalent because they share a location, name, or result label while their state retention, re-execution, or side effects differ | REJECT |
+| Combining contracts that do not share the same decision boundary for exhaustive coverage | REJECT. Do not introduce combination axes outside the contract |
 | Testing competing candidates only in separate inputs without verifying the winner and operation effects when both coexist | REJECT |
 | When a selected value or cursor designates an operation whose effect distinguishes the candidates, checking only value equality without verifying the selected operation's kind and effect | REJECT |
 | Directly verifying the selected value and requirement-relevant state transitions or side effects in the smallest state where the competing candidates coexist | OK |
-| Combining contracts that do not share the same decision boundary for exhaustive coverage | REJECT. Do not introduce combination axes outside the contract |
+| Preserving behavior shown by the current implementation, existing tests, mocks, fixtures, or completion reports as an established contract for inputs, states, or side effects where it conflicts with an explicit change | REJECT. Apply the explicit change |
 
 ## Primary Operation and Terminal Consumer
 
@@ -66,7 +67,9 @@ Treat a changed primary operation as incomplete until the downstream terminal co
 
 ## Evidence Boundary
 
-Treat current code, existing tests and usage sites, stored or persisted data, published or released status, and placement or isolation at a read boundary as evidence for impact paths and current consumers. They do not by themselves authorize support for a superseded contract.
+Treat current code, existing tests and usage sites, mocks, fixtures, test doubles, remediation completion reports, stored or persisted data, published or released status, and placement or isolation at a read boundary as evidence for impact paths and current consumers. They do not by themselves authorize support for a superseded contract.
+
+To classify behavior as an established contract that must be preserved, identify the original requirement, acceptance criterion, public specification, or real consumer dependency that requires it. Behavior without such authority is evidence only of how the system currently behaves.
 
 When support is explicitly required, record its target and scope and verify that behavior directly. Judge each support target independently; authority for one target does not authorize another.
 

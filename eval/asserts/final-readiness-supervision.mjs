@@ -1,15 +1,18 @@
 const OLD_NON_ACTIONABLE_FINDING = 'OLD-REVIEW-readme-L1';
-const ALLOWED_AUTHORIZATION_BASES = new Set([
-  'accepted_family_unvisited_consumer',
-  'remediation_regression',
-  'direct_acceptance_criterion_violation',
-  'required_consumer_migration',
-]);
+const EXPECTED_AUTHORIZATION_BASIS = 'accepted_family_unvisited_consumer';
 const INITIAL_ROUND_REASON_PATTERNS = [
-  /(?:initial|earlier|previous|review evidence).{0,80}(?:covered only|limited|did not|not inspect|omitted|missed|unvisited|absent|not included|scope)/i,
-  /(?:covered only|limited|did not|not inspect|omitted|missed|unvisited|absent|not included|scope).{0,80}(?:initial|earlier|previous|review evidence)/i,
+  /(?:initial|earlier|previous|review evidence).{0,80}(?:covered only|limited|did not|not inspect|omitted|missed|unvisited|absent|not included)/i,
+  /(?:covered only|limited|did not|not inspect|omitted|missed|unvisited|absent|not included).{0,80}(?:initial|earlier|previous|review evidence)/i,
   /(?:初回|前段).{0,80}(?:未走査|未確認|含まれなかった|見落|対象外|限定)/i,
   /(?:未走査|未確認|含まれなかった|見落|対象外|限定).{0,80}(?:初回|前段)/i,
+];
+const INITIAL_ROUND_INCLUSION_PATTERNS = [
+  /(?:already|previously)\s+(?:included|covered|inspected|visited)/i,
+  /(?:was|were)\s+(?:included|covered|inspected|visited)\s+(?:in|by|during)/i,
+  /\bdid\s+inspect\b/i,
+  /(?:initial|earlier|previous).{0,80}(?<!not\s)(?<!never\s)reviewed/i,
+  /(?<!not\s)(?<!never\s)reviewed.{0,80}(?:initial|earlier|previous)/i,
+  /(?:初回|前段).{0,80}(?:含まれていた|レビュー済み|確認済み|走査済み|対象だった)/i,
 ];
 
 function unwrapProviderOutput(output) {
@@ -156,15 +159,19 @@ function hasActionableFamily(lifecycle, findingId) {
   return lifecycle.rows.some((row) => row.sectionKind === 'actionable'
     && row.content.includes(findingId)
     && /(config|configuration|設定)/i.test(row.content)
-    && /(normalize|normalization|正規化)/i.test(row.content));
+    && /(normalize|normalization|正規化)/i.test(row.content)
+    && hasExpectedAuthorizationBasis(
+      valueForHeader(row, /authorization\s+basis|修正権限の根拠|権限根拠/) ?? '',
+    ));
 }
 
-function hasAllowedAuthorizationBasis(value) {
-  return ALLOWED_AUTHORIZATION_BASES.has(value.replace(/`/g, '').trim().toLowerCase());
+function hasExpectedAuthorizationBasis(value) {
+  return value.replace(/`/g, '').trim().toLowerCase() === EXPECTED_AUTHORIZATION_BASIS;
 }
 
 function hasMeaningfulInitialRoundReason(value) {
   return INITIAL_ROUND_REASON_PATTERNS.some((pattern) => pattern.test(value))
+    && !INITIAL_ROUND_INCLUSION_PATTERNS.some((pattern) => pattern.test(value))
     && !/^(?:none|n\/a|not applicable|なし|該当なし|-)$/i.test(value.trim());
 }
 
@@ -200,7 +207,7 @@ export default function assertFinalReadinessSupervision(output) {
     ['actionable-family', configurationGap !== undefined
       && hasActionableFamily(lifecycle, configurationGap.findingId.replace(/`/g, '').trim())],
     ['authorization-basis', configurationGap !== undefined
-      && hasAllowedAuthorizationBasis(configurationGap.basis)],
+      && hasExpectedAuthorizationBasis(configurationGap.basis)],
     ['initial-round-reason', configurationGap !== undefined
       && hasMeaningfulInitialRoundReason(configurationGap.absentReason)],
     ['old-finding-disposition', keepsOldFindingNonActionable(lifecycle)],

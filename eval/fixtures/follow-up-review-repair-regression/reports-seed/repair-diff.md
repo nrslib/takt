@@ -1,11 +1,15 @@
-# Repair Diff Scope
+# 修正差分の範囲
 
-| Path | Relation to the repair |
+| Path | 修正との関係 |
 |------|------------------------|
-| `src/retry-token.js` | modified to resolve the original finding |
-| `src/checkpoint.js` | modified to resolve the original finding |
-| `src/public-key.js` | newly added by the repair |
-| `src/primary-key.js` | unchanged |
-| `src/structured-key.js` | unchanged |
-| `src/resource-record.js` | unchanged |
-| `src/resource-text.js` | unchanged |
+| `src/retry-token.js` | 元 finding の解消のため変更 |
+| `src/checkpoint.js` | 元 finding の解消のため変更 |
+| `src/public-key.js` | 修正によって新規追加 |
+| `src/application.js` | 既存の identity-card projection を公開するため変更 |
+| `src/identity-card.js` | 変更なし |
+| `src/identity-resolver.js` | 変更なし |
+| `src/primary-key.js` | 変更なし |
+| `src/structured-key.js` | 変更なし |
+| `src/resource-record.js` | 変更なし |
+| `src/resource-text.js` | 変更なし |
+| `tests/resource-key.test.js` | 公開 identity-card projection を対象にするため修正で変更 |

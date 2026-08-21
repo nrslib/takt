@@ -1,5 +1,5 @@
-# Peer Review Summary
+# peer review サマリー
 
-## Result: APPROVE
+## 結果: APPROVE
 
-No open peer-review findings remain after adjudication.
+裁定後に未解決の peer-review finding は残っていません。

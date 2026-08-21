@@ -1,1 +1,1 @@
-follow-up finding の `Authorization basis` は `accepted_family_unvisited_consumer`、`remediation_regression`、`direct_acceptance_criterion_violation`、`required_consumer_migration` のいずれか正確な値に限定し、初回レビューでは「該当なし」とする。「初回に含まれなかった理由」は別の事実説明であり、初回レビューでは「該当なし」とする。
+follow-up finding の `Authorization basis` は、適用 policy に従って選定した `accepted_family_unvisited_consumer`、`direct_acceptance_criterion_violation`、`remediation_regression`、`required_consumer_migration` のいずれか正確な1値に限定し、複数値とそれ以外の値を無効とする。初回レビューでは「該当なし」とする。「初回に含まれなかった理由」は別の事実説明であり、初回レビューでは「該当なし」とする。

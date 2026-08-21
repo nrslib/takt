@@ -21,7 +21,7 @@
  *         write-tests-contract-traceability,
  *         implement-contract-traceability,
  *         implementation-report-contract-traceability,
- *         review-adjudication, final-readiness-supervision,
+ *         review-adjudication, review-adjudication-report, final-readiness-supervision,
  *         final-readiness-preservation,
  *         final-readiness-precision,
  *         task-instruction-gherkin
@@ -78,6 +78,7 @@ const SUITES = {
   'companion-early-scan': 'promptfooconfig.companion-early-scan.yaml',
   'companion-evidence-boundary': 'promptfooconfig.companion-evidence-boundary.yaml',
   'review-adjudication': 'promptfooconfig.review-adjudication.yaml',
+  'review-adjudication-report': 'promptfooconfig.review-adjudication-report.yaml',
   'final-readiness-supervision': 'promptfooconfig.final-readiness-supervision.yaml',
   'final-readiness-preservation': 'promptfooconfig.final-readiness-preservation.yaml',
   'final-readiness-precision': 'promptfooconfig.final-readiness-precision.yaml',
@@ -113,8 +114,10 @@ for (const name of names) {
 // デフォルト実行から除外して明示的に呼び出す。
 // fix-plan-cause-check も claude（opus）と codex（gpt-5.6-luna）の
 // 両ログインが必要な二重測定スイートのため、明示的に呼び出す。
-// fix-plan-bounded-proof も claude（opus）と codex（Luna Max / Sol High）の
-// 両ログインが必要な3モデル測定スイートのため、明示的に呼び出す。
+// fix-plan-bounded-proof、fix-plan-fresh-findings、review-adjudication も claude（opus）と
+// codex（Luna Max / Sol High）の両ログインが必要な3モデル測定スイートのため、明示的に呼び出す。
+// review-family-closure と follow-up-review-repair-regression、follow-up-testing-review-repair-regression も claude（opus）と
+// codex（Luna Max / Sol High）の両ログインが必要な3モデル測定スイートのため、明示的に呼び出す。
 const DEFAULT_EXCLUDED = new Set([
   'coding',
   'rescan',
@@ -123,6 +126,12 @@ const DEFAULT_EXCLUDED = new Set([
   'fix-loop-convergence',
   'fix-plan-cause-check',
   'fix-plan-bounded-proof',
+  'fix-plan-fresh-findings',
+  'review-family-closure',
+  'follow-up-review-repair-regression',
+  'follow-up-testing-review-repair-regression',
+  'review-adjudication',
+  'review-adjudication-report',
   'initial-review-external-identity-wiring',
   'review-adjudication-binding',
   'security-review-method',

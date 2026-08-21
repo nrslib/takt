@@ -17,7 +17,7 @@
 {{include:output-contracts/base-review-problem-family-completion-sweep}}
 
 {{include:output-contracts/base-review-new-findings-scope}}
-| 1 | TF-NEW-file-L42 | tf-convention | In-scope | `modules/example/main.tf:42` | Issue description | accepted_family_unvisited_consumer | The initial review evidence did not visit this module consumer | Fix approach |
+| 1 | TF-NEW-file-L42 | tf-convention | In-scope | `modules/example/main.tf:42` | Issue description | {For follow-up, the exact single machine value selected by the applicable policy; not applicable for initial review} | {Independent causal evidence for the follow-up omission; not applicable for initial review} | Fix approach |
 
 {{include:output-contracts/base-review-follow-up-authorization}}
 

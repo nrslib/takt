@@ -20,7 +20,7 @@
 ## 今回の指摘（new）
 | # | finding_id | family_tag | 場所 | 問題 | Authorization basis | 初回に含まれなかった理由 | 修正案 |
 |---|------------|------------|------|------|---------------------|------------------------------|--------|
-| 1 | FE-NEW-src-file-L42 | component-design | `src/file.tsx:42` | 問題の説明 | required_consumer_migration | 初回レビュー証跡ではこのconsumerを確認していなかった | 修正方法 |
+| 1 | FE-NEW-src-file-L42 | component-design | `src/file.tsx:42` | 問題の説明 | {follow-upでは適用 policy が選定した正確な機械値1つ。初回は該当なし} | {follow-upで初回に含まれなかったことを示す独立した因果証拠。初回は該当なし} | 修正方法 |
 
 {{include:output-contracts/base-review-follow-up-authorization}}
 

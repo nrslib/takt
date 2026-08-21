@@ -18,6 +18,7 @@ steps:
       implementation_instruction: implement-maintenance
       review_policy_additions: [existing-system-respect]
       review_policy: [coding, testing, existing-system-respect, review, architecture, backend]
+      final_gate_policy: [coding, testing, existing-system-respect, architecture, backend]
       review_knowledge: [backend, security, architecture, unit-testing, e2e-testing, existing-system]
     rules:
       - condition: COMPLETE
