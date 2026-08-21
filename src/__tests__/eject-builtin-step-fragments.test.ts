@@ -37,28 +37,28 @@ describe('ejectBuiltin step fragments', () => {
   });
 
   it('should load an ejected builtin workflow that uses a workflow_call step fragment', async () => {
-    await ejectBuiltin('review-fix-default', { projectDir });
+    await ejectBuiltin('review-fix', { projectDir });
 
-    const workflowPath = join(projectDir, '.takt', 'workflows', 'review-fix-default.yaml');
+    const workflowPath = join(projectDir, '.takt', 'workflows', 'review-fix.yaml');
     expect(() => loadWorkflowFromFile(workflowPath, projectDir)).not.toThrow();
   });
 
   it('should reject dangling symlink targets without writing outside the project', async () => {
     const outsideWorkflowPath = join(projectDir, 'outside-workflow.yaml');
     const outsideFragmentPath = join(projectDir, 'outside-fragment.yaml');
-    const workflowTarget = join(projectDir, '.takt', 'workflows', 'review-fix-default.yaml');
+    const workflowTarget = join(projectDir, '.takt', 'workflows', 'review-fix.yaml');
     const fragmentTarget = join(projectDir, '.takt', 'steps', 'review-gather-with-clarification-to-reviewers.yaml');
     mkdirSync(join(projectDir, '.takt', 'workflows'), { recursive: true });
     mkdirSync(join(projectDir, '.takt', 'steps'), { recursive: true });
     symlinkSync(outsideWorkflowPath, workflowTarget);
 
-    await expect(ejectBuiltin('review-fix-default', { projectDir })).rejects.toThrow('Eject target file must not be a symlink');
+    await expect(ejectBuiltin('review-fix', { projectDir })).rejects.toThrow('Eject target file must not be a symlink');
     expect(existsSync(outsideWorkflowPath)).toBe(false);
 
     rmSync(workflowTarget);
     symlinkSync(outsideFragmentPath, fragmentTarget);
 
-    await expect(ejectBuiltin('review-fix-default', { projectDir })).rejects.toThrow('Eject target file must not be a symlink');
+    await expect(ejectBuiltin('review-fix', { projectDir })).rejects.toThrow('Eject target file must not be a symlink');
     expect(existsSync(outsideFragmentPath)).toBe(false);
   });
 

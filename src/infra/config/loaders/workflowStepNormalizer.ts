@@ -440,6 +440,12 @@ export function normalizeStepFromRaw(
     ? normalizeStepField(stepPath, ['capabilities'], () => resolveCapabilitySets(step.capabilities!, workflowDir, context))
     : undefined;
   const effectiveCapabilityOptions = stepCapabilityOptions ?? workflowDefinitions?.capabilityOptions;
+  const companion = normalizeStepField(stepPath, ['companion'], () => {
+    if (isWorkflowParamReference(step.companion)) {
+      throw new Error(`Step "${step.name}" has unresolved $param in companion`);
+    }
+    return step.companion as CompanionSelection | undefined;
+  });
 
   const normalizedAgentFields: Omit<
     NormalAgentWorkflowStep,
@@ -498,7 +504,7 @@ export function normalizeStepFromRaw(
     passPreviousResponse: step.pass_previous_response ?? true,
     policyContents,
     knowledgeContents,
-    companion: step.companion as CompanionSelection | undefined,
+    companion,
     completionRetry,
   };
 
@@ -598,17 +604,19 @@ export function normalizeStepFromRaw(
   }
 
   const teamLeader = normalizeTeamLeader(step.team_leader, workflowDir, sections, stepPath, context);
+  const dynamicFacets = normalizeDynamicFacets(step.dynamic_facets, stepPath, workflowDir, sections, context);
   if (teamLeader) {
     return {
       ...normalizedAgentFields,
       teamLeader,
+      dynamicFacets,
     };
   }
 
   return {
     ...normalizedAgentFields,
     session: step.session,
-    dynamicFacets: normalizeDynamicFacets(step.dynamic_facets, stepPath, workflowDir, sections, context),
+    dynamicFacets,
   };
   } catch (error) {
     throw withWorkflowStepErrorPath(error, stepPath);

@@ -1,4 +1,5 @@
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
+import { RATE_LIMIT_ERROR_MESSAGE } from '../../models/response.js';
 import type {
   AgentResponse,
   FallbackContext,
@@ -360,7 +361,6 @@ function appendFallbackAttempt(
 function buildFallbackContext(
   deps: WorkflowRunLoopDeps,
   step: WorkflowStep,
-  response: AgentResponse,
   current: StepProviderInfo,
   fallback: RateLimitFallbackProvider,
   originalIteration: number,
@@ -371,7 +371,7 @@ function buildFallbackContext(
   }
   return {
     reason: 'rate_limited',
-    reasonDetail: response.error ?? 'Rate limit exceeded',
+    reasonDetail: RATE_LIMIT_ERROR_MESSAGE,
     originalIteration,
     previousProvider: current.provider,
     ...(current.model !== undefined ? { previousModel: current.model } : {}),
@@ -724,7 +724,6 @@ function prepareRateLimitFallback(
   deps.state.pendingFallback = buildFallbackContext(
     deps,
     step,
-    response,
     currentProvider,
     fallback,
     activeIteration,

@@ -1053,6 +1053,27 @@ provider_options:
 
 runtime profile または capability preset で設定できます。legacy モードでは `provider_routing`、deprecated の `persona_providers`、project、global config からも設定できます。環境変数 `TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS=true` でも上書きできます。
 
+#### Codex の fast mode (`fast_mode`)
+
+`provider_options.codex.fast_mode` で Codex の fast mode を明示的に設定できます。
+
+```yaml
+provider_options:
+  codex:
+    fast_mode: true
+```
+
+`true` と `false` はどちらも明示値として扱われます。省略した場合、TAKT は
+`features.fast_mode` を Codex に渡さず、Codex 自身の既定値を維持します。環境変数では
+`TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE=true` または
+`TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE=false` を使用できます。
+
+この設定は既存の provider option leaf の解決順序と source attribution に従います。
+runtime profile、`provider_routing.personas`、`provider_routing.tags`、
+`provider_routing.steps`、project または global の `provider_options`、環境変数 override
+から設定できます。`takt exec` の assistant session も、解決済み runtime default の
+provider options を使用します。
+
 #### Codex の permission control (`permission_control`)
 
 Codex はデフォルトで TAKT の permission mode マッピングを使います。これは `permission_control: takt` と同じで、解決済みの TAKT `permission_mode` を Codex SDK の `sandboxMode` へ渡します。`network_access` を指定した場合は `networkAccessEnabled` にも渡します。省略時は Codex の既定値（`false`）を維持します。

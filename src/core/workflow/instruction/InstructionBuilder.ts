@@ -21,7 +21,7 @@ import {
   preparePolicyContent as preparePolicyContentGeneric,
 } from 'faceted-prompting';
 import { renderPullRequestContext } from '../pr-context.js';
-import { isNormalAgentWorkflowStep } from '../../models/workflow-types.js';
+import { isNormalOrTeamLeaderWorkflowStep } from '../../models/workflow-types.js';
 import { getCompanionInstructionCopy } from '../companion/evidence.js';
 import { renderWorkflowWideRules } from './workflow-wide-rules.js';
 
@@ -262,7 +262,7 @@ export class InstructionBuilder {
 
   private appendCompanionInstruction(instructions: string): string {
     if (
-      !isNormalAgentWorkflowStep(this.step)
+      !isNormalOrTeamLeaderWorkflowStep(this.step)
       || this.step.companion === undefined
       || this.context.companion === undefined
     ) return instructions;

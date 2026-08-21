@@ -1236,8 +1236,13 @@ describe('agent-usecases', () => {
     );
 
     expect(runAgent).toHaveBeenCalledWith('team-leader', expect.any(String), expect.any(Object));
-    expect(vi.mocked(runAgent).mock.calls[0]?.[2]).toHaveProperty('allowedTools', ['Read', 'Glob', 'Grep']);
+    expect(vi.mocked(runAgent).mock.calls[0]?.[2]).toEqual(expect.objectContaining({
+      allowedTools: ['Read', 'Glob', 'Grep'],
+    }));
     expect(vi.mocked(runAgent).mock.calls[0]?.[2]).not.toHaveProperty('permissionMode');
+    expect(vi.mocked(runAgent).mock.calls[0]?.[1]).toContain(
+      'You may use read-only inspection tools only',
+    );
   });
 
   it('requestMoreParts は inspectGuidance を feedback prompt へ伝搬する', async () => {

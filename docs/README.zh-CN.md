@@ -257,7 +257,8 @@ steps:
 | `pure` | 不注入领域 facet 的最小流程，信任模型自身的判断与 skill 选择 |
 | `takt-default` | TAKT 自身使用的开发流程，也适用于其他 CLI 工具 |
 | `takt-default-team` | 通过 Team Leader 任务分解执行实现与修复的 `takt-default` 变体 |
-| `review` / `review-fix-default` | 多视角审查（不带 / 带收敛式修复循环） |
+| `review` | 按变更动态选择 reviewer 并由 supervisor 汇总的多视角审查，不修改代码 |
+| `review-fix` | 按变更动态选择 reviewer 的多视角审查，随后使用标准 workflow 的裁定、验证修复循环和最终需求检查收敛 |
 
 领域特化系列（`simple-*` / `frontend` / `backend` / `dual` / CQRS / `*-mini` 变体）仍可在 📦 Legacy 分类中使用。
 

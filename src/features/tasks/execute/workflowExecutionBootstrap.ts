@@ -129,6 +129,7 @@ export interface WorkflowExecutionBootstrap {
   companionProviders: Readonly<Record<string, ProviderRoutingEntry>>;
   providerRoutingTagConflictPolicy: TagRoutingConflictPolicy;
   providerOptions: WorkflowExecutionOptions['providerOptions'];
+  configProviderOptions: WorkflowExecutionOptions['providerOptions'];
   providerOptionsProviderSource: ProviderResolutionSource | undefined;
   providerPermissionMode: PermissionMode | undefined;
   autoRouting: WorkflowExecutionOptions['autoRouting'];
@@ -381,7 +382,13 @@ export async function createWorkflowExecutionBootstrap(
         handlerRef.current(event);
       };
 
-  const isRetry = Boolean(options.startStep || options.retryNote || options.resumePoint || options.restartPoint);
+  const isRetry = Boolean(
+    options.resumeSource?.resumeMode
+      || options.startStep
+      || options.retryNote
+      || options.resumePoint
+      || options.restartPoint,
+  );
   const shouldLoadSavedSessions = isRetry && options.restartPoint === undefined;
   const isWorktree = cwd !== projectCwd;
   log.debug('Session mode', { isRetry, isWorktree });
@@ -751,6 +758,7 @@ export async function createWorkflowExecutionBootstrap(
     companionProviders,
     providerRoutingTagConflictPolicy,
     providerOptions: effectiveProviderOptions,
+    configProviderOptions: resolvedRuntimeEnvironment.configProviderOptions,
     providerOptionsProviderSource: resolvedRuntimeEnvironment.providerConfigMode === 'runtime-v1'
       ? currentProviderSource
       : undefined,

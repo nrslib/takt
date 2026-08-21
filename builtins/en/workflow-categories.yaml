@@ -4,7 +4,7 @@ workflow_categories:
       - default
       - maintenance
       - simple
-      - pure
+      - review-fix
   🛠️ Development:
     workflows:
       - default
@@ -14,7 +14,7 @@ workflow_categories:
   🔍 Review:
     workflows:
       - review
-      - review-fix-default
+      - review-fix
       - audit-unit
       - audit-e2e
       - audit-security

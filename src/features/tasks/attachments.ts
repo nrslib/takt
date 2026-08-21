@@ -103,7 +103,7 @@ export function promoteTaskAttachments(
     if (fs.existsSync(destinationPath)) {
       throw new Error(`Task attachment destination already exists: ${destinationPath}`);
     }
-    fs.copyFileSync(attachment.tempPath, destinationPath);
+    fs.copyFileSync(attachment.tempPath, destinationPath, fs.constants.COPYFILE_EXCL);
   }
 }
 

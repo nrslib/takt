@@ -84,6 +84,7 @@ const CodexProviderOptionShape = {
   network_access: z.boolean().optional(),
   permission_control: z.enum(['takt', 'codex']).optional(),
   reasoning_effort: ProviderEffortSchema.optional(),
+  fast_mode: z.boolean().optional(),
   skills: z.object(CodexSkillsShape).optional(),
   guards: ProviderGuardOptionsSchema.optional(),
 };
@@ -610,6 +611,7 @@ const NormalizedStepProviderOptionsSchema = z.object({
     networkAccess: z.boolean().optional(),
     permissionControl: z.enum(['takt', 'codex']).optional(),
     reasoningEffort: ProviderEffortSchema.optional(),
+    fastMode: z.boolean().optional(),
     guards: z.object({
       callTimeoutMs: z.number().int().min(60_000).max(86_400_000).optional(),
     }).strict().optional(),

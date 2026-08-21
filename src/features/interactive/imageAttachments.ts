@@ -26,6 +26,7 @@ export interface ImageAttachmentStoreOptions {
   tmpRoot: string;
   sessionId: string;
   initialAttachments?: readonly InteractiveImageAttachment[];
+  initialAttachmentIndex?: number;
 }
 
 const PRIVATE_FILE_MODE = 0o600;
@@ -59,6 +60,14 @@ function validateImageAttachmentSessionId(sessionId: string): void {
   ) {
     throw new Error('Image attachment sessionId must be a single path segment.');
   }
+}
+
+function resolveInitialAttachmentIndex(attachments: readonly InteractiveImageAttachment[]): number {
+  return attachments.reduce((maxIndex, attachment) => {
+    const placeholderIndex = /\[Image #(\d+)\]/.exec(attachment.placeholder)?.[1];
+    const fileNameIndex = /^image-(\d+)\.[A-Za-z0-9]+$/.exec(attachment.fileName)?.[1];
+    return Math.max(maxIndex, Number(placeholderIndex ?? 0), Number(fileNameIndex ?? 0));
+  }, 0);
 }
 
 export function cleanupImageAttachmentStore(attachmentStore: ImageAttachmentStore): void {
@@ -108,8 +117,11 @@ export function cleanupInteractiveResultAttachments(result: ImageAttachmentClean
 export function buildInteractiveResultWithAttachments(
   result: InteractiveModeResult,
   attachmentStore: ImageAttachmentStore,
+  attachmentsOverride?: readonly InteractiveImageAttachment[],
 ): InteractiveModeResult {
-  const attachments = attachmentStore.listAttachments();
+  const attachments = attachmentsOverride
+    ? [...attachmentsOverride]
+    : attachmentStore.listAttachments();
   const resultWithAttachments = {
     ...result,
     ...(attachments.length > 0 ? { attachments } : {}),
@@ -130,13 +142,18 @@ export function createImageAttachmentStore(
   let attachments: InteractiveImageAttachment[] = options.initialAttachments
     ? [...options.initialAttachments]
     : [];
+  let nextAttachmentIndex = Math.max(
+    options.initialAttachmentIndex ?? 0,
+    resolveInitialAttachmentIndex(attachments),
+  );
   const sessionDir = path.join(options.tmpRoot, 'takt', options.sessionId);
   const taktTmpDir = path.dirname(sessionDir);
   const attachmentDir = path.join(sessionDir, 'attachments');
 
   return {
     async saveImage(data: Buffer, mimeType: string): Promise<InteractiveImageAttachment> {
-      const index = attachments.length + 1;
+      const index = nextAttachmentIndex + 1;
+      nextAttachmentIndex = index;
       const fileName = `image-${index}.${extensionForMimeType(mimeType)}`;
       const tempPath = path.join(attachmentDir, fileName);
       const attachment: InteractiveImageAttachment = {
@@ -165,11 +182,13 @@ export function createImageAttachmentStore(
 
 export function createSessionImageAttachmentStore(
   initialAttachments?: readonly InteractiveImageAttachment[],
+  initialAttachmentIndex?: number,
 ): ImageAttachmentStore {
   return createImageAttachmentStore({
     tmpRoot: os.tmpdir(),
     sessionId: randomUUID(),
     ...(initialAttachments ? { initialAttachments } : {}),
+    ...(initialAttachmentIndex === undefined ? {} : { initialAttachmentIndex }),
   });
 }
 

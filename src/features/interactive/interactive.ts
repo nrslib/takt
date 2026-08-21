@@ -295,4 +295,6 @@ export interface InteractiveModeResult extends ImageAttachmentCleanupOwner {
   task: string;
   /** Images pasted during interactive input and referenced by placeholder. */
   attachments?: InteractiveImageAttachment[];
+  /** The command path that produced this result. */
+  source?: 'go' | 'retry' | 'replay' | 'accept' | 'play';
 }

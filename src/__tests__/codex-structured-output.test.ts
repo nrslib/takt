@@ -12,6 +12,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CodexCallOptions } from '../infra/codex/types.js';
 
+const { mockBuildCodexSkillConfig } = vi.hoisted(() => ({
+  mockBuildCodexSkillConfig: vi.fn(),
+}));
+
 // ===== Codex SDK mock =====
 
 let mockEvents: Array<Record<string, unknown>> = [];
@@ -48,12 +52,17 @@ vi.mock('@openai/codex-sdk', () => {
   };
 });
 
+vi.mock('../infra/codex/skill-config.js', () => ({
+  buildCodexSkillConfig: mockBuildCodexSkillConfig,
+}));
+
 // CodexClient は @openai/codex-sdk をインポートするため、mock 後にインポート
 const { CodexClient } = await import('../infra/codex/client.js');
 
 describe('CodexClient — structuredOutput 抽出', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockBuildCodexSkillConfig.mockReset();
     mockEvents = [];
     lastThreadOptions = undefined;
     lastTurnOptions = undefined;
@@ -429,6 +438,68 @@ describe('CodexClient — structuredOutput 抽出', () => {
         model_reasoning_summary: 'auto',
       },
     });
+  });
+
+  it.each([true, false])('fastMode=%s は Codex config の features.fast_mode に反映される', async (fastMode) => {
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+    mockBuildCodexSkillConfig.mockReturnValue({
+      skills: {
+        config: [{ path: '/tmp/example/SKILL.md', enabled: false }],
+      },
+    });
+    const callOptions: CodexCallOptions = {
+      cwd: '/tmp',
+      fastMode,
+      reasoningEffort: 'high',
+      skills: { repo: false, user: false },
+    };
+
+    const client = new CodexClient();
+    await client.call('coder', 'prompt', callOptions);
+
+    expect(lastCodexConstructorOptions).toMatchObject({
+      config: {
+        skills: {
+          config: [{ path: '/tmp/example/SKILL.md', enabled: false }],
+        },
+        features: { fast_mode: fastMode },
+        model_reasoning_effort: 'high',
+        model_reasoning_summary: 'auto',
+      },
+    });
+  });
+
+  it('fastMode 未指定時は Codex config に features.fast_mode を追加しない', async () => {
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+    mockBuildCodexSkillConfig.mockReturnValue({
+      skills: {
+        config: [{ path: '/tmp/example/SKILL.md', enabled: false }],
+      },
+    });
+
+    const client = new CodexClient();
+    await client.call('coder', 'prompt', {
+      cwd: '/tmp',
+      reasoningEffort: 'high',
+      skills: { repo: false, user: false },
+    });
+
+    expect(lastCodexConstructorOptions).toMatchObject({
+      config: {
+        skills: {
+          config: [{ path: '/tmp/example/SKILL.md', enabled: false }],
+        },
+        model_reasoning_effort: 'high',
+        model_reasoning_summary: 'auto',
+      },
+    });
+    expect(lastCodexConstructorOptions?.config).not.toHaveProperty('features.fast_mode');
   });
 
   it('codexPathOverride が Codex constructor options に反映される', async () => {

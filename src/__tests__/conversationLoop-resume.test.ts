@@ -132,6 +132,7 @@ import { error as logError, info as logInfo } from '../shared/ui/index.js';
 import { callAIWithRetry, runConversationLoop, type SessionContext } from '../features/interactive/conversationLoop.js';
 import * as interactiveModule from '../features/interactive/interactive.js';
 import { initializeSession } from '../features/interactive/sessionInitialization.js';
+import { SlashCommand } from '../shared/constants.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockSelectOption = vi.mocked(selectOption);
@@ -598,6 +599,28 @@ describe('/resume command', () => {
 // /go command: summary AI session isolation
 // =================================================================
 describe('/go command', () => {
+  it('does not turn disabled /accept or /play into execution results in a guarded mode', async () => {
+    setupRawStdin(toRawInputs(['/accept', '/play run it', '/go']));
+    const { provider } = createScenarioProvider([
+      { content: 'Assistant response to accept text' },
+      { content: 'Assistant response to play text' },
+      { content: 'Revised order body' },
+    ]);
+    const ctx = createSessionContext({ provider: provider as SessionContext['provider'] });
+
+    const result = await runConversationLoop('/test', ctx, {
+      ...defaultStrategy,
+      enabledCommands: [SlashCommand.Go, SlashCommand.Cancel],
+      trackResultSource: true,
+    }, undefined, undefined);
+
+    expect(result).toMatchObject({
+      action: 'execute',
+      task: 'Revised order body',
+      source: 'go',
+    });
+  });
+
   it.each([
     ['unset', undefined, true],
     ['project false', false, false],
@@ -712,6 +735,34 @@ describe('/go command', () => {
       'mock',
     );
     expect(result.action).toBe('execute');
+  });
+
+  it('should return a rejected /go draft to the conversation history', async () => {
+    setupRawStdin(toRawInputs(['hello', '/go', 'revise this draft', '/go']));
+    const { provider, capture } = createScenarioProvider([
+      { content: 'Initial assistant response' },
+      { content: 'First generated order' },
+      { content: 'Revised assistant response' },
+      { content: 'Second generated order' },
+    ]);
+    const selectGoAction = vi.fn()
+      .mockResolvedValueOnce('continue')
+      .mockResolvedValueOnce('execute');
+    const ctx = createSessionContext({
+      provider: provider as SessionContext['provider'],
+    });
+
+    const result = await runConversationLoop(
+      '/test',
+      ctx,
+      { ...defaultStrategy, selectGoAction },
+      undefined,
+      undefined,
+    );
+
+    expect(result.action).toBe('execute');
+    expect(result.task).toBe('Second generated order');
+    expect(capture.prompts[3]).toContain('First generated order');
   });
 
   it('should return pasted image attachments after image input and /go', async () => {

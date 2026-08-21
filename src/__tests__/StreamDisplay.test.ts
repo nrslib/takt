@@ -174,6 +174,19 @@ describe('StreamDisplay', () => {
       expect(fullOutput).not.toContain('\x1b]52');
       expect(fullOutput).not.toContain('\x1b[41m');
     });
+
+    it('should neutralize private CSI in result error content', () => {
+      const display = new StreamDisplay('test-agent', false);
+      display.showResult(false, '\x1b[?25lCursor failed');
+
+      const errorLine = consoleLogSpy.mock.calls.find(
+        (call) => typeof call[0] === 'string' && (call[0] as string).includes('Cursor failed'),
+      );
+      expect(errorLine).toBeDefined();
+      const output = errorLine!.join(' ');
+      expect(output).toContain('\\x1b[?25lCursor failed');
+      expect(output).not.toContain('\x1b[?25l');
+    });
   });
 
   describe('showToolUse spinner suppression', () => {

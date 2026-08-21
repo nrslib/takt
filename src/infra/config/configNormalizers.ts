@@ -667,6 +667,7 @@ export function denormalizeProviderOptions(
     || providerOptions.codex?.networkAccess !== undefined
     || providerOptions.codex?.permissionControl !== undefined
     || providerOptions.codex?.reasoningEffort !== undefined
+    || providerOptions.codex?.fastMode !== undefined
     || providerOptions.codex?.guards?.callTimeoutMs !== undefined
     || providerOptions.codex?.skills?.repo !== undefined
     || providerOptions.codex?.skills?.user !== undefined
@@ -683,6 +684,9 @@ export function denormalizeProviderOptions(
         : {}),
       ...(providerOptions.codex.reasoningEffort !== undefined
         ? { reasoning_effort: providerOptions.codex.reasoningEffort }
+        : {}),
+      ...(providerOptions.codex.fastMode !== undefined
+        ? { fast_mode: providerOptions.codex.fastMode }
         : {}),
       ...(providerOptions.codex.skills?.repo !== undefined || providerOptions.codex.skills?.user !== undefined
         ? {

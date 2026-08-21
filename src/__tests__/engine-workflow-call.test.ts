@@ -893,7 +893,7 @@ steps:
     expect(options?.providerOptions).toEqual({ claude: { allowedTools: ['Read'] } });
     expect(startedProviderInfo[0]?.providerOptions).toEqual({ claude: { allowedTools: ['Read'] } });
     expect(startedProviderInfo[0]?.providerOptionsSources).toEqual({
-      'claude.allowedTools': 'default',
+      'claude.allowedTools': 'runtime-v1',
     });
   });
 

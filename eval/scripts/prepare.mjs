@@ -251,13 +251,13 @@ const TARGETS = [
   { id: 'review-adjudication', workflow: 'peer-review', step: 'review-adjudication', fixture: 'eval/fixtures/review-adjudication' },
   {
     id: 'final-readiness-supervision',
-    workflow: 'review-fix-default',
+    workflow: 'final-gate',
     step: 'supervise',
     fixture: 'eval/fixtures/final-readiness-supervision',
   },
   {
     id: 'final-readiness-supervision-phase2',
-    workflow: 'review-fix-default',
+    workflow: 'final-gate',
     step: 'supervise',
     fixture: 'eval/fixtures/final-readiness-supervision',
     phase: 'phase2',
@@ -265,7 +265,7 @@ const TARGETS = [
   },
   {
     id: 'final-readiness-precision',
-    workflow: 'review-fix-default',
+    workflow: 'final-gate',
     step: 'supervise',
     fixture: 'eval/fixtures/final-readiness-precision',
   },

@@ -1,9 +1,10 @@
 import { spawn } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 import {
-  terminateProcessTree,
+  startProcessTreeCleanup,
 } from './process-tree.mjs';
 const MAX_PROBE_OUTPUT_BYTES = 1024 * 1024;
+const PROBE_REPORT_FLUSH_GRACE_MS = 25;
 const PHASE_MARKERS = Object.freeze({
   ready: 'PROBE_READY',
   cleanupStart: 'PROBE_CLEANUP_START',
@@ -100,10 +101,15 @@ export function runProbeProcess(script, args, options) {
   return new Promise((resolve, reject) => {
     let phase = 'startup';
     let timedOut = false;
+    let timedOutPhase;
+    let timedOutDuration;
     let outputLimitExceeded = false;
     let protocolFailure;
     let terminationRequested = false;
     let termination = Promise.resolve();
+    let settled = false;
+    let reportSettlementScheduled = false;
+    let reportSettlementId;
     let outputBytes = 0;
     let stdout = '';
     let stderr = '';
@@ -119,8 +125,34 @@ export function runProbeProcess(script, args, options) {
         return;
       }
       terminationRequested = true;
-      termination = terminateProcessTree(child.pid);
+      termination = child.pid === undefined
+        ? Promise.resolve()
+        : startProcessTreeCleanup(child.pid);
       void termination.catch(() => undefined);
+    };
+    const settleFailure = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      clearTimeout(reportSettlementId);
+      reject(attachProbeCleanup(error, termination));
+    };
+    const settleSuccess = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      clearTimeout(reportSettlementId);
+      resolve({ stdout, stderr, cleanup: termination });
+    };
+    const scheduleReportSettlement = () => {
+      if (reportSettlementScheduled) return;
+      reportSettlementScheduled = true;
+      reportSettlementId = setTimeout(() => {
+        if (settled || protocolFailure !== undefined) return;
+        if (exitObserved && typeof exitCode === 'number' && exitCode !== 0) return;
+        terminate();
+        settleSuccess();
+      }, PROBE_REPORT_FLUSH_GRACE_MS);
     };
     const phaseTimeout = () => {
       if (phase === 'startup') return options.startupTimeout;
@@ -129,21 +161,49 @@ export function runProbeProcess(script, args, options) {
     };
     const schedulePhaseTimeout = () => {
       clearTimeout(timeoutId);
+      const timeout = phaseTimeout();
       timeoutId = setTimeout(() => {
+        if (terminationRequested || protocolFailure !== undefined || outputLimitExceeded) {
+          return;
+        }
+        const protocol = readProbeProtocol(stdout);
+        if (protocol.protocolError !== undefined) {
+          protocolFailure = createProbeProtocolError(protocol.phase, stdout, stderr, protocol.protocolError);
+          terminate();
+          settleFailure(protocolFailure);
+          return;
+        }
+        if (protocol.phase === 'cleanup' && protocol.resultCount === 1) {
+          clearTimeout(timeoutId);
+          scheduleReportSettlement();
+          return;
+        }
         timedOut = true;
+        timedOutPhase = phase;
+        timedOutDuration = timeout;
+        const error = createProbeTimeoutError(phase, timeout, stdout, stderr);
         terminate();
-      }, phaseTimeout());
+        settleFailure(error);
+      }, timeout);
     };
     const advancePhase = () => {
+      if (settled) return;
       const protocol = readProbeProtocol(stdout);
       if (protocol.protocolError !== undefined) {
         protocolFailure = createProbeProtocolError(protocol.phase, stdout, stderr, protocol.protocolError);
         terminate();
+        settleFailure(protocolFailure);
         return;
       }
       if (protocol.phase !== phase) {
         phase = protocol.phase;
-        schedulePhaseTimeout();
+        if (!terminationRequested) {
+          schedulePhaseTimeout();
+        }
+      }
+      if (protocol.phase === 'cleanup' && protocol.resultCount === 1) {
+        clearTimeout(timeoutId);
+        scheduleReportSettlement();
       }
     };
 
@@ -155,7 +215,9 @@ export function runProbeProcess(script, args, options) {
       outputBytes += appended.bytes;
       if (appended.exceeded && !outputLimitExceeded) {
         outputLimitExceeded = true;
+        const error = createProbeOutputLimitError(stdout, stderr);
         terminate();
+        settleFailure(error);
         return;
       }
       advancePhase();
@@ -166,57 +228,68 @@ export function runProbeProcess(script, args, options) {
       outputBytes += appended.bytes;
       if (appended.exceeded && !outputLimitExceeded) {
         outputLimitExceeded = true;
+        const error = createProbeOutputLimitError(stdout, stderr);
         terminate();
+        settleFailure(error);
       }
     });
 
     let spawnError;
+    let exitObserved = false;
+    let exitCode;
     child.once('error', (error) => {
       spawnError = error;
+      if (child.pid === undefined) {
+        error.stdout = stdout;
+        error.stderr = stderr;
+        settleFailure(error);
+      }
+    });
+    child.once('exit', (code) => {
+      exitObserved = true;
+      exitCode = code;
     });
     schedulePhaseTimeout();
     child.once('close', async (code, signal) => {
+      if (settled) return;
       clearTimeout(timeoutId);
+      const protocol = readProbeProtocol(stdout);
+      if (protocol.protocolError !== undefined && protocolFailure === undefined) {
+        protocolFailure = createProbeProtocolError(protocol.phase, stdout, stderr, protocol.protocolError);
+      }
       if (timedOut || outputLimitExceeded || protocolFailure !== undefined) {
-        const terminalError = timedOut
-          ? createProbeTimeoutError(phase, phaseTimeout(), stdout, stderr)
+        const terminalError = protocolFailure ?? (timedOut
+          ? createProbeTimeoutError(timedOutPhase ?? phase, timedOutDuration ?? phaseTimeout(), stdout, stderr)
           : outputLimitExceeded
             ? createProbeOutputLimitError(stdout, stderr)
-            : protocolFailure;
-        try {
-          await termination;
-        } catch (terminationError) {
-          reject(new AggregateError(
-            terminalError === undefined ? [terminationError] : [terminalError, terminationError],
-            'Probe process tree could not be terminated',
-          ));
-          return;
-        }
-        reject(terminalError);
+            : undefined);
+        settleFailure(terminalError);
         return;
       }
       if (spawnError !== undefined) {
         spawnError.stdout = stdout;
         spawnError.stderr = stderr;
-        reject(spawnError);
+        settleFailure(spawnError);
+        return;
+      }
+      if (reportSettlementScheduled && terminationRequested && code === null) {
+        settleSuccess();
         return;
       }
       if (code !== 0) {
-        reject(createProbeExitError(code, signal, stdout, stderr));
+        const error = createProbeExitError(code, signal, stdout, stderr);
+        terminate();
+        settleFailure(error);
         return;
       }
-      const protocol = readProbeProtocol(stdout);
       if (protocol.protocolError !== undefined || protocol.resultCount !== 1 || protocol.phase !== 'cleanup') {
-        reject(createProbeProtocolError(phase, stdout, stderr, protocol.protocolError));
+        const error = createProbeProtocolError(protocol.phase, stdout, stderr, protocol.protocolError);
+        terminate();
+        settleFailure(error);
         return;
       }
-      try {
-        await terminateProcessTree(child.pid);
-      } catch (terminationError) {
-        reject(terminationError);
-        return;
-      }
-      resolve({ stdout, stderr });
+      terminate();
+      settleSuccess();
     });
   });
 }
@@ -224,6 +297,11 @@ export function runProbeProcess(script, args, options) {
 function attachProbeOutput(error, stdout, stderr) {
   error.stdout = stdout;
   error.stderr = stderr;
+  return error;
+}
+
+function attachProbeCleanup(error, cleanup) {
+  error.cleanup = cleanup;
   return error;
 }
 
