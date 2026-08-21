@@ -97,7 +97,12 @@ export async function runReportPhase(
   ctx: ReportPhaseRunnerContext,
 ): Promise<ReportPhaseBlockedResult | ReportPhaseRateLimitedResult | void> {
   return executeReportPhase(step, stepIteration, ctx, {}, (report) => {
-    writeReportFile(ctx.reportDir, report.reportName, report.reportContent);
+    writeReportFile(
+      ctx.reportDir,
+      report.reportName,
+      report.reportContent,
+      ctx.reportContentSanitizer,
+    );
   });
 }
 

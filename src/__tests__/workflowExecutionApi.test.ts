@@ -381,6 +381,32 @@ describe('runWorkflowExecution', () => {
       expect.not.objectContaining({ loopAnalysisScheduler: expect.anything() }),
     );
   });
+
+  it('Given an internal analysis execution, When its options are built, Then report persistence receives the publication sanitizer', async () => {
+    mockExecuteTaskWorkflow.mockImplementationOnce(async (request, executor) => executor(
+      { name: 'project-loop-analysis-override', steps: [], maxSteps: 3 },
+      request.task,
+      request.cwd,
+      { projectCwd: request.projectCwd },
+    ));
+
+    await runLoopAnalysisWorkflowExecution({
+      task: 'Analyze a source run',
+      cwd: '/repo',
+      projectCwd: '/repo',
+      workflowIdentifier: 'loop-analysis',
+      outputMode: 'silent',
+    });
+
+    const options = mockExecuteWorkflow.mock.calls[0]?.[3] as {
+      reportContentSanitizer?: (content: string) => string;
+    } | undefined;
+    expect(options?.reportContentSanitizer).toEqual(expect.any(Function));
+    const sanitized = options?.reportContentSanitizer?.(
+      'token=analysis-secret\nWindows path: C:/Users/jane/private/report.md',
+    );
+    expect(sanitized).not.toMatch(/analysis-secret|C:\/Users\/jane/);
+  });
 });
 
 describe('runWorkflowExecution silent output', () => {

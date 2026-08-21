@@ -1,7 +1,7 @@
 import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
 
 const POSIX_ABSOLUTE_PATH_PATTERN = /(?<![\w:/])\/[^\s'"`<>|]*/g;
-const WINDOWS_ABSOLUTE_PATH_PATTERN = /[A-Za-z]:\\[^\s'"`<>|]*/g;
+const WINDOWS_ABSOLUTE_PATH_PATTERN = /[A-Za-z]:[\\/][^\s'"`<>|]*/g;
 const FILE_URL_PATTERN = /file:\/\/[^\s'"`<>|]*/gi;
 const EMAIL_ADDRESS_PATTERN = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
 const IPV4_ADDRESS_PATTERN = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;

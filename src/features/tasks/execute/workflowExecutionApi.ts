@@ -1,6 +1,7 @@
 import { isAbsolute } from 'node:path';
 import { executeWorkflow, executeWorkflowForRun, type WorkflowRunContext } from './workflowExecution.js';
 import { executeTaskWorkflow } from './taskWorkflowExecution.js';
+import { sanitizeLoopAnalysisReportForPublication } from './loopAnalysisReportPublication.js';
 import {
   createLoopAnalysisScheduler,
   LOOP_ANALYSIS_WORKFLOW,
@@ -54,8 +55,15 @@ async function runWorkflowExecutionInternal(
     workflowName: string,
     options: WorkflowExecutionOptions,
   ): WorkflowExecutionOptions => {
-    if (isLoopAnalysisRun || workflowName === LOOP_ANALYSIS_WORKFLOW) {
-      return options;
+    const isLoopAnalysisWorkflow = isLoopAnalysisRun || workflowName === LOOP_ANALYSIS_WORKFLOW;
+    const configuredOptions = isLoopAnalysisWorkflow
+      ? {
+          ...options,
+          reportContentSanitizer: sanitizeLoopAnalysisReportForPublication,
+        }
+      : options;
+    if (isLoopAnalysisWorkflow) {
+      return configuredOptions;
     }
     const loopAnalysisScheduler = createLoopAnalysisScheduler({
       projectCwd: request.projectCwd,
@@ -64,8 +72,8 @@ async function runWorkflowExecutionInternal(
         : { publication: options.loopAnalysisPublication }),
     });
     return loopAnalysisScheduler === undefined
-      ? options
-      : { ...options, loopAnalysisScheduler };
+      ? configuredOptions
+      : { ...configuredOptions, loopAnalysisScheduler };
   };
 
   return executeTaskWorkflow(

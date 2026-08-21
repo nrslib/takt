@@ -790,6 +790,8 @@ describe('commentLoopAnalysisReportOnPr', () => {
       'Contact: jane@example.com',
       'Runner name: private-runner-7',
       'Evidence: /Users/jane/project/.takt/runs/run-1/logs/session.jsonl',
+      'Windows evidence: C:/Users/jane/project/.takt/runs/run-1/logs/session.jsonl',
+      'Windows backslash evidence: C:\\Users\\jane\\project\\.takt\\runs\\run-1\\logs\\session.jsonl',
       'Host: 192.168.10.4',
     ].join('\n');
     mockFindExistingPr.mockReturnValue({
@@ -811,7 +813,7 @@ describe('commentLoopAnalysisReportOnPr', () => {
     if (typeof published !== 'string') {
       throw new Error('Expected the sanitized report to be published');
     }
-    expect(published).not.toMatch(/plain-secret|jane@example\.com|private-runner-7|\/Users\/jane|192\.168\.10\.4/);
+    expect(published).not.toMatch(/plain-secret|jane@example\.com|private-runner-7|\/Users\/jane|C:\/Users\/jane|C:\\Users\\jane|192\.168\.10\.4/);
     expect(published).toContain('[REDACTED]');
     expect(published).toContain('[PII]');
     expect(published).toContain('[path]');

@@ -773,6 +773,7 @@ export class OptionsBuilder {
       observabilityRunId: this.engineOptions.observabilityRunId,
       observabilityEnabled: this.engineOptions.observability?.enabled === true,
       sanitizeObservabilityText: this.engineOptions.sanitizeObservabilityText,
+      reportContentSanitizer: this.engineOptions.reportContentSanitizer,
       getCurrentWorkflowStack: this.getCurrentWorkflowStack,
       childProcessEnv: this.engineOptions.childProcessEnv,
       abortSignal: this.resolveAbortSignal(),

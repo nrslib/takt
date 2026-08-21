@@ -4,8 +4,10 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node
 import { basename, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { runReportPhase, type ReportPhaseRunnerContext } from '../core/workflow/phase-runner.js';
+import { writeReportFile } from '../core/workflow/report-writer.js';
 import type { WorkflowStep } from '../core/models/types.js';
 import type { RunAgentOptions } from '../agents/runner.js';
+import { sanitizeLoopAnalysisReportForPublication } from '../features/tasks/execute/loopAnalysisReportPublication.js';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -47,6 +49,7 @@ function createContext(
     onBuildResumeOptions?: (overrides: Pick<RunAgentOptions, 'maxTurns'>) => void;
     primaryProvider?: 'claude' | 'codex' | 'opencode' | 'mock';
     fallbackProvider?: 'claude' | 'codex' | 'opencode' | 'mock';
+    reportContentSanitizer?: (content: string) => string;
   } = {},
 ): ReportPhaseRunnerContext {
   const currentLastResponse = options.lastResponse ?? 'Phase 1 result';
@@ -59,6 +62,7 @@ function createContext(
     cwd: reportDir,
     reportDir,
     lastResponse: currentLastResponse,
+    reportContentSanitizer: options.reportContentSanitizer,
     resolveSessionKey: (step) => step.persona ?? step.name,
     getSessionId: (_persona: string) => currentSessionId,
     buildResumeOptions: (
@@ -166,6 +170,63 @@ describe('runReportPhase report history behavior', () => {
 
     const archivedContent = readFileSync(versionedFiles[0]!, 'utf-8');
     expect(archivedContent).toBe('First review result');
+  });
+
+  it('should sanitize loop analysis content before saving the report file and its history', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('loop-analysis.md');
+    const reportContent = [
+      '# Loop analysis',
+      'api_key=loop-analysis-secret',
+      'credentials=opaque-credential',
+      'Runner name: private-runner-7',
+      'Contact: jane@example.com',
+      'Evidence: C:/Users/jane/project/.takt/runs/run-1/logs/session.jsonl',
+      'Windows evidence: C:\\Users\\jane\\project\\.takt\\runs\\run-1\\logs\\session.jsonl',
+    ].join('\n');
+    const ctx = createContext(reportDir, {
+      reportContentSanitizer: sanitizeLoopAnalysisReportForPublication,
+    });
+    queueRunAgentResponses([{
+      persona: 'reviewers',
+      status: 'done',
+      content: reportContent,
+      timestamp: new Date('2026-02-10T06:11:43Z'),
+      sessionId: 'session-2',
+    }]);
+
+    await runReportPhase(step, 1, ctx);
+
+    const persistedContent = readFileSync(join(reportDir, 'loop-analysis.md'), 'utf-8');
+    expect(persistedContent).not.toMatch(
+      /loop-analysis-secret|opaque-credential|private-runner-7|jane@example\.com|C:\/Users\/jane|C:\\Users\\jane/,
+    );
+    expect(persistedContent).toContain('[REDACTED]');
+    expect(persistedContent).toContain('[PII]');
+    expect(persistedContent).toContain('[path]');
+  });
+
+  it('should sanitize an existing report before moving it to loop analysis history', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('loop-analysis.md');
+    const priorReport = 'token=prior-secret\nEvidence: C:/Users/jane/private/report.md\nWindows: C:\\Users\\jane\\private\\report.md';
+    writeReportFile(reportDir, 'loop-analysis.md', priorReport);
+    const ctx = createContext(reportDir, {
+      reportContentSanitizer: sanitizeLoopAnalysisReportForPublication,
+    });
+    queueRunAgentResponses([{
+      persona: 'reviewers',
+      status: 'done',
+      content: '# New loop analysis',
+      timestamp: new Date('2026-02-10T06:11:43Z'),
+      sessionId: 'session-2',
+    }]);
+
+    await runReportPhase(step, 1, ctx);
+
+    const historyFiles = writerHistoryPaths(reportDir, 'loop-analysis.md');
+    expect(historyFiles).toHaveLength(1);
+    expect(readFileSync(historyFiles[0]!, 'utf-8')).not.toMatch(/prior-secret|C:\/Users\/jane|C:\\Users\\jane/);
   });
 
   it('should add sequence suffix when history file name collides in the same second', async () => {

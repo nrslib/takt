@@ -294,6 +294,8 @@ export interface WorkflowExecutionOptions {
   prContext?: PullRequestContext;
   /** Coordinates optional loop-analysis publication with source-run PR handling. */
   loopAnalysisPublication?: LoopAnalysisPublicationCoordinator;
+  /** Sanitizes report content before it crosses the report-file persistence boundary. */
+  reportContentSanitizer?: (content: string) => string;
   /** Non-blocking hook invoked after terminal artifacts and observability are finalized. */
   loopAnalysisScheduler?: LoopAnalysisScheduler;
 }
