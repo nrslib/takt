@@ -36,6 +36,7 @@ import type {
   ProviderActivityCallback,
   StreamCallback,
 } from '../../../shared/types/provider.js';
+import { resolveSelectorPermissionMode } from '../selector-permission-resolution.js';
 
 const log = createLogger('dynamic-facet-selector');
 const SELECTOR_RATIONALE_LOG_MAX_BYTES = 1024;
@@ -180,8 +181,7 @@ export class DynamicFacetSelectorCoordinator {
             provider: selectorProvider.provider,
             model: selectorProvider.model,
             providerOptions: selectorProvider.providerOptions ?? {},
-            permissionMode: selectorProvider.permissionMode ?? 'readonly',
-            permissionModeSource: selectorProvider.permissionMode === undefined ? 'synthetic' : 'explicit',
+            ...resolveSelectorPermissionMode(selectorProvider.permissionMode),
           },
         },
       );

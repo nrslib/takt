@@ -17,6 +17,7 @@ function normalizeLoopMonitorJudge(
   return {
     persona: personaSpec,
     personaPath,
+    ...(raw.persona !== undefined && raw.persona.length > 0 ? { personaRef: raw.persona } : {}),
     instruction: raw.instruction
       ? resolveRefToContent(
           raw.instruction,
@@ -26,6 +27,7 @@ function normalizeLoopMonitorJudge(
           context,
         )
       : undefined,
+    ...(raw.instruction === undefined ? {} : { instructionRef: raw.instruction }),
     rules: raw.rules.map((rule) => ({
       condition: parseWorkflowRuleCondition(rule.condition),
       next: rule.next,

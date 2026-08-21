@@ -295,6 +295,7 @@ describe('normalizeWorkflowConfig team_leader', () => {
       partTags: ['coding', 'review'],
       partPersona: 'coder',
       partPersonaPath: undefined,
+      partPersonaRef: 'coder',
       partAllowedTools: ['Read', 'Edit'],
       partEdit: true,
       partPermissionMode: 'edit',

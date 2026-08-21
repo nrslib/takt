@@ -105,6 +105,7 @@ describe('completion retry workflow contract', () => {
       minRetry: 0,
       maxRetry: 4,
       retryInstruction: 'Close only the supplied gaps.',
+      retryInstructionRef: 'retry',
     });
   });
 
@@ -119,6 +120,7 @@ describe('completion retry workflow contract', () => {
       minRetry: 0,
       maxRetry: 4,
       retryInstruction: 'Close only the supplied gaps.',
+      retryInstructionRef: 'retry',
     });
   });
 
@@ -157,6 +159,7 @@ describe('completion retry workflow contract', () => {
       minRetry: 0,
       maxRetry: 4,
       retryInstruction: 'Close only the supplied gaps.',
+      retryInstructionRef: 'retry',
     });
   });
 
@@ -190,6 +193,7 @@ describe('completion retry workflow contract', () => {
       minRetry: 0,
       maxRetry: 4,
       retryInstruction: 'Close only the supplied gaps.',
+      retryInstructionRef: 'retry',
     });
   });
 

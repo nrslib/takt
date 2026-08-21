@@ -245,7 +245,9 @@ describe('selector guidance resolution', () => {
     };
     expect(facetSelector.selector).toEqual({
       persona: 'Choose implementation facets from the supplied evidence.',
+      personaRef: 'facet-selector',
       instruction: 'Select facets using the changed paths and findings.',
+      instructionRef: 'select-implementation-facets',
     });
 
     const parallel = workflow.steps[1]?.parallel;
@@ -257,7 +259,9 @@ describe('selector guidance resolution', () => {
     };
     expect(selection.selector).toEqual({
       persona: 'Choose reviewers from the supplied evidence.',
+      personaRef: 'reviewer-selector',
       instruction: 'Select reviewers using the changed paths and reports.',
+      instructionRef: 'select-reviewers',
     });
   });
 

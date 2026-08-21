@@ -115,6 +115,8 @@ export interface OutputContractItem {
   formatRef?: string;
   useJudge?: boolean;
   order?: string;
+  /** 解決前の order 参照名（facet ref）。 */
+  orderRef?: string;
 }
 
 export type OutputContractEntry = OutputContractItem;
@@ -220,6 +222,8 @@ export interface DynamicParallelSelectionSnapshot {
 export interface ResolvedFacetContent {
   readonly content: string;
   readonly sourcePath?: string;
+  readonly refName?: string;
+  readonly literalContent?: true;
 }
 
 export interface ResolvedFacetPoolCandidate {
@@ -246,7 +250,9 @@ export interface DynamicFacetsConfig {
 export interface SelectorGuidance {
   readonly persona?: string;
   readonly personaPath?: string;
+  readonly personaRef?: string;
   readonly instruction: string;
+  readonly instructionRef?: string;
 }
 
 export const MAX_COMPLETION_RETRY = 4;
@@ -255,6 +261,7 @@ export interface CompletionRetryConfig {
   readonly minRetry: number;
   readonly maxRetry: number;
   readonly retryInstruction: string;
+  readonly retryInstructionRef?: string;
 }
 
 export interface DynamicFacetSelectionSnapshot {
@@ -523,7 +530,9 @@ export interface LoopMonitorRule {
 export interface LoopMonitorJudge {
   persona?: string;
   personaPath?: string;
+  personaRef?: string;
   instruction?: string;
+  instructionRef?: string;
   rules: LoopMonitorRule[];
 }
 

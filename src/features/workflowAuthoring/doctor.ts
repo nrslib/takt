@@ -29,7 +29,7 @@ function reportHasErrors(report: WorkflowDoctorReport): boolean {
   return report.diagnostics.some((diagnostic) => diagnostic.level === 'error');
 }
 
-function loadWorkflowForRuntimeValidation(
+export function loadWorkflowForRuntimeValidation(
   target: WorkflowDoctorTarget,
   projectDir: string,
 ) {
@@ -53,7 +53,7 @@ function loadWorkflowForRuntimeValidation(
   }
 }
 
-function validateWorkflowRuntimeContract(
+export function validateWorkflowRuntimeContract(
   report: WorkflowDoctorReport,
   target: WorkflowDoctorTarget,
   projectDir: string,

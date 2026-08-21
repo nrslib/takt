@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockInitWorkflowCommand = vi.fn();
 const mockDoctorWorkflowCommand = vi.fn();
+const mockInspectWorkflowCommand = vi.fn();
+const mockInspectModuleLoaded = vi.fn();
 const mockPreviewPrompts = vi.fn();
 
 const { rootCommand, commandActions, commandMocks } = vi.hoisted(() => {
@@ -64,16 +66,26 @@ vi.mock('../features/workflowAuthoring/doctor.js', () => ({
   doctorWorkflowCommand: (...args: unknown[]) => mockDoctorWorkflowCommand(...args),
 }));
 
+vi.mock('../features/workflowAuthoring/inspect.js', () => {
+  mockInspectModuleLoaded();
+  return {
+    inspectWorkflowCommand: (...args: unknown[]) => mockInspectWorkflowCommand(...args),
+  };
+});
+
 vi.mock('../features/prompt/preview.js', () => ({
   previewPrompts: (...args: unknown[]) => mockPreviewPrompts(...args),
 }));
 
 import '../app/cli/commands.js';
 
+const inspectModuleLoadedCallsAtRegistration = mockInspectModuleLoaded.mock.calls.length;
+
 describe('CLI workflow command', () => {
   beforeEach(() => {
     mockInitWorkflowCommand.mockClear();
     mockDoctorWorkflowCommand.mockClear();
+    mockInspectWorkflowCommand.mockClear();
     mockPreviewPrompts.mockClear();
     rootCommand.opts.mockReturnValue({});
   });
@@ -85,11 +97,14 @@ describe('CLI workflow command', () => {
     expect(calledCommandNames).toContain('workflow');
     expect(commandMocks.get('root.workflow.init')).toBeTruthy();
     expect(commandMocks.get('root.workflow.doctor')).toBeTruthy();
+    expect(commandMocks.get('root.workflow.inspect')).toBeTruthy();
+    expect(inspectModuleLoadedCallsAtRegistration).toBe(0);
   });
 
   it('should define init options and doctor target arguments', () => {
     const initCommand = commandMocks.get('root.workflow.init');
     const doctorCommand = commandMocks.get('root.workflow.doctor');
+    const inspectCommand = commandMocks.get('root.workflow.inspect');
 
     expect(initCommand?.argument.mock.calls[0]?.[0]).toBe('<name>');
     const optionNames = initCommand?.option.mock.calls.map(([name]) => name);
@@ -100,6 +115,7 @@ describe('CLI workflow command', () => {
       '--global',
     ]));
     expect(doctorCommand?.argument.mock.calls[0]?.[0]).toBe('[targets...]');
+    expect(inspectCommand?.argument.mock.calls[0]?.[0]).toBe('[target]');
   });
 
   it('should delegate init action to workflow authoring feature', async () => {
@@ -133,10 +149,21 @@ describe('CLI workflow command', () => {
     expect(mockDoctorWorkflowCommand).toHaveBeenCalledWith(['default', './flow.yaml'], '/test/cwd', undefined);
   });
 
+  it('should delegate inspect action with one target to workflow authoring feature', async () => {
+    const inspectAction = commandActions.get('root.workflow.inspect');
+
+    expect(inspectAction).toBeTypeOf('function');
+
+    await inspectAction?.('sample-flow');
+
+    expect(mockInspectWorkflowCommand).toHaveBeenCalledWith('sample-flow', '/test/cwd', undefined);
+  });
+
   it('should propagate CLI execution overrides to prompt preview and workflow doctor', async () => {
     rootCommand.opts.mockReturnValue({ provider: 'mock', model: 'cli-model' });
     const promptAction = commandActions.get('root.prompt');
     const doctorAction = commandActions.get('root.workflow.doctor');
+    const inspectAction = commandActions.get('root.workflow.inspect');
     const expectedOverrides = {
       provider: 'mock',
       providerSource: 'cli',
@@ -146,8 +173,10 @@ describe('CLI workflow command', () => {
 
     await promptAction?.('default');
     await doctorAction?.(['default']);
+    await inspectAction?.('default');
 
     expect(mockPreviewPrompts).toHaveBeenCalledWith('/test/cwd', 'default', expectedOverrides);
     expect(mockDoctorWorkflowCommand).toHaveBeenCalledWith(['default'], '/test/cwd', expectedOverrides);
+    expect(mockInspectWorkflowCommand).toHaveBeenCalledWith('default', '/test/cwd', expectedOverrides);
   });
 });

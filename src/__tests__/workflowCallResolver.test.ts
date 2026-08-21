@@ -452,7 +452,9 @@ steps:
     const facetSelector = childWorkflow!.steps[0]?.dynamicFacets?.selector;
     expect(facetSelector).toEqual({
       persona: 'Selector persona content',
+      personaRef: 'selector-persona',
       instruction: 'Selector guidance content',
+      instructionRef: 'selector-guidance',
     });
     const parallel = childWorkflow!.steps[1]?.parallel;
     if (parallel === undefined || Array.isArray(parallel)) {
@@ -460,7 +462,9 @@ steps:
     }
     expect(parallel.selection.selector).toEqual({
       persona: 'Selector persona content',
+      personaRef: 'selector-persona',
       instruction: 'Selector guidance content',
+      instructionRef: 'selector-guidance',
     });
     expect(JSON.stringify(childWorkflow)).not.toContain('$param');
   });

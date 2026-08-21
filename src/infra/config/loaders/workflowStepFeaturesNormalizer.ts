@@ -63,7 +63,7 @@ export function normalizeOutputContract(
     ? resolveReference(entry.order, 'order')
     : undefined;
 
-  return { name: entry.name, useJudge: entry.use_judge ?? true, format, formatRef: entry.format, order };
+  return { name: entry.name, useJudge: entry.use_judge ?? true, format, formatRef: entry.format, order, orderRef: entry.order };
 }
 
 export function normalizeArpeggio(raw: RawStep['arpeggio'], workflowDir: string): ArpeggioStepConfig | undefined {
@@ -139,6 +139,9 @@ export function normalizeTeamLeader(
     inspectTools: normalizeTeamLeaderInspectTools(raw.inspect_tools, stepPath),
     partPersona,
     partPersonaPath,
+    ...(raw.part_persona !== undefined && raw.part_persona.trim().length > 0
+      ? { partPersonaRef: raw.part_persona }
+      : {}),
     partTags,
     partAllowedTools: raw.part_allowed_tools,
     partEdit: raw.part_edit,

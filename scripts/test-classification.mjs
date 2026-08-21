@@ -275,6 +275,7 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/usageEventLogger.test.ts',
   'src/__tests__/watcher.test.ts',
   'src/__tests__/workflow-init.test.ts',
+  'src/__tests__/workflow-inspect.test.ts',
   'src/__tests__/workflowExecution-ask-user-question.test.ts',
   'src/__tests__/workflowExecution-session-loading.test.ts',
   'src/__tests__/workflowExecution-structured-caller.test.ts',
