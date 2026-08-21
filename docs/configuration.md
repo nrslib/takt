@@ -631,12 +631,14 @@ recovery guarantee for a claim that was persisted immediately before the
 process was killed.
 
 The analyzer reads the source run's available JSONL logs, trace, monitor data,
-reports, and saved workflow definition. It proposes reusable changes to the
-workflow steps or transitions rather than changes tied to internal prompt
-components. The reviewer can request explicit reanalysis up to two times when a
-proposal is unsupported, over-specialized, or targets the wrong workflow
-behavior. The final report is always written to the analysis run's
-`reports/loop-analysis.md`.
+reports, saved workflow definition, and the facets referenced by each step. It
+expresses invariants shared by multiple steps as workflow-wide rules and
+step-specific problems as changes to the responsible facet. The reviewer can
+request explicit reanalysis up to two times when a proposal is unsupported,
+over-specialized, or targets the wrong workflow behavior. Reanalysis classifies
+each finding as addressed or unable to be addressed with evidence, withdraws
+the affected proposal in the latter case, and returns it to the reviewer. The
+final report is always written to the analysis run's `reports/loop-analysis.md`.
 
 With `output: pr-comment`, the same persisted report content is also posted when
 the source run has auto-PR enabled and its branch already has a pull request. If

@@ -230,7 +230,7 @@ describe('loadWorkflowByIdentifier', () => {
     }
   });
 
-  it.each(['en', 'ja'])('Given the %s loop analysis assets, When composing their prompt content, Then internal prompt-component terminology is absent', (language) => {
+  it.each(['en', 'ja'])('Given the %s loop analysis assets, When composing their prompt content, Then only analysis steps receive TAKT facet knowledge', (language) => {
     const configDir = process.env.TAKT_CONFIG_DIR;
     if (configDir === undefined) {
       throw new Error('TAKT_CONFIG_DIR is required for workflow loader tests');
@@ -247,17 +247,41 @@ describe('loadWorkflowByIdentifier', () => {
     if (workflow === null) {
       throw new Error(`loop-analysis builtin workflow was not loaded for ${language}`);
     }
-    const promptAssets = [
+    const analyzer = workflow.steps.find((step) => step.name === 'analyze');
+    const reanalyzer = workflow.steps.find((step) => step.name === 'reanalyze');
+    const reviewer = workflow.steps.find((step) => step.name === 'review');
+    if (analyzer === undefined || reanalyzer === undefined || reviewer === undefined) {
+      throw new Error(`loop-analysis steps were not loaded for ${language}`);
+    }
+    const analysisAssets = [
+      analyzer.persona,
+      analyzer.instruction,
+      ...(analyzer.knowledgeContents?.map((content) => content.content) ?? []),
+      reanalyzer.persona,
+      reanalyzer.instruction,
+      ...(reanalyzer.knowledgeContents?.map((content) => content.content) ?? []),
+    ].filter((content): content is string => content !== undefined).join('\n');
+    const reviewAssets = [
       workflow.description,
       ...(workflow.allStepsRules?.map((rule) => rule.content) ?? []),
-      ...workflow.steps.flatMap((step) => [step.persona, step.instruction]),
-      ...workflow.steps.flatMap((step) => (
-        step.outputContracts?.map((contract) => contract.format) ?? []
-      )),
+      reviewer.persona,
+      reviewer.instruction,
+      ...(reviewer.knowledgeContents?.map((content) => content.content) ?? []),
+      ...(reviewer.outputContracts?.map((contract) => contract.format) ?? []),
     ].filter((content): content is string => content !== undefined).join('\n');
+    const internalPromptTerminology = /\bfacets?\b|\bpersona\b|\bpolicy\b|\bknowledge\b|\binstruction\b|\boutput[- ]contract\b|ファセット|ペルソナ|ポリシー|ナレッジ|出力契約/i;
 
-    expect(promptAssets).not.toMatch(
-      /\bfacets?\b|\bpersona\b|\bpolicy\b|\bknowledge\b|\binstruction\b|\boutput[- ]contract\b|ファセット|ペルソナ|ポリシー|ナレッジ|出力契約/i,
+    expect(analyzer.knowledgeContents).toHaveLength(1);
+    expect(reanalyzer.knowledgeContents).toHaveLength(1);
+    expect(reviewer.knowledgeContents).toBeUndefined();
+    expect(analysisAssets).toMatch(internalPromptTerminology);
+    expect(reviewAssets).not.toMatch(internalPromptTerminology);
+    const reanalysisCondition = reanalyzer.rules?.[0]?.condition;
+    expect(reanalysisCondition?.kind).toBe('semantic');
+    expect(reanalysisCondition?.kind === 'semantic' ? reanalysisCondition.label : '').toMatch(
+      language === 'ja'
+        ? /修正済み.*対応不能/
+        : /resolved.*unable to be addressed/i,
     );
   });
 

@@ -616,11 +616,12 @@ loop_analysis:
 at-most-once であるため、claim がプロセス終了直前に永続化されていた場合、task 一覧から run を
 force-fail しても、この状態を自動復旧できる保証はありません。
 
-分析 agent は元 run に存在する JSONL ログ、trace、monitor data、report、保存済みのワークフロー定義を
-読みます。内部のプロンプト構成要素を対象にせず、ワークフローの step または transition に対する
-再利用可能な変更を提案します。reviewer は、根拠不足、過剰な個別最適化、対象となるワークフロー動作の
-誤りがある場合、明示的な再分析を最大2回まで要求できます。最終 report は常に分析 run の
-`reports/loop-analysis.md` へ保存されます。
+分析 agent は元 run に存在する JSONL ログ、trace、monitor data、report、保存済みのワークフロー定義と、
+各 step が参照した facets を読みます。複数 step で共有する不変条件はワークフロー全体の rule、step 固有の
+問題は対応する facet の変更として提案します。reviewer は、根拠不足、過剰な個別最適化、対象となる
+ワークフロー動作の誤りがある場合、明示的な再分析を最大2回まで要求できます。再分析では各指摘を
+対応済みまたは根拠付きの対応不能に分類し、対応不能な案を撤回した上で再び reviewer が判定します。
+最終 report は常に分析 run の `reports/loop-analysis.md` へ保存されます。
 
 `output: pr-comment` の場合、元 run で auto-PR が有効で、その branch の PR が既に存在するときだけ、
 保存済み report と同一内容をコメントします。PR が存在しない場合は report ファイルだけを残します。

@@ -25,6 +25,12 @@
 - Evidence or gap: {artifact path and the unsupported claim, targeting error, missing case, or weakened control}
 - Required correction: {specific change needed before approval}
 
+## Disposition of Prior Findings
+
+### {finding, or "Not applicable" for the initial review}
+- Result: `{Addressed, Proposal withdrawn because it cannot be addressed, or Not applicable}`
+- Evidence: {artifact showing the correction, or artifact and reason showing why the proposal was withdrawn}
+
 ## Rejected Proposals
 
 ### {proposal title, or "None"}
@@ -33,4 +39,4 @@
 - Rejection reason: {why it was unsupported, over-specialized, unsafe, redundant, or targeted incorrectly}
 ```
 
-Include every accepted proposal, every required correction, and every proposal rejected during analysis or evaluation. Do not omit rejected proposals when the final accepted set is empty. Use `None` for Required Reanalysis when the result is `APPROVE`. Do not include absolute filesystem paths or runner-identifying path components.
+Include every accepted proposal, every required correction, every prior-finding disposition, and every proposal rejected during analysis or evaluation. Do not omit rejected proposals when the final accepted set is empty. Use `None` for Required Reanalysis when the result is `APPROVE`. Do not include absolute filesystem paths or runner-identifying path components.
