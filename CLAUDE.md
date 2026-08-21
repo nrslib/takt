@@ -96,7 +96,7 @@ Verified against `resolveStepProviderModel` / `PROVIDER_MODEL_SOURCE_PRIORITY` a
 
 ### Worktree-isolated execution
 
-`worktree: true` runs a task in a `git clone --shared` (not a real git worktree — Claude Code follows `.git`-file `gitdir:` pointers back to the main repo, which breaks isolation). Clones are ephemeral (auto-commit + push on success, deleted after), contain only tracked files, and cannot resume sessions (`cwd !== projectCwd`). `cwd` = clone path, `projectCwd` = repo root; reports go to `cwd/.takt/runs/{slug}/reports/`.
+`worktree: true` runs a task in a clone created with `git clone --reference <main-repo> --dissociate` (plain `git clone` when the project is itself a linked worktree, or as fallback when the reference repo is shallow) — not a real git worktree, because Claude Code follows `.git`-file `gitdir:` pointers back to the main repo, which breaks isolation. Clones are ephemeral (auto-commit + push on success, deleted after), contain only tracked files, and cannot resume sessions (`cwd !== projectCwd`). `cwd` = clone path, `projectCwd` = repo root; reports go to `cwd/.takt/runs/{slug}/reports/`.
 
 ## Faceted Prompting
 
