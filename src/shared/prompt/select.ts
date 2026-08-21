@@ -13,6 +13,7 @@ import {
   type ViewportState,
   renderMenu,
   handleKeyInput,
+  firstSelectableIndex,
 } from './select-menu.js';
 import {
   createViewportState,
@@ -30,6 +31,7 @@ export {
   renderMenu,
   countRenderedLines,
   handleKeyInput,
+  firstSelectableIndex,
 } from './select-menu.js';
 
 function printHeader<T extends string>(message: string, callbacks?: InteractiveSelectCallbacks<T>): void {
@@ -164,7 +166,7 @@ function interactiveSelect<T extends string>(
   return new Promise((resolve, reject) => {
     let currentOptions = options;
     let totalItems = hasCancelOption ? currentOptions.length + 1 : currentOptions.length;
-    let selectedIndex = initialIndex;
+    let selectedIndex = firstSelectableIndex(currentOptions, initialIndex, hasCancelOption);
     let rawMode: RawMode | undefined;
     let cleanedUp = false;
     const keyInputDecoder = new KeyInputDecoder();
@@ -173,6 +175,18 @@ function interactiveSelect<T extends string>(
 
     const terminalRows = process.stdout.rows ?? 24;
     let viewport = createViewportState(terminalRows, currentOptions, hasCancelOption);
+    if (viewport.active) {
+      viewport = {
+        ...viewport,
+        scrollOffset: adjustScrollOffset(
+          selectedIndex,
+          viewport.scrollOffset,
+          currentOptions,
+          hasCancelOption,
+          viewport.maxOptionLines,
+        ),
+      };
+    }
     let totalLines = 0;
 
     const cleanup = (): unknown => {
@@ -256,7 +270,7 @@ function interactiveSelect<T extends string>(
         }
 
         const result = handleKeyInput(
-          key, selectedIndex, totalItems, hasCancelOption, currentOptions.length,
+          key, selectedIndex, totalItems, hasCancelOption, currentOptions.length, currentOptions,
         );
 
         switch (result.action) {
@@ -349,7 +363,7 @@ function interactiveSelect<T extends string>(
       const { useTty, forceTouchTty } = resolveTtyPolicy();
       assertTtyIfForced(forceTouchTty);
       if (!useTty) {
-        finish({ selectedIndex: initialIndex, finalOptions: currentOptions });
+        finish({ selectedIndex, finalOptions: currentOptions });
         return;
       }
 
@@ -394,7 +408,7 @@ export async function selectOption<T extends string>(
  */
 export async function selectOptionWithDefault<T extends string>(
   message: string,
-  options: { label: string; value: T }[],
+  options: SelectOptionItem<T>[],
   defaultValue: T,
 ): Promise<T | null> {
   if (options.length === 0) return defaultValue;

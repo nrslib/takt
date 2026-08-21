@@ -32,6 +32,9 @@ import type { TraceTaskContext } from './traceTaskMetadata.js';
 import type { RunFinalizationIssue } from './workflowRunExecution.js';
 import type { ResolvedTaskSpec } from './taskSpecContext.js';
 import type { SelectorProviderOverrides } from '../../../infra/config/selectorProviderResolution.js';
+import type { LoopAnalysisPublicationCoordinator } from './loopAnalysisPublication.js';
+
+export type LoopAnalysisScheduler = (sourceRunDirectory: string) => void;
 
 /** Info captured when iteration limit is hit in non-interactive mode */
 export interface ExceededInfo {
@@ -289,6 +292,12 @@ export interface WorkflowExecutionOptions {
   traceTaskMetadata?: WorkflowTraceTaskMetadata;
   /** Structured PR context used as prompt input. */
   prContext?: PullRequestContext;
+  /** Coordinates optional loop-analysis publication with source-run PR handling. */
+  loopAnalysisPublication?: LoopAnalysisPublicationCoordinator;
+  /** Sanitizes report content before it crosses the report-file persistence boundary. */
+  reportContentSanitizer?: (content: string) => string;
+  /** Non-blocking hook invoked after terminal artifacts and observability are finalized. */
+  loopAnalysisScheduler?: LoopAnalysisScheduler;
 }
 
 export interface TaskExecutionOptions {
@@ -377,6 +386,8 @@ export interface ExecuteTaskOptions {
   traceTaskMetadata?: WorkflowTraceTaskMetadata;
   /** Structured PR context used as prompt input. */
   prContext?: PullRequestContext;
+  /** Coordinates optional loop-analysis publication with source-run PR handling. */
+  loopAnalysisPublication?: LoopAnalysisPublicationCoordinator;
 }
 
 export interface PipelineExecutionOptions {

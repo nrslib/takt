@@ -348,6 +348,111 @@ describe('runtime-provider loader', () => {
     expect(resolved!.companion).toBeUndefined();
   });
 
+  it.each(['file', 'pr-comment'] as const)(
+    'Given loop analysis output is %s, When loading, Then the validated setting is returned',
+    (output) => {
+      writeRuntimeYaml(globalDir, [
+        'version: 1',
+        'loop_analysis:',
+        '  enabled: true',
+        `  output: ${output}`,
+      ]);
+
+      const loaded = loadRuntimeProviderFileAt(join(globalDir, RUNTIME_PROVIDER_FILENAME));
+
+      expect(loaded?.loop_analysis).toEqual({ enabled: true, output });
+    },
+  );
+
+  it('Given loop analysis output is omitted, When loading, Then file output is applied at the loader boundary', () => {
+    writeRuntimeYaml(globalDir, [
+      'version: 1',
+      'loop_analysis:',
+      '  enabled: true',
+    ]);
+
+    const loaded = loadRuntimeProviderFileAt(join(globalDir, RUNTIME_PROVIDER_FILENAME));
+
+    expect(loaded?.loop_analysis).toEqual({ enabled: true, output: 'file' });
+  });
+
+  it('Given loop analysis is not configured, When loading, Then it remains unset', () => {
+    writeRuntimeYaml(globalDir, ['version: 1']);
+
+    const loaded = loadRuntimeProviderFileAt(join(globalDir, RUNTIME_PROVIDER_FILENAME));
+
+    expect(loaded?.loop_analysis).toBeUndefined();
+  });
+
+  it('Given an unknown loop analysis output, When loading, Then validation rejects the file', () => {
+    writeRuntimeYaml(globalDir, [
+      'version: 1',
+      'loop_analysis:',
+      '  enabled: true',
+      '  output: issue-comment',
+    ]);
+
+    expect(() => loadRuntimeProviderFileAt(join(globalDir, RUNTIME_PROVIDER_FILENAME)))
+      .toThrow(/loop_analysis/);
+  });
+
+  it.each([
+    ['enabled is omitted', ['version: 1', 'loop_analysis:', '  output: file']],
+    ['enabled is not boolean', ['version: 1', 'loop_analysis:', '  enabled: yes-please']],
+  ])('Given %s, When loading, Then validation rejects the file', (_label, lines) => {
+    writeRuntimeYaml(globalDir, lines);
+
+    expect(() => loadRuntimeProviderFileAt(join(globalDir, RUNTIME_PROVIDER_FILENAME)))
+      .toThrow(/loop_analysis/);
+  });
+
+  it.each(['provider', 'model', 'provider_options'])(
+    'Given loop analysis contains %s, When loading, Then validation rejects provider configuration',
+    (field) => {
+      writeRuntimeYaml(globalDir, [
+        'version: 1',
+        'loop_analysis:',
+        '  enabled: true',
+        `  ${field}: forbidden`,
+      ]);
+
+      expect(() => loadRuntimeProviderFileAt(join(globalDir, RUNTIME_PROVIDER_FILENAME)))
+        .toThrow(/loop_analysis/);
+    },
+  );
+
+  it('Given both files configure loop analysis, When resolving, Then the project section replaces the global section', () => {
+    writeRuntimeYaml(globalDir, [
+      'version: 1',
+      'loop_analysis:',
+      '  enabled: true',
+      '  output: pr-comment',
+    ]);
+    writeRuntimeYaml(projectDir, [
+      'version: 1',
+      'loop_analysis:',
+      '  enabled: false',
+    ]);
+
+    const resolved = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
+
+    expect(resolved?.loop_analysis).toEqual({ enabled: false, output: 'file' });
+  });
+
+  it('Given only the global file configures loop analysis, When resolving, Then the global section is retained', () => {
+    writeRuntimeYaml(globalDir, [
+      'version: 1',
+      'loop_analysis:',
+      '  enabled: true',
+      '  output: pr-comment',
+    ]);
+    writeRuntimeYaml(projectDir, ['version: 1']);
+
+    const resolved = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
+
+    expect(resolved?.loop_analysis).toEqual({ enabled: true, output: 'pr-comment' });
+  });
+
   it('Given neither file present, When resolving, Then it returns undefined (C1)', () => {
     expect(resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir })).toBeUndefined();
   });

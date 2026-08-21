@@ -27,11 +27,19 @@ import type {
   WorkflowRunForceFailHandle,
 } from './workflowRunAdmin.js';
 import type { RunFinalization } from './workflowRunExecution.js';
+import type { LoopAnalysisScheduler } from './types.js';
+import {
+  settleLoopAnalysisPublication,
+  type LoopAnalysisPublicationCoordinator,
+} from './loopAnalysisPublication.js';
+import { scheduleLoopAnalysis } from './loopAnalysis.js';
 
 interface TaskRunForceFailAdapterContext
   extends WorkflowRunForceFailContext {
   readonly projectDir: string;
   readonly cwd: string;
+  readonly loopAnalysisScheduler?: LoopAnalysisScheduler;
+  readonly loopAnalysisPublication?: LoopAnalysisPublicationCoordinator;
 }
 
 const RUN_LOG_SIDECAR_FILE_SUFFIXES = Object.freeze([
@@ -68,6 +76,11 @@ class FileTaskRunForceFailStorage implements WorkflowRunForceFailHandle {
       iteration: payload.iterations,
       reason,
     }, payload);
+    scheduleLoopAnalysis(
+      this.context.loopAnalysisScheduler,
+      runPaths.runRootAbs,
+    );
+    settleLoopAnalysisPublication(this.context.loopAnalysisPublication);
     return result;
   }
 }

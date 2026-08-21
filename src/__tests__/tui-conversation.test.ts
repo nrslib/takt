@@ -6,6 +6,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AssistantInteractiveMode, PermissionMode } from '../core/models/index.js';
+import { SlashCommand } from '../shared/constants.js';
 import type { StreamCallback } from '../shared/types/provider.js';
 import type { WorkflowContext } from '../features/interactive/interactive-summary-types.js';
 
@@ -490,6 +491,131 @@ describe('TUI local commands', () => {
       enableRetryCommand: true,
       hasPreviousOrder: true,
     });
+  });
+
+  it('should build /go from the mode prompt builder and mark where the task came from', async () => {
+    // Retry and Instruct revise the task's order.md instead of writing a new
+    // instruction, and they record that the task came from `/go` so the caller
+    // knows to persist the revision.
+    const plan = createPlan();
+    const summaryPromptBuilder = vi.fn(() => 'revise this order');
+    const conversation = createTuiConversation({
+      cwd: '/repo',
+      plan: {
+        ...plan,
+        strategy: { ...plan.strategy, summaryPromptBuilder, trackResultSource: true },
+      },
+      attachmentStore: createSessionImageAttachmentStore('/repo'),
+    });
+
+    await send(conversation, 'describe the change', []);
+    mockCallAIWithRetry.mockResolvedValueOnce({
+      result: { content: 'Revised order', sessionId: undefined, success: true },
+      sessionId: undefined,
+    });
+    const outcome = await send(conversation, '/go', []);
+
+    expect(summaryPromptBuilder).toHaveBeenCalledWith(expect.objectContaining({
+      history: [
+        { role: 'user', content: 'describe the change' },
+        { role: 'assistant', content: 'Assistant answer' },
+      ],
+      userNote: '',
+      lang: 'en',
+    }));
+    expect(mockCallAIWithRetry.mock.calls.at(-1)?.[0]).toBe('revise this order');
+    expect(outcome).toEqual({
+      kind: 'task_instruction',
+      task: 'Revised order',
+      source: 'go',
+      notices: [],
+    });
+  });
+
+  it('should leave the source off for a mode that does not record it', async () => {
+    const conversation = createConversation();
+
+    await send(conversation, 'describe the change', []);
+    mockCallAIWithRetry.mockResolvedValueOnce({
+      result: { content: 'Task instruction', sessionId: undefined, success: true },
+      sessionId: undefined,
+    });
+
+    expect(await send(conversation, '/go', []))
+      .toEqual({ kind: 'task_instruction', task: 'Task instruction', notices: [] });
+  });
+
+  it('should put a rejected /go draft back into the conversation', async () => {
+    const plan = createPlan();
+    const summaryPromptBuilder = vi.fn(() => 'revise this order');
+    const conversation = createTuiConversation({
+      cwd: '/repo',
+      plan: { ...plan, strategy: { ...plan.strategy, summaryPromptBuilder } },
+      attachmentStore: createSessionImageAttachmentStore('/repo'),
+    });
+
+    conversation.recordRejectedDraft?.('rejected draft');
+    mockCallAIWithRetry.mockResolvedValueOnce({
+      result: { content: 'Second order', sessionId: undefined, success: true },
+      sessionId: undefined,
+    });
+    await send(conversation, '/go', []);
+
+    // The next revision starts from what was proposed, not from nothing.
+    expect(summaryPromptBuilder).toHaveBeenLastCalledWith(expect.objectContaining({
+      history: [{ role: 'assistant', content: 'rejected draft' }],
+    }));
+  });
+
+  it('should refuse the commands a guarded mode did not enable', () => {
+    const plan = createPlan();
+    const conversation = createTuiConversation({
+      cwd: '/repo',
+      plan: {
+        ...plan,
+        strategy: {
+          ...plan.strategy,
+          previousOrderContent: 'previous order',
+          trackResultSource: true,
+          enabledCommands: [
+            SlashCommand.Go,
+            SlashCommand.Replay,
+            SlashCommand.Cancel,
+            SlashCommand.Resume,
+            SlashCommand.PasteImage,
+          ],
+        },
+      },
+      attachmentStore: createSessionImageAttachmentStore('/repo'),
+    });
+
+    // Not on the mode's list: the line is text, exactly as the readline loop
+    // treats it once `enabledCommands` is set.
+    expect(conversation.isCommandLine('/play something')).toBe(false);
+    expect(conversation.resolveLocalCommand('/play something')).toBeNull();
+    expect(conversation.isCommandLine('/replay')).toBe(true);
+    expect(conversation.resolveLocalCommand('/replay'))
+      .toEqual({ kind: 'execute', task: 'previous order', source: 'replay' });
+  });
+
+  it('should send /retry through the mode selector with its own source', () => {
+    const plan = createPlan();
+    const conversation = createTuiConversation({
+      cwd: '/repo',
+      plan: {
+        ...plan,
+        strategy: {
+          ...plan.strategy,
+          enableRetryCommand: true,
+          previousOrderContent: 'previous order',
+          trackResultSource: true,
+        },
+      },
+      attachmentStore: createSessionImageAttachmentStore('/repo'),
+    });
+
+    expect(conversation.resolveLocalCommand('/retry'))
+      .toEqual({ kind: 'choose_action', task: 'previous order', source: 'retry' });
   });
 
   it('should hand /resume and /paste-image back to the caller', () => {

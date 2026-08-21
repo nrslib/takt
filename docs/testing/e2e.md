@@ -118,6 +118,13 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - `takt list` から completed タスクの Instruct を選び（ワークフロー再利用確認は Enter）、会話が Ink で開くこと・イントロが `/replay` を案内すること・`/replay` で前回 order がそのまま再実行され（`TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/tui-instruct.json`）タスクが完了して一覧へ戻ることを確認する。
     - PTY 上で `takt exec backend` を起動し、会話が Ink（枠付き入力ボックス）で行われること・`/setup` で Ink が閉じて従来のセレクタが出ること（画面に入力ボックスの枠が残らない）を確認する。
     - PTY なし（`runTakt`）で `--tui` を実行し、exit 1 と `--tui requires an interactive terminal` を確認する。
+- Detached loop analysis worker（`e2e/specs/loop-analysis-worker.e2e.ts`）
+  - 目的: 元のCLIプロセス終了後も独立workerが分析を完了し、`loop-analysis.md`を保存することを確認する。
+  - LLM: 呼び出さない（mock provider / `TAKT_MOCK_SCENARIO` 固定）
+  - 手順（ユーザー行動/コマンド）:
+    - `runtime.yaml`で`loop_analysis.enabled: true`と`output: file`を設定する。
+    - mock workflowを実行し、元のCLIプロセスの終了を確認する。
+    - 固定時間の待機ではなくreportファイルの出現を監視し、`loop-analysis.md`が保存されることを確認する。
 - Exec mode（`e2e/specs/exec.e2e.ts`）
   - 目的: `takt exec` がプリセット一覧、前回設定の自動利用、`/setup`、`/go` から生成 workflow 実行まで動作することを確認。
   - LLM: 呼び出さない（mock provider / `TAKT_MOCK_SCENARIO` 固定）

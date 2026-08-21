@@ -28,6 +28,7 @@ import {
 } from '../interactive/imageAttachments.js';
 import {
   createPostSummaryActionSelector,
+  type PostSummaryAction,
   type SummaryActionValue,
 } from '../interactive/interactive-summary.js';
 import type { TaskHistorySummaryItem } from '../interactive/interactive-summary-types.js';
@@ -103,11 +104,18 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
   let handedOver = false;
   const exitedEarly = getLabel('tui.errors.exitedEarly', options.lang);
   const summaryUi = getLabelObject<InteractiveUIText>('interactive.ui', options.lang);
-  const chooseAction = createPostSummaryActionSelector(
+  const selectAction = createPostSummaryActionSelector(
     summaryUi.proposed,
     summaryUi,
     options.excludeActions ?? [],
   );
+  /** The generic conversation has no draft to normalize; the task is the task. */
+  const chooseAction = async (
+    task: string,
+  ): Promise<{ action: PostSummaryAction; task: string } | null> => {
+    const action = await selectAction(task);
+    return action === null ? null : { action, task };
+  };
 
   function buildInitialEntries(
     intro: string,

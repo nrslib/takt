@@ -5,7 +5,6 @@
  */
 
 import { dirname, join } from 'node:path';
-import type { PromptLogRecord } from './types.js';
 import {
   appendPrivateFile,
   ensurePrivateDirectory,
@@ -45,7 +44,6 @@ export class DebugLogger {
   private debugEnabled = false;
   private traceEnabled = false;
   private debugLogFile: string | null = null;
-  private debugPromptsLogFile: string | null = null;
   private initialized = false;
   private verboseConsoleEnabled = false;
 
@@ -82,15 +80,9 @@ export class DebugLogger {
     if (this.debugEnabled) {
       if (config?.logFile) {
         this.debugLogFile = config.logFile;
-        if (config.logFile.endsWith('.log')) {
-          this.debugPromptsLogFile = config.logFile.slice(0, -4) + '-prompts.jsonl';
-        } else {
-          this.debugPromptsLogFile = `${config.logFile}-prompts.jsonl`;
-        }
       } else if (projectDir) {
         const logPrefix = DebugLogger.getDefaultLogPrefix(projectDir);
         this.debugLogFile = `${logPrefix}.log`;
-        this.debugPromptsLogFile = `${logPrefix}-prompts.jsonl`;
       }
 
       if (this.debugLogFile) {
@@ -111,15 +103,6 @@ export class DebugLogger {
 
         writePrivateFile(this.debugLogFile, header);
       }
-
-      if (this.debugPromptsLogFile) {
-        const promptsLogDir = dirname(this.debugPromptsLogFile);
-        ensurePrivateDirectory(promptsLogDir);
-        if (!config?.logFile) {
-          repairPrivateDirectory(promptsLogDir);
-        }
-        writePrivateFile(this.debugPromptsLogFile, '');
-      }
     }
 
     this.initialized = true;
@@ -130,7 +113,6 @@ export class DebugLogger {
     this.debugEnabled = false;
     this.traceEnabled = false;
     this.debugLogFile = null;
-    this.debugPromptsLogFile = null;
     this.initialized = false;
     this.verboseConsoleEnabled = false;
   }
@@ -153,11 +135,6 @@ export class DebugLogger {
   /** Get current debug log file path */
   getLogFile(): string | null {
     return this.debugLogFile;
-  }
-
-  /** Get current debug prompts log file path */
-  getPromptsLogFile(): string | null {
-    return this.debugPromptsLogFile;
   }
 
   /** Format log message with timestamp and level */
@@ -198,19 +175,6 @@ export class DebugLogger {
 
     try {
       appendPrivateFile(this.debugLogFile, logLine + '\n');
-    } catch {
-      // Silently fail - logging errors should not interrupt main flow
-    }
-  }
-
-  /** Write a prompt/response debug log entry */
-  writePromptLog(record: PromptLogRecord): void {
-    if (!this.debugEnabled || !this.debugPromptsLogFile) {
-      return;
-    }
-
-    try {
-      appendPrivateFile(this.debugPromptsLogFile, JSON.stringify(record) + '\n');
     } catch {
       // Silently fail - logging errors should not interrupt main flow
     }
@@ -258,10 +222,6 @@ export function getDebugLogFile(): string | null {
   return DebugLogger.getInstance().getLogFile();
 }
 
-export function getDebugPromptsLogFile(): string | null {
-  return DebugLogger.getInstance().getPromptsLogFile();
-}
-
 export function debugLog(component: string, message: string, data?: unknown): void {
   DebugLogger.getInstance().writeLog('DEBUG', component, message, data);
 }
@@ -272,10 +232,6 @@ export function infoLog(component: string, message: string, data?: unknown): voi
 
 export function errorLog(component: string, message: string, data?: unknown): void {
   DebugLogger.getInstance().writeLog('ERROR', component, message, data);
-}
-
-export function writePromptLog(record: PromptLogRecord): void {
-  DebugLogger.getInstance().writePromptLog(record);
 }
 
 export function traceEnter(component: string, funcName: string, args?: Record<string, unknown>): void {

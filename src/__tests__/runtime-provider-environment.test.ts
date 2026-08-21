@@ -150,6 +150,38 @@ describe('compileRuntimeProviderEnvironment (profile options)', () => {
     });
   });
 
+  it('carries Codex fast_mode through defaults and persona/tag/step routing entries', () => {
+    const section: RuntimeProviderSection = {
+      defaults: { profile: 'base' },
+      profiles: {
+        base: { provider: 'codex', model: 'base-m', options: { fast_mode: true } },
+        persona: { provider: 'codex', model: 'persona-m', options: { fast_mode: false } },
+        tag: { provider: 'codex', model: 'tag-m', options: { fast_mode: true } },
+        step: { provider: 'codex', model: 'step-m', options: { fast_mode: false } },
+      },
+      targets: {
+        personas: { coder: { profile: 'persona' } },
+        tags: { 'high-stakes': { profile: 'tag' } },
+        steps: { 'wf/impl': { profile: 'step' } },
+      },
+    };
+
+    const env = compileRuntimeProviderEnvironment(section);
+
+    expect(env.providerOptions).toEqual({ codex: { fastMode: true } });
+    expect(env.personaProviders).toEqual({
+      coder: { provider: 'codex', model: 'persona-m', providerOptions: { codex: { fastMode: false } } },
+    });
+    expect(env.providerRouting).toEqual({
+      tags: {
+        'high-stakes': { provider: 'codex', model: 'tag-m', providerOptions: { codex: { fastMode: true } } },
+      },
+      steps: {
+        'wf/impl': { provider: 'codex', model: 'step-m', providerOptions: { codex: { fastMode: false } } },
+      },
+    });
+  });
+
   it('allows a DeepSeek Python executable override from a global runtime profile', () => {
     const section: RuntimeProviderSection = {
       defaults: { profile: 'p' },

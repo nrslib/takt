@@ -2,7 +2,7 @@
  * Tests for /retry slash command in the conversation loop.
  *
  * Verifies:
- * - /retry with previousOrderContent uses post-summary action selection
+ * - /retry with previousOrderContent reruns the canonical order directly
  * - /retry without previousOrderContent shows error and continues loop
  * - /retry in retry mode with order.md context in system prompt
  */
@@ -71,7 +71,12 @@ vi.mock('../shared/prompt/index.js', () => ({
 }));
 
 vi.mock('../shared/i18n/index.js', () => ({
-  getLabel: vi.fn((_key: string, _lang: string) => 'Mock label'),
+  getLabel: vi.fn((key: string, lang: string) => {
+    if (key === 'orderRevision.attachmentsHeading') {
+      return lang === 'ja' ? '添付画像' : 'Attachments';
+    }
+    return 'Mock label';
+  }),
   getLabelObject: vi.fn(() => ({
     intro: 'Retry intro',
     resume: 'Resume',
@@ -150,8 +155,7 @@ describe('/retry slash command', () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('should route previous order content through action selection when /retry is used', async () => {
-    vi.mocked(selectOption).mockResolvedValueOnce('save_task');
+  it('should route previous order content directly when /retry is used', async () => {
     const orderContent = '# Task Order\n\nImplement feature X with tests.';
     setupRawStdin(toRawInputs(['/retry']));
     setupProvider([]);
@@ -159,8 +163,9 @@ describe('/retry slash command', () => {
     const retryContext = buildRetryContext({ previousOrderContent: orderContent });
     const result = await runTaskRetryMode(tmpDir, retryContext);
 
-    expect(result.action).toBe('save_task');
+    expect(result.action).toBe('execute');
     expect(result.task).toBe(orderContent);
+    expect(result.source).toBe('retry');
   });
 
   it('should show error and continue when /retry is used without order', async () => {
@@ -174,16 +179,32 @@ describe('/retry slash command', () => {
     expect(result.action).toBe('cancel');
   });
 
-  it('should continue when /retry is selected with continue action', async () => {
-    vi.mocked(selectOption).mockResolvedValueOnce('continue');
-    setupRawStdin(toRawInputs(['/retry', '/cancel']));
+  it('should rerun without an approval prompt when /retry is selected', async () => {
+    setupRawStdin(toRawInputs(['/retry']));
     setupProvider([]);
 
     const orderContent = '# Task Order\n\nImplement feature X with tests.';
     const retryContext = buildRetryContext({ previousOrderContent: orderContent });
     const result = await runTaskRetryMode(tmpDir, retryContext);
 
-    expect(result.action).toBe('cancel');
+    expect(result.action).toBe('execute');
+    expect(result.source).toBe('retry');
+    expect(vi.mocked(selectOption)).not.toHaveBeenCalled();
+  });
+
+  it('should not execute /accept or /play directly in order revision retry mode', async () => {
+    setupRawStdin(toRawInputs(['/accept', '/play run it', '/go']));
+    setupProvider([
+      'Assistant response to accept text',
+      'Assistant response to play text',
+      'Revised retry order',
+    ]);
+
+    const result = await runTaskRetryMode(tmpDir, buildRetryContext());
+
+    expect(result.action).toBe('execute');
+    expect(result.source).toBe('go');
+    expect(result.task).toBe('Revised retry order');
   });
 
   it('should show Run context and omit save_task action in direct retry mode', async () => {

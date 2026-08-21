@@ -8,7 +8,11 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { resolveAssistantProviderModelFromConfig as realResolveAssistantProviderModelFromConfig } from '../core/config/provider-resolution.js';
+import {
+  resolveAssistantProviderModelFromConfig as realResolveAssistantProviderModelFromConfig,
+  type AssistantCliOverrides,
+  type AssistantProviderConfig,
+} from '../core/config/provider-resolution.js';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -22,7 +26,7 @@ import {
 } from './helpers/stdinSimulator.js';
 
 const { mockResolveAssistantConfigLayers } = vi.hoisted(() => ({
-  mockResolveAssistantConfigLayers: vi.fn(() => ({
+  mockResolveAssistantConfigLayers: vi.fn((_projectDir: string): AssistantProviderConfig => ({
     local: { provider: 'mock' },
     global: {},
   })),
@@ -49,11 +53,11 @@ vi.mock('../infra/config/index.js', () => ({
 }));
 
 vi.mock('../features/interactive/assistantConfig.js', () => ({
-  resolveAssistantConfigLayers: (...args: unknown[]) => mockResolveAssistantConfigLayers(...args),
-  resolveAssistantProviderModel: (projectDir: string, cliOverrides?: { provider?: string; model?: string }) =>
+  resolveAssistantConfigLayers: (projectDir: string) => mockResolveAssistantConfigLayers(projectDir),
+  resolveAssistantProviderModel: (projectDir: string, cliOverrides?: AssistantCliOverrides) =>
     realResolveAssistantProviderModelFromConfig(
       mockResolveAssistantConfigLayers(projectDir),
-      cliOverrides as never,
+      cliOverrides,
     ),
 }));
 
@@ -132,12 +136,12 @@ import { error as logError, info as logInfo } from '../shared/ui/index.js';
 import { callAIWithRetry, runConversationLoop, type SessionContext } from '../features/interactive/conversationLoop.js';
 import * as interactiveModule from '../features/interactive/interactive.js';
 import { initializeSession } from '../features/interactive/sessionInitialization.js';
+import { SlashCommand } from '../shared/constants.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockSelectOption = vi.mocked(selectOption);
 const mockLogInfo = vi.mocked(logInfo);
 const mockLogError = vi.mocked(logError);
-const attachmentSessionDirs = new Set<string>();
 
 // --- Helpers ---
 
@@ -180,48 +184,7 @@ beforeEach(() => {
 
 afterEach(() => {
   restoreStdin();
-  for (const sessionDir of attachmentSessionDirs) {
-    fs.rmSync(sessionDir, { recursive: true, force: true });
-  }
-  attachmentSessionDirs.clear();
 });
-
-function createOscImagePaste(): string {
-  const imageData = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
-  return `\x1B]1337;File=inline=1;name=reference.png;size=${imageData.length}:${imageData.toString('base64')}\x07`;
-}
-
-function createInvalidSizeOscImagePaste(): string {
-  const imageData = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
-  return `\x1B]1337;File=inline=1;name=reference.png;size=${imageData.length + 1}:${imageData.toString('base64')}\x07`;
-}
-
-function trackAttachmentSession(tempPath: string): void {
-  attachmentSessionDirs.add(path.dirname(path.dirname(tempPath)));
-}
-
-function createIsolatedTmpRoot(prefix: string): string {
-  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  attachmentSessionDirs.add(tmpRoot);
-  return tmpRoot;
-}
-
-function listTaktTempSessionDirs(): Set<string> {
-  const taktTempRoot = path.join(os.tmpdir(), 'takt');
-  if (!fs.existsSync(taktTempRoot)) {
-    return new Set();
-  }
-  return new Set(
-    fs.readdirSync(taktTempRoot, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => path.join(taktTempRoot, entry.name)),
-  );
-}
-
-function expectNoNewTaktTempSessionDirs(previous: Set<string>): void {
-  const leaked = [...listTaktTempSessionDirs()].filter((sessionDir) => !previous.has(sessionDir));
-  expect(leaked).toEqual([]);
-}
 
 function createMissingImageAttachment() {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-missing-image-'));
@@ -583,6 +546,65 @@ describe('/resume command', () => {
 // /go command: summary AI session isolation
 // =================================================================
 describe('/go command', () => {
+  it('does not turn disabled /accept or /play into execution results in a guarded mode', async () => {
+    setupRawStdin(toRawInputs(['/accept', '/play run it', '/go']));
+    const { provider } = createScenarioProvider([
+      { content: 'Assistant response to accept text' },
+      { content: 'Assistant response to play text' },
+      { content: 'Revised order body' },
+    ]);
+    const ctx = createSessionContext({ provider: provider as SessionContext['provider'] });
+
+    const result = await runConversationLoop('/test', ctx, {
+      ...defaultStrategy,
+      enabledCommands: [SlashCommand.Go, SlashCommand.Cancel],
+      trackResultSource: true,
+    }, undefined, undefined);
+
+    expect(result).toMatchObject({
+      action: 'execute',
+      task: 'Revised order body',
+      source: 'go',
+    });
+  });
+
+  it.each([
+    ['unset', undefined, true],
+    ['project false', false, false],
+  ] as const)('should apply %s to the real summary prompt', async (_label, projectGherkin, expectedEnabled) => {
+    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-gherkin-real-summary-'));
+    if (projectGherkin !== undefined) {
+      fs.mkdirSync(path.join(projectDir, '.takt'), { recursive: true });
+      fs.writeFileSync(
+        path.join(projectDir, '.takt', 'config.yaml'),
+        ['assistant:', `  gherkin: ${projectGherkin}`].join('\n'),
+        'utf-8',
+      );
+    }
+    setupRawStdin(toRawInputs(['/go improve parser behavior']));
+    const { provider, capture } = createScenarioProvider([
+      { content: 'Generated task instruction.' },
+    ]);
+    const ctx = createSessionContext({
+      provider: provider as SessionContext['provider'],
+    });
+
+    try {
+      const result = await runConversationLoop(projectDir, ctx, defaultStrategy, undefined, undefined);
+
+      expect(result.action).toBe('execute');
+      if (expectedEnabled) {
+        expect(capture.prompts[0]).toContain('## Markdown + Gherkin Output Format');
+      } else {
+        expect(capture.prompts[0]).not.toContain('## Markdown + Gherkin Output Format');
+        expect(capture.prompts[0]).not.toContain('Write these in a fenced `gherkin` block:');
+        expect(capture.prompts[0]).not.toContain('Do not duplicate the same requirement in Markdown and Gherkin');
+      }
+    } finally {
+      fs.rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
   it('should include Markdown and Gherkin rules in assistant summaries when project config enables them', async () => {
     const buildSummaryPromptSpy = vi.spyOn(interactiveModule, 'buildSummaryPrompt');
     const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-gherkin-assistant-'));
@@ -660,6 +682,34 @@ describe('/go command', () => {
       'mock',
     );
     expect(result.action).toBe('execute');
+  });
+
+  it('should return a rejected /go draft to the conversation history', async () => {
+    setupRawStdin(toRawInputs(['hello', '/go', 'revise this draft', '/go']));
+    const { provider, capture } = createScenarioProvider([
+      { content: 'Initial assistant response' },
+      { content: 'First generated order' },
+      { content: 'Revised assistant response' },
+      { content: 'Second generated order' },
+    ]);
+    const selectGoAction = vi.fn()
+      .mockResolvedValueOnce('continue')
+      .mockResolvedValueOnce('execute');
+    const ctx = createSessionContext({
+      provider: provider as SessionContext['provider'],
+    });
+
+    const result = await runConversationLoop(
+      '/test',
+      ctx,
+      { ...defaultStrategy, selectGoAction },
+      undefined,
+      undefined,
+    );
+
+    expect(result.action).toBe('execute');
+    expect(result.task).toBe('Second generated order');
+    expect(capture.prompts[3]).toContain('First generated order');
   });
 
   it('should report missing stored images in regular input and continue without calling AI', async () => {

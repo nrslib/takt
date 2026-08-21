@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -440,7 +441,16 @@ describe('E2E: Ink TUI', () => {
   it('should open the instruct conversation from takt list and replay the previous order', async () => {
     // A finished task whose worktree still holds the order its run wrote. That
     // order is what `/replay` resubmits, so the conversation must offer it.
-    const orderDir = join(testRepo.path, '.takt', 'runs', 'e2e-instruct-run', 'context', 'task');
+    // The worktree is a clone under the project's clone base, which is where a
+    // reusable worktree has to live (`assertReusableWorktreePath`).
+    const worktreePath = join(testRepo.path, '.takt', 'worktrees', 'e2e-instruct');
+    mkdirSync(join(testRepo.path, '.takt', 'worktrees'), { recursive: true });
+    execFileSync('git', ['clone', '--shared', testRepo.path, worktreePath], { stdio: 'pipe' });
+    for (const [key, value] of [['user.email', 'test@example.com'], ['user.name', 'Test']]) {
+      execFileSync('git', ['config', key!, value!], { cwd: worktreePath, stdio: 'pipe' });
+    }
+    execFileSync('git', ['checkout', '-B', 'takt/e2e-instruct'], { cwd: worktreePath, stdio: 'pipe' });
+    const orderDir = join(worktreePath, '.takt', 'runs', 'e2e-instruct-run', 'context', 'task');
     mkdirSync(orderDir, { recursive: true });
     writeFileSync(join(orderDir, 'order.md'), 'Add a line to README.md\n', 'utf-8');
     const now = new Date().toISOString();
@@ -453,7 +463,7 @@ describe('E2E: Ink TUI', () => {
         '    content: "E2E instruct task"',
         `    workflow: "${WORKFLOW_PATH}"`,
         '    branch: "takt/e2e-instruct"',
-        `    worktree_path: "${testRepo.path}"`,
+        `    worktree_path: "${worktreePath}"`,
         `    created_at: "${now}"`,
         `    started_at: "${now}"`,
         `    completed_at: "${now}"`,

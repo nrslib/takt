@@ -10,7 +10,9 @@
 import { SlashCommand } from '../../shared/constants.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { matchSlashCommand } from '../interactive/commandMatcher.js';
+import type { CommandAvailability } from '../interactive/slashCommandRegistry.js';
 import { resolvePreviousOrder, type ConversationPlan } from '../interactive/conversationPlan.js';
+import type { InteractiveModeResult } from '../interactive/interactive.js';
 import {
   createConversationSession,
   type ConversationSessionErrorCode,
@@ -24,6 +26,9 @@ import {
   resolvePromptImageAttachments,
 } from '../interactive/imageAttachments.js';
 import type { PastedImage } from '../interactive/inlineImagePaste.js';
+
+/** Where a finished task came from, for the modes that record it. */
+export type InteractiveResultSource = NonNullable<InteractiveModeResult['source']>;
 
 export interface TuiConversationOptions {
   cwd: string;
@@ -75,14 +80,21 @@ export interface TuiSubmitInput {
  */
 export type TuiSubmission =
   | { kind: 'assistant_response'; content: string; notices?: readonly string[]; commit?: () => void }
-  | { kind: 'task_instruction'; task: string; notices?: readonly string[]; commit?: () => void }
+  | {
+    kind: 'task_instruction';
+    task: string;
+    /** The command path that produced it, for a mode that records where a task came from. */
+    source?: InteractiveResultSource;
+    notices?: readonly string[];
+    commit?: () => void;
+  }
   | { kind: 'error'; message: string; notices?: readonly string[]; commit?: () => void };
 
 /** Commands the TUI settles itself, without contacting the provider. */
 export type TuiLocalCommand =
   | { kind: 'cancel' }
-  | { kind: 'execute'; task: string }
-  | { kind: 'choose_action'; task: string }
+  | { kind: 'execute'; task: string; source?: InteractiveResultSource }
+  | { kind: 'choose_action'; task: string; source?: InteractiveResultSource }
   | { kind: 'resume_session' }
   /**
    * Something the caller has to run with the terminal to itself — a settings
@@ -102,11 +114,8 @@ export interface TuiConversation {
    */
   isCommandLine(text: string): boolean;
   readonly lang: 'en' | 'ja';
-  /** Which order-dependent commands this run can offer. */
-  readonly commandAvailability: {
-    readonly enableRetryCommand: boolean;
-    readonly hasPreviousOrder: boolean;
-  };
+  /** Which commands this run can offer, and which it refuses outright. */
+  readonly commandAvailability: CommandAvailability;
   /**
    * Commands the TUI resolves on its own. Callers consult this before `submit`
    * so a local command never raises the thinking indicator.
@@ -117,6 +126,12 @@ export interface TuiConversation {
   createInstruction(input: TuiSubmitInput): Promise<TuiSubmission>;
   /** Continue from a session picked with /resume. */
   resumeSession(sessionId: string): void;
+  /**
+   * Put a `/go` draft the user rejected back into the conversation, so the next
+   * revision starts from what was proposed. Left out by a front-end whose
+   * session keeps no transcript of its own (exec).
+   */
+  recordRejectedDraft?(task: string): void;
   /** Capture the clipboard image and return the placeholder to insert. */
   pasteClipboardImage(abortSignal: AbortSignal): Promise<string>;
   /** Refuse further images once the run ended, so a late save leaves no temp file. */
@@ -145,25 +160,39 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
   });
 
   const previousOrder = resolvePreviousOrder(strategy.previousOrderContent);
+  // Exactly what the readline loop builds (conversationLoop.ts): the retry mode
+  // is the only one that enables `/retry`, `/replay` needs an order to resubmit,
+  // and a mode with a guarded execution path names the commands it allows at all.
+  const commandAvailability: CommandAvailability = {
+    enableRetryCommand: strategy.enableRetryCommand === true,
+    hasPreviousOrder: previousOrder !== undefined,
+    ...(strategy.enabledCommands ? { enabledCommands: strategy.enabledCommands } : {}),
+  };
+  /**
+   * Only the modes that rewrite the task's `order.md` care where a task came
+   * from; for the others the field stays off, exactly as in the readline loop.
+   */
+  const trackedSource = (source: InteractiveResultSource): { source?: InteractiveResultSource } => (
+    strategy.trackResultSource === true ? { source } : {}
+  );
 
   return {
     lang: ctx.lang,
-    // Taken from the strategy, exactly like the readline loop builds it
-    // (conversationLoop.ts): the retry mode is the only one that enables
-    // `/retry`, and `/replay` needs an order to resubmit.
-    commandAvailability: {
-      enableRetryCommand: strategy.enableRetryCommand === true,
-      hasPreviousOrder: previousOrder !== undefined,
-    },
+    commandAvailability,
 
     isCommandLine(text: string): boolean {
       // The registry decides, not the leading character: `/go` is a command,
-      // `/usr/bin/env is missing` is a sentence.
-      return matchSlashCommand(text.trim()) !== null;
+      // `/usr/bin/env is missing` is a sentence. A mode that disables a command
+      // has no command there either, so the line stays text.
+      return matchSlashCommand(text.trim(), commandAvailability) !== null;
+    },
+
+    recordRejectedDraft(task: string): void {
+      session.recordRejectedDraft(task);
     },
 
     resolveLocalCommand(text: string): TuiLocalCommand | null {
-      const match = matchSlashCommand(text.trim());
+      const match = matchSlashCommand(text.trim(), commandAvailability);
       if (!match) {
         return null;
       }
@@ -174,11 +203,11 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
           const latest = session.getLatestAssistantMessage();
           return latest === null
             ? { kind: 'notice', message: getLabel('interactive.ui.acceptNoAssistant', ctx.lang) }
-            : { kind: 'execute', task: latest };
+            : { kind: 'execute', task: latest, ...trackedSource('accept') };
         }
         case SlashCommand.Play:
           return match.text
-            ? { kind: 'execute', task: match.text }
+            ? { kind: 'execute', task: match.text, ...trackedSource('play') }
             : { kind: 'notice', message: getLabel('interactive.ui.playNoTask', ctx.lang) };
         // Both commands are gated exactly as the readline loop gates them
         // (conversationLoop.ts): `/replay` resubmits the previous order without
@@ -186,14 +215,14 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
         case SlashCommand.Replay:
           return previousOrder === undefined
             ? { kind: 'notice', message: getLabel('instruct.ui.replayNoOrder', ctx.lang) }
-            : { kind: 'execute', task: previousOrder };
+            : { kind: 'execute', task: previousOrder, ...trackedSource('replay') };
         case SlashCommand.Retry: {
           if (strategy.enableRetryCommand !== true) {
             return { kind: 'notice', message: getLabel('interactive.ui.retryUnavailable', ctx.lang) };
           }
           return previousOrder === undefined
             ? { kind: 'notice', message: getLabel('interactive.ui.retryNoOrder', ctx.lang) }
-            : { kind: 'choose_action', task: previousOrder };
+            : { kind: 'choose_action', task: previousOrder, ...trackedSource('retry') };
         }
         case SlashCommand.Resume:
           return { kind: 'resume_session' };
@@ -236,7 +265,7 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
         case 'assistant_response':
           return { kind: 'assistant_response', content: result.content, notices };
         case 'workflow_execution_requested':
-          return { kind: 'task_instruction', task: result.task, notices };
+          return { kind: 'task_instruction', task: result.task, ...trackedSource('go'), notices };
         case 'error':
           return {
             kind: 'error',
@@ -269,7 +298,7 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
         turnEnded = true;
       }
       return result.kind === 'workflow_execution_requested'
-        ? { kind: 'task_instruction', task: result.task, notices }
+        ? { kind: 'task_instruction', task: result.task, ...trackedSource('go'), notices }
         : {
           kind: 'error',
           message: result.kind === 'error'

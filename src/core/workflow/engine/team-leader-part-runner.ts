@@ -34,6 +34,7 @@ export interface TeamLeaderPartObservability {
 export interface TeamLeaderPartExecutionOptions {
   readonly forceNewSession: boolean;
   readonly onDispatch?: RunAgentOptions['onDispatch'];
+  readonly composeOptions?: (options: RunAgentOptions) => RunAgentOptions;
   readonly deadlineSignal?: AbortSignal;
   readonly providerInfo: StepProviderInfo;
 }
@@ -106,7 +107,7 @@ export async function runTeamLeaderPart(
     signal = signals.length === 1 ? signals[0]! : AbortSignal.any(signals);
     dispose = legacyDeadline?.dispose ?? (() => {});
   }
-  const options = parallelLogger
+  const baseRunOptions = parallelLogger
     ? {
       ...baseOptions,
       abortSignal: signal,
@@ -123,6 +124,7 @@ export async function runTeamLeaderPart(
       abortSignal: signal,
       onDispatch: executionOptions?.onDispatch,
     };
+  const options = executionOptions?.composeOptions?.(baseRunOptions) ?? baseRunOptions;
 
   try {
     const partInstruction = buildInstruction(partStep);

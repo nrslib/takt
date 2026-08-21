@@ -84,6 +84,13 @@ const RuntimeCompanionPolicySchema = z
   })
   .strict();
 
+const RuntimeLoopAnalysisSchema = z
+  .object({
+    enabled: z.boolean(),
+    output: z.enum(['file', 'pr-comment']).default('file'),
+  })
+  .strict();
+
 /** An auto-routing pool candidate references a profile; it must not inline provider/model. */
 const CandidateSchema = z
   .object({
@@ -236,6 +243,7 @@ export const RuntimeProviderFileSchema = z
   .object({
     version: z.literal(RUNTIME_PROVIDER_VERSION),
     companion: RuntimeCompanionPolicySchema.optional(),
+    loop_analysis: RuntimeLoopAnalysisSchema.optional(),
     provider: ProviderSectionSchema.optional(),
   })
   .strict()

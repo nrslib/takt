@@ -6,6 +6,24 @@ import { WorkflowStepRawSchema } from '../core/models/schemas.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 
 describe('team_leader schema', () => {
+  it('トップレベルの dynamic_facets と companion を受け付ける', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'implement',
+      instruction: 'decompose',
+      team_leader: {
+        persona: 'team-leader',
+        max_concurrency: 2,
+      },
+      dynamic_facets: {
+        pool: 'review',
+        max_selected: 1,
+      },
+      companion: ['security-reviewer'],
+    });
+
+    expect(result.success).toBe(true);
+  });
+
   it('max_parts <= 3 の設定を受け付ける', () => {
     const raw = {
       name: 'implement',
@@ -252,6 +270,33 @@ describe('team_leader schema', () => {
 });
 
 describe('normalizeWorkflowConfig team_leader', () => {
+  it('トップレベルの dynamic_facets と companion を内部形式へ保持する', () => {
+    const workflowDir = join(process.cwd(), 'src', '__tests__');
+    const config = normalizeWorkflowConfig({
+      name: 'workflow',
+      policies: {
+        review: 'review policy',
+      },
+      facet_pools: {
+        review: {
+          candidates: [{ id: 'selected', description: 'selected facet', policy: 'review' }],
+        },
+      },
+      steps: [{
+        name: 'implement',
+        instruction: 'decompose',
+        team_leader: { max_concurrency: 2 },
+        dynamic_facets: { pool: 'review', max_selected: 1 },
+        companion: ['security-reviewer'],
+      }],
+    }, workflowDir);
+
+    expect(config.steps[0]).toEqual(expect.objectContaining({
+      dynamicFacets: { pool: 'review', maxSelected: 1 },
+      companion: { fixed: ['security-reviewer'], pool: [] },
+    }));
+  });
+
   it('team_leader の並列・初回分解設定を内部形式へ正規化する', () => {
     const workflowDir = join(process.cwd(), 'src', '__tests__');
     const raw = {

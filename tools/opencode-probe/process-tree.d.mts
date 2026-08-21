@@ -1,3 +1,7 @@
+export const PROCESS_TREE_CLEANUP_GRACE_MS: number;
+
+export function startProcessTreeCleanup(pid: number | undefined): Promise<void>;
+
 export function terminateProcessTree(pid: number | undefined): Promise<void>;
 
 export function terminateWindowsProcessTree(

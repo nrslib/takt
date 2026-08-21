@@ -5,7 +5,7 @@ import {
 import type {
   AgentResponse,
   DynamicFacetSelectionSnapshot,
-  NormalAgentWorkflowStep,
+  AgentWorkflowStep,
   ResolvedFacetPool,
   WorkflowResumePointEntry,
   WorkflowState,
@@ -55,7 +55,7 @@ export interface DynamicFacetSelectorCoordinatorDeps {
   ) => Promise<void>;
   readonly getReportDirectory: () => string;
   readonly getReportsRootDirectory: () => string;
-  readonly getReportNames: (step: NormalAgentWorkflowStep, state: WorkflowState) => readonly string[];
+  readonly getReportNames: (step: AgentWorkflowStep, state: WorkflowState) => readonly string[];
   readonly getCwd: () => string;
   readonly inputReader?: SelectorInputReader;
 }
@@ -76,7 +76,7 @@ export class DynamicFacetSelectorCoordinator {
   constructor(private readonly deps: DynamicFacetSelectorCoordinatorDeps) {}
 
   async resolveDynamicFacets(
-    step: NormalAgentWorkflowStep,
+    step: AgentWorkflowStep,
     state: WorkflowState,
     task: string,
     pool: ResolvedFacetPool,
@@ -131,7 +131,7 @@ export class DynamicFacetSelectorCoordinator {
       workflowName: state.workflowName,
       stepName: step.name,
       workflowCallPath: identityPath,
-      isReentry: previous !== undefined,
+      ...(previous === undefined ? {} : { previousSnapshot: previous }),
       stepIteration,
       reportDirectory: inputs.reportDirectory,
       reportNames: inputs.reportNames,
@@ -279,7 +279,7 @@ export class DynamicFacetSelectorCoordinator {
     pool: ResolvedFacetPool,
     snapshot: DynamicFacetSelectionSnapshot,
     selectedIds: readonly string[],
-    step: NormalAgentWorkflowStep,
+    step: AgentWorkflowStep,
   ): DynamicFacetSelectionResult {
     const fixed: FixedFacets = {
       policyContents: step.policyContents ?? [],
@@ -306,7 +306,7 @@ export class DynamicFacetSelectorCoordinator {
   }
 
   private logSelection(
-    step: NormalAgentWorkflowStep,
+    step: AgentWorkflowStep,
     identity: string,
     snapshot: DynamicFacetSelectionSnapshot,
     selectionSource: 'selector',

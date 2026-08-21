@@ -6,5 +6,5 @@ export function shouldUseGherkinTaskInstructions(projectDir: string): boolean {
   if (projectValue !== undefined) {
     return projectValue;
   }
-  return loadGlobalConfig().assistant?.gherkin === true;
+  return loadGlobalConfig().assistant?.gherkin ?? true;
 }

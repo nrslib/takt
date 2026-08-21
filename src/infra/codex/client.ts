@@ -408,6 +408,9 @@ export class CodexClient {
       ...(options.reasoningEffort === undefined
         ? {}
         : { model_reasoning_effort: options.reasoningEffort }),
+      ...(options.fastMode === undefined
+        ? {}
+        : { features: { fast_mode: options.fastMode } }),
       model_reasoning_summary: 'auto',
       ...(shellPath === undefined
         ? {}

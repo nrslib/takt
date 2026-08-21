@@ -14,7 +14,11 @@ import {
 } from './editorState.js';
 import { resolvePromptContentWidth } from './promptLayout.js';
 import { resolveSlashCompletions } from './slashCompletion.js';
-import type { TuiConversation, TuiLocalCommand } from './tuiConversation.js';
+import type {
+  InteractiveResultSource,
+  TuiConversation,
+  TuiLocalCommand,
+} from './tuiConversation.js';
 import { useImagePaste, type PendingWork } from './useImagePaste.js';
 
 export interface ConversationUiText {
@@ -36,7 +40,8 @@ export interface ConversationUiText {
 /** What the conversation phase asks the surrounding TUI to do next. */
 export type ConversationExit =
   | { kind: 'result'; result: InteractiveModeResult }
-  | { kind: 'choose_action'; task: string }
+  /** `source` travels with the task for the modes that record where it came from. */
+  | { kind: 'choose_action'; task: string; source?: InteractiveResultSource }
   | { kind: 'resume_session' }
   /** The caller runs `id` with Ink unmounted, then this view is mounted again. */
   | { kind: 'handoff'; id: string }
@@ -282,7 +287,11 @@ export function ConversationView({
           drainQueueRef.current();
           return;
         case 'task_instruction':
-          void finishRun({ kind: 'choose_action', task: outcome.task });
+          void finishRun({
+            kind: 'choose_action',
+            task: outcome.task,
+            ...(outcome.source ? { source: outcome.source } : {}),
+          });
           return;
       }
     } catch (error) {
@@ -393,10 +402,21 @@ export function ConversationView({
         void finishRun({ kind: 'result', result: CANCELLED });
         return;
       case 'execute':
-        void finishRun({ kind: 'result', result: { action: 'execute', task: command.task } });
+        void finishRun({
+          kind: 'result',
+          result: {
+            action: 'execute',
+            task: command.task,
+            ...(command.source ? { source: command.source } : {}),
+          },
+        });
         return;
       case 'choose_action':
-        void finishRun({ kind: 'choose_action', task: command.task });
+        void finishRun({
+          kind: 'choose_action',
+          task: command.task,
+          ...(command.source ? { source: command.source } : {}),
+        });
         return;
       case 'resume_session':
         // Consumed here, so the command is committed to the history and leaves

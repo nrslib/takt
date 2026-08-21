@@ -80,22 +80,19 @@ function mergeRuntimeProviderFiles(
   project: RuntimeProviderFile,
 ): RuntimeProviderFile {
   const provider = mergeProviderSections(global.provider, project.provider);
+  const loopAnalysis = project.loop_analysis ?? global.loop_analysis;
   const companion = global.companion === undefined && project.companion === undefined
     ? undefined
     : {
         enabled: global.companion?.enabled !== false
           && project.companion?.enabled !== false,
       };
-  return provider
-    ? {
-        version: RUNTIME_PROVIDER_VERSION,
-        ...(companion === undefined ? {} : { companion }),
-        provider,
-      }
-    : {
-        version: RUNTIME_PROVIDER_VERSION,
-        ...(companion === undefined ? {} : { companion }),
-      };
+  return {
+    version: RUNTIME_PROVIDER_VERSION,
+    ...(companion === undefined ? {} : { companion }),
+    ...(loopAnalysis === undefined ? {} : { loop_analysis: loopAnalysis }),
+    ...(provider === undefined ? {} : { provider }),
+  };
 }
 
 function mergeProviderSections(

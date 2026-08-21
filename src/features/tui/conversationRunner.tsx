@@ -21,7 +21,7 @@ import {
 } from './ConversationView.js';
 import { mountInk } from './inkMount.js';
 import type { TranscriptEntry } from './TranscriptEntryView.js';
-import type { TuiConversation } from './tuiConversation.js';
+import type { InteractiveResultSource, TuiConversation } from './tuiConversation.js';
 
 export interface TuiConversationRunOptions {
   readonly cwd: string;
@@ -37,8 +37,15 @@ export interface TuiConversationRunOptions {
    * mount, because a hand-off (exec's `/setup`) can replace the session.
    */
   readonly modelLabel: () => string;
-  /** Runs the post-summary selector on the bare terminal. */
-  readonly chooseAction: (task: string) => Promise<PostSummaryAction | null>;
+  /**
+   * Runs the post-summary selector on the bare terminal. The task it answers
+   * with is what the run returns: a mode may normalize the draft (Retry and
+   * Instruct append the attachment list) before showing it for confirmation.
+   */
+  readonly chooseAction: (
+    task: string,
+    source?: InteractiveResultSource,
+  ) => Promise<{ action: PostSummaryAction; task: string } | null>;
   /** Printed when the selector says to keep editing. */
   readonly continuePrompt: string;
   /**
@@ -143,12 +150,19 @@ export async function runTuiConversation(
         break;
       }
       case 'choose_action': {
-        const action = await options.chooseAction(settled.exit.task);
-        if (action === null || action === 'continue') {
+        const chosen = await options.chooseAction(settled.exit.task, settled.exit.source);
+        if (chosen === null || chosen.action === 'continue') {
+          // The rejected draft goes back into the conversation, so the next
+          // revision starts from what was proposed rather than from nothing.
+          options.conversation.recordRejectedDraft?.(chosen?.task ?? settled.exit.task);
           info(options.continuePrompt);
           break;
         }
-        const finished = await settleDecision({ action, task: settled.exit.task });
+        const finished = await settleDecision({
+          action: chosen.action,
+          task: chosen.task,
+          ...(settled.exit.source ? { source: settled.exit.source } : {}),
+        });
         if (finished !== undefined) {
           return finished;
         }

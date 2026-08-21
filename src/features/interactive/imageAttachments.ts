@@ -31,6 +31,7 @@ export interface ImageAttachmentStoreOptions {
   tmpRoot: string;
   sessionId: string;
   initialAttachments?: readonly InteractiveImageAttachment[];
+  initialAttachmentIndex?: number;
 }
 
 const PRIVATE_FILE_MODE = 0o600;
@@ -64,6 +65,14 @@ function validateImageAttachmentSessionId(sessionId: string): void {
   ) {
     throw new Error('Image attachment sessionId must be a single path segment.');
   }
+}
+
+function resolveInitialAttachmentIndex(attachments: readonly InteractiveImageAttachment[]): number {
+  return attachments.reduce((maxIndex, attachment) => {
+    const placeholderIndex = /\[Image #(\d+)\]/.exec(attachment.placeholder)?.[1];
+    const fileNameIndex = /^image-(\d+)\.[A-Za-z0-9]+$/.exec(attachment.fileName)?.[1];
+    return Math.max(maxIndex, Number(placeholderIndex ?? 0), Number(fileNameIndex ?? 0));
+  }, 0);
 }
 
 export function cleanupImageAttachmentStore(attachmentStore: ImageAttachmentStore): void {
@@ -139,8 +148,11 @@ export function cleanupInteractiveResultAttachments(result: ImageAttachmentClean
 export function buildInteractiveResultWithAttachments(
   result: InteractiveModeResult,
   attachmentStore: ImageAttachmentStore,
+  attachmentsOverride?: readonly InteractiveImageAttachment[],
 ): InteractiveModeResult {
-  const attachments = attachmentStore.listAttachments();
+  const attachments = attachmentsOverride
+    ? [...attachmentsOverride]
+    : attachmentStore.listAttachments();
   const resultWithAttachments = {
     ...result,
     ...(attachments.length > 0 ? { attachments } : {}),
@@ -161,6 +173,10 @@ export function createImageAttachmentStore(
   let attachments: InteractiveImageAttachment[] = options.initialAttachments
     ? [...options.initialAttachments]
     : [];
+  let nextAttachmentIndex = Math.max(
+    options.initialAttachmentIndex ?? 0,
+    resolveInitialAttachmentIndex(attachments),
+  );
   const sessionDir = path.join(options.tmpRoot, options.sessionId);
   const attachmentDir = path.join(sessionDir, 'attachments');
 
@@ -171,7 +187,10 @@ export function createImageAttachmentStore(
       if (sealed) {
         throw new Error('Image attachment store is sealed; the run already ended.');
       }
-      const index = attachments.length + 1;
+      // Numbered past whatever the run already carries: a revision that starts
+      // with attachments must not hand out a placeholder one of them owns.
+      const index = nextAttachmentIndex + 1;
+      nextAttachmentIndex = index;
       const fileName = `image-${index}.${extensionForMimeType(mimeType)}`;
       const tempPath = path.join(attachmentDir, fileName);
       const attachment: InteractiveImageAttachment = {
@@ -211,11 +230,13 @@ export function createImageAttachmentStore(
 export function createSessionImageAttachmentStore(
   cwd: string,
   initialAttachments?: readonly InteractiveImageAttachment[],
+  initialAttachmentIndex?: number,
 ): ImageAttachmentStore {
   return createImageAttachmentStore({
     tmpRoot: path.join(cwd, '.takt', 'tmp', 'images'),
     sessionId: randomUUID(),
     ...(initialAttachments ? { initialAttachments } : {}),
+    ...(initialAttachmentIndex === undefined ? {} : { initialAttachmentIndex }),
   });
 }
 

@@ -33,6 +33,7 @@ vi.mock('../infra/config/index.js', () => ({
     enableBuiltinWorkflows: true,
     language: 'en',
   })),
+  resolveNonWorkflowProviderModel: vi.fn(() => ({ runtimeManaged: false })),
   resolveNonWorkflowProviderOptions: vi.fn((_cwd: string, options?: unknown) => options),
 }));
 

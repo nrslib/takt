@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-# TAKT facet eval: review-fix-default / supervise requirement decisions.
+# TAKT facet eval: final-gate / supervise requirement decisions.
 
 description: 'TAKT facet eval: final supervisor requirement decisions'
 

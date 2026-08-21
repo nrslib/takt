@@ -15,7 +15,7 @@ const SMOKE_PROMPT_PATH = fileURLToPath(
 const SMOKE_RUNTIME_DIR = fileURLToPath(
   new URL('../../eval/fixtures/sample-project/.takt', import.meta.url),
 );
-const SOURCE_WORKFLOW = 'experimental-review';
+const SOURCE_WORKFLOW = 'development-review';
 const SECURITY_REVIEW_POOL = 'security-review-facets';
 const CANDIDATE_KNOWLEDGE = readFileSync(
   new URL('../../builtins/ja/facets/knowledge/security-local.md', import.meta.url),
@@ -80,14 +80,14 @@ test('keeps the target unchanged when dynamic facet selection is not configured'
 test('reports a missing source step with the target ID', () => {
   assertCompositionError(
     () => composeConfiguredDynamicFacets(target(), selection(), TARGET_ID, 'missing-step'),
-    /Dynamic facet source step not found.*experimental-review\/missing-step/,
+    /Dynamic facet source step not found.*development-review\/missing-step/,
   );
 });
 
 test('reports a source step without dynamic facets with the target ID', () => {
   assertCompositionError(
     () => composeConfiguredDynamicFacets(target(), selection(), TARGET_ID, 'review'),
-    /has no dynamicFacets configuration.*experimental-review\/review/,
+    /has no dynamicFacets configuration.*development-review\/review/,
   );
 });
 

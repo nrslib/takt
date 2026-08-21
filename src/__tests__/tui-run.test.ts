@@ -213,6 +213,13 @@ beforeEach(() => {
   vi.clearAllMocks();
   // clearAllMocks keeps implementations, and some cases install a throwing one.
   mockCreateTuiConversation.mockReset();
+  // The run talks to the conversation between mounts — a resumed session, a
+  // rejected draft — so the double answers that contract by default.
+  mockCreateTuiConversation.mockReturnValue({
+    resumeSession: vi.fn(),
+    recordRejectedDraft: vi.fn(),
+    commandAvailability: {},
+  });
   mockDetermineWorkflow.mockResolvedValue('default');
   mockSelectInteractiveMode.mockResolvedValue('assistant');
   mockSelectRecentSession.mockResolvedValue(null);
@@ -374,6 +381,50 @@ describe('runTui', () => {
 
       second.onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
       await run;
+    });
+
+    it('should give a rejected draft back to the conversation before remounting', async () => {
+      const tree = scriptRender();
+      const conversation = {
+        resumeSession: vi.fn(),
+        commandAvailability: {},
+        recordRejectedDraft: vi.fn(),
+      };
+      mockCreateTuiConversation.mockReturnValue(conversation);
+      mockSelectAction.mockResolvedValue('continue');
+      const run = startRun();
+      await waitForMount(tree, 1);
+
+      tree.conversationProps().onExit(
+        { kind: 'choose_action', task: 'proposed order' },
+        { history: ['ship it'], queue: [] },
+      );
+      await waitForMount(tree, 2);
+
+      // The next revision has to start from the draft that was turned down.
+      expect(conversation.recordRejectedDraft).toHaveBeenCalledWith('proposed order');
+
+      tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
+      await run;
+    });
+
+    it('should carry the command path of a confirmed task into the result', async () => {
+      const tree = scriptRender();
+      mockSelectAction.mockResolvedValue('execute');
+      const run = startRun();
+      await waitForMount(tree, 1);
+
+      tree.conversationProps().onExit(
+        { kind: 'choose_action', task: 'revised order', source: 'go' },
+        { history: [], queue: [] },
+      );
+
+      // The caller writes the revised order.md only for a task that came from /go.
+      await expect(run).resolves.toEqual({
+        kind: 'selected',
+        workflowId: 'default',
+        result: { action: 'execute', task: 'revised order', source: 'go' },
+      });
     });
 
     it('should load the chosen session and mount the conversation again', async () => {

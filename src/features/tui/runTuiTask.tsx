@@ -26,7 +26,7 @@ import {
 import type { InteractiveModeResult } from '../interactive/interactive.js';
 import { handOverAttachments } from './attachmentHandover.js';
 import { runTuiConversation } from './conversationRunner.js';
-import { createTuiConversation } from './tuiConversation.js';
+import { createTuiConversation, type InteractiveResultSource } from './tuiConversation.js';
 import { describeSessionModel } from './tuiSetup.js';
 
 export interface RunTuiTaskConversationOptions {
@@ -42,18 +42,40 @@ export async function runTuiTaskConversation(
   options: RunTuiTaskConversationOptions,
 ): Promise<InteractiveModeResult> {
   const { ctx, strategy } = options.plan;
-  const attachmentStore = createSessionImageAttachmentStore(options.cwd);
+  // The canonical order's own images are already numbered; a paste here has to
+  // continue past them rather than claim a placeholder the order uses.
+  const attachmentStore = createSessionImageAttachmentStore(
+    options.cwd,
+    undefined,
+    strategy.initialImageAttachmentIndex,
+  );
   // The selectors this run opens end the process themselves when interrupted,
   // so the temp files get a net that does not depend on this call finishing.
   const releaseExitCleanup = cleanupImageAttachmentStoreOnProcessExit(attachmentStore);
   let handedOver = false;
 
   const ui = getLabelObject<InteractiveUIText>('interactive.ui', ctx.lang);
-  const chooseAction = (task: string): Promise<PostSummaryAction | null> => (
-    strategy.selectAction
-      ? strategy.selectAction(task, ctx.lang)
-      : selectPostSummaryAction(task, ui.proposed, ui)
-  );
+  /**
+   * The same decision the readline loop makes in `handleSummaryAction`: a `/go`
+   * draft is a revision of the task's order and gets the mode's approve/reject
+   * selector after its attachment list is appended, while `/retry` resubmits the
+   * order the mode already has.
+   */
+  const chooseAction = async (
+    task: string,
+    source?: InteractiveResultSource,
+  ): Promise<{ action: PostSummaryAction; task: string } | null> => {
+    const normalized = source === 'go' && strategy.normalizeSummaryTask
+      ? strategy.normalizeSummaryTask(task, attachmentStore.listAttachments()).task
+      : task;
+    const selector = (source === 'go' ? strategy.selectGoAction : undefined)
+      ?? (source === 'retry' ? strategy.selectRetryAction : undefined)
+      ?? strategy.selectAction;
+    const action = selector
+      ? await selector(normalized, ctx.lang)
+      : await selectPostSummaryAction(normalized, ui.proposed, ui);
+    return action === null ? null : { action, task: normalized };
+  };
 
   try {
     const result = await runTuiConversation({

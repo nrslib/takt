@@ -15,21 +15,35 @@ vi.mock('../features/interactive/aiCaller.js', () => ({
   callAIWithRetry: (...args: unknown[]) => mockCallAIWithRetry(...args),
 }));
 
+vi.mock('../infra/config/global/globalConfig.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  loadGlobalConfig: vi.fn(() => ({ provider: 'mock', language: 'en' })),
+}));
+
 vi.mock('../features/interactive/interactiveApplication.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   buildConversationSummaryPrompt: (...args: unknown[]) => mockBuildSummaryPrompt(...args),
 }));
 
 import { createConversationSession } from '../features/interactive/conversationSession.js';
+import type { SessionContext } from '../features/interactive/aiCaller.js';
+
+/** These tests never reach past `setup`; the rest of the provider is unused. */
+function stubProvider(): SessionContext['provider'] {
+  return {
+    setup: vi.fn(),
+    getRuntimeInstructions: vi.fn(() => null),
+    supportsStructuredOutput: false,
+    supportsNativeImageInput: false,
+    keepsAllowedToolWithoutEdit: false,
+  } as unknown as SessionContext['provider'];
+}
 
 function createSession(cwd = '/repo') {
   return createConversationSession({
     cwd,
     ctx: {
-      provider: {
-        setup: vi.fn(),
-        getRuntimeInstructions: vi.fn(() => null),
-      },
+      provider: stubProvider(),
       providerType: 'mock',
       model: 'mock-model',
       lang: 'en',
@@ -145,7 +159,7 @@ describe('conversation session application API', () => {
       'include progress updates',
       'en',
       'summary context',
-      false,
+      true,
       // The adapter never opts into resumed-session summaries, so no note is added.
       {},
     );
@@ -161,7 +175,7 @@ describe('conversation session application API', () => {
   });
 
   it.each([
-    ['unset', undefined, false],
+    ['unset', undefined, true],
     ['enabled', true, true],
     ['disabled', false, false],
   ] as const)('should pass %s project Gherkin mode to ACP task instruction generation', async (_label, configured, expected) => {
@@ -180,6 +194,41 @@ describe('conversation session application API', () => {
       await session.createTaskInstruction({ userNote: 'implement ACP support' });
 
       expect(mockBuildSummaryPrompt.mock.calls[0]?.[4]).toBe(expected);
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['unset', undefined, true],
+    ['project false', false, false],
+  ] as const)('should apply %s to the actual ACP summary prompt', async (_label, configured, expectedEnabled) => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-gherkin-acp-prompt-'));
+    if (configured !== undefined) {
+      mkdirSync(join(projectDir, '.takt'), { recursive: true });
+      writeFileSync(
+        join(projectDir, '.takt', 'config.yaml'),
+        ['assistant:', `  gherkin: ${configured}`].join('\n'),
+        'utf-8',
+      );
+    }
+    const actualInteractiveApplication = await vi.importActual<typeof import('../features/interactive/interactiveApplication.js')>(
+      '../features/interactive/interactiveApplication.js',
+    );
+    mockBuildSummaryPrompt.mockImplementation(actualInteractiveApplication.buildConversationSummaryPrompt);
+
+    try {
+      const session = createSession(projectDir);
+      await session.createTaskInstruction({ userNote: 'implement ACP support' });
+
+      const prompt = mockCallAIWithRetry.mock.calls[0]?.[0];
+      if (expectedEnabled) {
+        expect(prompt).toContain('## Markdown + Gherkin Output Format');
+      } else {
+        expect(prompt).not.toContain('## Markdown + Gherkin Output Format');
+        expect(prompt).not.toContain('Write these in a fenced `gherkin` block:');
+        expect(prompt).not.toContain('Do not duplicate the same requirement in Markdown and Gherkin');
+      }
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
     }
@@ -208,7 +257,7 @@ describe('conversation session application API', () => {
       'worktree で実行できるように積んで',
       'en',
       'summary context',
-      false,
+      true,
       // The adapter never opts into resumed-session summaries, so no note is added.
       {},
     );
@@ -413,7 +462,7 @@ describe('conversation session application API', () => {
       'summarize',
       'en',
       'summary context',
-      false,
+      true,
       // The adapter never opts into resumed-session summaries, so no note is added.
       {},
     );
@@ -437,7 +486,7 @@ describe('conversation session application API', () => {
       code: 'no_conversation',
       message: 'No conversation to summarize',
     });
-    expect(mockBuildSummaryPrompt).toHaveBeenLastCalledWith([], '', 'en', 'summary context', false, {});
+    expect(mockBuildSummaryPrompt).toHaveBeenLastCalledWith([], '', 'en', 'summary context', true, {});
   });
 
   it('should describe a resumed session only when the caller opted in', async () => {
@@ -445,7 +494,7 @@ describe('conversation session application API', () => {
       cwd: '/repo',
       summarizeResumedSession: true,
       ctx: {
-        provider: { setup: vi.fn(), getRuntimeInstructions: vi.fn(() => null) },
+        provider: stubProvider(),
         providerType: 'mock',
         model: 'mock-model',
         lang: 'en',
@@ -462,7 +511,7 @@ describe('conversation session application API', () => {
     await session.handleUserMessage({ text: '/go' });
 
     expect(mockBuildSummaryPrompt).toHaveBeenLastCalledWith(
-      [], '', 'en', undefined, false, { resumedSessionNote: expect.any(String) },
+      [], '', 'en', undefined, true, { resumedSessionNote: expect.any(String) },
     );
   });
 
@@ -471,7 +520,7 @@ describe('conversation session application API', () => {
       cwd: '/repo',
       initialUserMessage: 'implement ACP support',
       ctx: {
-        provider: { setup: vi.fn(), getRuntimeInstructions: vi.fn(() => null) },
+        provider: stubProvider(),
         providerType: 'mock',
         model: 'mock-model',
         lang: 'en',
@@ -492,7 +541,7 @@ describe('conversation session application API', () => {
       '',
       'en',
       undefined,
-      false,
+      true,
       {},
     );
   });
@@ -504,7 +553,7 @@ describe('conversation session application API', () => {
       workflowContext,
       sourceContext: 'Issue #12 body',
       ctx: {
-        provider: { setup: vi.fn(), getRuntimeInstructions: vi.fn(() => null) },
+        provider: stubProvider(),
         providerType: 'mock',
         model: 'mock-model',
         lang: 'en',
@@ -525,7 +574,7 @@ describe('conversation session application API', () => {
       '',
       'en',
       undefined,
-      false,
+      true,
       { workflowContext, sourceContext: 'Issue #12 body' },
     );
   });

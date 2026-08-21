@@ -1,0 +1,48 @@
+name: loop-analysis
+description: 完了した実行を分析し、回避可能なループを減らすための根拠に基づくワークフロー改善案をレビューする。
+all_steps:
+  rules:
+    - ref: loop-analysis
+      position: before_instruction
+max_steps: 6
+initial_step: analyze
+
+steps:
+  - name: analyze
+    tags: [analysis]
+    capabilities: readonly
+    edit: false
+    persona: loop-analyzer
+    knowledge: loop-analysis
+    instruction: loop-analysis
+    rules:
+      - condition: when(true)
+        next: review
+
+  - name: review
+    tags: [review]
+    capabilities: readonly
+    edit: false
+    persona: loop-analysis-reviewer
+    instruction: review-loop-analysis
+    output_contracts:
+      report:
+        - name: loop-analysis.md
+          format: loop-analysis
+          use_judge: false
+    rules:
+      - condition: 改善案が汎用的で根拠に基づき、過去の指摘がある場合は修正済みまたは根拠付きで対応不能として提案から除外され、人間が検討できる状態になっている
+        next: COMPLETE
+      - condition: 改善案が過度に個別最適化されている、根拠が不足している、不完全である、対応不能の判断に根拠がない、または修正が必要である
+        next: reanalyze
+
+  - name: reanalyze
+    tags: [analysis]
+    capabilities: readonly
+    edit: false
+    persona: loop-analyzer
+    knowledge: loop-analysis
+    instruction: reanalyze-loop-analysis
+    rules:
+      - condition: when(true)
+        next: review

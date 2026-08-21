@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -376,6 +376,74 @@ describe('traceReport', () => {
     expect(markdown).not.toContain('xyz987');
     expect(markdown).not.toContain('ghp_abcdef1234567890');
     expect(markdown).not.toContain('xoxb-1234abcd-5678efgh');
+  });
+
+  it('should reject duplicate prompt executions within one run', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'trace-report-duplicate-prompt-'));
+    const sessionPath = join(dir, 'session.jsonl');
+    const promptPath = join(dir, 'session-prompts.jsonl');
+    const scope = '{"step":"plan","stack":[]}';
+    const promptRecord = {
+      step: 'plan',
+      phase: 1,
+      iteration: 1,
+      scope,
+      phaseExecutionId: 'plan:1:1:1',
+      systemPrompt: 'system prompt',
+      userInstruction: 'user prompt',
+      prompt: 'user prompt',
+      response: 'response',
+      timestamp: '2026-03-04T11:59:03.000Z',
+    };
+
+    try {
+      writeFileSync(sessionPath, [
+        JSON.stringify({ type: 'workflow_start', task: 'task', workflowName: 'workflow', startTime: '2026-03-04T11:59:00.000Z' }),
+        JSON.stringify({ type: 'step_start', step: 'plan', persona: 'planner', iteration: 1, timestamp: '2026-03-04T11:59:01.000Z' }),
+        JSON.stringify({ type: 'phase_start', step: 'plan', iteration: 1, phase: 1, phaseName: 'execute', phaseExecutionId: 'plan:1:1:1', instruction: 'user prompt', systemPrompt: 'system prompt', userInstruction: 'user prompt', timestamp: '2026-03-04T11:59:02.000Z' }),
+        JSON.stringify({ type: 'phase_complete', step: 'plan', iteration: 1, phase: 1, phaseName: 'execute', phaseExecutionId: 'plan:1:1:1', status: 'done', content: 'response', timestamp: '2026-03-04T11:59:03.000Z' }),
+        '',
+      ].join('\n'));
+      writeFileSync(promptPath, [
+        JSON.stringify(promptRecord),
+        JSON.stringify(promptRecord),
+        '',
+      ].join('\n'));
+
+      expect(() => renderTraceReportFromLogs(
+        {
+          tracePath: join(dir, 'trace.md'),
+          workflowName: 'workflow',
+          task: 'task',
+          runSlug: 'run-duplicate',
+          status: 'completed',
+          iterations: 1,
+          endTime: '2026-03-04T12:00:00.000Z',
+        },
+        sessionPath,
+        promptPath,
+        'full',
+      )).toThrow('Duplicate prompt execution');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('should not require session or prompt logs when trace mode is off', () => {
+    expect(renderTraceReportFromLogs(
+      {
+        tracePath: '/missing/trace.md',
+        workflowName: 'workflow',
+        task: 'task',
+        runSlug: 'run-off',
+        status: 'completed',
+        iterations: 1,
+        endTime: '2026-03-04T12:00:00.000Z',
+      },
+      '/missing/session.jsonl',
+      '/missing/session-prompts.jsonl',
+      'off',
+    )).toBeUndefined();
   });
 
 });

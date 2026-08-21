@@ -1,90 +1,91 @@
 workflow_categories:
   🚀 Quick Start:
     workflows:
-      - simple
       - default
-      - experimental
-      - default-mini
-      - default-high
-      - cli
-      - frontend
-      - backend
-      - dual
-  ✨ Simple:
-    workflows:
+      - maintenance
       - simple
-      - simple-mini
-      - simple-frontend
-      - simple-backend
-      - simple-dual
-      - simple-cqrs
-      - simple-dual-cqrs
-  ⚡ Mini:
+      - review-fix
+  🛠️ Development:
     workflows:
-      - simple-mini
-      - default-mini
-      - frontend-mini
-      - backend-mini
-      - backend-cqrs-mini
-      - dual-mini
-      - dual-cqrs-mini
-  🎨 Frontend:
-    workflows:
-      - simple-frontend
-      - frontend
-      - frontend-mini
-      - frontend-maintenance
-  ⚙️ Backend:
-    workflows:
-      - simple-backend
-      - simple-cqrs
-      - backend
-      - backend-mini
-      - backend-maintenance
-      - backend-cqrs
-      - backend-cqrs-mini
-  🔧 Dual:
-    workflows:
-      - simple-dual
-      - simple-dual-cqrs
-      - dual
-      - dual-mini
-      - dual-cqrs
-      - dual-cqrs-mini
-  🏗️ Infrastructure:
-    workflows:
-      - terraform
+      - default
+      - maintenance
+      - simple
+      - pure
   🔍 Review:
     workflows:
-      - review-default
-      - review-fix-default
-      - review-frontend
-      - review-fix-frontend
-      - review-backend
-      - review-fix-backend
-      - review-dual
-      - review-fix-dual
-      - review-dual-cqrs
-      - review-fix-dual-cqrs
-      - review-backend-cqrs
-      - review-fix-backend-cqrs
-      - review-takt-default
-      - review-fix-takt-default
+      - review
+      - review-fix
       - audit-unit
       - audit-e2e
       - audit-security
       - audit-architecture
-      - audit-architecture-frontend
-      - audit-architecture-backend
-      - audit-architecture-dual
+  🏗️ Infrastructure:
+    workflows:
+      - terraform
   🎵 TAKT Development:
     workflows:
       - takt-default
-      - takt-experimental
-      - takt-experimental-team
+      - takt-default-team
       - auto-improvement-loop
       - review-takt-default
       - review-fix-takt-default
+  📦 Legacy:
+    workflows:
+      - cli
+    ✨ Simple:
+      workflows:
+        - simple-mini
+        - simple-frontend
+        - simple-backend
+        - simple-dual
+        - simple-cqrs
+        - simple-dual-cqrs
+    ⚡ Mini:
+      workflows:
+        - simple-mini
+        - frontend-mini
+        - backend-mini
+        - backend-cqrs-mini
+        - dual-mini
+        - dual-cqrs-mini
+    🎨 Frontend:
+      workflows:
+        - simple-frontend
+        - frontend
+        - frontend-mini
+        - frontend-maintenance
+    ⚙️ Backend:
+      workflows:
+        - simple-backend
+        - simple-cqrs
+        - backend
+        - backend-mini
+        - backend-maintenance
+        - backend-cqrs
+        - backend-cqrs-mini
+    🔧 Dual:
+      workflows:
+        - simple-dual
+        - simple-dual-cqrs
+        - dual
+        - dual-mini
+        - dual-cqrs
+        - dual-cqrs-mini
+    🔍 Review:
+      workflows:
+        - review-frontend
+        - review-fix-frontend
+        - review-backend
+        - review-fix-backend
+        - review-dual
+        - review-fix-dual
+        - review-dual-cqrs
+        - review-fix-dual-cqrs
+        - review-backend-cqrs
+        - review-fix-backend-cqrs
+        - audit-architecture-frontend
+        - audit-architecture-backend
+        - audit-architecture-dual
   Others:
     workflows:
       - research

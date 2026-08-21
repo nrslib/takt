@@ -7,6 +7,7 @@ import {
   type ConversationMessage,
 } from './interactiveApplication.js';
 import { callAIWithRetry, type SessionContext } from './aiCaller.js';
+import type { SummaryPromptBuilder } from './conversationLoop.js';
 import type { WorkflowContext } from './interactive-summary-types.js';
 import type { InteractiveMetadata } from '../tasks/execute/types.js';
 import type { PermissionMode } from '../../core/models/index.js';
@@ -22,6 +23,12 @@ export interface ConversationSessionStrategy {
   transformPrompt: (message: string, sourceContext?: string) => string;
   summaryPromptContext?: string;
   initialPromptContext?: string;
+  /**
+   * Mode-specific `/go` prompt. Retry and Instruct revise the task's existing
+   * `order.md` instead of writing a new instruction, and that prompt is built
+   * from the canonical order — the same builder the readline loop uses.
+   */
+  summaryPromptBuilder?: SummaryPromptBuilder;
 }
 
 export interface ConversationSessionOptions {
@@ -108,6 +115,11 @@ export interface ConversationSession {
 export interface InteractiveConversationSession extends ConversationSession {
   /** Latest assistant reply, for front-ends that offer /accept. */
   getLatestAssistantMessage(): string | null;
+  /**
+   * Put a `/go` draft the user rejected back into the conversation, so the next
+   * revision starts from what was proposed rather than from nothing.
+   */
+  recordRejectedDraft(task: string): void;
   /** Continue from a previously recorded provider session (/resume). */
   setSessionId(nextSessionId: string): void;
 }
@@ -246,20 +258,36 @@ export function createConversationSession(options: ConversationSessionOptions): 
     // still running, so that one no longer writes history or session id when it
     // finally settles.
     const isCurrentTurn = beginTurn();
-    const summaryPrompt = buildConversationSummaryPrompt(
-      history,
-      userNote,
-      options.ctx.lang,
-      options.strategy.summaryPromptContext,
-      gherkin,
-      {
+    const resumedSessionNote = options.summarizeResumedSession === true && sessionId
+      ? getLabel('interactive.noTranscript', options.ctx.lang)
+      : undefined;
+    const summaryPrompt = options.strategy.summaryPromptBuilder
+      ? options.strategy.summaryPromptBuilder({
+        history,
+        hasSession: resumedSessionNote !== undefined,
+        lang: options.ctx.lang,
+        noTranscriptNote: resumedSessionNote ?? '',
+        conversationLabel: getLabel('interactive.conversationLabel', options.ctx.lang),
         ...(options.workflowContext ? { workflowContext: options.workflowContext } : {}),
         ...(options.sourceContext ? { sourceContext: options.sourceContext } : {}),
-        ...(options.summarizeResumedSession === true && sessionId
-          ? { resumedSessionNote: getLabel('interactive.noTranscript', options.ctx.lang) }
+        ...(options.strategy.summaryPromptContext
+          ? { promptContext: options.strategy.summaryPromptContext }
           : {}),
-      },
-    );
+        gherkin,
+        userNote,
+      })
+      : buildConversationSummaryPrompt(
+        history,
+        userNote,
+        options.ctx.lang,
+        options.strategy.summaryPromptContext,
+        gherkin,
+        {
+          ...(options.workflowContext ? { workflowContext: options.workflowContext } : {}),
+          ...(options.sourceContext ? { sourceContext: options.sourceContext } : {}),
+          ...(resumedSessionNote === undefined ? {} : { resumedSessionNote }),
+        },
+      );
     if (!summaryPrompt) {
       return { kind: 'error', code: 'no_conversation', message: 'No conversation to summarize' };
     }
@@ -324,6 +352,10 @@ export function createConversationSession(options: ConversationSessionOptions): 
 
     setSessionId(nextSessionId: string): void {
       sessionId = nextSessionId;
+    },
+
+    recordRejectedDraft(task: string): void {
+      history = [...history, { role: 'assistant', content: task }];
     },
 
     createTaskInstruction(input: ConversationTurnInput & { userNote: string }): Promise<ConversationSessionResult> {

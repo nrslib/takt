@@ -316,7 +316,9 @@ export class ParallelRunner {
                 edit: subStep.edit,
                 passPreviousResponse: subStep.passPreviousResponse === true,
               },
-              lastOutput: state.lastOutput?.content,
+              lastOutput: runtime?.fallback === undefined
+                ? state.lastOutput?.content
+                : undefined,
               sensitiveValues: this.deps.engineOptions.routingSensitiveValues,
             }),
             currentProviderInfo: configuredProviderInfoByStep.get(subStep.name)!,

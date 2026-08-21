@@ -563,6 +563,8 @@ export interface WorkflowEngineOptions {
   observabilityRunId?: string;
   /** Redacts text before it is attached to observability spans. */
   sanitizeObservabilityText?: (text: string) => string;
+  /** Sanitizes report content before it crosses the report-file persistence boundary. */
+  reportContentSanitizer?: (content: string) => string;
   /** Run-local environment values passed to trusted child processes. */
   childProcessEnv?: Readonly<Record<string, string>>;
   /** Language for instruction metadata. Defaults to 'en'. */
@@ -577,6 +579,8 @@ export interface WorkflowEngineOptions {
   rateLimitFallback?: RateLimitFallbackConfig;
   /** Resolved provider options */
   providerOptions?: StepProviderOptions;
+  /** Provider options resolved from config.yaml and environment variables. */
+  configProviderOptions?: StepProviderOptions;
   /** Provider source whose runtime profile supplied providerOptions; absent for shared config options. */
   providerOptionsProviderSource?: ProviderResolutionSource;
   /** Permission mode from the runtime defaults profile. */

@@ -237,6 +237,15 @@ retry:
     intro: "Retry mode - describe additional instructions. Commands: /go (create instruction & run), /retry (rerun previous order), /cancel (exit)"
   usePreviousWorkflowConfirm: "Use previous workflow \"{workflow}\"?"
 
+orderRevision:
+  attachmentsHeading: "Attachments"
+  ui:
+    proposed: "Proposed new order.md:"
+    actionPrompt: "Replace the current order with this instruction?"
+    actions:
+      approve: "Yes (save and run)"
+      reject: "No (return to conversation)"
+
 run:
   notifyComplete: "Run complete ({total} tasks)"
   notifyAbort: "Run finished with errors ({failed})"

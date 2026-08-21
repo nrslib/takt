@@ -42,14 +42,16 @@ takt
 
 首次启动时，TAKT 会先询问默认 agent 和 workflow 使用的语言，再询问 provider，然后才显示 workflow 选择。
 
-选择 `frontend-mini` workflow。初始界面只列出分类；具体顺序可能因环境而异，但 `frontend-mini` 通常位于 `Mini` 或 `Frontend` 分类下。
+选择 `frontend-mini` workflow。初始界面只列出分类；具体顺序可能因环境而异，但 `frontend-mini` 位于 `Legacy` 分类的 `Frontend` 子分类下。
 
 ```text
 Select workflow:
     📁 🚀 Quick Start/
-    📁 ✨ Simple/
-  ❯ 📁 ⚡ Mini/
-    📁 🎨 Frontend/
+    📁 🛠️ Development/
+    📁 🔍 Review/
+    📁 🏗️ Infrastructure/
+    📁 🎵 TAKT Development/
+  ❯ 📁 📦 Legacy/
 ```
 
 在 workflow 上按 `b` 可以收藏；收藏的 workflow 会以 `🎼 {name} [*]` 显示在此界面顶部。
@@ -57,14 +59,22 @@ Select workflow:
 打开分类并选择 `frontend-mini`：
 
 ```text
-Select workflow in ⚡ Mini:
-    🎼 simple-mini
-    🎼 default-mini
+Select workflow in 📦 Legacy:
+    📁 ✨ Simple/
+    📁 ⚡ Mini/
+  ❯ 📁 🎨 Frontend/
+    📁 ⚙️ Backend/
+    📁 🔧 Dual/
+    📁 🔍 Review/
+    🎼 cli
+```
+
+```text
+Select workflow in 🎨 Frontend:
+    🎼 simple-frontend
+    🎼 frontend
   ❯ 🎼 frontend-mini
-    🎼 backend-mini
-    🎼 backend-cqrs-mini
-    🎼 dual-mini
-    🎼 dual-cqrs-mini
+    🎼 frontend-maintenance
 ```
 
 随后 TAKT 会询问交互模式。第一次请选择 **Assistant**。

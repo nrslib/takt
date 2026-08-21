@@ -349,6 +349,10 @@ function emitProviderOptionLines(
     if (effort !== undefined) {
       out.info(`Reasoning effort: ${effort}${sourceSuffix('codex.reasoningEffort', sources, showSource)}`);
     }
+    const fastMode = options.codex?.fastMode;
+    if (fastMode !== undefined) {
+      out.info(`Fast mode: ${fastMode ? 'enabled' : 'disabled'}${sourceSuffix('codex.fastMode', sources, showSource)}`);
+    }
   } else if (stepProvider === 'opencode') {
     const variant = options.opencode?.variant;
     if (variant !== undefined) {

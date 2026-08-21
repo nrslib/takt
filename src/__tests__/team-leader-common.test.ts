@@ -194,9 +194,69 @@ describe('createPartStep', () => {
     }));
 
   });
+
+  it('does not copy dynamic facet or companion configuration to worker parts', () => {
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      instruction: 'decompose work',
+      passPreviousResponse: false,
+      dynamicFacets: { pool: 'team-facets', maxSelected: 1 },
+      companion: { fixed: ['reviewer'], pool: [] },
+      teamLeader: {
+        maxConcurrency: 1,
+        timeoutMs: 900000,
+      },
+    };
+
+    const partStep = createPartStep(step, {
+      id: 'part-1',
+      title: 'API',
+      instruction: 'implement api',
+    });
+
+    expect(partStep).not.toHaveProperty('dynamicFacets');
+    expect(partStep).not.toHaveProperty('companion');
+  });
 });
 
 describe('createTeamLeaderPlanningStep', () => {
+  it('adds mailbox pull guidance to the planning prompt without adding it to worker parts', () => {
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      instruction: 'plan the implementation',
+      passPreviousResponse: false,
+      teamLeader: {
+        persona: 'lead',
+        maxConcurrency: 2,
+        timeoutMs: 900000,
+      },
+      companion: { fixed: ['reviewer'], pool: [] },
+    };
+    const context = makeInstructionContext({
+      companion: { mailboxDirectory: '/tmp/takt-mailbox' },
+    });
+
+    const planningPrompt = new InstructionBuilder(
+      createTeamLeaderPlanningStep(step),
+      context,
+    ).build();
+    const partPrompt = new InstructionBuilder(
+      createPartStep(step, {
+        id: 'part-1',
+        title: 'Implementation',
+        instruction: 'Implement the change',
+      }),
+      context,
+    ).build();
+
+    expect(planningPrompt).toContain('/tmp/takt-mailbox');
+    expect(partPrompt).not.toContain('/tmp/takt-mailbox');
+  });
+
   it('uses team leader persona identity for provider resolution', () => {
     const step: WorkflowStep = {
       name: 'implement',

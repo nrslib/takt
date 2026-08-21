@@ -7,9 +7,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { SlashCommand } from '../shared/constants.js';
 
-const { mockRunTuiConversation, mockCreateTuiConversation } = vi.hoisted(() => ({
+const { mockRunTuiConversation, mockCreateTuiConversation, sessionStoreCalls } = vi.hoisted(() => ({
   mockRunTuiConversation: vi.fn(),
   mockCreateTuiConversation: vi.fn(),
+  sessionStoreCalls: [] as unknown[][],
 }));
 
 vi.mock('../features/tui/conversationRunner.js', () => ({
@@ -19,6 +20,22 @@ vi.mock('../features/tui/conversationRunner.js', () => ({
 vi.mock('../features/tui/tuiConversation.js', () => ({
   createTuiConversation: (...args: unknown[]) => mockCreateTuiConversation(...args),
 }));
+
+vi.mock('../features/interactive/imageAttachments.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../features/interactive/imageAttachments.js')>();
+  return {
+    ...actual,
+    createSessionImageAttachmentStore: (...args: unknown[]) => {
+      sessionStoreCalls.push(args);
+      return {
+        saveImage: vi.fn(),
+        listAttachments: () => [],
+        cleanup: vi.fn(),
+        seal: vi.fn(),
+      };
+    },
+  };
+});
 
 import { runTuiTaskConversation } from '../features/tui/runTuiTask.js';
 
@@ -47,7 +64,10 @@ describe('runTuiTaskConversation', () => {
     const selectAction = vi.fn().mockResolvedValue('save_task');
     mockRunTuiConversation.mockImplementation(async (options: {
       initialEntries: { role: string; content: string }[];
-      chooseAction: (task: string) => Promise<string | null>;
+      chooseAction: (
+      task: string,
+      source?: string,
+    ) => Promise<{ action: string; task: string } | null>;
       submitMode: string;
       autoSubmit: boolean;
     }) => {
@@ -57,7 +77,8 @@ describe('runTuiTaskConversation', () => {
       expect(options.submitMode).toBe('chat');
       expect(options.autoSubmit).toBe(false);
       // The mode's own selector decides, not the workflow one.
-      expect(await options.chooseAction('proposed task')).toBe('save_task');
+      expect(await options.chooseAction('proposed task'))
+        .toEqual({ action: 'save_task', task: 'proposed task' });
       return { action: 'save_task', task: 'proposed task' };
     });
 
@@ -68,6 +89,64 @@ describe('runTuiTaskConversation', () => {
 
     expect(result).toMatchObject({ action: 'save_task', task: 'proposed task' });
     expect(selectAction).toHaveBeenCalledWith('proposed task', 'en');
+  });
+
+  it('should revise the order with the mode selector when the task came from /go', async () => {
+    const selectGoAction = vi.fn().mockResolvedValue('execute');
+    const selectRetryAction = vi.fn().mockResolvedValue('execute');
+    const selectAction = vi.fn().mockResolvedValue('save_task');
+    const normalizeSummaryTask = vi.fn((task: string) => ({
+      task: `${task}\n\n## Attachments`,
+      attachments: [],
+    }));
+    mockRunTuiConversation.mockImplementation(async (options: {
+      chooseAction: (
+        task: string,
+        source?: string,
+      ) => Promise<{ action: string; task: string } | null>;
+    }) => {
+      // A `/go` draft is confirmed with the approve/reject selector, and what it
+      // shows is the draft with its attachment list already appended.
+      expect(await options.chooseAction('revised order', 'go')).toEqual({
+        action: 'execute',
+        task: 'revised order\n\n## Attachments',
+      });
+      expect(selectGoAction).toHaveBeenCalledWith('revised order\n\n## Attachments', 'en');
+      expect(selectAction).not.toHaveBeenCalled();
+
+      // `/retry` resubmits the order the mode already has, unnormalized.
+      expect(await options.chooseAction('previous order', 'retry'))
+        .toEqual({ action: 'execute', task: 'previous order' });
+      expect(selectRetryAction).toHaveBeenCalledWith('previous order', 'en');
+      expect(normalizeSummaryTask).toHaveBeenCalledTimes(1);
+
+      // Anything else keeps the mode's plain selector.
+      expect(await options.chooseAction('some task'))
+        .toEqual({ action: 'save_task', task: 'some task' });
+      return { action: 'cancel', task: '' };
+    });
+
+    await runTuiTaskConversation({
+      cwd: '/repo',
+      plan: createPlan({
+        selectAction,
+        selectGoAction,
+        selectRetryAction,
+        normalizeSummaryTask,
+      }),
+    });
+  });
+
+  it('should number pasted images past the ones the canonical order already has', async () => {
+    sessionStoreCalls.length = 0;
+    mockRunTuiConversation.mockResolvedValue({ action: 'cancel', task: '' });
+
+    await runTuiTaskConversation({
+      cwd: '/repo',
+      plan: createPlan({ initialImageAttachmentIndex: 3 }),
+    });
+
+    expect(sessionStoreCalls.at(-1)).toEqual(['/repo', undefined, 3]);
   });
 
   it('should hand the model of the session to the status row', async () => {

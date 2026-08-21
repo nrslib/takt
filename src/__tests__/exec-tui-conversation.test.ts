@@ -61,8 +61,12 @@ describe('exec conversation on the TUI', () => {
     expect(conversation.resolveLocalCommand('/paste-image')).toEqual({ kind: 'paste_image' });
     // Not part of exec's command set, so it is ordinary text.
     expect(conversation.resolveLocalCommand('/resume')).toBeNull();
-    expect(conversation.commandAvailability)
-      .toEqual({ enableRetryCommand: false, hasPreviousOrder: false });
+    // Exec's own set, so the completion list offers `/setup` and nothing the
+    // conversation would refuse to run.
+    expect(conversation.commandAvailability).toEqual({
+      enableSetupCommand: true,
+      enabledCommands: ['/setup', '/go', '/cancel', '/paste-image'],
+    });
   });
 
   it('should treat a line that only looks like a command as text', () => {

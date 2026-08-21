@@ -1,9 +1,11 @@
 import { getProvider } from '../../infra/providers/index.js';
 import type { ProviderType } from '../../infra/providers/index.js';
 import {
+  resolveNonWorkflowProviderModel,
   resolveNonWorkflowProviderOptions,
   resolveWorkflowConfigValues,
 } from '../../infra/config/index.js';
+import { mergeProviderOptions } from '../../infra/config/providerOptions.js';
 import type { PermissionMode, StepProviderOptions } from '../../core/models/index.js';
 import type { ImageAttachmentReference } from '../../shared/types/image-attachments.js';
 import type { StreamCallback } from '../../shared/types/provider.js';
@@ -75,10 +77,18 @@ export function createExecSessionContext(
   codexSkillInheritance: ExecCodexSkillInheritance = resolveExecCodexSkillInheritance(cwd),
 ): ExecSessionContext {
   const resolvedConfig = resolveWorkflowConfigValues(cwd, ['enableBuiltinWorkflows', 'language']);
-  const providerOptions = resolveNonWorkflowProviderOptions(
-    cwd,
-    withCodexSkillInheritance(buildSessionProviderOptions(config.session), codexSkillInheritance),
+  const sessionProviderOptions = withCodexSkillInheritance(
+    buildSessionProviderOptions(config.session),
+    codexSkillInheritance,
   );
+  const runtimeProvider = resolveNonWorkflowProviderModel(cwd);
+  const providerOptions = runtimeProvider.runtimeManaged
+    && runtimeProvider.provider === config.session.provider
+    ? resolveNonWorkflowProviderOptions(
+        cwd,
+        mergeProviderOptions(runtimeProvider.providerOptions, sessionProviderOptions),
+      )
+    : resolveNonWorkflowProviderOptions(cwd, sessionProviderOptions);
   return {
     provider: getProvider(config.session.provider as ProviderType),
     providerType: config.session.provider,

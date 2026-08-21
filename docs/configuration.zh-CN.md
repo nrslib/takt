@@ -30,7 +30,7 @@ interactive_preview_steps: 3  # 交互模式中的 step 预览数（0-10，默�
 auto_requeue_max_attempts: 0  # takt run 期间失败 workflow task 的自动 requeue 次数（非负整数，默认 0 = 禁用）
 ignore_exceed: false          # 对 takt run 和 takt watch 应用 --ignore-exceed（默认 false）
 assistant:
-  gherkin: false              # 将最终任务指令生成为 Markdown + 聚焦的 Gherkin
+  gherkin: true               # 将最终任务指令生成为 Markdown + 聚焦的 Gherkin（默认启用；设为 false 可禁用）
 # auto_fetch: false           # 创建 clone 前 fetch remote（默认 false）
 # base_branch: main           # 创建 clone 的基分支（默认使用 remote 默认分支）
 
@@ -189,7 +189,7 @@ assistant:
 | `concurrency` | number (1-10) | `1` | `takt run` 并行任务数 |
 | `task_poll_interval_ms` | number (100-5000) | `500` | 新任务轮询间隔 |
 | `interactive_preview_steps` | number (0-10) | `3` | 交互模式中的 step 预览数 |
-| `assistant.gherkin` | boolean | `false` | 在 assistant 生成的最终任务指令中组织关键行为和不变量 |
+| `assistant.gherkin` | boolean | `true` | 在 assistant 生成的最终任务指令中组织关键行为和不变量；未设置时默认启用，项目中的显式值优先于全局值 |
 | `auto_requeue_max_attempts` | 非负整数 | `0` | 失败 workflow task 的自动 requeue 上限；`0` 禁用 |
 | `ignore_exceed` | boolean | `false` | 配置 `takt run` 和 `takt watch` 的迭代上限绕过 |
 | `sync_project_local_takt_on_retry` | boolean | `true` | retry/re-execution 前将根项目 `.takt` 同步到 worktree |
@@ -254,10 +254,11 @@ auto_requeue_max_attempts: 1  # takt run 期间失败 workflow task 的自动 re
 ignore_exceed: false          # 对 takt run 和 takt watch 应用 --ignore-exceed
 # base_branch: main           # 创建 clone 的基分支（覆盖全局值，默认 remote 默认分支）
 
-# 仅项目配置支持的交互 assistant 初始上下文文件
+# 项目专属的 assistant 设置
 # assistant:
-#   gherkin: true              # 用 Markdown + 聚焦的 Gherkin 生成最终任务指令
+#   gherkin: true              # 覆盖全局设置；设为 false 可禁用
 #   init_files:
+#     # 仅项目配置支持；交互 assistant 的初始上下文文件
 #     - docs/assistant-context.md
 #     - .takt/assistant-notes.md
 
@@ -361,7 +362,7 @@ TAKT 观察实际收到的 provider event，不会合成 keepalive。OpenCode �
 | `ignore_exceed` | boolean | `false` | `takt run` / `takt watch` 的迭代限制绕过 |
 | `base_branch` | string | - | 创建 clone 的基分支 |
 | `assistant.init_files` | string[] | - | 仅项目级的 assistant 初始上下文文件。路径必须相对于项目根；绝对路径、解析到项目根之外的路径，以及 `.env*`、`.npmrc`、`.pypirc`、`.netrc`、`*.pem`、`*.key` 和 `.git/**` 等敏感文件模式会被拒绝。路径不存在、指向目录或文件不可读时会明确报错。最多 16 个文件，每个最多 256 KiB，合计最多 1 MiB。未设置或为空时，TAKT 不会自动发现 `CLAUDE.md`、`AGENT.md`、`AGENTS.md`、`TAKT.md` 或其他文件。 |
-| `assistant.gherkin` | boolean | `false` | 项目级的任务指令 Gherkin 设置 |
+| `assistant.gherkin` | boolean | `true`（来自全局/默认值） | 项目级的任务指令 Gherkin 覆盖设置。未设置时使用全局值；全局也未设置时默认启用。显式设为 `false` 可禁用。 |
 | `provider_options` | object | - | provider 专属选项 |
 | `provider_profiles` | object | - | provider 专属权限 profile |
 | `vcs_provider` | `"github"` \| `"gitlab"` | 自动检测 | 覆盖全局 VCS provider |
@@ -1046,7 +1047,7 @@ logging:
   debug: true
 ```
 
-debug 日志以 NDJSON 写入 `.takt/runs/debug-{timestamp}/logs/debug-{timestamp}.log`，prompt/response 日志写入同目录的 `debug-{timestamp}-prompts.jsonl`。
+常规 debug 日志按进程写入 `.takt/runs/debug-{timestamp}/logs/debug-{timestamp}.log`，格式为 NDJSON。prompt/response 日志按 workflow run 写入 `.takt/runs/<run>/logs/<sessionId>-prompts.jsonl`。
 
 ### 详细控制台输出
 
@@ -1056,7 +1057,7 @@ logging:
   level: debug
 ```
 
-`logging.level: debug` 会启用 CLI 的详细输出和上面的 debug logger；`logging.debug: true`、`logging.trace: true` 或 `logging.level: debug` 任一设置都可以生成 debug 产物。
+`logging.level: debug` 会启用 CLI 的详细输出，以及上面按进程保存的常规 debug 日志和按 workflow run 保存的 prompt/response 日志；`logging.debug: true`、`logging.trace: true` 或 `logging.level: debug` 任一设置都可以生成这些产物。
 
 ## Companion Provider Target
 

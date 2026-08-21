@@ -50,8 +50,9 @@ export function createExecTuiConversation(options: ExecTuiConversationOptions): 
 
   return {
     lang: ctx().lang,
-    // Exec offers its own command set; `/retry` and `/replay` are not part of it.
-    commandAvailability: { enableRetryCommand: false, hasPreviousOrder: false },
+    // Exec offers its own command set; `/retry` and `/replay` are not part of it,
+    // and `/setup` — which the plain conversation has no use for — is.
+    commandAvailability: EXEC_CONVERSATION_COMMAND_AVAILABILITY,
 
     isCommandLine(text: string): boolean {
       // Exec's own command set, so a line that names something else is text.
