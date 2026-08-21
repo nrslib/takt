@@ -77,9 +77,9 @@ When child-process launch or completion, or a lifetime independent of the parent
 | Work independent of the parent CLI | An artifact or persisted failure remains observable when the parent exits before the worker |
 | Polling or marker wait | Success, transient read contention during publication, and the wait bound all finish in finite time |
 | Child-process failure | Distinguish launch failure from nonzero exit or module-load failure after launch |
-| Supported cancellation or forced termination | Verify the documented terminal result, child and descendant termination, and temporary-resource cleanup; explicitly record any path where cleanup cannot run |
+| All applicable terminal paths | Inventory failure, interruption, cancellation, and forced termination; verify the documented terminal result, child and descendant termination, and temporary-resource cleanup. Record every unexecuted path and every path where cleanup cannot run |
 
-Classify verification that crosses a real child-process boundary as heavy integration. Avoid a Cartesian product: select the smallest cases that distinguish supported execution modes, normal completion, wait-bound completion, post-launch failure, and applicable cancellation or forced-termination behavior.
+Classify verification that crosses a real child-process boundary as heavy integration. Avoid a Cartesian product: select the smallest cases that distinguish supported execution modes, normal completion, wait-bound completion, post-launch failure, and every applicable interruption, cancellation, or forced-termination behavior. Record rather than omit a path that cannot run locally.
 
 ## Completion Evidence
 

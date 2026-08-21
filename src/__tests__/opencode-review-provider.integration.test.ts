@@ -57,7 +57,7 @@ function collectResult(child: ChildProcessWithoutNullStreams): Promise<ProcessRe
 }
 
 function startProvider(
-  mode: 'success' | 'failure' | 'idle' | 'external-termination' | 'exit-race',
+  mode: 'success' | 'non-text' | 'failure' | 'idle' | 'external-termination' | 'exit-race',
   environment: NodeJS.ProcessEnv = {},
 ): StartedProvider {
   const currentPath = process.env.PATH;
@@ -145,6 +145,9 @@ case "$FAKE_OPENCODE_MODE" in
   success)
     printf '%s\\n' '{"type":"text","part":{"text":"review complete"}}'
     ;;
+  non-text)
+    printf '%s\\n' '{"type":"step_start"}'
+    ;;
   failure)
     echo 'fake opencode failure' >&2
     exit 7
@@ -208,6 +211,19 @@ describe('OpenCode review eval provider process boundary', () => {
     expectWorkDirectoryRemoved();
   });
 
+  it('returns 65 and removes the work directory when JSONL has no text response', async () => {
+    const { result } = startProvider('non-text');
+    const completed = await result;
+
+    expect(completed).toEqual({
+      code: 65,
+      signal: null,
+      stdout: '',
+      stderr: 'opencode review completed without a text response\n',
+    });
+    expectWorkDirectoryRemoved();
+  });
+
   it('returns 124 after observable inactivity and terminates the process group', async () => {
     const { result } = startProvider('idle');
     await waitForFile(pidFile);
@@ -240,7 +256,8 @@ describe('OpenCode review eval provider process boundary', () => {
     const preload = join(testDir, 'simulate-watchdog-exit-race.cjs');
     writeFileSync(preload, `const originalKill = process.kill.bind(process);
 process.kill = (pid, signal) => {
-  if (pid < 0 && signal === 'SIGTERM' && process.argv[3]?.endsWith('/idle-timed-out')) {
+  const isWatchdog = process.argv.some((argument) => argument.endsWith('/idle-timed-out'));
+  if (pid < 0 && signal === 'SIGTERM' && isWatchdog) {
     const error = new Error('process group already exited');
     error.code = 'ESRCH';
     throw error;
