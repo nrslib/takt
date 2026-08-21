@@ -69,6 +69,7 @@ const mocks = vi.hoisted(() => {
   };
 
   const packageManager = {
+    getInstalledPath: vi.fn(() => undefined as string | undefined),
     resolveExtensionSources: vi.fn(async () => ({ extensions: [], skills: [], prompts: [], themes: [] })),
   };
   const sessionManager = {
@@ -124,6 +125,8 @@ const mocks = vi.hoisted(() => {
       mocks.session.getLastAssistantText.mockClear();
       mocks.createAgentSession.mockClear();
       mocks.resourceLoader.mockClear();
+      mocks.packageManager.getInstalledPath.mockReset();
+      mocks.packageManager.getInstalledPath.mockReturnValue(undefined);
       mocks.packageManager.resolveExtensionSources.mockClear();
       mocks.modelRuntime.getModel.mockClear();
       mocks.modelRuntime.getModels.mockClear();
@@ -210,19 +213,21 @@ describe('Pi SDK client', () => {
     expect(mocks.createAgentSession.mock.calls.at(-1)?.[0]).not.toHaveProperty('tools');
   });
 
-  it('falls back to temporary npm extension sources when user and project scopes are empty', async () => {
+  it('resolves npm extension sources temporarily when no user install exists', async () => {
     mocks.resetTransient();
-    const empty = { extensions: [], skills: [], prompts: [], themes: [] };
     const temporary = {
       extensions: [{ enabled: true, path: path.join(tmpdir(), 'extension.ts') }],
       skills: [{ enabled: true, path: path.join(tmpdir(), 'SKILL.md') }],
       prompts: [],
       themes: [],
     };
-    mocks.packageManager.resolveExtensionSources
-      .mockResolvedValueOnce(empty)
-      .mockResolvedValueOnce(empty)
-      .mockResolvedValueOnce(temporary);
+    mocks.packageManager.getInstalledPath.mockImplementation((_source, scope) => {
+      if (scope === 'project') {
+        throw new Error('project scope is not trusted');
+      }
+      return undefined;
+    });
+    mocks.packageManager.resolveExtensionSources.mockResolvedValueOnce(temporary);
 
     await callPi('worker', 'use the extension', {
       ...sessionOptions('pi-sdk-extension'),
@@ -236,17 +241,18 @@ describe('Pi SDK client', () => {
       },
     });
 
-    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenNthCalledWith(
+    expect(mocks.packageManager.getInstalledPath).toHaveBeenNthCalledWith(
       1,
-      ['npm:example-extension'],
-      { local: true },
+      'npm:example-extension',
+      'project',
     );
-    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenNthCalledWith(
+    expect(mocks.packageManager.getInstalledPath).toHaveBeenNthCalledWith(
       2,
-      ['npm:example-extension'],
+      'npm:example-extension',
+      'user',
     );
-    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenNthCalledWith(
-      3,
+    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenCalledOnce();
+    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenCalledWith(
       ['npm:example-extension'],
       { temporary: true },
     );
@@ -261,21 +267,115 @@ describe('Pi SDK client', () => {
     });
   });
 
-  it('falls back to temporary npm extension sources when project and user scopes reject', async () => {
+  it('reuses an existing user-scope npm extension without resolving the npm source', async () => {
     mocks.resetTransient();
+    const userInstallPath = path.join(tmpdir(), 'pi-agent-test', 'npm', 'node_modules', 'example-extension');
+    const userScope = {
+      extensions: [{ enabled: true, path: path.join(tmpdir(), 'user-extension.ts') }],
+      skills: [],
+      prompts: [],
+      themes: [],
+    };
+    mocks.packageManager.getInstalledPath.mockImplementation((_source, scope) => (
+      scope === 'user' ? userInstallPath : undefined
+    ));
+    mocks.packageManager.resolveExtensionSources.mockResolvedValueOnce(userScope);
+
+    const response = await callPi('worker', 'use the extension', {
+      ...sessionOptions('pi-sdk-user-scope-extension'),
+      providerOptions: {
+        extensions: ['npm:example-extension'],
+      },
+    });
+
+    expect(response.status).toBe('done');
+    expect(mocks.packageManager.getInstalledPath).toHaveBeenNthCalledWith(
+      1,
+      'npm:example-extension',
+      'project',
+    );
+    expect(mocks.packageManager.getInstalledPath).toHaveBeenNthCalledWith(
+      2,
+      'npm:example-extension',
+      'user',
+    );
+    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenCalledOnce();
+    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenCalledWith(
+      [userInstallPath],
+      { temporary: true },
+    );
+    expect(mocks.packageManager.resolveExtensionSources).not.toHaveBeenCalledWith(
+      ['npm:example-extension'],
+      { local: true },
+    );
+    expect(mocks.packageManager.resolveExtensionSources).not.toHaveBeenCalledWith(
+      ['npm:example-extension'],
+    );
+    expect(mocks.packageManager.resolveExtensionSources).not.toHaveBeenCalledWith(
+      ['npm:example-extension'],
+      { temporary: true },
+    );
+    expect(mocks.getLoaderOptions()).toMatchObject({
+      additionalExtensionPaths: [path.join(tmpdir(), 'user-extension.ts')],
+    });
+  });
+
+  it('reuses an existing project-scope npm extension before checking user scope', async () => {
+    mocks.resetTransient();
+    const projectInstallPath = path.join(tmpdir(), 'takt-project', '.takt', 'npm', 'node_modules', 'example-extension');
+    const projectScope = {
+      extensions: [{ enabled: true, path: path.join(tmpdir(), 'project-extension.ts') }],
+      skills: [],
+      prompts: [],
+      themes: [],
+    };
+    mocks.packageManager.getInstalledPath.mockImplementation((_source, scope) => (
+      scope === 'project' ? projectInstallPath : undefined
+    ));
+    mocks.packageManager.resolveExtensionSources.mockResolvedValueOnce(projectScope);
+
+    const response = await callPi('worker', 'use the extension', {
+      ...sessionOptions('pi-sdk-project-scope-extension'),
+      providerOptions: {
+        extensions: ['npm:example-extension'],
+      },
+    });
+
+    expect(response.status).toBe('done');
+    expect(mocks.packageManager.getInstalledPath).toHaveBeenCalledOnce();
+    expect(mocks.packageManager.getInstalledPath).toHaveBeenCalledWith(
+      'npm:example-extension',
+      'project',
+    );
+    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenCalledOnce();
+    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenCalledWith(
+      [projectInstallPath],
+      { temporary: true },
+    );
+    expect(mocks.getLoaderOptions()).toMatchObject({
+      additionalExtensionPaths: [path.join(tmpdir(), 'project-extension.ts')],
+    });
+  });
+
+  it('falls back to temporary when an existing user-scope npm extension has no resources', async () => {
+    mocks.resetTransient();
+    const userInstallPath = path.join(tmpdir(), 'pi-agent-test', 'npm', 'node_modules', 'example-extension');
+    const empty = { extensions: [], skills: [], prompts: [], themes: [] };
     const temporary = {
       extensions: [{ enabled: true, path: path.join(tmpdir(), 'temporary-extension.ts') }],
       skills: [],
       prompts: [],
       themes: [],
     };
+    mocks.packageManager.getInstalledPath.mockImplementation((_source, scope) => (
+      scope === 'user' ? userInstallPath : undefined
+    ));
     mocks.packageManager.resolveExtensionSources
-      .mockRejectedValueOnce(new Error('project scope failed'))
-      .mockRejectedValueOnce(new Error('user scope failed'))
+      .mockResolvedValueOnce(empty)
       .mockResolvedValueOnce(temporary);
 
     const response = await callPi('worker', 'use the extension', {
-      ...sessionOptions('pi-sdk-reject-fallback'),
+      ...sessionOptions('pi-sdk-user-empty-fallback'),
       providerOptions: {
         extensions: ['npm:example-extension'],
       },
@@ -284,15 +384,11 @@ describe('Pi SDK client', () => {
     expect(response.status).toBe('done');
     expect(mocks.packageManager.resolveExtensionSources).toHaveBeenNthCalledWith(
       1,
-      ['npm:example-extension'],
-      { local: true },
+      [userInstallPath],
+      { temporary: true },
     );
     expect(mocks.packageManager.resolveExtensionSources).toHaveBeenNthCalledWith(
       2,
-      ['npm:example-extension'],
-    );
-    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenNthCalledWith(
-      3,
       ['npm:example-extension'],
       { temporary: true },
     );
@@ -301,150 +397,48 @@ describe('Pi SDK client', () => {
     });
   });
 
-  it('stops extension resolution after project scope rejects when abort is requested', async () => {
+  it('falls back to temporary when an existing user-scope npm extension rejects', async () => {
     mocks.resetTransient();
-    const abortController = new AbortController();
-    mocks.packageManager.resolveExtensionSources.mockImplementationOnce(async () => {
-      abortController.abort('cancelled during project scope rejection');
-      throw new Error('project scope failed');
-    });
+    const userInstallPath = path.join(tmpdir(), 'pi-agent-test', 'npm', 'node_modules', 'example-extension');
+    const temporary = {
+      extensions: [{ enabled: true, path: path.join(tmpdir(), 'temporary-extension.ts') }],
+      skills: [],
+      prompts: [],
+      themes: [],
+    };
+    mocks.packageManager.getInstalledPath.mockImplementation((_source, scope) => (
+      scope === 'user' ? userInstallPath : undefined
+    ));
+    mocks.packageManager.resolveExtensionSources
+      .mockRejectedValueOnce(new Error('user scope failed'))
+      .mockResolvedValueOnce(temporary);
 
     const response = await callPi('worker', 'use the extension', {
-      ...sessionOptions('pi-sdk-project-reject-abort'),
-      abortSignal: abortController.signal,
+      ...sessionOptions('pi-sdk-user-reject-fallback'),
       providerOptions: {
         extensions: ['npm:example-extension'],
       },
     });
 
-    expect(response.status).toBe('error');
-    expect(response.failureCategory).toBe('external_abort');
-    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenCalledTimes(1);
-    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenNthCalledWith(
-      1,
-      ['npm:example-extension'],
-      { local: true },
-    );
-    expect(mocks.packageManager.resolveExtensionSources).not.toHaveBeenCalledWith(
-      ['npm:example-extension'],
-    );
-    expect(mocks.packageManager.resolveExtensionSources).not.toHaveBeenCalledWith(
-      ['npm:example-extension'],
-      { temporary: true },
-    );
-    expect(mocks.resourceLoader).not.toHaveBeenCalled();
-    expect(mocks.createAgentSession).not.toHaveBeenCalled();
-  });
-
-  it('uses user-scope npm extension when project scope rejects', async () => {
-    mocks.resetTransient();
-    const userScope = {
-      extensions: [{ enabled: true, path: path.join(tmpdir(), 'user-extension.ts') }],
-      skills: [],
-      prompts: [],
-      themes: [],
-    };
-    mocks.packageManager.resolveExtensionSources
-      .mockRejectedValueOnce(new Error('project scope failed'))
-      .mockResolvedValueOnce(userScope);
-
-    const response = await callPi('worker', 'use the extension', {
-      ...sessionOptions('pi-sdk-project-reject-user-scope'),
-      providerOptions: {
-        extensions: ['npm:pi-cursor-sdk'],
-      },
-    });
-
     expect(response.status).toBe('done');
-    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenCalledTimes(2);
     expect(mocks.packageManager.resolveExtensionSources).toHaveBeenNthCalledWith(
       1,
-      ['npm:pi-cursor-sdk'],
-      { local: true },
+      [userInstallPath],
+      { temporary: true },
     );
     expect(mocks.packageManager.resolveExtensionSources).toHaveBeenNthCalledWith(
       2,
-      ['npm:pi-cursor-sdk'],
-    );
-    expect(mocks.packageManager.resolveExtensionSources).not.toHaveBeenCalledWith(
-      ['npm:pi-cursor-sdk'],
+      ['npm:example-extension'],
       { temporary: true },
     );
     expect(mocks.getLoaderOptions()).toMatchObject({
-      additionalExtensionPaths: [path.join(tmpdir(), 'user-extension.ts')],
+      additionalExtensionPaths: [path.join(tmpdir(), 'temporary-extension.ts')],
     });
   });
 
-  it('prefers a loadable user-scope npm extension over temporary install', async () => {
+  it('falls back to temporary when an existing user-scope npm extension has no enabled resources', async () => {
     mocks.resetTransient();
-    const empty = { extensions: [], skills: [], prompts: [], themes: [] };
-    const userScope = {
-      extensions: [{ enabled: true, path: path.join(tmpdir(), 'user-extension.ts') }],
-      skills: [],
-      prompts: [],
-      themes: [],
-    };
-    mocks.packageManager.resolveExtensionSources
-      .mockResolvedValueOnce(empty)
-      .mockResolvedValueOnce(userScope);
-
-    const response = await callPi('worker', 'use the extension', {
-      ...sessionOptions('pi-sdk-user-scope-extension'),
-      providerOptions: {
-        extensions: ['npm:pi-cursor-sdk'],
-      },
-    });
-
-    expect(response.status).toBe('done');
-    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenCalledTimes(2);
-    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenNthCalledWith(
-      1,
-      ['npm:pi-cursor-sdk'],
-      { local: true },
-    );
-    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenNthCalledWith(
-      2,
-      ['npm:pi-cursor-sdk'],
-    );
-    expect(mocks.packageManager.resolveExtensionSources).not.toHaveBeenCalledWith(
-      ['npm:pi-cursor-sdk'],
-      { temporary: true },
-    );
-    expect(mocks.getLoaderOptions()).toMatchObject({
-      additionalExtensionPaths: [path.join(tmpdir(), 'user-extension.ts')],
-    });
-  });
-
-  it('prefers a loadable project-scope npm extension before user and temporary scopes', async () => {
-    mocks.resetTransient();
-    const projectScope = {
-      extensions: [{ enabled: true, path: path.join(tmpdir(), 'project-extension.ts') }],
-      skills: [],
-      prompts: [],
-      themes: [],
-    };
-    mocks.packageManager.resolveExtensionSources.mockResolvedValueOnce(projectScope);
-
-    const response = await callPi('worker', 'use the extension', {
-      ...sessionOptions('pi-sdk-project-scope-extension'),
-      providerOptions: {
-        extensions: ['npm:pi-cursor-sdk'],
-      },
-    });
-
-    expect(response.status).toBe('done');
-    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenCalledOnce();
-    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenCalledWith(
-      ['npm:pi-cursor-sdk'],
-      { local: true },
-    );
-    expect(mocks.getLoaderOptions()).toMatchObject({
-      additionalExtensionPaths: [path.join(tmpdir(), 'project-extension.ts')],
-    });
-  });
-
-  it('falls through when a higher npm scope resolves only disabled resources', async () => {
-    mocks.resetTransient();
+    const userInstallPath = path.join(tmpdir(), 'pi-agent-test', 'npm', 'node_modules', 'example-extension');
     const disabledOnly = {
       extensions: [{ enabled: false, path: path.join(tmpdir(), 'disabled-extension.ts') }],
       skills: [],
@@ -457,13 +451,15 @@ describe('Pi SDK client', () => {
       prompts: [],
       themes: [],
     };
+    mocks.packageManager.getInstalledPath.mockImplementation((_source, scope) => (
+      scope === 'user' ? userInstallPath : undefined
+    ));
     mocks.packageManager.resolveExtensionSources
-      .mockResolvedValueOnce(disabledOnly)
       .mockResolvedValueOnce(disabledOnly)
       .mockResolvedValueOnce(temporary);
 
     const response = await callPi('worker', 'use the extension', {
-      ...sessionOptions('pi-sdk-disabled-only-fallback'),
+      ...sessionOptions('pi-sdk-user-disabled-fallback'),
       providerOptions: {
         extensions: ['npm:example-extension'],
       },
@@ -472,21 +468,59 @@ describe('Pi SDK client', () => {
     expect(response.status).toBe('done');
     expect(mocks.packageManager.resolveExtensionSources).toHaveBeenNthCalledWith(
       1,
-      ['npm:example-extension'],
-      { local: true },
+      [userInstallPath],
+      { temporary: true },
     );
     expect(mocks.packageManager.resolveExtensionSources).toHaveBeenNthCalledWith(
       2,
-      ['npm:example-extension'],
-    );
-    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenNthCalledWith(
-      3,
       ['npm:example-extension'],
       { temporary: true },
     );
     expect(mocks.getLoaderOptions()).toMatchObject({
       additionalExtensionPaths: [path.join(tmpdir(), 'temporary-extension.ts')],
     });
+  });
+
+  it('stops extension resolution after existing user-scope resolution aborts', async () => {
+    mocks.resetTransient();
+    const userInstallPath = path.join(tmpdir(), 'pi-agent-test', 'npm', 'node_modules', 'example-extension');
+    const abortController = new AbortController();
+    mocks.packageManager.getInstalledPath.mockImplementation((_source, scope) => (
+      scope === 'user' ? userInstallPath : undefined
+    ));
+    mocks.packageManager.resolveExtensionSources.mockImplementationOnce(async () => {
+      abortController.abort('cancelled during user-scope resolution');
+      throw new Error('user scope failed');
+    });
+
+    const response = await callPi('worker', 'use the extension', {
+      ...sessionOptions('pi-sdk-user-resolution-abort'),
+      abortSignal: abortController.signal,
+      providerOptions: {
+        extensions: ['npm:example-extension'],
+      },
+    });
+
+    expect(response.status).toBe('error');
+    expect(response.failureCategory).toBe('external_abort');
+    expect(mocks.packageManager.getInstalledPath).toHaveBeenNthCalledWith(
+      1,
+      'npm:example-extension',
+      'project',
+    );
+    expect(mocks.packageManager.getInstalledPath).toHaveBeenNthCalledWith(
+      2,
+      'npm:example-extension',
+      'user',
+    );
+    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenCalledTimes(1);
+    expect(mocks.packageManager.resolveExtensionSources).toHaveBeenNthCalledWith(
+      1,
+      [userInstallPath],
+      { temporary: true },
+    );
+    expect(mocks.resourceLoader).not.toHaveBeenCalled();
+    expect(mocks.createAgentSession).not.toHaveBeenCalled();
   });
 
   it.each([

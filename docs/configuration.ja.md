@@ -1156,7 +1156,9 @@ provider_options:
 ```
 
 - `extensions` には npm package、Git source、local path を指定できます。
-- 明示した source は TAKT 実行時に temporary resolution され、Pi settings には永続化されません。
+- 明示した npm source は既存の user scope install を再利用し、利用できない、または読み込めない場合だけ temporary resolution に fallback します。user scope への新規 install は行いません。
+- npm 以外の明示した source は TAKT 実行時に temporary resolution されます。
+- 明示した source は Pi settings には永続化されません。
 - `no_extensions` は extension 探索を無効にしますが、`extensions` に列挙した source は読み込みます。
 - その他の `no_*` オプションはそれぞれ対応するリソース種別の探索を無効にします。
 - 暗黙の project-local Pi extension は信頼せず、読み込みません。

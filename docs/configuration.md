@@ -1210,7 +1210,9 @@ provider_options:
 ```
 
 - `extensions` accepts npm packages, Git sources, and local paths.
-- Explicit sources are resolved temporarily for the TAKT run and are not persisted into Pi settings.
+- Existing user-scope installs are reused for explicit npm sources; when one is unavailable or not loadable, TAKT falls back to temporary resolution without installing into the user scope.
+- Explicit non-npm sources are resolved temporarily for the TAKT run.
+- Explicit sources are not persisted into Pi settings.
 - `no_extensions` disables extension discovery but still loads the sources listed in `extensions`.
 - The other `no_*` options disable discovery of their respective resource types.
 - Implicit project-local Pi extensions are not trusted or loaded.

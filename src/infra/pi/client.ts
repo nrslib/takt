@@ -272,35 +272,45 @@ async function resolveExtensionSourcePaths(
     return sourcePaths;
   }
 
-  const scopeAttempts: Array<() => Promise<ResolvedPaths>> = [
-    () => packageManager.resolveExtensionSources([source], { local: true }),
-    () => packageManager.resolveExtensionSources([source]),
-    () => packageManager.resolveExtensionSources([source], { temporary: true }),
-  ];
-  for (let scopeIndex = 0; scopeIndex < scopeAttempts.length; scopeIndex++) {
-    const attempt = scopeAttempts[scopeIndex]!;
-    const isTemporaryScope = scopeIndex === scopeAttempts.length - 1;
-    let sourcePaths: ResolvedPaths;
-    if (isTemporaryScope) {
-      sourcePaths = await attempt();
-    } else {
-      try {
-        sourcePaths = await attempt();
-      } catch {
-        if (isAbortRequested(abortSignal)) {
-          throw new Error('Pi session aborted');
-        }
-        continue;
-      }
+  for (const scope of ['project', 'user'] as const) {
+    let installedPath: string | undefined;
+    try {
+      installedPath = packageManager.getInstalledPath(source, scope);
+    } catch {
+      // Project lookup can reject when project trust is disabled. A scope lookup
+      // failure must not prevent checking the next scope or the temporary fallback.
     }
     if (isAbortRequested(abortSignal)) {
       throw new Error('Pi session aborted');
     }
-    if (countEnabledResolvedResources(sourcePaths) > 0) {
-      return sourcePaths;
+
+    if (installedPath) {
+      try {
+        // Resolve the discovered absolute path as a local source. Passing the original
+        // npm spec here would make the SDK install a missing package into that scope.
+        const sourcePaths = await packageManager.resolveExtensionSources(
+          [installedPath],
+          { temporary: true },
+        );
+        if (isAbortRequested(abortSignal)) {
+          throw new Error('Pi session aborted');
+        }
+        if (countEnabledResolvedResources(sourcePaths) > 0) {
+          return sourcePaths;
+        }
+      } catch {
+        if (isAbortRequested(abortSignal)) {
+          throw new Error('Pi session aborted');
+        }
+      }
     }
   }
-  return { extensions: [], skills: [], prompts: [], themes: [] };
+
+  const sourcePaths = await packageManager.resolveExtensionSources([source], { temporary: true });
+  if (isAbortRequested(abortSignal)) {
+    throw new Error('Pi session aborted');
+  }
+  return sourcePaths;
 }
 
 async function resolvePiResources(
