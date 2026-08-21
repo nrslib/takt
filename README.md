@@ -40,7 +40,7 @@ Instead of asking one agent to remember the whole process, TAKT gives each step 
 - Execute queued tasks in isolated worktrees and inspect logs and reports afterward
 - Use Claude Code, Claude SDK, Codex SDK, OpenCode SDK, Pi SDK, the official DeepSeek Harness SDK, Cursor, GitHub Copilot CLI, or Kiro as providers
 
-**T**AKT **A**gent **K**oordination **T**opology orchestrates multiple AI agents with structured review loops, managed prompts, and guardrails.
+**T**AKT **A**gent **K**oordination **T**opology orchestrates multiple AI agents with review loops, managed prompts, and per-step permissions.
 
 Talk to AI to define what you want, queue it as a task, and run it with `takt run`. Planning, implementation, review, and fix loops are defined in YAML workflow files, so the process is not left to the agent's discretion. TAKT coordinates Claude Code, Codex, OpenCode, Pi, the official DeepSeek Harness SDK, Cursor, GitHub Copilot CLI, and Kiro CLI as agents with different roles, permissions, and context.
 
@@ -50,7 +50,7 @@ TAKT is built with TAKT itself (dogfooding).
 
 ## Why TAKT
 
-AI coding agents are powerful, but they do not automatically create a stable development process. In long-running work, they forget instructions, accumulate polluted context, blur implementation and review responsibilities, and often force humans to repeat the same feedback again and again. That wears people down.
+AI coding agents do not automatically create a stable development process. In long-running work, they forget instructions, accumulate polluted context, blur implementation and review responsibilities, and often force humans to repeat the same feedback again and again.
 
 Adding more rules to prompts, `CLAUDE.md`, or skills can help, but it cannot enforce the process. Whether the rules are followed is still left to the agent's behavior.
 
@@ -60,9 +60,7 @@ Workflows define the phases, and each step receives its own persona, policy, kno
 
 Reviews cannot be silently skipped. Findings route work back to fix steps, and human judgment can be requested when needed. Tasks run in isolated worktrees, and each step leaves logs and reports so the path from task to PR remains traceable.
 
-At its core, TAKT runs reusable agent processes built from roles, phases, judgments, and feedback loops.
-
-The goal is simple: make development processes reusable, reviewable, and reproducible without depending on constant human intervention.
+TAKT runs all of this as a reusable agent process built from roles, phases, judgments, and feedback loops, so the development process stays reviewable and reproducible without constant human intervention.
 
 ## Try It in 5 Minutes
 
@@ -418,7 +416,7 @@ Workflow definitions are stored under `workflows/`.
 
 ## Adopting Spec-Driven Development
 
-TAKT enforces phase transitions declaratively as a YAML state machine, formalizes the artifact of each phase with output contracts, and routes deviations back via parallel review and fix loops. This structure is particularly well-suited for users who follow Spec-Driven Development (SDD) and keep the spec at the center of the process. Once the spec is well-defined, the AI cannot silently skip a phase, drop an acceptance criterion, or claim "done" without passing the verification gate.
+TAKT enforces phase transitions declaratively as a YAML state machine, formalizes the artifact of each phase with output contracts, and routes deviations back via parallel review and fix loops. This structure suits Spec-Driven Development (SDD), where the spec stays at the center of the process. Once the spec is defined, the workflow enforces phase transitions, routes detected deviations back to fix steps, and does not complete until the verification gate passes.
 
 For users who want to adopt SDD, the community provides [j5ik2o/takt-sdd](https://github.com/j5ik2o/takt-sdd) as a ready-made implementation. It ships workflows for Requirements → Gap Analysis → Design → Tasks → Implementation → Validation, plus an OpenSpec-style change-proposal flow. Install in one command:
 

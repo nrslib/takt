@@ -314,7 +314,7 @@ system promptに配置される。役割の定義、境界、行動姿勢のみ�
 
 ### なぜこの5つか？
 
-**Persona** と **Instruction** は最低限必要なもの — エージェントが誰で、何をすべきかを定義する必要がある。しかし実際には、さらに3つの関心が独立した軸として現れる。
+**Persona** と **Instruction** は最低限必要なもの — エージェントが誰で、何をすべきかを定義する必要がある。しかし実際にはさらに3つの関心が独立した軸として現れる。
 
 - **Policy** はタスクをまたがって適用される規約・基準を捉える。「何を守るか」を定義する関心であり、禁止事項（フォールバック濫用の禁止、未使用コードの禁止）、品質基準（REJECT/APPROVE判定）、優先順位（正確性 > 速度）を含む。コーディングポリシーは機能実装でもバグ修正でも同じように適用される。ポリシーは「横断的関心事」であり、作業内容に関係なく守るべきルールを規定する。
 
@@ -335,7 +335,7 @@ Faceted Promptingの中核メカニズムは**宣言的な合成**である。�
 
 ### TAKTでの実装例
 
-[TAKT](https://github.com/nrslib/takt) は Faceted Prompting を YAML ベースの workflow 定義で実装している。builtin の各ファセットは、各 step から bare name で直接参照できる。セクションマップは「名前とファイル名が異なる」場合のカスタムエイリアス用途でのみ任意で使う。
+[TAKT](https://github.com/nrslib/takt) は Faceted Prompting を YAML ベースの workflow 定義で実装している。builtin の各ファセットは各 step から bare name で直接参照できる。セクションマップは「名前とファイル名が異なる」場合のカスタムエイリアス用途でのみ任意で使う。
 
 ```yaml
 name: my-workflow
@@ -415,4 +415,4 @@ workflow step は scalar の `instruction` フィールドで1つの instruction
 
 ## まとめ
 
-Faceted Promptingは、関心の分離（Separation of Concerns）をAIプロンプト工学に適用するデザインパターンである。プロンプトを5つの独立した関心 — Persona、Policy、Instruction、Knowledge、Output Contract — に分解し、宣言的に合成することで、再利用可能で保守しやすく透明なマルチエージェントワークフローを実現する。
+Faceted Promptingは関心の分離（Separation of Concerns）をAIプロンプト工学に適用するデザインパターンである。プロンプトを5つの独立した関心 — Persona、Policy、Instruction、Knowledge、Output Contract — に分解し、宣言的に合成することで、再利用可能で保守しやすく透明なマルチエージェントワークフローを実現する。

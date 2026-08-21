@@ -12,12 +12,12 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 | `maintenance` | 変更範囲外の既存コードと契約を尊重し、因果関係のある差分に限定して進める保守開発ワークフロー。 |
 | `simple` | pure と同じ最小構造に、変更内容に応じて TAKT がドメインファセットを自動選択して注入する軽量開発ワークフロー。AI アンチパターンとアーキテクチャの指針は常に含まれる。 |
 | `pure` | ドメインファセットを注入せず、強いモデルの判断力を信頼する素の開発ワークフロー。利用可能な関連SKILLをモデル自身が選び、テスト先行の実装、レビュー、修正、要件充足の最終確認を最小限の構成で行う。 |
-| `takt-default` | TAKT固有ファセットと実装 companion を、共通コアの裁定・修正検証付きピアレビュー収束ループ、要件の最終確認へ注入する。 |
-| `takt-default-team` | takt-default の計画・テスト・レビュー・最終ゲート契約を維持し、現行 schema 制約に合わせて、実装・修正・再修正を dynamic facets と companion を使わない静的な Team Leader coder execution へ切り替える TAKT 開発 workflow です。 |
+| `takt-default` | TAKT固有ファセットと実装 companion を共通コアの裁定・修正検証付きピアレビュー収束ループ、要件の最終確認へ注入する。 |
+| `takt-default-team` | takt-default の計画・テスト・レビュー・最終ゲート契約を維持し、現行 schema 制約に合わせて実装・修正・再修正を dynamic facets と companion を使わない静的な Team Leader coder execution へ切り替える TAKT 開発 workflow です。 |
 | `review` | 多角レビュー - 変更内容に応じて専門レビュアーを自動選択して並列レビューし、supervisor がレビュー結果を統合する |
 | `review-fix` | 多角レビューで変更内容に応じたレビュワーを動的に選択し、標準 workflow と同じ裁定・検証付き修正ループと要件の最終確認で収束させる。 |
 
-`default` / `takt-default` wrapper は、汎用または TAKT 固有の外部 security-review facet pool を、それを消費する reviewer suite だけへ束縛します。pool 参照は実際に消費する suite だけへ渡され、共有の development / peer-review workflow 契約は変更しません。dynamic facet selection の詳細（selector の実行順、parallel の子、resume の挙動）は [Workflow Guide](./workflows.ja.md) の Dynamic Facet Selection を参照してください。
+`default` / `takt-default` wrapper は汎用または TAKT 固有の外部 security-review facet pool を、それを消費する reviewer suite だけへ束縛します。pool 参照は実際に消費する suite だけへ渡され、共有の development / peer-review workflow 契約は変更しません。dynamic facet selection の詳細（selector の実行順、parallel の子、resume の挙動）は [Workflow Guide](./workflows.ja.md) の Dynamic Facet Selection を参照してください。
 
 ## 全ビルトイン Workflow 一覧
 
@@ -40,8 +40,8 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 |  | `audit-security` | セキュリティ全件監査。プロジェクトの全ファイルを1つずつ読んでセキュリティレビューする |
 |  | `audit-architecture` | アーキテクチャの全件監査。モジュールと境界を棚卸しし、コード修正なしで Issue 直貼り可能なレポートを作成する |
 | 🏗️ インフラストラクチャ | `terraform` | Terraform IaC 開発ワークフロー（plan → implement → 並列レビュー → 最終ゲート → 修正 → 完了） |
-| 🎵 TAKT開発 | `takt-default` | TAKT固有ファセットと実装 companion を、共通コアの裁定・修正検証付きピアレビュー収束ループ、要件の最終確認へ注入する。 |
-|  | `takt-default-team` | takt-default の計画・テスト・レビュー・最終ゲート契約を維持し、現行 schema 制約に合わせて、実装・修正・再修正を dynamic facets と companion を使わない静的な Team Leader coder execution へ切り替える TAKT 開発 workflow です。 |
+| 🎵 TAKT開発 | `takt-default` | TAKT固有ファセットと実装 companion を共通コアの裁定・修正検証付きピアレビュー収束ループ、要件の最終確認へ注入する。 |
+|  | `takt-default-team` | takt-default の計画・テスト・レビュー・最終ゲート契約を維持し、現行 schema 制約に合わせて実装・修正・再修正を dynamic facets と companion を使わない静的な Team Leader coder execution へ切り替える TAKT 開発 workflow です。 |
 |  | `auto-improvement-loop` | PR・Issue・新規改善を巡回しながら次の task を積み続ける orchestration loop workflow。 |
 |  | `review-takt-default` | TAKT開発向け多角レビュー（AIアンチパターン・コーディングレビューを含む） |
 |  | `review-fix-takt-default` | レビュー対象を収集してから、TAKT固有ファセットを共通開発フローへ注入するワークフロー。 |
@@ -93,9 +93,9 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 |  | `magi` | MAGI合議システム - 3つの観点から分析し多数決で判定 |
 |  | `compound-eye` | 複眼レビュー - 同じ指示を独立に割り当てた2つの eye へ同時に投げ、両者の回答を統合する。各 eye のプロバイダーは runtime.yaml（provider.targets.steps -> eye1 / eye2）で割り当てる。workflow 自身はプロバイダー名を持たない。 |
 
-ローカルモデルだけで既存 workflow を動かす場合は、`runtime.yaml` の
+ローカルモデルだけで既存 workflow を動かす場合は`runtime.yaml` の
 `provider.defaults` または `provider.targets` で provider/model を割り当てます。
-カスタムのハイブリッド構成では、通常の `review` step をローカル provider へ
+カスタムのハイブリッド構成では通常の `review` step をローカル provider へ
 振り分け、高信頼 provider へ戻す step に後ろの `final-gate` タグを付けます。
 workflow YAML 自体には provider/model/provider-options field はありません。
 
@@ -171,4 +171,4 @@ persona_providers:
   ai-antipattern-reviewer: claude   # レビューアーは Claude を維持
 ```
 
-この設定はすべての workflow にグローバルに適用されます。指定された persona を使用する step は、実行中の workflow に関係なく、対応する provider にルーティングされます。
+この設定はすべての workflow にグローバルに適用されます。指定された persona を使用する step は実行中の workflow に関係なく、対応する provider にルーティングされます。
