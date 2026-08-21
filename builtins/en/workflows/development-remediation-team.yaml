@@ -127,10 +127,10 @@ steps:
     rules:
       - condition: verified
         next: COMPLETE
-      - condition: incomplete
-        next: fix-retry
-      - condition: plan_invalid
+      - condition: plan_invalid — The fix plan omits a required member, state, or path; includes an out-of-scope path; or has a defective assumption, boundary, method, or evidentiary power. This includes cases that also have implementation or evidence gaps
         next: fix-plan
+      - condition: incomplete — The fix plan has no defect, but a planned obligation has an implementation or evidence gap
+        next: fix-retry
   - name: fix-retry
     capabilities: [edit, enable-skills]
     tags: [coding, coding-leader]

@@ -29,10 +29,11 @@ tests:
           the RunResult source of truth and distinguishes both facts: `failed`
           is already in the plan but remains unimplemented (an `incomplete`
           implementation gap), while `cancelled` is an applicable terminal
-          state omitted from the plan (a `plan_invalid` plan gap). The overall
-          result must be `plan_invalid`, while still listing the `failed`
-          implementation gap so the next plan/fix cycle does not lose it. Fail
-          if it trusts the plan's state list, reports only one of the two gaps,
+          state omitted from the plan (a `plan_invalid` plan gap). It must retain
+          both gaps independently so the next plan/fix cycle does not lose the
+          planned implementation gap. Overall workflow-result selection is not
+          part of this Phase 1 source-discovery evaluation. Fail if it trusts
+          the plan's state list, reports only one of the two gaps,
           or turns the adjacent progress-telemetry contract into a remediation
           target, plan defect, or implementation/evidence gap. Merely checking
           it as the fix plan's explicit unchanged preservation boundary is

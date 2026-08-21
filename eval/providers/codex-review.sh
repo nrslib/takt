@@ -13,14 +13,14 @@ else
   work_dir="$2"
   prompt="$3"
 fi
-raw_timeout_seconds="${CODEX_REVIEW_TIMEOUT_SECONDS:-900}"
-if [[ ! "$raw_timeout_seconds" =~ ^0*([1-9][0-9]{0,6})$ ]]; then
-  echo "CODEX_REVIEW_TIMEOUT_SECONDS must be an integer from 1 through 2147483" >&2
+raw_idle_timeout_seconds="${CODEX_REVIEW_IDLE_TIMEOUT_SECONDS:-${CODEX_REVIEW_TIMEOUT_SECONDS:-900}}"
+if [[ ! "$raw_idle_timeout_seconds" =~ ^0*([1-9][0-9]{0,6})$ ]]; then
+  echo "CODEX_REVIEW_IDLE_TIMEOUT_SECONDS must be an integer from 1 through 2147483" >&2
   exit 2
 fi
-timeout_seconds="${BASH_REMATCH[1]}"
-if [ "$timeout_seconds" -gt 2147483 ]; then
-  echo "CODEX_REVIEW_TIMEOUT_SECONDS must be an integer from 1 through 2147483" >&2
+idle_timeout_seconds="${BASH_REMATCH[1]}"
+if [ "$idle_timeout_seconds" -gt 2147483 ]; then
+  echo "CODEX_REVIEW_IDLE_TIMEOUT_SECONDS must be an integer from 1 through 2147483" >&2
   exit 2
 fi
 codex_pid=''
@@ -28,7 +28,8 @@ watchdog_pid=''
 tmp_dir=$(mktemp -d)
 out="$tmp_dir/output"
 prompt_file="$tmp_dir/prompt"
-timeout_marker="$tmp_dir/timed-out"
+event_log="$tmp_dir/events.jsonl"
+idle_marker="$tmp_dir/idle-timed-out"
 
 cleanup() {
   trap - INT TERM
@@ -55,67 +56,56 @@ printf '%s' "$prompt" > "$prompt_file"
 
 set -m
 codex exec -m "$model" -s read-only --skip-git-repo-check \
-  -c "model_reasoning_effort=$reasoning_effort" -o "$out" - < "$prompt_file" >/dev/null 2>&1 &
+  -c "model_reasoning_effort=$reasoning_effort" --json -o "$out" - \
+  < "$prompt_file" >"$event_log" 2>&1 &
 codex_pid=$!
 set +m
 
 node -e '
-  const { writeFileSync } = require("node:fs");
+  const { statSync, writeFileSync } = require("node:fs");
   const pid = Number(process.argv[1]);
-  const timeoutMs = Number(process.argv[2]) * 1000;
-  const timeoutMarker = process.argv[3];
-  let timedOut = false;
-  let failed = false;
-  process.on("SIGTERM", () => {
-    if (!timedOut) process.exit(0);
-  });
-  setTimeout(() => {
-    timedOut = true;
+  const idleMs = Number(process.argv[2]) * 1000;
+  const idleMarker = process.argv[3];
+  const activityFile = process.argv[4];
+  let lastActivity = Date.now();
+  let lastObservedMtime = 0;
+
+  const poll = setInterval(() => {
+    let observedMtime = 0;
     try {
-      writeFileSync(timeoutMarker, "");
-    } catch (error) {
-      console.error(`failed to record timeout: ${error.message}`);
-      failed = true;
+      observedMtime = statSync(activityFile).mtimeMs;
+    } catch {}
+    if (observedMtime > lastObservedMtime) {
+      lastObservedMtime = observedMtime;
+      lastActivity = Date.now();
+      return;
     }
-    try {
-      process.kill(-pid, "SIGTERM");
-    } catch (error) {
-      console.error(`failed to terminate Codex process group: ${error.message}`);
-      process.kill(process.ppid, "SIGTERM");
-      process.exit(1);
-    }
+    if (Date.now() - lastActivity < idleMs) return;
+
+    clearInterval(poll);
+    try { process.kill(-pid, "SIGTERM"); } catch { process.exit(0); }
+    writeFileSync(idleMarker, "");
     setTimeout(() => {
-      try {
-        process.kill(-pid, "SIGKILL");
-      } catch (error) {
-        if (error.code !== "ESRCH") {
-          console.error(`failed to kill Codex process group: ${error.message}`);
-          failed = true;
-        }
-      }
-      process.exit(failed ? 1 : 0);
+      try { process.kill(-pid, "SIGKILL"); } catch {}
+      process.exit(0);
     }, 15_000);
-  }, timeoutMs);
-' "$codex_pid" "$timeout_seconds" "$timeout_marker" >/dev/null &
+  }, 1_000);
+' "$codex_pid" "$idle_timeout_seconds" "$idle_marker" "$event_log" >/dev/null 2>&1 &
 watchdog_pid=$!
 
 status=0
 wait "$codex_pid" || status=$?
+codex_pid=''
 kill -TERM "$watchdog_pid" 2>/dev/null || true
-watchdog_status=0
-wait "$watchdog_pid" 2>/dev/null || watchdog_status=$?
+wait "$watchdog_pid" 2>/dev/null || true
 watchdog_pid=''
-if [ "$watchdog_status" -ne 0 ] && { [ -f "$timeout_marker" ] || [ "$watchdog_status" -ne 143 ]; }; then
-  echo "codex review watchdog failed (exit ${watchdog_status})" >&2
-  exit 125
-fi
-if [ -f "$timeout_marker" ]; then
-  echo "codex review timed out after ${timeout_seconds}s" >&2
+if [ -f "$idle_marker" ]; then
+  echo "codex review made no observable progress for ${idle_timeout_seconds}s" >&2
   exit 124
 fi
 if [ "$status" -ne 0 ]; then
   echo "codex review failed (exit ${status})" >&2
+  tail -n 40 "$event_log" >&2
   exit "$status"
 fi
-codex_pid=''
 cat "$out"

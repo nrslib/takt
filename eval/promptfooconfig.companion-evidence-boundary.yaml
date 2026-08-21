@@ -16,7 +16,7 @@ providers:
       model_reasoning_effort: low
 
 tests:
-  - description: 'moderator: merge duplicate proof, reject adjacent scope, and reject unsupported hidden-path claims'
+  - description: 'moderator: reject duplicate proof, adjacent scope, and unsupported hidden-path claims'
     vars:
       task: file://cases/companion-evidence-boundary.md
       previous_response: ''
@@ -25,10 +25,11 @@ tests:
         metric: companion-moderator/positive-reverse-boundary
         value: |
           Judge the response as evidence adjudication, not an early repository
-          scan. Pass only if it (positive) merges C-01 and C-02 as duplicate
-          evidence for one CLI normalization-family gap, (reverse) rejects C-03
-          because telemetry labels are a separate family, and (boundary)
-          rejects or marks C-04 unsupported because no evidence establishes the
-          hidden mobile path. Fail if it invents a new finding, claims to have
-          scanned the repository, or accepts an item merely because it is
-          nearby.
+          scan. Pass only if it (positive) accepts C-01 as the evidenced CLI
+          normalization-family gap and rejects C-02 as a duplicate within the
+          current list without merging or replacing either finding, (reverse)
+          rejects C-03 because telemetry labels are a separate family, and
+          (boundary) rejects or marks C-04 unsupported because no evidence
+          establishes the hidden mobile path. Fail if it invents a new finding,
+          claims to have scanned the repository, merges findings, or accepts an
+          item merely because it is nearby.
