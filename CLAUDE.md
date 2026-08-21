@@ -127,7 +127,7 @@ builtins/{en,ja}/       Bundled facets + workflows (read from dist/ at runtime)
 
 ## TypeScript / testing
 
-- ESM (`"type": "module"`); import paths use `.js` extensions in `.ts` sources. Strict TS with `noUncheckedIndexedAccess`. Node ≥ 18.19.
+- ESM (`"type": "module"`); import paths use `.js` extensions in `.ts` sources. Strict TS with `noUncheckedIndexedAccess`. Node ≥ 22.22 (floor set by dependency engines — pi SDK needs 22.19, dev-only posthog-node/promptfoo need 22.22; see `engines` in package.json).
 - Unit and integration tests live under `src/__tests__/` (Vitest); E2E specs under `e2e/` with per-provider configs.
 
 ## Debugging

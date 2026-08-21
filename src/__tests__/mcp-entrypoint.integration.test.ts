@@ -16,7 +16,11 @@ describe('MCP stdio entrypoint integration', () => {
       command: process.execPath,
       args: [
         'node_modules/.bin/vite-node',
-        '--script',
+        // --script mode ignores --config, so run in normal mode: the config
+        // sets an esbuild target that lowers `using` declarations, which raw
+        // Node < 24 cannot parse.
+        '--config',
+        'src/__tests__/helpers/vite-node.config.ts',
         SOURCE_STDIO_ENTRYPOINT_RUNNER,
       ],
       cwd: process.cwd(),

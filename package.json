@@ -136,7 +136,7 @@
   "homepage": "https://github.com/nrslib/takt#readme",
   "type": "module",
   "engines": {
-    "node": ">=24.15.0"
+    "node": ">=22.22.0"
   },
   "files": [
     "dist/",
@@ -171,7 +171,7 @@
   "devDependencies": {
     "@eslint/js": "^9.39.2",
     "@types/cross-spawn": "^6.0.6",
-    "@types/node": "^24.0.0",
+    "@types/node": "^22.0.0",
     "@types/wanakana": "^4.0.6",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",

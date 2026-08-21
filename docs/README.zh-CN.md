@@ -101,7 +101,7 @@ takt list
 
 ## 要求
 
-TAKT 需要 Node.js `>=24.15.0`。
+TAKT 需要 Node.js `>=22.22.0`。
 
 所选 provider 决定是否需要外部 CLI，或者是否只用 Node.js 即可通过 TypeScript SDK 运行。
 
