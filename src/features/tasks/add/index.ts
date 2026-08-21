@@ -25,6 +25,7 @@ import {
   type SaveEnqueuedTaskFileOptions,
 } from '../../../infra/task/enqueueService.js';
 import {
+  buildTaskOrderContent,
   prepareTaskSpecDirectory,
   type TaskAttachment,
 } from '../attachments.js';
@@ -34,6 +35,11 @@ const log = createLogger('add-task');
 
 export type SaveTaskOptions = SaveEnqueuedTaskFileOptions & {
   attachments?: TaskAttachment[];
+};
+
+type SavedInteractiveTask = Awaited<ReturnType<typeof saveTaskFile>> & {
+  taskContent: string;
+  sourceIssueNumber?: number;
 };
 
 export async function saveTaskFile(
@@ -93,7 +99,7 @@ export async function saveTaskFromInteractive(
     presetSettings?: WorktreeSettings;
     attachments?: TaskAttachment[];
   },
-): Promise<{ taskName: string; tasksFile: string } | undefined> {
+): Promise<SavedInteractiveTask | undefined> {
   if (options?.confirmAtEndMessage) {
     const approved = await confirm(options.confirmAtEndMessage, true);
     if (!approved) {
@@ -109,7 +115,11 @@ export async function saveTaskFromInteractive(
     ...(options?.attachments ? { attachments: options.attachments } : {}),
   });
   displayTaskCreationResult(created, settings, workflow);
-  return created;
+  return {
+    ...created,
+    taskContent: buildTaskOrderContent(task, options?.attachments),
+    ...(options?.issue !== undefined ? { sourceIssueNumber: options.issue } : {}),
+  };
 }
 
 export async function createIssueAndSaveTask(

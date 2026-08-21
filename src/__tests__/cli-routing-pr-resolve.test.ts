@@ -3,14 +3,21 @@ import { resolveAssistantProviderModelFromConfig as realResolveAssistantProvider
 
 let mockPipelineMode = false;
 
+const { mockConfirm, mockCommentOnIssue } = vi.hoisted(() => ({
+  mockConfirm: vi.fn(),
+  mockCommentOnIssue: vi.fn(),
+}));
+
 vi.mock('../shared/ui/index.js', () => ({
   info: vi.fn(),
   success: vi.fn(),
+  warn: vi.fn(),
   error: vi.fn(),
   withProgress: vi.fn(async (_start, _done, operation) => operation()),
 }));
 
 vi.mock('../shared/prompt/index.js', () => ({
+  confirm: mockConfirm,
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -47,6 +54,7 @@ vi.mock('../infra/git/index.js', () => ({
     checkCliStatus: (...args: unknown[]) => mockCheckCliStatus(...args),
     fetchIssue: (...args: unknown[]) => mockFetchIssue(...args),
     fetchPrReviewComments: (...args: unknown[]) => mockFetchPrReviewComments(...args),
+    commentOnIssue: (...args: unknown[]) => mockCommentOnIssue(...args),
   }),
   parseIssueNumbers: vi.fn(() => []),
   formatIssueAsTask: vi.fn(),
@@ -205,6 +213,7 @@ beforeEach(() => {
   mockResolveAssistantConfigLayers.mockReturnValue({ local: {}, global: {} });
   mockLoadPersonaSessionsFn.mockReturnValue({});
   mockResolveAgentOverrides.mockReturnValue(undefined);
+  mockConfirm.mockResolvedValue(true);
 });
 
 describe('interactive image attachment routing', () => {
@@ -354,6 +363,8 @@ describe('PR resolution in routing', () => {
           }),
         }),
       );
+      expect(mockConfirm).not.toHaveBeenCalled();
+      expect(mockCommentOnIssue).not.toHaveBeenCalled();
     });
 
     it('should exit with a controlled error when a saved PR task has no head branch', async () => {

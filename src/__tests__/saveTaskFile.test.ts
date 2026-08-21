@@ -470,6 +470,29 @@ describe('saveTaskFromInteractive', () => {
     expect(task.issue).toBe(42);
   });
 
+  it('should return the saved task content and source issue after persistence', async () => {
+    const taskContent = 'Confirmed task instructions\nwith full details';
+
+    const result = await saveTaskFromInteractive(testDir, taskContent, 'default', {
+      issue: 42,
+      presetSettings: {
+        worktree: true,
+        autoPr: false,
+        draftPr: false,
+      },
+    });
+
+    const savedTask = loadTasks(testDir).tasks[0]!;
+    expect(result).toEqual({
+      taskName: savedTask.name,
+      tasksFile: path.join(testDir, '.takt', 'tasks.yaml'),
+      taskContent,
+      sourceIssueNumber: 42,
+    });
+    expect(fs.existsSync(path.join(testDir, '.takt', 'tasks.yaml'))).toBe(true);
+    expect(savedTask.issue).toBe(42);
+  });
+
   it('should record PR review metadata and the resolved PR head branch in tasks.yaml', async () => {
     await saveTaskFromInteractive(testDir, 'Fix PR review comments', 'default', {
       prNumber: 456,
@@ -502,7 +525,7 @@ describe('saveTaskFromInteractive', () => {
   it('should persist image attachments when saving an interactive task with preset settings', async () => {
     const attachment = createTempAttachment(testDir, 'image-1.png', 'interactive-image');
 
-    await saveTaskFromInteractive(testDir, 'Review [Image #1].', 'default', {
+    const result = await saveTaskFromInteractive(testDir, 'Review [Image #1].', 'default', {
       presetSettings: { worktree: true, autoPr: false, draftPr: false },
       attachments: [attachment],
     });
@@ -512,9 +535,25 @@ describe('saveTaskFromInteractive', () => {
     const orderContent = fs.readFileSync(path.join(taskDir, 'order.md'), 'utf-8');
     expect(task.workflow).toBe('default');
     expect(task.worktree).toBe(true);
+    expect(result?.taskContent).toBe(orderContent);
     expect(orderContent).toContain('Review [Image #1].');
     expect(orderContent).toContain('- [Image #1]: `attachments/image-1.png`');
     expect(fs.readFileSync(path.join(taskDir, 'attachments', 'image-1.png'), 'utf-8')).toBe('interactive-image');
+  });
+
+  it('should keep task content unchanged when attachments are empty', async () => {
+    const taskContent = 'Review the login flow.';
+
+    const result = await saveTaskFromInteractive(testDir, taskContent, 'default', {
+      presetSettings: { worktree: true, autoPr: false, draftPr: false },
+      attachments: [],
+    });
+
+    const task = loadTasks(testDir).tasks[0]!;
+    const taskDir = path.join(testDir, String(task.task_dir));
+    const orderContent = fs.readFileSync(path.join(taskDir, 'order.md'), 'utf-8');
+    expect(orderContent).toBe(taskContent);
+    expect(result?.taskContent).toBe(orderContent);
   });
 
   describe('with confirmAtEndMessage', () => {

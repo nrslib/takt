@@ -35,6 +35,7 @@ function createTestGitProvider(overrides: Partial<GitProvider> = {}): GitProvide
     findExistingPr: vi.fn(() => undefined),
     createPullRequest: vi.fn(() => ({ success: true, url: 'https://example.com/pull/1' })),
     commentOnPr: vi.fn(() => ({ success: true })),
+    commentOnIssue: vi.fn(() => ({ success: true })),
     closePr: vi.fn(() => ({ success: true })),
     mergePr: vi.fn(() => ({ success: true })),
     ...overrides,
