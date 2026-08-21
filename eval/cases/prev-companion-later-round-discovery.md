@@ -8,4 +8,4 @@ Implementer update:
 - The web path now calls `normalizeRequestToken`; the reported duplication is considered repaired.
 - No change was made to telemetry.
 
-An outer workflow record refers to `finding_id: FC-17`, `family_tag: request-token`, and a `resolved` disposition. Those workflow lifecycle labels are not Companion review-item state.
+An unrelated outer workflow record contains the labels `finding_id: FC-17`, `family_tag: request-token`, and `resolved`. They are context data only; do not copy them into the current Companion review result.

@@ -641,7 +641,7 @@ async function main() {
     };
 
     const instruction = companionSystemPrompt !== undefined
-      ? `${companionSystemPrompt}\n\n## Supplied work-in-progress context\n${TASK_MARKER}\n\n## Prior findings and notes\n${PREV_MARKER}`
+      ? `${companionSystemPrompt}\n\n## Supplied work-in-progress context\n${TASK_MARKER}\n\n## Earlier call context\n${PREV_MARKER}`
       : resolvedPhase === 'phase2'
       ? new ReportInstructionBuilder(target, {
           cwd: runDir,

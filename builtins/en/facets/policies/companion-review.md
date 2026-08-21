@@ -54,7 +54,8 @@ Report a different problem or regression independently when the current state, i
 
 ## Reporting
 
+- Put each confirmed problem in one item of the structured `findings` array, and describe the problem and impact in that item's `finding` field.
 - For each problem, make the severity, file, line, problem, and impact clear.
 - Avoid repeating the same cause and summarize it at a unit the implementation agent can verify.
-- Return an empty problem list when no problem exists.
+- Return an empty `findings` array when no problem exists.
 - Keep supplementary notes distinct from repair requests and limit them to non-actionable information.

@@ -7,7 +7,7 @@ import { buildCompanionFollowUpInstruction } from '../core/workflow/companion/ev
 import { COMPANION_PROMPT_LIMITS } from '../core/workflow/companion/limits.js';
 
 describe('companion prompt behavior', () => {
-  it('reviews the current repository from a baseline without prior finding state', () => {
+  it('reviews the current repository from a baseline without prior review state', () => {
     const prompt = buildCompanionReviewPrompt({
       companionName: 'security-reviewer',
       task: 'implement',

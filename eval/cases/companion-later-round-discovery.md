@@ -1,6 +1,6 @@
 Review this cumulative work-in-progress diff as the current state.
 
-Task contract: move request-token normalization to `normalizeRequestToken`, migrate every current producer and consumer that applies the same trim-and-lowercase invariant, and preserve the web path's rejection of an empty normalized request token. Telemetry label formatting is unchanged and outside this contract family.
+Task contract: move request-token normalization to `normalizeRequestToken`, migrate every current producer and consumer that applies the same trim-and-lowercase invariant, and preserve the web path's rejection of an empty normalized request token. Telemetry label formatting is a separate behavior and must remain unchanged.
 
 ```diff
 diff --git a/src/token-normalization.ts b/src/token-normalization.ts

@@ -101,7 +101,7 @@ describe('CT-COMP-02 companion definition loading', () => {
   );
 
   it.each(['ja', 'en'] as const)(
-    'should keep builtin %s companion finding adjudication owned by the moderator',
+    'should keep builtin %s companion submitted-item adjudication owned by the moderator',
     (language) => {
       const definition = loadCompanionDefinition('review-companion-moderator', {
         candidateDirs: [getBuiltinCompanionsDir(language)],

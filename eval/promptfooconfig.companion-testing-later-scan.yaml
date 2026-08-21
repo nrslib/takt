@@ -16,7 +16,7 @@ providers:
       model_reasoning_effort: low
 
 tests:
-  - description: 'testing companion: later call finds a different public-behavior coverage gap without importing workflow lifecycle'
+  - description: 'testing companion: later call finds a different public-behavior coverage gap without copying unrelated workflow state'
     vars:
       task: file://cases/testing-review-observable-evidence-task.md
       previous_response: file://cases/prev-companion-testing-later-scan.md
@@ -41,7 +41,6 @@ tests:
           additional tests for the already-covered `traceLabel` contract, or
           assertions that freeze natural-language text, raw YAML, helper/import
           names, file layout, or other internal structure. It must not classify
-          review items with the outer workflow's `finding_id`, `family_tag`,
-          `new`, `persists`, `reopened`, or `resolved` lifecycle, and must not
-          perform accept/reject adjudication. A statement that those lifecycle
-          labels are inapplicable is allowed.
+          review items with unrelated outer workflow labels such as
+          `finding_id`, `family_tag`, `new`, `persists`, `reopened`, or
+          `resolved`, and must not perform accept/reject adjudication.

@@ -1,6 +1,6 @@
 Adjudicate these Companion candidates using only the supplied evidence. Do not perform a new scan.
 
-Task contract: move request-token trim-and-lowercase normalization to `normalizeRequestToken` and migrate all current consumers of that invariant. Telemetry label formatting is unchanged and outside this family.
+Task contract: move request-token trim-and-lowercase normalization to `normalizeRequestToken` and migrate all current consumers of that invariant. Telemetry label formatting is a separate behavior and must remain unchanged.
 
 - C-01 (`must_fix`, `src/cli-request.ts:2`): `cliToken` still executes `raw.trim().toLowerCase()` after the shared owner was added. The supplied diff shows the exact line.
 - C-02 (`should_fix`, `src/cli-request.ts:2`): the CLI consumer duplicates the new owner's trim-and-lowercase invariant. The supplied diff shows the same exact line as C-01.
