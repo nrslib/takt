@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadCompanionDefinition } from '../infra/config/loaders/companionDefinitionLoader.js';
 import { buildCompanionLookupDirs } from '../infra/config/loaders/companionLookupDirectories.js';
+import { getBuiltinCompanionsDir } from '../infra/config/paths.js';
 import { MAX_COMPANION_INTERVAL_MS } from '../core/models/companion-types.js';
 
 function writeDefinition(root: string, description: string, extra = ''): string {
@@ -80,6 +81,38 @@ describe('CT-COMP-02 companion definition loading', () => {
     expect(definition.sourcePath).toBe(userPath);
     expect(definition.description).toBe('user-reviewer');
   });
+
+  it.each(['ja', 'en'] as const)(
+    'should isolate builtin %s companion reviewers from the general review workflow policy',
+    (language) => {
+      for (const name of [
+        'ai-antipattern-review-companion',
+        'testing-review-companion',
+      ]) {
+        const definition = loadCompanionDefinition(name, {
+          candidateDirs: [getBuiltinCompanionsDir(language)],
+          language,
+        });
+
+        expect(definition.policy).toContain('companion-review');
+        expect(definition.policy).not.toContain('review');
+      }
+    },
+  );
+
+  it.each(['ja', 'en'] as const)(
+    'should keep builtin %s companion finding adjudication owned by the moderator',
+    (language) => {
+      const definition = loadCompanionDefinition('review-companion-moderator', {
+        candidateDirs: [getBuiltinCompanionsDir(language)],
+        language,
+      });
+
+      expect(definition.policy).toContain('companion-round-adjudication');
+      expect(definition.policy).not.toContain('companion-review');
+      expect(definition.policy).not.toContain('review');
+    },
+  );
 
   it('should reject a symlinked companion lookup directory before loading a candidate', () => {
     const realDirectory = join(root, 'real-companions');
