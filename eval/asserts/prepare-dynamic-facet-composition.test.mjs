@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, statSync } from 'node:fs';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -37,12 +37,13 @@ const PRODUCTION_REVIEWER_SUITES = [
   'peer-review-suite-frontend',
   'peer-review-suite-frontend-cqrs',
 ];
-const REPAIR_LEDGER_WORKFLOWS = new Set([
-  'development-remediation-dynamic.yaml',
-  'development-remediation.yaml',
-  'final-gate.yaml',
-  'review-remediation.yaml',
-]);
+const PROBLEM_TRACKING_STEPS = [
+  'peer-review-adjudication.yaml',
+  'peer-review-fix-plan.yaml',
+  'peer-review-fix.yaml',
+  'peer-review-fix-verifier.yaml',
+  'peer-review-final-gate.yaml',
+];
 const SOURCE_WORKFLOW = 'development-review';
 const SECURITY_REVIEW_POOL = 'security-review-facets';
 const CANDIDATE_KNOWLEDGE = readFileSync(
@@ -230,38 +231,45 @@ test('composes only reviewer-scoped workflow rules into every production reviewe
       );
       assert.doesNotMatch(
         source,
-        /^\s+- ref: (?:existing-family-lookup|invariant-recurrence)$/m,
-        `${language}/${workflow} must not compose repair-ledger rules into ordinary reviewers`,
+        /^\s+- ref: problem-tracking$/m,
+        `${language}/${workflow} must not compose remediation tracking into ordinary reviewers`,
       );
     }
   }
 });
 
-test('limits repair-ledger workflow rules to workflows that read or write the ledger', () => {
+test('composes remediation problem tracking only in dedicated step instructions', () => {
   for (const language of ['ja', 'en']) {
-    const workflowDirectory = fileURLToPath(
-      new URL(`../../builtins/${language}/workflows/`, import.meta.url),
-    );
-    const actual = new Set();
-
-    for (const fileName of readdirSync(workflowDirectory)) {
-      if (!fileName.endsWith('.yaml')) continue;
-      const source = readFileSync(`${workflowDirectory}/${fileName}`, 'utf8');
-      const hasExistingFamilyLookup = /^\s+- ref: existing-family-lookup$/m.test(source);
-      const hasInvariantRecurrence = /^\s+- ref: invariant-recurrence$/m.test(source);
+    for (const fileName of PROBLEM_TRACKING_STEPS) {
+      const source = readFileSync(new URL(
+        `../../builtins/${language}/steps/${fileName}`,
+        import.meta.url,
+      ), 'utf8');
       assert.equal(
-        hasExistingFamilyLookup,
-        hasInvariantRecurrence,
-        `${language}/${fileName} must compose the repair-ledger rules together`,
+        [...source.matchAll(/^\s+- review-remediation-problem-tracking$/gm)].length,
+        1,
+        `${language}/${fileName} must compose dedicated problem tracking exactly once`,
       );
-      if (hasExistingFamilyLookup) actual.add(fileName);
     }
 
-    assert.deepEqual(actual, REPAIR_LEDGER_WORKFLOWS);
+    const workflowSources = [
+      'review-fix.yaml',
+      'review-remediation.yaml',
+      'development-remediation-dynamic.yaml',
+      'development-remediation.yaml',
+      'final-gate.yaml',
+    ].map((fileName) => readFileSync(new URL(
+      `../../builtins/${language}/workflows/${fileName}`,
+      import.meta.url,
+    ), 'utf8')).join('\n');
+    assert.doesNotMatch(
+      workflowSources,
+      /^\s+- ref: (?:problem-tracking|existing-family-lookup|invariant-recurrence)$/m,
+    );
   }
 });
 
-test('keeps repair-ledger vocabulary out of ordinary reviewer prompts', () => {
+test('keeps remediation bookkeeping vocabulary out of ordinary reviewer prompts', () => {
   const targetIds = [
     'review-impact-path-coverage',
     'follow-up-review-repair-regression',
@@ -281,7 +289,7 @@ test('keeps repair-ledger vocabulary out of ordinary reviewer prompts', () => {
       new URL(`../../eval/prompts/${targetId}.phase1.md`, import.meta.url),
     );
     const prompt = readFileSync(promptPath, 'utf8');
-    assert.doesNotMatch(prompt, /\bfamily\b|actionable|fix-verifier|全13項目/i);
+    assert.doesNotMatch(prompt, /\bfamily\b|actionable|fix-verifier|全13項目|再発台帳|不変条件台帳/i);
   }
 });
 

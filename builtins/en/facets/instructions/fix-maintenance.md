@@ -13,8 +13,8 @@ Use reports in the Report Directory and fix reviewer findings within the causall
 
 {{include:instructions/post-edit-self-scan}}
 
-**Report reference policy:**
-- Use the latest review reports in the Report Directory as primary evidence.
+Use the latest review reports in the Report Directory as primary evidence.
+
 - Past iteration reports are saved as `{filename}.{timestamp}` in the same directory (e.g., `architect-review.md.20260304T123456Z`). For each report, run Glob with a `{report-name}.*` pattern, read up to 2 files in descending timestamp order, and understand persistence or recurrence trends before starting fixes.
 
 **Completion criteria (all must be satisfied):**

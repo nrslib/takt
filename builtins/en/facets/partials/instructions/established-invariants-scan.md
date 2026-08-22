@@ -1,7 +1,7 @@
-**Established-invariant diff scan:**
+**Diff check against planned conditions:**
 
-Before reporting, build a bounded list from every invariant recorded in the current fix-plan.md. Use only artifacts explicitly supplied by the current workflow as evidence; do not add invariants from sibling remediations, internal reports, or other history.
+Before reporting, inspect the repair units, conditions to preserve, and relevant paths in the current fix-plan.md. Use only artifacts supplied for this run and current code as evidence; do not add conditions from separate history.
 
-Compare the current diff with each invariant at its responsible source and recorded bounded graph. Use counterexamples that cover every affected path or exhaustively traverse that bounded graph to confirm that the diff introduces no violation. Do not use physical code location or file path alone as identity, and do not expand the scan beyond the recorded boundary.
+Confirm that the current diff satisfies the plan's acceptance criteria and preserved existing conditions on every relevant path. Use a failure example, boundary case, search, or code trace that would detect a violation, and do not stop at the reported location. Do not expand into a general search outside the plan boundary.
 
-Correct an introduced violation within the current change boundary or report the reason and required follow-up. Record the repair result and completion decision in the requested format.
+Repair any violation introduced by the current diff within the change boundary, or report why it cannot be repaired and the action required.

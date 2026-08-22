@@ -24,7 +24,7 @@ loop_monitors:
       rules:
         - condition: Healthy (fixes progressing and report content converging)
           next: reviewers
-        - condition: Implementation incomplete or report not converged, but the next review or fix is actionable
+        - condition: Implementation incomplete or report not converged, but the next review or fix can be performed
           next: reviewers
         - condition: The current loop cannot converge and requires a final-gate decision
           next: final-gate

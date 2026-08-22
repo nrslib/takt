@@ -281,7 +281,7 @@ loop_monitors:
       rules:
         - condition: Healthy (fixes progressing and report content converging)
           next: fix_both
-        - condition: Implementation incomplete or report not converged, but the next review or fix is actionable
+        - condition: Implementation incomplete or report not converged, but the next review or fix can be performed
           next: fix_both
         - condition: Unproductive (oscillation or requirement conflict)
           next: ABORT
@@ -299,7 +299,7 @@ loop_monitors:
       rules:
         - condition: Healthy (fixes progressing and report content converging)
           next: ai-antipattern-fix
-        - condition: Implementation incomplete or report not converged, but the next review or fix is actionable
+        - condition: Implementation incomplete or report not converged, but the next review or fix can be performed
           next: ai-antipattern-fix
         - condition: Unproductive (oscillation or requirement conflict)
           next: ABORT
@@ -317,7 +317,7 @@ loop_monitors:
       rules:
         - condition: Healthy (fixes progressing and report content converging)
           next: supervise_fix
-        - condition: Implementation incomplete or report not converged, but the next review or fix is actionable
+        - condition: Implementation incomplete or report not converged, but the next review or fix can be performed
           next: supervise_fix
         - condition: Unproductive (oscillation or requirement conflict)
           next: ABORT

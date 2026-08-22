@@ -45,7 +45,6 @@ const SUITES = {
   'cqrs-coder': 'promptfooconfig.cqrs-coder.yaml',
   'fix-closure': 'promptfooconfig.fix-closure.yaml',
   'fix-self-scan': 'promptfooconfig.fix-self-scan.yaml',
-  'fix-loop-convergence': 'promptfooconfig.fix-loop-convergence.yaml',
   'fix-plan-fresh-findings': 'promptfooconfig.fix-plan-fresh-findings.yaml',
   'fix-plan-boundary-preflight': 'promptfooconfig.fix-plan-boundary-preflight.yaml',
   'fix-plan-cause-check': 'promptfooconfig.fix-plan-cause-check.yaml',
@@ -104,8 +103,6 @@ for (const name of names) {
 // 弱いモデルの行は常に部分失敗するため、デフォルトのゲート実行からは除外する。
 // fix-self-scan は claude ヘッドレス CLI（要 claude ログイン）で走るため、
 // codex 前提のデフォルト実行からは除外し、明示的に呼び出す。
-// fix-loop-convergence も claude（opus）と codex（Luna Max / Sol High）の
-// 両ログインが必要な3モデル測定スイートのため、明示的に呼び出す。
 // initial-review-external-identity-wiring も同じ2つの外部 CLI で3モデルを使うため、
 // デフォルト実行から除外して明示的に呼び出す。
 // review-adjudication-binding も同じ2つの外部 CLI で3モデルを使うため、
@@ -123,7 +120,6 @@ const DEFAULT_EXCLUDED = new Set([
   'rescan',
   'rescan-coding',
   'fix-self-scan',
-  'fix-loop-convergence',
   'fix-plan-cause-check',
   'fix-plan-bounded-proof',
   'fix-plan-fresh-findings',

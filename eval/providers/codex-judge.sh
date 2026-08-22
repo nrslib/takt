@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # promptfoo exec プロバイダ: codex CLI での判定専用実行（read-only）。
 # 使い方: exec: bash providers/codex-judge.sh <model> [reasoning-effort]
-# fix-loop-convergence スイートで使用。モデルを明示指定するため
+# モデルを明示する編集なしの判定で使用する。
 # openai:codex-sdk ではなく CLI を直接使う。
 set -euo pipefail
 model="$1"

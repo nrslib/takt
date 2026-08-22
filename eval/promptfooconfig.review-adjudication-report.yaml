@@ -47,8 +47,8 @@ tests:
 
   - description: '裁定レポート: 要求にない強い type-error 契約を非修正対象に保つ'
     vars:
-      task: file://cases/review-adjudication-family-merge-task.md
-      previous_response: file://cases/review-adjudication-family-merge-phase1.md
+      task: file://cases/review-adjudication-problem-merge-task.md
+      previous_response: file://cases/review-adjudication-problem-merge-phase1.md
     assert:
       - type: llm-rubric
         metric: review/merge-case-type-error-report
@@ -57,10 +57,10 @@ tests:
 
   - description: '裁定レポート: 元要求へ直接違反する type-error を別の修正単位にする'
     vars:
-      task: file://cases/review-adjudication-family-separation-task.md
-      previous_response: file://cases/review-adjudication-family-separation-phase1.md
+      task: file://cases/review-adjudication-problem-separation-task.md
+      previous_response: file://cases/review-adjudication-problem-separation-phase1.md
     assert:
       - type: llm-rubric
-        metric: review/different-invariant-report
+        metric: review/different-condition-report
         value: |
           前段の判断をレポートへ保持できているかを評価する。ARCH-NEW-channel-type-error-L2 を修正対象とし、受理値の正規化とは異なるエラー形式の要件として別の修正単位に分けること。担当箇所が共通することだけを統合根拠にせず、末尾の固定文言、特定の修正単位名、英語ラベルは要求しない。

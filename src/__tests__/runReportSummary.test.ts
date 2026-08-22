@@ -65,6 +65,25 @@ describe('run report summary', () => {
     expect(summary?.reviewHistory).toEqual([`- ${history}`]);
   });
 
+  it('extracts the natural-language review decision contract', () => {
+    const summary = summarizeRunReports([{
+      filename: 'review-resolution.md',
+      content: [
+        '## 要件との照合',
+        '| 対象 | 状態 | 根拠 |',
+        '|---|---|---|',
+        '| 設定値を正規化する | 充足 | src/config.ts:10 |',
+        '## 指摘ごとの判断',
+        '| finding ID / 出典 | 技術的な確認結果 | 今回の扱い | 対応する問題ID | 理由と根拠 |',
+        '|---|---|---|---|---|',
+        '| CONFIG-1 | 確認済み | 修正する | config-normalization | src/config.ts:10 |',
+      ].join('\n'),
+    }]);
+
+    expect(summary?.fulfilledRequirements).toEqual(['設定値を正規化する']);
+    expect(summary?.unresolvedFindingCount).toBe(1);
+  });
+
   it('selects the latest report occurrence instead of an older report', () => {
     const summary = summarizeRunReports([
       {

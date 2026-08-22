@@ -1,5 +1,5 @@
 name: simple-core
-description: Internal core workflow for the simple family. It uses injected instructions, policies, and knowledge to run plan → write_tests → implement → review ⇄ fix → supervise.
+description: Internal core workflow for the simple workflow set. It uses injected instructions, policies, and knowledge to run plan → write_tests → implement → review ⇄ fix → supervise.
 all_steps:
   rules:
     - ref: findings-handling

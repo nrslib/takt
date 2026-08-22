@@ -1,35 +1,31 @@
 ```markdown
-# Review Finding Adjudication
+# Review Finding Decision
 
 ## Result: ACTIONABLE FINDINGS / NO ACTIONABLE FINDINGS / REPLAN REQUIRED
 
 ## Decision Summary
-{Source reports, actionable family count, non-actionable count, and evidence summary}
+{Reports inspected, number of problems to repair, number of findings not selected for repair, and key evidence}
 
-## Requirement Decision Grounds
-| Subject | Status | Grounds |
-|---------|--------|---------|
-| {Decomposed requirement or preceding finding} | {Fulfilled / Unfulfilled / Unverified / Resolved} | {Current-code file:line or a verification result already recorded in a preceding report} |
+## Requirement Check
+| Subject | Status | Evidence |
+|---------|--------|----------|
+| {Requirement or preceding finding} | {Fulfilled / Unfulfilled / Unverified / Resolved} | {Current-code file:line or a verification result recorded in a preceding report} |
 
-{{include:output-contracts/invariant-register-carry-forward}}
+## Problems to Repair
+| Problem ID | Related Findings | Violated Condition | Cause | Relevant Paths | Evidence | Acceptance Criteria | Repair Boundary |
+|------------|------------------|--------------------|-------|----------------|----------|---------------------|-----------------|
+| {Reuse the existing ID when present} | {All finding IDs and report names} | {Externally observable condition} | {Verified cause} | {Actual paths from the defining source through consumers to observable results} | {file:line or reproduction evidence} | {Conditions that establish resolution when all hold} | {Required changes and explicitly excluded separate problems} |
 
-## Actionable Families
-| family | Responsible source | Observable invariant | Reason to change from the same cause | Finding ID / source | Evidence | Problem -> root cause | Added path | Affected contract paths | Acceptance criteria | Remediation boundary |
-|--------|--------------------|----------------------|--------------------------------------|---------------------|----------|-----------------------|------------|-------------------------|---------------------|----------------------|
-| {Stable family name} | {Single responsibility and source that defines the invariant and guarantees it holds} | {Condition to preserve} | {Why the paths need to change for the same cause} | {All IDs and report names} | {file:line or reproduction evidence} | {Verified causal chain} | {New path checked in this review, or none} | {Actual paths across definition, production, normalization, validation, every consumer, retry, fallback, parallel execution, persistence, restoration, and terminal or API output} | {Observable completion conditions} | {Required minimal change; explicitly excluded neighboring contracts, adjacent work, or mechanisms} |
-
-## Finding Dispositions
-| Finding ID / source | Technical validity | Disposition | Target family | Reason to change from the same cause | Rationale | Evidence |
-|---------------------|--------------------|-------------|---------------|--------------------------------------|-----------|----------|
-| {ID and report name} | {Confirmed / Disproved / Unverified} | {actionable / duplicate / false_positive / overreach / out_of_scope / no_issue_after_verification / environment_unverified} | {Actionable family or none} | {Same reason as the target family, reason for keeping a separate family, or not applicable} | {Reason for merging into the target family, keeping a separate family, or not applicable} | {Defect evidence, counter-evidence, or applicable criteria} |
+## Decision for Each Finding
+| Finding ID / Source | Technical Check | Treatment in This Task | Problem ID | Reason and Evidence |
+|---------------------|-----------------|------------------------|------------|---------------------|
+| {ID and report name} | {Confirmed / Disproved / Unverified} | {Repair / Merge into same problem / Unsupported / Unnecessary expansion / Outside this task / No issue after verification / Cannot verify in this environment} | {Problem ID or none} | {Reason based on current code, requirements, or reproduction results} |
 
 ## Unresolved Premises
 - {None, or conflicting requirements, plan decisions, or findings and why replanning is required}
 ```
 
-**Cognitive-load rules:**
-- Record every submitted finding ID exactly once in Finding Dispositions
-- No actionable findings -> include only the summary, invariant-register carry-forward, finding dispositions, and unresolved premises
-- Actionable findings -> consolidate findings with the same cause into one family and include every `actionable` and `duplicate` finding ID in its target family
-- Findings with any other disposition are excluded from remediation and must not appear in an actionable family
-- Include in `Actionable Families` only problems currently adjudicated as requiring repair. Never copy a row there solely from carry-forward, requirement grounds, finding dispositions, or history
+- Record every submitted finding ID exactly once in Decision for Each Finding
+- Group findings only when their cause, violated condition, and acceptance criteria are the same
+- Include in Problems to Repair only problems this change must resolve. Do not copy an item merely because it exists in history
+- Omit Problems to Repair when no repair is required

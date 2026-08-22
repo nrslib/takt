@@ -65,20 +65,20 @@ tests:
 
   - description: '裁定: 同じ原因を持つ別経路の重複指摘を統合する'
     vars:
-      task: file://cases/review-adjudication-family-merge-task.md
+      task: file://cases/review-adjudication-problem-merge-task.md
       previous_response: ''
     assert:
       - type: llm-rubric
-        metric: review/existing-family-merge
+        metric: review/existing-problem-merge
         value: |
           見出し、識別子、分類ラベル、末尾の固定文言ではなく判断内容を評価する。ARCH-NEW-channel-normalization-L2 と CODE-NEW-channel-normalization-L2 が、同じ原因と受入条件を持つ重複指摘として1つの修正対象へ統合されている場合だけ合格とする。ARCH-NEW-channel-type-error-L2 は漏れなく検討するが、タスクは不正な文字列の即時失敗だけを要求し、文字列以外の値に安定したエラークラスやメッセージを要求しないため修正対象にしない。
 
-  - description: '裁定: 同じ担当箇所にある別の不変条件を分離する'
+  - description: '裁定: 同じ担当箇所にある別の条件を分離する'
     vars:
-      task: file://cases/review-adjudication-family-separation-task.md
+      task: file://cases/review-adjudication-problem-separation-task.md
       previous_response: ''
     assert:
       - type: llm-rubric
-        metric: review/different-invariant-separation
+        metric: review/different-condition-separation
         value: |
           見出し、識別子、分類ラベル、末尾の固定文言ではなく判断内容を評価する。ARCH-NEW-channel-type-error-L2 を修正対象として漏れなく扱い、受理値の正規化とは異なるエラー形式の要件として別の修正単位に分けた場合だけ合格とする。normalizeChannel という担当箇所が共通することだけを統合根拠にしてはならない。

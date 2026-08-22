@@ -241,7 +241,7 @@ test('explicit Claude shell timeout terminates a TERM-resistant descendant', {
         ...process.env,
         PATH: `${binDirectory}:${process.env.PATH ?? ''}`,
         GRANDCHILD_PID_FILE: pidPath,
-        CLAUDE_REVIEW_TIMEOUT_SECONDS: '1',
+        CLAUDE_REVIEW_TIMEOUT_SECONDS: '2',
       },
       encoding: 'utf8',
       timeout: 22_000,

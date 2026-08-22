@@ -1,5 +1,5 @@
 name: mini-core
-description: Internal core development workflow for the mini family. Uses injected policies, knowledge, and supervisor to run plan -> implement -> parallel review -> direct fixes.
+description: Internal core development workflow for the mini workflow set. Uses injected policies, knowledge, and supervisor to run plan -> implement -> parallel review -> direct fixes.
 all_steps:
   rules:
     - ref: findings-handling
@@ -52,7 +52,7 @@ loop_monitors:
       rules:
         - condition: converging (fixes progressing and report content converging)
           next: reviewers
-        - condition: Implementation incomplete or report not converged, but the next review or fix is actionable
+        - condition: Implementation incomplete or report not converged, but the next review or fix can be performed
           next: reviewers
         - condition: The current loop cannot converge and must switch to another verification or remediation stage
           next: supervise_fix

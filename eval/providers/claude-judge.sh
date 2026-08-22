@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # promptfoo exec プロバイダ: claude ヘッドレス CLI での判定専用実行（ツールなし・読み取りのみ）。
 # 使い方: exec: bash providers/claude-judge.sh <model>
-# fix-loop-convergence スイートで使用。編集を伴わない机上判定のため
+# 編集を伴わないモデル判定で使用する。
 # ツールを許可せず、個人設定の混入を避けるため --setting-sources=project で固定する。
 set -euo pipefail
 model="$1"

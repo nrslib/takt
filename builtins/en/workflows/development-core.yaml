@@ -163,7 +163,7 @@ steps:
           format:
             $param: plan_report_format
     rules:
-      - condition: An actionable, untried project-scoped change or investigation and its verification steps were defined
+      - condition: An untried project-scoped change or investigation and its verification steps were defined and can be performed
         next: implement
       - condition: The current implementation satisfies the requirements and acceptance criteria, required project-scoped verification is complete, and no untried change or investigation remains
         next: peer-review
