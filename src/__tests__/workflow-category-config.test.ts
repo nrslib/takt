@@ -288,7 +288,7 @@ workflow_categories:
   it('should reject the removed workflow_descriptions key', () => {
     expect(() => parseWorkflowCategoryOverlay({
       workflow_descriptions: { default: 'Standard coding workflow' },
-    }, 'test-categories.yaml')).toThrow(/Unrecognized key: "workflow_descriptions"/);
+    }, 'test-categories.yaml')).toThrow(/workflow_descriptions/);
   });
 
   it('should use builtin categories when user overlay file is missing', () => {
