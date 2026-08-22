@@ -99,7 +99,7 @@ import {
   runPhase1WithEmptyRecovery,
   type Phase1Attempt,
 } from './phase1-empty-recovery.js';
-import { buildCompanionMailboxDirectory } from '../companion/mailbox.js';
+import { buildCompanionInstructionContext } from '../companion/instruction-context.js';
 import { runCompanionFixLoop } from '../companion/fix-loop.js';
 import { CompanionStepRuntime } from '../companion/step-runtime.js';
 import type { CompanionAgentPurpose } from '../companion/review-runner.js';
@@ -1238,21 +1238,14 @@ export class StepExecutor {
       fallbackContext,
       workflowState: state,
       ...(step.engineSynthesized === true ? {} : { workflowRules: this.deps.getWorkflowRules() }),
-      ...(!this.deps.companionEnabled
-        || !isNormalOrTeamLeaderWorkflowStep(step)
-        || step.companion === undefined
-        ? {}
-        : {
-            companion: {
-              mailboxDirectory: buildCompanionMailboxDirectory({
-                cwd: this.deps.getCwd(),
-                runSlug: this.deps.getRunId(),
-                runPathNamespace: this.deps.getRunPathNamespace(),
-                stepName: step.name,
-              }),
-              reviewMode: this.deps.companionReviewMode,
-            },
-          }),
+      companion: buildCompanionInstructionContext({
+        companionEnabled: this.deps.companionEnabled,
+        companionReviewMode: this.deps.companionReviewMode,
+        cwd: this.deps.getCwd(),
+        step,
+        runSlug: this.deps.getRunId(),
+        runPathNamespace: this.deps.getRunPathNamespace(),
+      }),
     }).build();
     return instruction;
   }

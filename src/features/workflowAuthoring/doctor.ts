@@ -361,10 +361,10 @@ export async function doctorWorkflowCommand(
     const { filePath, lookupCwd, source } = target;
     const report = inspectWorkflowFile(filePath, projectDir, { lookupCwd, source });
     const companionReviewMode = validateWorkflowRuntimeContract(report, target, projectDir, selectorOverrides);
-    if (report.diagnostics.length === 0) {
+    if (companionReviewMode !== undefined && report.diagnostics.length === 0) {
       success(
         `Workflow OK: ${sanitizeTerminalText(filePath)} `
-        + `(Companion review mode: ${companionReviewMode ?? 'unknown'})`,
+        + `(Companion review mode: ${companionReviewMode})`,
       );
       continue;
     }

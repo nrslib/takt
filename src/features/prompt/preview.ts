@@ -15,7 +15,7 @@ import { validateWorkflowCallContracts } from '../../infra/config/loaders/workfl
 import { resolveAuxiliaryRuntimeEnvironment } from '../../infra/config/runtime-provider/provider-environment.js';
 import type { CompiledProviderEnvironment } from '../../infra/config/runtime-provider/environment.js';
 import { resolveWorkflowCompanions } from '../../infra/config/workflowCompanionResolution.js';
-import { buildCompanionMailboxDirectory } from '../../core/workflow/companion/mailbox.js';
+import { buildCompanionInstructionContext } from '../../core/workflow/companion/instruction-context.js';
 import { InstructionBuilder } from '../../core/workflow/instruction/InstructionBuilder.js';
 import { ReportInstructionBuilder } from '../../core/workflow/instruction/ReportInstructionBuilder.js';
 import { StatusJudgmentBuilder } from '../../core/workflow/instruction/StatusJudgmentBuilder.js';
@@ -34,7 +34,6 @@ import type { TagRoutingConflictPolicy } from '../../core/models/config-types.js
 import {
   getAllParallelSubSteps,
   isDynamicParallelSubSteps,
-  isNormalAgentWorkflowStep,
 } from '../../core/models/types.js';
 import type { Language } from '../../core/models/types.js';
 import type { ProviderResolutionSource } from '../../core/workflow/provider-options-trace.js';
@@ -136,29 +135,6 @@ function resolvePreviewReviewScope(cwd: string): TaskReviewScope | undefined {
   }
 }
 
-function buildPreviewCompanionContext(
-  cwd: string,
-  step: WorkflowStep,
-  providerResolution: PreviewProviderResolution,
-): InstructionContext['companion'] | undefined {
-  if (
-    !providerResolution.companionEnabled
-    || !isNormalAgentWorkflowStep(step)
-    || step.companion === undefined
-  ) {
-    return undefined;
-  }
-  return {
-    mailboxDirectory: buildCompanionMailboxDirectory({
-      cwd,
-      runSlug: 'preview',
-      runPathNamespace: [],
-      stepName: step.name,
-    }),
-    reviewMode: providerResolution.companionReviewMode,
-  };
-}
-
 function buildInstructionContext(
   cwd: string,
   config: WorkflowConfig,
@@ -185,7 +161,14 @@ function buildInstructionContext(
     language,
     reviewScope,
     workflowRules: step.engineSynthesized === true ? undefined : config.allStepsRules,
-    companion: buildPreviewCompanionContext(cwd, step, providerResolution),
+    companion: buildCompanionInstructionContext({
+      companionEnabled: providerResolution.companionEnabled,
+      companionReviewMode: providerResolution.companionReviewMode,
+      cwd,
+      step,
+      runSlug: 'preview',
+      runPathNamespace: [],
+    }),
   };
 }
 

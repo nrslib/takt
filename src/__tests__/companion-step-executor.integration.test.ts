@@ -16,7 +16,7 @@ import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engin
 import type { RunPaths } from '../core/workflow/run/run-paths.js';
 import { executeAgent } from '../agents/agent-usecases.js';
 import { callMock, resetScenario, setMockScenario } from '../infra/mock/index.js';
-import { invalidateGlobalConfigCache, loadWorkflowByIdentifier } from '../infra/config/index.js';
+import { loadWorkflowByIdentifier } from '../infra/config/index.js';
 import type { LegacyProviderEnvironmentInput } from '../infra/config/runtime-provider/environment.js';
 import { resolveRuntimeEnvironment } from '../infra/config/runtime-provider/provider-environment.js';
 import { executeTaskWithResult } from '../features/tasks/execute/taskExecution.js';
@@ -273,10 +273,6 @@ describe('companion StepExecutor lifecycle', () => {
       '        next: COMPLETE',
     ].join('\n'), 'utf8');
 
-    const originalConfigDir = process.env.TAKT_CONFIG_DIR;
-    const globalConfigDir = mkdtempSync(join(tmpdir(), 'companion-task-global-'));
-    process.env.TAKT_CONFIG_DIR = globalConfigDir;
-    invalidateGlobalConfigCache();
     expect(loadWorkflowByIdentifier('task-live', cwd)?.steps[0]).toMatchObject({
       companion: { fixed: ['reviewer'] },
       allowGitCommit: true,
@@ -375,13 +371,6 @@ describe('companion StepExecutor lifecycle', () => {
     } finally {
       coderReleased();
       await taskPromise?.catch(() => undefined);
-      if (originalConfigDir === undefined) {
-        delete process.env.TAKT_CONFIG_DIR;
-      } else {
-        process.env.TAKT_CONFIG_DIR = originalConfigDir;
-      }
-      invalidateGlobalConfigCache();
-      rmSync(globalConfigDir, { recursive: true, force: true });
     }
   });
 

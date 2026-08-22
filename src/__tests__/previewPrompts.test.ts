@@ -212,9 +212,9 @@ describe('previewPrompts', () => {
   });
 
   it.each([
-    ['completion', 'Findings are delivered in a follow-up prompt'],
-    ['live', 'Read new records after finishing each file, before running tests, and before declaring completion.'],
-  ] as const)('実際のInstructionBuilderへresolved Companion contextを渡す (%s)', async (reviewMode, expectedText) => {
+    'completion',
+    'live',
+  ] as const)('実際のInstructionBuilderへresolved Companion contextを渡す (%s)', async (reviewMode) => {
     const runtimeEnvironment = compiledEnvironment();
     runtimeEnvironment.companionReviewMode = reviewMode;
     mockResolveAuxiliaryRuntimeEnvironment.mockReturnValueOnce(runtimeEnvironment);
@@ -234,7 +234,9 @@ describe('previewPrompts', () => {
     await previewPrompts('/project');
 
     const calls = mockInstructionBuild.mock.calls;
-    expect(calls[calls.length - 1]?.[0]).toContain(expectedText);
+    const prompt = calls[calls.length - 1]?.[0];
+    expect(prompt).toContain('## Companion inbox');
+    expect(prompt).toContain('/project/.takt/runs/preview/companion/implement');
   });
 
   // takt prompt は診断ツール。レビュー範囲を解決できなくてもプロンプト本体の

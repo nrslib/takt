@@ -189,6 +189,8 @@ describe('SessionLogger', () => {
     expect(() => parseNdjsonRecord(JSON.stringify(withoutMode))).toThrow(/review mode is invalid/);
     expect(() => parseNdjsonRecord(JSON.stringify({ ...record, reviewMode: 'automatic' })))
       .toThrow(/review mode is invalid/);
+    expect(() => parseNdjsonRecord(JSON.stringify({ ...record, reviewMode: true })))
+      .toThrow(/review mode is invalid/);
   });
 
   it('Companion の実呼び出し、採否結果、skip理由を run NDJSON に永続化する', () => {

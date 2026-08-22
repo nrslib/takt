@@ -2,9 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { InstructionBuilder } from '../core/workflow/instruction/InstructionBuilder.js';
 import type { InstructionContext } from '../core/workflow/instruction/instruction-context.js';
 import type { CompanionReviewMode } from '../core/models/companion-types.js';
+import type { Language } from '../core/models/config-types.js';
 import { makeInstructionContext, makeStep } from './test-helpers.js';
-
-type Language = 'en' | 'ja';
 
 const POLLING_TRIGGERS = ['fileCompletion', 'beforeTests', 'beforeCompletion'] as const;
 type PollingTrigger = typeof POLLING_TRIGGERS[number];
@@ -160,7 +159,7 @@ function context(reviewMode: CompanionReviewMode, language: Language, task = 'te
       mailboxDirectory: '/tmp/takt-mailbox',
       reviewMode,
     },
-  } as unknown as InstructionContext;
+  };
 }
 
 function build(reviewMode: CompanionReviewMode, language: Language, task = 'test task'): string {
