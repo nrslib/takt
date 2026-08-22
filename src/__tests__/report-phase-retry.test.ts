@@ -254,9 +254,8 @@ describe('runReportPhase retry with new session', () => {
     const secondCallOptions = runAgentMock.mock.calls[1]?.[2] as { sessionId?: string };
     expect(secondCallOptions.sessionId).toBeUndefined();
     expect(runAgentMock.mock.calls[0]?.[1]).toContain(
-      'Respond with the report content directly as text.',
+      'Respond with only the report content (no status tags, no commentary).',
     );
-
   });
 
   it('should fail fast on a provider stream parse error without report retry or fallback', async () => {
