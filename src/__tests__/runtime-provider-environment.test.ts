@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   compileProviderEnvironment,
@@ -7,6 +8,10 @@ import {
 } from '../infra/config/runtime-provider/environment.js';
 import { collectLegacyProviderSignals } from '../infra/config/runtime-provider/legacy-signals.js';
 import type { RuntimeProviderSection } from '../infra/config/runtime-provider/schema.js';
+import type { RuntimeProviderResolutionContext } from '../infra/config/runtime-provider/resolution-context.js';
+import { resolveStepProviderModel } from '../core/workflow/provider-resolution.js';
+import { resolveDeterministicAutoRoutingProviderInfo } from '../core/workflow/auto-routing/resolver.js';
+import { selectRoutingCandidate } from '../core/workflow/auto-routing/selector.js';
 
 /**
  * Contracts covered (Unit A / issue #1136):
@@ -20,6 +25,21 @@ import type { RuntimeProviderSection } from '../infra/config/runtime-provider/sc
  *   or unknown key) fail fast before any agent runs.
  * - The factory selects the compiler by the discriminated union `kind`.
  */
+
+const globalRuntimeResolutionContext: RuntimeProviderResolutionContext = {
+  lang: 'en',
+  projectDir: '/project',
+  workflowDir: '/project/.takt',
+  repertoireDir: '/home/user/.takt/repertoire',
+  globalConfigDir: '/home/user/.takt',
+  projectConfigDir: '/project/.takt',
+  profileOrigins: new Map([['p', 'global']]),
+};
+
+const projectRuntimeResolutionContext: RuntimeProviderResolutionContext = {
+  ...globalRuntimeResolutionContext,
+  profileOrigins: new Map([['p', 'project']]),
+};
 
 const legacyInput: LegacyProviderEnvironmentInput = {
   provider: 'codex',
@@ -129,13 +149,186 @@ describe('compileRuntimeProviderEnvironment (profile options)', () => {
       coder: { provider: 'codex', model: 'persona-m', providerOptions: { codex: { reasoningEffort: 'low' } } },
     });
   });
+
+  it('carries Codex fast_mode through defaults and persona/tag/step routing entries', () => {
+    const section: RuntimeProviderSection = {
+      defaults: { profile: 'base' },
+      profiles: {
+        base: { provider: 'codex', model: 'base-m', options: { fast_mode: true } },
+        persona: { provider: 'codex', model: 'persona-m', options: { fast_mode: false } },
+        tag: { provider: 'codex', model: 'tag-m', options: { fast_mode: true } },
+        step: { provider: 'codex', model: 'step-m', options: { fast_mode: false } },
+      },
+      targets: {
+        personas: { coder: { profile: 'persona' } },
+        tags: { 'high-stakes': { profile: 'tag' } },
+        steps: { 'wf/impl': { profile: 'step' } },
+      },
+    };
+
+    const env = compileRuntimeProviderEnvironment(section);
+
+    expect(env.providerOptions).toEqual({ codex: { fastMode: true } });
+    expect(env.personaProviders).toEqual({
+      coder: { provider: 'codex', model: 'persona-m', providerOptions: { codex: { fastMode: false } } },
+    });
+    expect(env.providerRouting).toEqual({
+      tags: {
+        'high-stakes': { provider: 'codex', model: 'tag-m', providerOptions: { codex: { fastMode: true } } },
+      },
+      steps: {
+        'wf/impl': { provider: 'codex', model: 'step-m', providerOptions: { codex: { fastMode: false } } },
+      },
+    });
+  });
+
+  it('allows a DeepSeek Python executable override from a global runtime profile', () => {
+    const section: RuntimeProviderSection = {
+      defaults: { profile: 'p' },
+      profiles: {
+        p: {
+          provider: 'deepseek-harness',
+          model: 'deepseek-v4-flash',
+          options: {
+            python_path: '/opt/user-python',
+            base_url: 'https://proxy.example.test/v1',
+          },
+        },
+      },
+    };
+
+    const env = compileRuntimeProviderEnvironment(section, globalRuntimeResolutionContext);
+
+    expect(env.providerOptions).toEqual({
+      deepseekHarness: {
+        pythonPath: '/opt/user-python',
+        baseUrl: 'https://proxy.example.test/v1',
+      },
+    });
+  });
+
+  it('resolves relative paths from a trusted global runtime profile before execution', () => {
+    const section: RuntimeProviderSection = {
+      defaults: { profile: 'p' },
+      profiles: {
+        p: {
+          provider: 'deepseek-harness',
+          model: 'deepseek-v4-flash',
+          options: {
+            session_root: 'deepseek-sessions',
+            cordis: 'cordis.yml',
+          },
+        },
+      },
+    };
+
+    const env = compileRuntimeProviderEnvironment(section, {
+      ...globalRuntimeResolutionContext,
+      executionDir: '/execution',
+    });
+
+    expect(env.providerOptions).toEqual({
+      deepseekHarness: {
+        sessionRoot: resolve('/execution', 'deepseek-sessions'),
+        cordis: resolve('/execution', 'cordis.yml'),
+      },
+    });
+  });
+
+  it('keeps project runtime session roots relative for the client boundary check', () => {
+    const section: RuntimeProviderSection = {
+      defaults: { profile: 'p' },
+      profiles: {
+        p: {
+          provider: 'deepseek-harness',
+          model: 'deepseek-v4-flash',
+          options: { session_root: 'deepseek-sessions' },
+        },
+      },
+    };
+
+    const env = compileRuntimeProviderEnvironment(section, projectRuntimeResolutionContext);
+
+    expect(env.providerOptions).toEqual({
+      deepseekHarness: { sessionRoot: 'deepseek-sessions' },
+    });
+  });
+
+  it('rejects a DeepSeek executable override from a project runtime profile', () => {
+    const section: RuntimeProviderSection = {
+      defaults: { profile: 'p' },
+      profiles: {
+        p: {
+          provider: 'deepseek-harness',
+          model: 'deepseek-v4-flash',
+          options: { python_path: '/tmp/untrusted-python' },
+        },
+      },
+    };
+
+    expect(() => compileRuntimeProviderEnvironment(section, projectRuntimeResolutionContext))
+      .toThrow('python_path');
+  });
+
+  it('rejects a non-loopback DeepSeek endpoint from a project runtime profile', () => {
+    const section: RuntimeProviderSection = {
+      defaults: { profile: 'p' },
+      profiles: {
+        p: {
+          provider: 'deepseek-harness',
+          model: 'deepseek-v4-flash',
+          options: { base_url: 'https://proxy.example.test/v1' },
+        },
+      },
+    };
+
+    expect(() => compileRuntimeProviderEnvironment(section, projectRuntimeResolutionContext))
+      .toThrow('base_url');
+  });
+
+  it.each(['codex', 'claude'] as const)('rejects a non-loopback %s endpoint from a project runtime profile', (provider) => {
+    const section: RuntimeProviderSection = {
+      defaults: { profile: 'p' },
+      profiles: {
+        p: {
+          provider,
+          model: 'runtime-model',
+          options: { base_url: 'https://proxy.example.test/v1' },
+        },
+      },
+    };
+
+    expect(() => compileRuntimeProviderEnvironment(section, projectRuntimeResolutionContext))
+      .toThrow('base_url');
+  });
+
+  it.each([
+    { runtime_mode: 'invalid' },
+    { request_timeout_ms: 'slow' },
+    { unknown_option: true },
+  ])('rejects an invalid DeepSeek runtime profile option before normalization', (options) => {
+    const section: RuntimeProviderSection = {
+      defaults: { profile: 'p' },
+      profiles: {
+        p: {
+          provider: 'deepseek-harness',
+          model: 'deepseek-v4-flash',
+          options,
+        },
+      },
+    };
+
+    expect(() => compileRuntimeProviderEnvironment(section, projectRuntimeResolutionContext))
+      .toThrow();
+  });
 });
 
 describe('compileRuntimeProviderEnvironment (auto routing)', () => {
-  it('compiles defaults.pool + auto_routing into an AutoRoutingConfig referencing profiles', () => {
+  it('compiles defaults.profile and auto_routing without creating an implicit default pool', () => {
     const section: RuntimeProviderSection = {
-      defaults: { pool: 'sol-pool' },
+      defaults: { profile: 'default' },
       profiles: {
+        default: { provider: 'mock', model: 'gpt-default' },
         'sol-high': { provider: 'codex', model: 'gpt-h', options: { reasoning_effort: 'high' } },
         'sol-low': { provider: 'codex', model: 'gpt-l' },
         router: { provider: 'codex', model: 'gpt-r' },
@@ -155,8 +348,8 @@ describe('compileRuntimeProviderEnvironment (auto routing)', () => {
       },
     };
     const env = compileRuntimeProviderEnvironment(section);
-    expect(env.provider).toBeUndefined();
-    expect(env.model).toBeUndefined();
+    expect(env.provider).toBe('mock');
+    expect(env.model).toBe('gpt-default');
     expect(env.autoRouting).toEqual({
       strategy: 'balanced',
       router: { provider: 'codex', model: 'gpt-r' },
@@ -164,35 +357,83 @@ describe('compileRuntimeProviderEnvironment (auto routing)', () => {
         { name: 'sol-high', provider: 'codex', model: 'gpt-h', routingTier: 'high', providerOptions: { codex: { reasoningEffort: 'high' } } },
         { name: 'sol-low', provider: 'codex', model: 'gpt-l', routingTier: 'low' },
       ],
-      defaultPool: 'sol-pool',
       candidatePools: { 'sol-pool': { candidates: ['sol-high', 'sol-low'], fallback: 'sol-high' } },
     });
   });
 
-  it('maps target pool assignments to poolRules and defaults the strategy to balanced', () => {
+  it('maps explicit persona, tag, and step pools while keeping an unassigned step on defaults', () => {
     const section: RuntimeProviderSection = {
-      defaults: { pool: 'p1' },
+      defaults: { profile: 'default' },
       profiles: {
-        a: { provider: 'codex', model: 'ma' },
-        b: { provider: 'codex', model: 'mb' },
+        default: { provider: 'mock', model: 'm-default' },
+        persona: { provider: 'codex', model: 'm-persona' },
+        tag: { provider: 'codex', model: 'm-tag' },
+        low: { provider: 'codex', model: 'pool-model' },
         router: { provider: 'codex', model: 'mr' },
       },
-      targets: { steps: { 'wf/impl': { pool: 'p2' } } },
+      targets: {
+        personas: { coder: { pool: 'persona-pool' } },
+        tags: { 'high-stakes': { pool: 'tag-pool' } },
+        steps: { execute: { pool: 'main' } },
+      },
       auto_routing: {
         router_profile: 'router',
         pools: {
-          p1: { candidates: [{ profile: 'a', tier: 'low' }], fallback_profile: 'a' },
-          p2: { candidates: [{ profile: 'b', tier: 'high' }], fallback_profile: 'b' },
+          'persona-pool': { candidates: [{ profile: 'persona', tier: 'high' }], fallback_profile: 'persona' },
+          'tag-pool': { candidates: [{ profile: 'tag', tier: 'high' }], fallback_profile: 'tag' },
+          main: { candidates: [{ profile: 'low', tier: 'high' }], fallback_profile: 'low' },
         },
       },
     };
     const env = compileRuntimeProviderEnvironment(section);
+    expect(env.provider).toBe('mock');
+    expect(env.model).toBe('m-default');
     expect(env.autoRouting?.strategy).toBe('balanced');
-    expect(env.autoRouting?.defaultPool).toBe('p1');
-    expect(env.autoRouting?.poolRules).toEqual({ steps: { 'wf/impl': 'p2' } });
+    expect(env.autoRouting).not.toHaveProperty('defaultPool');
+    expect(env.autoRouting?.poolRules).toEqual({
+      personas: { coder: 'persona-pool' },
+      tags: { 'high-stakes': 'tag-pool' },
+      steps: { execute: 'main' },
+    });
+
+    const routedTargets = [
+      { step: { name: 'wf/persona', personaKey: 'coder' }, poolName: 'persona-pool', candidate: 'persona', model: 'm-persona' },
+      { step: { name: 'wf/tag', tags: ['high-stakes'] }, poolName: 'tag-pool', candidate: 'tag', model: 'm-tag' },
+      { step: { name: 'execute' }, poolName: 'main', candidate: 'low', model: 'pool-model' },
+    ] as const;
+    for (const target of routedTargets) {
+      expect(selectRoutingCandidate({
+        autoRouting: env.autoRouting!,
+        step: target.step,
+        estimatorFailure: new Error('test estimator failure'),
+      })).toMatchObject({
+        poolName: target.poolName,
+        candidate: { name: target.candidate, provider: 'codex', model: target.model },
+      });
+    }
+
+    const reviewResolution = resolveStepProviderModel({
+      step: { name: 'review', provider: undefined, model: undefined, personaDisplayName: 'reviewer' },
+      provider: env.provider,
+      providerSource: env.providerSource,
+      model: env.model,
+      modelSource: env.modelSource,
+      personaProviders: env.personaProviders,
+      providerRouting: env.providerRouting,
+      autoRouting: env.autoRouting,
+    });
+    expect(reviewResolution).toMatchObject({
+      provider: 'mock',
+      model: 'm-default',
+    });
+    expect(resolveDeterministicAutoRoutingProviderInfo({
+      autoRouting: env.autoRouting!,
+      step: { name: 'review' },
+      currentProviderInfo: { provider: undefined, model: undefined },
+    })).toBeUndefined();
   });
 
-  it('throws when auto_routing is configured but defaults does not use a pool', () => {
+  it('accepts auto_routing when defaults uses a profile', () => {
     const section: RuntimeProviderSection = {
       defaults: { profile: 'a' },
       profiles: { a: { provider: 'codex', model: 'm' }, router: { provider: 'codex', model: 'r' } },
@@ -201,12 +442,15 @@ describe('compileRuntimeProviderEnvironment (auto routing)', () => {
         pools: { p: { candidates: [{ profile: 'a', tier: 'low' }], fallback_profile: 'a' } },
       },
     };
-    expect(() => compileRuntimeProviderEnvironment(section)).toThrow(/defaults.*pool/);
+    const env = compileRuntimeProviderEnvironment(section);
+    expect(env.provider).toBe('codex');
+    expect(env.model).toBe('m');
+    expect(env.autoRouting?.poolRules).toBeUndefined();
   });
 
   it('throws when a pool candidate is missing a tier', () => {
     const section: RuntimeProviderSection = {
-      defaults: { pool: 'p' },
+      defaults: { profile: 'a' },
       profiles: { a: { provider: 'codex', model: 'm' }, router: { provider: 'codex', model: 'r' } },
       auto_routing: {
         router_profile: 'router',
@@ -218,7 +462,7 @@ describe('compileRuntimeProviderEnvironment (auto routing)', () => {
 
   it('throws when a pool fallback_profile is not among the pool candidates', () => {
     const section: RuntimeProviderSection = {
-      defaults: { pool: 'p' },
+      defaults: { profile: 'a' },
       profiles: {
         a: { provider: 'codex', model: 'm' },
         b: { provider: 'codex', model: 'm2' },
@@ -260,7 +504,7 @@ describe('compileRuntimeProviderEnvironment (internal agents)', () => {
 
   it('throws when internal_agents uses a pool', () => {
     const section: RuntimeProviderSection = {
-      defaults: { pool: 'sol-pool' },
+      defaults: { profile: 'p' },
       profiles: { p: { provider: 'codex', model: 'm' }, router: { provider: 'codex', model: 'r' } },
       targets: { internal_agents: { selector: { pool: 'sol-pool' } } },
       auto_routing: {
@@ -282,6 +526,46 @@ describe('compileRuntimeProviderEnvironment fail-fast on structural inconsistenc
   });
 });
 
+describe('compileRuntimeProviderEnvironment (internal agent seats)', () => {
+  it('compiles the loop-judge seat', () => {
+    const env = compileRuntimeProviderEnvironment({
+      defaults: { profile: 'weak' },
+      profiles: {
+        weak: { provider: 'codex', model: 'weak-model' },
+        strong: { provider: 'codex', model: 'strong-model' },
+      },
+      targets: {
+        internal_agents: {
+          'loop-judge': { profile: 'strong' },
+        },
+      },
+    });
+
+    const strong = { provider: 'codex', model: 'strong-model' };
+    expect(env.internalAgents).toEqual({
+      loopJudge: strong,
+    });
+  });
+
+  it('leaves every seat unset when internal_agents is omitted', () => {
+    const env = compileRuntimeProviderEnvironment({
+      defaults: { profile: 'weak' },
+      profiles: { weak: { provider: 'codex', model: 'weak-model' } },
+    });
+
+    expect(env.internalAgents).toBeUndefined();
+  });
+
+  it('still rejects an unknown internal_agents seat', () => {
+    expect(() => compileRuntimeProviderEnvironment({
+      defaults: { profile: 'weak' },
+      profiles: { weak: { provider: 'codex', model: 'weak-model' } },
+      targets: { internal_agents: { reviewer: { profile: 'weak' } } },
+    })).toThrow(/supports only .*loop-judge.*got "reviewer"/);
+  });
+
+});
+
 describe('collectLegacyProviderSignals', () => {
   it('reports config.yaml provider/model, provider_routing, persona_providers, auto_routing', () => {
     const signals = collectLegacyProviderSignals(
@@ -301,7 +585,6 @@ describe('collectLegacyProviderSignals', () => {
         },
         providerOptions: undefined,
       },
-      { name: 'wf' },
       'global',
     );
     const settings = signals.map((s) => s.setting);
@@ -327,7 +610,6 @@ describe('collectLegacyProviderSignals', () => {
         autoRouting: undefined,
         providerOptions: undefined,
       },
-      { name: 'wf' },
       'default',
     );
     expect(signals).toEqual([]);
@@ -344,8 +626,8 @@ describe('collectLegacyProviderSignals', () => {
       autoRouting: undefined,
       providerOptions: { codex: { skills: { repo: false } } },
     };
-    expect(collectLegacyProviderSignals(legacy, { name: 'wf' }, 'default')).toEqual([]);
-    expect(collectLegacyProviderSignals(legacy, { name: 'wf' }, 'env')).toEqual([]);
+    expect(collectLegacyProviderSignals(legacy, 'default')).toEqual([]);
+    expect(collectLegacyProviderSignals(legacy, 'env')).toEqual([]);
   });
 
   it('reports provider_options only when explicitly configured in project/global config.yaml', () => {
@@ -359,31 +641,27 @@ describe('collectLegacyProviderSignals', () => {
       autoRouting: undefined,
       providerOptions: { codex: { network_access: true } },
     };
-    expect(collectLegacyProviderSignals(legacy, { name: 'wf' }, 'global').map((s) => s.setting))
+    expect(collectLegacyProviderSignals(legacy, 'global').map((s) => s.setting))
       .toContain('provider_options');
-    expect(collectLegacyProviderSignals(legacy, { name: 'wf' }, 'project').map((s) => s.setting))
+    expect(collectLegacyProviderSignals(legacy, 'project').map((s) => s.setting))
       .toContain('provider_options');
   });
 
-  it('reports workflow-level provider/model as legacy settings', () => {
-    const signals = collectLegacyProviderSignals(
-      {
-        provider: 'codex',
-        providerSource: 'workflow',
-        model: 'm',
-        modelSource: 'workflow',
-        personaProviders: undefined,
-        providerRouting: undefined,
-        autoRouting: undefined,
-        providerOptions: undefined,
-      },
-      { name: 'wf', provider: 'codex', model: 'm' },
-      'default',
-    );
-    expect(signals.map((s) => s.location).some((l) => l.includes('workflow'))).toBe(true);
+  it('does not report removed workflow provider settings as legacy signals', () => {
+    const signals = collectLegacyProviderSignals({
+      provider: 'codex',
+      providerSource: 'workflow' as never,
+      model: 'm',
+      modelSource: 'workflow' as never,
+      personaProviders: undefined,
+      providerRouting: undefined,
+      autoRouting: undefined,
+      providerOptions: undefined,
+    }, 'default');
+    expect(signals).toEqual([]);
   });
 
-  it('locates workflow-derived auto_routing at the workflow, not config.yaml', () => {
+  it('locates the remaining config.yaml auto_routing signal at config.yaml', () => {
     const autoRouting = { strategy: 'balanced' } as unknown as LegacyProviderEnvironmentInput['autoRouting'];
     const signals = collectLegacyProviderSignals(
       {
@@ -396,28 +674,6 @@ describe('collectLegacyProviderSignals', () => {
         autoRouting,
         providerOptions: undefined,
       },
-      { name: 'wf', autoRouting },
-      'default',
-    );
-    const autoRoutingSignal = signals.find((s) => s.setting === 'auto_routing');
-    expect(autoRoutingSignal?.location).toBe('workflow "wf":auto_routing');
-    expect(autoRoutingSignal?.location).not.toContain('config.yaml');
-  });
-
-  it('locates config.yaml-derived auto_routing at config.yaml when the workflow does not set it', () => {
-    const autoRouting = { strategy: 'balanced' } as unknown as LegacyProviderEnvironmentInput['autoRouting'];
-    const signals = collectLegacyProviderSignals(
-      {
-        provider: undefined,
-        providerSource: 'default',
-        model: undefined,
-        modelSource: 'default',
-        personaProviders: undefined,
-        providerRouting: undefined,
-        autoRouting,
-        providerOptions: undefined,
-      },
-      { name: 'wf' },
       'default',
     );
     const autoRoutingSignal = signals.find((s) => s.setting === 'auto_routing');
@@ -438,7 +694,6 @@ describe('collectLegacyProviderSignals', () => {
     // Selector provider set → signal with the internal_agents migration target.
     const selectorSignals = collectLegacyProviderSignals(
       { ...base, taktProviders: { selector: { provider: 'opencode' } } },
-      { name: 'wf' },
       'default',
     );
     const selectorSignal = selectorSignals.find((s) => s.setting === 'takt_providers');
@@ -451,7 +706,6 @@ describe('collectLegacyProviderSignals', () => {
     expect(
       collectLegacyProviderSignals(
         { ...base, taktProviders: { assistant: { provider: 'claude' } } },
-        { name: 'wf' },
         'default',
       ).map((s) => s.setting),
     ).toContain('takt_providers');
@@ -459,11 +713,10 @@ describe('collectLegacyProviderSignals', () => {
     expect(
       collectLegacyProviderSignals(
         { ...base, taktProviders: { selector: { model: 'gpt-x' } } },
-        { name: 'wf' },
         'default',
       ),
     ).toEqual([]);
     // No takt_providers at all → no signal.
-    expect(collectLegacyProviderSignals(base, { name: 'wf' }, 'default')).toEqual([]);
+    expect(collectLegacyProviderSignals(base, 'default')).toEqual([]);
   });
 });

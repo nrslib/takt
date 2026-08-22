@@ -17,7 +17,7 @@ import type { AgentResponse } from '../core/models/index.js';
 
 const fakeAgentResponse: AgentResponse = {
   persona: 'test',
-  status: 'success',
+  status: 'done',
   content: '',
   timestamp: new Date(),
 };
@@ -34,6 +34,7 @@ function fakePreparedMcp(): PreparedProviderMcp {
     resolvedServers: {
       enabled: true,
       servers: { 'test-server': { type: 'stdio', command: 'srv' } },
+      serverNames: ['test-server'],
       identity: 'test-server:stdio',
     },
   };
@@ -152,8 +153,14 @@ function getLastCallOptions(mockFn: { mock: { calls: unknown[][] } }): AnyCallOp
   const calls = mockFn.mock.calls;
   expect(calls.length).toBeGreaterThan(0);
   const lastCall = calls[calls.length - 1];
-  const options = lastCall[lastCall.length - 1] as AnyCallOptions;
-  return options;
+  if (lastCall === undefined) {
+    throw new Error('Expected at least one provider call');
+  }
+  const options = lastCall.at(-1);
+  if (options === undefined) {
+    throw new Error('Expected provider call options as the final argument');
+  }
+  return options as AnyCallOptions;
 }
 
 describe('Provider toXxxOptions preparedMcp wiring (MCP-ADAPTER-WIRING)', () => {
@@ -165,7 +172,7 @@ describe('Provider toXxxOptions preparedMcp wiring (MCP-ADAPTER-WIRING)', () => 
     await agent.call('prompt', {
       cwd: '/tmp',
       preparedMcp,
-    } as never);
+    });
     const options = getLastCallOptions(callClaude as unknown as { mock: { calls: unknown[][] } });
     expect(options.preparedMcp).toBe(preparedMcp);
   });
@@ -178,7 +185,7 @@ describe('Provider toXxxOptions preparedMcp wiring (MCP-ADAPTER-WIRING)', () => 
     await agent.call('prompt', {
       cwd: '/tmp',
       preparedMcp,
-    } as never);
+    });
     const options = getLastCallOptions(callClaudeHeadless as unknown as { mock: { calls: unknown[][] } });
     expect(options.preparedMcp).toBe(preparedMcp);
   });
@@ -191,7 +198,7 @@ describe('Provider toXxxOptions preparedMcp wiring (MCP-ADAPTER-WIRING)', () => 
     await agent.call('prompt', {
       cwd: '/tmp',
       preparedMcp,
-    } as never);
+    });
     const options = getLastCallOptions(callClaudeTerminal as unknown as { mock: { calls: unknown[][] } });
     expect(options.preparedMcp).toBe(preparedMcp);
   });
@@ -204,7 +211,7 @@ describe('Provider toXxxOptions preparedMcp wiring (MCP-ADAPTER-WIRING)', () => 
     await agent.call('prompt', {
       cwd: '/tmp',
       preparedMcp,
-    } as never);
+    });
     const options = getLastCallOptions(callCodex as unknown as { mock: { calls: unknown[][] } });
     expect(options.preparedMcp).toBe(preparedMcp);
   });
@@ -218,7 +225,7 @@ describe('Provider toXxxOptions preparedMcp wiring (MCP-ADAPTER-WIRING)', () => 
       cwd: '/tmp',
       model: 'opencode/big-pickle',
       preparedMcp,
-    } as never);
+    });
     const options = getLastCallOptions(callOpenCode as unknown as { mock: { calls: unknown[][] } });
     expect(options.preparedMcp).toBe(preparedMcp);
   });
@@ -231,7 +238,7 @@ describe('Provider toXxxOptions preparedMcp wiring (MCP-ADAPTER-WIRING)', () => 
     await agent.call('prompt', {
       cwd: '/tmp',
       preparedMcp,
-    } as never);
+    });
     const options = getLastCallOptions(callCursor as unknown as { mock: { calls: unknown[][] } });
     expect(options.preparedMcp).toBe(preparedMcp);
   });
@@ -244,7 +251,7 @@ describe('Provider toXxxOptions preparedMcp wiring (MCP-ADAPTER-WIRING)', () => 
     await agent.call('prompt', {
       cwd: '/tmp',
       preparedMcp,
-    } as never);
+    });
     const options = getLastCallOptions(callCopilot as unknown as { mock: { calls: unknown[][] } });
     expect(options.preparedMcp).toBe(preparedMcp);
   });
@@ -257,7 +264,7 @@ describe('Provider toXxxOptions preparedMcp wiring (MCP-ADAPTER-WIRING)', () => 
     await agent.call('prompt', {
       cwd: '/tmp',
       preparedMcp,
-    } as never);
+    });
     const options = getLastCallOptions(callKiro as unknown as { mock: { calls: unknown[][] } });
     expect(options.preparedMcp).toBe(preparedMcp);
   });
@@ -270,7 +277,7 @@ describe('Provider toXxxOptions preparedMcp wiring (MCP-ADAPTER-WIRING)', () => 
     await agent.call('prompt', {
       cwd: '/tmp',
       preparedMcp,
-    } as never);
+    });
     const options = getLastCallOptions(callMock as unknown as { mock: { calls: unknown[][] } });
     expect(options.preparedMcp).toBe(preparedMcp);
   });
@@ -282,7 +289,7 @@ describe('Provider toXxxOptions preparedMcp wiring (MCP-ADAPTER-WIRING)', () => 
     const agent = provider.setup({ name: 'test' });
     await agent.call('prompt', {
       cwd: '/tmp',
-    } as never);
+    });
     const options = getLastCallOptions(callCodex as unknown as { mock: { calls: unknown[][] } });
     expect(options.preparedMcp).toBeUndefined();
   });
@@ -330,7 +337,7 @@ describe('Runner MCP secret redaction wiring (ARCH-NEW-6)', () => {
     const logPayload = JSON.stringify(redactedServers);
     expect(logPayload).not.toContain('leak-me');
     expect(logPayload).not.toContain('also-leak');
-    expect(redactedServers['secret-server'].env).toEqual({
+    expect(redactedServers['secret-server']?.env).toEqual({
       API_TOKEN: '<redacted>',
       OTHER: '<redacted>',
     });

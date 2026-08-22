@@ -20,6 +20,7 @@ function resolvedServers(): ResolvedMcpServers {
   return {
     enabled: true,
     servers: { 'common-tools': { type: 'stdio', command: 'srv' } },
+    serverNames: ['common-tools'],
     identity: 'common-tools:stdio',
   };
 }

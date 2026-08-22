@@ -2,7 +2,6 @@ import type { AgentResponse, WorkflowStep } from '../models/types.js';
 import { resolveAgentErrorMessage } from '../models/response.js';
 import type { RunAgentOptions } from '../../agents/runner.js';
 import { executeAgent } from '../../agents/agent-usecases.js';
-import { parseStructuredOutputObject } from '../../agents/structured-caller/shared.js';
 import { createLogger } from '../../shared/utils/index.js';
 import type { StreamEvent } from '../../shared/types/provider.js';
 import { buildPhaseExecutionId } from '../../shared/utils/phaseExecutionId.js';
@@ -11,15 +10,9 @@ import { ReportInstructionBuilder } from './instruction/ReportInstructionBuilder
 import { getReportFiles } from './output-contract-files.js';
 import type { PhasePromptParts, StepProviderInfo } from './types.js';
 import type { ReportPhaseRunnerContext } from './phase-runner.js';
-import type {
-  FindingContractReviewerOutputStrategy,
-} from './instruction/instruction-context.js';
-import {
-  FINDING_REVIEW_PUBLICATION_SCHEMA_REF,
-  findingReviewPublicationReportContent,
-} from './findings/review-publication-structured-output.js';
 import { runWithPhaseSpan } from './observability/workflowSpans.js';
 import { writeReportFile } from './report-writer.js';
+import { AGENT_FAILURE_CATEGORIES } from '../../shared/types/agent-failure.js';
 
 const log = createLogger('phase-runner');
 const REPORT_PHASE_MAX_TURNS = 3;
@@ -54,7 +47,6 @@ export type ReportContentValidator = (
 ) => ReportContentValidationResult;
 
 export interface ReportPhaseGenerationOptions {
-  readonly reviewerOutputStrategy?: FindingContractReviewerOutputStrategy;
   readonly validateReportContent?: ReportContentValidator;
   readonly retryMode?: 'standard' | 'single-attempt';
   readonly nextPhaseSequence?: () => number;
@@ -85,6 +77,8 @@ export class ReportPhaseGenerationError extends Error {
     message: string,
     readonly failureReason: ReportRetryFailureReason,
     readonly recovery: ReportPhaseRecoveryMetadata,
+    readonly failureCategory?: AgentResponse['failureCategory'],
+    readonly failureMessage?: string,
   ) {
     super(message);
     this.name = 'ReportPhaseGenerationError';
@@ -95,8 +89,7 @@ export class ReportPhaseGenerationError extends Error {
  * Phase 2: Report output.
  * Resumes the agent session with no tools to request report content.
  * Each report file is generated individually in a loop.
- * 通常レポートは plain text をそのまま扱う。Finding Contract reviewer は
- * structured publication の reportContent だけを正準本文として扱う。
+ * レポート本文は plain text として扱う。
  */
 export async function runReportPhase(
   step: WorkflowStep,
@@ -104,7 +97,12 @@ export async function runReportPhase(
   ctx: ReportPhaseRunnerContext,
 ): Promise<ReportPhaseBlockedResult | ReportPhaseRateLimitedResult | void> {
   return executeReportPhase(step, stepIteration, ctx, {}, (report) => {
-    writeReportFile(ctx.reportDir, report.reportName, report.reportContent);
+    writeReportFile(
+      ctx.reportDir,
+      report.reportName,
+      report.reportContent,
+      ctx.reportContentSanitizer,
+    );
   });
 }
 
@@ -121,31 +119,6 @@ export async function generateReportPhase(
   return result ?? { reports };
 }
 
-function buildReportFindingContractContext(
-  step: WorkflowStep,
-  ctx: ReportPhaseRunnerContext,
-  reviewerOutputStrategy: FindingContractReviewerOutputStrategy | undefined,
-) {
-  const context = ctx.buildFindingContractInstructionContext?.(
-    step,
-    reviewerOutputStrategy,
-  );
-  if (
-    reviewerOutputStrategy?.reportGeneration !== 'structured'
-    || context?.reviewer?.mode !== 'structured'
-    || step.structuredOutput === undefined
-  ) {
-    return context;
-  }
-  return {
-    ...context,
-    reviewer: {
-      ...context.reviewer,
-      rawFindingsStructuredOutput: step.structuredOutput,
-    },
-  };
-}
-
 async function executeReportPhase(
   step: WorkflowStep,
   stepIteration: number,
@@ -153,7 +126,6 @@ async function executeReportPhase(
   options: ReportPhaseGenerationOptions,
   acceptReport: (report: GeneratedReport) => void,
 ): Promise<ReportPhaseBlockedResult | ReportPhaseRateLimitedResult | void> {
-  const reviewerOutputStrategy = options.reviewerOutputStrategy;
   const primarySessionKey = ctx.resolveSessionKey(step);
   let currentSessionId = ctx.getSessionId(primarySessionKey);
   const hasLastResponse = ctx.lastResponse != null && ctx.lastResponse.trim().length > 0;
@@ -188,16 +160,13 @@ async function executeReportPhase(
     const firstAttemptInstruction = new ReportInstructionBuilder(step, {
       cwd: ctx.cwd,
       task: ctx.task,
+      reviewScope: ctx.reviewScope,
       reportDir: ctx.reportDir,
       stepIteration,
       language: ctx.language,
       targetFile: fileName,
       lastResponse: currentSessionId ? undefined : ctx.lastResponse,
-      findingContract: buildReportFindingContractContext(
-        step,
-        ctx,
-        reviewerOutputStrategy,
-      ),
+      completionRetryDiagnostic: ctx.completionRetryDiagnostic,
     }).build();
     let firstAttemptOptions: RunAgentOptions;
     if (currentSessionId === undefined) {
@@ -247,6 +216,9 @@ async function executeReportPhase(
       log.debug('Report file generated', { step: step.name, fileName });
       continue;
     }
+    if (firstAttempt.kind === 'non_retryable_failure') {
+      throwNonRetryableReportFailure(fileName, firstAttempt);
+    }
     failureReasons.add(firstAttempt.failureReason);
 
     if (options.retryMode === 'single-attempt' || !hasLastResponse) {
@@ -260,16 +232,13 @@ async function executeReportPhase(
     const baseRetryInstruction = new ReportInstructionBuilder(step, {
       cwd: ctx.cwd,
       task: ctx.task,
+      reviewScope: ctx.reviewScope,
       reportDir: ctx.reportDir,
       stepIteration,
       language: ctx.language,
       targetFile: fileName,
       lastResponse: ctx.lastResponse,
-      findingContract: buildReportFindingContractContext(
-        step,
-        ctx,
-        reviewerOutputStrategy,
-      ),
+      completionRetryDiagnostic: ctx.completionRetryDiagnostic,
     }).build();
     const retryInstruction = firstAttempt.failureReason === 'invalid_output'
       ? [
@@ -331,6 +300,9 @@ async function executeReportPhase(
         log.debug('Report file generated', { step: step.name, fileName });
         continue;
       }
+      if (retryAttempt.kind === 'non_retryable_failure') {
+        throwNonRetryableReportFailure(fileName, retryAttempt);
+      }
 
       retryFailure = retryAttempt;
       failureReasons.add(retryAttempt.failureReason);
@@ -379,6 +351,9 @@ async function executeReportPhase(
         response: fallbackAttempt.response,
         providerInfo: fallbackAttempt.providerInfo,
       };
+    }
+    if (fallbackAttempt.kind === 'non_retryable_failure') {
+      throwNonRetryableReportFailure(fileName, fallbackAttempt);
     }
     if (fallbackAttempt.kind === 'retryable_failure') {
       failureReasons.add(fallbackAttempt.failureReason);
@@ -445,6 +420,13 @@ function buildReportPhaseToolResultError(): ReportPhaseToolCallError {
   return new ReportPhaseToolCallError('Report phase does not allow tool results.');
 }
 
+/**
+ * Phase 2 のツール禁止ガード。
+ *
+ * report phase は構造化出力を要求しないので、provider がネイティブ構造化出力の
+ * 疑似ツール（OpenCode の StructuredOutput）を流すことはない。ツールイベントは
+ * すべて汚染セッション由来の違反として拒否する。
+ */
 function detectReportPhaseToolCall(event: StreamEvent): ReportPhaseToolCallError | undefined {
   if (event.type === 'tool_use') {
     return buildReportPhaseToolUseError(event.data.tool);
@@ -466,6 +448,12 @@ type ReportAttemptResult =
   }
   | { kind: 'blocked'; response: AgentResponse; providerInfo: StepProviderInfo }
   | { kind: 'rate_limited'; response: AgentResponse; providerInfo: StepProviderInfo }
+  | {
+    kind: 'non_retryable_failure';
+    response: AgentResponse;
+    providerInfo: StepProviderInfo;
+    errorMessage: string;
+  }
   | {
     kind: 'retryable_failure';
     errorMessage: string;
@@ -635,6 +623,20 @@ async function runSingleReportAttempt(
     };
   }
 
+  if (
+    response.status !== 'done'
+    && response.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR
+  ) {
+    const errorMessage = resolveAgentErrorMessage(response.errorKind, response.error || response.content);
+    ctx.onPhaseComplete?.(step, 2, 'report', '', response.status, errorMessage, phaseExecutionId, ctx.iteration);
+    return {
+      kind: 'non_retryable_failure',
+      response,
+      providerInfo: attemptProviderInfo,
+      errorMessage,
+    };
+  }
+
   if (response.status !== 'done') {
     const fallbackMessage = response.error || response.content || 'Unknown error';
     const errorMessage = resolveAgentErrorMessage(response.errorKind, fallbackMessage);
@@ -656,7 +658,7 @@ async function runSingleReportAttempt(
     };
   }
 
-  const finalReportContent = resolveReportContent(step, response);
+  const finalReportContent = response.content.trim();
   if (classifiedFailure !== undefined) {
     ctx.onPhaseComplete?.(
       step,
@@ -724,6 +726,9 @@ function classifyRetryableFailure(
     return undefined;
   }
   if (response.status !== 'done') {
+    if (response.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR) {
+      return undefined;
+    }
     return {
       failureReason: 'provider_error',
       errorMessage: buildRetryableFailureEventError(
@@ -732,8 +737,8 @@ function classifyRetryableFailure(
       ),
     };
   }
-  const finalReportContent = resolveReportContent(step, response);
-  if (finalReportContent.trim().length === 0) {
+  const finalReportContent = response.content.trim();
+  if (finalReportContent.length === 0) {
     return {
       failureReason: 'empty_output',
       errorMessage: buildRetryableFailureEventError(
@@ -755,20 +760,20 @@ function classifyRetryableFailure(
   return undefined;
 }
 
-function resolveReportContent(
-  step: WorkflowStep,
-  response: AgentResponse,
-): string {
-  if (step.structuredOutput?.schemaRef !== FINDING_REVIEW_PUBLICATION_SCHEMA_REF) {
-    return response.content.trim();
-  }
-  const structuredOutput = response.structuredOutput
-    ?? parseStructuredOutputObject(response.content);
-  const reportContent = findingReviewPublicationReportContent(structuredOutput);
-  if (reportContent === undefined) {
-    throw new Error('Finding review publication reportContent is missing');
-  }
-  return reportContent;
+function throwNonRetryableReportFailure(
+  fileName: string,
+  failure: Extract<ReportAttemptResult, { kind: 'non_retryable_failure' }>,
+): never {
+  throw new ReportPhaseGenerationError(
+    `Report phase failed for ${fileName}: ${failure.errorMessage}`,
+    'provider_error',
+    {
+      requiresFreshPhase1: false,
+      failureReasons: ['provider_error'],
+    },
+    failure.response.failureCategory,
+    failure.errorMessage,
+  );
 }
 
 function buildReportAttemptIdentity(

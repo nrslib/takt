@@ -1,8 +1,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
-import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
+import { createLogger, getErrorMessage, guardChildProcessStreams } from '../../shared/utils/index.js';
 import {
+  toCloneBaseRef,
   toLocalBranchRef,
   toPullRequestBaseRef,
   toRemoteTrackingBranchRef,
@@ -183,7 +184,7 @@ export function fetchBaseBranchIntoIsolatedClone(projectDir: string, clonePath: 
       '--force',
       '--no-write-fetch-head',
       projectDir,
-      `${toRemoteTrackingBranchRef(branch)}:refs/takt/base/${branch}`,
+      `${toRemoteTrackingBranchRef(branch)}:${toCloneBaseRef(branch)}`,
     ]);
   } catch {
     throw new Error(REMOTE_BRANCH_FETCH_FAILED_MESSAGE);
@@ -202,7 +203,7 @@ export async function fetchBaseBranchIntoIsolatedCloneAbortable(
       '--force',
       '--no-write-fetch-head',
       projectDir,
-      `${toRemoteTrackingBranchRef(branch)}:refs/takt/base/${branch}`,
+      `${toRemoteTrackingBranchRef(branch)}:${toCloneBaseRef(branch)}`,
     ], abortSignal);
   } catch (err) {
     if (isTaskAbortError(err)) {
@@ -350,6 +351,7 @@ export function runGitCommandAbortable(
       if (abortSignal) {
         abortSignal.removeEventListener('abort', onAbort);
       }
+      guardTeardown();
     };
 
     const resolveOnce = (): void => {
@@ -361,11 +363,14 @@ export function runGitCommandAbortable(
       resolve({ stdout, stderr });
     };
 
-    const rejectOnce = (error: Error): void => {
+    const rejectOnce = (error: Error, terminateChild = false): void => {
       if (settled) {
         return;
       }
       settled = true;
+      if (terminateChild) {
+        terminateProcessGroup(child, 'SIGTERM');
+      }
       cleanup();
       reject(error);
     };
@@ -388,8 +393,13 @@ export function runGitCommandAbortable(
     child.stderr?.on('data', (chunk) => {
       stderr += chunk.toString('utf-8');
     });
-    child.on('error', (error) => {
-      rejectOnce(error);
+    const guardTeardown = guardChildProcessStreams(child, (error, source) => {
+      rejectOnce(
+        source === 'process'
+          ? error
+          : new Error(`git ${args[0]} ${source} stream error: ${error.message}`),
+        source !== 'process',
+      );
     });
     child.on('close', (code) => {
       if (abortSignal?.aborted) {

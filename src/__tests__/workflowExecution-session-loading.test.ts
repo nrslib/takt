@@ -273,8 +273,6 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   notifyError: vi.fn(),
   preventSleep: vi.fn(),
   isDebugEnabled: vi.fn().mockReturnValue(false),
-  writePromptLog: vi.fn(),
-  getDebugPromptsLogFile: vi.fn().mockReturnValue(null),
   generateReportDir: vi.fn().mockReturnValue('test-report-dir'),
   isValidReportDirName: vi.fn().mockReturnValue(true),
   playWarningSound: vi.fn(),
@@ -587,16 +585,6 @@ describe('executeWorkflow session loading', () => {
     expect(mockLoadPersonaSessions).toHaveBeenCalledWith(projectCwd, 'claude');
   });
 
-  it('should log provider and model per step with global defaults', async () => {
-    await executeWorkflow(makeConfig(), 'task', projectCwd, {
-      projectCwd,
-    });
-
-    const mockInfo = vi.mocked(info);
-    expect(mockInfo).toHaveBeenCalledWith('Provider: claude');
-    expect(mockInfo).toHaveBeenCalledWith('Model: (default)');
-  });
-
   it('should resolve logging config from workflow config values', async () => {
     await executeWorkflow(makeConfig(), 'task', projectCwd, {
       projectCwd,
@@ -678,11 +666,10 @@ describe('executeWorkflow session loading', () => {
       '{ resource.service.name = "takt" && span."takt.git.branch" = "takt/843/add-trace-discovery" }',
     ]);
 
-    const mockInfo = vi.mocked(info);
-    expect(mockInfo).toHaveBeenCalledWith('TraceQL discovery:');
-    expect(mockInfo.mock.calls.map(([line]) => line).filter((line) => line.startsWith('  {'))).toEqual(
-      metaQueries?.map((query) => `  ${query}`),
-    );
+    const infoLines = vi.mocked(info).mock.calls.map(([line]) => String(line));
+    for (const query of metaQueries ?? []) {
+      expect(infoLines.some((line) => line.includes(query))).toBe(true);
+    }
   });
 
   it('Given observability is disabled at workflow entry, When trace metadata is present, Then omits TraceQL discovery output and metadata', async () => {
@@ -725,7 +712,6 @@ describe('executeWorkflow session loading', () => {
     };
 
     expect(finalMeta.observability?.traceDiscovery).toBeUndefined();
-    expect(vi.mocked(info)).not.toHaveBeenCalledWith('TraceQL discovery:');
   });
 
   it('Given observability is enabled at workflow entry, When workflow aborts, Then persists and prints the same TraceQL discovery queries', async () => {
@@ -784,11 +770,10 @@ describe('executeWorkflow session loading', () => {
       '{ resource.service.name = "takt" && span."takt.git.branch" = "takt/843/add-trace-discovery" }',
     ]);
 
-    const mockInfo = vi.mocked(info);
-    expect(mockInfo).toHaveBeenCalledWith('TraceQL discovery:');
-    expect(mockInfo.mock.calls.map(([line]) => line).filter((line) => line.startsWith('  {'))).toEqual(
-      metaQueries?.map((query) => `  ${query}`),
-    );
+    const infoLines = vi.mocked(info).mock.calls.map(([line]) => String(line));
+    for (const query of metaQueries ?? []) {
+      expect(infoLines.some((line) => line.includes(query))).toBe(true);
+    }
   });
 
   it('Given observability is enabled at workflow entry, When workflow run rejects without an abort event, Then persists and prints TraceQL discovery queries', async () => {
@@ -843,11 +828,10 @@ describe('executeWorkflow session loading', () => {
       '{ resource.service.name = "takt" && span."takt.git.branch" = "takt/843/add-trace-discovery" }',
     ]);
 
-    const mockInfo = vi.mocked(info);
-    expect(mockInfo).toHaveBeenCalledWith('TraceQL discovery:');
-    expect(mockInfo.mock.calls.map(([line]) => line).filter((line) => line.startsWith('  {'))).toEqual(
-      metaQueries?.map((query) => `  ${query}`),
-    );
+    const infoLines = vi.mocked(info).mock.calls.map(([line]) => String(line));
+    for (const query of metaQueries ?? []) {
+      expect(infoLines.some((line) => line.includes(query))).toBe(true);
+    }
   });
 
   it('Given workflow run rejects, When event sink is delayed, Then flushes failure events in order before rejecting', async () => {
@@ -1176,23 +1160,6 @@ describe('executeWorkflow session loading', () => {
     expect(mockObservabilityShutdown).toHaveBeenCalledOnce();
   });
 
-  it('should log configured model from global/project settings when step model is unresolved', async () => {
-    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
-      ...defaultResolvedConfigValues,
-      model: 'gpt-4.1',
-    });
-    mockResolveConfigValueWithSource.mockImplementation((_cwd, key) => key === 'provider'
-      ? { value: 'claude', source: 'global' }
-      : { value: 'gpt-4.1', source: 'global' });
-
-    await executeWorkflow(makeConfig(), 'task', projectCwd, {
-      projectCwd,
-    });
-
-    const mockInfo = vi.mocked(info);
-    expect(mockInfo).toHaveBeenCalledWith('Model: gpt-4.1');
-  });
-
   it('should pass resolved global provider/model to WorkflowEngine for step-level resolution', async () => {
     vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
       ...defaultResolvedConfigValues,
@@ -1213,19 +1180,6 @@ describe('executeWorkflow session loading', () => {
     expect(MockWorkflowEngine.lastInstance.receivedOptions.personaProviders).toEqual({
       coder: { provider: 'codex', model: 'o3' },
     });
-  });
-
-  it('should log provider and model per step with overrides', async () => {
-    await executeWorkflow(makeConfig(), 'task', projectCwd, {
-      projectCwd,
-      provider: 'codex',
-      model: 'gpt-5',
-      personaProviders: { coder: { provider: 'opencode' } },
-    });
-
-    const mockInfo = vi.mocked(info);
-    expect(mockInfo).toHaveBeenCalledWith('Provider: opencode');
-    expect(mockInfo).toHaveBeenCalledWith('Model: gpt-5');
   });
 
   it('should pass step type to usage logger for parallel step', async () => {

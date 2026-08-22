@@ -150,10 +150,6 @@ function validateEntry(entry: unknown, index: number): ScenarioEntry {
   if (obj.structured_output !== undefined && (typeof obj.structured_output !== 'object' || obj.structured_output === null || Array.isArray(obj.structured_output))) {
     throw new Error(`Scenario entry [${index}] "structured_output" must be an object if provided`);
   }
-  if (obj.mock_task_response !== undefined && obj.mock_task_response !== 'main_manager_raw_decisions') {
-    throw new Error(`Scenario entry [${index}] "mock_task_response" is invalid`);
-  }
-
   // delay_ms is optional
   if (obj.delay_ms !== undefined && typeof obj.delay_ms !== 'number') {
     throw new Error(`Scenario entry [${index}] "delay_ms" must be a number if provided`);
@@ -170,16 +166,104 @@ function validateEntry(entry: unknown, index: number): ScenarioEntry {
   ) {
     throw new Error(`Scenario entry [${index}] "failure_category" is invalid`);
   }
+  const streamEvents = validateStreamEvents(obj.stream_events, index);
+  const textChunks = validateTextChunks(obj.text_chunks, index);
+  const fileWrites = validateFileWrites(obj.file_writes, index);
 
   return {
     persona: obj.persona as string | undefined,
     status: status as ScenarioEntry['status'],
     content: obj.content as string,
     structuredOutput: obj.structured_output as Record<string, unknown> | undefined,
-    mockTaskResponse: obj.mock_task_response as ScenarioEntry['mockTaskResponse'],
     error: obj.error as string | undefined,
     failureCategory: obj.failure_category as ScenarioEntry['failureCategory'],
     delayMs: obj.delay_ms as number | undefined,
     waitForAbort: obj.wait_for_abort as boolean | undefined,
+    ...(streamEvents === undefined ? {} : { streamEvents }),
+    ...(textChunks === undefined ? {} : { textChunks }),
+    ...(fileWrites === undefined ? {} : { fileWrites }),
   };
+}
+
+function validateStreamEvents(
+  value: unknown,
+  entryIndex: number,
+): ScenarioEntry['streamEvents'] {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw new Error(`Scenario entry [${entryIndex}] "stream_events" must be an array`);
+  }
+  return value.map((event, eventIndex) => {
+    if (typeof event !== 'object' || event === null || Array.isArray(event)) {
+      throw new Error(`Scenario entry [${entryIndex}] stream_events[${eventIndex}] must be an object`);
+    }
+    const record = event as Record<string, unknown>;
+    if (
+      record.type !== 'tool_use'
+      || typeof record.tool !== 'string'
+      || typeof record.id !== 'string'
+      || typeof record.input !== 'object'
+      || record.input === null
+      || Array.isArray(record.input)
+    ) {
+      throw new Error(`Scenario entry [${entryIndex}] stream_events[${eventIndex}] is invalid`);
+    }
+    return {
+      type: 'tool_use' as const,
+      tool: record.tool,
+      id: record.id,
+      input: record.input as Record<string, unknown>,
+    };
+  });
+}
+
+function validateTextChunks(
+  value: unknown,
+  entryIndex: number,
+): ScenarioEntry['textChunks'] {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw new Error(`Scenario entry [${entryIndex}] "text_chunks" must be an array`);
+  }
+  return value.map((chunk, chunkIndex) => {
+    if (typeof chunk !== 'object' || chunk === null || Array.isArray(chunk)) {
+      throw new Error(`Scenario entry [${entryIndex}] text_chunks[${chunkIndex}] must be an object`);
+    }
+    const record = chunk as Record<string, unknown>;
+    if (typeof record.text !== 'string') {
+      throw new Error(`Scenario entry [${entryIndex}] text_chunks[${chunkIndex}] must have a "text" string`);
+    }
+    const delayMs = record.delay_ms;
+    if (delayMs !== undefined && typeof delayMs !== 'number') {
+      throw new Error(`Scenario entry [${entryIndex}] text_chunks[${chunkIndex}] "delay_ms" must be a number if provided`);
+    }
+    return {
+      text: record.text,
+      ...(delayMs === undefined ? {} : { delayMs }),
+    };
+  });
+}
+
+function validateFileWrites(
+  value: unknown,
+  entryIndex: number,
+): ScenarioEntry['fileWrites'] {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw new Error(`Scenario entry [${entryIndex}] "file_writes" must be an array`);
+  }
+  return value.map((write, writeIndex) => {
+    if (typeof write !== 'object' || write === null || Array.isArray(write)) {
+      throw new Error(`Scenario entry [${entryIndex}] file_writes[${writeIndex}] must be an object`);
+    }
+    const record = write as Record<string, unknown>;
+    if (
+      typeof record.path !== 'string'
+      || record.path.length === 0
+      || typeof record.content !== 'string'
+    ) {
+      throw new Error(`Scenario entry [${entryIndex}] file_writes[${writeIndex}] is invalid`);
+    }
+    return { path: record.path, content: record.content };
+  });
 }

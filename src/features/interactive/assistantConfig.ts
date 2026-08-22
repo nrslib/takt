@@ -11,6 +11,7 @@ import {
 import type { ProviderRoutingEntry } from '../../core/models/config-types.js';
 import type { ProviderType } from '../../shared/types/provider.js';
 import type { StepProviderOptions } from '../../core/models/workflow-types.js';
+import type { PermissionMode } from '../../core/models/types.js';
 
 /**
  * Assistant provider/model resolution result. Mirrors the selector seam by carrying the
@@ -24,6 +25,7 @@ export interface ResolvedAssistantProvider {
   provider?: ProviderType;
   model?: string;
   providerOptions?: StepProviderOptions;
+  permissionMode?: PermissionMode;
   runtimeManaged: boolean;
 }
 
@@ -90,7 +92,12 @@ function resolveAssistantFromRuntimeV1(
     ?? (configuredModel.source === 'env' ? configuredModel.value : undefined);
 
   const composed = composeRuntimeProviderOverride(
-    { provider: runtime.provider, model: runtime.model, providerOptions: runtime.providerOptions },
+    {
+      provider: runtime.provider,
+      model: runtime.model,
+      providerOptions: runtime.providerOptions,
+      permissionMode: runtime.permissionMode,
+    },
     { provider: providerOverride, model: modelOverride },
   );
   return {
@@ -98,5 +105,6 @@ function resolveAssistantFromRuntimeV1(
     provider: composed.provider,
     model: composed.model,
     ...(composed.providerOptions !== undefined ? { providerOptions: composed.providerOptions } : {}),
+    ...(composed.permissionMode !== undefined ? { permissionMode: composed.permissionMode } : {}),
   };
 }

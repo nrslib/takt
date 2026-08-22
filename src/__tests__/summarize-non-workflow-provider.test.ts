@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { stringify as stringifyYaml } from 'yaml';
 
 const providerMocks = vi.hoisted(() => ({
   call: vi.fn(),
@@ -19,6 +20,8 @@ import {
   invalidateGlobalConfigCache,
 } from '../infra/config/index.js';
 import { summarizeTaskName } from '../infra/task/summarize.js';
+import { RUNTIME_PROVIDER_FILENAME } from '../infra/config/runtime-provider/constants.js';
+import type { RuntimeProviderFile } from '../infra/config/runtime-provider/schema.js';
 
 describe('summarizeTaskName non-workflow provider integration', () => {
   let projectDir: string;
@@ -85,6 +88,18 @@ describe('summarizeTaskName non-workflow provider integration', () => {
     invalidateAllResolvedConfigCache();
   });
 
+  function configureRuntimeProvider(runtime: RuntimeProviderFile): void {
+    writeFileSync(join(globalConfigDir, 'config.yaml'), 'language: en\n', 'utf-8');
+    writeFileSync(join(projectDir, '.takt', 'config.yaml'), 'branch_name_strategy: ai\n', 'utf-8');
+    writeFileSync(
+      join(projectDir, '.takt', RUNTIME_PROVIDER_FILENAME),
+      stringifyYaml(runtime),
+      'utf-8',
+    );
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+  }
+
   it('should pass the top-level model through real config loading to the summarizer', async () => {
     const result = await summarizeTaskName('Create a routed workflow task', { cwd: projectDir });
 
@@ -101,5 +116,68 @@ describe('summarizeTaskName non-workflow provider integration', () => {
     const callOptions = providerMocks.call.mock.calls[0]?.[1];
     expect(callOptions?.model).not.toBe('codex/router-model');
     expect(callOptions?.model).not.toBe('opencode/workflow-candidate-model');
+  });
+
+  it('should generate an AI branch name with runtime defaults.profile', async () => {
+    configureRuntimeProvider({
+      version: 1,
+      provider: {
+        defaults: { profile: 'summary' },
+        profiles: {
+          summary: { provider: 'mock', model: 'runtime-profile-model' },
+          router: { provider: 'mock', model: 'router-model' },
+          fallback: { provider: 'mock', model: 'pool-fallback-model' },
+        },
+        auto_routing: {
+          router_profile: 'router',
+          pools: {
+            summary: {
+              candidates: [{ profile: 'fallback', tier: 'low' }],
+              fallback_profile: 'fallback',
+            },
+          },
+        },
+      },
+    });
+
+    await expect(summarizeTaskName('Create a runtime branch', { cwd: projectDir }))
+      .resolves.toBe('resolved-summary-slug');
+    expect(providerMocks.getProvider).toHaveBeenCalledWith('mock');
+    expect(providerMocks.call.mock.calls[0]?.[1]).toEqual(expect.objectContaining({
+      model: 'runtime-profile-model',
+    }));
+    expect(providerMocks.call.mock.calls[0]?.[1]?.model).not.toBe('pool-fallback-model');
+  });
+
+  it('should generate an AI branch name with the first profile in runtime defaults.ladder', async () => {
+    configureRuntimeProvider({
+      version: 1,
+      provider: {
+        defaults: { ladder: ['summary', 'strong-summary'] },
+        profiles: {
+          summary: { provider: 'mock', model: 'runtime-ladder-model' },
+          'strong-summary': { provider: 'mock', model: 'runtime-strong-model' },
+          router: { provider: 'mock', model: 'router-model' },
+          fallback: { provider: 'mock', model: 'pool-fallback-model' },
+        },
+        auto_routing: {
+          router_profile: 'router',
+          pools: {
+            summary: {
+              candidates: [{ profile: 'fallback', tier: 'low' }],
+              fallback_profile: 'fallback',
+            },
+          },
+        },
+      },
+    });
+
+    await expect(summarizeTaskName('Create a ladder branch', { cwd: projectDir }))
+      .resolves.toBe('resolved-summary-slug');
+    expect(providerMocks.getProvider).toHaveBeenCalledWith('mock');
+    expect(providerMocks.call.mock.calls[0]?.[1]).toEqual(expect.objectContaining({
+      model: 'runtime-ladder-model',
+    }));
+    expect(providerMocks.call.mock.calls[0]?.[1]?.model).not.toBe('pool-fallback-model');
   });
 });

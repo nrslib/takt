@@ -1,12 +1,20 @@
 name: review-fix-dual-cqrs
 description: Frontend + CQRS+ES focused review + fix loop (structure, modularization, domain model, component design, security, coding)
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 max_steps: 30
+facet_pools:
+  security-review-facets:
+    uses: security-review-facets
 initial_step: gather
 loop_monitors:
   - cycle:
@@ -38,7 +46,9 @@ steps:
     tags:
       - review
     parallel:
+      fixed:
       - name: arch-review
+        capabilities: readonly
         tags:
           - review
         edit: false
@@ -46,18 +56,13 @@ steps:
         policy:
           - contract-change
           - review
+          - architecture
+          - backend
+          - frontend
         knowledge:
           - architecture
           - frontend
           - backend
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - WebSearch
-              - WebFetch
         instruction: review-arch
         output_contracts:
           report:
@@ -68,24 +73,19 @@ steps:
           - condition: needs_fix
 
       - name: cqrs-es-review
+        capabilities: readonly
         tags:
           - review
         edit: false
         persona: cqrs-es-reviewer
         policy:
+          - cqrs-es
           - contract-change
           - review
+          - backend
         knowledge:
           - cqrs-es
           - backend
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - WebSearch
-              - WebFetch
         instruction: review-cqrs-es
         output_contracts:
           report:
@@ -96,6 +96,7 @@ steps:
           - condition: needs_fix
 
       - name: frontend-review
+        capabilities: readonly
         tags:
           - review
         edit: false
@@ -104,15 +105,8 @@ steps:
           - contract-change
           - review
           - design-fidelity
+          - frontend
         knowledge: frontend
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - WebSearch
-              - WebFetch
         instruction: review-frontend
         output_contracts:
           report:
@@ -122,33 +116,8 @@ steps:
           - condition: approved
           - condition: needs_fix
 
-      - name: security-review
-        tags:
-          - review
-        edit: false
-        persona: security-reviewer
-        policy:
-          - contract-change
-          - review
-        knowledge: security
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - WebSearch
-              - WebFetch
-        instruction: review-security
-        output_contracts:
-          report:
-            - name: security-review.md
-              format: security-review
-        rules:
-          - condition: approved
-          - condition: needs_fix
-
       - name: coding-review
+        capabilities: readonly
         tags:
           - review
         edit: false
@@ -157,15 +126,6 @@ steps:
           - contract-change
           - review
           - coding
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
         instruction: review-coding
         output_contracts:
           report:
@@ -175,7 +135,40 @@ steps:
           - condition: approved
           - condition: needs_fix
 
+      pool:
+      - name: security-review
+        description: Do not select by default. Select only when (a) the change may affect secret or credential handling, external-input handling, process execution, filesystem operations, network or terminal boundaries, sandboxing, or permissions, or (b) the change is large enough that security impact cannot be confidently ruled out. Do not select for documentation-only, comment-only, or test-only changes, or small localized fixes.
+        capabilities: readonly
+        tags:
+          - review
+        edit: false
+        persona: security-reviewer
+        policy:
+          - contract-change
+          - security-review
+        knowledge:
+          - security
+          - security-data
+          - security-dependencies
+        dynamic_facets:
+          pool: security-review-facets
+          selector:
+            instruction: select-applicable-candidates
+        instruction: review-security
+        output_contracts:
+          report:
+            - name: security-review.md
+              format: security-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+      selection:
+        selector:
+          instruction: select-applicable-candidates
+
     rules:
+      - condition: any("error")
+        next: reviewers
       - condition: all("approved")
         next: final-gate
       - condition: any("needs_fix")
@@ -183,19 +176,19 @@ steps:
 
   - name: final-gate
     kind: workflow_call
-    call: merge-readiness-dual-final-gate
+    call: final-gate
     args:
-      merge_readiness_knowledge:
-        - frontend
-        - backend
-        - cqrs-es
-        - security
-        - architecture
       supervise_knowledge:
         - frontend
         - backend
         - cqrs-es
         - security
+        - architecture
+      supervise_policy:
+        - contract-change
+        - frontend
+        - backend
+        - cqrs-es
         - architecture
     rules:
       - condition: COMPLETE
@@ -203,7 +196,7 @@ steps:
       - condition: needs_fix
         next: remediation
       - condition: need_replan
-        next: remediation
+        next: ABORT
       - condition: ABORT
         next: ABORT
   - name: remediation
@@ -215,17 +208,23 @@ steps:
         - design-fidelity
         - screen-api
         - review
+        - cqrs-es
       fix_policy:
         - coding
         - testing
         - design-fidelity
         - screen-api
+        - cqrs-es
+        - architecture
+        - backend
+        - frontend
       verification_policy:
         - coding
         - testing
         - design-fidelity
         - screen-api
         - review
+        - cqrs-es
       fix_knowledge:
         - frontend
         - backend

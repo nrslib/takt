@@ -3,6 +3,11 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import {
   interpolateMcpEnv,
 } from '../infra/config/runtime-provider/mcp-schema.js';
+import type {
+  McpHttpServerConfig,
+  McpSseServerConfig,
+  McpStdioServerConfig,
+} from '../core/models/workflow-provider-options.js';
 
 /**
  * Contracts covered (see plan.md 完了契約):
@@ -36,7 +41,7 @@ describe('interpolateMcpEnv (MCP-ENV)', () => {
       command: 'srv',
       env: { API_TOKEN: '${MCP_TEST_TOKEN}' },
     });
-    expect(result.env?.API_TOKEN).toBe('secret-value');
+    expect((result as McpStdioServerConfig).env?.API_TOKEN).toBe('secret-value');
   });
 
   it('Given a stdio server with literal env value, When interpolated, Then it is kept as-is', () => {
@@ -45,7 +50,7 @@ describe('interpolateMcpEnv (MCP-ENV)', () => {
       command: 'srv',
       env: { STATIC: 'literal-value' },
     });
-    expect(result.env?.STATIC).toBe('literal-value');
+    expect((result as McpStdioServerConfig).env?.STATIC).toBe('literal-value');
   });
 
   it('Given a stdio server with an undefined required env var, When interpolated, Then it fails fast (要件16)', () => {
@@ -66,7 +71,7 @@ describe('interpolateMcpEnv (MCP-ENV)', () => {
       url: 'https://example.com/mcp',
       headers: { Authorization: 'Bearer ${MCP_AUTH_TOKEN}' },
     });
-    expect(result.headers?.Authorization).toBe('Bearer bearer-value');
+    expect((result as McpHttpServerConfig).headers?.Authorization).toBe('Bearer bearer-value');
   });
 
   it('Given an http server with an undefined header env var, When interpolated, Then it fails fast (要件16)', () => {
@@ -86,7 +91,7 @@ describe('interpolateMcpEnv (MCP-ENV)', () => {
       type: 'sse',
       url: 'http://${MCP_HOST}:8080/sse',
     });
-    expect(result.url).toBe('http://mcp.local:8080/sse');
+    expect((result as McpSseServerConfig).url).toBe('http://mcp.local:8080/sse');
   });
 
   it('Given a stdio server with ${VAR} in args, When interpolated, Then the value is resolved', () => {
@@ -96,7 +101,7 @@ describe('interpolateMcpEnv (MCP-ENV)', () => {
       command: 'srv',
       args: ['--env', '${MCP_FLAG}'],
     });
-    expect(result.args).toEqual(['--env', 'production']);
+    expect((result as McpStdioServerConfig).args).toEqual(['--env', 'production']);
   });
 
   it('Given a server with multiple env vars in one value, When interpolated, Then both are resolved', () => {
@@ -107,7 +112,7 @@ describe('interpolateMcpEnv (MCP-ENV)', () => {
       command: 'srv',
       env: { COMBINED: '${MCP_A}-${MCP_B}' },
     });
-    expect(result.env?.COMBINED).toBe('alpha-beta');
+    expect((result as McpStdioServerConfig).env?.COMBINED).toBe('alpha-beta');
   });
 
   it('Given a server with no env references, When interpolated, Then it is returned unchanged', () => {
@@ -125,6 +130,6 @@ describe('interpolateMcpEnv (MCP-ENV)', () => {
       type: 'stdio',
       command: '${PATH}',
     });
-    expect(result.command).toBe('/usr/local/bin:/usr/bin');
+    expect((result as McpStdioServerConfig).command).toBe('/usr/local/bin:/usr/bin');
   });
 });

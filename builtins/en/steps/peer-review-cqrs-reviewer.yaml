@@ -5,22 +5,27 @@ params:
   review_knowledge_additions:
     type: facet_ref[]
     facet_kind: knowledge
+  cqrs_es_review_instruction:
+    type: facet_ref
+    facet_kind: instruction
 name: cqrs-es-review
+capabilities: readonly
 tags:
   - review
 edit: false
 persona: cqrs-es-reviewer
 policy:
+  - cqrs-es
   - contract-change
   - review
+  - backend
   - $param: review_policy_additions
 knowledge:
   - cqrs-es
   - backend
   - $param: review_knowledge_additions
-provider_options:
-  extends: review-readonly
-instruction: review-cqrs-es
+instruction:
+  $param: cqrs_es_review_instruction
 output_contracts:
   report:
     - name: cqrs-es-review.md

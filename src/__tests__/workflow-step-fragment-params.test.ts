@@ -145,6 +145,105 @@ parallel:
     expect(result.raw).toHaveProperty('steps.0.parallel.0.knowledge', ['reviewing']);
   });
 
+  it('should bind params recursively in dynamic parallel branches when a fragment contains dynamic parallel substeps', () => {
+    write(projectDir, '.takt/steps/dynamic-parallel.yaml', `params:
+  child_knowledge:
+    type: facet_ref[]
+    facet_kind: knowledge
+parallel:
+  fixed:
+    - name: fixed-review
+      instruction: review
+      knowledge:
+        - $param: child_knowledge
+  pool:
+    - name: pool-review
+      instruction: review
+      knowledge:
+        - base-knowledge
+        - $param: child_knowledge
+  selection:
+    mode: replace
+`);
+
+    const result = resolve({
+      steps: [caller(
+        'dynamic-parallel',
+        { child_knowledge: ['reviewing'] },
+        {
+          rules: {
+            self: RULES,
+            parallel: {
+              'fixed-review': RULES,
+              'pool-review': RULES,
+            },
+          },
+        },
+      )],
+    });
+
+    expect(result.raw).toHaveProperty(
+      'steps.0.parallel.fixed.0.knowledge',
+      ['reviewing'],
+    );
+    expect(result.raw).toHaveProperty(
+      'steps.0.parallel.pool.0.knowledge',
+      ['base-knowledge', 'reviewing'],
+    );
+  });
+
+  it('should bind a facet_pool_ref into dynamic_facets.pool when the caller supplies a scalar pool name', () => {
+    write(projectDir, '.takt/steps/pool-step.yaml', [
+      'params:',
+      '  implementation_pool:',
+      '    type: facet_pool_ref',
+      'dynamic_facets:',
+      '  pool:',
+      '    $param: implementation_pool',
+      '',
+    ].join('\n'));
+
+    const result = resolve({
+      steps: [caller('pool-step', { implementation_pool: 'takt-coding-facets' })],
+    });
+
+    expect(result.raw).toHaveProperty(
+      'steps.0.dynamic_facets.pool',
+      'takt-coding-facets',
+    );
+  });
+
+  it('should preserve a facet_pool_ref through a nested fragment when the outer scope maps the child parameter', () => {
+    write(projectDir, '.takt/steps/inner-pool.yaml', [
+      'params:',
+      '  child_pool:',
+      '    type: facet_pool_ref',
+      'dynamic_facets:',
+      '  pool:',
+      '    $param: child_pool',
+      '',
+    ].join('\n'));
+    write(projectDir, '.takt/steps/outer-pool.yaml', [
+      'params:',
+      '  parent_pool:',
+      '    type: facet_pool_ref',
+      'uses: inner-pool',
+      'with:',
+      '  child_pool:',
+      '    $param: parent_pool',
+      '',
+    ].join('\n'));
+
+    const result = resolve({
+      steps: [caller('outer-pool', { parent_pool: 'coding-facets' })],
+    });
+
+    expect(result.raw).toHaveProperty(
+      'steps.0.dynamic_facets.pool',
+      'coding-facets',
+    );
+  });
+
   it('splices empty and populated facet_ref arrays into mixed facet lists', () => {
     write(projectDir, '.takt/steps/composed.yaml', `params:
   policy_additions:
@@ -502,10 +601,24 @@ instruction:
       source: 'fragment',
     },
     {
+      name: 'facet_ref used as a dynamic pool',
+      fragment: 'params:\n  wrong:\n    type: facet_ref\n    facet_kind: policy\ndynamic_facets:\n  pool:\n    $param: wrong\n',
+      step: caller('invalid', { wrong: 'strict' }),
+      path: ['dynamic_facets', 'pool'],
+      source: 'fragment',
+    },
+    {
       name: 'undeclared reference',
       fragment: 'instruction:\n  $param: missing\n',
       step: caller('invalid', {}),
       path: ['instruction'],
+      source: 'fragment',
+    },
+    {
+      name: 'undeclared dynamic pool reference',
+      fragment: 'dynamic_facets:\n  pool:\n    $param: missing\n',
+      step: caller('invalid', {}),
+      path: ['dynamic_facets', 'pool'],
       source: 'fragment',
     },
     {
@@ -543,7 +656,7 @@ instruction:
       path: ['parallel', 0, 'params'],
       source: 'fragment',
     },
-  ])('rejects $name with a structured source path', ({ fragment, step, path, source }) => {
+  ])('should reject $name with a structured source path when the fragment parameter contract is invalid', ({ fragment, step, path, source }) => {
     const fragmentPath = write(projectDir, '.takt/steps/invalid.yaml', fragment);
 
     let thrown: unknown;

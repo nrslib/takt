@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { describe, expect, it } from 'vitest';
 import type { AgentWorkflowStep } from '../core/models/index.js';
-import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '../core/workflow/provider-resolution.js';
+import { resolveExecConfigProviderModel } from '../features/exec/runtimeConfig.js';
 import type { ExecConfig } from '../features/exec/types.js';
 import { buildExecWorkflowYaml as buildExecWorkflowYamlRaw } from '../features/exec/workflowTemplate.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
@@ -13,6 +13,16 @@ type ExecConfigOverrides = Omit<Partial<ExecConfig>, 'session' | 'replan' | 'loo
   session?: Partial<ExecConfig['session']>;
   replan?: Partial<ExecConfig['replan']>;
   loop?: Partial<ExecConfig['loop']>;
+};
+
+type RawProviderOptions = {
+  claude?: { effort?: string };
+  codex?: { reasoning_effort?: string };
+  copilot?: { effort?: string };
+};
+
+type RawParallelStep = {
+  provider_options?: RawProviderOptions;
 };
 
 const defaultExecWorkflowSkillOptions = {
@@ -44,10 +54,13 @@ type RawWorkflow = {
   loop_monitors?: Array<{
     cycle: string[];
     threshold: number;
-    judge: Record<string, unknown>;
+    judge: Record<string, unknown> & { provider_options?: RawProviderOptions };
   }>;
   report_formats?: Record<string, string>;
-  steps: Array<Record<string, unknown>>;
+  steps: Array<Record<string, unknown> & {
+    provider_options?: RawProviderOptions;
+    parallel?: RawParallelStep[];
+  }>;
 };
 
 function createExecConfig(overrides: ExecConfigOverrides = {}): ExecConfig {
@@ -178,10 +191,7 @@ describe('exec workflow template', () => {
       expect(workflow.description).toBe('Implement the requested task');
       expect(workflow.initialStep).toBe('execute');
       expect(workflow.maxSteps).toBe(20);
-      expect(raw.workflow_config?.provider_options?.codex?.skills).toEqual({
-        repo: true,
-        user: true,
-      });
+      expect(raw).not.toHaveProperty('workflow_config');
       expect(execute?.parallel).toHaveLength(1);
       expect(judge?.parallel).toHaveLength(1);
       expect(worker?.sessionKey).toBe('worker-1');
@@ -193,21 +203,11 @@ describe('exec workflow template', () => {
         parallel: [
           {
             pass_previous_response: false,
-            provider_options: {
-              claude: {
-                allowed_tools: ['Read', 'Glob', 'Grep'],
-              },
-            },
+            capabilities: ['readonly', 'enable-skills'],
           },
         ],
       });
-      expect(rawReplan).toMatchObject({
-        provider_options: {
-          claude: {
-            allowed_tools: ['Read', 'Glob', 'Grep'],
-          },
-        },
-      });
+      expect(rawReplan).toMatchObject({ capabilities: ['readonly', 'enable-skills'] });
       expect(judge?.passPreviousResponse).toBe(false);
       expect(judgeActor?.passPreviousResponse).toBe(false);
       expect(replan?.sessionKey).toBe('exec-replan');
@@ -246,10 +246,8 @@ describe('exec workflow template', () => {
       codexSkillInheritance: { repo: false, user: false },
     }));
 
-    expect(raw.workflow_config?.provider_options?.codex?.skills).toEqual({
-      repo: false,
-      user: false,
-    });
+    expect(raw).not.toHaveProperty('workflow_config');
+    expect(raw.steps.find((step) => step.name === 'execute')?.parallel[0]?.capabilities).toBe('edit');
   });
 
   it('should load generated parallel sub-steps with explicit model omission', () => {
@@ -297,63 +295,27 @@ describe('exec workflow template', () => {
         throw new Error('Generated exec workflow must include cursor worker, review, and replan steps');
       }
 
-      expect(raw.steps.find((step) => step.name === 'execute')).toMatchObject({
-        parallel: [{ provider: 'cursor', model: null }],
-      });
-      expect(raw.steps.find((step) => step.name === 'review')).toMatchObject({
-        parallel: [{ provider: 'cursor', model: null }],
-      });
-      expect(raw.steps.find((step) => step.name === 'replan')).toMatchObject({
-        provider: 'cursor',
-        model: null,
-      });
+      expect(raw.steps.find((step) => step.name === 'execute')).not.toHaveProperty('provider');
+      expect(raw.steps.find((step) => step.name === 'execute')).not.toHaveProperty('model');
+      expect(raw.steps.find((step) => step.name === 'review')).not.toHaveProperty('provider');
+      expect(raw.steps.find((step) => step.name === 'review')).not.toHaveProperty('model');
+      expect(raw.steps.find((step) => step.name === 'replan')).not.toHaveProperty('provider');
+      expect(raw.steps.find((step) => step.name === 'replan')).not.toHaveProperty('model');
       expect(raw.loop_monitors?.map((monitor) => monitor.judge)).toEqual([
-        expect.objectContaining({ provider: 'cursor', model: null }),
-        expect.objectContaining({ provider: 'cursor', model: null }),
+        expect.not.objectContaining({ provider: expect.anything(), model: expect.anything() }),
+        expect.not.objectContaining({ provider: expect.anything(), model: expect.anything() }),
       ]);
-      expect(cursorWorker).toMatchObject({
-        provider: 'cursor',
-        model: undefined,
-        modelSpecified: true,
-      });
-      expect(cursorJudge).toMatchObject({
-        provider: 'cursor',
-        model: undefined,
-        modelSpecified: true,
-      });
-      expect(replan).toMatchObject({
-        provider: 'cursor',
-        model: undefined,
-        modelSpecified: true,
-      });
-      for (const monitor of workflow.loopMonitors ?? []) {
-        expect(monitor.judge.provider).toBe('cursor');
-        expect(monitor.judge.model).toBeUndefined();
-        expect(monitor.judge.modelSpecified).toBe(true);
-        expect(resolveLoopMonitorJudgeProviderModel({
-          judge: monitor.judge,
-          triggeringProviderInfo: {
-            provider: 'cursor',
-            providerSource: 'step',
-            model: 'global-model',
-            modelSource: 'step',
-          },
-        })).toEqual({
-          provider: 'cursor',
-          providerSource: 'step',
-          model: undefined,
-          modelSource: 'step',
-        });
-      }
-      expect(resolveStepProviderModel({
-        step: cursorWorker,
-        provider: 'cursor',
-        model: 'global-model',
-      })).toEqual(expect.objectContaining({
-        provider: 'cursor',
-        model: undefined,
-        modelSource: 'step',
-      }));
+      expect(cursorWorker).not.toHaveProperty('provider');
+      expect(cursorWorker).not.toHaveProperty('model');
+      expect(cursorJudge).not.toHaveProperty('provider');
+      expect(cursorJudge).not.toHaveProperty('model');
+      expect(replan).not.toHaveProperty('provider');
+      expect(raw.steps.find((step) => step.name === 'execute')?.parallel[0]?.capabilities)
+        .toEqual(['edit', 'enable-skills']);
+      expect(raw.steps.find((step) => step.name === 'review')?.parallel[0]?.capabilities)
+        .toEqual(['readonly', 'enable-skills']);
+      expect(raw.steps.find((step) => step.name === 'replan')?.capabilities)
+        .toEqual(['readonly', 'enable-skills']);
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
       rmSync(globalConfigDir, { recursive: true, force: true });
@@ -401,33 +363,14 @@ describe('exec workflow template', () => {
       }
       expect(workflow.maxSteps).toBe(30);
       expect(loopMonitorJudges).toEqual([
-        expect.objectContaining({
-          provider: 'claude',
-          model: 'opus',
-          provider_options: {
-            claude: {
-              effort: 'high',
-              allowed_tools: ['Read', 'Glob', 'Grep'],
-            },
-          },
-        }),
-        expect.objectContaining({
-          provider: 'claude',
-          model: 'opus',
-          provider_options: {
-            claude: {
-              effort: 'high',
-              allowed_tools: ['Read', 'Glob', 'Grep'],
-            },
-          },
-        }),
+        expect.not.objectContaining({ provider: expect.anything(), model: expect.anything() }),
+        expect.not.objectContaining({ provider: expect.anything(), model: expect.anything() }),
       ]);
       expect(workflow.loopMonitors).toEqual([
         expect.objectContaining({
           cycle: ['execute', 'review'],
           threshold: 4,
           judge: expect.objectContaining({
-            sessionKey: 'exec-loop-monitor-small',
             persona: 'exec-assistant',
             instruction: 'exec-loop-monitor {cycle_count} instruction',
             rules: [
@@ -440,7 +383,6 @@ describe('exec workflow template', () => {
           cycle: ['replan', 'execute', 'review'],
           threshold: 2,
           judge: expect.objectContaining({
-            sessionKey: 'exec-loop-monitor-large',
             persona: 'exec-assistant',
             instruction: 'exec-loop-monitor {cycle_count} instruction',
             rules: [
@@ -462,24 +404,9 @@ describe('exec workflow template', () => {
         }),
       ]);
       for (const monitor of workflow.loopMonitors ?? []) {
-        expect(monitor.judge.providerOptions).toEqual({
-          claude: {
-            effort: 'high',
-            allowedTools: ['Read', 'Glob', 'Grep'],
-          },
-        });
-        expect(resolveLoopMonitorJudgeProviderModel({
-          judge: monitor.judge,
-          triggeringProviderInfo: {
-            provider: 'mock',
-            model: 'global-model',
-          },
-        })).toEqual({
-          provider: 'claude',
-          providerSource: 'step',
-          model: 'opus',
-          modelSource: 'step',
-        });
+        expect(monitor.judge).not.toHaveProperty('provider');
+        expect(monitor.judge).not.toHaveProperty('model');
+        expect(monitor.judge).not.toHaveProperty('providerOptions');
       }
       expect(judge?.outputContracts).toBeUndefined();
     } finally {
@@ -542,6 +469,7 @@ describe('exec workflow template', () => {
       workflowName: 'exec-provider-test',
       taskDescription: 'Implement provider-specific task',
     });
+    const raw = parseRawWorkflow(yaml);
     const { workflow, projectDir, globalConfigDir } = writeWorkflowAndLoad(yaml);
     try {
       const execute = workflow.steps.find((step) => step.name === 'execute') as AgentWorkflowStep | undefined;
@@ -551,56 +479,64 @@ describe('exec workflow template', () => {
       const opencodeWorker = execute?.parallel?.find((step) => step.name === 'opencode-worker');
       const terminalJudge = judge?.parallel?.find((step) => step.name === 'terminal-review');
       const copilotJudge = judge?.parallel?.find((step) => step.name === 'copilot-review');
-      expect(claudeWorker?.providerOptions).toEqual({
-        ...defaultExecWorkflowSkillOptions,
-        claude: {
-          effort: 'high',
-          allowedTools: ['Read', 'Glob', 'Grep', 'Edit', 'Write', 'Bash'],
-        },
-      });
-      expect(codexWorker?.providerOptions).toEqual({
-        codex: {
-          skills: { repo: true, user: true },
-          reasoningEffort: 'medium',
-        },
-      });
-      expect(opencodeWorker?.providerOptions).toEqual(defaultExecWorkflowSkillOptions);
-      expect(terminalJudge?.providerOptions).toEqual({
-        ...defaultExecWorkflowSkillOptions,
-        claude: {
-          effort: 'medium',
-          allowedTools: ['Read', 'Glob', 'Grep'],
-        },
-      });
-      expect(copilotJudge?.providerOptions).toEqual({
-        ...defaultExecWorkflowSkillOptions,
-        copilot: {
-          effort: 'low',
-        },
-      });
+      for (const step of [claudeWorker, codexWorker, opencodeWorker, terminalJudge, copilotJudge]) {
+        expect(step).not.toHaveProperty('provider');
+        expect(step).not.toHaveProperty('model');
+        expect(step).not.toHaveProperty('providerOptions');
+      }
+      expect(raw.steps.find((step) => step.name === 'execute')?.parallel.map((step) => step.capabilities))
+        .toEqual([['edit', 'enable-skills'], ['edit', 'enable-skills'], ['edit', 'enable-skills']]);
+      expect(raw.steps.find((step) => step.name === 'review')?.parallel.map((step) => step.capabilities))
+        .toEqual([['readonly', 'enable-skills'], ['readonly', 'enable-skills']]);
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
       rmSync(globalConfigDir, { recursive: true, force: true });
     }
   });
 
-  it('should reject effort values that the selected provider cannot use', () => {
-    expect(() => buildExecWorkflowYaml(createExecConfig({
+  it('should pass through arbitrary effort values to the selected provider', () => {
+    const config = resolveExecConfigProviderModel(createExecConfig({
+      session: {
+        provider: 'codex',
+        model: 'gpt-5',
+        effort: '  max  ',
+      },
       workers: [
         {
           name: 'codex-worker',
-          provider: 'codex',
-          model: 'gpt-5',
-          effort: 'max',
+          provider: 'claude',
+          model: 'opus',
+          effort: '  experimental  ',
           instruction: 'exec-worker',
           knowledge: ['architecture'],
           policy: ['coding'],
         },
       ],
-    }), {
-      workflowName: 'exec-invalid-effort-test',
-      taskDescription: 'Reject invalid effort',
-    })).toThrow(/does not support effort "max"/);
+      reviews: [
+        {
+          name: 'copilot-reviewer',
+          provider: 'copilot',
+          model: 'gpt-5',
+          effort: '  vendor-level  ',
+          instruction: 'exec-review',
+          knowledge: ['architecture'],
+          policy: ['review'],
+        },
+      ],
+    }), {});
+    const raw = parseRawWorkflow(buildExecWorkflowYaml(config, {
+      workflowName: 'exec-custom-effort-test',
+      taskDescription: 'Pass through custom effort',
+    }));
+
+    expect(raw).not.toHaveProperty('workflow_config');
+    expect(raw.steps[0]?.parallel[0]).not.toHaveProperty('provider');
+    expect(raw.steps[0]?.parallel[0]).not.toHaveProperty('model');
+    expect(raw.steps[0]?.parallel[0]).not.toHaveProperty('provider_options');
+    expect(raw.steps[1]?.parallel[0]).not.toHaveProperty('provider_options');
+    expect(raw.steps[2]).not.toHaveProperty('provider_options');
+    expect(raw.loop_monitors?.every((monitor) => !('provider' in monitor.judge) && !('model' in monitor.judge)))
+      .toBe(true);
   });
 
   it('should reject effort for providers without effort support', () => {

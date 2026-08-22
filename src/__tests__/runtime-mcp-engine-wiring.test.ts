@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { resolveCompiledProviderEnvironment } from '../infra/config/runtime-provider/provider-environment.js';
 import { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
 import { resolveMcpAssignment } from '../infra/config/runtime-provider/mcp-assignment.js';
-import type { WorkflowEngineOptions, WorkflowStep } from '../core/workflow/types.js';
+import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import type { McpAssignmentSection } from '../infra/config/runtime-provider/mcp-assignment.js';
-import type { McpServerConfig } from '../core/models/index.js';
+import type { McpServerConfig, WorkflowStep } from '../core/models/index.js';
 
 /**
  * Contracts covered (see plan.md 完了契約):
@@ -23,7 +23,6 @@ import type { McpServerConfig } from '../core/models/index.js';
 
 function buildMcpSection(): McpAssignmentSection {
   return {
-    version: 1,
     servers: {
       'common-tools': { type: 'stdio', command: 'srv' },
       'github': { type: 'http', url: 'https://example.com/mcp' },
@@ -157,13 +156,10 @@ describe('CompiledProviderEnvironment mcpAssignment field (MCP-ENGINE-WIRING)', 
         providerSource: 'cli',
         model: 'claude-sonnet-5',
         modelSource: 'cli',
-        providerOptions: {},
-        providerOptionsOriginResolver: undefined,
-        providerOptionsSource: 'cli',
-        workflowName: 'test',
-        workflowProvider: undefined,
-        workflowModel: undefined,
+        personaProviders: undefined,
+        providerRouting: undefined,
         autoRouting: undefined,
+        providerOptions: undefined,
       },
       legacySignals: [],
     });
@@ -185,7 +181,7 @@ describe('OptionsBuilder.resolveMcpServersForStep: runtime MCP mode + step.mcpSe
   function buildBuilder(
     engineOptions: Partial<WorkflowEngineOptions>,
     workflowName: string,
-    workflowStack?: { workflow_ref: string }[],
+    workflowStack?: { workflow: string; workflow_ref: string }[],
   ): OptionsBuilder {
     return new OptionsBuilder(
       engineOptions as WorkflowEngineOptions,
@@ -230,7 +226,7 @@ describe('OptionsBuilder.resolveMcpServersForStep: runtime MCP mode + step.mcpSe
     const builder = buildBuilder(
       { mcpAssignment: section },
       'parent',
-      [{ workflow_ref: 'child' }],
+      [{ workflow: 'child', workflow_ref: 'opaque-child-ref' }],
     );
     const step = {
       name: 'execute',

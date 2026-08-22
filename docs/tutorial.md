@@ -1,4 +1,4 @@
-[日本語](./tutorial.ja.md)
+[English](./tutorial.md) | [日本語](./tutorial.ja.md) | [简体中文](./tutorial.zh-CN.md)
 
 # Tutorial
 
@@ -42,14 +42,16 @@ takt
 
 On first launch, TAKT asks which language to use for default agents and workflows, then which provider to use, before the workflow selection appears.
 
-Choose `frontend-mini` as the workflow. The initial screen lists only categories; the exact order may vary by environment, but `frontend-mini` is usually under the `Mini` or `Frontend` category.
+Choose `frontend-mini` as the workflow. The initial screen lists only categories; the exact order may vary by environment, but `frontend-mini` is under the `Legacy` category's `Frontend` subcategory.
 
 ```text
 Select workflow:
     📁 🚀 Quick Start/
-    📁 ✨ Simple/
-  ❯ 📁 ⚡ Mini/
-    📁 🎨 Frontend/
+    📁 🛠️ Development/
+    📁 🔍 Review/
+    📁 🏗️ Infrastructure/
+    📁 🎵 TAKT Development/
+  ❯ 📁 📦 Legacy/
 ```
 
 Pressing `b` on a workflow bookmarks it; bookmarked workflows appear at the top of this screen as `🎼 {name} [*]`.
@@ -57,14 +59,22 @@ Pressing `b` on a workflow bookmarks it; bookmarked workflows appear at the top 
 Open the category and select `frontend-mini`.
 
 ```text
-Select workflow in ⚡ Mini:
-    🎼 simple-mini
-    🎼 default-mini
+Select workflow in 📦 Legacy:
+    📁 ✨ Simple/
+    📁 ⚡ Mini/
+  ❯ 📁 🎨 Frontend/
+    📁 ⚙️ Backend/
+    📁 🔧 Dual/
+    📁 🔍 Review/
+    🎼 cli
+```
+
+```text
+Select workflow in 🎨 Frontend:
+    🎼 simple-frontend
+    🎼 frontend
   ❯ 🎼 frontend-mini
-    🎼 backend-mini
-    🎼 backend-cqrs-mini
-    🎼 dual-mini
-    🎼 dual-cqrs-mini
+    🎼 frontend-maintenance
 ```
 
 TAKT then asks for an interactive mode. Choose **Assistant** first.

@@ -13,16 +13,6 @@ import { SlashCommand } from '../shared/constants.js';
 // Start-of-line detection (existing behavior)
 // =================================================================
 describe('start-of-line detection', () => {
-  it('should detect /play with task text', () => {
-    const result = matchSlashCommand('/play fix the login bug');
-    expect(result).toEqual({ command: '/play', text: 'fix the login bug' });
-  });
-
-  it('should detect /play without task text', () => {
-    const result = matchSlashCommand('/play');
-    expect(result).toEqual({ command: '/play', text: '' });
-  });
-
   it('should detect /go without note', () => {
     const result = matchSlashCommand('/go');
     expect(result).toEqual({ command: '/go', text: '' });
@@ -68,11 +58,6 @@ describe('start-of-line detection', () => {
 // End-of-line detection (new behavior)
 // =================================================================
 describe('end-of-line detection', () => {
-  it('should detect /play at the end with preceding text as task', () => {
-    const result = matchSlashCommand('fix the login bug /play');
-    expect(result).toEqual({ command: '/play', text: 'fix the login bug' });
-  });
-
   it('should detect /go at the end with preceding text as user note', () => {
     const result = matchSlashCommand('ここまでの内容で実行して /go');
     expect(result).toEqual({ command: '/go', text: 'ここまでの内容で実行して' });
@@ -118,8 +103,8 @@ describe('middle-of-text (not recognized)', () => {
     expect(result).toBeNull();
   });
 
-  it('should not detect /play in the middle of text', () => {
-    const result = matchSlashCommand('I want to /play around with the code later');
+  it('should not detect /replay in the middle of text', () => {
+    const result = matchSlashCommand('I want to /replay around with the code later');
     expect(result).toBeNull();
   });
 
@@ -185,7 +170,7 @@ describe('edge cases', () => {
     expect(matchSlashCommand('/go run it', execAvailability)).toEqual({ command: '/go', text: 'run it' });
     expect(matchSlashCommand('/setup', execAvailability)).toEqual({ command: '/setup', text: '' });
     expect(matchSlashCommand('/cancel', execAvailability)).toEqual({ command: '/cancel', text: '' });
-    expect(matchSlashCommand('/play run it', execAvailability)).toBeNull();
+    expect(matchSlashCommand('/replay', execAvailability)).toBeNull();
     expect(matchSlashCommand('/accept', execAvailability)).toBeNull();
     expect(matchSlashCommand('/resume', execAvailability)).toBeNull();
   });
@@ -204,17 +189,17 @@ describe('edge cases', () => {
     expect(result).toEqual({ command: '/go', text: 'text' });
   });
 
-  it('should handle /play with extra spaces in task', () => {
-    const result = matchSlashCommand('/play  fix  the  bug');
-    expect(result).toEqual({ command: '/play', text: 'fix  the  bug' });
+  it('should handle /go with extra spaces in the note', () => {
+    const result = matchSlashCommand('/go  fix  the  bug');
+    expect(result).toEqual({ command: '/go', text: 'fix  the  bug' });
   });
 
   it('should not match /go followed by characters without space', () => {
     expect(matchSlashCommand('/goextra')).toBeNull();
   });
 
-  it('should not match /play as prefix of another word', () => {
-    expect(matchSlashCommand('/playing around')).toBeNull();
+  it('should not match a command as prefix of another word', () => {
+    expect(matchSlashCommand('/cancelling around')).toBeNull();
   });
 
   it('should not match partial command at end of input', () => {
@@ -223,7 +208,7 @@ describe('edge cases', () => {
 
   it('should not match case-insensitive commands', () => {
     expect(matchSlashCommand('/Go')).toBeNull();
-    expect(matchSlashCommand('/PLAY')).toBeNull();
+    expect(matchSlashCommand('/RESUME')).toBeNull();
     expect(matchSlashCommand('/Cancel')).toBeNull();
     expect(matchSlashCommand('/Accept')).toBeNull();
   });

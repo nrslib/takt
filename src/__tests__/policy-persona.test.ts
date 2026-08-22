@@ -490,21 +490,6 @@ describe('section reference resolution', () => {
     expect(config.steps[0]!.persona).toBe('nonexistent');
   });
 
-  it('should resolve instruction field from instructions section', () => {
-    const raw = {
-      name: 'test-workflow',
-      instructions: { implement: './instructions/implement.md' },
-      steps: [{
-        name: 'impl',
-        persona: 'coder',
-        instruction: 'implement',
-      }],
-    };
-
-    const config = normalizeWorkflowConfig(raw, testDir);
-    expect(config.steps[0]!.instruction).toBe('Implement the feature.');
-  });
-
   it('should fail fast when step uses instruction_template', () => {
     const raw = {
       name: 'test-workflow',
@@ -679,19 +664,4 @@ describe('section reference resolution', () => {
     ]);
   });
 
-  it('should resolve policy by plain name (primary mechanism)', () => {
-    const raw = {
-      name: 'test-workflow',
-      policies: { coding: './policies/coding.md' },
-      steps: [{
-        name: 'impl',
-        persona: 'coder',
-        policy: 'coding',
-        instruction: '{task}',
-      }],
-    };
-
-    const config = normalizeWorkflowConfig(raw, testDir);
-    expect(config.steps[0]!.policyContents!.map((r) => r.content)).toEqual(['# Coding Policy\nWrite clean code.']);
-  });
 });

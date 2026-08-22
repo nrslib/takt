@@ -6,7 +6,6 @@ import { z } from 'zod/v4';
 import { DEFAULT_LANGUAGE } from '../../shared/constants.js';
 import { MAX_ASSISTANT_INIT_FILES } from './assistant-config.js';
 import { VCS_PROVIDER_TYPES } from './vcs-types.js';
-import { PROVIDER_TYPES } from '../../shared/types/provider.js';
 import {
   AnalyticsConfigSchema,
   AutoRoutingSchema,
@@ -60,6 +59,11 @@ export const WorkflowMcpServersConfigSchema = z.object({
 
 export const AssistantConfigSchema = z.object({
   init_files: z.array(z.string().min(1)).max(MAX_ASSISTANT_INIT_FILES).optional(),
+  gherkin: z.boolean().optional(),
+}).strict();
+
+export const GlobalAssistantConfigSchema = z.object({
+  gherkin: z.boolean().optional(),
 }).strict();
 
 export const ProviderRoutingSchema = z.object({
@@ -67,30 +71,6 @@ export const ProviderRoutingSchema = z.object({
   tags: z.record(z.string(), PersonaProviderReferenceSchema).optional(),
   steps: z.record(z.string(), PersonaProviderReferenceSchema).optional(),
 }).strict().optional();
-
-export const FindingIntakeNormalizeConfigSchema = z.object({
-  provider: ProviderReferenceSchema,
-  model: z.string().trim().min(1).optional(),
-  targets: z.array(z.object({
-    provider: z.enum(PROVIDER_TYPES),
-    model: z.string().trim().min(1),
-  }).strict()).min(1)
-    .refine(
-      (targets) =>
-        new Set(
-          targets.map((target) => JSON.stringify([target.provider, target.model])),
-        ).size === targets.length,
-      {
-        message: 'finding_contract.intake_normalize.targets must not contain duplicates',
-      },
-    )
-    .optional(),
-  provider_options: StepProviderOptionsSchema,
-}).strict();
-
-export const FindingContractRuntimeConfigSchema = z.object({
-  intake_normalize: FindingIntakeNormalizeConfigSchema.optional(),
-}).strict();
 
 /** Workflow category config schema (recursive) */
 export type WorkflowCategoryConfigNode = {
@@ -130,7 +110,6 @@ const ProjectConfigObjectBaseSchema = z.object({
   assistant: AssistantConfigSchema.optional(),
   persona_providers: z.record(z.string(), PersonaProviderReferenceSchema).optional(),
   provider_routing: ProviderRoutingSchema,
-  finding_contract: FindingContractRuntimeConfigSchema.optional(),
   branch_name_strategy: z.enum(['romaji', 'ai']).optional(),
   minimal_output: z.boolean().optional(),
   provider_options: StepProviderOptionsSchema,
@@ -206,6 +185,7 @@ export const GlobalConfigSchema = ProjectConfigObjectBaseSchema
   .omit({ submodules: true, with_submodules: true, assistant: true })
   .merge(GlobalOnlyConfigSchema)
   .extend({
+    assistant: GlobalAssistantConfigSchema.optional(),
     provider: ProviderReferenceSchema.optional().default('claude'),
   })
   .strict();

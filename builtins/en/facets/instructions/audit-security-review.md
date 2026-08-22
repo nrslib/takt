@@ -1,5 +1,7 @@
 Re-audit the files that were judged insufficient in the previous audit.
 
+{{include:instructions/security-knowledge-routing}}
+
 **Important:** Review the supervisor's verification results and understand:
 - List of unaudited files
 - List of files flagged as insufficiently audited
@@ -20,4 +22,3 @@ Re-audit the files that were judged insufficient in the previous audit.
 - Searching with Grep and only reviewing matching files → PROHIBITED
 - Reading only part of a file → PROHIBITED
 - Skipping a file because it "looks fine" → PROHIBITED
-{{include:instructions/review-pr-context}}

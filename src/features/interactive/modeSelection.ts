@@ -1,7 +1,7 @@
 /**
  * Interactive mode selection UI.
  *
- * Presents the four interactive mode options after workflow selection
+ * Presents the interactive mode options after workflow selection
  * and returns the user's choice.
  */
 

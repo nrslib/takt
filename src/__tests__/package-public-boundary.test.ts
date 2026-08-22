@@ -116,7 +116,6 @@ describe('package public boundary', () => {
   });
 
   it.each([
-    'takt/dist/core/workflow/findings/resume-capability.js',
     'takt/dist/shared/utils/private-file-lock-guard.js',
     'takt/dist/shared/utils/private-file-lock.js',
     'takt/dist/shared/utils/private-file.js',
@@ -157,7 +156,6 @@ describe('package public boundary', () => {
       'utf-8',
     );
     expect(declarations).toContain('WorkflowEngine');
-    expect(declarations).not.toContain('FindingResumeCapability');
     expect(declarations).not.toContain('PrivateFileExclusiveAccess');
   });
 });

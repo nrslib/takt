@@ -133,7 +133,6 @@ describe('listTasksNonInteractive completed actions', () => {
         branch: 'takt/completed-task',
       })).rejects.toThrow('exit');
 
-      expect(mockInfo).toHaveBeenCalledWith('Invalid --action. Use one of: diff, sync, try, merge, delete.');
       expect(exitSpy).toHaveBeenCalledWith(1);
     } finally {
       exitSpy.mockRestore();

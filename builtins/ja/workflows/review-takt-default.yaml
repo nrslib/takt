@@ -1,12 +1,20 @@
 name: review-takt-default
-description: TAKT開発向け多角レビュー（AIアンチパターン・コーディングレビュー含む5観点レビュー）
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
+description: TAKT開発向け多角レビュー（AIアンチパターン・コーディングレビューを含む）
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 max_steps: 10
+facet_pools:
+  takt-security-review-facets:
+    uses: takt-security-review-facets
 initial_step: gather
 
 steps:
@@ -26,7 +34,9 @@ steps:
     tags:
       - review
     parallel:
+      fixed:
       - name: arch-review
+        capabilities: readonly
         tags:
           - review
         edit: false
@@ -34,18 +44,11 @@ steps:
         policy:
           - contract-change
           - review
+          - architecture
+          - takt
         knowledge:
           - architecture
           - takt
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
         instruction: review-arch
         output_contracts:
           report:
@@ -55,34 +58,8 @@ steps:
           - condition: approved
           - condition: needs_fix
 
-      - name: security-review
-        tags:
-          - review
-        edit: false
-        persona: security-reviewer
-        policy:
-          - contract-change
-          - review
-        knowledge: security
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
-        instruction: review-security
-        output_contracts:
-          report:
-            - name: security-review.md
-              format: security-review
-        rules:
-          - condition: approved
-          - condition: needs_fix
-
       - name: testing-review
+        capabilities: readonly
         tags:
           - review
         edit: false
@@ -94,15 +71,6 @@ steps:
         knowledge:
           - unit-testing
           - e2e-testing
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
         instruction: review-test
         output_contracts:
           report:
@@ -113,6 +81,7 @@ steps:
           - condition: needs_fix
 
       - name: ai-antipattern-review-2nd
+        capabilities: readonly
         tags:
           - review
         edit: false
@@ -121,15 +90,6 @@ steps:
           - contract-change
           - review
           - ai-antipattern
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
         instruction: ai-antipattern-review
         output_contracts:
           report:
@@ -140,6 +100,7 @@ steps:
           - condition: needs_fix
 
       - name: coding-review
+        capabilities: readonly
         tags:
           - review
         edit: false
@@ -148,15 +109,6 @@ steps:
           - contract-change
           - review
           - coding
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
         instruction: review-coding
         output_contracts:
           report:
@@ -166,21 +118,49 @@ steps:
           - condition: approved
           - condition: needs_fix
 
+      pool:
+      - name: security-review
+        description: 既定では選ばない。(a) 変更が secret または credential の取扱い、外部入力の処理、process 実行、filesystem 操作、network または terminal の境界、sandbox、権限に影響し得る場合、または (b) 修正の規模が大きく、セキュリティへの影響がないと判断しきれない場合に限って選ぶ。ドキュメントのみ・コメントのみ・テストのみの変更や小さな局所修正では選ばない。
+        capabilities: readonly
+        tags:
+          - review
+        edit: false
+        persona: security-reviewer
+        policy:
+          - contract-change
+          - security-review
+          - takt
+        knowledge:
+          - security
+          - security-data
+          - security-dependencies
+          - takt
+        dynamic_facets:
+          pool: takt-security-review-facets
+          selector:
+            instruction: select-applicable-candidates
+        instruction: review-security
+        output_contracts:
+          report:
+            - name: security-review.md
+              format: security-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+      selection:
+        selector:
+          instruction: select-applicable-candidates
+
     rules:
+      - condition: any("error")
+        next: reviewers
       - condition: all("approved")
-        next: merge-readiness-review
+        next: review-synthesis
       - condition: any("needs_fix")
         next: supervise
 
-  - name: merge-readiness-review
-    uses: merge-readiness-to-review-synthesis
-    rules:
-      - condition: approved
-        next: review-synthesis
-      - condition: needs_fix
-        next: review-synthesis
-
   - name: review-synthesis
+    capabilities: readonly
     tags:
       - review
       - final-gate
@@ -190,17 +170,11 @@ steps:
     policy:
       - contract-change
       - review
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - WebSearch
-          - WebFetch
     pass_previous_response: false
     rules:
-      - condition: approved
+      - condition: APPROVE
+        next: COMPLETE
+      - condition: REJECT
         next: COMPLETE
     instruction: &review_synthesis_instruction |
       ## レビュー結果
@@ -210,14 +184,8 @@ steps:
       レビュー結果を統合し、最終サマリーを作成する役割です。
 
       **やること:**
-      1. Report Directory内の全レビューレポートを読む
-         - `review-target.md`（レビュー対象情報）
-         - `architecture-review.md`（アーキテクチャレビュー）
-         - `security-review.md`（セキュリティレビュー）
-         - `testing-review.md`（テストレビュー）
-         - `ai-antipattern-review.md`（AIアンチパターンレビュー）
-         - `coding-review.md`（コーディングレビュー）
-      2. 5つのレビュー結果を統合
+      1. `review-target.md` と Report Directory に存在するすべてのレビュワーレポートを読む。任意のレビュワーが未選択の場合、そのレポートが存在すると仮定しない。
+      2. 利用可能なすべてのレビュー結果を統合
       3. 統合レビューサマリーと総合判定を作成
     output_contracts: &review_synthesis_output_contracts
       report:
@@ -234,11 +202,7 @@ steps:
             ## レビュー結果
             | レビュー | 結果 | 主要な発見 |
             |---------|------|-----------|
-            | アーキテクチャ | APPROVE/REJECT | {概要} |
-            | セキュリティ | APPROVE/REJECT | {概要} |
-            | テスト | APPROVE/REJECT | {概要} |
-            | AIアンチパターン | APPROVE/REJECT | {概要} |
-            | コーディング | APPROVE/REJECT | {概要} |
+            | 存在する各レビュー | APPROVE/REJECT | {概要} |
 
             ## 今回の指摘（new）
             | # | finding_id | 重大度 | ソース | 場所 | 問題 | 修正案 |
@@ -264,6 +228,7 @@ steps:
             ```
 
   - name: supervise
+    capabilities: readonly
     tags:
       - review
       - supervise
@@ -272,17 +237,11 @@ steps:
     policy:
       - contract-change
       - review
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - WebSearch
-          - WebFetch
     pass_previous_response: false
     rules:
-      - condition: レビュー統合完了
+      - condition: APPROVE
+        next: COMPLETE
+      - condition: REJECT
         next: COMPLETE
     instruction: *review_synthesis_instruction
     output_contracts: *review_synthesis_output_contracts

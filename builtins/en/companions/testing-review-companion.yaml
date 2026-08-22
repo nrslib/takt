@@ -1,0 +1,6 @@
+name: testing-review-companion
+description: Continuously review whether existing tests can detect regressions in acceptance criteria and observable contracts changed by the implementation.
+persona: testing-reviewer
+policy: [contract-change, review, testing]
+knowledge: [unit-testing, e2e-testing]
+instruction: companion-watch-testing

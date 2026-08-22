@@ -130,6 +130,87 @@ describe('runStatusJudgmentPhase', () => {
     expect(onPhaseComplete).toHaveBeenCalledWith(step, 3, 'judge', 'approved', 'done', undefined, 'review:4:3:1', 4);
   });
 
+  it('should continue judgment with a plain sentence when a use_judge report is missing', async () => {
+    const structuredCaller = {
+      judgeStatus: vi.fn().mockImplementation(async (
+        _structured,
+        _tag,
+        _candidates,
+        options,
+      ) => {
+        options.onStructuredPromptResolved?.({
+          systemPrompt: 'conductor-system',
+          userInstruction: 'structured prompt',
+        });
+        return { candidateIndex: 0, method: 'structured_output' as const };
+      }),
+    };
+    const step: WorkflowStep = {
+      name: 'review',
+      persona: 'reviewer',
+      personaDisplayName: 'reviewer',
+      instruction: 'Review',
+      outputContracts: [{ name: 'review.md', format: '# Review', useJudge: true }],
+      rules: [
+        normalizeRule({ condition: 'approved', next: 'COMPLETE' }),
+        normalizeRule({ condition: 'needs_fix', next: 'fix' }),
+      ],
+    };
+
+    const result = await runStatusJudgmentPhase(step, {
+      cwd: '/tmp/project',
+      reportDir: '/tmp/project/.takt/runs/run/reports',
+      iteration: 1,
+      resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'cursor', model: undefined }),
+      structuredCaller,
+    });
+
+    expect(result.label).toBe('approved');
+    expect(structuredCaller.judgeStatus).toHaveBeenCalledOnce();
+  });
+
+  it('should judge a missing use_judge report from the available last response', async () => {
+    const lastResponse = 'REJECT: concrete blocking finding';
+    const structuredCaller = {
+      judgeStatus: vi.fn().mockImplementation(async (
+        structured,
+        tag,
+        _candidates,
+        options,
+      ) => {
+        expect(structured).toContain(lastResponse);
+        expect(tag).toContain(lastResponse);
+        options.onStructuredPromptResolved?.({
+          systemPrompt: 'conductor-system',
+          userInstruction: 'structured prompt',
+        });
+        return { candidateIndex: 1, method: 'structured_output' as const };
+      }),
+    };
+    const step: WorkflowStep = {
+      name: 'review',
+      persona: 'reviewer',
+      personaDisplayName: 'reviewer',
+      instruction: 'Review',
+      outputContracts: [{ name: 'review.md', format: '# Review', useJudge: true }],
+      rules: [
+        normalizeRule({ condition: 'approved', next: 'COMPLETE' }),
+        normalizeRule({ condition: 'needs_fix', next: 'fix' }),
+      ],
+    };
+
+    const result = await runStatusJudgmentPhase(step, {
+      cwd: '/tmp/project',
+      reportDir: '/tmp/project/.takt/runs/run/reports',
+      lastResponse,
+      iteration: 1,
+      resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'cursor', model: undefined }),
+      structuredCaller,
+    });
+
+    expect(result.label).toBe('needs_fix');
+  });
+
   it('should pass abortSignal to the Phase 3 structured caller', async () => {
     const abortController = new AbortController();
     const structuredCaller = {

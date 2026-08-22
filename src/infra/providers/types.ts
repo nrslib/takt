@@ -1,6 +1,10 @@
 import type { AgentResponse, Language, PermissionMode, McpServerConfig, StepProviderOptions } from '../../core/models/index.js';
 import type { ProviderType as SharedProviderType } from '../../shared/types/provider.js';
-import type { InternalAgentIsolation, StreamCallback } from '../../shared/types/provider.js';
+import type {
+  InternalAgentIsolation,
+  ProviderActivityCallback,
+  StreamCallback,
+} from '../../shared/types/provider.js';
 import type { PermissionHandler, AskUserQuestionHandler } from '../../core/workflow/types.js';
 import type { PreparedProviderMcp } from './mcp/types.js';
 
@@ -34,6 +38,7 @@ export interface ProviderCallOptions {
   permissionMode?: PermissionMode;
   providerOptions?: StepProviderOptions;
   onStream?: StreamCallback;
+  onActivity?: ProviderActivityCallback;
   onPermissionRequest?: PermissionHandler;
   onAskUserQuestion?: AskUserQuestionHandler;
   bypassPermissions?: boolean;
@@ -46,6 +51,8 @@ export interface ProviderCallOptions {
   outputSchema?: Record<string, unknown>;
   language?: Language;
   imageAttachments?: ProviderImageAttachment[];
+  /** Directory for full Codex failure text; when omitted, oversized failures are truncated without persistence. */
+  failureDir?: string;
   childProcessEnv?: Readonly<Record<string, string>>;
 }
 
@@ -63,10 +70,9 @@ export interface ProviderAgent {
 
 export interface Provider {
   supportsStructuredOutput: boolean;
-  /** Pre-check flag for isolated structured execution; the implementation itself lives in setupIsolatedStructured. */
-  supportsIsolatedStructuredExecution: boolean;
+  /** Whether this provider has a dedicated strict structured execution path. */
+  supportsIsolatedStructuredExecution?: boolean;
   supportsNativeImageInput: boolean;
-  supportsStrictInternalAgentIsolation: boolean;
   /**
    * MCP transports this provider implementation actually supports. Replaces
    * the fixed `MCP_SERVER_PROVIDERS` set (issue #1137). An empty/undefined set
@@ -74,10 +80,14 @@ export interface Provider {
    * on unsupported transports instead of silently dropping servers.
    */
   supportedMcpTransports?: ReadonlySet<'stdio' | 'sse' | 'http'>;
+  /** Whether runtime MCP mode can suppress ambient MCP configuration. */
+  supportsStrictMcpConfig?: boolean;
   getRuntimeInstructions(allowedTools?: string[], permissionMode?: import('../../core/models/index.js').PermissionMode, networkAccess?: boolean): string | null;
+  supportsPermissionControls?(): boolean;
   keepsAllowedToolWithoutEdit(tool: string): boolean;
+  getDefaultAllowedToolsWithoutEdit?(): readonly string[];
   setup(config: AgentSetup): ProviderAgent;
-  setupIsolatedStructured(config: AgentSetup): ProviderAgent;
+  setupIsolatedStructured?(config: AgentSetup): ProviderAgent;
   compactSession?(options: ProviderCompactSessionOptions): Promise<void>;
 }
 

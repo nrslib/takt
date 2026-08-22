@@ -6,8 +6,13 @@ import { callMock, callMockCustom, type MockCallOptions } from '../mock/index.js
 import type { AgentResponse } from '../../core/models/index.js';
 import { keepsAllowedToolWithoutEdit as keepsClaudeAllowedToolWithoutEdit } from './allowed-tool-edit-policy.js';
 import { createLogger } from '../../shared/utils/index.js';
-import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from './types.js';
-import { assertOutputSchema } from './types.js';
+import {
+  assertOutputSchema,
+  type AgentSetup,
+  type Provider,
+  type ProviderAgent,
+  type ProviderCallOptions,
+} from './types.js';
 
 const log = createLogger('mock-provider');
 
@@ -22,8 +27,10 @@ function toMockOptions(options: ProviderCallOptions): MockCallOptions {
     sessionId: options.sessionId,
     model: options.model,
     onStream: options.onStream,
+    onActivity: options.onActivity,
     allowedTools: options.allowedTools,
     preparedMcp: options.preparedMcp,
+    outputSchema: options.outputSchema,
   };
 }
 
@@ -32,7 +39,6 @@ export class MockProvider implements Provider {
   readonly supportsStructuredOutput = true;
   readonly supportsIsolatedStructuredExecution = true;
   readonly supportsNativeImageInput = false;
-  readonly supportsStrictInternalAgentIsolation = true;
   readonly supportedMcpTransports: ReadonlySet<'stdio' | 'sse' | 'http'> = new Set(['stdio']);
 
   getRuntimeInstructions(_allowedTools?: string[]): string | null {

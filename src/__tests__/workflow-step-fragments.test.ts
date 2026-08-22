@@ -343,11 +343,11 @@ steps:
     ]);
   });
 
-  it.each(['en', 'ja'] as const)('should resolve the language-specific final-gate fragment for %s builtins', (lang) => {
+  it.each(['en', 'ja'] as const)('should resolve a fragment from the selected %s builtin directory', (lang) => {
     const workflowPath = join(getBuiltinLanguageStepsDir(lang), 'fixture-workflow.yaml');
     const resolution = resolveWorkflowStepFragments({
       steps: [{
-        uses: 'finding-contract-final-gate',
+        uses: 'request-replan',
         rules: [{ condition: 'done', next: 'COMPLETE' }],
       }],
     }, {
@@ -368,7 +368,7 @@ steps:
     });
 
     expect(resolution.dependencies).toContainEqual(expect.objectContaining({
-      ref: 'finding-contract-final-gate',
+      ref: 'request-replan',
       sourceRoot: getBuiltinLanguageStepsDir(lang),
     }));
   });
@@ -390,18 +390,24 @@ steps:
   });
 
   it('should deep merge object overrides and use rules from the workflow', () => {
+    writeFile(projectDir, '.takt/config.yaml', `workflow_mcp_servers:
+  http: true
+`);
     writeProjectFragment(projectDir, 'base', `name: fragment-name
 instruction: fragment instruction
-provider_options:
-  codex:
-    network_access: false
-    reasoning_effort: low
+mcp_servers:
+  docs:
+    type: http
+    url: https://example.com/mcp
+    headers:
+      X-Base: fragment
 `);
     const workflowPath = writeWorkflow(projectDir, 'merge-overrides', `  - uses: base
     name: caller-name
-    provider_options:
-      codex:
-        network_access: true
+    mcp_servers:
+      docs:
+        headers:
+          X-Caller: workflow
     rules:
       - condition: caller
         next: COMPLETE`, 'caller-name');
@@ -411,7 +417,13 @@ provider_options:
     expect(workflow.steps[0]).toMatchObject({
       name: 'caller-name',
       instruction: 'fragment instruction',
-      providerOptions: { codex: { networkAccess: true, reasoningEffort: 'low' } },
+      mcpServers: {
+        docs: {
+          type: 'http',
+          url: 'https://example.com/mcp',
+          headers: { 'X-Base': 'fragment', 'X-Caller': 'workflow' },
+        },
+      },
       rules: [{ condition: { kind: 'semantic', label: 'caller' }, next: 'COMPLETE' }],
     });
   });
@@ -814,7 +826,7 @@ args:
     writeProjectFragment(projectDir, 'valid-step', 'instruction: valid\n');
     const workflowPath = writeWorkflow(projectDir, 'override-schema-error', `  - uses: valid-step
     instruction:
-      - invalid${COMPLETE_CALLER_RULES}`, 'valid-step');
+      - 123${COMPLETE_CALLER_RULES}`, 'valid-step');
 
     let error: unknown;
     try {
@@ -838,7 +850,7 @@ provider_options:
     const workflowPath = writeWorkflow(projectDir, 'nested-override-schema-error', `  - uses: valid-options
     provider_options:
       codex:
-        reasoning_effort: invalid${COMPLETE_CALLER_RULES}`, 'valid-options');
+        reasoning_effort: 42${COMPLETE_CALLER_RULES}`, 'valid-options');
 
     let error: unknown;
     try {
@@ -848,7 +860,9 @@ provider_options:
     }
 
     expect(error).toBeInstanceOf(ZodError);
-    const issue = (error as ZodError).issues.find((candidate) => candidate.path.join('.') === 'steps.0.provider_options.codex.reasoning_effort')!;
+    const issue = (error as ZodError).issues.find((candidate) => candidate.path.join('.') === 'steps.0.provider_options')!;
+    expect(issue.message).toContain('workflow YAML no longer accepts provider execution settings');
+    expect(issue.message).toContain('runtime.yaml');
     expect(issue.message).toContain('step uses fragment "valid-options"');
     expect(issue.message).toContain('defined by the workflow');
   });
@@ -857,7 +871,7 @@ provider_options:
     writeProjectFragment(projectDir, 'invalid-options', `instruction: valid
 provider_options:
   codex:
-    reasoning_effort: invalid
+    reasoning_effort: 42
     network_access: false
 `);
     const workflowPath = writeWorkflow(projectDir, 'fragment-leaf-provenance', `  - uses: invalid-options
@@ -873,20 +887,20 @@ provider_options:
     }
 
     expect(error).toBeInstanceOf(ZodError);
-    const issue = (error as ZodError).issues.find((candidate) => candidate.path.join('.') === 'steps.0.provider_options.codex.reasoning_effort')!;
-    expect(issue.message).toContain('step fragment "invalid-options"');
+    const issue = (error as ZodError).issues.find((candidate) => candidate.path.join('.') === 'steps.0.provider_options')!;
+    expect(issue.message).toContain('workflow YAML no longer accepts provider execution settings');
+    expect(issue.message).toContain('runtime.yaml');
+    expect(issue.message).toContain('step uses fragment "invalid-options"');
   });
 
-  it('should replace a nullable scalar with null from the workflow', () => {
+  it('should reject a workflow model override with runtime.yaml migration guidance', () => {
     writeProjectFragment(projectDir, 'modelled', `instruction: valid
 model: gpt-5
 `);
     const workflowPath = writeWorkflow(projectDir, 'null-model-override', `  - uses: modelled
     model: null${COMPLETE_CALLER_RULES}`, 'modelled');
 
-    const workflow = loadWorkflowFromFile(workflowPath, projectDir);
-
-    expect(workflow.steps[0]?.model).toBeUndefined();
+    expect(() => loadWorkflowFromFile(workflowPath, projectDir)).toThrow(/runtime\.yaml/);
   });
 
   it('should reject a fragment chain before recursive stack exhaustion', () => {
@@ -1030,42 +1044,6 @@ model: gpt-5
 
     expect(message).toContain('uses command quality gate');
     expect(message).toContain('step fragment "command-gate"');
-    expect(message).toContain(fragmentPath);
-  });
-
-  it('should retain fragment provenance for a doctor workflow_call contract error', () => {
-    writeFile(projectDir, '.takt/workflows/required.yaml', [
-      'name: required',
-      'subworkflow:',
-      '  callable: true',
-      '  requires_finding_contract: true',
-      'initial_step: child',
-      'max_steps: 1',
-      'steps:',
-      '  - name: child',
-      '    instruction: child',
-      '    rules:',
-      '      - condition: done',
-      '        next: COMPLETE',
-      '',
-    ].join('\n'));
-    const fragmentPath = writeProjectFragment(projectDir, 'delegate', [
-      'kind: workflow_call',
-      'call: required',
-      '',
-    ].join('\n'));
-    const workflowPath = writeWorkflow(
-      projectDir,
-      'doctor-contract-fragment',
-      `  - uses: delegate${COMPLETE_CALLER_RULES}`,
-      'delegate',
-    );
-
-    const report = inspectWorkflowFile(workflowPath, projectDir);
-    const message = report.diagnostics[0]?.message ?? '';
-
-    expect(message).toContain('requires a finding_contract');
-    expect(message).toContain('step fragment "delegate"');
     expect(message).toContain(fragmentPath);
   });
 
@@ -1412,11 +1390,6 @@ model: gpt-5
       'policy: [architecture-policy]',
       'knowledge: [architecture-domain]',
       'instruction: Review architecture',
-      'provider: codex',
-      'model: gpt-architecture',
-      'provider_options:',
-      '  codex:',
-      '    reasoning_effort: medium',
       'output_contracts:',
       '  report:',
       '    - name: architecture-review.md',
@@ -1429,11 +1402,6 @@ model: gpt-5
       'policy: [frontend-policy]',
       'knowledge: [frontend-domain]',
       'instruction: Review frontend implementation',
-      'provider: codex',
-      'model: gpt-frontend',
-      'provider_options:',
-      '  codex:',
-      '    reasoning_effort: high',
       'output_contracts:',
       '  report:',
       '    - name: frontend-review.md',
@@ -1473,7 +1441,6 @@ model: gpt-5
         name: string;
         description: string;
         instruction: string;
-        providerOptions?: { codex?: { reasoningEffort?: string } };
         rules: unknown[];
       }>;
       selection: { mode: string };
@@ -1487,9 +1454,6 @@ model: gpt-5
         policyContents: [expect.objectContaining({ content: 'Architecture policy contract' })],
         knowledgeContents: [expect.objectContaining({ content: 'Architecture knowledge contract' })],
         instruction: 'Review architecture',
-        provider: 'codex',
-        model: 'gpt-architecture',
-        providerOptions: { codex: { reasoningEffort: 'medium' } },
         outputContracts: [{ name: 'architecture-review.md', format: 'Return the reviewer report.' }],
         rules: [{ condition: { kind: 'semantic', label: 'approved' }, next: 'COMPLETE' }],
       }],
@@ -1501,9 +1465,6 @@ model: gpt-5
         policyContents: [expect.objectContaining({ content: 'Frontend policy contract' })],
         knowledgeContents: [expect.objectContaining({ content: 'Frontend knowledge contract' })],
         instruction: 'Review frontend implementation',
-        provider: 'codex',
-        model: 'gpt-frontend',
-        providerOptions: { codex: { reasoningEffort: 'high' } },
         outputContracts: [{ name: 'frontend-review.md', format: 'Return the reviewer report.' }],
         rules: [{ condition: { kind: 'semantic', label: 'approved' }, next: 'COMPLETE' }],
       }],
@@ -1515,16 +1476,11 @@ model: gpt-5
     writeProjectFragment(projectDir, 'architecture', [
       'name: architecture',
       'instruction: Review architecture',
-      'provider: codex',
-      'model: gpt-test',
       '',
     ].join('\n'));
     writeProjectFragment(projectDir, 'frontend', [
       'name: frontend',
       'instruction: Review frontend',
-      'provider_options:',
-      '  codex:',
-      '    reasoning_effort: high',
       '',
     ].join('\n'));
     writeProjectFragment(projectDir, 'dynamic-reviewers', [
@@ -1563,14 +1519,11 @@ model: gpt-5
 
     expect(parallel.fixed).toMatchObject([{
       name: 'architecture',
-      provider: 'codex',
-      model: 'gpt-test',
       rules: [{ condition: { kind: 'semantic', label: 'approved' } }],
     }]);
     expect(parallel.pool).toMatchObject([{
       name: 'frontend',
       description: 'Review frontend changes',
-      providerOptions: { codex: { reasoningEffort: 'high' } },
       rules: [{ condition: { kind: 'semantic', label: 'approved' } }],
     }]);
   });

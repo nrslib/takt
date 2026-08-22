@@ -1,0 +1,3 @@
+## Requirement Scenario Verification
+
+Enumerate every requirement scenario from the plan and map each scenario's Given / When / Then to current code. Read a preceding report only as support when it already records requirement fulfillment or finding resolution, and do not treat the absence of such a statement as an unmet requirement. Treat a scenario as unmet only when current code contradicts its observable result. Do not request or inspect test existence, inputs, assertions, execution status, results, or logs, and do not use their absence as a reason to reject the work. The absence of scenario IDs in code is not an issue.

@@ -10,7 +10,11 @@ import type {
   StepProviderOptions,
   ProviderPermissionProfiles,
 } from '../core/models/index.js';
-import type { InternalAgentIsolation, ProviderType } from '../shared/types/provider.js';
+import type {
+  InternalAgentIsolation,
+  ProviderActivityCallback,
+  ProviderType,
+} from '../shared/types/provider.js';
 import type { McpAssignmentSection } from '../infra/config/runtime-provider/mcp-assignment.js';
 
 export type { StreamCallback };
@@ -31,8 +35,8 @@ export interface WorkflowMeta {
 export interface ResolvedAgentExecution {
   readonly provider: ProviderType;
   readonly model: string | undefined;
-  readonly providerOptions: StepProviderOptions;
-  readonly permissionMode: PermissionMode;
+  readonly providerOptions: StepProviderOptions | undefined;
+  readonly permissionMode: PermissionMode | undefined;
 }
 
 /** Common options for running agents */
@@ -49,6 +53,7 @@ export interface RunAgentOptions {
   personaPath?: string;
   workflowBundleResourceRoot?: string;
   internalSystemPrompt?: string;
+  internalAgentName?: string;
   internalAgentIsolation?: InternalAgentIsolation;
   allowedTools?: string[];
   mcpServers?: Record<string, McpServerConfig>;
@@ -81,6 +86,7 @@ export interface RunAgentOptions {
   resolvedProviderOptions?: StepProviderOptions | null;
   resolvedExecution?: ResolvedAgentExecution;
   onStream?: StreamCallback;
+  onActivity?: ProviderActivityCallback;
   onPermissionRequest?: PermissionHandler;
   onAskUserQuestion?: AskUserQuestionHandler;
   onDispatch?: (permissionMode: PermissionMode | undefined) => void;
@@ -88,6 +94,7 @@ export interface RunAgentOptions {
   language?: Language;
   workflowMeta?: WorkflowMeta;
   outputSchema?: Record<string, unknown>;
+  failureDir?: string;
   childProcessEnv?: Readonly<Record<string, string>>;
   onPromptResolved?: (promptParts: {
     systemPrompt: string;

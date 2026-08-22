@@ -18,7 +18,7 @@ import {
   normalizeRateLimitFallback,
   normalizeAutoRoutingConfig,
   normalizeTelemetryConfig,
-  normalizeFindingIntakeNormalize,
+  normalizeAssistantConfig,
 } from '../configNormalizers.js';
 import {
   resolveAliasedPreviewCount,
@@ -129,15 +129,6 @@ export class GlobalConfigManager {
       provider: normalizedProvider.provider,
       model: normalizedProvider.model,
       autoRouting: normalizeAutoRoutingConfig(parsed.auto_routing),
-      findingContract: parsed.finding_contract === undefined
-        ? undefined
-        : {
-            intakeNormalize: normalizeFindingIntakeNormalize(
-              parsed.finding_contract.intake_normalize as Parameters<
-                typeof normalizeFindingIntakeNormalize
-              >[0],
-            ),
-          },
       logging: parsed.logging ? {
         level: parsed.logging.level,
         trace: parsed.logging.trace,
@@ -221,6 +212,7 @@ export class GlobalConfigManager {
       pipeline: normalizePipelineConfig(
         parsed.pipeline as { default_branch_prefix?: string; commit_message_template?: string; pr_body_template?: string } | undefined,
       ),
+      assistant: normalizeAssistantConfig(parsed.assistant),
       taktProviders: normalizeTaktProviders(
         parsed.takt_providers as {
           assistant?: {

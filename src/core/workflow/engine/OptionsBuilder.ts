@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import type { WorkflowStep, WorkflowState, Language, WorkflowResumePointEntry, McpServerConfig } from '../../models/types.js';
 import type { StepProviderOptions } from '../../models/workflow-types.js';
+import type { TaskReviewScope } from '../review-scope.js';
 import type { RunAgentOptions } from '../../../agents/runner.js';
 import type { WorkflowMeta } from '../../../agents/types.js';
 import type { StructuredCaller } from '../../../agents/structured-caller.js';
@@ -9,10 +10,10 @@ import {
   resolveEffectiveProviderOptions,
   resolveEffectiveTeamLeaderPartProviderOptions,
   resolveDirectStepProviderOptions,
-  resolveStepProviderOptionsLayers,
-  mergeStepProviderOptionsLayers,
+  resolveProfileScopedProviderOptionsLayers,
   mergeProviderOptions,
   resolveProviderOptionsSources,
+  resolveTrustedDeepSeekHarnessPaths,
   type ProviderOptionsLayer,
 } from '../../../infra/config/providerOptions.js';
 import {
@@ -24,9 +25,15 @@ import {
 } from './engine-provider-options.js';
 import {
   providerSupportsMaxTurns,
+  providerSupportsPermissionControls,
   providerSupportsStructuredOutput,
 } from '../../../infra/providers/provider-capabilities.js';
-import type { ProviderType, StreamCallback } from '../../../shared/types/provider.js';
+import type {
+  ProviderActivityCallback,
+  ProviderType,
+  StreamCallback,
+} from '../../../shared/types/provider.js';
+import { buildMcpServerSetIdentity } from '../../../infra/config/runtime-provider/mcp-schema.js';
 import { resolveMcpAssignment, type AgentExecutionContext } from '../../../infra/config/runtime-provider/mcp-assignment.js';
 import type {
   WorkflowEngineOptions,
@@ -38,14 +45,16 @@ import type {
 } from '../types.js';
 import type { ProviderResolutionSource } from '../provider-options-trace.js';
 import { buildSessionKey } from '../session-key.js';
+import { buildResumeReportConsumerKeyFromStack } from '../run/resume-report-consumer.js';
 import { getWorkflowStepKind } from '../step-kind.js';
 import { resolveStepProviderModel } from '../provider-resolution.js';
 import { resolveDeterministicAutoRoutingProviderInfo, toAutoRoutingStepMetadata } from '../auto-routing/resolver.js';
 import { buildPhase1WorkflowMeta } from './workflow-meta.js';
-import type {
-  FindingContractInstructionContext,
-  FindingContractReviewerOutputStrategy,
-} from '../instruction/instruction-context.js';
+import {
+  captureWorkflowStepProviderActivity,
+  recordWorkflowStepProviderActivity,
+  recordWorkflowStepProviderEventActivity,
+} from './step-deadline.js';
 
 type ResolvedRunAgentOptions = RunAgentOptions & {
   resolvedProviderOptions?: StepProviderOptions;
@@ -82,21 +91,24 @@ export class OptionsBuilder {
     private readonly getWorkflowName: () => string,
     private readonly getWorkflowDescription: () => string | undefined,
     private readonly getCurrentWorkflowStack: () => WorkflowResumePointEntry[] | undefined = () => undefined,
-    private readonly getFindingContractInstructionContext?: (
-      step: WorkflowStep,
-      reviewerOutputStrategy: FindingContractReviewerOutputStrategy | undefined,
-      reviewScopeSnapshotId?: string,
-      parallelContextKey?: string,
-    ) => FindingContractInstructionContext | undefined,
     private readonly getTask?: () => string,
+    private readonly getReviewScope?: () => TaskReviewScope,
+    private readonly getFailureDir?: () => string,
+    private readonly getAbortSignal: () => AbortSignal | undefined = () => this.engineOptions.abortSignal,
+    private readonly recordActivity: ProviderActivityCallback = () => {},
+    private readonly getReportsRootDir?: () => string,
   ) {}
+
+  private resolveAbortSignal(): AbortSignal | undefined {
+    return this.getAbortSignal();
+  }
 
   /**
    * 実行に使う provider/model の解決。構成レイヤー（step / persona / routing /
    * config）で provider が決まらない agent ステップは、auto_routing の
    * rules → strategy デフォルトへ決定的に補完する。実行ループの AI ルーターを
    * 通るステップは runtime.providerInfo が優先されるため補完は発動せず、
-   * ルーターを通らない合成ステップ（findings-manager 等）もこの共通経路で
+   * ルーターを通らない合成ステップもこの共通経路で
    * デフォルトまで落ちる。
    */
   resolveStepProviderModel(step: WorkflowStep, runtime?: RuntimeStepResolution): StepProviderInfo {
@@ -130,10 +142,10 @@ export class OptionsBuilder {
       if (runtime.providerInfoResolution === 'fully_resolved') {
         return runtime.providerInfo;
       }
-      const providerOptions = this.resolveMergedProviderOptions(step, runtime.providerInfo.provider, runtime);
+      const providerOptions = this.resolveMergedProviderOptions(step, runtime.providerInfo, runtime);
       const providerOptionsSources = this.resolveProviderOptionsSourcesForRuntime(step, runtime)
         ?? runtime.providerInfo.providerOptionsSources
-        ?? this.resolveProviderOptionsSourcesForStep(step);
+        ?? this.resolveProviderOptionsSourcesForStep(step, runtime.providerInfo);
       return {
         ...runtime.providerInfo,
         ...(providerOptions !== undefined ? { providerOptions } : {}),
@@ -151,9 +163,13 @@ export class OptionsBuilder {
       providerRouting: this.engineOptions.providerRouting,
       tagConflictPolicy: this.engineOptions.providerRoutingTagConflictPolicy,
       personaProviders: this.engineOptions.personaProviders,
+      permissionMode: this.engineOptions.providerPermissionMode,
     });
-    const providerOptions = this.resolveMergedProviderOptions(step, resolved.provider, runtime);
-    const providerOptionsSources = this.resolveProviderOptionsSourcesForStep(step);
+    const providerOptions = this.resolveMergedProviderOptions(step, resolved, runtime);
+    const providerOptionsSources = this.resolveProviderOptionsSourcesForStep(step, resolved);
+    const permissionMode = this.isInternalProviderIdentity(step, resolved)
+      ? step.internalPermissionMode ?? resolved.permissionMode
+      : resolved.permissionMode;
     return {
       provider: resolved.provider,
       providerSource: resolved.providerSource,
@@ -161,6 +177,7 @@ export class OptionsBuilder {
       modelSource: resolved.modelSource,
       providerOptions,
       providerOptionsSources,
+      ...(permissionMode !== undefined ? { permissionMode } : {}),
     };
   }
 
@@ -170,31 +187,98 @@ export class OptionsBuilder {
     providerModel: string | undefined,
     output: StreamCallback | undefined,
   ): StreamCallback | undefined {
+    return this.buildProviderStreamForExecutionUnit(
+      step,
+      provider,
+      providerModel,
+      step.name,
+      output,
+      this.recordActivity,
+    );
+  }
+
+  buildProviderCallCallbacks(
+    step: WorkflowStep,
+    provider: ProviderType | undefined,
+    providerModel: string | undefined,
+    executionUnitKey: string,
+  ): Pick<RunAgentOptions, 'onStream' | 'onActivity'> & { finish: () => void } {
+    const recordActivity = captureWorkflowStepProviderActivity(this.recordActivity);
+    return {
+      onStream: this.buildProviderStreamForExecutionUnit(
+        step,
+        provider,
+        providerModel,
+        executionUnitKey,
+        this.engineOptions.onStream,
+        recordActivity,
+      ),
+      onActivity: (activity) => recordWorkflowStepProviderActivity(
+        recordActivity,
+        executionUnitKey,
+        activity,
+      ),
+      finish: () => recordActivity({
+        kind: 'execution_unit_finished',
+        executionUnitKey,
+      }),
+    };
+  }
+
+  private buildProviderStreamForExecutionUnit(
+    step: WorkflowStep,
+    provider: ProviderType | undefined,
+    providerModel: string | undefined,
+    executionUnitKey: string,
+    output: StreamCallback | undefined,
+    recordActivity: ProviderActivityCallback,
+  ): StreamCallback | undefined {
     const onProviderStream = this.engineOptions.onProviderStream;
-    if (!onProviderStream) {
-      return output;
-    }
-    if (!provider) {
+    if (onProviderStream && !provider) {
       throw new Error(`Step "${step.name}" has no resolved provider for provider event logging`);
     }
     return (event): void => {
-      onProviderStream({
-        step: step.name,
-        provider,
-        providerModel: providerModel ?? '(default)',
-      }, event);
+      recordWorkflowStepProviderEventActivity(recordActivity, executionUnitKey, event);
+      if (onProviderStream && provider) {
+        onProviderStream({
+          step: step.name,
+          provider,
+          providerModel: providerModel ?? '(default)',
+        }, event);
+      }
       output?.(event);
     };
   }
 
-  private resolveProviderOptionsSourcesForStep(step: WorkflowStep) {
+  buildDeadlineActivityCallbacks(
+    executionUnitKey: string,
+    recordActivity: ProviderActivityCallback = this.recordActivity,
+  ): Pick<RunAgentOptions, 'onStream' | 'onActivity'> {
+    return {
+      onStream: (event) => recordWorkflowStepProviderEventActivity(
+        recordActivity,
+        executionUnitKey,
+        event,
+      ),
+      onActivity: (activity) => recordWorkflowStepProviderActivity(
+        recordActivity,
+        executionUnitKey,
+        activity,
+      ),
+    };
+  }
+
+  private resolveProviderOptionsSourcesForStep(
+    step: WorkflowStep,
+    resolvedProviderInfo: Pick<StepProviderInfo, 'provider' | 'model' | 'providerSource'>,
+  ) {
+    const resolvedProviderSource = resolvedProviderInfo.providerSource;
+    const baseProviderOptions = this.resolveConfigProviderOptions();
+    const tracedLayers = this.resolveProviderOptionLayersForStep(step, resolvedProviderSource);
     const providerOptionsSources = resolveProviderOptionsSources(
-      resolveDirectStepProviderOptions(step),
-      resolveStepProviderOptionsLayers(step, {
-        providerRouting: this.engineOptions.providerRouting,
-        personaProviders: this.engineOptions.personaProviders,
-      }),
-      this.engineOptions.providerOptions,
+      this.resolveIdentityAwareDirectStepProviderOptions(step, resolvedProviderInfo),
+      tracedLayers,
+      baseProviderOptions,
       this.engineOptions.providerOptionsOriginResolver,
       this.engineOptions.providerOptionsSource,
     );
@@ -211,16 +295,15 @@ export class OptionsBuilder {
     if (!runtime.providerInfo?.providerOptions || !isAutoProviderOptionsSource(runtimeSource)) {
       return undefined;
     }
+    const baseProviderOptions = this.resolveConfigProviderOptions();
+    const profileLayers = this.resolveProviderOptionLayersForStep(step, runtimeSource);
     const providerOptionsSources = resolveProviderOptionsSources(
-      resolveDirectStepProviderOptions(step),
+      this.resolveIdentityAwareDirectStepProviderOptions(step, runtime.providerInfo),
       [
-        ...resolveStepProviderOptionsLayers(step, {
-          providerRouting: this.engineOptions.providerRouting,
-          personaProviders: this.engineOptions.personaProviders,
-        }),
         { source: runtimeSource, options: runtime.providerInfo.providerOptions } satisfies ProviderOptionsLayer,
+        ...profileLayers,
       ],
-      this.engineOptions.providerOptions,
+      baseProviderOptions,
       this.engineOptions.providerOptionsOriginResolver,
       this.engineOptions.providerOptionsSource,
     );
@@ -231,20 +314,42 @@ export class OptionsBuilder {
 
   private resolveMergedProviderOptions(
     step: WorkflowStep,
-    resolvedProvider: StepProviderInfo['provider'],
+    resolvedProviderInfo: Pick<StepProviderInfo, 'provider' | 'model' | 'providerSource'>,
     runtime?: RuntimeStepResolution,
   ): StepProviderOptions | undefined {
     if (runtime?.providerInfoResolution === 'fully_resolved') {
       return runtime.providerInfo?.providerOptions;
     }
-    const middleProviderOptions = mergeStepProviderOptionsLayers(step, {
-      providerRouting: this.engineOptions.providerRouting,
-      personaProviders: this.engineOptions.personaProviders,
-    });
-    const directStepProviderOptions = resolveDirectStepProviderOptions(step);
+    const middleProviderOptions = mergeProviderOptions(
+      ...this.resolveProfileScopedProviderOptionLayers(
+        step,
+        resolvedProviderInfo.providerSource,
+      ).map((layer) => layer.options),
+    );
+    const runtimeProfileProviderOptions = this.resolveRuntimeProfileProviderOptions(
+      resolvedProviderInfo.providerSource,
+    );
+    const profileProviderOptions = mergeProviderOptions(
+      runtimeProfileProviderOptions,
+      middleProviderOptions,
+    );
+    const directStepProviderOptions = this.resolveIdentityAwareDirectStepProviderOptions(
+      step,
+      resolvedProviderInfo,
+    );
     const runtimeProviderOptions = runtime?.providerInfo?.providerOptions;
+    const baseProviderOptions = this.resolveConfigProviderOptions();
 
     if (runtimeProviderOptions && !runtime.teamLeaderPart) {
+      if (runtime.providerInfo?.providerSource !== 'promotion') {
+        return resolveEffectiveProviderOptions(
+          this.engineOptions.providerOptionsSource,
+          this.engineOptions.providerOptionsOriginResolver,
+          baseProviderOptions,
+          directStepProviderOptions,
+          mergeProviderOptions(runtimeProviderOptions, middleProviderOptions),
+        );
+      }
       const stepProviderOptions = mergeRuntimeAndDirectStepProviderOptions(
         runtime,
         runtimeProviderOptions,
@@ -253,9 +358,9 @@ export class OptionsBuilder {
       return resolveEffectiveProviderOptions(
         this.engineOptions.providerOptionsSource,
         this.engineOptions.providerOptionsOriginResolver,
-        this.engineOptions.providerOptions,
+        baseProviderOptions,
         stepProviderOptions,
-        middleProviderOptions,
+        profileProviderOptions,
       );
     }
 
@@ -268,21 +373,84 @@ export class OptionsBuilder {
       return resolveEffectiveTeamLeaderPartProviderOptions(
         this.engineOptions.providerOptionsSource,
         this.engineOptions.providerOptionsOriginResolver,
-        this.engineOptions.providerOptions,
+        baseProviderOptions,
         stepProviderOptions,
-        resolvedProvider,
+        resolvedProviderInfo.provider,
         runtime.teamLeaderPart.partAllowedTools,
-        middleProviderOptions,
+        profileProviderOptions,
       );
     }
 
     return resolveEffectiveProviderOptions(
       this.engineOptions.providerOptionsSource,
       this.engineOptions.providerOptionsOriginResolver,
-      this.engineOptions.providerOptions,
+      baseProviderOptions,
       directStepProviderOptions,
-      middleProviderOptions,
+      profileProviderOptions,
     );
+  }
+
+  private resolveConfigProviderOptions(): StepProviderOptions | undefined {
+    return this.engineOptions.providerOptionsProviderSource === undefined
+      ? this.engineOptions.providerOptions
+      : this.engineOptions.configProviderOptions;
+  }
+
+  private resolveRuntimeProfileProviderOptions(
+    resolvedProviderSource: StepProviderInfo['providerSource'],
+  ): StepProviderOptions | undefined {
+    const profileSource = this.engineOptions.providerOptionsProviderSource;
+    return profileSource !== undefined && profileSource === resolvedProviderSource
+      ? this.engineOptions.providerOptions
+      : undefined;
+  }
+
+  private resolveProviderOptionLayersForStep(
+    step: WorkflowStep,
+    resolvedProviderSource: StepProviderInfo['providerSource'],
+  ): ProviderOptionsLayer[] {
+    const profileSource = this.engineOptions.providerOptionsProviderSource;
+    const profileOptions = this.resolveRuntimeProfileProviderOptions(resolvedProviderSource);
+    const profileLayers = this.resolveProfileScopedProviderOptionLayers(step, resolvedProviderSource);
+    return profileSource === undefined || profileOptions === undefined
+      ? profileLayers
+      : [{ source: profileSource, options: profileOptions }, ...profileLayers];
+  }
+
+  private resolveProfileScopedProviderOptionLayers(
+    step: WorkflowStep,
+    resolvedProviderSource: StepProviderInfo['providerSource'],
+  ): ProviderOptionsLayer[] {
+    const context = {
+      providerRouting: this.engineOptions.providerRouting,
+      personaProviders: this.engineOptions.personaProviders,
+    };
+    return resolveProfileScopedProviderOptionsLayers(
+      step,
+      context,
+      resolvedProviderSource,
+      this.engineOptions.providerOptionsProviderSource !== undefined,
+    );
+  }
+
+  private resolveIdentityAwareDirectStepProviderOptions(
+    step: WorkflowStep,
+    resolvedProviderInfo: Pick<StepProviderInfo, 'provider' | 'model' | 'providerSource'>,
+  ): StepProviderOptions | undefined {
+    return mergeProviderOptions(
+      resolveDirectStepProviderOptions(step),
+      this.isInternalProviderIdentity(step, resolvedProviderInfo)
+        ? step.internalProviderOptions
+        : undefined,
+    );
+  }
+
+  private isInternalProviderIdentity(
+    step: WorkflowStep,
+    providerInfo: Pick<StepProviderInfo, 'provider' | 'model' | 'providerSource'>,
+  ): boolean {
+    return providerInfo.providerSource === 'step'
+      && providerInfo.provider === step.provider;
   }
 
   /** Build common RunAgentOptions shared by all phases */
@@ -294,10 +462,18 @@ export class OptionsBuilder {
     const steps = this.getWorkflowSteps();
     const currentIndex = steps.findIndex((currentStep) => currentStep.name === step.name);
     const currentPosition = currentIndex >= 0 ? `${currentIndex + 1}/${steps.length}` : '?/?';
-    const { provider: resolvedProvider, model: resolvedModel } = this.resolveStepProviderModel(step, runtime);
+    const providerInfo = this.resolveStepProviderModel(step, runtime);
+    const { provider: resolvedProvider, model: resolvedModel } = providerInfo;
 
-    const providerOptions = mergedProviderOptions
-      ?? this.resolveMergedProviderOptions(step, resolvedProvider, runtime);
+    const providerOptionsSources = {
+      ...this.resolveProviderOptionsSourcesForStep(step, providerInfo),
+      ...providerInfo.providerOptionsSources,
+    };
+    const providerOptions = resolveTrustedDeepSeekHarnessPaths(
+      mergedProviderOptions ?? this.resolveMergedProviderOptions(step, providerInfo, runtime),
+      this.getCwd(),
+      providerOptionsSources,
+    );
     const workflowMeta: WorkflowMeta = {
       workflowName: this.getWorkflowName(),
       workflowDescription: this.getWorkflowDescription(),
@@ -308,40 +484,53 @@ export class OptionsBuilder {
     const baseOptions: ResolvedRunAgentOptions = {
       cwd: this.getCwd(),
       projectCwd: this.getProjectCwd(),
-      abortSignal: this.engineOptions.abortSignal,
+      abortSignal: this.resolveAbortSignal(),
       personaPath: step.personaPath,
       workflowBundleResourceRoot: this.engineOptions.workflowBundleResourceRoot,
       resolvedProvider,
       resolvedModel,
-      permissionResolution: {
-        stepName: step.name,
-        // edit: true はステップが編集する宣言。プロファイル解決の結果が
-        // readonly でも、下限として edit を要求する（書けないのに書けと
-        // 指示される構成矛盾を防ぐ）。
-        requiredPermissionMode: step.requiredPermissionMode
-          ?? (step.edit === true ? 'edit' : undefined),
-        providerProfiles: this.engineOptions.providerProfiles,
-      },
+      ...(providerInfo.permissionMode !== undefined
+          ? { permissionMode: providerInfo.permissionMode }
+          : {
+            permissionResolution: {
+              stepName: step.name,
+              requiredPermissionMode: step.requiredPermissionMode
+                ?? (step.edit === true ? 'edit' : undefined),
+              providerProfiles: this.engineOptions.providerProfiles,
+            },
+          }),
       providerOptions,
       resolvedProviderOptions: providerOptions,
       language: this.getLanguage(),
       onStream: this.buildProviderStream(step, resolvedProvider, resolvedModel, this.engineOptions.onStream),
+      onActivity: (activity) => recordWorkflowStepProviderActivity(
+        this.recordActivity,
+        step.name,
+        activity,
+      ),
       onPermissionRequest: this.engineOptions.onPermissionRequest,
       onAskUserQuestion: this.engineOptions.onAskUserQuestion,
       bypassPermissions: this.engineOptions.bypassPermissions,
       workflowMeta,
       childProcessEnv: this.engineOptions.childProcessEnv,
+      ...(this.getFailureDir === undefined ? {} : { failureDir: this.getFailureDir() }),
       mcpAssignment: this.engineOptions.mcpAssignment,
     };
     return baseOptions;
   }
 
+  /**
+   * report / status phase 用の base options。structured output と tool 制約は
+   * phase ごとに組み立てるが、MCP は phase をまたぐ agent execution の一部なので
+   * Phase 1 と同じ解決済み server set を引き継ぐ。
+   */
   private buildReadonlyPhaseBaseOptions(
     step: WorkflowStep,
     mergedProviderOptions?: StepProviderOptions,
     runtime?: RuntimeStepResolution,
   ): ResolvedRunAgentOptions {
     const baseOptions = this.buildBaseOptions(step, mergedProviderOptions, runtime);
+    const mcpServers = this.resolveMcpServersForStep(step, baseOptions.resolvedProvider);
     return {
       cwd: baseOptions.cwd,
       projectCwd: baseOptions.projectCwd,
@@ -350,29 +539,22 @@ export class OptionsBuilder {
       workflowBundleResourceRoot: baseOptions.workflowBundleResourceRoot,
       resolvedProvider: baseOptions.resolvedProvider,
       resolvedModel: baseOptions.resolvedModel,
+      permissionMode: baseOptions.permissionMode,
+      permissionResolution: baseOptions.permissionResolution,
       providerOptions: baseOptions.providerOptions,
       resolvedProviderOptions: baseOptions.resolvedProviderOptions,
       language: baseOptions.language,
       onStream: baseOptions.onStream,
+      onActivity: baseOptions.onActivity,
       onPermissionRequest: baseOptions.onPermissionRequest,
       onAskUserQuestion: baseOptions.onAskUserQuestion,
       workflowMeta: baseOptions.workflowMeta,
+      failureDir: baseOptions.failureDir,
       childProcessEnv: baseOptions.childProcessEnv,
+      mcpServers,
       mcpAssignment: baseOptions.mcpAssignment,
+      mcpServerIdentity: this.resolveMcpServerIdentityForEffectiveServers(mcpServers),
     };
-  }
-
-  private resolveReportPhaseOutputSchema(
-    step: WorkflowStep,
-    provider: ProviderType | undefined,
-  ): RunAgentOptions['outputSchema'] {
-    assertProviderResolvedForCapabilitySensitiveOptions(provider, {
-      stepName: step.name,
-      usesStructuredOutput: step.structuredOutput !== undefined,
-    });
-    return providerSupportsStructuredOutput(provider) === false
-      ? undefined
-      : step.structuredOutput?.schema;
   }
 
   buildPhase1WorkflowMeta(
@@ -386,20 +568,6 @@ export class OptionsBuilder {
     const processSafety = runtime?.teamLeaderPart?.processSafety
       ?? this.engineOptions.phase1ProcessSafetyByStep?.[workflowMeta.currentStep];
     return buildPhase1WorkflowMeta(workflowMeta, processSafety);
-  }
-
-  buildFindingContractInstructionContext(
-    step: WorkflowStep,
-    reviewerOutputStrategy: FindingContractReviewerOutputStrategy | undefined,
-    reviewScopeSnapshotId?: string,
-    parallelContextKey?: string,
-  ): FindingContractInstructionContext | undefined {
-    return this.getFindingContractInstructionContext?.(
-      step,
-      reviewerOutputStrategy,
-      reviewScopeSnapshotId,
-      parallelContextKey,
-    );
   }
 
   private resolveSupportedMaxTurns(
@@ -422,11 +590,11 @@ export class OptionsBuilder {
     // is a no-op and allowed; session-boundary `engineOptions.mcpServers` (CLI/ACP)
     // is not workflow-sourced and remains permitted.
     if (this.engineOptions.mcpAssignment !== undefined) {
-      const stepMcpServers = step.mcpServers as Record<string, McpServerConfig> | undefined;
+      const stepMcpServers = step.mcpServers;
       if (stepMcpServers !== undefined && Object.keys(stepMcpServers).length > 0) {
         const workflowStack = this.getCurrentWorkflowStack();
         const workflowName = workflowStack !== undefined && workflowStack.length > 0
-          ? workflowStack[workflowStack.length - 1]?.workflow_ref
+          ? workflowStack[workflowStack.length - 1]?.workflow
           : this.getWorkflowName();
         const workflowLabel = workflowName !== undefined ? `"${workflowName}"` : '(unknown workflow)';
         throw new Error(
@@ -440,7 +608,9 @@ export class OptionsBuilder {
       provider,
       step.name,
     );
-    const stepServers = resolveMcpServersForProvider(step.mcpServers, provider);
+    const stepServers = this.engineOptions.mcpAssignment === undefined
+      ? resolveMcpServersForProvider(step.mcpServers, provider)
+      : undefined;
     return mergeMcpServerMaps(runtimeServers, sessionServers, stepServers, step.name);
   }
 
@@ -468,7 +638,7 @@ export class OptionsBuilder {
   private buildMcpAgentExecutionContext(step: WorkflowStep): AgentExecutionContext {
     const workflowStack = this.getCurrentWorkflowStack();
     const leafWorkflowName = workflowStack !== undefined && workflowStack.length > 0
-      ? workflowStack[workflowStack.length - 1]?.workflow_ref
+      ? workflowStack[workflowStack.length - 1]?.workflow
       : this.getWorkflowName();
     const stepQualifiedName = leafWorkflowName !== undefined
       ? `${leafWorkflowName}/${step.name}`
@@ -482,28 +652,24 @@ export class OptionsBuilder {
     };
   }
 
-  /**
-   * Compute the MCP server set identity for session key isolation. Returns
-   * `undefined` when runtime MCP assignment is not configured or yields an
-   * empty set; the session key then falls back to the legacy form.
-   */
-  private resolveMcpServerIdentityForSession(step: WorkflowStep): string | undefined {
-    const section = this.engineOptions.mcpAssignment;
-    if (section === undefined) {
+  /** Build the identity from the same effective server set passed to the provider. */
+  private resolveMcpServerIdentityForEffectiveServers(
+    mcpServers: Record<string, McpServerConfig> | undefined,
+  ): string | undefined {
+    if (mcpServers === undefined || Object.keys(mcpServers).length === 0) {
       return undefined;
     }
-    const context = this.buildMcpAgentExecutionContext(step);
-    const resolved = resolveMcpAssignment(section, context);
-    return resolved.enabled ? resolved.identity : undefined;
+    return buildMcpServerSetIdentity(mcpServers);
   }
 
   /** Build RunAgentOptions for Phase 1 (main execution) */
   buildAgentOptions(step: WorkflowStep, runtime?: RuntimeStepResolution): RunAgentOptions {
+    const providerInfo = this.resolveStepProviderModel(step, runtime);
     const {
       provider: resolvedProvider,
       model: resolvedModel,
-    } = this.resolveStepProviderModel(step, runtime);
-    const mergedProviderOptions = this.resolveMergedProviderOptions(step, resolvedProvider, runtime);
+    } = providerInfo;
+    const mergedProviderOptions = this.resolveMergedProviderOptions(step, providerInfo, runtime);
 
     assertProviderResolvedForCapabilitySensitiveOptions(resolvedProvider, {
       stepName: step.name,
@@ -531,7 +697,7 @@ export class OptionsBuilder {
     const baseOptions = this.buildBaseOptions(step, mergedProviderOptions, runtime);
 
     const mcpServers = this.resolveMcpServersForStep(step, resolvedProvider);
-    const mcpServerIdentity = this.resolveMcpServerIdentityForSession(step);
+    const mcpServerIdentity = this.resolveMcpServerIdentityForEffectiveServers(mcpServers);
 
     return {
       ...baseOptions,
@@ -547,7 +713,35 @@ export class OptionsBuilder {
     };
   }
 
-  /** Build RunAgentOptions for session-resume phases (Phase 2, Phase 3) */
+  private resolveReadonlyPhaseConstraints(
+    step: WorkflowStep,
+    allowedTools: string[] | undefined,
+    runtime?: RuntimeStepResolution,
+  ): Pick<RunAgentOptions, 'permissionMode' | 'permissionResolution' | 'allowedTools'> {
+    const { provider: resolvedProvider } = this.resolveStepProviderModel(step, runtime);
+    const supportsPermissionControls = providerSupportsPermissionControls(resolvedProvider);
+    if (supportsPermissionControls === false) {
+      // Empty tools are the synthetic report-phase default. Preserve a
+      // non-empty caller constraint so unsupported providers can reject it at
+      // their boundary instead of silently running without the constraint.
+      return allowedTools !== undefined && allowedTools.length > 0
+        ? { allowedTools }
+        : {};
+    }
+    return {
+      permissionMode: 'readonly' as const,
+      permissionResolution: undefined,
+      allowedTools,
+    };
+  }
+
+  /**
+   * Build RunAgentOptions for session-resume phases (Phase 2, Phase 3).
+   *
+   * step の `structured_output` は Phase 1 の遷移判定用であって、report phase の
+   * 成果物ではない。ここで outputSchema を渡すと provider が Phase 2 でもスキーマ
+   * どおりの JSON を返し、その本文がそのまま report file になる。
+   */
   buildResumeOptions(
     step: WorkflowStep,
     sessionId: string,
@@ -555,14 +749,10 @@ export class OptionsBuilder {
     runtime?: RuntimeStepResolution,
   ): RunAgentOptions {
     const maxTurns = this.resolveSupportedMaxTurns(step, overrides.maxTurns, runtime);
-    const baseOptions = this.buildReadonlyPhaseBaseOptions(step, undefined, runtime);
     return {
-      ...baseOptions,
-      // Report/status phases are read-only regardless of step settings.
-      permissionMode: 'readonly',
+      ...this.buildReadonlyPhaseBaseOptions(step, undefined, runtime),
+      ...this.resolveReadonlyPhaseConstraints(step, [], runtime),
       sessionId,
-      allowedTools: [],
-      outputSchema: this.resolveReportPhaseOutputSchema(step, baseOptions.resolvedProvider),
       ...(maxTurns !== undefined ? { maxTurns } : {}),
     };
   }
@@ -574,12 +764,9 @@ export class OptionsBuilder {
     runtime?: RuntimeStepResolution,
   ): RunAgentOptions {
     const maxTurns = this.resolveSupportedMaxTurns(step, overrides.maxTurns, runtime);
-    const baseOptions = this.buildReadonlyPhaseBaseOptions(step, undefined, runtime);
     return {
-      ...baseOptions,
-      permissionMode: 'readonly',
-      allowedTools: overrides.allowedTools,
-      outputSchema: this.resolveReportPhaseOutputSchema(step, baseOptions.resolvedProvider),
+      ...this.buildReadonlyPhaseBaseOptions(step, undefined, runtime),
+      ...this.resolveReadonlyPhaseConstraints(step, overrides.allowedTools, runtime),
       ...(maxTurns !== undefined ? { maxTurns } : {}),
     };
   }
@@ -597,13 +784,10 @@ export class OptionsBuilder {
       providerInfo: this.engineOptions.reportFallbackProvider,
     };
     const maxTurns = this.resolveSupportedMaxTurns(step, overrides.maxTurns, fallbackRuntime);
-    const baseOptions = this.buildReadonlyPhaseBaseOptions(step, undefined, fallbackRuntime);
     const options: RunAgentOptions = {
-      ...baseOptions,
-      permissionMode: 'readonly',
+      ...this.buildReadonlyPhaseBaseOptions(step, undefined, fallbackRuntime),
+      ...this.resolveReadonlyPhaseConstraints(step, overrides.allowedTools, fallbackRuntime),
       sessionId: undefined,
-      allowedTools: overrides.allowedTools,
-      outputSchema: this.resolveReportPhaseOutputSchema(step, baseOptions.resolvedProvider),
       ...(maxTurns !== undefined ? { maxTurns } : {}),
     };
 
@@ -661,10 +845,18 @@ export class OptionsBuilder {
     onProviderAttempt?: ReportPhaseRunnerContext['onProviderAttempt'],
   ): ReportPhaseRunnerContext & StatusJudgmentPhaseContext {
     const stepProvider = this.resolveStepProviderModel(step, runtime);
+    const mcpServers = this.resolveMcpServersForStep(step, stepProvider.provider);
+    const mcpServerIdentity = this.resolveMcpServerIdentityForEffectiveServers(mcpServers);
+    const resumeReportConsumerKey = buildResumeReportConsumerKeyFromStack(
+      this.getCurrentWorkflowStack() ?? [],
+    );
     return {
       cwd: this.getCwd(),
       task: this.getTask?.(),
+      reviewScope: this.getReviewScope?.(),
       reportDir: join(this.getCwd(), this.getReportDir()),
+      ...(this.getReportsRootDir === undefined ? {} : { reportsRootDir: this.getReportsRootDir() }),
+      ...(resumeReportConsumerKey === undefined ? {} : { resumeReportConsumerKey }),
       language: this.getLanguage(),
       interactive: this.engineOptions.interactive,
       lastResponse,
@@ -672,29 +864,35 @@ export class OptionsBuilder {
       observabilityRunId: this.engineOptions.observabilityRunId,
       observabilityEnabled: this.engineOptions.observability?.enabled === true,
       sanitizeObservabilityText: this.engineOptions.sanitizeObservabilityText,
+      reportContentSanitizer: this.engineOptions.reportContentSanitizer,
       getCurrentWorkflowStack: this.getCurrentWorkflowStack,
       childProcessEnv: this.engineOptions.childProcessEnv,
-      abortSignal: this.engineOptions.abortSignal,
+      abortSignal: this.resolveAbortSignal(),
+      ...(this.getFailureDir === undefined ? {} : { failureDir: this.getFailureDir() }),
+      mcpServers,
+      mcpAssignment: this.engineOptions.mcpAssignment,
+      mcpServerIdentity,
       onStream: this.buildProviderStream(
         step,
         stepProvider.provider,
         stepProvider.model,
         this.engineOptions.onStream,
       ),
+      onActivity: (activity) => recordWorkflowStepProviderActivity(
+        this.recordActivity,
+        step.name,
+        activity,
+      ),
       structuredCaller: this.requireStructuredCaller(),
       resolveStepProviderModel: (step) => this.resolveStepProviderModel(step, runtime),
-      buildFindingContractInstructionContext: (step, reviewerOutputStrategy) =>
-        this.buildFindingContractInstructionContext(
-          step,
-          reviewerOutputStrategy,
-        ),
       getSessionId: (persona: string) => state.personaSessions.get(persona),
       resolveSessionKey: (step) => {
         const providerInfo = this.resolveStepProviderModel(step, runtime);
+        const mcpServers = this.resolveMcpServersForStep(step, providerInfo.provider);
         return buildSessionKey(step, {
           provider: providerInfo.provider,
           model: providerInfo.model,
-          mcpServerIdentity: this.resolveMcpServerIdentityForSession(step),
+          mcpServerIdentity: this.resolveMcpServerIdentityForEffectiveServers(mcpServers),
         });
       },
       buildResumeOptions: (step, sessionId, overrides) => this.buildResumeOptions(step, sessionId, overrides, runtime),

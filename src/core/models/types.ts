@@ -31,17 +31,12 @@ export type {
   PartDefinition,
   PartResult,
   TeamLeaderConfig,
-  TeamLeaderMode,
-  FindingContractPartAssignment,
-  FindingContractFindingOutcome,
-  FindingContractPartCompletionClaim,
-  FindingContractFixCoverage,
-  FindingContractTeamLeaderDecision,
 } from './part.js';
 
 // Workflow configuration and runtime state
 export type {
   WorkflowRule,
+  WorkflowWideRule,
   WorkflowMaxSteps,
   WorkflowStructuredOutput,
   WorkflowPrListWhere,
@@ -57,12 +52,13 @@ export type {
   CommandQualityGate,
   QualityGate,
   McpServerConfig,
+  CodexProviderOptions,
+  CodexPermissionControl,
   RuntimePreparePreset,
   RuntimePrepareEntry,
   WorkflowRuntimeConfig,
   WorkflowStepKind,
   WorkflowResumeFrameKind,
-  WorkflowCallOverrides,
   WorkflowSessionMode,
   WorkflowPromotionEntry,
   WorkflowParamType,
@@ -80,11 +76,9 @@ export type {
   StepProviderOptions,
   OpenCodeGuardOptions,
   OpenCodeGuardProfile,
-  FindingContractConfig,
-  FindingLedger,
-  FindingsRuleContext,
   AgentWorkflowStep,
   NormalAgentWorkflowStep,
+  NormalOrTeamLeaderWorkflowStep,
   ParallelWorkflowStep,
   DynamicParallelFixedSubStep,
   DynamicParallelPoolSubStep,
@@ -115,8 +109,22 @@ export type {
   ResolvedFacetPoolCandidate,
   ResolvedFacetContent,
   DynamicFacetsConfig,
+  SelectorGuidance,
   DynamicFacetSelectionSnapshot,
+  CompletionRetryConfig,
 } from './workflow-types.js';
+
+export {
+  MAX_COMPLETION_RETRY,
+} from './workflow-types.js';
+
+export type {
+  CompanionSelection,
+  ResolvedCompanionDefinition,
+  CompanionFindingSeverity,
+  CompanionFinding,
+  CompanionWorkflowState,
+} from './companion-types.js';
 
 export {
   WORKFLOW_SESSION_MODES,
@@ -124,6 +132,7 @@ export {
   getAllParallelSubSteps,
   isDynamicParallelSubSteps,
   isNormalAgentWorkflowStep,
+  isNormalOrTeamLeaderWorkflowStep,
 } from './workflow-types.js';
 
 
@@ -141,7 +150,6 @@ export type {
   AutoRoutingStrategy,
   AutoRoutingCandidate,
   AutoRoutingConfig,
-  FindingIntakeNormalizeConfig,
   ProviderRoutingConfig,
   ProviderRoutingEntry,
   CustomAgentConfig,

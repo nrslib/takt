@@ -21,15 +21,25 @@ import {
 import {
   prependSourceContext,
   prependSourceContextGuardToSystemPrompt,
+  formatLiteralBlock,
 } from '../../interactive/promptSections.js';
 import { createSelectActionWithoutExecute, buildReplayHint } from '../../interactive/interactive-summary.js';
 import { attachImageAttachmentCleanup } from '../../interactive/imageAttachments.js';
+import { runTuiTaskConversation } from '../../tui/runTuiTask.js';
+import {
+  buildOrderRevisionPrompt,
+  createOrderRevisionSelector,
+  normalizeOrderRevisionSummary,
+} from '../../interactive/orderRevisionMode.js';
+import { resolveMaxImageIndex } from '../orderRevision.js';
 import { type RunSessionContext, formatRunSessionForPrompt } from '../../interactive/runSessionReader.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import { getLabelObject } from '../../../shared/i18n/index.js';
 import { resolveWorkflowConfigValues } from '../../../infra/config/index.js';
 import type { InstructModeAction, InstructModeResult, InstructUIText } from '../../interactive/instructModeTypes.js';
 import { renderPullRequestContext, type PullRequestContext } from '../../../core/workflow/pr-context.js';
+import { SlashCommand } from '../../../shared/constants.js';
+import { hasInteractiveTerminal } from '../../../shared/utils/index.js';
 
 export type { InstructModeAction, InstructModeResult, InstructUIText } from '../../interactive/instructModeTypes.js';
 
@@ -46,6 +56,12 @@ export interface InstructModeOptions {
   readonly runSessionContext?: RunSessionContext;
   readonly previousOrderContent?: string | null;
   readonly prContext?: PullRequestContext;
+  readonly failedContext?: FailedInstructContext;
+}
+
+export interface FailedInstructContext {
+  readonly reportSummary: string;
+  readonly worktreeSummary: string;
 }
 
 function toInstructModeResult(result: InteractiveModeResult): InstructModeResult {
@@ -53,6 +69,7 @@ function toInstructModeResult(result: InteractiveModeResult): InstructModeResult
     return attachImageAttachmentCleanup({
       action: 'cancel',
       task: '',
+      ...(result.source ? { source: result.source } : {}),
       ...(result.attachments ? { attachments: result.attachments } : {}),
     }, result.cleanupAttachments);
   }
@@ -60,6 +77,7 @@ function toInstructModeResult(result: InteractiveModeResult): InstructModeResult
   return attachImageAttachmentCleanup({
     action: result.action as InstructModeAction,
     task: result.task,
+    ...(result.source ? { source: result.source } : {}),
     ...(result.attachments ? { attachments: result.attachments } : {}),
   }, result.cleanupAttachments);
 }
@@ -78,6 +96,7 @@ function buildInstructTemplateVars(
     runSessionContext,
     previousOrderContent,
     prContext,
+    failedContext,
   } = options;
   const hasWorkflowPreview = !!workflowContext?.stepPreviews?.length;
   const stepDetails = hasWorkflowPreview
@@ -88,12 +107,18 @@ function buildInstructTemplateVars(
   const runPromptVars = hasRunSession
     ? formatRunSessionForPrompt(runSessionContext)
     : { runTask: '', runWorkflow: '', runStatus: '', runStepLogs: '', runReports: '' };
+  const reportSummary = failedContext?.reportSummary.length
+    ? formatLiteralBlock(failedContext.reportSummary)
+    : '';
+  const worktreeSummary = failedContext?.worktreeSummary.length
+    ? formatLiteralBlock(failedContext.worktreeSummary)
+    : '';
 
   return {
     taskName,
     taskContent,
     branchName,
-    branchContext,
+    branchContext: branchContext.length > 0 ? formatLiteralBlock(branchContext) : '',
     retryNote,
     hasWorkflowPreview,
     workflowStructure: workflowContext?.workflowStructure ?? '',
@@ -104,6 +129,11 @@ function buildInstructTemplateVars(
     orderContent: previousOrderContent ?? '',
     hasPrContext: prContext !== undefined,
     prContextText: prContext ? renderPullRequestContext(prContext, lang) : '',
+    hasFailedContext: reportSummary.length > 0 || worktreeSummary.length > 0,
+    hasReportSummary: reportSummary.length > 0,
+    hasWorktreeSummary: worktreeSummary.length > 0,
+    reportSummary,
+    worktreeSummary,
   };
 }
 
@@ -115,6 +145,7 @@ export async function runInstructMode(
     workflowContext,
     previousOrderContent,
   } = options;
+  const canonicalOrderContent = (previousOrderContent ?? options.taskContent).trim();
   const globalConfig = resolveWorkflowConfigValues(cwd, ['language']);
   const lang = resolveLanguage(globalConfig.language);
 
@@ -140,10 +171,25 @@ export async function runInstructMode(
       prependSourceContext(ctx.lang, userMessage, sourceContext),
     introMessage: `${ui.intro}${replayHint}`,
     selectAction: createSelectActionWithoutExecute(ui),
+    selectGoAction: createOrderRevisionSelector(),
+    summaryPromptBuilder: (summaryOptions) =>
+      buildOrderRevisionPrompt(summaryOptions, canonicalOrderContent),
+    normalizeSummaryTask: (task, attachments) => normalizeOrderRevisionSummary(task, attachments, ctx.lang),
+    initialImageAttachmentIndex: resolveMaxImageIndex(canonicalOrderContent),
+    enabledCommands: [
+      SlashCommand.Go,
+      SlashCommand.Replay,
+      SlashCommand.Cancel,
+      SlashCommand.Resume,
+      SlashCommand.PasteImage,
+    ],
     previousOrderContent: previousOrderContent ?? undefined,
+    trackResultSource: true,
   };
 
-  const result = await runConversationLoop(cwd, ctx, strategy, workflowContext, undefined);
+  const result = hasInteractiveTerminal()
+    ? await runTuiTaskConversation({ cwd, plan: { ctx, strategy }, workflowContext })
+    : await runConversationLoop(cwd, ctx, strategy, workflowContext, undefined);
 
   return toInstructModeResult(result);
 }

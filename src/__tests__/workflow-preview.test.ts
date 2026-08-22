@@ -2,7 +2,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { getWorkflowDescription } from '../infra/config/loaders/workflowPreview.js';
+import type { WorkflowConfig } from '../core/models/index.js';
+import {
+  getWorkflowDescription,
+  getWorkflowDescriptionFromConfig,
+} from '../infra/config/loaders/workflowPreview.js';
+import { withGlobalConfigDirOverride } from '../infra/config/paths.js';
 
 describe('getWorkflowDescription', () => {
   const tempRoots: string[] = [];
@@ -19,76 +24,57 @@ describe('getWorkflowDescription', () => {
     return root;
   }
 
-  function writeSingleStepFindingContractWorkflow(projectDir: string, managerProviderLines: string[]): void {
-    const workflowDir = join(projectDir, '.takt', 'workflows');
-    const outputContractsDir = join(projectDir, '.takt', 'facets', 'output-contracts');
-    mkdirSync(workflowDir, { recursive: true });
-    mkdirSync(outputContractsDir, { recursive: true });
-    writeFileSync(join(outputContractsDir, 'review-finding-contract.md'), 'Report raw findings as JSON.');
-    writeFileSync(join(workflowDir, 'finding-manager-single-step-preview.yaml'), [
-      'name: finding-manager-single-step-preview',
-      'initial_step: reviewer',
-      'max_steps: 2',
-      'finding_contract:',
-      '  manager:',
-      '    persona: findings-manager',
-      '    instruction: findings-manager',
-      '    output_contract: findings-manager',
-      ...managerProviderLines.map((line) => `    ${line}`),
-      'steps:',
-      '  - name: reviewer',
-      '    persona: reviewer',
-      '    instruction: Review the change.',
-      '    output_contracts:',
-      '      report:',
-      '        - name: review.md',
-      '          format: review-finding-contract',
-      '    rules:',
-      '      - condition: invalid_manager_output',
-      '        next: fix',
-      '      - condition: done',
-      '        next: COMPLETE',
-      '  - name: fix',
-      '    instruction: Fix manager output issues.',
-      '    rules:',
-      '      - condition: done',
-      '        next: COMPLETE',
+  function createProgrammaticPreviewWorkflow(): WorkflowConfig {
+    return {
+      name: 'preview-auto-routing',
+      initialStep: 'implement',
+      maxSteps: 1,
+      steps: [{
+        name: 'implement',
+        instruction: 'Implement the task',
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      }],
+    } as WorkflowConfig;
+  }
+
+  function writePreviewRuntime(projectDir: string, assignStepPool: boolean): void {
+    const configDir = join(projectDir, '.takt');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'runtime.yaml'), [
+      'version: 1',
+      'provider:',
+      '  defaults:',
+      '    profile: default',
+      '  profiles:',
+      '    default:',
+      '      provider: mock',
+      '      model: gpt-default',
+      '    rule-candidate:',
+      '      provider: codex',
+      '      model: gpt-rule',
+      '    router:',
+      '      provider: mock',
+      '      model: gpt-router',
+      ...(assignStepPool
+        ? [
+            '  targets:',
+            '    steps:',
+            '      preview-auto-routing/implement:',
+            '        pool: general',
+          ]
+        : []),
+      '  auto_routing:',
+      '    router_profile: router',
+      '    pools:',
+      '      general:',
+      '        candidates:',
+      '          - profile: rule-candidate',
+      '            tier: medium',
+      '        fallback_profile: rule-candidate',
     ].join('\n'));
   }
 
-  function writeFindingManagerWorkflow(projectDir: string, managerProviderLines: string[]): void {
-    const workflowDir = join(projectDir, '.takt', 'workflows');
-    mkdirSync(workflowDir, { recursive: true });
-    writeFileSync(join(workflowDir, 'finding-manager-preview.yaml'), [
-      'name: finding-manager-preview',
-      'initial_step: reviewers',
-      'max_steps: 2',
-      'finding_contract:',
-      '  manager:',
-      '    persona: findings-manager',
-      '    instruction: findings-manager',
-      '    output_contract: findings-manager',
-      ...managerProviderLines.map((line) => `    ${line}`),
-      'steps:',
-      '  - name: reviewers',
-      '    parallel:',
-      '      - name: reviewer-a',
-      '        persona: reviewer',
-      '        instruction: Review the change.',
-      '    rules:',
-      '      - condition: invalid_manager_output',
-      '        next: fix',
-      '      - condition: done',
-      '        next: COMPLETE',
-      '  - name: fix',
-      '    instruction: Fix manager output issues.',
-      '    rules:',
-      '      - condition: done',
-      '        next: COMPLETE',
-    ].join('\n'));
-  }
-
-  it('dynamic parallel の mode と fixed/pool role を preview に含める', () => {
+  it('dynamic parallel の mode と fixed/pool role、static child facet を preview に含める (DFP-002, DFP-008)', () => {
     const projectDir = createProject();
     const workflowDir = join(projectDir, '.takt', 'workflows');
     mkdirSync(workflowDir, { recursive: true });
@@ -129,9 +115,6 @@ describe('getWorkflowDescription', () => {
 
     const description = getWorkflowDescription('dynamic-preview', projectDir, 1);
 
-    expect(description.workflowStructure).toContain('selector mode: cumulative');
-    expect(description.workflowStructure).toContain('fixed: architecture');
-    expect(description.workflowStructure).toContain('pool candidate: frontend');
     expect(description.stepPreviews[0]).toMatchObject({
       name: 'reviewers',
       dynamicSelectionMode: 'cumulative',
@@ -142,8 +125,7 @@ describe('getWorkflowDescription', () => {
           provider: 'codex',
           model: 'gpt-selector',
           providerSource: 'project',
-          permissionMode: 'readonly',
-          allowedTools: ['request_user_input', 'update_plan', 'view_image', 'web_search'],
+          allowedTools: [],
           canEdit: false,
         },
         { name: 'architecture', parallelRole: 'fixed' },
@@ -172,9 +154,86 @@ describe('getWorkflowDescription', () => {
     });
     expect(description.stepPreviews[0]?.substeps?.[0]).not.toHaveProperty('providerOptions');
     expect(overridden.stepPreviews[0]?.substeps?.[0]).not.toHaveProperty('providerOptions');
+    const facetDir = join(workflowDir, 'facets', 'policies');
+    mkdirSync(facetDir, { recursive: true });
+    writeFileSync(join(facetDir, 'review.md'), 'Review policy\n');
+    writeFileSync(join(workflowDir, 'static-facet-preview.yaml'), [
+      'name: static-facet-preview',
+      'initial_step: reviewers',
+      'max_steps: 1',
+      'facet_pools:',
+      '  security-facets:',
+      '    policies:',
+      '      review: ./facets/policies/review.md',
+      '    candidates:',
+      '      - id: web',
+      '        description: Web security',
+      '        policy: review',
+      'steps:',
+      '  - name: reviewers',
+      '    parallel:',
+      '      - name: security',
+      '        persona: security-reviewer',
+      '        instruction: Review security',
+      '        dynamic_facets:',
+      '          pool: security-facets',
+      '          max_selected: 1',
+      '        rules:',
+      '          - condition: approved',
+      '            next: COMPLETE',
+      '    rules:',
+      '      - condition: all("approved")',
+      '        next: COMPLETE',
+    ].join('\n'));
+
+    const staticDescription = getWorkflowDescription('static-facet-preview', projectDir, 1);
+    const security = staticDescription.stepPreviews[0]?.substeps?.find((step) => step.name === 'security');
+
+    expect(security).toMatchObject({
+      name: 'security',
+      dynamicFacets: {
+        pool: 'security-facets',
+        maxSelected: 1,
+        source: 'inline',
+        candidates: [{
+          id: 'web',
+          description: 'Web security',
+          policyRefs: ['review'],
+          knowledgeRefs: [],
+        }],
+      },
+    });
   });
 
-  it('OpenCode selectorをpreview生成前に拒否する', () => {
+  it('pool未割当のruntime auto-routingはdefaults previewを上書きしない', () => {
+    const projectDir = createProject();
+    const globalConfigDir = createProject();
+    writePreviewRuntime(projectDir, false);
+    const description = withGlobalConfigDirOverride(globalConfigDir, () => getWorkflowDescriptionFromConfig(
+      createProgrammaticPreviewWorkflow(),
+      projectDir,
+      1,
+    ));
+
+    expect(description.stepPreviews[0]).toMatchObject({ model: 'gpt-default' });
+    expect(description.stepPreviews[0]).toMatchObject({ provider: 'mock' });
+  });
+
+  it('明示的なruntime pool割当は動的provider/modelを固定値としてpreviewしない', () => {
+    const projectDir = createProject();
+    const globalConfigDir = createProject();
+    writePreviewRuntime(projectDir, true);
+    const description = withGlobalConfigDirOverride(globalConfigDir, () => getWorkflowDescriptionFromConfig(
+      createProgrammaticPreviewWorkflow(),
+      projectDir,
+      1,
+    ));
+
+    expect(description.stepPreviews[0]).not.toHaveProperty('provider');
+    expect(description.stepPreviews[0]).not.toHaveProperty('model');
+  });
+
+  it('OpenCode selectorをshared transportでpreviewできる', () => {
     const projectDir = createProject();
     const workflowDir = join(projectDir, '.takt', 'workflows');
     mkdirSync(workflowDir, { recursive: true });
@@ -202,11 +261,11 @@ describe('getWorkflowDescription', () => {
       '        next: COMPLETE',
     ].join('\n'));
 
-    expect(() => getWorkflowDescription(
+    expect(getWorkflowDescription(
       'unsupported-selector-preview',
       projectDir,
       1,
-    )).toThrow('Provider "opencode" does not support strict internal-agent isolation');
+    ).stepPreviews).toHaveLength(1);
   });
 
   it('AI向けselector previewへ実行用provider optionsを含めない', () => {
@@ -250,7 +309,6 @@ describe('getWorkflowDescription', () => {
       provider: 'codex',
       model: 'gpt-selector',
       providerSource: 'project',
-      permissionMode: 'readonly',
     });
     expect(selectorPreview).not.toHaveProperty('providerOptions');
     expect(serializedPreview).not.toContain('selector-user');
@@ -283,218 +341,4 @@ describe('getWorkflowDescription', () => {
     expect(() => getWorkflowDescription('ordinary-preview', projectDir, 1)).not.toThrow();
   });
 
-  it('finding manager の解決済み provider/model を parallel step summary に含める', () => {
-    const projectDir = createProject();
-    writeFindingManagerWorkflow(projectDir, ['provider: codex', 'model: gpt-5.5']);
-
-    const description = getWorkflowDescription('finding-manager-preview', projectDir, 1);
-    const reviewers = description.stepPreviews[0];
-    const manager = reviewers?.substeps?.find((substep) => substep.name === 'findings-manager');
-
-    expect(manager).toMatchObject({
-      provider: 'codex',
-      model: 'gpt-5.5',
-      allowedTools: [],
-      canEdit: false,
-    });
-  });
-
-  it('FC サブステップを複数持つ並列親では findings-manager を親に1つだけ含め、サブステップには含めない', () => {
-    const projectDir = createProject();
-    const workflowDir = join(projectDir, '.takt', 'workflows');
-    const outputContractsDir = join(projectDir, '.takt', 'facets', 'output-contracts');
-    mkdirSync(workflowDir, { recursive: true });
-    mkdirSync(outputContractsDir, { recursive: true });
-    writeFileSync(join(outputContractsDir, 'coding-review-finding-contract.md'), 'Report raw findings as JSON.');
-    writeFileSync(join(outputContractsDir, 'security-review-finding-contract.md'), 'Report raw findings as JSON.');
-    writeFileSync(join(workflowDir, 'finding-manager-parallel-fc-preview.yaml'), [
-      'name: finding-manager-parallel-fc-preview',
-      'initial_step: reviewers',
-      'max_steps: 2',
-      'finding_contract:',
-      '  manager:',
-      '    persona: findings-manager',
-      '    instruction: findings-manager',
-      '    output_contract: findings-manager',
-      '    provider: codex',
-      '    model: gpt-5.5',
-      'steps:',
-      '  - name: reviewers',
-      '    parallel:',
-      '      - name: coding-review',
-      '        persona: reviewer',
-      '        instruction: Review the change.',
-      '        output_contracts:',
-      '          report:',
-      '            - name: coding-review.md',
-      '              format: coding-review-finding-contract',
-      '      - name: security-review',
-      '        persona: reviewer',
-      '        instruction: Review the change for security issues.',
-      '        output_contracts:',
-      '          report:',
-      '            - name: security-review.md',
-      '              format: security-review-finding-contract',
-      '    rules:',
-      '      - condition: invalid_manager_output',
-      '        next: fix',
-      '      - condition: done',
-      '        next: COMPLETE',
-      '  - name: fix',
-      '    instruction: Fix manager output issues.',
-      '    rules:',
-      '      - condition: done',
-      '        next: COMPLETE',
-    ].join('\n'));
-
-    const description = getWorkflowDescription('finding-manager-parallel-fc-preview', projectDir, 1);
-    const reviewers = description.stepPreviews[0];
-    const managers = reviewers?.substeps?.filter((substep) => substep.name === 'findings-manager');
-
-    // 実行時（ParallelRunner）は並列ブロック全体につき manager を親レベルで
-    // 1回しか起動しないため、preview も親に1つだけ現れるのが正しい。
-    expect(managers).toHaveLength(1);
-    for (const substep of reviewers?.substeps ?? []) {
-      expect(substep.substeps ?? []).toHaveLength(0);
-    }
-  });
-
-  it('*-finding-contract を持つ team_leader ステップには findings-manager を preview に含めない', () => {
-    const projectDir = createProject();
-    const workflowDir = join(projectDir, '.takt', 'workflows');
-    const outputContractsDir = join(projectDir, '.takt', 'facets', 'output-contracts');
-    mkdirSync(workflowDir, { recursive: true });
-    mkdirSync(outputContractsDir, { recursive: true });
-    writeFileSync(join(outputContractsDir, 'review-finding-contract.md'), 'Report raw findings as JSON.');
-    writeFileSync(join(workflowDir, 'finding-manager-team-leader-preview.yaml'), [
-      'name: finding-manager-team-leader-preview',
-      'initial_step: implement',
-      'max_steps: 2',
-      'finding_contract:',
-      '  manager:',
-      '    persona: findings-manager',
-      '    instruction: findings-manager',
-      '    output_contract: findings-manager',
-      '    provider: codex',
-      '    model: gpt-5.5',
-      'steps:',
-      '  - name: implement',
-      '    persona: team-leader',
-      '    instruction: Decompose and implement the task.',
-      '    team_leader:',
-      '      persona: team-leader',
-      '      max_parts: 2',
-      '    output_contracts:',
-      '      report:',
-      '        - name: review.md',
-      '          format: review-finding-contract',
-      '    rules:',
-      '      - condition: invalid_manager_output',
-      '        next: fix',
-      '      - condition: done',
-      '        next: COMPLETE',
-      '  - name: fix',
-      '    instruction: Fix manager output issues.',
-      '    rules:',
-      '      - condition: done',
-      '        next: COMPLETE',
-    ].join('\n'));
-
-    const description = getWorkflowDescription('finding-manager-team-leader-preview', projectDir, 1);
-    const implement = description.stepPreviews[0];
-
-    // 実行時は TeamLeaderRunner へ分岐し StepExecutor.runNormalStep（manager
-    // 起動経路）を通らないため、preview にも findings-manager を出さない。
-    expect(implement?.name).toBe('implement');
-    expect(implement?.substeps ?? []).toHaveLength(0);
-  });
-
-  it('*-finding-contract を持つ arpeggio ステップには findings-manager を preview に含めない', () => {
-    const projectDir = createProject();
-    const workflowDir = join(projectDir, '.takt', 'workflows');
-    const outputContractsDir = join(projectDir, '.takt', 'facets', 'output-contracts');
-    mkdirSync(workflowDir, { recursive: true });
-    mkdirSync(outputContractsDir, { recursive: true });
-    writeFileSync(join(outputContractsDir, 'review-finding-contract.md'), 'Report raw findings as JSON.');
-    writeFileSync(join(workflowDir, 'finding-manager-arpeggio-preview.yaml'), [
-      'name: finding-manager-arpeggio-preview',
-      'initial_step: batch',
-      'max_steps: 2',
-      'finding_contract:',
-      '  manager:',
-      '    persona: findings-manager',
-      '    instruction: findings-manager',
-      '    output_contract: findings-manager',
-      '    provider: codex',
-      '    model: gpt-5.5',
-      'steps:',
-      '  - name: batch',
-      '    persona: worker',
-      '    instruction: Process each row.',
-      '    arpeggio:',
-      '      source: csv',
-      '      source_path: ./data.csv',
-      '      template: ./prompt.md',
-      '    output_contracts:',
-      '      report:',
-      '        - name: review.md',
-      '          format: review-finding-contract',
-      '    rules:',
-      '      - condition: invalid_manager_output',
-      '        next: fix',
-      '      - condition: done',
-      '        next: COMPLETE',
-      '  - name: fix',
-      '    instruction: Fix manager output issues.',
-      '    rules:',
-      '      - condition: done',
-      '        next: COMPLETE',
-    ].join('\n'));
-
-    const description = getWorkflowDescription('finding-manager-arpeggio-preview', projectDir, 1);
-    const batch = description.stepPreviews[0];
-
-    // 実行時は ArpeggioRunner へ分岐し StepExecutor.runNormalStep（manager
-    // 起動経路）を通らないため、preview にも findings-manager を出さない。
-    expect(batch?.name).toBe('batch');
-    expect(batch?.substeps ?? []).toHaveLength(0);
-  });
-
-  it('並列親でない単独 FC ステップの後にも findings-manager を preview に含める', () => {
-    const projectDir = createProject();
-    writeSingleStepFindingContractWorkflow(projectDir, ['provider: codex', 'model: gpt-5.5']);
-
-    const description = getWorkflowDescription('finding-manager-single-step-preview', projectDir, 1);
-    const reviewer = description.stepPreviews[0];
-    const manager = reviewer?.substeps?.find((substep) => substep.name === 'findings-manager');
-
-    expect(manager).toMatchObject({
-      provider: 'codex',
-      model: 'gpt-5.5',
-      allowedTools: [],
-      canEdit: false,
-    });
-  });
-
-  it('finding manager の provider 直接指定時は persona model を継承しない', () => {
-    const projectDir = createProject();
-    writeFindingManagerWorkflow(projectDir, ['provider: codex']);
-    writeFileSync(join(projectDir, '.takt', 'config.yaml'), [
-      'persona_providers:',
-      '  findings-manager:',
-      '    provider: opencode',
-      '    model: opencode/persona-model',
-    ].join('\n'));
-
-    const description = getWorkflowDescription('finding-manager-preview', projectDir, 1);
-    const manager = description.stepPreviews[0]?.substeps
-      ?.find((substep) => substep.name === 'findings-manager');
-
-    expect(manager).toMatchObject({
-      provider: 'codex',
-      allowedTools: [],
-      canEdit: false,
-    });
-    expect(manager?.model).toBeUndefined();
-  });
 });

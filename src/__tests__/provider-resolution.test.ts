@@ -14,12 +14,8 @@ import {
   resolveAssistantScopedProviderModelFromConfig,
   resolveNonWorkflowProviderModelFromConfig,
 } from '../core/config/provider-resolution.js';
-import { buildFindingManagerStep } from '../core/workflow/findings/manager-step.js';
-import {
-  buildFindingConflictAdjudicationStep,
-  buildFindingTerminalAdjudicationStep,
-} from '../core/workflow/findings/adjudication-step.js';
-import type { ProjectConfig } from '../core/models/config-types.js';
+import { resolveExecutableRoutingCandidates } from '../core/workflow/auto-routing/selector.js';
+import type { AutoRoutingConfig, ProjectConfig } from '../core/models/config-types.js';
 
 describe('resolveProviderModelCandidates', () => {
   it('should resolve first defined provider and model independently', () => {
@@ -45,6 +41,34 @@ describe('resolveProviderModelCandidates', () => {
 });
 
 describe('resolveStepProviderModel', () => {
+  it('carries permission mode only from the profile that supplied the winning provider', () => {
+    const routed = resolveStepProviderModel({
+      step: { name: 'review', personaDisplayName: 'reviewer', tags: ['security'] },
+      provider: 'mock',
+      providerSource: 'runtime-v1',
+      permissionMode: 'full',
+      providerRouting: {
+        tags: {
+          security: { provider: 'claude', model: 'review-model', permissionMode: 'readonly' },
+        },
+      },
+    });
+    expect(routed.permissionMode).toBe('readonly');
+
+    const overridden = resolveStepProviderModel({
+      step: { name: 'review', personaDisplayName: 'reviewer', tags: ['security'] },
+      provider: 'codex',
+      providerSource: 'cli',
+      permissionMode: 'full',
+      providerRouting: {
+        tags: {
+          security: { provider: 'claude', model: 'review-model', permissionMode: 'readonly' },
+        },
+      },
+    });
+    expect(overridden.permissionMode).toBeUndefined();
+  });
+
   it.each([
     {
       label: 'provider only',
@@ -87,6 +111,7 @@ describe('resolveStepProviderModel', () => {
     const result = resolveStepProviderModel({
       step: {
         name: 'implement',
+        engineSynthesized: true,
         provider: 'codex',
         model: 'step-model',
         personaDisplayName: 'coder',
@@ -112,10 +137,93 @@ describe('resolveStepProviderModel', () => {
     expect(result).toEqual(expected);
   });
 
+  it('should use runtime defaults when auto routing has no matching explicit pool target', () => {
+    const result = resolveStepProviderModel({
+      step: { name: 'review', provider: undefined, model: undefined },
+      provider: 'mock',
+      providerSource: 'runtime-v1',
+      model: 'runtime-default-model',
+      modelSource: 'runtime-v1',
+      autoRouting: {
+        workflowName: 'e2e-mock-single',
+        strategy: 'balanced',
+        router: { provider: 'mock', model: 'router-model' },
+        candidates: [],
+        candidatePools: {},
+      } as AutoRoutingConfig,
+    });
+
+    expect(result).toEqual({
+      provider: 'mock',
+      providerSource: 'runtime-v1',
+      model: 'runtime-default-model',
+      modelSource: 'runtime-v1',
+    });
+  });
+
+  it('should leave an explicitly pooled target unresolved for auto routing', () => {
+    const autoRouting: AutoRoutingConfig = {
+      workflowName: 'e2e-mock-single',
+      strategy: 'balanced',
+      router: { provider: 'mock', model: 'router-model' },
+      candidates: [
+        { name: 'coding', provider: 'codex', model: 'gpt-5', routingTier: 'medium' },
+      ],
+      candidatePools: {
+        main: { candidates: ['coding'], fallback: 'coding' },
+      },
+      poolRules: { steps: { 'e2e-mock-single/execute': 'main' } },
+    };
+    const result = resolveStepProviderModel({
+      step: { name: 'execute', provider: undefined, model: undefined },
+      provider: 'mock',
+      providerSource: 'runtime-v1',
+      model: 'runtime-default-model',
+      modelSource: 'runtime-v1',
+      autoRouting,
+    });
+
+    expect(result.provider).toBeUndefined();
+    expect(result.model).toBeUndefined();
+
+    const resolvedCandidates = resolveExecutableRoutingCandidates(autoRouting, {
+      name: 'execute',
+      tags: [],
+    });
+
+    expect(resolvedCandidates).toMatchObject({
+      poolName: 'main',
+      resolutionSource: 'auto.dynamic',
+      selectionCandidates: [{ name: 'coding' }],
+      fallbackCandidate: { name: 'coding' },
+    });
+  });
+
+  it('resolves a fully qualified runtime step target in the active workflow', () => {
+    const result = resolveStepProviderModel({
+      step: { name: 'implement', provider: undefined, model: undefined },
+      provider: 'mock',
+      providerSource: 'runtime-v1',
+      model: 'runtime-default-model',
+      modelSource: 'runtime-v1',
+      providerRouting: {
+        workflowName: 'development-core',
+        steps: {
+          'development-core/implement': { provider: 'codex', model: 'gpt-5.6-sol' },
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      provider: 'codex',
+      providerSource: 'provider_routing.steps',
+      model: 'gpt-5.6-sol',
+      modelSource: 'provider_routing.steps',
+    });
+  });
+
   it.each([
     { layer: 'CLI', source: 'env', provider: 'mock' },
-    { layer: 'step', source: 'step', provider: 'codex' },
-    { layer: 'workflow_call', source: 'workflow_call', provider: 'claude' },
     { layer: 'provider routing', source: 'provider_routing.steps', provider: 'opencode' },
     { layer: 'persona', source: 'persona_providers', provider: 'cursor' },
   ] as const)('should preserve the project model for a provider-only $layer override with auto routing', ({
@@ -126,12 +234,12 @@ describe('resolveStepProviderModel', () => {
     const result = resolveStepProviderModel({
       step: {
         name: 'implement',
-        provider: layer === 'step' ? provider : undefined,
+        provider: undefined,
         model: undefined,
         personaDisplayName: 'coder',
       },
-      provider: layer === 'CLI' || layer === 'workflow_call' ? provider : 'claude',
-      providerSource: layer === 'CLI' ? 'env' : layer === 'workflow_call' ? 'workflow_call' : 'project',
+      provider: layer === 'CLI' ? provider : 'claude',
+      providerSource: layer === 'CLI' ? 'env' : 'project',
       model: 'project-model',
       modelSource: 'project',
       providerRouting: layer === 'provider routing'
@@ -155,8 +263,6 @@ describe('resolveStepProviderModel', () => {
 
   it.each([
     { layer: 'CLI', source: 'env', model: 'cli-model' },
-    { layer: 'step', source: 'step', model: 'step-model' },
-    { layer: 'workflow_call', source: 'workflow_call', model: 'call-model' },
     { layer: 'provider routing', source: 'provider_routing.steps', model: 'routing-model' },
     { layer: 'persona', source: 'persona_providers', model: 'persona-model' },
   ] as const)('should preserve a model-only $layer override for the auto-selected provider', ({
@@ -168,13 +274,13 @@ describe('resolveStepProviderModel', () => {
       step: {
         name: 'implement',
         provider: undefined,
-        model: layer === 'step' ? model : undefined,
+        model: undefined,
         personaDisplayName: 'coder',
       },
       provider: 'claude',
       providerSource: 'project',
-      model: layer === 'CLI' || layer === 'workflow_call' ? model : 'project-model',
-      modelSource: layer === 'CLI' ? 'env' : layer === 'workflow_call' ? 'workflow_call' : 'project',
+      model: layer === 'CLI' ? model : 'project-model',
+      modelSource: layer === 'CLI' ? 'env' : 'project',
       providerRouting: layer === 'provider routing'
         ? { steps: { implement: { model } } }
         : undefined,
@@ -183,6 +289,8 @@ describe('resolveStepProviderModel', () => {
         strategy: 'cost',
         router: { provider: 'mock', model: 'router-model' },
         candidates: [],
+        defaultPool: 'general',
+        poolRules: { steps: { implement: 'general' } },
       },
     });
 
@@ -194,106 +302,9 @@ describe('resolveStepProviderModel', () => {
     });
   });
 
-  it('should not inherit a persona model when the finding manager provider is direct', () => {
-    const step = buildFindingManagerStep({
-      contract: {
-        manager: {
-          persona: 'findings-manager',
-          instruction: 'findings-manager',
-          outputContract: 'findings-manager',
-          provider: 'codex',
-        },
-      },
-    });
-
+  it('should prefer an engine-synthesized provider over personaProviders.provider when both are defined', () => {
     const result = resolveStepProviderModel({
-      step,
-      personaProviders: {
-        'findings-manager': {
-          provider: 'opencode',
-          model: 'opencode/persona-model',
-        },
-      },
-    });
-
-    expect(result).toMatchObject({
-      provider: 'codex',
-      model: undefined,
-    });
-  });
-
-  it('should resolve conflict and terminal adjudicators through the same direct provider/model rules', () => {
-    const input = {
-      contract: {
-        manager: {
-          persona: 'findings-manager',
-          instruction: 'findings-manager',
-          outputContract: 'findings-manager',
-        },
-        adjudicator: {
-          persona: 'terminal-supervisor',
-          providerRoutingPersonaKey: 'terminal-supervisor',
-          provider: 'codex' as const,
-        },
-      },
-      workflowProvider: 'claude' as const,
-      workflowModel: 'workflow-model',
-    };
-
-    for (const step of [
-      buildFindingConflictAdjudicationStep(input),
-      buildFindingTerminalAdjudicationStep(input),
-    ]) {
-      expect(resolveStepProviderModel({
-        step,
-        providerRouting: {
-          personas: {
-            'terminal-supervisor': { provider: 'opencode', model: 'persona-model' },
-          },
-        },
-      })).toMatchObject({
-        provider: 'codex',
-        model: undefined,
-      });
-    }
-  });
-
-  it('should resolve conflict and terminal adjudicators through the same persona routing fallback', () => {
-    const input = {
-      contract: {
-        manager: {
-          persona: 'findings-manager',
-          instruction: 'findings-manager',
-          outputContract: 'findings-manager',
-        },
-        adjudicator: {
-          persona: 'terminal-supervisor',
-          providerRoutingPersonaKey: 'terminal-supervisor',
-        },
-      },
-    };
-
-    for (const step of [
-      buildFindingConflictAdjudicationStep(input),
-      buildFindingTerminalAdjudicationStep(input),
-    ]) {
-      expect(resolveStepProviderModel({
-        step,
-        providerRouting: {
-          personas: {
-            'terminal-supervisor': { provider: 'codex', model: 'strong-model' },
-          },
-        },
-      })).toMatchObject({
-        provider: 'codex',
-        model: 'strong-model',
-      });
-    }
-  });
-
-  it('should prefer step.provider over personaProviders.provider when both are defined', () => {
-    const result = resolveStepProviderModel({
-      step: { provider: 'codex', model: undefined, personaDisplayName: 'coder' },
+      step: { engineSynthesized: true, provider: 'codex', model: undefined, personaDisplayName: 'coder' },
       provider: 'claude',
       personaProviders: { coder: { provider: 'opencode' } },
     });
@@ -334,9 +345,9 @@ describe('resolveStepProviderModel', () => {
     expect(result.providerSource).toBeUndefined();
   });
 
-  it('should prefer step.model over personaProviders.model and input.model', () => {
+  it('should prefer an engine-synthesized model over personaProviders.model and input.model', () => {
     const result = resolveStepProviderModel({
-      step: { provider: undefined, model: 'step-model', personaDisplayName: 'coder' },
+      step: { engineSynthesized: true, provider: undefined, model: 'step-model', personaDisplayName: 'coder' },
       model: 'input-model',
       personaProviders: { coder: { provider: 'codex', model: 'persona-model' } },
     });
@@ -398,7 +409,7 @@ describe('resolveStepProviderModel', () => {
     expect(result.provider).toBe('cursor');
   });
 
-  it('should prefer workflow fallback over resolved project input', () => {
+  it('should ignore removed workflow fallback fields and keep the resolved project input', () => {
     const result = resolveStepProviderModel({
       step: {
         provider: 'codex',
@@ -414,10 +425,10 @@ describe('resolveStepProviderModel', () => {
     });
 
     expect(result).toEqual({
-      provider: 'codex',
-      providerSource: 'workflow',
-      model: 'workflow-model',
-      modelSource: 'workflow',
+      provider: 'mock',
+      providerSource: 'project',
+      model: 'project-model',
+      modelSource: 'project',
     });
   });
 
@@ -501,6 +512,19 @@ describe('resolveStepProviderModel — tag routing conflict policy', () => {
     ).toThrow(/Conflicting provider routing for tags \[t1, t2\]/);
   });
 
+  it('throws under fail-fast when tags share provider/model but differ in permission mode', () => {
+    expect(() => resolveStepProviderModel({
+      step: { name: 'implement', personaDisplayName: 'coder', tags: ['t1', 't2'] },
+      providerRouting: {
+        tags: {
+          t1: { provider: 'codex', model: 'm-a', permissionMode: 'readonly' },
+          t2: { provider: 'codex', model: 'm-a', permissionMode: 'edit' },
+        },
+      },
+      tagConflictPolicy: 'fail-fast',
+    })).toThrow(/Conflicting provider routing for tags \[t1, t2\]/);
+  });
+
   it('does not throw under fail-fast when tags share identical provider/model/providerOptions', () => {
     const result = resolveStepProviderModel({
       step: { name: 'implement', personaDisplayName: 'coder', tags: ['t1', 't2'] },
@@ -548,71 +572,54 @@ describe('resolveStepProviderModel — tag routing conflict policy', () => {
 });
 
 describe('resolveWorkflowCallProviderModel', () => {
-  it('should prefer workflow fallback over resolved project input', () => {
+  it('should propagate the resolved runtime provider/model to a child workflow', () => {
     const result = resolveWorkflowCallProviderModel({
-      workflow: { provider: 'codex', model: 'workflow-model' },
-      provider: 'mock',
-      providerSource: 'project',
-      model: 'project-model',
-      modelSource: 'project',
+      provider: 'codex',
+      providerSource: 'runtime-v1',
+      model: 'runtime-model',
+      modelSource: 'runtime-v1',
+      permissionMode: 'full',
     });
 
     expect(result).toEqual({
       provider: 'codex',
-      providerSource: 'workflow',
-      model: 'workflow-model',
-      modelSource: 'workflow',
+      providerSource: 'runtime-v1',
+      model: 'runtime-model',
+      modelSource: 'runtime-v1',
+      permissionMode: 'full',
     });
   });
 
-  it.each([
-    {
-      label: 'provider only',
-      providerSource: 'env' as const,
-      modelSource: 'project' as const,
-      expected: {
-        provider: 'mock',
-        providerSource: 'env',
-        model: 'child-model',
-        modelSource: 'workflow',
-      },
-    },
-    {
-      label: 'model only',
-      providerSource: 'project' as const,
-      modelSource: 'env' as const,
-      expected: {
-        provider: 'codex',
-        providerSource: 'workflow',
-        model: 'env-model',
-        modelSource: 'env',
-      },
-    },
-    {
-      label: 'provider and model',
-      providerSource: 'env' as const,
-      modelSource: 'env' as const,
-      expected: {
-        provider: 'mock',
-        providerSource: 'env',
-        model: 'env-model',
-        modelSource: 'env',
-      },
-    },
-  ])('should keep environment $label above child workflow values', ({
-    providerSource,
-    modelSource,
-    expected,
-  }) => {
+  it('should preserve CLI and environment overrides while propagating the other field', () => {
     const result = resolveWorkflowCallProviderModel({
-      workflow: { provider: 'codex', model: 'child-model' },
       provider: 'mock',
-      providerSource,
+      providerSource: 'env',
       model: 'env-model',
-      modelSource,
+      modelSource: 'env',
     });
 
-    expect(result).toEqual(expected);
+    expect(result).toEqual({
+      provider: 'mock',
+      providerSource: 'env',
+      model: 'env-model',
+      modelSource: 'env',
+    });
+  });
+
+  it('keeps inherited permission when the runtime model is absent', () => {
+    const result = resolveWorkflowCallProviderModel({
+      provider: 'codex',
+      providerSource: 'runtime-v1',
+      permissionMode: 'full',
+    });
+
+    expect(result).toEqual({
+      provider: 'codex',
+      providerSource: 'runtime-v1',
+      model: undefined,
+      modelSource: undefined,
+      permissionMode: 'full',
+    });
   });
 });
 
@@ -944,7 +951,12 @@ describe('resolveAgentProviderModel', () => {
 describe('resolveLoopMonitorJudgeProviderModel', () => {
   it('should inherit the resolved triggering provider and override only the judge model', () => {
     const result = resolveLoopMonitorJudgeProviderModel({
-      judge: { provider: undefined, model: 'opencode/model-b' },
+      judgeProviderInfo: {
+        provider: 'opencode',
+        providerSource: 'step',
+        model: 'opencode/model-b',
+        modelSource: 'step',
+      },
       triggeringProviderInfo: {
         provider: 'opencode',
         providerSource: 'persona_providers',
@@ -955,7 +967,7 @@ describe('resolveLoopMonitorJudgeProviderModel', () => {
 
     expect(result).toEqual({
       provider: 'opencode',
-      providerSource: 'persona_providers',
+      providerSource: 'step',
       model: 'opencode/model-b',
       modelSource: 'step',
     });
@@ -963,7 +975,10 @@ describe('resolveLoopMonitorJudgeProviderModel', () => {
 
   it('should inherit fallback-resolved triggering provider info without re-resolving the triggering step', () => {
     const result = resolveLoopMonitorJudgeProviderModel({
-      judge: { provider: undefined, model: undefined },
+      judgeProviderInfo: {
+        provider: undefined,
+        model: undefined,
+      },
       triggeringProviderInfo: {
         provider: 'codex',
         providerSource: 'step',
@@ -982,7 +997,12 @@ describe('resolveLoopMonitorJudgeProviderModel', () => {
 
   it('should clear inherited model when judge overrides only the provider', () => {
     const result = resolveLoopMonitorJudgeProviderModel({
-      judge: { provider: 'codex', model: undefined },
+      judgeProviderInfo: {
+        provider: 'codex',
+        providerSource: 'step',
+        model: undefined,
+        modelSource: undefined,
+      },
       triggeringProviderInfo: {
         provider: 'opencode',
         providerSource: 'step',
@@ -999,9 +1019,13 @@ describe('resolveLoopMonitorJudgeProviderModel', () => {
     });
   });
 
-  it('should not inherit the triggering model when judge model is explicitly omitted', () => {
+  it('should inherit the triggering model when the workflow judge has no runtime override', () => {
     const result = resolveLoopMonitorJudgeProviderModel({
-      judge: { provider: undefined, model: undefined, modelSpecified: true },
+      judgeProviderInfo: {
+        provider: undefined,
+        model: undefined,
+        modelSource: undefined,
+      },
       triggeringProviderInfo: {
         provider: 'cursor',
         providerSource: 'step',
@@ -1013,7 +1037,7 @@ describe('resolveLoopMonitorJudgeProviderModel', () => {
     expect(result).toEqual({
       provider: 'cursor',
       providerSource: 'step',
-      model: undefined,
+      model: 'configured-model',
       modelSource: 'step',
     });
   });

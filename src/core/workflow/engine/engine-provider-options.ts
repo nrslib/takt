@@ -1,6 +1,7 @@
 import type { ProviderType } from '../../../shared/types/provider.js';
 import type { McpServerConfig, StepProviderOptions } from '../../models/types.js';
 import {
+  providerDefaultAllowedToolsWithoutEdit,
   providerKeepsAllowedToolWithoutEdit,
   providerSupportsAllowedTools,
   providerSupportsClaudeAllowedTools,
@@ -10,6 +11,7 @@ import {
 import { splitClaudeAllowedToolSpecs } from '../../../infra/providers/allowed-tool-edit-policy.js';
 import {
   isTeamLeaderInspectTool,
+  TEAM_LEADER_INSPECT_TOOLS,
   type TeamLeaderInspectTool,
 } from '../../../shared/team-leader-inspect-tools.js';
 
@@ -19,6 +21,13 @@ interface CapabilitySensitiveStepOptions {
 }
 
 type CapabilityProbe = (provider: ProviderType | undefined) => boolean | undefined;
+
+function shouldFilterAllowedTools(
+  hasOutputContracts: boolean,
+  edit: boolean | undefined,
+): boolean {
+  return edit === false || (hasOutputContracts && edit !== true);
+}
 
 const CLAUDE_TEAM_LEADER_INSPECT_TOOL_NAMES: Record<TeamLeaderInspectTool, string> = {
   read: 'Read',
@@ -45,8 +54,7 @@ function filterAllowedToolsForEditPolicy(
   const normalizedAllowedTools = providerSupportsClaudeAllowedTools(provider) === true
     ? allowedTools.flatMap(splitClaudeAllowedToolSpecs)
     : allowedTools;
-  const shouldFilterEditTools = edit === false || (hasOutputContracts && edit !== true);
-  if (!shouldFilterEditTools) {
+  if (!shouldFilterAllowedTools(hasOutputContracts, edit)) {
     return normalizedAllowedTools;
   }
   return normalizedAllowedTools.filter((tool) => providerKeepsAllowedToolWithoutEdit(provider, tool));
@@ -68,7 +76,9 @@ export function resolveAllowedToolsForProvider(
     providerSupportsOpenCodeAllowedTools,
   );
   if (!allowedTools) {
-    return undefined;
+    return shouldFilterAllowedTools(hasOutputContracts, edit)
+      ? providerDefaultAllowedToolsWithoutEdit(provider)
+      : undefined;
   }
   return filterAllowedToolsForEditPolicy(allowedTools, hasOutputContracts, edit, provider);
 }
@@ -113,11 +123,18 @@ export function resolveInspectToolsForProvider(
   inspectTools: string[] | undefined,
   provider: ProviderType | undefined,
 ): string[] | undefined {
-  if (inspectTools === undefined || inspectTools.length === 0) {
-    return undefined;
+  if (inspectTools !== undefined && inspectTools.length === 0) {
+    const supportsAllowlist = provider !== undefined
+      && (providerSupportsOpenCodeAllowedTools(provider) === true
+        || providerSupportsClaudeAllowedTools(provider) === true);
+    return supportsAllowlist ? [] : undefined;
   }
 
-  const supportedInspectTools = inspectTools.map((tool) => {
+  const normalizedInspectTools = inspectTools === undefined
+    ? [...TEAM_LEADER_INSPECT_TOOLS]
+    : inspectTools;
+
+  const supportedInspectTools = normalizedInspectTools.map((tool) => {
     if (!isTeamLeaderInspectTool(tool)) {
       throw new Error(`Unsupported team_leader.inspect_tools value "${tool}"`);
     }
@@ -133,7 +150,19 @@ export function resolveInspectToolsForProvider(
   if (providerSupportsClaudeAllowedTools(provider) === true) {
     return supportedInspectTools.map((tool) => CLAUDE_TEAM_LEADER_INSPECT_TOOL_NAMES[tool]);
   }
+  if (inspectTools === undefined) {
+    return undefined;
+  }
   throw new Error(`Provider "${provider}" does not support team_leader.inspect_tools`);
+}
+
+export function isTeamLeaderInspectGuidanceApplicable(
+  explicitInspectTools: string[] | undefined,
+): boolean {
+  if (explicitInspectTools !== undefined) {
+    return explicitInspectTools.length > 0;
+  }
+  return true;
 }
 
 export function assertProviderResolvedForCapabilitySensitiveOptions(

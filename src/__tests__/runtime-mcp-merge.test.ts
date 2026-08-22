@@ -53,7 +53,7 @@ describe('runtime-provider loader — mcp merge (MCP-MERGE)', () => {
       '      - common',
     ]);
     const resolved = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
-    expect(resolved?.mcp?.servers?.common?.command).toBe('global-srv');
+    expect(resolved?.mcp?.servers?.common).toMatchObject({ command: 'global-srv' });
     expect(resolved?.mcp?.defaults?.servers).toEqual(['common']);
   });
 
@@ -69,7 +69,7 @@ describe('runtime-provider loader — mcp merge (MCP-MERGE)', () => {
       '      - common',
     ]);
     const resolved = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
-    expect(resolved?.mcp?.servers?.common?.command).toBe('project-srv');
+    expect(resolved?.mcp?.servers?.common).toMatchObject({ command: 'project-srv' });
   });
 
   it('Given global and project same-name servers, When resolving, Then project replaces the whole server (no field-level merge)', () => {
@@ -92,8 +92,8 @@ describe('runtime-provider loader — mcp merge (MCP-MERGE)', () => {
     ]);
     const resolved = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
     // same-name server fully replaced: project command wins AND the global-only `args` is gone.
-    expect(resolved?.mcp?.servers?.common?.command).toBe('project-srv');
-    expect(resolved?.mcp?.servers?.common?.args).toBeUndefined();
+    expect(resolved?.mcp?.servers?.common).toMatchObject({ command: 'project-srv' });
+    expect((resolved?.mcp?.servers?.common as { args?: string[] } | undefined)?.args).toBeUndefined();
   });
 
   it('Given global and project disjoint servers, When resolving, Then project replaces the whole servers map', () => {
@@ -114,7 +114,7 @@ describe('runtime-provider loader — mcp merge (MCP-MERGE)', () => {
     const resolved = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
     // When both files carry `mcp`, the project's whole `mcp` replaces global's;
     // global `global-only` disappears unless project also defines it.
-    expect(resolved?.mcp?.servers?.['project-only']?.command).toBe('p-srv');
+    expect(resolved?.mcp?.servers?.['project-only']).toMatchObject({ command: 'p-srv' });
     expect(resolved?.mcp?.servers?.['global-only']).toBeUndefined();
   });
 
@@ -185,7 +185,7 @@ describe('runtime-provider loader — mcp merge (MCP-MERGE)', () => {
       'version: 1',
     ]);
     const resolved = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
-    expect(resolved?.mcp?.servers?.a?.command).toBe('x');
+    expect(resolved?.mcp?.servers?.a).toMatchObject({ command: 'x' });
     expect(resolved?.mcp?.defaults?.servers).toEqual(['a']);
   });
 
@@ -193,6 +193,8 @@ describe('runtime-provider loader — mcp merge (MCP-MERGE)', () => {
     writeRuntimeYaml(globalDir, [
       'version: 1',
       'provider:',
+      '  defaults:',
+      '    profile: g',
       '  profiles:',
       '    g:',
       '      provider: mock',
@@ -205,6 +207,8 @@ describe('runtime-provider loader — mcp merge (MCP-MERGE)', () => {
     writeRuntimeYaml(projectDir, [
       'version: 1',
       'provider:',
+      '  defaults:',
+      '    profile: g',
       '  profiles:',
       '    g:',
       '      provider: codex',
@@ -216,6 +220,6 @@ describe('runtime-provider loader — mcp merge (MCP-MERGE)', () => {
     ]);
     const resolved = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
     expect(resolved?.provider?.profiles?.g?.model).toBe('p-model');
-    expect(resolved?.mcp?.servers?.a?.command).toBe('p-srv');
+    expect(resolved?.mcp?.servers?.a).toMatchObject({ command: 'p-srv' });
   });
 });

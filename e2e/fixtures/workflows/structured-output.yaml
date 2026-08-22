@@ -1,11 +1,5 @@
 name: e2e-structured-output
 description: E2E workflow to verify structured output rule matching
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
 personas:
   test-coder: |
     # E2E Test Coder

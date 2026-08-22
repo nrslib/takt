@@ -1,11 +1,13 @@
 import type { z } from 'zod/v4';
 import type { WorkflowCallArgValue } from '../../../core/models/index.js';
 import { WorkflowConfigRawSchema } from '../../../core/models/index.js';
+import { hasOwnFacetPool } from './workflowFacetPoolLookup.js';
 
 type RawWorkflowConfig = z.output<typeof WorkflowConfigRawSchema>;
 
 const DISCOVERY_PLACEHOLDER_PREFIX = '__takt_discovery_param__';
 const DISCOVERY_WORKFLOW_REF_PREFIX = '__takt_discovery_workflow_ref__';
+const DISCOVERY_FACET_POOL_PREFIX = '__takt_discovery_pool__';
 
 const FACET_SECTION_BY_KIND = {
   knowledge: 'knowledge',
@@ -23,6 +25,10 @@ function buildPlaceholderContent(paramName: string, kind: keyof typeof FACET_SEC
   return `[discovery placeholder for ${kind} param "${paramName}"]`;
 }
 
+function buildDiscoveryFacetPoolName(paramName: string): string {
+  return `${DISCOVERY_FACET_POOL_PREFIX}${paramName}`;
+}
+
 function ensurePlaceholderFacet(
   raw: RawWorkflowConfig,
   paramName: string,
@@ -36,6 +42,31 @@ function ensurePlaceholderFacet(
     [placeholderRef]: existingSection[placeholderRef] ?? buildPlaceholderContent(paramName, kind),
   };
   return placeholderRef;
+}
+
+function ensureDiscoveryFacetPool(raw: RawWorkflowConfig, paramName: string): string {
+  const baseName = buildDiscoveryFacetPoolName(paramName);
+  let poolName = baseName;
+  let suffix = 1;
+  while (hasOwnFacetPool(raw.facet_pools, poolName)) {
+    poolName = baseName + '_' + suffix;
+    suffix += 1;
+  }
+  const policyRef = ensurePlaceholderFacet(raw, paramName, 'policy');
+  const knowledgeRef = ensurePlaceholderFacet(raw, paramName, 'knowledge');
+  const facetPools = raw.facet_pools ?? {};
+  raw.facet_pools = {
+    ...facetPools,
+    [poolName]: {
+      candidates: [{
+        id: `${poolName}-candidate`,
+        description: `[discovery placeholder candidate for facet pool param "${paramName}"]`,
+        policy: policyRef,
+        knowledge: knowledgeRef,
+      }],
+    },
+  };
+  return poolName;
 }
 
 export function prepareCallableSubworkflowDiscoveryArgs(
@@ -61,6 +92,16 @@ export function prepareCallableSubworkflowDiscoveryArgs(
 
     if (definition.type === 'workflow_ref') {
       callableArgs.set(paramName, `${DISCOVERY_WORKFLOW_REF_PREFIX}_${paramName}`);
+      continue;
+    }
+
+    if (definition.type === 'facet_pool_ref') {
+      callableArgs.set(paramName, ensureDiscoveryFacetPool(prepared, paramName));
+      continue;
+    }
+
+    if (definition.type === 'companion_ref[]') {
+      callableArgs.set(paramName, []);
       continue;
     }
 

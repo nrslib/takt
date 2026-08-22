@@ -1,5 +1,16 @@
 name: mini-core
 description: miniシリーズの中核となる内部開発ワークフロー。注入されたポリシー、ナレッジ、監督者を使い、plan → implement → 並列レビュー → 直接修正を実行する。
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 subworkflow:
   callable: true
   visibility: internal
@@ -33,12 +44,6 @@ subworkflow:
       type: facet_ref
       facet_kind: persona
       default: supervisor
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
 initial_step: plan
 loop_monitors:
   - cycle:
@@ -82,6 +87,7 @@ steps:
       development_knowledge:
         $param: development_knowledge
       implementation_instruction: implement
+      scope_report_format: coder-scope
     rules:
       - condition: 実装が完了した
         next: reviewers
@@ -96,22 +102,14 @@ steps:
       - review
     parallel:
       - name: ai-antipattern-review-2nd
+        capabilities: readonly
         tags:
           - review
         edit: false
         persona: ai-antipattern-reviewer
         policy:
           - contract-change
-          - review
           - ai-antipattern
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - WebSearch
-              - WebFetch
         instruction: ai-antipattern-review
         rules:
           - condition: AI特有の問題なし
@@ -121,6 +119,7 @@ steps:
             - name: ai-antipattern-review.md
               format: ai-antipattern-review
       - name: supervise
+        capabilities: readonly
         tags:
           - review
           - supervise
@@ -129,23 +128,13 @@ steps:
           $param: supervisor_persona
         policy:
           - contract-change
-          - review
         knowledge:
           $param: development_knowledge
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
         instruction: supervise
         rules:
           - condition: BLOCKED
-          - condition: すべて問題なし
-          - condition: 要求未達成、テスト失敗、ビルドエラー
+          - condition: APPROVE
+          - condition: REJECT
         output_contracts:
           report:
             - name: supervisor-validation.md
@@ -154,15 +143,17 @@ steps:
               format: supervisor-summary
               use_judge: false
     rules:
+      - condition: any("error")
+        next: reviewers
       - condition: any("BLOCKED")
         next: ABORT
-      - condition: all("AI特有の問題なし", "すべて問題なし")
+      - condition: all("AI特有の問題なし", "APPROVE")
         next: COMPLETE
-      - condition: all("AI特有の問題あり", "要求未達成、テスト失敗、ビルドエラー")
+      - condition: all("AI特有の問題あり", "REJECT")
         next: fix_both
       - condition: any("AI特有の問題あり")
         next: ai-antipattern-fix
-      - condition: any("要求未達成、テスト失敗、ビルドエラー")
+      - condition: any("REJECT")
         next: supervise_fix
 
   - name: fix_both
@@ -188,6 +179,7 @@ steps:
           - condition: 修正を進行できない
 
   - name: ai-antipattern-fix
+    capabilities: edit
     tags:
       - coding
     edit: true
@@ -197,17 +189,6 @@ steps:
       - $param: development_policy
     knowledge:
       $param: development_knowledge
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Write
-          - Bash
-          - WebSearch
-          - WebFetch
     required_permission_mode: edit
     pass_previous_response: false
     rules:
@@ -225,6 +206,7 @@ steps:
           use_judge: false
 
   - name: supervise_fix
+    capabilities: edit
     tags:
       - coding
     edit: true
@@ -234,17 +216,6 @@ steps:
       - $param: development_policy
     knowledge:
       $param: development_knowledge
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Write
-          - Bash
-          - WebSearch
-          - WebFetch
     required_permission_mode: edit
     pass_previous_response: false
     rules:

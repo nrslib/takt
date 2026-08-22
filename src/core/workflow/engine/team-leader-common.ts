@@ -3,8 +3,10 @@ import type {
   PartResult,
   WorkflowStep,
 } from '../../models/types.js';
-import { formatAgentFailure } from '../../../shared/types/agent-failure.js';
-import { createFindingContractPartCompletionJsonSchema } from '../team-leader-finding-contract.js';
+import {
+  AGENT_FAILURE_CATEGORIES,
+  formatAgentFailure,
+} from '../../../shared/types/agent-failure.js';
 
 export function summarizeParts(parts: PartDefinition[]): Array<{ id: string; title: string }> {
   return parts.map((part) => ({ id: part.id, title: part.title }));
@@ -14,6 +16,9 @@ export function resolvePartErrorDetail(partResult: PartResult): string {
   const detail = partResult.response.error ?? partResult.response.content;
   if (!detail) {
     throw new Error(`Part "${partResult.part.id}" failed without error detail`);
+  }
+  if (partResult.response.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR) {
+    return detail;
   }
   if (partResult.response.failureCategory) {
     return formatAgentFailure({
@@ -38,6 +43,7 @@ export function createPartStep(step: WorkflowStep, part: PartDefinition): Workfl
 
   return {
     name: `${step.name}.${part.id}`,
+    engineSynthesized: true,
     description: part.title,
     persona: partPersona,
     personaPath: partPersonaPath,
@@ -46,10 +52,7 @@ export function createPartStep(step: WorkflowStep, part: PartDefinition): Workfl
     tags: step.teamLeader.partTags ?? step.tags,
     session: 'refresh',
     providerOptions: step.providerOptions,
-    ...('directProviderOptions' in step || 'workflowProviderOptions' in step
-      ? { directProviderOptions: step.directProviderOptions }
-      : {}),
-    ...('workflowProviderOptions' in step ? { workflowProviderOptions: step.workflowProviderOptions } : {}),
+    ...('capabilityProviderOptions' in step ? { capabilityProviderOptions: step.capabilityProviderOptions } : {}),
     mcpServers: step.mcpServers,
     provider: step.provider,
     providerSpecified: step.providerSpecified,
@@ -63,14 +66,6 @@ export function createPartStep(step: WorkflowStep, part: PartDefinition): Workfl
     policyContents: step.policyContents,
     knowledgeContents: step.knowledgeContents,
     qualityGates: step.qualityGates,
-    ...(step.teamLeader.mode === 'finding_contract_fix'
-      ? {
-          structuredOutput: {
-            schemaRef: 'team-leader-finding-contract-part-completion',
-            schema: createFindingContractPartCompletionJsonSchema(),
-          },
-        }
-      : {}),
   };
 }
 

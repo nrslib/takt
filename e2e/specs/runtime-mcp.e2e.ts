@@ -49,7 +49,7 @@ const ECHO_SERVER_SOURCE = [
   "    if (msg.method === 'initialize') {",
   "      stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'echo', version: '0.0.1' } } }) + '\\n');",
   "    } else if (msg.method === 'tools/list') {",
-  "      stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { tools: [{ name: 'echo_nonce', description: 'Echo a fixed nonce' }] } }) + '\\n');",
+  "      stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { tools: [{ name: 'echo_nonce', description: 'Echo a fixed nonce', inputSchema: { type: 'object', additionalProperties: false } }] } }) + '\\n');",
   "    } else if (msg.method === 'tools/call') {",
   "      stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text: 'NONCE:fixed-test-nonce' }] } }) + '\\n');",
   "    }",
@@ -193,8 +193,8 @@ describe('E2E: runtime MCP assignment (mock, MCP-E2E)', () => {
     expect(toolCallEntry?.mcpToolCall).toEqual({
       server: 'echo',
       transport: 'stdio',
-      tool: 'echo',
-      result: 'echo_nonce:echo',
+      tool: 'echo_nonce',
+      result: 'NONCE:fixed-test-nonce',
       nonce: 'fixed-test-nonce',
     });
     // The final mock response must include the known nonce marker.

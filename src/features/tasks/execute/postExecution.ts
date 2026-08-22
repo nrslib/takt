@@ -18,6 +18,8 @@ import {
 } from '../../../infra/git/index.js';
 import type { Issue, CreatePrResult, GitProvider } from '../../../infra/git/index.js';
 import type { ExecuteTaskOptions } from './types.js';
+import { readPrivateFileState, writePrivateFile } from '../../../shared/utils/private-file.js';
+import { sanitizeLoopAnalysisReportForPublication } from './loopAnalysisReportPublication.js';
 
 const log = createLogger('postExecution');
 
@@ -54,6 +56,37 @@ export interface PostExecutionResult {
   taskError?: string;
 }
 
+export interface CommentLoopAnalysisReportOptions {
+  projectCwd: string;
+  branch: string;
+  reportPath: string;
+  gitProvider?: GitProvider;
+}
+
+export async function commentLoopAnalysisReportOnPr(
+  options: CommentLoopAnalysisReportOptions,
+): Promise<void> {
+  const gitProvider = options.gitProvider ?? getGitProvider();
+  const existingPr = gitProvider.findExistingPr(options.branch, options.projectCwd);
+  if (existingPr === undefined) {
+    return;
+  }
+
+  const snapshot = readPrivateFileState(options.reportPath);
+  if (!('content' in snapshot)) {
+    throw new Error('Loop analysis report is no longer available');
+  }
+  const report = snapshot.content.toString('utf8');
+  const sanitizedReport = sanitizeLoopAnalysisReportForPublication(report);
+  if (sanitizedReport !== report) {
+    writePrivateFile(options.reportPath, sanitizedReport);
+  }
+  const result = gitProvider.commentOnPr(existingPr.number, sanitizedReport, options.projectCwd);
+  if (!result.success) {
+    throw new Error(result.error ?? PR_COMMENT_FAILURE_MESSAGE);
+  }
+}
+
 /**
  * Auto-commit, push, and optionally create a PR after successful task execution.
  */
@@ -77,7 +110,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
   } = options;
   const emitStatusLog = outputMode !== 'silent';
 
-  const commitResult = autoCommitAndPush(execCwd, task, projectCwd, branch);
+  const commitResult = await autoCommitAndPush(execCwd, task, projectCwd, branch);
   if (commitResult.commitHash) {
     if (emitStatusLog) {
       success(`Auto-committed: ${commitResult.commitHash}`);

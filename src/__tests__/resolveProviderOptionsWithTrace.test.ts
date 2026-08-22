@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { clearTaktEnv, restoreTaktEnv, type TaktEnvSnapshot } from './helpers/taktEnv.js';
@@ -63,6 +63,40 @@ describe('resolveProviderOptionsWithTrace', () => {
     expect(result.originResolver('codex.skills.repo')).toBe('default');
     expect(result.originResolver('codex.skills.user')).toBe('default');
     expect(result.originResolver('claude.skills.enabled')).toBe('default');
+  });
+
+  it('非 workflow の global 設定から相対 DeepSeek path を実行ディレクトリ基準へ解決する', () => {
+    writeFileSync(
+      globalConfigPath,
+      [
+        'language: en',
+        'provider_options:',
+        '  deepseek_harness:',
+        '    session_root: deepseek-sessions',
+        '    cordis: cordis.yml',
+      ].join('\n'),
+      'utf-8',
+    );
+    invalidateGlobalConfigCache();
+
+    const result = resolveNonWorkflowProviderOptions(projectDir);
+
+    expect(result?.deepseekHarness).toMatchObject({
+      sessionRoot: resolve(projectDir, 'deepseek-sessions'),
+      cordis: resolve(projectDir, 'cordis.yml'),
+    });
+  });
+
+  it('非 workflow の environment override から相対 DeepSeek path を解決する', () => {
+    process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_SESSION_ROOT = 'env-deepseek-sessions';
+    process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_CORDIS = 'env-cordis.yml';
+
+    const result = resolveNonWorkflowProviderOptions(projectDir);
+
+    expect(result?.deepseekHarness).toMatchObject({
+      sessionRoot: resolve(projectDir, 'env-deepseek-sessions'),
+      cordis: resolve(projectDir, 'env-cordis.yml'),
+    });
   });
 
   it('既定の Skill 設定を解決結果ごとに分離する', () => {
@@ -335,6 +369,30 @@ describe('resolveProviderOptionsWithTrace', () => {
     expect(result.originResolver('codex.networkAccess')).toBe('env');
   });
 
+  it('global/project provider_options の解決後に Codex permission control の競合を拒否する', () => {
+    writeFileSync(
+      globalConfigPath,
+      [
+        'language: en',
+        'provider_options:',
+        '  codex:',
+        '    permission_control: codex',
+      ].join('\n'),
+      'utf-8',
+    );
+    invalidateGlobalConfigCache();
+
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      ['provider_options:', '  codex:', '    network_access: true'].join('\n'),
+      'utf-8',
+    );
+
+    expect(() => resolveProviderOptionsWithTrace(projectDir)).toThrow();
+  });
+
   it('片方だけ指定した Codex Skill scope の未指定値を default のまま保つ', () => {
     process.env.TAKT_PROVIDER_OPTIONS = JSON.stringify({
       codex: { skills: { repo: true } },
@@ -363,6 +421,8 @@ describe('resolveProviderOptionsWithTrace', () => {
         '    base_url: http://global.example.test/v1',
         '  claude:',
         '    base_url: http://global.example.test',
+        '  deepseek_harness:',
+        '    base_url: http://global.example.test/deepseek',
       ].join('\n'),
       'utf-8',
     );
@@ -377,6 +437,7 @@ describe('resolveProviderOptionsWithTrace', () => {
     );
     process.env.TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL = 'http://env.example.test/v1';
     process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL = 'http://env.example.test';
+    process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_BASE_URL = 'http://env.example.test/deepseek';
 
     const result = resolveProviderOptionsWithTrace(projectDir);
 
@@ -387,9 +448,13 @@ describe('resolveProviderOptionsWithTrace', () => {
         skills: defaultCodexSkills,
       },
       claude: { baseUrl: 'http://global.example.test', skills: defaultClaudeSkills },
+      deepseekHarness: {
+        baseUrl: 'http://global.example.test/deepseek',
+      },
     });
     expect(result.originResolver('codex.baseUrl')).toBe('global');
     expect(result.originResolver('claude.baseUrl')).toBe('global');
+    expect(result.originResolver('deepseekHarness.baseUrl')).toBe('global');
     expect(result.originResolver('codex.networkAccess')).toBe('local');
   });
 });

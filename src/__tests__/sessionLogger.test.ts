@@ -1,7 +1,32 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const { mockPromptLogWarn } = vi.hoisted(() => ({
+  mockPromptLogWarn: vi.fn(),
+}));
+
+vi.mock('../shared/utils/index.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../shared/utils/index.js')>()),
+  createLogger: vi.fn(() => ({
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: mockPromptLogWarn,
+    error: vi.fn(),
+    enter: vi.fn(),
+    exit: vi.fn(),
+  })),
+}));
 import { initNdjsonLog, parseNdjsonRecord } from '../infra/fs/session.js';
 import { SessionLogger } from '../features/tasks/execute/sessionLogger.js';
 import { buildTraceFromRecords } from '../features/tasks/execute/traceReportParser.js';
@@ -9,9 +34,9 @@ import { buildWorkflowStepScopeKey } from '../features/tasks/execute/workflowSte
 import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
 import { buildPhaseExecutionId } from '../shared/utils/phaseExecutionId.js';
 import {
-  initDebugLogger,
-  resetDebugLogger,
-} from '../shared/utils/debug.js';
+  writePromptLog,
+  type PromptLogRecord,
+} from '../features/tasks/execute/promptLog.js';
 
 const tempDirs = new Set<string>();
 
@@ -21,8 +46,23 @@ function createTempLogsDir(): string {
   return dir;
 }
 
+function createPromptLogRecord(): PromptLogRecord {
+  return {
+    step: 'plan',
+    phase: 1,
+    iteration: 2,
+    scope: '{"step":"plan","stack":[]}',
+    phaseExecutionId: 'plan:2:1:1',
+    systemPrompt: 'system prompt',
+    userInstruction: 'prompt text',
+    prompt: 'prompt text',
+    response: 'response text',
+    timestamp: '2026-02-07T00:00:00.000Z',
+  };
+}
+
 afterEach(() => {
-  resetDebugLogger();
+  mockPromptLogWarn.mockClear();
   for (const dir of tempDirs) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -30,6 +70,207 @@ afterEach(() => {
 });
 
 describe('SessionLogger', () => {
+  it('explicit run path へ private prompt record を追記する', () => {
+    const logsDir = createTempLogsDir();
+    const promptLogPath = join(logsDir, 'run-one', 'logs', 'session-one-prompts.jsonl');
+    mkdirSync(join(logsDir, 'run-one', 'logs'), { recursive: true });
+
+    const firstRecord = createPromptLogRecord();
+    const secondRecord = {
+      ...firstRecord,
+      phaseExecutionId: 'plan:2:1:2',
+      response: 'second response',
+    };
+
+    writePromptLog(promptLogPath, firstRecord);
+    writePromptLog(promptLogPath, secondRecord);
+
+    const records = readFileSync(promptLogPath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    expect(records).toEqual([firstRecord, secondRecord]);
+    if (process.platform !== 'win32') {
+      expect(statSync(promptLogPath).mode & 0o777).toBe(0o600);
+    }
+  });
+
+  it('prompt record の永続化失敗で workflow を中断しない', () => {
+    const logsDir = createTempLogsDir();
+    const blockingPath = join(logsDir, 'not-a-directory');
+    const promptLogPath = join(blockingPath, 'session-one-prompts.jsonl');
+    writeFileSync(blockingPath, 'blocking file');
+
+    expect(() => writePromptLog(promptLogPath, createPromptLogRecord()))
+      .not.toThrow();
+    expect(existsSync(promptLogPath)).toBe(false);
+    expect(mockPromptLogWarn).toHaveBeenCalledWith(
+      'Prompt log could not be persisted; continuing workflow',
+      { error: expect.stringContaining('[path]') },
+    );
+    expect(JSON.stringify(mockPromptLogWarn.mock.calls[0])).not.toContain(logsDir);
+  });
+
+  it('companion review round と queue coalescing を run NDJSON に永続化する', () => {
+    const logsDir = createTempLogsDir();
+    const ndjsonPath = initNdjsonLog('session-companion', 'task', 'workflow', { logsDir });
+    const logger = new SessionLogger(ndjsonPath, false);
+
+    logger.onCompanionReviewRound({
+      step: 'implement',
+      companion: 'security-reviewer',
+      trigger: 'quiet',
+      digest: 'digest-2',
+      changedLines: 12,
+      findingCount: 0,
+      reviewerFindings: [],
+      acceptedFindings: [],
+    });
+    logger.onCompanionQueueCoalesced({
+      step: 'implement',
+      companion: 'security-reviewer',
+      replaced: {
+        trigger: 'quiet',
+        digest: 'digest-1',
+        changedLines: 10,
+        observedGeneration: 1,
+      },
+      replacement: {
+        trigger: 'quiet',
+        digest: 'digest-2',
+        changedLines: 12,
+        observedGeneration: 2,
+      },
+    });
+
+    const records = readFileSync(ndjsonPath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map(parseNdjsonRecord);
+
+    expect(records).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'companion_review_round',
+        step: 'implement',
+        companion: 'security-reviewer',
+        trigger: 'quiet',
+        digest: 'digest-2',
+        changedLines: 12,
+        findingCount: 0,
+      }),
+      expect.objectContaining({
+        type: 'companion_queue_coalesced',
+        replaced: expect.objectContaining({ digest: 'digest-1' }),
+        replacement: expect.objectContaining({ digest: 'digest-2' }),
+      }),
+    ]));
+  });
+
+  it('Companion の実呼び出し、採否結果、skip理由を run NDJSON に永続化する', () => {
+    const logsDir = createTempLogsDir();
+    const ndjsonPath = initNdjsonLog('session-companion-audit', 'task', 'workflow', { logsDir });
+    const logger = new SessionLogger(ndjsonPath, false);
+
+    logger.onCompanionCall({
+      step: 'implement',
+      agent: 'security-reviewer',
+      purpose: 'reviewer',
+      attempt: 1,
+      status: 'completed',
+      provider: 'mock',
+      model: 'mock-model',
+      systemPrompt: 'system token=super-secret',
+      prompt: 'prompt password=super-secret',
+      promptResolved: true,
+      response: {
+        persona: 'security-reviewer',
+        status: 'done',
+        content: 'review response',
+        structuredOutput: {
+          findings: [{ severity: 'must_fix', file: 'src/a.ts', line: 1, finding: 'candidate' }],
+          apiKey: 'sk-companion-actual-secret',
+          nested: { accessToken: 'nested-access-token-value' },
+        },
+        sessionId: 'provider-session-1',
+        providerUsage: { inputTokens: 10, outputTokens: 2, usageMissing: false },
+        timestamp: new Date('2026-08-13T00:00:00.000Z'),
+      },
+    });
+    logger.onCompanionReviewRound({
+      step: 'implement',
+      companion: 'security-reviewer',
+      trigger: 'completion',
+      digest: 'digest-1',
+      changedLines: 4,
+      reviewerFindings: [{
+        severity: 'must_fix',
+        file: 'src/a.ts',
+        line: 1,
+        finding: 'candidate',
+      }],
+      moderator: {
+        name: 'moderator',
+        invoked: true,
+        decisions: [{ action: 'accept', sourceIndex: 0 }],
+      },
+      acceptedFindings: [{
+        severity: 'must_fix',
+        file: 'src/a.ts',
+        line: 1,
+        finding: 'candidate',
+      }],
+      findingCount: 1,
+    });
+    logger.onCompanionReviewSkipped({
+      step: 'implement',
+      companion: 'security-reviewer',
+      phase: 'live',
+      reason: 'unchanged_digest',
+      observedGeneration: 3,
+    });
+
+    const records = readFileSync(ndjsonPath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map(parseNdjsonRecord);
+    const call = records.find((record) => record.type === 'companion_call');
+    const round = records.find((record) => (
+      record.type === 'companion_review_round' && record.digest === 'digest-1'
+    ));
+    const skipped = records.find((record) => record.type === 'companion_review_skipped');
+
+    expect(call).toMatchObject({
+      purpose: 'reviewer',
+      attempt: 1,
+      status: 'completed',
+      provider: 'mock',
+      sessionIdAvailable: true,
+      sessionId: 'provider-session-1',
+      response: 'review response',
+      structuredOutput: expect.stringContaining('candidate'),
+      promptResolved: true,
+      usage: expect.objectContaining({ inputTokens: 10, outputTokens: 2, usageMissing: false }),
+      systemPrompt: expect.stringContaining('[REDACTED]'),
+      prompt: expect.stringContaining('[REDACTED]'),
+    });
+    expect(call?.type).toBe('companion_call');
+    expect(call?.systemPrompt).not.toContain('sk-companion-actual-secret');
+    expect(call?.prompt).not.toContain('nested-access-token-value');
+    expect(call?.structuredOutput).not.toContain('sk-companion-actual-secret');
+    expect(call?.structuredOutput).not.toContain('nested-access-token-value');
+    expect(round).toMatchObject({
+      reviewerFindings: [expect.objectContaining({ finding: 'candidate' })],
+      moderator: expect.objectContaining({ invoked: true }),
+      acceptedFindings: [expect.objectContaining({ finding: 'candidate' })],
+      findingCount: 1,
+    });
+    expect(skipped).toMatchObject({
+      phase: 'live',
+      reason: 'unchanged_digest',
+      observedGeneration: 3,
+    });
+  });
+
   it.each([
     {
       name: 'completed',
@@ -250,14 +491,14 @@ describe('SessionLogger', () => {
 
   it('debug prompt と trace parser は同名 parallel child を scope で相関する', () => {
     const logsDir = createTempLogsDir();
-    initDebugLogger({ enabled: true }, logsDir);
     const ndjsonPath = initNdjsonLog(
       'session-parallel-prompts',
       'task',
       'parent',
       { logsDir },
     );
-    const logger = new SessionLogger(ndjsonPath, true);
+    const promptLogPath = join(logsDir, 'session-parallel-prompts-prompts.jsonl');
+    const logger = new SessionLogger(ndjsonPath, true, promptLogPath);
     const step = {
       name: 'review',
       kind: 'agent' as const,
@@ -362,7 +603,11 @@ describe('SessionLogger', () => {
       timestamp: new Date('2026-04-13T00:00:02.000Z'),
     }, 'slow', slowStack);
 
-    const promptRecords = logger.getPromptRecords();
+    const promptRecords = readFileSync(promptLogPath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line)) as ReturnType<SessionLogger['getPromptRecords']>;
+    expect(promptRecords).toEqual(logger.getPromptRecords());
     expect(promptRecords.map((record) => ({
       scope: record.scope,
       systemPrompt: record.systemPrompt,
@@ -596,5 +841,39 @@ describe('SessionLogger', () => {
         }),
       }),
     ]));
+  });
+
+  it('workflow_abort の failureCategory を NDJSON に保持する', () => {
+    const logsDir = createTempLogsDir();
+    const ndjsonPath = initNdjsonLog('session-abort-category', 'task', 'workflow', { logsDir });
+    const logger = new SessionLogger(ndjsonPath, true);
+    const state = {
+      workflowName: 'workflow',
+      currentStep: 'implement',
+      iteration: 1,
+      stepOutputs: new Map(),
+      structuredOutputs: new Map(),
+      systemContexts: new Map(),
+      effectResults: new Map(),
+      userInputs: [],
+      personaSessions: new Map(),
+      stepIterations: new Map(),
+      status: 'aborted' as const,
+    };
+
+    logger.onWorkflowAbort(
+      state,
+      'provider stream parse error: invalid line',
+      AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+    );
+
+    const persistedLines = readFileSync(ndjsonPath, 'utf-8').trim().split('\n');
+    const workflowAbort = JSON.parse(
+      persistedLines.at(-1) ?? '{}',
+    ) as Record<string, unknown>;
+    expect(workflowAbort).toMatchObject({
+      type: 'workflow_abort',
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+    });
   });
 });

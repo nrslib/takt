@@ -122,6 +122,39 @@ describe('WorkflowEngine Integration: Happy Path', () => {
   // 1. Happy Path
   // =====================================================
   describe('Happy path', () => {
+    it('renders workflow-wide rule placeholders during direct execution', async () => {
+      const config = {
+        name: 'direct-workflow-rules',
+        description: 'Direct workflow-wide rule rendering',
+        maxSteps: 2,
+        initialStep: 'review',
+        allStepsRules: [{
+          ref: 'contextual-rule',
+          position: 'before_instruction' as const,
+          content: 'DIRECT_RULE mode={var:review_mode} iteration={step_iteration}',
+        }],
+        steps: [makeStep('review', {
+          instruction: 'DIRECT_STEP_INSTRUCTION',
+          rules: [makeRule('done', 'COMPLETE')],
+        })],
+      } satisfies WorkflowConfig;
+      mockRunAgentSequence([makeResponse({ persona: 'reviewer', content: 'done' })]);
+      mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+
+      engine = new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        workflowCallVars: { review_mode: 'initial' },
+      });
+      const state = await engine.run();
+
+      expect(state.status).toBe('completed');
+      const prompt = vi.mocked(runAgent).mock.calls[0]?.[1];
+      expect(prompt).toContain('DIRECT_RULE mode=initial iteration=1');
+      expect(prompt).toContain('DIRECT_STEP_INSTRUCTION');
+      expect(prompt).not.toContain('{var:review_mode}');
+      expect(prompt).not.toContain('{step_iteration}');
+    });
+
     it('keeps top-level and parallel descendant occurrences independent when their names match', async () => {
       const config = buildDefaultWorkflowConfig({
         maxSteps: 2,
@@ -584,7 +617,6 @@ describe('WorkflowEngine Integration: Happy Path', () => {
         initialStep: 'plan',
         steps: [
           makeStep('plan', {
-            provider: 'cursor',
             structuredOutput: {
               schema: {
                 type: 'object',
@@ -599,7 +631,11 @@ describe('WorkflowEngine Integration: Happy Path', () => {
           }),
         ],
       };
-      engine = new WorkflowEngine(simpleConfig, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'claude' });
+      engine = new WorkflowEngine(simpleConfig, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        provider: 'cursor',
+        model: 'cursor-fast',
+      });
 
       mockRunAgentSequence([
         makeResponse({
@@ -909,7 +945,6 @@ describe('WorkflowEngine Integration: Happy Path', () => {
 
       expect(state.stepIterations.get('implement')).toBe(5);
       expect(state.stepIterations.get('reviewers')).toBe(2);
-      expect(startFn.mock.calls[0]?.[2]).toContain('Step Iteration: 5');
       expect(startFn.mock.calls[0]?.[6]).toBe(5);
       expect(engine.getResumePoint()?.stack[0]?.step_iterations).toEqual({
         implement: 5,

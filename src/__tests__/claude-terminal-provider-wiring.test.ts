@@ -56,6 +56,7 @@ describe('ClaudeTerminalProvider wiring', () => {
     const onStream = vi.fn();
     const onPermissionRequest = vi.fn();
     const onAskUserQuestion = vi.fn();
+    const onActivity = vi.fn();
     const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
     const mcpServers = {
       docs: { type: 'stdio' as const, command: 'docs-mcp', args: ['serve'] },
@@ -86,6 +87,7 @@ describe('ClaudeTerminalProvider wiring', () => {
       onStream,
       onPermissionRequest,
       onAskUserQuestion,
+      onActivity,
       outputSchema: SCHEMA,
       childProcessEnv,
     });
@@ -109,6 +111,7 @@ describe('ClaudeTerminalProvider wiring', () => {
       onStream,
       onPermissionRequest,
       onAskUserQuestion,
+      onActivity,
       outputSchema: SCHEMA,
       pathToClaudeCodeExecutable: '/opt/claude/bin/claude',
       childProcessEnv,
@@ -128,15 +131,15 @@ describe('ClaudeTerminalProvider wiring', () => {
     expect(Object.prototype.hasOwnProperty.call(terminalOptions, 'maxTurns')).toBe(false);
   });
 
-  it('Given strict read-only internal isolation, When call is invoked, Then it reaches the terminal client', async () => {
+  it('Given explicit runtime permissions, When call is invoked, Then they reach the terminal client', async () => {
+    const systemPrompt = 'selector guidance';
     const agent = new ClaudeTerminalProvider().setup({
       name: 'selector',
-      systemPrompt: 'Select reviewers.',
+      systemPrompt,
     });
 
     await agent.call('prompt', {
       cwd: '/tmp/worktree',
-      internalAgentIsolation: 'strict-readonly',
       permissionMode: 'readonly',
       allowedTools: [],
       mcpServers: {},
@@ -148,11 +151,10 @@ describe('ClaudeTerminalProvider wiring', () => {
     });
 
     expect(mockCallClaudeTerminal).toHaveBeenCalledWith('selector', 'prompt', expect.objectContaining({
-      internalAgentIsolation: 'strict-readonly',
       permissionMode: 'readonly',
       allowedTools: [],
       mcpServers: {},
-      skillsEnabled: false,
+      skillsEnabled: true,
     }));
   });
 
@@ -260,6 +262,29 @@ describe('ClaudeTerminalProvider wiring', () => {
     expect(mockCallClaudeTerminal).toHaveBeenCalledWith('coder', 'implement this', expect.objectContaining({
       sessionId: 'session-123',
       skillsEnabled: false,
+    }));
+  });
+
+  it('Given isolated structured execution, When the provider calls the terminal client, Then it forwards the strict marker and cleared ambient inputs', async () => {
+    const systemPrompt = 'selector guidance';
+    const agent = new ClaudeTerminalProvider().setupIsolatedStructured({
+      name: 'selector',
+      systemPrompt,
+    });
+    await agent.call('prompt', {
+      cwd: '/tmp/worktree',
+      sessionId: 'ambient-session',
+      allowedTools: ['Read'],
+      mcpServers: { docs: { type: 'stdio', command: 'docs-mcp', args: ['serve'] } },
+      outputSchema: SCHEMA,
+    });
+
+    expect(mockCallClaudeTerminal).toHaveBeenCalledWith('selector', `${systemPrompt}\n\nprompt`, expect.objectContaining({
+      internalAgentIsolation: 'strict-readonly',
+      sessionId: undefined,
+      skillsEnabled: false,
+      allowedTools: [],
+      mcpServers: undefined,
     }));
   });
 });

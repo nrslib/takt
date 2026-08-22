@@ -1,55 +1,13 @@
-Verify existing evidence for tests, builds, and functional checks, then perform final approval.
+Determine requirement fulfillment and resolution of preceding concerns from current code and preceding reports.
 
-Procedure:
-1. Open the Knowledge and Policy Source paths with the Read tool and obtain the full content
-2. List every `##` section in each of them (do not cherry-pick)
-3. Match the criteria in each listed section against the diff, execution evidence, and reports
+{{include:instructions/final-preservation-check}}
 
-## Step-Specific Additional Procedure
+1. Split the task requirements into the smallest independently decidable units and map them to current code
+2. Read statements in preceding reports as supporting material, and prefer current code when they conflict
+3. Map each preceding finding to its original acceptance criteria and determine whether it is resolved
+4. When a requirement is unfulfilled or a concern remains unresolved, record the repair target, acceptance criteria, and narrow repair boundary
+5. Treat the work as externally blocked only when current code and preceding reports cannot decide a requirement and task-scope code changes cannot provide the required external decision or information
 
-1. Extract each requirement from the task spec one by one
-   - If a single sentence contains multiple conditions or paths, split it into the smallest independently verifiable units
-     - Example: treat `global/project` as separate requirements
-     - Example: treat `JSON override / leaf override` as separate requirements
-     - Example: split parallel expressions such as `A and B`, `A/B`, `allow/deny`, or `read/write`
-2. For each requirement, identify the implementing code (file:line)
-3. Verify the code actually fulfills the requirement (read the file, check existing test/build evidence)
-   - Do not mark a composite requirement as ✅ based on only one side of the cases
-   - Do not reinterpret required task items as optional, out of scope, or different requirements without explicit evidence
-   - For requirements involving IDs, names, metadata, config, environment variables, or output contracts, verify entry points, execution modes, and missing-value behavior separately
-   - Do not rely on the plan report or prior review judgments; independently verify maintainability-aware merge quality
-   - For requirements involving side effects or state changes, separate verification of happy paths, failure paths, and cleanup
-   - If any requirement is unfulfilled, REJECT
-4. Re-evaluate prior review findings
-   - If a finding does not hold in code, classify it as `false_positive`
-   - If a finding holds technically but pushes work beyond the task objective or justified scope, classify it as `overreach`
-   - Judge `resolved` against the original finding's expected result, acceptance criteria, and task requirement, not merely against the patch
-   - Do not leave `false_positive` / `overreach` reasoning implicit
-5. If the diff adds or changes a shared helper, normalizer, builder, or adapter, reconcile its contract against existing branches with the same responsibility
-   - Even when absent from the requirements table, contract inconsistencies introduced by the diff must be treated as unverified scope or a REJECT reason
-6. Check whether prior review prose mentions concerns that were not turned into findings
-   - If they are explicitly classified as `false_positive` / `overreach` / `outside_contract_jurisdiction` / `no_issue_after_verification` with evidence, re-evaluate that classification
-   - If a concern has no classification or evidence, record it as an unclassified concern. Make it a REJECT reason only when it is independently confirmed from actual code or execution evidence and affects correctness, contracts, or wiring of the change
-7. Extract diff-introduced contracts that are not visible in the requirements table
-   - Metadata, source, trace, adapters, public tool contracts, and identifiers that are persisted, displayed, or reused must be checked as independent items even when absent from the original requirement
+Do not request or inspect machine-gate execution status, results, or logs, including tests and builds, whether presented as quality-gate or requirement-fulfillment evidence. Their absence is not evidence that the work requires repair or external input.
 
-## Verification Blocked by the Environment
-
-- Use BLOCKED only when a required test, build, or functional check cannot run because of an environmental constraint that task-scope code changes cannot resolve
-- Before selecting BLOCKED, verify the attempted command, actual error, required environment, available environment, and the `runtime.prepare` configuration and result or why it cannot be used
-- Treat implementation defects, dependency or test-configuration defects, failed executed checks, checks that were not attempted, and problems fixable within task scope as REJECT rather than BLOCKED
-- Do not approve unverified scope; record the environmental blocker and unverified scope in `summary` when BLOCKED
-
-## Report Priority (supervise-specific)
-
-- Do not treat summary reports as primary evidence. Use execution-result reports, reviewer reports with concrete verification details, and actual code in that order
-- You may treat `Build Results` / `Test Results` sections in execution-result reports as primary evidence
-- For `architecture-review`, `testing-review`, and `security-review`, prioritize each report's `Verification Evidence` section
-- Treat each `Verification Evidence` item as supporting evidence only when it states the verified target, what was checked, and observed result. If any part is missing, mark that item as `unverified`
-- Evidence based on mocks, static inspection, or limited unit tests must not be treated as verification beyond that scope
-- If items of evidence conflict, prioritize them in this order: `execution-result report > reviewer report with concrete verification details > summary report`
-
-## Output
-
-- Follow the `supervisor-validation` output contract to record requirements fulfillment, prior finding re-evaluation, unclassified concern checks, verification evidence, and unverified scope
-- Follow the `supervisor-summary` output contract and record APPROVE / REJECT / BLOCKED accurately. Do not record completion unless APPROVE
+Record the result according to the supplied output contract.

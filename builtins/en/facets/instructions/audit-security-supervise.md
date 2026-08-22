@@ -1,5 +1,7 @@
 Verify the completeness and quality of the security audit.
 
+{{include:instructions/security-knowledge-routing}}
+
 **Important:** Refer to the plan report: {report:01-plan.md}
 
 **Verification procedure:**

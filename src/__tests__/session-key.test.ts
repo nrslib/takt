@@ -126,23 +126,11 @@ describe('buildSessionKey', () => {
         'name: session-key-test',
         'initial_step: agent-step',
         'max_steps: 5',
-        'loop_monitors:',
-        '  - cycle:',
-        '      - agent-step',
-        '      - system-step',
-        '    threshold: 2',
-        '    judge:',
-        '      session_key: loop-monitor-session',
-        '      persona: coder',
-        '      rules:',
-        '        - condition: Healthy',
-        '          next: agent-step',
         'steps:',
         '  - name: agent-step',
         '    session_key: shared-agent',
         '    persona: coder',
         '    instruction: Do work',
-        '    provider: claude',
         '    rules:',
         '      - condition: done',
         '        next: system-step',
@@ -163,7 +151,6 @@ describe('buildSessionKey', () => {
         '        session_key: worker-session',
         '        persona: coder',
         '        instruction: Do worker work',
-        '        provider: codex',
         '        rules:',
         '          - condition: done',
         '    rules:',
@@ -175,13 +162,11 @@ describe('buildSessionKey', () => {
       const agentStep = workflow.steps.find((step) => step.name === 'agent-step');
       const parallelStep = workflow.steps.find((step) => step.name === 'parallel-step');
       const workerStep = parallelStep?.parallel?.[0];
-      const loopMonitor = workflow.loopMonitors?.[0];
 
       expect(agentStep?.sessionKey).toBe('shared-agent');
       expect(workerStep?.sessionKey).toBe('worker-session');
-      expect(loopMonitor?.judge.sessionKey).toBe('loop-monitor-session');
-      expect(agentStep ? buildSessionKey(agentStep) : undefined).toBe(JSON.stringify(['shared-agent', 'claude']));
-      expect(workerStep ? buildSessionKey(workerStep) : undefined).toBe(JSON.stringify(['worker-session', 'codex']));
+      expect(agentStep ? buildSessionKey(agentStep) : undefined).toBe(JSON.stringify(['shared-agent']));
+      expect(workerStep ? buildSessionKey(workerStep) : undefined).toBe(JSON.stringify(['worker-session']));
     } finally {
       if (originalConfigDir === undefined) {
         delete process.env.TAKT_CONFIG_DIR;
@@ -190,6 +175,43 @@ describe('buildSessionKey', () => {
       }
       rmSync(projectDir, { recursive: true, force: true });
       rmSync(globalConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects session_key on a loop monitor judge because judges always use fresh sessions', () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-loop-judge-session-key-'));
+    const workflowPath = join(projectDir, '.takt', 'workflows', 'invalid.yaml');
+    try {
+      mkdirSync(join(projectDir, '.takt', 'workflows'), { recursive: true });
+      writeFileSync(workflowPath, [
+        'name: invalid-loop-judge-session-key',
+        'initial_step: review',
+        'loop_monitors:',
+        '  - cycle: [review, fix]',
+        '    judge:',
+        '      session_key: old-session',
+        '      rules:',
+        '        - condition: Healthy',
+        '          next: review',
+        'steps:',
+        '  - name: review',
+        '    persona: reviewer',
+        '    instruction: Review',
+        '    rules:',
+        '      - condition: done',
+        '        next: fix',
+        '  - name: fix',
+        '    persona: fixer',
+        '    instruction: Fix',
+        '    rules:',
+        '      - condition: done',
+        '        next: review',
+      ].join('\n'));
+
+      expect(() => loadWorkflowFromFile(workflowPath, projectDir))
+        .toThrow(/session_key is not supported on loop_monitors\.judge/);
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
     }
   });
 
@@ -315,29 +337,6 @@ describe('buildSessionKey', () => {
           '          - condition: done',
           '    rules:',
           '      - condition: all("done")',
-          '        next: COMPLETE',
-        ],
-      },
-      {
-        name: 'loop-monitor',
-        lines: [
-          'name: whitespace-loop-monitor-session-key-test',
-          'initial_step: agent-step',
-          'loop_monitors:',
-          '  - cycle:',
-          '      - agent-step',
-          '      - agent-step',
-          '    judge:',
-          '      session_key: "   "',
-          '      rules:',
-          '        - condition: Healthy',
-          '          next: agent-step',
-          'steps:',
-          '  - name: agent-step',
-          '    persona: coder',
-          '    instruction: Do work',
-          '    rules:',
-          '      - condition: done',
           '        next: COMPLETE',
         ],
       },

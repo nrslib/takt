@@ -1,30 +1,29 @@
 name: terraform
 description: Terraform IaC development workflow (plan → implement → parallel review → final gate → fix → complete)
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 max_steps: 15
 initial_step: plan
 steps:
   - name: plan
+    capabilities: readonly
     tags:
       - plan
     edit: false
     persona: planner
-    policy: contract-change
+    policy:
+      - contract-change
+      - terraform
     knowledge: terraform-aws
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Bash
-          - WebSearch
-          - WebFetch
     rules:
       - condition: Requirements are clear and implementable
         next: implement
@@ -38,6 +37,7 @@ steps:
         - name: plan.md
           format: plan
   - name: implement
+    capabilities: edit
     tags:
       - coding
     edit: true
@@ -46,17 +46,6 @@ steps:
       - contract-change
       - terraform
     knowledge: terraform-aws
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Write
-          - Bash
-          - WebSearch
-          - WebFetch
     quality_gates:
       - terraform fmt -check passes without errors
       - terraform validate succeeds
@@ -84,6 +73,7 @@ steps:
       - review
     parallel:
       - name: tf_review
+        capabilities: readonly
         tags:
           - review
         edit: false
@@ -93,15 +83,6 @@ steps:
           - review
           - terraform
         knowledge: terraform-aws
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
         instruction: review-terraform
         rules:
           - condition: Complies with Terraform conventions
@@ -111,6 +92,7 @@ steps:
             - name: terraform-review.md
               format: terraform-review
       - name: ai-antipattern-review-2nd
+        capabilities: readonly
         tags:
           - review
         edit: false
@@ -119,14 +101,6 @@ steps:
           - contract-change
           - review
           - ai-antipattern
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - WebSearch
-              - WebFetch
         instruction: ai-antipattern-review
         rules:
           - condition: No AI-specific issues
@@ -136,6 +110,7 @@ steps:
             - name: ai-antipattern-review.md
               format: ai-antipattern-review
       - name: coding-review
+        capabilities: readonly
         tags:
           - review
         edit: false
@@ -144,15 +119,6 @@ steps:
           - contract-change
           - review
           - coding
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
         instruction: review-coding
         output_contracts:
           report:
@@ -162,71 +128,29 @@ steps:
           - condition: approved
           - condition: needs_fix
     rules:
+      - condition: any("error")
+        next: reviewers
       - condition: all("Complies with Terraform conventions", "No AI-specific issues", "approved")
-        next: merge-readiness-review
+        next: final-supervise
       - condition: any("Convention violations found", "AI-specific issues found", "needs_fix")
         next: supervise
-  - name: merge-readiness-review
-    tags:
-      - review
-      - final-gate
-      - merge-readiness
-    edit: false
-    persona: merge-readiness-reviewer
-    policy:
-      - contract-change
-      - review
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Bash
-          - WebSearch
-          - WebFetch
-    rules:
-      - condition: approved
-        next: final-supervise
-      - condition: needs_fix
-        next: final-supervise
-    instruction: review-merge-readiness
-    output_contracts:
-      report:
-        - name: merge-readiness-review.md
-          format: merge-readiness-review
-
   - name: final-supervise
+    capabilities: readonly
     tags:
       - review
-    edit: &terraform_supervise_edit false
-    persona: &terraform_supervise_persona supervisor
-    policy: &terraform_supervise_policy [contract-change, review]
-    knowledge: &terraform_supervise_knowledge terraform-aws
-    provider_options: &terraform_supervise_provider_options
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Bash
-          - WebSearch
-          - WebFetch
-    instruction: &terraform_supervise_instruction supervise
+    edit: false
+    persona: supervisor
+    policy: [contract-change, terraform]
+    knowledge: terraform-aws
+    instruction: supervise
     rules:
       - condition: BLOCKED
         next: ABORT
-      - condition: All reviewers approved and mergeable quality
+      - condition: APPROVE
         next: COMPLETE
-      - condition: Only AI-specific issues need fixing
-        next: ai-antipattern-fix
-      - condition: Only convention violations or mergeability issues need fixing
+      - condition: REJECT
         next: supervise_fix
-      - condition: Multiple types of issues found
-        next: fix_both
-      - condition: Irreconcilable requirement conflict, user decision needed
-        next: ABORT
-    output_contracts: &terraform_supervise_output_contracts
+    output_contracts:
       report:
         - name: supervisor-validation.md
           format: supervisor-validation
@@ -235,34 +159,35 @@ steps:
           use_judge: false
 
   - name: supervise
+    capabilities: readonly
     tags:
       - review
       - supervise
-    edit: *terraform_supervise_edit
-    persona: *terraform_supervise_persona
-    policy: *terraform_supervise_policy
-    knowledge: *terraform_supervise_knowledge
-    provider_options: *terraform_supervise_provider_options
-    instruction: *terraform_supervise_instruction
+    edit: &terraform_supervise_edit false
+    persona: &terraform_supervise_persona supervisor
+    policy: &terraform_supervise_policy [contract-change, review, terraform]
+    knowledge: &terraform_supervise_knowledge terraform-aws
+    instruction: &terraform_supervise_instruction supervise
     rules:
       - condition: BLOCKED
         next: ABORT
-      - condition: All reviewers approved and mergeable quality
+      - condition: APPROVE
         next: COMPLETE
-      - condition: Only AI-specific issues need fixing
-        next: ai-antipattern-fix
-      - condition: Only convention violations or mergeability issues need fixing
+      - condition: REJECT
         next: supervise_fix
-      - condition: Multiple types of issues found
-        next: fix_both
-      - condition: Irreconcilable requirement conflict, user decision needed
-        next: ABORT
-    output_contracts: *terraform_supervise_output_contracts
+    output_contracts: &terraform_supervise_output_contracts
+      report:
+        - name: supervisor-validation.md
+          format: supervisor-validation
+        - name: summary.md
+          format: supervisor-summary
+          use_judge: false
   - name: fix_both
     tags:
       - coding
     parallel:
       - name: ai-antipattern-fix-parallel
+        capabilities: edit
         tags:
           - coding
         edit: true
@@ -272,16 +197,6 @@ steps:
           - terraform
           - testing
         knowledge: terraform-aws
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Edit
-              - Bash
-              - WebSearch
-              - WebFetch
         rules:
           - condition: AI issue fix complete
           - condition: No fix needed (target file/spec verified)
@@ -293,6 +208,7 @@ steps:
               format: fix-report
               use_judge: false
       - name: supervise_fix_parallel
+        capabilities: edit
         tags:
           - coding
         edit: true
@@ -302,16 +218,6 @@ steps:
           - terraform
           - testing
         knowledge: terraform-aws
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Edit
-              - Bash
-              - WebSearch
-              - WebFetch
         rules:
           - condition: Supervisor's findings have been fixed
           - condition: Cannot proceed with fix
@@ -322,6 +228,7 @@ steps:
       - condition: any("No fix needed (target file/spec verified)", "Cannot determine, insufficient info", "Cannot proceed with fix")
         next: implement
   - name: ai-antipattern-fix
+    capabilities: edit
     tags:
       - coding
     edit: true
@@ -331,17 +238,6 @@ steps:
       - terraform
       - testing
     knowledge: terraform-aws
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Write
-          - Bash
-          - WebSearch
-          - WebFetch
     pass_previous_response: false
     rules:
       - condition: AI issue fix complete
@@ -357,6 +253,7 @@ steps:
           format: fix-report
           use_judge: false
   - name: supervise_fix
+    capabilities: edit
     tags:
       - coding
     edit: true
@@ -366,17 +263,6 @@ steps:
       - terraform
       - testing
     knowledge: terraform-aws
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Write
-          - Bash
-          - WebSearch
-          - WebFetch
     pass_previous_response: false
     rules:
       - condition: Supervisor's findings have been fixed
@@ -393,9 +279,9 @@ loop_monitors:
         The review → fix cycle has repeated {cycle_count} times.
         Check the review report history in the Report Directory and assess convergence.
 
-        - Fix progress: whether existing findings satisfy their acceptance criteria
-        - Report convergence: whether valid structural or contract findings keep being added across review rounds
-        - A different finding is not progress by itself; treat counts as supporting information
+        - Fix progress: whether reported problems satisfy their acceptance criteria
+        - Report convergence: whether valid structural or contract problems keep being added across review rounds
+        - A different problem is not progress by itself; treat counts as supporting information
       rules:
         - condition: Healthy (fixes progressing and report content converging)
           next: fix_both
@@ -411,9 +297,9 @@ loop_monitors:
         The AI fix → review cycle has repeated {cycle_count} times.
         Check the review report history in the Report Directory and assess convergence.
 
-        - Fix progress: whether existing findings satisfy their acceptance criteria
-        - Report convergence: whether valid structural or contract findings keep being added across review rounds
-        - A different finding is not progress by itself; treat counts as supporting information
+        - Fix progress: whether reported problems satisfy their acceptance criteria
+        - Report convergence: whether valid structural or contract problems keep being added across review rounds
+        - A different problem is not progress by itself; treat counts as supporting information
       rules:
         - condition: Healthy (fixes progressing and report content converging)
           next: ai-antipattern-fix
@@ -429,9 +315,9 @@ loop_monitors:
         The supervisor fix → review cycle has repeated {cycle_count} times.
         Check the review report history in the Report Directory and assess convergence.
 
-        - Fix progress: whether existing findings satisfy their acceptance criteria
-        - Report convergence: whether valid structural or contract findings keep being added across review rounds
-        - A different finding is not progress by itself; treat counts as supporting information
+        - Fix progress: whether reported problems satisfy their acceptance criteria
+        - Report convergence: whether valid structural or contract problems keep being added across review rounds
+        - A different problem is not progress by itself; treat counts as supporting information
       rules:
         - condition: Healthy (fixes progressing and report content converging)
           next: supervise_fix

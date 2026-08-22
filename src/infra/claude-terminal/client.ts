@@ -6,6 +6,7 @@ import {
   classifyAbortSignalReason,
   type AgentFailureCategory,
 } from '../../shared/types/agent-failure.js';
+import { PROVIDER_CALL_TIMEOUT_DEFAULT_MS } from '../../shared/types/provider-deadline.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { prepareClaudeMcpConfig } from '../claude/mcp-config.js';
 import {
@@ -27,7 +28,6 @@ import type {
 } from './types.js';
 
 const DEFAULT_BACKEND: ClaudeTerminalBackendName = 'tmux';
-const DEFAULT_TIMEOUT_MS = 900000;
 const DEFAULT_POLL_INTERVAL_MS = 500;
 const log = createLogger('claude-terminal');
 
@@ -158,7 +158,7 @@ export async function callClaudeTerminal(
   options: ClaudeTerminalCallOptions,
 ): Promise<AgentResponse> {
   const backendName = options.backend ?? DEFAULT_BACKEND;
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const callTimeoutMs = options.callTimeoutMs ?? options.timeoutMs ?? PROVIDER_CALL_TIMEOUT_DEFAULT_MS;
   const pollIntervalMs = options.transcriptPollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const keepSession = options.keepSession === true;
   const terminalBackend = resolveTerminalBackend(backendName, options.terminalBackend);
@@ -167,7 +167,10 @@ export async function callClaudeTerminal(
   let responseSessionId: string | undefined = options.sessionId;
   let terminalSession: TerminalSession | undefined;
   let stopRequested = false;
-  let cleanup: (() => Promise<void>) | undefined;
+  // Keep adapter disposal reachable even when MCP argument preparation fails.
+  let cleanup: (() => Promise<void>) | undefined = options.preparedMcp === undefined
+    ? undefined
+    : () => options.preparedMcp!.dispose();
   let abortHandler: (() => void) | undefined;
   let aborted = false;
   let pendingStart: Promise<TerminalSession> | undefined;
@@ -245,8 +248,9 @@ export async function callClaudeTerminal(
   }
 
   try {
+    const isStrictReadonly = options.internalAgentIsolation === 'strict-readonly';
     if (
-      (options.internalAgentIsolation === 'strict-readonly' || options.skillsEnabled === false)
+      options.skillsEnabled === false
       && options.terminalBackend === undefined
     ) {
       await assertClaudeSkillsDisableSupported(
@@ -255,13 +259,18 @@ export async function callClaudeTerminal(
       );
     }
     const preparedMcpConfig = options.preparedMcp === undefined
-      ? await prepareClaudeMcpConfig(options.mcpServers)
+      ? await prepareClaudeMcpConfig(isStrictReadonly ? undefined : options.mcpServers)
       : { path: undefined, cleanup: async () => {} };
     const legacyCleanup = preparedMcpConfig.cleanup;
-    const adapterCleanup = options.preparedMcp?.dispose ?? (async () => {});
     cleanup = async () => {
-      await legacyCleanup();
-      await adapterCleanup();
+      const results = await Promise.allSettled([
+        legacyCleanup(),
+        ...(options.preparedMcp === undefined ? [] : [options.preparedMcp.dispose()]),
+      ]);
+      const failed = results.find((result) => result.status === 'rejected');
+      if (failed?.status === 'rejected') {
+        throw failed.reason;
+      }
     };
     if (options.abortSignal?.aborted) {
       throw new ClaudeTerminalAbortError(options.abortSignal.reason);
@@ -283,6 +292,7 @@ export async function callClaudeTerminal(
       outputSchema: options.outputSchema,
     });
 
+    options.onActivity?.({ kind: 'attempt_started' });
     const startedSession = await withAbort(() => {
       const startPromise = terminalBackend.start({
         cwd: options.cwd,
@@ -307,9 +317,10 @@ export async function callClaudeTerminal(
     const session = await withAbort(() => transcriptReader.findSession({
       cwd: options.cwd,
       sessionId: claudeSessionId,
-      timeoutMs,
+      timeoutMs: callTimeoutMs,
       pollIntervalMs,
       abortSignal: options.abortSignal,
+      onActivity: options.onActivity,
     }));
     responseSessionId = session.sessionId;
     emitInit(options, session.sessionId);
@@ -317,13 +328,15 @@ export async function callClaudeTerminal(
     const handledEvents: ClaudeTerminalEvent[] = [];
     let response: ClaudeTerminalTranscript;
     while (true) {
+      options.onActivity?.({ kind: 'attempt_started' });
       response = await withAbort(() => transcriptReader.waitForAssistantResponse({
         session,
         baseline,
         cwd: options.cwd,
-        timeoutMs,
+        timeoutMs: callTimeoutMs,
         pollIntervalMs,
         abortSignal: options.abortSignal,
+        onActivity: options.onActivity,
       }));
 
       handledEvents.push(...response.events);
@@ -365,7 +378,16 @@ export async function callClaudeTerminal(
     ) {
       return createAbortResponse(agentName, error.reason, responseSessionId);
     }
-    return createErrorResponse(agentName, getErrorMessage(error), AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR, responseSessionId);
+    const errorMessage = getErrorMessage(error);
+    const classified = classifyAbortSignalReason(errorMessage);
+    return createErrorResponse(
+      agentName,
+      errorMessage,
+      classified.category === AGENT_FAILURE_CATEGORIES.PART_TIMEOUT
+        ? classified.category
+        : AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+      responseSessionId,
+    );
   } finally {
     if (abortHandler) {
       options.abortSignal?.removeEventListener('abort', abortHandler);

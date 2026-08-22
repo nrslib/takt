@@ -21,14 +21,14 @@ describe('serial integration group runner', () => {
     const code = await runSerialIntegrationGroups(['--reporter', 'verbose'], run);
 
     expect(commands).toEqual([
-      ['run', 'test:it:serial:git', '--', '--reporter', 'verbose'],
-      ['run', 'test:it:serial:workflow', '--', '--reporter', 'verbose'],
+      ['run', 'test:it:heavy:serial:git', '--', '--reporter', 'verbose'],
+      ['run', 'test:it:heavy:serial:workflow', '--', '--reporter', 'verbose'],
     ]);
     expect(events).toEqual([
-      'start:test:it:serial:git',
-      'finish:test:it:serial:git',
-      'start:test:it:serial:workflow',
-      'finish:test:it:serial:workflow',
+      'start:test:it:heavy:serial:git',
+      'finish:test:it:heavy:serial:git',
+      'start:test:it:heavy:serial:workflow',
+      'finish:test:it:heavy:serial:workflow',
     ]);
     expect(code).toBe(0);
   });
@@ -39,7 +39,7 @@ describe('serial integration group runner', () => {
     const run = vi.fn(async (npmArgs: string[]) => {
       commands.push(npmArgs);
       return {
-        code: npmArgs[1] === 'test:it:serial:git' ? 9 : 0,
+        code: npmArgs[1] === 'test:it:heavy:serial:git' ? 9 : 0,
         signal: null,
       };
     });
@@ -47,11 +47,11 @@ describe('serial integration group runner', () => {
     const code = await runSerialIntegrationGroups([], run);
 
     expect(commands).toEqual([
-      ['run', 'test:it:serial:git'],
-      ['run', 'test:it:serial:workflow'],
+      ['run', 'test:it:heavy:serial:git'],
+      ['run', 'test:it:heavy:serial:workflow'],
     ]);
     expect(error).toHaveBeenCalledWith(
-      '[takt] npm run test:it:serial:git failed with exit=9',
+      '[takt] npm run test:it:heavy:serial:git failed with exit=9',
     );
     expect(code).toBe(9);
   });

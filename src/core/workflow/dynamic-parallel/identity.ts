@@ -5,12 +5,8 @@ import {
   normalizeWorkflowResumePointEntry,
 } from '../workflow-reference.js';
 import {
-  parseWorkflowExecutionIdentity,
   serializeWorkflowExecutionIdentity,
-  type WorkflowExecutionIdentity,
 } from '../workflow-execution-identity-codec.js';
-
-export type DynamicParallelSelectionIdentity = WorkflowExecutionIdentity;
 
 export function buildDynamicParallelSelectionIdentity(
   workflow: WorkflowConfig,
@@ -54,27 +50,5 @@ export function buildDynamicParallelSelectionIdentityFromPath(
         instance,
       };
     }),
-  });
-}
-
-export function parseDynamicParallelSelectionIdentity(
-  identity: string,
-): DynamicParallelSelectionIdentity | undefined {
-  return parseWorkflowExecutionIdentity(identity);
-}
-
-export function isWithinDynamicParallelSelectionScope(
-  identity: string,
-  prefix: readonly WorkflowResumePointEntry[],
-): boolean {
-  const parsed = parseDynamicParallelSelectionIdentity(identity);
-  if (!parsed || parsed.calls.length < prefix.length) return false;
-  return prefix.every((entry, index) => {
-    const call = parsed.calls[index];
-    return call !== undefined
-      && call.workflow === getResumePointWorkflowReference(entry)
-      && call.step === entry.step
-      && call.kind === entry.kind
-      && call.instance === (entry.kind === 'workflow_call' ? entry.call_instance : entry.occurrence);
   });
 }

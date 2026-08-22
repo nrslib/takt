@@ -1,6 +1,6 @@
 # Workflow Guide
 
-[日本語](./workflows.ja.md)
+[English](./workflows.md) | [日本語](./workflows.ja.md) | [简体中文](./workflows.zh-CN.md)
 
 This guide explains how to create and customize TAKT workflows.
 
@@ -39,6 +39,12 @@ description: Optional description
 max_steps: 10
 initial_step: first-step          # Optional, defaults to the first step
 
+all_steps:
+  rules:
+    - findings-handling
+    - ref: careful-findings
+      position: before_instruction
+
 # Section maps (key → file path relative to workflow YAML directory)
 personas:
   planner: ../facets/personas/planner.md
@@ -66,15 +72,7 @@ steps:
     instruction: implement           # Instruction key (references instructions map)
     edit: true                       # Whether the step can edit files
     required_permission_mode: edit   # Minimum permission: readonly, edit, or full
-    provider_options:
-      claude:
-        allowed_tools:               # Optional Claude tool allowlist
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Write
-          - Bash
+    capabilities: edit               # Optional capability preset
     rules:
       - condition: "Implementation complete"
         next: next-step
@@ -99,6 +97,16 @@ Steps reference section maps by key name (e.g., `persona: coder`), not by file p
 
 Section maps are optional. Facets can be referenced directly by bare name (e.g., `persona: coder` without a `personas` map entry); bare names are resolved through the facet layers in priority order — project `.takt/facets/<type>/`, then global `~/.takt/facets/<type>/`, then bundled `builtins/{lang}/facets/<type>/`. Use a section map only when you need a custom alias or an explicit file path.
 
+`instruction` accepts either one scalar value or a non-empty ordered array. Each array item may be a facet key/path or inline text; items are resolved in place and joined with `\n\n---\n\n`, preserving an explicit boundary between elements. In a callable workflow, an array item may also be `{ $param: name }` for an `instruction` `facet_ref` or `facet_ref[]` parameter. A `facet_ref[]` value is spliced at that position without changing the surrounding order. The scalar form keeps its existing behavior.
+
+### Workflow-wide rules (`all_steps.rules`)
+
+Declare rules that apply to every agent step in the workflow under `all_steps.rules`. Each entry is either a rule reference or an object with `ref` and the optional `position: before_instruction`. An omitted position places the rule after the automatic execution rules; `before_instruction` places it immediately before the step's `Instructions` section.
+
+Rule files are Markdown files named `<ref>.md` under `workflows/rules/`. They resolve in project `.takt/workflows/rules/`, then global `~/.takt/workflows/rules/`, then the bundled builtin directory. The applicability notice and rule heading are rendered once per prompt. These rules apply only to Phase 1 agent instructions, not output reports, status routing, or companion reviewers. A called workflow inherits its parent's rules additively before its own `all_steps.rules`. When parent and child rules have identical `ref`, `position`, and resolved content, the parent occurrence wins and the rule is applied only once. Rules sharing a `ref` but differing in position or content are not deduplicated.
+
+Rule files must not contain the required-output heading or `{report:...}` references; invalid content fails workflow loading and identifies the referenced file. Omitting `all_steps` preserves the existing prompt. Future workflow-wide declarations belong under `all_steps`; unknown root-level keys remain invalid.
+
 ### Reusable step fragments
 
 Put exactly one step object in a root-level `<name>.yaml` or `<name>.yml` file under a `steps/` directory, then reference it with `uses`. `uses` is supported on top-level agent and `workflow_call` steps, parallel parents, and parallel sub-steps. The loader expands it before workflow schema validation, so runtime, doctor, and previews use the same ordinary step.
@@ -116,16 +124,46 @@ For example, `.takt/steps/final-gate.yaml` can contain:
 
 ```yaml
 kind: workflow_call
-call: merge-readiness-finding-contract-final-gate
+call: supervisor-final-gate
 ```
 
 Every concrete workflow step that declares `uses`, including a parallel sub-step, must declare its own non-empty rule specification. A non-parallel fragment caller uses a `rules` array; a parallel fragment caller uses the rule tree described below. A fragment cannot declare `rules` at its root or on any parallel sub-step. This keeps routing owned by the workflow that knows the destination step names; fragment-to-fragment `uses` is exempt until a concrete workflow calls the chain. The loader does not copy, inherit, or synthesize fallback rules.
 
-Step fragments may declare required typed parameters in root-level `params`, and each `uses` caller binds them with `with`. Facet parameters use `type: facet_ref` or `facet_ref[]` with `facet_kind: policy`, `knowledge`, `instruction`, `persona`, or `report_format`. Workflow target parameters use `type: workflow_ref` without `facet_kind`. Defaults and optional parameters are not supported in fragments.
+Step fragments may declare required typed parameters in root-level `params`, and each `uses` caller binds them with `with`. Facet parameters use `type: facet_ref` or `facet_ref[]` with `facet_kind: policy`, `knowledge`, `instruction`, `persona`, or `report_format`. Workflow target parameters use `type: workflow_ref` without `facet_kind`. A fragment that receives a dynamic facet pool name may use `type: facet_pool_ref` without `facet_kind`. Companion parameters are currently supported only by callable workflows, not by step-fragment `params`; a fragment can still contain a literal non-empty companion selection. Defaults and optional parameters are not supported in fragments.
 
-Use `{ $param: name }` in the field that matches its declaration: `policy`, `knowledge`, `persona`, `instruction`, `output_contracts.report[].format`, or `workflow_call.call`. A `facet_ref` or `facet_ref[]` parameter may also be an item within a `policy` or `knowledge` list; list values are spliced in place while preserving order, and an empty `facet_ref[]` contributes no item. Any parameter type may be passed as a direct `workflow_call.args` value or in a nested fragment caller's `with`. Nested fragments use lexical scope and cannot capture an outer parameter implicitly: pass it explicitly as `with: { child_param: { $param: outer_param } }`. A callable workflow parameter may be passed the same way and is resolved after fragment expansion. The resolver rejects unknown or missing bindings, cardinality or kind mismatches, undeclared references, and parameter references in unsupported fields. It consumes `params` and `with` before schema validation, preserves and expands a `workflow_call` fragment's own `args`, and applies ordinary caller overlays after parameter expansion.
+Use `{ $param: name }` in the field that matches its declaration: `policy`, `knowledge`, `persona`, `instruction`, `output_contracts.report[].format`, `workflow_call.call`, or `dynamic_facets.pool` for step-fragment parameters; callable workflow parameters additionally support a normal agent step's `companion`. A `companion_ref[]` value expands to fixed companion names. An empty array omits the `companion` field itself and rejects any remaining unquoted `companion.*` state reference. This keeps a generic wrapper companion-free without allowing a literal empty companion or an invalid companion-dependent route. Companion names are checked by the normal definition loader, so unknown references fail during loading. A `facet_ref` or `facet_ref[]` parameter may also be an item within a `policy` or `knowledge` list; list values are spliced in place while preserving order, and an empty `facet_ref[]` contributes no item. A `facet_pool_ref` is a scalar key in the containing callable workflow's top-level `facet_pools` map, not a policy or knowledge facet. Callable workflow parameters can be passed as direct `workflow_call.args`; the four fragment parameter types above can also be passed in a nested fragment caller's `with`. Nested fragments use lexical scope and cannot capture an outer parameter implicitly: pass it explicitly as `with: { child_param: { $param: outer_param } }`. A callable workflow parameter may be passed the same way and is resolved after fragment expansion. The resolver rejects unknown or missing bindings, cardinality or kind mismatches, undeclared references, and parameter references in unsupported fields. It consumes `params` and `with` before schema validation, preserves and expands a `workflow_call` fragment's own `args`, and applies ordinary caller overlays after parameter expansion.
 
 When a fragment resolves to a parallel step, the caller supplies a strict rule tree instead of a plain array. `self` contains the parallel parent's non-empty rule array, and `parallel` maps every explicit, unique final child name to a non-empty rule array. Child rule trees are invalid because workflow parallel steps cannot be nested. The mapping must list all children exactly once and cannot contain unknown children. The loader applies the tree after fragment expansion and converts it to ordinary per-step `rules` arrays before schema validation.
+
+For example, a callable workflow can select a child-local implementation pool through a fragment without copying the fragment's step definition:
+
+```yaml
+subworkflow:
+  callable: true
+  params:
+    implementation_pool:
+      type: facet_pool_ref
+      default: coding-facets
+
+facet_pools:
+  coding-facets:
+    candidates:
+      - id: backend
+        description: Handle backend changes
+        knowledge: backend
+
+steps:
+  - name: implement
+    uses: implementation-step
+    with:
+      implementation_pool:
+        $param: implementation_pool
+    dynamic_facets:
+      pool:
+        $param: implementation_pool
+```
+
+`facet_pool_ref` arguments and defaults must be scalar names of pools declared by the callable child. A missing required argument, a list value, an unknown pool name, or an unresolved/undeclared `$param` in `dynamic_facets.pool` fails during loading before an agent or selector starts. The loader does not fall back to another pool or to all candidates.
 
 ```yaml
 steps:
@@ -148,7 +186,7 @@ The caller overrides fragment fields. Objects are deep-merged; arrays such as `p
 
 `persona_name` is only a display name. `provider_routing.personas` in config matches the raw `persona` key, while `provider_routing.tags` matches the optional `tags` array in the order written on the step. Later tags override earlier tags for the same provider/model/provider_options leaf.
 
-`session_key` is supported on normal agent steps, parallel sub-steps, and `loop_monitors.judge`. It is not supported on system steps, workflow-call steps, or parallel parent steps because those entries do not own an agent session. Use it when multiple agent steps share a persona but must keep separate sessions, or when different agent steps must intentionally share one session. The effective runtime key is `session_key` plus the resolved provider suffix, for example `shared-coder:claude`. When `session_key` is omitted, TAKT uses the persona key, or the step name when no persona is set. Empty strings and whitespace-only values are rejected during workflow validation.
+`session_key` is supported on normal agent steps and parallel sub-steps. It is not supported on system steps, workflow-call steps, loop-monitor judges, or parallel parent steps because those entries do not own a resumable agent session. Use it when multiple agent steps share a persona but must keep separate sessions, or when different agent steps must intentionally share one session. The effective runtime key is `session_key` plus the resolved provider suffix, for example `shared-coder:claude`. When `session_key` is omitted, TAKT uses the persona key, or the step name when no persona is set. Empty strings and whitespace-only values are rejected during workflow validation.
 
 String `quality_gates` remain AI completion directives and are injected into agent step prompts. `type: command` gates run inside the worktree after an agent step completes and pass only when the command exits with code `0`. Workflow YAML command gates require `workflow_command_gates.custom_scripts: true` in config. On failure, TAKT feeds command metadata, cwd, exit code or timeout/output-limit details, and the private output log path back into the same agent step. Sanitized stdout and stderr are available only in that local private log and are not inserted into agent feedback. `system` and `workflow_call` steps do not accept `quality_gates`.
 
@@ -165,6 +203,16 @@ String `quality_gates` remain AI completion directives and are injected into age
 | `{user_inputs}` | Additional user inputs during workflow (auto-injected if not in template) |
 | `{report_dir}` | Report directory path (e.g., `.takt/runs/20250126-143052-task-summary/reports`) |
 | `{report:filename}` | Inline the content of `{report_dir}/filename` |
+| `{review_scope}` | TAKT-computed list of files changed by this task |
+
+What `{review_scope}` covers depends on where the run came from.
+
+- The working-tree computation (always performed): the union of committed changes since the base commit, uncommitted working-tree changes, and untracked files (ignored files excluded). It therefore still lists the changes when the task changes are already committed to the branch and the working-tree diff is empty.
+- PR-derived runs (a run carrying a PR context, e.g. `takt --pr N`): the PR diff range `base...head` is added **on top of** the working-tree computation. `--pr` pulls in PR review comments and fixes them, so the working tree changes within the same run and both belong to the review scope. If the diff range is not available locally, the text says so and lists the local changes only.
+
+When the working directory is not a Git repository, or no change is detected, it resolves to text stating that fact rather than to an empty string. Lists longer than 200 files are truncated with the remaining count stated. Builtin general-purpose reviewers receive this variable automatically through the shared `findings-handling` workflow rule.
+
+The base commit is taken from the merge-base against the first existing ref among `refs/takt/pr-base/<branch>`, `refs/takt/base/<branch>`, and the detected default branch, combined with the branch entry point recorded in the reflog; the newer of the two is used. In environments where no base ref survives and the reflog holds no branch entry point — for example a resume run that clones an existing branch directly — the base cannot be determined and committed changes are left out of the list. That limitation is stated explicitly in the rendered text.
 
 > **Note**: `{task}`, `{previous_response}`, and `{user_inputs}` are auto-injected into instructions. You only need explicit placeholders if you want to control their position in the template.
 
@@ -254,15 +302,9 @@ Sub-steps execute concurrently, and the parent aggregates sub-step matches via `
 - Parallel sub-steps do not support `promotion`
 - The parent step accepts an optional `concurrency: <N>` (minimum 1) to bound how many sub-steps run at the same time; without it, all sub-steps start together
 
-### Finding Contract reviewer output normalization
-
-Finding Contract reviewers use native structured output by default. Runtime
-configuration under `finding_contract.intake_normalize` can select ordinary
-Markdown plus isolated extraction by exact resolved reviewer provider/model.
-
 ### Dynamic Parallel Step
 
-`parallel` may instead define a fixed set and a selectable pool. TAKT runs an internal read-only selector when the step is entered; it is not a workflow step and cannot create agents or change the workflow. The selector runs with read-only permissions, permission bypass disabled, no inherited MCP servers, and a TAKT-owned structured output contract.
+`parallel` may instead define a fixed set and a selectable pool. TAKT runs an internal selector when the step is entered; it is not a workflow step and cannot create agents or change the workflow. The selector runs with read-only permission and cannot modify or write files. Providers that honor the tool allowlist permit only `Read`, `Glob`, and `Grep`. It uses the resolved runtime profile in a fresh session and returns a TAKT-owned structured output contract.
 
 ```yaml
   - name: reviewers
@@ -294,20 +336,24 @@ Markdown plus isolated extraction by exact resolved reviewer provider/model.
 - A `fixed` or `pool` item that declares `uses` owns its `rules` at that call site. The referenced fragment must not define them.
 - `fixed` always runs. The selector can select only expanded `pool` step names, and execution follows YAML order.
 - `replace` (the default) replaces a previous pool selection on a new round. `cumulative` retains every pool item selected in earlier rounds.
-- A resume of the same round restores its saved effective selection and does not invoke the selector again.
+- A process resume does not restore a saved selection; it invokes the selector again against the current pool.
 - `all()` and `any()` aggregate only the fixed and selected pool items of the current round. Dynamic parallel rejects position-dependent aggregate expressions.
-- Invalid selector output, an unknown selection, or an invalid saved selection fails before a fixed or pool agent starts; there is no all-pool fallback.
-- Loading fails before execution when `pool` is missing or empty, a pool description is empty, a fragment cannot expand, an expanded name is duplicated, a fixed/pool item is not an agent sub-step, `selection.mode` is not `replace` or `cumulative`, or an aggregate label is not defined by every candidate. Selector execution also fails before reviewer startup when the provider is unresolved, its strict output is invalid, or fixed plus selected pool items is empty. Resume fails before startup when its identity or saved IDs no longer match the expanded candidates.
-- The selector input contains the task, reports available in the current workflow-call scope, the current staged, unstaged, deleted, and untracked changes against `HEAD`, candidate IDs and descriptions, the previous selection for `cumulative`, and whether this is an initial entry or a new round. Its output must be a completed JSON object with only `selected_ids` and `rationale`; non-arrays, non-string IDs, duplicate IDs, and extra properties are rejected.
-- Selector evidence is complete on success and uses UTF-8 byte limits. Each report and each changed-path payload may be at most 64 KiB; at most 1,024 changed paths are accepted; each Git path list may be at most 1 MiB; and the combined rendered reports and current diff may be at most 1 MiB. A value exactly at a limit is accepted, while one byte or one path above it fails before the selector or any participant starts. `.takt/runs/` paths are excluded. Untracked symlinks contribute only their link target text and are never dereferenced; other non-regular files are rejected.
-- The current diff includes changes that already existed when the run started. Changes committed during a run are no longer different from `HEAD` and are not guaranteed to remain in later selector inputs; prior reports remain available as separate evidence. A normal empty diff is passed explicitly. A non-Git directory, an unavailable Git command, or a repository without `HEAD` fails before agent startup.
+- Invalid selector output or an unknown selection fails before a fixed or pool agent starts; there is no all-pool fallback.
+- Loading fails before execution when `pool` is missing or empty, a pool description is empty, a fragment cannot expand, an expanded name is duplicated, a fixed/pool item is not an agent sub-step, `selection.mode` is not `replace` or `cumulative`, or an aggregate label is not defined by every candidate. Selector execution also fails before reviewer startup when the provider is unresolved, its strict output is invalid, or fixed plus selected pool items is empty. Resume points containing the removed dynamic selection fields are not supported.
+- The selector input contains the task, the Report Directory path, the target report names (including names from `selection.reports`), the changed file paths against `HEAD`, candidate IDs and descriptions, the previous selection for `cumulative`, and whether this is an initial entry or a new round. The selector resolves report references through the current workflow scope, exact resume snapshot, and parent workflow scope before passing the resulting paths. It is configured with a tool allowlist of `Read`, `Glob`, and `Grep` for reading referenced files and reports; providers that honor the allowlist permit only those tools. Its output must be a completed JSON object with only `selected_ids` and `rationale`; non-arrays, non-string IDs, duplicate IDs, and extra properties are rejected.
+- The changed path list includes staged, unstaged, deleted, and untracked names against `HEAD`; `.takt/runs/` paths are excluded. Report references are resolved through the existing report-reference rules before they are passed as paths; report contents are read by the selector when needed.
+- Changes committed during a run are no longer different from `HEAD` and are not guaranteed to remain in later selector path lists; prior reports remain available through their report references. A non-Git directory or an unavailable Git command produces an empty changed-path list or fails according to the Git boundary.
 - The saved participant manifest is keyed by the workflow invocation path, workflow-call instance path, and parallel step. Report inheritance and aggregate evaluation use that manifest, so a reviewer removed by `replace` cannot contribute stale reports or findings to the current round.
 
 ### Dynamic Facet Selection (facet pools)
 
-A normal agent step can dynamically select additional `policy` and `knowledge` facets from a validated candidate pool right before its main agent runs. This keeps the fixed facets the step already declares and adds only the facets the current situation requires — for example, selecting a transaction-correctness policy only after a review surfaces transaction-boundary concerns.
+A normal agent step, or an agent sub-step under `parallel`, can dynamically select additional `policy` and `knowledge` facets from a validated candidate pool right before its main agent runs. This keeps the fixed facets the step already declares and adds only the facets the current situation requires — for example, selecting a transaction-correctness policy only after a review surfaces transaction-boundary concerns.
 
 Define a pool under the top-level `facet_pools` map, then reference it from a step with `dynamic_facets`. Pools can be defined inline in the workflow or as external resource files.
+
+`dynamic_facets.max_selected` is optional. When specified, it limits the number of selected candidates; when omitted, the selector may select up to every candidate in the pool. This does not add an all-candidate fallback when selector execution fails.
+
+`dynamic_facets.pool` may also use `{ $param: implementation_pool }` when the containing callable workflow declares `implementation_pool` with `type: facet_pool_ref`. The value is resolved before dynamic-facet validation and must name a pool in that callable workflow's top-level `facet_pools` map. An unset required parameter, a list or other non-scalar value, an unknown pool, or an unexpanded parameter reference fails before an agent or selector starts.
 
 #### Inline pool
 
@@ -352,6 +398,45 @@ steps:
       - condition: Fix complete
         next: review
 ```
+
+#### Parallel sub-steps
+
+`dynamic_facets` is also valid on a static `parallel` child and on a dynamic parallel `fixed` or `pool` entry. For a dynamic parallel step, participant selection runs first; the facet selector runs only for the selected children. For a static parallel step, each dynamic child runs its own facet selector independently.
+
+```yaml
+facet_pools:
+  security-review:
+    candidates:
+      - id: web
+        description: Review HTTP and browser security boundaries
+        knowledge: [security-web, security-api]
+      - id: cli
+        description: Review command-line and local process boundaries
+        knowledge: security-local
+
+steps:
+  - name: reviewers
+    parallel:
+      pool:
+        - name: security-review
+          description: Review security for the selected system
+          persona: security-reviewer
+          knowledge: security
+          dynamic_facets:
+            pool: security-review
+            max_selected: 1
+          instruction: review-security
+          rules: [{ condition: approved }]
+      selection:
+        mode: replace
+    rules:
+      - condition: all("approved")
+        next: COMPLETE
+```
+
+The selected knowledge or policy is added to the child's fixed facets. An empty selection keeps the fixed facets unchanged. All applicable facet selectors complete before any parallel child starts. An invalid pool reference, candidate ID, or `max_selected` stops the workflow without starting that child or any sibling under the same parallel parent. Within one uninterrupted run, the parent parallel frame and occurrence keep child selections independent. A process resume starts with empty run-local selection state and invokes the participant and child facet selectors again.
+
+For nested callable workflows, keep pool selection at the owning top-level workflow. When a shared workflow accepts an open `workflow_ref`, do not add a pool argument to every possible target: an undeclared callable argument is rejected. Instead, let the top-level workflow select a narrow adapter that binds the `facet_pool_ref` only when it calls the suite that consumes it. The consuming suite declares the accepted external pools, so unknown references still fail while loading that boundary without widening unrelated callable contracts.
 
 #### External pool
 
@@ -439,19 +524,18 @@ Every candidate in a pool shares the same shape:
 
 #### Selector contract
 
-When a step with `dynamic_facets` is entered, TAKT runs an internal read-only selector before the main agent starts. The selector is not a workflow step, cannot create agents or change the workflow, and runs with read-only permissions, permission bypass disabled, no inherited MCP servers, and a TAKT-owned structured output contract in a fresh session.
+When a step with `dynamic_facets` is entered, TAKT runs an internal selector before the main agent starts. The selector is not a workflow step, cannot create agents or change the workflow, and uses the resolved runtime profile in a fresh session. It runs with read-only permission and cannot modify or write files. Providers that honor the tool allowlist permit only `Read`, `Glob`, and `Grep`.
 
 The selector receives at least:
 
 - The user request
 - The leaf workflow, workflow-call instance, and step identity
 - Whether this is an initial entry or a re-entry, and the step iteration
-- Reports available in the current workflow-call scope
-- Unresolved findings
-- The cumulative diff since the task started
+- The Report Directory path and report names available in the current workflow-call scope
+- The changed file paths from the working tree at selector invocation time (equivalent to `git diff HEAD`)
 - Candidate IDs and descriptions
 
-Facet bodies are not sent to the selector. The selector returns only candidate IDs and a rationale against a strict structured output schema (`additionalProperties: false`, `selected_ids` as a unique array whose items are an `enum` of the pool's candidate IDs, plus a required `rationale` string). Pool-external IDs, duplicate IDs, and selections exceeding `max_selected` are rejected. Selector failure stops the run before the main agent starts; there is no implicit fallback to all candidates or to an empty selection. The selector itself is not subject to dynamic facet selection or auto routing.
+Candidate facet bodies are not sent separately to the selector. The selector receives the target-agent prompt inline, resolves the referenced reports through the current workflow scope, exact resume snapshot, and parent workflow scope, and is configured with a tool allowlist of `Read`, `Glob`, and `Grep` for reading the referenced files and reports; providers that honor the allowlist permit only those tools. It returns only candidate IDs and a rationale against a strict structured output schema (`additionalProperties: false`, `selected_ids` as a unique array whose items are an `enum` of the pool's candidate IDs, plus a required `rationale` string). Pool-external IDs, duplicate IDs, and selections exceeding a specified `max_selected` are rejected. Selector failure stops the run before the main agent starts; there is no implicit fallback to all candidates or to an empty selection. The selector itself is not subject to dynamic facet selection or auto routing.
 
 The selector provider is resolved through #1136's `provider.targets.internal_agents.selector` in `runtime.yaml`. When left unspecified, the runtime's normal default is used.
 
@@ -486,7 +570,7 @@ round 2 effective facets:
 The round-1 `frontend` facet does not leak into round 2.
 
 - The main agent session for a step using dynamic facets is isolated per round.
-- A provider retry or resume within the same round restores that round's effective facet set and session; the selector is not re-run.
+- A process resume starts with an empty run-local selection state and re-runs the selector against the current facet pool. Only in-memory state from the same uninterrupted run is retained.
 - Reaching the same step as a new workflow transition starts a new round and re-selects.
 - The selector result and the resolved effective facet set are written to runtime state before the main agent starts.
 - At load time, inline and external pools are normalized into the same `ResolvedFacetPool`, so the execution layer never branches on whether a pool was inline or external. External pool files are not re-read during execution.
@@ -508,8 +592,8 @@ Loading fails before execution when any of these hold:
 - An external pool uses nested `uses`, `params`, or `$param`
 - External resource lookup, trust, or file validation fails
 - `dynamic_facets.pool` is unknown
-- `max_selected` is invalid or exceeds the candidate count
-- `dynamic_facets` is declared on a non-agent step
+- A specified `max_selected` is invalid or exceeds the candidate count
+- `dynamic_facets` is declared on a non-agent step or a parallel parent
 
 Selector execution fails before the main agent starts when:
 
@@ -517,9 +601,41 @@ Selector execution fails before the main agent starts when:
 - Structured output is not established
 - `selected_ids` is not an array
 - An ID is non-string, duplicate, or unknown
-- `max_selected` is exceeded
+- A specified `max_selected` is exceeded
 
 There is no implicit fallback.
+
+#### Selector guidance
+
+Both selector forms accept optional `persona` guidance and required `instruction` guidance:
+
+```yaml
+steps:
+  - name: fix
+    dynamic_facets:
+      pool: implementation
+      selector:
+        persona: facet-selector
+        instruction: select-implement-facets
+  - name: reviewers
+    parallel:
+      fixed: []
+      pool:
+        - name: backend
+          persona: backend-reviewer
+          description: Review backend changes
+          instruction: Review the backend
+          rules: [{ condition: approved }]
+      selection:
+        mode: replace
+        selector:
+          persona: reviewer-selector
+          instruction: select-reviewers
+```
+
+`selector.instruction` is required whenever a selector is configured; `persona` is optional. The selector guidance only describes how to select facet or participant IDs. TAKT retains responsibility for the evidence references, read-only structured execution and tools, structured output contract, candidate validation, selection mode, and disabled permission bypass. A selector cannot change the selected agent's `persona`, `instruction`, provider, permissions, tools, MCP configuration, or output contract.
+
+The selector guidance references the workflow's existing persona and instruction resources. Unknown selector keys, an empty selector, a selector without `instruction`, or an unresolved persona/instruction reference fails during schema or workflow validation with the configuration path. A raw `$param` reference is valid only after callable argument expansion; an unexpanded reference in a non-callable workflow is rejected.
 
 #### Packages, eject, and authoring tools
 
@@ -529,46 +645,6 @@ There is no implicit fallback.
 - `takt workflow preview` shows the dynamic pool name, candidate IDs, referenced facets, and source.
 - When builtin ja/en pools are provided, their candidate ID sets are kept identical.
 
-### Finding Contract manager provider/model
-
-`finding_contract.manager` can set a dedicated provider and model for the synthetic Finding Manager step:
-
-```yaml
-finding_contract:
-  manager:
-    persona: findings-manager
-    instruction: findings-manager
-    output_contract: findings-manager
-    provider: codex
-    model: gpt-5.5
-```
-
-The report is saved before normalization, and the normalizer receives only that
-single report in a fresh, tool-free session.
-
-When set, these values are applied as step-level `provider` / `model` for the Finding Manager. Explicit CLI and environment overrides remain higher priority. The manager values take priority over `provider_routing`, deprecated `persona_providers.findings-manager`, effective auto routing, and workflow/project/global fallbacks. When neither field is set, the manager keeps the normal workflow step provider/model resolution behavior. Setting only `provider` stops lower-priority model fallback, so the selected provider uses its own default; providers that require an explicit model fail validation.
-
-### Finding Contract provisional findings and the completion gate
-
-Every raw finding is guaranteed a destination: it is either applied to the ledger as a confirmed finding, recorded as an active conflict, or kept as a **provisional finding** — an open ledger entry with `provisional` metadata representing an observation whose meaning could not be determined (contradictory relation/target labeling, reviewer output exceeding hard limits, an interrupted interpretation, a stale save-time precondition, or an exhausted interpretation budget). A single malformed raw finding, a broken Finding Manager response, or an exhausted interpretation budget never aborts the run.
-
-Provisional findings block the final gate:
-
-- `findings.provisional.count` (and `findings.provisional.items`) is available in `when()` rules. Builtin workflows route `findings.provisional.count > 0` to the replan step — a provisional finding is a system finding the fixer cannot address with code changes.
-- The engine enforces a final invariant: a transition to `COMPLETE` while any provisional finding is open aborts the workflow (fail-fast, with the provisional ids/kinds/reasons in the abort reason). Custom workflows that use `finding_contract` should route on `findings.provisional.count` before their `COMPLETE` rule.
-
-Provisional findings are settled only by later clean review evidence: a clean re-observation of the same claim confirms it as a real finding, and a deterministic mapping to an existing finding resolves it. They are never resolved just because a later round did not mention them, and they cannot be waived, invalidated, or superseded.
-
-Open finding items expose `familyTags` to both fixer instructions and `when()` rule state. Use `contains()` inside `exists()` to route by family without depending on array order:
-
-```yaml
-- condition: when(exists(findings.open.items, contains(item.familyTags, "provider-e2e")))
-  next: fix
-```
-
-If a ledger references a raw finding that is no longer present, its id is exposed in `unknownRawFindingIds` instead of being silently discarded or making the ledger unreadable. Both arrays are deduplicated and sorted; `contains(item.unknownRawFindingIds, "raw-id")` uses the same membership syntax.
-
-Invalid or missing Finding Manager decisions land as provisional findings and the run continues. Add a rule such as `when(findings.provisional.count > 0 && findings.conflicts.count == 0)` routed to your replan step *before* the `COMPLETE` rule (see the builtin `takt-default-high` workflow for the reference wiring). `takt workflow doctor` warns when a `finding_contract` workflow has no rule referencing `findings.provisional`.
 
 ### Arpeggio Step (data-driven batch)
 
@@ -608,7 +684,6 @@ The agent acts as a leader: it decomposes the task into independent sub-parts at
       max_concurrency: 2
       initial_max_parts: 2
       timeout_ms: 600000
-      inspect_tools: [read, glob, grep]
       part_tags: [coding]
       part_persona: coder
       part_edit: true
@@ -627,9 +702,7 @@ Useful for breaking one large task into independent units that can run in parall
 
 `max_concurrency` controls how many independent parts run at the same time. Both `max_concurrency` and the compatibility key `max_parts` accept at most `3`; a larger value fails workflow loading. When neither is set, the default is `3`. When specified, `initial_max_parts` limits only the first decomposition batch. There is no total-part limit for the workflow step; the Team Leader adds batches until it decides no additional work is required or stops returning new unique parts. The scheduler requests a new batch only after every part in the current batch completes, so parts in one batch must never depend on each other; verification that needs implementation results belongs in a later batch. With `fail_on_part_error: true`, a generated-part failure can still lead the Team Leader to plan and run new recovery parts; it then ends the step with an error. When omitted, the leader can continue according to its normal recovery flow. The older `max_parts` key is still accepted as the compatibility name for `max_concurrency`. `refill_threshold` is a compatibility key and may only be omitted or set to `0`; non-zero values fail workflow loading because incremental refill conflicts with the batch barrier. `part_tags` sets provider routing tags on generated part steps. When omitted, parts inherit the parent step's `tags`. Empty and whitespace-only tags are invalid. `part_tags` is resolved through normal `provider_routing.tags`, so tag routing takes priority over persona routing from `part_persona`.
 
-`inspect_tools` allows only read-only inspection tools (`read`, `glob`, `grep`) during the parent Team Leader task decomposition phase. Invalid tool names fail workflow loading. It does not affect generated child parts; child part tools remain controlled separately by `part_allowed_tools`. Inspection tools are supported by providers that expose `allowedTools`, including Claude-family providers and OpenCode. Providers that do not support Team Leader inspection tools fail at runtime with a clear error.
-
-For a Finding Contract repair step, set `team_leader.mode: finding_contract_fix`. This mode requires an active `finding_contract` and assigns every part to explicit actionable findings. Assignment `readPaths` entries are literal relative paths that guide inspection, while completion `changedPaths` report the files a worker actually changed. Neither accepts the `*` or `?` wildcard characters; other characters such as `[]` are not expanded and remain part of the path. Part edits follow the normal part permissions. When changes from multiple parts overlap, the Team Leader must plan a later repair or verify part in its next decision and check the final state. If the bounded index has a non-zero `omittedPartCount` or any non-zero `omittedChangedPathCount`, the Team Leader must not complete and instead uses a later consolidated repair or verify part to check the final state. The Team Leader does not accumulate old raw responses; it decides `continue`, `complete`, or `replan` from a batch-wide bounded raw excerpt and engine-validated finding-level claim digests for the latest batch plus the latest digest per finding from earlier batches. `complete` requires successful verification and `fixCoverage` for every actionable finding present at step start. This step-local decision means the work is ready for reviewers; only the Finding Manager updates finding lifecycle state in the ledger. Route the decision with a mechanical condition such as `when(structured.fix.decision == "complete")`.
+`inspect_tools` restricts the parent Team Leader task decomposition and additional-part decision phases to read-only inspection tools (`read`, `glob`, `grep`). Invalid tool names fail workflow loading. It does not affect generated child parts; child part tools remain controlled separately by `part_allowed_tools`. When omitted, the engine defaults to `read`, `glob`, and `grep` for providers that support `allowedTools` (Claude-family providers and OpenCode); an explicit value overrides the default. Providers that cannot restrict tools (such as Codex) leave the leader's `allowedTools` unset and the leader still gets read-only guidance because its execution environment is read-capable. An explicit non-empty `inspect_tools` value on a provider that does not support Team Leader inspection tools fails at runtime with a clear error.
 
 ### Workflow Call Step (subworkflow)
 
@@ -652,19 +725,9 @@ The called workflow can declare `subworkflow.params` so the parent passes values
 
 `workflow_call` rules only accept `COMPLETE`, `ABORT`, or a semantic return label the child declares. A child workflow lists its labels in `subworkflow.returns` (e.g. `returns: [approved, needs_fix]`; the reserved results `COMPLETE` / `ABORT` cannot be listed), and a child step's rule ends the subworkflow with a label via `return:` instead of `next:`. The parent's rules then route on that label, as `approved` / `needs_fix` do above.
 
-A `workflow_call` step may declare `overrides` to change the provider settings applied to the child workflow's steps. At least one of `provider`, `model`, or `provider_options` is required, and `provider_options` must include at least one provider-specific option:
-
-```yaml
-  - name: peer-review
-    kind: workflow_call
-    call: peer-review
-    overrides:
-      provider: codex
-      model: gpt-5.5
-    rules:
-      - condition: COMPLETE
-        next: COMPLETE
-```
+A `workflow_call` step does not accept provider, model, provider-options, or routing
+overrides. The child inherits the already-resolved runtime context from its parent; configure
+provider targets, profiles, options, and routing in `runtime.yaml`.
 
 `max_steps` is a budget owned by the root workflow and shared by every descendant. A `workflow_call` is a control node and does not consume that budget or select a provider/model of its own; only executable steps in the child consume iterations. For example, `plan → workflow_call(implement → review) → supervise` consumes four iterations, so extracting `implement` and `review` into a callable workflow does not require increasing `max_steps`. Nested calls follow the same rule. The call lifecycle remains visible in session logs and traces with a call invocation number and the complete call stack.
 
@@ -757,9 +820,11 @@ Every report entry requires `name` and `format`. Two optional fields refine beha
 - `use_judge` (default `true`) — whether the report is fed into the Phase 3 status judgment. Set `use_judge: false` for reports that should be written but not used as judgment evidence. A step whose rules need judgment must keep at least one `use_judge` report.
 - `order` — a report-format facet reference (resolved like `format`) whose content replaces the default report-writing instruction in Phase 2. Use it when the agent needs custom directions for producing the report beyond the format template itself.
 
-## Step-level Provider Promotion
+## Runtime provider promotion
 
-A step can escalate its `provider`, `model`, or `provider_options` based on per-step execution count or AI judgment. Each entry in `promotion` requires at least one of `at: <count>` (matches from the Nth execution of this step onward) or `condition: ai("...")`, plus one or more override targets:
+Workflow promotion only advances the ladder selected by `runtime.yaml`. Each entry must be the
+strict `{at: N}` shape; provider, model, provider-options, and condition fields are rejected at
+load time. The matching count selects the next stage from the runtime target's `ladder`.
 
 ```yaml
 steps:
@@ -767,18 +832,10 @@ steps:
     persona: reviewer
     promotion:
       - at: 3
-        model: opus
-      - condition: ai("The reviewer keeps rejecting and progress has stalled")
-        provider: claude
-        model: opus
-      - at: 5
-        provider:
-          type: codex
-          model: gpt-5.5
-          network_access: true
+      - at: 6
 ```
 
-Entries are evaluated in declaration order; the **last matching entry wins**. Promotion overrides step-level `provider` / `model` / `provider_options`, but explicit CLI and environment-variable provider / model overrides remain higher priority.
+Define the provider/model/options for each stage in `runtime.yaml`, not in the workflow.
 
 Promotion is not supported on parallel sub-steps.
 
@@ -797,32 +854,27 @@ Promotion is not supported on parallel sub-steps.
 | `knowledge` | - | Knowledge key or array of keys (section map, or bare facet name resolved project → user → builtin) |
 | `instruction` | - | Instruction key (section map, or bare facet name resolved project → user → builtin) |
 | `edit` | - | Whether the step can edit project files (`true`/`false`) |
+| `companion` | - | Run companion reviewers alongside a normal agent step using their resolved runtime profiles (see [Companion reviewers](#companion-reviewers)) |
+| `completion_retry` | - | Opt into bounded review completeness checks with an object containing the required `retry_instruction` facet and optional retry bounds |
 | `pass_previous_response` | `true` | Pass previous step's output to `{previous_response}` |
-| `provider_options.claude.allowed_tools` | - | Claude tool allowlist for the step or workflow |
-| `provider_options.claude.base_url` | - | Anthropic-compatible base URL for `claude` / `claude-sdk` (see [configuration guide](./configuration.md#provider-base-url-base_url)) |
-| `provider_options.claude.effort` | - | Claude reasoning effort: `low`, `medium`, `high`, `xhigh`, `max` (`xhigh` requires Opus 4.7) |
-| `provider_options.claude.skills.enabled` | `false` | Enable Claude filesystem Skill discovery for `claude-sdk`, `claude`, and `claude-terminal` (see [configuration guide](./configuration.md#claude-skill-inheritance-skills)) |
-| `provider_options.opencode.allowed_tools` | - | OpenCode tool allowlist. Tool names are lowercase, for example `read`, `glob`, `grep`, `bash`, `websearch`, `webfetch` |
-| `provider_options.opencode.variant` | - | OpenCode model variant, passed through as a provider/model-specific string |
-| `provider_options.opencode.guards` | `standard` / 60 minutes | OpenCode guard profile, first-match `model_profiles`, call wall-clock, and text/reasoning byte limits (see [configuration guide](./configuration.md#opencode-execution-guards)) |
-| `provider_options.codex.base_url` | - | OpenAI-compatible base URL for Codex SDK constructor options (see [configuration guide](./configuration.md#provider-base-url-base_url)) |
-| `provider_options.codex.network_access` | - | Allow Codex sandbox to access the network (see [configuration guide](./configuration.md#network-access-network_access)) |
-| `provider_options.codex.skills.repo` | `false` | Inherit Codex Skills from `.agents/skills` between the execution CWD and repository root (see [configuration guide](./configuration.md#codex-skill-inheritance-skills)) |
-| `provider_options.codex.skills.user` | `false` | Inherit Codex Skills from user scope (see [configuration guide](./configuration.md#codex-skill-inheritance-skills)) |
-| `provider_options.claude.sandbox.allow_unsandboxed_commands` | - | Run Claude Bash outside the macOS Seatbelt sandbox (see [configuration guide](./configuration.md#claude-code-sandbox-control-allow_unsandboxed_commands)) |
-| `provider_options.kiro.agent` | - | Kiro CLI custom agent name passed as `kiro-cli chat --agent`. Steps without it use the Kiro CLI default agent |
-| `provider` | - | Override provider for this step (`claude`, `claude-sdk`, `claude-terminal`, `codex`, `opencode`, `cursor`, `copilot`, `kiro`, or `mock`) |
-| `model` | - | Override model for this step |
-| `promotion` | - | Per-execution provider/model/options escalation (see [Step-level Provider Promotion](#step-level-provider-promotion)) |
+| `capabilities` | - | Capability preset name or list. Resolves allowed tools, network access, sandbox, and skills; it does not select a provider or model |
 | `mcp_servers` | - | Per-step MCP server configuration (stdio / HTTP / SSE) |
 | `allow_git_commit` | `false` | Allow `git add` / `commit` / `push` in step instructions. Default prohibits these so each PR represents one task |
 | `required_permission_mode` | - | Required minimum permission mode: `readonly`, `edit`, or `full` |
 | `output_contracts` | - | Report file configuration (name, format) |
 | `quality_gates` | - | Agent-step completion gates. String entries are AI instructions; `type: command` entries are executed after step completion and feed failures back into the same agent step |
 
-For normal agent steps, parallel sub-steps, and `loop_monitors.judge`, `model: null` explicitly omits the model. This is different from leaving `model` out: absence continues fallback to applicable lower-priority sources such as routing, workflow, the triggering step for loop monitor judges, and input models, while `null` stops model resolution at that entry. Providers that require an explicit model still fail validation.
+`completion_retry` is an explicit object-only opt-in. Omit the field to disable it. The object requires `retry_instruction`, an instruction facet that tells the reviewer how to close gaps without changing the scope or authority of its original instruction; `min_retry` is an optional non-negative integer bounded by `4`, while `max_retry` is an optional non-negative integer. When `max_retry` is omitted, it defaults to the internal ceiling of `4` (`min_retry` defaults to `0`): after `min_retry` has been satisfied, the completion judge can stop the episode early by returning `complete: true`, and incomplete results are retried up to that ceiling. An explicitly supplied `max_retry` takes precedence and may be any non-negative integer, including values above `4`. `true`, `false`, strings, an empty object, and unsupported fields such as `mode` are rejected. Each successful reviewer response is checked by a fresh completion judge against the actual original reviewer instruction, task, scope, evidence, and report, using the judge's resolved runtime profile. Reviewer retries continue the same reviewer session. Judge unavailability stops the episode immediately regardless of `min_retry`, while reviewer retry failures continue only while retry budget remains. On a terminal failure, TAKT preserves the latest valid reviewer response and emits an advisory Phase 2 diagnostic. When an incomplete decision reaches the retry ceiling, the `max_retry_reached` diagnostic retains the remaining `missingObligations`.
+
+`review_completion` remains accepted as a deprecated alias. Do not specify it together with `completion_retry`.
+
+Provider and model are not workflow fields. Runtime profiles and routing in `runtime.yaml` supply
+them; CLI/env overrides remain available. A workflow that writes these removed fields fails at the
+load boundary with a migration hint.
 
 The effective tool list may be narrower than configured. When `edit: false`, or when a step has `output_contracts` and does not set `edit: true`, TAKT removes command/edit tools from `provider_options.*.allowed_tools` before calling the provider. For Claude-family providers, comma-separated entries are normalized into atomic tool specs first, `Bash(...)` is judged by the canonical tool name before `(`, and `Bash`, `Edit`, `Write`, `Apply_Patch`, and `Patch` are removed. For OpenCode, lowercase tools such as `bash`, `edit`, and `write` are removed. The same read-only filtering applies to `team_leader.part_allowed_tools` when the part's effective edit setting is false, such as `part_edit: false` or inherited `edit: false`.
+
+The Pi provider maps generic `Read`, `Glob`, `Grep`, `Edit`, `Write`, and `Bash` names to Pi SDK tools. Pi does not support TAKT MCP servers or structured output; step-level MCP settings are dropped, while session-level MCP settings require a provider that supports them. `max_turns` is ignored for Pi calls.
 
 ## Workflow-level Configuration
 
@@ -846,85 +898,45 @@ schemas:
   pr-followup-task: pr-followup-task
 ```
 
-### `auto_routing`
+### Provider routing and automatic routing
 
-Workflow-level automatic provider routing: an AI `router` (provider + model) picks a provider/model `candidate` per step. `candidates` names the selectable provider/model entries, `candidate_pools` groups them with a per-pool `fallback`, `default_pool` selects the pool used when nothing more specific matches, and `pool_rules` / `rules` pin pools or candidates by step `tags`, `steps` (names), or `personas`. Rules must reference declared candidates and pools; unknown names fail validation.
-
-### `finding_contract`
-
-Declares a Finding Contract for the workflow (see the Finding Contract sections above for runtime semantics). `ledger_path`, `raw_findings_path`, and `manager` are required; `manager` requires `persona`, `instruction`, and `output_contract`, with optional `provider` / `model`. Optional budgets: `stop_budget` (`max_rounds`, default 40; `max_minutes`, no time limit unless set) and `review_budget` (`max_review_rounds`).
-
-```yaml
-finding_contract:
-  ledger_path: .takt/findings/review.json
-  raw_findings_path: .takt/findings/review/raw
-  manager:
-    persona: findings-manager
-    instruction: findings-manager
-    output_contract: findings-manager
-  stop_budget:
-    max_rounds: 40
-```
+`auto_routing`, provider/model defaults, provider options, and routing are not workflow YAML
+fields. Provider/model/options and routing are owned by `runtime.yaml` (with the existing
+`config.yaml` legacy mode and CLI/env overrides preserved). `rate_limit_fallback` remains a
+legacy `config.yaml` setting and is not a workflow YAML field. Workflow `capabilities` remains
+the only provider option surface in workflow YAML.
 
 ### `interactive_mode`
 
-Default interactive mode used when `takt` is invoked without arguments. One of `assistant` (default), `passthrough`, `quiet`, `persona`.
+Default interactive mode used when `takt` is invoked without arguments. One of `assistant` (default), `grill-me`, `passthrough`, `quiet`, `persona`. `grill-me` resolves requirements one recommended question at a time and suggests `/go` when they are ready.
 
 ```yaml
 interactive_mode: assistant
 ```
 
-### `workflow_config.provider` / `workflow_config.model`
+### Removed workflow execution settings
 
-Workflow-wide default provider and model. They sit below step-level `provider` / `model`, routing, and CLI/env overrides in the resolution order, and above project/global config defaults.
+`workflow_config.provider`, `workflow_config.model`, `workflow_config.provider_options`, step
+`provider`, `model`, `provider_options`, `loop_monitors.judge` provider settings, and
+`workflow_call.overrides` are rejected. Move execution settings to `runtime.yaml`. The
+`workflow_config.runtime.prepare` process-preparation block remains supported.
 
-```yaml
-workflow_config:
-  provider: claude-sdk
-  model: opus
-```
+### `capabilities`
 
-### `workflow_config.provider_options`
+`capabilities` names one or more provider-options presets that grant a step its abilities: tool allowlists, network access, sandbox, and skills. It is the reference-only form of `provider_options` — the value is a preset name (or a list of names), never an inline options block, and only capability leaves (`allowed_tools` / `network_access` / `sandbox` / `skills`) are accepted. A preset carrying a quality or machine leaf (`effort`, `base_url`, `guards`, ...) fails fast at load time; those belong in `runtime.yaml`.
 
-Workflow-wide provider options. For most provider option leaves, env- or CLI-resolved config values win first; otherwise priority is step `provider_options` > `provider_routing.steps` > `provider_routing.tags` > `provider_routing.personas` > deprecated `persona_providers` > `workflow_config.provider_options` > project `.takt/config.yaml` > global `~/.takt/config.yaml`. For `base_url`, step and workflow routing leaves stay above TAKT env overrides, and the same step-to-global order is followed before `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL` or `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL`. Workflow YAML and project `.takt/config.yaml` may only set `base_url` to loopback hosts; use global config or TAKT env for non-loopback endpoints.
-
-```yaml
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    claude:
-      sandbox:
-        allow_unsandboxed_commands: true
-```
-
-`provider_options` can reference a shared YAML preset by name. Names are resolved first-match from `.takt/provider-options`, `~/.takt/provider-options`, then `builtins/{lang}/provider-options`. For repertoire packages, package-local `provider-options` is checked first, and `@owner/repo/name` resolves a preset from that package. The referenced file is the base, and inline values override matching leaves.
-
-`provider_options.extends` fails fast as a configuration error when a preset or path cannot be resolved, a scoped ref points to an unavailable repertoire package, the target YAML is invalid or is not a provider-options object, the extends chain is circular, or the removed `$ref` key is used. Relative paths are resolved from the workflow file and must stay inside the workflow directory after symlink resolution; absolute paths and paths whose real target escapes that directory are rejected.
+The key is available at the workflow top level (the default for every step), on a step, and on a parallel sub-step. A step's own `capabilities` replaces the workflow default rather than merging with it. A list merges its entries left to right, so a later name wins on a leaf both declare:
 
 ```yaml
-workflow_config:
-  provider_options:
-    extends: review-readonly
+capabilities: readonly
 
 steps:
   - name: implement
-    provider_options:
-      extends: edit
-      opencode:
-        allowed_tools: [read, grep, bash]
+    capabilities: [edit, enable-skills]
 ```
 
-Relative file paths from the workflow file are still supported for workflow-local shared files.
+Presets resolve exactly like `provider_options.extends` (project → global → builtins, with repertoire package scoping). The bundled presets are `readonly` (read, search, shell, and web lookup plus network access), `edit` (`readonly` plus file creation and editing), and `enable-skills` (Codex repo/user skills). An unresolved name fails fast. `system` and `workflow_call` steps reject `capabilities`.
 
-Example shared file:
-
-```yaml
-claude:
-  allowed_tools: [Read, Glob, Grep, Bash, WebSearch, WebFetch]
-opencode:
-  allowed_tools: [read, glob, grep, bash, websearch, webfetch]
-```
 
 ### `workflow_config.runtime`
 
@@ -950,7 +962,6 @@ loop_monitors:
     ignore_steps: [verify]
     threshold: 3
     judge:
-      session_key: loop-supervisor
       persona: supervisor
       instruction: "Evaluate if the fix loop is making progress..."
       rules:
@@ -962,24 +973,14 @@ loop_monitors:
 
 `ignore_steps` excludes intermediate steps from cycle matching. Use it when a logical cycle has optional verification or retry steps; an ignored step cannot also appear in `cycle`.
 
-`loop_monitors.judge` supports `provider`, `model`, and `provider_options` with the same provider/model validation as agent steps. When `provider` is omitted, the judge inherits the triggering step provider and model. When `provider` is set without `model`, the inherited model is cleared. Use `model: null` to explicitly use a provider or CLI default even when the triggering step has a resolved model.
+`loop_monitors.judge` does not accept provider, model, or provider-options settings. It uses the
+runtime target `provider.targets.internal_agents.loop-judge` when configured, otherwise the normal
+runtime routing and triggering-step fallback.
 
-`loop_monitors.judge.session_key` follows the same provider-suffixed runtime key behavior as step `session_key`. Set it when separate monitors use the same persona but should not resume the same judge session.
+Loop-monitor judges always use a fresh provider session. `session_key` is therefore not accepted on `loop_monitors.judge`.
 
-### `rate_limit_fallback`
-
-When a Claude / Codex / OpenCode rate limit is observed during a step, continue the run by re-executing the interrupted step on the next provider in the chain. The new session receives a fallback notice instruction so the AI can rebuild context from existing reports on disk.
-
-```yaml
-rate_limit_fallback:
-  switch_chain:
-    - provider: claude-sdk
-      model: opus
-    - provider: codex
-      model: gpt-5.5
-```
-
-Attempts within a single fallback chain are tracked on workflow state and reset on a successful step completion. The same field is also accepted in `~/.takt/config.yaml` and `.takt/config.yaml` for project-wide / user-wide defaults.
+Rate-limit fallback is also configured in `runtime.yaml` (or the existing global/project
+`config.yaml` legacy mode), never in workflow YAML.
 
 ### `subworkflow`
 
@@ -989,7 +990,6 @@ Declare a workflow as a subworkflow that accepts parameters from a parent's `wor
 subworkflow:
   callable: true
   visibility: internal
-  requires_finding_contract: true
   params:
     impl_knowledge:
       type: facet_ref[]
@@ -1004,11 +1004,11 @@ subworkflow:
       default: peer-review-suite-base
 ```
 
-Do not set `max_steps` on a callable workflow. The loader rejects an explicit value because the root workflow's budget applies to the complete call tree. A callable workflow must be entered through `workflow_call`; use a standalone root wrapper when the same implementation also needs a direct entry point.
+Builtin callable workflows should omit `max_steps` because the root workflow owns the budget for the complete call tree. Keep `max_steps` on the standalone root wrapper when the shared implementation also needs a direct entry point; the callable child is intended to be entered through `workflow_call`.
 
-Callable workflow facet parameters use `facet_ref` or `facet_ref[]` and one of the five `facet_kind` values: `policy`, `knowledge`, `instruction`, `persona`, or `report_format`. A `workflow_ref` parameter identifies a callable workflow and omits `facet_kind`; it may be used as `call: { $param: reviewer_suite }`. Defaults are optional. A `facet_ref[]` argument or default may be empty, which is useful for optional additions. In `policy` and `knowledge`, scalar or list parameters can be mixed with fixed references; list values are flattened at their position while preserving the field's written order. Parameters can also be forwarded through `workflow_call.args`.
+Callable workflow facet parameters use `facet_ref` or `facet_ref[]` and one of the five `facet_kind` values: `policy`, `knowledge`, `instruction`, `persona`, or `report_format`. A `workflow_ref` parameter identifies a callable workflow and omits `facet_kind`; it may be used as `call: { $param: reviewer_suite }`. A `facet_pool_ref` parameter also omits `facet_kind` and identifies a scalar key in the callable child's top-level `facet_pools` map; it may be used as `dynamic_facets.pool: { $param: implementation_pool }`. A `companion_ref[]` parameter likewise omits `facet_kind` and supplies fixed companions through `companion: { $param: implementation_companions }` on a normal agent step. An empty array omits `companion` and rejects any remaining unquoted `companion.*` state reference; literal empty companion selections remain invalid. Defaults are optional. A `facet_ref[]` argument or default may be empty, which is useful for optional additions. In `policy` and `knowledge`, scalar or list parameters can be mixed with fixed references; list values are flattened at their position while preserving the field's written order. Parameters can also be forwarded through `workflow_call.args`. For `facet_pool_ref`, a missing required argument, a list value, an unknown child-local pool, or an unexpanded `$param` fails before execution; there is no implicit pool fallback. For `companion_ref[]`, a non-array argument, an undeclared parameter, or an unknown companion definition fails before execution.
 
-Set `requires_finding_contract: true` when the child consumes inherited `findings.*` state or Finding Contract output formats, or delegates to another subworkflow with the same requirement. The immediate caller must either declare `finding_contract` or require it from its own caller. Every child in the chain uses the owning caller's contract and the same ledger rather than creating its own ledger.
+For `instruction`, a non-empty ordered array may mix facet refs and inline text; `facet_ref` / `facet_ref[]` parameters can be array items, and `facet_ref[]` values are flattened at their position before the resolved elements are joined with `\n\n---\n\n`.
 
 ## Examples
 
@@ -1026,9 +1026,7 @@ steps:
     persona: coder
     edit: true
     required_permission_mode: edit
-    provider_options:
-      claude:
-        allowed_tools: [Read, Glob, Grep, Edit, Write, Bash, WebSearch, WebFetch]
+    capabilities: edit
     rules:
       - condition: Implementation complete
         next: COMPLETE
@@ -1053,9 +1051,7 @@ steps:
     persona: coder
     edit: true
     required_permission_mode: edit
-    provider_options:
-      claude:
-        allowed_tools: [Read, Glob, Grep, Edit, Write, Bash, WebSearch, WebFetch]
+    capabilities: edit
     rules:
       - condition: Implementation complete
         next: review
@@ -1067,9 +1063,7 @@ steps:
   - name: review
     persona: reviewer
     edit: false
-    provider_options:
-      claude:
-        allowed_tools: [Read, Glob, Grep, WebSearch, WebFetch]
+    capabilities: readonly
     rules:
       - condition: Approved
         next: COMPLETE
@@ -1090,9 +1084,7 @@ steps:
   - name: analyze
     persona: planner
     edit: false
-    provider_options:
-      claude:
-        allowed_tools: [Read, Glob, Grep, WebSearch, WebFetch]
+    capabilities: readonly
     rules:
       - condition: Analysis complete
         next: implement
@@ -1104,9 +1096,7 @@ steps:
     edit: true
     pass_previous_response: true
     required_permission_mode: edit
-    provider_options:
-      claude:
-        allowed_tools: [Read, Glob, Grep, Edit, Write, Bash, WebSearch, WebFetch]
+    capabilities: edit
     rules:
       - condition: Implementation complete
         next: COMPLETE
@@ -1114,6 +1104,33 @@ steps:
       Implement based on this analysis:
       {previous_response}
 ```
+
+## Companion reviewers
+
+Add `companion` to a normal agent step to run stateless, read-only reviewers while the agent edits. A shorthand list selects fixed reviewers. Use the object form to combine fixed reviewers with a pool selected once at step startup and an optional moderator. At most three reviewers run together.
+
+Companion reviewers are disabled by default. Set `companion.enabled: true` in
+`runtime.yaml` to run reviewers declared by a workflow.
+
+```yaml
+- name: implement
+  persona: coder
+  companion:
+    fixed: [security-reviewer]
+    pool: [design-reviewer, frontend-reviewer]
+    moderator: adjudicator
+  rules:
+    - condition: implementation complete
+      next: final-review
+```
+
+Workflow transition rules cannot reference `companion.*` state. Companion findings and failures are advisory diagnostics; ordinary semantic conditions and Phase 3 judgment exclusively control the main workflow route.
+
+Definitions are YAML files resolved from `.takt/companions/`, `~/.takt/companions/`, then `builtins/{language}/companions/`. They may contain `name`, `description`, facet references (`persona`, `policy`, `knowledge`, `instruction`), and `interval_ms`; provider and tool settings are not allowed. `interval_ms` must be a positive integer no greater than `2,147,483,647`.
+
+TAKT observes mutating tool events and reviews the current cumulative diff after a quiet period or forced interval. Each review round creates a fresh finding list, and an optional moderator accepts or rejects every submitted finding by its round-local index; findings are not carried between rounds. Accepted findings are appended as one NDJSON record per line to `.takt/runs/{run}/companion/{step}/{companion}.jsonl`. This mailbox is an audit log and reference view that the implementer may read at any time. The engine writes it but does not read, interpret, protect, or use it to decide delivery or completion.
+
+At each implementer turn boundary, TAKT embeds all undelivered accepted findings directly in the follow-up prompt and then clears the in-memory delivery buffer. The implementer decides whether to address each finding and explains any decision not to act. On completion, TAKT stops new triggers, drains running and queued review rounds, reads the current diff digest, and runs a completion review only for an unreviewed digest. If that produces findings, it delivers another follow-up turn and repeats completion processing. The step finishes only when no findings remain undelivered and the digest has not changed since the latest finding delivery. There is no Companion follow-up loop limit; cancellation through the workflow or step abort signal is the termination mechanism. If a follow-up returns `error`, `rate_limited`, or `blocked`, or throws an error, TAKT stops the Companion follow-up loop without retrying that follow-up and continues the step with the latest successful implementer response and session ID. The Companion diagnostics record `completionSettled: false`, the attempted `followUpRounds`, and a sanitized failure reason. AbortSignal cancellation still propagates. Companion calls retain their bounded provider retry policy before failing soft.
 
 ## Best Practices
 

@@ -10,7 +10,12 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
-import type { WorkflowConfig, WorkflowStep, AgentResponse } from '../core/models/index.js';
+import type {
+  AgentResponse,
+  ResolvedFacetPool,
+  WorkflowConfig,
+  WorkflowStep,
+} from '../core/models/index.js';
 import { makeRule } from './test-helpers.js';
 
 // --- Mock imports (consumers must call vi.mock before importing this) ---
@@ -44,6 +49,24 @@ export function makeStep(name: string, overrides: Partial<WorkflowStep> = {}): W
     instruction: `Run ${name}`,
     passPreviousResponse: true,
     ...overrides,
+  };
+}
+
+export function makeResolvedFacetPool(
+  name: string,
+  candidates: readonly { readonly id: string; readonly content: string }[],
+): ResolvedFacetPool {
+  return {
+    name,
+    source: 'inline',
+    candidates: candidates.map(({ id, content }) => ({
+      id,
+      description: `${id} facet`,
+      policyRefs: [],
+      knowledgeRefs: [id],
+      resolvedPolicyContents: [],
+      resolvedKnowledgeContents: [{ content }],
+    })),
   };
 }
 

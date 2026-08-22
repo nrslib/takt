@@ -48,6 +48,9 @@ export function createMcpAdapter(provider: ProviderType): ProviderMcpAdapter {
       return createKiroMcpAdapter();
     case 'mock':
       return createMockMcpAdapter();
+    case 'pi':
+    case 'deepseek-harness':
+      throw new Error(`Provider "${provider}" does not support MCP runtime assignments`);
     default: {
       const exhaustive: never = provider;
       throw new Error(`Unsupported provider for MCP adapter: ${String(exhaustive)}`);

@@ -12,6 +12,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CodexCallOptions } from '../infra/codex/types.js';
 
+const { mockBuildCodexSkillConfig } = vi.hoisted(() => ({
+  mockBuildCodexSkillConfig: vi.fn(),
+}));
+
 // ===== Codex SDK mock =====
 
 let mockEvents: Array<Record<string, unknown>> = [];
@@ -48,12 +52,17 @@ vi.mock('@openai/codex-sdk', () => {
   };
 });
 
+vi.mock('../infra/codex/skill-config.js', () => ({
+  buildCodexSkillConfig: mockBuildCodexSkillConfig,
+}));
+
 // CodexClient は @openai/codex-sdk をインポートするため、mock 後にインポート
 const { CodexClient } = await import('../infra/codex/client.js');
 
 describe('CodexClient — structuredOutput 抽出', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockBuildCodexSkillConfig.mockReset();
     mockEvents = [];
     lastThreadOptions = undefined;
     lastTurnOptions = undefined;
@@ -64,8 +73,13 @@ describe('CodexClient — structuredOutput 抽出', () => {
 
   it('outputSchema 指定時に agent_message の JSON テキストを structuredOutput として返す', async () => {
     const schema = { type: 'object', properties: { step: { type: 'integer' } } };
+    const onStream = vi.fn();
     mockEvents = [
       { type: 'thread.started', thread_id: 'thread-1' },
+      {
+        type: 'item.completed',
+        item: { id: 'reasoning-1', type: 'reasoning', text: 'internal reasoning summary' },
+      },
       {
         type: 'item.completed',
         item: { id: 'msg-1', type: 'agent_message', text: '{"step": 2, "reason": "approved"}' },
@@ -74,10 +88,15 @@ describe('CodexClient — structuredOutput 抽出', () => {
     ];
 
     const client = new CodexClient();
-    const result = await client.call('coder', 'prompt', { cwd: '/tmp', outputSchema: schema });
+    const result = await client.call('coder', 'prompt', { cwd: '/tmp', outputSchema: schema, onStream });
 
     expect(result.status).toBe('done');
     expect(result.structuredOutput).toEqual({ step: 2, reason: 'approved' });
+    expect(result.content).not.toContain('internal reasoning summary');
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'thinking',
+      data: { thinking: 'internal reasoning summary\n' },
+    });
   });
 
   it('複数の agent_message JSON がある場合は最後の JSON を structuredOutput として返す', async () => {
@@ -302,6 +321,34 @@ describe('CodexClient — structuredOutput 抽出', () => {
     expect(lastTurnOptions).toMatchObject({ outputSchema: schema });
   });
 
+  it('permission_control=codex は sandbox と network の指定を省略し approval policy は維持する', async () => {
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+
+    const client = new CodexClient();
+    await client.call('selector', 'prompt', {
+      cwd: '/tmp',
+      permissionMode: 'readonly',
+      permissionControl: 'codex',
+    });
+
+    expect(lastThreadOptions).toMatchObject({ approvalPolicy: 'never' });
+    expect(lastThreadOptions).not.toHaveProperty('sandboxMode');
+    expect(lastThreadOptions).not.toHaveProperty('networkAccessEnabled');
+  });
+
+  it('permission_control=codex と network_access の直接指定も fail fast する', async () => {
+    const client = new CodexClient();
+
+    await expect(client.call('coder', 'prompt', {
+      cwd: '/tmp',
+      permissionControl: 'codex',
+      networkAccess: false,
+    })).rejects.toThrow();
+  });
+
   it('provider_options.codex.network_access が ThreadOptions に反映される', async () => {
     mockEvents = [
       { type: 'thread.started', thread_id: 'thread-1' },
@@ -319,7 +366,23 @@ describe('CodexClient — structuredOutput 抽出', () => {
     });
   });
 
-  it('provider_options.codex.reasoningEffort が ThreadOptions に反映される', async () => {
+  it('permission_control 省略時は従来どおり TAKT sandbox mapping を使う', async () => {
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+
+    const client = new CodexClient();
+    await client.call('coder', 'prompt', { cwd: '/tmp', permissionMode: 'edit' });
+
+    expect(lastThreadOptions).toMatchObject({
+      sandboxMode: 'workspace-write',
+      approvalPolicy: 'never',
+    });
+    expect(lastThreadOptions).not.toHaveProperty('networkAccessEnabled');
+  });
+
+  it('permission_control=takt は従来の sandbox と network mapping を明示的に維持する', async () => {
     mockEvents = [
       { type: 'thread.started', thread_id: 'thread-1' },
       { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
@@ -328,12 +391,115 @@ describe('CodexClient — structuredOutput 抽出', () => {
     const client = new CodexClient();
     await client.call('coder', 'prompt', {
       cwd: '/tmp',
-      reasoningEffort: 'medium',
+      permissionMode: 'readonly',
+      permissionControl: 'takt',
+      networkAccess: true,
     });
 
     expect(lastThreadOptions).toMatchObject({
-      modelReasoningEffort: 'medium',
+      sandboxMode: 'read-only',
+      networkAccessEnabled: true,
+      approvalPolicy: 'never',
     });
+  });
+
+  it('provider_options.codex.reasoningEffort が安全な config override に反映される', async () => {
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+
+    const client = new CodexClient();
+    await client.call('coder', 'prompt', {
+      cwd: '/tmp',
+      reasoningEffort: 'vendor"level',
+    });
+
+    expect(lastCodexConstructorOptions).toMatchObject({
+      config: {
+        model_reasoning_effort: 'vendor"level',
+        model_reasoning_summary: 'auto',
+      },
+    });
+    expect(lastThreadOptions).not.toHaveProperty('modelReasoningEffort');
+  });
+
+  it('reasoningEffort がなくても Codex config に reasoning summary を設定する', async () => {
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+
+    const client = new CodexClient();
+    await client.call('coder', 'prompt', { cwd: '/tmp' });
+
+    expect(lastCodexConstructorOptions).toMatchObject({
+      config: {
+        model_reasoning_summary: 'auto',
+      },
+    });
+  });
+
+  it.each([true, false])('fastMode=%s は Codex config の features.fast_mode に反映される', async (fastMode) => {
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+    mockBuildCodexSkillConfig.mockReturnValue({
+      skills: {
+        config: [{ path: '/tmp/example/SKILL.md', enabled: false }],
+      },
+    });
+    const callOptions: CodexCallOptions = {
+      cwd: '/tmp',
+      fastMode,
+      reasoningEffort: 'high',
+      skills: { repo: false, user: false },
+    };
+
+    const client = new CodexClient();
+    await client.call('coder', 'prompt', callOptions);
+
+    expect(lastCodexConstructorOptions).toMatchObject({
+      config: {
+        skills: {
+          config: [{ path: '/tmp/example/SKILL.md', enabled: false }],
+        },
+        features: { fast_mode: fastMode },
+        model_reasoning_effort: 'high',
+        model_reasoning_summary: 'auto',
+      },
+    });
+  });
+
+  it('fastMode 未指定時は Codex config に features.fast_mode を追加しない', async () => {
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+    mockBuildCodexSkillConfig.mockReturnValue({
+      skills: {
+        config: [{ path: '/tmp/example/SKILL.md', enabled: false }],
+      },
+    });
+
+    const client = new CodexClient();
+    await client.call('coder', 'prompt', {
+      cwd: '/tmp',
+      reasoningEffort: 'high',
+      skills: { repo: false, user: false },
+    });
+
+    expect(lastCodexConstructorOptions).toMatchObject({
+      config: {
+        skills: {
+          config: [{ path: '/tmp/example/SKILL.md', enabled: false }],
+        },
+        model_reasoning_effort: 'high',
+        model_reasoning_summary: 'auto',
+      },
+    });
+    expect(lastCodexConstructorOptions?.config).not.toHaveProperty('features.fast_mode');
   });
 
   it('codexPathOverride が Codex constructor options に反映される', async () => {

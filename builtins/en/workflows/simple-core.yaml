@@ -1,5 +1,16 @@
 name: simple-core
 description: Internal core workflow for the simple family. It uses injected instructions, policies, and knowledge to run plan → write_tests → implement → review ⇄ fix → supervise.
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 subworkflow:
   callable: true
   visibility: internal
@@ -67,15 +78,11 @@ subworkflow:
         - architecture
         - unit-testing
         - e2e-testing
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
+capabilities: [readonly, enable-skills]
 initial_step: plan
 steps:
   - name: plan
+    capabilities: [readonly, enable-skills]
     uses: development-core-plan
     with:
       plan_policy:
@@ -98,6 +105,7 @@ steps:
           - {Question 2}
 
   - name: write_tests
+    capabilities: [edit, enable-skills]
     uses: development-core-write-tests
     with:
       testing_policy:
@@ -106,6 +114,7 @@ steps:
         $param: testing_knowledge
       testing_instruction:
         $param: testing_instruction
+      testing_report_format: test-report
     rules:
       - condition: Test creation completed
         next: implement
@@ -119,6 +128,7 @@ steps:
         interactive_only: true
 
   - name: implement
+    capabilities: [edit, enable-skills]
     uses: development-core-implement
     with:
       development_policy:
@@ -127,6 +137,7 @@ steps:
         $param: development_knowledge
       implementation_instruction:
         $param: implement_instruction
+      scope_report_format: coder-scope
     rules:
       - condition: Implementation completed
         next: review
@@ -149,8 +160,6 @@ steps:
       - $param: review_policy
     knowledge:
       $param: review_knowledge
-    provider_options:
-      extends: review-readonly
     pass_previous_response: false
     instruction:
       $param: review_instruction
@@ -195,8 +204,6 @@ steps:
       - $param: review_policy
     knowledge:
       $param: review_knowledge
-    provider_options:
-      extends: review-readonly
     pass_previous_response: false
     instruction:
       $param: supervise_instruction
@@ -210,9 +217,7 @@ steps:
     rules:
       - condition: BLOCKED
         next: ABORT
-      - condition: approved
+      - condition: APPROVE
         next: COMPLETE
-      - condition: need_replan
-        next: plan
-      - condition: needs_fix
+      - condition: REJECT
         next: remediation

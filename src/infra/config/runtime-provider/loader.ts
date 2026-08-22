@@ -6,19 +6,22 @@
  * homedir/cwd fallback and no `runtime_file` indirection. When both files exist, project
  * wins: same-name profiles are replaced wholesale (no field-level merge, per order.md:37),
  * disjoint profiles are retained, and the other sections take the project value when present.
+ * Named assignments and directory mappings are resolved after the two layers are merged.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { RUNTIME_PROVIDER_FILENAME, RUNTIME_PROVIDER_VERSION } from './constants.js';
+import { expandHomePath } from '../pathExpansion.js';
 import {
   RuntimeProviderFileSchema,
   type RuntimeProviderFile,
   type RuntimeProviderSection,
   type McpSection,
 } from './schema.js';
+import { validateMcpSectionReferences } from './mcp-schema.js';
 
 /** Load and validate a single runtime.yaml. Returns undefined when the file is absent or empty. */
 export function loadRuntimeProviderFileAt(filePath: string): RuntimeProviderFile | undefined {
@@ -35,6 +38,9 @@ export function loadRuntimeProviderFileAt(filePath: string): RuntimeProviderFile
     // Global and project layers share the `runtime.yaml` filename; name the failing path.
     throw new Error(`Invalid ${filePath}: ${z.prettifyError(result.error)}`);
   }
+  if (result.data.mcp !== undefined) {
+    validateMcpSectionReferences(result.data.mcp);
+  }
   return result.data;
 }
 
@@ -43,20 +49,41 @@ export interface ResolveRuntimeProviderInput {
   projectConfigDir: string;
 }
 
+export type RuntimeProviderProfileOrigin = 'global' | 'project';
+
+export interface ResolvedRuntimeProviderFileWithOrigins {
+  readonly runtimeFile: RuntimeProviderFile | undefined;
+  readonly profileOrigins: ReadonlyMap<string, RuntimeProviderProfileOrigin>;
+}
+
+/** Resolve the effective file together with the layer that contributed each profile. */
+export function resolveRuntimeProviderFileWithOrigins(
+  input: ResolveRuntimeProviderInput,
+): ResolvedRuntimeProviderFileWithOrigins {
+  const global = loadRuntimeProviderFileAt(join(input.globalConfigDir, RUNTIME_PROVIDER_FILENAME));
+  const project = loadRuntimeProviderFileAt(join(input.projectConfigDir, RUNTIME_PROVIDER_FILENAME));
+  const profileOrigins = new Map<string, RuntimeProviderProfileOrigin>();
+  for (const name of Object.keys(global?.provider?.profiles ?? {})) {
+    profileOrigins.set(name, 'global');
+  }
+  for (const name of Object.keys(project?.provider?.profiles ?? {})) {
+    profileOrigins.set(name, 'project');
+  }
+  const merged = !global ? project : !project ? global : mergeRuntimeProviderFiles(global, project);
+  const normalized = merged === undefined ? undefined : normalizeRuntimeProviderDirectories(merged);
+  return {
+    runtimeFile: normalized === undefined
+      ? undefined
+      : applyDirectoryAssignment(normalized, input.projectConfigDir),
+    profileOrigins,
+  };
+}
+
 /** Resolve the effective runtime.yaml from the global and project layers (project wins). */
 export function resolveRuntimeProviderFile(
   input: ResolveRuntimeProviderInput,
 ): RuntimeProviderFile | undefined {
-  const global = loadRuntimeProviderFileAt(join(input.globalConfigDir, RUNTIME_PROVIDER_FILENAME));
-  const project = loadRuntimeProviderFileAt(join(input.projectConfigDir, RUNTIME_PROVIDER_FILENAME));
-
-  if (!global) {
-    return project;
-  }
-  if (!project) {
-    return global;
-  }
-  return mergeRuntimeProviderFiles(global, project);
+  return resolveRuntimeProviderFileWithOrigins(input).runtimeFile;
 }
 
 function mergeRuntimeProviderFiles(
@@ -65,14 +92,20 @@ function mergeRuntimeProviderFiles(
 ): RuntimeProviderFile {
   const provider = mergeProviderSections(global.provider, project.provider);
   const mcp = mergeMcpSections(global.mcp, project.mcp);
-  const result: RuntimeProviderFile = { version: RUNTIME_PROVIDER_VERSION };
-  if (provider) {
-    result.provider = provider;
-  }
-  if (mcp) {
-    result.mcp = mcp;
-  }
-  return result;
+  const loopAnalysis = project.loop_analysis ?? global.loop_analysis;
+  const companion = global.companion === undefined && project.companion === undefined
+    ? undefined
+    : {
+        enabled: global.companion?.enabled !== false
+          && project.companion?.enabled !== false,
+      };
+  return {
+    version: RUNTIME_PROVIDER_VERSION,
+    ...(companion === undefined ? {} : { companion }),
+    ...(loopAnalysis === undefined ? {} : { loop_analysis: loopAnalysis }),
+    ...(provider === undefined ? {} : { provider }),
+    ...(mcp === undefined ? {} : { mcp }),
+  };
 }
 
 /**
@@ -117,6 +150,14 @@ function mergeProviderSections(
     merged.profiles = { ...(global.profiles ?? {}), ...(project.profiles ?? {}) };
   }
 
+  if (global.assignments || project.assignments) {
+    merged.assignments = { ...(global.assignments ?? {}), ...(project.assignments ?? {}) };
+  }
+
+  if (global.directories || project.directories) {
+    merged.directories = mergeDirectoryMappings(global.directories, project.directories);
+  }
+
   const targets = project.targets ?? global.targets;
   if (targets) {
     merged.targets = targets;
@@ -128,4 +169,89 @@ function mergeProviderSections(
   }
 
   return merged;
+}
+
+function mergeDirectoryMappings(
+  global: Record<string, string> | undefined,
+  project: Record<string, string> | undefined,
+): Record<string, string> {
+  return {
+    ...normalizeDirectoryMappings(global),
+    ...normalizeDirectoryMappings(project),
+  };
+}
+
+function normalizeRuntimeProviderDirectories(file: RuntimeProviderFile): RuntimeProviderFile {
+  const directories = file.provider?.directories;
+  if (directories === undefined) {
+    return file;
+  }
+  return {
+    ...file,
+    provider: {
+      ...file.provider,
+      directories: normalizeDirectoryMappings(directories),
+    },
+  };
+}
+
+function normalizeDirectoryMappings(
+  directories: Record<string, string> | undefined,
+): Record<string, string> {
+  const normalized: Record<string, string> = {};
+  for (const [directory, assignment] of Object.entries(directories ?? {})) {
+    normalized[normalizeDirectoryPath(directory)] = assignment;
+  }
+  return normalized;
+}
+
+function normalizeDirectoryPath(directory: string): string {
+  const absolutePath = resolve(expandHomePath(directory));
+  return existsSync(absolutePath) ? realpathSync(absolutePath) : absolutePath;
+}
+
+function applyDirectoryAssignment(
+  file: RuntimeProviderFile,
+  projectConfigDir: string,
+): RuntimeProviderFile {
+  const provider = file.provider;
+  if (provider?.directories === undefined) {
+    return file;
+  }
+
+  const assignments = provider.assignments ?? {};
+  for (const [directory, assignmentName] of Object.entries(provider.directories)) {
+    if (!Object.prototype.hasOwnProperty.call(assignments, assignmentName)) {
+      throw new Error(
+        `runtime.yaml provider.directories["${directory}"] references unknown assignment "${assignmentName}"`,
+      );
+    }
+  }
+
+  const projectDirectory = normalizeDirectoryPath(dirname(projectConfigDir));
+  const assignmentName = provider.directories[projectDirectory];
+  if (assignmentName === undefined) {
+    return file;
+  }
+  const assignment = assignments[assignmentName];
+  if (assignment === undefined) {
+    throw new Error(`runtime.yaml provider.directories references unknown assignment "${assignmentName}"`);
+  }
+
+  const selectedProvider = { ...provider };
+  if (assignment.defaults !== undefined) {
+    selectedProvider.defaults = assignment.defaults;
+  } else if (provider.defaults !== undefined) {
+    selectedProvider.defaults = provider.defaults;
+  } else {
+    delete selectedProvider.defaults;
+  }
+  if (assignment.targets !== undefined) {
+    selectedProvider.targets = assignment.targets;
+  }
+
+  return {
+    ...file,
+    provider: selectedProvider,
+  };
 }

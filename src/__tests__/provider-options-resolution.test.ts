@@ -59,6 +59,82 @@ describe('resolveEffectiveProviderOptions', () => {
     });
   });
 
+  it.each([true, false])('preserves Codex fastMode=%s when a later layer overrides it', (fastMode) => {
+    expect(mergeProviderOptions(
+      asProviderOptions({ codex: { fastMode: true } }),
+      asProviderOptions({ codex: { fastMode } }),
+    )).toEqual({ codex: { fastMode } });
+  });
+
+  it('does not create a Codex fastMode value when it is omitted', () => {
+    expect(mergeProviderOptions(asProviderOptions({ codex: { networkAccess: true } })))
+      .toEqual({ codex: { networkAccess: true } });
+  });
+
+  it.each([true, false])('resolves Codex fastMode=%s from the step before persona and config', (fastMode) => {
+    const configOptions = asProviderOptions({ codex: { fastMode: !fastMode } });
+    const personaOptions = asProviderOptions({ codex: { fastMode: !fastMode } });
+    const stepOptions = asProviderOptions({ codex: { fastMode } });
+
+    expect(resolveEffectiveProviderOptions(
+      'project',
+      undefined,
+      configOptions,
+      stepOptions,
+      personaOptions,
+    )).toEqual({ codex: { fastMode } });
+    expect(resolveProviderOptionSource(
+      'codex.fastMode',
+      stepOptions,
+      [],
+      configOptions,
+      undefined,
+      'project',
+    )).toBe('step');
+  });
+
+  it('resolves Codex fastMode from persona when the step does not set it', () => {
+    const personaOptions = asProviderOptions({ codex: { fastMode: false } });
+    const configOptions = asProviderOptions({ codex: { fastMode: true } });
+
+    expect(resolveEffectiveProviderOptions(
+      'project',
+      undefined,
+      configOptions,
+      undefined,
+      personaOptions,
+    )).toEqual({ codex: { fastMode: false } });
+    expect(resolveProviderOptionSource(
+      'codex.fastMode',
+      undefined,
+      [{ source: 'persona_providers', options: personaOptions }],
+      configOptions,
+      undefined,
+      'project',
+    )).toBe('persona_providers');
+  });
+
+  it('keeps an env-origin Codex fastMode value ahead of lower-priority layers', () => {
+    const configOptions = asProviderOptions({ codex: { fastMode: true } });
+    const stepOptions = asProviderOptions({ codex: { fastMode: false } });
+    const originResolver = (path: string) => (path === 'codex.fastMode' ? 'env' : 'local');
+
+    expect(resolveEffectiveProviderOptions(
+      'project',
+      originResolver,
+      configOptions,
+      stepOptions,
+    )).toEqual({ codex: { fastMode: true } });
+    expect(resolveProviderOptionSource(
+      'codex.fastMode',
+      stepOptions,
+      [],
+      configOptions,
+      originResolver,
+      'project',
+    )).toBe('env');
+  });
+
   it('Codex Skill inheritance is resolved independently per scope', () => {
     const result = resolveEffectiveProviderOptions(
       'project',
@@ -77,6 +153,37 @@ describe('resolveEffectiveProviderOptions', () => {
     expect(result).toEqual({
       codex: { skills: { repo: false, user: true } },
     });
+  });
+
+  it('permissionControl is resolved with normal provider-option precedence', () => {
+    const result = resolveEffectiveProviderOptions(
+      'project',
+      (path: string) => (path === 'codex.permissionControl' ? 'env' : 'local'),
+      {
+        codex: { permissionControl: 'takt' },
+      },
+      {
+        codex: { permissionControl: 'codex' },
+      },
+    );
+
+    expect(result).toEqual({
+      codex: { permissionControl: 'takt' },
+    });
+  });
+
+  it('rejects permissionControl codex when network access survives merge', () => {
+    expect(() => mergeProviderOptions(
+      { codex: { networkAccess: true } },
+      { codex: { permissionControl: 'codex' } },
+    )).toThrow();
+
+    expect(() => resolveEffectiveProviderOptions(
+      'project',
+      undefined,
+      { codex: { networkAccess: true } },
+      { codex: { permissionControl: 'codex' } },
+    )).toThrow();
   });
 
   it('Claude Skill enabled resolves false from config even when other Claude leaves come from the step', () => {
@@ -598,13 +705,17 @@ describe('resolveProviderOptionsSources (all paths)', () => {
   it('returns only paths with a defined source', () => {
     const result = resolveProviderOptionsSources(
       { claude: { effort: 'xhigh' } },
-      [{ source: 'persona_providers', options: { codex: { reasoningEffort: 'high' } } }],
+      [{ source: 'persona_providers', options: {
+        codex: { fastMode: false, permissionControl: 'codex', reasoningEffort: 'high' },
+      } }],
       { copilot: { effort: 'medium' } },
       undefined,
       'global',
     );
     expect(result).toEqual({
       'claude.effort': 'step',
+      'codex.fastMode': 'persona_providers',
+      'codex.permissionControl': 'persona_providers',
       'codex.reasoningEffort': 'persona_providers',
       'copilot.effort': 'global',
     });
@@ -693,6 +804,34 @@ describe('resolveProviderOptionsSources (all paths)', () => {
       'kiro.agent': 'step',
     });
   });
+
+  it('includes pi SDK options in resolved sources when set', () => {
+    const result = resolveProviderOptionsSources(
+      {
+        pi: {
+          extensions: ['npm:example-extension'],
+          noExtensions: true,
+          noSkills: true,
+          noPromptTemplates: true,
+          noThemes: true,
+          noContextFiles: true,
+        },
+      },
+      [],
+      undefined,
+      undefined,
+      undefined,
+    );
+
+    expect(result).toEqual({
+      'pi.extensions': 'step',
+      'pi.noExtensions': 'step',
+      'pi.noSkills': 'step',
+      'pi.noPromptTemplates': 'step',
+      'pi.noThemes': 'step',
+      'pi.noContextFiles': 'step',
+    });
+  });
 });
 
 describe('providerOptionsContract', () => {
@@ -702,8 +841,11 @@ describe('providerOptionsContract', () => {
     expect(envPaths).toEqual(new Set([
       'provider_options',
       'provider_options.codex.base_url',
+      'provider_options.codex.fast_mode',
       'provider_options.codex.network_access',
+      'provider_options.codex.permission_control',
       'provider_options.codex.reasoning_effort',
+      'provider_options.codex.guards.call_timeout_ms',
       'provider_options.codex.skills.repo',
       'provider_options.codex.skills.user',
       'provider_options.opencode.network_access',
@@ -717,21 +859,44 @@ describe('providerOptionsContract', () => {
       'provider_options.opencode.guards.reasoning_byte_limit',
       'provider_options.claude.base_url',
       'provider_options.claude.effort',
+      'provider_options.claude.guards.call_timeout_ms',
       'provider_options.claude.skills.enabled',
       'provider_options.claude.sandbox.allow_unsandboxed_commands',
       'provider_options.claude.sandbox.excluded_commands',
       'provider_options.claude_terminal.backend',
+      'provider_options.claude_terminal.guards.call_timeout_ms',
       'provider_options.claude_terminal.timeout_ms',
       'provider_options.claude_terminal.keep_session',
       'provider_options.claude_terminal.transcript_poll_interval_ms',
       'provider_options.copilot.effort',
+      'provider_options.copilot.guards.call_timeout_ms',
       'provider_options.kiro.agent',
+      'provider_options.kiro.guards.call_timeout_ms',
+      'provider_options.cursor.guards.call_timeout_ms',
+      'provider_options.deepseek_harness.python_path',
+      'provider_options.deepseek_harness.base_url',
+      'provider_options.deepseek_harness.session_root',
+      'provider_options.deepseek_harness.cordis',
+      'provider_options.deepseek_harness.max_tokens',
+      'provider_options.deepseek_harness.request_timeout_ms',
+      'provider_options.deepseek_harness.shutdown_timeout_ms',
+      'provider_options.deepseek_harness.runtime_mode',
+      'provider_options.pi.extensions',
+      'provider_options.pi.guards.call_timeout_ms',
+      'provider_options.pi.no_extensions',
+      'provider_options.pi.no_skills',
+      'provider_options.pi.no_prompt_templates',
+      'provider_options.pi.no_themes',
+      'provider_options.pi.no_context_files',
     ]));
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.base_url');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.fast_mode');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude.base_url');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude.allowed_tools');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude.skills.enabled');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.reasoning_effort');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.permission_control');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.guards.call_timeout_ms');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.skills.repo');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.skills.user');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.opencode.variant');
@@ -741,12 +906,27 @@ describe('providerOptionsContract', () => {
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.opencode.guards.event_limit');
     expect(PROVIDER_OPTIONS_TRACKED_KEYS).toContain('provider_options.opencode.guards.event_limit');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.copilot.effort');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.copilot.guards.call_timeout_ms');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude_terminal.timeout_ms');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude_terminal.guards.call_timeout_ms');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.kiro');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.kiro.agent');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.kiro.guards.call_timeout_ms');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.cursor.guards.call_timeout_ms');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.deepseek_harness');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.deepseek_harness.base_url');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.pi');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.pi.guards.call_timeout_ms');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.pi.extensions');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.pi.no_extensions');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.pi.no_skills');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.pi.no_prompt_templates');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.pi.no_themes');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.pi.no_context_files');
     expect(PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATHS).toEqual([
       'provider_options.codex.base_url',
       'provider_options.claude.base_url',
+      'provider_options.deepseek_harness.base_url',
     ]);
   });
 
@@ -757,6 +937,8 @@ describe('providerOptionsContract', () => {
   it('maps internal provider option paths to traced-config paths', () => {
     expect(toProviderOptionsTracePath('codex.baseUrl'))
       .toBe('provider_options.codex.base_url');
+    expect(toProviderOptionsTracePath('codex.fastMode'))
+      .toBe('provider_options.codex.fast_mode');
     expect(toProviderOptionsTracePath('claude.baseUrl'))
       .toBe('provider_options.claude.base_url');
     expect(toProviderOptionsTracePath('claude.sandbox.allowUnsandboxedCommands'))
@@ -767,6 +949,10 @@ describe('providerOptionsContract', () => {
       .toBe('provider_options.claude.skills.enabled');
     expect(toProviderOptionsTracePath('codex.reasoningEffort'))
       .toBe('provider_options.codex.reasoning_effort');
+    expect(toProviderOptionsTracePath('codex.permissionControl'))
+      .toBe('provider_options.codex.permission_control');
+    expect(toProviderOptionsTracePath('codex.guards.callTimeoutMs'))
+      .toBe('provider_options.codex.guards.call_timeout_ms');
     expect(toProviderOptionsTracePath('codex.skills.repo'))
       .toBe('provider_options.codex.skills.repo');
     expect(toProviderOptionsTracePath('codex.skills.user'))
@@ -783,14 +969,31 @@ describe('providerOptionsContract', () => {
       .toBe('provider_options.claude_terminal.transcript_poll_interval_ms');
     expect(toProviderOptionsTracePath('kiro.agent'))
       .toBe('provider_options.kiro.agent');
+    expect(toProviderOptionsTracePath('deepseekHarness.requestTimeoutMs'))
+      .toBe('provider_options.deepseek_harness.request_timeout_ms');
+    expect(toProviderOptionsTracePath('pi.extensions'))
+      .toBe('provider_options.pi.extensions');
+    expect(toProviderOptionsTracePath('pi.noExtensions'))
+      .toBe('provider_options.pi.no_extensions');
+    expect(toProviderOptionsTracePath('pi.noSkills'))
+      .toBe('provider_options.pi.no_skills');
+    expect(toProviderOptionsTracePath('pi.noPromptTemplates'))
+      .toBe('provider_options.pi.no_prompt_templates');
+    expect(toProviderOptionsTracePath('pi.noThemes'))
+      .toBe('provider_options.pi.no_themes');
+    expect(toProviderOptionsTracePath('pi.noContextFiles'))
+      .toBe('provider_options.pi.no_context_files');
   });
 
   it('enumerates only present provider option leaves', () => {
     expect(getPresentProviderOptionPaths({
       codex: {
         baseUrl: 'http://127.0.0.1:8787/v1',
+        fastMode: false,
         networkAccess: true,
+        permissionControl: 'takt',
         reasoningEffort: 'high',
+        guards: { callTimeoutMs: 120_000 },
         skills: { repo: false, user: true },
       },
       opencode: {
@@ -801,15 +1004,20 @@ describe('providerOptionsContract', () => {
       claude: {
         baseUrl: 'http://127.0.0.1:8787',
         effort: 'medium',
+        guards: { callTimeoutMs: 180_000 },
         sandbox: { excludedCommands: ['rm -rf'] },
         skills: { enabled: false },
       },
-      claudeTerminal: { backend: 'tmux', keepSession: false },
-      copilot: { effort: 'high' },
+      claudeTerminal: { backend: 'tmux', guards: { callTimeoutMs: 240_000 }, keepSession: false },
+      copilot: { effort: 'high', guards: { callTimeoutMs: 300_000 } },
+      cursor: { guards: { callTimeoutMs: 360_000 } },
     } as Parameters<typeof getPresentProviderOptionPaths>[0])).toEqual([
       'codex.baseUrl',
+      'codex.fastMode',
       'codex.networkAccess',
+      'codex.permissionControl',
       'codex.reasoningEffort',
+      'codex.guards.callTimeoutMs',
       'codex.skills.repo',
       'codex.skills.user',
       'opencode.variant',
@@ -817,11 +1025,15 @@ describe('providerOptionsContract', () => {
       'opencode.guards.eventLimit',
       'claude.baseUrl',
       'claude.effort',
+      'claude.guards.callTimeoutMs',
       'claude.sandbox.excludedCommands',
       'claude.skills.enabled',
       'claudeTerminal.backend',
+      'claudeTerminal.guards.callTimeoutMs',
       'claudeTerminal.keepSession',
       'copilot.effort',
+      'copilot.guards.callTimeoutMs',
+      'cursor.guards.callTimeoutMs',
     ]);
   });
 
@@ -834,6 +1046,34 @@ describe('providerOptionsContract', () => {
   it('does not enumerate kiro.agent for an empty kiro entry', () => {
     expect(getPresentProviderOptionPaths({
       kiro: {},
+    })).toEqual([]);
+  });
+
+  it('enumerates pi SDK options when present', () => {
+    expect(getPresentProviderOptionPaths({
+      pi: {
+        guards: { callTimeoutMs: 420_000 },
+        extensions: ['npm:example-extension'],
+        noExtensions: true,
+        noSkills: true,
+        noPromptTemplates: true,
+        noThemes: true,
+        noContextFiles: true,
+      },
+    })).toEqual([
+      'pi.extensions',
+      'pi.guards.callTimeoutMs',
+      'pi.noExtensions',
+      'pi.noSkills',
+      'pi.noPromptTemplates',
+      'pi.noThemes',
+      'pi.noContextFiles',
+    ]);
+  });
+
+  it('does not enumerate Pi SDK options for an empty pi entry', () => {
+    expect(getPresentProviderOptionPaths({
+      pi: {},
     })).toEqual([]);
   });
 });
@@ -977,10 +1217,18 @@ describe('claude_terminal provider_options normalization', () => {
   it('Given provider option trace paths, When listing paths, Then claudeTerminal leaves are included', () => {
     expect(PROVIDER_OPTION_PATHS).toEqual(expect.arrayContaining([
       'claudeTerminal.backend',
+      'claudeTerminal.guards.callTimeoutMs',
       'claudeTerminal.timeoutMs',
       'claudeTerminal.keepSession',
       'claudeTerminal.transcriptPollIntervalMs',
       'opencode.guards.eventLimit',
+      'claude.guards.callTimeoutMs',
+      'codex.guards.callTimeoutMs',
+      'codex.fastMode',
+      'copilot.guards.callTimeoutMs',
+      'kiro.guards.callTimeoutMs',
+      'cursor.guards.callTimeoutMs',
+      'pi.guards.callTimeoutMs',
     ]));
   });
 

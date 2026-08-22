@@ -146,6 +146,32 @@ describe('TaskExecutionConfigSchema', () => {
     expect(config.start_step).toBe('plan');
   });
 
+  it('should read the legacy start_movement key as start_step', () => {
+    const config = TaskExecutionConfigSchema.parse({
+      start_movement: 'develop',
+    }) as Record<string, unknown>;
+
+    expect(config.start_step).toBe('develop');
+    expect(config.start_movement).toBeUndefined();
+  });
+
+  it('should prefer start_step when the legacy start_movement key is also present', () => {
+    const config = TaskExecutionConfigSchema.parse({
+      start_step: 'plan',
+      start_movement: 'develop',
+    }) as Record<string, unknown>;
+
+    expect(config.start_step).toBe('plan');
+    expect(config.start_movement).toBeUndefined();
+  });
+
+  it('should not let the legacy start_movement key mask a non-string start_step', () => {
+    expect(() => TaskExecutionConfigSchema.parse({
+      start_step: 123,
+      start_movement: 'develop',
+    })).toThrow();
+  });
+
   it('should require occurrence and accept omitted or positive integer step iterations', () => {
     const baseResumePoint = {
       version: 2,
@@ -231,8 +257,29 @@ describe('TaskExecutionConfigSchema', () => {
     })).not.toThrow();
   });
 
-  it('should round-trip dynamic parallel resume selections', () => {
-    const parsed = TaskExecutionConfigSchema.parse({
+  it.each([
+    ['dynamic_parallel_selections', {
+      '{"workflow":"default","step":"reviewers","calls":[]}': {
+        identity: '{"workflow":"default","step":"reviewers","calls":[]}',
+        step_name: 'reviewers',
+        round: 1,
+        selected_pool_ids: ['frontend'],
+        effective_selection_ids: ['architecture', 'frontend'],
+      },
+    }],
+    ['dynamic_facet_selections', {
+      '{"workflow":"default","step":"fix","calls":[]}': {
+        identity: '{"workflow":"default","step":"fix","calls":[]}',
+        step_name: 'fix',
+        round: 1,
+        selected_ids: ['frontend'],
+        selected_policy_refs: [],
+        selected_knowledge_refs: [],
+        rationale: 'frontend is relevant',
+      },
+    }],
+  ] as const)('should reject legacy resume point field %s', (field, value) => {
+    const result = TaskExecutionConfigSchema.safeParse({
       resume_point: {
         version: 2,
         stack: [{
@@ -244,21 +291,22 @@ describe('TaskExecutionConfigSchema', () => {
         }],
         iteration: 3,
         elapsed_ms: 100,
-        dynamic_parallel_selections: {
-          '{"workflow":"default","step":"reviewers","calls":[]}': {
-            identity: '{"workflow":"default","step":"reviewers","calls":[]}',
-            step_name: 'reviewers',
-            round: 1,
-            selected_pool_ids: ['frontend'],
-            effective_selection_ids: ['architecture', 'frontend'],
-          },
-        },
+        [field]: value,
         workflow_call_invocations: {},
         workflow_step_participations: {},
       },
     });
 
-    expect(parsed.resume_point?.dynamic_parallel_selections).toBeDefined();
+    expect(result.success).toBe(false);
+    if (result.success) throw new Error(`Expected legacy field ${field} to be rejected`);
+    const issue = result.error.issues.find(({ code, path }) =>
+      code === 'custom' && path.length === 1 && path[0] === 'resume_point');
+    expect(issue).toMatchObject({
+      code: 'custom',
+      path: ['resume_point'],
+    });
+    expect(issue?.message).toContain('Unrecognized key');
+    expect(issue?.message).toContain(`"${field}"`);
   });
 
   it('should round-trip the canonical workflow-call invocation index', () => {
@@ -339,40 +387,14 @@ describe('TaskExecutionConfigSchema', () => {
   );
 
 
-  it('should reject conflicting start_step and start_movement values', () => {
+  it('should reject non-string start_step values', () => {
     expect(() => TaskExecutionConfigSchema.parse({
-      start_step: 'plan',
-      start_movement: 'implement',
-    })).toThrow('start_step and start_movement must match when both are set');
-  });
-
-  it('should return safeParse failure instead of throwing for conflicting start_step and start_movement values', () => {
-    const input = {
-      start_step: 'plan',
-      start_movement: 'implement',
-    };
-
-    expect(() => TaskExecutionConfigSchema.safeParse(input)).not.toThrow();
-    const result = TaskExecutionConfigSchema.safeParse(input);
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          message: 'start_step and start_movement must match when both are set',
-          path: ['start_movement'],
-        }),
-      ]));
-    }
-  });
-
-  it('should reject non-string start_movement values', () => {
-    expect(() => TaskExecutionConfigSchema.parse({
-      start_movement: 123,
+      start_step: 123,
     })).toThrow();
   });
 
 
-  it('should serialize canonical task keys as workflow and start_movement', () => {
+  it('should serialize canonical task keys as workflow and start_step', () => {
     const serialized = serializeTaskRecord({
       ...makePendingRecord(),
       workflow: 'unit-test',
@@ -381,7 +403,7 @@ describe('TaskExecutionConfigSchema', () => {
 
     expect(serialized).toMatchObject({
       workflow: 'unit-test',
-      start_movement: 'plan',
+      start_step: 'plan',
     });
   });
 
@@ -400,26 +422,6 @@ describe('TaskExecutionConfigSchema', () => {
 describe('TaskFileSchema', () => {
   it('should accept valid task with required fields', () => {
     expect(() => TaskFileSchema.parse({ task: 'do something' })).not.toThrow();
-  });
-
-  it('should return safeParse failure instead of throwing for conflicting start_step and start_movement values', () => {
-    const input = {
-      task: 'do something',
-      start_step: 'plan',
-      start_movement: 'implement',
-    };
-
-    expect(() => TaskFileSchema.safeParse(input)).not.toThrow();
-    const result = TaskFileSchema.safeParse(input);
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          message: 'start_step and start_movement must match when both are set',
-          path: ['start_movement'],
-        }),
-      ]));
-    }
   });
 
   it('should reject empty task string', () => {
@@ -452,26 +454,6 @@ describe('TaskRecordSchema', () => {
   describe('pending status', () => {
     it('should accept valid pending record', () => {
       expect(() => TaskRecordSchema.parse(makePendingRecord())).not.toThrow();
-    });
-
-    it('should return safeParse failure instead of throwing for conflicting start_step and start_movement values', () => {
-      const input = {
-        ...makePendingRecord(),
-        start_step: 'plan',
-        start_movement: 'implement',
-      };
-
-      expect(() => TaskRecordSchema.safeParse(input)).not.toThrow();
-      const result = TaskRecordSchema.safeParse(input);
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(result.error.issues).toEqual(expect.arrayContaining([
-          expect.objectContaining({
-            message: 'start_step and start_movement must match when both are set',
-            path: ['start_movement'],
-          }),
-        ]));
-      }
     });
 
     it('should reject pending record with started_at', () => {

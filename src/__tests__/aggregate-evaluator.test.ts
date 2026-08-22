@@ -50,10 +50,21 @@ function state(indexes: Record<string, number>): WorkflowState {
     stepIterations: new Map(),
     restoredStepIterationNames: new Set(),
     dynamicParallelSelections: new Map(),
-    resumedDynamicParallelSteps: new Set(),
     personaSessions: new Map(),
     userInputs: [],
   };
+}
+
+function stateWithError(stepName: string): WorkflowState {
+  const evaluatedState = state({ architecture: 0, coding: 0 });
+  evaluatedState.stepOutputs.set(stepName, {
+    persona: stepName,
+    status: 'error',
+    content: '',
+    error: 'Part timeout after 100ms',
+    timestamp: new Date(),
+  });
+  return evaluatedState;
 }
 
 describe('AggregateEvaluator', () => {
@@ -67,6 +78,14 @@ describe('AggregateEvaluator', () => {
   it('any() はいずれかのsub-stepの確定ラベルが一致するとき真になる', () => {
     expect(new AggregateEvaluator(parent(), state({ architecture: 0, coding: 1 }))
       .evaluateCondition(aggregate('any("needs_fix")'))).toBe(true);
+  });
+
+  it('terminal error を明示的な error 集約ラベルとして評価する', () => {
+    const evaluatedState = stateWithError('coding');
+    const evaluator = new AggregateEvaluator(parent(), evaluatedState);
+
+    expect(evaluator.evaluateCondition(aggregate('any("error")'))).toBe(true);
+    expect(evaluator.evaluateCondition(aggregate('all("approved")'))).toBe(false);
   });
 
   it('uses the active canonical dynamic selection instead of another snapshot with the same step name', () => {

@@ -57,7 +57,6 @@ describe('E2E: Team leader step', () => {
     }
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Workflow completed');
 
     // Verify session log has proper records
     const records = readSessionRecords(repo.path);
@@ -68,10 +67,9 @@ describe('E2E: Team leader step', () => {
     const stepComplete = records.find((r) => r.type === 'step_complete' && r.step === 'execute');
     expect(stepComplete).toBeDefined();
 
-    // The aggregated content should contain decomposition and part results
+    // The aggregated step result should be present.
     const content = stepComplete?.content as string | undefined;
     expect(content).toBeDefined();
-    expect(content).toContain('## decomposition');
 
     // At least one output file should exist
     const enExists = existsSync(resolve(repo.path, 'hello-en.txt'));

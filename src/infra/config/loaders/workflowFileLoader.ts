@@ -1,7 +1,8 @@
 import { dirname } from 'node:path';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { parse as parseYaml } from 'yaml';
-import type { WorkflowConfig } from '../../../core/models/index.js';
+import type { WorkflowCallArgValue, WorkflowConfig } from '../../../core/models/index.js';
+import { isNormalOrTeamLeaderWorkflowStep } from '../../../core/models/types.js';
 import { getRepertoireDir } from '../paths.js';
 import { resolveWorkflowConfigValue } from '../resolveWorkflowConfigValue.js';
 import { loadGlobalConfig } from '../global/globalConfig.js';
@@ -23,10 +24,12 @@ import {
 } from './workflowSourceMetadata.js';
 import type { WorkflowCallArgResolutionPolicy } from './workflowCallableArgResolver.js';
 import { resolveWorkflowTrustInfo, type WorkflowTrustInfo } from './workflowTrustSource.js';
+import { buildConfiguredCompanionLookupDirs } from './companionLookupDirectories.js';
+import { loadCompanionDefinition } from './companionDefinitionLoader.js';
 
 interface LoadWorkflowFromFileOptions {
   trustInfo?: WorkflowTrustInfo;
-  callableArgs?: Record<string, string | string[]>;
+  callableArgs?: Record<string, WorkflowCallArgValue>;
   callableArgPolicy?: WorkflowCallArgResolutionPolicy;
 }
 
@@ -99,6 +102,24 @@ function loadWorkflowFromFileInternal(
       workflowTrustInfo: trustInfo,
     },
   );
+  const companionNames = new Set<string>();
+  for (const step of config.steps) {
+    if (!isNormalOrTeamLeaderWorkflowStep(step) || step.companion === undefined) continue;
+    for (const name of step.companion.fixed) companionNames.add(name);
+    for (const name of step.companion.pool) companionNames.add(name);
+    if (step.companion.moderator !== undefined) companionNames.add(step.companion.moderator);
+  }
+  if (companionNames.size > 0) {
+    const candidateDirs = buildConfiguredCompanionLookupDirs(projectDir, context.lang);
+    config.companions = Object.fromEntries([...companionNames].map((name) => [
+      name,
+      loadCompanionDefinition(name, {
+        candidateDirs,
+        language: context.lang,
+        facetContext: context,
+      }),
+    ]));
+  }
   attachWorkflowOpaqueRef(config, buildOpaqueWorkflowRef(canonicalFilePath, trustInfo));
   attachWorkflowSourcePath(config, canonicalFilePath);
   attachWorkflowTrustInfo(config, trustInfo);

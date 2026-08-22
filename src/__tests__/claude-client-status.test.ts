@@ -71,7 +71,7 @@ describe('ClaudeClient status normalization', () => {
     );
   });
 
-  it('should pass strict read-only internal agent isolation to executeClaudeCli', async () => {
+  it('should pass explicitly configured runtime permissions to executeClaudeCli', async () => {
     mockExecuteClaudeCli.mockResolvedValue({
       success: true,
       content: 'done',
@@ -81,7 +81,6 @@ describe('ClaudeClient status normalization', () => {
 
     await client.callCustom('selector', 'Select reviewers', 'selector system prompt', {
       ...options,
-      internalAgentIsolation: 'strict-readonly',
       permissionMode: 'readonly',
       allowedTools: [],
       mcpServers: {},
@@ -90,10 +89,30 @@ describe('ClaudeClient status normalization', () => {
     expect(mockExecuteClaudeCli).toHaveBeenCalledWith(
       'Select reviewers',
       expect.objectContaining({
-        internalAgentIsolation: 'strict-readonly',
         permissionMode: 'readonly',
         allowedTools: [],
         mcpServers: {},
+      }),
+    );
+  });
+
+  it('should pass the internal isolation marker to the SDK executor', async () => {
+    mockExecuteClaudeCli.mockResolvedValue({
+      success: true,
+      content: 'done',
+      sessionId: 'selector-session',
+    });
+    const client = new ClaudeClient();
+
+    await client.callCustom('selector', 'Select reviewers', '', {
+      ...options,
+      internalAgentIsolation: 'strict-readonly',
+    });
+
+    expect(mockExecuteClaudeCli).toHaveBeenCalledWith(
+      'Select reviewers',
+      expect.objectContaining({
+        internalAgentIsolation: 'strict-readonly',
       }),
     );
   });

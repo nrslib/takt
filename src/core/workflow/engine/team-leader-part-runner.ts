@@ -9,13 +9,14 @@ import type { ParallelLogger } from './parallel-logger.js';
 import type { ProviderType } from '../../../shared/types/provider.js';
 import { createPartStep } from './team-leader-common.js';
 import { getErrorMessage } from '../../../shared/utils/index.js';
-import { classifyAbortSignalReason } from '../../../shared/types/agent-failure.js';
+import type { StepProviderInfo } from '../types.js';
+import {
+  classifyAbortSignalReason,
+  isAgentFailureError,
+} from '../../../shared/types/agent-failure.js';
+import { hasWorkflowStepCallTimeoutGuard } from './step-deadline.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
-import { buildSessionlessPartCompletionInspectionOptions } from './team-leader-part-completion-inspection.js';
 import { isTeamLeaderPartCancellation } from './team-leader-part-cancellation.js';
-import type {
-  FindingContractControlValidationIssue,
-} from '../team-leader-finding-contract-control-validation.js';
 import {
   ExplicitPartFailureError,
   OperationRecoveryError,
@@ -33,6 +34,9 @@ export interface TeamLeaderPartObservability {
 export interface TeamLeaderPartExecutionOptions {
   readonly forceNewSession: boolean;
   readonly onDispatch?: RunAgentOptions['onDispatch'];
+  readonly composeOptions?: (options: RunAgentOptions) => RunAgentOptions;
+  readonly deadlineSignal?: AbortSignal;
+  readonly providerInfo: StepProviderInfo;
 }
 
 export function buildPartScopedSessionKey(
@@ -65,9 +69,10 @@ export async function runTeamLeaderPart(
   executionOptions?: TeamLeaderPartExecutionOptions,
 ): Promise<PartResult> {
   const partStep = createPartStep(step, part);
-  const partProviderInfo = runtime
-    ? optionsBuilder.resolveStepProviderModel(partStep, runtime)
-    : optionsBuilder.resolveStepProviderModel(partStep);
+  const partProviderInfo = executionOptions?.providerInfo
+    ?? (runtime
+      ? optionsBuilder.resolveStepProviderModel(partStep, runtime)
+      : optionsBuilder.resolveStepProviderModel(partStep));
   const resolvedBaseOptions = optionsBuilder.buildAgentOptions(partStep, {
     ...runtime,
     providerInfo: partProviderInfo,
@@ -79,11 +84,30 @@ export async function runTeamLeaderPart(
   const baseOptions = executionOptions?.forceNewSession === true
     ? { ...resolvedBaseOptions, sessionId: undefined }
     : resolvedBaseOptions;
-  const { signal, dispose } = buildAbortSignal(
-    defaultTimeoutMs,
-    executionAbortSignal ?? baseOptions.abortSignal,
-  );
-  const options = parallelLogger
+  const deadlineSignal = executionOptions?.deadlineSignal;
+  let signal: AbortSignal;
+  let dispose: () => void;
+  if (deadlineSignal === undefined) {
+    const legacyDeadline = buildAbortSignal(
+      defaultTimeoutMs,
+      executionAbortSignal ?? baseOptions.abortSignal,
+    );
+    signal = legacyDeadline.signal;
+    dispose = legacyDeadline.dispose;
+  } else {
+    const legacyDeadline = !hasWorkflowStepCallTimeoutGuard(
+      partProviderInfo.provider,
+      partProviderInfo.providerOptions,
+    )
+      ? buildAbortSignal(defaultTimeoutMs, executionAbortSignal ?? baseOptions.abortSignal)
+      : undefined;
+    const signals = [executionAbortSignal, deadlineSignal, legacyDeadline?.signal].filter(
+      (candidate): candidate is AbortSignal => candidate !== undefined,
+    );
+    signal = signals.length === 1 ? signals[0]! : AbortSignal.any(signals);
+    dispose = legacyDeadline?.dispose ?? (() => {});
+  }
+  const baseRunOptions = parallelLogger
     ? {
       ...baseOptions,
       abortSignal: signal,
@@ -100,6 +124,7 @@ export async function runTeamLeaderPart(
       abortSignal: signal,
       onDispatch: executionOptions?.onDispatch,
     };
+  const options = executionOptions?.composeOptions?.(baseRunOptions) ?? baseRunOptions;
 
   try {
     const partInstruction = buildInstruction(partStep);
@@ -171,53 +196,6 @@ export async function runTeamLeaderPart(
   }
 }
 
-export async function requestTeamLeaderPartCompletionCorrection(
-  optionsBuilder: OptionsBuilder,
-  step: WorkflowStep,
-  part: PartDefinition,
-  instruction: string,
-  sessionId: string | undefined,
-  abortSignal: AbortSignal,
-  issues: readonly FindingContractControlValidationIssue[],
-  runtime?: RuntimeStepResolution,
-): Promise<AgentResponse> {
-  const partStep = createPartStep(step, part);
-  const schemaOptions = optionsBuilder.buildAgentOptions(partStep, runtime);
-  let correctionOptions: RunAgentOptions;
-  if (sessionId === undefined) {
-    const newSessionOptions = optionsBuilder.buildNewSessionReportOptions(
-      partStep,
-      { allowedTools: [], maxTurns: undefined },
-      runtime,
-    );
-    const inspectionOptions = buildSessionlessPartCompletionInspectionOptions(
-      newSessionOptions.cwd,
-      newSessionOptions.resolvedProvider,
-      issues,
-    );
-    correctionOptions = {
-      ...newSessionOptions,
-      ...inspectionOptions,
-    };
-  } else {
-    correctionOptions = optionsBuilder.buildResumeOptions(
-      partStep,
-      sessionId,
-      { maxTurns: undefined },
-      runtime,
-    );
-  }
-  const response = await executeAgent(partStep.persona, instruction, {
-    ...correctionOptions,
-    abortSignal,
-    outputSchema: schemaOptions.outputSchema,
-  });
-  return {
-    ...response,
-    persona: partStep.name,
-  };
-}
-
 export function buildTeamLeaderErrorPartResult(
   step: WorkflowStep,
   part: PartDefinition,
@@ -226,14 +204,18 @@ export function buildTeamLeaderErrorPartResult(
 ): PartResult {
   const message = getErrorMessage(error);
   const failure = abortSignal?.aborted ? classifyAbortSignalReason(abortSignal.reason) : undefined;
-  const errorMsg = failure ? failure.reason : message;
+  const errorMsg = failure ? failure.reason : isAgentFailureError(error) ? error.reason : message;
   const errorResponse: AgentResponse = {
     persona: `${step.name}.${part.id}`,
     status: 'error',
     content: '',
     timestamp: new Date(),
     error: errorMsg,
-    ...(failure ? { failureCategory: failure.category } : {}),
+    ...(failure
+      ? { failureCategory: failure.category }
+      : isAgentFailureError(error)
+        ? { failureCategory: error.failureCategory }
+        : {}),
   };
   return { part, response: errorResponse };
 }

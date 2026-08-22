@@ -6,18 +6,27 @@ import type {
   PartResult,
   WorkflowMaxSteps,
   WorkflowResumePointEntry,
-  FindingContractConfig,
+  AgentWorkflowStep,
 } from '../../models/types.js';
 import { ParallelLogger } from './parallel-logger.js';
 import { incrementStepIteration } from './state-manager.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
-import { runTeamLeaderExecution } from './team-leader-execution.js';
+import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
+import { truncateUtf8PreservingMarker, truncateUtf8WithMarker } from '../../../shared/utils/text.js';
 import {
-  buildFindingContractTeamLeaderAggregatedContent,
-  buildTeamLeaderAggregatedContent,
-  type TeamLeaderArtifactReference,
-} from './team-leader-aggregation.js';
+  AGENT_FAILURE_CATEGORIES,
+  MAX_AGENT_FAILURE_MESSAGE_BYTES,
+  createProviderStreamParseError,
+  isProviderStreamParseError,
+} from '../../../shared/types/agent-failure.js';
+import { runTeamLeaderExecution } from './team-leader-execution.js';
+import { buildTeamLeaderAggregatedContent } from './team-leader-aggregation.js';
 import { createPartStep, createTeamLeaderPlanningStep, resolvePartErrorDetail, summarizeParts } from './team-leader-common.js';
+import {
+  buildTeamLeaderPartReportPath,
+  summarizePartResultForFeedback,
+  writeTeamLeaderPartResultReport,
+} from './team-leader-part-report.js';
 import { buildTeamLeaderParallelLoggerOptions, emitTeamLeaderProgressHint } from './team-leader-streaming.js';
 import {
   collectUncoveredPartTimeoutIds,
@@ -38,70 +47,100 @@ import type {
 } from '../types.js';
 import type { RuntimeStepResolution, StepProviderInfo, StepRunResult } from '../types.js';
 import {
-  buildPartScopedSessionKey,
   buildTeamLeaderErrorPartResult,
-  createExplicitPartFailure,
   runTeamLeaderPart,
 } from './team-leader-part-runner.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 import { buildPhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js';
-import { resolveInspectToolsForProvider } from './engine-provider-options.js';
+import { resolveInspectToolsForProvider, isTeamLeaderInspectGuidanceApplicable } from './engine-provider-options.js';
 import {
   createRoutingScope,
   resolveAutoRoutingBatch,
   resolveAutoRoutingRuntime,
 } from '../auto-routing/resolver.js';
-import { buildRoutingFindings, buildRoutingWorkSnapshot } from '../auto-routing/snapshot.js';
+import { buildRoutingWorkSnapshot } from '../auto-routing/snapshot.js';
 import { InstructionBuildTransaction } from './instruction-build-transaction.js';
 import { recordAgentUsageEvent } from './agent-usage-event.js';
-import type { FindingLedgerStore } from '../findings/store.js';
 import type { RunPaths } from '../run/run-paths.js';
-import {
-  buildFindingContractPartIndexEntry,
-  appendFindingContractPartAssignmentInstruction,
-  buildLatestFindingContractDigests,
-} from '../team-leader-finding-contract.js';
-import {
-  type FindingContractRecoveryAttemptEvent,
-  type FindingContractRecoveryPromptContext,
-} from './team-leader-finding-contract-recovery.js';
-import type {
-  FindingContractRejectedDecisionDigest,
-} from '../team-leader-finding-contract-decision-validation.js';
-import type {
-  FindingContractRejectedPartCompletionDigest,
-} from '../team-leader-finding-contract-part-completion-validation.js';
-import type {
-  FindingContractRejectedDecompositionDigest,
-} from '../team-leader-finding-contract-decomposition-validation.js';
-import { buildFindingContractDecisionEvidenceSnapshot } from '../team-leader-finding-contract-evidence.js';
-import {
-  type FindingContractOperationBoundary,
-} from './team-leader-finding-contract-operation-journal.js';
 import type {
   TeamLeaderExecutionPublicationFence,
 } from './team-leader-execution-terminal.js';
-import {
-  validateOrRecoverFindingContractPartCompletion,
-} from './team-leader-finding-contract-part-completion-recovery.js';
-import { FindingContractTeamLeaderCoordinator } from './team-leader-finding-contract-coordinator.js';
 import { createAbortScope } from './abort-signal.js';
 import { isTeamLeaderPartCancellation } from './team-leader-part-cancellation.js';
+import type {
+  WorkflowStepInactivityDeadline,
+  WorkflowStepExecutionDeadlineContext,
+} from './step-deadline.js';
 
 const log = createLogger('team-leader-runner');
+
+async function runWithExecutionDeadline<T>(
+  context: WorkflowStepExecutionDeadlineContext | undefined,
+  deadline: WorkflowStepInactivityDeadline | undefined,
+  operation: () => Promise<T>,
+): Promise<T> {
+  if (context === undefined || deadline === undefined) {
+    return operation();
+  }
+  return context.runWith(deadline, operation);
+}
+
+function combineAbortSignals(signals: readonly (AbortSignal | undefined)[]): AbortSignal | undefined {
+  const activeSignals = signals.filter((signal): signal is AbortSignal => signal !== undefined);
+  if (activeSignals.length === 0) {
+    return undefined;
+  }
+  if (activeSignals.length === 1) {
+    return activeSignals[0];
+  }
+  return AbortSignal.any(activeSignals);
+}
+
+function truncateTeamLeaderFailureContent(text: string): string {
+  if (Buffer.byteLength(text, 'utf8') <= MAX_AGENT_FAILURE_MESSAGE_BYTES) {
+    return text;
+  }
+
+  const markers = text.match(/\[TRUNCATED: [^\]]+\]/gu);
+  if (markers === null || markers.length < 2) {
+    return truncateUtf8PreservingMarker(text, MAX_AGENT_FAILURE_MESSAGE_BYTES);
+  }
+
+  const markerSuffix = markers.join(' ');
+  const textWithoutMarkers = text.replace(/\[TRUNCATED: [^\]]+\]/gu, '').trimEnd();
+  const textWithMarkersAtEnd = textWithoutMarkers.length === 0
+    ? markerSuffix
+    : `${textWithoutMarkers} ${markerSuffix}`;
+  return truncateUtf8WithMarker(
+    textWithMarkersAtEnd,
+    MAX_AGENT_FAILURE_MESSAGE_BYTES,
+    () => markerSuffix,
+  );
+}
+
+function selectPrimaryTeamLeaderFailure(failedResults: readonly PartResult[]): PartResult {
+  const primaryFailure = failedResults.find(
+    (result) => result.response.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+  )
+    ?? failedResults.find((result) => result.response.failureCategory !== undefined)
+    ?? failedResults[0];
+  if (primaryFailure === undefined) {
+    throw new Error('Team leader failure aggregation requires at least one failed part');
+  }
+  return primaryFailure;
+}
 
 export interface TeamLeaderRunnerDeps {
   readonly optionsBuilder: OptionsBuilder;
   readonly stepExecutor: StepExecutor;
   readonly engineOptions: WorkflowEngineOptions;
+  readonly getAbortSignal?: () => AbortSignal | undefined;
   readonly getCwd: () => string;
   readonly getTask: () => string;
   readonly getState: () => WorkflowState;
   readonly getWorkflowName: () => string;
   readonly getInteractive: () => boolean;
   readonly getRunPaths: () => RunPaths;
-  readonly findingContract?: FindingContractConfig;
-  readonly findingLedgerStore?: FindingLedgerStore;
   readonly operationJournal?: WorkflowOperationJournalContext;
   readonly observabilityEnabled: boolean;
   readonly observabilityRunId?: string;
@@ -144,6 +183,10 @@ export class TeamLeaderRunner {
     private readonly deps: TeamLeaderRunnerDeps,
   ) {}
 
+  private resolveAbortSignal(): AbortSignal | undefined {
+    return this.deps.getAbortSignal?.() ?? this.deps.engineOptions.abortSignal;
+  }
+
   async runTeamLeaderStep(
     step: WorkflowStep,
     state: WorkflowState,
@@ -152,28 +195,38 @@ export class TeamLeaderRunner {
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
     runtime?: RuntimeStepResolution,
     activeStepIteration?: number,
+    executionDeadlineContext?: WorkflowStepExecutionDeadlineContext,
   ): Promise<StepRunResult> {
     if (!step.teamLeader) {
       throw new Error(`Step "${step.name}" has no teamLeader configuration`);
     }
-    const teamLeaderConfig = step.teamLeader;
-    const findingContractMode = teamLeaderConfig.mode === 'finding_contract_fix';
     const parentIteration = state.iteration;
     const attemptState = captureTeamLeaderAttemptState(state, step.name, activeStepIteration);
     const instructionTransaction = new InstructionBuildTransaction();
 
     const stepIteration = activeStepIteration ?? incrementStepIteration(state, step.name);
-    const findingContractCoordinator = findingContractMode
-      ? new FindingContractTeamLeaderCoordinator(this.deps, step, stepIteration)
+    const agentStep = step as AgentWorkflowStep;
+    const selectorProvider = this.deps.engineOptions.selectorProvider;
+    const dynamicFacetDeadline = agentStep.dynamicFacets !== undefined && selectorProvider !== undefined
+      ? executionDeadlineContext?.begin('team-leader:dynamic-facet-selector', selectorProvider)
       : undefined;
-    const findingContractExecution = findingContractCoordinator?.execution;
-    const replayedStepResult = findingContractCoordinator?.readPreparedStepResult();
-    if (replayedStepResult !== undefined) {
-      state.stepOutputs.set(step.name, replayedStepResult.response);
-      state.lastOutput = replayedStepResult.response;
-      return replayedStepResult;
+    const executableStep = agentStep.dynamicFacets === undefined
+      ? agentStep
+      : await runWithExecutionDeadline(
+        executionDeadlineContext,
+        dynamicFacetDeadline,
+        () => this.deps.stepExecutor.prepareDynamicFacetStep(
+          agentStep,
+          state,
+          task,
+          stepIteration,
+        ),
+      );
+    if (!executableStep.teamLeader) {
+      throw new Error(`Step "${step.name}" lost its teamLeader configuration during preparation`);
     }
-    const leaderStep = createTeamLeaderPlanningStep(step);
+    const teamLeaderConfig = executableStep.teamLeader;
+    const leaderStep = createTeamLeaderPlanningStep(executableStep);
     const instruction = this.deps.stepExecutor.buildInstruction(
       leaderStep,
       stepIteration,
@@ -181,17 +234,69 @@ export class TeamLeaderRunner {
       task,
       maxSteps,
       runtime?.fallback,
-      findingContractMode ? { mode: 'omit' } : undefined,
       instructionTransaction,
     );
-    const leaderRuntime = await this.resolveLeaderAutoRouting(leaderStep, runtime);
+    const leaderRuntime = await this.resolveLeaderAutoRouting(
+      leaderStep,
+      runtime,
+      executionDeadlineContext,
+    );
     const leaderProviderInfo = this.deps.optionsBuilder.resolveStepProviderModel(leaderStep, leaderRuntime);
     const { provider: leaderProvider, model: leaderModel } = leaderProviderInfo;
-    const leaderBaseOptions = this.deps.optionsBuilder.buildBaseOptions(leaderStep, undefined, leaderRuntime);
+    const leaderDeadline = executionDeadlineContext?.begin('team-leader:leader', leaderProviderInfo);
+    const leaderBaseOptions = this.deps.optionsBuilder.buildBaseOptions(
+      leaderStep,
+      undefined,
+      leaderRuntime,
+    );
     const leaderWorkflowMeta = this.deps.optionsBuilder.buildPhase1WorkflowMeta(
       leaderBaseOptions.workflowMeta,
     );
+    const leaderAbortSignal = combineAbortSignals([
+      leaderBaseOptions.abortSignal,
+      leaderDeadline?.signal,
+    ]);
+    const companionRuntime = executableStep.companion === undefined
+      ? undefined
+      : await runWithExecutionDeadline(
+        executionDeadlineContext,
+        leaderDeadline,
+        () => this.deps.stepExecutor.createCompanionRuntime(
+          executableStep,
+          task,
+          state,
+          leaderAbortSignal,
+        ),
+      );
+    using activeCompanionRuntime = companionRuntime;
+    activeCompanionRuntime?.beginReviewAttempt();
+    let companionFollowUpRound = 0;
+    let companionFindingCountForNextRound = 0;
+    let companionReviewCompleted = false;
+    let feedbackRequestCount = 0;
+    const completeCompanionReview = async (implementerResponse: string): Promise<void> => {
+      if (activeCompanionRuntime === undefined) return;
+      if (companionFindingCountForNextRound > 0) {
+        const sequence = companionFollowUpRound + 2;
+        activeCompanionRuntime.beginFollowUpRound(
+          sequence,
+          companionFindingCountForNextRound,
+        );
+        companionFollowUpRound += 1;
+        companionFindingCountForNextRound = 0;
+      }
+      const review = await activeCompanionRuntime.complete(
+        state,
+        implementerResponse,
+        { followUpRound: companionFollowUpRound },
+      );
+      companionReviewCompleted = true;
+      companionFindingCountForNextRound = review.findings.length;
+    };
+    const leaderStream = activeCompanionRuntime?.composeOptions(leaderBaseOptions).onStream
+      ?? leaderBaseOptions.onStream;
     const inspectTools = resolveInspectToolsForProvider(teamLeaderConfig.inspectTools, leaderProvider);
+    const inspectGuidance = isTeamLeaderInspectGuidanceApplicable(teamLeaderConfig.inspectTools);
     const leaderMcpServers = this.deps.optionsBuilder.resolveMcpServersForStep(leaderStep, leaderProvider);
 
     emitTeamLeaderProgressHint(this.deps.engineOptions, 'decompose');
@@ -203,35 +308,12 @@ export class TeamLeaderRunner {
       phase: 1,
       sequence: 1,
     });
-    const emitReplayedDecompositionPhaseStart = (): void => {
-      if (didEmitPhaseStart) return;
-      const promptParts: PhasePromptParts = {
-        systemPrompt: '',
-        userInstruction: instruction,
-      };
-      resolvedPromptParts = promptParts;
-      this.deps.onPhaseStart?.(
-        leaderStep,
-        1,
-        'execute',
-        instruction,
-        promptParts,
-        phaseExecutionId,
-        parentIteration,
-      );
-      didEmitPhaseStart = true;
-    };
     const structuredCaller = this.deps.engineOptions.structuredCaller;
     if (!structuredCaller) {
       throw new Error('structuredCaller is required for team leader execution');
     }
     const leaderStartedAt = Date.now();
-    const buildDecompositionOptions = (
-      recoveryRequest?: {
-        recoveryContext: FindingContractRecoveryPromptContext<FindingContractRejectedDecompositionDigest>;
-        abortSignal: AbortSignal;
-      },
-    ) => ({
+    const buildDecompositionOptions = () => ({
       cwd: this.deps.getCwd(),
       persona: leaderStep.persona,
       personaPath: leaderStep.personaPath,
@@ -240,19 +322,27 @@ export class TeamLeaderRunner {
       provider: leaderProvider,
       resolvedModel: leaderModel,
       resolvedProvider: leaderProvider,
+      resolvedProviderOptions: leaderProviderInfo.providerOptions,
+      permissionMode: leaderProviderInfo.permissionMode,
+      projectCwd: this.deps.engineOptions.projectCwd,
       language: this.deps.engineOptions.language,
       inspectTools,
+      inspectGuidance,
       mcpServers: leaderMcpServers,
+      mcpAssignment: leaderBaseOptions.mcpAssignment,
+      mcpServerIdentity: leaderBaseOptions.mcpServerIdentity,
       workflowMeta: leaderWorkflowMeta,
       childProcessEnv: this.deps.engineOptions.childProcessEnv,
-      abortSignal: recoveryRequest?.abortSignal ?? leaderBaseOptions.abortSignal,
-      onStream: leaderBaseOptions.onStream,
+      failureDir: leaderBaseOptions.failureDir,
+      abortSignal: leaderAbortSignal,
+      onStream: leaderStream,
+      onActivity: leaderBaseOptions.onActivity,
       onAgentResponse: (response: AgentResponse) => {
         this.recordUsage(
           leaderStep.name,
           leaderProviderInfo,
           response.status === 'done'
-            && (recoveryRequest?.abortSignal ?? leaderBaseOptions.abortSignal)?.aborted !== true,
+            && leaderBaseOptions.abortSignal?.aborted !== true,
           response.providerUsage,
         );
       },
@@ -273,83 +363,40 @@ export class TeamLeaderRunner {
         );
         didEmitPhaseStart = true;
       },
-      ...(findingContractExecution === undefined
-        ? {}
-        : {
-            findingContract: {
-              targetFindingIds: findingContractExecution.targetFindingIds,
-              actionableFindings: findingContractExecution.actionableFindings,
-              ...(recoveryRequest === undefined
-                ? {}
-                : { recovery: recoveryRequest.recoveryContext }),
-            },
-          }),
     });
-    const requestDecomposition = (
-      recoveryRequest?: {
-        recoveryContext: FindingContractRecoveryPromptContext<FindingContractRejectedDecompositionDigest>;
-        abortSignal: AbortSignal;
-      },
-    ) => {
+    const requestDecomposition = () => {
       return structuredCaller.decomposeTask(
         instruction,
         teamLeaderConfig.initialMaxParts,
-        buildDecompositionOptions(recoveryRequest),
+        buildDecompositionOptions(),
       );
     };
-    const requestRawDecomposition = (
-      recoveryRequest: {
-        recoveryContext: FindingContractRecoveryPromptContext<FindingContractRejectedDecompositionDigest>;
-        abortSignal: AbortSignal;
-      },
-    ) => {
-      return structuredCaller.requestDecompositionRawResponse(
-        instruction,
-        teamLeaderConfig.initialMaxParts,
-        buildDecompositionOptions(recoveryRequest),
-      );
-    };
-    const decomposition = await runWithPhaseSpan(
-      {
-        enabled: this.deps.observabilityEnabled,
-        runId: this.deps.observabilityRunId,
-        workflowName: this.deps.getWorkflowName(),
-        step: leaderStep,
-        iteration: parentIteration,
-        phase: 1,
-        phaseName: 'execute',
-        instruction,
-        phaseExecutionId,
-        workflowStack: this.deps.getCurrentWorkflowStack?.(),
-        sanitizeText: this.deps.sanitizeObservabilityText,
-        providerInfo: leaderProviderInfo,
-        getPromptParts: () => resolvedPromptParts,
-      },
-      async () => {
-        if (!findingContractMode) return requestDecomposition();
-        if (findingContractCoordinator === undefined) {
-          throw new Error('Finding Contract coordinator is missing');
-        }
-        return findingContractCoordinator.recoverDecomposition({
-          maxInitialParts: teamLeaderConfig.initialMaxParts,
-          abortSignal: leaderBaseOptions.abortSignal,
-          requestRaw: ({ recoveryContext, abortSignal }) => (
-            requestRawDecomposition({
-              recoveryContext,
-              abortSignal,
-            })
-          ),
-          onReplay: emitReplayedDecompositionPhaseStart,
-        });
-      },
-      (result) => ({
-        status: 'done',
-        content: JSON.stringify({ parts: result.parts }, null, 2),
-      }),
-    ).catch((error) => {
-      findingContractCoordinator?.terminate(error);
-      throw error;
-    });
+    const decomposition = await runWithExecutionDeadline(
+      executionDeadlineContext,
+      leaderDeadline,
+      () => runWithPhaseSpan(
+        {
+          enabled: this.deps.observabilityEnabled,
+          runId: this.deps.observabilityRunId,
+          workflowName: this.deps.getWorkflowName(),
+          step: leaderStep,
+          iteration: parentIteration,
+          phase: 1,
+          phaseName: 'execute',
+          instruction,
+          phaseExecutionId,
+          workflowStack: this.deps.getCurrentWorkflowStack?.(),
+          sanitizeText: this.deps.sanitizeObservabilityText,
+          providerInfo: leaderProviderInfo,
+          getPromptParts: () => resolvedPromptParts,
+        },
+        requestDecomposition,
+        (result) => ({
+          status: 'done',
+          content: JSON.stringify({ parts: result.parts }, null, 2),
+        }),
+      ),
+    );
     const parts = decomposition.parts;
     if (!didEmitPhaseStart) {
       throw new Error(`Missing prompt parts for phase start: ${leaderStep.name}:1`);
@@ -400,51 +447,36 @@ export class TeamLeaderRunner {
       ))
       : undefined;
     const coveredTimedOutPartIds = new Set<string>();
-    const routedProviderInfoByPart = await this.resolvePartAutoRouting(step, parts, runtime);
+    const routedProviderInfoByPart = await runWithExecutionDeadline(
+      executionDeadlineContext,
+      leaderDeadline,
+      () => this.resolvePartAutoRouting(executableStep, parts, runtime),
+    );
 
-    let currentBatchNumber = 1;
-    const batchNumberByPartId = new Map(parts.map((part) => [part.id, currentBatchNumber]));
-    const partIndexById = new Map<string, number>();
-    let previousFindingContractDecision: { decision: 'continue'; reasoning: string } | undefined;
-    const artifactReferences: TeamLeaderArtifactReference[] = [];
     const executionAbortScope = createAbortScope(leaderBaseOptions.abortSignal);
     let executionResult: Awaited<ReturnType<typeof runTeamLeaderExecution>>;
     try {
-      executionResult = await runTeamLeaderExecution({
+      executionResult = await runWithExecutionDeadline(
+        executionDeadlineContext,
+        leaderDeadline,
+        () => runTeamLeaderExecution({
         initialParts: parts,
         maxConcurrency: teamLeaderConfig.maxConcurrency,
-        findingContractMode,
         abortSignal: executionAbortScope.signal,
         onTerminalError: (error) => {
-          try {
-            findingContractCoordinator?.beginTermination(error);
-          } finally {
-            executionAbortScope.abort(error);
-          }
+          executionAbortScope.abort(error);
         },
-      onPartQueued: (part, partIndex) => {
-        partIndexById.set(part.id, partIndex);
+      onPartQueued: (part) => {
         parallelLogger?.addSubStep(part.id);
       },
       onPartCompleted: (result) => {
         const acceptedResult = structuredClone(result) as PartResult;
         state.stepOutputs.set(acceptedResult.response.persona, acceptedResult.response);
-        if (findingContractMode) {
-          const partIndex = partIndexById.get(acceptedResult.part.id);
-          const partBatchNumber = batchNumberByPartId.get(acceptedResult.part.id);
-          if (
-            findingContractCoordinator === undefined
-            || partIndex === undefined
-            || partBatchNumber === undefined
-          ) {
-            throw new Error(`Finding Contract artifact metadata is missing for part "${acceptedResult.part.id}"`);
-          }
-          artifactReferences.push(findingContractCoordinator.writeAcceptedPartArtifact(
-            partBatchNumber,
-            partIndex,
-            acceptedResult,
-          ));
-        }
+        writeTeamLeaderPartResultReport({
+          runPaths: this.deps.getRunPaths(),
+          stepName: step.name,
+          result: acceptedResult,
+        });
       },
       onPlanningDone: ({ reason, plannedParts: plannedCount, completedParts }) => {
         log.info('Team leader marked planning as done', {
@@ -479,78 +511,43 @@ export class TeamLeaderRunner {
       },
       requestMoreParts: async ({
         partResults: currentResults,
-        latestBatchResults,
-        completedPartResults,
-        plannedParts: currentPlannedParts,
+        latestBatchResults: _latestBatchResults,
+        completedPartResults: _completedPartResults,
+        plannedParts: _currentPlannedParts,
         scheduledIds,
         cancellablePartIds,
         abortSignal: feedbackAbortSignal,
       }) => {
         const currentResultsCopy = structuredClone(currentResults) as PartResult[];
-        const latestBatchResultsCopy = structuredClone(latestBatchResults) as PartResult[];
-        const completedPartResultsCopy = structuredClone(completedPartResults) as PartResult[];
-        const currentPlannedPartsCopy = structuredClone(currentPlannedParts) as PartDefinition[];
         const scheduledIdsCopy = [...scheduledIds];
         const cancellablePartIdsCopy = [...cancellablePartIds];
         emitTeamLeaderProgressHint(this.deps.engineOptions, 'feedback');
-        const feedbackPartResults = findingContractMode
-          ? latestBatchResultsCopy.sort((left, right) => {
-              const leftIndex = partIndexById.get(left.part.id);
-              const rightIndex = partIndexById.get(right.part.id);
-              if (leftIndex === undefined || rightIndex === undefined) {
-                throw new Error('Finding Contract feedback part index is missing');
-              }
-              return leftIndex - rightIndex;
-            })
-          : currentResultsCopy;
-        const feedbackResults = feedbackPartResults.map((result) => ({
-          id: result.part.id,
-          title: result.part.title,
-          status: result.response.status,
-          content: result.response.status === 'error'
+        const feedbackResults = currentResultsCopy.map((result) => {
+          const fullContent = result.response.status === 'error'
             ? `[ERROR] ${resolvePartErrorDetail(result)}`
-            : result.response.content,
-          ...(findingContractMode
-            ? { findingContractClaim: buildFindingContractPartIndexEntry(result) }
-            : {}),
-        }));
-        const findingContractContext = findingContractExecution === undefined
-          ? undefined
-          : {
-              targetFindingIds: [...findingContractExecution.targetFindingIds],
-              actionableFindings: findingContractExecution.actionableFindings,
-              completedPartIndex: buildLatestFindingContractDigests(
-                completedPartResultsCopy
-                  .map((result) => ({
-                    result,
-                    index: partIndexById.get(result.part.id),
-                  }))
-                  .map(({ result, index }) => {
-                    if (index === undefined) {
-                      throw new Error(`Finding Contract part index is missing: ${result.part.id}`);
-                    }
-                    return {
-                      sequence: index,
-                      entry: buildFindingContractPartIndexEntry(result),
-                    };
-                  }),
-              ),
-              plannedParts: currentPlannedPartsCopy,
-              evidence: buildFindingContractDecisionEvidenceSnapshot(
-                currentResultsCopy,
-                findingContractExecution.targetFindingIds,
-              ),
-              ...(previousFindingContractDecision !== undefined
-                ? { previousDecision: previousFindingContractDecision }
-                : {}),
-            };
+            : result.response.content;
+          const reportPath = buildTeamLeaderPartReportPath({
+            runPaths: this.deps.getRunPaths(),
+            stepName: step.name,
+            partId: result.part.id,
+          });
+          const summary = summarizePartResultForFeedback(fullContent);
+          return {
+            id: result.part.id,
+            title: result.part.title,
+            status: result.response.status,
+            content: `${summary}\n\n[full report: ${reportPath.absolutePath}]`,
+          };
+        });
+        const feedbackSignal = leaderDeadline?.signal === undefined
+          ? feedbackAbortSignal
+          : AbortSignal.any([feedbackAbortSignal, leaderDeadline.signal]);
         try {
-          const buildFeedbackOptions = (
-            decisionRequest?: {
-              recoveryContext?: FindingContractRecoveryPromptContext<FindingContractRejectedDecisionDigest>;
-              abortSignal: AbortSignal;
-            },
-          ) => ({
+          const reviewedBeforeFeedback = feedbackRequestCount > 0;
+          if (reviewedBeforeFeedback) {
+            await completeCompanionReview(JSON.stringify(feedbackResults));
+          }
+          const buildFeedbackOptions = (abortSignal: AbortSignal) => ({
             cwd: this.deps.getCwd(),
             persona: leaderStep.persona,
             personaPath: leaderStep.personaPath,
@@ -560,107 +557,60 @@ export class TeamLeaderRunner {
             provider: leaderProvider,
             resolvedModel: leaderModel,
             resolvedProvider: leaderProvider,
+            resolvedProviderOptions: leaderProviderInfo.providerOptions,
+            permissionMode: leaderProviderInfo.permissionMode,
+            projectCwd: this.deps.engineOptions.projectCwd,
             mcpServers: leaderMcpServers,
+            mcpAssignment: leaderBaseOptions.mcpAssignment,
+            mcpServerIdentity: leaderBaseOptions.mcpServerIdentity,
             workflowMeta: leaderWorkflowMeta,
             childProcessEnv: this.deps.engineOptions.childProcessEnv,
+            failureDir: leaderBaseOptions.failureDir,
             cancellablePartIds: cancellablePartIdsCopy,
-            abortSignal: decisionRequest?.abortSignal ?? feedbackAbortSignal,
-            onStream: leaderBaseOptions.onStream,
+            inspectTools,
+            inspectGuidance,
+            abortSignal,
+            onStream: leaderStream,
+            onActivity: leaderBaseOptions.onActivity,
             onAgentResponse: (response: AgentResponse) => {
               this.recordUsage(
                 leaderStep.name,
                 leaderProviderInfo,
-                response.status === 'done'
-                  && (decisionRequest?.abortSignal ?? feedbackAbortSignal).aborted !== true,
+                response.status === 'done' && !abortSignal.aborted,
                 response.providerUsage,
               );
             },
             onAgentError: () => {
               this.recordUsage(leaderStep.name, leaderProviderInfo, false);
             },
-            ...(findingContractContext === undefined
-              ? {}
-              : {
-                  findingContract: {
-                    ...findingContractContext,
-                    ...(decisionRequest?.recoveryContext === undefined
-                      ? {}
-                      : { recovery: decisionRequest.recoveryContext }),
-                  },
-                }),
           });
-          const feedbackInstruction = findingContractMode
-            ? `${step.instruction}\n\n## Original Task\n${task}`
-            : instruction;
+          const feedbackInstruction = instruction;
           const requestFeedback = async (abortSignal: AbortSignal) => structuredCaller.requestMoreParts(
             feedbackInstruction,
             feedbackResults,
             scheduledIdsCopy,
-            buildFeedbackOptions({ abortSignal }),
+            buildFeedbackOptions(abortSignal),
           );
-          const requestRawFeedback = async (
-            decisionRequest: {
-              recoveryContext: FindingContractRecoveryPromptContext<FindingContractRejectedDecisionDigest>;
-              abortSignal: AbortSignal;
-            },
-          ) => structuredCaller.requestMorePartsRawResponse(
-            feedbackInstruction,
-            feedbackResults,
-            scheduledIdsCopy,
-            buildFeedbackOptions(decisionRequest),
-          );
-          let moreParts: MorePartsResponse;
-          if (!findingContractMode) {
-            moreParts = await requestFeedback(feedbackAbortSignal);
-          } else {
-            if (
-              findingContractCoordinator === undefined
-              || findingContractContext === undefined
-            ) {
-              throw new Error('Finding Contract feedback coordinator is missing');
-            }
-            moreParts = await findingContractCoordinator.recoverDecision({
-              batchNumber: currentBatchNumber,
-              abortSignal: feedbackAbortSignal,
-              validationContext: {
-                targetFindingIds: findingContractContext.targetFindingIds,
-                plannedParts: findingContractContext.plannedParts,
-                evidence: findingContractContext.evidence,
-              },
-              requestRaw: ({ recoveryContext, abortSignal }) => requestRawFeedback({
-                recoveryContext,
-                abortSignal,
-              }),
-              onRejected: (event) => {
-                log.info('Finding Contract Team Leader decision failed validation; regenerating', {
-                  step: step.name,
-                  attempt: event.attempt,
-                  mode: event.mode,
-                  strictReason: event.strictReason,
-                  issueCodes: event.rejectedOutput?.issues.map((issue) => issue.code),
-                  issueFingerprint: event.rejectedOutput?.issueFingerprint,
-                  decisionDigest: event.rejectedOutput?.outputDigest.hash,
-                });
-              },
-            });
+          let moreParts: MorePartsResponse = await requestFeedback(feedbackSignal);
+          feedbackRequestCount += 1;
+          if (!reviewedBeforeFeedback) {
+            await completeCompanionReview(JSON.stringify(feedbackResults));
           }
-          if (moreParts.findingContractDecision?.decision === 'continue') {
-            previousFindingContractDecision = {
-              decision: 'continue',
-              reasoning: moreParts.findingContractDecision.reasoning,
-            };
-            currentBatchNumber += 1;
-            for (const part of moreParts.parts) {
-              batchNumberByPartId.set(part.id, currentBatchNumber);
-            }
+          if (
+            moreParts.done
+            && activeCompanionRuntime !== undefined
+            && companionFindingCountForNextRound > 0
+          ) {
+            moreParts = await requestFeedback(feedbackSignal);
+            feedbackRequestCount += 1;
           }
-          await this.addPartAutoRouting(routedProviderInfoByPart, step, moreParts.parts, runtime);
+          await this.addPartAutoRouting(routedProviderInfoByPart, executableStep, moreParts.parts, runtime);
           return moreParts;
         } catch (error) {
-          if (feedbackAbortSignal.aborted) {
+          if (feedbackSignal.aborted) {
             throw error;
           }
-          if (findingContractMode) {
+          if (isProviderStreamParseError(error)) {
             throw error;
           }
           const timeoutFallback = createTimeoutContinuationFeedback({
@@ -680,58 +630,56 @@ export class TeamLeaderRunner {
               detail: getErrorMessage(error),
               parts: summarizeParts(timeoutFallback.parts),
             });
-            await this.addPartAutoRouting(routedProviderInfoByPart, step, timeoutFallback.parts, runtime);
+            await this.addPartAutoRouting(routedProviderInfoByPart, executableStep, timeoutFallback.parts, runtime);
             return timeoutFallback;
           }
           throw error;
         }
       },
-        runPart: async (part, partIndex, publicationFence, partAbortSignal) => this.runSinglePart(
-        step,
-        leaderWorkflowMeta,
-        part,
-        partIndex,
-        parentIteration,
-        state,
-        task,
-        maxSteps,
-        teamLeaderConfig.timeoutMs,
-        updatePersonaSession,
-        parallelLogger,
-        this.buildPartRuntime(runtime, routedProviderInfoByPart.get(part.id)),
-        instructionTransaction,
-        findingContractExecution === undefined
-          ? undefined
-          : findingContractCoordinator?.partSummary(part),
-        findingContractCoordinator?.partBoundary(part),
-        findingContractExecution === undefined
-          ? undefined
-          : (event) => {
-              if (findingContractCoordinator === undefined) {
-                throw new Error('Finding Contract recovery artifact attempt is missing');
-              }
-              findingContractCoordinator.recordAttempt(
-                `part:${part.id}:completion`,
-                event,
-              );
-            },
-        partAbortSignal,
-        publicationFence,
-        ).catch((error) => {
+        runPart: async (part, partIndex, publicationFence, partAbortSignal) => {
+          const partRuntime = this.buildPartRuntime(runtime, routedProviderInfoByPart.get(part.id));
+          const partStep = createPartStep(executableStep, part);
+          const partProviderInfo = this.deps.optionsBuilder.resolveStepProviderModel(partStep, partRuntime);
+          const partDeadline = executionDeadlineContext?.begin(`team-leader:part:${part.id}`, partProviderInfo);
+          return runWithExecutionDeadline(
+            executionDeadlineContext,
+            partDeadline,
+            () => this.runSinglePart(
+              executableStep,
+              leaderWorkflowMeta,
+              part,
+              partIndex,
+              parentIteration,
+              state,
+              task,
+              maxSteps,
+              teamLeaderConfig.timeoutMs,
+              updatePersonaSession,
+              parallelLogger,
+              partRuntime,
+              partProviderInfo,
+              activeCompanionRuntime === undefined
+                ? undefined
+                : (options) => activeCompanionRuntime.composeOptions(options),
+              instructionTransaction,
+              partAbortSignal,
+              publicationFence,
+              partDeadline?.signal,
+            ),
+          ).catch((error) => {
           if (isTeamLeaderPartCancellation(error)) throw error;
-          if (findingContractMode) throw error;
-          return buildTeamLeaderErrorPartResult(step, part, error);
+          if (isProviderStreamParseError(error)) throw error;
+          return buildTeamLeaderErrorPartResult(executableStep, part, error);
+          });
+        },
         }),
-      });
-    } catch (error) {
-      findingContractCoordinator?.terminate(error);
-      throw error;
+      );
     } finally {
       executionAbortScope.dispose();
     }
-    const { plannedParts, partResults, findingContractDecision } = executionResult;
-    this.recordPartRoutingResults(step, partResults, routedProviderInfoByPart);
-    this.emitPartRoutingDecisionEvents(step, partResults, routedProviderInfoByPart, parentIteration);
+    const { plannedParts, partResults } = executionResult;
+    this.recordPartRoutingResults(executableStep, partResults, routedProviderInfoByPart);
+    this.emitPartRoutingDecisionEvents(executableStep, partResults, routedProviderInfoByPart, parentIteration);
 
     const rateLimitedResult = partResults.find((result) => result.response.status === 'rate_limited');
     if (rateLimitedResult) {
@@ -752,20 +700,29 @@ export class TeamLeaderRunner {
     const allFailed = failedResults.length === partResults.length;
     const timeoutContinuationFailed = hasFailedTimeoutContinuationResult(partResults);
     const failClosedPartError = teamLeaderConfig.failOnPartError === true && failedResults.length > 0;
-    const findingContractReplan = findingContractDecision?.decision === 'replan';
-    if (!findingContractReplan && (allFailed || timeoutContinuationFailed || failClosedPartError)) {
+    if (allFailed || timeoutContinuationFailed || failClosedPartError) {
       const errors = failedResults.map((result) => `${result.part.id}: ${resolvePartErrorDetail(result)}`).join('; ');
       const errorMessage = allFailed
         ? `All team leader parts failed: ${errors}`
         : timeoutContinuationFailed
           ? `Team leader timeout continuation failed: ${errors}`
           : `Team leader part failed: ${errors}`;
+      const primaryFailure = selectPrimaryTeamLeaderFailure(failedResults);
+      const boundedError = truncateTeamLeaderFailureContent(
+        sanitizeSensitiveText(resolvePartErrorDetail(primaryFailure)),
+      );
+      const boundedContent = truncateTeamLeaderFailureContent(
+        sanitizeSensitiveText(errorMessage),
+      );
       const errorResponse: AgentResponse = {
         persona: step.name,
         status: 'error',
-        content: errorMessage,
-        error: errorMessage,
+        content: boundedContent,
+        error: boundedError,
         timestamp: new Date(),
+        ...(primaryFailure.response.failureCategory === undefined
+          ? {}
+          : { failureCategory: primaryFailure.response.failureCategory }),
       };
       state.stepOutputs.set(step.name, errorResponse);
       state.lastOutput = errorResponse;
@@ -775,6 +732,15 @@ export class TeamLeaderRunner {
       };
     }
 
+    const aggregatedContent = buildTeamLeaderAggregatedContent(plannedParts, partResults);
+    if (activeCompanionRuntime !== undefined && !companionReviewCompleted) {
+      await runWithExecutionDeadline(
+        executionDeadlineContext,
+        leaderDeadline,
+        () => completeCompanionReview(aggregatedContent),
+      );
+    }
+
     if (parallelLogger) {
       parallelLogger.printSummary(
         step.name,
@@ -782,38 +748,16 @@ export class TeamLeaderRunner {
       );
     }
 
-    if (findingContractMode && findingContractDecision === undefined) {
-      throw new Error('Finding Contract Team Leader execution completed without a final decision');
-    }
-    const aggregatedContent = findingContractDecision !== undefined
-      ? buildFindingContractTeamLeaderAggregatedContent(
-          findingContractDecision,
-          partResults.map(buildFindingContractPartIndexEntry),
-          artifactReferences,
-        )
-      : buildTeamLeaderAggregatedContent(plannedParts, partResults);
-
     let aggregatedResponse: AgentResponse = {
       persona: step.name,
       status: 'done',
       content: aggregatedContent,
       timestamp: new Date(),
-      ...(findingContractDecision !== undefined
-        ? {
-            structuredOutput: {
-              decision: findingContractDecision.decision,
-              reasoning: findingContractDecision.reasoning,
-              ...(findingContractDecision.decision === 'complete'
-                ? { fixCoverage: findingContractDecision.fixCoverage }
-                : { blockers: findingContractDecision.blockers }),
-            },
-          }
-        : {}),
     };
 
     let terminalOperation: StepRunResult['terminalOperation'];
     aggregatedResponse = await this.deps.stepExecutor.applyPostExecutionPhases(
-      step,
+      executableStep,
       state,
       stepIteration,
       aggregatedResponse,
@@ -861,54 +805,70 @@ export class TeamLeaderRunner {
       providerInfo: leaderProviderInfo,
       ...(terminalOperation !== undefined ? { terminalOperation } : {}),
     };
-    return findingContractCoordinator?.prepareStepResult(result) ?? result;
+    return result;
   }
 
   private async resolveLeaderAutoRouting(
     leaderStep: WorkflowStep,
     runtime: RuntimeStepResolution | undefined,
+    executionDeadlineContext: WorkflowStepExecutionDeadlineContext | undefined,
   ): Promise<RuntimeStepResolution | undefined> {
-    if (!this.deps.engineOptions.autoRouting || runtime?.fallback) {
+    const autoRouting = this.deps.engineOptions.autoRouting;
+    if (!autoRouting || runtime?.fallback) {
       return runtime;
     }
 
     const currentProviderInfo = this.deps.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(leaderStep, runtime);
-    const autoRuntime = await resolveAutoRoutingRuntime({
-      autoRouting: this.deps.engineOptions.autoRouting,
-      scope: createRoutingScope({
-        workflow: this.deps.getWorkflowName(),
-        parentStep: leaderStep.name,
-        workItem: 'leader',
-      }),
-      step: {
-        name: leaderStep.name,
-        tags: leaderStep.tags,
-        personaKey: leaderStep.providerRoutingPersonaKey,
-        instruction: leaderStep.instruction,
+    const routingDeadline = executionDeadlineContext?.begin(
+      `team-leader:auto-routing:${leaderStep.name}`,
+      {
+        provider: autoRouting.router.provider,
+        providerOptions: autoRouting.router.providerOptions,
       },
-      snapshot: buildRoutingWorkSnapshot({
-        goal: this.deps.getTask(),
-        userInputs: this.deps.getState().userInputs,
-        retryNote: this.deps.engineOptions.retryNote,
+    );
+    const autoRuntime = await runWithExecutionDeadline(
+      executionDeadlineContext,
+      routingDeadline,
+      () => resolveAutoRoutingRuntime({
+        autoRouting,
+        scope: createRoutingScope({
+          workflow: this.deps.getWorkflowName(),
+          parentStep: leaderStep.name,
+          workItem: 'leader',
+        }),
         step: {
           name: leaderStep.name,
-          tags: leaderStep.tags ?? [],
+          tags: leaderStep.tags,
           personaKey: leaderStep.providerRoutingPersonaKey,
           instruction: leaderStep.instruction,
-          stepType: 'agent',
-          edit: leaderStep.edit,
-          passPreviousResponse: leaderStep.passPreviousResponse === true,
         },
-        lastOutput: this.deps.getState().lastOutput?.content,
-        findings: buildRoutingFindings(this.deps.findingLedgerStore?.loadLedger()),
-        sensitiveValues: this.deps.engineOptions.routingSensitiveValues,
+        snapshot: buildRoutingWorkSnapshot({
+          goal: this.deps.getTask(),
+          userInputs: this.deps.getState().userInputs,
+          retryNote: this.deps.engineOptions.retryNote,
+          step: {
+            name: leaderStep.name,
+            tags: leaderStep.tags ?? [],
+            personaKey: leaderStep.providerRoutingPersonaKey,
+            instruction: leaderStep.instruction,
+            stepType: 'agent',
+            edit: leaderStep.edit,
+            passPreviousResponse: leaderStep.passPreviousResponse === true,
+          },
+          lastOutput: this.deps.getState().lastOutput?.content,
+          sensitiveValues: this.deps.engineOptions.routingSensitiveValues,
+        }),
+        currentProviderInfo,
+        estimator: this.deps.engineOptions.autoRoutingEstimator,
+        runtime: this.deps.engineOptions.routingRuntime,
+        logger: log,
+        abortSignal: this.resolveAbortSignal(),
+        ...this.deps.optionsBuilder.buildDeadlineActivityCallbacks(
+          `team-leader:auto-routing:${leaderStep.name}`,
+          routingDeadline?.recordActivity,
+        ),
       }),
-      currentProviderInfo,
-      estimator: this.deps.engineOptions.autoRoutingEstimator,
-      runtime: this.deps.engineOptions.routingRuntime,
-      logger: log,
-      abortSignal: this.deps.engineOptions.abortSignal,
-    });
+    );
     if (!autoRuntime) {
       return runtime;
     }
@@ -930,126 +890,56 @@ export class TeamLeaderRunner {
     defaultTimeoutMs: number,
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
     parallelLogger: ParallelLogger | undefined,
-    runtime?: RuntimeStepResolution,
+    runtime: RuntimeStepResolution | undefined,
+    providerInfo: StepProviderInfo,
+    composeOptions?: (options: RunAgentOptions) => RunAgentOptions,
     instructionTransaction?: InstructionBuildTransaction,
-    findingContractSummary?: string,
-    operationBoundary?: FindingContractOperationBoundary,
-    onFindingContractRecoveryAttempt?: (
-      event: FindingContractRecoveryAttemptEvent<FindingContractRejectedPartCompletionDigest>,
-    ) => void,
     executionAbortSignal?: AbortSignal,
     publicationFence?: TeamLeaderExecutionPublicationFence,
+    deadlineSignal?: AbortSignal,
   ): Promise<PartResult> {
+    publicationFence?.assertRunning('part.worker_start');
     const startedAt = Date.now();
-    const orphanRecoveryInstruction = operationBoundary?.orphanRecoveryInstruction(
-      this.deps.engineOptions.language,
+    const result = await runTeamLeaderPart(
+      this.deps.optionsBuilder,
+      step,
+      leaderWorkflowMeta,
+      part,
+      partIndex,
+      defaultTimeoutMs,
+      updatePersonaSession,
+      parallelLogger,
+      {
+        enabled: this.deps.observabilityEnabled,
+        runId: this.deps.observabilityRunId,
+        workflowName: this.deps.getWorkflowName(),
+        iteration: parentIteration,
+        workflowStack: this.deps.getCurrentWorkflowStack?.(),
+        sanitizeText: this.deps.sanitizeObservabilityText,
+      },
+      (partStep) => {
+        const partIteration = incrementStepIteration(state, partStep.name);
+        return this.deps.stepExecutor.buildInstruction(
+          partStep,
+          partIteration,
+          state,
+          task,
+          maxSteps,
+          runtime?.fallback,
+          instructionTransaction,
+        );
+      },
+      runtime,
+      executionAbortSignal,
+      {
+        forceNewSession: false,
+        composeOptions,
+        deadlineSignal,
+        providerInfo,
+      },
     );
-    let pendingSessionPublication: {
-      readonly key: string;
-      readonly sessionId: string;
-    } | undefined;
-    publicationFence?.assertRunning('part.replay');
-    const completed = operationBoundary?.readCompleted<PartResult>();
-    if (completed !== undefined) {
-      return hydratePartResult(completed);
-    }
-    const applied = operationBoundary?.readApplied<PartResult>();
-    let replayedWorker = false;
-    let result: PartResult;
-    if (applied !== undefined) {
-      publicationFence?.assertRunning('part.applied_replay');
-      result = hydratePartResult(applied);
-      replayedWorker = true;
-      if (result.response.sessionId !== undefined) {
-        pendingSessionPublication = {
-          key: buildPartScopedSessionKey(
-            createPartStep(step, part),
-            {
-              provider: result.providerInfo?.provider,
-              model: result.providerInfo?.model,
-            },
-          ),
-          sessionId: result.response.sessionId,
-        };
-      }
-    } else {
-      publicationFence?.assertRunning('part.worker_start');
-      operationBoundary?.assertWorkerCanStart();
-      publicationFence?.assertRunning('part.provider_call');
-      result = await runTeamLeaderPart(
-        this.deps.optionsBuilder,
-        step,
-        leaderWorkflowMeta,
-        part,
-        partIndex,
-        defaultTimeoutMs,
-        (key, sessionId) => {
-          if (sessionId !== undefined) {
-            pendingSessionPublication = { key, sessionId };
-          }
-        },
-        parallelLogger,
-        {
-          enabled: this.deps.observabilityEnabled,
-          runId: this.deps.observabilityRunId,
-          workflowName: this.deps.getWorkflowName(),
-          iteration: parentIteration,
-          workflowStack: this.deps.getCurrentWorkflowStack?.(),
-          sanitizeText: this.deps.sanitizeObservabilityText,
-        },
-        (partStep) => {
-          const partIteration = incrementStepIteration(state, partStep.name);
-          const builtInstruction = this.deps.stepExecutor.buildInstruction(
-            partStep,
-            partIteration,
-            state,
-            task,
-            maxSteps,
-            runtime?.fallback,
-            findingContractSummary === undefined ? undefined : { mode: 'omit' },
-            instructionTransaction,
-          );
-          if (findingContractSummary === undefined) return builtInstruction;
-          const assignedInstruction = appendFindingContractPartAssignmentInstruction(
-            builtInstruction,
-            part,
-            this.deps.engineOptions.language,
-            findingContractSummary,
-          );
-          const recoveryInstruction = orphanRecoveryInstruction === undefined
-            ? assignedInstruction
-            : `${assignedInstruction}\n\n${orphanRecoveryInstruction}`;
-          return this.deps.stepExecutor.buildPhase1Instruction(recoveryInstruction, partStep, runtime);
-        },
-        runtime,
-        executionAbortSignal,
-        {
-          forceNewSession: orphanRecoveryInstruction !== undefined,
-          ...(operationBoundary === undefined
-            ? {}
-            : {
-                onDispatch: (permissionMode) => {
-                  publicationFence?.assertRunning('part.provider_dispatch');
-                  operationBoundary.markWorkerStarted(permissionMode);
-                },
-              }),
-        },
-      );
-      result = {
-        ...result,
-        durationMs: Math.max(0, result.response.timestamp.getTime() - startedAt),
-      };
-      if (
-        result.response.status === 'rate_limited'
-        && publicationFence?.state !== 'terminating'
-        && publicationFence?.state !== 'terminated'
-      ) {
-        operationBoundary?.markProviderFallbackPending(result);
-      } else {
-        operationBoundary?.markApplied(result);
-      }
-    }
-    if (result.providerInfo && !replayedWorker) {
+    publicationFence?.assertRunning('part.completed');
+    if (result.providerInfo !== undefined) {
       this.recordUsage(
         `${step.name}.${part.id}`,
         result.providerInfo,
@@ -1057,59 +947,13 @@ export class TeamLeaderRunner {
         result.response.providerUsage,
       );
     }
-    if (
-      findingContractSummary !== undefined
-      && result.response.status !== 'done'
-      && result.response.status !== 'rate_limited'
-    ) {
-      if (result.response.status === 'error' && operationBoundary !== undefined) {
-        throw createExplicitPartFailure(operationBoundary.id, result);
-      }
-      throw new Error(result.response.error ?? result.response.content);
+    if (result.response.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR) {
+      throw createProviderStreamParseError(resolvePartErrorDetail(result));
     }
-    publicationFence?.assertRunning('part.session');
-    if (pendingSessionPublication !== undefined) {
-      updatePersonaSession(
-        pendingSessionPublication.key,
-        pendingSessionPublication.sessionId,
-      );
-    }
-    const recovered = findingContractSummary === undefined || result.response.status !== 'done'
-      ? { response: result.response }
-      : await validateOrRecoverFindingContractPartCompletion(
-          {
-            optionsBuilder: this.deps.optionsBuilder,
-            stepExecutor: this.deps.stepExecutor,
-            language: this.deps.engineOptions.language,
-            recordUsage: (partStep, providerInfo, success, usage) => {
-              this.recordUsage(partStep, providerInfo, success, usage);
-            },
-          },
-          {
-            step,
-            part,
-            response: result.response,
-            runtime,
-            updatePersonaSession,
-            onAttempt: onFindingContractRecoveryAttempt,
-            operationBoundary,
-            abortSignal: executionAbortSignal,
-            publicationFence,
-          },
-        );
-    const finalResult = {
+    return {
       ...result,
-      response: recovered.response,
-      ...('claim' in recovered ? { findingContractClaim: recovered.claim } : {}),
-      durationMs: result.durationMs
-        ?? Math.max(0, result.response.timestamp.getTime() - startedAt),
+      durationMs: Math.max(0, result.response.timestamp.getTime() - startedAt),
     };
-    if (finalResult.response.status === 'rate_limited') {
-      return finalResult;
-    }
-    publicationFence?.assertRunning('part.journal_completed');
-    operationBoundary?.complete(finalResult);
-    return finalResult;
   }
 
   private recordUsage(
@@ -1248,7 +1092,6 @@ export class TeamLeaderRunner {
       return;
     }
 
-    const routingLedger = this.deps.findingLedgerStore?.loadLedger();
     const routed = await resolveAutoRoutingBatch({
       autoRouting: this.deps.engineOptions.autoRouting,
       concurrency: step.teamLeader?.maxConcurrency,
@@ -1283,7 +1126,6 @@ export class TeamLeaderRunner {
             },
             part: { title: part.title, instruction: part.instruction },
             lastOutput: this.deps.getState().lastOutput?.content,
-            findings: buildRoutingFindings(routingLedger),
             sensitiveValues: this.deps.engineOptions.routingSensitiveValues,
           }),
           currentProviderInfo: this.deps.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(partStep, partResolutionRuntime),
@@ -1292,7 +1134,10 @@ export class TeamLeaderRunner {
       estimator: this.deps.engineOptions.autoRoutingEstimator,
       runtime: this.deps.engineOptions.routingRuntime,
       logger: log,
-      abortSignal: this.deps.engineOptions.abortSignal,
+      abortSignal: this.resolveAbortSignal(),
+      ...this.deps.optionsBuilder.buildDeadlineActivityCallbacks(
+        `team-parts:auto-routing:${step.name}`,
+      ),
     });
 
     for (const [partId, providerInfo] of routed.entries()) {
@@ -1427,19 +1272,4 @@ function collectRollbackError(errors: Error[], stage: string, operation: () => v
   } catch (error) {
     errors.push(new Error(`Team leader attempt rollback failed during ${stage}`, { cause: error }));
   }
-}
-
-function hydratePartResult(result: PartResult): PartResult {
-  return {
-    ...result,
-    response: hydrateAgentResponse(result.response),
-  };
-}
-
-function hydrateAgentResponse(response: AgentResponse): AgentResponse {
-  const timestamp: unknown = response.timestamp;
-  return {
-    ...response,
-    timestamp: timestamp instanceof Date ? timestamp : new Date(String(timestamp)),
-  };
 }

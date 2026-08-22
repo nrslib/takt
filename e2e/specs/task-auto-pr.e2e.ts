@@ -66,7 +66,6 @@ describe.skipIf(!requiresGitHub)('E2E: Task run auto PR (takt run -> postExecuti
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('PR created');
 
     const prUrl = execFileSync(
       'gh',

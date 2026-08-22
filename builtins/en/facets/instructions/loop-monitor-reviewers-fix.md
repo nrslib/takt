@@ -1,19 +1,15 @@
-The review → fix loop has repeated {cycle_count} times.
+The review and repair loop has repeated {cycle_count} times.
 
-Review the latest review and fix reports in the Report Directory and determine whether this loop is healthy (converging) or unproductive (diverging, oscillating, or stalled).
+Inspect the latest review reports, decision record, repair reports, verification reports, and current code in the Report Directory. Determine whether the loop is converging, stalled, or diverging.
 
-**First establish the observation point:**
-- Use report chronology to determine whether a verifier or review ran after the latest fix. If one did, treat that latest report as authoritative evidence and compare its `incomplete` reasons, unmet acceptance criteria, and evidence changed by each retry. Repeated verifier results with the same reason and evidence indicate a stall.
-- If a fix just completed and neither a verifier nor a post-fix review exists yet, an issue reported as addressed after its latest review is awaiting post-fix verification rather than repeating or stalled. Include this state under the healthy / progress option.
-- When no fix reports addressing the issue, do not infer that the loop is healthy merely because no later verification report exists.
+{{include:instructions/fix-plan-validity}}
 
-**Judgment criteria:**
-- **Fix progress:** Use fix reports, current code, and post-fix reviews to verify that each prior open finding's acceptance criteria are satisfied. Repetition of the same `finding_id`, root cause, or acceptance criterion after a fix means implementation is incomplete.
-- **Report convergence:** Compare completed review rounds and check whether valid new structural or contract findings keep being added. Even when earlier findings resolve, this means the review report has not converged.
-- A new finding from a different `family_tag` is not inherently healthy or unproductive. Inspect its content, impact scope, and review round.
-- The loop may be converging when new findings are limited to a finite set of local issues and the unreviewed structural or contract surface is not expanding.
-- Compare fix units and acceptance evidence in the fix report with the current code to verify that target findings are actually closed.
-- When a post-fix review conflicts with the current code, do not repeat the same fix; choose among the available verification, recovery, or stop options.
-- Treat counts as supporting information and judge fix progress separately from report-content convergence.
+First establish the observation point from report chronology. Determine whether verification or review ran after the latest repair. If neither ran, use the repair report's completion conditions and remaining work to distinguish waiting for verification from unfinished implementation.
 
-Choose a stop outcome only when implementation is incomplete or the report has not converged and no available action can break the deadlock.
+Across iterations, compare acceptance criteria newly satisfied, the same root causes that remain, code and evidence that changed, and newly confirmed structural or contract problems. Do not infer progress from counts or identifier changes alone; verify that implementation or evidence materially changed.
+
+Treat the loop as stalled or diverging when the same cause and evidence repeat, post-repair reports disagree with current code, or structural problems continue to appear without reducing the uninspected area. When required repairs are progressing and the remaining work is concrete and executable, the loop may still be converging even though it is not complete.
+
+Require replanning only when evidence shows that the plan's assumptions, repair boundary, method, or verification capability are insufficient or inconsistent and a plan change can address the problem. Implementation or evidence gaps alone do not justify replanning.
+
+Choose the outcome supplied by the output contract that matches the current evidence. Do not report convergence while completion conditions remain unmet. When evidence shows that repeating the same review or repair cannot resolve the loop, choose the outcome that stops that repetition.

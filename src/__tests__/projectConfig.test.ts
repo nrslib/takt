@@ -26,6 +26,7 @@ type ObservabilityConfigForTest = {
 type ProjectConfigWithAssistant = ProjectLocalConfig & {
   assistant?: {
     initFiles?: string[];
+    gherkin?: boolean;
   };
 };
 
@@ -156,6 +157,58 @@ describe('projectConfig', () => {
     });
   });
 
+  describe('assistant Gherkin task instructions', () => {
+    it.each([
+      ['absent assistant config', ''],
+      ['assistant config without Gherkin', 'assistant: {}'],
+    ])('should keep assistant undefined for %s', (_label, yaml) => {
+      if (yaml) {
+        writeFileSync(join(testDir, '.takt', 'config.yaml'), yaml, 'utf-8');
+      }
+
+      const loaded = loadProjectConfig(testDir) as ProjectConfigWithAssistant;
+
+      expect(loaded.assistant).toBeUndefined();
+    });
+
+    it.each([
+      ['absent assistant config', undefined],
+      ['assistant config without Gherkin', {}],
+    ] as const)('should not save a Gherkin key for %s', (_label, assistant) => {
+      const config: ProjectConfigWithAssistant = assistant === undefined ? {} : { assistant };
+
+      saveProjectConfig(testDir, config);
+
+      const raw = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
+      expect(raw).not.toContain('gherkin:');
+    });
+
+    it('should load assistant.gherkin from project config', () => {
+      writeFileSync(
+        join(testDir, '.takt', 'config.yaml'),
+        ['assistant:', '  gherkin: true'].join('\n'),
+        'utf-8',
+      );
+
+      const loaded = loadProjectConfig(testDir) as ProjectConfigWithAssistant;
+
+      expect(loaded.assistant).toEqual({ gherkin: true });
+    });
+
+    it.each([true, false])('should preserve assistant.gherkin=%s in save/load cycle', (gherkin) => {
+      const config: ProjectConfigWithAssistant = {
+        assistant: { gherkin },
+      };
+
+      saveProjectConfig(testDir, config);
+
+      const raw = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
+      const reloaded = loadProjectConfig(testDir) as ProjectConfigWithAssistant;
+      expect(raw).toContain(`gherkin: ${gherkin}`);
+      expect(reloaded.assistant?.gherkin).toBe(gherkin);
+    });
+  });
+
   it('should load a provider-only OpenCode selector before top-level composition', () => {
     const configPath = join(testDir, '.takt', 'config.yaml');
     writeFileSync(configPath, [
@@ -212,6 +265,16 @@ describe('projectConfig', () => {
 
       expect(() => saveProjectConfig(testDir, config)).toThrow(/base_url/);
     });
+  });
+
+  it('rejects a project DeepSeek Cordis override because it selects executable tools', () => {
+    writeFileSync(join(testDir, '.takt', 'config.yaml'), [
+      'provider_options:',
+      '  deepseek_harness:',
+      '    cordis: .takt/cordis.yml',
+    ].join('\n'), 'utf-8');
+
+    expect(() => loadProjectConfig(testDir)).toThrow(/cordis.*trusted user configuration/i);
   });
 
   describe('workflow_overrides empty array round-trip', () => {
@@ -535,16 +598,18 @@ unexpected_overrides:
   });
 
   describe('migrated project-local fields', () => {
-    it('should fail fast when codex reasoning_effort is outside SDK enum', () => {
+    it('should pass through arbitrary codex reasoning_effort values', () => {
       const configPath = join(testDir, '.takt', 'config.yaml');
       const configContent = [
         'provider_options:',
         '  codex:',
-        '    reasoning_effort: extreme',
+        "    reasoning_effort: '  extreme  '",
       ].join('\n');
       writeFileSync(configPath, configContent, 'utf-8');
 
-      expect(() => loadProjectConfig(testDir)).toThrow(/reasoning_effort/);
+      expect(loadProjectConfig(testDir).providerOptions).toEqual({
+        codex: { reasoningEffort: 'extreme' },
+      });
     });
 
     it('should fail fast when Codex Skill inheritance is not boolean', () => {
@@ -586,16 +651,37 @@ unexpected_overrides:
       );
     });
 
-    it('should fail fast when claude effort is outside SDK enum', () => {
+    it('should pass through arbitrary claude effort values', () => {
       const configPath = join(testDir, '.takt', 'config.yaml');
       const configContent = [
         'provider_options:',
         '  claude:',
-        '    effort: impossible',
+        "    effort: '  impossible  '",
       ].join('\n');
       writeFileSync(configPath, configContent, 'utf-8');
 
-      expect(() => loadProjectConfig(testDir)).toThrow(/effort/);
+      expect(loadProjectConfig(testDir).providerOptions).toEqual({
+        claude: { effort: 'impossible' },
+      });
+    });
+
+    it.each([
+      ['codex reasoning_effort', 'empty', '  codex:', '    reasoning_effort:', "''"],
+      ['codex reasoning_effort', 'whitespace-only', '  codex:', '    reasoning_effort:', "'   '"],
+      ['claude effort', 'empty', '  claude:', '    effort:', "''"],
+      ['claude effort', 'whitespace-only', '  claude:', '    effort:', "'   '"],
+      ['copilot effort', 'empty', '  copilot:', '    effort:', "''"],
+      ['copilot effort', 'whitespace-only', '  copilot:', '    effort:', "'   '"],
+    ])('should reject %s values that are %s', (_name, _valueKind, providerLine, effortLine, value) => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      const configContent = [
+        'provider_options:',
+        providerLine,
+        `${effortLine} ${value}`,
+      ].join('\n');
+      writeFileSync(configPath, configContent, 'utf-8');
+
+      expect(() => loadProjectConfig(testDir)).toThrow(/effort/i);
     });
 
     it('should load project-local fields from project config yaml', () => {
@@ -1220,13 +1306,13 @@ unexpected_overrides:
         ],
       ],
       [
-        'invalid selector enum',
+        'invalid selector effort type',
         [
           'takt_providers:',
           '  selector:',
           '    provider_options:',
           '      codex:',
-          '        reasoning_effort: turbo',
+          '        reasoning_effort: 42',
         ],
       ],
     ])('should reject %s in project config', (_name, lines) => {
@@ -1389,7 +1475,7 @@ unexpected_overrides:
       ['an unknown nested selector option', {
         providerOptions: { codex: { skills: { repo: true, unknownSkill: true } } },
       }],
-      ['an invalid selector enum', { providerOptions: { codex: { reasoningEffort: 'turbo' } } }],
+      ['an invalid selector effort type', { providerOptions: { codex: { reasoningEffort: 42 } } }],
     ])('should reject %s when saving project config', (_label, selector) => {
       const invalidConfig = {
         taktProviders: { selector },
@@ -1506,19 +1592,6 @@ unexpected_overrides:
       expect(reloaded.workflowRuntimePrepare).toEqual({ customScripts: true });
     });
 
-    it('should load workflow_runtime_prepare policy block', () => {
-      const configPath = join(testDir, '.takt', 'config.yaml');
-      writeFileSync(
-        configPath,
-        ['workflow_runtime_prepare:', '  custom_scripts: true'].join('\n'),
-        'utf-8',
-      );
-
-      const loaded = loadProjectConfig(testDir);
-
-      expect(loaded.workflowRuntimePrepare).toEqual({ customScripts: true });
-    });
-
     it('should save workflowRuntimePrepare using workflow_runtime_prepare key', () => {
       const config: ProjectLocalConfig = {
         workflowRuntimePrepare: { customScripts: true },
@@ -1581,28 +1654,6 @@ unexpected_overrides:
         customDataSourceModules: true,
         customMergeInlineJs: true,
         customMergeFiles: false,
-      });
-    });
-
-    it('should load workflow_arpeggio policy block', () => {
-      const configPath = join(testDir, '.takt', 'config.yaml');
-      writeFileSync(
-        configPath,
-        [
-          'workflow_arpeggio:',
-          '  custom_data_source_modules: true',
-          '  custom_merge_inline_js: false',
-          '  custom_merge_files: true',
-        ].join('\n'),
-        'utf-8',
-      );
-
-      const loaded = loadProjectConfig(testDir);
-
-      expect(loaded.workflowArpeggio).toEqual({
-        customDataSourceModules: true,
-        customMergeInlineJs: false,
-        customMergeFiles: true,
       });
     });
 
@@ -1759,19 +1810,6 @@ unexpected_overrides:
       const reloaded = loadProjectConfig(testDir);
 
       expect(reloaded.workflowMcpServers).toEqual({ stdio: true, http: true, sse: false });
-    });
-
-    it('should load workflow_mcp_servers config block', () => {
-      const configPath = join(testDir, '.takt', 'config.yaml');
-      writeFileSync(
-        configPath,
-        ['workflow_mcp_servers:', '  stdio: true', '  http: false', '  sse: true'].join('\n'),
-        'utf-8',
-      );
-
-      const loaded = loadProjectConfig(testDir);
-
-      expect(loaded.workflowMcpServers).toEqual({ stdio: true, http: false, sse: true });
     });
 
     it('should save workflowMcpServers using workflow_mcp_servers key', () => {

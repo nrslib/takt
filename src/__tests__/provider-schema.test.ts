@@ -180,6 +180,56 @@ describe('Claude provider split (Zod)', () => {
   });
 });
 
+describe('provider effort values', () => {
+  it.each([
+    ['codex', { codex: { reasoning_effort: 'max' } }],
+    ['claude', { claude: { effort: 'vendor-level' } }],
+    ['copilot', { copilot: { effort: 'vendor-level' } }],
+  ])('accepts provider-specific effort strings for %s', (_provider, options) => {
+    expect(StepProviderOptionsSchema.parse(options)).toEqual(options);
+  });
+
+  it('trims provider-specific effort strings', () => {
+    expect(StepProviderOptionsSchema.parse({
+      codex: { reasoning_effort: '  custom-level  ' },
+      claude: { effort: '  custom-level  ' },
+      copilot: { effort: '  custom-level  ' },
+    })).toEqual({
+      codex: { reasoning_effort: 'custom-level' },
+      claude: { effort: 'custom-level' },
+      copilot: { effort: 'custom-level' },
+    });
+  });
+
+  it.each([
+    ['codex', '', { codex: { reasoning_effort: '' } }],
+    ['codex', 'whitespace-only', { codex: { reasoning_effort: '   ' } }],
+    ['claude', '', { claude: { effort: '' } }],
+    ['claude', 'whitespace-only', { claude: { effort: '   ' } }],
+    ['copilot', '', { copilot: { effort: '' } }],
+    ['copilot', 'whitespace-only', { copilot: { effort: '   ' } }],
+  ])('rejects %s %s effort values', (_provider, _valueKind, options) => {
+    expect(() => StepProviderOptionsSchema.parse(options)).toThrow(/effort/);
+  });
+});
+
+describe('Codex permission control provider option', () => {
+  it('accepts takt and codex values', () => {
+    expect(StepProviderOptionsSchema.parse({
+      codex: { permission_control: 'takt' },
+    })).toEqual({ codex: { permission_control: 'takt' } });
+    expect(StepProviderOptionsSchema.parse({
+      codex: { permission_control: 'codex' },
+    })).toEqual({ codex: { permission_control: 'codex' } });
+  });
+
+  it('rejects unknown permission control values', () => {
+    expect(() => StepProviderOptionsSchema.parse({
+      codex: { permission_control: 'workspace' },
+    })).toThrow(/permission_control|Invalid option/i);
+  });
+});
+
 describe('Claude terminal provider contract', () => {
   beforeEach(() => {
     ProviderRegistry.resetInstance();
@@ -284,6 +334,20 @@ describe('Claude terminal provider contract', () => {
 });
 
 describe('Schemas accept opencode provider', () => {
+  it('should accept assistant.gherkin in GlobalConfigSchema', () => {
+    const result = GlobalConfigSchema.parse({
+      assistant: { gherkin: true },
+    });
+
+    expect(result.assistant).toEqual({ gherkin: true });
+  });
+
+  it('should reject assistant.init_files in GlobalConfigSchema', () => {
+    expect(() => GlobalConfigSchema.parse({
+      assistant: { init_files: ['docs/context.md'] },
+    })).toThrow(/init_files|unrecognized/i);
+  });
+
   it('should accept opencode in GlobalConfigSchema provider field', () => {
     const result = GlobalConfigSchema.parse({ provider: 'opencode' });
     expect(result.provider).toBe('opencode');
@@ -397,40 +461,19 @@ describe('Schemas accept opencode provider', () => {
     expect(result.provider).toBe('cursor');
   });
 
-  it('should accept opencode in WorkflowStepRawSchema', () => {
-    const result = WorkflowStepRawSchema.parse({
-      name: 'test-step',
-      provider: 'opencode',
-    });
-    expect(result.provider).toBe('opencode');
+  it.each([
+    { label: 'workflow step with opencode', schema: WorkflowStepRawSchema, input: { name: 'test-step', provider: 'opencode' } },
+    { label: 'workflow step with cursor', schema: WorkflowStepRawSchema, input: { name: 'test-step', provider: 'cursor' } },
+    { label: 'parallel sub-step with opencode', schema: ParallelSubStepRawSchema, input: { name: 'sub-1', provider: 'opencode' } },
+    { label: 'parallel sub-step with cursor', schema: ParallelSubStepRawSchema, input: { name: 'sub-1', provider: 'cursor' } },
+  ])('should reject provider execution settings in workflow YAML: $label', ({ schema, input }) => {
+    expect(() => schema.parse(input)).toThrow(
+      /workflow YAML no longer accepts provider execution settings.*runtime\.yaml/i,
+    );
   });
 
-  it('should accept cursor in WorkflowStepRawSchema', () => {
-    const result = WorkflowStepRawSchema.parse({
-      name: 'test-step',
-      provider: 'cursor',
-    });
-    expect(result.provider).toBe('cursor');
-  });
-
-  it('should accept opencode in ParallelSubStepRawSchema', () => {
-    const result = ParallelSubStepRawSchema.parse({
-      name: 'sub-1',
-      provider: 'opencode',
-    });
-    expect(result.provider).toBe('opencode');
-  });
-
-  it('should accept cursor in ParallelSubStepRawSchema', () => {
-    const result = ParallelSubStepRawSchema.parse({
-      name: 'sub-1',
-      provider: 'cursor',
-    });
-    expect(result.provider).toBe('cursor');
-  });
-
-  it('should still accept existing providers (claude, codex, opencode, cursor, mock)', () => {
-    for (const provider of ['claude', 'codex', 'opencode', 'cursor', 'mock']) {
+  it('should still accept existing providers (claude, codex, opencode, cursor, pi, deepseek-harness, mock)', () => {
+    for (const provider of ['claude', 'codex', 'opencode', 'cursor', 'pi', 'deepseek-harness', 'mock']) {
       const result = GlobalConfigSchema.parse({ provider });
       expect(result.provider).toBe(provider);
     }

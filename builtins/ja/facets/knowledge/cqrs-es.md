@@ -4,26 +4,13 @@
 
 CQRS+ES は、状態変更をドメイン上の出来事として保存し、そこから現在状態やRead Modelを導出する設計である。バックエンド全体やワークフローが CQRS+ES を扱う場合でも、すべての新機能をイベントソーシングで実装する必要はない。
 
-| 基準 | 判定 |
-|------|------|
-| ユーザー要求・設計資料・既存境界が CQRS+ES を明示している | CQRS+ES を採用 |
-| 状態遷移、ライフサイクル、業務上の不変条件が機能の中心 | CQRS+ES を検討 |
-| 変更イベントが他集約・Saga・下流プロセスを起動する | CQRS+ES を検討 |
-| 過去時点の状態復元、イベント再生、監査証跡そのものが要件 | CQRS+ES を検討 |
-| 読み取りモデルを複数用途へ非同期投影する必要がある | CQRS+ES を検討 |
-| 現在値の参照・更新だけで完結する管理設定 | CRUD を優先 |
-| セキュリティ設定、機能フラグ、許可リスト、閾値などの即時反映が重要 | CRUD を優先 |
-| 「作成・更新・削除したい」以上のドメイン語彙がない | CRUD を優先 |
-| CQRS+ESワークフローで実装しているだけ | 採用根拠にしない |
-| タスク指示書生成時に元タスクへ存在しない CQRS+ES 要件を追加する | REJECT |
-
 CQRS+ES の採用は要件から導く。既存システムが CQRS+ES を含むことは、依存方向や境界をそろえる理由にはなるが、単純な設定テーブルまでイベントソーシング化する理由にはならない。
 
 ### 要件変換時の扱い
 
-元タスクやユーザー要求が CRUD 相当の業務要件だけを述べている場合、タスク指示書に「コマンド・イベント・プロジェクション」を新しい要件として追加しない。CQRS+ES が必要か不明な場合は、採用理由を明示するか、未確認事項として残す。
+元要件やユーザー要求が CRUD 相当の業務要件だけを述べている場合、仕様に「コマンド・イベント・プロジェクション」を新しい要件として追加しない。CQRS+ES が必要か不明な場合は、採用理由を明示するか、未確認事項として残す。
 
-| 元要求 | 指示書への落とし込み |
+| 元要求 | 意味・選択肢 |
 |--------|--------------------|
 | 「施設ごとに許可IPを管理したい」 | CRUDの管理設定として扱う。ドメイン語彙が「追加・削除」だけで業務ルールがない |
 | 「注文の承認・取消・返品を管理し、状態に応じて請求や在庫が連動する」 | CQRS+ESの候補。複雑な状態遷移と業務不変条件があり、複数集約が連動する |
@@ -43,33 +30,14 @@ Command Model（Aggregate）の役割は「コマンドを受けて判断し、�
 - `if`/`require`の条件分岐に使う
 - インスタンスメソッドでイベント発行時にフィールド値を参照する
 
-| 基準 | 判定 |
-|------|------|
-| Aggregateが複数のトランザクション境界を跨ぐ | REJECT |
-| Aggregate間の直接参照（ID参照でない） | REJECT |
-| Aggregateが100行を超える | 分割を検討 |
-| ビジネス不変条件がAggregate外にある | REJECT |
-| 判断に使わないフィールドを保持 | REJECT |
-| `source` / `input` / `origin` / `channel` / `type` などの由来メタデータで状態遷移を分岐 | 原則REJECT |
-| 既存Aggregateの通常ライフサイクルで許可される状態を、特定入力元だけ拒否 | REJECT |
-| 作成時の呼び出し者を Aggregate 状態に保持し、後続イベントのアクターとして流用 | REJECT。各コマンドで実行者を渡す |
-
 `if`/`require` に使われていることだけでは、Aggregate state に保持する根拠にならない。先に、その分岐や検証が Aggregate 全体の本質的な不変条件かを確認する。
 
 ### 由来メタデータと不変条件
 
 入力元、チャネル、生成元、連携元などの由来メタデータは、表示・検索・監査・連携追跡で必要になることがある。ただし、それだけでは Aggregate の状態として復元する理由にならない。
 
-| 基準 | 判定 |
-|------|------|
-| 由来メタデータが表示・検索・監査・連携追跡だけに必要 | Event payload または Read Model に保持 |
-| 由来メタデータを使った分岐が既存Aggregateの通常ライフサイクルと異なる制約を作る | REJECT |
-| 特定入力元だけ、通常は任意の項目を必須化する | REJECT |
-| 入力元ごとに本当に不変条件が異なる | 別Aggregate / 別Command / 別UseCase境界を検討 |
-| `require` のためだけに由来メタデータを Aggregate state へ追加する | REJECT |
-
 ```kotlin
-// NG - 由来メタデータで既存Aggregateの通常ライフサイクルを狭めている
+// 避ける例: 由来メタデータで既存Aggregateの通常ライフサイクルを狭めている
 data class Note(
     val noteId: String,
     val sourceType: SourceType?,
@@ -83,7 +51,7 @@ data class Note(
     }
 }
 
-// OK - 由来はイベント・Read Modelで追跡し、Aggregateの不変条件は通常ライフサイクルに合わせる
+// 例: 由来はイベント・Read Modelで追跡し、Aggregateの不変条件は通常ライフサイクルに合わせる
 data class Note(
     val noteId: String,
     val confirmed: Boolean,
@@ -105,15 +73,6 @@ data class NoteCreatedEvent(
 ### 既存ライフサイクルの優先
 
 既存 Aggregate に新しい入力フローを統合する場合、既存の通常ライフサイクルを優先する。入力元が違うだけで専用 command、専用 wrapper、専用 service、専用削除処理を増やさない。
-
-| 基準 | 判定 |
-|------|------|
-| 既存 Aggregate の通常 command / event で同じ事実を表せる | 既存ライフサイクルを使う |
-| 入力元別の wrapper が通常 command を薄く委譲しているだけ | REJECT |
-| 入力元別の command が通常ライフサイクルより強い必須条件を追加する | REJECT |
-| 既存 Aggregate の削除・更新イベントから派生処理を起動できる | EventHandler に分離 |
-| 専用フローだけが必要な表示・検索項目 | Read Model に保持 |
-| 入力元ごとに本当に状態遷移や不変条件が異なる | 別 Aggregate / 別 bounded context を検討 |
 
 良いAggregate:
 ```kotlin
@@ -242,28 +201,14 @@ fun apply(event: OrderEvent): Order = when (event) {
 }
 ```
 
-| 基準 | 判定 |
-|------|------|
-| apply 内にビジネスロジック（バリデーション等） | REJECT。applyは状態復元のみ |
-| apply が副作用を持つ（DB操作、イベント発行等） | REJECT |
-| apply が例外をスローする | REJECT。再生時の失敗は許容しない |
-
 ## イベント設計
-
-| 基準 | 判定 |
-|------|------|
-| イベントが過去形でない（Created → Create） | REJECT |
-| イベントにロジックが含まれる | REJECT |
-| イベントが他Aggregateの内部状態を含む | REJECT |
-| イベントのスキーマがバージョン管理されていない | 警告 |
-| CRUDスタイルのイベント（Updated, Deleted） | 要検討 |
 
 良いイベント:
 ```kotlin
 // Good: ドメインの意図が明確
 OrderPlaced, PaymentReceived, ItemShipped
 
-// Bad: CRUDスタイル
+// 避ける例: CRUDスタイル
 OrderUpdated, OrderDeleted
 ```
 
@@ -271,7 +216,7 @@ OrderUpdated, OrderDeleted
 
 イベントは発生した事実を表し、名前はその業務上の意味から決める。`〜Requested` という接尾辞や現在の消費者数だけでは、事実イベントか偽装コマンドかを判定できない。要求を受理・開始したこと自体が業務上の出来事なら事実になり得るが、既知の宛先へ処理を命令する以外の意味を持たない通知はコマンドとして表す。
 
-| 判断軸 | 事実イベント | コマンドを検討 |
+| 比較軸 | 事実イベント | コマンドを検討 |
 |--------|-------------|----------------|
 | 業務上の意味 | 受理・開始・却下など、監査や状態復元にも意味がある出来事 | 特定処理を実行させることだけが目的 |
 | 発行元のライフサイクル | 待機、重複拒否、期限切れ等の後続判断に使う | 発行元は結果や状態を追跡しない |
@@ -281,25 +226,16 @@ OrderUpdated, OrderDeleted
 イベントは技術的な消費先ではなく、独立した業務上の事実を単位に分ける。同じ出来事を状態復元用と処理起動用に重複発行せず、発行元集約が所有する事実を EventHandler や Projection がそれぞれ購読する。複数のイベントが必要なのは、別々に命名・監査・再生する意味を持つ事実が同時に成立した場合である。別集約の内部状態や初期化詳細はイベントに詰め込まず、安定したIDや参照を境界側で解決する。
 
 ```kotlin
-// NG - 1つの業務上の事実を、状態用と技術的な処理起動用に重複分割
+// 避ける例: 1つの業務上の事実を、状態用と技術的な処理起動用に重複分割
 fun addItem(itemId: String, productId: String, quantity: Int): List<OrderEvent> = listOf(
     OrderItemLinkedEvent(orderId, itemId),                 // 状態用
     OrderItemCreationRequestedEvent(orderId, itemId, productId, quantity), // トリガー用（実質コマンド）
 )
 
-// OK - 発行元集約の事実として必要な内容を持つ単一イベント
+// 例: 発行元集約の事実として必要な内容を持つ単一イベント
 fun addItem(itemId: String, productId: String, quantity: Int): OrderItemAddedEvent =
     OrderItemAddedEvent(orderId, itemId, productId, quantity)
 ```
-
-| 基準 | 判定 |
-|------|------|
-| 接尾辞または現在の消費者数だけでイベント／コマンドを判定する | REJECT。業務上の意味とライフサイクルで判断する |
-| 同じ業務上の事実を、状態用（Linked 等）と処理起動用（Requested 等）に重複分割する | REJECT。発行元集約が所有する事実へ統合する |
-| 外部サービス・別コンテキストへの非同期依頼で、受理・待機が業務上の事実となり、完了/失敗を追跡する | OK。要求を受理した事実として表現できる |
-| 確定・承認などの既存事実イベントで表せる処理起動に、専用の要求イベントを追加する | REJECT。既存の事実を EventHandler（必要ならドメインポリシー）が購読する |
-| 他集約の状態だけが変わる出来事を、自分のストリームのイベントとして記録する | REJECT。事実はそれが起きた集約自身のストリームに積む |
-| 自分の状態やライフサイクルに関与しない操作を集約に経由させ、中継イベントで対象集約へ転送する | REJECT。対象集約へコマンドを送り、所属・存在確認は不変条件の所有境界で行う |
 
 ### sealed interface によるイベント型階層
 
@@ -382,25 +318,11 @@ CQRS+ES では、DB schema migration、data migration、event upcaster、Read Mo
 
 ## コマンドハンドラ
 
-| 基準 | 判定 |
-|------|------|
-| ハンドラがDBを直接操作 | REJECT |
-| ハンドラが複数Aggregateを変更 | REJECT |
-| コマンドのバリデーションがない | REJECT |
-| ハンドラがクエリを実行して判断 | 要検討 |
-| 操作が生み得るイベント数と戻り値の契約が一致しない | 要検討。単一・任意・複数・結果型のどれを使うかは、ドメイン上の多重度と言語・フレームワークの規約で決める |
-
 ### コマンドとイベントの契約寿命
 
 イベントは履歴として永続化される長寿命の契約である。履歴payloadの変換を行う場合は、現行イベントの型識別子・payloadと、履歴payloadを replay 可能な形へ変換する境界を分け、変換方式はイベントストアとシリアライズ方式から選ぶ。
 
 コマンドは通常、application 境界で生成・処理される短寿命のメッセージだが、予約実行、outbox、再試行、dead-letter、監査等で永続化される構成もある。永続参照の有無は、移動・改名時に調べる影響境界である。ドメインモデルは配送方式やフレームワークのコマンド型に依存せず、application / adapter 境界でドメインの引数・値オブジェクトへ変換する。
-
-| 基準 | 判定 |
-|------|------|
-| ドメインモデルが配送・フレームワーク固有のコマンド型を直接受け取る | REJECT。application / adapter 境界でドメインの入力へ変換する |
-| domain 層から参照されない application メッセージを domain パッケージに置く | application 境界へ移す |
-| コマンドの移動・改名 | 予約・outbox・再試行・dead-letter・監査等の永続参照を影響対象として確認する |
 
 良いコマンドハンドラ:
 ```
@@ -426,7 +348,7 @@ Aggregate は、自身のイベント履歴から復元できる状態と、コ�
 
 Aggregate に入れてよい検証は「イベント再生だけで再現できる状態」に基づくものに限る。それ以外の検証は、コマンド送信前に境界側で解決し、Aggregate には解決済みの事実を渡す。
 
-| 判断対象 | 置き場所 |
+| 対象 | 置き場所 |
 |---------|---------|
 | 現在状態でその操作が可能か | Aggregate |
 | コマンド実行者がAggregate ownerと一致するか | Aggregate |
@@ -443,23 +365,15 @@ Aggregate に入れてよい検証は「イベント再生だけで再現でき�
 
 Command は「現在の状態を見て何の command を送るか」ではなく、「利用者や外部処理が何をしたいか」を表す。現在状態に基づく Add / Update / Delete / Noop の判断は、同じ Aggregate の Read Model ではなく、復元済み Aggregate に寄せる。
 
-| 基準 | 判定 |
-|------|------|
-| 他Aggregateや外部事実の存在・scopeを事前確認して、解決済み事実を command に渡す | OK |
-| 同じ Aggregate の Read Model を読んで command 種別を選ぶ | REJECT |
-| 「存在すれば update、なければ add」を UseCase が Query 結果で決める | REJECT。Set / Attach / Upsert などの意図 command を Aggregate に送る |
-| Aggregate または AggregateAdapter が復元済み状態で既存有無・遷移可否を判断する | OK |
-| Aggregate が冪等に無視できる重複 command を EventHandler や UseCase が事前 Query で抑止する | REJECT。Aggregate の状態遷移で守る |
-
 ```kotlin
-// NG - Query 結果で command 種別を投げ分けている
+// 避ける例: Query 結果で command 種別を投げ分けている
 if (readService.exists(orderId)) {
     commandGateway.send(UpdateOrderCommand(orderId, value))
 } else {
     commandGateway.send(AddOrderCommand(orderId, value))
 }
 
-// OK - 意図 command を送り、Aggregate が復元済み状態で判断する
+// 例: 意図 command を送り、Aggregate が復元済み状態で判断する
 commandGateway.send(SetOrderValueCommand(orderId, value))
 ```
 
@@ -503,12 +417,6 @@ fun confirm(confirmedBy: String): OrderConfirmedEvent {
 }
 ```
 
-| 基準 | 判定 |
-|------|------|
-| ドメイン層のバリデーションがAPI層にある | REJECT。状態遷移ルールはドメインに |
-| UseCase層のバリデーションがController内にある | REJECT。UseCase層に分離 |
-| API層のバリデーション（@NotBlank等）がドメインにある | REJECT。構造検証はAPI層で |
-
 ## UseCase層（オーケストレーション）
 
 Controller と CommandGateway の間にUseCase層を置く。UseCase層は境界で解決すべき事実を集め、原則として1つの意図 command を送る。後続の状態変更は、確定済みイベントを起点に EventHandler が進める。
@@ -529,19 +437,6 @@ UseCaseが不要なケース:
 - ControllerからQuery側へ問い合わせてレスポンスへ変換するだけの単純な参照
 - 既存リソースの存在確認・スコープ確認後にコマンドを1つ送るだけの操作
 
-| 基準 | 判定 |
-|------|------|
-| ControllerがRepository直接参照してバリデーション | UseCase層に分離 |
-| UseCaseがHTTPリクエスト/レスポンスに依存 | REJECT。UseCaseはプロトコル非依存 |
-| UseCaseがAggregate内部状態を直接変更 | REJECT。CommandGateway経由 |
-| UseCaseが同じ状態遷移のために複数 command を順番に送る | REJECT。確定済みイベントの EventHandler に分離 |
-| UseCaseが同じ Aggregate の状態を Query して command 種別を投げ分ける | REJECT。Aggregate に判断を寄せる |
-| UseCaseが他Aggregateや外部事実を検証し、解決済み事実を1つの command に渡す | OK |
-| 確定済みイベントを EventHandler が受け、他Aggregateへの command を送る | OK |
-| processStore / ProcessStore / operationProcess / completeStep で投影完了や手順進行を保存する | REJECT。Projection と EventHandler で表現 |
-| 明示的な長期業務プロセス、再試行、補償、利用者に見える進捗がある | Saga / Process Manager を検討 |
-| UseCaseが別の問い合わせ層やコマンド送信への薄い委譲だけで終わる | 削除を検討 |
-
 ## イベントドリブン連鎖
 
 CQRS+ES では、状態変更の連鎖は確定済みイベントを起点に進める。Application Service / UseCase / Controller が同じ状態遷移のために command を直列に投げて、複数 Aggregate の変更順序を同期制御しない。
@@ -556,24 +451,7 @@ UseCase → Command → Aggregate → Event
                          Projection → Read Model
 ```
 
-| 基準 | 判定 |
-|------|------|
-| UseCase が command A の直後に同じ状態遷移の command B を送る | REJECT。A のイベントを EventHandler が受けて B を送る |
-| `sendAndWait` の戻り後に別 command を送って整合性を作る | REJECT。イベント連鎖に分離 |
-| 既存 Aggregate の通常イベントが派生処理の起点になる | OK |
-| EventHandler が確定済みイベントを受け、冪等な command を別Aggregateへ送る | OK |
-| Projection 更新と次の command 送信を同じ handler に混ぜる | REJECT。Projection と EventHandler を分離 |
-| 競合、補償、長期 retry、利用者に見える進捗がある | Saga / Process Manager を検討 |
-| 単に「途中状態を覚えたい」だけで processStore を作る | REJECT。Aggregate event / Projection / Saga の責務に分ける |
-
 ## プロジェクション設計
-
-| 基準 | 判定 |
-|------|------|
-| プロジェクションがコマンドを発行 | REJECT |
-| プロジェクションがWriteモデルを参照 | REJECT |
-| 複数のユースケースを1つのプロジェクションで賄う | 要検討 |
-| リビルド不可能な設計 | REJECT |
 
 良いプロジェクション:
 - 特定の読み取りユースケースに最適化
@@ -626,24 +504,9 @@ class InventoryReleaseHandler(private val commandGateway: CommandGateway) {
 }
 ```
 
-| 基準 | 判定 |
-|------|------|
-| Projection 内で CommandGateway を使用 | REJECT。EventHandler に分離 |
-| EventHandler 内で Repository に save | REJECT。Projection に分離 |
-| 1クラスに Projection と EventHandler の責務が混在 | REJECT。クラスを分離 |
-
 ### 外部処理の起動
 
 外部ワーカーや非同期処理の起動は、Aggregate が確定したドメインイベントを起点にする。Application Service や Coordinator が、コマンド送信と外部副作用を同じ制御フローで束ねない。
-
-| 基準 | 判定 |
-|------|------|
-| Application Service や Coordinator がコマンド送信直後に同じ状態遷移の外部処理を起動する | REJECT。確定済みイベントの EventHandler に分離 |
-| Aggregate が生成開始・処理開始を表すイベントを発行し、EventHandler が外部処理を起動する | OK |
-| 外部処理の起動失敗を EventHandler が失敗コマンドとして Aggregate に戻す | OK |
-| 外部処理に必要な入力がイベントまたは安定したIDから再取得できるデータで表現されている | OK |
-| 外部処理の入力がコマンド処理中のローカル変数にしか存在しない | REJECT。イベントまたは再取得可能な参照へ移す |
-| 競合や補償を持たない単純な外部処理起動に Saga を使う | REJECT。EventHandler で十分 |
 
 ## Query側の設計
 
@@ -654,31 +517,9 @@ Query側はイベント駆動のPubSubモデルで動作する。Projection が 
 - **Subscription Query**（たとえばAxonの `subscriptionQuery()`）: クエリ結果の変更通知を購読元へ返す仕組み。既存基盤として採用され、購読元への通知配送が保証される構成でのみ使う。tracking processor や tracker を前提にした構成では、機能実装のためだけに subscription query を新設しない。
 - **Subscribing イベントプロセッサ**（たとえばAxonの `SubscribingEventProcessor`）: ローカルのイベントバスからの直接購読に依存し、イベントを発行したインスタンスのみがイベントを受け取る。分散環境では他インスタンスの Projection が更新されない。PubSubで全インスタンスにイベントが配信される構成にする。
 
-| 基準 | 判定 |
-|------|------|
-| 既存基盤として配送保証が確認できる Subscription Query（たとえばAxonの `subscriptionQuery()`）の使用 | OK |
-| 機能実装のためだけに Subscription Query を新規導入する | REJECT。既存の tracker / Read Model polling を使う |
-| 配送保証が確認できない Subscription Query（たとえばAxonの `subscriptionQuery()`）の使用 | REJECT。既存の tracker / Read Model polling を使う |
-| Subscribing イベントプロセッサ（たとえばAxonの `SubscribingEventProcessor`）の使用 | REJECT。ローカル配信のみ。分散環境で他インスタンスが更新されない |
-| Controller から Repository を直接参照 | REJECT。UseCase層を経由 |
-| Query側が Command Model を参照 | REJECT |
-| QueryHandler がコマンドを発行 | REJECT |
-| Query側のサービスやハンドラが保存・削除・外部API呼び出しを行う | REJECT |
-| Command と Query を同じサービスに混在させる | REJECT。責務と命名を分離 |
-| Query側やReadServiceがQuery結果を見て同一Aggregateへの command 種別を決める | REJECT |
-| Query側で他Aggregateや外部事実の存在確認・スコープ確認を行い、呼び出し元が1つの command を送る | OK |
-
 ### QueryHandler と ApplicationService の命名
 
 CQRSではクエリを受けるコンポーネントを QueryHandler と呼び、クエリを送る入口は QueryGateway / QueryBus として扱う。Controller から読み取りユースケースを呼ぶ facade は、QueryHandler と混同しないよう ApplicationService または ReadService と名付ける。
-
-| 基準 | 判定 |
-|------|------|
-| Query を受けて Read Model を参照し、Query結果の型を返す | QueryHandler |
-| Controller から複数Query、認可境界、ページング、DTO組み立てを調整する | ApplicationService または ReadService |
-| Query送信や読み取り調整だけのクラスを QueryService と呼ぶ | 警告。QueryHandler と混同しやすい |
-| QueryHandler がHTTPリクエスト/レスポンスやController都合のエラー変換を知る | REJECT |
-| 追加判断のない単純な読み取り wrapper を作る | 削除を検討。Controller から QueryGateway 直でもよい |
 
 レイヤー間の型:
 - `application/query/` - Query結果の型（例: `OrderDetail`）
@@ -735,34 +576,9 @@ Aggregate → Event Bus → Projection(@EventHandler) → Repository(Read Model)
 
 非同期処理の完了通知は重複・遅延・順序逆転を前提に設計する。Controller や単一プロセス内のロックではなく、Aggregate の状態遷移とコマンドの冪等性で守る。
 
-| 基準 | 判定 |
-|------|------|
-| Controllerやアプリケーションプロセス内のロックで重複callbackを防ぐ | REJECT。複数インスタンスで効かない |
-| 処理中かどうかをAggregate状態で判断する | OK |
-| callbackの試行IDや世代をAggregateが検証する | OK |
-| 古いcallbackや重複callbackを状態遷移で冪等に無視する | OK |
-| 並行制御がController、UseCase、Aggregateに重複して散らばる | REJECT |
-
 ## 結果整合性
 
 コマンド発行後の Projection 待機は、同一 API レスポンスで更新後 Read Model を返す明示的な同期契約がある場合に限る。画面側が入力値やIDを保持できる場合、サーバーは待機せず、Read Model の収束を通常の参照 API で扱う。
-
-| 基準 | 判定 |
-|------|------|
-| 同一レスポンスで更新後 Read Model を返す明示契約がない | 待機しない |
-| 画面側や呼び出し元が command の入力値・生成IDを保持できる | 待機しない |
-| 待機中の処理へ Projection 更新通知が確実に配送される基盤がある | OK。通知駆動で待機してよい |
-| 既存基盤として Subscription Query など、購読元へ更新通知が届く構成が確認できている | OK |
-| Kafka などを使い、通知の配送先と再配送・欠落時の扱いが運用上保証されている | OK |
-| Subscription Query やイベント通知の配送先が単一プロセス・単一インスタンス前提、または保証不明 | REJECT。既存の tracker / Read Model polling を使う |
-| `Thread.sleep` や同等の待機でリクエストスレッドをブロックして Projection 更新を待つ | REJECT。高並行時にスレッド枯渇を起こす |
-| `delayedExecutor` / `CompletableFuture` で Projection 待機の retry を独自実装する | REJECT。リアクティブHTTPスタックや既存 tracker を使う |
-| processStore / ProcessStore / materialStore / completeStep で Projection 反映状況を管理する | REJECT。Projection はイベントから冪等に更新する |
-| 同一HTTPレスポンスで更新後状態を返す必要がある | リアクティブHTTPスタックで非ブロッキングに待機 |
-| 同一HTTPレスポンスで待つ必要がない | `202 Accepted` + フロントエンドのロングポーリング、通常ポーリング、SSE、WebSocket |
-| UIが即座に更新を期待している | フロントエンドポーリング、SSE、WebSocket。サーバー側待機は同期 API 契約がある場合のみ |
-| 整合性遅延が許容範囲を超える | アーキテクチャ再検討 |
-| 補償トランザクションが未定義 | 障害シナリオの検討を要求 |
 
 ### リアクティブポーリング
 
@@ -799,14 +615,14 @@ private fun pollForCompletion(orderId: String): Mono<Void> {
 ブロッキング待機は避ける:
 
 ```kotlin
-// NG - リクエストスレッドを占有し、負荷時にスレッド枯渇を起こす
+// 避ける例: リクエストスレッドを占有し、負荷時にスレッド枯渇を起こす
 while (Instant.now().isBefore(deadline)) {
     val order = orderRepository.findById(orderId).orElse(null)
     if (order?.status == OrderStatus.CONFIRMED) return PlaceOrderOutput(orderId)
     Thread.sleep(100)
 }
 
-// OK - 同一レスポンスで待つならリアクティブな待機へ載せる
+// 例: 同一レスポンスで待つならリアクティブな待機へ載せる
 return pollForCompletion(orderId).thenReturn(PlaceOrderOutput(orderId))
 ```
 
@@ -860,14 +676,14 @@ InventoryReleasedEvent
 
 アンチパターン:
 ```kotlin
-// NG - ライフサイクル管理のためにSagaを使う
+// 避ける例: ライフサイクル管理のためにSagaを使う
 @Saga
 class OrderLifecycleSaga {
     // 注文の全状態遷移をSagaで追跡
     // PLACED → CONFIRMED → SHIPPED → DELIVERED
 }
 
-// OK - 結果整合性が必要な操作だけをSagaで処理
+// 例: 結果整合性が必要な操作だけをSagaで処理
 @Saga
 class InventoryReservationSaga {
     // 在庫確保の同時実行制御のみ
@@ -924,14 +740,9 @@ data class PaymentFailedEvent(
 
 ## 抽象化レベルの評価
 
-**条件分岐の肥大化検出**
+**条件分岐と抽象化**
 
-| パターン | 判定 |
-|---------|------|
-| 同じif-elseパターンが3箇所以上 | ポリモーフィズムで抽象化 → REJECT |
-| switch/caseが5分岐以上 | Strategy/Mapパターンを検討 |
-| イベント種別による分岐が増殖 | イベントハンドラを分離 → REJECT |
-| Aggregate内の状態分岐が複雑 | State Patternを検討 |
+分岐数だけで Strategy、State、ポリモーフィズムを選ばない。同じドメイン上の意味・契約・変更理由を持つ処理が2つ確認できたら、Aggregate、EventHandler、Projection など本来の所有者へ集約するか判断する。イベント種別や状態が異なる理由で変わる処理は分離を保つ。
 
 **抽象度の不一致検出**
 
@@ -990,18 +801,9 @@ class PendingState : OrderState() {
 }
 ```
 
-## アンチパターン検出
+## アンチパターンの観察
 
-以下を見つけたら REJECT:
-
-| アンチパターン | 問題 |
-|---------------|------|
-| CRUD偽装 | CQRSの形だけ真似てCRUD実装 |
-| Anemic Domain Model | Aggregateが単なるデータ構造 |
-| Event Soup | 意味のないイベントが乱発される |
-| Temporal Coupling | イベント順序に暗黙の依存 |
-| Missing Events | 重要なドメインイベントが欠落 |
-| God Aggregate | 1つのAggregateに全責務が集中 |
+CQRS+ES では、CRUD の形だけをなぞる実装、意味のないイベントの乱発、イベント順序への暗黙依存、重要な事実の欠落、Aggregate への責務集中が設計上の観察対象になる。最終判定は CQRS+ES Policy の基準で行う。
 
 ## テスト戦略
 
@@ -1047,20 +849,12 @@ fun `注文詳細が取得できる`() {
 }
 ```
 
-チェック項目:
-
-| 観点 | 判定 |
-|------|------|
-| Aggregateテストが状態ではなくイベントを検証している | 必須 |
-| Query側テストがCommand経由でデータを作っていない | 推奨 |
-| 統合テストでAxonの非同期処理を考慮している | 必須 |
-
 ## 値オブジェクト設計
 
 Aggregate とイベントの構成要素として値オブジェクトを使う。プリミティブ型（String, Int）で済ませない。
 
 ```kotlin
-// NG - プリミティブ型のまま
+// 避ける例: プリミティブ型のまま
 data class OrderPlacedEvent(
     val orderId: String,
     val categoryId: String,      // ただの文字列
@@ -1068,7 +862,7 @@ data class OrderPlacedEvent(
     val to: LocalDateTime
 )
 
-// OK - 値オブジェクトで意味と制約を表現
+// 例: 値オブジェクトで意味と制約を表現
 data class OrderPlacedEvent(
     val orderId: String,
     val categoryId: CategoryId,
@@ -1107,13 +901,6 @@ data class ApprovalInfo(
     val approvalTime: LocalDateTime
 )
 ```
-
-| 基準 | 判定 |
-|------|------|
-| IDをStringのまま使い回す | 値オブジェクト化を検討 |
-| 同じフィールドの組み合わせ（from/to等）が複数箇所に | 値オブジェクトに抽出 |
-| 値オブジェクトにビジネスロジック（状態遷移等） | REJECT。Aggregateの責務 |
-| init ブロックなしで不変条件が保証されない | REJECT |
 
 ## マスタデータ・設定値と CRUD の使い分け
 

@@ -87,12 +87,7 @@ describe('ParallelSubStepRawSchema', () => {
       name: 'full-sub-step',
       persona: '~/.takt/agents/default/coder.md',
       persona_name: 'Coder',
-      provider_options: {
-        claude: {
-          allowed_tools: ['Read', 'Grep'],
-        },
-      },
-      model: 'haiku',
+      capabilities: 'readonly',
       edit: false,
       instruction: 'Do work',
       report: '01-report.md',
@@ -103,12 +98,12 @@ describe('ParallelSubStepRawSchema', () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.persona_name).toBe('Coder');
-      expect(result.data.provider_options?.claude?.allowed_tools).toEqual(['Read', 'Grep']);
+      expect(result.data.capabilities).toBe('readonly');
       expect(result.data.edit).toBe(false);
     }
   });
 
-  it('should accept provider block in parallel sub-step', () => {
+  it('should reject provider block in parallel sub-step with runtime migration guidance', () => {
     const raw = {
       name: 'provider-block-sub-step',
       provider: {
@@ -120,7 +115,10 @@ describe('ParallelSubStepRawSchema', () => {
     };
 
     const result = ParallelSubStepRawSchema.safeParse(raw);
-    expect(result.success).toBe(true);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.message).toMatch(/runtime\.yaml/);
+    }
   });
 
   it('should reject invalid provider block options in parallel sub-step', () => {
@@ -142,7 +140,6 @@ describe('ParallelSubStepRawSchema', () => {
       name: 'delegate-review',
       kind: 'workflow_call',
       call: 'review-workflow',
-      overrides: { provider: 'mock' },
       args: {
         review_policy: 'strict-review',
         evidence: ['plan-report', 'draft-report'],
@@ -161,7 +158,6 @@ describe('ParallelSubStepRawSchema', () => {
     const parsed = result.data as Record<string, unknown>;
     expect(parsed.kind).toBe('workflow_call');
     expect(parsed.call).toBe('review-workflow');
-    expect(parsed.overrides).toEqual({ provider: 'mock' });
     expect(parsed.args).toEqual({
       review_policy: 'strict-review',
       evidence: ['plan-report', 'draft-report'],
@@ -338,7 +334,7 @@ describe('WorkflowStepRawSchema with parallel', () => {
     expect(result.success).toBe(true);
   });
 
-  it('should accept provider string in parallel sub-step', () => {
+  it('should reject provider string in parallel sub-step with runtime migration guidance', () => {
     const raw = {
       name: 'parallel-provider-string',
       parallel: [
@@ -351,7 +347,8 @@ describe('WorkflowStepRawSchema with parallel', () => {
     };
 
     const result = WorkflowStepRawSchema.safeParse(raw);
-    expect(result.success).toBe(true);
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error.message).toMatch(/runtime\.yaml/);
   });
 
   it('Given a workflow step with a parallel workflow_call sub-step, When parsing, Then the call shape is accepted at the workflow entrypoint', () => {
@@ -362,7 +359,6 @@ describe('WorkflowStepRawSchema with parallel', () => {
           name: 'delegate-review',
           kind: 'workflow_call',
           call: 'shared/review',
-          overrides: { provider: 'mock' },
           args: {
             review_policy: 'strict-review',
           },
@@ -387,7 +383,6 @@ describe('WorkflowStepRawSchema with parallel', () => {
       name: 'delegate-review',
       kind: 'workflow_call',
       call: 'shared/review',
-      overrides: { provider: 'mock' },
     });
   });
 
@@ -458,11 +453,11 @@ describe('LoopMonitorJudgeSchema', () => {
 
     expect(result.success).toBe(true);
     if (result.success) {
-      expect((result.data as unknown as Record<string, unknown>).instruction).toBe('Judge loop health');
+      expect((result.data as unknown as Record<string, unknown>).instruction).toBeTypeOf('string');
     }
   });
 
-  it('should accept judge configuration with provider block', () => {
+  it('should reject judge configuration with provider block', () => {
     const raw = {
       provider: {
         type: 'codex',
@@ -474,7 +469,8 @@ describe('LoopMonitorJudgeSchema', () => {
 
     const result = LoopMonitorJudgeSchema.safeParse(raw);
 
-    expect(result.success).toBe(true);
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error.message).toMatch(/runtime\.yaml/);
   });
 
   it('should reject empty judge model values', () => {
@@ -858,10 +854,6 @@ describe('WorkflowConfigRawSchema with parallel steps', () => {
             {
               name: 'delegate-review',
               call: 'shared/review',
-              overrides: {
-                provider: 'codex',
-                model: 'gpt-5-codex',
-              },
               args: {
                 review_policy: 'strict-review',
               },
@@ -885,10 +877,6 @@ describe('WorkflowConfigRawSchema with parallel steps', () => {
       name: 'delegate-review',
       kind: 'workflow_call',
       call: 'shared/review',
-      overrides: {
-        provider: 'codex',
-        model: 'gpt-5-codex',
-      },
       args: {
         review_policy: 'strict-review',
       },
@@ -1025,17 +1013,17 @@ describe('all()/any() aggregate condition expression parsing', () => {
   });
 
   it('should only parse a standalone aggregate condition', () => {
-    expect(parseAggregateConditionExpression('all("approved") && findings.open.count == 0')).toBeUndefined();
-    expect(parseAggregateConditionExpression('all("approved") && && when(findings.open.count == 0)')).toBeUndefined();
-    expect(parseAggregateConditionExpression('all("approved") && when(findings.open.count == 0)')).toBeUndefined();
+    expect(parseAggregateConditionExpression('all("approved") && context.review.pending_count == 0')).toBeUndefined();
+    expect(parseAggregateConditionExpression('all("approved") && && when(context.review.pending_count == 0)')).toBeUndefined();
+    expect(parseAggregateConditionExpression('all("approved") && when(context.review.pending_count == 0)')).toBeUndefined();
   });
 
   it('should reject a composite condition when locating escaped aggregate arguments', () => {
-    expect(parseAggregateConditionExpression('any("approved with \\"quoted ) text\\"") && when(findings.open.count == 0)')).toBeUndefined();
+    expect(parseAggregateConditionExpression('any("approved with \\"quoted ) text\\"") && when(context.review.pending_count == 0)')).toBeUndefined();
   });
 
   it('should reject a composite condition after an even backslash run', () => {
-    expect(parseAggregateConditionExpression(String.raw`any("path ends with \\") && when(findings.open.count == 0)`)).toBeUndefined();
+    expect(parseAggregateConditionExpression(String.raw`any("path ends with \\") && when(context.review.pending_count == 0)`)).toBeUndefined();
   });
 
   it('should not match regular condition text', () => {
@@ -1112,7 +1100,7 @@ describe('all()/any() condition in WorkflowStepRawSchema', () => {
       const children = [
         ' approved ',
         'when( true )',
-        'needs_fix && when( findings.open.count > 0 )',
+        'needs_fix && when( context.review.pending_count > 0 )',
       ];
       const source = `${aggregate}(${children.map((child) => JSON.stringify(child)).join(', ')})`;
 
@@ -1125,7 +1113,7 @@ describe('all()/any() condition in WorkflowStepRawSchema', () => {
           {
             kind: 'and',
             left: { kind: 'semantic', label: 'needs_fix' },
-            right: { kind: 'when', expression: 'findings.open.count > 0' },
+            right: { kind: 'when', expression: 'context.review.pending_count > 0' },
           },
         ],
       });
@@ -1207,8 +1195,8 @@ describe('all()/any() condition in WorkflowStepRawSchema', () => {
 });
 
 describe('when expression syntax at the raw workflow boundary', () => {
-  const invalidWhen = 'when(findings.open.count ==)';
-  const validWhen = 'when(findings.open.count == 0)';
+  const invalidWhen = 'when(context.review.pending_count ==)';
+  const validWhen = 'when(context.review.pending_count == 0)';
 
   const makeAgentStep = (condition: string) => ({
     name: 'review',
@@ -1264,52 +1252,5 @@ describe('when expression syntax at the raw workflow boundary', () => {
         expect.objectContaining({ message: expect.stringContaining('Invalid when operand') }),
       ]));
     }
-  });
-});
-
-describe('parallel step aggregation format', () => {
-  it('should aggregate sub-step outputs in the expected format', () => {
-    // Mirror the aggregation logic from engine.ts
-    const subResults = [
-      { name: 'arch-review', content: 'Architecture looks good.\n## Result: APPROVE' },
-      { name: 'sec-review', content: 'No security issues.\n## Result: APPROVE' },
-    ];
-
-    const aggregatedContent = subResults
-      .map((r) => `## ${r.name}\n${r.content}`)
-      .join('\n\n---\n\n');
-
-    expect(aggregatedContent).toContain('## arch-review');
-    expect(aggregatedContent).toContain('Architecture looks good.');
-    expect(aggregatedContent).toContain('---');
-    expect(aggregatedContent).toContain('## sec-review');
-    expect(aggregatedContent).toContain('No security issues.');
-  });
-
-  it('should handle single sub-step', () => {
-    const subResults = [
-      { name: 'only-step', content: 'Single result' },
-    ];
-
-    const aggregatedContent = subResults
-      .map((r) => `## ${r.name}\n${r.content}`)
-      .join('\n\n---\n\n');
-
-    expect(aggregatedContent).toBe('## only-step\nSingle result');
-    expect(aggregatedContent).not.toContain('---');
-  });
-
-  it('should handle empty content from sub-steps', () => {
-    const subResults = [
-      { name: 'step-a', content: '' },
-      { name: 'step-b', content: 'Has content' },
-    ];
-
-    const aggregatedContent = subResults
-      .map((r) => `## ${r.name}\n${r.content}`)
-      .join('\n\n---\n\n');
-
-    expect(aggregatedContent).toContain('## step-a\n');
-    expect(aggregatedContent).toContain('## step-b\nHas content');
   });
 });

@@ -37,8 +37,9 @@ function makeState(workflowName: string, status: WorkflowState['status'], iterat
     userInputs: [],
     personaSessions: new Map(),
     stepIterations: new Map([['delegate', 1]]),
+    restoredStepIterationNames: new Set(),
     dynamicParallelSelections: new Map(),
-    resumedDynamicParallelSteps: new Set(),
+    dynamicFacetSelections: new Map(),
     status,
   };
 }
@@ -58,7 +59,7 @@ function buildMcpSection(): McpAssignmentSection {
         'leaf/execute': { servers: ['github'] },
       },
     },
-  } as unknown as McpAssignmentSection;
+  };
 }
 
 function prepareExecutionRequest(
@@ -138,7 +139,6 @@ describe('WorkflowCallExecutor mcpAssignment inheritance (要件114)', () => {
       emit: vi.fn(),
       state,
       setActiveResumePoint: vi.fn(),
-      refreshFindingsState: vi.fn(),
     });
 
     await executor.execute(prepareExecutionRequest(executor, {
@@ -212,7 +212,6 @@ describe('WorkflowCallExecutor mcpAssignment inheritance (要件114)', () => {
       emit: vi.fn(),
       state,
       setActiveResumePoint: vi.fn(),
-      refreshFindingsState: vi.fn(),
     });
 
     await executor.execute(prepareExecutionRequest(executor, {

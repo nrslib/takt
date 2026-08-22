@@ -18,12 +18,12 @@ Choose test doubles based on purpose. Excessive mocking reduces test reliability
 - Pure functions have no dependencies and need no mocking
 
 ```typescript
-// NG - mocking internal implementation (testing implementation, not behavior)
+// Avoid: mocking internal implementation (testing implementation, not behavior)
 vi.spyOn(service, 'privateMethod')
 service.execute()
 expect(service.privateMethod).toHaveBeenCalled()
 
-// OK - mock external dependency, verify behavior
+// Example: mock external dependency, verify behavior
 const repository = { findById: vi.fn().mockResolvedValue(user) }
 const service = new UserService(repository)
 const result = await service.getUser('id')
@@ -54,12 +54,12 @@ Boundary values and equivalence partitioning are fundamental unit testing techni
 | Boundary value analysis | Test at equivalence class boundaries (boundary, boundary±1) |
 
 ```typescript
-// NG - happy path only
+// Avoid: happy path only
 test('validates age', () => {
   expect(validateAge(25)).toBe(true)
 })
 
-// OK - includes boundary values
+// Example: includes boundary values
 test('validates age at boundaries', () => {
   expect(validateAge(0)).toBe(true)    // lower bound
   expect(validateAge(-1)).toBe(false)  // lower bound - 1
@@ -72,12 +72,6 @@ test('validates age at boundaries', () => {
 
 Unit tests should verify that the public contract behaves as expected, not only that configuration values or internal-state snapshots changed. Boundary changes such as rejection, permission, isolation, or release should cover the main success/failure cases deterministically.
 
-| Criteria | Judgment |
-|----------|----------|
-| Expected return values, exceptions, or side effects are directly verified | OK |
-| Both sides of a boundary change, such as success/failure or allow/deny, are verified | OK |
-| Only configuration values or the last internal state are checked | REJECT |
-| Main boundary conditions require an external environment to reproduce | Consider a deterministic test with a fake or stub |
 
 ## Verification Layers for Natural-Language and Declarative Assets
 
@@ -93,7 +87,7 @@ Prompt and instruction strings, as well as declarative definitions such as workf
 | Decisions that can be defined deterministically | Unit tests after extracting the decision from prose into code |
 
 ```typescript
-// Bad - copying a shipped definition into expectations and detecting definition diffs only
+// Avoid: copying a shipped definition into expectations and detecting definition diffs only
 expect(shippedWorkflow.steps.map((step) => step.name)).toEqual(['plan', 'review', 'fix'])
 
 // Good - verifying the parser contract with a minimal fixture
@@ -111,10 +105,10 @@ Manage test data with factory functions.
 - Do not share and mutate fixtures between tests (maintain test independence)
 
 ```typescript
-// NG - defining all fields every time
+// Avoid: defining all fields every time
 const user = { id: '1', name: 'test', email: 'test@example.com', role: 'admin', createdAt: new Date() }
 
-// OK - factory function with minimal overrides
+// Example: factory function with minimal overrides
 const createUser = (overrides: Partial<User> = {}): User => ({
   id: 'test-id',
   name: 'test-user',
@@ -142,13 +136,13 @@ Testability is an indicator of design quality. Hard-to-test code has tightly cou
 | Module replacement | Replace entire modules during testing |
 
 ```typescript
-// NG - creates dependency directly (cannot mock in tests)
+// Avoid: creates dependency directly (cannot mock in tests)
 class OrderService {
   private repo = new OrderRepository()
   async create(order: Order) { return this.repo.save(order) }
 }
 
-// OK - constructor injection (mockable in tests)
+// Example: constructor injection (mockable in tests)
 class OrderService {
   constructor(private readonly repo: OrderRepository) {}
   async create(order: Order) { return this.repo.save(order) }

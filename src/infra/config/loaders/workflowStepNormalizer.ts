@@ -11,40 +11,90 @@ import type {
 } from '../../../core/models/index.js';
 import { getWorkflowStepKind } from '../../../core/models/workflow-step-kind.js';
 import type { WorkflowArpeggioConfig, WorkflowMcpServersConfig, WorkflowOverrides } from '../../../core/models/config-types.js';
-import type {
-  StepProviderOptions,
-  WorkflowCallArgValue,
-  WorkflowStepKind,
-  DynamicFacetsConfig,
+import {
+  MAX_COMPLETION_RETRY,
+  type DynamicFacetsConfig,
+  type CompletionRetryConfig,
+  type SelectorGuidance,
+  type StepProviderOptions,
+  type WorkflowCallArgValue,
+  type WorkflowStepKind,
 } from '../../../core/models/workflow-types.js';
+import type { CompanionSelection } from '../../../core/models/companion-types.js';
 import { applyQualityGateOverrides } from './qualityGateOverrides.js';
 import {
   type FacetResolutionContext,
   type WorkflowSections,
   extractPersonaDisplayName,
   isResourcePath,
+  isScopeRef,
   resolvePersona,
   resolveRefListWithSource,
   resolveRefToContent,
+  resolveSelectorInstruction,
 } from './resource-resolver.js';
-import { mergeProviderOptions } from '../providerOptions.js';
-import { normalizeProviderBlockOptions } from '../providerBlockOptions.js';
-import type { ConfigProviderReference } from '../providerReference.js';
 import { validateWorkflowArpeggio, validateWorkflowMcpServers } from './workflowNormalizationPolicies.js';
 import { normalizeRule } from './workflowRuleNormalizer.js';
 import { normalizeArpeggio, normalizeOutputContract, normalizeTeamLeader } from './workflowStepFeaturesNormalizer.js';
 import { resolveStructuredOutput } from './workflowStructuredOutputResolver.js';
 import { normalizeWorkflowEffects } from './workflowSystemStepNormalizer.js';
-import { parseAiConditionExpression } from '../../../core/models/workflow-condition-expression.js';
-import { resolveWorkflowProviderOptions } from './workflowProviderOptionsResolver.js';
+import { resolveCapabilitySets } from './capabilitySetResolver.js';
+import { resolveWorkflowMcpReferences } from './workflowMcpReferenceResolver.js';
+import type { McpServerConfig } from '../../../core/models/index.js';
 import { isWorkflowParamReference } from './workflowCallableParamRef.js';
 import { normalizeQualityGates } from '../configNormalizers.js';
 import { withWorkflowConfigErrorPath as withWorkflowStepErrorPath } from '../../../core/workflow/workflow-config-error.js';
 
+function normalizeCompletionRetry(
+  step: z.input<typeof WorkflowStepRawSchema>,
+  stepPath: readonly PropertyKey[],
+  workflowDir: string,
+  sections: WorkflowSections,
+  context: FacetResolutionContext | undefined,
+): CompletionRetryConfig | undefined {
+  const raw = step.completion_retry;
+  if (raw === undefined) {
+    return undefined;
+  }
+  const retryInstructionRef = raw.retry_instruction;
+  if (isWorkflowParamReference(retryInstructionRef)) {
+    throw withWorkflowStepErrorPath(
+      new Error(`Step "${step.name}" has unresolved $param in completion_retry.retry_instruction`),
+      [...stepPath, 'completion_retry', 'retry_instruction'],
+    );
+  }
+  const retryInstruction = normalizeStepField(
+    stepPath,
+    ['completion_retry', 'retry_instruction'],
+    () => resolveRefToContent(
+      retryInstructionRef,
+      sections.resolvedInstructionsWithSource ?? sections.resolvedInstructions,
+      workflowDir,
+      'instructions',
+      context,
+    ),
+  );
+  if (retryInstruction === undefined) {
+    throw withWorkflowStepErrorPath(
+      new Error(`Failed to resolve completion retry instruction "${retryInstructionRef}"`),
+      [...stepPath, 'completion_retry', 'retry_instruction'],
+    );
+  }
+  return {
+    minRetry: raw.min_retry ?? 0,
+    maxRetry: raw.max_retry ?? MAX_COMPLETION_RETRY,
+    retryInstruction,
+  };
+}
+
 type RawStep = z.output<typeof WorkflowStepRawSchema>;
-type RawProviderReference = RawStep['provider'];
-type RawPromotionEntry = NonNullable<RawStep['promotion']>[number];
-type NormalizedProviderReference = ReturnType<typeof normalizeProviderReference>;
+type RawSelectorGuidance = NonNullable<NonNullable<RawStep['dynamic_facets']>['selector']>;
+
+/** Workflow-level inputs threaded down to every step so `capabilities:` / `mcp:` references resolve. */
+export interface WorkflowLevelDefinitions {
+  capabilityOptions?: StepProviderOptions;
+  mcpServers?: Record<string, McpServerConfig>;
+}
 
 function normalizeWorkflowCallArgs(
   stepName: string,
@@ -64,97 +114,90 @@ function normalizeWorkflowCallArgs(
   return normalized;
 }
 
-export function normalizeProviderReference(
-  provider: RawProviderReference,
-  model: RawStep['model'],
-  providerOptions: RawStep['provider_options'],
-  workflowDir: string,
-  context?: FacetResolutionContext,
-): {
-  provider: WorkflowStep['provider'];
-  model: WorkflowStep['model'];
-  providerOptions: StepProviderOptions | undefined;
-  providerSpecified: boolean;
-  modelSpecified: boolean;
-} {
-  const modelSpecified = model !== undefined;
-  const normalizedModel = model ?? undefined;
-  const normalizedProviderOptions = resolveWorkflowProviderOptions(
-    providerOptions as (Record<string, unknown> & { extends?: string }) | undefined,
-    workflowDir,
-    context,
-  );
-  const providerReference = provider as ConfigProviderReference<NonNullable<WorkflowStep['provider']>>;
-  if (typeof providerReference === 'string' || providerReference === undefined) {
-    return {
-      provider: providerReference,
-      model: normalizedModel,
-      providerOptions: normalizedProviderOptions,
-      providerSpecified: providerReference !== undefined,
-      modelSpecified,
-    };
-  }
-
-  return {
-    provider: providerReference.type,
-    model: providerReference.model ?? normalizedModel,
-    providerOptions: mergeProviderOptions(
-      normalizeProviderBlockOptions(providerReference),
-      normalizedProviderOptions,
-    ),
-    providerSpecified: true,
-    modelSpecified: providerReference.model !== undefined || modelSpecified,
-  };
-}
-
 function normalizeDynamicFacets(
   raw: RawStep['dynamic_facets'],
   stepPath: readonly PropertyKey[],
+  workflowDir: string,
+  sections: WorkflowSections,
+  context?: FacetResolutionContext,
 ): DynamicFacetsConfig | undefined {
   if (raw === undefined) {
     return undefined;
   }
+  const pool = normalizeStepField(stepPath, ['dynamic_facets', 'pool'], () => {
+    if (typeof raw.pool !== 'string') {
+      throw new Error('dynamic_facets.pool has an unresolved parameter reference');
+    }
+    return raw.pool;
+  });
   return normalizeStepField(stepPath, ['dynamic_facets'], () => ({
-    pool: raw.pool,
-    maxSelected: raw.max_selected,
+    pool,
+    ...(raw.max_selected === undefined ? {} : { maxSelected: raw.max_selected }),
+    ...(raw.selector === undefined ? {} : {
+      selector: normalizeSelectorGuidance(
+        raw.selector,
+        stepPath,
+        ['dynamic_facets', 'selector'],
+        workflowDir,
+        sections,
+        context,
+      ),
+    }),
   }));
 }
 
-function normalizePromotionEntry(
-  entry: RawPromotionEntry,
-  normalizedProvider: NormalizedProviderReference,
-): NonNullable<AgentWorkflowStep['promotion']>[number] {
-  const aiExpression = entry.condition !== undefined
-    ? parseAiConditionExpression(entry.condition)
-    : undefined;
-  if (
-    entry.provider === undefined
-    && entry.model === undefined
-    && normalizedProvider.providerOptions === undefined
-  ) {
-    throw new Error('Configuration error: promotion entry requires at least one of "provider", "model", or "provider_options"');
-  }
+function normalizeSelectorGuidance(
+  raw: RawSelectorGuidance,
+  stepPath: readonly PropertyKey[],
+  selectorPath: readonly PropertyKey[],
+  workflowDir: string,
+  sections: WorkflowSections,
+  context?: FacetResolutionContext,
+): SelectorGuidance {
+  const normalizedPersona = raw.persona === undefined
+    ? undefined
+    : normalizeStepField(stepPath, [...selectorPath, 'persona'], () => {
+      if (typeof raw.persona !== 'string') {
+        throw new Error('selector.persona has an unresolved parameter reference');
+      }
+      if (raw.persona.trim().length === 0) {
+        throw new Error('selector.persona must not be empty');
+      }
+      const resolved = resolvePersona(raw.persona, sections, workflowDir, context);
+      if (isScopeRef(raw.persona) && resolved.personaPath === undefined) {
+        throw new Error(`selector.persona could not be resolved: ${raw.persona}`);
+      }
+      return resolved;
+    });
+  const instruction = normalizeStepField(stepPath, [...selectorPath, 'instruction'], () => {
+    if (typeof raw.instruction !== 'string') {
+      throw new Error('selector.instruction has an unresolved parameter reference');
+    }
+    const resolved = resolveSelectorInstruction(
+      raw.instruction,
+      sections.resolvedInstructionsWithSource ?? sections.resolvedInstructions,
+      workflowDir,
+      context,
+    );
+    if (resolved === undefined) {
+      throw new Error(`selector.instruction could not be resolved: ${raw.instruction}`);
+    }
+    return resolved;
+  });
   return {
-    at: entry.at,
-    condition: entry.condition,
-    aiConditionText: aiExpression?.text,
-    provider: normalizedProvider.provider,
-    providerSpecified: normalizedProvider.providerSpecified,
-    model: normalizedProvider.model,
-    providerOptions: normalizedProvider.providerOptions,
+    ...(normalizedPersona?.personaSpec === undefined ? {} : { persona: normalizedPersona.personaSpec }),
+    ...(normalizedPersona?.personaPath === undefined ? {} : { personaPath: normalizedPersona.personaPath }),
+    instruction,
   };
 }
 
-function validateWorkflowCallOverrides(
-  normalizedOverrides: NormalizedProviderReference,
-): void {
-  if (
-    normalizedOverrides.provider === undefined
-    && normalizedOverrides.model === undefined
-    && normalizedOverrides.providerOptions === undefined
-  ) {
-    throw new Error("Configuration error: workflow_call overrides require at least one of 'provider', 'model', or 'provider_options'");
+function normalizePromotionEntry(
+  entry: NonNullable<RawStep['promotion']>[number],
+): NonNullable<AgentWorkflowStep['promotion']>[number] {
+  if (entry.at === undefined) {
+    throw new Error('Configuration error: workflow promotion entry requires "at"');
   }
+  return { at: entry.at };
 }
 
 function normalizeStepField<T>(
@@ -169,25 +212,78 @@ function normalizeStepField<T>(
   }
 }
 
+const INSTRUCTION_COMPOSITION_SEPARATOR = '\n\n---\n\n';
+
+function normalizeInstruction(
+  rawInstruction: z.input<typeof WorkflowStepRawSchema>['instruction'],
+  stepName: string,
+  stepPath: readonly PropertyKey[],
+  sections: WorkflowSections,
+  workflowDir: string,
+  context: FacetResolutionContext | undefined,
+): string | undefined {
+  if (rawInstruction === undefined) {
+    return undefined;
+  }
+  const refs = Array.isArray(rawInstruction) ? rawInstruction : [rawInstruction];
+  const contents = refs.map((ref, index) => normalizeStepField(
+    stepPath,
+    ['instruction', ...(Array.isArray(rawInstruction) ? [index] : [])],
+    () => {
+      if (isWorkflowParamReference(ref)) {
+        throw new Error(`Step "${stepName}" has unresolved $param in instruction`);
+      }
+      const resolved = resolveRefToContent(
+        ref,
+        sections.resolvedInstructionsWithSource ?? sections.resolvedInstructions,
+        workflowDir,
+        'instructions',
+        context,
+      );
+      if (resolved === undefined) {
+        throw new Error(`Failed to resolve instruction "${ref}"`);
+      }
+      return resolved;
+    },
+  ));
+  return Array.isArray(rawInstruction)
+    ? contents.join(INSTRUCTION_COMPOSITION_SEPARATOR)
+    : contents[0];
+}
+
+function preserveInstructionRef(
+  rawInstruction: z.output<typeof WorkflowStepRawSchema>['instruction'],
+  stepName: string,
+  stepPath: readonly PropertyKey[],
+): string | string[] | undefined {
+  return normalizeStepField(stepPath, ['instruction'], () => {
+    if (rawInstruction === undefined) {
+      return undefined;
+    }
+    const refs = Array.isArray(rawInstruction) ? rawInstruction : [rawInstruction];
+    const stringRefs = refs.map((ref) => {
+      if (isWorkflowParamReference(ref)) {
+        throw new Error(`Step "${stepName}" has unresolved $param in instruction`);
+      }
+      return ref;
+    });
+    return Array.isArray(rawInstruction) ? stringRefs : stringRefs[0];
+  });
+}
+
 export function normalizeStepFromRaw(
   step: RawStep,
   workflowDir: string,
   sections: WorkflowSections,
   workflowSchemas: Record<string, string> | undefined,
   stepPath: readonly PropertyKey[],
-  inheritedProvider?: WorkflowStep['provider'],
-  inheritedModel?: WorkflowStep['model'],
-  inheritedModelSpecified = inheritedModel !== undefined,
-  inheritedDirectProviderOptions?: WorkflowStep['providerOptions'],
-  inheritedWorkflowProviderOptions?: WorkflowStep['providerOptions'],
   inheritedAllowGitCommit?: boolean,
-  inheritedProviderIsWorkflowFallback = false,
-  inheritedModelIsWorkflowFallback = inheritedProviderIsWorkflowFallback,
   context?: FacetResolutionContext,
   projectOverrides?: WorkflowOverrides,
   globalOverrides?: WorkflowOverrides,
   workflowArpeggioPolicy?: WorkflowArpeggioConfig,
   workflowMcpServersPolicy?: WorkflowMcpServersConfig,
+  workflowDefinitions?: WorkflowLevelDefinitions,
 ): WorkflowStep {
   try {
   const rules = step.rules?.map((rule, index) =>
@@ -196,6 +292,14 @@ export function normalizeStepFromRaw(
   const kind: WorkflowStepKind = getWorkflowStepKind(step);
   const isSystemStep = kind === 'system';
   const isWorkflowCallStep = kind === 'workflow_call';
+  if ((isSystemStep || isWorkflowCallStep) && (step.capabilities !== undefined || step.mcp !== undefined)) {
+    // `capabilities` / `mcp` are agent-only capability declarations; fail fast rather than silently
+    // dropping them on a step kind that never consumes them.
+    throw withWorkflowStepErrorPath(
+      new Error(`Step "${step.name}" cannot use "capabilities"/"mcp" on a ${kind} step`),
+      stepPath,
+    );
+  }
   const rawPersona = (step as Record<string, unknown>).persona as string | undefined;
   if (rawPersona !== undefined && rawPersona.trim().length === 0) {
     const error = new Error(`Step "${step.name}" has an empty persona value`);
@@ -244,47 +348,44 @@ export function normalizeStepFromRaw(
       'knowledge',
       context,
   ));
-  const normalizedProvider = normalizeStepField(
-    stepPath,
-    ['provider_options', 'extends'],
-    () => normalizeProviderReference(step.provider, step.model, step.provider_options, workflowDir, context),
-  );
   const promotion = step.promotion?.map((entry, index) => normalizeStepField(
     stepPath,
     ['promotion', index],
-    () => normalizePromotionEntry(
-      entry,
-      normalizeStepField(
-        stepPath,
-        ['promotion', index, 'provider_options', 'extends'],
-        () => normalizeProviderReference(entry.provider, entry.model, entry.provider_options, workflowDir, context),
-      ),
-    ),
+    () => normalizePromotionEntry(entry),
   ));
-  const normalizedOverrides = step.overrides
-    ? normalizeStepField(
-      stepPath,
-      ['overrides', 'provider_options', 'extends'],
-      () => normalizeProviderReference(step.overrides!.provider, step.overrides!.model, step.overrides!.provider_options, workflowDir, context),
-    )
-    : undefined;
-  if (normalizedOverrides !== undefined) {
-    normalizeStepField(stepPath, ['overrides'], () => validateWorkflowCallOverrides(normalizedOverrides));
-  }
   const instruction = isSystemStep || isWorkflowCallStep
     ? undefined
-    : step.instruction
-    ? normalizeStepField(stepPath, ['instruction'], () => resolveRefToContent(
-        step.instruction as string,
-        sections.resolvedInstructionsWithSource ?? sections.resolvedInstructions,
-        workflowDir,
-        'instructions',
-        context,
-      ))
-    : undefined;
+    : normalizeInstruction(
+      step.instruction,
+      step.name,
+      stepPath,
+      sections,
+      workflowDir,
+      context,
+    );
+  const completionRetry = normalizeCompletionRetry(
+    step,
+    stepPath,
+    workflowDir,
+    sections,
+    context,
+  );
+  const instructionRef = isSystemStep || isWorkflowCallStep
+    ? undefined
+    : preserveInstructionRef(step.instruction, step.name, stepPath);
 
   validateWorkflowArpeggio(step.name, step.arpeggio, stepPath, workflowArpeggioPolicy);
-  validateWorkflowMcpServers(step.name, step.mcp_servers, stepPath, workflowMcpServersPolicy);
+  // Resolve `mcp:` references against the workflow's top-level definitions, then enforce the
+  // deny-by-default transport policy on the merged result (inline + resolved), so a bundled default
+  // pulled in by reference is gated exactly like an inline definition (CT-MCP-5).
+  const resolvedMcpServers = resolveWorkflowMcpReferences(
+    step.name,
+    step.mcp,
+    workflowDefinitions?.mcpServers,
+    step.mcp_servers,
+    stepPath,
+  );
+  validateWorkflowMcpServers(step.name, resolvedMcpServers, stepPath, workflowMcpServersPolicy);
 
   if (isWorkflowCallStep) {
     if (isWorkflowParamReference(step.call)) {
@@ -299,15 +400,7 @@ export function normalizeStepFromRaw(
       kind: 'workflow_call',
       call: step.call!,
       vars: step.vars,
-      overrides: normalizedOverrides
-        ? {
-            provider: normalizedOverrides.provider,
-            model: normalizedOverrides.model,
-            providerOptions: normalizedOverrides.providerOptions,
-          }
-        : undefined,
       args: normalizeStepField(stepPath, ['args'], () => normalizeWorkflowCallArgs(step.name, step.args)),
-      findingContractAuthority: step.finding_contract_authority,
       personaDisplayName: resolvedPersonaDisplayName,
       instruction: '',
       rules,
@@ -340,14 +433,19 @@ export function normalizeStepFromRaw(
     globalOverrides,
   ));
 
-  const directProviderOptions = mergeProviderOptions(inheritedDirectProviderOptions, normalizedProvider.providerOptions);
-  const providerOptions = mergeProviderOptions(inheritedWorkflowProviderOptions, directProviderOptions);
-  const resolvedModel = normalizedProvider.modelSpecified
-    ? normalizedProvider.model
-    : (normalizedProvider.providerSpecified ? undefined : inheritedModel);
-  const inheritsDirectModel = inheritedModelSpecified
-    && !inheritedModelIsWorkflowFallback
-    && !normalizedProvider.providerSpecified;
+  // A step's own `capabilities:` replaces the workflow default rather than merging. Capability
+  // options remain a separate layer from runtime profile options and never become a direct
+  // provider assignment.
+  const stepCapabilityOptions = step.capabilities !== undefined
+    ? normalizeStepField(stepPath, ['capabilities'], () => resolveCapabilitySets(step.capabilities!, workflowDir, context))
+    : undefined;
+  const effectiveCapabilityOptions = stepCapabilityOptions ?? workflowDefinitions?.capabilityOptions;
+  const companion = normalizeStepField(stepPath, ['companion'], () => {
+    if (isWorkflowParamReference(step.companion)) {
+      throw new Error(`Step "${step.name}" has unresolved $param in companion`);
+    }
+    return step.companion as CompanionSelection | undefined;
+  });
 
   const normalizedAgentFields: Omit<
     NormalAgentWorkflowStep,
@@ -363,21 +461,14 @@ export function normalizeStepFromRaw(
     tags: tags && tags.length > 0 ? tags : undefined,
     personaDisplayName: resolvedPersonaDisplayName,
     personaPath,
-    mcpServers: step.mcp_servers,
-    provider: normalizedProvider.provider ?? inheritedProvider,
-    providerSpecified: normalizedProvider.providerSpecified
-      || (inheritedProvider !== undefined && !inheritedProviderIsWorkflowFallback),
-    model: resolvedModel,
-    modelSpecified: normalizedProvider.modelSpecified
-      || inheritsDirectModel,
+    mcpServers: resolvedMcpServers,
     promotion,
     requiredPermissionMode: step.required_permission_mode,
-    providerOptions,
-    directProviderOptions,
-    workflowProviderOptions: inheritedWorkflowProviderOptions,
+    capabilityProviderOptions: effectiveCapabilityOptions,
     edit: step.edit,
     allowGitCommit: step.allow_git_commit ?? inheritedAllowGitCommit ?? false,
     instruction: instruction || '{task}',
+    instructionRef,
     delayBeforeMs: step.delay_before_ms,
     structuredOutput: normalizeStepField(stepPath, ['structured_output', 'schema_ref'], () => resolveStructuredOutput(step, workflowSchemas, {
       projectDir: context?.projectDir ?? workflowDir,
@@ -413,7 +504,15 @@ export function normalizeStepFromRaw(
     passPreviousResponse: step.pass_previous_response ?? true,
     policyContents,
     knowledgeContents,
+    companion,
+    completionRetry,
   };
+
+  // parallel 親の capabilities は sub-step の既定になる（sub-step 自身の宣言が置換する）。
+  // 渡さないと、親が readonly を宣言していても無宣言の子が workflow 既定へ落ちて広くなる。
+  const subStepWorkflowDefinitions = effectiveCapabilityOptions === undefined
+    ? workflowDefinitions
+    : { ...workflowDefinitions, capabilityOptions: effectiveCapabilityOptions };
 
   if (step.parallel && Array.isArray(step.parallel) && step.parallel.length > 0) {
     const normalizedStep: AgentWorkflowStep = {
@@ -425,19 +524,13 @@ export function normalizeStepFromRaw(
           sections,
           workflowSchemas,
           [...stepPath, 'parallel', index],
-          normalizedAgentFields.provider,
-          normalizedAgentFields.model,
-          normalizedAgentFields.modelSpecified,
-          normalizedAgentFields.directProviderOptions,
-          normalizedAgentFields.workflowProviderOptions,
           normalizedAgentFields.allowGitCommit,
-          normalizedAgentFields.providerSpecified === false,
-          normalizedAgentFields.modelSpecified === false,
           context,
           projectOverrides,
           globalOverrides,
           workflowArpeggioPolicy,
           workflowMcpServersPolicy,
+          subStepWorkflowDefinitions,
         ),
       ),
       ...(step.concurrency != null ? { concurrency: step.concurrency } : {}),
@@ -457,19 +550,13 @@ export function normalizeStepFromRaw(
       sections,
       workflowSchemas,
       [...stepPath, 'parallel', branch, index],
-      normalizedAgentFields.provider,
-      normalizedAgentFields.model,
-      normalizedAgentFields.modelSpecified,
-      normalizedAgentFields.directProviderOptions,
-      normalizedAgentFields.workflowProviderOptions,
       normalizedAgentFields.allowGitCommit,
-      normalizedAgentFields.providerSpecified === false,
-      normalizedAgentFields.modelSpecified === false,
       context,
       projectOverrides,
       globalOverrides,
       workflowArpeggioPolicy,
       workflowMcpServersPolicy,
+      subStepWorkflowDefinitions,
       );
       return normalized as DynamicParallelFixedSubStep;
     };
@@ -484,7 +571,22 @@ export function normalizeStepFromRaw(
       kind: 'dynamic' as const,
       fixed,
       pool,
-      selection: step.parallel.selection,
+      selection: {
+        mode: step.parallel.selection.mode,
+        ...(step.parallel.selection.reports === undefined ? {} : {
+          reports: [...step.parallel.selection.reports],
+        }),
+        ...(step.parallel.selection.selector === undefined ? {} : {
+          selector: normalizeSelectorGuidance(
+            step.parallel.selection.selector,
+            stepPath,
+            ['parallel', 'selection', 'selector'],
+            workflowDir,
+            sections,
+            context,
+          ),
+        }),
+      },
     };
     return {
       ...normalizedAgentFields,
@@ -502,17 +604,19 @@ export function normalizeStepFromRaw(
   }
 
   const teamLeader = normalizeTeamLeader(step.team_leader, workflowDir, sections, stepPath, context);
+  const dynamicFacets = normalizeDynamicFacets(step.dynamic_facets, stepPath, workflowDir, sections, context);
   if (teamLeader) {
     return {
       ...normalizedAgentFields,
       teamLeader,
+      dynamicFacets,
     };
   }
 
   return {
     ...normalizedAgentFields,
     session: step.session,
-    dynamicFacets: normalizeDynamicFacets(step.dynamic_facets, stepPath),
+    dynamicFacets,
   };
   } catch (error) {
     throw withWorkflowStepErrorPath(error, stepPath);

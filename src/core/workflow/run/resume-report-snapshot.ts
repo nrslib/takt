@@ -6,11 +6,9 @@
  * producer 実行後の resume で consumer の参照が必ず壊れる（v3-r4 の resume
  * 境界バグ）。ここでは旧 run の workflow 成果物全体を新 run の reports/
  * として原子的に継承する。writer の lock・履歴を保持する
- * `.takt-report-internal/` は原則継承しない。ただし正式 resume に必要な
- * Finding review publication の pending/completed record だけは、専用の
- * allowlist 経路で非公開のまま継承する。
+ * `.takt-report-internal/` は継承しない。
  *
- * Finding Contractのポイント:
+ * 重要なポイント:
  * - workflow成果物の選択コピーはしない。静的解析では workflow_call / loop
  *   judge / 動的 facet の参照を把握しきれないため、内部名前空間を除く全体を
  *   コピーする。
@@ -18,9 +16,7 @@
  * - symlink・run 外 path・非通常ファイルは拒否。target reports/ が既に非空なら
  *   fail-fast。失敗時は一時成果物を除去し、半端な reports/ を公開しない。
  * - 公開 workflow 成果物のファイル一覧と hash の SSOT は manifest
- *   （resume-artifacts.json）。非公開の Finding review record は各 record
- *   自身の identity/digest/protocol 検証を使い、manifest には露出させない。
- *   meta.json からは manifest への参照のみ。
+ *   （resume-artifacts.json）。meta.json からは manifest への参照のみ。
  * - **公開は単一 rename に集約する（atomic publication requirement）**: manifest は staged
  *   reports の内側（reports/resume-artifacts.json、予約名）に置き、一時領域で
  *   全部完成させてから reports の rename 1回だけで公開する。ロールバックという
@@ -48,6 +44,7 @@ import {
   type PrivateDirectoryReadSnapshot,
 } from '../../../shared/utils/private-file.js';
 import { buildRunPaths } from './run-paths.js';
+import { isResumeReportConsumerKey } from './resume-report-consumer.js';
 
 // reports/ 直下の予約名（単一情報源は core/models/reserved-report-names.ts）。
 // 継承 manifest はスナップショットの一部として reports 内に置かれ、次回 resume
@@ -57,8 +54,6 @@ import { buildRunPaths } from './run-paths.js';
 export { RESUME_ARTIFACTS_FILE_NAME } from '../../models/reserved-report-names.js';
 import {
   classifyReportRelativePath,
-  FINDING_REVIEW_PUBLICATIONS_INTERNAL_DIRECTORY,
-  REPORT_INTERNAL_NAMESPACE,
   RESUME_ARTIFACTS_FILE_NAME,
 } from '../../models/reserved-report-names.js';
 
@@ -69,12 +64,24 @@ export interface ResumeReportSnapshotFileEntry {
   readonly sha256: string;
 }
 
+export interface ResumeReportSnapshotReferenceEntry {
+  readonly reference: string;
+  readonly path: string;
+}
+
+export interface ResumeReportSnapshotConsumerEntry {
+  readonly consumerKey: string;
+  readonly reportDirectories: readonly string[];
+  readonly references: readonly ResumeReportSnapshotReferenceEntry[];
+}
+
 export interface ResumeReportSnapshotManifest {
-  readonly version: 1;
+  readonly version: 1 | 2;
   readonly sourceRunSlug: string;
   readonly targetRunSlug: string;
   readonly createdAt: string;
   readonly files: readonly ResumeReportSnapshotFileEntry[];
+  readonly resumeReportConsumers?: readonly ResumeReportSnapshotConsumerEntry[];
 }
 
 export interface InheritResumeReportSnapshotOptions {
@@ -82,6 +89,7 @@ export interface InheritResumeReportSnapshotOptions {
   readonly cwd: string;
   readonly sourceRunSlug: string;
   readonly targetRunSlug: string;
+  readonly resumeReportConsumers?: readonly ResumeReportSnapshotConsumerEntry[];
 }
 
 export class ResumeReportSnapshotSourceError extends Error {
@@ -91,8 +99,18 @@ export class ResumeReportSnapshotSourceError extends Error {
   }
 }
 
-const MANIFEST_KEYS = new Set(['version', 'sourceRunSlug', 'targetRunSlug', 'createdAt', 'files']);
+const MANIFEST_V1_KEYS = new Set(['version', 'sourceRunSlug', 'targetRunSlug', 'createdAt', 'files']);
+const MANIFEST_V2_KEYS = new Set([
+  'version',
+  'sourceRunSlug',
+  'targetRunSlug',
+  'createdAt',
+  'files',
+  'resumeReportConsumers',
+]);
 const MANIFEST_FILE_KEYS = new Set(['path', 'size', 'sha256']);
+const MANIFEST_CONSUMER_KEYS = new Set(['consumerKey', 'reportDirectories', 'references']);
+const MANIFEST_REFERENCE_KEYS = new Set(['reference', 'path']);
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 
 function assertManifestMetadata(
@@ -123,12 +141,79 @@ function isValidManifestPath(value: string): boolean {
     && classification.normalizedPath === value;
 }
 
+function isValidManifestDirectory(value: string): boolean {
+  return value === '' || isValidManifestPath(`${value}/report.md`);
+}
+
+function parseResumeReportConsumers(
+  value: unknown,
+  filePaths: ReadonlySet<string>,
+): readonly ResumeReportSnapshotConsumerEntry[] {
+  if (!Array.isArray(value)) {
+    throw new Error('Resume report snapshot: manifest resumeReportConsumers must be an array');
+  }
+  const seenConsumers = new Set<string>();
+  return value.map((entry, consumerIndex): ResumeReportSnapshotConsumerEntry => {
+    if (!isRecord(entry) || !hasOnlyKeys(entry, MANIFEST_CONSUMER_KEYS)) {
+      throw new Error(`Resume report snapshot: manifest resumeReportConsumers[${consumerIndex}] has an invalid shape`);
+    }
+    if (typeof entry.consumerKey !== 'string' || !isResumeReportConsumerKey(entry.consumerKey)) {
+      throw new Error(`Resume report snapshot: manifest resumeReportConsumers[${consumerIndex}].consumerKey is invalid`);
+    }
+    if (seenConsumers.has(entry.consumerKey)) {
+      throw new Error(`Resume report snapshot: manifest contains a duplicate report consumer "${entry.consumerKey}"`);
+    }
+    if (!Array.isArray(entry.reportDirectories)
+      || entry.reportDirectories.some((directory) => typeof directory !== 'string' || !isValidManifestDirectory(directory))) {
+      throw new Error(`Resume report snapshot: manifest resumeReportConsumers[${consumerIndex}].reportDirectories is invalid`);
+    }
+    if (!Array.isArray(entry.references)) {
+      throw new Error(`Resume report snapshot: manifest resumeReportConsumers[${consumerIndex}].references must be an array`);
+    }
+    const seenReferences = new Set<string>();
+    const references = entry.references.map((referenceEntry, referenceIndex): ResumeReportSnapshotReferenceEntry => {
+      if (!isRecord(referenceEntry) || !hasOnlyKeys(referenceEntry, MANIFEST_REFERENCE_KEYS)) {
+        throw new Error(
+          `Resume report snapshot: manifest resumeReportConsumers[${consumerIndex}].references[${referenceIndex}] has an invalid shape`,
+        );
+      }
+      if (typeof referenceEntry.reference !== 'string' || referenceEntry.reference.length === 0) {
+        throw new Error(
+          `Resume report snapshot: manifest resumeReportConsumers[${consumerIndex}].references[${referenceIndex}].reference is invalid`,
+        );
+      }
+      if (typeof referenceEntry.path !== 'string' || !filePaths.has(referenceEntry.path)) {
+        throw new Error(
+          `Resume report snapshot: manifest resumeReportConsumers[${consumerIndex}].references[${referenceIndex}].path is invalid`,
+        );
+      }
+      if (seenReferences.has(referenceEntry.reference)) {
+        throw new Error(
+          `Resume report snapshot: manifest report consumer contains a duplicate reference "${referenceEntry.reference}"`,
+        );
+      }
+      seenReferences.add(referenceEntry.reference);
+      return { reference: referenceEntry.reference, path: referenceEntry.path };
+    });
+    seenConsumers.add(entry.consumerKey);
+    return {
+      consumerKey: entry.consumerKey,
+      reportDirectories: [...new Set(entry.reportDirectories)],
+      references,
+    };
+  });
+}
+
 function parseResumeReportSnapshotManifest(value: unknown, targetRunSlug: string): ResumeReportSnapshotManifest {
-  if (!isRecord(value) || !hasOnlyKeys(value, MANIFEST_KEYS)) {
+  if (!isRecord(value)) {
     throw new Error('Resume report snapshot: manifest must be an object with only the documented fields');
   }
-  if (value.version !== 1) {
-    throw new Error('Resume report snapshot: manifest version must be 1');
+  if (value.version !== 1 && value.version !== 2) {
+    throw new Error('Resume report snapshot: manifest version must be 1 or 2');
+  }
+  const allowedKeys = value.version === 1 ? MANIFEST_V1_KEYS : MANIFEST_V2_KEYS;
+  if (!hasOnlyKeys(value, allowedKeys)) {
+    throw new Error('Resume report snapshot: manifest must be an object with only the documented fields');
   }
   if (typeof value.sourceRunSlug !== 'string' || !isValidReportDirName(value.sourceRunSlug)) {
     throw new Error('Resume report snapshot: manifest sourceRunSlug is invalid');
@@ -165,12 +250,18 @@ function parseResumeReportSnapshotManifest(value: unknown, targetRunSlug: string
     seenPaths.add(entry.path);
     return { path: entry.path, size: entry.size, sha256: entry.sha256 };
   });
+  const resumeReportConsumers = value.version === 2
+    ? value.resumeReportConsumers === undefined
+      ? []
+      : parseResumeReportConsumers(value.resumeReportConsumers, seenPaths)
+    : undefined;
   return {
-    version: 1,
+    version: value.version,
     sourceRunSlug: value.sourceRunSlug,
     targetRunSlug,
     createdAt: value.createdAt,
     files,
+    ...(resumeReportConsumers === undefined ? {} : { resumeReportConsumers }),
   };
 }
 
@@ -230,47 +321,14 @@ interface CopyResult {
 }
 
 const PRIVATE_FILE_MODE = 0o600;
-const FINDING_REVIEW_PUBLICATIONS_INTERNAL_ROOT = [
-  REPORT_INTERNAL_NAMESPACE,
-  FINDING_REVIEW_PUBLICATIONS_INTERNAL_DIRECTORY,
-].join('/');
-const FINDING_REVIEW_PUBLICATION_RECORD_PATTERN = /^[a-f0-9]{64}\.json$/;
-
 type ResumeSnapshotEntryKind =
   | 'public'
-  | 'finding-review-directory'
-  | 'finding-review-record'
   | 'excluded';
 
 function classifyResumeSnapshotEntry(relativePath: string): ResumeSnapshotEntryKind {
   const classification = classifyReportRelativePath(relativePath);
   if (classification.kind === 'public') {
     return 'public';
-  }
-  if (
-    relativePath === REPORT_INTERNAL_NAMESPACE
-    || relativePath === FINDING_REVIEW_PUBLICATIONS_INTERNAL_ROOT
-    || relativePath === `${FINDING_REVIEW_PUBLICATIONS_INTERNAL_ROOT}/pending`
-  ) {
-    return 'finding-review-directory';
-  }
-  const completedPrefix = `${FINDING_REVIEW_PUBLICATIONS_INTERNAL_ROOT}/`;
-  const pendingPrefix = `${completedPrefix}pending/`;
-  if (
-    (
-      relativePath.startsWith(pendingPrefix)
-      && FINDING_REVIEW_PUBLICATION_RECORD_PATTERN.test(
-        relativePath.slice(pendingPrefix.length),
-      )
-    )
-    || (
-      relativePath.startsWith(completedPrefix)
-      && FINDING_REVIEW_PUBLICATION_RECORD_PATTERN.test(
-        relativePath.slice(completedPrefix.length),
-      )
-    )
-  ) {
-    return 'finding-review-record';
   }
   return 'excluded';
 }
@@ -323,18 +381,8 @@ function copyReportsTree(
       );
     }
     if (stat.isDirectory()) {
-      if (entryKind === 'finding-review-record') {
-        throw new ResumeReportSnapshotSourceError(
-          `Resume report snapshot: finding review record "${entryPosix}" is not a regular file`,
-        );
-      }
       files.push(...copyReportsTree(sourceRootSnapshot, stagingRootAbs, entryRel).files);
       continue;
-    }
-    if (entryKind === 'finding-review-directory') {
-      throw new ResumeReportSnapshotSourceError(
-        `Resume report snapshot: finding review directory "${entryPosix}" is not a directory`,
-      );
     }
     if (!stat.isFile()) {
       throw new ResumeReportSnapshotSourceError(
@@ -471,13 +519,18 @@ export function inheritResumeReportSnapshot(
 
     const createdAt = new Date().toISOString();
     assertManifestMetadata(sourceRunSlug, targetRunSlug, createdAt);
-    const manifest: ResumeReportSnapshotManifest = {
-      version: 1,
+    const copiedFilePaths = new Set(files.map((file) => file.path));
+    const manifest = parseResumeReportSnapshotManifest({
+      version: 2,
       sourceRunSlug,
       targetRunSlug,
       createdAt,
       files: [...files].sort((a, b) => a.path.localeCompare(b.path)),
-    };
+      resumeReportConsumers: (options.resumeReportConsumers ?? []).map((consumer) => ({
+        ...consumer,
+        references: consumer.references.filter((reference) => copiedFilePaths.has(reference.path)),
+      })),
+    }, targetRunSlug);
     // manifest は staged reports の内側（予約名）— 空 source でも staged
     // reports は manifest 1ファイルを含むため、「空ディレクトリの公開」という
     // 窓自体が消える。

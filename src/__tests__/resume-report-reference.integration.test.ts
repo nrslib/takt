@@ -3,8 +3,8 @@
  *
  * producer 実行後に abort → resume した場合、新 run は旧 run の reports/ を
  * 継承したスナップショットを持ち、consumer（裁定ステップ）の {report:X} は
- * 新 run 内の実在ファイルへ解決される。継承が無い（レポート欠落）場合は
- * エージェント起動前（runAgent 呼び出しゼロ）に runtime_error で abort する。
+ * 新 run 内の実在ファイルへ解決される。継承が無い（レポート欠落）場合も
+ * 平易な欠落文を agent に渡して run を続ける。
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -68,6 +68,7 @@ function makeArbitrateConfig(): WorkflowConfig {
 }
 
 describe('resume boundary: {report:X} references across runs', () => {
+  const inheritedReportContent = 'REJECT: findings...';
   let tmpDir: string;
 
   beforeEach(() => {
@@ -87,7 +88,7 @@ describe('resume boundary: {report:X} references across runs', () => {
     mkdirSync(paths.reportsAbs, { recursive: true });
     writeFileSync(join(paths.runRootAbs, 'meta.json'), JSON.stringify({ status: 'aborted' }));
     // producer（ai-antipattern-review-1st）が abort 前に書いたレポート。
-    writeFileSync(join(paths.reportsAbs, 'ai-antipattern-review-1st.md'), 'REJECT: findings...');
+    writeFileSync(join(paths.reportsAbs, 'ai-antipattern-review-1st.md'), inheritedReportContent);
   }
 
   it('resolves the consumer reference to the inherited snapshot in the new run (v3-r4 shape)', async () => {
@@ -107,67 +108,47 @@ describe('resume boundary: {report:X} references across runs', () => {
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
     const instruction = vi.mocked(runAgent).mock.calls[0]?.[1] as string;
     const inheritedPath = join(tmpDir, '.takt/runs/test-report-dir/reports/ai-antipattern-review-1st.md');
-    expect(instruction).toContain('REJECT: findings...');
+    expect(instruction).toContain(inheritedReportContent);
     expect(instruction).not.toContain('{report:ai-antipattern-review-1st.md}');
-    expect(readFileSync(inheritedPath, 'utf-8')).toBe('REJECT: findings...');
+    expect(readFileSync(inheritedPath, 'utf-8')).toBe(inheritedReportContent);
   });
 
-  it('aborts with a clear runtime error and zero agent calls when the report was not inherited', async () => {
+  it('continues with a plain missing-report sentence when the report was not inherited', async () => {
     // 継承なし: 新 run の reports/ は空（createTestTmpDir が作成済み）。
+    mockRunAgentSequence([makeResponse({ persona: 'ai-antipattern-no-fix', content: 'reviewer right' })]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'auto_select' }]);
     const engine = new WorkflowEngine(makeArbitrateConfig(), tmpDir, 'resume the arbitration', {
       projectCwd: tmpDir,
       reportDirName: 'test-report-dir',
     });
 
-    const abort = vi.fn();
-    engine.on('workflow:abort', abort);
-
     const state = await engine.run();
 
-    expect(state.status).toBe('aborted');
-    expect(abort).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'aborted' }),
-      expect.stringMatching(
-        /Report reference "ai-antipattern-review-1st\.md" is unavailable for step "ai-antipattern-no-fix"/,
-      ),
-      'runtime_error',
-      expect.objectContaining({
-        kind: 'runtime_error',
-        step: 'ai-antipattern-no-fix',
-      }),
-    );
-    expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
+    expect(state.status).toBe('completed');
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(runAgent).mock.calls[0]?.[1]).toContain('ai-antipattern-review-1st.md');
   });
 
-  it('mentions the resume source when aborting for a manifest that lacks the report', async () => {
+  it('continues with the same missing-report sentence when a snapshot lacks the report', async () => {
     // 空の source（レポートなし）から継承した場合、manifest は存在するが
-    // 対象レポートは含まれない — エラーに resume 元を明示する。
+    // 対象レポートは含まれない。
     const sourcePaths = buildRunPaths(tmpDir, 'aborted-empty');
     mkdirSync(sourcePaths.runRootAbs, { recursive: true });
     writeFileSync(join(sourcePaths.runRootAbs, 'meta.json'), '{}');
     rmSync(buildRunPaths(tmpDir, 'test-report-dir').reportsAbs, { recursive: true, force: true });
     inheritResumeReportSnapshot({ cwd: tmpDir, sourceRunSlug: 'aborted-empty', targetRunSlug: 'test-report-dir' });
+    mockRunAgentSequence([makeResponse({ persona: 'ai-antipattern-no-fix', content: 'reviewer right' })]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'auto_select' }]);
 
     const engine = new WorkflowEngine(makeArbitrateConfig(), tmpDir, 'resume the arbitration', {
       projectCwd: tmpDir,
       reportDirName: 'test-report-dir',
     });
 
-    const abort = vi.fn();
-    engine.on('workflow:abort', abort);
-
     const state = await engine.run();
 
-    expect(state.status).toBe('aborted');
-    expect(abort).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'aborted' }),
-      expect.stringMatching(/Resumed from "aborted-empty"/),
-      'runtime_error',
-      expect.objectContaining({
-        kind: 'runtime_error',
-        step: 'ai-antipattern-no-fix',
-      }),
-    );
-    expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
+    expect(state.status).toBe('completed');
+    expect(vi.mocked(runAgent).mock.calls[0]?.[1]).toContain('ai-antipattern-review-1st.md');
   });
+
 });

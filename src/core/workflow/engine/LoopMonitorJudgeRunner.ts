@@ -7,20 +7,29 @@ import type {
   WorkflowState,
   WorkflowStep,
 } from '../../models/types.js';
-import { mergeProviderOptions } from '../../../infra/config/providerOptions.js';
-import { providerSupportsClaudeAllowedTools } from '../../../infra/providers/provider-capabilities.js';
 import { resolveLoopMonitorJudgeProviderModel } from '../provider-resolution.js';
+import type { InternalAgentSeats } from '../../models/config-types.js';
+import {
+  LOOP_JUDGE_ROUTING_KEY,
+  loopJudgeProviderFields,
+  loopJudgeStepName,
+} from '../loop-judge-step.js';
 import type { RuntimeStepResolution, StepProviderInfo } from '../types.js';
 import { incrementStepIteration } from './state-manager.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { StepExecutor } from './StepExecutor.js';
 import { formatWorkflowRuleCondition } from '../../models/workflow-rule-condition.js';
+import {
+  createWorkflowStepDeadline,
+  type WorkflowStepAbortSignalContext,
+} from './step-deadline.js';
 
 const log = createLogger('loop-monitor-judge-runner');
 
 interface LoopMonitorJudgeRunnerDeps {
   optionsBuilder: OptionsBuilder;
   stepExecutor: StepExecutor;
+  stepAbortSignalContext: WorkflowStepAbortSignalContext;
   state: WorkflowState;
   task: string;
   getMaxSteps: () => WorkflowMaxSteps;
@@ -44,13 +53,8 @@ interface LoopMonitorJudgeRunnerDeps {
   ) => void;
   emitCollectedReports: () => void;
   resetCycleDetector: () => void;
-  /**
-   * finding contract 有効時のみ。エンジン計算済みの findings 状態
-   * （完了ゲートの充足状況・暫定の滞留ラウンド数・解消経路）を judge の
-   * instruction 末尾へ注入する（loop-monitor-summary.ts 参照）。store を
-   * runner に直接読ませず、Setup が構築した読み取り依存だけを渡す。
-   */
-  getFindingsSummaryForJudge?: () => string | undefined;
+  /** runtime.yaml internal_agents の解決済み seat。`loop-judge` seat だけを消費する。 */
+  internalAgentSeats?: InternalAgentSeats;
 }
 
 export class LoopMonitorJudgeRunner {
@@ -64,7 +68,7 @@ export class LoopMonitorJudgeRunner {
     fallbackNextStep: string,
   ): Promise<string> {
     const resolvedRuntime = this.resolveJudgeRuntime(monitor, cycleCount, triggeringStep, triggeringRuntime);
-    const judgeStep = this.createJudgeStep(monitor, cycleCount, resolvedRuntime.providerInfo);
+    const judgeStep = this.createJudgeStep(monitor, cycleCount);
     log.info('Running loop monitor judge', {
       cycle: monitor.cycle,
       cycleCount,
@@ -81,90 +85,88 @@ export class LoopMonitorJudgeRunner {
       this.deps.task,
       maxSteps,
     );
-    const findingsSummary = this.deps.getFindingsSummaryForJudge?.();
-    const prebuiltInstruction = findingsSummary !== undefined
-      ? `${baseInstruction}\n\n## Findings state (engine-computed)\n${findingsSummary}`
-      : baseInstruction;
+    const prebuiltInstruction = baseInstruction;
 
     const providerInfo = this.deps.optionsBuilder.resolveStepProviderModel(judgeStep, resolvedRuntime);
-    const stepEventWorkflowStack = this.deps.onStepStart(
-      judgeStep,
-      this.deps.state.iteration,
-      prebuiltInstruction,
-      providerInfo,
-      triggeringStep.name,
-      stepIteration,
+    const deadline = createWorkflowStepDeadline(
+      providerInfo.provider,
+      providerInfo.providerOptions,
+      this.deps.stepAbortSignalContext.getAbortSignal(),
     );
+    try {
+      return await this.deps.stepAbortSignalContext.runWith(deadline, async () => {
+        const stepEventWorkflowStack = this.deps.onStepStart(
+          judgeStep,
+          this.deps.state.iteration,
+          prebuiltInstruction,
+          providerInfo,
+          triggeringStep.name,
+          stepIteration,
+        );
 
-    const { response, instruction } = await this.deps.stepExecutor.runNormalStep(
-      judgeStep,
-      this.deps.state,
-      this.deps.task,
-      maxSteps,
-      this.deps.updatePersonaSession,
-      prebuiltInstruction,
-      resolvedRuntime,
-    );
+        const { response, instruction } = await this.deps.stepExecutor.runNormalStep(
+          judgeStep,
+          this.deps.state,
+          this.deps.task,
+          maxSteps,
+          this.deps.updatePersonaSession,
+          prebuiltInstruction,
+          resolvedRuntime,
+        );
 
-    this.deps.emitCollectedReports();
-    this.deps.onStepComplete(
-      judgeStep,
-      response,
-      instruction,
-      triggeringStep.name,
-      stepEventWorkflowStack,
-    );
+        this.deps.emitCollectedReports();
+        this.deps.onStepComplete(
+          judgeStep,
+          response,
+          instruction,
+          triggeringStep.name,
+          stepEventWorkflowStack,
+        );
 
-    if (response.status !== 'done') {
-      // 監視は衛生装置であり、判定役自身の障害（プロバイダエラー等）で
-      // 走行本体を落とさない。介入しなかった場合の自然な遷移で続行する。
-      // リセットしないと次のサイクル末尾ステップ完了のたびに壊れた判定役を
-      // 呼び直すため、成功時と同様に検出状態をリセットする。
-      log.warn('Loop monitor judge did not produce a decision; continuing with the natural transition', {
-        cycle: monitor.cycle,
-        status: response.status,
-        error: response.error,
-        fallbackNextStep,
+        if (response.status !== 'done') {
+          // 監視は衛生装置であり、判定役自身の障害（プロバイダエラー等）で
+          // 走行本体を落とさない。介入しなかった場合の自然な遷移で続行する。
+          // リセットしないと次のサイクル末尾ステップ完了のたびに壊れた判定役を
+          // 呼び直すため、成功時と同様に検出状態をリセットする。
+          log.warn('Loop monitor judge did not produce a decision; continuing with the natural transition', {
+            cycle: monitor.cycle,
+            status: response.status,
+            error: response.error,
+            fallbackNextStep,
+          });
+          this.deps.resetCycleDetector();
+          return fallbackNextStep;
+        }
+        const nextStep = this.deps.resolveNextStepFromDone(judgeStep, response);
+        log.info('Loop monitor judge decision', {
+          cycle: monitor.cycle,
+          nextStep,
+          matchedRuleIndex: response.matchedRuleIndex,
+        });
+        this.deps.resetCycleDetector();
+        return nextStep;
       });
-      this.deps.resetCycleDetector();
-      return fallbackNextStep;
+    } finally {
+      deadline.dispose();
     }
-    const nextStep = this.deps.resolveNextStepFromDone(judgeStep, response);
-    log.info('Loop monitor judge decision', {
-      cycle: monitor.cycle,
-      nextStep,
-      matchedRuleIndex: response.matchedRuleIndex,
-    });
-    this.deps.resetCycleDetector();
-    return nextStep;
   }
 
   private createJudgeStep(
     monitor: LoopMonitorConfig,
     cycleCount: number,
-    providerInfo: StepProviderInfo | undefined,
   ): WorkflowStep {
     const instruction = (monitor.judge.instruction ?? this.buildDefaultInstruction(monitor, cycleCount))
       .replace(/\{cycle_count\}/g, String(cycleCount));
-    const defaultProviderOptions = this.buildDefaultProviderOptions(providerInfo?.provider);
-
     return {
-      name: `_loop_judge_${monitor.cycle.join('_')}`,
-      sessionKey: monitor.judge.sessionKey,
+      name: loopJudgeStepName(monitor.cycle),
+      engineSynthesized: true,
+      internalFreshSession: true,
       persona: monitor.judge.persona,
       personaPath: monitor.judge.personaPath,
-      personaDisplayName: 'loop-judge',
-      // provider_routing.personas.loop-judge を効かせるためのキー。personaDisplayName は
-      // セッションキー等にも使う表示名で、ルーティング専用のキーとは役割が違うため分けている。
-      providerRoutingPersonaKey: 'loop-judge',
-      provider: monitor.judge.provider,
-      model: monitor.judge.model,
-      modelSpecified: monitor.judge.modelSpecified,
+      personaDisplayName: LOOP_JUDGE_ROUTING_KEY,
+      providerRoutingPersonaKey: LOOP_JUDGE_ROUTING_KEY,
+      ...loopJudgeProviderFields(this.deps.internalAgentSeats),
       edit: false,
-      providerOptions: mergeProviderOptions(
-        defaultProviderOptions,
-        monitor.judge.providerOptions,
-      ),
       instruction,
       rules: monitor.judge.rules,
       passPreviousResponse: true,
@@ -174,8 +176,8 @@ export class LoopMonitorJudgeRunner {
   /**
    * 判定役（judge）の provider/model を決める。
    *
-   * 優先順位は (1) judge.provider / judge.model の直接指定、(2) judge ステップの通常解決で
-   * 得られる provider_routing.* や persona_providers.loop-judge、(3) どちらも無い場合だけ
+   * 優先順位は (1) judge ステップの通常解決で得られる provider_routing.* や
+   * persona_providers.loop-judge、(2) どちらも無い場合だけ
    * トリガー元（ループを踏んだステップ）の解決済み provider/model（rate-limit フォールバック
    * 後の値を含む）。
    *
@@ -184,10 +186,8 @@ export class LoopMonitorJudgeRunner {
    * 9 時間走り続けた）。そのため runtime を渡さずに judge ステップ単体の通常解決を先に取り、
    * そこに明示指定が無かった場合だけトリガー元へフォールバックする。
    *
-   * 通常解決の呼び出しには provider 確定後にしか作れる defaultProviderOptions を含む
-   * ステップは使えない（provider を決めるための解決に、決まった後の値が要る循環になる）。
-   * そのため providerInfo なしの下書きステップで解決だけ行い、確定した providerInfo で
-   * createJudgeStep を呼び直して本物のステップを作る。
+   * judge ステップ自体の通常解決とトリガー元の解決を分離し、最後に共通 resolver で
+   * 優先順位を決める。
    */
   private resolveJudgeRuntime(
     monitor: LoopMonitorConfig,
@@ -195,30 +195,17 @@ export class LoopMonitorJudgeRunner {
     triggeringStep: WorkflowStep,
     triggeringRuntime?: RuntimeStepResolution,
   ): RuntimeStepResolution {
-    const draftJudgeStep = this.createJudgeStep(monitor, cycleCount, undefined);
+    const draftJudgeStep = this.createJudgeStep(monitor, cycleCount);
     const judgeProviderInfo = this.deps.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(draftJudgeStep);
     const triggeringProviderInfo = this.deps.optionsBuilder.resolveStepProviderModel(
       triggeringStep,
       triggeringRuntime,
     );
     const providerInfo = resolveLoopMonitorJudgeProviderModel({
-      judge: monitor.judge,
       judgeProviderInfo,
       triggeringProviderInfo,
     });
     return { providerInfo };
-  }
-
-  private buildDefaultProviderOptions(provider: StepProviderInfo['provider']) {
-    if (!providerSupportsClaudeAllowedTools(provider)) {
-      return undefined;
-    }
-
-    return {
-      claude: {
-        allowedTools: ['Read', 'Glob', 'Grep'],
-      },
-    };
   }
 
   private buildDefaultInstruction(monitor: LoopMonitorConfig, cycleCount: number): string {

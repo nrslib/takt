@@ -9,18 +9,15 @@ export const PROVIDER_TYPES = [
   'cursor',
   'copilot',
   'kiro',
+  'pi',
+  'deepseek-harness',
   'mock',
 ] as const;
 
 export type ProviderType = (typeof PROVIDER_TYPES)[number];
 
+/** Isolation mode used by TAKT-owned selector calls. */
 export type InternalAgentIsolation = 'strict-readonly';
-
-export function createStrictInternalAgentIsolationError(provider: ProviderType): Error {
-  return new Error(
-    `Provider "${provider}" does not support strict internal-agent isolation required by dynamic parallel selector`,
-  );
-}
 
 const PROVIDER_TYPE_SET: ReadonlySet<string> = new Set(PROVIDER_TYPES);
 
@@ -32,6 +29,14 @@ export interface StreamInitEventData {
   model: string;
   sessionId: string;
 }
+
+/**
+ * ネイティブ構造化出力を疑似ツール呼び出しとして表現する provider（OpenCode）が
+ * 使うツール名。エンジン自身が outputSchema で要求した収集機構であり、
+ * エージェントによるツール使用ではない。ツール禁止フェーズはこれを一般ツールとして
+ * 拒否してはならない。
+ */
+export const PROVIDER_NATIVE_STRUCTURED_OUTPUT_TOOL_NAME = 'StructuredOutput';
 
 export interface StreamToolUseEventData {
   tool: string;
@@ -124,3 +129,19 @@ export type StreamEvent =
   | { type: 'error'; data: StreamErrorEventData };
 
 export type StreamCallback = (event: StreamEvent) => void;
+
+export type ProviderActivityEvent =
+  | { readonly kind: 'attempt_started'; readonly executionUnitKey?: string }
+  | { readonly kind: 'execution_unit_finished'; readonly executionUnitKey: string }
+  | {
+    readonly kind: 'tool_started';
+    readonly executionUnitKey: string;
+    readonly toolCallKey: string;
+  }
+  | {
+    readonly kind: 'tool_finished';
+    readonly executionUnitKey: string;
+    readonly toolCallKey: string;
+  };
+
+export type ProviderActivityCallback = (event?: ProviderActivityEvent) => void;

@@ -2,10 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import type { WorkflowCallStep, WorkflowConfig } from '../core/models/index.js';
+import type { AutoRoutingConfig, WorkflowCallStep, WorkflowConfig } from '../core/models/index.js';
+import type { ProviderType } from '../shared/types/provider.js';
+import type { resolveWorkflowConfigValues } from '../infra/config/index.js';
 import {
-  CapabilityAwareStructuredCaller,
-  DefaultStructuredCaller,
+  ProviderNeutralStructuredCaller,
   type StructuredCaller,
 } from '../agents/structured-caller.js';
 import { getWorkflowReference } from '../core/workflow/workflow-reference.js';
@@ -80,6 +81,24 @@ const {
     mockResolveConfigValueWithSource: vi.fn(),
   };
 });
+
+function resolvedWorkflowConfigValues(
+  provider: ProviderType,
+  autoRouting: AutoRoutingConfig | undefined,
+): ReturnType<typeof resolveWorkflowConfigValues> {
+  return {
+    notificationSound: true,
+    notificationSoundEvents: {},
+    provider,
+    runtime: undefined,
+    preventSleep: false,
+    model: undefined,
+    logging: undefined,
+    analytics: undefined,
+    observability: disabledObservability,
+    autoRouting,
+  };
+}
 
 vi.mock('../core/workflow/index.js', async () => {
   const errorModule = await import('../core/workflow/ask-user-question-error.js');
@@ -199,7 +218,8 @@ vi.mock('../infra/fs/index.js', () => ({
   appendNdjsonLine: vi.fn(),
 }));
 
-vi.mock('../shared/utils/index.js', () => ({
+vi.mock('../shared/utils/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   createLogger: vi.fn().mockReturnValue({
     debug: vi.fn(),
     info: vi.fn(),
@@ -210,8 +230,6 @@ vi.mock('../shared/utils/index.js', () => ({
   notifyError: vi.fn(),
   preventSleep: vi.fn(),
   isDebugEnabled: vi.fn().mockReturnValue(false),
-  writePromptLog: vi.fn(),
-  getDebugPromptsLogFile: vi.fn().mockReturnValue(null),
   generateReportDir: vi.fn().mockReturnValue('test-report-dir'),
   ensureCurrentTmpDirExists: mockEnsureCurrentTmpDirExists,
   isValidReportDirName: vi.fn().mockReturnValue(true),
@@ -319,6 +337,7 @@ describe('executeWorkflow structuredCaller injection', () => {
     cleanupDirs = [];
     projectCwd = mkdtempSync(join(tmpdir(), 'takt-structured-caller-project-'));
     cleanupDirs.push(projectCwd);
+    process.env.TAKT_CONFIG_DIR = join(projectCwd, 'global-config');
   });
 
   afterEach(() => {
@@ -357,13 +376,12 @@ describe('executeWorkflow structuredCaller injection', () => {
     mockRunAgent.mockResolvedValue({
       persona: 'default',
       status: 'done',
-      content: '[JUDGE:6]',
+      content: '[JUDGE:1]',
       timestamp: new Date('2026-04-01T00:00:00.000Z'),
     });
 
     const structuredCaller = getInjectedStructuredCaller();
-    expect(structuredCaller).toBeInstanceOf(CapabilityAwareStructuredCaller);
-    expect(structuredCaller).toBeInstanceOf(DefaultStructuredCaller);
+    expect(structuredCaller).toBeInstanceOf(ProviderNeutralStructuredCaller);
     const result = await structuredCaller.evaluateCondition(
       'agent output',
       [{ index: 5, text: 'approved' }],
@@ -375,11 +393,10 @@ describe('executeWorkflow structuredCaller injection', () => {
     expect(MockWorkflowEngine.lastInstance.receivedOptions.callAiJudge).toBeUndefined();
     expect(MockWorkflowEngine.lastInstance.receivedOptions.provider).toBe('cursor');
     expect(MockWorkflowEngine.lastInstance.receivedOptions.model).toBeUndefined();
-    const [, prompt, runOptions] = mockRunAgent.mock.calls[0] ?? [];
-    expect(prompt).toContain('Output ONLY the tag `[JUDGE:N]`');
+    const [, , runOptions] = mockRunAgent.mock.calls[0] ?? [];
     expect(runOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
-      provider: 'cursor',
+      resolvedExecution: expect.objectContaining({ provider: 'cursor' }),
     }));
     expect(runOptions).not.toHaveProperty('outputSchema');
   });
@@ -413,8 +430,7 @@ describe('executeWorkflow structuredCaller injection', () => {
     });
 
     const structuredCaller = getInjectedStructuredCaller();
-    expect(structuredCaller).toBeInstanceOf(CapabilityAwareStructuredCaller);
-    expect(structuredCaller).toBeInstanceOf(DefaultStructuredCaller);
+    expect(structuredCaller).toBeInstanceOf(ProviderNeutralStructuredCaller);
     const result = await structuredCaller.evaluateCondition(
       'agent output',
       [
@@ -429,10 +445,10 @@ describe('executeWorkflow structuredCaller injection', () => {
     expect(MockWorkflowEngine.lastInstance.receivedOptions.callAiJudge).toBeUndefined();
     expect(MockWorkflowEngine.lastInstance.receivedOptions.provider).toBe('claude');
     const [, prompt, runOptions] = mockRunAgent.mock.calls[0] ?? [];
-    expect(prompt).toContain('Output ONLY the tag `[JUDGE:N]`');
+    expect(prompt).toContain('needs_fix');
     expect(runOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
-      provider: 'claude',
+      resolvedExecution: expect.objectContaining({ provider: 'claude' }),
     }));
     expect(runOptions).toHaveProperty('outputSchema');
   });
@@ -469,14 +485,16 @@ describe('executeWorkflow structuredCaller injection', () => {
       .mockResolvedValueOnce({
         persona: 'conductor',
         status: 'done',
-        content: '[IMPLEMENT:1]',
+        content: '```json\n{"content":"[IMPLEMENT:1]"}\n```',
         timestamp: new Date('2026-04-01T00:00:01.000Z'),
       });
 
     const structuredCaller = getInjectedStructuredCaller();
+    const structuredPrompt = 'structured judge prompt';
+    const tagPrompt = 'tag judge prompt';
     const result = await structuredCaller.judgeStatus(
-      'structured judge prompt',
-      'tag judge prompt',
+      structuredPrompt,
+      tagPrompt,
       [
         { label: 'approved' },
         { label: 'needs_fix' },
@@ -493,15 +511,14 @@ describe('executeWorkflow structuredCaller injection', () => {
     expect(mockGetProvider).toHaveBeenCalledWith('cursor');
     expect(mockRunAgent).toHaveBeenCalledTimes(2);
     const [, firstPrompt, firstRunOptions] = mockRunAgent.mock.calls[0] ?? [];
-    expect(firstPrompt).toContain('structured judge prompt');
+    expect(firstPrompt).toContain(structuredPrompt);
     expect(firstRunOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
-      provider: 'cursor',
-      resolvedProvider: 'cursor',
+      resolvedExecution: expect.objectContaining({ provider: 'cursor' }),
     }));
     expect(firstRunOptions).not.toHaveProperty('outputSchema');
     const [, secondPrompt, secondRunOptions] = mockRunAgent.mock.calls[1] ?? [];
-    expect(secondPrompt).toContain('tag judge prompt');
+    expect(secondPrompt).toContain(tagPrompt);
     expect(secondRunOptions).not.toHaveProperty('outputSchema');
   });
 
@@ -536,9 +553,11 @@ describe('executeWorkflow structuredCaller injection', () => {
     });
 
     const structuredCaller = getInjectedStructuredCaller();
+    const structuredPrompt = 'structured judge prompt';
+    const tagPrompt = 'tag judge prompt';
     const result = await structuredCaller.judgeStatus(
-      'structured judge prompt',
-      'tag judge prompt',
+      structuredPrompt,
+      tagPrompt,
       [
         { label: 'approved' },
         { label: 'needs_fix' },
@@ -555,12 +574,10 @@ describe('executeWorkflow structuredCaller injection', () => {
     expect(result).toEqual({ candidateIndex: 0, method: 'structured_output' });
     expect(mockGetProvider).toHaveBeenCalledWith('claude');
     const [, prompt, runOptions] = mockRunAgent.mock.calls[0] ?? [];
-    expect(prompt).toContain('structured judge prompt');
+    expect(prompt).toContain(structuredPrompt);
     expect(runOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
-      provider: 'claude',
-      resolvedProvider: 'claude',
-      resolvedModel: 'sonnet',
+      resolvedExecution: expect.objectContaining({ provider: 'claude', model: 'sonnet' }),
     }));
     expect(runOptions).toHaveProperty('outputSchema');
   });
@@ -1005,8 +1022,8 @@ steps:
     });
 
     const structuredCaller = getInjectedStructuredCaller();
-    expect(structuredCaller).toBeInstanceOf(CapabilityAwareStructuredCaller);
-    expect(structuredCaller).toBeInstanceOf(DefaultStructuredCaller);
+    expect(structuredCaller).toBeInstanceOf(ProviderNeutralStructuredCaller);
+    expect(structuredCaller).toBeInstanceOf(ProviderNeutralStructuredCaller);
     expect(MockWorkflowEngine.lastInstance.receivedOptions.provider).toBe('mock');
   });
 
@@ -1032,11 +1049,12 @@ steps:
       ],
       defaultPool: 'general',
       candidatePools: { general: { candidates: ['reasoning', 'coding'], fallback: 'reasoning' } },
-    } satisfies NonNullable<WorkflowConfig['autoRouting']>;
-    const config = {
-      ...makeConfig(),
-      autoRouting,
-    };
+    } satisfies AutoRoutingConfig;
+    const config = makeConfig();
+    const { resolveWorkflowConfigValues } = await import('../infra/config/index.js');
+    vi.mocked(resolveWorkflowConfigValues).mockReturnValue(
+      resolvedWorkflowConfigValues('cursor', autoRouting),
+    );
 
     await executeWorkflow(config, 'task', projectCwd, {
       projectCwd,
@@ -1048,10 +1066,8 @@ steps:
   });
 
   it('should delegate autoStrategy override application to WorkflowEngine', async () => {
-    const config = {
-      ...makeConfig(),
-      provider: 'mock',
-      autoRouting: {
+    const config = makeConfig();
+    const autoRouting = {
         strategy: 'cost',
         router: { provider: 'claude-sdk', model: 'claude-haiku-4-5-20251001' },
         candidates: [
@@ -1072,11 +1088,15 @@ steps:
         ],
         defaultPool: 'general',
         candidatePools: { general: { candidates: ['reasoning', 'coding'], fallback: 'reasoning' } },
-      },
-    } satisfies WorkflowConfig;
+      } satisfies AutoRoutingConfig;
+    const { resolveWorkflowConfigValues } = await import('../infra/config/index.js');
+    vi.mocked(resolveWorkflowConfigValues).mockReturnValue(
+      resolvedWorkflowConfigValues('mock', autoRouting),
+    );
 
     await executeWorkflow(config, 'task', projectCwd, {
       projectCwd,
+      provider: 'mock',
       autoStrategy: 'performance',
     });
 
@@ -1128,12 +1148,10 @@ steps:
     );
 
     expect(result).toBe(0);
-    const [, prompt, runOptions] = mockRunAgent.mock.calls[0] ?? [];
-    expect(prompt).toContain('Output ONLY the tag `[JUDGE:N]`');
+    const [, , runOptions] = mockRunAgent.mock.calls[0] ?? [];
     expect(runOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
-      provider: 'cursor',
-      resolvedProvider: 'cursor',
+      resolvedExecution: expect.objectContaining({ provider: 'cursor' }),
     }));
     expect(runOptions).not.toHaveProperty('outputSchema');
   });
@@ -1169,7 +1187,7 @@ steps:
       persona: 'default',
       status: 'done',
       content: '[JUDGE:1]',
-      structuredOutput: { matched_index: 1 },
+      structuredOutput: { matched_index: 1, reason: 'approved matched' },
       timestamp: new Date('2026-04-01T00:00:00.000Z'),
     });
 
@@ -1181,12 +1199,10 @@ steps:
     );
 
     expect(result).toBe(0);
-    const [, prompt, runOptions] = mockRunAgent.mock.calls[0] ?? [];
-    expect(prompt).toContain('Output ONLY the tag `[JUDGE:N]`');
+    const [, , runOptions] = mockRunAgent.mock.calls[0] ?? [];
     expect(runOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
-      provider: 'claude',
-      resolvedProvider: 'claude',
+      resolvedExecution: expect.objectContaining({ provider: 'claude' }),
     }));
     expect(runOptions).toHaveProperty('outputSchema');
   });
@@ -1229,12 +1245,10 @@ steps:
     expect(result.parts).toEqual([
       { id: 'part-1', title: 'API', instruction: 'Implement API' },
     ]);
-    const [, prompt, runOptions] = mockRunAgent.mock.calls[0] ?? [];
-    expect(prompt).toContain('```json');
+    const [, , runOptions] = mockRunAgent.mock.calls[0] ?? [];
     expect(runOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
-      resolvedProvider: 'cursor',
-      resolvedModel: 'cursor-fast',
+      resolvedExecution: expect.objectContaining({ provider: 'cursor', model: 'cursor-fast' }),
     }));
     expect(runOptions).not.toHaveProperty('outputSchema');
   });
@@ -1283,8 +1297,7 @@ steps:
     const [, , runOptions] = mockRunAgent.mock.calls[0] ?? [];
     expect(runOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
-      resolvedProvider: 'claude',
-      resolvedModel: 'sonnet',
+      resolvedExecution: expect.objectContaining({ provider: 'claude', model: 'sonnet' }),
     }));
     expect(runOptions).toHaveProperty('outputSchema');
   });
@@ -1325,12 +1338,10 @@ steps:
       cancelPartIds: [],
       parts: [{ id: 'part-2', title: 'Tests', instruction: 'Add tests' }],
     });
-    const [, prompt, runOptions] = mockRunAgent.mock.calls[0] ?? [];
-    expect(prompt).toContain('```json');
+    const [, , runOptions] = mockRunAgent.mock.calls[0] ?? [];
     expect(runOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
-      resolvedProvider: 'cursor',
-      resolvedModel: 'cursor-fast',
+      resolvedExecution: expect.objectContaining({ provider: 'cursor', model: 'cursor-fast' }),
     }));
     expect(runOptions).not.toHaveProperty('outputSchema');
   });
@@ -1380,8 +1391,7 @@ steps:
     const [, , runOptions] = mockRunAgent.mock.calls[0] ?? [];
     expect(runOptions).toEqual(expect.objectContaining({
       cwd: projectCwd,
-      resolvedProvider: 'claude',
-      resolvedModel: 'sonnet',
+      resolvedExecution: expect.objectContaining({ provider: 'claude', model: 'sonnet' }),
     }));
     expect(runOptions).toHaveProperty('outputSchema');
   });

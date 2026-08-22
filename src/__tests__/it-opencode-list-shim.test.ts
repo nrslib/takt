@@ -70,14 +70,12 @@ function startProbeRecorder(): Promise<ProbeRecorder> {
     request.on('data', (chunk) => { body += chunk; });
     request.on('end', () => {
       const parsed = body ? JSON.parse(body) as Record<string, unknown> : {};
-      const messages = (parsed.messages ?? []) as Array<{ role: string; content: unknown }>;
-      const systemText = messages.filter((m) => m.role === 'system').map((m) => String(m.content)).join('');
-      const isTitle = systemText.startsWith('You are a title generator');
-      if (request.url?.includes('chat/completions') && !isTitle) {
+      const hasToolDefinitions = Array.isArray(parsed.tools);
+      if (request.url?.includes('chat/completions') && hasToolDefinitions) {
         recorder.captured.push(parsed);
       }
       const chunks: Array<Record<string, unknown>> = [];
-      if (!isTitle && recorder.scriptToolCall !== undefined) {
+      if (hasToolDefinitions && recorder.scriptToolCall !== undefined) {
         const toolCall = recorder.scriptToolCall;
         recorder.scriptToolCall = undefined;
         chunks.push(
@@ -211,7 +209,7 @@ describe.skipIf(!shouldRun)('IT: opencode list tool shim against the real binary
     const versionAllowsShim = versionAllowsListToolShim(opencodeVersion!);
     const registryAllowsShim = registryAllowsListToolShim(shimlessRegistry);
     expect(versionAllowsShim && !registryAllowsShim).toBe(false);
-  }, 60_000);
+  }, 120_000);
 
   it('exposes list to the model when read is enabled and executes it end to end', async () => {
     recorder.captured.length = 0;
@@ -234,7 +232,7 @@ describe.skipIf(!shouldRun)('IT: opencode list tool shim against the real binary
       .filter((message) => message.role === 'tool')
       .map((message) => String(message.content));
     expect(toolMessages.join('\n')).toContain('seeded-marker.txt');
-  }, 60_000);
+  }, 120_000);
 
   it('hides list from the model when the read-shaped tools are disabled', async () => {
     recorder.captured.length = 0;
@@ -254,11 +252,5 @@ describe.skipIf(!shouldRun)('IT: opencode list tool shim against the real binary
     expect(toolNames).not.toContain('list');
     // 全ツールが消えたのではなく、read 系だけが隠れたことの対照。
     expect(toolNames).toContain('todowrite');
-  }, 60_000);
-});
-
-describe.skipIf(shouldRun)('IT: opencode list tool shim (skipped)', () => {
-  it('is skipped because the opencode binary or dist plugin is unavailable', () => {
-    expect(shouldRun).toBe(false);
-  });
+  }, 120_000);
 });

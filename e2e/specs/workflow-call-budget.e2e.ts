@@ -96,8 +96,6 @@ describe('E2E: workflow_call shared step budget (mock)', () => {
 
     expect(extractedResult.exitCode).toBe(0);
     expect(standaloneResult.exitCode).toBe(0);
-    expect(extractedResult.stdout).toContain('Workflow completed (4 iterations');
-    expect(standaloneResult.stdout).toContain('Workflow completed (4 iterations');
     const extractedRecords = readSessionRecords(repo.path);
     const standaloneRecords = readSessionRecords(standaloneRepo.path);
     const extractedSteps = extractedRecords

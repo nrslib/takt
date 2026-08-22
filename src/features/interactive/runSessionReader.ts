@@ -3,6 +3,8 @@ import { join, relative, resolve } from 'node:path';
 import { readRunContextOrderContent } from '../../core/workflow/run/order-content.js';
 import { readRunMetaBySlug } from '../../core/workflow/run/run-meta.js';
 import {
+  OTEL_SESSION_SHADOW_LOG_FILE_SUFFIX,
+  PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX,
   PROVIDER_EVENTS_LOG_FILE_SUFFIX,
   USAGE_EVENTS_LOG_FILE_SUFFIX,
 } from '../../core/logging/contracts.js';
@@ -158,10 +160,10 @@ function assertLogsDirectory(rootDir: string, stats: Stats): void {
   }
 }
 
-function readReportFile(rootDir: string, fullPath: string, filename: string): ReportEntry {
+function readReportFile(rootDir: string, fullPath: string, filename: string): ReportEntry | null {
   const stats = assertReportPathSegmentsAreSafe(rootDir, fullPath, filename);
   if (stats === null) {
-    throw new Error(`Expected report does not exist: ${filename}`);
+    return null;
   }
   if (!stats.isFile()) {
     throw new Error(`Expected report is not a file: ${filename}`);
@@ -170,10 +172,18 @@ function readReportFile(rootDir: string, fullPath: string, filename: string): Re
     throw new Error(`Report file is too large: ${filename} exceeds the ${MAX_RUN_REPORT_BYTES} byte limit.`);
   }
 
-  return {
-    filename,
-    content: readFileSync(fullPath, 'utf-8'),
-  };
+  try {
+    return {
+      filename,
+      content: readFileSync(fullPath, 'utf-8'),
+    };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
+      return null;
+    }
+    throw error;
+  }
 }
 
 function collectReportFiles(rootDir: string, currentDir: string): ReportEntry[] {
@@ -192,7 +202,10 @@ function collectReportFiles(rootDir: string, currentDir: string): ReportEntry[] 
       continue;
     }
 
-    reports.push(readReportFile(rootDir, fullPath, relative(rootDir, fullPath)));
+    const report = readReportFile(rootDir, fullPath, relative(rootDir, fullPath));
+    if (report !== null) {
+      reports.push(report);
+    }
   }
 
   return reports;
@@ -242,8 +255,10 @@ function findSessionLogFile(cwd: string, logsDir: string): string | null {
       f.endsWith('.jsonl')
       && !f.endsWith(PROVIDER_EVENTS_LOG_FILE_SUFFIX)
       && !f.endsWith(USAGE_EVENTS_LOG_FILE_SUFFIX)
+      && !f.endsWith(PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX)
+      && !f.endsWith(OTEL_SESSION_SHADOW_LOG_FILE_SUFFIX)
     ),
-  );
+  ).sort();
 
   const first = files[0];
   if (!first) {
@@ -262,6 +277,10 @@ function findSessionLogFile(cwd: string, logsDir: string): string | null {
 }
 
 export function listRecentRuns(cwd: string): RunSummary[] {
+  return readRunSummaries(cwd).slice(0, MAX_RUNS);
+}
+
+function readRunSummaries(cwd: string): RunSummary[] {
   const runsDir = join(cwd, '.takt', 'runs');
   if (!existsSync(runsDir)) {
     return [];
@@ -286,11 +305,11 @@ export function listRecentRuns(cwd: string): RunSummary[] {
   }
 
   summaries.sort((a, b) => b.startTime.localeCompare(a.startTime));
-  return summaries.slice(0, MAX_RUNS);
+  return summaries;
 }
 
 export function findRunForTask(cwd: string, taskContent: string): string | null {
-  const runs = listRecentRuns(cwd);
+  const runs = readRunSummaries(cwd);
   const match = runs.find((r) => r.task === taskContent);
   return match?.slug ?? null;
 }

@@ -12,9 +12,6 @@ import { z } from 'zod/v4';
 import { PROVIDER_TYPES } from '../../shared/types/provider.js';
 import { STATUS_VALUES } from './status.js';
 import {
-  CLAUDE_EFFORT_VALUES,
-  CODEX_REASONING_EFFORT_VALUES,
-  COPILOT_EFFORT_VALUES,
   OPENCODE_GUARD_PROFILES,
   RUNTIME_PREPARE_PRESETS,
 } from './workflow-types.js';
@@ -74,11 +71,22 @@ const CodexSkillsShape = {
   user: z.boolean().optional(),
 };
 
+const ProviderEffortSchema = z.string().trim().min(1, 'effort must not be empty');
+
+const ProviderGuardOptionShape = {
+  call_timeout_ms: z.number().int().min(60_000).max(86_400_000).optional(),
+};
+
+const ProviderGuardOptionsSchema = z.object(ProviderGuardOptionShape).strict();
+
 const CodexProviderOptionShape = {
   base_url: z.string().min(1).optional(),
   network_access: z.boolean().optional(),
-  reasoning_effort: z.enum(CODEX_REASONING_EFFORT_VALUES).optional(),
+  permission_control: z.enum(['takt', 'codex']).optional(),
+  reasoning_effort: ProviderEffortSchema.optional(),
+  fast_mode: z.boolean().optional(),
   skills: z.object(CodexSkillsShape).optional(),
+  guards: ProviderGuardOptionsSchema.optional(),
 };
 
 const CodexProviderOptionsSchema = z.object(CodexProviderOptionShape);
@@ -120,9 +128,10 @@ const ClaudeSkillsSchema = z.object(ClaudeSkillsShape).strict();
 const ClaudeProviderOptionShape = {
   base_url: z.string().min(1).optional(),
   allowed_tools: z.array(z.string()).optional(),
-  effort: z.enum(CLAUDE_EFFORT_VALUES).optional(),
+  effort: ProviderEffortSchema.optional(),
   skills: ClaudeSkillsSchema.optional(),
   sandbox: z.object(ClaudeSandboxShape).optional(),
+  guards: ProviderGuardOptionsSchema.optional(),
 };
 
 const ClaudeProviderOptionsSchema = z.object(ClaudeProviderOptionShape);
@@ -134,17 +143,45 @@ const StrictClaudeProviderOptionsSchema = z.object({
 
 const ClaudeTerminalProviderOptionsSchema = z.object({
   backend: z.enum(['tmux']).optional(),
+  guards: ProviderGuardOptionsSchema.optional(),
   timeout_ms: z.number().int().positive().optional(),
   keep_session: z.boolean().optional(),
   transcript_poll_interval_ms: z.number().int().positive().optional(),
 }).strict();
 
 const CopilotProviderOptionsSchema = z.object({
-  effort: z.enum(COPILOT_EFFORT_VALUES).optional(),
+  effort: ProviderEffortSchema.optional(),
+  guards: ProviderGuardOptionsSchema.optional(),
 });
 
 const KiroProviderOptionsSchema = z.object({
   agent: z.string().min(1).optional(),
+  guards: ProviderGuardOptionsSchema.optional(),
+});
+
+const CursorProviderOptionsSchema = z.object({
+  guards: ProviderGuardOptionsSchema.optional(),
+});
+
+const DeepSeekHarnessProviderOptionsSchema = z.object({
+  python_path: z.string().min(1).optional(),
+  base_url: z.string().min(1).optional(),
+  session_root: z.string().min(1).optional(),
+  cordis: z.string().min(1).optional(),
+  max_tokens: z.number().int().positive().safe().optional(),
+  request_timeout_ms: z.number().int().positive().safe().max(2_147_483_647).optional(),
+  shutdown_timeout_ms: z.number().int().positive().safe().max(2_147_483_647).optional(),
+  runtime_mode: z.enum(['exe', 'node']).optional(),
+}).strict();
+
+const PiProviderOptionsSchema = z.object({
+  guards: ProviderGuardOptionsSchema.optional(),
+  extensions: z.array(z.string().min(1)).optional(),
+  no_extensions: z.boolean().optional(),
+  no_skills: z.boolean().optional(),
+  no_prompt_templates: z.boolean().optional(),
+  no_themes: z.boolean().optional(),
+  no_context_files: z.boolean().optional(),
 });
 
 export const StepProviderOptionsObjectSchema = z.object({
@@ -152,8 +189,11 @@ export const StepProviderOptionsObjectSchema = z.object({
   opencode: OpenCodeProviderOptionsSchema.optional(),
   claude: ClaudeProviderOptionsSchema.optional(),
   claude_terminal: ClaudeTerminalProviderOptionsSchema.optional(),
+  cursor: CursorProviderOptionsSchema.optional(),
   copilot: CopilotProviderOptionsSchema.optional(),
   kiro: KiroProviderOptionsSchema.optional(),
+  pi: PiProviderOptionsSchema.optional(),
+  deepseek_harness: DeepSeekHarnessProviderOptionsSchema.optional(),
 });
 
 export const StepProviderOptionsSchema = StepProviderOptionsObjectSchema.optional();
@@ -163,8 +203,11 @@ const StrictStepProviderOptionsSchema = z.object({
   opencode: StrictOpenCodeProviderOptionsSchema.optional(),
   claude: StrictClaudeProviderOptionsSchema.optional(),
   claude_terminal: ClaudeTerminalProviderOptionsSchema.strict().optional(),
+  cursor: CursorProviderOptionsSchema.strict().optional(),
   copilot: CopilotProviderOptionsSchema.strict().optional(),
   kiro: KiroProviderOptionsSchema.strict().optional(),
+  pi: PiProviderOptionsSchema.strict().optional(),
+  deepseek_harness: DeepSeekHarnessProviderOptionsSchema.strict().optional(),
 }).strict().optional();
 
 /** Provider key schema for profile maps */
@@ -371,6 +414,8 @@ export const ProviderPermissionProfilesSchema = z.object({
   cursor: ProviderPermissionProfileSchema.optional(),
   copilot: ProviderPermissionProfileSchema.optional(),
   kiro: ProviderPermissionProfileSchema.optional(),
+  pi: ProviderPermissionProfileSchema.optional(),
+  'deepseek-harness': ProviderPermissionProfileSchema.optional(),
   mock: ProviderPermissionProfileSchema.optional(),
 }).strict().optional();
 
@@ -388,29 +433,27 @@ export const RuntimeConfigSchema = z.object({
   prepare: z.array(RuntimePrepareEntrySchema).optional(),
 }).optional();
 
-/** Workflow-level provider options schema */
-export const WorkflowProviderOptionsSchema = z.object({
-  provider: ProviderReferenceSchema.optional(),
-  model: z.string().optional(),
-  provider_options: StepProviderOptionsSchema,
-  runtime: RuntimeConfigSchema,
-}).optional();
+function createReportRelativePathSchema(label: string) {
+  return z.string().min(1).transform((name, ctx) => {
+    const classification = classifyReportRelativePath(name);
+    if (classification.kind !== 'public') {
+      ctx.addIssue({
+        code: 'custom',
+        message: `${label} ${reportPathRejectionMessage(name)}`,
+      });
+      return z.NEVER;
+    }
+    return classification.normalizedPath;
+  });
+}
+
+export const ReportRelativePathSchema = createReportRelativePathSchema('report path');
 
 /**
  * Output contract item schema (new structured format).
  */
 export const OutputContractItemSchema = z.object({
-  name: z.string().min(1).transform((name, ctx) => {
-    const classification = classifyReportRelativePath(name);
-    if (classification.kind !== 'public') {
-      ctx.addIssue({
-        code: 'custom',
-        message: `output contract report name ${reportPathRejectionMessage(name)}`,
-      });
-      return z.NEVER;
-    }
-    return classification.normalizedPath;
-  }),
+  name: createReportRelativePathSchema('output contract report name'),
   format: z.union([
     z.string().min(1),
     z.object({
@@ -566,7 +609,12 @@ const NormalizedStepProviderOptionsSchema = z.object({
   codex: z.object({
     baseUrl: z.string().min(1).optional(),
     networkAccess: z.boolean().optional(),
-    reasoningEffort: z.enum(CODEX_REASONING_EFFORT_VALUES).optional(),
+    permissionControl: z.enum(['takt', 'codex']).optional(),
+    reasoningEffort: ProviderEffortSchema.optional(),
+    fastMode: z.boolean().optional(),
+    guards: z.object({
+      callTimeoutMs: z.number().int().min(60_000).max(86_400_000).optional(),
+    }).strict().optional(),
     skills: z.object(CodexSkillsShape).strict().optional(),
   }).strict().optional(),
   opencode: z.object({
@@ -588,7 +636,10 @@ const NormalizedStepProviderOptionsSchema = z.object({
   claude: z.object({
     baseUrl: z.string().min(1).optional(),
     allowedTools: z.array(z.string()).optional(),
-    effort: z.enum(CLAUDE_EFFORT_VALUES).optional(),
+    effort: ProviderEffortSchema.optional(),
+    guards: z.object({
+      callTimeoutMs: z.number().int().min(60_000).max(86_400_000).optional(),
+    }).strict().optional(),
     skills: z.object(ClaudeSkillsShape).strict().optional(),
     sandbox: z.object({
       allowUnsandboxedCommands: z.boolean().optional(),
@@ -597,15 +648,50 @@ const NormalizedStepProviderOptionsSchema = z.object({
   }).strict().optional(),
   claudeTerminal: z.object({
     backend: z.enum(['tmux']).optional(),
+    guards: z.object({
+      callTimeoutMs: z.number().int().min(60_000).max(86_400_000).optional(),
+    }).strict().optional(),
     timeoutMs: z.number().int().positive().optional(),
     keepSession: z.boolean().optional(),
     transcriptPollIntervalMs: z.number().int().positive().optional(),
   }).strict().optional(),
   copilot: z.object({
-    effort: z.enum(COPILOT_EFFORT_VALUES).optional(),
+    effort: ProviderEffortSchema.optional(),
+    guards: z.object({
+      callTimeoutMs: z.number().int().min(60_000).max(86_400_000).optional(),
+    }).strict().optional(),
   }).strict().optional(),
   kiro: z.object({
     agent: z.string().min(1).optional(),
+    guards: z.object({
+      callTimeoutMs: z.number().int().min(60_000).max(86_400_000).optional(),
+    }).strict().optional(),
+  }).strict().optional(),
+  cursor: z.object({
+    guards: z.object({
+      callTimeoutMs: z.number().int().min(60_000).max(86_400_000).optional(),
+    }).strict().optional(),
+  }).strict().optional(),
+  deepseekHarness: z.object({
+    pythonPath: z.string().min(1).optional(),
+    baseUrl: z.string().min(1).optional(),
+    sessionRoot: z.string().min(1).optional(),
+    cordis: z.string().min(1).optional(),
+    maxTokens: z.number().int().positive().safe().optional(),
+    requestTimeoutMs: z.number().int().positive().safe().max(2_147_483_647).optional(),
+    shutdownTimeoutMs: z.number().int().positive().safe().max(2_147_483_647).optional(),
+    runtimeMode: z.enum(['exe', 'node']).optional(),
+  }).strict().optional(),
+  pi: z.object({
+    guards: z.object({
+      callTimeoutMs: z.number().int().min(60_000).max(86_400_000).optional(),
+    }).strict().optional(),
+    extensions: z.array(z.string().min(1)).optional(),
+    noExtensions: z.boolean().optional(),
+    noSkills: z.boolean().optional(),
+    noPromptTemplates: z.boolean().optional(),
+    noThemes: z.boolean().optional(),
+    noContextFiles: z.boolean().optional(),
   }).strict().optional(),
 }).strict().optional();
 

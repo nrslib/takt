@@ -9,6 +9,10 @@ function isNormalizedPathInside(basePath: string, candidatePath: string): boolea
   return candidatePath.startsWith(basePath + path.sep);
 }
 
+export function isAbsolutePathLike(value: string): boolean {
+  return path.isAbsolute(value) || path.win32.isAbsolute(value) || /^[A-Za-z]:/u.test(value);
+}
+
 export function isPathInside(basePath: string, candidatePath: string): boolean {
   const resolvedBase = path.resolve(basePath);
   const resolvedCandidate = path.resolve(candidatePath);

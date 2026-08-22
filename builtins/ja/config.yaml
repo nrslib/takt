@@ -7,7 +7,7 @@
 language: ja         # 表示言語: ja | en
 
 # デフォルトプロバイダー・モデル
-# provider: claude                    # デフォルトプロバイダー: claude | claude-sdk | claude-terminal | codex | opencode | cursor | copilot | kiro | mock
+# provider: claude                    # デフォルトプロバイダー: claude | claude-sdk | claude-terminal | codex | opencode | deepseek-harness | pi | cursor | copilot | kiro | mock
 # model: sonnet                       # デフォルトモデル（プロバイダーにそのまま渡される）
 
 # 実行制御
@@ -64,6 +64,8 @@ language: ja         # 表示言語: ja | en
 
 # インタラクティブモード
 # interactive_preview_steps: 3 # インタラクティブモードでの step プレビュー数 (0-10)
+# assistant:
+#   gherkin: true              # 最終指示書を Markdown + 要所の Gherkin で生成（デフォルト: true、無効化は false）
 
 # workflow step の provider routing（推奨）
 # provider_routing:

@@ -135,7 +135,35 @@ describe('Claude terminal client', () => {
     });
   });
 
-  it('Given strict read-only internal isolation, When terminal lifecycle starts, Then strict CLI flags are used', async () => {
+  it('Given readonly permission, When terminal lifecycle starts, Then only the normal permission flag is used', async () => {
+    const backend = createBackend();
+    const transcriptReader = createTranscriptReader({
+      sessionId: 'claude-session-1',
+      assistantText: 'done',
+      events: [],
+    });
+
+    await callClaudeTerminal('selector', 'select reviewers', {
+      cwd: '/tmp/worktree',
+      backend: 'tmux',
+      permissionMode: 'readonly',
+      skillsEnabled: true,
+      terminalBackend: backend,
+      transcriptReader,
+    });
+
+    expect(backend.start).toHaveBeenCalledWith(expect.objectContaining({
+      command: expect.objectContaining({
+        args: expect.arrayContaining(['--permission-mode', 'default']),
+      }),
+    }));
+    const args = vi.mocked(backend.start).mock.calls[0]?.[0].command.args ?? [];
+    expect(args).not.toContain('--tools');
+    expect(args).not.toContain('--strict-mcp-config');
+    expect(args).not.toContain('--disable-slash-commands');
+  });
+
+  it('Given strict-readonly isolation, When terminal lifecycle starts, Then the command is tool, settings, MCP, and Skills free', async () => {
     const backend = createBackend();
     const transcriptReader = createTranscriptReader({
       sessionId: 'claude-session-1',
@@ -147,26 +175,30 @@ describe('Claude terminal client', () => {
       cwd: '/tmp/worktree',
       backend: 'tmux',
       internalAgentIsolation: 'strict-readonly',
+      allowedTools: ['Read'],
+      mcpServers: {
+        docs: { type: 'stdio', command: 'docs-mcp', args: ['serve'] },
+      },
       permissionMode: 'readonly',
+      bypassPermissions: false,
       skillsEnabled: true,
       terminalBackend: backend,
       transcriptReader,
     });
 
-    expect(backend.start).toHaveBeenCalledWith(expect.objectContaining({
-      command: expect.objectContaining({
-        args: expect.arrayContaining([
-          '--tools',
-          '',
-          '--setting-sources',
-          '',
-          '--strict-mcp-config',
-          '--disable-slash-commands',
-          '--permission-mode',
-          'default',
-        ]),
-      }),
-    }));
+    const args = vi.mocked(backend.start).mock.calls[0]?.[0].command.args ?? [];
+    expect(args).toEqual(expect.arrayContaining([
+      '--tools',
+      '',
+      '--strict-mcp-config',
+      '--setting-sources',
+      '',
+      '--disable-slash-commands',
+      '--permission-mode',
+      'default',
+    ]));
+    expect(args).not.toContain('--allowed-tools');
+    expect(args).not.toContain('--mcp-config');
   });
 
   it('Given disabled Skills, When terminal lifecycle runs, Then it keeps slash commands disabled while starting, prompting, receiving, and stopping the session', async () => {
@@ -735,6 +767,7 @@ describe('Claude terminal client', () => {
     const backend = createBackend();
     const onPermissionRequest = vi.fn();
     const onAskUserQuestion = vi.fn().mockResolvedValue({ answer: 'Use option A.' });
+    const onActivity = vi.fn();
     const transcriptReader = {
       readBaseline: vi.fn().mockResolvedValue({ byteOffset: 0, lineNumberOffset: 0 }),
       findSession: vi.fn().mockResolvedValue({ sessionId: 'claude-session-1' }),
@@ -761,6 +794,7 @@ describe('Claude terminal client', () => {
       backend: 'tmux',
       onPermissionRequest,
       onAskUserQuestion,
+      onActivity,
       terminalBackend: backend,
       transcriptReader,
     });
@@ -781,6 +815,16 @@ describe('Claude terminal client', () => {
       'Use option A.',
     );
     expect(transcriptReader.waitForAssistantResponse).toHaveBeenCalledTimes(2);
+    expect(onActivity).toHaveBeenCalledTimes(3);
+    expect(onActivity).toHaveBeenNthCalledWith(1, { kind: 'attempt_started' });
+    expect(onActivity).toHaveBeenNthCalledWith(2, { kind: 'attempt_started' });
+    expect(onActivity).toHaveBeenNthCalledWith(3, { kind: 'attempt_started' });
+    expect(onActivity.mock.invocationCallOrder[1]).toBeLessThan(
+      transcriptReader.waitForAssistantResponse.mock.invocationCallOrder[0]!,
+    );
+    expect(onActivity.mock.invocationCallOrder[2]).toBeLessThan(
+      transcriptReader.waitForAssistantResponse.mock.invocationCallOrder[1]!,
+    );
     expect(result).toMatchObject({
       persona: 'coder',
       status: 'done',

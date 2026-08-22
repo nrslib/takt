@@ -43,7 +43,7 @@ my-takt-repertoire/
   workflows/
     expert.yaml
   provider-options/
-    review-readonly.yaml
+    readonly.yaml
   steps/
     final-gate.yaml
   facet-pools/
@@ -54,7 +54,7 @@ my-takt-repertoire/
 
 ### takt-repertoire.yaml
 
-マニフェストは、リポジトリ内のパッケージコンテンツの場所を TAKT に伝えます。
+マニフェストはリポジトリ内のパッケージコンテンツの場所を TAKT に伝えます。
 
 ```yaml
 # 説明（任意）
@@ -119,7 +119,7 @@ takt --workflow @nrslib/takt-fullstack/expert
 
 ### @scope 参照
 
-インストール済みパッケージのファセットは、workflow YAML で `@{owner}/{repo}/{facet-name}` 構文を使って参照できます。
+インストール済みパッケージのファセットはworkflow YAML で `@{owner}/{repo}/{facet-name}` 構文を使って参照できます。
 
 ```yaml
 steps:
@@ -129,15 +129,12 @@ steps:
     knowledge: @nrslib/takt-fullstack/domain
 ```
 
-インストール済みパッケージの provider-options プリセットも、同じ scoped 構文を使って `provider_options.extends` から参照できます。repertoire パッケージ内の workflow では package-local の `provider-options/` がプロジェクト、ユーザー、ビルトインの provider-options ディレクトリより先に検索されます。workflow または step の inline `provider_options` は参照先プリセットを base とし、同じ leaf を上書きします。
+インストール済みパッケージの provider-options capability preset も同じ scoped 構文を使って `capabilities` から参照できます。repertoire パッケージ内の workflow では package-local の `provider-options/` がプロジェクト、ユーザー、ビルトインの provider-options ディレクトリより先に検索されます。workflow YAML では capability preset だけを参照し、provider/model/options は `runtime.yaml`（または既存の legacy config layer）に置きます。
 
-`provider_options.extends` は、preset または path を解決できない場合、scoped ref が利用可能な repertoire package を指していない場合、参照先 YAML が不正または provider-options object でない場合、extends チェーンが循環している場合、削除済みの `$ref` キーが使われた場合に、設定エラーとして fail fast します。相対 path は workflow file 基準で解決され、symlink 解決後も workflow directory 内に留まる必要があります。絶対 path と、実体が workflow directory 外へ出る path は拒否されます。
+capability preset の解決はpreset または path を解決できない場合、scoped ref が利用可能な repertoire package を指していない場合、参照先 YAML が不正または provider-options object でない場合、extends チェーンが循環している場合、削除済みの `$ref` キーが使われた場合に、設定エラーとして fail fast します。相対 path は workflow file 基準で解決され、symlink 解決後も workflow directory 内に留まる必要があります。絶対 path と、実体が workflow directory 外へ出る path は拒否されます。
 
 ```yaml
-provider_options:
-  extends: @nrslib/takt-fullstack/edit
-  opencode:
-    allowed_tools: [read, grep]
+capabilities: '@nrslib/takt-fullstack/edit'
 ```
 
 ### 4層ファセット解決
@@ -186,7 +183,7 @@ takt repertoire remove @{owner}/{repo}
       workflows/              # repertoire パッケージ内の workflow 定義
         expert.yaml
       provider-options/        # 共有 provider_options プリセット
-        review-readonly.yaml
+        readonly.yaml
       steps/                   # 再利用可能な step fragment
         final-gate.yaml
       facet-pools/             # 再利用可能な dynamic facet pool resource

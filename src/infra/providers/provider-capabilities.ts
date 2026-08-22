@@ -1,9 +1,8 @@
 import type { ProviderType } from './types.js';
 import { getProvider } from './index.js';
-import { createStrictInternalAgentIsolationError } from '../../shared/types/provider.js';
 
 const ALLOWED_TOOLS_PROVIDERS: ReadonlySet<ProviderType> = new Set([
-  'claude', 'claude-sdk', 'claude-terminal', 'opencode', 'mock',
+  'claude', 'claude-sdk', 'claude-terminal', 'opencode', 'pi', 'mock',
 ]);
 
 const CLAUDE_ALLOWED_TOOLS_PROVIDERS: ReadonlySet<ProviderType> = new Set([
@@ -21,20 +20,12 @@ interface ProviderCapabilities {
   supportsIsolatedStructuredExecution: boolean;
   supportsNativeImageInput: boolean;
   supportsMcpServers: boolean;
+  supportsStrictMcpConfig: boolean;
   supportsAllowedTools: boolean;
   supportsClaudeAllowedTools: boolean;
   supportsOpenCodeAllowedTools: boolean;
   supportsMaxTurns: boolean;
-  supportsStrictInternalAgentIsolation: boolean;
 }
-
-const STRICT_INTERNAL_AGENT_NATIVE_TOOLS: Readonly<Partial<Record<ProviderType, readonly string[]>>> = {
-  codex: ['request_user_input', 'update_plan', 'view_image', 'web_search'],
-  claude: [],
-  'claude-sdk': [],
-  'claude-terminal': [],
-  mock: [],
-};
 
 function resolveProviderCapabilities(
   provider: ProviderType | undefined,
@@ -44,53 +35,36 @@ function resolveProviderCapabilities(
   }
 
   const providerImpl = getProvider(provider);
+  if (providerImpl === undefined) {
+    return undefined;
+  }
   const mcpTransports = providerImpl.supportedMcpTransports;
 
   return {
     supportsStructuredOutput: providerImpl.supportsStructuredOutput,
-    supportsIsolatedStructuredExecution: providerImpl.supportsIsolatedStructuredExecution,
+    supportsIsolatedStructuredExecution: providerImpl.supportsIsolatedStructuredExecution === true,
     supportsNativeImageInput: providerImpl.supportsNativeImageInput,
     supportsMcpServers: mcpTransports !== undefined && mcpTransports.size > 0,
+    supportsStrictMcpConfig: providerImpl.supportsStrictMcpConfig === true,
     supportsAllowedTools: ALLOWED_TOOLS_PROVIDERS.has(provider),
     supportsClaudeAllowedTools: CLAUDE_ALLOWED_TOOLS_PROVIDERS.has(provider),
     supportsOpenCodeAllowedTools: OPENCODE_ALLOWED_TOOLS_PROVIDERS.has(provider),
     supportsMaxTurns: MAX_TURNS_PROVIDERS.has(provider),
-    supportsStrictInternalAgentIsolation: providerImpl.supportsStrictInternalAgentIsolation,
   };
 }
 
-export function providerSupportsStrictInternalAgentIsolation(
+export function providerSupportsIsolatedStructuredExecution(
   provider: ProviderType | undefined,
 ): boolean | undefined {
-  return resolveProviderCapabilities(provider)?.supportsStrictInternalAgentIsolation;
+  return resolveProviderCapabilities(provider)?.supportsIsolatedStructuredExecution;
 }
 
-export function assertProviderSupportsStrictInternalAgentIsolation(
+export function assertProviderSupportsIsolatedStructuredExecution(
   provider: ProviderType,
 ): void {
-  if (providerSupportsStrictInternalAgentIsolation(provider) !== true) {
-    throw createStrictInternalAgentIsolationError(provider);
+  if (providerSupportsIsolatedStructuredExecution(provider) !== true) {
+    throw new Error(`Provider "${provider}" does not support isolated structured execution`);
   }
-}
-
-export function assertProviderSupportsSelectorExecution(provider: ProviderType): void {
-  assertProviderSupportsStrictInternalAgentIsolation(provider);
-  if (providerSupportsStructuredOutput(provider) !== true) {
-    throw new Error(
-      `Provider "${provider}" does not support native structured output required by dynamic parallel selector`,
-    );
-  }
-}
-
-export function resolveStrictInternalAgentNativeTools(
-  provider: ProviderType,
-): readonly string[] {
-  assertProviderSupportsStrictInternalAgentIsolation(provider);
-  const tools = STRICT_INTERNAL_AGENT_NATIVE_TOOLS[provider];
-  if (tools === undefined) {
-    throw new Error(`Provider "${provider}" has no strict internal-agent native tool profile`);
-  }
-  return [...tools];
 }
 
 export function providerSupportsStructuredOutput(
@@ -99,10 +73,19 @@ export function providerSupportsStructuredOutput(
   return resolveProviderCapabilities(provider)?.supportsStructuredOutput;
 }
 
-export function providerSupportsIsolatedStructuredExecution(
+export function providerSupportsPermissionControls(
   provider: ProviderType | undefined,
 ): boolean | undefined {
-  return resolveProviderCapabilities(provider)?.supportsIsolatedStructuredExecution;
+  if (provider === undefined) {
+    return undefined;
+  }
+  const providerImpl = getProvider(provider);
+  if (providerImpl === undefined) {
+    return undefined;
+  }
+  return providerImpl.supportsPermissionControls === undefined
+    ? undefined
+    : providerImpl.supportsPermissionControls();
 }
 
 export function providerSupportsNativeImageInput(
@@ -115,6 +98,12 @@ export function providerSupportsMcpServers(
   provider: ProviderType | undefined,
 ): boolean | undefined {
   return resolveProviderCapabilities(provider)?.supportsMcpServers;
+}
+
+export function providerSupportsStrictMcpConfig(
+  provider: ProviderType | undefined,
+): boolean | undefined {
+  return resolveProviderCapabilities(provider)?.supportsStrictMcpConfig;
 }
 
 export function providerSupportsAllowedTools(
@@ -150,4 +139,15 @@ export function providerKeepsAllowedToolWithoutEdit(
   }
 
   return getProvider(provider).keepsAllowedToolWithoutEdit(tool);
+}
+
+export function providerDefaultAllowedToolsWithoutEdit(
+  provider: ProviderType | undefined,
+): string[] | undefined {
+  if (provider === undefined) {
+    return undefined;
+  }
+
+  const tools = getProvider(provider).getDefaultAllowedToolsWithoutEdit?.();
+  return tools === undefined ? undefined : [...tools];
 }

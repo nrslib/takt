@@ -8,22 +8,16 @@
  */
 
 import type { FirstStepInfo } from '../../infra/config/index.js';
-import { getLabel } from '../../shared/i18n/index.js';
 import {
   type WorkflowContext,
   type InteractiveModeResult,
   type InteractiveSeedInput,
-  DEFAULT_INTERACTIVE_TOOLS,
 } from './interactive.js';
 import {
   displayAndClearSessionState,
   runConversationLoop,
 } from './conversationLoop.js';
-import {
-  prependSourceContext,
-  prependSourceContextGuardToSystemPrompt,
-} from './promptSections.js';
-import { initializeSession } from './sessionInitialization.js';
+import { createPersonaConversationPlan } from './conversationPlan.js';
 
 /**
  * Run persona mode: converse as the first step's persona.
@@ -44,20 +38,9 @@ export async function personaMode(
   initialInput?: InteractiveSeedInput,
   workflowContext?: WorkflowContext,
 ): Promise<InteractiveModeResult> {
-  const ctx = initializeSession(cwd, 'persona-interactive');
+  const { ctx, strategy } = createPersonaConversationPlan(cwd, firstStep);
 
   displayAndClearSessionState(cwd, ctx.lang);
 
-  const allowedTools = firstStep.allowedTools.length > 0
-    ? firstStep.allowedTools
-    : DEFAULT_INTERACTIVE_TOOLS;
-
-  const introMessage = `${getLabel('interactive.ui.intro', ctx.lang)} [${firstStep.personaDisplayName}]`;
-
-  return runConversationLoop(cwd, ctx, {
-    systemPrompt: prependSourceContextGuardToSystemPrompt(ctx.lang, firstStep.personaContent),
-    allowedTools,
-    transformPrompt: (msg, sourceContext) => prependSourceContext(ctx.lang, msg, sourceContext),
-    introMessage,
-  }, workflowContext, initialInput);
+  return runConversationLoop(cwd, ctx, strategy, workflowContext, initialInput);
 }

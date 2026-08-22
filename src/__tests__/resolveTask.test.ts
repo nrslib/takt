@@ -206,12 +206,12 @@ describe('resolveTaskExecution', () => {
     expect(result.workflowIdentifier).toBe('workflow-only');
   });
 
-  it('should resolve startStep from start_movement', async () => {
+  it('should resolve startStep from start_step', async () => {
     const root = createTempProjectDir();
     const task = createTask({
       data: ({
         task: 'Run task',
-        start_movement: 'implement',
+        start_step: 'implement',
       } as unknown) as NonNullable<TaskInfo['data']>,
     });
 
@@ -220,7 +220,7 @@ describe('resolveTaskExecution', () => {
     expect(result.startStep).toBe('implement');
   });
 
-  it('should preserve dynamic selection through exceed, requeue, claim, and execution resolution', async () => {
+  it('should preserve resume metadata through exceed, requeue, claim, and execution resolution', async () => {
     const root = createTempProjectDir();
     writeTaktFile(root, 'workflows/default.yaml', [
       'name: default',
@@ -234,7 +234,6 @@ describe('resolveTaskExecution', () => {
       '      - condition: approved',
       '        next: COMPLETE',
     ].join('\n'));
-    const identity = '{"workflow":"default","step":"reviewers","calls":[]}' as const;
     const invocationIdentity = '{"workflow":"default","step":"delegate","calls":[]}' as const;
     const resumePoint = {
       version: 2 as const,
@@ -247,15 +246,6 @@ describe('resolveTaskExecution', () => {
       }],
       iteration: 30,
       elapsed_ms: 183245,
-      dynamic_parallel_selections: {
-        [identity]: {
-          identity,
-          step_name: 'reviewers',
-          round: 2,
-          selected_pool_ids: ['frontend'],
-          effective_selection_ids: ['architecture', 'frontend'],
-        },
-      },
       workflow_call_invocations: {
         [invocationIdentity]: {
           call_instance: 2,
@@ -426,7 +416,7 @@ describe('resolveTaskExecution', () => {
     });
   });
 
-  it('should prefer resume_point root step over stored start_movement on workflow_call retry', async () => {
+  it('should prefer resume_point root step over stored start_step on workflow_call retry', async () => {
     const root = createTempProjectDir();
     const workflowDir = path.join(root, '.takt', 'workflows');
     fs.mkdirSync(workflowDir, { recursive: true });
@@ -446,7 +436,7 @@ describe('resolveTaskExecution', () => {
     const task = createTask({
       data: ({
         task: 'Run task',
-        start_movement: 'review',
+        start_step: 'review',
         resume_point: {
           version: 2,
           stack: [

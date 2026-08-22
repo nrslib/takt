@@ -1,5 +1,3 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import type { WorkflowStep, RuleMatchMethod } from '../models/types.js';
 import { StatusJudgmentBuilder, type StatusJudgmentContext } from './instruction/StatusJudgmentBuilder.js';
 import { getJudgmentReportFiles } from './output-contract-files.js';
@@ -9,6 +7,7 @@ import { buildPhaseExecutionId } from '../../shared/utils/phaseExecutionId.js';
 import { recordJudgeStageSpan, runWithPhaseSpan } from './observability/workflowSpans.js';
 import { semanticRuleCandidatesOf } from '../models/workflow-rule-condition.js';
 import { RuleDetectionExhaustedError } from './evaluation/RuleDetectionExhaustedError.js';
+import { resolveReportReferenceDetailed } from './instruction/report-reference.js';
 
 const log = createLogger('phase-runner');
 
@@ -28,22 +27,32 @@ function buildBaseContext(
   const reportFiles = getJudgmentReportFiles(step.outputContracts);
 
   if (reportFiles.length > 0) {
-    const reports: string[] = [];
-    for (const fileName of reportFiles) {
-      const filePath = resolve(ctx.reportDir, fileName);
-      if (!existsSync(filePath)) continue;
-      const content = readFileSync(filePath, 'utf-8');
-      reports.push(`# ${fileName}\n\n${content}`);
-    }
-    if (reports.length > 0) {
+    let availableReportCount = 0;
+    const reports = reportFiles.map((fileName) => {
+      const resolvedReport = resolveReportReferenceDetailed(ctx.reportDir, fileName, {
+        stepName: step.name,
+        reportsRootDir: ctx.reportsRootDir,
+        resumeReportConsumerKey: ctx.resumeReportConsumerKey,
+      });
+      if (resolvedReport.scope !== 'missing') {
+        availableReportCount += 1;
+      }
+      return `# ${fileName}\n\n${resolvedReport.content}`;
+    });
+    if (availableReportCount === 0 && ctx.lastResponse) {
       return {
         language: ctx.language,
         interactive: ctx.interactive,
-        reportContent: reports.join('\n\n---\n\n'),
-        inputSource: 'report',
+        lastResponse: ctx.lastResponse,
+        inputSource: 'response',
       };
     }
-    throw new Error(`Status judgment requires existing use_judge reports for step "${step.name}"`);
+    return {
+      language: ctx.language,
+      interactive: ctx.interactive,
+      reportContent: reports.join('\n\n---\n\n'),
+      inputSource: 'report',
+    };
   }
 
   if (!ctx.lastResponse) return undefined;
@@ -140,10 +149,17 @@ export async function runStatusJudgmentPhase(
         provider: resolvedStepProvider.provider,
         resolvedProvider: resolvedStepProvider.provider,
         resolvedModel: resolvedStepProvider.model,
+        resolvedProviderOptions: resolvedStepProvider.providerOptions,
+        permissionMode: resolvedStepProvider.permissionMode,
         language: ctx.language,
         abortSignal: ctx.abortSignal,
+        failureDir: ctx.failureDir,
         childProcessEnv: ctx.childProcessEnv,
+        mcpServers: ctx.mcpServers,
+        mcpAssignment: ctx.mcpAssignment,
+        mcpServerIdentity: ctx.mcpServerIdentity,
         onStream: ctx.onStream,
+        onActivity: ctx.onActivity,
         onStructuredPromptResolved: (promptParts) => {
           if (!didEmitPhaseStart) {
             emitPhaseStart(promptParts);

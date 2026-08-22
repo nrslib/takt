@@ -47,7 +47,12 @@ function reportHistoryRoot(reportDir: string, targetPath: string): string {
   );
 }
 
-function backupExistingReport(reportDir: string, fileName: string, targetPath: string): void {
+function backupExistingReport(
+  reportDir: string,
+  fileName: string,
+  targetPath: string,
+  sanitizeContent?: (content: string) => string,
+): void {
   const targetStat = lstatOrUndefined(targetPath);
   if (targetStat === undefined) {
     return;
@@ -73,7 +78,10 @@ function backupExistingReport(reportDir: string, fileName: string, targetPath: s
     );
   }
 
-  writeNewPrivateFileWithMode(versionedPath, currentContent, PRIVATE_REPORT_MODE);
+  const historyContent = sanitizeContent === undefined
+    ? currentContent
+    : Buffer.from(sanitizeContent(currentContent.toString('utf8')), 'utf8');
+  writeNewPrivateFileWithMode(versionedPath, historyContent, PRIVATE_REPORT_MODE);
 }
 
 function lstatOrUndefined(path: string): Stats | undefined {
@@ -174,11 +182,17 @@ function resolveReportTarget(reportDir: string, fileName: string): {
   };
 }
 
-export function writeReportFile(reportDir: string, fileName: string, content: string): string {
+export function writeReportFile(
+  reportDir: string,
+  fileName: string,
+  content: string,
+  sanitizeContent?: (content: string) => string,
+): string {
   const { baseDir, targetPath, normalizedFileName } = resolveReportTarget(reportDir, fileName);
   return runReportPublicationExclusive(baseDir, targetPath, () => {
-    backupExistingReport(baseDir, normalizedFileName, targetPath);
-    writePrivateFile(targetPath, content);
+    const persistedContent = sanitizeContent === undefined ? content : sanitizeContent(content);
+    backupExistingReport(baseDir, normalizedFileName, targetPath, sanitizeContent);
+    writePrivateFile(targetPath, persistedContent);
     return targetPath;
   });
 }

@@ -11,13 +11,15 @@ import {
 } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
+import { WorkflowCallArgValueRawSchema } from '../../../core/models/index.js';
 import type {
   AgentWorkflowStep,
+  WorkflowCallArgValue,
   WorkflowCallStep,
   WorkflowConfig,
   WorkflowStep,
 } from '../../../core/models/index.js';
-import { getAllParallelSubSteps } from '../../../core/models/index.js';
+import { getAllParallelSubSteps, isDynamicParallelSubSteps } from '../../../core/models/index.js';
 import type { WorkflowCallResolver } from '../../../core/workflow/types.js';
 import { isWorkflowCallStep } from '../../../core/workflow/step-kind.js';
 import { findWorkflowStepLocation } from '../../../core/workflow/workflow-step-location.js';
@@ -44,7 +46,7 @@ interface BundleCallEdge {
   readonly stepPath: StepPath;
   readonly childNodeId: string;
   readonly call: string;
-  readonly args: Readonly<Record<string, string | string[]>>;
+  readonly args: Readonly<Record<string, WorkflowCallArgValue>>;
 }
 
 interface BundleNodeObject {
@@ -182,6 +184,30 @@ function materializePersona(
   owner.personaPath = addResource(resources, resourceKinds, prompt, 'prompt');
 }
 
+interface SelectorOwner {
+  readonly selector: { persona?: string; personaPath?: string };
+  readonly label: string;
+}
+
+function getSelectorOwners(step: WorkflowStep): readonly SelectorOwner[] {
+  if (step.kind === 'system' || step.kind === 'workflow_call') return [];
+  const owners: SelectorOwner[] = [];
+  if (step.dynamicFacets?.selector !== undefined) {
+    owners.push({
+      selector: step.dynamicFacets.selector,
+      label: `dynamic facet selector for step "${step.name}"`,
+    });
+  }
+  if (step.parallel !== undefined && isDynamicParallelSubSteps(step.parallel)
+    && step.parallel.selection.selector !== undefined) {
+    owners.push({
+      selector: step.parallel.selection.selector,
+      label: `dynamic parallel selector for step "${step.name}"`,
+    });
+  }
+  return owners;
+}
+
 function materializeAgentStep(
   step: AgentWorkflowStep,
   customAgents: ReturnType<typeof loadCustomAgents>,
@@ -190,6 +216,9 @@ function materializeAgentStep(
   resourceKinds: Map<string, BundleManifest['resources'][string]['kind']>,
 ): void {
   materializePersona(step, customAgents, projectCwd, resources, resourceKinds);
+  for (const { selector } of getSelectorOwners(step)) {
+    materializePersona(selector, customAgents, projectCwd, resources, resourceKinds);
+  }
   if (step.teamLeader !== undefined) {
     materializePersona(step.teamLeader, customAgents, projectCwd, resources, resourceKinds);
     const partOwner = {
@@ -253,12 +282,6 @@ function materializeWorkflowConfig(
   });
   for (const monitor of cloned.loopMonitors ?? []) {
     materializePersona(monitor.judge, customAgents, projectCwd, resources, resourceKinds);
-  }
-  if (cloned.findingContract !== undefined) {
-    materializePersona(cloned.findingContract.manager, customAgents, projectCwd, resources, resourceKinds);
-    if (cloned.findingContract.adjudicator !== undefined) {
-      materializePersona(cloned.findingContract.adjudicator, customAgents, projectCwd, resources, resourceKinds);
-    }
   }
   return cloned;
 }
@@ -520,16 +543,17 @@ function parseNode(value: unknown): BundleNodeObject {
     if (typeof edge.call !== 'string' || edge.call.length === 0) throw new Error(`Workflow bundle call[${index}] call is invalid`);
     const args = structuredClone(requireRecord(edge.args, `Workflow bundle call[${index}] args`));
     for (const [key, argument] of Object.entries(args)) {
-      if (typeof argument !== 'string'
-        && (!Array.isArray(argument) || argument.some((part) => typeof part !== 'string'))) {
+      const parsed = WorkflowCallArgValueRawSchema.safeParse(argument);
+      if (!parsed.success) {
         throw new Error(`Workflow bundle call[${index}] argument "${key}" is invalid`);
       }
+      args[key] = parsed.data;
     }
     return {
       stepPath: edge.stepPath as (string | number)[],
       childNodeId: requireSha256(edge.childNodeId, `Workflow bundle call[${index}] child node id`),
       call: edge.call,
-      args: args as Record<string, string | string[]>,
+      args: args as Record<string, WorkflowCallArgValue>,
     };
   });
   return {
@@ -579,6 +603,9 @@ function rebindWorkflowResourcePaths(
   walkSteps(config.steps, (step) => {
     if (step.kind !== undefined && step.kind !== 'agent') return;
     rebindPersona(step);
+    for (const { selector } of getSelectorOwners(step)) {
+      rebindPersona(selector);
+    }
     if (step.teamLeader !== undefined) {
       rebindPersona(step.teamLeader);
       if (step.teamLeader.partPersonaPath !== undefined) {
@@ -613,12 +640,6 @@ function rebindWorkflowResourcePaths(
     }
   });
   for (const monitor of config.loopMonitors ?? []) rebindPersona(monitor.judge);
-  if (config.findingContract !== undefined) {
-    rebindPersona(config.findingContract.manager);
-    if (config.findingContract.adjudicator !== undefined) {
-      rebindPersona(config.findingContract.adjudicator);
-    }
-  }
 }
 
 function validateMaterializedWorkflow(config: WorkflowConfig): void {
@@ -634,6 +655,9 @@ function validateMaterializedWorkflow(config: WorkflowConfig): void {
   walkSteps(config.steps, (step) => {
     if (step.kind !== undefined && step.kind !== 'agent') return;
     requireMaterializedPersona(step, `step "${step.name}"`);
+    for (const { selector, label } of getSelectorOwners(step)) {
+      requireMaterializedPersona(selector, label);
+    }
     if (step.teamLeader !== undefined) {
       requireMaterializedPersona(step.teamLeader, `team leader "${step.name}"`);
       if (step.teamLeader.partPersona !== undefined && step.teamLeader.partPersonaPath === undefined) {
@@ -649,12 +673,6 @@ function validateMaterializedWorkflow(config: WorkflowConfig): void {
   });
   for (const [index, monitor] of (config.loopMonitors ?? []).entries()) {
     requireMaterializedPersona(monitor.judge, `loop monitor ${index + 1} judge`);
-  }
-  if (config.findingContract !== undefined) {
-    requireMaterializedPersona(config.findingContract.manager, 'finding manager');
-    if (config.findingContract.adjudicator !== undefined) {
-      requireMaterializedPersona(config.findingContract.adjudicator, 'finding adjudicator');
-    }
   }
 }
 

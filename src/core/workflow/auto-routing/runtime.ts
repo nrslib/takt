@@ -1,5 +1,6 @@
 import type { AutoRoutingConfig, RoutingTier } from '../../models/config-types.js';
 import type { RoutingWorkSnapshot, WorkRequirementEstimate, WorkRequirementEstimator } from './contracts.js';
+import type { ProviderActivityCallback, StreamCallback } from '../../../shared/types/provider.js';
 import {
   createRoutingModelInputDigest,
   createRoutingWorkFingerprint,
@@ -7,6 +8,7 @@ import {
   normalizeRoutingWorkSnapshot,
 } from './normalizer.js';
 import { maxRoutingTier, promoteRoutingTier, selectRoutingCandidate } from './selector.js';
+import { isProviderStreamParseError } from '../../../shared/types/agent-failure.js';
 
 type PreviousResolution = {
   fingerprint: string;
@@ -22,7 +24,13 @@ export class RoutingRuntime {
 
   constructor(private readonly options: { autoRouting: AutoRoutingConfig; estimator: WorkRequirementEstimator }) {}
 
-  async resolve(input: { scope: string; snapshot: RoutingWorkSnapshot; abortSignal?: AbortSignal }) {
+  async resolve(input: {
+    scope: string;
+    snapshot: RoutingWorkSnapshot;
+    abortSignal?: AbortSignal;
+    onStream?: StreamCallback;
+    onActivity?: ProviderActivityCallback;
+  }) {
     input.abortSignal?.throwIfAborted();
     const fingerprint = createRoutingWorkFingerprint(input.snapshot);
     const previous = this.resolutions.get(input.scope);
@@ -39,6 +47,8 @@ export class RoutingRuntime {
       } else {
         estimate = await this.options.estimator.estimate(modelInput, {
           abortSignal: input.abortSignal,
+          onStream: input.onStream,
+          onActivity: input.onActivity,
         });
         this.estimates.set(estimateCacheKey, this.copyEstimate(estimate));
       }
@@ -47,6 +57,9 @@ export class RoutingRuntime {
         throw input.abortSignal.reason;
       }
       if (error instanceof Error && error.name === 'AbortError') {
+        throw error;
+      }
+      if (isProviderStreamParseError(error)) {
         throw error;
       }
       const estimatorFailure = error instanceof Error ? error : new Error(String(error));

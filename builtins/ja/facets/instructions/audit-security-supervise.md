@@ -1,5 +1,7 @@
 セキュリティ監査の網羅性と品質を検証してください。
 
+{{include:instructions/security-knowledge-routing}}
+
 **重要:** 計画レポートを参照してください: {report:01-plan.md}
 
 **検証手順:**

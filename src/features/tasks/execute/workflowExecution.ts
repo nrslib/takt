@@ -68,11 +68,13 @@ import {
 } from './workflowExecutionReporting.js';
 import { stageTaskSpecForExecution } from './taskSpecContext.js';
 import { GitSelectorCommandRunner } from '../../../infra/task/selector-git-command-runner.js';
+import { GitCompanionDiffReader } from '../../../infra/task/companion-git-diff-reader.js';
 import {
   loadWorkflowExecutionBundle,
   prepareWorkflowExecutionBundle,
   publishWorkflowExecutionBundle,
 } from './workflowExecutionBundle.js';
+import { scheduleLoopAnalysis } from './loopAnalysis.js';
 
 export type { WorkflowExecutionResult, WorkflowExecutionOptions };
 
@@ -228,13 +230,14 @@ async function executeWorkflowInternal(
       ? {}
       : { resumeSource: options.resumeSource }),
   });
-  const publishedResumeSource = options.resumeSource;
   const resumeLineage: WorkflowExecutionResumeLineage =
     availableSourceLineage ?? resolveWorkflowExecutionResumeLineage(
       cwd,
       activeRun.runSlug,
       options.resumeSource,
     );
+  const artifactResumeSource = resumeLineage.artifactResumeSource;
+  const publishedResumeSource = resumeLineage.publishedResumeSource;
   let bootstrap: WorkflowExecutionBootstrap;
   try {
     publishWorkflowExecutionBundle(activeRun.runPaths, preparedBundle);
@@ -256,16 +259,14 @@ async function executeWorkflowInternal(
       resumeLineage,
     );
   } catch (bootstrapError) {
-    return await terminalizeBootstrapFailure({
+    return terminalizeBootstrapFailure({
       activeRun,
       workflowConfig,
       task,
       projectCwd: options.projectCwd,
       primaryError: bootstrapError,
       resumeLineage,
-      ...(publishedResumeSource === undefined
-        ? {}
-        : { resumeSource: publishedResumeSource }),
+      loopAnalysisScheduler: options.loopAnalysisScheduler,
     });
   }
   const executionBundle = loadWorkflowExecutionBundle(activeRun.runPaths);
@@ -400,18 +401,26 @@ async function executeWorkflowInternal(
         model: bootstrap.configuredModel,
         modelSource: bootstrap.configuredModelSource,
         reportFallbackProvider: options.reportFallbackProvider,
-        rateLimitFallback: bootstrap.effectiveWorkflowConfig.rateLimitFallback,
+        reportContentSanitizer: options.reportContentSanitizer,
+        rateLimitFallback: bootstrap.rateLimitFallback,
         providerOptions: bootstrap.providerOptions,
-        selectorProvider: options.selectorProvider,
+        configProviderOptions: bootstrap.configProviderOptions,
+        providerOptionsProviderSource: bootstrap.providerOptionsProviderSource,
+        providerPermissionMode: bootstrap.providerPermissionMode,
+        selectorProvider: bootstrap.selectorProvider,
         selectorGitCommandRunner: new GitSelectorCommandRunner(),
-        autoRouting: bootstrap.effectiveWorkflowConfig.autoRouting,
-        findingContractConfig: bootstrap.findingContractConfig,
+        companionDiffReader: new GitCompanionDiffReader(),
+        autoRouting: bootstrap.autoRouting,
         autoStrategyOverride: bootstrap.autoStrategyOverride,
         onEffectiveAutoRoutingReached: bootstrap.onEffectiveAutoRoutingReached,
         providerOptionsSource: options.providerOptionsSource,
         providerOptionsOriginResolver: options.providerOptionsOriginResolver,
         personaProviders: bootstrap.personaProviders,
         providerRouting: bootstrap.providerRouting,
+        providerLadders: bootstrap.providerLadders,
+        internalAgentSeats: bootstrap.internalAgentSeats,
+        companionEnabled: bootstrap.companionEnabled,
+        companionProviders: bootstrap.companionProviders,
         providerRoutingTagConflictPolicy: bootstrap.providerRoutingTagConflictPolicy,
         providerProfiles: options.providerProfiles,
         mcpServers: options.mcpServers,
@@ -423,10 +432,7 @@ async function executeWorkflowInternal(
         retryNote: options.retryNote,
         resumePoint: options.resumePoint,
         restartPoint: options.restartPoint,
-        resumeSource: publishedResumeSource,
-        onDynamicParallelSelectionPersisted: (resumePoint) => {
-          bootstrap.runMetaManager.updateResumePoint(resumePoint);
-        },
+        resumeSource: artifactResumeSource,
         operationJournal: bootstrap.operationJournal,
         reportDirName: bootstrap.runSlug,
         taskPrefix: options.taskPrefix,
@@ -442,7 +448,6 @@ async function executeWorkflowInternal(
         }),
         workflowCallResolver,
         workflowBundleResourceRoot: executionBundle.resourceRoot,
-        findingAuthorityResolver: executionBinding.findingAuthorityResolver,
       });
 
       eventBridge = bindWorkflowExecutionEvents({
@@ -555,6 +560,10 @@ async function executeWorkflowInternal(
         );
         finalizationIssues.push(...finalization.issues);
         committedPublication = terminalPublication;
+        scheduleLoopAnalysis(
+          options.loopAnalysisScheduler,
+          activeRun.runPaths.runRootAbs,
+        );
       } catch (error) {
         terminalizationErrors.push(error);
       }
@@ -630,19 +639,20 @@ async function terminalizeBootstrapFailure(input: {
   readonly task: string;
   readonly projectCwd: string;
   readonly primaryError: unknown;
-  readonly resumeSource?: WorkflowExecutionOptions['resumeSource'];
   readonly resumeLineage?: WorkflowExecutionResumeLineage;
+  readonly loopAnalysisScheduler?: WorkflowExecutionOptions['loopAnalysisScheduler'];
 }): Promise<never> {
   const reason = getErrorMessage(input.primaryError);
   const finalizationErrors: unknown[] = [];
+  const publishedResumeSource = input.resumeLineage?.publishedResumeSource;
   try {
     input.activeRun.bootstrap.publishRunMeta({
         runPaths: input.activeRun.runPaths,
         task: input.task,
         workflowName: input.workflowConfig.name,
-        ...(input.resumeSource === undefined
+        ...(publishedResumeSource === undefined
           ? {}
-          : { resumeSource: input.resumeSource }),
+          : { resumeSource: publishedResumeSource }),
         ...(input.resumeLineage === undefined
           ? {}
           : {
@@ -704,6 +714,10 @@ async function terminalizeBootstrapFailure(input: {
       reason,
     }, payload);
     finalizationErrors.push(...finalization.issues);
+    scheduleLoopAnalysis(
+      input.loopAnalysisScheduler,
+      input.activeRun.runPaths.runRootAbs,
+    );
   } catch (error) {
     finalizationErrors.push(error);
   }

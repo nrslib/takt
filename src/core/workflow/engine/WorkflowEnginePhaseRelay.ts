@@ -38,6 +38,7 @@ export interface WorkflowPhaseRelay {
 export function createWorkflowPhaseRelay(
   emit: (event: string, ...args: unknown[]) => void,
   getCurrentWorkflowStack: () => readonly WorkflowResumePointEntry[] | undefined,
+  recordActivity: () => void = () => {},
 ): WorkflowPhaseRelay {
   const workflowStackByPhase = new Map<string, WorkflowResumePointEntry[]>();
   const phaseKey = (
@@ -53,6 +54,7 @@ export function createWorkflowPhaseRelay(
   ]);
   return {
     onPhaseStart: (step, phase, phaseName, instruction, promptParts, phaseExecutionId, iteration) => {
+      recordActivity();
       const workflowStack = requireWorkflowResumeStackSnapshot(
         getCurrentWorkflowStack(),
       );
@@ -73,6 +75,7 @@ export function createWorkflowPhaseRelay(
       );
     },
     onPhaseComplete: (step, phase, phaseName, content, phaseStatus, error, phaseExecutionId, iteration) => {
+      recordActivity();
       const key = phaseKey(step, phase, phaseExecutionId, iteration);
       const workflowStack = workflowStackByPhase.get(key);
       if (workflowStack === undefined) {
@@ -93,6 +96,7 @@ export function createWorkflowPhaseRelay(
       );
     },
     onJudgeStage: (step, phase, phaseName, entry, phaseExecutionId, iteration) => {
+      recordActivity();
       const workflowStack = workflowStackByPhase.get(
         phaseKey(step, phase, phaseExecutionId, iteration),
       );

@@ -7,14 +7,14 @@ steps:
     kind: workflow_call
     call: development-core
     args:
-      plan_policy: [design-planning]
+      plan_policy: [design-planning, cqrs-es, architecture, backend, frontend, react]
       plan_knowledge: [frontend, react, backend, cqrs-es, architecture]
-      testing_policy: [coding, testing]
+      testing_policy: [coding, testing, cqrs-es, architecture, backend, frontend, react]
       testing_knowledge: [frontend, react, backend, cqrs-es, architecture, unit-testing, e2e-testing]
-      development_policy: [coding, testing, design-fidelity, screen-api]
+      development_policy: [coding, testing, cqrs-es, design-fidelity, screen-api, architecture, backend, frontend, react, task-decomposition]
       development_knowledge: [frontend, react, backend, cqrs-es, security, architecture, task-decomposition]
       reviewer_suite: peer-review-suite-frontend-cqrs
-      review_policy: [coding, testing, design-fidelity, screen-api, review]
+      review_policy: [coding, testing, design-fidelity, screen-api, review, architecture, backend, frontend, react]
       review_knowledge: [frontend, react, backend, cqrs-es, security, architecture, unit-testing, e2e-testing]
     rules:
       - condition: COMPLETE

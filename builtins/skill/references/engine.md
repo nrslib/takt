@@ -77,6 +77,9 @@ Task tool:
 - `policies.coding: ../facets/policies/coding.md` → `~/.claude/skills/takt/facets/policies/coding.md`
 - `instructions.plan: ../facets/instructions/plan.md` → `~/.claude/skills/takt/facets/instructions/plan.md`
 
+ファセット本文の `{{include:<kind>/<name>}}` は、`facets/partials/<kind>/<name>.md` を同じ言語のリソースから読み込み、参照先に include があれば再帰的に展開する。
+参照先が存在しない場合、または include が循環する場合はエラーとして扱い、別言語の partial へフォールバックしない。
+
 ## プロンプト構築
 
 各チームメイト起動時、以下を結合してプロンプトを組み立てる。

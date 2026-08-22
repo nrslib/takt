@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { WorkflowConfigRawSchema, WorkflowStepRawSchema } from '../core/models/index.js';
+import { getWorkflowConfigErrorPath } from '../core/workflow/workflow-config-error.js';
+import { hasCompanionReference, parseWorkflowRuleCondition } from '../core/models/workflow-rule-condition.js';
+import { prepareCallableSubworkflowDiscoveryArgs } from '../infra/config/loaders/workflowCallableDiscoveryArgs.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 
 function createWorkflowCallStep(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -14,6 +17,123 @@ function createWorkflowCallStep(overrides: Record<string, unknown> = {}): Record
       },
     ],
     ...overrides,
+  };
+}
+
+function createDynamicPoolWorkflow(pool: unknown): Record<string, unknown> {
+  return {
+    name: 'invalid-dynamic-pool',
+    steps: [{
+      name: 'implement',
+      persona: 'coder',
+      instruction: 'Implement',
+      dynamic_facets: { pool },
+      rules: [{ condition: 'done', next: 'COMPLETE' }],
+    }],
+  };
+}
+
+function createRootDynamicFacetPoolWorkflow(poolName: string): Record<string, unknown> {
+  return {
+    ...createDynamicPoolWorkflow(poolName),
+    policies: { policy: 'Policy' },
+    facet_pools: {
+      available: {
+        candidates: [{
+          id: 'candidate',
+          description: 'Candidate',
+          policy: 'policy',
+        }],
+      },
+    },
+  };
+}
+
+function createCallableFacetPoolWorkflow(): Record<string, unknown> {
+  return {
+    name: 'invalid-callable-pool',
+    subworkflow: {
+      callable: true,
+      params: {
+        implementation_pool: { type: 'facet_pool_ref' },
+      },
+    },
+    policies: { policy: 'Policy' },
+    facet_pools: {
+      available: {
+        candidates: [{
+          id: 'candidate',
+          description: 'Candidate',
+          policy: 'policy',
+        }],
+      },
+    },
+    steps: [{
+      name: 'implement',
+      persona: 'coder',
+      instruction: 'Implement',
+      dynamic_facets: {
+        pool: { $param: 'implementation_pool' },
+      },
+      rules: [{ condition: 'done', next: 'COMPLETE' }],
+    }],
+  };
+}
+
+function createCallableCompanionWorkflow(): Record<string, unknown> {
+  return {
+    name: 'callable-companion',
+    subworkflow: {
+      callable: true,
+      params: {
+        implementation_companions: {
+          type: 'companion_ref[]',
+          default: [],
+        },
+      },
+    },
+    steps: [{
+      name: 'implement',
+      instruction: 'Implement',
+      companion: { $param: 'implementation_companions' },
+      rules: [{ condition: 'done', next: 'COMPLETE' }],
+    }, {
+      name: 'fix',
+      instruction: 'Fix',
+      rules: [{ condition: 'done', next: 'COMPLETE' }],
+    }],
+  };
+}
+
+function createCallableScalarFacetWorkflow(): Record<string, unknown> {
+  return {
+    name: 'callable-scalar-facets',
+    subworkflow: {
+      callable: true,
+      params: {
+        review_persona: { type: 'facet_ref', facet_kind: 'persona', default: 'reviewer' },
+        review_policy: { type: 'facet_ref', facet_kind: 'policy', default: 'strict-review' },
+        review_knowledge: { type: 'facet_ref', facet_kind: 'knowledge', default: 'architecture' },
+        review_instruction: { type: 'facet_ref', facet_kind: 'instruction', default: 'review-instruction' },
+        review_format: { type: 'facet_ref', facet_kind: 'report_format', default: 'summary' },
+      },
+    },
+    personas: { reviewer: 'Reviewer persona content' },
+    policies: { 'strict-review': 'Strict review policy content' },
+    knowledge: { architecture: 'Architecture knowledge content' },
+    instructions: { 'review-instruction': 'Review instruction content' },
+    report_formats: { summary: 'Summary format content' },
+    steps: [{
+      name: 'review',
+      persona: { $param: 'review_persona' },
+      policy: { $param: 'review_policy' },
+      knowledge: { $param: 'review_knowledge' },
+      instruction: { $param: 'review_instruction' },
+      output_contracts: {
+        report: [{ name: 'summary', format: { $param: 'review_format' } }],
+      },
+      rules: [{ condition: 'done', next: 'COMPLETE' }],
+    }],
   };
 }
 
@@ -111,6 +231,139 @@ const workflowCallForbiddenFieldCases = [
 ] as const;
 
 describe('workflow_call schema', () => {
+  it('accepts ordered instruction arrays and rejects an empty instruction array', () => {
+    const accepted = WorkflowStepRawSchema.safeParse({
+      name: 'implement',
+      instruction: ['first instruction', 'second instruction'],
+    });
+    const rejected = WorkflowStepRawSchema.safeParse({
+      name: 'implement',
+      instruction: [],
+    });
+
+    expect(accepted.success).toBe(true);
+    expect(rejected.success).toBe(false);
+  });
+
+  it('composes instruction array elements in order and preserves instructionRef', () => {
+    const workflow = normalizeWorkflowConfig({
+      name: 'composed-instruction',
+      instructions: {
+        first: 'First facet',
+        last: 'Last facet',
+      },
+      steps: [{
+        name: 'implement',
+        instruction: ['first', 'Inline instruction', 'last'],
+      }],
+    }, '/tmp');
+
+    expect(workflow.steps[0]?.instruction).toBe(
+      'First facet\n\n---\n\nInline instruction\n\n---\n\nLast facet',
+    );
+    expect(workflow.steps[0]?.instructionRef).toEqual(['first', 'Inline instruction', 'last']);
+  });
+
+  it('flattens callable instruction facet_ref and facet_ref[] params at their positions', () => {
+    const workflow = normalizeWorkflowConfig({
+      name: 'callable-composed-instruction',
+      subworkflow: {
+        callable: true,
+        params: {
+          lead_instruction: {
+            type: 'facet_ref',
+            facet_kind: 'instruction',
+          },
+          extra_instructions: {
+            type: 'facet_ref[]',
+            facet_kind: 'instruction',
+          },
+        },
+      },
+      instructions: {
+        lead: 'Lead facet',
+        extra_a: 'Extra facet A',
+        extra_b: 'Extra facet B',
+        tail: 'Tail facet',
+      },
+      steps: [{
+        name: 'implement',
+        instruction: [
+          { $param: 'lead_instruction' },
+          'Inline instruction',
+          { $param: 'extra_instructions' },
+          'tail',
+        ],
+      }],
+    }, '/tmp', undefined, undefined, undefined, undefined, undefined, undefined, {
+      callableArgs: {
+        lead_instruction: 'lead',
+        extra_instructions: ['extra_a', 'extra_b'],
+      },
+    });
+
+    expect(workflow.steps[0]?.instruction).toBe(
+      'Lead facet\n\n---\n\nInline instruction\n\n---\n\nExtra facet A\n\n---\n\nExtra facet B\n\n---\n\nTail facet',
+    );
+    expect(workflow.steps[0]?.instructionRef).toEqual([
+      'lead',
+      'Inline instruction',
+      'extra_a',
+      'extra_b',
+      'tail',
+    ]);
+  });
+
+  it('should accept dynamic parallel selection reports as report-relative paths', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'reviewers',
+      parallel: {
+        pool: [{
+          name: 'frontend',
+          description: 'Review frontend changes',
+          instruction: 'Review frontend changes',
+          rules: [{ condition: 'approved', next: 'COMPLETE' }],
+        }],
+        selection: {
+          reports: ['review.md', 'nested/review.md'],
+        },
+      },
+      rules: [{ condition: 'approved', next: 'COMPLETE' }],
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.parallel).toMatchObject({
+        selection: { reports: ['review.md', 'nested/review.md'] },
+      });
+    }
+  });
+
+  it.each([
+    ['reserved manifest', 'resume-artifacts.json'],
+    ['internal namespace', '.takt-report-internal/history/review.md'],
+    ['dot path segment', '../review.md'],
+    ['absolute path', '/tmp/review.md'],
+    ['non-canonical separator', 'nested\\review.md'],
+    ['leading whitespace', ' review.md'],
+  ])('should reject a dynamic parallel selection report with %s at load time', (_label, reportName) => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'reviewers',
+      parallel: {
+        pool: [{
+          name: 'frontend',
+          description: 'Review frontend changes',
+          instruction: 'Review frontend changes',
+          rules: [{ condition: 'approved', next: 'COMPLETE' }],
+        }],
+        selection: { reports: [reportName] },
+      },
+      rules: [{ condition: 'approved', next: 'COMPLETE' }],
+    });
+
+    expect(result.success).toBe(false);
+  });
+
   it('should preserve an explicit max_steps on a root workflow', () => {
     const workflow = normalizeWorkflowConfig({
       name: 'root',
@@ -171,6 +424,476 @@ describe('workflow_call schema', () => {
 
     expect(workflow.maxSteps).toBe(10);
   });
+
+  it('should omit an empty companion_ref[] while preserving ordinary rules', () => {
+    const workflow = normalizeWorkflowConfig(createCallableCompanionWorkflow(), '/tmp');
+    const implement = workflow.steps.find((step) => step.name === 'implement');
+
+    expect(implement).toBeDefined();
+    expect(implement?.companion).toBeUndefined();
+    expect(implement?.rules).toHaveLength(1);
+    expect(implement?.rules?.[0]?.next).toBe('COMPLETE');
+  });
+
+  it('should expand companion_ref[] to fixed companions without adding rules', () => {
+    const workflow = normalizeWorkflowConfig(createCallableCompanionWorkflow(), '/tmp', undefined, undefined, undefined, undefined, undefined, undefined, {
+      callableArgs: {
+        implementation_companions: ['first-reviewer', 'second-reviewer'],
+      },
+    });
+    const implement = workflow.steps.find((step) => step.name === 'implement');
+
+    expect(implement?.companion).toEqual({
+      fixed: ['first-reviewer', 'second-reviewer'],
+      pool: [],
+    });
+    expect(implement?.rules).toHaveLength(1);
+    expect(implement?.rules?.[0]?.next).toBe('COMPLETE');
+  });
+
+  it('should preserve a companion selection object through callable arg expansion', () => {
+    const workflow = normalizeWorkflowConfig(createCallableCompanionWorkflow(), '/tmp', undefined, undefined, undefined, undefined, undefined, undefined, {
+      callableArgs: {
+        implementation_companions: {
+          fixed: ['reviewer'],
+          pool: [],
+          moderator: 'review-adjudicator',
+        },
+      },
+    });
+    const implement = workflow.steps.find((step) => step.name === 'implement');
+
+    expect(implement?.companion).toEqual({
+      fixed: ['reviewer'],
+      pool: [],
+      moderator: 'review-adjudicator',
+    });
+  });
+
+  it.each([
+    {
+      label: 'without a reviewer',
+      value: { fixed: [], pool: [], moderator: 'review-adjudicator' },
+      message: 'companion selection requires a fixed or pool reference',
+    },
+    {
+      label: 'with a duplicate moderator',
+      value: { fixed: ['review-adjudicator'], pool: [], moderator: 'review-adjudicator' },
+      message: 'companion moderator cannot also be a reviewer',
+    },
+    {
+      label: 'with a malformed reviewer list',
+      value: { fixed: 'reviewer', pool: [], moderator: 'review-adjudicator' },
+      message: 'must be a companion_ref[] array or selection object',
+    },
+  ])('should reject a malformed companion selection object: $label', ({ value, message }) => {
+    expect(() => normalizeWorkflowConfig(createCallableCompanionWorkflow(), '/tmp', undefined, undefined, undefined, undefined, undefined, undefined, {
+      callableArgs: { implementation_companions: value },
+    })).toThrow(message);
+  });
+
+  it('should preserve scalar facet params while expanding callable steps', () => {
+    const workflow = normalizeWorkflowConfig(createCallableScalarFacetWorkflow(), '/tmp');
+    const review = workflow.steps[0];
+
+    expect(review.persona).toContain('Reviewer persona content');
+    expect(review.policyContents?.map((facet) => facet.content)).toEqual(['Strict review policy content']);
+    expect(review.knowledgeContents?.map((facet) => facet.content)).toEqual(['Architecture knowledge content']);
+    expect(review.instruction).toContain('Review instruction content');
+    expect(review.instructionRef).toBe('review-instruction');
+    expect(review.outputContracts?.[0]?.format).toContain('Summary format content');
+  });
+
+  it('should retain an unrelated first when rule instead of removing it', () => {
+    const workflow = createCallableCompanionWorkflow();
+    (workflow.steps as Array<Record<string, unknown>>)[0]!.rules = [
+      { condition: 'when(true)', next: 'fix' },
+      { condition: 'done', next: 'COMPLETE' },
+    ];
+
+    const normalized = normalizeWorkflowConfig(workflow, '/tmp');
+    const implement = normalized.steps.find((step) => step.name === 'implement');
+
+    expect(implement?.companion).toBeUndefined();
+    expect(implement?.rules?.map((rule) => rule.next)).toEqual(['fix', 'COMPLETE']);
+    expect(implement?.rules?.[0]?.condition).toMatchObject({
+      kind: 'when',
+      expression: 'true',
+    });
+  });
+
+  it.each(['companion.completionSettled', 'companion.completionSettled == true'])
+    ('should retain a semantic companion label when companions are empty: %s', (condition) => {
+      const workflow = createCallableCompanionWorkflow();
+      (workflow.steps as Array<Record<string, unknown>>)[0]!.rules = [
+        { condition, next: 'fix' },
+        { condition: 'done', next: 'COMPLETE' },
+      ];
+
+      const normalized = normalizeWorkflowConfig(workflow, '/tmp');
+      const implement = normalized.steps.find((step) => step.name === 'implement');
+
+      expect(implement?.companion).toBeUndefined();
+      expect(implement?.rules?.[0]?.condition).toEqual({ kind: 'semantic', label: condition });
+      expect(implement?.rules).toHaveLength(2);
+    });
+
+  it('should recurse through aggregate targets and ignore semantic or quoted companion text', () => {
+    const aggregateRule = 'all("when(companion.followUpRounds == 0)")';
+    const schemaResult = WorkflowStepRawSchema.safeParse({
+      name: 'parallel-review',
+      parallel: [{
+        name: 'review',
+        instruction: 'Review',
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      }],
+      rules: [{ condition: aggregateRule, next: 'COMPLETE' }],
+    });
+
+    expect(schemaResult.success).toBe(false);
+    expect(schemaResult.error?.issues[0]?.message)
+      .toContain('Workflow transition rules cannot reference advisory companion state');
+    expect(hasCompanionReference(parseWorkflowRuleCondition(aggregateRule))).toBe(true);
+    expect(hasCompanionReference(parseWorkflowRuleCondition('companion.followUpRounds'))).toBe(false);
+    expect(hasCompanionReference(parseWorkflowRuleCondition('when(context.status == "companion.followUpRounds")'))).toBe(false);
+  });
+
+  it('should reject companion state rules even when companions are non-empty', () => {
+    const workflow = createCallableCompanionWorkflow();
+    (workflow.steps as Array<Record<string, unknown>>)[0]!.rules = [
+      { condition: 'when(companion.completionSettled)', next: 'fix' },
+      { condition: 'when(companion.followUpRounds == 0)', next: 'fix' },
+      { condition: 'done', next: 'COMPLETE' },
+    ];
+
+    expect(() => normalizeWorkflowConfig(
+      workflow,
+      '/tmp',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { callableArgs: { implementation_companions: ['reviewer'] } },
+    )).toThrow('Workflow transition rules cannot reference advisory companion state');
+  });
+
+  it('should not reject a quoted companion string in a remaining when rule', () => {
+    const workflow = createCallableCompanionWorkflow();
+    (workflow.steps as Array<Record<string, unknown>>)[0]!.rules = [
+      { condition: 'when(true)', next: 'fix' },
+      { condition: 'when(context.status == "companion.followUpRounds")', next: 'fix' },
+      { condition: 'done', next: 'COMPLETE' },
+    ];
+
+    const normalized = normalizeWorkflowConfig(workflow, '/tmp');
+    const implement = normalized.steps.find((step) => step.name === 'implement');
+
+    expect(implement?.companion).toBeUndefined();
+    expect(implement?.rules).toHaveLength(3);
+    expect(implement?.rules?.[1]?.condition).toMatchObject({
+      kind: 'when',
+      expression: 'context.status == "companion.followUpRounds"',
+    });
+  });
+
+  it('should reject a scalar companion_ref[] argument before expansion', () => {
+    expect(() => normalizeWorkflowConfig(createCallableCompanionWorkflow(), '/tmp', undefined, undefined, undefined, undefined, undefined, undefined, {
+      callableArgs: {
+        implementation_companions: 'first-reviewer',
+      },
+    })).toThrow('must be a companion_ref[] array');
+  });
+
+  it('should reject an undeclared companion parameter reference before schema validation', () => {
+    const workflow = createCallableCompanionWorkflow();
+    workflow.steps = [{
+      name: 'implement',
+      instruction: 'Implement',
+      companion: { $param: 'undeclared_companions' },
+      rules: [
+        { condition: 'done', next: 'fix' },
+        { condition: 'done', next: 'COMPLETE' },
+      ],
+    }, {
+      name: 'fix',
+      instruction: 'Fix',
+      rules: [{ condition: 'done', next: 'COMPLETE' }],
+    }];
+
+    expect(() => normalizeWorkflowConfig(workflow, '/tmp'))
+      .toThrow(/undeclared_companions/);
+  });
+
+  it('should supply an empty discovery binding for a required companion_ref[] parameter', () => {
+    const workflow = createCallableCompanionWorkflow();
+    workflow.subworkflow = {
+      callable: true,
+      params: {
+        implementation_companions: { type: 'companion_ref[]' },
+      },
+    };
+    const raw = WorkflowConfigRawSchema.parse(workflow);
+
+    expect(prepareCallableSubworkflowDiscoveryArgs(raw).callableArgs).toEqual({
+      implementation_companions: [],
+    });
+  });
+
+  it('should use a suffixed synthetic discovery pool when the default pool name collides', () => {
+    const syntheticPoolName = '__takt_discovery_pool__implementation_pool';
+    const raw = WorkflowConfigRawSchema.parse({
+      name: 'pool-discovery',
+      subworkflow: {
+        callable: true,
+        params: {
+          implementation_pool: {
+            type: 'facet_pool_ref',
+          },
+        },
+      },
+      policies: {
+        policy: 'Discovery policy',
+      },
+      knowledge: {
+        knowledge: 'Discovery knowledge',
+      },
+      facet_pools: {
+        [syntheticPoolName]: {
+          candidates: [{
+            id: 'existing-candidate',
+            description: 'Existing pool candidate',
+            policy: 'policy',
+          }],
+        },
+        first: {
+          candidates: [{
+            id: 'first-candidate',
+            description: 'First candidate',
+            policy: 'policy',
+          }],
+        },
+        second: {
+          candidates: [{
+            id: 'second-candidate',
+            description: 'Second candidate',
+            knowledge: 'knowledge',
+          }],
+        },
+      },
+      steps: [{
+        name: 'implement',
+        persona: 'reviewer',
+        instruction: 'Review',
+        dynamic_facets: {
+          pool: {
+            $param: 'implementation_pool',
+          },
+        },
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      }],
+    });
+
+    const prepared = prepareCallableSubworkflowDiscoveryArgs(raw);
+    const suffixedPoolName = `${syntheticPoolName}_1`;
+    expect(prepared.callableArgs).toEqual({ implementation_pool: suffixedPoolName });
+    expect(prepared.raw.facet_pools?.[syntheticPoolName]).toEqual({
+      candidates: [{
+        id: 'existing-candidate',
+        description: 'Existing pool candidate',
+        policy: 'policy',
+      }],
+    });
+    expect(prepared.raw.facet_pools?.first).toBeDefined();
+    expect(prepared.raw.facet_pools?.second).toBeDefined();
+    expect(prepared.raw.facet_pools?.[suffixedPoolName]).toEqual({
+      candidates: [{
+        id: suffixedPoolName + '-candidate',
+        description: '[discovery placeholder candidate for facet pool param "implementation_pool"]',
+        policy: '__takt_discovery_param___policy_implementation_pool',
+        knowledge: '__takt_discovery_param___knowledge_implementation_pool',
+      }],
+    });
+    expect(prepared.raw.policies?.['__takt_discovery_param___policy_implementation_pool']).toBeDefined();
+    expect(prepared.raw.knowledge?.['__takt_discovery_param___knowledge_implementation_pool']).toBeDefined();
+  });
+
+  it('should use the base synthetic pool name when the default name is inherited', () => {
+    const poolName = '__takt_discovery_pool__implementation_pool';
+    const raw = WorkflowConfigRawSchema.parse({
+      name: 'inherited-pool-discovery',
+      subworkflow: {
+        callable: true,
+        params: {
+          implementation_pool: { type: 'facet_pool_ref' },
+        },
+      },
+      policies: { policy: 'Discovery policy' },
+      knowledge: { knowledge: 'Discovery knowledge' },
+      steps: [{
+        name: 'implement',
+        persona: 'reviewer',
+        instruction: 'Review',
+        dynamic_facets: { pool: { $param: 'implementation_pool' } },
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      }],
+    });
+    const previousDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, poolName);
+
+    try {
+      Object.defineProperty(Object.prototype, poolName, {
+        configurable: true,
+        enumerable: false,
+        value: { inherited: true },
+        writable: true,
+      });
+
+      const prepared = prepareCallableSubworkflowDiscoveryArgs(raw);
+      expect(prepared.callableArgs).toEqual({ implementation_pool: poolName });
+      expect(Object.hasOwn(prepared.raw.facet_pools ?? {}, poolName)).toBe(true);
+      expect(prepared.raw.facet_pools?.[poolName]?.candidates).toHaveLength(1);
+    } finally {
+      if (previousDescriptor === undefined) {
+        delete Object.prototype[poolName];
+      } else {
+        Object.defineProperty(Object.prototype, poolName, previousDescriptor);
+      }
+    }
+  });
+
+  it('should report the dynamic pool field path when a non-string pool reaches normalization', () => {
+    let thrown: unknown;
+    try {
+      normalizeWorkflowConfig({
+        name: 'invalid-dynamic-pool',
+        steps: [{
+          name: 'implement',
+          persona: 'coder',
+          instruction: 'Implement',
+          dynamic_facets: {
+            pool: { $param: 'implementation_pool' },
+          },
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        }],
+      }, '/tmp');
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect(getWorkflowConfigErrorPath(thrown)).toEqual([
+      'steps',
+      0,
+      'dynamic_facets',
+      'pool',
+    ]);
+    expect((thrown as Error).message).toContain('dynamic_facets.pool has an unresolved parameter reference');
+  });
+
+  it.each([
+    { label: 'an array', value: ['available'] },
+    { label: 'null', value: null },
+  ])('should report the dynamic pool path when $label is supplied', ({ value }) => {
+    let thrown: unknown;
+    try {
+      normalizeWorkflowConfig(createDynamicPoolWorkflow(value), '/tmp');
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeDefined();
+    expect(getWorkflowConfigErrorPath(thrown)).toEqual([
+      'steps',
+      0,
+      'dynamic_facets',
+      'pool',
+    ]);
+    expect((thrown as { message: string }).message).toContain(
+      `Invalid input: expected string, received ${value === null ? 'null' : 'array'}`,
+    );
+  });
+
+  it.each([
+    { label: 'an array', value: ['available'], expectedMessage: 'must be a scalar facet_pool_ref' },
+    { label: 'null', value: null, expectedMessage: 'references unknown facet pool "null"' },
+  ])('should report the callable argument path when $label is supplied', ({ value, expectedMessage }) => {
+    let thrown: unknown;
+    try {
+      normalizeWorkflowConfig(
+        createCallableFacetPoolWorkflow(),
+        '/tmp',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        {
+          callableArgs: {
+            implementation_pool: value as unknown as string | string[],
+          },
+        },
+      );
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect(getWorkflowConfigErrorPath(thrown)).toEqual(['callableArgs', 'implementation_pool']);
+    expect((thrown as Error).message).toContain(expectedMessage);
+  });
+
+  it.each(['constructor', 'toString', '__proto__'])(
+    'should reject an undeclared facet pool when a callable arg uses the inherited key %s',
+    (poolName) => {
+      let thrown: unknown;
+      try {
+        normalizeWorkflowConfig(
+          createCallableFacetPoolWorkflow(),
+          '/tmp',
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          { callableArgs: { implementation_pool: poolName } },
+        );
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toContain(
+        `workflow_call arg "implementation_pool" references unknown facet pool "${poolName}"`,
+      );
+      expect(getWorkflowConfigErrorPath(thrown)).toEqual(['callableArgs', 'implementation_pool']);
+    },
+  );
+
+  it.each(['constructor', 'toString', '__proto__'])(
+    'should reject an inherited root facet pool name when dynamic facets use %s',
+    (poolName) => {
+      let thrown: unknown;
+      try {
+        normalizeWorkflowConfig(createRootDynamicFacetPoolWorkflow(poolName), '/tmp');
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toContain(
+        `Configuration error: step "implement" references unknown facet pool "${poolName}"`,
+      );
+      expect(getWorkflowConfigErrorPath(thrown)).toEqual([
+        'steps',
+        0,
+        'dynamic_facets',
+        'pool',
+      ]);
+    },
+  );
 
   it('accepts scalar vars only on workflow_call steps and preserves them after normalization', () => {
     const raw = {
@@ -233,6 +956,36 @@ describe('workflow_call schema', () => {
       if (!result.success) {
         expect(result.error.issues.some((issue) => issue.path.includes('vars'))).toBe(true);
       }
+    },
+  );
+
+  it.each([
+    ['Initial', 'case alias'],
+    ['follow-up', 'hyphen alias'],
+    ['', 'empty string'],
+    [1, 'number'],
+    [true, 'boolean'],
+  ])('rejects reserved review_mode outside its exact domain: %j (%s)', (value, _label) => {
+    const result = WorkflowStepRawSchema.safeParse(createWorkflowCallStep({
+      vars: { review_mode: value },
+    }));
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((issue) => (
+        issue.path.includes('vars') && issue.path.includes('review_mode')
+      ))).toBe(true);
+    }
+  });
+
+  it.each(['initial', 'follow_up', 'unspecified'])(
+    'accepts exact reserved review_mode value %s without narrowing other vars',
+    (reviewMode) => {
+      const result = WorkflowStepRawSchema.safeParse(createWorkflowCallStep({
+        vars: { review_mode: reviewMode, generic_number: 2, generic_boolean: true },
+      }));
+
+      expect(result.success).toBe(true);
     },
   );
 
@@ -411,15 +1164,6 @@ describe('workflow_call schema', () => {
           name: 'delegate',
           kind: 'workflow_call',
           call: 'takt/review-loop',
-          overrides: {
-            provider: 'codex',
-            model: 'gpt-5-codex',
-            provider_options: {
-              codex: {
-                network_access: true,
-              },
-            },
-          },
           rules: [
             {
               condition: 'COMPLETE',
@@ -442,16 +1186,8 @@ describe('workflow_call schema', () => {
     expect(steps[0]).toMatchObject({
       kind: 'workflow_call',
       call: 'takt/review-loop',
-      overrides: {
-        provider: 'codex',
-        model: 'gpt-5-codex',
-        provider_options: {
-          codex: {
-            network_access: true,
-          },
-        },
-      },
     });
+    expect('overrides' in steps[0]).toBe(false);
   });
 
   it.each(['COMPLETE', 'ABORT'])('subworkflow.returns で予約語 %s を reject する', (reservedResult) => {
@@ -597,52 +1333,6 @@ describe('workflow_call schema', () => {
     }));
 
     expect(result.success).toBe(true);
-  });
-
-  it('workflow_call step で terminal adjudication authority を保持する', () => {
-    const result = WorkflowStepRawSchema.safeParse(createWorkflowCallStep({
-      finding_contract_authority: 'terminal_adjudication',
-    }));
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data).toMatchObject({
-        finding_contract_authority: 'terminal_adjudication',
-      });
-    }
-  });
-
-  it.each(['standard', 'provider_trusted'])(
-    'workflow_call step で未許可の finding contract authority %s を reject する',
-    (authority) => {
-      const result = WorkflowStepRawSchema.safeParse(createWorkflowCallStep({
-        finding_contract_authority: authority,
-      }));
-
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(result.error.issues).toContainEqual(expect.objectContaining({
-          path: ['finding_contract_authority'],
-        }));
-      }
-    },
-  );
-
-  it('agent step で finding contract authority を reject する', () => {
-    const result = WorkflowStepRawSchema.safeParse({
-      name: 'review',
-      persona: 'reviewer',
-      instruction: 'Review the code',
-      finding_contract_authority: 'terminal_adjudication',
-      rules: [{ condition: 'done', next: 'COMPLETE' }],
-    });
-
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues).toContainEqual(expect.objectContaining({
-        path: ['finding_contract_authority'],
-      }));
-    }
   });
 
   it('workflow_call step で when rule を reject する', () => {
@@ -1046,15 +1736,6 @@ describe('workflow_call schema', () => {
         name: 'parent',
         initial_step: 'delegate',
         max_steps: 3,
-        workflow_config: {
-          provider: 'codex',
-          model: 'gpt-5-codex',
-          provider_options: {
-            codex: {
-              network_access: true,
-            },
-          },
-        },
         steps: [
           {
             name: 'delegate',
@@ -1120,7 +1801,8 @@ describe('workflow_call schema', () => {
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.error.issues.some((issue) =>
-        issue.message.includes('workflow_call overrides require at least one of'),
+        issue.message.includes('workflow YAML no longer accepts provider execution settings')
+        && issue.message.includes('runtime.yaml'),
       )).toBe(true);
     }
   });
@@ -1145,8 +1827,8 @@ describe('workflow_call schema', () => {
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.error.issues.some((issue) =>
-        issue.code === 'unrecognized_keys'
-        && issue.path[0] === 'overrides',
+        issue.path[0] === 'overrides'
+        && issue.message.includes('runtime.yaml'),
       )).toBe(true);
     }
   });
@@ -1172,7 +1854,6 @@ describe('workflow_call schema', () => {
           {
             name: 'delegate',
             call: 'takt/review-loop',
-            finding_contract_authority: 'terminal_adjudication',
             rules: [
               {
                 condition: 'COMPLETE',
@@ -1202,7 +1883,6 @@ describe('workflow_call schema', () => {
     expect(plan.kind).toBe('agent');
     expect(delegate.kind).toBe('workflow_call');
     expect(delegate.call).toBe('takt/review-loop');
-    expect(delegate.findingContractAuthority).toBe('terminal_adjudication');
     expect(routeContext.kind).toBe('system');
     expect('provider' in delegate).toBe(false);
     expect('persona' in routeContext).toBe(false);
@@ -1250,46 +1930,27 @@ describe('workflow_call schema', () => {
     }
   });
 
-  it('callable subworkflow で workflow-level provider 設定を保持する', () => {
-    const workflow = normalizeWorkflowConfig(
+  it.each([
+    ['provider', 'codex'],
+    ['model', 'gpt-5-codex'],
+    ['provider_options', { codex: { network_access: true } }],
+  ] as const)('callable subworkflow で workflow_config.%s を拒否する', (field, value) => {
+    expect(() => normalizeWorkflowConfig(
       {
         name: 'takt/coding',
-        subworkflow: {
-          callable: true,
-        },
+        subworkflow: { callable: true },
         workflow_config: {
-          provider: 'codex',
-          model: 'gpt-5-codex',
-          provider_options: {
-            codex: {
-              network_access: true,
-            },
-          },
+          [field]: value,
         },
-        steps: [
-          {
-            name: 'review',
-            persona: 'reviewer',
-            instruction: 'Review the task',
-            rules: [
-              {
-                condition: 'COMPLETE',
-                next: 'COMPLETE',
-              },
-            ],
-          },
-        ],
+        steps: [{
+          name: 'review',
+          persona: 'reviewer',
+          instruction: 'Review the task',
+          rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+        }],
       },
       process.cwd(),
-    );
-
-    expect(workflow.provider).toBe('codex');
-    expect(workflow.model).toBe('gpt-5-codex');
-    expect(workflow.providerOptions).toEqual({
-      codex: {
-        networkAccess: true,
-      },
-    });
+    )).toThrow(/runtime\.yaml/);
   });
 
   it('callable subworkflow で workflow-level runtime を保持する', () => {
@@ -1326,79 +1987,41 @@ describe('workflow_call schema', () => {
     });
   });
 
-  it('callable subworkflow で step-level provider 設定と overrides を保持する', () => {
-    const workflow = normalizeWorkflowConfig(
+  it.each([
+    ['step', 'provider', 'codex'],
+    ['step', 'model', 'gpt-5-codex'],
+    ['step', 'provider_options', { codex: { network_access: true } }],
+    ['workflow_call override', 'provider', 'codex'],
+    ['workflow_call override', 'model', 'gpt-5-codex'],
+    ['workflow_call override', 'provider_options', { codex: { network_access: true } }],
+  ] as const)('callable subworkflow で %s の %s を拒否する', (location, field, value) => {
+    const review = {
+      name: 'review',
+      persona: 'reviewer',
+      instruction: 'Review the task',
+      rules: [{ condition: 'COMPLETE', next: 'delegate' }],
+      ...(location === 'step' ? { [field]: value } : {}),
+    };
+    const delegate = {
+      name: 'delegate',
+      kind: 'workflow_call',
+      call: 'takt/review-loop',
+      ...(location === 'workflow_call override'
+        ? { overrides: { [field]: value } }
+        : {}),
+      rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+    };
+
+    expect(() => normalizeWorkflowConfig(
       {
         name: 'takt/coding',
         subworkflow: {
           callable: true,
         },
-        steps: [
-          {
-            name: 'review',
-            persona: 'reviewer',
-            provider: 'codex',
-            model: 'gpt-5-codex',
-            provider_options: {
-              codex: {
-                network_access: true,
-              },
-            },
-            instruction: 'Review the task',
-            rules: [
-              {
-                condition: 'COMPLETE',
-                next: 'delegate',
-              },
-            ],
-          },
-          {
-            name: 'delegate',
-            kind: 'workflow_call',
-            call: 'takt/review-loop',
-            overrides: {
-              provider: 'codex',
-              model: 'gpt-5-codex',
-              provider_options: {
-                codex: {
-                  network_access: true,
-                },
-              },
-            },
-            rules: [
-              {
-                condition: 'COMPLETE',
-                next: 'COMPLETE',
-              },
-            ],
-          },
-        ],
+        steps: [review, delegate],
       },
       process.cwd(),
-    );
-
-    expect(workflow.steps[0]).toMatchObject({
-      name: 'review',
-      provider: 'codex',
-      model: 'gpt-5-codex',
-      providerOptions: {
-        codex: {
-          networkAccess: true,
-        },
-      },
-    });
-    expect(workflow.steps[1]).toMatchObject({
-      name: 'delegate',
-      overrides: {
-        provider: 'codex',
-        model: 'gpt-5-codex',
-        providerOptions: {
-          codex: {
-            networkAccess: true,
-          },
-        },
-      },
-    });
+    )).toThrow(/runtime\.yaml/);
   });
 
   it('callable subworkflow で parallel substep の return を reject する', () => {
@@ -1440,8 +2063,33 @@ describe('workflow_call schema', () => {
     )).toThrow(/parallel sub-step rules do not allow/);
   });
 
-  it('callable subworkflow で parallel substep と loop monitor judge の provider 設定を保持する', () => {
-    const workflow = normalizeWorkflowConfig(
+  it.each([
+    ['parallel substep', 'provider', 'codex'],
+    ['parallel substep', 'model', 'gpt-5-codex'],
+    ['parallel substep', 'provider_options', { codex: { network_access: true } }],
+    ['loop monitor judge', 'provider', 'codex'],
+    ['loop monitor judge', 'model', 'gpt-5-codex'],
+    ['loop monitor judge', 'provider_options', { codex: { network_access: true } }],
+  ] as const)('callable subworkflow で %s の %s を拒否する', (location, field, value) => {
+    const parallel = location === 'parallel substep'
+      ? [{
+          name: 'security',
+          persona: 'security-reviewer',
+          instruction: 'Security review',
+          [field]: value,
+        }]
+      : undefined;
+    const loopMonitors = location === 'loop monitor judge'
+      ? [{
+          cycle: ['review', 'review'],
+          judge: {
+            [field]: value,
+            rules: [{ condition: 'stop', next: 'ABORT' }],
+          },
+        }]
+      : undefined;
+
+    expect(() => normalizeWorkflowConfig(
       {
         name: 'takt/coding',
         subworkflow: {
@@ -1452,20 +2100,7 @@ describe('workflow_call schema', () => {
             name: 'review',
             persona: 'reviewer',
             instruction: 'Review the task',
-            parallel: [
-              {
-                name: 'security',
-                persona: 'security-reviewer',
-                provider: 'codex',
-                model: 'gpt-5-codex',
-                provider_options: {
-                  codex: {
-                    network_access: true,
-                  },
-                },
-                instruction: 'Security review',
-              },
-            ],
+            ...(parallel === undefined ? {} : { parallel }),
             rules: [
               {
                 condition: 'done',
@@ -1474,46 +2109,9 @@ describe('workflow_call schema', () => {
             ],
           },
         ],
-        loop_monitors: [
-          {
-            cycle: ['review', 'review'],
-            judge: {
-              provider: {
-                type: 'codex',
-                network_access: true,
-              },
-              model: 'gpt-5-codex',
-              rules: [
-                {
-                  condition: 'stop',
-                  next: 'ABORT',
-                },
-              ],
-            },
-          },
-        ],
+        ...(loopMonitors === undefined ? {} : { loop_monitors: loopMonitors }),
       },
       process.cwd(),
-    );
-
-    expect(workflow.steps[0]?.parallel?.[0]).toMatchObject({
-      name: 'security',
-      provider: 'codex',
-      model: 'gpt-5-codex',
-      providerOptions: {
-        codex: {
-          networkAccess: true,
-        },
-      },
-    });
-    expect(workflow.loopMonitors?.[0]?.judge).toMatchObject({
-      provider: 'codex',
-      model: 'gpt-5-codex',
-      providerOptions: {
-        codex: {
-          networkAccess: true,
-        },
-      },
-    });
+    )).toThrow(/runtime\.yaml/);
   });
 });

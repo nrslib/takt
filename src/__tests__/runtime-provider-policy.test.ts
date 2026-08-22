@@ -39,6 +39,38 @@ describe('validateRuntimeProviderSection — valid sections', () => {
   it('accepts a fully-populated ladder section', () => {
     expect(() => validateRuntimeProviderSection(ladderSection())).not.toThrow();
   });
+
+  it('rejects an active section without defaults', () => {
+    expect(() => validateRuntimeProviderSection({
+      profiles: { real: { provider: 'mock', model: 'm' } },
+    } as RuntimeProviderSection)).toThrow(/defaults/);
+  });
+
+  it('rejects defaults.pool even when the referenced pool exists', () => {
+    expect(() => validateRuntimeProviderSection({
+      defaults: { pool: 'pool-a' },
+      profiles: {
+        real: { provider: 'mock', model: 'm' },
+        router: { provider: 'mock', model: 'router' },
+      },
+      auto_routing: {
+        router_profile: 'router',
+        pools: {
+          'pool-a': {
+            candidates: [{ profile: 'real', tier: 'low' }],
+            fallback_profile: 'real',
+          },
+        },
+      },
+    } as unknown as RuntimeProviderSection)).toThrow(/defaults.*pool|pool.*defaults/);
+  });
+
+  it('rejects defaults.pool when auto_routing is absent', () => {
+    expect(() => validateRuntimeProviderSection({
+      defaults: { pool: 'pool-a' },
+      profiles: { real: { provider: 'mock', model: 'model-real' } },
+    } as unknown as RuntimeProviderSection)).toThrow(/defaults.*pool|pool.*defaults/);
+  });
 });
 
 describe('validateRuntimeProviderSection — extends (C3/C10)', () => {
@@ -98,12 +130,41 @@ describe('validateRuntimeProviderSection — unknown reference fail-fast (C10)',
     };
     expect(() => validateRuntimeProviderSection(section)).toThrow(/provider.*model|model.*provider/i);
   });
+
+  it('fails fast on a profile referenced by a named assignment default', () => {
+    const section: RuntimeProviderSection = {
+      defaults: { profile: 'real' },
+      profiles: { real: { provider: 'mock', model: 'm' } },
+      assignments: { project: { defaults: { profile: 'ghost' } } },
+    };
+    expect(() => validateRuntimeProviderSection(section)).toThrow(/ghost|unknown profile/i);
+  });
+
+  it('fails fast on a pool referenced by a named assignment target', () => {
+    const section: RuntimeProviderSection = {
+      defaults: { profile: 'real' },
+      profiles: { real: { provider: 'mock', model: 'm' } },
+      assignments: {
+        project: { targets: { steps: { implement: { pool: 'missing' } } } },
+      },
+    };
+    expect(() => validateRuntimeProviderSection(section)).toThrow(/missing|unknown pool/i);
+  });
+
+  it('fails fast on a ladder profile referenced by a named assignment default', () => {
+    const section: RuntimeProviderSection = {
+      defaults: { profile: 'real' },
+      profiles: { real: { provider: 'mock', model: 'm' } },
+      assignments: { project: { defaults: { ladder: ['missing'] } } },
+    };
+    expect(() => validateRuntimeProviderSection(section)).toThrow(/missing|unknown profile/i);
+  });
 });
 
 describe('validateRuntimeProviderSection — auto_routing references (C9/C10)', () => {
   function autoSection(overrides: (s: RuntimeProviderSection) => void): RuntimeProviderSection {
     const section: RuntimeProviderSection = {
-      defaults: { pool: 'pool-a' },
+      defaults: { profile: 'hi' },
       profiles: {
         hi: { provider: 'codex', model: 'gpt', options: { reasoning_effort: 'high' } },
         lo: { provider: 'codex', model: 'gpt', options: { reasoning_effort: 'low' } },
@@ -147,7 +208,7 @@ describe('validateRuntimeProviderSection — auto_routing references (C9/C10)', 
 
   it('fails fast on defaults referencing an undefined pool', () => {
     expect(() => validateRuntimeProviderSection(autoSection((s) => {
-      s.defaults = { pool: 'missing' };
+      s.targets = { steps: { execute: { pool: 'missing' } } };
     }))).toThrow(/missing|unknown pool/i);
   });
 });

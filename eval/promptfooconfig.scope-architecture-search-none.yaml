@@ -1,0 +1,22 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'TAKT facet eval: shared architecture instruction without policy or knowledge'
+
+prompts:
+  - file://prompts/scope-architecture-search-none.phase1.md
+
+providers:
+  - id: file://providers/takt-codex.mjs
+    label: codex
+    config:
+      working_dir: fixtures/scope-architecture-search
+      model_reasoning_effort: low
+
+tests:
+  - description: 'completes semantic exploration without injected policy or knowledge'
+    vars:
+      task: file://cases/scope-architecture-search.md
+      previous_response: ''
+    assert:
+      - type: javascript
+        metric: scope/search-no-facets
+        value: file://asserts/scope-architecture-search.mjs

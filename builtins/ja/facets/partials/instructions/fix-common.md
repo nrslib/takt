@@ -4,6 +4,6 @@
 
 {{include:instructions/fix-root-cause-analysis}}
 
-{{include:instructions/fix-family-completion}}
+{{include:instructions/repair-path-check}}
 
 {{include:instructions/post-edit-self-scan}}

@@ -206,7 +206,7 @@ describe('inheritResumeReportSnapshot', () => {
     expect(readFileSync(join(targetReports, 'ai-antipattern-review-1st.md.20260701T010101Z'), 'utf-8')).toBe('older review');
     expect(readFileSync(join(targetReports, 'nested/sub-report.md'), 'utf-8')).toBe('nested report');
 
-    expect(manifest.version).toBe(1);
+    expect(manifest.version).toBe(2);
     expect(manifest.sourceRunSlug).toBe('source-run');
     expect(manifest.targetRunSlug).toBe('target-run');
     expect(manifest.files.map((f) => f.path)).toEqual([
@@ -246,60 +246,6 @@ describe('inheritResumeReportSnapshot', () => {
     expect(existsSync(join(targetReports, '.takt-report-internal'))).toBe(false);
     expect(existsSync(join(targetReports, '.TAKT-REPORT-INTERNAL'))).toBe(false);
     expect(existsSync(join(targetReports, 'nested', 'resume-artifacts.json'))).toBe(false);
-  });
-
-  it('inherits only Finding review pending/completed records without exposing them in manifest', () => {
-    const completedId = 'a'.repeat(64);
-    const pendingId = 'b'.repeat(64);
-    seedSourceRun('source-run', {
-      'plan.md': 'the plan',
-      [`.takt-report-internal/finding-review-publications/${completedId}.json`]:
-        'completed publication',
-      [`.takt-report-internal/finding-review-publications/pending/${pendingId}.json`]:
-        'pending publication',
-      [`.takt-report-internal/finding-review-publications/${completedId}.json.lock`]:
-        'publication lock',
-      '.takt-report-internal/history/private.json': 'internal history',
-    });
-
-    const manifest = inheritResumeReportSnapshot({
-      cwd,
-      sourceRunSlug: 'source-run',
-      targetRunSlug: 'target-run',
-    });
-
-    const targetReports = buildRunPaths(cwd, 'target-run').reportsAbs;
-    expect(manifest.files.map((entry) => entry.path)).toEqual(['plan.md']);
-    expect(readFileSync(
-      join(
-        targetReports,
-        '.takt-report-internal',
-        'finding-review-publications',
-        `${completedId}.json`,
-      ),
-      'utf-8',
-    )).toBe('completed publication');
-    expect(readFileSync(
-      join(
-        targetReports,
-        '.takt-report-internal',
-        'finding-review-publications',
-        'pending',
-        `${pendingId}.json`,
-      ),
-      'utf-8',
-    )).toBe('pending publication');
-    expect(existsSync(join(
-      targetReports,
-      '.takt-report-internal',
-      'finding-review-publications',
-      `${completedId}.json.lock`,
-    ))).toBe(false);
-    expect(existsSync(join(
-      targetReports,
-      '.takt-report-internal',
-      'history',
-    ))).toBe(false);
   });
 
   it('leaves the source run untouched', () => {
@@ -516,12 +462,33 @@ describe('inheritResumeReportSnapshot', () => {
     expect(() => readResumeReportSnapshotManifest(cwd, 'source-run')).toThrow(SyntaxError);
   });
 
+  it('accepts a version 2 manifest without resume report consumers', () => {
+    const reports = buildRunPaths(cwd, 'target-run').reportsAbs;
+    mkdirSync(reports, { recursive: true });
+    writeFileSync(join(reports, RESUME_ARTIFACTS_FILE_NAME), JSON.stringify({
+      version: 2,
+      sourceRunSlug: 'source-run',
+      targetRunSlug: 'target-run',
+      createdAt: '2026-07-17T00:00:00.000Z',
+      files: [],
+    }));
+
+    expect(readResumeReportSnapshotManifest(cwd, 'target-run')).toEqual({
+      version: 2,
+      sourceRunSlug: 'source-run',
+      targetRunSlug: 'target-run',
+      createdAt: '2026-07-17T00:00:00.000Z',
+      files: [],
+      resumeReportConsumers: [],
+    });
+  });
+
   it.each([
     ['empty object', {}],
     ['null root', null],
     ['array root', []],
     ['missing fields', { version: 1 }],
-    ['wrong version', { version: 2, sourceRunSlug: 'source-run', targetRunSlug: 'target-run', createdAt: '2026-07-17T00:00:00.000Z', files: [] }],
+    ['wrong version', { version: 3, sourceRunSlug: 'source-run', targetRunSlug: 'target-run', createdAt: '2026-07-17T00:00:00.000Z', files: [] }],
     ['target slug mismatch', { version: 1, sourceRunSlug: 'source-run', targetRunSlug: 'other-run', createdAt: '2026-07-17T00:00:00.000Z', files: [] }],
     ['same source and target slug', { version: 1, sourceRunSlug: 'target-run', targetRunSlug: 'target-run', createdAt: '2026-07-17T00:00:00.000Z', files: [] }],
     ['non-canonical ISO timestamp', { version: 1, sourceRunSlug: 'source-run', targetRunSlug: 'target-run', createdAt: '2026-07-17 00:00:00Z', files: [] }],

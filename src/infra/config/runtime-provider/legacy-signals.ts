@@ -2,19 +2,26 @@
  * Shared legacy-provider signal collection (issue #1136).
  *
  * A "legacy provider signal" is a provider setting explicitly written to project/global
- * `config.yaml` (or a workflow) that must not coexist with an active runtime.yaml provider
+ * `config.yaml` settings that must not coexist with an active runtime.yaml provider
  * section. `determineProviderConfigMode` turns a non-empty signal list into a mixed-config
  * fail-fast. This module owns the single signal-generation mapping so every entry point — the
  * workflow-execution bootstrap, the auxiliary preview/doctor entry, and the selector/assistant
  * seams — consumes the same mode decision instead of re-deriving it.
  */
 
-import type { TaktProvidersConfig } from '../../../core/models/config-types.js';
+import type {
+  TaktProvidersConfig,
+  WorkflowMcpServersConfig,
+} from '../../../core/models/config-types.js';
 import type { McpServerConfig } from '../../../core/models/index.js';
 import type { ProviderOptionsSource } from '../../../core/workflow/provider-options-trace.js';
 import { loadGlobalConfig } from '../global/globalConfig.js';
 import { loadProjectConfig } from '../project/projectConfig.js';
-import { resolveConfigValueWithSource, resolveProviderOptionsWithTrace } from '../resolveConfigValue.js';
+import {
+  resolveConfigValueWithSource,
+  resolveProviderOptionsWithTrace,
+  toProviderResolutionSource,
+} from '../resolveConfigValue.js';
 import { resolveWorkflowConfigValues } from '../resolveWorkflowConfigValue.js';
 import type { LegacyProviderEnvironmentInput } from './environment.js';
 import type { LegacyProviderSignal } from './mode.js';
@@ -48,11 +55,10 @@ export function selectConfigTaktProviders(
  * Detect legacy provider settings that must not coexist with an active runtime.yaml provider
  * section. CLI/env overrides and built-in defaults are runtime overrides / defaults (allowed in
  * both modes), so they are not reported as legacy configuration — only settings explicitly
- * written to project/global `config.yaml` (or the workflow) count.
+ * written to project/global `config.yaml` count.
  */
 export function collectLegacyProviderSignals(
   legacy: LegacyProviderEnvironmentInput,
-  workflow: { name: string; provider?: unknown; model?: unknown; autoRouting?: unknown },
   providerOptionsSource: ProviderOptionsSource | undefined,
 ): LegacyProviderSignal[] {
   const signals: LegacyProviderSignal[] = [];
@@ -69,20 +75,6 @@ export function collectLegacyProviderSignals(
       setting: 'model',
       location: `config.yaml:model (${legacy.modelSource})`,
       migrateTo: 'provider.defaults + provider.profiles',
-    });
-  }
-  if (legacy.providerSource === 'workflow' || workflow.provider !== undefined) {
-    signals.push({
-      setting: 'provider',
-      location: `workflow "${workflow.name}":provider`,
-      migrateTo: 'provider.targets.steps',
-    });
-  }
-  if (legacy.modelSource === 'workflow' || workflow.model !== undefined) {
-    signals.push({
-      setting: 'model',
-      location: `workflow "${workflow.name}":model`,
-      migrateTo: 'provider.targets.steps',
     });
   }
   // Only takt_providers with an explicit provider (config.yaml only; never CLI/env/default) count.
@@ -123,16 +115,10 @@ export function collectLegacyProviderSignals(
       migrateTo: 'provider.targets',
     });
   }
-  // auto_routing is inherited as `workflowConfig.autoRouting ?? globalConfig.autoRouting`, so the
-  // effective value can originate from the workflow. Report the location that actually holds it —
-  // consistent with the provider/model workflow-vs-config.yaml split above — so the mixed-config
-  // error points at a real migration target rather than a config.yaml entry that does not exist.
   if (legacy.autoRouting !== undefined) {
     signals.push({
       setting: 'auto_routing',
-      location: workflow.autoRouting !== undefined
-        ? `workflow "${workflow.name}":auto_routing`
-        : 'config.yaml:auto_routing',
+      location: 'config.yaml:auto_routing',
       migrateTo: 'provider.auto_routing',
     });
   }
@@ -157,9 +143,9 @@ export function collectProjectLegacyProviderSignals(projectCwd: string): LegacyP
   ]);
   const legacy: LegacyProviderEnvironmentInput = {
     provider: provider.value,
-    providerSource: provider.source,
+    providerSource: toProviderResolutionSource(provider.source),
     model: model.value,
-    modelSource: model.source,
+    modelSource: toProviderResolutionSource(model.source),
     personaProviders: resolved.personaProviders,
     providerRouting: resolved.providerRouting,
     autoRouting: resolved.autoRouting,
@@ -169,7 +155,7 @@ export function collectProjectLegacyProviderSignals(projectCwd: string): LegacyP
       loadGlobalConfig().taktProviders,
     ),
   };
-  return collectLegacyProviderSignals(legacy, { name: 'internal-agent' }, providerOptions.source);
+  return collectLegacyProviderSignals(legacy, providerOptions.source);
 }
 
 /**
@@ -179,7 +165,7 @@ export function collectProjectLegacyProviderSignals(projectCwd: string): LegacyP
  */
 export interface LegacyMcpSignalInput {
   /** The workflow-level `mcp_servers` policy (e.g. `{ stdio: true }`). */
-  workflowMcpServersPolicy: Record<string, unknown> | undefined;
+  workflowMcpServersPolicy: WorkflowMcpServersConfig | undefined;
   /** The per-step `mcp_servers` map (`{ name: McpServerConfig }`). */
   workflowStepMcpServers: Record<string, McpServerConfig> | undefined;
   /** Workflow name for error messages. */
@@ -201,7 +187,7 @@ export function collectLegacyMcpSignals(input: LegacyMcpSignalInput): LegacyProv
     && Object.keys(input.workflowMcpServersPolicy).length > 0) {
     signals.push({
       setting: 'workflow_mcp_servers',
-      location: `workflow "${input.workflowName}":mcp_servers policy`,
+      location: `workflow "${input.workflowName}":workflow_mcp_servers policy`,
       migrateTo: 'mcp.targets',
     });
   }
@@ -212,11 +198,78 @@ export function collectLegacyMcpSignals(input: LegacyMcpSignalInput): LegacyProv
       ? `:${input.workflowStepName}`
       : '';
     signals.push({
-      setting: 'workflow_mcp_servers',
+      setting: 'mcp_servers',
       location: `workflow "${input.workflowName}"${stepSuffix}:mcp_servers`,
       migrateTo: 'mcp.targets.steps',
     });
   }
 
   return signals;
+}
+
+/** Minimal workflow shape needed to collect legacy workflow MCP signals. */
+export interface WorkflowMcpSignalSource {
+  name: string;
+  steps: ReadonlyArray<{
+    name: string;
+    mcpServers?: Record<string, McpServerConfig>;
+  }>;
+}
+
+/** Collect all legacy workflow MCP signals used by the bootstrap mixed-mode gate. */
+export function collectWorkflowLegacyMcpSignals(
+  workflowConfig: WorkflowMcpSignalSource,
+  workflowMcpServersPolicy: WorkflowMcpServersConfig | undefined,
+): LegacyProviderSignal[] {
+  const signals = collectLegacyMcpSignals({
+    workflowMcpServersPolicy,
+    workflowStepMcpServers: undefined,
+    workflowName: workflowConfig.name,
+    workflowStepName: undefined,
+  });
+
+  for (const step of workflowConfig.steps) {
+    if (step.mcpServers === undefined || Object.keys(step.mcpServers).length === 0) {
+      continue;
+    }
+    signals.push(...collectLegacyMcpSignals({
+      workflowMcpServersPolicy: undefined,
+      workflowStepMcpServers: step.mcpServers,
+      workflowName: workflowConfig.name,
+      workflowStepName: step.name,
+    }));
+  }
+
+  return signals;
+}
+
+/** Fail fast when runtime MCP assignment and legacy workflow MCP are mixed. */
+export function assertNoMixedMcpConfiguration(
+  mcpAssignment: object | undefined,
+  legacyMcpSignals: readonly LegacyProviderSignal[],
+): void {
+  if (mcpAssignment === undefined || legacyMcpSignals.length === 0) {
+    return;
+  }
+  const lines = legacyMcpSignals.map(
+    (signal) => `  - ${signal.setting} at ${signal.location} → migrate to ${signal.migrateTo}`,
+  );
+  throw new Error([
+    'Mixed MCP configuration detected: an active runtime.yaml mcp section cannot',
+    'coexist with legacy workflow MCP settings. Remove the runtime.yaml mcp section or migrate',
+    'the following legacy settings:',
+    ...lines,
+  ].join('\n'));
+}
+
+/** Apply the production mixed-MCP gate to a workflow and its legacy settings. */
+export function assertNoMixedWorkflowMcpConfiguration(
+  mcpAssignment: object | undefined,
+  workflowConfig: WorkflowMcpSignalSource,
+  workflowMcpServersPolicy: WorkflowMcpServersConfig | undefined,
+): void {
+  assertNoMixedMcpConfiguration(
+    mcpAssignment,
+    collectWorkflowLegacyMcpSignals(workflowConfig, workflowMcpServersPolicy),
+  );
 }

@@ -6,7 +6,7 @@ import type { BranchListItem, TaskListItem } from '../../../infra/task/index.js'
 
 const log = createLogger('list-tasks');
 
-export type ListAction = 'diff' | 'instruct' | 'sync' | 'pull' | 'try' | 'merge' | 'delete';
+export type ListAction = 'diff' | 'instruct' | 'sync' | 'pull' | 'try' | 'merge' | 'delete' | 'create_pr';
 
 export type BranchActionTarget = TaskListItem | Pick<BranchListItem, 'info' | 'originalInstruction'>;
 

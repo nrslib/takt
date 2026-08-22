@@ -53,7 +53,7 @@ jobs:
 
 Pipeline モードにはタスクソースが必須です。`--task`、`--issue`、`--pr` のいずれかを指定してください。いずれも指定しない場合、TAKT は exit code `2` で終了します。
 
-Pipeline モードでは、`--auto-pr` を明示的に指定しない限り PR は作成**されません**。`--auto-pr` を `--skip-git` と併用した場合、PR は作成されず、TAKT は警告を出力します。終了コードはワークフローの結果に従います（ワークフロー自体が成功した場合のみ `0`）。
+Pipeline モードでは`--auto-pr` を明示的に指定しない限り PR は作成**されません**。`--auto-pr` を `--skip-git` と併用した場合、PR は作成されず、TAKT は警告を出力します。終了コードはワークフローの結果に従います（ワークフロー自体が成功した場合のみ `0`）。
 
 ### Pipeline の全オプション
 
@@ -70,7 +70,7 @@ Pipeline モードでは、`--auto-pr` を明示的に指定しない限り PR �
 | `--skip-git` | ブランチ作成、コミット、プッシュをスキップ（pipeline モード、workflow のみ実行） |
 | `--repo <owner/repo>` | リポジトリを指定（PR 作成用） |
 | `-q, --quiet` | 最小出力モード: AI 出力を抑制（CI 向け） |
-| `--provider <name>` | エージェント provider を上書き（claude\|claude-sdk\|claude-terminal\|codex\|opencode\|cursor\|copilot\|kiro\|mock） |
+| `--provider <name>` | エージェント provider を上書き（claude\|claude-sdk\|claude-terminal\|codex\|opencode\|deepseek-harness\|cursor\|copilot\|kiro\|pi\|mock） |
 | `--model <name>` | エージェントモデルを上書き |
 | `--auto-strategy <strategy>` | 自動ルーティング戦略（cost\|balanced\|performance） |
 
@@ -122,7 +122,7 @@ takt --pipeline --task "Fix bug" --quiet
 
 ## Exit Code
 
-Pipeline モードは、CI スクリプトが失敗の種類を区別できるように細分化された exit code を返します。
+Pipeline モードはCI スクリプトが失敗の種類を区別できるように細分化された exit code を返します。
 
 | Code | 意味 |
 |------|------|
@@ -136,7 +136,7 @@ Pipeline モードは、CI スクリプトが失敗の種類を区別できる�
 
 ## Pipeline テンプレート変数
 
-`~/.takt/config.yaml` の pipeline 設定では、コミットメッセージと PR 本文をカスタマイズするためのテンプレート変数をサポートしています。
+`~/.takt/config.yaml` の pipeline 設定ではコミットメッセージと PR 本文をカスタマイズするためのテンプレート変数をサポートしています。
 
 ```yaml
 pipeline:
@@ -159,7 +159,7 @@ pipeline:
 
 ## その他の CI システム
 
-GitHub Actions 以外の CI システムでは、TAKT をグローバルにインストールして pipeline モードを直接使用します。
+GitHub Actions 以外の CI システムではTAKT をグローバルにインストールして pipeline モードを直接使用します。
 
 ```bash
 # takt のインストール
@@ -173,7 +173,7 @@ takt --pipeline --task "Fix bug" --auto-pr --repo owner/repo
 
 ## 環境変数
 
-CI 環境での認証には、適切な API キー環境変数を設定してください。これらは他のツールとの衝突を避けるため TAKT 固有のプレフィックスを使用しています。
+CI 環境での認証には該当する場合は適切な API キー環境変数を設定してください。これらは他のツールとの衝突を避けるため TAKT 固有のプレフィックスを使用しますが、公式 provider が指定する名前は例外です。公式 DeepSeek Harness SDK は `DEEPSEEK_API_KEY` と `DEEPSEEK_BASE_URL` を使用します。
 
 ```bash
 # Claude（Anthropic）用
@@ -184,6 +184,13 @@ export TAKT_OPENAI_API_KEY=sk-...
 
 # OpenCode 用
 export TAKT_OPENCODE_API_KEY=...
+
+# Pi 用
+# Pi SDK の credential store または provider-native 環境変数を使用
+
+# 公式 DeepSeek Harness SDK 用（Python 3.10+。公式名のためプレフィックス規則の例外）
+export DEEPSEEK_API_KEY=...
+# 任意: export DEEPSEEK_BASE_URL=https://...
 
 # Cursor Agent 用（cursor-agent login 済みなら省略可）
 export TAKT_CURSOR_API_KEY=...
@@ -197,7 +204,7 @@ export TAKT_KIRO_API_KEY=...
 
 優先順位: 環境変数は `config.yaml` の設定よりも優先されます。
 
-> **注意**: 環境変数で API キーを設定すれば、SDK provider（Claude SDK、Codex、OpenCode）用の CLI インストールは不要です。TAKT が対応する API を直接呼び出します。Cursor、Copilot、Kiro は CLI のインストールが必要です。
+> **注意**: SDK provider（Claude SDK、Codex、OpenCode、Pi）の認証情報を設定すれば、対応する CLI のインストールは不要です。TAKT が API を直接呼び出します。`deepseek-harness` はさらに Python 3.10+、対応する `deepseek-harness-sdk` / `deepseek-harness-runtime-bin` package、Linux x64/arm64 または macOS arm64 が必要です。Windows と macOS x64 は未対応です。Cursor、Copilot、Kiro は CLI のインストールが必要です。
 
 ## コストに関する注意
 

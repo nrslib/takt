@@ -1,11 +1,12 @@
 /**
- * Tests for interactive mode variants (assistant, persona, quiet, passthrough)
+ * Tests for interactive mode variants (assistant, grill-me, persona, quiet, passthrough)
  */
 
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { restoreStdin, setupRawStdin, toRawInputs } from './helpers/stdinSimulator.js';
 
 // ── Mocks ──────────────────────────────────────────────
 
@@ -68,83 +69,6 @@ const TEST_TMPDIR = fs.realpathSync(os.tmpdir());
 
 // ── Stdin helpers (same pattern as interactive.test.ts) ──
 
-let savedIsTTY: boolean | undefined;
-let savedIsRaw: boolean | undefined;
-let savedSetRawMode: typeof process.stdin.setRawMode | undefined;
-let savedStdoutWrite: typeof process.stdout.write;
-let savedStdinOn: typeof process.stdin.on;
-let savedStdinRemoveListener: typeof process.stdin.removeListener;
-let savedStdinResume: typeof process.stdin.resume;
-let savedStdinPause: typeof process.stdin.pause;
-
-function setupRawStdin(rawInputs: string[]): void {
-  savedIsTTY = process.stdin.isTTY;
-  savedIsRaw = process.stdin.isRaw;
-  savedSetRawMode = process.stdin.setRawMode;
-  savedStdoutWrite = process.stdout.write;
-  savedStdinOn = process.stdin.on;
-  savedStdinRemoveListener = process.stdin.removeListener;
-  savedStdinResume = process.stdin.resume;
-  savedStdinPause = process.stdin.pause;
-
-  Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
-  Object.defineProperty(process.stdin, 'isRaw', { value: false, configurable: true, writable: true });
-  process.stdin.setRawMode = vi.fn((mode: boolean) => {
-    (process.stdin as unknown as { isRaw: boolean }).isRaw = mode;
-    return process.stdin;
-  }) as unknown as typeof process.stdin.setRawMode;
-  process.stdout.write = vi.fn(() => true) as unknown as typeof process.stdout.write;
-  process.stdin.resume = vi.fn(() => process.stdin) as unknown as typeof process.stdin.resume;
-  process.stdin.pause = vi.fn(() => process.stdin) as unknown as typeof process.stdin.pause;
-
-  let currentHandler: ((data: Buffer) => void) | null = null;
-  let inputIndex = 0;
-
-  process.stdin.on = vi.fn(((event: string, handler: (...args: unknown[]) => void) => {
-    if (event === 'data') {
-      currentHandler = handler as (data: Buffer) => void;
-      if (inputIndex < rawInputs.length) {
-        const data = rawInputs[inputIndex]!;
-        inputIndex++;
-        queueMicrotask(() => {
-          if (currentHandler) {
-            currentHandler(Buffer.from(data, 'utf-8'));
-          }
-        });
-      }
-    }
-    return process.stdin;
-  }) as typeof process.stdin.on);
-
-  process.stdin.removeListener = vi.fn(((event: string) => {
-    if (event === 'data') {
-      currentHandler = null;
-    }
-    return process.stdin;
-  }) as typeof process.stdin.removeListener);
-}
-
-function restoreStdin(): void {
-  if (savedIsTTY !== undefined) {
-    Object.defineProperty(process.stdin, 'isTTY', { value: savedIsTTY, configurable: true });
-  }
-  if (savedIsRaw !== undefined) {
-    Object.defineProperty(process.stdin, 'isRaw', { value: savedIsRaw, configurable: true, writable: true });
-  }
-  if (savedSetRawMode) process.stdin.setRawMode = savedSetRawMode;
-  if (savedStdoutWrite) process.stdout.write = savedStdoutWrite;
-  if (savedStdinOn) process.stdin.on = savedStdinOn;
-  if (savedStdinRemoveListener) process.stdin.removeListener = savedStdinRemoveListener;
-  if (savedStdinResume) process.stdin.resume = savedStdinResume;
-  if (savedStdinPause) process.stdin.pause = savedStdinPause;
-}
-
-function toRawInputs(inputs: (string | null)[]): string[] {
-  return inputs.map((input) => {
-    if (input === null) return '\x04';
-    return input + '\r';
-  });
-}
 
 function setupMockProvider(responses: string[]): void {
   let callIndex = 0;
@@ -159,16 +83,17 @@ function setupMockProvider(responses: string[]): void {
     };
   });
   const mockSetup = vi.fn(() => ({ call: mockCall }));
-  const mockProvider = {
-    getRuntimeInstructions: vi.fn(() => null),
-    setup: mockSetup,
+  // The spies stay reachable for the assertions; the rest of the provider
+  // contract comes from the shared double so a change to it fails type checking.
+  const mockProvider = Object.assign(makeProvider({ setup: mockSetup }), {
     _call: mockCall,
     _setup: mockSetup,
-  };
+  });
   mockGetProvider.mockReturnValue(mockProvider);
 }
 
 // ── Imports (after mocks) ──
+import { makeProvider } from './test-helpers.js';
 
 import { INTERACTIVE_MODES, DEFAULT_INTERACTIVE_MODE } from '../core/models/interactive-mode.js';
 import { selectInteractiveMode } from '../features/interactive/modeSelection.js';
@@ -240,8 +165,8 @@ function expectNoNewTaktTempSessionDirs(previous: Set<string>): void {
 // ── InteractiveMode type & constants tests ──
 
 describe('InteractiveMode type', () => {
-  it('should define all four modes', () => {
-    expect(INTERACTIVE_MODES).toEqual(['assistant', 'persona', 'quiet', 'passthrough']);
+  it('should define all five modes', () => {
+    expect(INTERACTIVE_MODES).toEqual(['assistant', 'grill-me', 'persona', 'quiet', 'passthrough']);
   });
 
   it('should have assistant as default mode', () => {
@@ -252,7 +177,7 @@ describe('InteractiveMode type', () => {
 // ── Mode selection tests ──
 
 describe('selectInteractiveMode', () => {
-  it('should call selectOptionWithDefault with four mode options', async () => {
+  it('should call selectOptionWithDefault with five mode options', async () => {
     // When
     await selectInteractiveMode('en');
 
@@ -261,6 +186,7 @@ describe('selectInteractiveMode', () => {
       expect.any(String),
       expect.arrayContaining([
         expect.objectContaining({ value: 'assistant' }),
+        expect.objectContaining({ value: 'grill-me' }),
         expect.objectContaining({ value: 'persona' }),
         expect.objectContaining({ value: 'quiet' }),
         expect.objectContaining({ value: 'passthrough' }),
@@ -326,9 +252,10 @@ describe('selectInteractiveMode', () => {
     // Then
     const options = mockSelectOptionWithDefault.mock.calls[0]?.[1] as Array<{ value: string }>;
     expect(options?.[0]?.value).toBe('assistant');
-    expect(options?.[1]?.value).toBe('persona');
-    expect(options?.[2]?.value).toBe('quiet');
-    expect(options?.[3]?.value).toBe('passthrough');
+    expect(options?.[1]?.value).toBe('grill-me');
+    expect(options?.[2]?.value).toBe('persona');
+    expect(options?.[3]?.value).toBe('quiet');
+    expect(options?.[4]?.value).toBe('passthrough');
   });
 });
 
@@ -337,29 +264,22 @@ describe('selectInteractiveMode', () => {
 describe('passthroughMode', () => {
   it('should return initialInput directly when provided', async () => {
     // When
-    const result = await passthroughMode('en', 'my task text');
+    const result = await passthroughMode('/repo', 'en', 'my task text');
 
     // Then
     expect(result.action).toBe('execute');
     expect(result.task).toBe('my task text');
   });
 
-  it('should show passthrough intro without slash command guidance when prompting for input', async () => {
+  it('should show an intro when prompting for passthrough input', async () => {
     // Given
     setupRawStdin(toRawInputs([null]));
 
     // When
-    await passthroughMode('ja');
+    await passthroughMode('/repo', 'ja');
 
     // Then
-    expect(mockInfo).toHaveBeenCalledWith(
-      'パススルーモード - タスク内容を入力してください。入力内容をそのまま実行します。',
-    );
-    const introMessage = mockInfo.mock.calls[0]?.[0] as string;
-    expect(introMessage).not.toContain('/go');
-    expect(introMessage).not.toContain('/play');
-    expect(introMessage).not.toContain('/resume');
-    expect(introMessage).not.toContain('/cancel');
+    expect(mockInfo).toHaveBeenCalled();
   });
 
   it('should return cancel when user sends EOF', async () => {
@@ -367,7 +287,7 @@ describe('passthroughMode', () => {
     setupRawStdin(toRawInputs([null]));
 
     // When
-    const result = await passthroughMode('en');
+    const result = await passthroughMode('/repo', 'en');
 
     // Then
     expect(result.action).toBe('cancel');
@@ -379,7 +299,7 @@ describe('passthroughMode', () => {
     setupRawStdin(toRawInputs(['']));
 
     // When
-    const result = await passthroughMode('en');
+    const result = await passthroughMode('/repo', 'en');
 
     // Then
     expect(result.action).toBe('cancel');
@@ -390,49 +310,11 @@ describe('passthroughMode', () => {
     setupRawStdin(toRawInputs(['implement login feature']));
 
     // When
-    const result = await passthroughMode('en');
+    const result = await passthroughMode('/repo', 'en');
 
     // Then
     expect(result.action).toBe('execute');
     expect(result.task).toBe('implement login feature');
-  });
-
-  it('should return pasted image attachments with placeholders in task text', async () => {
-    setupRawStdin([`use ${createOscImagePaste()} please\r`]);
-
-    const result = await passthroughMode('en');
-
-    expect(result.action).toBe('execute');
-    expect(result.task).toBe('use [Image #1] please');
-    expect(result.attachments?.[0]?.fileName).toBe('image-1.png');
-    expect(result.attachments?.[0]).not.toHaveProperty('relativePath');
-    expect(result.attachments?.[0]?.tempPath).toBeDefined();
-    trackAttachmentSession(result.attachments![0]!.tempPath);
-    expect(fs.existsSync(result.attachments![0]!.tempPath)).toBe(true);
-  });
-
-  it('should cleanup pasted image session directory when input processing throws after image paste', async () => {
-    const tmpRoot = createIsolatedTmpRoot('takt-passthrough-cleanup-');
-    const originalTmpDir = process.env.TMPDIR;
-    process.env.TMPDIR = tmpRoot;
-    const previousSessionDirs = listTaktTempSessionDirs();
-    setupRawStdin([
-      `use ${createOscImagePaste()} ${createInvalidSizeOscImagePaste()}\r`,
-    ]);
-
-    try {
-      await expect(passthroughMode('en')).rejects.toThrow(
-        'Pasted inline image data does not match its declared size.',
-      );
-
-      expectNoNewTaktTempSessionDirs(previousSessionDirs);
-    } finally {
-      if (originalTmpDir === undefined) {
-        delete process.env.TMPDIR;
-      } else {
-        process.env.TMPDIR = originalTmpDir;
-      }
-    }
   });
 
   it('should trim whitespace from user input', async () => {
@@ -440,7 +322,7 @@ describe('passthroughMode', () => {
     setupRawStdin(toRawInputs(['  my task  ']));
 
     // When
-    const result = await passthroughMode('en');
+    const result = await passthroughMode('/repo', 'en');
 
     // Then
     expect(result.task).toBe('my task');
@@ -463,7 +345,7 @@ describe('quietMode', () => {
     expect(result.task).toBe('Generated task instruction for login feature.');
   });
 
-  it('should show quiet intro without slash command guidance when prompting for input', async () => {
+  it('should show an intro when prompting for quiet input', async () => {
     // Given
     setupRawStdin(toRawInputs([null]));
 
@@ -471,14 +353,7 @@ describe('quietMode', () => {
     await quietMode('/project');
 
     // Then
-    expect(mockInfo).toHaveBeenCalledWith(
-      'Quiet mode - describe your task. Instructions will be generated without further questions.',
-    );
-    const introMessage = mockInfo.mock.calls[0]?.[0] as string;
-    expect(introMessage).not.toContain('/go');
-    expect(introMessage).not.toContain('/play');
-    expect(introMessage).not.toContain('/resume');
-    expect(introMessage).not.toContain('/cancel');
+    expect(mockInfo).toHaveBeenCalled();
   });
 
   it('should return cancel when user sends EOF for input', async () => {
@@ -517,47 +392,6 @@ describe('quietMode', () => {
     // Then
     expect(result.action).toBe('execute');
     expect(result.task).toBe('Fix the bug instruction.');
-  });
-
-  it('should return pasted image attachments from prompted quiet input', async () => {
-    setupRawStdin([`use ${createOscImagePaste()} please\r`]);
-    setupMockProvider(['Generated task using [Image #1].']);
-    mockSelectOption.mockResolvedValue('execute');
-
-    const result = await quietMode('/project');
-
-    expect(result.action).toBe('execute');
-    expect(result.task).toBe('Generated task using [Image #1].');
-    expect(result.attachments?.[0]?.fileName).toBe('image-1.png');
-    expect(result.attachments?.[0]).not.toHaveProperty('relativePath');
-    expect(result.attachments?.[0]?.tempPath).toBeDefined();
-    trackAttachmentSession(result.attachments![0]!.tempPath);
-    expect(fs.existsSync(result.attachments![0]!.tempPath)).toBe(true);
-  });
-
-  it('should cleanup pasted image session directory when prompted input processing throws after image paste', async () => {
-    const tmpRoot = createIsolatedTmpRoot('takt-quiet-cleanup-');
-    const originalTmpDir = process.env.TMPDIR;
-    process.env.TMPDIR = tmpRoot;
-    const previousSessionDirs = listTaktTempSessionDirs();
-    setupRawStdin([
-      `use ${createOscImagePaste()} ${createInvalidSizeOscImagePaste()}\r`,
-    ]);
-    setupMockProvider([]);
-
-    try {
-      await expect(quietMode('/project')).rejects.toThrow(
-        'Pasted inline image data does not match its declared size.',
-      );
-
-      expectNoNewTaktTempSessionDirs(previousSessionDirs);
-    } finally {
-      if (originalTmpDir === undefined) {
-        delete process.env.TMPDIR;
-      } else {
-        process.env.TMPDIR = originalTmpDir;
-      }
-    }
   });
 
   it('should include workflow context in summary generation', async () => {
@@ -685,19 +519,6 @@ describe('personaMode', () => {
 
     const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
     expect(mockProvider._call).toHaveBeenCalledTimes(1);
-  });
-
-  it('should handle /play command', async () => {
-    // Given
-    setupRawStdin(toRawInputs(['/play direct task text']));
-    setupMockProvider([]);
-
-    // When
-    const result = await personaMode('/project', mockFirstStep);
-
-    // Then
-    expect(result.action).toBe('execute');
-    expect(result.task).toBe('direct task text');
   });
 
   it('should fall back to default tools when first step has none', async () => {

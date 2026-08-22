@@ -71,6 +71,17 @@ describe('loadGlobalConfig', () => {
     expect(config.interactivePreviewSteps).toBeUndefined();
   });
 
+  it.each([true, false])('should load assistant.gherkin=%s from global config.yaml', (gherkin) => {
+    mkdirSync(join(testHomeDir, '.takt'), { recursive: true });
+    writeFileSync(
+      getGlobalConfigPath(),
+      ['assistant:', `  gherkin: ${gherkin}`].join('\n'),
+      'utf-8',
+    );
+
+    expect(loadGlobalConfig().assistant).toEqual({ gherkin });
+  });
+
   it.each(['codex', 'claude'])('should accept an external %s selector base_url in global config', (provider) => {
     mkdirSync(join(testHomeDir, '.takt'), { recursive: true });
     writeFileSync(getGlobalConfigPath(), [
@@ -220,12 +231,12 @@ describe('loadGlobalConfig', () => {
       '          repo: true',
       '          unknown_skill: true',
     ]],
-    ['an invalid selector enum', [
+    ['an invalid selector effort type', [
       'takt_providers:',
       '  selector:',
       '    provider_options:',
       '      codex:',
-      '        reasoning_effort: turbo',
+      '        reasoning_effort: 42',
     ]],
   ])('should reject %s when loading global config', (_label, lines) => {
     mkdirSync(join(testHomeDir, '.takt'), { recursive: true });
@@ -392,6 +403,21 @@ describe('loadGlobalConfig', () => {
     expect(raw).toContain('model: haiku');
   });
 
+  it.each([true, false])('should preserve assistant.gherkin=%s when saving global config', (gherkin) => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
+
+    saveGlobalConfig({
+      ...loadGlobalConfig(),
+      assistant: { gherkin },
+    });
+    invalidateGlobalConfigCache();
+
+    expect(loadGlobalConfig().assistant).toEqual({ gherkin });
+    expect(readFileSync(getGlobalConfigPath(), 'utf-8')).toContain(`gherkin: ${gherkin}`);
+  });
+
   it('should persist selector provider options when saving global config', () => {
     const taktDir = join(testHomeDir, '.takt');
     mkdirSync(taktDir, { recursive: true });
@@ -463,7 +489,7 @@ describe('loadGlobalConfig', () => {
     ['an unknown nested selector option', {
       providerOptions: { codex: { skills: { repo: true, unknownSkill: true } } },
     }],
-    ['an invalid selector enum', { providerOptions: { codex: { reasoningEffort: 'turbo' } } }],
+    ['an invalid selector effort type', { providerOptions: { codex: { reasoningEffort: 42 } } }],
   ])('should reject %s when saving global config', (_label, selector) => {
     const taktDir = join(testHomeDir, '.takt');
     mkdirSync(taktDir, { recursive: true });

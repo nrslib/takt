@@ -19,12 +19,6 @@ export function cloneDynamicParallelSelections(
   ]));
 }
 
-export function serializeDynamicParallelSelections(
-  selections: ReadonlyMap<string, DynamicParallelSelectionSnapshot>,
-): Record<string, DynamicParallelSelectionSnapshot> {
-  return Object.fromEntries(cloneDynamicParallelSelections(selections));
-}
-
 export function resolveDynamicParallelSelection(
   parallel: DynamicParallelSubSteps,
   snapshot: DynamicParallelSelectionSnapshot,

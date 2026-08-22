@@ -1,71 +1,63 @@
 import { describe, expect, it } from 'vitest';
 import { DynamicParallelSelectionStore } from '../core/workflow/dynamic-parallel/selection-store.js';
 
-function selection(identity: string, selectedPoolId: string) {
+function selection(identity: string, selectedPoolId: string, round = 1) {
   return {
     identity,
     step_name: 'reviewers',
-    round: 1,
+    round,
     selected_pool_ids: [selectedPoolId],
     effective_selection_ids: ['architecture', selectedPoolId],
   };
 }
 
 describe('DynamicParallelSelectionStore', () => {
-  it('should retain parent and fresh child selections across sequential commits', async () => {
+  it('should retain parent and child selections in run-local state', async () => {
     const store = new DynamicParallelSelectionStore(new Map());
 
-    await store.commit('parent:reviewers', selection('parent:reviewers', 'frontend'), async () => {});
-    await store.commit('parent:delegate:child:reviewers', selection('parent:delegate:child:reviewers', 'backend'), async () => {});
+    await store.commit('parent:reviewers', selection('parent:reviewers', 'frontend'));
+    await store.commit('parent:delegate:child:reviewers', selection('parent:delegate:child:reviewers', 'backend'));
 
-    expect(store.serialized()).toMatchObject({
-      'parent:reviewers': selection('parent:reviewers', 'frontend'),
-      'parent:delegate:child:reviewers': selection('parent:delegate:child:reviewers', 'backend'),
-    });
+    expect(store.snapshot()).toEqual(new Map([
+      ['parent:reviewers', selection('parent:reviewers', 'frontend')],
+      ['parent:delegate:child:reviewers', selection('parent:delegate:child:reviewers', 'backend')],
+    ]));
   });
 
   it('should merge concurrent commits from independent workflow call identities', async () => {
     const store = new DynamicParallelSelectionStore(new Map());
-    const persisted: string[][] = [];
 
     await Promise.all([
-      store.commit('parent:call-1', selection('parent:call-1', 'frontend'), async (selections) => {
-        persisted.push([...selections.keys()]);
-      }),
-      store.commit('parent:call-2', selection('parent:call-2', 'backend'), async (selections) => {
-        persisted.push([...selections.keys()]);
-      }),
+      store.commit('parent:call-1', selection('parent:call-1', 'frontend')),
+      store.commit('parent:call-2', selection('parent:call-2', 'backend')),
     ]);
 
-    expect(store.serialized()).toMatchObject({
-      'parent:call-1': selection('parent:call-1', 'frontend'),
-      'parent:call-2': selection('parent:call-2', 'backend'),
-    });
-    expect(persisted).toEqual([['parent:call-1'], ['parent:call-1', 'parent:call-2']]);
+    expect(store.snapshot()).toEqual(new Map([
+      ['parent:call-1', selection('parent:call-1', 'frontend')],
+      ['parent:call-2', selection('parent:call-2', 'backend')],
+    ]));
   });
 
-  it('should leave the committed selection unchanged when persistence fails', async () => {
-    const store = new DynamicParallelSelectionStore(new Map([['parent:call-1', selection('parent:call-1', 'frontend')]]));
-
-    await expect(store.commit('parent:call-2', selection('parent:call-2', 'backend'), async () => {
-      throw new Error('metadata write failed');
-    })).rejects.toThrow('metadata write failed');
-
-    expect(store.serialized()).toEqual({ 'parent:call-1': selection('parent:call-1', 'frontend') });
-  });
-
-  it('should return a defensive snapshot only after persistence succeeds', async () => {
+  it('should replace the same identity with the latest round', async () => {
     const store = new DynamicParallelSelectionStore(new Map());
 
-    const committed = await store.commit(
-      'parent:call-1',
-      selection('parent:call-1', 'frontend'),
-      async () => {},
-    );
-    committed.get('parent:call-1')!.selected_pool_ids.push('backend');
+    await store.commit('parent:reviewers', selection('parent:reviewers', 'frontend', 1));
+    await store.commit('parent:reviewers', selection('parent:reviewers', 'backend', 2));
 
-    expect(store.serialized()).toEqual({
-      'parent:call-1': selection('parent:call-1', 'frontend'),
-    });
+    expect(store.snapshot()).toEqual(new Map([
+      ['parent:reviewers', selection('parent:reviewers', 'backend', 2)],
+    ]));
+  });
+
+  it('should return defensive snapshots for run-local selection state', async () => {
+    const store = new DynamicParallelSelectionStore(new Map());
+    await store.commit('parent:reviewers', selection('parent:reviewers', 'frontend'));
+
+    const exported = store.snapshot();
+    exported.get('parent:reviewers')!.selected_pool_ids.push('backend');
+
+    expect(store.snapshot()).toEqual(new Map([
+      ['parent:reviewers', selection('parent:reviewers', 'frontend')],
+    ]));
   });
 });

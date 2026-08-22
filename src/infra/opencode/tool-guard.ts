@@ -15,7 +15,8 @@ export type ToolGuardFailure =
   | { kind: 'unavailable_tool_loop'; tool: string; fingerprint: string; message: string }
   | { kind: 'invalid_argument_loop'; tool: string; fingerprint: string; message: string }
   | { kind: 'edit_conflict_loop'; tool: 'edit'; signature: string; filePath: string; message: string }
-  | { kind: 'tool_error_burst'; fingerprint: string; stats: ToolHealthStats; message: string };
+  | { kind: 'tool_error_burst'; fingerprint: string; stats: ToolHealthStats; message: string }
+  | { kind: 'exact_repeat_loop'; tool: string; fingerprint: string; message: string };
 
 export function computeEditConflictSignature(filePath: string, oldString: string): string {
   return createHash('sha256').update(`${filePath}\0${oldString}`).digest('hex');
@@ -52,6 +53,21 @@ export function shouldIssueToolGuardCorrection(
 ): boolean {
   return !state.correctedFingerprints.includes(fingerprint)
     && state.correctionsUsed < state.correctionLimit;
+}
+
+export type ToolGuardRecoveryAction = 'correction' | 'fresh_session' | 'fail';
+
+export function resolveToolGuardRecoveryAction(
+  state: ToolGuardRecoveryState,
+  fingerprint: string,
+): ToolGuardRecoveryAction {
+  if (!state.freshSessionUsed && shouldIssueToolGuardCorrection(state, fingerprint)) {
+    return 'correction';
+  }
+  if (!state.freshSessionUsed) {
+    return 'fresh_session';
+  }
+  return 'fail';
 }
 
 export function markToolGuardCorrectionPending(
@@ -116,6 +132,14 @@ export function buildToolGuardCorrectionPrompt(
       'Continue the current task without repeating the original prompt.',
     ].join('\n');
   }
+  if (failure.kind === 'exact_repeat_loop') {
+    return [
+      `Your recent calls to ${JSON.stringify(failure.tool)} repeated the same input and received the same result consecutively.`,
+      'Do not call that tool again.',
+      'Judge the actual progress from the latest tool result and the current task state.',
+      'State honestly what has been completed and what remains, then output your final response as text and end the turn without making any further tool calls.',
+    ].join('\n');
+  }
   return [
     'Your recent tool calls are failing repeatedly without progress.',
     'Pause, re-read the current task and relevant workspace state, then make one deliberate valid tool call instead of repeating the failing pattern.',
@@ -146,6 +170,8 @@ function buildFreshRecoveryReason(reason: ToolGuardRecoverableKind): string {
       return 'Your previous session repeatedly called an unavailable tool.';
     case 'invalid_argument_loop':
       return 'Your previous session repeatedly called a tool with invalid arguments.';
+    case 'exact_repeat_loop':
+      return 'Your previous session kept repeating the same tool call with identical input and result instead of producing a final response.';
     case 'tool_error_burst':
       return 'Your previous session degraded into a burst of failing tool calls without making progress.';
   }

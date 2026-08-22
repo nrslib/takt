@@ -6,6 +6,24 @@ args:
     $param: review_policy_additions
   review_knowledge_additions:
     $param: review_knowledge_additions
+  security_review_knowledge_additions:
+    $param: security_review_knowledge_additions
+  security_review_pool:
+    $param: security_review_pool
+  architecture_review_instruction:
+    $param: architecture_review_instruction
+  security_review_instruction:
+    $param: security_review_instruction
+  testing_review_instruction:
+    $param: testing_review_instruction
+  coding_review_instruction:
+    $param: coding_review_instruction
+  ai_antipattern_review_instruction:
+    $param: ai_antipattern_review_instruction
+  frontend_review_instruction:
+    $param: frontend_review_instruction
+  cqrs_es_review_instruction:
+    $param: cqrs_es_review_instruction
 params:
   reviewer_suite:
     type: workflow_ref
@@ -15,3 +33,29 @@ params:
   review_knowledge_additions:
     type: facet_ref[]
     facet_kind: knowledge
+  security_review_knowledge_additions:
+    type: facet_ref[]
+    facet_kind: knowledge
+  security_review_pool:
+    type: facet_pool_ref
+  architecture_review_instruction:
+    type: facet_ref
+    facet_kind: instruction
+  security_review_instruction:
+    type: facet_ref
+    facet_kind: instruction
+  testing_review_instruction:
+    type: facet_ref
+    facet_kind: instruction
+  coding_review_instruction:
+    type: facet_ref
+    facet_kind: instruction
+  ai_antipattern_review_instruction:
+    type: facet_ref
+    facet_kind: instruction
+  frontend_review_instruction:
+    type: facet_ref
+    facet_kind: instruction
+  cqrs_es_review_instruction:
+    type: facet_ref
+    facet_kind: instruction

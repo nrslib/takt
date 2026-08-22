@@ -314,7 +314,7 @@ system promptに配置される。役割の定義、境界、行動姿勢のみ�
 
 ### なぜこの5つか？
 
-**Persona** と **Instruction** は最低限必要なもの — エージェントが誰で、何をすべきかを定義する必要がある。しかし実際には、さらに3つの関心が独立した軸として現れる。
+**Persona** と **Instruction** は最低限必要なもの — エージェントが誰で、何をすべきかを定義する必要がある。しかし実際にはさらに3つの関心が独立した軸として現れる。
 
 - **Policy** はタスクをまたがって適用される規約・基準を捉える。「何を守るか」を定義する関心であり、禁止事項（フォールバック濫用の禁止、未使用コードの禁止）、品質基準（REJECT/APPROVE判定）、優先順位（正確性 > 速度）を含む。コーディングポリシーは機能実装でもバグ修正でも同じように適用される。ポリシーは「横断的関心事」であり、作業内容に関係なく守るべきルールを規定する。
 
@@ -335,7 +335,7 @@ Faceted Promptingの中核メカニズムは**宣言的な合成**である。�
 
 ### TAKTでの実装例
 
-[TAKT](https://github.com/nrslib/takt) は Faceted Prompting を YAML ベースの workflow 定義で実装している。builtin の各ファセットは、各 step から bare name で直接参照できる。セクションマップは「名前とファイル名が異なる」場合のカスタムエイリアス用途でのみ任意で使う。
+[TAKT](https://github.com/nrslib/takt) は Faceted Prompting を YAML ベースの workflow 定義で実装している。builtin の各ファセットは各 step から bare name で直接参照できる。セクションマップは「名前とファイル名が異なる」場合のカスタムエイリアス用途でのみ任意で使う。
 
 ```yaml
 name: my-workflow
@@ -382,6 +382,8 @@ instructions、policies、knowledge、output contracts の facet ファイルは
 
 canonical form はコロン後にスペースを入れない `{extends:fix}` だが、`{extends: fix}` も受理される。親名は bare facet name のみで、path reference や `@scope` reference による継承はサポートしない。親 lookup では現在の source file を候補から除外するため、project-level の `fix.md` は自身を再帰的に読むことなく lower-layer の `fix.md` を継承できる。persona facet は継承対象外である。
 
+workflow step は scalar の `instruction` フィールドで1つの instruction facet を選択する。再利用可能な instruction の関心を合成する場合は wrapper facet を作り、`{{include:instructions/<name>}}` で同じ kind の partial を取り込む。output contract でも同様に `{{include:output-contracts/<name>}}` を使用できる。builtin の `scenario-based-*` facet はこの構成で、要求シナリオの計画、テスト対応、維持、最終検証を明示的に有効化する。これらの step 間契約を有効にするのは `default`、`takt-default`、`takt-default-team` だけであり、通常の development、maintenance、review、要件充足の最終確認、Terraform、simple workflow はシナリオ非依存の facet を使う。
+
 ## 既存手法との違い
 
 | 手法 | 内容 | 本手法との違い |
@@ -413,4 +415,4 @@ canonical form はコロン後にスペースを入れない `{extends:fix}` だ
 
 ## まとめ
 
-Faceted Promptingは、関心の分離（Separation of Concerns）をAIプロンプト工学に適用するデザインパターンである。プロンプトを5つの独立した関心 — Persona、Policy、Instruction、Knowledge、Output Contract — に分解し、宣言的に合成することで、再利用可能で保守しやすく透明なマルチエージェントワークフローを実現する。
+Faceted Promptingは関心の分離（Separation of Concerns）をAIプロンプト工学に適用するデザインパターンである。プロンプトを5つの独立した関心 — Persona、Policy、Instruction、Knowledge、Output Contract — に分解し、宣言的に合成することで、再利用可能で保守しやすく透明なマルチエージェントワークフローを実現する。

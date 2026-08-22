@@ -45,20 +45,6 @@ steps:
 `);
 }
 
-function writeRequiredFindingContractReview(projectDir: string): void {
-  writeWorkflow(projectDir, '.takt/workflows/required-review.yaml', `name: required-review
-subworkflow:
-  callable: true
-  requires_finding_contract: true
-initial_step: review
-steps:
-  - name: review
-    rules:
-      - condition: when(findings.open.count == 0)
-        next: COMPLETE
-`);
-}
-
 interface WorktreeRootCase {
   name: string;
   rootDirRelativePath: string;
@@ -263,7 +249,7 @@ steps:
     expect(mockError).not.toHaveBeenCalled();
   });
 
-  it('reports an unresolved dynamic selector provider contract', async () => {
+  it('accepts a dynamic selector provider through the shared transport', async () => {
     writeWorkflow(projectDir, '.takt/config.yaml', [
       'takt_providers:',
       '  selector:',
@@ -284,13 +270,9 @@ steps:
         mode: replace
 `);
 
-    await expect(doctorWorkflowCommand([filePath], projectDir)).rejects.toThrow(
-      'Workflow validation failed',
-    );
-
-    expect(mockError).toHaveBeenCalledWith(
-      expect.stringContaining('Provider "opencode" does not support strict internal-agent isolation'),
-    );
+    await expect(doctorWorkflowCommand([filePath], projectDir)).resolves.toBeUndefined();
+    expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining('dynamic-selector-provider.yaml'));
+    expect(mockError).not.toHaveBeenCalled();
   });
 
   it('uses the CLI selector override for runtime contract validation', async () => {
@@ -324,7 +306,45 @@ steps:
     expect(mockError).not.toHaveBeenCalled();
   });
 
-  it('reports selector resolution failures when only a called workflow is dynamic', async () => {
+  it('skips disabled companion provider resolution while validating companion declarations', async () => {
+    writeWorkflow(projectDir, '.takt/companions/security-reviewer.yaml', `name: security-reviewer
+description: security review
+interval_ms: 60000
+`);
+    writeWorkflow(projectDir, '.takt/runtime.yaml', `version: 1
+companion:
+  enabled: false
+provider:
+  defaults:
+    profile: default
+  profiles:
+    default:
+      provider: mock
+      model: mock-model
+  targets:
+    companions:
+      security-reviewer:
+        profile: missing-profile
+`);
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/disabled-companion.yaml', `name: disabled-companion
+max_steps: 1
+initial_step: implement
+steps:
+  - name: implement
+    instruction: implement
+    companion: [security-reviewer]
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    await expect(doctorWorkflowCommand([filePath], projectDir)).resolves.toBeUndefined();
+
+    expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining('disabled-companion.yaml'));
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
+  it('accepts shared selector transport when only a called workflow is dynamic', async () => {
     writeWorkflow(projectDir, '.takt/config.yaml', [
       'takt_providers:',
       '  selector:',
@@ -363,12 +383,9 @@ steps:
         next: COMPLETE
 `);
 
-    await expect(doctorWorkflowCommand([parentPath], projectDir)).rejects.toThrow(
-      'Workflow validation failed',
-    );
-    expect(mockError).toHaveBeenCalledWith(
-      expect.stringContaining('Provider "opencode" does not support strict internal-agent isolation'),
-    );
+    await expect(doctorWorkflowCommand([parentPath], projectDir)).resolves.toBeUndefined();
+    expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining('parent-dynamic.yaml'));
+    expect(mockError).not.toHaveBeenCalled();
   });
 
   it('reports invalid team_leader inspect_tools from workflow doctor output', async () => {
@@ -391,28 +408,6 @@ steps:
     expect(mockError).toHaveBeenCalledWith(expect.stringContaining('bash'));
   });
 
-  it('reports invalid finding_contract.manager provider/model from workflow doctor output', async () => {
-    const filePath = writeWorkflow(projectDir, '.takt/workflows/invalid-finding-manager-provider.yaml', `name: invalid-finding-manager-provider
-max_steps: 10
-initial_step: step1
-finding_contract:
-  manager:
-    persona: findings-manager
-    instruction: findings-manager
-    output_contract: findings-manager
-    provider: opencode
-steps:
-  - name: step1
-    rules:
-      - condition: done
-        next: COMPLETE
-`);
-
-    await expect(doctorWorkflowCommand([filePath], projectDir)).rejects.toThrow('Workflow validation failed');
-
-    expect(mockError).toHaveBeenCalledWith(expect.stringContaining('invalid-finding-manager-provider.yaml'));
-    expect(mockError).toHaveBeenCalledWith(expect.stringContaining("provider 'opencode' requires model"));
-  });
 
   it('reports a runtime.yaml same-priority tag routing conflict as a doctor error (fail-fast forwarded)', async () => {
     writeWorkflow(projectDir, '.takt/runtime.yaml', `version: 1
@@ -455,55 +450,8 @@ steps:
     expect(mockError).toHaveBeenCalledWith(expect.stringContaining('Conflicting provider routing for tags'));
   });
 
-  it('propagates a root finding contract through an expanded workflow_ref invocation', async () => {
-    const filePath = writeWorkflow(projectDir, '.takt/workflows/root.yaml', `name: root
-finding_contract:
-  manager:
-    persona: findings-manager
-    instruction: findings-manager
-    output_contract: findings-manager
-initial_step: compose
-steps:
-  - name: compose
-    kind: workflow_call
-    call: composer
-    args:
-      target: required-review
-    rules:
-      - condition: COMPLETE
-        next: COMPLETE
-`);
-    writeWorkflowRefComposer(projectDir);
-    writeRequiredFindingContractReview(projectDir);
 
-    await expect(doctorWorkflowCommand([filePath], projectDir)).resolves.toBeUndefined();
-  });
-
-  it('rejects an expanded Finding Contract workflow_ref when the root has no contract', async () => {
-    const filePath = writeWorkflow(projectDir, '.takt/workflows/root.yaml', `name: root
-initial_step: compose
-steps:
-  - name: compose
-    kind: workflow_call
-    call: composer
-    args:
-      target: required-review
-    rules:
-      - condition: COMPLETE
-        next: COMPLETE
-`);
-    writeWorkflowRefComposer(projectDir);
-    writeRequiredFindingContractReview(projectDir);
-
-    await expect(doctorWorkflowCommand([filePath], projectDir)).rejects.toThrow(
-      'Workflow validation failed',
-    );
-    expect(mockError).toHaveBeenCalledWith(
-      expect.stringContaining('requires a finding_contract inherited from its caller'),
-    );
-  });
-
-  it('keeps expanded workflow_ref composition valid without a Finding Contract requirement', async () => {
+  it('keeps expanded workflow_ref composition valid without an inherited runtime requirement', async () => {
     const filePath = writeWorkflow(projectDir, '.takt/workflows/root.yaml', `name: root
 initial_step: compose
 steps:
@@ -549,398 +497,14 @@ steps:
     await expect(doctorWorkflowCommand([filePath], projectDir)).rejects.toThrow('Workflow validation failed');
 
     const output = mockError.mock.calls.flat().join('\n');
-    expect(output).toContain("provider 'opencode' requires model");
+    expect(output).toContain('workflow YAML no longer accepts provider execution settings');
+    expect(output).toContain('configure provider/model/options in runtime.yaml');
     expect(output).toContain(filePath);
     expect(output).toContain('from step fragment "opencode-review"');
     expect(output).toContain(fragmentPath);
   });
 
-  it('warns when a finding_contract workflow has no provisional routing', async () => {
-    // persona facet を用意する（missing-resource エラーを避ける）。
-    writeWorkflow(projectDir, '.takt/facets/personas/reviewer.md', 'You are a reviewer.');
-    writeWorkflow(projectDir, '.takt/facets/personas/planner.md', 'You are a planner.');
-    const filePath = writeWorkflow(projectDir, '.takt/workflows/missing-provisional-routing.yaml', `name: missing-provisional-routing
-max_steps: 10
-initial_step: reviewers
-finding_contract:
-  manager:
-    persona: findings-manager
-    instruction: findings-manager
-    output_contract: findings-manager
-steps:
-  - name: reviewers
-    parallel:
-      - name: review
-        persona: reviewer
-        instruction: review it
-        output_contracts:
-          report:
-            - name: review.md
-              format: architecture-review-finding-contract
-        rules:
-          - condition: approved
-    rules:
-      - condition: when(findings.open.count == 0)
-        next: COMPLETE
-      - condition: when(findings.conflicts.count > 0)
-        next: ABORT
-`);
 
-    await doctorWorkflowCommand([filePath], projectDir);
-
-    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('findings.provisional.count'));
-    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('Undeterminable observations land as gate-blocking provisional findings'));
-    expect(mockError).not.toHaveBeenCalled();
-  });
-
-  it('ignores quoted findings identifiers when classifying provisional and budget routes', async () => {
-    writeWorkflow(projectDir, '.takt/facets/personas/reviewer.md', 'You are a reviewer.');
-    const filePath = writeWorkflow(projectDir, '.takt/workflows/quoted-findings-routing.yaml', `name: quoted-findings-routing
-max_steps: 10
-initial_step: reviewers
-finding_contract:
-  manager:
-    persona: findings-manager
-    instruction: findings-manager
-    output_contract: findings-manager
-steps:
-  - name: reviewers
-    parallel:
-      - name: review
-        persona: reviewer
-        instruction: review it
-        output_contracts:
-          report:
-            - name: review.md
-              format: architecture-review-finding-contract
-        rules:
-          - condition: approved
-    rules:
-      - condition: 'when(structured.note == "findings.provisional.count")'
-        next: ABORT
-      - condition: 'when(structured.note == "findings.provisional.fixpoint")'
-        next: ABORT
-      - condition: 'when(structured.note == "findings.rounds.budgetExhausted")'
-        next: ABORT
-      - condition: 'when(structured.note == "findings.reviewerAnomalies.budgetExhausted")'
-        next: ABORT
-      - condition: when(findings.open.count == 0)
-        next: COMPLETE
-      - condition: when(findings.conflicts.count > 0)
-        next: ABORT
-`);
-
-    await doctorWorkflowCommand([filePath], projectDir);
-
-    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining(
-      'no rule routing on findings.provisional.count',
-    ));
-    expect(mockWarn).not.toHaveBeenCalledWith(expect.stringContaining('directly to ABORT'));
-    expect(mockError).not.toHaveBeenCalled();
-  });
-
-  it('warns for a reachable COMPLETE rule after a semantic condition with when(true)', async () => {
-    const filePath = writeWorkflow(projectDir, '.takt/workflows/semantic-guard-before-complete.yaml', `name: semantic-guard-before-complete
-max_steps: 10
-initial_step: reviewers
-finding_contract:
-  manager:
-    persona: findings-manager
-    instruction: findings-manager
-    output_contract: findings-manager
-steps:
-  - name: reviewers
-    tags: [review]
-    instruction: review it
-    rules:
-      - condition: needs_fix && when(true)
-        next: fix
-      - condition: approved && when(findings.open.count == 0)
-        next: COMPLETE
-  - name: fix
-    instruction: fix it
-    rules:
-      - condition: done
-        next: reviewers
-`);
-
-    await doctorWorkflowCommand([filePath], projectDir);
-
-    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining(
-      'COMPLETE gate without an effective reviewer-anomaly route',
-    ));
-    expect(mockError).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    'when(true)',
-    'when(findings.open.count >= 0)',
-  ])('treats the known deterministic condition %s as an unreachable COMPLETE guard', async (condition) => {
-    const filePath = writeWorkflow(projectDir, '.takt/workflows/deterministic-guard-before-complete.yaml', `name: deterministic-guard-before-complete
-max_steps: 10
-initial_step: reviewers
-finding_contract:
-  manager:
-    persona: findings-manager
-    instruction: findings-manager
-    output_contract: findings-manager
-steps:
-  - name: reviewers
-    tags: [review]
-    instruction: review it
-    rules:
-      - condition: ${condition}
-        next: fix
-      - condition: approved && when(findings.open.count == 0)
-        next: COMPLETE
-  - name: fix
-    instruction: fix it
-    rules:
-      - condition: done
-        next: reviewers
-`);
-
-    await doctorWorkflowCommand([filePath], projectDir);
-
-    expect(mockWarn).not.toHaveBeenCalledWith(expect.stringContaining(
-      'COMPLETE gate without an effective reviewer-anomaly route',
-    ));
-    expect(mockError).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ['all with a deterministic child result', ['when(true)'], 'all("when(true)")'],
-    ['any with a deterministic child result', ['when(true)'], 'any("when(true)")'],
-    [
-      'all with a compound child result',
-      ['approved && when(true)'],
-      'all("approved && when(true)")',
-    ],
-    [
-      'all with positional full child conditions',
-      ['when(true)', 'approved && when(true)'],
-      'all("when(true)", "approved && when(true)")',
-    ],
-  ])('warns for a reachable aggregate COMPLETE rule using %s', async (
-    _caseName,
-    childConditions,
-    aggregateCondition,
-  ) => {
-    const parallelSteps = childConditions.map((condition, index) => `      - name: review-${index}
-        instruction: review it
-        output_contracts:
-          report:
-            - name: review-${index}.md
-              format: architecture-review-finding-contract
-        rules:
-          - condition: ${condition}`).join('\n');
-    const filePath = writeWorkflow(projectDir, '.takt/workflows/aggregate-condition-complete.yaml', `name: aggregate-condition-complete
-max_steps: 10
-initial_step: reviewers
-finding_contract:
-  manager:
-    persona: findings-manager
-    instruction: findings-manager
-    output_contract: findings-manager
-steps:
-  - name: reviewers
-    parallel:
-${parallelSteps}
-    rules:
-      - condition: ${aggregateCondition} && when(findings.open.count == 0)
-        next: COMPLETE
-`);
-
-    await doctorWorkflowCommand([filePath], projectDir);
-
-    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining(
-      'COMPLETE gate without an effective reviewer-anomaly route',
-    ));
-    expect(mockError).not.toHaveBeenCalled();
-  });
-
-  it('does not warn when fixpoint and exhausted budget route through a bounded requirements-preserving replan', async () => {
-    writeWorkflow(projectDir, '.takt/facets/personas/reviewer.md', 'You are a reviewer.');
-    writeWorkflow(projectDir, '.takt/facets/personas/planner.md', 'You are a planner.');
-    const filePath = writeWorkflow(projectDir, '.takt/workflows/bounded-fc-routing.yaml', `name: bounded-fc-routing
-max_steps: 10
-initial_step: reviewers
-finding_contract:
-  manager:
-    persona: findings-manager
-    instruction: findings-manager
-    output_contract: findings-manager
-loop_monitors:
-  - cycle: [plan, reviewers]
-    threshold: 2
-    judge:
-      instruction: assess whether a feasible requirements-compliant approach remains
-      rules:
-        - condition: an alternative remains
-          next: plan
-        - condition: no feasible approach remains
-          next: ABORT
-steps:
-  - name: plan
-    tags: [plan]
-    persona: planner
-    instruction: re-plan the work
-    rules:
-      - condition: done
-        next: reviewers
-  - name: reviewers
-    parallel:
-      - name: review
-        persona: reviewer
-        instruction: review it
-        output_contracts:
-          report:
-            - name: review.md
-              format: architecture-review-finding-contract
-        rules:
-          - condition: approved
-    rules:
-      - condition: when(findings.open.count == 0)
-        next: COMPLETE
-      - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
-        next: plan
-      - condition: when(findings.rounds.budgetExhausted == true && findings.conflicts.count == 0)
-        next: plan
-      - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
-        next: plan
-      - condition: when(findings.conflicts.count > 0)
-        next: ABORT
-`);
-
-    await doctorWorkflowCommand([filePath], projectDir);
-
-    expect(mockWarn).not.toHaveBeenCalledWith(expect.stringContaining('findings.provisional.count'));
-    expect(mockWarn).not.toHaveBeenCalledWith(expect.stringContaining('findings.provisional.fixpoint'));
-    expect(mockWarn).not.toHaveBeenCalledWith(expect.stringContaining('findings.rounds.budgetExhausted'));
-    expect(mockError).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    [
-      'a finding fixpoint',
-      'when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)',
-    ],
-    [
-      'an exhausted finding budget',
-      'when(findings.rounds.budgetExhausted == true && findings.conflicts.count == 0)',
-    ],
-  ])('warns when %s routes directly to ABORT', async (_caseName, findingCondition) => {
-    writeWorkflow(projectDir, '.takt/facets/personas/reviewer.md', 'You are a reviewer.');
-    const filePath = writeWorkflow(projectDir, '.takt/workflows/direct-budget-abort.yaml', `name: direct-budget-abort
-max_steps: 10
-initial_step: reviewers
-finding_contract:
-  manager:
-    persona: findings-manager
-    instruction: findings-manager
-    output_contract: findings-manager
-steps:
-  - name: reviewers
-    parallel:
-      - name: review
-        persona: reviewer
-        instruction: review it
-        output_contracts:
-          report:
-            - name: review.md
-              format: architecture-review-finding-contract
-        rules:
-          - condition: approved
-    rules:
-      - condition: ${findingCondition}
-        next: ABORT
-      - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
-        next: reviewers
-      - condition: when(findings.conflicts.count > 0)
-        next: ABORT
-`);
-
-    await doctorWorkflowCommand([filePath], projectDir);
-
-    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('directly to ABORT'));
-    expect(mockError).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    [
-      'a finding fixpoint',
-      'when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)',
-    ],
-    [
-      'an exhausted finding budget',
-      'when(findings.rounds.budgetExhausted == true && findings.conflicts.count == 0)',
-    ],
-  ])('warns when the replan monitor for %s cannot fire on the route back to replan', async (
-    _caseName,
-    findingCondition,
-  ) => {
-    writeWorkflow(projectDir, '.takt/facets/personas/reviewer.md', 'You are a reviewer.');
-    writeWorkflow(projectDir, '.takt/facets/personas/planner.md', 'You are a planner.');
-    const filePath = writeWorkflow(projectDir, '.takt/workflows/non-firing-budget-monitor.yaml', `name: non-firing-budget-monitor
-max_steps: 10
-initial_step: reviewers
-finding_contract:
-  manager:
-    persona: findings-manager
-    instruction: findings-manager
-    output_contract: findings-manager
-loop_monitors:
-  - cycle: [replan, reviewers, unrelated]
-    threshold: 2
-    judge:
-      instruction: assess the loop
-      rules:
-        - condition: retry
-          next: replan
-        - condition: impossible
-          next: ABORT
-steps:
-  - name: replan
-    tags: [plan]
-    persona: planner
-    instruction: replan the work
-    rules:
-      - condition: done
-        next: reviewers
-  - name: reviewers
-    parallel:
-      - name: review
-        persona: reviewer
-        instruction: review it
-        output_contracts:
-          report:
-            - name: review.md
-              format: architecture-review-finding-contract
-        rules:
-          - condition: approved
-    rules:
-      - condition: ${findingCondition}
-        next: replan
-      - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
-        next: replan
-      - condition: all("approved")
-        next: unrelated
-      - condition: when(findings.conflicts.count > 0)
-        next: ABORT
-  - name: unrelated
-    rules:
-      - condition: done
-        next: replan
-`);
-
-    await doctorWorkflowCommand([filePath], projectDir);
-
-    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('without a bounded replan monitor'));
-    expect(mockError).not.toHaveBeenCalled();
-  });
-
-  // v3-r4 の裁定ステップ死因の再発防止: {report:X} が「そのステップより前に
-  // 実行され得るステップの output_contracts」に無い参照を警告する。
   it('warns when an instruction references a report that is only produced by later steps (v3-r4 arbitrate shape)', async () => {
     writeWorkflow(projectDir, '.takt/facets/output-contracts/simple-report.md', 'Write a short report.');
     const filePath = writeWorkflow(projectDir, '.takt/workflows/report-ref-later.yaml', `name: report-ref-later
@@ -1272,31 +836,6 @@ steps:
 
     await expect(doctorWorkflowCommand([filePath], projectDir)).rejects.toThrow('Workflow validation failed');
     expect(mockError).toHaveBeenCalledWith(expect.stringContaining('reserved internal file'));
-  });
-
-  // 回帰: builtin workflow / facet が予約名を使っていないこと。
-  it('no builtin workflow or facet uses the reserved resume-artifacts.json name', async () => {
-    const { readdirSync, readFileSync, statSync } = await import('node:fs');
-    const { join } = await import('node:path');
-    const roots = ['builtins/en', 'builtins/ja'];
-    const offenders: string[] = [];
-    const scan = (dir: string): void => {
-      for (const entry of readdirSync(dir)) {
-        const abs = join(dir, entry);
-        if (statSync(abs).isDirectory()) {
-          scan(abs);
-          continue;
-        }
-        if (!/\.(ya?ml|md)$/.test(entry)) continue;
-        if (readFileSync(abs, 'utf-8').toLowerCase().includes('resume-artifacts.json')) {
-          offenders.push(abs);
-        }
-      }
-    };
-    for (const root of roots) {
-      scan(join(process.cwd(), root));
-    }
-    expect(offenders).toEqual([]);
   });
 
   it('warns when an instruction references a report that no step produces at all', async () => {
@@ -2052,184 +1591,6 @@ steps:
     expect(report.diagnostics).toEqual([]);
   });
 
-  it('does not flag routing to the synthesized finding-conflict-adjudication step when finding_contract is configured', () => {
-    const filePath = writeWorkflow(projectDir, '.takt/workflows/adjudication-wired.yaml', `name: adjudication-wired
-max_steps: 10
-initial_step: step1
-finding_contract:
-  manager:
-    persona: findings-manager
-    instruction: findings-manager
-    output_contract: findings-manager
-steps:
-  - name: step1
-    rules:
-      - condition: conflict
-        next: finding-conflict-adjudication
-      - condition: done
-        next: COMPLETE
-`);
-
-    const report = inspectWorkflowFile(filePath, projectDir);
-
-    expect(report.diagnostics).toEqual([]);
-  });
-
-  it('reports routing to finding-conflict-adjudication without finding_contract configured', () => {
-    const filePath = writeWorkflow(projectDir, '.takt/workflows/adjudication-unconfigured.yaml', `name: adjudication-unconfigured
-max_steps: 10
-initial_step: step1
-steps:
-  - name: step1
-    rules:
-      - condition: conflict
-        next: finding-conflict-adjudication
-      - condition: done
-        next: COMPLETE
-`);
-
-    const messages = inspectWorkflowFile(filePath, projectDir).diagnostics.map((item) => item.message);
-
-    expect(messages).toContain(
-      'Step "step1" routes to "finding-conflict-adjudication" but finding_contract is not configured',
-    );
-  });
-
-  // parallel サブステップの next はエンジンで遷移として消費されない
-  // （ParallelRunner が集約し、遷移は親ステップの rules だけが決める）ため、
-  // 合成名への配線は契約の有無に関わらず「無視される」警告を出す。契約が
-  // 無ければ validator と同趣旨のエラーも併せて出す。
-  it('warns that a parallel sub-step routing to finding-conflict-adjudication is ignored by aggregation (finding_contract configured)', () => {
-    const filePath = writeWorkflow(projectDir, '.takt/workflows/adjudication-parallel-sub.yaml', `name: adjudication-parallel-sub
-max_steps: 10
-initial_step: step1
-finding_contract:
-  manager:
-    persona: findings-manager
-    instruction: findings-manager
-    output_contract: findings-manager
-steps:
-  - name: step1
-    parallel:
-      - name: sub-review
-        rules:
-          - condition: conflict
-            next: finding-conflict-adjudication
-          - condition: approved
-            next: COMPLETE
-    rules:
-      - condition: done
-        next: COMPLETE
-`);
-
-    const diagnostics = inspectWorkflowFile(filePath, projectDir).diagnostics;
-
-    expect(diagnostics).toEqual([{
-      level: 'warning',
-      message: 'Step "step1/sub-review" routes to "finding-conflict-adjudication" from a parallel sub-step, but sub-step "next" is ignored by parallel aggregation; wire the parent step\'s rules instead',
-    }]);
-  });
-
-  it('reports caller-owned parallel sub-step routing warnings after fragment expansion', () => {
-    const fragmentPath = writeWorkflow(projectDir, '.takt/steps/reviewers.yaml', `parallel:
-  - name: sub-review
-`);
-    const filePath = writeWorkflow(projectDir, '.takt/workflows/adjudication-parallel-fragment.yaml', `name: adjudication-parallel-fragment
-max_steps: 10
-initial_step: step1
-finding_contract:
-  manager:
-    persona: findings-manager
-    instruction: findings-manager
-    output_contract: findings-manager
-steps:
-  - name: step1
-    uses: reviewers
-    rules:
-      self:
-        - condition: done
-          next: COMPLETE
-      parallel:
-        sub-review:
-          - condition: conflict
-            next: finding-conflict-adjudication
-          - condition: approved
-            next: COMPLETE
-`);
-
-    const warning = inspectWorkflowFile(filePath, projectDir).diagnostics.find(
-      (diagnostic) => diagnostic.level === 'warning',
-    );
-
-    expect(warning?.message).toContain('ignored by parallel aggregation');
-    expect(warning?.message).not.toContain('from step fragment');
-    expect(warning?.message).not.toContain(fragmentPath);
-  });
-
-  it('reports a parallel sub-step routing to finding-conflict-adjudication without finding_contract configured', () => {
-    const filePath = writeWorkflow(projectDir, '.takt/workflows/adjudication-parallel-sub-unconfigured.yaml', `name: adjudication-parallel-sub-unconfigured
-max_steps: 10
-initial_step: step1
-steps:
-  - name: step1
-    parallel:
-      - name: sub-review
-        rules:
-          - condition: conflict
-            next: finding-conflict-adjudication
-          - condition: approved
-            next: COMPLETE
-    rules:
-      - condition: done
-        next: COMPLETE
-`);
-
-    const diagnostics = inspectWorkflowFile(filePath, projectDir).diagnostics;
-
-    expect(diagnostics).toContainEqual({
-      level: 'error',
-      message: 'Step "step1/sub-review" routes to "finding-conflict-adjudication" but finding_contract is not configured',
-    });
-    expect(diagnostics).toContainEqual({
-      level: 'warning',
-      message: 'Step "step1/sub-review" routes to "finding-conflict-adjudication" from a parallel sub-step, but sub-step "next" is ignored by parallel aggregation; wire the parent step\'s rules instead',
-    });
-  });
-
-  it('reports loop monitor routing to finding-conflict-adjudication without finding_contract configured', () => {
-    const filePath = writeWorkflow(
-      projectDir,
-      '.takt/workflows/adjudication-loop-monitor-unconfigured.yaml',
-      `name: adjudication-loop-monitor-unconfigured
-max_steps: 10
-initial_step: step1
-loop_monitors:
-  - cycle: [step1, step2]
-    threshold: 2
-    judge:
-      rules:
-        - condition: conflict
-          next: finding-conflict-adjudication
-steps:
-  - name: step1
-    rules:
-      - condition: continue
-        next: step2
-  - name: step2
-    rules:
-      - condition: repeat
-        next: step1
-      - condition: done
-        next: COMPLETE
-`,
-    );
-
-    const messages = inspectWorkflowFile(filePath, projectDir).diagnostics.map((item) => item.message);
-
-    expect(messages).toContain(
-      'Loop monitor "step1 -> step2" routes to "finding-conflict-adjudication" but finding_contract is not configured',
-    );
-  });
 
   it('resolves named builtin workflow targets without downgrading privileged builtin trust', async () => {
     await expect(doctorWorkflowCommand(['auto-improvement-loop'], process.cwd())).resolves.toBeUndefined();
@@ -2479,17 +1840,6 @@ steps:
         projectDir,
         worktreeDir,
         { allowPathBasedCalls: false },
-      );
-      expect(validateContractsSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ name: 'parent' }),
-        projectDir,
-        worktreeDir,
-        expect.objectContaining({
-          providerValidationOptions: expect.objectContaining({
-            providerSource: 'default',
-            modelSource: 'default',
-          }),
-        }),
       );
     } finally {
       validateContractsSpy.mockRestore();

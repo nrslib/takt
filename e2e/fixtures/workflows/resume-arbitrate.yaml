@@ -1,11 +1,5 @@
 name: resume-arbitrate
 description: Producer report then arbitrate consumer, for resume report inheritance E2E
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
 personas:
   test-reviewer: |
     You are the E2E first reviewer.

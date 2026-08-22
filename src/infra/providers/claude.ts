@@ -3,8 +3,13 @@ import type { ClaudeCallOptions } from '../claude/types.js';
 import { resolveAnthropicApiKey, resolveClaudeCliPath } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import { keepsAllowedToolWithoutEdit as keepsClaudeAllowedToolWithoutEdit } from './allowed-tool-edit-policy.js';
-import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from './types.js';
-import { assertOutputSchema } from './types.js';
+import {
+  assertOutputSchema,
+  type AgentSetup,
+  type Provider,
+  type ProviderAgent,
+  type ProviderCallOptions,
+} from './types.js';
 
 function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
   const claudeSandbox = options.providerOptions?.claude?.sandbox;
@@ -26,6 +31,7 @@ function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
     maxTurns: options.maxTurns,
     permissionMode: options.permissionMode,
     onStream: options.onStream,
+    onActivity: options.onActivity,
     onPermissionRequest: options.onPermissionRequest,
     onAskUserQuestion: options.onAskUserQuestion,
     bypassPermissions: options.bypassPermissions,
@@ -46,8 +52,8 @@ export class ClaudeProvider implements Provider {
   readonly supportsStructuredOutput = true;
   readonly supportsIsolatedStructuredExecution = true;
   readonly supportsNativeImageInput = true;
-  readonly supportsStrictInternalAgentIsolation = true;
   readonly supportedMcpTransports: ReadonlySet<'stdio' | 'sse' | 'http'> = new Set(['stdio', 'sse', 'http']);
+  readonly supportsStrictMcpConfig = true;
 
   getRuntimeInstructions(_allowedTools?: string[]): string | null {
     return null;

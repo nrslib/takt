@@ -8,7 +8,8 @@
  * than silently merging or preferring one side.
  */
 
-import type { RuntimeProviderFile } from './schema.js';
+import { hasActiveProviderContent, type RuntimeProviderFile } from './schema.js';
+import { DEFAULT_COMPANION_ENABLED } from '../../../shared/constants.js';
 
 export type ProviderConfigMode = 'legacy' | 'runtime-v1';
 
@@ -28,50 +29,32 @@ export interface DetermineProviderConfigModeInput {
 
 /** True only when the runtime.yaml carries a provider section with meaningful content. */
 export function hasActiveProviderSection(file: RuntimeProviderFile | undefined): boolean {
-  const provider = file?.provider;
-  if (!provider) {
-    return false;
-  }
-  // Empty nested maps (`defaults: {}`, `targets: { personas: {} }`, `auto_routing: {}`) carry no
-  // assignment and must not flip the mode to runtime-v1 (they would trip the mixed-config gate
-  // for nothing). The schema rejects an empty `defaults` anyway; this keeps the direct-call
-  // contract consistent.
-  const hasDefaults = provider.defaults !== undefined
-    && Object.keys(provider.defaults).length > 0;
-  const hasProfiles = provider.profiles !== undefined && Object.keys(provider.profiles).length > 0;
-  const hasTargets = Object.values(provider.targets ?? {}).some(
-    (map) => Object.keys(map ?? {}).length > 0,
+  return hasActiveProviderContent(
+    file?.provider,
+    file?.companion?.enabled ?? DEFAULT_COMPANION_ENABLED,
   );
-  const hasAutoRouting = provider.auto_routing !== undefined
-    && Object.keys(provider.auto_routing).length > 0;
-  return hasDefaults || hasProfiles || hasTargets || hasAutoRouting;
 }
 
 /**
  * True only when the runtime.yaml carries an `mcp` section with meaningful
  * content. The `mcp` section is independent from `provider` — it may be active
- * alone (order.md:36, plan MCP-LEGACY-GATE). `mcp.servers` alone is considered
- * active because the user has defined servers even if no `defaults`/`targets`
- * assign them yet (the resolver will simply yield an empty effective set).
+ * alone (order.md:36, plan MCP-LEGACY-GATE). Server definitions become active
+ * only when a default or positive target assignment references them.
  */
 export function hasActiveMcpSection(file: RuntimeProviderFile | undefined): boolean {
   const mcp = file?.mcp;
   if (!mcp) {
     return false;
   }
-  const hasServers = mcp.servers !== undefined && Object.keys(mcp.servers).length > 0;
   const hasDefaults = mcp.defaults !== undefined && mcp.defaults.servers.length > 0;
-  const hasTargets = mcp.targets !== undefined
-    && Object.values(mcp.targets).some((map) => {
-      if (map === undefined) {
-        return false;
-      }
-      if ('selector' in map) {
-        return map.selector?.exclude !== undefined && map.selector.exclude.length > 0;
-      }
-      return Object.keys(map).length > 0;
-    });
-  return hasServers || hasDefaults || hasTargets;
+  const hasTargetAssignments = [
+    mcp.targets?.personas,
+    mcp.targets?.tags,
+    mcp.targets?.steps,
+  ].some((targetMap) => Object.values(targetMap ?? {}).some(
+    (target) => (target.servers?.length ?? 0) > 0,
+  ));
+  return hasDefaults || hasTargetAssignments;
 }
 
 export function determineProviderConfigMode(
@@ -81,6 +64,11 @@ export function determineProviderConfigMode(
   const hasMcp = hasActiveMcpSection(input.runtimeFile);
   if (!hasProvider && !hasMcp) {
     return { mode: 'legacy' };
+  }
+  // An active MCP section can be layered on top of legacy provider/model
+  // resolution; runtime-v1 owns only the MCP assignment in this case.
+  if (!hasProvider && hasMcp) {
+    return { mode: 'runtime-v1' };
   }
   if (input.legacyProviderSignals.length > 0) {
     throw new Error(buildMixedConfigError(input.legacyProviderSignals));

@@ -1,19 +1,22 @@
 import { describe, expect, it } from 'vitest';
 // New module under test (implemented in the following `implement` step).
 // Import errors here are expected until then.
-import { RuntimeProviderFileSchema } from '../infra/config/runtime-provider/schema.js';
+import {
+  getEffectiveRuntimeProviderFile,
+  RuntimeProviderFileSchema,
+} from '../infra/config/runtime-provider/schema.js';
 
 /**
  * Contracts covered (see plan.md 完了契約):
  * - C1  runtime.yaml is read with schema validation (version literal, strict keys)
  * - C4  provider.profiles + 4 provider.targets maps parse
- * - C5/C14 each target/defaults assignment is `profile` XOR `pool`
+ * - C5/C14 target assignments are `profile` XOR `pool`; defaults use `profile` or `ladder`
  * - C9  auto_routing candidates/router/fallback reference profiles (no inline provider/model)
  * - C17 first-run *active* file shape parses
  * - C18 first-run *inactive* `version: 1` file parses
  * - req4 no indirect `runtime_file` key (strict schema rejects it)
  *
- * These are the literal shapes from order.md:41-103 / 206-217 / 221-223.
+ * These fixtures cover the valid and invalid shapes from order.md:41-103 / 206-217 / 221-223.
  */
 
 /**
@@ -24,7 +27,7 @@ import { RuntimeProviderFileSchema } from '../infra/config/runtime-provider/sche
 type LooseRuntimeDoc = {
   version?: unknown;
   provider: {
-    defaults: { profile?: unknown; pool?: unknown };
+    defaults?: { profile?: unknown; pool?: unknown; ladder?: unknown };
     profiles: Record<string, { provider?: unknown; model?: unknown; options?: unknown; extends?: unknown }>;
     targets: {
       personas: Record<string, unknown>;
@@ -46,7 +49,7 @@ function fullExample(): LooseRuntimeDoc {
   return {
     version: 1,
     provider: {
-      defaults: { pool: 'sol-pool' },
+      defaults: { profile: 'sol-medium' },
       profiles: {
         'sol-high': { provider: 'codex', model: 'gpt-5.6-sol', options: { reasoning_effort: 'high' } },
         'sol-medium': { provider: 'codex', model: 'gpt-5.6-sol', options: { reasoning_effort: 'medium' } },
@@ -94,10 +97,196 @@ describe('RuntimeProviderFileSchema', () => {
     expect(result.success).toBe(true);
   });
 
+  it('Given defaults.ladder, When parsed, Then it is accepted as a runtime default', () => {
+    const result = RuntimeProviderFileSchema.safeParse({
+      version: 1,
+      provider: {
+        defaults: { ladder: ['default', 'strong'] },
+        profiles: {
+          default: { provider: 'mock', model: 'runtime-model' },
+          strong: { provider: 'mock', model: 'runtime-strong-model' },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it.each([
+    ['without auto_routing', { profiles: { default: { provider: 'mock', model: 'runtime-model' } } }],
+    ['with auto_routing', {
+      profiles: { default: { provider: 'mock', model: 'runtime-model' }, router: { provider: 'mock', model: 'router-model' } },
+      auto_routing: {
+        router_profile: 'router',
+        pools: { main: { candidates: [{ profile: 'default', tier: 'low' }], fallback_profile: 'default' } },
+      },
+    }],
+  ])('Given an active provider section %s without defaults, When parsed, Then it is rejected', (_label, provider) => {
+    const result = RuntimeProviderFileSchema.safeParse({ version: 1, provider });
+    expect(result.success).toBe(false);
+  });
+
+  it('Given disabled companion-only targets without defaults, When parsed, Then it remains inactive', () => {
+    const result = RuntimeProviderFileSchema.safeParse({
+      version: 1,
+      companion: { enabled: false },
+      provider: {
+        profiles: {
+          security: { provider: 'mock', model: 'mock-security' },
+        },
+        targets: { companions: { security: { profile: 'security' } } },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('Given a disabled companion-only named assignment without top-level defaults, When parsed, Then it remains inactive', () => {
+    const result = RuntimeProviderFileSchema.safeParse({
+      version: 1,
+      companion: { enabled: false },
+      provider: {
+        profiles: {
+          security: { provider: 'mock', model: 'mock-security' },
+        },
+        assignments: {
+          security: {
+            targets: { companions: { security: { profile: 'security' } } },
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('Given disabled companions, When applying the effective section, Then named companion targets and profiles are removed', () => {
+    const file = RuntimeProviderFileSchema.parse({
+      version: 1,
+      companion: { enabled: false },
+      provider: {
+        defaults: { profile: 'default' },
+        profiles: {
+          default: { provider: 'mock', model: 'default-model' },
+          security: { provider: 'mock', model: 'mock-security' },
+        },
+        assignments: {
+          security: {
+            targets: { companions: { security: { profile: 'security' } } },
+          },
+        },
+      },
+    });
+
+    const effective = getEffectiveRuntimeProviderFile(file);
+
+    expect(effective?.provider?.assignments).toBeUndefined();
+    expect(effective?.provider?.profiles).toEqual({
+      default: { provider: 'mock', model: 'default-model' },
+    });
+  });
+
+  it('Given an active named assignment without top-level defaults, When parsed, Then it is rejected', () => {
+    const result = RuntimeProviderFileSchema.safeParse({
+      version: 1,
+      provider: {
+        profiles: {
+          default: { provider: 'mock', model: 'default-model' },
+        },
+        assignments: {
+          project: { defaults: { profile: 'default' } },
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('Given enabled companion-only targets without defaults, When parsed, Then it is rejected for missing defaults', () => {
+    const result = RuntimeProviderFileSchema.safeParse({
+      version: 1,
+      companion: { enabled: true },
+      provider: {
+        targets: { companions: { security: { profile: 'security' } } },
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((issue) => issue.message.includes('provider.defaults'))).toBe(true);
+    }
+  });
+
+  it('Given companion-only targets without a companion policy or defaults, When parsed, Then it remains inactive by default', () => {
+    const result = RuntimeProviderFileSchema.safeParse({
+      version: 1,
+      provider: {
+        targets: { companions: { security: { profile: 'security' } } },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('Given defaults.pool with a defined pool and fallback profile, When parsed, Then it is rejected with a pool-specific error', () => {
+    const doc = fullExample();
+    doc.provider.defaults = { pool: 'sol-pool' };
+    const result = RuntimeProviderFileSchema.safeParse(doc);
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          code: 'unrecognized_keys',
+          path: ['provider', 'defaults'],
+          keys: ['pool'],
+        }),
+      ]));
+    }
+  });
+
+  it('Given defaults.pool without auto_routing, When parsed, Then it is rejected at the defaults boundary', () => {
+    const result = RuntimeProviderFileSchema.safeParse({
+      version: 1,
+      provider: {
+        defaults: { pool: 'pool-a' },
+        profiles: { real: { provider: 'mock', model: 'model-real' } },
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((issue) =>
+        issue.path.includes('pool')
+        || issue.message.includes('pool')
+        || issue.message.includes('provider.defaults'))).toBe(true);
+    }
+  });
+
+  it('Given defaults with profile and ladder together, When parsed, Then the defaults assignment is rejected', () => {
+    const doc = fullExample();
+    doc.provider.defaults = { profile: 'sol-medium', ladder: ['sol-high'] };
+    expect(RuntimeProviderFileSchema.safeParse(doc).success).toBe(false);
+  });
+
   it('Given the inactive `version: 1` file, When parsed, Then it is accepted with no provider (C18)', () => {
     const result = RuntimeProviderFileSchema.safeParse({ version: 1 });
     expect(result.success).toBe(true);
     if (result.success) expect(result.data.provider).toBeUndefined();
+  });
+
+  it('Given a companion policy, When parsed, Then enabled is required and strict', () => {
+    expect(RuntimeProviderFileSchema.safeParse({
+      version: 1,
+      companion: { enabled: false },
+    }).success).toBe(true);
+    expect(RuntimeProviderFileSchema.safeParse({
+      version: 1,
+      companion: {},
+    }).success).toBe(false);
+    expect(RuntimeProviderFileSchema.safeParse({
+      version: 1,
+      companion: { enabled: false, extra: true },
+    }).success).toBe(false);
   });
 
   it('Given a missing version, When parsed, Then it is rejected (C1)', () => {
@@ -121,6 +310,57 @@ describe('RuntimeProviderFileSchema', () => {
     const doc = fullExample();
     doc.provider.targets.personas.coder = {};
     const result = RuntimeProviderFileSchema.safeParse(doc);
+    expect(result.success).toBe(false);
+  });
+
+  it('Given named assignments with defaults and targets, When parsed, Then the documented forms are accepted', () => {
+    const result = RuntimeProviderFileSchema.safeParse({
+      version: 1,
+      provider: {
+        defaults: { profile: 'default' },
+        profiles: {
+          default: { provider: 'mock', model: 'default-model' },
+          selected: { provider: 'mock', model: 'selected-model' },
+        },
+        assignments: {
+          project: {
+            defaults: { ladder: ['default', 'selected'] },
+            targets: {
+              personas: { coder: { profile: 'selected' } },
+              companions: { security: { profile: 'selected' } },
+            },
+          },
+        },
+        directories: { '~/work/project': 'project' },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('Given an empty named assignment, When parsed, Then it is rejected', () => {
+    const result = RuntimeProviderFileSchema.safeParse({
+      version: 1,
+      provider: {
+        defaults: { profile: 'default' },
+        profiles: { default: { provider: 'mock', model: 'default-model' } },
+        assignments: { empty: {} },
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('Given an unknown key in a named assignment, When parsed, Then strict validation rejects it', () => {
+    const result = RuntimeProviderFileSchema.safeParse({
+      version: 1,
+      provider: {
+        defaults: { profile: 'default' },
+        profiles: { default: { provider: 'mock', model: 'default-model' } },
+        assignments: { project: { defaults: { profile: 'default' }, use: 'forbidden' } },
+      },
+    });
+
     expect(result.success).toBe(false);
   });
 

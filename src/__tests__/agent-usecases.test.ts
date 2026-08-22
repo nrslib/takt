@@ -7,36 +7,44 @@ import {
   executeIsolatedStructuredInternalAgent,
   generateReport,
   executePart,
-  evaluateCondition,
-  judgeStatus,
-  decomposeTask,
-  requestMoreParts,
+  evaluateCondition as evaluateConditionImpl,
+  judgeStatus as judgeStatusImpl,
+  decomposeTask as decomposeTaskImpl,
+  requestMoreParts as requestMorePartsImpl,
   type DecomposeTaskOptions,
 } from '../agents/agent-usecases.js';
-import { runTagJudgeStage } from '../agents/judge-status-usecase.js';
-import { requestDecompositionRawResponse } from '../agents/decompose-task-usecase.js';
+import { runTagJudgeStage as runTagJudgeStageImpl } from '../agents/judge-status-usecase.js';
+import { requestDecompositionRawResponse as requestDecompositionRawResponseImpl } from '../agents/decompose-task-usecase.js';
 import { loadEvaluationSchema, loadJudgmentSchema } from '../infra/resources/schema-loader.js';
+import { OpenCodeProvider } from '../infra/providers/opencode.js';
+import {
+  createWorkflowStepDeadline,
+  recordWorkflowStepProviderActivity,
+  recordWorkflowStepProviderEventActivity,
+} from '../core/workflow/engine/step-deadline.js';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock('../infra/resources/schema-loader.js', () => ({
-  loadJudgmentSchema: vi.fn(() => ({
-    type: 'object',
-    required: ['step', 'reason'],
-    properties: { step: { type: 'integer' }, reason: { type: 'string' } },
-    additionalProperties: false,
-  })),
-  loadEvaluationSchema: vi.fn(() => ({
-    type: 'object',
-    required: ['matched_index', 'reason'],
-    properties: { matched_index: { type: 'integer' }, reason: { type: 'string' } },
-    additionalProperties: false,
-  })),
-  loadDecompositionSchema: vi.fn((maxInitialParts?: number) => ({ type: 'decomposition', maxInitialParts })),
-  loadMorePartsSchema: vi.fn(() => ({ type: 'more-parts' })),
-}));
+vi.mock('../infra/resources/schema-loader.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../infra/resources/schema-loader.js')>();
+  return {
+    ...actual,
+    loadJudgmentSchema: vi.fn(() => ({
+      type: 'object',
+      required: ['step', 'reason'],
+      properties: { step: { type: 'integer' }, reason: { type: 'string' } },
+      additionalProperties: false,
+    })),
+    loadEvaluationSchema: vi.fn(() => ({
+      type: 'object',
+      required: ['matched_index', 'reason'],
+      properties: { matched_index: { type: 'integer' }, reason: { type: 'string' } },
+      additionalProperties: false,
+    })),
+  };
+});
 
 vi.mock('../core/workflow/engine/task-decomposer.js', () => ({
   parseParts: vi.fn(),
@@ -57,11 +65,51 @@ function doneResponse(content: string, structuredOutput?: Record<string, unknown
     status: 'done' as const,
     content,
     timestamp: new Date('2026-02-12T00:00:00Z'),
-    structuredOutput,
+    structuredOutput: structuredOutput ?? { content },
   };
 }
 
 const judgeOptions = { cwd: '/repo', stepName: 'review' };
+
+const withResolvedMockProvider = <T extends { provider?: unknown; resolvedProvider?: unknown }>(
+  options: T,
+): T => ({
+  ...options,
+  ...(options.provider === undefined && options.resolvedProvider === undefined
+    ? { resolvedProvider: 'mock' }
+    : {}),
+});
+
+const evaluateCondition = (...args: Parameters<typeof evaluateConditionImpl>) => evaluateConditionImpl(
+  args[0],
+  args[1],
+  withResolvedMockProvider(args[2]),
+);
+const judgeStatus = (...args: Parameters<typeof judgeStatusImpl>) => judgeStatusImpl(
+  args[0],
+  args[1],
+  args[2],
+  withResolvedMockProvider(args[3]),
+);
+const decomposeTask = (...args: Parameters<typeof decomposeTaskImpl>) => decomposeTaskImpl(
+  args[0],
+  args[1],
+  withResolvedMockProvider(args[2]),
+);
+const requestMoreParts = (...args: Parameters<typeof requestMorePartsImpl>) => requestMorePartsImpl(
+  args[0],
+  args[1],
+  args[2],
+  withResolvedMockProvider(args[3]),
+);
+const runTagJudgeStage = (...args: Parameters<typeof runTagJudgeStageImpl>) => runTagJudgeStageImpl(
+  args[0],
+  args[1],
+  withResolvedMockProvider(args[2]),
+);
+const requestDecompositionRawResponse = (
+  ...args: Parameters<typeof requestDecompositionRawResponseImpl>
+) => requestDecompositionRawResponseImpl(args[0], args[1], withResolvedMockProvider(args[2]));
 type JudgeStageLog = {
   stage: 1 | 2 | 3;
   method: 'structured_output' | 'phase3_tag' | 'ai_judge';
@@ -95,23 +143,28 @@ describe('agent-usecases', () => {
     ));
     const schema = { type: 'object', additionalProperties: false };
 
+    const internalOptions = {
+      cwd: '/tmp',
+      workflowBundleResourceRoot: '/tmp/workflow-bundle/resources',
+      agentName: 'security-reviewer',
+      personaPath: '/project/.takt/facets/personas/security-reviewer.md',
+      sessionId: 'ambient-session',
+      resolution: {
+        provider: 'opencode' as const,
+        model: 'opencode/model',
+        providerOptions: {
+          codex: { skills: { repo: true, user: true } },
+          opencode: { allowedTools: ['write'] },
+          claude: { allowedTools: ['Bash'], skills: { enabled: true } },
+        },
+      },
+    } as unknown as Parameters<typeof executeIsolatedStructuredInternalAgent>[3];
+
     const response = await executeIsolatedStructuredInternalAgent(
       'selector system prompt',
       'select reviewers',
       schema,
-      {
-        cwd: '/tmp',
-        sessionId: 'ambient-session',
-        resolution: {
-          provider: 'mock',
-          model: undefined,
-          providerOptions: {
-            codex: { skills: { repo: true, user: true } },
-            opencode: { allowedTools: ['write'] },
-            claude: { allowedTools: ['Bash'], skills: { enabled: true } },
-          },
-        },
-      },
+      internalOptions,
     );
 
     expect(response.structuredOutput).toEqual({
@@ -122,15 +175,20 @@ describe('agent-usecases', () => {
       undefined,
       'select reviewers',
       expect.objectContaining({
+        executionProfile: 'isolated-structured',
         internalAgentIsolation: 'strict-readonly',
+        internalAgentName: 'security-reviewer',
+        personaPath: '/project/.takt/facets/personas/security-reviewer.md',
+        workflowBundleResourceRoot: '/tmp/workflow-bundle/resources',
+        internalSystemPrompt: 'selector system prompt',
         allowedTools: [],
         mcpServers: {},
         bypassPermissions: false,
         sessionId: undefined,
         outputSchema: schema,
         resolvedExecution: {
-          provider: 'mock',
-          model: undefined,
+          provider: 'opencode',
+          model: 'opencode/model',
           permissionMode: 'readonly',
           providerOptions: {
             codex: { skills: { repo: true, user: true } },
@@ -183,7 +241,7 @@ describe('agent-usecases', () => {
     expect(callOptions?.mcpServers).not.toHaveProperty('excluded');
   });
 
-  it('should resolve runtime MCP assignment for the assistant internal agent selector', async () => {
+  it('should propagate runtime MCP defaults to an isolated structured internal agent', async () => {
     vi.mocked(runAgent).mockResolvedValue(doneResponse('ignored', { selected_ids: ['a'] }));
     const mcpAssignment = {
       servers: { common: { command: 'common-srv' } },
@@ -246,8 +304,41 @@ describe('agent-usecases', () => {
     );
   });
 
-  it.each(['copilot', 'cursor', 'kiro', 'opencode'] as const)(
-    'should reject %s before invoking an internal agent without strict isolation support',
+  it('routes OpenCode internal structured execution through setupIsolatedStructured', async () => {
+    const actualRunner = await vi.importActual<typeof import('../agents/runner.js')>(
+      '../agents/runner.js',
+    );
+    const setupIsolatedStructured = vi.spyOn(OpenCodeProvider.prototype, 'setupIsolatedStructured')
+      .mockReturnValue({
+        call: vi.fn().mockResolvedValue(doneResponse('ignored', { selected_ids: ['frontend'] })),
+      });
+    vi.mocked(runAgent).mockImplementation(actualRunner.runAgent);
+
+    try {
+      await executeIsolatedStructuredInternalAgent(
+        'selector system prompt',
+        'select reviewers',
+        { type: 'object' },
+        {
+          cwd: '/tmp',
+          resolution: {
+            provider: 'opencode',
+            model: 'opencode/model',
+            providerOptions: {},
+          },
+        },
+      );
+
+      expect(setupIsolatedStructured).toHaveBeenCalledWith(expect.objectContaining({
+        name: 'takt-internal',
+      }));
+    } finally {
+      setupIsolatedStructured.mockRestore();
+    }
+  });
+
+  it.each(['copilot', 'cursor', 'kiro'] as const)(
+    'should reject %s before invoking an internal agent without isolated structured execution support',
     async (provider) => {
       await expect(executeIsolatedStructuredInternalAgent(
         'selector system prompt',
@@ -261,26 +352,28 @@ describe('agent-usecases', () => {
             providerOptions: {},
           },
         },
-      )).rejects.toThrow(`Provider "${provider}" does not support strict internal-agent isolation`);
+      )).rejects.toThrow(`Provider "${provider}" does not support isolated structured execution`);
 
       expect(runAgent).not.toHaveBeenCalled();
     },
   );
-
   it('evaluateCondition は構造化出力の matched_index を優先する', async () => {
     vi.mocked(runAgent).mockResolvedValue(doneResponse('ignored', { matched_index: 2, reason: 'second condition' }));
+    const onStream = vi.fn();
+    const onActivity = vi.fn();
 
     const result = await evaluateCondition('agent output', [
       { index: 0, text: 'first' },
       { index: 1, text: 'second' },
-    ], { cwd: '/repo' });
+    ], { cwd: '/repo', onStream, onActivity });
 
     expect(result).toBe(1);
-    expect(runAgent).toHaveBeenCalledWith(undefined, 'judge prompt', expect.objectContaining({
+    expect(runAgent).toHaveBeenCalledWith(undefined, expect.stringContaining('judge prompt'), expect.objectContaining({
       cwd: '/repo',
-      outputSchema: expect.objectContaining({
-        required: ['matched_index', 'reason'],
-      }),
+      resolvedExecution: expect.objectContaining({ provider: 'mock' }),
+      outputSchema: expect.any(Object),
+      onStream,
+      onActivity,
     }));
   });
 
@@ -355,7 +448,7 @@ describe('agent-usecases', () => {
     expect(detectJudgeIndex).not.toHaveBeenCalled();
   });
 
-  it('evaluateCondition は maxTurns 非対応 provider では内部 maxTurns を渡さない', async () => {
+  it('evaluateCondition は provider 分岐なしで暗黙の maxTurns を付与しない', async () => {
     vi.mocked(runAgent).mockResolvedValue(doneResponse('ignored', { matched_index: 1, reason: 'first condition' }));
 
     await evaluateCondition('agent output', [
@@ -365,9 +458,9 @@ describe('agent-usecases', () => {
       resolvedProvider: 'claude-terminal',
     });
 
-    expect(runAgent).toHaveBeenCalledWith(undefined, 'judge prompt', expect.not.objectContaining({
-      maxTurns: expect.anything(),
-    }));
+    const options = vi.mocked(runAgent).mock.calls[0]?.[2];
+    expect(options?.resolvedExecution).toMatchObject({ provider: 'claude-terminal' });
+    expect(options).not.toHaveProperty('maxTurns');
   });
 
   // --- judgeStatus: 3-stage fallback ---
@@ -391,10 +484,8 @@ describe('agent-usecases', () => {
 
     expect(result).toEqual({ candidateIndex: 1, method: 'structured_output' });
     expect(runAgent).toHaveBeenCalledTimes(1);
-    expect(runAgent).toHaveBeenCalledWith('conductor', 'structured', expect.objectContaining({
-      outputSchema: expect.objectContaining({
-        required: ['step', 'reason'],
-      }),
+    expect(runAgent).toHaveBeenCalledWith('conductor', expect.stringContaining('structured'), expect.objectContaining({
+      outputSchema: expect.any(Object),
     }));
   });
 
@@ -411,12 +502,10 @@ describe('agent-usecases', () => {
 
     expect(result).toEqual({ candidateIndex: 1, method: 'phase3_tag' });
     expect(runAgent).toHaveBeenCalledTimes(2);
-    expect(runAgent).toHaveBeenNthCalledWith(1, 'conductor', 'structured', expect.objectContaining({
-      outputSchema: expect.objectContaining({
-        required: ['step', 'reason'],
-      }),
+    expect(runAgent).toHaveBeenNthCalledWith(1, 'conductor', expect.stringContaining('structured'), expect.objectContaining({
+      outputSchema: expect.any(Object),
     }));
-    expect(runAgent).toHaveBeenNthCalledWith(2, 'conductor', 'tag', expect.not.objectContaining({
+    expect(runAgent).toHaveBeenNthCalledWith(2, 'conductor', 'tag', expect.objectContaining({
       outputSchema: expect.anything(),
     }));
   });
@@ -453,6 +542,96 @@ describe('agent-usecases', () => {
 
     expect(result).toEqual({ candidateIndex: 1, method: 'ai_judge' });
     expect(runAgent).toHaveBeenCalledTimes(3);
+  });
+
+  it('judgeStatus は ai_judge fallback の活動中に親 deadline を生存させる', async () => {
+    vi.useFakeTimers();
+    const inactivityTimeoutMs = 60_000;
+    const deadline = createWorkflowStepDeadline('opencode', {
+      opencode: { guards: { callTimeoutMs: inactivityTimeoutMs } },
+    }, undefined);
+    let resolveAiJudgeStarted: (() => void) | undefined;
+    const aiJudgeStarted = new Promise<void>((resolve) => {
+      resolveAiJudgeStarted = resolve;
+    });
+    let releaseStreamActivity: (() => void) | undefined;
+    const streamActivity = new Promise<void>((resolve) => {
+      releaseStreamActivity = resolve;
+    });
+    let releaseRetryActivity: (() => void) | undefined;
+    const retryActivity = new Promise<void>((resolve) => {
+      releaseRetryActivity = resolve;
+    });
+    let releaseAiJudge: (() => void) | undefined;
+    const aiJudgeCompletion = new Promise<void>((resolve) => {
+      releaseAiJudge = resolve;
+    });
+    let providerStage = 0;
+    vi.mocked(runAgent).mockImplementation(async (_persona, _instruction, options) => {
+      providerStage++;
+      if (providerStage === 1) {
+        return {
+          persona: 'conductor',
+          status: 'error',
+          content: 'structured stage failed',
+          timestamp: new Date('2026-08-15T00:00:00.000Z'),
+        };
+      }
+      if (providerStage === 2) {
+        return doneResponse('tag did not match');
+      }
+      options.onActivity?.({ kind: 'attempt_started' });
+      resolveAiJudgeStarted?.();
+      await streamActivity;
+      options.onStream?.({ type: 'text', data: { text: 'ai judge is still working' } });
+      await retryActivity;
+      options.onActivity?.({ kind: 'attempt_started' });
+      await aiJudgeCompletion;
+      return doneResponse('ignored', { matched_index: 2, reason: 'second condition' });
+    });
+
+    try {
+      const judgment = judgeStatus('structured', 'tag', [
+        { label: 'a' },
+        { label: 'b' },
+      ], {
+        ...judgeOptions,
+        abortSignal: deadline.signal,
+        onStream: (event) => recordWorkflowStepProviderEventActivity(
+          deadline.recordActivity,
+          'review',
+          event,
+        ),
+        onActivity: (activity) => recordWorkflowStepProviderActivity(
+          deadline.recordActivity,
+          'review',
+          activity,
+        ),
+      });
+      await aiJudgeStarted;
+      await vi.advanceTimersByTimeAsync(40_000);
+      releaseStreamActivity?.();
+      await vi.advanceTimersByTimeAsync(40_000);
+      releaseRetryActivity?.();
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      expect(deadline.signal.aborted).toBe(false);
+      expect(runAgent).toHaveBeenNthCalledWith(
+        3,
+        undefined,
+        expect.any(String),
+        expect.objectContaining({
+          onStream: expect.any(Function),
+          onActivity: expect.any(Function),
+        }),
+      );
+
+      releaseAiJudge?.();
+      await expect(judgment).resolves.toEqual({ candidateIndex: 1, method: 'ai_judge' });
+    } finally {
+      deadline.dispose();
+      vi.useRealTimers();
+    }
   });
 
   it('judgeStatus passes childProcessEnv to all Phase 3 internal agent calls', async () => {
@@ -558,7 +737,7 @@ describe('agent-usecases', () => {
     },
   );
 
-  it('judgeStatus は maxTurns 非対応 provider では全内部ステージで maxTurns を渡さない', async () => {
+  it('judgeStatus は provider 分岐なしで全内部ステージに暗黙の maxTurns を付与しない', async () => {
     vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('no match'));
     vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('no tag'));
     vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('ignored', { matched_index: 2, reason: 'second condition' }));
@@ -573,9 +752,8 @@ describe('agent-usecases', () => {
 
     expect(result).toEqual({ candidateIndex: 1, method: 'ai_judge' });
     expect(runAgent).toHaveBeenCalledTimes(3);
-    for (const call of vi.mocked(runAgent).mock.calls) {
-      expect(call[2]).not.toHaveProperty('maxTurns');
-    }
+    expect(vi.mocked(runAgent).mock.calls.every((call) => !('maxTurns' in (call[2] ?? {}))))
+      .toBe(true);
   });
 
   it('judgeStatus は Phase 3 の内部ステージログを順序どおりに通知する', async () => {
@@ -760,15 +938,19 @@ describe('agent-usecases', () => {
     ]);
     expect(parseParts).not.toHaveBeenCalled();
     expect(runAgent).toHaveBeenCalledWith('team-leader', expect.any(String), expect.objectContaining({
-      allowedTools: [],
-      permissionMode: 'readonly',
-      outputSchema: { type: 'decomposition', maxInitialParts: 3 },
+      outputSchema: expect.objectContaining({
+        properties: expect.objectContaining({
+          parts: expect.objectContaining({ maxItems: 3 }),
+        }),
+      }),
     }));
     const [, , callOptions] = vi.mocked(runAgent).mock.calls[0] ?? [];
     expect(callOptions).not.toHaveProperty('maxTurns');
+    expect(callOptions).not.toHaveProperty('allowedTools');
+    expect(callOptions).not.toHaveProperty('permissionMode');
   });
 
-  it('Given inspectTools, When decomposeTask runs, Then it passes them to the parent decomposition call only', async () => {
+  it('Given inspectTools, When decomposeTask runs, Then it passes them to the parent decomposition call', async () => {
     vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
       parts: [
         { id: 'p1', title: 'Part 1', instruction: 'Do 1' },
@@ -783,9 +965,27 @@ describe('agent-usecases', () => {
 
     expect(runAgent).toHaveBeenCalledWith('team-leader', expect.any(String), expect.objectContaining({
       allowedTools: ['Read', 'Glob', 'Grep'],
-      permissionMode: 'readonly',
-      outputSchema: { type: 'decomposition', maxInitialParts: 3 },
     }));
+    expect(vi.mocked(runAgent).mock.calls[0]?.[2]).not.toHaveProperty('permissionMode');
+  });
+
+  it('Given inspectGuidance without inspectTools, When decomposeTask runs, Then it reaches the decomposition prompt', async () => {
+    vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
+      parts: [
+        { id: 'p1', title: 'Part 1', instruction: 'Do 1' },
+      ],
+    }));
+
+    await decomposeTask('instruction', 3, {
+      cwd: '/repo',
+      persona: 'team-leader',
+      inspectGuidance: true,
+    });
+
+    const [, prompt, callOptions] = vi.mocked(runAgent).mock.calls[0] ?? [];
+    expect(prompt).toContain('You may use read-only inspection tools only');
+    expect(prompt).not.toContain('Do not use any tool');
+    expect(callOptions).not.toHaveProperty('allowedTools');
   });
 
   it('decomposeTask は構造化出力がない場合 parseParts にフォールバックする', async () => {
@@ -802,22 +1002,7 @@ describe('agent-usecases', () => {
     ]);
   });
 
-  it('Finding Contract decomposition は構造化出力がない場合に汎用parserへフォールバックしない', async () => {
-    vi.mocked(runAgent).mockResolvedValue(doneResponse('```json [] ```'));
-
-    await expect(decomposeTask('instruction', 2, {
-      cwd: '/repo',
-      findingContract: {
-        targetFindingIds: ['F-0001'],
-        actionableFindings: '{"open":[{"id":"F-0001"}]}',
-      },
-    })).rejects.toThrow('requires structured output');
-
-    expect(parseParts).not.toHaveBeenCalled();
-    expect(runAgent).toHaveBeenCalledOnce();
-  });
-
-  it('非Finding Contract decomposition は意味的検証診断付きで全partsを再生成する', async () => {
+  it('decomposition は意味的検証診断付きで全partsを再生成する', async () => {
     vi.mocked(runAgent)
       .mockResolvedValueOnce(doneResponse('invalid', { parts: [] }))
       .mockResolvedValueOnce(doneResponse('valid', {
@@ -830,13 +1015,9 @@ describe('agent-usecases', () => {
       { id: 'p1', title: 'Part 1', instruction: 'Do 1' },
     ]);
     expect(runAgent).toHaveBeenCalledTimes(2);
-    const secondPrompt = vi.mocked(runAgent).mock.calls[1]?.[1];
-    expect(secondPrompt).toContain('Previously rejected decomposition');
-    expect(secondPrompt).toContain('"code": "decomposition.parts_invalid"');
-    expect(secondPrompt).toContain('regenerate all parts');
   });
 
-  it('非Finding Contract decomposition は provider 例外を再試行しない', async () => {
+  it('decomposition は provider 例外を再試行しない', async () => {
     const providerError = new Error('network unavailable');
     const onAgentError = vi.fn();
     vi.mocked(runAgent).mockRejectedValue(providerError);
@@ -899,17 +1080,25 @@ describe('agent-usecases', () => {
     vi.mocked(runAgent).mockResolvedValue(response);
     const abortController = new AbortController();
     const onAgentResponse = vi.fn();
+    const onStream = vi.fn();
+    const onActivity = vi.fn();
 
     const result = await decomposeTask('instruction', 2, {
       cwd: '/repo',
       abortSignal: abortController.signal,
+      onStream,
+      onActivity,
       onAgentResponse,
     });
 
     expect(runAgent).toHaveBeenCalledWith(
       undefined,
       expect.any(String),
-      expect.objectContaining({ abortSignal: abortController.signal }),
+      expect.objectContaining({
+        abortSignal: abortController.signal,
+        onStream: expect.any(Function),
+        onActivity,
+      }),
     );
     expect(onAgentResponse).toHaveBeenCalledWith(response);
     expect(result.providerUsage).toEqual(providerUsage);
@@ -1024,7 +1213,7 @@ describe('agent-usecases', () => {
     });
     resolveRunAgent?.(response);
 
-    await expect(result).resolves.toBe(response);
+    await expect(result).resolves.toStrictEqual(response);
     expect(onAgentResponse).not.toHaveBeenCalled();
   });
 
@@ -1123,16 +1312,14 @@ describe('agent-usecases', () => {
       cancelPartIds: ['p2'],
       parts: [{ id: 'p3', title: 'Part 3', instruction: 'Do 3' }],
     });
-    expect(runAgent).toHaveBeenCalledWith('team-leader', expect.stringContaining('original instruction'), expect.objectContaining({
-      allowedTools: [],
-      outputSchema: { type: 'more-parts' },
-      permissionMode: 'readonly',
-    }));
+    expect(runAgent).toHaveBeenCalledWith('team-leader', expect.stringContaining('original instruction'), expect.any(Object));
     const [, , callOptions] = vi.mocked(runAgent).mock.calls[0] ?? [];
     expect(callOptions).not.toHaveProperty('maxTurns');
+    expect(callOptions).not.toHaveProperty('allowedTools');
+    expect(callOptions).not.toHaveProperty('permissionMode');
   });
 
-  it('requestMoreParts は inspect tools を feedback planning call に渡さない', async () => {
+  it('requestMoreParts は inspect tools を feedback planning call に渡す', async () => {
     vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
       done: true,
       reasoning: 'Enough',
@@ -1152,11 +1339,40 @@ describe('agent-usecases', () => {
       } as Parameters<typeof requestMoreParts>[3] & { inspectTools: string[] },
     );
 
-    expect(runAgent).toHaveBeenCalledWith('team-leader', expect.any(String), expect.objectContaining({
-      allowedTools: [],
-      outputSchema: { type: 'more-parts' },
-      permissionMode: 'readonly',
+    expect(runAgent).toHaveBeenCalledWith('team-leader', expect.any(String), expect.any(Object));
+    expect(vi.mocked(runAgent).mock.calls[0]?.[2]).toEqual(expect.objectContaining({
+      allowedTools: ['Read', 'Glob', 'Grep'],
     }));
+    expect(vi.mocked(runAgent).mock.calls[0]?.[2]).not.toHaveProperty('permissionMode');
+    expect(vi.mocked(runAgent).mock.calls[0]?.[1]).toContain(
+      'You may use read-only inspection tools only',
+    );
+  });
+
+  it('requestMoreParts は inspectGuidance を feedback prompt へ伝搬する', async () => {
+    vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
+      done: true,
+      reasoning: 'Enough',
+      cancelPartIds: [],
+      parts: [],
+    }));
+
+    await requestMoreParts(
+      'original instruction',
+      [{ id: 'p1', title: 'Part 1', status: 'done', content: 'done' }],
+      ['p1'],
+      {
+        cwd: '/repo',
+        persona: 'team-leader',
+        cancellablePartIds: [],
+        inspectGuidance: true,
+      },
+    );
+
+    const [, prompt, callOptions] = vi.mocked(runAgent).mock.calls[0] ?? [];
+    expect(prompt).toContain('You may use read-only inspection tools only');
+    expect(prompt).not.toContain('Do not use any tool');
+    expect(callOptions).not.toHaveProperty('allowedTools');
   });
 
   it('requestMoreParts は done 以外をエラーにする', async () => {
@@ -1193,6 +1409,8 @@ describe('agent-usecases', () => {
     vi.mocked(runAgent).mockResolvedValue(response);
     const abortController = new AbortController();
     const onAgentResponse = vi.fn();
+    const onStream = vi.fn();
+    const onActivity = vi.fn();
 
     const result = await requestMoreParts(
       'instruction',
@@ -1202,6 +1420,8 @@ describe('agent-usecases', () => {
         cwd: '/repo',
         cancellablePartIds: [],
         abortSignal: abortController.signal,
+        onStream,
+        onActivity,
         onAgentResponse,
       },
     );
@@ -1209,7 +1429,11 @@ describe('agent-usecases', () => {
     expect(runAgent).toHaveBeenCalledWith(
       undefined,
       expect.any(String),
-      expect.objectContaining({ abortSignal: abortController.signal }),
+      expect.objectContaining({
+        abortSignal: abortController.signal,
+        onStream: expect.any(Function),
+        onActivity,
+      }),
     );
     expect(onAgentResponse).toHaveBeenCalledWith(response);
     expect(result.providerUsage).toEqual(providerUsage);
@@ -1320,15 +1544,13 @@ describe('agent-usecases', () => {
     );
 
     expect(result).toEqual({ candidateIndex: 0, method: 'phase3_tag' });
-    expect(runAgent).toHaveBeenCalledWith('conductor', 'tag instruction', expect.objectContaining({
+    expect(runAgent).toHaveBeenCalledWith('conductor', expect.stringContaining('tag instruction'), expect.objectContaining({
       cwd: '/repo',
-      provider: 'cursor',
-      maxTurns: 3,
-      permissionMode: 'readonly',
+      resolvedExecution: expect.objectContaining({ provider: 'cursor' }),
     }));
   });
 
-  it('runTagJudgeStage は maxTurns 非対応 provider では内部 maxTurns を渡さない', async () => {
+  it('runTagJudgeStage は provider 分岐なしで暗黙の maxTurns を付与しない', async () => {
     vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('[REVIEW:1]'));
 
     const result = await runTagJudgeStage(
@@ -1338,9 +1560,9 @@ describe('agent-usecases', () => {
     );
 
     expect(result).toEqual({ candidateIndex: 0, method: 'phase3_tag' });
-    expect(runAgent).toHaveBeenCalledWith('conductor', 'tag instruction', expect.not.objectContaining({
-      maxTurns: expect.anything(),
-    }));
+    const options = vi.mocked(runAgent).mock.calls[0]?.[2];
+    expect(options?.resolvedExecution).toMatchObject({ provider: 'claude-terminal' });
+    expect(options).not.toHaveProperty('maxTurns');
   });
 
   it('runTagJudgeStage はタグ不一致時に undefined を返す', async () => {

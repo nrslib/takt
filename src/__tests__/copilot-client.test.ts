@@ -98,6 +98,7 @@ describe('callCopilot', () => {
   });
 
   it('should invoke copilot with required args including --silent, --no-color', async () => {
+    const onActivity = vi.fn();
     mockSpawnWithScenario({
       stdout: 'Implementation complete. All tests pass.',
       code: 0,
@@ -109,11 +110,13 @@ describe('callCopilot', () => {
       sessionId: 'sess-prev',
       permissionMode: 'full',
       copilotGithubToken: 'gh-token',
+      onActivity,
     });
 
     expect(result.status).toBe('done');
     expect(result.content).toBe('Implementation complete. All tests pass.');
     expect(result.sessionId).toBe('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee');
+    expect(onActivity).toHaveBeenCalledOnce();
 
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     const [command, args, options] = mockSpawn.mock.calls[0] as [string, string[], { env?: NodeJS.ProcessEnv; stdio?: unknown }];
@@ -242,15 +245,17 @@ describe('callCopilot', () => {
       code: 0,
     });
 
-    await callCopilot('reviewer', 'review this code', {
+    const systemPrompt = 'custom system prompt';
+    const userPrompt = 'custom user prompt';
+    await callCopilot('reviewer', userPrompt, {
       cwd: '/repo',
-      systemPrompt: 'You are a strict reviewer.',
+      systemPrompt,
     });
 
     const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
     const promptIndex = args.indexOf('-p');
     expect(promptIndex).toBeGreaterThan(-1);
-    expect(args[promptIndex + 1]).toBe('You are a strict reviewer.\n\nreview this code');
+    expect(args[promptIndex + 1]).toBe(`${systemPrompt}\n\n${userPrompt}`);
   });
 
   it('should return structured error when copilot binary is not found', async () => {

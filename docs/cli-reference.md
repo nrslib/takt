@@ -1,6 +1,6 @@
 # CLI Reference
 
-[日本語](./cli-reference.ja.md)
+[English](./cli-reference.md) | [日本語](./cli-reference.ja.md) | [简体中文](./cli-reference.zh-CN.md)
 
 This document provides a complete reference for all TAKT CLI commands and options.
 
@@ -19,10 +19,11 @@ This document provides a complete reference for all TAKT CLI commands and option
 | `--skip-git` | Skip branch creation, commit, and push (pipeline mode, workflow-only) |
 | `--repo <owner/repo>` | Specify repository (for PR creation) |
 | `-q, --quiet` | Minimal output mode: suppress AI output (for CI) |
-| `--provider <name>` | Override agent provider (claude\|claude-sdk\|claude-terminal\|codex\|opencode\|cursor\|copilot\|kiro\|mock) |
+| `--provider <name>` | Override agent provider (claude\|claude-sdk\|claude-terminal\|codex\|opencode\|deepseek-harness\|cursor\|copilot\|kiro\|pi\|mock) |
 | `--auto-strategy <strategy>` | Override the auto-routing strategy (`cost`\|`balanced`\|`performance`). Applied when execution reaches the current workflow or a workflow-call child with effective `auto_routing`; otherwise, TAKT warns and ignores the option. |
 | `--model <name>` | Override agent model |
 | `-c, --continue` | Continue from the last assistant session for the current project directory and provider |
+| `--tui` | The TUI is what a terminal gets anyway: with a TTY on stdin and stdout the task conversation is drawn by Ink whether or not this flag is given, and piped input keeps the plain reader. The flag only makes that requirement explicit — without a TTY it fails with `--tui requires an interactive terminal` instead of falling back. Workflow, mode and post-summary selection stay on the usual selectors; only the conversation is drawn by the TUI. Enter sends, Shift+Enter or Option+Enter inserts a newline, Ctrl+K cuts to the end of the line, Esc interrupts the answer in progress, and anything queued behind it is sent as the next turn. Lines submitted while the assistant is answering are queued and sent when it finishes; ↑ takes the last one back until the queue starts moving. The session stays open after a task runs, until /cancel |
 
 `--workflow` is the canonical option.
 
@@ -45,9 +46,9 @@ takt hello
 ### Flow
 
 1. Select workflow
-2. Select interactive mode (assistant / persona / quiet / passthrough)
+2. Select interactive mode (assistant / grill-me / persona / quiet / passthrough)
 3. Refine task content through conversation with AI
-4. Finalize task instructions with `/go` (you can also add additional instructions like `/go additional instructions`), or use `/play <task>` to execute a task immediately
+4. Finalize task instructions with `/go` (you can also add additional instructions like `/go additional instructions`)
 5. Execute (run workflow, create PR)
 
 ### Interactive Mode Variants
@@ -55,6 +56,7 @@ takt hello
 | Mode | Description |
 |------|-------------|
 | `assistant` | Default. AI asks clarifying questions before generating task instructions. |
+| `grill-me` | Resolves material decision branches one recommended question at a time, then suggests `/go` when the requirements are ready. |
 | `persona` | Conversation with the first step's persona (uses its system prompt and tools). |
 | `quiet` | Generates task instructions without asking questions (best-effort). |
 | `passthrough` | Passes user input directly as task text without AI processing. |
@@ -119,7 +121,7 @@ Launch it from an ACP-compatible client as the agent command:
 takt-acp
 ```
 
-The ACP session `cwd` must be an absolute path. TAKT uses that directory as both the conversation base and workflow project root. By default, `session/prompt` is an enqueue-first conversation entrypoint: prompts such as "enqueue this task" or "make it a pending task" add a pending task to `.takt/tasks.yaml` with `worktree: true`, and the task can later be executed with `takt run`. Direct workflow execution is kept only for explicit requests such as "run it now" or "execute now"; ambiguous prompts stay in the conversation. The main ACP UX does not depend on `/go` or `/play`: `/go` follows the session `defaultAction` and is enqueued by default, while `/play <task>` remains a compatibility-only explicit direct execution command.
+The ACP session `cwd` must be an absolute path. TAKT uses that directory as both the conversation base and workflow project root. By default, `session/prompt` is an enqueue-first conversation entrypoint: prompts such as "enqueue this task" or "make it a pending task" add a pending task to `.takt/tasks.yaml` with `worktree: true`, and the task can later be executed with `takt run`. Direct workflow execution is kept only for explicit requests such as "run it now" or "execute now"; ambiguous prompts stay in the conversation. The main ACP UX does not depend on `/go`, which follows the session `defaultAction` and is enqueued by default.
 
 If an ACP prompt creates or directly executes a task, TAKT uses the `default` workflow unless the conversation result explicitly provides another workflow.
 
@@ -196,7 +198,7 @@ takt exec backend  # start from a named preset
 takt exec --list   # list available exec presets
 ```
 
-Preset lookup order is project `.takt/exec/presets/`, then global `$TAKT_CONFIG_DIR/exec/presets/` (or `~/.takt/exec/presets/` when unset), then builtin `builtins/exec/presets/`. Builtin/default presets define agent roles, facets, and loop thresholds only. Provider and model are resolved from normal TAKT configuration when exec mode starts, and the same resolved values are used for the Assistant dialogue, `/setup` display, and workflow generation. An exec config overrides provider/model only when it sets them explicitly. `effort` is emitted only when it is explicitly configured. Each Codex repository or user Skill scope is inherited when that scope is omitted; explicit `provider_options.codex.skills` values take precedence, and the resolved values are embedded in the generated workflow. Changes made in `/setup` are saved to `$TAKT_CONFIG_DIR/exec.yaml` (or `~/.takt/exec.yaml` when unset) for the next exec session.
+Preset lookup order is project `.takt/exec/presets/`, then global `$TAKT_CONFIG_DIR/exec/presets/` (or `~/.takt/exec/presets/` when unset), then builtin `builtins/exec/presets/`. Builtin/default presets define agent roles, facets, and loop thresholds only. Provider and model are resolved from normal TAKT configuration when exec mode starts, and the same resolved values are used for the Assistant dialogue and `/setup` display. The generated workflow uses capabilities for tool/skill needs; provider/model/options remain in `runtime.yaml` (or retained legacy config). `effort` is emitted only when it is explicitly configured. Each Codex repository or user Skill scope is inherited when that scope is omitted, and the resolved capability is emitted in the generated workflow. Changes made in `/setup` are saved to `$TAKT_CONFIG_DIR/exec.yaml` (or `~/.takt/exec.yaml` when unset) for the next exec session.
 
 Inside exec mode:
 
@@ -214,7 +216,7 @@ On `/go`, TAKT writes `.takt/exec/workflow.yaml` and executes it through the exi
 
 Image attachments are available while editing exec input. Use `/paste-image` or `Ctrl+V` to attach a clipboard image on macOS, or paste an OSC 1337 inline image from a compatible terminal. TAKT inserts a `[Image #N]` placeholder. The image is sent with an Assistant request only when the current message or `/go <note>` references that placeholder; placeholders that were not attached in the session are treated as normal text. When `/go` runs, referenced stored images are copied into the generated task spec and listed in its attachment section. Supported formats are PNG, JPEG, GIF, and WebP; inline and clipboard images are limited to 10 MiB. TAKT rejects unsupported image data, mismatched inline-image filename types, oversized images, and stored attachments whose temp path is missing, a symlink, or not a regular file. Providers without native image input receive local path references in the prompt.
 
-Generated exec workflows use `session_key` to keep Worker agent, Review agent, Replanning agent, and loop detection sessions separate even when they share a persona. In user-authored workflows, `session_key` is supported only on normal agent steps, parallel sub-steps, and `loop_monitors.judge`; it is not supported on system steps, workflow_call steps, or parallel parent steps. The effective session key is suffixed with the resolved provider.
+Generated exec workflows use `session_key` to keep Worker agent, Review agent, and Replanning agent sessions separate even when they share a persona. Loop detection judges always use fresh sessions. In user-authored workflows, `session_key` is supported only on normal agent steps and parallel sub-steps; it is not supported on system steps, workflow_call steps, loop-monitor judges, or parallel parent steps. The effective session key is suffixed with the resolved provider.
 
 ## GitHub Issue Tasks
 

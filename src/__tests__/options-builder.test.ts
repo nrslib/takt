@@ -2,22 +2,34 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
 import { buildFindingManagerStep } from '../core/workflow/findings/manager-step.js';
 import * as capabilityModule from '../infra/providers/provider-capabilities.js';
-import type { WorkflowStep } from '../core/models/types.js';
+import type { WorkflowResumePointEntry, WorkflowStep } from '../core/models/types.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 
 function createStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
+  const hasEngineProviderFields = overrides.provider !== undefined
+    || overrides.model !== undefined
+    || overrides.providerOptions !== undefined
+    || overrides.providerSpecified !== undefined
+    || overrides.modelSpecified !== undefined;
   return {
     name: 'reviewers',
     personaDisplayName: 'Reviewers',
     instruction: 'review',
     passPreviousResponse: false,
+    ...(hasEngineProviderFields ? { engineSynthesized: true } : {}),
     ...overrides,
   };
 }
 
 type BuilderEngineOverrides = Partial<WorkflowEngineOptions> & {
   workflowName?: string;
+  failureDir?: string;
 };
+
+interface PhaseContextSources {
+  readonly currentWorkflowStack?: readonly WorkflowResumePointEntry[];
+  readonly reportsRootDir?: string;
+}
 
 function createProcessSafetyByStep(parentRunPid: number): WorkflowEngineOptions['phase1ProcessSafetyByStep'] {
   return {
@@ -25,7 +37,14 @@ function createProcessSafetyByStep(parentRunPid: number): WorkflowEngineOptions[
   };
 }
 
-function createBuilder(step: WorkflowStep, engineOverrides: BuilderEngineOverrides = {}): OptionsBuilder {
+function createBuilder(
+  step: WorkflowStep,
+  engineOverrides: BuilderEngineOverrides = {},
+  recordActivity: NonNullable<ConstructorParameters<typeof OptionsBuilder>[14]> = () => {},
+  phaseContextSources: PhaseContextSources = {},
+): OptionsBuilder {
+  const currentWorkflowStack = phaseContextSources.currentWorkflowStack;
+  const reportsRootDir = phaseContextSources.reportsRootDir;
   const engineOptions: WorkflowEngineOptions = {
     projectCwd: '/project',
     provider: 'codex',
@@ -47,9 +66,17 @@ function createBuilder(step: WorkflowStep, engineOverrides: BuilderEngineOverrid
     () => [{ name: step.name }],
     () => engineOverrides.workflowName ?? 'default',
     () => 'test workflow',
-    undefined,
-    undefined,
+    currentWorkflowStack === undefined
+      ? undefined
+      : () => [...currentWorkflowStack],
     () => 'Original workflow task',
+    undefined,
+    engineOverrides.failureDir === undefined ? undefined : () => engineOverrides.failureDir,
+    () => engineOptions.abortSignal,
+    recordActivity,
+    reportsRootDir === undefined
+      ? undefined
+      : () => reportsRootDir,
   );
 }
 
@@ -71,6 +98,208 @@ describe('OptionsBuilder.buildBaseOptions', () => {
       providerProfiles: {
         codex: { defaultPermissionMode: 'full' },
       },
+    });
+  });
+
+  it('passes runtime defaults permission mode to the actual provider call', () => {
+    const step = createStep();
+    const builder = createBuilder(step, {
+      providerSource: 'runtime-v1',
+      providerPermissionMode: 'readonly',
+    });
+
+    const options = builder.buildBaseOptions(step);
+
+    expect(options.permissionMode).toBe('readonly');
+    expect(options.permissionResolution).toBeUndefined();
+  });
+
+  it('passes the winning persona profile permission mode to the actual provider call', () => {
+    const step = createStep({ personaDisplayName: 'Reviewers' });
+    const builder = createBuilder(step, {
+      personaProviders: {
+        Reviewers: { provider: 'claude', model: 'review-model', permissionMode: 'edit' },
+      },
+    });
+
+    const options = builder.buildBaseOptions(step);
+
+    expect(options.resolvedProvider).toBe('claude');
+    expect(options.permissionMode).toBe('edit');
+  });
+
+  it.each([
+    { label: 'same provider', targetProvider: 'codex' as const },
+    { label: 'different provider', targetProvider: 'claude' as const },
+  ])('does not leak defaults profile capabilities into a plain target profile ($label)', ({ targetProvider }) => {
+    const step = createStep({ personaDisplayName: 'Reviewers' });
+    const builder = createBuilder(step, {
+      provider: 'codex',
+      providerSource: 'runtime-v1',
+      providerOptionsProviderSource: 'runtime-v1',
+      providerOptions: {
+        codex: { networkAccess: false },
+        claude: { allowedTools: ['Read'] },
+      },
+      personaProviders: {
+        Reviewers: { provider: targetProvider, model: 'target-model' },
+      },
+    });
+
+    expect(builder.buildAgentOptions(step).providerOptions).toBeUndefined();
+  });
+
+  it('does not leak a runtime default profile into a direct step provider override', () => {
+    const step = createStep({ provider: 'claude', model: 'step-model' });
+    const builder = createBuilder(step, {
+      provider: 'codex',
+      providerSource: 'runtime-v1',
+      providerOptionsProviderSource: 'runtime-v1',
+      providerOptions: {
+        codex: { networkAccess: false },
+        claude: { allowedTools: ['Read'] },
+      },
+    });
+
+    expect(builder.buildAgentOptions(step).providerOptions).toBeUndefined();
+  });
+
+  it('passes only the winning target profile capabilities to the actual provider call', () => {
+    const step = createStep({ personaDisplayName: 'Reviewers' });
+    const builder = createBuilder(step, {
+      provider: 'codex',
+      providerSource: 'runtime-v1',
+      providerOptionsProviderSource: 'runtime-v1',
+      providerOptions: {
+        codex: { networkAccess: false },
+      },
+      personaProviders: {
+        Reviewers: {
+          provider: 'claude',
+          model: 'target-model',
+          providerOptions: { claude: { allowedTools: ['Read', 'Glob'] } },
+        },
+      },
+    });
+
+    expect(builder.buildAgentOptions(step).providerOptions).toEqual({
+      claude: { allowedTools: ['Read', 'Glob'] },
+    });
+  });
+
+  it('drops synthesized seat options and permission when a CLI provider override wins', () => {
+    const step = createStep({
+      provider: 'claude',
+      model: 'seat-model',
+      internalProviderOptions: {
+        codex: { networkAccess: false },
+        claude: { allowedTools: ['Read'] },
+      },
+      internalPermissionMode: 'readonly',
+    });
+    const builder = createBuilder(step, {
+      provider: 'codex',
+      providerSource: 'cli',
+      model: 'cli-model',
+      modelSource: 'cli',
+    });
+
+    const options = builder.buildAgentOptions(step);
+
+    expect(options.resolvedProvider).toBe('codex');
+    expect(options.resolvedModel).toBe('cli-model');
+    expect(options.providerOptions).toBeUndefined();
+    expect(options.permissionMode).toBeUndefined();
+  });
+
+  it('keeps synthesized seat options and permission when the seat provider wins', () => {
+    const step = createStep({
+      provider: 'claude',
+      model: 'seat-model',
+      internalProviderOptions: { claude: { allowedTools: ['Read'] } },
+      internalPermissionMode: 'readonly',
+    });
+    const options = createBuilder(step).buildAgentOptions(step);
+
+    expect(options.providerOptions).toEqual({ claude: { allowedTools: ['Read'] } });
+    expect(options.permissionMode).toBe('readonly');
+  });
+
+  it('keeps synthesized seat options and permission across a model-only CLI override', () => {
+    const step = createStep({
+      provider: 'codex',
+      model: 'seat-model',
+      internalProviderOptions: { codex: { networkAccess: false } },
+      internalPermissionMode: 'readonly',
+    });
+    const options = createBuilder(step, {
+      provider: 'codex',
+      providerSource: 'runtime-v1',
+      model: 'cli-model',
+      modelSource: 'cli',
+    }).buildAgentOptions(step);
+
+    expect(options.resolvedProvider).toBe('codex');
+    expect(options.resolvedModel).toBe('cli-model');
+    expect(options.providerOptions).toEqual({ codex: { networkAccess: false } });
+    expect(options.permissionMode).toBe('readonly');
+  });
+
+  it.each([
+    { label: 'persona', personaOptions: { codex: { networkAccess: false } }, tagOptions: undefined },
+    { label: 'tag', personaOptions: undefined, tagOptions: { codex: { networkAccess: false } } },
+  ])('drops a constrained $label profile when a plain step profile wins', ({ personaOptions, tagOptions }) => {
+    const step = createStep({ name: 'reviewers', personaDisplayName: 'Reviewers', tags: ['review'] });
+    const builder = createBuilder(step, {
+      provider: 'codex',
+      providerSource: 'runtime-v1',
+      providerOptionsProviderSource: 'runtime-v1',
+      personaProviders: personaOptions === undefined ? undefined : {
+        Reviewers: { provider: 'codex', model: 'persona-model', providerOptions: personaOptions },
+      },
+      providerRouting: {
+        tags: tagOptions === undefined ? undefined : {
+          review: { provider: 'codex', model: 'tag-model', providerOptions: tagOptions },
+        },
+        steps: { reviewers: { provider: 'claude', model: 'step-model' } },
+      },
+    });
+
+    expect(builder.buildAgentOptions(step).providerOptions).toBeUndefined();
+  });
+
+  it('keeps workflow capability options independent of the winning runtime profile', () => {
+    const step = createStep({
+      personaDisplayName: 'Reviewers',
+      capabilityProviderOptions: { claude: { allowedTools: ['Read'] } },
+    });
+    const builder = createBuilder(step, {
+      provider: 'codex',
+      providerSource: 'runtime-v1',
+      providerOptionsProviderSource: 'runtime-v1',
+      personaProviders: {
+        Reviewers: { provider: 'claude', model: 'target-model' },
+      },
+    });
+
+    expect(builder.buildAgentOptions(step).providerOptions).toEqual({
+      claude: { allowedTools: ['Read'] },
+    });
+  });
+
+  it('keeps legacy persona and step option layering when runtime profiles are not active', () => {
+    const step = createStep({
+      personaDisplayName: 'Reviewers',
+      providerOptions: { codex: { reasoningEffort: 'high' } },
+    });
+    const builder = createBuilder(step, {
+      personaProviders: {
+        Reviewers: { provider: 'codex', providerOptions: { codex: { networkAccess: false } } },
+      },
+    });
+
+    expect(builder.buildAgentOptions(step).providerOptions).toEqual({
+      codex: { networkAccess: false, reasoningEffort: 'high' },
     });
   });
 
@@ -308,6 +537,80 @@ describe('OptionsBuilder.buildBaseOptions', () => {
     });
   });
 
+  it.each([
+    { profileFastMode: false, configFastMode: true },
+    { profileFastMode: true, configFastMode: false },
+  ])('uses the config/env winner for runtime profile options and its source', ({
+    profileFastMode,
+    configFastMode,
+  }) => {
+    const step = createStep();
+    const builder = createBuilder(step, {
+      providerSource: 'runtime-v1',
+      providerOptionsProviderSource: 'runtime-v1',
+      providerOptions: { codex: { fastMode: profileFastMode } },
+      configProviderOptions: { codex: { fastMode: configFastMode } },
+      providerOptionsSource: 'env',
+      providerOptionsOriginResolver: (path: string) => (
+        path === 'codex.fastMode' ? 'env' : 'default'
+      ),
+    });
+
+    const providerInfo = builder.resolveStepProviderModel(step);
+
+    expect(providerInfo.providerOptions).toEqual({ codex: { fastMode: configFastMode } });
+    expect(providerInfo.providerOptionsSources).toEqual({
+      'codex.fastMode': 'env',
+    });
+  });
+
+  it('attributes an explicit runtime profile option to runtime-v1', () => {
+    const step = createStep();
+    const builder = createBuilder(step, {
+      providerSource: 'runtime-v1',
+      providerOptionsProviderSource: 'runtime-v1',
+      providerOptions: { codex: { fastMode: false } },
+    });
+
+    const providerInfo = builder.resolveStepProviderModel(step);
+
+    expect(providerInfo.providerOptions).toEqual({ codex: { fastMode: false } });
+    expect(providerInfo.providerOptionsSources).toEqual({
+      'codex.fastMode': 'runtime-v1',
+    });
+  });
+
+  it('attributes profile options included by a runtime-resolved provider layer', () => {
+    const step = createStep();
+    const builder = createBuilder(step, {
+      providerSource: 'auto.fallback',
+      providerOptionsProviderSource: 'auto.fallback',
+      providerOptions: { codex: { fastMode: false } },
+    });
+
+    const providerInfo = builder.resolveStepProviderModel(step, {
+      providerInfo: {
+        provider: 'codex',
+        model: 'gpt-auto',
+        providerSource: 'auto.fallback',
+        modelSource: 'auto.fallback',
+        providerOptions: { codex: { networkAccess: true } },
+      },
+      teamLeaderPart: { partAllowedTools: [] },
+    });
+
+    expect(providerInfo.providerOptions).toEqual({
+      codex: {
+        fastMode: false,
+        networkAccess: true,
+      },
+    });
+    expect(providerInfo.providerOptionsSources).toEqual({
+      'codex.fastMode': 'auto.fallback',
+      'codex.networkAccess': 'auto.fallback',
+    });
+  });
+
   it('buildBaseOptions は takt-default の implement でも process safety を workflowMeta に含めない', () => {
     const step = createStep({ name: 'implement' });
     const builder = createBuilder(step, {
@@ -525,48 +828,23 @@ describe('OptionsBuilder auto routing deterministic completion', () => {
     ],
     defaultPool: 'general',
     candidatePools: { general: { candidates: ['coding'], fallback: 'coding' } },
+    poolRules: { steps: { implement: 'general', 'summary-generator': 'general' } },
     rules: { steps: { implement: 'coding' } },
   };
 
-  function createManagerLikeStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
+  function createStructuredStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
     return createStep({
-      name: 'findings-manager',
+      name: 'summary-generator',
       structuredOutput: {
-        schemaRef: 'takt.findings.manager',
+        schemaRef: 'takt.summary.generator',
         schema: { type: 'object' },
       },
       ...overrides,
     });
   }
 
-  it('resolveStepProviderModel falls back to the strategy default candidate when auto routing suppresses the config provider', () => {
-    // 事故の再現: config デフォルト provider は auto_routing 有効時に抑止される。
-    // 実行ループの AI ルーターを通らない findings-manager（実際に合成される
-    // ステップそのもの）も、共通の解決経路で strategy デフォルトまで落ち、
-    // buildAgentOptions の structured_output ガードを通過すること。
-    const managerStep = buildFindingManagerStep({
-      contract: {
-        manager: {
-          persona: 'findings-manager',
-          instruction: 'findings-manager',
-          outputContract: 'findings-manager',
-        },
-      },
-    });
-    const builder = createBuilder(managerStep, { provider: 'codex', providerSource: 'global', autoRouting });
-
-    const resolved = builder.resolveStepProviderModel(managerStep);
-
-    expect(resolved).toMatchObject({
-      provider: 'codex',
-      model: 'default-candidate-model',
-      providerSource: 'auto.fallback',
-    });
-    expect(builder.buildAgentOptions(managerStep).resolvedProvider).toBe('codex');
-  });
-
   it('resolveStepProviderModel applies auto routing rules before the strategy default', () => {
-    const step = createManagerLikeStep({ name: 'implement' });
+    const step = createStructuredStep({ name: 'implement' });
     const builder = createBuilder(step, { provider: 'codex', providerSource: 'global', autoRouting });
 
     expect(builder.resolveStepProviderModel(step)).toMatchObject({
@@ -576,7 +854,7 @@ describe('OptionsBuilder auto routing deterministic completion', () => {
   });
 
   it('resolveStepProviderModel prefers runtime providerInfo routed by the run loop over the deterministic completion', () => {
-    const step = createManagerLikeStep();
+    const step = createStructuredStep();
     const builder = createBuilder(step, { provider: 'codex', providerSource: 'global', autoRouting });
 
     const resolved = builder.resolveStepProviderModel(step, {
@@ -587,12 +865,12 @@ describe('OptionsBuilder auto routing deterministic completion', () => {
   });
 
   it('resolveStepProviderModel does not override a provider resolved by persona providers', () => {
-    const step = createManagerLikeStep({ personaDisplayName: 'findings-manager' });
+    const step = createStructuredStep({ personaDisplayName: 'summary-generator' });
     const builder = createBuilder(step, {
       provider: 'codex',
       providerSource: 'global',
       autoRouting,
-      personaProviders: { 'findings-manager': { provider: 'claude', model: 'sonnet' } },
+      personaProviders: { 'summary-generator': { provider: 'claude', model: 'sonnet' } },
     });
 
     expect(builder.resolveStepProviderModel(step)).toMatchObject({
@@ -603,7 +881,7 @@ describe('OptionsBuilder auto routing deterministic completion', () => {
   });
 
   it('resolveStepProviderModelBeforeAutoRouting leaves the provider unresolved so the AI router keeps its say', () => {
-    const step = createManagerLikeStep();
+    const step = createStructuredStep();
     const builder = createBuilder(step, { provider: 'codex', providerSource: 'global', autoRouting });
 
     expect(builder.resolveStepProviderModelBeforeAutoRouting(step).provider).toBeUndefined();
@@ -633,6 +911,55 @@ describe('OptionsBuilder.buildResumeOptions', () => {
     expect(options.sessionId).toBe('session-123');
   });
 
+  it('omits synthetic but preserves explicit unsupported controls for DeepSeek Harness report phases', () => {
+    const step = createStep({ provider: 'deepseek-harness', model: 'deepseek-v4-flash' });
+    const builder = createBuilder(step);
+
+    const resumeOptions = builder.buildResumeOptions(step, 'session-123', { maxTurns: 3 });
+    const newSessionOptions = builder.buildNewSessionReportOptions(step, {
+      allowedTools: ['Read'],
+      maxTurns: 3,
+    });
+
+    expect(resumeOptions.permissionMode).toBeUndefined();
+    expect(resumeOptions.allowedTools).toBeUndefined();
+    expect(newSessionOptions.permissionMode).toBeUndefined();
+    expect(newSessionOptions.allowedTools).toEqual(['Read']);
+
+    const fallbackBuilder = createBuilder(
+      createStep({ provider: 'opencode', model: 'opencode/report-model' }),
+      { reportFallbackProvider: { provider: 'deepseek-harness', model: 'deepseek-v4-flash' } },
+    );
+    const fallbackOptions = fallbackBuilder.buildFallbackReportOptions(
+      createStep({ provider: 'opencode', model: 'opencode/report-model' }),
+      { cwd: '/project', resolvedProvider: 'opencode' },
+      { allowedTools: [], maxTurns: 3 },
+    );
+
+    expect(fallbackOptions).toBeDefined();
+    expect(fallbackOptions?.permissionMode).toBeUndefined();
+    expect(fallbackOptions?.allowedTools).toBeUndefined();
+  });
+
+  it('preserves an explicit permission requirement for DeepSeek report phases', () => {
+    const step = createStep({
+      provider: 'deepseek-harness',
+      model: 'deepseek-v4-flash',
+      requiredPermissionMode: 'full',
+    });
+    const builder = createBuilder(step);
+
+    const options = builder.buildNewSessionReportOptions(step, {
+      allowedTools: [],
+      maxTurns: 3,
+    });
+
+    expect(options.permissionMode).toBeUndefined();
+    expect(options.permissionResolution).toMatchObject({
+      requiredPermissionMode: 'full',
+    });
+  });
+
   it('report/status phase では takt-default の implement でも process safety を付与しない', () => {
     const step = createStep({ name: 'implement' });
     const builder = createBuilder(step, {
@@ -643,6 +970,89 @@ describe('OptionsBuilder.buildResumeOptions', () => {
     const options = builder.buildResumeOptions(step, 'session-123', { maxTurns: 3 });
 
     expect(options.workflowMeta?.processSafety).toBeUndefined();
+  });
+
+  it('never requests the step structured output on report/status phases', () => {
+    // Given: structured_output は Phase 1 の遷移判定用。Phase 2 で要求すると provider が
+    // スキーマどおりの JSON を返し、それが report file になる（issue #1242）
+    // report fallback は primary が opencode のときだけ成立するので、fallback 分岐まで
+    // 到達させるために step provider を opencode にする
+    const step = createStep({
+      provider: 'opencode',
+      model: 'opencode/qwen3-coder-next',
+      structuredOutput: {
+        schemaRef: 'researcher-status',
+        schema: {
+          type: 'object',
+          properties: { status: { type: 'string' } },
+          required: ['status'],
+          additionalProperties: false,
+        },
+      },
+    });
+    const builder = createBuilder(step, {
+      reportFallbackProvider: { provider: 'mock', model: 'mock-report-model' },
+    });
+
+    // When
+    const resumeOptions = builder.buildResumeOptions(step, 'session-123', { maxTurns: 3 });
+    const newSessionOptions = builder.buildNewSessionReportOptions(step, {
+      allowedTools: [],
+      maxTurns: 3,
+    });
+    const fallbackOptions = builder.buildFallbackReportOptions(step, newSessionOptions, {
+      allowedTools: [],
+      maxTurns: 3,
+    });
+
+    // Then
+    // fallback 分岐が実際に実行されたことを先に固定する。optional chaining のままだと
+    // buildFallbackReportOptions が undefined を返しても outputSchema の検証が通ってしまう。
+    if (fallbackOptions === undefined) {
+      throw new Error('Expected fallback report options');
+    }
+    expect(fallbackOptions.resolvedProvider).toBe('mock');
+    expect(resumeOptions.outputSchema).toBeUndefined();
+    expect(newSessionOptions.outputSchema).toBeUndefined();
+    expect(fallbackOptions.outputSchema).toBeUndefined();
+  });
+
+  it('read-only phase options retain the workflow deadline activity callback', () => {
+    const step = createStep({ provider: 'opencode', model: 'opencode/report-model' });
+    const recordActivity = vi.fn();
+    const builder = createBuilder(step, {
+      reportFallbackProvider: { provider: 'mock', model: 'mock-report-model' },
+    }, recordActivity);
+    const resumeOptions = builder.buildResumeOptions(step, 'session-123', { maxTurns: 3 });
+    const newSessionOptions = builder.buildNewSessionReportOptions(step, {
+      allowedTools: [],
+      maxTurns: 3,
+    });
+    const fallbackOptions = builder.buildFallbackReportOptions(step, newSessionOptions, {
+      allowedTools: [],
+      maxTurns: 3,
+    });
+
+    if (fallbackOptions === undefined) {
+      throw new Error('Expected fallback report options');
+    }
+    resumeOptions.onActivity?.({ kind: 'attempt_started' });
+    newSessionOptions.onActivity?.({ kind: 'attempt_started' });
+    fallbackOptions.onActivity?.({ kind: 'attempt_started' });
+
+    expect(recordActivity).toHaveBeenCalledTimes(3);
+    expect(recordActivity).toHaveBeenNthCalledWith(1, {
+      kind: 'attempt_started',
+      executionUnitKey: step.name,
+    });
+    expect(recordActivity).toHaveBeenNthCalledWith(2, {
+      kind: 'attempt_started',
+      executionUnitKey: step.name,
+    });
+    expect(recordActivity).toHaveBeenNthCalledWith(3, {
+      kind: 'attempt_started',
+      executionUnitKey: step.name,
+    });
   });
 
   it('removes report/status phase maxTurns when provider does not support it', () => {
@@ -688,7 +1098,7 @@ describe('OptionsBuilder.buildNewSessionReportOptions', () => {
     expect(options.workflowMeta?.processSafety).toBeUndefined();
   });
 
-  it('should enforce readonly permission without provider profile escalation for new-session report phase', () => {
+  it('should enforce readonly permission for new-session report phase', () => {
     const step = createStep({ requiredPermissionMode: 'full' });
     const builder = createBuilder(step, {
       bypassPermissions: true,
@@ -915,6 +1325,36 @@ describe('OptionsBuilder.buildFallbackReportOptions', () => {
       sessionId: undefined,
     });
   });
+
+  it('should expose report resolution coordinates through status judgment context', () => {
+    const step = createStep({ name: 'final-gate' });
+    const currentWorkflowStack: WorkflowResumePointEntry[] = [{
+      workflow: 'review-gate',
+      workflow_ref: 'review-gate',
+      step: 'final-gate',
+      kind: 'agent',
+      occurrence: 1,
+    }];
+    const builder = createBuilder(step, {
+      structuredCaller: { judgeStatus: vi.fn() },
+    }, undefined, {
+      currentWorkflowStack,
+      reportsRootDir: '/project/.takt/runs/target-run/reports',
+    });
+    const state = {
+      currentStep: step.name,
+      stepCount: 1,
+      history: [],
+      personaSessions: new Map<string, string>(),
+    };
+
+    const ctx = builder.buildPhaseRunnerContext(step, state, 'Phase 1 response', vi.fn());
+
+    expect(ctx.reportsRootDir).toBe('/project/.takt/runs/target-run/reports');
+    expect(ctx.resumeReportConsumerKey).toBe(
+      '{"workflow":"review-gate","step":"final-gate","calls":[]}',
+    );
+  });
 });
 
 describe('OptionsBuilder.buildAgentOptions', () => {
@@ -1105,6 +1545,33 @@ describe('OptionsBuilder.buildAgentOptions', () => {
       docs: { type: 'stdio', command: 'docs-mcp' },
       playwright: { type: 'stdio', command: 'playwright-mcp' },
     });
+  });
+
+  it('includes session-boundary mcpServers in the server-set identity', () => {
+    const step = createStep({ provider: 'claude' });
+    const builder = createBuilder(step, {
+      provider: 'claude',
+      mcpAssignment: {
+        servers: {
+          runtime: { type: 'stdio', command: 'runtime-mcp' },
+        },
+        defaults: { servers: ['runtime'] },
+      },
+      mcpServers: {
+        session: { type: 'stdio', command: 'session-mcp' },
+      },
+    });
+
+    const options = builder.buildAgentOptions(step);
+
+    expect(options.mcpServers).toEqual({
+      runtime: { type: 'stdio', command: 'runtime-mcp' },
+      session: { type: 'stdio', command: 'session-mcp' },
+    });
+    expect(options.mcpServerIdentity).toBe(
+      '["runtime",{"type":"stdio","command":"runtime-mcp","args":[]}],'
+        + '["session",{"type":"stdio","command":"session-mcp","args":[]}]',
+    );
   });
 
   it('fails fast when session and step mcpServers use the same name', () => {

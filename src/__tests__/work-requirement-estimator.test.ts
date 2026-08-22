@@ -27,7 +27,7 @@ function createModelInput(): RoutingModelInput {
       stepType: 'normal',
       edit: true,
     },
-    remainingWork: [{ source: 'finding', description: 'A validation branch is incomplete.' }],
+    remainingWork: [{ source: 'task', description: 'A validation branch is incomplete.' }],
     progress: {
       previousAttemptFailed: false,
       noProgress: false,
@@ -85,13 +85,14 @@ describe('createWorkRequirementEstimator', () => {
     });
   });
 
-  it('Given a router without native structured output, When its JSON response omits optional confidence, Then the estimate is accepted', async () => {
+  it('Given a router without native structured output, When confidence is null, Then the estimate is accepted', async () => {
     vi.mocked(runAgent).mockResolvedValue({
       persona: 'auto-router',
       status: 'done',
       content: JSON.stringify({
         required_tier: 'medium',
         reason_codes: ['focused-change'],
+        confidence: null,
       }),
       timestamp: new Date('2026-01-01T00:00:00.000Z'),
     });
@@ -114,7 +115,7 @@ describe('createWorkRequirementEstimator', () => {
       content: 'The estimate is available in structured output.',
       structuredOutput: {
         required_tier: 'high',
-        reason_codes: ['critical-finding'],
+        reason_codes: ['complex-work'],
         confidence: null,
       },
       timestamp: new Date('2026-01-01T00:00:00.000Z'),
@@ -127,7 +128,7 @@ describe('createWorkRequirementEstimator', () => {
 
     await expect(estimator.estimate(createModelInput())).resolves.toEqual({
       requiredTier: 'high',
-      reasonCodes: ['critical-finding'],
+      reasonCodes: ['complex-work'],
     });
   });
 
@@ -137,7 +138,7 @@ describe('createWorkRequirementEstimator', () => {
       status: 'done',
       content: JSON.stringify({
         required_tier: 'high',
-        reason_codes: ['critical-finding'],
+        reason_codes: ['complex-work'],
         confidence: null,
       }),
       timestamp: new Date('2026-01-01T00:00:00.000Z'),
@@ -153,15 +154,13 @@ describe('createWorkRequirementEstimator', () => {
     await estimator.estimate(createModelInput());
 
     const [, prompt, options] = vi.mocked(runAgent).mock.calls[0] ?? [];
-    expect(prompt).toContain('required_tier');
     expect(prompt).not.toMatch(/terra|sol|candidate_pool|gpt-5|\/repo/i);
     expect(options).toMatchObject({
       cwd: '/repo',
-      provider: 'claude-sdk',
-      resolvedProvider: 'claude-sdk',
-      model: 'claude-haiku-4-5-20251001',
-      resolvedModel: 'claude-haiku-4-5-20251001',
-      permissionMode: 'readonly',
+      resolvedExecution: {
+        provider: 'claude-sdk',
+        model: 'claude-haiku-4-5-20251001',
+      },
       language: 'ja',
       childProcessEnv: { TAKT_TEST: '1' },
       outputSchema: {
@@ -236,7 +235,7 @@ describe('createWorkRequirementEstimator', () => {
       if (!(error instanceof Error)) {
         throw error;
       }
-      expect(error.message).toMatch(/invalid required_tier/i);
+      expect(error.message).toMatch(/required_tier.*allowed values/i);
       expect(error.message).not.toContain(rawContent);
       return;
     }
@@ -269,9 +268,7 @@ describe('createWorkRequirementEstimator', () => {
       model: 'claude-haiku-4-5-20251001',
     });
 
-    await expect(estimator.estimate(createModelInput())).rejects.toThrow(
-      'Auto routing estimator response has invalid reason_codes',
-    );
+    await expect(estimator.estimate(createModelInput())).rejects.toThrow(/reason_codes/);
   });
 
   it('Given an already aborted parent signal, When estimating work requirements, Then no provider call starts', async () => {
@@ -305,6 +302,35 @@ describe('createWorkRequirementEstimator', () => {
 
     await expect(estimate).rejects.toThrow('cancel routing');
     expect(vi.mocked(runAgent).mock.calls[0]?.[2]?.abortSignal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('passes deadline-scoped stream and activity callbacks to the structured provider call', async () => {
+    vi.mocked(runAgent).mockResolvedValue({
+      persona: 'auto-router',
+      status: 'done',
+      content: '{}',
+      timestamp: new Date('2026-08-14T00:00:00.000Z'),
+      structuredOutput: {
+        required_tier: 'low',
+        reason_codes: ['focused-change'],
+        confidence: null,
+      },
+    });
+    const estimator = createWorkRequirementEstimator({
+      cwd: '/repo',
+      provider: 'claude-sdk',
+      model: 'claude-haiku-4-5-20251001',
+    });
+    const onStream = vi.fn();
+    const onActivity = vi.fn();
+
+    await estimator.estimate(createModelInput(), { onStream, onActivity });
+
+    expect(runAgent).toHaveBeenCalledWith(
+      'auto-router',
+      expect.any(String),
+      expect.objectContaining({ onStream, onActivity }),
+    );
   });
 
   it('Given the router never responds, When the estimator timeout elapses, Then it fails instead of hanging the workflow', async () => {

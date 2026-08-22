@@ -28,6 +28,7 @@ function toKiroOptions(options: ProviderCallOptions, systemPrompt?: string): Kir
     systemPrompt,
     permissionMode: options.permissionMode,
     onStream: options.onStream,
+    onActivity: options.onActivity,
     kiroApiKey: options.kiroApiKey ?? resolveKiroApiKey(),
     kiroCliPath: resolveKiroCliPath(),
     agent: options.providerOptions?.kiro?.agent,
@@ -38,9 +39,7 @@ function toKiroOptions(options: ProviderCallOptions, systemPrompt?: string): Kir
 
 export class KiroProvider implements Provider {
   readonly supportsStructuredOutput = false;
-  readonly supportsIsolatedStructuredExecution = false;
   readonly supportsNativeImageInput = false;
-  readonly supportsStrictInternalAgentIsolation = false;
   readonly supportedMcpTransports: ReadonlySet<'stdio' | 'sse' | 'http'> = new Set(['stdio', 'http']);
 
   getRuntimeInstructions(_allowedTools?: string[]): string | null {
@@ -61,15 +60,4 @@ export class KiroProvider implements Provider {
     };
   }
 
-  setupIsolatedStructured(config: AgentSetup): ProviderAgent {
-    const call = async (_prompt: string, options: ProviderCallOptions): Promise<AgentResponse> => ({
-      persona: config.name,
-      status: 'error',
-      content: 'Provider "kiro" does not support isolated structured execution',
-      timestamp: new Date(),
-      sessionId: options.sessionId,
-      error: 'Provider "kiro" does not support isolated structured execution',
-    });
-    return { call };
-  }
 }

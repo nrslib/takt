@@ -1,6 +1,6 @@
 import type { ProviderType } from '../../infra/providers/index.js';
 
-export type ExecEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export type ExecEffort = string;
 
 export interface ExecCodexSkillInheritance {
   readonly repo: boolean;

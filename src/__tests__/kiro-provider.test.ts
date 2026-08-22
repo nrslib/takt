@@ -69,12 +69,14 @@ describe('KiroProvider', () => {
 
     const provider = new KiroProvider();
     const agent = provider.setup({ name: 'coder' });
+    const onActivity = vi.fn();
 
     await agent.call('implement', {
       cwd: '/tmp/work',
       model: 'claude-3-opus',
       sessionId: 'sess-1',
       permissionMode: 'full',
+      onActivity,
     });
 
     expect(mockCallKiro).toHaveBeenCalledWith(
@@ -85,6 +87,7 @@ describe('KiroProvider', () => {
         model: 'claude-3-opus',
         sessionId: 'sess-1',
         permissionMode: 'full',
+        onActivity,
         kiroApiKey: 'resolved-key',
         kiroCliPath: '/custom/bin/kiro-cli',
       }),
@@ -201,7 +204,6 @@ describe('KiroProvider', () => {
 
     const options = mockCallKiro.mock.calls[0]?.[2] as Record<string, unknown>;
     expect(options.model).toBe('claude-3-opus');
-    expect(mockLogger.info).not.toHaveBeenCalledWith('Kiro provider does not support model CLI flag; ignoring');
   });
 
   it('Given no model, When agent is called, Then passes undefined model to callKiro', async () => {
@@ -246,25 +248,8 @@ describe('KiroProvider', () => {
     expect(options.outputSchema).toBeUndefined();
     expect(options.imageAttachments).toBeUndefined();
     expect(options.permissionMode).toBe('edit');
-    expect(mockLogger.info).toHaveBeenCalledWith('Kiro provider does not support imageAttachments; ignoring');
   });
 
-  it('Given empty or missing image attachments, When agent is called, Then does not log unsupported image attachments', async () => {
-    mockCallKiro.mockResolvedValue(doneResponse('coder'));
-
-    const provider = new KiroProvider();
-    const agent = provider.setup({ name: 'coder' });
-
-    await agent.call('implement', {
-      cwd: '/tmp/work',
-      imageAttachments: [],
-    });
-    await agent.call('implement', {
-      cwd: '/tmp/work',
-    });
-
-    expect(mockLogger.info).not.toHaveBeenCalledWith('Kiro provider does not support imageAttachments; ignoring');
-  });
 });
 
 describe('ProviderRegistry with Kiro', () => {

@@ -1,30 +1,35 @@
+import { hasFinalDecision } from './final-readiness-decision.mjs';
+
 const NON_ACTIONABLE_FINDING = 'OLD-REVIEW-readme-L1';
 
-function extractSection(output, headings) {
-  const lines = output.split('\n');
-  const start = lines.findIndex((line) => headings.some((heading) => heading.test(line.trim())));
-  if (start < 0) return '';
-  const endOffset = lines.slice(start + 1).findIndex((line) => /^##\s+/.test(line.trim()));
-  const end = endOffset < 0 ? lines.length : start + 1 + endOffset;
-  return lines.slice(start + 1, end).join('\n');
+function hasNearbyEvidence(output, anchor, evidence) {
+  let index = output.indexOf(anchor);
+  while (index >= 0) {
+    const context = output.slice(Math.max(0, index - 300), index + anchor.length + 700);
+    if (evidence.test(context)) return true;
+    index = output.indexOf(anchor, index + anchor.length);
+  }
+  return false;
+}
+
+function hasNearbyReopening(output, anchor) {
+  const lines = output.split(/\r?\n/);
+  return lines.some((line, index) => line.includes(anchor)
+    && /(?:remains?\s+open|requires?\s+(?:a\s+)?fix|(?:is|remains?|becomes?)\s+actionable|再開(?:する|が必要)|修正(?:が)?必要)/i
+      .test([lines[index - 1], line, lines[index + 1]].filter(Boolean).join(' ')));
 }
 
 export default function assertFinalReadinessPrecision(output) {
-  const actionable = extractSection(output, [
-    /^##\s+修正対象\s*family$/i,
-    /^##\s+Actionable Families$/i,
-  ]);
-  const priorFindings = extractSection(output, [
-    /^##\s+前段\s*finding\s*の扱い$/i,
-    /^##\s+Prior Finding Dispositions$/i,
-  ]);
   const checks = [
-    ['mergeable', /(結果:\s*マージ可能|Result:\s*MERGEABLE)/i.test(output)],
-    ['no-actionable-family', actionable.trim().length === 0
-      || !/(FINAL-(?:NEW|PERSIST)-[^\s|]+)/i.test(actionable)],
-    ['non-actionable-preserved', priorFindings.includes(NON_ACTIONABLE_FINDING)
-      && /(adjudicated_non_actionable|非修正対象)/i.test(priorFindings)],
-    ['not-rejected', !/(結果:\s*(修正が必要|タスク全体の再計画が必要|実行環境により判定不能)|Result:\s*(FIX REQUIRED|TASK REPLAN REQUIRED|BLOCKED BY ENVIRONMENT))/i.test(output)],
+    ['approve', hasFinalDecision(output, 'APPROVE')],
+    ['no-actionable-family', !/(FINAL-(?:NEW|PERSIST)-[^\s|]+)/i.test(output)],
+    ['non-actionable-preserved', hasNearbyEvidence(
+      output,
+      NON_ACTIONABLE_FINDING,
+      /(false_positive|overreach|out_of_scope|no_issue_after_verification|environment_unverified|非修正対象(?:として)?(?:維持|扱)|非\s*actionable\s*(?:です|である|であり|で(?=[、。\s]|$)|として(?:維持|扱))|actionable\s+findings?\s*(?:は|が)?\s*(?:ありません|ない|なし)|再開[^。\n]*(?:しない|せず|ない|なし)|(?:not|without)\s+reopen|(?:is|remains?)\s+non-actionable)/i,
+    )],
+    ['old-finding-not-reopened', !hasNearbyReopening(output, NON_ACTIONABLE_FINDING)],
+    ['not-rejected', !hasFinalDecision(output, 'REJECT') && !hasFinalDecision(output, 'BLOCKED')],
   ];
   const failed = checks.filter(([, pass]) => !pass).map(([name]) => name);
 

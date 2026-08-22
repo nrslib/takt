@@ -9,12 +9,13 @@ Prioritize correctness over speed, and code accuracy over ease of implementation
 | Simple > Easy | Prioritize readability over writability |
 | DRY | Eliminate essential duplication |
 | Comments | Why only. Never write What/How |
-| Function size | One function, one responsibility. ~30 lines |
-| File size | ~300 lines as a guideline. Be flexible depending on the task |
-| Boy Scout | Leave touched areas a little better than you found them |
+| Function and file size | Judge by responsibility and reason to change, not line count |
+| Boy Scout | Improve only problems the current change depends on, expands, or newly exposes |
 | Fail Fast | Detect errors early. Never swallow them |
 | Project scripts first | Use project-defined scripts for tool execution. Direct invocation is a last resort |
 | State normalization | Do not keep the same fact in multiple states |
+
+Minimal means a direct change that satisfies the requirement and real safety conditions, not the fewest lines. Do not add structure for predicted flexibility or quality metrics, but do not omit validation, authorization, cleanup, or error handling at a changed trust boundary.
 
 ## No Fallbacks or Default Arguments
 
@@ -169,9 +170,9 @@ Decision criteria:
 
 ### Think Before Adding Conditionals
 
-- Does the same condition exist elsewhere? → Abstract with a pattern
-- Will more branches be added? → Use Strategy/Map pattern
-- Branching on type? → Replace with polymorphism
+- Does the same condition exist elsewhere with the same meaning, contract, and reason to change? → Candidate for a common owner or abstraction
+- Might more branches be added later? → Do not abstract from prediction alone; confirm a real axis of change
+- Do type variants have independent named responsibilities under one replacement contract? → Consider polymorphism
 
 ```typescript
 // ❌ Growing conditionals
@@ -179,9 +180,9 @@ if (type === 'A') { ... }
 else if (type === 'B') { ... }
 else if (type === 'C') { ... }  // Yet another branch
 
-// ✅ Abstract with a Map
-const handlers = { A: handleA, B: handleB, C: handleC };
-handlers[type]?.();
+// ✅ Express a real replacement contract as a domain concept
+const paymentMethods = { card: cardPaymentMethod, bankTransfer: bankTransferPaymentMethod };
+paymentMethods[type]?.pay(order);
 ```
 
 ### Do Not Over-Abstract
@@ -191,8 +192,7 @@ Use abstraction to reduce duplication and real axes of change, and also to name 
 | Criteria | Judgment |
 |----------|----------|
 | A small number of branches differs by event type, state, or domain concept | Use explicit `when` / `switch` |
-| The same operation with the same argument shape repeats in 3+ places | Consider abstraction |
-| A config array or function object is used in only one place | REJECT. Prefer explicit branching first |
+| A config array or function object hides meaning, contracts, or change boundaries so behavior requires cross-reading configuration and execution code | REJECT. Name the concept or use explicit branching |
 | Side effects or removed fields cannot be understood without reading config objects | REJECT |
 | Strategy names a domain concept and makes interchangeable implementations explicit | OK |
 | Branch names read as domain concepts | OK |
@@ -372,9 +372,6 @@ Criteria:
 
 ### Criteria for Splitting
 
-- Has its own state → Separate
-- UI/logic exceeding 50 lines → Separate
-- Has multiple responsibilities → Separate
 - Has an independent reason to change, responsibility, or reuse boundary → Separate. Whether small supporting types may share a file depends on language conventions and file cohesion
 
 ### Reachability When Adding Features
@@ -452,10 +449,9 @@ Do not leave TODO/FIXME comments, empty implementations, stubs, or commented-out
 
 | Criteria | Judgment |
 |----------|----------|
-| TODO/FIXME without an issue number, external blocker, and removal condition | REJECT |
 | Authorization, validation, persistence, or error handling is deferred with TODO | REJECT |
 | Empty implementations, `return null`, `pass`, or commented-out old implementations remain | REJECT |
-| An external dependency or known blocker makes implementation impossible now, with issue number and removal condition documented | Acceptable |
+| An external constraint makes implementation impossible now, and the constraint and condition for removing the TODO/FIXME are documented | Acceptable |
 | TODO only for future extension | REJECT |
 
 ## Sensitive Information Handling
@@ -472,10 +468,10 @@ Do not expose passwords, tokens, API keys, session IDs, auth headers, personal i
 
 ## Error Handling
 
-Centralize error handling. Do not scatter try-catch everywhere.
+Consolidate error translation for the same external contract under the boundary that owns that contract. Do not move different operation or protocol error contracts into one global handler.
 
 ```typescript
-// ❌ Scattered try-catch
+// ❌ Duplicate the same HTTP error translation in each endpoint
 async function createUser(data) {
   try {
     const user = await userService.create(data)
@@ -486,8 +482,7 @@ async function createUser(data) {
   }
 }
 
-// ✅ Centralized handling at the upper layer
-// Handle collectively at the boundary exception translation layer
+// ✅ Translate at the adapter boundary that owns the HTTP contract
 async function createUser(data) {
   return await userService.create(data)  // Let exceptions propagate up
 }
@@ -541,14 +536,15 @@ Request → toInput() → UseCase/Service → Output → Response.from()
 
 ## Shared Code Decisions
 
-Eliminate duplication by default. When logic is essentially the same and should be unified, apply DRY. Do not decide mechanically by count.
+When a second implementation with the same meaning, contract, and reason to change is confirmed, decide whether both belong under a common owner. A direct reference or call relationship is not required when actual code shows that both share the same authority, invariant, and reason to change. Changing only one would make the contract diverge, so both participate in the impact path of the current change.
+
+Do not treat use of the same generic API, visual similarity, or argument-shape similarity as proof of one contract. A real boundary in the current change between external I/O and domain logic, Policy and Mechanism, or public contract and internal implementation may justify an abstraction on the first implementation. Do not abstract from predicted future variants alone.
 
 ### Should Be Shared
 
-- Essentially identical logic duplicated
-- Same style/UI pattern
-- Same validation logic
-- Same formatting logic
+- Logic derived from the same authority and sharing a reason to change
+- Validation or transformation implementing the same external contract
+- UI patterns where changing only one copy would break the contract
 
 ### Should Not Be Shared
 
@@ -644,17 +640,16 @@ Verification approach:
 - **Fallbacks are prohibited by default** - Do not write fallbacks using `?? 'unknown'`, `|| 'default'`, or swallowing via `try-catch`. Propagate errors upward. If absolutely necessary, add a comment explaining why
 - **Explanatory comments** - Express intent through code. Do not write What/How comments
 - **Unused code** - Do not write "just in case" code
-- **Unfinished code** - Do not leave TODO/FIXME without an issue number, external blocker, and removal condition; do not leave stubs or commented-out old code
+- **Unfinished code** - Do not defer required work with TODO/FIXME or leave stubs or commented-out old code
 - **any type** - Do not break type safety
 - **Direct mutation of objects/arrays outside local ownership** - Do not mutate caller-owned, shared, or externally exposed values; create new values instead
 - **console.log** - Do not leave in production code
 - **Sensitive information exposure** - Do not include sensitive data in hardcoded values, logs, error responses, or test output
 - **Scattered hardcoded contract strings** - File names and config key names must be defined as constants in one place. Scattered literals are prohibited
-- **Scattered try-catch** - Centralize error handling at the upper layer
+- **Scattered try-catch** - Consolidate error translation for the same external contract under the owner of that boundary. Do not mix different operation contracts into one global handler
 - **Internal implementation exported from public API** - Only export domain-level functions and types. Do not export infrastructure functions or internal classes
 - **Replaced code surviving after refactoring** - Remove replaced code and exports. Do not keep unless explicitly told to
 - **Workarounds that bypass safety mechanisms** - If the root fix is correct, no additional bypass is needed
 - **Direct tool execution bypassing project scripts** - `npx tool` and similar bypass the lockfile, causing version mismatches. Look for project-defined scripts (npm scripts, Makefile, etc.) first. Only consider direct execution when no script exists
-- **Missing wiring** - When adding new parameters or fields, search the entire call chain to verify. If callers do not pass the value, `options.xxx ?? fallback` always uses the fallback
+- **Missing wiring** - Producers, propagation paths, and consumers of new parameters or fields must share one contract. A value omitted by callers and always replaced by `options.xxx ?? fallback` is not wired
 - **Redundant conditionals** - When if/else calls the same function with only argument differences, unify using ternary operators or spread syntax
-- **Copy-paste patterns** - Before writing new code, search for existing implementations of the same kind and follow the existing pattern. Do not introduce your own style

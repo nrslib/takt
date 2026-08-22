@@ -6,20 +6,21 @@ params:
     type: facet_ref[]
     facet_kind: knowledge
 name: review-adjudication
+capabilities: readonly
 tags:
-  - review
+  - adjudication
 edit: false
 persona: review-adjudicator
 policy:
+  - architecture
+  - takt
+  - review-adjudication
   - contract-change
-  - review
   - $param: review_policy_additions
 knowledge:
   - architecture
   - takt
   - $param: review_knowledge_additions
-provider_options:
-  extends: review-readonly
 pass_previous_response: false
 instruction: adjudicate-review-findings
 output_contracts:

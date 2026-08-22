@@ -12,6 +12,18 @@ export interface PrivateFileInspection {
   expectedStat: Stats | undefined;
 }
 
+export class PrivateArtifactAncestorIdentityMismatchError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'PrivateArtifactAncestorIdentityMismatchError';
+  }
+}
+
+function isMissingPathError(error: unknown): error is NodeJS.ErrnoException {
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
+}
+
 export function lstatOrUndefined(path: string): Stats | undefined {
   try {
     return lstatSync(path) as Stats;
@@ -148,11 +160,24 @@ export function hasMatchingDirectoryIdentity(expected: Stats, actual: Stats): bo
 
 export function assertAncestorIdentities(identities: readonly DirectoryIdentity[]): void {
   for (const identity of identities) {
-    const current = identity.followSymbolicLink
-      ? statSync(identity.path) as Stats
-      : lstatSync(identity.path) as Stats;
+    let current: Stats;
+    try {
+      current = identity.followSymbolicLink
+        ? statSync(identity.path) as Stats
+        : lstatSync(identity.path) as Stats;
+    } catch (error) {
+      if (!isMissingPathError(error)) {
+        throw error;
+      }
+      throw new PrivateArtifactAncestorIdentityMismatchError(
+        `Private artifact ancestor disappeared while opening: ${identity.path}`,
+        { cause: error },
+      );
+    }
     if (!current.isDirectory() || !hasMatchingDirectoryIdentity(identity.stat, current)) {
-      throw new Error(`Private artifact ancestor identity changed while opening: ${identity.path}`);
+      throw new PrivateArtifactAncestorIdentityMismatchError(
+        `Private artifact ancestor identity changed while opening: ${identity.path}`,
+      );
     }
   }
 }

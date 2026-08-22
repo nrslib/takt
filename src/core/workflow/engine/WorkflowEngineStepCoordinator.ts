@@ -6,9 +6,7 @@ import type {
   WorkflowState,
   WorkflowStep,
 } from '../../models/types.js';
-import { getAllParallelSubSteps } from '../../models/types.js';
-import { ABORT_STEP, FINDING_CONFLICT_ADJUDICATION_STEP } from '../constants.js';
-import { FINDING_CONFLICT_ADJUDICATION_RULE_INDEX } from '../findings/adjudication-step.js';
+import { getAllParallelSubSteps, isNormalOrTeamLeaderWorkflowStep } from '../../models/types.js';
 import { isDelegatedWorkflowStep, isSystemWorkflowStep, isWorkflowCallStep } from '../step-kind.js';
 import type {
   RuntimeStepResolution,
@@ -16,10 +14,19 @@ import type {
   WorkflowEngineOptions,
   WorkflowStepExecutionEventContext,
 } from '../types.js';
+import type { WorkflowStepAbortSignalContext } from './step-deadline.js';
 import type { PreparedNormalStepExecution } from './StepExecutor.js';
 import type { WorkflowCallExecutionToken } from './WorkflowCallRunner.js';
 import { determineRuleTransition, type WorkflowRuleTransition } from './transitions.js';
 import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
+import {
+  createWorkflowStepCompositeDeadline,
+  createWorkflowStepDeadline,
+  type WorkflowStepInactivityDeadline,
+  type WorkflowStepDeadlineProviderInfo,
+  type WorkflowStepExecutionDeadlineContext,
+} from './step-deadline.js';
+import type { OptionsBuilder } from './OptionsBuilder.js';
 
 interface WorkflowEngineStepCoordinatorDeps {
   config: {
@@ -29,6 +36,8 @@ interface WorkflowEngineStepCoordinatorDeps {
   task: string;
   getMaxSteps: () => WorkflowMaxSteps;
   getOptions: () => WorkflowEngineOptions;
+  optionsBuilder: OptionsBuilder;
+  stepAbortSignalContext?: WorkflowStepAbortSignalContext;
   stepExecutor: {
     runNormalStep: (
       step: WorkflowStep,
@@ -73,6 +82,7 @@ interface WorkflowEngineStepCoordinatorDeps {
       updateSession: (persona: string, sessionId: string | undefined) => void,
       runtime?: RuntimeStepResolution,
       activeStepIteration?: number,
+      executionDeadlineContext?: WorkflowStepExecutionDeadlineContext,
     ) => Promise<StepRunResult>;
   };
   arpeggioRunner: {
@@ -92,6 +102,7 @@ interface WorkflowEngineStepCoordinatorDeps {
       updateSession: (persona: string, sessionId: string | undefined) => void,
       runtime?: RuntimeStepResolution,
       activeStepIteration?: number,
+      executionDeadlineContext?: WorkflowStepExecutionDeadlineContext,
     ) => Promise<StepRunResult>;
   };
   systemStepExecutor: {
@@ -125,17 +136,180 @@ interface WorkflowEngineStepCoordinatorDeps {
     fileName: string,
     context: WorkflowStepExecutionEventContext,
   ) => void;
-  recordParticipation: (step: WorkflowStep, reportNames: readonly string[]) => void;
-  /** Present only when the workflow has an effective finding_contract and the finding-conflict-adjudication step was injected (see WorkflowEngine). */
-  findingConflictAdjudicationRunner?: {
-    run: (step: WorkflowStep, state: WorkflowState, runtime?: RuntimeStepResolution) => Promise<StepRunResult>;
-    /** Origin the runner last resolved (state.previousStep or the pending attempt's durable originStep — origin-step requirement). */
-    getLastOriginStep: () => string | undefined;
-  };
+  recordParticipation: (
+    step: WorkflowStep,
+    reportNames: readonly string[],
+    parallelParentStepName?: string,
+  ) => void;
 }
 
 export class WorkflowEngineStepCoordinator {
+  private readonly stepDeadlines = new Map<string, WorkflowStepInactivityDeadline>();
+
   constructor(private readonly deps: WorkflowEngineStepCoordinatorDeps) {}
+
+  beginStepDeadline(
+    step: WorkflowStep,
+    runtime: RuntimeStepResolution | undefined,
+    stepIteration: number,
+  ): WorkflowStepInactivityDeadline {
+    const providerInfos = this.resolveStepDeadlineProviderInfos(step, runtime);
+    return this.getOrCreateStepDeadline(
+      step,
+      stepIteration,
+      'step',
+      () => createWorkflowStepCompositeDeadline(providerInfos, this.deps.getOptions().abortSignal),
+    );
+  }
+
+  refreshStepDeadline(
+    step: WorkflowStep,
+    runtime: RuntimeStepResolution | undefined,
+    stepIteration: number,
+  ): WorkflowStepInactivityDeadline {
+    const key = this.stepDeadlineKey(step, stepIteration, 'step');
+    const existing = this.stepDeadlines.get(key);
+    if (existing === undefined) {
+      throw new Error(`Step deadline for "${step.name}" occurrence ${stepIteration} is not active`);
+    }
+    existing.dispose();
+    const providerInfos = this.resolveStepDeadlineProviderInfos(step, runtime);
+    const deadline = createWorkflowStepCompositeDeadline(
+      providerInfos,
+      this.deps.getOptions().abortSignal,
+    );
+    this.stepDeadlines.set(key, deadline);
+    return deadline;
+  }
+
+  beginExecutionUnitDeadline(
+    step: WorkflowStep,
+    stepIteration: number,
+    executionUnitKey: string,
+    providerInfo: WorkflowStepDeadlineProviderInfo,
+  ): WorkflowStepInactivityDeadline {
+    return this.getOrCreateStepDeadline(
+      step,
+      stepIteration,
+      executionUnitKey,
+      () => createWorkflowStepDeadline(
+        providerInfo.provider,
+        providerInfo.providerOptions,
+        this.deps.getOptions().abortSignal,
+      ),
+    );
+  }
+
+  disposeStepDeadline(step: WorkflowStep, stepIteration: number): void {
+    const occurrencePrefix = this.stepDeadlineOccurrencePrefix(step, stepIteration);
+    let disposed = false;
+    for (const [activeKey, activeDeadline] of this.stepDeadlines) {
+      if (activeKey.startsWith(occurrencePrefix)) {
+        activeDeadline.dispose();
+        this.stepDeadlines.delete(activeKey);
+        disposed = true;
+      }
+    }
+    if (disposed) return;
+
+    // A delegated runner can roll back its iteration counter before returning
+    // a terminal result. There is still only one active occurrence, so clean
+    // that step's deadline by name when the exact counter is no longer visible.
+    const stepPrefix = this.stepDeadlineStepPrefix(step);
+    for (const [activeKey, activeDeadline] of this.stepDeadlines) {
+      if (activeKey.startsWith(stepPrefix)) {
+        activeDeadline.dispose();
+        this.stepDeadlines.delete(activeKey);
+      }
+    }
+  }
+
+  disposeAllStepDeadlines(): void {
+    for (const deadline of this.stepDeadlines.values()) {
+      deadline.dispose();
+    }
+    this.stepDeadlines.clear();
+  }
+
+  private stepDeadlineStepPrefix(step: WorkflowStep): string {
+    return `${step.name}\u0000`;
+  }
+
+  private stepDeadlineOccurrencePrefix(step: WorkflowStep, stepIteration: number): string {
+    return `${this.stepDeadlineStepPrefix(step)}${stepIteration}\u0000`;
+  }
+
+  private stepDeadlineKey(
+    step: WorkflowStep,
+    stepIteration: number,
+    executionUnitKey: string,
+  ): string {
+    return `${this.stepDeadlineOccurrencePrefix(step, stepIteration)}${executionUnitKey}`;
+  }
+
+  private getOrCreateStepDeadline(
+    step: WorkflowStep,
+    stepIteration: number,
+    executionUnitKey: string,
+    create: () => WorkflowStepInactivityDeadline,
+  ): WorkflowStepInactivityDeadline {
+    const key = this.stepDeadlineKey(step, stepIteration, executionUnitKey);
+    const existing = this.stepDeadlines.get(key);
+    if (existing !== undefined) {
+      return existing;
+    }
+
+    const occurrencePrefix = this.stepDeadlineOccurrencePrefix(step, stepIteration);
+    for (const [activeKey, deadline] of this.stepDeadlines) {
+      if (!activeKey.startsWith(occurrencePrefix)) {
+        deadline.dispose();
+        this.stepDeadlines.delete(activeKey);
+      }
+    }
+
+    const deadline = create();
+    this.stepDeadlines.set(key, deadline);
+    return deadline;
+  }
+
+  private createExecutionDeadlineContext(
+    step: WorkflowStep,
+    stepIteration: number | undefined,
+  ): WorkflowStepExecutionDeadlineContext | undefined {
+    if (stepIteration === undefined) {
+      return undefined;
+    }
+    return {
+      begin: (executionUnitKey, providerInfo) => this.beginExecutionUnitDeadline(
+        step,
+        stepIteration,
+        executionUnitKey,
+        providerInfo,
+      ),
+      runWith: <T>(deadline: WorkflowStepInactivityDeadline, operation: () => Promise<T>): Promise<T> => {
+        if (this.deps.stepAbortSignalContext === undefined) {
+          return operation();
+        }
+        return this.deps.stepAbortSignalContext.runWith(deadline, operation);
+      },
+    };
+  }
+
+  private resolveStepDeadlineProviderInfos(
+    step: WorkflowStep,
+    runtime: RuntimeStepResolution | undefined,
+  ): WorkflowStepDeadlineProviderInfo[] {
+    const providerInfos = [this.deps.optionsBuilder.resolveStepProviderModel(step, runtime)];
+
+    if (isNormalOrTeamLeaderWorkflowStep(step) && step.dynamicFacets !== undefined) {
+      const selectorProvider = this.deps.getOptions().selectorProvider;
+      if (selectorProvider !== undefined) {
+        providerInfos.push(selectorProvider);
+      }
+    }
+
+    return providerInfos;
+  }
 
   getStep(name: string): WorkflowStep {
     const step = this.deps.config.steps.find((candidate) => candidate.name === name);
@@ -161,17 +335,10 @@ export class WorkflowEngineStepCoordinator {
     workflowCallExecution?: WorkflowCallExecutionToken,
   ): Promise<StepRunResult> {
     const updateSession = this.deps.updatePersonaSession;
+    const executionDeadlineContext = this.createExecutionDeadlineContext(step, stepIteration);
     let result: StepRunResult;
 
-    if (step.name === FINDING_CONFLICT_ADJUDICATION_STEP && step.engineSynthesized === true) {
-      const runner = this.deps.findingConflictAdjudicationRunner;
-      if (!runner) {
-        throw new Error(
-          `Step "${step.name}" is the engine-synthesized conflict adjudication step but no adjudication runner is configured`,
-        );
-      }
-      result = await runner.run(step, this.deps.state, runtime);
-    } else if (step.parallel && getAllParallelSubSteps(step.parallel).length > 0) {
+    if (step.parallel && getAllParallelSubSteps(step.parallel).length > 0) {
       result = await this.deps.parallelRunner.runParallelStep(
         step,
         this.deps.state,
@@ -180,6 +347,7 @@ export class WorkflowEngineStepCoordinator {
         updateSession,
         runtime,
         stepIteration,
+        executionDeadlineContext,
       );
     } else if (step.arpeggio) {
       result = await this.deps.arpeggioRunner.runArpeggioStep(
@@ -197,6 +365,7 @@ export class WorkflowEngineStepCoordinator {
         updateSession,
         runtime,
         stepIteration,
+        executionDeadlineContext,
       );
     } else if (isSystemWorkflowStep(step)) {
       result = {
@@ -225,17 +394,21 @@ export class WorkflowEngineStepCoordinator {
     for (const { step: reportedStep, filePath, fileName, context } of reports) {
       this.deps.emitReport(reportedStep, filePath, fileName, context);
     }
-    const reportedSteps = new Map<string, WorkflowStep>();
-    for (const report of reports) {
-      reportedSteps.set(report.step.name, report.step);
-    }
-    reportedSteps.set(step.name, step);
-    for (const [stepName, participatedStep] of reportedSteps) {
+    const reportedSteps = new Set<WorkflowStep>([
+      step,
+      ...reports.map(({ step: reportedStep }) => reportedStep),
+    ]);
+    for (const participatedStep of reportedSteps) {
+      const parallelParentStepName = step.parallel !== undefined
+        && getAllParallelSubSteps(step.parallel).some((subStep) => subStep === participatedStep)
+        ? step.name
+        : undefined;
       this.deps.recordParticipation(
         participatedStep,
         reports
-          .filter((report) => report.step.name === stepName)
+          .filter((report) => report.step === participatedStep)
           .map((report) => report.fileName),
+        parallelParentStepName,
       );
     }
     return result;
@@ -253,16 +426,6 @@ export class WorkflowEngineStepCoordinator {
     if (response.status !== 'done') {
       throw new Error(`Unhandled response status: ${response.status}`);
     }
-    if (
-      step.name === FINDING_CONFLICT_ADJUDICATION_STEP
-      && step.engineSynthesized === true
-      && response.matchedRuleIndex != null
-    ) {
-      const dynamicNext = this.resolveAdjudicationDynamicNextStep(response.matchedRuleIndex);
-      if (dynamicNext !== undefined) {
-        return { nextStep: dynamicNext };
-      }
-    }
     if (response.matchedRuleIndex != null && step.rules) {
       const transition = determineRuleTransition(step, response.matchedRuleIndex);
       if (transition && (transition.nextStep || transition.returnValue || transition.requiresUserInput)) {
@@ -270,71 +433,6 @@ export class WorkflowEngineStepCoordinator {
       }
     }
     throw new RuleDetectionExhaustedError(step.name);
-  }
-
-  /**
-   * Dynamic transitions of the engine-synthesized finding-conflict-adjudication
-   * step. The originating step (whose rule routed here) is only known at run
-   * time, so the FINDING_CLOSED / ACTIONABLE_FIX rules carry no static `next`
-   * (see adjudication-step.ts) and are resolved from WorkflowState.previousStep:
-   *
-   * - FINDING_CLOSED — return to the origin step so it re-evaluates the updated
-   *   ledger.
-   * - ACTIONABLE_FIX — route to the origin step's fix path: its first non-AI
-   *   rule with `next: fix` (contract-intake.ts's
-   *   selectInvalidManagerOutputRuleIndex precedent); when absent, return to
-   *   the origin whose own `when(findings.conflicts.count == 0 &&
-   *   findings.open.count > 0)`-style rule routes to the fix path next round.
-   *
-   * Origin resolution order (origin-step requirement):
-   * 1. WorkflowState.previousStep (normal in-run entry),
-   * 2. the runner's last resolved origin — which covers the durable originStep
-   *    persisted on the conflict's pending attempt, so a resume that starts
-   *    directly at this step still returns to the true origin,
-   * 3. the UNIQUE step wiring a rule to this step (only when unambiguous —
-   *    guessing among multiple wiring steps such as reviewers vs final-gate
-   *    would misroute),
-   * 4. otherwise ABORT.
-   * UNRESOLVED keeps its static `next: ABORT` and never reaches this method's
-   * dynamic branch (returns undefined).
-   */
-  private resolveAdjudicationDynamicNextStep(matchedRuleIndex: number): string | undefined {
-    if (
-      matchedRuleIndex !== FINDING_CONFLICT_ADJUDICATION_RULE_INDEX.FINDING_CLOSED
-      && matchedRuleIndex !== FINDING_CONFLICT_ADJUDICATION_RULE_INDEX.ACTIONABLE_FIX
-    ) {
-      return undefined;
-    }
-    const originName = this.resolveAdjudicationOriginStepName();
-    if (originName === undefined) {
-      return ABORT_STEP;
-    }
-    if (matchedRuleIndex === FINDING_CONFLICT_ADJUDICATION_RULE_INDEX.FINDING_CLOSED) {
-      return originName;
-    }
-    const originStep = this.deps.config.steps.find((candidate) => candidate.name === originName);
-    const fixRule = (originStep?.rules ?? []).find((rule) => rule.next === 'fix');
-    return fixRule?.next ?? originName;
-  }
-
-  private resolveAdjudicationOriginStepName(): string | undefined {
-    const isValidOrigin = (name: string | undefined): name is string => (
-      name !== undefined
-      && name !== FINDING_CONFLICT_ADJUDICATION_STEP
-      && this.deps.config.steps.some((candidate) => candidate.name === name)
-    );
-    const previous = this.deps.state.previousStep;
-    if (isValidOrigin(previous)) {
-      return previous;
-    }
-    const fromRunner = this.deps.findingConflictAdjudicationRunner?.getLastOriginStep();
-    if (isValidOrigin(fromRunner)) {
-      return fromRunner;
-    }
-    const wiringSteps = this.deps.config.steps.filter((candidate) => (
-      (candidate.rules ?? []).some((rule) => rule.next === FINDING_CONFLICT_ADJUDICATION_STEP)
-    ));
-    return wiringSteps.length === 1 ? wiringSteps[0]!.name : undefined;
   }
 
   buildInstruction(
@@ -358,8 +456,7 @@ export class WorkflowEngineStepCoordinator {
     runtime?: RuntimeStepResolution,
   ): Promise<PreparedNormalStepExecution | undefined> {
     if (
-      (step.name === FINDING_CONFLICT_ADJUDICATION_STEP && step.engineSynthesized === true)
-      || isDelegatedWorkflowStep(step)
+      isDelegatedWorkflowStep(step)
       || isSystemWorkflowStep(step)
       || isWorkflowCallStep(step)
     ) {

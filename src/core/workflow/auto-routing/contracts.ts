@@ -1,4 +1,5 @@
 import type { RoutingTier } from '../../models/config-types.js';
+import type { ProviderActivityCallback, StreamCallback } from '../../../shared/types/provider.js';
 
 export type { RoutingTier };
 
@@ -22,14 +23,9 @@ export interface RoutingWorkSnapshot {
     edit?: boolean;
   }>;
   readonly remainingWork: ReadonlyArray<Readonly<{
-    source: 'task' | 'finding' | 'team-part' | 'prior-result';
-    severity?: string;
-    lifecycle?: string;
+    source: 'task' | 'team-part' | 'prior-result';
     title?: string;
     description: string;
-    suggestion?: string;
-    provisional?: boolean;
-    conflict?: boolean;
   }>>;
   readonly progress: Readonly<{
     previousAttemptFailed: boolean;
@@ -53,7 +49,6 @@ export interface WorkRequirementEstimate {
 export const ROUTING_REASON_CODE_VALUES = [
   'api-change',
   'complex-work',
-  'critical-finding',
   'focused-change',
   'formatting',
   'initial-complexity',
@@ -78,5 +73,9 @@ export function validateRoutingReasonCodes(reasonCodes: unknown): asserts reason
 }
 
 export interface WorkRequirementEstimator {
-  estimate(input: RoutingModelInput, options?: { abortSignal?: AbortSignal }): Promise<WorkRequirementEstimate>;
+  estimate(input: RoutingModelInput, options?: {
+    abortSignal?: AbortSignal;
+    onStream?: StreamCallback;
+    onActivity?: ProviderActivityCallback;
+  }): Promise<WorkRequirementEstimate>;
 }

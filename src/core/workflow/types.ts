@@ -6,6 +6,7 @@ import type {
   Language,
   LoopMonitorConfig,
   WorkflowConfig,
+  WorkflowWideRule,
   WorkflowCallStep,
   WorkflowMaxSteps,
   WorkflowRestartPoint,
@@ -15,13 +16,15 @@ import type {
   FallbackContext,
   FallbackOperationOrigin,
   McpServerConfig,
+  PermissionMode,
 } from '../models/types.js';
-import type { FindingManagerAuthority } from '../models/finding-types.js';
 import type {
   AutoRoutingConfig,
   AutoRoutingStrategy,
-  FindingContractRuntimeConfig,
+  InternalAgentSeats,
   PersonaProviderEntry,
+  ProviderRoutingEntry,
+  ProviderLadderConfig,
   ProviderRoutingConfig,
   ResolvedObservabilityConfig,
   TagRoutingConflictPolicy,
@@ -35,19 +38,18 @@ import type { RoutingRuntime } from './auto-routing/runtime.js';
 import type { SystemStepServicesFactory } from './system/system-step-services.js';
 import type { StructuredOutputNormalizerRegistry } from './engine/structured-output-normalizer.js';
 import type { ProviderOptionsOriginResolver, ProviderOptionsSource, ProviderResolutionSource } from './provider-options-trace.js';
-import type { FindingContractConfig, FindingLedger } from '../models/finding-types.js';
 import type { RunResumeSource } from './run/run-meta.js';
-import type { FindingLedgerStore } from './findings/store.js';
 import type { OperationJournalStore } from './operations/operation-journal-types.js';
 import type { PullRequestContext } from './pr-context.js';
-import type { RunPaths } from './run/run-paths.js';
 import type { DynamicParallelSelectionStore } from './dynamic-parallel/selection-store.js';
 import type { WorkflowCallInvocationEvidence } from './workflow-call-invocation-index.js';
 import type { WorkflowStepParticipationIndex } from './workflow-step-participation-index.js';
 import type { SelectorGitCommandRunner } from './dynamic-parallel/selector-git-command-runner.js';
 import type { McpAssignmentSection } from '../../infra/config/runtime-provider/mcp-assignment.js';
+import type { CompanionDiffReader } from './companion/diff-reader.js';
 
 import type { ProviderType, StreamCallback, StreamEvent } from '../../shared/types/provider.js';
+import type { AgentFailureCategory } from '../../shared/types/agent-failure.js';
 
 export interface WorkflowOperationJournalContext {
   readonly store: OperationJournalStore;
@@ -119,6 +121,8 @@ export interface StepProviderInfo {
   modelSource?: ProviderResolutionSource;
   providerOptions?: StepProviderOptions;
   providerOptionsSources?: Readonly<Record<string, ProviderResolutionSource>>;
+  /** Permission mode from the same winning runtime profile as provider/model/options. */
+  permissionMode?: PermissionMode;
   autoRoutingDecision?: {
     candidateName: string;
     routingTier: 'high' | 'medium' | 'low';
@@ -136,8 +140,6 @@ export interface StepProviderInfo {
 
 export interface SelectorProviderInfo extends StepProviderInfo {
   provider: ProviderType;
-  providerOptions: StepProviderOptions;
-  nativeTools: readonly string[];
 }
 
 export interface ProviderStreamContext {
@@ -147,7 +149,7 @@ export interface ProviderStreamContext {
 }
 
 export interface DelegatedAgentUsageContext extends ProviderStreamContext {
-  /** 'normal' は実行ループ外の合成ステップ（findings-manager 等）の直接呼び出し。 */
+  /** 'normal' は実行ループ外の合成ステップの直接呼び出し。 */
   readonly stepType: 'parallel' | 'team_leader' | 'normal';
 }
 
@@ -198,6 +200,7 @@ export interface WorkflowSharedRuntimeState {
   dynamicFacetSelectionStore?: import('./dynamic-facets/dynamicFacetSelectionStore.js').DynamicFacetSelectionStore;
   workflowCallInvocationEvidence?: WorkflowCallInvocationEvidence;
   workflowStepParticipationIndex?: WorkflowStepParticipationIndex;
+  resumeArtifactOccurrenceIndex?: import('./run/resume-artifact-occurrence-index.js').ResumeArtifactOccurrenceIndex;
 }
 
 export type WorkflowAbortKind =
@@ -211,36 +214,14 @@ export type WorkflowAbortKind =
   | 'user_input_cancelled'
   | 'step_transition'
   | 'runtime_error'
-  | 'rule_no_match'
-  /**
-   * COMPLETE への遷移時に open な provisional finding（意味を確定できなかった
-   * 観測）が残っていた。エンジン最終不変条件のバックストップ発火 = workflow の
-   * rules が findings.provisional.count を処理する記述を欠いている設定不備で、
-   * 「ルールはあるが何もマッチしない」と同じクラスの fail-fast。
-   */
-  | 'provisional_findings'
-  | 'review_integrity_unresolved';
-
-export type ReviewIntegrityFailureCode =
-  | 'restatement_exhausted_claim_bearing'
-  | 'review_integrity_unresolved_unpresented';
-
-export interface ReviewIntegrityFailureDetails {
-  code: ReviewIntegrityFailureCode;
-  anomalyIds: string[];
-  unpresentedIds: string[];
-  classificationAuthorityIds: string[];
-  publicationIds: string[];
-}
+  | 'rule_no_match';
 
 export interface WorkflowStepFailureSummary {
   kind: WorkflowAbortKind;
   step: string;
   reason: string;
   error: string;
-  details?: {
-    reviewIntegrity?: ReviewIntegrityFailureDetails;
-  };
+  failureCategory?: AgentFailureCategory;
 }
 
 export interface WorkflowAbortResult {
@@ -269,15 +250,6 @@ export interface WorkflowCallResolutionRequest {
 
 export type WorkflowCallResolver = (request: WorkflowCallResolutionRequest) => WorkflowConfig | null;
 
-export interface FindingAuthorityResolver {
-  resolve(input: {
-    readonly workflowConfig: WorkflowConfig;
-    readonly runPaths: RunPaths;
-    readonly runPathNamespace: readonly string[];
-    readonly workflowCallSiteIdentity?: string;
-  }): FindingLedgerStore;
-}
-
 export interface WorkflowStepExecutionEventContext {
   readonly iteration: number;
   readonly workflowName: string;
@@ -287,8 +259,6 @@ export interface WorkflowStepExecutionEventContext {
   readonly provider: ProviderType;
   readonly model: string;
   readonly workflowStack: WorkflowResumePointEntry[];
-  readonly findingScopeIdentity: string | undefined;
-  readonly findingIds: readonly string[] | undefined;
 }
 
 export interface WorkflowCallLifecycle {
@@ -307,6 +277,49 @@ export interface WorkflowCallCompleteLifecycle extends WorkflowCallLifecycle {
 }
 
 /** Events emitted by workflow engine */
+export type CompanionReviewTrigger = 'quiet' | 'forced' | 'completion' | 'commit';
+
+export interface CompanionQueueAuditEntry {
+  readonly trigger: CompanionReviewTrigger;
+  readonly digest: string;
+  readonly changedLines: number;
+  readonly observedGeneration: number;
+}
+
+export type CompanionCallPurpose = 'selector' | 'reviewer' | 'moderator';
+export type CompanionCallStatus = 'completed' | 'failed';
+export type CompanionReviewPhase = 'initial' | 'live' | 'fix' | 'completion';
+export type CompanionReviewSkipReason =
+  | 'companion_disabled'
+  | 'companion_not_configured'
+  | 'companion_runtime_unavailable'
+  | 'selector_empty'
+  | 'empty_diff'
+  | 'unchanged_digest'
+  | 'below_minimum_changed_lines';
+export type CompanionReviewZeroReason =
+  | 'reviewer_returned_no_findings'
+  | 'moderator_rejected_all_findings';
+
+export interface CompanionModeratorDecisionAudit {
+  readonly action: 'accept' | 'reject';
+  readonly sourceIndex: number;
+}
+
+export interface CompanionAcceptedFindingAudit {
+  readonly severity: 'must_fix' | 'should_fix' | 'nit';
+  readonly file: string;
+  readonly line: number;
+  readonly finding: string;
+}
+
+export interface CompanionModeratorAudit {
+  readonly name: string;
+  readonly invoked: boolean;
+  readonly reason?: 'reviewer_result_empty' | 'not_configured';
+  readonly decisions: readonly CompanionModeratorDecisionAudit[];
+}
+
 export interface WorkflowEvents {
   'workflow_call:start': (lifecycle: WorkflowCallLifecycle) => void;
   'workflow_call:complete': (lifecycle: WorkflowCallCompleteLifecycle) => void;
@@ -319,8 +332,6 @@ export interface WorkflowEvents {
     resumeStepName: string,
     stepIteration: number,
     workflowStack: WorkflowResumePointEntry[],
-    findingScopeIdentity: string | undefined,
-    findingIds: readonly string[] | undefined,
   ) => void;
   'step:complete': (
     step: WorkflowStep,
@@ -345,14 +356,100 @@ export interface WorkflowEvents {
     fileName: string,
     context: WorkflowStepExecutionEventContext,
   ) => void;
-  'findings:ledger': (
-    ledger: FindingLedger,
-    context: {
-      readonly iteration: number;
-      readonly workflowName: string;
-      readonly scopeIdentity: string;
-    },
-  ) => void;
+  'companion:start': (payload: {
+    step: string;
+    companion: string;
+  }) => void;
+  'companion:pool_selected': (payload: {
+    step: string;
+    selected: string[];
+    rationale: string;
+  }) => void;
+  'companion:finding': (payload: {
+    step: string;
+    companion: string;
+    severity: 'must_fix' | 'should_fix' | 'nit';
+  }) => void;
+  'companion:fix_round': (payload: {
+    step: string;
+    sequence: number;
+    findingCount: number;
+  }) => void;
+  'companion:complete': (payload: {
+    step: string;
+    completionSettled: boolean;
+    completionFailure: boolean;
+    followUpRounds: number;
+    reason?: string;
+  }) => void;
+  'companion:review_round': (payload: {
+    step: string;
+    companion: string;
+    trigger: CompanionReviewTrigger;
+    digest: string;
+    changedLines: number;
+    findingCount: number;
+    reviewerFindings: readonly CompanionAcceptedFindingAudit[];
+    moderator?: CompanionModeratorAudit;
+    acceptedFindings: readonly CompanionAcceptedFindingAudit[];
+    zeroReason?: CompanionReviewZeroReason;
+    runPathNamespace?: string[];
+  }) => void;
+  'companion:queue_coalesced': (payload: {
+    step: string;
+    companion: string;
+    replaced: CompanionQueueAuditEntry;
+    replacement: CompanionQueueAuditEntry;
+    runPathNamespace?: string[];
+  }) => void;
+  'companion:call': (payload: {
+    step: string;
+    agent: string;
+    purpose: CompanionCallPurpose;
+    attempt: number;
+    status: CompanionCallStatus;
+    provider: ProviderType;
+    model?: string;
+    systemPrompt?: string;
+    prompt?: string;
+    promptResolved: boolean;
+    runPathNamespace?: string[];
+    response?: AgentResponse;
+    error?: string;
+  }) => void;
+  'companion:review_skipped': (payload: {
+    step: string;
+    companion?: string;
+    phase: CompanionReviewPhase;
+    reason: CompanionReviewSkipReason;
+    fixRound?: number;
+    observedGeneration?: number;
+    runPathNamespace?: string[];
+  }) => void;
+  'review_completion:judge:start': (payload: {
+    step: string;
+    attempt: number;
+    provider: string | undefined;
+    model: string | undefined;
+  }) => void;
+  'review_completion:retry:start': (payload: {
+    step: string;
+    attempt: number;
+  }) => void;
+  'review_completion:retry:complete': (payload: {
+    step: string;
+    attempt: number;
+    status: string;
+    error?: string;
+  }) => void;
+  'review_completion:judge:complete': (payload: {
+    step: string;
+    attempt: number;
+    status: string;
+    complete?: boolean;
+    gapCount?: number;
+    error?: string;
+  }) => void;
   'step:blocked': (step: WorkflowStep, response: AgentResponse) => void;
   'step:rate_limited': (step: WorkflowStep, response: AgentResponse, rateLimitInfo: AgentResponse['rateLimitInfo']) => void;
   'step:user_input': (step: WorkflowStep, userInput: string) => void;
@@ -473,6 +570,8 @@ export interface WorkflowEngineOptions {
   observabilityRunId?: string;
   /** Redacts text before it is attached to observability spans. */
   sanitizeObservabilityText?: (text: string) => string;
+  /** Sanitizes report content before it crosses the report-file persistence boundary. */
+  reportContentSanitizer?: (content: string) => string;
   /** Run-local environment values passed to trusted child processes. */
   childProcessEnv?: Readonly<Record<string, string>>;
   /** Language for instruction metadata. Defaults to 'en'. */
@@ -487,13 +586,17 @@ export interface WorkflowEngineOptions {
   rateLimitFallback?: RateLimitFallbackConfig;
   /** Resolved provider options */
   providerOptions?: StepProviderOptions;
+  /** Provider options resolved from config.yaml and environment variables. */
+  configProviderOptions?: StepProviderOptions;
+  /** Provider source whose runtime profile supplied providerOptions; absent for shared config options. */
+  providerOptionsProviderSource?: ProviderResolutionSource;
+  /** Permission mode from the runtime defaults profile. */
+  providerPermissionMode?: PermissionMode;
   selectorProvider?: SelectorProviderInfo;
   /** Reads the current working-tree evidence required by a dynamic selector. */
   selectorGitCommandRunner?: SelectorGitCommandRunner;
   /** Resolved automatic provider/model routing configuration */
   autoRouting?: AutoRoutingConfig;
-  /** Opt-in reviewer report extraction for effective Finding Contract workflows. */
-  findingContractConfig?: FindingContractRuntimeConfig;
   /** Run-scoped strategy override for automatic provider/model routing. */
   autoStrategyOverride?: AutoRoutingStrategy;
   onEffectiveAutoRoutingReached?: () => void;
@@ -512,6 +615,18 @@ export interface WorkflowEngineOptions {
   personaProviders?: Record<string, PersonaProviderEntry>;
   /** Provider routing by raw persona key, workflow step tag, and workflow step name */
   providerRouting?: ProviderRoutingConfig;
+  /** runtime.yaml `provider.targets.internal_agents` の解決済み seat。 */
+  internalAgentSeats?: InternalAgentSeats;
+  /** runtime.yaml から解決済みの companion ごとの実行環境。 */
+  companionEnabled?: boolean;
+  companionProviders?: Readonly<Record<string, ProviderRoutingEntry>>;
+  companionDiffReader?: CompanionDiffReader;
+  /**
+   * Ordered provider ladders (issue #1208) resolved from runtime.yaml `ladder` assignments. The
+   * promotion seam advances a matched target-less `{at:N}` to a later stage of the governing
+   * ladder; stage 0 is already reflected in provider/model/personaProviders/providerRouting.
+   */
+  providerLadders?: ProviderLadderConfig;
   /**
    * How to resolve same-priority tag routing conflicts. `fail-fast` (runtime-v1) throws
    * before the agent runs; `last-wins` (legacy, the default) merges in tag order.
@@ -534,7 +649,6 @@ export interface WorkflowEngineOptions {
   /** Stateless authored path for retrying from a new nested position. */
   restartPoint?: WorkflowRestartPoint;
   resumeSource?: RunResumeSource;
-  onDynamicParallelSelectionPersisted?: (resumePoint: WorkflowResumePoint) => Promise<void> | void;
   operationJournal?: WorkflowOperationJournalContext;
   /** Override report directory name (without parent path). */
   reportDirName?: string;
@@ -562,36 +676,12 @@ export interface WorkflowEngineOptions {
   sharedRuntime?: WorkflowSharedRuntimeState;
   resumeStackPrefix?: WorkflowResumePointEntry[];
   workflowCallResolver?: WorkflowCallResolver;
+  /** Workflow-wide rules inherited from the caller workflow. */
+  inheritedWorkflowRules?: readonly WorkflowWideRule[];
   /** Scalar execution context inherited through nested workflow_call boundaries. */
   workflowCallVars?: Readonly<Record<string, string | number | boolean>>;
   /** Exact verified resource root for the run's workflow execution bundle. */
   workflowBundleResourceRoot?: string;
-  /**
-   * Run-bound Finding authority selected by the application composition root.
-   * Local contracts resolve through it; inherited contracts keep the exact
-   * parent store instance.
-   */
-  findingAuthorityResolver?: FindingAuthorityResolver;
-  /**
-   * workflow_call の親から継承する Finding Contract。
-   * 継承しないと子の parallel レビューが出す raw findings が親の台帳に届かず、
-   * fix ステップへ渡らないまま reviewers ↔ fix が回り続ける（実測: 56周・9時間）。
-   * ledgerStore は親と同一インスタンスを渡し、同じ authority を共有する。
-   */
-  inheritedFindingContract?: {
-    contract: FindingContractConfig;
-    ledgerStore: FindingLedgerStore;
-    managerAuthority: FindingManagerAuthority;
-  };
-  /**
-   * workflow_call の呼び出しスタックを表す名前空間。raw finding id にこの値を
-   * 混ぜることで、親の parallel から同じ子ワークフローを複数同時に呼んだ場合の
-   * id 衝突を防ぐ。子エンジンは同じ親の runPaths.slug（= runId）を継承するため、
-   * 呼び出し元ステップ名で区別しないと2子の raw finding id が完全に一致し、
-   * 片方が他方の台帳エントリを上書きしてしまう。トップレベルの走行では
-   * undefined のままにし、既存の raw finding id の形を変えない。
-   */
-  findingCallNamespace?: string;
   /** Full resume-stack-derived identity for the workflow_call that owns this engine. */
   workflowCallSiteIdentity?: string;
 }

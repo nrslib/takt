@@ -8,7 +8,7 @@ export default tseslint.config(
     languageOptions: {
       parserOptions: {
         projectService: {
-          allowDefaultProject: ['eval/asserts/*.mjs', 'eval/scripts/*.mjs'],
+          allowDefaultProject: ['eval/*.mjs', 'eval/asserts/*.mjs', 'eval/scripts/*.mjs'],
         },
         tsconfigRootDir: import.meta.dirname,
       },
@@ -26,6 +26,9 @@ export default tseslint.config(
       globals: {
         console: 'readonly',
         process: 'readonly',
+        AbortController: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly',
       },
     },
   },

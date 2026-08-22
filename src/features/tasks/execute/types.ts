@@ -31,6 +31,10 @@ import type { TaskAttachment } from '../attachments.js';
 import type { TraceTaskContext } from './traceTaskMetadata.js';
 import type { RunFinalizationIssue } from './workflowRunExecution.js';
 import type { ResolvedTaskSpec } from './taskSpecContext.js';
+import type { SelectorProviderOverrides } from '../../../infra/config/selectorProviderResolution.js';
+import type { LoopAnalysisPublicationCoordinator } from './loopAnalysisPublication.js';
+
+export type LoopAnalysisScheduler = (sourceRunDirectory: string) => void;
 
 /** Info captured when iteration limit is hit in non-interactive mode */
 export interface ExceededInfo {
@@ -117,6 +121,70 @@ export type WorkflowExecutionEvent =
       success: false;
       reason: string;
       reportDirectory?: string;
+    }
+  | {
+      type: 'companion';
+      action: 'start';
+      step: string;
+      companion: string;
+    }
+  | {
+      type: 'companion';
+      action: 'pool_selected';
+      step: string;
+      selected: string[];
+      rationale: string;
+    }
+  | {
+      type: 'companion';
+      action: 'finding';
+      step: string;
+      companion: string;
+      severity: 'must_fix' | 'should_fix' | 'nit';
+    }
+  | {
+      type: 'companion';
+      action: 'fix_round';
+      step: string;
+      sequence: number;
+      findingCount: number;
+    }
+  | {
+      type: 'companion';
+      action: 'complete';
+      step: string;
+      completionSettled: boolean;
+      completionFailure: boolean;
+      followUpRounds: number;
+      reason?: string;
+    }
+  | {
+      type: 'companion';
+      action: 'review_round';
+      step: string;
+      companion: string;
+      trigger: 'quiet' | 'forced' | 'completion' | 'commit';
+      digest: string;
+      changedLines: number;
+      findingCount: number;
+    }
+  | {
+      type: 'companion';
+      action: 'queue_coalesced';
+      step: string;
+      companion: string;
+      replaced: {
+        trigger: 'quiet' | 'forced' | 'completion' | 'commit';
+        digest: string;
+        changedLines: number;
+        observedGeneration: number;
+      };
+      replacement: {
+        trigger: 'quiet' | 'forced' | 'completion' | 'commit';
+        digest: string;
+        changedLines: number;
+        observedGeneration: number;
+      };
     };
 
 /** Live-only workflow feedback. Delivery failure never changes run outcome. */
@@ -177,6 +245,7 @@ export interface WorkflowExecutionOptions {
   /** Resolved provider options */
   providerOptions?: StepProviderOptions;
   selectorProvider?: SelectorProviderInfo;
+  selectorProviderOverrides?: SelectorProviderOverrides;
   /** Resolved automatic provider/model routing configuration */
   autoRouting?: AutoRoutingConfig;
   /** Strategy override for automatic provider/model routing. */
@@ -223,6 +292,12 @@ export interface WorkflowExecutionOptions {
   traceTaskMetadata?: WorkflowTraceTaskMetadata;
   /** Structured PR context used as prompt input. */
   prContext?: PullRequestContext;
+  /** Coordinates optional loop-analysis publication with source-run PR handling. */
+  loopAnalysisPublication?: LoopAnalysisPublicationCoordinator;
+  /** Sanitizes report content before it crosses the report-file persistence boundary. */
+  reportContentSanitizer?: (content: string) => string;
+  /** Non-blocking hook invoked after terminal artifacts and observability are finalized. */
+  loopAnalysisScheduler?: LoopAnalysisScheduler;
 }
 
 export interface TaskExecutionOptions {
@@ -311,6 +386,8 @@ export interface ExecuteTaskOptions {
   traceTaskMetadata?: WorkflowTraceTaskMetadata;
   /** Structured PR context used as prompt input. */
   prContext?: PullRequestContext;
+  /** Coordinates optional loop-analysis publication with source-run PR handling. */
+  loopAnalysisPublication?: LoopAnalysisPublicationCoordinator;
 }
 
 export interface PipelineExecutionOptions {

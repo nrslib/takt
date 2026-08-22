@@ -1,8 +1,11 @@
-import { executeIsolatedStructuredInternalAgent } from '../../../agents/agent-usecases.js';
+import {
+  executeStructuredAgent,
+  StructuredAgentResponseError,
+} from '../../../agents/structured-caller/transport.js';
 import type {
   AgentResponse,
   DynamicFacetSelectionSnapshot,
-  NormalAgentWorkflowStep,
+  AgentWorkflowStep,
   ResolvedFacetPool,
   WorkflowResumePointEntry,
   WorkflowState,
@@ -12,10 +15,15 @@ import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { recordAgentUsageEvent } from '../engine/agent-usage-event.js';
 import { buildDynamicParallelSelectionIdentityFromPath } from '../dynamic-parallel/identity.js';
 import {
-  createSelectorOutputSchema,
+  createSelectorContract,
+  SELECTOR_READ_ONLY_TOOLS,
   validateSelectorResponse,
-} from '../dynamic-parallel/selector-contract.js';
-import { buildDynamicFacetSelectorInstruction } from './dynamicFacetContextBuilder.js';
+} from '../selector-contract.js';
+import {
+  buildDynamicFacetSelectorInstruction,
+  buildDynamicFacetTargetAgentPrompt,
+} from './dynamicFacetContextBuilder.js';
+import { resolveSelectorReportNames } from '../dynamic-parallel/selector-input.js';
 import { composeDynamicFacets, type FixedFacets } from './dynamicFacetComposer.js';
 import type { DynamicFacetSelectionStore } from './dynamicFacetSelectionStore.js';
 import { truncateUtf8 } from '../../../shared/utils/utf8.js';
@@ -24,26 +32,38 @@ import {
   sanitizeSensitiveTextWithKnownValues,
 } from '../../../shared/utils/sensitiveText.js';
 import { SelectorInputReader } from '../dynamic-parallel/selector-input-reader.js';
+import type {
+  ProviderActivityCallback,
+  StreamCallback,
+} from '../../../shared/types/provider.js';
+import { resolveInternalAgentMcpServers } from '../../../infra/config/runtime-provider/mcp-assignment.js';
 
 const log = createLogger('dynamic-facet-selector');
 const SELECTOR_RATIONALE_LOG_MAX_BYTES = 1024;
 
 export interface DynamicFacetSelectorCoordinatorDeps {
   readonly engineOptions: WorkflowEngineOptions;
+  readonly getAbortSignal?: () => AbortSignal | undefined;
+  readonly onStream?: StreamCallback;
+  readonly onActivity?: ProviderActivityCallback;
+  readonly failureDir: string;
   readonly selectionStore: DynamicFacetSelectionStore;
   readonly getWorkflowReference: () => string;
   readonly workflowCallPath: readonly WorkflowResumePointEntry[];
   readonly commitSelection: (
-    step: NormalAgentWorkflowStep,
-    iteration: number,
     identity: string,
     snapshot: DynamicFacetSelectionSnapshot,
   ) => Promise<void>;
   readonly getReportDirectory: () => string;
-  readonly getReportNames: (step: NormalAgentWorkflowStep, state: WorkflowState) => readonly string[];
+  readonly getReportsRootDirectory: () => string;
+  readonly getReportNames: (step: AgentWorkflowStep, state: WorkflowState) => readonly string[];
   readonly getCwd: () => string;
   readonly inputReader?: SelectorInputReader;
-  readonly getUnresolvedFindings: () => string;
+}
+
+export interface DynamicFacetSelectionContext {
+  readonly identityPath?: readonly WorkflowResumePointEntry[];
+  readonly stepIteration?: number;
 }
 
 export interface DynamicFacetSelectionResult {
@@ -57,75 +77,80 @@ export class DynamicFacetSelectorCoordinator {
   constructor(private readonly deps: DynamicFacetSelectorCoordinatorDeps) {}
 
   async resolveDynamicFacets(
-    step: NormalAgentWorkflowStep,
+    step: AgentWorkflowStep,
     state: WorkflowState,
     task: string,
     pool: ResolvedFacetPool,
+    context?: DynamicFacetSelectionContext,
   ): Promise<DynamicFacetSelectionResult> {
-    const signal = this.deps.engineOptions.abortSignal;
+    const signal = this.deps.getAbortSignal?.() ?? this.deps.engineOptions.abortSignal;
     signal?.throwIfAborted();
     if (step.dynamicFacets === undefined) {
       throw new Error(`Step "${step.name}" has no dynamic_facets configuration`);
     }
-    const identity = this.resolveIdentity(step.name);
-    const selections = this.deps.selectionStore.snapshot();
-    const resumed = state.resumedDynamicFacetSteps.has(identity)
-      ? selections.get(identity)
-      : undefined;
-
-    if (resumed !== undefined) {
-      signal?.throwIfAborted();
-      const result = this.buildResultFromSnapshot(pool, resumed, step);
-      state.resumedDynamicFacetSteps.delete(identity);
-      state.activeDynamicFacetSelectionIdentity = identity;
-      this.logSelection(step, identity, resumed, 'resume');
-      signal?.throwIfAborted();
-      return result;
+    const identityPath = context?.identityPath ?? this.deps.workflowCallPath;
+    const identity = this.resolveIdentity(step.name, identityPath);
+    const stepIteration = context?.stepIteration ?? state.stepIterations.get(step.name);
+    if (stepIteration === undefined) {
+      throw new Error(`Dynamic facet selector for "${step.name}" requires a resolved step iteration`);
     }
-
+    const selections = this.deps.selectionStore.snapshot();
     const selectorProvider = this.deps.engineOptions.selectorProvider;
     if (selectorProvider?.provider === undefined) {
       throw new Error(`Dynamic facet selector for "${step.name}" has no resolved provider`);
     }
 
     const poolIds = pool.candidates.map((candidate) => candidate.id);
-    const outputSchema = createSelectorOutputSchema(poolIds, step.dynamicFacets.maxSelected);
+    const selectorContract = createSelectorContract(
+      pool.candidates.map(({ id, description }) => ({ name: id, description })),
+      step.dynamicFacets.maxSelected,
+    );
     const previous = selections.get(identity);
 
-    const reportNames = this.deps.getReportNames(step, state);
+    const reportDirectory = this.deps.getReportDirectory();
+    const reportNames = resolveSelectorReportNames({
+      reportDirectory,
+      reportsRootDirectory: this.deps.getReportsRootDirectory(),
+      reportNames: this.deps.getReportNames(step, state),
+      stepName: step.name,
+      workflowReference: this.deps.getWorkflowReference(),
+      workflowCallPath: identityPath,
+    });
     if (this.deps.inputReader === undefined) {
       throw new Error('Dynamic facet selector requires an input reader');
     }
+    const targetAgentPrompt = buildDynamicFacetTargetAgentPrompt(step);
     const inputs = await this.deps.inputReader.readInputs(
-      this.deps.getReportDirectory(),
+      reportDirectory,
       reportNames,
       this.deps.getCwd(),
       signal,
     );
     signal?.throwIfAborted();
-    const unresolvedFindings = this.deps.getUnresolvedFindings();
-
     const instruction = buildDynamicFacetSelectorInstruction({
       task,
       workflowName: state.workflowName,
       stepName: step.name,
-      workflowCallPath: this.deps.workflowCallPath,
-      isReentry: previous !== undefined,
-      stepIteration: state.stepIterations.get(step.name) ?? 1,
-      reports: inputs.reports,
-      unresolvedFindings,
-      cumulativeDiff: inputs.workingTreeDiff,
+      workflowCallPath: identityPath,
+      ...(previous === undefined ? {} : { previousSnapshot: previous }),
+      stepIteration,
+      reportDirectory: inputs.reportDirectory,
+      reportNames: inputs.reportNames,
+      changedPaths: inputs.changedPaths,
+      targetAgentPrompt,
       pool,
       maxSelected: step.dynamicFacets.maxSelected,
+      selectorInstruction: step.dynamicFacets.selector?.instruction,
     });
 
     const sensitiveValues = createBoundedSensitiveValues();
     sensitiveValues.collect({
       task,
-      reports: inputs.reports,
-      working_tree_diff: inputs.workingTreeDiff,
+      report_directory: inputs.reportDirectory,
+      report_names: inputs.reportNames,
+      changed_paths: inputs.changedPaths,
+      targetAgentPrompt,
       candidates: pool.candidates.map((candidate) => ({ id: candidate.id, description: candidate.description })),
-      unresolved_findings: unresolvedFindings,
     });
     const redact = (text: string): string => sanitizeSensitiveTextWithKnownValues(text, sensitiveValues);
 
@@ -134,28 +159,51 @@ export class DynamicFacetSelectorCoordinator {
     let selectedIds: readonly string[];
     let snapshot: DynamicFacetSelectionSnapshot;
     try {
-      response = await executeIsolatedStructuredInternalAgent(
-        'You are TAKT\'s internal dynamic facet selector. Select only candidate IDs from the provided pool.',
+      const mcp = resolveInternalAgentMcpServers(this.deps.engineOptions.mcpAssignment);
+      response = await executeStructuredAgent(
         instruction,
-        outputSchema,
+        selectorContract.providerSchema,
         {
+          name: 'dynamic-facet-selector',
           cwd: this.deps.getCwd(),
           projectCwd: this.deps.engineOptions.projectCwd,
-          abortSignal: this.deps.engineOptions.abortSignal,
+          persona: step.dynamicFacets.selector?.persona,
+          workflowBundleResourceRoot: this.deps.engineOptions.workflowBundleResourceRoot,
+          systemPrompt: 'You are TAKT\'s internal dynamic facet selector. Select only candidate IDs from the provided pool.',
+          abortSignal: signal,
+          onStream: this.deps.onStream,
+          onActivity: this.deps.onActivity,
           language: this.deps.engineOptions.language,
+          failureDir: this.deps.failureDir,
+          personaPath: step.dynamicFacets.selector?.personaPath,
+          allowedTools: [...SELECTOR_READ_ONLY_TOOLS],
+          allowedToolsSource: 'synthetic',
           resolution: {
             provider: selectorProvider.provider,
             model: selectorProvider.model,
-            providerOptions: selectorProvider.providerOptions,
+            providerOptions: selectorProvider.providerOptions ?? {},
+            permissionMode: selectorProvider.permissionMode ?? 'readonly',
+            permissionModeSource: selectorProvider.permissionMode === undefined ? 'synthetic' : 'explicit',
           },
+          mcpServers: mcp.servers,
+          mcpServerIdentity: mcp.identity,
           mcpAssignment: this.deps.engineOptions.mcpAssignment,
         },
       );
       signal?.throwIfAborted();
-      selectorResult = validateSelectorResponse(response, outputSchema, step.name, redact, { label: 'Dynamic facet' });
+      selectorResult = validateSelectorResponse(
+        response,
+        selectorContract.validationSchema,
+        step.name,
+        redact,
+        { label: 'Dynamic facet' },
+      );
       signal?.throwIfAborted();
       selectedIds = selectorResult.selectedIds;
-      if (selectedIds.length > step.dynamicFacets.maxSelected) {
+      if (
+        step.dynamicFacets.maxSelected !== undefined
+        && selectedIds.length > step.dynamicFacets.maxSelected
+      ) {
         throw new Error(
           `Dynamic facet selector for "${step.name}" selected ${selectedIds.length} candidates, exceeding max_selected ${step.dynamicFacets.maxSelected}`,
         );
@@ -170,6 +218,9 @@ export class DynamicFacetSelectorCoordinator {
       snapshot = this.createSnapshot(identity, step.name, pool, selectedIds, selectorResult.rationale, previous);
       signal?.throwIfAborted();
     } catch (error) {
+      if (error instanceof StructuredAgentResponseError) {
+        response = error.response;
+      }
       recordAgentUsageEvent(
         this.deps.engineOptions,
         `dynamic-facet-selector:${identity}`,
@@ -190,7 +241,7 @@ export class DynamicFacetSelectorCoordinator {
       response.providerUsage,
     );
     signal?.throwIfAborted();
-    await this.deps.commitSelection(step, state.iteration, identity, snapshot);
+    await this.deps.commitSelection(identity, snapshot);
     signal?.throwIfAborted();
     state.activeDynamicFacetSelectionIdentity = identity;
     this.logSelection(step, identity, snapshot, 'selector', {
@@ -233,7 +284,7 @@ export class DynamicFacetSelectorCoordinator {
     pool: ResolvedFacetPool,
     snapshot: DynamicFacetSelectionSnapshot,
     selectedIds: readonly string[],
-    step: NormalAgentWorkflowStep,
+    step: AgentWorkflowStep,
   ): DynamicFacetSelectionResult {
     const fixed: FixedFacets = {
       policyContents: step.policyContents ?? [],
@@ -248,34 +299,22 @@ export class DynamicFacetSelectorCoordinator {
     };
   }
 
-  private buildResultFromSnapshot(
-    pool: ResolvedFacetPool,
-    snapshot: DynamicFacetSelectionSnapshot,
-    step: NormalAgentWorkflowStep,
-  ): DynamicFacetSelectionResult {
-    const knownIds = new Set(pool.candidates.map((candidate) => candidate.id));
-    const missingId = snapshot.selected_ids.find((id) => !knownIds.has(id));
-    if (missingId !== undefined) {
-      throw new Error(
-        `Restored dynamic facet selection for step "${snapshot.step_name}" references candidate id "${missingId}" that is not in pool "${pool.name}"`,
-      );
-    }
-    return this.buildResult(pool, snapshot, snapshot.selected_ids, step);
-  }
-
-  private resolveIdentity(stepName: string): string {
+  private resolveIdentity(
+    stepName: string,
+    workflowCallPath: readonly WorkflowResumePointEntry[],
+  ): string {
     return buildDynamicParallelSelectionIdentityFromPath(
       this.deps.getWorkflowReference(),
       stepName,
-      this.deps.workflowCallPath,
+      workflowCallPath,
     );
   }
 
   private logSelection(
-    step: NormalAgentWorkflowStep,
+    step: AgentWorkflowStep,
     identity: string,
     snapshot: DynamicFacetSelectionSnapshot,
-    selectionSource: 'selector' | 'resume',
+    selectionSource: 'selector',
     selectorDetails?: {
       readonly selectorProvider: string;
       readonly selectorProviderSource: string | undefined;

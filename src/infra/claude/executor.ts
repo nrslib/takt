@@ -40,6 +40,29 @@ import { buildClaudePromptInput } from './image-input.js';
 import { extractClaudeProviderUsage } from './usage.js';
 
 const log = createLogger('claude-sdk');
+const ABORT_CLEANUP_TIMEOUT_MS = 30_000;
+
+async function awaitAbortCleanup(cleanup: Promise<void>, queryId: string): Promise<void> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      cleanup,
+      new Promise<void>((resolve) => {
+        timeoutId = setTimeout(() => {
+          log.debug('Claude query cleanup timed out after abort', {
+            queryId,
+            timeoutMs: ABORT_CLEANUP_TIMEOUT_MS,
+          });
+          resolve();
+        }, ABORT_CLEANUP_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeoutId !== undefined) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
 
 function isRejectedRateLimitEvent(message: SDKRateLimitEvent): boolean {
   // SDK は rate_limit_event を情報イベントとして毎回流す。
@@ -134,6 +157,7 @@ export class QueryExecutor {
     prompt: string,
     options: ClaudeSpawnOptions,
   ): Promise<ClaudeResult> {
+    options.onActivity?.({ kind: 'attempt_started' });
     const queryId = generateQueryId();
 
     log.debug('Executing Claude query via SDK', {
@@ -163,6 +187,12 @@ export class QueryExecutor {
     let structuredOutput: Record<string, unknown> | undefined;
     let providerUsage: ProviderUsageSnapshot | undefined;
     let onExternalAbort: (() => void) | undefined;
+    let iterator: AsyncIterator<SDKMessage> | undefined;
+    let rejectAbort: ((error: unknown) => void) | undefined;
+    let abortPromise: Promise<never>;
+    let abortRequested = false;
+    let interruptPromise: Promise<void> | undefined;
+    let iteratorClosePromise: Promise<void> | undefined;
     let observedRateLimit = false;
     let rateLimitInfo: RateLimitInfo | undefined;
     let rateLimitMessage: string | undefined;
@@ -215,17 +245,49 @@ export class QueryExecutor {
       success = true;
     };
 
+    const closeIterator = (): Promise<void> => {
+      if (iteratorClosePromise !== undefined) {
+        return iteratorClosePromise;
+      }
+      const result = iterator?.return?.();
+      iteratorClosePromise = result === undefined
+        ? Promise.resolve()
+        : Promise.resolve(result)
+            .then(() => undefined)
+            .catch((closeError: unknown) => {
+              log.debug('Failed to close Claude query iterator', {
+                queryId,
+                error: getErrorMessage(closeError),
+              });
+            });
+      return iteratorClosePromise;
+    };
+
     try {
       const q = query({ prompt: buildClaudePromptInput(prompt, options.imageAttachments), options: sdkOptions });
       registerQuery(queryId, q);
+      iterator = q[Symbol.asyncIterator]();
+      abortPromise = new Promise<never>((_resolve, reject) => {
+        rejectAbort = reject;
+      });
+      abortPromise.catch(() => undefined);
       if (options.abortSignal) {
         const interruptQuery = () => {
-          void q.interrupt().catch((interruptError: unknown) => {
-            log.debug('Failed to interrupt Claude query', {
-              queryId,
-              error: getErrorMessage(interruptError),
+          if (abortRequested) {
+            return;
+          }
+          abortRequested = true;
+          interruptPromise = Promise.resolve()
+            .then(() => q.interrupt())
+            .then(() => undefined)
+            .catch((interruptError: unknown) => {
+              log.debug('Failed to interrupt Claude query', {
+                queryId,
+                error: getErrorMessage(interruptError),
+              });
             });
-          });
+          void closeIterator();
+          rejectAbort?.(new AbortError('Query interrupted'));
         };
         if (options.abortSignal.aborted) {
           interruptQuery();
@@ -235,7 +297,13 @@ export class QueryExecutor {
         }
       }
 
-      for await (const message of q) {
+      while (true) {
+        const nextMessage = iterator.next();
+        const messageResult = await Promise.race([nextMessage, abortPromise]);
+        if (messageResult.done) {
+          break;
+        }
+        const message = messageResult.value;
         if ('session_id' in message) {
           sessionId = message.session_id;
         }
@@ -269,13 +337,9 @@ export class QueryExecutor {
         }
 
         if (observedRateLimit) {
+          void closeIterator();
           break;
         }
-      }
-
-      unregisterQuery(queryId);
-      if (onExternalAbort && options.abortSignal) {
-        options.abortSignal.removeEventListener('abort', onExternalAbort);
       }
 
       const finalContent = resultContent || accumulatedAssistantText;
@@ -310,10 +374,6 @@ export class QueryExecutor {
       };
       return response;
     } catch (error) {
-      if (onExternalAbort && options.abortSignal) {
-        options.abortSignal.removeEventListener('abort', onExternalAbort);
-      }
-      unregisterQuery(queryId);
       return QueryExecutor.handleQueryError(
         error,
         queryId,
@@ -327,6 +387,20 @@ export class QueryExecutor {
         rateLimitInfo,
         rateLimitMessage,
       );
+    } finally {
+      if (onExternalAbort && options.abortSignal) {
+        options.abortSignal.removeEventListener('abort', onExternalAbort);
+      }
+      const cleanup = Promise.all([
+        closeIterator(),
+        interruptPromise ?? Promise.resolve(),
+      ]).then(() => undefined);
+      if (abortRequested) {
+        await awaitAbortCleanup(cleanup, queryId);
+      } else {
+        await cleanup;
+      }
+      unregisterQuery(queryId);
     }
   }
 

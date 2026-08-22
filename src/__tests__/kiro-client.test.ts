@@ -28,13 +28,14 @@ import { callKiro } from '../infra/kiro/client.js';
 type SpawnScenario = {
   stdout?: string;
   stderr?: string;
+  stdinError?: Partial<NodeJS.ErrnoException> & { message: string };
   code?: number | null;
   signal?: NodeJS.Signals | null;
   error?: Partial<NodeJS.ErrnoException> & { message: string };
 };
 
 type MockChildProcess = EventEmitter & {
-  stdin: { end: ReturnType<typeof vi.fn> };
+  stdin: EventEmitter & { end: ReturnType<typeof vi.fn> };
   stdout: EventEmitter;
   stderr: EventEmitter;
   kill: ReturnType<typeof vi.fn>;
@@ -108,7 +109,8 @@ function restoreEnv(): void {
 
 function createMockChildProcess(): MockChildProcess {
   const child = new EventEmitter() as MockChildProcess;
-  child.stdin = { end: vi.fn() };
+  child.stdin = new EventEmitter() as EventEmitter & { end: ReturnType<typeof vi.fn> };
+  child.stdin.end = vi.fn();
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
   child.kill = vi.fn(() => true);
@@ -118,6 +120,11 @@ function createMockChildProcess(): MockChildProcess {
 function mockSpawnWithScenario(scenario: SpawnScenario): void {
   mockSpawn.mockImplementation((_cmd: string, _args: string[], _options: object) => {
     const child = createMockChildProcess();
+    child.stdin.end.mockImplementation(() => {
+      if (scenario.stdinError) {
+        child.stdin.emit('error', Object.assign(new Error(scenario.stdinError.message), scenario.stdinError));
+      }
+    });
 
     queueMicrotask(() => {
       if (scenario.stdout) {
@@ -196,6 +203,7 @@ describe('callKiro', () => {
   });
 
   it('Given full permission and a session, When called, Then invokes kiro-cli headless with trust-all and resume-id', async () => {
+    const onActivity = vi.fn();
     mockSpawnWithScenario({
       stdout: 'Implementation complete.',
       code: 0,
@@ -206,11 +214,13 @@ describe('callKiro', () => {
       sessionId: 'sess-prev',
       permissionMode: 'full',
       kiroApiKey: 'kiro-secret',
+      onActivity,
     });
 
     expect(result.status).toBe('done');
     expect(result.content).toBe('Implementation complete.');
     expect(result.sessionId).toBe('sess-prev');
+    expect(onActivity).toHaveBeenCalledOnce();
 
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     const [command, args, options] = mockSpawn.mock.calls[0] as [
@@ -287,13 +297,15 @@ describe('callKiro', () => {
       code: 0,
     });
 
-    await callKiro('reviewer', 'review this code', {
+    const systemPrompt = 'custom system prompt';
+    const userPrompt = 'custom user prompt';
+    await callKiro('reviewer', userPrompt, {
       cwd: '/repo',
-      systemPrompt: 'You are a strict reviewer.',
+      systemPrompt,
     });
 
     const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
-    expect(args.at(-1)).toBe('You are a strict reviewer.\n\nreview this code');
+    expect(args.at(-1)).toBe(`${systemPrompt}\n\n${userPrompt}`);
   });
 
   it('Given Kiro home, network env, and run-local child process env, When called, Then passes only the Kiro child env allowlist', async () => {
@@ -662,6 +674,35 @@ describe('callKiro', () => {
     expect(result.content).toBe(output);
   });
 
+  it('Given only a context compaction notice, When command succeeds, Then returns an error so the caller can retry', async () => {
+    const notice = 'The context window has overflowed, summarizing the history...';
+    mockSpawnWithScenario({
+      stdout: notice,
+      code: 0,
+    });
+
+    const onStream = vi.fn();
+    const result = await callKiro('planner', 'write the report', {
+      cwd: '/repo',
+      onStream,
+      sessionId: '123e4567-e89b-12d3-a456-426614174000',
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.error).toBe(
+      'kiro-cli compacted the context without returning a response',
+    );
+    expect(onStream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'result',
+        data: expect.objectContaining({ success: false }),
+      }),
+    );
+    expect(onStream).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'text' }),
+    );
+  });
+
   it('Given onStream callback, When command succeeds, Then emits text and successful result events', async () => {
     mockSpawnWithScenario({
       stdout: 'stream content',
@@ -699,6 +740,17 @@ describe('callKiro', () => {
     expect(result.content).toContain('kiro-cli binary not found');
     expect(result.error).toContain('kiro-cli binary not found');
     expect(result.content).toContain('TAKT_KIRO_CLI_PATH');
+  });
+
+  it('Given stdin emits an error while closing input, When called, Then returns the stream failure', async () => {
+    mockSpawnWithScenario({
+      stdinError: { message: 'stdin pipe closed' },
+    });
+
+    const result = await callKiro('coder', 'implement feature', { cwd: '/repo' });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('kiro-cli stdin stream error: stdin pipe closed');
   });
 
   it('Given authentication stderr, When command fails, Then returns an authentication error without exposing the key', async () => {

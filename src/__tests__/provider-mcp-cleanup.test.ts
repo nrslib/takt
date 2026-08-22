@@ -28,6 +28,7 @@ function resolvedServers(): ResolvedMcpServers {
     servers: {
       'common-tools': { type: 'stdio', command: 'srv', env: { TOKEN: 'x' } },
     },
+    serverNames: ['common-tools'],
     identity: 'common-tools:stdio',
   };
 }
@@ -56,7 +57,7 @@ describe('ProviderMcpAdapter cleanup (MCP-CLEANUP)', () => {
     const path = (prepared as { path?: string }).path;
     expect(path).toBeDefined();
     await prepared.dispose();
-    expect(existsSync(path)).toBe(false);
+    expect(existsSync(path!)).toBe(false);
   });
 
   it('Given a prepared claude-terminal adapter, When dispose is called after abort, Then temp config is removed', async () => {
@@ -67,7 +68,7 @@ describe('ProviderMcpAdapter cleanup (MCP-CLEANUP)', () => {
     const path = (prepared as { path?: string }).path;
     expect(path).toBeDefined();
     await prepared.dispose();
-    expect(existsSync(path)).toBe(false);
+    expect(existsSync(path!)).toBe(false);
   });
 
   it('Given a prepared copilot adapter, When dispose is called, Then the temporary additional-mcp-config file is removed', async () => {
@@ -76,7 +77,7 @@ describe('ProviderMcpAdapter cleanup (MCP-CLEANUP)', () => {
     const path = (prepared as { path?: string }).path;
     expect(path).toBeDefined();
     await prepared.dispose();
-    expect(existsSync(path)).toBe(false);
+    expect(existsSync(path!)).toBe(false);
   });
 
   it('Given a prepared copilot adapter, When abort fires before dispose, Then dispose still removes the temp file', async () => {
@@ -87,7 +88,7 @@ describe('ProviderMcpAdapter cleanup (MCP-CLEANUP)', () => {
     const path = (prepared as { path?: string }).path;
     expect(path).toBeDefined();
     await prepared.dispose();
-    expect(existsSync(path)).toBe(false);
+    expect(existsSync(path!)).toBe(false);
   });
 
   it('Given a prepared kiro adapter, When dispose is called, Then the temporary kiro mcp config is removed', async () => {
@@ -96,7 +97,7 @@ describe('ProviderMcpAdapter cleanup (MCP-CLEANUP)', () => {
     const path = (prepared as { path?: string }).path;
     expect(path).toBeDefined();
     await prepared.dispose();
-    expect(existsSync(path)).toBe(false);
+    expect(existsSync(path!)).toBe(false);
   });
 
   it('Given a prepared kiro adapter, When abort fires, Then dispose still removes the temp config', async () => {
@@ -107,7 +108,7 @@ describe('ProviderMcpAdapter cleanup (MCP-CLEANUP)', () => {
     const path = (prepared as { path?: string }).path;
     expect(path).toBeDefined();
     await prepared.dispose();
-    expect(existsSync(path)).toBe(false);
+    expect(existsSync(path!)).toBe(false);
   });
 
   it('Given a prepared cursor adapter, When dispose is called, Then the temporary config root directory is removed', async () => {
@@ -116,7 +117,7 @@ describe('ProviderMcpAdapter cleanup (MCP-CLEANUP)', () => {
     const configRoot = (prepared as { configRoot?: string }).configRoot;
     expect(configRoot).toBeDefined();
     await prepared.dispose();
-    expect(existsSync(configRoot)).toBe(false);
+    expect(existsSync(configRoot!)).toBe(false);
   });
 
   it('Given a prepared cursor adapter, When abort fires before dispose, Then dispose still removes the config root', async () => {
@@ -127,7 +128,7 @@ describe('ProviderMcpAdapter cleanup (MCP-CLEANUP)', () => {
     expect(configRoot).toBeDefined();
     controller.abort();
     await prepared.dispose();
-    expect(existsSync(configRoot)).toBe(false);
+    expect(existsSync(configRoot!)).toBe(false);
   });
 
   it('Given a prepared cursor adapter, When dispose is called twice, Then the second call does not throw', async () => {
@@ -152,7 +153,7 @@ describe('ProviderMcpAdapter cleanup (MCP-CLEANUP)', () => {
 
   it('Given an MCP-disabled server set, When prepared, Then no temp artifacts are created and dispose is a no-op', async () => {
     const adapter = createMcpAdapter('claude');
-    const empty: ResolvedMcpServers = { enabled: false, servers: {}, identity: '' };
+    const empty: ResolvedMcpServers = { enabled: false, servers: {}, serverNames: [], identity: '' };
     const prepared = await adapter.prepare(empty, baseContext());
     const path = (prepared as { path?: string }).path;
     expect(path).toBeUndefined();

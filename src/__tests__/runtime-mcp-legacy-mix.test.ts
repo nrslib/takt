@@ -5,6 +5,7 @@ import {
   determineProviderConfigMode,
 } from '../infra/config/runtime-provider/mode.js';
 import {
+  assertNoMixedWorkflowMcpConfiguration,
   collectLegacyMcpSignals,
   type LegacyMcpSignalInput,
 } from '../infra/config/runtime-provider/legacy-signals.js';
@@ -12,8 +13,6 @@ import {
   compileProviderEnvironment,
 } from '../infra/config/runtime-provider/environment.js';
 import type { McpSection } from '../infra/config/runtime-provider/schema.js';
-import type { WorkflowConfig } from '../core/models/index.js';
-import type { McpServerConfig } from '../core/models/index.js';
 
 /**
  * Contracts covered (see plan.md 完了契約):
@@ -41,13 +40,13 @@ describe('hasActiveMcpSection (MCP-LEGACY-GATE)', () => {
     expect(hasActiveMcpSection({ version: 1, mcp: {} } as never)).toBe(false);
   });
 
-  it('Given an mcp section with servers only, Then mcp IS active (servers defined)', () => {
+  it('Given an mcp section with servers only, Then mcp is not active until a server is assigned', () => {
     expect(
       hasActiveMcpSection({
         version: 1,
         mcp: { servers: { a: { command: 'x' } } },
       } as never),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it('Given an mcp section with defaults only, Then mcp IS active', () => {
@@ -129,7 +128,7 @@ describe('collectLegacyMcpSignals (MCP-LEGACY-GATE)', () => {
       }),
     );
     expect(signals.length).toBeGreaterThan(0);
-    const signal = signals.find((s) => s.setting === 'workflow_mcp_servers');
+    const signal = signals.find((s) => s.setting === 'mcp_servers');
     expect(signal).toBeDefined();
     expect(signal?.location).toContain('release-workflow');
     expect(signal?.location).toContain('create-pr');
@@ -149,6 +148,7 @@ describe('collectLegacyMcpSignals (MCP-LEGACY-GATE)', () => {
     expect(signals.length).toBeGreaterThanOrEqual(2);
     const settings = signals.map((s) => s.setting);
     expect(settings).toContain('workflow_mcp_servers');
+    expect(settings).toContain('mcp_servers');
   });
 
   it('Given a legacy signal location, When reported, Then the error names the workflow/step and migration target', () => {
@@ -160,6 +160,9 @@ describe('collectLegacyMcpSignals (MCP-LEGACY-GATE)', () => {
       }),
     );
     const signal = signals[0];
+    if (signal === undefined) {
+      throw new Error('Expected a legacy MCP signal');
+    }
     // The error message contract: each signal must carry workflow/step location + migrateTo.
     expect(signal.location).toContain('release-workflow');
     expect(signal.location).toContain('create-pr');
@@ -179,18 +182,30 @@ describe('determineProviderConfigMode: mcp active without provider (MCP-MODE / M
     expect(result.mode).toBe('runtime-v1');
   });
 
-  it('Given an mcp-only active runtime file AND legacy provider signals, When determining mode, Then it fails fast (混在 gate)', () => {
-    expect(() =>
-      determineProviderConfigMode({
-        runtimeFile: {
-          version: 1,
-          mcp: { servers: { a: { command: 'x' } }, defaults: { servers: ['a'] } },
-        } as never,
-        legacyProviderSignals: [
-          { setting: 'provider', location: 'config.yaml:provider', migrateTo: 'provider.defaults' },
-        ],
-      }),
-    ).toThrow(/Mixed provider configuration/);
+  it('Given an mcp-only active runtime file AND legacy provider signals, When determining mode, Then runtime-v1 keeps legacy provider resolution (docs/configuration.md)', () => {
+    const result = determineProviderConfigMode({
+      runtimeFile: {
+        version: 1,
+        mcp: { servers: { a: { command: 'x' } }, defaults: { servers: ['a'] } },
+      } as never,
+      legacyProviderSignals: [
+        { setting: 'provider', location: 'config.yaml:provider', migrateTo: 'provider.defaults' },
+      ],
+    });
+    expect(result.mode).toBe('runtime-v1');
+  });
+
+  it('Given provider: {} and an active mcp section, When determining mode, Then runtime-v1 is chosen', () => {
+    const result = determineProviderConfigMode({
+      runtimeFile: {
+        version: 1,
+        provider: {},
+        mcp: { servers: { a: { command: 'x' } }, defaults: { servers: ['a'] } },
+      } as never,
+      legacyProviderSignals: [],
+    });
+
+    expect(result.mode).toBe('runtime-v1');
   });
 });
 
@@ -205,12 +220,27 @@ describe('compileProviderEnvironment: mcp-only runtime-v1 (MCP-MODE)', () => {
     expect(env.model).toBeUndefined();
     expect(env.providerSource).toBe('runtime-v1');
     expect(env.mcpAssignment).toBeDefined();
-    expect(env.mcpAssignment?.servers?.a?.command).toBe('x');
+    expect(env.mcpAssignment?.servers?.a).toMatchObject({ command: 'x' });
   });
 
   it('Given a runtime-v1 model with section undefined and no mcp section, When compiled, Then mcpAssignment is undefined', () => {
     const env = compileProviderEnvironment({ kind: 'runtime-v1', section: undefined, mcp: undefined });
     expect(env.mcpAssignment).toBeUndefined();
+  });
+
+  it('Given an inactive provider section and an active mcp section, When compiled, Then it uses MCP-only mode', () => {
+    const env = compileProviderEnvironment({
+      kind: 'runtime-v1',
+      section: {},
+      mcp: {
+        servers: { a: { command: 'x' } },
+        defaults: { servers: ['a'] },
+      },
+    });
+
+    expect(env.provider).toBeUndefined();
+    expect(env.model).toBeUndefined();
+    expect(env.mcpAssignment?.servers?.a).toMatchObject({ command: 'x' });
   });
 });
 
@@ -230,10 +260,10 @@ describe('collectLegacyMcpSignals: per-step signals (MCP-LEGACY-GATE)', () => {
     });
     expect(stepA.length).toBeGreaterThan(0);
     expect(stepB.length).toBeGreaterThan(0);
-    expect(stepA[0].location).toContain('step-a');
-    expect(stepB[0].location).toContain('step-b');
-    expect(stepA[0].location).not.toContain('step-b');
-    expect(stepB[0].location).not.toContain('step-a');
+    expect(stepA[0]?.location).toContain('step-a');
+    expect(stepB[0]?.location).toContain('step-b');
+    expect(stepA[0]?.location).not.toContain('step-b');
+    expect(stepB[0]?.location).not.toContain('step-a');
   });
 
   it('Given a workflow_mcp_servers policy and a step mcp_servers, When collected separately, Then both are reported as distinct signals', () => {
@@ -251,8 +281,8 @@ describe('collectLegacyMcpSignals: per-step signals (MCP-LEGACY-GATE)', () => {
     });
     expect(policySignal.length).toBeGreaterThan(0);
     expect(stepSignal.length).toBeGreaterThan(0);
-    expect(policySignal[0].location).toContain('mcp_servers policy');
-    expect(stepSignal[0].location).toContain('create-pr');
+    expect(policySignal[0]?.location).toContain('workflow_mcp_servers policy');
+    expect(stepSignal[0]?.location).toContain('create-pr');
   });
 });
 
@@ -264,59 +294,6 @@ describe('collectLegacyMcpSignals: per-step signals (MCP-LEGACY-GATE)', () => {
  * the provider environment (order.md:118).
  */
 describe('workflowExecutionBootstrap mixed MCP gate (MCP-LEGACY-MIX-BOOTSTRAP)', () => {
-  function collectWorkflowLegacyMcpSignals(
-    workflowConfig: Pick<WorkflowConfig, 'name' | 'steps'>,
-    workflowMcpServersPolicy: Record<string, unknown> | undefined,
-  ) {
-    const signals: ReturnType<typeof collectLegacyMcpSignals> = [];
-    const policySignals = collectLegacyMcpSignals({
-      workflowMcpServersPolicy: workflowMcpServersPolicy as Record<string, unknown> | undefined,
-      workflowStepMcpServers: undefined,
-      workflowName: workflowConfig.name,
-      workflowStepName: undefined,
-    });
-    signals.push(...policySignals);
-    for (const step of workflowConfig.steps) {
-      if (!('mcpServers' in step) || step.mcpServers === undefined) {
-        continue;
-      }
-      const servers = step.mcpServers as Record<string, McpServerConfig>;
-      if (Object.keys(servers).length === 0) {
-        continue;
-      }
-      const stepSignals = collectLegacyMcpSignals({
-        workflowMcpServersPolicy: undefined,
-        workflowStepMcpServers: servers,
-        workflowName: workflowConfig.name,
-        workflowStepName: step.name,
-      });
-      signals.push(...stepSignals);
-    }
-    return signals;
-  }
-
-  function mixedMcpGate(
-    mcpAssignment: unknown,
-    workflowConfig: Pick<WorkflowConfig, 'name' | 'steps'>,
-    workflowMcpServersPolicy: Record<string, unknown> | undefined,
-  ): void {
-    if (mcpAssignment === undefined) {
-      return;
-    }
-    const legacyMcpSignals = collectWorkflowLegacyMcpSignals(workflowConfig, workflowMcpServersPolicy);
-    if (legacyMcpSignals.length > 0) {
-      const lines = legacyMcpSignals.map(
-        (signal) => `  - ${signal.setting} at ${signal.location} → migrate to ${signal.migrateTo}`,
-      );
-      throw new Error([
-        'Mixed MCP configuration detected: an active runtime.yaml mcp section cannot',
-        'coexist with legacy workflow MCP settings. Remove the runtime.yaml mcp section or migrate',
-        'the following legacy settings:',
-        ...lines,
-      ].join('\n'));
-    }
-  }
-
   it('Given runtime MCP active and a workflow with step mcp_servers, When the mixed gate runs, Then it throws "Mixed MCP configuration detected" naming the workflow/step and migrateTo (order.md:118)', () => {
     const mcp: McpSection = {
       servers: { 'common-tools': { command: 'srv' } },
@@ -330,18 +307,11 @@ describe('workflowExecutionBootstrap mixed MCP gate (MCP-LEGACY-MIX-BOOTSTRAP)',
         { name: 'create-pr', mcpServers: { legacy: { command: 'old' } } },
       ],
     };
-    expect(() => mixedMcpGate(env.mcpAssignment, workflowConfig, undefined)).toThrow(
-      /Mixed MCP configuration detected/,
-    );
-    expect(() => mixedMcpGate(env.mcpAssignment, workflowConfig, undefined)).toThrow(
-      /release-workflow/,
-    );
-    expect(() => mixedMcpGate(env.mcpAssignment, workflowConfig, undefined)).toThrow(
-      /create-pr/,
-    );
-    expect(() => mixedMcpGate(env.mcpAssignment, workflowConfig, undefined)).toThrow(
-      /migrate to/,
-    );
+    expect(() => assertNoMixedWorkflowMcpConfiguration(
+      env.mcpAssignment,
+      workflowConfig,
+      undefined,
+    )).toThrow(/Mixed MCP configuration detected[\s\S]*release-workflow[\s\S]*create-pr[\s\S]*migrate to/);
   });
 
   it('Given runtime MCP active and a workflow_mcp_servers policy, When the mixed gate runs, Then it throws naming the workflow and migrateTo (order.md:118)', () => {
@@ -355,15 +325,11 @@ describe('workflowExecutionBootstrap mixed MCP gate (MCP-LEGACY-MIX-BOOTSTRAP)',
       name: 'release-workflow',
       steps: [],
     };
-    expect(() =>
-      mixedMcpGate(env.mcpAssignment, workflowConfig, { stdio: true }),
-    ).toThrow(/Mixed MCP configuration detected/);
-    expect(() =>
-      mixedMcpGate(env.mcpAssignment, workflowConfig, { stdio: true }),
-    ).toThrow(/release-workflow/);
-    expect(() =>
-      mixedMcpGate(env.mcpAssignment, workflowConfig, { stdio: true }),
-    ).toThrow(/migrate to/);
+    expect(() => assertNoMixedWorkflowMcpConfiguration(
+      env.mcpAssignment,
+      workflowConfig,
+      { stdio: true },
+    )).toThrow(/Mixed MCP configuration detected[\s\S]*release-workflow[\s\S]*migrate to/);
   });
 
   it('Given runtime MCP active and no legacy MCP settings, When the mixed gate runs, Then it does not throw (order.md:116-118)', () => {
@@ -377,7 +343,11 @@ describe('workflowExecutionBootstrap mixed MCP gate (MCP-LEGACY-MIX-BOOTSTRAP)',
       name: 'clean-workflow',
       steps: [{ name: 'step-a' }],
     };
-    expect(() => mixedMcpGate(env.mcpAssignment, workflowConfig, undefined)).not.toThrow();
+    expect(() => assertNoMixedWorkflowMcpConfiguration(
+      env.mcpAssignment,
+      workflowConfig,
+      undefined,
+    )).not.toThrow();
   });
 
   it('Given runtime MCP inactive (legacy mode) and a workflow with mcp_servers, When the mixed gate runs, Then it does not throw (legacy mode is allowed)', () => {
@@ -388,6 +358,10 @@ describe('workflowExecutionBootstrap mixed MCP gate (MCP-LEGACY-MIX-BOOTSTRAP)',
         providerSource: 'cli',
         model: undefined,
         modelSource: 'cli',
+        personaProviders: undefined,
+        providerRouting: undefined,
+        autoRouting: undefined,
+        providerOptions: undefined,
       },
     });
     expect(env.mcpAssignment).toBeUndefined();
@@ -395,6 +369,10 @@ describe('workflowExecutionBootstrap mixed MCP gate (MCP-LEGACY-MIX-BOOTSTRAP)',
       name: 'legacy-workflow',
       steps: [{ name: 'step-a', mcpServers: { legacy: { command: 'old' } } }],
     };
-    expect(() => mixedMcpGate(env.mcpAssignment, workflowConfig, undefined)).not.toThrow();
+    expect(() => assertNoMixedWorkflowMcpConfiguration(
+      env.mcpAssignment,
+      workflowConfig,
+      undefined,
+    )).not.toThrow();
   });
 });

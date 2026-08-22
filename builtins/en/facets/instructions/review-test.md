@@ -1,11 +1,5 @@
 Focus on reviewing **test quality**.
 
-Procedure:
-1. Open the Knowledge and Policy Source paths with the Read tool and obtain the full content
-2. List every `##` section in each of them (do not cherry-pick)
-3. Match the criteria in each listed section against the diff and detect any issues
-
-{{include:instructions/review-round-scope}}
 ## Step-Specific Additional Procedure
 
 1. Cross-reference the test plan / test scope reports in the Report Directory with the implemented tests
@@ -18,5 +12,5 @@ Procedure:
 8. For prohibition, rejection, non-inheritance, unsupported targets, and isolation, verify that tests extract observable units and check each forbidden value instead of relying on exact-string absence alone
 9. For new configuration boundaries, check normalization inputs such as empty strings, whitespace-only strings, empty arrays, and case variants when relevant
 10. Verify that E2E timeout, cleanup, and forced-termination handling follows existing same-kind test conventions
-{{include:instructions/review-family-completion}}
-{{include:instructions/review-pr-context}}
+{{include:instructions/review-investigation-discipline}}
+{{include:instructions/review-path-check}}

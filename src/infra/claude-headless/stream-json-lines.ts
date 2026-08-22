@@ -137,6 +137,29 @@ export function tryExtractThinkingFromStreamJsonLine(line: string): string | und
   return parsed ? extractStreamingThinkingFromEvent(parsed) : undefined;
 }
 
+export interface StreamJsonToolUse {
+  readonly tool: string;
+  readonly id: string;
+  readonly input: Record<string, unknown>;
+}
+
+export function tryExtractToolUseFromStreamJsonLine(line: string): StreamJsonToolUse[] {
+  const root = toRecord(parseStreamJsonLine(line));
+  const message = toRecord(root?.message);
+  if (root?.type !== 'assistant' || !Array.isArray(message?.content)) return [];
+  return message.content.flatMap((block) => {
+    const record = toRecord(block);
+    const input = toRecord(record?.input);
+    if (
+      record?.type !== 'tool_use'
+      || typeof record.id !== 'string'
+      || typeof record.name !== 'string'
+      || input === undefined
+    ) return [];
+    return [{ tool: record.name, id: record.id, input }];
+  });
+}
+
 export function tryExtractSessionIdFromStreamJsonLine(line: string): string | undefined {
   const parsed = parseStreamJsonLine(line);
   if (!parsed) {

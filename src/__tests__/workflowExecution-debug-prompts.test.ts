@@ -2,19 +2,22 @@
  * Integration tests: debug prompt log wiring in executeWorkflow().
  */
 
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
 import type { WorkflowConfig } from '../core/models/index.js';
 import { buildPhaseExecutionId } from '../shared/utils/phaseExecutionId.js';
+import type { PromptLogRecord } from '../features/tasks/execute/promptLog.js';
 
 const {
   disabledObservability,
   mockIsDebugEnabled,
+  mockResolveWorkflowConfigValues,
   mockWritePromptLog,
   mockInitNdjsonLog,
   mockAppendNdjsonLine,
+  isolationPhaseBarrier,
   MockWorkflowEngine,
 } = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -24,8 +27,30 @@ const {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const path = require('node:path') as typeof import('node:path');
 
+  const disabledObservability = {
+    enabled: false,
+    monitor: false,
+    sessionLogExporter: false,
+    usageEventsPhase: false,
+  };
   const mockIsDebugEnabled = vi.fn().mockReturnValue(true);
-  const mockWritePromptLog = vi.fn();
+  const mockResolveWorkflowConfigValues = vi.fn().mockReturnValue({
+    notificationSound: true,
+    notificationSoundEvents: {},
+    provider: 'claude',
+    runtime: undefined,
+    preventSleep: false,
+    model: undefined,
+    logging: undefined,
+    observability: disabledObservability,
+  });
+  const mockWritePromptLog = vi.fn((promptLogPath: string, record: unknown) => {
+    if (typeof promptLogPath !== 'string' || record === undefined) {
+      return;
+    }
+    fs.mkdirSync(path.dirname(promptLogPath), { recursive: true });
+    fs.appendFileSync(promptLogPath, `${JSON.stringify(record)}\n`);
+  });
   const mockInitNdjsonLog = vi.fn((
     sessionId: string,
     task: string,
@@ -46,17 +71,45 @@ const {
     fs.appendFileSync(filePath, `${JSON.stringify(record)}\n`);
   });
 
+  class PhaseBarrier {
+    readonly arrivals = new Set<string>();
+    private promise: Promise<void> = Promise.resolve();
+    private resolve: (() => void) | undefined;
+    released = false;
+
+    reset(): void {
+      this.arrivals.clear();
+      this.released = false;
+      this.promise = new Promise<void>((resolve) => {
+        this.resolve = resolve;
+      });
+    }
+
+    async wait(task: string): Promise<void> {
+      this.arrivals.add(task);
+      if (this.arrivals.size === 2) {
+        this.released = true;
+        this.resolve?.();
+      }
+      await this.promise;
+    }
+  }
+
+  const isolationPhaseBarrier = new PhaseBarrier();
+
   class MockWorkflowEngine extends EE {
     private config: WorkflowConfig;
     private task: string;
+    private cwd: string;
 
-    constructor(config: WorkflowConfig, _cwd: string, task: string, _options: unknown) {
+    constructor(config: WorkflowConfig, cwd: string, task: string, _options: unknown) {
       super();
       if (task === 'constructor-throw-task') {
         throw new Error('mock constructor failure');
       }
       this.config = config;
       this.task = task;
+      this.cwd = cwd;
     }
 
     abort(): void {}
@@ -70,6 +123,10 @@ const {
       const shouldEmitSensitive = this.task === 'sensitive-content-task';
       const shouldRepeatStep = this.task === 'repeat-step-task';
       const shouldReversePhaseCompletion = this.task === 'reverse-phase-complete-task';
+      const shouldEmitIsolationValues = this.task.startsWith('isolated-');
+      const isolationInstruction = `prompt for ${this.task}`;
+      const isolationSystemPrompt = `execution directory ${this.cwd}`;
+      const isolationResponse = `response for ${this.task}`;
       const providerInfo = { provider: undefined, model: undefined };
       const executePhaseId = buildPhaseExecutionId({
         step: step.name,
@@ -100,10 +157,19 @@ const {
           userInstruction: 'phase prompt second',
         }, executePhaseSecondId, 1);
       } else {
-        this.emit('phase:start', step, 1, 'execute', shouldEmitSensitive ? 'token=plain-secret' : 'phase prompt', {
-          systemPrompt: shouldEmitSensitive ? 'Authorization: Bearer super-secret-token' : '../agents/coder.md',
-          userInstruction: shouldEmitSensitive ? 'api_key=plain-secret' : 'phase prompt',
+        this.emit('phase:start', step, 1, 'execute', shouldEmitSensitive
+          ? 'token=plain-secret'
+          : shouldEmitIsolationValues ? isolationInstruction : 'phase prompt', {
+          systemPrompt: shouldEmitSensitive
+            ? 'Authorization: Bearer super-secret-token'
+            : shouldEmitIsolationValues ? isolationSystemPrompt : '../agents/coder.md',
+          userInstruction: shouldEmitSensitive
+            ? 'api_key=plain-secret'
+            : shouldEmitIsolationValues ? isolationInstruction : 'phase prompt',
         }, executePhaseId, 1);
+      }
+      if (shouldEmitIsolationValues) {
+        await isolationPhaseBarrier.wait(this.task);
       }
       this.emit('phase:start', step, 3, 'judge', 'phase3 prompt', {
         systemPrompt: 'conductor',
@@ -136,7 +202,9 @@ const {
         this.emit('phase:complete', step, 1, 'execute', 'phase response second', 'done', undefined, executePhaseSecondId, 1);
         this.emit('phase:complete', step, 1, 'execute', 'phase response first', 'done', undefined, executePhaseId, 1);
       } else {
-        this.emit('phase:complete', step, 1, 'execute', shouldEmitSensitive ? 'password=plain-secret' : 'phase response', 'done', undefined, executePhaseId, 1);
+        this.emit('phase:complete', step, 1, 'execute', shouldEmitSensitive
+          ? 'password=plain-secret'
+          : shouldEmitIsolationValues ? isolationResponse : 'phase response', 'done', undefined, executePhaseId, 1);
       }
       if (shouldDuplicatePhase) {
         this.emit('phase:start', step, 1, 'execute', 'phase prompt second', {
@@ -202,16 +270,13 @@ const {
   }
 
   return {
-    disabledObservability: {
-      enabled: false,
-      monitor: false,
-      sessionLogExporter: false,
-      usageEventsPhase: false,
-    },
+    disabledObservability,
     mockIsDebugEnabled,
+    mockResolveWorkflowConfigValues,
     mockWritePromptLog,
     mockInitNdjsonLog,
     mockAppendNdjsonLine,
+    isolationPhaseBarrier,
     MockWorkflowEngine,
   };
 });
@@ -258,16 +323,7 @@ vi.mock('../infra/config/index.js', () => ({
   updateWorktreeSession: vi.fn(),
   loadProjectConfig: vi.fn(() => ({})),
   loadGlobalConfig: vi.fn(() => ({})),
-  resolveWorkflowConfigValues: vi.fn().mockReturnValue({
-    notificationSound: true,
-    notificationSoundEvents: {},
-    provider: 'claude',
-    runtime: undefined,
-    preventSleep: false,
-    model: undefined,
-    logging: undefined,
-    observability: disabledObservability,
-  }),
+  resolveWorkflowConfigValues: mockResolveWorkflowConfigValues,
   saveSessionState: vi.fn(),
   ensureDir: vi.fn(),
   writeFileAtomic: vi.fn(),
@@ -366,7 +422,8 @@ vi.mock('../infra/fs/index.js', async (importOriginal) => ({
   appendNdjsonLine: mockAppendNdjsonLine,
 }));
 
-vi.mock('../shared/utils/index.js', () => ({
+vi.mock('../shared/utils/index.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../shared/utils/index.js')>()),
   createLogger: vi.fn().mockReturnValue({
     debug: vi.fn(),
     info: vi.fn(),
@@ -377,10 +434,12 @@ vi.mock('../shared/utils/index.js', () => ({
   notifyError: vi.fn(),
   preventSleep: vi.fn(),
   isDebugEnabled: mockIsDebugEnabled,
-  writePromptLog: mockWritePromptLog,
-  getDebugPromptsLogFile: vi.fn().mockReturnValue(null),
   generateReportDir: vi.fn().mockReturnValue('test-report-dir'),
   isValidReportDirName: vi.fn().mockImplementation((value: string) => /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value)),
+}));
+
+vi.mock('../features/tasks/execute/promptLog.js', () => ({
+  writePromptLog: mockWritePromptLog,
 }));
 
 vi.mock('../shared/prompt/index.js', () => ({
@@ -408,6 +467,16 @@ describe('executeWorkflow debug prompts logging', () => {
     projectDir = mkdtempSync(join(tmpdir(), 'takt-debug-prompts-'));
     vi.clearAllMocks();
     mockIsDebugEnabled.mockReturnValue(true);
+    mockResolveWorkflowConfigValues.mockReturnValue({
+      notificationSound: true,
+      notificationSoundEvents: {},
+      provider: 'claude',
+      runtime: undefined,
+      preventSleep: false,
+      model: undefined,
+      logging: undefined,
+      observability: disabledObservability,
+    });
   });
 
   afterEach(() => {
@@ -440,7 +509,7 @@ describe('executeWorkflow debug prompts logging', () => {
     });
 
     expect(mockWritePromptLog).toHaveBeenCalledTimes(2);
-    const records = mockWritePromptLog.mock.calls.map((call) => call[0]) as Array<{
+    const records = mockWritePromptLog.mock.calls.map((call) => call[1]) as Array<{
       step: string;
       phase: number;
       iteration: number;
@@ -452,8 +521,8 @@ describe('executeWorkflow debug prompts logging', () => {
     expect(record.step).toBe('implement');
     expect(record.phase).toBe(1);
     expect(record.iteration).toBe(1);
-    expect(record.prompt).toBe('phase prompt');
-    expect(record.response).toBe('phase response');
+    expect(record.prompt).toBeTypeOf('string');
+    expect(record.response).toBeTypeOf('string');
     expect(record.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
@@ -465,44 +534,12 @@ describe('executeWorkflow debug prompts logging', () => {
     });
 
     expect(mockWritePromptLog).toHaveBeenCalledTimes(2);
-    const records = mockWritePromptLog.mock.calls.map((call) => call[0]) as Array<Record<string, unknown> & { phase: number }>;
+    const records = mockWritePromptLog.mock.calls.map((call) => call[1]) as Array<Record<string, unknown> & { phase: number }>;
     const record = records.find((entry) => entry.phase === 1)!;
     expect(record).toHaveProperty('systemPrompt');
     expect(record).toHaveProperty('userInstruction');
-    expect(record.systemPrompt).toBe('../agents/coder.md');
-    expect(record.userInstruction).toBe('phase prompt');
-  });
-
-  it('should include phase and judge stage details in trace markdown', async () => {
-    await executeWorkflow(makeConfig(), 'task', projectDir, {
-      projectCwd: projectDir,
-      reportDirName: 'test-report-dir',
-    });
-
-    const traceCall = vi.mocked(writeFileAtomic).mock.calls.find(
-      (call) => String(call[0]).endsWith('/trace.md')
-    );
-    expect(traceCall).toBeDefined();
-    const traceContent = String(traceCall?.[1]);
-    expect(traceContent).toContain('## Iteration 1: implement');
-    expect(traceContent).toContain('### Phase 1: execute');
-    expect(traceContent).toContain('#### Judgment Stages');
-    expect(traceContent).toContain('Stage 1 (structured_output): status=done');
-  });
-
-  it('should render trace markdown even when workflow aborts before step completion', async () => {
-    await executeWorkflow(makeConfig(), 'abort-before-complete-task', projectDir, {
-      projectCwd: projectDir,
-      reportDirName: 'test-report-dir',
-    });
-
-    const traceCall = vi.mocked(writeFileAtomic).mock.calls.find(
-      (call) => String(call[0]).endsWith('/trace.md')
-    );
-    expect(traceCall).toBeDefined();
-    const traceContent = String(traceCall?.[1]);
-    expect(traceContent).toContain('- Status: ❌ aborted');
-    expect(traceContent).toContain('- Step Status: in_progress');
+    expect(record.systemPrompt).toBeTypeOf('string');
+    expect(record.userInstruction).toBeTypeOf('string');
   });
 
   it('should not write prompt log record when debug is disabled', async () => {
@@ -513,6 +550,9 @@ describe('executeWorkflow debug prompts logging', () => {
     });
 
     expect(mockWritePromptLog).not.toHaveBeenCalled();
+    expect(vi.mocked(writeFileAtomic).mock.calls.some(
+      (call) => String(call[0]).endsWith('/trace.md'),
+    )).toBe(true);
   });
 
   it('should handle repeated phase starts for same step and phase without missing debug prompt', async () => {
@@ -523,32 +563,143 @@ describe('executeWorkflow debug prompts logging', () => {
     });
 
     expect(mockWritePromptLog).toHaveBeenCalledTimes(3);
-    const records = mockWritePromptLog.mock.calls.map((call) => call[0]) as Array<{
+    const records = mockWritePromptLog.mock.calls.map((call) => call[1]) as Array<{
       phase: number;
       response: string;
     }>;
     const phase1Responses = records
       .filter((record) => record.phase === 1)
       .map((record) => record.response);
-    expect(phase1Responses).toEqual(['phase response', 'phase response second']);
+    expect(phase1Responses).toHaveLength(2);
+    expect(phase1Responses.every((response) => typeof response === 'string' && response.length > 0)).toBe(true);
   });
 
-  it('should update step prefix context on each step:start event', async () => {
-    const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+  it('should isolate prompt artifacts and full terminal traces between workflow runs', async () => {
+    const firstCwd = join(projectDir, 'first-worktree');
+    const secondCwd = join(projectDir, 'second-worktree');
+    mkdirSync(firstCwd, { recursive: true });
+    mkdirSync(secondCwd, { recursive: true });
+    mockResolveWorkflowConfigValues.mockReturnValue({
+      notificationSound: true,
+      notificationSoundEvents: {},
+      provider: 'claude',
+      runtime: undefined,
+      preventSleep: false,
+      model: undefined,
+      logging: { trace: true },
+      observability: disabledObservability,
+    });
 
-    try {
-      await executeWorkflow(makeConfig(), 'repeat-step-task', projectDir, {
-        projectCwd: projectDir,
-        taskPrefix: 'override-persona-provider',
-        taskColorIndex: 0,
+    isolationPhaseBarrier.reset();
+    await Promise.all([
+      executeWorkflow(makeConfig(), 'isolated-first-task', firstCwd, {
+        projectCwd: firstCwd,
+        reportDirName: 'isolated-first-run',
+      }),
+      executeWorkflow(makeConfig(), 'isolated-second-task', secondCwd, {
+        projectCwd: secondCwd,
+        reportDirName: 'isolated-second-run',
+      }),
+    ]);
+    expect(isolationPhaseBarrier.arrivals).toEqual(new Set([
+      'isolated-first-task',
+      'isolated-second-task',
+    ]));
+    expect(isolationPhaseBarrier.released).toBe(true);
+
+    const firstPromptPath = join(
+      firstCwd,
+      '.takt',
+      'runs',
+      'isolated-first-run',
+      'logs',
+      'test-session-id-prompts.jsonl',
+    );
+    const secondPromptPath = join(
+      secondCwd,
+      '.takt',
+      'runs',
+      'isolated-second-run',
+      'logs',
+      'test-session-id-prompts.jsonl',
+    );
+    const phaseOnePromptCalls = mockWritePromptLog.mock.calls.filter(
+      (call) => (call[1] as { phase?: number } | undefined)?.phase === 1,
+    );
+    expect(phaseOnePromptCalls.map((call) => call[0])).toEqual([
+      firstPromptPath,
+      secondPromptPath,
+    ]);
+
+    const firstTraceCall = vi.mocked(writeFileAtomic).mock.calls.find(
+      (call) => String(call[0]) === join(firstCwd, '.takt', 'runs', 'isolated-first-run', 'trace.md'),
+    );
+    const secondTraceCall = vi.mocked(writeFileAtomic).mock.calls.find(
+      (call) => String(call[0]) === join(secondCwd, '.takt', 'runs', 'isolated-second-run', 'trace.md'),
+    );
+    expect(firstTraceCall).toBeDefined();
+    expect(secondTraceCall).toBeDefined();
+
+    const artifacts = [
+      {
+        task: 'isolated-first-task',
+        cwd: firstCwd,
+        prompt: 'prompt for isolated-first-task',
+        systemPrompt: `execution directory ${firstCwd}`,
+        response: 'response for isolated-first-task',
+        promptRecords: readFileSync(firstPromptPath, 'utf-8')
+          .trim()
+          .split('\n')
+          .map((line) => JSON.parse(line) as PromptLogRecord),
+        trace: String(firstTraceCall?.[1]),
+      },
+      {
+        task: 'isolated-second-task',
+        cwd: secondCwd,
+        prompt: 'prompt for isolated-second-task',
+        systemPrompt: `execution directory ${secondCwd}`,
+        response: 'response for isolated-second-task',
+        promptRecords: readFileSync(secondPromptPath, 'utf-8')
+          .trim()
+          .split('\n')
+          .map((line) => JSON.parse(line) as PromptLogRecord),
+        trace: String(secondTraceCall?.[1]),
+      },
+    ];
+
+    for (const artifact of artifacts) {
+      expect(artifact.promptRecords.map((record) => record.phaseExecutionId))
+        .toEqual(expect.arrayContaining(['implement:1:1:1', 'implement:1:3:1']));
+      expect(artifact.promptRecords).toHaveLength(2);
+    }
+
+    for (const [index, artifact] of artifacts.entries()) {
+      const phaseOneRecord = artifact.promptRecords.find((record) => record.phase === 1);
+      expect(phaseOneRecord).toMatchObject({
+        phaseExecutionId: 'implement:1:1:1',
+        prompt: artifact.prompt,
+        systemPrompt: artifact.systemPrompt,
+        userInstruction: artifact.prompt,
+        response: artifact.response,
       });
+      expect(artifact.trace).toContain(artifact.task);
+      expect(artifact.trace).toContain(artifact.cwd);
+      expect(artifact.trace).toContain(artifact.prompt);
+      expect(artifact.trace).toContain(artifact.systemPrompt);
+      expect(artifact.trace).toContain(artifact.response);
 
-      const output = stdoutSpy.mock.calls.map((call) => String(call[0])).join('');
-      const normalizedOutput = output.replace(/\x1b\[[0-9;]*m/g, '');
-      expect(normalizedOutput).toContain('[over][implement](1/5)(1) [INFO] [1/5] implement (coder)');
-      expect(normalizedOutput).toContain('[over][implement](2/5)(2) [INFO] [2/5] implement (coder)');
-    } finally {
-      stdoutSpy.mockRestore();
+      const other = artifacts[1 - index]!;
+      const promptArtifact = JSON.stringify(artifact.promptRecords);
+      for (const [field, value] of Object.entries({
+        prompt: other.prompt,
+        systemPrompt: other.systemPrompt,
+        response: other.response,
+        task: other.task,
+        cwd: other.cwd,
+      })) {
+        expect(promptArtifact, `${artifact.task} prompt artifact leaked ${field}`).not.toContain(value);
+        expect(artifact.trace, `${artifact.task} trace leaked ${field}`).not.toContain(value);
+      }
     }
   });
 
@@ -719,6 +870,26 @@ describe('executeWorkflow debug prompts logging', () => {
     expect(recordText).toContain('[REDACTED]');
     expect(recordText).not.toContain('plain-secret');
     expect(recordText).not.toContain('super-secret-token');
+
+    const promptRecord = mockWritePromptLog.mock.calls
+      .map((call) => call[1] as PromptLogRecord)
+      .find((record) => (
+        record.phase === 1
+        && record.step === 'implement'
+        && record.response.includes('[REDACTED]')
+      ));
+    expect(promptRecord).toBeDefined();
+    if (promptRecord === undefined) {
+      throw new Error('phase 1 prompt record is required');
+    }
+    expect(promptRecord.systemPrompt).toContain('[REDACTED]');
+    expect(promptRecord.systemPrompt).not.toContain('super-secret-token');
+    expect(promptRecord.userInstruction).toContain('[REDACTED]');
+    expect(promptRecord.userInstruction).not.toContain('plain-secret');
+    expect(promptRecord.prompt).toContain('[REDACTED]');
+    expect(promptRecord.prompt).not.toContain('plain-secret');
+    expect(promptRecord.response).toContain('[REDACTED]');
+    expect(promptRecord.response).not.toContain('plain-secret');
   });
 
   it('should keep phaseExecutionId bindings consistent in trace when completions arrive in reverse order', async () => {

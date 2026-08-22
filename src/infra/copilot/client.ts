@@ -505,26 +505,30 @@ export class CopilotClient {
       log.debug('mkdtemp failed, skipping session extraction', { err });
     }
 
-    const executionOutcome = await executeCopilotCall(
-      prompt,
-      options,
-      shareFilePath,
-    );
-    const outcome = await finalizeCopilotCall(executionOutcome, shareTmpDir);
+    options.onActivity?.({ kind: 'attempt_started' });
     try {
-      await options.preparedMcp?.dispose?.();
-    } catch (error) {
-      log.debug('Failed to clean up Copilot MCP config', { error: getErrorMessage(error) });
+      const executionOutcome = await executeCopilotCall(
+        prompt,
+        options,
+        shareFilePath,
+      );
+      const outcome = await finalizeCopilotCall(executionOutcome, shareTmpDir);
+      emitResult(outcome, options);
+      return {
+        persona: agentType,
+        status: outcome.status,
+        content: outcome.content,
+        timestamp: new Date(),
+        sessionId: outcome.sessionId,
+        ...(outcome.error === undefined ? {} : { error: outcome.error }),
+      };
+    } finally {
+      try {
+        await options.preparedMcp?.dispose();
+      } catch (error) {
+        log.debug('Failed to clean up Copilot MCP config', { error: getErrorMessage(error) });
+      }
     }
-    emitResult(outcome, options);
-    return {
-      persona: agentType,
-      status: outcome.status,
-      content: outcome.content,
-      timestamp: new Date(),
-      sessionId: outcome.sessionId,
-      ...(outcome.error === undefined ? {} : { error: outcome.error }),
-    };
   }
 
   async callCustom(

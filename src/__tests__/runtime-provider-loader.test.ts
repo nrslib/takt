@@ -1,11 +1,20 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
+
+const mockedHome = vi.hoisted(() => ({ value: '' }));
+
+vi.mock('node:os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:os')>();
+  return { ...actual, homedir: () => mockedHome.value || actual.homedir() };
+});
+
 // New module under test (implemented in the following `implement` step).
 import {
   loadRuntimeProviderFileAt,
   resolveRuntimeProviderFile,
+  resolveRuntimeProviderFileWithOrigins,
 } from '../infra/config/runtime-provider/loader.js';
 import { RUNTIME_PROVIDER_FILENAME } from '../infra/config/runtime-provider/constants.js';
 
@@ -35,9 +44,11 @@ describe('runtime-provider loader', () => {
     root = mkdtempSync(join(tmpdir(), 'takt-runtime-provider-loader-'));
     globalDir = join(root, 'global-.takt');
     projectDir = join(root, 'project-.takt');
+    mockedHome.value = dirname(projectDir);
   });
 
   afterEach(() => {
+    mockedHome.value = '';
     rmSync(root, { recursive: true, force: true });
   });
 
@@ -50,6 +61,77 @@ describe('runtime-provider loader', () => {
     writeRuntimeYaml(globalDir, ['version: 2']);
     const filePath = join(globalDir, RUNTIME_PROVIDER_FILENAME);
     expect(() => loadRuntimeProviderFileAt(filePath)).toThrow(filePath);
+  });
+
+  it('Given an unselected target referencing an unknown server, When loading, Then it fails before target matching', () => {
+    writeRuntimeYaml(globalDir, [
+      'version: 1',
+      'mcp:',
+      '  servers:',
+      '    known:',
+      '      command: known-server',
+      '  targets:',
+      '    personas:',
+      '      never-matched:',
+      '        servers:',
+      '          - missing-server',
+    ]);
+
+    expect(() => loadRuntimeProviderFileAt(join(globalDir, RUNTIME_PROVIDER_FILENAME))).toThrow(
+      'MCP target personas.never-matched.servers references unknown server "missing-server"',
+    );
+  });
+
+  it('Given an unused server with an undefined environment reference, When loading, Then it does not interpolate that server', () => {
+    writeRuntimeYaml(globalDir, [
+      'version: 1',
+      'mcp:',
+      '  servers:',
+      '    unused:',
+      '      command: ${TAKT_PHASE2_UNUSED_ENV}',
+      '    selected:',
+      '      command: selected-server',
+      '  defaults:',
+      '    servers:',
+      '      - selected',
+    ]);
+
+    expect(loadRuntimeProviderFileAt(join(globalDir, RUNTIME_PROVIDER_FILENAME))).toBeDefined();
+  });
+
+  it.each([
+    ['without auto_routing', [
+      'version: 1',
+      'provider:',
+      '  profiles:',
+      '    default:',
+      '      provider: mock',
+      '      model: runtime-model',
+    ]],
+    ['with auto_routing', [
+      'version: 1',
+      'provider:',
+      '  profiles:',
+      '    default:',
+      '      provider: mock',
+      '      model: runtime-model',
+      '    router:',
+      '      provider: mock',
+      '      model: router-model',
+      '  auto_routing:',
+      '    router_profile: router',
+      '    pools:',
+      '      main:',
+      '        candidates:',
+      '          - profile: default',
+      '            tier: low',
+      '        fallback_profile: default',
+    ]],
+  ])('Given an active provider file %s without defaults, When loading, Then it fails with the defaults cause', (_label, lines) => {
+    writeRuntimeYaml(globalDir, lines);
+    const filePath = join(globalDir, RUNTIME_PROVIDER_FILENAME);
+
+    expect(() => loadRuntimeProviderFileAt(filePath)).toThrow(/defaults/);
   });
 
   it('Given an empty runtime.yaml, When loading, Then it is treated as unset (C1)', () => {
@@ -133,6 +215,8 @@ describe('runtime-provider loader', () => {
     writeRuntimeYaml(projectDir, [
       'version: 1',
       'provider:',
+      '  defaults:',
+      '    profile: shared',
       '  profiles:',
       '    shared:',
       '      provider: codex',
@@ -151,10 +235,52 @@ describe('runtime-provider loader', () => {
     expect(resolved?.provider?.profiles?.['project-only']?.model).toBe('added');
   });
 
+  it('tracks the origin layer of every profile after project replacement', () => {
+    writeRuntimeYaml(globalDir, [
+      'version: 1',
+      'provider:',
+      '  defaults:',
+      '    profile: shared',
+      '  profiles:',
+      '    shared:',
+      '      provider: mock',
+      '      model: global',
+      '    global-only:',
+      '      provider: mock',
+      '      model: global-only',
+    ]);
+    writeRuntimeYaml(projectDir, [
+      'version: 1',
+      'provider:',
+      '  defaults:',
+      '    profile: shared',
+      '  profiles:',
+      '    shared:',
+      '      provider: mock',
+      '      model: project',
+      '    project-only:',
+      '      provider: mock',
+      '      model: project-only',
+    ]);
+
+    const resolved = resolveRuntimeProviderFileWithOrigins({
+      globalConfigDir: globalDir,
+      projectConfigDir: projectDir,
+    });
+
+    expect(resolved.profileOrigins).toEqual(new Map([
+      ['shared', 'project'],
+      ['global-only', 'global'],
+      ['project-only', 'project'],
+    ]));
+  });
+
   it('Given both files carry `targets`, When resolving, Then the whole targets section is replaced by project (no deep merge, C2)', () => {
     writeRuntimeYaml(globalDir, [
       'version: 1',
       'provider:',
+      '  defaults:',
+      '    profile: p',
       '  profiles:',
       '    p:',
       '      provider: mock',
@@ -167,6 +293,8 @@ describe('runtime-provider loader', () => {
     writeRuntimeYaml(projectDir, [
       'version: 1',
       'provider:',
+      '  defaults:',
+      '    profile: p',
       '  profiles:',
       '    p:',
       '      provider: mock',
@@ -182,7 +310,233 @@ describe('runtime-provider loader', () => {
     expect(resolved?.provider?.targets?.personas).toBeUndefined();
   });
 
-  it('Given project lacks `defaults` but global has it, When resolving, Then defaults falls back to global (C3)', () => {
+  it('applies the matching assignment, falls back to top-level defaults, and replaces targets as a whole', () => {
+    const projectRoot = dirname(projectDir);
+    writeRuntimeYaml(globalDir, [
+      'version: 1',
+      'provider:',
+      '  defaults:',
+      '    profile: base',
+      '  profiles:',
+      '    base:',
+      '      provider: mock',
+      '      model: base-model',
+      '    selected:',
+      '      provider: codex',
+      '      model: selected-model',
+      '  targets:',
+      '    personas:',
+      '      coder:',
+      '        profile: base',
+      '  assignments:',
+      '    project:',
+      '      targets:',
+      '        tags:',
+      '          high-stakes:',
+      '            profile: selected',
+      '  directories:',
+      `    ${projectRoot}: project`,
+    ]);
+
+    const resolved = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
+
+    expect(resolved?.provider?.defaults).toEqual({ profile: 'base' });
+    expect(resolved?.provider?.targets).toEqual({
+      tags: { 'high-stakes': { profile: 'selected' } },
+    });
+    expect(resolved?.provider?.targets?.personas).toBeUndefined();
+  });
+
+  it('falls back to top-level targets when a matching assignment omits targets', () => {
+    const projectRoot = dirname(projectDir);
+    writeRuntimeYaml(globalDir, [
+      'version: 1',
+      'provider:',
+      '  defaults:',
+      '    profile: base',
+      '  profiles:',
+      '    base:',
+      '      provider: mock',
+      '      model: base-model',
+      '    selected:',
+      '      provider: codex',
+      '      model: selected-model',
+      '  targets:',
+      '    personas:',
+      '      coder:',
+      '        profile: base',
+      '  assignments:',
+      '    project:',
+      '      defaults:',
+      '        profile: selected',
+      '  directories:',
+      `    ${projectRoot}: project`,
+    ]);
+
+    const resolved = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
+
+    expect(resolved?.provider?.defaults).toEqual({ profile: 'selected' });
+    expect(resolved?.provider?.targets).toEqual({
+      personas: { coder: { profile: 'base' } },
+    });
+  });
+
+  it('leaves the top-level assignment unchanged when no directory matches', () => {
+    const projectRoot = dirname(projectDir);
+    writeRuntimeYaml(globalDir, [
+      'version: 1',
+      'provider:',
+      '  defaults:',
+      '    profile: base',
+      '  profiles:',
+      '    base:',
+      '      provider: mock',
+      '      model: base-model',
+      '    selected:',
+      '      provider: codex',
+      '      model: selected-model',
+      '  targets:',
+      '    personas:',
+      '      coder:',
+      '        profile: base',
+      '  assignments:',
+      '    other:',
+      '      targets:',
+      '        tags:',
+      '          high-stakes:',
+      '            profile: selected',
+      '  directories:',
+      `    ${join(projectRoot, 'other-project')}: other`,
+    ]);
+
+    const resolved = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
+
+    expect(resolved?.provider?.defaults).toEqual({ profile: 'base' });
+    expect(resolved?.provider?.targets).toEqual({
+      personas: { coder: { profile: 'base' } },
+    });
+  });
+
+  it('merges assignments by name and directories by normalized key with project priority', () => {
+    const projectRoot = dirname(projectDir);
+    const globalOnlyRoot = join(root, 'global-project');
+    const projectOnlyRoot = join(root, 'project-only');
+    mkdirSync(globalOnlyRoot);
+    mkdirSync(projectOnlyRoot);
+    writeRuntimeYaml(globalDir, [
+      'version: 1',
+      'provider:',
+      '  defaults:',
+      '    profile: base',
+      '  profiles:',
+      '    base:',
+      '      provider: mock',
+      '      model: base-model',
+      '    global:',
+      '      provider: mock',
+      '      model: global-model',
+      '    project:',
+      '      provider: mock',
+      '      model: global-project-model',
+      '  assignments:',
+      '    shared:',
+      '      defaults:',
+      '        profile: global',
+      '    global-only:',
+      '      defaults:',
+      '        profile: global',
+      '  directories:',
+      `    ${join(projectRoot, '.')}: shared`,
+      `    ${globalOnlyRoot}: global-only`,
+    ]);
+    writeRuntimeYaml(projectDir, [
+      'version: 1',
+      'provider:',
+      '  defaults:',
+      '    profile: base',
+      '  profiles:',
+      '    project:',
+      '      provider: codex',
+      '      model: project-model',
+      '  assignments:',
+      '    shared:',
+      '      defaults:',
+      '        profile: project',
+      '    project-only:',
+      '      defaults:',
+      '        profile: project',
+      '  directories:',
+      `    ${projectRoot}: project-only`,
+      `    ${projectOnlyRoot}: project-only`,
+    ]);
+
+    const resolved = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
+
+    expect(resolved?.provider?.assignments).toEqual({
+      shared: { defaults: { profile: 'project' } },
+      'global-only': { defaults: { profile: 'global' } },
+      'project-only': { defaults: { profile: 'project' } },
+    });
+    expect(resolved?.provider?.directories?.[projectRoot]).toBe('project-only');
+    expect(resolved?.provider?.directories?.[globalOnlyRoot]).toBe('global-only');
+    expect(resolved?.provider?.directories?.[projectOnlyRoot]).toBe('project-only');
+    expect(resolved?.provider?.defaults).toEqual({ profile: 'project' });
+  });
+
+  it('fails fast when a directory points to an unknown assignment', () => {
+    writeRuntimeYaml(globalDir, [
+      'version: 1',
+      'provider:',
+      '  defaults:',
+      '    profile: base',
+      '  profiles:',
+      '    base:',
+      '      provider: mock',
+      '      model: base-model',
+      '  directories:',
+      `    ${dirname(projectDir)}: missing`,
+    ]);
+
+    expect(() => resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir }))
+      .toThrow(/unknown assignment/i);
+  });
+
+  it('expands `~` and compares real paths for the project directory', () => {
+    const realProjectRoot = join(root, 'real-project');
+    const linkedProjectRoot = join(root, 'linked-project');
+    mkdirSync(realProjectRoot);
+    symlinkSync(realProjectRoot, linkedProjectRoot, 'dir');
+    const linkedProjectConfigDir = join(linkedProjectRoot, '.takt');
+    mockedHome.value = realProjectRoot;
+    writeRuntimeYaml(globalDir, [
+      'version: 1',
+      'provider:',
+      '  defaults:',
+      '    profile: base',
+      '  profiles:',
+      '    base:',
+      '      provider: mock',
+      '      model: base-model',
+      '    selected:',
+      '      provider: codex',
+      '      model: selected-model',
+      '  assignments:',
+      '    selected:',
+      '      defaults:',
+      '        profile: selected',
+      '  directories:',
+      '    ~/.: selected',
+    ]);
+
+    const resolved = resolveRuntimeProviderFile({
+      globalConfigDir: globalDir,
+      projectConfigDir: linkedProjectConfigDir,
+    });
+
+    expect(resolved?.provider?.defaults).toEqual({ profile: 'selected' });
+  });
+
+  it('Given project has an active provider section without defaults, When resolving with a valid global file, Then the project file is rejected', () => {
     writeRuntimeYaml(globalDir, [
       'version: 1',
       'provider:',
@@ -201,29 +555,174 @@ describe('runtime-provider loader', () => {
       '      provider: codex',
       '      model: project-model',
     ]);
-    const resolved = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
-    // defaults is absent in project, so the global defaults survives.
-    expect(resolved?.provider?.defaults?.profile).toBe('g-default');
-    // disjoint profiles from both layers are retained.
-    expect(resolved?.provider?.profiles?.['g-default']?.model).toBe('m');
-    expect(resolved?.provider?.profiles?.p?.model).toBe('project-model');
+    expect(() => resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir }))
+      .toThrow(/defaults/);
   });
 
   it('Given both files carry `auto_routing`, When resolving, Then project auto_routing replaces global (C3)', () => {
     writeRuntimeYaml(globalDir, [
       'version: 1',
       'provider:',
+      '  defaults:',
+      '    profile: default',
       '  auto_routing:',
       '    strategy: balanced',
     ]);
     writeRuntimeYaml(projectDir, [
       'version: 1',
       'provider:',
+      '  defaults:',
+      '    profile: default',
       '  auto_routing:',
       '    strategy: performance',
     ]);
     const resolved = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
     expect(resolved?.provider?.auto_routing?.strategy).toBe('performance');
+  });
+
+  it('Given global companion.enabled=false and project companion.enabled=true, When resolving, Then companion remains disabled', () => {
+    writeRuntimeYaml(globalDir, [
+      'version: 1',
+      'companion:',
+      '  enabled: false',
+    ]);
+    writeRuntimeYaml(projectDir, [
+      'version: 1',
+      'companion:',
+      '  enabled: true',
+    ]);
+
+    const resolved = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
+
+    expect(resolved?.companion?.enabled).toBe(false);
+  });
+
+  it('Given global companion.enabled=true and an unrelated project file, When resolving, Then companion remains enabled', () => {
+    writeRuntimeYaml(globalDir, [
+      'version: 1',
+      'companion:',
+      '  enabled: true',
+    ]);
+    writeRuntimeYaml(projectDir, ['version: 1']);
+
+    const resolved = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
+
+    expect(resolved?.companion?.enabled).toBe(true);
+  });
+
+  it('Given both files omit companion, When resolving, Then companion remains undefined', () => {
+    writeRuntimeYaml(globalDir, ['version: 1']);
+    writeRuntimeYaml(projectDir, ['version: 1']);
+
+    const resolved = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
+
+    expect(resolved).toBeDefined();
+    expect(resolved!.companion).toBeUndefined();
+  });
+
+  it.each(['file', 'pr-comment'] as const)(
+    'Given loop analysis output is %s, When loading, Then the validated setting is returned',
+    (output) => {
+      writeRuntimeYaml(globalDir, [
+        'version: 1',
+        'loop_analysis:',
+        '  enabled: true',
+        `  output: ${output}`,
+      ]);
+
+      const loaded = loadRuntimeProviderFileAt(join(globalDir, RUNTIME_PROVIDER_FILENAME));
+
+      expect(loaded?.loop_analysis).toEqual({ enabled: true, output });
+    },
+  );
+
+  it('Given loop analysis output is omitted, When loading, Then file output is applied at the loader boundary', () => {
+    writeRuntimeYaml(globalDir, [
+      'version: 1',
+      'loop_analysis:',
+      '  enabled: true',
+    ]);
+
+    const loaded = loadRuntimeProviderFileAt(join(globalDir, RUNTIME_PROVIDER_FILENAME));
+
+    expect(loaded?.loop_analysis).toEqual({ enabled: true, output: 'file' });
+  });
+
+  it('Given loop analysis is not configured, When loading, Then it remains unset', () => {
+    writeRuntimeYaml(globalDir, ['version: 1']);
+
+    const loaded = loadRuntimeProviderFileAt(join(globalDir, RUNTIME_PROVIDER_FILENAME));
+
+    expect(loaded?.loop_analysis).toBeUndefined();
+  });
+
+  it('Given an unknown loop analysis output, When loading, Then validation rejects the file', () => {
+    writeRuntimeYaml(globalDir, [
+      'version: 1',
+      'loop_analysis:',
+      '  enabled: true',
+      '  output: issue-comment',
+    ]);
+
+    expect(() => loadRuntimeProviderFileAt(join(globalDir, RUNTIME_PROVIDER_FILENAME)))
+      .toThrow(/loop_analysis/);
+  });
+
+  it.each([
+    ['enabled is omitted', ['version: 1', 'loop_analysis:', '  output: file']],
+    ['enabled is not boolean', ['version: 1', 'loop_analysis:', '  enabled: yes-please']],
+  ])('Given %s, When loading, Then validation rejects the file', (_label, lines) => {
+    writeRuntimeYaml(globalDir, lines);
+
+    expect(() => loadRuntimeProviderFileAt(join(globalDir, RUNTIME_PROVIDER_FILENAME)))
+      .toThrow(/loop_analysis/);
+  });
+
+  it.each(['provider', 'model', 'provider_options'])(
+    'Given loop analysis contains %s, When loading, Then validation rejects provider configuration',
+    (field) => {
+      writeRuntimeYaml(globalDir, [
+        'version: 1',
+        'loop_analysis:',
+        '  enabled: true',
+        `  ${field}: forbidden`,
+      ]);
+
+      expect(() => loadRuntimeProviderFileAt(join(globalDir, RUNTIME_PROVIDER_FILENAME)))
+        .toThrow(/loop_analysis/);
+    },
+  );
+
+  it('Given both files configure loop analysis, When resolving, Then the project section replaces the global section', () => {
+    writeRuntimeYaml(globalDir, [
+      'version: 1',
+      'loop_analysis:',
+      '  enabled: true',
+      '  output: pr-comment',
+    ]);
+    writeRuntimeYaml(projectDir, [
+      'version: 1',
+      'loop_analysis:',
+      '  enabled: false',
+    ]);
+
+    const resolved = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
+
+    expect(resolved?.loop_analysis).toEqual({ enabled: false, output: 'file' });
+  });
+
+  it('Given only the global file configures loop analysis, When resolving, Then the global section is retained', () => {
+    writeRuntimeYaml(globalDir, [
+      'version: 1',
+      'loop_analysis:',
+      '  enabled: true',
+      '  output: pr-comment',
+    ]);
+    writeRuntimeYaml(projectDir, ['version: 1']);
+
+    const resolved = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
+
+    expect(resolved?.loop_analysis).toEqual({ enabled: true, output: 'pr-comment' });
   });
 
   it('Given neither file present, When resolving, Then it returns undefined (C1)', () => {

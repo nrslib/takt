@@ -3,8 +3,7 @@
 
 ## 結果: APPROVE / IMPROVE / REJECT
 
-## サマリー
-{1-2文で結果を要約}
+{{include:output-contracts/base-review-summary}}
 
 ## 確認した観点
 - [x] 構造・設計
@@ -14,48 +13,38 @@
 - [x] デッドコード
 - [x] 呼び出しチェーン検証
 
-## 問題系列の完了走査
-| family_tag / 変更契約 | 不変条件・根本原因 | 定義・生成・検証 | 利用・永続化・再注入 | 失敗・中断・再試行・再開・並列・補助入口 | mock・fixture・test double | 未確認経路 | 判定 |
-|-----------------------|-------------------|------------------|----------------------|------------------------------------------|----------------------------|------------|------|
-| {問題系列または確認対象契約} | {守るべき条件} | {確認した場所} | {確認した場所} | {確認した経路} | {確認したテスト資産} | {なし、または未確認理由} | {問題なし / finding番号} |
+{{include:output-contracts/base-review-problem-family-completion-sweep}}
 
-## 今回の指摘（new）
-| # | finding_id | family_tag | スコープ | 場所 | 問題 | 修正案 |
-|---|------------|------------|---------|------|------|--------|
-| 1 | ARCH-NEW-src-file-L42 | design-violation | スコープ内 | `src/file.ts:42` | 問題の説明 | 修正方法 |
+{{include:output-contracts/base-review-new-findings-scope}}
+| 1 | ARCH-NEW-src-file-L42 | design-violation | スコープ内 | `src/file.ts:42` | 問題の説明 | accepted_family_unvisited_consumer | 初回レビュー証跡ではこのconsumerを確認していなかった | 修正方法 |
 
-スコープ: 「スコープ内」（今回修正可能）/ 「スコープ外」（既存問題・非ブロッキング）
+{{include:output-contracts/base-review-follow-up-authorization}}
 
-## 継続指摘（persists）
-| # | finding_id | family_tag | 前回根拠 | 今回根拠 | 問題 | 修正案 |
-|---|------------|------------|----------|----------|------|--------|
+{{include:output-contracts/base-review-scope}}
+
+{{include:output-contracts/base-review-persists}}
+{{include:output-contracts/base-review-carry-over-findings}}
 | 1 | ARCH-PERSIST-src-file-L77 | design-violation | `src/file.ts:77` | `src/file.ts:77` | 未解消 | 既存修正方針を適用 |
 
-## 解消済み（resolved）
-| finding_id | 解消根拠 |
-|------------|----------|
+{{include:output-contracts/base-review-resolved-findings}}
 | ARCH-RESOLVED-src-file-L10 | `src/file.ts:10` は規約を満たす |
 
-## 再開指摘（reopened）
-| # | finding_id | family_tag | 解消根拠（前回） | 再発根拠 | 問題 | 修正案 |
-|---|------------|------------|----------------|---------|------|--------|
-| 1 | ARCH-REOPENED-src-file-L55 | design-violation | `前回: src/file.ts:10 で修正済み` | `src/file.ts:55 で再発` | 問題の説明 | 修正方法 |
+{{include:output-contracts/base-review-adjudicated-out-of-scope}}
+{{include:output-contracts/base-review-reopened-findings}}
+| 1 | ARCH-REOPENED-src-file-L55 | design-violation | `review-resolution.md`: 解消済み | d | `src/file.ts:55 で再発` | 問題の説明 | 修正方法 |
 
-## 検証証跡
-- ビルド: {確認対象・確認内容・結果。未確認ならその旨}
-- テスト: {確認対象・確認内容・結果。未確認ならその旨}
-- 動作確認: {確認対象・確認内容・結果。未確認ならその旨}
+{{include:output-contracts/base-review-reopened}}
+{{include:output-contracts/base-review-verification-evidence}}
 
-## 再走査証跡（2回目以降のレビューで必須）
-| 照合した Policy/Knowledge の章 | 差分側の根拠（`file:line` または「該当なし」） |
-|-------------------------------|---------------------------------------------|
-| {章名} | {根拠} |
+{{include:output-contracts/base-review-rescan-evidence}}
 
 ## REJECT判定条件
-- `new`、`persists`、または `reopened` が1件以上ある場合のみ REJECT 可
+{{include:output-contracts/base-review-rejection-gate}}
+{{include:output-contracts/base-review-rejection-gate-in-scope}}
 - `finding_id` なしの指摘は無効
 ```
 
 **認知負荷軽減ルール:**
 - APPROVE → サマリー + 検証証跡 + 再走査証跡（2回目以降）。それ以外は省略
 - REJECT → 確認済みの指摘をすべて表で記載し、同じ原因の場所は集約
+{{include:output-contracts/base-review-adjudicated-out-of-scope-reporting}}

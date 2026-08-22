@@ -15,8 +15,24 @@ import type { ProviderType } from '../../shared/types/provider.js';
 export interface ResolvedSessionTarget {
   provider?: ProviderType;
   model?: string;
-  /** Deterministic MCP server set identity (server name + transport only). */
+  /** Deterministic MCP server set identity including non-secret server structure. */
   mcpServerIdentity?: string;
+}
+
+function normalizeMcpServerIdentity(rawIdentity: string): string {
+  const identity = rawIdentity.trim();
+  // buildMcpServerSetIdentity returns sorted JSON values. Keep that canonical
+  // representation opaque because command arguments and URLs may contain commas.
+  if (identity.startsWith('[')) {
+    return identity;
+  }
+  // Preserve compatibility with older/manual name:transport identities.
+  return identity
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0)
+    .sort()
+    .join(',');
 }
 
 /**
@@ -40,11 +56,10 @@ export function buildSessionKey(step: WorkflowStep, resolvedTarget?: ResolvedSes
   const provider = resolvedTarget === undefined ? step.provider : resolvedTarget.provider;
   const model = resolvedTarget === undefined ? step.model : resolvedTarget.model;
   const rawMcpIdentity = resolvedTarget?.mcpServerIdentity;
-  // Normalize the MCP identity so the session key is order-independent: the
-  // identity is a comma-separated `name:transport` list and is sorted before
-  // being folded into the key (order.md:269,333).
+  // Normalize legacy identities while preserving the canonical JSON identity
+  // produced by the MCP resolver (order.md:269,333).
   const mcpIdentity = rawMcpIdentity !== undefined && rawMcpIdentity.length > 0
-    ? rawMcpIdentity.split(',').map((part) => part.trim()).filter((part) => part.length > 0).sort().join(',')
+    ? normalizeMcpServerIdentity(rawMcpIdentity)
     : undefined;
   if (provider === undefined && mcpIdentity === undefined) return JSON.stringify([base]);
   const components: unknown[] = [base];

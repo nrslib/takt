@@ -14,7 +14,7 @@ import type {
   WorkflowSharedRuntimeState,
 } from '../core/workflow/types.js';
 
-function makeState(workflowName: string, stepName: string): WorkflowState {
+function makeState(workflowName: string, stepName: string, occurrence = 1): WorkflowState {
   return {
     workflowName,
     currentStep: stepName,
@@ -25,9 +25,8 @@ function makeState(workflowName: string, stepName: string): WorkflowState {
     effectResults: new Map(),
     userInputs: [],
     personaSessions: new Map(),
-    stepIterations: new Map([[stepName, 1]]),
+    stepIterations: new Map([[stepName, occurrence]]),
     dynamicParallelSelections: new Map(),
-    resumedDynamicParallelSteps: new Set(),
     status: 'running',
   };
 }
@@ -117,7 +116,6 @@ function makeExecutor(options: {
     setActiveResumePoint: vi.fn(),
     setActiveResumeStack: vi.fn(),
     adoptResumeCheckpoint: vi.fn(),
-    refreshFindingsState: vi.fn(),
   });
   return { executor, createEngine, sharedRuntime };
 }
@@ -436,41 +434,44 @@ describe('WorkflowCallExecutor nested restart contract', () => {
     expect(createEngine).not.toHaveBeenCalled();
   });
 
-  it('should reject a runtime call-stack mismatch instead of ignoring the persisted path', async () => {
-    const step = makeCallStep('delegate', 'coding');
-    const parent = makeWorkflow('default', 'delegate', [step]);
+  it.each([
+    {
+      mismatch: 'workflow_ref',
+      runtimeEntry: {
+        ...makeRuntimeCallEntry('default', 'delegate'),
+        workflow_ref: 'other-root',
+      },
+    },
+    {
+      mismatch: 'step',
+      runtimeEntry: makeRuntimeCallEntry('default', 'other-step'),
+    },
+    {
+      mismatch: 'kind',
+      runtimeEntry: {
+        ...makeRuntimeCallEntry('default', 'delegate'),
+        kind: 'agent' as const,
+      },
+    },
+  ])('should reject a runtime call-stack $mismatch mismatch', ({ runtimeEntry }) => {
+    const restartPoint: WorkflowRestartPoint = {
+      stack: [
+        { workflow: 'default', workflow_ref: 'default', step: 'delegate', kind: 'workflow_call', call_instance: 1 },
+        { workflow: 'coding', workflow_ref: 'coding', step: 'review', kind: 'agent' },
+      ],
+    };
+    const navigator = new WorkflowRestartNavigator(restartPoint);
     const child = makeWorkflow('coding', 'review', [
       { name: 'review', persona: 'reviewer', instruction: 'Review' },
     ]);
-    const callStack = [makeRuntimeCallEntry('default', 'delegate')];
-    const restartPoint = {
-      stack: [
-        {
-          workflow: 'other-root',
-          workflow_ref: 'other-root',
-          step: 'delegate',
-          kind: 'workflow_call' as const,
-          call_instance: 1,
-        },
-        { workflow: 'coding', workflow_ref: 'coding', step: 'review', kind: 'agent' as const },
-      ],
-    };
-    const state = makeState('default', 'delegate');
-    const { executor, createEngine } = makeExecutor({
-      parent,
-      state,
-      restartPoint,
-      childEngine: makeChildEngine(child),
-    });
 
-    await expect(executor.execute(
-      makeRequest(executor, { step, child, callStack }),
-      { syncParentState: true },
-    )).rejects.toThrow(/restart.*other-root|other-root.*restart/i);
-    expect(createEngine).not.toHaveBeenCalled();
+    expect(() => navigator.resolveChildStartStep(child, [runtimeEntry])).toThrow(
+      'Runtime workflow_call stack does not match restart path',
+    );
+    expect(navigator.isActive()).toBe(true);
   });
 
-  it('should reject a runtime call instance that differs from the selected restart invocation', async () => {
+  it('should continue from the selected restart step when call_instance differs', async () => {
     const step = makeCallStep('delegate', 'coding');
     const parent = makeWorkflow('default', 'delegate', [step]);
     const child = makeWorkflow('coding', 'review', [
@@ -484,20 +485,29 @@ describe('WorkflowCallExecutor nested restart contract', () => {
     };
     const { executor, createEngine } = makeExecutor({
       parent,
-      state: makeState('default', 'delegate'),
+      state: makeState('default', 'delegate', 2),
       restartPoint,
       childEngine: makeChildEngine(child),
     });
 
-    await expect(executor.execute(
+    await executor.execute(
       makeRequest(executor, {
         step,
         child,
         callStack: [makeRuntimeCallEntry('default', 'delegate', 2)],
       }),
       { syncParentState: true },
-    )).rejects.toThrow(/prepared occurrence does not match execution state/i);
-    expect(createEngine).not.toHaveBeenCalled();
+    );
+
+    expect(createEngine).toHaveBeenCalledWith(
+      child,
+      '/project/worktree',
+      'restart nested workflow',
+      expect.objectContaining({
+        startStep: 'review',
+        initialIteration: 0,
+      }),
+    );
   });
 
   it('should reject a runtime call stack that exceeds an active selected path', () => {

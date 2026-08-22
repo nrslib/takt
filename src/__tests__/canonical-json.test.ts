@@ -3,7 +3,6 @@ import {
   canonicalJson,
   deepFreezeCanonicalJsonValue,
 } from '../shared/utils/canonical-json.js';
-import type { FindingLedger } from '../core/workflow/findings/types.js';
 
 describe('canonicalJson', () => {
   it('orders integer-like and Unicode keys with compareBinaryStrings semantics', () => {
@@ -125,23 +124,4 @@ describe('canonicalJson', () => {
     expect(Object.isFrozen(child)).toBe(false);
   });
 
-  it('serializes representative existing ledger input without changing array order', () => {
-    const ledger: FindingLedger = {
-      workflowName: 'peer-review',
-      nextId: 1,
-      updatedAt: '2026-07-27T00:00:00.000Z',
-      findings: [],
-      rawFindings: [],
-      conflicts: [],
-      stopBudget: {
-        roundMarkers: ['round-2', 'round-1'],
-        firstRoundAt: '2026-07-27T00:00:00.000Z',
-        exhausted: false,
-      },
-    };
-
-    const parsed = JSON.parse(canonicalJson(ledger)) as FindingLedger;
-    expect(parsed).toEqual(ledger);
-    expect(parsed.stopBudget?.roundMarkers).toEqual(['round-2', 'round-1']);
-  });
 });

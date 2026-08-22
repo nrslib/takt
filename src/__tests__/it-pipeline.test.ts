@@ -159,8 +159,6 @@ import { loadGlobalConfig } from '../infra/config/global/globalConfig.js';
 
 const mockExecFileSync = vi.mocked(execFileSync);
 
-// --- Test helpers ---
-
 /** Create a minimal test workflow YAML + agent files in a temp directory */
 function createTestWorkflowDir(): { dir: string; workflowPath: string } {
   const dir = mkdtempSync(join(tmpdir(), 'takt-it-pipeline-'));
@@ -220,37 +218,43 @@ steps:
 function writeChildAutoRoutingWorkflow(dir: string, parallel: boolean): string {
   const workflowsDir = join(dir, '.takt', 'workflows');
   mkdirSync(workflowsDir, { recursive: true });
+  writeFileSync(join(dir, '.takt', 'runtime.yaml'), `version: 1
+provider:
+  defaults:
+    profile: default
+  profiles:
+    default:
+      provider: mock
+      model: mock/default-model
+    low:
+      provider: mock
+      model: mock/low-model
+    medium:
+      provider: mock
+      model: mock/medium-model
+    high:
+      provider: mock
+      model: mock/high-model
+    router:
+      provider: mock
+      model: mock/router-model
+  auto_routing:
+    strategy: balanced
+    router_profile: router
+    pools:
+      general:
+        candidates:
+          - profile: low
+            tier: low
+          - profile: medium
+            tier: medium
+          - profile: high
+            tier: high
+        fallback_profile: high
+`);
   writeFileSync(join(workflowsDir, 'child-auto.yaml'), `name: child-auto
 subworkflow:
   callable: true
-workflow_config:
-  provider: mock
-auto_routing:
-  strategy: balanced
-  router:
-    provider: mock
-    model: mock/router-model
-  candidates:
-    - name: low
-      description: Low-cost candidate
-      provider: mock
-      model: mock/low-model
-      routing_tier: low
-    - name: medium
-      description: Balanced candidate
-      provider: mock
-      model: mock/medium-model
-      routing_tier: medium
-    - name: high
-      description: High-performance candidate
-      provider: mock
-      model: mock/high-model
-      routing_tier: high
-  default_pool: general
-  candidate_pools:
-    general:
-      candidates: [low, medium, high]
-      fallback: high
 initial_step: child-step
 max_steps: 2
 steps:
@@ -377,81 +381,7 @@ describe('Pipeline Integration Tests', () => {
     expect(exitCode).toBe(3);
   });
 
-  it('should complete pipeline with workflow name + skip-git + mock scenario', async () => {
-    // Use builtin 'default' workflow
-    // persona field: extractPersonaName result (from .md filename)
-    // Flow: shared development core → peer-review → final gate → COMPLETE
-    setMockScenario([
-      { persona: 'planner', status: 'done', content: '[PLAN:1]\n\nRequirements are clear and implementable' },
-      { persona: 'coder', status: 'done', content: '[WRITE_TESTS:1]\n\nTests written successfully' },
-      { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\n\nImplementation complete' },
-      { persona: 'architecture-reviewer', status: 'done', content: '[ARCH-REVIEW:1]\n\napproved' },
-      { persona: 'security-reviewer', status: 'done', content: '[SECURITY-REVIEW:1]\n\napproved' },
-      { persona: 'testing-reviewer', status: 'done', content: '[TESTING-REVIEW:1]\n\napproved' },
-      { persona: 'coding-reviewer', status: 'done', content: '[CODING-REVIEW:1]\n\napproved' },
-      { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-2ND:1]\n\napproved' },
-      { persona: 'review-adjudicator', status: 'done', content: '[REVIEW-ADJUDICATION:2]\n\nNo actionable findings remain.' },
-      { persona: 'merge-readiness-supervisor', status: 'done', content: '[FINAL-GATE:1]\n\nMergeable.' },
-    ]);
-
-    const exitCode = await executePipeline({
-      task: 'Add a hello world function',
-      workflow: 'default',
-      autoPr: false,
-      skipGit: true,
-      cwd: testDir,
-      provider: 'mock',
-    });
-
-    expect(exitCode).toBe(0);
-    expect(getScenarioQueue()?.remaining).toBe(0);
-  });
-
-  it('should complete the shared development core after remediating review findings', async () => {
-    setMockScenario([
-      { persona: 'planner', status: 'done', content: '[PLAN:1]\n\nPlan completed.' },
-      { persona: 'coder', status: 'done', content: '[WRITE_TESTS:1]\n\nTests created.' },
-      { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\n\nImplementation completed.' },
-      { persona: 'architecture-reviewer', status: 'done', content: '[ARCH-REVIEW:2]\n\nA fix is required.' },
-      { persona: 'security-reviewer', status: 'done', content: '[SECURITY-REVIEW:1]\n\nApproved.' },
-      { persona: 'testing-reviewer', status: 'done', content: '[TESTING-REVIEW:1]\n\nApproved.' },
-      { persona: 'coding-reviewer', status: 'done', content: '[CODING-REVIEW:1]\n\nApproved.' },
-      { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-2ND:1]\n\nApproved.' },
-      { persona: 'frontend-reviewer', status: 'done', content: '[FRONTEND-REVIEW:1]\n\nApproved.' },
-      { persona: 'review-adjudicator', status: 'done', content: '[REVIEW-ADJUDICATION:1]\n\nActionable findings remain.' },
-      { persona: 'planner', status: 'done', content: '[FIX-PLAN:1]\n\nFix plan finalized.' },
-      { persona: 'coder', status: 'done', content: '[FIX:1]\n\nFix completed.' },
-      { persona: 'coding-reviewer', status: 'done', content: '[FIX-VERIFIER:1]\n\nVerified.' },
-      { persona: 'architecture-reviewer', status: 'done', content: '[ARCH-REVIEW:1]\n\nApproved.' },
-      { persona: 'security-reviewer', status: 'done', content: '[SECURITY-REVIEW:1]\n\nApproved.' },
-      { persona: 'testing-reviewer', status: 'done', content: '[TESTING-REVIEW:1]\n\nApproved.' },
-      { persona: 'coding-reviewer', status: 'done', content: '[CODING-REVIEW:1]\n\nApproved.' },
-      { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-2ND:1]\n\nApproved.' },
-      { persona: 'frontend-reviewer', status: 'done', content: '[FRONTEND-REVIEW:1]\n\nApproved.' },
-      { persona: 'review-adjudicator', status: 'done', content: '[REVIEW-ADJUDICATION:2]\n\nNo actionable findings remain.' },
-      { persona: 'merge-readiness-supervisor', status: 'done', content: '[FINAL-GATE:1]\n\nMergeable.' },
-    ]);
-
-    const exitCode = await executePipeline({
-      task: 'Implement a frontend change that requires review remediation',
-      workflow: 'frontend',
-      autoPr: false,
-      skipGit: true,
-      cwd: testDir,
-      provider: 'mock',
-    });
-
-    expect(
-      exitCode,
-      JSON.stringify({
-        errors: mockUiError.mock.calls,
-        remaining: getScenarioQueue()?.remaining,
-      }),
-    ).toBe(0);
-    expect(getScenarioQueue()?.remaining).toBe(0);
-  }, 30_000);
-
-  it.each(['backend-mini', 'default-mini'])('should complete %s through the shared mini core', async (workflow) => {
+  it.each(['backend-mini', 'frontend-mini'])('should complete %s through the shared mini core', async (workflow) => {
     setMockScenario([
       { persona: 'planner', status: 'done', content: '[PLAN:1]\n\nPlan completed.' },
       { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\n\nImplementation completed.' },
@@ -499,24 +429,30 @@ describe('Pipeline Integration Tests', () => {
     { name: 'root workflow', child: false },
     { name: 'workflow_call child', child: true },
   ])('should accept a pool with one eligible tier regardless of strategy without reporting it as unused for $name', async ({ child }) => {
-    const invalidAutoRouting = `workflow_config:
-  provider: mock
-auto_routing:
-  strategy: balanced
-  router:
-    provider: mock
-    model: mock/router-model
-  candidates:
-    - name: medium
-      description: Balanced candidate
+    writeFileSync(join(testDir, '.takt', 'runtime.yaml'), `version: 1
+provider:
+  defaults:
+    profile: default
+  profiles:
+    default:
+      provider: mock
+      model: mock/default-model
+    medium:
       provider: mock
       model: mock/medium-model
-      routing_tier: medium
-  default_pool: general
-  candidate_pools:
-    general:
-      candidates: [medium]
-      fallback: medium`;
+    router:
+      provider: mock
+      model: mock/router-model
+  auto_routing:
+    strategy: balanced
+    router_profile: router
+    pools:
+      general:
+        candidates:
+          - profile: medium
+            tier: medium
+        fallback_profile: medium
+`);
 
     if (child) {
       const workflowsDir = join(testDir, '.takt', 'workflows');
@@ -524,7 +460,6 @@ auto_routing:
       writeFileSync(join(workflowsDir, 'invalid-auto.yaml'), `name: invalid-auto
 subworkflow:
   callable: true
-${invalidAutoRouting}
 initial_step: child-step
 max_steps: 2
 steps:
@@ -550,7 +485,6 @@ steps:
     } else {
       workflowPath = join(testDir, 'invalid-auto-root.yaml');
       writeFileSync(workflowPath, `name: invalid-auto-root
-${invalidAutoRouting}
 initial_step: implement
 max_steps: 2
 steps:
@@ -577,7 +511,7 @@ steps:
     );
   });
 
-  it('should warn when a conditional workflow_call child with auto routing is not executed', async () => {
+  it('should not warn when runtime auto routing is effective on a conditional parent', async () => {
     writeChildAutoRoutingWorkflow(testDir, false);
     workflowPath = join(testDir, 'conditional-parent.yaml');
     writeFileSync(workflowPath, `name: conditional-parent
@@ -620,8 +554,8 @@ steps:
     });
 
     expect(exitCode).toBe(0);
-    expect(mockWorkflowWarn).toHaveBeenCalledWith(
-      '--auto-strategy was ignored because execution did not reach a workflow with effective auto_routing',
+    expect(mockWorkflowWarn).not.toHaveBeenCalledWith(
+      expect.stringMatching(/auto-strategy.*ignored/i),
     );
   });
 

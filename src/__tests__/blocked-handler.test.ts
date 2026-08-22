@@ -65,14 +65,15 @@ describe('handleBlocked', () => {
 
   it('should pass extracted prompt in the request', async () => {
     const onUserInput = vi.fn().mockResolvedValue('answer');
+    const question = 'environment question';
     await handleBlocked(
       makeStep(),
-      makeResponse('質問: 環境は何ですか？'),
+      makeResponse(`質問: ${question}`),
       makeOptions({ onUserInput }),
     );
 
     const request = onUserInput.mock.calls[0]![0];
-    expect(request.prompt).toBe('環境は何ですか？');
+    expect(request.prompt).toBe(question);
   });
 
   it('should pass the full content as prompt when no pattern matches', async () => {

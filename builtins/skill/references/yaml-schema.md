@@ -10,11 +10,13 @@ description: 説明テキスト      # 任意
 max_steps: 10                 # 最大イテレーション数（省略時デフォルトあり）
 initial_step: plan            # 最初に実行する step 名（省略時は steps の先頭）
 
-# ワークフロー全体の provider / runtime 等
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
+# ワークフロー実行設定は runtime.yaml が所有する。workflow YAML では
+# capabilities で能力プリセットだけを参照し、provider / model / options は指定しない。
+
+# 能力プリセット参照（任意）。全 step の既定。step / parallel サブステップにも書け、
+# step 側は既定を置換する。リストは左から右へマージし後勝ち。
+# 同梱プリセット: readonly / edit / enable-skills
+capabilities: readonly
 
 # セクションマップ（キー → ファイルパスの対応表）
 policies:                     # ポリシー定義（任意）
@@ -66,6 +68,7 @@ fragment root の `params` は必須の型付き parameter を宣言し、`uses`
   session: refresh             # セッション管理: continue / refresh / compact（任意）
   pass_previous_response: true # 前の出力を渡すか（デフォルト: true）
   allowed_tools: [...]         # 許可ツール一覧（任意、参考情報）
+  capabilities: readonly       # 能力プリセット参照（任意）。名前かリスト。workflow 既定を置換する
   output_contracts: [...]      # 出力契約設定（任意）
   quality_gates: [...]         # agent step 用の品質 gate（文字列指示 / command gate、任意）
   rules: [...]                 # 遷移ルール（必須）
@@ -96,6 +99,8 @@ fragment root の `params` は必須の型付き parameter を宣言し、`uses`
 ```
 
 **`instruction`**: セクションマップ → パス → 3-layer facet → インラインの順で解決する正式フィールド。`instruction_template` は受理されない。
+
+`instruction` は scalar または空でない順序付き配列を指定できます。配列の各要素は facet 参照またはインライン文字列で、記述順に解決して `\n\n---\n\n` で結合します。callable workflow では `facet_ref` / `facet_ref[]` parameter を配列要素の `{ $param: name }` で参照でき、`facet_ref[]` はその位置へ平坦化されます。
 
 ### Parallel step（親 + `parallel`）
 
@@ -137,6 +142,7 @@ fragment root の `params` は必須の型付き parameter を宣言し、`uses`
 
 **重要**: サブステップの `rules` は結果分類のための condition 定義のみ。`next` は無視される（親の rules が遷移先を決定）。
 
+
 ### Team Leader step
 
 ```yaml
@@ -150,28 +156,6 @@ fragment root の `params` は必須の型付き parameter を宣言し、`uses`
 ```
 
 Team Leader はタスクを独立 part に分解する。`initial_max_parts` を指定した場合のみ初回 batch の part 数を制限し、未指定時は初回 part 数にも上限を設けない。`max_concurrency` は同時実行上限であり、全 batch 合計の上限はない。同一 batch の part は互いに独立でなければならず、実装結果を必要とする検証は全 part 完了後の後続 batch に置く。`fail_on_part_error: true` は回復 part 実行後も親 step を error にする。`refill_threshold` は逐次 refill と batch 障壁が両立しないため互換キーとして 0 のみ受理し、非0はロード時エラーになる。
-
-`mode: finding_contract_fix` は Finding Contract の修正専用契約を有効にする。有効な `finding_contract` が必須で、part ごとの finding assignment、明示的な `continue | complete | replan` decision、全 actionable finding の `fixCoverage`、latest batch 全体で bounded な raw excerpt と検証済み finding 単位 claim digest を使用する。過去 batch は finding ごとの最新 digest だけを渡す。Team Leader 用の actionable summary は既存項目を維持したまま raw finding ID だけを除外する。worker の割当詳細と ledger には raw finding ID を残し、完全な provenance を保持する。assignment の `readPaths` は調査対象の目安となる作業ディレクトリからのリテラルな相対パスであり、completion の `changedPaths` は実際の変更ファイルを申告する。どちらにもワイルドカードの `*` と `?` は使えない。`[]` などその他の文字は展開されず、パスの一部として扱われる。part は通常の編集権限で動作し、変更が重なった場合は Team Leader が後続の repair または verify part を計画する。bounded index の `omittedPartCount` またはいずれかの `omittedChangedPathCount` が1以上なら `complete` にせず、後続の集約した repair または verify part で最終状態を確認する。`complete` は reviewer へ引き渡せるという step-local な判断で、ledger lifecycle は Finding Manager が更新する。遷移は `when(structured.fix.decision == "complete")` / `when(structured.fix.decision == "replan")` で定義する。
-
-### Finding Contract manager の provider/model
-
-`finding_contract.manager` は、Finding Manager 合成 step 専用の `provider` / `model` を指定できる。
-
-```yaml
-finding_contract:
-  manager:
-    persona: findings-manager
-    instruction: findings-manager
-    output_contract: findings-manager
-    provider: codex
-    model: gpt-5.5
-```
-
-指定値は step レベル provider/model として扱われ、`provider_routing`、deprecated の `persona_providers.findings-manager`、workflow 既定値、解決済み入力より優先される。両方とも未指定の場合は通常の workflow step provider/model 解決を使う。`provider` だけを指定すると下位優先度の model fallback は停止し、明示 model が必須の provider では検証エラーになる。
-
-### Finding Contract provisional finding の明示的 route
-
-Finding Manager の invalid・欠落した判断は provisional finding として台帳へ保存され、旧 invalid-manager-output 用の detour rule は自動選択されない。`finding_contract` を使う workflow は、`COMPLETE` の rule より前に `when(findings.provisional.count > 0)` などの rule を置き、再計画先を明示する。
 
 ## Rules 定義
 
@@ -190,13 +174,9 @@ rules:
 | 記法 | 説明 | 例 |
 |-----|------|-----|
 | 意味ラベル | status judge が一度だけ選択 | `approved` |
-| `when(...)` | workflow state を決定的に評価 | `when(findings.open.count == 0)` |
 | `all("...")` | 全サブステップがマッチ（parallel 親のみ） | `all("approved")` |
 | `any("...")` | いずれかがマッチ（parallel 親のみ） | `any("needs_fix")` |
 | `all("X", "Y")` | 位置対応で全マッチ（parallel 親のみ） | `all("問題なし", "テスト成功")` |
-| `<label> && when(...)` | 意味ラベルと state predicate の AND | `approved && when(findings.open.count == 0)` |
-| `all("...") && when(...)` | 全 sub-step の集約と state predicate の AND | `all("approved") && when(findings.open.count == 0)` |
-| `any("...") && when(...)` | いずれかの sub-step の集約と state predicate の AND | `any("needs_fix") && when(findings.open.count > 0)` |
 
 rule は YAML 順の first-match で評価する。workflow rule では `ai(...)` と `when:` 別名を使わない。どの rule も成立しない場合は `rule_no_match` で ABORT する。
 

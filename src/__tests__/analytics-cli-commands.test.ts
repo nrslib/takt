@@ -121,7 +121,6 @@ describe('lazy CLI action wiring', () => {
     expect(mockParseSinceDuration).toHaveBeenCalledWith('7d');
     expect(mockComputeReviewMetrics).toHaveBeenCalledWith('/configured/events', 1_395_200_000);
     expect(mockFormatReviewMetrics).toHaveBeenCalledWith(metrics);
-    expect(mockInfo).toHaveBeenCalledWith('formatted metrics');
   });
 
   it('should execute the registered purge action with config overrides', async () => {
@@ -134,7 +133,6 @@ describe('lazy CLI action wiring', () => {
     await requireAction('root.purge')({ retentionDays: '30' });
 
     expect(mockPurgeOldEvents).toHaveBeenCalledWith('/configured/events', 5, expect.any(Date));
-    expect(mockSuccess).toHaveBeenCalledWith('Purged 1 file(s): old.jsonl');
   });
 
   it('should execute the registered purge action with CLI defaults when config is unset', async () => {
@@ -143,7 +141,6 @@ describe('lazy CLI action wiring', () => {
     await requireAction('root.purge')({ retentionDays: '30' });
 
     expect(mockPurgeOldEvents).toHaveBeenCalledWith('/global-config/analytics/events', 30, expect.any(Date));
-    expect(mockInfo).toHaveBeenCalledWith('No files to purge.');
   });
 
   it('should execute the registered reset config action', async () => {

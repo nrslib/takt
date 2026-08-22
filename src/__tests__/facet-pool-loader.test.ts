@@ -13,6 +13,11 @@ const COMPLETE_CALLER_RULES = `
       - condition: done
         next: COMPLETE`;
 
+const BACKEND_KNOWLEDGE_CONTENT = '# backend-api knowledge\n';
+const TRANSACTION_POLICY_CONTENT = '# transaction-correctness policy\n';
+const SIBLING_POLICY_CONTENT = '# sibling policy\n';
+const POOL_TRANSACTION_POLICY_CONTENT = '# POOL transaction-correctness\n';
+
 function writeFile(root: string, relativePath: string, content: string): string {
   const filePath = join(root, relativePath);
   mkdirSync(dirname(filePath), { recursive: true });
@@ -123,6 +128,73 @@ candidates:
     policy: backward-compatibility
 `;
 
+const STATIC_PARALLEL_CHILD_WORKFLOW = `
+policies:
+  coding: ../../facets/policies/coding.md
+knowledge:
+  architecture: ../../facets/knowledge/architecture.md
+facet_pools:
+  fix:
+    candidates:
+      - id: backend
+        description: backend
+        knowledge: architecture
+steps:
+  - name: parallel-parent
+    parallel:
+      - name: child
+        persona: coder
+        instruction: child
+        dynamic_facets:
+          pool: fix
+          max_selected: 1
+        rules:
+          - condition: done
+            next: COMPLETE
+    rules:
+      - condition: done
+        next: COMPLETE
+`;
+
+const DYNAMIC_PARALLEL_CHILD_WORKFLOW = `
+policies:
+  coding: ../../facets/policies/coding.md
+knowledge:
+  architecture: ../../facets/knowledge/architecture.md
+facet_pools:
+  fix:
+    candidates:
+      - id: backend
+        description: backend
+        knowledge: architecture
+steps:
+  - name: parallel-parent
+    parallel:
+      fixed:
+        - name: fixed-child
+          persona: coder
+          instruction: fixed
+          dynamic_facets:
+            pool: fix
+            max_selected: 1
+          rules:
+            - condition: done
+              next: COMPLETE
+      pool:
+        - name: pool-child
+          description: pool child
+          persona: coder
+          instruction: pool
+          dynamic_facets:
+            pool: fix
+          rules:
+            - condition: done
+              next: COMPLETE
+    rules:
+      - condition: done
+        next: COMPLETE
+`;
+
 describe('facet_pools loader (C-INLINE-POOL, C-EXTERNAL-POOL, C-POOL-NORMALIZE, C-POOL-LOOKUP, C-POOL-PROVENANCE)', () => {
   let projectDir: string;
   let globalConfigDir: string;
@@ -136,10 +208,10 @@ describe('facet_pools loader (C-INLINE-POOL, C-EXTERNAL-POOL, C-POOL-NORMALIZE, 
     invalidateGlobalConfigCache();
     invalidateAllResolvedConfigCache();
     writeFacet(projectDir, 'facets/policies/coding.md', '# coding policy\n');
-    writeFacet(projectDir, 'facets/policies/transaction-correctness.md', '# transaction-correctness policy\n');
+    writeFacet(projectDir, 'facets/policies/transaction-correctness.md', TRANSACTION_POLICY_CONTENT);
     writeFacet(projectDir, 'facets/policies/backward-compatibility.md', '# backward-compatibility policy\n');
     writeFacet(projectDir, 'facets/knowledge/architecture.md', '# architecture knowledge\n');
-    writeFacet(projectDir, 'facets/knowledge/backend-api.md', '# backend-api knowledge\n');
+    writeFacet(projectDir, 'facets/knowledge/backend-api.md', BACKEND_KNOWLEDGE_CONTENT);
     writeFacet(projectDir, 'facets/knowledge/database-transaction.md', '# database-transaction knowledge\n');
   });
 
@@ -169,7 +241,7 @@ describe('facet_pools loader (C-INLINE-POOL, C-EXTERNAL-POOL, C-POOL-NORMALIZE, 
       const backend = pool?.candidates.find((c) => c.id === 'backend');
       expect(backend?.knowledgeRefs).toEqual(['backend-api']);
       // S1: the alias resolves to the workflow section's facet file body, not the ref name.
-      expect(backend?.resolvedKnowledgeContents?.[0]?.content).toContain('# backend-api knowledge');
+      expect(backend?.resolvedKnowledgeContents?.[0]?.content).toBe(BACKEND_KNOWLEDGE_CONTENT);
       expect(backend?.resolvedKnowledgeContents?.[0]?.sourcePath).toBeDefined();
     });
 
@@ -179,7 +251,7 @@ describe('facet_pools loader (C-INLINE-POOL, C-EXTERNAL-POOL, C-POOL-NORMALIZE, 
       // transaction candidate's policy:transaction-correctness is aliased via workflow policies section
       const transaction = workflow.facetPools?.fix?.candidates.find((c) => c.id === 'transaction');
       expect(transaction?.policyRefs).toEqual(['transaction-correctness']);
-      expect(transaction?.resolvedPolicyContents?.[0]?.content).toContain('# transaction-correctness policy');
+      expect(transaction?.resolvedPolicyContents?.[0]?.content).toBe(TRANSACTION_POLICY_CONTENT);
     });
   });
 
@@ -205,7 +277,7 @@ describe('facet_pools loader (C-INLINE-POOL, C-EXTERNAL-POOL, C-POOL-NORMALIZE, 
       // External pool defines its own "transaction-correctness" pointing to its own file.
       // The resolved candidate facet content must come from the pool's file, not the caller's.
       writeProjectPool(projectDir, 'implementation-fix', EXTERNAL_POOL_BODY);
-      writeFacet(projectDir, '.takt/facet-pools/facets/policies/transaction-correctness.md', '# POOL transaction-correctness\n');
+      writeFacet(projectDir, '.takt/facet-pools/facets/policies/transaction-correctness.md', POOL_TRANSACTION_POLICY_CONTENT);
       writeFacet(projectDir, '.takt/facet-pools/facets/policies/backward-compatibility.md', '# POOL backward-compatibility\n');
       writeFacet(projectDir, '.takt/facet-pools/facets/knowledge/backend-api.md', '# POOL backend-api\n');
       writeFacet(projectDir, '.takt/facet-pools/facets/knowledge/database-transaction.md', '# POOL database-transaction\n');
@@ -236,7 +308,7 @@ steps:
       const transaction = workflow.facetPools?.fix?.candidates.find((c) => c.id === 'transaction');
       // The candidate's resolved policy content must reference the POOL's transaction-correctness file,
       // proving the caller's same-named alias was not captured.
-      expect(transaction?.resolvedPolicyContents?.[0]?.content).toContain('POOL transaction-correctness');
+      expect(transaction?.resolvedPolicyContents?.[0]?.content).toBe(POOL_TRANSACTION_POLICY_CONTENT);
     });
 
     it('should reject nested uses/params/$param in an external pool (C-EXTERNAL-NESTED)', () => {
@@ -325,6 +397,86 @@ steps:
       // are normalized to the same shape while preserving their origin metadata (order.md:339).
       expect(inlinePool?.source).toBe('inline');
       expect(externalPool?.source).toBe('external');
+    });
+  });
+
+  describe('DFP-002/DFP-006: parallel child dynamic facet loading', () => {
+    it('should retain dynamic facets on static parallel children during normalization (DFP-002)', () => {
+      const workflowPath = writeWorkflow(
+        projectDir,
+        'static-parallel-facets',
+        STATIC_PARALLEL_CHILD_WORKFLOW,
+        'parallel-parent',
+      );
+      const workflow = loadWorkflowFromFile(workflowPath, projectDir);
+      const parent = workflow.steps[0];
+
+      if (!parent || !('parallel' in parent) || parent.parallel === undefined || !Array.isArray(parent.parallel)) {
+        throw new Error('Expected a static parallel workflow step');
+      }
+      expect(parent.parallel[0]?.dynamicFacets).toEqual({ pool: 'fix', maxSelected: 1 });
+    });
+
+    it('should retain dynamic facets on dynamic parallel fixed and pool children during normalization (DFP-002)', () => {
+      const workflowPath = writeWorkflow(
+        projectDir,
+        'dynamic-parallel-facets',
+        DYNAMIC_PARALLEL_CHILD_WORKFLOW,
+        'parallel-parent',
+      );
+      const workflow = loadWorkflowFromFile(workflowPath, projectDir);
+      const parent = workflow.steps[0];
+
+      if (!parent || !('parallel' in parent) || parent.parallel === undefined || Array.isArray(parent.parallel)) {
+        throw new Error('Expected a dynamic parallel workflow step');
+      }
+      expect(parent.parallel.fixed[0]?.dynamicFacets).toEqual({ pool: 'fix', maxSelected: 1 });
+      expect(parent.parallel.pool[0]?.dynamicFacets).toEqual({ pool: 'fix' });
+    });
+
+    it('should reject an unknown facet pool on a nested static parallel child (DFP-006)', () => {
+      const workflow = STATIC_PARALLEL_CHILD_WORKFLOW.replace('pool: fix', 'pool: missing');
+      const workflowPath = writeWorkflow(projectDir, 'static-parallel-missing-pool', workflow, 'parallel-parent');
+
+      const error = errorMessage(() => loadWorkflowFromFile(workflowPath, projectDir));
+      expect(error).toContain('unknown facet pool "missing"');
+      expect(error).toContain('parallel');
+    });
+
+    it('should reject an unknown facet pool on a dynamic parallel fixed child (DFP-017)', () => {
+      const workflow = DYNAMIC_PARALLEL_CHILD_WORKFLOW.replace(
+        'dynamic_facets:\n            pool: fix\n            max_selected: 1',
+        'dynamic_facets:\n            pool: missing\n            max_selected: 1',
+      );
+      const workflowPath = writeWorkflow(projectDir, 'dynamic-parallel-fixed-missing-pool', workflow, 'parallel-parent');
+
+      const error = errorMessage(() => loadWorkflowFromFile(workflowPath, projectDir));
+      expect(error).toContain('unknown facet pool "missing"');
+      expect(error).toContain('parallel');
+    });
+
+    it('should reject max_selected exceeding candidates on a dynamic parallel fixed child (DFP-017)', () => {
+      const workflow = DYNAMIC_PARALLEL_CHILD_WORKFLOW.replace(
+        'dynamic_facets:\n            pool: fix\n            max_selected: 1',
+        'dynamic_facets:\n            pool: fix\n            max_selected: 2',
+      );
+      const workflowPath = writeWorkflow(projectDir, 'dynamic-parallel-fixed-max-selected', workflow, 'parallel-parent');
+
+      const error = errorMessage(() => loadWorkflowFromFile(workflowPath, projectDir));
+      expect(error).toContain('exceeds candidate count');
+      expect(error).toContain('parallel');
+    });
+
+    it('should reject max_selected exceeding candidates on a nested dynamic pool child (DFP-006)', () => {
+      const workflow = DYNAMIC_PARALLEL_CHILD_WORKFLOW.replace(
+        'pool: fix\n          rules:',
+        'pool: fix\n            max_selected: 2\n          rules:',
+      );
+      const workflowPath = writeWorkflow(projectDir, 'dynamic-parallel-max-selected', workflow, 'parallel-parent');
+
+      const error = errorMessage(() => loadWorkflowFromFile(workflowPath, projectDir));
+      expect(error).toContain('exceeds candidate count');
+      expect(error).toContain('parallel');
     });
   });
 
@@ -487,7 +639,7 @@ candidates:
 `;
       writeProjectPool(projectDir, 'implementation-fix', siblingPoolBody);
       writeFacet(projectDir, '.takt/facet-pools/facets/knowledge/backend-api.md', '# ext backend-api\n');
-      writeFacet(projectDir, '.takt/facets/policies/sibling-policy.md', '# sibling policy\n');
+      writeFacet(projectDir, '.takt/facets/policies/sibling-policy.md', SIBLING_POLICY_CONTENT);
 
       const siblingWorkflow = `
 facet_pools:
@@ -505,7 +657,7 @@ steps:
       const workflowPath = writeWorkflow(projectDir, 'ext-sibling-ok', siblingWorkflow, 'fix');
       const workflow = loadWorkflowFromFile(workflowPath, projectDir);
       const candidate = workflow.facetPools?.fix?.candidates.find((c) => c.id === 'backend');
-      expect(candidate?.resolvedPolicyContents?.[0]?.content).toContain('# sibling policy');
+      expect(candidate?.resolvedPolicyContents?.[0]?.content).toBe(SIBLING_POLICY_CONTENT);
     });
 
     it('should reject an external pool map value with an absolute path (C-POOL-LOOKUP: 絶対パス 拒否)', () => {

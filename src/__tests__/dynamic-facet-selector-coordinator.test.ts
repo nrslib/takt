@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   DynamicFacetSelectorCoordinator,
   type DynamicFacetSelectorCoordinatorDeps,
@@ -12,16 +12,24 @@ import type {
 } from '../core/models/types.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import { DynamicFacetSelectionStore } from '../core/workflow/dynamic-facets/dynamicFacetSelectionStore.js';
+import { assertStrictStructuredOutputSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
 
-vi.mock('../agents/agent-usecases.js', () => ({
-  executeIsolatedStructuredInternalAgent: vi.fn(),
-}));
+vi.mock('../agents/structured-caller/transport.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../agents/structured-caller/transport.js')>();
+  return {
+    ...actual,
+    executeStructuredAgent: vi.fn(),
+  };
+});
 
-import { executeIsolatedStructuredInternalAgent } from '../agents/agent-usecases.js';
-import * as selectorContract from '../core/workflow/dynamic-parallel/selector-contract.js';
+import { executeStructuredAgent } from '../agents/structured-caller/transport.js';
 import * as contextBuilder from '../core/workflow/dynamic-facets/dynamicFacetContextBuilder.js';
 
-const mockedExecuteAgent = vi.mocked(executeIsolatedStructuredInternalAgent);
+const mockedExecuteAgent = vi.mocked(executeStructuredAgent);
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 function makePool(candidates: { id: string; description: string }[]): ResolvedFacetPool {
   return {
@@ -37,16 +45,59 @@ function makePool(candidates: { id: string; description: string }[]): ResolvedFa
   };
 }
 
-function makeStep(maxSelected = 4): NormalAgentWorkflowStep {
+function makeStep(maxSelected: number | undefined = 4): NormalAgentWorkflowStep {
   return {
     name: 'fix',
     personaDisplayName: 'coder',
     instruction: 'Fix',
-    dynamicFacets: { pool: 'fix', maxSelected },
+    dynamicFacets: {
+      pool: 'fix',
+      ...(maxSelected === undefined ? {} : { maxSelected }),
+    },
   };
 }
 
-function makeState(snapshot?: DynamicFacetSelectionSnapshot, resumedIdentity?: string): WorkflowState {
+function makeUnlimitedStep(): NormalAgentWorkflowStep {
+  return {
+    name: 'fix',
+    personaDisplayName: 'coder',
+    instruction: 'Fix',
+    dynamicFacets: { pool: 'fix' },
+  };
+}
+
+function makeGuidedStep(): NormalAgentWorkflowStep {
+  return {
+    ...makeStep(),
+    dynamicFacets: {
+      pool: 'fix',
+      maxSelected: 4,
+      selector: {
+        persona: 'facet-selector',
+        personaPath: '/project/.takt/facets/personas/facet-selector.md',
+        instruction: 'Select facets from the changed paths and unresolved findings.',
+      },
+    } as unknown as NormalAgentWorkflowStep['dynamicFacets'],
+  };
+}
+
+function snapshot(
+  identity: string,
+  selectedIds: string[],
+  round: number,
+): DynamicFacetSelectionSnapshot {
+  return {
+    identity,
+    step_name: 'fix',
+    round,
+    selected_ids: selectedIds,
+    selected_policy_refs: [],
+    selected_knowledge_refs: [],
+    rationale: `round ${round}`,
+  };
+}
+
+function makeState(snapshot?: DynamicFacetSelectionSnapshot): WorkflowState {
   const selections = new Map<string, DynamicFacetSelectionSnapshot>();
   if (snapshot) selections.set(snapshot.identity, snapshot);
   return {
@@ -59,9 +110,9 @@ function makeState(snapshot?: DynamicFacetSelectionSnapshot, resumedIdentity?: s
     effectResults: new Map(),
     userInputs: [],
     personaSessions: new Map(),
-    stepIterations: new Map(),
+    stepIterations: new Map([['fix', 1]]),
+    dynamicParallelSelections: new Map(),
     dynamicFacetSelections: selections,
-    resumedDynamicFacetSteps: resumedIdentity ? new Set([resumedIdentity]) : new Set(),
     status: 'running',
   };
 }
@@ -69,13 +120,13 @@ function makeState(snapshot?: DynamicFacetSelectionSnapshot, resumedIdentity?: s
 function makeOptions(overrides: Partial<WorkflowEngineOptions> = {}): WorkflowEngineOptions {
   return {
     projectCwd: '/tmp/project',
+    workflowBundleResourceRoot: '/tmp/project/.takt/runs/bundle/resources',
     selectorProvider: {
       provider: 'cursor',
       providerSource: 'step',
       model: 'm',
       modelSource: 'step',
       providerOptions: {},
-      nativeTools: [],
     },
     ...overrides,
   } as unknown as WorkflowEngineOptions;
@@ -89,16 +140,24 @@ function buildDeps(overrides: Partial<DynamicFacetSelectorCoordinatorDeps> = {})
   const store = new DynamicFacetSelectionStore(new Map());
   return {
     engineOptions: makeOptions(),
+    failureDir: '/tmp/project/.takt/runs/run/failures',
     selectionStore: store,
     getWorkflowReference: () => 'test-workflow',
     workflowCallPath: [],
     commitSelection: vi.fn().mockResolvedValue(undefined),
     getReportDirectory: () => '.takt/reports',
+    getReportsRootDirectory: () => '.takt/reports',
     getReportNames: () => [],
     getCwd: () => '/tmp/project',
-    getUnresolvedFindings: () => '',
     inputReader: {
-      readInputs: vi.fn().mockResolvedValue({ reports: '', workingTreeDiff: '' }),
+      readInputs: vi.fn().mockImplementation(async (
+        reportDirectory: string,
+        reportNames: readonly string[],
+      ) => ({
+        reportDirectory,
+        reportNames,
+        changedPaths: ['src/changed.ts'],
+      })),
     } as unknown as DynamicFacetSelectorCoordinatorDeps['inputReader'],
     ...overrides,
   };
@@ -131,30 +190,224 @@ describe('DynamicFacetSelectorCoordinator', () => {
     ).rejects.toThrow('must NOT have more than 2 items');
   });
 
-  it('restores from snapshot without invoking selector when identity is in resumedDynamicFacetSteps', async () => {
-    const pool = makePool([{ id: 'backend', description: 'backend' }]);
+  it('accepts all pool candidates when max_selected is omitted', async () => {
+    const pool = makePool([
+      { id: 'a', description: 'A' },
+      { id: 'b', description: 'B' },
+      { id: 'c', description: 'C' },
+    ]);
+    const step = makeUnlimitedStep();
+    const response: AgentResponse = {
+      persona: 'selector',
+      status: 'done',
+      content: '',
+      timestamp: new Date(),
+      structuredOutput: { selected_ids: ['a', 'b', 'c'], rationale: 'all facets are relevant' },
+    };
+    mockedExecuteAgent.mockResolvedValueOnce(response);
+
+    const coordinator = new DynamicFacetSelectorCoordinator(buildDeps());
+    const result = await coordinator.resolveDynamicFacets(step, makeState(), 'task', pool);
+
+    expect(result.selectedIds).toEqual(['a', 'b', 'c']);
+    const outputSchema = mockedExecuteAgent.mock.calls[0]?.[1] as { properties?: { selected_ids?: { maxItems?: number } } };
+    expect(outputSchema.properties?.selected_ids?.maxItems).toBeUndefined();
+  });
+
+  it('keeps base facets unchanged when the selector returns an empty selection (DFP-005)', async () => {
+    const pool: ResolvedFacetPool = {
+      name: 'fix',
+      candidates: [{
+        id: 'extra',
+        description: 'extra facet',
+        policyRefs: ['extra-policy'],
+        knowledgeRefs: ['extra-knowledge'],
+        resolvedPolicyContents: [{ content: 'EXTRA POLICY' }],
+        resolvedKnowledgeContents: [{ content: 'EXTRA KNOWLEDGE' }],
+      }],
+    };
+    const step: NormalAgentWorkflowStep = {
+      ...makeStep(1),
+      policyContents: [{ content: 'BASE POLICY' }],
+      knowledgeContents: [{ content: 'BASE KNOWLEDGE' }],
+    };
+    mockedExecuteAgent.mockResolvedValueOnce({
+      persona: 'selector',
+      status: 'done',
+      content: '',
+      timestamp: new Date(),
+      structuredOutput: { selected_ids: [], rationale: 'no extra facet is needed' },
+    });
+
+    const coordinator = new DynamicFacetSelectorCoordinator(buildDeps());
+    const result = await coordinator.resolveDynamicFacets(step, makeState(), 'task', pool);
+
+    expect(result.selectedIds).toEqual([]);
+    expect(result.effectivePolicyContents).toEqual(['BASE POLICY']);
+    expect(result.effectiveKnowledgeContents).toEqual(['BASE KNOWLEDGE']);
+    expect(result.effectivePolicyContents).not.toContain('EXTRA POLICY');
+    expect(result.effectiveKnowledgeContents).not.toContain('EXTRA KNOWLEDGE');
+  });
+
+  it('sends a provider-compatible schema to the structured selector', async () => {
+    const pool = makePool([
+      { id: 'a', description: 'A' },
+      { id: 'b', description: 'B' },
+    ]);
+    const response: AgentResponse = {
+      persona: 'selector',
+      status: 'done',
+      content: '',
+      timestamp: new Date(),
+      structuredOutput: { selected_ids: ['a'], rationale: 'a is relevant' },
+    };
+    mockedExecuteAgent.mockResolvedValueOnce(response);
+
+    const coordinator = new DynamicFacetSelectorCoordinator(buildDeps());
+    await coordinator.resolveDynamicFacets(makeStep(1), makeState(), 'task', pool);
+
+    const outputSchema = mockedExecuteAgent.mock.calls[0]?.[1];
+    if (outputSchema === undefined) throw new Error('Selector output schema was not sent');
+    expect(() => assertStrictStructuredOutputSchema(outputSchema)).not.toThrow();
+    expect(outputSchema).not.toHaveProperty('properties.selected_ids.uniqueItems');
+    expect(outputSchema).toHaveProperty('properties.selected_ids.maxItems', 1);
+  });
+
+  it('passes selector runtime options without replacing the engine contract', async () => {
+    const onActivity = vi.fn();
+    const pool = makePool([
+      { id: 'frontend', description: 'Frontend changes' },
+      { id: 'backend', description: 'Backend changes' },
+    ]);
+    mockedExecuteAgent.mockResolvedValueOnce({
+      persona: 'selector',
+      status: 'done',
+      content: '',
+      timestamp: new Date(),
+      structuredOutput: { selected_ids: ['frontend'], rationale: 'changed paths are frontend-only' },
+    });
+
+    const coordinator = new DynamicFacetSelectorCoordinator(buildDeps({ onActivity }));
+    await coordinator.resolveDynamicFacets(makeGuidedStep(), makeState(), 'task', pool);
+
+    const [, outputSchema, options] = mockedExecuteAgent.mock.calls[0] ?? [];
+    expect(outputSchema).toMatchObject({
+      type: 'object',
+      additionalProperties: false,
+      required: ['selected_ids', 'rationale'],
+      properties: {
+        selected_ids: {
+          type: 'array',
+          maxItems: 4,
+          items: { type: 'string', enum: ['frontend', 'backend'] },
+        },
+        rationale: { type: 'string' },
+      },
+    });
+    expect(options).toEqual(expect.objectContaining({
+      persona: 'facet-selector',
+      personaPath: '/project/.takt/facets/personas/facet-selector.md',
+      workflowBundleResourceRoot: '/tmp/project/.takt/runs/bundle/resources',
+      onActivity,
+      allowedTools: ['Read', 'Glob', 'Grep'],
+      resolution: expect.objectContaining({ permissionMode: 'readonly' }),
+    }));
+  });
+
+  it('preserves an explicitly configured selector permission mode', async () => {
+    mockedExecuteAgent.mockResolvedValueOnce({
+      persona: 'selector',
+      status: 'done',
+      content: '',
+      timestamp: new Date(),
+      structuredOutput: { selected_ids: ['frontend'], rationale: 'explicit policy applies' },
+    });
+    const coordinator = new DynamicFacetSelectorCoordinator(buildDeps({
+      engineOptions: makeOptions({
+        selectorProvider: {
+          provider: 'deepseek-harness',
+          providerSource: 'step',
+          model: 'deepseek-v4-flash',
+          modelSource: 'step',
+          providerOptions: {},
+          permissionMode: 'full',
+        },
+      }),
+    }));
+
+    await coordinator.resolveDynamicFacets(makeGuidedStep(), makeState(), 'task', makePool([
+      { id: 'frontend', description: 'Frontend changes' },
+    ]));
+
+    const options = mockedExecuteAgent.mock.calls[0]?.[2];
+    expect(options?.resolution).toEqual(expect.objectContaining({
+      permissionMode: 'full',
+      permissionModeSource: 'explicit',
+    }));
+  });
+
+  it('should run the selector instead of restoring a run-local selection as a resume snapshot', async () => {
+    const pool = makePool([
+      { id: 'frontend', description: 'frontend' },
+      { id: 'backend', description: 'backend' },
+    ]);
     const step = makeStep();
     const identity = buildIdentity('fix');
-    const snapshot: DynamicFacetSelectionSnapshot = {
-      identity,
-      step_name: 'fix',
-      round: 1,
-      selected_ids: ['backend'],
-      selected_policy_refs: [],
-      selected_knowledge_refs: [],
-      rationale: 'prev',
-    };
-    const store = new DynamicFacetSelectionStore(new Map([[identity, snapshot]]));
-    const state = makeState(snapshot, identity);
-    const deps = buildDeps({ selectionStore: store });
+    const previous = snapshot(identity, ['frontend'], 1);
+    const deps = buildDeps({
+      selectionStore: new DynamicFacetSelectionStore(new Map([[identity, previous]])),
+    });
+    mockedExecuteAgent.mockResolvedValueOnce({
+      persona: 'selector',
+      status: 'done',
+      content: '',
+      timestamp: new Date(),
+      structuredOutput: { selected_ids: ['backend'], rationale: 'backend is relevant now' },
+    });
 
-    const coordinator = new DynamicFacetSelectorCoordinator(deps);
-    const result = await coordinator.resolveDynamicFacets(step, state, 'task', pool);
+    const result = await new DynamicFacetSelectorCoordinator(deps)
+      .resolveDynamicFacets(step, makeState(), 'task', pool);
 
-    expect(mockedExecuteAgent).not.toHaveBeenCalled();
+    expect(mockedExecuteAgent).toHaveBeenCalledOnce();
     expect(result.selectedIds).toEqual(['backend']);
-    expect(state.activeDynamicFacetSelectionIdentity).toBe(identity);
-    expect(state.resumedDynamicFacetSteps.has(identity)).toBe(false);
+    expect(result.snapshot.round).toBe(2);
+  });
+
+  it('should start a resumed selector at round one with no re-entry history', async () => {
+    const pool = makePool([
+      { id: 'transaction', description: 'transaction' },
+      { id: 'database', description: 'database' },
+    ]);
+    const step = makeStep();
+    const getReportNames = vi.fn().mockReturnValue([]);
+    const deps = buildDeps({ getReportNames });
+    mockedExecuteAgent.mockResolvedValueOnce({
+      persona: 'selector',
+      status: 'done',
+      content: '',
+      timestamp: new Date(),
+      structuredOutput: { selected_ids: ['database'], rationale: 'database is relevant now' },
+    });
+    const instructionSpy = vi.spyOn(contextBuilder, 'buildDynamicFacetSelectorInstruction');
+
+    const result = await new DynamicFacetSelectorCoordinator(deps)
+      .resolveDynamicFacets(step, makeState(), 'task', pool);
+
+    expect(result.snapshot.round).toBe(1);
+    expect(getReportNames).toHaveBeenCalledWith(step, expect.any(Object));
+    expect(deps.inputReader?.readInputs).toHaveBeenCalledWith(
+      '.takt/reports',
+      [],
+      '/tmp/project',
+      undefined,
+    );
+    expect(instructionSpy).toHaveBeenCalledOnce();
+    const instructionInput = instructionSpy.mock.calls[0]![0] as {
+      previousSnapshot?: DynamicFacetSelectionSnapshot;
+      reportNames: readonly string[];
+    };
+    expect(instructionInput.previousSnapshot).toBeUndefined();
+    expect(instructionInput.reportNames).toEqual([]);
   });
 
   it('throws when selector provider is not resolved', async () => {
@@ -170,8 +423,21 @@ describe('DynamicFacetSelectorCoordinator', () => {
     ).rejects.toThrow('has no resolved provider');
   });
 
-  // L2: round increment + isReentry propagation through coordinator chain.
-  it('increments round and propagates isReentry when selector runs with a previous selection (L2)', async () => {
+  it('fails fast when the selector does not receive a resolved step iteration', async () => {
+    const pool = makePool([{ id: 'a', description: 'A' }]);
+    const step = makeStep();
+    const state = makeState();
+    state.stepIterations.clear();
+    const coordinator = new DynamicFacetSelectorCoordinator(buildDeps());
+
+    await expect(
+      coordinator.resolveDynamicFacets(step, state, 'task', pool),
+    ).rejects.toThrow('requires a resolved step iteration');
+    expect(mockedExecuteAgent).not.toHaveBeenCalled();
+  });
+
+  // L2: round increment + previous snapshot propagation through coordinator chain.
+  it('increments round and propagates the previous snapshot when selector runs with a previous selection (L2)', async () => {
     const pool = makePool([
       { id: 'a', description: 'A' },
       { id: 'b', description: 'B' },
@@ -197,7 +463,7 @@ describe('DynamicFacetSelectorCoordinator', () => {
       structuredOutput: { selected_ids: ['b'], rationale: 'now needs b' },
     };
     mockedExecuteAgent.mockResolvedValueOnce(response);
-    // Capture isReentry propagation into the selector instruction (order.md:374-375).
+    // Capture the previous selection snapshot passed into the selector instruction.
     const instructionSpy = vi.spyOn(contextBuilder, 'buildDynamicFacetSelectorInstruction');
 
     const coordinator = new DynamicFacetSelectorCoordinator(deps);
@@ -207,18 +473,58 @@ describe('DynamicFacetSelectorCoordinator', () => {
     // commitSelection receives the new snapshot with round=2 (previous round 1 + 1).
     const commit = deps.commitSelection as unknown as { mock: { calls: unknown[][] } };
     expect(commit.mock.calls).toHaveLength(1);
-    const committed = commit.mock.calls[0]![3] as DynamicFacetSelectionSnapshot;
+    const committed = commit.mock.calls[0]![1] as DynamicFacetSelectionSnapshot;
     expect(committed.round).toBe(2);
     expect(committed.selected_ids).toEqual(['b']);
-    // isReentry is true when previous selection exists (coordinator L117).
     expect(instructionSpy).toHaveBeenCalledOnce();
-    const instructionInput = instructionSpy.mock.calls[0]![0] as { isReentry: boolean };
-    expect(instructionInput.isReentry).toBe(true);
+    const instructionInput = instructionSpy.mock.calls[0]![0] as {
+      previousSnapshot?: DynamicFacetSelectionSnapshot;
+    };
+    expect(instructionInput.previousSnapshot).toEqual(previous);
+  });
+
+  it('uses the captured parallel child iteration and parent frame in the run-local identity', async () => {
+    const pool = makePool([{ id: 'a', description: 'A' }]);
+    const step = makeStep();
+    mockedExecuteAgent.mockResolvedValueOnce({
+      persona: 'selector',
+      status: 'done',
+      content: '',
+      timestamp: new Date(),
+      structuredOutput: { selected_ids: ['a'], rationale: 'parallel selection' },
+    });
+    const instructionSpy = vi.spyOn(contextBuilder, 'buildDynamicFacetSelectorInstruction');
+    const parentFrame = {
+      workflow: 'test-workflow',
+      workflow_ref: 'test-workflow',
+      step: 'reviewers',
+      kind: 'parallel' as const,
+      occurrence: 2,
+    };
+    const deps = buildDeps();
+    const coordinator = new DynamicFacetSelectorCoordinator(deps);
+
+    await coordinator.resolveDynamicFacets(step, makeState(), 'task', pool, {
+      identityPath: [parentFrame],
+      stepIteration: 7,
+    });
+
+    expect(instructionSpy).toHaveBeenCalledWith(expect.objectContaining({ stepIteration: 7 }));
+    const commit = deps.commitSelection as unknown as { mock: { calls: unknown[][] } };
+    expect(JSON.parse(commit.mock.calls[0]?.[0] as string)).toEqual({
+      workflow: 'test-workflow',
+      step: 'fix',
+      calls: [{
+        workflow: 'test-workflow',
+        step: 'reviewers',
+        kind: 'parallel',
+        instance: 2,
+      }],
+    });
     instructionSpy.mockRestore();
   });
 
-  // L3: coordinator-level secondary unknownId rejection.
-  it('throws when selector returns an unknown candidate id (coordinator secondary check, L3)', async () => {
+  it('throws when selector returns an unknown candidate id through the shared contract', async () => {
     const pool = makePool([{ id: 'a', description: 'A' }]);
     const step = makeStep();
     const response: AgentResponse = {
@@ -229,22 +535,13 @@ describe('DynamicFacetSelectorCoordinator', () => {
       structuredOutput: { selected_ids: ['unknown-id'], rationale: 'x' },
     };
     mockedExecuteAgent.mockResolvedValueOnce(response);
-    // The schema enum check rejects unknown ids inside validateSelectorResponse. To exercise the
-    // coordinator's defensive secondary check (dynamicFacetSelectorCoordinator.ts:165-171), bypass
-    // the validator and inject an unknown id directly.
-    const spy = vi.spyOn(selectorContract, 'validateSelectorResponse').mockReturnValueOnce({
-      selectedIds: ['unknown-id'],
-      rationale: 'x',
-    });
-
     const coordinator = new DynamicFacetSelectorCoordinator(buildDeps());
     await expect(
       coordinator.resolveDynamicFacets(step, makeState(), 'task', pool),
-    ).rejects.toThrow(/unknown candidate id/);
-    spy.mockRestore();
+    ).rejects.toThrow(/invalid structured output/);
   });
 
-  it('propagates commitSelection failure and leaves activeDynamicFacetSelectionIdentity unset (C-STATE-RUNTIME: persistence failure)', async () => {
+  it('propagates run-local selection commit failure and leaves active identity unset', async () => {
     const pool = makePool([{ id: 'a', description: 'A' }]);
     const step = makeStep();
     const response: AgentResponse = {
@@ -283,30 +580,4 @@ describe('DynamicFacetSelectorCoordinator', () => {
     expect(mockedExecuteAgent).not.toHaveBeenCalled();
   });
 
-  it('keeps resumedDynamicFacetSteps entry when buildResultFromSnapshot fails so retry restores the same round (C-STATE-RUNTIME: resume failure)', async () => {
-    const pool = makePool([{ id: 'a', description: 'A' }]);
-    const step = makeStep();
-    const identity = buildIdentity('fix');
-    const snapshot: DynamicFacetSelectionSnapshot = {
-      identity,
-      step_name: 'fix',
-      round: 1,
-      selected_ids: ['unknown-id'],
-      selected_policy_refs: [],
-      selected_knowledge_refs: [],
-      rationale: 'prev',
-    };
-    const store = new DynamicFacetSelectionStore(new Map([[identity, snapshot]]));
-    const state = makeState(snapshot, identity);
-    const deps = buildDeps({ selectionStore: store });
-
-    const coordinator = new DynamicFacetSelectorCoordinator(deps);
-    // buildResultFromSnapshot fails because 'unknown-id' is not in the pool.
-    await expect(
-      coordinator.resolveDynamicFacets(step, state, 'task', pool),
-    ).rejects.toThrow(/not in pool/);
-    // The resume marker must remain so a retry can restore the same round.
-    expect(state.resumedDynamicFacetSteps.has(identity)).toBe(true);
-    expect(state.activeDynamicFacetSelectionIdentity).toBeUndefined();
-  });
 });

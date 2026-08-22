@@ -4,24 +4,11 @@
 
 CQRS+ES is a design in which state changes are stored as domain events, and current state and Read Models are derived from them. Even when the backend as a whole or the workflow handles CQRS+ES, not every new feature needs to be implemented with event sourcing.
 
-| Criteria | Judgment |
-|----------|----------|
-| User request, design material, or existing boundaries explicitly require CQRS+ES | Adopt CQRS+ES |
-| State transitions, lifecycle, and business invariants are central to the feature | Consider CQRS+ES |
-| Change events trigger other Aggregates, Sagas, or downstream processes | Consider CQRS+ES |
-| Restoring state at a past point, event replay, or audit evidence itself is a requirement | Consider CQRS+ES |
-| Read Models need to be projected asynchronously for multiple uses | Consider CQRS+ES |
-| The feature is complete with current-value reference and updates only | Prefer CRUD |
-| Security settings, feature flags, allowlists, thresholds, or similar values require immediate reflection | Prefer CRUD |
-| There is no domain vocabulary beyond "create/update/delete" | Prefer CRUD |
-| The task is merely being implemented in a CQRS+ES workflow | Do not use as adoption rationale |
-| Adding CQRS+ES requirements to a task specification when they were absent from the original task | REJECT |
-
 Adopt CQRS+ES based on requirements. An existing system containing CQRS+ES can justify aligning dependencies and boundaries, but it does not justify event-sourcing simple settings tables.
 
 ### Requirement Transformation
 
-If the original task or user request states only CRUD-equivalent business requirements, do not add "commands, events, and projections" as new requirements in the task specification. If it is unclear whether CQRS+ES is needed, state the adoption rationale or leave it as an open question.
+If the original requirements or user request states only CRUD-equivalent business requirements, do not add "commands, events, and projections" as new requirements in the specification. If it is unclear whether CQRS+ES is needed, state the adoption rationale or leave it as an open question.
 
 | Original Request | How to Convert into a Specification |
 |------------------|-------------------------------------|
@@ -43,33 +30,14 @@ The Command Model (Aggregate) role is to "receive commands, make decisions, and 
 - Used in `if` / `require` conditional branches
 - Field values are referenced by instance methods when emitting events
 
-| Criteria | Judgment |
-|----------|----------|
-| Aggregate spans multiple transaction boundaries | REJECT |
-| Direct references between Aggregates, not ID references | REJECT |
-| Aggregate exceeds 100 lines | Consider splitting |
-| Business invariants exist outside the Aggregate | REJECT |
-| Holding fields not used for decisions | REJECT |
-| Branching state transitions with origin metadata such as `source` / `input` / `origin` / `channel` / `type` | REJECT by default |
-| Rejecting, only for a specific input source, a state allowed by the existing Aggregate's normal lifecycle | REJECT |
-| Keeping the creation-time caller in Aggregate state and reusing it as the actor of later events | REJECT. Pass the performer with each command |
-
 Being used in an `if` / `require` branch is not enough to justify keeping a field in Aggregate state. First verify that the branch or validation is an essential invariant of the whole Aggregate.
 
 ### Origin Metadata and Invariants
 
 Origin metadata such as input source, channel, producer, or integration source can be needed for display, search, audit, or integration tracing. That need alone does not justify restoring it as Aggregate state.
 
-| Criteria | Judgment |
-|----------|----------|
-| Origin metadata is needed only for display, search, audit, or integration tracing | Keep it in the Event payload or Read Model |
-| A branch based on origin metadata creates constraints that differ from the existing Aggregate's normal lifecycle | REJECT |
-| A field that is normally optional becomes required only for one input source | REJECT |
-| Invariants truly differ by input source | Consider a separate Aggregate, Command, or UseCase boundary |
-| Adding origin metadata to Aggregate state only to support a `require` | REJECT |
-
 ```kotlin
-// NG - Origin metadata narrows the normal lifecycle of an existing Aggregate
+// Avoid: Origin metadata narrows the normal lifecycle of an existing Aggregate
 data class Note(
     val noteId: String,
     val sourceType: SourceType?,
@@ -83,7 +51,7 @@ data class Note(
     }
 }
 
-// OK - Track origin in events/read models and align Aggregate invariants with the normal lifecycle
+// Example: Track origin in events/read models and align Aggregate invariants with the normal lifecycle
 data class Note(
     val noteId: String,
     val confirmed: Boolean,
@@ -105,15 +73,6 @@ data class NoteCreatedEvent(
 ### Existing Lifecycle Priority
 
 When integrating a new input flow into an existing Aggregate, prefer the existing normal lifecycle. Do not add input-source-specific commands, wrappers, services, or deletion paths merely because the input source differs.
-
-| Criteria | Judgment |
-|----------|----------|
-| The existing Aggregate's normal command / event can represent the same fact | Use the existing lifecycle |
-| An input-source-specific wrapper only thinly delegates to a normal command | REJECT |
-| An input-source-specific command adds stricter required fields than the normal lifecycle | REJECT |
-| Existing Aggregate deletion or update events can trigger derived processing | Separate into EventHandler |
-| Display or search fields needed only by a specialized flow | Keep them in the Read Model |
-| State transitions or invariants truly differ by input source | Consider a separate Aggregate / bounded context |
 
 Good Aggregate:
 ```kotlin
@@ -242,28 +201,14 @@ fun apply(event: OrderEvent): Order = when (event) {
 }
 ```
 
-| Criteria | Judgment |
-|----------|----------|
-| Business logic such as validation inside `apply` | REJECT. `apply` is state restoration only |
-| `apply` has side effects such as DB operations or event emission | REJECT |
-| `apply` throws exceptions | REJECT. Replay failures are not acceptable |
-
 ## Event Design
-
-| Criteria | Judgment |
-|----------|----------|
-| Event is not in past tense, such as Created -> Create | REJECT |
-| Event contains logic | REJECT |
-| Event contains internal state of another Aggregate | REJECT |
-| Event schema is not versioned | Warning |
-| CRUD-style events such as Updated or Deleted | Needs review |
 
 Good events:
 ```kotlin
 // Good: domain intent is clear
 OrderPlaced, PaymentReceived, ItemShipped
 
-// Bad: CRUD style
+// Avoid: CRUD style
 OrderUpdated, OrderDeleted
 ```
 
@@ -271,7 +216,7 @@ OrderUpdated, OrderDeleted
 
 Events express facts that occurred, and their names come from business meaning. A `...Requested` suffix or the current number of consumers does not by itself distinguish a fact event from a command in disguise. Accepting or starting a request can be a business fact; a message whose only meaning is instructing a known destination to execute work is a command.
 
-| Decision axis | Fact event | Consider a command |
+| Comparison axis | Fact event | Consider a command |
 |---------------|------------|--------------------|
 | Business meaning | An occurrence such as acceptance, start, or rejection that matters to audit or replay | Its only purpose is to make a specific process run |
 | Emitter lifecycle | Used by later decisions such as waiting, duplicate rejection, or timeout | The emitter tracks neither state nor outcome |
@@ -281,25 +226,16 @@ Events express facts that occurred, and their names come from business meaning. 
 Split events by independent business facts, not by technical consumers. Do not emit duplicate state and trigger events for the same occurrence; EventHandlers and projections subscribe to the fact owned by the emitting Aggregate. Multiple events are appropriate only when independently named, audited, and replayed facts occur together. Do not pack another Aggregate's internal state or initialization details into the event; resolve stable IDs or references at the boundary.
 
 ```kotlin
-// NG - One business fact duplicated as separate state and technical trigger events
+// Avoid: One business fact duplicated as separate state and technical trigger events
 fun addItem(itemId: String, productId: String, quantity: Int): List<OrderEvent> = listOf(
     OrderItemLinkedEvent(orderId, itemId),                 // for state
     OrderItemCreationRequestedEvent(orderId, itemId, productId, quantity), // for triggering (a command in effect)
 )
 
-// OK - A single event carrying the content that is factual for the emitting Aggregate
+// Example: A single event carrying the content that is factual for the emitting Aggregate
 fun addItem(itemId: String, productId: String, quantity: Int): OrderItemAddedEvent =
     OrderItemAddedEvent(orderId, itemId, productId, quantity)
 ```
-
-| Criteria | Judgment |
-|----------|----------|
-| Classifying a message as an event or command from its suffix or current consumer count alone | REJECT. Judge business meaning and lifecycle |
-| Splitting the same business fact into a state event (Linked, etc.) and a trigger event (Requested, etc.) | REJECT. Merge them into the fact owned by the emitting Aggregate |
-| An asynchronous request to an external service or another context where acceptance or waiting is a business fact and completion/failure is tracked | OK. It can be expressed as the fact that the request was accepted |
-| Adding a dedicated request event for processing that an existing fact event (confirmed, approved, etc.) can drive | REJECT. Have an EventHandler, and a domain policy when needed, subscribe to the existing fact |
-| Recording an occurrence that only changes another Aggregate's state as an event in one's own stream | REJECT. Facts belong to the stream of the Aggregate where they happened |
-| Routing an operation unrelated to an Aggregate's own state or lifecycle through it and relaying it to the target Aggregate | REJECT. Send the command to the target Aggregate and perform membership or existence checks at the boundary that owns the invariant |
 
 ### Event Type Hierarchy with sealed interface
 
@@ -382,25 +318,11 @@ CQRS+ES has distinct responsibility boundaries for DB schema migration, data mig
 
 ## Command Handlers
 
-| Criteria | Judgment |
-|----------|----------|
-| Handler directly manipulates the DB | REJECT |
-| Handler changes multiple Aggregates | REJECT |
-| Command has no validation | REJECT |
-| Handler executes queries to make decisions | Needs review |
-| The return contract does not match the number of events an operation can produce | Needs review. Choose a single, optional, collection, or result type from domain cardinality and language/framework conventions |
-
 ### Contract Lifetimes of Commands and Events
 
 Events are long-lived contracts persisted as history. When historical payload translation is performed, keep the current event type identifier and payload contract separate from the boundary that translates historical payloads into replayable form, choosing the translation mechanism from the event store and serialization strategy.
 
 Commands are usually short-lived messages created and handled at the application boundary, but some architectures persist them for scheduling, outbox delivery, retries, dead-letter handling, or audit. Persisted references are impact boundaries to investigate when commands move or are renamed. Domain models should not depend on transport- or framework-specific command types; translate them into domain arguments and value objects at the application or adapter boundary.
-
-| Criteria | Judgment |
-|----------|----------|
-| A domain model directly receives a transport- or framework-specific command type | REJECT. Translate it into domain input at the application or adapter boundary |
-| An application message unused by domain classes sits in the domain package | Move it to the application boundary |
-| A command package moves or is renamed | Check scheduling, outbox, retry, dead-letter, and audit storage as impact targets |
 
 Good command handler:
 ```
@@ -426,7 +348,7 @@ Aggregates make decisions only from state restored from their own event history 
 
 Validation inside an Aggregate must be limited to state that can be reproduced solely by event replay. Other validation should be resolved at the boundary before command dispatch, and resolved facts should be passed to the Aggregate.
 
-| Decision Target | Location |
+| Target | Location |
 |-----------------|----------|
 | Whether the operation is possible in the current state | Aggregate |
 | Whether command executor matches Aggregate owner | Aggregate |
@@ -443,23 +365,15 @@ Example: in an upload-completion command, the Aggregate decides whether the sess
 
 A Command represents what the user or external process intends to do, not which command should be selected after reading the current state. Decisions such as Add / Update / Delete / Noop based on current state should be pushed into the restored Aggregate, not decided from the same Aggregate's Read Model.
 
-| Criteria | Judgment |
-|----------|----------|
-| Check existence or scope of other Aggregates or external facts, then pass resolved facts to the command | OK |
-| Read the same Aggregate's Read Model to choose the command type | REJECT |
-| The UseCase decides "update if it exists, add if it does not" from Query results | REJECT. Send an intent command such as Set / Attach / Upsert to the Aggregate |
-| Aggregate or AggregateAdapter decides existence and transition validity from restored state | OK |
-| EventHandler or UseCase suppresses duplicate commands with a pre-query even though the Aggregate could ignore them idempotently | REJECT. Protect with Aggregate state transitions |
-
 ```kotlin
-// NG - Query result chooses the command type
+// Avoid: Query result chooses the command type
 if (readService.exists(orderId)) {
     commandGateway.send(UpdateOrderCommand(orderId, value))
 } else {
     commandGateway.send(AddOrderCommand(orderId, value))
 }
 
-// OK - Send an intent command; the Aggregate decides from restored state
+// Example: Send an intent command; the Aggregate decides from restored state
 commandGateway.send(SetOrderValueCommand(orderId, value))
 ```
 
@@ -503,12 +417,6 @@ fun confirm(confirmedBy: String): OrderConfirmedEvent {
 }
 ```
 
-| Criteria | Judgment |
-|----------|----------|
-| Domain-layer validation exists in API layer | REJECT. State-transition rules belong in the domain |
-| UseCase-layer validation exists in Controller | REJECT. Separate into UseCase layer |
-| API-layer validation such as `@NotBlank` exists in domain | REJECT. Structural validation belongs in API layer |
-
 ## UseCase Layer: Orchestration
 
 Place a UseCase layer between Controller and CommandGateway. The UseCase layer gathers facts that must be resolved at the boundary and normally sends one intent command. Subsequent state changes are driven by EventHandlers for committed events.
@@ -529,19 +437,6 @@ Cases that do not need a UseCase:
 - A simple read where the Controller queries the Query side and converts to a response
 - An operation that only checks existence/scope of an existing resource and then sends one command
 
-| Criteria | Judgment |
-|----------|----------|
-| Controller directly references Repository for validation | Separate into UseCase layer |
-| UseCase depends on HTTP request/response | REJECT. UseCase must be protocol-independent |
-| UseCase directly changes Aggregate internal state | REJECT. Use CommandGateway |
-| UseCase sends multiple commands sequentially for the same state transition | REJECT. Separate into EventHandlers for committed events |
-| UseCase queries the same Aggregate's state to choose the command type | REJECT. Push the decision into the Aggregate |
-| UseCase validates another Aggregate or external facts and passes resolved facts to one command | OK |
-| EventHandler receives a committed event and sends a command to another Aggregate | OK |
-| processStore / ProcessStore / operationProcess / completeStep stores projection completion or procedural progress | REJECT. Model it with Projection and EventHandlers |
-| There is an explicit long-running business process, retry, compensation, or user-visible progress | Consider Saga / Process Manager |
-| UseCase only thinly delegates to another query layer or command dispatch | Consider removing |
-
 ## Event-driven Chaining
 
 In CQRS+ES, chains of state changes start from committed events. Application Services, UseCases, and Controllers must not synchronously control the order of multiple Aggregate changes by sending commands sequentially for the same state transition.
@@ -556,24 +451,7 @@ UseCase -> Command -> Aggregate -> Event
                          Projection -> Read Model
 ```
 
-| Criteria | Judgment |
-|----------|----------|
-| UseCase sends command B immediately after command A for the same state transition | REJECT. Let an EventHandler receive A's event and send B |
-| Another command is sent after `sendAndWait` returns to create consistency | REJECT. Separate into event chaining |
-| A normal event from an existing Aggregate becomes the trigger for derived processing | OK |
-| EventHandler receives a committed event and sends an idempotent command to another Aggregate | OK |
-| Projection update and next-command dispatch are mixed in the same handler | REJECT. Separate Projection from EventHandler |
-| There is contention, compensation, long-running retry, or user-visible progress | Consider Saga / Process Manager |
-| processStore is created only to remember intermediate progress | REJECT. Split responsibilities into Aggregate events, Projections, or Saga |
-
 ## Projection Design
-
-| Criteria | Judgment |
-|----------|----------|
-| Projection dispatches commands | REJECT |
-| Projection references Write Model | REJECT |
-| One projection supports multiple use cases | Needs review |
-| Cannot be rebuilt | REJECT |
 
 Good projections:
 - Optimized for a specific read use case
@@ -626,24 +504,9 @@ class InventoryReleaseHandler(private val commandGateway: CommandGateway) {
 }
 ```
 
-| Criteria | Judgment |
-|----------|----------|
-| Projection uses CommandGateway | REJECT. Separate into EventHandler |
-| EventHandler saves with Repository | REJECT. Separate into Projection |
-| One class mixes Projection and EventHandler responsibilities | REJECT. Split classes |
-
 ### Starting External Processing
 
 Starting external workers or asynchronous processing should be triggered by a domain event that an Aggregate has committed. An Application Service or Coordinator must not bundle command dispatch and external side effects in the same control flow for the same state transition.
-
-| Criteria | Judgment |
-|----------|----------|
-| Application Service or Coordinator starts external processing immediately after command dispatch for the same state transition | REJECT. Separate into EventHandler for committed events |
-| Aggregate emits an event that represents generation start or processing start, and EventHandler starts external processing | OK |
-| EventHandler reports external-processing start failure back to the Aggregate with a failure command | OK |
-| Input needed for external processing is represented by the event or stable IDs that can be reloaded | OK |
-| External-processing input exists only in local variables during command processing | REJECT. Move to events or reloadable references |
-| Saga is used for simple external processing with no contention or compensation | REJECT. EventHandler is enough |
 
 ## Query-side Design
 
@@ -654,31 +517,9 @@ Event delivery should be PubSub, through a message broker, to all instances. Do 
 - **Subscription Query** (for example Axon's `subscriptionQuery()`): a mechanism that returns change notifications for query results to the subscriber. Use it only when it is already adopted as infrastructure and delivery to subscribers is guaranteed. In systems based on tracking processors or trackers, do not introduce subscription query only for a feature implementation.
 - **Subscribing event processor** (for example Axon's `SubscribingEventProcessor`): depends on direct subscription from the local event bus, so only the instance that published the event receives it. In distributed environments, projections on other instances are not updated. Configure PubSub delivery to all instances.
 
-| Criteria | Judgment |
-|----------|----------|
-| Use of Subscription Query already adopted as infrastructure with confirmed delivery guarantee, such as Axon Server `subscriptionQuery()` | OK |
-| Introducing Subscription Query only for a feature implementation | REJECT. Use the existing tracker / Read Model polling |
-| Use of Subscription Query with unknown delivery guarantee, such as Axon `subscriptionQuery()` | REJECT. Use the existing tracker / Read Model polling |
-| Use of Subscribing event processor, such as Axon `SubscribingEventProcessor` | REJECT. Local delivery only; other instances are not updated in distributed environments |
-| Controller directly references Repository | REJECT. Go through UseCase layer |
-| Query side references Command Model | REJECT |
-| QueryHandler dispatches commands | REJECT |
-| Query-side service or handler saves, deletes, or calls external APIs | REJECT |
-| Command and Query are mixed in the same service | REJECT. Separate responsibilities and naming |
-| Query side or ReadService reads Query results to choose the command type for the same Aggregate | REJECT |
-| Query side checks existence/scope of another Aggregate or external facts, and the caller dispatches one command | OK |
-
 ### QueryHandler and ApplicationService Naming
 
 In CQRS, the component that receives queries is called a QueryHandler, and the entry point that sends queries is treated as QueryGateway / QueryBus. A facade called from a Controller to coordinate read use cases should be named ApplicationService or ReadService so it is not confused with QueryHandler.
-
-| Criteria | Judgment |
-|----------|----------|
-| Receives a Query, references Read Model, and returns a query-result type | QueryHandler |
-| Coordinates multiple Queries, authorization boundary, paging, and DTO assembly from Controller | ApplicationService or ReadService |
-| A class that only sends queries or coordinates reads is called QueryService | Warning. Easy to confuse with QueryHandler |
-| QueryHandler knows HTTP request/response or Controller-specific error conversion | REJECT |
-| Adds a simple read wrapper with no additional decision | Consider removing. Controller may call QueryGateway directly |
 
 Types between layers:
 - `application/query/` - query-result type, for example `OrderDetail`
@@ -735,34 +576,9 @@ Aggregate -> Event Bus -> Projection(@EventHandler) -> Repository(Read Model)
 
 Design asynchronous completion callbacks assuming duplicates, delays, and ordering inversions. Protect with Aggregate state transitions and command idempotency, not Controller or single-process locks.
 
-| Criteria | Judgment |
-|----------|----------|
-| Prevent duplicate callbacks with Controller or application-process locks | REJECT. Does not work across instances |
-| Determine processing state from Aggregate state | OK |
-| Aggregate verifies callback attempt ID or generation | OK |
-| Idempotently ignore old or duplicate callbacks by state transition | OK |
-| Concurrency control is duplicated across Controller, UseCase, and Aggregate | REJECT |
-
 ## Eventual Consistency
 
 Wait for Projection updates after command dispatch only when there is an explicit synchronous contract to return the updated Read Model in the same API response. If the client can keep the input values or generated ID, the server should not wait; Read Model convergence is handled through normal read APIs.
-
-| Criteria | Judgment |
-|----------|----------|
-| No explicit contract to return the updated Read Model in the same response | Do not wait |
-| The client or caller can keep the command input or generated ID | Do not wait |
-| There is infrastructure guaranteeing Projection update notification delivery to the waiting process | OK. Notification-driven waiting is acceptable |
-| Existing infrastructure such as Subscription Query confirms update notifications reach subscribers | OK |
-| Kafka or similar guarantees destination, redelivery, and missing-message handling operationally | OK |
-| Subscription Query or event notification destination assumes single process/single instance, or guarantee is unknown | REJECT. Use the existing tracker / Read Model polling |
-| `Thread.sleep` or equivalent blocks request threads while waiting for Projection updates | REJECT. Causes thread starvation under high concurrency |
-| `delayedExecutor` / `CompletableFuture` is used to implement custom Projection-wait retry | REJECT. Use a reactive HTTP stack or the existing tracker |
-| processStore / ProcessStore / materialStore / completeStep manages Projection update progress | REJECT. Projections should update idempotently from events |
-| Updated state must be returned in the same HTTP response | Wait non-blockingly on a reactive HTTP stack |
-| Same response does not need to wait | `202 Accepted` plus frontend long polling, normal polling, SSE, or WebSocket |
-| UI expects immediate update | Frontend polling, SSE, or WebSocket. Server-side waiting only for a synchronous API contract |
-| Consistency delay exceeds acceptable range | Reconsider architecture |
-| Compensation transaction is undefined | Require failure-scenario review |
 
 ### Reactive Polling
 
@@ -799,14 +615,14 @@ private fun pollForCompletion(orderId: String): Mono<Void> {
 Avoid blocking waits:
 
 ```kotlin
-// NG - Occupies request threads and causes thread starvation under load
+// Avoid: Occupies request threads and causes thread starvation under load
 while (Instant.now().isBefore(deadline)) {
     val order = orderRepository.findById(orderId).orElse(null)
     if (order?.status == OrderStatus.CONFIRMED) return PlaceOrderOutput(orderId)
     Thread.sleep(100)
 }
 
-// OK - If the same response must wait, put it on reactive waiting
+// Example: If the same response must wait, put it on reactive waiting
 return pollForCompletion(orderId).thenReturn(PlaceOrderOutput(orderId))
 ```
 
@@ -860,14 +676,14 @@ Decision criteria:
 
 Anti-pattern:
 ```kotlin
-// NG - Using Saga for lifecycle management
+// Avoid: Using Saga for lifecycle management
 @Saga
 class OrderLifecycleSaga {
     // Tracks every order state transition
     // PLACED -> CONFIRMED -> SHIPPED -> DELIVERED
 }
 
-// OK - Saga only for operations that need eventual consistency
+// Example: Saga only for operations that need eventual consistency
 @Saga
 class InventoryReservationSaga {
     // Concurrency control for inventory reservation only
@@ -924,14 +740,9 @@ Default to the exception approach. Consider events only when there is an audit r
 
 ## Abstraction-level Evaluation
 
-**Detecting bloated conditional branches**
+**Conditionals and abstraction**
 
-| Pattern | Judgment |
-|---------|----------|
-| Same if-else pattern appears in 3 or more places | Abstract with polymorphism -> REJECT |
-| switch/case has 5 or more branches | Consider Strategy/Map pattern |
-| Branching by event type grows repeatedly | Split EventHandlers -> REJECT |
-| State branching inside Aggregate is complex | Consider State Pattern |
+Do not choose Strategy, State, or polymorphism from branch count alone. When two implementations with the same domain meaning, contract, and reason to change are observed, decide whether they belong under the proper owner such as the Aggregate, EventHandler, or Projection. Keep behavior separate when event types or states change for different reasons.
 
 **Detecting mismatched abstraction levels**
 
@@ -990,18 +801,9 @@ class PendingState : OrderState() {
 }
 ```
 
-## Anti-pattern Detection
+## Anti-pattern observations
 
-Reject when any of the following is found:
-
-| Anti-pattern | Problem |
-|--------------|---------|
-| CRUD disguise | Only mimics the shape of CQRS while implementing CRUD |
-| Anemic Domain Model | Aggregate is only a data structure |
-| Event Soup | Meaningless events are emitted repeatedly |
-| Temporal Coupling | Implicit dependency on event order |
-| Missing Events | Important domain events are missing |
-| God Aggregate | One Aggregate concentrates all responsibilities |
+In CQRS+ES, implementations that only mimic CRUD, emit meaningless events repeatedly, depend implicitly on event order, omit important facts, or concentrate all responsibilities in one Aggregate are design concerns to inspect. The final judgment is governed by the CQRS+ES policy.
 
 ## Test Strategy
 
@@ -1047,20 +849,12 @@ fun `order detail is returned`() {
 }
 ```
 
-Checklist:
-
-| Perspective | Judgment |
-|-------------|----------|
-| Aggregate tests verify events, not state | Required |
-| Query-side tests do not create data through commands | Recommended |
-| Integration tests account for Axon asynchronous processing | Required |
-
 ## Value Object Design
 
 Use value objects as Aggregate and event components. Do not rely only on primitive types such as String or Int.
 
 ```kotlin
-// NG - primitives only
+// Avoid: primitives only
 data class OrderPlacedEvent(
     val orderId: String,
     val categoryId: String,      // Just a string
@@ -1068,7 +862,7 @@ data class OrderPlacedEvent(
     val to: LocalDateTime
 )
 
-// OK - Value objects express meaning and constraints
+// Example: Value objects express meaning and constraints
 data class OrderPlacedEvent(
     val orderId: String,
     val categoryId: CategoryId,
@@ -1107,13 +901,6 @@ data class ApprovalInfo(
     val approvalTime: LocalDateTime
 )
 ```
-
-| Criteria | Judgment |
-|----------|----------|
-| Reusing IDs as raw String | Consider value object |
-| Same field combination, such as from/to, appears in multiple places | Extract value object |
-| Value object contains business logic such as state transitions | REJECT. Aggregate responsibility |
-| No `init` block to guarantee invariants | REJECT |
 
 ## Master Data, Settings, and CRUD Use
 

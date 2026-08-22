@@ -111,8 +111,8 @@ describe('completed task actions with root branch materialized on completion', (
     fixture.cleanup();
   });
 
-  it('autoCommitAndPush materializes the worktree HEAD to a root local branch', () => {
-    const result = autoCommitAndPush(fixture.worktreeDir, 'update slides deck', fixture.rootDir, fixture.branch);
+  it('autoCommitAndPush materializes the worktree HEAD to a root local branch', async () => {
+    const result = await autoCommitAndPush(fixture.worktreeDir, 'update slides deck', fixture.rootDir, fixture.branch);
 
     expect(result.success).toBe(true);
     expect(result.commitHash).toBeTruthy();
@@ -121,7 +121,7 @@ describe('completed task actions with root branch materialized on completion', (
   });
 
   it('shows diff stat through the root branch ref after completion', async () => {
-    autoCommitAndPush(fixture.worktreeDir, 'update slides deck', fixture.rootDir, fixture.branch);
+    await autoCommitAndPush(fixture.worktreeDir, 'update slides deck', fixture.rootDir, fixture.branch);
     const task = makeCompletedTask(fixture);
 
     await showDiffAndPromptActionForTask(fixture.rootDir, task);
@@ -131,8 +131,8 @@ describe('completed task actions with root branch materialized on completion', (
     expect(mockWarn).not.toHaveBeenCalledWith('Could not generate diff stat');
   });
 
-  it('try-merge stages changes from the materialized root branch', () => {
-    autoCommitAndPush(fixture.worktreeDir, 'update slides deck', fixture.rootDir, fixture.branch);
+  it('try-merge stages changes from the materialized root branch', async () => {
+    await autoCommitAndPush(fixture.worktreeDir, 'update slides deck', fixture.rootDir, fixture.branch);
     const task = makeCompletedTask(fixture);
 
     const merged = tryMergeBranch(fixture.rootDir, task);
@@ -141,8 +141,8 @@ describe('completed task actions with root branch materialized on completion', (
     expect(git(fixture.rootDir, ['status', '--porcelain'])).toContain('A  slides/deck.md');
   });
 
-  it('restores a missing root branch from the worktree before try-merge', () => {
-    autoCommitAndPush(fixture.worktreeDir, 'update slides deck', fixture.rootDir, fixture.branch);
+  it('restores a missing root branch from the worktree before try-merge', async () => {
+    await autoCommitAndPush(fixture.worktreeDir, 'update slides deck', fixture.rootDir, fixture.branch);
     git(fixture.rootDir, ['branch', '-D', fixture.branch]);
     const task = makeCompletedTask(fixture);
 
@@ -154,8 +154,8 @@ describe('completed task actions with root branch materialized on completion', (
     expect(mockInfo).toHaveBeenCalledWith(`Restored missing root branch ${fixture.branch} from worktree.`);
   });
 
-  it('merge applies changes and removes the root branch ref', () => {
-    autoCommitAndPush(fixture.worktreeDir, 'update slides deck', fixture.rootDir, fixture.branch);
+  it('merge applies changes and removes the root branch ref', async () => {
+    await autoCommitAndPush(fixture.worktreeDir, 'update slides deck', fixture.rootDir, fixture.branch);
     const task = makeCompletedTask(fixture);
 
     const merged = mergeBranch(fixture.rootDir, task);

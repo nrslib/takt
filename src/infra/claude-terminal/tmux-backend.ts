@@ -3,7 +3,7 @@ import type { ExecFileException } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import { stripAnsi } from '../../shared/utils/text.js';
-import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
+import { createLogger, getErrorMessage, guardChildProcessStreams } from '../../shared/utils/index.js';
 import {
   buildEnvWithNestedObservabilitySnapshot,
   pickNestedObservabilityEnv,
@@ -115,13 +115,35 @@ async function loadBuffer(bufferName: string, text: string): Promise<void> {
     child.stderr?.on('data', (chunk: string) => {
       stderr += chunk;
     });
-    child.on('error', (error) => reject(formatTmuxError(error)));
+    let settled = false;
+    const resolveOnce = (): void => {
+      if (settled) return;
+      settled = true;
+      guardTeardown();
+      resolve();
+    };
+    const rejectOnce = (error: Error, terminateChild = false): void => {
+      if (settled) return;
+      settled = true;
+      if (terminateChild) {
+        child.kill();
+      }
+      guardTeardown();
+      reject(error);
+    };
+    const guardTeardown = guardChildProcessStreams(child, (error, source) => {
+      const failure = source === 'process'
+        ? formatTmuxError(error)
+        : new Error(`tmux ${source} stream error: ${error.message}`);
+      rejectOnce(failure, true);
+    });
     child.on('close', (code) => {
+      if (settled) return;
       if (code === 0) {
-        resolve();
+        resolveOnce();
         return;
       }
-      reject(new Error(`tmux load-buffer failed (${code}): ${stderr.trim()}`));
+      rejectOnce(new Error(`tmux load-buffer failed (${code}): ${stderr.trim()}`));
     });
     child.stdin.end(text);
   });

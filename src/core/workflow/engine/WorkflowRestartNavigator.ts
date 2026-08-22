@@ -9,7 +9,6 @@ import { getWorkflowStepKind, isWorkflowCallStep } from '../step-kind.js';
 import {
   getWorkflowReference,
   workflowRestartEntryMatchesWorkflow,
-  workflowRestartEntryMatchesRuntime,
 } from '../workflow-reference.js';
 import { isWorkflowRestartTarget } from '../workflow-restart-target.js';
 
@@ -98,7 +97,7 @@ export class WorkflowRestartNavigator {
       const runtimeEntry = callStack[index]!;
       const selectedEntry = this.restartPoint.stack[index]!;
       if (
-        !workflowRestartEntryMatchesRuntime(runtimeEntry, selectedEntry)
+        runtimeEntry.workflow_ref !== selectedEntry.workflow_ref
         || runtimeEntry.step !== selectedEntry.step
         || runtimeEntry.kind !== selectedEntry.kind
       ) {

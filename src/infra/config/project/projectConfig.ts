@@ -30,8 +30,6 @@ import {
   denormalizeRateLimitFallback,
   normalizeTelemetryConfig,
   denormalizeTelemetryConfig,
-  normalizeFindingIntakeNormalize,
-  denormalizeFindingIntakeNormalize,
 } from '../configNormalizers.js';
 import {
   resolveAliasedPreviewCount,
@@ -101,7 +99,6 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     takt_providers,
     persona_providers,
     provider_routing,
-    finding_contract,
     branch_name_strategy,
     minimal_output,
     concurrency,
@@ -114,8 +111,14 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     sync_conflict_resolver,
     observability,
   } = parsedConfigResult;
-  const projectBaseUrlOptions = {
+  const projectProviderOptionsPolicy = {
     baseUrlTrust: 'local-loopback-only' as const,
+    pythonPathTrust: 'local-untrusted' as const,
+    pathTrust: 'local-untrusted' as const,
+    // Cordis selects executable tool composition and is therefore never
+    // accepted from repository/project configuration. Keep it restricted to
+    // trusted global or explicit environment configuration.
+    cordisTrust: 'untrusted' as const,
     getOrigin: trace.getOrigin,
   };
   const normalizedProvider = normalizeConfigProviderReference(
@@ -123,7 +126,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     model as string | undefined,
     provider_options as Record<string, unknown> | undefined,
     {
-      ...projectBaseUrlOptions,
+      ...projectProviderOptionsPolicy,
       pathPrefix: 'provider_options',
     },
   );
@@ -140,7 +143,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
       model?: string;
       provider_options?: Record<string, unknown>;
     }> | undefined,
-    projectBaseUrlOptions,
+    projectProviderOptionsPolicy,
   );
   const normalizedProviderRouting = normalizeProviderRouting(
     provider_routing as {
@@ -148,7 +151,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
       tags?: Record<string, string | { type?: string; provider?: string; model?: string; provider_options?: Record<string, unknown> }>;
       steps?: Record<string, string | { type?: string; provider?: string; model?: string; provider_options?: Record<string, unknown> }>;
     } | undefined,
-    projectBaseUrlOptions,
+    projectProviderOptionsPolicy,
   );
   const analyticsConfig = normalizeAnalytics(analytics as Record<string, unknown> | undefined);
   const normalizedTaktProviders = normalizeTaktProviders(
@@ -164,7 +167,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
       };
     } | undefined,
     {
-      ...projectBaseUrlOptions,
+      ...projectProviderOptionsPolicy,
       pathPrefix: 'takt_providers.selector.provider_options',
     },
   );
@@ -201,17 +204,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     provider: normalizedProvider.provider,
     model: normalizedProvider.model,
     providerOptions: normalizedProvider.providerOptions,
-    autoRouting: normalizeAutoRoutingConfig(auto_routing, projectBaseUrlOptions),
-    findingContract: finding_contract === undefined
-      ? undefined
-      : {
-          intakeNormalize: normalizeFindingIntakeNormalize(
-            finding_contract.intake_normalize as Parameters<
-              typeof normalizeFindingIntakeNormalize
-            >[0],
-            projectBaseUrlOptions,
-          ),
-        },
+    autoRouting: normalizeAutoRoutingConfig(auto_routing, projectProviderOptionsPolicy),
     rateLimitFallback: normalizeRateLimitFallback(rate_limit_fallback),
     providerProfiles: normalizeProviderProfiles(
       parsedConfigResult.provider_profiles as Record<string, {
@@ -274,14 +267,6 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
     delete savePayload.auto_routing;
   }
 
-  const rawIntakeNormalize = denormalizeFindingIntakeNormalize(
-    config.findingContract?.intakeNormalize,
-  );
-  if (rawIntakeNormalize) {
-    savePayload.finding_contract = { intake_normalize: rawIntakeNormalize };
-  } else {
-    delete savePayload.finding_contract;
-  }
 
   const rawObservability = denormalizeObservabilityConfig(config.observability);
   if (rawObservability) {
@@ -357,7 +342,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
       delete savePayload.with_submodules;
     }
   }
-  for (const k of ['providerProfiles', 'providerOptions', 'autoRouting', 'findingContract', 'rateLimitFallback', 'autoPr', 'draftPr', 'allowGitHooks', 'allowGitFilters', 'vcsProvider', 'baseBranch', 'withSubmodules', 'branchNameStrategy', 'minimalOutput', 'taskPollIntervalMs', 'interactivePreviewSteps', 'syncProjectLocalTaktOnRetry', 'autoRequeueMaxAttempts', 'ignoreExceed', 'personaProviders', 'providerRouting', 'taktProviders', 'workflowRuntimePrepare', 'workflowCommandGates', 'workflowArpeggio', 'syncConflictResolver', 'workflowMcpServers'] as const) {
+  for (const k of ['providerProfiles', 'providerOptions', 'autoRouting', 'rateLimitFallback', 'autoPr', 'draftPr', 'allowGitHooks', 'allowGitFilters', 'vcsProvider', 'baseBranch', 'withSubmodules', 'branchNameStrategy', 'minimalOutput', 'taskPollIntervalMs', 'interactivePreviewSteps', 'syncProjectLocalTaktOnRetry', 'autoRequeueMaxAttempts', 'ignoreExceed', 'personaProviders', 'providerRouting', 'taktProviders', 'workflowRuntimePrepare', 'workflowCommandGates', 'workflowArpeggio', 'syncConflictResolver', 'workflowMcpServers'] as const) {
     delete savePayload[k];
   }
 

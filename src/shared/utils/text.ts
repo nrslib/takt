@@ -5,6 +5,11 @@
  * terminal display width, with full-width (CJK) character support.
  */
 
+import { truncateUtf8 } from './utf8.js';
+import { MAX_AGENT_FAILURE_MESSAGE_BYTES } from '../types/agent-failure.js';
+
+export const MAX_TERMINAL_OUTPUT_BYTES = MAX_AGENT_FAILURE_MESSAGE_BYTES;
+
 /**
  * Check if a Unicode code point is full-width (occupies 2 columns).
  * Covers CJK unified ideographs, Hangul, fullwidth forms, etc.
@@ -82,6 +87,61 @@ export function sanitizeTerminalText(text: string): string {
   }
 
   return sanitized;
+}
+
+const TRUNCATION_MARKER_PATTERN = /\[TRUNCATED: [^\]]+\]$/;
+
+export function truncateUtf8WithMarker(
+  text: string,
+  maxBytes: number,
+  createMarker: (omittedBytes: number) => string,
+): string {
+  const totalBytes = Buffer.byteLength(text, 'utf8');
+  if (totalBytes <= maxBytes) {
+    return text;
+  }
+  if (maxBytes <= 0) {
+    return '';
+  }
+
+  let prefixBytes = maxBytes;
+  while (true) {
+    const prefix = truncateUtf8(text, prefixBytes);
+    const marker = createMarker(totalBytes - prefix.bytes);
+    const markerBytes = Buffer.byteLength(marker, 'utf8');
+    if (markerBytes >= maxBytes) {
+      return truncateUtf8(marker, maxBytes).value;
+    }
+
+    const nextPrefixBytes = maxBytes - markerBytes;
+    if (nextPrefixBytes >= prefix.bytes) {
+      return `${prefix.value}${marker}`;
+    }
+    prefixBytes = nextPrefixBytes;
+  }
+}
+
+export function truncateUtf8PreservingMarker(text: string, maxBytes: number): string {
+  if (Buffer.byteLength(text, 'utf8') <= maxBytes) {
+    return text;
+  }
+
+  const marker = text.match(TRUNCATION_MARKER_PATTERN)?.[0];
+  return truncateUtf8WithMarker(
+    text,
+    maxBytes,
+    marker === undefined
+      ? (omittedBytes) => `[TRUNCATED: ${omittedBytes} bytes]`
+      : () => marker,
+  );
+}
+
+export function sanitizeTerminalTextWithinBytes(
+  text: string,
+  maxBytes: number,
+): string {
+  const sanitized = sanitizeTerminalText(text);
+  return truncateUtf8PreservingMarker(sanitized, maxBytes);
 }
 
 /**

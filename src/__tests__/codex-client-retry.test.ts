@@ -15,6 +15,7 @@ let startThreadCalls: Array<Record<string, unknown> | undefined> = [];
 let resumeThreadCalls: Array<{ threadId: string; options?: Record<string, unknown> }> = [];
 let runStreamedInputs: unknown[] = [];
 let codexConstructorCalls: Array<Record<string, unknown> | undefined> = [];
+let attemptOrder: string[] = [];
 const tempRoots = new Set<string>();
 const CODEX_STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const CODEX_RECONNECT_FAILURE_MESSAGE = 'Reconnecting... 2/5 (timeout waiting for child process to exit)';
@@ -122,11 +123,13 @@ vi.mock('@openai/codex-sdk', () => {
       }
 
       async startThread(options?: Record<string, unknown>) {
+        attemptOrder.push('provider');
         startThreadCalls.push(options);
         return createThread('thread-1');
       }
 
       async resumeThread(threadId: string, options?: Record<string, unknown>) {
+        attemptOrder.push('provider');
         resumeThreadCalls.push({ threadId, options });
         return createThread(threadId);
       }
@@ -146,11 +149,13 @@ describe('CodexClient retry', () => {
     resumeThreadCalls = [];
     runStreamedInputs = [];
     codexConstructorCalls = [];
+    attemptOrder = [];
   });
 
   afterEach(() => {
     vi.clearAllTimers();
     vi.useRealTimers();
+    vi.unstubAllEnvs();
     for (const root of tempRoots) {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -255,8 +260,9 @@ describe('CodexClient retry', () => {
     ];
 
     const client = new CodexClient();
+    const onActivity = vi.fn(() => attemptOrder.push('activity'));
 
-    const resultPromise = client.call('coder', 'prompt', { cwd: '/tmp' });
+    const resultPromise = client.call('coder', 'prompt', { cwd: '/tmp', onActivity });
 
     await vi.advanceTimersByTimeAsync(999);
     expect(resumeThreadCalls).toHaveLength(0);
@@ -273,6 +279,10 @@ describe('CodexClient retry', () => {
     ]);
     expect(result.status).toBe('done');
     expect(result.content).toBe('retry succeeded');
+    expect(onActivity).toHaveBeenCalledTimes(2);
+    expect(onActivity).toHaveBeenNthCalledWith(1, { kind: 'attempt_started' });
+    expect(onActivity).toHaveBeenNthCalledWith(2, { kind: 'attempt_started' });
+    expect(attemptOrder).toEqual(['activity', 'provider', 'activity', 'provider']);
   });
 
   it('retry と session resume に同じ Codex Skill override を適用する', async () => {
@@ -315,6 +325,10 @@ describe('CodexClient retry', () => {
       skills: {
         config: [{ path: fs.realpathSync(skillPath), enabled: false }],
       },
+      model_reasoning_summary: 'auto',
+      shell_environment_policy: {
+        set: { PATH: process.env.PATH },
+      },
     };
 
     expect(result.status).toBe('done');
@@ -324,6 +338,33 @@ describe('CodexClient retry', () => {
       expectedConfig,
       expectedConfig,
     ]);
+  });
+
+  it('Codex の tool shell に CLI process と同じ PATH を渡す', async () => {
+    const shellPath = '/opt/takt/bin:/usr/bin:/bin';
+    vi.stubEnv('PATH', shellPath);
+    runPlans = [
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-1' },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+        ],
+      },
+    ];
+
+    const result = await new CodexClient().call('coder', 'prompt', { cwd: '/tmp' });
+
+    expect(result.status).toBe('done');
+    expect(codexConstructorCalls).toHaveLength(1);
+    expect(codexConstructorCalls[0]).toMatchObject({
+      env: { PATH: shellPath },
+      config: {
+        shell_environment_policy: {
+          set: { PATH: shellPath },
+        },
+      },
+    });
   });
 
   it('例外経路の at capacity を 1 秒、2 秒の指数バックオフで retry する', async () => {

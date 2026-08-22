@@ -11,7 +11,6 @@
 import type { WorkflowStep, Language, OutputContractItem, OutputContractEntry } from '../../models/types.js';
 import type { InstructionContext } from './instruction-context.js';
 import { buildEditRule, buildGitRules } from './instruction-context.js';
-import { buildFindingContractInstruction } from './finding-contract-instruction.js';
 import { escapeTemplateChars, replaceTemplatePlaceholders } from './escape.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import { renderFallbackNotice } from './fallback-notice.js';
@@ -21,8 +20,10 @@ import {
   prepareKnowledgeContent as prepareKnowledgeContentGeneric,
   preparePolicyContent as preparePolicyContentGeneric,
 } from 'faceted-prompting';
-import { renderFencedJsonBlock } from './fenced-block.js';
 import { renderPullRequestContext } from '../pr-context.js';
+import { isNormalOrTeamLeaderWorkflowStep } from '../../models/workflow-types.js';
+import { getCompanionInstructionCopy } from '../companion/evidence.js';
+import { renderWorkflowWideRules } from './workflow-wide-rules.js';
 
 const CONTEXT_MAX_CHARS = 2000;
 
@@ -34,7 +35,7 @@ function preparePolicyContent(content: string, sourcePath?: string): string {
   return preparePolicyContentGeneric(content, CONTEXT_MAX_CHARS, sourcePath);
 }
 
-function preparePreviousResponseContent(
+export function preparePreviousResponseContent(
   content: string,
   sourcePath: string | undefined,
   preserveFullContent: boolean,
@@ -127,6 +128,15 @@ export class InstructionBuilder {
           this.step.preserveFullPreviousResponse === true,
         )
       : '';
+    const workflowRules = renderWorkflowWideRules(
+      this.context.workflowRules,
+      language,
+      this.step,
+      {
+        ...this.context,
+        previousResponseText: previousResponsePrepared || undefined,
+      },
+    );
     const previousResponse = hasPreviousResponse
       ? escapeTemplateChars(previousResponsePrepared)
       : '';
@@ -138,7 +148,7 @@ export class InstructionBuilder {
       : '';
 
     // Instructions (step instruction with placeholder processing)
-    const instructions = this.appendFindingContractInstruction(replaceTemplatePlaceholders(
+    const instructions = this.appendCompanionInstruction(replaceTemplatePlaceholders(
       tmpl,
       this.step,
       {
@@ -218,6 +228,12 @@ export class InstructionBuilder {
       knowledgeContent,
       hasQualityGates,
       qualityGatesContent,
+      hasWorkflowRulesAfterExecution: workflowRules.hasAfterExecutionRules,
+      workflowRulesNoticeAfterExecution: workflowRules.noticeAfterExecutionRules,
+      workflowRulesAfterExecution: workflowRules.afterExecutionRules,
+      hasWorkflowRulesBeforeInstruction: workflowRules.hasBeforeInstructionRules,
+      workflowRulesNoticeBeforeInstruction: workflowRules.noticeBeforeInstructionRules,
+      workflowRulesBeforeInstruction: workflowRules.beforeInstructionRules,
       instructions,
     });
   }
@@ -244,17 +260,29 @@ export class InstructionBuilder {
     return [structureHeader, ...stepLines].join('\n');
   }
 
-  private appendFindingContractInstruction(instructions: string): string {
-    if (!this.context.findingContract) {
-      return instructions;
-    }
-
-    const section = buildFindingContractInstruction({
-      contract: this.context.findingContract,
-      language: this.context.language ?? 'en',
-      renderFencedJsonBlock,
-    });
-
+  private appendCompanionInstruction(instructions: string): string {
+    if (
+      !isNormalOrTeamLeaderWorkflowStep(this.step)
+      || this.step.companion === undefined
+      || this.context.companion === undefined
+    ) return instructions;
+    const language = this.context.language ?? 'en';
+    const companionCopy = getCompanionInstructionCopy(language);
+    const section = language === 'ja'
+      ? [
+          `## ${companionCopy.heading}`,
+          `${companionCopy.inboxLabel}: ${this.context.companion.mailboxDirectory}`,
+          '各ファイルの実装完了後、テスト実行前、作業完了宣言の直前に新規レコードを確認してください。',
+          companionCopy.evidenceGuard,
+          '指摘は参考情報です。現在のコードで検証し、対応するかどうかは自分で判断してください。対応しない場合は理由を応答に書いてください。',
+        ].join('\n')
+      : [
+          `## ${companionCopy.heading}`,
+          `${companionCopy.inboxLabel}: ${this.context.companion.mailboxDirectory}`,
+          'Read new records after finishing each file, before running tests, and before declaring completion.',
+          companionCopy.evidenceGuard,
+          'Findings are advisory. Verify them against the current code and decide whether to act. Explain in your response why you do not address a finding.',
+        ].join('\n');
     return [instructions, '', section].join('\n');
   }
 }

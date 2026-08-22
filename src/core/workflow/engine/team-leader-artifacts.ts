@@ -7,7 +7,7 @@ import type { TeamLeaderArtifactReference } from './team-leader-aggregation.js';
 
 const ARTIFACT_SEGMENT_MAX_LENGTH = 80;
 
-function safeSegment(value: string): string {
+export function safeSegment(value: string): string {
   const normalized = value.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^\.+/, '');
   if (normalized.length === 0) {
     throw new Error(`Team Leader artifact path segment is empty after normalization: ${value}`);

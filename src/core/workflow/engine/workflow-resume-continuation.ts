@@ -5,7 +5,8 @@ import type {
   WorkflowState,
   WorkflowStep,
 } from '../../models/types.js';
-import { getWorkflowResumeFrameKind } from '../step-kind.js';
+import { getWorkflowResumeFrameKind, isWorkflowCallStep } from '../step-kind.js';
+import type { ResumeArtifactOccurrenceIndex } from '../run/resume-artifact-occurrence-index.js';
 import { matchesResumeStackPrefix } from '../run/resume-point.js';
 import {
   workflowEntriesMatch,
@@ -17,6 +18,7 @@ import { incrementStepIteration } from './state-manager.js';
 export class WorkflowResumeContinuation {
   readonly #workflow: WorkflowConfig;
   readonly #source: WorkflowResumePoint | undefined;
+  readonly #resumeArtifactOccurrences: ResumeArtifactOccurrenceIndex | undefined;
   readonly #consumedFrameIndices = new Set<number>();
   readonly #claimedWorkflowCallFrames = new Map<
     number,
@@ -26,15 +28,18 @@ export class WorkflowResumeContinuation {
   constructor(
     workflow: WorkflowConfig,
     source: WorkflowResumePoint | undefined,
+    resumeArtifactOccurrences?: ResumeArtifactOccurrenceIndex,
   ) {
     this.#workflow = workflow;
     this.#source = source;
+    this.#resumeArtifactOccurrences = resumeArtifactOccurrences;
   }
 
   claimStepOccurrence(input: {
     readonly step: WorkflowStep;
     readonly resumeStackPrefix: readonly WorkflowResumePointEntry[];
     readonly state: WorkflowState;
+    readonly isOccurrenceNamespaceReserved?: (occurrence: number) => boolean;
   }): number {
     const frameIndex = input.resumeStackPrefix.length;
     const stepIterationIdentity = buildWorkflowStackStepIterationIdentity(
@@ -56,7 +61,22 @@ export class WorkflowResumeContinuation {
       || sourceFrame.step !== input.step.name
       || sourceFrame.kind !== getWorkflowResumeFrameKind(input.step)
     ) {
-      return incrementStepIteration(input.state, stepIterationIdentity);
+      if (isWorkflowCallStep(input.step)) {
+        const inheritedMax = this.#resumeArtifactOccurrences?.getMaxOccurrence(
+          this.#workflow,
+          input.step.name,
+          input.resumeStackPrefix,
+        );
+        const current = input.state.stepIterations.get(stepIterationIdentity) ?? 0;
+        if (inheritedMax !== undefined && inheritedMax > current) {
+          input.state.stepIterations.set(stepIterationIdentity, inheritedMax);
+        }
+      }
+      let occurrence = incrementStepIteration(input.state, stepIterationIdentity);
+      while (input.isOccurrenceNamespaceReserved?.(occurrence) === true) {
+        occurrence = incrementStepIteration(input.state, stepIterationIdentity);
+      }
+      return occurrence;
     }
 
     const restoredOccurrence = input.state.stepIterations.get(stepIterationIdentity);

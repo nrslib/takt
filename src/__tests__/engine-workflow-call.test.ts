@@ -35,8 +35,7 @@ import {
 } from '../infra/config/index.js';
 import { WorkflowCallRunner } from '../core/workflow/engine/WorkflowCallRunner.js';
 import {
-  applyWorkflowCallOverridesToPersonaProviders,
-  applyWorkflowCallOverridesToProviderRouting,
+  resolveWorkflowCallChildProviderModel,
 } from '../core/workflow/workflow-call-provider-context.js';
 import {
   applyDefaultMocks,
@@ -49,6 +48,7 @@ import {
 } from './engine-test-helpers.js';
 import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 import type {
+  AutoRoutingConfig,
   WorkflowConfig,
 } from '../core/models/index.js';
 import { initAnalyticsWriter } from '../features/analytics/index.js';
@@ -66,6 +66,18 @@ import {
   mockPersonaResponses,
   writeWorkflow,
 } from './helpers/engine-workflow-call-shared.js';
+
+function createQualifiedChildAutoRouting(): AutoRoutingConfig {
+  const autoRouting = createWorkflowCallAutoRoutingConfig();
+  return {
+    ...autoRouting,
+    candidatePools: {
+      ...autoRouting.candidatePools,
+      'child-special': { candidates: ['coding'], fallback: 'coding' },
+    },
+    poolRules: { steps: { 'takt/coding/review': 'child-special' } },
+  };
+}
 
 describe('WorkflowEngine workflow_call integration', () => {
   let tmpDir: string;
@@ -147,6 +159,75 @@ describe('WorkflowEngine workflow_call integration', () => {
     expect(onEffectiveAutoRoutingReached).not.toHaveBeenCalled();
   });
 
+  it('workflow-wide rules are inherited additively by a workflow_call child', async () => {
+    writeWorkflow(tmpDir, 'rules/parent-rule.md', 'PARENT_WORKFLOW_RULE mode={var:review_mode} iteration={step_iteration}');
+    writeWorkflow(tmpDir, 'rules/child-rule.md', 'CHILD_WORKFLOW_RULE mode={var:review_mode} iteration={step_iteration}');
+    writeWorkflow(tmpDir, 'child.yaml', `name: child
+subworkflow:
+  callable: true
+  returns: [ok]
+initial_step: review
+max_steps: 3
+all_steps:
+  rules:
+    - ref: parent-rule
+    - ref: child-rule
+      position: before_instruction
+steps:
+  - name: review
+    persona: reviewer
+    instruction: Review child work
+    rules:
+      - condition: done
+        return: ok
+`);
+
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'delegate',
+      max_steps: 3,
+      all_steps: { rules: ['parent-rule'] },
+      steps: [{
+        name: 'delegate',
+        kind: 'workflow_call',
+        call: 'child',
+        rules: [{ condition: 'ok', next: 'COMPLETE' }],
+      }],
+    });
+    mockPersonaResponses({ reviewer: 'done' });
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+    ]);
+
+    engine = new WorkflowEngine(
+      config,
+      tmpDir,
+      'test task',
+      createWorkflowCallOptions(tmpDir, {
+        workflowCallVars: { review_mode: 'follow_up' },
+      }),
+    );
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    const childPrompt = vi.mocked(runAgent).mock.calls[0]?.[1];
+    expect(childPrompt).toEqual(expect.any(String));
+    expect(childPrompt).toContain('PARENT_WORKFLOW_RULE');
+    expect(childPrompt).toContain('CHILD_WORKFLOW_RULE');
+    expect(childPrompt).toContain('PARENT_WORKFLOW_RULE mode=follow_up iteration=1');
+    expect(childPrompt).toContain('CHILD_WORKFLOW_RULE mode=follow_up iteration=1');
+    expect(childPrompt).not.toContain('{var:review_mode}');
+    expect(childPrompt).not.toContain('{step_iteration}');
+    expect(childPrompt!.split('PARENT_WORKFLOW_RULE')).toHaveLength(2);
+    expect(childPrompt!.indexOf('PARENT_WORKFLOW_RULE')).toBeLessThan(
+      childPrompt!.indexOf('CHILD_WORKFLOW_RULE'),
+    );
+    expect(childPrompt!.indexOf('CHILD_WORKFLOW_RULE')).toBeLessThan(
+      childPrompt!.indexOf('Review child work'),
+    );
+  });
+
   it('strategy override がない場合は到達した child 内の未到達 workflow_call を解決しない', async () => {
     const config = createParentWorkflow(tmpDir, {
       name: 'parent-with-child-that-finishes-directly',
@@ -161,7 +242,6 @@ describe('WorkflowEngine workflow_call integration', () => {
     });
     const childConfig: WorkflowConfig = {
       name: 'child',
-      provider: 'mock',
       subworkflow: { callable: true },
       initialStep: 'finish-child',
       steps: [
@@ -236,165 +316,21 @@ describe('WorkflowEngine workflow_call integration', () => {
     ]);
   });
 
-  it('workflow_call concrete provider override replaces child provider entries and clears stale models', () => {
-    const personaProviders = applyWorkflowCallOverridesToPersonaProviders({
-      reviewer: {
-        provider: 'mock',
-        model: 'child-review-model',
-      },
-    }, { provider: 'claude' });
-    const providerRouting = applyWorkflowCallOverridesToProviderRouting({
-      steps: {
-        review: {
-          provider: 'mock',
-          model: 'child-step-model',
-        },
-      },
-      tags: {
-        implementation: {
-          provider: 'codex',
-          model: 'gpt-5',
-        },
-      },
-    }, { provider: 'claude' });
-
-    expect(personaProviders).toEqual({
-      reviewer: {
-        provider: 'claude',
-      },
-    });
-    expect(providerRouting).toEqual({
-      personas: undefined,
-      steps: {
-        review: {
-          provider: 'claude',
-        },
-      },
-      tags: {
-        implementation: {
-          provider: 'claude',
-        },
-      },
-    });
-  });
-
-  it('workflow_call concrete provider and model override wins over child and inherited auto_routing defaults', async () => {
-    const parentConfig = createParentWorkflow(tmpDir, {
-      name: 'parent',
-      initial_step: 'delegate',
-      max_steps: 4,
-      steps: [
-        {
-          name: 'delegate',
-          kind: 'workflow_call',
-          call: 'takt/coding',
-          overrides: { provider: 'mock', model: 'workflow-call-model' },
-          rules: [
-            {
-              condition: 'COMPLETE',
-              next: 'COMPLETE',
-            },
-          ],
-        },
-      ],
-    });
-    const childConfig = {
-      name: 'takt/coding',
-      provider: 'claude',
-      model: 'child-top-level-model',
-      autoRouting: createWorkflowCallAutoRoutingConfig(),
-      subworkflow: { callable: true },
-      initialStep: 'review',
-      maxSteps: 5,
-      steps: [
-        {
-          name: 'review',
-          persona: 'reviewer',
-          instruction: 'Review child workflow',
-          rules: [makeRule('done', 'COMPLETE')],
-        },
-      ],
+  it('workflow_call child inherits the already-resolved runtime provider context', () => {
+    const parentContext = {
+      provider: 'mock' as const,
+      providerSource: 'runtime-v1' as const,
+      model: 'weak-model',
+      modelSource: 'runtime-v1' as const,
+      providerPermissionMode: 'full' as const,
     };
-    const createEngine = vi.fn().mockReturnValue({
-      on: vi.fn(),
-      runWithResult: vi.fn().mockResolvedValue({
-        state: {
-          workflowName: childConfig.name,
-          currentStep: 'review',
-          iteration: 1,
-          stepOutputs: new Map(),
-          structuredOutputs: new Map(),
-          systemContexts: new Map(),
-          effectResults: new Map(),
-          lastOutput: makeResponse({ persona: 'reviewer', content: 'done' }),
-          userInputs: [],
-          personaSessions: new Map(),
-          stepIterations: new Map(),
-          status: 'completed',
-        },
-      }),
+    expect(resolveWorkflowCallChildProviderModel(parentContext)).toEqual({
+      provider: 'mock',
+      providerSource: 'runtime-v1',
+      model: 'weak-model',
+      modelSource: 'runtime-v1',
+      permissionMode: 'full',
     });
-    const runner = new WorkflowCallRunner({
-      getConfig: () => parentConfig,
-      state: {
-        workflowName: parentConfig.name,
-        currentStep: 'delegate',
-        iteration: 1,
-        stepOutputs: new Map(),
-        structuredOutputs: new Map(),
-        systemContexts: new Map(),
-        effectResults: new Map(),
-        userInputs: [],
-        personaSessions: new Map(),
-        stepIterations: new Map([['delegate', 1]]),
-        status: 'running',
-      },
-      projectCwd: tmpDir,
-      getMaxSteps: () => parentConfig.maxSteps,
-      updateMaxSteps: vi.fn(),
-      getCwd: () => tmpDir,
-      task: 'Preserve auto workflow_call models',
-      getOptions: () => createWorkflowCallOptions(tmpDir, {
-        provider: 'codex',
-        model: 'parent-runtime-model',
-        autoRouting: createWorkflowCallAutoRoutingConfig(),
-      }),
-      sharedRuntime: { startedAtMs: Date.now() },
-      resumeStackPrefix: [],
-      consumeWorkflowCallContinuation: vi.fn(),
-      runPaths: { slug: 'test-report-dir' } as never,
-      setActiveResumePoint: vi.fn(),
-      emit: vi.fn(),
-      resolveWorkflowCall: () => childConfig as never,
-      createEngine,
-    });
-    const step = parentConfig.steps[0] as never;
-
-    expect(runner.resolveRuntime(step)).toEqual({
-      providerInfo: {
-        provider: 'mock',
-        providerSource: 'workflow_call',
-        model: 'workflow-call-model',
-        modelSource: 'workflow_call',
-      },
-    });
-
-    const execution = runner.activateInvocation(step, 1, 1, []);
-    await runner.run(step, execution);
-
-    expect(createEngine).toHaveBeenCalledWith(
-      childConfig,
-      tmpDir,
-      'Preserve auto workflow_call models',
-      expect.objectContaining({
-        provider: 'mock',
-        model: 'workflow-call-model',
-        autoRouting: createWorkflowCallAutoRoutingConfig(),
-      }),
-    );
-    await expect(runner.run(step, execution)).rejects.toThrow(
-      'workflow_call step "delegate" execution was not prepared',
-    );
   });
 
   it('子 workflow の最終出力を親 step の previous_response に引き継ぐ', async () => {
@@ -520,12 +456,10 @@ steps:
     expect(onRateLimited.mock.calls[0]?.[1]).toMatchObject({ status: 'rate_limited' });
   });
 
-  it('workflow_call 子 workflow の空 switch_chain は親 fallback を継承しない', async () => {
+  it('workflow_call 子 workflow は config 由来の親 fallback を継承する', async () => {
     writeWorkflow(tmpDir, 'child.yaml', `name: child
 subworkflow:
   callable: true
-rate_limit_fallback:
-  switch_chain: []
 initial_step: limited
 steps:
   - name: limited
@@ -558,7 +492,7 @@ steps:
         },
       ],
     });
-    engine = new WorkflowEngine(config, tmpDir, 'Child disables fallback', createWorkflowCallOptions(tmpDir, {
+    engine = new WorkflowEngine(config, tmpDir, 'Child inherits config fallback', createWorkflowCallOptions(tmpDir, {
       provider: 'claude',
       model: 'claude-sonnet',
       rateLimitFallback: {
@@ -584,11 +518,12 @@ steps:
     const state = await engine.run();
 
     expect(state.status).toBe('completed');
-    expect(vi.mocked(runAgent)).toHaveBeenCalledOnce();
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
     expect(vi.mocked(runAgent).mock.calls[0]?.[2]?.resolvedProvider).toBe('claude');
+    expect(vi.mocked(runAgent).mock.calls[1]?.[2]?.resolvedProvider).toBe('codex');
   });
 
-  it('workflow_call 子 workflow の rate_limit_fallback 空オブジェクトは親 fallback を継承しない', async () => {
+  it('workflow_call 子 workflow の rate_limit_fallback はロード時に拒否する', async () => {
     writeWorkflow(tmpDir, 'child.yaml', `name: child
 subworkflow:
   callable: true
@@ -650,9 +585,8 @@ steps:
 
     const state = await engine.run();
 
-    expect(state.status).toBe('completed');
-    expect(vi.mocked(runAgent)).toHaveBeenCalledOnce();
-    expect(vi.mocked(runAgent).mock.calls[0]?.[2]?.resolvedProvider).toBe('claude');
+    expect(state.status).toBe('aborted');
+    expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
   });
 
   it('親 task を child workflow の agent prompt へデフォルト伝搬する', async () => {
@@ -836,7 +770,7 @@ steps:
     expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
   });
 
-  it('workflow_call overrides を子 workflow の agent 実行へ伝搬する', async () => {
+  it('workflow_call は親で解決済みの runtime provider context を子へ伝搬する', async () => {
     writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
 subworkflow:
   callable: true
@@ -859,15 +793,6 @@ steps:
           name: 'delegate',
           kind: 'workflow_call',
           call: 'takt/coding',
-          overrides: {
-            provider: 'codex',
-            model: 'gpt-5-codex',
-            provider_options: {
-              codex: {
-                network_access: true,
-              },
-            },
-          },
           rules: [
             {
               condition: 'COMPLETE',
@@ -891,8 +816,15 @@ steps:
       { index: 0, method: 'phase3_tag' },
     ]);
 
-    engine = new WorkflowEngine(config, tmpDir, 'Override child provider', createWorkflowCallOptions(tmpDir, {
-      provider: 'claude',
+    engine = new WorkflowEngine(config, tmpDir, 'Inherit runtime child provider', createWorkflowCallOptions(tmpDir, {
+      provider: 'codex',
+      model: 'gpt-5-codex',
+      providerSource: 'runtime-v1',
+      providerOptionsProviderSource: 'runtime-v1',
+      providerPermissionMode: 'full',
+      providerOptions: {
+        codex: { networkAccess: true },
+      },
     }));
 
     await engine.run();
@@ -901,14 +833,71 @@ steps:
 
     expect(options?.resolvedProvider).toBe('codex');
     expect(options?.resolvedModel).toBe('gpt-5-codex');
-    expect(options?.providerOptions).toMatchObject({
+    expect(options?.permissionMode).toBe('full');
+    expect(options?.providerOptions).toEqual({
       codex: {
         networkAccess: true,
       },
     });
   });
 
-  it('workflow_call が provider だけ override した場合は親 model を引き継がない', async () => {
+  it('workflow_call は子 workflow の runtime persona routing を維持する', async () => {
+    writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
+subworkflow:
+  callable: true
+initial_step: review
+steps:
+  - name: review
+    persona: reviewer
+    instruction: "Review child workflow"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'delegate',
+      max_steps: 10,
+      steps: [{
+        name: 'delegate',
+        kind: 'workflow_call',
+        call: 'takt/coding',
+        rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+      }],
+    });
+
+    vi.mocked(runAgent).mockResolvedValueOnce(makeResponse({ persona: 'reviewer', content: 'done' }));
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+    const startedProviderInfo: Array<Record<string, unknown>> = [];
+    engine = new WorkflowEngine(config, tmpDir, 'Keep runtime persona routing', createWorkflowCallOptions(tmpDir, {
+      provider: 'claude',
+      model: 'target-model',
+      providerSource: 'runtime-v1',
+      providerOptionsProviderSource: 'runtime-v1',
+      providerOptions: {
+        claude: { allowedTools: ['Read'] },
+      },
+    }));
+    engine.on('step:start', (step, _iteration, _instruction, providerInfo) => {
+      if (step.name === 'review') {
+        startedProviderInfo.push(providerInfo as unknown as Record<string, unknown>);
+      }
+    });
+
+    await engine.run();
+
+    const options = vi.mocked(runAgent).mock.calls[0]?.[2];
+    expect(options?.resolvedProvider).toBe('claude');
+    expect(options?.resolvedModel).toBe('target-model');
+    expect(options?.providerOptions).toEqual({ claude: { allowedTools: ['Read'] } });
+    expect(startedProviderInfo[0]?.providerOptions).toEqual({ claude: { allowedTools: ['Read'] } });
+    expect(startedProviderInfo[0]?.providerOptionsSources).toEqual({
+      'claude.allowedTools': 'runtime-v1',
+    });
+  });
+
+  it('workflow_call は親 runtime の provider と model を継承する', async () => {
     writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
 subworkflow:
   callable: true
@@ -931,9 +920,6 @@ steps:
           name: 'delegate',
           kind: 'workflow_call',
           call: 'takt/coding',
-          overrides: {
-            provider: 'codex',
-          },
           rules: [
             {
               condition: 'COMPLETE',
@@ -953,7 +939,7 @@ steps:
       { index: 0, method: 'phase3_tag' },
     ]);
 
-    engine = new WorkflowEngine(config, tmpDir, 'Override child provider only', createWorkflowCallOptions(tmpDir, {
+    engine = new WorkflowEngine(config, tmpDir, 'Inherit child provider and model', createWorkflowCallOptions(tmpDir, {
       provider: 'claude',
       model: 'parent-model',
     }));
@@ -962,11 +948,11 @@ steps:
 
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
 
-    expect(options?.resolvedProvider).toBe('codex');
-    expect(options?.resolvedModel).toBeUndefined();
+    expect(options?.resolvedProvider).toBe('claude');
+    expect(options?.resolvedModel).toBe('parent-model');
   });
 
-  it('workflow_call が provider だけ override した場合は child personaProviders の stale model を引き継がない', async () => {
+  it('workflow_call は child persona routing を継承する', async () => {
     writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
 subworkflow:
   callable: true
@@ -989,9 +975,6 @@ steps:
           name: 'delegate',
           kind: 'workflow_call',
           call: 'takt/coding',
-          overrides: {
-            provider: 'codex',
-          },
           rules: [
             {
               condition: 'COMPLETE',
@@ -1008,13 +991,13 @@ steps:
     }));
     mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
-    engine = new WorkflowEngine(config, tmpDir, 'Override child provider without stale persona model', createWorkflowCallOptions(tmpDir, {
+    engine = new WorkflowEngine(config, tmpDir, 'Inherit child persona routing', createWorkflowCallOptions(tmpDir, {
       provider: 'claude',
       model: 'parent-model',
       personaProviders: {
         reviewer: {
           provider: 'opencode',
-          model: 'reviewer-model',
+          model: 'opencode/reviewer-model',
         },
       },
     }));
@@ -1023,11 +1006,11 @@ steps:
 
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
 
-    expect(options?.resolvedProvider).toBe('codex');
-    expect(options?.resolvedModel).toBeUndefined();
+    expect(options?.resolvedProvider).toBe('opencode');
+    expect(options?.resolvedModel).toBe('opencode/reviewer-model');
   });
 
-  it('workflow_call が provider だけ override した場合は child providerRouting の stale model を引き継がない', async () => {
+  it('workflow_call は child step routing を継承する', async () => {
     writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
 subworkflow:
   callable: true
@@ -1050,9 +1033,6 @@ steps:
           name: 'delegate',
           kind: 'workflow_call',
           call: 'takt/coding',
-          overrides: {
-            provider: 'codex',
-          },
           rules: [
             {
               condition: 'COMPLETE',
@@ -1069,7 +1049,7 @@ steps:
     }));
     mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
-    engine = new WorkflowEngine(config, tmpDir, 'Override child provider without stale routing model', createWorkflowCallOptions(tmpDir, {
+    engine = new WorkflowEngine(config, tmpDir, 'Inherit child step routing', createWorkflowCallOptions(tmpDir, {
       provider: 'claude',
       model: 'parent-model',
       providerRouting: {
@@ -1089,14 +1069,14 @@ steps:
 
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
 
-    expect(options?.resolvedProvider).toBe('codex');
-    expect(options?.resolvedModel).toBeUndefined();
+    expect(options?.resolvedProvider).toBe('opencode');
+    expect(options?.resolvedModel).toBe('opencode/stale-review-model');
     expect(options?.providerOptions).toMatchObject({
       codex: { reasoningEffort: 'high' },
     });
   });
 
-  it('workflow_call が provider を override しても child personaProviders の provider_options を保持する', async () => {
+  it('workflow_call は child persona の runtime provider options を維持する', async () => {
     writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
 subworkflow:
   callable: true
@@ -1119,9 +1099,6 @@ steps:
           name: 'delegate',
           kind: 'workflow_call',
           call: 'takt/coding',
-          overrides: {
-            provider: 'codex',
-          },
           rules: [
             {
               condition: 'COMPLETE',
@@ -1138,8 +1115,8 @@ steps:
     }));
     mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
-    engine = new WorkflowEngine(config, tmpDir, 'Keep child persona provider options on workflow_call override', createWorkflowCallOptions(tmpDir, {
-      provider: 'claude',
+    engine = new WorkflowEngine(config, tmpDir, 'Keep child persona provider options', createWorkflowCallOptions(tmpDir, {
+      provider: 'opencode',
       model: 'parent-model',
       providerOptions: {
         codex: { networkAccess: false },
@@ -1147,7 +1124,7 @@ steps:
       personaProviders: {
         reviewer: {
           provider: 'opencode',
-          model: 'reviewer-model',
+          model: 'opencode/reviewer-model',
           providerOptions: {
             codex: { reasoningEffort: 'high' },
           },
@@ -1159,8 +1136,8 @@ steps:
 
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
 
-    expect(options?.resolvedProvider).toBe('codex');
-    expect(options?.resolvedModel).toBeUndefined();
+    expect(options?.resolvedProvider).toBe('opencode');
+    expect(options?.resolvedModel).toBe('opencode/reviewer-model');
     expect(options?.providerOptions).toEqual({
       codex: {
         networkAccess: false,
@@ -1169,7 +1146,7 @@ steps:
     });
   });
 
-  it('workflow_call が model だけ override しても child personaProviders の provider 解決を維持する', async () => {
+  it('workflow_call は child persona の provider と model を継承する', async () => {
     writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
 subworkflow:
   callable: true
@@ -1192,9 +1169,6 @@ steps:
           name: 'delegate',
           kind: 'workflow_call',
           call: 'takt/coding',
-          overrides: {
-            model: 'opencode/override-model',
-          },
           rules: [
             {
               condition: 'COMPLETE',
@@ -1211,13 +1185,17 @@ steps:
     }));
     mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
-    engine = new WorkflowEngine(config, tmpDir, 'Override child model with persona provider fallback', createWorkflowCallOptions(tmpDir, {
+    engine = new WorkflowEngine(config, tmpDir, 'Inherit child model with persona provider fallback', createWorkflowCallOptions(tmpDir, {
       provider: 'claude',
       model: 'parent-model',
       personaProviders: {
         reviewer: {
           provider: 'opencode',
           model: 'opencode/reviewer-model',
+          permissionMode: 'readonly',
+          providerOptions: {
+            opencode: { networkAccess: false },
+          },
         },
       },
     }));
@@ -1227,77 +1205,33 @@ steps:
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
 
     expect(options?.resolvedProvider).toBe('opencode');
-    expect(options?.resolvedModel).toBe('opencode/override-model');
+    expect(options?.resolvedModel).toBe('opencode/reviewer-model');
+    expect(options?.permissionMode).toBe('readonly');
+    expect(options?.providerOptions).toEqual({
+      opencode: { networkAccess: false },
+    });
   });
 
   it.each([
-    {
-      name: 'provider only',
-      overrides: { provider: 'opencode' },
-      engineOptions: { provider: 'claude', model: 'parent-model' },
-    },
-    {
-      name: 'provider with bare model',
-      overrides: { provider: 'opencode', model: 'big-pickle' },
-      engineOptions: { provider: 'claude', model: 'parent-model' },
-    },
-    {
-      name: 'inherited opencode provider with bare model',
-      overrides: { model: 'big-pickle' },
-      engineOptions: { provider: 'opencode', model: 'opencode/parent-model' },
-    },
-  ])('workflow_call overrides は OpenCode の不正 model 契約を拒否する: $name', async ({ overrides, engineOptions }) => {
-    writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
-subworkflow:
-  callable: true
-initial_step: review
-steps:
-  - name: review
-    persona: reviewer
-    instruction: "Review child workflow"
-    rules:
-      - condition: done
-        next: COMPLETE
-`);
-
-    const config = createParentWorkflow(tmpDir, {
+    { name: 'provider only', overrides: { provider: 'opencode' } },
+    { name: 'provider with model', overrides: { provider: 'opencode', model: 'big-pickle' } },
+    { name: 'provider options only', overrides: { provider_options: { opencode: { network_access: true } } } },
+  ])('workflow_call removed execution settings are rejected at load time: $name', ({ overrides }) => {
+    expect(() => createParentWorkflow(tmpDir, {
       name: 'parent',
       initial_step: 'delegate',
-      max_steps: 10,
-      steps: [
-        {
-          name: 'delegate',
-          kind: 'workflow_call',
-          call: 'takt/coding',
-          overrides,
-          rules: [
-            {
-              condition: 'COMPLETE',
-              next: 'COMPLETE',
-            },
-            {
-              condition: 'ABORT',
-              next: 'ABORT',
-            },
-          ],
-        },
-      ],
-    });
-
-    engine = new WorkflowEngine(
-      config,
-      tmpDir,
-      'Reject invalid OpenCode workflow_call override',
-      createWorkflowCallOptions(tmpDir, engineOptions),
-    );
-
-    const state = await engine.run();
-
-    expect(state.status).toBe('aborted');
-    expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
+      max_steps: 1,
+      steps: [{
+        name: 'delegate',
+        kind: 'workflow_call',
+        call: 'child',
+        overrides,
+        rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+      }],
+    })).toThrow(/configure provider\/model\/options in runtime\.yaml/);
   });
 
-  it('workflow_call が provider_options だけ override した場合は親 provider/model を維持する', async () => {
+  it('workflow_call は親 runtime の provider/model/options を継承する', async () => {
     writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
 subworkflow:
   callable: true
@@ -1315,27 +1249,11 @@ steps:
       name: 'parent',
       initial_step: 'delegate',
       max_steps: 10,
-      workflow_config: {
-        provider: 'claude',
-        model: 'parent-model',
-        provider_options: {
-          claude: {
-            allowed_tools: ['Read'],
-          },
-        },
-      },
       steps: [
         {
           name: 'delegate',
           kind: 'workflow_call',
           call: 'takt/coding',
-          overrides: {
-            provider_options: {
-              codex: {
-                network_access: true,
-              },
-            },
-          },
           rules: [
             {
               condition: 'COMPLETE',
@@ -1352,9 +1270,12 @@ steps:
     }));
     mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
-    engine = new WorkflowEngine(config, tmpDir, 'Override child provider options only', createWorkflowCallOptions(tmpDir, {
-      provider: 'mock',
-      model: 'cli-model',
+    engine = new WorkflowEngine(config, tmpDir, 'Inherit runtime provider options', createWorkflowCallOptions(tmpDir, {
+      provider: 'claude',
+      model: 'parent-model',
+      providerOptions: {
+        claude: { allowedTools: ['Read'] },
+      },
     }));
 
     await engine.run();
@@ -1366,9 +1287,6 @@ steps:
     expect(options?.providerOptions).toMatchObject({
       claude: {
         allowedTools: ['Read'],
-      },
-      codex: {
-        networkAccess: true,
       },
     });
   });
@@ -1391,15 +1309,6 @@ steps:
       name: 'parent',
       initial_step: 'delegate',
       max_steps: 3,
-      workflow_config: {
-        provider: 'codex',
-        model: 'gpt-5-codex',
-        provider_options: {
-          codex: {
-            network_access: true,
-          },
-        },
-      },
       steps: [
         {
           name: 'delegate',
@@ -1426,7 +1335,11 @@ steps:
     mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
     engine = new WorkflowEngine(config, tmpDir, 'Inherited child provider', createWorkflowCallOptions(tmpDir, {
-      provider: 'claude',
+      provider: 'codex',
+      model: 'gpt-5-codex',
+      providerOptions: {
+        codex: { networkAccess: true },
+      },
     }));
 
     await engine.run();
@@ -1508,8 +1421,6 @@ initial_step: review
 steps:
   - name: review
     persona: reviewer
-    provider: mock
-    model: child-model
     instruction: "Review child workflow"
     rules:
       - condition: done
@@ -1546,8 +1457,8 @@ steps:
       resumeStep: string;
     }> = [];
     engine = new WorkflowEngine(config, tmpDir, 'Run provider-less workflow call wrapper', createWorkflowCallOptions(tmpDir, {
-      provider: undefined,
-      model: undefined,
+      provider: 'mock',
+      model: 'child-model',
     }));
     engine.on('step:start', (step, iteration, _instruction, providerInfo, _workflowName, resumeStepName) => {
       startedSteps.push({
@@ -1585,8 +1496,6 @@ steps:
     writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
 subworkflow:
   callable: true
-workflow_config:
-  provider: mock
 initial_step: review
 steps:
   - name: review
@@ -1624,7 +1533,7 @@ steps:
       if (persona === 'auto-router') {
         return makeResponse({
           persona: 'auto-router',
-          content: '{"required_tier":"medium","reason_codes":["focused-change"]}',
+          content: '{"required_tier":"medium","reason_codes":["focused-change"],"confidence":null}',
         });
       }
       return makeResponse({
@@ -1634,9 +1543,10 @@ steps:
     });
     mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
+    const childAutoRouting = createQualifiedChildAutoRouting();
     engine = new WorkflowEngine(config, tmpDir, 'Route child workflow with child context', createWorkflowCallOptions(tmpDir, {
       provider: 'mock',
-      autoRouting: createWorkflowCallAutoRoutingConfig(),
+      autoRouting: childAutoRouting,
     }));
     const abortReasons: string[] = [];
     engine.on('workflow:abort', (_state, reason) => abortReasons.push(reason));
@@ -1665,11 +1575,10 @@ steps:
     expect(state.status).toBe('completed');
     expect(routerCalls).toHaveLength(1);
     expect(routerCall?.[1]).toContain('"name":"review"');
-    expect(routerCall?.[1]).toContain('"instruction":"Review child workflow"');
     expect(routerCall?.[1]).not.toContain('parent');
     expect(childCall?.[2]).toEqual(expect.objectContaining({
-      resolvedProvider: 'mock',
-      resolvedModel: 'parent-model',
+      resolvedProvider: 'codex',
+      resolvedModel: 'gpt-5',
     }));
     const records = readFileSync(join(routingEventsDir, '2026-02-18.jsonl'), 'utf-8')
       .trim()
@@ -1682,7 +1591,7 @@ steps:
       type: 'routing_decision',
       stepName: 'review',
       workflowName: 'takt/coding',
-      selectedCategory: 'delegate-runtime',
+      selectedCategory: 'coding',
     });
   });
 
@@ -1727,7 +1636,7 @@ steps:
       if (persona === 'auto-router') {
         return makeResponse({
           persona: 'auto-router',
-          content: '{"required_tier":"medium","reason_codes":["focused-change"]}',
+          content: '{"required_tier":"medium","reason_codes":["focused-change"],"confidence":null}',
         });
       }
       return makeResponse({
@@ -1737,10 +1646,14 @@ steps:
     });
     mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
+    const childAutoRouting = {
+      ...createQualifiedChildAutoRouting(),
+      defaultPool: undefined,
+    };
     engine = new WorkflowEngine(config, tmpDir, 'Route inherited auto provider child workflow', createWorkflowCallOptions(tmpDir, {
       provider: 'mock',
       model: undefined,
-      autoRouting: createWorkflowCallAutoRoutingConfig(),
+      autoRouting: childAutoRouting,
     }));
 
     const state = await engine.run();
@@ -1748,40 +1661,14 @@ steps:
 
     expect(state.status).toBeDefined();
     expect(childCall?.[2]).toEqual(expect.objectContaining({
-      resolvedProvider: 'mock',
-      resolvedModel: 'parent-model',
+      resolvedProvider: 'codex',
+      resolvedModel: 'gpt-5',
     }));
   });
 
-  it('workflow_call は child workflow 自前の auto_routing への strategy override を実 engine で1回だけ通知する', async () => {
+  it('workflow_call は親 runtime auto routing への strategy override を child に一度だけ通知する', async () => {
     const onEffectiveAutoRoutingReached = vi.fn();
     writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
-workflow_config:
-  provider: mock
-auto_routing:
-  strategy: balanced
-  router:
-    provider: claude-sdk
-    model: claude-haiku-4-5-20251001
-  candidates:
-    - name: delegate-runtime
-      description: Workflow call delegation
-      provider: mock
-      model: mock/parent-model
-      routing_tier: medium
-    - name: reasoning
-      description: Architecture and planning
-      provider: claude-sdk
-      model: claude-opus-4-20250514
-      routing_tier: high
-  default_pool: general
-  candidate_pools:
-    general:
-      candidates: [delegate-runtime, reasoning]
-      fallback: reasoning
-  rules:
-    steps:
-      review: reasoning
 subworkflow:
   callable: true
 initial_step: review
@@ -1816,6 +1703,12 @@ steps:
         systemPrompt: typeof persona === 'string' ? persona : '',
         userInstruction: prompt,
       });
+      if (persona === 'auto-router') {
+        return makeResponse({
+          persona: 'auto-router',
+          content: '{"required_tier":"medium","reason_codes":["focused-change"],"confidence":null}',
+        });
+      }
       return makeResponse({ persona: 'reviewer', content: 'done' });
     });
     mockRuleEvaluationSequence([
@@ -1825,21 +1718,24 @@ steps:
     engine = new WorkflowEngine(parentConfig, tmpDir, 'Override child auto strategy', createWorkflowCallOptions(tmpDir, {
       provider: 'mock',
       model: undefined,
+      autoRouting: createQualifiedChildAutoRouting(),
       autoStrategyOverride: 'performance',
       onEffectiveAutoRoutingReached,
     }));
     const state = await engine.run();
+    const routerCalls = vi.mocked(runAgent).mock.calls.filter(([persona]) => persona === 'auto-router');
     const childCall = vi.mocked(runAgent).mock.calls.find(([persona]) => String(persona).includes('reviewer'));
 
     expect(state.status).toBe('completed');
-    expect(onEffectiveAutoRoutingReached).toHaveBeenCalledOnce();
+    expect(onEffectiveAutoRoutingReached).toHaveBeenCalledTimes(2);
+    expect(routerCalls).toHaveLength(1);
     expect(childCall?.[2]).toEqual(expect.objectContaining({
-      resolvedProvider: 'claude-sdk',
-      resolvedModel: 'claude-opus-4-20250514',
+      resolvedProvider: 'codex',
+      resolvedModel: 'gpt-5',
     }));
   });
 
-  it('workflow_call concrete provider override があっても strategy override の適用を child engine に委譲する', async () => {
+  it('workflow_call は strategy override の適用を child engine に委譲する', async () => {
     const parentConfig = createParentWorkflow(tmpDir, {
       name: 'parent',
       initial_step: 'delegate',
@@ -1849,7 +1745,6 @@ steps:
           name: 'delegate',
           kind: 'workflow_call',
           call: 'takt/coding',
-          overrides: { provider: 'mock' },
           rules: [
             {
               condition: 'COMPLETE',
@@ -1861,8 +1756,6 @@ steps:
     });
     const childConfig = {
       name: 'takt/coding',
-      provider: 'claude',
-      autoRouting: createWorkflowCallAutoRoutingConfig(),
       subworkflow: { callable: true },
       initialStep: 'review',
       maxSteps: 5,
@@ -1913,17 +1806,19 @@ steps:
       getMaxSteps: () => parentConfig.maxSteps,
       updateMaxSteps: vi.fn(),
       getCwd: () => tmpDir,
-      task: 'Concrete override child top-level auto',
+      task: 'Inherit runtime child auto routing',
       getOptions: () => ({
         ...createWorkflowCallOptions(tmpDir),
-        provider: 'mock',
-        model: undefined,
-        autoStrategyOverride: 'performance',
+      provider: 'mock',
+      model: undefined,
+      autoRouting: createWorkflowCallAutoRoutingConfig(),
+      autoRoutingEstimator: { estimate: vi.fn() },
+      autoStrategyOverride: 'performance',
       }),
       sharedRuntime: { startedAtMs: Date.now() },
       resumeStackPrefix: [],
       consumeWorkflowCallContinuation: vi.fn(),
-      runPaths: { slug: 'test-report-dir' } as never,
+      runPaths: { slug: 'test-report-dir', runRootAbs: tmpDir } as never,
       setActiveResumePoint: vi.fn(),
       emit: vi.fn(),
       resolveWorkflowCall: () => childConfig as never,
@@ -1937,7 +1832,7 @@ steps:
     expect(createEngine).toHaveBeenCalledWith(
       childConfig,
       tmpDir,
-      'Concrete override child top-level auto',
+      'Inherit runtime child auto routing',
       expect.objectContaining({
         provider: 'mock',
         autoStrategyOverride: 'performance',

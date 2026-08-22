@@ -60,6 +60,9 @@ steps:
     tags:
       - plan
     persona: supervisor
+    policy:
+      - architecture
+      - takt
     knowledge:
       - architecture
       - takt
@@ -146,6 +149,9 @@ steps:
     tags:
       - plan
     persona: supervisor
+    policy:
+      - architecture
+      - takt
     knowledge:
       - architecture
       - takt
@@ -220,6 +226,9 @@ steps:
     tags:
       - plan
     persona: supervisor
+    policy:
+      - architecture
+      - takt
     knowledge:
       - architecture
       - takt

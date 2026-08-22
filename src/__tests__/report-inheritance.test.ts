@@ -112,8 +112,8 @@ describe('inheritReviewReports', () => {
     writeSourceReport(
       projectDirectory,
       ['subworkflows', 'iteration-2--step-peer-review--workflow-peer-review'],
-      'findings-ledger.json',
-      '{"findings":[]}',
+      'run-metadata.json',
+      '{"status":"complete"}',
       new Date('2026-07-17T00:02:00.000Z'),
     );
     const securityPath = writeSourceReport(
@@ -139,7 +139,7 @@ describe('inheritReviewReports', () => {
     expect(readFileSync(copiedPath, 'utf-8')).toBe('latest review');
     expect(readFileSync(olderPath, 'utf-8')).toBe('older review');
     expect(readFileSync(latestPath, 'utf-8')).toBe('latest review');
-    expect(existsSync(join(targetReportDirectory(projectDirectory), 'findings-ledger.json'))).toBe(false);
+    expect(existsSync(join(targetReportDirectory(projectDirectory), 'run-metadata.json'))).toBe(false);
   });
 
   it('should record partial status and retain available reports when another review report is missing', () => {
@@ -450,7 +450,7 @@ describe('inheritReviewReports', () => {
     const sourcePath = writeSourceReport(
       projectDirectory,
       namespace,
-      'merge-readiness-review.md',
+      'review-resolution.md',
       'nested review',
       new Date('2026-07-17T00:00:00.000Z'),
     );
@@ -473,12 +473,12 @@ describe('inheritReviewReports', () => {
       currentRunSlug,
       targetReportDirectory: targetDirectory,
       reviewReportNames: [
-        'subworkflows/iteration-*--step-final-gate--workflow-final-gate/subworkflows/iteration-*--step-reviewers--workflow-reviewers/merge-readiness-review.md',
+        'subworkflows/iteration-*--step-final-gate--workflow-final-gate/subworkflows/iteration-*--step-reviewers--workflow-reviewers/review-resolution.md',
       ],
     });
 
     // Then
-    const copiedPath = join(targetDirectory, 'merge-readiness-review.md');
+    const copiedPath = join(targetDirectory, 'review-resolution.md');
     expect(result.copied).toEqual([
       expect.objectContaining({ sourcePath, targetPath: copiedPath }),
     ]);

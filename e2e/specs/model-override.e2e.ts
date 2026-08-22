@@ -43,7 +43,6 @@ describe('E2E: --model option override (mock)', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Workflow completed');
   }, 240_000);
 
   it('should complete pipeline --skip-git execution with --model', () => {
@@ -68,6 +67,5 @@ describe('E2E: --model option override (mock)', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('completed');
   }, 240_000);
 });

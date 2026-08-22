@@ -14,6 +14,10 @@ const KIRO_AGENT_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
 // Matches only a leading prompt-echo marker (absolute start of the cleaned
 // output), so a Markdown blockquote ("> ") later in the body is left intact.
 const KIRO_LEADING_PROMPT_PATTERN = /^\s*> /;
+const KIRO_CONTEXT_COMPACTION_NOTICE =
+  'The context window has overflowed, summarizing the history...';
+const KIRO_CONTEXT_COMPACTION_ERROR =
+  'kiro-cli compacted the context without returning a response';
 // UUID emitted by `kiro-cli chat --list-sessions` for each listed session.
 // No `g` flag: RegExp#exec always returns the first (most recent) match.
 const KIRO_SESSION_UUID_PATTERN = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/;
@@ -256,16 +260,22 @@ export class KiroClient {
 
     try {
       const args = buildArgs(effectiveOptions, promptText);
+      options.onActivity?.({ kind: 'attempt_started' });
       const { stdout } = await execKiro(args, effectiveOptions);
       const content = cleanKiroOutput(stdout);
-      if (!content) {
-        const message = 'kiro-cli returned empty output';
-        emitResult(options, '', false, message, options.sessionId);
+      const outputError = content.length === 0
+        ? 'kiro-cli returned empty output'
+        : content === KIRO_CONTEXT_COMPACTION_NOTICE
+          ? KIRO_CONTEXT_COMPACTION_ERROR
+          : undefined;
+
+      if (outputError !== undefined) {
+        emitResult(options, '', false, outputError, options.sessionId);
         return {
           persona: agentType,
           status: 'error',
-          content: message,
-          error: message,
+          content: outputError,
+          error: outputError,
           timestamp: new Date(),
           sessionId: options.sessionId,
         };

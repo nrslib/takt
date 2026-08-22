@@ -1,5 +1,6 @@
 import type { WorkflowStep } from '../../models/types.js';
 import {
+  hasCompanionReference,
   needsSemanticStatusJudgment,
   semanticLabelsOf,
   semanticRuleCandidatesOf,
@@ -20,6 +21,9 @@ export async function evaluatePostExecutionRules(
   getStatusJudgmentContext: () => StatusJudgmentPhaseContext,
   ruleContext: RuleEvaluatorContext,
 ): Promise<RuleMatch | undefined> {
+  if (step.rules?.some((rule) => hasCompanionReference(rule.condition))) {
+    throw new Error('Workflow transition rules cannot reference advisory companion state');
+  }
   const firstSemanticRuleIndex = step.rules?.findIndex(
     (rule) => rule.interactiveOnly !== true || ruleContext.interactive === true
       ? semanticLabelsOf(rule.condition).length > 0

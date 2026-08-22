@@ -1,23 +1,18 @@
-import { resolveEffectiveProviderOptions } from '../../../infra/config/providerOptions.js';
 import type {
   AgentResponse,
-  FindingContractConfig,
   WorkflowConfig,
   WorkflowCallStep,
   WorkflowMaxSteps,
   WorkflowResumePointEntry,
   WorkflowState,
 } from '../../models/types.js';
-import type { FindingLedgerStore } from '../findings/store.js';
 import type { RunPaths } from '../run/run-paths.js';
 import {
-  applyProviderModelOverride,
   resolveWorkflowCallProviderModel,
 } from '../provider-resolution.js';
 import {
-  applyWorkflowCallOverridesToPersonaProviders,
-  applyWorkflowCallOverridesToProviderRouting,
   resolveWorkflowCallChildProviderModel,
+  type WorkflowCallProviderModel,
 } from '../workflow-call-provider-context.js';
 import {
   buildWorkflowResumePointEntry,
@@ -26,11 +21,11 @@ import {
 } from '../workflow-reference.js';
 import { MAX_WORKFLOW_CALL_DEPTH } from '../workflow-call-depth.js';
 import { buildWorkflowCallInvocationIdentity } from '../workflow-call-invocation-index.js';
+import { buildWorkflowCallSiteIdentity } from '../workflow-call-site-identity.js';
 import { withWorkflowConfigErrorPath } from '../workflow-config-error.js';
 import { findWorkflowStepLocation } from '../workflow-step-location.js';
 import type {
   RuntimeStepResolution,
-  StepProviderInfo,
   StepRunResult,
   WorkflowCallChildEngine,
   WorkflowCallCompleteLifecycle,
@@ -55,6 +50,7 @@ import { getErrorMessage } from '../../../shared/utils/error.js';
 interface WorkflowCallRunnerDeps {
   getConfig: () => WorkflowConfig;
   getMaxSteps: () => WorkflowMaxSteps;
+  getAbortSignal?: () => AbortSignal | undefined;
   updateMaxSteps: (maxSteps: WorkflowMaxSteps) => void;
   state: WorkflowState;
   projectCwd: string;
@@ -83,11 +79,6 @@ interface WorkflowCallRunnerDeps {
     task: string,
     options: WorkflowEngineOptions,
   ) => WorkflowCallChildEngine;
-  /** 自前 or 継承済みの、この engine で有効な Finding Contract。子へ引き継ぐ。 */
-  findingContract?: FindingContractConfig;
-  findingLedgerStore?: FindingLedgerStore;
-  /** workflow_call 完了後、子が書き込んだ台帳を親の state.findings へ反映する。 */
-  refreshFindingsState: () => void;
 }
 
 export interface WorkflowCallExecutionToken {
@@ -132,79 +123,97 @@ export class WorkflowCallRunner {
     providerSource: WorkflowEngineOptions['providerSource'];
     model: string | undefined;
     modelSource: WorkflowEngineOptions['modelSource'];
+    providerPermissionMode: WorkflowEngineOptions['providerPermissionMode'];
     providerOptions: WorkflowEngineOptions['providerOptions'];
   } {
     const options = this.deps.getOptions();
-    const parentConfig = this.deps.getConfig();
     const providerInfo = resolveWorkflowCallProviderModel({
-      workflow: parentConfig,
       provider: options.provider,
       providerSource: options.providerSource,
       model: options.model,
       modelSource: options.modelSource,
+      permissionMode: options.providerPermissionMode,
     });
-    const providerOptions = resolveEffectiveProviderOptions(
-      options.providerOptionsSource,
-      options.providerOptionsOriginResolver,
-      options.providerOptions,
-      parentConfig.providerOptions,
-    );
+    const providerOptions = options.providerOptions;
 
     return {
       provider: providerInfo.provider,
       providerSource: providerInfo.providerSource,
       model: providerInfo.model,
       modelSource: providerInfo.modelSource,
+      providerPermissionMode: providerInfo.permissionMode,
       providerOptions,
     };
   }
 
   private resolveChildProviderModel(
-    step: WorkflowCallStep,
-    childWorkflow: WorkflowConfig,
-  ): StepProviderInfo {
-    return resolveWorkflowCallChildProviderModel(
-      childWorkflow,
-      step.overrides,
-      this.resolveParentWorkflowProviderContext(),
-    );
+    _step: WorkflowCallStep,
+    _childWorkflow: WorkflowConfig,
+  ): WorkflowCallProviderModel {
+    return resolveWorkflowCallChildProviderModel(this.resolveParentWorkflowProviderContext());
   }
 
-  resolveRuntime(step: WorkflowCallStep): RuntimeStepResolution {
+  resolveRuntime(_step: WorkflowCallStep): RuntimeStepResolution {
     const parentProviderInfo = this.resolveParentWorkflowProviderContext();
-    const workflowCallProviderModel = applyProviderModelOverride(parentProviderInfo, {
-      provider: step.overrides?.provider,
-      providerSpecified: step.overrides?.provider !== undefined,
-      model: step.overrides?.model,
-      modelSpecified: step.overrides?.model !== undefined,
-      source: 'workflow_call',
-    });
+    const workflowCallProviderModel = parentProviderInfo;
     return {
       providerInfo: {
         provider: workflowCallProviderModel.provider,
         providerSource: workflowCallProviderModel.providerSource,
         model: workflowCallProviderModel.model,
         modelSource: workflowCallProviderModel.modelSource,
+        permissionMode: workflowCallProviderModel.providerSource === parentProviderInfo.providerSource
+          ? parentProviderInfo.providerPermissionMode
+          : undefined,
       },
     };
   }
 
-  private buildChildPersonaProviders(
+  isArtifactNamespaceReserved(
     step: WorkflowCallStep,
-  ): WorkflowEngineOptions['personaProviders'] {
-    return applyWorkflowCallOverridesToPersonaProviders(
-      this.deps.getOptions().personaProviders,
-      step.overrides,
-    );
+    occurrence: number,
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
+  ): boolean {
+    const occurrenceIndex = this.deps.sharedRuntime.resumeArtifactOccurrenceIndex;
+    if (occurrenceIndex === undefined) {
+      return false;
+    }
+    const parentConfig = this.deps.getConfig();
+    const childWorkflow = this.resolveCallableChildWorkflow(step, resumeStackPrefix);
+    const namespace = buildWorkflowCallSiteIdentity({
+      stack: [
+        ...resumeStackPrefix,
+        buildWorkflowResumePointEntry(
+          parentConfig,
+          step.name,
+          'workflow_call',
+          occurrence,
+          this.deps.state.stepIterations,
+          occurrence,
+        ),
+      ],
+      childWorkflow,
+    }).runPathSegment;
+    return occurrenceIndex.hasArtifactNamespacePath([
+      ...(this.deps.getOptions().runPathNamespace ?? []),
+      'subworkflows',
+      namespace,
+    ]);
   }
 
-  private buildChildProviderRouting(
-    step: WorkflowCallStep,
-  ): WorkflowEngineOptions['providerRouting'] {
-    return applyWorkflowCallOverridesToProviderRouting(
-      this.deps.getOptions().providerRouting,
-      step.overrides,
-    );
+  private buildChildPersonaProviders(): WorkflowEngineOptions['personaProviders'] {
+    return this.deps.getOptions().personaProviders;
+  }
+
+  private buildChildProviderRouting(): WorkflowEngineOptions['providerRouting'] {
+    return this.deps.getOptions().providerRouting;
+  }
+
+  private buildChildProviderLadders(): WorkflowEngineOptions['providerLadders'] {
+    // Ladders come from runtime.yaml, not the workflow, so workflow_call overrides do not
+    // reshape them; the child inherits the same ladders so its steps reach the promotion seam
+    // with the stages the parent resolved (issue #1208).
+    return this.deps.getOptions().providerLadders;
   }
 
   private buildWorkflowCallResponse(
@@ -625,20 +634,35 @@ export class WorkflowCallRunner {
         parentConfig,
         step,
         new Error(`workflow_call step "${step.name}" could not resolve provider context`),
-        step.overrides === undefined ? ['call'] : ['overrides'],
+        ['call'],
       );
     }
-    const childProviderInfo = runtime.fallback
-      ? runtimeProviderInfo
+    // rate-limit fallback で provider が差し替わった場合、その provider は
+    // profile 由来ではないので格上げ先も引き継がない。
+    const childProviderModel: WorkflowCallProviderModel = runtime.fallback
+      ? {
+          provider: runtimeProviderInfo.provider,
+          providerSource: runtimeProviderInfo.providerSource,
+          model: runtimeProviderInfo.model,
+          modelSource: runtimeProviderInfo.modelSource,
+          permissionMode: runtimeProviderInfo.permissionMode,
+        }
       : this.resolveChildProviderModel(step, childWorkflow);
     const parentProviderContext = this.resolveParentWorkflowProviderContext();
+    const profileScopedOptions = this.deps.getOptions().providerOptionsProviderSource !== undefined;
+    const inheritedProviderOptions = runtime.fallback
+      ? runtimeProviderInfo.providerOptions
+      : !profileScopedOptions || childProviderModel.providerSource === parentProviderContext.providerSource
+        ? parentProviderContext.providerOptions
+        : undefined;
     const childResult = await this.executor.execute({
       step,
       preparedExecution,
-      childProviderInfo,
-      parentProviderOptions: parentProviderContext.providerOptions,
-      personaProviders: this.buildChildPersonaProviders(step),
-      providerRouting: this.buildChildProviderRouting(step),
+      childProviderInfo: childProviderModel,
+      parentProviderOptions: inheritedProviderOptions,
+      personaProviders: this.buildChildPersonaProviders(),
+      providerRouting: this.buildChildProviderRouting(),
+      providerLadders: this.buildChildProviderLadders(),
     }, {
       syncParentState,
     });

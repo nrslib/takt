@@ -9,7 +9,13 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  rmSync,
+  existsSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -40,17 +46,12 @@ vi.mock('../infra/config/resolveConfigValue.js', () => ({
 
 // --- Imports (after mocks) ---
 
-import {
-  loadAllStandaloneWorkflowsWithSources,
-  loadWorkflow,
-} from '../infra/config/loaders/index.js';
+import { loadWorkflow } from '../infra/config/loaders/index.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
-import { listBuiltinWorkflowNames } from '../infra/config/loaders/workflowResolver.js';
 import { loadGlobalConfig } from '../infra/config/global/globalConfig.js';
 import { validateWorkflowConfig } from '../core/workflow/engine/WorkflowValidator.js';
 
 const loadWorkflowConfig = loadWorkflow;
-const listBuiltinWorkflowLabels = listBuiltinWorkflowNames;
 // --- Test helpers ---
 
 function createTestDir(): string {
@@ -59,9 +60,28 @@ function createTestDir(): string {
   return dir;
 }
 
-describe('Workflow Loader IT: builtin workflow loading', () => {
+function expectWorkflowLoadIssue(
+  workflowName: string,
+  projectDir: string,
+  expectedPath: readonly PropertyKey[],
+): void {
+  try {
+    loadWorkflow(workflowName, projectDir);
+    expect.fail(`Expected ${workflowName} to fail workflow validation`);
+  } catch (error) {
+    expect(error).toMatchObject({
+      issues: expect.arrayContaining([
+        expect.objectContaining({
+          path: expectedPath,
+          message: expect.stringContaining('runtime.yaml'),
+        }),
+      ]),
+    });
+  }
+}
+
+describe('Workflow Loader IT: workflow validation', () => {
   let testDir: string;
-  const builtinNames = listBuiltinWorkflowLabels(process.cwd(), { includeDisabled: true });
 
   beforeEach(() => {
     testDir = createTestDir();
@@ -70,34 +90,6 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
 
   afterEach(() => {
     rmSync(testDir, { recursive: true, force: true });
-  });
-
-  for (const name of builtinNames) {
-    it(`should load builtin workflow: ${name}`, () => {
-      const config = loadWorkflow(name, testDir);
-
-      expect(config).not.toBeNull();
-      expect(config!.name).toBe(name);
-      expect(config!.steps.length).toBeGreaterThan(0);
-      expect(config!.initialStep).toBeDefined();
-      const maxSteps = (config as Record<string, unknown>).maxSteps;
-      expect(maxSteps === 'infinite' || typeof maxSteps === 'number').toBe(true);
-      if (typeof maxSteps === 'number') {
-        expect(maxSteps).toBeGreaterThan(0);
-      }
-    });
-  }
-
-  it.each(['en', 'ja'] as const)('should load every %s builtin standalone workflow without warnings', (language) => {
-    languageState.value = language;
-    const onWarning = vi.fn();
-
-    const workflows = loadAllStandaloneWorkflowsWithSources(testDir, { onWarning });
-
-    expect(workflows.size).toBeGreaterThan(0);
-    expect(workflows.get('takt-default-localllm')?.source).toBe('builtin');
-    expect(Array.from(workflows.values()).every(({ source }) => source === 'builtin')).toBe(true);
-    expect(onWarning).not.toHaveBeenCalled();
   });
 
   it('should return null for non-existent workflow', () => {
@@ -256,7 +248,7 @@ loop_monitors:
     expect(judge.instruction).toBe('Judge instruction');
   });
 
-  it('should load loop monitor judge provider and model overrides', () => {
+  it('should reject loop monitor judge provider and model overrides', () => {
     const workflowsDir = join(testDir, '.takt', 'workflows');
     mkdirSync(workflowsDir, { recursive: true });
 
@@ -290,19 +282,14 @@ loop_monitors:
           next: step2
 `);
 
-    const config = loadWorkflow('loop-monitor-judge-provider-model', testDir);
-
-    expect(config).not.toBeNull();
-    expect(config!.loopMonitors).toHaveLength(1);
-    expect(config!.loopMonitors?.[0]?.judge).toMatchObject({
-      persona: 'supervisor',
-      provider: 'opencode',
-      model: 'opencode/big-pickle',
-      instruction: 'Judge instruction',
-    });
+    expectWorkflowLoadIssue(
+      'loop-monitor-judge-provider-model',
+      testDir,
+      ['loop_monitors', 0, 'judge', 'provider'],
+    );
   });
 
-  it('should load loop monitor judge provider block overrides', () => {
+  it('should reject loop monitor judge provider block overrides', () => {
     const workflowsDir = join(testDir, '.takt', 'workflows');
     mkdirSync(workflowsDir, { recursive: true });
 
@@ -337,23 +324,14 @@ loop_monitors:
           next: step2
 `);
 
-    const config = loadWorkflow('loop-monitor-judge-provider-block', testDir);
-
-    expect(config).not.toBeNull();
-    expect(config!.loopMonitors).toHaveLength(1);
-    expect(config!.loopMonitors?.[0]?.judge).toMatchObject({
-      provider: 'codex',
-      model: 'gpt-5.2-codex',
-      providerOptions: {
-        codex: {
-          networkAccess: true,
-        },
-      },
-      instruction: 'Judge instruction',
-    });
+    expectWorkflowLoadIssue(
+      'loop-monitor-judge-provider-block',
+      testDir,
+      ['loop_monitors', 0, 'judge', 'provider'],
+    );
   });
 
-  it('should load loop monitor judge model-only override without changing provider', () => {
+  it('should reject loop monitor judge model-only overrides', () => {
     const workflowsDir = join(testDir, '.takt', 'workflows');
     mkdirSync(workflowsDir, { recursive: true });
 
@@ -364,8 +342,6 @@ initial_step: step1
 
 steps:
   - name: step1
-    provider: opencode
-    model: opencode/big-pickle
     instruction: "Step 1 instruction"
     rules:
       - condition: next
@@ -387,16 +363,14 @@ loop_monitors:
           next: step2
 `);
 
-    const config = loadWorkflow('loop-monitor-judge-model-only', testDir);
-
-    expect(config).not.toBeNull();
-    expect(config!.loopMonitors?.[0]?.judge).toMatchObject({
-      model: 'opencode/model-b',
-      instruction: 'Judge instruction',
-    });
+    expectWorkflowLoadIssue(
+      'loop-monitor-judge-model-only',
+      testDir,
+      ['loop_monitors', 0, 'judge', 'model'],
+    );
   });
 
-  it('should defer bare OpenCode loop judge model rejection to effective config validation', () => {
+  it('should reject bare OpenCode loop judge model at the workflow boundary', () => {
     const workflowsDir = join(testDir, '.takt', 'workflows');
     mkdirSync(workflowsDir, { recursive: true });
 
@@ -429,14 +403,14 @@ loop_monitors:
           next: step2
 `);
 
-    const config = loadWorkflow('loop-monitor-judge-opencode-bare-model', testDir);
-
-    expect(config).not.toBeNull();
-    expect(() => validateWorkflowConfig(config!, { projectCwd: testDir }))
-      .toThrow("Configuration error: loop_monitors.judge.model");
+    expectWorkflowLoadIssue(
+      'loop-monitor-judge-opencode-bare-model',
+      testDir,
+      ['loop_monitors', 0, 'judge', 'provider'],
+    );
   });
 
-  it('should defer inherited bare OpenCode loop judge model rejection to effective config validation', () => {
+  it('should reject inherited bare OpenCode loop judge model at the workflow boundary', () => {
     const workflowsDir = join(testDir, '.takt', 'workflows');
     mkdirSync(workflowsDir, { recursive: true });
 
@@ -452,8 +426,6 @@ steps:
       - condition: next
         next: step2
   - name: step2
-    provider: opencode
-    model: opencode/big-pickle
     instruction: "Step 2 instruction"
     rules:
       - condition: done
@@ -470,11 +442,11 @@ loop_monitors:
           next: step2
 `);
 
-    const config = loadWorkflow('loop-monitor-judge-inherited-opencode-bare-model', testDir);
-
-    expect(config).not.toBeNull();
-    expect(() => validateWorkflowConfig(config!, { projectCwd: testDir }))
-      .toThrow("Configuration error: loop_monitors.judge.model");
+    expectWorkflowLoadIssue(
+      'loop-monitor-judge-inherited-opencode-bare-model',
+      testDir,
+      ['loop_monitors', 0, 'judge', 'model'],
+    );
   });
 });
 

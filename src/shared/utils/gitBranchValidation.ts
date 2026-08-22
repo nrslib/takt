@@ -84,6 +84,12 @@ export function toPullRequestBaseRef(branch: string): string {
   return `refs/takt/pr-base/${branch}`;
 }
 
+/** Base branch tip materialized into an isolated clone whose origin remote is removed. */
+export function toCloneBaseRef(branch: string): string {
+  assertValidLocalBranchName(branch);
+  return `refs/takt/base/${branch}`;
+}
+
 function hasInvalidGitBranchCharacter(branch: string): boolean {
   for (const char of branch) {
     const code = char.charCodeAt(0);

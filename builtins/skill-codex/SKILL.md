@@ -81,7 +81,7 @@ $takt {workflow} [permission] {task...}
 
 YAML から以下を抽出する（→ references/yaml-schema.md 参照）:
 - `name`, `max_steps`, `initial_step`, `steps` 配列
-- `workflow_config`（ワークフロー全体の provider / runtime 等）
+- `workflow_config`（`runtime.prepare` などの process 準備。provider / model / options は runtime.yaml）
 - セクションマップ: `personas`, `policies`, `instructions`, `output_contracts`, `knowledge`
 
 ### 手順 2: セクションリソースの事前読み込み
@@ -91,6 +91,9 @@ YAML から以下を抽出する（→ references/yaml-schema.md 参照）:
 
 例: ワークフローが `~/.agents/skills/takt/workflows/default.yaml` にあり、`personas:` に `coder: ../facets/personas/coder.md` がある場合
 → 絶対パスは `~/.agents/skills/takt/facets/personas/coder.md`
+
+ファセット本文に `{{include:<kind>/<name>}}` がある場合は、同じ言語の `facets/partials/<kind>/<name>.md` を Read で取得し、参照先の include も再帰的に展開してからプロンプトへ結合する。
+参照先が存在しない場合、または include が循環する場合はエラーとして扱い、別言語の partial へフォールバックしない。
 
 重複を除いて Read で全て読み込む。読み込んだ内容はサブエージェントへのプロンプト構築に使う。
 

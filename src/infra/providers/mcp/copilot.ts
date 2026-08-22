@@ -17,7 +17,7 @@ import type {
   McpServerConfig,
 } from './types.js';
 import { isStdioServer } from './types.js';
-import { validateTransports, onceDispose, classifyMcpFailure } from './adapter.js';
+import { validateTransports, onceDispose, noopDispose, classifyMcpFailure } from './adapter.js';
 import { ensureCurrentTmpDirExists } from '../../../shared/utils/index.js';
 
 export function createCopilotMcpAdapter(): ProviderMcpAdapter {
@@ -30,7 +30,7 @@ export function createCopilotMcpAdapter(): ProviderMcpAdapter {
       context: ProviderMcpContext,
     ): Promise<PreparedProviderMcp> {
       if (!servers.enabled || Object.keys(servers.servers).length === 0) {
-        return { dispose: () => Promise.resolve(), args: [] };
+        return { dispose: noopDispose, args: [] };
       }
       // MCP tool approval must not contradict TAKT's permission mode
       // (order.md:220). A readonly execution must not enable MCP servers
@@ -83,6 +83,7 @@ function toCopilotServer(server: McpServerConfig): unknown {
     };
   }
   return {
+    type: server.type,
     url: server.url,
     ...(server.headers !== undefined ? { headers: server.headers } : {}),
   };

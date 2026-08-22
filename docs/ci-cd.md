@@ -70,7 +70,7 @@ In pipeline mode, PRs are **not** created unless `--auto-pr` is explicitly speci
 | `--skip-git` | Skip branch creation, commit, and push (pipeline mode, workflow-only) |
 | `--repo <owner/repo>` | Specify repository (for PR creation) |
 | `-q, --quiet` | Minimal output mode: suppress AI output (for CI) |
-| `--provider <name>` | Override agent provider (claude\|claude-sdk\|claude-terminal\|codex\|opencode\|cursor\|copilot\|kiro\|mock) |
+| `--provider <name>` | Override agent provider (claude\|claude-sdk\|claude-terminal\|codex\|opencode\|deepseek-harness\|cursor\|copilot\|kiro\|pi\|mock) |
 | `--model <name>` | Override agent model |
 | `--auto-strategy <strategy>` | Auto routing strategy (cost\|balanced\|performance) |
 
@@ -173,7 +173,7 @@ This approach works with any CI system that supports Node.js, including GitLab C
 
 ## Environment Variables
 
-For authentication in CI environments, set the appropriate API key environment variable. These use TAKT-specific prefixes to avoid conflicts with other tools.
+For authentication in CI environments, set the appropriate API key environment variable where applicable. These use TAKT-specific prefixes to avoid conflicts with other tools, except where an official provider-native name is required. The official DeepSeek Harness SDK uses `DEEPSEEK_API_KEY` and `DEEPSEEK_BASE_URL`.
 
 ```bash
 # For Claude (Anthropic)
@@ -184,6 +184,13 @@ export TAKT_OPENAI_API_KEY=sk-...
 
 # For OpenCode
 export TAKT_OPENCODE_API_KEY=...
+
+# For Pi
+# Use the Pi SDK credential store or provider-native environment variables
+
+# For the official DeepSeek Harness SDK (Python 3.10+; official names are a prefix exception)
+export DEEPSEEK_API_KEY=...
+# Optional: export DEEPSEEK_BASE_URL=https://...
 
 # For Cursor Agent (optional if cursor-agent login session exists)
 export TAKT_CURSOR_API_KEY=...
@@ -197,7 +204,7 @@ export TAKT_KIRO_API_KEY=...
 
 Priority: Environment variables take precedence over `config.yaml` settings.
 
-> **Note**: If you set an API key via environment variable, installing the corresponding CLI for SDK providers (Claude SDK, Codex, OpenCode) is not necessary. TAKT directly calls the respective API. Cursor, Copilot, and Kiro require their CLIs to be installed.
+> **Note**: If you set credentials for an SDK provider (Claude SDK, Codex, OpenCode, or Pi), installing its CLI is not necessary. TAKT directly calls the respective API. `deepseek-harness` additionally requires Python 3.10+, the matching `deepseek-harness-sdk`/`deepseek-harness-runtime-bin` packages, and Linux x64/arm64 or macOS arm64. Windows and macOS x64 are unsupported. Cursor, Copilot, and Kiro require their CLIs to be installed.
 
 ## Cost Considerations
 

@@ -10,7 +10,6 @@ import type { PermissionMode, McpServerConfig } from '../../core/models/index.js
 import type { ClaudeEffort } from '../../core/models/workflow-types.js';
 import type { AgentErrorKind, ProviderUsageSnapshot, RateLimitInfo } from '../../core/models/response.js';
 import type { ProviderImageAttachment } from '../providers/types.js';
-import type { InternalAgentIsolation } from '../../shared/types/provider.js';
 import type {
   StreamEvent as SharedStreamEvent,
   StreamCallback as SharedStreamCallback,
@@ -24,6 +23,8 @@ import type {
   StreamErrorEventData as SharedErrorEventData,
   StreamAssistantErrorEventData as SharedAssistantErrorEventData,
   StreamRateLimitEventData as SharedRateLimitEventData,
+  InternalAgentIsolation,
+  ProviderActivityCallback,
 } from '../../shared/types/provider.js';
 
 export type { SandboxSettings };
@@ -121,6 +122,7 @@ export interface ClaudeCallOptions {
   permissionMode?: PermissionMode;
   /** Enable streaming mode with callback for real-time output */
   onStream?: StreamCallback;
+  onActivity?: ProviderActivityCallback;
   /** Custom permission handler for interactive permission prompts */
   onPermissionRequest?: PermissionHandler;
   /** Custom handler for AskUserQuestion tool */
@@ -164,6 +166,7 @@ export interface ClaudeSpawnOptions {
   systemPrompt?: string;
   /** Enable streaming mode with callback */
   onStream?: StreamCallback;
+  onActivity?: ProviderActivityCallback;
   /** Custom agents to register */
   agents?: Record<string, AgentDefinition>;
   /** Permission mode for tool execution (TAKT abstract value, mapped to SDK value in SdkOptionsBuilder) */

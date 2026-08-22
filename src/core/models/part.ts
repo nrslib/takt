@@ -10,67 +10,12 @@ export interface PartDefinition {
   title: string;
   /** Instruction passed to the part agent */
   instruction: string;
-  /** Finding Contract assignment for finding_contract_fix Team Leader parts. */
-  findingContract?: FindingContractPartAssignment;
 }
-
-export type TeamLeaderMode = 'finding_contract_fix';
-
-export interface FindingContractPartAssignment {
-  findingIds: string[];
-  role: 'diagnose' | 'repair' | 'verify';
-  readPaths: string[];
-}
-
-export interface FindingContractFindingOutcome {
-  findingId: string;
-  outcome: 'addressed' | 'disputed' | 'blocked';
-  evidence: string[];
-}
-
-export interface FindingContractPartCompletionClaim {
-  /** Untrusted worker claim; it does not update the finding ledger. */
-  findingOutcomes: FindingContractFindingOutcome[];
-  changedPaths: string[];
-  checks: Array<{
-    command: string;
-    status: 'passed' | 'failed' | 'not_run';
-  }>;
-  summary: string;
-}
-
-export interface FindingContractFixCoverage {
-  findingId: string;
-  disposition: 'addressed' | 'disputed';
-  supportingPartIds: string[];
-  verificationPartIds: string[];
-}
-
-export type FindingContractTeamLeaderDecision =
-  | {
-      decision: 'continue';
-      reasoning: string;
-      parts: PartDefinition[];
-    }
-  | {
-      decision: 'complete';
-      reasoning: string;
-      parts: [];
-      fixCoverage: FindingContractFixCoverage[];
-    }
-  | {
-      decision: 'replan';
-      reasoning: string;
-      parts: [];
-      blockers: string[];
-    };
 
 /** Result of a single part execution */
 export interface PartResult {
   part: PartDefinition;
   response: AgentResponse;
-  /** Validated Finding Contract claim. Present only after completion recovery accepts the output. */
-  findingContractClaim?: FindingContractPartCompletionClaim;
   providerInfo?: {
     provider: ProviderType | undefined;
     model: string | undefined;
@@ -80,8 +25,6 @@ export interface PartResult {
 
 /** team_leader config on a step */
 export interface TeamLeaderConfig {
-  /** Specialized execution contract. Omitted for the generic Team Leader flow. */
-  mode?: TeamLeaderMode;
   /** Persona reference for the team leader agent */
   persona?: string;
   /** Resolved absolute path for team leader persona */
@@ -98,7 +41,7 @@ export interface TeamLeaderConfig {
   failOnPartError?: boolean;
   /** Default timeout for parts in milliseconds */
   timeoutMs: number;
-  /** Read-only inspection tools for the parent decomposition call */
+  /** Read-only inspection tools for the parent decomposition and feedback calls */
   inspectTools?: string[];
   /** Persona reference for part agents */
   partPersona?: string;

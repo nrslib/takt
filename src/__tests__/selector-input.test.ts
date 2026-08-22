@@ -1,84 +1,99 @@
-import { describe, expect, it } from 'vitest';
-import type {
-  DynamicParallelPoolSubStep,
-  DynamicParallelSelectionSnapshot,
-} from '../core/models/types.js';
-import { buildDynamicSelectorInstruction } from '../core/workflow/dynamic-parallel/selector-input.js';
+import { afterEach, describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { buildRunPaths } from '../core/workflow/run/run-paths.js';
+import { buildResumeReportConsumerKey } from '../core/workflow/run/resume-report-consumer.js';
+import { inheritResumeReportSnapshot } from '../core/workflow/run/resume-report-snapshot.js';
+import { resolveSelectorReportNames } from '../core/workflow/dynamic-parallel/selector-input.js';
 
-const SELECTION_HISTORY_SENTINEL = 'prior-selection-history-sentinel';
+const temporaryDirectories: string[] = [];
 
-const pool: DynamicParallelPoolSubStep[] = [
-  {
-    name: 'frontend',
-    description: 'Review React and UI changes',
-    personaDisplayName: 'frontend',
-    instruction: 'Review frontend',
-    rules: [{ condition: 'approved' }],
-  },
-  {
-    name: 'backend',
-    description: 'Review API and persistence changes',
-    personaDisplayName: 'backend',
-    instruction: 'Review backend',
-    rules: [{ condition: 'approved' }],
-  },
-];
+afterEach(() => {
+  for (const directory of temporaryDirectories.splice(0)) {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
-const previousSnapshot: DynamicParallelSelectionSnapshot = {
-  identity: 'workflow:reviewers',
-  step_name: 'reviewers',
-  round: 1,
-  selected_pool_ids: [SELECTION_HISTORY_SENTINEL],
-  effective_selection_ids: ['architecture', 'frontend'],
-};
+describe('resolveSelectorReportNames', () => {
+  it('should resolve a missing child report from the parent workflow scope', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-selector-parent-report-'));
+    temporaryDirectories.push(cwd);
+    const reportsRootDirectory = buildRunPaths(cwd, 'run-1').reportsRootAbs;
+    const reportDirectory = join(reportsRootDirectory, 'subworkflows', 'child');
+    mkdirSync(reportDirectory, { recursive: true });
+    const parentReport = join(reportsRootDirectory, 'review-resolution.md');
+    writeFileSync(parentReport, 'parent report');
 
-describe('buildDynamicSelectorInstruction', () => {
-  it('should include every required initial-entry value and only pool candidates', () => {
-    const instruction = buildDynamicSelectorInstruction({
-      task: 'Implement checkout UI',
-      reports: 'architecture report',
-      workingTreeDiff: 'diff --git a/ui.tsx b/ui.tsx',
-      pool,
-      selection: { mode: 'replace' },
-    });
-
-    expect(instruction).toContain('Implement checkout UI');
-    expect(instruction).toContain('architecture report');
-    expect(instruction).toContain('diff --git a/ui.tsx b/ui.tsx');
-    expect(instruction).toContain('frontend: Review React and UI changes');
-    expect(instruction).toContain('backend: Review API and persistence changes');
+    expect(resolveSelectorReportNames({
+      reportDirectory,
+      reportsRootDirectory,
+      reportNames: ['review-resolution.md'],
+      stepName: 'child-review',
+      workflowReference: 'child-workflow',
+      workflowCallPath: [],
+    })).toEqual([parentReport]);
   });
 
-  it('should include fresh required values without selection history on replace re-entry', () => {
-    const instruction = buildDynamicSelectorInstruction({
-      task: 'Fix API validation',
-      reports: 'latest backend report',
-      workingTreeDiff: 'diff --git a/api.ts b/api.ts',
-      pool,
-      selection: { mode: 'replace' },
-      previousSnapshot,
+  it('should resolve a resumed report through the exact consumer snapshot mapping', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-selector-resume-report-'));
+    temporaryDirectories.push(cwd);
+    const sourceReportsRoot = buildRunPaths(cwd, 'source-run').reportsRootAbs;
+    const snapshotReport = join(
+      sourceReportsRoot,
+      'subworkflows',
+      'old-peer',
+      'review-resolution.md',
+    );
+    mkdirSync(join(sourceReportsRoot, 'subworkflows', 'old-peer'), { recursive: true });
+    writeFileSync(snapshotReport, 'resumed report');
+    const consumerKey = buildResumeReportConsumerKey('review-gate', 'final-gate', []);
+    inheritResumeReportSnapshot({
+      cwd,
+      sourceRunSlug: 'source-run',
+      targetRunSlug: 'target-run',
+      resumeReportConsumers: [{
+        consumerKey,
+        reportDirectories: ['subworkflows/old-peer'],
+        references: [{
+          reference: 'review-resolution.md',
+          path: 'subworkflows/old-peer/review-resolution.md',
+        }],
+      }],
     });
+    const reportsRootDirectory = buildRunPaths(cwd, 'target-run').reportsRootAbs;
+    const reportDirectory = join(reportsRootDirectory, 'subworkflows', 'new-peer');
+    mkdirSync(reportDirectory, { recursive: true });
 
-    expect(instruction).toContain('Fix API validation');
-    expect(instruction).toContain('latest backend report');
-    expect(instruction).toContain('diff --git a/api.ts b/api.ts');
-    expect(instruction).not.toContain(SELECTION_HISTORY_SENTINEL);
+    expect(resolveSelectorReportNames({
+      reportDirectory,
+      reportsRootDirectory,
+      reportNames: ['review-resolution.md'],
+      stepName: 'final-gate',
+      workflowReference: 'review-gate',
+      workflowCallPath: [],
+    })).toEqual([join(
+      reportsRootDirectory,
+      'subworkflows',
+      'old-peer',
+      'review-resolution.md',
+    )]);
   });
 
-  it('should include previous pool IDs and every required value on cumulative re-entry', () => {
-    const instruction = buildDynamicSelectorInstruction({
-      task: 'Re-review checkout',
-      reports: 'frontend approved',
-      workingTreeDiff: 'diff --git a/server.ts b/server.ts',
-      pool,
-      selection: { mode: 'cumulative' },
-      previousSnapshot,
-    });
+  it('should exclude unresolved report references', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-selector-unresolved-report-'));
+    temporaryDirectories.push(cwd);
+    const reportsRootDirectory = buildRunPaths(cwd, 'run-1').reportsRootAbs;
+    const reportDirectory = join(reportsRootDirectory, 'subworkflows', 'child');
+    mkdirSync(reportDirectory, { recursive: true });
 
-    expect(instruction).toContain('Re-review checkout');
-    expect(instruction).toContain('frontend approved');
-    expect(instruction).toContain('diff --git a/server.ts b/server.ts');
-    expect(instruction).toContain(SELECTION_HISTORY_SENTINEL);
-    expect(instruction).toContain('backend: Review API and persistence changes');
+    expect(resolveSelectorReportNames({
+      reportDirectory,
+      reportsRootDirectory,
+      reportNames: ['review-resolution.md'],
+      stepName: 'child-review',
+      workflowReference: 'child-workflow',
+      workflowCallPath: [],
+    })).toEqual([]);
   });
 });

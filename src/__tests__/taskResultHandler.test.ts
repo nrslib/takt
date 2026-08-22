@@ -59,8 +59,7 @@ describe('persistExceededTaskResult', () => {
     const { tasks } = loadTasksFile(testDir);
     const row = tasks[0]!;
     expect(row.status).toBe('exceeded');
-    expect(row.start_movement).toBe('reviewers');
-    expect(row.start_step).toBeUndefined();
+    expect(row.start_step).toBe('reviewers');
     expect(row.exceeded_max_steps).toBe(60);
     expect(row.exceeded_current_iteration).toBe(30);
     expect(mockInfo).toHaveBeenCalledWith(
@@ -78,7 +77,7 @@ describe('persistExceededTaskResult', () => {
       task,
       runResult: {
         success: false,
-        reason: 'NEEDS_ADJUDICATION: finding invariant failed',
+        reason: 'REVIEW_FAILED: report validation failed',
         lastStep: 'reviewers',
         lastMessage: 'Provider failed with api_key=task-result-secret',
       },
@@ -93,7 +92,7 @@ describe('persistExceededTaskResult', () => {
       status: 'failed',
       failure: {
         step: 'reviewers',
-        error: 'NEEDS_ADJUDICATION: finding invariant failed',
+        error: 'REVIEW_FAILED: report validation failed',
         last_message: 'Provider failed with api_key=[REDACTED]',
       },
     });

@@ -43,7 +43,11 @@ async function assertClipboardImageWithinLimit(filePath: string): Promise<void> 
   }
 }
 
-async function execClipboardCommand(file: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+async function execClipboardCommand(
+  file: string,
+  args: string[],
+  abortSignal?: AbortSignal,
+): Promise<{ stdout: string; stderr: string }> {
   if (!childProcess.execFile) {
     throw new Error('node:child_process.execFile is required to read clipboard images.');
   }
@@ -51,16 +55,17 @@ async function execClipboardCommand(file: string, args: string[]): Promise<{ std
   const execFileAsync = promisify(childProcess.execFile) as (
     command: string,
     commandArgs: string[],
-    options: { timeout: number; maxBuffer: number },
+    options: { timeout: number; maxBuffer: number; signal?: AbortSignal },
   ) => Promise<{ stdout: string; stderr: string }>;
 
   return execFileAsync(file, args, {
     timeout: CLIPBOARD_COMMAND_TIMEOUT_MS,
     maxBuffer: CLIPBOARD_COMMAND_MAX_BUFFER,
+    ...(abortSignal ? { signal: abortSignal } : {}),
   });
 }
 
-async function readMacOSClipboardImage(): Promise<PastedImage> {
+async function readMacOSClipboardImage(abortSignal?: AbortSignal): Promise<PastedImage> {
   const tempDir = await mkdtemp(path.join(ensureCurrentTmpDirExists(), 'takt-clipboard-image-'));
   const pngPath = path.join(tempDir, 'clipboard.png');
   const tiffPath = path.join(tempDir, 'clipboard.tiff');
@@ -73,7 +78,7 @@ async function readMacOSClipboardImage(): Promise<PastedImage> {
       MACOS_CLIPBOARD_IMAGE_SCRIPT,
       pngPath,
       tiffPath,
-    ]);
+    ], abortSignal);
 
     if (stdout.trim() === 'tiff') {
       await execClipboardCommand('sips', [
@@ -83,7 +88,7 @@ async function readMacOSClipboardImage(): Promise<PastedImage> {
         tiffPath,
         '--out',
         pngPath,
-      ]);
+      ], abortSignal);
     }
 
     await assertClipboardImageWithinLimit(pngPath);
@@ -96,10 +101,11 @@ async function readMacOSClipboardImage(): Promise<PastedImage> {
   }
 }
 
-export async function readClipboardImage(): Promise<PastedImage> {
+/** `abortSignal` terminates the clipboard subprocess; the temp dir is removed either way. */
+export async function readClipboardImage(abortSignal?: AbortSignal): Promise<PastedImage> {
   if (process.platform !== 'darwin') {
     throw new Error('Clipboard image paste is currently supported only on macOS.');
   }
 
-  return readMacOSClipboardImage();
+  return readMacOSClipboardImage(abortSignal);
 }

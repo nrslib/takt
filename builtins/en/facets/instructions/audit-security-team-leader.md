@@ -1,5 +1,7 @@
 Decompose the security audit task, assign files to each part, and execute in parallel.
 
+{{include:instructions/security-knowledge-routing}}
+
 **Important:** Refer to the plan report: {report:01-plan.md}
 
 **What to do:**

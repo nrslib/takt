@@ -2,7 +2,6 @@ import type { ProviderType } from '../../shared/types/provider.js';
 import type {
   CanonicalWorkflowResumeFrame,
 } from '../../shared/types/workflow-resume.js';
-import type { AutoRoutingConfig } from './config-types.js';
 import type { PermissionMode } from './status.js';
 import type { AgentResponse } from './response.js';
 import type { InteractiveMode } from './interactive-mode.js';
@@ -10,7 +9,6 @@ import type { TeamLeaderConfig } from './part.js';
 import type {
   McpServerConfig,
   StepProviderOptions,
-  WorkflowCallOverrides,
   WorkflowRuntimeConfig,
   WorkflowStepKind,
 } from './workflow-provider-options.js';
@@ -18,12 +16,12 @@ import type {
   WorkflowEffect,
   WorkflowSystemInput,
 } from './workflow-system-input-types.js';
-import type {
-  FindingContractConfig,
-  FindingManagerAuthority,
-  FindingsRuleContext,
-} from './finding-types.js';
 import type { WorkflowRuleCondition } from './workflow-rule-condition.js';
+import type {
+  CompanionSelection,
+  CompanionWorkflowState,
+  ResolvedCompanionDefinition,
+} from './companion-types.js';
 
 export const WORKFLOW_SESSION_MODES = ['continue', 'refresh', 'compact'] as const;
 export type WorkflowSessionMode = typeof WORKFLOW_SESSION_MODES[number];
@@ -39,7 +37,6 @@ export type {
   WorkflowEffectScalarReference,
 } from './workflow-system-input-types.js';
 export type { WorkflowResumeFrameKind } from '../../shared/types/workflow-resume.js';
-export type { FindingContractConfig, FindingLedger, FindingsRuleContext } from './finding-types.js';
 export {
   normalizeWorkflowPrListWhere,
   workflowPrListWhereEquals,
@@ -54,24 +51,25 @@ export type {
   ClaudeEffort,
   CopilotEffort,
   ClaudeSandboxSettings,
+  ProviderGuardOptions,
   CodexProviderOptions,
+  CodexPermissionControl,
   OpenCodeGuardOptions,
   OpenCodeGuardProfile,
   OpenCodeProviderOptions,
   ClaudeProviderOptions,
   ClaudeTerminalProviderOptions,
+  CursorProviderOptions,
   CopilotProviderOptions,
   KiroProviderOptions,
+  DeepSeekHarnessProviderOptions,
+  PiProviderOptions,
   StepProviderOptions,
   WorkflowStepKind,
-  WorkflowCallOverrides,
 } from './workflow-provider-options.js';
 export {
   RUNTIME_PREPARE_PRESETS,
   OPENCODE_GUARD_PROFILES,
-  CODEX_REASONING_EFFORT_VALUES,
-  CLAUDE_EFFORT_VALUES,
-  COPILOT_EFFORT_VALUES,
   isRuntimePreparePreset,
 } from './workflow-provider-options.js';
 
@@ -82,6 +80,12 @@ export interface WorkflowRule {
   appendix?: string;
   requiresUserInput?: boolean;
   interactiveOnly?: boolean;
+}
+
+export interface WorkflowWideRule {
+  readonly ref: string;
+  readonly position: 'after_execution_rules' | 'before_instruction';
+  readonly content: string;
 }
 
 export type WorkflowMaxSteps = number | 'infinite';
@@ -107,11 +111,7 @@ export interface WorkflowStructuredOutput {
 export interface OutputContractItem {
   name: string;
   format: string;
-  /**
-   * 解決前の format 参照名（facet ref）。`format` は facet 本文へ解決済みの
-   * テキストになるため、"*-finding-contract" 命名規約を検証したい呼び出し元
-   * （WorkflowValidator の fail-fast チェックなど）はこちらを見る。
-   */
+  /** 解決前の format 参照名（facet ref）。 */
   formatRef?: string;
   useJudge?: boolean;
   order?: string;
@@ -129,15 +129,20 @@ export interface CommandQualityGate {
 
 export type QualityGate = string | CommandQualityGate;
 
-export type WorkflowParamType = 'facet_ref' | 'facet_ref[]' | 'workflow_ref';
+export type WorkflowParamType =
+  | 'facet_ref'
+  | 'facet_ref[]'
+  | 'workflow_ref'
+  | 'facet_pool_ref'
+  | 'companion_ref[]';
 export type WorkflowParamFacetKind = 'knowledge' | 'policy' | 'instruction' | 'persona' | 'report_format';
-export type WorkflowCallArgValue = string | string[];
+export type WorkflowCallArgValue = string | string[] | CompanionSelection;
 export type WorkflowCallVariableValue = string | number | boolean;
 
 interface WorkflowFacetSubworkflowParamConfig {
   type: 'facet_ref' | 'facet_ref[]';
   facetKind: WorkflowParamFacetKind;
-  default?: WorkflowCallArgValue;
+  default?: string | string[];
 }
 
 interface WorkflowReferenceSubworkflowParamConfig {
@@ -145,14 +150,25 @@ interface WorkflowReferenceSubworkflowParamConfig {
   default?: string;
 }
 
+interface WorkflowFacetPoolSubworkflowParamConfig {
+  type: 'facet_pool_ref';
+  default?: string;
+}
+
+interface WorkflowCompanionSubworkflowParamConfig {
+  type: 'companion_ref[]';
+  default?: string[] | CompanionSelection;
+}
+
 export type WorkflowSubworkflowParamConfig =
   | WorkflowFacetSubworkflowParamConfig
-  | WorkflowReferenceSubworkflowParamConfig;
+  | WorkflowReferenceSubworkflowParamConfig
+  | WorkflowFacetPoolSubworkflowParamConfig
+  | WorkflowCompanionSubworkflowParamConfig;
 
 export interface WorkflowSubworkflowConfig {
   callable?: boolean;
   visibility?: 'internal';
-  requiresFindingContract?: true;
   returns?: string[];
   params?: Record<string, WorkflowSubworkflowParamConfig>;
 }
@@ -180,8 +196,6 @@ export interface WorkflowResumePoint {
   stack: WorkflowResumePointEntry[];
   iteration: number;
   elapsed_ms: number;
-  dynamic_parallel_selections?: Record<string, DynamicParallelSelectionSnapshot>;
-  dynamic_facet_selections?: Record<string, DynamicFacetSelectionSnapshot>;
   workflow_call_invocations: Record<string, WorkflowCallInvocationRecord>;
   workflow_step_participations: Record<string, WorkflowStepParticipationRecord>;
 }
@@ -225,7 +239,22 @@ export interface ResolvedFacetPool {
 
 export interface DynamicFacetsConfig {
   readonly pool: string;
-  readonly maxSelected: number;
+  readonly maxSelected?: number;
+  readonly selector?: SelectorGuidance;
+}
+
+export interface SelectorGuidance {
+  readonly persona?: string;
+  readonly personaPath?: string;
+  readonly instruction: string;
+}
+
+export const MAX_COMPLETION_RETRY = 4;
+
+export interface CompletionRetryConfig {
+  readonly minRetry: number;
+  readonly maxRetry: number;
+  readonly retryInstruction: string;
 }
 
 export interface DynamicFacetSelectionSnapshot {
@@ -239,13 +268,7 @@ export interface DynamicFacetSelectionSnapshot {
 }
 
 export interface WorkflowPromotionEntry {
-  at?: number;
-  condition?: string;
-  aiConditionText?: string;
-  provider?: ProviderType;
-  providerSpecified?: boolean;
-  model?: string;
-  providerOptions?: StepProviderOptions;
+  at: number;
 }
 
 interface WorkflowStepBase {
@@ -255,20 +278,31 @@ interface WorkflowStepBase {
   providerRoutingPersonaKey?: string;
   tags?: string[];
   instruction: string;
+  /** Loader-preserved instruction reference or inline declaration before facet resolution. */
+  instructionRef?: string | string[];
   delayBeforeMs?: number;
   rules?: WorkflowRule[];
   passPreviousResponse?: boolean;
   /** Internal-only marker for Team Leader planning steps that need lossless state output. */
   preserveFullPreviousResponse?: true;
   /**
-   * Set only by the engine when it synthesizes a step (e.g. the
-   * finding-conflict-adjudication step injected into config.steps). Never
-   * settable from workflow YAML (the raw schema has no such field), which is
-   * how WorkflowValidator distinguishes a user-authored step that squats on a
-   * reserved synthetic name (configuration error) from the engine's own
-   * injection (allowed).
+   * Set only by the engine when it synthesizes an internal step, such as a
+   * loop-monitor judge. Never settable from workflow YAML because the raw
+   * schema has no such field.
    */
   engineSynthesized?: true;
+  /** Engine-owned provider identity. Workflow YAML cannot set these fields. */
+  provider?: ProviderType;
+  providerSpecified?: boolean;
+  model?: string;
+  modelSpecified?: boolean;
+  providerOptions?: StepProviderOptions;
+  /** Engine-owned agent whose Phase 1 must use the shared fresh-session transport. */
+  internalFreshSession?: true;
+  /** Runtime-profile options tied to this synthesized step's direct provider identity. */
+  internalProviderOptions?: StepProviderOptions;
+  /** Runtime-profile permission tied to this synthesized step's direct provider identity. */
+  internalPermissionMode?: PermissionMode;
 }
 
 interface AgentWorkflowStepBase extends WorkflowStepBase {
@@ -283,15 +317,9 @@ interface AgentWorkflowStepBase extends WorkflowStepBase {
   allowGitCommit?: boolean;
   mcpServers?: Record<string, McpServerConfig>;
   personaPath?: string;
-  provider?: ProviderType;
-  providerSpecified?: boolean;
-  model?: string;
-  modelSpecified?: boolean;
   promotion?: WorkflowPromotionEntry[];
   requiredPermissionMode?: PermissionMode;
-  providerOptions?: StepProviderOptions;
-  directProviderOptions?: StepProviderOptions;
-  workflowProviderOptions?: StepProviderOptions;
+  capabilityProviderOptions?: StepProviderOptions;
   edit?: boolean;
   qualityGates?: QualityGate[];
   structuredOutput?: WorkflowStructuredOutput;
@@ -304,6 +332,7 @@ interface AgentWorkflowStepBase extends WorkflowStepBase {
   teamLeader?: TeamLeaderConfig;
   policyContents?: readonly ResolvedFacetContent[];
   knowledgeContents?: readonly ResolvedFacetContent[];
+  completionRetry?: CompletionRetryConfig;
 }
 
 export interface NormalAgentWorkflowStep extends AgentWorkflowStepBase {
@@ -313,6 +342,7 @@ export interface NormalAgentWorkflowStep extends AgentWorkflowStepBase {
   arpeggio?: never;
   teamLeader?: never;
   dynamicFacets?: DynamicFacetsConfig;
+  companion?: CompanionSelection;
 }
 
 export interface ParallelWorkflowStep extends AgentWorkflowStepBase {
@@ -336,7 +366,11 @@ export interface DynamicParallelSubSteps {
   readonly kind: 'dynamic';
   readonly fixed: readonly DynamicParallelFixedSubStep[];
   readonly pool: readonly DynamicParallelPoolSubStep[];
-  readonly selection: { readonly mode: DynamicParallelSelectionMode };
+  readonly selection: {
+    readonly mode: DynamicParallelSelectionMode;
+    readonly reports?: readonly string[];
+    readonly selector?: SelectorGuidance;
+  };
 }
 
 export type ParallelSubSteps = WorkflowStep[] | DynamicParallelSubSteps;
@@ -368,7 +402,8 @@ export interface TeamLeaderWorkflowStep extends AgentWorkflowStepBase {
   concurrency?: never;
   arpeggio?: never;
   teamLeader: TeamLeaderConfig;
-  dynamicFacets?: never;
+  dynamicFacets?: DynamicFacetsConfig;
+  companion?: CompanionSelection;
 }
 
 export type AgentWorkflowStep =
@@ -376,6 +411,8 @@ export type AgentWorkflowStep =
   | ParallelWorkflowStep
   | ArpeggioWorkflowStep
   | TeamLeaderWorkflowStep;
+
+export type NormalOrTeamLeaderWorkflowStep = NormalAgentWorkflowStep | TeamLeaderWorkflowStep;
 
 export interface SystemWorkflowStep extends WorkflowStepBase {
   kind: 'system';
@@ -408,6 +445,7 @@ export interface SystemWorkflowStep extends WorkflowStepBase {
   teamLeader?: never;
   policyContents?: never;
   knowledgeContents?: never;
+  completionRetry?: never;
 }
 
 export interface WorkflowCallStep extends WorkflowStepBase {
@@ -416,9 +454,7 @@ export interface WorkflowCallStep extends WorkflowStepBase {
   mode?: never;
   call: string;
   vars?: Record<string, WorkflowCallVariableValue>;
-  overrides?: WorkflowCallOverrides;
   args?: Record<string, WorkflowCallArgValue>;
-  findingContractAuthority?: Exclude<FindingManagerAuthority, 'standard'>;
   sessionKey?: never;
   requiresUserInput?: never;
   persona?: never;
@@ -444,6 +480,7 @@ export interface WorkflowCallStep extends WorkflowStepBase {
   teamLeader?: never;
   policyContents?: never;
   knowledgeContents?: never;
+  completionRetry?: never;
 }
 
 export type WorkflowStep = AgentWorkflowStep | SystemWorkflowStep | WorkflowCallStep;
@@ -455,6 +492,12 @@ export function isNormalAgentWorkflowStep(step: WorkflowStep): step is NormalAge
     && step.arpeggio === undefined
     && step.teamLeader === undefined
   );
+}
+
+export function isNormalOrTeamLeaderWorkflowStep(
+  step: WorkflowStep,
+): step is NormalOrTeamLeaderWorkflowStep {
+  return isNormalAgentWorkflowStep(step) || step.teamLeader !== undefined;
 }
 
 export interface ArpeggioMergeStepConfig {
@@ -487,13 +530,8 @@ export interface LoopMonitorRule {
 }
 
 export interface LoopMonitorJudge {
-  sessionKey?: string;
   persona?: string;
   personaPath?: string;
-  provider?: ProviderType;
-  model?: string;
-  modelSpecified?: boolean;
-  providerOptions?: StepProviderOptions;
   instruction?: string;
   rules: LoopMonitorRule[];
 }
@@ -509,19 +547,14 @@ export interface WorkflowConfig {
   name: string;
   description?: string;
   subworkflow?: WorkflowSubworkflowConfig;
-  findingContract?: FindingContractConfig;
   schemas?: Record<string, string>;
-  provider?: ProviderType;
-  model?: string;
-  providerOptions?: StepProviderOptions;
-  autoRouting?: AutoRoutingConfig;
-  rateLimitFallback?: RateLimitFallbackConfig;
   runtime?: WorkflowRuntimeConfig;
   personas?: Record<string, string>;
   policies?: Record<string, string>;
   knowledge?: Record<string, string>;
   instructions?: Record<string, string>;
   reportFormats?: Record<string, string>;
+  allStepsRules?: readonly WorkflowWideRule[];
   steps: WorkflowStep[];
   initialStep: string;
   maxSteps: WorkflowMaxSteps;
@@ -529,6 +562,7 @@ export interface WorkflowConfig {
   loopMonitors?: LoopMonitorConfig[];
   interactiveMode?: InteractiveMode;
   facetPools?: Record<string, ResolvedFacetPool>;
+  companions?: Record<string, ResolvedCompanionDefinition>;
 }
 
 export interface RateLimitFallbackProvider {
@@ -540,9 +574,7 @@ export interface RateLimitFallbackConfig {
   switchChain: RateLimitFallbackProvider[];
 }
 
-export type FallbackOperationStage =
-  | 'reviewer'
-  | 'finding_intake_normalizer';
+export type FallbackOperationStage = 'reviewer';
 
 export interface FallbackOperationOrigin {
   readonly stage: FallbackOperationStage;
@@ -570,16 +602,8 @@ export interface RateLimitFallbackState {
 export interface WorkflowState {
   workflowName: string;
   currentStep: string;
-  /**
-   * Name of the step the state machine advanced FROM into currentStep
-   * (updated in WorkflowRunLoop's advanceActiveStep). Used by the
-   * finding-conflict-adjudication synthetic step to resolve its dynamic
-   * return-to-origin transition; undefined at workflow start and after a
-   * resume that begins directly at a step.
-   */
-  previousStep?: string;
   iteration: number;
-  findings?: FindingsRuleContext;
+  companion?: CompanionWorkflowState;
   stepOutputs: Map<string, AgentResponse>;
   structuredOutputs: Map<string, Record<string, unknown>>;
   systemContexts: Map<string, Record<string, unknown>>;
@@ -591,10 +615,8 @@ export interface WorkflowState {
   stepIterations: Map<string, number>;
   restoredStepIterationNames: Set<string>;
   dynamicParallelSelections: Map<string, DynamicParallelSelectionSnapshot>;
-  resumedDynamicParallelSteps: Set<string>;
   activeDynamicParallelSelectionIdentity?: string;
   dynamicFacetSelections: Map<string, DynamicFacetSelectionSnapshot>;
-  resumedDynamicFacetSteps: Set<string>;
   activeDynamicFacetSelectionIdentity?: string;
   pendingFallback?: FallbackContext;
   rateLimitFallbackState?: RateLimitFallbackState;

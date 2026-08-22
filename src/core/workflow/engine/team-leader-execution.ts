@@ -1,9 +1,5 @@
 import type { MorePartsResponse } from '../../../agents/agent-usecases.js';
-import type {
-  FindingContractTeamLeaderDecision,
-  PartDefinition,
-  PartResult,
-} from '../../models/types.js';
+import type { PartDefinition, PartResult } from '../../models/types.js';
 import { createAbortScope, type AbortScope } from './abort-signal.js';
 import {
   createTeamLeaderPartCancellation,
@@ -13,6 +9,7 @@ import {
   TeamLeaderExecutionTerminalGate,
   type TeamLeaderExecutionPublicationFence,
 } from './team-leader-execution-terminal.js';
+import { isProviderStreamParseError } from '../../../shared/types/agent-failure.js';
 
 type DeepReadonly<T> = T extends object
   ? { readonly [Key in keyof T]: DeepReadonly<T[Key]> }
@@ -31,7 +28,6 @@ interface TeamLeaderFeedbackArgs {
 export interface TeamLeaderExecutionOptions {
   initialParts: PartDefinition[];
   maxConcurrency: number;
-  findingContractMode?: boolean;
   abortSignal?: AbortSignal;
   runPart: (
     part: PartDefinition,
@@ -76,7 +72,6 @@ type PartSettlement = CompletedPartSettlement | CancelledPartSettlement;
 export interface TeamLeaderExecutionResult {
   plannedParts: PartDefinition[];
   partResults: PartResult[];
-  findingContractDecision?: Exclude<FindingContractTeamLeaderDecision, { decision: 'continue' }>;
 }
 
 export async function runTeamLeaderExecution(
@@ -93,7 +88,6 @@ export async function runTeamLeaderExecution(
   let nextPartIndex = 0;
   let leaderDone = false;
   let latestBatchStart = 0;
-  let findingContractDecision: Exclude<FindingContractTeamLeaderDecision, { decision: 'continue' }> | undefined;
 
   const cancellablePartIds = (): string[] => [
     ...queue.map((part) => part.id),
@@ -189,28 +183,8 @@ export async function runTeamLeaderExecution(
       terminalGate.assertRunning('feedback.provider_result');
       options.abortSignal?.throwIfAborted();
 
-      if (options.findingContractMode !== true) {
-        publishSettledParts();
-        applyCancellations(feedback.cancelPartIds);
-      }
-
-      if (options.findingContractMode === true) {
-        const decision = feedback.findingContractDecision;
-        if (decision === undefined) {
-          throw new Error('Finding Contract Team Leader feedback is missing an explicit decision');
-        }
-        if (decision.decision === 'complete' || decision.decision === 'replan') {
-          findingContractDecision = decision;
-          terminalGate.assertRunning('feedback.planning_done');
-          options.onPlanningDone?.({
-            reason: decision.reasoning,
-            plannedParts: plannedParts.length,
-            completedParts: partResults.length,
-          });
-          leaderDone = true;
-          return;
-        }
-      }
+      publishSettledParts();
+      applyCancellations(feedback.cancelPartIds);
 
       if (feedback.done) {
         terminalGate.assertRunning('feedback.planning_done');
@@ -233,9 +207,6 @@ export async function runTeamLeaderExecution(
       }
 
       if (newParts.length === 0) {
-        if (options.findingContractMode === true) {
-          throw new Error('Finding Contract Team Leader continue decision produced no new unique parts');
-        }
         if (queue.length > 0 || running.size > 0) {
           return;
         }
@@ -263,7 +234,7 @@ export async function runTeamLeaderExecution(
       if (options.abortSignal?.aborted) {
         throw error;
       }
-      if (options.findingContractMode === true) {
+      if (isProviderStreamParseError(error)) {
         throw error;
       }
       options.onPlanningError?.(error);
@@ -331,7 +302,7 @@ export async function runTeamLeaderExecution(
           options.abortSignal.throwIfAborted();
         }
 
-        if (publishedSuccessfulPart && options.findingContractMode !== true) {
+        if (publishedSuccessfulPart) {
           await tryPlanMoreParts();
         } else if (queue.length === 0 && running.size === 0) {
           await tryPlanMoreParts();
@@ -357,6 +328,5 @@ export async function runTeamLeaderExecution(
   return {
     plannedParts,
     partResults,
-    ...(findingContractDecision !== undefined ? { findingContractDecision } : {}),
   };
 }

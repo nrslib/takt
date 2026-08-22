@@ -60,8 +60,6 @@ const replacements: Array<[RegExp, string]> = [
   [RELATIVE_FILE_LOCATION_PATTERN, '[PATH]'],
   [BASENAME_FILE_LOCATION_PATTERN, '[PATH]'],
   [/\bline\s*:?\s*\d+\b/gi, '[LINE]'],
-  [/\bF-[A-Za-z0-9]+\b/gi, '[FINDING_ID]'],
-  [/\bC-[A-Za-z0-9]+\b/gi, '[CONFLICT_ID]'],
   [/\b[A-Za-z0-9+/_-]{32,}={0,2}\b/g, '[SECRET]'],
 ];
 
@@ -135,9 +133,6 @@ function normalizeRemainingWork(
     description: normalizeRoutingText(work.description, ROUTING_REMAINING_WORK_FIELD_BUDGET, sensitiveValues),
     ...(work.title !== undefined
       ? { title: normalizeRoutingText(work.title, ROUTING_REMAINING_WORK_FIELD_BUDGET, sensitiveValues) }
-      : {}),
-    ...(work.suggestion !== undefined
-      ? { suggestion: normalizeRoutingText(work.suggestion, ROUTING_REMAINING_WORK_FIELD_BUDGET, sensitiveValues) }
       : {}),
   };
 }

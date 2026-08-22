@@ -1,7 +1,7 @@
-import type { InteractiveMode, WorkflowConfig, WorkflowStep } from '../../../core/models/index.js';
+import type { InteractiveMode, PermissionMode, WorkflowConfig, WorkflowStep } from '../../../core/models/index.js';
 import { getAllParallelSubSteps, isDynamicParallelSubSteps } from '../../../core/models/types.js';
 import type { StepProviderOptions } from '../../../core/models/workflow-types.js';
-import type { TagRoutingConflictPolicy } from '../../../core/models/config-types.js';
+import type { InternalAgentSeats, TagRoutingConflictPolicy } from '../../../core/models/config-types.js';
 import {
   resolveStepProviderModel,
   type ProviderModelResolutionContext,
@@ -9,12 +9,8 @@ import {
 import type { SelectorProviderInfo, StepProviderInfo, WorkflowCallResolver } from '../../../core/workflow/types.js';
 import type { ProviderResolutionSource } from '../../../core/workflow/provider-options-trace.js';
 import {
-  resolveDeterministicAutoRoutingProviderInfo,
   resolveRuleBasedAutoRoutingProviderInfo,
-  toAutoRoutingStepMetadata,
 } from '../../../core/workflow/auto-routing/resolver.js';
-import { buildFindingManagerStep } from '../../../core/workflow/findings/manager-step.js';
-import { resolveFindingContractIntakeStep } from '../../../core/workflow/findings/contract-intake.js';
 import {
   assertProviderResolvedForCapabilitySensitiveOptions,
   resolveAllowedToolsForProvider,
@@ -23,12 +19,12 @@ import {
 import { createTeamLeaderPlanningStep } from '../../../core/workflow/engine/team-leader-common.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { resolveProviderOptionsWithTrace } from '../resolveConfigValue.js';
-import { resolveAuxiliaryProviderEnvironment } from '../runtime-provider/provider-environment.js';
+import { resolveAuxiliaryRuntimeEnvironment } from '../runtime-provider/provider-environment.js';
 import {
   resolveEffectiveProviderOptions,
   resolveDirectStepProviderOptions,
   mergeProviderOptions,
-  mergeStepProviderOptionsLayers,
+  resolveProfileScopedProviderOptionsLayers,
 } from '../providerOptions.js';
 import { loadPersonaPromptFromPath } from './agentLoader.js';
 import { loadWorkflowByIdentifier } from './workflowResolver.js';
@@ -36,6 +32,7 @@ import {
   type SelectorProviderOverrides,
 } from '../selectorProviderResolution.js';
 import { resolveWorkflowSelector } from '../workflowSelectorResolution.js';
+import { withWorkflowTargetContext } from '../../../core/workflow/provider-target-resolution.js';
 
 const log = createLogger('workflow-preview');
 
@@ -50,7 +47,7 @@ export interface StepPreview {
   model?: StepProviderInfo['model'];
   providerSource?: ProviderResolutionSource;
   modelSource?: ProviderResolutionSource;
-  permissionMode?: 'readonly';
+  permissionMode?: PermissionMode;
   internalAgent?: boolean;
   sessionKey?: string;
   requiresUserInput?: boolean;
@@ -59,7 +56,7 @@ export interface StepPreview {
   dynamicSelectionMode?: 'replace' | 'cumulative';
   dynamicFacets?: {
     readonly pool: string;
-    readonly maxSelected: number;
+    readonly maxSelected?: number;
     readonly candidates: readonly {
       readonly id: string;
       readonly description: string;
@@ -83,6 +80,10 @@ interface PreviewProviderResolution extends ProviderModelResolutionContext {
   providerOptions: StepProviderOptions | undefined;
   providerOptionsSource: ReturnType<typeof resolveProviderOptionsWithTrace>['source'];
   providerOptionsOriginResolver: ReturnType<typeof resolveProviderOptionsWithTrace>['originResolver'];
+  profileScopedProviderOptions: boolean;
+  /** runtime.yaml internal_agents の解決済み seat。合成ロールの表示を実行時と一致させる。 */
+  internalAgentSeats: InternalAgentSeats | undefined;
+  companionEnabled: boolean;
   selectorProvider?: SelectorProviderInfo;
 }
 
@@ -147,6 +148,7 @@ function resolvePreviewProviderInfo(
     providerRouting: resolution.providerRouting,
     personaProviders: resolution.personaProviders,
     tagConflictPolicy: resolution.tagConflictPolicy,
+    permissionMode: resolution.permissionMode,
   });
   if (resolution.autoRouting === undefined) {
     return currentProviderInfo;
@@ -163,45 +165,6 @@ function resolvePreviewProviderInfo(
   }) ?? currentProviderInfo;
 }
 
-function buildFindingManagerPreview(
-  workflow: WorkflowConfig,
-  projectCwd: string,
-  resolution: PreviewProviderResolution,
-  workflowBundleResourceRoot?: string,
-): StepPreview | undefined {
-  if (!workflow.findingContract) {
-    return undefined;
-  }
-  const managerStep = buildFindingManagerStep({
-    contract: workflow.findingContract,
-    workflowProvider: workflow.provider,
-    workflowModel: workflow.model,
-  });
-  // findings-manager は AI ルーターを通らないため、rules 不一致でも実行時
-  // （OptionsBuilder）と同じ strategy デフォルトまで確定して表示する。
-  // 通常ステップの resolvePreviewProviderInfo（rules のみ、AI 判定分は未確定
-  // 表示）とはここが異なる。
-  const ruleProviderInfo = resolvePreviewProviderInfo(managerStep, resolution);
-  const providerInfo = resolution.autoRouting === undefined
-    ? ruleProviderInfo
-    : resolveDeterministicAutoRoutingProviderInfo({
-        autoRouting: resolution.autoRouting,
-        step: toAutoRoutingStepMetadata(managerStep),
-        currentProviderInfo: ruleProviderInfo,
-      }) ?? ruleProviderInfo;
-
-  return {
-    name: managerStep.name,
-    personaDisplayName: managerStep.personaDisplayName,
-    personaContent: readStepPersona(managerStep, projectCwd, workflowBundleResourceRoot),
-    instructionContent: managerStep.instruction,
-    allowedTools: [],
-    canEdit: false,
-    provider: providerInfo.provider,
-    model: providerInfo.model,
-  };
-}
-
 function buildDynamicSelectorPreview(
   selectorProvider: SelectorProviderInfo,
 ): StepPreview {
@@ -210,10 +173,17 @@ function buildDynamicSelectorPreview(
     personaDisplayName: 'TAKT internal selector',
     personaContent: '',
     instructionContent: '',
-    allowedTools: [...selectorProvider.nativeTools],
+    allowedTools: resolveAllowedToolsForProvider(
+      selectorProvider.providerOptions,
+      false,
+      undefined,
+      selectorProvider.provider,
+    ) ?? [],
     canEdit: false,
     internalAgent: true,
-    permissionMode: 'readonly',
+    ...(selectorProvider.permissionMode === undefined
+      ? {}
+      : { permissionMode: selectorProvider.permissionMode }),
     provider: selectorProvider.provider,
     model: selectorProvider.model,
     providerSource: selectorProvider.providerSource,
@@ -236,7 +206,7 @@ function buildStepPreview(
   projectCwd: string,
   resolution: PreviewProviderResolution,
   workflowBundleResourceRoot?: string,
-  context: { isParallelSubstep: boolean; parallelRole?: 'fixed' | 'pool' } = { isParallelSubstep: false },
+  context: { parallelRole?: 'fixed' | 'pool' } = {},
 ): StepPreview {
   const previewStep = resolvePreviewStep(step);
   const parallelSubsteps = previewStep.parallel === undefined
@@ -246,41 +216,18 @@ function buildStepPreview(
           buildDynamicSelectorPreview(getDynamicSelectorProvider(resolution)),
           ...previewStep.parallel.fixed.map((substep) =>
             buildStepPreview(workflow, substep, projectCwd, resolution, workflowBundleResourceRoot, {
-              isParallelSubstep: true,
               parallelRole: 'fixed',
             })),
           ...previewStep.parallel.pool.map((substep) =>
             buildStepPreview(workflow, substep, projectCwd, resolution, workflowBundleResourceRoot, {
-              isParallelSubstep: true,
               parallelRole: 'pool',
             })),
         ]
       : getAllParallelSubSteps(previewStep.parallel).map((substep) =>
           buildStepPreview(workflow, substep, projectCwd, resolution, workflowBundleResourceRoot, {
-            isParallelSubstep: true,
           }),
         );
   const isParallelParent = parallelSubsteps !== undefined && parallelSubsteps.length > 0;
-  // 並列親だけでなく、FC の取り込み対象になるトップレベルの単独ステップの
-  // 後にも findings-manager を追加する。実行時に StepExecutor.runNormalStep が
-  // findings-manager を起動する条件（resolveFindingContractIntakeStep）と
-  // 同じ述語を使い、実行時と preview の判定を一致させる
-  // （以前は並列親の場合しか manager を preview に足しておらず、単独
-  // ステップの manager が実行時には起動するのに preview から欠落していた）。
-  //
-  // 並列サブステップには追加しない。実行時は WorkflowEngineStepCoordinator →
-  // ParallelRunner の経路で、並列ブロック全体につき manager は親レベルで
-  // 1回だけ起動する（各サブステップの raw findings は親がまとめて取り込む）。
-  // ここで isParallelSubstep を見ないと、*-finding-contract を持つ各
-  // サブステップと並列親の両方に manager が付き、実行時に存在しない重複が
-  // preview に現れる。
-  const isFindingContractIntakeStep = !isParallelParent
-    && !context.isParallelSubstep
-    && resolveFindingContractIntakeStep(previewStep, workflow.findingContract) !== undefined;
-  const managerPreview = isParallelParent || isFindingContractIntakeStep
-    ? buildFindingManagerPreview(workflow, projectCwd, resolution, workflowBundleResourceRoot)
-    : undefined;
-  const substeps = managerPreview ? [...(parallelSubsteps ?? []), managerPreview] : parallelSubsteps;
   const providerInfo = isParallelParent ? undefined : resolvePreviewProviderInfo(previewStep, resolution);
 
   return {
@@ -292,6 +239,9 @@ function buildStepPreview(
     canEdit: isParallelParent ? false : resolvePreviewCanEdit(previewStep),
     ...(providerInfo?.provider !== undefined ? { provider: providerInfo.provider } : {}),
     ...(providerInfo?.model !== undefined ? { model: providerInfo.model } : {}),
+    ...(providerInfo?.permissionMode !== undefined
+      ? { permissionMode: providerInfo.permissionMode }
+      : {}),
     sessionKey: previewStep.sessionKey,
     requiresUserInput: previewStep.requiresUserInput,
     ...(context.parallelRole === undefined ? {} : { parallelRole: context.parallelRole }),
@@ -299,7 +249,7 @@ function buildStepPreview(
       ? { dynamicSelectionMode: previewStep.parallel.selection.mode }
       : {}),
     ...(resolveDynamicFacetsPreview(workflow, previewStep)),
-    ...(substeps ? { substeps } : {}),
+    ...(parallelSubsteps ? { substeps: parallelSubsteps } : {}),
   };
 }
 
@@ -307,7 +257,7 @@ function resolveDynamicFacetsPreview(
   workflow: WorkflowConfig,
   step: WorkflowStep,
 ): { dynamicFacets: NonNullable<StepPreview['dynamicFacets']> } | Record<string, never> {
-  const dynamicFacets = (step as { dynamicFacets?: { readonly pool: string; readonly maxSelected: number } }).dynamicFacets;
+  const dynamicFacets = (step as { dynamicFacets?: { readonly pool: string; readonly maxSelected?: number } }).dynamicFacets;
   if (dynamicFacets === undefined) return {};
   const pool = workflow.facetPools?.[dynamicFacets.pool];
   if (pool === undefined) return {};
@@ -337,7 +287,8 @@ function resolvePreviewProviderResolution(
   // same compiled bundle as execution, so a runtime-v1 environment previews the runtime.yaml
   // `profiles.default` resolution (and a mixed configuration fails fast here too). providerOptions
   // source/originResolver stay on the trace resolver, matching how the executor traces them.
-  const env = resolveAuxiliaryProviderEnvironment(projectCwd, workflow);
+  const runtimeEnvironment = resolveAuxiliaryRuntimeEnvironment(projectCwd, workflow);
+  const env = runtimeEnvironment.providerEnvironment;
   const {
     source: providerOptionsSource,
     originResolver: providerOptionsOriginResolver,
@@ -346,6 +297,9 @@ function resolvePreviewProviderResolution(
     projectCwd,
     lookupCwd,
     overrides: selectorOverrides,
+    companionEnabled: runtimeEnvironment.companionEnabled,
+    providerEnvironment: env,
+    providerConfigMode: runtimeEnvironment.providerConfigMode,
     workflowCallResolver,
   });
 
@@ -354,13 +308,17 @@ function resolvePreviewProviderResolution(
     providerSource: env.providerSource,
     model: env.model,
     modelSource: env.modelSource,
-    autoRouting: env.autoRouting,
+    autoRouting: withWorkflowTargetContext(env.autoRouting, workflow.name),
     personaProviders: env.personaProviders,
-    providerRouting: env.providerRouting,
+    providerRouting: withWorkflowTargetContext(env.providerRouting, workflow.name),
     tagConflictPolicy: env.tagConflictPolicy,
+    permissionMode: env.permissionMode,
     providerOptions: env.providerOptions,
     providerOptionsSource,
     providerOptionsOriginResolver,
+    profileScopedProviderOptions: runtimeEnvironment.providerConfigMode === 'runtime-v1',
+    internalAgentSeats: env.internalAgents,
+    companionEnabled: runtimeEnvironment.companionEnabled,
     ...(selectorResolution.applies
       ? { selectorProvider: selectorResolution.selectorProvider }
       : {}),
@@ -376,15 +334,25 @@ function resolvePreviewAllowedTools(
     providerInfo.providerOptions,
     resolveDirectStepProviderOptions(step),
   );
+  const profileLayers = resolveProfileScopedProviderOptionsLayers(
+    step,
+    {
+      providerRouting: resolution.providerRouting,
+      personaProviders: resolution.personaProviders,
+    },
+    providerInfo.providerSource,
+    resolution.profileScopedProviderOptions,
+  );
+  const baseProviderOptions = !resolution.profileScopedProviderOptions
+    || providerInfo.providerSource === resolution.providerSource
+    ? resolution.providerOptions
+    : undefined;
   const mergedProviderOptions = resolveEffectiveProviderOptions(
     resolution.providerOptionsSource,
     resolution.providerOptionsOriginResolver,
-    resolution.providerOptions,
+    baseProviderOptions,
     stepProviderOptions,
-    mergeStepProviderOptionsLayers(step, {
-      providerRouting: resolution.providerRouting,
-      personaProviders: resolution.personaProviders,
-    }),
+    mergeProviderOptions(...profileLayers.map((layer) => layer.options)),
   );
   const resolvedProvider = providerInfo.provider;
 

@@ -18,12 +18,13 @@ export type {
   CommandQualityGate,
   QualityGate,
   McpServerConfig,
+  CodexProviderOptions,
+  CodexPermissionControl,
   RuntimePreparePreset,
   RuntimePrepareEntry,
   WorkflowRuntimeConfig,
   WorkflowStepKind,
   WorkflowResumeFrameKind,
-  WorkflowCallOverrides,
   WorkflowSessionMode,
   WorkflowParamType,
   WorkflowParamFacetKind,
@@ -38,10 +39,9 @@ export type {
   WorkflowCallInvocationRecord,
   WorkflowStepParticipationRecord,
   WorkflowPromotionEntry,
-  FindingContractConfig,
-  FindingsRuleContext,
   AgentWorkflowStep,
   NormalAgentWorkflowStep,
+  NormalOrTeamLeaderWorkflowStep,
   ParallelWorkflowStep,
   DynamicParallelFixedSubStep,
   DynamicParallelPoolSubStep,
@@ -57,15 +57,10 @@ export type {
   PartDefinition,
   PartResult,
   TeamLeaderConfig,
-  TeamLeaderMode,
-  FindingContractPartAssignment,
-  FindingContractFindingOutcome,
-  FindingContractPartCompletionClaim,
-  FindingContractFixCoverage,
-  FindingContractTeamLeaderDecision,
   ProviderRoutingConfig,
   ProviderRoutingEntry,
   WorkflowRule,
+  WorkflowWideRule,
   StepProviderOptions,
   OpenCodeGuardOptions,
   OpenCodeGuardProfile,
@@ -78,7 +73,11 @@ export type {
   LoopMonitorRule,
   WorkflowConfig,
   WorkflowState,
-  FindingLedger,
+  CompanionSelection,
+  ResolvedCompanionDefinition,
+  CompanionFindingSeverity,
+  CompanionFinding,
+  CompanionWorkflowState,
   CustomAgentConfig,
   RoutingTier,
   AutoRoutingStrategy,
@@ -98,6 +97,7 @@ export type {
   ResolvedFacetPoolCandidate,
   ResolvedFacetContent,
   DynamicFacetsConfig,
+  SelectorGuidance,
   DynamicFacetSelectionSnapshot,
 } from './types.js';
 
@@ -107,6 +107,7 @@ export {
   getAllParallelSubSteps,
   isDynamicParallelSubSteps,
   isNormalAgentWorkflowStep,
+  isNormalOrTeamLeaderWorkflowStep,
 } from './types.js';
 
 // Re-export from agent.ts
@@ -119,7 +120,12 @@ export * from './config.js';
 export * from './schemas.js';
 
 // Re-export from interactive-mode.ts
-export { INTERACTIVE_MODES, DEFAULT_INTERACTIVE_MODE, type InteractiveMode } from './interactive-mode.js';
+export {
+  INTERACTIVE_MODES,
+  DEFAULT_INTERACTIVE_MODE,
+  type InteractiveMode,
+  type AssistantInteractiveMode,
+} from './interactive-mode.js';
 
 // Re-export from session.ts (functions only, not types)
 export {

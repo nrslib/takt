@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -6,6 +6,9 @@ import { stringify as stringifyYaml } from 'yaml';
 import { resolveRuntimeNonWorkflowProvider } from '../infra/config/runtime-provider/internal-agents.js';
 import { resolveNonWorkflowProviderModel } from '../infra/config/nonWorkflowProvider.js';
 import { initializeSession } from '../features/interactive/sessionInitialization.js';
+import { askExecAssistant, createExecSessionContext } from '../features/exec/assistantSession.js';
+import { DEFAULT_EXEC_CONFIG } from '../features/exec/defaults.js';
+import type { ResolvedExecConfig } from '../features/exec/types.js';
 import {
   getGlobalConfigDir,
   getGlobalConfigPath,
@@ -15,6 +18,16 @@ import {
 } from '../infra/config/index.js';
 import { RUNTIME_PROVIDER_FILENAME } from '../infra/config/runtime-provider/constants.js';
 import type { RuntimeProviderFile } from '../infra/config/runtime-provider/schema.js';
+
+const { mockCallCodex, mockCallCodexCustom } = vi.hoisted(() => ({
+  mockCallCodex: vi.fn(),
+  mockCallCodexCustom: vi.fn(),
+}));
+
+vi.mock('../infra/codex/index.js', () => ({
+  callCodex: mockCallCodex,
+  callCodexCustom: mockCallCodexCustom,
+}));
 
 /**
  * Integration coverage for the non-workflow provider seam reading the runtime.yaml `defaults`
@@ -102,13 +115,40 @@ describe('runtime.yaml non-workflow provider resolution', () => {
     });
   });
 
+  it('keeps disabled companion-only targets in legacy mode for non-workflow resolution', () => {
+    writeGlobalConfig(['language: en', 'provider: claude', 'model: legacy-model']);
+    writeGlobalRuntimeFile({
+      version: 1,
+      companion: { enabled: false },
+      provider: {
+        profiles: {
+          security: { provider: 'mock', model: 'mock-security' },
+        },
+        targets: { companions: { security: { profile: 'security' } } },
+      },
+    });
+    invalidate();
+
+    expect(resolveRuntimeNonWorkflowProvider(projectCwd)).toBeUndefined();
+    expect(resolveNonWorkflowProviderModel(projectCwd)).toEqual({
+      runtimeManaged: false,
+      provider: 'claude',
+      model: 'legacy-model',
+    });
+  });
+
   it('flows the runtime defaults profile options into a non-assistant session context', () => {
     writeGlobalRuntimeFile({
       version: 1,
       provider: {
         defaults: { profile: 'default' },
         profiles: {
-          default: { provider: 'codex', model: 'gpt-default', options: { reasoning_effort: 'high' } },
+          default: {
+            provider: 'codex',
+            model: 'gpt-default',
+            options: { reasoning_effort: 'high' },
+            permission_mode: 'readonly',
+          },
         },
       },
     });
@@ -120,6 +160,147 @@ describe('runtime.yaml non-workflow provider resolution', () => {
     expect(ctx.providerType).toBe('codex');
     expect(ctx.model).toBe('gpt-default');
     expect(ctx.providerOptions).toEqual({ codex: { reasoningEffort: 'high' } });
+    expect(ctx.permissionMode).toBe('readonly');
+  });
+
+  it.each([false, true])(
+    'flows runtime defaults fast_mode=%s into the exec assistant terminal',
+    async (profileFastMode) => {
+      writeGlobalRuntimeFile({
+        version: 1,
+        provider: {
+          defaults: { profile: 'default' },
+          profiles: {
+            default: {
+              provider: 'codex',
+              model: 'gpt-default',
+              options: { fast_mode: profileFastMode },
+            },
+          },
+        },
+      });
+      const previousFastMode = process.env.TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE;
+      delete process.env.TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE;
+      invalidate();
+
+      try {
+        const config: ResolvedExecConfig = {
+          ...DEFAULT_EXEC_CONFIG,
+          session: { provider: 'codex', model: 'gpt-default' },
+          workers: DEFAULT_EXEC_CONFIG.workers.map((worker) => ({ ...worker, provider: 'codex' })),
+          reviews: DEFAULT_EXEC_CONFIG.reviews.map((review) => ({ ...review, provider: 'codex' })),
+        };
+        const ctx = createExecSessionContext(projectCwd, config);
+
+        expect(ctx.providerOptions).toMatchObject({
+          codex: {
+            fastMode: profileFastMode,
+            skills: { repo: true, user: true },
+          },
+        });
+
+        mockCallCodexCustom.mockReset();
+        mockCallCodexCustom.mockResolvedValue({
+          content: 'done',
+          sessionId: 'exec-session',
+          status: 'completed',
+        });
+        const result = await askExecAssistant(
+          projectCwd,
+          ctx,
+          'prompt',
+          'system',
+          { outputMode: 'silent', persistSession: false },
+        );
+
+        expect(result.content).toBe('done');
+        expect(mockCallCodexCustom.mock.calls[0]?.[3]).toMatchObject({
+          fastMode: profileFastMode,
+        });
+      } finally {
+        if (previousFastMode === undefined) {
+          delete process.env.TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE;
+        } else {
+          process.env.TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE = previousFastMode;
+        }
+        invalidate();
+      }
+    },
+  );
+
+  it.each([
+    { profileFastMode: false, envFastMode: true },
+    { profileFastMode: true, envFastMode: false },
+  ])('lets config/env options win over the exec runtime profile, including network access', async ({
+    profileFastMode,
+    envFastMode,
+  }) => {
+    writeGlobalRuntimeFile({
+      version: 1,
+      provider: {
+        defaults: { profile: 'default' },
+        profiles: {
+          default: {
+            provider: 'codex',
+            model: 'gpt-default',
+            options: { fast_mode: profileFastMode, network_access: true },
+          },
+        },
+      },
+    });
+    const previousFastMode = process.env.TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE;
+    const previousNetworkAccess = process.env.TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS;
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE = String(envFastMode);
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS = 'false';
+    invalidate();
+    try {
+      const config: ResolvedExecConfig = {
+        ...DEFAULT_EXEC_CONFIG,
+        session: { provider: 'codex', model: 'gpt-default' },
+        workers: DEFAULT_EXEC_CONFIG.workers.map((worker) => ({ ...worker, provider: 'codex' })),
+        reviews: DEFAULT_EXEC_CONFIG.reviews.map((review) => ({ ...review, provider: 'codex' })),
+      };
+      const ctx = createExecSessionContext(projectCwd, config);
+
+      expect(ctx.providerOptions).toMatchObject({
+        codex: {
+          fastMode: envFastMode,
+          networkAccess: false,
+        },
+      });
+
+      mockCallCodexCustom.mockReset();
+      mockCallCodexCustom.mockResolvedValue({
+        content: 'done',
+        sessionId: 'exec-session',
+        status: 'completed',
+      });
+      const result = await askExecAssistant(
+        projectCwd,
+        ctx,
+        'prompt',
+        'system',
+        { outputMode: 'silent', persistSession: false },
+      );
+
+      expect(result.content).toBe('done');
+      expect(mockCallCodexCustom.mock.calls[0]?.[3]).toMatchObject({
+        fastMode: envFastMode,
+        networkAccess: false,
+      });
+    } finally {
+      if (previousFastMode === undefined) {
+        delete process.env.TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE;
+      } else {
+        process.env.TAKT_PROVIDER_OPTIONS_CODEX_FAST_MODE = previousFastMode;
+      }
+      if (previousNetworkAccess === undefined) {
+        delete process.env.TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS;
+      } else {
+        process.env.TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS = previousNetworkAccess;
+      }
+      invalidate();
+    }
   });
 
   it('treats an env-source provider as an override that drops the runtime model/options', () => {
@@ -190,20 +371,18 @@ describe('runtime.yaml non-workflow provider resolution', () => {
     }
   });
 
-  it('fails fast when the active section resolves no defaults profile and no auto routing', () => {
-    // targets-only active section: runtime-v1 owns the resolution, so the seam must not
-    // silently fall back to the legacy config.yaml provider.
+  it('fails fast when the active section omits defaults and has no auto routing', () => {
     writeGlobalRuntimeFile({
       version: 1,
       provider: {
         profiles: { router: { provider: 'claude', model: 'sonnet' } },
         targets: { internal_agents: { selector: { profile: 'router' } } },
       },
-    });
+    } as unknown as RuntimeProviderFile);
     invalidate();
 
-    expect(() => resolveRuntimeNonWorkflowProvider(projectCwd)).toThrow(/No provider configured/);
-    expect(() => resolveNonWorkflowProviderModel(projectCwd)).toThrow(/No provider configured/);
+    expect(() => resolveRuntimeNonWorkflowProvider(projectCwd)).toThrow(/defaults/);
+    expect(() => resolveNonWorkflowProviderModel(projectCwd)).toThrow(/defaults/);
   });
 
   it('fails fast when an env provider override requires a model the override does not carry', () => {

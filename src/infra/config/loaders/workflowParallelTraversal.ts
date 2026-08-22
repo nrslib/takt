@@ -1,4 +1,4 @@
-import type { WorkflowCallStep, WorkflowStep } from '../../../core/models/types.js';
+import type { WorkflowCallStep, WorkflowConfig, WorkflowStep } from '../../../core/models/types.js';
 import { isWorkflowCallStep } from '../../../core/workflow/step-kind.js';
 
 export interface ParallelSubStepEntry<T> {
@@ -69,4 +69,33 @@ export function collectWorkflowCallSteps(
     }
   }
   return calls;
+}
+
+export function collectReachableSteps(workflow: WorkflowConfig): WorkflowStep[] {
+  const stepsByName = new Map(workflow.steps.map((step) => [step.name, step]));
+  const visited = new Set<string>();
+  const pending = [workflow.initialStep];
+  const reachable: WorkflowStep[] = [];
+  while (pending.length > 0) {
+    const name = pending.shift();
+    if (name === undefined || visited.has(name)) continue;
+    visited.add(name);
+    const step = stepsByName.get(name);
+    if (step === undefined) continue;
+    reachable.push(step);
+    for (const next of step.rules?.map((rule) => rule.next) ?? []) {
+      if (next !== undefined && stepsByName.has(next) && !visited.has(next)) pending.push(next);
+    }
+    for (const monitor of workflow.loopMonitors ?? []) {
+      if (!monitor.cycle.includes(name)) continue;
+      for (const rule of monitor.judge.rules) {
+        if (stepsByName.has(rule.next) && !visited.has(rule.next)) pending.push(rule.next);
+      }
+    }
+  }
+  return reachable;
+}
+
+export function collectReachableWorkflowCallSteps(workflow: WorkflowConfig): WorkflowCallStep[] {
+  return collectWorkflowCallSteps(collectReachableSteps(workflow));
 }

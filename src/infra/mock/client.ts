@@ -5,12 +5,16 @@
  * Useful for testing workflows without incurring costs or latency.
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import type { AgentResponse } from '../../core/models/index.js';
-import type { StreamEvent } from '../../shared/types/provider.js';
+import type { PreparedProviderMcp } from '../providers/mcp/types.js';
+import type { StreamCallback, StreamEvent } from '../../shared/types/provider.js';
 import { appendPrivateFile } from '../../shared/utils/private-file.js';
 import { getScenarioQueue } from './scenario.js';
 import type { MockCallOptions, ScenarioEntry } from './types.js';
+import { assertPathSegmentsAreSafe } from '../../shared/utils/pathBoundary.js';
 
 export type { MockCallOptions };
 
@@ -30,47 +34,35 @@ function generateMockSessionId(): string {
   return `mock-session-${randomUUID()}`;
 }
 
-function managerTaskResponse(prompt: string): Record<string, unknown> {
-  const match = /## Task manifest\n(`{3,})json\n([\s\S]*?)\n\1/u.exec(prompt);
-  if (match?.[2] === undefined) {
-    throw new Error('Mock manager task response requires an engine task manifest');
-  }
-  const manifest = JSON.parse(match[2]) as {
-    taskId?: unknown;
-    rawFindings?: unknown;
-  };
-  if (typeof manifest.taskId !== 'string' || !Array.isArray(manifest.rawFindings)) {
-    throw new Error('Mock manager task response received an invalid raw task manifest');
-  }
-  return {
-    taskId: manifest.taskId,
-    decisions: manifest.rawFindings.map((raw) => {
-      if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-        throw new Error('Mock manager task response received an invalid raw finding');
-      }
-      const rawFinding = raw as { rawFindingId?: unknown; componentId?: unknown };
-      if (typeof rawFinding.rawFindingId !== 'string' || typeof rawFinding.componentId !== 'string') {
-        throw new Error('Mock manager task response received an invalid raw finding identity');
-      }
-      return {
-        componentId: rawFinding.componentId,
-        rawFindingId: rawFinding.rawFindingId,
-        decision: 'new',
-        findingId: '',
-        evidence: 'Mock manager accepted the new finding.',
-      };
-    }),
-  };
-}
-
-function scenarioStructuredOutput(
-  entry: ScenarioEntry | undefined,
-  prompt: string,
+function structuredTextOutput(
+  schema: Record<string, unknown> | undefined,
+  content: string,
 ): Record<string, unknown> | undefined {
-  if (entry?.mockTaskResponse === 'main_manager_raw_decisions') {
-    return managerTaskResponse(prompt);
+  if (schema?.type !== 'object' || schema.additionalProperties !== false) {
+    return undefined;
   }
-  return entry?.structuredOutput;
+  const properties = schema.properties;
+  const required = schema.required;
+  if (
+    typeof properties !== 'object'
+    || properties === null
+    || Array.isArray(properties)
+    || !Array.isArray(required)
+    || required.length !== 1
+    || required[0] !== 'content'
+  ) {
+    return undefined;
+  }
+  const contentSchema = Reflect.get(properties, 'content');
+  if (
+    typeof contentSchema !== 'object'
+    || contentSchema === null
+    || Array.isArray(contentSchema)
+    || Reflect.get(contentSchema, 'type') !== 'string'
+  ) {
+    return undefined;
+  }
+  return { content };
 }
 
 function recordMockCall(
@@ -82,6 +74,8 @@ function recordMockCall(
     aborted?: boolean;
     mcpServers?: Record<string, { transport: string }>;
     mcpToolCall?: { server: string; transport: string; tool: string; result: unknown; nonce?: string };
+    inputSessionId?: string;
+    returnedSessionId?: string;
   },
 ): void {
   const logPath = process.env.TAKT_MOCK_CALL_LOG;
@@ -100,6 +94,12 @@ function recordMockCall(
     personaName,
     runtimeEnvironment,
     ...details,
+    ...(details?.inputSessionId === undefined ? {} : {
+      inputSessionId: mockSessionIdentity(details.inputSessionId),
+    }),
+    ...(details?.returnedSessionId === undefined ? {} : {
+      returnedSessionId: mockSessionIdentity(details.returnedSessionId),
+    }),
   })}\n`);
 }
 
@@ -128,7 +128,7 @@ function recordMcpToolCall(
  * (env/headers) are never logged.
  */
 function buildMcpServerSummary(
-  preparedMcp: import('../providers/mcp/types.js').PreparedProviderMcp | undefined,
+  preparedMcp: PreparedProviderMcp | undefined,
 ): Record<string, { transport: string }> | undefined {
   const resolved = preparedMcp?.resolvedServers;
   if (!resolved?.enabled || Object.keys(resolved.servers).length === 0) {
@@ -139,6 +139,10 @@ function buildMcpServerSummary(
     summary[name] = { transport: server.type ?? 'stdio' };
   }
   return summary;
+}
+
+function mockSessionIdentity(sessionId: string): string {
+  return createHash('sha256').update(sessionId).digest('hex');
 }
 
 async function delayWithAbort(ms: number, signal: AbortSignal | undefined): Promise<void> {
@@ -170,6 +174,87 @@ async function waitForAbort(signal: AbortSignal | undefined): Promise<void> {
   });
 }
 
+/** Records the completion and builds the response returned whenever a mock call is aborted. */
+function finishAbortedCall(personaName: string, sessionId: string): AgentResponse {
+  recordMockCall('complete', personaName, {
+    status: 'blocked',
+    aborted: true,
+    returnedSessionId: sessionId,
+  });
+  return {
+    persona: personaName,
+    status: 'blocked',
+    content: '[MOCK:ABORTED]\n\nMock response interrupted by abort signal.',
+    timestamp: new Date(),
+    sessionId,
+  };
+}
+
+/** Read through a call so the narrowing from an earlier check does not persist. */
+function isAborted(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true;
+}
+
+async function streamTextChunks(
+  chunks: NonNullable<ScenarioEntry['textChunks']>,
+  onStream: StreamCallback,
+  signal: AbortSignal | undefined,
+): Promise<'completed' | 'aborted'> {
+  for (const chunk of chunks) {
+    // Checked before every emission, not only around a delay: a chunk without a
+    // delay, or an abort raised while the caller handled the previous chunk,
+    // must stop the stream just as promptly.
+    if (isAborted(signal)) {
+      return 'aborted';
+    }
+    if (chunk.delayMs !== undefined) {
+      try {
+        await delayWithAbort(chunk.delayMs, signal);
+      } catch (e) {
+        if (e instanceof DOMException && e.name === 'AbortError') {
+          return 'aborted';
+        }
+        throw e;
+      }
+    }
+    if (isAborted(signal)) {
+      return 'aborted';
+    }
+    onStream({ type: 'text', data: { text: chunk.text } });
+  }
+  return isAborted(signal) ? 'aborted' : 'completed';
+}
+
+/**
+ * Writes the prompt a call received, for a test that needs to assert on what
+ * reached the provider.
+ *
+ * Deliberately separate from the call log, which is contractually free of
+ * prompt content: this one is written only when its own variable names a file,
+ * and nothing but a test sets it.
+ */
+function recordMockPrompt(personaName: string, prompt: string): void {
+  const logPath = process.env.TAKT_MOCK_PROMPT_LOG;
+  if (!logPath) {
+    return;
+  }
+  appendPrivateFile(logPath, `${JSON.stringify({ personaName, prompt })}\n`);
+}
+
+function applyScenarioFileWrites(entry: ScenarioEntry | undefined, cwd: string): void {
+  for (const write of entry?.fileWrites ?? []) {
+    const target = resolve(cwd, write.path);
+    assertPathSegmentsAreSafe(
+      cwd,
+      target,
+      (violation) => new Error(`Mock scenario file_writes path violates cwd boundary (${violation})`),
+      { rejectSamePath: true },
+    );
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, write.content, 'utf-8');
+  }
+}
+
 /**
  * Call mock agent - returns immediate fixed response
  */
@@ -178,6 +263,7 @@ export async function callMock(
   prompt: string,
   options: MockCallOptions
 ): Promise<AgentResponse> {
+  options.onActivity?.({ kind: 'attempt_started' });
   const sessionId = options.sessionId ?? generateMockSessionId();
 
   // Scenario queue takes priority over explicit options
@@ -185,7 +271,9 @@ export async function callMock(
   recordMockCall('start', personaName, {
     model: options.model,
     mcpServers: buildMcpServerSummary(options.preparedMcp),
+    inputSessionId: options.sessionId,
   });
+  recordMockPrompt(personaName, prompt);
 
   // Apply deterministic abort gating or an artificial delay when requested.
   if (scenarioEntry?.waitForAbort === true || scenarioEntry?.delayMs) {
@@ -197,14 +285,7 @@ export async function callMock(
       }
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') {
-        recordMockCall('complete', personaName, { status: 'blocked', aborted: true });
-        return {
-          persona: personaName,
-          status: 'blocked',
-          content: '[MOCK:ABORTED]\n\nMock response interrupted by abort signal.',
-          timestamp: new Date(),
-          sessionId,
-        };
+        return finishAbortedCall(personaName, sessionId);
       }
       throw e;
     }
@@ -218,6 +299,8 @@ export async function callMock(
   const content = scenarioEntry?.content ?? options.mockResponse ??
     `${statusMarker}\n\nMock response for persona "${personaName}".\nPrompt: ${prompt.slice(0, 100)}${prompt.length > 100 ? '...' : ''}${allowedToolsSuffix}`;
 
+  applyScenarioFileWrites(scenarioEntry, options.cwd);
+
   // Emit stream events if callback is provided
   if (options.onStream) {
     const initEvent: StreamEvent = {
@@ -225,13 +308,44 @@ export async function callMock(
       data: { model: 'mock-model', sessionId },
     };
     options.onStream(initEvent);
+    // The caller can abort while it consumes an event, and the answer body is
+    // the one thing an abort cannot take back once it is on screen.
+    if (isAborted(options.abortSignal)) {
+      return finishAbortedCall(personaName, sessionId);
+    }
 
-    const textEvent: StreamEvent = {
-      type: 'text',
-      data: { text: content },
-    };
-    options.onStream(textEvent);
+    for (const event of scenarioEntry?.streamEvents ?? []) {
+      options.onStream({
+        type: 'tool_use',
+        data: { tool: event.tool, id: event.id, input: { ...event.input } },
+      });
+      if (isAborted(options.abortSignal)) {
+        return finishAbortedCall(personaName, sessionId);
+      }
+    }
 
+    if (scenarioEntry?.textChunks === undefined) {
+      const textEvent: StreamEvent = {
+        type: 'text',
+        data: { text: content },
+      };
+      options.onStream(textEvent);
+    } else {
+      const outcome = await streamTextChunks(
+        scenarioEntry.textChunks,
+        options.onStream,
+        options.abortSignal,
+      );
+      if (outcome === 'aborted') {
+        return finishAbortedCall(personaName, sessionId);
+      }
+    }
+
+    // An abort raised while the caller consumed the last text event must not be
+    // followed by a success result.
+    if (isAborted(options.abortSignal)) {
+      return finishAbortedCall(personaName, sessionId);
+    }
     const resultEvent: StreamEvent = {
       type: 'result',
       data: { success: true, result: content, sessionId },
@@ -239,25 +353,34 @@ export async function callMock(
     options.onStream(resultEvent);
   }
 
-  recordMockCall('complete', personaName, { status, aborted: false });
+  recordMockCall('complete', personaName, {
+    status,
+    aborted: false,
+    returnedSessionId: sessionId,
+  });
 
   // Runtime MCP adapter route (issue #1137): when the runner prepared MCP
   // material with an enabled server set, simulate a deterministic stdio
   // MCP server startup and a single fixture tool call so E2E tests can
   // assert that runtime-resolved MCP servers reach the provider
-  // (order.md:240-242, ARCH-NEW-4). The fixture tool name and nonce are
-  // derived from the first enabled server's config.
+  // (order.md:240-242, ARCH-NEW-4). The server is selected by sorted name;
+  // the fixture tool, result, and nonce remain fixed for deterministic tests.
   const preparedMcp = options.preparedMcp;
   const resolvedServers = preparedMcp?.resolvedServers;
   if (resolvedServers?.enabled && Object.keys(resolvedServers.servers).length > 0) {
-    const [serverName, serverConfig] = Object.entries(resolvedServers.servers)[0] ?? ['', undefined];
-    if (serverName && serverConfig) {
-      const transport = serverConfig.type ?? 'stdio';
-      const fixtureTool = 'echo';
-      const fixtureResult = `echo_nonce:${serverName}`;
-      const nonce = 'fixed-test-nonce';
-      recordMcpToolCall(personaName, serverName, transport, fixtureTool, fixtureResult, nonce);
+    const serverName = Object.keys(resolvedServers.servers).sort()[0];
+    if (serverName === undefined) {
+      throw new Error('Mock MCP fixture requires an enabled server');
     }
+    const serverConfig = resolvedServers.servers[serverName];
+    if (serverConfig === undefined) {
+      throw new Error(`Mock MCP fixture server "${serverName}" is not defined`);
+    }
+    const transport = serverConfig.type ?? 'stdio';
+    const fixtureTool = 'echo_nonce';
+    const fixtureResult = 'NONCE:fixed-test-nonce';
+    const nonce = 'fixed-test-nonce';
+    recordMcpToolCall(personaName, serverName, transport, fixtureTool, fixtureResult, nonce);
   }
 
   return {
@@ -266,7 +389,9 @@ export async function callMock(
     content,
     timestamp: new Date(),
     sessionId,
-    structuredOutput: scenarioStructuredOutput(scenarioEntry, prompt) ?? options.structuredOutput,
+    structuredOutput: scenarioEntry?.structuredOutput
+      ?? options.structuredOutput
+      ?? structuredTextOutput(options.outputSchema, content),
     error: scenarioEntry?.error ?? options.error,
     failureCategory: scenarioEntry?.failureCategory ?? options.failureCategory,
   };

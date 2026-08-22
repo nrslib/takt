@@ -7,7 +7,7 @@
 language: en        # UI language: en | ja
 
 # Default provider and model
-# provider: claude                    # Default provider: claude | claude-sdk | claude-terminal | codex | opencode | cursor | copilot | kiro | mock
+# provider: claude                    # Default provider: claude | claude-sdk | claude-terminal | codex | opencode | deepseek-harness | pi | cursor | copilot | kiro | mock
 # model: sonnet                       # Default model (passed directly to provider)
 
 # Execution control
@@ -64,6 +64,8 @@ language: en        # UI language: en | ja
 
 # Interactive mode
 # interactive_preview_steps: 3 # Number of step previews in interactive mode (0-10)
+# assistant:
+#   gherkin: true              # Generate final task instructions as Markdown + focused Gherkin (default: true; set false to disable)
 
 # Provider routing for workflow steps (recommended)
 # provider_routing:

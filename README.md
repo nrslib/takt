@@ -17,7 +17,8 @@
 
 <p align="center">
   <a href="./README.md">English</a> |
-  <a href="./docs/README.ja.md">日本語</a>
+  <a href="./docs/README.ja.md">日本語</a> |
+  <a href="./docs/README.zh-CN.md">简体中文</a>
 </p>
 
 <p align="center">
@@ -37,11 +38,11 @@ Instead of asking one agent to remember the whole process, TAKT gives each step 
 - Run plan → implement → review → fix loops as explicit workflow steps
 - Keep context focused with step-specific personas, policies, knowledge, instructions, and output contracts
 - Execute queued tasks in isolated worktrees and inspect logs and reports afterward
-- Use Claude Code, Claude SDK, Codex SDK, OpenCode SDK, Cursor, GitHub Copilot CLI, or Kiro as providers
+- Use Claude Code, Claude SDK, Codex SDK, OpenCode SDK, Pi SDK, the official DeepSeek Harness SDK, Cursor, GitHub Copilot CLI, or Kiro as providers
 
-**T**AKT **A**gent **K**oordination **T**opology orchestrates multiple AI agents with structured review loops, managed prompts, and guardrails.
+**T**AKT **A**gent **K**oordination **T**opology orchestrates multiple AI agents with review loops, managed prompts, and per-step permissions.
 
-Talk to AI to define what you want, queue it as a task, and run it with `takt run`. Planning, implementation, review, and fix loops are defined in YAML workflow files, so the process is not left to the agent's discretion. TAKT coordinates Claude Code, Codex, OpenCode, Cursor, GitHub Copilot CLI, and Kiro CLI as agents with different roles, permissions, and context.
+Talk to AI to define what you want, queue it as a task, and run it with `takt run`. Planning, implementation, review, and fix loops are defined in YAML workflow files, so the process is not left to the agent's discretion. TAKT coordinates Claude Code, Codex, OpenCode, Pi, the official DeepSeek Harness SDK, Cursor, GitHub Copilot CLI, and Kiro CLI as agents with different roles, permissions, and context.
 
 TAKT is built primarily for AI coding workflows, but the same model applies beyond coding: any task where multiple AI agents need to coordinate, or where review, judgment, and feedback loops can improve task quality.
 
@@ -49,7 +50,7 @@ TAKT is built with TAKT itself (dogfooding).
 
 ## Why TAKT
 
-AI coding agents are powerful, but they do not automatically create a stable development process. In long-running work, they forget instructions, accumulate polluted context, blur implementation and review responsibilities, and often force humans to repeat the same feedback again and again. That wears people down.
+AI coding agents do not automatically create a stable development process. In long-running work, they forget instructions, accumulate polluted context, blur implementation and review responsibilities, and often force humans to repeat the same feedback again and again.
 
 Adding more rules to prompts, `CLAUDE.md`, or skills can help, but it cannot enforce the process. Whether the rules are followed is still left to the agent's behavior.
 
@@ -59,9 +60,7 @@ Workflows define the phases, and each step receives its own persona, policy, kno
 
 Reviews cannot be silently skipped. Findings route work back to fix steps, and human judgment can be requested when needed. Tasks run in isolated worktrees, and each step leaves logs and reports so the path from task to PR remains traceable.
 
-At its core, TAKT runs reusable agent processes built from roles, phases, judgments, and feedback loops.
-
-The goal is simple: make development processes reusable, reviewable, and reproducible without depending on constant human intervention.
+TAKT runs all of this as a reusable agent process built from roles, phases, judgments, and feedback loops, so the development process stays reviewable and reproducible without constant human intervention.
 
 ## Try It in 5 Minutes
 
@@ -80,7 +79,7 @@ takt run
 takt list
 ```
 
-If this is your first run, configure a provider in `~/.takt/config.yaml` or use the API key environment variables listed in [Configuration](#configuration). SDK-based providers such as `claude-sdk`, `codex`, and `opencode` can run with Node.js and API keys; CLI-based providers require their external CLIs.
+If this is your first run, configure a provider in `~/.takt/config.yaml` or use the API key environment variables listed in [Configuration](#configuration). SDK-based providers such as `claude-sdk`, `codex`, `opencode`, and `pi` can run with Node.js; `deepseek-harness` additionally requires Python 3.10+ and its official runtime wheel; CLI-based providers require their external CLIs.
 
 ### Video Tutorial
 
@@ -104,7 +103,7 @@ Follow the [written tutorial](./docs/tutorial.md) with these hands-on walkthroug
 
 ## Requirements
 
-TAKT requires Node.js `>=24.15.0`.
+TAKT requires Node.js `>=22.22.0`.
 
 The provider you choose determines whether you need to install an external CLI or can run on Node.js alone via a TypeScript SDK.
 
@@ -113,6 +112,15 @@ These providers run via SDK (no CLI required, Node.js only):
 - `claude-sdk` — `@anthropic-ai/claude-agent-sdk`
 - `codex` — `@openai/codex-sdk`
 - `opencode` — `@opencode-ai/sdk`
+- `pi` — `@earendil-works/pi-coding-agent`
+
+The `deepseek-harness` provider uses the official Python SDK through a private JSON-RPC bridge. Install the matching SDK/runtime packages with Python 3.10+:
+
+```bash
+python3 -m pip install deepseek-harness-sdk deepseek-harness-runtime-bin
+```
+
+The official runtime currently supports Linux x64/arm64 and macOS arm64 only. Windows and macOS x64 fail fast; TAKT does not silently fall back to another provider. Set `DEEPSEEK_API_KEY` and optionally `DEEPSEEK_BASE_URL` in the environment. The Python SDK and bundled `deepseek-harness-runtime-bin` must come from matching releases. This provider is a developer-preview compatibility surface: upstream API/event vocabulary may change between matching releases, so use the opt-in live smoke procedure in the configuration guide before relying on a new SDK/runtime pair.
 
 These providers require an external CLI:
 
@@ -154,8 +162,8 @@ $ takt
 Select workflow:
   ❯ 🎼 default (current)
     📁 🚀 Quick Start/
-    📁 🎨 Frontend/
-    📁 ⚙️ Backend/
+    📁 🛠️ Development/
+    📁 🔍 Review/
 
 > Add user authentication with JWT
 
@@ -245,14 +253,16 @@ When the same workflow name exists in multiple locations, TAKT resolves in this 
 
 | Workflow | Use Case |
 |-------|----------|
-| `default` | Standard development workflow. Test-first with multi-perspective parallel peer review (architecture, AI antipattern, coding, semantics, contract lifecycle, robustness), adjudication, and a convergent fix loop. |
-| `frontend` | Frontend development workflow. |
-| `backend` | Backend development workflow. |
-| `dual` | Combined frontend + backend workflow. |
+| `default` | Standard development workflow. Scenario-based planning and test-first development with dynamic implementation companions, multi-perspective parallel peer review, adjudication, and a convergent fix loop. |
+| `maintenance` | A `default` variant for existing codebases: preserves contracts outside the change scope and limits work to causally related changes. |
+| `simple` | Lightweight workflow with the same minimal structure as `pure`; TAKT selects applicable domain facets per change, always including AI antipattern and architecture guidance. |
+| `pure` | Minimal workflow with no injected domain facets — trusts the model's own judgment and skill selection. |
 | `takt-default` | The workflow used to develop TAKT itself. Directly applicable to other CLI tool development. |
-| `frontend-maintenance` | Frontend production maintenance. Strict multi-phase review with loop monitors. |
-| `backend-maintenance` | Backend production maintenance. Strict multi-phase review with dual-supervisor sign-off. |
-| `*-mini` series | Lightweight variants of each workflow (`default-mini` / `frontend-mini` / `backend-mini` / `dual-mini`). Omits `write_tests`. |
+| `takt-default-team` | A `takt-default` variant that runs implementation and remediation through Team Leader task decomposition. |
+| `review` | Multi-perspective review with dynamic reviewer selection and supervisor synthesis, without modifying code. |
+| `review-fix` | Multi-perspective review with dynamic reviewer selection, followed by the default workflow's adjudicated, verified remediation loop and final requirement check. |
+
+Domain-specific families (`simple-*` / `frontend` / `backend` / `dual` / CQRS / `*-mini` variants) remain available under the 📦 Legacy category.
 
 See the [Builtin Catalog](./docs/builtin-catalog.md) for all workflows and personas.
 
@@ -280,83 +290,27 @@ TAKT also ships two client-integration entrypoints: `takt-acp` runs TAKT as an [
 
 `takt exec` starts TAKT's interactive task-entry mode. The Assistant agent clarifies the request, `/go` turns the conversation into a generated workflow, Worker agent(s) implement the task, Review agent(s) review the result, the Replanning agent asks the user for direction when needed, and loop detection prevents repeated unproductive cycles.
 
-Exec starts from the previous exec configuration, or the default configuration on first run. Pass a preset name to start from that preset. Use `/setup` during the conversation to edit agents, loop detection thresholds, presets, and referenced instruction/knowledge/policy facets. Builtin/default presets define the agent roles, facets, and loop thresholds only. Provider and model are resolved from normal TAKT configuration when exec mode starts, and the same resolved values are used for the Assistant dialogue, `/setup` display, and workflow generation. An exec config overrides provider/model only when it sets them explicitly. `effort` is emitted only when it is explicitly configured.
+Exec starts from the previous exec configuration, or the default configuration on first run; pass a preset name to start from that preset. Use `/setup` during the conversation to edit agents, loop detection thresholds, presets, and referenced facets. When `/go` runs, TAKT generates `.takt/exec/workflow.yaml` and executes it through the normal workflow engine; use `/cancel` to exit without running. Image attachments are supported while editing input (`/paste-image`, `Ctrl+V`, or an OSC 1337 inline-image paste).
 
-Exec presets resolve in this order: project `.takt/exec/presets/` → global `$TAKT_CONFIG_DIR/exec/presets/` (default `~/.takt/exec/presets/`) → builtin `builtins/exec/presets/`. Changes made in `/setup` are saved to `$TAKT_CONFIG_DIR/exec.yaml` (default `~/.takt/exec.yaml`) for the next exec session. `/setup` can also save or delete project/global presets, and created facets are stored under `.takt/facets/` or `$TAKT_CONFIG_DIR/facets/` (default `~/.takt/facets/`).
-
-When `/go` runs, TAKT generates `.takt/exec/workflow.yaml` and executes it through the normal workflow engine. Inline text after `/go` is treated as an additional note. `/go` without prior conversation or inline task text does not generate the workflow. Use `/cancel` to exit without running.
-
-Exec input supports image attachments while editing the current line. Use `/paste-image` or `Ctrl+V` to attach a clipboard image on macOS, or paste an OSC 1337 inline image from a compatible terminal. TAKT inserts a `[Image #N]` placeholder. Reference that placeholder in an Assistant message or `/go` note to send the image with that Assistant request; placeholders that were not attached in the session are treated as normal text. When `/go` runs, referenced stored images are copied into the generated task spec and listed in its attachment section. Supported image types are PNG, JPEG, GIF, and WebP. Inline and clipboard images are limited to 10 MiB. TAKT rejects unsupported image data, mismatched inline-image filename types, oversized images, and stored attachments whose temp path is missing, a symlink, or not a regular file. Providers without native image input receive the attachment as a local path reference in the prompt.
-
-Normal agent steps, parallel sub-steps, and loop detection judges may set `session_key` to share or isolate persona sessions. System steps, workflow_call steps, and parallel parent steps cannot set `session_key`. TAKT builds the runtime key as `session_key` plus the resolved provider, so values must be non-empty strings that do not collide with other generated session routes.
+See [Instant Exec Mode](./docs/cli-reference.md#instant-exec-mode) in the CLI Reference for preset resolution order, `/setup` persistence, image handling limits, and `session_key` behavior.
 
 ## Configuration
 
 Minimal `~/.takt/config.yaml`:
 
 ```yaml
-provider: claude    # claude, claude-sdk, claude-terminal, codex, opencode, cursor, copilot, kiro, or mock
+provider: claude    # claude, claude-sdk, claude-terminal, codex, opencode, deepseek-harness, cursor, copilot, kiro, pi, or mock
 model: sonnet       # passed directly to provider
 language: en        # en or ja
 ```
 
 Run metadata, sessions, traces, reports, and other run artifacts remain ordinary
-files under `.takt/runs/<run>/`. A workflow that uses Finding Contract lazily
-creates `.takt/runs/<run>/finding-contract.sqlite` for Finding authority state
-only. Resume and requeue can seed that state from another run; when the source
-has no Finding database, the target starts with an empty Finding ledger.
+files under `.takt/runs/<run>/`. Resume and requeue preserve the applicable run
+state and reports.
 
-To let TAKT choose provider/model per workflow step, keep a concrete top-level provider and define `auto_routing` candidates. The presence of effective `auto_routing` enables automatic routing:
+Beyond these basics, `config.yaml` (legacy mode) supports internal-agent overrides (`takt_providers`) and `auto_routing`, which selects a provider/model per step from candidate pools with a `cost` / `balanced` / `performance` strategy. Auto-routing decisions can be recorded locally as NDJSON under `.takt/events/`; recording is opt-in (`takt telemetry enable` or `telemetry.routing_decisions`) and TAKT never uploads routing decisions. In runtime mode, provider/model/options and routing move to `runtime.yaml` (see below).
 
-```yaml
-provider: codex          # used outside workflow steps and when auto_routing is absent
-model: gpt-5.6-sol
-takt_providers:
-  assistant:             # optional override; interactive / instruct / retry are not auto-routed
-    provider: codex
-    model: gpt-5.6-sol
-auto_routing:
-  strategy: balanced   # cost, balanced, or performance
-  router:
-    provider: codex
-    model: gpt-5.6-luna
-  candidates:
-    - name: advanced
-      description: Planning, final decisions, requirement-fulfillment judgment, and other advanced reasoning
-      provider: codex
-      model: gpt-5.6-sol
-      routing_tier: high
-    - name: coding
-      description: Implementation, tests, debugging, and refactoring
-      provider: codex
-      model: gpt-5.6-terra
-      routing_tier: medium
-    - name: lightweight
-      description: Formatting and small mechanical edits
-      provider: codex
-      model: gpt-5.6-luna
-      routing_tier: low
-  rules:
-    steps:
-      security-audit: advanced
-  default_pool: general
-  candidate_pools:
-    general:
-      candidates: [lightweight, coding, advanced]
-      fallback: advanced
-    implementation:
-      candidates: [coding, advanced]
-      fallback: advanced
-  pool_rules:
-    tags:
-      implementation: implementation
-```
-
-Operations without workflow-step context, such as AI task-slug generation, use the concrete top-level provider/model. `auto_routing.router` and candidates are only for workflow routing and are never implicit defaults. Assistant conversations (interactive planning, instruct, and retry) are not auto-routed: they use `takt_providers.assistant` when set and otherwise fall back to the top-level provider/model. CLI provider/model overrides apply only to interactive planning, not instruct or retry.
-
-Auto-routing decisions are written locally to `.takt/events/` as NDJSON. TAKT does not upload routing decisions. Local recording is enabled by default, can be configured with `telemetry.routing_decisions`, and can be inspected or changed with `takt telemetry status|enable|disable`.
-
-Or use API keys directly (no CLI installation required for Claude, Codex, OpenCode):
+Or use provider credentials directly (no CLI installation required for claude-sdk, Codex, OpenCode, Pi, or DeepSeek Harness when its Python SDK/runtime is installed):
 
 ```bash
 export TAKT_ANTHROPIC_API_KEY=sk-ant-...   # Anthropic (Claude)
@@ -365,34 +319,36 @@ export TAKT_OPENCODE_API_KEY=...           # OpenCode
 export TAKT_CURSOR_API_KEY=...             # Cursor Agent (optional if logged in)
 export TAKT_COPILOT_GITHUB_TOKEN=ghp_...   # GitHub Copilot CLI
 export TAKT_KIRO_API_KEY=...               # Kiro CLI
+export DEEPSEEK_API_KEY=...                 # Official DeepSeek Harness SDK
+# Optional: export DEEPSEEK_BASE_URL=https://...
+# Pi uses its SDK credential store or provider-native environment variables.
 ```
 
 See the [Configuration Guide](./docs/configuration.md) for all options, provider profiles, and model resolution.
 
-OpenCode calls have a 60-minute wall-clock limit by default. Calls that may run
-longer than 60 minutes must set `provider_options.opencode.guards.call_timeout_ms`
-explicitly (up to 86,400,000 ms). Guard profiles and per-model overrides can be
-configured as follows; `model_profiles` uses first-match order and `*` wildcards:
+OpenCode calls have a 60-minute provider-event inactivity limit by default: the
+timer resets on each provider event, so a healthy call can run longer while
+events continue to arrive. Raise the limit with
+`provider_options.opencode.guards.call_timeout_ms` (up to 86,400,000 ms). Guard
+profiles and per-model overrides are described in
+[Provider inactivity deadline and OpenCode execution guards](./docs/configuration.md#provider-inactivity-deadline-and-opencode-execution-guards).
 
-```yaml
-provider_options:
-  opencode:
-    guards:
-      profile: standard
-      model_profiles:
-        "opencode/big-pickle": minimal
-        "lmstudio/*": standard
-      call_timeout_ms: 7200000
-      text_byte_limit: 1048576
-      reasoning_byte_limit: 4194304
-```
+### Dedicated provider configuration (`runtime.yaml`)
 
-The removed `TAKT_OPENCODE_TOOL_ERROR_BUDGET`,
-`TAKT_OPENCODE_TOOL_SIGNATURE_ABSOLUTE`,
-`TAKT_OPENCODE_TOOL_SIGNATURE_REPEATS`,
-`TAKT_OPENCODE_TOOL_SUCCESS_REPEATS`, and
-`TAKT_OPENCODE_TOOL_RESULT_STAGNATION_REPEATS` variables are ignored and emit a
-one-time migration warning. See the configuration guide for the v6 guard policy.
+Provider, model, provider options, auto routing, and internal-agent assignment
+can live in a dedicated layer instead of `config.yaml`: `~/.takt/runtime.yaml`
+and `<project>/.takt/runtime.yaml`, with the project layer winning. Workflow
+YAML has no provider/model/options/routing layer. Runtime mode is enabled by an
+active `provider` section, not by the file existing; mixing an active
+`runtime.yaml` provider section with the legacy provider keys is rejected with
+a diagnostic naming the file and the key to migrate to. Without an active
+provider section, `config.yaml` behaves exactly as before.
+
+Companion reviewers are disabled by default. Enable them with the top-level
+`companion.enabled: true` policy in `runtime.yaml`; global and project policies
+combine with logical AND, so a global `false` cannot be re-enabled by a project
+setting. See [docs/configuration.md](docs/configuration.md) for the schema, the
+migration table, and companion policy details.
 
 ## Customization
 
@@ -460,9 +416,9 @@ Workflow definitions are stored under `workflows/`.
 
 ## Adopting Spec-Driven Development
 
-TAKT enforces phase transitions declaratively as a YAML state machine, formalizes the artifact of each phase with output contracts, and routes deviations back via parallel review and fix loops. This structure is particularly well-suited for users who follow Spec-Driven Development (SDD) and keep the spec at the center of the process. Once the spec is well-defined, the AI cannot silently skip a phase, drop an acceptance criterion, or claim "done" without passing the verification gate.
+TAKT enforces phase transitions declaratively as a YAML state machine, formalizes the artifact of each phase with output contracts, and routes deviations back via parallel review and fix loops. This structure suits Spec-Driven Development (SDD), where the spec stays at the center of the process. Once the spec is defined, the workflow enforces phase transitions, routes detected deviations back to fix steps, and does not complete until the verification gate passes.
 
-For users who want to adopt SDD, the community provides [j5ik2o/takt-sdd](https://github.com/j5ik2o/takt-sdd) as a ready-made implementation. It ships pieces for Requirements → Gap Analysis → Design → Tasks → Implementation → Validation, plus an OpenSpec-style change-proposal flow. Install in one command:
+For users who want to adopt SDD, the community provides [j5ik2o/takt-sdd](https://github.com/j5ik2o/takt-sdd) as a ready-made implementation. It ships workflows for Requirements → Gap Analysis → Design → Tasks → Implementation → Validation, plus an OpenSpec-style change-proposal flow. Install in one command:
 
 ```bash
 npx create-takt-sdd
@@ -488,6 +444,12 @@ See [External Integrations](./docs/external-integrations.md) for other community
 | [CI/CD Integration](./docs/ci-cd.md) | GitHub Actions and pipeline mode |
 | [External Integrations](./docs/external-integrations.md) | Community examples that extend TAKT without modifying core (audit trails, etc.) |
 | [Changelog](./CHANGELOG.md) ([日本語](./docs/CHANGELOG.ja.md)) | Version history |
+
+### Simplified Chinese documentation
+
+Simplified Chinese documentation uses the `.zh-CN.md` suffix so it can coexist with the English and Japanese pages. Start with the [Chinese documentation index](./docs/README.zh-CN.md).
+
+Translated coverage includes the onboarding path (README, tutorial, configuration, and CLI reference), workflow authoring, provider/external integrations, and task management. The remaining catalog, observability, design, prompting, token-saving, repertoire, CI/CD, testing, contributing, changelog, and internal design/development pages remain available in English or Japanese and are intentionally not duplicated here.
 
 ## Sponsors
 

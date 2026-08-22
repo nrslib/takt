@@ -28,6 +28,12 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run lint
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.10'
+      - name: Validate Python 3.10 compatibility
+        run: python -c "import sys; version = tuple(sys.version_info[:2]); assert version >= (3, 10), f'Python 3.10+ required, found {sys.version_info[:3]}'; print(sys.version_info[:3])"
+      - run: python -m py_compile src/infra/deepseek-harness/bridge.py
 
   test-shard:
     name: test shard (${{ matrix.shard }}/4)
@@ -64,6 +70,7 @@ jobs:
           fi
 
   it:
+    name: test:it
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -79,6 +86,66 @@ jobs:
       - run: npm run build
       - run: npm run test:it
 
+  heavy_it_shard:
+    name: test:it:heavy parallel shard (${{ matrix.shard }}/6)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run test:it:heavy:parallel -- --shard=${{ matrix.shard }}/6
+
+  heavy_it_serial:
+    name: test:it:heavy serial (${{ matrix.group }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - group: git
+            script: test:it:heavy:serial:git
+          - group: workflow
+            script: test:it:heavy:serial:workflow
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run ${{ matrix.script }}
+
+  heavy_it:
+    name: test:it:heavy
+    runs-on: ubuntu-latest
+    needs: [heavy_it_shard, heavy_it_serial]
+    if: ${{ always() }}
+    permissions:
+      contents: read
+    steps:
+      - run: |
+          if [ "${{ needs.heavy_it_shard.result }}" != "success" ] || [ "${{ needs.heavy_it_serial.result }}" != "success" ]; then
+            echo "Heavy integration jobs did not all succeed"
+            exit 1
+          fi
+
   windows-private-artifacts:
     runs-on: windows-latest
     permissions:
@@ -92,10 +159,30 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      # build は不要: 対象テストは vitest が src / prompt-evals/*.mjs を直接読む。
-      # ルートの build スクリプトは mkdir -p / cp を使う Unix 前提で Windows の
-      # cmd では実行できない（このジョブの検証対象でもない）。
+      # build は pi-cross-platform で Windows / macOS の両方を検証する。
       - run: npm test -- src/__tests__/private-file.test.ts src/__tests__/resume-report-snapshot.test.ts src/__tests__/promptEvalProbeLifecycle.test.ts src/__tests__/runtime-environment-windows.test.ts src/__tests__/executable-path.test.ts src/__tests__/spawn.test.ts src/__tests__/managed-spawn.test.ts src/__tests__/windows-executable-shadowing.test.ts
+
+  pi-cross-platform:
+    name: Pi SDK (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm test -- src/__tests__/pi-client.test.ts src/__tests__/pi-provider.test.ts
+      - run: npm run test:pi-sdk-smoke
 
   e2e-mock:
     runs-on: ubuntu-latest

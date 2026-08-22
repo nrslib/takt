@@ -13,9 +13,14 @@ import type {
   UsageEventLogger,
 } from '../../../core/logging/usageEventLogger.js';
 import { StreamDisplay } from '../../../shared/ui/index.js';
-import { sanitizeTerminalText } from '../../../shared/utils/text.js';
+import {
+  MAX_TERMINAL_OUTPUT_BYTES,
+  sanitizeTerminalText,
+  sanitizeTerminalTextWithinBytes,
+} from '../../../shared/utils/text.js';
 import { isDebugEnabled, isVerboseConsole } from '../../../shared/utils/debug.js';
-import { notifyWarning, playWarningSound } from '../../../shared/utils/index.js';
+import { createLogger, notifyWarning, playWarningSound } from '../../../shared/utils/index.js';
+import { safeExternalErrorMessage } from '../../../shared/utils/safeExternalErrorMessage.js';
 import type { ExceededInfo, WorkflowExecutionEvent, WorkflowExecutionOptions } from './types.js';
 import type { AnalyticsStepContext } from './analyticsEmitter.js';
 import { detectStepType, isQuietMode } from './workflowExecutionBootstrap.js';
@@ -131,6 +136,7 @@ type WorkflowTerminalIntent =
     };
 
 type OutInfo = { info: (line: string) => void };
+const log = createLogger('workflow-execution-events');
 
 function resolveStepProviderContext(
   providerInfo: StepProviderInfo,
@@ -204,7 +210,17 @@ function createOutputEvents(
           }]
         : [];
     case 'tool_result': {
-      const completedToolCallId = pendingToolCallIds.shift();
+      const reportedToolCallId = streamEvent.data.id;
+      let completedToolCallId: string | undefined;
+      if (reportedToolCallId !== undefined) {
+        const pendingIndex = pendingToolCallIds.indexOf(reportedToolCallId);
+        if (pendingIndex >= 0) {
+          pendingToolCallIds.splice(pendingIndex, 1);
+          completedToolCallId = reportedToolCallId;
+        }
+      } else {
+        completedToolCallId = pendingToolCallIds.shift();
+      }
       if (!completedToolCallId && !streamEvent.data.content) {
         return [];
       }
@@ -333,6 +349,10 @@ function emitProviderOptionLines(
     if (effort !== undefined) {
       out.info(`Reasoning effort: ${effort}${sourceSuffix('codex.reasoningEffort', sources, showSource)}`);
     }
+    const fastMode = options.codex?.fastMode;
+    if (fastMode !== undefined) {
+      out.info(`Fast mode: ${fastMode ? 'enabled' : 'disabled'}${sourceSuffix('codex.fastMode', sources, showSource)}`);
+    }
   } else if (stepProvider === 'opencode') {
     const variant = options.opencode?.variant;
     if (variant !== undefined) {
@@ -347,6 +367,26 @@ function emitProviderOptionLines(
     const agent = options.kiro?.agent;
     if (agent !== undefined) {
       out.info(`Agent: ${agent}${sourceSuffix('kiro.agent', sources, showSource)}`);
+    }
+  } else if (stepProvider === 'deepseek-harness') {
+    const baseUrl = options.deepseekHarness?.baseUrl;
+    if (baseUrl !== undefined) {
+      out.info(`Base URL: ${CONFIGURED_PROVIDER_OPTION_VALUE}${sourceSuffix('deepseekHarness.baseUrl', sources, showSource)}`);
+    }
+  } else if (stepProvider === 'pi') {
+    const pi = options.pi;
+    if (pi?.extensions !== undefined) {
+      out.info(`Extensions: ${pi.extensions.length}${sourceSuffix('pi.extensions', sources, showSource)}`);
+    }
+    const disabledResources = [
+      pi?.noExtensions === true ? 'extensions' : undefined,
+      pi?.noSkills === true ? 'skills' : undefined,
+      pi?.noPromptTemplates === true ? 'prompt templates' : undefined,
+      pi?.noThemes === true ? 'themes' : undefined,
+      pi?.noContextFiles === true ? 'context files' : undefined,
+    ].filter((resource): resource is string => resource !== undefined);
+    if (disabledResources.length > 0) {
+      out.info(`Disabled resources: ${disabledResources.join(', ')}`);
     }
   }
 }
@@ -380,12 +420,28 @@ export function bindWorkflowExecutionEvents(
   let preparedTerminalPublication:
     WorkflowTerminalPublicationPayload | undefined;
   let confirmationSequence = 0;
+  let companionAuditWriteFailureReported = false;
   const nextConfirmationId = (): string => {
     confirmationSequence += 1;
     return `confirmation-${confirmationSequence}`;
   };
   const onEventSinkFailure = (error: unknown): void => {
     finalizationIssues.push(new RunLiveDeliveryError(error));
+  };
+  const persistCompanionAudit = (
+    recordType: 'companion_call' | 'companion_review_round' | 'companion_review_skipped',
+    persist: () => void,
+  ): void => {
+    try {
+      persist();
+    } catch (error) {
+      if (companionAuditWriteFailureReported) return;
+      companionAuditWriteFailureReported = true;
+      log.warn('Companion audit record could not be persisted; continuing workflow', {
+        recordType,
+        error: safeExternalErrorMessage(error),
+      });
+    }
   };
   const syncLatestResumePoint = (): void => {
     if (!canReadResumePoint()) {
@@ -499,8 +555,6 @@ export function bindWorkflowExecutionEvents(
     resumeStepName,
     stepIteration,
     workflowStack,
-    findingScopeIdentity,
-    findingIds,
   ) => {
     state.currentIteration = iteration;
     state.currentStepName = resumeStepName;
@@ -547,19 +601,7 @@ export function bindWorkflowExecutionEvents(
       deps.configuredModel,
     );
     const stepScopeKey = buildWorkflowStepScopeKey(step.name, workflowStack);
-    const analyticsScopeIdentity = findingScopeIdentity
-      ?? buildWorkflowScopeIdentity(workflowName, workflowStack);
-    if (findingScopeIdentity !== undefined) {
-      if (findingIds === undefined) {
-        throw new Error(
-          `Finding IDs are missing for scope "${findingScopeIdentity}"`,
-        );
-      }
-      deps.analyticsEmitter.setFindingContractFindingIds(
-        findingScopeIdentity,
-        findingIds,
-      );
-    }
+    const analyticsScopeIdentity = buildWorkflowScopeIdentity(workflowName, workflowStack);
     stepContextsByScope.set(stepScopeKey, {
       usage: {
         provider: stepProvider,
@@ -627,7 +669,11 @@ export function bindWorkflowExecutionEvents(
     }
 
     if (response.error) {
-      deps.out.error(`Error: ${response.error}`);
+      const prefix = 'Error: ';
+      deps.out.error(`${prefix}${sanitizeTerminalTextWithinBytes(
+        response.error,
+        MAX_TERMINAL_OUTPUT_BYTES - Buffer.byteLength(prefix, 'utf8'),
+      )}`);
       emitWorkflowExecutionEvent(
         deps.eventSink,
         {
@@ -756,19 +802,10 @@ export function bindWorkflowExecutionEvents(
 
   deps.engine.on('step:report', (step, filePath, fileName, context) => {
     reportStepFile(filePath, fileName, deps.out);
-    if (
-      context.findingScopeIdentity !== undefined
-      && context.findingIds === undefined
-    ) {
-      throw new Error(
-        `Finding IDs are missing for scope "${context.findingScopeIdentity}"`,
-      );
-    }
-    const scopeIdentity = context.findingScopeIdentity
-      ?? buildWorkflowScopeIdentity(
-        context.workflowName,
-        context.workflowStack,
-      );
+    const scopeIdentity = buildWorkflowScopeIdentity(
+      context.workflowName,
+      context.workflowStack,
+    );
     deps.analyticsEmitter.onStepReport(
       step,
       filePath,
@@ -782,8 +819,92 @@ export function bindWorkflowExecutionEvents(
     );
   });
 
-  deps.engine.on('findings:ledger', (ledger, context) => {
-    deps.analyticsEmitter.onFindingLedgerUpdated(ledger, context);
+  deps.engine.on('companion:start', (payload) => {
+    deps.analyticsEmitter.onCompanionEvent('companion:start', payload);
+    deps.out.info(`Companion start for step "${sanitizeTerminalText(payload.step)}"`);
+    emitWorkflowExecutionEvent(
+      deps.eventSink,
+      { type: 'companion', action: 'start', ...payload },
+      onEventSinkFailure,
+      eventSinkDispatchState,
+    );
+  });
+  deps.engine.on('companion:pool_selected', (payload) => {
+    deps.analyticsEmitter.onCompanionEvent('companion:pool_selected', payload);
+    deps.out.info(`Companion pool_selected for step "${sanitizeTerminalText(payload.step)}"`);
+    emitWorkflowExecutionEvent(
+      deps.eventSink,
+      { type: 'companion', action: 'pool_selected', ...payload },
+      onEventSinkFailure,
+      eventSinkDispatchState,
+    );
+  });
+  deps.engine.on('companion:finding', (payload) => {
+    deps.analyticsEmitter.onCompanionEvent('companion:finding', payload);
+    deps.out.info(`Companion finding for step "${sanitizeTerminalText(payload.step)}"`);
+    emitWorkflowExecutionEvent(
+      deps.eventSink,
+      { type: 'companion', action: 'finding', ...payload },
+      onEventSinkFailure,
+      eventSinkDispatchState,
+    );
+  });
+  deps.engine.on('companion:fix_round', (payload) => {
+    deps.analyticsEmitter.onCompanionEvent('companion:fix_round', payload);
+    deps.out.info(`Companion fix_round for step "${sanitizeTerminalText(payload.step)}"`);
+    emitWorkflowExecutionEvent(
+      deps.eventSink,
+      { type: 'companion', action: 'fix_round', ...payload },
+      onEventSinkFailure,
+      eventSinkDispatchState,
+    );
+  });
+  deps.engine.on('companion:complete', (payload) => {
+    deps.analyticsEmitter.onCompanionEvent('companion:complete', payload);
+    deps.out.info(`Companion complete for step "${sanitizeTerminalText(payload.step)}"`);
+    emitWorkflowExecutionEvent(
+      deps.eventSink,
+      { type: 'companion', action: 'complete', ...payload },
+      onEventSinkFailure,
+      eventSinkDispatchState,
+    );
+  });
+  deps.engine.on('companion:review_round', (payload) => {
+    const summary = {
+      step: payload.step,
+      companion: payload.companion,
+      trigger: payload.trigger,
+      digest: payload.digest,
+      changedLines: payload.changedLines,
+      findingCount: payload.findingCount,
+      ...(payload.runPathNamespace === undefined
+        ? {}
+        : { runPathNamespace: payload.runPathNamespace }),
+    };
+    deps.analyticsEmitter.onCompanionEvent('companion:review_round', summary);
+    persistCompanionAudit('companion_review_round', () => deps.sessionLogger.onCompanionReviewRound(payload));
+    emitWorkflowExecutionEvent(
+      deps.eventSink,
+      { type: 'companion', action: 'review_round', ...summary },
+      onEventSinkFailure,
+      eventSinkDispatchState,
+    );
+  });
+  deps.engine.on('companion:queue_coalesced', (payload) => {
+    deps.analyticsEmitter.onCompanionEvent('companion:queue_coalesced', payload);
+    deps.sessionLogger.onCompanionQueueCoalesced(payload);
+    emitWorkflowExecutionEvent(
+      deps.eventSink,
+      { type: 'companion', action: 'queue_coalesced', ...payload },
+      onEventSinkFailure,
+      eventSinkDispatchState,
+    );
+  });
+  deps.engine.on('companion:call', (payload) => {
+    persistCompanionAudit('companion_call', () => deps.sessionLogger.onCompanionCall(payload));
+  });
+  deps.engine.on('companion:review_skipped', (payload) => {
+    persistCompanionAudit('companion_review_skipped', () => deps.sessionLogger.onCompanionReviewSkipped(payload));
   });
 
   deps.engine.on('workflow:complete', (workflowState) => {
@@ -802,6 +923,9 @@ export function bindWorkflowExecutionEvents(
       const runFailure: RunFailure = {
         step: failure.step,
         error: failure.error,
+        ...(failure.failureCategory === undefined
+          ? {}
+          : { failureCategory: failure.failureCategory }),
       };
       state.abortReason = reason;
       state.abortKind = kind;

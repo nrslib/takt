@@ -18,4 +18,3 @@
 - production code を変更すること
 - 境界や依存方向が妥当だと、ファイル根拠なしに断定すること
 - 「よくある構成だから」で指摘対象 module を飛ばすこと
-{{include:instructions/review-pr-context}}

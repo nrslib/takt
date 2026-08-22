@@ -2,13 +2,80 @@ import { describe, expect, it } from 'vitest';
 import {
   AGENT_FAILURE_CATEGORIES,
   classifyAbortSignalReason,
+  createAgentFailureError,
+  createAgentResponseFailureError,
   createPartTimeoutReason,
   createProviderErrorFailure,
+  createProviderStreamParseError,
+  createProviderStreamParseFailure,
   createStreamIdleTimeoutFailure,
   formatAgentFailure,
+  isAgentFailureError,
+  isProviderStreamParseError,
 } from '../shared/types/agent-failure.js';
 
 describe('agent-failure', () => {
+  it('registers the stdout parse failure category', () => {
+    expect(AGENT_FAILURE_CATEGORIES).toMatchObject({
+      PROVIDER_STREAM_PARSE_ERROR: 'provider_stream_parse_error',
+    });
+  });
+
+  it('creates and formats a stdout parse failure detail', () => {
+    const failure = createProviderStreamParseFailure(new Error('Failed to parse item: invalid stdout line'));
+
+    expect(failure).toEqual({
+      category: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+      reason: 'Failed to parse item: invalid stdout line',
+    });
+    expect(formatAgentFailure(failure)).toBe(
+      'provider stream parse error: Failed to parse item: invalid stdout line',
+    );
+  });
+
+  it('keeps the typed parse failure reason raw when the response was already formatted', () => {
+    const error = createProviderStreamParseError(
+      'provider stream parse error: Failed to parse item: invalid stdout line',
+    );
+
+    expect(isProviderStreamParseError(error)).toBe(true);
+    expect(error.reason).toBe('Failed to parse item: invalid stdout line');
+    expect(error.message).toBe('provider stream parse error: Failed to parse item: invalid stdout line');
+  });
+
+  it('preserves the category and raw reason in the generic typed failure contract', () => {
+    const error = createAgentFailureError(
+      AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+      new Error('Gateway unavailable'),
+    );
+
+    expect(isAgentFailureError(error)).toBe(true);
+    expect(error.failureCategory).toBe(AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR);
+    expect(error.reason).toBe('Gateway unavailable');
+    expect(error.message).toBe('Gateway unavailable');
+  });
+
+  it('creates a typed failure from a categorized response', () => {
+    const error = createAgentResponseFailureError({
+      status: 'error',
+      content: '',
+      error: 'invalid stdout line',
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+    }, 'Agent failed');
+
+    expect(error.name).toBe('ProviderStreamParseError');
+    expect(error.message).toBe('provider stream parse error: invalid stdout line');
+  });
+
+  it('uses the shared detail fallback and boundary prefix for an unclassified response', () => {
+    const error = createAgentResponseFailureError({
+      status: 'blocked',
+      content: '',
+    }, 'Agent failed');
+
+    expect(error).toEqual(new Error('Agent failed: blocked'));
+  });
+
   it('失敗分類の生成と表示整形を共通契約として扱う', () => {
     const partTimeout = classifyAbortSignalReason(new Error(createPartTimeoutReason(2500)));
 

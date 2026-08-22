@@ -1,3 +1,4 @@
+# `readonly` の全許可に加えて、ファイルの作成・編集。
 claude:
   allowed_tools:
     - Read
@@ -19,3 +20,6 @@ opencode:
     - todowrite
     - websearch
     - webfetch
+  network_access: true
+codex:
+  network_access: true

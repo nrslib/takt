@@ -5,6 +5,7 @@ import {
   EXEC_EFFORTS,
   providerSupportsExecEffort,
   getSupportedExecEfforts,
+  resolveExecProviderEffort,
 } from '../features/exec/configValidation.js';
 import type { ExecEffort } from '../features/exec/types.js';
 
@@ -54,7 +55,7 @@ describe('assertExecProviderEffort and providerSupportsExecEffort consistency', 
   );
 });
 
-describe('assertExecProviderEffort sufficiency for type narrowing', () => {
+describe('assertExecProviderEffort provider capability checks', () => {
   it('should pass validation for claude provider with valid effort — no redundant check needed', () => {
     const effort: ExecEffort = 'high';
     expect(() =>
@@ -76,10 +77,42 @@ describe('assertExecProviderEffort sufficiency for type narrowing', () => {
     ).not.toThrow();
   });
 
-  it('should reject provider with unsupported effort before any downstream code runs', () => {
+  it.each([
+    ['codex', 'max'],
+    ['claude', 'experimental'],
+    ['copilot', 'vendor-level'],
+  ] as const)(
+    'should accept arbitrary effort values for %s/%s and leave support to the provider',
+    (provider, effort) => {
+      expect(() =>
+        assertExecProviderEffort(provider, effort, 'test'),
+      ).not.toThrow();
+    },
+  );
+
+  it.each(
+    (['codex', 'claude', 'copilot'] as const).flatMap((provider) =>
+      (['', '   '] as const).map((effort) => [provider, effort] as const)),
+  )('should reject blank effort values for %s/%s', (provider, effort) => {
+    expect(() => resolveExecProviderEffort(provider, effort, 'test'))
+      .toThrow(`does not support effort "${effort}"`);
+  });
+
+  it.each([
+    ['codex', '  custom-level  ', 'custom-level'],
+    ['claude', '  experimental  ', 'experimental'],
+    ['copilot', '  vendor-level  ', 'vendor-level'],
+  ] as const)(
+    'should return the canonical trimmed effort value for %s/%s',
+    (provider, effort, expected) => {
+      expect(resolveExecProviderEffort(provider, effort, 'test')).toBe(expected);
+    },
+  );
+
+  it('should reject effort for providers without effort support', () => {
     expect(() =>
-      assertExecProviderEffort('codex', 'max', 'test'),
-    ).toThrow('does not support effort "max"');
+      assertExecProviderEffort('opencode', 'high', 'test'),
+    ).toThrow('does not support effort "high"');
   });
 
   it('should allow codex provider when effort is undefined', () => {
@@ -133,7 +166,7 @@ describe('assertExecProviderModel', () => {
     expect(() => assertExecProviderModel('opencode', 'opencode/big-pickle', 'exec.session.model')).not.toThrow();
   });
 
-  it.each(['claude', 'codex', 'mock', 'cursor', 'copilot', 'kiro'] as const)(
+  it.each(['claude', 'codex', 'mock', 'cursor', 'copilot', 'kiro', 'pi', 'deepseek-harness'] as const)(
     'should allow omitted model for %s',
     (provider) => {
       expect(() => assertExecProviderModel(provider, undefined, 'exec.session.model')).not.toThrow();

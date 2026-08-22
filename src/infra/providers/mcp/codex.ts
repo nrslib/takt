@@ -3,8 +3,8 @@
  *
  * Converts resolved servers into the Codex CLI `mcp_servers` config object
  * passed via `CodexOptions.config` (order.md:177-182). stdio servers become
- * `command`/`args`/`env`; Streamable HTTP servers become `url`/`headers`. SSE
- * is not supported by Codex and fails fast in `validate`.
+ * `command`/`args`/`env`; Streamable HTTP servers become `url`/`http_headers`.
+ * SSE is not supported by Codex and fails fast in `validate`.
  */
 
 import type {
@@ -58,6 +58,6 @@ function toCodexServer(server: McpServerConfig): unknown {
   }
   return {
     url: server.url,
-    ...(server.headers !== undefined ? { headers: server.headers } : {}),
+    ...(server.headers !== undefined ? { http_headers: server.headers } : {}),
   };
 }

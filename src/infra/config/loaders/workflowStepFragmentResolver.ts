@@ -106,6 +106,34 @@ const STATIC_PARTICIPANT_ROLE: FragmentExpansionRole = {
 };
 const MAX_STEP_FRAGMENT_DEPTH = 64;
 const MAX_STEP_FRAGMENT_REFERENCES = 512;
+const COMPLETION_RETRY_KEY = 'completion_retry';
+const DEPRECATED_COMPLETION_RETRY_KEY = 'review_completion';
+
+function normalizeCompletionRetryAlias(
+  step: RawRecord,
+  workflowPath: string,
+  stepPath: readonly PropertyKey[],
+  sourcePath: string,
+): RawRecord {
+  const hasCompletionRetry = Object.hasOwn(step, COMPLETION_RETRY_KEY);
+  const hasDeprecatedAlias = Object.hasOwn(step, DEPRECATED_COMPLETION_RETRY_KEY);
+  if (hasCompletionRetry && hasDeprecatedAlias) {
+    throw workflowError(
+      workflowPath,
+      `step cannot specify both "${COMPLETION_RETRY_KEY}" and deprecated alias "${DEPRECATED_COMPLETION_RETRY_KEY}"`,
+      { path: [...stepPath, COMPLETION_RETRY_KEY], sourcePath },
+    );
+  }
+  if (!hasDeprecatedAlias) {
+    return step;
+  }
+  const normalized: RawRecord = {
+    ...step,
+    [COMPLETION_RETRY_KEY]: getOwnValue(step, DEPRECATED_COMPLETION_RETRY_KEY),
+  };
+  delete normalized[DEPRECATED_COMPLETION_RETRY_KEY];
+  return normalized;
+}
 
 function mergeStepValues(base: RawRecord, override: RawRecord): RawRecord {
   const result: RawRecord = { ...base };
@@ -444,20 +472,21 @@ function expandStep(
   role: FragmentExpansionRole,
 ): ExpandedStep {
   if (!isRecord(value)) return { value, provenance: [], dependencies: [], referenceCount };
-  const uses = getOwnValue(value, 'uses');
+  const step = normalizeCompletionRetryAlias(value, options.workflowPath, stepPath, options.workflowPath);
+  const uses = getOwnValue(step, 'uses');
   if (uses === undefined) {
-    const stepOutsideParallel = { ...value };
+    const stepOutsideParallel = { ...step };
     delete stepOutsideParallel.parallel;
     assertSafeStepFragmentObject(stepOutsideParallel, options.workflowPath, 'workflow step');
     if (isConcreteExpansion(role)) {
-      return expandNestedParallel(value, scope, stack, referenceCount, options, stepPath);
+      return expandNestedParallel(step, scope, stack, referenceCount, options, stepPath);
     }
     return {
-      value: { ...value },
+      value: { ...step },
       provenance: [],
       dependencies: [],
       referenceCount,
-      parallelContext: getOwnValue(value, 'parallel') === undefined ? undefined : { scope, stack },
+      parallelContext: getOwnValue(step, 'parallel') === undefined ? undefined : { scope, stack },
     };
   }
   if (typeof uses !== 'string' || uses.trim().length === 0) {
@@ -492,10 +521,15 @@ function expandStep(
   if (stack.some((entry) => entry.realPath === realPath)) {
     throw workflowError(options.workflowPath, `circular step fragment reference "${uses}": ${[...stack.map((entry) => entry.sourcePath), resolved.path].join(' -> ')}`);
   }
-  const rawFragment = readStepFragment(resolved.path, options.workflowPath, uses);
+  const rawFragment = normalizeCompletionRetryAlias(
+    readStepFragment(resolved.path, options.workflowPath, uses),
+    options.workflowPath,
+    stepPath,
+    resolved.path,
+  );
   assertCallerOwnedFragmentDoesNotDefineRules(rawFragment, options.workflowPath, uses, resolved.path);
-  const callerSource = getBoundStepFragmentSource(value);
-  const boundFragment = bindStepFragmentParams(rawFragment, value, {
+  const callerSource = getBoundStepFragmentSource(step);
+  const boundFragment = bindStepFragmentParams(rawFragment, step, {
     callerPath: callerSource?.path ?? stepPath,
     callerSourcePath: callerSource?.sourcePath ?? options.workflowPath,
     fragmentPath: resolved.path,
@@ -531,8 +565,8 @@ function expandStep(
       : withoutOverriddenProvenance(expandedBase.provenance, expandedBase.value, fragmentInline, stepPath)),
     ...collectFragmentProvenance(fragmentInline, uses, resolved.path, stepPath),
   ].filter((entry) => !boundPaths.some((path) => isPathWithin(entry.stepPath, path)));
-  const callerRuleSpec = getOwnValue(value, 'rules');
-  const inlineStep = removeUses(value);
+  const callerRuleSpec = getOwnValue(step, 'rules');
+  const inlineStep = removeUses(step);
   try {
     assertSafeStepFragmentObject(inlineStep, options.workflowPath, `step using fragment "${uses}"`);
   } catch (error) {

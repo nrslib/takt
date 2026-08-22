@@ -6,7 +6,7 @@ import {
 
 export function resolveWorkflowStateRoot(
   state: WorkflowState,
-  root: Exclude<WorkflowStateRoot, 'findings'>,
+  root: Exclude<WorkflowStateRoot, 'companion'>,
 ): Map<string, Record<string, unknown>> {
   if (root === 'context') {
     return state.systemContexts;
@@ -42,10 +42,10 @@ export function resolveWorkflowStateReference(reference: string, state: Workflow
   const { root, scope, path } = parseWorkflowStateReference(reference);
 
   let current: unknown;
-  if (root === 'findings') {
-    current = state.findings;
+  if (root === 'companion') {
+    current = state.companion;
     if (current == null) {
-      throw new Error('Missing workflow findings state');
+      throw new Error(`Missing workflow ${root} state`);
     }
   } else {
     if (!scope) {
@@ -69,5 +69,10 @@ export function resolveWorkflowStateReference(reference: string, state: Workflow
     current = (current as Record<string, unknown>)[key];
   }
 
+  if (Array.isArray(current)) {
+    return current.map((item) => (
+      item !== null && typeof item === 'object' ? { ...item as Record<string, unknown> } : item
+    ));
+  }
   return current;
 }

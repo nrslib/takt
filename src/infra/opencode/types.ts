@@ -4,7 +4,7 @@
 
 import type { AskUserQuestionHandler } from '../../core/workflow/types.js';
 import type { Language, OpenCodeGuardOptions, PermissionMode } from '../../core/models/index.js';
-import type { StreamCallback } from '../../shared/types/provider.js';
+import type { ProviderActivityCallback, StreamCallback } from '../../shared/types/provider.js';
 import { mapsToOpenCodeEditPermission } from './allowedTools.js';
 
 /** OpenCode permission reply values */
@@ -436,6 +436,7 @@ export interface OpenCodeCallOptions {
   /** Guard feature switches from provider_options.opencode.guards. */
   guards?: OpenCodeGuardOptions;
   onStream?: StreamCallback;
+  onActivity?: ProviderActivityCallback;
   onAskUserQuestion?: AskUserQuestionHandler;
   opencodeApiKey?: string;
   interactionTimeoutMs?: number;

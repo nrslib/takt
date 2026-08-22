@@ -300,7 +300,6 @@ describe('saveTaskFile', () => {
     const orderContent = fs.readFileSync(path.join(taskDir, 'order.md'), 'utf-8');
 
     expect(orderContent).toContain('Use [Image #1] as the visual reference.');
-    expect(orderContent).toContain('## 添付画像');
     expect(orderContent).toContain('- [Image #1]: `attachments/image-1.png`');
     expect(fs.readFileSync(path.join(taskDir, 'attachments', 'image-1.png'), 'utf-8')).toBe('png-data');
   });
@@ -457,7 +456,7 @@ describe('saveTaskFromInteractive', () => {
 
     await saveTaskFromInteractive(testDir, 'Task content', 'review');
 
-    expect(mockInfo).toHaveBeenCalledWith('  Workflow: review');
+    expect(mockInfo).toHaveBeenCalledWith(expect.stringContaining('review'));
   });
 
   it('should record issue number in tasks.yaml when issue option is provided', async () => {

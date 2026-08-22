@@ -48,7 +48,7 @@ describe('WorkflowEngine agent overrides', () => {
     applyDefaultMocks();
   });
 
-  it('passes resolved step provider/model to AgentRunner', async () => {
+  it('ignores workflow step provider/model and passes engine-level values to AgentRunner', async () => {
     const step = makeStep('plan', {
       provider: 'claude',
       model: 'claude-step',
@@ -77,8 +77,8 @@ describe('WorkflowEngine agent overrides', () => {
     const options = vi.mocked(runAgent).mock.calls[0][2];
     expect(options.provider).toBeUndefined();
     expect(options.model).toBeUndefined();
-    expect(options.resolvedProvider).toBe('claude');
-    expect(options.resolvedModel).toBe('claude-step');
+    expect(options.resolvedProvider).toBe('codex');
+    expect(options.resolvedModel).toBe('cli-model');
   });
 
   it('uses engine-level provider/model as resolved values when step provider/model is undefined', async () => {
@@ -112,7 +112,7 @@ describe('WorkflowEngine agent overrides', () => {
     expect(options.resolvedModel).toBe('cli-model');
   });
 
-  it('sets step provider/model to resolved fields when no engine-level overrides are supplied', async () => {
+  it('does not resolve provider/model from workflow step fields', async () => {
     const step = makeStep('plan', {
       provider: 'claude',
       model: 'step-model',
@@ -136,8 +136,8 @@ describe('WorkflowEngine agent overrides', () => {
     const options = vi.mocked(runAgent).mock.calls[0][2];
     expect(options.provider).toBeUndefined();
     expect(options.model).toBeUndefined();
-    expect(options.resolvedProvider).toBe('claude');
-    expect(options.resolvedModel).toBe('step-model');
+    expect(options.resolvedProvider).toBeUndefined();
+    expect(options.resolvedModel).toBeUndefined();
   });
 
   it('passes engine childProcessEnv to normal step AgentRunner options', async () => {
@@ -166,5 +166,34 @@ describe('WorkflowEngine agent overrides', () => {
 
     const options = vi.mocked(runAgent).mock.calls[0][2];
     expect(options.childProcessEnv).toEqual(childProcessEnv);
+  });
+
+  it('passes the current run failure directory to normal step AgentRunner options', async () => {
+    const step = makeStep('plan', {
+      rules: [makeRule('done', 'COMPLETE')],
+    });
+    const config: WorkflowConfig = {
+      name: 'failure-directory-test',
+      steps: [step],
+      initialStep: 'plan',
+      maxSteps: 1,
+    };
+
+    mockRunAgentSequence([
+      makeResponse({ persona: step.persona, content: 'done' }),
+    ]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+
+    const engine = new WorkflowEngine(config, '/tmp/project', 'failure directory task', {
+      projectCwd: '/tmp/project',
+    });
+
+    await engine.run();
+
+    const options = vi.mocked(runAgent).mock.calls[0][2];
+    expect(options).toHaveProperty(
+      'failureDir',
+      '/tmp/project/.takt/runs/test-report-dir/failures',
+    );
   });
 });

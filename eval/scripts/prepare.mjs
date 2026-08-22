@@ -39,6 +39,12 @@ const SCENARIO_MARKER = '@@PROMPTFOO_SCENARIO@@';
 const TARGETS = [
   { id: 'coding-review', workflow: 'peer-review', step: 'coding-review', fixture: 'eval/fixtures/sample-project' },
   { id: 'arch-review', workflow: 'peer-review', step: 'arch-review', fixture: 'eval/fixtures/sample-project' },
+  {
+    id: 'arch-failure-aggregation',
+    workflow: 'peer-review',
+    step: 'arch-review',
+    fixture: 'eval/fixtures/arch-failure-aggregation',
+  },
   { id: 'antipattern-review', workflow: 'peer-review', step: 'ai-antipattern-review-2nd', fixture: 'eval/fixtures/sample-project' },
   { id: 'frontend-review', workflow: 'review-frontend', step: 'frontend-review', fixture: 'eval/fixtures/frontend-app' },
   { id: 'cqrs-review', workflow: 'review-backend-cqrs', step: 'cqrs-es-review', fixture: 'eval/fixtures/backend-cqrs' },
@@ -46,23 +52,34 @@ const TARGETS = [
   // スナップショット（Source Path）を inventory-es 側に生成する専用エントリが必要
   { id: 'rescan', workflow: 'peer-review', step: 'arch-review', fixture: 'eval/fixtures/inventory-es' },
   { id: 'rescan-coding', workflow: 'peer-review', step: 'coding-review', fixture: 'eval/fixtures/inventory-es' },
-  { id: 'rescan-semantics', workflow: 'takt-default-high', step: 'implementation-semantics-review', fixture: 'eval/fixtures/inventory-es' },
-  // 精度（偽陽性）測定: hasOwn 防御済み Record を指摘しないこと
-  { id: 'rescan-precision', workflow: 'takt-default-high', step: 'implementation-semantics-review', fixture: 'eval/fixtures/inventory-es-guarded' },
-  { id: 'loop-monitor-reviewers-fix-fc', workflow: 'takt-default-high', monitorCycle: ['fix', 'reviewers'], fixture: 'eval/fixtures/sample-project' },
   { id: 'frontend-implement', workflow: 'frontend', step: 'implement', fixture: 'eval/fixtures/frontend-app', mutable: true },
   { id: 'cqrs-implement', workflow: 'backend-cqrs', step: 'implement', fixture: 'eval/fixtures/backend-cqrs', mutable: true },
   { id: 'fix-closure', workflow: 'review-remediation', step: 'fix-retry', fixture: 'eval/fixtures/fix-closure', mutable: true },
   { id: 'fix-self-scan', workflow: 'peer-review', step: 'fix', fixture: 'eval/fixtures/fix-self-scan', mutable: true },
   { id: 'fix-plan-fresh-findings', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-fresh-findings' },
   { id: 'fix-plan-boundary-preflight', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-boundary-preflight' },
+  { id: 'fix-plan-cause-check', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-cause-check' },
+  { id: 'fix-plan-bounded-proof', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-bounded-proof' },
   { id: 'review-family-closure', workflow: 'peer-review-suite-base', step: 'coding-review', fixture: 'eval/fixtures/review-family-closure' },
   {
     id: 'initial-review-contract-discovery',
     workflow: 'peer-review',
+    via: 'initial-reviewers',
     step: 'coding-review',
     fixture: 'eval/fixtures/initial-review-contract-discovery',
-    workflowCallVars: { review_mode: 'initial' },
+  },
+  {
+    id: 'initial-review-external-identity-wiring',
+    workflow: 'takt-development-review',
+    step: 'coding-review',
+    fixture: 'eval/fixtures/initial-review-external-identity-wiring',
+  },
+  {
+    id: 'testing-review-observable-evidence',
+    workflow: 'peer-review',
+    via: 'initial-reviewers',
+    step: 'testing-review',
+    fixture: 'eval/fixtures/testing-review-observable-evidence',
   },
   {
     id: 'initial-plan-contract-closure',
@@ -72,7 +89,7 @@ const TARGETS = [
   },
   {
     id: 'replan-contract-closure',
-    workflow: 'takt-default-high',
+    workflow: 'default',
     step: 'replan',
     fixture: 'eval/fixtures/initial-review-contract-discovery',
   },
@@ -100,6 +117,60 @@ const TARGETS = [
     mutable: true,
   },
   {
+    id: 'write-tests-default-priority',
+    workflow: 'default',
+    step: 'write_tests',
+    fixture: 'eval/fixtures/write-tests-default-priority',
+    mutable: true,
+  },
+  {
+    id: 'write-tests-default-priority-codex',
+    workflow: 'default',
+    step: 'write_tests',
+    fixture: 'eval/fixtures/write-tests-default-priority',
+    mutable: true,
+  },
+  {
+    id: 'scope-default-write-tests',
+    workflow: 'default',
+    step: 'write_tests',
+    fixture: 'eval/fixtures/scope-discipline-tests',
+    mutable: true,
+  },
+  {
+    id: 'scope-maintenance-write-tests',
+    workflow: 'backend-maintenance',
+    step: 'write_tests',
+    fixture: 'eval/fixtures/scope-discipline-tests',
+    mutable: true,
+  },
+  {
+    id: 'scope-architecture-search',
+    workflow: 'peer-review',
+    step: 'arch-review',
+    fixture: 'eval/fixtures/scope-architecture-search',
+  },
+  {
+    id: 'scope-architecture-search-none',
+    workflow: 'peer-review',
+    step: 'arch-review',
+    fixture: 'eval/fixtures/scope-architecture-search',
+    facetMode: 'none',
+  },
+  {
+    id: 'scope-architecture-search-unrelated',
+    workflow: 'peer-review',
+    step: 'arch-review',
+    fixture: 'eval/fixtures/scope-architecture-search',
+    facetMode: 'unrelated',
+  },
+  {
+    id: 'scope-architecture-boundary',
+    workflow: 'peer-review',
+    step: 'arch-review',
+    fixture: 'eval/fixtures/scope-architecture-boundary',
+  },
+  {
     id: 'implement-contract-traceability',
     workflow: 'default',
     step: 'implement',
@@ -118,11 +189,86 @@ const TARGETS = [
   {
     id: 'follow-up-review-repair-regression',
     workflow: 'peer-review',
+    via: 'reviewers',
     step: 'coding-review',
     fixture: 'eval/fixtures/follow-up-review-repair-regression',
-    workflowCallVars: { review_mode: 'follow_up' },
+  },
+  {
+    id: 'follow-up-testing-review-repair-regression',
+    workflow: 'peer-review',
+    via: 'reviewers',
+    step: 'testing-review',
+    fixture: 'eval/fixtures/follow-up-review-repair-regression',
+  },
+  {
+    id: 'review-adjudication-binding',
+    workflow: 'peer-review',
+    via: 'reviewers',
+    step: 'security-review',
+    fixture: 'eval/fixtures/review-adjudication-binding',
+    includeOutputContract: true,
+    dynamicFacetSelection: {
+      sourceWorkflow: 'development-review',
+      pool: 'security-review-facets',
+      candidateIds: ['cli'],
+    },
+  },
+  {
+    id: 'security-review-method',
+    workflow: 'peer-review',
+    via: 'initial-reviewers',
+    step: 'security-review',
+    fixture: 'eval/fixtures/security-review-method',
+    includeOutputContract: true,
+    dynamicFacetSelection: {
+      sourceWorkflow: 'development-review',
+      pool: 'security-review-facets',
+      candidateIds: ['cli'],
+    },
+  },
+  {
+    id: 'review-mode-authority',
+    workflow: 'review',
+    step: 'backend-review',
+    fixture: 'eval/fixtures/review-mode-authority',
+  },
+  {
+    id: 'fix-verifier-family-boundary',
+    workflow: 'review-remediation',
+    step: 'fix-verifier',
+    fixture: 'eval/fixtures/fix-verifier-family-boundary',
+  },
+  {
+    id: 'companion-early-scan',
+    companion: 'ai-antipattern-review-companion',
+    fixture: 'eval/fixtures/companion-family-boundary',
+  },
+  {
+    id: 'companion-evidence-boundary',
+    companion: 'review-companion-moderator',
+    fixture: 'eval/fixtures/companion-family-boundary',
   },
   { id: 'review-adjudication', workflow: 'peer-review', step: 'review-adjudication', fixture: 'eval/fixtures/review-adjudication' },
+  {
+    id: 'final-readiness-supervision',
+    workflow: 'final-gate',
+    step: 'supervise',
+    fixture: 'eval/fixtures/final-readiness-supervision',
+  },
+  {
+    id: 'final-readiness-supervision-phase2',
+    workflow: 'final-gate',
+    step: 'supervise',
+    fixture: 'eval/fixtures/final-readiness-supervision',
+    phase: 'phase2',
+    targetFile: 'supervisor-validation.md',
+  },
+  {
+    id: 'final-readiness-precision',
+    workflow: 'final-gate',
+    step: 'supervise',
+    fixture: 'eval/fixtures/final-readiness-precision',
+  },
 ];
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
@@ -145,38 +291,42 @@ const { ReportInstructionBuilder } = await import(
 const { StatusJudgmentBuilder } = await import(
   pathToFileURL(join(repoRoot, 'dist/core/workflow/instruction/StatusJudgmentBuilder.js')).href
 );
+const { composeDynamicFacets } = await import(
+  pathToFileURL(join(repoRoot, 'dist/core/workflow/dynamic-facets/dynamicFacetComposer.js')).href
+);
 const { getAllParallelSubSteps } = await import(
   pathToFileURL(join(repoRoot, 'dist/core/models/types.js')).href
 );
 const { MAX_WORKFLOW_CALL_DEPTH } = await import(
   pathToFileURL(join(repoRoot, 'dist/core/workflow/workflow-call-depth.js')).href
 );
+const { mergeWorkflowWideRules } = await import(
+  pathToFileURL(join(repoRoot, 'dist/core/workflow/engine/workflow-wide-rule-merge.js')).href
+);
+const { loadCompanionDefinition } = await import(
+  pathToFileURL(join(repoRoot, 'dist/infra/config/loaders/companionDefinitionLoader.js')).href
+);
+const { getBuiltinCompanionsDir } = await import(
+  pathToFileURL(join(repoRoot, 'dist/infra/config/paths.js')).href
+);
 
-const requested = process.argv.slice(2);
-for (const id of requested) {
-  if (!TARGETS.some((t) => t.id === id)) {
-    throw new Error(`Unknown target "${id}". Available: ${TARGETS.map((t) => t.id).join(', ')}`);
-  }
-}
-const targets = requested.length > 0 ? TARGETS.filter((t) => requested.includes(t.id)) : TARGETS;
-
-const language = resolveWorkflowConfigValue(repoRoot, 'language');
-const preparedDirs = new Set();
-
-function findStepTarget(workflow, stepName, depth = 0) {
+function findStepTarget(workflow, stepName, depth = 0, inheritedWorkflowRules) {
   if (depth > MAX_WORKFLOW_CALL_DEPTH) {
     throw new Error(`Workflow-call nesting exceeded while resolving step "${stepName}"`);
   }
 
+  const workflowRules = mergeWorkflowWideRules(inheritedWorkflowRules, workflow.allStepsRules);
+
   for (const [stepIndex, step] of workflow.steps.entries()) {
-    if (step.name === stepName) {
-      return { workflow, target: step, stepIndex };
+    if (step.name === stepName && step.kind !== 'workflow_call') {
+      return { workflow, target: step, stepIndex, workflowRules };
     }
+  }
+
+  for (const [stepIndex, step] of workflow.steps.entries()) {
     const substep = (step.parallel === undefined ? [] : getAllParallelSubSteps(step.parallel))
-      .find((candidate) => candidate.name === stepName);
-    if (substep) {
-      return { workflow, target: substep, stepIndex };
-    }
+      .find((candidate) => candidate.name === stepName && candidate.kind !== 'workflow_call');
+    if (substep) return { workflow, target: substep, stepIndex, workflowRules };
   }
 
   for (const step of workflow.steps) {
@@ -188,165 +338,354 @@ function findStepTarget(workflow, stepName, depth = 0) {
       if (candidate.kind !== 'workflow_call') continue;
       const child = resolveWorkflowCallTarget(workflow, candidate, repoRoot);
       if (!child) continue;
-      const found = findStepTarget(child, stepName, depth + 1);
+      const found = findStepTarget(child, stepName, depth + 1, workflowRules);
       if (found) return found;
     }
+  }
+
+  const directWorkflowCall = workflow.steps.find((step) => (
+    step.name === stepName && step.kind === 'workflow_call'
+  ));
+  if (directWorkflowCall) {
+    return {
+      workflow,
+      target: directWorkflowCall,
+      stepIndex: workflow.steps.indexOf(directWorkflowCall),
+      workflowRules,
+    };
   }
 
   return null;
 }
 
-for (const {
-  id,
-  workflow: workflowName,
-  step: stepName,
-  monitorCycle,
-  fixture,
-  mutable,
-  workflowCallVars,
-  artifacts,
-  phase: requestedPhase,
-  targetFile,
-} of targets) {
-  if (requestedPhase !== undefined && monitorCycle !== undefined) {
-    throw new Error(`Target "${id}" cannot define both phase and monitorCycle`);
+function findStepThroughCall(workflow, callStepName, stepName) {
+  const callStep = workflow.steps.find((step) => step.name === callStepName);
+  if (!callStep || callStep.kind !== 'workflow_call') {
+    throw new Error(`Workflow call "${callStepName}" not found while resolving step "${stepName}"`);
   }
-  const resolvedPhase = requestedPhase ?? (monitorCycle ? 'phase3' : 'phase1');
-  const fixtureDir = resolve(repoRoot, fixture);
-
-  // Mutable (coder) targets work on a disposable copy.
-  let runDir = fixtureDir;
-  if (mutable) {
-    runDir = join(repoRoot, 'eval', '.work', id);
-    rmSync(runDir, { recursive: true, force: true });
-    mkdirSync(dirname(runDir), { recursive: true });
-    cpSync(fixtureDir, runDir, { recursive: true });
+  const child = resolveWorkflowCallTarget(workflow, callStep, repoRoot);
+  if (!child) {
+    throw new Error(`Workflow call "${callStepName}" could not be resolved`);
   }
-  const artifactDir = artifacts === undefined ? runDir : resolve(repoRoot, artifacts);
-
-  let config = loadWorkflowByIdentifier(workflowName, repoRoot);
-  if (!config) {
-    throw new Error(`Workflow not found: ${workflowName}`);
-  }
-
-  let target = null;
-  let stepIndex = -1;
-  if (monitorCycle) {
-    const monitor = config.loopMonitors?.find(({ cycle }) =>
-      cycle.length === monitorCycle.length
-      && cycle.every((name, index) => name === monitorCycle[index]),
-    );
-    if (!monitor?.judge.instruction) {
-      throw new Error(`Loop monitor [${monitorCycle.join(', ')}] not found in ${workflowName}`);
-    }
-    target = {
-      name: `_loop_judge_${monitor.cycle.join('_')}`,
-      persona: monitor.judge.persona,
-      personaPath: monitor.judge.personaPath,
-      edit: false,
-      instruction: monitor.judge.instruction.replaceAll('{cycle_count}', String(monitor.threshold)),
-      rules: monitor.judge.rules,
-      passPreviousResponse: true,
-    };
-    stepIndex = config.steps.findIndex(({ name }) => name === monitor.cycle.at(-1));
-  } else {
-    const found = findStepTarget(config, stepName);
-    if (found) {
-      config = found.workflow;
-      target = found.target;
-      stepIndex = found.stepIndex;
-    }
-  }
-  if (!target) {
-    const names = config.steps.flatMap((step) => [
-      step.name,
-      ...(step.parallel === undefined ? [] : getAllParallelSubSteps(step.parallel))
-        .map((substep) => substep.name),
-    ]);
-    throw new Error(`Step "${stepName}" not found in ${workflowName}. Available: ${names.join(', ')}`);
-  }
-
-  // --- Facet snapshots + seeded reports (once per run directory) -----------
-  const snapshotDir = join(artifactDir, '.takt', 'eval-snapshots');
-  const reportDir = join(artifactDir, '.takt', 'runs', 'eval', 'reports');
-  if (!preparedDirs.has(artifactDir)) {
-    preparedDirs.add(artifactDir);
-    rmSync(snapshotDir, { recursive: true, force: true });
-    mkdirSync(snapshotDir, { recursive: true });
-    rmSync(reportDir, { recursive: true, force: true });
-    mkdirSync(reportDir, { recursive: true });
-    const seedDir = join(runDir, 'reports-seed');
-    if (existsSync(seedDir)) {
-      cpSync(seedDir, reportDir, { recursive: true });
-      console.log(`Report dir seeded: ${reportDir} (${readdirSync(seedDir).length} files)`);
-    }
-  }
-
-  function writeFacetSnapshot(kind, contents) {
-    if (!contents || contents.length === 0) return undefined;
-    const path = join(snapshotDir, `${id}-${kind}.md`);
-    writeFileSync(path, contents.join('\n\n---\n\n'));
-    return path;
-  }
-
-  const policySourcePath = writeFacetSnapshot('policies', target.policyContents);
-  const knowledgeSourcePath = writeFacetSnapshot('knowledge', target.knowledgeContents);
-
-  // --- Render the assembled Phase 1 prompt ---------------------------------
-  const context = {
-    task: TASK_MARKER,
-    iteration: 1,
-    maxSteps: config.maxSteps,
-    stepIteration: 1,
-    cwd: runDir,
-    projectCwd: runDir,
-    userInputs: [],
-    previousOutput: { content: PREV_MARKER },
-    workflowSteps: config.steps,
-    currentStepIndex: stepIndex,
-    reportDir,
-    policySourcePath,
-    knowledgeSourcePath,
-    workflowCallVars,
-    language,
-  };
-
-  const instruction = resolvedPhase === 'phase2'
-    ? new ReportInstructionBuilder(target, {
-        cwd: runDir,
-        task: TASK_MARKER,
-        reportDir,
-        stepIteration: 1,
-        language,
-        targetFile,
-        lastResponse: PREV_MARKER,
-      }).build()
-    : resolvedPhase === 'phase3'
-      ? new StatusJudgmentBuilder(target, {
-        language,
-        inputSource: 'response',
-        lastResponse: `${target.instruction}\n\n## Scenario evidence\n${SCENARIO_MARKER}`,
-        }).build()
-      : new InstructionBuilder(target, context).build();
-
-  // The codex provider concatenates system prompt (persona) and instruction.
-  const persona = target.personaPath
-    ? loadPersonaPromptFromPath(target.personaPath, repoRoot).trim()
-    : '';
-  const assembled = (persona ? `${persona}\n\n${instruction}` : instruction)
-    .replaceAll(TASK_MARKER, '{{task}}')
-    .replaceAll(PREV_MARKER, '{{previous_response}}')
-    .replaceAll(SCENARIO_MARKER, '{{scenario}}');
-
-  const outDir = join(repoRoot, 'eval', 'prompts');
-  mkdirSync(outDir, { recursive: true });
-  const outPath = join(outDir, `${id}.${resolvedPhase}.md`);
-  writeFileSync(outPath, assembled);
-
-  const targetName = monitorCycle ? `[${monitorCycle.join(' -> ')}] monitor` : stepName;
-  console.log(`[${id}] ${workflowName}/${targetName}${mutable ? ' (mutable copy)' : ''}`);
-  console.log(`  Prompt:             ${outPath} (${assembled.length} chars, language: ${language})`);
-  console.log(`  Run dir:            ${runDir}`);
-  console.log(`  Policy snapshot:    ${policySourcePath ?? '(none)'}`);
-  console.log(`  Knowledge snapshot: ${knowledgeSourcePath ?? '(none)'}`);
+  const inheritedWorkflowRules = mergeWorkflowWideRules(undefined, workflow.allStepsRules);
+  return findStepTarget(child, stepName, 1, inheritedWorkflowRules);
 }
+
+function composeConfiguredDynamicFacets(target, selection, targetId, stepName) {
+  if (selection === undefined) return target;
+
+  const sourceWorkflow = loadWorkflowByIdentifier(selection.sourceWorkflow, repoRoot);
+  if (!sourceWorkflow) {
+    throw new Error(
+      `Dynamic facet source workflow not found for eval target "${targetId}": ${selection.sourceWorkflow}`,
+    );
+  }
+  const source = findStepTarget(sourceWorkflow, stepName);
+  if (!source) {
+    throw new Error(
+      `Dynamic facet source step not found for eval target "${targetId}": `
+      + `${selection.sourceWorkflow}/${stepName}`,
+    );
+  }
+  if (source.target.dynamicFacets === undefined) {
+    throw new Error(
+      `Dynamic facet source step has no dynamicFacets configuration for eval target "${targetId}": `
+      + `${selection.sourceWorkflow}/${stepName}`,
+    );
+  }
+  if (source.target.dynamicFacets.pool !== selection.pool) {
+    throw new Error(
+      `Dynamic facet pool mismatch for eval target "${targetId}": `
+      + `expected "${selection.pool}", source uses "${source.target.dynamicFacets.pool}"`,
+    );
+  }
+
+  const pool = source.workflow.facetPools?.[selection.pool];
+  if (pool === undefined) {
+    throw new Error(
+      `Dynamic facet pool not found for eval target "${targetId}": `
+      + `${selection.sourceWorkflow}/${selection.pool}`,
+    );
+  }
+  const knownCandidateIds = new Set(pool.candidates.map(({ id }) => id));
+  const unknownCandidateId = selection.candidateIds.find((id) => !knownCandidateIds.has(id));
+  if (unknownCandidateId !== undefined) {
+    throw new Error(
+      `Dynamic facet candidate mismatch for eval target "${targetId}": `
+      + `candidate "${unknownCandidateId}" is not in pool "${selection.pool}"`,
+    );
+  }
+
+  const composed = composeDynamicFacets(pool, selection.candidateIds, {
+    policyContents: target.policyContents ?? [],
+    knowledgeContents: source.target.knowledgeContents ?? [],
+  });
+  return {
+    ...target,
+    policyContents: composed.policyContents.map((content) => ({ content })),
+    knowledgeContents: composed.knowledgeContents.map((content) => ({ content })),
+  };
+}
+
+async function main() {
+  const requested = process.argv.slice(2);
+  for (const id of requested) {
+    if (!TARGETS.some((t) => t.id === id)) {
+      throw new Error(`Unknown target "${id}". Available: ${TARGETS.map((t) => t.id).join(', ')}`);
+    }
+  }
+  const targets = requested.length > 0 ? TARGETS.filter((t) => requested.includes(t.id)) : TARGETS;
+
+  const language = resolveWorkflowConfigValue(repoRoot, 'language');
+  const preparedDirs = new Set();
+
+  for (const {
+    id,
+    workflow: workflowName,
+    companion: companionName,
+    via,
+    step: stepName,
+    monitorCycle,
+    fixture,
+    mutable,
+    workflowCallVars,
+    facetMode,
+    artifacts,
+    phase: requestedPhase,
+    targetFile,
+    includeOutputContract,
+    dynamicFacetSelection,
+  } of targets) {
+    if (requestedPhase !== undefined && monitorCycle !== undefined) {
+      throw new Error(`Target "${id}" cannot define both phase and monitorCycle`);
+    }
+    const resolvedPhase = requestedPhase ?? (monitorCycle ? 'phase3' : 'phase1');
+    const fixtureDir = resolve(repoRoot, fixture);
+
+    // Mutable (coder) targets work on a disposable copy.
+    let runDir = fixtureDir;
+    if (mutable) {
+      runDir = join(repoRoot, 'eval', '.work', id);
+      rmSync(runDir, { recursive: true, force: true });
+      mkdirSync(dirname(runDir), { recursive: true });
+      cpSync(fixtureDir, runDir, { recursive: true });
+    }
+    const artifactDir = artifacts === undefined ? runDir : resolve(repoRoot, artifacts);
+
+    let config = null;
+    let companionSystemPrompt;
+    if (companionName !== undefined) {
+      const candidateDirs = [getBuiltinCompanionsDir(language)];
+      const definition = loadCompanionDefinition(companionName, {
+        candidateDirs,
+        language,
+        facetContext: { projectDir: runDir, lang: language },
+      });
+      companionSystemPrompt = [
+        definition.personaContent,
+        ...(definition.policyContents ?? []),
+        ...(definition.knowledgeContents ?? []),
+        definition.instruction,
+      ].filter((content) => content !== undefined).join('\n\n');
+      config = { name: companionName, maxSteps: 1, steps: [] };
+    } else {
+      config = loadWorkflowByIdentifier(workflowName, repoRoot);
+      if (!config) {
+        throw new Error(`Workflow not found: ${workflowName}`);
+      }
+    }
+    let workflowRules = mergeWorkflowWideRules(undefined, config.allStepsRules);
+
+    let target = null;
+    let stepIndex = -1;
+    if (companionSystemPrompt !== undefined) {
+      target = {
+        name: companionName,
+        instruction: companionSystemPrompt,
+        edit: false,
+        rules: [],
+      };
+    } else if (monitorCycle) {
+      const monitor = config.loopMonitors?.find(({ cycle }) =>
+        cycle.length === monitorCycle.length
+        && cycle.every((name, index) => name === monitorCycle[index]),
+      );
+      if (!monitor?.judge.instruction) {
+        throw new Error(`Loop monitor [${monitorCycle.join(', ')}] not found in ${workflowName}`);
+      }
+      target = {
+        name: `_loop_judge_${monitor.cycle.join('_')}`,
+        persona: monitor.judge.persona,
+        personaPath: monitor.judge.personaPath,
+        edit: false,
+        instruction: monitor.judge.instruction.replaceAll('{cycle_count}', String(monitor.threshold)),
+        rules: monitor.judge.rules,
+        passPreviousResponse: true,
+      };
+      stepIndex = config.steps.findIndex(({ name }) => name === monitor.cycle.at(-1));
+    } else {
+      const found = via === undefined
+        ? findStepTarget(config, stepName)
+        : findStepThroughCall(config, via, stepName);
+      if (found) {
+        config = found.workflow;
+        target = found.target;
+        stepIndex = found.stepIndex;
+        workflowRules = found.workflowRules;
+      }
+    }
+    if (!target) {
+      const names = config.steps.flatMap((step) => [
+        step.name,
+        ...(step.parallel === undefined ? [] : getAllParallelSubSteps(step.parallel))
+          .map((substep) => substep.name),
+      ]);
+      throw new Error(`Step "${stepName}" not found in ${workflowName}. Available: ${names.join(', ')}`);
+    }
+
+    if (includeOutputContract === true) {
+      if (target.outputContracts?.length !== 1) {
+        throw new Error(`Target "${id}" requires exactly one output contract`);
+      }
+      const [outputContract] = target.outputContracts;
+      if (
+        outputContract === undefined
+        || outputContract === null
+        || typeof outputContract !== 'object'
+        || typeof outputContract.format !== 'string'
+      ) {
+        throw new Error(`Target "${id}" requires a formatted output contract`);
+      }
+      target = {
+        ...target,
+        instruction: [
+          target.instruction,
+          '',
+          '## Phase 1 evaluation output contract',
+          outputContract.format.trimEnd(),
+        ].join('\n'),
+      };
+    }
+
+    target = composeConfiguredDynamicFacets(target, dynamicFacetSelection, id, stepName);
+
+    if (facetMode === 'none') {
+      target = { ...target, policyContents: [], knowledgeContents: [] };
+    } else if (facetMode === 'unrelated') {
+      target = {
+        ...target,
+        policyContents: [{
+          content: '# Documentation Link Policy\n\nWhen public documentation is edited, preserve externally published link targets.',
+        }],
+        knowledgeContents: [{
+          content: '# Markdown Navigation Knowledge\n\nRelative links in Markdown are resolved from the directory containing the document.',
+        }],
+      };
+    }
+
+    // --- Facet snapshots + seeded reports (once per run directory) -----------
+    const snapshotDir = join(artifactDir, '.takt', 'eval-snapshots');
+    const reportDir = join(artifactDir, '.takt', 'runs', 'eval', 'reports');
+    if (!preparedDirs.has(artifactDir)) {
+      preparedDirs.add(artifactDir);
+      rmSync(snapshotDir, { recursive: true, force: true });
+      mkdirSync(snapshotDir, { recursive: true });
+      rmSync(reportDir, { recursive: true, force: true });
+      mkdirSync(reportDir, { recursive: true });
+      const seedDir = join(runDir, 'reports-seed');
+      if (existsSync(seedDir)) {
+        cpSync(seedDir, reportDir, { recursive: true });
+        console.log(`Report dir seeded: ${reportDir} (${readdirSync(seedDir).length} files)`);
+      }
+    }
+
+    function writeFacetSnapshot(kind, contents) {
+      if (!contents || contents.length === 0) return undefined;
+      const path = join(snapshotDir, `${id}-${kind}.md`);
+      const text = contents.map((entry) => {
+        if (entry === null || typeof entry !== 'object' || typeof entry.content !== 'string') {
+          throw new Error(`Invalid ${kind} facet content for eval target "${id}"`);
+        }
+        return entry.content;
+      }).join('\n\n---\n\n');
+      writeFileSync(path, text);
+      return path;
+    }
+
+    const policySourcePath = writeFacetSnapshot('policies', target.policyContents);
+    const knowledgeSourcePath = writeFacetSnapshot('knowledge', target.knowledgeContents);
+
+    // --- Render the assembled Phase 1 prompt ---------------------------------
+    const context = {
+      task: TASK_MARKER,
+      iteration: 1,
+      maxSteps: config.maxSteps,
+      stepIteration: 1,
+      cwd: runDir,
+      projectCwd: runDir,
+      userInputs: [],
+      previousOutput: { content: PREV_MARKER },
+      workflowSteps: config.steps,
+      currentStepIndex: stepIndex,
+      reportDir,
+      policySourcePath,
+      knowledgeSourcePath,
+      workflowCallVars,
+      workflowRules,
+      language,
+    };
+
+    const instruction = companionSystemPrompt !== undefined
+      ? `${companionSystemPrompt}\n\n## Supplied work-in-progress context\n${TASK_MARKER}\n\n## Prior findings and notes\n${PREV_MARKER}`
+      : resolvedPhase === 'phase2'
+      ? new ReportInstructionBuilder(target, {
+          cwd: runDir,
+          task: TASK_MARKER,
+          reportDir,
+          stepIteration: 1,
+          language,
+          targetFile,
+          lastResponse: PREV_MARKER,
+        }).build()
+      : resolvedPhase === 'phase3'
+        ? new StatusJudgmentBuilder(target, {
+          language,
+          inputSource: 'response',
+          lastResponse: `${target.instruction}\n\n## Scenario evidence\n${SCENARIO_MARKER}`,
+          }).build()
+        : new InstructionBuilder(target, context).build();
+
+    // The codex provider concatenates system prompt (persona) and instruction.
+    const persona = target.personaPath
+      ? loadPersonaPromptFromPath(target.personaPath, repoRoot).trim()
+      : '';
+    const assembled = (persona ? `${persona}\n\n${instruction}` : instruction)
+      .replaceAll(TASK_MARKER, '{{task}}')
+      .replaceAll(PREV_MARKER, '{{previous_response}}')
+      .replaceAll(SCENARIO_MARKER, '{{scenario}}');
+
+    const outDir = join(repoRoot, 'eval', 'prompts');
+    mkdirSync(outDir, { recursive: true });
+    const outPath = join(outDir, `${id}.${resolvedPhase}.md`);
+    writeFileSync(outPath, assembled);
+
+    const targetName = companionName ?? (monitorCycle ? `[${monitorCycle.join(' -> ')}] monitor` : stepName);
+    console.log(`[${id}] ${workflowName ?? 'companion'}/${targetName}${mutable ? ' (mutable copy)' : ''}`);
+    console.log(`  Prompt:             ${outPath} (${assembled.length} chars, language: ${language})`);
+    console.log(`  Run dir:            ${runDir}`);
+    console.log(`  Policy snapshot:    ${policySourcePath ?? '(none)'}`);
+    console.log(`  Knowledge snapshot: ${knowledgeSourcePath ?? '(none)'}`);
+    if (dynamicFacetSelection !== undefined) {
+      console.log(
+        `  Dynamic selection:  ${dynamicFacetSelection.pool} -> ${dynamicFacetSelection.candidateIds.join(', ') || '(none)'}`,
+      );
+    }
+  }
+
+}
+
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await main();
+}
+
+export { composeConfiguredDynamicFacets };

@@ -10,56 +10,12 @@ import type {
   Language,
   WorkflowMaxSteps,
   WorkflowState,
-  WorkflowStructuredOutput,
   ResolvedFacetContent,
+  WorkflowWideRule,
 } from '../../models/types.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import type { PullRequestContext } from '../pr-context.js';
-import type { FindingReviewPresentationContext } from '../findings/review-publication.js';
-
-export type FindingContractReviewerOutputStrategy =
-  | {
-      readonly kind: 'structured';
-      readonly reportGeneration: 'structured';
-      readonly intake: 'reviewer_structured';
-    }
-  | {
-      readonly kind: 'plain_text_normalized';
-      readonly reportGeneration: 'plain_text';
-      readonly intake: 'isolated_normalizer';
-    };
-
-export type FindingContractReviewerContext =
-  | {
-      mode: 'structured';
-      rawFindingsStructuredOutput: WorkflowStructuredOutput;
-      reviewScopeSnapshotId: string;
-      presentationContext?: FindingReviewPresentationContext;
-    }
-  | {
-      mode: 'plain_text_normalized';
-      reviewScopeSnapshotId: string;
-      presentationContext?: FindingReviewPresentationContext;
-    };
-
-export interface FindingContractInstructionContext {
-  ledgerSummary: string;
-  reportLedgerSummary: string;
-  /** Whether the ledger currently has open findings (computed from the ledger, not re-parsed from the summary). */
-  hasOpenFindings: boolean;
-  /** Whether the ledger currently has waived findings. */
-  hasWaivedFindings: boolean;
-  hasDismissedFindings: boolean;
-  /**
-   * このレビューラウンドで生成した raw findings の provider-facing 契約。
-   * プロンプト表示と実行ステップの structuredOutput に同じオブジェクトを渡す。
-   */
-  reviewer?: FindingContractReviewerContext;
-}
-
-export type FindingContractInstructionPolicy =
-  | { mode: 'omit' }
-  | { mode: 'explicit'; context: FindingContractInstructionContext };
+import type { TaskReviewScope } from '../review-scope.js';
 
 /**
  * Context for building instruction from template.
@@ -94,6 +50,8 @@ export interface InstructionContext {
    * 親成果物へ read-only フォールバックするために engine から明示的に渡す。
    */
   reportsRootDir?: string;
+  /** Resume snapshot 上の元 run 座標を引くための論理 consumer key。 */
+  resumeReportConsumerKey?: string;
   /**
    * {report:X} の存在検証を無効化する（`takt prompt` プレビューなど実 run が
    * 存在しない文脈のみ）。既定は検証あり。
@@ -115,6 +73,11 @@ export interface InstructionContext {
   retryNote?: string;
   /** Structured PR context resolved at the execution boundary. */
   prContext?: PullRequestContext;
+  /**
+   * Engine-computed changed file set for this task, resolved at the execution
+   * boundary and rendered by the `{review_scope}` placeholder.
+   */
+  reviewScope?: TaskReviewScope;
   /** Resolved policy content strings for injection into instruction */
   policyContents?: readonly ResolvedFacetContent[];
   /** Source path for policy snapshot */
@@ -125,10 +88,13 @@ export interface InstructionContext {
   knowledgeSourcePath?: string;
   /** Workflow state for context/structured/effect interpolation */
   workflowState?: WorkflowState;
+  /** Resolved workflow-wide rules for Phase 1 only. */
+  workflowRules?: readonly WorkflowWideRule[];
   /** Scalar context inherited through workflow_call boundaries. */
   workflowCallVars?: Readonly<Record<string, string | number | boolean>>;
-  /** Finding Contract input for reviewer raw finding output. */
-  findingContract?: FindingContractInstructionContext;
+  companion?: {
+    mailboxDirectory: string;
+  };
 }
 
 /**

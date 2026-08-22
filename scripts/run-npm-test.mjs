@@ -1,16 +1,30 @@
 #!/usr/bin/env node
 
-import { spawn } from 'node:child_process';
 import { basename, isAbsolute, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
+  heavyParallelIntegrationTestFiles,
+  lightIntegrationTestFiles,
+  parallelIntegrationTestFiles,
   serialGitTestFiles,
   serialWorkflowTestFiles,
 } from './test-classification.mjs';
 import { resolveNpmInvocation } from './npm-invocation.mjs';
+import { runTeedCommand } from './teed-command.mjs';
+import { isBirpcNoiseOnlyFailure } from './vitest-birpc-noise.mjs';
 
 const UNIT_SHARDS = ['1/4', '2/4', '3/4', '4/4'];
 const NO_ARG_UNIT_RUN_OPTIONS = ['--maxWorkers=1'];
+const INTEGRATION_NOTICE = '[takt] Fast unit gate only. After implementation run "npm run test:it" for light integration coverage. If you add or change an integration test, run the classification contract by itself with "npm test -- src/__tests__/releaseVerificationWiring.test.ts". Pull requests and "npm run check:release" run heavy integration coverage too. If you add or change a heavy integration test, run that file directly with "npm test -- <test-file>" before handoff.';
+const PARALLEL_TEST_SCRIPTS = new Set([
+  'test:unit:parallel',
+  'test:it:light',
+  'test:it:heavy:parallel',
+]);
+const SERIAL_TEST_SCRIPTS = [
+  'test:it:heavy:serial:git',
+  'test:it:heavy:serial:workflow',
+];
 const VITEST_OPTIONS_WITH_REQUIRED_VALUE = new Set([
   '-c',
   '-r',
@@ -74,9 +88,10 @@ export function selectNpmTestRuns(args) {
   }
   return [
     buildTargetedRun('test:unit:parallel', targets.shared, targets.unit),
-    buildTargetedRun('test:it:parallel', targets.shared, targets.integration),
-    buildTargetedRun('test:it:serial:git', targets.shared, targets.serialGit),
-    buildTargetedRun('test:it:serial:workflow', targets.shared, targets.serialWorkflow),
+    buildTargetedRun('test:it:light', targets.shared, targets.lightIntegration),
+    buildTargetedRun('test:it:heavy:parallel', targets.shared, targets.heavyIntegration),
+    buildTargetedRun('test:it:heavy:serial:git', targets.shared, targets.serialGit),
+    buildTargetedRun('test:it:heavy:serial:workflow', targets.shared, targets.serialWorkflow),
   ].filter((run) => run !== undefined);
 }
 
@@ -87,7 +102,8 @@ function buildDefaultRuns(shared) {
 
 function hasExplicitTargets(targets) {
   return targets.unit.length > 0
-    || targets.integration.length > 0
+    || targets.lightIntegration.length > 0
+    || targets.heavyIntegration.length > 0
     || targets.serialGit.length > 0
     || targets.serialWorkflow.length > 0;
 }
@@ -95,7 +111,8 @@ function hasExplicitTargets(targets) {
 function splitTestTargets(args) {
   const shared = [];
   const unit = [];
-  const integration = [];
+  const lightIntegration = [];
+  const heavyIntegration = [];
   const serialGit = [];
   const serialWorkflow = [];
 
@@ -119,14 +136,16 @@ function splitTestTargets(args) {
       serialGit.push(normalizeTestTarget(arg));
     } else if (isSerialWorkflowTarget(arg)) {
       serialWorkflow.push(normalizeTestTarget(arg));
-    } else if (isIntegrationTestTarget(arg)) {
-      integration.push(normalizeTestTarget(arg));
+    } else if (isHeavyIntegrationTestTarget(arg)) {
+      heavyIntegration.push(normalizeTestTarget(arg));
+    } else if (isLightIntegrationTestTarget(arg)) {
+      lightIntegration.push(normalizeTestTarget(arg));
     } else {
       unit.push(normalizeTestTarget(arg));
     }
   }
 
-  return { shared, unit, integration, serialGit, serialWorkflow };
+  return { shared, unit, lightIntegration, heavyIntegration, serialGit, serialWorkflow };
 }
 
 function buildTargetedRun(script, shared, targets) {
@@ -169,16 +188,30 @@ function isTestFileTarget(arg) {
     || fileName.endsWith('.spec.tsx');
 }
 
-function isIntegrationTestTarget(arg) {
+function isHeavyIntegrationTestTarget(arg) {
   if (arg.startsWith('-')) {
+    return false;
+  }
+
+  const normalizedTarget = normalizeTestTarget(arg);
+  if (lightIntegrationTestFiles.includes(normalizedTarget)) {
     return false;
   }
 
   const fileName = basename(arg);
   return fileName.startsWith('it-')
     || fileName.endsWith('.integration.test.ts')
+    || fileName.endsWith('-integration.test.ts')
     || fileName.endsWith('.regression.test.ts')
-    || fileName.endsWith('.performance.test.ts');
+    || fileName.endsWith('.performance.test.ts')
+    || heavyParallelIntegrationTestFiles.includes(normalizedTarget);
+}
+
+function isLightIntegrationTestTarget(arg) {
+  if (arg.startsWith('-')) {
+    return false;
+  }
+  return lightIntegrationTestFiles.includes(normalizeTestTarget(arg));
 }
 
 function isSerialGitTarget(arg) {
@@ -197,7 +230,11 @@ function normalizeTestTarget(arg) {
   if (workspaceRelative.includes('/')) {
     return workspaceRelative;
   }
-  const matchingClassifiedTargets = [...serialGitTestFiles, ...serialWorkflowTestFiles]
+  const matchingClassifiedTargets = [
+    ...parallelIntegrationTestFiles,
+    ...serialGitTestFiles,
+    ...serialWorkflowTestFiles,
+  ]
     .filter((target) => basename(target) === workspaceRelative);
   return matchingClassifiedTargets.length === 1
     ? matchingClassifiedTargets[0]
@@ -205,38 +242,67 @@ function normalizeTestTarget(arg) {
 }
 
 async function runNpmCommand(npmArgs) {
-  return new Promise((resolve) => {
-    const invocation = resolveNpmInvocation(process.execPath, process.env.npm_execpath);
-    const child = spawn(invocation.executable, [...invocation.args, ...npmArgs], {
-      stdio: 'inherit',
-      shell: false,
-    });
+  const invocation = resolveNpmInvocation(process.execPath, process.env.npm_execpath);
+  // Shard output is teed rather than inherited so a non-zero exit can be read
+  // back and classified before it is reported as a failure.
+  try {
+    return await runTeedCommand(invocation.executable, [...invocation.args, ...npmArgs]);
+  } catch (error) {
+    console.error(`[takt] Failed to start npm ${npmArgs.join(' ')}: ${error.message}`);
+    return {
+      code: 1,
+      signal: null,
+      output: '',
+    };
+  }
+}
 
-    child.on('exit', (code, signal) => {
-      resolve({
-        code: code ?? 1,
-        signal,
-      });
-    });
+async function remeasureBirpcNoiseShards(results, runCommand) {
+  const isCI = Boolean(process.env.CI);
+  const settled = [];
+  for (const { run, result } of results) {
+    if (result.code === 0 || !isBirpcNoiseOnlyFailure({ output: result.output, isCI })) {
+      settled.push({ run, result });
+      continue;
+    }
+    console.error(
+      `[takt] npm ${run.npmArgs.join(' ')} exited ${result.code} with every test passed and only birpc noise; re-measuring this shard once`,
+    );
+    settled.push({ run, result: await runCommand(run.npmArgs) });
+  }
+  return settled;
+}
 
-    child.on('error', (error) => {
-      console.error(`[takt] Failed to start npm ${npmArgs.join(' ')}: ${error.message}`);
-      resolve({
-        code: 1,
-        signal: null,
-      });
-    });
+export async function executeNpmTestRuns(runs, runCommand) {
+  const indexedRuns = runs.map((run, index) => ({ run, index }));
+  const parallelRuns = indexedRuns.filter(({ run }) => PARALLEL_TEST_SCRIPTS.has(run.npmArgs[1]));
+  const serialRuns = SERIAL_TEST_SCRIPTS.flatMap((script) =>
+    indexedRuns.filter(({ run }) => run.npmArgs[1] === script));
+  if (parallelRuns.length + serialRuns.length !== runs.length) {
+    const unknownScripts = indexedRuns
+      .filter(({ run }) => !PARALLEL_TEST_SCRIPTS.has(run.npmArgs[1]) && !SERIAL_TEST_SCRIPTS.includes(run.npmArgs[1]))
+      .map(({ run }) => run.npmArgs[1] ?? '(missing)');
+    throw new Error(`Unknown npm test runner classification: ${[...new Set(unknownScripts)].join(', ')}`);
+  }
+  const executeRun = async (run) => ({
+    ...run,
+    result: await runCommand(run.run.npmArgs),
   });
+  const results = await Promise.all(parallelRuns.map(executeRun));
+  for (const run of serialRuns) {
+    results.push(await executeRun(run));
+  }
+  return results.sort((left, right) => left.index - right.index);
 }
 
 export async function runNpmTest(args, runCommand = runNpmCommand) {
-  const runs = selectNpmTestRuns(args);
-  const results = await Promise.all(runs.map(async (run) => {
-    const result = await runCommand(run.npmArgs);
-    return { run, result };
-  }));
+  if (!hasExplicitTargets(splitTestTargets(args))) {
+    console.log(INTEGRATION_NOTICE);
+  }
+  const results = await executeNpmTestRuns(selectNpmTestRuns(args), runCommand);
 
-  const failed = results.filter(({ result }) => result.code !== 0);
+  const failed = (await remeasureBirpcNoiseShards(results, runCommand))
+    .filter(({ result }) => result.code !== 0);
   for (const { run, result } of failed) {
     const suffix = result.signal ? ` signal=${result.signal}` : '';
     console.error(`[takt] npm ${run.npmArgs.join(' ')} failed with exit=${result.code}${suffix}`);

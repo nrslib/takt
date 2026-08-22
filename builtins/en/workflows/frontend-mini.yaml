@@ -1,11 +1,5 @@
 name: frontend-mini
 description: Frontend-focused mini development workflow (plan -> implement -> parallel review -> fix if needed -> complete)
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
 max_steps: 21
 initial_step: develop
 steps:
@@ -15,6 +9,8 @@ steps:
     args:
       plan_policy:
         - design-planning
+        - architecture
+        - frontend
       plan_knowledge:
         - frontend
         - security
@@ -24,6 +20,8 @@ steps:
         - coding
         - testing
         - design-fidelity
+        - architecture
+        - frontend
       development_knowledge:
         - frontend
         - security

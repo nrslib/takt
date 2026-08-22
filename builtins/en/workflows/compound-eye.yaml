@@ -1,11 +1,6 @@
 name: compound-eye
-description: Multi-model review - send the same instruction to Claude and Codex simultaneously, synthesize both responses
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
+description: Multi-eye review - send the same instruction to two independently assigned eyes and synthesize both responses. Assign a different provider to each eye via runtime.yaml (provider.targets.steps -> eye1 / eye2); the workflow itself names no provider.
+capabilities: readonly
 max_steps: 10
 initial_step: evaluate
 steps:
@@ -13,32 +8,23 @@ steps:
     tags:
       - review
     parallel:
-      - name: claude-eye
+      - name: eye1
         tags:
           - review
         edit: false
         persona: coder
-        provider: claude-sdk
         session: refresh
+        policy: architecture
         knowledge: architecture
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
         rules:
           - condition: done
           - condition: failed
         output_contracts:
           report:
-            - name: claude-review.md
+            - name: eye1-review.md
               format: |
                 ```markdown
-                # Claude Review Result
+                # Eye 1 Review Result
 
                 ## Conclusion
                 {One-line conclusion}
@@ -56,32 +42,23 @@ steps:
                 ## Recommended Next Step
                 - {action}
                 ```
-      - name: codex-eye
+      - name: eye2
         tags:
           - review
         edit: false
         persona: coder
-        provider: codex
         session: refresh
+        policy: architecture
         knowledge: architecture
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
         rules:
           - condition: done
           - condition: failed
         output_contracts:
           report:
-            - name: codex-review.md
+            - name: eye2-review.md
               format: |
                 ```markdown
-                # Codex Review Result
+                # Eye 2 Review Result
 
                 ## Conclusion
                 {One-line conclusion}
@@ -100,6 +77,8 @@ steps:
                 - {action}
                 ```
     rules:
+      - condition: any("error")
+        next: evaluate
       - condition: any("done")
         next: synthesize
   - name: synthesize
@@ -107,54 +86,49 @@ steps:
       - review
     edit: false
     persona: supervisor
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
     rules:
       - condition: synthesis complete
         next: COMPLETE
     instruction: |
-      Two models (Claude / Codex) independently answered the same instruction.
+      Two eyes independently answered the same instruction. Depending on the
+      runtime.yaml assignment they may be different providers or models.
       Synthesize their responses.
 
       **Tasks:**
       1. Read reports in the Report Directory
-         - `claude-review.md` (Claude's response)
-         - `codex-review.md` (Codex's response)
-         Note: If one report is missing (model failed), synthesize from the available report only
-      2. If both reports exist, compare and clarify:
+         - `eye1-review.md` (eye 1's response)
+         - `eye2-review.md` (eye 2's response)
+         Both reports are required; the evaluate step retries when either eye ends in error.
+      2. Compare and clarify:
          - Points of agreement
          - Points of disagreement
-         - Points mentioned by only one model
+         - Points mentioned by only one eye
       3. Produce a synthesized conclusion
 
       **Output format:**
       ```markdown
-      # Multi-Model Review Synthesis
+      # Multi-Eye Review Synthesis
 
       ## Conclusion
       {Synthesized conclusion}
 
       ## Response Status
-      | Model | Status |
-      |-------|--------|
-      | Claude | ✅ / ❌ |
-      | Codex | ✅ / ❌ |
+      | Eye | Status |
+      |-----|--------|
+      | Eye 1 | ✅ / ❌ |
+      | Eye 2 | ✅ / ❌ |
 
       ## Agreements
-      - {Points where both models agree}
+      - {Points where both eyes agree}
 
       ## Disagreements
-      | Topic | Claude | Codex |
-      |-------|--------|-------|
-      | {topic} | {Claude's view} | {Codex's view} |
+      | Topic | Eye 1 | Eye 2 |
+      |-------|-------|-------|
+      | {topic} | {eye 1's view} | {eye 2's view} |
 
       ## Unique Findings
-      - **Claude only:** {Points only Claude mentioned}
-      - **Codex only:** {Points only Codex mentioned}
+      - **Eye 1 only:** {Points only eye 1 mentioned}
+      - **Eye 2 only:** {Points only eye 2 mentioned}
 
       ## Overall Assessment
       {Overall assessment considering both responses}
@@ -164,28 +138,28 @@ steps:
         - name: synthesis.md
           format: |
             ```markdown
-            # Multi-Model Review Synthesis
+            # Multi-Eye Review Synthesis
 
             ## Conclusion
             {Synthesized conclusion}
 
             ## Response Status
-            | Model | Status |
-            |-------|--------|
-            | Claude | ✅ / ❌ |
-            | Codex | ✅ / ❌ |
+            | Eye | Status |
+            |-----|--------|
+            | Eye 1 | ✅ / ❌ |
+            | Eye 2 | ✅ / ❌ |
 
             ## Agreements
-            - {Points where both models agree}
+            - {Points where both eyes agree}
 
             ## Disagreements
-            | Topic | Claude | Codex |
-            |-------|--------|-------|
-            | {topic} | {Claude's view} | {Codex's view} |
+            | Topic | Eye 1 | Eye 2 |
+            |-------|-------|-------|
+            | {topic} | {eye 1's view} | {eye 2's view} |
 
             ## Unique Findings
-            - **Claude only:** {Points only Claude mentioned}
-            - **Codex only:** {Points only Codex mentioned}
+            - **Eye 1 only:** {Points only eye 1 mentioned}
+            - **Eye 2 only:** {Points only eye 2 mentioned}
 
             ## Overall Assessment
             {Overall assessment considering both responses}

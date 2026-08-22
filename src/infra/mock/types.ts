@@ -4,7 +4,7 @@
 
 import type { Status } from '../../core/models/status.js';
 import type { AgentFailureCategory } from '../../shared/types/agent-failure.js';
-import type { StreamCallback } from '../../shared/types/provider.js';
+import type { ProviderActivityCallback, StreamCallback } from '../../shared/types/provider.js';
 
 /** Options for mock calls */
 export interface MockCallOptions {
@@ -13,9 +13,12 @@ export interface MockCallOptions {
   sessionId?: string;
   model?: string;
   onStream?: StreamCallback;
+  onActivity?: ProviderActivityCallback;
   allowedTools?: string[];
   /** Provider-prepared MCP material (issue #1137). */
   preparedMcp?: import('../providers/mcp/types.js').PreparedProviderMcp;
+  /** Native structured-output schema requested by the caller. */
+  outputSchema?: Record<string, unknown>;
   /** Fixed response content (optional, defaults to generic mock response) */
   mockResponse?: string;
   /** Fixed status to return (optional, defaults to 'done') */
@@ -38,8 +41,6 @@ export interface ScenarioEntry {
   content: string;
   /** Optional structured output payload (for outputSchema-driven flows) */
   structuredOutput?: Record<string, unknown>;
-  /** Build a valid response from an engine-owned manager task manifest. */
-  mockTaskResponse?: 'main_manager_raw_decisions';
   /** Optional error message */
   error?: string;
   /** Optional machine-readable failure category */
@@ -48,4 +49,16 @@ export interface ScenarioEntry {
   delayMs?: number;
   /** Keep the response pending until the call's abort signal fires. */
   waitForAbort?: boolean;
+  streamEvents?: Array<{
+    type: 'tool_use';
+    tool: string;
+    id: string;
+    input: Record<string, unknown>;
+  }>;
+  /**
+   * Stream the response text as several `text` events instead of one.
+   * Reproduces gradual provider output; the chunks do not change `content`.
+   */
+  textChunks?: Array<{ text: string; delayMs?: number }>;
+  fileWrites?: Array<{ path: string; content: string }>;
 }

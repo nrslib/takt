@@ -1,6 +1,6 @@
 Use the latest reviewer reports in the Report Directory as authoritative and remediate their issues.
 
-**History:** Before starting remediation, understand the trends of recurring or reopened issues and the assumptions missing from earlier remediation. Do not use past reports to add or reopen issues that the latest reviewer reports do not target.
+**History:** Before starting remediation, understand repeated problems and the assumptions missing from earlier remediation. Do not use past reports to add issues that the latest reviewer reports do not target.
 {{include:instructions/review-report-history}}
 
 {{include:instructions/fix-common}}
@@ -10,11 +10,4 @@ Use the latest reviewer reports in the Report Directory as authoritative and rem
 - Correct every issue that can be remediated
 - Do not claim that an unresolvable issue was fixed; identify it as a blocker in the work results
 
-**Required output (include the headings)**
-{{include:instructions/fix-output-common}}
-## Acceptance criteria
-| Issue | Acceptance criterion | Evidence | Status |
-|-------|----------------------|----------|--------|
-| {Issue ID or source} | {Expected behavior} | {Test or reproducible verification result} | {Complete / blocker} |
-## Evidence
-- {Key files, searches, diffs, and logs inspected}
+Record the changes, verification evidence, and any blocker according to the supplied output contract.

@@ -235,6 +235,19 @@ describe('RuntimeProviderFileSchema — mcp section (MCP-SCHEMA)', () => {
     expect(result.success).toBe(false);
   });
 
+  it('Given a server entry with an unknown transport-specific key, When parsed, Then it is rejected', () => {
+    const result = RuntimeProviderFileSchema.safeParse({
+      version: 1,
+      mcp: {
+        servers: {
+          stdio: { command: 'srv', unexpected: true },
+          remote: { type: 'http', url: 'http://localhost/mcp', unexpected: true },
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
   it('Given mcp as a non-object, When parsed, Then it is rejected', () => {
     expect(RuntimeProviderFileSchema.safeParse({ version: 1, mcp: [] }).success).toBe(false);
     expect(RuntimeProviderFileSchema.safeParse({ version: 1, mcp: null }).success).toBe(false);

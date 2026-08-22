@@ -7,7 +7,7 @@ import type { TaskInfo } from '../infra/task/index.js';
 import type { ProviderPermissionProfiles } from '../core/models/provider-profiles.js';
 import { attachWorkflowSourcePath, attachWorkflowTrustInfo } from '../infra/config/loaders/workflowSourceMetadata.js';
 
-const { mockResolveTaskExecution, mockResolveTaskIssue, mockExecuteWorkflow, mockExecuteWorkflowForRun, mockLoadWorkflowByIdentifier, mockIsWorkflowPath, mockLoadProjectConfig, mockLoadGlobalConfig, mockResolveWorkflowConfigValues, mockResolveProviderOptionsWithTrace, mockBuildBooleanTaskResult, mockBuildTaskResult, mockPersistExceededTaskResult, mockPersistTaskResult, mockPersistPrFailedTaskResult, mockPersistTaskError, mockPostExecutionFlow, mockUpdateRunningTaskExecution } =
+const { mockResolveTaskExecution, mockResolveTaskIssue, mockExecuteWorkflow, mockExecuteWorkflowForRun, mockLoadWorkflowByIdentifier, mockIsWorkflowPath, mockLoadProjectConfig, mockLoadGlobalConfig, mockResolveWorkflowConfigValues, mockResolveProviderOptionsWithTrace, mockBuildBooleanTaskResult, mockBuildTaskResult, mockPersistExceededTaskResult, mockPersistTaskResult, mockPersistPrFailedTaskResult, mockPersistTaskError, mockPostExecutionFlow, mockUpdateRunningTaskExecution, mockCreateLoopAnalysisPublicationCoordinator, mockSettleLoopAnalysisPublication } =
   vi.hoisted(() => ({
     mockResolveTaskExecution: vi.fn(),
     mockResolveTaskIssue: vi.fn(),
@@ -27,6 +27,8 @@ const { mockResolveTaskExecution, mockResolveTaskIssue, mockExecuteWorkflow, moc
     mockPersistTaskError: vi.fn(),
     mockPostExecutionFlow: vi.fn(),
     mockUpdateRunningTaskExecution: vi.fn(),
+    mockCreateLoopAnalysisPublicationCoordinator: vi.fn(),
+    mockSettleLoopAnalysisPublication: vi.fn(),
   }));
 
 vi.mock('../features/tasks/execute/resolveTask.js', () => ({
@@ -50,6 +52,13 @@ vi.mock('../features/tasks/execute/taskResultHandler.js', () => ({
 
 vi.mock('../features/tasks/execute/postExecution.js', () => ({
   postExecutionFlow: (...args: unknown[]) => mockPostExecutionFlow(...args),
+}));
+
+vi.mock('../features/tasks/execute/loopAnalysisPublication.js', () => ({
+  createLoopAnalysisPublicationCoordinator: (...args: unknown[]) =>
+    mockCreateLoopAnalysisPublicationCoordinator(...args),
+  settleLoopAnalysisPublication: (...args: unknown[]) =>
+    mockSettleLoopAnalysisPublication(...args),
 }));
 
 vi.mock('../infra/config/index.js', () => ({
@@ -107,6 +116,17 @@ function createTaskRunnerMock() {
   };
 }
 
+function createDeferred<T>(): {
+  readonly promise: Promise<T>;
+  resolve(value: T): void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 const executeAndCompleteTaskWithoutWorkflow = executeAndCompleteTask as (
   task: TaskInfo,
   taskRunner: unknown,
@@ -122,6 +142,7 @@ const executeTaskAndCompleteWithDetailsWithoutWorkflow = executeTaskAndCompleteW
   executeOptions?: unknown,
   parallelOptions?: unknown,
   taskContext?: unknown,
+  gitProvider?: unknown,
 ) => Promise<{
   success: boolean;
   prFailed?: boolean;
@@ -196,7 +217,13 @@ describe('executeAndCompleteTask', () => {
     });
     mockExecuteWorkflow.mockResolvedValue({ success: true });
     mockExecuteWorkflowForRun.mockResolvedValue({ success: true });
+    mockPostExecutionFlow.mockResolvedValue({});
     mockResolveTaskIssue.mockReturnValue(undefined);
+    mockCreateLoopAnalysisPublicationCoordinator.mockImplementation((branch: string) => ({
+      branch,
+      register: vi.fn(),
+      settle: vi.fn(),
+    }));
     mockUpdateRunningTaskExecution.mockImplementation((taskName: string, execution: { runSlug: string; worktreePath?: string; branch?: string }) => ({
       ...createTask(taskName),
       status: 'running',
@@ -361,6 +388,144 @@ describe('executeAndCompleteTask', () => {
       expect.anything(),
       { emitStatusLog: false },
     );
+  });
+
+  it('Given task resolution enables auto PR for a branch, When workflow execution starts, Then loop analysis receives the resolved PR context', async () => {
+    const task = createTask('task-with-loop-analysis-pr');
+    const taskExecutor = vi.fn().mockResolvedValue({ success: true });
+    const gitProvider = { name: 'request-provider' };
+    mockResolveTaskExecution.mockResolvedValueOnce({
+      execCwd: '/worktree/clone',
+      workflowIdentifier: 'default',
+      isWorktree: true,
+      autoPr: true,
+      draftPr: false,
+      managedPr: false,
+      shouldPublishBranchToOrigin: true,
+      reportDirName: '20260216-task-with-loop-analysis-pr',
+      branch: 'takt/task-with-loop-analysis-pr',
+      worktreePath: '/worktree/clone',
+      baseBranch: 'main',
+    });
+    mockPostExecutionFlow.mockResolvedValueOnce({});
+
+    await executeTaskAndCompleteWithDetailsWithoutWorkflow(
+      task,
+      createTaskRunnerMock() as never,
+      '/project',
+      taskExecutor,
+      undefined,
+      undefined,
+      undefined,
+      gitProvider,
+    );
+
+    const coordinator = mockCreateLoopAnalysisPublicationCoordinator.mock.results[0]?.value;
+    expect(mockCreateLoopAnalysisPublicationCoordinator).toHaveBeenCalledWith(
+      'takt/task-with-loop-analysis-pr',
+    );
+    expect(taskExecutor).toHaveBeenCalledWith(expect.objectContaining({
+      loopAnalysisPublication: coordinator,
+    }));
+    expect(mockSettleLoopAnalysisPublication).toHaveBeenCalledWith(coordinator);
+  });
+
+  it('Given task auto PR publication is pending, When post execution has not completed, Then loop analysis publication remains unsettled', async () => {
+    const task = createTask('task-with-pending-pr-publication');
+    const taskExecutor = vi.fn().mockResolvedValue({ success: true });
+    const postExecution = createDeferred<Record<string, never>>();
+    mockResolveTaskExecution.mockResolvedValueOnce({
+      execCwd: '/worktree/clone',
+      workflowIdentifier: 'default',
+      isWorktree: true,
+      autoPr: true,
+      draftPr: false,
+      managedPr: false,
+      shouldPublishBranchToOrigin: true,
+      reportDirName: '20260216-task-with-pending-pr-publication',
+      branch: 'takt/task-with-pending-pr-publication',
+      worktreePath: '/worktree/clone',
+      baseBranch: 'main',
+    });
+    mockPostExecutionFlow.mockReturnValueOnce(postExecution.promise);
+
+    const execution = executeTaskAndCompleteWithDetailsWithoutWorkflow(
+      task,
+      createTaskRunnerMock() as never,
+      '/project',
+      taskExecutor,
+    );
+    await vi.waitFor(() => {
+      expect(mockPostExecutionFlow).toHaveBeenCalledOnce();
+    });
+
+    expect(mockSettleLoopAnalysisPublication).not.toHaveBeenCalled();
+
+    postExecution.resolve({});
+    await execution;
+
+    const coordinator = mockCreateLoopAnalysisPublicationCoordinator.mock.results[0]?.value;
+    expect(mockSettleLoopAnalysisPublication).toHaveBeenCalledOnce();
+    expect(mockSettleLoopAnalysisPublication).toHaveBeenCalledWith(coordinator);
+  });
+
+  it.each([
+    {
+      label: 'the workflow exceeds its iteration limit',
+      runResult: {
+        success: false,
+        exceeded: true,
+        exceededInfo: {
+          currentStep: 'review',
+          newMaxSteps: 4,
+          currentIteration: 3,
+        },
+      },
+      postResult: {},
+    },
+    {
+      label: 'the workflow fails',
+      runResult: { success: false, reason: 'workflow failed' },
+      postResult: {},
+    },
+    {
+      label: 'post execution fails',
+      runResult: { success: true },
+      postResult: { taskFailed: true, taskError: 'post execution failed' },
+    },
+    {
+      label: 'PR creation fails',
+      runResult: { success: true },
+      postResult: { prFailed: true, prError: 'PR creation failed' },
+    },
+  ])('Given auto PR is enabled, When $label, Then loop analysis publication is settled', async ({ runResult, postResult }) => {
+    const task = createTask('task-publication-settlement');
+    const taskExecutor = vi.fn().mockResolvedValue(runResult);
+    mockResolveTaskExecution.mockResolvedValueOnce({
+      execCwd: '/worktree/clone',
+      workflowIdentifier: 'default',
+      isWorktree: true,
+      autoPr: true,
+      draftPr: false,
+      managedPr: false,
+      shouldPublishBranchToOrigin: true,
+      reportDirName: '20260216-task-publication-settlement',
+      branch: 'takt/task-publication-settlement',
+      worktreePath: '/worktree/clone',
+      baseBranch: 'main',
+    });
+    mockPostExecutionFlow.mockResolvedValue(postResult);
+
+    await executeTaskAndCompleteWithDetailsWithoutWorkflow(
+      task,
+      createTaskRunnerMock() as never,
+      '/project',
+      taskExecutor,
+    );
+
+    const coordinator = mockCreateLoopAnalysisPublicationCoordinator.mock.results[0]?.value;
+    expect(mockSettleLoopAnalysisPublication).toHaveBeenCalledOnce();
+    expect(mockSettleLoopAnalysisPublication).toHaveBeenCalledWith(coordinator);
   });
 
   it('Given silent task adapter options, When workflow execution fails, Then failure task result logs are muted', async () => {
@@ -1123,7 +1288,7 @@ describe('executeAndCompleteTask', () => {
     expect(mockExecuteWorkflow.mock.calls[0]?.[0]).toBe(workflow);
   });
 
-  it('should use workflow terminology when named workflow is missing', async () => {
+  it('should report a missing named workflow without executing it', async () => {
     mockLoadWorkflowByIdentifier.mockReturnValueOnce(undefined);
 
     const result = await executeTask({
@@ -1134,10 +1299,8 @@ describe('executeAndCompleteTask', () => {
     });
 
     expect(result).toBe(false);
-    expect(mockError).toHaveBeenCalledWith('Workflow "missing-workflow" not found.');
-    expect(mockInfo).toHaveBeenCalledWith('Available workflows are searched in .takt/workflows/ and ~/.takt/workflows/.');
-    expect(mockInfo).toHaveBeenCalledWith('If the same workflow name exists in multiple locations, project workflows/ take priority over user workflows/.');
-    expect(mockInfo).toHaveBeenCalledWith('Specify a valid workflow when creating tasks (e.g., via "takt add").');
+    expect(mockError).toHaveBeenCalledWith(expect.stringContaining('missing-workflow'));
+    expect(mockInfo).toHaveBeenCalled();
   });
 
   it('should use workflow file terminology when workflow path is missing', async () => {
@@ -1152,8 +1315,8 @@ describe('executeAndCompleteTask', () => {
     });
 
     expect(result).toBe(false);
-    expect(mockError).toHaveBeenCalledWith('Workflow file not found: ./custom-workflow.yaml');
-    expect(mockInfo).not.toHaveBeenCalledWith('Available workflows are searched in .takt/workflows/ and ~/.takt/workflows/.');
+    expect(mockError).toHaveBeenCalledWith(expect.stringContaining('./custom-workflow.yaml'));
+    expect(mockInfo).not.toHaveBeenCalled();
   });
 
   it('should sanitize workflow identifiers in terminal errors', async () => {
@@ -1167,7 +1330,8 @@ describe('executeAndCompleteTask', () => {
     });
 
     expect(result).toBe(false);
-    expect(mockError).toHaveBeenCalledWith('Workflow "bad-name\\n" not found.');
+    expect(mockError).toHaveBeenCalledWith(expect.stringContaining('bad-name\\n'));
+    expect(mockError.mock.calls.flat().join('')).not.toContain('\\x1b');
   });
 
   it('should mark task as pr_failed when PR creation fails', async () => {

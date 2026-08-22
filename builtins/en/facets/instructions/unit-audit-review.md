@@ -21,4 +21,3 @@ Re-audit the files or behaviors that were judged insufficient in the previous un
 - Modifying tests or production code
 - Claiming a behavior is covered without citing the actual test evidence
 - Skipping a flagged file or behavior because it "looks fine"
-{{include:instructions/review-pr-context}}

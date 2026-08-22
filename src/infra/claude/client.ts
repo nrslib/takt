@@ -50,6 +50,7 @@ export class ClaudeClient {
       agents: options.agents,
       permissionMode: options.permissionMode,
       onStream: options.onStream,
+      onActivity: options.onActivity,
       onPermissionRequest: options.onPermissionRequest,
       onAskUserQuestion: options.onAskUserQuestion,
       bypassPermissions: options.bypassPermissions,

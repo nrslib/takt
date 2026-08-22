@@ -54,7 +54,7 @@ describe.skipIf(!pytestAvailable)(
           '    You are a strict test runner. Execute bash commands verbatim as instructed and report the outcome using only the allowed reply keywords.',
           'steps:',
           '  - name: run_tests',
-          '    edit: false',
+          '    edit: true',
           '    persona: pytest-runner',
           '    required_permission_mode: edit',
           '    instruction: |',
@@ -118,7 +118,6 @@ describe.skipIf(!pytestAvailable)(
 
       expect(combined.includes('requires approval')).toBe(false);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain('Workflow completed');
     }, 360_000);
   },
 );

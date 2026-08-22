@@ -17,7 +17,7 @@ import type {
   McpServerConfig,
 } from './types.js';
 import { isStdioServer } from './types.js';
-import { validateTransports, onceDispose, classifyMcpFailure } from './adapter.js';
+import { validateTransports, onceDispose, noopDispose, classifyMcpFailure } from './adapter.js';
 import { ensureCurrentTmpDirExists } from '../../../shared/utils/index.js';
 
 export function createKiroMcpAdapter(): ProviderMcpAdapter {
@@ -30,7 +30,7 @@ export function createKiroMcpAdapter(): ProviderMcpAdapter {
       _context: ProviderMcpContext,
     ): Promise<PreparedProviderMcp> {
       if (!servers.enabled || Object.keys(servers.servers).length === 0) {
-        return { dispose: () => Promise.resolve(), args: [] };
+        return { dispose: noopDispose, args: [] };
       }
       const tempDir = await mkdtemp(join(ensureCurrentTmpDirExists(), 'takt-kiro-mcp-'));
       const configPath = join(tempDir, 'mcp.json');
@@ -38,6 +38,7 @@ export function createKiroMcpAdapter(): ProviderMcpAdapter {
         await chmod(tempDir, 0o700);
         const payload = toKiroMcpJson(servers.servers);
         await writeFile(configPath, JSON.stringify(payload), { mode: 0o600 });
+        await chmod(configPath, 0o600);
       } catch (error) {
         await rm(tempDir, { recursive: true, force: true });
         throw error;

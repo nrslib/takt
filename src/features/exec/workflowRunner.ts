@@ -57,19 +57,11 @@ function loadCompletedExecRun(
   expectedReviewReportNames: string[],
 ): ReturnType<typeof loadRunSessionContext> {
   const context = loadRunSessionContext(cwd, runSlug, { reportNames: expectedReviewReportNames });
-  const actualReportNames = new Set(context.reports.map((report) => report.filename));
-  const missingReportNames = expectedReviewReportNames.filter((name) => !actualReportNames.has(name));
-  if (missingReportNames.length > 0) {
-    throw new Error(`Exec review result report was not found: ${missingReportNames.join(', ')}`);
-  }
   return {
     ...context,
-    reports: expectedReviewReportNames.map((name) => {
+    reports: expectedReviewReportNames.flatMap((name) => {
       const report = context.reports.find((entry) => entry.filename === name);
-      if (report === undefined) {
-        throw new Error(`Exec review result report was not found: ${name}`);
-      }
-      return report;
+      return report === undefined ? [] : [report];
     }),
   };
 }

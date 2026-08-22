@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 // New modules under test (implemented in the following `implement` step).
 import { createMcpAdapter, type ResolvedMcpServers, type ProviderMcpContext } from '../infra/providers/mcp/index.js';
 
@@ -23,10 +23,6 @@ import { createMcpAdapter, type ResolvedMcpServers, type ProviderMcpContext } fr
  *   - abort 時に一時ファイルが残存する
  */
 
-function readModuleSource(path: string): string {
-  return readFileSync(new URL(path, import.meta.url), 'utf-8');
-}
-
 function resolvedServers(): ResolvedMcpServers {
   return {
     enabled: true,
@@ -34,6 +30,7 @@ function resolvedServers(): ResolvedMcpServers {
       'common-tools': { type: 'stdio', command: 'srv' },
       github: { type: 'http', url: 'https://example.com/mcp' },
     },
+    serverNames: ['common-tools', 'github'],
     identity: 'common-tools:stdio,github:http',
   };
 }
@@ -69,7 +66,7 @@ describe('Claude Agent SDK adapter (MCP-CLAUDE-SDK)', () => {
 
   it('Given the claude-sdk adapter, When prepared with empty servers, Then mcpServers is undefined but strictMcpConfig stays true (order.md:152,160)', async () => {
     const adapter = createMcpAdapter('claude-sdk');
-    const empty: ResolvedMcpServers = { enabled: false, servers: {}, identity: '' };
+    const empty: ResolvedMcpServers = { enabled: false, servers: {}, serverNames: [], identity: '' };
     const prepared = await adapter.prepare(empty, baseContext());
     const sdkOptions = (prepared as { sdkOptions?: { strictMcpConfig?: boolean; mcpServers?: unknown } }).sdkOptions;
     // Empty server set is MCP-disabled so no mcpServers option is passed, but
@@ -85,6 +82,7 @@ describe('Claude Agent SDK adapter (MCP-CLAUDE-SDK)', () => {
     const sseServers: ResolvedMcpServers = {
       enabled: true,
       servers: { events: { type: 'sse', url: 'http://x/sse' } },
+      serverNames: ['events'],
       identity: 'events:sse',
     };
     const prepared = await adapter.prepare(sseServers, baseContext());
@@ -93,11 +91,6 @@ describe('Claude Agent SDK adapter (MCP-CLAUDE-SDK)', () => {
     await prepared.dispose();
   });
 
-  it('Given the claude provider source, Then it passes resolved mcpServers to the SDK via the adapter (not engine-branching)', () => {
-    const source = readModuleSource('../infra/providers/claude.ts');
-    // The provider must pass options.mcpServers through to the SDK; the engine must not build the SDK format.
-    expect(source).toContain('mcpServers');
-  });
 });
 
 describe('Claude headless CLI adapter (MCP-CLAUDE-HEADLESS)', () => {
@@ -119,12 +112,17 @@ describe('Claude headless CLI adapter (MCP-CLAUDE-HEADLESS)', () => {
     const mcpConfigIndex = args?.indexOf('--mcp-config') ?? -1;
     const path = mcpConfigIndex >= 0 ? args?.[mcpConfigIndex + 1] : undefined;
     expect(path).toBeDefined();
+    if (path === undefined) {
+      throw new Error('Expected a Claude MCP config path');
+    }
+    expect(existsSync(path)).toBe(true);
     await prepared.dispose();
+    expect(existsSync(path)).toBe(false);
   });
 
   it('Given the claude adapter, When prepared with empty servers, Then --mcp-config is NOT added but --strict-mcp-config is (order.md:152,166)', async () => {
     const adapter = createMcpAdapter('claude');
-    const empty: ResolvedMcpServers = { enabled: false, servers: {}, identity: '' };
+    const empty: ResolvedMcpServers = { enabled: false, servers: {}, serverNames: [], identity: '' };
     const prepared = await adapter.prepare(empty, baseContext());
     const args = (prepared as { args?: string[] }).args ?? [];
     expect(args).not.toContain('--mcp-config');
@@ -150,7 +148,7 @@ describe('Claude terminal adapter (MCP-CLAUDE-TERMINAL)', () => {
 
   it('Given the claude-terminal adapter, When prepared with empty servers, Then --mcp-config is NOT added but --strict-mcp-config is (order.md:152,172)', async () => {
     const adapter = createMcpAdapter('claude-terminal');
-    const empty: ResolvedMcpServers = { enabled: false, servers: {}, identity: '' };
+    const empty: ResolvedMcpServers = { enabled: false, servers: {}, serverNames: [], identity: '' };
     const prepared = await adapter.prepare(empty, baseContext());
     const args = (prepared as { args?: string[] }).args ?? [];
     expect(args).not.toContain('--mcp-config');

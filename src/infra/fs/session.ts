@@ -19,6 +19,7 @@ import {
 import {
   parseCanonicalWorkflowResumeFrame,
 } from '../../shared/types/workflow-resume.js';
+import { isAgentFailureCategory } from '../../shared/types/agent-failure.js';
 
 export type {
   SessionLog,
@@ -34,6 +35,11 @@ export type {
   NdjsonPhaseJudgeStage,
   NdjsonInteractiveStart,
   NdjsonInteractiveEnd,
+  NdjsonCompanionReviewRound,
+  NdjsonCompanionQueueCoalesced,
+  NdjsonCompanionCall,
+  NdjsonCompanionReviewSkipped,
+  NdjsonCompanionReviewTrigger,
   NdjsonRecord,
 } from '../../shared/utils/index.js';
 
@@ -414,6 +420,7 @@ function assertNdjsonRecordShape(
       requireNdjsonString(record.instruction, 'instruction');
       requireNdjsonInteger(record.iteration, 'iteration');
       requireNdjsonString(record.timestamp, 'timestamp');
+      requireOptionalAgentFailureCategory(record.failureCategory, 'failureCategory');
       return;
     case 'workflow_complete':
       requireNdjsonInteger(record.iterations, 'iterations');
@@ -423,6 +430,7 @@ function assertNdjsonRecordShape(
       requireNdjsonInteger(record.iterations, 'iterations');
       requireNdjsonString(record.reason, 'reason');
       requireNdjsonString(record.endTime, 'endTime');
+      requireOptionalAgentFailureCategory(record.failureCategory, 'failureCategory');
       return;
     case 'phase_start':
     case 'phase_complete':
@@ -468,9 +476,235 @@ function assertNdjsonRecordShape(
       }
       requireNdjsonString(record.timestamp, 'timestamp');
       return;
+    case 'companion_review_round':
+      requireCompanionReviewRoundFields(record);
+      return;
+    case 'companion_queue_coalesced':
+      requireCompanionQueueCoalescedFields(record);
+      return;
+    case 'companion_call':
+      requireCompanionCallFields(record);
+      return;
+    case 'companion_review_skipped':
+      requireCompanionReviewSkippedFields(record);
+      return;
     default:
       throw new Error(`Unknown NDJSON session record type: ${String(record.type)}`);
   }
+}
+
+function requireOptionalAgentFailureCategory(value: unknown, field: string): void {
+  if (value !== undefined && !isAgentFailureCategory(value)) {
+    throw new Error(`NDJSON ${field} is invalid`);
+  }
+}
+
+function requireCompanionReviewRoundFields(
+  record: Readonly<Record<string, unknown>>,
+): void {
+  requireNdjsonString(record.step, 'step');
+  requireNdjsonString(record.companion, 'companion');
+  requireCompanionReviewTrigger(record.trigger);
+  requireNdjsonString(record.digest, 'digest');
+  requireNdjsonInteger(record.changedLines, 'changedLines');
+  requireNdjsonInteger(record.findingCount, 'findingCount');
+  requireCompanionAcceptedFindings(record.reviewerFindings);
+  requireOptionalCompanionModeratorAudit(record.moderator);
+  requireCompanionAcceptedFindings(record.acceptedFindings);
+  requireOptionalCompanionZeroReason(record.zeroReason);
+  requireOptionalNdjsonStringArray(record.runPathNamespace, 'runPathNamespace');
+  requireNdjsonString(record.timestamp, 'timestamp');
+}
+
+function requireCompanionQueueCoalescedFields(
+  record: Readonly<Record<string, unknown>>,
+): void {
+  requireNdjsonString(record.step, 'step');
+  requireNdjsonString(record.companion, 'companion');
+  requireOptionalNdjsonStringArray(record.runPathNamespace, 'runPathNamespace');
+  requireCompanionQueueRequest(record.replaced, 'replaced');
+  requireCompanionQueueRequest(record.replacement, 'replacement');
+  requireNdjsonString(record.timestamp, 'timestamp');
+}
+
+function requireCompanionQueueRequest(value: unknown, field: string): void {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`NDJSON ${field} must be an object`);
+  }
+  const request = value as Record<string, unknown>;
+  requireCompanionReviewTrigger(request.trigger);
+  requireNdjsonString(request.digest, `${field}.digest`);
+  requireNdjsonInteger(request.changedLines, `${field}.changedLines`);
+  requireNdjsonInteger(request.observedGeneration, `${field}.observedGeneration`);
+}
+
+function requireCompanionReviewTrigger(value: unknown): void {
+  if (value !== 'quiet' && value !== 'forced' && value !== 'completion' && value !== 'commit') {
+    throw new Error('NDJSON companion review trigger is invalid');
+  }
+}
+
+function requireCompanionCallFields(
+  record: Readonly<Record<string, unknown>>,
+): void {
+  requireNdjsonString(record.step, 'step');
+  requireNdjsonString(record.agent, 'agent');
+  if (
+    record.purpose !== 'selector'
+    && record.purpose !== 'reviewer'
+    && record.purpose !== 'moderator'
+  ) {
+    throw new Error('NDJSON companion call purpose is invalid');
+  }
+  if (record.status !== 'completed' && record.status !== 'failed') {
+    throw new Error('NDJSON companion call status is invalid');
+  }
+  requireNdjsonInteger(record.attempt, 'attempt');
+  if (record.attempt < 1) {
+    throw new Error('NDJSON companion call attempt must be positive');
+  }
+  requireNdjsonString(record.provider, 'provider');
+  requireOptionalNdjsonString(record.model, 'model');
+  requireOptionalNdjsonStringArray(record.runPathNamespace, 'runPathNamespace');
+  requireNdjsonBoolean(record.sessionIdAvailable, 'sessionIdAvailable');
+  requireOptionalNdjsonString(record.sessionId, 'sessionId');
+  if (record.sessionIdAvailable !== (typeof record.sessionId === 'string' && record.sessionId.length > 0)) {
+    throw new Error('NDJSON companion session ID availability does not match session ID');
+  }
+  requireNdjsonBoolean(record.promptResolved, 'promptResolved');
+  if (record.promptResolved) {
+    requireNdjsonString(record.systemPrompt, 'systemPrompt');
+    requireNdjsonBoolean(record.systemPromptTruncated, 'systemPromptTruncated');
+    requireNdjsonString(record.prompt, 'prompt');
+    requireNdjsonBoolean(record.promptTruncated, 'promptTruncated');
+  } else if (
+    record.systemPrompt !== undefined
+    || record.systemPromptTruncated !== undefined
+    || record.prompt !== undefined
+    || record.promptTruncated !== undefined
+  ) {
+    throw new Error('NDJSON unresolved companion prompt must be omitted');
+  }
+  requireOptionalNdjsonString(record.response, 'response');
+  requireOptionalNdjsonBoolean(record.responseTruncated, 'responseTruncated');
+  requireOptionalNdjsonString(record.structuredOutput, 'structuredOutput');
+  requireOptionalNdjsonBoolean(record.structuredOutputTruncated, 'structuredOutputTruncated');
+  requireCompanionUsage(record.usage);
+  requireOptionalNdjsonString(record.error, 'error');
+  requireOptionalNdjsonBoolean(record.errorTruncated, 'errorTruncated');
+  requireNdjsonString(record.timestamp, 'timestamp');
+}
+
+function requireCompanionUsage(value: unknown): void {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('NDJSON companion usage must be an object');
+  }
+  const usage = value as Record<string, unknown>;
+  requireNdjsonBoolean(usage.usageMissing, 'usage.usageMissing');
+  for (const field of [
+    'inputTokens',
+    'outputTokens',
+    'totalTokens',
+    'cachedInputTokens',
+    'cacheCreationInputTokens',
+    'cacheReadInputTokens',
+  ]) {
+    requireOptionalNdjsonInteger(usage[field], `usage.${field}`);
+  }
+  requireOptionalNdjsonString(usage.reason, 'usage.reason');
+}
+
+function requireCompanionAcceptedFindings(value: unknown): void {
+  if (!Array.isArray(value)) {
+    throw new Error('NDJSON companion accepted findings must be an array');
+  }
+  value.forEach((finding, index) => {
+    if (finding === null || typeof finding !== 'object' || Array.isArray(finding)) {
+      throw new Error(`NDJSON companion accepted finding[${index}] must be an object`);
+    }
+    const item = finding as Record<string, unknown>;
+    if (
+      item.severity !== 'must_fix'
+      && item.severity !== 'should_fix'
+      && item.severity !== 'nit'
+    ) {
+      throw new Error(`NDJSON companion accepted finding[${index}] severity is invalid`);
+    }
+    requireNdjsonString(item.file, `acceptedFindings[${index}].file`);
+    requireNdjsonInteger(item.line, `acceptedFindings[${index}].line`);
+    requireNdjsonString(item.finding, `acceptedFindings[${index}].finding`);
+  });
+}
+
+function requireOptionalCompanionModeratorAudit(value: unknown): void {
+  if (value === undefined) return;
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('NDJSON companion moderator must be an object');
+  }
+  const moderator = value as Record<string, unknown>;
+  requireNdjsonString(moderator.name, 'moderator.name');
+  requireNdjsonBoolean(moderator.invoked, 'moderator.invoked');
+  if (moderator.reason !== undefined
+    && moderator.reason !== 'reviewer_result_empty'
+    && moderator.reason !== 'not_configured') {
+    throw new Error('NDJSON companion moderator reason is invalid');
+  }
+  if (!Array.isArray(moderator.decisions)) {
+    throw new Error('NDJSON companion moderator decisions must be an array');
+  }
+  moderator.decisions.forEach((decision, index) => {
+    if (decision === null || typeof decision !== 'object' || Array.isArray(decision)) {
+      throw new Error(`NDJSON companion moderator decision[${index}] must be an object`);
+    }
+    const item = decision as Record<string, unknown>;
+    if (
+      item.action !== 'accept'
+      && item.action !== 'reject'
+    ) {
+      throw new Error(`NDJSON companion moderator decision[${index}] action is invalid`);
+    }
+    requireNdjsonInteger(item.sourceIndex, `moderator.decisions[${index}].sourceIndex`);
+  });
+}
+
+function requireOptionalCompanionZeroReason(value: unknown): void {
+  if (value === undefined) return;
+  if (
+    value !== 'reviewer_returned_no_findings'
+    && value !== 'moderator_rejected_all_findings'
+  ) {
+    throw new Error('NDJSON companion zero reason is invalid');
+  }
+}
+
+function requireCompanionReviewSkippedFields(
+  record: Readonly<Record<string, unknown>>,
+): void {
+  requireNdjsonString(record.step, 'step');
+  requireOptionalNdjsonString(record.companion, 'companion');
+  if (
+    record.phase !== 'initial'
+    && record.phase !== 'live'
+    && record.phase !== 'fix'
+    && record.phase !== 'completion'
+  ) {
+    throw new Error('NDJSON companion review skipped phase is invalid');
+  }
+  if (
+    record.reason !== 'companion_disabled'
+    && record.reason !== 'companion_not_configured'
+    && record.reason !== 'companion_runtime_unavailable'
+    && record.reason !== 'selector_empty'
+    && record.reason !== 'empty_diff'
+    && record.reason !== 'unchanged_digest'
+    && record.reason !== 'below_minimum_changed_lines'
+  ) {
+    throw new Error('NDJSON companion review skipped reason is invalid');
+  }
+  requireOptionalNdjsonInteger(record.fixRound, 'fixRound');
+  requireOptionalNdjsonInteger(record.observedGeneration, 'observedGeneration');
+  requireOptionalNdjsonStringArray(record.runPathNamespace, 'runPathNamespace');
+  requireNdjsonString(record.timestamp, 'timestamp');
 }
 
 function requireNdjsonWorkflowCallIdentity(
@@ -492,13 +726,30 @@ function requireNdjsonString(value: unknown, field: string): void {
   }
 }
 
+function requireNdjsonBoolean(value: unknown, field: string): void {
+  if (typeof value !== 'boolean') {
+    throw new Error(`NDJSON ${field} must be a boolean`);
+  }
+}
+
 function requireOptionalNdjsonString(value: unknown, field: string): void {
   if (value !== undefined) {
     requireNdjsonString(value, field);
   }
 }
 
-function requireNdjsonInteger(value: unknown, field: string): void {
+function requireOptionalNdjsonStringArray(value: unknown, field: string): void {
+  if (value === undefined) return;
+  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
+    throw new Error(`NDJSON ${field} must be an array of strings`);
+  }
+}
+
+function requireOptionalNdjsonBoolean(value: unknown, field: string): void {
+  if (value !== undefined) requireNdjsonBoolean(value, field);
+}
+
+function requireNdjsonInteger(value: unknown, field: string): asserts value is number {
   if (!Number.isSafeInteger(value) || (value as number) < 0) {
     throw new Error(`NDJSON ${field} must be a non-negative integer`);
   }

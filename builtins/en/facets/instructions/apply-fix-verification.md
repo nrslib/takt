@@ -1,4 +1,4 @@
-Correct the gaps found by the latest completion verification and finish the finalized fix plan.
+Correct every gap found by the latest completion verification and finish the finalized fix plan.
 
 **Fix plan:**
 {report:fix-plan.md}
@@ -9,23 +9,20 @@ Correct the gaps found by the latest completion verification and finish the fina
 **Previous fix report:**
 {report:fix-report.md}
 
-**Required procedure after a verifier return:**
-1. Map every verifier gap to its completion obligation
-2. Classify why the previous evidence could not detect it as an unscanned path, weak observation, false assumption, incomplete migration, unexecuted counterexample, or overstated completion report
-3. Invalidate that proof method and reopen every obligation, including obligations in other fix units, closed with the same assumption, search method, or evidence
-4. Correct the observation point or counterexample, then implement and rerun every reopened obligation and every still-open obligation in the whole plan
+**Procedure after a verifier return:**
+1. Map every verified gap to a completion obligation in the plan
+2. Carry recurrence records forward without splitting a problem governed by the same invariant based only on physical code locations or file paths
+3. Determine why the previous evidence missed each gap: an unscanned path, weak observation, false assumption, incomplete migration, unexecuted counterexample, or overstated completion report
+4. When the observation or detection method itself failed, recheck every obligation closed with the same assumption, search method, or evidence
+5. When the same invariant repeatedly breaks through different paths, do not repair only the reported path; implement the planned enforcement point across the bounded graph or make violation impossible by type or structure
+6. Correct the observation point or counterexample, then implement and rerun obligations that require rechecking and all remaining obligations in the plan
+7. Add or update a counterexample that detects recurrence and record its result
 
-The verifier list contains examples of incomplete coverage; it is not an upper bound on this remediation. Do not correct only the listed locations and resubmit. Request fix-plan revision only when resolution requires changing the plan's assumptions, invariants, remediation boundary, methods, or evidentiary power.
+Do not treat the locations listed by verification as the upper bound of the repair. Request plan revision only when assumptions, repair boundaries, methods, or evidentiary power are insufficient or inconsistent and a plan change can resolve the deficiency.
 
 {{include:instructions/fix-plan-validity}}
-{{include:instructions/fix-family-completion}}
-
+{{include:instructions/repair-retry-path-check}}
+{{include:instructions/established-invariants-scan}}
 {{include:instructions/post-edit-self-scan}}
 
-**Required output (include headings)**
-## Work result
-- {Fix complete / Fix plan requires revision / Task-level replanning required}
-## Changes and acceptance criteria
-- {Changes by fix unit and falsification method, evidence, and status for every obligation reopened after the verifier return}
-## Verification and evidence
-- {Commands and results plus code, diffs, reports, and logs inspected}
+Follow the current output contract and record the work result, changes and acceptance criteria, and verification evidence.

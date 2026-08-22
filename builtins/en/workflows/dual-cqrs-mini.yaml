@@ -1,11 +1,5 @@
 name: dual-cqrs-mini
 description: CQRS+ES frontend + backend mini development workflow (plan -> implement -> parallel review -> fix if needed -> complete) with CQRS+ES knowledge injection
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
 max_steps: 21
 initial_step: develop
 steps:
@@ -15,6 +9,10 @@ steps:
     args:
       plan_policy:
         - design-planning
+        - cqrs-es
+        - architecture
+        - backend
+        - frontend
       plan_knowledge:
         - frontend
         - backend
@@ -25,8 +23,12 @@ steps:
       development_policy:
         - coding
         - testing
+        - cqrs-es
         - design-fidelity
         - screen-api
+        - architecture
+        - backend
+        - frontend
       development_knowledge:
         - frontend
         - backend

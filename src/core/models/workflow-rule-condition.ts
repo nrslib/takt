@@ -15,6 +15,9 @@ export type WorkflowRuleCondition =
   | { kind: 'aggregate'; aggregate: 'all' | 'any'; targetConditions: WorkflowRuleCondition[] }
   | { kind: 'and'; left: WorkflowRuleCondition; right: WorkflowRuleCondition };
 
+/** Engine-produced aggregate label for a parallel participant that ended in terminal error. */
+export const PARALLEL_TERMINAL_ERROR_LABEL = 'error';
+
 /** A semantic label selectable during Phase 3 status judgment. */
 export interface SemanticRuleCandidate {
   label: string;
@@ -197,35 +200,8 @@ export function needsSemanticStatusJudgment(
   return semanticRuleCandidatesOf(rules, interactive).length > 1;
 }
 
-export function hasFindingsReference(condition: WorkflowRuleCondition): boolean {
-  switch (condition.kind) {
-    case 'when': return hasUnquotedFindingsReference(condition.expression);
-    case 'and': return hasFindingsReference(condition.left) || hasFindingsReference(condition.right);
-    default: return false;
-  }
-}
-
 function isReferenceBoundary(char: string | undefined): boolean {
   return char === undefined || !/[A-Za-z0-9_.]/.test(char);
-}
-
-/** Detects an unquoted findings state reference at an identifier boundary. */
-export function hasUnquotedFindingsReference(expression: string): boolean {
-  let inString = false;
-
-  for (let index = 0; index < expression.length; index++) {
-    if (expression[index] === '"') {
-      if (!isEscapedQuote(expression, index)) {
-        inString = !inString;
-      }
-      continue;
-    }
-    if (!inString && expression.startsWith('findings.', index) && isReferenceBoundary(expression[index - 1])) {
-      return true;
-    }
-  }
-
-  return false;
 }
 
 /** Detects an unquoted, complete state identifier reference. */
@@ -250,6 +226,16 @@ export function hasUnquotedIdentifierReference(expression: string, identifier: s
   }
 
   return false;
+}
+
+/** Detects an unquoted companion state reference in a parsed rule condition. */
+export function hasCompanionReference(condition: WorkflowRuleCondition): boolean {
+  switch (condition.kind) {
+    case 'when': return hasUnquotedIdentifierReference(condition.expression, 'companion');
+    case 'and': return hasCompanionReference(condition.left) || hasCompanionReference(condition.right);
+    case 'aggregate': return condition.targetConditions.some(hasCompanionReference);
+    default: return false;
+  }
 }
 
 export function terminalLabelOf(condition: WorkflowRuleCondition): string | undefined {

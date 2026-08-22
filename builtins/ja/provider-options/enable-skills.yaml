@@ -1,0 +1,5 @@
+# リポジトリとユーザー自身の skills をプロバイダーに読み込ませる。
+codex:
+  skills:
+    repo: true
+    user: true

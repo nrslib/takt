@@ -21,6 +21,7 @@ import type { McpServerConfig } from '../../../core/models/index.js';
 import {
   interpolateMcpEnv,
   buildMcpServerSetIdentity,
+  validateMcpSectionReferences,
   type McpSection,
 } from './mcp-schema.js';
 
@@ -55,33 +56,18 @@ export interface ResolvedMcpServers {
   servers: Record<string, McpServerConfig>;
   /** Sorted server names (effective set, de-duplicated). */
   serverNames: string[];
-  /** Deterministic identity (server name + transport only, secrets excluded). */
+  /** Deterministic identity including non-secret server structure. */
   identity: string;
-}
-
-function assertKnownServer(
-  serverName: string,
-  known: ReadonlySet<string>,
-  context: string,
-): void {
-  if (!known.has(serverName)) {
-    throw new Error(
-      `MCP target ${context} references unknown server "${serverName}". Defined servers: ${[...known].sort().join(', ') || '(none)'}`,
-    );
-  }
 }
 
 function collectAdditions(
   additions: Set<string>,
   list: readonly string[] | undefined,
-  known: ReadonlySet<string>,
-  context: string,
 ): void {
   if (list === undefined) {
     return;
   }
   for (const name of list) {
-    assertKnownServer(name, known, context);
     additions.add(name);
   }
 }
@@ -89,14 +75,11 @@ function collectAdditions(
 function collectExcludes(
   excludes: Set<string>,
   list: readonly string[] | undefined,
-  known: ReadonlySet<string>,
-  context: string,
 ): void {
   if (list === undefined) {
     return;
   }
   for (const name of list) {
-    assertKnownServer(name, known, context);
     excludes.add(name);
   }
 }
@@ -161,7 +144,7 @@ export function resolveMcpAssignment(
   section: McpAssignmentSection,
   context: AgentExecutionContext,
 ): ResolvedMcpServers {
-  const knownServers = new Set<string>(Object.keys(section.servers ?? {}));
+  validateMcpSectionReferences(section);
   const additions = new Set<string>();
   const excludes = new Set<string>();
 
@@ -169,8 +152,6 @@ export function resolveMcpAssignment(
   collectAdditions(
     additions,
     section.defaults?.servers,
-    knownServers,
-    'defaults.servers',
   );
 
   // personas/tags/steps add on top of defaults.
@@ -178,33 +159,25 @@ export function resolveMcpAssignment(
   collectAdditions(
     additions,
     personaTarget?.servers,
-    knownServers,
-    `personas.${context.persona ?? '(none)'}.servers`,
   );
   collectExcludes(
     excludes,
     personaTarget?.exclude,
-    knownServers,
-    `personas.${context.persona ?? '(none)'}.exclude`,
   );
 
   for (const tagTarget of matchTagTargets(section, context)) {
-    collectAdditions(additions, tagTarget.servers, knownServers, 'tags.servers');
-    collectExcludes(excludes, tagTarget.exclude, knownServers, 'tags.exclude');
+    collectAdditions(additions, tagTarget.servers);
+    collectExcludes(excludes, tagTarget.exclude);
   }
 
   const stepTarget = matchStepTarget(section, context);
   collectAdditions(
     additions,
     stepTarget?.servers,
-    knownServers,
-    `steps.${context.stepQualifiedName ?? '(none)'}.servers`,
   );
   collectExcludes(
     excludes,
     stepTarget?.exclude,
-    knownServers,
-    `steps.${context.stepQualifiedName ?? '(none)'}.exclude`,
   );
 
   // internal_agents.selector.exclude applies a common exclude to internal agents.
@@ -212,8 +185,6 @@ export function resolveMcpAssignment(
   collectExcludes(
     excludes,
     internalExclude,
-    knownServers,
-    'internal_agents.selector.exclude',
   );
 
   // exclude wins over addition (order.md:102).
@@ -232,13 +203,10 @@ export function resolveMcpAssignment(
   }
 
   const resolvedServers: Record<string, McpServerConfig> = {};
+  const serverDefinitions = section.servers ?? {};
   for (const name of serverNames) {
-    const raw = section.servers?.[name];
-    if (raw === undefined) {
-      // Unreachable: additions are validated against known servers above.
-      throw new Error(`MCP server "${name}" is not defined in mcp.servers`);
-    }
-    resolvedServers[name] = interpolateMcpEnv(raw as McpServerConfig);
+    // validateMcpSectionReferences above guarantees every effective name is defined.
+    resolvedServers[name] = interpolateMcpEnv(serverDefinitions[name]!);
   }
 
   return {
@@ -247,4 +215,36 @@ export function resolveMcpAssignment(
     serverNames,
     identity: buildMcpServerSetIdentity(resolvedServers),
   };
+}
+
+/**
+ * Resolve the shared MCP assignment for a TAKT-owned internal agent.
+ *
+ * Internal agents do not have a workflow persona, tag, or step target. They
+ * still receive `defaults.servers`, and the common internal-agent exclusion
+ * is applied with `isInternalAgent: true`.
+ */
+export interface ResolvedInternalAgentMcpServers {
+  servers: Record<string, McpServerConfig>;
+  identity: string | undefined;
+}
+
+export function resolveInternalAgentMcpServers(
+  section: McpAssignmentSection | undefined,
+): ResolvedInternalAgentMcpServers {
+  if (section === undefined) {
+    return { servers: {}, identity: undefined };
+  }
+
+  const resolved = resolveMcpAssignment(section, {
+    persona: undefined,
+    tags: [],
+    stepQualifiedName: undefined,
+    isWorkflowCallNode: false,
+    isInternalAgent: true,
+  });
+  if (!resolved.enabled) {
+    return { servers: {}, identity: undefined };
+  }
+  return { servers: resolved.servers, identity: resolved.identity };
 }

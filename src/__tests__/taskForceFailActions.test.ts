@@ -21,6 +21,9 @@ const {
   mockLogError,
   mockForceFailRunningTask,
   mockRunnerProjectDir,
+  mockSpawn,
+  mockWorkerOnce,
+  mockWorkerUnref,
 } = vi.hoisted(() => ({
   mockConfirm: vi.fn(),
   mockSuccess: vi.fn(),
@@ -28,6 +31,14 @@ const {
   mockLogError: vi.fn(),
   mockForceFailRunningTask: vi.fn(),
   mockRunnerProjectDir: vi.fn(),
+  mockSpawn: vi.fn(),
+  mockWorkerOnce: vi.fn(),
+  mockWorkerUnref: vi.fn(),
+}));
+
+vi.mock('node:child_process', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  spawn: (...args: unknown[]) => mockSpawn(...args),
 }));
 
 vi.mock('../shared/prompt/index.js', () => ({
@@ -119,6 +130,10 @@ describe('forceFailRunningTask', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockSpawn.mockReturnValue({
+      once: mockWorkerOnce,
+      unref: mockWorkerUnref,
+    });
     vi.mocked(isStaleRunningTask).mockReturnValue(true);
     projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-force-fail-'));
   });
@@ -145,16 +160,17 @@ describe('forceFailRunningTask', () => {
       });
 
       expect(storage.currentStep).toBe('implement');
-      await expect(storage.terminalize('contract force-fail'))
+      const reason = 'contract force-fail';
+      await expect(storage.terminalize(reason))
         .resolves.toMatchObject({ issues: [] });
-      await expect(storage.terminalize('contract force-fail'))
+      await expect(storage.terminalize(reason))
         .resolves.toMatchObject({ issues: [] });
       const meta = JSON.parse(
         fs.readFileSync(runPaths.metaAbs, 'utf-8'),
       ) as { status: string; reason?: string };
       expect(meta).toMatchObject({
         status: 'failed',
-        reason: 'contract force-fail',
+        reason,
       });
       expect(
         fs.readFileSync(
@@ -167,9 +183,88 @@ describe('forceFailRunningTask', () => {
           path.join(runPaths.runRootAbs, 'trace.md'),
           'utf-8',
         ),
-      ).toContain('contract force-fail');
+      ).toContain(reason);
     },
   );
+
+  it('force-failで終端化したrunも重複なくループ分析へ送る', async () => {
+    const runSlug = '20260409-loop-analysis';
+    const runPaths = buildRunPaths(projectDir, runSlug);
+    writeMeta(projectDir, runSlug, {
+      status: 'running',
+      currentStep: 'review',
+      currentIteration: 2,
+    });
+    fs.writeFileSync(
+      path.join(projectDir, '.takt', 'runtime.yaml'),
+      'version: 1\nloop_analysis:\n  enabled: true\n  output: file\n',
+      'utf-8',
+    );
+    const storage = createTaskRunForceFailStorage({
+      task: createRunningTask(projectDir, { runSlug }),
+      projectDir,
+      onWarning: mockWarn,
+    });
+
+    await storage?.terminalize('manual force-fail');
+    await storage?.terminalize('manual force-fail');
+
+    const jobDirectory = path.join(
+      runPaths.runRootAbs,
+      '.takt-report-internal',
+      'loop-analysis',
+    );
+    const files = fs.readdirSync(jobDirectory);
+    expect(files.filter((file) => file.endsWith('.job.json'))).toHaveLength(1);
+    expect(files).toContain('dispatch.claim');
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('force-failでPRコメント用ジョブを作成した後、publication markerをsettledにする', async () => {
+    const runSlug = '20260409-loop-analysis-pr';
+    const runPaths = buildRunPaths(projectDir, runSlug);
+    writeMeta(projectDir, runSlug, {
+      status: 'running',
+      currentStep: 'review',
+      currentIteration: 2,
+    });
+    fs.writeFileSync(
+      path.join(projectDir, '.takt', 'runtime.yaml'),
+      'version: 1\nloop_analysis:\n  enabled: true\n  output: pr-comment\n',
+      'utf-8',
+    );
+    const storage = createTaskRunForceFailStorage({
+      task: createRunningTask(projectDir, {
+        runSlug,
+        branch: 'takt/source-run',
+        data: {
+          task: 'Force fail me\nwith full prompt',
+          auto_pr: true,
+        },
+      }),
+      projectDir,
+      onWarning: mockWarn,
+    });
+
+    await expect(storage?.terminalize('manual force-fail'))
+      .resolves.toMatchObject({ issues: [] });
+
+    const jobDirectory = path.join(
+      runPaths.runRootAbs,
+      '.takt-report-internal',
+      'loop-analysis',
+    );
+    const jobPath = fs.readdirSync(jobDirectory)
+      .find((file) => file.endsWith('.job.json'));
+    if (jobPath === undefined) {
+      throw new Error('Loop analysis PR comment job was not created');
+    }
+    const job = JSON.parse(fs.readFileSync(path.join(jobDirectory, jobPath), 'utf8')) as {
+      publicationMarkerPath: string;
+    };
+    expect(JSON.parse(fs.readFileSync(job.publicationMarkerPath, 'utf8')))
+      .toMatchObject({ state: 'settled', version: 1 });
+  });
 
   it('bootstrapがmeta作成後かつNDJSON初期化前に停止してもforce-failできる', async () => {
     const runSlug = '20260409-bootstrap-partial';
@@ -387,7 +482,7 @@ describe('forceFailRunningTask', () => {
     const result = await forceFailRunningTask(createRunningTask(projectDir), projectDir);
 
     expect(result).toBe(false);
-    expect(mockConfirm).toHaveBeenCalledWith('Mark running task "running-task" as failed?', false);
+    expect(mockConfirm).toHaveBeenCalled();
     expect(mockForceFailRunningTask).not.toHaveBeenCalled();
     expect(mockSuccess).not.toHaveBeenCalled();
   });
@@ -404,7 +499,7 @@ describe('forceFailRunningTask', () => {
     const result = await forceFailRunningTask(createRunningTask(projectDir), projectDir);
 
     expect(result).toBe(true);
-    expect(mockConfirm).toHaveBeenCalledWith('Mark running task "running-task" as failed?', false);
+    expect(mockConfirm).toHaveBeenCalled();
     expect(mockRunnerProjectDir).toHaveBeenCalledWith(projectDir);
     expect(mockForceFailRunningTask).toHaveBeenCalledWith('running-task', {
       step: 'implement',

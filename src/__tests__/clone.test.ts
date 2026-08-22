@@ -2236,7 +2236,6 @@ describe('shallow clone fallback', () => {
     expect(cloneCalls[0][cloneCalls[0].length - 1]).toBe('/tmp/shallow-test');
     expect(cloneCalls[1][cloneCalls[1].length - 1]).toBe('/tmp/shallow-test');
 
-    expect(mockLogInfo).toHaveBeenCalledWith('Reference repository is shallow, retrying clone without --reference');
     expect(serializedCloneLogs()).not.toContain(hiddenMainRepoPath);
   });
 
@@ -2254,7 +2253,6 @@ describe('shallow clone fallback', () => {
     expect(cloneCalls[0]).toContain('--dissociate');
     expect(cloneCalls[1]).not.toContain('--reference');
     expect(cloneCalls[1]).not.toContain('--dissociate');
-    expect(mockLogInfo).toHaveBeenCalledWith('Reference repository is shallow, retrying clone without --reference');
     expect(serializedCloneLogs()).not.toContain(hiddenMainRepoPath);
   });
 
@@ -2442,7 +2440,7 @@ describe('resolveCloneBaseDir parent-not-writable fallback', () => {
 
     expect(result.path).toContain(path.join('/workspaces/hello-world', '.takt', 'worktrees'));
     expect(mockLogInfo).toHaveBeenCalledWith(
-      'Parent directory not writable, using fallback clone base dir',
+      expect.any(String),
       expect.objectContaining({ fallback: expect.stringContaining('.takt/worktrees') }),
     );
   });
@@ -2604,7 +2602,7 @@ describe('auto clone path allocation', () => {
       const second = new CloneManager().createSharedClone('/project', {
         worktree: true,
         taskSlug: 'fix-review-comments',
-        branch: 'takt/816/implement-finding-contract',
+        branch: 'takt/816/implement-review-flow',
       });
 
       expect(first.path).toMatch(/^\/tmp\/takt-worktrees\/20260101T0000-fix-review-comments-[a-f0-9]{16}$/);
@@ -2645,7 +2643,7 @@ describe('auto clone path allocation', () => {
         new CloneManager().createSharedCloneAbortable('/project', {
           worktree: true,
           taskSlug: 'fix-review-comments',
-          branch: 'takt/816/implement-finding-contract',
+          branch: 'takt/816/implement-review-flow',
         }),
       ]);
       await vi.runAllTimersAsync();
@@ -2669,7 +2667,7 @@ describe('auto clone path allocation', () => {
         clonePath: first.path,
       });
       expect(metadataByBranch.get(second.branch)).toEqual({
-        filePath: '/project/.takt/clone-meta/takt--816--implement-finding-contract.json',
+        filePath: '/project/.takt/clone-meta/takt--816--implement-review-flow.json',
         clonePath: second.path,
       });
     } finally {

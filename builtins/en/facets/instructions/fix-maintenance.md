@@ -3,40 +3,22 @@ Use reports in the Report Directory and fix reviewer findings within the causall
 **Fix principles:**
 - When a finding includes a "suggested fix", follow it rather than inventing your own workaround
 - Fix the target code directly. Do not deflect findings by adding tests or documentation instead
-- Classify findings as must-fix, verification-only, or out-of-scope
-- Modify only must-fix findings
+- Determine from the request, current code, and evidence which reported problems require a change and which only require verification
+- Modify only the code needed to resolve the confirmed problems
 - Do not mix unrelated refactoring, renames, comment deletion, or test expectation changes
 
 {{include:instructions/fix-root-cause-analysis}}
 
-{{include:instructions/fix-family-completion}}
+{{include:instructions/repair-path-check}}
 
 {{include:instructions/post-edit-self-scan}}
 
 **Report reference policy:**
 - Use the latest review reports in the Report Directory as primary evidence.
-- Past iteration reports are saved as `{filename}.{timestamp}` in the same directory (e.g., `architect-review.md.20260304T123456Z`). For each report, run Glob with a `{report-name}.*` pattern, read up to 2 files in descending timestamp order, and understand persists / reopened trends before starting fixes.
+- Past iteration reports are saved as `{filename}.{timestamp}` in the same directory (e.g., `architect-review.md.20260304T123456Z`). For each report, run Glob with a `{report-name}.*` pattern, read up to 2 files in descending timestamp order, and understand persistence or recurrence trends before starting fixes.
 
 **Completion criteria (all must be satisfied):**
-- Must-fix findings in this iteration (new / persists / reopened) have been fixed
+- Every reported problem that requires a change has been resolved
 - After fixing, the full diff has been inspected and changes unrelated to the findings or request have been reverted
 
-**Required output (include headings)**
-## Work Results
-- {Summary of actions taken}
-## Finding Responses
-- {Classification and response for must-fix, verification-only, and out-of-scope findings}
-## Changes Made
-- {Summary of required and related changes}
-## Reverted Unnecessary Changes
-- {Changes reverted, or "none"}
-## Build Results
-- {Build execution results}
-## Test Results
-- {Test command executed and results}
-## Acceptance criteria
-| Finding | Acceptance criterion | Evidence | Status |
-|---------|----------------------|----------|--------|
-| {Finding} | {Expected behavior} | {Test or reproducible verification result} | {Complete / blocker} |
-## Evidence
-- {List key points from files checked/searches/diffs/logs}
+Record the decisions, changes, reverted unrelated edits, and verification evidence according to the supplied output contract.

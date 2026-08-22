@@ -229,7 +229,12 @@ describe('runtime.yaml internal_agents resolution', () => {
       provider: {
         defaults: { profile: 'default' },
         profiles: {
-          default: { provider: 'codex', model: 'gpt-default', options: { reasoning_effort: 'high' } },
+          default: {
+            provider: 'codex',
+            model: 'gpt-default',
+            options: { reasoning_effort: 'high' },
+            permission_mode: 'readonly',
+          },
         },
       },
     });
@@ -239,10 +244,12 @@ describe('runtime.yaml internal_agents resolution', () => {
     expect(ctx.providerType).toBe('codex');
     expect(ctx.model).toBe('gpt-default');
     expect(ctx.providerOptions).toEqual({ codex: { reasoningEffort: 'high' } });
+    expect(ctx.permissionMode).toBe('readonly');
 
     const overridden = initializeSession(projectCwd, 'interactive', { provider: 'claude' });
     expect(overridden.providerType).toBe('claude');
     expect(overridden.providerOptions).toBeUndefined();
+    expect(overridden.permissionMode).toBeUndefined();
   });
 
   // Unit D: the selector seam adopts CLI/env provider overrides and drops the runtime model/options.

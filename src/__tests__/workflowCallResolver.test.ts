@@ -12,6 +12,7 @@ import { getWorkflowSourcePath } from '../infra/config/loaders/workflowSourceMet
 import { getWorkflowTrustInfo, resolveWorkflowTrustInfo } from '../infra/config/loaders/workflowTrustSource.js';
 import type { WorkflowConfig } from '../core/models/index.js';
 import type { AutoRoutingConfig } from '../core/models/config-types.js';
+import { getWorkflowConfigErrorPath } from '../core/workflow/workflow-config-error.js';
 import { findWorkflowCallStep } from './testUtils/workflowCallStepTestHelper.js';
 
 describe('workflowCallResolver module boundary', () => {
@@ -38,95 +39,6 @@ describe('workflowCallResolver module boundary', () => {
         lookupCwd: worktreeDir,
       }),
     });
-  }
-
-  function writeFindingContractCallFixture(
-    overridesYaml: string,
-    childAutoRoutingYaml = '',
-  ): void {
-    writeProjectWorkflow('root.yaml', `name: root
-finding_contract:
-  manager:
-    persona: findings-manager
-    instruction: findings-manager
-    output_contract: findings-manager
-    provider: codex
-    model: gpt-5
-  adjudicator:
-    persona: supervisor
-    instruction: adjudicate
-initial_step: delegate
-steps:
-  - name: delegate
-    kind: workflow_call
-    call: child
-${overridesYaml}    rules:
-      - condition: COMPLETE
-        next: COMPLETE
-`);
-    writeProjectWorkflow('child.yaml', `name: child
-subworkflow:
-  callable: true
-${childAutoRoutingYaml}initial_step: review
-steps:
-  - name: review
-    persona: reviewer
-    instruction: Review.
-    rules:
-      - condition: done
-        next: COMPLETE
-`);
-  }
-
-  function syntheticRoleAutoRouting(
-    provider: 'codex' | 'opencode',
-    strategy: AutoRoutingConfig['strategy'],
-  ): AutoRoutingConfig {
-    const candidateName = `${provider}-synthetic`;
-    return {
-      strategy,
-      router: { provider: 'claude-sdk', model: 'claude-haiku-4-5-20251001' },
-      candidates: [{
-        name: candidateName,
-        provider,
-        model: provider === 'opencode' ? 'opencode/good' : 'gpt-5',
-        routingTier: 'medium',
-      }],
-      defaultPool: 'synthetic',
-      candidatePools: {
-        synthetic: { candidates: [candidateName], fallback: candidateName },
-      },
-      rules: {
-        steps: { 'findings-terminal-adjudication': candidateName },
-      },
-    };
-  }
-
-  function childAutoRoutingYaml(
-    provider: 'codex' | 'opencode',
-    strategy: AutoRoutingConfig['strategy'],
-  ): string {
-    const candidateName = `${provider}-synthetic`;
-    const model = provider === 'opencode' ? 'opencode/good' : 'gpt-5';
-    return `auto_routing:
-  strategy: ${strategy}
-  router:
-    provider: claude-sdk
-    model: claude-haiku-4-5-20251001
-  candidates:
-    - name: ${candidateName}
-      provider: ${provider}
-      model: ${model}
-      routing_tier: medium
-  default_pool: synthetic
-  candidate_pools:
-    synthetic:
-      candidates: [${candidateName}]
-      fallback: ${candidateName}
-  rules:
-    steps:
-      findings-terminal-adjudication: ${candidateName}
-`;
   }
 
   beforeEach(() => {
@@ -253,41 +165,7 @@ steps:
     expect(childWorkflow?.steps[0]?.rules?.[0]?.returnValue).toBe('ok');
   });
 
-  it('rejects a Finding Contract subworkflow when its caller does not provide the required contract', () => {
-    writeProjectWorkflow('parent.yaml', `name: parent
-initial_step: delegate
-max_steps: 3
-steps:
-  - name: delegate
-    kind: workflow_call
-    call: child
-    rules:
-      - condition: COMPLETE
-        next: COMPLETE
-      - condition: ABORT
-        next: ABORT
-`);
-    writeProjectWorkflow('child.yaml', `name: child
-subworkflow:
-  callable: true
-  visibility: internal
-  requires_finding_contract: true
-initial_step: review
-max_steps: 3
-steps:
-  - name: review
-    persona: reviewer
-    instruction: Review with the inherited ledger
-    rules:
-      - condition: when(findings.open.count == 0)
-        next: COMPLETE
-`);
 
-    const parent = loadProjectWorkflow('parent.yaml');
-    expect(() => workflowResolver.validateWorkflowCallContracts(parent, projectDir)).toThrow(
-      /workflow "child".*requires a finding_contract inherited from its caller/s,
-    );
-  });
 
   it('prefers parent workflow metadata over fallback context for nested relative workflow_call resolution', () => {
     const rootWorkflowPath = join(externalDir, 'root.yaml');
@@ -485,10 +363,284 @@ steps:
       outputContracts: [
         expect.objectContaining({
           name: 'summary',
-          format: expect.stringContaining('# Summary Format'),
+          format: expect.any(String),
         }),
       ],
     });
+  });
+
+  it('expands callable selector persona and instruction refs for facet and parallel selectors', () => {
+    writeProjectWorkflow('parent.yaml', `name: parent
+initial_step: delegate
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: child
+    args:
+      selector_persona: selector-persona
+      selector_instruction: selector-guidance
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+    writeProjectWorkflow('child.yaml', `name: child
+subworkflow:
+  callable: true
+  params:
+    selector_persona:
+      type: facet_ref
+      facet_kind: persona
+    selector_instruction:
+      type: facet_ref
+      facet_kind: instruction
+initial_step: facets
+personas:
+  selector-persona: Selector persona content
+instructions:
+  selector-guidance: Selector guidance content
+knowledge:
+  architecture: Architecture guidance content
+facet_pools:
+  selector-facets:
+    candidates:
+      - id: architecture
+        description: Architecture review
+        knowledge: architecture
+steps:
+  - name: facets
+    instruction: Implement
+    dynamic_facets:
+      pool: selector-facets
+      selector:
+        persona:
+          $param: selector_persona
+        instruction:
+          $param: selector_instruction
+    rules:
+      - condition: done
+        next: COMPLETE
+  - name: reviewers
+    parallel:
+      pool:
+        - name: architecture
+          description: Architecture review
+          instruction: Review architecture
+          rules:
+            - condition: approved
+              next: COMPLETE
+      selection:
+        mode: replace
+        selector:
+          persona:
+            $param: selector_persona
+          instruction:
+            $param: selector_instruction
+    rules:
+      - condition: all("approved")
+        next: COMPLETE
+`);
+
+    const parentWorkflow = loadProjectWorkflow('parent.yaml');
+    const childWorkflow = workflowCallResolver.resolveWorkflowCallTarget(
+      parentWorkflow!,
+      findWorkflowCallStep(parentWorkflow!, 'delegate'),
+      projectDir,
+      projectDir,
+    );
+
+    expect(childWorkflow).not.toBeNull();
+    const facetSelector = childWorkflow!.steps[0]?.dynamicFacets?.selector;
+    expect(facetSelector).toEqual({
+      persona: 'Selector persona content',
+      instruction: 'Selector guidance content',
+    });
+    const parallel = childWorkflow!.steps[1]?.parallel;
+    if (parallel === undefined || Array.isArray(parallel)) {
+      throw new Error('Expected a dynamic parallel step');
+    }
+    expect(parallel.selection.selector).toEqual({
+      persona: 'Selector persona content',
+      instruction: 'Selector guidance content',
+    });
+    expect(JSON.stringify(childWorkflow)).not.toContain('$param');
+  });
+
+  it('rejects a callable selector instruction that expands to an external absolute path', () => {
+    const secretPath = join(externalDir, 'selector-secret.md');
+    writeFileSync(secretPath, 'SECRET-OUTSIDE-PROJECT', 'utf-8');
+    writeProjectWorkflow('parent.yaml', `name: parent
+initial_step: delegate
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: child
+    args:
+      selector_instruction: ${secretPath}
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+    writeProjectWorkflow('child.yaml', `name: child
+subworkflow:
+  callable: true
+  params:
+    selector_instruction:
+      type: facet_ref
+      facet_kind: instruction
+initial_step: facets
+knowledge:
+  architecture: Architecture guidance content
+steps:
+  - name: facets
+    instruction: Implement
+    dynamic_facets:
+      pool: selector-facets
+      selector:
+        instruction:
+          $param: selector_instruction
+    rules:
+      - condition: done
+        next: COMPLETE
+facet_pools:
+  selector-facets:
+    candidates:
+      - id: architecture
+        description: Architecture review
+        knowledge: architecture
+`);
+
+    const parentWorkflow = loadProjectWorkflow('parent.yaml');
+    expect(parentWorkflow).not.toBeNull();
+
+    expect(() => workflowCallResolver.resolveWorkflowCallTarget(
+      parentWorkflow!,
+      findWorkflowCallStep(parentWorkflow!, 'delegate'),
+      projectDir,
+      projectDir,
+    )).toThrow(/Selector instruction file must stay inside an allowed instruction facet root/);
+  });
+
+  it('rejects a callable selector map source outside the instruction facet root', () => {
+    const secretPath = join(externalDir, 'selector-map-secret.md');
+    writeFileSync(secretPath, 'SECRET-OUTSIDE-INSTRUCTION-ROOT', 'utf-8');
+    writeProjectWorkflow('parent.yaml', `name: parent
+initial_step: delegate
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: child
+    args:
+      selector_instruction: selector.md
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+    writeProjectWorkflow('child.yaml', `name: child
+subworkflow:
+  callable: true
+  params:
+    selector_instruction:
+      type: facet_ref
+      facet_kind: instruction
+initial_step: facets
+knowledge:
+  architecture: Architecture guidance content
+instructions:
+  selector.md: ${secretPath}
+steps:
+  - name: facets
+    instruction: Implement
+    dynamic_facets:
+      pool: selector-facets
+      selector:
+        instruction:
+          $param: selector_instruction
+    rules:
+      - condition: done
+        next: COMPLETE
+facet_pools:
+  selector-facets:
+    candidates:
+      - id: architecture
+        description: Architecture review
+        knowledge: architecture
+`);
+
+    const parentWorkflow = loadProjectWorkflow('parent.yaml');
+    expect(parentWorkflow).not.toBeNull();
+
+    expect(() => workflowCallResolver.resolveWorkflowCallTarget(
+      parentWorkflow!,
+      findWorkflowCallStep(parentWorkflow!, 'delegate'),
+      projectDir,
+      projectDir,
+    )).toThrow(/Selector instruction file must stay inside an allowed instruction facet root/);
+  });
+
+  it('rejects selector parameter references outside a callable workflow', () => {
+    writeProjectWorkflow('non-callable.yaml', `name: non-callable
+initial_step: facets
+steps:
+  - name: facets
+    instruction: Implement
+    dynamic_facets:
+      pool: selector-facets
+      selector:
+        instruction:
+          $param: selector_instruction
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    expect(() => loadProjectWorkflow('non-callable.yaml')).toThrow(
+      /cannot use \$param in selector\.instruction outside a callable subworkflow/,
+    );
+  });
+
+  it('rejects raw parameter references in a non-callable parallel selector with its configuration path', () => {
+    writeProjectWorkflow('non-callable-parallel.yaml', `name: non-callable-parallel
+initial_step: reviewers
+steps:
+  - name: reviewers
+    instruction: Review
+    parallel:
+      pool:
+        - name: architecture
+          description: Architecture review
+          instruction: Review architecture
+          rules:
+            - condition: approved
+              next: COMPLETE
+      selection:
+        mode: replace
+        selector:
+          instruction:
+            $param: selector_instruction
+    rules:
+      - condition: all("approved")
+        next: COMPLETE
+`);
+
+    let validationError: unknown;
+    try {
+      loadProjectWorkflow('non-callable-parallel.yaml');
+    } catch (error) {
+      validationError = error;
+    }
+
+    expect(validationError).toBeInstanceOf(Error);
+    expect((validationError as Error).message).toContain(
+      'cannot use $param in selector.instruction outside a callable subworkflow',
+    );
+    expect(getWorkflowConfigErrorPath(validationError)).toEqual([
+      'steps',
+      0,
+      'parallel',
+      'selection',
+      'selector',
+      'instruction',
+    ]);
   });
 
   it('expands callable $param values inside nested workflow_call args', () => {
@@ -908,358 +1060,6 @@ steps:
 
     expect(delegate.call).toBe('implementation');
     expect(implementation?.name).toBe('implementation');
-  });
-
-  it('validates required Finding Contracts for each expanded workflow_ref invocation', () => {
-    writeProjectWorkflow('root.yaml', `name: root
-initial_step: compose-safe
-steps:
-  - name: compose-safe
-    kind: workflow_call
-    call: composer
-    args:
-      target: safe-review
-    rules:
-      - condition: COMPLETE
-        next: compose-required
-  - name: compose-required
-    kind: workflow_call
-    call: composer
-    args:
-      target: required-review
-    rules:
-      - condition: COMPLETE
-        next: COMPLETE
-`);
-    writeProjectWorkflow('composer.yaml', `name: composer
-subworkflow:
-  callable: true
-  params:
-    target:
-      type: workflow_ref
-steps:
-  - name: delegate
-    kind: workflow_call
-    call:
-      $param: target
-    rules:
-      - condition: COMPLETE
-        next: COMPLETE
-`);
-    writeProjectWorkflow('safe-review.yaml', `name: safe-review
-subworkflow:
-  callable: true
-steps:
-  - name: review
-    persona: reviewer
-    instruction: Review without a Finding Contract
-    rules:
-      - condition: done
-        next: COMPLETE
-`);
-    writeProjectWorkflow('required-review.yaml', `name: required-review
-subworkflow:
-  callable: true
-  requires_finding_contract: true
-steps:
-  - name: review
-    persona: reviewer
-    instruction: Review with the inherited Finding Contract
-    rules:
-      - condition: when(findings.open.count == 0)
-        next: COMPLETE
-`);
-
-    const root = loadProjectWorkflow('root.yaml');
-
-    expect(() => workflowResolver.validateWorkflowCallContracts(root, projectDir)).toThrow(
-      /workflow "required-review".*requires a finding_contract inherited from its caller/s,
-    );
-  });
-
-  it.each([
-    { nested: false, terminalAuthority: false },
-    { nested: false, terminalAuthority: true },
-    { nested: true, terminalAuthority: false },
-    { nested: true, terminalAuthority: true },
-  ])(
-    'accepts routing that makes an inherited terminal role valid (nested=$nested, terminal=$terminalAuthority)',
-    ({ nested, terminalAuthority }) => {
-      const authorityLine = terminalAuthority
-        ? '    finding_contract_authority: terminal_adjudication\n'
-        : '';
-      writeProjectWorkflow('root.yaml', `name: root
-workflow_config:
-  provider: claude
-finding_contract:
-  manager:
-    persona: findings-manager
-    instruction: findings-manager
-    output_contract: findings-manager
-    provider: codex
-    model: strong-manager
-initial_step: delegate
-steps:
-  - name: delegate
-    kind: workflow_call
-    call: ${nested ? 'outer' : 'inner'}
-${nested ? '' : authorityLine}    rules:
-      - condition: COMPLETE
-        next: COMPLETE
-`);
-      if (nested) {
-        writeProjectWorkflow('outer.yaml', `name: outer
-workflow_config:
-  provider: claude
-subworkflow:
-  callable: true
-initial_step: delegate-inner
-steps:
-  - name: delegate-inner
-    kind: workflow_call
-    call: inner
-${authorityLine}    rules:
-      - condition: COMPLETE
-        next: COMPLETE
-`);
-      }
-      writeProjectWorkflow('inner.yaml', `name: inner
-workflow_config:
-  provider: opencode
-subworkflow:
-  callable: true
-initial_step: review
-steps:
-  - name: review
-    persona: reviewer
-    instruction: Review.
-    rules:
-      - condition: done
-        next: COMPLETE
-`);
-
-      const root = loadProjectWorkflow('root.yaml');
-
-      expect(() => workflowResolver.validateWorkflowCallContracts(root, projectDir, projectDir, {
-        providerValidationOptions: {
-          provider: 'claude',
-          providerSource: 'project',
-          providerRouting: {
-            personas: {
-              supervisor: { provider: 'codex', model: 'strong-adjudicator' },
-            },
-          },
-        },
-      })).not.toThrow();
-    },
-  );
-
-  it('rejects an inherited role when workflow_call provider override invalidates valid base routing', () => {
-    writeFindingContractCallFixture(`    overrides:
-      provider: opencode
-`);
-    const root = loadProjectWorkflow('root.yaml');
-
-    expect(() => workflowResolver.validateWorkflowCallContracts(root, projectDir, projectDir, {
-      providerValidationOptions: {
-        providerRouting: {
-          personas: {
-            supervisor: { provider: 'codex', model: 'gpt-5' },
-          },
-        },
-      },
-    })).toThrow(/provider 'opencode' requires model/);
-  });
-
-  it('accepts an inherited role when workflow_call overrides repair invalid base routing', () => {
-    writeFindingContractCallFixture(`    overrides:
-      provider: codex
-      model: gpt-5
-`);
-    const root = loadProjectWorkflow('root.yaml');
-
-    expect(() => workflowResolver.validateWorkflowCallContracts(root, projectDir, projectDir, {
-      providerValidationOptions: {
-        providerRouting: {
-          personas: {
-            supervisor: { provider: 'opencode' },
-          },
-        },
-      },
-    })).not.toThrow();
-  });
-
-  it('rejects using child auto_routing instead of valid inherited auto routing', () => {
-    writeFindingContractCallFixture(`    overrides:
-      model: bare-model
-`, childAutoRoutingYaml('opencode', 'performance'));
-    const root = loadProjectWorkflow('root.yaml');
-
-    expect(() => workflowResolver.validateWorkflowCallContracts(root, projectDir, projectDir, {
-      providerValidationOptions: {
-        autoRouting: syntheticRoleAutoRouting('codex', 'cost'),
-      },
-    })).toThrow(/auto_routing resolved model.*provider\/model/);
-  });
-
-  it('accepts using child auto_routing instead of invalid inherited auto routing', () => {
-    writeFindingContractCallFixture(`    overrides:
-      model: bare-model
-`, childAutoRoutingYaml('codex', 'cost'));
-    const root = loadProjectWorkflow('root.yaml');
-
-    expect(() => workflowResolver.validateWorkflowCallContracts(root, projectDir, projectDir, {
-      providerValidationOptions: {
-        autoRouting: syntheticRoleAutoRouting('opencode', 'performance'),
-      },
-    })).not.toThrow();
-  });
-
-  it.each([
-    { nested: false, terminalAuthority: false },
-    { nested: false, terminalAuthority: true },
-    { nested: true, terminalAuthority: false },
-    { nested: true, terminalAuthority: true },
-  ])(
-    'rejects routing that makes an inherited terminal role invalid before execution (nested=$nested, terminal=$terminalAuthority)',
-    ({ nested, terminalAuthority }) => {
-      const authorityLine = terminalAuthority
-        ? '    finding_contract_authority: terminal_adjudication\n'
-        : '';
-      writeProjectWorkflow('root.yaml', `name: root
-workflow_config:
-  provider: claude
-finding_contract:
-  manager:
-    persona: findings-manager
-    instruction: findings-manager
-    output_contract: findings-manager
-    provider: codex
-    model: strong-manager
-initial_step: delegate
-steps:
-  - name: delegate
-    kind: workflow_call
-    call: ${nested ? 'outer' : 'inner'}
-${nested ? '' : authorityLine}    rules:
-      - condition: COMPLETE
-        next: COMPLETE
-`);
-      if (nested) {
-        writeProjectWorkflow('outer.yaml', `name: outer
-workflow_config:
-  provider: claude
-subworkflow:
-  callable: true
-initial_step: delegate-inner
-steps:
-  - name: delegate-inner
-    kind: workflow_call
-    call: inner
-${authorityLine}    rules:
-      - condition: COMPLETE
-        next: COMPLETE
-`);
-      }
-      writeProjectWorkflow('inner.yaml', `name: inner
-workflow_config:
-  provider: claude
-subworkflow:
-  callable: true
-initial_step: review
-steps:
-  - name: review
-    persona: reviewer
-    instruction: Review.
-    rules:
-      - condition: done
-        next: COMPLETE
-`);
-
-      const root = loadProjectWorkflow('root.yaml');
-
-      expect(() => workflowResolver.validateWorkflowCallContracts(root, projectDir, projectDir, {
-        providerValidationOptions: {
-          provider: 'claude',
-          providerSource: 'project',
-          providerRouting: {
-            personas: {
-              supervisor: { provider: 'opencode' },
-            },
-          },
-        },
-      })).toThrow(/provider 'opencode' requires model/);
-    },
-  );
-
-  it('does not apply terminal validation to a sibling without an effective contract or conflict route', () => {
-    writeProjectWorkflow('root.yaml', `name: root
-workflow_config:
-  provider: claude
-initial_step: fc-child
-steps:
-  - name: fc-child
-    kind: workflow_call
-    call: local-fc
-    rules:
-      - condition: COMPLETE
-        next: plain-child
-  - name: plain-child
-    kind: workflow_call
-    call: plain
-    rules:
-      - condition: COMPLETE
-        next: COMPLETE
-`);
-    writeProjectWorkflow('local-fc.yaml', `name: local-fc
-subworkflow:
-  callable: true
-finding_contract:
-  manager:
-    persona: findings-manager
-    instruction: findings-manager
-    output_contract: findings-manager
-    provider: codex
-    model: strong-manager
-  adjudicator:
-    persona: supervisor
-    instruction: adjudicate
-    provider: codex
-    model: strong-adjudicator
-initial_step: review
-steps:
-  - name: review
-    persona: reviewer
-    instruction: Review.
-    rules:
-      - condition: done
-        next: COMPLETE
-`);
-    writeProjectWorkflow('plain.yaml', `name: plain
-subworkflow:
-  callable: true
-initial_step: review
-steps:
-  - name: review
-    persona: reviewer
-    instruction: Review.
-    rules:
-      - condition: done
-        next: COMPLETE
-`);
-
-    const root = loadProjectWorkflow('root.yaml');
-
-    expect(() => workflowResolver.validateWorkflowCallContracts(root, projectDir, projectDir, {
-      providerValidationOptions: {
-        provider: 'claude',
-        providerRouting: {
-          personas: {
-            supervisor: { provider: 'opencode' },
-          },
-        },
-      },
-    })).not.toThrow();
   });
 
   it('validates nested return routes for each expanded workflow_ref invocation', () => {

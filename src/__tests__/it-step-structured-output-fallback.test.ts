@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 import { createDefaultStructuredOutputNormalizers } from '../infra/workflow/structured-output/followup-task-normalizer.js';
+import type { WorkflowStepFailureSummary } from '../core/workflow/types.js';
+import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
 
 const {
   mockGetProvider,
@@ -70,7 +72,6 @@ describe('workflow structured_output fallback integration', () => {
           {
             name: 'plan_followup',
             persona: 'planner',
-            provider: 'cursor',
             instruction: 'Plan the next follow-up action.',
             structured_output: {
               schema_ref: 'followup-task',
@@ -89,7 +90,8 @@ describe('workflow structured_output fallback integration', () => {
 
     const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
       projectCwd: projectDir,
-      provider: 'claude',
+      provider: 'cursor',
+      providerSource: 'runtime-v1',
       structuredCaller: {
         judgeStatus: vi.fn(),
         evaluateCondition: vi.fn().mockResolvedValue(-1),
@@ -106,6 +108,74 @@ describe('workflow structured_output fallback integration', () => {
     expect(mockGetProvider).toHaveBeenCalledWith('cursor');
     expect((stateRecord.structuredOutputs as Map<string, unknown>).get('plan_followup')).toEqual({
       action: 'noop',
+    });
+  });
+
+  it('provider stream parse failure bypasses structured_output fallback and preserves its category', async () => {
+    writeFileSync(
+      join(projectDir, '.takt', 'schemas', 'followup-task.json'),
+      readFileSync(join(process.cwd(), 'builtins', 'schemas', 'followup-task.json'), 'utf-8'),
+      'utf-8',
+    );
+    const failureMessage = 'provider stream parse error: Failed to parse item: invalid stdout line';
+    mockProviderCall.mockResolvedValue({
+      persona: 'planner',
+      status: 'error',
+      content: '',
+      error: failureMessage,
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+      timestamp: new Date('2026-04-01T00:00:00.000Z'),
+    });
+    const config = normalizeWorkflowConfig(
+      {
+        name: 'step-structured-output-parse-failure',
+        initial_step: 'plan_fresh_improvement',
+        max_steps: 2,
+        schemas: {
+          'followup-task': 'followup-task',
+        },
+        steps: [
+          {
+            name: 'plan_fresh_improvement',
+            persona: 'planner',
+            instruction: 'Plan the next follow-up action.',
+            structured_output: {
+              schema_ref: 'followup-task',
+            },
+            rules: [{ condition: 'always', next: 'COMPLETE' }],
+          },
+        ],
+      },
+      projectDir,
+    );
+    let abortFailure: WorkflowStepFailureSummary | undefined;
+    const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
+      projectCwd: projectDir,
+      provider: 'cursor',
+      providerSource: 'runtime-v1',
+      structuredCaller: {
+        judgeStatus: vi.fn(),
+        evaluateCondition: vi.fn(),
+        decomposeTask: vi.fn(),
+        requestMoreParts: vi.fn(),
+      },
+      structuredOutputNormalizers: createDefaultStructuredOutputNormalizers(),
+      reportDirName: 'test-report-dir',
+    });
+    engine.on('workflow:abort', (_state, _reason, _kind, failure) => {
+      abortFailure = failure;
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(mockProviderCall).toHaveBeenCalledOnce();
+    expect(abortFailure).toMatchObject({
+      kind: 'step_error',
+      step: 'plan_fresh_improvement',
+      reason: failureMessage,
+      error: failureMessage,
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
     });
   });
 
@@ -159,7 +229,6 @@ describe('workflow structured_output fallback integration', () => {
           {
             name: 'plan_fresh_improvement',
             persona: 'planner',
-            provider: 'cursor',
             instruction: 'Plan the next follow-up action.',
             structured_output: {
               schema_ref: 'followup-task',
@@ -179,7 +248,8 @@ describe('workflow structured_output fallback integration', () => {
     let abortReason = '';
     const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
       projectCwd: projectDir,
-      provider: 'claude',
+      provider: 'cursor',
+      providerSource: 'runtime-v1',
       structuredCaller: {
         judgeStatus: vi.fn(),
         evaluateCondition: vi.fn().mockResolvedValue(-1),
@@ -238,7 +308,6 @@ describe('workflow structured_output fallback integration', () => {
           {
             name: 'plan_fresh_improvement',
             persona: 'planner',
-            provider: 'cursor',
             instruction: 'Plan the next follow-up action.',
             structured_output: {
               schema_ref: 'followup-task',
@@ -257,7 +326,8 @@ describe('workflow structured_output fallback integration', () => {
 
     const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
       projectCwd: projectDir,
-      provider: 'claude',
+      provider: 'cursor',
+      providerSource: 'runtime-v1',
       structuredCaller: {
         judgeStatus: vi.fn(),
         evaluateCondition: vi.fn().mockResolvedValue(-1),
@@ -313,7 +383,6 @@ describe('workflow structured_output fallback integration', () => {
           {
             name: 'plan_followup',
             persona: 'planner',
-            provider: 'cursor',
             instruction: 'Plan the next follow-up action.',
             structured_output: {
               schema_ref: 'followup-contact',
@@ -332,7 +401,8 @@ describe('workflow structured_output fallback integration', () => {
 
     const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
       projectCwd: projectDir,
-      provider: 'claude',
+      provider: 'cursor',
+      providerSource: 'runtime-v1',
       structuredCaller: {
         judgeStatus: vi.fn(),
         evaluateCondition: vi.fn().mockResolvedValue(-1),

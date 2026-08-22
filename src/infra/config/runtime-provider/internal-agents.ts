@@ -19,8 +19,10 @@ import { getGlobalConfigDir, getProjectConfigDir } from '../paths.js';
 import type { ProviderRoutingEntry } from '../../../core/models/config-types.js';
 import { compileProviderEnvironment, type CompiledProviderEnvironment } from './environment.js';
 import { collectProjectLegacyProviderSignals } from './legacy-signals.js';
-import { resolveRuntimeProviderFile } from './loader.js';
+import { resolveRuntimeProviderFileWithOrigins } from './loader.js';
 import { determineProviderConfigMode } from './mode.js';
+import { getEffectiveRuntimeProviderFile } from './schema.js';
+import { createRuntimeProviderResolutionContext } from './resolution-context.js';
 
 export type RuntimeInternalAgent = 'selector' | 'assistant';
 
@@ -37,10 +39,11 @@ export type RuntimeInternalAgent = 'selector' | 'assistant';
 function resolveActiveRuntimeProviderEnvironment(
   projectCwd: string,
 ): CompiledProviderEnvironment | undefined {
-  const runtimeFile = resolveRuntimeProviderFile({
+  const resolvedRuntimeFile = resolveRuntimeProviderFileWithOrigins({
     globalConfigDir: getGlobalConfigDir(),
     projectConfigDir: getProjectConfigDir(projectCwd),
   });
+  const runtimeFile = getEffectiveRuntimeProviderFile(resolvedRuntimeFile.runtimeFile);
   const { mode } = determineProviderConfigMode({
     runtimeFile,
     legacyProviderSignals: collectProjectLegacyProviderSignals(projectCwd),
@@ -66,30 +69,35 @@ function resolveActiveRuntimeProviderEnvironment(
     }
     return env;
   }
-  return compileProviderEnvironment({ kind: 'runtime-v1', section, mcp: runtimeFile?.mcp });
+  return compileProviderEnvironment({
+    kind: 'runtime-v1',
+    section,
+    mcp: runtimeFile?.mcp,
+    resolutionContext: createRuntimeProviderResolutionContext(
+      projectCwd,
+      resolvedRuntimeFile.profileOrigins,
+    ),
+  });
 }
 
 /**
- * Build the `defaults` profile entry from a compiled runtime env. A pool default (auto routing
- * configured) legitimately leaves the fixed provider unset and returns `undefined`; an active
- * section that resolves no provider at all fails fast instead of silently falling back to the
- * legacy config.yaml resolution — symmetric with the workflow bootstrap boundary.
+ * Build the `defaults` profile entry from a compiled runtime env. Runtime defaults are always a
+ * concrete profile or ladder stage, so an unresolved provider is a configuration error rather
+ * than an invitation to reuse an auto-routing fallback or legacy config.yaml value.
  */
 function defaultsProfileEntry(
   env: CompiledProviderEnvironment,
 ): ProviderRoutingEntry | undefined {
   if (env.provider === undefined) {
-    if (env.autoRouting === undefined) {
-      throw new Error(
-        'No provider configured. The active runtime.yaml provider section resolves no `provider.defaults`; set `provider.defaults` in runtime.yaml',
-      );
-    }
-    return undefined;
+    throw new Error(
+      'No provider configured. The active runtime.yaml provider section resolves no `provider.defaults`; set `provider.defaults` in runtime.yaml',
+    );
   }
   return {
     provider: env.provider,
     ...(env.model !== undefined ? { model: env.model } : {}),
     ...(env.providerOptions !== undefined ? { providerOptions: env.providerOptions } : {}),
+    ...(env.permissionMode !== undefined ? { permissionMode: env.permissionMode } : {}),
   };
 }
 
@@ -117,8 +125,8 @@ export function resolveRuntimeInternalAgentProvider(
  * Resolve provider/model/options for the non-workflow agents (task summarizer, sync conflict
  * resolver, non-assistant interactive personas) from an active runtime.yaml provider section.
  * These agents are not the selector/assistant internal agents, so they resolve the `defaults`
- * profile directly. Returns `undefined` in legacy mode (or when the `defaults` profile is unset)
- * so callers keep resolving provider/model/options from config.yaml.
+ * profile directly. Returns `undefined` in legacy mode so callers keep resolving
+ * provider/model/options from config.yaml.
  */
 export function resolveRuntimeNonWorkflowProvider(
   projectCwd: string,

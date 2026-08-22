@@ -3,8 +3,13 @@ import type { ClaudeHeadlessCallOptions } from '../claude-headless/types.js';
 import { resolveAnthropicApiKey, resolveClaudeCliPath } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import { keepsAllowedToolWithoutEdit as keepsClaudeAllowedToolWithoutEdit } from './allowed-tool-edit-policy.js';
-import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from './types.js';
-import { assertOutputSchema } from './types.js';
+import {
+  assertOutputSchema,
+  type AgentSetup,
+  type Provider,
+  type ProviderAgent,
+  type ProviderCallOptions,
+} from './types.js';
 
 function toHeadlessOptions(options: ProviderCallOptions): ClaudeHeadlessCallOptions {
   const claudeOptions = options.providerOptions?.claude;
@@ -28,6 +33,7 @@ function toHeadlessOptions(options: ProviderCallOptions): ClaudeHeadlessCallOpti
     bypassPermissions: options.bypassPermissions,
     sandbox: claudeOptions?.sandbox,
     onStream: options.onStream,
+    onActivity: options.onActivity,
     claudeCliPath: resolveClaudeCliPath() ?? undefined,
     outputSchema: options.outputSchema,
     childProcessEnv: options.childProcessEnv,
@@ -38,8 +44,8 @@ export class ClaudeHeadlessProvider implements Provider {
   readonly supportsStructuredOutput = true;
   readonly supportsIsolatedStructuredExecution = true;
   readonly supportsNativeImageInput = false;
-  readonly supportsStrictInternalAgentIsolation = true;
   readonly supportedMcpTransports: ReadonlySet<'stdio' | 'sse' | 'http'> = new Set(['stdio', 'sse', 'http']);
+  readonly supportsStrictMcpConfig = true;
 
   getRuntimeInstructions(_allowedTools?: string[]): string | null {
     return null;

@@ -14,87 +14,53 @@ function snapshot(identity: string, selectedIds: string[], round: number): Dynam
   };
 }
 
-describe('DynamicFacetSelectionStore (C-ROUND-REPLACE, C-ROUND-RESUME, C-STATE-RUNTIME)', () => {
-  it('should replace the previous round selection when the same identity commits a new round (C-ROUND-REPLACE)', async () => {
+describe('DynamicFacetSelectionStore', () => {
+  it('should replace the previous round selection for the same identity', async () => {
     const store = new DynamicFacetSelectionStore(new Map());
 
-    await store.commit('wf:fix', snapshot('wf:fix', ['frontend'], 1), async () => {});
-    expect(store.snapshot().get('wf:fix')?.selected_ids).toEqual(['frontend']);
+    await store.commit('wf:fix', snapshot('wf:fix', ['frontend'], 1));
+    await store.commit('wf:fix', snapshot('wf:fix', ['transaction'], 2));
 
-    // New round: selection is replaced, not accumulated.
-    await store.commit('wf:fix', snapshot('wf:fix', ['transaction'], 2), async () => {});
-    const replaced = store.snapshot().get('wf:fix');
-    expect(replaced?.round).toBe(2);
-    expect(replaced?.selected_ids).toEqual(['transaction']);
-    // The previous round's frontend selection must not be present.
-    expect(replaced?.selected_ids).not.toContain('frontend');
-  });
-
-  it('should retain parent and fresh child selections across sequential commits (C-STATE-RUNTIME)', async () => {
-    const store = new DynamicFacetSelectionStore(new Map());
-
-    await store.commit('parent:fix', snapshot('parent:fix', ['frontend'], 1), async () => {});
-    await store.commit('parent:delegate:child:fix', snapshot('parent:delegate:child:fix', ['backend'], 1), async () => {});
-
-    expect(store.serialized()).toMatchObject({
-      'parent:fix': snapshot('parent:fix', ['frontend'], 1),
-      'parent:delegate:child:fix': snapshot('parent:delegate:child:fix', ['backend'], 1),
-    });
-  });
-
-  it('should return a defensive snapshot only after persistence succeeds (C-STATE-RUNTIME)', async () => {
-    const store = new DynamicFacetSelectionStore(new Map());
-
-    const committed = await store.commit(
-      'parent:fix',
-      snapshot('parent:fix', ['frontend'], 1),
-      async () => {},
-    );
-    // Mutate the returned snapshot; the store must be unaffected.
-    committed.get('parent:fix')!.selected_ids.push('backend');
-
-    expect(store.serialized()).toEqual({
-      'parent:fix': snapshot('parent:fix', ['frontend'], 1),
-    });
-  });
-
-  it('should leave the committed selection unchanged when persistence fails (C-STATE-RUNTIME)', async () => {
-    const store = new DynamicFacetSelectionStore(new Map([
-      ['parent:fix', snapshot('parent:fix', ['frontend'], 1)],
+    expect(store.snapshot()).toEqual(new Map([
+      ['wf:fix', snapshot('wf:fix', ['transaction'], 2)],
     ]));
-
-    await expect(store.commit('parent:call-2', snapshot('parent:call-2', ['backend'], 1), async () => {
-      throw new Error('metadata write failed');
-    })).rejects.toThrow('metadata write failed');
-
-    expect(store.serialized()).toEqual({
-      'parent:fix': snapshot('parent:fix', ['frontend'], 1),
-    });
   });
 
-  it('should return undefined from serialized() when no selection exists (C-STATE-RUNTIME)', () => {
+  it('should retain parent and child selections in run-local state', async () => {
     const store = new DynamicFacetSelectionStore(new Map());
 
-    expect(store.serialized()).toBeUndefined();
+    await store.commit('parent:fix', snapshot('parent:fix', ['frontend'], 1));
+    await store.commit('parent:delegate:child:fix', snapshot('parent:delegate:child:fix', ['backend'], 1));
+
+    expect(store.snapshot()).toEqual(new Map([
+      ['parent:fix', snapshot('parent:fix', ['frontend'], 1)],
+      ['parent:delegate:child:fix', snapshot('parent:delegate:child:fix', ['backend'], 1)],
+    ]));
   });
 
-  it('should merge concurrent commits from independent workflow call identities (C-STATE-RUNTIME)', async () => {
+  it('should merge concurrent commits from independent workflow call identities', async () => {
     const store = new DynamicFacetSelectionStore(new Map());
-    const persisted: string[][] = [];
 
     await Promise.all([
-      store.commit('parent:call-1', snapshot('parent:call-1', ['frontend'], 1), async (selections) => {
-        persisted.push([...selections.keys()]);
-      }),
-      store.commit('parent:call-2', snapshot('parent:call-2', ['backend'], 1), async (selections) => {
-        persisted.push([...selections.keys()]);
-      }),
+      store.commit('parent:call-1', snapshot('parent:call-1', ['frontend'], 1)),
+      store.commit('parent:call-2', snapshot('parent:call-2', ['backend'], 1)),
     ]);
 
-    expect(store.serialized()).toMatchObject({
-      'parent:call-1': snapshot('parent:call-1', ['frontend'], 1),
-      'parent:call-2': snapshot('parent:call-2', ['backend'], 1),
-    });
-    expect(persisted).toEqual([['parent:call-1'], ['parent:call-1', 'parent:call-2']]);
+    expect(store.snapshot()).toEqual(new Map([
+      ['parent:call-1', snapshot('parent:call-1', ['frontend'], 1)],
+      ['parent:call-2', snapshot('parent:call-2', ['backend'], 1)],
+    ]));
+  });
+
+  it('should return defensive snapshots for run-local selection state', async () => {
+    const store = new DynamicFacetSelectionStore(new Map());
+    await store.commit('parent:fix', snapshot('parent:fix', ['frontend'], 1));
+
+    const exported = store.snapshot();
+    exported.get('parent:fix')!.selected_ids.push('backend');
+
+    expect(store.snapshot()).toEqual(new Map([
+      ['parent:fix', snapshot('parent:fix', ['frontend'], 1)],
+    ]));
   });
 });

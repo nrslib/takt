@@ -6,8 +6,9 @@ params:
     type: facet_ref[]
     facet_kind: knowledge
 name: fix-verifier
+capabilities: readonly
 tags:
-  - review
+  - verification
 edit: false
 persona: coding-reviewer
 policy:
@@ -15,8 +16,6 @@ policy:
   - $param: verification_policy
 knowledge:
   $param: fix_knowledge
-provider_options:
-  extends: review-readonly
 pass_previous_response: false
 instruction: verify-fix
 output_contracts:

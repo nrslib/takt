@@ -8,7 +8,7 @@ import {
   denormalizeRateLimitFallback,
   denormalizeTelemetryConfig,
   denormalizeAutoRoutingConfig,
-  denormalizeFindingIntakeNormalize,
+  denormalizeAssistantConfig,
 } from '../configNormalizers.js';
 import { denormalizeObservabilityConfig } from '../observabilityConfig.js';
 
@@ -51,12 +51,6 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
   const rawAutoRouting = denormalizeAutoRoutingConfig(config.autoRouting);
   if (rawAutoRouting) {
     raw.auto_routing = rawAutoRouting;
-  }
-  const rawIntakeNormalize = denormalizeFindingIntakeNormalize(
-    config.findingContract?.intakeNormalize,
-  );
-  if (rawIntakeNormalize) {
-    raw.finding_contract = { intake_normalize: rawIntakeNormalize };
   }
   const rawObservability = denormalizeObservabilityConfig(config.observability);
   if (rawObservability) {
@@ -229,6 +223,10 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
       pipelineRaw.pr_body_template = config.pipeline.prBodyTemplate;
     }
     if (Object.keys(pipelineRaw).length > 0) raw.pipeline = pipelineRaw;
+  }
+  const rawAssistant = denormalizeAssistantConfig(config.assistant);
+  if (rawAssistant) {
+    raw.assistant = rawAssistant;
   }
   const rawPersonaProviders = denormalizePersonaProviders(config.personaProviders);
   if (rawPersonaProviders && Object.keys(rawPersonaProviders).length > 0) {

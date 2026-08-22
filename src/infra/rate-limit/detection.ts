@@ -9,6 +9,7 @@ const RATE_LIMIT_ERROR_PATTERNS = [
   /\brate[_\s-]?limit(?:ed|[_\s-]+exceeded)\b/i,
   /\brate[_\s-]?limit[_\s-]?error\b/i,
   /\b(?:exceeded|hit|reached)\s+(?:a\s+|the\s+)?rate[_\s-]?limit\b/i,
+  /\bhit\s+your\s+(?:weekly|5-hour|session)\s+limit\b/i,
   /too many requests/i,
   /out of extra usage/i,
   /usage_limit_exceeded/i,

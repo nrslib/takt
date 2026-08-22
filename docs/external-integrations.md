@@ -1,6 +1,6 @@
 # External Integrations
 
-[日本語](./external-integrations.ja.md)
+[English](./external-integrations.md) | [日本語](./external-integrations.ja.md) | [简体中文](./external-integrations.zh-CN.md)
 
 This page is a catalog of community-built third-party integrations. For the official GitHub/GitLab integration, see [Configuration](./configuration.md) and [CI/CD](./ci-cd.md).
 
@@ -10,11 +10,11 @@ To add an integration here, open a PR with a one-line description and a link to 
 
 ## Methodology Kits
 
-Bundles that implement a software development methodology on top of TAKT — pre-built pieces, facets, and helper scripts installable in one command.
+Bundles that implement a software development methodology on top of TAKT — pre-built workflows, facets, and helper scripts installable in one command.
 
 | Integration | Description |
 |-------------|-------------|
-| [j5ik2o/takt-sdd](https://github.com/j5ik2o/takt-sdd) | Spec-Driven Development (SDD) methodology for TAKT. Provides pieces for Requirements → Gap Analysis → Design → Tasks → Implementation → Validation, plus an OpenSpec-style change-proposal flow. Leans on TAKT's phase gates, output contracts, and review loops so that a well-defined spec translates into faithful execution — phases cannot be silently skipped and deviations are routed back to `fix`. Provider-agnostic (Claude / Codex). Install via `npx create-takt-sdd`. |
+| [j5ik2o/takt-sdd](https://github.com/j5ik2o/takt-sdd) | Spec-Driven Development (SDD) methodology for TAKT. Provides workflows for Requirements → Gap Analysis → Design → Tasks → Implementation → Validation, plus an OpenSpec-style change-proposal flow. Leans on TAKT's phase gates, output contracts, and review loops so that a well-defined spec translates into faithful execution — phases cannot be silently skipped and deviations are routed back to `fix`. Provider-agnostic (Claude / Codex). Install via `npx create-takt-sdd`. |
 
 ## Audit Trail / Receipt Signing
 

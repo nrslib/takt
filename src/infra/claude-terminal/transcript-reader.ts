@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { AskUserQuestionInput } from '../../core/workflow/types.js';
+import { createPartTimeoutReason } from '../../shared/types/agent-failure.js';
 import { getClaudeProjectSessionsDir } from '../config/project/sessionStore.js';
 import type {
   ClaudeSessionRef,
@@ -291,22 +292,34 @@ async function sleepWithAbort(pollIntervalMs: number, signal: AbortSignal | unde
 }
 
 async function pollUntil<T>(
-  timeoutMs: number,
+  initialDeadlineAt: number,
+  inactivityTimeoutMs: number | undefined,
   pollIntervalMs: number,
   abortSignal: AbortSignal | undefined,
-  attempt: () => Promise<T | undefined>,
+  onActivity: (() => void) | undefined,
+  attempt: (recordActivity: () => void) => Promise<T | undefined>,
   timeoutMessage: string,
 ): Promise<T> {
-  const deadline = Date.now() + timeoutMs;
+  let deadlineAt = initialDeadlineAt;
+  const recordActivity = (): void => {
+    if (inactivityTimeoutMs !== undefined) {
+      deadlineAt = Date.now() + inactivityTimeoutMs;
+    }
+    onActivity?.();
+  };
   throwIfAborted(abortSignal);
-  while (Date.now() <= deadline) {
+  while (Date.now() <= deadlineAt) {
     throwIfAborted(abortSignal);
-    const value = await attempt();
+    const value = await attempt(recordActivity);
     throwIfAborted(abortSignal);
     if (value !== undefined) {
       return value;
     }
-    await sleepWithAbort(pollIntervalMs, abortSignal);
+    const remainingMs = deadlineAt - Date.now();
+    if (remainingMs <= 0) {
+      break;
+    }
+    await sleepWithAbort(Math.min(pollIntervalMs, remainingMs), abortSignal);
     throwIfAborted(abortSignal);
   }
   throwIfAborted(abortSignal);
@@ -366,14 +379,27 @@ export class ProjectClaudeTranscriptReader implements ClaudeTranscriptReader {
   }
 
   async findSession(options: FindClaudeSessionOptions): Promise<ClaudeSessionRef> {
+    const deadlineAt = options.deadlineAt ?? (options.timeoutMs === undefined
+      ? undefined
+      : Date.now() + options.timeoutMs);
+    if (deadlineAt === undefined) {
+      throw new Error('Claude terminal session deadline is required.');
+    }
+    let observedTranscript: string | undefined;
     return pollUntil(
+      deadlineAt,
       options.timeoutMs,
       options.pollIntervalMs,
       options.abortSignal,
-      async () => {
+      options.onActivity,
+      async (recordActivity) => {
         const transcript = await readTranscript(options.cwd, options.sessionId);
         if (transcript === undefined || transcript.trim().length === 0) {
           return undefined;
+        }
+        if (transcript !== observedTranscript) {
+          observedTranscript = transcript;
+          recordActivity();
         }
         const parsed = parseClaudeTerminalTranscript(transcript, {
           allowIncompleteFinalLine: true,
@@ -383,19 +409,35 @@ export class ProjectClaudeTranscriptReader implements ClaudeTranscriptReader {
         }
         return { sessionId: parsed.sessionId || options.sessionId };
       },
-      'Timed out waiting for Claude terminal session id.',
+      options.timeoutMs === undefined
+        ? 'Timed out waiting for Claude terminal session id.'
+        : createPartTimeoutReason(options.timeoutMs),
     );
   }
 
   async waitForAssistantResponse(options: WaitForClaudeResponseOptions): Promise<ClaudeTerminalTranscript> {
+    const deadlineAt = options.deadlineAt ?? (options.timeoutMs === undefined
+      ? undefined
+      : Date.now() + options.timeoutMs);
+    if (deadlineAt === undefined) {
+      throw new Error('Claude terminal response deadline is required.');
+    }
+    let observedByteLength = options.baseline.byteOffset;
     return pollUntil(
+      deadlineAt,
       options.timeoutMs,
       options.pollIntervalMs,
       options.abortSignal,
-      async () => {
+      options.onActivity,
+      async (recordActivity) => {
         const transcript = await readTranscript(options.cwd, options.session.sessionId);
         if (transcript === undefined || transcript.trim().length === 0) {
           return undefined;
+        }
+        const byteLength = Buffer.byteLength(transcript, 'utf-8');
+        if (byteLength > observedByteLength) {
+          observedByteLength = byteLength;
+          recordActivity();
         }
         const parsed = parseClaudeTerminalTranscript(transcript, {
           baseline: options.baseline,
@@ -415,7 +457,9 @@ export class ProjectClaudeTranscriptReader implements ClaudeTranscriptReader {
         }
         return withSessionIdFallback(parsed, options.session.sessionId);
       },
-      'Timed out waiting for Claude terminal assistant response.',
+      options.timeoutMs === undefined
+        ? 'Timed out waiting for Claude terminal assistant response.'
+        : createPartTimeoutReason(options.timeoutMs),
     );
   }
 }

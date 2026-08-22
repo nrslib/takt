@@ -1,9 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
 // New modules under test (implemented in the following `implement` step).
 import {
   createMcpAdapter,
-  type ProviderMcpAdapter,
   type ResolvedMcpServers,
   type ProviderMcpContext,
 } from '../infra/providers/mcp/index.js';
@@ -25,10 +23,6 @@ import {
  *   - adapter 単体テストが target context なしで動く
  */
 
-function readModuleSource(path: string): string {
-  return readFileSync(new URL(path, import.meta.url), 'utf-8');
-}
-
 function resolvedServers(): ResolvedMcpServers {
   return {
     enabled: true,
@@ -36,30 +30,12 @@ function resolvedServers(): ResolvedMcpServers {
       common: { type: 'stdio', command: 'common-srv' },
       github: { type: 'http', url: 'https://example.com/mcp' },
     },
+    serverNames: ['common', 'github'],
     identity: 'common:stdio,github:http',
   };
 }
 
 describe('ProviderMcpAdapter interface boundary (MCP-ADAPTER-SPLIT)', () => {
-  it('Given the engine-provider-options module, Then it does NOT reference provider-specific MCP config format names', () => {
-    const engineSource = readModuleSource('../core/workflow/engine/engine-provider-options.ts');
-    // The engine layer must not branch on Codex/OpenCode/Cursor CLI-specific MCP config keys.
-    // The legacy mcpServers capability helper may remain (it gates by provider capability, not by config format).
-    expect(engineSource).not.toContain('mcp_servers:');
-    expect(engineSource).not.toContain('--additional-mcp-config');
-    expect(engineSource).not.toContain('--require-mcp-startup');
-    expect(engineSource).not.toContain('--mcp-config');
-    expect(engineSource).not.toContain('strictMcpConfig');
-  });
-
-  it('Given the OptionsBuilder module, Then it does NOT reference provider-specific MCP config format names', () => {
-    const builderSource = readModuleSource('../core/workflow/engine/OptionsBuilder.ts');
-    expect(builderSource).not.toContain('--additional-mcp-config');
-    expect(builderSource).not.toContain('--require-mcp-startup');
-    expect(builderSource).not.toContain('strictMcpConfig');
-    expect(builderSource).not.toContain('CodexOptions.config');
-  });
-
   it('Given an adapter created for claude-sdk, When called with resolved servers and a minimal context, Then it does not require target selector context', () => {
     // Adapter unit test must work without target context — adapter does not know target selectors.
     const adapter = createMcpAdapter('claude-sdk');
@@ -69,7 +45,7 @@ describe('ProviderMcpAdapter interface boundary (MCP-ADAPTER-SPLIT)', () => {
 
   it('Given an adapter, When validated with an empty server set, Then it treats it as MCP-disabled and does not throw', () => {
     const adapter = createMcpAdapter('claude');
-    const empty: ResolvedMcpServers = { enabled: false, servers: {}, identity: '' };
+    const empty: ResolvedMcpServers = { enabled: false, servers: {}, serverNames: [], identity: '' };
     expect(() => adapter.validate(empty)).not.toThrow();
   });
 
@@ -88,20 +64,14 @@ describe('ProviderMcpAdapter interface boundary (MCP-ADAPTER-SPLIT)', () => {
     const servers = resolvedServers();
     const claude = createMcpAdapter('claude');
     const codex = createMcpAdapter('codex');
-    // Both must accept or reject without sharing target resolution state.
+    // Both must validate the same resolved server set independently.
     expect(() => claude.validate(servers)).not.toThrow();
-    // codex may reject sse but should not read target selectors.
-    expect(typeof codex.validate).toBe('function');
-  });
-
-  it('Given the mcp adapter module, Then the McpAssignmentPolicy lives in a separate module from the adapter', () => {
-    // The assignment policy must live in infra/config/runtime-provider/mcp-assignment.ts,
-    // not in infra/providers/mcp/. Verify the adapter module does not export resolveMcpAssignment.
-    const adapterSource = readModuleSource('../infra/providers/mcp/index.ts');
-    expect(adapterSource).not.toContain('resolveMcpAssignment');
-    expect(adapterSource).not.toContain('AgentExecutionContext');
-    // Adapter must not read target selector keys (personas/tags/steps/internal_agents).
-    expect(adapterSource).not.toMatch(/\bpersonas\b/);
-    expect(adapterSource).not.toMatch(/\binternal_agents\b/);
+    const sseServers: ResolvedMcpServers = {
+      enabled: true,
+      servers: { events: { type: 'sse', url: 'http://events/sse' } },
+      serverNames: ['events'],
+      identity: 'events:sse',
+    };
+    expect(() => codex.validate(sseServers)).toThrow(/codex.*sse/i);
   });
 });

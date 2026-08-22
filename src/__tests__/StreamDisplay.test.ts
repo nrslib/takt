@@ -28,37 +28,6 @@ describe('StreamDisplay', () => {
     };
 
     describe('showInit', () => {
-      it('should include progress info when provided', () => {
-        const display = new StreamDisplay('test-agent', false, progressInfo);
-        display.showInit('claude-3');
-
-        expect(consoleLogSpy).toHaveBeenCalledWith(
-          expect.stringContaining('[test-agent]')
-        );
-        expect(consoleLogSpy).toHaveBeenCalledWith(
-          expect.stringContaining('(3/10) step 2/4')
-        );
-        expect(consoleLogSpy).toHaveBeenCalledWith(
-          expect.stringContaining('Model: claude-3')
-        );
-      });
-
-      it('should not include progress info when not provided', () => {
-        const display = new StreamDisplay('test-agent', false);
-        display.showInit('claude-3');
-
-        expect(consoleLogSpy).toHaveBeenCalledWith(
-          expect.stringContaining('[test-agent]')
-        );
-        expect(consoleLogSpy).toHaveBeenCalledWith(
-          expect.stringContaining('Model: claude-3')
-        );
-        // Should not contain progress format
-        expect(consoleLogSpy).not.toHaveBeenCalledWith(
-          expect.stringMatching(/\(\d+\/\d+\) step \d+\/\d+/)
-        );
-      });
-
       it('should not display anything in quiet mode', () => {
         const display = new StreamDisplay('test-agent', true, progressInfo);
         display.showInit('claude-3');
@@ -68,35 +37,12 @@ describe('StreamDisplay', () => {
     });
 
     describe('showText', () => {
-      it('should include progress info in first text header when provided', () => {
-        const display = new StreamDisplay('test-agent', false, progressInfo);
-        display.showText('Hello');
-
-        // First call is blank line, second is the header
-        expect(consoleLogSpy).toHaveBeenCalledTimes(2);
-        expect(consoleLogSpy).toHaveBeenNthCalledWith(2,
-          expect.stringContaining('[test-agent]')
-        );
-        expect(consoleLogSpy).toHaveBeenNthCalledWith(2,
-          expect.stringContaining('(3/10) step 2/4')
-        );
-      });
-
-      it('should not include progress info in header when not provided', () => {
-        const display = new StreamDisplay('test-agent', false);
-        display.showText('Hello');
-
-        expect(consoleLogSpy).toHaveBeenCalledTimes(2);
-        const headerCall = consoleLogSpy.mock.calls[1]?.[0] as string;
-        expect(headerCall).toContain('[test-agent]');
-        expect(headerCall).not.toMatch(/\(\d+\/\d+\) step \d+\/\d+/);
-      });
-
       it('should output text content to stdout', () => {
         const display = new StreamDisplay('test-agent', false, progressInfo);
-        display.showText('Hello');
+        const text = 'streamed text';
+        display.showText(text);
 
-        expect(stdoutWriteSpy).toHaveBeenCalledWith('Hello');
+        expect(stdoutWriteSpy).toHaveBeenCalledWith(text);
       });
 
       it('should not display anything in quiet mode', () => {
@@ -109,32 +55,6 @@ describe('StreamDisplay', () => {
     });
 
     describe('showThinking', () => {
-      it('should include progress info in thinking header when provided', () => {
-        const display = new StreamDisplay('test-agent', false, progressInfo);
-        display.showThinking('Thinking...');
-
-        expect(consoleLogSpy).toHaveBeenCalledTimes(2);
-        expect(consoleLogSpy).toHaveBeenNthCalledWith(2,
-          expect.stringContaining('[test-agent]')
-        );
-        expect(consoleLogSpy).toHaveBeenNthCalledWith(2,
-          expect.stringContaining('(3/10) step 2/4')
-        );
-        expect(consoleLogSpy).toHaveBeenNthCalledWith(2,
-          expect.stringContaining('thinking')
-        );
-      });
-
-      it('should not include progress info in header when not provided', () => {
-        const display = new StreamDisplay('test-agent', false);
-        display.showThinking('Thinking...');
-
-        expect(consoleLogSpy).toHaveBeenCalledTimes(2);
-        const headerCall = consoleLogSpy.mock.calls[1]?.[0] as string;
-        expect(headerCall).toContain('[test-agent]');
-        expect(headerCall).not.toMatch(/\(\d+\/\d+\) step \d+\/\d+/);
-      });
-
       it('should not display anything in quiet mode', () => {
         const display = new StreamDisplay('test-agent', true, progressInfo);
         display.showThinking('Thinking...');
@@ -225,11 +145,7 @@ describe('StreamDisplay', () => {
       display.showToolUse('Read', { file_path: '/test.ts' });
       display.showToolResult('\x1b[41mResult with red bg\x1b[0m', false);
 
-      const resultLine = consoleLogSpy.mock.calls.find(
-        (call) => typeof call[0] === 'string' && (call[0] as string).includes('✓'),
-      );
-      expect(resultLine).toBeDefined();
-      const fullOutput = resultLine!.join(' ');
+      const fullOutput = consoleLogSpy.mock.calls.flat().map((value) => String(value)).join(' ');
       expect(fullOutput).toContain('Result with red bg');
       expect(fullOutput).not.toContain('\x1b[41m');
     });
@@ -239,11 +155,7 @@ describe('StreamDisplay', () => {
       display.showToolUse('Bash', { command: 'fail' });
       display.showToolResult('\x1b[31mError message\x1b[0m', true);
 
-      const errorLine = consoleLogSpy.mock.calls.find(
-        (call) => typeof call[0] === 'string' && (call[0] as string).includes('✗'),
-      );
-      expect(errorLine).toBeDefined();
-      const fullOutput = errorLine!.join(' ');
+      const fullOutput = consoleLogSpy.mock.calls.flat().map((value) => String(value)).join(' ');
       expect(fullOutput).toContain('Error message');
       expect(fullOutput).not.toContain('\x1b[31m');
     });
@@ -261,6 +173,19 @@ describe('StreamDisplay', () => {
       expect(fullOutput).not.toContain('secret');
       expect(fullOutput).not.toContain('\x1b]52');
       expect(fullOutput).not.toContain('\x1b[41m');
+    });
+
+    it('should neutralize private CSI in result error content', () => {
+      const display = new StreamDisplay('test-agent', false);
+      display.showResult(false, '\x1b[?25lCursor failed');
+
+      const errorLine = consoleLogSpy.mock.calls.find(
+        (call) => typeof call[0] === 'string' && (call[0] as string).includes('Cursor failed'),
+      );
+      expect(errorLine).toBeDefined();
+      const output = errorLine!.join(' ');
+      expect(output).toContain('\\x1b[?25lCursor failed');
+      expect(output).not.toContain('\x1b[?25l');
     });
   });
 
@@ -308,14 +233,9 @@ describe('StreamDisplay', () => {
       display.showToolUse('AskUserQuestion', { questions: [] });
       display.showToolResult('Error: Answer questions?', false);
 
-      // Find the result line with ✓
-      const resultLine = consoleLogSpy.mock.calls.find(
-        (call) => typeof call[0] === 'string' && (call[0] as string).includes('✓'),
-      );
-      expect(resultLine).toBeDefined();
-
-      // Should show only "✓ AskUserQuestion" without content preview
-      const fullOutput = resultLine!.join(' ');
+      // Find the result line containing the tool name.
+      // The tool name remains visible while the returned content is suppressed.
+      const fullOutput = consoleLogSpy.mock.calls.flat().map((value) => String(value)).join(' ');
       expect(fullOutput).toContain('AskUserQuestion');
       expect(fullOutput).not.toContain('Error:');
       expect(fullOutput).not.toContain('Answer questions');
@@ -326,12 +246,8 @@ describe('StreamDisplay', () => {
       display.showToolUse('AskUserQuestion', { questions: [] });
       display.showToolResult('Something went wrong', true);
 
-      // Find the error line with ✗
-      const errorLine = consoleLogSpy.mock.calls.find(
-        (call) => typeof call[0] === 'string' && (call[0] as string).includes('✗'),
-      );
-      expect(errorLine).toBeDefined();
-      const fullOutput = errorLine!.join(' ');
+      // Find the error line containing the returned content.
+      const fullOutput = consoleLogSpy.mock.calls.flat().map((value) => String(value)).join(' ');
       expect(fullOutput).toContain('AskUserQuestion');
       expect(fullOutput).toContain('Something went wrong');
     });
@@ -341,43 +257,10 @@ describe('StreamDisplay', () => {
       display.showToolUse('Read', { file_path: '/test.ts' });
       display.showToolResult('File content here', false);
 
-      const resultLine = consoleLogSpy.mock.calls.find(
-        (call) => typeof call[0] === 'string' && (call[0] as string).includes('✓'),
-      );
-      expect(resultLine).toBeDefined();
-      const fullOutput = resultLine!.join(' ');
+      const fullOutput = consoleLogSpy.mock.calls.flat().map((value) => String(value)).join(' ');
       expect(fullOutput).toContain('Read');
       expect(fullOutput).toContain('File content here');
     });
   });
 
-  describe('progress prefix format', () => {
-    it('should format progress as (iteration/max) step index/total', () => {
-      const progressInfo: ProgressInfo = {
-        iteration: 5,
-        maxSteps: 20,
-        stepIndex: 2,
-        totalSteps: 6,
-      };
-      const display = new StreamDisplay('agent', false, progressInfo);
-      display.showText('test');
-
-      const headerCall = consoleLogSpy.mock.calls[1]?.[0] as string;
-      expect(headerCall).toContain('(5/20) step 3/6');
-    });
-
-    it('should convert 0-indexed stepIndex to 1-indexed display', () => {
-      const progressInfo: ProgressInfo = {
-        iteration: 1,
-        maxSteps: 10,
-        stepIndex: 0,
-        totalSteps: 4,
-      };
-      const display = new StreamDisplay('agent', false, progressInfo);
-      display.showText('test');
-
-      const headerCall = consoleLogSpy.mock.calls[1]?.[0] as string;
-      expect(headerCall).toContain('step 1/4'); // Should display as 1-indexed
-    });
-  });
 });

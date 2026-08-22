@@ -36,19 +36,19 @@ const McpStdioServerSchema = z.object({
   command: z.string().min(1),
   args: z.array(z.string()).optional(),
   env: z.record(z.string(), z.string()).optional(),
-});
+}).strict();
 
 const McpSseServerSchema = z.object({
   type: z.literal('sse'),
   url: z.string().min(1),
   headers: z.record(z.string(), z.string()).optional(),
-});
+}).strict();
 
 const McpHttpServerSchema = z.object({
   type: z.literal('http'),
   url: z.string().min(1),
   headers: z.record(z.string(), z.string()).optional(),
-});
+}).strict();
 
 export const McpServerEntrySchema = z.union([
   McpStdioServerSchema,
@@ -61,7 +61,7 @@ export const McpServersMapSchema = z.record(z.string(), McpServerEntrySchema);
 /** `defaults.servers` is a plain string array referencing server names. */
 const McpDefaultsSchema = z.object({
   servers: z.array(z.string()),
-});
+}).strict();
 
 /** `personas`/`tags`/`steps` targets share the same `servers`/`exclude` shape. */
 const McpTargetEntrySchema = z.object({
@@ -98,7 +98,49 @@ export type McpDefaults = z.infer<typeof McpDefaultsSchema>;
 export type McpTargets = z.infer<typeof McpTargetsSchema>;
 export type McpTargetEntry = z.infer<typeof McpTargetEntrySchema>;
 
+function assertKnownServer(
+  serverName: string,
+  knownServers: ReadonlySet<string>,
+  context: string,
+): void {
+  if (!knownServers.has(serverName)) {
+    throw new Error(
+      `MCP target ${context} references unknown server "${serverName}". Defined servers: ${[...knownServers].sort().join(', ') || '(none)'}`,
+    );
+  }
+}
+
+function validateTargetMap(
+  targetMap: Record<string, McpTargetEntry> | undefined,
+  selector: 'personas' | 'tags' | 'steps',
+  knownServers: ReadonlySet<string>,
+): void {
+  for (const [targetName, target] of Object.entries(targetMap ?? {})) {
+    for (const serverName of target.servers ?? []) {
+      assertKnownServer(serverName, knownServers, `${selector}.${targetName}.servers`);
+    }
+    for (const serverName of target.exclude ?? []) {
+      assertKnownServer(serverName, knownServers, `${selector}.${targetName}.exclude`);
+    }
+  }
+}
+
+/** Validate every server reference before any agent target is selected. */
+export function validateMcpSectionReferences(section: McpSection): void {
+  const knownServers = new Set(Object.keys(section.servers ?? {}));
+  for (const serverName of section.defaults?.servers ?? []) {
+    assertKnownServer(serverName, knownServers, 'defaults.servers');
+  }
+  validateTargetMap(section.targets?.personas, 'personas', knownServers);
+  validateTargetMap(section.targets?.tags, 'tags', knownServers);
+  validateTargetMap(section.targets?.steps, 'steps', knownServers);
+  for (const serverName of section.targets?.internal_agents?.selector?.exclude ?? []) {
+    assertKnownServer(serverName, knownServers, 'internal_agents.selector.exclude');
+  }
+}
+
 const ENV_REF_PATTERN = /\$\{([A-Z_][A-Z0-9_]*)\}/g;
+const ORIGINAL_MCP_SERVER = new WeakMap<object, McpServerConfig>();
 
 function interpolateString(value: string, env: NodeJS.ProcessEnv): string {
   return value.replace(ENV_REF_PATTERN, (match, name: string) => {
@@ -145,30 +187,71 @@ export function interpolateMcpEnv(
   server: McpServerConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): McpServerConfig {
+  const originalServer = ORIGINAL_MCP_SERVER.get(server) ?? server;
+  let resolvedServer: McpServerConfig;
   if (isStdio(server)) {
-    return {
+    resolvedServer = {
       type: 'stdio',
       command: interpolateString(server.command, env),
       args: interpolateArray(server.args, env),
       env: interpolateRecord(server.env, env),
     };
-  }
-  if (isSse(server)) {
-    return {
+  } else if (isSse(server)) {
+    resolvedServer = {
       type: 'sse',
       url: interpolateString(server.url, env),
       headers: interpolateRecord(server.headers, env),
     };
+  } else {
+    resolvedServer = {
+      type: 'http',
+      url: interpolateString((server as McpHttpServerConfig).url, env),
+      headers: interpolateRecord((server as McpHttpServerConfig).headers, env),
+    };
   }
-  return {
-    type: 'http',
-    url: interpolateString((server as McpHttpServerConfig).url, env),
-    headers: interpolateRecord((server as McpHttpServerConfig).headers, env),
-  };
+  ORIGINAL_MCP_SERVER.set(resolvedServer, originalServer);
+  return resolvedServer;
 }
 
 /** Placeholder used in place of secret values in log-safe representations. */
 const REDACTED = '<redacted>';
+
+const SECRET_ARGUMENT_NAME = /(?:token|secret|password|passphrase|api[-_]?key|authorization|credential)/i;
+
+function redactMcpArgs(args: string[] | undefined): string[] | undefined {
+  if (args === undefined) {
+    return undefined;
+  }
+  const result: string[] = [];
+  let redactNext = false;
+  for (const arg of args) {
+    if (redactNext) {
+      result.push(REDACTED);
+      redactNext = false;
+      continue;
+    }
+    const delimiter = arg.search(/[=:]/);
+    const argumentName = delimiter >= 0 ? arg.slice(0, delimiter) : arg;
+    if (!SECRET_ARGUMENT_NAME.test(argumentName)) {
+      result.push(arg);
+      continue;
+    }
+    if (delimiter >= 0) {
+      result.push(arg.slice(0, delimiter + 1) + REDACTED);
+    } else {
+      result.push(arg);
+      redactNext = true;
+    }
+  }
+  return result;
+}
+
+function redactMcpUrl(url: string): string {
+  // Remove URL userinfo without changing the endpoint path. The original
+  // interpolation source is already safe, but literal credentials must also
+  // never reach logs or session/cache identities.
+  return url.replace(/(\/\/)[^/?#@]+@/, (_match, prefix: string) => prefix + REDACTED + '@');
+}
 
 function redactRecord(
   record: Record<string, string> | undefined,
@@ -184,40 +267,55 @@ function redactRecord(
 }
 
 /**
- * Return a log-safe representation of a server entry. `env` and `headers` values
- * are replaced with `<redacted>`; structural fields (`command`, `args`, `url`,
- * `type`) are preserved because they are not secret (order.md:110).
+ * Return a log-safe representation of a server entry. Environment/header values,
+ * URL userinfo, and authentication argument values are redacted (order.md:110).
  */
 export function redactMcpServerForLog(server: McpServerConfig): Record<string, unknown> {
-  if (isStdio(server)) {
+  const logSafeSource = ORIGINAL_MCP_SERVER.get(server) ?? server;
+  if (isStdio(logSafeSource)) {
     return {
       type: 'stdio',
-      command: server.command,
-      args: server.args,
-      env: redactRecord(server.env),
+      command: logSafeSource.command,
+      args: redactMcpArgs(logSafeSource.args),
+      env: redactRecord(logSafeSource.env),
     };
   }
-  const remote = isSse(server) ? server : (server as McpHttpServerConfig);
+  const remote = isSse(logSafeSource) ? logSafeSource : (logSafeSource as McpHttpServerConfig);
   return {
     type: remote.type,
-    url: remote.url,
+    url: redactMcpUrl(remote.url),
     headers: redactRecord(remote.headers),
   };
 }
 
 /**
- * Build a deterministic identity for a resolved server. The identity carries
- * only the server name and transport — never token/header/env resolved values
- * (order.md:270,335). Two servers with the same name+transport but different
- * secrets share the same identity so sessions remain stable across secret
- * rotations.
+ * Build a deterministic identity for a resolved server. The identity includes
+ * the server name and non-secret command/args or URL, while excluding env and
+ * headers. Interpolated servers use their pre-interpolation structure so a
+ * secret rotation does not change the identity (order.md:270,335).
  */
 export function buildMcpServerIdentity(
   serverName: string,
   server: McpServerConfig,
 ): string {
-  const transport = server.type ?? 'stdio';
-  return `${serverName}:${transport}`;
+  const identitySource = ORIGINAL_MCP_SERVER.get(server) ?? server;
+  if (isStdio(identitySource)) {
+    return JSON.stringify([
+      serverName,
+      {
+        type: 'stdio',
+        command: identitySource.command,
+        args: redactMcpArgs(identitySource.args) ?? [],
+      },
+    ]);
+  }
+  const remote = isSse(identitySource)
+    ? identitySource
+    : (identitySource as McpHttpServerConfig);
+  return JSON.stringify([
+    serverName,
+    { type: remote.type, url: redactMcpUrl(remote.url) },
+  ]);
 }
 
 /**

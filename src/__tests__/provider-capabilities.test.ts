@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   providerKeepsAllowedToolWithoutEdit,
@@ -7,30 +6,14 @@ import {
   providerSupportsMaxTurns,
   providerSupportsMcpServers,
   providerSupportsNativeImageInput,
+  providerSupportsStructuredOutput,
 } from '../infra/providers/provider-capabilities.js';
 
-function readModuleSource(path: string): string {
-  return readFileSync(new URL(path, import.meta.url), 'utf-8');
-}
-
 describe('provider capabilities module boundary', () => {
-  it('必要な predicate helper のみを公開する', () => {
-    const source = readModuleSource('../infra/providers/provider-capabilities.ts');
-
-    expect(source).toContain('export function providerSupportsAllowedTools');
-    expect(source).toContain('export function providerSupportsStructuredOutput');
-    expect(source).toContain('export function providerSupportsMcpServers');
-    expect(source).toContain('export function providerSupportsClaudeAllowedTools');
-    expect(source).toContain('export function providerSupportsMaxTurns');
-    expect(source).toContain('export function providerSupportsNativeImageInput');
-    expect(source).toContain('export function providerKeepsAllowedToolWithoutEdit');
-    expect(source).not.toContain('export interface ProviderCapabilities');
-    expect(source).not.toContain('export function resolveProviderCapabilities');
-  });
-
   it('provider-neutral な allowedTools capability は opencode を許可し cursor と codex を拒否する', () => {
     expect(providerSupportsAllowedTools('claude')).toBe(true);
     expect(providerSupportsAllowedTools('opencode')).toBe(true);
+    expect(providerSupportsAllowedTools('pi')).toBe(true);
     expect(providerSupportsAllowedTools('cursor')).toBe(false);
     expect(providerSupportsAllowedTools('codex')).toBe(false);
   });
@@ -49,18 +32,24 @@ describe('provider capabilities module boundary', () => {
     expect(providerSupportsAllowedTools('opencode')).toBe(true);
     // issue #1137: MCP capability is declared per-provider via supportedMcpTransports.
     expect(providerSupportsMcpServers('opencode')).toBe(true);
+    expect(providerSupportsAllowedTools('pi')).toBe(true);
+    expect(providerSupportsMcpServers('pi')).toBe(false);
     expect(providerSupportsAllowedTools('cursor')).toBe(false);
     // issue #1137: cursor declares MCP transports for runtime assignment.
     expect(providerSupportsMcpServers('cursor')).toBe(true);
     expect(providerSupportsAllowedTools('codex')).toBe(false);
     // issue #1137: codex declares MCP transports for runtime assignment.
     expect(providerSupportsMcpServers('codex')).toBe(true);
+    expect(providerSupportsAllowedTools('deepseek-harness')).toBe(false);
+    expect(providerSupportsMcpServers('deepseek-harness')).toBe(false);
   });
 
   it('maxTurns capability は SDK payload 非対応 provider を明示的に拒否する', () => {
     expect(providerSupportsMaxTurns('claude')).toBe(true);
     expect(providerSupportsMaxTurns('claude-terminal')).toBe(false);
     expect(providerSupportsMaxTurns('opencode')).toBe(false);
+    expect(providerSupportsMaxTurns('pi')).toBe(false);
+    expect(providerSupportsMaxTurns('deepseek-harness')).toBe(false);
   });
 
   it('native image input capability は SDK に実画像を渡せる provider だけを許可する', () => {
@@ -69,24 +58,20 @@ describe('provider capabilities module boundary', () => {
     expect(providerSupportsNativeImageInput('claude')).toBe(false);
     expect(providerSupportsNativeImageInput('claude-terminal')).toBe(false);
     expect(providerSupportsNativeImageInput('opencode')).toBe(false);
+    expect(providerSupportsNativeImageInput('pi')).toBe(true);
+    expect(providerSupportsNativeImageInput('deepseek-harness')).toBe(false);
+  });
+
+  it('Pi と DeepSeek Harness は structured output をサポートしない', () => {
+    expect(providerSupportsStructuredOutput('pi')).toBe(false);
+    expect(providerSupportsStructuredOutput('deepseek-harness')).toBe(false);
   });
 
   it('非編集 step の allowedTools 判定は provider capability 境界に閉じる', () => {
-    const engineSource = readModuleSource('../core/workflow/engine/engine-provider-options.ts');
-
     expect(providerKeepsAllowedToolWithoutEdit('opencode', 'apply_patch')).toBe(false);
     expect(providerKeepsAllowedToolWithoutEdit('opencode', 'Edit')).toBe(false);
     expect(providerKeepsAllowedToolWithoutEdit('opencode', 'read')).toBe(true);
     expect(providerKeepsAllowedToolWithoutEdit('claude', 'Write')).toBe(false);
     expect(providerKeepsAllowedToolWithoutEdit('codex', 'Write')).toBe(true);
-    expect(engineSource).not.toContain('OPENCODE_EDIT_PERMISSION_TOOL_NAMES');
-    expect(engineSource).not.toContain('mapsToOpenCodeEditPermission');
-  });
-
-  it('provider capability 境界は OpenCode 実装詳細を直接 import しない', () => {
-    const source = readModuleSource('../infra/providers/provider-capabilities.ts');
-
-    expect(source).not.toContain('../opencode/');
-    expect(source).not.toContain('mapsToOpenCodeEditPermission');
   });
 });

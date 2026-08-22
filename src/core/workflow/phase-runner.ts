@@ -10,10 +10,7 @@ import type { StructuredCaller } from '../../agents/structured-caller.js';
 import type { PhaseName, PhasePromptParts, JudgeStageEntry, StepProviderInfo } from './types.js';
 import type { RunAgentOptions } from '../../agents/runner.js';
 import { needsSemanticStatusJudgment } from '../models/workflow-rule-condition.js';
-import type {
-  FindingContractInstructionContext,
-  FindingContractReviewerOutputStrategy,
-} from './instruction/instruction-context.js';
+import type { TaskReviewScope } from './review-scope.js';
 export {
   generateReportPhase,
   runReportPhase,
@@ -35,6 +32,8 @@ export interface BasePhaseRunnerContext {
   cwd: string;
   /** Original workflow task. Phase 2 needs this even after a new-session retry. */
   task?: string;
+  /** Engine-computed changed file set, so Phase 2 output contracts resolve {review_scope}. */
+  reviewScope?: TaskReviewScope;
   /** Report directory path */
   reportDir: string;
   /** Language for instructions */
@@ -43,6 +42,8 @@ export interface BasePhaseRunnerContext {
   interactive?: boolean;
   /** Last response from Phase 1 */
   lastResponse?: string;
+  /** Phase 2-only non-finding diagnostic produced by the completion-retry controller. */
+  completionRetryDiagnostic?: string;
   /** Workflow name for observability spans */
   workflowName: string;
   /** Run-local identifier for observability artifact routing */
@@ -51,14 +52,26 @@ export interface BasePhaseRunnerContext {
   observabilityEnabled?: boolean;
   /** Optional text sanitizer for observability span attributes */
   sanitizeObservabilityText?: (text: string) => string;
+  /** Sanitizes report content before it crosses the report-file persistence boundary. */
+  reportContentSanitizer?: (content: string) => string;
   /** Current workflow stack for observability span parity (phase/judge records) */
   getCurrentWorkflowStack?: () => WorkflowResumePointEntry[] | undefined;
   /** Run-local environment values passed to trusted child processes. */
   childProcessEnv?: RunAgentOptions['childProcessEnv'];
+  /** MCP server set resolved for the current step and phase execution. */
+  mcpServers?: RunAgentOptions['mcpServers'];
+  /** Runtime MCP assignment section used to enforce runtime mode at the runner boundary. */
+  mcpAssignment?: RunAgentOptions['mcpAssignment'];
+  /** Identity of the resolved MCP server set for session/pool isolation. */
+  mcpServerIdentity?: RunAgentOptions['mcpServerIdentity'];
   /** Interrupts active provider calls when the workflow is cancelled. */
   abortSignal?: AbortSignal;
+  /** Run-local private directory for oversized provider failure details. */
+  failureDir?: string;
   /** Stream callback for provider event logging */
   onStream?: import('../../agents/types.js').StreamCallback;
+  /** Records provider activity that does not produce a public stream event. */
+  onActivity?: RunAgentOptions['onActivity'];
   /** Parent workflow iteration for sub-step phase events */
   iteration?: number;
   /** Callback for phase lifecycle logging */
@@ -106,16 +119,16 @@ export interface ReportPhaseRunnerContext extends BasePhaseRunnerContext {
   resolveReportFallbackProviderModel: () => StepProviderInfo | undefined;
   /** Update persona session after a phase run */
   updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
-  buildFindingContractInstructionContext?: (
-    step: WorkflowStep,
-    reviewerOutputStrategy: FindingContractReviewerOutputStrategy | undefined,
-  ) => FindingContractInstructionContext | undefined;
   resolveStepProviderModel: (step: WorkflowStep) => StepProviderInfo;
 }
 
 export interface StatusJudgmentPhaseContext extends BasePhaseRunnerContext {
   /** Structured caller for phase 3 status judgment */
   structuredCaller: StructuredCaller;
+  /** Run reports root used by the shared report resolver. */
+  reportsRootDir?: string;
+  /** Exact resume snapshot consumer mapping used by the shared report resolver. */
+  resumeReportConsumerKey?: string;
   resolveStepProviderModel: (step: WorkflowStep) => StepProviderInfo;
   /** Callback for Phase 3 internal stage logging */
   onJudgeStage?: (

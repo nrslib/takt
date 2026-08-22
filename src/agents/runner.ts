@@ -12,8 +12,18 @@ import {
 import {
   resolveEffectiveProviderOptions,
   resolvePersonaProviderOptions,
+  resolveProviderOptionsSources,
+  resolveTrustedDeepSeekHarnessPaths,
 } from '../infra/config/providerOptions.js';
-import { getProvider, type ProviderType, type ProviderCallOptions, type ProviderAgent, type AgentSetup } from '../infra/providers/index.js';
+import {
+  getProvider,
+  type ProviderType,
+  type ProviderCallOptions,
+} from '../infra/providers/index.js';
+import {
+  providerSupportsPermissionControls,
+  providerSupportsStrictMcpConfig,
+} from '../infra/providers/provider-capabilities.js';
 import type { AgentResponse, CustomAgentConfig } from '../core/models/index.js';
 import { resolveAgentProviderModel } from '../core/workflow/provider-resolution.js';
 import { mergeGlobalPermissionProfiles, resolveStepPermissionMode } from '../core/workflow/permission-profile-resolution.js';
@@ -35,6 +45,23 @@ type AgentExecutionResolution = {
   readonly providerOptions: ProviderCallOptions['providerOptions'];
   readonly permissionMode: RunAgentOptions['permissionMode'];
 };
+
+function hasExplicitPermissionConstraint(
+  provider: ProviderType,
+  resolution: NonNullable<RunAgentOptions['permissionResolution']>,
+  localConfig: ReturnType<typeof loadProjectConfig>,
+  globalConfig: ReturnType<typeof loadGlobalConfig>,
+): boolean {
+  if (resolution.requiredPermissionMode !== undefined) {
+    return true;
+  }
+  return [
+    resolution.providerProfiles?.[provider],
+    localConfig.providerProfiles?.[provider],
+    globalConfig.providerProfiles?.[provider],
+  ].some((profile) => profile?.defaultPermissionMode !== undefined
+    || profile?.stepPermissionOverrides?.[resolution.stepName] !== undefined);
+}
 
 export class AgentRunner {
   private static resolvePersonaProviders(cwd: string) {
@@ -107,12 +134,26 @@ export class AgentRunner {
       originResolver: providerOptionsOriginResolver,
     } = resolveProviderOptionsWithTrace(cwd);
 
-    return resolveEffectiveProviderOptions(
+    const resolvedProviderOptions = resolveEffectiveProviderOptions(
       providerOptionsSource,
       providerOptionsOriginResolver,
       resolvedConfigProviderOptions,
       options.providerOptions,
       personaProviderOptions,
+    );
+    const providerOptionsSources = resolveProviderOptionsSources(
+      options.providerOptions,
+      personaProviderOptions === undefined
+        ? []
+        : [{ source: 'persona_providers' as const, options: personaProviderOptions }],
+      resolvedConfigProviderOptions,
+      providerOptionsOriginResolver,
+      providerOptionsSource,
+    );
+    return resolveTrustedDeepSeekHarnessPaths(
+      resolvedProviderOptions,
+      cwd,
+      providerOptionsSources,
     );
   }
 
@@ -183,11 +224,13 @@ export class AgentRunner {
       permissionMode: resolution.permissionMode,
       providerOptions: resolution.providerOptions,
       onStream: options.onStream,
+      onActivity: options.onActivity,
       onPermissionRequest: options.onPermissionRequest,
       onAskUserQuestion: options.onAskUserQuestion,
       bypassPermissions: options.bypassPermissions,
       outputSchema: options.outputSchema,
       language: options.language,
+      failureDir: options.failureDir,
       childProcessEnv: options.childProcessEnv,
     };
   }
@@ -198,8 +241,11 @@ export class AgentRunner {
     localConfig: ReturnType<typeof loadProjectConfig>,
     globalConfig: ReturnType<typeof loadGlobalConfig>,
   ): RunAgentOptions['permissionMode'] {
+    if (options.permissionResolution !== undefined && options.permissionMode !== undefined) {
+      throw new Error('permissionMode cannot be combined with permissionResolution');
+    }
     if (options.permissionResolution) {
-      return resolveStepPermissionMode({
+      const permissionMode = resolveStepPermissionMode({
         stepName: options.permissionResolution.stepName,
         requiredPermissionMode: options.permissionResolution.requiredPermissionMode,
         provider: resolvedProvider,
@@ -207,6 +253,19 @@ export class AgentRunner {
           ?? localConfig.providerProfiles,
         globalProviderProfiles: mergeGlobalPermissionProfiles(globalConfig.providerProfiles),
       });
+      if (
+        permissionMode !== undefined
+        && !hasExplicitPermissionConstraint(
+          resolvedProvider,
+          options.permissionResolution,
+          localConfig,
+          globalConfig,
+        )
+        && providerSupportsPermissionControls(resolvedProvider) === false
+      ) {
+        return undefined;
+      }
+      return permissionMode;
     }
     return options.permissionMode;
   }
@@ -228,30 +287,29 @@ export class AgentRunner {
     const provider = getProvider(resolution.provider);
     const resolvedSystemPrompt = loadAgentPrompt(agentConfig, options.cwd);
     const preparedMcp = await AgentRunner.prepareMcpAdapter(resolution.provider, customOptions, resolution.permissionMode);
-    const callOptions = AgentRunner.buildCallOptions(resolution, customOptions, preparedMcp);
-    const providerRuntimeInstructions = provider.getRuntimeInstructions(customOptions.allowedTools, callOptions.permissionMode, callOptions.providerOptions?.opencode?.networkAccess);
-    const systemPrompt = buildWrappedSystemPrompt(resolvedSystemPrompt, {
-      ...customOptions,
-      providerRuntimeInstructions,
-    });
+    try {
+      const callOptions = AgentRunner.buildCallOptions(resolution, customOptions, preparedMcp);
+      const providerRuntimeInstructions = provider.getRuntimeInstructions(customOptions.allowedTools, callOptions.permissionMode, callOptions.providerOptions?.opencode?.networkAccess);
+      const systemPrompt = buildWrappedSystemPrompt(resolvedSystemPrompt, {
+        ...customOptions,
+        providerRuntimeInstructions,
+      });
 
-    options.onPromptResolved?.({
-      systemPrompt,
-      userInstruction: task,
-    });
+      options.onPromptResolved?.({
+        systemPrompt,
+        userInstruction: task,
+      });
 
-    const agent = options.executionProfile === 'isolated-structured'
-      ? provider.setupIsolatedStructured({
-          name: agentConfig.name,
-          systemPrompt,
-        })
-      : provider.setup({
-          name: agentConfig.name,
-          systemPrompt,
-        });
+      const agent = provider.setup({
+        name: agentConfig.name,
+        systemPrompt,
+      });
 
-    options.onDispatch?.(resolution.permissionMode);
-    return AgentRunner.callAgentWithMcp(agent, task, callOptions, preparedMcp);
+      options.onDispatch?.(resolution.permissionMode);
+      return await agent.call(task, callOptions);
+    } finally {
+      await preparedMcp?.dispose();
+    }
   }
 
   async run(
@@ -274,83 +332,104 @@ export class AgentRunner {
 
     const resolution = AgentRunner.resolveExecution(options.cwd, personaName, options);
     const provider = getProvider(resolution.provider);
-    const preparedMcp = await AgentRunner.prepareMcpAdapter(resolution.provider, options, resolution.permissionMode);
-    const callOptions = AgentRunner.buildCallOptions(resolution, options, preparedMcp);
-    const useIsolatedStructured = options.executionProfile === 'isolated-structured';
-    const setupAgent = (agentSetup: AgentSetup): ProviderAgent =>
-      useIsolatedStructured
-        ? provider.setupIsolatedStructured(agentSetup)
-        : provider.setup(agentSetup);
+    let preparedMcp = await AgentRunner.prepareMcpAdapter(resolution.provider, options, resolution.permissionMode);
+    try {
+      const callOptions = AgentRunner.buildCallOptions(resolution, options, preparedMcp);
+      const setupAgent = (agentSetup: { name: string; systemPrompt?: string }) => {
+        if (options.executionProfile !== 'isolated-structured') {
+          return provider.setup(agentSetup);
+        }
+        const isolatedAgent = provider.setupIsolatedStructured?.(agentSetup);
+        if (isolatedAgent === undefined) {
+          throw new Error(`Provider "${resolution.provider}" does not support isolated structured execution`);
+        }
+        return isolatedAgent;
+      };
 
-    if (options.internalSystemPrompt !== undefined) {
-      const systemPrompt = buildWrappedSystemPrompt(options.internalSystemPrompt, {
-        ...options,
-        providerRuntimeInstructions: provider.getRuntimeInstructions(options.allowedTools, callOptions.permissionMode, callOptions.providerOptions?.opencode?.networkAccess),
-      });
-      options.onPromptResolved?.({
-        systemPrompt,
-        userInstruction: task,
-      });
-      const agent = setupAgent({ name: 'takt-internal', systemPrompt });
-      options.onDispatch?.(resolution.permissionMode);
-      return AgentRunner.callAgentWithMcp(agent, task, callOptions, preparedMcp);
-    }
-
-    if (options.personaPath) {
-      const agentDefinition = loadPersonaPromptFromPath(
-        options.personaPath,
-        options.projectCwd ?? options.cwd,
-        options.workflowBundleResourceRoot,
-      );
-      const systemPrompt = buildWrappedSystemPrompt(agentDefinition, {
-        ...options,
-        providerRuntimeInstructions: provider.getRuntimeInstructions(options.allowedTools, callOptions.permissionMode, callOptions.providerOptions?.opencode?.networkAccess),
-      });
-      options.onPromptResolved?.({
-        systemPrompt,
-        userInstruction: task,
-      });
-      const agent = setupAgent({ name: personaName, systemPrompt });
-      options.onDispatch?.(resolution.permissionMode);
-      return AgentRunner.callAgentWithMcp(agent, task, callOptions, preparedMcp);
-    }
-
-    if (personaSpec) {
-      const customAgents = loadCustomAgents();
-      const agentConfig = customAgents.get(personaName);
-      if (agentConfig) {
-        await preparedMcp?.dispose();
-        return this.runCustom(agentConfig, task, options);
+      if (options.internalSystemPrompt !== undefined) {
+        const personaDefinition = options.personaPath === undefined
+          ? personaSpec
+          : loadPersonaPromptFromPath(
+            options.personaPath,
+            options.projectCwd ?? options.cwd,
+            options.workflowBundleResourceRoot,
+          );
+        const internalAgentDefinition = personaDefinition === undefined
+          ? options.internalSystemPrompt
+          : `${personaDefinition}\n\n${options.internalSystemPrompt}`;
+        const systemPrompt = buildWrappedSystemPrompt(internalAgentDefinition, {
+          ...options,
+          providerRuntimeInstructions: provider.getRuntimeInstructions(options.allowedTools, callOptions.permissionMode, callOptions.providerOptions?.opencode?.networkAccess),
+        });
+        options.onPromptResolved?.({
+          systemPrompt,
+          userInstruction: task,
+        });
+        const agent = setupAgent({ name: options.internalAgentName ?? 'takt-internal', systemPrompt });
+        options.onDispatch?.(resolution.permissionMode);
+        return await agent.call(task, callOptions);
       }
 
-      const systemPrompt = buildWrappedSystemPrompt(personaSpec, {
+      if (options.personaPath) {
+        const agentDefinition = loadPersonaPromptFromPath(
+          options.personaPath,
+          options.projectCwd ?? options.cwd,
+          options.workflowBundleResourceRoot,
+        );
+        const systemPrompt = buildWrappedSystemPrompt(agentDefinition, {
+          ...options,
+          providerRuntimeInstructions: provider.getRuntimeInstructions(options.allowedTools, callOptions.permissionMode, callOptions.providerOptions?.opencode?.networkAccess),
+        });
+        options.onPromptResolved?.({
+          systemPrompt,
+          userInstruction: task,
+        });
+        const agent = setupAgent({ name: personaName, systemPrompt });
+        options.onDispatch?.(resolution.permissionMode);
+        return await agent.call(task, callOptions);
+      }
+
+      if (personaSpec) {
+        const customAgents = loadCustomAgents();
+        const agentConfig = customAgents.get(personaName);
+        if (agentConfig) {
+          const preparedForCurrentRun = preparedMcp;
+          preparedMcp = undefined;
+          await preparedForCurrentRun?.dispose();
+          return await this.runCustom(agentConfig, task, options);
+        }
+
+        const systemPrompt = buildWrappedSystemPrompt(personaSpec, {
+          ...options,
+          providerRuntimeInstructions: provider.getRuntimeInstructions(options.allowedTools, callOptions.permissionMode, callOptions.providerOptions?.opencode?.networkAccess),
+        });
+
+        options.onPromptResolved?.({
+          systemPrompt,
+          userInstruction: task,
+        });
+        const agent = setupAgent({ name: personaName, systemPrompt });
+        options.onDispatch?.(resolution.permissionMode);
+        return await agent.call(task, callOptions);
+      }
+
+      const systemPrompt = buildWrappedSystemPrompt('', {
         ...options,
         providerRuntimeInstructions: provider.getRuntimeInstructions(options.allowedTools, callOptions.permissionMode, callOptions.providerOptions?.opencode?.networkAccess),
       });
-
       options.onPromptResolved?.({
         systemPrompt,
         userInstruction: task,
       });
-      const agent = setupAgent({ name: personaName, systemPrompt });
+      const agentSetup = systemPrompt
+        ? { name: personaName, systemPrompt }
+        : { name: personaName };
+      const agent = setupAgent(agentSetup);
       options.onDispatch?.(resolution.permissionMode);
-      return AgentRunner.callAgentWithMcp(agent, task, callOptions, preparedMcp);
+      return await agent.call(task, callOptions);
+    } finally {
+      await preparedMcp?.dispose();
     }
-
-    const systemPrompt = buildWrappedSystemPrompt('', {
-      ...options,
-      providerRuntimeInstructions: provider.getRuntimeInstructions(options.allowedTools, callOptions.permissionMode, callOptions.providerOptions?.opencode?.networkAccess),
-    });
-    options.onPromptResolved?.({
-      systemPrompt,
-      userInstruction: task,
-    });
-    const agentSetup = systemPrompt
-      ? { name: personaName, systemPrompt }
-      : { name: personaName };
-    const agent = setupAgent(agentSetup);
-    options.onDispatch?.(resolution.permissionMode);
-    return AgentRunner.callAgentWithMcp(agent, task, callOptions, preparedMcp);
   }
 
   /**
@@ -377,12 +456,11 @@ export class AgentRunner {
       if (!runtimeMcpMode) {
         return undefined;
       }
-      // Runtime MCP mode active with an empty set: only Claude系 providers
-      // emit `strictMcpConfig`/`--strict-mcp-config` to suppress ambient
-      // project/user/plugin MCP config (order.md:160,166,172). Other
-      // providers have no ambient-config suppression contract, so an empty
-      // set remains a no-op for them.
-      if (provider !== 'claude-sdk' && provider !== 'claude' && provider !== 'claude-terminal') {
+      // Runtime MCP mode active with an empty set: providers declaring the
+      // strict-MCP capability suppress ambient project/user/plugin MCP config
+      // (order.md:160,166,172). Other providers have no such contract, so an
+      // empty set remains a no-op for them.
+      if (providerSupportsStrictMcpConfig(provider) !== true) {
         return undefined;
       }
       const adapter = createMcpAdapter(provider);
@@ -444,22 +522,6 @@ export class AgentRunner {
     return prepared;
   }
 
-  /**
-   * Invoke a provider agent and guarantee the prepared MCP adapter is disposed
-   * on every path — success, failure, abort, and timeout (order.md:151,334).
-   */
-  private static async callAgentWithMcp(
-    agent: ProviderAgent,
-    task: string,
-    callOptions: ProviderCallOptions,
-    preparedMcp: PreparedProviderMcp | undefined,
-  ): Promise<AgentResponse> {
-    try {
-      return await agent.call(task, callOptions);
-    } finally {
-      await preparedMcp?.dispose();
-    }
-  }
 }
 
 const defaultRunner = new AgentRunner();
@@ -469,5 +531,7 @@ export async function runAgent(
   task: string,
   options: RunAgentOptions,
 ): Promise<AgentResponse> {
+  // Provider dispatch is an attempt boundary even when the provider emits no stream events.
+  options.onActivity?.();
   return defaultRunner.run(personaSpec, task, options);
 }

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { ReadableSpan, SpanExporter } from '@opentelemetry/sdk-trace-base';
 import type { WorkflowStep } from '../core/models/types.js';
-import type { StepRunResult } from '../core/workflow/types.js';
+import type { StepProviderInfo, StepRunResult } from '../core/workflow/types.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import { TeamLeaderPartCancellation } from '../core/workflow/engine/team-leader-part-cancellation.js';
 
@@ -484,6 +484,7 @@ describe('workflow OpenTelemetry spans', () => {
             step: 'implement',
             reason: 'Step "implement" failed: secret content',
             error: 'secret content',
+            failureCategory: 'provider_stream_parse_error',
           },
         })),
       ).rejects.toThrow('workflow execution rejected');
@@ -492,6 +493,7 @@ describe('workflow OpenTelemetry spans', () => {
       expect(workflowSpan.attributes).toMatchObject({
         'takt.workflow.status': 'error',
         'takt.failure.kind': 'step_error',
+        'takt.failure.category': 'provider_stream_parse_error',
         'takt.failure.step': 'implement',
         'takt.failure.reason': 'Step "implement" failed: [REDACTED] content',
       });
@@ -601,18 +603,26 @@ describe('workflow OpenTelemetry spans', () => {
         step: 'implement',
         reason: 'Step "implement" failed: secret content',
         error: 'secret content',
+        failureCategory: 'provider_stream_parse_error',
       },
     }));
 
     const workflowSpan = findSpan(spans, 'workflow.test-workflow');
     expect(workflowSpan.attributes).toMatchObject({
       'takt.failure.kind': 'step_error',
+      'takt.failure.category': 'provider_stream_parse_error',
       'takt.failure.step': 'implement',
       'takt.failure.reason': 'Step "implement" failed: [REDACTED] content',
     });
-    expect(findSpan(spans, 'workflow_start.test-workflow').attributes['takt.failure.kind']).toBeUndefined();
+    const startSpanAttributes = findSpan(
+      spans,
+      'workflow_start.test-workflow',
+    ).attributes;
+    expect(startSpanAttributes['takt.failure.kind']).toBeUndefined();
+    expect(startSpanAttributes['takt.failure.category']).toBeUndefined();
     for (const record of metricRecords) {
       expect(record.attributes['takt.failure.kind']).toBeUndefined();
+      expect(record.attributes['takt.failure.category']).toBeUndefined();
       expect(record.attributes['takt.failure.step']).toBeUndefined();
       expect(record.attributes['takt.failure.reason']).toBeUndefined();
     }
@@ -865,16 +875,27 @@ describe('workflow OpenTelemetry spans', () => {
         providerOptions: {
           codex: {
             baseUrl: 'http://user:token@127.0.0.1:8787/v1?api_key=secret',
+            fastMode: false,
             reasoningEffort: 'high',
           },
         },
-        providerOptionsSources: { 'codex.baseUrl': 'workflow', 'codex.reasoningEffort': 'project' },
+        providerOptionsSources: {
+          'codex.baseUrl': 'workflow',
+          'codex.fastMode': 'project',
+          'codex.reasoningEffort': 'project',
+        },
       },
     }, async () => makeDoneResult());
 
     expect(spans[0]?.attributes).toMatchObject({
-      'takt.provider.options': JSON.stringify({ codex: { baseUrl: '[configured]', reasoningEffort: 'high' } }),
-      'takt.provider.options_sources': JSON.stringify({ 'codex.baseUrl': 'workflow', 'codex.reasoningEffort': 'project' }),
+      'takt.provider.options': JSON.stringify({
+        codex: { baseUrl: '[configured]', fastMode: false, reasoningEffort: 'high' },
+      }),
+      'takt.provider.options_sources': JSON.stringify({
+        'codex.baseUrl': 'workflow',
+        'codex.fastMode': 'project',
+        'codex.reasoningEffort': 'project',
+      }),
     });
   });
 

@@ -16,8 +16,19 @@ providers:
       skip_git_repo_check: true
       model_reasoning_effort: low
 
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        working_dir: fixtures/review-adjudication
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+
 tests:
-  - description: 'adjudication: retain a real defect, merge its duplicate, and reject unsupported findings'
+  - description: 'adjudication: separate valid observations from authorized remediation'
     vars:
       task: file://cases/review-adjudication-task.md
       previous_response: ''
@@ -25,3 +36,30 @@ tests:
       - type: javascript
         metric: review/adjudication-quality
         value: file://asserts/review-adjudication.mjs
+      - type: llm-rubric
+        metric: review/adjudication-authority
+        value: |
+          Judge the decision semantics, not headings, column names, table shape, or exact wording. Pass only if the adjudication explicitly separates technical validity from authority to remediate:
+
+          - The channel-normalization defect is actionable because it directly violates the accepted normalization behavior and leaves a required execution consumer unmigrated. The architecture report's transaction suggestion is not promoted into acceptance criteria.
+          - The exact duplication in src/build-label.js is acknowledged as a technically valid observation but remains out of scope because it belongs to a separate unchanged contract. Its Critical label must not create remediation authority, and it must not enter an actionable family or fix planning.
+          - The README expansion, unsupported secret-leak claim, and environment-only Windows request remain non-actionable for their evidence-based reasons.
+          - Every actionable family has an explicit authorization basis and remediation boundary. The result remains blocking while any actionable family remains; it is not waived because findings were recorded, are old or new, or have any particular severity.
+
+  - description: 'adjudication: merge a different path and submitted family tag into the recorded family'
+    vars:
+      task: file://cases/review-adjudication-family-merge-task.md
+      previous_response: ''
+    assert:
+      - type: regex
+        metric: review/existing-family-merge
+        value: 'JUDGEMENT: candidate=ARCH-NEW-channel-normalization-L2; decision=merge; target_family=FAM-channel-normalization\s*$'
+
+  - description: 'adjudication: keep a different invariant under the same responsible source separate'
+    vars:
+      task: file://cases/review-adjudication-family-separation-task.md
+      previous_response: ''
+    assert:
+      - type: regex
+        metric: review/different-invariant-separation
+        value: 'JUDGEMENT: candidate=ARCH-NEW-channel-type-error-L2; decision=separate; target_family=(?!FAM-channel-normalization(?:\s|$))\S+\s*$'

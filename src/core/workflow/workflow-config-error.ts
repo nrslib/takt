@@ -1,3 +1,5 @@
+import { ZodError } from 'zod';
+
 export class WorkflowConfigError extends Error {
   private normalizedPath: readonly PropertyKey[];
 
@@ -26,5 +28,11 @@ export function withWorkflowConfigErrorPath(error: unknown, path: readonly Prope
 }
 
 export function getWorkflowConfigErrorPath(error: unknown): readonly PropertyKey[] | undefined {
-  return error instanceof WorkflowConfigError ? error.path : undefined;
+  if (error instanceof WorkflowConfigError) {
+    return error.path;
+  }
+  if (error instanceof ZodError) {
+    return error.issues[0]?.path;
+  }
+  return undefined;
 }

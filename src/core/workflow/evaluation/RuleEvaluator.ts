@@ -1,5 +1,8 @@
 import type { WorkflowStep, WorkflowState, RuleMatchMethod } from '../../models/types.js';
-import { type WorkflowRuleCondition, hasFindingsReference } from '../../models/workflow-rule-condition.js';
+import {
+  type WorkflowRuleCondition,
+  hasCompanionReference,
+} from '../../models/workflow-rule-condition.js';
 import { AggregateEvaluator } from './AggregateEvaluator.js';
 import { evaluateWhenExpression } from './when-evaluator.js';
 import { RuleDetectionExhaustedError } from './RuleDetectionExhaustedError.js';
@@ -19,8 +22,8 @@ export class RuleEvaluator {
     const rules = this.step.rules;
     if (rules === undefined || rules.length === 0) return undefined;
     const conditions = rules.map((rule) => rule.condition);
-    if (conditions.some(hasFindingsReference) && this.ctx.state.findings === undefined) {
-      throw new Error('Missing workflow findings state');
+    if (conditions.some(hasCompanionReference)) {
+      throw new Error('Workflow transition rules cannot reference advisory companion state');
     }
     for (let index = 0; index < rules.length; index++) {
       const rule = rules[index];

@@ -29,6 +29,14 @@ import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
 import type { StepProviderInfo, WorkflowEngineOptions } from '../core/workflow/types.js';
 import type { AutoRoutingConfig, WorkflowConfig } from '../core/models/index.js';
+import type { RoutingModelInput, RoutingWorkSnapshot, WorkRequirementEstimator } from '../core/workflow/auto-routing/contracts.js';
+import { createWorkRequirementEstimator } from '../agents/auto-routing-usecase.js';
+import { RoutingRuntime } from '../core/workflow/auto-routing/runtime.js';
+import { resolveAutoRoutingRuntime } from '../core/workflow/auto-routing/resolver.js';
+import {
+  createProviderStreamParseError,
+  isProviderStreamParseError,
+} from '../shared/types/agent-failure.js';
 import { createProviderEventLogger } from '../core/logging/providerEventLogger.js';
 import { createUsageEventLogger, type UsageEventLoggerConfig } from '../core/logging/usageEventLogger.js';
 import { USAGE_MISSING_REASONS } from '../core/logging/contracts.js';
@@ -75,11 +83,37 @@ function createAutoRoutingConfig(): AutoRoutingConfig {
     candidatePools: {
       general: { candidates: ['lightweight', 'coding'], fallback: 'coding' },
     },
+    poolRules: {
+      tags: { implementation: 'general', format: 'general' },
+      steps: {
+        implement: 'general',
+        'security-audit': 'general',
+        'api-review': 'general',
+        'format-review': 'general',
+      },
+    },
     rules: {
       tags: {
         implementation: 'coding',
         format: 'lightweight',
       },
+    },
+  };
+}
+
+function createRoutingSnapshot(): RoutingWorkSnapshot {
+  return {
+    goal: 'implement the feature',
+    step: {
+      name: 'implement',
+      tags: [],
+      stepType: 'normal',
+    },
+    remainingWork: [],
+    progress: {
+      previousAttemptFailed: false,
+      noProgress: false,
+      retryingSameWork: false,
     },
   };
 }
@@ -238,6 +272,9 @@ describe('WorkflowEngine auto routing integration', () => {
     const state = await engine.run();
 
     expect(state.status).toBe('completed');
+    expect(vi.mocked(runAgent).mock.calls.find(([persona]) => persona === 'auto-router')?.[2]).toMatchObject({
+      failureDir: join(tmpDir, '.takt', 'runs', 'test-report-dir', 'failures'),
+    });
     const providerRecords = readFileSync(providerLogger.filepath, 'utf-8')
       .trim()
       .split('\n')
@@ -394,8 +431,9 @@ describe('WorkflowEngine auto routing integration', () => {
   });
 
   it('Given a normal step needs AI routing, When the estimator prompt is built, Then it receives the normalized work snapshot', async () => {
+    const instruction = 'Route using workflow instruction with {task} and {previous_response}';
     const step = makeStep('implement', {
-      instruction: 'Route using workflow instruction with {task} and {previous_response}',
+      instruction,
       providerRoutingPersonaKey: 'coder',
       rules: [makeRule('done', 'COMPLETE')],
     });
@@ -438,32 +476,33 @@ describe('WorkflowEngine auto routing integration', () => {
     const routerPrompt = vi.mocked(runAgent).mock.calls.find(([persona]) => persona === 'auto-router')?.[1];
 
     expect(state.status).toBe('completed');
-    expect(routerPrompt).toContain('"instruction":"Route using workflow instruction with {task} and {previous_response}"');
+    expect(routerPrompt).toContain(instruction);
     expect(routerPrompt).not.toContain('SECRET_TASK_SHOULD_NOT_REACH_ROUTER');
     expect(routerPrompt).not.toContain('Previous Response');
     expect(routerPrompt).not.toContain('Report Directory');
   });
 
-  it('Given workflow-level and config-level autoRouting, When a normal step runs, Then the workflow-level config wins', async () => {
+  it('Given runtime autoRouting, When a normal step runs, Then the runtime configuration is used', async () => {
     const step = makeStep('implement', {
       tags: ['implementation'],
       providerRoutingPersonaKey: 'coder',
       rules: [makeRule('done', 'COMPLETE')],
     });
     const config: WorkflowConfig = {
-      name: 'auto-routing-workflow-level',
-      provider: 'mock',
-      autoRouting: {
-        ...createAutoRoutingConfig(),
-        rules: { tags: { implementation: 'lightweight' } },
-      },
+      name: 'auto-routing-runtime-level',
       initialStep: 'implement',
       maxSteps: 1,
       steps: [step],
     };
+    const runtimeAutoRouting = {
+        ...createAutoRoutingConfig(),
+        rules: { tags: { implementation: 'lightweight' } },
+    };
     const stepStarts: StepProviderInfo[] = [];
 
-    engine = new WorkflowEngine(config, tmpDir, 'implement feature', createEngineOptions(tmpDir));
+    engine = new WorkflowEngine(config, tmpDir, 'implement feature', createEngineOptions(tmpDir, {
+      autoRouting: runtimeAutoRouting,
+    }));
     engine.on('step:start', (_step, _iteration, _instruction, providerInfo) => {
       stepStarts.push(providerInfo);
     });
@@ -526,7 +565,6 @@ describe('WorkflowEngine auto routing integration', () => {
       initialStep: 'implement',
       maxSteps: 1,
       steps: [makeStep('implement', { rules: [makeRule('done', 'COMPLETE')] })],
-      autoRouting: createAutoRoutingConfig(),
     };
 
     engine = new WorkflowEngine(config, tmpDir, 'implement feature', createEngineOptions(tmpDir, {
@@ -539,7 +577,6 @@ describe('WorkflowEngine auto routing integration', () => {
 
   it('Given auto routing selects a provider incompatible with a step model, When constructing the engine, Then validation fails fast', () => {
     const step = makeStep('implement', {
-      model: 'sonnet',
       tags: ['implementation'],
       rules: [makeRule('done', 'COMPLETE')],
     });
@@ -554,14 +591,18 @@ describe('WorkflowEngine auto routing integration', () => {
       config,
       tmpDir,
       'implement feature',
-      createEngineOptions(tmpDir),
+      createEngineOptions(tmpDir, {
+        providerRouting: {
+          tags: {
+            implementation: { model: 'sonnet' },
+          },
+        },
+      }),
     )).toThrow(/model 'sonnet'|provider is 'codex'|auto_routing resolved model/i);
   });
 
-  it('Given a step explicitly sets provider, When effective auto_routing exists, Then explicit step provider still wins', async () => {
+  it('Given runtime provider routing sets a provider, When effective auto_routing exists, Then runtime routing wins', async () => {
     const step = makeStep('security-audit', {
-      provider: 'claude-sdk',
-      model: 'claude-opus-4-20250514',
       tags: ['implementation'],
       rules: [makeRule('done', 'COMPLETE')],
     });
@@ -572,7 +613,13 @@ describe('WorkflowEngine auto routing integration', () => {
       steps: [step],
     };
 
-    engine = new WorkflowEngine(config, tmpDir, 'audit security', createEngineOptions(tmpDir));
+    engine = new WorkflowEngine(config, tmpDir, 'audit security', createEngineOptions(tmpDir, {
+      providerRouting: {
+        tags: {
+          implementation: { provider: 'claude-sdk', model: 'claude-opus-4-20250514' },
+        },
+      },
+    }));
 
     mockRunAgentSequence([
       makeResponse({ persona: step.persona, content: 'done' }),
@@ -590,9 +637,8 @@ describe('WorkflowEngine auto routing integration', () => {
     });
   });
 
-  it('Given a step sets only model, When effective auto_routing exists, Then auto routing selects provider and keeps the step model', async () => {
+  it('Given runtime provider routing sets only a model, When effective auto_routing exists, Then auto routing selects provider and keeps the routed model', async () => {
     const step = makeStep('implement', {
-      model: 'gpt-5-step-override',
       tags: ['implementation'],
       rules: [makeRule('done', 'COMPLETE')],
     });
@@ -604,7 +650,13 @@ describe('WorkflowEngine auto routing integration', () => {
     };
     const stepStarts: StepProviderInfo[] = [];
 
-    engine = new WorkflowEngine(config, tmpDir, 'implement feature', createEngineOptions(tmpDir));
+    engine = new WorkflowEngine(config, tmpDir, 'implement feature', createEngineOptions(tmpDir, {
+      providerRouting: {
+        tags: {
+          implementation: { model: 'gpt-5-step-override' },
+        },
+      },
+    }));
     engine.on('step:start', (_step, _iteration, _instruction, providerInfo) => {
       stepStarts.push(providerInfo);
     });
@@ -623,7 +675,7 @@ describe('WorkflowEngine auto routing integration', () => {
       provider: 'codex',
       model: 'gpt-5-step-override',
       providerSource: 'auto.rules',
-      modelSource: 'step',
+      modelSource: 'provider_routing.tags',
       autoRoutingDecision: { candidateName: 'coding' },
     });
     expect(vi.mocked(runAgent).mock.calls[0]?.[2]).toMatchObject({
@@ -879,8 +931,6 @@ describe('WorkflowEngine auto routing integration', () => {
         makeStep('reviewers', {
           parallel: [
             makeStep('explicit-review', {
-              provider: 'mock',
-              model: 'explicit-parallel-model',
               tags: ['implementation'],
               rules: [makeRule('approved', 'COMPLETE')],
             }),
@@ -897,7 +947,13 @@ describe('WorkflowEngine auto routing integration', () => {
     };
     const routingDecision = vi.fn();
 
-    engine = new WorkflowEngine(config, tmpDir, 'review feature', createEngineOptions(tmpDir));
+    engine = new WorkflowEngine(config, tmpDir, 'review feature', createEngineOptions(tmpDir, {
+      providerRouting: {
+        steps: {
+          'explicit-review': { provider: 'mock', model: 'explicit-parallel-model' },
+        },
+      },
+    }));
     engine.on('routing:decision', routingDecision);
     mockRunAgentSequence([
       makeResponse({ persona: 'explicit-review', content: 'approved' }),
@@ -933,7 +989,6 @@ describe('WorkflowEngine auto routing integration', () => {
         makeStep('reviewers', {
           parallel: [
             makeStep('api-review', {
-              model: 'sonnet',
               tags: ['implementation'],
               rules: [makeRule('approved', 'COMPLETE')],
             }),
@@ -949,7 +1004,13 @@ describe('WorkflowEngine auto routing integration', () => {
       config,
       tmpDir,
       'review feature',
-      createEngineOptions(tmpDir),
+      createEngineOptions(tmpDir, {
+        providerRouting: {
+          tags: {
+            implementation: { model: 'sonnet' },
+          },
+        },
+      }),
     )).toThrow(/model 'sonnet'|provider is 'codex'|auto_routing resolved model/i);
     expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
   });
@@ -1154,5 +1215,158 @@ describe('WorkflowEngine auto routing integration', () => {
     expect(usageRecords).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ step: 'reviewers' }),
     ]));
+  });
+
+  it('rethrows a provider stream parse failure from direct auto-routing without fallback warning', async () => {
+    const parseError = createProviderStreamParseError('Failed to parse item: invalid routing response');
+    const estimator: WorkRequirementEstimator = {
+      estimate: vi.fn().mockRejectedValue(parseError),
+    };
+    const logger = { warn: vi.fn() };
+
+    await expect(resolveAutoRoutingRuntime({
+      autoRouting: createAutoRoutingConfig(),
+      step: { name: 'implement', tags: [] },
+      snapshot: createRoutingSnapshot(),
+      currentProviderInfo: {
+        provider: undefined,
+        model: undefined,
+        providerSource: undefined,
+        modelSource: undefined,
+      },
+      estimator,
+      logger,
+    })).rejects.toBe(parseError);
+
+    expect(estimator.estimate).toHaveBeenCalledOnce();
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('preserves the provider stream parse category at the estimator boundary', async () => {
+    vi.mocked(runAgent).mockResolvedValue(makeResponse({
+      persona: 'auto-router',
+      status: 'error',
+      content: '',
+      error: 'provider stream parse error: Failed to parse item: invalid routing response',
+      failureCategory: 'provider_stream_parse_error',
+    }));
+    const estimator = createWorkRequirementEstimator({
+      cwd: tmpDir,
+      provider: 'claude-sdk',
+      model: 'claude-haiku-4-5-20251001',
+    });
+    const input: RoutingModelInput = {
+      ...createRoutingSnapshot(),
+      version: 'v1',
+    };
+
+    await expect(estimator.estimate(input)).rejects.toMatchObject({
+      name: 'ProviderStreamParseError',
+      failureCategory: 'provider_stream_parse_error',
+      message: 'provider stream parse error: Failed to parse item: invalid routing response',
+    });
+    expect(runAgent).toHaveBeenCalledOnce();
+  });
+
+  it('preserves a classified estimator failure detail before the resolver selects its fallback', async () => {
+    vi.mocked(runAgent).mockResolvedValue(makeResponse({
+      persona: 'auto-router',
+      status: 'error',
+      content: '',
+      error: 'upstream unavailable',
+      failureCategory: 'provider_error',
+    }));
+    const estimator = createWorkRequirementEstimator({
+      cwd: tmpDir,
+      provider: 'claude-sdk',
+      model: 'claude-haiku-4-5-20251001',
+    });
+    const logger = { warn: vi.fn() };
+
+    const failure = await estimator.estimate({
+      ...createRoutingSnapshot(),
+      version: 'v1',
+    }).catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({
+      name: 'AgentFailureError',
+      failureCategory: 'provider_error',
+      reason: 'upstream unavailable',
+      message: 'upstream unavailable',
+    });
+    const result = await resolveAutoRoutingRuntime({
+      autoRouting: createAutoRoutingConfig(),
+      step: { name: 'implement', tags: [] },
+      snapshot: createRoutingSnapshot(),
+      currentProviderInfo: {
+        provider: undefined,
+        model: undefined,
+        providerSource: undefined,
+        modelSource: undefined,
+      },
+      estimator: { estimate: vi.fn().mockRejectedValue(failure) },
+      logger,
+    });
+    expect(result?.providerInfo).toMatchObject({
+      providerSource: 'auto.fallback',
+      autoRoutingDecision: { fallbackReason: 'estimator-failure' },
+    });
+    expect(logger.warn).toHaveBeenCalledOnce();
+  });
+
+  it('rethrows a provider stream parse failure from RoutingRuntime without selecting a configured fallback', async () => {
+    const parseError = createProviderStreamParseError('Failed to parse item: invalid routing response');
+    const estimator: WorkRequirementEstimator = {
+      estimate: vi.fn().mockRejectedValue(parseError),
+    };
+    const runtime = new RoutingRuntime({
+      autoRouting: createAutoRoutingConfig(),
+      estimator,
+    });
+    expect(isProviderStreamParseError(parseError)).toBe(true);
+
+    await expect(resolveAutoRoutingRuntime({
+      autoRouting: createAutoRoutingConfig(),
+      step: { name: 'implement', tags: [] },
+      snapshot: createRoutingSnapshot(),
+      currentProviderInfo: {
+        provider: undefined,
+        model: undefined,
+        providerSource: undefined,
+        modelSource: undefined,
+      },
+      estimator,
+      runtime,
+    })).rejects.toBe(parseError);
+
+    expect(estimator.estimate).toHaveBeenCalledOnce();
+  });
+
+  it('keeps configured fallback for generic auto-routing estimator failures', async () => {
+    const estimator: WorkRequirementEstimator = {
+      estimate: vi.fn().mockRejectedValue(new Error('estimator unavailable')),
+    };
+    const logger = { warn: vi.fn() };
+
+    const result = await resolveAutoRoutingRuntime({
+      autoRouting: createAutoRoutingConfig(),
+      step: { name: 'implement', tags: [] },
+      snapshot: createRoutingSnapshot(),
+      currentProviderInfo: {
+        provider: undefined,
+        model: undefined,
+        providerSource: undefined,
+        modelSource: undefined,
+      },
+      estimator,
+      logger,
+    });
+
+    expect(result?.providerInfo).toMatchObject({
+      provider: 'codex',
+      model: 'gpt-5',
+      providerSource: 'auto.fallback',
+    });
+    expect(logger.warn).toHaveBeenCalledOnce();
   });
 });

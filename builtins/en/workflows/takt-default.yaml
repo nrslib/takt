@@ -1,21 +1,40 @@
 name: takt-default
-description: TAKT development workflow that injects TAKT-specific facets into the shared development flow.
+description: Inject TAKT-specific facets and implementation companions into the shared core's adjudicated, verified peer-review remediation loop and final check that requirements are met.
 max_steps: 51
 initial_step: develop
+
 steps:
   - name: develop
     kind: workflow_call
     call: development-core
     args:
-      plan_policy: [design-planning]
-      plan_knowledge: [takt, architecture]
-      testing_policy: [coding, testing]
-      testing_knowledge: [takt, architecture, unit-testing, e2e-testing]
-      development_policy: [coding, testing]
-      development_knowledge: [takt, architecture, task-decomposition]
-      implementation_instruction: implement
-      review_policy: [coding, testing, review]
+      implementation_pool: takt-coding-facets
+      implementation_workflow: development-implement-dynamic
+      remediation_workflow: development-remediation-dynamic
+      plan_instruction: scenario-based-plan
+      plan_report_format: scenario-based-plan
+      replan_instruction: scenario-based-replan-implementation
+      testing_instruction: scenario-based-write-tests-first
+      testing_report_format: scenario-based-test-report
+      fix_plan_instruction: scenario-based-fix-plan-from-review-resolution
+      fix_plan_report_format: scenario-based-fix-plan
+      final_gate_instruction: scenario-based-supervise-review-resolution
+      implementation_companions:
+        fixed: [ai-antipattern-review-companion, testing-review-companion]
+        pool: []
+        moderator: review-companion-moderator
+      reviewer_suite: takt-development-review
+      review_policy_additions: [takt-testing]
+      review_policy: [coding, testing, takt-testing, review, architecture, takt]
       review_knowledge: [takt, architecture, unit-testing, e2e-testing]
+      security_review_pool: takt-security-review-facets
+      security_review_knowledge_additions: [takt]
+      plan_policy: [design-planning, architecture, takt, task-decomposition]
+      plan_knowledge: [takt, architecture, task-decomposition]
+      testing_policy: [coding, testing, takt-testing, architecture, takt]
+      testing_knowledge: [takt, architecture, unit-testing, e2e-testing]
+      development_policy: [coding, testing, takt-testing, ai-antipattern, architecture, implementation-semantics, takt]
+      development_knowledge: [takt, architecture, implementation-semantics]
     rules:
       - condition: COMPLETE
         next: COMPLETE

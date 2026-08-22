@@ -4,9 +4,24 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 
+const injectedRuntimeEnvironmentFailure = vi.hoisted(() => ({ enabled: false }));
+
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
+
+vi.mock('../infra/config/runtime-provider/provider-environment.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../infra/config/runtime-provider/provider-environment.js')>();
+  return {
+    ...actual,
+    resolveRuntimeEnvironment: (...args: Parameters<typeof actual.resolveRuntimeEnvironment>) => {
+      if (injectedRuntimeEnvironmentFailure.enabled) {
+        throw new Error('injected zero-iteration bootstrap failure');
+      }
+      return actual.resolveRuntimeEnvironment(...args);
+    },
+  };
+});
 
 import { runAgent } from '../agents/runner.js';
 import { executeAndCompleteTask } from '../features/tasks/execute/taskExecution.js';
@@ -23,8 +38,8 @@ import {
 import { buildWorkflowCallSiteIdentity } from '../core/workflow/workflow-call-site-identity.js';
 import { WorkflowCallInvocationIndex } from '../core/workflow/workflow-call-invocation-index.js';
 import { WorkflowStepParticipationIndex } from '../core/workflow/workflow-step-participation-index.js';
-import { createTestFindingLedgerStore } from './helpers/finding-storage.js';
-import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
+import { inheritResumeReportSnapshot } from '../core/workflow/run/resume-report-snapshot.js';
+import { buildResumeReportConsumerKeyFromStack } from '../core/workflow/run/resume-report-consumer.js';
 
 const sourceRunSlug = '20260717-source-run';
 const resumeModes = ['requeue', 'retry', 'instruct'] as const;
@@ -37,7 +52,7 @@ interface TestEnvironment {
   globalDir: string;
 }
 
-function createEnvironment(withFindingContract: boolean): TestEnvironment {
+function createEnvironment(): TestEnvironment {
   const root = join(tmpdir(), `takt-report-inheritance-resume-${randomUUID()}`);
   const projectDir = join(root, 'project');
   const globalDir = join(root, 'global');
@@ -63,13 +78,6 @@ function createEnvironment(withFindingContract: boolean): TestEnvironment {
     'name: child-fix',
     'subworkflow:',
     '  callable: true',
-    ...(withFindingContract ? [
-      'finding_contract:',
-      '  manager:',
-      '    persona: findings-manager',
-      '    instruction: findings-manager',
-      '    output_contract: findings-manager',
-    ] : []),
     'initial_step: fix',
     'max_steps: 4',
     'steps:',
@@ -81,9 +89,7 @@ function createEnvironment(withFindingContract: boolean): TestEnvironment {
       '        output_contracts:',
       '          report:',
       '            - name: 05-arch-review.md',
-      ...(withFindingContract
-        ? ['              format: architecture-review-finding-contract']
-        : ['              format: "# Architecture Review"']),
+      '              format: "# Architecture Review"',
     '        rules:',
     '          - condition: approved',
     '            next: COMPLETE',
@@ -95,6 +101,32 @@ function createEnvironment(withFindingContract: boolean): TestEnvironment {
     '    instruction: "Inherited report: {report:05-arch-review.md}"',
     '    rules:',
     '      - condition: fix complete',
+    '        next: COMPLETE',
+  ].join('\n'), 'utf-8');
+  writeFileSync(join(workflowsDir, 'experimental.yaml'), [
+    'name: experimental',
+    'initial_step: review',
+    'max_steps: 4',
+    'steps:',
+    '  - name: review',
+    '    kind: workflow_call',
+    '    call: review-gate',
+    '    rules:',
+    '      - condition: COMPLETE',
+    '        next: COMPLETE',
+  ].join('\n'), 'utf-8');
+  writeFileSync(join(workflowsDir, 'review-gate.yaml'), [
+    'name: review-gate',
+    'subworkflow:',
+    '  callable: true',
+    'initial_step: final-gate',
+    'max_steps: 4',
+    'steps:',
+    '  - name: final-gate',
+    '    persona: ./personas/fixer.md',
+    '    instruction: "Resolve final gate with {report:review-resolution.md}"',
+    '    rules:',
+    '      - condition: approved',
     '        next: COMPLETE',
   ].join('\n'), 'utf-8');
 
@@ -140,8 +172,55 @@ function buildWorkflowCallNamespace(projectDir: string, occurrence: number): str
   return buildWorkflowCallSite(projectDir, occurrence).runPathSegment;
 }
 
-function buildWorkflowCallAuthorityKey(projectDir: string, occurrence: number): string {
-  return buildWorkflowCallSite(projectDir, occurrence).key;
+function loadFinalGateWorkflows(projectDir: string) {
+  const parent = loadWorkflowByIdentifier('experimental', projectDir);
+  if (!parent) {
+    throw new Error('Final-gate parent workflow fixture could not be loaded');
+  }
+  const parentStep = parent.steps.find((step) => step.name === 'review');
+  if (!parentStep || parentStep.kind !== 'workflow_call') {
+    throw new Error('Final-gate workflow_call fixture could not be loaded');
+  }
+  const child = resolveWorkflowCallTarget(parent, parentStep, projectDir, projectDir);
+  if (!child) {
+    throw new Error('Final-gate child workflow fixture could not be loaded');
+  }
+  return { parent, child };
+}
+
+function buildFinalGateResumePoint(projectDir: string) {
+  const { parent, child } = loadFinalGateWorkflows(projectDir);
+  const reviewEntry = buildWorkflowResumePointEntry(
+    parent,
+    'review',
+    'workflow_call',
+    1,
+    undefined,
+    1,
+  );
+  const namespace = buildWorkflowCallSiteIdentity({
+    stack: [reviewEntry],
+    childWorkflow: child,
+  }).runPathSegment;
+  const invocationIndex = new WorkflowCallInvocationIndex(new Map());
+  invocationIndex.record(parent, 'review', [], {
+    call_instance: 1,
+    report_namespace_segment: namespace,
+  });
+  return {
+    namespace,
+    resumePoint: {
+      version: 2 as const,
+      stack: [
+        reviewEntry,
+        buildWorkflowResumePointEntry(child, 'final-gate', 'agent', 1),
+      ],
+      iteration: 1,
+      elapsed_ms: 0,
+      workflow_call_invocations: invocationIndex.serialized(),
+      workflow_step_participations: {},
+    },
+  };
 }
 
 function buildResumePoint(projectDir: string) {
@@ -248,10 +327,80 @@ function writeSourceRunMeta(projectDir: string): void {
   }), 'utf-8');
 }
 
-async function writeSourceReports(projectDir: string, withFindingContract: boolean): Promise<{
+function seedFinalGateResumeSource(projectDir: string): ReturnType<typeof buildFinalGateResumePoint> {
+  const originRunSlug = '20260717-final-gate-origin';
+  const oldNamespace = 'iteration-1--step-review--workflow-review-gate--site-' + 'a'.repeat(64);
+  const oldReportPath = `subworkflows/${oldNamespace}/review-resolution.md`;
+  const resume = buildFinalGateResumePoint(projectDir);
+  const consumerKey = buildResumeReportConsumerKeyFromStack(resume.resumePoint.stack);
+  if (consumerKey === undefined) {
+    throw new Error('Final-gate consumer key could not be built');
+  }
+  const originReports = join(projectDir, '.takt', 'runs', originRunSlug, 'reports');
+  mkdirSync(join(originReports, 'subworkflows', oldNamespace), { recursive: true });
+  writeFileSync(
+    join(originReports, ...oldReportPath.split('/')),
+    'CHAINED REVIEW RESOLUTION',
+    'utf-8',
+  );
+  inheritResumeReportSnapshot({
+    cwd: projectDir,
+    sourceRunSlug: originRunSlug,
+    targetRunSlug: sourceRunSlug,
+    resumeReportConsumers: [{
+      consumerKey,
+      reportDirectories: [`subworkflows/${resume.namespace}`, `subworkflows/${oldNamespace}`],
+      references: [{ reference: 'review-resolution.md', path: oldReportPath }],
+    }],
+  });
+  const runRoot = `.takt/runs/${sourceRunSlug}`;
+  writeFileSync(join(projectDir, runRoot, 'meta.json'), JSON.stringify({
+    task: 'resume nested final gate',
+    workflow: 'experimental',
+    runSlug: sourceRunSlug,
+    runRoot,
+    reportDirectory: `${runRoot}/reports`,
+    contextDirectory: `${runRoot}/context`,
+    logsDirectory: `${runRoot}/logs`,
+    status: 'failed',
+    startTime: '2026-07-17T00:00:00.000Z',
+    endTime: '2026-07-17T00:01:00.000Z',
+    iterations: 0,
+    reason: 'intermediate run stopped before final-gate',
+    resume_point: resume.resumePoint,
+  }), 'utf-8');
+  return resume;
+}
+
+function prepareFinalGateRequeue(
+  runner: TaskRunner,
+  resumePoint: ReturnType<typeof buildFinalGateResumePoint>['resumePoint'],
+): TaskInfo {
+  runner.addTask('resume nested final gate', { workflow: 'experimental' });
+  const sourceTask = runner.claimNextTasks(1)[0];
+  if (!sourceTask) {
+    throw new Error('Final-gate source task was not claimed');
+  }
+  const taskWithSourceRun = runner.updateRunningTaskExecution(sourceTask.name, {
+    runSlug: sourceRunSlug,
+  });
+  runner.exceedTask(taskWithSourceRun.name, {
+    currentStep: 'review',
+    newMaxSteps: 4,
+    currentIteration: 1,
+    resumePoint,
+  });
+  runner.requeueExceededTask(taskWithSourceRun.name);
+  const requeuedTask = runner.claimNextTasks(1)[0];
+  if (!requeuedTask) {
+    throw new Error('Final-gate requeued task was not claimed');
+  }
+  return requeuedTask;
+}
+
+async function writeSourceReports(projectDir: string): Promise<{
   sourceReportDir: string;
-  sourceLedger?: ReturnType<typeof parseFindingLedger>;
-  sourceStore?: FindingLedgerStore;
+  sourceReportContent: string;
 }> {
   writeSourceRunMeta(projectDir);
   const sourceReportDir = join(
@@ -264,21 +413,10 @@ async function writeSourceReports(projectDir: string, withFindingContract: boole
     buildWorkflowCallNamespace(projectDir, 1),
   );
   mkdirSync(sourceReportDir, { recursive: true });
-  writeFileSync(join(sourceReportDir, '05-arch-review.md'), 'previous architecture review', 'utf-8');
+  const sourceReportContent = 'previous architecture review';
+  writeFileSync(join(sourceReportDir, '05-arch-review.md'), sourceReportContent, 'utf-8');
 
-  if (!withFindingContract) {
-    return { sourceReportDir };
-  }
-
-  const sourceStore = createTestFindingLedgerStore({
-    projectCwd: projectDir,
-    runId: sourceRunSlug,
-    reportDir: sourceReportDir,
-    workflowName: 'child-fix',
-    authorityKey: buildWorkflowCallAuthorityKey(projectDir, 1),
-  });
-  const sourceLedger = sourceStore.loadLedger();
-  return { sourceReportDir, sourceLedger, sourceStore };
+  return { sourceReportDir, sourceReportContent };
 }
 
 function findResumedRunSlug(projectDir: string): string {
@@ -288,6 +426,15 @@ function findResumedRunSlug(projectDir: string): string {
     throw new Error('Resumed run directory was not created');
   }
   return resumedRunSlug;
+}
+
+function findRunSlugExcluding(projectDir: string, excluded: ReadonlySet<string>): string {
+  const runSlug = readdirSync(join(projectDir, '.takt', 'runs'))
+    .find((name) => !excluded.has(name) && existsSync(join(projectDir, '.takt', 'runs', name, 'meta.json')));
+  if (!runSlug) {
+    throw new Error('Expected run directory was not created');
+  }
+  return runSlug;
 }
 
 function readResumeArtifacts(projectDir: string, runSlug: string) {
@@ -303,6 +450,9 @@ function readResumeArtifacts(projectDir: string, runSlug: string) {
     sourceRunSlug: string;
     targetRunSlug: string;
     files: Array<{ path: string; size: number; sha256: string }>;
+    resumeReportConsumers?: Array<{
+      references: Array<{ reference: string; path: string }>;
+    }>;
   };
 }
 
@@ -315,6 +465,7 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
   });
 
   afterEach(() => {
+    injectedRuntimeEnvironmentFailure.enabled = false;
     vi.clearAllMocks();
     if (originalConfigDir === undefined) {
       delete process.env.TAKT_CONFIG_DIR;
@@ -327,8 +478,8 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
     }
   });
 
-  it.each([false, true])('honors report inheritance and finding storage contracts (finding contract: %s)', async (withFindingContract) => {
-    environment = createEnvironment(withFindingContract);
+  it('honors report inheritance across task resume', async () => {
+    environment = createEnvironment();
     process.env.TAKT_CONFIG_DIR = environment.globalDir;
     invalidateGlobalConfigCache();
 
@@ -348,7 +499,7 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
       };
     });
 
-    const source = await writeSourceReports(environment.projectDir, withFindingContract);
+    const source = await writeSourceReports(environment.projectDir);
     const runner = new TaskRunner(environment.projectDir);
     const resumedTask = prepareResumedTask(
       runner,
@@ -387,20 +538,20 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
 
     expect(success).toBe(true);
     expect(instructions).toHaveLength(1);
-    expect(instructions[0]).toContain('Inherited report: previous architecture review');
+    expect(instructions[0]).toContain(source.sourceReportContent);
     expect(instructions[0]).not.toContain('{report:05-arch-review.md}');
     expect(instructions[0]).not.toContain(inheritedReportPath);
     expect(instructions[0]).not.toContain(source.sourceReportDir);
-    expect(readFileSync(inheritedReportPath, 'utf-8')).toBe('previous architecture review');
-    expect(readFileSync(join(source.sourceReportDir, '05-arch-review.md'), 'utf-8')).toBe('previous architecture review');
+    expect(readFileSync(inheritedReportPath, 'utf-8')).toBe(source.sourceReportContent);
+    expect(readFileSync(join(source.sourceReportDir, '05-arch-review.md'), 'utf-8')).toBe(source.sourceReportContent);
     expect(readResumeArtifacts(environment.projectDir, resumedRunSlug)).toEqual(expect.objectContaining({
-      version: 1,
+      version: 2,
       sourceRunSlug,
       targetRunSlug: resumedRunSlug,
       files: [
         expect.objectContaining({
           path: inheritedReportRelativePath,
-          size: Buffer.byteLength('previous architecture review'),
+          size: Buffer.byteLength(source.sourceReportContent),
           sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
         }),
       ],
@@ -414,9 +565,123 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
         reason: 'target_exists',
       })],
     }));
-    if (source.sourceLedger !== undefined && source.sourceStore !== undefined) {
-      expect(source.sourceStore.loadLedger()).toEqual(source.sourceLedger);
+  });
+});
+
+describe('IT: nested final-gate report resolution through TaskRunner requeue', () => {
+  let environment: TestEnvironment;
+  let originalConfigDir: string | undefined;
+
+  beforeEach(() => {
+    originalConfigDir = process.env.TAKT_CONFIG_DIR;
+  });
+
+  afterEach(() => {
+    injectedRuntimeEnvironmentFailure.enabled = false;
+    vi.clearAllMocks();
+    if (originalConfigDir === undefined) {
+      delete process.env.TAKT_CONFIG_DIR;
+    } else {
+      process.env.TAKT_CONFIG_DIR = originalConfigDir;
     }
+    invalidateGlobalConfigCache();
+    if (environment && existsSync(environment.root)) {
+      rmSync(environment.root, { recursive: true, force: true });
+    }
+  });
+
+  function captureFinalGateInstructions(): string[] {
+    const instructions: string[] = [];
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: instruction,
+      });
+      instructions.push(instruction);
+      return {
+        persona: 'fixer',
+        status: 'done',
+        content: '[FINAL-GATE:1]\napproved',
+        timestamp: new Date(),
+        sessionId: 'final-gate-session',
+      };
+    });
+    return instructions;
+  }
+
+  it('resolves final-gate report through the snapshot mapping on the production requeue path', async () => {
+    environment = createEnvironment();
+    process.env.TAKT_CONFIG_DIR = environment.globalDir;
+    invalidateGlobalConfigCache();
+    const instructions = captureFinalGateInstructions();
+    const { resumePoint } = seedFinalGateResumeSource(environment.projectDir);
+    const runner = new TaskRunner(environment.projectDir);
+    const requeuedTask = prepareFinalGateRequeue(runner, resumePoint);
+
+    const success = await executeAndCompleteTask(requeuedTask, runner, environment.projectDir);
+
+    const targetRunSlug = findRunSlugExcluding(
+      environment.projectDir,
+      new Set([sourceRunSlug, '20260717-final-gate-origin']),
+    );
+    const manifest = readResumeArtifacts(environment.projectDir, targetRunSlug);
+    expect(success).toBe(true);
+    expect(instructions).toHaveLength(1);
+    expect(manifest.resumeReportConsumers?.[0]?.references).toEqual([
+      expect.objectContaining({ reference: 'review-resolution.md' }),
+    ]);
+  });
+
+  it('propagates final-gate snapshot mapping through a zero-iteration failed requeue', async () => {
+    environment = createEnvironment();
+    process.env.TAKT_CONFIG_DIR = environment.globalDir;
+    const { resumePoint } = seedFinalGateResumeSource(environment.projectDir);
+    const runner = new TaskRunner(environment.projectDir);
+    const firstRequeue = prepareFinalGateRequeue(runner, resumePoint);
+    injectedRuntimeEnvironmentFailure.enabled = true;
+
+    const firstSuccess = await executeAndCompleteTask(firstRequeue, runner, environment.projectDir);
+    injectedRuntimeEnvironmentFailure.enabled = false;
+    const failedTask = runner.listFailedTasks()[0];
+    if (!failedTask?.runSlug) {
+      throw new Error('Zero-iteration requeue did not persist its run slug');
+    }
+    const intermediateRunSlug = failedTask.runSlug;
+    const intermediateMeta = JSON.parse(readFileSync(join(
+      environment.projectDir,
+      '.takt',
+      'runs',
+      intermediateRunSlug,
+      'meta.json',
+    ), 'utf-8')) as { status?: string; iterations?: number };
+    const intermediateManifest = readResumeArtifacts(environment.projectDir, intermediateRunSlug);
+
+    expect(firstSuccess).toBe(false);
+    expect(runAgent).not.toHaveBeenCalled();
+    expect(intermediateMeta).toEqual(expect.objectContaining({ status: 'failed', iterations: 0 }));
+    expect(intermediateManifest.resumeReportConsumers?.[0]?.references).toEqual([
+      expect.objectContaining({ reference: 'review-resolution.md' }),
+    ]);
+
+    runner.requeueTask(failedTask.name, ['failed'], {
+      workflow: 'experimental',
+      resumePoint,
+      sourceRunSlug: intermediateRunSlug,
+    });
+    const secondRequeue = runner.claimNextTasks(1)[0];
+    if (!secondRequeue) {
+      throw new Error('Second final-gate requeue was not claimed');
+    }
+    const instructions = captureFinalGateInstructions();
+
+    const secondSuccess = await executeAndCompleteTask(
+      secondRequeue,
+      runner,
+      environment.projectDir,
+    );
+
+    expect(secondSuccess).toBe(true);
+    expect(instructions).toHaveLength(1);
   });
 });
 
@@ -441,8 +706,8 @@ describe('IT: missing report source through task resume', () => {
     }
   });
 
-  it('should fail before the resumed fix agent runs and publish an empty source snapshot when source reports are missing', async () => {
-    environment = createEnvironment(false);
+  it('should continue the resumed fix with a missing-report sentence when source reports are missing', async () => {
+    environment = createEnvironment();
     process.env.TAKT_CONFIG_DIR = environment.globalDir;
     invalidateGlobalConfigCache();
 
@@ -498,10 +763,13 @@ describe('IT: missing report source through task resume', () => {
       skipped?: Array<{ reason?: string }>;
     };
 
-    expect(success).toBe(false);
-    expect(instructions).toHaveLength(0);
+    expect(success).toBe(true);
+    expect(instructions).toHaveLength(1);
+    expect(instructions[0]).toContain(
+      '（参照先の報告 05-arch-review.md はこの run に存在しない）',
+    );
     expect(readResumeArtifacts(environment.projectDir, resumedRunSlug)).toEqual(expect.objectContaining({
-      version: 1,
+      version: 2,
       sourceRunSlug,
       targetRunSlug: resumedRunSlug,
       files: [],
@@ -515,6 +783,6 @@ describe('IT: missing report source through task resume', () => {
         reason: 'not_found',
       })],
     }));
-    expect(resumedMeta.reason).toBe('rule_no_match');
+    expect(resumedMeta.reason).toBeUndefined();
   });
 });

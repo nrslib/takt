@@ -12,6 +12,7 @@
 import type { ProviderType } from '../../../shared/types/provider.js';
 import type { StepProviderOptions } from '../../../core/models/workflow-types.js';
 import type { ProviderResolutionSource } from '../../../core/workflow/provider-options-trace.js';
+import type { PermissionMode } from '../../../core/models/types.js';
 import type { CompiledProviderEnvironment } from './environment.js';
 
 /** Provider/model resolved by the bootstrap, tagged with the layer that supplied each value. */
@@ -27,6 +28,7 @@ export interface RuntimeProviderValues {
   provider: ProviderType | undefined;
   model: string | undefined;
   providerOptions: StepProviderOptions | undefined;
+  permissionMode?: PermissionMode;
 }
 
 /**
@@ -42,12 +44,13 @@ export function composeRuntimeProviderOverride(
   const providerOverridden = override.provider !== undefined;
   const provider = override.provider ?? runtime.provider;
   const providerOptions = providerOverridden ? undefined : runtime.providerOptions;
+  const permissionMode = providerOverridden ? undefined : runtime.permissionMode;
   const model = override.model !== undefined
     ? override.model
     : providerOverridden
       ? undefined
       : runtime.model;
-  return { provider, model, providerOptions };
+  return { provider, model, providerOptions, permissionMode };
 }
 
 /** Only CLI flags and environment variables are explicit runtime overrides. */
@@ -94,5 +97,6 @@ export function applyRuntimeProviderOverride(
     model: composed.model,
     modelSource,
     providerOptions: composed.providerOptions,
+    permissionMode: composed.permissionMode,
   };
 }

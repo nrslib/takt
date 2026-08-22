@@ -1,0 +1,100 @@
+import type { ProviderRoutingEntry, WorkflowConfig } from '../../core/models/index.js';
+import { isNormalOrTeamLeaderWorkflowStep } from '../../core/models/types.js';
+import type { CompiledProviderEnvironment } from './runtime-provider/environment.js';
+import {
+  collectReachableSteps,
+  collectReachableWorkflowCallSteps,
+} from './loaders/workflowParallelTraversal.js';
+import { resolveWorkflowCallTarget } from './loaders/workflowCallResolver.js';
+import { getWorkflowReference } from '../../core/workflow/workflow-reference.js';
+import { MAX_WORKFLOW_CALL_DEPTH } from '../../core/workflow/workflow-call-depth.js';
+import type { WorkflowCallResolver } from '../../core/workflow/types.js';
+
+function collectLocalCompanionNames(workflow: WorkflowConfig): string[] {
+  const names = new Set<string>();
+  for (const step of collectReachableSteps(workflow)) {
+    if (!isNormalOrTeamLeaderWorkflowStep(step) || step.companion === undefined) continue;
+    for (const name of step.companion.fixed) names.add(name);
+    for (const name of step.companion.pool) names.add(name);
+    if (step.companion.moderator !== undefined) names.add(step.companion.moderator);
+  }
+  return [...names];
+}
+
+function collectCompanionNames(
+  workflow: WorkflowConfig,
+  options: {
+    projectCwd: string;
+    lookupCwd: string;
+    workflowCallResolver?: WorkflowCallResolver;
+  } | undefined,
+  activeReferences: ReadonlySet<string>,
+  depth: number,
+): string[] {
+  const names = new Set(collectLocalCompanionNames(workflow));
+  if (options === undefined) return [...names];
+  for (const step of collectReachableWorkflowCallSteps(workflow)) {
+    if (depth + 1 > MAX_WORKFLOW_CALL_DEPTH) {
+      throw new Error(`Companion resolution exceeded workflow-call depth ${MAX_WORKFLOW_CALL_DEPTH}`);
+    }
+    const child = options.workflowCallResolver === undefined
+      ? resolveWorkflowCallTarget(workflow, step, options.projectCwd, options.lookupCwd)
+      : options.workflowCallResolver({
+          parentWorkflow: workflow,
+          step,
+          projectCwd: options.projectCwd,
+          lookupCwd: options.lookupCwd,
+        });
+    if (child === null) continue;
+    const reference = getWorkflowReference(child);
+    if (activeReferences.has(reference)) continue;
+    for (const name of collectCompanionNames(
+      child,
+      options,
+      new Set([...activeReferences, reference]),
+      depth + 1,
+    )) names.add(name);
+  }
+  return [...names];
+}
+
+function defaultResolution(environment: CompiledProviderEnvironment): ProviderRoutingEntry | undefined {
+  if (environment.provider === undefined && environment.model === undefined) return undefined;
+  return {
+    ...(environment.provider === undefined ? {} : { provider: environment.provider }),
+    ...(environment.model === undefined ? {} : { model: environment.model }),
+    ...(environment.providerOptions === undefined ? {} : { providerOptions: environment.providerOptions }),
+    ...(environment.permissionMode === undefined ? {} : { permissionMode: environment.permissionMode }),
+  };
+}
+
+export function resolveWorkflowCompanions(
+  workflow: WorkflowConfig,
+  environment: CompiledProviderEnvironment,
+  options?: {
+    projectCwd: string;
+    lookupCwd: string;
+    workflowCallResolver?: WorkflowCallResolver;
+  },
+): Map<string, ProviderRoutingEntry> {
+  const names = collectCompanionNames(
+    workflow,
+    options,
+    new Set([getWorkflowReference(workflow)]),
+    0,
+  );
+  if (names.length === 0) return new Map();
+  if (environment.providerSource !== 'runtime-v1') {
+    throw new Error('Companion reviewers require runtime.yaml; migrate provider configuration from config.yaml');
+  }
+  const defaults = defaultResolution(environment);
+  const resolved = new Map<string, ProviderRoutingEntry>();
+  for (const name of names) {
+    const entry = environment.companions?.[name] ?? defaults;
+    if (!entry?.provider) {
+      throw new Error(`Companion "${name}" has no runtime.yaml provider target or defaults assignment`);
+    }
+    resolved.set(name, { ...entry });
+  }
+  return resolved;
+}

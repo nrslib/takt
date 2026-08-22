@@ -11,7 +11,8 @@ interactive:
   conversationLabel: "会話:"
   noTranscript: "（ローカル履歴なし。現在のセッション文脈を要約してください。）"
   ui:
-    intro: "対話モード - タスク内容を入力してください。コマンド: /go（指示書作成・実行）, /play（即実行）, /accept（最新のアシスタント発言を採用）, /paste-image（クリップボード画像を添付）, /resume（セッション読込）, /cancel（終了）"
+    intro: "対話モード - タスク内容を入力してください。コマンド: /go（指示書作成・実行）, /accept（最新のアシスタント発言を採用）, /paste-image（クリップボード画像を添付）, /resume（セッション読込）, /cancel（終了）"
+    introGrillMe: "Grill Meモード - 要件の判断分岐を1問ずつ掘り下げます。要件が固まるとアシスタントが /go を案内します。コマンド: /go（指示書作成・実行）, /accept（最新のアシスタント発言を採用）, /paste-image（クリップボード画像を添付）, /resume（セッション読込）, /cancel（終了）"
     introQuiet: "クワイエットモード - タスク内容を入力してください。追加質問なしで指示書を生成します。"
     introPassthrough: "パススルーモード - タスク内容を入力してください。入力内容をそのまま実行します。"
     resume: "前回のセッションを再開します"
@@ -29,7 +30,6 @@ interactive:
       continue: "会話を続ける"
     cancelled: "キャンセルしました"
     acceptNoAssistant: "アシスタント発言が見つかりません。まずタスク内容を入力してください。"
-    playNoTask: "タスク内容を指定してください: /play <タスク内容>"
     retryNoOrder: "前回の指示書（order.md）が見つかりません。/retry はリトライ時のみ使用できます。"
     retryUnavailable: "/retry は `takt list` の Retry モードでのみ使用できます。"
     pasteImageUnavailable: "/paste-image は対話入力中の画像添付にのみ使用できます。"
@@ -38,6 +38,8 @@ interactive:
     prompt: "対話モードを選択してください:"
     assistant: "アシスタント"
     assistantDescription: "確認質問をしてから指示書を作成"
+    grill-me: "Grill Me"
+    grill-meDescription: "推奨案付きの質問を1問ずつ行い、要件を固める"
     persona: "ペルソナ"
     personaDescription: "先頭エージェントのペルソナで対話"
     quiet: "クワイエット"
@@ -65,7 +67,6 @@ interactive:
     timestamp: "実行時刻: {timestamp}"
   commands:
     accept: "最新のアシスタント発言を採用"
-    play: "タスクを即実行する"
     go: "指示書を作成して実行"
     retry: "前回の指示書を確認して再実行"
     replay: "前回の指示書で即再実行"
@@ -234,6 +235,15 @@ retry:
     intro: "リトライモード - 追加指示を入力してください。コマンド: /go（指示書作成・実行）, /retry（前回の指示書で再実行）, /cancel（終了）"
   usePreviousWorkflowConfirm: "前回のワークフロー \"{workflow}\" を使用しますか？"
 
+orderRevision:
+  attachmentsHeading: "添付画像"
+  ui:
+    proposed: "新しい order.md 案:"
+    actionPrompt: "この指示書で置き換えますか？"
+    actions:
+      approve: "Yes（保存して実行）"
+      reject: "No（会話に戻る）"
+
 run:
   notifyComplete: "run完了 ({total} tasks)"
   notifyAbort: "runはエラー終了 ({failed})"
@@ -245,3 +255,35 @@ issue:
     none: "なし"
     custom: "入力（カスタム）"
     customPrompt: "ラベル名を入力"
+
+# ===== Ink TUI =====
+tui:
+  ui:
+    thinking: "考え中..."
+    hint: "Enter: 送信  Shift+Enter: 改行  Tab: 補完  ↑↓: 行移動/履歴  Ctrl+C: 中止"
+    placeholder: "タスクを入力、/ でコマンド"
+    queuedHint: "↑ でキューを編集"
+    queuedMore: "他 {count} 件をキュー中"
+    interruptHint: "(Esc で中断)"
+    responseInterrupted: "応答を中断しました。"
+    instructionInterrupted: "指示書の生成を中断しました。"
+    runFinished: "ワークフローの実行が完了しました。続けてタスクを入力するか、/cancel で終了できます。"
+    taskSaved: "タスクを保存しました。続けてタスクを入力するか、/cancel で終了できます。"
+    issueCreated: "Issue を作成しました。続けてタスクを入力するか、/cancel で終了できます。"
+    promptHint: "Enter: 確定  Esc: キャンセル"
+    promptKeepHint: "Enter: 確定  空のまま Enter: 現在値のまま  Esc: キャンセル"
+    promptPlaceholder: "入力してください"
+    model: "モデル: {value}"
+    passthroughHint: "Enter: そのまま実行  Shift+Enter: 改行  Ctrl+C: 中止"
+  errors:
+    requiresTty: "--tui は対話端末 (TTY) が必要です。TTY 上で takt を実行するか --tui を外してください。"
+    exitedEarly: "タスク会話が完了する前に TUI が終了しました。"
+    providerNotConfigured: "プロバイダが設定されていません。~/.takt/config.yaml で設定するか --provider を指定してください。"
+    workflowNotFound: "ワークフローが見つかりません: {workflow}"
+    messageRequired: "メッセージを入力してください。"
+    taskTextRequired: "タスク本文が必要です。"
+    emptyAiResponse: "アシスタントからの応答がありませんでした。"
+    noConversation: "まだ会話がありません。先にタスクを説明してください。"
+    instructionFailed: "タスク指示書の作成に失敗しました。"
+    unsupportedCommand: "このコマンドは TUI では利用できません。"
+    imagePasteFailed: "画像を貼り付けられませんでした。"

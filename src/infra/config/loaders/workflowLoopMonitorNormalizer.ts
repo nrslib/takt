@@ -1,16 +1,11 @@
 import type { LoopMonitorConfig, LoopMonitorJudge } from '../../../core/models/index.js';
 import type { FacetResolutionContext, WorkflowSections } from './resource-resolver.js';
 import { resolvePersona, resolveRefToContent } from './resource-resolver.js';
-import { normalizeProviderReference } from './workflowStepNormalizer.js';
 import { parseWorkflowRuleCondition } from '../../../core/models/workflow-rule-condition.js';
 
 function normalizeLoopMonitorJudge(
   raw: {
-    session_key?: string;
     persona?: string;
-    provider?: unknown;
-    model?: string | null;
-    provider_options?: unknown;
     instruction?: string;
     rules: Array<{ condition: string; next: string }>;
   },
@@ -19,21 +14,9 @@ function normalizeLoopMonitorJudge(
   context?: FacetResolutionContext,
 ): LoopMonitorJudge {
   const { personaSpec, personaPath } = resolvePersona(raw.persona, sections, workflowDir, context);
-  const normalizedProvider = normalizeProviderReference(
-    raw.provider as Parameters<typeof normalizeProviderReference>[0],
-    raw.model,
-    raw.provider_options as Parameters<typeof normalizeProviderReference>[2],
-    workflowDir,
-    context,
-  );
   return {
-    sessionKey: raw.session_key,
     persona: personaSpec,
     personaPath,
-    provider: normalizedProvider.provider,
-    model: normalizedProvider.model,
-    modelSpecified: normalizedProvider.modelSpecified,
-    providerOptions: normalizedProvider.providerOptions,
     instruction: raw.instruction
       ? resolveRefToContent(
           raw.instruction,
@@ -56,11 +39,7 @@ export function normalizeLoopMonitors(
     ignore_steps?: string[];
     threshold: number;
     judge: {
-      session_key?: string;
       persona?: string;
-      provider?: unknown;
-      model?: string | null;
-      provider_options?: unknown;
       instruction?: string;
       rules: Array<{ condition: string; next: string }>;
     };

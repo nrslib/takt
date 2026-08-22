@@ -1,3 +1,6 @@
+{{include:instructions/task-decomposition-boundary}}
+{{include:instructions/team-leader-part-error-completion}}
+
 Analyze the implementation task and, if decomposition is appropriate, split into multiple parts for parallel execution.
 
 **Important:** Use the original task and the engine-provided previous response below as the primary sources. The parent Team Leader must not use tools or fill in facts that are not present in them.

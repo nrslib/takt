@@ -22,10 +22,11 @@ function readModuleSource(path: string): string {
   return readFileSync(new URL(path, import.meta.url), 'utf-8');
 }
 
-function serversWith(overrides: Record<string, unknown>): ResolvedMcpServers {
+function serversWith(overrides: ResolvedMcpServers['servers']): ResolvedMcpServers {
   return {
     enabled: true,
     servers: overrides,
+    serverNames: Object.keys(overrides).sort(),
     identity: Object.keys(overrides).sort().join(','),
   };
 }
@@ -33,7 +34,7 @@ function serversWith(overrides: Record<string, unknown>): ResolvedMcpServers {
 describe('ProviderMcpAdapter transport validation (MCP-TRANSPORT-VALIDATE)', () => {
   it('Given an empty server set, When validated, Then it is MCP-disabled and does not throw (要件29)', () => {
     const adapter = createMcpAdapter('claude-sdk');
-    const empty: ResolvedMcpServers = { enabled: false, servers: {}, identity: '' };
+    const empty: ResolvedMcpServers = { enabled: false, servers: {}, serverNames: [], identity: '' };
     expect(() => adapter.validate(empty)).not.toThrow();
   });
 

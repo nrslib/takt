@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkflowStep } from '../core/models/types.js';
 import { runStatusJudgmentPhase } from '../core/workflow/status-judgment-phase.js';
 import { runAgent } from '../agents/runner.js';
-import { PromptBasedStructuredCaller } from '../agents/structured-caller.js';
+import { ProviderNeutralStructuredCaller } from '../agents/structured-caller.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 
 vi.mock('../agents/runner.js', () => ({
@@ -118,6 +118,7 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
 
   it('passes childProcessEnv to phase 3 structured caller judgment', async () => {
     const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
+    const failureDir = '/tmp/project/.takt/runs/sample/failures';
     const structuredCaller = {
       judgeStatus: vi.fn().mockImplementation(async (_structured, _tag, _rules, options) => {
         options.onStructuredPromptResolved?.({
@@ -145,6 +146,7 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
       lastResponse: 'response body',
       iteration: 2,
       childProcessEnv,
+      failureDir,
       resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'codex', model: 'gpt-5.2-codex' }),
       structuredCaller,
     } as Parameters<typeof runStatusJudgmentPhase>[1] & {
@@ -158,7 +160,7 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
         { label: 'needs_fix' },
         { label: 'approved' },
       ],
-      expect.objectContaining({ childProcessEnv }),
+      expect.objectContaining({ childProcessEnv, failureDir }),
     );
   });
 
@@ -252,7 +254,7 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
       lastResponse: 'response body',
       iteration: 2,
       resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'cursor', model: undefined }),
-      structuredCaller: new PromptBasedStructuredCaller(),
+      structuredCaller: new ProviderNeutralStructuredCaller(),
       onProviderAttempt,
     } as Parameters<typeof runStatusJudgmentPhase>[1])).rejects.toThrow('tag attempt rejected');
 
@@ -278,7 +280,8 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
       .mockResolvedValueOnce({
         persona: 'conductor',
         status: 'done',
-        content: 'no matching tag',
+        content: '',
+        structuredOutput: { content: 'no matching tag' },
         timestamp: new Date(),
       })
       .mockRejectedValueOnce(new Error('ai judge attempt rejected'));
@@ -301,7 +304,7 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
       lastResponse: 'response body',
       iteration: 2,
       resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'cursor', model: undefined }),
-      structuredCaller: new PromptBasedStructuredCaller(),
+      structuredCaller: new ProviderNeutralStructuredCaller(),
       onProviderAttempt,
     } as Parameters<typeof runStatusJudgmentPhase>[1])).rejects.toThrow('ai judge attempt rejected');
 

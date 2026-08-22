@@ -4,26 +4,20 @@
 
 Split modules by domain (network, database, application layer). Do not create generic utility modules.
 
-| Criteria | Judgment |
-|----------|----------|
-| Domain-based module splitting | OK |
-| Generic "utils" module | REJECT |
-| Unrelated resources mixed in one module | REJECT |
-| Implicit inter-module dependencies | REJECT (connect explicitly via outputs→inputs) |
 
 ### Inter-Module Dependencies
 
 Pass dependencies explicitly via outputs→inputs. Avoid implicit references (using `data` sources to look up other module resources).
 
 ```hcl
-# OK - Explicit dependency
+# Example: Explicit dependency
 module "database" {
   source     = "../../modules/database"
   vpc_id     = module.network.vpc_id
   subnet_ids = module.network.private_subnet_ids
 }
 
-# NG - Implicit dependency
+# Avoid: Implicit dependency
 module "database" {
   source = "../../modules/database"
   # vpc_id not passed; module uses data "aws_vpc" internally
@@ -35,7 +29,7 @@ module "database" {
 Pass identification variables (environment, service name) explicitly from root to child modules. Do not rely on globals or hardcoding.
 
 ```hcl
-# OK - Explicit passthrough
+# Example: Explicit passthrough
 module "database" {
   environment      = var.environment
   service          = var.service
@@ -47,15 +41,9 @@ module "database" {
 
 Compute `name_prefix` in `locals` and apply consistently to all resources. Append resource-specific suffixes.
 
-| Criteria | Judgment |
-|----------|----------|
-| Unified naming with `name_prefix` pattern | OK |
-| Inconsistent naming across resources | REJECT |
-| Name exceeds AWS character limits | REJECT |
-| Tag names not in PascalCase | Warning |
 
 ```hcl
-# OK - Unified with name_prefix
+# Example: Unified with name_prefix
 locals {
   name_prefix = "${var.environment}-${var.service}-${var.application_name}"
 }
@@ -64,7 +52,7 @@ resource "aws_ecs_cluster" "main" {
   name = "${local.name_prefix}-cluster"
 }
 
-# NG - Inconsistent naming
+# Avoid: Inconsistent naming
 resource "aws_ecs_cluster" "main" {
   name = "${var.environment}-app-cluster"
 }
@@ -77,21 +65,16 @@ AWS services have name character limits. Use shortened forms when approaching li
 | Service | Limit | Example |
 |---------|-------|---------|
 | Target Group | 32 chars | `${var.environment}-${var.service}-backend-tg` |
-| Lambda Function | 64 chars | Full prefix OK |
-| S3 Bucket | 63 chars | Full prefix OK |
+| Lambda Function | 64 chars | Full prefix fits |
+| S3 Bucket | 63 chars | Full prefix fits |
 
 ## Tagging Strategy
 
 Use provider `default_tags` for common tags. No duplicate tagging on individual resources.
 
-| Criteria | Judgment |
-|----------|----------|
-| Centralized via provider `default_tags` | OK |
-| Duplicate tags matching `default_tags` on individual resources | Warning |
-| Only `Name` tag added on individual resources | OK |
 
 ```hcl
-# OK - Centralized, individual gets Name only
+# Example: Centralized, individual gets Name only
 provider "aws" {
   default_tags {
     tags = {
@@ -107,7 +90,7 @@ resource "aws_instance" "main" {
   }
 }
 
-# NG - Duplicates default_tags
+# Avoid: Duplicates default_tags
 resource "aws_instance" "main" {
   tags = {
     Environment = var.environment
@@ -161,7 +144,7 @@ environments/
 Block all public access with all four settings. Use OAC (Origin Access Control) for CloudFront distributions.
 
 ```hcl
-# OK - Complete block
+# Example: Complete block
 resource "aws_s3_bucket_public_access_block" "this" {
   block_public_acls       = true
   block_public_policy     = true
@@ -180,12 +163,12 @@ resource "aws_s3_bucket_public_access_block" "this" {
 
 ### Secret Management
 
-| Method | Recommendation |
-|--------|---------------|
-| SSM Parameter Store (SecureString) | Recommended |
-| Secrets Manager | Recommended (when rotation needed) |
-| Direct in `.tfvars` | Conditional OK (gitignore required) |
-| Hardcoded in `.tf` files | REJECT |
+| Method | Usage |
+|--------|-------|
+| SSM Parameter Store (SecureString) | Manage as a parameter |
+| Secrets Manager | Use when rotation is required |
+| Direct in `.tfvars` | Check gitignore and the injection boundary |
+| Hardcoded in `.tf` files | Keep out of the secret-management path |
 
 Set SSM Parameter initial values to placeholders and use `lifecycle { ignore_changes = [value] }` to manage outside Terraform.
 
@@ -200,7 +183,7 @@ Document trade-offs with inline comments for cost-impacting choices.
 | EC2 + EBS vs RDS | EC2 ~$15-20/mo vs RDS ~$50+/mo | Higher operational burden |
 
 ```hcl
-# OK - Trade-off documented
+# Example: Trade-off documented
 # Using t3.nano instead of NAT Gateway (~$3-4/mo vs ~$32/mo)
 # Trade-off: single-AZ availability, throughput limits
 resource "aws_instance" "nat" {
@@ -217,14 +200,14 @@ resource "aws_instance" "nat" {
 | `create_before_destroy` | Prevent downtime | Load balancers, security groups |
 
 ```hcl
-# OK - Prevent accidental database deletion
+# Example: Prevent accidental database deletion
 resource "aws_instance" "database" {
   lifecycle {
     prevent_destroy = true
   }
 }
 
-# OK - Let Auto Scaling manage desired_count
+# Example: Let Auto Scaling manage desired_count
 resource "aws_ecs_service" "main" {
   lifecycle {
     ignore_changes = [desired_count]

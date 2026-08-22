@@ -6,28 +6,33 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-TAKT (TAKT Agent Koordination Topology) is a multi-agent orchestration CLI. It runs AI agents (Claude, Codex, OpenCode, Cursor, Copilot) through YAML-defined workflows: a state machine of steps with rule-based routing, parallel review sub-steps, dynamic task decomposition, worktree-isolated execution, and an optional Finding Contract subsystem that tracks review findings in a per-run SQLite ledger. TAKT is dogfooded — this repository uses TAKT itself for review and development.
+TAKT (TAKT Agent Koordination Topology) is a multi-agent orchestration CLI. It runs AI agents through YAML-defined workflows with rule-based routing, parallel review, dynamic task decomposition, and worktree-isolated execution. This repository dogfoods TAKT for its own review and development.
 
 ## Development Commands
 
 | Command | Notes |
 |---------|-------|
-| `npm run build` | `tsc` (+ prompt-evals tsconfig) plus copies of `src/shared/prompts/{en,ja}/**/*.md`, `src/shared/i18n/*.yaml`, and `src/core/runtime/presets/*.sh` into `dist/`. Skipping any copy breaks runtime resolution. |
+| `npm run build` | `tsc` (+ opencode-probe tsconfig) plus copies of `src/shared/prompts/{en,ja}/**/*.md`, `src/shared/i18n/*.yaml`, and `src/core/runtime/presets/*.sh` into `dist/`. Skipping any copy breaks runtime resolution. |
 | `npm run watch` | TypeScript incremental build (no asset copy). |
 | `npm run lint` | ESLint on `src/`. `no-explicit-any` is error; unused vars must be prefixed `_`. |
-| `npm test` | Fast unit gate: type-contracts tsc, then 4 shards launched **concurrently** (`Promise.all` in `scripts/run-npm-test.mjs`, each shard `--maxWorkers=1`). Excludes integration/regression/performance tests. |
-| `npm run test:it` | Integration gate: parallel IT slice (`it-*`, `*.integration/regression/performance.test.ts`), then the serial group. |
-| `npm test -- src/__tests__/<file>.test.ts` | Route a single file to the correct runner (unit, parallel-IT, or serial). Multiple routed runners execute sequentially and return the first failing exit code. |
+| `npm test` | Fast unit gate: type-contracts tsc, the test type-check (`tsconfig.tests.json`), then 4 shards launched **concurrently** (`Promise.all` in `scripts/run-npm-test.mjs`, each shard `--maxWorkers=1`). Excludes integration tests; the output names the follow-up command. |
+| `npm run test:it` | Light integration gate for real filesystem, bounded storage, and multi-component contracts. Run after implementation. |
+| `npm run test:it:heavy` | Full heavy integration gate for real child processes, Git, complete engines, integration/regression/performance suites, and serial groups. Local execution uses one worker; PR CI shards across isolated runners. |
+| `npm test -- src/__tests__/<file>.test.ts` | Route a single file to the correct unit, light-IT, heavy-parallel-IT, or heavy-serial-IT runner. For an added or changed IT, also run `releaseVerificationWiring.test.ts` by itself. Always target-run an added or changed heavy IT before handoff. |
 | `npm test -- -t "<pattern>"` | Run unit tests whose name matches `<pattern>`. |
-| `npm run test:prompt-evals` | Deterministic OpenCode prompt-eval smoke gate (11 cases, no API cost). Part of `check:release`; not part of routine gates. |
-| `npm run test:e2e:mock` | Full mock-provider E2E suite (parallel shards). Single spec: `npx vitest run --config vitest.config.e2e.mock.ts e2e/specs/<file>.e2e.ts`. |
+| `npm run test:opencode-probe` | Deterministic OpenCode probe smoke gate (11 cases, no API cost). Standalone; not part of routine gates or `check:release`. |
+| `npm run test:e2e:mock` | Full mock-provider E2E suite (parallel shards). Single spec: `TAKT_E2E_PROVIDER=mock npx vitest run --config vitest.config.e2e.mock.ts e2e/specs/<file>.e2e.ts` — **without that env var the specs run against the real provider** (`provider: claude` in `e2e/fixtures/config.e2e.yaml`) and cost API credits. |
 | `npm run test:e2e:provider:{claude,claude-sdk,codex,opencode,cursor}` | E2E against a real provider (slow, costs API credits). |
-| `npm run check:release` | Full pre-release gate: build + lint + test + test:it + prompt-evals + e2e. |
+| `npm run check:release` | Full pre-release gate: build + lint + fast 4-shard unit + light IT + heavy IT + e2e. |
+
+**Vitest strips types, so a test only gets type-checked if it is listed in `tsconfig.tests.json`.** Add the test you wrote or changed to that list; if an older test does not type-check yet, fix it first rather than leaving it off.
 
 ### Test pool behavior (worth knowing before "fixing" flakes)
 
-- Serial-group membership lives in `scripts/test-classification.mjs` (`serialGitTestFiles`). Membership is about **measured IO interference** (fsync/spawnSync storms that block a worker past vitest's 60s birpc deadline), not correctness. Add files only with a measured reason; `releaseVerificationWiring.test.ts` fails if a listed file does not exist.
-- `dangerouslyIgnoreUnhandledErrors: !process.env.CI` (vitest.config.shared.ts): the spurious `[vitest-worker]: Timeout calling "onTaskUpdate"` error is tolerated locally (4 concurrent shards on one machine) but **fatal on CI**. The parallel IT slice runs single-worker on CI (`maxWorkers: process.env.CI ? 1 : 4`) for the same reason.
+- Test-layer membership lives in `scripts/test-classification.mjs`. `lightIntegrationTestFiles` covers bounded filesystem/storage and component contracts; `heavyParallelIntegrationTestFiles`, integration filename globs, and the serial groups cover real processes, Git, full engines, and measured IO interference. `releaseVerificationWiring.test.ts` fails if a listed file does not exist, overlaps another group, or leaves an observed boundary in unit.
+- `dangerouslyIgnoreUnhandledErrors: !process.env.CI` (vitest.config.shared.ts): the spurious `[vitest-worker]: Timeout calling "onTaskUpdate"` error is tolerated locally (4 concurrent unit shards on one machine) but **fatal on CI**. Heavy parallel IT always uses one worker per runner; PR CI scales out through four isolated job-level shards, while local full-heavy execution stays serial.
+- Because that noise still makes a shard exit non-zero locally, `npm test` re-measures such a shard **once** (`scripts/vitest-birpc-noise.mjs`): only when the shard's own output shows zero failed tests, at least one passed test, and no reported error other than `[vitest-worker]: Timeout calling "onTaskUpdate"`. One real test failure, one unrecognized error headline, or `CI` set → no re-measurement, exit code stands. The re-measurement is announced on stderr; a silent shard exit is never rescued. The same one-time re-measurement now applies to `npm run test:e2e:mock` shards after the parallel wave completes.
+- Reading that output means unit and mock E2E shards run through a pipe (`scripts/teed-command.mjs`) instead of inheriting the terminal, so **`npm test` and `npm run test:e2e:mock` output is now non-TTY: no color and no live progress rewriting**. That module takes the exit code from `exit` and gives `close` only a short deadline — a shard's grandchild can hold the stdout pipe open forever, and waiting on `close` alone hangs the gate.
 - `src/__tests__/test-setup.ts` clears `TAKT_CONFIG_DIR` / `TAKT_NOTIFY_WEBHOOK` per test and provides an isolated config root — don't add per-suite env overrides that fight it.
 
 ## CLI Surface
@@ -43,13 +48,12 @@ Two execution modes share the same engine: **Interactive** (`src/features/intera
 ```text
 app/cli/       CLI entrypoint, command wiring, routing
 core/          Engine internals — no IO providers here
-  workflow/    Engine, step executors, rule evaluation, instruction builder,
-               findings/ (Finding Contract engine)
+  workflow/    Engine, step executors, rule evaluation, instruction builder
   config/      Workflow/global/project config models
-  models/      Shared domain types + Zod schemas (schemas.ts, finding-*.ts)
+  models/      Shared domain types + Zod schemas
   runtime/     Runtime environment & shell presets
 features/      User-facing feature modules (interactive, pipeline, tasks, ...)
-infra/         Adapters — providers, fs, git/github/gitlab, finding-storage,
+infra/         Adapters — providers, fs, git/github/gitlab,
                observability, config loaders
 shared/        Constants, i18n, ui, utils, prompt templates
 agents/        agent-usecases (executeAgent, generateReport, judgeStatus, ...)
@@ -65,7 +69,7 @@ Each normal step runs up to three phases on the same provider session: Phase 1 m
 
 ### Rule evaluation (5-stage fallback)
 
-`src/core/workflow/evaluation/` — first match wins: (1) aggregate `all()`/`any()` for parallel parents, (2) Phase 3 `[STEP:N]` tag, (3) Phase 1 tag, (4) AI judge for `ai("...")` conditions, (5) AI judge over every condition. Deterministic `when(...)` expressions (e.g. `findings.*`) are evaluated before tags. Quirks: tag rules match by array **index**; multiple tags → last match wins; if rules exist but nothing matches the workflow **fails fast** — silently picking a default is a bug.
+`src/core/workflow/evaluation/` — first match wins: (1) aggregate `all()`/`any()` for parallel parents, (2) Phase 3 `[STEP:N]` tag, (3) Phase 1 tag, (4) AI judge for `ai("...")` conditions, (5) AI judge over every condition. Deterministic `when(...)` expressions are evaluated before tags. Quirks: tag rules match by array **index**; multiple tags → last match wins; if rules exist but nothing matches the workflow **fails fast** — silently picking a default is a bug.
 
 ### Instruction assembly
 
@@ -73,7 +77,7 @@ Each normal step runs up to three phases on the same provider session: Phase 1 m
 
 ### Provider integration
 
-`src/infra/providers/` exposes a unified `Provider` interface. Registered: `claude-sdk`, `claude` (headless CLI), `codex`, `opencode` (shared server pool), `cursor`, `copilot`, `mock`. **Provider errors must surface through `AgentResponse.error`** — otherwise SDK failures appear as empty `blocked` output and are nearly impossible to debug. Use `--provider mock` to exercise the engine without a real API.
+`src/infra/providers/` exposes a unified `Provider` interface. Registered: `claude-sdk`, `claude` (headless CLI), `codex`, `opencode` (shared server pool), `pi` (Pi SDK), `deepseek-harness` (official Python SDK bridge), `cursor`, `copilot`, `kiro`, `mock`. **Provider errors must surface through `AgentResponse.error`** — otherwise SDK failures appear as empty `blocked` output and are nearly impossible to debug. Use `--provider mock` to exercise the engine without a real API.
 
 ### Provider/model resolution priority
 
@@ -88,29 +92,13 @@ Verified against `resolveStepProviderModel` / `PROVIDER_MODEL_SOURCE_PRIORITY` a
 7. Auto routing (`auto.rules` / `auto.dynamic` / `auto.fallback`)
 8. Workflow → project (`.takt/config.yaml`) → global (`~/.takt/config.yaml`) → provider default
 
-Synthetic Finding Contract roles route by persona key: `findings-manager`, `supervisor` (adjudication), `loop-judge` (loop monitors).
-
-### Finding Contract (FC)
-
-Optional per-run SQLite ledger (`finding-contract.sqlite`) that makes review findings durable and machine-verified. **Activates only when a workflow defines `finding_contract:`** — non-FC workflows are unaffected. Core pieces (`src/core/workflow/findings/`, storage in `src/infra/finding-storage/`):
-
-- Reviewers emit structured raw findings via `*-finding-contract` output contracts; the engine verifies quotes/anchors byte-exact against files.
-- The **manager** (persona `findings-manager`) runs after each FC review step: admission, same/new identity judgment (dedup merge), rejected-observation recording. It **cannot** dismiss findings.
-- **Terminal/conflict adjudication** (adjudicator, default derived from `supervisor` persona) dismisses or settles findings — every dismissal basis requires machine-verifiable evidence (byte-exact quotes or task-scope quotes). Terminal authority is granted only via `finding_contract_authority: terminal_adjudication` on a workflow call, never by configuration alone.
-- Lifecycle identity across rounds: `new` / `persists` / `reopened` / `resolved`; resolution is lifecycle-continuity based and requires verified confirmation — "I fixed it" alone never resolves.
-- Provider calls run under persistent leases (reserved→dispatched→settled) with input/output/call budgets in the ledger; `stop_budget.max_rounds` guarantees finite termination.
-- `finding_contract.manager` accepts `persona/instruction/output_contract`, optional `policy`/`knowledge` additions, and `provider`/`model`. `finding_contract.adjudicator` (optional) accepts `persona/instruction/provider/model`; when omitted the supervisor auto-derivation keeps prompts byte-identical (guarded by golden-baseline tests — do not regenerate goldens to make a change pass).
-- Manager/adjudicator prompt wire formats (structured output schemas, allowed actions, evidence requirements) are **engine-owned**; facets add judgment guidance only.
-
-Workflows: `takt-default` (non-FC, prompt-adjudication step) and `takt-default-fc` (FC; no adjudication step — manager + terminal adjudication replace it). The FC fix/plan/monitor instructions treat the engine-injected live ledger state as the single source of truth; report files are not authoritative there.
-
 ### Config & workflow loading
 
 `src/infra/config/loaders/`. Workflow resolution is 3-layer with project priority: `.takt/workflows/` → `~/.takt/workflows/` → bundled `builtins/{lang}/workflows/`. Zod schemas in `src/core/models/schemas.ts` (Zod v4). Load-time provider validation for workflow_call chains uses the same routing transformation helpers as runtime (`workflow-call-provider-context.ts`) — keep them shared; divergence between load-time and runtime resolution is a bug class we have shipped before.
 
 ### Worktree-isolated execution
 
-`worktree: true` runs a task in a `git clone --shared` (not a real git worktree — Claude Code follows `.git`-file `gitdir:` pointers back to the main repo, which breaks isolation). Clones are ephemeral (auto-commit + push on success, deleted after), contain only tracked files, and cannot resume sessions (`cwd !== projectCwd`). `cwd` = clone path, `projectCwd` = repo root; reports go to `cwd/.takt/runs/{slug}/reports/`.
+`worktree: true` runs a task in a clone created with `git clone --reference <main-repo> --dissociate` (plain `git clone` when the project is itself a linked worktree, or as fallback when the reference repo is shallow) — not a real git worktree, because Claude Code follows `.git`-file `gitdir:` pointers back to the main repo, which breaks isolation. Clones are ephemeral (auto-commit + push on success, deleted after), contain only tracked files, and cannot resume sessions (`cwd !== projectCwd`). `cwd` = clone path, `projectCwd` = repo root; reports go to `cwd/.takt/runs/{slug}/reports/`.
 
 ## Faceted Prompting
 
@@ -126,8 +114,6 @@ Prompts are split into facet kinds — keep additions in the right bucket:
 
 Output contracts live under `facets/output-contracts/`. User overrides: `~/.takt/facets/<type>/` or `.takt/facets/<type>/`.
 
-**No FC conditionals in shared facets.** Never write "if Finding Contract state exists, …" branches into a shared instruction. The pattern is: a standard variant (report-based, zero FC vocabulary), an FC variant (`*-finding-contract`, live-ledger-based), and shared body extracted to partials. Workflows wire the right variant. Structural tests pin that standard facets stay FC-free after partial expansion.
-
 ## Runtime directory layout
 
 ```text
@@ -136,25 +122,24 @@ Output contracts live under `facets/output-contracts/`. User overrides: `~/.takt
   config.yaml           provider / provider_routing / quality gates / overrides
   workflows/, facets/   project-level overrides
   tasks.yaml, tasks/    queued task specs
-  runs/{slug}/          per-run reports + finding-contract.sqlite
+  runs/{slug}/          per-run reports, logs, metadata, and context
   logs/, events/        NDJSON session logs / analytics (gitignored)
 builtins/{en,ja}/       Bundled facets + workflows (read from dist/ at runtime)
 ```
 
 ## TypeScript / testing
 
-- ESM (`"type": "module"`); import paths use `.js` extensions in `.ts` sources. Strict TS with `noUncheckedIndexedAccess`. Node ≥ 18.19.
+- ESM (`"type": "module"`); import paths use `.js` extensions in `.ts` sources. Strict TS with `noUncheckedIndexedAccess`. Node ≥ 22.22 (floor set by dependency engines — pi SDK needs 22.19, dev-only posthog-node/promptfoo need 22.22; see `engines` in package.json).
 - Unit and integration tests live under `src/__tests__/` (Vitest); E2E specs under `e2e/` with per-provider configs.
-- Tests that hand-build normalized `WorkflowConfig` objects with a finding contract must include an `adjudicator` — engine construction pre-validates all synthetic FC roles.
 
 ## Debugging
 
 - `logging.debug: true` in `~/.takt/config.yaml` → debug logs under `.takt/runs/debug-{timestamp}/logs/`. `TAKT_VERBOSE=true` for verbose console. Session logs at `.takt/logs/{sessionId}.jsonl`.
-- OpenCode's composed system prompt cannot be read from the binary or SDK; `prompt-evals/sdk-prompt-capture.mjs` points OpenCode at a local OpenAI-compatible probe endpoint and records real request bodies. Facts established with it (re-verify — OpenCode changes): the system prompt concatenates `agent.prompt` + the user's `~/.claude/CLAUDE.md` + skills + `config.instructions`; every prompt triggers a thread-title call on `small_model` before the real one (capture tooling that grabs the first request measures the title generator). Do not use `opencode run` (CLI) as a measurement instrument — it intermittently hangs; production uses `createOpencode` from the SDK.
+- OpenCode's composed system prompt cannot be read from the binary or SDK; `tools/opencode-probe/sdk-prompt-capture.mjs` points OpenCode at a local OpenAI-compatible probe endpoint and records real request bodies. Facts established with it (re-verify — OpenCode changes): the system prompt concatenates `agent.prompt` + the user's `~/.claude/CLAUDE.md` + skills + `config.instructions`; every prompt triggers a thread-title call on `small_model` before the real one (capture tooling that grabs the first request measures the title generator). Do not use `opencode run` (CLI) as a measurement instrument — it intermittently hangs; production uses `createOpencode` from the SDK.
 
 ## House conventions (from AGENTS.md / CONTRIBUTING.md)
 
-- Prefer simple code over defensive fallback-heavy logic. TAKT is a local tool: no audit trails, tamper-resistance, or security theater — the threat model is provider output and engine wiring mistakes, not hostile users editing their own files.
+- Prefer simple code over defensive fallback-heavy logic. TAKT is a local tool: no audit trails, tamper-resistance, or security theater.
 - Filenames mostly `kebab-case`. Conventional Commit style with occasional `(#issue)` suffix.
 - Don't commit secrets; provider keys live in env vars or `~/.takt/config.yaml`.
-- A TAKT review pass is recommended before a PR: `takt -t "#<PR>" -w review-takt-default`. For CodeRabbit comments: judge each, act on the valid ones, resolve every thread; don't post replies.
+- For CodeRabbit comments: judge each, act on the valid ones, resolve every thread; don't post replies.

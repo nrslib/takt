@@ -1,0 +1,1 @@
+## 結果: APPROVE / REJECT

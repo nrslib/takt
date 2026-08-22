@@ -8,10 +8,13 @@ params:
   plan_instruction:
     type: facet_ref
     facet_kind: instruction
+  plan_report_format:
+    type: facet_ref
+    facet_kind: report_format
 name: fix-plan
+capabilities: readonly
 tags:
   - plan
-  - review
 edit: false
 persona: planner
 policy:
@@ -19,13 +22,12 @@ policy:
   - $param: plan_policy
 knowledge:
   $param: fix_knowledge
-provider_options:
-  extends: review-readonly
 pass_previous_response: false
 instruction:
   $param: plan_instruction
 output_contracts:
   report:
     - name: fix-plan.md
-      format: fix-plan
+      format:
+        $param: plan_report_format
       use_judge: false

@@ -24,19 +24,20 @@ import type { AgentResponse } from '../core/models/index.js';
 
 const fakeAgentResponse: AgentResponse = {
   persona: 'test',
-  status: 'success',
+  status: 'done',
   content: '',
   timestamp: new Date(),
 };
 
 const observedIdentities: string[] = [];
+const dispose = vi.fn(async () => {});
 
 const fakeAdapter: ProviderMcpAdapter = {
   validate: vi.fn(),
   async prepare(servers: ResolvedMcpServers): Promise<PreparedProviderMcp> {
     observedIdentities.push(servers.identity);
     return {
-      dispose: async () => {},
+      dispose,
       serverConfig: {},
       identity: servers.identity,
     };
@@ -95,6 +96,7 @@ vi.mock('../core/logging/contracts.js', () => ({
 
 vi.mock('../shared/types/agent-failure.js', () => ({
   AGENT_FAILURE_CATEGORIES: { PROVIDER_ERROR: 'provider_error' },
+  MAX_AGENT_FAILURE_MESSAGE_BYTES: 8 * 1024,
 }));
 
 vi.mock('../shared/types/provider.js', async (importOriginal) => {
@@ -132,12 +134,32 @@ describe('Runner MCP pool identity propagation (MCP-POOL-IDENTITY-MISSING)', () 
         provider: 'opencode',
         model: 'sonnet',
         providerOptions: {},
-        permissionMode: 'default',
+        permissionMode: 'readonly',
       },
       mcpServers,
       mcpServerIdentity: 'common-tools:stdio',
     });
     expect(observedIdentities).toContain('common-tools:stdio');
+  });
+
+  it('Given an onPromptResolved failure, When runAgent fails before provider.call, Then the prepared MCP adapter is disposed', async () => {
+    const { runAgent } = await import('../agents/runner.js');
+
+    await expect(runAgent(undefined, 'task', {
+      cwd: '/tmp',
+      resolvedExecution: {
+        provider: 'opencode',
+        model: 'sonnet',
+        providerOptions: {},
+        permissionMode: 'readonly',
+      },
+      mcpServers,
+      onPromptResolved: () => {
+        throw new Error('prompt resolution failed');
+      },
+    })).rejects.toThrow('prompt resolution failed');
+
+    expect(dispose).toHaveBeenCalledTimes(1);
   });
 
   it('Given different mcpServerIdentity values, When runAgent executes opencode twice, Then the adapter receives different identities so pool keys differ (要件191-195,269,333)', async () => {
@@ -148,7 +170,7 @@ describe('Runner MCP pool identity propagation (MCP-POOL-IDENTITY-MISSING)', () 
         provider: 'opencode',
         model: 'sonnet',
         providerOptions: {},
-        permissionMode: 'default',
+        permissionMode: 'readonly',
       },
       mcpServers,
       mcpServerIdentity: 'set-a:stdio',
@@ -159,7 +181,7 @@ describe('Runner MCP pool identity propagation (MCP-POOL-IDENTITY-MISSING)', () 
         provider: 'opencode',
         model: 'sonnet',
         providerOptions: {},
-        permissionMode: 'default',
+        permissionMode: 'readonly',
       },
       mcpServers,
       mcpServerIdentity: 'set-b:stdio',
@@ -176,14 +198,15 @@ describe('Runner MCP pool identity propagation (MCP-POOL-IDENTITY-MISSING)', () 
         provider: 'opencode',
         model: 'sonnet',
         providerOptions: {},
-        permissionMode: 'default',
+        permissionMode: 'readonly',
       },
       mcpServers,
     });
-    // The fallback identity is computed via buildMcpServerSetIdentity, which
-    // produces "common-tools:stdio" for the single stdio server above. This
-    // ensures the identity is never empty (the pre-fix silent-collision case).
-    expect(observedIdentities).toContain('common-tools:stdio');
+    // The fallback identity is computed from the effective server structure,
+    // so it is never empty and isolates different command/transport settings.
+    expect(observedIdentities).toContain(
+      '["common-tools",{"type":"stdio","command":"srv-a","args":[]}]',
+    );
     expect(observedIdentities[0]).not.toBe('');
   });
 
@@ -195,7 +218,7 @@ describe('Runner MCP pool identity propagation (MCP-POOL-IDENTITY-MISSING)', () 
         provider: 'opencode',
         model: 'sonnet',
         providerOptions: {},
-        permissionMode: 'default',
+        permissionMode: 'readonly',
       },
       mcpServers,
       mcpServerIdentity: 'common-tools:stdio',
@@ -206,7 +229,7 @@ describe('Runner MCP pool identity propagation (MCP-POOL-IDENTITY-MISSING)', () 
         provider: 'opencode',
         model: 'sonnet',
         providerOptions: {},
-        permissionMode: 'default',
+        permissionMode: 'readonly',
       },
       mcpServers,
       mcpServerIdentity: 'common-tools:stdio',

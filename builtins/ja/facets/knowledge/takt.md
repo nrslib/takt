@@ -54,12 +54,6 @@ Provider.setup(AgentSetup) → ProviderAgent
 ProviderAgent.call(prompt, options) → AgentResponse
 ```
 
-| 基準 | 判定 |
-|------|------|
-| SDK 固有のエラーハンドリングが Provider 外に漏れている | REJECT |
-| AgentResponse.error にエラーを伝播していない | REJECT |
-| プロバイダー間でセッションキーが衝突する | REJECT |
-| セッションキー形式 `{persona}:{provider}` | OK |
 
 ### モデル解決
 
@@ -78,24 +72,11 @@ provider と model はフィールドごとに独立して解決される。上�
 
 TAKT では workflow 実行経路だけでなく、preview、doctor、workflow summary、validation、report も利用者に見える契約入口である。設定値、provider、model、tool、権限、出力契約を表示・検証する補助入口は、runtime と同じ正規化済み入力、resolver、override 順を使う。
 
-| 基準 | 判定 |
-|------|------|
-| runtime と preview が別々の入力で provider、model、tool、権限を解決している | REJECT |
-| preview に値が表示されるだけで、runtime と同じ override 条件を検証していない | REJECT |
-| doctor や validation が正常とする設定が runtime では別条件により失敗する | 警告 |
-| runtime と補助入口が同じ正規化済み入力または同じ resolver を共有している | OK |
 
 ## 実行資産の消費境界
 
 TAKT の実行資産は、配置場所や名前だけではなく、それを消費する入口で意味が決まる。同じ文字列でも、資産参照、セッション識別子、表示名、直接渡される本文は別契約として扱う。
 
-| 基準 | 判定 |
-|------|------|
-| 資産参照を解決する入口と、識別子だけを使う入口を同一視している | REJECT |
-| 同名の facet を追加しただけで、直接本文を渡す入口にも反映されると扱っている | REJECT |
-| workflow 由来の実行資産と機能固有の実行資産が同じ責務名で混在している | 警告 |
-| 入口ごとに、どの resolver / loader がどの資産種別を消費するかを確認して配置している | OK |
-| 共有すべき本文を、既存の実行資産 loader から読む形に集約している | OK |
 
 ### 参照名と識別名
 
@@ -109,11 +90,6 @@ faceted-prompting モジュールは TAKT 本体に依存しない独立モジ�
 compose(facets, options) → ComposedPrompt { systemPrompt, userMessage }
 ```
 
-| 基準 | 判定 |
-|------|------|
-| faceted-prompting から TAKT コアへの import | REJECT |
-| TAKT コアから faceted-prompting への依存 | OK |
-| ファセットパス解決のロジックが faceted-prompting 外にある | 警告 |
 
 ### ファセット解決の3層優先順位
 
@@ -121,25 +97,38 @@ compose(facets, options) → ComposedPrompt { systemPrompt, userMessage }
 
 同名ファセットは上位が優先。ビルトインのカスタマイズは上位層でオーバーライドする。
 
-## テストパターン
+## テストレイヤーと実行ゲート
 
-vitest を使用。テストファイルの命名規約で種別を区別する。
+TAKT は、テスト名や所要時間ではなく実際にまたぐ境界で unit、軽い IT、重い IT、E2E を分類する。実子プロセスを起動しても、利用者の入口ではなく内部 client からローカルの偽 CLI を呼ぶ検証なら E2E ではなく重い IT である。
 
-| プレフィックス | 種別 | 内容 |
-|--------------|------|------|
-| なし | ユニットテスト | 個別関数・クラスの検証 |
-| `it-` | 統合テスト | ワークフロー実行のシミュレーション |
-| `engine-` | エンジンテスト | WorkflowEngine シナリオ検証 |
+| レイヤー | 境界 | 標準ゲート |
+|---------|------|-----------|
+| unit | 個別関数・クラス。直接依存を test double に置き換え、実 process・Git・filesystem・workflow engine を使わない | `npm test` |
+| 軽い IT | 実 filesystem・bounded storage、または複数の本番コンポーネントを結合するが、高負荷な process / engine 実行を伴わない | `npm run test:it` |
+| 重い IT | 実 child process・Git・完全な WorkflowEngine / TeamLeader、または計測上 serial 実行が必要な高負荷ケース | `npm run test:it:heavy` |
+| E2E | 利用者が使う CLI などの公開入口からアプリケーション全体を実行し、利用者から見える結果を観測する | provider 別 E2E gate |
+
+### 開発時の実行順
+
+| 状態 | 実行 |
+|------|------|
+| 実装中 | unit gate を反復する |
+| 実装完了時 | unit gate の後に軽い IT gate を実行する |
+| IT を追加・変更した | 分類契約テスト `releaseVerificationWiring.test.ts` を単体実行する |
+| 重い IT を追加・変更した | 全重い IT を待たず、変更したファイルを target 指定で自分で実行する |
+| Pull Request / release | 軽い IT と重い IT の全件を実行する |
+
+重い IT runner は、process・Git・同期 I/O の競合を避けるため1 workerで動く。ローカルの全件実行は直列であり、PR CI は重い parallel IT を独立 runner の4シャードへ分割し、serial groupも別 runnerへ分離する。`npm test -- <test-file>` は分類済みの対象を対応 runner へ送る。重い IT を追加・変更した担当者は、この target 実行を完了証拠として残し、PR での全重い IT だけに初回検証を委ねない。`npm run check:release` は unit、軽い IT、重い IT、prompt evaluation、E2E を順に実行する。
 
 ### Mock プロバイダー
 
 `--provider mock` でテスト用の決定論的レスポンスを返す。シナリオキューで複数ターンのテストを構成する。
 
 ```typescript
-// NG - テストでリアル API を呼ぶ
+// 避ける例: テストでリアル API を呼ぶ
 const response = await callClaude(prompt)
 
-// OK - Mock プロバイダーでシナリオを設定
+// 例: Mock プロバイダーでシナリオを設定
 setMockScenario([
   { persona: 'coder', status: 'done', content: '[STEP:1]\nDone.' },
   { persona: 'reviewer', status: 'done', content: '[STEP:1]\napproved' },
@@ -148,11 +137,6 @@ setMockScenario([
 
 ### テストの分離
 
-| 基準 | 判定 |
-|------|------|
-| テスト間でグローバル状態を共有 | REJECT |
-| 環境変数をテストセットアップでクリアしていない | 警告 |
-| E2E テストで実 API を前提としている | `provider` 指定の config で分離 |
 
 ## プラットフォーム優先度
 
@@ -162,11 +146,6 @@ TAKT では Windows を副次プラットフォームとして扱う。
 
 プロバイダーエラーは `AgentResponse.error` → セッションログ → コンソール出力の経路で伝播する。
 
-| 基準 | 判定 |
-|------|------|
-| SDK エラーが空の `blocked` ステータスになる | REJECT |
-| エラー詳細がセッションログに記録されない | REJECT |
-| エラー時に ABORT 遷移が定義されていない | 警告 |
 
 ## セッション管理
 
@@ -178,10 +157,7 @@ TAKT では Windows を副次プラットフォームとして扱う。
 
 Report Phase は Phase 1 の成果物を読む Phase 2 であり、readonly かつ tool-free の実行契約を持つ。report retry/fallback でも `permissionMode: readonly`、空の tool 許可、provider 能力 override（例: turn 上限）を落としてはならない。
 
-| 基準 | 判定 |
-|------|------|
-| `cwd !== projectCwd` でセッション再開している | REJECT |
-| セッションキーにプロバイダーが含まれない | REJECT（クロスプロバイダー汚染） |
-| 継続すべき Phase 間でセッションが切れている | REJECT（コンテキスト喪失） |
-| 新規セッション retry 成功後に、古い resumed session を残している | REJECT（意図しない resume） |
-| report retry/fallback で readonly、tool-free、能力 override が落ちている | REJECT |
+
+## 終了経路の完全性
+
+一時ファイルや外部リソースを生成する機能では、正常終了だけでなく、失敗、キャンセル、強制終了の各終端でも解放されるかを確認します。`process.exit()` と強制終了（SIGINT 連打、abort ハンドラの即時終了）は `finally` を実行しません。`finally` に依存した cleanup は、その内側で `process.exit` が呼ばれる経路や強制終了経路では迂回されます。リソースを生成する入口ごとに、終端の一覧（正常・失敗・キャンセル・強制終了）を作り、cleanup が実行されない終端を列挙してください。

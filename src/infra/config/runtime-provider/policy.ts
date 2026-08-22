@@ -17,11 +17,15 @@ import type {
   RuntimeProviderProfile,
   RuntimeProviderAssignment,
 } from './schema.js';
+import { hasActiveProviderContent } from './schema.js';
 
 export interface FlatProfile {
   provider?: string;
   model?: string;
   options?: Record<string, unknown>;
+  capabilities?: string | string[];
+  capabilitiesOriginProfile?: string;
+  permissionMode?: 'readonly' | 'edit' | 'full';
 }
 
 /**
@@ -29,6 +33,14 @@ export interface FlatProfile {
  * references, cyclic `extends`, and referenced profiles missing `provider`/`model`.
  */
 export function validateRuntimeProviderSection(section: RuntimeProviderSection): void {
+  if (hasActiveProviderContent(section) && section.defaults === undefined) {
+    throw new Error('runtime.yaml active provider section must specify `provider.defaults`');
+  }
+
+  if (section.defaults !== undefined && 'pool' in section.defaults) {
+    throw new Error('runtime.yaml `provider.defaults.pool` is not allowed; use `profile` or `ladder`');
+  }
+
   const flatProfiles = flattenProfiles(section.profiles ?? {});
   const poolNames = new Set(Object.keys(section.auto_routing?.pools ?? {}));
   validateReferences(section, flatProfiles, poolNames);
@@ -63,6 +75,15 @@ export function flattenProfiles(
     }
     if (profile.options !== undefined) {
       flat.options = profile.options;
+    }
+    if (profile.capabilities !== undefined) {
+      flat.capabilities = Array.isArray(profile.capabilities)
+        ? [...profile.capabilities]
+        : profile.capabilities;
+      flat.capabilitiesOriginProfile = name;
+    }
+    if (profile.permission_mode !== undefined) {
+      flat.permissionMode = profile.permission_mode;
     }
     resolving.delete(name);
     cache.set(name, flat);
@@ -101,6 +122,35 @@ function validateReferences(
       assertProfile(assignment.profile, referencedBy);
     } else if (assignment.pool !== undefined) {
       assertPool(assignment.pool, referencedBy);
+    } else if (assignment.ladder !== undefined) {
+      // Every stage of a ladder must resolve to a fully-defined profile up front (CT-LAD-5); an
+      // unresolved or incomplete stage fails fast here, never at the moment a promotion advances.
+      const seenProfiles = new Set<string>();
+      assignment.ladder.forEach((profileName, stage) => {
+        assertProfile(profileName, `${referencedBy} ladder[${stage}]`);
+        // Promotion is a monotonic escalation, so a stage that repeats an earlier profile is a
+        // self-reference / cycle in the ladder — the author asked for "stronger than itself".
+        if (seenProfiles.has(profileName)) {
+          throw new Error(
+            `Profile "${profileName}" is repeated by ${referencedBy} ladder[${stage}]; a ladder must escalate to a different profile at every stage`,
+          );
+        }
+        seenProfiles.add(profileName);
+      });
+    }
+  };
+
+  const assertTargetMaps = (
+    targets: RuntimeProviderSection['targets'] | undefined,
+    referencedBy: string,
+  ): void => {
+    for (const [mapName, map] of Object.entries(targets ?? {})) {
+      if (map === undefined) {
+        continue;
+      }
+      for (const [key, assignment] of Object.entries(map)) {
+        assertAssignment(assignment, `${referencedBy}.${mapName}.${key}`);
+      }
     }
   };
 
@@ -108,16 +158,13 @@ function validateReferences(
     assertAssignment(section.defaults, 'defaults');
   }
 
-  const targets = section.targets;
-  if (targets) {
-    for (const [mapName, map] of Object.entries(targets)) {
-      if (map === undefined) {
-        continue;
-      }
-      for (const [key, assignment] of Object.entries(map)) {
-        assertAssignment(assignment, `targets.${mapName}.${key}`);
-      }
+  assertTargetMaps(section.targets, 'targets');
+
+  for (const [assignmentName, assignmentSet] of Object.entries(section.assignments ?? {})) {
+    if (assignmentSet.defaults !== undefined) {
+      assertAssignment(assignmentSet.defaults, `assignments.${assignmentName}.defaults`);
     }
+    assertTargetMaps(assignmentSet.targets, `assignments.${assignmentName}.targets`);
   }
 
   const autoRouting = section.auto_routing;

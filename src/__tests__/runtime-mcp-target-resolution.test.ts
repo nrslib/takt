@@ -167,26 +167,32 @@ describe('resolveMcpAssignment — target resolution (MCP-RESOLVE)', () => {
     const section: McpAssignmentSection = {
       servers: baseServers(),
       defaults: { servers: ['common'] },
-      targets: { personas: { coder: { servers: ['nonexistent'] } } },
+      targets: { personas: { coder: { servers: ['missing-target'] } } },
     };
-    expect(() => resolveMcpAssignment(section, baseContext({ persona: 'coder' }))).toThrow(/nonexistent/);
+    expect(() => resolveMcpAssignment(section, baseContext({ persona: 'coder' }))).toThrow(
+      'MCP target personas.coder.servers references unknown server "missing-target"',
+    );
   });
 
   it('Given defaults referencing an unknown server, When resolved, Then it fails fast (要件12)', () => {
     const section: McpAssignmentSection = {
       servers: baseServers(),
-      defaults: { servers: ['unknown'] },
+      defaults: { servers: ['missing-default'] },
     };
-    expect(() => resolveMcpAssignment(section, baseContext())).toThrow(/unknown/);
+    expect(() => resolveMcpAssignment(section, baseContext())).toThrow(
+      'MCP target defaults.servers references unknown server "missing-default"',
+    );
   });
 
   it('Given an exclude referencing an unknown server, When resolved, Then it fails fast (要件12)', () => {
     const section: McpAssignmentSection = {
       servers: baseServers(),
       defaults: { servers: ['common'] },
-      targets: { personas: { coder: { exclude: ['unknown'] } } },
+      targets: { personas: { coder: { exclude: ['missing-exclude'] } } },
     };
-    expect(() => resolveMcpAssignment(section, baseContext({ persona: 'coder' }))).toThrow(/unknown/);
+    expect(() => resolveMcpAssignment(section, baseContext({ persona: 'coder' }))).toThrow(
+      'MCP target personas.coder.exclude references unknown server "missing-exclude"',
+    );
   });
 
   it('Given servers defined but not assigned, When resolved, Then they are NOT enabled (要件13)', () => {

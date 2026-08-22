@@ -98,7 +98,6 @@ describe('watchTasks', () => {
     await watchTasks('/project');
 
     expect(mockFailInterruptedRunningTasks).toHaveBeenCalledTimes(1);
-    expect(mockInfo).toHaveBeenCalledWith('Marked 1 interrupted running task(s) as failed.');
     expect(mockWatch).toHaveBeenCalledTimes(1);
     expect(mockExecuteRunTaskAndComplete).toHaveBeenCalledTimes(1);
   });

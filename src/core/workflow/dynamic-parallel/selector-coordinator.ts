@@ -1,4 +1,7 @@
-import { executeIsolatedStructuredInternalAgent } from '../../../agents/agent-usecases.js';
+import {
+  executeStructuredAgent,
+  StructuredAgentResponseError,
+} from '../../../agents/structured-caller/transport.js';
 import {
   isDynamicParallelSubSteps,
   type AgentResponse,
@@ -12,8 +15,15 @@ import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { recordAgentUsageEvent } from '../engine/agent-usage-event.js';
 import { buildDynamicParallelSelectionIdentityFromPath } from './identity.js';
 import { createDynamicParallelSelectionSnapshot, resolveDynamicParallelSelection } from './snapshot.js';
-import { createSelectorOutputSchema, validateSelectorResponse } from './selector-contract.js';
-import { buildDynamicSelectorInstruction } from './selector-input.js';
+import {
+  createSelectorContract,
+  SELECTOR_READ_ONLY_TOOLS,
+  validateSelectorResponse,
+} from '../selector-contract.js';
+import {
+  buildDynamicSelectorInstruction,
+  resolveSelectorReportNames,
+} from './selector-input.js';
 import { SelectorInputReader } from './selector-input-reader.js';
 import type { DynamicParallelSelectionStore } from './selection-store.js';
 import { truncateUtf8 } from '../../../shared/utils/utf8.js';
@@ -21,21 +31,29 @@ import {
   createBoundedSensitiveValues,
   sanitizeSensitiveTextWithKnownValues,
 } from '../../../shared/utils/sensitiveText.js';
+import type {
+  ProviderActivityCallback,
+  StreamCallback,
+} from '../../../shared/types/provider.js';
+import { resolveInternalAgentMcpServers } from '../../../infra/config/runtime-provider/mcp-assignment.js';
 
 const log = createLogger('dynamic-parallel-selector');
 const SELECTOR_RATIONALE_LOG_MAX_BYTES = 1024;
 
 export interface DynamicParallelSelectorCoordinatorDeps {
   readonly engineOptions: WorkflowEngineOptions;
+  readonly getAbortSignal?: () => AbortSignal | undefined;
+  readonly onStream?: StreamCallback;
+  readonly onActivity?: ProviderActivityCallback;
+  readonly failureDir: string;
   readonly selectionStore: DynamicParallelSelectionStore;
   readonly getCwd: () => string;
   readonly getReportDirectory: () => string;
+  readonly getReportsRootDirectory: () => string;
   readonly getReportNames: (step: WorkflowStep, state: WorkflowState) => readonly string[];
   readonly getWorkflowReference: () => string;
   readonly workflowCallPath: readonly WorkflowResumePointEntry[];
   readonly commitSelection: (
-    step: WorkflowStep,
-    iteration: number,
     identity: string,
     snapshot: import('../../models/types.js').DynamicParallelSelectionSnapshot,
   ) => Promise<void>;
@@ -49,56 +67,65 @@ export class DynamicParallelSelectorCoordinator {
     this.inputReader = deps.inputReader;
   }
 
+  private resolveAbortSignal(): AbortSignal | undefined {
+    return this.deps.getAbortSignal?.() ?? this.deps.engineOptions.abortSignal;
+  }
+
   async selectParticipants(step: WorkflowStep, state: WorkflowState, task: string): Promise<WorkflowStep[]> {
-    const signal = this.deps.engineOptions.abortSignal;
+    const signal = this.resolveAbortSignal();
     signal?.throwIfAborted();
     if (!step.parallel || !isDynamicParallelSubSteps(step.parallel)) {
       throw new Error(`Step "${step.name}" is not a dynamic parallel step`);
     }
     const identity = this.resolveIdentity(step.name);
     const selections = this.deps.selectionStore.snapshot();
-    const resumed = state.resumedDynamicParallelSteps.has(identity)
-      ? selections.get(identity)
-      : undefined;
-    if (resumed !== undefined) {
-      const effective = resolveDynamicParallelSelection(step.parallel, resumed);
-      signal?.throwIfAborted();
-      state.resumedDynamicParallelSteps.delete(identity);
-      state.activeDynamicParallelSelectionIdentity = identity;
-      this.logSelection(step, identity, resumed, 'resume');
-      signal?.throwIfAborted();
-      return effective;
-    }
     const selectorProvider = this.deps.engineOptions.selectorProvider;
     if (selectorProvider?.provider === undefined) {
       throw new Error(`Dynamic parallel selector for "${step.name}" has no resolved provider`);
     }
-    const poolIds = step.parallel.pool.map((subStep) => subStep.name);
-    const outputSchema = createSelectorOutputSchema(poolIds);
+    const selectorContract = createSelectorContract(step.parallel.pool.map(({ name, description }) => ({
+      name,
+      description,
+    })));
     const previous = selections.get(identity);
     if (this.inputReader === undefined) {
       throw new Error('Dynamic parallel selector requires an input reader');
     }
+    const reportDirectory = this.deps.getReportDirectory();
+    const reportNames = resolveSelectorReportNames({
+      reportDirectory,
+      reportsRootDirectory: this.deps.getReportsRootDirectory(),
+      reportNames: [...new Set([
+        ...this.deps.getReportNames(step, state),
+        ...(step.parallel.selection.reports ?? []),
+      ])],
+      stepName: step.name,
+      workflowReference: this.deps.getWorkflowReference(),
+      workflowCallPath: this.deps.workflowCallPath,
+    });
     const inputs = await this.inputReader.readInputs(
-      this.deps.getReportDirectory(),
-      this.deps.getReportNames(step, state),
+      reportDirectory,
+      reportNames,
       this.deps.getCwd(),
       signal,
     );
     signal?.throwIfAborted();
     const instruction = buildDynamicSelectorInstruction({
       task,
-      reports: inputs.reports,
-      workingTreeDiff: inputs.workingTreeDiff,
+      reportDirectory: inputs.reportDirectory,
+      reportNames: inputs.reportNames,
+      changedPaths: inputs.changedPaths,
       pool: step.parallel.pool,
       selection: step.parallel.selection,
+      selectorInstruction: step.parallel.selection.selector?.instruction,
       ...(previous === undefined ? {} : { previousSnapshot: previous }),
     });
     const sensitiveValues = createBoundedSensitiveValues();
     sensitiveValues.collect({
       task,
-      reports: inputs.reports,
-      working_tree_diff: inputs.workingTreeDiff,
+      report_directory: inputs.reportDirectory,
+      report_names: inputs.reportNames,
+      changed_paths: inputs.changedPaths,
       candidates: step.parallel.pool.map(({ name, description }) => ({ name, description })),
     });
     const redact = (text: string): string =>
@@ -109,25 +136,45 @@ export class DynamicParallelSelectorCoordinator {
     let snapshot: DynamicParallelSelectionSnapshot;
     let participants: WorkflowStep[];
     try {
-      response = await executeIsolatedStructuredInternalAgent(
-        'You are TAKT\'s internal dynamic parallel selector. Select only candidate IDs from the provided pool.',
+      const mcp = resolveInternalAgentMcpServers(this.deps.engineOptions.mcpAssignment);
+      response = await executeStructuredAgent(
         instruction,
-        outputSchema,
+        selectorContract.providerSchema,
         {
+          name: 'dynamic-parallel-selector',
           cwd: this.deps.getCwd(),
           projectCwd: this.deps.engineOptions.projectCwd,
-          abortSignal: this.deps.engineOptions.abortSignal,
+          persona: step.parallel.selection.selector?.persona,
+          workflowBundleResourceRoot: this.deps.engineOptions.workflowBundleResourceRoot,
+          systemPrompt: 'You are TAKT\'s internal dynamic parallel selector. Select only candidate IDs from the provided pool.',
+          abortSignal: signal,
+          onStream: this.deps.onStream,
+          onActivity: this.deps.onActivity,
           language: this.deps.engineOptions.language,
+          failureDir: this.deps.failureDir,
+          personaPath: step.parallel.selection.selector?.personaPath,
+          allowedTools: [...SELECTOR_READ_ONLY_TOOLS],
+          allowedToolsSource: 'synthetic',
           resolution: {
             provider: selectorProvider.provider,
             model: selectorProvider.model,
-            providerOptions: selectorProvider.providerOptions,
+            providerOptions: selectorProvider.providerOptions ?? {},
+            permissionMode: selectorProvider.permissionMode ?? 'readonly',
+            permissionModeSource: selectorProvider.permissionMode === undefined ? 'synthetic' : 'explicit',
           },
+          mcpServers: mcp.servers,
+          mcpServerIdentity: mcp.identity,
           mcpAssignment: this.deps.engineOptions.mcpAssignment,
         },
       );
       signal?.throwIfAborted();
-      selectorResult = validateSelectorResponse(response, outputSchema, step.name, redact, { label: 'Dynamic parallel' });
+      selectorResult = validateSelectorResponse(
+        response,
+        selectorContract.validationSchema,
+        step.name,
+        redact,
+        { label: 'Dynamic parallel' },
+      );
       signal?.throwIfAborted();
       const selectedIds = selectorResult.selectedIds;
       selected = new Set(step.parallel.selection.mode === 'cumulative'
@@ -143,6 +190,9 @@ export class DynamicParallelSelectorCoordinator {
       participants = resolveDynamicParallelSelection(step.parallel, snapshot);
       signal?.throwIfAborted();
     } catch (error) {
+      if (error instanceof StructuredAgentResponseError) {
+        response = error.response;
+      }
       recordAgentUsageEvent(
         this.deps.engineOptions,
         `dynamic-selector:${identity}`,
@@ -163,7 +213,7 @@ export class DynamicParallelSelectorCoordinator {
       response.providerUsage,
     );
     signal?.throwIfAborted();
-    await this.deps.commitSelection(step, state.iteration, identity, snapshot);
+    await this.deps.commitSelection(identity, snapshot);
     signal?.throwIfAborted();
     state.activeDynamicParallelSelectionIdentity = identity;
     this.logSelection(step, identity, snapshot, 'selector', {
@@ -187,7 +237,7 @@ export class DynamicParallelSelectorCoordinator {
     step: WorkflowStep,
     identity: string,
     snapshot: DynamicParallelSelectionSnapshot,
-    selectionSource: 'selector' | 'resume',
+    selectionSource: 'selector',
     selectorDetails?: {
       readonly selectorProvider: string;
       readonly selectorProviderSource: string | undefined;

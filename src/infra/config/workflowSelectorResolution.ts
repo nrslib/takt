@@ -1,30 +1,31 @@
 import {
   getAllParallelSubSteps,
   isDynamicParallelSubSteps,
+  isNormalOrTeamLeaderWorkflowStep,
   type WorkflowConfig,
+  type WorkflowStep,
 } from '../../core/models/types.js';
 import { MAX_WORKFLOW_CALL_DEPTH } from '../../core/workflow/workflow-call-depth.js';
 import { getWorkflowReference } from '../../core/workflow/workflow-reference.js';
 import type { ProviderType } from '../../shared/types/provider.js';
 import type { StepProviderOptions } from '../../core/models/workflow-types.js';
 import type { WorkflowCallResolver } from '../../core/workflow/types.js';
+import { DEFAULT_COMPANION_ENABLED } from '../../shared/constants.js';
 import { resolveWorkflowCallTarget } from './loaders/workflowCallResolver.js';
-import { collectWorkflowCallSteps } from './loaders/workflowParallelTraversal.js';
+import { collectReachableWorkflowCallSteps } from './loaders/workflowParallelTraversal.js';
 import {
-  assertProviderSupportsSelectorExecution,
-  resolveStrictInternalAgentNativeTools,
-} from '../providers/provider-capabilities.js';
-import {
-  resolveSelectorProviderForProject,
+  resolveSelectorProviderFromLegacyProject,
+  resolveSelectorProviderFromRuntimeEnvironment,
   type ResolvedSelectorProvider,
   type SelectorProviderOverrides,
 } from './selectorProviderResolution.js';
+import type { CompiledProviderEnvironment } from './runtime-provider/environment.js';
+import type { ProviderConfigMode } from './runtime-provider/mode.js';
 
 type ResolvedActiveSelectorProvider = ResolvedSelectorProvider & {
   readonly provider: ProviderType;
   readonly model: string | undefined;
-  readonly providerOptions: StepProviderOptions;
-  readonly nativeTools: readonly string[];
+  readonly providerOptions?: StepProviderOptions;
 };
 
 export type WorkflowSelectorResolution =
@@ -39,6 +40,9 @@ export interface WorkflowSelectorResolutionOptions {
   readonly lookupCwd: string;
   readonly overrides?: SelectorProviderOverrides;
   readonly workflowCallResolver?: WorkflowCallResolver;
+  readonly companionEnabled?: boolean;
+  readonly providerEnvironment: CompiledProviderEnvironment;
+  readonly providerConfigMode: ProviderConfigMode;
 }
 
 function hasDynamicParallel(workflow: WorkflowConfig): boolean {
@@ -49,8 +53,21 @@ function hasDynamicParallel(workflow: WorkflowConfig): boolean {
 }
 
 function hasDynamicFacets(workflow: WorkflowConfig): boolean {
-  return workflow.steps.some((step) =>
-    (step as { dynamicFacets?: unknown }).dynamicFacets !== undefined);
+  return workflow.steps.some(hasDynamicFacetsInStep);
+}
+
+function hasDynamicFacetsInStep(step: WorkflowStep): boolean {
+  if (isNormalOrTeamLeaderWorkflowStep(step) && step.dynamicFacets !== undefined) {
+    return true;
+  }
+  return step.parallel !== undefined
+    && getAllParallelSubSteps(step.parallel).some(hasDynamicFacetsInStep);
+}
+
+function hasCompanionPool(workflow: WorkflowConfig): boolean {
+  return workflow.steps.some((step) => (
+    (isNormalOrTeamLeaderWorkflowStep(step) ? step.companion?.pool.length ?? 0 : 0) > 0
+  ));
 }
 
 function workflowGraphHasDynamicFacets(
@@ -59,11 +76,12 @@ function workflowGraphHasDynamicFacets(
   activeReferences: ReadonlySet<string>,
   depth: number,
 ): boolean {
-  if (hasDynamicFacets(workflow)) {
+  const companionEnabled = options.companionEnabled ?? DEFAULT_COMPANION_ENABLED;
+  if (hasDynamicFacets(workflow) || (companionEnabled && hasCompanionPool(workflow))) {
     return true;
   }
 
-  for (const step of collectWorkflowCallSteps(workflow.steps)) {
+  for (const step of collectReachableWorkflowCallSteps(workflow)) {
     const childDepth = depth + 1;
     if (childDepth > MAX_WORKFLOW_CALL_DEPTH) {
       throw new Error(
@@ -113,7 +131,7 @@ function workflowGraphHasDynamicParallel(
     return true;
   }
 
-  for (const step of collectWorkflowCallSteps(workflow.steps)) {
+  for (const step of collectReachableWorkflowCallSteps(workflow)) {
     const childDepth = depth + 1;
     if (childDepth > MAX_WORKFLOW_CALL_DEPTH) {
       throw new Error(
@@ -155,29 +173,6 @@ function workflowGraphHasDynamicParallel(
   return false;
 }
 
-function resolveEffectiveSelectorProviderOptions(
-  provider: ProviderType,
-  providerOptions: StepProviderOptions | undefined,
-): StepProviderOptions {
-  const resolved = providerOptions ?? {};
-  if (provider !== 'claude' && provider !== 'claude-sdk' && provider !== 'claude-terminal') {
-    return resolved;
-  }
-  if ((resolved.claude?.allowedTools?.length ?? 0) > 0) {
-    throw new Error(
-      'Configuration error: takt_providers.selector.provider_options.claude.allowed_tools '
-      + 'must be empty for the strict read-only selector',
-    );
-  }
-  if (resolved.claude?.skills?.enabled === true) {
-    throw new Error(
-      'Configuration error: takt_providers.selector.provider_options.claude.skills.enabled '
-      + 'cannot be true for the strict read-only selector',
-    );
-  }
-  return resolved;
-}
-
 export function resolveWorkflowSelector(
   workflow: WorkflowConfig,
   options: WorkflowSelectorResolutionOptions,
@@ -198,26 +193,19 @@ export function resolveWorkflowSelector(
     return { applies: false };
   }
 
-  const selectorProvider = resolveSelectorProviderForProject(
-    options.projectCwd,
-    options.overrides,
-  );
+  const selectorProvider = options.providerConfigMode === 'runtime-v1'
+    ? resolveSelectorProviderFromRuntimeEnvironment(options.providerEnvironment, options.overrides)
+    : resolveSelectorProviderFromLegacyProject(options.projectCwd, options.overrides);
   if (selectorProvider.provider === undefined) {
     throw new Error('Dynamic selector has no resolved provider');
   }
-  assertProviderSupportsSelectorExecution(selectorProvider.provider);
-  const providerOptions = resolveEffectiveSelectorProviderOptions(
-    selectorProvider.provider,
-    selectorProvider.providerOptions,
-  );
   return {
     applies: true,
     selectorProvider: {
       ...selectorProvider,
       provider: selectorProvider.provider,
       model: selectorProvider.model,
-      providerOptions,
-      nativeTools: resolveStrictInternalAgentNativeTools(selectorProvider.provider),
+      providerOptions: selectorProvider.providerOptions,
     },
   };
 }

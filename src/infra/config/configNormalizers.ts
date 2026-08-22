@@ -16,7 +16,6 @@ import type { ProviderPermissionProfiles } from '../../core/models/provider-prof
 import type {
   AssistantConfig,
   AutoRoutingConfig,
-  FindingIntakeNormalizeConfig,
   WorkflowOverrides,
   PersonaProviderEntry,
   PipelineConfig,
@@ -33,20 +32,11 @@ import {
   type ConfigProviderReference,
 } from './providerReference.js';
 import {
+  assertValidCodexProviderOptions,
   assertAllowedNormalizedProviderBaseUrls,
   normalizeProviderOptions,
   type NormalizeProviderOptionsOptions,
 } from './providerOptions.js';
-
-type RawFindingIntakeNormalizeConfig = {
-  provider: ConfigProviderReference<FindingIntakeNormalizeConfig['provider']>;
-  model?: string;
-  targets?: Array<{
-    provider: FindingIntakeNormalizeConfig['provider'];
-    model: string;
-  }>;
-  provider_options?: Record<string, unknown>;
-};
 
 type RawProviderRoutingEntry = string | {
   type?: string;
@@ -126,83 +116,6 @@ function assertNormalizedProviderOptions(
   );
 }
 
-export function normalizeFindingIntakeNormalize(
-  raw: RawFindingIntakeNormalizeConfig | undefined,
-  options: NormalizeProviderOptionsOptions = {},
-): FindingIntakeNormalizeConfig | undefined {
-  if (raw === undefined) {
-    return undefined;
-  }
-
-  const normalizedReference = normalizeConfigProviderReferenceDetailed(
-    raw.provider,
-    raw.model,
-    raw.provider_options,
-    {
-      ...options,
-      pathPrefix: 'finding_contract.intake_normalize.provider_options',
-    },
-  );
-  if (raw.provider_options !== undefined) {
-    assertNormalizedProviderOptions('finding_contract.intake_normalize', normalizedReference.providerOptions);
-  }
-  if (normalizedReference.provider === undefined) {
-    throw new Error("Configuration error: finding_contract.intake_normalize.provider is required");
-  }
-  if (normalizedReference.model === undefined || normalizedReference.model.trim() === '') {
-    throw new Error("Configuration error: finding_contract.intake_normalize.model is required");
-  }
-
-  return {
-    provider: normalizedReference.provider,
-    model: normalizedReference.model,
-    ...(raw.targets !== undefined
-      ? {
-          targets: raw.targets.map((target) => ({
-            provider: target.provider,
-            model: target.model,
-          })),
-        }
-      : {}),
-    ...(normalizedReference.providerOptions !== undefined
-      ? { providerOptions: normalizedReference.providerOptions }
-      : {}),
-  };
-}
-
-export function denormalizeFindingIntakeNormalize(
-  config: FindingIntakeNormalizeConfig | undefined,
-): Record<string, unknown> | undefined {
-  if (config === undefined) {
-    return undefined;
-  }
-  if (config.provider === undefined) {
-    throw new Error("Configuration error: finding_contract.intake_normalize.provider is required");
-  }
-  if (config.model === undefined || config.model.trim() === '') {
-    throw new Error("Configuration error: finding_contract.intake_normalize.model is required");
-  }
-
-  const providerOptions = denormalizeProviderOptions(config.providerOptions);
-  if (config.providerOptions !== undefined) {
-    assertNormalizedProviderOptions('finding_contract.intake_normalize', providerOptions);
-  }
-
-  return {
-    provider: config.provider,
-    model: config.model,
-    ...(config.targets !== undefined
-      ? {
-          targets: config.targets.map((target) => ({
-            provider: target.provider,
-            model: target.model,
-          })),
-        }
-      : {}),
-    ...(providerOptions !== undefined ? { provider_options: providerOptions } : {}),
-  };
-}
-
 export function normalizeRuntime(
   runtime: { prepare?: string[] } | undefined,
 ): WorkflowRuntimeConfig | undefined {
@@ -277,6 +190,9 @@ export function denormalizeAutoRoutingConfig(
 ): RawAutoRoutingConfig | undefined {
   if (!config) {
     return undefined;
+  }
+  if (config.defaultPool === undefined) {
+    throw new Error('Cannot serialize auto routing without a default pool');
   }
   return {
     strategy: config.strategy,
@@ -607,21 +523,29 @@ export function normalizePipelineConfig(raw: {
 }
 
 export function normalizeAssistantConfig(
-  raw: { init_files?: string[] } | undefined,
+  raw: { init_files?: string[]; gherkin?: boolean } | undefined,
 ): AssistantConfig | undefined {
-  if (!raw?.init_files || raw.init_files.length === 0) {
+  const initFiles = raw?.init_files?.length ? raw.init_files : undefined;
+  if (initFiles === undefined && raw?.gherkin === undefined) {
     return undefined;
   }
-  return { initFiles: raw.init_files };
+  return {
+    ...(initFiles !== undefined ? { initFiles } : {}),
+    ...(raw?.gherkin !== undefined ? { gherkin: raw.gherkin } : {}),
+  };
 }
 
 export function denormalizeAssistantConfig(
   config: AssistantConfig | undefined,
-): { init_files: string[] } | undefined {
-  if (!config?.initFiles || config.initFiles.length === 0) {
+): { init_files?: string[]; gherkin?: boolean } | undefined {
+  const initFiles = config?.initFiles?.length ? config.initFiles : undefined;
+  if (initFiles === undefined && config?.gherkin === undefined) {
     return undefined;
   }
-  return { init_files: config.initFiles };
+  return {
+    ...(initFiles !== undefined ? { init_files: initFiles } : {}),
+    ...(config?.gherkin !== undefined ? { gherkin: config.gherkin } : {}),
+  };
 }
 
 export function normalizeTaktProviders(raw: {
@@ -735,12 +659,16 @@ export function denormalizeProviderOptions(
   if (!providerOptions) {
     return undefined;
   }
+  assertValidCodexProviderOptions(providerOptions);
 
   const raw: Record<string, unknown> = {};
   if (
     providerOptions.codex?.baseUrl !== undefined
     || providerOptions.codex?.networkAccess !== undefined
+    || providerOptions.codex?.permissionControl !== undefined
     || providerOptions.codex?.reasoningEffort !== undefined
+    || providerOptions.codex?.fastMode !== undefined
+    || providerOptions.codex?.guards?.callTimeoutMs !== undefined
     || providerOptions.codex?.skills?.repo !== undefined
     || providerOptions.codex?.skills?.user !== undefined
   ) {
@@ -751,8 +679,14 @@ export function denormalizeProviderOptions(
       ...(providerOptions.codex.networkAccess !== undefined
         ? { network_access: providerOptions.codex.networkAccess }
         : {}),
+      ...(providerOptions.codex.permissionControl !== undefined
+        ? { permission_control: providerOptions.codex.permissionControl }
+        : {}),
       ...(providerOptions.codex.reasoningEffort !== undefined
         ? { reasoning_effort: providerOptions.codex.reasoningEffort }
+        : {}),
+      ...(providerOptions.codex.fastMode !== undefined
+        ? { fast_mode: providerOptions.codex.fastMode }
         : {}),
       ...(providerOptions.codex.skills?.repo !== undefined || providerOptions.codex.skills?.user !== undefined
         ? {
@@ -810,6 +744,12 @@ export function denormalizeProviderOptions(
         : {}),
     };
   }
+  if (providerOptions.codex?.guards?.callTimeoutMs !== undefined) {
+    raw.codex = {
+      ...(raw.codex ?? {}),
+      guards: { call_timeout_ms: providerOptions.codex.guards.callTimeoutMs },
+    };
+  }
   if (providerOptions.claude) {
     const claude: Record<string, unknown> = {};
     if (providerOptions.claude.baseUrl !== undefined) {
@@ -820,6 +760,9 @@ export function denormalizeProviderOptions(
     }
     if (providerOptions.claude.effort !== undefined) {
       claude.effort = providerOptions.claude.effort;
+    }
+    if (providerOptions.claude.guards?.callTimeoutMs !== undefined) {
+      claude.guards = { call_timeout_ms: providerOptions.claude.guards.callTimeoutMs };
     }
     if (providerOptions.claude.skills?.enabled !== undefined) {
       claude.skills = { enabled: providerOptions.claude.skills.enabled };
@@ -838,16 +781,89 @@ export function denormalizeProviderOptions(
       raw.claude = claude;
     }
   }
-  if (providerOptions.copilot?.effort !== undefined) {
-    raw.copilot = { effort: providerOptions.copilot.effort };
+  if (providerOptions.copilot?.effort !== undefined || providerOptions.copilot?.guards?.callTimeoutMs !== undefined) {
+    raw.copilot = {
+      ...(providerOptions.copilot.effort !== undefined ? { effort: providerOptions.copilot.effort } : {}),
+      ...(providerOptions.copilot.guards?.callTimeoutMs !== undefined
+        ? { guards: { call_timeout_ms: providerOptions.copilot.guards.callTimeoutMs } }
+        : {}),
+    };
   }
-  if (providerOptions.kiro?.agent !== undefined) {
-    raw.kiro = { agent: providerOptions.kiro.agent };
+  if (providerOptions.kiro?.agent !== undefined || providerOptions.kiro?.guards?.callTimeoutMs !== undefined) {
+    raw.kiro = {
+      ...(providerOptions.kiro.agent !== undefined ? { agent: providerOptions.kiro.agent } : {}),
+      ...(providerOptions.kiro.guards?.callTimeoutMs !== undefined
+        ? { guards: { call_timeout_ms: providerOptions.kiro.guards.callTimeoutMs } }
+        : {}),
+    };
+  }
+  if (providerOptions.cursor?.guards?.callTimeoutMs !== undefined) {
+    raw.cursor = {
+      guards: {
+        ...(providerOptions.cursor.guards.callTimeoutMs !== undefined
+          ? { call_timeout_ms: providerOptions.cursor.guards.callTimeoutMs }
+          : {}),
+      },
+    };
+  }
+  if (providerOptions.deepseekHarness !== undefined) {
+    const deepseekHarness = {
+      ...(providerOptions.deepseekHarness.pythonPath !== undefined
+        ? { python_path: providerOptions.deepseekHarness.pythonPath }
+        : {}),
+      ...(providerOptions.deepseekHarness.baseUrl !== undefined
+        ? { base_url: providerOptions.deepseekHarness.baseUrl }
+        : {}),
+      ...(providerOptions.deepseekHarness.sessionRoot !== undefined
+        ? { session_root: providerOptions.deepseekHarness.sessionRoot }
+        : {}),
+      ...(providerOptions.deepseekHarness.cordis !== undefined
+        ? { cordis: providerOptions.deepseekHarness.cordis }
+        : {}),
+      ...(providerOptions.deepseekHarness.maxTokens !== undefined
+        ? { max_tokens: providerOptions.deepseekHarness.maxTokens }
+        : {}),
+      ...(providerOptions.deepseekHarness.requestTimeoutMs !== undefined
+        ? { request_timeout_ms: providerOptions.deepseekHarness.requestTimeoutMs }
+        : {}),
+      ...(providerOptions.deepseekHarness.shutdownTimeoutMs !== undefined
+        ? { shutdown_timeout_ms: providerOptions.deepseekHarness.shutdownTimeoutMs }
+        : {}),
+      ...(providerOptions.deepseekHarness.runtimeMode !== undefined
+        ? { runtime_mode: providerOptions.deepseekHarness.runtimeMode }
+        : {}),
+    };
+    if (Object.keys(deepseekHarness).length > 0) {
+      raw.deepseek_harness = deepseekHarness;
+    }
+  }
+  if (providerOptions.pi !== undefined) {
+    const pi = {
+      ...(providerOptions.pi.guards?.callTimeoutMs !== undefined
+        ? { guards: { call_timeout_ms: providerOptions.pi.guards.callTimeoutMs } }
+        : {}),
+      ...(providerOptions.pi.extensions !== undefined ? { extensions: [...providerOptions.pi.extensions] } : {}),
+      ...(providerOptions.pi.noExtensions !== undefined ? { no_extensions: providerOptions.pi.noExtensions } : {}),
+      ...(providerOptions.pi.noSkills !== undefined ? { no_skills: providerOptions.pi.noSkills } : {}),
+      ...(providerOptions.pi.noPromptTemplates !== undefined
+        ? { no_prompt_templates: providerOptions.pi.noPromptTemplates }
+        : {}),
+      ...(providerOptions.pi.noThemes !== undefined ? { no_themes: providerOptions.pi.noThemes } : {}),
+      ...(providerOptions.pi.noContextFiles !== undefined
+        ? { no_context_files: providerOptions.pi.noContextFiles }
+        : {}),
+    };
+    if (Object.keys(pi).length > 0) {
+      raw.pi = pi;
+    }
   }
   if (providerOptions.claudeTerminal) {
     const claudeTerminal: Record<string, unknown> = {};
     if (providerOptions.claudeTerminal.backend !== undefined) {
       claudeTerminal.backend = providerOptions.claudeTerminal.backend;
+    }
+    if (providerOptions.claudeTerminal.guards?.callTimeoutMs !== undefined) {
+      claudeTerminal.guards = { call_timeout_ms: providerOptions.claudeTerminal.guards.callTimeoutMs };
     }
     if (providerOptions.claudeTerminal.timeoutMs !== undefined) {
       claudeTerminal.timeout_ms = providerOptions.claudeTerminal.timeoutMs;

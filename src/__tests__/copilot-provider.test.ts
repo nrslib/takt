@@ -3,7 +3,7 @@
  *
  * The two providers are template clones of each other, so the shared
  * behavior is parameterized; provider-specific behavior (Copilot's strict
- * internal-agent isolation rejection) keeps dedicated tests.
+ * provider-specific behavior) keeps dedicated tests.
  */
 
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
@@ -166,12 +166,14 @@ for (const c of cases) {
 
       const provider = c.createProvider();
       const agent = provider.setup({ name: 'coder' });
+      const onActivity = vi.fn();
 
       await agent.call('implement', {
         cwd: '/tmp/work',
         model: c.model,
         sessionId: 'sess-1',
         permissionMode: 'full',
+        onActivity,
       });
 
       expect(c.mockCall).toHaveBeenCalledWith(
@@ -182,6 +184,7 @@ for (const c of cases) {
           model: c.model,
           sessionId: 'sess-1',
           permissionMode: 'full',
+          onActivity,
           [c.keyOption]: c.resolvedKey,
         }),
       );
@@ -302,35 +305,6 @@ for (const c of cases) {
     });
   });
 }
-
-describe('CopilotProvider strict internal-agent isolation', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it('should reject strict internal-agent isolation before invoking Copilot', async () => {
-    const provider = new CopilotProvider();
-    const agent = provider.setup({ name: 'selector' });
-
-    await expect(agent.call('select reviewers', {
-      cwd: '/tmp/work',
-      sessionId: 'ambient-session',
-      internalAgentIsolation: 'strict-readonly',
-      permissionMode: 'readonly',
-      allowedTools: [],
-      mcpServers: {},
-    })).rejects.toThrow(
-      'Provider "copilot" does not support strict internal-agent isolation required by dynamic parallel selector',
-    );
-
-    expect(mockCallCopilot).not.toHaveBeenCalled();
-    expect(mockCallCopilotCustom).not.toHaveBeenCalled();
-  });
-
-  it('should declare strict internal-agent isolation as unsupported', () => {
-    expect(new CopilotProvider().supportsStrictInternalAgentIsolation).toBe(false);
-  });
-});
 
 for (const c of cases) {
   describe(`ProviderRegistry with ${c.suiteName.replace('Provider', '')}`, () => {

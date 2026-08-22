@@ -10,6 +10,8 @@ import {
 import {
   createToolGuardRecoveryState,
   markToolGuardCorrectionPending,
+  markToolGuardFreshSessionUsed,
+  resolveToolGuardRecoveryAction,
   shouldIssueToolGuardCorrection,
 } from '../infra/opencode/tool-guard.js';
 import {
@@ -20,20 +22,27 @@ import {
   computeToolInputHash,
   computeToolResultHash,
 } from '../infra/opencode/tool-call-tuple.js';
+import { readOpenCodeToolPart } from '../infra/opencode/guards/tool-events.js';
 import { ExactLoopGuard } from '../infra/opencode/guards/integrity-guards.js';
 import { SensitiveBudgetGuard } from '../infra/opencode/guards/resource-guards.js';
+import { STALE_IN_FLIGHT_TOOL_FACTOR } from '../infra/opencode/guards/time-guards.js';
 import { createBoundedSensitiveValues } from '../shared/utils/sensitiveText.js';
+import { buildToolGuardCorrectionPrompt, buildToolGuardRetryPrompt } from '../infra/opencode/tool-guard.js';
+
+const DEPRECATED_ENV_KEYS = [
+  'TAKT_OPENCODE_TOOL_ERROR_BUDGET',
+  'TAKT_OPENCODE_TOOL_SIGNATURE_ABSOLUTE',
+  'TAKT_OPENCODE_TOOL_SIGNATURE_REPEATS',
+  'TAKT_OPENCODE_TOOL_SUCCESS_REPEATS',
+  'TAKT_OPENCODE_TOOL_RESULT_STAGNATION_REPEATS',
+] as const;
 
 const ENV_KEYS = [
   'TAKT_OPENCODE_MESSAGE_CYCLE_BUDGET',
   'TAKT_OPENCODE_TOOL_ERROR_CONSECUTIVE',
   'TAKT_OPENCODE_TOOL_ERROR_WINDOW',
   'TAKT_OPENCODE_TOOL_ERROR_WINDOW_RATE',
-  'TAKT_OPENCODE_TOOL_ERROR_BUDGET',
-  'TAKT_OPENCODE_TOOL_SIGNATURE_ABSOLUTE',
-  'TAKT_OPENCODE_TOOL_SIGNATURE_REPEATS',
-  'TAKT_OPENCODE_TOOL_SUCCESS_REPEATS',
-  'TAKT_OPENCODE_TOOL_RESULT_STAGNATION_REPEATS',
+  ...DEPRECATED_ENV_KEYS,
   'TAKT_OPENCODE_STREAM_EVENT_LIMIT',
 ] as const;
 
@@ -92,6 +101,26 @@ function errorTool(
   };
 }
 
+function runningTool(
+  callId: string,
+  input: Record<string, unknown>,
+  tool = 'bash',
+): OpenCodeStreamEvent {
+  return {
+    type: 'message.part.updated',
+    properties: {
+      part: {
+        id: `part-${callId}`,
+        sessionID: 'session-1',
+        type: 'tool',
+        callID: callId,
+        tool,
+        state: { status: 'running', input, title: tool },
+      },
+    },
+  };
+}
+
 function completedMessage(id: string, sessionID = 'session-1'): OpenCodeStreamEvent {
   return {
     type: 'message.updated',
@@ -107,15 +136,14 @@ function completedMessage(id: string, sessionID = 'session-1'): OpenCodeStreamEv
 }
 
 describe('OpenCode guard registry / Strategy', () => {
-  it('設計表どおり11ガードを登録する', () => {
+  it('設計表どおり10ガードを登録する', () => {
     expect(OPENCODE_GUARD_REGISTRY.map(({ id, layer, mandatory }) => ({ id, layer, mandatory }))).toEqual([
       { id: 'text-volume', layer: 'resource', mandatory: true },
       { id: 'reasoning-volume', layer: 'resource', mandatory: true },
       { id: 'event-count', layer: 'resource', mandatory: true },
       { id: 'tracked-ids', layer: 'resource', mandatory: true },
       { id: 'sensitive-budget', layer: 'integrity', mandatory: true },
-      { id: 'wall-clock', layer: 'time', mandatory: true },
-      { id: 'idle-timeout', layer: 'time', mandatory: true },
+      { id: 'inactivity-timeout', layer: 'time', mandatory: true },
       { id: 'exact-loop', layer: 'integrity', mandatory: true },
       { id: 'consecutive-errors', layer: 'heuristic', mandatory: false },
       { id: 'cycle-budget', layer: 'heuristic', mandatory: false },
@@ -131,7 +159,7 @@ describe('OpenCode guard registry / Strategy', () => {
     expect(minimal.enabledGuardIds).toEqual(
       OPENCODE_GUARD_REGISTRY.filter((guard) => guard.mandatory).map((guard) => guard.id),
     );
-    expect(minimal.enabledGuardIds).toContain('wall-clock');
+    expect(minimal.enabledGuardIds).toContain('inactivity-timeout');
     expect(minimal.enabledGuardIds).toContain('exact-loop');
   });
 
@@ -258,6 +286,44 @@ describe('OpenCode guard suite', () => {
     expect(suite.onEvent(completedTool('call-12', { filePath: 'a.ts' }, 'same')).failure).toMatchObject({
       guardId: 'exact-repeat-streak',
     });
+  });
+
+  it('exact repeat streak 発火時は recoveryFailure として exact_repeat_loop を表出する', () => {
+    const suite = resolveOpenCodeGuardSuite(undefined, 'opencode/big-pickle');
+    for (let index = 1; index < 12; index += 1) {
+      expect(suite.onEvent(completedTool(`call-${index}`, { filePath: 'a.ts' }, 'same')).failure).toBeUndefined();
+    }
+    const failure = suite.onEvent(completedTool('call-12', { filePath: 'a.ts' }, 'same')).failure;
+    expect(failure).toMatchObject({
+      guardId: 'exact-repeat-streak',
+      recoveryFailure: {
+        kind: 'exact_repeat_loop',
+        tool: 'read',
+      },
+    });
+    expect(failure?.recoveryFailure?.fingerprint).toMatch(/^exact_repeat:[0-9a-f]{64}$/);
+    expect(failure?.recoveryFailure?.message).toContain('exact tool outcome repeated 12');
+  });
+
+  it('exact_repeat_loop は同一セッション矯正プロンプトを生成する', () => {
+    const prompt = buildToolGuardCorrectionPrompt(
+      {
+        kind: 'exact_repeat_loop',
+        tool: 'todowrite',
+        fingerprint: 'exact_repeat:todowrite',
+        message: 'streak',
+      },
+      undefined,
+    );
+    expect(prompt).toContain('"todowrite"');
+    expect(prompt.toLowerCase()).toContain('do not call');
+    expect(prompt.toLowerCase()).toContain('final response');
+    expect(prompt.toLowerCase()).not.toContain('already done');
+  });
+
+  it('exact_repeat_loop は fresh session の前置理由でも専用メッセージを出す', () => {
+    const prompt = buildToolGuardRetryPrompt('do the task', 'exact_repeat_loop');
+    expect(prompt.toLowerCase()).toContain('same tool call with identical input and result');
   });
 
   it('exact tool outcome streak は attempt 境界を越えて持ち越さない', () => {
@@ -426,16 +492,141 @@ describe('OpenCode guard suite', () => {
     expect(minimal.onEvent(errorTool('m-3', 'tool-3', 'failure-3')).failure).toBeUndefined();
   });
 
-  it('wall-clock は call scope 全体で発火する', () => {
+  it('provider event と attempt 開始で無応答期限を更新する', () => {
     vi.useFakeTimers();
     const suite = resolveOpenCodeGuardSuite({ callTimeoutMs: 60_000 }, 'opencode/big-pickle');
     const failures: string[] = [];
     suite.startCall((failure) => failures.push(failure.guardId));
+    vi.advanceTimersByTime(40_000);
+    suite.onEvent(runningTool('call-1', { command: 'npm test' }));
+    vi.advanceTimersByTime(40_000);
+    suite.startAttempt((failure) => failures.push(failure.guardId));
     vi.advanceTimersByTime(59_999);
     expect(failures).toEqual([]);
     vi.advanceTimersByTime(1);
-    expect(failures).toEqual(['wall-clock']);
+    expect(failures).toEqual(['inactivity-timeout']);
+    suite.stopAttempt();
     suite.stopCall();
+  });
+
+  it('idle watchdog は既定で無効で、無音の attempt を終了させない', () => {
+    vi.useFakeTimers();
+    const suite = resolveOpenCodeGuardSuite(undefined, 'opencode/big-pickle');
+    const failures: string[] = [];
+    expect(suite.enabledGuardIds).not.toContain('idle-timeout');
+    suite.startAttempt((failure) => failures.push(failure.guardId));
+
+    suite.onEvent(runningTool('call-1', { command: 'npm run test:it' }));
+    vi.advanceTimersByTime(10 * 60_000);
+    expect(failures).toEqual([]);
+    suite.stopAttempt();
+  });
+
+  it('終端イベント後に無応答が続くと inactivity timeout が発火する', () => {
+    vi.useFakeTimers();
+    const suite = resolveOpenCodeGuardSuite({ callTimeoutMs: 60_000 }, 'opencode/big-pickle');
+    const failures: string[] = [];
+    suite.startCall((failure) => failures.push(failure.guardId));
+    suite.startAttempt((failure) => failures.push(failure.guardId));
+
+    suite.onEvent(runningTool('call-1', { command: 'npm run test:it' }));
+    vi.advanceTimersByTime(2 * 60_000);
+    expect(failures).toEqual([]);
+    suite.onEvent(completedTool(
+      'call-1',
+      { command: 'npm run test:it' },
+      'tests passed',
+      { tool: 'bash', exit: 0 },
+    ));
+    vi.advanceTimersByTime(59_999);
+    expect(failures).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(failures).toEqual(['inactivity-timeout']);
+    expect(suite.getCallFailure()).toMatchObject({ guardId: 'inactivity-timeout' });
+    suite.stopAttempt();
+    suite.stopCall();
+  });
+
+  it('終端イベントが欠落した in-flight tool は stale 上限で PART_TIMEOUT にする', () => {
+    vi.useFakeTimers();
+    const callTimeoutMs = 60_000;
+    const suite = resolveOpenCodeGuardSuite({ callTimeoutMs }, 'opencode/big-pickle');
+    const failures: string[] = [];
+    suite.startCall((failure) => failures.push(failure.guardId));
+    suite.startAttempt((failure) => failures.push(failure.guardId));
+
+    suite.onEvent(runningTool('call-1', { command: 'npm run test:it' }));
+    vi.advanceTimersByTime(callTimeoutMs * STALE_IN_FLIGHT_TOOL_FACTOR - 1);
+    expect(failures).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(failures).toEqual(['inactivity-timeout']);
+    expect(suite.getCallFailure()?.verdict.reason).toContain('Part timeout');
+    suite.stopAttempt();
+    suite.stopCall();
+  });
+
+  it.each([
+    ['object でない part', undefined],
+    ['null の part', null],
+    ['文字列の part', 'tool'],
+    ['state を欠く tool part', { type: 'tool', tool: 'bash', callID: 'call-1' }],
+    ['state が null の tool part', { type: 'tool', tool: 'bash', callID: 'call-1', state: null }],
+    ['status を欠く tool part', {
+      type: 'tool',
+      tool: 'bash',
+      callID: 'call-1',
+      state: { input: {} },
+    }],
+    ['tool 名を欠く tool part', {
+      type: 'tool',
+      callID: 'call-1',
+      state: { status: 'running', input: {} },
+    }],
+    ['呼び出し識別子を欠く tool part', {
+      type: 'tool',
+      tool: 'bash',
+      state: { status: 'running', input: {} },
+    }],
+    ['sessionID が string でない tool part', {
+      type: 'tool',
+      tool: 'bash',
+      callID: 'call-1',
+      sessionID: 42,
+      state: { status: 'running', input: {} },
+    }],
+  ])('%s は tool part として読まない', (_label, part) => {
+    const event = {
+      type: 'message.part.updated',
+      properties: { sessionID: 'session-1', part },
+    } as OpenCodeStreamEvent;
+
+    expect(readOpenCodeToolPart(event)).toBeUndefined();
+  });
+
+  it.each([undefined, null, 'properties'])(
+    'properties が object でない message.part.updated は無視する (%s)',
+    (properties) => {
+      const event = { type: 'message.part.updated', properties } as OpenCodeStreamEvent;
+
+      expect(readOpenCodeToolPart(event)).toBeUndefined();
+    },
+  );
+
+  it('sessionID を欠く tool part は call 内で識別できるので読み取れる', () => {
+    const event = {
+      type: 'message.part.updated',
+      properties: {
+        sessionID: 'session-1',
+        part: { type: 'tool', tool: 'bash', callID: 'call-1', state: { status: 'running', input: {} } },
+      },
+    } as OpenCodeStreamEvent;
+
+    expect(readOpenCodeToolPart(event)).toMatchObject({ callID: 'call-1' });
+  });
+
+  it('必要なフィールドが揃った tool part は読み取れる', () => {
+    expect(readOpenCodeToolPart(runningTool('call-1', { command: 'ls' })))
+      .toMatchObject({ type: 'tool', tool: 'bash', callID: 'call-1' });
   });
 
   it('新しい call deadline guard はレジストリ登録だけで共通 abort 契約に参加する', () => {
@@ -520,7 +711,7 @@ describe('OpenCode guard suite', () => {
   );
 
   it('廃止済み tool guard env は値を無視して各変数につき一度だけ警告する', () => {
-    const deprecated = ENV_KEYS.slice(4, -1);
+    const deprecated = DEPRECATED_ENV_KEYS;
     for (const key of deprecated) process.env[key] = '1';
     const emitWarning = vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined);
 
@@ -547,5 +738,62 @@ describe('ToolGuardRecoveryState', () => {
     expect(shouldIssueToolGuardCorrection(state, 'invalid:read')).toBe(true);
     state = markToolGuardCorrectionPending(state, 'session-1', 'invalid:read', 'Use valid arguments.');
     expect(shouldIssueToolGuardCorrection(state, 'edit:signature')).toBe(false);
+  });
+
+  it('exact_repeat_loop は 矯正1回 → fresh session 1回 → 本失敗 の順に消費される', () => {
+    // attempt-runner と同じ resolveToolGuardRecoveryAction で回復経路を検証する
+    const correctionLimit = 2;
+    let state = createToolGuardRecoveryState(correctionLimit);
+
+    // 1) 同一ループ fingerprint を矯正対象として受理する
+    const fingerprintA = 'exact_repeat:abc123';
+    expect(resolveToolGuardRecoveryAction(state, fingerprintA)).toBe('correction');
+    expect(state.freshSessionUsed).toBe(false);
+    state = markToolGuardCorrectionPending(state, 'session-1', fingerprintA, 'Stop repeating.');
+    expect(state.correctionsUsed).toBe(1);
+    expect(state.correctedFingerprints).toContain(fingerprintA);
+    expect(state.freshSessionUsed).toBe(false);
+
+    // 2) 同一 fingerprint は再矯正しない。fresh session は未使用なので通せる
+    expect(resolveToolGuardRecoveryAction(state, fingerprintA)).toBe('fresh_session');
+
+    // 3) fresh session を1回消費する。fresh session 使用後はもう矯正も fresh session も不可
+    state = markToolGuardFreshSessionUsed(state, 'exact_repeat_loop');
+    expect(state.freshSessionUsed).toBe(true);
+    expect(state.freshReason).toBe('exact_repeat_loop');
+    expect(state.pendingCorrection).toBeUndefined();
+
+    // 4) fresh session 後の再発はもう回復枠がない → attempt-runner は本失敗に落ちる。
+    //    別 fingerprint でも fail になることを確認する。
+    expect(resolveToolGuardRecoveryAction(state, fingerprintA)).toBe('fail');
+    expect(resolveToolGuardRecoveryAction(state, 'exact_repeat:other')).toBe('fail');
+  });
+
+  it('exact_repeat_loop の fingerprint は outcome.key ベースで別入力ループは別 fingerprint になる', () => {
+    const suite = resolveOpenCodeGuardSuite(undefined, 'opencode/big-pickle');
+
+    // 入力Aで streak 12 に達して発火 → recoveryFailure を取り出す
+    for (let index = 1; index < 12; index += 1) {
+      expect(suite.onEvent(completedTool(`a-${index}`, { filePath: 'a.ts' }, 'same')).failure).toBeUndefined();
+    }
+    const failureA = suite.onEvent(completedTool('a-12', { filePath: 'a.ts' }, 'same')).failure;
+    expect(failureA?.recoveryFailure?.kind).toBe('exact_repeat_loop');
+    const fingerprintA = failureA?.recoveryFailure?.fingerprint;
+    expect(typeof fingerprintA).toBe('string');
+    expect(fingerprintA).toMatch(/^exact_repeat:[0-9a-f]{64}$/);
+
+    // 同一入力で再度発火しても fingerprint は同一（矯正済み扱いで再矯正しない）
+    const failureA2 = suite.onEvent(completedTool('a-13', { filePath: 'a.ts' }, 'same')).failure;
+    expect(failureA2?.recoveryFailure?.fingerprint).toBe(fingerprintA);
+
+    // 入力B(別入力)のループは別 fingerprint になる → 別ループとして再度矯正される
+    for (let index = 1; index < 12; index += 1) {
+      expect(suite.onEvent(completedTool(`b-${index}`, { filePath: 'b.ts' }, 'same')).failure).toBeUndefined();
+    }
+    const failureB = suite.onEvent(completedTool('b-12', { filePath: 'b.ts' }, 'same')).failure;
+    expect(failureB?.recoveryFailure?.kind).toBe('exact_repeat_loop');
+    const fingerprintB = failureB?.recoveryFailure?.fingerprint;
+    expect(fingerprintB).toMatch(/^exact_repeat:[0-9a-f]{64}$/);
+    expect(fingerprintB).not.toBe(fingerprintA);
   });
 });

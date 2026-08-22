@@ -1,48 +1,29 @@
 import { describe, it, expect } from 'vitest';
-import { join } from 'node:path';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { parse as parseYaml } from 'yaml';
+import { join } from 'node:path';
 import { WorkflowStepRawSchema } from '../core/models/schemas.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 
 describe('team_leader schema', () => {
-  it('finding_contract_fix mode を受け付け、それ以外を拒否する', () => {
-    const valid = WorkflowStepRawSchema.safeParse({
-      name: 'fix',
-      team_leader: { mode: 'finding_contract_fix' },
-      instruction: 'fix',
-    });
-    const invalid = WorkflowStepRawSchema.safeParse({
-      name: 'fix',
-      team_leader: { mode: 'unsupported' },
-      instruction: 'fix',
+  it('トップレベルの dynamic_facets と companion を受け付ける', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'implement',
+      instruction: 'decompose',
+      team_leader: {
+        persona: 'team-leader',
+        max_concurrency: 2,
+      },
+      dynamic_facets: {
+        pool: 'review',
+        max_selected: 1,
+      },
+      companion: ['security-reviewer'],
     });
 
-    expect(valid.success).toBe(true);
-    expect(invalid.success).toBe(false);
+    expect(result.success).toBe(true);
   });
 
-  it.each(['ja', 'en'])('default team high (%s) の fix は明示 decision だけで reviewers または replan へ遷移する', (locale) => {
-    const source = readFileSync(
-      join(process.cwd(), 'builtins', locale, 'workflows', 'takt-default-team-high.yaml'),
-      'utf-8',
-    );
-    const workflow = parseYaml(source) as {
-      steps: Array<{
-        name: string;
-        team_leader?: { mode?: string };
-        rules?: Array<{ condition: string; next: string }>;
-      }>;
-    };
-    const fix = workflow.steps.find((step) => step.name === 'fix');
-
-    expect(fix?.team_leader?.mode).toBe('finding_contract_fix');
-    expect(fix?.rules).toEqual([
-      { condition: 'when(structured.fix.decision == "complete")', next: 'reviewers' },
-      { condition: 'when(structured.fix.decision == "replan")', next: 'replan' },
-    ]);
-  });
   it('max_parts <= 3 の設定を受け付ける', () => {
     const raw = {
       name: 'implement',
@@ -289,6 +270,33 @@ describe('team_leader schema', () => {
 });
 
 describe('normalizeWorkflowConfig team_leader', () => {
+  it('トップレベルの dynamic_facets と companion を内部形式へ保持する', () => {
+    const workflowDir = join(process.cwd(), 'src', '__tests__');
+    const config = normalizeWorkflowConfig({
+      name: 'workflow',
+      policies: {
+        review: 'review policy',
+      },
+      facet_pools: {
+        review: {
+          candidates: [{ id: 'selected', description: 'selected facet', policy: 'review' }],
+        },
+      },
+      steps: [{
+        name: 'implement',
+        instruction: 'decompose',
+        team_leader: { max_concurrency: 2 },
+        dynamic_facets: { pool: 'review', max_selected: 1 },
+        companion: ['security-reviewer'],
+      }],
+    }, workflowDir);
+
+    expect(config.steps[0]).toEqual(expect.objectContaining({
+      dynamicFacets: { pool: 'review', maxSelected: 1 },
+      companion: { fixed: ['security-reviewer'], pool: [] },
+    }));
+  });
+
   it('team_leader の並列・初回分解設定を内部形式へ正規化する', () => {
     const workflowDir = join(process.cwd(), 'src', '__tests__');
     const raw = {
@@ -298,7 +306,6 @@ describe('normalizeWorkflowConfig team_leader', () => {
           name: 'implement',
           allow_git_commit: true,
           team_leader: {
-            mode: 'finding_contract_fix',
             persona: 'team-leader',
             max_concurrency: 2,
             initial_max_parts: 2,
@@ -321,7 +328,6 @@ describe('normalizeWorkflowConfig team_leader', () => {
     expect(step).toBeDefined();
     expect(step!.allowGitCommit).toBe(true);
     expect(step!.teamLeader).toEqual({
-      mode: 'finding_contract_fix',
       persona: 'team-leader',
       personaPath: undefined,
       personaDisplayName: 'team-leader',

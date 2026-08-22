@@ -22,6 +22,8 @@ export const DEFAULT_PROVIDER_PERMISSION_PROFILES: ProviderPermissionProfiles = 
   cursor: { defaultPermissionMode: DEFAULT_PROVIDER_PROFILE_PERMISSION_MODE },
   copilot: { defaultPermissionMode: DEFAULT_PROVIDER_PROFILE_PERMISSION_MODE },
   kiro: { defaultPermissionMode: DEFAULT_PROVIDER_PROFILE_PERMISSION_MODE },
+  pi: { defaultPermissionMode: DEFAULT_PROVIDER_PROFILE_PERMISSION_MODE },
+  'deepseek-harness': { defaultPermissionMode: DEFAULT_PROVIDER_PROFILE_PERMISSION_MODE },
   mock: { defaultPermissionMode: DEFAULT_PROVIDER_PROFILE_PERMISSION_MODE },
 };
 

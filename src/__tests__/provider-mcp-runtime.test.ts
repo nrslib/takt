@@ -41,6 +41,7 @@ function resolvedServers(): ResolvedMcpServers {
       'common-tools': { type: 'stdio', command: 'common-srv', args: ['--flag'], env: { K: 'v' } },
       'remote-tools': { type: 'http', url: 'https://example.com/mcp', headers: { Authorization: 'Bearer x' } },
     },
+    serverNames: ['common-tools', 'remote-tools'],
     identity: 'common-tools:stdio,remote-tools:http',
   };
 }
@@ -70,6 +71,7 @@ describe('Codex adapter (MCP-CODEX)', () => {
     const stdioOnly: ResolvedMcpServers = {
       enabled: true,
       servers: { 'common-tools': { type: 'stdio', command: 'srv', args: ['--flag'], env: { K: 'v' } } },
+      serverNames: ['common-tools'],
       identity: 'common-tools:stdio',
     };
     const prepared = await adapter.prepare(stdioOnly, baseContext());
@@ -81,23 +83,26 @@ describe('Codex adapter (MCP-CODEX)', () => {
     await prepared.dispose();
   });
 
-  it('Given the codex adapter and an http server, When prepared, Then mcp_servers entry has url/headers (要件42)', async () => {
+  it('Given the codex adapter and an http server, When prepared, Then mcp_servers entry has url/http_headers (要件42)', async () => {
     const adapter = createMcpAdapter('codex');
     const httpOnly: ResolvedMcpServers = {
       enabled: true,
       servers: { 'remote-tools': { type: 'http', url: 'https://example.com/mcp', headers: { Authorization: 'Bearer x' } } },
+      serverNames: ['remote-tools'],
       identity: 'remote-tools:http',
     };
     const prepared = await adapter.prepare(httpOnly, baseContext());
     const config = (prepared as { config?: { mcp_servers?: Record<string, unknown> } }).config;
     const entry = config?.mcp_servers?.['remote-tools'] as Record<string, unknown>;
     expect(entry.url).toBe('https://example.com/mcp');
+    expect(entry.http_headers).toEqual({ Authorization: 'Bearer x' });
+    expect(entry.headers).toBeUndefined();
     await prepared.dispose();
   });
 
   it('Given the codex adapter, When prepared with empty servers, Then config has no mcp_servers (要件45: 未割当 server が有効にならない)', async () => {
     const adapter = createMcpAdapter('codex');
-    const empty: ResolvedMcpServers = { enabled: false, servers: {}, identity: '' };
+    const empty: ResolvedMcpServers = { enabled: false, servers: {}, serverNames: [], identity: '' };
     const prepared = await adapter.prepare(empty, baseContext());
     const config = (prepared as { config?: { mcp_servers?: Record<string, unknown> } }).config;
     // No mcp_servers must be set when no servers are assigned — do not enable unassigned native servers.
@@ -122,13 +127,13 @@ describe('OpenCode adapter (MCP-OPENCODE)', () => {
     const stdioOnly: ResolvedMcpServers = {
       enabled: true,
       servers: { 'common-tools': { type: 'stdio', command: 'srv' } },
+      serverNames: ['common-tools'],
       identity: 'common-tools:stdio',
     };
     const prepared = await adapter.prepare(stdioOnly, baseContext());
     const serverConfig = (prepared as { serverConfig?: Record<string, unknown> }).serverConfig;
     const entry = serverConfig?.['common-tools'] as Record<string, unknown>;
-    // OpenCode local schema should include command or type local.
-    expect(entry).toBeDefined();
+    expect(entry).toEqual({ type: 'local', command: ['srv'] });
     await prepared.dispose();
   });
 
@@ -137,12 +142,16 @@ describe('OpenCode adapter (MCP-OPENCODE)', () => {
     const httpOnly: ResolvedMcpServers = {
       enabled: true,
       servers: { 'remote-tools': { type: 'http', url: 'https://example.com/mcp' } },
+      serverNames: ['remote-tools'],
       identity: 'remote-tools:http',
     };
     const prepared = await adapter.prepare(httpOnly, baseContext());
     const serverConfig = (prepared as { serverConfig?: Record<string, unknown> }).serverConfig;
     const entry = serverConfig?.['remote-tools'] as Record<string, unknown>;
-    expect(entry).toBeDefined();
+    expect(entry).toMatchObject({
+      type: 'remote',
+      url: 'https://example.com/mcp',
+    });
     await prepared.dispose();
   });
 
@@ -151,11 +160,13 @@ describe('OpenCode adapter (MCP-OPENCODE)', () => {
     const setA: ResolvedMcpServers = {
       enabled: true,
       servers: { a: { type: 'stdio', command: 'a' } },
+      serverNames: ['a'],
       identity: 'a:stdio',
     };
     const setB: ResolvedMcpServers = {
       enabled: true,
       servers: { b: { type: 'stdio', command: 'b' } },
+      serverNames: ['b'],
       identity: 'b:stdio',
     };
     const preparedA = await adapter.prepare(setA, baseContext());
@@ -169,7 +180,7 @@ describe('OpenCode adapter (MCP-OPENCODE)', () => {
 
   it('Given the opencode adapter with empty servers, Then serverConfig is undefined or empty', async () => {
     const adapter = createMcpAdapter('opencode');
-    const empty: ResolvedMcpServers = { enabled: false, servers: {}, identity: '' };
+    const empty: ResolvedMcpServers = { enabled: false, servers: {}, serverNames: [], identity: '' };
     const prepared = await adapter.prepare(empty, baseContext());
     const serverConfig = (prepared as { serverConfig?: Record<string, unknown> }).serverConfig;
     expect(serverConfig === undefined || Object.keys(serverConfig ?? {}).length === 0).toBe(true);
@@ -193,17 +204,23 @@ describe('Cursor adapter (MCP-CURSOR)', () => {
 
   it('Given the cursor adapter, When prepared with empty servers, Then it does not create a config root', async () => {
     const adapter = createMcpAdapter('cursor');
-    const empty: ResolvedMcpServers = { enabled: false, servers: {}, identity: '' };
+    const empty: ResolvedMcpServers = { enabled: false, servers: {}, serverNames: [], identity: '' };
     const prepared = await adapter.prepare(empty, baseContext());
     const configRoot = (prepared as { configRoot?: string }).configRoot;
     expect(configRoot).toBeUndefined();
     await prepared.dispose();
   });
 
-  it('Given the cursor adapter with a version flag that cannot isolate, When validated, Then it fails fast naming the supported version (要件55)', () => {
+  it('Given the cursor adapter with an unsupported SSE server, When validated, Then it fails fast naming the transport (要件55)', () => {
     const adapter = createMcpAdapter('cursor');
-    // The adapter must not silently use ambient config; it must fail-fast when isolation is impossible.
-    expect(typeof adapter.validate).toBe('function');
+    const unsupported: ResolvedMcpServers = {
+      enabled: true,
+      servers: { events: { type: 'sse', url: 'http://events/sse' } },
+      serverNames: ['events'],
+      identity: 'events:sse',
+    };
+    expect(() => adapter.validate(unsupported, { sourcePath: '/tmp/runtime.yaml' }))
+      .toThrow(/cursor.*sse/i);
   });
 
   it('Given the cursor adapter, When prepare is called twice, Then each call yields a distinct isolated configRoot (要件205 並列安全性)', async () => {
@@ -249,7 +266,7 @@ describe('Copilot adapter (MCP-COPILOT)', () => {
 
   it('Given the copilot adapter with empty servers, Then --additional-mcp-config is NOT added', async () => {
     const adapter = createMcpAdapter('copilot');
-    const empty: ResolvedMcpServers = { enabled: false, servers: {}, identity: '' };
+    const empty: ResolvedMcpServers = { enabled: false, servers: {}, serverNames: [], identity: '' };
     const prepared = await adapter.prepare(empty, baseContext());
     const args = (prepared as { args?: string[] }).args ?? [];
     expect(args.find((a) => a.startsWith('--additional-mcp-config'))).toBeUndefined();
@@ -297,7 +314,7 @@ describe('Kiro adapter (MCP-KIRO)', () => {
 
   it('Given the kiro adapter with empty servers, Then --require-mcp-startup is NOT added', async () => {
     const adapter = createMcpAdapter('kiro');
-    const empty: ResolvedMcpServers = { enabled: false, servers: {}, identity: '' };
+    const empty: ResolvedMcpServers = { enabled: false, servers: {}, serverNames: [], identity: '' };
     const prepared = await adapter.prepare(empty, baseContext());
     const args = (prepared as { args?: string[] }).args ?? [];
     expect(args).not.toContain('--require-mcp-startup');
@@ -327,7 +344,7 @@ describe('Claude SDK adapter (MCP-CLAUDE-SDK strict-mcp-config)', () => {
 
   it('Given the claude-sdk adapter with an empty server set, Then sdkOptions still has strictMcpConfig: true but no mcpServers (order.md:152,160)', async () => {
     const adapter = createMcpAdapter('claude-sdk');
-    const empty: ResolvedMcpServers = { enabled: false, servers: {}, identity: '' };
+    const empty: ResolvedMcpServers = { enabled: false, servers: {}, serverNames: [], identity: '' };
     const prepared = await adapter.prepare(empty, baseContext());
     const sdkOptions = (prepared as { sdkOptions?: { mcpServers?: Record<string, unknown>; strictMcpConfig?: boolean } }).sdkOptions;
     expect(sdkOptions).toBeDefined();
@@ -351,7 +368,7 @@ describe('Claude headless CLI adapter (MCP-CLAUDE strict-mcp-config)', () => {
 
   it('Given the claude adapter with an empty server set, Then args include --strict-mcp-config but no --mcp-config (order.md:152,166)', async () => {
     const adapter = createMcpAdapter('claude');
-    const empty: ResolvedMcpServers = { enabled: false, servers: {}, identity: '' };
+    const empty: ResolvedMcpServers = { enabled: false, servers: {}, serverNames: [], identity: '' };
     const prepared = await adapter.prepare(empty, baseContext());
     const args = (prepared as { args?: string[] }).args;
     expect(args).toBeDefined();
@@ -375,7 +392,7 @@ describe('Claude terminal CLI adapter (MCP-CLAUDE-TERMINAL strict-mcp-config)', 
 
   it('Given the claude-terminal adapter with an empty server set, Then args include --strict-mcp-config but no --mcp-config (order.md:152,172)', async () => {
     const adapter = createMcpAdapter('claude-terminal');
-    const empty: ResolvedMcpServers = { enabled: false, servers: {}, identity: '' };
+    const empty: ResolvedMcpServers = { enabled: false, servers: {}, serverNames: [], identity: '' };
     const prepared = await adapter.prepare(empty, baseContext());
     const args = (prepared as { args?: string[] }).args;
     expect(args).toBeDefined();
@@ -397,7 +414,7 @@ describe('Mock adapter (MCP-MOCK)', () => {
 
   it('Given the mock adapter, When prepared with empty servers, Then resolvedServers is empty (要件66)', async () => {
     const adapter = createMcpAdapter('mock');
-    const empty: ResolvedMcpServers = { enabled: false, servers: {}, identity: '' };
+    const empty: ResolvedMcpServers = { enabled: false, servers: {}, serverNames: [], identity: '' };
     const prepared = await adapter.prepare(empty, baseContext());
     const exposed = (prepared as { resolvedServers?: ResolvedMcpServers }).resolvedServers;
     expect(exposed?.enabled).toBe(false);

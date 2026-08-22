@@ -9,16 +9,9 @@ parallel:
     persona: security-reviewer
     policy:
       - contract-change
-      - review
-    knowledge: security
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - WebSearch
-          - WebFetch
+      - security-review
+    knowledge: [security, security-web, security-api, security-local, security-data, security-dependencies]
+    capabilities: readonly
     instruction: review-security
     output_contracts:
       report:
@@ -33,15 +26,7 @@ parallel:
       - contract-change
       - review
       - coding
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Bash
-          - WebSearch
-          - WebFetch
+    capabilities: readonly
     instruction: review-coding
     output_contracts:
       report:

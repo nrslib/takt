@@ -1,13 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
-import { CapabilityAwareStructuredCaller } from '../../../agents/structured-caller.js';
+import { ProviderNeutralStructuredCaller } from '../../../agents/structured-caller.js';
 import type { WorkflowConfig } from '../../../core/models/index.js';
 import type {
-  FindingContractRuntimeConfig,
+  InternalAgentSeats,
+  ProviderRoutingEntry,
+  ProviderLadderConfig,
   ResolvedObservabilityConfig,
   TagRoutingConflictPolicy,
-  WorkflowMcpServersConfig,
 } from '../../../core/models/config-types.js';
+import type { RateLimitFallbackConfig } from '../../../core/models/workflow-types.js';
+import type { PermissionMode } from '../../../core/models/types.js';
 import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
 import { readRunMetaBySlug } from '../../../core/workflow/run/run-meta.js';
 import {
@@ -20,6 +23,7 @@ import {
   RESUME_ARTIFACTS_FILE_NAME,
   ResumeReportSnapshotSourceError,
 } from '../../../core/workflow/run/resume-report-snapshot.js';
+import { buildResumeReportSnapshotConsumerEntry } from '../../../core/workflow/run/resume-report-reference-snapshot.js';
 import { resolveRuntimeConfig } from '../../../core/runtime/runtime-environment.js';
 import {
   loadGlobalConfig,
@@ -32,6 +36,7 @@ import {
 } from '../../../infra/config/index.js';
 import {
   resolveConfigValueWithSource,
+  toProviderResolutionSource,
 } from '../../../infra/config/resolveConfigValue.js';
 import type { ProviderResolutionSource } from '../../../core/workflow/provider-options-trace.js';
 import {
@@ -46,7 +51,7 @@ import { TaskPrefixWriter } from '../../../shared/ui/TaskPrefixWriter.js';
 import { getErrorMessage } from '../../../shared/utils/error.js';
 import {
   createLogger,
-  getDebugPromptsLogFile,
+  isDebugEnabled,
   isValidReportDirName,
   preventSleep,
 } from '../../../shared/utils/index.js';
@@ -71,19 +76,22 @@ import { SessionLogger } from './sessionLogger.js';
 import type { TraceReportMode } from './traceReport.js';
 import { sanitizeTextForStorage } from './traceReportRedaction.js';
 import type { WorkflowExecutionOptions } from './types.js';
-import { resolveCompiledProviderEnvironment } from '../../../infra/config/runtime-provider/provider-environment.js';
 import {
+  resolveRuntimeEnvironment,
+} from '../../../infra/config/runtime-provider/provider-environment.js';
+import {
+  assertNoMixedWorkflowMcpConfiguration,
   collectLegacyProviderSignals,
-  collectLegacyMcpSignals,
   selectConfigTaktProviders,
 } from '../../../infra/config/runtime-provider/legacy-signals.js';
 import type { LegacyProviderEnvironmentInput } from '../../../infra/config/runtime-provider/environment.js';
 import type { McpAssignmentSection } from '../../../infra/config/runtime-provider/mcp-assignment.js';
-import type { McpServerConfig } from '../../../core/models/index.js';
 import { assertTaskPrefixPair, detectStepType } from './workflowExecutionUtils.js';
 import type { WorkflowRunBootstrap } from './workflowRunLifecycle.js';
 import { inheritWorkflowConfigMetadata } from '../../../shared/workflowConfigMetadata.js';
 import { validateWorkflowCallContracts } from '../../../infra/config/loaders/workflowResolver.js';
+import { resolveWorkflowCompanions } from '../../../infra/config/workflowCompanionResolution.js';
+import { resolveWorkflowSelector } from '../../../infra/config/workflowSelectorResolution.js';
 
 const log = createLogger('workflow');
 
@@ -116,10 +124,19 @@ export interface WorkflowExecutionBootstrap {
   configuredModelSource: ProviderResolutionSource;
   personaProviders: WorkflowExecutionOptions['personaProviders'];
   providerRouting: WorkflowExecutionOptions['providerRouting'];
+  providerLadders: ProviderLadderConfig | undefined;
+  internalAgentSeats: InternalAgentSeats | undefined;
+  selectorProvider: WorkflowExecutionOptions['selectorProvider'];
+  companionEnabled: boolean;
+  companionProviders: Readonly<Record<string, ProviderRoutingEntry>>;
   providerRoutingTagConflictPolicy: TagRoutingConflictPolicy;
   providerOptions: WorkflowExecutionOptions['providerOptions'];
+  configProviderOptions: WorkflowExecutionOptions['providerOptions'];
+  providerOptionsProviderSource: ProviderResolutionSource | undefined;
+  providerPermissionMode: PermissionMode | undefined;
+  autoRouting: WorkflowExecutionOptions['autoRouting'];
+  rateLimitFallback: RateLimitFallbackConfig | undefined;
   effectiveWorkflowConfig: WorkflowConfig;
-  findingContractConfig?: FindingContractRuntimeConfig;
   autoStrategyOverride: WorkflowExecutionOptions['autoStrategy'];
   onEffectiveAutoRoutingReached: () => void;
   warnIfAutoStrategyUnused: () => void;
@@ -128,7 +145,7 @@ export interface WorkflowExecutionBootstrap {
   observability: ResolvedObservabilityConfig;
   observabilityHandle: OtelFoundationHandle;
   analyticsEmitter: AnalyticsEmitter;
-  structuredCaller: CapabilityAwareStructuredCaller;
+  structuredCaller: ProviderNeutralStructuredCaller;
   savedSessions: Record<string, string>;
   sessionUpdateHandler: (persona: string, sessionId: string | undefined) => void;
   traceReportMode: TraceReportMode;
@@ -143,7 +160,11 @@ export interface WorkflowExecutionBootstrap {
 }
 
 export interface WorkflowExecutionResumeLineage {
+  /** Best-effort report/artifact inheritance source, not operation ancestry. */
   readonly sourceRunSlug?: string;
+  /** Runtime-only resume source for report/artifact fallback in the engine. */
+  readonly artifactResumeSource?: WorkflowExecutionOptions['resumeSource'];
+  /** Verified operation ancestry source to persist in run metadata. */
   readonly publishedResumeSource?: WorkflowExecutionOptions['resumeSource'];
   readonly operationJournalRunSlug: string;
   readonly operationClaimToken: string;
@@ -272,7 +293,10 @@ export function resolveWorkflowExecutionResumeLineage(
     return {
       operationJournalRunSlug: runSlug,
       operationClaimToken: randomUUID(),
-      ...(resumeSource === undefined ? {} : { publishedResumeSource: resumeSource }),
+      ...(resumeSource === undefined ? {} : {
+        artifactResumeSource: resumeSource,
+        publishedResumeSource: resumeSource,
+      }),
     };
   }
 
@@ -292,7 +316,7 @@ export function resolveWorkflowExecutionResumeLineage(
     );
     return {
       sourceRunSlug,
-      publishedResumeSource: resumeSource,
+      artifactResumeSource: resumeSource,
       operationJournalRunSlug: runSlug,
       operationClaimToken: randomUUID(),
     };
@@ -313,6 +337,7 @@ export function resolveWorkflowExecutionResumeSourceLineage(
   const sourceClaims = resolveOperationJournalSourceClaims(cwd, sourceRunSlug);
   return {
     sourceRunSlug,
+    artifactResumeSource: resumeSource,
     publishedResumeSource: resumeSource,
     operationJournalRunSlug: sourceClaims.journalRunSlug,
     operationClaimToken: randomUUID(),
@@ -365,7 +390,13 @@ export async function createWorkflowExecutionBootstrap(
         handlerRef.current(event);
       };
 
-  const isRetry = Boolean(options.startStep || options.retryNote || options.resumePoint || options.restartPoint);
+  const isRetry = Boolean(
+    options.resumeSource?.resumeMode
+      || options.startStep
+      || options.retryNote
+      || options.resumePoint
+      || options.restartPoint,
+  );
   const shouldLoadSavedSessions = isRetry && options.restartPoint === undefined;
   const isWorktree = cwd !== projectCwd;
   log.debug('Session mode', { isRetry, isWorktree });
@@ -401,10 +432,23 @@ export async function createWorkflowExecutionBootstrap(
   let resumeArtifactsManifest: ReturnType<typeof inheritResumeReportSnapshot> | undefined;
   if (sourceRunSlug && sourceRunSlug !== runSlug) {
     try {
+      const resumeReportConsumer = options.resumePoint === undefined
+        ? undefined
+        : buildResumeReportSnapshotConsumerEntry({
+          cwd,
+          projectCwd,
+          sourceRunSlug,
+          workflow: workflowConfig,
+          resumePoint: options.resumePoint,
+          workflowCallResolver: options.workflowCallResolver,
+        });
       resumeArtifactsManifest = inheritResumeReportSnapshot({
         cwd,
         sourceRunSlug,
         targetRunSlug: runSlug,
+        ...(resumeReportConsumer === undefined
+          ? {}
+          : { resumeReportConsumers: [resumeReportConsumer] }),
       });
     } catch (error) {
       if (!(error instanceof ResumeReportSnapshotSourceError)) {
@@ -442,7 +486,6 @@ export async function createWorkflowExecutionBootstrap(
     'telemetry',
     'observability',
     'autoRouting',
-    'findingContract',
     'workflowMcpServers',
   ]);
   const traceReportMode = globalConfig.logging?.trace === true ? 'full' : 'redacted';
@@ -489,7 +532,14 @@ export async function createWorkflowExecutionBootstrap(
       startTime: runBootstrap.startedAt,
     },
   );
-  const sessionLogger = new SessionLogger(ndjsonLogPath, allowSensitiveData);
+  const promptLogPath = isDebugEnabled()
+    ? join(runPaths.logsAbs, `${workflowSessionId}-prompts.jsonl`)
+    : undefined;
+  const sessionLogger = new SessionLogger(
+    ndjsonLogPath,
+    allowSensitiveData,
+    promptLogPath,
+  );
   if (options.interactiveMetadata) {
     sessionLogger.writeInteractiveMetadata(options.interactiveMetadata);
   }
@@ -504,18 +554,20 @@ export async function createWorkflowExecutionBootstrap(
         value: options.provider,
         source: options.providerSource ?? 'cli' as ProviderResolutionSource,
       }
-    : resolveConfigValueWithSource(projectCwd, 'provider', {
-        workflowContext: { provider: workflowConfig.provider },
-      });
+    : (() => {
+        const resolved = resolveConfigValueWithSource(projectCwd, 'provider');
+        return { ...resolved, source: toProviderResolutionSource(resolved.source) };
+      })();
   const resolvedModel = options.model !== undefined
     ? {
         value: options.model,
         source: options.modelSource ?? 'cli' as ProviderResolutionSource,
       }
-    : resolveConfigValueWithSource(projectCwd, 'model', {
-        workflowContext: { model: workflowConfig.model },
-      });
-  const inheritedAutoRouting = resolveEffectiveAutoRouting(workflowConfig, globalConfig.autoRouting);
+    : (() => {
+        const resolved = resolveConfigValueWithSource(projectCwd, 'model');
+        return { ...resolved, source: toProviderResolutionSource(resolved.source) };
+      })();
+  const inheritedAutoRouting = resolveEffectiveAutoRouting(globalConfig.autoRouting);
 
   // Configuration-format anti-corruption boundary (issue #1136): compile either legacy
   // config or an active runtime.yaml provider section into the shared engine-options bundle.
@@ -534,39 +586,26 @@ export async function createWorkflowExecutionBootstrap(
       loadGlobalConfig().taktProviders,
     ),
   };
-  const providerEnvironment = resolveCompiledProviderEnvironment({
+  const resolvedRuntimeEnvironment = resolveRuntimeEnvironment({
     projectCwd,
+    executionCwd: cwd,
     legacy: legacyProviderEnvironment,
     legacySignals: collectLegacyProviderSignals(
       legacyProviderEnvironment,
-      {
-        name: workflowConfig.name,
-        provider: workflowConfig.provider,
-        model: workflowConfig.model,
-        autoRouting: workflowConfig.autoRouting,
-      },
       options.providerOptionsSource,
     ),
   });
+  const providerEnvironment = resolvedRuntimeEnvironment.providerEnvironment;
+  const companionEnabled = resolvedRuntimeEnvironment.companionEnabled;
   // Legacy workflow MCP mode (`mcp_servers` / `workflow_mcp_servers`) must not
   // coexist with an active `runtime.yaml.mcp` section (order.md:112-118).
   // Collect legacy MCP signals from the workflow and fail-fast on mix.
   if (providerEnvironment.mcpAssignment !== undefined) {
-    const legacyMcpSignals = collectWorkflowLegacyMcpSignals(
+    assertNoMixedWorkflowMcpConfiguration(
+      providerEnvironment.mcpAssignment,
       workflowConfig,
       globalConfig.workflowMcpServers,
     );
-    if (legacyMcpSignals.length > 0) {
-      const lines = legacyMcpSignals.map(
-        (signal) => `  - ${signal.setting} at ${signal.location} → migrate to ${signal.migrateTo}`,
-      );
-      throw new Error([
-        'Mixed MCP configuration detected: an active runtime.yaml mcp section cannot',
-        'coexist with legacy workflow MCP settings. Remove the runtime.yaml mcp section or migrate',
-        'the following legacy settings:',
-        ...lines,
-      ].join('\n'));
-    }
   }
   const currentProvider = providerEnvironment.provider;
   // Fail fast when neither the legacy config nor a runtime.yaml profile resolves a provider.
@@ -584,6 +623,7 @@ export async function createWorkflowExecutionBootstrap(
   const configuredModelSource = providerEnvironment.modelSource;
   const effectivePersonaProviders = providerEnvironment.personaProviders;
   const effectiveProviderRouting = providerEnvironment.providerRouting;
+  const effectiveProviderLadders = providerEnvironment.providerLadders;
   const effectiveProviderOptions = providerEnvironment.providerOptions;
   const providerRoutingTagConflictPolicy = providerEnvironment.tagConflictPolicy;
   const autoRoutingReachTracker = new AutoRoutingReachTracker();
@@ -598,24 +638,35 @@ export async function createWorkflowExecutionBootstrap(
   const autoStrategyOverride = options.autoStrategy;
   const effectiveWorkflowConfig: WorkflowConfig = {
     ...workflowConfig,
-    autoRouting: providerEnvironment.autoRouting,
-    rateLimitFallback: workflowConfig.rateLimitFallback ?? globalConfig.rateLimitFallback,
     runtime: resolveRuntimeConfig(globalConfig.runtime, workflowConfig.runtime),
     maxSteps: effectiveMaxSteps,
   };
   inheritWorkflowConfigMetadata(workflowConfig, effectiveWorkflowConfig);
-  validateWorkflowCallContracts(effectiveWorkflowConfig, projectCwd, cwd, {
-    providerValidationOptions: {
-      provider: currentProvider,
-      providerSource: currentProviderSource,
-      model: configuredModel,
-      modelSource: configuredModelSource,
-      autoRouting: providerEnvironment.autoRouting,
-      personaProviders: effectivePersonaProviders,
-      providerRouting: effectiveProviderRouting,
-      providerRoutingTagConflictPolicy,
-    },
-  });
+  let selectorProvider = options.selectorProvider;
+  if (selectorProvider === undefined) {
+    const selectorResolution = resolveWorkflowSelector(effectiveWorkflowConfig, {
+      projectCwd,
+      lookupCwd: cwd,
+      overrides: options.selectorProviderOverrides,
+      companionEnabled,
+      workflowCallResolver: options.workflowCallResolver,
+      providerEnvironment,
+      providerConfigMode: resolvedRuntimeEnvironment.providerConfigMode,
+    });
+    selectorProvider = selectorResolution.applies
+      ? selectorResolution.selectorProvider
+      : undefined;
+  }
+  const companionProviders = Object.fromEntries(
+    companionEnabled
+      ? resolveWorkflowCompanions(effectiveWorkflowConfig, providerEnvironment, {
+          projectCwd,
+          lookupCwd: cwd,
+          workflowCallResolver: options.workflowCallResolver,
+        })
+      : [],
+  );
+  validateWorkflowCallContracts(effectiveWorkflowConfig, projectCwd, cwd);
   const providerEventLogger = createProviderEventLogger({
     logsDir: runPaths.logsAbs,
     sessionId: workflowSessionId,
@@ -646,7 +697,7 @@ export async function createWorkflowExecutionBootstrap(
     interactiveUserInput,
     workflowSessionId,
   );
-  const structuredCaller = new CapabilityAwareStructuredCaller();
+  const structuredCaller = new ProviderNeutralStructuredCaller();
   const savedSessions = shouldLoadSavedSessions
     ? (isWorktree
       ? loadWorktreeSessions(projectCwd, cwd, currentProvider)
@@ -657,7 +708,6 @@ export async function createWorkflowExecutionBootstrap(
         updateWorktreeSession(projectCwd, cwd, personaName, personaSessionId, currentProvider)
     : (persona: string, personaSessionId: string | undefined) =>
         updatePersonaSession(projectCwd, persona, personaSessionId, currentProvider);
-  const promptLogPath = getDebugPromptsLogFile() ?? undefined;
   const observabilityOptions = globalConfig.observability.enabled
     && (
       globalConfig.observability.sessionLogExporter
@@ -722,12 +772,23 @@ export async function createWorkflowExecutionBootstrap(
     currentProviderSource,
     configuredModel,
     configuredModelSource,
+    autoRouting: providerEnvironment.autoRouting,
+    rateLimitFallback: globalConfig.rateLimitFallback,
     personaProviders: effectivePersonaProviders,
     providerRouting: effectiveProviderRouting,
+    providerLadders: effectiveProviderLadders,
+    internalAgentSeats: providerEnvironment.internalAgents,
+    selectorProvider,
+    companionEnabled,
+    companionProviders,
     providerRoutingTagConflictPolicy,
     providerOptions: effectiveProviderOptions,
+    configProviderOptions: resolvedRuntimeEnvironment.configProviderOptions,
+    providerOptionsProviderSource: resolvedRuntimeEnvironment.providerConfigMode === 'runtime-v1'
+      ? currentProviderSource
+      : undefined,
+    providerPermissionMode: providerEnvironment.permissionMode,
     effectiveWorkflowConfig,
-    findingContractConfig: globalConfig.findingContract,
     autoStrategyOverride,
     onEffectiveAutoRoutingReached,
     warnIfAutoStrategyUnused,
@@ -744,50 +805,6 @@ export async function createWorkflowExecutionBootstrap(
     operationJournal,
     mcpAssignment: providerEnvironment.mcpAssignment,
   };
-}
-
-/**
- * Collect legacy workflow MCP signals from a workflow config. Reports the
- * workflow-level `workflow_mcp_servers` policy and each per-step `mcpServers`
- * map as a distinct signal so the mixed-config gate names every location
- * (order.md:112-118). The workflow-level policy is read from project/global
- * `config.yaml` (it is not part of `WorkflowConfig`); step `mcpServers` are
- * read from the workflow steps. Each step with `mcpServers` produces one
- * signal carrying the step name, so the error points at the actual step
- * rather than a flattened workflow-level location.
- */
-function collectWorkflowLegacyMcpSignals(
-  workflowConfig: WorkflowConfig,
-  workflowMcpServersPolicy: WorkflowMcpServersConfig | undefined,
-): ReturnType<typeof collectLegacyMcpSignals> {
-  const signals: ReturnType<typeof collectLegacyMcpSignals> = [];
-
-  const policySignals = collectLegacyMcpSignals({
-    workflowMcpServersPolicy: workflowMcpServersPolicy as Record<string, unknown> | undefined,
-    workflowStepMcpServers: undefined,
-    workflowName: workflowConfig.name,
-    workflowStepName: undefined,
-  });
-  signals.push(...policySignals);
-
-  for (const step of workflowConfig.steps) {
-    if (!('mcpServers' in step) || step.mcpServers === undefined) {
-      continue;
-    }
-    const servers = step.mcpServers as Record<string, McpServerConfig>;
-    if (Object.keys(servers).length === 0) {
-      continue;
-    }
-    const stepSignals = collectLegacyMcpSignals({
-      workflowMcpServersPolicy: undefined,
-      workflowStepMcpServers: servers,
-      workflowName: workflowConfig.name,
-      workflowStepName: step.name,
-    });
-    signals.push(...stepSignals);
-  }
-
-  return signals;
 }
 
 export { detectStepType, isQuietMode };

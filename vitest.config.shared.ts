@@ -1,13 +1,37 @@
 import type { UserConfig } from 'vitest/config';
 import {
+  heavyParallelIntegrationTestFiles,
+  lightIntegrationTestFiles,
+  parallelIntegrationTestFiles,
   parallelIntegrationTestGlobs,
   serialGitTestFiles,
   serialWorkflowTestFiles,
 } from './scripts/test-classification.mjs';
 
-export const srcTestInclude = ['src/__tests__/**/*.test.ts'];
+export const srcTestInclude = [
+  'src/__tests__/**/*.test.ts',
+  'src/__tests__/**/*.test.tsx',
+];
 
-export const itTestGlobs = [...parallelIntegrationTestGlobs];
+export const itTestGlobs = [
+  ...parallelIntegrationTestGlobs,
+  ...parallelIntegrationTestFiles,
+];
+
+export const lightItTestGlobs = [
+  ...lightIntegrationTestFiles,
+];
+
+export const heavyParallelItTestGlobs = [
+  ...parallelIntegrationTestGlobs,
+  ...heavyParallelIntegrationTestFiles,
+];
+
+export const heavyParallelItTestExcludes = [
+  ...lightIntegrationTestFiles,
+  ...serialGitTestFiles,
+  ...serialWorkflowTestFiles,
+];
 
 // These files create real repositories and mutate branches/commits. Keep them
 // serial to avoid IO-heavy git operations competing inside the same pool.
@@ -23,6 +47,10 @@ export const itSerialTestGlobs = [
   ...itSerialGitTestGlobs,
   ...itSerialWorkflowLoaderTestGlobs,
 ];
+
+// Some workflow tests spawn processes and perform fsync-heavy persistence.
+// Keep one sufficiently large ceiling for every platform and runner.
+const testTimeout = 120_000;
 
 export const commonSrcTestConfig = {
   env: {
@@ -40,7 +68,7 @@ export const commonSrcTestConfig = {
   globals: false,
   reporters: ['dot'],
   setupFiles: ['src/__tests__/test-setup.ts'],
-  testTimeout: 15000,
+  testTimeout,
   teardownTimeout: 5000,
   coverage: {
     provider: 'v8',
@@ -58,7 +86,7 @@ export const parallelSrcRunnerConfig = {
 } satisfies UserConfig['test'];
 
 export const serialSrcRunnerConfig = {
-  testTimeout: 60_000,
+  testTimeout: 120_000,
   passWithNoTests: true,
   pool: 'threads',
   poolOptions: {

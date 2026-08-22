@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type {
   OpenCodePart,
   OpenCodeStreamEvent,
@@ -134,7 +135,10 @@ export class ExactRepeatStreakGuard implements OpenCodeGuard {
   readonly layer = 'heuristic' as const;
   private lastKey: string | undefined;
   private streak = 0;
+  private recoveryFailure: ToolGuardRecoverableFailure | undefined;
 
+  // エラー反復は ConsecutiveErrorsGuard(tool_error_burst)が先に拾う。
+  // 本ガードの矯正対象は成功結果の反復が主対象。
   constructor(private readonly limit: number) {}
 
   start(scope: OpenCodeGuardLifecycleScope): void {
@@ -147,9 +151,19 @@ export class ExactRepeatStreakGuard implements OpenCodeGuard {
     this.streak = outcome.key === this.lastKey ? this.streak + 1 : 1;
     this.lastKey = outcome.key;
     if (this.streak < this.limit) return undefined;
-    return {
-      action: 'fail',
-      reason: `OpenCode exact tool outcome repeated ${this.streak} consecutive times for tool "${outcome.tool}"`,
+    const failure: ToolGuardRecoverableFailure = {
+      kind: 'exact_repeat_loop',
+      tool: outcome.tool,
+      fingerprint: `exact_repeat:${createHash('sha256').update(outcome.key).digest('hex')}`,
+      message: `OpenCode exact tool outcome repeated ${this.streak} consecutive times for tool "${outcome.tool}"`,
     };
+    this.recoveryFailure = failure;
+    return { action: 'fail', reason: failure.message };
+  }
+
+  takeRecoveryFailure(): ToolGuardRecoverableFailure | undefined {
+    const failure = this.recoveryFailure;
+    this.recoveryFailure = undefined;
+    return failure;
   }
 }

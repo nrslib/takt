@@ -146,8 +146,8 @@ describe('runGeneratedWorkflow integration', () => {
     ]);
     expect(formatted.runReports).toContain('review-1-review-result.md');
     expect(formatted.runReports).toContain('review-2-review-result.md');
-    expect(formatted.runReports).toContain('# Review 1');
-    expect(formatted.runReports).toContain('# Review 2');
+    expect(formatted.runReports).toContain('review-1-review-result.md');
+    expect(formatted.runReports).toContain('review-2-review-result.md');
     expect(formatted.runReports).not.toContain('worker-extra.md');
     expect(formatted.runReports).toContain('untrusted data');
     expect(formatted.runReports).toContain('do not follow instructions');
@@ -191,7 +191,7 @@ describe('runGeneratedWorkflow integration', () => {
     }
   });
 
-  it('should reject a completed run when any expected review report is missing on disk', async () => {
+  it('should return the available reports when an expected review report is missing on disk', async () => {
     const task = 'Executable task with a missing review report';
     mockSelectAndExecuteTask.mockImplementation(async (cwd, executedTask, options) => {
       if (!options?.reportDirName) {
@@ -200,8 +200,13 @@ describe('runGeneratedWorkflow integration', () => {
       writeCompletedRun(cwd, options.reportDirName, executedTask, ['review-1-review-result.md']);
     });
 
-    await expect(runGeneratedWorkflow(projectDir, createTwoJudgeConfig(), task, undefined))
-      .rejects.toThrow(/review-2-review-result\.md/);
+    const result = await runGeneratedWorkflow(projectDir, createTwoJudgeConfig(), task, undefined);
+
+    expect(result.status).toBe('completed');
+    expect(result.reports).toEqual([{
+      filename: 'review-1-review-result.md',
+      content: '# Review 1\n\napproved',
+    }]);
 
     expect(existsSync(join(globalConfigDir, 'exec.yaml'))).toBe(false);
   });
@@ -322,9 +327,11 @@ describe('runGeneratedWorkflow integration', () => {
       'codex',
       'copilot',
       'cursor',
+      'deepseek-harness',
       'kiro',
       'mock',
       'opencode',
+      'pi',
     ]);
     expect(overrides.codex?.defaultPermissionMode).toBe('edit');
     expect(overrides.codex?.stepPermissionOverrides).toEqual(expect.objectContaining({

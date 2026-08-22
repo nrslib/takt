@@ -8,6 +8,7 @@
  */
 
 import type { ProviderType } from '../../shared/types/provider.js';
+import type { PermissionMode } from './types.js';
 import type { QualityGate, RateLimitFallbackConfig, StepProviderOptions, WorkflowRuntimeConfig } from './workflow-types.js';
 import type { ProviderPermissionProfiles } from './provider-profiles.js';
 import type { VcsProviderType } from './vcs-types.js';
@@ -22,16 +23,22 @@ export interface AutoRoutingCandidate {
   model: string;
   routingTier: RoutingTier;
   providerOptions?: StepProviderOptions;
+  permissionMode?: PermissionMode;
 }
 
 export interface AutoRoutingConfig {
+  /** Engine-local workflow identity used to resolve runtime.yaml `<workflow>/<step>` targets. */
+  workflowName?: string;
   strategy: AutoRoutingStrategy;
   router: {
     provider: ProviderType;
     model: string;
+    providerOptions?: StepProviderOptions;
+    permissionMode?: PermissionMode;
   };
   candidates: AutoRoutingCandidate[];
-  defaultPool: string;
+  /** Legacy auto routing default; runtime.yaml requires an explicit target pool instead. */
+  defaultPool?: string;
   candidatePools: Record<string, {
     candidates: string[];
     fallback: string;
@@ -52,14 +59,59 @@ export interface PersonaProviderEntry {
   provider?: ProviderType;
   model?: string;
   providerOptions?: StepProviderOptions;
+  /** Exact permission mode declared by the resolved runtime profile. */
+  permissionMode?: PermissionMode;
 }
 
 export type ProviderRoutingEntry = PersonaProviderEntry;
 
+/**
+ * runtime.yaml `provider.targets.internal_agents` の seat 割り当て（解決済み）。
+ *
+ * seat はエンジンが自前で合成するエージェント（ワークフローの step として書けない
+ * 役職）の宛先を runtime 側から名指しするための口である。`targets.personas` が
+ * 人間定義 persona の表示名照合であるのに対し、ここは固定のロールキーで引く。
+ *
+ * すべて **オプショナル**。未指定の seat は従来どおりの既定解決
+ * （persona routing → project → global → provider 既定）に落ちる。
+ * 指定された seat だけが合成ステップへ焼き込まれ、
+ * step 直指定と同じ層（CLI/環境変数の明示 override より下、`provider_routing` より上）
+ * で効く。
+ */
+export interface InternalAgentSeats {
+  /** `selector`: 動的 facet / 動的 parallel のセレクタ。 */
+  selector?: ProviderRoutingEntry;
+  /** `assistant`: 対話モードのアシスタント。 */
+  assistant?: ProviderRoutingEntry;
+  /** `loop-judge`: loop_monitors の判定役。 */
+  loopJudge?: ProviderRoutingEntry;
+  /** `review-completion-judge`: completion-retry episode の網羅性判定役。 */
+  completionRetryJudge?: ProviderRoutingEntry;
+}
+
 export interface ProviderRoutingConfig {
+  /** Engine-local workflow identity used to resolve runtime.yaml `<workflow>/<step>` targets. */
+  workflowName?: string;
   personas?: Record<string, ProviderRoutingEntry>;
   tags?: Record<string, ProviderRoutingEntry>;
   steps?: Record<string, ProviderRoutingEntry>;
+}
+
+/**
+ * Fully-resolved provider ladders (issue #1208), keyed by the same assignment paths as
+ * `ProviderRoutingConfig` plus `defaults`. Each value holds every stage of a `ladder`
+ * assignment in order. Stage 0 is the initial assignment already reflected in
+ * providerRouting/personaProviders/provider-model defaults; a matched target-less `{at:N}`
+ * promotion advances to `stages[index]` at the runtime resolution seam. `personas` is keyed by
+ * persona display name (runtime `targets.personas` compiles into `personaProviders`).
+ */
+export interface ProviderLadderConfig {
+  /** Engine-local workflow identity used to resolve runtime.yaml `<workflow>/<step>` targets. */
+  workflowName?: string;
+  defaults?: ProviderRoutingEntry[];
+  personas?: Record<string, ProviderRoutingEntry[]>;
+  tags?: Record<string, ProviderRoutingEntry[]>;
+  steps?: Record<string, ProviderRoutingEntry[]>;
 }
 
 /**
@@ -94,24 +146,13 @@ export interface TaktProvidersConfig {
 
 export interface AssistantConfig {
   initFiles?: string[];
+  /** Generate final task instructions as human-readable Markdown with focused Gherkin scenarios. */
+  gherkin?: boolean;
 }
 
-/** Finding Contract reviewer report extraction configuration. */
-export interface FindingIntakeNormalizeTarget {
-  provider: ProviderType;
-  model: string;
-}
-
-export interface FindingIntakeNormalizeConfig {
-  provider: ProviderType;
-  model: string;
-  targets?: FindingIntakeNormalizeTarget[];
-  providerOptions?: StepProviderOptions;
-}
-
-/** Engine-side Finding Contract settings from global/project config. */
-export interface FindingContractRuntimeConfig {
-  intakeNormalize?: FindingIntakeNormalizeConfig;
+export interface GlobalAssistantConfig {
+  /** Generate final task instructions as human-readable Markdown with focused Gherkin scenarios. */
+  gherkin?: boolean;
 }
 
 /** Step-specific quality gates override */
@@ -314,8 +355,6 @@ export interface ProjectConfig {
   providerOptions?: StepProviderOptions;
   /** Automatic provider/model routing configuration. */
   autoRouting?: AutoRoutingConfig;
-  /** Engine-side Finding Contract settings. */
-  findingContract?: FindingContractRuntimeConfig;
   /** Rate limit fallback provider switch chain */
   rateLimitFallback?: RateLimitFallbackConfig;
   /** Provider-specific permission profiles (project-level override) */
@@ -344,6 +383,8 @@ export interface ProjectConfig {
  * — handled by the resolution layer.
  */
 export interface GlobalConfig extends Omit<ProjectConfig, 'submodules' | 'withSubmodules' | 'assistant'> {
+  /** Global default for assistant task-instruction formatting. */
+  assistant?: GlobalAssistantConfig;
   /** @globalOnly */
   language: Language;
   /** @globalOnly */

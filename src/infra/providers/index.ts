@@ -6,6 +6,8 @@ import { OpenCodeProvider } from './opencode.js';
 import { CursorProvider } from './cursor.js';
 import { CopilotProvider } from './copilot.js';
 import { KiroProvider } from './kiro.js';
+import { PiProvider } from './pi.js';
+import { DeepSeekHarnessProvider } from './deepseek-harness.js';
 import { MockProvider } from './mock.js';
 import type { Provider, ProviderType } from './types.js';
 
@@ -32,6 +34,8 @@ export class ProviderRegistry {
       cursor: new CursorProvider(),
       copilot: new CopilotProvider(),
       kiro: new KiroProvider(),
+      pi: new PiProvider(),
+      'deepseek-harness': new DeepSeekHarnessProvider(),
       mock: new MockProvider(),
     };
   }

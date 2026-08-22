@@ -31,7 +31,7 @@ export OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
 takt run
 ```
 
-`observability.enabled: true` かつ `OTEL_EXPORTER_OTLP_ENDPOINT` が設定されている場合、TAKT は config で有効化したローカル exporter を維持したまま、span と metric を OTLP で送信します。`OTEL_EXPORTER_OTLP_ENDPOINT` が未設定の場合はローカル exporter のみを使い、ネットワーク送信は行いません。`observability.enabled: false` の場合は、OTLP 環境変数が設定されていても OpenTelemetry SDK を初期化しません。
+`observability.enabled: true` かつ `OTEL_EXPORTER_OTLP_ENDPOINT` が設定されている場合、TAKT は config で有効化したローカル exporter を維持したまま、span と metric を OTLP で送信します。`OTEL_EXPORTER_OTLP_ENDPOINT` が未設定の場合はローカル exporter のみを使い、ネットワーク送信は行いません。`observability.enabled: false` の場合はOTLP 環境変数が設定されていても OpenTelemetry SDK を初期化しません。
 
 Grafana は `http://127.0.0.1:3000` で開き、`takt` service を確認します。trace は既存の workflow span tree（`workflow.<name>` の下に `step.<name>`、さらに `phase.<step>.<phaseName>` / `judge_stage.<step>.<stage>.<method>` という名前の phase / judge span）として表示され、metric はローカルの `monitor.json` 出力と並走して送信されます。
 
@@ -44,8 +44,8 @@ active workflow を探す Tempo TraceQL filter 例:
 { resource.service.name = "takt" && span."takt.run.id" = "<run-id>" }
 { resource.service.name = "takt" && span."takt.task.pr_number" = 826 }
 { resource.service.name = "takt" && span."takt.task.issue_number" = 792 }
-{ resource.service.name = "takt" && span."takt.git.branch" = "takt/816/implement-finding-contract" }
-{ resource.service.name = "takt" && span."takt.task.summary" =~ ".*finding contract.*" }
+{ resource.service.name = "takt" && span."takt.git.branch" = "takt/816/implement-review-flow" }
+{ resource.service.name = "takt" && span."takt.task.summary" =~ ".*review flow.*" }
 { resource.service.name = "takt" && name =~ "workflow_start\\..*" }
 ```
 
@@ -58,7 +58,7 @@ TraceQL discovery:
   { resource.service.name = "takt" && span."takt.run.id" = "<run-id>" }
   { resource.service.name = "takt" && span."takt.task.pr_number" = 826 }
   { resource.service.name = "takt" && span."takt.task.issue_number" = 792 }
-  { resource.service.name = "takt" && span."takt.git.branch" = "takt/816/implement-finding-contract" }
+  { resource.service.name = "takt" && span."takt.git.branch" = "takt/816/implement-review-flow" }
 ```
 
 workflow が abort/error で終わった場合、root `workflow.<name>` span には step-level の failure 属性も記録されます。
@@ -79,11 +79,11 @@ OTLP export には base endpoint が必要です。
 
 TAKT が明示的に解決・検証するのはこの endpoint 3種だけです。その他の標準 `OTEL_EXPORTER_OTLP_*` 環境変数（`_HEADERS`、`_TIMEOUT`、`_COMPRESSION` など）は TAKT では解釈せず、OpenTelemetry SDK にはそのまま届きます。子プロセスへの伝播はより厳格で、資格情報を含む変数（`_HEADERS`、クライアント証明書、クライアント鍵）は TAKT が渡す環境から除外され、非機微な変数のみ通過します。
 
-OTLP export に使用する endpoint は絶対 `http` または `https` URL である必要があります。trace / metric 個別 endpoint だけを設定して base endpoint を設定していない場合、OTLP export には opt-in せず、TAKT はローカル exporter のみを使います。base endpoint が設定されている場合は、個別 endpoint 上書きも run 開始前に検証されます。起動後に collector が停止しているなどの export 送信失敗が起きても、workflow run は阻害しません。
+OTLP export に使用する endpoint は絶対 `http` または `https` URL である必要があります。trace / metric 個別 endpoint だけを設定して base endpoint を設定していない場合、OTLP export には opt-in せず、TAKT はローカル exporter のみを使います。base endpoint が設定されている場合は個別 endpoint 上書きも run 開始前に検証されます。起動後に collector が停止しているなどの export 送信失敗が起きても、workflow run は阻害しません。
 
 ## 環境変数で observability を上書きする
 
-`observability` の各フラグは、config ファイルを編集せずにプロセス単位で上書きできます。
+`observability` の各フラグはconfig ファイルを編集せずにプロセス単位で上書きできます。
 
 | 環境変数 | 上書き対象 |
 |----------|-----------|
@@ -94,7 +94,7 @@ OTLP export に使用する endpoint は絶対 `http` または `https` URL で�
 
 各変数は `true` または `false` を受け付け、`~/.takt/config.yaml` と `.takt/config.yaml` の値より優先されます。
 
-command gate から起動される nested `takt` run には、observability 設定と OTLP endpoint がこれらの環境変数経由で自動的に伝播します。credential を含む exporter 変数（`_HEADERS`、client certificate、client key）は伝播から除外されます。
+command gate から起動される nested `takt` run にはobservability 設定と OTLP endpoint がこれらの環境変数経由で自動的に伝播します。credential を含む exporter 変数（`_HEADERS`、client certificate、client key）は伝播から除外されます。
 
 ## Phase Usage Events を有効化する
 
@@ -128,7 +128,7 @@ record は workflow phase ごとに分かれます。
 
 usage を取得できない場合は `usage_missing: true` と reason を記録します。分析コマンドでは missing usage を 0 token として扱わず、token 統計から除外します。
 
-各 record には、step で定義されている場合に `persona` と `tags` も含まれます。`persona` は文字列、`tags` は文字列配列で、値がない場合はフィールド自体を省略します。
+各 record にはstep で定義されている場合に `persona` と `tags` も含まれます。`persona` は文字列、`tags` は文字列配列で、値がない場合はフィールド自体を省略します。
 
 ## Usage を集計する
 
@@ -165,7 +165,7 @@ npm run analyze:usage -- --format csv .takt/runs/<run> > usage.csv
 | `cached_input_tokens` / `cache_creation_input_tokens` / `cache_read_input_tokens` | cache 関連 token 合計 |
 | `avg_total_tokens` / `median_total_tokens` / `stddev_total_tokens` | missing usage を除外した call 単位の total token 統計 |
 
-before/after 比較では、それぞれの run directory 群に対して別々にコマンドを実行し、出力された table または CSV を比較します。
+before/after 比較ではそれぞれの run directory 群に対して別々にコマンドを実行し、出力された table または CSV を比較します。
 
 ## トークン使用量をまとめて確認する
 

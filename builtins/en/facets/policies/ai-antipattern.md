@@ -1,6 +1,6 @@
 # AI Antipattern Detection Criteria
 
-Detect assumptions, over-implementation, and superficial fixes that AI-generated changes commonly introduce.
+Avoid assumptions, over-implementation, and superficial fixes during implementation, and detect them during review.
 
 ## Principles
 
@@ -14,6 +14,14 @@ Detect assumptions, over-implementation, and superficial fixes that AI-generated
 | Direct fixes | Do not replace a fix with tests or documentation explaining the issue |
 | Reachability | Confirm that added or retained code is used by current call paths |
 | Verifiability | Check code paths, usage sites, and execution results instead of explanations |
+
+## Justifying Extension Points
+
+| Judgment | Criteria |
+|----------|----------|
+| REJECT | Add options, a Strategy, or an extension point for a value or behavior fixed by the requirement when current callers do not use it |
+| REJECT | A Strategy or interface has only one implementation and the current requirement has no replacement axis |
+| OK | The current requirement has multiple implementations or change axes and the abstraction represents that boundary |
 
 ## Assumption Verification
 
@@ -249,9 +257,9 @@ AI often turns a small number of concrete branches into config arrays, function 
 
 | Pattern | Example | Verdict |
 |---------|---------|---------|
-| Single-use operation config array | Processing `[{ kind, fields, removedFields }]` in a loop | REJECT |
+| Operation config array hides meaning, contracts, or change boundaries | Side effects require reading both `[{ kind, fields, removedFields }]` and its loop | REJECT |
 | Deletions, side effects, or exception cases are hidden in config objects | Readers must inspect config values to find destructive behavior | REJECT |
-| Function object introduced when each branch is only 1-3 lines | `handlers[type]()` adds indirection only | REJECT |
+| Function object introduced when branch differences have no independent concept or change axis | `handlers[type]()` adds only indirection | REJECT |
 | Strategy represents a domain concept and clarifies the implementation boundary | `TaxPolicy`, `PaymentMethod`, `RetryStrategy` | OK |
 | Many branches share the same shape and are expected to grow | Consider a handler map | OK |
 

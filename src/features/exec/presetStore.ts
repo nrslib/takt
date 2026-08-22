@@ -5,7 +5,7 @@ import { getGlobalConfigDir } from '../../infra/config/paths.js';
 import type { ProviderType } from '../../infra/providers/index.js';
 import { getResourcesDir } from '../../infra/resources/index.js';
 import { debugLog } from '../../shared/utils/index.js';
-import { assertExecActorName, assertExecConfig, EXEC_EFFORTS, EXEC_PROVIDERS } from './configValidation.js';
+import { assertExecActorName, assertExecConfig, EXEC_PROVIDERS } from './configValidation.js';
 import {
   deleteProjectLocalFile,
   listProjectLocalDirectoryEntries,
@@ -106,11 +106,7 @@ function asEffort(value: unknown, path: string): ExecEffort | undefined {
   if (value === undefined) {
     return undefined;
   }
-  const effort = asString(value, path);
-  if (!EXEC_EFFORTS.includes(effort as ExecEffort)) {
-    throw new Error(`Invalid exec config at ${path}: unsupported effort "${effort}"`);
-  }
-  return effort as ExecEffort;
+  return asString(value, path);
 }
 
 function asModel(value: unknown, path: string): string | undefined {

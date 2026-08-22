@@ -14,10 +14,12 @@ describe('public API exports', () => {
     expect(typeof api.loadWorkflow).toBe('function');
     expect(typeof api.loadWorkflowByIdentifier).toBe('function');
     expect(typeof api.listWorkflows).toBe('function');
+    expect(typeof api.isWorkflowPath).toBe('function');
     expect('WorkflowEngine' in api).toBe(true);
     expect('loadWorkflow' in api).toBe(true);
     expect('loadWorkflowByIdentifier' in api).toBe(true);
     expect('listWorkflows' in api).toBe(true);
+    expect('isWorkflowPath' in api).toBe(true);
   });
 
   it('should not expose internal engine implementation details', async () => {

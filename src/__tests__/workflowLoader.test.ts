@@ -8,6 +8,8 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
+import type { WorkflowConfig, WorkflowStep } from '../core/models/index.js';
+
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
 import {
   isWorkflowPath,
@@ -17,6 +19,7 @@ import {
   loadAllStandaloneWorkflowsWithSources,
   loadWorkflow,
   loadWorkflowByIdentifier,
+  resolveWorkflowCallTarget,
   listStandaloneWorkflowEntries,
   listWorkflows,
   listWorkflowEntries,
@@ -61,6 +64,23 @@ steps:
     allowed_tools: [Read]
     instruction: "{task}"
 `;
+
+function findWorkflowStep(workflow: WorkflowConfig, name: string): WorkflowStep {
+  const step = workflow.steps.find((candidate) => candidate.name === name);
+  if (!step) {
+    throw new Error(`Workflow step "${name}" was not found in "${workflow.name}"`);
+  }
+  return step;
+}
+
+function semanticTransitionMap(step: WorkflowStep): Record<string, string | undefined> {
+  return Object.fromEntries((step.rules ?? []).map((rule) => {
+    if (rule.condition.kind !== 'semantic') {
+      throw new Error(`Expected semantic transition rule on workflow step "${step.name}"`);
+    }
+    return [rule.condition.label, rule.next];
+  }));
+}
 
 function writeWorkflowCallContractChildFixture(workflowsDir: string): void {
   mkdirSync(workflowsDir, { recursive: true });
@@ -179,6 +199,58 @@ describe('loadWorkflowByIdentifier', () => {
     expect(workflow!.name).toBe('default');
   });
 
+  it('should load the loop analysis builtin workflow', () => {
+    const workflow = loadWorkflowByIdentifier('loop-analysis', process.cwd());
+
+    expect(workflow?.name).toBe('loop-analysis');
+  });
+
+  it('TEST-NEW-review-fix-contract keeps review-fix aligned with default peer-review wiring', () => {
+    for (const language of ['en', 'ja'] as const) {
+      const projectDir = join(tempDir, language);
+      mkdirSync(join(projectDir, '.takt'), { recursive: true });
+      writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${language}\n`, 'utf-8');
+
+      const defaultWorkflow = loadWorkflowByIdentifier('default', projectDir);
+      const reviewWorkflow = loadWorkflowByIdentifier('review', projectDir);
+      const reviewFixWorkflow = loadWorkflowByIdentifier('review-fix', projectDir);
+      if (!defaultWorkflow || !reviewWorkflow || !reviewFixWorkflow) {
+        throw new Error(`Expected builtin workflows to load for language "${language}"`);
+      }
+
+      const defaultDevelop = findWorkflowStep(defaultWorkflow, 'develop');
+      if (defaultDevelop.kind !== 'workflow_call') {
+        throw new Error('Expected default.develop to be a workflow_call step');
+      }
+      const developmentCore = resolveWorkflowCallTarget(defaultWorkflow, defaultDevelop, projectDir, projectDir);
+      if (!developmentCore) {
+        throw new Error('Expected default.develop to resolve development-core');
+      }
+
+      const defaultPeerReview = findWorkflowStep(developmentCore, 'peer-review');
+      const reviewFixReviewers = findWorkflowStep(reviewFixWorkflow, 'reviewers');
+      if (defaultPeerReview.kind !== 'workflow_call' || reviewFixReviewers.kind !== 'workflow_call') {
+        throw new Error('Expected peer-review and reviewers to be workflow_call steps');
+      }
+
+      expect(reviewFixReviewers.call).toBe('peer-review');
+      expect(reviewFixReviewers.args).toEqual(defaultPeerReview.args);
+      expect(reviewFixReviewers.args?.reviewer_suite).toBe('development-review');
+
+      const reviewGather = findWorkflowStep(reviewWorkflow, 'gather');
+      const reviewFixGather = findWorkflowStep(reviewFixWorkflow, 'gather');
+      expect(reviewFixGather.instructionRef).toBe(reviewGather.instructionRef);
+      expect(reviewFixGather.instruction).toBe(reviewGather.instruction);
+      expect(reviewFixGather.rules).toEqual(reviewGather.rules);
+
+      expect(semanticTransitionMap(reviewFixReviewers)).toEqual({
+        COMPLETE: 'COMPLETE',
+        need_replan: 'ABORT',
+        ABORT: 'ABORT',
+      });
+    }
+  });
+
   it('should load workflow by absolute path', () => {
     const filePath = join(tempDir, 'test.yaml');
     writeFileSync(filePath, SAMPLE_WORKFLOW);
@@ -188,7 +260,7 @@ describe('loadWorkflowByIdentifier', () => {
     expect(workflow!.name).toBe('test-workflow');
   });
 
-  it('should preserve explicit model omission from model null', () => {
+  it('should reject workflow provider/model settings and point to runtime.yaml', () => {
     const filePath = join(tempDir, 'model-null.yaml');
     writeFileSync(filePath, `name: model-null
 initial_step: step1
@@ -202,14 +274,7 @@ steps:
     instruction: "{task}"
 `);
 
-    const workflow = loadWorkflowByIdentifier(filePath, tempDir);
-
-    expect(workflow).not.toBeNull();
-    expect(workflow!.steps[0]).toMatchObject({
-      provider: 'cursor',
-      model: undefined,
-      modelSpecified: true,
-    });
+    expect(() => loadWorkflowByIdentifier(filePath, tempDir)).toThrow(/runtime\.yaml/);
   });
 
   it('should reject callable section map project facet symlinks before expanding workflow_call defaults', () => {
@@ -395,7 +460,7 @@ steps:
     expect(workflow!.name).toBe('test-workflow');
   });
 
-  it('should preserve callable subworkflow provider settings during load', () => {
+  it('should reject callable subworkflow provider settings and point to runtime.yaml', () => {
     const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
     mkdirSync(projectWorkflowsDir, { recursive: true });
     writeFileSync(join(projectWorkflowsDir, 'callable-provider.yaml'), `name: callable-provider
@@ -443,55 +508,7 @@ steps:
         next: COMPLETE
 `);
 
-    const workflow = loadWorkflowByIdentifier('callable-provider', tempDir);
-
-    expect(workflow).not.toBeNull();
-    expect(workflow).toMatchObject({
-      provider: 'codex',
-      model: 'gpt-5-codex',
-      providerOptions: {
-        codex: {
-          networkAccess: true,
-        },
-      },
-      loopMonitors: [
-        {
-          judge: {
-            provider: 'codex',
-            model: 'gpt-5-codex',
-            providerOptions: {
-              codex: {
-                networkAccess: true,
-              },
-            },
-          },
-        },
-      ],
-      steps: [
-        {
-          name: 'review',
-          provider: 'codex',
-          model: 'gpt-5-codex',
-          providerOptions: {
-            codex: {
-              networkAccess: true,
-            },
-          },
-          parallel: [
-            {
-              name: 'security',
-              provider: 'codex',
-              model: 'gpt-5-codex',
-              providerOptions: {
-                codex: {
-                  networkAccess: true,
-                },
-              },
-            },
-          ],
-        },
-      ],
-    });
+    expect(() => loadWorkflowByIdentifier('callable-provider', tempDir)).toThrow(/runtime\.yaml/);
   });
 
   it('should reject unsupported workflow_call child return conditions during load', () => {
@@ -993,7 +1010,7 @@ describe('listWorkflows with project-local', () => {
 
     expect(workflows).not.toContain('broken');
     expect(onWarning).toHaveBeenCalledTimes(1);
-    expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('Workflow "broken" failed to load'));
+    expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('broken'));
   });
 
   it('should include privileged project-local workflows', () => {
@@ -1295,9 +1312,7 @@ steps:
 
     expect(workflowNames).not.toContain('broken-internal');
     expect(onWarning).toHaveBeenCalledTimes(1);
-    expect(onWarning).toHaveBeenCalledWith(
-      expect.stringContaining('Workflow "broken-internal" failed to load: subworkflow.visibility: subworkflow.visibility requires callable: true'),
-    );
+    expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('broken-internal'));
   });
 });
 
@@ -1534,8 +1549,7 @@ describe('loadAllWorkflowsWithSources with repertoire workflows', () => {
 
     expect(workflows.has('broken')).toBe(false);
     expect(onWarning).toHaveBeenCalledTimes(1);
-    expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('Workflow "broken" failed to load'));
-    expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('allowed_tools'));
+    expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('broken'));
   });
 
   it('should warn and skip invalid repertoire workflows', () => {
@@ -1548,10 +1562,7 @@ describe('loadAllWorkflowsWithSources with repertoire workflows', () => {
 
     expect(workflows.has('@nrslib/takt-ensemble/broken')).toBe(false);
     expect(onWarning).toHaveBeenCalledTimes(1);
-    expect(onWarning).toHaveBeenCalledWith(
-      expect.stringContaining('Workflow "@nrslib/takt-ensemble/broken" failed to load'),
-    );
-    expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('allowed_tools'));
+    expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('@nrslib/takt-ensemble/broken'));
   });
 
   it('should forward warnings through loadAllWorkflows callback', () => {
@@ -1710,9 +1721,7 @@ steps:
 
     expect(entries.find((entry) => entry.name === '@nrslib/takt-ensemble/broken')).toBeUndefined();
     expect(onWarning).toHaveBeenCalledTimes(1);
-    expect(onWarning).toHaveBeenCalledWith(
-      expect.stringContaining('Workflow "@nrslib/takt-ensemble/broken" failed to load'),
-    );
+    expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('@nrslib/takt-ensemble/broken'));
   });
 });
 

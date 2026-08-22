@@ -227,10 +227,9 @@ describe('applyExecOverrides', () => {
     const summary = formatExecConfigSummary(config);
     const workerDetails = formatActorDetails(config.workers[0]!);
 
-    expect(summary).toContain('Assistant agent: opencode/big-pickle');
-    expect(summary).toContain('Worker agent x1: opencode/big-pickle');
-    expect(summary).toContain('Review agent x1: opencode/big-pickle');
-    expect(workerDetails).toContain('opencode/big-pickle · instruction: exec-worker');
+    expect(summary).toContain('opencode/big-pickle');
+    expect(workerDetails).toContain(config.workers[0]!.instruction);
+    expect(workerDetails).toContain(config.workers[0]!.model);
     expect(summary).not.toContain('opencode/opencode/big-pickle');
     expect(workerDetails).not.toContain('opencode/opencode/big-pickle');
   });
@@ -260,7 +259,7 @@ describe('applyExecOverrides', () => {
     },
   );
 
-  it.each(['cursor', 'copilot', 'kiro'] as const)(
+  it.each(['cursor', 'copilot', 'kiro', 'pi', 'deepseek-harness'] as const)(
     'should display and emit provider defaults when overriding provider to %s without an explicit model',
     (provider) => {
       const config = createTestConfig();
@@ -282,13 +281,17 @@ describe('applyExecOverrides', () => {
       expect(summary).toContain(`Assistant agent: ${provider}/(provider default)`);
       expect(summary).toContain(`Worker agent x1: ${provider}/(provider default)`);
       expect(summary).toContain(`Review agent x1: ${provider}/(provider default)`);
-      expect(findRawStep(rawWorkflow, 'execute').parallel?.[0]).toMatchObject({ provider, model: null });
-      expect(findRawStep(rawWorkflow, 'review').parallel?.[0]).toMatchObject({ provider, model: null });
-      expect(findRawStep(rawWorkflow, 'replan')).toMatchObject({ provider, model: null });
-      expect(rawWorkflow.loop_monitors?.map((monitor) => monitor.judge)).toEqual([
-        expect.objectContaining({ provider, model: null }),
-        expect.objectContaining({ provider, model: null }),
-      ]);
+      expect(findRawStep(rawWorkflow, 'execute').parallel?.[0]).not.toHaveProperty('provider');
+      expect(findRawStep(rawWorkflow, 'execute').parallel?.[0]).not.toHaveProperty('model');
+      expect(findRawStep(rawWorkflow, 'review').parallel?.[0]).not.toHaveProperty('provider');
+      expect(findRawStep(rawWorkflow, 'review').parallel?.[0]).not.toHaveProperty('model');
+      expect(findRawStep(rawWorkflow, 'replan')).not.toHaveProperty('provider');
+      expect(findRawStep(rawWorkflow, 'replan')).not.toHaveProperty('model');
+      expect(rawWorkflow.loop_monitors).toHaveLength(2);
+      for (const monitor of rawWorkflow.loop_monitors ?? []) {
+        expect(monitor.judge).not.toHaveProperty('provider');
+        expect(monitor.judge).not.toHaveProperty('model');
+      }
     },
   );
 

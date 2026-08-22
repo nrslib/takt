@@ -44,12 +44,11 @@ import {
   createToolGuardRecoveryState,
   markToolGuardCorrectionPending,
   markToolGuardFreshSessionUsed,
-  shouldIssueToolGuardCorrection,
+  resolveToolGuardRecoveryAction,
   type ToolGuardRecoverableFailure,
 } from './tool-guard.js';
 import {
   resolveOpenCodeGuardSuite,
-  describeOpenCodeIdleTimeout,
   type OpenCodeGuardAbortKind,
   type OpenCodeGuardEvaluation,
   type OpenCodeGuardSuite,
@@ -70,6 +69,7 @@ import {
 } from './unavailable-tool-recovery.js';
 import { createOpenCodeSessionLifecycle } from './session-lifecycle.js';
 import type { OpenCodeSessionLifecycle } from './session-lifecycle.js';
+import { AGENT_FAILURE_CATEGORIES } from '../../shared/types/agent-failure.js';
 import { buildRateLimitedResponseFields, containsRateLimitError } from '../rate-limit/detection.js';
 import {
   createSensitiveTextStreamRedactor,
@@ -251,8 +251,8 @@ function extractStatusCode(error: unknown): number | undefined {
  * 直近の assistant メッセージのエラーを検死し、レート制限ならその内容を返す。
  *
  * OpenCode サーバはプロバイダの 429 を内部リトライで握り、イベントバスへ
- * session.error を流さない。takt からは「無音のまま停止したセッション」に
- * 見えるため、無音ウォッチドッグのタイムアウト後にここで死因を確かめる。
+ * session.error を流さない。認証済み transport が追加する無音ウォッチドッグで
+ * セッションを停止した場合に、ここで死因を確かめる。
  *
  * 判定するのは「最新の assistant メッセージ」だけに限る。sessionId は phase や
  * resume で再利用されるため、過去の assistant に残る古い 429 を今回の死因と
@@ -771,7 +771,6 @@ export class OpenCodeAttemptRunner {
       profile: guardSuite.profile,
       enabledGuardIds: guardSuite.enabledGuardIds,
       callTimeoutMs: guardSuite.policy.callTimeoutMs,
-      streamIdleTimeoutMs: guardSuite.policy.streamIdleTimeoutMs,
       messageCycleBudget: guardSuite.policy.messageCycleBudget,
       exactToolRepeatLimit: guardSuite.policy.exactToolRepeatLimit,
       streamEventLimit: guardSuite.policy.streamEventLimit,
@@ -798,6 +797,7 @@ export class OpenCodeAttemptRunner {
     const provisionalKey = `provisional-${nextProvisionalId++}`;
     try {
       for (let attempt = 1; attempt <= callState.maxAttempts; attempt++) {
+        guardedOptions.onActivity?.({ kind: 'attempt_started' });
         const result = await this.runAttempt(
           agentType,
           prompt,
@@ -828,7 +828,7 @@ export class OpenCodeAttemptRunner {
   callState: OpenCodeCallState,
   ): Promise<AgentResponse | typeof RETRY_ATTEMPT> {
   const streamAbortController = new AbortController();
-  const timeoutMessage = describeOpenCodeIdleTimeout(guardSuite.policy.streamIdleTimeoutMs);
+  let timeoutMessage = OPENCODE_STREAM_ABORTED_MESSAGE;
   let abortCause: OpenCodeAbortCause | undefined;
   let diagRef: StreamDiagnostics | undefined;
   let release: (() => void) | undefined;
@@ -933,6 +933,9 @@ export class OpenCodeAttemptRunner {
       error: errorMessage,
       timestamp: new Date(),
       sessionId,
+      ...(abortCause === 'deadline'
+        ? { failureCategory: AGENT_FAILURE_CATEGORIES.PART_TIMEOUT }
+        : {}),
     };
   };
 
@@ -978,6 +981,14 @@ export class OpenCodeAttemptRunner {
     const failure = guardSuite.getCallFailure();
     throw new Error(failure?.verdict.reason ?? OPENCODE_STREAM_ABORTED_MESSAGE);
   };
+
+  guardSuite.startAttempt((failure) => {
+    if (streamAbortController.signal.aborted) return;
+    timeoutMessage = failure.verdict.reason;
+    log.warn(failure.verdict.reason, { sessionId, model: options.model });
+    abortCause = 'timeout';
+    streamAbortController.abort(new Error(failure.verdict.reason));
+  });
 
   let attemptResult: AgentResponse | typeof RETRY_ATTEMPT;
   try {
@@ -1093,12 +1104,6 @@ export class OpenCodeAttemptRunner {
       { signal: streamAbortController.signal },
     );
     throwIfCallAborted();
-    guardSuite.startAttempt((failure) => {
-      diagRef?.onIdleTimeoutFired();
-      log.warn(failure.verdict.reason, { sessionId, model: options.model });
-      abortCause = 'timeout';
-      streamAbortController.abort(new Error(failure.verdict.reason));
-    });
     diag.onConnected();
     if (appliedPermissionRuleset) {
       emitPermissionSummary(options.onStream, {
@@ -1353,8 +1358,8 @@ export class OpenCodeAttemptRunner {
           const rejection = extractOpenCodeToolRejection(toolPart);
           // onStream（→ provider event logging 有効時は *-provider-events.jsonl
           // へ永続化される）にも raw エラー文を流さない。マスク済みの
-          // コピーを downstream へ渡す（Finding Contract: onStream はライブ表示
-          // 専用ではなく永続化経路を含む）。
+          // コピーを downstream へ渡す（onStream はライブ表示専用ではなく
+          // 永続化経路を含む）。
           let partForDownstream: OpenCodePart = part;
           if (rejection !== undefined) {
             // 失敗したツール呼び出しの引数を残す。エラー文だけでは
@@ -1687,7 +1692,7 @@ export class OpenCodeAttemptRunner {
 
     throwIfServerInvalidated();
 
-    // The idle watchdog and external aborts cancel the stream. If the
+    // Guard-triggered and external aborts cancel the stream. If the
     // iterator ends without throwing, the loop falls through with
     // success still true - do not let a timed-out or aborted stream
     // pass as a completed call (a stalled stream after a rejected
@@ -1754,7 +1759,8 @@ export class OpenCodeAttemptRunner {
           sessionId: activeSessionId,
         };
       }
-      // 無音タイムアウトで止めた場合、死因はサーバが握った 429 かもしれない。
+      // 認証済み transport の無音タイムアウトで止めた場合、死因はサーバが握った
+      // 429 かもしれない。
       // メッセージ文字列だけでは判別できないため、セッションを検死する。
       if (
         abortCause === 'timeout'
@@ -1855,59 +1861,58 @@ export class OpenCodeAttemptRunner {
         && toolGuardFailure.tool === STRUCTURED_OUTPUT_TOOL_NAME
         ? undefined
         : toolGuardFailure;
-      if (
-        recoverableToolFailure !== undefined
-        && !callState.toolGuardRecovery.freshSessionUsed
-        && shouldIssueToolGuardCorrection(
+      if (recoverableToolFailure !== undefined) {
+        const toolGuardRecoveryAction = resolveToolGuardRecoveryAction(
           callState.toolGuardRecovery,
           getToolGuardFailureFingerprint(recoverableToolFailure),
-        )
-      ) {
-        throwIfCallAborted();
-        callState.toolGuardRecovery = markToolGuardCorrectionPending(
-          callState.toolGuardRecovery,
-          activeSessionId,
-          getToolGuardFailureFingerprint(recoverableToolFailure),
-          buildToolGuardCorrectionPrompt(recoverableToolFailure, unavailableLoopServerTools),
         );
-        guardSuite.noteRecovery();
-        callState.maxAttempts = Math.max(callState.maxAttempts, attempt + 1);
-        log.debug('OpenCode tool loop detected; sending one in-session correction', {
-          agentType,
-          previousAttempt: attempt,
-          sessionId: activeSessionId,
-          kind: recoverableToolFailure.kind,
-          fingerprint: getToolGuardFailureFingerprint(recoverableToolFailure).slice(0, 12),
-          toolHealth: guardSuite.stats(),
-        });
-        await this.waitForRetryDelay(attempt, options.abortSignal);
-        throwIfCallAborted();
-        throwIfServerInvalidated();
-        return RETRY_ATTEMPT;
-      }
+        if (toolGuardRecoveryAction === 'correction') {
+          throwIfCallAborted();
+          callState.toolGuardRecovery = markToolGuardCorrectionPending(
+            callState.toolGuardRecovery,
+            activeSessionId,
+            getToolGuardFailureFingerprint(recoverableToolFailure),
+            buildToolGuardCorrectionPrompt(recoverableToolFailure, unavailableLoopServerTools),
+          );
+          guardSuite.noteRecovery();
+          callState.maxAttempts = Math.max(callState.maxAttempts, attempt + 1);
+          log.debug('OpenCode tool loop detected; sending one in-session correction', {
+            agentType,
+            previousAttempt: attempt,
+            sessionId: activeSessionId,
+            kind: recoverableToolFailure.kind,
+            fingerprint: getToolGuardFailureFingerprint(recoverableToolFailure).slice(0, 12),
+            toolHealth: guardSuite.stats(),
+          });
+          await this.waitForRetryDelay(attempt, options.abortSignal);
+          throwIfCallAborted();
+          throwIfServerInvalidated();
+          return RETRY_ATTEMPT;
+        }
 
-      if (recoverableToolFailure !== undefined && !callState.toolGuardRecovery.freshSessionUsed) {
-        throwIfCallAborted();
-        callState.toolGuardRecovery = markToolGuardFreshSessionUsed(callState.toolGuardRecovery, recoverableToolFailure.kind);
-        guardSuite.noteRecovery();
-        callState.maxAttempts = Math.max(callState.maxAttempts, attempt + 1);
-        log.debug('OpenCode tool guard failure; retrying prompt once in a fresh session with a continuation preamble', {
-          agentType,
-          previousAttempt: attempt,
-          previousSessionId: activeSessionId,
-          reason: recoverableToolFailure.kind,
-          toolHealth: guardSuite.stats(),
-        });
-        await this.waitForRetryDelay(attempt, options.abortSignal);
-        throwIfCallAborted();
-        throwIfServerInvalidated();
-        return RETRY_ATTEMPT;
+        if (toolGuardRecoveryAction === 'fresh_session') {
+          throwIfCallAborted();
+          callState.toolGuardRecovery = markToolGuardFreshSessionUsed(callState.toolGuardRecovery, recoverableToolFailure.kind);
+          guardSuite.noteRecovery();
+          callState.maxAttempts = Math.max(callState.maxAttempts, attempt + 1);
+          log.debug('OpenCode tool guard failure; retrying prompt once in a fresh session with a continuation preamble', {
+            agentType,
+            previousAttempt: attempt,
+            previousSessionId: activeSessionId,
+            reason: recoverableToolFailure.kind,
+            toolHealth: guardSuite.stats(),
+          });
+          await this.waitForRetryDelay(attempt, options.abortSignal);
+          throwIfCallAborted();
+          throwIfServerInvalidated();
+          return RETRY_ATTEMPT;
+        }
       }
 
       // ガード発火（absolute_cost_limit / recovery 消費後の再発）は決定的な
       // ループ失敗であり transient ではない — retriable 判定に流さず即失敗する。
       // needs_fix / plan への自動迂回はしない（インフラ障害とレビュー判断を
-      // 混同しない — Finding Contract）。
+      // 混同しない。
       const retriable = toolGuardFailure === undefined
         && this.isRetriableError(message, abortCause);
       if (retriable && attempt < OPENCODE_RETRY_MAX_ATTEMPTS) {
@@ -2095,6 +2100,9 @@ export class OpenCodeAttemptRunner {
       error: sanitizedErrorMessage,
       timestamp: new Date(),
       sessionId,
+      ...(abortCause === 'deadline'
+        ? { failureCategory: AGENT_FAILURE_CATEGORIES.PART_TIMEOUT }
+        : {}),
     };
   } finally {
     guardSuite.stopAttempt();

@@ -1,11 +1,15 @@
-import { crossSpawn } from '../../shared/utils/index.js';
+import { crossSpawn, guardChildProcessStreams } from '../../shared/utils/index.js';
 import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/index.js';
 import { containsRateLimitMarker } from '../rate-limit/detection.js';
-import { tryExtractTextFromStreamJsonLine, tryExtractThinkingFromStreamJsonLine } from './stream-json-lines.js';
+import {
+  tryExtractTextFromStreamJsonLine,
+  tryExtractThinkingFromStreamJsonLine,
+  tryExtractToolUseFromStreamJsonLine,
+} from './stream-json-lines.js';
 import type { ClaudeHeadlessCallOptions } from './types.js';
 
-const HEADLESS_STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const HEADLESS_MAX_BUFFER_BYTES = 10 * 1024 * 1024;
+const HEADLESS_FORCE_KILL_DELAY_MS = 1_000;
 export const HEADLESS_ABORTED_MESSAGE = 'Claude CLI execution aborted';
 export const HEADLESS_RATE_LIMIT_MESSAGE = 'Claude CLI stream reported a rate limit';
 const CLAUDE_COMMAND = 'claude';
@@ -66,30 +70,25 @@ export function runHeadlessCli(
     let stdoutBytes = 0;
     let stderrBytes = 0;
     let settled = false;
-    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
+    let childClosed = false;
 
-    const clearIdle = (): void => {
-      if (idleTimer !== undefined) {
-        clearTimeout(idleTimer);
-        idleTimer = undefined;
+    const clearForceKillTimer = (): void => {
+      if (forceKillTimer !== undefined) {
+        clearTimeout(forceKillTimer);
+        forceKillTimer = undefined;
       }
     };
 
-    const scheduleIdle = (): void => {
-      clearIdle();
-      idleTimer = setTimeout(() => {
-        if (settled) {
-          return;
+    const scheduleForceKill = (): void => {
+      clearForceKillTimer();
+      forceKillTimer = setTimeout(() => {
+        forceKillTimer = undefined;
+        if (!settled && !childClosed) {
+          child.kill('SIGKILL');
         }
-        child.kill('SIGTERM');
-        rejectOnce(
-          createExecError('Claude CLI stream idle timeout: no output within time limit', {
-            stdout,
-            stderr,
-          }),
-        );
-      }, HEADLESS_STREAM_IDLE_TIMEOUT_MS);
-      idleTimer.unref?.();
+      }, HEADLESS_FORCE_KILL_DELAY_MS);
+      forceKillTimer.unref?.();
     };
 
     const abortHandler = (): void => {
@@ -97,13 +96,15 @@ export function runHeadlessCli(
         return;
       }
       child.kill('SIGTERM');
+      scheduleForceKill();
     };
 
     const cleanup = (): void => {
-      clearIdle();
+      clearForceKillTimer();
       if (options.abortSignal) {
         options.abortSignal.removeEventListener('abort', abortHandler);
       }
+      guardTeardown();
     };
 
     const resolveOnce = (result: { stdout: string; stderr: string }): void => {
@@ -115,11 +116,14 @@ export function runHeadlessCli(
       resolve(result);
     };
 
-    const rejectOnce = (error: ExecError): void => {
+    const rejectOnce = (error: ExecError, terminateChild = false): void => {
       if (settled) {
         return;
       }
       settled = true;
+      if (terminateChild) {
+        child.kill('SIGTERM');
+      }
       cleanup();
       reject(error);
     };
@@ -142,7 +146,6 @@ export function runHeadlessCli(
           return;
         }
         stdout += text;
-        scheduleIdle();
         if (containsRateLimitMarker(stdout)) {
           child.kill('SIGTERM');
           rejectOnce(
@@ -187,6 +190,10 @@ export function runHeadlessCli(
       if (!options.onStream) return;
 
       for (const line of parts) {
+        const toolUses = tryExtractToolUseFromStreamJsonLine(line);
+        for (const toolUse of toolUses) {
+          options.onStream({ type: 'tool_use', data: toolUse });
+        }
         const thinking = tryExtractThinkingFromStreamJsonLine(line);
         if (thinking) {
           options.onStream({ type: 'thinking', data: { thinking } });
@@ -207,17 +214,28 @@ export function runHeadlessCli(
 
     child.stderr?.on('data', (chunk: Buffer | string) => appendChunk('stderr', chunk));
 
-    child.on('error', (error: NodeJS.ErrnoException) => {
+    const guardTeardown = guardChildProcessStreams(child, (error, source) => {
+      if (source === 'process') {
+        rejectOnce(
+          createExecError(error.message, {
+            code: (error as NodeJS.ErrnoException).code,
+            stdout,
+            stderr,
+          }),
+        );
+        return;
+      }
       rejectOnce(
-        createExecError(error.message, {
-          code: error.code,
+        createExecError(`Claude CLI ${source} stream error: ${error.message}`, {
           stdout,
           stderr,
         }),
+        true,
       );
     });
 
     child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
+      childClosed = true;
       if (settled) {
         return;
       }
@@ -265,6 +283,5 @@ export function runHeadlessCli(
       }
     }
 
-    scheduleIdle();
   });
 }

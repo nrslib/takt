@@ -71,28 +71,31 @@ export class SdkOptionsBuilder {
     const hooks = SdkOptionsBuilder.createAskUserQuestionHooks(askHandler);
 
     const permissionMode = this.resolvePermissionMode();
+    const isStrictReadonly = this.options.internalAgentIsolation === 'strict-readonly';
     // Only include defined values — the SDK treats key-present-but-undefined
     // differently from key-absent for some options (e.g. model), causing hangs.
     const sdkOptions: Options = {
       cwd: this.options.cwd,
       permissionMode,
-      settingSources: this.options.internalAgentIsolation === 'strict-readonly' ? [] : ['project'],
+      settingSources: isStrictReadonly ? [] : ['project'],
     };
 
-    if (this.options.internalAgentIsolation === 'strict-readonly') {
+    if (isStrictReadonly) {
       sdkOptions.tools = [];
-      sdkOptions.strictMcpConfig = true;
       sdkOptions.skills = [];
+      sdkOptions.strictMcpConfig = true;
     }
+
     if (this.options.model) sdkOptions.model = this.options.model;
-    if (this.options.effort) sdkOptions.effort = this.options.effort;
-    if (this.options.internalAgentIsolation !== 'strict-readonly' && this.options.skillsEnabled === false) {
+    // The SDK's TypeScript union can lag values accepted by the Claude CLI runtime.
+    if (this.options.effort) sdkOptions.effort = this.options.effort as Options['effort'];
+    if (!isStrictReadonly && this.options.skillsEnabled === false) {
       sdkOptions.skills = [];
     }
     if (this.options.maxTurns != null) sdkOptions.maxTurns = this.options.maxTurns;
-    if (this.options.allowedTools) sdkOptions.allowedTools = this.options.allowedTools;
+    if (!isStrictReadonly && this.options.allowedTools) sdkOptions.allowedTools = this.options.allowedTools;
     if (this.options.agents) sdkOptions.agents = this.options.agents;
-    if (this.options.mcpServers) sdkOptions.mcpServers = this.options.mcpServers;
+    if (!isStrictReadonly && this.options.mcpServers) sdkOptions.mcpServers = this.options.mcpServers;
     // Runtime MCP assignment (issue #1137): when the runner prepared MCP
     // material, merge `mcpServers`/`strictMcpConfig` so a normal agent step
     // with a non-empty server set also isolates ambient MCP config

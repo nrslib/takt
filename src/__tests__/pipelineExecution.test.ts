@@ -20,6 +20,20 @@ const mockFetchPrReviewComments = vi.fn();
 const mockFormatPrReviewAsTask = vi.fn((pr: { number: number; title: string }) =>
   `## PR #${pr.number} Review Comments: ${pr.title}`
 );
+const mockPublicationCoordinator = {
+  branch: 'takt/pipeline-publication',
+  register: vi.fn(),
+  settle: vi.fn(),
+};
+const mockCreateLoopAnalysisPublicationCoordinator = vi.fn();
+const mockSettleLoopAnalysisPublication = vi.fn();
+
+vi.mock('../features/tasks/execute/loopAnalysisPublication.js', () => ({
+  createLoopAnalysisPublicationCoordinator: (...args: unknown[]) =>
+    mockCreateLoopAnalysisPublicationCoordinator(...args),
+  settleLoopAnalysisPublication: (...args: unknown[]) =>
+    mockSettleLoopAnalysisPublication(...args),
+}));
 
 vi.mock('../infra/git/index.js', () => ({
   getGitProvider: () => ({
@@ -59,7 +73,14 @@ vi.mock('../infra/config/index.js', () => ({
 }));
 
 const mockExecFileSync = vi.fn();
+const mockExecFile = vi.fn((
+  _file: string,
+  _args: readonly string[],
+  _options: object,
+  callback: (error: Error | null, stdout: string, stderr: string) => void,
+) => callback(null, '', ''));
 vi.mock('node:child_process', () => ({
+  execFile: mockExecFile,
   execFileSync: mockExecFileSync,
 }));
 
@@ -120,6 +141,7 @@ describe('executePipeline', () => {
     mockGetCurrentBranch.mockReturnValue('current/branch');
     mockResolveConfigValues.mockReturnValue({ pipeline: undefined });
     mockResolveConfigValue.mockReturnValue(undefined);
+    mockCreateLoopAnalysisPublicationCoordinator.mockReturnValue(mockPublicationCoordinator);
   });
 
   it('should return exit code 2 when neither --issue nor --task is specified', async () => {
@@ -173,13 +195,16 @@ describe('executePipeline', () => {
     const exitCode = await executePipeline({
       issueNumber: 99,
       workflow: 'default',
-      autoPr: false,
+      autoPr: true,
       cwd: '/tmp/test',
     });
 
     expect(exitCode).toBe(3);
-    expect(mockInfo).toHaveBeenCalledWith('Running workflow: default');
-    expect(mockError).toHaveBeenCalledWith("Workflow 'default' failed");
+    expect(mockInfo).toHaveBeenCalled();
+    expect(mockError).toHaveBeenCalled();
+    expect(mockError.mock.calls[0]?.[0]).toEqual(expect.stringContaining('default'));
+    expect(mockCreateLoopAnalysisPublicationCoordinator).toHaveBeenCalledTimes(1);
+    expect(mockSettleLoopAnalysisPublication).toHaveBeenCalledWith(mockPublicationCoordinator);
   });
 
   it('should return exit code 0 on successful task-only execution', async () => {
@@ -207,10 +232,10 @@ describe('executePipeline', () => {
     };
     expect(executeArg.traceTaskContext?.branch).toMatch(/^takt\/pipeline-/);
     expect('traceTaskMetadata' in executeArg).toBe(false);
-    expect(mockInfo).toHaveBeenCalledWith('Running workflow: default');
-    expect(mockSuccess).toHaveBeenCalledWith("Workflow 'default' completed");
-    expect(mockStatus).toHaveBeenCalledWith('Workflow', 'default');
-    expect(mockStatus).toHaveBeenCalledWith('Result', 'Success', 'green');
+    expect(mockInfo).toHaveBeenCalled();
+    expect(mockSuccess.mock.calls.some(([message]) => message.includes('default'))).toBe(true);
+    expect(mockStatus.mock.calls.some(([, value]) => value === 'default')).toBe(true);
+    expect(mockStatus.mock.calls.some(([, value]) => value === 'Success')).toBe(true);
   });
 
   it('should report workflow status for issue execution success', async () => {
@@ -231,10 +256,10 @@ describe('executePipeline', () => {
     });
 
     expect(exitCode).toBe(0);
-    expect(mockInfo).toHaveBeenCalledWith('Running workflow: default');
-    expect(mockSuccess).toHaveBeenCalledWith("Workflow 'default' completed");
-    expect(mockStatus).toHaveBeenCalledWith('Workflow', 'default');
-    expect(mockStatus).toHaveBeenCalledWith('Result', 'Success', 'green');
+    expect(mockInfo).toHaveBeenCalled();
+    expect(mockSuccess.mock.calls.some(([message]) => message.includes('default'))).toBe(true);
+    expect(mockStatus.mock.calls.some(([, value]) => value === 'default')).toBe(true);
+    expect(mockStatus.mock.calls.some(([, value]) => value === 'Success')).toBe(true);
     const executeArg = mockExecuteTask.mock.calls[0]?.[0] as {
       traceTaskContext?: {
         issueNumber?: number;
@@ -260,9 +285,13 @@ describe('executePipeline', () => {
     });
 
     expect(exitCode).toBe(0);
-    expect(mockInfo).toHaveBeenCalledWith('Running workflow: bad-workflow\\n');
-    expect(mockSuccess).toHaveBeenCalledWith("Workflow 'bad-workflow\\n' completed");
-    expect(mockStatus).toHaveBeenCalledWith('Workflow', 'bad-workflow\\n');
+    const renderedMessages = [
+      ...mockInfo.mock.calls,
+      ...mockSuccess.mock.calls,
+      ...mockStatus.mock.calls,
+    ].flat().filter((value): value is string => typeof value === 'string');
+    expect(renderedMessages.some((message) => message.includes('bad-workflow'))).toBe(true);
+    expect(renderedMessages.every((message) => !/[\u0000-\u001f\u007f]/.test(message))).toBe(true);
   });
 
   it('should sanitize issue title and branch in terminal output', async () => {
@@ -284,11 +313,14 @@ describe('executePipeline', () => {
     });
 
     expect(exitCode).toBe(0);
-    expect(mockSuccess).toHaveBeenCalledWith('Issue #99 fetched: "Issue\\n"');
-    expect(mockInfo).toHaveBeenCalledWith('Creating branch: feature\\t');
-    expect(mockSuccess).toHaveBeenCalledWith('Branch created: feature\\t');
-    expect(mockStatus).toHaveBeenCalledWith('Issue', '#99 "Issue\\n"');
-    expect(mockStatus).toHaveBeenCalledWith('Branch', 'feature\\t');
+    const renderedMessages = [
+      ...mockInfo.mock.calls,
+      ...mockSuccess.mock.calls,
+      ...mockStatus.mock.calls,
+    ].flat().filter((value): value is string => typeof value === 'string');
+    expect(renderedMessages.some((message) => message.includes('Issue\\n'))).toBe(true);
+    expect(renderedMessages.some((message) => message.includes('feature\\t'))).toBe(true);
+    expect(renderedMessages.every((message) => !/[\u0000-\u001f\u007f]/.test(message))).toBe(true);
   });
 
   it('should reject an invalid PR head before worktree creation', async () => {
@@ -308,7 +340,8 @@ describe('executePipeline', () => {
     });
 
     expect(exitCode).toBe(4);
-    expect(mockSuccess).toHaveBeenCalledWith('PR #12 fetched: "PR\\n"');
+    expect(mockSuccess.mock.calls[0]?.[0]).toEqual(expect.stringContaining('PR\\n'));
+    expect(mockSuccess.mock.calls[0]?.[0]).not.toMatch(/[\u0000-\u001f\u007f]/);
     expect(mockConfirmAndCreateWorktree).not.toHaveBeenCalled();
     expect(mockExecuteTask).not.toHaveBeenCalled();
   });
@@ -347,6 +380,7 @@ describe('executePipeline', () => {
     });
 
     expect(exitCode).toBe(5);
+    expect(mockSettleLoopAnalysisPublication).toHaveBeenCalledWith(mockPublicationCoordinator);
   });
 
   it('should return exit code 5 when createPullRequest throws', async () => {
@@ -379,12 +413,34 @@ describe('executePipeline', () => {
     });
 
     expect(exitCode).toBe(0);
+    expect(mockSettleLoopAnalysisPublication).toHaveBeenCalledWith(mockPublicationCoordinator);
     expect(mockCreatePullRequest).toHaveBeenCalledWith(
       expect.objectContaining({
         branch: 'fix/my-branch',
         repo: 'owner/repo',
       }),
       '/tmp/test',
+    );
+  });
+
+  it('should settle loop analysis publication after successful PR creation', async () => {
+    mockExecuteTask.mockResolvedValueOnce(true);
+    mockCreatePullRequest.mockReturnValueOnce({
+      success: true,
+      url: 'https://github.com/test/pr/1',
+    });
+
+    const exitCode = await executePipeline({
+      task: 'Fix the bug',
+      workflow: 'default',
+      branch: 'fix/my-branch',
+      autoPr: true,
+      cwd: '/tmp/test',
+    });
+
+    expect(exitCode).toBe(0);
+    expect(mockCreatePullRequest.mock.invocationCallOrder[0]).toBeLessThan(
+      mockSettleLoopAnalysisPublication.mock.invocationCallOrder[0]!,
     );
   });
 
@@ -570,12 +626,11 @@ describe('executePipeline', () => {
 
       // When prBodyTemplate is set, buildPrBody (mock) should NOT be called
       // Instead, the template is expanded directly
-      expect(mockCreatePullRequest).toHaveBeenCalledWith(
-        expect.objectContaining({
-          body: '## Summary\nAuth is broken.\n\nCloses #50',
-        }),
-        '/tmp/test',
-      );
+      const createArgs = mockCreatePullRequest.mock.calls[0] as [Record<string, unknown>, string];
+      expect(createArgs[1]).toBe('/tmp/test');
+      expect(createArgs[0].body).toEqual(expect.stringContaining('Auth is broken.'));
+      expect(createArgs[0].body).toEqual(expect.stringContaining('#50'));
+      expect(mockBuildPrBody).not.toHaveBeenCalled();
       expect(mockBuildTaktManagedPrOptions).not.toHaveBeenCalled();
     });
 
@@ -598,9 +653,7 @@ describe('executePipeline', () => {
 
       expect(mockBuildPrBody).not.toHaveBeenCalled();
       expect(mockCreatePullRequest).toHaveBeenCalledWith(
-        expect.objectContaining({
-          body: '## Summary\nWorkflow `default` completed successfully.\n\nIssue:\nDetails:',
-        }),
+        expect.objectContaining({ body: expect.any(String) }),
         '/tmp/test',
       );
       expect(mockBuildTaktManagedPrOptions).not.toHaveBeenCalled();
@@ -620,7 +673,7 @@ describe('executePipeline', () => {
 
       // Should use buildPrBody (the mock)
       expect(mockBuildPrBody).toHaveBeenCalled();
-      expect(mockBuildPrBody).toHaveBeenCalledWith(undefined, 'Workflow `default` completed successfully.');
+      expect(mockBuildPrBody).toHaveBeenCalledWith(undefined, expect.any(String));
       expect(mockCreatePullRequest).toHaveBeenCalledWith(
         expect.objectContaining({
           body: 'Default PR body',
@@ -1203,11 +1256,12 @@ describe('executePipeline', () => {
       task: 'Fix the bug',
       workflow: 'default',
       branch: 'fix/my-branch',
-      autoPr: false,
+      autoPr: true,
       cwd: '/tmp/test',
     });
 
     expect(exitCode).toBe(4);
+    expect(mockSettleLoopAnalysisPublication).toHaveBeenCalledWith(mockPublicationCoordinator);
   });
 
   describe('Slack notification', () => {

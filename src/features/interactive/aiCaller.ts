@@ -16,9 +16,14 @@ import { EXIT_SIGINT } from '../../shared/exitCodes.js';
 import type { ProviderType } from '../../infra/providers/index.js';
 import { getProvider } from '../../infra/providers/index.js';
 import type { ImageAttachmentReference } from '../../shared/types/image-attachments.js';
+import type { StreamCallback } from '../../shared/types/provider.js';
 import type { PermissionMode, StepProviderOptions } from '../../core/models/index.js';
 import { expandImageAttachmentPlaceholders } from '../../infra/providers/imageAttachmentPrompt.js';
 import { buildProviderRuntimeSystemPrompt } from '../../infra/providers/runtimeSystemPrompt.js';
+import {
+  providerSupportsAllowedTools,
+  providerSupportsPermissionControls,
+} from '../../infra/providers/provider-capabilities.js';
 
 const log = createLogger('ai-caller');
 
@@ -38,13 +43,26 @@ export interface SessionContext {
   personaName: string;
   sessionId: string | undefined;
   providerOptions?: StepProviderOptions;
+  permissionMode?: PermissionMode;
 }
 
 interface CallAIWithRetryOptions {
   imageAttachments?: ImageAttachmentReference[];
+  /** Receives what a terminal caller would have printed alongside the answer. */
+  onNotice?: (message: string) => void;
   permissionMode?: PermissionMode;
   outputMode?: 'terminal' | 'silent';
   abortSignal?: AbortSignal;
+  /**
+   * Persist a returned session ID for later resume. Defaults to true.
+   *
+   * A predicate is evaluated once the provider has answered, so a caller whose
+   * turn can be superseded — the TUI interrupts one and starts the next — can
+   * refuse to write the session of a turn nobody is waiting for any more.
+   */
+  persistSession?: boolean | (() => boolean);
+  /** Stream observer for callers that render the response themselves (`outputMode: 'silent'`). */
+  onStream?: StreamCallback;
 }
 
 /**
@@ -60,11 +78,22 @@ export async function callAIWithRetry(
   cwd: string,
   ctx: SessionContext,
   options: CallAIWithRetryOptions = {},
-): Promise<{ result: CallAIResult | null; sessionId: string | undefined }> {
+): Promise<{
+  result: CallAIResult | null;
+  sessionId: string | undefined;
+  /**
+   * Why there is no result. A terminal caller reads it off the screen, but a
+   * silent one (the Ink TUI) has no screen to read — without this the failure
+   * would reach the user as "the assistant returned no response".
+   */
+  error?: string;
+}> {
   const outputMode = options.outputMode ?? 'terminal';
   const display = outputMode === 'terminal'
     ? new StreamDisplay('assistant', isQuietMode())
     : undefined;
+  const resolveStreamHandler = (activeDisplay: StreamDisplay | undefined): StreamCallback | undefined =>
+    activeDisplay === undefined ? options.onStream : activeDisplay.createHandler();
   const abortController = new AbortController();
   const onExternalAbort = (): void => {
     abortController.abort(options.abortSignal?.reason);
@@ -90,6 +119,10 @@ export async function callAIWithRetry(
   if (outputMode === 'terminal') {
     process.on('SIGINT', onSigInt);
   }
+  const shouldPersistSession = (): boolean =>
+    typeof options.persistSession === 'function'
+      ? options.persistSession()
+      : options.persistSession !== false;
   let { sessionId } = ctx;
 
   try {
@@ -106,18 +139,36 @@ export async function callAIWithRetry(
     const promptForProvider = ctx.provider.supportsNativeImageInput
       ? prompt
       : expandImageAttachmentPlaceholders(prompt, options.imageAttachments);
+    const allowedToolsForProvider = providerSupportsAllowedTools(ctx.providerType) === false
+      ? undefined
+      : allowedTools;
+    // Per-call permissionMode is synthesized by the assistant strategy; a session-level mode is
+    // resolved user configuration and must still reach the provider for explicit-constraint errors.
+    const permissionModeForProvider = providerSupportsPermissionControls(ctx.providerType) === false
+      ? ctx.permissionMode
+      : options.permissionMode ?? ctx.permissionMode;
+    // Only the terminal caller owns stdout; a silent caller (the Ink TUI) renders
+    // its own frames and a stray write would corrupt them.
     if (hasImageAttachments && nativeImageAttachments === undefined) {
-      info(`Provider "${ctx.providerType}" does not support native image input; image paths were added to the prompt.`);
+      // The image did not go to the provider as an image, and the user has to
+      // know that. A terminal caller prints it; a silent one is handed the same
+      // sentence to render its own way.
+      const note = `Provider "${ctx.providerType}" does not support native image input; image paths were added to the prompt.`;
+      if (outputMode === 'terminal') {
+        info(note);
+      } else {
+        options.onNotice?.(note);
+      }
     }
     const response = await agent.call(promptForProvider, {
       cwd,
       model: ctx.model,
       sessionId,
-      allowedTools,
-      permissionMode: options.permissionMode,
+      ...(allowedToolsForProvider === undefined ? {} : { allowedTools: allowedToolsForProvider }),
+      ...(permissionModeForProvider === undefined ? {} : { permissionMode: permissionModeForProvider }),
       providerOptions: ctx.providerOptions,
       abortSignal: abortController.signal,
-      onStream: display?.createHandler(),
+      onStream: resolveStreamHandler(display),
       imageAttachments: nativeImageAttachments,
     });
     display?.flush();
@@ -134,30 +185,46 @@ export async function callAIWithRetry(
         cwd,
         model: ctx.model,
         sessionId: undefined,
-        allowedTools,
-        permissionMode: options.permissionMode,
+        ...(allowedToolsForProvider === undefined ? {} : { allowedTools: allowedToolsForProvider }),
+        ...(permissionModeForProvider === undefined ? {} : { permissionMode: permissionModeForProvider }),
         providerOptions: ctx.providerOptions,
         abortSignal: abortController.signal,
-        onStream: retryDisplay?.createHandler(),
+        onStream: resolveStreamHandler(retryDisplay),
         imageAttachments: nativeImageAttachments,
       });
       retryDisplay?.flush();
       if (retry.sessionId) {
         sessionId = retry.sessionId;
-        updatePersonaSession(cwd, ctx.personaName, sessionId, ctx.providerType);
+        if (shouldPersistSession()) {
+          updatePersonaSession(cwd, ctx.personaName, sessionId, ctx.providerType);
+        }
       }
+      const retrySucceeded = retry.status !== 'blocked' && retry.status !== 'error';
       return {
-        result: { content: retry.content, sessionId: retry.sessionId, success: retry.status !== 'blocked' && retry.status !== 'error' },
+        // A provider that fails puts its reason in `error`; the content of a
+        // failed call is often empty, and reporting that empty string would hide
+        // what went wrong.
+        result: {
+          content: retrySucceeded ? retry.content : (retry.error ?? retry.content),
+          sessionId: retry.sessionId,
+          success: retrySucceeded,
+        },
         sessionId,
       };
     }
 
     if (response.sessionId) {
       sessionId = response.sessionId;
-      updatePersonaSession(cwd, ctx.personaName, sessionId, ctx.providerType);
+      if (shouldPersistSession()) {
+        updatePersonaSession(cwd, ctx.personaName, sessionId, ctx.providerType);
+      }
     }
     return {
-      result: { content: response.content, sessionId: response.sessionId, success },
+      result: {
+        content: success ? response.content : (response.error ?? response.content),
+        sessionId: response.sessionId,
+        success,
+      },
       sessionId,
     };
   } catch (e) {
@@ -167,7 +234,7 @@ export async function callAIWithRetry(
       error(msg);
       blankLine();
     }
-    return { result: null, sessionId };
+    return { result: null, sessionId, error: msg };
   } finally {
     options.abortSignal?.removeEventListener('abort', onExternalAbort);
     if (outputMode === 'terminal') {

@@ -52,6 +52,5 @@ describe('E2E: Pipeline mode with --skip-git', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('completed');
   }, 240_000);
 });

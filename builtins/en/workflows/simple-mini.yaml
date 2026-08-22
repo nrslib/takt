@@ -1,21 +1,25 @@
 name: simple-mini
-description: A lightweight development workflow that trusts a capable model's judgment (plan → implement → review ⇄ fix → COMPLETE). It omits dedicated test writing and final supervision while letting the model select relevant available skills.
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-      skills:
-        repo: true
-        user: true
-    opencode:
-      network_access: true
+description: A lightweight development workflow that trusts a capable model's judgment (plan → implement → review ⇄ fix → COMPLETE). It omits dedicated test writing and the final requirement check while letting the model select relevant available skills.
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
+capabilities: [readonly, enable-skills]
 max_steps: 20
 initial_step: plan
 steps:
   - name: plan
+    capabilities: [readonly, enable-skills]
     uses: development-core-plan
     with:
-      plan_policy: [design-planning]
+      plan_policy: [design-planning, architecture]
       plan_knowledge: [architecture]
       plan_instruction: simple-plan
       plan_report_format: plan
@@ -32,11 +36,13 @@ steps:
           - {Question 2}
 
   - name: implement
+    capabilities: [edit, enable-skills]
     uses: development-core-implement
     with:
-      development_policy: [coding, testing]
+      development_policy: [coding, testing, architecture]
       development_knowledge: [architecture]
       implementation_instruction: simple-implement
+      scope_report_format: coder-scope
     rules:
       - condition: Implementation completed
         next: review
@@ -59,12 +65,11 @@ steps:
       - review
       - coding
       - testing
+      - architecture
     knowledge:
       - architecture
       - unit-testing
       - e2e-testing
-    provider_options:
-      extends: review-readonly
     pass_previous_response: false
     instruction: simple-review-coding
     output_contracts:
@@ -87,6 +92,7 @@ steps:
       fix_policy:
         - coding
         - testing
+        - architecture
       verification_policy:
         - coding
         - testing

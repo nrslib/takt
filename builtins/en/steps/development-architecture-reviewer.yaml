@@ -1,0 +1,29 @@
+params:
+  review_policy_additions:
+    type: facet_ref[]
+    facet_kind: policy
+  review_knowledge_additions:
+    type: facet_ref[]
+    facet_kind: knowledge
+  architecture_review_instruction: { type: facet_ref, facet_kind: instruction }
+name: architecture-review
+description: Review module structure, responsibility boundaries, dependency direction, and call paths.
+capabilities: readonly
+tags: [review]
+edit: false
+persona: architecture-reviewer
+policy:
+  - architecture
+  - contract-change
+  - review
+  - $param: review_policy_additions
+knowledge:
+  - architecture
+  - $param: review_knowledge_additions
+instruction:
+  $param: architecture_review_instruction
+pass_previous_response: false
+output_contracts:
+  report:
+    - name: architecture-review.md
+      format: architecture-review

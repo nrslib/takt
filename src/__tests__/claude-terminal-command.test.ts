@@ -60,26 +60,7 @@ describe('Claude terminal command builder', () => {
     expect(command.args).toEqual(['--permission-mode', 'bypassPermissions']);
   });
 
-  it('isolates strict read-only internal agents from tools, filesystem settings, and ambient MCP', () => {
-    const command = buildClaudeTerminalCommand({
-      pathToClaudeCodeExecutable: 'claude',
-      internalAgentIsolation: 'strict-readonly',
-      permissionMode: 'readonly',
-    });
-
-    expect(command.args).toEqual([
-      '--tools',
-      '',
-      '--setting-sources',
-      '',
-      '--strict-mcp-config',
-      '--disable-slash-commands',
-      '--permission-mode',
-      'default',
-    ]);
-  });
-
-  it('does not apply strict internal isolation flags to an ordinary terminal call', () => {
+  it('maps an explicit readonly permission without adding unrelated restrictions', () => {
     const command = buildClaudeTerminalCommand({
       pathToClaudeCodeExecutable: 'claude',
       permissionMode: 'readonly',
@@ -126,6 +107,31 @@ describe('Claude terminal command builder', () => {
     });
 
     expect(command.args).not.toContain('--disable-slash-commands');
+  });
+
+  it('strict-readonly isolation disables tools, settings, MCP, and Skills in the terminal command', () => {
+    const command = buildClaudeTerminalCommand({
+      pathToClaudeCodeExecutable: 'claude',
+      internalAgentIsolation: 'strict-readonly',
+      allowedTools: ['Read'],
+      mcpConfigPath: '/tmp/mcp-config.json',
+      permissionMode: 'readonly',
+      bypassPermissions: false,
+      skillsEnabled: true,
+    });
+
+    expect(command.args).toEqual(expect.arrayContaining([
+      '--tools',
+      '',
+      '--strict-mcp-config',
+      '--setting-sources',
+      '',
+      '--disable-slash-commands',
+      '--permission-mode',
+      'default',
+    ]));
+    expect(command.args).not.toContain('--allowed-tools');
+    expect(command.args).not.toContain('--mcp-config');
   });
 
 });

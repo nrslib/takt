@@ -10,7 +10,7 @@ import type { WorkflowStep } from '../core/models/types.js';
  *   - session/cache/pool は異なる解決済み MCP server 集合を共有しない
  *   - session/cache/pool の識別情報やログへ token/header/env 解決値を含めない
  *   - session resume 時の集合変更挙動を provider 別に明示する
- *   - identity は server 名 + transport のみ（秘密値含まず）
+ *   - identity は server 名と秘密値を除いた server 構造を含む
  *
  * 反例:
  *   - session key に MCP 集合を含めない → 異なる集合が同じ session を共有
@@ -26,7 +26,7 @@ function createStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
     instruction: '',
     passPreviousResponse: true,
     ...overrides,
-  };
+  } as unknown as WorkflowStep;
 }
 
 describe('buildSessionKey with MCP identity (MCP-SESSION-ISOLATION)', () => {
@@ -54,7 +54,7 @@ describe('buildSessionKey with MCP identity (MCP-SESSION-ISOLATION)', () => {
 
   it('Given a session key with MCP identity, Then the key does NOT contain token/header/env resolved values (要件75)', () => {
     const step = createStep({ persona: 'coder', provider: 'claude' });
-    // identity should only contain server name + transport, never secrets.
+    // The identity may include non-secret server structure, but never secrets.
     const key = buildSessionKey(step, { provider: 'claude', mcpServerIdentity: 'common:stdio' });
     expect(key).not.toContain('Bearer');
     expect(key).not.toContain('secret');
@@ -73,6 +73,14 @@ describe('buildSessionKey with MCP identity (MCP-SESSION-ISOLATION)', () => {
     const stdio = buildSessionKey(step, { provider: 'claude', mcpServerIdentity: 'common:stdio' });
     const http = buildSessionKey(step, { provider: 'claude', mcpServerIdentity: 'common:http' });
     expect(stdio).not.toBe(http);
+  });
+
+  it('Given canonical identities with comma-containing arguments, Then their structure is not split', () => {
+    const step = createStep({ persona: 'coder', provider: 'claude' });
+    const setA = '[\"common\",{\"type\":\"stdio\",\"command\":\"node\",\"args\":[\"--value\",\"a,b\"]}]';
+    const setB = '[\"common\",{\"type\":\"stdio\",\"command\":\"node\",\"args\":[\"--value\",\"a,c\"]}]';
+    expect(buildSessionKey(step, { provider: 'claude', mcpServerIdentity: setA }))
+      .not.toBe(buildSessionKey(step, { provider: 'claude', mcpServerIdentity: setB }));
   });
 
   it('Given an empty MCP identity, Then the session key equals the key without MCP (treated as MCP-disabled)', () => {

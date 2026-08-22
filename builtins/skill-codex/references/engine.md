@@ -83,6 +83,9 @@ codex exec --full-auto - < "$tmp_prompt_file"
 - `policies.coding: ../facets/policies/coding.md` → `~/.agents/skills/takt/facets/policies/coding.md`
 - `instructions.plan: ../facets/instructions/plan.md` → `~/.agents/skills/takt/facets/instructions/plan.md`
 
+ファセット本文の `{{include:<kind>/<name>}}` は、`facets/partials/<kind>/<name>.md` を同じ言語のリソースから読み込み、参照先に include があれば再帰的に展開する。
+参照先が存在しない場合、または include が循環する場合はエラーとして扱い、別言語の partial へフォールバックしない。
+
 ## プロンプト構築
 
 各 step 実行時、以下を上から順に結合してプロンプトを作る。

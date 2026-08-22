@@ -1,8 +1,3 @@
-import {
-  CLAUDE_EFFORT_VALUES,
-  CODEX_REASONING_EFFORT_VALUES,
-  COPILOT_EFFORT_VALUES,
-} from '../../core/models/workflow-types.js';
 import { validateProviderModelRequirements } from '../../core/workflow/provider-model-requirements.js';
 import type { ProviderType } from '../../infra/providers/index.js';
 import type { ExecActorConfig, ExecConfig, ExecEffort, ResolvedExecConfig } from './types.js';
@@ -16,13 +11,24 @@ export const EXEC_PROVIDERS: readonly ProviderType[] = [
   'cursor',
   'copilot',
   'kiro',
+  'pi',
+  'deepseek-harness',
   'mock',
 ];
 
 export const EXEC_EFFORTS: readonly ExecEffort[] = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
-const EXEC_OPTIONAL_MODEL_PROVIDERS: ReadonlySet<ProviderType> = new Set(['cursor', 'copilot', 'kiro']);
+const EXEC_OPTIONAL_MODEL_PROVIDERS: ReadonlySet<ProviderType> = new Set(['cursor', 'copilot', 'kiro', 'pi', 'deepseek-harness']);
 
 export const CLAUDE_TOOL_PROVIDERS: ReadonlySet<ProviderType> = new Set(['claude', 'claude-sdk', 'claude-terminal']);
+const EXEC_EFFORT_PROVIDERS: ReadonlySet<ProviderType> = new Set([
+  ...CLAUDE_TOOL_PROVIDERS,
+  'codex',
+  'copilot',
+]);
+
+export function normalizeExecEffort(effort: ExecEffort): ExecEffort {
+  return effort.trim();
+}
 
 const EXEC_ACTOR_NAME_REGEX = /^[A-Za-z0-9_-]+$/;
 const RESERVED_EXEC_SESSION_KEY_BASES = new Set([
@@ -38,20 +44,11 @@ const RESERVED_EXEC_SESSION_KEY_BASES = new Set([
 ]);
 
 export function providerSupportsExecEffort(provider: ProviderType, effort: ExecEffort): boolean {
-  if (CLAUDE_TOOL_PROVIDERS.has(provider)) {
-    return CLAUDE_EFFORT_VALUES.includes(effort as typeof CLAUDE_EFFORT_VALUES[number]);
-  }
-  if (provider === 'codex') {
-    return CODEX_REASONING_EFFORT_VALUES.includes(effort as typeof CODEX_REASONING_EFFORT_VALUES[number]);
-  }
-  if (provider === 'copilot') {
-    return COPILOT_EFFORT_VALUES.includes(effort as typeof COPILOT_EFFORT_VALUES[number]);
-  }
-  return false;
+  return EXEC_EFFORT_PROVIDERS.has(provider) && normalizeExecEffort(effort).length > 0;
 }
 
 export function getSupportedExecEfforts(provider: ProviderType): ExecEffort[] {
-  return EXEC_EFFORTS.filter((effort) => providerSupportsExecEffort(provider, effort));
+  return EXEC_EFFORT_PROVIDERS.has(provider) ? [...EXEC_EFFORTS] : [];
 }
 
 export function providerAllowsOmittedExecModel(provider: ProviderType): boolean {
@@ -76,12 +73,22 @@ export function assertExecProviderEffort(
   effort: ExecEffort | undefined,
   path: string,
 ): void {
+  resolveExecProviderEffort(provider, effort, path);
+}
+
+export function resolveExecProviderEffort(
+  provider: ProviderType,
+  effort: ExecEffort | undefined,
+  path: string,
+): ExecEffort | undefined {
   if (effort === undefined) {
-    return;
+    return undefined;
   }
-  if (!providerSupportsExecEffort(provider, effort)) {
+  const normalizedEffort = normalizeExecEffort(effort);
+  if (!providerSupportsExecEffort(provider, normalizedEffort)) {
     throw new Error(`Invalid exec config at ${path}: provider "${provider}" does not support effort "${effort}"`);
   }
+  return normalizedEffort;
 }
 
 function assertUniqueActorSessionKeys(actors: ExecActorConfig[]): void {

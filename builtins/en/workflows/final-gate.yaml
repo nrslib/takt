@@ -1,0 +1,66 @@
+name: final-gate
+description: A supervisor determines requirement fulfillment and the required next action from current code and preceding reports.
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
+subworkflow:
+  callable: true
+  visibility: internal
+  returns:
+    - needs_fix
+    - need_replan
+  params:
+    supervise_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default:
+        - architecture
+    supervise_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default:
+        - contract-change
+        - architecture
+    supervisor_persona:
+      type: facet_ref
+      facet_kind: persona
+      default: supervisor
+capabilities: readonly
+initial_step: supervise
+steps:
+  - name: supervise
+    tags:
+      - review
+      - final-gate
+      - supervise
+    edit: false
+    persona:
+      $param: supervisor_persona
+    policy:
+      $param: supervise_policy
+    knowledge:
+      $param: supervise_knowledge
+    pass_previous_response: false
+    instruction: supervise
+    output_contracts:
+      report:
+        - name: supervisor-validation.md
+          format: supervisor-validation
+        - name: summary.md
+          format: supervisor-summary
+          use_judge: false
+    rules:
+      - condition: BLOCKED
+        return: need_replan
+      - condition: APPROVE
+        next: COMPLETE
+      - condition: REJECT
+        return: needs_fix

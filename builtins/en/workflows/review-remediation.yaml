@@ -1,5 +1,16 @@
 name: review-remediation
 description: Shared convergence loop that plans review findings across their full scope, fixes them, and verifies completion.
+all_steps:
+  rules:
+    - ref: findings-handling
+      position: before_instruction
+    - ref: existing-family-lookup
+      position: before_instruction
+    - ref: invariant-recurrence
+      position: before_instruction
+    - ref: plain-terminology
+      position: before_instruction
+
 subworkflow:
   callable: true
   visibility: internal
@@ -31,13 +42,7 @@ subworkflow:
       facet_kind: knowledge
       default:
         - architecture
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
-initial_step: fix-plan
+initial_step: review-adjudication
 loop_monitors:
   - cycle:
       - fix-plan
@@ -75,6 +80,21 @@ loop_monitors:
         - condition: No feasible path can satisfy the requirements
           next: ABORT
 steps:
+  - name: review-adjudication
+    uses: peer-review-adjudication
+    with:
+      review_policy_additions:
+        $param: plan_policy
+      review_knowledge_additions:
+        $param: fix_knowledge
+    rules:
+      - condition: ACTIONABLE FINDINGS
+        next: fix-plan
+      - condition: NO ACTIONABLE FINDINGS
+        next: COMPLETE
+      - condition: REPLAN REQUIRED
+        return: need_replan
+
   - name: fix-plan
     uses: peer-review-fix-plan
     with:
@@ -82,7 +102,8 @@ steps:
         $param: plan_policy
       fix_knowledge:
         $param: fix_knowledge
-      plan_instruction: fix-plan
+      plan_instruction: fix-plan-from-review-resolution
+      plan_report_format: fix-plan
     rules:
       - condition: Fix plan finalized
         next: fix

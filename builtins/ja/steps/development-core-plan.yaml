@@ -12,6 +12,7 @@ params:
     type: facet_ref
     facet_kind: report_format
 name: plan
+capabilities: readonly
 tags:
   - plan
 edit: false
@@ -21,8 +22,6 @@ policy:
   - $param: plan_policy
 knowledge:
   $param: plan_knowledge
-provider_options:
-  extends: review-readonly
 instruction:
   $param: plan_instruction
 output_contracts:

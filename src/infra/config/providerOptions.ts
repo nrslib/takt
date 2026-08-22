@@ -1,9 +1,13 @@
+import { resolve as resolvePath } from 'node:path';
 import type {
   ClaudeEffort,
   ClaudeTerminalProviderOptions,
+  CodexPermissionControl,
   CodexReasoningEffort,
   CopilotEffort,
+  DeepSeekHarnessProviderOptions,
   OpenCodeGuardProfile,
+  PiProviderOptions,
   WorkflowStep,
   StepProviderOptions,
 } from '../../core/models/workflow-types.js';
@@ -14,15 +18,24 @@ import type {
   ProviderOptionsTraceOrigin,
   ProviderResolutionSource,
 } from '../../core/workflow/provider-options-trace.js';
+import { resolveWorkflowStepTarget } from '../../core/workflow/provider-target-resolution.js';
 import type { ProviderType } from '../../shared/types/provider.js';
+import { isAbsolutePathLike } from '../../shared/utils/pathBoundary.js';
 import { providerSupportsClaudeAllowedTools } from '../providers/provider-capabilities.js';
+
+type RawProviderGuardOptions = {
+  call_timeout_ms?: number;
+};
 
 type RawProviderOptions = {
   extends?: string;
   codex?: {
     base_url?: string;
     network_access?: boolean;
+    permission_control?: CodexPermissionControl;
     reasoning_effort?: CodexReasoningEffort;
+    fast_mode?: boolean;
+    guards?: RawProviderGuardOptions;
     skills?: {
       repo?: boolean;
       user?: boolean;
@@ -45,6 +58,7 @@ type RawProviderOptions = {
     base_url?: string;
     allowed_tools?: string[];
     effort?: ClaudeEffort;
+    guards?: RawProviderGuardOptions;
     skills?: {
       enabled?: boolean;
     };
@@ -55,22 +69,53 @@ type RawProviderOptions = {
   };
   claude_terminal?: {
     backend?: ClaudeTerminalProviderOptions['backend'];
+    guards?: RawProviderGuardOptions;
     timeout_ms?: number;
     keep_session?: boolean;
     transcript_poll_interval_ms?: number;
   };
   copilot?: {
     effort?: CopilotEffort;
+    guards?: RawProviderGuardOptions;
   };
   kiro?: {
     agent?: string;
+    guards?: RawProviderGuardOptions;
+  };
+  cursor?: {
+    guards?: RawProviderGuardOptions;
+  };
+  deepseek_harness?: {
+    python_path?: string;
+    base_url?: string;
+    session_root?: string;
+    cordis?: string;
+    max_tokens?: number;
+    request_timeout_ms?: number;
+    shutdown_timeout_ms?: number;
+    runtime_mode?: 'exe' | 'node';
+  };
+  pi?: {
+    guards?: RawProviderGuardOptions;
+    extensions?: string[];
+    no_extensions?: boolean;
+    no_skills?: boolean;
+    no_prompt_templates?: boolean;
+    no_themes?: boolean;
+    no_context_files?: boolean;
   };
 };
 
 type ProviderBaseUrlTrust = 'trusted' | 'loopback-only' | 'local-loopback-only';
+type ProviderPythonPathTrust = 'trusted' | 'untrusted' | 'local-untrusted';
+type ProviderPathTrust = 'trusted' | 'untrusted' | 'local-untrusted';
+type ProviderCordisTrust = 'trusted' | 'untrusted' | 'local-untrusted';
 
 export interface NormalizeProviderOptionsOptions {
   baseUrlTrust?: ProviderBaseUrlTrust;
+  pythonPathTrust?: ProviderPythonPathTrust;
+  pathTrust?: ProviderPathTrust;
+  cordisTrust?: ProviderCordisTrust;
   pathPrefix?: string;
   getOrigin?: (path: string) => ProviderOptionsTraceOrigin;
 }
@@ -78,6 +123,19 @@ export interface NormalizeProviderOptionsOptions {
 export interface ProviderOptionsLayer {
   source: ProviderResolutionSource;
   options: StepProviderOptions | undefined;
+}
+
+export function assertValidCodexProviderOptions(
+  providerOptions: StepProviderOptions | undefined,
+): void {
+  if (
+    providerOptions?.codex?.permissionControl === 'codex'
+    && providerOptions.codex.networkAccess !== undefined
+  ) {
+    throw new Error(
+      'Configuration error: provider_options.codex.permission_control=codex cannot be combined with provider_options.codex.network_access.',
+    );
+  }
 }
 
 interface StepProviderOptionsLayerContext {
@@ -149,6 +207,95 @@ function assertAllowedProviderBaseUrl(
   );
 }
 
+function assertAllowedProviderPythonPath(
+  path: string,
+  value: string | undefined,
+  options: NormalizeProviderOptionsOptions,
+): void {
+  if (value === undefined) {
+    return;
+  }
+  const trust = options.pythonPathTrust ?? 'trusted';
+  if (trust === 'trusted') {
+    return;
+  }
+  if (trust === 'local-untrusted') {
+    const origin = options.getOrigin?.(path) ?? 'default';
+    if (origin !== 'local' && origin !== 'default') {
+      return;
+    }
+  }
+
+  throw new Error(
+    `Configuration error: ${path} may only be set by trusted user configuration. `
+    + 'Use global config or TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PYTHON_PATH.',
+  );
+}
+
+function hasParentPathSegment(value: string): boolean {
+  return value.split(/[\\\\/]/u).some((segment) => segment === '..');
+}
+
+function assertTrustedProjectPath(
+  path: string,
+  value: string | undefined,
+  options: NormalizeProviderOptionsOptions,
+): void {
+  if (value === undefined) {
+    return;
+  }
+  const trust = options.pathTrust ?? 'trusted';
+  if (trust === 'trusted') {
+    return;
+  }
+  if (trust === 'local-untrusted') {
+    const origin = options.getOrigin?.(path) ?? 'default';
+    if (origin !== 'local' && origin !== 'default') {
+      return;
+    }
+  }
+  const trimmed = value.trim();
+  if (!isAbsolutePathLike(trimmed) && !hasParentPathSegment(trimmed)) {
+    return;
+  }
+  throw new Error(
+    `Configuration error: ${path} must be a relative path without '..' traversal inside the project/session boundary.`,
+  );
+}
+
+function assertAllowedProviderCordis(
+  path: string,
+  value: string | undefined,
+  options: NormalizeProviderOptionsOptions,
+): void {
+  if (value === undefined) {
+    return;
+  }
+  const trust = options.cordisTrust ?? options.pathTrust ?? 'trusted';
+  if (trust === 'trusted') {
+    return;
+  }
+  if (trust === 'untrusted') {
+    const origin = options.getOrigin?.(path) ?? 'default';
+    // Environment overrides are user-controlled even when the surrounding
+    // project/config layer is untrusted. Repository and workflow values keep
+    // the default origin and remain rejected.
+    if (origin === 'env' || origin === 'global') {
+      return;
+    }
+  }
+  if (trust === 'local-untrusted') {
+    const origin = options.getOrigin?.(path) ?? 'default';
+    if (origin !== 'local' && origin !== 'default') {
+      return;
+    }
+  }
+  throw new Error(
+    `Configuration error: ${path} may only be set by trusted user configuration. `
+    + 'Use global config or TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_CORDIS.',
+  );
+}
+
 export function assertAllowedNormalizedProviderBaseUrls(
   providerOptions: StepProviderOptions | undefined,
   options: NormalizeProviderOptionsOptions = {},
@@ -162,6 +309,11 @@ export function assertAllowedNormalizedProviderBaseUrls(
   assertAllowedProviderBaseUrl(
     `${prefix}.claude.base_url`,
     providerOptions?.claude?.baseUrl,
+    options,
+  );
+  assertAllowedProviderBaseUrl(
+    `${prefix}.deepseek_harness.base_url`,
+    providerOptions?.deepseekHarness?.baseUrl,
     options,
   );
 }
@@ -184,7 +336,10 @@ export function normalizeProviderOptions(
   if (
     options.codex?.base_url !== undefined
     || options.codex?.network_access !== undefined
+    || options.codex?.permission_control !== undefined
     || options.codex?.reasoning_effort !== undefined
+    || options.codex?.fast_mode !== undefined
+    || options.codex?.guards !== undefined
     || options.codex?.skills?.repo !== undefined
     || options.codex?.skills?.user !== undefined
   ) {
@@ -197,8 +352,17 @@ export function normalizeProviderOptions(
       ...(options.codex.network_access !== undefined
         ? { networkAccess: options.codex.network_access }
         : {}),
+      ...(options.codex.permission_control !== undefined
+        ? { permissionControl: options.codex.permission_control }
+        : {}),
       ...(options.codex.reasoning_effort !== undefined
         ? { reasoningEffort: options.codex.reasoning_effort }
+        : {}),
+      ...(options.codex.fast_mode !== undefined
+        ? { fastMode: options.codex.fast_mode }
+        : {}),
+      ...(options.codex.guards?.call_timeout_ms !== undefined
+        ? { guards: { callTimeoutMs: options.codex.guards.call_timeout_ms } }
         : {}),
       ...(options.codex.skills?.repo !== undefined || options.codex.skills?.user !== undefined
         ? {
@@ -256,6 +420,7 @@ export function normalizeProviderOptions(
     options.claude?.base_url !== undefined
     || options.claude?.allowed_tools !== undefined
     || options.claude?.effort !== undefined
+    || options.claude?.guards !== undefined
     || options.claude?.skills?.enabled !== undefined
     || options.claude?.sandbox
   ) {
@@ -270,6 +435,9 @@ export function normalizeProviderOptions(
     }
     if (options.claude.effort !== undefined) {
       claude.effort = options.claude.effort;
+    }
+    if (options.claude.guards?.call_timeout_ms !== undefined) {
+      claude.guards = { callTimeoutMs: options.claude.guards.call_timeout_ms };
     }
     if (options.claude.skills?.enabled !== undefined) {
       claude.skills = { enabled: options.claude.skills.enabled };
@@ -291,14 +459,103 @@ export function normalizeProviderOptions(
       result.claude = claude;
     }
   }
-  if (options.copilot?.effort !== undefined) {
-    result.copilot = { effort: options.copilot.effort };
+  if (options.copilot?.effort !== undefined || options.copilot?.guards !== undefined) {
+    result.copilot = {
+      ...(options.copilot.effort !== undefined ? { effort: options.copilot.effort } : {}),
+      ...(options.copilot.guards?.call_timeout_ms !== undefined
+        ? { guards: { callTimeoutMs: options.copilot.guards.call_timeout_ms } }
+        : {}),
+    };
   }
-  if (options.kiro?.agent !== undefined) {
-    result.kiro = { agent: options.kiro.agent };
+  if (options.kiro?.agent !== undefined || options.kiro?.guards !== undefined) {
+    result.kiro = {
+      ...(options.kiro.agent !== undefined ? { agent: options.kiro.agent } : {}),
+      ...(options.kiro.guards?.call_timeout_ms !== undefined
+        ? { guards: { callTimeoutMs: options.kiro.guards.call_timeout_ms } }
+        : {}),
+    };
+  }
+  if (options.cursor?.guards !== undefined) {
+    result.cursor = {
+      ...(options.cursor.guards.call_timeout_ms !== undefined
+        ? { guards: { callTimeoutMs: options.cursor.guards.call_timeout_ms } }
+        : {}),
+    };
+  }
+  if (options.deepseek_harness !== undefined) {
+    const deepseekOptionsPath = `${normalizationOptions.pathPrefix ?? 'provider_options'}.deepseek_harness`;
+    const deepseekBaseUrlPath = `${deepseekOptionsPath}.base_url`;
+    assertAllowedProviderBaseUrl(
+      deepseekBaseUrlPath,
+      options.deepseek_harness.base_url,
+      normalizationOptions,
+    );
+    assertAllowedProviderPythonPath(
+      `${deepseekOptionsPath}.python_path`,
+      options.deepseek_harness.python_path,
+      normalizationOptions,
+    );
+    assertTrustedProjectPath(
+      `${deepseekOptionsPath}.session_root`,
+      options.deepseek_harness.session_root,
+      normalizationOptions,
+    );
+    assertAllowedProviderCordis(
+      `${deepseekOptionsPath}.cordis`,
+      options.deepseek_harness.cordis,
+      normalizationOptions,
+    );
+    const deepseekHarness: DeepSeekHarnessProviderOptions = {
+      ...(options.deepseek_harness.python_path !== undefined
+        ? { pythonPath: options.deepseek_harness.python_path }
+        : {}),
+      ...(options.deepseek_harness.base_url !== undefined
+        ? { baseUrl: options.deepseek_harness.base_url }
+        : {}),
+      ...(options.deepseek_harness.session_root !== undefined
+        ? { sessionRoot: options.deepseek_harness.session_root }
+        : {}),
+      ...(options.deepseek_harness.cordis !== undefined
+        ? { cordis: options.deepseek_harness.cordis }
+        : {}),
+      ...(options.deepseek_harness.max_tokens !== undefined
+        ? { maxTokens: options.deepseek_harness.max_tokens }
+        : {}),
+      ...(options.deepseek_harness.request_timeout_ms !== undefined
+        ? { requestTimeoutMs: options.deepseek_harness.request_timeout_ms }
+        : {}),
+      ...(options.deepseek_harness.shutdown_timeout_ms !== undefined
+        ? { shutdownTimeoutMs: options.deepseek_harness.shutdown_timeout_ms }
+        : {}),
+      ...(options.deepseek_harness.runtime_mode !== undefined
+        ? { runtimeMode: options.deepseek_harness.runtime_mode }
+        : {}),
+    };
+    if (Object.keys(deepseekHarness).length > 0) {
+      result.deepseekHarness = deepseekHarness;
+    }
+  }
+  if (options.pi !== undefined) {
+    const pi: PiProviderOptions = {
+      ...(options.pi.extensions !== undefined ? { extensions: [...options.pi.extensions] } : {}),
+      ...(options.pi.no_extensions !== undefined ? { noExtensions: options.pi.no_extensions } : {}),
+      ...(options.pi.no_skills !== undefined ? { noSkills: options.pi.no_skills } : {}),
+      ...(options.pi.no_prompt_templates !== undefined
+        ? { noPromptTemplates: options.pi.no_prompt_templates }
+        : {}),
+      ...(options.pi.no_themes !== undefined ? { noThemes: options.pi.no_themes } : {}),
+      ...(options.pi.no_context_files !== undefined ? { noContextFiles: options.pi.no_context_files } : {}),
+      ...(options.pi.guards?.call_timeout_ms !== undefined
+        ? { guards: { callTimeoutMs: options.pi.guards.call_timeout_ms } }
+        : {}),
+    };
+    if (Object.keys(pi).length > 0) {
+      result.pi = pi;
+    }
   }
   if (
     options.claude_terminal?.backend !== undefined
+    || options.claude_terminal?.guards !== undefined
     || options.claude_terminal?.timeout_ms !== undefined
     || options.claude_terminal?.keep_session !== undefined
     || options.claude_terminal?.transcript_poll_interval_ms !== undefined
@@ -306,6 +563,9 @@ export function normalizeProviderOptions(
     result.claudeTerminal = {
       ...(options.claude_terminal.backend !== undefined
         ? { backend: options.claude_terminal.backend }
+        : {}),
+      ...(options.claude_terminal.guards?.call_timeout_ms !== undefined
+        ? { guards: { callTimeoutMs: options.claude_terminal.guards.call_timeout_ms } }
         : {}),
       ...(options.claude_terminal.timeout_ms !== undefined
         ? { timeoutMs: options.claude_terminal.timeout_ms }
@@ -318,7 +578,62 @@ export function normalizeProviderOptions(
         : {}),
     };
   }
-  return Object.keys(result).length > 0 ? result : undefined;
+  const normalized = Object.keys(result).length > 0 ? result : undefined;
+  assertValidCodexProviderOptions(normalized);
+  return normalized;
+}
+
+const TRUSTED_DEEPSEEK_PATH_SOURCES = new Set<ProviderResolutionSource>([
+  'env',
+  'global',
+]);
+
+function resolveTrustedDeepSeekPath(
+  value: string,
+  cwd: string,
+  source: ProviderResolutionSource | undefined,
+): string {
+  if (source === undefined || !TRUSTED_DEEPSEEK_PATH_SOURCES.has(source)) {
+    return value;
+  }
+  const trimmed = value.trim();
+  return trimmed.length === 0 ? value : resolvePath(cwd, trimmed);
+}
+
+export function resolveTrustedDeepSeekHarnessPaths(
+  providerOptions: StepProviderOptions | undefined,
+  cwd: string,
+  providerOptionsSources: Readonly<Record<string, ProviderResolutionSource>> | undefined,
+): StepProviderOptions | undefined {
+  const deepseekHarness = providerOptions?.deepseekHarness;
+  if (deepseekHarness === undefined) {
+    return providerOptions;
+  }
+  const sessionRoot = deepseekHarness.sessionRoot === undefined
+    ? undefined
+    : resolveTrustedDeepSeekPath(
+        deepseekHarness.sessionRoot,
+        cwd,
+        providerOptionsSources?.['deepseekHarness.sessionRoot'],
+      );
+  const cordis = deepseekHarness.cordis === undefined
+    ? undefined
+    : resolveTrustedDeepSeekPath(
+        deepseekHarness.cordis,
+        cwd,
+        providerOptionsSources?.['deepseekHarness.cordis'],
+      );
+  if (sessionRoot === deepseekHarness.sessionRoot && cordis === deepseekHarness.cordis) {
+    return providerOptions;
+  }
+  return {
+    ...providerOptions,
+    deepseekHarness: {
+      ...deepseekHarness,
+      ...(sessionRoot === undefined ? {} : { sessionRoot }),
+      ...(cordis === undefined ? {} : { cordis }),
+    },
+  };
 }
 
 /** Deep merge provider options. Later sources override earlier ones. */
@@ -338,8 +653,17 @@ export function mergeProviderOptions(
         ...(layer.codex.networkAccess !== undefined
           ? { networkAccess: layer.codex.networkAccess }
           : {}),
+        ...(layer.codex.permissionControl !== undefined
+          ? { permissionControl: layer.codex.permissionControl }
+          : {}),
         ...(layer.codex.reasoningEffort !== undefined
           ? { reasoningEffort: layer.codex.reasoningEffort }
+          : {}),
+        ...(layer.codex.fastMode !== undefined
+          ? { fastMode: layer.codex.fastMode }
+          : {}),
+        ...(layer.codex.guards !== undefined
+          ? { guards: { ...result.codex?.guards, ...layer.codex.guards } }
           : {}),
         ...(layer.codex.skills !== undefined
           ? {
@@ -402,6 +726,9 @@ export function mergeProviderOptions(
         ...(layer.claude.effort !== undefined
           ? { effort: layer.claude.effort }
           : {}),
+        ...(layer.claude.guards !== undefined
+          ? { guards: { ...result.claude?.guards, ...layer.claude.guards } }
+          : {}),
         ...(layer.claude.skills?.enabled !== undefined
           ? { skills: { enabled: layer.claude.skills.enabled } }
           : {}),
@@ -416,6 +743,9 @@ export function mergeProviderOptions(
         ...(layer.copilot.effort !== undefined
           ? { effort: layer.copilot.effort }
           : {}),
+        ...(layer.copilot.guards !== undefined
+          ? { guards: { ...result.copilot?.guards, ...layer.copilot.guards } }
+          : {}),
       };
     }
     if (layer.kiro) {
@@ -424,14 +754,55 @@ export function mergeProviderOptions(
         ...(layer.kiro.agent !== undefined
           ? { agent: layer.kiro.agent }
           : {}),
+        ...(layer.kiro.guards !== undefined
+          ? { guards: { ...result.kiro?.guards, ...layer.kiro.guards } }
+          : {}),
+      };
+    }
+    if (layer.cursor) {
+      result.cursor = {
+        ...result.cursor,
+        ...(layer.cursor.guards !== undefined
+          ? { guards: { ...result.cursor?.guards, ...layer.cursor.guards } }
+          : {}),
+      };
+    }
+    if (layer.deepseekHarness) {
+      result.deepseekHarness = {
+        ...result.deepseekHarness,
+        ...layer.deepseekHarness,
+      };
+    }
+    if (layer.pi) {
+      result.pi = {
+        ...result.pi,
+        ...(layer.pi.guards !== undefined
+          ? { guards: { ...result.pi?.guards, ...layer.pi.guards } }
+          : {}),
+        ...(layer.pi.extensions !== undefined ? { extensions: [...layer.pi.extensions] } : {}),
+        ...(layer.pi.noExtensions !== undefined ? { noExtensions: layer.pi.noExtensions } : {}),
+        ...(layer.pi.noSkills !== undefined ? { noSkills: layer.pi.noSkills } : {}),
+        ...(layer.pi.noPromptTemplates !== undefined
+          ? { noPromptTemplates: layer.pi.noPromptTemplates }
+          : {}),
+        ...(layer.pi.noThemes !== undefined ? { noThemes: layer.pi.noThemes } : {}),
+        ...(layer.pi.noContextFiles !== undefined ? { noContextFiles: layer.pi.noContextFiles } : {}),
       };
     }
     if (layer.claudeTerminal) {
-      result.claudeTerminal = { ...result.claudeTerminal, ...layer.claudeTerminal };
+      result.claudeTerminal = {
+        ...result.claudeTerminal,
+        ...layer.claudeTerminal,
+        ...(layer.claudeTerminal.guards !== undefined
+          ? { guards: { ...result.claudeTerminal?.guards, ...layer.claudeTerminal.guards } }
+          : {}),
+      };
     }
   }
 
-  return Object.keys(result).length > 0 ? result : undefined;
+  const merged = Object.keys(result).length > 0 ? result : undefined;
+  assertValidCodexProviderOptions(merged);
+  return merged;
 }
 
 function resolveFallbackOrigin(
@@ -511,15 +882,12 @@ export function resolvePersonaProviderOptions(
 }
 
 export function resolveDirectStepProviderOptions(step: WorkflowStep): StepProviderOptions | undefined {
-  if ('directProviderOptions' in step) {
-    return step.directProviderOptions;
-  }
-  return step.providerOptions;
+  return step.engineSynthesized === true ? step.providerOptions : undefined;
 }
 
-export function resolveStepWorkflowProviderOptions(step: WorkflowStep): StepProviderOptions | undefined {
-  if ('workflowProviderOptions' in step) {
-    return step.workflowProviderOptions;
+export function resolveStepCapabilityProviderOptions(step: WorkflowStep): StepProviderOptions | undefined {
+  if ('capabilityProviderOptions' in step) {
+    return step.capabilityProviderOptions;
   }
   return undefined;
 }
@@ -530,8 +898,8 @@ export function resolveStepProviderOptionsLayers(
 ): ProviderOptionsLayer[] {
   const layers: ProviderOptionsLayer[] = [
     {
-      source: 'workflow',
-      options: resolveStepWorkflowProviderOptions(step),
+      source: 'capabilities',
+      options: resolveStepCapabilityProviderOptions(step),
     },
     {
       source: 'persona_providers',
@@ -553,7 +921,11 @@ export function resolveStepProviderOptionsLayers(
   }
   layers.push({
     source: 'provider_routing.steps',
-    options: context.providerRouting?.steps?.[step.name]?.providerOptions,
+    options: resolveWorkflowStepTarget(
+      context.providerRouting?.steps,
+      step.name,
+      context.providerRouting?.workflowName,
+    )?.providerOptions,
   });
 
   return layers.filter((layer) => layer.options !== undefined);
@@ -568,6 +940,40 @@ export function mergeStepProviderOptionsLayers(
   );
 }
 
+/**
+ * Runtime profile options are identity-scoped: only the profile that supplied the winning
+ * provider contributes options. Legacy configuration keeps its historical layered merge.
+ */
+export function resolveProfileScopedProviderOptionsLayers(
+  step: WorkflowStep,
+  context: StepProviderOptionsLayerContext,
+  resolvedProviderSource: ProviderResolutionSource | undefined,
+  profileScoped: boolean,
+): ProviderOptionsLayer[] {
+  const layers = resolveStepProviderOptionsLayers(step, context);
+  if (!profileScoped) {
+    return layers;
+  }
+  const nonProfileLayers = layers.filter((layer) => (
+    layer.source === 'capabilities'
+  ));
+  if (resolvedProviderSource === 'provider_routing.tags') {
+    const winningTag = [...(step.tags ?? [])].reverse().find((tag) => (
+      context.providerRouting?.tags?.[tag]?.provider !== undefined
+    ));
+    const options = winningTag === undefined
+      ? undefined
+      : context.providerRouting?.tags?.[winningTag]?.providerOptions;
+    return options === undefined
+      ? nonProfileLayers
+      : [...nonProfileLayers, { source: 'provider_routing.tags', options }];
+  }
+  return [
+    ...nonProfileLayers,
+    ...layers.filter((layer) => layer.source === resolvedProviderSource),
+  ];
+}
+
 export function resolveEffectiveProviderOptions(
   source: ProviderOptionsSource | undefined,
   originResolver: ProviderOptionsOriginResolver | undefined,
@@ -579,6 +985,7 @@ export function resolveEffectiveProviderOptions(
     return mergeProviderOptions(personaOptions, stepOptions);
   }
   if (!personaOptions && !stepOptions) {
+    assertValidCodexProviderOptions(resolvedConfigOptions);
     return resolvedConfigOptions;
   }
 
@@ -625,6 +1032,12 @@ export function resolveEffectiveProviderOptions(
     stepOptions?.claude?.skills?.enabled,
     resolveProviderOptionOrigin(originResolver, 'claude.skills.enabled', source),
   );
+  const claudeCallTimeoutMs = selectProviderValue(
+    resolvedConfigOptions.claude?.guards?.callTimeoutMs,
+    personaOptions?.claude?.guards?.callTimeoutMs,
+    stepOptions?.claude?.guards?.callTimeoutMs,
+    resolveProviderOptionOrigin(originResolver, 'claude.guards.callTimeoutMs', source),
+  );
 
   const codexNetworkAccess = selectProviderValue(
     resolvedConfigOptions.codex?.networkAccess,
@@ -632,11 +1045,23 @@ export function resolveEffectiveProviderOptions(
     stepOptions?.codex?.networkAccess,
     resolveProviderOptionOrigin(originResolver, 'codex.networkAccess', source),
   );
+  const codexPermissionControl = selectProviderValue(
+    resolvedConfigOptions.codex?.permissionControl,
+    personaOptions?.codex?.permissionControl,
+    stepOptions?.codex?.permissionControl,
+    resolveProviderOptionOrigin(originResolver, 'codex.permissionControl', source),
+  );
   const codexReasoningEffort = selectProviderValue(
     resolvedConfigOptions.codex?.reasoningEffort,
     personaOptions?.codex?.reasoningEffort,
     stepOptions?.codex?.reasoningEffort,
     resolveProviderOptionOrigin(originResolver, 'codex.reasoningEffort', source),
+  );
+  const codexFastMode = selectProviderValue(
+    resolvedConfigOptions.codex?.fastMode,
+    personaOptions?.codex?.fastMode,
+    stepOptions?.codex?.fastMode,
+    resolveProviderOptionOrigin(originResolver, 'codex.fastMode', source),
   );
   const codexBaseUrl = selectProviderValueByScope(
     resolvedConfigOptions.codex?.baseUrl,
@@ -654,6 +1079,12 @@ export function resolveEffectiveProviderOptions(
     personaOptions?.codex?.skills?.user,
     stepOptions?.codex?.skills?.user,
     resolveProviderOptionOrigin(originResolver, 'codex.skills.user', source),
+  );
+  const codexCallTimeoutMs = selectProviderValue(
+    resolvedConfigOptions.codex?.guards?.callTimeoutMs,
+    personaOptions?.codex?.guards?.callTimeoutMs,
+    stepOptions?.codex?.guards?.callTimeoutMs,
+    resolveProviderOptionOrigin(originResolver, 'codex.guards.callTimeoutMs', source),
   );
   const opencodeNetworkAccess = selectProviderValue(
     resolvedConfigOptions.opencode?.networkAccess,
@@ -721,6 +1152,113 @@ export function resolveEffectiveProviderOptions(
     stepOptions?.kiro?.agent,
     resolveProviderOptionOrigin(originResolver, 'kiro.agent', source),
   );
+  const deepseekHarnessPythonPath = selectProviderValue(
+    resolvedConfigOptions.deepseekHarness?.pythonPath,
+    personaOptions?.deepseekHarness?.pythonPath,
+    stepOptions?.deepseekHarness?.pythonPath,
+    resolveProviderOptionOrigin(originResolver, 'deepseekHarness.pythonPath', source),
+  );
+  const deepseekHarnessBaseUrl = selectProviderValueByScope(
+    resolvedConfigOptions.deepseekHarness?.baseUrl,
+    personaOptions?.deepseekHarness?.baseUrl,
+    stepOptions?.deepseekHarness?.baseUrl,
+  );
+  const deepseekHarnessSessionRoot = selectProviderValue(
+    resolvedConfigOptions.deepseekHarness?.sessionRoot,
+    personaOptions?.deepseekHarness?.sessionRoot,
+    stepOptions?.deepseekHarness?.sessionRoot,
+    resolveProviderOptionOrigin(originResolver, 'deepseekHarness.sessionRoot', source),
+  );
+  const deepseekHarnessCordis = selectProviderValue(
+    resolvedConfigOptions.deepseekHarness?.cordis,
+    personaOptions?.deepseekHarness?.cordis,
+    stepOptions?.deepseekHarness?.cordis,
+    resolveProviderOptionOrigin(originResolver, 'deepseekHarness.cordis', source),
+  );
+  const deepseekHarnessMaxTokens = selectProviderValue(
+    resolvedConfigOptions.deepseekHarness?.maxTokens,
+    personaOptions?.deepseekHarness?.maxTokens,
+    stepOptions?.deepseekHarness?.maxTokens,
+    resolveProviderOptionOrigin(originResolver, 'deepseekHarness.maxTokens', source),
+  );
+  const deepseekHarnessRequestTimeoutMs = selectProviderValue(
+    resolvedConfigOptions.deepseekHarness?.requestTimeoutMs,
+    personaOptions?.deepseekHarness?.requestTimeoutMs,
+    stepOptions?.deepseekHarness?.requestTimeoutMs,
+    resolveProviderOptionOrigin(originResolver, 'deepseekHarness.requestTimeoutMs', source),
+  );
+  const deepseekHarnessShutdownTimeoutMs = selectProviderValue(
+    resolvedConfigOptions.deepseekHarness?.shutdownTimeoutMs,
+    personaOptions?.deepseekHarness?.shutdownTimeoutMs,
+    stepOptions?.deepseekHarness?.shutdownTimeoutMs,
+    resolveProviderOptionOrigin(originResolver, 'deepseekHarness.shutdownTimeoutMs', source),
+  );
+  const deepseekHarnessRuntimeMode = selectProviderValue(
+    resolvedConfigOptions.deepseekHarness?.runtimeMode,
+    personaOptions?.deepseekHarness?.runtimeMode,
+    stepOptions?.deepseekHarness?.runtimeMode,
+    resolveProviderOptionOrigin(originResolver, 'deepseekHarness.runtimeMode', source),
+  );
+  const piExtensions = selectProviderValue(
+    resolvedConfigOptions.pi?.extensions,
+    personaOptions?.pi?.extensions,
+    stepOptions?.pi?.extensions,
+    resolveProviderOptionOrigin(originResolver, 'pi.extensions', source),
+  );
+  const piNoExtensions = selectProviderValue(
+    resolvedConfigOptions.pi?.noExtensions,
+    personaOptions?.pi?.noExtensions,
+    stepOptions?.pi?.noExtensions,
+    resolveProviderOptionOrigin(originResolver, 'pi.noExtensions', source),
+  );
+  const piNoSkills = selectProviderValue(
+    resolvedConfigOptions.pi?.noSkills,
+    personaOptions?.pi?.noSkills,
+    stepOptions?.pi?.noSkills,
+    resolveProviderOptionOrigin(originResolver, 'pi.noSkills', source),
+  );
+  const piNoPromptTemplates = selectProviderValue(
+    resolvedConfigOptions.pi?.noPromptTemplates,
+    personaOptions?.pi?.noPromptTemplates,
+    stepOptions?.pi?.noPromptTemplates,
+    resolveProviderOptionOrigin(originResolver, 'pi.noPromptTemplates', source),
+  );
+  const piNoThemes = selectProviderValue(
+    resolvedConfigOptions.pi?.noThemes,
+    personaOptions?.pi?.noThemes,
+    stepOptions?.pi?.noThemes,
+    resolveProviderOptionOrigin(originResolver, 'pi.noThemes', source),
+  );
+  const piNoContextFiles = selectProviderValue(
+    resolvedConfigOptions.pi?.noContextFiles,
+    personaOptions?.pi?.noContextFiles,
+    stepOptions?.pi?.noContextFiles,
+    resolveProviderOptionOrigin(originResolver, 'pi.noContextFiles', source),
+  );
+  const piCallTimeoutMs = selectProviderValue(
+    resolvedConfigOptions.pi?.guards?.callTimeoutMs,
+    personaOptions?.pi?.guards?.callTimeoutMs,
+    stepOptions?.pi?.guards?.callTimeoutMs,
+    resolveProviderOptionOrigin(originResolver, 'pi.guards.callTimeoutMs', source),
+  );
+  const copilotCallTimeoutMs = selectProviderValue(
+    resolvedConfigOptions.copilot?.guards?.callTimeoutMs,
+    personaOptions?.copilot?.guards?.callTimeoutMs,
+    stepOptions?.copilot?.guards?.callTimeoutMs,
+    resolveProviderOptionOrigin(originResolver, 'copilot.guards.callTimeoutMs', source),
+  );
+  const kiroCallTimeoutMs = selectProviderValue(
+    resolvedConfigOptions.kiro?.guards?.callTimeoutMs,
+    personaOptions?.kiro?.guards?.callTimeoutMs,
+    stepOptions?.kiro?.guards?.callTimeoutMs,
+    resolveProviderOptionOrigin(originResolver, 'kiro.guards.callTimeoutMs', source),
+  );
+  const cursorCallTimeoutMs = selectProviderValue(
+    resolvedConfigOptions.cursor?.guards?.callTimeoutMs,
+    personaOptions?.cursor?.guards?.callTimeoutMs,
+    stepOptions?.cursor?.guards?.callTimeoutMs,
+    resolveProviderOptionOrigin(originResolver, 'cursor.guards.callTimeoutMs', source),
+  );
   const claudeTerminalBackend = selectProviderValue(
     resolvedConfigOptions.claudeTerminal?.backend,
     personaOptions?.claudeTerminal?.backend,
@@ -732,6 +1270,12 @@ export function resolveEffectiveProviderOptions(
     personaOptions?.claudeTerminal?.timeoutMs,
     stepOptions?.claudeTerminal?.timeoutMs,
     resolveProviderOptionOrigin(originResolver, 'claudeTerminal.timeoutMs', source),
+  );
+  const claudeTerminalCallTimeoutMs = selectProviderValue(
+    resolvedConfigOptions.claudeTerminal?.guards?.callTimeoutMs,
+    personaOptions?.claudeTerminal?.guards?.callTimeoutMs,
+    stepOptions?.claudeTerminal?.guards?.callTimeoutMs,
+    resolveProviderOptionOrigin(originResolver, 'claudeTerminal.guards.callTimeoutMs', source),
   );
   const claudeTerminalKeepSession = selectProviderValue(
     resolvedConfigOptions.claudeTerminal?.keepSession,
@@ -749,14 +1293,22 @@ export function resolveEffectiveProviderOptions(
   const result: StepProviderOptions = {
     ...(codexBaseUrl !== undefined
       || codexNetworkAccess !== undefined
+      || codexPermissionControl !== undefined
       || codexReasoningEffort !== undefined
+      || codexFastMode !== undefined
+      || codexCallTimeoutMs !== undefined
       || codexRepoSkills !== undefined
       || codexUserSkills !== undefined
       ? {
           codex: {
             ...(codexBaseUrl !== undefined ? { baseUrl: codexBaseUrl } : {}),
             ...(codexNetworkAccess !== undefined ? { networkAccess: codexNetworkAccess } : {}),
+            ...(codexPermissionControl !== undefined ? { permissionControl: codexPermissionControl } : {}),
             ...(codexReasoningEffort !== undefined ? { reasoningEffort: codexReasoningEffort } : {}),
+            ...(codexFastMode !== undefined ? { fastMode: codexFastMode } : {}),
+            ...(codexCallTimeoutMs !== undefined
+              ? { guards: { callTimeoutMs: codexCallTimeoutMs } }
+              : {}),
             ...(codexRepoSkills !== undefined || codexUserSkills !== undefined
               ? {
                   skills: {
@@ -816,6 +1368,7 @@ export function resolveEffectiveProviderOptions(
       || claudeAllowedTools !== undefined
       || claudeBaseUrl !== undefined
       || claudeEffort !== undefined
+      || claudeCallTimeoutMs !== undefined
       || claudeSkillsEnabled !== undefined
       ? {
           claude: {
@@ -823,19 +1376,93 @@ export function resolveEffectiveProviderOptions(
             ...(claudeAllowedTools !== undefined ? { allowedTools: claudeAllowedTools } : {}),
             ...(claudeBaseUrl !== undefined ? { baseUrl: claudeBaseUrl } : {}),
             ...(claudeEffort !== undefined ? { effort: claudeEffort } : {}),
+            ...(claudeCallTimeoutMs !== undefined
+              ? { guards: { callTimeoutMs: claudeCallTimeoutMs } }
+              : {}),
             ...(claudeSkillsEnabled !== undefined ? { skills: { enabled: claudeSkillsEnabled } } : {}),
           },
         }
       : {}),
-    ...(copilotEffort !== undefined ? { copilot: { effort: copilotEffort } } : {}),
-    ...(kiroAgent !== undefined ? { kiro: { agent: kiroAgent } } : {}),
+    ...(copilotEffort !== undefined || copilotCallTimeoutMs !== undefined
+      ? {
+          copilot: {
+            ...(copilotEffort !== undefined ? { effort: copilotEffort } : {}),
+            ...(copilotCallTimeoutMs !== undefined
+              ? { guards: { callTimeoutMs: copilotCallTimeoutMs } }
+              : {}),
+          },
+        }
+      : {}),
+    ...(kiroAgent !== undefined || kiroCallTimeoutMs !== undefined
+      ? {
+          kiro: {
+            ...(kiroAgent !== undefined ? { agent: kiroAgent } : {}),
+            ...(kiroCallTimeoutMs !== undefined
+              ? { guards: { callTimeoutMs: kiroCallTimeoutMs } }
+              : {}),
+          },
+        }
+      : {}),
+    ...(cursorCallTimeoutMs !== undefined
+      ? { cursor: { guards: { callTimeoutMs: cursorCallTimeoutMs } } }
+      : {}),
+    ...(deepseekHarnessPythonPath !== undefined
+      || deepseekHarnessBaseUrl !== undefined
+      || deepseekHarnessSessionRoot !== undefined
+      || deepseekHarnessCordis !== undefined
+      || deepseekHarnessMaxTokens !== undefined
+      || deepseekHarnessRequestTimeoutMs !== undefined
+      || deepseekHarnessShutdownTimeoutMs !== undefined
+      || deepseekHarnessRuntimeMode !== undefined
+      ? {
+          deepseekHarness: {
+            ...(deepseekHarnessPythonPath !== undefined ? { pythonPath: deepseekHarnessPythonPath } : {}),
+            ...(deepseekHarnessBaseUrl !== undefined ? { baseUrl: deepseekHarnessBaseUrl } : {}),
+            ...(deepseekHarnessSessionRoot !== undefined ? { sessionRoot: deepseekHarnessSessionRoot } : {}),
+            ...(deepseekHarnessCordis !== undefined ? { cordis: deepseekHarnessCordis } : {}),
+            ...(deepseekHarnessMaxTokens !== undefined ? { maxTokens: deepseekHarnessMaxTokens } : {}),
+            ...(deepseekHarnessRequestTimeoutMs !== undefined
+              ? { requestTimeoutMs: deepseekHarnessRequestTimeoutMs }
+              : {}),
+            ...(deepseekHarnessShutdownTimeoutMs !== undefined
+              ? { shutdownTimeoutMs: deepseekHarnessShutdownTimeoutMs }
+              : {}),
+            ...(deepseekHarnessRuntimeMode !== undefined ? { runtimeMode: deepseekHarnessRuntimeMode } : {}),
+          },
+        }
+      : {}),
+    ...(piExtensions !== undefined
+      || piCallTimeoutMs !== undefined
+      || piNoExtensions !== undefined
+      || piNoSkills !== undefined
+      || piNoPromptTemplates !== undefined
+      || piNoThemes !== undefined
+      || piNoContextFiles !== undefined
+      ? {
+          pi: {
+            ...(piCallTimeoutMs !== undefined
+              ? { guards: { callTimeoutMs: piCallTimeoutMs } }
+              : {}),
+            ...(piExtensions !== undefined ? { extensions: [...piExtensions] } : {}),
+            ...(piNoExtensions !== undefined ? { noExtensions: piNoExtensions } : {}),
+            ...(piNoSkills !== undefined ? { noSkills: piNoSkills } : {}),
+            ...(piNoPromptTemplates !== undefined ? { noPromptTemplates: piNoPromptTemplates } : {}),
+            ...(piNoThemes !== undefined ? { noThemes: piNoThemes } : {}),
+            ...(piNoContextFiles !== undefined ? { noContextFiles: piNoContextFiles } : {}),
+          },
+        }
+      : {}),
     ...(claudeTerminalBackend !== undefined
+      || claudeTerminalCallTimeoutMs !== undefined
       || claudeTerminalTimeoutMs !== undefined
       || claudeTerminalKeepSession !== undefined
       || claudeTerminalTranscriptPollIntervalMs !== undefined
       ? {
           claudeTerminal: {
             ...(claudeTerminalBackend !== undefined ? { backend: claudeTerminalBackend } : {}),
+            ...(claudeTerminalCallTimeoutMs !== undefined
+              ? { guards: { callTimeoutMs: claudeTerminalCallTimeoutMs } }
+              : {}),
             ...(claudeTerminalTimeoutMs !== undefined ? { timeoutMs: claudeTerminalTimeoutMs } : {}),
             ...(claudeTerminalKeepSession !== undefined ? { keepSession: claudeTerminalKeepSession } : {}),
             ...(claudeTerminalTranscriptPollIntervalMs !== undefined
@@ -846,7 +1473,9 @@ export function resolveEffectiveProviderOptions(
       : {}),
   };
 
-  return Object.keys(result).length > 0 ? result : undefined;
+  const effective = Object.keys(result).length > 0 ? result : undefined;
+  assertValidCodexProviderOptions(effective);
+  return effective;
 }
 
 function stripClaudeAllowedTools(
@@ -863,6 +1492,9 @@ function stripClaudeAllowedTools(
           : {}),
         ...(providerOptions.claude.effort !== undefined
           ? { effort: providerOptions.claude.effort }
+          : {}),
+        ...(providerOptions.claude.guards !== undefined
+          ? { guards: { ...providerOptions.claude.guards } }
           : {}),
         ...(providerOptions.claude.skills?.enabled !== undefined
           ? { skills: { enabled: providerOptions.claude.skills.enabled } }
@@ -883,11 +1515,40 @@ function stripClaudeAllowedTools(
     ...(sanitizedClaude !== undefined && Object.keys(sanitizedClaude).length > 0
       ? { claude: sanitizedClaude }
       : {}),
+    ...(providerOptions.cursor !== undefined
+      ? { cursor: { ...providerOptions.cursor } }
+      : {}),
     ...(providerOptions.copilot !== undefined
       ? { copilot: { ...providerOptions.copilot } }
       : {}),
     ...(providerOptions.kiro !== undefined
       ? { kiro: { ...providerOptions.kiro } }
+      : {}),
+    ...(providerOptions.deepseekHarness !== undefined
+      ? { deepseekHarness: { ...providerOptions.deepseekHarness } }
+      : {}),
+    ...(providerOptions.pi !== undefined
+      ? {
+          pi: {
+            ...(providerOptions.pi.guards !== undefined
+              ? { guards: { ...providerOptions.pi.guards } }
+              : {}),
+            ...(providerOptions.pi.extensions !== undefined
+              ? { extensions: [...providerOptions.pi.extensions] }
+              : {}),
+            ...(providerOptions.pi.noExtensions !== undefined
+              ? { noExtensions: providerOptions.pi.noExtensions }
+              : {}),
+            ...(providerOptions.pi.noSkills !== undefined ? { noSkills: providerOptions.pi.noSkills } : {}),
+            ...(providerOptions.pi.noPromptTemplates !== undefined
+              ? { noPromptTemplates: providerOptions.pi.noPromptTemplates }
+              : {}),
+            ...(providerOptions.pi.noThemes !== undefined ? { noThemes: providerOptions.pi.noThemes } : {}),
+            ...(providerOptions.pi.noContextFiles !== undefined
+              ? { noContextFiles: providerOptions.pi.noContextFiles }
+              : {}),
+          },
+        }
       : {}),
     ...(providerOptions.claudeTerminal !== undefined
       ? { claudeTerminal: { ...providerOptions.claudeTerminal } }
@@ -935,9 +1596,13 @@ export const PROVIDER_OPTION_PATHS = [
   'claude.sandbox.allowUnsandboxedCommands',
   'claude.sandbox.excludedCommands',
   'claude.skills.enabled',
+  'claude.guards.callTimeoutMs',
   'codex.baseUrl',
+  'codex.fastMode',
   'codex.networkAccess',
+  'codex.permissionControl',
   'codex.reasoningEffort',
+  'codex.guards.callTimeoutMs',
   'codex.skills.repo',
   'codex.skills.user',
   'opencode.networkAccess',
@@ -950,8 +1615,27 @@ export const PROVIDER_OPTION_PATHS = [
   'opencode.guards.textByteLimit',
   'opencode.guards.reasoningByteLimit',
   'copilot.effort',
+  'copilot.guards.callTimeoutMs',
   'kiro.agent',
+  'kiro.guards.callTimeoutMs',
+  'cursor.guards.callTimeoutMs',
+  'deepseekHarness.pythonPath',
+  'deepseekHarness.baseUrl',
+  'deepseekHarness.sessionRoot',
+  'deepseekHarness.cordis',
+  'deepseekHarness.maxTokens',
+  'deepseekHarness.requestTimeoutMs',
+  'deepseekHarness.shutdownTimeoutMs',
+  'deepseekHarness.runtimeMode',
+  'pi.extensions',
+  'pi.guards.callTimeoutMs',
+  'pi.noExtensions',
+  'pi.noSkills',
+  'pi.noPromptTemplates',
+  'pi.noThemes',
+  'pi.noContextFiles',
   'claudeTerminal.backend',
+  'claudeTerminal.guards.callTimeoutMs',
   'claudeTerminal.timeoutMs',
   'claudeTerminal.keepSession',
   'claudeTerminal.transcriptPollIntervalMs',
@@ -962,6 +1646,7 @@ export type ProviderOptionPath = (typeof PROVIDER_OPTION_PATHS)[number];
 const FILE_PREFERRED_PROVIDER_OPTION_PATHS: ReadonlySet<string> = new Set([
   'claude.baseUrl',
   'codex.baseUrl',
+  'deepseekHarness.baseUrl',
 ]);
 
 export function isFilePreferredProviderOptionPath(path: string): boolean {
@@ -1009,6 +1694,7 @@ export function resolveProviderOptionSource(
   if (
     path !== 'claude.baseUrl'
     && path !== 'codex.baseUrl'
+    && path !== 'deepseekHarness.baseUrl'
     && (origin === 'env' || origin === 'cli')
     && configValue !== undefined
   ) {

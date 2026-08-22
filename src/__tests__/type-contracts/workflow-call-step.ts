@@ -1,4 +1,7 @@
-import type { WorkflowCallStep } from '../../core/models/workflow-types.js';
+import type {
+  WorkflowCallStep,
+  WorkflowSubworkflowParamConfig,
+} from '../../core/models/workflow-types.js';
 
 const workflowCallStep: WorkflowCallStep = {
   name: 'delegate',
@@ -11,3 +14,12 @@ const workflowCallStep: WorkflowCallStep = {
 };
 
 void workflowCallStep;
+
+const facetParamWithCompanionDefault: WorkflowSubworkflowParamConfig = {
+  type: 'facet_ref',
+  facetKind: 'instruction',
+  // @ts-expect-error facet defaults cannot contain companion selections.
+  default: { fixed: ['reviewer'], pool: [], moderator: 'moderator' },
+};
+
+void facetParamWithCompanionDefault;

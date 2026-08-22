@@ -34,17 +34,14 @@ vi.mock('../infra/claude/client.js', () => ({
 const {
   mockCallCodex,
   mockCallCodexCustom,
-  mockCallCodexIsolatedStructured,
 } = vi.hoisted(() => ({
   mockCallCodex: vi.fn(),
   mockCallCodexCustom: vi.fn(),
-  mockCallCodexIsolatedStructured: vi.fn(),
 }));
 
 vi.mock('../infra/codex/index.js', () => ({
   callCodex: mockCallCodex,
   callCodexCustom: mockCallCodexCustom,
-  callCodexIsolatedStructured: mockCallCodexIsolatedStructured,
 }));
 
 // ===== OpenCode =====
@@ -196,23 +193,47 @@ describe('ClaudeProvider — structured output', () => {
     expect(result.structuredOutput).toEqual({ step: 1 });
   });
 
-  it('strict read-only internal agent isolation を Claude SDK client に渡す', async () => {
+  it('明示された runtime permission を Claude SDK client に渡す', async () => {
     mockCallClaudeCustom.mockResolvedValue(doneResponse('selector', {}));
 
     const agent = new ClaudeProvider().setup({ name: 'selector', systemPrompt: 'Select reviewers.' });
     await agent.call('prompt', {
       cwd: '/tmp',
-      internalAgentIsolation: 'strict-readonly',
       permissionMode: 'readonly',
       allowedTools: [],
       mcpServers: {},
     });
 
     expect(mockCallClaudeCustom.mock.calls[0]?.[3]).toMatchObject({
-      internalAgentIsolation: 'strict-readonly',
       permissionMode: 'readonly',
       allowedTools: [],
       mcpServers: {},
+    });
+  });
+
+  it('isolated structured execution forwards the strict marker and clears ambient inputs', async () => {
+    mockCallClaudeCustom.mockResolvedValue(doneResponse('selector', { step: 1 }));
+
+    const agent = new ClaudeProvider().setupIsolatedStructured({
+      name: 'selector',
+      systemPrompt: 'Select reviewers.',
+    });
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      sessionId: 'ambient-session',
+      allowedTools: ['Read'],
+      mcpServers: { docs: { command: 'docs-mcp', args: ['serve'] } },
+      imageAttachments: [{ placeholder: '[Image #1]', path: '/tmp/image.png' }],
+      outputSchema: SCHEMA,
+    });
+
+    expect(mockCallClaudeCustom.mock.calls[0]?.[3]).toMatchObject({
+      internalAgentIsolation: 'strict-readonly',
+      sessionId: undefined,
+      allowedTools: [],
+      mcpServers: undefined,
+      imageAttachments: undefined,
+      outputSchema: SCHEMA,
     });
   });
 
@@ -267,6 +288,7 @@ describe('ClaudeProvider — structured output', () => {
     const opts = mockCallClaudeCustom.mock.calls[0]?.[3];
     expect(opts).toHaveProperty('childProcessEnv', childProcessEnv);
   });
+
 });
 
 // ---------- Codex ----------
@@ -303,34 +325,6 @@ describe('CodexProvider — structured output', () => {
     });
 
     expect(mockCallCodex).toHaveBeenCalledOnce();
-    expect(mockCallCodexIsolatedStructured).not.toHaveBeenCalled();
-  });
-
-  it('setupIsolatedStructuredがhardened direct CLI経路を使う', async () => {
-    mockCallCodexIsolatedStructured.mockResolvedValue(
-      doneResponse('normalizer', { rawFindings: [] }),
-    );
-
-    const agent = new CodexProvider().setupIsolatedStructured({
-      name: 'normalizer',
-      systemPrompt: 'system',
-    });
-    await agent.call('report', {
-      cwd: '/tmp/isolated',
-      outputSchema: SCHEMA,
-    });
-
-    expect(mockCallCodexIsolatedStructured).toHaveBeenCalledWith(
-      'normalizer',
-      'system\n\nreport',
-      expect.objectContaining({
-        cwd: '/tmp/isolated',
-        outputSchema: SCHEMA,
-        codexPathOverride: '/opt/codex/bin/codex',
-      }),
-    );
-    expect(mockCallCodex).not.toHaveBeenCalled();
-    expect(mockCallCodexCustom).not.toHaveBeenCalled();
   });
 
   it('provider_options.codex.reasoningEffort を callCodex に渡す', async () => {
@@ -344,6 +338,27 @@ describe('CodexProvider — structured output', () => {
 
     const opts = mockCallCodex.mock.calls[0]?.[2];
     expect(opts).toHaveProperty('reasoningEffort', 'high');
+  });
+
+  it.each([true, false])('provider_options.codex.fastMode=%s を通常・isolated structured callへ渡す', async (fastMode) => {
+    mockCallCodex.mockResolvedValue(doneResponse('coder'));
+    const providerOptions: StepProviderOptions = {
+      codex: { fastMode },
+    };
+    const provider = new CodexProvider();
+
+    await provider.setup({ name: 'coder' }).call('prompt', {
+      cwd: '/tmp',
+      providerOptions,
+    });
+    await provider.setupIsolatedStructured({ name: 'selector' }).call('prompt', {
+      cwd: '/tmp',
+      providerOptions,
+      outputSchema: SCHEMA,
+    });
+
+    expect(mockCallCodex.mock.calls[0]?.[2]).toHaveProperty('fastMode', fastMode);
+    expect(mockCallCodex.mock.calls[1]?.[2]).toHaveProperty('fastMode', fastMode);
   });
 
   it('provider_options.codex.baseUrl を callCodex に渡す', async () => {
@@ -387,13 +402,12 @@ describe('CodexProvider — structured output', () => {
     expect(opts).toHaveProperty('skills', { repo: false, user: false });
   });
 
-  it('strict read-only internal agent isolation を Codex client に渡す', async () => {
+  it('明示された runtime permission と provider options を Codex client に渡す', async () => {
     mockCallCodexCustom.mockResolvedValue(doneResponse('selector', {}));
 
     const agent = new CodexProvider().setup({ name: 'selector', systemPrompt: 'Select reviewers.' });
     await agent.call('prompt', {
       cwd: '/tmp',
-      internalAgentIsolation: 'strict-readonly',
       permissionMode: 'readonly',
       allowedTools: [],
       mcpServers: {},
@@ -407,12 +421,38 @@ describe('CodexProvider — structured output', () => {
     });
 
     expect(mockCallCodexCustom.mock.calls[0]?.[3]).toMatchObject({
-      internalAgentIsolation: 'strict-readonly',
       permissionMode: 'readonly',
       outputSchema: SCHEMA,
       networkAccess: false,
       skills: { repo: true, user: false },
     });
+  });
+
+  it('permission_control=codex を通常経路と strict isolated structured 経路へ渡す', async () => {
+    mockCallCodex.mockResolvedValue(doneResponse('coder'));
+
+    const provider = new CodexProvider();
+    await provider.setup({ name: 'coder' }).call('prompt', {
+      cwd: '/tmp',
+      permissionMode: 'edit',
+      providerOptions: { codex: { permissionControl: 'codex' } },
+    });
+    expect(mockCallCodex.mock.calls[0]?.[2]).toMatchObject({
+      permissionMode: 'edit',
+      permissionControl: 'codex',
+    });
+
+    await provider.setupIsolatedStructured({ name: 'selector' }).call('prompt', {
+      cwd: '/tmp',
+      permissionMode: 'full',
+      providerOptions: { codex: { permissionControl: 'codex' } },
+      outputSchema: SCHEMA,
+    });
+    expect(mockCallCodex.mock.calls[1]?.[2]).toMatchObject({
+      permissionMode: 'readonly',
+      permissionControl: 'codex',
+    });
+    expect(mockCallCodex.mock.calls[1]?.[2].networkAccess).toBeUndefined();
   });
 
   it('childProcessEnv を callCodex に渡す', async () => {
@@ -572,13 +612,6 @@ describe('OpenCodeProvider — structured output', () => {
 
     const opts = mockCallOpenCode.mock.calls[0]?.[2] as Record<string, unknown>;
     expect(opts.imageAttachments).toBeUndefined();
-    expect(mockLogger.info).toHaveBeenCalledWith('OpenCode provider does not support imageAttachments; ignoring');
-
-    mockLogger.info.mockClear();
-    await agent.call('prompt', { cwd: '/tmp', model: 'openai/gpt-4', imageAttachments: [] });
-    await agent.call('prompt', { cwd: '/tmp', model: 'openai/gpt-4' });
-
-    expect(mockLogger.info).not.toHaveBeenCalledWith('OpenCode provider does not support imageAttachments; ignoring');
   });
 });
 
@@ -607,6 +640,7 @@ describe('MockProvider — structured output', () => {
     const opts = mockCallMock.mock.calls[0]?.[2];
     expect(opts).toMatchObject({
       allowedTools: ['Read', 'Edit'],
+      outputSchema: SCHEMA,
     });
   });
 
@@ -621,13 +655,6 @@ describe('MockProvider — structured output', () => {
 
     const opts = mockCallMock.mock.calls[0]?.[2] as Record<string, unknown>;
     expect(opts.imageAttachments).toBeUndefined();
-    expect(mockLogger.info).toHaveBeenCalledWith('Mock provider does not support imageAttachments; ignoring');
-
-    mockLogger.info.mockClear();
-    await agent.call('prompt', { cwd: '/tmp', imageAttachments: [] });
-    await agent.call('prompt', { cwd: '/tmp' });
-
-    expect(mockLogger.info).not.toHaveBeenCalledWith('Mock provider does not support imageAttachments; ignoring');
   });
 });
 
@@ -650,5 +677,31 @@ describe('ClaudeProvider abortSignal wiring', () => {
     expect(mockCallClaude).toHaveBeenCalledTimes(1);
     const callOptions = mockCallClaude.mock.calls[0]?.[2];
     expect(callOptions).toHaveProperty('abortSignal', controller.signal);
+  });
+});
+
+describe('Provider activity wiring', () => {
+  it.each([
+    ['claude', () => new ClaudeProvider(), mockCallClaude, undefined],
+    ['codex', () => new CodexProvider(), mockCallCodex, undefined],
+    ['opencode', () => new OpenCodeProvider(), mockCallOpenCode, 'opencode/big-pickle'],
+    ['mock', () => new MockProvider(), mockCallMock, undefined],
+  ] as const)('%s provider は onActivity を client へ渡す', async (
+    _name,
+    createProvider,
+    callMock,
+    model,
+  ) => {
+    vi.clearAllMocks();
+    callMock.mockResolvedValue(doneResponse('coder'));
+    const onActivity = vi.fn();
+
+    await createProvider().setup({ name: 'coder' }).call('prompt', {
+      cwd: '/tmp/project',
+      onActivity,
+      ...(model === undefined ? {} : { model }),
+    });
+
+    expect(callMock.mock.calls[0]?.[2]).toHaveProperty('onActivity', onActivity);
   });
 });

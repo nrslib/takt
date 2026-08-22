@@ -1,26 +1,25 @@
 import { existsSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import type { StructuredCaller } from '../../../agents/structured-caller.js';
 import { createLogger } from '../../../shared/utils/index.js';
-import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
+import { DEFAULT_COMPANION_ENABLED } from '../../../shared/constants.js';
 import type {
   AgentResponse,
-  FindingContractConfig,
   WorkflowConfig,
   WorkflowMaxSteps,
   WorkflowResumePoint,
   WorkflowResumePointEntry,
   WorkflowState,
   WorkflowStep,
+  WorkflowWideRule,
 } from '../../models/types.js';
-import type { FindingManagerAuthority } from '../../models/finding-types.js';
+import { isDynamicParallelSubSteps } from '../../models/types.js';
 import { prepareRuntimeEnvironment } from '../../runtime/runtime-environment.js';
 import type { RunPaths } from '../run/run-paths.js';
 import type {
   WorkflowEngineOptions,
   WorkflowSharedRuntimeState,
-  WorkflowStepFailureSummary,
 } from '../types.js';
-import { createRunFailure } from '../run/run-failure.js';
 import { ArpeggioRunner } from './ArpeggioRunner.js';
 import { LoopMonitorJudgeRunner } from './LoopMonitorJudgeRunner.js';
 import { OptionsBuilder } from './OptionsBuilder.js';
@@ -38,31 +37,8 @@ import { getWorkflowReference } from '../workflow-reference.js';
 import type { WorkflowCallChildEngine } from '../types.js';
 import type { StructuredOutputNormalizerRegistry } from './structured-output-normalizer.js';
 import { runQualityGates } from '../quality-gates/qualityGateRunner.js';
-import type { FindingLedgerStore } from '../findings/store.js';
-import { createRawFindingsStructuredOutput } from '../findings/manager-runner.js';
-import {
-  ledgerHasDismissedFindings,
-  ledgerHasOpenFindings,
-  ledgerHasWaivedFindings,
-  renderFindingLedgerInstructionSummary,
-  renderFindingLedgerReportSummary,
-} from '../findings/context.js';
-import { renderLoopMonitorFindingsSummary } from '../findings/loop-monitor-summary.js';
-import { computeReviewScopeSnapshotId } from '../findings/snapshot.js';
-import {
-  computeRestatementRequestId,
-  createFindingReviewPresentationContextV2,
-  listFindingReviewPublications,
-  type RestatementRequestV1,
-} from '../findings/review-publication.js';
-import { RAW_FINDING_LIMITS } from '../findings/raw-finding-limits.js';
-import type { FindingTarget } from '../../models/finding-types.js';
-import type {
-  FindingContractInstructionContext,
-  FindingContractReviewerOutputStrategy,
-} from '../instruction/instruction-context.js';
+import { createTaskReviewScopeResolver } from '../review-scope.js';
 import { requireWorkflowResumeStackSnapshot } from '../run/resume-point.js';
-import { resolveFindingIntakeNormalizeConfig } from '../findings/intake-normalize-policy.js';
 import {
   createReviewReportDiscoveryContext,
   resolveWorkflowStepReportNamesWithDiagnostics,
@@ -75,40 +51,15 @@ import {
 } from '../workflow-call-invocation-index.js';
 import { SelectorInputReader } from '../dynamic-parallel/selector-input-reader.js';
 import { restoreWorkflowStepParticipationIndex } from '../workflow-step-participation-index.js';
+import {
+  createWorkflowStepAbortSignalContext,
+  recordWorkflowStepProviderActivity,
+  recordWorkflowStepProviderEventActivity,
+  type WorkflowStepAbortSignalContext,
+} from './step-deadline.js';
+import { mergeWorkflowWideRules } from './workflow-wide-rule-merge.js';
 
 const log = createLogger('workflow-engine');
-
-export class FindingReviewCapacityError extends Error {
-  readonly failure: WorkflowStepFailureSummary;
-
-  constructor(input: {
-    stepName: string;
-    anomalyIds: readonly string[];
-    classificationAuthorityIds: readonly string[];
-    requiredInvocations: number;
-    remainingCapacity: number;
-  }) {
-    const unpresentedIds = [...input.anomalyIds].sort(compareBinaryStrings);
-    const reason = `Finding review presentation capacity is insufficient: ${input.requiredInvocations} invocation(s) required, ${input.remainingCapacity} remaining`;
-    super(reason);
-    this.name = 'FindingReviewCapacityError';
-    this.failure = createRunFailure({
-      kind: 'review_integrity_unresolved',
-      step: input.stepName,
-      reason,
-      error: reason,
-      details: {
-        reviewIntegrity: {
-          code: 'review_integrity_unresolved_unpresented',
-          anomalyIds: unpresentedIds,
-          unpresentedIds,
-          classificationAuthorityIds: [...input.classificationAuthorityIds].sort(compareBinaryStrings),
-          publicationIds: [],
-        },
-      },
-    });
-  }
-}
 
 interface WorkflowEngineSetupParams {
   config: WorkflowConfig;
@@ -141,23 +92,14 @@ interface WorkflowEngineSetupParams {
     occurrence: number,
     resumeStackPrefix: readonly WorkflowResumePointEntry[],
   ) => void;
-  persistDynamicParallelSelection: (
-    step: WorkflowStep,
-    iteration: number,
+  commitDynamicParallelSelection: (
     identity: string,
     selection: import('../../models/types.js').DynamicParallelSelectionSnapshot,
   ) => Promise<void>;
-  persistDynamicFacetSelection: (
-    step: WorkflowStep,
-    iteration: number,
+  commitDynamicFacetSelection: (
     identity: string,
     selection: import('../../models/types.js').DynamicFacetSelectionSnapshot,
   ) => Promise<void>;
-  refreshFindingsState: () => void;
-  /** 自前 or workflow_call 親から継承した、この engine で有効な Finding Contract。 */
-  findingContract?: FindingContractConfig;
-  findingManagerAuthority: FindingManagerAuthority;
-  findingLedgerStore?: FindingLedgerStore;
   updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
   resolveNextStepFromDone: (step: WorkflowStep, response: AgentResponse) => string;
   resetCycleDetector: () => void;
@@ -171,6 +113,7 @@ interface WorkflowEngineSetupParams {
 }
 
 export interface WorkflowEngineServices {
+  stepAbortSignalContext: WorkflowStepAbortSignalContext;
   optionsBuilder: OptionsBuilder;
   stepExecutor: StepExecutor;
   parallelRunner: ParallelRunner;
@@ -197,12 +140,8 @@ export function createSharedRuntime(
   return {
     startedAtMs: resumePoint ? now - resumePoint.elapsed_ms : now,
     maxSteps,
-    dynamicParallelSelectionStore: new DynamicParallelSelectionStore(
-      new Map(Object.entries(resumePoint?.dynamic_parallel_selections ?? {})),
-    ),
-    dynamicFacetSelectionStore: new DynamicFacetSelectionStore(
-      new Map(Object.entries(resumePoint?.dynamic_facet_selections ?? {})),
-    ),
+    dynamicParallelSelectionStore: new DynamicParallelSelectionStore(new Map()),
+    dynamicFacetSelectionStore: new DynamicFacetSelectionStore(new Map()),
     workflowCallInvocationEvidence: restoreWorkflowCallInvocationEvidence(resumePoint),
     workflowStepParticipationIndex: restoreWorkflowStepParticipationIndex(resumePoint),
   };
@@ -245,254 +184,19 @@ export function applyRuntimeEnvironment(
   });
 }
 
-export function assertFindingReviewPresentationCapacity(input: {
-  ledger: ReturnType<FindingLedgerStore['loadLedger']>;
-  presentationCounts: ReadonlyMap<string, number>;
-  maxSteps: WorkflowMaxSteps;
-  currentIteration: number;
-  stepName: string;
-}): void {
-  const unpresented = (input.ledger.reviewerAnomalies ?? []).filter((anomaly) => {
-    const defect = anomaly.intakeContract;
-    const presentedCount = input.presentationCounts.get(anomaly.id) ?? 0;
-    return anomaly.kind === 'intake-contract-incomplete'
-      && defect !== undefined
-      && anomaly.promotedFindingId === undefined
-      && anomaly.settlement === undefined
-      && defect.terminalDisposition === undefined
-      && presentedCount === 0;
-  });
-  if (unpresented.length === 0) {
-    return;
-  }
-  const countsByOwner = new Map<string, number>();
-  for (const anomaly of unpresented) {
-    const owner = anomaly.intakeContract!.presentationOwnerReviewer;
-    countsByOwner.set(owner, (countsByOwner.get(owner) ?? 0) + 1);
-  }
-  const total = unpresented.length;
-  const ownerInvocationCount = Math.max(
-    ...Array.from(countsByOwner.values(), (count) => Math.ceil(count / 64)),
-  );
-  const requiredInvocations = Math.max(ownerInvocationCount, Math.ceil(total / 128));
-  const remainingCapacity = typeof input.maxSteps === 'number'
-    ? Math.max(0, input.maxSteps - input.currentIteration + (input.currentIteration > 0 ? 1 : 0))
-    : 0;
-  if (requiredInvocations <= remainingCapacity) {
-    return;
-  }
-  throw new FindingReviewCapacityError({
-    stepName: input.stepName,
-    anomalyIds: unpresented.map(({ id }) => id),
-    classificationAuthorityIds: unpresented.map(
-      ({ intakeContract }) => intakeContract!.classificationAuthorityId,
-    ),
-    requiredInvocations,
-    remainingCapacity,
-  });
-}
-
-function targetPathsForRestatementRequest(target: FindingTarget): string[] {
-  const sortedUniquePaths = (paths: readonly string[]): string[] => (
-    [...new Set(paths)].sort(compareBinaryStrings)
-  );
-  switch (target.kind) {
-    case 'code':
-      return sortedUniquePaths(target.paths);
-    case 'structure':
-      return sortedUniquePaths([...target.scope.roots, ...target.manifestTargets]);
-    case 'absence':
-      return target.predicate.kind === 'path_state'
-        ? [target.predicate.path]
-        : sortedUniquePaths(target.predicate.roots);
-    case 'review_scope':
-      return [];
-  }
-}
-
-function boundedRestatementClaimExcerpt(
-  anomaly: NonNullable<ReturnType<FindingLedgerStore['loadLedger']>['reviewerAnomalies']>[number],
-  raw: NonNullable<ReturnType<FindingLedgerStore['loadLedger']>['rawFindings']>[number],
-): string {
-  // フォールバックは「非 blank な最初の候補」を選ぶ。`??` だけだと空白のみの
-  // claimedExcerpt が後続の description / rawExcerpt を遮って title まで飛ぶ。
-  // 全候補が blank な観測（protocol-noise 相当）でも request が空文字にならない
-  // よう、最後は必ず非空の anomaly.title へフォールバックする。title は
-  // createReviewerAnomalySpec が常に非空で採番する。
-  const excerpt = [anomaly.claimedExcerpt, raw.description, raw.rawExcerpt]
-    .find((candidate) => candidate !== undefined && candidate !== null && candidate.trim().length > 0)
-    ?? anomaly.title;
-  return excerpt.slice(0, RAW_FINDING_LIMITS.maxDescriptionChars);
-}
-
 export function createWorkflowEngineServices(params: WorkflowEngineSetupParams): WorkflowEngineServices {
+  const stepAbortSignalContext = createWorkflowStepAbortSignalContext(params.options.abortSignal);
   const phaseRelay = createWorkflowPhaseRelay(
     (event, ...args) => params.emitEvent(event, ...args),
     params.getCurrentWorkflowStack,
+    stepAbortSignalContext.recordActivity,
   );
-  const intakeNormalize = resolveFindingIntakeNormalizeConfig(
-    params.options.findingContractConfig?.intakeNormalize,
-    params.findingContract,
-  );
-  let frozenParallelFindingContractInput: {
-    contextKey: string;
-    ledger: ReturnType<FindingLedgerStore['loadLedger']>;
-    presentationCounts: Map<string, number>;
-    contexts: Map<string, FindingContractInstructionContext>;
-    allocatedRequestCount: number;
-  } | undefined;
-  const buildFindingContractInstructionContext = (
-    step: WorkflowStep,
-    strategy: FindingContractReviewerOutputStrategy | undefined,
-    sharedReviewScopeSnapshotId?: string,
-    parallelContextKey?: string,
-  ): FindingContractInstructionContext | undefined => {
-    if (!params.findingContract) {
-      return undefined;
-    }
-    if (!params.findingLedgerStore) {
-      throw new Error('Finding contract is configured but finding ledger store is not available');
-    }
-
-    let ledger: ReturnType<FindingLedgerStore['loadLedger']>;
-    let presentationCounts: Map<string, number>;
-    let frozenContexts: Map<string, FindingContractInstructionContext> | undefined;
-    let allocatedRequestCount = 0;
-    if (
-      sharedReviewScopeSnapshotId !== undefined
-      && parallelContextKey !== undefined
-      && frozenParallelFindingContractInput?.contextKey === parallelContextKey
-    ) {
-      ({ ledger, presentationCounts, contexts: frozenContexts, allocatedRequestCount } = frozenParallelFindingContractInput);
-    } else {
-      ledger = params.findingLedgerStore.loadLedger();
-      presentationCounts = new Map<string, number>();
-      for (const publication of listFindingReviewPublications(params.getReportDir())) {
-        if (publication.presentationContext?.revision !== 2) {
-          continue;
-        }
-        for (const anomalyId of publication.presentationContext.presentedReviewerAnomalyIds) {
-          presentationCounts.set(anomalyId, (presentationCounts.get(anomalyId) ?? 0) + 1);
-        }
-      }
-      if (parallelContextKey !== undefined) {
-        frozenParallelFindingContractInput = {
-          contextKey: parallelContextKey,
-          ledger,
-          presentationCounts,
-          contexts: new Map(),
-          allocatedRequestCount: 0,
-        };
-        frozenContexts = frozenParallelFindingContractInput.contexts;
-      }
-    }
-    if (frozenContexts !== undefined && strategy !== undefined) {
-      const frozenContext = frozenContexts.get(step.name);
-      if (frozenContext !== undefined) {
-        return frozenContext;
-      }
-    }
-    let reviewer: FindingContractInstructionContext['reviewer'];
-    if (strategy !== undefined) {
-      const reviewScopeSnapshotId = sharedReviewScopeSnapshotId
-        ?? computeReviewScopeSnapshotId(params.getCwd());
-      assertFindingReviewPresentationCapacity({
-        ledger,
-        presentationCounts,
-        maxSteps: params.getMaxSteps(),
-        currentIteration: params.state.iteration,
-        stepName: step.name,
-      });
-      const requests = (ledger.reviewerAnomalies ?? [])
-        .filter((anomaly) => (
-          anomaly.kind === 'intake-contract-incomplete'
-          && anomaly.intakeContract !== undefined
-          && anomaly.intakeContract.presentationOwnerReviewer === step.name
-          && anomaly.promotedFindingId === undefined
-          && anomaly.settlement === undefined
-        ))
-        .map((anomaly) => ({
-          anomaly,
-          presentedCount: presentationCounts.get(anomaly.id) ?? 0,
-        }))
-        .filter(({ anomaly, presentedCount }) => (
-          presentedCount < anomaly.intakeContract!.presentationLimit
-        ))
-        .sort((left, right) => (
-          left.presentedCount - right.presentedCount
-          || compareBinaryStrings(left.anomaly.firstObserved.timestamp, right.anomaly.firstObserved.timestamp)
-          || compareBinaryStrings(left.anomaly.id, right.anomaly.id)
-        ))
-        .slice(0, Math.min(64, Math.max(0, 128 - allocatedRequestCount)));
-      const restatementRequests: RestatementRequestV1[] = requests.flatMap(({ anomaly, presentedCount }) => {
-        const raw = anomaly.sourceRawFindingIds
-          .map((rawId) => ledger.rawFindings.find((candidate) => candidate.rawFindingId === rawId))
-          .find((candidate) => candidate !== undefined);
-        if (raw === undefined) {
-          return [];
-        }
-        const requestWithoutId = {
-          anomalyId: anomaly.id,
-          reviewer: step.name,
-          presentationOrdinal: presentedCount + 1,
-          reviewScopeSnapshotId,
-          sourceExcerptDigest: raw.sourceBinding.excerptDigest,
-          claimedExcerpt: boundedRestatementClaimExcerpt(anomaly, raw),
-          targetPaths: targetPathsForRestatementRequest(raw.target),
-          missingRequirements: anomaly.intakeContract!.missingRequirements,
-          expectedRelation: 'new' as const,
-          expectedTargetFindingId: null,
-          expectedTargetPreconditionClass: 'absent' as const,
-        };
-        return [{
-          ...requestWithoutId,
-          restatementRequestId: computeRestatementRequestId(requestWithoutId),
-        }];
-      });
-      const presentationContext = createFindingReviewPresentationContextV2({
-        reviewScopeSnapshotId,
-        restatementRequests,
-      });
-      reviewer = strategy.reportGeneration === 'structured'
-        ? {
-            mode: 'structured',
-            rawFindingsStructuredOutput: createRawFindingsStructuredOutput(),
-            reviewScopeSnapshotId,
-            presentationContext,
-          }
-        : {
-            mode: strategy.kind,
-            reviewScopeSnapshotId,
-            presentationContext,
-          };
-      if (frozenContexts !== undefined && parallelContextKey !== undefined) {
-        frozenContexts.set(step.name, {
-          ledgerSummary: renderFindingLedgerInstructionSummary(ledger),
-          reportLedgerSummary: renderFindingLedgerReportSummary(ledger),
-          hasOpenFindings: ledgerHasOpenFindings(ledger),
-          hasWaivedFindings: ledgerHasWaivedFindings(ledger),
-          hasDismissedFindings: ledgerHasDismissedFindings(ledger),
-          ...(reviewer !== undefined ? { reviewer } : {}),
-        });
-        frozenParallelFindingContractInput = {
-          contextKey: parallelContextKey,
-          ledger,
-          presentationCounts,
-          contexts: frozenContexts,
-          allocatedRequestCount: allocatedRequestCount + restatementRequests.length,
-        };
-      }
-    }
-    const context = {
-      ledgerSummary: renderFindingLedgerInstructionSummary(ledger),
-      reportLedgerSummary: renderFindingLedgerReportSummary(ledger),
-      hasOpenFindings: ledgerHasOpenFindings(ledger),
-      hasWaivedFindings: ledgerHasWaivedFindings(ledger),
-      hasDismissedFindings: ledgerHasDismissedFindings(ledger),
-      ...(reviewer !== undefined ? { reviewer } : {}),
-    };
-    return context;
-  };
+  // base の解決は ref 走査を伴うため、ラン境界で一度だけ解決して保持する。
+  const getReviewScope = createTaskReviewScopeResolver({
+    getCwd: params.getCwd,
+    getPrContext: () => params.options.prContext,
+  });
+  const failureDir = join(params.runPaths.runRootAbs, 'failures');
 
   const optionsBuilder = new OptionsBuilder(
     params.options,
@@ -505,16 +209,34 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     () => params.config.name,
     () => params.config.description,
     params.getCurrentWorkflowStack,
-    buildFindingContractInstructionContext,
     () => params.task,
+    getReviewScope,
+    () => failureDir,
+    stepAbortSignalContext.getAbortSignal,
+    stepAbortSignalContext.recordActivity,
+    () => params.runPaths.reportsRootAbs,
   );
 
   const dynamicFacetSelector = new DynamicFacetSelectorCoordinator({
     engineOptions: params.options,
+    getAbortSignal: stepAbortSignalContext.getAbortSignal,
+    onStream: (event) => recordWorkflowStepProviderEventActivity(
+      stepAbortSignalContext.recordActivity,
+      'dynamic-facet-selector',
+      event,
+    ),
+    onActivity: (activity) => recordWorkflowStepProviderActivity(
+      stepAbortSignalContext.recordActivity,
+      'dynamic-facet-selector',
+      activity,
+    ),
+    failureDir,
     selectionStore: params.sharedRuntime.dynamicFacetSelectionStore!,
     getCwd: params.getCwd,
     getReportDirectory: () => params.runPaths.reportsAbs,
-    getReportNames: (_step, state) => getSelectorReportNames(
+    getReportsRootDirectory: () => params.runPaths.reportsRootAbs,
+    getReportNames: (step, state) => getSelectorReportNames(
+      step,
       params.config,
       state,
       params.resumeStackPrefix,
@@ -523,29 +245,24 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       params.getCwd(),
       params.sharedRuntime.workflowCallInvocationEvidence!,
       params.sharedRuntime.workflowStepParticipationIndex!,
+      params.sharedRuntime.dynamicParallelSelectionStore!.snapshot(),
     ),
     getWorkflowReference: () => getWorkflowReference(params.config),
     workflowCallPath: params.resumeStackPrefix,
-    commitSelection: params.persistDynamicFacetSelection,
+    commitSelection: params.commitDynamicFacetSelection,
     ...(params.options.selectorGitCommandRunner === undefined
       ? {}
       : { inputReader: new SelectorInputReader(params.options.selectorGitCommandRunner) }),
-    getUnresolvedFindings: () => {
-      if (!params.findingLedgerStore) {
-        return '';
-      }
-      const ledger = params.findingLedgerStore.loadLedger();
-      const summary = renderFindingLedgerInstructionSummary(ledger);
-      const projection = JSON.parse(summary) as { open?: readonly unknown[] };
-      if (!projection.open || projection.open.length === 0) {
-        return '';
-      }
-      return summary;
-    },
   });
+  const companionEnabled = params.options.companionEnabled ?? DEFAULT_COMPANION_ENABLED;
+  const workflowRules: readonly WorkflowWideRule[] = mergeWorkflowWideRules(
+    params.options.inheritedWorkflowRules,
+    params.config.allStepsRules,
+  );
 
   const stepExecutor = new StepExecutor({
     optionsBuilder,
+    getFailureDir: () => failureDir,
     getCwd: params.getCwd,
     getProjectCwd: () => params.projectCwd,
     getReportDir: params.getReportDir,
@@ -556,30 +273,31 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getWorkflowName: () => params.config.name,
     getTask: () => params.task,
     getWorkflowDescription: () => params.config.description,
+    getWorkflowRules: () => workflowRules,
     getWorkflowCallVars: () => params.options.workflowCallVars,
     getRetryNote: () => params.options.retryNote,
     getPrContext: () => params.options.prContext,
+    getReviewScope,
     getObservabilityRunId: () => params.options.observabilityRunId,
     observabilityEnabled: () => params.options.observability?.enabled === true,
     sanitizeObservabilityText: params.options.sanitizeObservabilityText,
     getCurrentWorkflowStack: params.getCurrentWorkflowStack,
     structuredOutputNormalizers: params.options.structuredOutputNormalizers,
-    structuredCaller: params.structuredCaller,
-    intakeNormalize,
     abortSignal: params.options.abortSignal,
-    findingContract: params.findingContract,
-    findingManagerAuthority: params.findingManagerAuthority,
-    workflowProvider: params.config.provider,
-    workflowModel: params.config.model,
+    getAbortSignal: stepAbortSignalContext.getAbortSignal,
     executionProvider: params.options.provider,
     executionModel: params.options.model,
-    findingLedgerStore: params.findingLedgerStore,
-    refreshFindingsState: params.refreshFindingsState,
+    internalAgentSeats: params.options.internalAgentSeats,
     emitEvent: params.emitEvent,
     recordSynthesizedAgentUsage: (stepName, providerInfo, success, usage) =>
       recordAgentUsageEvent(params.options, stepName, 'normal', providerInfo, success, usage),
     getRunId: () => params.runPaths.slug,
-    getFindingCallNamespace: () => params.options.findingCallNamespace ?? '',
+    getRunPathNamespace: () => params.options.runPathNamespace ?? [],
+    companionEnabled,
+    companionDefinitions: params.config.companions,
+    companionProviders: params.options.companionProviders,
+    companionSelectorProvider: params.options.selectorProvider,
+    companionDiffReader: params.options.companionDiffReader,
     ...phaseRelay,
     getFacetPool: (name: string) => params.config.facetPools?.[name],
     dynamicFacetSelectorCoordinator: dynamicFacetSelector,
@@ -594,6 +312,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getCwd: params.getCwd,
     task: params.task,
     getOptions: () => params.options,
+    getAbortSignal: stepAbortSignalContext.getAbortSignal,
     sharedRuntime: params.sharedRuntime,
     resumeStackPrefix: [...(params.resumeStackPrefix ?? [])],
     consumeWorkflowCallContinuation: params.consumeWorkflowCallContinuation,
@@ -602,17 +321,28 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     emit: params.emitEvent,
     resolveWorkflowCall: (request) => params.options.workflowCallResolver!(request),
     createEngine: params.createEngine,
-    findingContract: params.findingContract,
-    findingLedgerStore: params.findingLedgerStore,
-    refreshFindingsState: params.refreshFindingsState,
   });
 
   const dynamicParallelSelector = new DynamicParallelSelectorCoordinator({
     engineOptions: params.options,
+    getAbortSignal: stepAbortSignalContext.getAbortSignal,
+    onStream: (event) => recordWorkflowStepProviderEventActivity(
+      stepAbortSignalContext.recordActivity,
+      'dynamic-parallel-selector',
+      event,
+    ),
+    onActivity: (activity) => recordWorkflowStepProviderActivity(
+      stepAbortSignalContext.recordActivity,
+      'dynamic-parallel-selector',
+      activity,
+    ),
+    failureDir,
     selectionStore: params.sharedRuntime.dynamicParallelSelectionStore!,
     getCwd: params.getCwd,
     getReportDirectory: () => params.runPaths.reportsAbs,
-    getReportNames: (_step, state) => getSelectorReportNames(
+    getReportsRootDirectory: () => params.runPaths.reportsRootAbs,
+    getReportNames: (step, state) => getSelectorReportNames(
+      step,
       params.config,
       state,
       params.resumeStackPrefix,
@@ -621,10 +351,11 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       params.getCwd(),
       params.sharedRuntime.workflowCallInvocationEvidence!,
       params.sharedRuntime.workflowStepParticipationIndex!,
+      params.sharedRuntime.dynamicParallelSelectionStore!.snapshot(),
     ),
     getWorkflowReference: () => getWorkflowReference(params.config),
     workflowCallPath: params.resumeStackPrefix,
-    commitSelection: params.persistDynamicParallelSelection,
+    commitSelection: params.commitDynamicParallelSelection,
     ...(params.options.selectorGitCommandRunner === undefined
       ? {}
       : { inputReader: new SelectorInputReader(params.options.selectorGitCommandRunner) }),
@@ -634,6 +365,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     optionsBuilder,
     stepExecutor,
     engineOptions: params.options,
+    getAbortSignal: stepAbortSignalContext.getAbortSignal,
     getCwd: params.getCwd,
     dynamicParallelSelector,
     getWorkflowName: () => params.config.name,
@@ -643,14 +375,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     observabilityRunId: params.options.observabilityRunId,
     sanitizeObservabilityText: params.options.sanitizeObservabilityText,
     getCurrentWorkflowStack: params.getCurrentWorkflowStack,
-    refreshFindingsState: params.refreshFindingsState,
     emitEvent: params.emitEvent,
-    findingContract: params.findingContract,
-    intakeNormalize,
-    findingManagerAuthority: params.findingManagerAuthority,
-    workflowProvider: params.config.provider,
-    workflowModel: params.config.model,
-    findingLedgerStore: params.findingLedgerStore,
     getWorkflowCallRunner: () => workflowCallRunner,
     claimStepOccurrence: params.claimStepOccurrence,
     updateMaxSteps: params.updateMaxSteps,
@@ -661,8 +386,6 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       params.resumeStackPrefix,
     ),
     getRunId: () => params.runPaths.slug,
-    reviewPublicationDir: params.runPaths.reportsAbs,
-    getFindingCallNamespace: () => params.options.findingCallNamespace ?? '',
     runQualityGates,
     ...phaseRelay,
   });
@@ -671,7 +394,15 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     optionsBuilder,
     stepExecutor,
     getCwd: params.getCwd,
+    getReportDir: params.getReportDir,
+    getReportsRootDir: () => params.runPaths.reportsRootAbs,
+    getProjectCwd: () => params.projectCwd,
+    getTask: () => params.task,
+    getMaxSteps: params.getMaxSteps,
     getWorkflowName: () => params.config.name,
+    getWorkflowRules: () => workflowRules,
+    getReviewScope,
+    getWorkflowCallVars: () => params.options.workflowCallVars,
     getInteractive: () => params.options.interactive === true,
     childProcessEnv: params.options.childProcessEnv,
     observabilityEnabled: params.options.observability?.enabled === true,
@@ -686,14 +417,13 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     optionsBuilder,
     stepExecutor,
     engineOptions: params.options,
+    getAbortSignal: stepAbortSignalContext.getAbortSignal,
     getCwd: params.getCwd,
     getTask: () => params.task,
     getState: () => params.state,
     getWorkflowName: () => params.config.name,
     getInteractive: () => params.options.interactive === true,
     getRunPaths: params.getRunPaths,
-    findingContract: params.findingContract,
-    findingLedgerStore: params.findingLedgerStore,
     operationJournal: params.options.operationJournal,
     observabilityEnabled: params.options.observability?.enabled === true,
     observabilityRunId: params.options.observabilityRunId,
@@ -731,10 +461,12 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
   const loopMonitorJudgeRunner = new LoopMonitorJudgeRunner({
     optionsBuilder,
     stepExecutor,
+    stepAbortSignalContext,
     state: params.state as never,
     task: params.task,
     getMaxSteps: params.getMaxSteps,
     language: params.options.language,
+    internalAgentSeats: params.options.internalAgentSeats,
     updatePersonaSession: params.updatePersonaSession,
     resolveNextStepFromDone: params.resolveNextStepFromDone as never,
     onStepStart: (step, iteration, instruction, providerInfo, resumeStepName, stepIteration) => {
@@ -751,11 +483,6 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
         resumeStepName,
         stepIteration,
         workflowStack,
-        params.findingLedgerStore?.ledgerIdentity,
-        params.findingLedgerStore
-          ?.loadLedger()
-          .findings
-          .map((finding) => finding.id),
       );
       return workflowStack;
     },
@@ -786,15 +513,10 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       }
     },
     resetCycleDetector: params.resetCycleDetector,
-    ...(params.findingContract && params.findingLedgerStore
-      ? {
-          getFindingsSummaryForJudge: () =>
-            renderLoopMonitorFindingsSummary(params.findingLedgerStore!.loadLedger(), params.findingContract!),
-        }
-      : {}),
   });
 
   return {
+    stepAbortSignalContext,
     optionsBuilder,
     stepExecutor,
     parallelRunner,
@@ -807,6 +529,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
 }
 
 function getSelectorReportNames(
+  step: WorkflowStep,
   config: WorkflowConfig,
   state: WorkflowState,
   resumeStackPrefix: readonly WorkflowResumePointEntry[],
@@ -815,10 +538,14 @@ function getSelectorReportNames(
   lookupCwd: string,
   workflowCallInvocationEvidence: WorkflowCallInvocationEvidence,
   workflowStepParticipationIndex: import('../workflow-step-participation-index.js').WorkflowStepParticipationIndex,
+  dynamicParallelSelections: ReadonlyMap<string, import('../../models/types.js').DynamicParallelSelectionSnapshot>,
 ): readonly string[] {
+  const configuredReportNames = step.parallel !== undefined && isDynamicParallelSubSteps(step.parallel)
+    ? step.parallel.selection.reports ?? []
+    : [];
   const results = config.steps
-    .map((step) => resolveWorkflowStepReportNamesWithDiagnostics(step, createReviewReportDiscoveryContext({
-      step,
+    .map((candidateStep) => resolveWorkflowStepReportNamesWithDiagnostics(candidateStep, createReviewReportDiscoveryContext({
+      step: candidateStep,
       workflow: config,
       workflowCallResolver,
       projectCwd,
@@ -826,11 +553,11 @@ function getSelectorReportNames(
       resumeStackPrefix,
       stepOutputNames: new Set(state.stepOutputs.keys()),
       restoredStepIterationNames: state.restoredStepIterationNames,
-      dynamicParallelSelections: state.dynamicParallelSelections,
       workflowCallInvocations: snapshotWorkflowCallInvocationEvidence(
         workflowCallInvocationEvidence,
       ),
       workflowStepParticipations: workflowStepParticipationIndex.snapshot(),
+      dynamicParallelSelections,
     })));
   const failures = results.flatMap((result) => result.failures);
   if (failures.length > 0) {
@@ -838,5 +565,8 @@ function getSelectorReportNames(
       `Unable to resolve dynamic selector report inputs: ${failures.map((failure) => failure.reason).join('; ')}`,
     );
   }
-  return results.flatMap((result) => result.reportNames);
+  return [...new Set([
+    ...configuredReportNames,
+    ...results.flatMap((result) => result.reportNames),
+  ])];
 }

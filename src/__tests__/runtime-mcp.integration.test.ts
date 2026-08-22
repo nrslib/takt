@@ -196,7 +196,7 @@ describe('runtime MCP integration: loader → mode → resolveMcpAssignment (MCP
     expect(result.serverNames).toEqual(['common']);
   });
 
-  it('Given a target referencing an unknown server, When resolved, Then it fails fast', () => {
+  it('Given a target referencing an unknown server, When loaded, Then it fails fast', () => {
     writeRuntimeYaml(projectDir, [
       ...COMMON_RUNTIME_YAML,
       '  defaults:',
@@ -208,10 +208,11 @@ describe('runtime MCP integration: loader → mode → resolveMcpAssignment (MCP
       '        servers:',
       '          - nonexistent',
     ]);
-    const resolved = resolveRuntimeProviderFile({ globalConfigDir: projectDir, projectConfigDir: projectDir });
+    // Unknown server references are validated at load time, before any agent
+    // execution resolves an assignment (order.md:104).
     expect(() =>
-      resolveMcpAssignment(resolved!.mcp!, baseCtx({ persona: 'rm' })),
-    ).toThrow(/nonexistent/);
+      resolveRuntimeProviderFile({ globalConfigDir: projectDir, projectConfigDir: projectDir }),
+    ).toThrow(/unknown server "nonexistent"/);
   });
 
   it('Given an inactive mcp section (empty), When mode is determined, Then it is NOT active', () => {
@@ -224,6 +225,8 @@ describe('runtime MCP integration: loader → mode → resolveMcpAssignment (MCP
     writeRuntimeYaml(projectDir, [
       'version: 1',
       'provider:',
+      '  defaults:',
+      '    profile: default',
       '  profiles:',
       '    default:',
       '      provider: mock',
@@ -238,7 +241,7 @@ describe('runtime MCP integration: loader → mode → resolveMcpAssignment (MCP
     ]);
     const resolved = resolveRuntimeProviderFile({ globalConfigDir: projectDir, projectConfigDir: projectDir });
     expect(resolved?.provider?.profiles?.default?.provider).toBe('mock');
-    expect(resolved?.mcp?.servers?.common?.command).toBe('common-srv');
+    expect(resolved?.mcp?.servers?.common).toMatchObject({ command: 'common-srv' });
     expect(hasActiveMcpSection(resolved as never)).toBe(true);
   });
 });
@@ -307,7 +310,7 @@ describe('deterministic stdio MCP server fixture (MCP-INTEGRATION-TESTS)', () =>
       const resolved = resolveRuntimeProviderFile({ globalConfigDir: dir, projectConfigDir: dir });
       const assignment = resolveMcpAssignment(resolved!.mcp!, baseCtx());
       expect(assignment.serverNames).toEqual(['echo']);
-      expect(assignment.servers?.echo?.command).toBe('node');
+      expect(assignment.servers?.echo).toMatchObject({ command: 'node' });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

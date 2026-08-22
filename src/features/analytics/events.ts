@@ -6,9 +6,15 @@
  */
 
 /** Status of a review finding across iterations */
-import type { FindingLifecycle } from '../../core/models/finding-types.js';
-
-export type FindingStatus = FindingLifecycle;
+export type FindingStatus =
+  | 'new'
+  | 'persists'
+  | 'resolved'
+  | 'reopened'
+  | 'waived'
+  | 'invalidated'
+  | 'superseded'
+  | 'dismissed';
 
 /** Severity level of a review finding */
 export type FindingSeverity = 'error' | 'warning';
@@ -99,9 +105,43 @@ export interface RoutingDecisionEvent {
   timestamp: string;
 }
 
+export interface CompanionAnalyticsEvent {
+  type: 'companion';
+  action: 'start' | 'pool_selected' | 'finding' | 'fix_round' | 'complete' | 'review_round' | 'queue_coalesced';
+  step: string;
+  companion?: string;
+  selected?: string[];
+  rationale?: string;
+  severity?: 'must_fix' | 'should_fix' | 'nit';
+  sequence?: number;
+  findingCount?: number;
+  completionSettled?: boolean;
+  completionFailure?: boolean;
+  followUpRounds?: number;
+  reason?: string;
+  trigger?: 'quiet' | 'forced' | 'completion' | 'commit';
+  digest?: string;
+  changedLines?: number;
+  replaced?: {
+    trigger: 'quiet' | 'forced' | 'completion' | 'commit';
+    digest: string;
+    changedLines: number;
+    observedGeneration: number;
+  };
+  replacement?: {
+    trigger: 'quiet' | 'forced' | 'completion' | 'commit';
+    digest: string;
+    changedLines: number;
+    observedGeneration: number;
+  };
+  runId: string;
+  timestamp: string;
+}
+
 /** Union of all analytics event types */
 export type AnalyticsEvent =
   | ReviewFindingEvent
   | FixActionEvent
   | StepResultEvent
-  | RoutingDecisionEvent;
+  | RoutingDecisionEvent
+  | CompanionAnalyticsEvent;

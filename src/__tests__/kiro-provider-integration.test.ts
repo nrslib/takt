@@ -17,7 +17,7 @@ import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig
 import { KiroProvider } from '../infra/providers/kiro.js';
 
 type MockChildProcess = EventEmitter & {
-  stdin: { end: ReturnType<typeof vi.fn> };
+  stdin: EventEmitter & { end: ReturnType<typeof vi.fn> };
   stdout: EventEmitter;
   stderr: EventEmitter;
   kill: ReturnType<typeof vi.fn>;
@@ -25,7 +25,8 @@ type MockChildProcess = EventEmitter & {
 
 function createMockChildProcess(): MockChildProcess {
   const child = new EventEmitter() as MockChildProcess;
-  child.stdin = { end: vi.fn() };
+  child.stdin = new EventEmitter() as EventEmitter & { end: ReturnType<typeof vi.fn> };
+  child.stdin.end = vi.fn();
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
   child.kill = vi.fn(() => true);

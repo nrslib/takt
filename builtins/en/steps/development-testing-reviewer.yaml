@@ -1,0 +1,30 @@
+params:
+  review_policy_additions:
+    type: facet_ref[]
+    facet_kind: policy
+  review_knowledge_additions:
+    type: facet_ref[]
+    facet_kind: knowledge
+  testing_review_instruction: { type: facet_ref, facet_kind: instruction }
+name: testing-review
+description: Review test coverage, test design, integration boundaries, and E2E boundaries.
+capabilities: readonly
+tags: [review]
+edit: false
+persona: testing-reviewer
+policy:
+  - testing
+  - contract-change
+  - review
+  - $param: review_policy_additions
+knowledge:
+  - unit-testing
+  - e2e-testing
+  - $param: review_knowledge_additions
+instruction:
+  $param: testing_review_instruction
+pass_previous_response: false
+output_contracts:
+  report:
+    - name: testing-review.md
+      format: testing-review

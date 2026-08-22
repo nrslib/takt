@@ -1,11 +1,17 @@
 /**
- * Stdin simulation helpers for testing interactive conversation loops.
+ * Stdin simulation helpers for testing the readline conversation loop.
  *
- * Simulates raw-mode TTY input by intercepting process.stdin events,
- * feeding pre-defined input strings one-at-a-time as data events.
+ * Feeds pre-defined lines through `process.stdin`'s data events, one at a time,
+ * the way a pipe delivers them. `\x04` stands for the end of the input: the
+ * stream's `end` is what makes readline report that there is nothing more, and
+ * the loop reads that as a cancellation.
  */
 
 import { vi } from 'vitest';
+import type { Provider } from '../../infra/providers/index.js';
+
+/** The provider double, plus the call spy the tests assert against. */
+export type MockProvider = Provider & { _call: ReturnType<typeof vi.fn> };
 
 interface SavedStdinState {
   isTTY: boolean | undefined;
@@ -57,9 +63,28 @@ export function setupRawStdin(rawInputs: string[], options: RawStdinOptions = {}
   process.stdin.pause = vi.fn(() => process.stdin) as unknown as typeof process.stdin.pause;
 
   let currentHandler: ((data: Buffer) => void) | null = null;
+  let endHandler: (() => void) | null = null;
   let inputIndex = 0;
 
-  process.stdin.on = vi.fn(((event: string, handler: (...args: unknown[]) => void) => {
+  /** `\x04` is the end of the pipe, not a byte the reader should see. */
+  const deliver = (data: string): void => {
+    if (data === '\x04') {
+      endHandler?.();
+      return;
+    }
+    currentHandler?.(Buffer.from(data, 'utf-8'));
+  };
+
+  // The overload set of `stdin.on` is far wider than what a simulator needs, so
+  // the stub is installed through the property's own type.
+  const installListener = (
+    stub: (event: string, handler: (...args: unknown[]) => void) => NodeJS.ReadStream,
+  ): typeof process.stdin.on => stub as unknown as typeof process.stdin.on;
+
+  process.stdin.on = installListener(((event: string, handler: (...args: unknown[]) => void) => {
+    if (event === 'end') {
+      endHandler = handler as () => void;
+    }
     if (event === 'data') {
       currentHandler = handler as (data: Buffer) => void;
       if (!options.continuous) {
@@ -67,9 +92,7 @@ export function setupRawStdin(rawInputs: string[], options: RawStdinOptions = {}
           const data = rawInputs[inputIndex]!;
           inputIndex++;
           queueMicrotask(() => {
-            if (currentHandler) {
-              currentHandler(Buffer.from(data, 'utf-8'));
-            }
+            deliver(data);
           });
         }
         return process.stdin;
@@ -78,27 +101,30 @@ export function setupRawStdin(rawInputs: string[], options: RawStdinOptions = {}
         if (!currentHandler || inputIndex >= rawInputs.length) return;
         const data = rawInputs[inputIndex]!;
         inputIndex++;
-        currentHandler(Buffer.from(data, 'utf-8'));
+        deliver(data);
         queueMicrotask(deliverNextInput);
       };
       queueMicrotask(deliverNextInput);
     }
     return process.stdin;
-  }) as typeof process.stdin.on);
+  }));
 
-  process.stdin.removeListener = vi.fn(((event: string) => {
+  process.stdin.removeListener = installListener(((event: string) => {
     if (event === 'data') {
       currentHandler = null;
     }
+    if (event === 'end') {
+      endHandler = null;
+    }
     return process.stdin;
-  }) as typeof process.stdin.removeListener);
+  })) as typeof process.stdin.removeListener;
 
   return {
     send(input: string): void {
       if (!currentHandler) {
-        throw new Error('Raw stdin data listener is not registered.');
+        throw new Error('Stdin data listener is not registered.');
       }
-      currentHandler(Buffer.from(input, 'utf-8'));
+      deliver(input);
     },
   };
 }
@@ -143,6 +169,7 @@ export interface MockProviderCapture {
   prompts: string[];
   sessionIds: Array<string | undefined>;
   providerOptions: unknown[];
+  allowedTools: Array<string[] | undefined>;
   permissionModes: Array<string | undefined>;
   imageAttachments: Array<Array<{ placeholder: string; path: string }> | undefined>;
 }
@@ -151,7 +178,7 @@ export interface MockProviderCapture {
  * Create a mock provider that captures system prompts and returns
  * pre-defined responses. Returns a capture object for assertions.
  */
-export function createMockProvider(responses: string[]): { provider: unknown; capture: MockProviderCapture } {
+export function createMockProvider(responses: string[]): { provider: MockProvider; capture: MockProviderCapture } {
   return createScenarioProvider(responses.map((content) => ({ content })));
 }
 
@@ -177,13 +204,14 @@ interface ScenarioProviderOptions {
 export function createScenarioProvider(
   scenarios: CallScenario[],
   options: ScenarioProviderOptions = {},
-): { provider: unknown; capture: MockProviderCapture } {
+): { provider: MockProvider; capture: MockProviderCapture } {
   const capture: MockProviderCapture = {
     systemPrompts: [],
     callCount: 0,
     prompts: [],
     sessionIds: [],
     providerOptions: [],
+    allowedTools: [],
     permissionModes: [],
     imageAttachments: [],
   };
@@ -191,6 +219,7 @@ export function createScenarioProvider(
   const mockCall = vi.fn(async (prompt: string, options?: {
     sessionId?: string;
     providerOptions?: unknown;
+    allowedTools?: string[];
     permissionMode?: string;
     imageAttachments?: Array<{ placeholder: string; path: string }>;
   }) => {
@@ -199,6 +228,7 @@ export function createScenarioProvider(
     capture.prompts.push(prompt);
     capture.sessionIds.push(options?.sessionId);
     capture.providerOptions.push(options?.providerOptions);
+    capture.allowedTools.push(options?.allowedTools);
     capture.permissionModes.push(options?.permissionMode);
     capture.imageAttachments.push(options?.imageAttachments);
 
@@ -230,5 +260,7 @@ export function createScenarioProvider(
     _call: mockCall,
   };
 
-  return { provider, capture };
+  // The double answers only what these tests exercise; the rest of the provider
+  // surface is never reached.
+  return { provider: provider as unknown as MockProvider, capture };
 }

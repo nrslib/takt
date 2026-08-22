@@ -14,10 +14,10 @@ import {
 import { createLogger, sanitizeTerminalText } from '../../shared/utils/index.js';
 import { info, error, blankLine } from '../../shared/ui/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
-import { readInteractiveInput } from './interactiveInput.js';
-import type { CommandAvailability } from './slashCommandRegistry.js';
+import { readPipedLine } from './lineEditor.js';
 import { selectRecentSession } from './sessionSelector.js';
 import { matchSlashCommand } from './commandMatcher.js';
+import type { CommandAvailability } from './slashCommandRegistry.js';
 import { SlashCommand } from '../../shared/constants.js';
 import {
   type WorkflowContext,
@@ -33,16 +33,19 @@ import {
 import { callAIWithRetry, type CallAIResult, type SessionContext } from './aiCaller.js';
 import {
   createInputLogMeta,
-  createPlayCommandLogMeta,
   createSessionLogMeta,
 } from './conversationLogMeta.js';
+import { resolvePreviousOrder } from './conversationPlan.js';
 import { prependInitialPromptContext } from './promptSections.js';
+import { shouldUseGherkinTaskInstructions } from './taskInstructionFormat.js';
+import type { PermissionMode } from '../../core/models/index.js';
 import {
   buildInteractiveResultWithAttachments,
   cleanupImageAttachmentStore,
   createSessionImageAttachmentStore,
   resolvePromptImageAttachments,
 } from './imageAttachments.js';
+import type { InteractiveImageAttachment } from './imageAttachments.js';
 
 export { type CallAIResult, type SessionContext, callAIWithRetry } from './aiCaller.js';
 
@@ -91,32 +94,73 @@ export function displayAndClearSessionState(cwd: string, lang: 'en' | 'ja'): voi
 
 export type { PostSummaryAction } from './interactive.js';
 
+export interface SummaryPromptOptions {
+  readonly history: ConversationMessage[];
+  readonly hasSession: boolean;
+  readonly lang: 'en' | 'ja';
+  readonly noTranscriptNote: string;
+  readonly conversationLabel: string;
+  readonly workflowContext?: WorkflowContext;
+  readonly sourceContext?: string;
+  readonly promptContext?: string;
+  readonly gherkin: boolean;
+  readonly userNote: string;
+}
+
+export type SummaryPromptBuilder = (options: SummaryPromptOptions) => string;
+
+export interface NormalizedSummaryTask {
+  readonly task: string;
+  readonly attachments: readonly InteractiveImageAttachment[];
+}
+
+export type SummaryTaskNormalizer = (
+  task: string,
+  attachments: readonly InteractiveImageAttachment[],
+) => NormalizedSummaryTask;
+
 /** Strategy for customizing conversation loop behavior */
 export interface ConversationStrategy {
   /** System prompt for AI calls */
   systemPrompt: string;
   /** Allowed tools for AI calls */
   allowedTools: string[];
+  /** Permission mode for AI calls. */
+  permissionMode?: PermissionMode;
   /** Transform user message before sending to AI (e.g., policy injection) */
   transformPrompt: (userMessage: string, sourceContext?: string) => string;
   /** Intro message displayed at start */
   introMessage: string;
   /** Custom action selector (optional). If not provided, uses default selectPostSummaryAction. */
   selectAction?: (task: string, lang: 'en' | 'ja') => Promise<PostSummaryAction | null>;
+  /** Action selector used for a generated /go proposal. */
+  selectGoAction?: (task: string, lang: 'en' | 'ja') => Promise<PostSummaryAction | null>;
+  /** Action selector used by /retry. */
+  selectRetryAction?: (task: string, lang: 'en' | 'ja') => Promise<PostSummaryAction | null>;
+  /** Build a mode-specific /go prompt. */
+  summaryPromptBuilder?: SummaryPromptBuilder;
+  /** Normalize a generated summary and its attachments before confirmation. */
+  normalizeSummaryTask?: SummaryTaskNormalizer;
+  /** Offset newly pasted image placeholders after the canonical order's images. */
+  initialImageAttachmentIndex?: number;
   /** Previous order.md content for /replay command (retry/instruct only) */
   previousOrderContent?: string;
   /** Enable /retry slash command (retry mode only) */
   enableRetryCommand?: boolean;
+  /** Explicit slash-command allowlist for modes with a guarded execution path. */
+  enabledCommands?: readonly SlashCommand[];
   /** Context prepended to the first regular prompt in this conversation. */
   initialPromptContext?: string;
   /** Context prepended to summary prompts. */
   summaryPromptContext?: string;
+  /** Include the command source on returned results for task re-execution flows. */
+  trackResultSource?: boolean;
 }
 
 /**
  * Run the shared conversation loop.
  *
- * Handles: EOF, /play, /accept, /retry, /go (summary), /cancel, regular AI messaging.
+ * Handles: EOF, /accept, /retry, /replay, /go (summary), /cancel, regular AI messaging.
  * The Strategy object controls system prompt, tool access, and prompt transformation.
  */
 export async function runConversationLoop(
@@ -126,6 +170,7 @@ export async function runConversationLoop(
   workflowContext: WorkflowContext | undefined,
   initialInput: InteractiveSeedInput | undefined,
 ): Promise<InteractiveModeResult> {
+  const gherkin = shouldUseGherkinTaskInstructions(cwd);
   const history: ConversationMessage[] = initialInput?.userMessage
     ? [{ role: 'user', content: initialInput.userMessage }]
     : [];
@@ -135,7 +180,11 @@ export async function runConversationLoop(
   const ui = getLabelObject<InteractiveUIText>('interactive.ui', ctx.lang);
   const conversationLabel = getLabel('interactive.conversationLabel', ctx.lang);
   const noTranscript = getLabel('interactive.noTranscript', ctx.lang);
-  const attachmentStore = createSessionImageAttachmentStore(initialInput?.attachments);
+  const attachmentStore = createSessionImageAttachmentStore(
+    cwd,
+    initialInput?.attachments,
+    strategy.initialImageAttachmentIndex,
+  );
 
   try {
     info(strategy.introMessage);
@@ -155,7 +204,12 @@ export async function runConversationLoop(
         return null;
       }
       const { result, sessionId: newSessionId } = await callAIWithRetry(
-        prompt, sysPrompt, tools, cwd, { ...ctx, sessionId }, { imageAttachments },
+        prompt,
+        sysPrompt,
+        tools,
+        cwd,
+        { ...ctx, sessionId },
+        { imageAttachments, permissionMode: strategy.permissionMode },
       );
       sessionId = newSessionId;
       return result;
@@ -167,25 +221,48 @@ export async function runConversationLoop(
       });
     }
 
-    async function handleSummaryAction(task: string): Promise<InteractiveModeResult | null> {
-      const selectedAction = strategy.selectAction
-        ? await strategy.selectAction(task, ctx.lang)
-        : await selectPostSummaryAction(task, ui.proposed, ui);
+    async function handleSummaryAction(
+      task: string,
+      source: 'go' | 'retry',
+      selector?: (task: string, lang: 'en' | 'ja') => Promise<PostSummaryAction | null>,
+      normalize = false,
+    ): Promise<InteractiveModeResult | null> {
+      const normalized = normalize && strategy.normalizeSummaryTask
+        ? strategy.normalizeSummaryTask(task, attachmentStore.listAttachments())
+        : {
+          task,
+          attachments: attachmentStore.listAttachments(),
+        };
+      const actionSelector = selector
+        ?? (source === 'go' ? strategy.selectGoAction : strategy.selectRetryAction)
+        ?? strategy.selectAction;
+      const selectedAction = actionSelector
+        ? await actionSelector(normalized.task, ctx.lang)
+        : await selectPostSummaryAction(normalized.task, ui.proposed, ui);
       if (selectedAction === 'continue' || selectedAction === null) {
+        if (selectedAction === 'continue' && source === 'go') {
+          history.push({ role: 'assistant', content: normalized.task });
+        }
         info(ui.continuePrompt);
         return null;
       }
       log.info('Conversation action selected', { action: selectedAction, messageCount: history.length });
-      return buildInteractiveResultWithAttachments({ action: selectedAction, task }, attachmentStore);
+      const sourceMetadata = strategy.trackResultSource ? { source } : {};
+      return buildInteractiveResultWithAttachments(
+        { action: selectedAction, task: normalized.task, ...sourceMetadata },
+        attachmentStore,
+        normalized.attachments,
+      );
     }
 
     const commandAvailability: CommandAvailability = {
       enableRetryCommand: strategy.enableRetryCommand,
-      hasPreviousOrder: !!strategy.previousOrderContent,
+      hasPreviousOrder: resolvePreviousOrder(strategy.previousOrderContent) !== undefined,
+      enabledCommands: strategy.enabledCommands,
     };
 
     while (true) {
-      const input = await readInteractiveInput(chalk.green('> '), ctx.lang, commandAvailability, attachmentStore);
+      const input = await readPipedLine(chalk.green('> '));
 
       if (input === null) {
         blankLine();
@@ -199,7 +276,7 @@ export async function runConversationLoop(
         continue;
       }
 
-      const match = matchSlashCommand(trimmed);
+      const match = matchSlashCommand(trimmed, commandAvailability);
 
       // No slash command detected, treat as regular message
       if (!match) {
@@ -239,16 +316,11 @@ export async function runConversationLoop(
             info(ui.acceptNoAssistant);
             continue;
           }
-          return buildInteractiveResultWithAttachments({ action: 'execute', task: assistantMessage.content }, attachmentStore);
-        }
-
-        case SlashCommand.Play: {
-          if (!match.text) {
-            info(ui.playNoTask);
-            continue;
-          }
-          log.info('Play command', createPlayCommandLogMeta(match.text));
-          return buildInteractiveResultWithAttachments({ action: 'execute', task: match.text }, attachmentStore);
+          return buildInteractiveResultWithAttachments({
+            action: 'execute',
+            task: assistantMessage.content,
+            ...(strategy.trackResultSource ? { source: 'accept' as const } : {}),
+          }, attachmentStore);
         }
 
         case SlashCommand.Retry: {
@@ -256,12 +328,15 @@ export async function runConversationLoop(
             info(ui.retryUnavailable);
             continue;
           }
-          if (!strategy.previousOrderContent) {
+          const retryOrder = resolvePreviousOrder(strategy.previousOrderContent);
+          if (retryOrder === undefined) {
             info(ui.retryNoOrder);
             continue;
           }
           log.info('Retry command — using previous order.md');
-          const selectedAction = await handleSummaryAction(strategy.previousOrderContent);
+          const selectedAction = strategy.selectRetryAction
+            ? await handleSummaryAction(retryOrder, 'retry', strategy.selectRetryAction)
+            : await handleSummaryAction(retryOrder, 'retry');
           if (selectedAction === null) {
             continue;
           }
@@ -275,21 +350,35 @@ export async function runConversationLoop(
             !!sourceContext,
             match.text,
           );
-          let summaryPrompt = buildSummaryPrompt(
-            summaryHistory,
-            !!sessionId,
-            ctx.lang,
-            noTranscript,
-            conversationLabel,
-            workflowContext,
-            sourceContext,
-            strategy.summaryPromptContext,
-          );
+          let summaryPrompt = strategy.summaryPromptBuilder
+            ? strategy.summaryPromptBuilder({
+              history: summaryHistory,
+              hasSession: !!sessionId,
+              lang: ctx.lang,
+              noTranscriptNote: noTranscript,
+              conversationLabel,
+              workflowContext,
+              sourceContext,
+              promptContext: strategy.summaryPromptContext,
+              gherkin,
+              userNote,
+            })
+            : buildSummaryPrompt(
+              summaryHistory,
+              !!sessionId,
+              ctx.lang,
+              noTranscript,
+              conversationLabel,
+              workflowContext,
+              sourceContext,
+              strategy.summaryPromptContext,
+              gherkin,
+            );
           if (!summaryPrompt) {
             info(ui.noConversation);
             continue;
           }
-          if (userNote) {
+          if (userNote && !strategy.summaryPromptBuilder) {
             summaryPrompt = `${summaryPrompt}\n\nUser Note:\n${userNote}`;
           }
           process.stdin.pause();
@@ -306,7 +395,11 @@ export async function runConversationLoop(
           const { result: summaryResult } = await callAIWithRetry(
             summaryPrompt, summaryPrompt, strategy.allowedTools, cwd,
             { ...ctx, sessionId: undefined },
-            { imageAttachments: summaryImageAttachments },
+            {
+              imageAttachments: summaryImageAttachments,
+              permissionMode: strategy.permissionMode,
+              persistSession: false,
+            },
           );
           if (!summaryResult) {
             info(ui.summarizeFailed);
@@ -318,7 +411,7 @@ export async function runConversationLoop(
             return buildInteractiveResultWithAttachments({ action: 'cancel', task: '' }, attachmentStore);
           }
           const task = summaryResult.content.trim();
-          const selectedAction = await handleSummaryAction(task);
+          const selectedAction = await handleSummaryAction(task, 'go', strategy.selectGoAction, true);
           if (selectedAction === null) {
             continue;
           }
@@ -326,13 +419,18 @@ export async function runConversationLoop(
         }
 
         case SlashCommand.Replay: {
-          if (!strategy.previousOrderContent) {
+          const replayOrder = resolvePreviousOrder(strategy.previousOrderContent);
+          if (replayOrder === undefined) {
             const replayNoOrder = getLabel('instruct.ui.replayNoOrder', ctx.lang);
             info(replayNoOrder);
             continue;
           }
           log.info('Replay command');
-          return buildInteractiveResultWithAttachments({ action: 'execute', task: strategy.previousOrderContent }, attachmentStore);
+          return buildInteractiveResultWithAttachments({
+            action: 'execute',
+            task: replayOrder,
+            ...(strategy.trackResultSource ? { source: 'replay' as const } : {}),
+          }, attachmentStore);
         }
 
         case SlashCommand.Cancel: {

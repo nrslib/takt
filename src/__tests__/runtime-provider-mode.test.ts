@@ -4,6 +4,7 @@ import {
   hasActiveProviderSection,
   determineProviderConfigMode,
 } from '../infra/config/runtime-provider/mode.js';
+import type { RuntimeProviderFile } from '../infra/config/runtime-provider/schema.js';
 
 /**
  * Contracts covered (see plan.md 完了契約):
@@ -22,6 +23,10 @@ const activeFile = {
   provider: { defaults: { profile: 'default' }, profiles: { default: { provider: 'mock', model: 'm' } } },
 };
 
+function runtimeFile(value: unknown): RuntimeProviderFile {
+  return value as RuntimeProviderFile;
+}
+
 describe('hasActiveProviderSection (C11/C25)', () => {
   it('Given undefined, Then it is not active', () => {
     expect(hasActiveProviderSection(undefined)).toBe(false);
@@ -32,52 +37,81 @@ describe('hasActiveProviderSection (C11/C25)', () => {
   });
 
   it('Given an empty provider section, Then it is not active', () => {
-    expect(hasActiveProviderSection({ version: 1, provider: {} })).toBe(false);
+    expect(hasActiveProviderSection(runtimeFile({ version: 1, provider: {} }))).toBe(false);
   });
 
   it('Given a populated provider section, Then it is active', () => {
     expect(hasActiveProviderSection(activeFile)).toBe(true);
   });
 
+  it('Given a disabled companion-only target, Then it is inactive', () => {
+    expect(hasActiveProviderSection(runtimeFile({
+      version: 1,
+      companion: { enabled: false },
+      provider: { targets: { companions: { security: { profile: 'security' } } } },
+    }))).toBe(false);
+  });
+
+  it('Given a companion-only target without a companion policy, Then it is inactive by default', () => {
+    expect(hasActiveProviderSection(runtimeFile({
+      version: 1,
+      provider: { targets: { companions: { security: { profile: 'security' } } } },
+    }))).toBe(false);
+  });
+
+  it('Given an enabled companion-only target, Then it is active', () => {
+    expect(hasActiveProviderSection(runtimeFile({
+      version: 1,
+      companion: { enabled: true },
+      provider: { targets: { companions: { security: { profile: 'security' } } } },
+    }))).toBe(true);
+  });
+
   it('Given a defaults-only provider section, Then it is active', () => {
     expect(hasActiveProviderSection({ version: 1, provider: { defaults: { profile: 'default' } } })).toBe(true);
   });
 
-  it('Given a targets-only provider section, Then it is active', () => {
+  it('Given defaults and targets, Then the provider section is active', () => {
     expect(
       hasActiveProviderSection({
         version: 1,
-        provider: { targets: { personas: { coder: { profile: 'default' } } } },
+        provider: {
+          defaults: { profile: 'default' },
+          targets: { personas: { coder: { profile: 'default' } } },
+        },
       }),
     ).toBe(true);
   });
 
-  it('Given an auto_routing-only provider section, Then it is active', () => {
+  it('Given defaults and auto_routing, Then the provider section is active', () => {
     expect(
-      hasActiveProviderSection({ version: 1, provider: { auto_routing: { strategy: 'balanced' } } }),
+      hasActiveProviderSection({
+        version: 1,
+        provider: { defaults: { profile: 'default' }, auto_routing: { strategy: 'balanced' } },
+      }),
     ).toBe(true);
   });
 
   it('Given an empty `profiles` map, Then it is not active', () => {
-    expect(hasActiveProviderSection({ version: 1, provider: { profiles: {} } })).toBe(false);
+    expect(hasActiveProviderSection(runtimeFile({ version: 1, provider: { profiles: {} } }))).toBe(false);
   });
 
   it('Given an empty `targets` map, Then it is not active', () => {
-    expect(hasActiveProviderSection({ version: 1, provider: { targets: {} } })).toBe(false);
+    expect(hasActiveProviderSection(runtimeFile({ version: 1, provider: { targets: {} } }))).toBe(false);
   });
 
   it('Given `targets` with only empty nested maps, Then it is not active', () => {
     expect(
-      hasActiveProviderSection({ version: 1, provider: { targets: { personas: {} } } }),
+      hasActiveProviderSection(runtimeFile({ version: 1, provider: { targets: { personas: {} } } })),
     ).toBe(false);
   });
 
   it('Given an empty `auto_routing` map, Then it is not active', () => {
-    expect(hasActiveProviderSection({ version: 1, provider: { auto_routing: {} } })).toBe(false);
+    expect(hasActiveProviderSection(runtimeFile({ version: 1, provider: { auto_routing: {} } }))).toBe(false);
   });
 
   it('Given an empty `defaults` map, Then it is not active', () => {
-    expect(hasActiveProviderSection({ version: 1, provider: { defaults: {} } })).toBe(false);
+    expect(hasActiveProviderSection(runtimeFile({ version: 1, provider: { defaults: {} } }))).toBe(false);
   });
 });
 
@@ -103,9 +137,15 @@ describe('determineProviderConfigMode (C11/C12/C13)', () => {
     expect(result.mode).toBe('runtime-v1');
   });
 
-  it('Given a targets-only active runtime file and no legacy signals, When determining mode, Then runtime-v1 mode is chosen', () => {
+  it('Given defaults and targets in an active runtime file and no legacy signals, When determining mode, Then runtime-v1 mode is chosen', () => {
     const result = determineProviderConfigMode({
-      runtimeFile: { version: 1, provider: { targets: { steps: { 'default/supervise': { profile: 'router' } } } } },
+      runtimeFile: {
+        version: 1,
+        provider: {
+          defaults: { profile: 'default' },
+          targets: { steps: { 'default/supervise': { profile: 'router' } } },
+        },
+      },
       legacyProviderSignals: [],
     });
     expect(result.mode).toBe('runtime-v1');
@@ -135,7 +175,6 @@ describe('determineProviderConfigMode (C11/C12/C13)', () => {
     ['persona_providers', 'persona_providers', 'provider.targets.personas'],
     ['legacy auto_routing', 'auto_routing', 'provider.auto_routing'],
     ['takt_providers', 'takt_providers', 'provider.targets.internal_agents'],
-    ['workflow provider', 'workflow.provider', 'provider.targets.steps'],
   ])('Given active runtime and a %s legacy signal, When determining mode, Then it fails fast (C13)', (_name, setting, migrateTo) => {
     const location = `config.yaml:${setting}`;
     let thrown: unknown;

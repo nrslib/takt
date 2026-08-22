@@ -1,20 +1,11 @@
 name: supervise
+capabilities: readonly
 tags:
-  - review
   - supervise
 edit: false
 persona: supervisor
 policy:
   - contract-change
-  - review
-provider_options:
-  claude:
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - WebSearch
-      - WebFetch
 pass_previous_response: false
 instruction: supervise
 output_contracts:
