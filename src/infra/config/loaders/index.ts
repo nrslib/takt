@@ -32,12 +32,14 @@ export {
   loadDefaultCategories,
   getDefaultCategoriesPath,
   getWorkflowCategories,
+  getWorkflowDescriptions,
   buildCategorizedWorkflows,
   findWorkflowCategories,
   type CategoryConfig,
   type CategorizedWorkflows,
   type MissingWorkflow,
   type WorkflowCategoryNode,
+  type WorkflowDescriptions,
 } from './workflowCategories.js';
 
 export {

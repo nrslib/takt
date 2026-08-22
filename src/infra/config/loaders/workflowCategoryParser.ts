@@ -1,8 +1,9 @@
 import { WorkflowCategoryOverlaySchema } from '../../../core/models/index.js';
-import type { CategoryConfig, WorkflowCategoryNode } from './workflowCategoryTypes.js';
+import type { CategoryConfig, WorkflowCategoryNode, WorkflowDescriptions } from './workflowCategoryTypes.js';
 
 interface RawCategoryConfig {
   workflow_categories?: Record<string, unknown>;
+  workflow_descriptions?: Record<string, string>;
   show_others_category?: boolean;
   others_category_name?: string;
 }
@@ -15,12 +16,14 @@ interface ParsedCategoryNode {
 
 interface ParsedCategoryConfig {
   workflowCategories?: ParsedCategoryNode[];
+  workflowDescriptions?: WorkflowDescriptions;
   showOthersCategory?: boolean;
   othersCategoryName?: string;
 }
 
 export interface WorkflowCategoryOverlay {
   workflowCategories?: WorkflowCategoryNode[];
+  workflowDescriptions?: WorkflowDescriptions;
   showOthersCategory?: boolean;
   othersCategoryName?: string;
 }
@@ -100,6 +103,21 @@ function parseCategoryConfig(raw: unknown, sourceLabel: string): ParsedCategoryC
     }
     result.workflowCategories = parseCategoryTree(parsed.workflow_categories, sourceLabel, 'workflow_categories');
   }
+  if (parsed.workflow_descriptions !== undefined) {
+    const descriptions: Record<string, string> = {};
+    for (const [workflowName, description] of Object.entries(parsed.workflow_descriptions)) {
+      if (workflowName.trim().length === 0) {
+        throw new Error(`workflow name must be a non-empty string in ${sourceLabel} at workflow_descriptions`);
+      }
+      if (description.trim().length === 0) {
+        throw new Error(
+          `description must be a non-empty string in ${sourceLabel} at workflow_descriptions > ${workflowName}`,
+        );
+      }
+      descriptions[workflowName] = description;
+    }
+    result.workflowDescriptions = descriptions;
+  }
   if (parsed.show_others_category !== undefined) {
     result.showOthersCategory = parsed.show_others_category;
   }
@@ -109,6 +127,7 @@ function parseCategoryConfig(raw: unknown, sourceLabel: string): ParsedCategoryC
 
   if (
     result.workflowCategories === undefined
+    && result.workflowDescriptions === undefined
     && result.showOthersCategory === undefined
     && result.othersCategoryName === undefined
   ) {
@@ -134,6 +153,7 @@ export function parseWorkflowCategoryOverlay(raw: unknown, sourceLabel: string):
     workflowCategories: parsed.workflowCategories
       ? convertParsedNodes(parsed.workflowCategories)
       : undefined,
+    workflowDescriptions: parsed.workflowDescriptions,
     showOthersCategory: parsed.showOthersCategory,
     othersCategoryName: parsed.othersCategoryName,
   };
@@ -152,6 +172,7 @@ export function parseWorkflowCategoryConfig(raw: unknown, sourceLabel: string): 
     hasUserCategories: false,
     showOthersCategory: parsed.showOthersCategory ?? true,
     othersCategoryName: parsed.othersCategoryName ?? 'Others',
+    workflowDescriptions: parsed.workflowDescriptions,
   };
 }
 
@@ -181,5 +202,19 @@ export function mergeWorkflowCategoryConfigs(
     hasUserCategories,
     showOthersCategory: userConfig?.showOthersCategory ?? builtinConfig.showOthersCategory,
     othersCategoryName: userConfig?.othersCategoryName ?? builtinConfig.othersCategoryName,
+    workflowDescriptions: mergeWorkflowDescriptions(
+      builtinConfig.workflowDescriptions,
+      userConfig?.workflowDescriptions,
+    ),
+  };
+}
+
+export function mergeWorkflowDescriptions(
+  builtinDescriptions: WorkflowDescriptions | undefined,
+  userDescriptions: WorkflowDescriptions | undefined,
+): WorkflowDescriptions {
+  return {
+    ...(builtinDescriptions ?? {}),
+    ...(userDescriptions ?? {}),
   };
 }

@@ -1015,6 +1015,10 @@ workflow_categories:
   Research:
     workflows: [research, magi]
 
+workflow_descriptions:
+  default: "标准编码工作流"
+  review: "多角度代码审查"
+
 show_others_category: true
 others_category_name: "Other Workflows"
 ```
@@ -1026,6 +1030,7 @@ others_category_name: "Other Workflows"
 - **嵌套分类**：支持任意深度；除 `workflows` 外的 key 都作为子分类名称，不使用 `children:`。
 - **每类 workflow 列表**：`workflows:` 保存该分类显示的 workflow 名称。
 - **Others 分类**：收集未列入任何分类的 workflow，可用 `show_others_category: false` 关闭。
+- **Workflow 描述**：为匹配的 workflow 选择项追加简短说明；用户 overlay 按 workflow 名称覆盖 builtin，也可以添加仅用户存在的名称。
 - **Builtin 过滤**：用 `enable_builtin_workflows: false` 关闭全部 builtin，或用 `disabled_builtins: [name1, name2]` 关闭指定名称。
 
 ### 重置分类

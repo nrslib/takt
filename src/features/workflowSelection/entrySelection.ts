@@ -8,12 +8,15 @@ import {
   buildCategoryWorkflowOptions,
   buildTopLevelSelectOptions,
   buildWorkflowSelectionItems,
+  formatWorkflowLabel,
+  getWorkflowDescription,
   parseCategorySelection,
   type SelectionOption,
 } from './options.js';
 
 async function selectWorkflowFromEntriesWithCategories(
   entries: WorkflowDirEntry[],
+  workflowDescriptions?: Readonly<Record<string, string>>,
 ): Promise<string | null> {
   if (entries.length === 0) {
     return null;
@@ -25,7 +28,7 @@ async function selectWorkflowFromEntriesWithCategories(
 
   if (!hasCategories) {
     const baseOptions: SelectionOption[] = availableWorkflows.map((name) => ({
-      label: `🎼 ${sanitizeTerminalText(name)}`,
+      label: formatWorkflowLabel(name, getWorkflowDescription(name, workflowDescriptions), true),
       value: name,
     }));
     const buildFlatOptions = (): SelectionOption[] =>
@@ -48,7 +51,7 @@ async function selectWorkflowFromEntriesWithCategories(
 
   while (true) {
     const buildTopLevelOptions = (): SelectionOption[] =>
-      applyBookmarks(buildTopLevelSelectOptions(items), getBookmarkedWorkflows());
+      applyBookmarks(buildTopLevelSelectOptions(items, workflowDescriptions), getBookmarkedWorkflows());
 
     const selected = await selectOption<string>('Select workflow:', buildTopLevelOptions(), {
       onKeyPress: (key: string, value: string): SelectOptionItem<string>[] | null => {
@@ -75,7 +78,7 @@ async function selectWorkflowFromEntriesWithCategories(
       return selected;
     }
 
-    const categoryOptions = buildCategoryWorkflowOptions(items, categoryName);
+    const categoryOptions = buildCategoryWorkflowOptions(items, categoryName, workflowDescriptions);
     if (!categoryOptions) {
       continue;
     }
@@ -110,6 +113,7 @@ async function selectWorkflowFromEntriesWithCategories(
 
 export async function selectWorkflowFromEntries(
   entries: WorkflowDirEntry[],
+  workflowDescriptions?: Readonly<Record<string, string>>,
 ): Promise<string | null> {
   const builtinEntries = entries.filter((entry) => entry.source === 'builtin');
   const customEntries = entries.filter((entry) => entry.source !== 'builtin');
@@ -127,10 +131,12 @@ export async function selectWorkflowFromEntries(
     }
     return selectWorkflowFromEntriesWithCategories(
       selectedSource === 'custom' ? customEntries : builtinEntries,
+      workflowDescriptions,
     );
   }
 
   return selectWorkflowFromEntriesWithCategories(
     customEntries.length > 0 ? customEntries : builtinEntries,
+    workflowDescriptions,
   );
 }

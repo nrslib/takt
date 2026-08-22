@@ -14,6 +14,31 @@ export interface SelectionOption {
 export const CATEGORY_VALUE_PREFIX = '__category__:';
 const BOOKMARK_MARK = ' [*]';
 
+export function getWorkflowDescription(
+  workflowName: string,
+  workflowDescriptions?: Readonly<Record<string, string>>,
+): string | undefined {
+  if (
+    workflowDescriptions === undefined
+    || !Object.prototype.hasOwnProperty.call(workflowDescriptions, workflowName)
+  ) {
+    return undefined;
+  }
+  return workflowDescriptions[workflowName];
+}
+
+export function formatWorkflowLabel(
+  workflowName: string,
+  workflowDescription: string | undefined,
+  includeIcon: boolean,
+): string {
+  const safeName = sanitizeTerminalText(workflowName);
+  const label = includeIcon ? `🎼 ${safeName}` : safeName;
+  return workflowDescription === undefined
+    ? label
+    : `${label} — ${sanitizeTerminalText(workflowDescription)}`;
+}
+
 export function buildWorkflowSelectionItems(entries: WorkflowDirEntry[]): WorkflowSelectionItem[] {
   const categories = new Map<string, string[]>();
   const items: WorkflowSelectionItem[] = [];
@@ -35,10 +60,16 @@ export function buildWorkflowSelectionItems(entries: WorkflowDirEntry[]): Workfl
   return items.sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export function buildTopLevelSelectOptions(items: WorkflowSelectionItem[]): SelectionOption[] {
+export function buildTopLevelSelectOptions(
+  items: WorkflowSelectionItem[],
+  workflowDescriptions?: Readonly<Record<string, string>>,
+): SelectionOption[] {
   return items.map((item) => {
     if (item.type === 'workflow') {
-      return { label: sanitizeTerminalText(item.name), value: item.name };
+      return {
+        label: formatWorkflowLabel(item.name, getWorkflowDescription(item.name, workflowDescriptions), false),
+        value: item.name,
+      };
     }
     return {
       label: `📁 ${sanitizeTerminalText(item.name)}/`,
@@ -57,6 +88,7 @@ export function parseCategorySelection(selected: string): string | null {
 export function buildCategoryWorkflowOptions(
   items: WorkflowSelectionItem[],
   categoryName: string,
+  workflowDescriptions?: Readonly<Record<string, string>>,
 ): SelectionOption[] | null {
   const categoryItem = items.find(
     (item) => item.type === 'category' && item.name === categoryName,
@@ -67,7 +99,10 @@ export function buildCategoryWorkflowOptions(
 
   return categoryItem.workflows.map((qualifiedName) => {
     const displayName = qualifiedName.split('/').pop() ?? qualifiedName;
-    return { label: sanitizeTerminalText(displayName), value: qualifiedName };
+    return {
+      label: formatWorkflowLabel(displayName, getWorkflowDescription(qualifiedName, workflowDescriptions), false),
+      value: qualifiedName,
+    };
   });
 }
 

@@ -88,6 +88,7 @@ export const WorkflowCategoryConfigSchema = z.record(z.string(), WorkflowCategor
 
 export const WorkflowCategoryOverlaySchema = z.object({
   workflow_categories: WorkflowCategoryConfigSchema.optional(),
+  workflow_descriptions: z.record(z.string(), z.string()).optional(),
   show_others_category: z.boolean().optional(),
   others_category_name: z.string().min(1).optional(),
 }).strict();
