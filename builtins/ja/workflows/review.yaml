@@ -26,6 +26,8 @@ steps:
   - name: reviewers
     kind: workflow_call
     call: development-review
+    vars:
+      review_mode: initial
     rules:
       - condition: COMPLETE
         next: review-synthesis

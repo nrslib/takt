@@ -90,7 +90,7 @@ const REPORT_SECTIONS: Record<ReportContract, ReportSections> = {
 };
 
 const FULFILLED_STATUS = /^(?:充足|fulfilled|satisfied)$/i;
-const UNRESOLVED_STATUS = /(?:未解決|未解消|未確認|未対応|修正する|unresolved|open|actionable|unverified|repair)/i;
+const UNRESOLVED_STATUS = /(?:未解決|未解消|未確認|未対応|修正する|同じ問題へ統合|環境上確認不能|unresolved|open|actionable|unverified|repair|merge into same problem|cannot verify in this environment)/i;
 
 interface FenceMarker {
   readonly character: '`' | '~';

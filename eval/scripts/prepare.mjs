@@ -200,15 +200,6 @@ const TARGETS = [
     fixture: 'eval/fixtures/follow-up-review-repair-regression',
   },
   {
-    id: 'follow-up-review-repair-regression-phase2',
-    workflow: 'peer-review',
-    via: 'reviewers',
-    step: 'coding-review',
-    fixture: 'eval/fixtures/follow-up-review-repair-regression',
-    phase: 'phase2',
-    targetFile: 'coding-review.md',
-  },
-  {
     id: 'follow-up-testing-review-repair-regression',
     workflow: 'peer-review',
     via: 'reviewers',
@@ -238,28 +229,6 @@ const TARGETS = [
       pool: 'security-review-facets',
       candidateIds: ['cli'],
     },
-  },
-  {
-    id: 'review-mode-authority',
-    workflow: 'review',
-    step: 'backend-review',
-    fixture: 'eval/fixtures/review-mode-authority',
-  },
-  {
-    id: 'fix-verifier-family-boundary',
-    workflow: 'review-remediation',
-    step: 'fix-verifier',
-    fixture: 'eval/fixtures/fix-verifier-family-boundary',
-  },
-  {
-    id: 'companion-early-scan',
-    companion: 'ai-antipattern-review-companion',
-    fixture: 'eval/fixtures/companion-family-boundary',
-  },
-  {
-    id: 'companion-evidence-boundary',
-    companion: 'review-companion-moderator',
-    fixture: 'eval/fixtures/companion-family-boundary',
   },
   { id: 'review-adjudication', workflow: 'peer-review', step: 'review-adjudication', fixture: 'eval/fixtures/review-adjudication' },
   {

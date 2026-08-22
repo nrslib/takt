@@ -25,7 +25,7 @@ defaultTest:
         model_reasoning_effort: low
 
 tests:
-  - description: '#1127: retain explicit ordering and every transition family without inventing architecture'
+  - description: '#1127: retain explicit ordering and every named transition group without inventing architecture'
     vars:
       task: file://cases/issues/1127-command-gate-order.md
       previous_response: ''
@@ -35,7 +35,7 @@ tests:
         value: |
           Judge executable meaning, not wording or table shape. Pass only if the plan preserves the required default, resolves a rule before gating, leaves a failed required transition unapplied, and covers required/skip behavior across normal next, COMPLETE, ABORT, return, requires_user_input, both execution loops, schema/loading, fragment propagation, documentation, and behavioral tests. It must preserve blocked/error early exits and existing failure feedback.
 
-          Fail if any named transition family or execution loop is omitted, if `skip` becomes the default, if the gate runs before rule resolution, or if the plan adds a new orchestration framework or unrelated workflow redesign not required by the issue.
+          Fail if any named transition group or execution loop is omitted, if `skip` becomes the default, if the gate runs before rule resolution, or if the plan adds a new orchestration framework or unrelated workflow redesign not required by the issue.
 
   - description: '#1155: preserve the allowed design choice while closing shared safety and lifecycle contracts'
     vars:

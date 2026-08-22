@@ -1,1 +1,1 @@
-- Include findings adjudicated out of scope whenever the latest resolution contains findings with any of the listed dispositions; when any exist, do not omit this section even on APPROVE
+- Include every finding that the latest decision does not report as independently unresolved here; preserve its recorded treatment and do not omit this section even on APPROVE

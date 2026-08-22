@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-description: 'TAKT facet eval: initial review external identity wiring'
+description: 'TAKT ファセット評価: 初回レビューで外部対象の配線を確認する'
 
 prompts:
   - file://prompts/initial-review-external-identity-wiring.phase1.md
@@ -16,7 +16,7 @@ evaluateOptions:
   maxConcurrency: 3
 
 tests:
-  - description: 'initial review: derive and trace the documented external step target value'
+  - description: '初回レビュー: 文書化された外部ステップ対象の値を導出して追跡する'
     vars:
       task: file://cases/initial-review-external-identity-wiring-task.md
       previous_response: ''

@@ -211,6 +211,20 @@ test('renders eval targets with the production caller review mode', () => {
   }
 });
 
+test('marks the standalone review workflow as an initial review across error retries', () => {
+  for (const language of ['ja', 'en']) {
+    const source = readFileSync(new URL(
+      `../../builtins/${language}/workflows/review.yaml`,
+      import.meta.url,
+    ), 'utf8');
+    assert.match(
+      source,
+      /call: development-review\n\s+vars:\n\s+review_mode: initial/,
+      `${language}/review.yaml must keep provider-error retries inside the initial review boundary`,
+    );
+  }
+});
+
 test('composes only reviewer-scoped workflow rules into every production reviewer suite', () => {
   for (const language of ['ja', 'en']) {
     for (const workflow of PRODUCTION_REVIEWER_SUITES) {
@@ -257,7 +271,6 @@ test('composes remediation problem tracking only in dedicated step instructions'
       'review-remediation.yaml',
       'development-remediation-dynamic.yaml',
       'development-remediation.yaml',
-      'final-gate.yaml',
     ].map((fileName) => readFileSync(new URL(
       `../../builtins/${language}/workflows/${fileName}`,
       import.meta.url,
@@ -265,6 +278,16 @@ test('composes remediation problem tracking only in dedicated step instructions'
     assert.doesNotMatch(
       workflowSources,
       /^\s+- ref: (?:problem-tracking|existing-family-lookup|invariant-recurrence)$/m,
+    );
+
+    const finalGateSource = readFileSync(new URL(
+      `../../builtins/${language}/workflows/final-gate.yaml`,
+      import.meta.url,
+    ), 'utf8');
+    assert.equal(
+      [...finalGateSource.matchAll(/^\s+- review-remediation-problem-tracking$/gm)].length,
+      1,
+      `${language}/final-gate.yaml must compose dedicated problem tracking exactly once`,
     );
   }
 });

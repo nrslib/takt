@@ -1,7 +1,7 @@
-# Follow-up security review: concrete OSC effect
+# 修正後セキュリティレビュー: 具体的な OSC 効果
 
-Review a diff that newly passes a repository-controlled title to the normal terminal renderer without escaping control sequences. The latest adjudication left SEC-NEW-terminal-output-L28 out of scope because the earlier probe showed only a lone `ESC` byte and no concrete terminal effect.
+制御シーケンスを除去せず、リポジトリが指定するタイトルを通常の端末描画処理へ新たに渡す差分をレビューしてください。以前の確認では単独の `ESC` バイトしか観測されず、具体的な端末効果がなかったため、最新の裁定は `SEC-NEW-terminal-output-L28` を今回の修正対象外としました。
 
-New evidence now supplies `release\u001b]0;VERIFIED BUILD\u0007failed` through the normal repository-title input. On the supported xterm-compatible terminal, the normal execution path changes the terminal title to `VERIFIED BUILD` although the command is failing. The effect is repeatable without patching the terminal or constructing an artificial external target.
+新しい証拠では、通常のリポジトリタイトル入力から `release\u001b]0;VERIFIED BUILD\u0007failed` を渡しています。対応する xterm 互換端末では、コマンドが失敗中でも通常の実行経路により端末タイトルが `VERIFIED BUILD` へ変わります。この効果は、端末を改変したり人工的な外部対象を作ったりせず再現できます。
 
-Relate the new evidence to the immediately preceding disposition and produce the follow-up security-review result.
+新しい証拠を直前の判断と対応付け、修正後セキュリティレビューの結果を記録してください。

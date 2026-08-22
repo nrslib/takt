@@ -1,8 +1,8 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-# TAKT facet eval: follow-up security review の裁定拘束と blocking 証拠基準。
+# TAKT ファセット評価: 修正後セキュリティレビューで直前の裁定と阻害問題の証拠基準を維持する。
 # claude / codex 両 CLI のログインが必要。デフォルトスイートからは除外。
 
-description: 'TAKT facet eval: follow-up security review adjudication binding'
+description: 'TAKT ファセット評価: 修正後セキュリティレビューで直前の裁定を維持する'
 
 prompts:
   - file://prompts/review-adjudication-binding.phase1.md
@@ -29,7 +29,7 @@ evaluateOptions:
   maxConcurrency: 3
 
 tests:
-  - description: 'A: latest out_of_scope dispositions bind the follow-up verdict'
+  - description: 'A: 最新の out_of_scope 判断を修正後レビューで維持する'
     vars:
       task: file://cases/review-adjudication-binding-a.md
       previous_response: ''
@@ -40,9 +40,9 @@ tests:
       - type: llm-rubric
         metric: A/disposition-binding
         value: |
-          Judge the security-review decision semantics and classification, not exact headings or table shape. Pass only if the response returns APPROVE, lists all three prior findings SEC-NEW-rule-size-L14, SEC-NEW-terminal-output-L28, and SEC-NEW-symlink-target-L41 in the dedicated adjudicated non-actionable findings area with the exact latest disposition out_of_scope, does not place any of them in persists or reopened, and does not count them toward REJECT. Fail if any of the three is omitted, reconstructed as open, or used as a blocking finding.
+          見出しや表の形ではなく、セキュリティレビューの判断内容を評価する。APPROVE を返し、以前の3件 SEC-NEW-rule-size-L14、SEC-NEW-terminal-output-L28、SEC-NEW-symlink-target-L41 を漏れなく記録し、最新の判断どおりすべて out_of_scope として扱う場合だけ合格とする。いずれも persists、reopened、REJECT の根拠にしてはならない。3件のいずれかを省略する、未解消として作り直す、または阻害問題として扱う場合は不合格とする。
 
-  - description: 'B: remeasurement of the same event does not reopen the finding'
+  - description: 'B: 同じ事象の再測定だけでは指摘を再開しない'
     vars:
       task: file://cases/review-adjudication-binding-b-remeasurement.md
       previous_response: ''
@@ -53,9 +53,9 @@ tests:
       - type: llm-rubric
         metric: B-remeasurement/reopen-discipline
         value: |
-          Judge the security-review decision semantics, not exact wording. Pass only if the response returns APPROVE, keeps SEC-NEW-terminal-output-L28 under the dedicated adjudicated non-actionable findings area with out_of_scope, and treats the repeated observation of the same lone ESC byte as insufficient to use reopened. It must not put that finding in persists, reopened, or a blocking new finding. Warning-level advice is allowed.
+          正確な文言ではなく、セキュリティレビューの判断内容を評価する。APPROVE を返し、SEC-NEW-terminal-output-L28 を out_of_scope のまま維持し、同じ単独 ESC バイトの反復観測だけでは reopened にできないと判断する場合だけ合格とする。この指摘を persists、reopened、または新しい阻害問題にしてはならない。阻害しない注意事項は許容する。
 
-  - description: 'B control: remediation reintroduction permits reopened and REJECT'
+  - description: 'B 対照: 修正による再導入では reopened と REJECT を認める'
     vars:
       task: file://cases/review-adjudication-binding-b-remediation.md
       previous_response: ''
@@ -66,9 +66,9 @@ tests:
       - type: llm-rubric
         metric: B-remediation/reopen-discipline
         value: |
-          Judge the security-review decision semantics, not exact wording. Pass only if the response returns REJECT and classifies the terminal-control problem as reopened, states the immediately preceding out_of_scope disposition, and uses allowed reopening basis d because the remediation reintroduced the same problem. It must connect the new OSC sequence to the reproduced terminal-title spoofing effect. Fail if it calls the finding persists, treats mere remeasurement as the reason, omits the prior disposition or basis d, or approves the change.
+          正確な文言ではなく、セキュリティレビューの判断内容を評価する。REJECT を返し、端末制御の問題を reopened として扱い、直前は out_of_scope だったことと、修正によって同じ問題が再導入されたことを理由として示す場合だけ合格とする。新しい OSC シーケンスを、再現された端末タイトル偽装へ結び付けなければならない。persists とする、単なる再測定を理由にする、直前の判断または再導入の事実を省略する、あるいは APPROVE する場合は不合格とする。
 
-  - description: 'C: rule size and a lone ESC byte are not blocking evidence'
+  - description: 'C: ルールサイズと単独 ESC バイトだけでは阻害問題の証拠にならない'
     vars:
       task: file://cases/review-adjudication-binding-c-threshold.md
       previous_response: ''
@@ -79,9 +79,9 @@ tests:
       - type: llm-rubric
         metric: C-threshold/security-evidence
         value: |
-          Judge only whether the supplied security evidence crosses the blocking threshold. Pass only if the response returns APPROVE and does not create a blocking finding from either the absence of a size limit on repository-author-controlled rule files or the observation that one ESC byte reaches terminal output. It may record either concern as a warning. It must keep the three prior findings, including SEC-NEW-rule-size-L14 and SEC-NEW-terminal-output-L28, in the dedicated adjudicated non-actionable findings area with out_of_scope rather than persists or reopened.
+          提示されたセキュリティ証拠が阻害問題を示すかだけを評価する。APPROVE を返し、リポジトリ作成者が管理するルールファイルにサイズ上限がないことも、単独の ESC バイトが端末出力へ到達したことも、阻害問題にしない場合だけ合格とする。いずれも注意事項として記録して構わない。SEC-NEW-rule-size-L14 と SEC-NEW-terminal-output-L28 を含む以前の3件は out_of_scope のまま維持し、persists または reopened にしてはならない。
 
-  - description: 'C control: a reproduced OSC display effect is blocking evidence'
+  - description: 'C 対照: 再現された OSC の表示効果は阻害問題の証拠になる'
     vars:
       task: file://cases/review-adjudication-binding-c-osc.md
       previous_response: ''
@@ -92,4 +92,4 @@ tests:
       - type: llm-rubric
         metric: C-OSC/security-evidence
         value: |
-          Judge the security-review decision semantics, not exact wording. Pass only if the response returns REJECT and treats the reproduced OSC terminal-title spoofing effect as sufficient concrete blocking evidence. Because SEC-NEW-terminal-output-L28 was previously out_of_scope specifically for lack of a concrete terminal effect, the response must classify it as reopened, state that prior disposition, and use allowed reopening basis b for the newly supplied blocking evidence. Fail if it suppresses the finding merely because the previous evidence was insufficient, calls it persists, omits the concrete display effect, or approves the change.
+          正確な文言ではなく、セキュリティレビューの判断内容を評価する。REJECT を返し、再現された OSC による端末タイトル偽装を具体的な阻害問題の証拠として扱う場合だけ合格とする。SEC-NEW-terminal-output-L28 は具体的な端末効果がなかったため以前は out_of_scope だったので、今回は reopened とし、直前の判断と、新しい証拠によって端末効果を確認できたことを示さなければならない。以前の証拠が不足していたことだけを理由に指摘を抑止する、persists とする、具体的な表示効果を省略する、または APPROVE する場合は不合格とする。
