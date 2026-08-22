@@ -18,7 +18,7 @@ describe('workflow selection helpers', () => {
       { label: '📁 frontend/', value: '__category__:frontend' },
     ]);
     expect(buildTopLevelSelectOptions(items, { default: 'Standard coding workflow' })).toEqual([
-      { label: 'default — Standard coding workflow', value: 'default' },
+      { label: 'default', value: 'default', description: 'Standard coding workflow' },
       { label: '📁 frontend/', value: '__category__:frontend' },
     ]);
   });

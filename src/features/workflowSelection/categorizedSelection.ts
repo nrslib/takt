@@ -7,7 +7,7 @@ import { sanitizeTerminalText } from '../../shared/utils/index.js';
 import {
   applyBookmarks,
   formatWorkflowLabel,
-  getWorkflowDescription,
+  getWorkflowDescriptionOption,
   type SelectionOption,
   parseCategorySelection,
   CATEGORY_VALUE_PREFIX,
@@ -45,8 +45,9 @@ function buildCategoryLevelOptions(
 
   for (const workflowName of workflows) {
     options.push({
-      label: formatWorkflowLabel(workflowName, getWorkflowDescription(workflowName, workflowDescriptions), true),
+      label: formatWorkflowLabel(workflowName, true),
       value: workflowName,
+      description: getWorkflowDescriptionOption(workflowName, workflowDescriptions),
     });
   }
 
@@ -138,12 +139,9 @@ async function selectTopLevelWorkflowOption(
 
     for (const workflowName of getSelectableBookmarkedWorkflows(categorized)) {
       options.push({
-        label: `${formatWorkflowLabel(
-          workflowName,
-          getWorkflowDescription(workflowName, categorized.workflowDescriptions),
-          true,
-        )} [*]`,
+        label: `${formatWorkflowLabel(workflowName, true)} [*]`,
         value: workflowName,
+        description: getWorkflowDescriptionOption(workflowName, categorized.workflowDescriptions),
       });
     }
 

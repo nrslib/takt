@@ -9,7 +9,7 @@ import {
   buildTopLevelSelectOptions,
   buildWorkflowSelectionItems,
   formatWorkflowLabel,
-  getWorkflowDescription,
+  getWorkflowDescriptionOption,
   parseCategorySelection,
   type SelectionOption,
 } from './options.js';
@@ -28,8 +28,9 @@ async function selectWorkflowFromEntriesWithCategories(
 
   if (!hasCategories) {
     const baseOptions: SelectionOption[] = availableWorkflows.map((name) => ({
-      label: formatWorkflowLabel(name, getWorkflowDescription(name, workflowDescriptions), true),
+      label: formatWorkflowLabel(name, true),
       value: name,
+      description: getWorkflowDescriptionOption(name, workflowDescriptions),
     }));
     const buildFlatOptions = (): SelectionOption[] =>
       applyBookmarks(baseOptions, getBookmarkedWorkflows());

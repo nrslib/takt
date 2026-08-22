@@ -238,9 +238,13 @@ describe('selectWorkflowFromCategorizedWorkflows', () => {
 
     await selectWorkflowFromCategorizedWorkflows(categorized);
 
-    const workflowOptions = selectOptionMock.mock.calls[1]![1] as { label: string; value: string }[];
+    const workflowOptions = selectOptionMock.mock.calls[1]![1] as { label: string; value: string; description?: string }[];
     expect(workflowOptions).toEqual([
-      { label: '🎼 my-workflow — Configured description\\nwith control text', value: 'my-workflow' },
+      {
+        label: '🎼 my-workflow',
+        value: 'my-workflow',
+        description: 'Configured description\\nwith control text',
+      },
     ]);
   });
 
@@ -257,7 +261,11 @@ describe('selectWorkflowFromCategorizedWorkflows', () => {
 
     expect(selected).toBe('flat-workflow');
     expect(selectOptionMock.mock.calls[0]![1]).toEqual([
-      { label: '🎼 flat-workflow — Flat description\\twith control text', value: 'flat-workflow' },
+      {
+        label: '🎼 flat-workflow',
+        value: 'flat-workflow',
+        description: 'Flat description\\twith control text',
+      },
     ]);
   });
 
@@ -586,7 +594,7 @@ describe('selectWorkflow', () => {
     });
     expect(configMock.getWorkflowDescriptions).toHaveBeenCalledWith('/cwd');
     expect(selectOptionMock.mock.calls[1]![1]).toEqual(expect.arrayContaining([
-      { label: '🎼 custom-flow — Custom workflow', value: 'custom-flow' },
+      { label: '🎼 custom-flow', value: 'custom-flow', description: 'Custom workflow' },
     ]));
   });
 

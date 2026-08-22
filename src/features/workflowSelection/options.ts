@@ -9,6 +9,7 @@ export type WorkflowSelectionItem =
 export interface SelectionOption {
   label: string;
   value: string;
+  description?: string;
 }
 
 export const CATEGORY_VALUE_PREFIX = '__category__:';
@@ -27,16 +28,18 @@ export function getWorkflowDescription(
   return workflowDescriptions[workflowName];
 }
 
-export function formatWorkflowLabel(
+/** Description rendered on the option's second line (dimmed by the select menu). */
+export function getWorkflowDescriptionOption(
   workflowName: string,
-  workflowDescription: string | undefined,
-  includeIcon: boolean,
-): string {
+  workflowDescriptions?: Readonly<Record<string, string>>,
+): string | undefined {
+  const description = getWorkflowDescription(workflowName, workflowDescriptions);
+  return description === undefined ? undefined : sanitizeTerminalText(description);
+}
+
+export function formatWorkflowLabel(workflowName: string, includeIcon: boolean): string {
   const safeName = sanitizeTerminalText(workflowName);
-  const label = includeIcon ? `🎼 ${safeName}` : safeName;
-  return workflowDescription === undefined
-    ? label
-    : `${label} — ${sanitizeTerminalText(workflowDescription)}`;
+  return includeIcon ? `🎼 ${safeName}` : safeName;
 }
 
 export function buildWorkflowSelectionItems(entries: WorkflowDirEntry[]): WorkflowSelectionItem[] {
@@ -67,8 +70,9 @@ export function buildTopLevelSelectOptions(
   return items.map((item) => {
     if (item.type === 'workflow') {
       return {
-        label: formatWorkflowLabel(item.name, getWorkflowDescription(item.name, workflowDescriptions), false),
+        label: formatWorkflowLabel(item.name, false),
         value: item.name,
+        description: getWorkflowDescriptionOption(item.name, workflowDescriptions),
       };
     }
     return {
@@ -100,8 +104,9 @@ export function buildCategoryWorkflowOptions(
   return categoryItem.workflows.map((qualifiedName) => {
     const displayName = qualifiedName.split('/').pop() ?? qualifiedName;
     return {
-      label: formatWorkflowLabel(displayName, getWorkflowDescription(qualifiedName, workflowDescriptions), false),
+      label: formatWorkflowLabel(displayName, false),
       value: qualifiedName,
+      description: getWorkflowDescriptionOption(qualifiedName, workflowDescriptions),
     };
   });
 }
