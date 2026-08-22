@@ -3487,6 +3487,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         expect(result.response.content).toContain(marker);
       }
       expect(result.response.error).toContain(markers[0]);
+      expect(result.response.error).not.toContain(markers[1]);
       expect(result.response.error).not.toContain(markers[2]);
       expect(mockExecuteAgent).toHaveBeenCalledTimes(3);
       const [, continuationInstruction] = mockExecuteAgent.mock.calls[2] ?? [];
