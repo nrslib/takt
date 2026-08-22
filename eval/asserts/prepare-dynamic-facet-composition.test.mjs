@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, rmSync, statSync } from 'node:fs';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, URL } from 'node:url';
 
 const { composeConfiguredDynamicFacets } = await import('../scripts/prepare.mjs');
 
@@ -50,6 +50,37 @@ const CANDIDATE_KNOWLEDGE = readFileSync(
   new URL('../../builtins/ja/facets/knowledge/security-local.md', import.meta.url),
   'utf8',
 ).trim();
+const CHILD_PROCESS_TIMEOUT_MS = 30_000;
+
+function spawnNode(args, timeout = CHILD_PROCESS_TIMEOUT_MS) {
+  return spawnSync(process.execPath, args, {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+    timeout,
+    killSignal: 'SIGKILL',
+  });
+}
+
+function runNode(args) {
+  const result = spawnNode(args);
+
+  assert.equal(result.error, undefined, result.error?.message);
+  assert.equal(result.signal, null, `child process terminated by ${result.signal}`);
+  assert.equal(result.status, 0, result.stderr);
+  return result;
+}
+
+function runPrepare(targetIds) {
+  return runNode(['eval/scripts/prepare.mjs', ...targetIds]);
+}
+
+test('force-kills a child process that exceeds the hang watchdog', () => {
+  const result = spawnNode(['-e', 'setInterval(() => {}, 1000)'], 50);
+
+  assert.equal(result.error?.code, 'ETIMEDOUT');
+  assert.equal(result.status, null);
+  assert.equal(result.signal, 'SIGKILL');
+});
 
 function selection(overrides = {}) {
   return {
@@ -149,14 +180,8 @@ test('executes main when prepare.mjs is launched directly', () => {
   const runtimeDirBefore = existsSync(SMOKE_RUNTIME_DIR);
 
   try {
-    const result = spawnSync(
-      process.execPath,
-      ['eval/scripts/prepare.mjs', SMOKE_TARGET_ID],
-      { cwd: REPO_ROOT, encoding: 'utf8' },
-    );
+    const result = runPrepare([SMOKE_TARGET_ID]);
 
-    assert.equal(result.error, undefined);
-    assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, new RegExp(`\\[${SMOKE_TARGET_ID}\\]`));
   } finally {
     if (promptBefore === null) {
@@ -170,32 +195,19 @@ test('executes main when prepare.mjs is launched directly', () => {
 
 test('does not execute main when prepare.mjs is imported', () => {
   const promptBefore = snapshotFile(SMOKE_PROMPT_PATH);
-  const result = spawnSync(
-    process.execPath,
-    [
-      '--input-type=module',
-      '-e',
-      `await import(${JSON.stringify(new URL('../scripts/prepare.mjs', import.meta.url).href)});`,
-    ],
-    { cwd: REPO_ROOT, encoding: 'utf8' },
-  );
+  const result = runNode([
+    '--input-type=module',
+    '-e',
+    `await import(${JSON.stringify(new URL('../scripts/prepare.mjs', import.meta.url).href)});`,
+  ]);
 
-  assert.equal(result.error, undefined);
-  assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout, '');
   assert.equal(result.stderr, '');
   assert.deepEqual(snapshotFile(SMOKE_PROMPT_PATH), promptBefore);
 });
 
 test('renders eval targets with the production caller review mode', () => {
-  const result = spawnSync(
-    process.execPath,
-    ['eval/scripts/prepare.mjs', ...REVIEW_MODE_TARGETS.keys()],
-    { cwd: REPO_ROOT, encoding: 'utf8' },
-  );
-
-  assert.equal(result.error, undefined);
-  assert.equal(result.status, 0, result.stderr);
+  runPrepare([...REVIEW_MODE_TARGETS.keys()]);
 
   for (const [targetId, reviewMode] of REVIEW_MODE_TARGETS) {
     const promptPath = fileURLToPath(
@@ -298,14 +310,7 @@ test('keeps remediation bookkeeping vocabulary out of ordinary reviewer prompts'
     'follow-up-review-repair-regression',
     'follow-up-testing-review-repair-regression',
   ];
-  const result = spawnSync(
-    process.execPath,
-    ['eval/scripts/prepare.mjs', ...targetIds],
-    { cwd: REPO_ROOT, encoding: 'utf8' },
-  );
-
-  assert.equal(result.error, undefined);
-  assert.equal(result.status, 0, result.stderr);
+  runPrepare(targetIds);
 
   for (const targetId of targetIds) {
     const promptPath = fileURLToPath(
@@ -347,14 +352,7 @@ test('keeps finding identity stable across newly checked paths', () => {
 });
 
 test('does not inject report output contracts into Phase 1 eval prompts', () => {
-  const result = spawnSync(
-    process.execPath,
-    ['eval/scripts/prepare.mjs', ...PHASE1_WITHOUT_OUTPUT_CONTRACT_TARGET_IDS],
-    { cwd: REPO_ROOT, encoding: 'utf8' },
-  );
-
-  assert.equal(result.error, undefined);
-  assert.equal(result.status, 0, result.stderr);
+  runPrepare(PHASE1_WITHOUT_OUTPUT_CONTRACT_TARGET_IDS);
 
   for (const targetId of PHASE1_WITHOUT_OUTPUT_CONTRACT_TARGET_IDS) {
     const promptPath = fileURLToPath(
@@ -366,14 +364,7 @@ test('does not inject report output contracts into Phase 1 eval prompts', () => 
 });
 
 test('renders the production review-adjudication Phase 2 report contract', () => {
-  const result = spawnSync(
-    process.execPath,
-    ['eval/scripts/prepare.mjs', REVIEW_ADJUDICATION_PHASE2_TARGET_ID],
-    { cwd: REPO_ROOT, encoding: 'utf8' },
-  );
-
-  assert.equal(result.error, undefined);
-  assert.equal(result.status, 0, result.stderr);
+  runPrepare([REVIEW_ADJUDICATION_PHASE2_TARGET_ID]);
 
   const promptPath = fileURLToPath(new URL(
     `../../eval/prompts/${REVIEW_ADJUDICATION_PHASE2_TARGET_ID}.phase2.md`,
@@ -397,14 +388,7 @@ test('does not hard-code workflow-specific report paths in Japanese adjudication
 
 test('keeps peer-review round scope out of the production final gate', () => {
   const targetId = 'final-readiness-supervision-phase2';
-  const result = spawnSync(
-    process.execPath,
-    ['eval/scripts/prepare.mjs', 'final-readiness-supervision', targetId],
-    { cwd: REPO_ROOT, encoding: 'utf8' },
-  );
-
-  assert.equal(result.error, undefined);
-  assert.equal(result.status, 0, result.stderr);
+  runPrepare(['final-readiness-supervision', targetId]);
 
   const policySnapshotPath = fileURLToPath(new URL(
     `../../eval/fixtures/final-readiness-supervision/.takt/eval-snapshots/${targetId}-policies.md`,

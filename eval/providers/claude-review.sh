@@ -24,6 +24,7 @@ watchdog_pid=''
 tmp_dir=$(mktemp -d)
 prompt_file="$tmp_dir/prompt"
 timeout_marker="$tmp_dir/timed-out"
+watchdog_firing_marker="$tmp_dir/watchdog-firing"
 
 cleanup() {
   trap - INT TERM
@@ -61,10 +62,12 @@ set +m
 if [ "$timeout_seconds" -gt 0 ]; then
   (
     sleep "$timeout_seconds"
-    : > "$timeout_marker"
-    kill -TERM -- "-$claude_pid" 2>/dev/null || exit 0
-    sleep 15
-    kill -KILL -- "-$claude_pid" 2>/dev/null || true
+    : > "$watchdog_firing_marker"
+    if kill -TERM -- "-$claude_pid" 2>/dev/null; then
+      : > "$timeout_marker"
+      sleep 15
+      kill -KILL -- "-$claude_pid" 2>/dev/null || true
+    fi
   ) >/dev/null 2>&1 &
   watchdog_pid=$!
 fi
@@ -72,7 +75,7 @@ fi
 status=0
 wait "$claude_pid" || status=$?
 claude_pid=''
-if [ -n "$watchdog_pid" ] && [ -f "$timeout_marker" ]; then
+if [ -n "$watchdog_pid" ] && [ -f "$watchdog_firing_marker" ]; then
   wait "$watchdog_pid" 2>/dev/null || true
 elif [ -n "$watchdog_pid" ]; then
   kill -TERM "$watchdog_pid" 2>/dev/null || true
