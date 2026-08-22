@@ -395,6 +395,9 @@ export class StepExecutor {
                 failureDir: judgeOptions.failureDir,
                 onStream: judgeOptions.onStream,
                 onActivity: judgeOptions.onActivity,
+                mcpServers: judgeOptions.mcpServers,
+                mcpAssignment: judgeOptions.mcpAssignment,
+                mcpServerIdentity: judgeOptions.mcpServerIdentity,
                 resolution: {
                   provider,
                   model: judgeProviderInfo.model,
@@ -1531,6 +1534,9 @@ export class StepExecutor {
                   onActivity: agentOptions.onActivity,
                   onPromptResolved,
                   workflowMeta: agentOptions.workflowMeta,
+                  mcpServers: agentOptions.mcpServers,
+                  mcpAssignment: agentOptions.mcpAssignment,
+                  mcpServerIdentity: agentOptions.mcpServerIdentity,
                 }).then((response) => {
                   const freshResponse = { ...response };
                   delete freshResponse.sessionId;

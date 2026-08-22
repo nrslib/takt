@@ -102,6 +102,43 @@ describe('CompanionStructuredCaller', () => {
       .toEqual([1, 1]);
   });
 
+  it('passes readonly permission without collapsing provider tools to an empty list', async () => {
+    const successfulResponse = {
+      persona: 'security-reviewer',
+      status: 'done' as const,
+      content: 'reviewed',
+      timestamp: new Date('2026-08-14T00:00:00.000Z'),
+      structuredOutput: { findings: [], updates: [] },
+    };
+    let providerOptions: Parameters<typeof executeStructuredAgent>[2] | undefined;
+    vi.mocked(executeStructuredAgent).mockImplementation(async (_prompt, _schema, options) => {
+      providerOptions = options;
+      return successfulResponse;
+    });
+    const caller = new CompanionStructuredCaller({
+      cwd: '/worktree',
+      projectCwd: '/project',
+      failureDir: '/project/.takt/runs/run/failures',
+      language: 'en',
+      buildProviderCallCallbacks: () => ({ finish: vi.fn() }),
+      recordUsage: vi.fn(),
+      recordCall: vi.fn(),
+    });
+
+    await caller.call({
+      purpose: 'reviewer',
+      agentName: 'security-reviewer',
+      provider: { provider: 'mock' },
+      systemPrompt: 'review system',
+      prompt: 'review prompt',
+      outputSchema: { type: 'object' },
+    });
+
+    expect(providerOptions?.resolution.permissionMode).toBe('readonly');
+    expect(providerOptions?.resolution.permissionModeSource).toBe('synthetic');
+    expect(providerOptions?.allowedTools).toBeUndefined();
+  });
+
   it('finishes each provider execution unit when the companion call fails', async () => {
     vi.mocked(executeStructuredAgent).mockRejectedValue(new Error('provider failed'));
     const finishes: Array<ReturnType<typeof vi.fn>> = [];

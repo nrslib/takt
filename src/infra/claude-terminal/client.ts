@@ -167,7 +167,10 @@ export async function callClaudeTerminal(
   let responseSessionId: string | undefined = options.sessionId;
   let terminalSession: TerminalSession | undefined;
   let stopRequested = false;
-  let cleanup: (() => Promise<void>) | undefined;
+  // Keep adapter disposal reachable even when MCP argument preparation fails.
+  let cleanup: (() => Promise<void>) | undefined = options.preparedMcp === undefined
+    ? undefined
+    : () => options.preparedMcp!.dispose();
   let abortHandler: (() => void) | undefined;
   let aborted = false;
   let pendingStart: Promise<TerminalSession> | undefined;
@@ -255,8 +258,20 @@ export async function callClaudeTerminal(
         options.abortSignal,
       );
     }
-    const prepared = await prepareClaudeMcpConfig(isStrictReadonly ? undefined : options.mcpServers);
-    cleanup = prepared.cleanup;
+    const preparedMcpConfig = options.preparedMcp === undefined
+      ? await prepareClaudeMcpConfig(isStrictReadonly ? undefined : options.mcpServers)
+      : { path: undefined, cleanup: async () => {} };
+    const legacyCleanup = preparedMcpConfig.cleanup;
+    cleanup = async () => {
+      const results = await Promise.allSettled([
+        legacyCleanup(),
+        ...(options.preparedMcp === undefined ? [] : [options.preparedMcp.dispose()]),
+      ]);
+      const failed = results.find((result) => result.status === 'rejected');
+      if (failed?.status === 'rejected') {
+        throw failed.reason;
+      }
+    };
     if (options.abortSignal?.aborted) {
       throw new ClaudeTerminalAbortError(options.abortSignal.reason);
     }
@@ -267,7 +282,8 @@ export async function callClaudeTerminal(
       effort: options.effort,
       skillsEnabled: options.skillsEnabled,
       allowedTools: options.allowedTools,
-      mcpConfigPath: isStrictReadonly ? undefined : prepared.path,
+      mcpConfigPath: preparedMcpConfig.path,
+      preparedMcpArgs: options.preparedMcp?.args,
       permissionMode: options.permissionMode,
       bypassPermissions: options.bypassPermissions,
       sessionId: options.sessionId,

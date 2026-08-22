@@ -1,39 +1,18 @@
 import type { ProviderType } from './types.js';
 import { getProvider } from './index.js';
 
-const MCP_SERVER_PROVIDERS = new Set<ProviderType>([
-  'claude',
-  'claude-sdk',
-  'claude-terminal',
+const ALLOWED_TOOLS_PROVIDERS: ReadonlySet<ProviderType> = new Set([
+  'claude', 'claude-sdk', 'claude-terminal', 'opencode', 'pi', 'mock',
 ]);
 
-const ALLOWED_TOOLS_PROVIDERS = new Set<ProviderType>([
-  'claude',
-  'claude-sdk',
-  'claude-terminal',
-  'opencode',
-  'pi',
-  'mock',
+const CLAUDE_ALLOWED_TOOLS_PROVIDERS: ReadonlySet<ProviderType> = new Set([
+  'claude', 'claude-sdk', 'claude-terminal', 'mock',
 ]);
 
-const CLAUDE_ALLOWED_TOOLS_PROVIDERS = new Set<ProviderType>([
-  'claude',
-  'claude-sdk',
-  'claude-terminal',
-  'mock',
-]);
+const OPENCODE_ALLOWED_TOOLS_PROVIDERS: ReadonlySet<ProviderType> = new Set(['opencode']);
 
-const OPENCODE_ALLOWED_TOOLS_PROVIDERS = new Set<ProviderType>([
-  'opencode',
-]);
-
-const MAX_TURNS_PROVIDERS = new Set<ProviderType>([
-  'claude',
-  'claude-sdk',
-  'codex',
-  'cursor',
-  'copilot',
-  'mock',
+const MAX_TURNS_PROVIDERS: ReadonlySet<ProviderType> = new Set([
+  'claude', 'claude-sdk', 'codex', 'cursor', 'copilot', 'mock',
 ]);
 
 interface ProviderCapabilities {
@@ -41,6 +20,7 @@ interface ProviderCapabilities {
   supportsIsolatedStructuredExecution: boolean;
   supportsNativeImageInput: boolean;
   supportsMcpServers: boolean;
+  supportsStrictMcpConfig: boolean;
   supportsAllowedTools: boolean;
   supportsClaudeAllowedTools: boolean;
   supportsOpenCodeAllowedTools: boolean;
@@ -58,12 +38,14 @@ function resolveProviderCapabilities(
   if (providerImpl === undefined) {
     return undefined;
   }
+  const mcpTransports = providerImpl.supportedMcpTransports;
 
   return {
     supportsStructuredOutput: providerImpl.supportsStructuredOutput,
     supportsIsolatedStructuredExecution: providerImpl.supportsIsolatedStructuredExecution === true,
     supportsNativeImageInput: providerImpl.supportsNativeImageInput,
-    supportsMcpServers: MCP_SERVER_PROVIDERS.has(provider),
+    supportsMcpServers: mcpTransports !== undefined && mcpTransports.size > 0,
+    supportsStrictMcpConfig: providerImpl.supportsStrictMcpConfig === true,
     supportsAllowedTools: ALLOWED_TOOLS_PROVIDERS.has(provider),
     supportsClaudeAllowedTools: CLAUDE_ALLOWED_TOOLS_PROVIDERS.has(provider),
     supportsOpenCodeAllowedTools: OPENCODE_ALLOWED_TOOLS_PROVIDERS.has(provider),
@@ -116,6 +98,12 @@ export function providerSupportsMcpServers(
   provider: ProviderType | undefined,
 ): boolean | undefined {
   return resolveProviderCapabilities(provider)?.supportsMcpServers;
+}
+
+export function providerSupportsStrictMcpConfig(
+  provider: ProviderType | undefined,
+): boolean | undefined {
+  return resolveProviderCapabilities(provider)?.supportsStrictMcpConfig;
 }
 
 export function providerSupportsAllowedTools(

@@ -49,6 +49,8 @@ import {
   type RuntimeProviderResolutionContext,
 } from './resolution-context.js';
 import { validateRuntimeProviderSection, flattenProfiles, type FlatProfile } from './policy.js';
+import { hasActiveProviderContent, type McpSection } from './schema.js';
+import { hasActiveMcpAssignments } from './mode.js';
 import type {
   RuntimeCompanionProviderAssignment,
   RuntimeProviderAssignment,
@@ -84,6 +86,12 @@ export interface CompiledProviderEnvironment {
    * and assistant seams resolve the runtime.yaml `targets.internal_agents` ladder.
    */
   internalAgents: InternalAgentEnvironment | undefined;
+  /**
+   * Runtime MCP assignment section (runtime-v1 only). Carries the `mcp`
+   * section from `runtime.yaml` so the engine can resolve effective servers
+   * per agent execution (issue #1137). Undefined in legacy mode.
+   */
+  mcpAssignment?: McpSection | undefined;
   companions?: Record<string, ProviderRoutingEntry>;
   /**
    * Every stage of each `ladder` assignment (issue #1208), so the promotion seam can advance a
@@ -115,7 +123,12 @@ export interface LegacyProviderEnvironmentInput {
 
 export type ProviderConfigModel =
   | { kind: 'legacy'; legacy: LegacyProviderEnvironmentInput }
-  | { kind: 'runtime-v1'; section: RuntimeProviderSection; resolutionContext?: RuntimeProviderResolutionContext };
+  | {
+      kind: 'runtime-v1';
+      section: RuntimeProviderSection | undefined;
+      mcp: McpSection | undefined;
+      resolutionContext?: RuntimeProviderResolutionContext;
+    };
 
 /** Factory/registry: pick the matching compiler for the loaded configuration format. */
 export function compileProviderEnvironment(
@@ -125,7 +138,7 @@ export function compileProviderEnvironment(
     case 'legacy':
       return compileLegacyProviderEnvironment(model.legacy);
     case 'runtime-v1':
-      return compileRuntimeProviderEnvironment(model.section, model.resolutionContext);
+      return compileRuntimeProviderEnvironment(model.section, model.resolutionContext, model.mcp);
   }
 }
 
@@ -145,19 +158,42 @@ export function compileLegacyProviderEnvironment(
     permissionMode: undefined,
     tagConflictPolicy: 'last-wins',
     internalAgents: undefined,
+    mcpAssignment: undefined,
     providerLadders: undefined,
   };
 }
 
 /**
  * RuntimeProviderPolicyCompiler: map a validated runtime.yaml `provider` section into the
- * shared engine-options bundle. Profile `options`, target `pool`/`auto_routing`, and
- * `internal_agents` are all compiled into the bundle here; nothing is left unwired.
+ * shared engine-options bundle. Profile `options`, `pool`/`auto_routing`, and `internal_agents`
+ * are all compiled into the bundle here; nothing is left unwired. When `section` is
+ * undefined or inactive the runtime-v1 mode was entered by an active `mcp` section alone
+ * (order.md:36); the bundle then carries no runtime provider/model/options but
+ * still forwards the `mcp` assignment.
  */
 export function compileRuntimeProviderEnvironment(
-  section: RuntimeProviderSection,
+  section: RuntimeProviderSection | undefined,
   resolutionContext?: RuntimeProviderResolutionContext,
+  mcp?: McpSection,
 ): CompiledProviderEnvironment {
+  if (section === undefined || !hasActiveProviderContent(section)) {
+    return {
+      provider: undefined,
+      providerSource: 'runtime-v1',
+      model: undefined,
+      modelSource: 'runtime-v1',
+      personaProviders: undefined,
+      providerRouting: undefined,
+      autoRouting: undefined,
+      providerOptions: undefined,
+      permissionMode: undefined,
+      tagConflictPolicy: 'fail-fast',
+      internalAgents: undefined,
+      mcpAssignment: hasActiveMcpAssignments(mcp) ? mcp : undefined,
+      providerLadders: undefined,
+    };
+  }
+
   // Reuse the runtime section's up-front validation: unknown profile/pool references,
   // cyclic `extends`, and profiles missing provider/model all throw here.
   validateRuntimeProviderSection(section);
@@ -188,6 +224,7 @@ export function compileRuntimeProviderEnvironment(
     permissionMode: defaults?.permissionMode,
     tagConflictPolicy: 'fail-fast',
     internalAgents,
+    mcpAssignment: hasActiveMcpAssignments(mcp) ? mcp : undefined,
     ...(companions === undefined ? {} : { companions }),
     providerLadders,
   };

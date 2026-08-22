@@ -14,7 +14,7 @@ const reviewerResult = {
 
 const moderatorEvidence = {
   task: 'implement the requested contract',
-  cumulativeDiff: '+const changed = true;',
+  baselineSha: 'base-123',
 };
 
 describe('companion moderator', () => {
@@ -22,7 +22,6 @@ describe('companion moderator', () => {
     const result = await moderateCompanionResult({
       reviewerResult,
       ...moderatorEvidence,
-      diffSummary: 'two files',
       runModerator: vi.fn().mockResolvedValue({
         findings: [
           { action: 'accept', sourceIndex: 0 },
@@ -39,7 +38,6 @@ describe('companion moderator', () => {
     const result = await moderateCompanionResult({
       reviewerResult: { findings: [] },
       ...moderatorEvidence,
-      diffSummary: 'empty',
       runModerator,
     });
 
@@ -47,7 +45,9 @@ describe('companion moderator', () => {
     expect(runModerator).not.toHaveBeenCalled();
   });
 
-  it('passes the task and reviewed cumulative diff snapshot to the moderator prompt', async () => {
+  it('passes baseline context to both calls without injecting the diff body', async () => {
+    const diffBody = '+const changed = true;';
+    const reviewerPrompts: string[] = [];
     const moderatorPrompts: string[] = [];
 
     await executeCompanionReviewRound({
@@ -55,7 +55,7 @@ describe('companion moderator', () => {
       diff: {
         digest: 'digest-1',
         changedLines: 1,
-        content: moderatorEvidence.cumulativeDiff,
+        content: diffBody,
         changedFiles: ['src/a.ts'],
         fileFingerprints: { 'src/a.ts': 'fingerprint' },
         hunkFingerprints: { 'src/a.ts:1': 'hunk' },
@@ -64,8 +64,7 @@ describe('companion moderator', () => {
       },
       trigger: 'completion',
       observedGeneration: 1,
-      changedRegionsSincePreviousReview: ['src/a.ts:1'],
-      diffSummary: 'one file',
+      baselineSha: moderatorEvidence.baselineSha,
       signal: new AbortController().signal,
       task: moderatorEvidence.task,
       stepName: 'implement',
@@ -74,6 +73,7 @@ describe('companion moderator', () => {
       systemPrompt: (name) => name,
       callStructured: async (purpose, _agentName, _systemPrompt, prompt) => {
         if (purpose === 'reviewer') {
+          reviewerPrompts.push(prompt);
           return { status: 'done', content: 'review', structuredOutput: reviewerResult };
         }
         moderatorPrompts.push(prompt);
@@ -93,13 +93,24 @@ describe('companion moderator', () => {
       onRoundCompleted: () => undefined,
     });
 
+    expect(reviewerPrompts).toHaveLength(1);
     expect(moderatorPrompts).toHaveLength(1);
+    expect(reviewerPrompts[0]).toContain(
+      '"label":"baseline_sha","value":"base-123"',
+    );
+    expect(reviewerPrompts[0]).toContain(
+      '"label":"task","value":"implement the requested contract"',
+    );
+    expect(reviewerPrompts[0]).not.toContain(diffBody);
     expect(moderatorPrompts[0]).toContain(
       '"label":"task","value":"implement the requested contract"',
     );
     expect(moderatorPrompts[0]).toContain(
-      '"label":"cumulative_diff","value":"+const changed = true;"',
+      '"label":"baseline_sha","value":"base-123"',
     );
+    expect(moderatorPrompts[0]).not.toContain(diffBody);
+    expect(moderatorPrompts[0]).toContain('"label":"reviewer_result"');
+    expect(moderatorPrompts[0]).toContain('"finding":"first"');
   });
 
   it.each([

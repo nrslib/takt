@@ -76,6 +76,7 @@ const SUITES = {
   'review-mode-authority': 'promptfooconfig.review-mode-authority.yaml',
   'fix-verifier-family-boundary': 'promptfooconfig.fix-verifier-family-boundary.yaml',
   'companion-early-scan': 'promptfooconfig.companion-early-scan.yaml',
+  'companion-testing-later-scan': 'promptfooconfig.companion-testing-later-scan.yaml',
   'companion-evidence-boundary': 'promptfooconfig.companion-evidence-boundary.yaml',
   'review-adjudication': 'promptfooconfig.review-adjudication.yaml',
   'final-readiness-supervision': 'promptfooconfig.final-readiness-supervision.yaml',

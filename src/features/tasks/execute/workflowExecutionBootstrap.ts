@@ -81,10 +81,12 @@ import {
 } from '../../../infra/config/runtime-provider/provider-environment.js';
 import type { CompanionReviewMode } from '../../../core/models/companion-types.js';
 import {
+  assertNoMixedWorkflowMcpConfiguration,
   collectLegacyProviderSignals,
   selectConfigTaktProviders,
 } from '../../../infra/config/runtime-provider/legacy-signals.js';
 import type { LegacyProviderEnvironmentInput } from '../../../infra/config/runtime-provider/environment.js';
+import type { McpAssignmentSection } from '../../../infra/config/runtime-provider/mcp-assignment.js';
 import { assertTaskPrefixPair, detectStepType } from './workflowExecutionUtils.js';
 import type { WorkflowRunBootstrap } from './workflowRunLifecycle.js';
 import { inheritWorkflowConfigMetadata } from '../../../shared/workflowConfigMetadata.js';
@@ -151,6 +153,12 @@ export interface WorkflowExecutionBootstrap {
   traceReportMode: TraceReportMode;
   promptLogPath?: string;
   operationJournal: WorkflowOperationJournalContext;
+  /**
+   * Runtime MCP assignment section (runtime-v1 only, issue #1137). Passed to
+   * the workflow engine so `OptionsBuilder` can resolve effective MCP servers
+   * per agent step.
+   */
+  mcpAssignment: McpAssignmentSection | undefined;
 }
 
 export interface WorkflowExecutionResumeLineage {
@@ -480,6 +488,7 @@ export async function createWorkflowExecutionBootstrap(
     'telemetry',
     'observability',
     'autoRouting',
+    'workflowMcpServers',
   ]);
   const traceReportMode = globalConfig.logging?.trace === true ? 'full' : 'redacted';
   const allowSensitiveData = traceReportMode === 'full';
@@ -590,6 +599,22 @@ export async function createWorkflowExecutionBootstrap(
   });
   const providerEnvironment = resolvedRuntimeEnvironment.providerEnvironment;
   const companionEnabled = resolvedRuntimeEnvironment.companionEnabled;
+  // Legacy workflow MCP mode (`mcp_servers` / `workflow_mcp_servers`) must not
+  // coexist with an active `mcp` section in `runtime.yaml` (order.md:112-118).
+  // Collect legacy MCP signals from the reachable workflow graph and fail-fast on mix
+  // before any agent starts.
+  if (providerEnvironment.mcpAssignment !== undefined) {
+    assertNoMixedWorkflowMcpConfiguration(
+      providerEnvironment.mcpAssignment,
+      workflowConfig,
+      globalConfig.workflowMcpServers,
+      {
+        workflowCallResolver: options.workflowCallResolver,
+        projectCwd,
+        lookupCwd: cwd,
+      },
+    );
+  }
   const currentProvider = providerEnvironment.provider;
   // Fail fast when neither the legacy config nor a runtime.yaml profile resolves a provider.
   // A runtime-v1 pool default legitimately leaves the fixed provider unset (auto routing
@@ -787,6 +812,7 @@ export async function createWorkflowExecutionBootstrap(
     traceReportMode,
     ...(promptLogPath === undefined ? {} : { promptLogPath }),
     operationJournal,
+    mcpAssignment: providerEnvironment.mcpAssignment,
   };
 }
 

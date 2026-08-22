@@ -227,6 +227,69 @@ describe('StreamDisplay', () => {
     });
   });
 
+  describe('tool spinner terminal output', () => {
+    it('should keep multiline Bash previews on one line', () => {
+      vi.useFakeTimers();
+      try {
+        const display = new StreamDisplay('test-agent', false);
+        display.showToolUse('Bash', {
+          command: `first   second\n third    fourth ${'x'.repeat(50)}`,
+        });
+
+        vi.advanceTimersByTime(80);
+
+        const spinnerWrites = stdoutWriteSpy.mock.calls
+          .map(([chunk]) => String(chunk))
+          .filter((chunk) => chunk.startsWith('\r  '));
+        expect(spinnerWrites).toHaveLength(1);
+        expect(spinnerWrites[0]).not.toContain('\n');
+        expect(spinnerWrites[0]).toContain(`first second third fourth ${'x'.repeat(31)}...`);
+
+        display.flush();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('should keep unregistered tool previews on one line', () => {
+      vi.useFakeTimers();
+      try {
+        const display = new StreamDisplay('test-agent', false);
+        display.showToolUse('CustomTool', { input: 'first\nsecond' });
+
+        vi.advanceTimersByTime(80);
+
+        const spinnerWrites = stdoutWriteSpy.mock.calls
+          .map(([chunk]) => String(chunk))
+          .filter((chunk) => chunk.startsWith('\r  '));
+        expect(spinnerWrites).toHaveLength(1);
+        expect(spinnerWrites[0]).not.toContain('\n');
+
+        display.flush();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('should clear a spinner within a narrow terminal width', () => {
+      vi.useFakeTimers();
+      try {
+        const display = new StreamDisplay('test-agent', false);
+        display.showToolUse('Bash', { command: 'ls' });
+
+        vi.advanceTimersByTime(80);
+        display.flush();
+
+        const clearWrite = stdoutWriteSpy.mock.calls
+          .map(([chunk]) => String(chunk))
+          .find((chunk) => chunk === '\r\x1b[K');
+        expect(clearWrite).toBe('\r\x1b[K');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   describe('showToolResult AskUserQuestion content suppression', () => {
     it('should suppress content preview for AskUserQuestion non-error result', () => {
       const display = new StreamDisplay('test-agent', false);

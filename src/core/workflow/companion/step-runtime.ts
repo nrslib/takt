@@ -387,10 +387,9 @@ export class CompanionStepRuntime {
     const result = await executeCompanionReviewRound({
       companionName,
       diff,
+      baselineSha: this.baselineSha,
       trigger: request.reason,
       observedGeneration,
-      changedRegionsSincePreviousReview: detector.changedRegionsSinceLastReview(diff),
-      diffSummary: summarizeDiff(diff),
       implementerExplanation: this.latestImplementerExplanation,
       signal,
       task: this.deps.task,
@@ -557,15 +556,4 @@ export class CompanionStepRuntime {
       error: safeExternalErrorMessage(error),
     });
   }
-}
-
-function summarizeDiff(diff: CompanionDiff): string {
-  return truncateUtf8(JSON.stringify({
-    digest: diff.digest,
-    changedLines: diff.changedLines,
-    changedFiles: diff.changedFiles,
-    changedRegions: Object.keys(diff.hunkFingerprints),
-    omittedBytes: diff.omittedBytes,
-    truncated: diff.truncated,
-  }), ROUND_CONTEXT_MAX_BYTES).value;
 }

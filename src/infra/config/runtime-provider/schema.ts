@@ -13,6 +13,7 @@ import { PROVIDER_TYPES } from '../../../shared/types/provider.js';
 import { PermissionModeSchema } from '../../../core/models/schema-base.js';
 import { COMPANION_REVIEW_MODE_VALUES } from '../../../core/models/companion-types.js';
 import { RUNTIME_PROVIDER_VERSION } from './constants.js';
+import { McpSectionSchema } from './mcp-schema.js';
 import { DEFAULT_COMPANION_ENABLED } from '../../../shared/constants.js';
 
 const ProviderNameSchema = z.enum(PROVIDER_TYPES);
@@ -337,6 +338,7 @@ export const RuntimeProviderFileSchema = z
     companion: RuntimeCompanionPolicySchema.optional(),
     loop_analysis: RuntimeLoopAnalysisSchema.optional(),
     provider: ProviderSectionSchema.optional(),
+    mcp: McpSectionSchema.optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -357,6 +359,7 @@ export type RuntimeProviderAssignment = z.infer<typeof AssignmentSchema>;
 export type RuntimeProviderAssignmentSet = z.infer<typeof ProviderAssignmentSetSchema>;
 export type RuntimeCompanionProviderAssignment = z.infer<typeof CompanionAssignmentSchema>;
 export type RuntimeProviderAutoRouting = z.infer<typeof AutoRoutingSchema>;
+export type { McpSection } from './mcp-schema.js';
 
 /** Remove disabled companion-only targets before mode detection and provider compilation. */
 export function getEffectiveRuntimeProviderFile(

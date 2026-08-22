@@ -36,7 +36,7 @@ describe('CLI command registration', () => {
 
   it.each([
     ['reset', ['config', 'categories']],
-    ['workflow', ['init', 'doctor', 'bundle']],
+    ['workflow', ['init', 'doctor', 'inspect', 'bundle']],
     ['metrics', ['review']],
     ['telemetry', ['status', 'enable', 'disable']],
     ['repertoire', ['add', 'remove', 'list']],

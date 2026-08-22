@@ -2,7 +2,7 @@
 
 Use the contract-family identity defined by the active role instruction; this authority policy does not redefine it. Names, types, or proximity alone are grounds neither for merging nor for splitting a family.
 
-A bounded horizontal comparison is allowed as evidence gathering needed to close an active contract family: use it to identify the responsible source, duplicate implementations that reconstruct the same meaning under another name, and unvisited or unmigrated consumers. Observing an adjacent, separate family during that comparison does not itself authorize a finding, a Companion repair request, or expansion of remediation scope.
+A bounded horizontal comparison is allowed as evidence gathering needed to close an active contract family: use it to identify the responsible source, duplicate implementations that reconstruct the same meaning under another name, and unvisited or unmigrated consumers. Observing an adjacent, separate family during that comparison does not itself authorize a finding or expansion of remediation scope.
 
 ## Authority by Role
 
@@ -12,8 +12,6 @@ A bounded horizontal comparison is allowed as evidence gathering needed to close
 | Follow-up review | Check accepted-family unvisited consumers, required migrations, and remediation regressions | Restart general discovery or add an adjacent family |
 | Review adjudication | Validate a submitted candidate and its same-family boundary | General initial discovery or a new finding without a candidate |
 | Final preservation | Treat unmigrated paths, obsolete paths, one-sided updates, and remediation regressions in declared actionable families as merge blockers | Discover or add a new family |
-| Companion | Report early active-family candidates within the supplied cumulative diff and context | Claim hidden repository paths were verified or request repair of another family |
-| Companion Moderator | Accept, merge, downgrade, or reject submitted Companion evidence | Early scan, repository search, new findings, or a family-completion guarantee |
 
 Only the following four Authorization Bases permit a new finding during follow-up. Every new finding must record its Authorization Basis and Reason Absent (why it was absent from the initial review).
 
@@ -26,7 +24,7 @@ Only the following four Authorization Bases permit a new finding during follow-u
 
 Treat a normal path and an isolated failure path as one family when they share the same invariant, responsible source, and reason to change from the same cause. Do not create a new finding or expand remediation scope for an adjacent or separate family observed during bounded horizontal comparison unless it satisfies one of the four Authorization Bases. `direct_acceptance_criterion_violation` also requires the evidence to share the identity of an acceptance-contract family already presented. A problem that requires a different responsible source or reason to change does not become a new family during final or follow-up review.
 
-A Companion must not promote an unauthorized adjacent or separate family to `must_fix`, `should_fix`, `nit`, or a note that substantively requests a repair. A Moderator must `reject` such a finding. Review Adjudication must classify a technically valid finding without remediation authority as `out_of_scope` and must not propagate it into an actionable family or fix plan.
+Review Adjudication must classify a technically valid finding without remediation authority as `out_of_scope` and must not propagate it into an actionable family or fix plan.
 
 ## Review Mode
 

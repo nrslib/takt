@@ -146,7 +146,10 @@ function normalizeInstructionFacetWorkflow(
   context: FacetResolutionContext,
 ): { facetInstruction?: string; parallelInstruction?: string } {
   const normalized = normalizeWorkflowConfig(workflow, workflowDir, context);
-  const facetSelector = normalized.steps[0]?.dynamicFacets?.selector;
+  const firstStep = normalized.steps[0];
+  const facetSelector = firstStep !== undefined && 'dynamicFacets' in firstStep
+    ? firstStep.dynamicFacets?.selector
+    : undefined;
   const parallel = normalized.steps[1]?.parallel;
   if (parallel === undefined || Array.isArray(parallel)) {
     throw new Error('Expected a dynamic parallel step');
@@ -181,7 +184,10 @@ describe('selector guidance resolution', () => {
     const context = { projectDir, workflowDir, lang: 'ja' as const };
     const normalized = normalizeWorkflowConfig(workflow, workflowDir, context);
 
-    const facetSelector = normalized.steps[0]?.dynamicFacets?.selector;
+    const normalizedFirstStep = normalized.steps[0];
+    const facetSelector = normalizedFirstStep !== undefined && 'dynamicFacets' in normalizedFirstStep
+      ? normalizedFirstStep.dynamicFacets?.selector
+      : undefined;
     expect(facetSelector).toMatchObject({
       persona: 'facet-selector',
       personaPath: join(personasDir, 'facet-selector.md'),
@@ -240,12 +246,14 @@ describe('selector guidance resolution', () => {
       { projectDir: '/project', workflowDir: '/project/.takt/workflows', lang: 'ja' },
     );
 
-    const facetSelector = workflow.steps[0]?.dynamicFacets as unknown as {
+    const facetSelector = (workflow.steps[0] as { dynamicFacets?: unknown } | undefined)?.dynamicFacets as unknown as {
       selector?: { persona?: string; instruction?: string };
     };
     expect(facetSelector.selector).toEqual({
       persona: 'Choose implementation facets from the supplied evidence.',
+      personaRef: 'facet-selector',
       instruction: 'Select facets using the changed paths and findings.',
+      instructionRef: 'select-implementation-facets',
     });
 
     const parallel = workflow.steps[1]?.parallel;
@@ -257,7 +265,9 @@ describe('selector guidance resolution', () => {
     };
     expect(selection.selector).toEqual({
       persona: 'Choose reviewers from the supplied evidence.',
+      personaRef: 'reviewer-selector',
       instruction: 'Select reviewers using the changed paths and reports.',
+      instructionRef: 'select-reviewers',
     });
   });
 

@@ -67,6 +67,42 @@ describe('runtime-provider loader', () => {
     expect(() => loadRuntimeProviderFileAt(filePath)).toThrow(filePath);
   });
 
+  it('Given an unselected target referencing an unknown server, When loading, Then it fails before target matching', () => {
+    writeRuntimeYaml(globalDir, [
+      'version: 1',
+      'mcp:',
+      '  servers:',
+      '    known:',
+      '      command: known-server',
+      '  targets:',
+      '    personas:',
+      '      never-matched:',
+      '        servers:',
+      '          - missing-server',
+    ]);
+
+    expect(() => loadRuntimeProviderFileAt(join(globalDir, RUNTIME_PROVIDER_FILENAME))).toThrow(
+      'MCP target personas.never-matched.servers references unknown server "missing-server"',
+    );
+  });
+
+  it('Given an unused server with an undefined environment reference, When loading, Then it does not interpolate that server', () => {
+    writeRuntimeYaml(globalDir, [
+      'version: 1',
+      'mcp:',
+      '  servers:',
+      '    unused:',
+      '      command: ${TAKT_PHASE2_UNUSED_ENV}',
+      '    selected:',
+      '      command: selected-server',
+      '  defaults:',
+      '    servers:',
+      '      - selected',
+    ]);
+
+    expect(loadRuntimeProviderFileAt(join(globalDir, RUNTIME_PROVIDER_FILENAME))).toBeDefined();
+  });
+
   it.each([
     ['without auto_routing', [
       'version: 1',
