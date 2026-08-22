@@ -8,6 +8,19 @@ emitCompanionEvent('companion:start', {
   reviewMode: 'completion',
 });
 
+// @ts-expect-error Companion start events require a review mode.
+emitCompanionEvent('companion:start', {
+  step: 'implement',
+  companion: 'security-reviewer',
+});
+
+emitCompanionEvent('companion:start', {
+  step: 'implement',
+  companion: 'security-reviewer',
+  // @ts-expect-error Companion review modes are restricted to declared values.
+  reviewMode: 'automatic',
+});
+
 emitCompanionEvent('companion:pool_selected', {
   step: 'implement',
   selected: ['security-reviewer'],
