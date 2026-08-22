@@ -987,6 +987,48 @@ describe('Pi SDK client', () => {
     }
   });
 
+  it('adds resource-loading context when the SDK loader rejects', async () => {
+    mocks.resetTransient();
+    mocks.packageManager.resolveExtensionSources.mockResolvedValueOnce({
+      extensions: [{ enabled: true, path: path.join(tmpdir(), 'extension.ts') }],
+      skills: [],
+      prompts: [],
+      themes: [],
+    });
+    mocks.setReloadResourceLoader(async () => {
+      throw new Error('loader rejected');
+    });
+
+    const response = await callPi('worker', 'use the extension', {
+      ...sessionOptions('pi-sdk-resource-load-error'),
+      providerOptions: { extensions: ['./extension.ts'] },
+    });
+
+    expect(response.status).toBe('error');
+    expect(response.error).toContain('Pi extension resource loading failed: loader rejected');
+    expect(mocks.extensionRuntimeInvalidate).toHaveBeenCalledOnce();
+    expect(mocks.createAgentSession).not.toHaveBeenCalled();
+  });
+
+  it('labels a local source without exposing its filename when resolution fails', async () => {
+    mocks.resetTransient();
+    mocks.packageManager.resolveExtensionSources.mockRejectedValueOnce(
+      new Error('resolution failed'),
+    );
+
+    const response = await callPi('worker', 'use the extension', {
+      ...sessionOptions('pi-sdk-local-source-resolution-error'),
+      providerOptions: { extensions: ['./confidential-extension.ts'] },
+    });
+
+    expect(response.status).toBe('error');
+    expect(response.error).toContain(
+      'Pi extension source could not be resolved for local source (temporary: resolution failed)',
+    );
+    expect(response.error).not.toContain('nfidential-extension.ts');
+    expect(mocks.resourceLoader).not.toHaveBeenCalled();
+  });
+
   it.each([
     { label: 'git', source: 'git:https://example.invalid/extension.git' },
     { label: 'local path', source: './local-extension.ts' },

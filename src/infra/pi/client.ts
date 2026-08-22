@@ -274,7 +274,11 @@ function isNpmExtensionSource(source: string): boolean {
 }
 
 function getSafeNpmPackageName(source: string): string | undefined {
-  const spec = source.trim().slice('npm:'.length);
+  const trimmed = source.trim();
+  if (!trimmed.startsWith('npm:')) {
+    return undefined;
+  }
+  const spec = trimmed.slice('npm:'.length);
   const versionDelimiter = spec.startsWith('@')
     ? spec.indexOf('@', spec.indexOf('/') + 1)
     : spec.indexOf('@');
@@ -373,9 +377,9 @@ function createProjectInstalledPackageLookup(
 }
 
 function extensionSourceDiagnosticLabel(source: string): string {
-  const packageName = getSafeNpmPackageName(source);
-  if (packageName !== undefined) {
-    return `npm:${packageName}`;
+  if (isNpmExtensionSource(source)) {
+    const packageName = getSafeNpmPackageName(source);
+    return packageName === undefined ? 'npm source' : `npm:${packageName}`;
   }
   const trimmed = source.trim();
   if (trimmed.startsWith('git:')) {
@@ -642,7 +646,10 @@ async function resolvePiResourceLoader(
       if (isAbortRequested(options.abortSignal)) {
         throwPiSessionAborted();
       }
-      throw new Error(safeExternalErrorMessage(error), { cause: error });
+      throw new Error(
+        `Pi extension resource loading failed: ${safeExternalErrorMessage(error)}`,
+        { cause: error },
+      );
     }
     if (isAbortRequested(options.abortSignal)) {
       invalidateRejectedResourceLoader(resourceLoader);
@@ -989,6 +996,7 @@ async function createPiSession(
       throw new Error('Pi session aborted');
     }
     const extensionsResult = resourceLoader.getExtensions();
+    // SDK conflicts do not select a fallback candidate, but they still make the final session unsafe.
     const loadErrors = extensionsResult.errors;
     if (loadErrors.length > 0) {
       throw new Error(`Pi extension loading failed: ${formatExtensionLoadErrors(loadErrors)}`);
