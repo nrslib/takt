@@ -8,7 +8,10 @@ if (configPath === undefined) {
 }
 
 const parsed = JSON.parse(readFileSync(resolve(configPath), 'utf8'));
-const FIXTURE_TIMEOUT_MS = 5_000;
+const caseTimeoutMs = parsed.caseTimeoutMs;
+if (!Number.isInteger(caseTimeoutMs) || caseTimeoutMs <= 0) {
+  throw new Error('Smoke batch fixture config requires a positive integer caseTimeoutMs');
+}
 if (!Array.isArray(parsed.cases)) {
   throw new Error('Smoke batch fixture config requires a cases array');
 }
@@ -28,7 +31,10 @@ const cases = parsed.cases.map((candidate) => {
       resolve(candidate.script),
       candidate.args,
       process.env,
-      { timeoutMs: FIXTURE_TIMEOUT_MS },
+      {
+        timeoutMs: caseTimeoutMs,
+        reportMarker: 'SMOKE_CASE_RESULT ',
+      },
     ),
   };
 });

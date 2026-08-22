@@ -55,8 +55,9 @@
     "eval:prompts:final-readiness-supervision": "node --test eval/asserts/final-readiness-supervision.test.mjs && node eval/scripts/prepare.mjs final-readiness-supervision final-readiness-supervision-phase2 && node eval/scripts/run-evals.mjs final-readiness-supervision final-readiness-preservation",
     "eval:prompts:initial-review-external-identity-wiring": "node eval/scripts/prepare.mjs initial-review-external-identity-wiring && node eval/scripts/run-evals.mjs initial-review-external-identity-wiring",
     "eval:prompts:final-readiness-precision": "node eval/scripts/prepare.mjs final-readiness-precision && node eval/scripts/run-evals.mjs final-readiness-precision",
-    "test": "npm run test:type-contracts && node scripts/run-npm-test.mjs",
+    "test": "npm run test:type-contracts && npm run test:types && node scripts/run-npm-test.mjs",
     "test:type-contracts": "tsc --noEmit -p tsconfig.type-contracts.json",
+    "test:types": "tsc --noEmit -p tsconfig.tests.json",
     "test:pi-sdk-smoke": "node scripts/pi-sdk-cross-platform-smoke.mjs",
     "test:deepseek-harness:live": "npm test -- src/__tests__/deepseek-harness-live-smoke.test.ts",
     "test:unit": "vitest run --config vitest.config.unit.parallel.ts",
@@ -136,7 +137,7 @@
   "homepage": "https://github.com/nrslib/takt#readme",
   "type": "module",
   "engines": {
-    "node": ">=24.15.0"
+    "node": ">=22.22.0"
   },
   "files": [
     "dist/",
@@ -162,6 +163,9 @@
     "commander": "^12.1.0",
     "cross-spawn": "^7.0.6",
     "faceted-prompting": "^0.6.1",
+    "ink": "^7.1.1",
+    "react": "^19.2.8",
+    "string-width": "^8.2.2",
     "traced-config": "^0.3.0",
     "update-notifier": "^7.3.1",
     "wanakana": "^5.3.1",
@@ -171,12 +175,17 @@
   "devDependencies": {
     "@eslint/js": "^9.39.2",
     "@types/cross-spawn": "^6.0.6",
-    "@types/node": "^24.0.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.2.18",
     "@types/wanakana": "^4.0.6",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
+    "@xterm/headless": "^6.0.0",
     "eslint": "^9.0.0",
+    "ink-testing-library": "^4.0.0",
+    "node-pty": "^1.2.0-beta.15",
     "promptfoo": "^0.121.17",
+    "tsx": "4.22.4",
     "typescript": "^5.5.0",
     "typescript-eslint": "^8.53.1",
     "vitest": "^3.2.6"

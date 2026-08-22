@@ -409,7 +409,8 @@ export interface TeamLeaderWorkflowStep extends AgentWorkflowStepBase {
   concurrency?: never;
   arpeggio?: never;
   teamLeader: TeamLeaderConfig;
-  dynamicFacets?: never;
+  dynamicFacets?: DynamicFacetsConfig;
+  companion?: CompanionSelection;
 }
 
 export type AgentWorkflowStep =
@@ -417,6 +418,8 @@ export type AgentWorkflowStep =
   | ParallelWorkflowStep
   | ArpeggioWorkflowStep
   | TeamLeaderWorkflowStep;
+
+export type NormalOrTeamLeaderWorkflowStep = NormalAgentWorkflowStep | TeamLeaderWorkflowStep;
 
 export interface SystemWorkflowStep extends WorkflowStepBase {
   kind: 'system';
@@ -496,6 +499,12 @@ export function isNormalAgentWorkflowStep(step: WorkflowStep): step is NormalAge
     && step.arpeggio === undefined
     && step.teamLeader === undefined
   );
+}
+
+export function isNormalOrTeamLeaderWorkflowStep(
+  step: WorkflowStep,
+): step is NormalOrTeamLeaderWorkflowStep {
+  return isNormalAgentWorkflowStep(step) || step.teamLeader !== undefined;
 }
 
 export interface ArpeggioMergeStepConfig {

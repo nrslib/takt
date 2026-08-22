@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-description: 'TAKT interactive summary eval: Markdown preserves design intent while Gherkin captures behavior'
+description: 'TAKT interactive summary eval: Gherkin is always available and formal specification guidance is conditional'
 
 prompts:
   - file://task-instruction-gherkin-prompt.mjs
@@ -28,6 +28,7 @@ tests:
   - description: 'English source: design details stay in Markdown and observable behavior becomes focused Gherkin'
     vars:
       language: en
+      formalSpec: false
       conversation: |
         Add configurable retry handling to the payment flow. Extract the current
         retry decisions behind a RetryPolicy interface so payment providers do not
@@ -76,6 +77,7 @@ tests:
   - description: 'Japanese: abstraction intent stays in Markdown and boundary behavior becomes focused Gherkin'
     vars:
       language: ja
+      formalSpec: false
       conversation: |
         商品検索のキャッシュ処理を追加してほしい。キャッシュ方式は
         SearchCache インターフェースで抽象化し、検索ユースケースが Redis の
@@ -117,3 +119,28 @@ tests:
           Markdown 側に再掲せず、これらの境界を区別するために必要な最小限の Scenario
           にすること。Markdown で目的を大まかに説明することや、確認方法から Gherkin
           全体を参照することは重複とみなさない。
+
+  - description: 'Formal specification mode uses applicable notation without duplicate requirements or ASCII diagrams'
+    vars:
+      language: en
+      formalSpec: true
+      conversation: |
+        Add a lease service with Requested, Active, Expired, and Released states.
+        Activation is allowed only from Requested. An active lease eventually
+        becomes Expired unless it is released first. Each resource has at most one
+        active lease, and every lease belongs to exactly one resource and one owner.
+        Keep observable API behavior in Gherkin. Use formal notation only where it
+        is applicable, use actual syntax, and do not duplicate requirements.
+    assert:
+      - type: javascript
+        metric: task-instruction-formal-spec/no-ascii-diagram
+        value: |
+          return !/[+|][-=]{2,}|->.*->|\[[^\]]+\]\s*--/m.test(output);
+      - type: llm-rubric
+        metric: task-instruction-formal-spec/applicable-notation
+        value: |
+          Pass only if the generated task instruction uses actual Quint syntax for
+          the lease state-transition or temporal requirements and actual Alloy
+          syntax for the ownership/cardinality relationships. The same requirement
+          must not be repeated across Gherkin, Quint, Alloy, and Markdown. It must
+          not contain an ASCII diagram or invent pseudo-notation.

@@ -219,6 +219,7 @@ describe('bindWorkflowExecutionEvents', () => {
       });
       engine.emit('companion:review_round', {
         step: 'review',
+        reviewMode: 'live',
         companion: 'security-reviewer',
         trigger: 'quiet',
         digest: 'digest',
@@ -324,6 +325,7 @@ describe('bindWorkflowExecutionEvents', () => {
       const childScope = ['subworkflows', 'iteration-1--step-delegate--workflow-child'];
       const reviewRoundPayload = {
         step: 'review',
+        reviewMode: 'live',
         companion: 'security-reviewer',
         trigger: 'quiet',
         digest: 'child-digest',
@@ -417,6 +419,7 @@ describe('bindWorkflowExecutionEvents', () => {
       expect(records).toContainEqual(expect.objectContaining({
         type: 'companion_review_round',
         step: 'review',
+        reviewMode: 'live',
         companion: 'security-reviewer',
         trigger: 'quiet',
         digest: 'child-digest',
@@ -1132,6 +1135,66 @@ describe('bindWorkflowExecutionEvents', () => {
 
     const infoText = out.info.mock.calls.flat().map((value) => String(value)).join('\n');
     expect(infoText).not.toContain('127.0.0.1:8787');
+  });
+
+  it.each([
+    { fastMode: true, label: 'enabled' },
+    { fastMode: false, label: 'disabled' },
+  ])('verbose 時に Codex fast mode=%s と解決ソースを表示する', ({ fastMode, label }) => {
+    resetDebugLogger();
+    setVerboseConsole(true);
+    try {
+      const { engine, out } = createBridgeHarness({
+        currentProvider: 'codex',
+        configuredModel: 'gpt-5.2',
+      });
+      const step = {
+        name: 'review',
+        personaDisplayName: 'Reviewer',
+        instruction: '',
+      } as WorkflowStep;
+
+      engine.emit('step:start', step, 1, 'instruction', {
+        provider: 'codex',
+        model: 'gpt-5.2',
+        providerOptions: { codex: { fastMode } },
+        providerOptionsSources: { 'codex.fastMode': 'project' },
+      }, 'parent', step.name);
+
+      const infoLines = out.info.mock.calls.map(([value]) => String(value));
+      expect(infoLines).toContain(`Fast mode: ${label} (source: project)`);
+    } finally {
+      resetDebugLogger();
+    }
+  });
+
+  it('Codex fast mode が未指定ならサマリー行を表示しない', () => {
+    resetDebugLogger();
+    setVerboseConsole(true);
+    try {
+      const { engine, out } = createBridgeHarness({
+        currentProvider: 'codex',
+        configuredModel: 'gpt-5.2',
+      });
+      const step = {
+        name: 'review',
+        personaDisplayName: 'Reviewer',
+        instruction: '',
+      } as WorkflowStep;
+
+      engine.emit('step:start', step, 1, 'instruction', {
+        provider: 'codex',
+        model: 'gpt-5.2',
+        providerOptions: { codex: { reasoningEffort: 'high' } },
+      }, 'parent', step.name);
+
+      const fastModeLines = out.info.mock.calls
+        .map(([value]) => String(value))
+        .filter((line) => line.startsWith('Fast mode:'));
+      expect(fastModeLines).toEqual([]);
+    } finally {
+      resetDebugLogger();
+    }
   });
 
   it('verbose 時に Claude SDK base URL を伏せて解決ソースを表示する', () => {
@@ -1890,11 +1953,11 @@ describe('bindWorkflowExecutionEvents', () => {
     ]);
   });
 
-  it('CT-COMP-11 should preserve all companion actions in event sink and analytics payloads', async () => {
+  it('CT-COMP-11 should preserve companion review mode and trigger across event and analytics bridges', async () => {
     const eventSink = vi.fn().mockResolvedValue(undefined);
     const { bridge, engine, analyticsEmitter, out, sessionLogger } = createBridgeHarness({ eventSink });
     const events = [
-      ['companion:start', { step: 'implement', companion: 'security-reviewer' }],
+      ['companion:start', { step: 'implement', companion: 'security-reviewer', reviewMode: 'completion' }],
       ['companion:pool_selected', {
         step: 'implement',
         selected: ['design-reviewer'],
@@ -1914,6 +1977,7 @@ describe('bindWorkflowExecutionEvents', () => {
       }],
       ['companion:review_round', {
         step: 'implement',
+        reviewMode: 'live',
         companion: 'security-reviewer',
         trigger: 'quiet',
         digest: 'digest-2',
@@ -1961,7 +2025,7 @@ describe('bindWorkflowExecutionEvents', () => {
     await bridge.flushEventSink();
 
     expect(eventSink.mock.calls.map(([event]) => event)).toEqual([
-      { type: 'companion', action: 'start', step: 'implement', companion: 'security-reviewer' },
+      { type: 'companion', action: 'start', step: 'implement', companion: 'security-reviewer', reviewMode: 'completion' },
       {
         type: 'companion',
         action: 'pool_selected',
@@ -1995,6 +2059,7 @@ describe('bindWorkflowExecutionEvents', () => {
         type: 'companion',
         action: 'review_round',
         step: 'implement',
+        reviewMode: 'live',
         companion: 'security-reviewer',
         trigger: 'quiet',
         digest: 'digest-2',
@@ -2021,11 +2086,16 @@ describe('bindWorkflowExecutionEvents', () => {
       },
     ]);
     expect(sessionLogger.onCompanionReviewRound).toHaveBeenCalledWith(events[5][1]);
+    expect(sessionLogger.onCompanionReviewRound).toHaveBeenCalledWith(expect.objectContaining({
+      reviewMode: 'live',
+      trigger: 'quiet',
+    }));
     expect(sessionLogger.onCompanionQueueCoalesced).toHaveBeenCalledWith(events[6][1]);
     expect(analyticsEmitter.onCompanionEvent.mock.calls.map(([name]) => name))
       .toEqual(events.map(([name]) => name));
     expect(analyticsEmitter.onCompanionEvent).toHaveBeenNthCalledWith(6, 'companion:review_round', {
       step: 'implement',
+      reviewMode: 'live',
       companion: 'security-reviewer',
       trigger: 'quiet',
       digest: 'digest-2',

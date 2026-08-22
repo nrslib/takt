@@ -5,6 +5,20 @@ import {
   normalizeTaktSelectorProvider,
 } from '../infra/config/configNormalizers.js';
 import { normalizeProviderOptions } from '../infra/config/providerOptions.js';
+import { StepProviderOptionsObjectSchema } from '../core/models/schema-base.js';
+import type { StepProviderOptions } from '../core/models/workflow-provider-options.js';
+
+describe('Codex fast mode provider option schema', () => {
+  it.each([true, false])('accepts an explicit boolean value: %s', (fastMode) => {
+    expect(StepProviderOptionsObjectSchema.parse({ codex: { fast_mode: fastMode } })).toEqual({
+      codex: { fast_mode: fastMode },
+    });
+  });
+
+  it('rejects a non-boolean fast mode value', () => {
+    expect(() => StepProviderOptionsObjectSchema.parse({ codex: { fast_mode: 'true' } })).toThrow();
+  });
+});
 
 describe('denormalizeProviderOptions', () => {
   it('should convert camelCase provider options into persisted snake_case format', () => {
@@ -146,6 +160,14 @@ describe('denormalizeProviderOptions', () => {
         permissionControl: 'codex',
       },
     });
+    expect(denormalizeProviderOptions(normalizedProviderOptions)).toEqual(rawProviderOptions);
+  });
+
+  it.each([true, false])('should normalize and denormalize Codex fast_mode=%s', (fastMode) => {
+    const rawProviderOptions = { codex: { fast_mode: fastMode } };
+    const normalizedProviderOptions = normalizeProviderOptions(rawProviderOptions);
+
+    expect(normalizedProviderOptions).toEqual({ codex: { fastMode } });
     expect(denormalizeProviderOptions(normalizedProviderOptions)).toEqual(rawProviderOptions);
   });
 
@@ -417,6 +439,24 @@ describe('buildRawTaktProvidersOrThrow', () => {
             max_tokens: 4096,
           },
         },
+      },
+    });
+  });
+
+  it.each([true, false])('should preserve Codex fastMode=%s through the strict normalized selector schema', (fastMode) => {
+    const providerOptions: StepProviderOptions = {
+      codex: { fastMode },
+    };
+
+    expect(buildRawTaktProvidersOrThrow({
+      selector: {
+        provider: 'codex',
+        providerOptions,
+      },
+    })).toEqual({
+      selector: {
+        provider: 'codex',
+        provider_options: { codex: { fast_mode: fastMode } },
       },
     });
   });

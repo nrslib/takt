@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import type { NdjsonRecord, NdjsonWorkflowStackEntry, PromptLogRecord } from '../../../shared/utils/index.js';
+import type { NdjsonRecord, NdjsonWorkflowStackEntry } from '../../../shared/utils/index.js';
 import {
   buildPhaseExecutionId,
   parsePhaseExecutionId,
@@ -9,6 +9,7 @@ import type {
   TracePhase,
 } from './traceReportTypes.js';
 import { buildWorkflowStepScopeKey } from './workflowStepScope.js';
+import type { PromptLogRecord } from './promptLog.js';
 
 interface PromptRecord extends PromptLogRecord {
   timestamp: string;

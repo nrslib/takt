@@ -40,7 +40,7 @@ TAKT 是一个开源 CLI，可将 AI 编码智能体变成可重复的开发工�
 - 在隔离的 worktree 中执行排队任务，并在之后查看日志和报告
 - 使用 Claude Code、Claude SDK、Codex SDK、OpenCode SDK、Pi SDK、官方 DeepSeek Harness SDK、Cursor、GitHub Copilot CLI 或 Kiro 作为 provider
 
-**T**AKT **A**gent **K**oordination **T**opology 用结构化审查循环、受管理的 prompt 和防护措施来编排多个 AI 智能体。
+**T**AKT **A**gent **K**oordination **T**opology 通过审查循环、prompt 管理和按 step 划分的权限来编排多个 AI 智能体。
 
 先和 AI 对话描述需求，再将需求加入任务队列，最后运行 `takt run`。规划、实现、审查和修复循环都定义在 YAML workflow 文件中，不会把整个流程交给智能体自行决定。TAKT 让 Claude Code、Codex、OpenCode、Pi、官方 DeepSeek Harness SDK、Cursor、GitHub Copilot CLI 和 Kiro CLI 以不同的角色、权限和上下文协作。
 
@@ -50,19 +50,17 @@ TAKT 本身也是用 TAKT 开发的（dogfooding）。
 
 ## 为什么选择 TAKT
 
-AI 编码智能体很强大，但不会自动形成稳定的开发流程。在长时间工作中，它们可能忘记指令、积累被污染的上下文、混淆实现与审查职责，还会迫使人类反复提出相同的反馈。
+AI 编码智能体不会自动形成稳定的开发流程。在长时间工作中，它们可能忘记指令、积累被污染的上下文、混淆实现与审查职责，还会迫使人类反复提出相同的反馈。
 
 把更多规则写入 prompt、`CLAUDE.md` 或 skill 会有所帮助，却不能真正强制流程；规则是否被遵守仍取决于智能体自身的行为。
 
-TAKT 将 AI 智能体视为需要从外部控制的对象，而不是只能被信任的对象。
+TAKT 将 AI 智能体视为需要从外部控制的对象，而不是仅仅依赖信任。
 
 workflow 定义阶段，每个 step 获得自己的 persona、policy、knowledge、instruction 和 output contract。TAKT 以声明式方式管理实现、审查、修复和再次审查。把职责、知识和限制分开，再只向当前 step 提供所需内容，可以避免上下文膨胀并提高任务质量。
 
 审查不会被静默跳过。发现问题后，工作会回到修复 step；需要时也可以请求人工判断。任务在隔离的 worktree 中运行，每个 step 都留下日志和报告，因此从任务到 PR 的路径可以追溯。
 
-TAKT 的核心是运行可复用的智能体流程：流程拥有角色、阶段、判断和反馈循环。
-
-目标很简单：不依赖人类持续介入，让开发流程可复用、可审查、可复现。
+TAKT 将这些环节组织为由角色、阶段、判断和反馈循环组成的可复用智能体流程；开发流程因此不依赖人类持续介入，保持可审查、可复现。
 
 ## 5 分钟试用
 
@@ -103,7 +101,7 @@ takt list
 
 ## 要求
 
-TAKT 需要 Node.js `>=24.15.0`。
+TAKT 需要 Node.js `>=22.22.0`。
 
 所选 provider 决定是否需要外部 CLI，或者是否只用 Node.js 即可通过 TypeScript SDK 运行。
 
@@ -162,8 +160,8 @@ $ takt
 Select workflow:
   ❯ 🎼 default (current)
     📁 🚀 Quick Start/
-    📁 🎨 Frontend/
-    📁 ⚙️ Backend/
+    📁 🛠️ Development/
+    📁 🔍 Review/
 
 > Add user authentication with JWT
 
@@ -251,14 +249,16 @@ steps:
 
 | Workflow | 用途 |
 |----------|------|
-| `default` | 标准开发流程，包含测试优先、多视角并行审查和修复循环 |
-| `frontend` | 前端开发流程 |
-| `backend` | 后端开发流程 |
-| `dual` | 前端与后端组合流程 |
+| `default` | 标准开发流程。基于场景的规划与测试优先开发，配合动态实现 companion、多视角并行审查、裁定和收敛式修复循环 |
+| `maintenance` | 面向既有代码库的 `default` 变体：保护变更范围外的契约，只做与请求有因果关系的修改 |
+| `simple` | 与 `pure` 相同的最小结构，TAKT 按变更内容自动选择并注入领域 facet 的轻量流程；始终包含 AI 反模式与架构指导 |
+| `pure` | 不注入领域 facet 的最小流程，信任模型自身的判断与 skill 选择 |
 | `takt-default` | TAKT 自身使用的开发流程，也适用于其他 CLI 工具 |
-| `frontend-maintenance` | 前端生产维护流程 |
-| `backend-maintenance` | 后端生产维护流程 |
-| `*-mini` 系列 | 各 workflow 的轻量版本，省略 `write_tests` |
+| `takt-default-team` | 通过 Team Leader 任务分解执行实现与修复的 `takt-default` 变体 |
+| `review` | 按变更动态选择 reviewer 并由 supervisor 汇总的多视角审查，不修改代码 |
+| `review-fix` | 按变更动态选择 reviewer 的多视角审查，随后使用标准 workflow 的裁定、验证修复循环和最终需求检查收敛 |
+
+领域特化系列（`simple-*` / `frontend` / `backend` / `dual` / CQRS / `*-mini` 变体）仍可在 📦 Legacy 分类中使用。
 
 所有 builtin workflow 和 persona 请参阅 [Builtin Catalog](./builtin-catalog.md)。
 

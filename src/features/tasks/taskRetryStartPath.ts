@@ -20,7 +20,6 @@ import { resolveWorkflowCallTarget } from '../../infra/config/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
 
 const TASK_RETRY_PATH_SEPARATOR = ' > ';
-export const TASK_RETRY_START_PAGE_SIZE = 50;
 
 export interface TaskRetryStartPathContext {
   projectCwd: string;
@@ -31,27 +30,31 @@ export interface ResolvedTaskRetryPath {
   segments: string[];
 }
 
-export interface TaskRetryRestartLevel {
-  workflow: WorkflowConfig;
-  stack: WorkflowRestartPointEntry[];
-  segments: string[];
-  ancestors: string[];
-}
-
-export interface TaskRetryRestartPageItem {
-  stepIndex: number;
+/** A selectable authored leaf step in the restart tree. */
+export interface TaskRetryRestartTreeLeaf {
+  kind: 'leaf';
   step: WorkflowStep;
+  /** Nesting depth (root steps are 0, children of a workflow_call are +1). */
+  depth: number;
+  /** Unique position path within the tree, used to derive a stable row value. */
+  id: string;
   restartPoint: WorkflowRestartPoint;
-  segments: string[];
 }
 
-export interface TaskRetryRestartPage {
-  items: TaskRetryRestartPageItem[];
-  pageNumber: number;
-  pageCount: number;
-  previousStartIndex?: number;
-  nextStartIndex?: number;
+/** A non-selectable workflow_call heading that expands its child steps. */
+export interface TaskRetryRestartTreeHeading {
+  kind: 'heading';
+  step: WorkflowStep;
+  depth: number;
+  id: string;
+  children: TaskRetryRestartTreeNode[];
+  /** Reason the branch could not be expanded (degraded rendering). */
+  note?: string;
 }
+
+export type TaskRetryRestartTreeNode =
+  | TaskRetryRestartTreeLeaf
+  | TaskRetryRestartTreeHeading;
 
 interface ResolveTaskRetryStackOptions {
   allowParallelEntries: boolean;
@@ -118,78 +121,103 @@ export function formatTaskRetryPath(segments: readonly string[]): string {
     .join(TASK_RETRY_PATH_SEPARATOR);
 }
 
-export class TaskRetryRestartBrowser {
-  private readonly context: TaskRetryStartPathContext;
+interface TaskRetryTreeLevelContext {
+  workflow: WorkflowConfig;
+  stack: readonly WorkflowRestartPointEntry[];
+  ancestors: readonly string[];
+  depth: number;
+  idPrefix: string;
+}
 
-  constructor(context: TaskRetryStartPathContext) {
-    this.context = context;
-  }
-
-  createRootLevel(rootWorkflow: WorkflowConfig): TaskRetryRestartLevel {
-    return {
+/**
+ * Expand a workflow into a restart tree: authored non-call steps become
+ * selectable leaves carrying their cumulative restart stack, and each
+ * workflow_call step becomes a heading that recursively expands its callee.
+ * A branch that cannot be resolved (unknown/non-callable/cycle/depth) is kept
+ * as a heading annotated with the reason instead of aborting the whole tree.
+ * Headings that expand to no selectable descendant are pruned.
+ */
+export function buildTaskRetryRestartTree(
+  rootWorkflow: WorkflowConfig,
+  context: TaskRetryStartPathContext,
+): TaskRetryRestartTreeNode[] {
+  return buildTaskRetryTreeLevel(
+    {
       workflow: rootWorkflow,
       stack: [],
-      segments: [rootWorkflow.name],
       ancestors: [getWorkflowReference(rootWorkflow)],
-    };
-  }
+      depth: 0,
+      idPrefix: '',
+    },
+    context,
+  );
+}
 
-  getPage(level: TaskRetryRestartLevel, startIndex: number): TaskRetryRestartPage {
-    if (!Number.isInteger(startIndex) || startIndex < 0 || startIndex >= level.workflow.steps.length) {
-      throw new Error(`Invalid task retry page start index: ${startIndex}`);
+function buildTaskRetryTreeLevel(
+  level: TaskRetryTreeLevelContext,
+  context: TaskRetryStartPathContext,
+): TaskRetryRestartTreeNode[] {
+  const nodes: TaskRetryRestartTreeNode[] = [];
+  level.workflow.steps.forEach((step, index) => {
+    if (!isWorkflowRestartTarget(step)) {
+      return;
     }
-    const pageCount = Math.ceil(level.workflow.steps.length / TASK_RETRY_START_PAGE_SIZE);
-    const pageNumber = Math.floor(startIndex / TASK_RETRY_START_PAGE_SIZE) + 1;
-    const normalizedStart = (pageNumber - 1) * TASK_RETRY_START_PAGE_SIZE;
-    const pageSteps = level.workflow.steps.slice(
-      normalizedStart,
-      normalizedStart + TASK_RETRY_START_PAGE_SIZE,
-    );
-    const items = pageSteps.flatMap((step, offset): TaskRetryRestartPageItem[] => {
-      if (!isWorkflowRestartTarget(step)) {
-        return [];
+    const id = level.idPrefix === '' ? String(index) : `${level.idPrefix}.${index}`;
+    const entry = createRestartEntry(level.workflow, step);
+    if (isWorkflowCallStep(step)) {
+      const heading = buildTaskRetryHeadingNode(level, step, entry, id, context);
+      if (heading !== undefined) {
+        nodes.push(heading);
       }
-      const entry = createRestartEntry(level.workflow, step);
-      return [{
-        stepIndex: normalizedStart + offset,
-        step,
-        restartPoint: {
-          stack: [...level.stack, entry],
-        },
-        segments: [...level.segments, step.name],
-      }];
-    });
-    const previousStartIndex = normalizedStart === 0
-      ? undefined
-      : normalizedStart - TASK_RETRY_START_PAGE_SIZE;
-    const nextStartIndex = pageNumber === pageCount
-      ? undefined
-      : normalizedStart + TASK_RETRY_START_PAGE_SIZE;
-    return {
-      items,
-      pageNumber,
-      pageCount,
-      ...(previousStartIndex === undefined ? {} : { previousStartIndex }),
-      ...(nextStartIndex === undefined ? {} : { nextStartIndex }),
-    };
-  }
-
-  openChild(
-    level: TaskRetryRestartLevel,
-    item: TaskRetryRestartPageItem,
-  ): TaskRetryRestartLevel {
-    if (!isWorkflowCallStep(item.step)) {
-      throw new Error(`Task retry path step "${item.step.name}" is not a workflow_call`);
+      return;
     }
-    const child = resolveCallableChild(level.workflow, item.step, this.context);
+    nodes.push({
+      kind: 'leaf',
+      step,
+      depth: level.depth,
+      id,
+      restartPoint: { stack: [...level.stack, entry] },
+    });
+  });
+  return nodes;
+}
+
+function buildTaskRetryHeadingNode(
+  level: TaskRetryTreeLevelContext,
+  step: Extract<WorkflowStep, { kind: 'workflow_call' }>,
+  entry: WorkflowRestartPointEntry,
+  id: string,
+  context: TaskRetryStartPathContext,
+): TaskRetryRestartTreeHeading | undefined {
+  let children: TaskRetryRestartTreeNode[] = [];
+  let note: string | undefined;
+  try {
+    const child = resolveCallableChild(level.workflow, step, context);
     assertCallableChildBoundary(child, level.ancestors);
-    return {
-      workflow: child,
-      stack: item.restartPoint.stack,
-      segments: [...item.segments, child.name],
-      ancestors: [...level.ancestors, getWorkflowReference(child)],
-    };
+    children = buildTaskRetryTreeLevel(
+      {
+        workflow: child,
+        stack: [...level.stack, entry],
+        ancestors: [...level.ancestors, getWorkflowReference(child)],
+        depth: level.depth + 1,
+        idPrefix: id,
+      },
+      context,
+    );
+  } catch (error) {
+    note = error instanceof Error ? error.message : String(error);
   }
+  if (children.length === 0 && note === undefined) {
+    return undefined;
+  }
+  return {
+    kind: 'heading',
+    step,
+    depth: level.depth,
+    id,
+    children,
+    ...(note === undefined ? {} : { note }),
+  };
 }
 
 function resolveTaskRetryStackPathWithOptions(

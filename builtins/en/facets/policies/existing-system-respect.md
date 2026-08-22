@@ -1,118 +1,54 @@
 # Existing System Respect Policy
 
-For released or operational systems, make changes that are causally related to the request and do not change existing contracts that lack that relationship.
+For released or operational systems, make only changes causally related to the request and preserve existing contracts outside the change scope. This policy limits the scope of changes and fixes; it does not limit investigation or finding reports by specialist reviewers.
 
 ## Principles
 
 | Principle | Criteria |
 |-----------|----------|
-| Existing contracts first | Preserve contracts outside the requested change scope that users, tests, and operations rely on |
-| Causal diff | Make changes causally related to the request; exclude changes without causal relationship |
-| Necessity over proximity | Do not use nearby code as a reason to change it |
-| Respect existing structure | Do not change file placement, type names, public APIs, or responsibility boundaries without causal relationship to the request |
-| Preserve comments | Do not delete comments that explain intent, constraints, or calculation rationale |
-| Tests are contracts | Do not treat observable behavior directly asserted by existing tests as incidental. A test's existence alone does not make internal structure a contract |
-| Verify external contracts from primary evidence | Confirm behavior of external services, SDKs, and generated artifacts from official specs or actual types/schemas |
-| Causal improvement judgment | Perform style improvements and refactoring when causally related to the request. Do not mix improvements without causal relationship |
-| Protect unrelated code | Prioritize preserving existing behavior and structure that is not causally related to the request |
+| Existing contracts first | Preserve contracts outside the requested change scope that existing users, tests, and operations depend on |
+| Causal diff | Make only changes required by the request and changes needed to connect, verify, or keep them consistent |
+| Necessity over proximity | Do not use the same file, nearby responsibility, or general style as justification for a change |
+| Respect existing structure | Do not change file placement, type names, public APIs, or responsibility boundaries without a causal relationship to the request |
+| Preserve observable contracts | Do not treat UI, accessibility, tests, logs, APIs, types, file placement, or comments recording intent, constraints, or calculation rationale as incidental |
+| Primary evidence | Verify external-service, SDK, and generated-artifact contracts from official specifications or actual types and schemas |
 
-## Change Boundary
+## Separation of Investigation, Findings, and Remediation Authority
 
-| Criteria | Verdict |
-|----------|---------|
+- Do not use this policy to limit a specialist reviewer's investigation scope or finding reports.
+- Report causally related robustness, security, and correctness problems normally under the criteria of each specialist policy.
+- Do not downgrade, suppress, or dismiss a finding that satisfies a specialist policy's criteria because of this policy.
+- The `review-adjudication` policy is the source of truth for authority to remediate a finding in the current change. When this policy conflicts with an adjudication, follow `review-adjudication`.
+
+## Change and Remediation Boundary
+
+| Situation | Verdict |
+|-----------|---------|
 | Change required to satisfy the request | OK |
-| Call-site update required to wire a necessary change | OK |
-| Local fix required to prevent side effects of a necessary change | OK |
-| Structural change or refactoring causally related to the request | OK |
-| Cleanup justified only because the file was touched | REJECT |
-| Moving files, renaming types, or changing public APIs without causal relationship to the request | REJECT |
-| Mixing framework-style improvements not causally related to the request | REJECT |
-| Including improvements not causally related to the request | REJECT |
+| Change needed to connect, verify, or keep a required change consistent | OK |
+| Local fix needed to stop a side effect introduced by a required change | OK |
+| Structural change causally related to the request or valid adjudication | OK. Record the reason and impact scope |
+| Cleanup, rename, move, or public-contract change justified only by proximity to touched code | REJECT |
+| Style improvement, refactoring, or test-expectation weakening without causal relationship to the request | REJECT |
 
-## Priority Against Other Policies
+Plan rationale alone does not authorize changing an existing contract. Such a change requires an explicit user request, an acceptance criterion, or remediation authority recognized by `review-adjudication`.
 
-In existing-system maintenance, apply general quality policies such as coding, frontend, design-fidelity, and testing within the scope causally related to the request.
+## Contract Checks
 
-| Conflict | Verdict |
-|----------|---------|
-| General quality criteria suggest an improvement, but it is not causally related to the request | Do not change |
-| Existing structure is imperfect, but not causally related to the request | Preserve existing structure |
-| Satisfying a quality criterion requires changing an existing contract | Requires an explicit user request or plan-level rationale |
-| Structural change causally related to the request | Make it with reason and impact scope documented |
-
-## Observable Contracts
-
-UI, accessibility, tests, logs, APIs, types, file placement, and comments can be contracts observed by users or developers.
-
-| Contract | Change condition |
-|----------|------------------|
-| UI copy, accessible names, role/state | Change only when causally related to the request |
-| Hook return values, Props type names, public function names | Change only when required for caller updates causally related to the request |
-| Test expectations | Change only when the requested behavior changes |
-| Comments | Change only when correcting inaccurate comments or when code makes them truly obsolete |
-| File placement | Change only when causally related to the request |
-
-## External Dependency Contracts
-
-Treat behavior of external services, SDKs, generated code, schemas, and CLIs as boundary contracts of the existing system. Do not infer one operation's error types, statuses, return values, idempotency, limits, or optionality from another operation without verification.
-
-| Criteria | Verdict |
-|----------|---------|
-| The concrete contract is verified from official specs, actual type definitions, generated schemas, or existing equivalent implementation | OK |
-| Error types, statuses, or return values from a different operation in the same service are generalized as "equivalent" and reused for an unverified operation | REJECT |
-| Compile success, mock success, or stub expectations alone are treated as proof of the external contract | REJECT |
-| Plans or implementation guidelines keep vague external-contract wording such as "equivalent" or "same as" | REJECT |
-| When the external contract cannot be verified, the unverified scope, risk, and verification method are recorded | OK |
-
-## Test Changes
-
-Tests should distinguish existing contracts from new requirements, not merely follow the implementation.
-
-| Pattern | Verdict |
-|---------|---------|
-| Add tests for new requirements | OK |
-| Add regression tests to preserve existing contracts | OK |
-| Delete an internal-structure test in the owning test set when it maps to no observable contract | OK. Do not clean unrelated test sets |
-| Merely weaken existing expectations to match implementation changes | REJECT |
-| Remove tested existing behavior to make tests pass | REJECT |
-| Delete tests because they obstruct the new implementation | REJECT |
+| Target | Criteria |
+|--------|----------|
+| UI copy, accessible names, role/state | Change only when causally related to an authorized requirement |
+| Return structures, public type names, consumer interfaces, public function names | Make only consumer updates required by an authorized change |
+| Test expectations | Change only for a requested specification change; do not weaken them for implementation convenience |
+| Comments | Change only to correct an error or when removal of the relevant code makes them wholly obsolete |
+| External dependency contracts | Do not generalize operation-specific errors, states, return values, idempotency, limits, or optionality without primary evidence |
 
 ## Pre-Completion Check
 
-Before completion, classify the full diff as required changes, related changes, or unnecessary changes. Do not complete while unnecessary changes remain.
+Classify the full diff using the following criteria and do not complete while an `unnecessary` change remains.
 
 | Classification | Criteria |
 |----------------|----------|
-| Required change | The request fails without it |
-| Related change | Needed to connect, verify, or keep a required change consistent |
-| Unnecessary change | Not causally related to the request; justified only by readability, style, cleanup, or future extensibility |
-
-## existing-system Criteria
-
-### Existing System Contracts
-
-| Criteria | Judgment |
-|----------|----------|
-| User-visible copy or state changes | Contract change |
-| A value asserted by tests changes | Contract change |
-| Hook or component call shape changes | Contract change |
-| Only file placement or type names change | May still be a maintenance contract change |
-| Closed internal duplication is removed | Internal change if impact is contained |
-
-### Diff Classification
-
-| Classification | Decision criteria |
-|----------------|-------------------|
-| Required change | Directly required to satisfy the request |
-| Related change | Required to wire, verify, or keep a required change consistent |
-| Unnecessary change | The request still succeeds without it |
-| Dangerous unnecessary change | The request still succeeds without it and it changes an existing contract |
-
-### Conflicts With General Quality Criteria
-
-| Situation | Judgment |
-|-----------|----------|
-| Component extraction would look cleaner but is not causally related to the request | Do not change |
-| Renaming or relocating Props types only to match common style | Do not change |
-| The existing structure cannot satisfy the request | Change within the causally related scope |
-| The existing structure is the cause of the bug | Change it with reason and impact scope documented |
+| `required` | The request cannot be satisfied without it |
+| `related` | Needed to connect, verify, or keep a `required` change consistent |
+| `unnecessary` | Lacks causal relationship to the request and is justified only by readability, style, incidental cleanup, or future extensibility |

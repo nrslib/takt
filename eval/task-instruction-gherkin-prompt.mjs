@@ -3,6 +3,7 @@ import { buildSummaryPrompt } from '../dist/features/interactive/interactive-sum
 export default async function buildTaskInstructionGherkinPrompt({ vars }) {
   const language = vars.language === 'ja' ? 'ja' : 'en';
   const conversationLabel = language === 'ja' ? '## 会話履歴' : '## Conversation History';
+  const formalSpec = vars.formalSpec === true || vars.formalSpec === 'true';
 
   return buildSummaryPrompt(
     [{ role: 'user', content: String(vars.conversation ?? '') }],
@@ -13,6 +14,6 @@ export default async function buildTaskInstructionGherkinPrompt({ vars }) {
     undefined,
     undefined,
     undefined,
-    true,
+    formalSpec,
   );
 }

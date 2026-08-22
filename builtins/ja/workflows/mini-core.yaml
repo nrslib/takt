@@ -87,6 +87,7 @@ steps:
       development_knowledge:
         $param: development_knowledge
       implementation_instruction: implement
+      scope_report_format: coder-scope
     rules:
       - condition: 実装が完了した
         next: reviewers

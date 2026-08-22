@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import * as path from 'node:path';
 import {
   createBashToolDefinition,
@@ -33,6 +34,7 @@ import {
 } from '../../shared/types/agent-failure.js';
 import type { StreamCallback } from '../../shared/types/provider.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
+import { safeExternalErrorMessage } from '../../shared/utils/safeExternalErrorMessage.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import type { ProviderImageAttachment } from '../providers/types.js';
 import { validateProviderImageAttachments } from '../providers/imageAttachments.js';
@@ -198,6 +200,9 @@ function resolvePiModel(
 function assertSafeExtensionSources(sources: readonly string[]): void {
   for (const source of sources) {
     const trimmedSource = source.trim();
+    if (trimmedSource.startsWith('npm:') && !getSafeNpmPackageName(trimmedSource)) {
+      throw new Error('Pi npm extension sources must use a valid package name');
+    }
     const candidate = trimmedSource.startsWith('git:') && !trimmedSource.startsWith('git://')
       ? trimmedSource.slice('git:'.length)
       : trimmedSource;
@@ -248,38 +253,442 @@ function enabledResourcePaths(paths: ResolvedPaths, key: keyof ResolvedPaths): s
     .map((resource) => resource.path);
 }
 
-async function resolvePiResources(
+function countEnabledResolvedResources(paths: ResolvedPaths): number {
+  return enabledResourcePaths(paths, 'extensions').length
+    + enabledResourcePaths(paths, 'skills').length
+    + enabledResourcePaths(paths, 'prompts').length
+    + enabledResourcePaths(paths, 'themes').length;
+}
+
+function mergeResolvedPaths(base: ResolvedPaths, additions: ResolvedPaths): ResolvedPaths {
+  return {
+    extensions: [...base.extensions, ...additions.extensions],
+    skills: [...base.skills, ...additions.skills],
+    prompts: [...base.prompts, ...additions.prompts],
+    themes: [...base.themes, ...additions.themes],
+  };
+}
+
+function isNpmExtensionSource(source: string): boolean {
+  return source.trim().startsWith('npm:');
+}
+
+function getSafeNpmPackageName(source: string): string | undefined {
+  const trimmed = source.trim();
+  if (!trimmed.startsWith('npm:')) {
+    return undefined;
+  }
+  const spec = trimmed.slice('npm:'.length);
+  const versionDelimiter = spec.startsWith('@')
+    ? spec.indexOf('@', spec.indexOf('/') + 1)
+    : spec.indexOf('@');
+  const packageName = versionDelimiter >= 0 ? spec.slice(0, versionDelimiter) : spec;
+  const unscopedName = /^[a-z0-9][a-z0-9._~-]*$/u;
+  const scopedName = /^@[a-z0-9][a-z0-9._~-]*\/[a-z0-9._~-]+$/u;
+  if (scopedName.test(packageName)) {
+    const member = packageName.slice(packageName.indexOf('/') + 1);
+    if (member === '.' || member === '..') {
+      return undefined;
+    }
+  }
+  return unscopedName.test(packageName) || scopedName.test(packageName)
+    ? packageName
+    : undefined;
+}
+
+function isVersionQualifiedNpmExtensionSource(source: string): boolean {
+  const spec = source.trim().slice('npm:'.length);
+  return spec.startsWith('@') ? spec.indexOf('@', 1) >= 0 : spec.includes('@');
+}
+
+interface InstalledPackageLookup {
+  getInstalledPath(source: string): string | undefined;
+}
+
+type ExtensionSourceScope = 'project' | 'user' | 'temporary';
+
+interface ExtensionCandidateFailure {
+  scope: ExtensionSourceScope;
+  reason: string;
+}
+
+type ExtensionLoadError = LoadExtensionsResult['errors'][number];
+
+interface ResolvedExtensionCandidate {
+  scope: ExtensionSourceScope;
+  paths: ResolvedPaths;
+}
+
+interface ExtensionSourceSearch {
+  source: string;
+  scopes: readonly ExtensionSourceScope[];
+  nextScopeIndex: number;
+  failures: ExtensionCandidateFailure[];
+}
+
+interface ExtensionSourceResolution extends ExtensionSourceSearch {
+  candidate: ResolvedExtensionCandidate;
+}
+
+type ExtensionPackageManager = Pick<
+  DefaultPackageManager,
+  'getInstalledPath' | 'resolveExtensionSources'
+>;
+
+function createProjectInstalledPackageLookup(
+  cwd: string,
+  agentDir: string,
+): InstalledPackageLookup {
+  // This manager exists only to pass the SDK's project-storage trust guard for
+  // a read-only existence lookup. Its settings are in-memory, it is never given
+  // to the resource loader, and no mutating or resolving methods escape.
+  const lookupSettingsManager = SettingsManager.inMemory({}, { projectTrusted: true });
+  const lookupPackageManager = new DefaultPackageManager({
+    cwd,
+    agentDir,
+    settingsManager: lookupSettingsManager,
+  });
+  const projectPackageRoot = path.resolve(cwd, '.pi', 'npm', 'node_modules');
+  return {
+    getInstalledPath: (source) => {
+      const installedPath = lookupPackageManager.getInstalledPath(source, 'project');
+      if (!installedPath) {
+        return undefined;
+      }
+      let canonicalProjectPackageRoot: string;
+      let canonicalInstalledPath: string;
+      try {
+        canonicalProjectPackageRoot = realpathSync(projectPackageRoot);
+        canonicalInstalledPath = realpathSync(installedPath);
+      } catch (error) {
+        throw new Error(
+          `Project package path could not be verified: ${getErrorMessage(error)}`,
+          { cause: error },
+        );
+      }
+      const relativePath = path.relative(canonicalProjectPackageRoot, canonicalInstalledPath);
+      if (relativePath === '' || relativePath === '..' || relativePath.startsWith(`..${path.sep}`)
+        || path.isAbsolute(relativePath)) {
+        throw new Error('Project package path is outside project package storage');
+      }
+      return canonicalInstalledPath;
+    },
+  };
+}
+
+function extensionSourceDiagnosticLabel(source: string): string {
+  if (isNpmExtensionSource(source)) {
+    const packageName = getSafeNpmPackageName(source);
+    return packageName === undefined ? 'npm source' : `npm:${packageName}`;
+  }
+  const trimmed = source.trim();
+  if (trimmed.startsWith('git:')) {
+    return 'git source';
+  }
+  return 'local source';
+}
+
+function extensionCandidateFailureReason(error: unknown): string {
+  const reason = safeExternalErrorMessage(error).trim();
+  return reason || 'unknown resolution failure';
+}
+
+function recordExtensionCandidateFailure(
+  source: string,
+  failures: ExtensionCandidateFailure[],
+  scope: ExtensionSourceScope,
+  error: unknown,
+): void {
+  const reason = extensionCandidateFailureReason(error);
+  failures.push({ scope, reason });
+  log.debug('Pi extension candidate failed', {
+    source: extensionSourceDiagnosticLabel(source),
+    scope,
+    reason,
+  });
+}
+
+function formatExtensionSourceResolutionFailure(
+  source: string,
+  failures: readonly ExtensionCandidateFailure[],
+): Error {
+  const details = failures.length === 0
+    ? ''
+    : ` (${failures.map(({ scope, reason }) => `${scope}: ${reason}`).join('; ')})`;
+  return new Error(
+    `Pi extension source could not be resolved for ${extensionSourceDiagnosticLabel(source)}${details}`,
+  );
+}
+
+function extensionSourceScopes(source: string): readonly ExtensionSourceScope[] {
+  return isNpmExtensionSource(source) && !isVersionQualifiedNpmExtensionSource(source)
+    ? ['project', 'user', 'temporary']
+    : ['temporary'];
+}
+
+function createExtensionSourceSearch(source: string): ExtensionSourceSearch {
+  return {
+    source,
+    scopes: extensionSourceScopes(source),
+    nextScopeIndex: 0,
+    failures: [],
+  };
+}
+
+function createPiResourceLoader(
   cwd: string,
   agentDir: string,
   options: PiCallOptions,
   settingsManager: SettingsManager,
-): Promise<ResolvedPaths> {
-  const sources = options.providerOptions?.extensions ?? [];
-  if (sources.length === 0) {
-    return { extensions: [], skills: [], prompts: [], themes: [] };
+  resolvedResources: ResolvedPaths,
+): DefaultResourceLoader {
+  const providerOptions = options.providerOptions;
+  return new DefaultResourceLoader({
+    cwd,
+    agentDir,
+    settingsManager,
+    additionalExtensionPaths: enabledResourcePaths(resolvedResources, 'extensions'),
+    additionalSkillPaths: enabledResourcePaths(resolvedResources, 'skills'),
+    additionalPromptTemplatePaths: enabledResourcePaths(resolvedResources, 'prompts'),
+    additionalThemePaths: enabledResourcePaths(resolvedResources, 'themes'),
+    noExtensions: providerOptions?.noExtensions,
+    noSkills: providerOptions?.noSkills,
+    noPromptTemplates: providerOptions?.noPromptTemplates,
+    noThemes: providerOptions?.noThemes,
+    noContextFiles: providerOptions?.noContextFiles,
+    ...(options.systemPrompt !== undefined ? { systemPrompt: options.systemPrompt } : {}),
+  });
+}
+
+function throwPiSessionAborted(): never {
+  throw new Error('Pi session aborted');
+}
+
+function assertPiSessionNotAborted(abortSignal: AbortSignal | undefined): void {
+  if (isAbortRequested(abortSignal)) {
+    throwPiSessionAborted();
+  }
+}
+
+function candidateSourceForScope(
+  packageManager: ExtensionPackageManager,
+  projectLookup: InstalledPackageLookup,
+  source: string,
+  scope: ExtensionSourceScope,
+): string | undefined {
+  switch (scope) {
+    case 'project':
+      return projectLookup.getInstalledPath(source);
+    case 'user':
+      return packageManager.getInstalledPath(source, 'user');
+    case 'temporary':
+      return source;
+  }
+}
+
+async function resolveNextExtensionCandidate(
+  packageManager: ExtensionPackageManager,
+  projectLookup: InstalledPackageLookup,
+  search: ExtensionSourceSearch,
+  abortSignal: AbortSignal | undefined,
+): Promise<ResolvedExtensionCandidate> {
+  while (search.nextScopeIndex < search.scopes.length) {
+    const scope = search.scopes[search.nextScopeIndex];
+    if (scope === undefined) {
+      break;
+    }
+    search.nextScopeIndex += 1;
+    try {
+      const candidateSource = candidateSourceForScope(
+        packageManager,
+        projectLookup,
+        search.source,
+        scope,
+      );
+      assertPiSessionNotAborted(abortSignal);
+      if (candidateSource === undefined) {
+        continue;
+      }
+      const paths = await packageManager.resolveExtensionSources(
+        [candidateSource],
+        { temporary: true },
+      );
+      assertPiSessionNotAborted(abortSignal);
+      if (countEnabledResolvedResources(paths) === 0) {
+        recordExtensionCandidateFailure(
+          search.source,
+          search.failures,
+          scope,
+          'no enabled resources',
+        );
+        continue;
+      }
+      return { scope, paths };
+    } catch (error) {
+      if (isAbortRequested(abortSignal)) {
+        throwPiSessionAborted();
+      }
+      recordExtensionCandidateFailure(
+        search.source,
+        search.failures,
+        scope,
+        error,
+      );
+    }
   }
 
-  assertSafeExtensionSources(sources);
-  const packageManager = new DefaultPackageManager({ cwd, agentDir, settingsManager });
-  const resolved: ResolvedPaths = { extensions: [], skills: [], prompts: [], themes: [] };
-  for (const source of sources) {
-    const sourcePaths = await packageManager.resolveExtensionSources([source], { temporary: true });
-    if (isAbortRequested(options.abortSignal)) {
-      throw new Error('Pi session aborted');
+  throw formatExtensionSourceResolutionFailure(search.source, search.failures);
+}
+
+function mergeExtensionSourcePaths(
+  resolutions: readonly ExtensionSourceResolution[],
+): ResolvedPaths {
+  return resolutions.reduce<ResolvedPaths>(
+    (resolved, resolution) => mergeResolvedPaths(resolved, resolution.candidate.paths),
+    { extensions: [], skills: [], prompts: [], themes: [] },
+  );
+}
+
+function extensionPathKey(cwd: string, extensionPath: string): string {
+  return path.resolve(cwd, extensionPath);
+}
+
+function failedExtensionSources(
+  cwd: string,
+  resolutions: readonly ExtensionSourceResolution[],
+  loadErrors: readonly ExtensionLoadError[],
+): Set<ExtensionSourceResolution> | undefined {
+  const ownersByPath = new Map<string, ExtensionSourceResolution[]>();
+  for (const resolution of resolutions) {
+    for (const extensionPath of enabledResourcePaths(resolution.candidate.paths, 'extensions')) {
+      const key = extensionPathKey(cwd, extensionPath);
+      ownersByPath.set(key, [...(ownersByPath.get(key) ?? []), resolution]);
     }
-    const resolvedCount = sourcePaths.extensions.length
-      + sourcePaths.skills.length
-      + sourcePaths.prompts.length
-      + sourcePaths.themes.length;
-    if (resolvedCount === 0) {
-      throw new Error('Pi extension source could not be resolved');
-    }
-    resolved.extensions.push(...sourcePaths.extensions);
-    resolved.skills.push(...sourcePaths.skills);
-    resolved.prompts.push(...sourcePaths.prompts);
-    resolved.themes.push(...sourcePaths.themes);
   }
-  return resolved;
+
+  const failedResolutions = new Set<ExtensionSourceResolution>();
+  for (const loadError of loadErrors) {
+    const owners = ownersByPath.get(extensionPathKey(cwd, loadError.path));
+    if (owners?.length !== 1) {
+      return undefined;
+    }
+    const owner = owners[0];
+    if (owner === undefined) {
+      return undefined;
+    }
+    failedResolutions.add(owner);
+  }
+  return failedResolutions;
+}
+
+function actualExtensionLoadErrors(
+  cwd: string,
+  extensionsResult: LoadExtensionsResult,
+): ExtensionLoadError[] {
+  const loadedExtensionPaths = new Set(
+    extensionsResult.extensions.map((extension) => extensionPathKey(cwd, extension.path)),
+  );
+  return extensionsResult.errors.filter((error) => (
+    !loadedExtensionPaths.has(extensionPathKey(cwd, error.path))
+  ));
+}
+
+function loadErrorsForResolution(
+  cwd: string,
+  resolution: ExtensionSourceResolution,
+  loadErrors: readonly ExtensionLoadError[],
+): ExtensionLoadError[] {
+  const candidatePaths = new Set(
+    enabledResourcePaths(resolution.candidate.paths, 'extensions')
+      .map((extensionPath) => extensionPathKey(cwd, extensionPath)),
+  );
+  return loadErrors.filter((loadError) => candidatePaths.has(extensionPathKey(cwd, loadError.path)));
+}
+
+function invalidateRejectedResourceLoader(resourceLoader: DefaultResourceLoader): void {
+  resourceLoader.getExtensions().runtime.invalidate('Pi extension candidate was rejected');
+}
+
+async function resolvePiResourceLoader(
+  cwd: string,
+  agentDir: string,
+  options: PiCallOptions,
+  settingsManager: SettingsManager,
+): Promise<DefaultResourceLoader> {
+  assertPiSessionNotAborted(options.abortSignal);
+  const sources = (options.providerOptions?.extensions ?? []).map((source) => source.trim());
+  if (sources.length > 0) {
+    assertSafeExtensionSources(sources);
+  }
+
+  const packageManager = new DefaultPackageManager({ cwd, agentDir, settingsManager });
+  const projectLookup = createProjectInstalledPackageLookup(cwd, agentDir);
+  const resolutions: ExtensionSourceResolution[] = [];
+  for (const search of sources.map(createExtensionSourceSearch)) {
+    const candidate = await resolveNextExtensionCandidate(
+      packageManager,
+      projectLookup,
+      search,
+      options.abortSignal,
+    );
+    resolutions.push({ ...search, candidate });
+  }
+
+  while (true) {
+    assertPiSessionNotAborted(options.abortSignal);
+    const resolved = mergeExtensionSourcePaths(resolutions);
+    const resourceLoader = createPiResourceLoader(cwd, agentDir, options, settingsManager, resolved);
+    try {
+      assertPiSessionNotAborted(options.abortSignal);
+      await resourceLoader.reload();
+    } catch (error) {
+      invalidateRejectedResourceLoader(resourceLoader);
+      if (isAbortRequested(options.abortSignal)) {
+        throwPiSessionAborted();
+      }
+      throw new Error(
+        `Pi extension resource loading failed: ${safeExternalErrorMessage(error)}`,
+        { cause: error },
+      );
+    }
+    if (isAbortRequested(options.abortSignal)) {
+      invalidateRejectedResourceLoader(resourceLoader);
+      throwPiSessionAborted();
+    }
+
+    const extensionsResult = resourceLoader.getExtensions();
+    const loadErrors = actualExtensionLoadErrors(cwd, extensionsResult);
+    if (loadErrors.length === 0) {
+      return resourceLoader;
+    }
+
+    const failedResolutions = failedExtensionSources(cwd, resolutions, loadErrors);
+    if (failedResolutions === undefined || failedResolutions.size === 0) {
+      invalidateRejectedResourceLoader(resourceLoader);
+      throw new Error(`Pi extension loading failed: ${formatExtensionLoadErrors(loadErrors)}`);
+    }
+
+    for (const resolution of failedResolutions) {
+      const candidate = resolution.candidate;
+      const candidateErrors = loadErrorsForResolution(cwd, resolution, loadErrors);
+      recordExtensionCandidateFailure(
+        resolution.source,
+        resolution.failures,
+        candidate.scope,
+        `Pi extension loading failed: ${formatExtensionLoadErrors(candidateErrors)}`,
+      );
+    }
+
+    invalidateRejectedResourceLoader(resourceLoader);
+    for (const resolution of failedResolutions) {
+      resolution.candidate = await resolveNextExtensionCandidate(
+        packageManager,
+        projectLookup,
+        resolution,
+        options.abortSignal,
+      );
+    }
+  }
 }
 
 function inferImageMimeType(filePath: string): string {
@@ -442,13 +851,12 @@ function formatExtensionLoadErrors(
   errors: ReadonlyArray<{ path: string; error: string }>,
 ): string {
   return errors
-    .map((error) => `${path.basename(error.path) || 'extension'}: ${sanitizeSensitiveText(error.error)}`)
+    .map((error) => `extension: ${safeExternalErrorMessage(error.error)}`)
     .join('; ');
 }
 
 function formatExtensionRuntimeError(error: ExtensionError): string {
-  const extension = path.basename(error.extensionPath) || 'extension';
-  return `${extension} (${error.event}): ${sanitizeSensitiveText(error.error)}`;
+  return `extension (${error.event}): ${safeExternalErrorMessage(error.error)}`;
 }
 
 function registerPendingExtensionProviders(
@@ -569,63 +977,57 @@ async function createPiSession(
     throw new Error('Pi session aborted');
   }
   // Explicit provider options are trusted input. Project-local Pi resources are
-  // not: keep implicit .pi discovery disabled while still loading temporary
-  // extension sources passed through additionalExtensionPaths.
+  // not: keep implicit .pi discovery disabled while loading only explicitly
+  // resolved extension paths through additionalExtensionPaths.
   const settingsManager = SettingsManager.inMemory({}, { projectTrusted: false });
   const runtime = await createModelRuntime(agentDir);
   if (isAbortRequested(options.abortSignal)) {
     throw new Error('Pi session aborted');
   }
-  const resolvedResources = await resolvePiResources(options.cwd, agentDir, options, settingsManager);
-  if (isAbortRequested(options.abortSignal)) {
-    throw new Error('Pi session aborted');
-  }
-  const providerOptions = options.providerOptions;
-  const resourceLoader = new DefaultResourceLoader({
-    cwd: options.cwd,
-    agentDir,
-    settingsManager,
-    additionalExtensionPaths: enabledResourcePaths(resolvedResources, 'extensions'),
-    additionalSkillPaths: enabledResourcePaths(resolvedResources, 'skills'),
-    additionalPromptTemplatePaths: enabledResourcePaths(resolvedResources, 'prompts'),
-    additionalThemePaths: enabledResourcePaths(resolvedResources, 'themes'),
-    noExtensions: providerOptions?.noExtensions,
-    noSkills: providerOptions?.noSkills,
-    noPromptTemplates: providerOptions?.noPromptTemplates,
-    noThemes: providerOptions?.noThemes,
-    noContextFiles: providerOptions?.noContextFiles,
-    ...(options.systemPrompt !== undefined ? { systemPrompt: options.systemPrompt } : {}),
-  });
-  await resourceLoader.reload();
-  if (isAbortRequested(options.abortSignal)) {
-    throw new Error('Pi session aborted');
-  }
-  const extensionsResult = resourceLoader.getExtensions();
-  const loadErrors = extensionsResult.errors;
-  if (loadErrors.length > 0) {
-    throw new Error(`Pi extension loading failed: ${formatExtensionLoadErrors(loadErrors)}`);
-  }
-  registerPendingExtensionProviders(runtime, extensionsResult);
-  const sessionManager = SessionManager.inMemory(
+  const resourceLoader = await resolvePiResourceLoader(
     options.cwd,
-    options.sessionId === undefined ? undefined : { id: options.sessionId },
-  );
-
-  const bashTool = createBashToolDefinition(options.cwd, {
-    spawnHook: (context) => ({
-      ...context,
-      env: buildEnvWithNestedObservabilitySnapshot(context.env, options.childProcessEnv),
-    }),
-  }) as unknown as NonNullable<CreateAgentSessionOptions['customTools']>[number];
-  const result = await createAgentSession({
-    cwd: options.cwd,
     agentDir,
-    modelRuntime: runtime,
-    resourceLoader,
-    sessionManager,
+    options,
     settingsManager,
-    customTools: [bashTool],
-  });
+  );
+  let result: Awaited<ReturnType<typeof createAgentSession>>;
+  try {
+    if (isAbortRequested(options.abortSignal)) {
+      throw new Error('Pi session aborted');
+    }
+    const extensionsResult = resourceLoader.getExtensions();
+    // SDK conflicts do not select a fallback candidate, but they still make the final session unsafe.
+    const loadErrors = extensionsResult.errors;
+    if (loadErrors.length > 0) {
+      throw new Error(`Pi extension loading failed: ${formatExtensionLoadErrors(loadErrors)}`);
+    }
+    registerPendingExtensionProviders(runtime, extensionsResult);
+    const sessionManager = SessionManager.inMemory(
+      options.cwd,
+      options.sessionId === undefined ? undefined : { id: options.sessionId },
+    );
+
+    const bashTool = createBashToolDefinition(options.cwd, {
+      spawnHook: (context) => ({
+        ...context,
+        env: buildEnvWithNestedObservabilitySnapshot(context.env, options.childProcessEnv),
+      }),
+    }) as unknown as NonNullable<CreateAgentSessionOptions['customTools']>[number];
+    result = await createAgentSession({
+      cwd: options.cwd,
+      agentDir,
+      modelRuntime: runtime,
+      resourceLoader,
+      sessionManager,
+      settingsManager,
+      customTools: [bashTool],
+    });
+  } catch (error) {
+    // No session owns the loader yet, so release event-bus subscriptions from
+    // an extension factory when setup or session creation fails.
+    invalidateRejectedResourceLoader(resourceLoader);
+    throw error;
+  }
   try {
     if (isAbortRequested(options.abortSignal)) {
       throw new Error('Pi session aborted');

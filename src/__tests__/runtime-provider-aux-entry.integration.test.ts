@@ -3,7 +3,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { stringify as stringifyYaml } from 'yaml';
-import { resolveAuxiliaryProviderEnvironment } from '../infra/config/runtime-provider/provider-environment.js';
+import {
+  resolveAuxiliaryProviderEnvironment,
+  resolveAuxiliaryRuntimeEnvironment,
+} from '../infra/config/runtime-provider/provider-environment.js';
 import { getWorkflowDescription } from '../infra/config/loaders/workflowPreview.js';
 import { resolveConfiguredExecProviderModel } from '../features/exec/runtimeConfig.js';
 import {
@@ -78,6 +81,20 @@ describe('resolveAuxiliaryProviderEnvironment', () => {
     expect(env.providerSource).toBe('runtime-v1');
     expect(env.modelSource).toBe('runtime-v1');
     expect(env.tagConflictPolicy).toBe('fail-fast');
+  });
+
+  it('propagates the effective companion review mode through the auxiliary runtime environment', () => {
+    writeGlobalConfig(['language: en']);
+    writeGlobalRuntimeFile({
+      ...activeRuntimeSection(),
+      companion: { enabled: true, review_mode: 'live' },
+    } as unknown as RuntimeProviderFile);
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+
+    const env = resolveAuxiliaryRuntimeEnvironment(projectCwd, WORKFLOW);
+
+    expect((env as unknown as { companionReviewMode?: string }).companionReviewMode).toBe('live');
   });
 
   it('passes legacy config.yaml provider/model through unchanged when no active runtime section exists', () => {

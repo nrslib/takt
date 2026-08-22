@@ -10,9 +10,9 @@ describe('filterSlashCommands', () => {
   it('should return all commands when prefix is "/"', () => {
     const result = filterSlashCommands('/');
     const commands = result.map((e) => e.command);
-    const playCommands = filterSlashCommands('/p').map((e) => e.command);
-    expect(playCommands.length).toBeGreaterThan(0);
-    expect(commands).toEqual(expect.arrayContaining(playCommands));
+    const pasteCommands = filterSlashCommands('/p').map((e) => e.command);
+    expect(pasteCommands.length).toBeGreaterThan(0);
+    expect(commands).toEqual(expect.arrayContaining(pasteCommands));
     expect(commands).not.toContain('/setup');
   });
 
@@ -29,7 +29,7 @@ describe('filterSlashCommands', () => {
   it('should filter by prefix "/p"', () => {
     const result = filterSlashCommands('/p');
     const commands = result.map((e) => e.command);
-    expect(commands).toContain('/play');
+    expect(commands).toContain('/paste-image');
     expect(commands).not.toContain('/go');
     expect(commands).not.toContain('/cancel');
   });
@@ -57,7 +57,7 @@ describe('filterSlashCommands', () => {
   it('should be case-insensitive', () => {
     const result = filterSlashCommands('/P');
     const commands = result.map((e) => e.command);
-    expect(commands).toContain('/play');
+    expect(commands).toContain('/paste-image');
   });
 
   it('should return "/re" prefix matches (retry, replay, resume)', () => {
@@ -70,8 +70,8 @@ describe('filterSlashCommands', () => {
   });
 
   it('should include labelKey for i18n lookup', () => {
-    const result = filterSlashCommands('/play');
-    expect(result[0]!.labelKey).toBe('interactive.commands.play');
+    const result = filterSlashCommands('/replay');
+    expect(result[0]!.labelKey).toBe('interactive.commands.replay');
   });
 
   it('should include /accept labelKey for i18n lookup', () => {

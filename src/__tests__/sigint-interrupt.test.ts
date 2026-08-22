@@ -212,7 +212,6 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => {
     playWarningSound: vi.fn(),
     preventSleep: vi.fn(),
     isDebugEnabled: vi.fn().mockReturnValue(false),
-    writePromptLog: vi.fn(),
     generateReportDir: vi.fn().mockReturnValue('test-report-dir'),
     isValidReportDirName: vi.fn().mockImplementation((value: string) => /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value)),
   };
@@ -422,6 +421,25 @@ describe('executeWorkflow: SIGINT handler integration', () => {
     expect(() => uncaughtListeners[0]!(otherError)).toThrow('other error');
 
     await resultPromise;
+  });
+
+  it('Given a run is cancelled by SIGINT, When abort artifacts are finalized, Then analysis is scheduled once', async () => {
+    const config = makeConfig();
+    const loopAnalysisScheduler = vi.fn();
+    const resultPromise = executeWorkflow(config, 'test task', tmpDir, {
+      projectCwd: tmpDir,
+      loopAnalysisScheduler,
+    });
+
+    const newListener = await waitForSigintListener(savedSigintListeners);
+    newListener();
+    const result = await resultPromise;
+
+    expect(result.success).toBe(false);
+    expect(loopAnalysisScheduler).toHaveBeenCalledOnce();
+    expect(loopAnalysisScheduler).toHaveBeenCalledWith(
+      join(tmpDir, '.takt', 'runs', 'test-report-dir'),
+    );
   });
 });
 

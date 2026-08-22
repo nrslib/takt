@@ -9,7 +9,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import type { AgentResponse } from '../../core/models/index.js';
-import type { StreamEvent } from '../../shared/types/provider.js';
+import type { StreamCallback, StreamEvent } from '../../shared/types/provider.js';
 import { appendPrivateFile } from '../../shared/utils/private-file.js';
 import { getScenarioQueue } from './scenario.js';
 import type { MockCallOptions, ScenarioEntry } from './types.js';
@@ -133,6 +133,73 @@ async function waitForAbort(signal: AbortSignal | undefined): Promise<void> {
   });
 }
 
+/** Records the completion and builds the response returned whenever a mock call is aborted. */
+function finishAbortedCall(personaName: string, sessionId: string): AgentResponse {
+  recordMockCall('complete', personaName, {
+    status: 'blocked',
+    aborted: true,
+    returnedSessionId: sessionId,
+  });
+  return {
+    persona: personaName,
+    status: 'blocked',
+    content: '[MOCK:ABORTED]\n\nMock response interrupted by abort signal.',
+    timestamp: new Date(),
+    sessionId,
+  };
+}
+
+/** Read through a call so the narrowing from an earlier check does not persist. */
+function isAborted(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true;
+}
+
+async function streamTextChunks(
+  chunks: NonNullable<ScenarioEntry['textChunks']>,
+  onStream: StreamCallback,
+  signal: AbortSignal | undefined,
+): Promise<'completed' | 'aborted'> {
+  for (const chunk of chunks) {
+    // Checked before every emission, not only around a delay: a chunk without a
+    // delay, or an abort raised while the caller handled the previous chunk,
+    // must stop the stream just as promptly.
+    if (isAborted(signal)) {
+      return 'aborted';
+    }
+    if (chunk.delayMs !== undefined) {
+      try {
+        await delayWithAbort(chunk.delayMs, signal);
+      } catch (e) {
+        if (e instanceof DOMException && e.name === 'AbortError') {
+          return 'aborted';
+        }
+        throw e;
+      }
+    }
+    if (isAborted(signal)) {
+      return 'aborted';
+    }
+    onStream({ type: 'text', data: { text: chunk.text } });
+  }
+  return isAborted(signal) ? 'aborted' : 'completed';
+}
+
+/**
+ * Writes the prompt a call received, for a test that needs to assert on what
+ * reached the provider.
+ *
+ * Deliberately separate from the call log, which is contractually free of
+ * prompt content: this one is written only when its own variable names a file,
+ * and nothing but a test sets it.
+ */
+function recordMockPrompt(personaName: string, prompt: string): void {
+  const logPath = process.env.TAKT_MOCK_PROMPT_LOG;
+  if (!logPath) {
+    return;
+  }
+  appendPrivateFile(logPath, `${JSON.stringify({ personaName, prompt })}\n`);
+}
+
 function applyScenarioFileWrites(entry: ScenarioEntry | undefined, cwd: string): void {
   for (const write of entry?.fileWrites ?? []) {
     const target = resolve(cwd, write.path);
@@ -164,6 +231,7 @@ export async function callMock(
     model: options.model,
     inputSessionId: options.sessionId,
   });
+  recordMockPrompt(personaName, prompt);
 
   // Apply deterministic abort gating or an artificial delay when requested.
   if (scenarioEntry?.waitForAbort === true || scenarioEntry?.delayMs) {
@@ -175,18 +243,7 @@ export async function callMock(
       }
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') {
-        recordMockCall('complete', personaName, {
-          status: 'blocked',
-          aborted: true,
-          returnedSessionId: sessionId,
-        });
-        return {
-          persona: personaName,
-          status: 'blocked',
-          content: '[MOCK:ABORTED]\n\nMock response interrupted by abort signal.',
-          timestamp: new Date(),
-          sessionId,
-        };
+        return finishAbortedCall(personaName, sessionId);
       }
       throw e;
     }
@@ -209,20 +266,44 @@ export async function callMock(
       data: { model: 'mock-model', sessionId },
     };
     options.onStream(initEvent);
+    // The caller can abort while it consumes an event, and the answer body is
+    // the one thing an abort cannot take back once it is on screen.
+    if (isAborted(options.abortSignal)) {
+      return finishAbortedCall(personaName, sessionId);
+    }
 
     for (const event of scenarioEntry?.streamEvents ?? []) {
       options.onStream({
         type: 'tool_use',
         data: { tool: event.tool, id: event.id, input: { ...event.input } },
       });
+      if (isAborted(options.abortSignal)) {
+        return finishAbortedCall(personaName, sessionId);
+      }
     }
 
-    const textEvent: StreamEvent = {
-      type: 'text',
-      data: { text: content },
-    };
-    options.onStream(textEvent);
+    if (scenarioEntry?.textChunks === undefined) {
+      const textEvent: StreamEvent = {
+        type: 'text',
+        data: { text: content },
+      };
+      options.onStream(textEvent);
+    } else {
+      const outcome = await streamTextChunks(
+        scenarioEntry.textChunks,
+        options.onStream,
+        options.abortSignal,
+      );
+      if (outcome === 'aborted') {
+        return finishAbortedCall(personaName, sessionId);
+      }
+    }
 
+    // An abort raised while the caller consumed the last text event must not be
+    // followed by a success result.
+    if (isAborted(options.abortSignal)) {
+      return finishAbortedCall(personaName, sessionId);
+    }
     const resultEvent: StreamEvent = {
       type: 'result',
       data: { success: true, result: content, sessionId },

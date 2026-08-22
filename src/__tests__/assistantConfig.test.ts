@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -8,6 +8,10 @@ const testId = randomUUID();
 const testDir = join(tmpdir(), `takt-assistant-config-test-${testId}`);
 const globalTaktDir = join(testDir, 'global-takt');
 const globalConfigPath = join(globalTaktDir, 'config.yaml');
+const { mockConfirm, mockResolveTtyPolicy } = vi.hoisted(() => ({
+  mockConfirm: vi.fn(),
+  mockResolveTtyPolicy: vi.fn(),
+}));
 
 vi.mock('../infra/config/paths.js', async (importOriginal) => {
   const original = await importOriginal() as Record<string, unknown>;
@@ -18,11 +22,36 @@ vi.mock('../infra/config/paths.js', async (importOriginal) => {
   };
 });
 
+vi.mock('../shared/prompt/confirm.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  confirm: (...args: unknown[]) => mockConfirm(...args),
+}));
+
+vi.mock('../shared/prompt/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  confirm: (...args: unknown[]) => mockConfirm(...args),
+}));
+
+vi.mock('../shared/prompt/tty.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  resolveTtyPolicy: () => mockResolveTtyPolicy(),
+}));
+
 const { resolveAssistantConfigLayers } = await import('../features/interactive/assistantConfig.js');
-const { shouldUseGherkinTaskInstructions } = await import('../features/interactive/taskInstructionFormat.js');
+const taskInstructionFormat = await import('../features/interactive/taskInstructionFormat.js');
 const { invalidateGlobalConfigCache } = await import('../infra/config/global/globalConfig.js');
 const { invalidateAllResolvedConfigCache } = await import('../infra/config/resolveConfigValue.js');
 const { getProjectConfigDir } = await import('../infra/config/paths.js');
+
+type FormalSpecResolverModule = {
+  resolveFormalSpecMode(projectDir: string): Promise<boolean>;
+  resolveFormalSpecModeWithoutPrompt(projectDir: string): boolean;
+};
+
+const {
+  resolveFormalSpecMode,
+  resolveFormalSpecModeWithoutPrompt,
+} = taskInstructionFormat as unknown as FormalSpecResolverModule;
 
 describe('assistantConfig', () => {
   let projectDir: string;
@@ -33,6 +62,8 @@ describe('assistantConfig', () => {
     mkdirSync(globalTaktDir, { recursive: true });
     invalidateGlobalConfigCache();
     invalidateAllResolvedConfigCache();
+    mockConfirm.mockReset();
+    mockResolveTtyPolicy.mockReturnValue({ useTty: false, forceTouchTty: false });
   });
 
   afterEach(() => {
@@ -99,29 +130,158 @@ describe('assistantConfig', () => {
   });
 
   it.each([
-    ['global value', true, undefined, true],
+    ['global false', false, undefined, false],
+    ['global true', true, undefined, true],
     ['project false override', true, false, false],
     ['project true override', false, true, true],
   ] as const)(
-    'should resolve Gherkin task instructions from %s',
-    (_label, globalGherkin, projectGherkin, expected) => {
-      writeFileSync(
-        globalConfigPath,
-        ['language: en', 'assistant:', `  gherkin: ${globalGherkin}`].join('\n'),
-        'utf-8',
-      );
-
-      if (projectGherkin !== undefined) {
-        const configDir = getProjectConfigDir(projectDir);
-        mkdirSync(configDir, { recursive: true });
+    'should resolve boolean formal specification mode from %s without asking',
+    async (_label, globalFormalSpec, projectFormalSpec, expected) => {
+      if (globalFormalSpec !== undefined) {
         writeFileSync(
-          join(configDir, 'config.yaml'),
-          ['assistant:', `  gherkin: ${projectGherkin}`].join('\n'),
+          globalConfigPath,
+          ['language: en', 'assistant:', `  formal_spec: ${globalFormalSpec}`].join('\n'),
           'utf-8',
         );
       }
 
-      expect(shouldUseGherkinTaskInstructions(projectDir)).toBe(expected);
+      if (projectFormalSpec !== undefined) {
+        const configDir = getProjectConfigDir(projectDir);
+        mkdirSync(configDir, { recursive: true });
+        writeFileSync(
+          join(configDir, 'config.yaml'),
+          ['assistant:', `  formal_spec: ${projectFormalSpec}`].join('\n'),
+          'utf-8',
+        );
+      }
+
+      await expect(resolveFormalSpecMode(projectDir)).resolves.toBe(expected);
+      expect(mockConfirm).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ['Y/n', 'y/N', false],
+    ['y/N', 'Y/n', true],
+  ] as const)(
+    'should let project formal_spec override global formal_spec=%s with %s',
+    async (globalFormalSpec, projectFormalSpec, expected) => {
+      writeFileSync(
+        globalConfigPath,
+        ['language: en', 'assistant:', `  formal_spec: '${globalFormalSpec}'`].join('\n'),
+        'utf-8',
+      );
+      const configDir = getProjectConfigDir(projectDir);
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(
+        join(configDir, 'config.yaml'),
+        ['assistant:', `  formal_spec: '${projectFormalSpec}'`].join('\n'),
+        'utf-8',
+      );
+
+      await expect(resolveFormalSpecMode(projectDir)).resolves.toBe(expected);
+      expect(mockConfirm).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ['Y/n', true],
+    ['y/N', false],
+    [undefined, false],
+  ] as const)(
+    'should ask once on a TTY for formal_spec=%s with default=%s',
+    async (formalSpec, defaultYes) => {
+      mockResolveTtyPolicy.mockReturnValue({ useTty: true, forceTouchTty: false });
+      mockConfirm.mockResolvedValue(!defaultYes);
+      if (formalSpec !== undefined) {
+        const configDir = getProjectConfigDir(projectDir);
+        mkdirSync(configDir, { recursive: true });
+        writeFileSync(
+          join(configDir, 'config.yaml'),
+          ['assistant:', `  formal_spec: '${formalSpec}'`].join('\n'),
+          'utf-8',
+        );
+      }
+
+      await expect(resolveFormalSpecMode(projectDir)).resolves.toBe(!defaultYes);
+      expect(mockConfirm).toHaveBeenCalledOnce();
+      expect(mockConfirm).toHaveBeenCalledWith(expect.stringMatching(/Alloy.*Quint|Quint.*Alloy/i), defaultYes);
+      expect(String(mockConfirm.mock.calls[0]?.[0])).toContain('assistant.formal_spec');
+    },
+  );
+
+  it.each([
+    ['en', /formal specification mode/i],
+    ['ja', /形式仕様モード/],
+  ] as const)('should localize the formal specification question for language=%s', async (language, messagePattern) => {
+    writeFileSync(globalConfigPath, `language: ${language}\n`, 'utf-8');
+    mockResolveTtyPolicy.mockReturnValue({ useTty: true, forceTouchTty: false });
+    mockConfirm.mockResolvedValue(false);
+
+    await resolveFormalSpecMode(projectDir);
+
+    expect(mockConfirm).toHaveBeenCalledWith(expect.stringMatching(messagePattern), false);
+    expect(String(mockConfirm.mock.calls[0]?.[0])).toMatch(/Alloy.*Quint|Quint.*Alloy/i);
+    expect(String(mockConfirm.mock.calls[0]?.[0])).toContain('assistant.formal_spec');
+  });
+
+  it.each([
+    ['Y/n', true],
+    ['y/N', false],
+    [undefined, false],
+  ] as const)(
+    'should use the configured default without asking when formal_spec=%s is resolved outside a TTY',
+    async (formalSpec, expected) => {
+      if (formalSpec !== undefined) {
+        const configDir = getProjectConfigDir(projectDir);
+        mkdirSync(configDir, { recursive: true });
+        writeFileSync(
+          join(configDir, 'config.yaml'),
+          ['assistant:', `  formal_spec: '${formalSpec}'`].join('\n'),
+          'utf-8',
+        );
+      }
+
+      await expect(resolveFormalSpecMode(projectDir)).resolves.toBe(expected);
+      expect(mockConfirm).not.toHaveBeenCalled();
+    },
+  );
+
+  it('should keep answers session-local and resolve again for a new session', async () => {
+    mockResolveTtyPolicy.mockReturnValue({ useTty: true, forceTouchTty: false });
+    const configDir = getProjectConfigDir(projectDir);
+    const configPath = join(configDir, 'config.yaml');
+    const original = ['assistant:', "  formal_spec: 'y/N'"].join('\n');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(configPath, original, 'utf-8');
+    mockConfirm.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+
+    await expect(resolveFormalSpecMode(projectDir)).resolves.toBe(true);
+    await expect(resolveFormalSpecMode(projectDir)).resolves.toBe(false);
+
+    expect(mockConfirm).toHaveBeenCalledTimes(2);
+    expect(readFileSync(configPath, 'utf-8')).toBe(original);
+  });
+
+  it.each([
+    ['Y/n', true],
+    ['y/N', false],
+    [undefined, false],
+  ] as const)(
+    'should resolve ACP formal_spec=%s synchronously without prompting',
+    (formalSpec, expected) => {
+      if (formalSpec !== undefined) {
+        const configDir = getProjectConfigDir(projectDir);
+        mkdirSync(configDir, { recursive: true });
+        writeFileSync(
+          join(configDir, 'config.yaml'),
+          ['assistant:', `  formal_spec: '${formalSpec}'`].join('\n'),
+          'utf-8',
+        );
+      }
+
+      expect(resolveFormalSpecModeWithoutPrompt(projectDir)).toBe(expected);
+      expect(mockConfirm).not.toHaveBeenCalled();
     },
   );
 

@@ -44,7 +44,7 @@ export {
 type PendingTaskAction = 'delete';
 type ExceededTaskAction = 'requeue' | 'delete';
 type RunningTaskAction = 'force_fail';
-type FailedTaskAction = 'requeue' | 'retry' | 'instruct' | 'create_pr' | 'delete';
+type FailedTaskAction = 'requeue' | 'retry' | 'create_pr' | 'delete';
 type PrFailedTaskAction = Exclude<ListAction, 'create_pr'>;
 type CompletedTaskAction = ListAction;
 
@@ -109,7 +109,6 @@ async function showFailedTaskAndPromptAction(task: TaskListItem): Promise<Failed
     [
       { label: 'Requeue', value: 'requeue', description: 'Requeue without conversation' },
       { label: 'Retry', value: 'retry', description: 'Analyze failure in conversation, then re-run' },
-      { label: 'Instruct', value: 'instruct', description: 'Craft additional instructions and requeue this task' },
       { label: 'Create PR', value: 'create_pr', description: 'Commit, push, and create a pull request' },
       { label: 'Delete', value: 'delete', description: 'Remove this task permanently' },
     ],
@@ -250,12 +249,6 @@ export async function listTasks(
         await taskRetryActions.requeueFailedTask(task, cwd);
       } else if (taskAction === 'retry') {
         await taskRetryActions.retryFailedTask(task, cwd, options);
-      } else if (taskAction === 'instruct') {
-        if (!task.branch) {
-          info(`Branch is missing for failed task: ${task.name}`);
-          continue;
-        }
-        await instructBranch(cwd, task, options);
       } else if (taskAction === 'create_pr') {
         await createPullRequestForTask(cwd, task);
       } else if (taskAction === 'delete') {

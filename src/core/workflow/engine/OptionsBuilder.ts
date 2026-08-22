@@ -271,9 +271,8 @@ export class OptionsBuilder {
     resolvedProviderInfo: Pick<StepProviderInfo, 'provider' | 'model' | 'providerSource'>,
   ) {
     const resolvedProviderSource = resolvedProviderInfo.providerSource;
-    const baseProviderOptions = this.resolveProfileScopedBaseProviderOptions(resolvedProviderSource);
-    const profileLayers = this.resolveProfileScopedProviderOptionLayers(step, resolvedProviderSource);
-    const tracedLayers = profileLayers;
+    const baseProviderOptions = this.resolveConfigProviderOptions();
+    const tracedLayers = this.resolveProviderOptionLayersForStep(step, resolvedProviderSource);
     const providerOptionsSources = resolveProviderOptionsSources(
       this.resolveIdentityAwareDirectStepProviderOptions(step, resolvedProviderInfo),
       tracedLayers,
@@ -294,8 +293,8 @@ export class OptionsBuilder {
     if (!runtime.providerInfo?.providerOptions || !isAutoProviderOptionsSource(runtimeSource)) {
       return undefined;
     }
-    const baseProviderOptions = this.resolveProfileScopedBaseProviderOptions(runtimeSource);
-    const profileLayers = this.resolveProfileScopedProviderOptionLayers(step, runtimeSource);
+    const baseProviderOptions = this.resolveConfigProviderOptions();
+    const profileLayers = this.resolveProviderOptionLayersForStep(step, runtimeSource);
     const providerOptionsSources = resolveProviderOptionsSources(
       this.resolveIdentityAwareDirectStepProviderOptions(step, runtime.providerInfo),
       [
@@ -325,14 +324,19 @@ export class OptionsBuilder {
         resolvedProviderInfo.providerSource,
       ).map((layer) => layer.options),
     );
+    const runtimeProfileProviderOptions = this.resolveRuntimeProfileProviderOptions(
+      resolvedProviderInfo.providerSource,
+    );
+    const profileProviderOptions = mergeProviderOptions(
+      runtimeProfileProviderOptions,
+      middleProviderOptions,
+    );
     const directStepProviderOptions = this.resolveIdentityAwareDirectStepProviderOptions(
       step,
       resolvedProviderInfo,
     );
     const runtimeProviderOptions = runtime?.providerInfo?.providerOptions;
-    const baseProviderOptions = this.resolveProfileScopedBaseProviderOptions(
-      resolvedProviderInfo.providerSource,
-    );
+    const baseProviderOptions = this.resolveConfigProviderOptions();
 
     if (runtimeProviderOptions && !runtime.teamLeaderPart) {
       if (runtime.providerInfo?.providerSource !== 'promotion') {
@@ -354,7 +358,7 @@ export class OptionsBuilder {
         this.engineOptions.providerOptionsOriginResolver,
         baseProviderOptions,
         stepProviderOptions,
-        middleProviderOptions,
+        profileProviderOptions,
       );
     }
 
@@ -371,7 +375,7 @@ export class OptionsBuilder {
         stepProviderOptions,
         resolvedProviderInfo.provider,
         runtime.teamLeaderPart.partAllowedTools,
-        middleProviderOptions,
+        profileProviderOptions,
       );
     }
 
@@ -380,17 +384,35 @@ export class OptionsBuilder {
       this.engineOptions.providerOptionsOriginResolver,
       baseProviderOptions,
       directStepProviderOptions,
-      middleProviderOptions,
+      profileProviderOptions,
     );
   }
 
-  private resolveProfileScopedBaseProviderOptions(
+  private resolveConfigProviderOptions(): StepProviderOptions | undefined {
+    return this.engineOptions.providerOptionsProviderSource === undefined
+      ? this.engineOptions.providerOptions
+      : this.engineOptions.configProviderOptions;
+  }
+
+  private resolveRuntimeProfileProviderOptions(
     resolvedProviderSource: StepProviderInfo['providerSource'],
   ): StepProviderOptions | undefined {
     const profileSource = this.engineOptions.providerOptionsProviderSource;
-    return profileSource === undefined || profileSource === resolvedProviderSource
+    return profileSource !== undefined && profileSource === resolvedProviderSource
       ? this.engineOptions.providerOptions
       : undefined;
+  }
+
+  private resolveProviderOptionLayersForStep(
+    step: WorkflowStep,
+    resolvedProviderSource: StepProviderInfo['providerSource'],
+  ): ProviderOptionsLayer[] {
+    const profileSource = this.engineOptions.providerOptionsProviderSource;
+    const profileOptions = this.resolveRuntimeProfileProviderOptions(resolvedProviderSource);
+    const profileLayers = this.resolveProfileScopedProviderOptionLayers(step, resolvedProviderSource);
+    return profileSource === undefined || profileOptions === undefined
+      ? profileLayers
+      : [{ source: profileSource, options: profileOptions }, ...profileLayers];
   }
 
   private resolveProfileScopedProviderOptionLayers(
@@ -773,6 +795,7 @@ export class OptionsBuilder {
       observabilityRunId: this.engineOptions.observabilityRunId,
       observabilityEnabled: this.engineOptions.observability?.enabled === true,
       sanitizeObservabilityText: this.engineOptions.sanitizeObservabilityText,
+      reportContentSanitizer: this.engineOptions.reportContentSanitizer,
       getCurrentWorkflowStack: this.getCurrentWorkflowStack,
       childProcessEnv: this.engineOptions.childProcessEnv,
       abortSignal: this.resolveAbortSignal(),

@@ -1,5 +1,5 @@
 name: development-remediation-team
-description: Convergence loop for adjudicated experimental findings that keeps fix planning and verification as normal agent steps while using Team Leader for remediation and retry remediation.
+description: Convergence loop for adjudicated review findings that keeps fix planning and verification as normal agent steps while using Team Leader for remediation and retry remediation.
 subworkflow:
   callable: true
   visibility: internal

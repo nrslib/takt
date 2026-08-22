@@ -54,6 +54,43 @@ describe('buildSummaryPrompt', () => {
     expect(summary).toContain('Improve parser');
   });
 
+  it('includes Gherkin output rules when formal specification mode is disabled', () => {
+    const summary = buildSummaryPrompt(
+      [{ role: 'user', content: 'Improve parser' }],
+      false,
+      'en',
+      'No transcript',
+      'Conversation:',
+      undefined,
+      undefined,
+      undefined,
+      false,
+    );
+
+    expect(summary).toContain('Gherkin');
+    expect(summary).not.toContain('Quint');
+    expect(summary).not.toContain('Alloy');
+  });
+
+  it('adds conditional Quint and Alloy guidance when formal specification mode is enabled', () => {
+    const summary = buildSummaryPrompt(
+      [{ role: 'user', content: 'Improve parser' }],
+      false,
+      'en',
+      'No transcript',
+      'Conversation:',
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+
+    expect(summary).toContain('Gherkin');
+    expect(summary).toContain('Quint');
+    expect(summary).toContain('Alloy');
+    expect(summary).toContain('ASCII');
+  });
+
 });
 
 describe('buildSummaryActionOptions', () => {

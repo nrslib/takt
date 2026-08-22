@@ -1,0 +1,43 @@
+name: maintenance
+description: Maintenance development workflow that respects existing code and contracts outside the change scope and limits work to causally related changes.
+max_steps: 51
+initial_step: develop
+
+steps:
+  - name: develop
+    kind: workflow_call
+    call: development-core
+    args:
+      implementation_pool: coding-facets
+      implementation_workflow: development-implement-dynamic
+      remediation_workflow: development-remediation-dynamic
+      plan_policy: [design-planning, existing-system-respect]
+      plan_knowledge: [architecture, task-decomposition, existing-system]
+      plan_instruction: scenario-based-plan-maintenance
+      plan_report_format: scenario-based-plan
+      replan_instruction: scenario-based-replan-implementation
+      testing_policy: [coding, testing, existing-system-respect]
+      testing_knowledge: [architecture, unit-testing, e2e-testing, existing-system]
+      testing_instruction: scenario-based-write-tests-first
+      testing_report_format: scenario-based-test-report
+      development_policy: [coding, testing, ai-antipattern, existing-system-respect]
+      development_knowledge: [architecture, implementation-semantics, existing-system]
+      implementation_instruction: implement-maintenance
+      scope_report_format: maintenance-scope
+      fix_plan_instruction: scenario-based-fix-plan-from-review-resolution
+      fix_plan_report_format: scenario-based-fix-plan
+      final_gate_instruction: scenario-based-supervise-review-resolution
+      implementation_companions:
+        fixed: [ai-antipattern-review-companion, testing-review-companion]
+        pool: []
+        moderator: review-companion-moderator
+      reviewer_suite: development-review
+      review_policy_additions: [existing-system-respect]
+      review_policy: [coding, testing, review, architecture, existing-system-respect]
+      review_knowledge: [architecture, unit-testing, e2e-testing, existing-system]
+      security_review_knowledge_additions: [existing-system]
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: ABORT
+        next: ABORT

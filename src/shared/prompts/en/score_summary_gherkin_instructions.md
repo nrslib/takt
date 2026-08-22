@@ -1,7 +1,7 @@
 <!-- markdownlint-disable MD041 -->
 <!--
   template: score_summary_gherkin_instructions
-  role: opt-in Markdown and Gherkin rules for conversation-to-task summarization
+  role: conditional Markdown and Gherkin rules for conversation-to-task summarization
   vars: none
   caller: features/interactive
 -->
@@ -31,3 +31,4 @@ For Gherkin:
 - Do not duplicate the same requirement in Markdown and Gherkin
 - In Markdown verification or test guidance, refer to the Gherkin behavior collectively instead of restating each selected outcome
 - Preserve the overall task context in Markdown so the document remains understandable without reading every Scenario
+- Do not include ASCII diagrams in the final task instruction

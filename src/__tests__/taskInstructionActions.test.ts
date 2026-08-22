@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { PersistedTaskOrderRevision } from '../features/tasks/orderRevision.js';
 import { withAttachmentCleanup } from './testUtils/attachmentTestHelpers.js';
+import {
+  createPersistedTaskOrderRevisionMock,
+  MOCK_CREATED_TASK_DIR,
+} from './testUtils/orderRevisionTestHelpers.js';
 
 const {
-  mockExistsSync,
-  mockReadFileSync,
   mockStartReExecution,
   mockRequeueTask,
   mockExecuteAndCompleteTask,
@@ -19,19 +22,18 @@ const {
   mockSelectRun,
   mockLoadRunSessionContext,
   mockFindRunForTask,
-  mockFindPreviousOrderContent,
   mockWarn,
   mockIsWorkflowPath,
   mockLoadWorkflowByIdentifier,
   mockLoadAllStandaloneWorkflowsWithSources,
-  mockPrepareTaskSpecDirectory,
-  mockCleanupPreparedTaskSpec,
+  mockResolveTaskOrderContent,
+  mockPersistTaskOrderRevision,
+  mockCleanupPersistedTaskOrderRevision,
+  mockAssertReusableWorktreePath,
   mockResolveBaseBranch,
   mockGetCurrentBranch,
   mockLocalBranchExists,
 } = vi.hoisted(() => ({
-  mockExistsSync: vi.fn(() => true),
-  mockReadFileSync: vi.fn(),
   mockStartReExecution: vi.fn(),
   mockRequeueTask: vi.fn(),
   mockExecuteAndCompleteTask: vi.fn(),
@@ -52,7 +54,6 @@ const {
   mockSelectRun: vi.fn(() => null),
   mockLoadRunSessionContext: vi.fn(),
   mockFindRunForTask: vi.fn(() => null),
-  mockFindPreviousOrderContent: vi.fn(() => null),
   mockWarn: vi.fn(),
   mockIsWorkflowPath: vi.fn(() => false),
   mockLoadWorkflowByIdentifier: vi.fn(() => ({ name: 'path-workflow' })),
@@ -60,17 +61,14 @@ const {
     ['default', {}],
     ['selected-workflow', {}],
   ])),
-  mockPrepareTaskSpecDirectory: vi.fn(),
-  mockCleanupPreparedTaskSpec: vi.fn(),
+  mockResolveTaskOrderContent: vi.fn(() => 'done'),
+  mockPersistTaskOrderRevision: vi.fn((projectDir: string, taskDir?: string): PersistedTaskOrderRevision =>
+    createPersistedTaskOrderRevisionMock(projectDir, taskDir)),
+  mockCleanupPersistedTaskOrderRevision: vi.fn(),
+  mockAssertReusableWorktreePath: vi.fn(),
   mockResolveBaseBranch: vi.fn(() => ({ branch: 'main' })),
   mockGetCurrentBranch: vi.fn(() => 'takt/826/pr-context'),
   mockLocalBranchExists: vi.fn(() => true),
-}));
-
-vi.mock('node:fs', async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  existsSync: (...args: unknown[]) => mockExistsSync(...args),
-  readFileSync: (...args: unknown[]) => mockReadFileSync(...args),
 }));
 
 vi.mock('node:child_process', async (importOriginal) => ({
@@ -129,20 +127,20 @@ vi.mock('../features/interactive/index.js', () => ({
   selectRun: (...args: unknown[]) => mockSelectRun(...args),
   loadRunSessionContext: (...args: unknown[]) => mockLoadRunSessionContext(...args),
   findRunForTask: (...args: unknown[]) => mockFindRunForTask(...args),
-  findPreviousOrderContent: (...args: unknown[]) => mockFindPreviousOrderContent(...args),
 }));
 
 vi.mock('../features/tasks/execute/taskExecution.js', () => ({
   executeAndCompleteTask: (...args: unknown[]) => mockExecuteAndCompleteTask(...args),
 }));
 
-vi.mock('../features/tasks/attachments.js', () => ({
-  prepareTaskSpecDirectory: (...args: unknown[]) => mockPrepareTaskSpecDirectory(...args),
-  cleanupPreparedTaskSpec: (...args: unknown[]) => mockCleanupPreparedTaskSpec(...args),
+vi.mock('../features/tasks/orderRevision.js', () => ({
+  resolveTaskOrderContent: (...args: unknown[]) => mockResolveTaskOrderContent(...args),
+  persistTaskOrderRevision: (...args: unknown[]) => mockPersistTaskOrderRevision(...args),
+  cleanupPersistedTaskOrderRevision: (...args: unknown[]) => mockCleanupPersistedTaskOrderRevision(...args),
 }));
 
-vi.mock('../features/tasks/taskSpecFile.js', () => ({
-  readTaskSpecFile: (sourceOrderPath: string) => mockReadFileSync(sourceOrderPath, 'utf-8'),
+vi.mock('../features/tasks/execute/reusedWorktree.js', () => ({
+  assertReusableWorktreePath: (...args: unknown[]) => mockAssertReusableWorktreePath(...args),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -161,9 +159,6 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 }));
 
 import { instructBranch } from '../features/tasks/list/taskActions.js';
-import { error as logError } from '../shared/ui/index.js';
-
-const mockLogError = vi.mocked(logError);
 const testAttachment = {
   placeholder: '[Image #1]',
   tempPath: '/tmp/takt/session-1/attachments/image-1.png',
@@ -173,13 +168,10 @@ const testAttachment = {
 describe('instructBranch direct execution flow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockExistsSync.mockReturnValue(true);
-    mockReadFileSync.mockImplementation(() => {
-      throw new Error('readFileSync should not be called by default');
-    });
-
+    mockResolveTaskOrderContent.mockImplementation(() => 'done');
+    mockAssertReusableWorktreePath.mockImplementation(() => undefined);
     mockSelectWorkflow.mockResolvedValue('default');
-    mockRunInstructMode.mockResolvedValue({ action: 'execute', task: '追加指示A' });
+    mockRunInstructMode.mockResolvedValue({ action: 'execute', task: '追加指示A', source: 'go' });
     mockDispatchConversationAction.mockImplementation(async (_result, handlers) => handlers.execute({ task: '追加指示A' }));
     mockExecFileSync.mockReturnValue('');
     mockConfirm.mockResolvedValue(true);
@@ -202,7 +194,6 @@ describe('instructBranch direct execution flow', () => {
     mockListRecentRuns.mockReturnValue([]);
     mockSelectRun.mockResolvedValue(null);
     mockFindRunForTask.mockReturnValue(null);
-    mockFindPreviousOrderContent.mockReturnValue(null);
     mockIsWorkflowPath.mockImplementation((workflow: string) => workflow.startsWith('/') || workflow.startsWith('~') || workflow.startsWith('./') || workflow.startsWith('../') || workflow.endsWith('.yaml') || workflow.endsWith('.yml'));
     mockLoadWorkflowByIdentifier.mockReturnValue({ name: 'path-workflow' });
     mockLoadAllStandaloneWorkflowsWithSources.mockReturnValue(new Map<string, unknown>([
@@ -215,10 +206,6 @@ describe('instructBranch direct execution flow', () => {
       data: { task: 'done' },
     });
     mockExecuteAndCompleteTask.mockResolvedValue(true);
-    mockPrepareTaskSpecDirectory.mockReturnValue({
-      taskDir: '/project/.takt/tasks/done-task',
-      taskDirRelative: '.takt/tasks/done-task',
-    });
   });
 
   it('should execute directly via startReExecution instead of requeuing', async () => {
@@ -236,14 +223,14 @@ describe('instructBranch direct execution flow', () => {
     expect(result).toBe(true);
     expect(mockStartReExecution).toHaveBeenCalledWith(
       'done-task',
-      ['completed', 'failed'],
+      ['completed', 'pr_failed'],
       'instruct',
       {
         startStep: undefined,
-        retryNote: '既存ノート\n\n追加指示A',
+        retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: undefined,
         restartPoint: undefined,
       },
@@ -268,17 +255,47 @@ describe('instructBranch direct execution flow', () => {
     expect(result).toBe(true);
     expect(mockStartReExecution).toHaveBeenCalledWith(
       'done-task',
-      ['completed', 'failed'],
+      ['completed', 'pr_failed'],
       'instruct',
       {
         startStep: undefined,
-        retryNote: '追加指示A',
+        retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: '20260717-source-run',
         restartPoint: undefined,
       },
+    );
+  });
+
+  it('should replay the existing task_dir without revising order', async () => {
+    mockRunInstructMode.mockResolvedValue({
+      action: 'execute',
+      task: '# Canonical order',
+      source: 'replay',
+    });
+    const taskDir = '.takt/tasks/done-task';
+    mockResolveTaskOrderContent.mockReturnValue('# Canonical order');
+
+    await instructBranch('/project', {
+      kind: 'completed',
+      name: 'done-task',
+      createdAt: '2026-02-14T00:00:00.000Z',
+      filePath: '/project/.takt/tasks.yaml',
+      content: 'legacy task text',
+      taskDir,
+      branch: 'takt/done-task',
+      worktreePath: '/project/.takt/worktrees/done-task',
+      data: { task: 'legacy task text' },
+    });
+
+    expect(mockPersistTaskOrderRevision).not.toHaveBeenCalled();
+    expect(mockStartReExecution).toHaveBeenCalledWith(
+      'done-task',
+      ['completed', 'pr_failed'],
+      'instruct',
+      expect.objectContaining({ taskDir, retryNote: undefined }),
     );
   });
 
@@ -288,6 +305,7 @@ describe('instructBranch direct execution flow', () => {
       action: 'execute',
       task: 'Use [Image #1].',
       attachments: [testAttachment],
+      source: 'go',
     }, cleanupAttachments));
     mockDispatchConversationAction.mockImplementation(async (_result, handlers) =>
       handlers.execute({ task: 'Use [Image #1].' }));
@@ -303,24 +321,23 @@ describe('instructBranch direct execution flow', () => {
       data: { task: 'done' },
     });
 
-    expect(mockPrepareTaskSpecDirectory).toHaveBeenCalledWith(
+    expect(mockPersistTaskOrderRevision).toHaveBeenCalledWith(
       '/project',
-      expect.any(String),
+      undefined,
+      'Use [Image #1].',
+      'en',
       [testAttachment],
     );
-    const preparedOrder = mockPrepareTaskSpecDirectory.mock.calls[0]?.[1] as string;
-    expect(preparedOrder).toContain('done');
-    expect(preparedOrder).toContain('Use [Image #1].');
     expect(mockStartReExecution).toHaveBeenCalledWith(
       'done-task',
-      ['completed', 'failed'],
+      ['completed', 'pr_failed'],
       'instruct',
       {
         startStep: undefined,
-        retryNote: 'Use [Image #1].',
+        retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
-        taskDir: '.takt/tasks/done-task',
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: undefined,
         restartPoint: undefined,
       },
@@ -351,11 +368,62 @@ describe('instructBranch direct execution flow', () => {
     expect(cleanupAttachments).toHaveBeenCalledTimes(1);
   });
 
+  it('should cleanup a created order revision when instructed execution setup fails', async () => {
+    mockStartReExecution.mockImplementationOnce(() => {
+      throw new Error('start failed');
+    });
+
+    await expect(instructBranch('/project', {
+      kind: 'completed',
+      name: 'done-task',
+      createdAt: '2026-02-14T00:00:00.000Z',
+      filePath: '/project/.takt/tasks.yaml',
+      content: 'done',
+      branch: 'takt/done-task',
+      worktreePath: '/project/.takt/worktrees/done-task',
+      data: { task: 'done' },
+    })).rejects.toThrow('start failed');
+
+    expect(mockCleanupPersistedTaskOrderRevision).toHaveBeenCalledWith(expect.objectContaining({
+      created: true,
+      taskDirRelative: MOCK_CREATED_TASK_DIR,
+      taskDir: `/project/${MOCK_CREATED_TASK_DIR}`,
+    }));
+  });
+
+  it('should rollback the revision when the worktree disappears before instruct state mutation', async () => {
+    mockAssertReusableWorktreePath.mockImplementation((_projectDir: string, candidatePath: string) => {
+      if (mockPersistTaskOrderRevision.mock.calls.length > 0) {
+        throw new Error(`Worktree was replaced before instruct state mutation: ${candidatePath}`);
+      }
+    });
+
+    await expect(instructBranch('/project', {
+      kind: 'completed',
+      name: 'done-task',
+      createdAt: '2026-02-14T00:00:00.000Z',
+      filePath: '/project/.takt/tasks.yaml',
+      content: 'done',
+      branch: 'takt/done-task',
+      worktreePath: '/project/.takt/worktrees/done-task',
+      data: { task: 'done' },
+    })).rejects.toThrow('Worktree was replaced before instruct state mutation');
+
+    expect(mockCleanupPersistedTaskOrderRevision).toHaveBeenCalledWith(expect.objectContaining({
+      created: true,
+      taskDirRelative: MOCK_CREATED_TASK_DIR,
+      taskDir: `/project/${MOCK_CREATED_TASK_DIR}`,
+    }));
+    expect(mockStartReExecution).not.toHaveBeenCalled();
+    expect(mockRequeueTask).not.toHaveBeenCalled();
+  });
+
   it('should promote image attachments for instructed save_task requeue', async () => {
     mockRunInstructMode.mockResolvedValue({
       action: 'save_task',
       task: 'Use [Image #1].',
       attachments: [testAttachment],
+      source: 'go',
     });
     mockDispatchConversationAction.mockImplementation(async (_result, handlers) =>
       handlers.save_task({ task: 'Use [Image #1].' }));
@@ -373,30 +441,33 @@ describe('instructBranch direct execution flow', () => {
 
     expect(mockRequeueTask).toHaveBeenCalledWith(
       'done-task',
-      ['completed', 'failed'],
+      ['completed', 'pr_failed'],
       {
         startStep: undefined,
-        retryNote: 'Use [Image #1].',
+        retryNote: undefined,
         resumePoint: undefined,
         workflow: 'default',
-        taskDir: '.takt/tasks/done-task',
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: undefined,
         restartPoint: undefined,
       },
     );
-    expect(mockPrepareTaskSpecDirectory).toHaveBeenCalledWith(
+    expect(mockPersistTaskOrderRevision).toHaveBeenCalledWith(
       '/project',
-      ['done', '', '## 追加指示', '', 'Use [Image #1].'].join('\n'),
+      undefined,
+      'Use [Image #1].',
+      'en',
       [testAttachment],
     );
   });
 
   it('should preserve task_dir order content when instructed task has image attachments', async () => {
-    mockReadFileSync.mockReturnValue(['Full order', 'Second line'].join('\n'));
+    mockResolveTaskOrderContent.mockReturnValue(['Full order', 'Second line'].join('\n'));
     mockRunInstructMode.mockResolvedValue({
       action: 'save_task',
       task: 'Use [Image #1].',
       attachments: [testAttachment],
+      source: 'go',
     });
     mockDispatchConversationAction.mockImplementation(async (_result, handlers) =>
       handlers.save_task({ task: 'Use [Image #1].' }));
@@ -413,21 +484,22 @@ describe('instructBranch direct execution flow', () => {
       data: { task: 'Implement using only the files in `.takt/tasks/done-task`.' },
     });
 
-    expect(mockReadFileSync).toHaveBeenCalledWith('/project/.takt/tasks/done-task/order.md', 'utf-8');
-    expect(mockPrepareTaskSpecDirectory).toHaveBeenCalledWith(
+    expect(mockResolveTaskOrderContent).toHaveBeenCalledWith(
       '/project',
-      expect.any(String),
-      [testAttachment],
-      { sourceTaskDir: '/project/.takt/tasks/done-task' },
+      '.takt/tasks/done-task',
+      'Implement using only the files in `.takt/tasks/done-task`.',
     );
-    const preparedOrder = mockPrepareTaskSpecDirectory.mock.calls[0]?.[1] as string;
-    expect(preparedOrder).toContain('Full order');
-    expect(preparedOrder).toContain('Second line');
-    expect(preparedOrder).toContain('Use [Image #1].');
+    expect(mockPersistTaskOrderRevision).toHaveBeenCalledWith(
+      '/project',
+      '.takt/tasks/done-task',
+      'Use [Image #1].',
+      'en',
+      [testAttachment],
+    );
   });
 
   it('should renumber instructed attachments when task_dir order already references images', async () => {
-    mockReadFileSync.mockReturnValue([
+    mockResolveTaskOrderContent.mockReturnValue([
       'Full order with [Image #1].',
       '',
       '## 添付画像',
@@ -438,6 +510,7 @@ describe('instructBranch direct execution flow', () => {
       action: 'save_task',
       task: 'Use [Image #1].',
       attachments: [testAttachment],
+      source: 'go',
     });
     mockDispatchConversationAction.mockImplementation(async (_result, handlers) =>
       handlers.save_task({ task: 'Use [Image #1].' }));
@@ -456,10 +529,10 @@ describe('instructBranch direct execution flow', () => {
 
     expect(mockRequeueTask).toHaveBeenCalledWith(
       'done-task',
-      ['completed', 'failed'],
+      ['completed', 'pr_failed'],
       {
         startStep: undefined,
-        retryNote: 'Use [Image #2].',
+        retryNote: undefined,
         resumePoint: undefined,
         workflow: 'default',
         taskDir: '.takt/tasks/done-task',
@@ -467,24 +540,17 @@ describe('instructBranch direct execution flow', () => {
         restartPoint: undefined,
       },
     );
-    expect(mockPrepareTaskSpecDirectory).toHaveBeenCalledWith(
+    expect(mockPersistTaskOrderRevision).toHaveBeenCalledWith(
       '/project',
-      expect.any(String),
-      [{
-        ...testAttachment,
-        placeholder: '[Image #2]',
-        fileName: 'image-2.png',
-      }],
-      { sourceTaskDir: '/project/.takt/tasks/done-task' },
+      '.takt/tasks/done-task',
+      'Use [Image #1].',
+      'en',
+      [testAttachment],
     );
-    const preparedOrder = mockPrepareTaskSpecDirectory.mock.calls[0]?.[1] as string;
-    expect(preparedOrder).toContain('Full order with [Image #1].');
-    expect(preparedOrder).toContain('attachments/image-1.png');
-    expect(preparedOrder).toContain('Use [Image #2].');
   });
 
   it('should pass renumbered instruction note when executing instructed attachments directly', async () => {
-    mockReadFileSync.mockReturnValue([
+    mockResolveTaskOrderContent.mockReturnValue([
       'Full order with [Image #1].',
       '',
       '## 添付画像',
@@ -495,6 +561,7 @@ describe('instructBranch direct execution flow', () => {
       action: 'execute',
       task: 'Use [Image #1].',
       attachments: [testAttachment],
+      source: 'go',
     });
     mockDispatchConversationAction.mockImplementation(async (_result, handlers) =>
       handlers.execute({ task: 'Use [Image #1].' }));
@@ -513,11 +580,11 @@ describe('instructBranch direct execution flow', () => {
 
     expect(mockStartReExecution).toHaveBeenCalledWith(
       'done-task',
-      ['completed', 'failed'],
+      ['completed', 'pr_failed'],
       'instruct',
       {
         startStep: undefined,
-        retryNote: 'Use [Image #2].',
+        retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
         taskDir: '.takt/tasks/done-task',
@@ -655,7 +722,7 @@ describe('instructBranch direct execution flow', () => {
         taskName: 'done-task',
         taskContent: 'done',
         retryNote: '',
-        previousOrderContent: null,
+        previousOrderContent: 'done',
       }),
     );
     const branchContext = mockRunInstructMode.mock.calls[0]?.[0]?.branchContext as string;
@@ -664,6 +731,7 @@ describe('instructBranch direct execution flow', () => {
   });
 
   it('should use the saved PR base for Instruct diff context', async () => {
+    mockResolveTaskOrderContent.mockReturnValue('review PR');
     mockExecFileSync
       .mockReturnValueOnce(' src/index.ts | 2 +-\n 1 file changed')
       .mockReturnValueOnce('abc123 fix issue');
@@ -705,7 +773,7 @@ describe('instructBranch direct execution flow', () => {
         taskName: 'pr-task',
         taskContent: 'review PR',
         retryNote: '',
-        previousOrderContent: null,
+        previousOrderContent: 'review PR',
         prContext: {
           source: 'pr_review',
           prNumber: 826,
@@ -851,7 +919,7 @@ describe('instructBranch direct execution flow', () => {
     expect(mockStartReExecution).not.toHaveBeenCalled();
   });
 
-  it('should set generated instruction as retry note when no existing note', async () => {
+  it('should not store a generated instruction as retry note', async () => {
     await instructBranch('/project', {
       kind: 'completed',
       name: 'done-task',
@@ -865,14 +933,14 @@ describe('instructBranch direct execution flow', () => {
 
     expect(mockStartReExecution).toHaveBeenCalledWith(
       'done-task',
-      ['completed', 'failed'],
+      ['completed', 'pr_failed'],
       'instruct',
       {
         startStep: undefined,
-        retryNote: '追加指示A',
+        retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: undefined,
         restartPoint: undefined,
       },
@@ -899,56 +967,12 @@ describe('instructBranch direct execution flow', () => {
         taskName: 'done-task',
         taskContent: 'done',
         retryNote: '',
-        previousOrderContent: null,
+        previousOrderContent: 'done',
       }),
     );
   });
 
-  it('should start failed instruct from the saved run in the same worktree', async () => {
-    const runSessionContext = {
-      task: 'failed task\n追加条件を確認する',
-      workflow: 'default',
-      status: 'failed',
-      stepLogs: [],
-      reports: [{
-        filename: 'review-resolution.md',
-        content: [
-          '## Requirement Decision Grounds',
-          '| Subject | Status | Grounds |',
-          '|---|---|---|',
-          '| failed instruct | Fulfilled | review: APPROVE |',
-          '## Finding Dispositions',
-          '| Finding ID / Source | Disposition | Basis |',
-          '|---|---|---|',
-          '## Re-evaluation of Prior Findings',
-          '- review: APPROVE',
-          '## Reason the Decision Cannot Be Made (when BLOCKED)',
-          '- npm run test:e2e:mock',
-        ].join('\n'),
-      }],
-    };
-    mockLoadRunSessionContext.mockReturnValue(runSessionContext);
-    mockFindRunForTask.mockReturnValue('different-run');
-    mockExecFileSync.mockImplementation((_command, args) => {
-      const gitArgs = args as string[];
-      if (gitArgs[0] === 'status') {
-        return 'A  src/staged-marker.ts\n M src/unstaged-marker.ts\n?? untracked-marker.md\n';
-      }
-      if (gitArgs[0] === 'diff' && gitArgs.includes('main...takt/failed-task')) {
-        return ' src/committed-marker.ts | 1 +\n';
-      }
-      if (gitArgs[0] === 'diff' && gitArgs.includes('--cached')) {
-        return ' src/staged-marker.ts | 1 +\n';
-      }
-      if (gitArgs[0] === 'diff') {
-        return ' src/unstaged-marker.ts | 1 +\n';
-      }
-      if (gitArgs[0] === 'log') {
-        return 'abc123 failed run\n';
-      }
-      return '';
-    });
-
+  it('should reject failed tasks before starting instruct mode', async () => {
     const failedTask = {
       kind: 'failed' as const,
       name: 'failed-task',
@@ -961,150 +985,12 @@ describe('instructBranch direct execution flow', () => {
       data: { task: 'failed task\n追加条件を確認する' },
     };
 
-    const result = await instructBranch('/project', failedTask);
-
-    expect(result).toBe(true);
+    await expect(instructBranch('/project', failedTask)).rejects.toThrow(
+      'Failed tasks do not support Instruct; use Retry instead.',
+    );
+    expect(mockRunInstructMode).not.toHaveBeenCalled();
     expect(mockFindRunForTask).not.toHaveBeenCalled();
-    expect(mockLoadRunSessionContext).toHaveBeenCalledWith(
-      '/project/.takt/worktrees/failed-task',
-      'failed-run',
-    );
-    expect(mockRunInstructMode).toHaveBeenCalledWith(expect.objectContaining({
-      cwd: '/project/.takt/worktrees/failed-task',
-      branchName: 'takt/failed-task',
-      runSessionContext,
-      failedContext: expect.objectContaining({
-        reportSummary: expect.stringContaining('failed instruct'),
-        worktreeSummary: expect.any(String),
-      }),
-    }));
-    const failedContext = mockRunInstructMode.mock.calls[0]?.[0]?.failedContext as {
-      reportSummary: string;
-      worktreeSummary: string;
-    };
-    expect(failedContext.reportSummary).toContain('failed instruct');
-    expect(failedContext.worktreeSummary).toContain('src/staged-marker.ts');
-    expect(failedContext.worktreeSummary).toContain('src/unstaged-marker.ts');
-    expect(failedContext.worktreeSummary).toContain('untracked-marker.md');
-    expect(mockStartReExecution).toHaveBeenCalledWith(
-      'failed-task',
-      ['completed', 'failed'],
-      'instruct',
-      expect.objectContaining({
-        sourceRunSlug: 'failed-run',
-      }),
-    );
-    expect(mockExecuteAndCompleteTask).toHaveBeenCalled();
-  });
-
-  it('should resolve a missing failed run slug from the task in the same worktree', async () => {
-    const fullTask = 'failed task\n追加条件を確認する';
-    const runSessionContext = {
-      task: fullTask,
-      workflow: 'default',
-      status: 'failed',
-      stepLogs: [],
-      reports: [],
-    };
-    mockFindRunForTask.mockReturnValue('discovered-failed-run');
-    mockLoadRunSessionContext.mockReturnValue(runSessionContext);
-
-    await instructBranch('/project', {
-      kind: 'failed',
-      name: 'failed-task',
-      createdAt: '2026-08-15T00:00:00.000Z',
-      filePath: '/project/.takt/tasks.yaml',
-      content: 'failed task',
-      branch: 'takt/failed-task',
-      worktreePath: '/project/.takt/worktrees/failed-task',
-      data: { task: fullTask },
-    });
-
-    expect(mockFindRunForTask).toHaveBeenCalledWith(
-      '/project/.takt/worktrees/failed-task',
-      fullTask,
-    );
-    expect(mockLoadRunSessionContext).toHaveBeenCalledWith(
-      '/project/.takt/worktrees/failed-task',
-      'discovered-failed-run',
-    );
-    expect(mockFindPreviousOrderContent).toHaveBeenCalledWith(
-      '/project/.takt/worktrees/failed-task',
-      'discovered-failed-run',
-    );
-    expect(mockRunInstructMode).toHaveBeenCalledWith(expect.objectContaining({
-      cwd: '/project/.takt/worktrees/failed-task',
-      runSessionContext,
-      previousOrderContent: null,
-    }));
-    expect(mockStartReExecution).toHaveBeenCalledWith(
-      'failed-task',
-      ['completed', 'failed'],
-      'instruct',
-      expect.objectContaining({ sourceRunSlug: 'discovered-failed-run' }),
-    );
-  });
-
-  it('should not select a run when only the displayed task prefix matches', async () => {
-    const fullTask = 'x'.repeat(81);
-    mockFindRunForTask.mockReturnValue(null);
-    mockFindPreviousOrderContent.mockReturnValue('unrelated latest order');
-
-    await instructBranch('/project', {
-      kind: 'failed',
-      name: 'failed-task',
-      createdAt: '2026-08-15T00:00:00.000Z',
-      filePath: '/project/.takt/tasks.yaml',
-      content: 'x'.repeat(80),
-      branch: 'takt/failed-task',
-      worktreePath: '/project/.takt/worktrees/failed-task',
-      data: { task: fullTask },
-    });
-
-    expect(mockFindRunForTask).toHaveBeenCalledWith(
-      '/project/.takt/worktrees/failed-task',
-      fullTask,
-    );
-    expect(mockLoadRunSessionContext).not.toHaveBeenCalled();
-    expect(mockFindPreviousOrderContent).not.toHaveBeenCalled();
-    expect(mockRunInstructMode).toHaveBeenCalledWith(expect.objectContaining({
-      runSessionContext: undefined,
-      previousOrderContent: null,
-      failedContext: expect.objectContaining({ reportSummary: '' }),
-    }));
-    expect(mockStartReExecution).toHaveBeenCalledWith(
-      'failed-task',
-      ['completed', 'failed'],
-      'instruct',
-      expect.objectContaining({ sourceRunSlug: undefined }),
-    );
-  });
-
-  it('should not read an unrelated order when a failed run cannot be resolved', async () => {
-    mockFindRunForTask.mockReturnValue(null);
-    mockFindPreviousOrderContent.mockReturnValue('unrelated latest order');
-
-    await instructBranch('/project', {
-      kind: 'failed',
-      name: 'failed-task',
-      createdAt: '2026-08-15T00:00:00.000Z',
-      filePath: '/project/.takt/tasks.yaml',
-      content: 'failed task',
-      branch: 'takt/failed-task',
-      worktreePath: '/project/.takt/worktrees/failed-task',
-      data: { task: 'failed task' },
-    });
-
-    expect(mockFindPreviousOrderContent).not.toHaveBeenCalled();
-    expect(mockRunInstructMode).toHaveBeenCalledWith(expect.objectContaining({
-      previousOrderContent: null,
-    }));
-    expect(mockStartReExecution).toHaveBeenCalledWith(
-      'failed-task',
-      ['completed', 'failed'],
-      'instruct',
-      expect.objectContaining({ sourceRunSlug: undefined }),
-    );
+    expect(mockResolveTaskOrderContent).not.toHaveBeenCalled();
   });
 
   it('should search runs in worktree for run session context', async () => {
@@ -1140,12 +1026,12 @@ describe('instructBranch direct execution flow', () => {
         taskContent: 'done',
         retryNote: '',
         runSessionContext: runContext,
-        previousOrderContent: null,
+        previousOrderContent: 'done',
       }),
     );
   });
 
-  it('should not warn when selected run order uses canonical provider block fields', async () => {
+  it('should not warn when canonical order uses provider block fields', async () => {
     mockListRecentRuns.mockReturnValue([
       { slug: 'run-1', task: 'fix', workflow: 'default', status: 'completed', startTime: '2026-02-18T00:00:00Z' },
     ]);
@@ -1157,7 +1043,7 @@ describe('instructBranch direct execution flow', () => {
       stepLogs: [],
       reports: [],
     });
-    mockFindPreviousOrderContent.mockReturnValue([
+    mockResolveTaskOrderContent.mockReturnValue([
       'steps:',
       '  - name: review',
       '    provider:',
@@ -1181,7 +1067,7 @@ describe('instructBranch direct execution flow', () => {
   });
 
   it('should not warn for markdown explanatory snippets without workflow config body', async () => {
-    mockFindPreviousOrderContent.mockReturnValue([
+    mockResolveTaskOrderContent.mockReturnValue([
       '# Deprecated examples',
       '',
       '```yaml',
@@ -1207,8 +1093,8 @@ describe('instructBranch direct execution flow', () => {
     expect(mockWarn).not.toHaveBeenCalled();
   });
 
-  it('should not warn when selected run order uses provider block format', async () => {
-    mockFindPreviousOrderContent.mockReturnValue([
+  it('should not warn when canonical order uses provider block format', async () => {
+    mockResolveTaskOrderContent.mockReturnValue([
       'steps:',
       '  - name: review',
       '    provider:',
@@ -1231,10 +1117,12 @@ describe('instructBranch direct execution flow', () => {
     expect(mockWarn).not.toHaveBeenCalled();
   });
 
-  it('should return false when worktree does not exist', async () => {
-    mockExistsSync.mockReturnValue(false);
+  it('should fail fast when worktree does not exist', async () => {
+    mockAssertReusableWorktreePath.mockImplementationOnce((_projectDir: string, candidatePath: string) => {
+      throw new Error(`Worktree directory does not exist: ${candidatePath}`);
+    });
 
-    const result = await instructBranch('/project', {
+    await expect(instructBranch('/project', {
       kind: 'completed',
       name: 'done-task',
       createdAt: '2026-02-14T00:00:00.000Z',
@@ -1243,10 +1131,7 @@ describe('instructBranch direct execution flow', () => {
       branch: 'takt/done-task',
       worktreePath: '/project/.takt/worktrees/done-task',
       data: { task: 'done' },
-    });
-
-    expect(result).toBe(false);
-    expect(mockLogError).toHaveBeenCalledWith(expect.stringContaining('done-task'));
+    })).rejects.toThrow('Worktree directory does not exist');
     expect(mockStartReExecution).not.toHaveBeenCalled();
   });
 
@@ -1267,13 +1152,13 @@ describe('instructBranch direct execution flow', () => {
     expect(result).toBe(true);
     expect(mockRequeueTask).toHaveBeenCalledWith(
       'done-task',
-      ['completed', 'failed'],
+      ['completed', 'pr_failed'],
       {
         startStep: undefined,
-        retryNote: '追加指示A',
+        retryNote: undefined,
         resumePoint: undefined,
         workflow: 'default',
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: undefined,
         restartPoint: undefined,
       },
@@ -1302,13 +1187,13 @@ describe('instructBranch direct execution flow', () => {
     expect(result).toBe(true);
     expect(mockRequeueTask).toHaveBeenCalledWith(
       'done-task',
-      ['completed', 'failed'],
+      ['completed', 'pr_failed'],
       {
         startStep: undefined,
-        retryNote: '追加指示A',
+        retryNote: undefined,
         resumePoint: undefined,
         workflow: 'selected-workflow',
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: undefined,
         restartPoint: undefined,
       },
@@ -1335,20 +1220,20 @@ describe('instructBranch direct execution flow', () => {
     expect(result).toBe(true);
     expect(mockRequeueTask).toHaveBeenCalledWith(
       'done-task',
-      ['completed', 'failed'],
+      ['completed', 'pr_failed'],
       {
         startStep: undefined,
-        retryNote: '追加指示A',
+        retryNote: undefined,
         resumePoint: undefined,
         workflow: undefined,
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: undefined,
         restartPoint: undefined,
       },
     );
   });
 
-  it('should requeue task with existing retry note appended when save_task', async () => {
+  it('should clear an existing retry note when revised order is requeued', async () => {
     mockDispatchConversationAction.mockImplementation(async (_result, handlers) => handlers.save_task({ task: '追加指示A' }));
 
     const result = await instructBranch('/project', {
@@ -1365,13 +1250,13 @@ describe('instructBranch direct execution flow', () => {
     expect(result).toBe(true);
     expect(mockRequeueTask).toHaveBeenCalledWith(
       'done-task',
-      ['completed', 'failed'],
+      ['completed', 'pr_failed'],
       {
         startStep: undefined,
-        retryNote: '既存ノート\n\n追加指示A',
+        retryNote: undefined,
         resumePoint: undefined,
         workflow: 'default',
-        taskDir: undefined,
+        taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: undefined,
         restartPoint: undefined,
       },

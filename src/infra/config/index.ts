@@ -30,6 +30,7 @@ export {
 } from './loaders/workflowLoader.js';
 export {
   getWorkflowCategories,
+  getWorkflowDescriptions,
   resolveIgnoredWorkflows,
   buildCategorizedWorkflows,
   findWorkflowCategories,
@@ -37,6 +38,7 @@ export {
   type WorkflowCategoryNode,
   type CategorizedWorkflows,
   type MissingWorkflow,
+  type WorkflowDescriptions,
 } from './loaders/workflowCategories.js';
 export * from './global/index.js';
 export * from './project/index.js';

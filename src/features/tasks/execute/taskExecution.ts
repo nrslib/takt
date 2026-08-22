@@ -25,6 +25,11 @@ import {
   persistTaskResult,
 } from './taskResultHandler.js';
 import { runWorkflowExecution } from './workflowExecutionApi.js';
+import {
+  createLoopAnalysisPublicationCoordinator,
+  settleLoopAnalysisPublication,
+  type LoopAnalysisPublicationCoordinator,
+} from './loopAnalysisPublication.js';
 
 export type { TaskExecutionOptions, ExecuteTaskOptions };
 
@@ -110,6 +115,7 @@ export async function executeTaskAndCompleteWithDetails(
   const taskAbortController = new AbortController();
   const externalAbortSignal = parallelOptions?.abortSignal;
   const taskAbortSignal = externalAbortSignal ? taskAbortController.signal : undefined;
+  let loopAnalysisPublication: LoopAnalysisPublicationCoordinator | undefined;
 
   const onExternalAbort = (): void => {
     taskAbortController.abort();
@@ -160,6 +166,9 @@ export async function executeTaskAndCompleteWithDetails(
     taskForPersistence = executionTask;
 
     const projectRootCwd = cwd;
+    loopAnalysisPublication = autoPr && branch
+      ? createLoopAnalysisPublicationCoordinator(branch)
+      : undefined;
     const taskRunResult = await taskExecutor({
       task: taskSpec?.taskPrompt ?? task.content,
       ...(taskSpec === undefined ? {} : { taskSpec }),
@@ -191,6 +200,9 @@ export async function executeTaskAndCompleteWithDetails(
         prNumber,
       }),
       ...(prContext ? { prContext } : {}),
+      ...(loopAnalysisPublication === undefined
+        ? {}
+        : { loopAnalysisPublication }),
     });
 
     if (taskRunResult.exceeded && taskRunResult.exceededInfo) {
@@ -297,6 +309,7 @@ export async function executeTaskAndCompleteWithDetails(
       failureReason,
     };
   } finally {
+    settleLoopAnalysisPublication(loopAnalysisPublication);
     if (externalAbortSignal) {
       externalAbortSignal.removeEventListener('abort', onExternalAbort);
     }

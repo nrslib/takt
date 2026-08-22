@@ -42,6 +42,7 @@ steps:
       development_policy: [coding, testing, architecture]
       development_knowledge: [architecture]
       implementation_instruction: simple-implement
+      scope_report_format: coder-scope
     rules:
       - condition: 実装が完了した
         next: review

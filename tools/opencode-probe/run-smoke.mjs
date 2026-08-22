@@ -30,6 +30,7 @@ async function runScript(script, args = []) {
     const isolatedEnvironment = prepareIsolatedProbeEnvironment(process.env, runtimeRoot);
     return runSmokeScript(resolve(script), args, isolatedEnvironment, {
       timeoutMs: SMOKE_SCRIPT_TIMEOUT_MS,
+      reportMarker: 'PROBE_RESULT ',
     });
   });
 }
@@ -40,7 +41,10 @@ async function verifyDirectPluginProbe() {
       resolve('tools/opencode-probe/plugin-probe.mjs'),
       ['--plugin', 'none'],
       prepareIsolatedProbeEnvironment(process.env, runtimeRoot),
-      { timeoutMs: SMOKE_SCRIPT_TIMEOUT_MS },
+      {
+        timeoutMs: SMOKE_SCRIPT_TIMEOUT_MS,
+        reportMarker: 'PROBE_RESULT ',
+      },
     )
   ));
   const result = parseProbeResult(stdout);

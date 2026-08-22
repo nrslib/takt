@@ -340,6 +340,27 @@ describe('CodexProvider — structured output', () => {
     expect(opts).toHaveProperty('reasoningEffort', 'high');
   });
 
+  it.each([true, false])('provider_options.codex.fastMode=%s を通常・isolated structured callへ渡す', async (fastMode) => {
+    mockCallCodex.mockResolvedValue(doneResponse('coder'));
+    const providerOptions: StepProviderOptions = {
+      codex: { fastMode },
+    };
+    const provider = new CodexProvider();
+
+    await provider.setup({ name: 'coder' }).call('prompt', {
+      cwd: '/tmp',
+      providerOptions,
+    });
+    await provider.setupIsolatedStructured({ name: 'selector' }).call('prompt', {
+      cwd: '/tmp',
+      providerOptions,
+      outputSchema: SCHEMA,
+    });
+
+    expect(mockCallCodex.mock.calls[0]?.[2]).toHaveProperty('fastMode', fastMode);
+    expect(mockCallCodex.mock.calls[1]?.[2]).toHaveProperty('fastMode', fastMode);
+  });
+
   it('provider_options.codex.baseUrl を callCodex に渡す', async () => {
     mockCallCodex.mockResolvedValue(doneResponse('coder'));
     const providerOptions = {

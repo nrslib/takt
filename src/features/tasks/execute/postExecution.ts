@@ -18,6 +18,8 @@ import {
 } from '../../../infra/git/index.js';
 import type { Issue, CreatePrResult, GitProvider } from '../../../infra/git/index.js';
 import type { ExecuteTaskOptions } from './types.js';
+import { readPrivateFileState, writePrivateFile } from '../../../shared/utils/private-file.js';
+import { sanitizeLoopAnalysisReportForPublication } from './loopAnalysisReportPublication.js';
 
 const log = createLogger('postExecution');
 
@@ -52,6 +54,37 @@ export interface PostExecutionResult {
   prError?: string;
   taskFailed?: boolean;
   taskError?: string;
+}
+
+export interface CommentLoopAnalysisReportOptions {
+  projectCwd: string;
+  branch: string;
+  reportPath: string;
+  gitProvider?: GitProvider;
+}
+
+export async function commentLoopAnalysisReportOnPr(
+  options: CommentLoopAnalysisReportOptions,
+): Promise<void> {
+  const gitProvider = options.gitProvider ?? getGitProvider();
+  const existingPr = gitProvider.findExistingPr(options.branch, options.projectCwd);
+  if (existingPr === undefined) {
+    return;
+  }
+
+  const snapshot = readPrivateFileState(options.reportPath);
+  if (!('content' in snapshot)) {
+    throw new Error('Loop analysis report is no longer available');
+  }
+  const report = snapshot.content.toString('utf8');
+  const sanitizedReport = sanitizeLoopAnalysisReportForPublication(report);
+  if (sanitizedReport !== report) {
+    writePrivateFile(options.reportPath, sanitizedReport);
+  }
+  const result = gitProvider.commentOnPr(existingPr.number, sanitizedReport, options.projectCwd);
+  if (!result.success) {
+    throw new Error(result.error ?? PR_COMMENT_FAILURE_MESSAGE);
+  }
 }
 
 /**
