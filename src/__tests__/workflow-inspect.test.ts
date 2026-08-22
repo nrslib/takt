@@ -59,9 +59,6 @@ function expectField(output: string, field: string, value: string): void {
   const lines = output.split('\n');
   const start = lines.findIndex((line) => fieldPattern.test(lineContent(line)));
   expect(start).toBeGreaterThanOrEqual(0);
-  if (start < 0) {
-    return;
-  }
 
   const startLine = lineContent(lines[start]!);
   const separator = startLine.indexOf(':');
@@ -176,65 +173,17 @@ function expectResolvedLine(block: string, field: string, value: string, source:
   expect(block).toContain(`${field}: ${value} (source: ${source})`);
 }
 
-describe('workflow inspect', () => {
-  let projectDir: string;
-  let globalDir: string;
-  let previousConfigDir: string | undefined;
-  let consoleLogSpy: ReturnType<typeof vi.spyOn>;
+function writeRichInspectFixture(projectDir: string, globalDir: string): string {
+  writeProjectFacet(projectDir, 'personas', 'project-persona');
+  writeProjectFacet(projectDir, 'instructions', 'project-instruction');
+  writeProjectFacet(projectDir, 'instructions', 'retry-instruction');
+  writeProjectFacet(projectDir, 'policies', 'project-policy');
+  writeProjectFacet(projectDir, 'output-contracts', 'rich-format');
+  writeGlobalFacet(globalDir, 'knowledge', 'global-knowledge');
+  writeFile(projectDir, 'rows.csv', 'value\nitem\n');
+  writeFile(projectDir, 'prompt.md', 'Process {line:1}\n');
 
-  beforeEach(() => {
-    projectDir = mkdtempSync(join(tmpdir(), 'takt-workflow-inspect-'));
-    globalDir = mkdtempSync(join(tmpdir(), 'takt-workflow-inspect-global-'));
-    previousConfigDir = process.env.TAKT_CONFIG_DIR;
-    process.env.TAKT_CONFIG_DIR = globalDir;
-    writeFile(projectDir, '.takt/config.yaml', `language: en
-provider: mock
-model: config-model
-workflow_command_gates:
-  custom_scripts: true
-workflow_mcp_servers:
-  stdio: true
-`);
-    writeFile(projectDir, '.takt/schemas/rich-schema.json', '{}');
-    invalidateGlobalConfigCache();
-    invalidateAllResolvedConfigCache();
-    outputEvents.length = 0;
-    mockBlankLine.mockClear();
-    mockError.mockClear();
-    mockHeader.mockClear();
-    mockInfo.mockClear();
-    mockSection.mockClear();
-    mockSuccess.mockClear();
-    mockWarn.mockClear();
-    consoleLogSpy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
-      outputEvents.push(`console: ${args.map(String).join(' ')}`);
-    });
-  });
-
-  afterEach(() => {
-    consoleLogSpy.mockRestore();
-    rmSync(projectDir, { recursive: true, force: true });
-    rmSync(globalDir, { recursive: true, force: true });
-    if (previousConfigDir === undefined) {
-      delete process.env.TAKT_CONFIG_DIR;
-    } else {
-      process.env.TAKT_CONFIG_DIR = previousConfigDir;
-    }
-    invalidateGlobalConfigCache();
-    invalidateAllResolvedConfigCache();
-  });
-
-  it('全ステップの設定と解決ソースを構造化テキストで表示する', async () => {
-    writeProjectFacet(projectDir, 'personas', 'project-persona');
-    writeProjectFacet(projectDir, 'instructions', 'project-instruction');
-    writeProjectFacet(projectDir, 'instructions', 'retry-instruction');
-    writeProjectFacet(projectDir, 'policies', 'project-policy');
-    writeProjectFacet(projectDir, 'output-contracts', 'rich-format');
-    writeGlobalFacet(globalDir, 'knowledge', 'global-knowledge');
-    writeFile(projectDir, 'rows.csv', 'value\nitem\n');
-    writeFile(projectDir, 'prompt.md', 'Process {line:1}\n');
-
-    const workflowPath = writeFile(projectDir, '.takt/workflows/rich.yaml', `name: rich-inspect
+  return writeFile(projectDir, '.takt/workflows/rich.yaml', `name: rich-inspect
 initial_step: rich-agent
 max_steps: 20
 loop_monitors:
@@ -375,26 +324,65 @@ steps:
       - condition: done
         next: COMPLETE
 `);
+}
 
-    await expect(inspectWorkflowCommand(workflowPath, projectDir)).resolves.toBeUndefined();
+async function inspectRichWorkflow(projectDir: string, globalDir: string): Promise<string> {
+  const workflowPath = writeRichInspectFixture(projectDir, globalDir);
+  await expect(inspectWorkflowCommand(workflowPath, projectDir)).resolves.toBeUndefined();
+  return renderedOutput();
+}
 
-    const output = renderedOutput();
-    expect(output).not.toMatch(/^\s*\{/m);
-    expect(output).toContain('rich-inspect');
-    for (const stepName of [
-      'rich-agent',
-      'dynamic-review',
-      'fixed-review',
-      'pool-review',
-      'system-step',
-      'batch-step',
-      'team-step',
-      'builtin-step',
-      'fragment-step',
-    ]) {
-      expect(output).toContain(stepName);
+describe('workflow inspect', () => {
+  let projectDir: string;
+  let globalDir: string;
+  let previousConfigDir: string | undefined;
+  let consoleLogSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    projectDir = mkdtempSync(join(tmpdir(), 'takt-workflow-inspect-'));
+    globalDir = mkdtempSync(join(tmpdir(), 'takt-workflow-inspect-global-'));
+    previousConfigDir = process.env.TAKT_CONFIG_DIR;
+    process.env.TAKT_CONFIG_DIR = globalDir;
+    writeFile(projectDir, '.takt/config.yaml', `language: en
+provider: mock
+model: config-model
+workflow_command_gates:
+  custom_scripts: true
+workflow_mcp_servers:
+  stdio: true
+`);
+    writeFile(projectDir, '.takt/schemas/rich-schema.json', '{}');
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+    outputEvents.length = 0;
+    mockBlankLine.mockClear();
+    mockError.mockClear();
+    mockHeader.mockClear();
+    mockInfo.mockClear();
+    mockSection.mockClear();
+    mockSuccess.mockClear();
+    mockWarn.mockClear();
+    consoleLogSpy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+      outputEvents.push(`console: ${args.map(String).join(' ')}`);
+    });
+  });
+
+  afterEach(() => {
+    consoleLogSpy.mockRestore();
+    rmSync(projectDir, { recursive: true, force: true });
+    rmSync(globalDir, { recursive: true, force: true });
+    if (previousConfigDir === undefined) {
+      delete process.env.TAKT_CONFIG_DIR;
+    } else {
+      process.env.TAKT_CONFIG_DIR = previousConfigDir;
     }
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+  });
 
+  it('agent step の設定と解決ソースを表示する', async () => {
+    const output = await inspectRichWorkflow(projectDir, globalDir);
+    expect(output).not.toMatch(/^\s*\{/m);
     const richAgentBlock = stepBlock(output, 'rich-agent');
     for (const [field, value] of [
       ['description', 'rich-description'],
@@ -436,7 +424,10 @@ steps:
     expectResolvedLine(richAgentBlock, 'provider', 'mock', 'project');
     expectResolvedLine(richAgentBlock, 'model', 'config-model', 'project');
     expectResolvedLine(richAgentBlock, 'permissionMode', 'edit', 'step');
+  });
 
+  it('dynamic parallel の固定・pool step と selector を表示する', async () => {
+    const output = await inspectRichWorkflow(projectDir, globalDir);
     const dynamicReviewBlock = stepBlock(output, 'dynamic-review');
     for (const [field, value] of [
       ['parallel', 'cumulative'],
@@ -466,19 +457,16 @@ steps:
     ] as const) {
       expectField(poolReviewBlock, field, value);
     }
-    const teamStepBlock = stepBlock(output, 'team-step');
-    for (const [field, value] of [
-      ['teamLeader', '2'],
-      ['timeoutMs', '1000'],
-      ['inspectTools', 'read'],
-      ['partPersona', 'coder'],
-      ['partTags', 'part'],
-      ['partAllowedTools', 'read'],
-      ['partEdit', 'false'],
-      ['partPermissionMode', 'edit'],
-    ] as const) {
-      expectField(teamStepBlock, field, value);
-    }
+    expect(dynamicReviewBlock).toContain('source: fragment');
+    expect(fixedReviewBlock).toContain('source: fragment');
+    expect(poolReviewBlock).toContain('source: fragment');
+    expect(dynamicReviewBlock).not.toContain('selector guidance');
+    expect(output).not.toContain('fixed review');
+    expect(output).not.toContain('pool review');
+  });
+
+  it('system step の入力と effect を表示する', async () => {
+    const output = await inspectRichWorkflow(projectDir, globalDir);
     const systemStepBlock = stepBlock(output, 'system-step');
     for (const [field, value] of [
       ['systemInputs', 'task_context'],
@@ -490,6 +478,10 @@ steps:
     ] as const) {
       expectField(systemStepBlock, field, value);
     }
+  });
+
+  it('arpeggio step の入出力設定を表示する', async () => {
+    const output = await inspectRichWorkflow(projectDir, globalDir);
     const batchStepBlock = stepBlock(output, 'batch-step');
     expectField(batchStepBlock, 'arpeggio', 'csv');
     const arpeggioBlock = nestedSectionBlock(batchStepBlock, 'arpeggio');
@@ -505,18 +497,47 @@ steps:
     ] as const) {
       expectField(arpeggioBlock, field, value);
     }
+  });
+
+  it('team leader step の設定を表示する', async () => {
+    const output = await inspectRichWorkflow(projectDir, globalDir);
+    const teamStepBlock = stepBlock(output, 'team-step');
+    for (const [field, value] of [
+      ['teamLeader', '2'],
+      ['timeoutMs', '1000'],
+      ['inspectTools', 'read'],
+      ['partPersona', 'coder'],
+      ['partTags', 'part'],
+      ['partAllowedTools', 'read'],
+      ['partEdit', 'false'],
+      ['partPermissionMode', 'edit'],
+    ] as const) {
+      expectField(teamStepBlock, field, value);
+    }
+  });
+
+  it('workflow の全ステップと loop monitor を表示し本文を漏らさない', async () => {
+    const output = await inspectRichWorkflow(projectDir, globalDir);
+    expect(output).toContain('rich-inspect');
+    for (const stepName of [
+      'rich-agent',
+      'dynamic-review',
+      'fixed-review',
+      'pool-review',
+      'system-step',
+      'batch-step',
+      'team-step',
+      'builtin-step',
+      'fragment-step',
+    ]) {
+      expect(output).toContain(stepName);
+    }
     const loopMonitorBlock = output.slice(output.indexOf('loopMonitors:'));
     expectField(loopMonitorBlock, 'cycle', 'rich-agent');
     expectField(loopMonitorBlock, 'judge', 'inline');
-    expect(dynamicReviewBlock).toContain('source: fragment');
-    expect(fixedReviewBlock).toContain('source: fragment');
-    expect(poolReviewBlock).toContain('source: fragment');
     expect(loopMonitorBlock).toContain('source: fragment');
     expect(loopMonitorBlock).not.toContain('inspect loop');
-    expect(dynamicReviewBlock).not.toContain('selector guidance');
-    expect(richAgentBlock).not.toContain('retry-instruction project facet');
-    expect(output).not.toContain('fixed review');
-    expect(output).not.toContain('pool review');
+    expect(output).not.toContain('retry-instruction project facet');
     expect(output).not.toContain('batch instruction');
     expect(output).not.toContain('delegate work');
     expect(output).not.toContain('Builtin step instruction');
@@ -901,8 +922,8 @@ steps:
   it('facet の参照名、解決先パス、出所を表示する', async () => {
     const projectPersonaPath = writeProjectFacet(projectDir, 'personas', 'project-persona');
     const globalInstructionPath = writeGlobalFacet(globalDir, 'instructions', 'global-instruction');
-    const builtinPolicyPath = join(process.cwd(), 'builtins/en/facets/policies/architecture.md');
-    const builtinKnowledgePath = join(process.cwd(), 'builtins/en/facets/knowledge/architecture.md');
+    const builtinPolicyPath = join('builtins', 'en', 'facets', 'policies', 'architecture.md');
+    const builtinKnowledgePath = join('builtins', 'en', 'facets', 'knowledge', 'architecture.md');
     const externalInstructionPath = writeFile(projectDir, 'docs/guide.md', 'external guide body');
     const workflowPath = writeFile(projectDir, '.takt/workflows/facets.yaml', `name: facet-sources
 instructions:
@@ -2417,8 +2438,8 @@ steps:
 
     const output = renderedOutput();
     expect(output).toContain('depth limit 5 reached');
-    expect(output).toContain('w5-step');
-    expect(output).not.toContain('w6-step');
+    expect(output).toContain('w4-step');
+    expect(output).not.toContain('w5-step');
     expect(output).not.toContain('circular reference detected');
   });
 

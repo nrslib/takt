@@ -4,6 +4,7 @@ import {
   type ProviderPermissionProfiles,
   type ProviderProfileName,
 } from '../models/provider-profiles.js';
+import type { ProviderResolutionSource } from './provider-options-trace.js';
 
 export interface ResolvePermissionModeInput {
   stepName: string;
@@ -11,6 +12,7 @@ export interface ResolvePermissionModeInput {
   provider?: ProviderProfileName;
   projectProviderProfiles?: ProviderPermissionProfiles;
   globalProviderProfiles?: ProviderPermissionProfiles;
+  defaultProviderProfiles?: ProviderPermissionProfiles;
 }
 
 export const DEFAULT_PROVIDER_PERMISSION_PROFILES: ProviderPermissionProfiles = {
@@ -41,37 +43,63 @@ export function mergeGlobalPermissionProfiles(
   };
 }
 
+export interface ResolvedPermissionMode {
+  value: PermissionMode;
+  source: ProviderResolutionSource;
+}
+
 export function resolveStepPermissionMode(input: ResolvePermissionModeInput): PermissionMode {
+  return resolveStepPermissionModeWithSource(input).value;
+}
+
+export function resolveStepPermissionModeWithSource(
+  input: ResolvePermissionModeInput,
+): ResolvedPermissionMode {
   if (!input.provider) {
-    return input.requiredPermissionMode ?? 'readonly';
+    return input.requiredPermissionMode === undefined
+      ? { value: 'readonly', source: 'default' }
+      : { value: input.requiredPermissionMode, source: 'step' };
   }
 
   const projectProfile = input.projectProviderProfiles?.[input.provider];
-  const globalProfile = input.globalProviderProfiles?.[input.provider];
+  const configuredGlobalProfile = input.globalProviderProfiles?.[input.provider];
+  const globalProfile = configuredGlobalProfile
+    ?? input.defaultProviderProfiles?.[input.provider];
+  const globalProfileSource: ProviderResolutionSource = configuredGlobalProfile === undefined
+    ? 'default'
+    : 'global';
 
   const projectOverride = projectProfile?.stepPermissionOverrides?.[input.stepName];
   if (projectOverride) {
-    return applyRequiredPermissionFloor(projectOverride, input.requiredPermissionMode);
+    return applyRequiredPermissionFloorWithSource(projectOverride, input.requiredPermissionMode, 'project');
   }
 
   const globalOverride = globalProfile?.stepPermissionOverrides?.[input.stepName];
   if (globalOverride) {
-    return applyRequiredPermissionFloor(globalOverride, input.requiredPermissionMode);
+    return applyRequiredPermissionFloorWithSource(globalOverride, input.requiredPermissionMode, globalProfileSource);
   }
 
   if (projectProfile?.defaultPermissionMode) {
-    return applyRequiredPermissionFloor(projectProfile.defaultPermissionMode, input.requiredPermissionMode);
+    return applyRequiredPermissionFloorWithSource(
+      projectProfile.defaultPermissionMode,
+      input.requiredPermissionMode,
+      'project',
+    );
   }
 
   if (globalProfile?.defaultPermissionMode) {
-    return applyRequiredPermissionFloor(globalProfile.defaultPermissionMode, input.requiredPermissionMode);
+    return applyRequiredPermissionFloorWithSource(
+      globalProfile.defaultPermissionMode,
+      input.requiredPermissionMode,
+      globalProfileSource,
+    );
   }
 
   if (input.requiredPermissionMode) {
-    return input.requiredPermissionMode;
+    return { value: input.requiredPermissionMode, source: 'step' };
   }
 
-  return 'readonly';
+  return { value: 'readonly', source: 'default' };
 }
 
 const PERMISSION_MODE_RANK: Record<PermissionMode, number> = {
@@ -90,4 +118,16 @@ function applyRequiredPermissionFloor(
   return PERMISSION_MODE_RANK[requiredMode] > PERMISSION_MODE_RANK[resolvedMode]
     ? requiredMode
     : resolvedMode;
+}
+
+function applyRequiredPermissionFloorWithSource(
+  resolvedMode: PermissionMode,
+  requiredMode: PermissionMode | undefined,
+  source: ProviderResolutionSource,
+): ResolvedPermissionMode {
+  const value = applyRequiredPermissionFloor(resolvedMode, requiredMode);
+  return {
+    value,
+    source: value === requiredMode && requiredMode !== undefined ? 'step' : source,
+  };
 }

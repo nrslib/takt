@@ -15,7 +15,7 @@ import {
   resolveWorkflowDoctorTargets,
   type WorkflowDoctorReport,
 } from '../../infra/config/loaders/workflowDoctor.js';
-import { loadWorkflowForRuntimeValidation, validateWorkflowRuntimeContract } from './doctor.js';
+import { reportHasErrors, validateWorkflowRuntimeContract } from './doctor.js';
 import {
   resolveRefToContentWithSource,
   type FacetResolutionContext,
@@ -33,11 +33,14 @@ import { getWorkflowReference } from '../../core/workflow/workflow-reference.js'
 import { MAX_WORKFLOW_CALL_DEPTH } from '../../core/workflow/workflow-call-depth.js';
 import { createTeamLeaderPlanningStep } from '../../core/workflow/engine/team-leader-common.js';
 import { resolveStepProviderModel, type StepProviderModelOutput } from '../../core/workflow/provider-resolution.js';
-import { resolveDeterministicAutoRoutingProviderInfo } from '../../core/workflow/auto-routing/resolver.js';
+import {
+  applyAutoRoutingStrategyOverride,
+  resolveDeterministicAutoRoutingProviderInfo,
+} from '../../core/workflow/auto-routing/resolver.js';
 import { withWorkflowTargetContext } from '../../core/workflow/provider-target-resolution.js';
 import {
   DEFAULT_PROVIDER_PERMISSION_PROFILES,
-  resolveStepPermissionMode,
+  resolveStepPermissionModeWithSource,
 } from '../../core/workflow/permission-profile-resolution.js';
 import {
   resolveSelectorPermissionMode,
@@ -250,10 +253,7 @@ function displayCompletionRetry(indent: string, step: WorkflowStep, context: Run
   info(`${indent}completionRetry:`);
   printScalar(`${indent}  `, 'minRetry', step.completionRetry.minRetry);
   printScalar(`${indent}  `, 'maxRetry', step.completionRetry.maxRetry);
-  const reference = step.completionRetry.retryInstructionRef;
-  if (reference === undefined) {
-    throw new Error(`Completion retry instruction reference is missing for step "${step.name}"`);
-  }
+  const reference = step.completionRetry.retryInstructionRef!;
   const facet = resolveFacetReference(reference, context.workflow, context, 'instructions');
   printScalar(`${indent}  `, 'retryInstruction', facet.ref);
   printScalar(`${indent}  `, 'source', facet.source);
@@ -294,10 +294,7 @@ function displaySelectorGuidance(indent: string, selector: {
   readonly instructionRef?: string;
 }, context: RuntimeDisplayContext): void {
   printFacetReference(indent, 'persona', selector.personaRef, selector.personaPath, 'personas', context);
-  if (selector.instructionRef === undefined) {
-    throw new Error('Selector instruction reference is missing');
-  }
-  const facet = resolveFacetReference(selector.instructionRef, context.workflow, context, 'instructions');
+  const facet = resolveFacetReference(selector.instructionRef!, context.workflow, context, 'instructions');
   printScalar(indent, 'instruction', facet.ref);
   printScalar(`${indent}  `, 'source', facet.source);
   if (facet.path !== undefined) {
@@ -450,14 +447,13 @@ function displayTeamLeader(indent: string, teamLeader: TeamLeaderConfig, context
 function displayStep(
   indent: string,
   step: WorkflowStep,
-  workflow: WorkflowConfig,
   context: RuntimeDisplayContext,
   node: InspectPlanNode,
   label = '-',
 ): void {
   const record = step as unknown as Record<string, unknown>;
   info(`${indent}${label} name: ${formatValue(step.name)}`);
-  displayInstructions(`${indent}  `, step, { ...context, workflow });
+  displayInstructions(`${indent}  `, step, context);
   printFacetReference(
     `${indent}  `,
     'persona',
@@ -541,15 +537,15 @@ function displayStep(
       }
       info(`${indent}    fixed:`);
       for (const subStep of step.parallel.fixed) {
-        displayStep(`${indent}      `, subStep, workflow, context, node);
+        displayStep(`${indent}      `, subStep, context, node);
       }
       info(`${indent}    pool:`);
       for (const subStep of step.parallel.pool) {
-        displayStep(`${indent}      `, subStep, workflow, context, node);
+        displayStep(`${indent}      `, subStep, context, node);
       }
     } else {
       for (const subStep of step.parallel) {
-        displayStep(`${indent}    `, subStep, workflow, context, node);
+        displayStep(`${indent}    `, subStep, context, node);
       }
     }
   }
@@ -591,11 +587,8 @@ function resolveProviderDisplay(step: WorkflowStep, context: RuntimeDisplayConte
   let resolved = resolution;
   if (autoRouting !== undefined) {
     const contextualAutoRouting = withWorkflowTargetContext(autoRouting, context.workflow.name);
-    if (contextualAutoRouting === undefined) {
-      throw new Error('Auto-routing configuration could not be contextualized for workflow inspect');
-    }
     resolved = resolveDeterministicAutoRoutingProviderInfo({
-      autoRouting: contextualAutoRouting,
+      autoRouting: contextualAutoRouting!,
       step: {
         name: providerResolutionStep.name,
         tags: providerResolutionStep.tags,
@@ -636,52 +629,15 @@ function resolvePermissionForDisplay(
     };
   }
 
-  const projectProfile = providerInfo.provider === undefined
-    ? undefined
-    : context.projectConfig.providerProfiles?.[providerInfo.provider];
-  const globalProfiles = {
-    ...DEFAULT_PROVIDER_PERMISSION_PROFILES,
-    ...(context.globalConfig.providerProfiles ?? {}),
-  };
-  const globalProfile = providerInfo.provider === undefined
-    ? undefined
-    : globalProfiles[providerInfo.provider];
-  const valueWithoutRequired = resolveStepPermissionMode({
-    stepName: step.name,
-    requiredPermissionMode: undefined,
-    provider: providerInfo.provider,
-    projectProviderProfiles: context.projectConfig.providerProfiles,
-    globalProviderProfiles: globalProfiles,
-  });
-  const value = resolveStepPermissionMode({
+  const resolvedPermission = resolveStepPermissionModeWithSource({
     stepName: step.name,
     requiredPermissionMode: explicitRequired,
     provider: providerInfo.provider,
     projectProviderProfiles: context.projectConfig.providerProfiles,
-    globalProviderProfiles: globalProfiles,
+    globalProviderProfiles: context.globalConfig.providerProfiles,
+    defaultProviderProfiles: DEFAULT_PROVIDER_PERMISSION_PROFILES,
   });
-
-  if (value !== valueWithoutRequired && explicitRequired !== undefined) {
-    return { value, source: 'step' };
-  }
-
-  if (providerInfo.provider !== undefined && projectProfile?.stepPermissionOverrides?.[step.name] !== undefined) {
-    return { value, source: 'project' };
-  }
-  if (providerInfo.provider !== undefined && globalProfile?.stepPermissionOverrides?.[step.name] !== undefined) {
-    return { value, source: 'global' };
-  }
-  if (projectProfile?.defaultPermissionMode !== undefined) {
-    return { value, source: 'project' };
-  }
-  if (providerInfo.provider !== undefined
-    && context.globalConfig.providerProfiles?.[providerInfo.provider]?.defaultPermissionMode !== undefined) {
-    return { value, source: 'global' };
-  }
-  if (explicitRequired !== undefined) {
-    return { value, source: 'step' };
-  }
-  return { value, source: 'default' };
+  return resolvedPermission;
 }
 
 function displayFacetPoolContents(
@@ -696,15 +652,9 @@ function displayFacetPoolContents(
     printScalar(indent, field, 'not configured');
     return;
   }
-  if (refs.length !== values.length) {
-    throw new Error(`Facet pool ${field} references and resolved contents are out of sync`);
-  }
   info(`${indent}${field}:`);
   for (const [index, ref] of refs.entries()) {
-    const value = values[index];
-    if (value === undefined) {
-      throw new Error(`Facet pool ${field} content is missing at index ${index}`);
-    }
+    const value = values[index]!;
     const facet = toDisplayFacet(value, ref, facetType, context.facetContext);
     printScalar(`${indent}  - `, 'ref', facet.ref);
     printScalar(`${indent}    `, 'source', facet.source);
@@ -786,10 +736,7 @@ function displayLoopMonitors(indent: string, workflow: WorkflowConfig, context: 
       context,
     );
     if (monitor.judge.instruction !== undefined) {
-      if (monitor.judge.instructionRef === undefined) {
-        throw new Error('Loop monitor judge instruction reference is missing');
-      }
-      const facet = resolveFacetReference(monitor.judge.instructionRef, context.workflow, context, 'instructions');
+      const facet = resolveFacetReference(monitor.judge.instructionRef!, context.workflow, context, 'instructions');
       printScalar(`${indent}      `, 'instruction', facet.ref);
       printScalar(`${indent}        `, 'source', facet.source);
       if (facet.path !== undefined) {
@@ -819,7 +766,7 @@ function displayWorkflow(
   printWorkflowSections(`${indent}  `, workflow, context);
   info(`${indent}  steps:`);
   for (const step of workflow.steps) {
-    displayStep(`${indent}    `, step, workflow, context, node);
+    displayStep(`${indent}    `, step, context, node);
   }
   displayLoopMonitors(`${indent}  `, workflow, context);
 }
@@ -844,28 +791,80 @@ function applyInspectionOverrides(
   runtime: ReturnType<typeof resolveAuxiliaryRuntimeEnvironment>,
   overrides: SelectorProviderOverrides | undefined,
 ): CompiledProviderEnvironment {
-  if (overrides === undefined || (overrides.provider === undefined && overrides.model === undefined)) {
+  if (overrides === undefined
+    || (overrides.provider === undefined && overrides.model === undefined && overrides.autoStrategy === undefined)) {
     return runtime.providerEnvironment;
   }
+  let providerEnvironment: CompiledProviderEnvironment;
   if (runtime.providerConfigMode === 'runtime-v1') {
-    return applyRuntimeProviderOverride(runtime.providerEnvironment, {
+    providerEnvironment = applyRuntimeProviderOverride(runtime.providerEnvironment, {
       provider: overrides.provider,
       providerSource: overrides.providerSource ?? 'cli',
       model: overrides.model,
       modelSource: overrides.modelSource ?? 'cli',
     });
+  } else {
+    providerEnvironment = {
+      ...runtime.providerEnvironment,
+      ...(overrides.provider === undefined ? {} : {
+        provider: overrides.provider,
+        providerSource: overrides.providerSource ?? 'cli',
+      }),
+      ...(overrides.model === undefined ? {} : {
+        model: overrides.model,
+        modelSource: overrides.modelSource ?? 'cli',
+      }),
+    };
   }
   return {
-    ...runtime.providerEnvironment,
-    ...(overrides.provider === undefined ? {} : {
-      provider: overrides.provider,
-      providerSource: overrides.providerSource ?? 'cli',
-    }),
-    ...(overrides.model === undefined ? {} : {
-      model: overrides.model,
-      modelSource: overrides.modelSource ?? 'cli',
-    }),
+    ...providerEnvironment,
+    autoRouting: applyAutoRoutingStrategyOverride(providerEnvironment.autoRouting, overrides.autoStrategy),
   };
+}
+
+function collectStepDisplayDiagnostics(step: WorkflowStep, diagnostics: string[]): void {
+  if (step.completionRetry !== undefined && step.completionRetry.retryInstructionRef === undefined) {
+    diagnostics.push(`Completion retry instruction reference is missing for step "${step.name}"`);
+  }
+  const dynamicFacets = 'dynamicFacets' in step ? step.dynamicFacets : undefined;
+  if (dynamicFacets?.selector !== undefined && dynamicFacets.selector.instructionRef === undefined) {
+    diagnostics.push('Selector instruction reference is missing');
+  }
+  if (step.parallel !== undefined && isDynamicParallelSubSteps(step.parallel)) {
+    const selector = step.parallel.selection.selector;
+    if (selector !== undefined && selector.instructionRef === undefined) {
+      diagnostics.push('Selector instruction reference is missing');
+    }
+  }
+}
+
+function collectFacetPoolDisplayDiagnostics(workflow: WorkflowConfig, diagnostics: string[]): void {
+  for (const pool of Object.values(workflow.facetPools ?? {})) {
+    for (const candidate of pool.candidates) {
+      const facetCollections = [
+        ['policy', candidate.policyRefs, candidate.resolvedPolicyContents],
+        ['knowledge', candidate.knowledgeRefs, candidate.resolvedKnowledgeContents],
+      ] as const;
+      for (const [field, refs, values] of facetCollections) {
+        if (refs.length !== values.length) {
+          diagnostics.push(`Facet pool ${field} references and resolved contents are out of sync`);
+        }
+        for (const index of refs.keys()) {
+          if (values[index] === undefined) {
+            diagnostics.push(`Facet pool ${field} content is missing at index ${index}`);
+          }
+        }
+      }
+    }
+  }
+}
+
+function collectLoopMonitorDisplayDiagnostics(workflow: WorkflowConfig, diagnostics: string[]): void {
+  for (const monitor of workflow.loopMonitors ?? []) {
+    if (monitor.judge.instruction !== undefined && monitor.judge.instructionRef === undefined) {
+      diagnostics.push('Loop monitor judge instruction reference is missing');
+    }
+  }
 }
 
 function buildInspectPlan(
@@ -891,6 +890,8 @@ function buildInspectPlan(
     providerDisplays: new Map(),
     callEdges: new Map(),
   };
+  collectFacetPoolDisplayDiagnostics(workflow, diagnostics);
+  collectLoopMonitorDisplayDiagnostics(workflow, diagnostics);
   for (const step of workflow.steps) {
     collectStepPlan(step, node, activeReferences, depth, diagnostics);
   }
@@ -904,6 +905,7 @@ function collectStepPlan(
   depth: number,
   diagnostics: string[],
 ): void {
+  collectStepDisplayDiagnostics(step, diagnostics);
   if (getWorkflowStepKind(step) === 'agent') {
     try {
       node.providerDisplays.set(step, resolveProviderDisplay(step, node.context));
@@ -937,7 +939,7 @@ function buildCallEdge(
   depth: number,
   diagnostics: string[],
 ): WorkflowCallPlanResult {
-  if (depth >= DISPLAY_DEPTH_LIMIT) {
+  if (depth + 1 >= DISPLAY_DEPTH_LIMIT) {
     return { edge: { note: `depth limit ${DISPLAY_DEPTH_LIMIT} reached` } };
   }
   let child: WorkflowConfig | null;
@@ -972,10 +974,6 @@ function buildCallEdge(
       ),
     },
   };
-}
-
-function reportHasErrors(report: WorkflowDoctorReport): boolean {
-  return report.diagnostics.some((diagnostic) => diagnostic.level === 'error');
 }
 
 function reportDiagnostics(report: WorkflowDoctorReport): void {
@@ -1015,17 +1013,9 @@ export async function inspectWorkflowCommand(
     lookupCwd: workflowTarget.lookupCwd,
     source: workflowTarget.source,
   });
-  const runtimeValidationTarget = workflowTarget;
-  const runtimeReport = { diagnostics: [...report.diagnostics], filePath: report.filePath };
-  validateWorkflowRuntimeContract(
-    runtimeReport,
-    runtimeValidationTarget,
-    projectDir,
-    selectorOverrides,
-  );
-  report.diagnostics = runtimeReport.diagnostics;
+  const validation = validateWorkflowRuntimeContract(report, workflowTarget, projectDir, selectorOverrides);
 
-  if (reportHasErrors(report)) {
+  if (reportHasErrors(report) || validation === undefined) {
     reportDiagnostics(report);
     throw new Error('Workflow validation failed');
   }
@@ -1033,8 +1023,7 @@ export async function inspectWorkflowCommand(
     warn(`${sanitizeTerminalText(report.filePath)}: ${formatInspectWarning(sanitizeTerminalText(diagnostic.message))}`);
   }
 
-  const workflow = loadWorkflowForRuntimeValidation(workflowTarget, projectDir);
-  const runtime = resolveAuxiliaryRuntimeEnvironment(projectDir, workflow);
+  const { workflow, runtimeEnvironment: runtime } = validation;
   const providerEnvironment = applyInspectionOverrides(runtime, selectorOverrides);
   const sourcePath = getWorkflowSourcePath(workflow);
   const context: RuntimeDisplayContext = {

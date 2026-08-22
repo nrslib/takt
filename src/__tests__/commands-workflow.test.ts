@@ -101,7 +101,7 @@ describe('CLI workflow command', () => {
     expect(inspectModuleLoadedCallsAtRegistration).toBe(0);
   });
 
-  it('should define init options and doctor target arguments', () => {
+  it('should define init options and doctor/inspect target arguments', () => {
     const initCommand = commandMocks.get('root.workflow.init');
     const doctorCommand = commandMocks.get('root.workflow.doctor');
     const inspectCommand = commandMocks.get('root.workflow.inspect');
@@ -159,8 +159,8 @@ describe('CLI workflow command', () => {
     expect(mockInspectWorkflowCommand).toHaveBeenCalledWith('sample-flow', '/test/cwd', undefined);
   });
 
-  it('should propagate CLI execution overrides to prompt preview and workflow doctor', async () => {
-    rootCommand.opts.mockReturnValue({ provider: 'mock', model: 'cli-model' });
+  it('should propagate CLI execution overrides to prompt preview, workflow doctor, and workflow inspect', async () => {
+    rootCommand.opts.mockReturnValue({ provider: 'mock', model: 'cli-model', autoStrategy: 'performance' });
     const promptAction = commandActions.get('root.prompt');
     const doctorAction = commandActions.get('root.workflow.doctor');
     const inspectAction = commandActions.get('root.workflow.inspect');
@@ -169,6 +169,7 @@ describe('CLI workflow command', () => {
       providerSource: 'cli',
       model: 'cli-model',
       modelSource: 'cli',
+      autoStrategy: 'performance',
     };
 
     await promptAction?.('default');

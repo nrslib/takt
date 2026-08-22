@@ -26,7 +26,7 @@ import { translateWorkflowConfigError } from '../../shared/workflowConfigMetadat
 import { validateWorkflowCallContracts } from '../../infra/config/loaders/workflowResolver.js';
 import { resolveWorkflowCompanions } from '../../infra/config/workflowCompanionResolution.js';
 
-function reportHasErrors(report: WorkflowDoctorReport): boolean {
+export function reportHasErrors(report: WorkflowDoctorReport): boolean {
   return report.diagnostics.some((diagnostic) => diagnostic.level === 'error');
 }
 
@@ -54,12 +54,18 @@ export function loadWorkflowForRuntimeValidation(
   }
 }
 
+export interface WorkflowRuntimeValidationResult {
+  readonly workflow: ReturnType<typeof loadWorkflowForRuntimeValidation>;
+  readonly runtimeEnvironment: ReturnType<typeof resolveAuxiliaryRuntimeEnvironment>;
+  readonly companionReviewMode: CompanionReviewMode;
+}
+
 export function validateWorkflowRuntimeContract(
   report: WorkflowDoctorReport,
   target: WorkflowDoctorTarget,
   projectDir: string,
   selectorOverrides: SelectorProviderOverrides | undefined,
-): CompanionReviewMode | undefined {
+): WorkflowRuntimeValidationResult | undefined {
   if (reportHasErrors(report)) {
     return undefined;
   }
@@ -99,7 +105,11 @@ export function validateWorkflowRuntimeContract(
       workflowCallResolver: () => null,
     });
     warnOnUnproducibleReportReferences(report, workflow);
-    return runtimeEnvironment.companionReviewMode;
+    return {
+      workflow,
+      runtimeEnvironment,
+      companionReviewMode: runtimeEnvironment.companionReviewMode,
+    };
   } catch (validationError) {
     const translatedError = workflow === undefined
       ? validationError
@@ -360,11 +370,11 @@ export async function doctorWorkflowCommand(
   for (const target of resolvedTargets) {
     const { filePath, lookupCwd, source } = target;
     const report = inspectWorkflowFile(filePath, projectDir, { lookupCwd, source });
-    const companionReviewMode = validateWorkflowRuntimeContract(report, target, projectDir, selectorOverrides);
-    if (companionReviewMode !== undefined && report.diagnostics.length === 0) {
+    const validation = validateWorkflowRuntimeContract(report, target, projectDir, selectorOverrides);
+    if (validation !== undefined && report.diagnostics.length === 0) {
       success(
         `Workflow OK: ${sanitizeTerminalText(filePath)} `
-        + `(Companion review mode: ${companionReviewMode})`,
+        + `(Companion review mode: ${validation.companionReviewMode})`,
       );
       continue;
     }
